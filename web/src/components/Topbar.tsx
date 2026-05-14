@@ -1,4 +1,6 @@
+import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
+import { LocalePicker } from './LocalePicker'
 
 type View = 'home' | 'import' | 'stats'
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
@@ -44,6 +46,7 @@ export function Topbar({
   dark,
   setDark,
 }: Props) {
+  const { t } = useTranslation()
   return (
     <header className="fx-topbar">
       <div className="fx-brand">
@@ -67,16 +70,16 @@ export function Topbar({
           </svg>
         </div>
         <div className="fx-brand-text">
-          <div className="fx-brand-name">foldex</div>
-          <div className="fx-brand-sub">personal · self-hosted</div>
+          <div className="fx-brand-name">{t('app.name')}</div>
+          <div className="fx-brand-sub">{t('app.tagline')}</div>
         </div>
       </div>
 
       <nav className="fx-quicknav">
         <button
           className={'fx-qn' + (view === 'home' ? ' fx-qn-active' : '')}
-          aria-label="Home"
-          data-tooltip="Home · lista de links"
+          aria-label={t('topbar.home')}
+          data-tooltip={t('topbar.home')}
           data-tooltip-side="bottom"
           onClick={onHome}
         >
@@ -84,8 +87,8 @@ export function Topbar({
         </button>
         <button
           className={'fx-qn' + (view === 'stats' ? ' fx-qn-active' : '')}
-          aria-label="Stats"
-          data-tooltip="Estatísticas · cliques e top links"
+          aria-label={t('topbar.stats')}
+          data-tooltip={t('topbar.stats')}
           onClick={() => setView('stats')}
         >
           <svg
@@ -105,8 +108,8 @@ export function Topbar({
         </button>
         <button
           className={'fx-qn' + (view === 'import' ? ' fx-qn-active' : '')}
-          aria-label="Import"
-          data-tooltip="Importar / exportar bookmarks"
+          aria-label={t('topbar.import_export')}
+          data-tooltip={t('topbar.import_export')}
           onClick={() => setView('import')}
         >
           <Icon d={I.upload} size={16} />
@@ -116,10 +119,10 @@ export function Topbar({
       <div className="fx-search" onClick={onOpenPalette}>
         <Icon d={I.search} size={16} />
         <input
-          placeholder="Busque por título, URL, tag…"
+          placeholder={t('topbar.search_placeholder')}
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          aria-label="Search"
+          aria-label={t('common.search')}
         />
         <kbd className="fx-kbd">⌥K</kbd>
       </div>
@@ -130,53 +133,53 @@ export function Topbar({
           onClick={() => setSort('created')}
           aria-pressed={sort === 'created'}
         >
-          Novos
+          {t('sort.new')}
         </button>
         <button
           className={'fx-seg' + (sort === 'clicks' ? ' fx-seg-active' : '')}
           onClick={() => setSort('clicks')}
           aria-pressed={sort === 'clicks'}
         >
-          <Icon d={I.flame} size={13} /> Top
+          <Icon d={I.flame} size={13} /> {t('sort.top')}
         </button>
         <button
           className={'fx-seg' + (sort === 'recent' ? ' fx-seg-active' : '')}
           onClick={() => setSort('recent')}
           aria-pressed={sort === 'recent'}
         >
-          <Icon d={I.clock} size={13} /> Recentes
+          <Icon d={I.clock} size={13} /> {t('sort.recent')}
         </button>
         <button
           className={'fx-seg' + (sort === 'alpha' ? ' fx-seg-active' : '')}
           onClick={() => setSort('alpha')}
           aria-pressed={sort === 'alpha'}
-          data-tooltip="Pastas e links em ordem alfabética"
+          data-tooltip={t('sort.alpha_asc')}
         >
-          A→Z
+          {t('sort.alpha_asc')}
         </button>
         <button
           className={'fx-seg' + (sort === 'alpha_desc' ? ' fx-seg-active' : '')}
           onClick={() => setSort('alpha_desc')}
           aria-pressed={sort === 'alpha_desc'}
-          data-tooltip="Pastas e links em ordem alfabética reversa"
+          data-tooltip={t('sort.alpha_desc')}
         >
-          Z→A
+          {t('sort.alpha_desc')}
         </button>
       </div>
 
       <div className="fx-viewseg" role="group" aria-label="view mode">
         <button
           className={'fx-vs' + (viewMode === 'cards' ? ' fx-vs-active' : '')}
-          data-tooltip="Vista em cards"
-          aria-label="cards view"
+          data-tooltip={t('view.cards')}
+          aria-label={t('view.cards')}
           onClick={() => setViewMode('cards')}
         >
           <Icon d={I.layers} size={14} />
         </button>
         <button
           className={'fx-vs' + (viewMode === 'compact' ? ' fx-vs-active' : '')}
-          data-tooltip="Vista compacta"
-          aria-label="compact view"
+          data-tooltip={t('view.compact')}
+          aria-label={t('view.compact')}
           onClick={() => setViewMode('compact')}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -188,8 +191,8 @@ export function Topbar({
         </button>
         <button
           className={'fx-vs' + (viewMode === 'list' ? ' fx-vs-active' : '')}
-          data-tooltip="Vista em lista"
-          aria-label="list view"
+          data-tooltip={t('view.list')}
+          aria-label={t('view.list')}
           onClick={() => setViewMode('list')}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -203,8 +206,8 @@ export function Topbar({
               <button
                 key={n}
                 className={'fx-vs fx-vs-density' + (gridCols === n ? ' fx-vs-active' : '')}
-                data-tooltip={`${n} colunas`}
-                aria-label={`${n} colunas`}
+                data-tooltip={`${n} ${t('view.density')}`}
+                aria-label={`${n} ${t('view.density')}`}
                 aria-pressed={gridCols === n}
                 onClick={() => setGridCols(n)}
               >
@@ -215,22 +218,24 @@ export function Topbar({
         )}
       </div>
 
+      <LocalePicker />
+
       <button
         className="fx-themetoggle"
-        aria-label="toggle theme"
-        data-tooltip={dark ? 'Trocar para tema claro' : 'Trocar para tema escuro'}
+        aria-label={t('topbar.toggle_theme')}
+        data-tooltip={t('topbar.toggle_theme')}
         onClick={() => setDark(!dark)}
       >
         <Icon d={dark ? I.sun : I.moon} size={16} />
       </button>
 
-      <button className="fx-cta fx-cta-folder" onClick={onNewFolder} aria-label="new folder">
-        <Icon d={I.folder} size={16} stroke={2.2} /> Nova pasta
+      <button className="fx-cta fx-cta-folder" onClick={onNewFolder} aria-label={t('topbar.new_folder')}>
+        <Icon d={I.folder} size={16} stroke={2.2} /> {t('topbar.new_folder')}
         <kbd className="fx-kbd fx-kbd-cta">⌥F</kbd>
       </button>
 
-      <button className="fx-cta" onClick={onNewLink} aria-label="new link">
-        <Icon d={I.plus} size={16} stroke={2.2} /> Novo link
+      <button className="fx-cta" onClick={onNewLink} aria-label={t('topbar.new_link')}>
+        <Icon d={I.plus} size={16} stroke={2.2} /> {t('topbar.new_link')}
         <kbd className="fx-kbd fx-kbd-cta">⌥N</kbd>
       </button>
     </header>

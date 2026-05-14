@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import { ConfirmProvider } from './components/ConfirmDialog'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import './i18n' // initialises i18next BEFORE any component renders so t() works
 import './styles/foldex.css'
 import './styles/overrides.css'
 

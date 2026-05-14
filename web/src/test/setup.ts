@@ -2,6 +2,10 @@ import '@testing-library/jest-dom/vitest'
 import { afterEach, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
 
+// Initialise i18n before any component renders so `useTranslation()` returns
+// real translations. English is the default — tests assert against en.json.
+import '../i18n'
+
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
