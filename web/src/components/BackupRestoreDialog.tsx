@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -18,6 +20,7 @@ type Props = {
 }
 
 export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
+  const { t } = useTranslation()
   const [validation, setValidation] = useState<BackupValidation | null>(null)
   const [loading, setLoading] = useState(true)
   const [errMsg, setErrMsg] = useState<string | null>(null)
@@ -36,11 +39,11 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
         if (alive) setValidation(v)
       })
       .catch((e) => {
-        if (alive) setErrMsg(extractErr(e))
+        if (alive) setErrMsg(extractErr(e, t('common.unknown_error')))
       })
       .finally(() => alive && setLoading(false))
     return () => { alive = false }
-  }, [file])
+  }, [file, t])
 
   const handleRestore = async () => {
     setRestoring(true)
@@ -49,7 +52,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
       const r = await restoreBackup(file, mode)
       setReport(r)
     } catch (e: unknown) {
-      setErrMsg(extractErr(e))
+      setErrMsg(extractErr(e, t('common.unknown_error')))
     } finally {
       setRestoring(false)
     }
@@ -67,25 +70,25 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
       className="fx-overlay fx-overlay-modal"
       role="dialog"
       aria-modal="true"
-      aria-label="Restaurar backup"
+      aria-label={t('backup.dialog_title')}
     >
       <div className="fx-modal" style={{ maxWidth: 640 }}>
         <header className="fx-modal-head">
           <div>
-            <div className="fx-modal-kicker">💾 RESTAURAR</div>
-            <h2 className="fx-modal-title">Revisar backup</h2>
+            <div className="fx-modal-kicker">{t('backup.dialog_kicker_short')}</div>
+            <h2 className="fx-modal-title">{t('backup.dialog_title_short')}</h2>
             <div style={{ fontSize: 12, color: 'var(--fx-ink-4)', fontFamily: 'var(--fx-mono)' }}>
               {file.name}
             </div>
           </div>
-          <button className="fx-confirm-x" onClick={onClose} aria-label="close">
+          <button className="fx-confirm-x" onClick={onClose} aria-label={t('common.close')}>
             <Icon d={I.x} size={14} />
           </button>
         </header>
 
         <div className="fx-modal-body" style={{ gridTemplateColumns: '1fr' }}>
           <div className="fx-modal-col">
-            {loading && <div style={{ color: 'var(--fx-ink-4)' }}>Validando…</div>}
+            {loading && <div style={{ color: 'var(--fx-ink-4)' }}>{t('common.validating')}</div>}
 
             {!loading && errMsg && (
               <div className="fx-confirm-msg" style={{ color: 'var(--fx-danger)' }}>
@@ -96,10 +99,10 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
             {!loading && validation && (
               <>
                 {m ? (
-                  <ValidationSummary v={validation} />
+                  <ValidationSummary v={validation} t={t} />
                 ) : (
                   <div style={{ color: 'var(--fx-danger)' }}>
-                    Manifest inválido ou ausente.
+                    {t('backup.manifest_invalid')}
                   </div>
                 )}
 
@@ -112,13 +115,13 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
                 {!hasErrors && !report && m && (
                   <>
                     <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)', marginTop: 8 }}>
-                      Modo de restauração
+                      {t('backup.mode_section_short')}
                     </div>
-                    <ModePicker value={mode} onChange={setMode} conflicts={validation.conflicts} />
+                    <ModePicker value={mode} onChange={setMode} conflicts={validation.conflicts} t={t} />
                   </>
                 )}
 
-                {report && <RestoreReportBlock r={report} />}
+                {report && <RestoreReportBlock r={report} t={t} />}
               </>
             )}
           </div>
@@ -127,13 +130,13 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
         <footer className="fx-modal-foot">
           {report ? (
             <button className="fx-confirm-btn fx-confirm-btn-primary" onClick={onRestored}>
-              Concluído
+              {t('common.done')}
               <Icon d={I.check} size={14} stroke={2} />
             </button>
           ) : (
             <>
               <button className="fx-confirm-btn" onClick={onClose}>
-                Cancelar
+                {t('common.cancel')}
               </button>
               <button
                 className={'fx-confirm-btn ' + (mode === 'wipe' ? 'fx-confirm-btn-danger' : 'fx-confirm-btn-primary')}
@@ -141,10 +144,10 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
                 disabled={!validation || hasErrors || restoring}
               >
                 {restoring
-                  ? 'Restaurando…'
+                  ? t('backup.submit_restoring')
                   : mode === 'wipe'
-                    ? '⚠ Restaurar (zerar tudo)'
-                    : 'Restaurar'}
+                    ? t('backup.submit_restore_wipe')
+                    : t('backup.submit_restore')}
                 <Icon d={I.arrowR} size={14} stroke={2} />
               </button>
             </>
@@ -155,16 +158,16 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
   )
 }
 
-function ValidationSummary({ v }: { v: BackupValidation }) {
+function ValidationSummary({ v, t }: { v: BackupValidation; t: TFunction }) {
   const m = v.manifest
   if (!m) return null
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <Row label="Manifest" value={`${v.ok ? '✓' : '✗'} ${m.version} · schema ${m.schema_version}`} />
-      <Row label="Conteúdo" value={`${m.counts.links} links · ${m.counts.tags} tags · ${m.counts.folders} pastas`} />
-      <Row label="Cliques" value={`${m.counts.click_logs.toLocaleString('pt-BR')} cliques`} />
-      <Row label="Arquivos" value={`${m.counts.files} · ${formatBytes(m.counts.file_bytes)}`} />
-      <Row label="Conflitos" value={`${v.conflicts.links} links · ${v.conflicts.tags} tags`} />
+      <Row label={t('backup.summary_manifest')} value={t('backup.summary_manifest_value', { status: v.ok ? '✓' : '✗', version: m.version, schema: m.schema_version })} />
+      <Row label={t('backup.summary_content')} value={t('backup.summary_content_value', { links: m.counts.links, tags: m.counts.tags, folders: m.counts.folders })} />
+      <Row label={t('backup.summary_clicks')} value={t('backup.summary_clicks_value', { count: m.counts.click_logs })} />
+      <Row label={t('backup.summary_files')} value={t('backup.summary_files_value', { count: m.counts.files, size: formatBytes(m.counts.file_bytes) })} />
+      <Row label={t('backup.summary_conflicts')} value={t('backup.summary_conflicts_value', { links: v.conflicts.links, tags: v.conflicts.tags })} />
       {v.warnings.length > 0 && (
         <div style={{ background: 'rgba(245,158,11,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-ink-3)' }}>
           {v.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
@@ -184,31 +187,32 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function ModePicker({
-  value, onChange, conflicts,
+  value, onChange, conflicts, t,
 }: {
   value: Mode
   onChange: (m: Mode) => void
   conflicts: { links: number; tags: number; folders: number }
+  t: TFunction
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <ModeOption
         active={value === 'skip'}
         onClick={() => onChange('skip')}
-        title="Pular conflitos (recomendado)"
-        desc={`Mantém o atual; adiciona só o que é novo. ${conflicts.links} links e ${conflicts.tags} tags vão ser pulados.`}
+        title={t('backup.mode_skip_title')}
+        desc={t('backup.mode_skip_desc', { links: conflicts.links, tags: conflicts.tags })}
       />
       <ModeOption
         active={value === 'duplicate'}
         onClick={() => onChange('duplicate')}
-        title="Duplicar"
-        desc="Renomeia tags conflitantes pra `nome (2)`; folders sempre são criados novos. Links com URL idêntica caem pra skip (URL é UNIQUE)."
+        title={t('backup.mode_duplicate_title')}
+        desc={t('backup.mode_duplicate_desc')}
       />
       <ModeOption
         active={value === 'wipe'}
         onClick={() => onChange('wipe')}
-        title="⚠ Limpar tudo e importar"
-        desc="DESTRUTIVO. Apaga TODOS os links, tags, pastas, cliques e arquivos atuais; restaura com IDs originais preservados."
+        title={t('backup.mode_wipe_title')}
+        desc={t('backup.mode_wipe_desc')}
         danger
       />
     </div>
@@ -250,14 +254,14 @@ function ModeOption({
   )
 }
 
-function RestoreReportBlock({ r }: { r: RestoreReport }) {
+function RestoreReportBlock({ r, t }: { r: RestoreReport; t: TFunction }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <Row label="Modo" value={r.mode} />
-      <Row label="Inseridos" value={`${r.inserted.links} links · ${r.inserted.tags} tags · ${r.inserted.folders} pastas · ${r.inserted.click_logs} cliques`} />
-      <Row label="Pulados" value={`${r.skipped.links} links · ${r.skipped.tags} tags`} />
-      <Row label="Arquivos" value={`${r.files.uploaded} uploads · ${r.files.skipped} já existentes`} />
-      <Row label="Duração" value={`${(r.duration_ms / 1000).toFixed(2)}s`} />
+      <Row label={t('backup.result_mode')} value={r.mode} />
+      <Row label={t('backup.result_inserted')} value={t('backup.result_inserted_format', { links: r.inserted.links, tags: r.inserted.tags, folders: r.inserted.folders, clicks: r.inserted.click_logs })} />
+      <Row label={t('backup.result_skipped')} value={t('backup.result_skipped_format', { links: r.skipped.links, tags: r.skipped.tags })} />
+      <Row label={t('backup.result_files')} value={t('backup.result_files_format', { uploaded: r.files.uploaded, skipped: r.files.skipped })} />
+      <Row label={t('backup.result_duration')} value={t('backup.report_duration_value', { value: (r.duration_ms / 1000).toFixed(2) })} />
       {r.warnings.length > 0 && (
         <div style={{ background: 'rgba(245,158,11,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-ink-3)' }}>
           {r.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
@@ -267,9 +271,9 @@ function RestoreReportBlock({ r }: { r: RestoreReport }) {
   )
 }
 
-function extractErr(e: unknown): string {
+function extractErr(e: unknown, fallback: string): string {
   const obj = e as { response?: { data?: { error?: { message?: string } } }; message?: string }
-  return obj?.response?.data?.error?.message ?? obj?.message ?? 'erro desconhecido'
+  return obj?.response?.data?.error?.message ?? obj?.message ?? fallback
 }
 
 function formatBytes(b: number): string {

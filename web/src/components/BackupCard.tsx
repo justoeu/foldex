@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import {
   generateBackup,
@@ -12,6 +14,7 @@ type Props = {
 }
 
 export function BackupCard({ onRestored }: Props) {
+  const { t } = useTranslation()
   const [history, setHistory] = useState<BackupHistoryEntry[]>(() => readBackupHistory())
   const [generating, setGenerating] = useState(false)
   const [errMsg, setErrMsg] = useState<string | null>(null)
@@ -37,7 +40,7 @@ export function BackupCard({ onRestored }: Props) {
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
         ?? (e as Error).message
-        ?? 'falha ao gerar backup'
+        ?? t('backup.generate_failed')
       setErrMsg(msg)
     } finally {
       setGenerating(false)
@@ -47,7 +50,7 @@ export function BackupCard({ onRestored }: Props) {
   const handleFile = (f: File | null) => {
     if (!f) return
     if (!f.name.toLowerCase().endsWith('.zip')) {
-      setErrMsg('Arquivo precisa ser um .zip de backup do foldex.')
+      setErrMsg(t('backup.restore_file_invalid'))
       return
     }
     setErrMsg(null)
@@ -60,15 +63,14 @@ export function BackupCard({ onRestored }: Props) {
         <div className="fx-card-body" style={{ gap: 14, padding: 18 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <h3 className="fx-card-title" style={{ fontSize: 16, margin: 0 }}>
-              💾 Backup completo
+              {t('backup.card_title')}
             </h3>
             <span style={{ fontFamily: 'var(--fx-mono)', fontSize: 10, color: 'var(--fx-ink-4)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-              DB + MinIO
+              {t('backup.card_kicker')}
             </span>
           </div>
           <div style={{ fontSize: 13, color: 'var(--fx-ink-3)' }}>
-            Gera um ZIP com todas as tabelas (tags, pastas, links, M:N, click_log)
-            e todos os arquivos do bucket (screenshots + imagens).
+            {t('backup.card_body')}
           </div>
 
           <button
@@ -78,7 +80,7 @@ export function BackupCard({ onRestored }: Props) {
             onClick={handleGenerate}
             style={{ justifyContent: 'center' }}
           >
-            {generating ? 'Gerando…' : 'Gerar backup completo'}
+            {generating ? t('backup.generating') : t('backup.generate_button')}
             <Icon d={I.upload} size={14} stroke={2} />
           </button>
 
@@ -87,7 +89,7 @@ export function BackupCard({ onRestored }: Props) {
           )}
 
           <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)', marginTop: 6 }}>
-            Restaurar de um backup
+            {t('backup.restore_section_title')}
           </div>
           <div
             className={'fx-backup-dropzone' + (isDragging ? ' fx-backup-dropzone-drag' : '')}
@@ -110,7 +112,7 @@ export function BackupCard({ onRestored }: Props) {
           >
             <Icon d={I.upload} size={22} />
             <div style={{ marginTop: 6, color: 'var(--fx-ink-3)', fontSize: 13 }}>
-              Arraste o .zip ou clique pra escolher
+              {t('backup.restore_dropzone')}
             </div>
             <input
               ref={fileRef}
@@ -124,7 +126,7 @@ export function BackupCard({ onRestored }: Props) {
           {history.length > 0 && (
             <>
               <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)', marginTop: 8 }}>
-                Histórico
+                {t('backup.history_section_title')}
               </div>
               <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {history.map((h) => (
@@ -133,7 +135,13 @@ export function BackupCard({ onRestored }: Props) {
                       {formatDate(h.created_at)}
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--fx-ink-4)', fontFamily: 'var(--fx-mono)' }}>
-                      {h.counts.files} files · {formatBytes(h.size_bytes)} · {formatDuration(h.duration_ms)} · {h.counts.links} links / {h.counts.tags} tags
+                      {t('backup.history_format_files', {
+                        files: h.counts.files,
+                        size: formatBytes(h.size_bytes),
+                        duration: formatDuration(h.duration_ms, t),
+                        links: h.counts.links,
+                        tags: h.counts.tags,
+                      })}
                     </div>
                   </li>
                 ))}
@@ -160,7 +168,7 @@ export function BackupCard({ onRestored }: Props) {
 function formatDate(iso: string): string {
   try {
     const d = new Date(iso)
-    return d.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+    return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
   } catch {
     return iso
   }
@@ -178,7 +186,7 @@ function formatBytes(b: number): string {
   return `${n.toFixed(n >= 10 ? 0 : 1)} ${units[i]}`
 }
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
+function formatDuration(ms: number, t: TFunction): string {
+  if (ms < 1000) return t('backup.duration_ms', { value: ms })
+  return t('backup.duration_s', { value: (ms / 1000).toFixed(1) })
 }

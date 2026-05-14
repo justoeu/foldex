@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
@@ -25,6 +26,7 @@ function densityFor(link: Link): 'tall' | 'medium' | 'short' {
 }
 
 export function LinkCard({ link, onEdit, onMergeWith }: Props) {
+  const { t } = useTranslation()
   const del = useDeleteLink()
   const refresh = useRefreshPreview()
   const update = useUpdateLink()
@@ -42,14 +44,9 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
 
   const onDelete = async () => {
     const ok = await confirm({
-      title: `Apagar "${link.title}"?`,
-      message: (
-        <>
-          O link <code>{link.url}</code> e seu histórico de cliques serão removidos
-          permanentemente. As tags associadas continuam.
-        </>
-      ),
-      confirmLabel: 'Apagar link',
+      title: t('link_card.delete_confirm_title', { title: link.title }),
+      message: t('link_card.delete_confirm_body', { url: link.url }),
+      confirmLabel: t('link_card.delete_confirm_action'),
       destructive: true,
     })
     if (ok) del.mutate(link.id)
@@ -100,8 +97,8 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
           e.stopPropagation()
           togglePin()
         }}
-        aria-label={link.pinned ? 'unpin' : 'pin'}
-        data-tooltip={link.pinned ? 'Desafixar' : 'Fixar no topo'}
+        aria-label={link.pinned ? t('link_card.unpin') : t('link_card.pin')}
+        data-tooltip={link.pinned ? t('link_card.unpin_tooltip') : t('link_card.pin_top_tooltip')}
         data-tooltip-side="left"
       >
         <Icon d={I.pin} size={13} stroke={2} />
@@ -134,26 +131,26 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
 
         {link.tags.length > 0 && (
           <div className="fx-card-tags">
-            {link.tags.map((t) => (
-              <TagChip key={t.id} tag={t} />
+            {link.tags.map((tag) => (
+              <TagChip key={tag.id} tag={tag} />
             ))}
           </div>
         )}
 
         <footer className="fx-card-foot">
           <div className="fx-card-meta">
-            <span className="fx-meta-stat" data-tooltip="Cliques" aria-label="Cliques">
+            <span className="fx-meta-stat" data-tooltip={t('link_card.clicks_tooltip')} aria-label={t('link_card.clicks_tooltip')}>
               <Icon d={I.flame} size={13} /> {link.click_count}
             </span>
             <span className="fx-meta-sep" />
-            <span className="fx-meta-stat" data-tooltip="Último clique" aria-label="Último clique">
-              <Icon d={I.clock} size={13} /> {lastClick(link)}
+            <span className="fx-meta-stat" data-tooltip={t('link_card.last_click_tooltip')} aria-label={t('link_card.last_click_tooltip')}>
+              <Icon d={I.clock} size={13} /> {lastClick(link, t)}
             </span>
             {link.preview_status === 'failed' && !link.og_image_url && (
               <>
                 <span className="fx-meta-sep" />
                 <span className="fx-meta-warn">
-                  <Icon d={I.alert} size={13} /> preview falhou
+                  <Icon d={I.alert} size={13} /> {t('link_card.preview_failed')}
                 </span>
               </>
             )}
@@ -161,7 +158,7 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
               <>
                 <span className="fx-meta-sep" />
                 <span className="fx-meta-stat" style={{ color: 'var(--fx-warn)' }}>
-                  <Icon d={I.clock} size={13} /> capturando…
+                  <Icon d={I.clock} size={13} /> {t('link_card.capturing')}
                 </span>
               </>
             )}
@@ -171,9 +168,9 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
             {link.preview_status !== 'ok' && (
               <button
                 className="fx-iconbtn"
-                data-tooltip="Recapturar preview"
+                data-tooltip={t('link_card.refresh_preview')}
                 data-tooltip-side="top"
-                aria-label="refresh preview"
+                aria-label={t('link_card.refresh_preview')}
                 onClick={() => refresh.mutate(link.id)}
               >
                 <Icon d={I.refresh} size={14} />
@@ -181,7 +178,7 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
             )}
             <button
               className="fx-iconbtn"
-              data-tooltip="Editar link"
+              data-tooltip={t('link_card.edit_link')}
               data-tooltip-side="top"
               aria-label="edit"
               onClick={() => onEdit(link)}
@@ -190,7 +187,7 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
             </button>
             <button
               className="fx-iconbtn fx-iconbtn-danger"
-              data-tooltip="Apagar link"
+              data-tooltip={t('link_card.delete_link')}
               data-tooltip-side="top"
               aria-label="delete"
               onClick={onDelete}
@@ -202,12 +199,12 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
               href={goHref(link.id)}
               target="_blank"
               rel="noopener noreferrer"
-              data-tooltip="Acessar"
+              data-tooltip={t('link_card.open_action')}
               data-tooltip-side="top"
               aria-label={`open ${link.title}`}
               onClick={onGo}
             >
-              <span className="fx-openbtn-go">Acessar</span>
+              <span className="fx-openbtn-go">{t('link_card.open_action')}</span>
               <Icon d={I.arrowR} size={14} />
             </a>
           </div>
@@ -225,16 +222,16 @@ function hostOf(u: string) {
   }
 }
 
-function lastClick(link: Link): string {
-  if (!link.last_clicked_at) return 'nunca'
+function lastClick(link: Link, t: (key: string, opts?: Record<string, unknown>) => string): string {
+  if (!link.last_clicked_at) return t('link_card.never_clicked')
   const ms = Date.now() - new Date(link.last_clicked_at).getTime()
   const min = Math.round(ms / 60000)
-  if (min < 1) return 'agora'
-  if (min < 60) return `há ${min}min`
+  if (min < 1) return t('link_card.last_click_now')
+  if (min < 60) return t('link_card.last_click_minutes', { count: min })
   const h = Math.round(min / 60)
-  if (h < 24) return `há ${h}h`
+  if (h < 24) return t('link_card.last_click_hours', { count: h })
   const d = Math.round(h / 24)
-  if (d === 1) return 'ontem'
-  if (d < 30) return `há ${d}d`
-  return new Date(link.last_clicked_at).toLocaleDateString('pt-BR')
+  if (d === 1) return t('link_card.last_click_yesterday')
+  if (d < 30) return t('link_card.last_click_days', { count: d })
+  return new Date(link.last_clicked_at).toLocaleDateString()
 }

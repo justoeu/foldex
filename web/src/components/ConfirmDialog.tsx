@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -60,15 +61,18 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
 function ConfirmModal({
   title,
   message,
-  confirmLabel = 'Confirmar',
-  cancelLabel = 'Cancelar',
+  confirmLabel,
+  cancelLabel,
   destructive,
   onCancel,
   onConfirm,
 }: ConfirmOpts & { onCancel: () => void; onConfirm: () => void }) {
+  const { t } = useTranslation()
   useEscape(onCancel)
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(dialogRef, true)
+  const resolvedConfirm = confirmLabel ?? t('common.confirm')
+  const resolvedCancel = cancelLabel ?? t('common.cancel')
   return (
     <div
       ref={dialogRef}
@@ -86,11 +90,11 @@ function ConfirmModal({
             <div
               className={'fx-modal-kicker' + (destructive ? '' : ' fx-modal-kicker-info')}
             >
-              {destructive ? '⚠ Ação destrutiva' : 'Confirmação'}
+              {destructive ? t('common.destructive_action_kicker') : t('common.confirmation_kicker')}
             </div>
             <h2 className="fx-modal-title">{title}</h2>
           </div>
-          <button className="fx-confirm-x" onClick={onCancel} aria-label="close">
+          <button className="fx-confirm-x" onClick={onCancel} aria-label={t('common.close')}>
             <Icon d={I.x} size={14} />
           </button>
         </header>
@@ -99,7 +103,7 @@ function ConfirmModal({
 
         <footer className="fx-confirm-foot">
           <button className="fx-confirm-btn" onClick={onCancel} autoFocus>
-            {cancelLabel}
+            {resolvedCancel}
           </button>
           <button
             className={
@@ -109,7 +113,7 @@ function ConfirmModal({
             onClick={onConfirm}
           >
             {destructive ? <Icon d={I.trash} size={13} /> : null}
-            {confirmLabel}
+            {resolvedConfirm}
           </button>
         </footer>
       </div>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Trans, useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { TagChip } from './TagChip'
 import { useEscape } from '../hooks/useEscape'
@@ -55,6 +56,7 @@ const INLINE_PALETTE = [
 ]
 
 export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }: Props) {
+  const { t } = useTranslation()
   const { data: tags = [] } = useTags()
   const { data: folders = [] } = useFolders()
   const createTag = useCreateTag()
@@ -98,13 +100,13 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   useEscape(onClose, open)
 
   const available = useMemo(
-    () => tags.filter((t) => !selected.some((s) => s.id === t.id)),
+    () => tags.filter((tag) => !selected.some((s) => s.id === tag.id)),
     [tags, selected],
   )
   const filteredAvailable = useMemo(
     () =>
       tagFilter
-        ? available.filter((t) => t.name.toLowerCase().includes(tagFilter.toLowerCase()))
+        ? available.filter((tag) => tag.name.toLowerCase().includes(tagFilter.toLowerCase()))
         : available,
     [available, tagFilter],
   )
@@ -114,7 +116,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   }, [filteredAvailable.length, tagPage])
   const canCreateFromFilter =
     tagFilter.trim().length > 0 &&
-    !tags.some((t) => t.name.toLowerCase() === tagFilter.trim().toLowerCase()) &&
+    !tags.some((tag) => tag.name.toLowerCase() === tagFilter.trim().toLowerCase()) &&
     !selected.some((s) => s.name.toLowerCase() === tagFilter.trim().toLowerCase())
 
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -136,18 +138,18 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   // Cycle through INLINE_PALETTE for a pending tag (real tags ignore clicks).
   const cycleColor = (idx: number) => {
     setSelected(
-      selected.map((t, i) => {
-        if (i !== idx || !t._pending) return t
-        const cur = INLINE_PALETTE.indexOf(t.color)
+      selected.map((tag, i) => {
+        if (i !== idx || !tag._pending) return tag
+        const cur = INLINE_PALETTE.indexOf(tag.color)
         const next = INLINE_PALETTE[(cur + 1) % INLINE_PALETTE.length]
-        return { ...t, color: next }
+        return { ...tag, color: next }
       }),
     )
   }
 
   const handleImageFile = (file: File) => {
     if (!file.type.startsWith('image/')) {
-      setImgUploadError('Arquivo deve ser uma imagem.')
+      setImgUploadError(t('link_dialog.image_error_type'))
       return
     }
     setImgUploadError(null)
@@ -166,11 +168,11 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
     // about), the link save also fails so the user sees the error and can
     // recover without ending up with orphan tags.
     const tagIds: number[] = []
-    for (const t of selected) {
-      if (t.id) {
-        tagIds.push(t.id)
+    for (const tag of selected) {
+      if (tag.id) {
+        tagIds.push(tag.id)
       } else {
-        const created = await createTag.mutateAsync({ name: t.name, color: t.color })
+        const created = await createTag.mutateAsync({ name: tag.name, color: tag.color })
         tagIds.push(created.id)
       }
     }
@@ -194,7 +196,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
           qc.invalidateQueries({ queryKey: ['links'] })
           qc.invalidateQueries({ queryKey: ['folders'] })
         } catch (e: unknown) {
-          setImgUploadError(extractUploadErr(e))
+          setImgUploadError(extractUploadErr(e, t('link_dialog.image_error_generic')))
           setImageBusy(false)
           return
         }
@@ -224,7 +226,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
           qc.invalidateQueries({ queryKey: ['links'] })
           qc.invalidateQueries({ queryKey: ['folders'] })
         } catch (e: unknown) {
-          setImgUploadError(extractUploadErr(e))
+          setImgUploadError(extractUploadErr(e, t('link_dialog.image_error_generic')))
           setImageBusy(false)
           return
         }
@@ -253,15 +255,15 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
       className="fx-overlay fx-overlay-modal"
       role="dialog"
       aria-modal="true"
-      aria-label={isEdit ? 'Edit link' : 'New link'}
+      aria-label={isEdit ? t('link_dialog.edit_title') : t('link_dialog.kicker_create')}
     >
       <div className="fx-modal">
         <header className="fx-modal-head">
           <div>
-            <div className="fx-modal-kicker">{isEdit ? '✎ Editar' : '+ Novo link'}</div>
-            <h2 className="fx-modal-title">{isEdit ? 'Editar link' : 'Captura visual'}</h2>
+            <div className="fx-modal-kicker">{isEdit ? t('link_dialog.kicker_edit') : t('link_dialog.kicker_create')}</div>
+            <h2 className="fx-modal-title">{isEdit ? t('link_dialog.edit_title') : t('link_dialog.create_title')}</h2>
           </div>
-          <button className="fx-confirm-x" onClick={onClose} aria-label="close">
+          <button className="fx-confirm-x" onClick={onClose} aria-label={t('common.close')}>
             <Icon d={I.x} size={14} />
           </button>
         </header>
@@ -269,13 +271,13 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
         <div className="fx-modal-body">
           <div className="fx-modal-col">
             <label className="fx-field">
-              <span className="fx-field-label">URL</span>
+              <span className="fx-field-label">{t('link_dialog.url_label')}</span>
               <div className="fx-input fx-input-url">
                 <Icon d={I.link} size={15} />
                 <input
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://"
+                  placeholder={t('link_dialog.url_placeholder')}
                   autoFocus
                   aria-label="URL"
                 />
@@ -283,19 +285,19 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
             </label>
 
             <label className="fx-field">
-              <span className="fx-field-label">Título</span>
+              <span className="fx-field-label">{t('link_dialog.title_label')}</span>
               <div className="fx-input">
                 <input
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Derivado da URL se vazio"
+                  placeholder={t('link_dialog.title_placeholder')}
                   aria-label="Title"
                 />
               </div>
             </label>
 
             <label className="fx-field">
-              <span className="fx-field-label">Descrição</span>
+              <span className="fx-field-label">{t('link_dialog.description_label')}</span>
               <div className="fx-textarea-wrap">
                 <textarea
                   className="fx-textarea"
@@ -316,15 +318,15 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
             </label>
 
             <label className="fx-field">
-              <span className="fx-field-label">Tags</span>
+              <span className="fx-field-label">{t('link_dialog.tags_label')}</span>
               <div className="fx-tagpicker">
-                {selected.map((t, i) => (
+                {selected.map((tag, i) => (
                   <TagChip
-                    key={t.id || `pending-${i}`}
-                    tag={t}
+                    key={tag.id || `pending-${i}`}
+                    tag={tag}
                     active
                     closable
-                    onClick={t._pending ? () => cycleColor(i) : undefined}
+                    onClick={tag._pending ? () => cycleColor(i) : undefined}
                     onClose={() => setSelected(selected.filter((_, j) => j !== i))}
                   />
                 ))}
@@ -338,14 +340,13 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                       queueInlineTag()
                     }
                   }}
-                  placeholder="+ adicionar tag…"
+                  placeholder={t('link_dialog.tags_search_placeholder')}
                   aria-label="tag filter"
                 />
               </div>
-              {selected.some((t) => t._pending) && (
+              {selected.some((tag) => tag._pending) && (
                 <div className="fx-tag-hint">
-                  Clique no <strong>círculo colorido</strong> de uma tag nova pra trocar a cor.
-                  Tags só são criadas quando você salva o link.
+                  <Trans i18nKey="link_dialog.pending_tag_color_hint_html" components={{ strong: <strong /> }} />
                 </div>
               )}
               {(filteredAvailable.length > 0 || canCreateFromFilter) && (() => {
@@ -356,7 +357,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                   <div style={{ marginTop: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                       <span style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)' }}>
-                        Tags cadastradas
+                        {t('link_dialog.tags_registered_label')}
                       </span>
                       {totalPages > 1 && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -365,7 +366,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                             className="fx-iconbtn"
                             disabled={tagPage === 0}
                             onClick={() => setTagPage((p) => p - 1)}
-                            aria-label="página anterior"
+                            aria-label={t('link_dialog.tags_page_prev_aria')}
                             style={{ width: 22, height: 22 }}
                           >
                             <Icon d={I.chevronLeft} size={12} />
@@ -378,7 +379,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                             className="fx-iconbtn"
                             disabled={tagPage >= totalPages - 1}
                             onClick={() => setTagPage((p) => p + 1)}
-                            aria-label="próxima página"
+                            aria-label={t('link_dialog.tags_page_next_aria')}
                             style={{ width: 22, height: 22 }}
                           >
                             <Icon d={I.chevronRight} size={12} />
@@ -387,12 +388,12 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                       )}
                     </div>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {pageTags.map((t) => (
+                      {pageTags.map((tag) => (
                         <TagChip
-                          key={t.id}
-                          tag={t}
+                          key={tag.id}
+                          tag={tag}
                           onClick={() => {
-                            setSelected([...selected, t])
+                            setSelected([...selected, tag])
                             setTagFilter('')
                           }}
                         />
@@ -404,7 +405,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                           onClick={queueInlineTag}
                           style={{ fontSize: 11 }}
                         >
-                          <Icon d={I.plus} size={11} /> criar "{tagFilter.trim()}"
+                          <Icon d={I.plus} size={11} /> {t('link_dialog.tags_create_inline', { name: tagFilter.trim() })}
                         </button>
                       )}
                     </div>
@@ -414,7 +415,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
             </label>
 
             <label className="fx-field">
-              <span className="fx-field-label">Pasta</span>
+              <span className="fx-field-label">{t('link_dialog.folder_label')}</span>
               <div className="fx-input">
                 <select
                   className="fx-folder-select"
@@ -424,7 +425,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                   }
                   aria-label="folder"
                 >
-                  <option value="">Nenhuma pasta</option>
+                  <option value="">{t('link_dialog.folder_none')}</option>
                   {folders.map((f) => (
                     <option key={f.id} value={String(f.id)}>
                       {f.name}
@@ -439,31 +440,31 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                 type="checkbox"
                 checked={pinned}
                 onChange={(e) => setPinned(e.target.checked)}
-                aria-label="pin to top"
+                aria-label={t('link_dialog.pinned_aria')}
               />
               <span className="fx-toggle-track">
                 <span className="fx-toggle-knob" />
               </span>
               <span className="fx-toggle-label">
-                <Icon d={I.pin} size={12} /> Fixar no topo
-                <span className="fx-toggle-hint">Pinados aparecem antes dos demais</span>
+                <Icon d={I.pin} size={12} /> {t('link_dialog.pinned_label')}
+                <span className="fx-toggle-hint">{t('link_dialog.pinned_hint')}</span>
               </span>
             </label>
           </div>
 
           <aside className="fx-modal-side">
             {/* Status */}
-            <div className="fx-modal-side-label">Status</div>
+            <div className="fx-modal-side-label">{t('link_dialog.status_label')}</div>
             <div className="fx-modal-side-meta">
               <div className="fx-modal-side-meta-row">
                 <Icon d={I.globe} size={13} /> {hostOf(url) || '—'}
               </div>
               <div className="fx-modal-side-meta-row">
-                <Icon d={I.flame} size={13} /> {link?.click_count ?? 0} cliques
+                <Icon d={I.flame} size={13} /> {t('link_dialog.clicks_count', { count: link?.click_count ?? 0 })}
               </div>
               {pinned && (
                 <div className="fx-modal-side-meta-row" style={{ color: 'var(--fx-accent)' }}>
-                  <Icon d={I.pin} size={13} /> Fixado
+                  <Icon d={I.pin} size={13} /> {t('link_dialog.pinned_status')}
                 </div>
               )}
             </div>
@@ -471,10 +472,10 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
             {/* Preview / Upload */}
             <div className="fx-modal-side-preview" style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div className="fx-modal-side-label">Imagem de prévia</div>
+                <div className="fx-modal-side-label">{t('link_dialog.image_label')}</div>
                 {url && (
                   <a href={url} target="_blank" rel="noopener noreferrer" className="fx-modal-side-open-link">
-                    <Icon d={I.arrowR} size={11} /> Abrir no browser
+                    <Icon d={I.arrowR} size={11} /> {t('link_dialog.image_open_browser')}
                   </a>
                 )}
               </div>
@@ -486,7 +487,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                   {imageBusy && (
                     <div className="fx-modal-side-uploading" aria-live="polite">
                       <span className="fx-spinner" aria-hidden="true" />
-                      <span>Enviando imagem…</span>
+                      <span>{t('link_dialog.image_uploading')}</span>
                     </div>
                   )}
                 </div>
@@ -519,17 +520,17 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
               >
                 {imageBusy ? (
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    <span className="fx-spinner" aria-hidden="true" /> Enviando imagem…
+                    <span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}
                   </span>
                 ) : pendingImagePreview
-                  ? '✅ Imagem selecionada — será salva ao clicar em Salvar'
-                  : '📎 Arraste ou clique para adicionar imagem'}
+                  ? t('link_dialog.image_selected_hint')
+                  : t('link_dialog.image_drop_hint')}
               </div>
 
               {/* Status messages */}
               {pendingImagePreview && (
                 <div style={{ fontSize: 11, color: 'var(--fx-accent)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Icon d={I.check} size={12} /> Será salva junto com o link
+                  <Icon d={I.check} size={12} /> {t('link_dialog.image_saved_with_link')}
                 </div>
               )}
               {imgUploadError && (
@@ -546,7 +547,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                   style={{ justifyContent: 'center', color: 'var(--fx-danger)' }}
                   onClick={handleRemoveImage}
                 >
-                  <Icon d={I.trash} size={13} /> Remover imagem
+                  <Icon d={I.trash} size={13} /> {t('link_dialog.image_remove')}
                 </button>
               )}
             </div>
@@ -555,7 +556,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
 
         <footer className="fx-modal-foot">
           <button className="fx-confirm-btn" onClick={onClose}>
-            Cancelar
+            {t('common.cancel')}
           </button>
           <button
             className="fx-confirm-btn fx-confirm-btn-primary"
@@ -564,11 +565,11 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
           >
             {imageBusy ? (
               <>
-                <span className="fx-spinner" aria-hidden="true" /> Enviando imagem…
+                <span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}
               </>
             ) : (
               <>
-                {isEdit ? 'Salvar alterações' : 'Salvar link'}
+                {isEdit ? t('link_dialog.submit_save') : t('link_dialog.submit_create')}
                 <Icon d={I.arrowR} size={14} stroke={2} />
               </>
             )}
@@ -587,7 +588,7 @@ function hostOf(u: string) {
   }
 }
 
-function extractUploadErr(e: unknown): string {
+function extractUploadErr(e: unknown, fallback: string): string {
   const obj = e as { response?: { data?: { error?: { message?: string } } }; message?: string }
-  return obj?.response?.data?.error?.message ?? obj?.message ?? 'falha ao enviar imagem'
+  return obj?.response?.data?.error?.message ?? obj?.message ?? fallback
 }

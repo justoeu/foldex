@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 
 type Props = { children: ReactNode }
 type State = { error: Error | null }
@@ -28,63 +29,68 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.error) {
-      return (
-        <div
-          role="alert"
-          style={{
-            minHeight: '100vh',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 32,
-            background: 'var(--fx-bg, #0b0b0f)',
-            color: 'var(--fx-ink, #e6e6f0)',
-            fontFamily: 'var(--fx-mono, ui-monospace, monospace)',
-            gap: 18,
-            textAlign: 'center',
-          }}
-        >
-          <div style={{ fontSize: 14, color: 'var(--fx-ink-3, #9ca0b8)', textTransform: 'uppercase', letterSpacing: '0.18em' }}>
-            ⚠ algo deu errado
-          </div>
-          <h1 style={{ fontFamily: 'var(--fx-display, system-ui, sans-serif)', fontSize: 28, margin: 0 }}>
-            Foldex bateu num erro inesperado
-          </h1>
-          <p style={{ fontSize: 14, color: 'var(--fx-ink-4, #6b6e85)', maxWidth: 520 }}>
-            A view atual quebrou ao renderizar. Recarregar a página resolve quase sempre — os dados estão salvos no servidor.
-          </p>
-          <pre
-            style={{
-              maxWidth: 720,
-              overflow: 'auto',
-              padding: 12,
-              borderRadius: 8,
-              background: 'rgba(255, 255, 255, 0.04)',
-              fontSize: 12,
-              color: 'var(--fx-ink-3, #9ca0b8)',
-              textAlign: 'left',
-            }}
-          >
-            {this.state.error.message}
-          </pre>
-          <button
-            onClick={this.handleReload}
-            style={{
-              padding: '10px 18px',
-              borderRadius: 10,
-              border: 0,
-              background: 'linear-gradient(180deg, #8B85FF, #6366F1)',
-              color: 'white',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            Recarregar
-          </button>
-        </div>
-      )
+      return <ErrorFallback error={this.state.error} onReload={this.handleReload} />
     }
     return this.props.children
   }
+}
+
+function ErrorFallback({ error, onReload }: { error: Error; onReload: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <div
+      role="alert"
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 32,
+        background: 'var(--fx-bg, #0b0b0f)',
+        color: 'var(--fx-ink, #e6e6f0)',
+        fontFamily: 'var(--fx-mono, ui-monospace, monospace)',
+        gap: 18,
+        textAlign: 'center',
+      }}
+    >
+      <div style={{ fontSize: 14, color: 'var(--fx-ink-3, #9ca0b8)', textTransform: 'uppercase', letterSpacing: '0.18em' }}>
+        {t('errors_boundary.kicker')}
+      </div>
+      <h1 style={{ fontFamily: 'var(--fx-display, system-ui, sans-serif)', fontSize: 28, margin: 0 }}>
+        {t('errors_boundary.title')}
+      </h1>
+      <p style={{ fontSize: 14, color: 'var(--fx-ink-4, #6b6e85)', maxWidth: 520 }}>
+        {t('errors_boundary.body')}
+      </p>
+      <pre
+        style={{
+          maxWidth: 720,
+          overflow: 'auto',
+          padding: 12,
+          borderRadius: 8,
+          background: 'rgba(255, 255, 255, 0.04)',
+          fontSize: 12,
+          color: 'var(--fx-ink-3, #9ca0b8)',
+          textAlign: 'left',
+        }}
+      >
+        {error.message}
+      </pre>
+      <button
+        onClick={onReload}
+        style={{
+          padding: '10px 18px',
+          borderRadius: 10,
+          border: 0,
+          background: 'linear-gradient(180deg, #8B85FF, #6366F1)',
+          color: 'white',
+          fontWeight: 700,
+          cursor: 'pointer',
+        }}
+      >
+        {t('errors_boundary.reload')}
+      </button>
+    </div>
+  )
 }

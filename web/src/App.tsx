@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useHotkeys } from 'react-hotkeys-hook'
+import { Trans, useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import './styles/foldex.css'
 import './styles/overrides.css'
 
@@ -28,6 +30,7 @@ type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
 type ViewMode = 'cards' | 'compact' | 'list'
 
 export default function App() {
+  const { t } = useTranslation()
   const [view, setView] = useState<View>('home')
   const [selectedTags, setSelectedTags] = useState<number[]>([])
   const [q, setQ] = useState('')
@@ -218,7 +221,7 @@ export default function App() {
     try {
       // If we're already inside a folder, the merged-pair lives under it
       // (subfolder); otherwise it's a root folder.
-      const f = await createFolder.mutateAsync({ name: 'Nova pasta', parent_id: openFolder ?? null })
+      const f = await createFolder.mutateAsync({ name: t('home.merge_new_folder_name'), parent_id: openFolder ?? null })
       await Promise.all([
         updateLink.mutateAsync({ id: aId, body: { folder_id: f.id } }),
         updateLink.mutateAsync({ id: bId, body: { folder_id: f.id } }),
@@ -440,6 +443,7 @@ function Home({
   onMergeLinks,
   onMoveFolder,
 }: HomeProps) {
+  const { t } = useTranslation()
   const totalClicks = useMemo(() => links.reduce((acc, l) => acc + l.click_count, 0), [links])
   const { data: tags = [] } = useTags()
   const currentFolder = openFolder !== null ? allFolders.find((f) => f.id === openFolder) : null
@@ -479,21 +483,21 @@ function Home({
       ) : (
         <div className="fx-pagehead">
           <div>
-            <div className="fx-pagehead-kicker">📡 EM ÓRBITA</div>
-            <h1 className="fx-pagehead-h">Sua base de links</h1>
+            <div className="fx-pagehead-kicker">{t('home.page_kicker')}</div>
+            <h1 className="fx-pagehead-h">{t('home.page_title')}</h1>
           </div>
           <div className="fx-pagehead-stats">
             <div className="fx-stat">
               <div className="fx-stat-num">{links.length + folders.reduce((a, f) => a + f.link_count, 0)}</div>
-              <div className="fx-stat-cap">links</div>
+              <div className="fx-stat-cap">{t('home.stat_links')}</div>
             </div>
             <div className="fx-stat">
               <div className="fx-stat-num">{tags.length}</div>
-              <div className="fx-stat-cap">tags</div>
+              <div className="fx-stat-cap">{t('home.stat_tags')}</div>
             </div>
             <div className="fx-stat">
               <div className="fx-stat-num fx-stat-num-accent">{totalClicks}</div>
-              <div className="fx-stat-cap">cliques</div>
+              <div className="fx-stat-cap">{t('home.stat_clicks')}</div>
             </div>
           </div>
         </div>
@@ -511,6 +515,7 @@ function Home({
           onMoveLinkToFolder={onMoveLinkToFolder}
           onMergeLinks={onMergeLinks}
           onMoveFolder={onMoveFolder}
+          t={t}
         />
       )}
       {viewMode === 'list' && <ListView links={links} onEdit={onEdit} />}
@@ -530,6 +535,7 @@ function CardsView({
   onMoveLinkToFolder,
   onMergeLinks,
   onMoveFolder,
+  t,
 }: {
   folders: FolderT[]
   links: LinkT[]
@@ -541,14 +547,15 @@ function CardsView({
   onMoveLinkToFolder: (linkId: number, folderId: number) => void
   onMergeLinks: (aId: number, bId: number) => void
   onMoveFolder: (sourceId: number, targetId: number) => void
+  t: TFunction
 }) {
   if (isLoading) {
-    return <div style={{ padding: 48, color: 'var(--fx-ink-4)' }}>carregando…</div>
+    return <div style={{ padding: 48, color: 'var(--fx-ink-4)' }}>{t('home.loading')}</div>
   }
   if (folders.length === 0 && links.length === 0) {
     return (
       <div style={{ padding: '48px 6px', color: 'var(--fx-ink-4)' }}>
-        Nada por aqui ainda. Aperte <kbd className="fx-kbd">⌥N</kbd> pra adicionar o primeiro link.
+        <Trans i18nKey="home.cards_empty_html" components={{ kbd: <kbd className="fx-kbd" /> }} />
       </div>
     )
   }
@@ -566,7 +573,7 @@ function CardsView({
       ...links.map<Cell>((l) => ({ kind: 'link', name: l.title, link: l })),
     ]
     const dir = sort === 'alpha' ? 1 : -1
-    cells.sort((a, b) => dir * a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }))
+    cells.sort((a, b) => dir * a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
     return (
       <div className="fx-grid">
         {cells.map((c) =>
@@ -623,15 +630,16 @@ function FolderBreadcrumb({
   onReload: () => void
   reloading: boolean
 }) {
+  const { t } = useTranslation()
   return (
     <div className="fx-pagehead fx-pagehead-folder">
       <div>
         <div className="fx-pagehead-kicker">
           <button type="button" className="fx-breadcrumb-back" onClick={onBack}>
-            ← Pastas
+            {t('home.breadcrumb_back')}
           </button>
         </div>
-        <h1 className="fx-pagehead-h">{folder?.name ?? 'Pasta'}</h1>
+        <h1 className="fx-pagehead-h">{folder?.name ?? t('home.breadcrumb_default')}</h1>
       </div>
       {folder && (
         <div style={{ display: 'flex', gap: 8 }}>
@@ -640,7 +648,7 @@ function FolderBreadcrumb({
             onClick={onReload}
             disabled={reloading}
             aria-label="reload folder"
-            data-tooltip="Recarregar links e subpastas"
+            data-tooltip={t('home.breadcrumb_reload_tooltip')}
           >
             <Icon d={I.refresh} size={14} stroke={2} />
           </button>
@@ -648,9 +656,9 @@ function FolderBreadcrumb({
             className="fx-confirm-btn"
             onClick={onEdit}
             aria-label="edit folder"
-            data-tooltip="Editar pasta"
+            data-tooltip={t('home.breadcrumb_edit_tooltip')}
           >
-            Editar pasta
+            {t('home.breadcrumb_edit_label')}
           </button>
         </div>
       )}

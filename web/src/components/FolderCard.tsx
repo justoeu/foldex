@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { primaryColor } from '../lib/tagColor'
 import type { Folder, PreviewTile, PreviewFolderTile } from '../api/types'
@@ -31,6 +32,7 @@ const MIME_FOLDER = 'application/x-foldex-folder'
 // the preview area, folder name + link count in the body. Empty folder shows
 // dashed tiles + "Pasta vazia" label.
 export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder }: Props) {
+  const { t } = useTranslation()
   const tiles = mixTiles(folder.preview_links, folder.preview_folders)
   const total = folder.link_count + folder.folder_count
   const overflow = Math.max(0, total - 4)
@@ -106,7 +108,7 @@ export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder }:
         type="button"
         className="fx-folder-preview"
         onClick={() => onOpen(folder.id)}
-        aria-label={`Abrir pasta ${folder.name}`}
+        aria-label={t('folder_card.open_folder_aria', { name: folder.name })}
         style={{ ['--fx-folder-accent' as never]: accent, background: folder.color }}
       >
         <div className="fx-folder-tiles">
@@ -115,7 +117,7 @@ export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder }:
           ))}
         </div>
         {total === 0 && (
-          <span className="fx-folder-empty-label">Pasta vazia</span>
+          <span className="fx-folder-empty-label">{t('folder_card.empty')}</span>
         )}
       </button>
       <div className="fx-card-body">
@@ -131,11 +133,11 @@ export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder }:
               </button>
             </h3>
             <div className="fx-card-host">
-              {folder.link_count} {folder.link_count === 1 ? 'link' : 'links'}
+              {t('folder_card.links_count', { count: folder.link_count })}
               {folder.folder_count > 0 && (
                 <>
                   {' · '}
-                  {folder.folder_count} {folder.folder_count === 1 ? 'pasta' : 'pastas'}
+                  {t('folder_card.folders_count', { count: folder.folder_count })}
                 </>
               )}
             </div>
@@ -143,15 +145,15 @@ export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder }:
         </header>
         <footer className="fx-card-foot">
           <div className="fx-card-meta">
-            <span className="fx-meta-stat" data-tooltip="Pasta">
-              <Icon d={I.folder} size={13} /> pasta
+            <span className="fx-meta-stat" data-tooltip={t('folder_card.folder_label_tooltip')}>
+              <Icon d={I.folder} size={13} /> {t('folder_card.folder_label')}
             </span>
           </div>
           <div className="fx-card-actions">
             {onEdit && (
               <button
                 className="fx-iconbtn"
-                data-tooltip="Editar pasta"
+                data-tooltip={t('folder_card.edit_folder')}
                 data-tooltip-side="top"
                 aria-label="edit folder"
                 onClick={() => onEdit(folder)}
@@ -161,7 +163,7 @@ export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder }:
             )}
             <button
               className="fx-iconbtn fx-iconbtn-primary"
-              data-tooltip="Abrir pasta"
+              data-tooltip={t('folder_card.open_folder')}
               data-tooltip-side="top"
               aria-label="open folder"
               onClick={() => onOpen(folder.id)}

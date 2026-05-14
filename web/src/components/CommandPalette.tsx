@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
@@ -16,6 +17,7 @@ type Props = {
 }
 
 export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
+  const { t } = useTranslation()
   const [q, setQ] = useState('')
   const [debounced, setDebounced] = useState('')
 
@@ -43,7 +45,7 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
   const tagMatches = useMemo(() => {
     if (!debounced) return []
     const f = debounced.toLowerCase()
-    return tags.filter((t) => t.name.toLowerCase().includes(f)).slice(0, 4)
+    return tags.filter((tag) => tag.name.toLowerCase().includes(f)).slice(0, 4)
   }, [tags, debounced])
   // Hierarchical folder rendering — depth-aware so the user sees the tree
   // shape, with the full ancestor path attached to each match for context
@@ -59,7 +61,7 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
   if (!open) return null
 
   return (
-    <div ref={dialogRef} className="fx-overlay" role="dialog" aria-modal="true" aria-label="Command palette">
+    <div ref={dialogRef} className="fx-overlay" role="dialog" aria-modal="true" aria-label={t('command_palette.dialog_aria')}>
       <div className="fx-cmdk">
         <div className="fx-cmdk-input">
           <Icon d={I.search} size={18} />
@@ -67,11 +69,11 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Buscar por título, URL, tag, ação…"
-            aria-label="search"
+            placeholder={t('command_palette.placeholder')}
+            aria-label={t('command_palette.search_aria')}
           />
           <span className="fx-cmdk-scope">
-            em <b>todas as tags</b>
+            {t('command_palette.scope_label_prefix')} <b>{t('command_palette.scope_label_all_tags')}</b>
           </span>
           <kbd className="fx-kbd">esc</kbd>
         </div>
@@ -79,7 +81,7 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
         <div className="fx-cmdk-results">
           {!debounced && suggested.length > 0 && (
             <div className="fx-cmdk-group">
-              <div className="fx-cmdk-grouplabel">Sugeridos · mais clicados</div>
+              <div className="fx-cmdk-grouplabel">{t('command_palette.suggested_section')}</div>
               {suggested.map((l, i) => (
                 <a
                   key={l.id}
@@ -95,11 +97,11 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
                     <div className="fx-cmdk-sub">{l.url}</div>
                   </div>
                   <div className="fx-cmdk-tags">
-                    {l.tags.slice(0, 2).map((t) => (
-                      <TagChip key={t.id} tag={t} />
+                    {l.tags.slice(0, 2).map((tag) => (
+                      <TagChip key={tag.id} tag={tag} />
                     ))}
                   </div>
-                  <span className="fx-cmdk-hint">{l.click_count} cliques</span>
+                  <span className="fx-cmdk-hint">{t('command_palette.clicks_count', { count: l.click_count })}</span>
                 </a>
               ))}
             </div>
@@ -107,7 +109,7 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
 
           {matches.length > 0 && (
             <div className="fx-cmdk-group">
-              <div className="fx-cmdk-grouplabel">Links</div>
+              <div className="fx-cmdk-grouplabel">{t('command_palette.links_section')}</div>
               {matches.map((l) => (
                 <a
                   key={l.id}
@@ -123,8 +125,8 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
                     <div className="fx-cmdk-sub">{l.url}</div>
                   </div>
                   <div className="fx-cmdk-tags">
-                    {l.tags.slice(0, 2).map((t) => (
-                      <TagChip key={t.id} tag={t} />
+                    {l.tags.slice(0, 2).map((tag) => (
+                      <TagChip key={tag.id} tag={tag} />
                     ))}
                   </div>
                   <span className="fx-cmdk-hint">/go/{l.id}</span>
@@ -136,10 +138,10 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
           {folderMatches.length > 0 && (
             <div className="fx-cmdk-group">
               <div className="fx-cmdk-grouplabel">
-                Pastas
+                {t('command_palette.folders_section')}
                 <span className="fx-cmdk-grouphint">
-                  <span className="fx-cmdk-grouphint-unit">L</span> links ·{' '}
-                  <span className="fx-cmdk-grouphint-unit">P</span> pastas
+                  <span className="fx-cmdk-grouphint-unit">L</span> {t('command_palette.folders_hint_links')} ·{' '}
+                  <span className="fx-cmdk-grouphint-unit">P</span> {t('command_palette.folders_hint_folders')}
                 </span>
               </div>
               {folderMatches.map((f) => (
@@ -148,7 +150,7 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
                   type="button"
                   className="fx-cmdk-row fx-cmdk-folder-row"
                   onClick={() => onOpenFolder?.(f.id)}
-                  aria-label={`abrir pasta ${f.name}`}
+                  aria-label={t('command_palette.open_folder_aria', { name: f.name })}
                   data-tooltip={f.path.length > 1 ? f.path.join(' / ') : f.name}
                 >
                   {f.depth > 0 && (
@@ -180,7 +182,7 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
                     )}
                   </span>
                   <span className="fx-cmdk-folder-name">{f.name}</span>
-                  <span className="fx-cmdk-hint">Pasta</span>
+                  <span className="fx-cmdk-hint">{t('command_palette.folder_hint')}</span>
                 </button>
               ))}
             </div>
@@ -188,17 +190,17 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
 
           {tagMatches.length > 0 && (
             <div className="fx-cmdk-group">
-              <div className="fx-cmdk-grouplabel">Tags</div>
-              {tagMatches.map((t) => (
-                <div key={t.id} className="fx-cmdk-row">
-                  <span className="fx-cmdk-tagdot" style={{ background: t.color }} />
+              <div className="fx-cmdk-grouplabel">{t('command_palette.tags_section')}</div>
+              {tagMatches.map((tag) => (
+                <div key={tag.id} className="fx-cmdk-row">
+                  <span className="fx-cmdk-tagdot" style={{ background: tag.color }} />
                   <div className="fx-cmdk-main">
                     <div className="fx-cmdk-title">
-                      Filtrar por <b>{t.name}</b>
+                      {t('command_palette.filter_by')} <b>{tag.name}</b>
                     </div>
-                    <div className="fx-cmdk-sub">{t.link_count ?? 0} links</div>
+                    <div className="fx-cmdk-sub">{t('command_palette.tag_links_count', { count: tag.link_count ?? 0 })}</div>
                   </div>
-                  <span className="fx-cmdk-hint">Tag</span>
+                  <span className="fx-cmdk-hint">{t('command_palette.tag_hint')}</span>
                 </div>
               ))}
             </div>
@@ -206,21 +208,21 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
 
           {debounced && matches.length === 0 && tagMatches.length === 0 && folderMatches.length === 0 && (
             <div style={{ padding: 24, textAlign: 'center', color: 'var(--fx-ink-4)', fontSize: 13 }}>
-              no matches
+              {t('command_palette.no_results')}
             </div>
           )}
         </div>
 
         <div className="fx-cmdk-foot">
           <span className="fx-cmdk-foot-item">
-            <kbd className="fx-kbd">↵</kbd> abrir via /go
+            <kbd className="fx-kbd">↵</kbd> {t('command_palette.footer_open_go')}
           </span>
           <span className="fx-cmdk-foot-item">
-            <kbd className="fx-kbd">⌘↵</kbd> abrir em nova aba
+            <kbd className="fx-kbd">⌘↵</kbd> {t('command_palette.footer_open_new_tab')}
           </span>
           <span className="fx-cmdk-foot-grow" />
           <span className="fx-cmdk-foot-item fx-cmdk-foot-stat">
-            ⌥K · {links.length} links indexados
+            {t('command_palette.footer_indexed', { count: links.length })}
           </span>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Icon, I } from '../components/icons'
 import { BackupCard } from '../components/BackupCard'
 import { ImportPreviewDialog } from '../components/ImportPreviewDialog'
@@ -8,6 +9,7 @@ type Props = {
 }
 
 export function ImportPage({ onDone }: Props) {
+  const { t } = useTranslation()
   const [format, setFormat] = useState<'netscape' | 'json'>('netscape')
   const [file, setFile] = useState<File | null>(null)
   const [previewing, setPreviewing] = useState(false)
@@ -16,8 +18,8 @@ export function ImportPage({ onDone }: Props) {
     <div style={{ padding: 6, maxWidth: 1280 }}>
       <div className="fx-pagehead" style={{ marginBottom: 18 }}>
         <div>
-          <div className="fx-pagehead-kicker">📥 IMPORTAR / EXPORTAR</div>
-          <h1 className="fx-pagehead-h">Mover seus links</h1>
+          <div className="fx-pagehead-kicker">{t('import.page_kicker')}</div>
+          <h1 className="fx-pagehead-h">{t('import.page_title')}</h1>
         </div>
       </div>
 
@@ -26,30 +28,30 @@ export function ImportPage({ onDone }: Props) {
 
       <section className="fx-card" style={{ marginBottom: 16 }}>
         <div className="fx-card-body" style={{ gap: 14, padding: 18 }}>
-          <h3 className="fx-card-title" style={{ fontSize: 16 }}>Importar</h3>
+          <h3 className="fx-card-title" style={{ fontSize: 16 }}>{t('import.import_section_title')}</h3>
 
           <div className="fx-segment" role="group" aria-label="format">
             <button
               className={'fx-seg' + (format === 'netscape' ? ' fx-seg-active' : '')}
               onClick={() => setFormat('netscape')}
               aria-pressed={format === 'netscape'}
-              data-tooltip="Formato Netscape — padrão de export do Chrome, Firefox, Safari, Edge"
+              data-tooltip={t('import.format_bookmarks_tooltip')}
             >
-              Bookmarks HTML
+              {t('import.format_bookmarks_label')}
             </button>
             <button
               className={'fx-seg' + (format === 'json' ? ' fx-seg-active' : '')}
               onClick={() => setFormat('json')}
               aria-pressed={format === 'json'}
-              data-tooltip="Formato próprio do Foldex (preserva pastas, tags, cliques)"
+              data-tooltip={t('import.format_json_tooltip')}
             >
-              Foldex JSON
+              {t('import.format_json_label')}
             </button>
           </div>
           <div style={{ fontSize: 11, color: 'var(--fx-ink-4)' }}>
             {format === 'netscape'
-              ? 'Arquivo .html exportado do navegador (Chrome / Firefox / Safari / Edge).'
-              : 'Arquivo .json exportado do próprio Foldex.'}
+              ? t('import.format_hint_bookmarks')
+              : t('import.format_hint_json')}
           </div>
 
           <div
@@ -71,7 +73,7 @@ export function ImportPage({ onDone }: Props) {
           >
             <Icon d={I.upload} size={28} />
             <div style={{ marginTop: 8, color: 'var(--fx-ink-3)' }}>
-              {file ? file.name : 'Arraste o arquivo aqui ou clique pra escolher'}
+              {file ? file.name : t('import.drop_zone')}
             </div>
             <input
               type="file"
@@ -88,11 +90,11 @@ export function ImportPage({ onDone }: Props) {
               disabled={!file}
               onClick={() => setPreviewing(true)}
             >
-              Revisar e importar
+              {t('import.review_button')}
               <Icon d={I.arrowR} size={15} stroke={2} />
             </button>
             <span style={{ fontSize: 11, color: 'var(--fx-ink-4)' }}>
-              Mostra contagens + duplicados antes de aplicar.
+              {t('import.review_hint')}
             </span>
           </div>
         </div>
@@ -100,19 +102,19 @@ export function ImportPage({ onDone }: Props) {
 
       <section className="fx-card">
         <div className="fx-card-body" style={{ gap: 12, padding: 18 }}>
-          <h3 className="fx-card-title" style={{ fontSize: 16 }}>Exportar</h3>
+          <h3 className="fx-card-title" style={{ fontSize: 16 }}>{t('import.export_section_title')}</h3>
           <div style={{ display: 'flex', gap: 8 }}>
             <a
               className="fx-pillbtn"
               href="/api/export?format=netscape"
-              data-tooltip="HTML que qualquer navegador importa de volta"
+              data-tooltip={t('import.export_bookmarks_tooltip')}
             >
-              <Icon d={I.upload} size={13} /> Bookmarks HTML
+              <Icon d={I.upload} size={13} /> {t('import.format_bookmarks_label')}
             </a>
             <a
               className="fx-pillbtn"
               href="/api/export?format=json"
-              data-tooltip="JSON do próprio Foldex (preserva pastas, tags, cliques)"
+              data-tooltip={t('import.export_json_tooltip')}
             >
               <Icon d={I.upload} size={13} /> JSON
             </a>

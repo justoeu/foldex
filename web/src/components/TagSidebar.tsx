@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { TagDialog } from './TagDialog'
 import { TagManagerDialog } from './TagManagerDialog'
@@ -38,6 +39,7 @@ export function TagSidebar({
   collapsed,
   onToggleCollapsed,
 }: Props) {
+  const { t } = useTranslation()
   const { data: tags = [], isLoading } = useTags()
   const [creating, setCreating] = useState(false)
   const [managing, setManaging] = useState(false)
@@ -62,8 +64,8 @@ export function TagSidebar({
       <aside className="fx-sidebar fx-sidebar-rail">
         <button
           className="fx-iconbtn"
-          aria-label="expand sidebar"
-          data-tooltip="Expandir tags"
+          aria-label={t('sidebar.expand')}
+          data-tooltip={t('sidebar.expand')}
           data-tooltip-side="right"
           onClick={onToggleCollapsed}
         >
@@ -75,8 +77,8 @@ export function TagSidebar({
         <div className="fx-sidebar-rail-actions">
           <button
             className="fx-iconbtn"
-            aria-label="new tag"
-            data-tooltip="Nova tag"
+            aria-label={t('sidebar.new_tag_tooltip')}
+            data-tooltip={t('sidebar.new_tag_tooltip')}
             data-tooltip-side="right"
             onClick={() => setCreating(true)}
           >
@@ -84,8 +86,8 @@ export function TagSidebar({
           </button>
           <button
             className="fx-iconbtn"
-            aria-label="manage tags"
-            data-tooltip="Gerenciar tags"
+            aria-label={t('sidebar.manage_tags_tooltip')}
+            data-tooltip={t('sidebar.manage_tags_tooltip')}
             data-tooltip-side="right"
             disabled={tags.length === 0}
             onClick={() => setManaging(true)}
@@ -109,13 +111,13 @@ export function TagSidebar({
     <aside className="fx-sidebar">
       <div className="fx-side-head">
         <div className="fx-side-title">
-          <Icon d={I.tag} size={15} /> <span>Tags</span>
+          <Icon d={I.tag} size={15} /> <span>{t('sidebar.tags')}</span>
         </div>
         <div className="fx-side-head-actions">
           <button
             className="fx-iconbtn"
-            aria-label="collapse sidebar"
-            data-tooltip="Recolher"
+            aria-label={t('sidebar.collapse')}
+            data-tooltip={t('sidebar.collapse')}
             onClick={onToggleCollapsed}
           >
             <Icon d={I.chevronLeft} size={14} />
@@ -133,27 +135,27 @@ export function TagSidebar({
           <span className="fx-all-dot">
             <Icon d={I.layers} size={13} />
           </span>
-          <span className="fx-side-label">Todos os links</span>
+          <span className="fx-side-label">{t('sidebar.all_links')}</span>
           <span className="fx-side-count">{totalLinks}</span>
         </button>
 
-        {isLoading && <div style={{ padding: 12, color: 'var(--fx-ink-4)' }}>carregando…</div>}
+        {isLoading && <div style={{ padding: 12, color: 'var(--fx-ink-4)' }}>{t('sidebar.loading')}</div>}
 
         {freq.length > 0 && (
           <>
             <SectionHeader
-              label="Frequentes"
+              label={t('sidebar.frequent')}
               open={freqOpen}
               onToggle={() => setFreqOpen((v) => !v)}
             />
-            {freqOpen && freq.map((t) => (
+            {freqOpen && freq.map((tag) => (
               <TagRow
-                key={t.id}
-                name={t.name}
-                color={t.color}
-                count={t.link_count ?? 0}
-                active={selected.includes(t.id)}
-                onClick={() => onToggle(t.id)}
+                key={tag.id}
+                name={tag.name}
+                color={tag.color}
+                count={tag.link_count ?? 0}
+                active={selected.includes(tag.id)}
+                onClick={() => onToggle(tag.id)}
               />
             ))}
           </>
@@ -162,20 +164,20 @@ export function TagSidebar({
         {other.length > 0 && (
           <>
             <SectionHeader
-              label="Outras"
+              label={t('sidebar.others')}
               open={otherOpen}
               onToggle={() => setOtherOpen((v) => !v)}
             />
             {otherOpen && (
               <>
-                {otherVisible.map((t) => (
+                {otherVisible.map((tag) => (
                   <TagRow
-                    key={t.id}
-                    name={t.name}
-                    color={t.color}
-                    count={t.link_count ?? 0}
-                    active={selected.includes(t.id)}
-                    onClick={() => onToggle(t.id)}
+                    key={tag.id}
+                    name={tag.name}
+                    color={tag.color}
+                    count={tag.link_count ?? 0}
+                    active={selected.includes(tag.id)}
+                    onClick={() => onToggle(tag.id)}
                   />
                 ))}
                 {otherHidden > 0 && (
@@ -183,9 +185,9 @@ export function TagSidebar({
                     type="button"
                     className="fx-side-more"
                     onClick={() => setOtherShowAll(true)}
-                    data-tooltip={`Mostrar mais ${otherHidden} tags`}
+                    data-tooltip={t('sidebar.load_more', { count: otherHidden })}
                   >
-                    … carregar mais ({otherHidden})
+                    {t('sidebar.load_more', { count: otherHidden })}
                   </button>
                 )}
               </>
@@ -198,19 +200,19 @@ export function TagSidebar({
         <button
           className="fx-side-action"
           onClick={() => setCreating(true)}
-          data-tooltip="Criar nova tag"
+          data-tooltip={t('sidebar.new_tag_tooltip')}
         >
           <Icon d={I.plus} size={13} />
-          <span>Nova</span>
+          <span>{t('sidebar.new')}</span>
         </button>
         <button
           className="fx-side-action"
           onClick={() => setManaging(true)}
           disabled={tags.length === 0}
-          data-tooltip="Editar ou excluir tags existentes"
+          data-tooltip={t('sidebar.manage_tags_tooltip')}
         >
           <Icon d={I.pen} size={13} />
-          <span>Gerenciar</span>
+          <span>{t('sidebar.manage')}</span>
         </button>
       </div>
 

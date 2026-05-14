@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { makeGradient, hexToHsl, hslToHex } from '../lib/tagColor'
 
@@ -26,13 +27,14 @@ const PAYLOAD = 'application/x-foldex-gradient-stop'
 // the colors, AND dragging one stop onto the other does the same thing
 // (iPhone-style — same gesture as merging two links into a folder).
 export function GradientPicker({ from, to, onChange }: Props) {
+  const { t } = useTranslation()
   const swap = () => onChange(to, from)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <HueSpectrumBar from={from} to={to} onChange={onChange} />
       <div
         aria-hidden="true"
-        data-tooltip="Preview do gradiente final"
+        data-tooltip={t('tag_dialog.gradient_preview_tooltip')}
         style={{
           height: 12,
           borderRadius: 6,
@@ -43,7 +45,7 @@ export function GradientPicker({ from, to, onChange }: Props) {
       <div className="fx-gradient-stops">
         <Stop
           side="from"
-          label="Início"
+          label={t('tag_dialog.gradient_start')}
           value={from}
           onChange={(c) => onChange(c, to)}
           onSwap={swap}
@@ -52,15 +54,15 @@ export function GradientPicker({ from, to, onChange }: Props) {
           type="button"
           className="fx-gradient-swap"
           onClick={swap}
-          aria-label="inverter início e fim do gradiente"
-          data-tooltip="Inverter Início ↔ Fim"
+          aria-label={t('tag_dialog.gradient_swap_aria')}
+          data-tooltip={t('tag_dialog.gradient_swap_tooltip')}
           data-tooltip-side="top"
         >
           <Icon d={I.swap} size={14} stroke={2} />
         </button>
         <Stop
           side="to"
-          label="Fim"
+          label={t('tag_dialog.gradient_end')}
           value={to}
           onChange={(c) => onChange(from, c)}
           onSwap={swap}
@@ -83,6 +85,7 @@ function Stop({
   onChange: (c: string) => void
   onSwap: () => void
 }) {
+  const { t } = useTranslation()
   const [dragOver, setDragOver] = useState(false)
   const [dragging, setDragging] = useState(false)
   return (
@@ -122,7 +125,7 @@ function Stop({
           setDragging(true)
         }}
         onDragEnd={() => setDragging(false)}
-        data-tooltip="Arraste para inverter"
+        data-tooltip={t('tag_dialog.gradient_drag_tooltip')}
       >
         <span className="fx-gradient-stop-grip" aria-hidden="true">
           <Icon d={I.grip} size={10} />
@@ -188,6 +191,7 @@ function HueSpectrumBar({
   to: string
   onChange: (f: string, t: string) => void
 }) {
+  const { t } = useTranslation()
   const barRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState<'from' | 'to' | null>(null)
   const fromHsl = hexToHsl(from)
@@ -239,7 +243,7 @@ function HueSpectrumBar({
       ref={barRef}
       className={'fx-hue-bar' + (dragging ? ' fx-hue-bar-dragging' : '')}
       role="slider"
-      aria-label="seletor de matiz para gradiente"
+      aria-label={t('tag_dialog.gradient_hue_aria')}
       onPointerDown={(e) => onPointerDown(e)}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -248,7 +252,7 @@ function HueSpectrumBar({
       <HueThumb
         position={fromHsl.h / 360}
         color={from}
-        label="Início"
+        label={t('tag_dialog.gradient_start')}
         active={dragging === 'from'}
         onPointerDown={(e) => {
           e.stopPropagation()
@@ -258,7 +262,7 @@ function HueSpectrumBar({
       <HueThumb
         position={toHsl.h / 360}
         color={to}
-        label="Fim"
+        label={t('tag_dialog.gradient_end')}
         active={dragging === 'to'}
         onPointerDown={(e) => {
           e.stopPropagation()

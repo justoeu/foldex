@@ -1,3 +1,4 @@
+import { Trans, useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 
 type Props = {
@@ -6,6 +7,7 @@ type Props = {
 }
 
 export function EmptyState({ onNewLink, onImport }: Props) {
+  const { t } = useTranslation()
   return (
     <div className="fx-empty">
       <div className="fx-empty-card">
@@ -28,19 +30,24 @@ export function EmptyState({ onNewLink, onImport }: Props) {
           </svg>
         </div>
         <div className="fx-empty-kicker">3 · 2 · 1 …</div>
-        <h2 className="fx-empty-h">Sua base ainda está vazia.</h2>
+        <h2 className="fx-empty-h">{t('home.empty_title')}</h2>
         <p className="fx-empty-p">
-          Cole uma URL, importe seu <code>bookmarks.html</code> ou instale a extensão. Foldex resolve
-          título, og:image e favicon enquanto você organiza por tags.
+          <Trans
+            i18nKey="home.empty_body"
+            values={{ file: 'bookmarks.html' }}
+            components={{ code: <code /> }}
+          />
+          {' '}
+          {t('home.empty_hint')}
         </p>
 
         <div className="fx-empty-actions">
           <button className="fx-cta fx-cta-fill" onClick={onNewLink}>
-            <Icon d={I.plus} size={15} stroke={2.2} /> Adicionar primeiro link
+            <Icon d={I.plus} size={15} stroke={2.2} /> {t('home.add_first')}
             <kbd className="fx-kbd fx-kbd-cta">⌥N</kbd>
           </button>
           <button className="fx-btn-ghost-lg" onClick={onImport}>
-            <Icon d={I.upload} size={15} /> Importar bookmarks.html
+            <Icon d={I.upload} size={15} /> {t('home.import_bookmarks')}
           </button>
         </div>
       </div>

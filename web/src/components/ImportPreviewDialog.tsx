@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -19,6 +21,7 @@ type Props = {
 }
 
 export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props) {
+  const { t } = useTranslation()
   const [validation, setValidation] = useState<ImportValidation | null>(null)
   const [loading, setLoading] = useState(true)
   const [errMsg, setErrMsg] = useState<string | null>(null)
@@ -35,10 +38,10 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
     setErrMsg(null)
     validateImport(file, format)
       .then((v) => { if (alive) setValidation(v) })
-      .catch((e) => { if (alive) setErrMsg(extractErr(e)) })
+      .catch((e) => { if (alive) setErrMsg(extractErr(e, t('common.unknown_error'))) })
       .finally(() => alive && setLoading(false))
     return () => { alive = false }
-  }, [file, format])
+  }, [file, format, t])
 
   // Effective counts after the user's folder exclusions.
   const effectiveCounts = useMemo(() => {
@@ -61,7 +64,7 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
       const r = await applyImport(file, format, mode, Array.from(excluded))
       setReport(r)
     } catch (e: unknown) {
-      setErrMsg(extractErr(e))
+      setErrMsg(extractErr(e, t('common.unknown_error')))
     } finally {
       setApplying(false)
     }
@@ -82,24 +85,24 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
   useFocusTrap(dialogRef, true)
 
   return (
-    <div ref={dialogRef} className="fx-overlay fx-overlay-modal" role="dialog" aria-modal="true" aria-label="Revisar importação">
+    <div ref={dialogRef} className="fx-overlay fx-overlay-modal" role="dialog" aria-modal="true" aria-label={t('import.preview_title')}>
       <div className="fx-modal" style={{ maxWidth: 720 }}>
         <header className="fx-modal-head">
           <div>
-            <div className="fx-modal-kicker">📥 IMPORTAR</div>
-            <h2 className="fx-modal-title">Revisar antes de importar</h2>
+            <div className="fx-modal-kicker">{t('import.preview_kicker')}</div>
+            <h2 className="fx-modal-title">{t('import.preview_title')}</h2>
             <div style={{ fontSize: 12, color: 'var(--fx-ink-4)', fontFamily: 'var(--fx-mono)' }}>
               {file.name} · {format === 'netscape' ? 'Bookmarks HTML' : 'Foldex JSON'}
             </div>
           </div>
-          <button className="fx-confirm-x" onClick={onClose} aria-label="close">
+          <button className="fx-confirm-x" onClick={onClose} aria-label={t('common.close')}>
             <Icon d={I.x} size={14} />
           </button>
         </header>
 
         <div className="fx-modal-body" style={{ gridTemplateColumns: '1fr' }}>
           <div className="fx-modal-col">
-            {loading && <div style={{ color: 'var(--fx-ink-4)' }}>Validando…</div>}
+            {loading && <div style={{ color: 'var(--fx-ink-4)' }}>{t('common.validating')}</div>}
 
             {errMsg && (
               <div className="fx-confirm-msg" style={{ color: 'var(--fx-danger)' }}>
@@ -109,22 +112,22 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
 
             {validation && !report && (
               <>
-                <Counts validation={validation} effective={effectiveCounts} />
+                <Counts validation={validation} effective={effectiveCounts} t={t} />
 
                 <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)', marginTop: 6 }}>
-                  Modo de importação
+                  {t('import.mode_section')}
                 </div>
-                <ModePicker value={mode} onChange={setMode} conflicts={validation.conflicts.links} />
+                <ModePicker value={mode} onChange={setMode} conflicts={validation.conflicts.links} t={t} />
 
                 {validation.folders.length > 0 && (
                   <>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 8 }}>
                       <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)' }}>
-                        Pastas a importar
+                        {t('import.folders_section_title')}
                       </div>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <button type="button" className="fx-pillbtn" onClick={selectAll} style={{ fontSize: 11 }}>todas</button>
-                        <button type="button" className="fx-pillbtn" onClick={selectNone} style={{ fontSize: 11 }}>nenhuma</button>
+                        <button type="button" className="fx-pillbtn" onClick={selectAll} style={{ fontSize: 11 }}>{t('import.select_all')}</button>
+                        <button type="button" className="fx-pillbtn" onClick={selectNone} style={{ fontSize: 11 }}>{t('import.select_none')}</button>
                       </div>
                     </div>
                     <FolderList folders={validation.folders} excluded={excluded} onToggle={toggle} />
@@ -133,19 +136,19 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
               </>
             )}
 
-            {report && <ResultBlock r={report} />}
+            {report && <ResultBlock r={report} t={t} />}
           </div>
         </div>
 
         <footer className="fx-modal-foot">
           {report ? (
             <button className="fx-confirm-btn fx-confirm-btn-primary" onClick={onApplied}>
-              Concluído
+              {t('import.submit_done')}
               <Icon d={I.check} size={14} stroke={2} />
             </button>
           ) : (
             <>
-              <button className="fx-confirm-btn" onClick={onClose}>Cancelar</button>
+              <button className="fx-confirm-btn" onClick={onClose}>{t('common.cancel')}</button>
               <button
                 className={'fx-confirm-btn ' + (mode === 'wipe' ? 'fx-confirm-btn-danger' : 'fx-confirm-btn-primary')}
                 onClick={handleApply}
@@ -153,12 +156,12 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
               >
                 {applying ? (
                   <>
-                    <span className="fx-spinner" aria-hidden="true" /> Importando…
+                    <span className="fx-spinner" aria-hidden="true" /> {t('import.submit_importing')}
                   </>
                 ) : mode === 'wipe' ? (
-                  '⚠ Importar (substitui duplicados)'
+                  t('import.submit_wipe')
                 ) : (
-                  `Importar ${effectiveCounts.links} ${effectiveCounts.links === 1 ? 'link' : 'links'}`
+                  t('import.submit_apply', { count: effectiveCounts.links })
                 )}
                 {!applying && <Icon d={I.arrowR} size={14} stroke={2} />}
               </button>
@@ -171,19 +174,20 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
 }
 
 function Counts({
-  validation, effective,
+  validation, effective, t,
 }: {
   validation: ImportValidation
   effective: { links: number; folders: number; conflicts: number }
+  t: TFunction
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <Row label="Arquivo contém" value={`${validation.counts.links} links · ${validation.counts.folders} pastas · ${validation.counts.tags} tags`} />
-      <Row label="Já existem no foldex" value={`${validation.conflicts.links} links · ${validation.conflicts.tags} tags`} />
+      <Row label={t('import.counts_file')} value={t('import.counts_format', { links: validation.counts.links, folders: validation.counts.folders, tags: validation.counts.tags })} />
+      <Row label={t('import.counts_existing')} value={t('import.counts_format_links_dup', { links: validation.conflicts.links, tags: validation.conflicts.tags })} />
       {(effective.links !== validation.counts.links || effective.folders !== validation.counts.folders) && (
         <Row
-          label="Após exclusões"
-          value={`${effective.links} links · ${effective.folders} pastas · ${effective.conflicts} duplicados`}
+          label={t('import.counts_effective')}
+          value={t('import.counts_format_effective', { links: effective.links, folders: effective.folders, duplicates: effective.conflicts })}
           accent
         />
       )}
@@ -206,31 +210,32 @@ function Row({ label, value, accent }: { label: string; value: string; accent?: 
 }
 
 function ModePicker({
-  value, onChange, conflicts,
+  value, onChange, conflicts, t,
 }: {
   value: ImportMode
   onChange: (m: ImportMode) => void
   conflicts: number
+  t: TFunction
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <ModeOption
         active={value === 'skip'}
         onClick={() => onChange('skip')}
-        title="Pular duplicados (recomendado)"
-        desc={`Mantém o que já existe; importa só os novos. ${conflicts} links serão pulados.`}
+        title={t('import.mode_skip_title')}
+        desc={t('import.mode_skip_desc', { count: conflicts })}
       />
       <ModeOption
         active={value === 'duplicate'}
         onClick={() => onChange('duplicate')}
-        title="Duplicar"
-        desc="Tenta importar tudo. Links com URL idêntica caem pra skip + warning (URL é UNIQUE)."
+        title={t('import.mode_duplicate_title')}
+        desc={t('import.mode_duplicate_desc')}
       />
       <ModeOption
         active={value === 'wipe'}
         onClick={() => onChange('wipe')}
-        title="⚠ Apagar duplicados e re-importar"
-        desc={`DESTRUTIVO por link. Apaga ${conflicts} links existentes (e seus cliques/tags) e re-importa os do arquivo. Links que NÃO estão no arquivo permanecem intactos.`}
+        title={t('import.mode_wipe_title')}
+        desc={t('import.mode_wipe_desc', { count: conflicts })}
         danger
       />
     </div>
@@ -302,13 +307,13 @@ function FolderList({
   )
 }
 
-function ResultBlock({ r }: { r: ImportResult }) {
+function ResultBlock({ r, t }: { r: ImportResult; t: TFunction }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <Row label="Modo" value={r.mode} />
-      <Row label="Importados" value={`${r.imported} ${r.imported === 1 ? 'link' : 'links'}`} />
-      <Row label="Pulados" value={`${r.skipped}`} />
-      {r.wiped > 0 && <Row label="Apagados" value={`${r.wiped}`} />}
+      <Row label={t('import.result_mode')} value={r.mode} />
+      <Row label={t('import.result_imported')} value={t('import.result_link', { count: r.imported })} />
+      <Row label={t('import.result_skipped')} value={`${r.skipped}`} />
+      {r.wiped > 0 && <Row label={t('import.result_wiped')} value={`${r.wiped}`} />}
       {r.warnings && r.warnings.length > 0 && (
         <div style={{ background: 'rgba(245,158,11,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-ink-3)', maxHeight: 200, overflowY: 'auto' }}>
           {r.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
@@ -318,7 +323,7 @@ function ResultBlock({ r }: { r: ImportResult }) {
   )
 }
 
-function extractErr(e: unknown): string {
+function extractErr(e: unknown, fallback: string): string {
   const obj = e as { response?: { data?: { error?: { message?: string } } }; message?: string }
-  return obj?.response?.data?.error?.message ?? obj?.message ?? 'erro desconhecido'
+  return obj?.response?.data?.error?.message ?? obj?.message ?? fallback
 }

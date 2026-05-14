@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { GradientPicker } from './GradientPicker'
 import { useCreateFolder, useUpdateFolder, useDeleteFolder } from '../api/folders'
@@ -39,6 +40,7 @@ type Mode = 'solid' | 'gradient'
 // targets the folder CRUD endpoints. Delete lives inside the dialog when in
 // edit mode — links survive (ON DELETE SET NULL on the FK).
 export function FolderDialog({ open, onClose, folder, justCreated, parentId }: Props) {
+  const { t } = useTranslation()
   const isEdit = !!folder
   const isNaming = !!folder && !!justCreated
   const [name, setName] = useState('')
@@ -97,9 +99,9 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
   const onDeleteKeepLinks = async () => {
     if (!folder) return
     const ok = await confirm({
-      title: 'Excluir pasta (manter links)',
-      message: `Os ${folder.link_count} link(s) dentro de "${folder.name}" voltam pra home como links soltos. A pasta em si é removida.`,
-      confirmLabel: 'Excluir pasta',
+      title: t('folder_dialog.delete_confirm_title'),
+      message: t('folder_dialog.delete_confirm_body', { count: folder.link_count, name: folder.name }),
+      confirmLabel: t('folder_dialog.delete_confirm_action'),
       destructive: true,
     })
     if (!ok) return
@@ -110,12 +112,12 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
   const onDeleteCascade = async () => {
     if (!folder) return
     const ok = await confirm({
-      title: 'Excluir pasta e tudo dentro',
+      title: t('folder_dialog.delete_cascade_confirm_title'),
       message:
         folder.link_count > 0
-          ? `Esta ação apaga a pasta "${folder.name}" E os ${folder.link_count} link(s) dentro dela, junto com o histórico de cliques. As tags associadas aos links continuam existindo. Não tem como desfazer.`
-          : `A pasta "${folder.name}" está vazia. Vai ser apagada.`,
-      confirmLabel: 'Excluir tudo',
+          ? t('folder_dialog.delete_cascade_confirm_body', { count: folder.link_count, name: folder.name })
+          : t('folder_dialog.delete_cascade_confirm_body_empty', { name: folder.name }),
+      confirmLabel: t('folder_dialog.delete_cascade_confirm_action'),
       destructive: true,
     })
     if (!ok) return
@@ -131,20 +133,20 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
       className="fx-overlay fx-overlay-modal"
       role="dialog"
       aria-modal="true"
-      aria-label={isNaming ? 'Name folder' : isEdit ? 'Edit folder' : 'New folder'}
+      aria-label={isNaming ? t('folder_dialog.kicker_naming') : isEdit ? t('folder_dialog.kicker_edit') : t('folder_dialog.kicker_create')}
     >
       <div className="fx-modal" style={{ maxWidth: 480 }}>
         <header className="fx-modal-head">
           <div>
             <div className="fx-modal-kicker">
               <Icon d={I.folder} size={12} />{' '}
-              {isNaming ? 'Nomear pasta' : isEdit ? 'Editar pasta' : 'Nova pasta'}
+              {isNaming ? t('folder_dialog.kicker_naming') : isEdit ? t('folder_dialog.kicker_edit') : t('folder_dialog.kicker_create')}
             </div>
             <h2 className="fx-modal-title">
-              {isNaming ? 'Dê um nome à pasta' : isEdit ? `Editar "${folder?.name}"` : 'Criar pasta'}
+              {isNaming ? t('folder_dialog.naming_title') : isEdit ? t('folder_dialog.edit_title', { name: folder?.name ?? '' }) : t('folder_dialog.create_title')}
             </h2>
           </div>
-          <button className="fx-confirm-x" onClick={onClose} aria-label="close">
+          <button className="fx-confirm-x" onClick={onClose} aria-label={t('common.close')}>
             <Icon d={I.x} size={14} />
           </button>
         </header>
@@ -152,7 +154,7 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
         <div className="fx-modal-body" style={{ gridTemplateColumns: '1fr' }}>
           <div className="fx-modal-col">
             <label className="fx-field">
-              <span className="fx-field-label">Nome</span>
+              <span className="fx-field-label">{t('folder_dialog.name_label')}</span>
               <div className="fx-input">
                 <input
                   autoFocus
@@ -163,16 +165,16 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                     // — select it so the user can just start typing to overwrite.
                     if (isNaming) e.target.select()
                   }}
-                  placeholder="ex: Trabalho, Pessoal…"
-                  aria-label="folder name"
+                  placeholder={t('folder_dialog.name_placeholder')}
+                  aria-label={t('folder_dialog.name_aria')}
                 />
               </div>
             </label>
 
             <div className="fx-field">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <span className="fx-field-label" style={{ margin: 0 }}>Cor</span>
-                <div className="fx-mode-toggle" role="tablist" aria-label="modo de cor">
+                <span className="fx-field-label" style={{ margin: 0 }}>{t('folder_dialog.color_label')}</span>
+                <div className="fx-mode-toggle" role="tablist" aria-label={t('folder_dialog.color_mode_aria')}>
                   <button
                     type="button"
                     role="tab"
@@ -180,7 +182,7 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                     className={'fx-mode-tab' + (mode === 'solid' ? ' fx-mode-tab-active' : '')}
                     onClick={() => setMode('solid')}
                   >
-                    <Icon d={I.solid} size={11} /> Sólida
+                    <Icon d={I.solid} size={11} /> {t('folder_dialog.color_solid')}
                   </button>
                   <button
                     type="button"
@@ -189,7 +191,7 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                     className={'fx-mode-tab' + (mode === 'gradient' ? ' fx-mode-tab-active' : '')}
                     onClick={() => setMode('gradient')}
                   >
-                    <Icon d={I.gradient} size={11} /> Gradiente
+                    <Icon d={I.gradient} size={11} /> {t('folder_dialog.color_gradient')}
                   </button>
                 </div>
               </div>
@@ -224,16 +226,16 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                       background: 'transparent',
                       cursor: 'pointer',
                     }}
-                    aria-label="custom color"
+                    aria-label={t('folder_dialog.custom_color_aria')}
                   />
                 </div>
               ) : (
                 <GradientPicker
                   from={gradFrom}
                   to={gradTo}
-                  onChange={(f, t) => {
+                  onChange={(f, to) => {
                     setGradFrom(f)
-                    setGradTo(t)
+                    setGradTo(to)
                   }}
                 />
               )}
@@ -249,25 +251,25 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                 onClick={onDeleteKeepLinks}
                 disabled={busy}
                 aria-label="delete folder keep links"
-                data-tooltip="Apaga só a pasta — links voltam pra home"
+                data-tooltip={t('folder_dialog.delete_button_tooltip')}
                 data-tooltip-side="top"
               >
-                <Icon d={I.folder} size={13} stroke={2} /> Excluir pasta
+                <Icon d={I.folder} size={13} stroke={2} /> {t('folder_dialog.delete_button')}
               </button>
               <button
                 className="fx-confirm-btn fx-confirm-btn-danger"
                 onClick={onDeleteCascade}
                 disabled={busy}
                 aria-label="delete folder and links"
-                data-tooltip="Apaga a pasta e todos os links dentro"
+                data-tooltip={t('folder_dialog.delete_with_links_button_tooltip')}
                 data-tooltip-side="top"
               >
-                <Icon d={I.trash} size={13} stroke={2} /> Excluir tudo
+                <Icon d={I.trash} size={13} stroke={2} /> {t('folder_dialog.delete_with_links_button')}
               </button>
             </div>
           )}
           <button className="fx-confirm-btn" onClick={onClose}>
-            Cancelar
+            {t('common.cancel')}
           </button>
           <button
             className="fx-confirm-btn fx-confirm-btn-primary"
@@ -275,7 +277,7 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
             disabled={!name.trim() || busy}
           >
             <Icon d={isEdit ? I.check : I.plus} size={13} stroke={2.2} />{' '}
-            {isNaming ? 'Pronto' : isEdit ? 'Salvar' : 'Criar pasta'}
+            {isNaming ? t('folder_dialog.submit_done') : isEdit ? t('folder_dialog.submit_save') : t('folder_dialog.submit_create')}
           </button>
         </footer>
       </div>

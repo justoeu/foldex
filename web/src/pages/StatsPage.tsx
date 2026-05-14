@@ -1,4 +1,6 @@
 import { useMemo, useState, type CSSProperties } from 'react'
+import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { Icon, I } from '../components/icons'
 import {
   useStatsDaily,
@@ -11,6 +13,7 @@ import {
 } from '../api/stats'
 
 export function StatsPage() {
+  const { t } = useTranslation()
   const summary = useStatsSummary()
   const daily = useStatsDaily(60)
   const top = useStatsTop(5)
@@ -31,45 +34,47 @@ export function StatsPage() {
     <div className="fx-stats">
       <div className="fx-stats-head">
         <div>
-          <div className="fx-pagehead-kicker">📊 ANALYTICS · /go telemetry</div>
-          <h1 className="fx-pagehead-h">Estatísticas</h1>
+          <div className="fx-pagehead-kicker">{t('stats.page_kicker')}</div>
+          <h1 className="fx-pagehead-h">{t('stats.page_title')}</h1>
           <div className="fx-stats-sub">
-            Cliques rastreados via redirect <span className="fx-mono-inline">/go/:id</span>
+            {t('stats.subtitle_prefix')} <span className="fx-mono-inline">/go/:id</span>
           </div>
         </div>
       </div>
 
       <div className="fx-kpis">
         <KpiCard
-          label="Cliques · 30d"
-          value={s ? s.clicks_last_30d.toLocaleString('pt-BR') : '—'}
+          label={t('stats.kpi_clicks_30d')}
+          value={s ? s.clicks_last_30d.toLocaleString() : '—'}
           delta={s ? (mom >= 0 ? '+' : '') + mom + '%' : ''}
           deltaKind={mom >= 0 ? 'up' : 'down'}
           spark={daily.data?.slice(-14).map((p) => p.clicks)}
         />
         <KpiCard
-          label="Links totais"
+          label={t('stats.kpi_total_links')}
           value={s ? s.total_links : '—'}
-          delta={s ? `+${s.new_links_last_30d} novos · 30d` : ''}
+          delta={s ? t('stats.kpi_links_new_30d', { count: s.new_links_last_30d }) : ''}
           deltaKind="up"
         />
         <KpiCard
-          label="Cliques · link"
+          label={t('stats.kpi_clicks_per_link')}
           value={clicksPerLink}
-          delta={s ? `${s.clicks_last_30d} cliques / ${s.total_links} links` : ''}
+          delta={s ? t('stats.kpi_clicks_per_link_delta', { clicks: s.clicks_last_30d, links: s.total_links }) : ''}
           deltaKind="neutral"
         />
         <KpiCard
-          label="Top host"
+          label={t('stats.kpi_top_host')}
           value={s && s.top_host ? s.top_host : '—'}
           valueClass="fx-kpi-host"
-          delta={s ? `${s.top_host_clicks} cliques totais` : ''}
+          delta={s ? t('stats.kpi_top_host_delta', { count: s.top_host_clicks }) : ''}
           deltaKind="neutral"
         />
         <KpiCard
-          label="Objects stored"
-          value={storage.data ? storage.data.objects.toLocaleString('pt-BR') : '—'}
-          delta={storage.data ? formatBytes(storage.data.total_bytes) + ' · MinIO' : 'MinIO indisponível'}
+          label={t('stats.kpi_storage_objects')}
+          value={storage.data ? storage.data.objects.toLocaleString() : '—'}
+          delta={storage.data
+            ? t('stats.kpi_storage_minio_delta', { size: formatBytes(storage.data.total_bytes) })
+            : t('stats.kpi_storage_minio_unavailable')}
           deltaKind="neutral"
         />
       </div>
@@ -78,66 +83,66 @@ export function StatsPage() {
         <section className="fx-statcard fx-statcard-wide">
           <header className="fx-statcard-head">
             <div>
-              <div className="fx-statcard-title">Cliques diários</div>
+              <div className="fx-statcard-title">{t('stats.section_clicks_day')}</div>
               <div className="fx-statcard-sub">
-                Últimos 60 dias · total {totalDaily.toLocaleString('pt-BR')}
+                {t('stats.section_clicks_day_sub', { count: totalDaily.toLocaleString() })}
               </div>
             </div>
             <div className="fx-statcard-legend">
               <span>
-                <span className="fx-legend-dot" style={{ background: 'var(--fx-accent)' }} /> Cliques
+                <span className="fx-legend-dot" style={{ background: 'var(--fx-accent)' }} /> {t('stats.section_clicks_label')}
               </span>
               <span>
-                <span className="fx-legend-dot fx-legend-dot-line" /> Média 7d
+                <span className="fx-legend-dot fx-legend-dot-line" /> {t('stats.section_clicks_avg')}
               </span>
             </div>
           </header>
           {daily.data && daily.data.length > 0 ? (
-            <AreaChart data={daily.data} width={760} height={220} />
+            <AreaChart data={daily.data} width={760} height={220} t={t} />
           ) : (
-            <EmptyChart hint="Sem cliques nos últimos 60 dias" />
+            <EmptyChart hint={t('stats.section_clicks_empty')} />
           )}
         </section>
 
         <section className="fx-statcard">
           <header className="fx-statcard-head">
             <div>
-              <div className="fx-statcard-title">Mês vs mês</div>
-              <div className="fx-statcard-sub">Δ cliques · base 30d ant.</div>
+              <div className="fx-statcard-title">{t('stats.section_mom')}</div>
+              <div className="fx-statcard-sub">{t('stats.section_mom_sub')}</div>
             </div>
             <div className="fx-mom-pill">
               <Icon d={I.flame} size={11} /> {mom >= 0 ? '+' : ''}
               {mom}%
             </div>
           </header>
-          {s ? <MomCompare prev={s.clicks_prev_30d} curr={s.clicks_last_30d} /> : null}
+          {s ? <MomCompare prev={s.clicks_prev_30d} curr={s.clicks_last_30d} t={t} /> : null}
         </section>
 
         <section className="fx-statcard">
           <header className="fx-statcard-head">
             <div>
-              <div className="fx-statcard-title">Top links · 30d</div>
-              <div className="fx-statcard-sub">Por volume de cliques</div>
+              <div className="fx-statcard-title">{t('stats.section_top_links')}</div>
+              <div className="fx-statcard-sub">{t('stats.section_top_links_sub')}</div>
             </div>
           </header>
           {top.data && top.data.length > 0 ? (
             <TopLinksList links={top.data} />
           ) : (
-            <EmptyChart hint="Cadastre seus primeiros links" />
+            <EmptyChart hint={t('stats.section_top_links_empty')} />
           )}
         </section>
 
         <section className="fx-statcard">
           <header className="fx-statcard-head">
             <div>
-              <div className="fx-statcard-title">Distribuição por tag</div>
-              <div className="fx-statcard-sub">Cliques · lifetime</div>
+              <div className="fx-statcard-title">{t('stats.section_tag_distribution')}</div>
+              <div className="fx-statcard-sub">{t('stats.section_tag_distribution_sub')}</div>
             </div>
           </header>
           {tagBuckets.data && tagBuckets.data.length > 0 ? (
             <TagDistribution buckets={tagBuckets.data} />
           ) : (
-            <EmptyChart hint="Crie tags pra ver a distribuição" />
+            <EmptyChart hint={t('stats.section_tag_distribution_empty')} />
           )}
         </section>
       </div>
@@ -199,7 +204,7 @@ function Sparkline({ data, width, height }: { data: number[]; width: number; hei
   )
 }
 
-function AreaChart({ data, width, height }: { data: DailyPoint[]; width: number; height: number }) {
+function AreaChart({ data, width, height, t }: { data: DailyPoint[]; width: number; height: number; t: TFunction }) {
   const pad = { l: 36, r: 12, t: 14, b: 22 }
   const w = width - pad.l - pad.r
   const h = height - pad.t - pad.b
@@ -217,7 +222,7 @@ function AreaChart({ data, width, height }: { data: DailyPoint[]; width: number;
   const avgPath = avgPts
     .map(([x, y], i) => (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1))
     .join(' ')
-  const yTicks = [0, 0.5, 1].map((t) => Math.round(max * t))
+  const yTicks = [0, 0.5, 1].map((pct) => Math.round(max * pct))
   const [hover, setHover] = useState<number | null>(null)
 
   // Flip the tooltip away from the chart edges so it never clips off the
@@ -250,13 +255,13 @@ function AreaChart({ data, width, height }: { data: DailyPoint[]; width: number;
             <stop offset="100%" stopColor="var(--fx-accent)" stopOpacity="0" />
           </linearGradient>
         </defs>
-        {yTicks.map((t, i) => {
-          const y = pad.t + h - (t / max) * h
+        {yTicks.map((tick, i) => {
+          const y = pad.t + h - (tick / max) * h
           return (
             <g key={i}>
               <line x1={pad.l} y1={y} x2={pad.l + w} y2={y} stroke="var(--fx-border-2)" strokeDasharray="2 3" />
               <text x={pad.l - 6} y={y + 3} textAnchor="end" className="fx-chart-tick">
-                {t}
+                {tick}
               </text>
             </g>
           )
@@ -268,7 +273,13 @@ function AreaChart({ data, width, height }: { data: DailyPoint[]; width: number;
         {[0, Math.floor(series.length * 0.25), Math.floor(series.length * 0.5), Math.floor(series.length * 0.75), series.length - 1].map((i, idx) => {
           const x = pad.l + i * step
           const days = series.length
-          const labels = [`−${days - 1}d`, `−${Math.floor((days - 1) * 0.75)}d`, `−${Math.floor((days - 1) * 0.5)}d`, `−${Math.floor((days - 1) * 0.25)}d`, 'hoje']
+          const labels = [
+            t('stats.chart_days_ago', { count: days - 1 }),
+            t('stats.chart_days_ago', { count: Math.floor((days - 1) * 0.75) }),
+            t('stats.chart_days_ago', { count: Math.floor((days - 1) * 0.5) }),
+            t('stats.chart_days_ago', { count: Math.floor((days - 1) * 0.25) }),
+            t('stats.chart_today'),
+          ]
           return (
             <text key={idx} x={x} y={height - 6} textAnchor="middle" className="fx-chart-tick">
               {labels[idx]}
@@ -328,7 +339,7 @@ function AreaChart({ data, width, height }: { data: DailyPoint[]; width: number;
         <div className="fx-chart-tooltip" style={tooltipStyle}>
           <div className="fx-chart-tooltip-date">{formatChartDate(data[hover].date)}</div>
           <div className="fx-chart-tooltip-value">
-            <strong>{series[hover]}</strong> {series[hover] === 1 ? 'clique' : 'cliques'}
+            <strong>{series[hover]}</strong> {series[hover] === 1 ? t('stats.chart_clicks_one') : t('stats.chart_clicks_plural')}
           </div>
         </div>
       )}
@@ -338,34 +349,33 @@ function AreaChart({ data, width, height }: { data: DailyPoint[]; width: number;
 
 function formatChartDate(iso: string) {
   const d = new Date(iso)
-  // "12 mai · qua"
   const day = d.getDate()
-  const month = d.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')
-  const wd = d.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '')
+  const month = d.toLocaleDateString(undefined, { month: 'short' }).replace('.', '')
+  const wd = d.toLocaleDateString(undefined, { weekday: 'short' }).replace('.', '')
   return `${day} ${month} · ${wd}`
 }
 
-function MomCompare({ prev, curr }: { prev: number; curr: number }) {
+function MomCompare({ prev, curr, t }: { prev: number; curr: number; t: TFunction }) {
   const max = Math.max(prev, curr, 1)
   return (
     <div className="fx-mom">
       <div className="fx-mom-bar-wrap">
-        <div className="fx-mom-bar-lbl">30d ant.</div>
+        <div className="fx-mom-bar-lbl">{t('stats.section_mom_prev')}</div>
         <div className="fx-mom-bar fx-mom-bar-prev">
           <div style={{ width: (prev / max) * 100 + '%' }} />
         </div>
-        <div className="fx-mom-bar-num">{prev.toLocaleString('pt-BR')}</div>
+        <div className="fx-mom-bar-num">{prev.toLocaleString()}</div>
       </div>
       <div className="fx-mom-bar-wrap">
-        <div className="fx-mom-bar-lbl">Atual</div>
+        <div className="fx-mom-bar-lbl">{t('stats.section_mom_curr')}</div>
         <div className="fx-mom-bar fx-mom-bar-curr">
           <div style={{ width: (curr / max) * 100 + '%' }} />
         </div>
-        <div className="fx-mom-bar-num fx-mom-bar-num-accent">{curr.toLocaleString('pt-BR')}</div>
+        <div className="fx-mom-bar-num fx-mom-bar-num-accent">{curr.toLocaleString()}</div>
       </div>
       <div className="fx-mom-foot">
         <span>
-          <Icon d={I.flame} size={12} /> Δ {(curr - prev).toLocaleString('pt-BR')} cliques
+          <Icon d={I.flame} size={12} /> {t('stats.section_mom_delta', { count: (curr - prev).toLocaleString() })}
         </span>
       </div>
     </div>
@@ -423,17 +433,17 @@ function TagDistribution({
   const max = Math.max(...buckets.map((b) => b.clicks), 1)
   return (
     <ul className="fx-tagdist">
-      {buckets.map((t) => (
-        <li key={t.name} className="fx-tagdist-row">
-          <span className="fx-tagdist-dot" style={{ background: t.color }} />
-          <span className="fx-tagdist-label">{t.name}</span>
+      {buckets.map((bucket) => (
+        <li key={bucket.name} className="fx-tagdist-row">
+          <span className="fx-tagdist-dot" style={{ background: bucket.color }} />
+          <span className="fx-tagdist-label">{bucket.name}</span>
           <div className="fx-tagdist-bar">
             <div
               className="fx-tagdist-bar-fill"
-              style={{ width: (t.clicks / max) * 100 + '%', background: t.color }}
+              style={{ width: (bucket.clicks / max) * 100 + '%', background: bucket.color }}
             />
           </div>
-          <span className="fx-tagdist-num">{t.clicks}</span>
+          <span className="fx-tagdist-num">{bucket.clicks}</span>
         </li>
       ))}
     </ul>

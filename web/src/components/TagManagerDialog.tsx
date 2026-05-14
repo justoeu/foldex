@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { TagDialog } from './TagDialog'
 import { useConfirm } from './ConfirmDialog'
@@ -17,6 +18,7 @@ type Props = {
 // "edit" swaps to the TagDialog (in edit mode); deleting goes through the
 // shared ConfirmDialog and respects the FK ON DELETE CASCADE on link_tag.
 export function TagManagerDialog({ open, onClose }: Props) {
+  const { t } = useTranslation()
   const { data: tags = [] } = useTags()
   const del = useDeleteTag()
   const confirm = useConfirm()
@@ -28,27 +30,17 @@ export function TagManagerDialog({ open, onClose }: Props) {
   useFocusTrap(dialogRef, open)
   if (!open) return null
 
-  const askDelete = async (t: Tag) => {
-    const linkCount = t.link_count ?? 0
+  const askDelete = async (tag: Tag) => {
+    const linkCount = tag.link_count ?? 0
     const ok = await confirm({
-      title: `Apagar tag "${t.name}"?`,
-      message: (
-        <>
-          {linkCount > 0 ? (
-            <>
-              Os <b>{linkCount}</b> link{linkCount === 1 ? '' : 's'} associado
-              {linkCount === 1 ? '' : 's'} permanecerão — apenas a associação com essa tag será
-              removida.
-            </>
-          ) : (
-            <>Essa tag não tem links associados.</>
-          )}
-        </>
-      ),
-      confirmLabel: 'Apagar tag',
+      title: t('tag_manager.delete_confirm_title', { name: tag.name }),
+      message: linkCount > 0
+        ? t('tag_manager.delete_confirm_with_links', { count: linkCount })
+        : t('tag_manager.delete_confirm_no_links'),
+      confirmLabel: t('tag_manager.delete_confirm_action'),
       destructive: true,
     })
-    if (ok) del.mutate(t.id)
+    if (ok) del.mutate(tag.id)
   }
 
   const sorted = [...tags].sort((a, b) => (b.link_count ?? 0) - (a.link_count ?? 0))
@@ -59,50 +51,50 @@ export function TagManagerDialog({ open, onClose }: Props) {
       className="fx-overlay fx-overlay-modal"
       role="dialog"
       aria-modal="true"
-      aria-label="Manage tags"
+      aria-label={t('tag_manager.title')}
     >
       <div className="fx-modal fx-tagmgr">
         <header className="fx-modal-head">
           <div>
-            <div className="fx-modal-kicker fx-modal-kicker-info">⚙ Tags</div>
-            <h2 className="fx-modal-title">Gerenciar tags</h2>
+            <div className="fx-modal-kicker fx-modal-kicker-info">{t('tag_manager.kicker')}</div>
+            <h2 className="fx-modal-title">{t('tag_manager.title')}</h2>
           </div>
-          <button className="fx-confirm-x" onClick={onClose} aria-label="close">
+          <button className="fx-confirm-x" onClick={onClose} aria-label={t('common.close')}>
             <Icon d={I.x} size={14} />
           </button>
         </header>
 
         <div className="fx-tagmgr-body">
           {sorted.length === 0 && (
-            <div className="fx-tagmgr-empty">Nenhuma tag criada ainda.</div>
+            <div className="fx-tagmgr-empty">{t('tag_manager.empty')}</div>
           )}
-          {sorted.map((t) => (
-            <div key={t.id} className="fx-tagmgr-row">
-              <span className="fx-tagmgr-dot" style={{ background: t.color }} />
+          {sorted.map((tag) => (
+            <div key={tag.id} className="fx-tagmgr-row">
+              <span className="fx-tagmgr-dot" style={{ background: tag.color }} />
               <div className="fx-tagmgr-text">
                 <div className="fx-tagmgr-name">
-                  {t.icon && <span style={{ marginRight: 4 }}>{t.icon}</span>}
-                  {t.name}
+                  {tag.icon && <span style={{ marginRight: 4 }}>{tag.icon}</span>}
+                  {tag.name}
                 </div>
                 <div className="fx-tagmgr-meta">
-                  {t.link_count ?? 0} link{(t.link_count ?? 0) === 1 ? '' : 's'}
+                  {t('tag_manager.links_count', { count: tag.link_count ?? 0 })}
                 </div>
               </div>
               <button
                 className="fx-iconbtn"
-                aria-label={`edit ${t.name}`}
-                data-tooltip="Editar tag"
+                aria-label={`edit ${tag.name}`}
+                data-tooltip={t('tag_manager.edit_tooltip')}
                 data-tooltip-side="top"
-                onClick={() => setEditing(t)}
+                onClick={() => setEditing(tag)}
               >
                 <Icon d={I.pen} size={13} />
               </button>
               <button
                 className="fx-iconbtn fx-iconbtn-danger"
-                aria-label={`delete ${t.name}`}
-                data-tooltip="Apagar tag"
+                aria-label={`delete ${tag.name}`}
+                data-tooltip={t('tag_manager.delete_tooltip')}
                 data-tooltip-side="top"
-                onClick={() => askDelete(t)}
+                onClick={() => askDelete(tag)}
               >
                 <Icon d={I.trash} size={13} />
               </button>
@@ -116,10 +108,10 @@ export function TagManagerDialog({ open, onClose }: Props) {
             onClick={() => setCreating(true)}
           >
             <Icon d={I.plus} size={13} />
-            Nova tag
+            {t('tag_manager.new_button')}
           </button>
           <button className="fx-confirm-btn" onClick={onClose}>
-            Fechar
+            {t('common.close')}
           </button>
         </footer>
       </div>

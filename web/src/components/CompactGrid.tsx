@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
@@ -10,6 +11,7 @@ type Props = {
 }
 
 export function CompactGrid({ links, onEdit }: Props) {
+  const { t } = useTranslation()
   return (
     <div className="fx-compactgrid">
       {links.map((l) => (
@@ -26,16 +28,16 @@ export function CompactGrid({ links, onEdit }: Props) {
                 textAlign: 'left',
                 width: '100%',
               }}
-              data-tooltip="Editar"
-              aria-label="Editar"
+              data-tooltip={t('common.edit')}
+              aria-label={t('common.edit')}
             >
               <div className="fx-compact-title">{l.title}</div>
               <div className="fx-compact-url">{l.url}</div>
             </button>
             {l.tags.length > 0 && (
               <div className="fx-compact-tags">
-                {l.tags.slice(0, 2).map((t) => (
-                  <TagChip key={t.id} tag={t} />
+                {l.tags.slice(0, 2).map((tag) => (
+                  <TagChip key={tag.id} tag={tag} />
                 ))}
               </div>
             )}
@@ -49,10 +51,10 @@ export function CompactGrid({ links, onEdit }: Props) {
               href={goHref(l.id)}
               target="_blank"
               rel="noopener noreferrer"
-              data-tooltip="Acessar"
+              data-tooltip={t('link_card.open_action')}
               aria-label={`open ${l.title}`}
             >
-              Acessar
+              {t('link_card.open_action')}
             </a>
           </div>
         </article>

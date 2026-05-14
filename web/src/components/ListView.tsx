@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
@@ -11,13 +12,14 @@ type Props = {
 }
 
 export function ListView({ links, onEdit }: Props) {
+  const { t } = useTranslation()
   const del = useDeleteLink()
   const confirm = useConfirm()
   const askDelete = async (l: Link) => {
     const ok = await confirm({
-      title: `Apagar "${l.title}"?`,
-      message: <>O link e seu histórico de cliques serão removidos permanentemente.</>,
-      confirmLabel: 'Apagar link',
+      title: t('link_card.delete_confirm_title', { title: l.title }),
+      message: t('link_card.delete_confirm_body_short'),
+      confirmLabel: t('link_card.delete_confirm_action'),
       destructive: true,
     })
     if (ok) del.mutate(l.id)
@@ -25,10 +27,10 @@ export function ListView({ links, onEdit }: Props) {
   return (
     <div className="fx-list">
       <div className="fx-list-head">
-        <div>Link</div>
-        <div>Tags</div>
-        <div className="fx-list-num">Cliques</div>
-        <div>Último</div>
+        <div>{t('link_card.list_header_link')}</div>
+        <div>{t('link_card.list_header_tags')}</div>
+        <div className="fx-list-num">{t('link_card.list_header_clicks')}</div>
+        <div>{t('link_card.list_header_last')}</div>
         <div />
       </div>
       {links.map((l) => (
@@ -41,8 +43,8 @@ export function ListView({ links, onEdit }: Props) {
             </div>
           </div>
           <div className="fx-list-tags">
-            {l.tags.slice(0, 3).map((t) => (
-              <TagChip key={t.id} tag={t} />
+            {l.tags.slice(0, 3).map((tag) => (
+              <TagChip key={tag.id} tag={tag} />
             ))}
           </div>
           <div className="fx-list-clicks">
@@ -54,7 +56,7 @@ export function ListView({ links, onEdit }: Props) {
           <div className="fx-list-actions">
             <button
               className="fx-iconbtn"
-              data-tooltip="Editar link"
+              data-tooltip={t('link_card.edit_link')}
               data-tooltip-side="top"
               aria-label="edit"
               onClick={() => onEdit(l)}
@@ -63,7 +65,7 @@ export function ListView({ links, onEdit }: Props) {
             </button>
             <button
               className="fx-iconbtn fx-iconbtn-danger"
-              data-tooltip="Apagar link"
+              data-tooltip={t('link_card.delete_link')}
               data-tooltip-side="top"
               aria-label="delete"
               onClick={() => askDelete(l)}
@@ -75,12 +77,12 @@ export function ListView({ links, onEdit }: Props) {
               href={goHref(l.id)}
               target="_blank"
               rel="noopener noreferrer"
-              data-tooltip={`Acessar via /go/${l.id}`}
+              data-tooltip={t('link_card.open_action')}
               data-tooltip-side="top"
               aria-label={`open ${l.title}`}
             >
               <Icon d={I.open} size={12} />
-              <span>Acessar</span>
+              <span>{t('link_card.open_action')}</span>
             </a>
           </div>
         </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { GradientPicker } from './GradientPicker'
 import { useCreateTag, useUpdateTag } from '../api/tags'
@@ -29,6 +30,7 @@ const DEFAULT_COLORS = [
 type Mode = 'solid' | 'gradient'
 
 export function TagDialog({ open, onClose, tag }: Props) {
+  const { t } = useTranslation()
   const isEdit = !!tag
   const [name, setName] = useState('')
   const [mode, setMode] = useState<Mode>('solid')
@@ -95,15 +97,15 @@ export function TagDialog({ open, onClose, tag }: Props) {
       className="fx-overlay fx-overlay-modal"
       role="dialog"
       aria-modal="true"
-      aria-label={isEdit ? 'Edit tag' : 'New tag'}
+      aria-label={isEdit ? t('tag_dialog.kicker_edit') : t('tag_dialog.kicker_create')}
     >
       <div className="fx-modal" style={{ maxWidth: 480 }}>
         <header className="fx-modal-head">
           <div>
-            <div className="fx-modal-kicker">{isEdit ? '✎ Editar tag' : '+ Nova tag'}</div>
-            <h2 className="fx-modal-title">{isEdit ? `Editar "${tag?.name}"` : 'Criar tag'}</h2>
+            <div className="fx-modal-kicker">{isEdit ? t('tag_dialog.kicker_edit') : t('tag_dialog.kicker_create')}</div>
+            <h2 className="fx-modal-title">{isEdit ? t('tag_dialog.edit_title', { name: tag?.name ?? '' }) : t('tag_dialog.create_title')}</h2>
           </div>
-          <button className="fx-confirm-x" onClick={onClose} aria-label="close">
+          <button className="fx-confirm-x" onClick={onClose} aria-label={t('common.close')}>
             <Icon d={I.x} size={14} />
           </button>
         </header>
@@ -111,22 +113,22 @@ export function TagDialog({ open, onClose, tag }: Props) {
         <div className="fx-modal-body" style={{ gridTemplateColumns: '1fr' }}>
           <div className="fx-modal-col">
             <label className="fx-field">
-              <span className="fx-field-label">Nome</span>
+              <span className="fx-field-label">{t('tag_dialog.name_label')}</span>
               <div className="fx-input">
                 <input
                   autoFocus
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="ex: Jira, Dashboards…"
-                  aria-label="tag name"
+                  placeholder={t('tag_dialog.name_placeholder')}
+                  aria-label={t('tag_dialog.name_aria')}
                 />
               </div>
             </label>
 
             <div className="fx-field">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <span className="fx-field-label" style={{ margin: 0 }}>Cor</span>
-                <div className="fx-mode-toggle" role="tablist" aria-label="modo de cor">
+                <span className="fx-field-label" style={{ margin: 0 }}>{t('tag_dialog.color_label')}</span>
+                <div className="fx-mode-toggle" role="tablist" aria-label={t('tag_dialog.color_mode_aria')}>
                   <button
                     type="button"
                     role="tab"
@@ -134,7 +136,7 @@ export function TagDialog({ open, onClose, tag }: Props) {
                     className={'fx-mode-tab' + (mode === 'solid' ? ' fx-mode-tab-active' : '')}
                     onClick={() => setMode('solid')}
                   >
-                    <Icon d={I.solid} size={11} /> Sólida
+                    <Icon d={I.solid} size={11} /> {t('tag_dialog.color_solid')}
                   </button>
                   <button
                     type="button"
@@ -143,7 +145,7 @@ export function TagDialog({ open, onClose, tag }: Props) {
                     className={'fx-mode-tab' + (mode === 'gradient' ? ' fx-mode-tab-active' : '')}
                     onClick={() => setMode('gradient')}
                   >
-                    <Icon d={I.gradient} size={11} /> Gradiente
+                    <Icon d={I.gradient} size={11} /> {t('tag_dialog.color_gradient')}
                   </button>
                 </div>
               </div>
@@ -178,30 +180,30 @@ export function TagDialog({ open, onClose, tag }: Props) {
                       background: 'transparent',
                       cursor: 'pointer',
                     }}
-                    aria-label="custom color"
+                    aria-label={t('tag_dialog.custom_color_aria')}
                   />
                 </div>
               ) : (
                 <GradientPicker
                   from={gradFrom}
                   to={gradTo}
-                  onChange={(f, t) => {
+                  onChange={(f, to) => {
                     setGradFrom(f)
-                    setGradTo(t)
+                    setGradTo(to)
                   }}
                 />
               )}
             </div>
 
             <label className="fx-field">
-              <span className="fx-field-label">Ícone (emoji, opcional)</span>
+              <span className="fx-field-label">{t('tag_dialog.icon_label')}</span>
               <div className="fx-input">
                 <input
                   value={icon}
                   onChange={(e) => setIcon(e.target.value)}
-                  placeholder="🪲, 📊, 📚…"
+                  placeholder={t('tag_dialog.icon_placeholder')}
                   maxLength={3}
-                  aria-label="tag icon"
+                  aria-label={t('tag_dialog.icon_aria')}
                 />
               </div>
             </label>
@@ -210,7 +212,7 @@ export function TagDialog({ open, onClose, tag }: Props) {
 
         <footer className="fx-modal-foot">
           <button className="fx-confirm-btn" onClick={onClose}>
-            Cancelar
+            {t('common.cancel')}
           </button>
           <button
             className="fx-confirm-btn fx-confirm-btn-primary"
@@ -218,7 +220,7 @@ export function TagDialog({ open, onClose, tag }: Props) {
             disabled={!name.trim() || busy}
           >
             <Icon d={isEdit ? I.check : I.plus} size={13} stroke={2.2} />{' '}
-            {isEdit ? 'Salvar' : 'Criar tag'}
+            {isEdit ? t('tag_dialog.submit_save') : t('tag_dialog.submit_create')}
           </button>
         </footer>
       </div>
