@@ -161,13 +161,20 @@ A vanilla Manifest V3 extension lives in `extension/`. Load it as **unpacked** f
 
 ## Screenshots
 
-> *Placeholder — capture after first real use.*
+<p align="center">
+  <img src="docs/assets/home-empty.png" alt="Foldex home view — base vazia mostrando o sidebar de tags, topbar e empty-state com CTA pra adicionar o primeiro link" width="100%"/>
+</p>
 
-- Home grid (with tag sidebar + sort toggle)
-- Command palette (`⌘K`)
-- New link dialog with tag autocomplete
-- Import page (drag-drop)
-- Extension popup
+<p align="center"><sub><em>Home view (sem links ainda) — tag sidebar à esquerda, topbar com busca + filtros, CTAs Novo link / Nova pasta à direita, empty-state convidando o primeiro import.</em></sub></p>
+
+> *Outras capturas pendentes:*
+>
+> - Home grid populado (cards + densidade 3/5/8 col)
+> - Command palette (`⌥K`)
+> - New link dialog com tag autocomplete
+> - Import page (drag-drop) + preview com mode picker
+> - Página de stats (KPIs, top hosts, distribuição por tag)
+> - Extension popup
 
 ## Layout
 
