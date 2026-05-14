@@ -6,40 +6,40 @@
 
 > Self-hosted bookmark manager with rich tagging, nestable folders, click tracking, visual URL previews, full backup, and a browser extension.
 
-Foldex é um "smart bookmarks bar" pessoal — guarda links organizados por **pastas aninhadas + tags M:N**, mostra **o que você de fato clica** (telemetria via `/go/:id`), captura visualmente cada URL (OG image / favicon / screenshot fallback) e roda **inteiro na sua máquina** (Postgres + MinIO + Go + React em containers).
+Foldex is a personal "smart bookmarks bar" — it stores links organized by **nestable folders + M:N tags**, shows **what you actually click** (telemetry via `/go/:id`), captures every URL visually (OG image / favicon / screenshot fallback), and runs **entirely on your own machine** (Postgres + MinIO + Go + React in containers).
 
-> Stack: **Go 1.26 · PostgreSQL 16 · MinIO · Vite 8 + React 19 + bun · Vitest 4**. Versionamento + invariants em [`CLAUDE.md`](CLAUDE.md).
+> Stack: **Go 1.26 · PostgreSQL 16 · MinIO · Vite 8 + React 19 + bun · Vitest 4**. Versioning policy + invariants in [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
-## Por que foldex e não o bookmark do browser?
+## Why foldex instead of the browser's built-in bookmarks?
 
-Bookmark nativo é ótimo pra "salvar uma página rápida e esquecer". Quando você passa de 50 links, começa a doer. Foldex resolve cada uma dessas dores:
+Native bookmarks are fine for "save a page quickly and forget it". Once you pass 50 links, the friction starts to hurt. Foldex addresses each pain point:
 
-| Problema do bookmark nativo                                                   | Como foldex resolve                                                                                                            |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| **Preso a um browser.** Chrome ↔ Safari ↔ Firefox = 3 silos. Sync exige conta no fornecedor. | Servidor próprio. Acessa de qualquer browser, em qualquer máquina da sua rede. Os dados ficam num Postgres que **você** controla. |
-| **Só árvore.** Um bookmark mora em UMA pasta. Quer "trabalho + ia + notebookLLM"? Triplica. | **Tags M:N** (um link pode ter N labels) **+ pastas 1:N aninhadas** (containment iPhone-style). Os dois sistemas coexistem. |
-| **Zero telemetria.** Você "favorita" 200 links, usa 8. Não sabe quais.        | Toda navegação passa por `/go/:id` que insere em `click_log`. Página de estatísticas mostra: cliques por dia, top hosts, top links 30d, distribuição por tag. |
-| **Preview = favicon 16×16.** Lista cinza com mini-ícone.                      | Card visual com OG image. Se a página não tem, foldex **captura screenshot** automaticamente (headless Chromium → MinIO). Você pode ainda fazer upload manual da imagem que quiser. |
-| **Busca raquítica.** Match só no título/URL.                                  | Busca full-text via Postgres `pg_trgm` em título + URL + descrição. Combinada com filtro por tag (AND-multi-tag) e escopo de pasta. |
-| **Backup = arquivo Netscape opaco.** Imagens? Cliques? Hierarquia? Perde tudo. | Backup ZIP único com `manifest.json` + `database.json` (5 tabelas) + **todas as imagens do MinIO**. Round-trip lossless, validação com checksums SHA-256, 3 modos de conflito (wipe/skip/duplicate). |
-| **Atalhos engessados.** Cmd+D abre o diálogo nativo do browser.               | Extensão MV3 + atalhos Alt-K (palette), Alt-N (novo link), Alt-F (nova pasta). Drag-and-drop iPhone-style entre cards/pastas. |
-| **Lock-in do fornecedor.** Sair do Chrome = exportar HTML + perder metadados. | Export pra **Netscape HTML** (compat universal) **OU** JSON v2 (com folders + click_count) **OU** ZIP full backup. Importer aceita os três. |
-| **Pinned/favoritos = uma pastinha à parte.** Só visual.                       | `pinned` é coluna real na tabela. `ORDER BY pinned DESC, …` em todo sort. Badge gradiente sempre visível.                  |
-| **Dados embarcados no browser.** Trocou de máquina? Reinstalou Chrome? Reza.  | Postgres + MinIO em containers. `make up` numa máquina nova e seu backup ZIP restaura tudo (DB + imagens) em ~minutos.       |
+| Native-bookmark pain                                                            | How foldex solves it                                                                                                            |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **Locked to one browser.** Chrome ↔ Safari ↔ Firefox = 3 silos. Sync requires a vendor account. | Your own server. Reach it from any browser, on any machine on your network. Data lives in a Postgres **you** control. |
+| **Tree-only.** A bookmark lives in ONE folder. Want "work + ai + notebookLLM"? You triplicate. | **M:N tags** (a link can carry N labels) **+ 1:N nestable folders** (iPhone-style containment). The two systems coexist. |
+| **Zero telemetry.** You "favorite" 200 links and use 8. You don't know which.   | Every navigation goes through `/go/:id` which inserts into `click_log`. Stats page shows clicks per day, top hosts, top links (last 30d), tag distribution. |
+| **Preview = 16×16 favicon.** A gray list with tiny icons.                       | Visual card with OG image. If the page has none, foldex **captures a screenshot** automatically (headless Chromium → MinIO). You can also upload any image manually. |
+| **Weak search.** Title/URL match only.                                          | Full-text search via Postgres `pg_trgm` over title + URL + description. Composes with tag filter (AND-multi-tag) and folder scope. |
+| **Backup = opaque Netscape file.** Images? Clicks? Hierarchy? All lost.         | Single backup ZIP with `manifest.json` + `database.json` (5 tables) + **every MinIO image**. Lossless round-trip, SHA-256 checksum verification, 3 conflict modes (wipe/skip/duplicate). |
+| **Fixed shortcuts.** Cmd+D opens the browser's native dialog.                   | MV3 extension + Alt-K (palette), Alt-N (new link), Alt-F (new folder). iPhone-style drag-and-drop between cards/folders. |
+| **Vendor lock-in.** Leaving Chrome = export HTML + lose metadata.               | Export to **Netscape HTML** (universal compat) **OR** JSON v2 (with folders + click_count) **OR** full backup ZIP. Importer accepts all three. |
+| **Pinned/favorites = a tiny separate folder.** Visual only.                     | `pinned` is a real column on the table. `ORDER BY pinned DESC, …` applies in every sort mode. Gradient badge always visible. |
+| **Data embedded in the browser.** Switched machines? Reinstalled Chrome? Pray. | Postgres + MinIO in containers. `make up` on a new machine and your backup ZIP restores everything (DB + images) in ~minutes. |
 
-### Cenários reais que viraram a chave (de bookmark nativo → foldex)
+### Real scenarios that flipped the switch (native bookmarks → foldex)
 
-- **"Quais dashboards eu de fato uso?"** → stats page mostra top hosts e top links 30d. Larga os que ficaram em 0 cliques.
-- **"Quero compartilhar `localhost:9089/go/42` com a equipe."** → toda URL ganha um alias estável `/go/:id` que redireciona + loga clique.
-- **"Trocar de máquina sem perder nada."** → 1 botão "Gerar backup completo" na UI gera ZIP. Outro botão "Restaurar" na máquina nova com `mode=wipe`.
-- **"O mesmo link mora em 3 contextos (trabalho + ia + arquitetura)."** → 3 tags. Aparece nos 3 filtros.
-- **"Quero saber visualmente qual link é qual antes de clicar."** → cada card mostra preview OG/screenshot/upload em 150px.
+- **"Which dashboards am I actually using?"** → the stats page surfaces top hosts and top links over 30 days. Drop the ones at 0 clicks.
+- **"I want to share `localhost:9089/go/42` with the team."** → every URL gets a stable alias `/go/:id` that redirects + logs the click.
+- **"Switch machines without losing anything."** → 1 button in the UI generates the full backup ZIP. Another button on the new machine restores with `mode=wipe`.
+- **"The same link lives in 3 contexts (work + ai + architecture)."** → 3 tags. It shows up in all 3 filters.
+- **"I want to know visually which link is which before clicking."** → every card shows an OG/screenshot/upload preview at 150px.
 
-### Quando foldex é overkill
+### When foldex is overkill
 
-Se você tem <30 links salvos e usa **um único browser numa única máquina**, o bookmark nativo é mais simples. Foldex faz sentido a partir do ponto em que você quer cross-browser, telemetria, ou organização real por mais de uma dimensão.
+If you have fewer than 30 links saved and use **a single browser on a single machine**, native bookmarks are simpler. Foldex starts paying off once you need cross-browser access, telemetry, or real organization across more than one dimension.
 
 ---
 
@@ -82,11 +82,11 @@ never commit. Re-run `mkcert ...` (and `make up`) when you add a new hostname
 (e.g. a `*.foldex.test` you point at `127.0.0.1`) or after re-installing the
 local CA (`mkcert -install`) on a new machine.
 
-> **"Not Secure" no browser depois de tudo?** Significa que a CA root do
-> mkcert não está no trust store dessa máquina (ou está mas o cert foi
-> assinado por outra CA — comum quando se move o projeto entre máquinas).
-> Rode `mkcert -install` e reemita os pem files com o bloco acima; depois
-> `make up` para rebuildar o nginx com os certs novos.
+> **Still seeing "Not Secure" in the browser?** It means the mkcert root CA
+> is not in this machine's trust store (or it is, but the cert was signed by
+> a different CA — common when you move the project between machines).
+> Run `mkcert -install` and re-emit the pem files using the block above; then
+> `make up` to rebuild the nginx image with the fresh certs baked in.
 
 > **Reuse a Postgres you already run on your host.** Set `POSTGRES_HOST=host.docker.internal` in `.env` (and matching `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`), skip `make db-up`, and run `make apps-up` directly. Migrations need to be applied against that DB by hand (or `make migrate-up` if the user/db exist).
 
@@ -162,18 +162,18 @@ A vanilla Manifest V3 extension lives in `extension/`. Load it as **unpacked** f
 ## Screenshots
 
 <p align="center">
-  <img src="docs/assets/home-empty.png" alt="Foldex home view — base vazia mostrando o sidebar de tags, topbar e empty-state com CTA pra adicionar o primeiro link" width="100%"/>
+  <img src="docs/assets/home-empty.png" alt="Foldex home view — empty state showing the tag sidebar, topbar, and the CTA card to add the first link" width="100%"/>
 </p>
 
-<p align="center"><sub><em>Home view (sem links ainda) — tag sidebar à esquerda, topbar com busca + filtros, CTAs Novo link / Nova pasta à direita, empty-state convidando o primeiro import.</em></sub></p>
+<p align="center"><sub><em>Home view (no links yet) — tag sidebar on the left, topbar with search + filters, New link / New folder CTAs on the right, empty-state card inviting the first import.</em></sub></p>
 
-> *Outras capturas pendentes:*
+> *Other captures pending:*
 >
-> - Home grid populado (cards + densidade 3/5/8 col)
+> - Populated home grid (cards + 3/5/8-column density)
 > - Command palette (`⌥K`)
-> - New link dialog com tag autocomplete
-> - Import page (drag-drop) + preview com mode picker
-> - Página de stats (KPIs, top hosts, distribuição por tag)
+> - New link dialog with tag autocomplete
+> - Import page (drag-drop) + preview with the mode picker
+> - Stats page (KPIs, top hosts, tag distribution)
 > - Extension popup
 
 ## Layout
@@ -212,7 +212,7 @@ curl -X POST -F file=@foldex-backup-*.zip \
 #                     links with URL collision fall back to skip + warning
 ```
 
-Via UI: go to **Importar / Exportar** → right column has the **💾 Backup completo** card. Drag a `.zip` onto it to review the validation summary and pick a mode in `BackupRestoreDialog`. History (last 10 backups: date, duration, size, counts) persists in `localStorage`.
+Via UI: open the **Import / Export** page → the right column hosts the **💾 Full backup** card. Drag a `.zip` onto it to review the validation summary and pick a mode in `BackupRestoreDialog`. History (last 10 backups: date, duration, size, counts) persists in `localStorage`. *(Note: UI strings still ship in Portuguese — see the i18n roadmap below.)*
 
 Full design rationale: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 
