@@ -1,0 +1,35 @@
+# Env / secrets
+.env
+.env.local
+
+# Go
+backend/bin/
+backend/coverage*.out
+backend/cov*.out
+backend/foldex
+*.test
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+*.local
+
+# Extension build
+extension/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Docker volumes (local data)
+.pgdata/
+web/certs/
+
+# DB backups produced by scripts/backup.sh
+backups/
+
+# Claude Code per-session state (lock files, local user settings)
+.claude/

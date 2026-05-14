@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:18.2-alpine
+    container_name: foldex-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-foldex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-foldex}
+      POSTGRES_DB: ${POSTGRES_DB:-foldex}
+    # Postgres is reached through the shared `foldex` network — by service
+    # name `db` (alias) or by container name `foldex-db`. We do NOT publish a
+    # host port by default to avoid conflicts with other local Postgres
+    # instances. Uncomment to expose for GUI clients.
+    # ports:
+    #   - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-foldex} -d ${POSTGRES_DB:-foldex}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      foldex:
+        aliases: [db]
+
+# A named, top-level network so the apps compose (docker-compose.yml) can
+# attach to it via `external: true`. Lives independently of either compose
+# project's lifecycle.
+networks:
+  foldex:
+    name: foldex
+
+volumes:
+  pgdata:
+    name: foldex_pgdata

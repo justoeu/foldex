@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS link_pinned_created;
+ALTER TABLE link DROP COLUMN IF EXISTS pinned;

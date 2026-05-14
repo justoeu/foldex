@@ -1,0 +1,231 @@
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { FolderCard } from './FolderCard'
+import type { Folder, PreviewTile } from '../api/types'
+
+function makeTile(i: number, og?: string): PreviewTile {
+  return { id: i, title: `link-${i}`, og_image_url: og ?? null, favicon_url: null }
+}
+
+function makeFolder(opts: Partial<Folder> & { link_count: number; preview_links: PreviewTile[] }): Folder {
+  return {
+    id: 1,
+    name: opts.name ?? 'Trabalho',
+    color: opts.color ?? '#0EA5E9',
+    link_count: opts.link_count,
+    folder_count: opts.folder_count ?? 0,
+    preview_links: opts.preview_links,
+    preview_folders: opts.preview_folders ?? [],
+    created_at: new Date().toISOString(),
+  }
+}
+
+describe('FolderCard', () => {
+  it('renders folder name and link count', () => {
+    render(<FolderCard folder={makeFolder({ link_count: 3, preview_links: [] })} onOpen={vi.fn()} />)
+    expect(screen.getByText('Trabalho')).toBeInTheDocument()
+    expect(screen.getByText(/3 links/)).toBeInTheDocument()
+  })
+
+  it('pluralizes 1 link correctly', () => {
+    render(<FolderCard folder={makeFolder({ link_count: 1, preview_links: [makeTile(1)] })} onOpen={vi.fn()} />)
+    expect(screen.getByText(/1 link/)).toBeInTheDocument()
+  })
+
+  it('shows folder count when there are subfolders', () => {
+    render(
+      <FolderCard
+        folder={makeFolder({ link_count: 2, folder_count: 3, preview_links: [] })}
+        onOpen={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/2 links · 3 pastas/)).toBeInTheDocument()
+  })
+
+  it('pluralizes 1 subfolder correctly', () => {
+    render(
+      <FolderCard
+        folder={makeFolder({ link_count: 0, folder_count: 1, preview_links: [] })}
+        onOpen={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/0 links · 1 pasta/)).toBeInTheDocument()
+  })
+
+  it('hides the folder count when there are no subfolders', () => {
+    const { container } = render(
+      <FolderCard
+        folder={makeFolder({ link_count: 5, folder_count: 0, preview_links: [] })}
+        onOpen={vi.fn()}
+      />,
+    )
+    const host = container.querySelector('.fx-card-host')
+    // "5 links" — no " · 0 pastas" segment
+    expect(host?.textContent?.trim()).toBe('5 links')
+  })
+
+  it('shows "Pasta vazia" overlay when link_count is 0', () => {
+    render(<FolderCard folder={makeFolder({ link_count: 0, preview_links: [] })} onOpen={vi.fn()} />)
+    expect(screen.getByText(/Pasta vazia/i)).toBeInTheDocument()
+  })
+
+  it('renders subfolder tiles when the folder has no direct links', () => {
+    const { container } = render(
+      <FolderCard
+        folder={makeFolder({
+          link_count: 0,
+          folder_count: 2,
+          preview_links: [],
+          preview_folders: [
+            { id: 10, name: 'Sub1', color: '#06B6D4' },
+            { id: 11, name: 'Sub2', color: '#10B981' },
+          ],
+        })}
+        onOpen={vi.fn()}
+      />,
+    )
+    expect(container.querySelectorAll('.fx-folder-tile-subfolder').length).toBe(2)
+    expect(screen.queryByText(/Pasta vazia/i)).toBeNull()
+  })
+
+  it('shows "Pasta vazia" only when BOTH links and subfolders are empty', () => {
+    render(
+      <FolderCard
+        folder={makeFolder({
+          link_count: 0,
+          folder_count: 0,
+          preview_links: [],
+          preview_folders: [],
+        })}
+        onOpen={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/Pasta vazia/i)).toBeInTheDocument()
+  })
+
+  it('renders +N overlay when there are more than 4 links', () => {
+    const tiles = [1, 2, 3, 4].map((i) => makeTile(i))
+    render(<FolderCard folder={makeFolder({ link_count: 10, preview_links: tiles })} onOpen={vi.fn()} />)
+    expect(screen.getByText('+6')).toBeInTheDocument()
+  })
+
+  it('does not render +N when link_count <= 4', () => {
+    const tiles = [1, 2, 3, 4].map((i) => makeTile(i))
+    const { container } = render(
+      <FolderCard folder={makeFolder({ link_count: 4, preview_links: tiles })} onOpen={vi.fn()} />,
+    )
+    expect(container.querySelector('.fx-folder-tile-more')).toBeNull()
+  })
+
+  it('calls onOpen when the preview is clicked', async () => {
+    const onOpen = vi.fn()
+    render(<FolderCard folder={makeFolder({ link_count: 0, preview_links: [] })} onOpen={onOpen} />)
+    await userEvent.setup().click(screen.getByRole('button', { name: /Abrir pasta Trabalho/i }))
+    expect(onOpen).toHaveBeenCalledWith(1)
+  })
+
+  it('accepts a link drop and calls onDropLink with (sourceId, folderId)', () => {
+    const onDropLink = vi.fn()
+    const { container } = render(
+      <FolderCard
+        folder={makeFolder({ link_count: 0, preview_links: [] })}
+        onOpen={vi.fn()}
+        onDropLink={onDropLink}
+      />,
+    )
+    const root = container.querySelector('.fx-folder-card') as HTMLElement
+    fireEvent.drop(root, {
+      dataTransfer: {
+        types: ['application/x-foldex-link'],
+        getData: (k: string) => (k === 'application/x-foldex-link' ? '42' : ''),
+      },
+    })
+    expect(onDropLink).toHaveBeenCalledWith(42, 1)
+  })
+
+  it('ignores drops without the foldex link payload', () => {
+    const onDropLink = vi.fn()
+    const { container } = render(
+      <FolderCard
+        folder={makeFolder({ link_count: 0, preview_links: [] })}
+        onOpen={vi.fn()}
+        onDropLink={onDropLink}
+      />,
+    )
+    const root = container.querySelector('.fx-folder-card') as HTMLElement
+    fireEvent.drop(root, {
+      dataTransfer: {
+        types: [],
+        getData: () => '',
+      },
+    })
+    expect(onDropLink).not.toHaveBeenCalled()
+  })
+
+  it('accepts a folder drop and calls onDropFolder with (sourceId, folderId)', () => {
+    const onDropFolder = vi.fn()
+    const { container } = render(
+      <FolderCard
+        folder={makeFolder({ link_count: 0, preview_links: [] })}
+        onOpen={vi.fn()}
+        onDropFolder={onDropFolder}
+      />,
+    )
+    const root = container.querySelector('.fx-folder-card') as HTMLElement
+    fireEvent.drop(root, {
+      dataTransfer: {
+        types: ['application/x-foldex-folder'],
+        getData: (k: string) => (k === 'application/x-foldex-folder' ? '17' : ''),
+      },
+    })
+    expect(onDropFolder).toHaveBeenCalledWith(17, 1)
+  })
+
+  it('ignores a folder drop on itself (same id)', () => {
+    const onDropFolder = vi.fn()
+    const { container } = render(
+      <FolderCard
+        folder={makeFolder({ link_count: 0, preview_links: [] })}
+        onOpen={vi.fn()}
+        onDropFolder={onDropFolder}
+      />,
+    )
+    const root = container.querySelector('.fx-folder-card') as HTMLElement
+    fireEvent.drop(root, {
+      dataTransfer: {
+        types: ['application/x-foldex-folder'],
+        getData: (k: string) => (k === 'application/x-foldex-folder' ? '1' : ''),
+      },
+    })
+    expect(onDropFolder).not.toHaveBeenCalled()
+  })
+
+  it('exposes the folder id via the foldex-folder MIME type on drag start', () => {
+    const setData = vi.fn()
+    const { container } = render(
+      <FolderCard
+        folder={makeFolder({ link_count: 0, preview_links: [] })}
+        onOpen={vi.fn()}
+      />,
+    )
+    const root = container.querySelector('.fx-folder-card') as HTMLElement
+    fireEvent.dragStart(root, { dataTransfer: { setData, effectAllowed: '' } })
+    expect(setData).toHaveBeenCalledWith('application/x-foldex-folder', '1')
+  })
+
+  it('renders the edit affordance only when onEdit is provided', () => {
+    const { rerender } = render(
+      <FolderCard folder={makeFolder({ link_count: 0, preview_links: [] })} onOpen={vi.fn()} />,
+    )
+    expect(screen.queryByLabelText(/edit folder/i)).toBeNull()
+    rerender(
+      <FolderCard
+        folder={makeFolder({ link_count: 0, preview_links: [] })}
+        onOpen={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    )
+    expect(screen.getByLabelText(/edit folder/i)).toBeInTheDocument()
+  })
+})

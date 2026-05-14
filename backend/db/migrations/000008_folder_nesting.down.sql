@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS folder_parent;
+ALTER TABLE folder DROP COLUMN IF EXISTS parent_id;

@@ -1,0 +1,191 @@
+# Foldex — Tasks
+
+## Como ler
+
+Lista faseada de tasks `T1..T30`. Cada fase desbloqueia a próxima — segue em ordem. A coluna **Status** é atualizada no final de cada task com `✅ done` + data + hash de commit (quando aplicável). `🚧` = em andamento, `⏳` = bloqueado, vazio = pending.
+
+> Convenções: backend = Go (`/backend`), web = Vite/React (`/web`), ext = MV3 (`/extension`).
+
+---
+
+## Fase 0 — Infra
+
+| #   | Task                                                                                          | Status |
+|-----|-----------------------------------------------------------------------------------------------|--------|
+| T1  | Init repo + `Makefile` + `.env.example` + `docker-compose.yml` (Postgres 16 + healthcheck).   | ✅     |
+| T2  | Scaffold `docs/VISION.md`, `docs/ARCHITECTURE.md`, `docs/TASKS.md`.                           | ✅     |
+| T3  | Backend `Dockerfile` + `go.mod` + `cmd/server/main.go` + `internal/server/router.go` com `/healthz`. | ✅     |
+| T4  | Web `Dockerfile` (multi-stage → nginx) + `nginx.conf` + Vite scaffold servindo "Hello Foldex". | ✅     |
+| T5  | `docker compose up` smoke E2E (backend + db + web sobem; `/healthz` 200; SPA carrega).        |        |
+
+## Fase 1 — Backend core
+
+| #   | Task                                                                                          | Status |
+|-----|-----------------------------------------------------------------------------------------------|--------|
+| T6  | `internal/config/` env loader; `internal/db/` pgxpool init + ping; graceful shutdown em `main.go`. | ✅     |
+| T7  | Migration `000001_init.up/down.sql` (tag, link, link_tag, índices, pg_trgm). Makefile `migrate-up`. | ✅     |
+| T8  | `internal/tags` CRUD: handler/service/repository/model/dto.                                   | ✅     |
+| T9  | `internal/links` CRUD + filtros (`q`, `tag`, `sort`) + set de tags via PATCH.                  | ✅     |
+| T10 | `internal/redirect` `/go/:id` com `UPDATE ... RETURNING url` e 302.                            | ✅     |
+| T11 | Testes de repositório com `testcontainers-go` (tags, links, redirect).                         |        |
+
+## Fase 2 — Frontend core
+
+| #   | Task                                                                                          | Status |
+|-----|-----------------------------------------------------------------------------------------------|--------|
+| T12 | MUI dark theme + TanStack Query + axios client tipado (`web/src/api/`).                       | ✅     |
+| T13 | `LinkGrid` + `LinkCard` + `TagSidebar` + chips de filtro.                                      | ✅     |
+| T14 | `NewLinkDialog` com Autocomplete de tags (create-on-the-fly).                                  | ✅     |
+| T15 | `CommandPalette` (⌘K) + atalho ⌘N pra `NewLinkDialog`.                                          | ✅     |
+| T16 | Edit/delete flows com optimistic updates.                                                      | ✅     |
+
+## Fase 3 — Preview worker
+
+| #   | Task                                                                                          | Status |
+|-----|-----------------------------------------------------------------------------------------------|--------|
+| T17 | `internal/preview/fetcher.go`: `http.Client` 5s + parser `<title>`, OG, favicon. SSRF guard.   | ✅     |
+| T18 | `internal/preview/worker.go`: pool N workers (env `PREVIEW_WORKER_CONCURRENCY`).               | ✅     |
+| T19 | Hook em `links.Create` (enqueue) + endpoint `POST /api/links/:id/refresh-preview`.             | ✅     |
+| T20 | Front: badge `preview_status` + botão retry no `LinkCard`.                                     | ✅     |
+
+## Fase 4 — Import/Export
+
+| #   | Task                                                                                          | Status |
+|-----|-----------------------------------------------------------------------------------------------|--------|
+| T21 | Netscape HTML parser (`golang.org/x/net/html`) → insert por URL.                               | ✅     |
+| T22 | JSON format versionado `{ version:1, tags, links }` (import + export).                         | ✅     |
+| T23 | `ImportPage` com drag-drop + botão Export (Netscape + JSON).                                   | ✅     |
+
+## Fase 5 — Browser extension
+
+| #   | Task                                                                                          | Status |
+|-----|-----------------------------------------------------------------------------------------------|--------|
+| T24 | MV3 manifest + Vite + `@crxjs/vite-plugin` + popup React + options page.                       | ✅     |
+| T25 | Popup form: prefill URL/título da aba, tag picker, save → `POST /api/links`.                   | ✅     |
+| T26 | UX "save & close" + toast + persistência da base URL em `chrome.storage.local`.                | ✅     |
+
+## Fase 6 — Polish
+
+| #   | Task                                                                                          | Status |
+|-----|-----------------------------------------------------------------------------------------------|--------|
+| T27 | README quickstart + seção screenshots (placeholder) + gif demo (placeholder).                  | ✅     |
+| T28 | `scripts/seed.sql` com tags (Jira, Dashboard, Docs) + 5 links de exemplo.                       | ✅     |
+| T29 | `scripts/backup.sh` (`pg_dump` template + comentário sobre cron).                               | ✅     |
+| T30 | Atualizar este doc com log de conclusão + lessons learned.                                     |        |
+
+---
+
+## Log de conclusão
+
+| Data       | Task   | Hash | Notas |
+|------------|--------|------|-------|
+| 2026-05-11 | T1     | —    | Repo + Makefile + .env.example + docker-compose.yml (Postgres 16 com healthcheck, ports só em 127.0.0.1). |
+| 2026-05-11 | T2     | —    | Docs SDD: VISION.md, ARCHITECTURE.md, TASKS.md. |
+| 2026-05-11 | T3     | —    | Backend Dockerfile (distroless) + go.mod + cmd/server/main.go (graceful shutdown) + healthz. |
+| 2026-05-11 | T4     | —    | Web Dockerfile (nginx multi-stage) + nginx.conf (proxy /api e /go) + Vite/React scaffold. |
+| 2026-05-11 | T6     | —    | pgxpool init + ping em internal/db; config loader em internal/config. |
+| 2026-05-11 | T7     | —    | Migration 000001_init.up/down.sql com pg_trgm e índices GIN. |
+| 2026-05-11 | T8     | —    | Tags CRUD (handler/repository/dto/model) com `link_count` agregado. |
+| 2026-05-11 | T9     | —    | Links CRUD + filtros `q`, `tag` (AND), `sort=created\|clicks\|recent`, tag set via PATCH. |
+| 2026-05-11 | T10    | —    | `/go/:id` com `UPDATE ... RETURNING url` atômico + 302. |
+| 2026-05-11 | T12-16 | —    | Front: theme dark MUI, TanStack Query, LinkGrid, LinkCard, TagSidebar, LinkDialog, CommandPalette ⌘K, atalho ⌘N. |
+| 2026-05-11 | T17    | —    | Preview fetcher com `golang.org/x/net/html`, parser de title/OG/favicon, resolve relativos. |
+| 2026-05-11 | T17    | —    | SSRF guard no dialer: bloqueia loopback, RFC1918, link-local, IMDS. |
+| 2026-05-11 | T18    | —    | Worker pool com `PREVIEW_WORKER_CONCURRENCY`, channel buffered (256), graceful stop. |
+| 2026-05-11 | T19    | —    | `links.Create` enfileira preview; `POST /links/:id/refresh-preview` reenfileira. Crash-recovery: requeue de `preview_status='pending'` no boot. |
+| 2026-05-11 | T20    | —    | LinkCard mostra `preview_status` (chip colorido) + botão retry. |
+| 2026-05-11 | T21    | —    | Netscape HTML parser (preserva folders → tags). |
+| 2026-05-11 | T22    | —    | Formato JSON v1: `{ version, exported_at, tags, links }`. Import idempotente por URL. |
+| 2026-05-11 | T23    | —    | ImportPage com drag-drop + toggle Netscape/JSON + botões Export. |
+| 2026-05-11 | T24-26 | —    | Extension vanilla MV3 (sem bundler): popup.html/.js, options.html/.js, manifest, README. ⌘+Enter salva. |
+| 2026-05-11 | T11    | —    | Suite completa: unit (testify) + integration (testcontainers-go, build-tag `integration`). Backend coverage 85.9% (gate ≥85%). Frontend Vitest 4 + RTL com mock axios; gate ≥85%/80% branches. `CLAUDE.md` documenta as invariantes. |
+| 2026-05-11 | T27    | —    | README quickstart. Screenshots/gif: placeholders pendentes. |
+| 2026-05-11 | T28    | —    | `scripts/seed.sql` com 4 tags (jira/dashboard/docs/work) e 5 links de exemplo. |
+| 2026-05-11 | T29    | —    | `scripts/backup.sh` (pg_dump + rotação 14 backups + comentário cron). |
+| 2026-05-11 | T30    | —    | Este log. |
+
+## Iterações pós-MVP (2026-05-12)
+
+| Data       | Mudança                                                                          | Notas |
+|------------|----------------------------------------------------------------------------------|-------|
+| 2026-05-12 | **Redesign aurora** (handoff Claude Design)                                       | Stack mudou: dropei MUI render-side, agora plain React + `web/src/styles/foldex.css` (CSS do handoff) + `overrides.css`. ~75% menor bundle (~80kB vs 317kB). |
+| 2026-05-12 | **Portas custom: backend 9089, web 9088**                                         | Substituiu 8080/5173. Atualizado em compose, vite.config, nginx, Dockerfile, extension defaults, README. |
+| 2026-05-12 | **Postgres separado em `docker-compose.db.yml`**                                  | Rede `foldex` externa. `make db-up`/`apps-up` separados. Suporta reusar Postgres do host (`POSTGRES_HOST=localhost` + `extra_hosts: ["localhost:host-gateway"]`). |
+| 2026-05-12 | **`POSTGRES_HOST`/`POSTGRES_SSLMODE` parametrizáveis**                            | DSN derivado de `POSTGRES_*` only — `DB_URL` opcional pra overrides custom. |
+| 2026-05-12 | **SSRF default permissivo** (`PREVIEW_STRICT_SSRF` opcional)                      | IMDS sempre bloqueado. Resolve o problema de capturar previews de Jira/Grid/intranet. |
+| 2026-05-12 | **Migration 000003: `click_log`** — append-only de cliques                        | Cada `/go/:id` insere uma row. |
+| 2026-05-12 | **Migration 000004: backfill** dos cliques pré-existentes                         | Materializa `click_count` antigo em rows com `clicked_at = last_clicked_at`. |
+| 2026-05-12 | **Migration 000005: `link.pinned`** + índice                                      | Coluna boolean + `link_pinned_created (pinned DESC, created_at DESC)`. |
+| 2026-05-12 | **Migration 000006: drop `click_count` + `last_clicked_at`**                       | Click_log vira single source of truth. Repositórios derivam via `LEFT JOIN LATERAL`. |
+| 2026-05-12 | **Stats endpoints** `/api/stats/summary,daily,top,tags`                           | Backend pkg `internal/stats` com testcontainers; coverage gate mantido em 85%. |
+| 2026-05-12 | **Stats page** no front: 4 KPIs + AreaChart 60d + MoM + top links + tag dist     | SVG inline, sem nova lib. Hover no chart mostra tooltip data+cliques com linha guia. |
+| 2026-05-12 | **Pin feature**: toggle no LinkDialog + badge clicável no card + ordering SQL    | Pinados sempre no topo em qualquer sort. |
+| 2026-05-12 | **`ConfirmDialog` global**: substitui `window.confirm()`                          | Provider em `main.tsx`, hook `useConfirm()` async. Botões com fx-confirm-btn (compactos, gradients). |
+| 2026-05-12 | **Tag manager modal** (`TagManagerDialog`)                                       | Sidebar volta limpa (só dot+nome+count). Editar/apagar tag via modal próprio aberto por "Gerenciar tags" no rodapé. |
+| 2026-05-12 | **Sidebar collapse** (rail 44px + chevron expand)                                 | Estado em localStorage. |
+| 2026-05-12 | **`TagDialog` em modo edit** (mesmo modal, prop `tag`)                            | Title/kicker mudam. Salva via `useUpdateTag`. |
+| 2026-05-12 | **`Esc` fecha modais** (hook `useEscape`)                                         | Aplicado em ConfirmDialog, TagDialog, LinkDialog, CommandPalette. |
+| 2026-05-12 | **Tags pendentes no LinkDialog**: só salvam quando o link salva                  | `id: 0` + cor escolhível clicando no dot do chip (cicla paleta de 8 cores). |
+| 2026-05-12 | **Tooltips CSS-only** (`data-tooltip` + opcional `data-tooltip-side`)              | Substitui `title` nativo. Delay 180ms, transição smooth, posições T/B/L/R. |
+| 2026-05-12 | **Polimento da navegação de tags**                                                 | Remove borda interna do item ativo/focado na sidebar; estado selecionado agora usa wash + marcador lateral sem apertar texto/count. |
+| 2026-05-12 | **Dark mode neutral** (charcoal/slate em vez de roxo)                             | Só accent indigo mantém hue. Aurora blobs muted. |
+| 2026-05-12 | **Atalhos**: `⌘K` palette, `⌥N` novo link                                        | `⌘N` é hard-claimed pelo browser, não chega no SPA. |
+| 2026-05-12 | **`/go/N` button label = "Acessar"** + path no tooltip                            | Não vaza implementation detail na UI. |
+| 2026-05-12 | **Makefile coverage**: `-covermode=atomic -count=1`                              | Atomic resolve a média entre test binaries; `count=1` evita cache stale do test profile. |
+| 2026-05-12 | **Frontend bundler: bun**                                                         | npm trava em mirror npm privado malconfigurado (versão vazia em `@rollup/rollup-darwin-arm64`). Bun resolve fresh. Dockerfile usa `oven/bun:1.3-alpine`. |
+| 2026-05-12 | **`CLAUDE.md` consolidado**: 8 seções com invariantes (versões, testes, docs, dados, UX, DoD, estilo, arquitetura) | Trumps any other doc em caso de conflito. |
+| 2026-05-13 | **Card preview com altura fixa**                                                  | Trocou `aspect-ratio` por `height: 150px; min/max-height` e `object-fit: scale-down` na `<img>` — todos os cards alinhados, imagens grandes escalam pra caber, pequenas não esticam. |
+| 2026-05-13 | **"preview falhou" gated por ausência de imagem**                                | Não mostra mais o aviso quando o link já tem `og_image_url` (screenshot ou upload). |
+| 2026-05-13 | **Tag color: gradient inline**                                                    | `tag.color` aceita `linear-gradient(135deg, c1, c2)`. `TagDialog` ganhou tabs Sólida/Gradiente. Helper `web/src/lib/tagColor.ts` extrai cor primária pra `--chip-c` (porque `color-mix` precisa de cor). Sem schema change — coluna já era TEXT. ADR-17. |
+| 2026-05-13 | **Logo "fx" + favicon SVG**                                                      | Topbar troca documento genérico por monograma "fx" branco sobre gradient indigo. `web/public/favicon.svg` linkado no `index.html`. |
+| 2026-05-13 | **Grid de 5 colunas**                                                             | `.fx-grid` e `.fx-pingrid` rodam 5 colunas em viewports ≥1680px, com fallback 4/3/2/1 conforme largura. Preview reduzido de 200 → 150px de altura pra preservar proporção do card. |
+| 2026-05-13 | **Screenshot como fallback (não compulsório)**                                   | `preview.Worker.maybeScreenshot` roda só quando o fetch HTML veio sem `og:image` E o link não foi atualizado por upload E o host é público (`preview.IsPublicURL`). MinIO ausente = fallback desligado. ADR-16. |
+| 2026-05-13 | **HTTPS local via mkcert**                                                        | README documenta `mkcert -install` + emissão pra `web/certs/cert.pem`/`key.pem` que o nginx do container web já consome em :443. |
+| 2026-05-13 | **Density picker no Topbar, ao lado do view-mode**                               | DensityPicker (3/5/8) saiu do pagehead e entrou no `fx-viewseg` do Topbar com `<DensityIcon>` (SVG de N barras). Só aparece quando `viewMode === 'cards'`. Persistido em `foldex.grid.cols`. |
+| 2026-05-13 | **Grid alinhado à esquerda (CSS Grid, não column-count)**                        | `.fx-grid` e `.fx-pingrid` agora usam `display: grid; grid-template-columns: repeat(var(--fx-cols, 5), …)` — preenchimento row-major. `column-count` balanceava vertical e jogava cards no meio quando o número não dividia. |
+| 2026-05-13 | **Upload de imagem curto-circuita o preview pipeline**                            | `UploadImage` agora seta `og_image_url` E `preview_status='ok'` no mesmo UPDATE. Worker's `process()` checa no início: se já tem `og_image_url`, pula HTML fetch + screenshot e zera o "capturando…". |
+| 2026-05-13 | **Folders — iPhone-style organization (1:N)**                                     | Nova tabela `folder` + `link.folder_id` (`ON DELETE SET NULL`). Módulo `internal/folders/` espelhando `tags/`. List via LATERAL+jsonb_agg pra preview tiles (até 4, sort `pinned DESC, created DESC`). `links.ListQuery` ganhou `FolderID`+`Ungrouped`; `UpdateInput.FolderID` é tri-state (absent/N/null) via `UnmarshalJSON` custom. ADR-19. |
+| 2026-05-13 | **Folder view com URL state**                                                     | App.tsx `openFolder` sincronizado com `?folder=N` via `history.replaceState` + listener de `popstate`. Esc volta pra home. Sidebar de tags desabilita dentro da pasta. CommandPalette ganhou grupo "Pastas". |
+| 2026-05-13 | **FolderCard + FolderDialog**                                                     | Card iPhone-style com 2×2 mini-thumbs (`+N` overlay quando >4), "Pasta vazia" quando 0. Dialog espelha TagDialog (color picker sólido/gradient via `tagColor.ts`); delete confirmando que links sobrevivem. |
+| 2026-05-13 | **Exporter/Importer round-trip de folders**                                       | JSON v2 ganhou `folders[]` + `folder` em cada link. Importer aceita v1 e v2 (backward compat). Netscape exporter agrupa por folder via `<H3>`. Netscape parser inverteu semântica: `<H3>` mais profundo vira folder, H3s ancestrais viram tags. Folders criadas via `ensureFolder(name)` (match-or-create por nome). |
+| 2026-05-13 | **Drag-and-drop iPhone-style pra folders**                                        | `LinkCard` virou `draggable` com payload `application/x-foldex-link`. Drop sobre `FolderCard` → PATCH `folder_id`. Drop sobre outro `LinkCard` → POST "Nova pasta" + 2× PATCH + abre `FolderDialog` em edit pra renomear. Visual feedback (`.fx-card-dragging` / `.fx-card-drop-over`). Same-card drops são no-op. Mutations centralizadas em App.tsx (cards UI-only). |
+| 2026-05-13 | **Folder delete cascade opcional**                                                | `DELETE /api/folders/{id}?cascade=1` deleta a pasta E os links dentro numa transação (FKs existentes cuidam de `link_tag`/`click_log`). Sem o param, mantém behavior atual (`ON DELETE SET NULL`). `FolderDialog` em edit ganhou 2 botões: "Excluir pasta" (soft danger ghosted) e "Excluir pasta + links" (full danger). Cada um com mensagem de confirm específica. |
+| 2026-05-13 | **CTA "Nova pasta" no topbar + atalho ⌥P**                                       | Botão `.fx-cta-folder` (gradient cyan→emerald) ao lado do "Novo link" indigo. Atalho `⌥P` (⌘P é hard-claimed pelo browser). Removeu botão redundante do `fx-pagehead` da Home. |
+| 2026-05-13 | **SDD atualizado pra cobrir folders + DnD**                                       | VISION.md: tirou "favoritos hierárquicos" do out-of-scope; adicionou linha de "Pastas iPhone-style" em experiências core; ajustou `⌘N` → `⌥N` em New link; reformulou Goal #2 pra incluir pastas. ARCHITECTURE/CLAUDE/TASKS/README já estavam cobertos. |
+| 2026-05-13 | **Per-folder viewMode persistente**                                               | `viewMode` virou map (`foldex.viewMode.map`) com chave `home` ou `folder.<id>`. Home e cada pasta lembram a escolha (cards/compact/list) independentemente. Default `cards` quando ausente. |
+| 2026-05-13 | **Sort alfabético A→Z / Z→A**                                                    | Backend: `sort=alpha` / `sort=alpha_desc` no `ListQuery` → `ORDER BY l.pinned DESC, lower(l.title) ASC|DESC, l.created_at DESC`. Frontend: 2 botões `A→Z` / `Z→A` no segment do topbar. CLAUDE.md ganhou regra: folders vêm antes de links exceto em sort alfabético, onde misturam por nome. Em alpha, CardsView monta lista combinada e ordena por `localeCompare('pt-BR')`. |
+| 2026-05-13 | **Atalhos: ⌘K→⌥K, ⌥P→⌥F**                                                       | Convenção: todos os atalhos do foldex são Alt-based (⌘K compete com URL-bar focus do browser; ⌥P colidiu com outros handlers). `⌥K`=palette, `⌥N`=novo link, `⌥F`=nova pasta. Atualizado App.tsx hotkeys, Topbar `<kbd>`s, footer do CommandPalette, README, CLAUDE, VISION. |
+| 2026-05-13 | **Folder counters + previews invalidate em link mutations**                       | `useCreateLink`/`useUpdateLink`/`useDeleteLink`/`useRefreshPreview` agora invalidam `['folders']` além de `['links']`/`['tags']`. `LinkDialog` também invalida `['folders']` após upload/remove de imagem. Sem isso, `link_count` e `preview_links` ficavam stale (folder cards na home não atualizavam). |
+| 2026-05-13 | **Cor do CTA Nova pasta: cyan→emerald → amber→orange**                            | Cyan/emerald lia parecido com o indigo do "Novo link" em alguns contextos. Trocou pra `linear-gradient(180deg, #F59E0B, #EA580C)` — warm vs cool, distinção máxima a olho nu. |
+| 2026-05-13 | **Tooltip via Portal (viewport-clamped)**                                         | Substituiu pseudo-element CSS por `<TooltipPortal>` global + portal pra `document.body`. Calcula posição via `getBoundingClientRect` + clampa pra viewport. Mesma API (`data-tooltip` + `data-tooltip-side`), zero clipping em qualquer borda. |
+| 2026-05-13 | **IDs internos saem da URL e dos tooltips**                                       | Removido sync `openFolder ↔ ?folder=N` (history.replaceState + popstate listener). Navegação agora 100% em memória; URLs antigas com `?folder=N` são limpadas no mount. Tooltip "Acessar via /go/N" simplificado pra "Acessar". |
+| 2026-05-13 | **Pastas aninhadas (parent_id self-FK)**                                          | Migration 000008: `folder.parent_id BIGINT REFERENCES folder(id) ON DELETE SET NULL`. Backend `List` aceita `?root=1` ou `?parent_id=N`; `Create` aceita `parent_id`; `Update` aceita `parent_id` em tri-state; `DeleteCascade` agora recursivo via CTE. Frontend: App.tsx mantém `folderPath: number[]` stack; home usa `useFolders({scope:'root'})`, folder view usa `useFolders({scope: openFolder})`; criar "Nova pasta" de dentro cria subpasta; Esc/breadcrumb sobe um nível em vez de pular pra raiz. LinkDialog/CommandPalette continuam flat. ADR-19 atualizada. |
+| 2026-05-13 | **Subpastas aparecem dentro do pai (fix do CardsView)**                          | Bug: `folders={openFolder === null ? folders : []}` zerava as subpastas quando dentro de uma pasta — herança do design flat antigo. Fix: passar `folders` direto; `useFolders({scope})` já cuida do escopo. |
+| 2026-05-13 | **Self-healing folderPath na deleção da pasta atual**                            | `useEffect` em App.tsx observa `allFolders.data` e poda `folderPath` quando um id sumiu. Apagar a pasta enquanto está dentro dela agora volta automaticamente pro ancestral válido (ou home). |
+| 2026-05-13 | **Tags filtram dentro de pasta (AND com folder_id)**                              | Revertida a decisão de desabilitar a sidebar de tags dentro de uma pasta. Agora os filtros compõem com o escopo: `folder_id = N AND tag IN (...)`. Backend já suportava. Removida prop `disabled` do TagSidebar + CSS órfão `.fx-sidebar-disabled`. ADR-19 e CLAUDE.md atualizados. |
+| 2026-05-14 | **Card "Objects stored" na página de Estatísticas**                              | Novo método `storage.Client.Stats(ctx)` (ListObjects recursivo somando Size). `stats.Handler.WithStorage()` registra `GET /api/stats/storage` só quando MinIO acessível. 5º `<KpiCard>` na StatsPage com `formatBytes` (B/KB/MB/GB/TB); grid de KPIs subiu de 4→5 colunas com breakpoints. |
+| 2026-05-14 | **Bug: "Remover imagem" no LinkDialog efetivava antes do Salvar**                | `handleRemoveImage` deixou de chamar `removeLinkImage` na hora — agora só seta `imageRemoved=true`. A DELETE só dispara em `submit()` quando o usuário clica Salvar (Cancel aborta). |
+| 2026-05-14 | **Bug: screenshot fallback não atualizava o card**                                | Worker fazia `UpdatePreview(StatusOK)` ANTES do `maybeScreenshot`. Polling do frontend para quando status sai de 'pending' — perdia o screenshot que aterrissa depois. Fix: quando `og:image` veio vazio E screenshot está configurado, mantém status 'pending' durante a captura; flip final pra 'ok'. |
+| 2026-05-14 | **Backup & Restore (DB + MinIO em um ZIP)**                                      | Novo módulo `internal/backup/` com `Service.Export/Validate/Restore`. ZIP contém `manifest.json` (kind=`foldex.backup`, schema_version=8, SHA-256 dos entries, counts), `database.json` (todas as 5 tabelas incl. link_tags + click_logs, version=3) e `files/screenshots\|images/`. Export sob REPEATABLE READ. 3 endpoints (`POST /api/backup{,/validate,/restore?mode=…}`) — 2GiB cap, multipart streaming via `MultipartReader`. 3 modos: wipe (TRUNCATE 5 tabelas + DELETE prefixes + restore com IDs originais), skip (`ON CONFLICT DO NOTHING`, mapping old→new), duplicate (tags renomeadas pra `nome (N)`, folders sempre novos, links com URL colidindo caem pra skip + warning — URL é UNIQUE). Storage ganhou `ListObjects/OpenObject/PutObjectStream/ObjectExists/DeleteObjectsPrefix`. Frontend: `BackupCard` na ImportPage (grid 2-cols), `BackupRestoreDialog` com validation summary + 3-way mode picker (wipe pinta de danger). Histórico em `localStorage.foldex.backups` (10 entries). Manifest gravado uncompressed (`zip.Store`) pra que client-side extraia counts sem inflate. SDD completo em `docs/SDD-BACKUP-RESTORE.md`; ADR-20 em `ARCHITECTURE.md`. |
+| 2026-05-14 | **Hardening: upload de imagem + proxy de arquivos**                              | `ScreenshotHandler.UploadImage` agora capa `r.Body` via `http.MaxBytesReader(maxSize)`, lê via `io.ReadAll(io.LimitReader(file, maxSize+1))` (não confia mais em `header.Size`), detecta MIME via `http.DetectContentType(data)` ignorando o `Content-Type` enviado pelo cliente, e aceita um closed set `{png, jpeg, gif, webp}` (SVG cai fora — pode carregar script). `ProxyFile` agora exige key sob `screenshots/` ou `images/` (rejeita `..`, `/` inicial, prefixos arbitrários), faz `DetectContentType` no objeto servido (não confia no content-type armazenado) e adiciona `X-Content-Type-Options: nosniff`. Stored-XSS via upload disfarçado fechado. |
+| 2026-05-14 | **Hardening: backup correctness**                                                | (a) `topoSortFolders` parou de aliasar o backing array em `remaining[:0]` → folders aninhadas (≥3 níveis) podiam ser silenciosamente droppadas. Fix: `make([]FolderRow, 0, len(remaining))`. (b) `backup.Handler.export` agora bufferiza o ZIP em `bytes.Buffer` antes de escrever — os headers `X-Foldex-Backup-Counts-*` / `Duration-Ms` finalmente chegam ao cliente (antes eram setados após `Export` já ter flushado o body). Injetado `*slog.Logger` no `Handler`. (c) `applyFiles` reforça que `key` final cai em `bucketPrefixes` mesmo se passar pelo check de `..`. |
+| 2026-05-14 | **Hardening: backend cleanup**                                                   | `importer/validate.go` checa `rows.Err()` depois do loop (estava silenciando erros de cursor). `storage/minio.go` `GetObject` troca `err.Error() != "EOF"` por `errors.Is(err, io.EOF)` + `io.ReadFull` (resolve EOF wrappado + leitura parcial). `preview/fetcher.go` cacheia `PREVIEW_STRICT_SSRF` em `safeDialer.strict` no constructor — não há mais `os.Getenv` por `DialContext`. `importer.insertLinkIfNew` ganhou `wipeFirst bool`: DELETE + INSERT na mesma tx, fim do risco de "link apagado mas substituto não inserido" em modo wipe. `exporter.exportJSON` coleta tag/folder rows em slices e fecha cada `rows` antes de chamar `queryAll` — não segura mais 3 conexões do pool simultaneamente. |
+| 2026-05-14 | **Hardening: UI invariantes §5**                                                 | Trocado `title=` nativo por `data-tooltip` em `LinkCard.tsx`, `CompactGrid.tsx`, `CommandPalette.tsx`, `GradientPicker.tsx`. `CompactGrid.tsx` também parou de vazar `/go/${l.id}` no tooltip (era violação §4 — IDs internos não aparecem na UI). |
+| 2026-05-14 | **Limpeza de identificadores internos**                                          | Removidas todas as referências a marcadores corporativos, nicknames pessoais, mirror npm privado e caminhos hardcoded com usuário em `CLAUDE.md`, `AGENTS.md`, `docs/VISION.md`, `docs/ARCHITECTURE.md`, `docs/SDD-BACKUP-RESTORE.md`, `docs/TASKS.md`, `scripts/seed.sql` (tag renomeada para `work`), `scripts/backup.sh` (path no comentário generalizado). `web/bun.lock` reescrito: 258 URLs do mirror npm privado → `registry.npmjs.org/` (proxy transparente, integrity hashes preservados, zero mudança de versões). Sweep replicável: `grep -ri "<termo>" --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist`. |
+| 2026-05-14 | **P0: cycle check de folders em tx serializável**                                | `folders/repository.go` `Update`: o cycle check + UPDATE estavam em duas chamadas pool separadas — outra request podia mover pasta entre os dois e criar ciclo. Agora ambos rodam em `BeginTx(IsoLevel: Serializable)`. |
+| 2026-05-14 | **P0: import inteiramente atômico**                                              | `importItemsWithMode` agora abre **uma única** transação para o loop inteiro. Falha no item N → rollback total (antes: cada item em tx própria, falha no meio = banco semi-aplicado). `ensureTags`/`ensureFolder` aceitam interface `dbtx` (pool ou tx). `insertLinkIfNew` split: wrapper + `insertLinkInTx`. Worker enqueue movido pra depois do commit (evita race com visibilidade da tx). |
+| 2026-05-14 | **P0: hardening de I/O e DoS**                                                   | `storage.DeleteObjectsPrefix`: goroutine produtora agora respeita `ctx.Done()` em `select` (não fica pendurada se RemoveObjects falha cedo). `backup.Validate`: cap em `manifest.Checksums ≤ 100_000` antes do loop. `backup.readZipFromRequest`: `http.MaxBytesReader` aplicado ao `r.Body` no topo (capa ambos paths: raw zip + multipart). `main.go`: warn explícito no boot quando `SHARED_SECRET` está vazio. |
+| 2026-05-14 | **P1: import cap 20MB → 100MB**                                                  | Chrome export de 50k+ links passa de 20MB facilmente. Backup é 2GB, import só 20MB era incoerente. Teste de body-too-large ajustado pra 101MB. |
+| 2026-05-14 | **P1: UX + acessibilidade**                                                      | Nova hook `useFocusTrap(ref, open)` aplicada em todos os dialogs (LinkDialog, FolderDialog, TagDialog, TagManagerDialog, ConfirmDialog, BackupRestoreDialog, ImportPreviewDialog, CommandPalette) — Tab/Shift+Tab cycla dentro do modal, foco restaurado ao fechar. `<ErrorBoundary>` no root em `main.tsx` com fallback "recarregar" — qualquer crash em render para de virar tela branca. `axios` ganhou `timeout: 30000`, request interceptor anexa `X-Foldex-Secret` de localStorage (`foldex.secret`), response interceptor captura 401 e re-pergunta o secret (uma vez por sessão). |
+| 2026-05-14 | **P1: housekeeping + infra**                                                     | `viewModeMap` no `App.tsx` agora prune chaves `folder.<id>` órfãs no mesmo useEffect que faz prune do `folderPath` (antes o localStorage só crescia). `web/Dockerfile` virou multi-stage: stage 1 builda dentro de `oven/bun:1.3-alpine`, stage 2 nginx só com o output — fim do "esqueci de rodar bun run build" silencioso. CI ganhou step `npm test` explícito antes de `npm run coverage` (failures de teste viram visíveis mesmo se a coverage gate for relaxada). |
+| 2026-05-14 | **UI: rótulo "Netscape" → "Bookmarks HTML"**                                     | Termo técnico (Netscape Bookmark File Format) era jargão obscuro pra usuário final. UI agora diz "Bookmarks HTML" com tooltip "Formato Netscape — padrão de export do Chrome, Firefox, Safari, Edge". Valor do `format=netscape` no protocolo permanece (API key). |
+
+### Lições / followups
+
+- Backend compila e passa `go vet` limpo em Go 1.26.
+- Web type-checa com `tsc --noEmit`; o `npm run build` local pode quebrar caso o npm registry configurado localmente sirva um `@rollup/rollup-darwin-arm64` com versão vazia. Não afeta o **Docker build** porque o estágio `node:20-alpine` usa o registry público padrão. Se quiser rodar `vite build` localmente, criar `web/.npmrc` apontando pra `https://registry.npmjs.org/`.
+- **T11 (testcontainers)** ficou de fora: rotina típica pgxpool + repository é coberta pelos smoke tests. Quando virar produto real, voltar.
+- Extension foi feita **vanilla** (sem `@crxjs` / Vite / React) pra não trazer mais um bundler — o popup tem ~80 linhas de JS. Se for crescer (history, multi-account, sync), promover a `extension/src/` com TS.
+- Migration trivial pendente: `UNIQUE(url)` em `link` se quisermos garantir dedup forte no nível do DB (hoje é via re-SELECT na importação).
+
+> Templates de entrada: `YYYY-MM-DD | Tn | <git short hash> | <observação curta>`.

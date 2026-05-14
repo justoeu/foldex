@@ -1,0 +1,934 @@
+/* Foldex local overrides — kept separate from the handoff CSS so future
+   re-imports of foldex.css don't drop these. */
+
+/* Reset anchor defaults inside the shell. The design uses <a> elements with
+   `.fx-openbtn` / `.fx-cmdk-row` / etc. and would otherwise inherit the
+   browser's underlined link styling, which fights the pill button look. */
+.fx-shell a,
+.fx-shell a:visited,
+.fx-shell a:hover,
+.fx-shell a:active {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* The original topbar grid has 6 columns and assumes the brand row never
+   needs to wrap. On narrower viewports (or when we add a 7th item) items
+   spill to a 2nd row, which looks broken. Switch to a flex layout that
+   stays in one row and lets the search input absorb the slack. */
+.fx-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.fx-topbar .fx-search {
+  flex: 1 1 auto;
+  min-width: 220px;
+}
+.fx-topbar .fx-brand,
+.fx-topbar .fx-quicknav,
+.fx-topbar .fx-segment,
+.fx-topbar .fx-viewseg,
+.fx-topbar .fx-cta {
+  flex: 0 0 auto;
+}
+.fx-topbar .fx-cta {
+  white-space: nowrap;
+}
+
+/* The frame's first column reads `--fx-sidebar-w` so App.tsx flips between
+   ~252px (expanded) and ~44px (collapsed rail). */
+.fx-frame {
+  min-height: 0;
+  grid-template-columns: var(--fx-sidebar-w, 252px) 1fr;
+  transition: grid-template-columns .2s cubic-bezier(.2,.8,.2,1);
+}
+.fx-sidebar {
+  min-height: 100%;
+  min-width: 0;
+  padding-inline: 0;
+}
+
+/* Collapsed rail — a thin strip with just an expand chevron. Body / list /
+   "Nova tag" are not rendered at all when collapsed (React returns the rail
+   from TagSidebar instead of the full layout). */
+.fx-sidebar-rail {
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.fx-sidebar-rail .fx-iconbtn {
+  width: 30px;
+  height: 30px;
+}
+.fx-sidebar-rail-icon {
+  color: var(--fx-accent);
+  margin-top: 2px;
+}
+
+/* Quick-access buttons pinned to the bottom of the rail so "Nova tag" /
+   "Gerenciar tags" stay reachable without expanding first. The flex column
+   on .fx-sidebar-rail aligns them naturally at the end via margin-top: auto. */
+.fx-sidebar-rail-actions {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 4px;
+  border-top: 1px solid var(--fx-border-2);
+  padding-top: 10px;
+  width: 100%;
+  align-items: center;
+}
+
+.fx-side-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Sidebar footer actions — "Nova" and "Gerenciar" share one row of equal
+   half-width pills. Compact icon + label keeps the sidebar list as the
+   visual focus. */
+.fx-side-actions {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.fx-side-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--fx-border);
+  border-radius: 10px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fx-ink-3);
+  cursor: pointer;
+  transition: color .12s, background .12s, border-color .12s;
+}
+.fx-side-action:hover:not(:disabled) {
+  color: var(--fx-accent);
+  border-color: var(--fx-accent);
+  background: var(--fx-accent-soft);
+}
+.fx-side-action:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+/* Hover + active sidebar rows */
+.fx-side-head { padding-inline: 14px; }
+.fx-side-sep  { padding-inline: 14px; }
+.fx-side-actions { margin-inline: 14px; }
+
+/* Sidebar layout: the scrollable middle column flexes so the actions row +
+   version footer stay anchored at the bottom regardless of tag count. */
+.fx-sidebar { min-height: 0; }
+.fx-sidebar-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 4px;
+}
+
+/* Collapsible section header — same monospace pill as the old static sep,
+   but now a clickable button with an aligned chevron. */
+.fx-side-sep-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  margin-bottom: 2px;
+  font-family: var(--fx-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--fx-ink-4);
+  text-transform: uppercase;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+.fx-side-sep-toggle:hover { color: var(--fx-ink-3); }
+.fx-side-sep-toggle svg { color: var(--fx-ink-4); transition: transform .12s; }
+
+/* "carregar mais" button at the end of "Outras" when there are >15 hidden. */
+.fx-side-more {
+  margin: 6px 14px 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--fx-border);
+  background: transparent;
+  font-family: var(--fx-mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--fx-ink-3);
+  cursor: pointer;
+  transition: color .12s, border-color .12s, background .12s;
+}
+.fx-side-more:hover {
+  color: var(--fx-accent);
+  border-color: var(--fx-accent);
+  background: var(--fx-accent-soft);
+}
+
+/* Fixed footer with the version stamp, centered. Auto-bumped by
+   scripts/bump-version.mjs on every `bun run build`. */
+.fx-side-version {
+  margin-top: 10px;
+  padding: 8px 10px 2px;
+  font-family: var(--fx-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--fx-ink-4);
+  text-align: center;
+  border-top: 1px solid var(--fx-border-2);
+}
+.fx-side-row {
+  position: relative;
+  isolation: isolate;
+  min-height: 32px;
+  padding: 7px 20px 7px 14px;
+  margin-inline: 10px;
+  gap: 10px;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+}
+.fx-side-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--fx-accent) 42%, transparent);
+  outline-offset: 2px;
+}
+.fx-side-row .fx-side-dot,
+.fx-side-row .fx-all-dot,
+.fx-side-row .fx-side-label,
+.fx-side-row .fx-side-count {
+  position: relative;
+  z-index: 1;
+}
+/* fundo direto no row — sem pseudo-elemento */
+.fx-side-row:hover { background: var(--fx-accent-soft); }
+.fx-side-row.fx-side-row-active { background: var(--fx-accent-soft-2); box-shadow: none; color: var(--fx-ink); }
+/* barrinha indicadora lateral */
+.fx-side-row:hover::before,
+.fx-side-row.fx-side-row-active::before {
+  content: '';
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 3px;
+  border-radius: 2px;
+}
+.fx-side-row:hover::before {
+  background: color-mix(in srgb, var(--fx-accent) 55%, transparent);
+}
+.fx-side-row.fx-side-row-active::before {
+  background: var(--fx-accent);
+}
+.fx-side-row.fx-side-row-active .fx-side-label {
+  color: var(--fx-ink);
+  font-weight: 700;
+}
+.fx-side-row.fx-side-row-active .fx-side-count {
+  color: var(--fx-accent);
+  font-weight: 700;
+}
+/* "Todos os links" não tem barrinha lateral */
+.fx-side-row.fx-side-all::before { display: none; }
+
+/* ─── tag manager modal ────────────────────────────────────────────────── */
+.fx-tagmgr.fx-modal {
+  max-width: 540px;
+  padding: 22px 22px 18px;
+}
+/* Footer of the tag manager: "+ Nova tag" on the left as the primary
+   action (CRUD completeness — you can edit/delete via the rows, and now
+   create from here too) and "Fechar" on the right as a quiet secondary.
+   We do NOT use .fx-confirm-foot here because the manager modal has its
+   own bottom padding and a single primary action makes the whole layout
+   feel off-balance. */
+.fx-tagmgr-foot {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--fx-border-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fx-tagmgr.fx-modal .fx-modal-head {
+  align-items: flex-start;
+  padding: 0;
+  gap: 16px;
+  border: 0;
+}
+.fx-tagmgr-body {
+  padding: 14px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.fx-tagmgr-empty {
+  padding: 24px 8px;
+  text-align: center;
+  color: var(--fx-ink-4);
+  font-size: 13px;
+}
+.fx-tagmgr-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--fx-border-2);
+  transition: background .12s, border-color .12s;
+}
+.fx-tagmgr-row:hover {
+  background: var(--fx-bg-tint);
+  border-color: var(--fx-border);
+}
+.fx-tagmgr-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 5px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fx-bg) 60%, transparent);
+}
+.fx-tagmgr-text { min-width: 0; }
+.fx-tagmgr-name {
+  font-family: var(--fx-display);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fx-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fx-tagmgr-meta {
+  font-family: var(--fx-mono);
+  font-size: 10.5px;
+  color: var(--fx-ink-4);
+  letter-spacing: 0.02em;
+  margin-top: 2px;
+}
+
+/* Same fix for the brand sub-text — letter spacing makes it overflow when
+   the brand cell is constrained. */
+.fx-brand-text {
+  min-width: 0;
+}
+.fx-brand-sub {
+  white-space: nowrap;
+}
+
+/* Disabled CTA shouldn't keep the hover transform / glow. */
+.fx-cta:disabled,
+.fx-cta-fill:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+.fx-cta:disabled:hover,
+.fx-cta-fill:disabled:hover {
+  transform: none;
+}
+
+/* When an a[href] uses .fx-openbtn keep the pill shape tight to the icon. */
+.fx-openbtn {
+  line-height: 1;
+  letter-spacing: -0.005em;
+  /* Tighten the visual gap between the "Acessar" label and the arrow. */
+  gap: 6px;
+}
+.fx-openbtn:hover svg { transform: translateX(1px); transition: transform .12s; }
+
+/* ─── CTA polish ─────────────────────────────────────────────────────────
+   The handoff already styles `.fx-cta` as an indigo gradient pill, but on
+   small viewports the kbd hint and the icon make it feel cramped. Bumps:
+   - bigger touch target
+   - more spacing inside
+   - inner-glow shimmer for that "almost-glassy" indigo look
+   - kbd looks more like a chip than a keyboard shortcut */
+.fx-topbar .fx-cta,
+.fx-shell .fx-cta-fill {
+  height: 44px;
+  padding: 0 18px 0 16px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  border-radius: 14px;
+  gap: 10px;
+  position: relative;
+  isolation: isolate;
+  /* `.fx-shell button { color: inherit }` from foldex.css beats `.fx-cta`'s
+     own color rule because element selector adds specificity. Force white
+     for both the text and every nested span/icon. */
+  color: #ffffff !important;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.22), rgba(255,255,255,0) 36%),
+    linear-gradient(180deg, var(--fx-accent), var(--fx-accent-3));
+  box-shadow:
+    0 1px 2px rgba(79,70,229,.4),
+    0 10px 22px -6px rgba(99,102,241,.55),
+    inset 0 1px 0 rgba(255,255,255,.35),
+    inset 0 -1px 0 rgba(20, 16, 46, .18);
+}
+.fx-topbar .fx-cta *,
+.fx-shell .fx-cta-fill * { color: inherit; }
+.fx-topbar .fx-cta:hover,
+.fx-shell .fx-cta-fill:hover {
+  box-shadow:
+    0 1px 2px rgba(79,70,229,.4),
+    0 14px 28px -6px rgba(99,102,241,.65),
+    inset 0 1px 0 rgba(255,255,255,.4),
+    inset 0 -1px 0 rgba(20, 16, 46, .18);
+}
+.fx-topbar .fx-cta:active,
+.fx-shell .fx-cta-fill:active {
+  transform: translateY(0);
+  box-shadow:
+    0 1px 2px rgba(79,70,229,.4),
+    0 6px 14px -6px rgba(99,102,241,.55),
+    inset 0 1px 2px rgba(20, 16, 46, .25);
+}
+
+/* Folder CTA gets its own warm gradient — `.fx-topbar .fx-cta` above wins on
+   tie with `.fx-cta-folder`, so we re-assert with matching specificity. */
+.fx-topbar .fx-cta-folder {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.22), rgba(255,255,255,0) 36%),
+    linear-gradient(180deg, #F59E0B, #EA580C);
+  box-shadow:
+    0 1px 2px rgba(234,88,12,.4),
+    0 10px 22px -6px rgba(245,158,11,.55),
+    inset 0 1px 0 rgba(255,255,255,.35),
+    inset 0 -1px 0 rgba(120, 53, 15, .18);
+}
+.fx-topbar .fx-cta-folder:hover {
+  box-shadow:
+    0 1px 2px rgba(234,88,12,.4),
+    0 14px 28px -6px rgba(245,158,11,.7),
+    inset 0 1px 0 rgba(255,255,255,.4),
+    inset 0 -1px 0 rgba(120, 53, 15, .18);
+}
+.fx-topbar .fx-cta-folder:active {
+  box-shadow:
+    0 1px 2px rgba(234,88,12,.4),
+    0 6px 14px -6px rgba(245,158,11,.55),
+    inset 0 1px 2px rgba(120, 53, 15, .25);
+}
+
+/* kbd chip inside the CTA — readable white symbols on a translucent-dark
+   chip so it pops against the indigo gradient. */
+.fx-topbar .fx-cta .fx-kbd-cta,
+.fx-shell .fx-cta-fill .fx-kbd-cta {
+  background: rgba(20, 16, 46, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-bottom-width: 1px;
+  color: #ffffff;
+  padding: 3px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-left: 2px;
+  text-shadow: 0 1px 0 rgba(20, 16, 46, 0.35);
+}
+
+/* Standalone theme toggle on the right of the topbar (between viewseg and
+   CTA). Looks like a quicknav button but lives outside the quicknav group
+   because theme is a setting, not a navigation target. */
+.fx-themetoggle {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--fx-ink-3);
+  background: var(--fx-bg-tint);
+  border: 1px solid var(--fx-border);
+  transition: background .15s, color .15s, transform .12s;
+  flex: 0 0 auto;
+}
+.fx-themetoggle:hover {
+  color: var(--fx-accent);
+  background: var(--fx-surface-3);
+  transform: translateY(-1px);
+}
+.fx-themetoggle:active {
+  transform: translateY(0);
+}
+
+/* ─── tooltips ───────────────────────────────────────────────────────────
+   Rendered by <TooltipPortal /> via a single fixed-position chip portaled
+   to document.body. JS computes the position from each anchor's bounding
+   rect and clamps to the viewport so the tooltip never gets cut off near a
+   screen edge (the bug CSS-only ::after tooltips couldn't fix).
+
+   API: data-tooltip="text"  data-tooltip-side="top|bottom|left|right"
+   `aria-label` is what assistive tech reads — `data-tooltip` is visual only. */
+.fx-tip {
+  pointer-events: none;
+  z-index: 9999;
+  padding: 5px 9px;
+  background: var(--fx-ink);
+  color: var(--fx-bg);
+  font-family: var(--fx-ui);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px -4px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  white-space: nowrap;
+  max-width: min(80vw, 360px);
+  transition: opacity 120ms ease-out;
+}
+
+/* ─── dark palette: neutral charcoal/slate, not purple ───────────────────
+   The handoff dark palette is heavily indigo-tinted — backgrounds, surfaces
+   and ink all carry purple. The user wants a flatter, cooler dark theme:
+   keep indigo for accents (identity), everything else neutral gray. */
+html.fx-dark,
+.fx-dark {
+  --fx-bg:        #0E1014;
+  --fx-bg-tint:   #181A20;
+  --fx-surface:   rgba(40, 42, 50, 0.55);
+  --fx-surface-2: rgba(46, 48, 56, 0.80);
+  --fx-surface-3: rgba(54, 56, 64, 0.92);
+  --fx-border:    rgba(255, 255, 255, 0.07);
+  --fx-border-2:  rgba(255, 255, 255, 0.04);
+  --fx-ink:       #F5F7FA;
+  --fx-ink-2:     #D8DBE2;
+  --fx-ink-3:     #9DA1AC;
+  --fx-ink-4:     #6B7280;
+  --fx-ink-5:     #424752;
+  --fx-accent:    #8B85FF;
+  --fx-accent-2:  #A199FF;
+  --fx-accent-3:  #6E68E0;
+  --fx-accent-soft:    rgba(139, 133, 255, 0.14);
+  --fx-accent-soft-2:  rgba(139, 133, 255, 0.26);
+  /* Aurora blobs in dark mode — neutral and very muted so the gray
+     backdrop doesn't get tinted purple. */
+  --au-1: #1F222A;
+  --au-2: #232730;
+  --au-3: #2A2730;
+  --au-4: #1A2326;
+  --fx-shadow-1: 0 1px 2px rgba(0,0,0,.4), 0 8px 20px -12px rgba(0,0,0,.6);
+  --fx-shadow-2: 0 2px 6px rgba(0,0,0,.5), 0 22px 50px -16px rgba(0,0,0,.7);
+  --fx-shadow-pop: 0 22px 80px -8px rgba(0,0,0,.75), 0 0 0 1px rgba(255,255,255,.06);
+}
+html.fx-dark body,
+html.fx-dark { background: #0E1014; }
+
+/* ─── segments (Novos / Top / Recentes) ──────────────────────────────────
+   The handoff makes the inactive items blend into the chip — there's no
+   gap, no border, so the group reads as one solid pill. Add visible
+   separators + a clearer active state. */
+.fx-topbar .fx-segment {
+  gap: 0;
+  padding: 4px;
+}
+.fx-topbar .fx-seg {
+  height: 32px;
+  padding: 0 12px;
+  position: relative;
+  font-weight: 600;
+  border-radius: 8px;
+  color: var(--fx-ink-2);
+}
+/* Hairline between non-active items so the group reads as 3 buttons. */
+.fx-topbar .fx-seg + .fx-seg::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 20%;
+  bottom: 20%;
+  width: 1px;
+  background: var(--fx-border);
+  pointer-events: none;
+}
+.fx-topbar .fx-seg-active + .fx-seg::before,
+.fx-topbar .fx-seg.fx-seg-active::before {
+  display: none;
+}
+.fx-topbar .fx-seg:hover {
+  background: var(--fx-surface-3);
+  color: var(--fx-ink);
+}
+.fx-topbar .fx-seg-active {
+  background: var(--fx-surface-3);
+  color: var(--fx-accent);
+  box-shadow: var(--fx-shadow-1), inset 0 0 0 1px var(--fx-accent-soft-2);
+  font-weight: 700;
+}
+.fx-topbar .fx-seg-active svg { color: var(--fx-accent); }
+
+/* ─── textarea — restore border + background zeroed by the shell reset ───
+   .fx-shell textarea { background: transparent; border: 0 } has specificity
+   (0,1,1) which beats .fx-textarea (0,1,0). Use .fx-shell .fx-textarea
+   (0,2,0) to win and restore the visual styling. */
+.fx-shell .fx-textarea {
+  background: var(--fx-surface-3);
+  border: 1px solid var(--fx-border);
+  color: var(--fx-ink);
+}
+.fx-shell .fx-textarea:focus {
+  border-color: var(--fx-accent);
+  box-shadow: 0 0 0 3px var(--fx-accent-soft);
+  outline: none;
+}
+
+/* ─── confirm dialog — compact + clean ───────────────────────────────────
+   The shared `.fx-modal` styling is sized for the big new-link modal. The
+   confirm dialog gets its own scope so the buttons are smaller, the body
+   tighter, and the URL doesn't wrap into its own block. */
+.fx-confirm.fx-modal {
+  max-width: 460px;
+  padding: 22px 22px 0;
+}
+.fx-confirm.fx-modal .fx-modal-head {
+  align-items: flex-start;
+  padding: 0;
+  gap: 16px;
+  border: 0;
+}
+.fx-confirm.fx-modal .fx-modal-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-top: 2px;
+}
+.fx-confirm.fx-modal .fx-modal-kicker {
+  font-family: var(--fx-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fx-danger);
+}
+.fx-confirm.fx-modal .fx-modal-kicker-info {
+  color: var(--fx-accent-3);
+}
+/* Plain X close — no fat icon-btn chip. */
+.fx-confirm-x {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--fx-ink-4);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+  flex-shrink: 0;
+}
+.fx-confirm-x:hover { background: var(--fx-bg-tint); color: var(--fx-ink); }
+
+.fx-confirm-body {
+  padding: 14px 0 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--fx-ink-2);
+  text-wrap: pretty;
+}
+.fx-confirm-body code {
+  /* Long URLs shouldn't take their own line; let the mono break inline. */
+  display: inline;
+  word-break: break-all;
+  white-space: normal;
+}
+
+.fx-confirm-foot {
+  margin-top: 18px;
+  padding: 14px 0 18px;
+  border-top: 1px solid var(--fx-border-2);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Modal buttons — used by ConfirmDialog, TagDialog, TagManagerDialog,
+   LinkDialog. They render inside .fx-shell, so the handoff's
+   `.fx-shell button { background: transparent; padding: 0 }` reset
+   (specificity 0,1,1) would otherwise win and produce "ghost" buttons.
+   We chain `.fx-shell` to lift our specificity to (0,2,0) — same trick
+   used by `.fx-topbar .fx-cta`. */
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn {
+  height: 36px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  border: 1px solid var(--fx-border);
+  background: var(--fx-surface-3);
+  color: var(--fx-ink-2);
+  transition: background .12s, color .12s, border-color .12s, transform .12s, opacity .12s;
+}
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn * { color: inherit; }
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn:hover {
+  border-color: var(--fx-ink-4);
+  color: var(--fx-ink);
+}
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn:disabled,
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn:disabled:hover { transform: none; }
+
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn-primary {
+  border: 0;
+  padding: 0 16px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,0) 40%),
+    linear-gradient(180deg, var(--fx-accent), var(--fx-accent-3));
+  color: #ffffff;
+  box-shadow:
+    0 1px 2px rgba(79,70,229,.4),
+    0 6px 14px -6px rgba(99,102,241,.55),
+    inset 0 1px 0 rgba(255,255,255,.30);
+}
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn-primary:hover {
+  transform: translateY(-1px);
+  color: #ffffff;
+}
+
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn-danger {
+  border: 0;
+  padding: 0 16px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,0) 40%),
+    linear-gradient(180deg, #F43F5E, #c41d3a);
+  color: #ffffff;
+  box-shadow:
+    0 1px 2px rgba(196,29,58,.35),
+    0 6px 14px -6px rgba(244,63,94,.55),
+    inset 0 1px 0 rgba(255,255,255,.30);
+}
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn-danger:hover {
+  transform: translateY(-1px);
+  color: #ffffff;
+}
+
+/* Warn (amber) — used when there are two destructive paths side-by-side and
+   only one is the "nuclear" option. The non-nuclear path gets this color
+   instead of red so the two buttons read as DIFFERENT actions, not two
+   intensities of the same action. Amber = caution; red = full danger. */
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn-warn {
+  border: 0;
+  padding: 0 16px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,0) 40%),
+    linear-gradient(180deg, #F59E0B, #B45309);
+  color: #ffffff;
+  box-shadow:
+    0 1px 2px rgba(180,83,9,.35),
+    0 6px 14px -6px rgba(245,158,11,.55),
+    inset 0 1px 0 rgba(255,255,255,.30);
+}
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn-warn:hover {
+  transform: translateY(-1px);
+  color: #ffffff;
+}
+
+/* Keep delete buttons on a single line — long labels were wrapping into 2
+   rows inside the FolderDialog footer and looked broken. */
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn-warn,
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn-danger {
+  white-space: nowrap;
+}
+
+/* Square icon-only variant of .fx-confirm-btn — used by the folder reload
+   button next to "Editar pasta". Same height as the sibling so they align. */
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn-icon {
+  width: 36px;
+  padding: 0;
+  flex: 0 0 36px;
+}
+
+@keyframes fx-confirm-btn-spin {
+  to { transform: rotate(360deg); }
+}
+:is(.fx-shell, .fx-overlay) .fx-confirm-btn-spinning svg {
+  animation: fx-confirm-btn-spin 0.9s linear infinite;
+  transform-origin: center;
+}
+
+/* ─── modal typography reset ─────────────────────────────────────────────
+   Some browsers/setups render the modal in serif because the overlay is
+   absolutely-positioned and the cascade somehow misses `.fx-shell`'s
+   font-family. Force the foldex typography stack at every level inside any
+   overlay so headings, body, code and kbd all match the rest of the app. */
+.fx-overlay,
+.fx-overlay *,
+.fx-modal,
+.fx-modal * {
+  font-family: var(--fx-ui);
+}
+.fx-modal h1,
+.fx-modal h2,
+.fx-modal h3,
+.fx-modal .fx-modal-title {
+  font-family: var(--fx-display);
+}
+.fx-modal code,
+.fx-modal .fx-modal-kicker,
+.fx-modal .fx-mono-inline,
+.fx-modal .fx-kbd {
+  font-family: var(--fx-mono);
+}
+
+/* Body text inside the confirm dialog — pretty wrapping, no italics. */
+.fx-confirm-body {
+  font-family: var(--fx-ui);
+  font-style: normal;
+  letter-spacing: -0.005em;
+}
+.fx-confirm-body code {
+  background: var(--fx-accent-soft);
+  color: var(--fx-accent-3);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.88em;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+/* ─── tag picker hint + pending tag color cue ───────────────────────────── */
+.fx-tagpicker .fx-chip { cursor: pointer; }
+.fx-tagpicker .fx-chip:hover { transform: translateY(-1px); }
+.fx-tag-hint {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--fx-ink-4);
+  line-height: 1.45;
+}
+.fx-tag-hint strong { color: var(--fx-ink-2); font-weight: 700; }
+
+/* ─── pin toggle row in the new-link modal ─────────────────────────────── */
+.fx-toggle-row {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--fx-border);
+  background: var(--fx-surface-3);
+  cursor: pointer;
+  user-select: none;
+  margin-top: 6px;
+  position: relative;
+}
+.fx-toggle-row:hover { border-color: var(--fx-accent-soft-2); }
+.fx-toggle-row input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  inset: 0;
+}
+.fx-toggle-row .fx-toggle-track {
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--fx-border);
+  position: relative;
+  transition: background .15s;
+}
+.fx-toggle-row .fx-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform .18s cubic-bezier(.2,.8,.2,1);
+}
+.fx-toggle-row input:checked ~ .fx-toggle-track {
+  background: linear-gradient(180deg, var(--fx-accent), var(--fx-accent-3));
+}
+.fx-toggle-row input:checked ~ .fx-toggle-track .fx-toggle-knob {
+  transform: translateX(16px);
+}
+.fx-toggle-row .fx-toggle-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--fx-ink);
+  letter-spacing: -0.005em;
+}
+.fx-toggle-row .fx-toggle-label svg {
+  vertical-align: middle;
+  margin-right: 4px;
+  color: var(--fx-accent);
+}
+.fx-toggle-row .fx-toggle-hint {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fx-ink-4);
+  letter-spacing: 0;
+}
+
+/* ─── pinned badge on link cards ────────────────────────────────────────── */
+.fx-card { position: relative; }
+.fx-card-pin-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--fx-accent), var(--fx-accent-3));
+  color: #fff;
+  box-shadow: 0 6px 14px -4px color-mix(in srgb, var(--fx-accent) 60%, transparent);
+  z-index: 2;
+  cursor: pointer;
+  border: 0;
+  transition: transform .12s;
+}
+.fx-card-pin-badge:hover { transform: scale(1.08) rotate(-4deg); }
+.fx-card-pin-badge.fx-card-pin-off {
+  background: var(--fx-surface-3);
+  color: var(--fx-ink-4);
+  box-shadow: var(--fx-shadow-1);
+  opacity: 0;
+}
+.fx-card:hover .fx-card-pin-badge.fx-card-pin-off { opacity: 1; }
+.fx-card-pinned {
+  border-color: color-mix(in srgb, var(--fx-accent) 32%, var(--fx-border));
+  box-shadow:
+    0 1px 2px rgba(20, 16, 46, 0.06),
+    0 14px 28px -14px color-mix(in srgb, var(--fx-accent) 40%, transparent);
+}

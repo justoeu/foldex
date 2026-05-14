@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Save to Foldex</title>
+  <style>
+    :root {
+      --bg: #0b0d12;
+      --fg: #f5f7fb;
+      --muted: #94a3b8;
+      --accent: #6366F1;
+      --line: rgba(255,255,255,0.08);
+    }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+    body { width: 340px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 14px; }
+    h1 { font-size: 14px; margin: 0 0 10px; }
+    label { display: block; font-size: 11px; color: var(--muted); margin-top: 8px; }
+    input, textarea, select { width: 100%; padding: 6px 8px; box-sizing: border-box;
+      background: rgba(255,255,255,0.04); color: var(--fg); border: 1px solid var(--line);
+      border-radius: 6px; font-size: 13px; font-family: inherit; }
+    textarea { resize: vertical; min-height: 50px; }
+    .row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+    .row .grow { flex: 1; }
+    button { background: var(--accent); color: white; border: 0; border-radius: 6px;
+      padding: 7px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    button.secondary { background: transparent; color: var(--muted); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; max-height: 80px; overflow: auto; }
+    .tag { font-size: 11px; padding: 2px 6px; border-radius: 4px; cursor: pointer;
+      border: 1px solid var(--line); background: rgba(255,255,255,0.03); }
+    .tag.selected { background: var(--accent); color: white; border-color: var(--accent); }
+    .status { font-size: 11px; color: var(--muted); margin-top: 8px; }
+    .status.error { color: #f87171; }
+    .status.ok { color: #34d399; }
+    a { color: var(--accent); font-size: 11px; }
+  </style>
+</head>
+<body>
+  <h1>Save to Foldex</h1>
+  <label for="url">URL</label>
+  <input id="url" type="url" />
+  <label for="title">Title</label>
+  <input id="title" type="text" />
+  <label for="description">Description</label>
+  <textarea id="description"></textarea>
+  <label>Tags</label>
+  <div id="tags" class="tags"></div>
+  <div class="row">
+    <button id="save" class="grow">Save</button>
+    <a href="#" id="openOptions">settings</a>
+  </div>
+  <div id="status" class="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

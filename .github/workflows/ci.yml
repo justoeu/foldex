@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      docker:
+        image: docker:dind
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: vet
+        working-directory: backend
+        run: go vet ./...
+      - name: unit + integration tests with coverage (>= 85%)
+        working-directory: backend
+        run: make coverage
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - working-directory: web
+        run: npm ci --registry=https://registry.npmjs.org/
+      - name: type-check
+        working-directory: web
+        run: npm run typecheck
+      - name: tests
+        working-directory: web
+        # Explicit test step so failures surface distinctly in CI even if
+        # the coverage threshold is later relaxed. The coverage job below
+        # runs the same suite — this is the cheap belt-and-suspenders.
+        run: npm test
+      - name: coverage (>= 85% lines, 80% branches)
+        working-directory: web
+        run: npm run coverage
