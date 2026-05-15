@@ -46,12 +46,13 @@ services:
       foldex:
         aliases: [minio]
 
-# A named, top-level network so the apps compose (docker-compose.yml) can
-# attach to it via `external: true`. Lives independently of either compose
-# project's lifecycle.
+# Same convention as docker-compose.db.yml — the network is owned by the
+# Makefile's `make network` target so all 3 compose projects can attach
+# cleanly without label-mismatch errors.
 networks:
   foldex:
     name: foldex
+    external: true
 
 volumes:
   pgdata:

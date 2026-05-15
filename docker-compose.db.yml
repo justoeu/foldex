@@ -24,12 +24,14 @@ services:
       foldex:
         aliases: [db]
 
-# A named, top-level network so the apps compose (docker-compose.yml) can
-# attach to it via `external: true`. Lives independently of either compose
-# project's lifecycle.
+# Both compose projects (db + apps) attach to `foldex` as external — the
+# Makefile's `make network` target creates it once. Keeping the network
+# fully external avoids the "network exists but was not created by compose"
+# label check that breaks when reusing or pre-creating the network.
 networks:
   foldex:
     name: foldex
+    external: true
 
 volumes:
   pgdata:
