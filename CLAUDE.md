@@ -35,7 +35,8 @@ Current pinned versions (re-verify on every upgrade — `bun pm ls` to confirm):
 | golang-migrate   | `v4.17.x`         | inside `migrate/migrate` Docker image              |
 | Vite             | `^8.0`            |                                                    |
 | React            | `^19.2`           |                                                    |
-| **MUI**          | **`^7.3`** ⚠️     | **DO NOT** upgrade to v8/v9 without migrating `Stack`/`Typography` (require `component=` on every node). Decided case-by-case. |
+| **MUI**          | **`^9.0`**        | Used only for `createTheme` (`web/src/theme/theme.ts`) + `<ThemeProvider>` (in tests). No `<Stack>`/`<Typography>`/etc. in render — visual lives in `web/src/styles/foldex.css`. Earlier v8/v9 warning is moot for that reason; do re-evaluate if you ever start rendering MUI components. |
+| **react-i18next**| **`^17.0`**       | Wraps `i18next ^26`. Locales: `en` (source-of-truth), `pt`, `es`. Picker in topbar persists choice to `localStorage["foldex.locale"]`. New visible strings MUST go through `t('namespace.key')` and ship in all 3 locale files (`web/src/i18n/locales/{en,pt,es}.json`). Plurals use the modern `_one`/`_other` suffix (NOT the legacy `_plural`). |
 | TanStack Query   | `^5.100`          |                                                    |
 | TypeScript       | `^6.0`            |                                                    |
 | Vitest           | `^4.1`            |                                                    |
@@ -125,6 +126,7 @@ These are checked by tests and enforced by the schema / handlers:
 - **Backup is a complete DB + MinIO snapshot ZIP.** `POST /api/backup` produces a ZIP with `manifest.json` (kind=`foldex.backup`, schema_version=8, SHA-256 checksums, counts), `database.json` (all 5 tables incl. `link_tags` and `click_logs`) and `files/` mirroring the bucket prefixes (`screenshots/`, `images/`). `manifest.json` is stored uncompressed (`zip.Store`) so the frontend can read counts without inflate; everything else uses `zip.Deflate`. Export runs inside `REPEATABLE READ` so the 5 SELECTs + the bucket listing all see the same snapshot. `POST /api/backup/{validate,restore}` accepts the zip as `multipart/form-data` (2 GiB cap via streaming `MultipartReader`).
 - **Backup restore is idempotent by default and never atomic across DB+MinIO.** Three conflict modes: `wipe` (TRUNCATE 5 tables + DELETE bucket prefixes + restore with original IDs preserved + bump sequences), `skip` (`ON CONFLICT DO NOTHING` on tag.name and link.url; old→new id mapping for link_tags/click_logs re-key; bucket files skipped if key exists), `duplicate` (tags renamed to `nome (N)`, folders always new, links with URL collision **fall back to skip + warning** — URL is UNIQUE so true duplication would violate the invariant). The DB phase is a single transaction; files are written post-commit. Crash between the two = re-run with the same zip converges.
 - **Backup endpoints require MinIO.** `POST /api/backup/*` are mounted only when the storage client came up. Without MinIO the backup would be silently incomplete (no files), so the routes don't exist at all — `404` rather than `200 OK` with partial data.
+- **The `foldex-web` image NEVER ships a private TLS key.** `web/Dockerfile` does NOT `COPY` certs. At container start, `entrypoint-certs.sh` either uses a volume-mounted pair at `/etc/nginx/certs/{cert,key}.pem` (production / mkcert dev) OR generates a self-signed ephemeral pair on the fly. Baking a key into a public image is a HIGH-severity finding (Trivy/Scout flag it) AND a real risk (every operator pulling it would share the same private key). Do not add `COPY certs/...` back to the Dockerfile. Local dev: `make up` bind-mounts `./web/certs` from the gitignored host directory.
 
 ## 5. UI/UX invariants — interaction contracts
 
@@ -147,6 +149,7 @@ These are not "nice to have" — they are part of the product contract:
 - **Dark mode is neutral charcoal/slate**, not purple. Only the accent (`--fx-accent` indigo `#8B85FF`) carries hue. Backgrounds/surfaces/ink are all neutral gray.
 - **Backup mode picker uses dual visual encoding** for `wipe`: red border + red background on the option AND `fx-confirm-btn-danger` on the submit button (red gradient) AND the literal `⚠` prefix in the label. `skip` and `duplicate` use the indigo accent. The submit button's gradient is what makes the destructive intent unmissable; the radio styling alone isn't enough.
 - **Backup history persists in `localStorage` under `foldex.backups`** (array of `{id, created_at, duration_ms, size_bytes, counts}`, capped at 10). New entries prepend. Other tabs sync via `storage` event listener.
+- **Locale picker lives in the topbar**, between the view-mode segment and the theme toggle. Persists to `localStorage["foldex.locale"]`. Default detection: `navigator.language` falls back to `en`. Adding a new locale = drop a JSON in `web/src/i18n/locales/`, list it in `SUPPORTED_LOCALES` in `web/src/i18n/index.ts`, populate every key from `en.json` (source of truth).
 
 ## 6. Definition of Done — every change must check all boxes
 
@@ -167,7 +170,7 @@ Before you announce "done," verify each item below. If any fails, the change is 
 ## 7. Style choices — the project's defaults
 
 - **Backend:** Chi router, pgx + pgxpool, slog. No ORMs, no global state, no service locators.
-- **Frontend:** Plain React (no MUI in render — MUI is only a dev dep, kept for tooling parity; visual lives in `web/src/styles/foldex.css` from the handoff + `overrides.css` on top). TanStack Query for server state, no Redux. axios as the HTTP client. `react-hotkeys-hook` for keyboard shortcuts.
+- **Frontend:** Plain React (no MUI in render — MUI is only used for `createTheme`/`ThemeProvider`; visual lives in `web/src/styles/foldex.css` from the handoff + `overrides.css` on top). TanStack Query for server state, no Redux. axios as the HTTP client. `react-hotkeys-hook` for keyboard shortcuts. **i18n via `react-i18next`** — every visible string goes through `t('key')` and is mirrored across `en/pt/es` JSON locale files.
 - **Migrations:** `golang-migrate`, `000NNN_*.up.sql` / `.down.sql` only. Each migration must be reversible (a real `.down.sql` or an explicit `SELECT 1;` no-op with a comment explaining why).
 - **Errors:** uniform JSON envelope `{ "error": { "code", "message" } }`. Backend handlers go through `httperr.Write`. Never leak `pgx` errors to clients.
 - **Logs:** structured (slog JSON). No `fmt.Println`.

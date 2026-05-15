@@ -53,6 +53,13 @@ services:
     ports:
       - "127.0.0.1:${WEB_PORT:-9088}:80"
       - "127.0.0.1:${WEB_HTTPS_PORT:-9444}:443"
+    # Mount the mkcert pair from the host so the image stays generic.
+    # The path is gitignored locally — `make up` after `mkcert ...` lands
+    # the cert here; the entrypoint detects it and skips the ephemeral
+    # placeholder. Mounted read-only so the container can't tamper with
+    # the host keys.
+    volumes:
+      - ./web/certs:/etc/nginx/certs:ro
     depends_on:
       - backend
     networks:

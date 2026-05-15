@@ -136,21 +136,11 @@ jobs:
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # web/Dockerfile is multi-stage (bun → nginx) and does COPY certs/...
-      # to bake the TLS pair into the image. web/certs/ is gitignored
-      # because mkcert pairs are per-machine, so we generate a throwaway
-      # self-signed pair here just to satisfy the COPY. Users who pull the
-      # published image should mount their own mkcert volume to override —
-      # the placeholder is intentionally low-trust and labelled as such.
-      - name: Generate placeholder TLS pair for image build
-        run: |
-          mkdir -p web/certs
-          openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-            -keyout web/certs/key.pem \
-            -out web/certs/cert.pem \
-            -subj "/CN=foldex-placeholder" \
-            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
-
+      # web/Dockerfile no longer COPYs certs into the image — the entrypoint
+      # generates an ephemeral self-signed pair at container start, or the
+      # operator mounts their own pair as a volume. This keeps private keys
+      # OUT of the published image (Trivy/Scout flagged the previous baked
+      # placeholder as a HIGH-severity secret leak).
       - name: Build & push foldex-web
         uses: docker/build-push-action@v6
         with:
