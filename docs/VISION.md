@@ -24,9 +24,9 @@ Foldex resolve isso como um **app pessoal self-hosted**: bookmark com cara de pr
 
 - **Sem multi-user.** Roda como app de uma pessoa, sem login, atrás do `127.0.0.1`.
 - **Sem sync entre máquinas.** O dado vive num Postgres local; backup é responsabilidade do usuário (script `pg_dump` sugerido).
-- **Sem app mobile nativo.** A SPA é responsiva o suficiente; extensão é desktop only.
+- **Sem app mobile nativo.** A SPA virou PWA-grade (manifest + service worker offline + install via "Adicionar à tela inicial") e tem layout responsivo dedicado em ≤768px e ≤600px (topbar single-row com kebab, dialogs full-screen, FAB). Pra alcançar do celular, basta `WEB_BIND_HOST=0.0.0.0` e o LAN IP no SAN do cert. Extensão MV3 segue desktop only.
 - **Sem AI tagging automático.** Sugestão de tags por LLM fica pra v2.
-- **Sem deploy cloud.** Sem TLS, sem secrets manager, sem CI. Quando virar multi-user, repensar.
+- **Sem deploy cloud.** Sem TLS gerenciado, sem secrets manager. Quando virar multi-user, repensar.
 
 ## Target user
 
@@ -40,6 +40,7 @@ Engenheiro/PM que vive em browser, abre dezenas de ferramentas internas por sema
 | **Pastas iPhone-style**    | Clicar uma pasta entra nela (Esc / botão "← Pastas" volta). URL bookmarkável (`?folder=N`). Drag-and-drop: link → pasta (move), link → link (cria nova pasta com os dois). `⌥F` cria nova pasta. |
 | **Command palette**        | `⌥K` abre overlay com busca fuzzy (título + URL + tag). `Enter` abre o link via `/go/:id`.    |
 | **New link**               | `⌥N` ou botão `+` abre dialog. URL → cola → backend resolve preview em background.            |
+| **Paste-to-create**        | `⌘V`/`Ctrl+V` (ou "Paste" no menu de seleção do celular) em qualquer canto da página sniffa o clipboard; se for uma URL, o dialog de New Link abre com ela pré-preenchida. No-op dentro de inputs ou com outro modal aberto. ADR-21. |
 | **Captura via extension**  | Pin do popup MV3 no Chrome/Edge. Clique → URL e título preenchidos → escolhe tag → salva.     |
 | **Import**                 | Drag-drop do `bookmarks.html` ou `.json` → backend cria links idempotentemente.               |
 | **Export**                 | Botão "Export" → download em Netscape HTML (reimportável no Chrome) ou JSON nosso.            |

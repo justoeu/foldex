@@ -419,11 +419,66 @@ Detalhe completo em [SDD-BACKUP-RESTORE.md](./SDD-BACKUP-RESTORE.md). Resumo das
 - **`schema_version` no manifest** rejeita backups de futuro; backups antigos podem rodar com warning (campos novos default).
 - **Restore não é atômico DB+MinIO** (sem 2PC entre Postgres e S3). Writes idempotentes + re-rodar com mesmo zip converge.
 
+### ADR-21 — Paste anywhere = New Link dialog pre-filled
+**Status:** Done.
+
+Listener document-level (`web/src/hooks/usePasteUrl.ts`) intercepta `paste` no
+`document` e, se o payload do clipboard parecer uma URL (`web/src/lib/url.ts:looksLikeUrl`),
+abre o `LinkDialog` com `initialUrl=<clipboard>`. No-op quando o `e.target` é
+editável (INPUT/TEXTAREA/SELECT/contentEditable) ou quando qualquer `.fx-overlay`
+já está montado — sem hijack do paste dentro da busca, dentro de outro modal,
+ou enquanto a palette está aberta. **Por quê** um listener de documento em
+vez de campo: aceita "Ctrl+V em qualquer lugar da página", inclusive no menu
+nativo "Paste" do iOS Safari, sem precisar mudar foco antes. **Por quê não
+publicar a feature como atalho `⌥V`**: o evento `paste` nativo já carrega
+o clipboard sem prompt de permissão; um atalho explícito teria que ler via
+`navigator.clipboard.readText()` que requer HTTPS + permissão.
+
+Detecção é tolerante: aceita `http(s)?://`, `ftp://`, `file://`, e hosts
+bare como `example.com/x`. Rejeita números puros, palavras soltas, strings
+com whitespace, e schemes não-web (`mailto:`, `tel:`, `javascript:`). O
+gotcha que motivou a checagem extra: `new URL("https://42")` parseia
+hostname pra IPv4 `0.0.0.42` (octets implícitos), o que daria false-positive
+para qualquer número solto — daí o `trimmed.includes('.')` antes do parse
+no implicit-https path. 16 unit tests cobrem os edge cases em
+`web/src/lib/url.test.ts`.
+
+### ADR-22 — Mobile-first responsive (PWA-grade)
+**Status:** Done.
+
+Single SPA serve desktop + mobile via 3 breakpoints em `web/src/styles/foldex.css`:
+- **≤980px / ≤640px**: grid de cards cai pra 2 / 1 colunas (teto inferior,
+  override de qualquer densidade salva).
+- **≤768px**: topbar vira **single row** com 5 elementos exatos:
+  `[hamburger] [fx-mark] [search] [home + stats] [⋯]`. Tudo o que sobrou —
+  sort, view, density, locale, theme, import/export, new folder, new link —
+  vai pra dentro do popover do "⋯" (`MobileOverflowMenu`). Sidebar vira
+  off-canvas drawer (`transform: translateX(-100%)`, `position: fixed`,
+  z-index 90). FAB redondo aparece no canto inferior direito pra new-link
+  rápido.
+- **≤600px**: dialogs viram full-screen (`width: 100vw`, `height: 100dvh`,
+  border-radius 0). `LinkDialog` ainda stack 2-cols → 1-col com header e
+  footer sticky; `CommandPalette` ganha botão X (esc não existe no teclado
+  virtual) + tap-no-backdrop fecha. Inputs sobem pra min-height 44px (alvo
+  iOS), font 15px, footer respeita `env(safe-area-inset-bottom)`.
+
+**Gotcha load-bearing**: `web/src/styles/overrides.css` é carregado **depois**
+de `foldex.css`, então qualquer regra ali com a mesma specificity vence o
+cascade — mesmo regras dentro de `@media` em `foldex.css`. Por isso o
+`.fx-frame` (e `.fx-topbar`, `.fx-topbar .fx-search`) em `overrides.css`
+estão escopados em `@media (min-width: 769px)`. Adicionar nova regra
+"desktop-only" em `overrides.css` exige o mesmo wrapping ou a mobile
+quebra silenciosamente.
+
+PWA: `vite-plugin-pwa` (Workbox) gera `sw.js` + `manifest.webmanifest`,
+`skipWaiting + clientsClaim` faz o SW novo assumir tabs abertas, `cacheId`
+versionado deixa rolar limpeza geral. Service worker NetworkFirst pra
+`/api/files/`, precache pra build assets, navigateFallback pra `/index.html`.
+
 ## Future considerations
 
 - **Auth + multi-user.** Login local (bcrypt + JWT) ou OAuth Google. Tabelas `user_id` em `link`/`tag`.
 - **Sync entre máquinas.** Hospedar Postgres remoto, ou criar `foldex-sync` que replica via litestream.
 - **AI suggestions.** Sugerir tags ao criar (LLM lê título + descrição), agrupar duplicatas.
-- **Slugs amigáveis.** Coluna `slug` em `link`; `/go/jira-board`.
 - **Favicon cache local.** Worker baixa e armazena em volume; resolve broken icons offline/VPN.
 - **Public sharing.** Sub-set de links visível sem auth (read-only link de partilha).

@@ -90,6 +90,31 @@ make up                       # restarts the web container; certs are bind-mount
 open https://localhost:9444   # 9444 = WEB_HTTPS_PORT; 9088 (WEB_PORT) is HTTP→HTTPS redirect
 ```
 
+#### Reaching the SPA from a phone on the same wifi
+
+The containers bind to `127.0.0.1` by default (per the single-user threat
+model). To open foldex on an iPhone/iPad/Android on the same LAN, two
+things have to change:
+
+1. Set `WEB_BIND_HOST=0.0.0.0` in `.env` so nginx listens on every
+   interface. `BIND_HOST` (backend) can stay on `127.0.0.1` — nginx
+   already proxies `/api/` and `/go/` for you.
+2. Include the host's LAN IP in the mkcert SAN list, otherwise the
+   phone's browser rejects the cert before nginx even sees the request:
+
+   ```bash
+   LAN_IP=$(ipconfig getifaddr en0)   # macOS; substitute for Linux/WSL
+   cd web/certs && mkcert -cert-file cert.pem -key-file key.pem \
+     localhost 127.0.0.1 ::1 host.docker.internal "$LAN_IP"
+   cd - && make up                     # bind-mount picks up the new cert
+   ```
+
+Then open `https://<LAN_IP>:9444` on the phone. The cert will show as
+untrusted unless you also install the mkcert root CA on the device
+(AirDrop `$(mkcert -CAROOT)/rootCA.pem` → Settings → Profile → Trust
+on iOS; varies on Android). Tap-through warnings work fine for casual
+use; PWA install (Add to Home Screen) requires a trusted cert.
+
 The `cert.pem` and `key.pem` files are **gitignored** — generate them locally,
 never commit. The web container bind-mounts `./web/certs:/etc/nginx/certs:ro`
 at boot, so you only need to `make restart-web` (or `make up`) after
@@ -170,10 +195,11 @@ open http://localhost:9088
 | `⌥K` / `Alt+K`   | Command palette (fuzzy search). `⌘K` conflicts with browsers' URL-bar focus. |
 | `⌥N` / `Alt+N`   | New link (⌘N is hard-claimed by browser for "New window") |
 | `⌥F` / `Alt+F`   | New folder (⌥P collided with other handlers; "F" for Folder) |
+| `⌘V` / `Ctrl+V`  | Paste a URL anywhere on the page → New Link dialog opens with it pre-filled. No-ops when typing in a field or when any dialog is already open. |
 | `Esc`            | Close any open modal / exit folder view |
 | `⌘Enter` (popup) | Save (in the browser extension) |
 
-> **Convention**: every foldex shortcut is Alt-based. Browsers swallow most `⌘`-modifier combos (⌘K = focus URL bar, ⌘N = new window, ⌘P = print), so Alt-prefixed shortcuts are the only ones that reach the SPA reliably.
+> **Convention**: every foldex shortcut is Alt-based. Browsers swallow most `⌘`-modifier combos (⌘K = focus URL bar, ⌘N = new window, ⌘P = print), so Alt-prefixed shortcuts are the only ones that reach the SPA reliably. The paste-to-create gesture is the one exception — it uses the native clipboard event, so it works with whatever paste shortcut the OS provides (including the phone's "Paste" menu).
 
 ## Browser extension
 
