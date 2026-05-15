@@ -162,7 +162,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	const maxSize = 5 << 20 // 5 MB
+	const maxSize = 20 << 20 // 20 MB — comfortable headroom for phone-camera shots
 	// Cap the whole request body — ParseMultipartForm's `maxMemory` only
 	// controls when parts spill to a temp file, not the total upload size.
 	r.Body = http.MaxBytesReader(w, r.Body, maxSize)
@@ -190,7 +190,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if int64(len(data)) > maxSize {
-		httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "too_large", "image exceeds 5MB limit"))
+		httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "too_large", "image exceeds 20MB limit"))
 		return
 	}
 
