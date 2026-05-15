@@ -574,8 +574,26 @@ function Home({
           t={t}
         />
       )}
-      {viewMode === 'list' && <ListView links={links} onEdit={onEdit} />}
-      {viewMode === 'compact' && <CompactGrid links={links} onEdit={onEdit} />}
+      {viewMode === 'list' && (
+        <ListView
+          folders={folders}
+          links={links}
+          sort={sort}
+          onEdit={onEdit}
+          onOpenFolder={onOpenFolder}
+          onEditFolder={onEditFolder}
+        />
+      )}
+      {viewMode === 'compact' && (
+        <CompactGrid
+          folders={folders}
+          links={links}
+          sort={sort}
+          onEdit={onEdit}
+          onOpenFolder={onOpenFolder}
+          onEditFolder={onEditFolder}
+        />
+      )}
     </div>
   )
 }

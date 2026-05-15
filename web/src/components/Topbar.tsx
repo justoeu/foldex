@@ -225,7 +225,7 @@ export function Topbar({
             <path d="M3 6h18M3 12h18M3 18h18" />
           </svg>
         </button>
-        {viewMode === 'cards' && (
+        {(viewMode === 'cards' || viewMode === 'compact') && (
           <>
             <span className="fx-viewseg-sep" aria-hidden="true" />
             {([3, 5, 8] as const).map((n) => (

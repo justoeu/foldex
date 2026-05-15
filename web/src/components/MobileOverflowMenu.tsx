@@ -175,7 +175,7 @@ export function MobileOverflowMenu({
               active={viewMode === 'list'}
               onClick={() => { setViewMode('list'); closeAll() }}
             />
-            {viewMode === 'cards' && (
+            {(viewMode === 'cards' || viewMode === 'compact') && (
               <div className="fx-mobile-more-density">
                 {([3, 5, 8] as const).map((n) => (
                   <button
