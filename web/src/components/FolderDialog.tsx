@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
+import { FolderPicker } from './FolderPicker'
 import { GradientPicker } from './GradientPicker'
-import { useCreateFolder, useUpdateFolder, useDeleteFolder } from '../api/folders'
+import { useCreateFolder, useFolders, useUpdateFolder, useDeleteFolder } from '../api/folders'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useConfirm } from './ConfirmDialog'
@@ -48,15 +49,25 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
   const [solid, setSolid] = useState('#6366F1')
   const [gradFrom, setGradFrom] = useState('#6366F1')
   const [gradTo, setGradTo] = useState('#EC4899')
+  // The folder's parent in edit mode. Read once into local state on open
+  // and tracked as a tri-state (`undefined` → "untouched", null → root,
+  // number → another folder) so we can decide whether to include
+  // parent_id in the PATCH body.
+  const [parentChoice, setParentChoice] = useState<number | null>(null)
+  const [parentDirty, setParentDirty] = useState(false)
   const create = useCreateFolder()
   const update = useUpdateFolder()
   const del = useDeleteFolder()
   const confirm = useConfirm()
+  // Full folder tree, for descendant-cycle prevention in the picker.
+  const { data: allFolders = [] } = useFolders()
 
   useEffect(() => {
     if (!open) return
     if (folder) {
       setName(folder.name)
+      setParentChoice(folder.parent_id ?? null)
+      setParentDirty(false)
       if (isGradient(folder.color)) {
         const { from, to } = parseGradient(folder.color)
         setMode('gradient')
@@ -71,6 +82,8 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
       }
     } else {
       setName('')
+      setParentChoice(null)
+      setParentDirty(false)
       setMode('solid')
       setSolid('#6366F1')
       setGradFrom('#6366F1')
@@ -89,7 +102,15 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
     const trimmed = name.trim()
     if (!trimmed) return
     if (isEdit && folder) {
-      await update.mutateAsync({ id: folder.id, body: { name: trimmed, color: finalColor } })
+      // Only send parent_id when the user actually touched the picker —
+      // sending an unchanged value adds zero info and would surprise on
+      // a future cycle-check change.
+      const body: { name: string; color: string; parent_id?: number | null } = {
+        name: trimmed,
+        color: finalColor,
+      }
+      if (parentDirty) body.parent_id = parentChoice
+      await update.mutateAsync({ id: folder.id, body })
     } else {
       await create.mutateAsync({ name: trimmed, color: finalColor, parent_id: parentId ?? null })
     }
@@ -170,6 +191,21 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                 />
               </div>
             </label>
+
+            {isEdit && !isNaming && folder && (
+              <label className="fx-field">
+                <span className="fx-field-label">{t('folder_dialog.parent_label')}</span>
+                <FolderPicker
+                  selected={parentDirty ? parentChoice : (folder.parent_id ?? null)}
+                  onChange={(id) => {
+                    setParentChoice(id)
+                    setParentDirty(true)
+                  }}
+                  excludeIds={descendantSet(folder.id, allFolders)}
+                />
+                <span className="fx-field-hint">{t('folder_dialog.parent_help')}</span>
+              </label>
+            )}
 
             <div className="fx-field">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
@@ -283,5 +319,24 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
       </div>
     </div>
   )
+}
+
+// Collect rootId + every descendant id (transitive closure of parent_id).
+// Used by the parent picker so the user can't move a folder under one of
+// its own children — the backend already rejects cycles, but blocking it
+// in the UI avoids a confusing error after a click.
+function descendantSet(rootId: number, folders: Folder[]): Set<number> {
+  const out = new Set<number>([rootId])
+  let added = true
+  while (added) {
+    added = false
+    for (const f of folders) {
+      if (f.parent_id != null && out.has(f.parent_id) && !out.has(f.id)) {
+        out.add(f.id)
+        added = true
+      }
+    }
+  }
+  return out
 }
 

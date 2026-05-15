@@ -14,6 +14,11 @@ type Props = {
   // when the dialog was opened from inside a folder so the new folder is
   // a sibling, not a stray root entry.
   parentId?: number | null
+  // IDs to filter out of the dropdown. Used by FolderDialog when editing
+  // a folder: pass the folder itself + all of its descendants so the user
+  // can't pick a parent that would create a cycle (the backend also
+  // rejects it, but blocking it in the UI is friendlier).
+  excludeIds?: Set<number>
 }
 
 // Autocomplete combobox for picking a folder. Three sources of options:
@@ -33,10 +38,15 @@ type Props = {
 // The component never renders the underlying folder.id in the UI — only
 // `f.name` — to keep with the §4 "internal ids never appear in the URL/UI"
 // invariant.
-export function FolderPicker({ selected, onChange, parentId }: Props) {
+export function FolderPicker({ selected, onChange, parentId, excludeIds }: Props) {
   const { t } = useTranslation()
-  const { data: folders = [] } = useFolders()
+  const { data: allFolders = [] } = useFolders()
   const createFolder = useCreateFolder()
+  // Strip excluded ids (self + descendants when editing a folder).
+  const folders = useMemo(
+    () => (excludeIds && excludeIds.size > 0 ? allFolders.filter((f) => !excludeIds.has(f.id)) : allFolders),
+    [allFolders, excludeIds],
+  )
 
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState('')
@@ -78,11 +88,11 @@ export function FolderPicker({ selected, onChange, parentId }: Props) {
       r.push({
         kind: 'create',
         label: trimmedFilter
-          ? t('link_dialog.folder_picker_create_inline', { name: trimmedFilter })
-          : t('link_dialog.folder_picker_create_empty'),
+          ? t('folder_picker.create_inline', { name: trimmedFilter })
+          : t('folder_picker.create_empty'),
       })
     }
-    r.push({ kind: 'none', label: t('link_dialog.folder_none') })
+    r.push({ kind: 'none', label: t('folder_picker.none') })
     for (const f of filtered) r.push({ kind: 'folder', id: f.id, label: f.name })
     return r
   }, [filtered, showCreateRow, t, trimmedFilter])
@@ -175,9 +185,9 @@ export function FolderPicker({ selected, onChange, parentId }: Props) {
         onClick={() => setOpen(true)}
         onKeyDown={onKeyDown}
         placeholder={
-          selectedFolder ? selectedFolder.name : t('link_dialog.folder_picker_placeholder')
+          selectedFolder ? selectedFolder.name : t('folder_picker.placeholder')
         }
-        aria-label={t('link_dialog.folder_aria')}
+        aria-label={t('folder_picker.input_aria')}
         aria-autocomplete="list"
         aria-expanded={open}
         aria-controls="fx-folderpicker-list"
@@ -191,7 +201,7 @@ export function FolderPicker({ selected, onChange, parentId }: Props) {
           setOpen((v) => !v)
           inputRef.current?.focus()
         }}
-        aria-label={t('link_dialog.folder_picker_toggle_aria')}
+        aria-label={t('folder_picker.toggle_aria')}
         tabIndex={-1}
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
@@ -204,11 +214,11 @@ export function FolderPicker({ selected, onChange, parentId }: Props) {
           id="fx-folderpicker-list"
           role="listbox"
           className="fx-folderpicker-list"
-          aria-label={t('link_dialog.folder_label')}
+          aria-label={t('folder_picker.list_aria')}
         >
           {rows.length === 0 && (
             <li className="fx-folderpicker-empty" role="presentation">
-              {t('link_dialog.folder_picker_no_match')}
+              {t('folder_picker.no_match')}
             </li>
           )}
           {rows.map((row, i) => {

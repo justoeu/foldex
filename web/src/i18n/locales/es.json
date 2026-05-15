@@ -3,6 +3,16 @@
     "name": "foldex",
     "tagline": "personal · self-hosted"
   },
+  "folder_picker": {
+    "placeholder": "Buscar o crear carpeta…",
+    "create_empty": "Nueva carpeta…",
+    "create_inline": "Crear carpeta \"{{name}}\"",
+    "no_match": "Sin coincidencias",
+    "toggle_aria": "Alternar lista de carpetas",
+    "input_aria": "carpeta",
+    "list_aria": "carpetas",
+    "none": "Sin carpeta"
+  },
   "common": {
     "cancel": "Cancelar",
     "save": "Guardar",
@@ -138,12 +148,6 @@
     "description_placeholder": "Opcional",
     "folder_label": "Carpeta",
     "folder_aria": "carpeta",
-    "folder_none": "Sin carpeta",
-    "folder_picker_placeholder": "Buscar o crear carpeta…",
-    "folder_picker_create_empty": "Nueva carpeta…",
-    "folder_picker_create_inline": "Crear carpeta \"{{name}}\"",
-    "folder_picker_no_match": "Sin coincidencias",
-    "folder_picker_toggle_aria": "Alternar lista de carpetas",
     "tags_label": "Etiquetas",
     "tags_search_placeholder": "+ añadir etiqueta…",
     "tags_search_aria": "tag filter",
@@ -182,6 +186,8 @@
     "name_label": "Nombre",
     "name_placeholder": "ej.: Trabajo, Personal…",
     "name_aria": "nombre de la carpeta",
+    "parent_label": "Carpeta padre",
+    "parent_help": "Mueve esta carpeta dentro de otra. Selecciona \"Sin carpeta\" para promoverla nuevamente a la raíz.",
     "color_label": "Color",
     "color_solid": "Sólido",
     "color_gradient": "Gradiente",

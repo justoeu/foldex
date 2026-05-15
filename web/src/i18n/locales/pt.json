@@ -3,6 +3,16 @@
     "name": "foldex",
     "tagline": "pessoal · self-hosted"
   },
+  "folder_picker": {
+    "placeholder": "Buscar ou criar pasta…",
+    "create_empty": "Nova pasta…",
+    "create_inline": "Criar pasta \"{{name}}\"",
+    "no_match": "Nenhuma pasta correspondente",
+    "toggle_aria": "Abrir lista de pastas",
+    "input_aria": "pasta",
+    "list_aria": "pastas",
+    "none": "Nenhuma pasta"
+  },
   "common": {
     "cancel": "Cancelar",
     "save": "Salvar",
@@ -138,12 +148,6 @@
     "description_placeholder": "Opcional",
     "folder_label": "Pasta",
     "folder_aria": "pasta",
-    "folder_none": "Nenhuma pasta",
-    "folder_picker_placeholder": "Buscar ou criar pasta…",
-    "folder_picker_create_empty": "Nova pasta…",
-    "folder_picker_create_inline": "Criar pasta \"{{name}}\"",
-    "folder_picker_no_match": "Nenhuma pasta correspondente",
-    "folder_picker_toggle_aria": "Abrir lista de pastas",
     "tags_label": "Tags",
     "tags_search_placeholder": "+ adicionar tag…",
     "tags_search_aria": "tag filter",
@@ -182,6 +186,8 @@
     "name_label": "Nome",
     "name_placeholder": "ex: Trabalho, Pessoal…",
     "name_aria": "nome da pasta",
+    "parent_label": "Pasta pai",
+    "parent_help": "Mova esta pasta para dentro de outra. Selecione \"Nenhuma pasta\" para promovê-la de volta à raiz.",
     "color_label": "Cor",
     "color_solid": "Sólida",
     "color_gradient": "Gradiente",
