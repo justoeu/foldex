@@ -26,7 +26,7 @@ describe('App', () => {
   it('shows the empty state on first load', async () => {
     renderWithProviders(<App />)
     await waitFor(() => expect(screen.getByText('jira')).toBeInTheDocument())
-    expect(screen.getByText(/Sua base ainda está vazia/i)).toBeInTheDocument()
+    expect(screen.getByText(/Your base is still empty/i)).toBeInTheDocument()
     expect(screen.getAllByText(/⌥N/).length).toBeGreaterThan(0)
   })
 
@@ -40,8 +40,8 @@ describe('App', () => {
   it('navigates to the Import page', async () => {
     renderWithProviders(<App />)
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /^Import$/i }))
-    expect(await screen.findByRole('heading', { name: 'Importar' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Import \/ Export/i }))
+    expect(await screen.findByRole('heading', { name: 'Import' })).toBeInTheDocument()
   })
 
   it('filters links via the search box', async () => {
@@ -70,11 +70,11 @@ describe('App', () => {
     renderWithProviders(<App />)
     const user = userEvent.setup()
     await waitFor(() => expect(screen.getByText('Hacker News')).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /8 colunas/i }))
+    await user.click(screen.getByRole('button', { name: /8 Density/i }))
     const mainarea = document.querySelector('.fx-mainarea') as HTMLElement
     expect(mainarea.style.getPropertyValue('--fx-cols')).toBe('8')
     expect(localStorage.getItem('foldex.grid.cols')).toBe('8')
-    await user.click(screen.getByRole('button', { name: /3 colunas/i }))
+    await user.click(screen.getByRole('button', { name: /3 Density/i }))
     expect(mainarea.style.getPropertyValue('--fx-cols')).toBe('3')
   })
 
@@ -83,8 +83,8 @@ describe('App', () => {
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /^Top$/i }))
     expect(screen.getByRole('button', { name: /^Top$/i })).toHaveAttribute('aria-pressed', 'true')
-    await user.click(screen.getByRole('button', { name: /^Recentes$/i }))
-    expect(screen.getByRole('button', { name: /^Recentes$/i })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: /^Recent$/i }))
+    expect(screen.getByRole('button', { name: /^Recent$/i })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('toggles a tag filter via the sidebar', async () => {
@@ -113,7 +113,7 @@ describe('App', () => {
     renderWithProviders(<App />)
     const user = userEvent.setup()
     await user.keyboard('{Alt>}k{/Alt}')
-    expect(await screen.findByPlaceholderText(/Buscar por/i)).toBeInTheDocument()
+    expect(await screen.findByPlaceholderText(/Search by.*action/i)).toBeInTheDocument()
   })
 
   it('opens the new-folder dialog via ⌥F', async () => {
@@ -176,8 +176,8 @@ describe('App', () => {
     renderWithProviders(<App />)
     const user = userEvent.setup()
     // Enter folder A
-    await waitFor(() => expect(screen.getByRole('button', { name: /Abrir pasta A/i })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /Abrir pasta A/i }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder A/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder A/i }))
     // Open the LinkDialog (new link) — sits on top of the folder view
     await user.keyboard('{Alt>}n{/Alt}')
     expect(await screen.findByRole('dialog', { name: /new link/i })).toBeInTheDocument()
@@ -187,7 +187,7 @@ describe('App', () => {
       expect(screen.queryByRole('dialog', { name: /new link/i })).not.toBeInTheDocument(),
     )
     // Still inside A — the home page-head should NOT be visible.
-    expect(screen.queryByText(/Sua base de links/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Your link base/i)).not.toBeInTheDocument()
   })
 
   it('creating a subfolder while inside a folder shows it in the grid (level 3)', async () => {
@@ -201,19 +201,19 @@ describe('App', () => {
     renderWithProviders(<App />)
     const user = userEvent.setup()
     // Home renders A. Click to enter A.
-    await waitFor(() => expect(screen.getByRole('button', { name: /Abrir pasta A/i })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /Abrir pasta A/i }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder A/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder A/i }))
     // Inside A, we should see B as a child folder. Click to enter B.
-    await waitFor(() => expect(screen.getByRole('button', { name: /Abrir pasta B/i })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /Abrir pasta B/i }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder B/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder B/i }))
     // Inside B (level 2). Open the "Nova pasta" CTA and create "C" — should
     // land as a child of B (level 3).
     await user.click(screen.getByRole('button', { name: /new folder/i }))
     await user.type(screen.getByLabelText('folder name'), 'C')
-    await user.click(screen.getByRole('button', { name: /Criar pasta/i }))
+    await user.click(screen.getByRole('button', { name: /Create folder/i }))
     // After save, the grid inside B should show folder C.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /Abrir pasta C/i })).toBeInTheDocument(),
+      expect(screen.getByRole('button', { name: /Open folder C/i })).toBeInTheDocument(),
     )
     // Verify state: C exists with parent_id=B(2).
     const c = state.folders.find((f) => f.name === 'C')
@@ -231,11 +231,11 @@ describe('App', () => {
     } as any)
     renderWithProviders(<App />)
     const user = userEvent.setup()
-    await waitFor(() => expect(screen.getByRole('button', { name: /Abrir pasta Trabalho/i })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Trabalho/i })).toBeInTheDocument())
     // Enter folder (cards mode is default)
-    await user.click(screen.getByRole('button', { name: /Abrir pasta Trabalho/i }))
+    await user.click(screen.getByRole('button', { name: /Open folder Trabalho/i }))
     // Switch the folder to compact
-    await user.click(screen.getByRole('button', { name: /compact view/i }))
+    await user.click(screen.getByRole('button', { name: /^Compact$/i }))
     const map = JSON.parse(localStorage.getItem('foldex.viewMode.map') ?? '{}')
     expect(map['folder.1']).toBe('compact')
     expect(map['home']).toBeUndefined()

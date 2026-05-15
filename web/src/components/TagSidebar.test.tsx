@@ -39,14 +39,14 @@ describe('TagSidebar', () => {
     const onClear = vi.fn()
     renderWithProviders(<TagSidebar selected={[1]} onToggle={vi.fn()} onClear={onClear} totalLinks={0} collapsed={false} onToggleCollapsed={vi.fn()} />)
     const user = userEvent.setup()
-    await user.click(screen.getByText('Todos os links'))
+    await user.click(screen.getByText('All links'))
     expect(onClear).toHaveBeenCalled()
   })
 
   it('opens the new-tag dialog from the "Nova" button', async () => {
     renderWithProviders(<TagSidebar selected={[]} onToggle={vi.fn()} onClear={vi.fn()} totalLinks={0} collapsed={false} onToggleCollapsed={vi.fn()} />)
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /Nova/i }))
+    await user.click(screen.getByRole('button', { name: /^New$/i }))
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 
@@ -54,7 +54,7 @@ describe('TagSidebar', () => {
     renderWithProviders(<TagSidebar selected={[]} onToggle={vi.fn()} onClear={vi.fn()} totalLinks={0} collapsed={false} onToggleCollapsed={vi.fn()} />)
     await waitFor(() => expect(screen.getByText('jira')).toBeInTheDocument())
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /Gerenciar/i }))
+    await user.click(screen.getByRole('button', { name: /Manage/i }))
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 })

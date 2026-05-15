@@ -95,7 +95,7 @@ describe('LinkCard', () => {
     renderWithProviders(<LinkCard link={baseLink} onEdit={vi.fn()} />)
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /delete/i }))
-    const confirmBtn = await screen.findByRole('button', { name: /Apagar link/i })
+    const confirmBtn = await screen.findByRole('button', { name: /Delete link/i })
     await user.click(confirmBtn)
     await waitFor(() => expect(state.links).toHaveLength(0))
   })
@@ -141,6 +141,6 @@ describe('LinkCard', () => {
     renderWithProviders(
       <LinkCard link={{ ...baseLink, preview_status: 'pending' }} onEdit={vi.fn()} />,
     )
-    expect(screen.getByText(/capturando/i)).toBeInTheDocument()
+    expect(screen.getByText(/capturing/i)).toBeInTheDocument()
   })
 })

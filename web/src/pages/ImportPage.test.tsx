@@ -12,8 +12,8 @@ beforeEach(() => {
 describe('ImportPage', () => {
   it('renders import + export sections', () => {
     renderWithProviders(<ImportPage onDone={vi.fn()} />)
-    expect(screen.getByRole('heading', { name: 'Importar' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Exportar' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Import' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Export' })).toBeInTheDocument()
     expect(screen.getAllByText(/Bookmarks HTML/i).length).toBeGreaterThan(0)
   })
 
@@ -26,7 +26,7 @@ describe('ImportPage', () => {
 
   it('disables "Revisar e importar" when no file is picked', () => {
     renderWithProviders(<ImportPage onDone={vi.fn()} />)
-    expect(screen.getByRole('button', { name: /Revisar e importar/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Review and import/i })).toBeDisabled()
   })
 
   it('opens the preview dialog when a file is picked + the button is clicked', async () => {
@@ -47,8 +47,8 @@ describe('ImportPage', () => {
     const input = document.getElementById('foldex-file') as HTMLInputElement
     await user.upload(input, file)
 
-    await user.click(screen.getByRole('button', { name: /Revisar e importar/i }))
-    await waitFor(() => expect(screen.getByText(/Revisar antes de importar/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Review and import/i }))
+    await waitFor(() => expect(screen.getByText(/Review before importing/i)).toBeInTheDocument())
     expect(postSpy).toHaveBeenCalledWith(
       '/api/import/validate',
       expect.any(FormData),

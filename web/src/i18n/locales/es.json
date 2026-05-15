@@ -199,10 +199,10 @@
     "edit_folder": "Editar carpeta",
     "folder_label": "carpeta",
     "folder_label_tooltip": "Carpeta",
-    "links_count": "{{count}} enlace",
-    "links_count_plural": "{{count}} enlaces",
-    "folders_count": "{{count}} carpeta",
-    "folders_count_plural": "{{count}} carpetas"
+    "links_count_one": "{{count}} enlace",
+    "links_count_other": "{{count}} enlaces",
+    "folders_count_one": "{{count}} carpeta",
+    "folders_count_other": "{{count}} carpetas"
   },
   "tag_dialog": {
     "create_title": "Crear etiqueta",
@@ -235,8 +235,8 @@
     "kicker": "⚙ Etiquetas",
     "empty": "Aún no hay etiquetas creadas.",
     "new_button": "Nueva etiqueta",
-    "links_count": "{{count}} enlace",
-    "links_count_plural": "{{count}} enlaces",
+    "links_count_one": "{{count}} enlace",
+    "links_count_other": "{{count}} enlaces",
     "edit_tooltip": "Editar etiqueta",
     "delete_tooltip": "Eliminar etiqueta",
     "delete_confirm_title": "¿Eliminar etiqueta \"{{name}}\"?",
@@ -304,8 +304,8 @@
     "folders_section_title": "Carpetas a importar",
     "select_all": "todas",
     "select_none": "ninguna",
-    "submit_apply": "Importar {{count}} enlace",
-    "submit_apply_plural": "Importar {{count}} enlaces",
+    "submit_apply_one": "Importar {{count}} enlace",
+    "submit_apply_other": "Importar {{count}} enlaces",
     "submit_wipe": "⚠ Importar (reemplaza duplicados)",
     "submit_importing": "Importando…",
     "submit_done": "Listo",
@@ -313,8 +313,8 @@
     "result_imported": "Importados",
     "result_skipped": "Saltados",
     "result_wiped": "Borrados",
-    "result_link": "{{count}} enlace",
-    "result_link_plural": "{{count}} enlaces"
+    "result_link_one": "{{count}} enlace",
+    "result_link_other": "{{count}} enlaces"
   },
   "backup": {
     "card_title": "💾 Backup completo",
@@ -420,7 +420,7 @@
     "chart_today": "hoy",
     "chart_days_ago": "−{{count}}d",
     "chart_clicks_one": "clic",
-    "chart_clicks_plural": "clics",
+    "chart_clicks_other": "clics",
     "no_data": "Sin datos aún — haz clic en algunos enlaces vía /go/:id para poblar."
   },
   "errors": {

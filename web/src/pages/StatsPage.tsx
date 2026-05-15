@@ -339,7 +339,7 @@ function AreaChart({ data, width, height, t }: { data: DailyPoint[]; width: numb
         <div className="fx-chart-tooltip" style={tooltipStyle}>
           <div className="fx-chart-tooltip-date">{formatChartDate(data[hover].date)}</div>
           <div className="fx-chart-tooltip-value">
-            <strong>{series[hover]}</strong> {series[hover] === 1 ? t('stats.chart_clicks_one') : t('stats.chart_clicks_plural')}
+            <strong>{series[hover]}</strong> {t('stats.chart_clicks', { count: series[hover] })}
           </div>
         </div>
       )}

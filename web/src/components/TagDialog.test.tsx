@@ -23,7 +23,7 @@ describe('TagDialog', () => {
     renderWithProviders(<TagDialog open onClose={onClose} />)
     const user = userEvent.setup()
     await user.type(screen.getByLabelText('tag name'), 'mynew')
-    await user.click(screen.getByRole('button', { name: /Criar tag/i }))
+    await user.click(screen.getByRole('button', { name: /Create tag/i }))
     expect(state.tags[0]?.name).toBe('mynew')
     expect(onClose).toHaveBeenCalled()
   })
@@ -31,7 +31,7 @@ describe('TagDialog', () => {
   it('disables submit when name is empty', () => {
     const onClose = vi.fn()
     renderWithProviders(<TagDialog open onClose={onClose} />)
-    expect(screen.getByRole('button', { name: /Criar tag/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Create tag/i })).toBeDisabled()
     expect(state.tags).toHaveLength(0)
     expect(onClose).not.toHaveBeenCalled()
   })
@@ -40,7 +40,7 @@ describe('TagDialog', () => {
     const onClose = vi.fn()
     renderWithProviders(<TagDialog open onClose={onClose} />)
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /Cancelar/i }))
+    await user.click(screen.getByRole('button', { name: /Cancel/i }))
     expect(onClose).toHaveBeenCalled()
   })
 
@@ -49,8 +49,8 @@ describe('TagDialog', () => {
     renderWithProviders(<TagDialog open onClose={onClose} />)
     const user = userEvent.setup()
     await user.type(screen.getByLabelText('tag name'), 'rainbow')
-    await user.click(screen.getByRole('tab', { name: /Gradiente/i }))
-    await user.click(screen.getByRole('button', { name: /Criar tag/i }))
+    await user.click(screen.getByRole('tab', { name: /Gradient/i }))
+    await user.click(screen.getByRole('button', { name: /Create tag/i }))
     expect(state.tags[0]?.name).toBe('rainbow')
     expect(state.tags[0]?.color).toMatch(/^linear-gradient\(135deg,\s*#/)
   })
@@ -65,7 +65,7 @@ describe('TagDialog', () => {
       link_count: 0,
     }
     renderWithProviders(<TagDialog open onClose={vi.fn()} tag={tag} />)
-    const gradTab = screen.getByRole('tab', { name: /Gradiente/i })
+    const gradTab = screen.getByRole('tab', { name: /Gradient/i })
     expect(gradTab).toHaveAttribute('aria-selected', 'true')
   })
 
@@ -74,7 +74,7 @@ describe('TagDialog', () => {
     const user = userEvent.setup()
     await user.type(screen.getByLabelText('tag name'), 'cyan')
     await user.click(screen.getByLabelText('color #0EA5E9'))
-    await user.click(screen.getByRole('button', { name: /Criar tag/i }))
+    await user.click(screen.getByRole('button', { name: /Create tag/i }))
     expect(state.tags[0]?.color).toBe('#0EA5E9')
   })
 
@@ -82,9 +82,9 @@ describe('TagDialog', () => {
     renderWithProviders(<TagDialog open onClose={vi.fn()} />)
     const user = userEvent.setup()
     await user.type(screen.getByLabelText('tag name'), 'sunset')
-    await user.click(screen.getByRole('tab', { name: /Gradiente/i }))
-    await user.click(screen.getByLabelText(/Fim #F59E0B/))
-    await user.click(screen.getByRole('button', { name: /Criar tag/i }))
+    await user.click(screen.getByRole('tab', { name: /Gradient/i }))
+    await user.click(screen.getByLabelText(/End #F59E0B/))
+    await user.click(screen.getByRole('button', { name: /Create tag/i }))
     expect(state.tags[0]?.color).toContain('#F59E0B')
   })
 
@@ -100,17 +100,17 @@ describe('TagDialog', () => {
     const tag = state.tags[0]
     renderWithProviders(<TagDialog open onClose={vi.fn()} tag={tag} />)
     const user = userEvent.setup()
-    await user.click(screen.getByRole('tab', { name: /Gradiente/i }))
-    await user.click(screen.getByRole('button', { name: /Salvar/i }))
+    await user.click(screen.getByRole('tab', { name: /Gradient/i }))
+    await user.click(screen.getByRole('button', { name: /Save/i }))
     expect(state.tags[0]?.color).toMatch(/^linear-gradient/)
   })
 
   it('switching to solid mode hides the gradient stop labels', async () => {
     renderWithProviders(<TagDialog open onClose={vi.fn()} />)
     const user = userEvent.setup()
-    await user.click(screen.getByRole('tab', { name: /Gradiente/i }))
-    expect(screen.getByText(/Início/i)).toBeInTheDocument()
-    await user.click(screen.getByRole('tab', { name: /Sólida/i }))
-    expect(screen.queryByText(/Início/i)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: /Gradient/i }))
+    expect(screen.getByText(/Start/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: /Solid/i }))
+    expect(screen.queryByText(/Start/i)).not.toBeInTheDocument()
   })
 })

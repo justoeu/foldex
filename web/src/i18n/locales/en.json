@@ -199,10 +199,10 @@
     "edit_folder": "Edit folder",
     "folder_label": "folder",
     "folder_label_tooltip": "Folder",
-    "links_count": "{{count}} link",
-    "links_count_plural": "{{count}} links",
-    "folders_count": "{{count}} folder",
-    "folders_count_plural": "{{count}} folders"
+    "links_count_one": "{{count}} link",
+    "links_count_other": "{{count}} links",
+    "folders_count_one": "{{count}} folder",
+    "folders_count_other": "{{count}} folders"
   },
   "tag_dialog": {
     "create_title": "Create tag",
@@ -235,8 +235,8 @@
     "kicker": "⚙ Tags",
     "empty": "No tags created yet.",
     "new_button": "New tag",
-    "links_count": "{{count}} link",
-    "links_count_plural": "{{count}} links",
+    "links_count_one": "{{count}} link",
+    "links_count_other": "{{count}} links",
     "edit_tooltip": "Edit tag",
     "delete_tooltip": "Delete tag",
     "delete_confirm_title": "Delete tag \"{{name}}\"?",
@@ -304,8 +304,8 @@
     "folders_section_title": "Folders to import",
     "select_all": "all",
     "select_none": "none",
-    "submit_apply": "Import {{count}} link",
-    "submit_apply_plural": "Import {{count}} links",
+    "submit_apply_one": "Import {{count}} link",
+    "submit_apply_other": "Import {{count}} links",
     "submit_wipe": "⚠ Import (replaces duplicates)",
     "submit_importing": "Importing…",
     "submit_done": "Done",
@@ -313,8 +313,8 @@
     "result_imported": "Imported",
     "result_skipped": "Skipped",
     "result_wiped": "Wiped",
-    "result_link": "{{count}} link",
-    "result_link_plural": "{{count}} links"
+    "result_link_one": "{{count}} link",
+    "result_link_other": "{{count}} links"
   },
   "backup": {
     "card_title": "💾 Full backup",
@@ -420,7 +420,7 @@
     "chart_today": "today",
     "chart_days_ago": "−{{count}}d",
     "chart_clicks_one": "click",
-    "chart_clicks_plural": "clicks",
+    "chart_clicks_other": "clicks",
     "no_data": "No data yet — click some links via /go/:id to populate."
   },
   "errors": {

@@ -15,13 +15,13 @@ beforeEach(() => {
 describe('BackupCard', () => {
   it('renders the generate button and a hint about scope', () => {
     render(<BackupCard onRestored={vi.fn()} />)
-    expect(screen.getByRole('button', { name: /Gerar backup completo/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Generate full backup/i })).toBeInTheDocument()
     expect(screen.getByText(/DB \+ MinIO/i)).toBeInTheDocument()
   })
 
   it('shows empty history by default', () => {
     render(<BackupCard onRestored={vi.fn()} />)
-    expect(screen.queryByText('Histórico')).toBeNull()
+    expect(screen.queryByText('History')).toBeNull()
   })
 
   it('renders existing history entries', () => {
@@ -35,12 +35,12 @@ describe('BackupCard', () => {
       },
     ]))
     render(<BackupCard onRestored={vi.fn()} />)
-    expect(screen.getByText('Histórico')).toBeInTheDocument()
+    expect(screen.getByText('History')).toBeInTheDocument()
     expect(screen.getByText(/24 files/)).toBeInTheDocument()
     expect(screen.getByText(/25 links \/ 7 tags/)).toBeInTheDocument()
   })
 
-  it('clicking "Gerar backup completo" appends a history entry', async () => {
+  it('clicking "Generate full backup" appends a history entry', async () => {
     const clickSpy = vi.fn()
     const origCreate = document.createElement.bind(document)
     vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
@@ -50,8 +50,8 @@ describe('BackupCard', () => {
     })
 
     render(<BackupCard onRestored={vi.fn()} />)
-    await userEvent.setup().click(screen.getByRole('button', { name: /Gerar backup completo/i }))
-    await waitFor(() => expect(screen.getByText('Histórico')).toBeInTheDocument())
+    await userEvent.setup().click(screen.getByRole('button', { name: /Generate full backup/i }))
+    await waitFor(() => expect(screen.getByText('History')).toBeInTheDocument())
     expect(clickSpy).toHaveBeenCalledOnce()
   })
 
@@ -60,7 +60,7 @@ describe('BackupCard', () => {
     const input = container.querySelector('input[type=file]') as HTMLInputElement
     const file = new File(['hi'], 'wrong.txt', { type: 'text/plain' })
     fireEvent.change(input, { target: { files: [file] } })
-    expect(screen.getByText(/precisa ser um \.zip/i)).toBeInTheDocument()
+    expect(screen.getByText(/must be a foldex backup \.zip/i)).toBeInTheDocument()
   })
 
   it('opens the restore dialog when a .zip is dropped', async () => {
@@ -69,7 +69,7 @@ describe('BackupCard', () => {
     const file = new File([new Uint8Array([0])], 'foo.zip', { type: 'application/zip' })
     fireEvent.change(input, { target: { files: [file] } })
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
-    expect(screen.getByText(/Revisar backup/i)).toBeInTheDocument()
+    expect(screen.getByText(/Review backup/i)).toBeInTheDocument()
   })
 
   it('accepts a .zip via the drop zone (drag → drop)', async () => {
@@ -97,7 +97,7 @@ describe('BackupCard', () => {
 
   it('reacts to a cross-tab storage event by re-reading history', async () => {
     render(<BackupCard onRestored={vi.fn()} />)
-    expect(screen.queryByText('Histórico')).toBeNull()
+    expect(screen.queryByText('History')).toBeNull()
     localStorage.setItem('foldex.backups', JSON.stringify([
       {
         id: 'cross-tab',
@@ -108,7 +108,7 @@ describe('BackupCard', () => {
       },
     ]))
     window.dispatchEvent(new StorageEvent('storage', { key: 'foldex.backups' }))
-    await waitFor(() => expect(screen.getByText('Histórico')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('History')).toBeInTheDocument())
   })
 
   it('closing the restore dialog clears the file', async () => {

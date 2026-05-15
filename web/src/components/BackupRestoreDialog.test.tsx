@@ -18,32 +18,32 @@ function makeFile(): File {
 describe('BackupRestoreDialog', () => {
   it('shows validation summary and counts after validate resolves', async () => {
     render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
-    await waitFor(() => expect(screen.getByText(/5 links · 2 tags · 1 pastas/)).toBeInTheDocument())
-    expect(screen.getByText(/8 cliques/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/5 links · 2 tags · 1 folders/)).toBeInTheDocument())
+    expect(screen.getByText(/8 clicks/)).toBeInTheDocument()
   })
 
   it('defaults to "skip" mode and switches when the user picks "wipe"', async () => {
     const user = userEvent.setup()
     render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
-    await waitFor(() => expect(screen.getByText(/Modo de restauração/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
 
     // Default action button is the indigo primary (skip text).
-    expect(screen.getByRole('button', { name: /^Restaurar$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Restore$/i })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /Limpar tudo e importar/i }))
+    await user.click(screen.getByRole('button', { name: /Wipe everything and import/i }))
     // After picking wipe, the submit button carries the destructive copy.
-    expect(screen.getByRole('button', { name: /Restaurar \(zerar tudo\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Restore \(wipe everything\)/i })).toBeInTheDocument()
   })
 
   it('restore call uses the selected mode', async () => {
     const user = userEvent.setup()
     render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
-    await waitFor(() => expect(screen.getByText(/Modo de restauração/i)).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /Duplicar/i }))
-    await user.click(screen.getByRole('button', { name: /^Restaurar$/i }))
+    await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Duplicate/i }))
+    await user.click(screen.getByRole('button', { name: /^Restore$/i }))
     await waitFor(() => expect(state.lastRestoreMode).toBe('duplicate'))
     // The report screen replaces the picker.
-    await waitFor(() => expect(screen.getByRole('button', { name: /Concluído/i })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: /Done/i })).toBeInTheDocument())
   })
 
   it('blocks restore when validate reports errors', async () => {
@@ -56,13 +56,13 @@ describe('BackupRestoreDialog', () => {
     }
     render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
     await waitFor(() => expect(screen.getByText(/checksum mismatch/i)).toBeInTheDocument())
-    expect(screen.queryByText(/Modo de restauração/i)).toBeNull()
+    expect(screen.queryByText(/Restore mode/i)).toBeNull()
   })
 
   it('Esc closes the dialog', async () => {
     const onClose = vi.fn()
     render(<BackupRestoreDialog file={makeFile()} onClose={onClose} onRestored={vi.fn()} />)
-    await waitFor(() => expect(screen.getByText(/Modo de restauração/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
     await userEvent.setup().keyboard('{Escape}')
     expect(onClose).toHaveBeenCalledOnce()
   })
@@ -88,14 +88,14 @@ describe('BackupRestoreDialog', () => {
     const onRestored = vi.fn()
     const user = userEvent.setup()
     render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={onRestored} />)
-    await waitFor(() => expect(screen.getByText(/Modo de restauração/i)).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /^Restaurar$/i }))
-    await waitFor(() => expect(screen.getByRole('button', { name: /Concluído/i })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /^Restore$/i }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Done/i })).toBeInTheDocument())
     // Report rows
-    expect(screen.getByText(/Modo/)).toBeInTheDocument()
-    expect(screen.getByText(/Inseridos/)).toBeInTheDocument()
-    expect(screen.getByText(/Duração/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /Concluído/i }))
+    expect(screen.getByText(/Mode/)).toBeInTheDocument()
+    expect(screen.getByText(/Inserted/)).toBeInTheDocument()
+    expect(screen.getByText(/Duration/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Done/i }))
     expect(onRestored).toHaveBeenCalledOnce()
   })
 
@@ -111,9 +111,9 @@ describe('BackupRestoreDialog', () => {
     }
     const user = userEvent.setup()
     render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
-    await waitFor(() => expect(screen.getByText(/Modo de restauração/i)).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /Duplicar/i }))
-    await user.click(screen.getByRole('button', { name: /^Restaurar$/i }))
+    await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Duplicate/i }))
+    await user.click(screen.getByRole('button', { name: /^Restore$/i }))
     await waitFor(() => expect(screen.getByText(/já existia — não duplicado/i)).toBeInTheDocument())
   })
 
@@ -121,11 +121,11 @@ describe('BackupRestoreDialog', () => {
     const onClose = vi.fn()
     const user = userEvent.setup()
     render(<BackupRestoreDialog file={makeFile()} onClose={onClose} onRestored={vi.fn()} />)
-    await waitFor(() => expect(screen.getByText(/Modo de restauração/i)).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /Cancelar/i }))
+    await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Cancel/i }))
     expect(onClose).toHaveBeenCalled()
     onClose.mockClear()
-    await user.click(screen.getByRole('button', { name: 'close' }))
+    await user.click(screen.getByRole('button', { name: 'Close' }))
     expect(onClose).toHaveBeenCalled()
   })
 
@@ -150,8 +150,8 @@ describe('BackupRestoreDialog', () => {
     })
     const user = userEvent.setup()
     render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
-    await waitFor(() => expect(screen.getByText(/Modo de restauração/i)).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /^Restaurar$/i }))
+    await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /^Restore$/i }))
     await waitFor(() => expect(screen.getByText(/backend exploded/i)).toBeInTheDocument())
   })
 
@@ -187,9 +187,9 @@ describe('BackupRestoreDialog', () => {
   it('clicking "Pular conflitos" while already on skip stays on skip', async () => {
     const user = userEvent.setup()
     render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
-    await waitFor(() => expect(screen.getByText(/Modo de restauração/i)).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /Pular conflitos/i }))
-    await user.click(screen.getByRole('button', { name: /^Restaurar$/i }))
+    await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Skip conflicts/i }))
+    await user.click(screen.getByRole('button', { name: /^Restore$/i }))
     await waitFor(() => expect(state.lastRestoreMode).toBe('skip'))
   })
 })

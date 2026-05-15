@@ -44,7 +44,7 @@ describe('CommandPalette', () => {
   it('lists results matching the query', async () => {
     renderWithProviders(<CommandPalette open onClose={vi.fn()} />)
     const user = userEvent.setup()
-    const input = await screen.findByPlaceholderText(/Buscar por/i)
+    const input = await screen.findByPlaceholderText(/Search by/i)
     await user.type(input, 'Hacker')
     await waitFor(() => expect(screen.getByText('Hacker News')).toBeInTheDocument())
   })
@@ -52,7 +52,7 @@ describe('CommandPalette', () => {
   it('shows "no matches" when filter excludes everything', async () => {
     renderWithProviders(<CommandPalette open onClose={vi.fn()} />)
     const user = userEvent.setup()
-    const input = await screen.findByPlaceholderText(/Buscar por/i)
+    const input = await screen.findByPlaceholderText(/Search by/i)
     await user.type(input, 'zzzzz')
     await waitFor(() => expect(screen.getByText(/no matches/i)).toBeInTheDocument())
   })
@@ -71,7 +71,7 @@ describe('CommandPalette', () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) })
 
     renderWithProviders(<CommandPalette open onClose={vi.fn()} />)
-    const input = await screen.findByPlaceholderText(/Buscar por/i)
+    const input = await screen.findByPlaceholderText(/Search by/i)
 
     await user.type(input, 'hack')
 

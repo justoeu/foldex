@@ -25,7 +25,7 @@ describe('FolderCard', () => {
   it('renders folder name and link count', () => {
     render(<FolderCard folder={makeFolder({ link_count: 3, preview_links: [] })} onOpen={vi.fn()} />)
     expect(screen.getByText('Trabalho')).toBeInTheDocument()
-    expect(screen.getByText(/3 links/)).toBeInTheDocument()
+    expect(screen.getByText(/3 link/)).toBeInTheDocument()
   })
 
   it('pluralizes 1 link correctly', () => {
@@ -40,7 +40,7 @@ describe('FolderCard', () => {
         onOpen={vi.fn()}
       />,
     )
-    expect(screen.getByText(/2 links · 3 pastas/)).toBeInTheDocument()
+    expect(screen.getByText(/2 links · 3 folders/)).toBeInTheDocument()
   })
 
   it('pluralizes 1 subfolder correctly', () => {
@@ -50,7 +50,7 @@ describe('FolderCard', () => {
         onOpen={vi.fn()}
       />,
     )
-    expect(screen.getByText(/0 links · 1 pasta/)).toBeInTheDocument()
+    expect(screen.getByText(/0 links · 1 folder/)).toBeInTheDocument()
   })
 
   it('hides the folder count when there are no subfolders', () => {
@@ -61,13 +61,13 @@ describe('FolderCard', () => {
       />,
     )
     const host = container.querySelector('.fx-card-host')
-    // "5 links" — no " · 0 pastas" segment
+    // "5 links" — no " · 0 folders" segment
     expect(host?.textContent?.trim()).toBe('5 links')
   })
 
   it('shows "Pasta vazia" overlay when link_count is 0', () => {
     render(<FolderCard folder={makeFolder({ link_count: 0, preview_links: [] })} onOpen={vi.fn()} />)
-    expect(screen.getByText(/Pasta vazia/i)).toBeInTheDocument()
+    expect(screen.getByText(/Empty folder/i)).toBeInTheDocument()
   })
 
   it('renders subfolder tiles when the folder has no direct links', () => {
@@ -86,7 +86,7 @@ describe('FolderCard', () => {
       />,
     )
     expect(container.querySelectorAll('.fx-folder-tile-subfolder').length).toBe(2)
-    expect(screen.queryByText(/Pasta vazia/i)).toBeNull()
+    expect(screen.queryByText(/Empty folder/i)).toBeNull()
   })
 
   it('shows "Pasta vazia" only when BOTH links and subfolders are empty', () => {
@@ -101,7 +101,7 @@ describe('FolderCard', () => {
         onOpen={vi.fn()}
       />,
     )
-    expect(screen.getByText(/Pasta vazia/i)).toBeInTheDocument()
+    expect(screen.getByText(/Empty folder/i)).toBeInTheDocument()
   })
 
   it('renders +N overlay when there are more than 4 links', () => {
@@ -121,7 +121,7 @@ describe('FolderCard', () => {
   it('calls onOpen when the preview is clicked', async () => {
     const onOpen = vi.fn()
     render(<FolderCard folder={makeFolder({ link_count: 0, preview_links: [] })} onOpen={onOpen} />)
-    await userEvent.setup().click(screen.getByRole('button', { name: /Abrir pasta Trabalho/i }))
+    await userEvent.setup().click(screen.getByRole('button', { name: /Open folder Trabalho/i }))
     expect(onOpen).toHaveBeenCalledWith(1)
   })
 

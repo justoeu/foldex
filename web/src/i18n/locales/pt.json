@@ -199,10 +199,10 @@
     "edit_folder": "Editar pasta",
     "folder_label": "pasta",
     "folder_label_tooltip": "Pasta",
-    "links_count": "{{count}} link",
-    "links_count_plural": "{{count}} links",
-    "folders_count": "{{count}} pasta",
-    "folders_count_plural": "{{count}} pastas"
+    "links_count_one": "{{count}} link",
+    "links_count_other": "{{count}} links",
+    "folders_count_one": "{{count}} pasta",
+    "folders_count_other": "{{count}} pastas"
   },
   "tag_dialog": {
     "create_title": "Criar tag",
@@ -235,8 +235,8 @@
     "kicker": "⚙ Tags",
     "empty": "Nenhuma tag criada ainda.",
     "new_button": "Nova tag",
-    "links_count": "{{count}} link",
-    "links_count_plural": "{{count}} links",
+    "links_count_one": "{{count}} link",
+    "links_count_other": "{{count}} links",
     "edit_tooltip": "Editar tag",
     "delete_tooltip": "Apagar tag",
     "delete_confirm_title": "Apagar tag \"{{name}}\"?",
@@ -304,8 +304,8 @@
     "folders_section_title": "Pastas a importar",
     "select_all": "todas",
     "select_none": "nenhuma",
-    "submit_apply": "Importar {{count}} link",
-    "submit_apply_plural": "Importar {{count}} links",
+    "submit_apply_one": "Importar {{count}} link",
+    "submit_apply_other": "Importar {{count}} links",
     "submit_wipe": "⚠ Importar (substitui duplicados)",
     "submit_importing": "Importando…",
     "submit_done": "Concluído",
@@ -313,8 +313,8 @@
     "result_imported": "Importados",
     "result_skipped": "Pulados",
     "result_wiped": "Apagados",
-    "result_link": "{{count}} link",
-    "result_link_plural": "{{count}} links"
+    "result_link_one": "{{count}} link",
+    "result_link_other": "{{count}} links"
   },
   "backup": {
     "card_title": "💾 Backup completo",
@@ -420,7 +420,7 @@
     "chart_today": "hoje",
     "chart_days_ago": "−{{count}}d",
     "chart_clicks_one": "clique",
-    "chart_clicks_plural": "cliques",
+    "chart_clicks_other": "cliques",
     "no_data": "Sem dados ainda — clique em alguns links via /go/:id pra popular."
   },
   "errors": {

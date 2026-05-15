@@ -25,7 +25,7 @@ describe('ImportPreviewDialog', () => {
         onApplied={vi.fn()}
       />,
     )
-    await waitFor(() => expect(screen.getByText(/4 links · 2 pastas/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/4 links · 2 folders/)).toBeInTheDocument())
     expect(screen.getByText(/1 links · 0 tags/)).toBeInTheDocument()
   })
 
@@ -44,7 +44,7 @@ describe('ImportPreviewDialog', () => {
     expect(checkboxes).toHaveLength(2)
     await user.click(checkboxes[1])  // uncheck "Work"
     await waitFor(() =>
-      expect(screen.getByText(/2 links · 1 pastas · 1 duplicados/)).toBeInTheDocument(),
+      expect(screen.getByText(/2 links · 1 folders · 1 duplicates/)).toBeInTheDocument(),
     )
   })
 
@@ -61,18 +61,18 @@ describe('ImportPreviewDialog', () => {
     )
     await waitFor(() => expect(screen.getByText('Work')).toBeInTheDocument())
 
-    await user.click(screen.getByRole('button', { name: /Apagar duplicados e re-importar/i }))
+    await user.click(screen.getByRole('button', { name: /Erase duplicates and re-import/i }))
     // Exclude "Work"
     const checkboxes = screen.getAllByRole('checkbox')
     await user.click(checkboxes[1])
 
-    await user.click(screen.getByRole('button', { name: /Importar \(substitui duplicados\)/i }))
+    await user.click(screen.getByRole('button', { name: /Import \(replaces duplicates\)/i }))
     await waitFor(() => expect(state.lastImportMode).toBe('wipe'))
     expect(state.lastImportExcluded).toEqual(['Work'])
 
     // Result block appears with Concluído button.
-    await waitFor(() => expect(screen.getByRole('button', { name: /Concluído/i })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /Concluído/i }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Done/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Done/i }))
     expect(onApplied).toHaveBeenCalledOnce()
   })
 
@@ -88,11 +88,11 @@ describe('ImportPreviewDialog', () => {
     )
     await waitFor(() => expect(screen.getByText('Work')).toBeInTheDocument())
 
-    await user.click(screen.getByRole('button', { name: /nenhuma/i }))
+    await user.click(screen.getByRole('button', { name: /^none$/i }))
     const checkboxes = screen.getAllByRole('checkbox')
     expect(checkboxes.every((c) => !(c as HTMLInputElement).checked)).toBe(true)
 
-    await user.click(screen.getByRole('button', { name: /todas/i }))
+    await user.click(screen.getByRole('button', { name: /^all$/i }))
     const checkboxes2 = screen.getAllByRole('checkbox')
     expect(checkboxes2.every((c) => (c as HTMLInputElement).checked)).toBe(true)
   })
@@ -107,7 +107,7 @@ describe('ImportPreviewDialog', () => {
         onApplied={vi.fn()}
       />,
     )
-    await waitFor(() => expect(screen.getByText(/Modo de importação/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Import mode/i)).toBeInTheDocument())
     await userEvent.setup().keyboard('{Escape}')
     expect(onClose).toHaveBeenCalledOnce()
   })

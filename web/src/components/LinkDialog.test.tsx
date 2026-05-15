@@ -25,7 +25,7 @@ describe('LinkDialog', () => {
     renderWithProviders(<LinkDialog open link={null} onClose={onClose} />)
     const user = userEvent.setup()
     await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://example.com')
-    await user.click(screen.getByRole('button', { name: /Salvar link/i }))
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
     await waitFor(() => expect(state.links).toHaveLength(1))
     expect(state.links[0].url).toBe('https://example.com')
     expect(onClose).toHaveBeenCalled()
@@ -43,7 +43,7 @@ describe('LinkDialog', () => {
     const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
     await user.clear(titleInput)
     await user.type(titleInput, 'renamed')
-    await user.click(screen.getByRole('button', { name: /Salvar alterações/i }))
+    await user.click(screen.getByRole('button', { name: /Save changes/i }))
     await waitFor(() => expect(state.links[0].title).toBe('renamed'))
     expect(onClose).toHaveBeenCalled()
   })
@@ -52,7 +52,7 @@ describe('LinkDialog', () => {
     const onClose = vi.fn()
     renderWithProviders(<LinkDialog open link={null} onClose={onClose} />)
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /Cancelar/i }))
+    await user.click(screen.getByRole('button', { name: /Cancel/i }))
     expect(onClose).toHaveBeenCalled()
     expect(state.links).toHaveLength(0)
   })
@@ -64,7 +64,7 @@ describe('LinkDialog', () => {
 
   it('disables save when URL is empty', () => {
     renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
-    expect(screen.getByRole('button', { name: /Salvar link/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Save link/i })).toBeDisabled()
   })
 
   it('creates a new tag inline via tag filter input', async () => {
@@ -75,7 +75,7 @@ describe('LinkDialog', () => {
     await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://x')
     const tagsInput = screen.getByLabelText('tag filter')
     await user.type(tagsInput, 'brand-new{Enter}')
-    await user.click(screen.getByRole('button', { name: /Salvar link/i }))
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
     await waitFor(() => expect(state.tags.some((t) => t.name === 'brand-new')).toBe(true))
     expect(state.links).toHaveLength(1)
   })
@@ -88,7 +88,7 @@ describe('LinkDialog', () => {
     await user.type(tagsInput, 'j')
     const jiraChip = await screen.findByText('jira')
     await user.click(jiraChip)
-    await user.click(screen.getByRole('button', { name: /Salvar link/i }))
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
     await waitFor(() => expect(state.links).toHaveLength(1))
     expect(state.links[0].tags[0].name).toBe('jira')
   })
