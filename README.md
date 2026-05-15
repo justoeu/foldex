@@ -1,5 +1,7 @@
 # Foldex
 
+<p align="right"><sub><strong>🇺🇸 English</strong> · <a href="./README.pt-BR.md">🇧🇷 Português</a></sub></p>
+
 <p align="center">
   <img src="docs/assets/home-empty.png" alt="foldex — self-hosted bookmark manager (home view with empty state, tag sidebar, topbar with search + sort + density controls, New folder / New link CTAs)" width="100%"/>
 </p>
