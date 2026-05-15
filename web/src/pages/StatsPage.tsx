@@ -404,7 +404,7 @@ function TopLinksList({ links }: { links: TopLink[] }) {
             <div className="fx-toplink-text">
               <div className="fx-toplink-title">{l.title}</div>
               <div className="fx-toplink-host">
-                {l.host} · /go/{l.id}
+                {l.host} · /go/{l.slug}
               </div>
             </div>
             <div className="fx-toplink-bar">

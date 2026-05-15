@@ -104,7 +104,7 @@ func (r *Repository) TopLinks(ctx context.Context, limit int) ([]TopLink, error)
 	}
 	rows, err := r.pool.Query(ctx, `
         SELECT
-            l.id, l.url, l.title,
+            l.id, l.url, l.title, l.slug,
             regexp_replace(l.url, '^https?://([^/]+).*$', '\1') AS host,
             count(cl.id)::bigint AS clicks,
             COALESCE(sum(CASE WHEN cl.clicked_at >= now() - interval '30 days' THEN 1 END), 0)::bigint AS c30,
@@ -123,7 +123,7 @@ func (r *Repository) TopLinks(ctx context.Context, limit int) ([]TopLink, error)
 	out := []TopLink{}
 	for rows.Next() {
 		var t TopLink
-		if err := rows.Scan(&t.ID, &t.URL, &t.Title, &t.Host, &t.Clicks, &t.Clicks30d, &t.ClicksPrev); err != nil {
+		if err := rows.Scan(&t.ID, &t.URL, &t.Title, &t.Slug, &t.Host, &t.Clicks, &t.Clicks30d, &t.ClicksPrev); err != nil {
 			return nil, err
 		}
 		out = append(out, t)

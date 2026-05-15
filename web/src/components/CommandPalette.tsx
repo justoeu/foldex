@@ -152,7 +152,7 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
                       <TagChip key={tag.id} tag={tag} />
                     ))}
                   </div>
-                  <span className="fx-cmdk-hint">/go/{l.id}</span>
+                  <span className="fx-cmdk-hint">/go/{l.slug}</span>
                 </a>
               ))}
             </div>

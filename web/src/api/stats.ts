@@ -21,6 +21,7 @@ export type TopLink = {
   id: number
   url: string
   title: string
+  slug: string
   host: string
   clicks: number
   clicks_30d: number

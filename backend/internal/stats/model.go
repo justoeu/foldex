@@ -22,6 +22,7 @@ type TopLink struct {
 	ID         int64  `json:"id"`
 	URL        string `json:"url"`
 	Title      string `json:"title"`
+	Slug       string `json:"slug"`
 	Host       string `json:"host"`
 	Clicks     int64  `json:"clicks"`
 	Clicks30d  int64  `json:"clicks_30d"`
