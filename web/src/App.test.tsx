@@ -31,9 +31,15 @@ describe('App', () => {
   })
 
   it('opens the new-link dialog via the New link button', async () => {
+    /* The FAB and the topbar CTA both expose `aria-label="New link"`.
+       We want to assert the desktop CTA click here — pick the topbar one
+       by walking from the brand: the visible CTA sits in the same
+       `<header>` and the FAB is fixed-positioned outside it. */
     renderWithProviders(<App />)
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /new link/i }))
+    const newLinkButtons = screen.getAllByRole('button', { name: /new link/i })
+    // First one is the topbar CTA (rendered before the FAB in App.tsx).
+    await user.click(newLinkButtons[0])
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 

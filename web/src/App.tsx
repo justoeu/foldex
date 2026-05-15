@@ -383,6 +383,23 @@ export default function App() {
               <StatsPage />
             </div>
           )}
+
+          {/* FAB — only visible on mobile (CSS-gated). Anchors to the
+              bottom-right safe area so it doesn't fight an open keyboard.
+              Single primary action (new link); secondary actions live
+              in the topbar overflow menu / hamburger sidebar. */}
+          <button
+            type="button"
+            className="fx-fab"
+            aria-label={t('topbar.new_link')}
+            data-tooltip={t('topbar.new_link')}
+            onClick={() => {
+              setEditLink(null)
+              setLinkDialogOpen(true)
+            }}
+          >
+            <Icon d={I.plus} size={22} stroke={2.4} />
+          </button>
         </main>
       </div>
 

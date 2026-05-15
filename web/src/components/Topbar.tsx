@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { LocalePicker } from './LocalePicker'
+import { MobileOverflowMenu } from './MobileOverflowMenu'
 
 type View = 'home' | 'import' | 'stats'
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
@@ -253,6 +254,19 @@ export function Topbar({
       >
         <Icon d={dark ? I.sun : I.moon} size={16} />
       </button>
+
+      {/* Mobile-only overflow menu — desktop hides it via CSS. Owns the
+          sort/view/density choices + an extra "New folder" entry so the
+          topbar's second row stays tappable on a phone. */}
+      <MobileOverflowMenu
+        sort={sort}
+        setSort={setSort}
+        viewMode={viewMode}
+        setViewMode={setViewMode}
+        gridCols={gridCols}
+        setGridCols={setGridCols}
+        onNewFolder={onNewFolder}
+      />
 
       <button className="fx-cta fx-cta-folder" onClick={onNewFolder} aria-label={t('topbar.new_folder')}>
         <Icon d={I.folder} size={16} stroke={2.2} /> {t('topbar.new_folder')}
