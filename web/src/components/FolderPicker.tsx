@@ -57,14 +57,14 @@ export function FolderPicker({ selected, onChange, parentId }: Props) {
     return folders.filter((f) => f.name.toLowerCase().includes(q))
   }, [folders, filter])
 
-  // "Create" row appears only if (a) the user typed something and (b) it
-  // doesn't already exist. We compare against ALL folders (not just the
-  // filtered list) so the create option vanishes the instant the typed
-  // value matches an existing name exactly, even if the filter would
-  // hide it.
+  // "Create" row is ALWAYS the first option (per the product requirement),
+  // except when the typed filter matches an existing folder exactly — in
+  // that case we hide it to avoid offering a duplicate-name conflict.
+  // Label morphs: empty filter → "New folder…" (placeholder-style cue);
+  // typed filter without match → "Create folder \"X\"".
   const trimmedFilter = filter.trim()
   const exactMatch = folders.some((f) => f.name.toLowerCase() === trimmedFilter.toLowerCase())
-  const showCreateRow = trimmedFilter.length > 0 && !exactMatch
+  const showCreateRow = !exactMatch
 
   // Final ordered options the user can highlight + click. Tuple of
   // (kind, label, value) where value lets the click handler dispatch.
@@ -75,7 +75,12 @@ export function FolderPicker({ selected, onChange, parentId }: Props) {
   const rows: Row[] = useMemo(() => {
     const r: Row[] = []
     if (showCreateRow) {
-      r.push({ kind: 'create', label: t('link_dialog.folder_picker_create_inline', { name: trimmedFilter }) })
+      r.push({
+        kind: 'create',
+        label: trimmedFilter
+          ? t('link_dialog.folder_picker_create_inline', { name: trimmedFilter })
+          : t('link_dialog.folder_picker_create_empty'),
+      })
     }
     r.push({ kind: 'none', label: t('link_dialog.folder_none') })
     for (const f of filtered) r.push({ kind: 'folder', id: f.id, label: f.name })
@@ -102,6 +107,14 @@ export function FolderPicker({ selected, onChange, parentId }: Props) {
 
   const commit = async (row: Row) => {
     if (row.kind === 'create') {
+      // Empty filter = the user clicked "New folder…" without naming it.
+      // Don't close the dropdown — just re-focus the input so they can
+      // type the name and confirm with Enter. The create row's label
+      // will live-update to "Create folder \"<typed>\"" as they type.
+      if (!trimmedFilter) {
+        inputRef.current?.focus()
+        return
+      }
       setBusy(true)
       try {
         const folder = await createFolder.mutateAsync({

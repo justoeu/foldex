@@ -951,10 +951,17 @@
   padding: 4px;
   margin: 0;
   list-style: none;
-  background: var(--fx-surface);
+  /* Solid `--fx-bg` so the popover doesn't bleed onto the form fields
+     below. The 62% transparent `--fx-surface` we tried first showed the
+     "Fixar no topo" toggle right through the dropdown. Pairing with a
+     subtle backdrop-filter to keep the slight "lift" feel without
+     compromising legibility. */
+  background: var(--fx-bg);
   border: 1px solid var(--fx-border);
   border-radius: 12px;
   box-shadow: 0 12px 32px -8px rgba(0,0,0,0.18);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
   scrollbar-width: thin;
 }
 .fx-folderpicker-list::-webkit-scrollbar { width: 8px; }

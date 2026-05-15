@@ -140,6 +140,7 @@
     "folder_aria": "pasta",
     "folder_none": "Nenhuma pasta",
     "folder_picker_placeholder": "Buscar ou criar pasta…",
+    "folder_picker_create_empty": "Nova pasta…",
     "folder_picker_create_inline": "Criar pasta \"{{name}}\"",
     "folder_picker_no_match": "Nenhuma pasta correspondente",
     "folder_picker_toggle_aria": "Abrir lista de pastas",

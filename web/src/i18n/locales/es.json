@@ -140,6 +140,7 @@
     "folder_aria": "carpeta",
     "folder_none": "Sin carpeta",
     "folder_picker_placeholder": "Buscar o crear carpeta…",
+    "folder_picker_create_empty": "Nueva carpeta…",
     "folder_picker_create_inline": "Crear carpeta \"{{name}}\"",
     "folder_picker_no_match": "Sin coincidencias",
     "folder_picker_toggle_aria": "Alternar lista de carpetas",

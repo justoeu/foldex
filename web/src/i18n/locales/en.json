@@ -140,6 +140,7 @@
     "folder_aria": "folder",
     "folder_none": "No folder",
     "folder_picker_placeholder": "Search or create folder…",
+    "folder_picker_create_empty": "New folder…",
     "folder_picker_create_inline": "Create folder \"{{name}}\"",
     "folder_picker_no_match": "No matching folder",
     "folder_picker_toggle_aria": "Toggle folder list",
