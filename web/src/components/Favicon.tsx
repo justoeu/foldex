@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { Link } from '../api/types'
 
 type Props = {
@@ -8,28 +9,44 @@ type Props = {
 // Renders the real favicon when the backend resolved one. Falls back to a
 // gradient tile with the first letter of the hostname (the design uses
 // per-host gradients; we generate one deterministically here).
+//
+// Also falls back to the letter tile when the favicon URL fails to load
+// at runtime (404, CORS block, etc.). Without this, the browser would
+// render its built-in broken-image icon — visually jarring, defeats the
+// whole point of the favicon row.
 export function Favicon({ link, size = 32 }: Props) {
   const host = safeHost(link.url)
   const letter = (host[0] ?? link.title[0] ?? '?').toUpperCase()
   const { bg, fg } = paletteFor(host)
+  const [errored, setErrored] = useState(false)
+
+  // Reset the error flag when the URL changes (e.g. preview worker re-runs
+  // and stamps a new favicon_url on the link).
+  useEffect(() => {
+    setErrored(false)
+  }, [link.favicon_url])
+
+  const showImg = !!link.favicon_url && !errored
+
   return (
     <div
       className="fx-favicon"
       style={{
         width: size,
         height: size,
-        background: link.favicon_url ? 'transparent' : bg,
+        background: showImg ? 'transparent' : bg,
         color: fg,
         fontSize: Math.round(size * 0.46),
       }}
     >
-      {link.favicon_url ? (
+      {showImg ? (
         <img
-          src={link.favicon_url}
+          src={link.favicon_url ?? undefined}
           alt=""
           referrerPolicy="no-referrer"
           width={size}
           height={size}
+          onError={() => setErrored(true)}
           style={{ width: size, height: size, borderRadius: 8, objectFit: 'cover' }}
         />
       ) : (

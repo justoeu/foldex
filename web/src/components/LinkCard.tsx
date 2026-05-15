@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { Favicon } from './Favicon'
@@ -18,9 +18,12 @@ type Props = {
 }
 
 // Decide card height purely from how much content we have. Tall when a real
-// og:image was fetched; medium when there's a description; short otherwise.
-function densityFor(link: Link): 'tall' | 'medium' | 'short' {
-  if (link.og_image_url) return 'tall'
+// og:image was fetched AND known to load; medium when there's a description;
+// short otherwise. The `imageOk` argument lets the card collapse to the
+// no-image variant when the og:image URL fails at runtime instead of leaving
+// a broken-image icon in the preview area.
+function densityFor(link: Link, imageOk: boolean): 'tall' | 'medium' | 'short' {
+  if (link.og_image_url && imageOk) return 'tall'
   if (link.description) return 'medium'
   return 'short'
 }
@@ -32,10 +35,18 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
   const update = useUpdateLink()
   const confirm = useConfirm()
   const qc = useQueryClient()
-  const density = densityFor(link)
+  const [previewErrored, setPreviewErrored] = useState(false)
+  const showPreview = !!link.og_image_url && !previewErrored
+  const density = densityFor(link, showPreview)
   const togglePin = () => update.mutate({ id: link.id, body: { pinned: !link.pinned } })
   const [dragOver, setDragOver] = useState(false)
   const [dragging, setDragging] = useState(false)
+
+  // Reset the preview-error flag when the URL changes (e.g. preview worker
+  // re-runs and stamps a new og:image_url, or the user uploads an image).
+  useEffect(() => {
+    setPreviewErrored(false)
+  }, [link.og_image_url])
 
   // Invalidate after a short delay so the backend has time to log the click
   const onGo = useCallback(() => {
@@ -104,19 +115,20 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
         <Icon d={I.pin} size={13} stroke={2} />
       </button>
 
-      {link.og_image_url && (
+      {showPreview && (
         <a className="fx-preview fx-preview-img" href={goHref(link.id)} target="_blank" rel="noopener noreferrer" onClick={onGo}>
           <img
-            src={link.og_image_url}
+            src={link.og_image_url ?? undefined}
             alt=""
             referrerPolicy="no-referrer"
+            onError={() => setPreviewErrored(true)}
             style={{ width: '100%', height: '100%', objectFit: 'scale-down', display: 'block' }}
           />
         </a>
       )}
       <div className="fx-card-body">
         <header className="fx-card-head">
-          <Favicon link={link} size={link.og_image_url ? 28 : 36} />
+          <Favicon link={link} size={showPreview ? 28 : 36} />
           <div className="fx-card-head-text">
             <h3 className="fx-card-title">
               <a href={goHref(link.id)} target="_blank" rel="noopener noreferrer" className="fx-card-title-link" onClick={onGo}>
