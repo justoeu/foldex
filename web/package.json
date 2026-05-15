@@ -1,11 +1,10 @@
 {
   "name": "foldex-web",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.8",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "prebuild": "node scripts/bump-version.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",

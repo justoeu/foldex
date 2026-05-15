@@ -199,8 +199,9 @@
   background: var(--fx-accent-soft);
 }
 
-/* Fixed footer with the version stamp, centered. Auto-bumped by
-   scripts/bump-version.mjs on every `bun run build`. */
+/* Fixed footer with the version stamp, centered. VERSION reads from
+   web/package.json (release-please bumps it); BUILD_DATE comes from a
+   Vite `define` set at build time (web/vite.config.ts). */
 .fx-side-version {
   margin-top: 10px;
   padding: 8px 10px 2px;
