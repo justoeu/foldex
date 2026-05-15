@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useHotkeys } from 'react-hotkeys-hook'
+import { usePasteUrl } from './hooks/usePasteUrl'
 import { Trans, useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import './styles/foldex.css'
@@ -50,6 +51,10 @@ export default function App() {
   })
   const [linkDialogOpen, setLinkDialogOpen] = useState(false)
   const [editLink, setEditLink] = useState<LinkT | null>(null)
+  // Carries a URL the user pasted onto the page so LinkDialog can mount
+  // with it pre-filled. Cleared on close so subsequent manual "New link"
+  // clicks start empty.
+  const [pastedUrl, setPastedUrl] = useState<string | undefined>(undefined)
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [editFolder, setEditFolder] = useState<FolderT | null>(null)
   // Distinguishes "just-merged" naming flow from normal edit. When true the
@@ -255,8 +260,19 @@ export default function App() {
   useHotkeys('alt+n', (e) => {
     e.preventDefault()
     setEditLink(null)
+    setPastedUrl(undefined)
     setLinkDialogOpen(true)
   })
+
+  // Paste a URL anywhere on the page → New Link dialog opens with the
+  // URL pre-filled. No-ops when typing in a field, when any dialog is
+  // already up, or when the clipboard isn't URL-shaped.
+  const onPastedUrl = useCallback((url: string) => {
+    setEditLink(null)
+    setPastedUrl(url)
+    setLinkDialogOpen(true)
+  }, [])
+  usePasteUrl(onPastedUrl)
   // ⌥F — Nova pasta ("F" for Folder). ⌥P collided with other key handlers.
   useHotkeys('alt+f', (e) => {
     e.preventDefault()
@@ -406,8 +422,12 @@ export default function App() {
       <LinkDialog
         open={linkDialogOpen}
         link={editLink}
+        initialUrl={pastedUrl}
         defaultFolderId={openFolder}
-        onClose={() => setLinkDialogOpen(false)}
+        onClose={() => {
+          setLinkDialogOpen(false)
+          setPastedUrl(undefined)
+        }}
       />
       <FolderDialog
         open={folderDialogOpen}
