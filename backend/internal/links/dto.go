@@ -9,6 +9,9 @@ import (
 type CreateInput struct {
 	URL         string  `json:"url"`
 	Title       string  `json:"title"`
+	// Slug is optional on create — when nil/empty the repository derives it
+	// from Title via Slugify (with auto-suffix on collision).
+	Slug        *string `json:"slug"`
 	Description *string `json:"description"`
 	TagIDs      []int64 `json:"tag_ids"`
 	Pinned      bool    `json:"pinned"`
@@ -20,6 +23,14 @@ func (c *CreateInput) Normalize() {
 	c.Title = strings.TrimSpace(c.Title)
 	if c.Title == "" {
 		c.Title = c.URL
+	}
+	if c.Slug != nil {
+		s := strings.TrimSpace(*c.Slug)
+		if s == "" {
+			c.Slug = nil
+		} else {
+			c.Slug = &s
+		}
 	}
 }
 
@@ -36,6 +47,9 @@ func (c CreateInput) Validate() error {
 	}
 	if len(c.Title) > 500 {
 		return errMsg("title too long (max 500)")
+	}
+	if c.Slug != nil && !SlugIsValid(*c.Slug) {
+		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
 	}
 	return nil
 }
@@ -55,6 +69,11 @@ type UpdateInput struct {
 	// UnmarshalJSON (see helper below).
 	FolderID    *int64 `json:"-"`
 	FolderIDSet bool   `json:"-"`
+	// Slug shares the same tri-state pattern: absent → don't touch,
+	// {"slug": "foo-bar"} → set explicitly, {"slug": null} → regenerate
+	// from title via Slugify().
+	Slug    *string `json:"-"`
+	SlugSet bool    `json:"-"`
 }
 
 func (u *UpdateInput) Normalize() {
@@ -89,6 +108,12 @@ func (u UpdateInput) Validate() error {
 			return errMsg("title too long (max 500)")
 		}
 	}
+	// Slug: explicit value must pass the same check the DB enforces. A
+	// `null` payload (SlugSet=true, Slug=nil) means "regenerate from
+	// title" — that's handled by the repository, not validated here.
+	if u.SlugSet && u.Slug != nil && !SlugIsValid(*u.Slug) {
+		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
+	}
 	return nil
 }
 
@@ -102,34 +127,57 @@ type ListQuery struct {
 	Ungrouped bool   // ?ungrouped=1 → links with folder_id IS NULL
 }
 
-// UnmarshalJSON for UpdateInput preserves the "null vs absent" distinction on
-// folder_id: presence flips FolderIDSet=true; null inside payload leaves
-// FolderID=nil + FolderIDSet=true (= clear).
+// UnmarshalJSON for UpdateInput preserves the "null vs absent" distinction
+// on `folder_id` and `slug` (both tri-state). For each: presence flips the
+// *Set flag true; explicit `null` keeps the value pointer nil with the flag
+// true (= clear/regenerate); absence leaves both untouched.
 func (u *UpdateInput) UnmarshalJSON(data []byte) error {
 	type alias UpdateInput
 	aux := struct {
 		FolderID json.RawMessage `json:"folder_id"`
+		Slug     json.RawMessage `json:"slug"`
 		*alias
 	}{alias: (*alias)(u)}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
+
 	if len(aux.FolderID) == 0 {
-		// field absent
 		u.FolderIDSet = false
 		u.FolderID = nil
-		return nil
+	} else {
+		u.FolderIDSet = true
+		if string(aux.FolderID) == "null" {
+			u.FolderID = nil
+		} else {
+			var n int64
+			if err := json.Unmarshal(aux.FolderID, &n); err != nil {
+				return err
+			}
+			u.FolderID = &n
+		}
 	}
-	u.FolderIDSet = true
-	if string(aux.FolderID) == "null" {
-		u.FolderID = nil
-		return nil
+
+	if len(aux.Slug) == 0 {
+		u.SlugSet = false
+		u.Slug = nil
+	} else {
+		u.SlugSet = true
+		if string(aux.Slug) == "null" {
+			u.Slug = nil
+		} else {
+			var s string
+			if err := json.Unmarshal(aux.Slug, &s); err != nil {
+				return err
+			}
+			s = strings.TrimSpace(s)
+			if s == "" {
+				u.Slug = nil
+			} else {
+				u.Slug = &s
+			}
+		}
 	}
-	var n int64
-	if err := json.Unmarshal(aux.FolderID, &n); err != nil {
-		return err
-	}
-	u.FolderID = &n
 	return nil
 }
 

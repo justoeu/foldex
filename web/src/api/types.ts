@@ -11,6 +11,9 @@ export type Link = {
   id: number
   url: string
   title: string
+  // slug is always set after migration 000009 — backend enforces NOT NULL.
+  // Used as the primary path for /go/{slug}; /go/{id} stays as fallback.
+  slug: string
   description?: string | null
   favicon_url?: string | null
   og_image_url?: string | null
@@ -28,6 +31,8 @@ export type Link = {
 export type LinkCreate = {
   url: string
   title: string
+  // Optional: backend auto-derives from title when omitted (Slugify).
+  slug?: string
   description?: string | null
   tag_ids?: number[]
   pinned?: boolean
@@ -37,6 +42,8 @@ export type LinkCreate = {
 export type LinkUpdate = Partial<{
   url: string
   title: string
+  // null = regenerate from current title; explicit string = set verbatim.
+  slug: string | null
   description: string | null
   tag_ids: number[]
   pinned: boolean

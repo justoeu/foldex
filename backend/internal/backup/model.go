@@ -70,6 +70,7 @@ type LinkRow struct {
 	ID            int64     `json:"id"`
 	URL           string    `json:"url"`
 	Title         string    `json:"title"`
+	Slug          string    `json:"slug"`
 	Description   *string   `json:"description"`
 	FaviconURL    *string   `json:"favicon_url"`
 	OGImageURL    *string   `json:"og_image_url"`

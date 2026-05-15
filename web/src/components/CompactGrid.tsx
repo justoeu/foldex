@@ -48,7 +48,7 @@ export function CompactGrid({ links, onEdit }: Props) {
             </div>
             <a
               className="fx-openbtn fx-openbtn-list"
-              href={goHref(l.id)}
+              href={goHref(l)}
               target="_blank"
               rel="noopener noreferrer"
               data-tooltip={t('link_card.open_action')}

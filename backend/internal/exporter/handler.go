@@ -42,6 +42,7 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 type linkRow struct {
 	URL         string
 	Title       string
+	Slug        string
 	Description *string
 	CreatedAt   time.Time
 	ClickCount  int64
@@ -55,7 +56,7 @@ func (h *Handler) queryAll(r *http.Request) ([]linkRow, error) {
 	// link_tag join. Folder name comes from the LEFT JOIN — NULL when the
 	// link isn't in a folder.
 	rows, err := h.pool.Query(r.Context(), `
-        SELECT l.url, l.title, l.description, l.created_at,
+        SELECT l.url, l.title, l.slug, l.description, l.created_at,
                (SELECT count(*) FROM click_log WHERE link_id = l.id)::bigint AS click_count,
                COALESCE(array_agg(t.name) FILTER (WHERE t.name IS NOT NULL), '{}'),
                f.name AS folder_name
@@ -73,7 +74,7 @@ func (h *Handler) queryAll(r *http.Request) ([]linkRow, error) {
 	out := []linkRow{}
 	for rows.Next() {
 		var l linkRow
-		if err := rows.Scan(&l.URL, &l.Title, &l.Description, &l.CreatedAt, &l.ClickCount, &l.TagNames, &l.FolderName); err != nil {
+		if err := rows.Scan(&l.URL, &l.Title, &l.Slug, &l.Description, &l.CreatedAt, &l.ClickCount, &l.TagNames, &l.FolderName); err != nil {
 			return nil, err
 		}
 		out = append(out, l)
@@ -138,6 +139,7 @@ func (h *Handler) exportJSON(w http.ResponseWriter, r *http.Request) {
 	type jsonLink struct {
 		URL         string   `json:"url"`
 		Title       string   `json:"title"`
+		Slug        string   `json:"slug"`
 		Description *string  `json:"description"`
 		Tags        []string `json:"tags"`
 		Folder      *string  `json:"folder"`
@@ -182,6 +184,7 @@ func (h *Handler) exportJSON(w http.ResponseWriter, r *http.Request) {
 		out.Links = append(out.Links, jsonLink{
 			URL:         l.URL,
 			Title:       l.Title,
+			Slug:        l.Slug,
 			Description: l.Description,
 			Tags:        l.TagNames,
 			Folder:      l.FolderName,

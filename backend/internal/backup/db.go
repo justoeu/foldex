@@ -7,6 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"foldex/internal/links"
 )
 
 // readSnapshot reads all 5 tables inside the given tx and returns a Snapshot.
@@ -41,12 +43,12 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 	}
 
 	if err := scanRows(ctx, tx, `
-        SELECT id, url, title, description, favicon_url, og_image_url, pinned,
+        SELECT id, url, title, slug, description, favicon_url, og_image_url, pinned,
                preview_status, preview_error, folder_id, created_at, updated_at
         FROM link ORDER BY id`,
 		func(rows pgx.Rows) error {
 			var l LinkRow
-			if err := rows.Scan(&l.ID, &l.URL, &l.Title, &l.Description, &l.FaviconURL,
+			if err := rows.Scan(&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL,
 				&l.OGImageURL, &l.Pinned, &l.PreviewStatus, &l.PreviewError, &l.FolderID,
 				&l.CreatedAt, &l.UpdatedAt); err != nil {
 				return err
@@ -170,12 +172,23 @@ func restoreIdentity(ctx context.Context, tx pgx.Tx, snap *Snapshot) (idMapping,
 		m.folderMap[f.ID] = f.ID
 	}
 	for _, l := range snap.Links {
+		// Wipe-mode preserves original IDs; slug comes straight from the
+		// snapshot. If a backup somehow lacks slug (older format), derive
+		// from title with a fallback to the id pattern that matches
+		// migration 000009's backfill convention.
+		slug := l.Slug
+		if slug == "" {
+			slug = links.Slugify(l.Title)
+			if slug == "" {
+				slug = fmt.Sprintf("link-%d", l.ID)
+			}
+		}
 		if _, err := tx.Exec(ctx, `
-            INSERT INTO link (id, url, title, description, favicon_url, og_image_url,
+            INSERT INTO link (id, url, title, slug, description, favicon_url, og_image_url,
                               pinned, preview_status, preview_error, folder_id,
                               created_at, updated_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-			l.ID, l.URL, l.Title, l.Description, l.FaviconURL, l.OGImageURL,
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			l.ID, l.URL, l.Title, slug, l.Description, l.FaviconURL, l.OGImageURL,
 			l.Pinned, l.PreviewStatus, l.PreviewError, l.FolderID, l.CreatedAt, l.UpdatedAt); err != nil {
 			return m, fmt.Errorf("insert link %d: %w", l.ID, err)
 		}
@@ -261,15 +274,23 @@ func restoreSkip(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, Counts
 				folderID = &mapped
 			}
 		}
+		// Slug: try to keep the original; if it collides with an existing
+		// row (skip mode is conservative — preserves what's there), derive
+		// a fresh suffix via uniqueLinkSlug. URL collision still wins via
+		// ON CONFLICT (url).
+		slug, err := uniqueLinkSlug(ctx, tx, l.Slug, l.Title)
+		if err != nil {
+			return inserted, skipped, m, err
+		}
 		var newID int64
-		err := tx.QueryRow(ctx, `
-            INSERT INTO link (url, title, description, favicon_url, og_image_url,
+		err = tx.QueryRow(ctx, `
+            INSERT INTO link (url, title, slug, description, favicon_url, og_image_url,
                               pinned, preview_status, preview_error, folder_id,
                               created_at, updated_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             ON CONFLICT (url) DO NOTHING
             RETURNING id`,
-			l.URL, l.Title, l.Description, l.FaviconURL, l.OGImageURL,
+			l.URL, l.Title, slug, l.Description, l.FaviconURL, l.OGImageURL,
 			l.Pinned, l.PreviewStatus, l.PreviewError, folderID, l.CreatedAt, l.UpdatedAt).Scan(&newID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			if err2 := tx.QueryRow(ctx, `SELECT id FROM link WHERE url=$1`, l.URL).Scan(&newID); err2 != nil {
@@ -370,15 +391,19 @@ func restoreDuplicate(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, [
 				folderID = &mapped
 			}
 		}
+		slug, err := uniqueLinkSlug(ctx, tx, l.Slug, l.Title)
+		if err != nil {
+			return inserted, warnings, m, err
+		}
 		var newID int64
-		err := tx.QueryRow(ctx, `
-            INSERT INTO link (url, title, description, favicon_url, og_image_url,
+		err = tx.QueryRow(ctx, `
+            INSERT INTO link (url, title, slug, description, favicon_url, og_image_url,
                               pinned, preview_status, preview_error, folder_id,
                               created_at, updated_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             ON CONFLICT (url) DO NOTHING
             RETURNING id`,
-			l.URL, l.Title, l.Description, l.FaviconURL, l.OGImageURL,
+			l.URL, l.Title, slug, l.Description, l.FaviconURL, l.OGImageURL,
 			l.Pinned, l.PreviewStatus, l.PreviewError, folderID, l.CreatedAt, l.UpdatedAt).Scan(&newID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			// URL conflict — can't honestly duplicate without breaking the
@@ -423,6 +448,32 @@ func restoreDuplicate(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, [
 	}
 
 	return inserted, warnings, m, nil
+}
+
+// uniqueLinkSlug returns the original slug if free, else the original with
+// `-2`, `-3`, … suffix. Falls back to slugify(title) when the snapshot has
+// an empty/missing slug (older backups predating migration 000009 — those
+// don't exist in practice, but defensive). Caps at 1000 attempts.
+func uniqueLinkSlug(ctx context.Context, tx pgx.Tx, slug, title string) (string, error) {
+	base := slug
+	if base == "" {
+		base = links.Slugify(title)
+		if base == "" {
+			base = "link-restored"
+		}
+	}
+	candidate := base
+	for attempt := 1; attempt < 1000; attempt++ {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM link WHERE slug = $1)`, candidate).Scan(&exists); err != nil {
+			return "", fmt.Errorf("check slug availability: %w", err)
+		}
+		if !exists {
+			return candidate, nil
+		}
+		candidate = fmt.Sprintf("%s-%d", base, attempt+1)
+	}
+	return "", fmt.Errorf("uniqueLinkSlug: exhausted attempts for %q", base)
 }
 
 // uniqueTagName returns `base` if free, else `base (2)`, `base (3)`, ...

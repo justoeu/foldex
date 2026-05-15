@@ -31,7 +31,7 @@ describe('LinkGrid', () => {
 
 function mk(id: number, title: string): Link {
   return {
-    id, url: 'https://x/' + id, title,
+    id, url: 'https://x/' + id, title, slug: title.toLowerCase(),
     click_count: 0, preview_status: 'ok', pinned: false,
     created_at: '', updated_at: '', tags: [],
   } as Link

@@ -116,7 +116,7 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
       </button>
 
       {showPreview && (
-        <a className="fx-preview fx-preview-img" href={goHref(link.id)} target="_blank" rel="noopener noreferrer" onClick={onGo}>
+        <a className="fx-preview fx-preview-img" href={goHref(link)} target="_blank" rel="noopener noreferrer" onClick={onGo}>
           <img
             src={link.og_image_url ?? undefined}
             alt=""
@@ -131,7 +131,7 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
           <Favicon link={link} size={showPreview ? 28 : 36} />
           <div className="fx-card-head-text">
             <h3 className="fx-card-title">
-              <a href={goHref(link.id)} target="_blank" rel="noopener noreferrer" className="fx-card-title-link" onClick={onGo}>
+              <a href={goHref(link)} target="_blank" rel="noopener noreferrer" className="fx-card-title-link" onClick={onGo}>
                 {link.title}
               </a>
             </h3>
@@ -208,7 +208,7 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
             </button>
             <a
               className="fx-openbtn"
-              href={goHref(link.id)}
+              href={goHref(link)}
               target="_blank"
               rel="noopener noreferrer"
               data-tooltip={t('link_card.open_action')}

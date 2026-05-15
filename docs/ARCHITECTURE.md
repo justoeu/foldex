@@ -330,8 +330,14 @@ URL curta (`http://foldex.local/go/47`) é compartilhável. Evita preflight CORS
 ### ADR-6 — Extension sem código compartilhado com SPA
 Manifest V3 service worker faz HTTP plain pro `/api/links`. Sem npm workspace no v1; tipos `Link`/`Tag` ficam duplicados na extension (5 campos, sem custo real). Se incomodar, promover a `packages/shared-types`.
 
-### ADR-7 — `/go/:id` numérico, não slug
-IDs inteiros são triviais; slugs adicionam constraint UNIQUE + UX de "scolha o slug". Pode ser uma `ALTER TABLE link ADD COLUMN slug TEXT UNIQUE` quando necessário.
+### ADR-7 — `/go/{id-or-slug}` aceita ambos (Done — migration 000009)
+A versão original (numeric-only) foi implementada primeiro porque IDs são triviais e slugs adicionam constraint UNIQUE + UX de "escolher o slug". Quando a base passou de "alguns links pessoais" pra "links que você quer compartilhar com a equipe", a leitura de `localhost:9089/go/42` virou ruído — daí a evolução pra slugs amigáveis.
+
+**Como funciona:** `link.slug TEXT NOT NULL UNIQUE` (migration 000009) com CHECK `^[a-z0-9]+(-[a-z0-9]+)*$ AND NOT ^[0-9]+$`. Slug é auto-derivado do título no create via `Slugify` (lowercase ASCII, accent-fold, hyphen-collapse, max 80 chars na hyphen-boundary); usuário pode override no `LinkDialog`. Backfill SQL no up.sql cobre os links existentes.
+
+**Resolução `/go/{valor}`:** ID-first (preserva backward-compat de todo `/go/42` antigo), depois slug-fallback. A constraint que rejeita slug puramente numérico garante que nunca há ambiguidade — `/go/42` SEMPRE significa link 42.
+
+**Backup/import/export:** snapshot inclui slug; restore com `mode=skip|wipe|duplicate` resolve colisões com sufixo `-2`, `-3`, … via `uniqueLinkSlug`. Importer (Netscape/JSON) gera slug auto pra cada link novo.
 
 ### ADR-8 — SSRF guard no preview fetcher
 Fetcher visita URLs arbitrárias fornecidas pelo usuário. **IMDS (169.254.169.254) é sempre bloqueado**, sem opt-out — é o único alvo que nunca é legítimo num app pessoal. Os demais ranges privados (loopback, RFC1918, link-local, IPv6 ULA) só são bloqueados quando `PREVIEW_STRICT_SSRF=1`. Default é permissivo: foldex é single-user local e links de intranet (Jira/Grid/Confluence/dashboards internos) são caso de uso primário — bloquear o que o usuário visita no próprio browser todos os dias é fricção sem ganho. Revisitar se virar multi-user ou expor o backend pra rede pública.

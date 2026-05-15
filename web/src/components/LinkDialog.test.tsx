@@ -33,7 +33,7 @@ describe('LinkDialog', () => {
 
   it('edits an existing link', async () => {
     const link: Link = {
-      id: 7, url: 'https://x', title: 'old', click_count: 0,
+      id: 7, url: 'https://x', title: 'old', slug: 'old', click_count: 0,
       preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
     } as Link
     state.links.push(link)

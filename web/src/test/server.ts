@@ -184,6 +184,16 @@ function deleteTag(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockSta
   return null
 }
 
+// Mirror of the backend's Slugify — kept in sync with internal/links/slug.go.
+// Tests don't need accent-folding, just the basic shape. Empty result falls
+// back to "link-{id}" the way the real backfill does.
+function slugifyForMock(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'link-untitled'
+}
+
 function createLink(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState): Link {
   const tags = (data.tag_ids ?? [])
     .map((id: number) => s.tags.find((x) => x.id === id))
@@ -192,6 +202,7 @@ function createLink(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Moc
     id: (s.links.at(-1)?.id ?? 0) + 1,
     url: data.url,
     title: data.title ?? data.url,
+    slug: data.slug ?? slugifyForMock(data.title ?? data.url),
     description: data.description ?? null,
     favicon_url: null,
     og_image_url: null,

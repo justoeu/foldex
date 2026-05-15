@@ -141,6 +141,12 @@ export async function removeLinkImage(id: number): Promise<void> {
   await http.delete(`/api/links/${id}/image`)
 }
 
-export function goHref(id: number) {
-  return `/go/${id}`
+// Builds the public short link. Prefers the slug when given a Link object —
+// `/go/jira-board` is the share-friendly path. Falls back to `/go/{id}` for
+// callers that only have the numeric id (legacy, optimistic UI updates that
+// don't yet have the slug, etc.). Backend resolution is ID-first then slug-
+// fallback so both forms always work.
+export function goHref(linkOrId: { id: number; slug: string } | number): string {
+  if (typeof linkOrId === 'number') return `/go/${linkOrId}`
+  return `/go/${linkOrId.slug || linkOrId.id}`
 }

@@ -58,7 +58,9 @@ func TestRedirect_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
-func TestRedirect_InvalidID(t *testing.T) {
+// /go/abc used to be a 400 (bad ID). With slug-fallback, "abc" is a valid
+// candidate slug — we just don't have any link with that slug, so it 404s.
+func TestRedirect_NonNumericTargetUnknownSlug404(t *testing.T) {
 	pool := testdb.New(t)
 	r := chi.NewRouter()
 	redirect.NewHandler(links.NewRepository(pool)).Mount(r)
@@ -68,7 +70,66 @@ func TestRedirect_InvalidID(t *testing.T) {
 	resp, err := http.Get(srv.URL + "/go/abc")
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+// /go/{slug} resolves the same link that the create call returned, with the
+// click counter incremented post-redirect.
+func TestRedirect_BySlugHappyPath(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	lrepo := links.NewRepository(pool)
+
+	created, err := lrepo.Create(ctx, links.CreateInput{URL: "https://news.ycombinator.com", Title: "Hacker News"})
+	require.NoError(t, err)
+	require.Equal(t, "hacker-news", created.Slug, "slug auto-derived from title")
+
+	r := chi.NewRouter()
+	redirect.NewHandler(lrepo).Mount(r)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	resp, err := client.Get(srv.URL + "/go/" + created.Slug)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusFound, resp.StatusCode)
+	assert.Equal(t, "https://news.ycombinator.com", resp.Header.Get("Location"))
+
+	got, _ := lrepo.Get(ctx, created.ID)
+	assert.EqualValues(t, 1, got.ClickCount)
+}
+
+// Whatever already worked under /go/{id} has to keep working post-migration.
+// Belt-and-suspenders: this is the contract every shared `/go/42` URL relies
+// on.
+func TestRedirect_ByIDStillWorksAfterSlugFeature(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	lrepo := links.NewRepository(pool)
+
+	created, err := lrepo.Create(ctx, links.CreateInput{URL: "https://example.com", Title: "ex"})
+	require.NoError(t, err)
+
+	r := chi.NewRouter()
+	redirect.NewHandler(lrepo).Mount(r)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	resp, err := client.Get(srv.URL + "/go/" + intToStr(created.ID))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusFound, resp.StatusCode)
+	assert.Equal(t, "https://example.com", resp.Header.Get("Location"))
 }
 
 func intToStr(n int64) string {

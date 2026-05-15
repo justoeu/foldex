@@ -17,6 +17,7 @@ const baseLink: Link = {
   id: 1,
   url: 'https://news.ycombinator.com',
   title: 'Hacker News',
+  slug: 'hacker-news',
   description: 'Tech news.',
   favicon_url: 'https://news.ycombinator.com/favicon.ico',
   og_image_url: null,
@@ -38,11 +39,12 @@ describe('LinkCard', () => {
     expect(screen.getByText('7')).toBeInTheDocument()
   })
 
-  it('title is a link that opens via /go/:id', () => {
+  it('title is a link that opens via /go/{slug}', () => {
     renderWithProviders(<LinkCard link={baseLink} onEdit={vi.fn()} />)
     const titleLink = screen.getByText('Hacker News').closest('a')
     expect(titleLink).not.toBeNull()
-    expect(titleLink?.getAttribute('href')).toBe('/go/1')
+    // goHref(link) prefers slug over id — the share-friendly path.
+    expect(titleLink?.getAttribute('href')).toBe('/go/hacker-news')
     expect(titleLink?.getAttribute('target')).toBe('_blank')
   })
 

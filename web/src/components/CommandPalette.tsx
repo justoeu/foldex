@@ -86,7 +86,7 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
                 <a
                   key={l.id}
                   className={'fx-cmdk-row' + (i === 0 ? ' fx-cmdk-row-sel' : '')}
-                  href={goHref(l.id)}
+                  href={goHref(l)}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={onClose}
@@ -114,7 +114,7 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
                 <a
                   key={l.id}
                   className="fx-cmdk-row"
-                  href={goHref(l.id)}
+                  href={goHref(l)}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={onClose}

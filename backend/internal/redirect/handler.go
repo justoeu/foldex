@@ -1,6 +1,7 @@
 package redirect
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -17,17 +18,44 @@ type Handler struct {
 func NewHandler(repo *links.Repository) *Handler { return &Handler{repo: repo} }
 
 func (h *Handler) Mount(r chi.Router) {
+	// Param name stays "id" so the chi route doesn't change shape — what
+	// flows through it can be either a numeric ID or a slug, decided in
+	// h.redirect at request time.
 	r.Get("/go/{id}", h.redirect)
 }
 
+// redirect resolves /go/{value} where {value} is either a positive int
+// (legacy ID lookup) or a slug. ID-first to preserve backward compatibility
+// for every old `/go/42` link that's already shared somewhere — slugs are a
+// pure fallback.
+//
+// The DB CHECK constraint on link.slug forbids pure-numeric values, so the
+// branches can't collide: a value that parses as int can't ever be a slug.
 func (h *Handler) redirect(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil || id <= 0 {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_id", "id must be a positive integer"))
+	raw := chi.URLParam(r, "id")
+	if raw == "" {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_target", "target is required"))
 		return
 	}
-	dest, err := h.repo.ClickAndResolve(r.Context(), id)
+
+	if id, err := strconv.ParseInt(raw, 10, 64); err == nil && id > 0 {
+		dest, err := h.repo.ClickAndResolve(r.Context(), id)
+		if err == nil {
+			http.Redirect(w, r, dest, http.StatusFound)
+			return
+		}
+		// A pure-numeric value can never be a slug (CHECK constraint), so
+		// not-found here is terminal.
+		httperr.Write(w, err)
+		return
+	}
+
+	dest, err := h.repo.ClickAndResolveBySlug(r.Context(), raw)
 	if err != nil {
+		if errors.Is(err, httperr.ErrNotFound) {
+			httperr.Write(w, httperr.ErrNotFound)
+			return
+		}
 		httperr.Write(w, err)
 		return
 	}

@@ -453,6 +453,25 @@ func ensureTags(ctx context.Context, q dbtx, names []string) ([]int64, error) {
 	return ids, nil
 }
 
+// nextAvailableSlug returns `base` if no link uses it, else `base-2`,
+// `base-3`, … (capped at 999 to prevent pathological loops). Used by the
+// importer's insertLinkInTx — bulk imports of similarly-titled pages
+// shouldn't fail just because the first slug already exists.
+func nextAvailableSlug(ctx context.Context, q dbtx, base string) (string, error) {
+	candidate := base
+	for attempt := 1; attempt < 1000; attempt++ {
+		var exists bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM link WHERE slug = $1)`, candidate).Scan(&exists); err != nil {
+			return "", fmt.Errorf("check slug availability: %w", err)
+		}
+		if !exists {
+			return candidate, nil
+		}
+		candidate = fmt.Sprintf("%s-%d", base, attempt+1)
+	}
+	return "", fmt.Errorf("nextAvailableSlug: exhausted attempts for %q", base)
+}
+
 // ensureFolder finds-or-creates a folder by name. folder.name has no UNIQUE
 // constraint (iPhone allows duplicate names) so we do a SELECT-then-INSERT
 // dance: the import contract is "match existing by name; create a new row
@@ -527,13 +546,30 @@ func insertLinkInTx(ctx context.Context, tx pgx.Tx, url, title string, descripti
 	// Atomic upsert: ON CONFLICT DO NOTHING returns nothing on conflict, so a
 	// second SELECT finds the existing id. Avoids depending on pgx's xmax
 	// scanning rules (pgx 5 rejects xid → int64 in some pool configurations).
+	//
+	// Slug is auto-derived from title via Slugify with collision suffix
+	// (importers never carry a user-supplied slug — that's a UI-time choice).
+	// We resolve a free slug FIRST via SELECT against the live table, then
+	// INSERT with the resolved value. A small race remains (two concurrent
+	// imports targeting the same slug) — but importers are single-user single-
+	// machine, and the unique constraint catches it as a hard error if it
+	// ever happens.
+	slugBase := links.Slugify(title)
+	if slugBase == "" {
+		slugBase = "link-imported"
+	}
+	slug, err := nextAvailableSlug(ctx, tx, slugBase)
+	if err != nil {
+		return 0, false, false, err
+	}
+
 	var id int64
-	err := tx.QueryRow(ctx, `
-        INSERT INTO link (url, title, description, folder_id, created_at)
-        VALUES ($1, $2, $3, $4, COALESCE($5, now()))
+	err = tx.QueryRow(ctx, `
+        INSERT INTO link (url, title, slug, description, folder_id, created_at)
+        VALUES ($1, $2, $3, $4, $5, COALESCE($6, now()))
         ON CONFLICT (url) DO NOTHING
         RETURNING id
-    `, url, title, description, folderID, createdAt).Scan(&id)
+    `, url, title, slug, description, folderID, createdAt).Scan(&id)
 	dup := false
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {

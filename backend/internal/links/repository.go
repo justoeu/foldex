@@ -34,7 +34,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 // LATERAL join — there is no longer a denormalized counter on the link row.
 // Use `linkColumns` together with `linkFrom` in every SELECT.
 const linkColumns = `
-    l.id, l.url, l.title, l.description, l.favicon_url, l.og_image_url,
+    l.id, l.url, l.title, l.slug, l.description, l.favicon_url, l.og_image_url,
     COALESCE(cl.cnt, 0) AS click_count,
     l.preview_status, l.preview_error,
     cl.last_at AS last_clicked_at,
@@ -57,14 +57,56 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Link, error) {
 	}
 	defer tx.Rollback(ctx)
 
+	// Slug strategy:
+	//   - User-supplied: use as-is, surface UNIQUE violations as ErrConflict.
+	//   - Auto-derived from title: try the bare slug first, fall back to
+	//     "-2", "-3", … on collision (capped at 999 to avoid pathological
+	//     loops). Empty Slugify output → "link-<placeholder>" pre-INSERT;
+	//     since we don't have the id yet we use a UUID-ish marker, but the
+	//     simpler path is "link-untitled" + suffix-on-collision.
+	userSupplied := in.Slug != nil
+	var slug string
+	if userSupplied {
+		slug = *in.Slug
+	} else {
+		slug = Slugify(in.Title)
+		if slug == "" {
+			slug = "link-untitled"
+		}
+	}
+
 	var id int64
-	err = tx.QueryRow(ctx, `
-        INSERT INTO link (url, title, description, pinned, folder_id)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id
-    `, in.URL, in.Title, in.Description, in.Pinned, in.FolderID).Scan(&id)
-	if err != nil {
+	for attempt := 0; attempt < 1000; attempt++ {
+		candidate := slug
+		if attempt > 0 {
+			candidate = fmt.Sprintf("%s-%d", slug, attempt+1)
+		}
+		err = tx.QueryRow(ctx, `
+            INSERT INTO link (url, title, slug, description, pinned, folder_id)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id
+        `, in.URL, in.Title, candidate, in.Description, in.Pinned, in.FolderID).Scan(&id)
+		if err == nil {
+			break
+		}
+		if isSlugUniqueViolation(err) {
+			if userSupplied {
+				return Link{}, httperr.New(409, "slug_taken", "slug already in use")
+			}
+			// Roll back the failed INSERT — Postgres aborts the tx on a
+			// constraint violation, so reopening is required for the next
+			// attempt.
+			_ = tx.Rollback(ctx)
+			tx, err = r.pool.Begin(ctx)
+			if err != nil {
+				return Link{}, fmt.Errorf("retry begin tx: %w", err)
+			}
+			continue
+		}
 		return Link{}, fmt.Errorf("insert link: %w", err)
+	}
+	if id == 0 {
+		return Link{}, fmt.Errorf("could not allocate a unique slug after 1000 attempts")
 	}
 
 	if err := setLinkTags(ctx, tx, id, in.TagIDs); err != nil {
@@ -77,10 +119,18 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Link, error) {
 	return r.Get(ctx, id)
 }
 
+// isSlugUniqueViolation matches the link_slug_unique constraint name from the
+// 000009 migration. Plain string match because the pgx driver surfaces the
+// error wrapped — switching on `*pgconn.PgError.ConstraintName` requires
+// importing pgconn into the repository.
+func isSlugUniqueViolation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "link_slug_unique")
+}
+
 func (r *Repository) Get(ctx context.Context, id int64) (Link, error) {
 	var l Link
 	err := r.pool.QueryRow(ctx, `SELECT `+linkColumns+linkFrom+` WHERE l.id = $1`, id).Scan(
-		&l.ID, &l.URL, &l.Title, &l.Description, &l.FaviconURL, &l.OGImageURL,
+		&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
 		&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
 		&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
 	)
@@ -95,6 +145,33 @@ func (r *Repository) Get(ctx context.Context, id int64) (Link, error) {
 		return Link{}, err
 	}
 	l.Tags = tags[id]
+	if l.Tags == nil {
+		l.Tags = []Tag{}
+	}
+	return l, nil
+}
+
+// GetBySlug is the slug-keyed sibling of Get. Used by the redirect handler's
+// fallback path (ID-first → slug fallback) and by anywhere that needs to
+// resolve a public-facing slug back to the full link row.
+func (r *Repository) GetBySlug(ctx context.Context, slug string) (Link, error) {
+	var l Link
+	err := r.pool.QueryRow(ctx, `SELECT `+linkColumns+linkFrom+` WHERE l.slug = $1`, slug).Scan(
+		&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
+		&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
+		&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Link{}, httperr.ErrNotFound
+	}
+	if err != nil {
+		return Link{}, fmt.Errorf("get link by slug: %w", err)
+	}
+	tags, err := r.tagsFor(ctx, []int64{l.ID})
+	if err != nil {
+		return Link{}, err
+	}
+	l.Tags = tags[l.ID]
 	if l.Tags == nil {
 		l.Tags = []Tag{}
 	}
@@ -170,7 +247,7 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Link, error) {
 	for rows.Next() {
 		var l Link
 		if err := rows.Scan(
-			&l.ID, &l.URL, &l.Title, &l.Description, &l.FaviconURL, &l.OGImageURL,
+			&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
 			&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
 			&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
 		); err != nil {
@@ -236,12 +313,45 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Link
 		args = append(args, in.FolderID)
 		i++
 	}
+	// slug: tri-state same as folder_id, except `null` doesn't mean "clear"
+	// (slug is NOT NULL) — it means "regenerate from current title". We need
+	// the live title for that, so resolve it inside the same tx so we read
+	// the about-to-be-updated value if `in.Title` was also set.
+	if in.SlugSet {
+		newSlug := ""
+		if in.Slug != nil {
+			newSlug = *in.Slug
+		} else {
+			// Use the just-staged title if present, else read current.
+			currentTitle := ""
+			if in.Title != nil {
+				currentTitle = strings.TrimSpace(*in.Title)
+			} else {
+				if err := tx.QueryRow(ctx, `SELECT title FROM link WHERE id = $1`, id).Scan(&currentTitle); err != nil {
+					if errors.Is(err, pgx.ErrNoRows) {
+						return Link{}, httperr.ErrNotFound
+					}
+					return Link{}, fmt.Errorf("read title for slug regen: %w", err)
+				}
+			}
+			newSlug = Slugify(currentTitle)
+			if newSlug == "" {
+				newSlug = fmt.Sprintf("link-%d", id)
+			}
+		}
+		sets = append(sets, fmt.Sprintf("slug = $%d", i))
+		args = append(args, newSlug)
+		i++
+	}
 	if len(sets) > 0 {
 		sets = append(sets, "updated_at = now()")
 		args = append(args, id)
 		q := fmt.Sprintf(`UPDATE link SET %s WHERE id = $%d`, strings.Join(sets, ", "), i)
 		ct, err := tx.Exec(ctx, q, args...)
 		if err != nil {
+			if isSlugUniqueViolation(err) {
+				return Link{}, httperr.New(409, "slug_taken", "slug already in use")
+			}
 			return Link{}, fmt.Errorf("update link: %w", err)
 		}
 		if ct.RowsAffected() == 0 {
@@ -271,7 +381,7 @@ func (r *Repository) Delete(ctx context.Context, id int64) error {
 }
 
 // ClickAndResolve appends a row to click_log and returns the destination URL.
-// Used by /go/:id; returns httperr.ErrNotFound when no link matches.
+// Used by /go/{id}; returns httperr.ErrNotFound when no link matches.
 //
 // click_log is the only writer for click data — there's no longer a
 // denormalized counter on `link`, so this is a single INSERT (counter views
@@ -279,14 +389,25 @@ func (r *Repository) Delete(ctx context.Context, id int64) error {
 // a transaction so a missing link returns 404 instead of producing an
 // orphan click_log row via FK violation.
 func (r *Repository) ClickAndResolve(ctx context.Context, id int64) (string, error) {
+	return r.clickAndResolveWhere(ctx, "id = $1", id)
+}
+
+// ClickAndResolveBySlug is the slug-keyed sibling of ClickAndResolve. Same
+// invariants — atomic resolve + click insert in one tx.
+func (r *Repository) ClickAndResolveBySlug(ctx context.Context, slug string) (string, error) {
+	return r.clickAndResolveWhere(ctx, "slug = $1", slug)
+}
+
+func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg any) (string, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("begin click tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
+	var id int64
 	var u string
-	err = tx.QueryRow(ctx, `SELECT url FROM link WHERE id = $1`, id).Scan(&u)
+	err = tx.QueryRow(ctx, `SELECT id, url FROM link WHERE `+where, arg).Scan(&id, &u)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", httperr.ErrNotFound
 	}

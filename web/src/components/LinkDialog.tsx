@@ -65,6 +65,12 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
 
   const [url, setUrl] = useState('')
   const [title, setTitle] = useState('')
+  // Slug is auto-derived from title until the user touches the field. After
+  // that it stays "dirty" — the user is in control. On submit, an empty slug
+  // is sent as `null` (edit mode = regenerate from title) or omitted from
+  // the create payload (= backend auto-generates).
+  const [slug, setSlug] = useState('')
+  const [slugDirty, setSlugDirty] = useState(false)
   const [description, setDescription] = useState('')
   const [pinned, setPinned] = useState(false)
   const [folderId, setFolderId] = useState<number | null>(null)
@@ -84,6 +90,10 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
     if (!open) return
     setUrl(link?.url ?? initialUrl ?? '')
     setTitle(link?.title ?? '')
+    setSlug(link?.slug ?? '')
+    // Treat a pre-existing slug (edit mode) as dirty so we don't overwrite
+    // the user's saved value while they edit other fields.
+    setSlugDirty(!!link?.slug)
     setDescription(link?.description ?? '')
     setPinned(link?.pinned ?? false)
     setFolderId(link?.folder_id ?? defaultFolderId ?? null)
@@ -96,6 +106,12 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
     setPendingImagePreview(null)
     setImageRemoved(false)
   }, [open, link, initialUrl])
+
+  // Live auto-derive the slug from the title until the user takes over.
+  useEffect(() => {
+    if (slugDirty) return
+    setSlug(slugifyClient(title))
+  }, [title, slugDirty])
 
   useEscape(onClose, open)
 
@@ -178,6 +194,15 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
     }
 
     if (link) {
+      // Slug semantics on PATCH:
+      //   user-typed slug      → send as string (backend validates + sets)
+      //   field empty + dirty  → send as null  (backend regenerates from title)
+      //   not dirty            → don't include the field (keep current slug)
+      const slugTrimmed = slug.trim()
+      const slugPayload: { slug?: string | null } = {}
+      if (slugDirty) {
+        slugPayload.slug = slugTrimmed === '' ? null : slugTrimmed
+      }
       await updateLink.mutateAsync({
         id: link.id,
         body: {
@@ -187,6 +212,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
           tag_ids: tagIds,
           pinned,
           folder_id: folderId,
+          ...slugPayload,
         },
       })
       if (pendingImage) {
@@ -211,6 +237,14 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
         setImageBusy(false)
       }
     } else {
+      // Slug on CREATE:
+      //   dirty + non-empty → ship verbatim
+      //   else              → omit (backend auto-derives via Slugify)
+      const slugTrimmed = slug.trim()
+      const createSlug: { slug?: string } = {}
+      if (slugDirty && slugTrimmed !== '') {
+        createSlug.slug = slugTrimmed
+      }
       const newLink = await createLink.mutateAsync({
         url: trimmed,
         title: title.trim() || trimmed,
@@ -218,6 +252,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
         tag_ids: tagIds,
         pinned,
         folder_id: folderId,
+        ...createSlug,
       })
       if (pendingImage && newLink?.id) {
         setImageBusy(true)
@@ -294,6 +329,41 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                   aria-label="Title"
                 />
               </div>
+            </label>
+
+            <label className="fx-field">
+              <span className="fx-field-label">{t('link_dialog.slug_label')}</span>
+              <div className="fx-input">
+                <span style={{ color: 'var(--fx-ink-4)', fontFamily: 'var(--fx-mono)', fontSize: 12, paddingRight: 4 }}>
+                  /go/
+                </span>
+                <input
+                  value={slug}
+                  onChange={(e) => {
+                    setSlug(e.target.value)
+                    setSlugDirty(true)
+                  }}
+                  placeholder={slugifyClient(title) || 'jira-board'}
+                  aria-label={t('link_dialog.slug_aria')}
+                  pattern="[a-z0-9]+(-[a-z0-9]+)*"
+                  style={{ fontFamily: 'var(--fx-mono)' }}
+                />
+                {slugDirty && (
+                  <button
+                    type="button"
+                    className="fx-iconbtn"
+                    onClick={() => {
+                      setSlug(slugifyClient(title))
+                      setSlugDirty(false)
+                    }}
+                    data-tooltip={t('link_dialog.slug_reset_tooltip')}
+                    aria-label={t('link_dialog.slug_reset_tooltip')}
+                  >
+                    <Icon d={I.refresh} size={13} />
+                  </button>
+                )}
+              </div>
+              <span className="fx-field-hint">{t('link_dialog.slug_hint')}</span>
             </label>
 
             <label className="fx-field">
@@ -586,6 +656,22 @@ function hostOf(u: string) {
   } catch {
     return ''
   }
+}
+
+// Mirror of the backend Slugify (internal/links/slug.go) — used to render
+// the live "Auto: jira-board" placeholder under the slug field as the user
+// types a title. Keep both in sync; the source of truth lives on the
+// backend (the value posted is what gets persisted, not whatever this
+// returns).
+function slugifyClient(title: string): string {
+  return title
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // strip combining marks
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+    .replace(/-+$/g, '')
 }
 
 function extractUploadErr(e: unknown, fallback: string): string {
