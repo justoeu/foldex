@@ -36,6 +36,13 @@ export default defineConfig(({ mode }) => {
           ],
         },
         workbox: {
+          // Bump this when something in the cache strategy itself changes
+          // (precache pattern, runtime handlers, navigation fallback…) and
+          // we need every client to forget what it cached under the old
+          // policy. Plain version bumps for code changes are handled
+          // automatically by the Workbox revision hashes — this is the
+          // big-hammer escape hatch.
+          cacheId: 'foldex-v2',
           // Precache every built asset Vite produced. Revisioned URLs mean
           // stale caches roll forward automatically on next page load.
           globPatterns: ['**/*.{js,css,html,svg,png,webp,jpg,jpeg,gif,woff2}'],
@@ -48,6 +55,15 @@ export default defineConfig(({ mode }) => {
           // The API and the short-link redirect are NOT cacheable — they
           // mutate state on click and must always hit the backend.
           navigateFallbackDenylist: [/^\/api\//, /^\/go\//, /^\/healthz/],
+          // skipWaiting + clientsClaim ensures a new SW activates and
+          // takes over open tabs immediately — no need to close all
+          // foldex tabs to receive updates.
+          skipWaiting: true,
+          clientsClaim: true,
+          // Drops cache entries that don't match the current precache
+          // manifest. With cacheId bumped above, this evicts the entire
+          // previous-version cache on next activation.
+          cleanupOutdatedCaches: true,
           runtimeCaching: [
             {
               // Favicons / og:images we proxy from /api/files/. Network-
