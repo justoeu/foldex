@@ -30,11 +30,20 @@ db-nuke: ## Stop Postgres AND drop its volume (destructive)
 db-logs: ## Tail Postgres logs
 	$(COMPOSE_DB) logs -f
 
-up: env db-up ## Start the full stack: Postgres + backend + web
+up: env db-up ## Start the full stack from Docker Hub images (Postgres + backend + web)
+	$(COMPOSE_APP) up -d
+
+apps-up: env ## Start only backend + web from Docker Hub (assumes Postgres already running)
+	$(COMPOSE_APP) up -d
+
+up-build: env db-up ## Build images locally from source and start the full stack (dev mode)
 	$(COMPOSE_APP) up -d --build
 
-apps-up: env ## Start only backend + web (assumes Postgres already running)
+apps-up-build: env ## Build apps locally and start them (dev mode, assumes Postgres running)
 	$(COMPOSE_APP) up -d --build
+
+pull: ## Refresh backend + web images from Docker Hub (does not restart)
+	$(COMPOSE_APP) pull
 
 down: ## Stop apps (Postgres keeps running — use db-down for that)
 	$(COMPOSE_APP) down
@@ -53,10 +62,10 @@ ps: ## Show all foldex container status (apps + Postgres)
 	@echo
 	@$(COMPOSE_DB) ps
 
-restart-backend: ## Rebuild + restart the backend container
+restart-backend: ## Rebuild + restart the backend container (dev mode, builds locally)
 	$(COMPOSE_APP) up -d --build backend
 
-restart-web: ## Rebuild + restart the web container
+restart-web: ## Rebuild + restart the web container (dev mode, builds locally)
 	$(COMPOSE_APP) up -d --build web
 
 migrate-up: ## Apply all pending migrations against the running db

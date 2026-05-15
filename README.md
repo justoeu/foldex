@@ -47,12 +47,23 @@ If you have fewer than 30 links saved and use **a single browser on a single mac
 
 ```bash
 cp .env.example .env
-make up                 # builds Postgres (separate compose) + backend + web on 127.0.0.1
+make up                 # pulls justoeu/foldex-{backend,web}:latest from Docker Hub
+                        # + boots Postgres on 127.0.0.1 (no Go/bun toolchain needed)
 make migrate-up         # applies SQL migrations
 make seed               # optional: sample tags + links
 
 open http://localhost:9088
 ```
+
+### Choosing between pre-built images and local build
+
+| Want to … | Run | Notes |
+|---|---|---|
+| Just run Foldex | `make up` | Pulls `justoeu/foldex-{backend,web}:${FOLDEX_VERSION}` from Docker Hub. Default tag is `latest`. |
+| Pin to a specific build | set `FOLDEX_VERSION=sha-3f6cc06` (or `v1.2.3`) in `.env` then `make up` | Image tags published per commit + per semver tag. |
+| Refresh to the latest tag | `make pull && make up` | `pull` re-fetches without restarting; `up` notices the new image and rolls. |
+| Develop / build from source | `make up-build` | Uses the same `Dockerfile`s but builds locally, ignoring the registry image. Needs Docker; does NOT need Go/bun on the host (they run inside the build stages). |
+| Apply local code changes | `make restart-backend` / `make restart-web` | Same as `up-build` but only the named service. |
 
 ### HTTPS (local dev) via mkcert
 
@@ -73,14 +84,21 @@ mkcert -cert-file web/certs/cert.pem \
        -key-file  web/certs/key.pem \
        localhost 127.0.0.1 ::1 host.docker.internal
 
-make up                       # rebuilds the web image with the new certs baked in
+make up                       # restarts the web container; certs are bind-mounted from web/certs
 open https://localhost:9444   # 9444 = WEB_HTTPS_PORT; 9088 (WEB_PORT) is HTTP→HTTPS redirect
 ```
 
 The `cert.pem` and `key.pem` files are **gitignored** — generate them locally,
-never commit. Re-run `mkcert ...` (and `make up`) when you add a new hostname
-(e.g. a `*.foldex.test` you point at `127.0.0.1`) or after re-installing the
-local CA (`mkcert -install`) on a new machine.
+never commit. The web container bind-mounts `./web/certs:/etc/nginx/certs:ro`
+at boot, so you only need to `make restart-web` (or `make up`) after
+re-emitting the pair — no rebuild required. The published Docker Hub image
+ships **no** TLS material; if the volume is empty (e.g. plain
+`docker pull && docker run` without a mount), the container generates an
+ephemeral self-signed pair so the browser can still reach the SPA.
+
+Re-run `mkcert ...` when you add a new hostname (e.g. a `*.foldex.test` you
+point at `127.0.0.1`) or after re-installing the local CA (`mkcert -install`)
+on a new machine.
 
 > **Still seeing "Not Secure" in the browser?** It means the mkcert root CA
 > is not in this machine's trust store (or it is, but the cert was signed by

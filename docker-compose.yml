@@ -5,6 +5,11 @@
 
 services:
   backend:
+    # Pulled from Docker Hub by default — set FOLDEX_VERSION in .env to pin a
+    # specific tag (e.g. `v1.2.3`, `sha-3f6cc06`). `build:` is kept so
+    # `docker compose build` (or `make up-build`) still produces a local
+    # image with the same name when developing from source.
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-latest}
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -44,6 +49,7 @@ services:
       - foldex
 
   web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-latest}
     build:
       context: ./web
       dockerfile: Dockerfile
