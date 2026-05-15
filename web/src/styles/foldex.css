@@ -280,6 +280,26 @@
 .fx-seg-active { background: var(--fx-surface-3); color: var(--fx-ink); box-shadow: var(--fx-shadow-1); }
 .fx-seg svg { opacity: 0.7; }
 
+/* Icon-only variant for the sort segment — used after the locale picker
+   added pressure on the topbar's horizontal budget. Square 32×32 cells
+   with the full label living in `data-tooltip`/`aria-label`. Saves
+   ~220px vs the text-labelled variant. */
+.fx-seg-icon {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+}
+.fx-seg-icon svg { opacity: 1; }
+.fx-seg-alpha {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+  font-family: var(--fx-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
 .fx-cta {
   height: 40px; padding: 0 14px 0 12px;
   display: inline-flex; align-items: center; gap: 8px;

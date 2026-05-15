@@ -127,43 +127,51 @@ export function Topbar({
         <kbd className="fx-kbd">⌥K</kbd>
       </div>
 
-      <div className="fx-segment" role="group" aria-label="sort">
+      <div className="fx-segment fx-segment-icon" role="group" aria-label={t('sort.label', { defaultValue: 'sort' })}>
         <button
-          className={'fx-seg' + (sort === 'created' ? ' fx-seg-active' : '')}
+          className={'fx-seg fx-seg-icon' + (sort === 'created' ? ' fx-seg-active' : '')}
           onClick={() => setSort('created')}
           aria-pressed={sort === 'created'}
+          aria-label={t('sort.new')}
+          data-tooltip={t('sort.new')}
         >
-          {t('sort.new')}
+          <Icon d={I.sparkles} size={14} />
         </button>
         <button
-          className={'fx-seg' + (sort === 'clicks' ? ' fx-seg-active' : '')}
+          className={'fx-seg fx-seg-icon' + (sort === 'clicks' ? ' fx-seg-active' : '')}
           onClick={() => setSort('clicks')}
           aria-pressed={sort === 'clicks'}
+          aria-label={t('sort.top')}
+          data-tooltip={t('sort.top')}
         >
-          <Icon d={I.flame} size={13} /> {t('sort.top')}
+          <Icon d={I.flame} size={14} />
         </button>
         <button
-          className={'fx-seg' + (sort === 'recent' ? ' fx-seg-active' : '')}
+          className={'fx-seg fx-seg-icon' + (sort === 'recent' ? ' fx-seg-active' : '')}
           onClick={() => setSort('recent')}
           aria-pressed={sort === 'recent'}
+          aria-label={t('sort.recent')}
+          data-tooltip={t('sort.recent')}
         >
-          <Icon d={I.clock} size={13} /> {t('sort.recent')}
+          <Icon d={I.clock} size={14} />
         </button>
         <button
-          className={'fx-seg' + (sort === 'alpha' ? ' fx-seg-active' : '')}
+          className={'fx-seg fx-seg-alpha' + (sort === 'alpha' ? ' fx-seg-active' : '')}
           onClick={() => setSort('alpha')}
           aria-pressed={sort === 'alpha'}
+          aria-label={t('sort.alpha_asc')}
           data-tooltip={t('sort.alpha_asc')}
         >
-          {t('sort.alpha_asc')}
+          A↓
         </button>
         <button
-          className={'fx-seg' + (sort === 'alpha_desc' ? ' fx-seg-active' : '')}
+          className={'fx-seg fx-seg-alpha' + (sort === 'alpha_desc' ? ' fx-seg-active' : '')}
           onClick={() => setSort('alpha_desc')}
           aria-pressed={sort === 'alpha_desc'}
+          aria-label={t('sort.alpha_desc')}
           data-tooltip={t('sort.alpha_desc')}
         >
-          {t('sort.alpha_desc')}
+          Z↓
         </button>
       </div>
 
