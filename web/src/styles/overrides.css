@@ -16,34 +16,47 @@
    needs to wrap. On narrower viewports (or when we add a 7th item) items
    spill to a 2nd row, which looks broken. Switch to a flex layout that
    stays in one row and lets the search input absorb the slack. */
-.fx-topbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: nowrap;
-  min-width: 0;
-}
-.fx-topbar .fx-search {
-  flex: 1 1 auto;
-  min-width: 220px;
-}
-.fx-topbar .fx-brand,
-.fx-topbar .fx-quicknav,
-.fx-topbar .fx-segment,
-.fx-topbar .fx-viewseg,
-.fx-topbar .fx-cta {
-  flex: 0 0 auto;
-}
-.fx-topbar .fx-cta {
-  white-space: nowrap;
+/* Desktop-only: flex layout for the topbar with a 220px-minimum search
+   input. On mobile (`@media (max-width: 768px)` in foldex.css) the topbar
+   is a single-row grid with a flexible search column — these rules would
+   otherwise win the cascade (this stylesheet loads after foldex.css) and
+   re-impose the desktop minimum, pushing the kebab off-canvas. */
+@media (min-width: 769px) {
+  .fx-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+  .fx-topbar .fx-search {
+    flex: 1 1 auto;
+    min-width: 220px;
+  }
+  .fx-topbar .fx-brand,
+  .fx-topbar .fx-quicknav,
+  .fx-topbar .fx-segment,
+  .fx-topbar .fx-viewseg,
+  .fx-topbar .fx-cta {
+    flex: 0 0 auto;
+  }
+  .fx-topbar .fx-cta {
+    white-space: nowrap;
+  }
 }
 
 /* The frame's first column reads `--fx-sidebar-w` so App.tsx flips between
-   ~252px (expanded) and ~44px (collapsed rail). */
-.fx-frame {
-  min-height: 0;
-  grid-template-columns: var(--fx-sidebar-w, 252px) 1fr;
-  transition: grid-template-columns .2s cubic-bezier(.2,.8,.2,1);
+   ~252px (expanded) and ~44px (collapsed rail). Scoped to ≥769px because
+   mobile (`@media (max-width: 768px)` in foldex.css) wants the frame to
+   be a single column with the sidebar as an off-canvas drawer — and this
+   stylesheet is loaded AFTER foldex.css, so an unscoped rule here wins
+   the cascade even against a media-query rule that fires on the phone. */
+@media (min-width: 769px) {
+  .fx-frame {
+    min-height: 0;
+    grid-template-columns: var(--fx-sidebar-w, 252px) 1fr;
+    transition: grid-template-columns .2s cubic-bezier(.2,.8,.2,1);
+  }
 }
 .fx-sidebar {
   min-height: 100%;

@@ -61,7 +61,18 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
   if (!open) return null
 
   return (
-    <div ref={dialogRef} className="fx-overlay" role="dialog" aria-modal="true" aria-label={t('command_palette.dialog_aria')}>
+    <div
+      ref={dialogRef}
+      className="fx-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('command_palette.dialog_aria')}
+      onMouseDown={(e) => {
+        // Backdrop click = close. The check `e.target === e.currentTarget`
+        // makes sure clicks inside the .fx-cmdk box don't bubble up here.
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
       <div className="fx-cmdk">
         <div className="fx-cmdk-input">
           <Icon d={I.search} size={18} />
@@ -76,6 +87,18 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
             {t('command_palette.scope_label_prefix')} <b>{t('command_palette.scope_label_all_tags')}</b>
           </span>
           <kbd className="fx-kbd">esc</kbd>
+          {/* Touch-friendly close button. Esc covers desktop; on a phone
+              there is no esc key, so this is the only way out besides the
+              backdrop tap. */}
+          <button
+            type="button"
+            className="fx-cmdk-close"
+            onClick={onClose}
+            aria-label={t('common.close')}
+            data-tooltip={t('common.close')}
+          >
+            <Icon d={I.x} size={14} />
+          </button>
         </div>
 
         <div className="fx-cmdk-results">

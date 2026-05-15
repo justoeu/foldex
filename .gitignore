@@ -33,3 +33,6 @@ backups/
 
 # Claude Code per-session state (lock files, local user settings)
 .claude/
+
+# Playwright MCP artifacts (snapshots, console logs from in-session debugging)
+.playwright-mcp/

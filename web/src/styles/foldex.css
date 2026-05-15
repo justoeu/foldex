@@ -941,6 +941,18 @@
 .fx-cmdk-input input { flex: 1; font-size: 16px; font-weight: 600; color: var(--fx-ink); }
 .fx-cmdk-scope { font-size: 11px; color: var(--fx-ink-4); padding: 4px 8px; border-radius: 6px; background: var(--fx-bg-tint); }
 .fx-cmdk-scope b { color: var(--fx-ink-2); }
+.fx-cmdk-close {
+  display: grid; place-items: center;
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  color: var(--fx-ink-3);
+  background: var(--fx-bg-tint);
+  border: 1px solid var(--fx-border);
+  transition: background .12s, color .12s;
+  flex: 0 0 auto;
+}
+.fx-cmdk-close:hover { background: var(--fx-surface-3); color: var(--fx-ink); }
+.fx-cmdk-close:active { transform: translateY(1px); }
 
 .fx-cmdk-results { max-height: 420px; overflow-y: auto; padding: 6px 6px 8px; }
 .fx-cmdk-group { padding: 8px 0 4px; }
@@ -1576,15 +1588,16 @@
   /* Hamburger now visible. */
   .fx-topbar-hamburger { display: inline-flex; }
 
-  /* Topbar simplification: collapse to two rows so each row stays in
-     viewport. Row 1: hamburger + brand-mark + search. Row 2: action
-     icons. Brand-text already hidden by the existing ≤1500px rule. */
+  /* Mobile topbar = single row, five affordances:
+       [ham] [brand-mark] [search ………………] [home+stats] [more]
+     Every other control (sort, view, density, new link, new folder,
+     import/export, theme, language) collapses into the .fx-mobile-more
+     popover. Brand text is hidden — the icon alone identifies the app
+     and we recover ~50px of horizontal space for the search input. */
   .fx-topbar {
     grid-template-columns: auto auto minmax(0, 1fr) auto auto;
-    grid-template-rows: auto auto;
-    grid-template-areas:
-      "ham brand search search search"
-      "nav nav    nav    actions actions";
+    grid-template-rows: auto;
+    grid-template-areas: "ham brand search nav more";
     gap: 8px;
     padding: 10px 12px;
     overflow: visible;
@@ -1593,54 +1606,90 @@
   .fx-topbar > .fx-brand            { grid-area: brand; }
   .fx-topbar > .fx-search           { grid-area: search; }
   .fx-topbar > .fx-quicknav         { grid-area: nav; }
+  .fx-topbar > .fx-mobile-more      { grid-area: more; }
 
-  /* Everything after .fx-viewseg lives on the second row right side. */
+  /* Brand keeps only the gradient mark — the wordmark is redundant when
+     screen real estate is scarce, and a phone user looking at the SPA is
+     already inside Foldex. */
+  .fx-brand-text { display: none; }
+
+  /* Quicknav: keep Home + Stats, drop Import/Export (moved into the
+     kebab). Targeting the 3rd child rather than a named class because
+     the buttons are siblings without distinguishing selectors. */
+  .fx-topbar > .fx-quicknav > .fx-qn:nth-child(3) { display: none; }
+
+  /* Move sort + view segments, locale, theme, folder CTA, link CTA all
+     out of the topbar entirely — they're rendered inside the kebab
+     popover. `display: none` on the topbar-level children only; the same
+     classes inside the popover keep their default rendering. */
   .fx-topbar > .fx-segment,
-  .fx-topbar > .fx-viewseg {
-    display: none; /* sort + density move to the kebab menu — TODO Phase 2 */
-  }
-
-  /* Locale + theme + folder CTA + link CTA collapse onto the second row.
-     CTAs go icon-only on mobile to save width — labels move to tooltips. */
+  .fx-topbar > .fx-viewseg,
   .fx-topbar > .fx-themetoggle,
   .fx-topbar > .fx-cta-folder,
-  .fx-topbar > .fx-cta { /* nothing extra here — kbd hides below */ }
+  .fx-topbar > .fx-cta {
+    display: none;
+  }
+  /* LocalePicker is wrapped in its own div (inline style position:relative);
+     match by position — it's the direct child immediately before the kebab. */
+  .fx-topbar > div:not([class]) { display: none; }
 
   .fx-topbar .fx-kbd { display: none; }    /* keyboard shortcut chips */
   .fx-topbar .fx-kbd-cta { display: none; }
 
-  /* Hide brand-mark subtitle wrapper (already hidden via the existing
-     ≤1500px rule), but ensure brand-name still fits a 32px tile. */
-  .fx-brand-name { font-size: 15px; }
-
-  /* Search input slightly shorter so it fits side-by-side with brand+ham. */
-  .fx-search { height: 38px; padding: 0 10px; }
-
-  /* CTAs go compact: icon-prominent, label optional. */
-  .fx-cta {
-    padding: 0 12px;
-    height: 38px;
-    font-size: 13px;
-    gap: 6px;
-  }
-
-  /* Search kbd chip suppressed by the .fx-topbar .fx-kbd rule above. */
+  /* Search input slightly shorter so it fits side-by-side with the
+     other single-row affordances. The `min-width: 220px` from
+     overrides.css uses a `.fx-topbar .fx-search` (specificity 0/2/0)
+     selector, so we need to match-or-beat that here — hence the same
+     two-class selector with `min-width: 0`. Without this the search
+     pushes the kebab off-canvas on a 390px viewport. */
+  .fx-topbar .fx-search { height: 38px; padding: 0 10px; min-width: 0; }
+  .fx-topbar .fx-search input { font-size: 14px; min-width: 0; }
+  /* Kbd shortcut chip is keyboard-only — drop on phones. */
+  .fx-topbar .fx-search .fx-kbd { display: none; }
 }
 
-/* Phone-narrow (≤480px): hide non-essential nav icons + CTA labels. */
+/* Phone-narrow (≤480px): trim a little more padding. Quicknav (Home +
+   Stats) stays — it's part of the three-affordance contract. */
 @media (max-width: 480px) {
-  .fx-topbar > .fx-quicknav { display: none; }
-  .fx-cta span:not([class]) { display: none; }   /* hide label, keep icon */
-  .fx-cta { padding: 0 10px; }
+  .fx-topbar { gap: 6px; padding: 10px 10px; }
+  .fx-quicknav { gap: 2px; padding: 2px; }
 }
 
 /* Dialogs go full-screen on small viewports. The default `.fx-modal` has
    max-width 520-720px which is fine on desktop but leaves a tiny window
-   on a phone. Below 600px the modal claims the full viewport and the
-   overlay loses its centred padding. */
+   on a phone. Below 600px the modal claims the full viewport, the
+   overlay loses its centred padding, and the 2-column body stacks into
+   a single column so the form is comfortable to fill with one thumb. */
 @media (max-width: 600px) {
+  /* Belt-and-braces: prevent any element (including off-canvas drawers
+     and iOS's autoscroll-on-focus) from pushing the document past the
+     visual viewport horizontally. The shell already clips, but iOS
+     Safari can scroll the document/body even when the shell doesn't. */
+  html, body { overflow-x: hidden; }
+
+  /* Command palette gets the same full-screen treatment as the link
+     modal: claims the whole viewport, scope label hides (no horizontal
+     room), the esc kbd hint hides (no physical keyboard on a phone),
+     and the explicit X close button becomes the primary close
+     affordance besides the backdrop tap. */
+  .fx-cmdk {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    border-radius: 0;
+    border: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .fx-cmdk-input { padding: 14px 14px; gap: 8px; }
+  .fx-cmdk-input input { font-size: 15px; }
+  .fx-cmdk-scope { display: none; }
+  .fx-cmdk-input .fx-kbd { display: none; }
+  .fx-cmdk-close { width: 36px; height: 36px; }
+  .fx-cmdk-results { max-height: none; flex: 1; }
+
   .fx-overlay { padding: 0 !important; }
-  .fx-overlay-modal { align-items: stretch; }
+  .fx-overlay-modal { align-items: stretch; padding-top: 0 !important; }
   .fx-modal {
     width: 100vw;
     max-width: 100vw;
@@ -1648,6 +1697,82 @@
     max-height: 100dvh;
     border-radius: 0;
     margin: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Sticky header so the dialog title + close button stay reachable
+     while the user scrolls the form. */
+  .fx-modal-head {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--fx-surface);
+    border-bottom: 1px solid var(--fx-border-2);
+    padding: 14px 16px 10px;
+  }
+  .fx-modal-title { font-size: 18px; }
+  .fx-modal-kicker { font-size: 9.5px; }
+
+  /* Body: stack the two columns (form + preview/upload aside) into a
+     single scrollable column. The aside loses its left border (becomes
+     a top divider) so the visual seam matches the new direction. */
+  .fx-modal-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .fx-modal-col {
+    padding: 14px 16px 8px;
+    gap: 16px;
+    overflow: visible; /* parent .fx-modal-body owns the scroll */
+  }
+  .fx-modal-side {
+    padding: 14px 16px 24px;
+    border-left: 0;
+    border-top: 1px solid var(--fx-border-2);
+    background: color-mix(in srgb, var(--fx-bg-tint) 25%, transparent);
+  }
+
+  /* Bigger touch targets: form inputs at 44px tall, the recommended
+     iOS minimum. The desktop version is 38px which works with a mouse
+     but feels cramped on a finger. */
+  .fx-modal-col .fx-input,
+  .fx-modal-col .fx-input input,
+  .fx-modal-col .fx-input select {
+    min-height: 44px;
+    font-size: 15px;
+  }
+  .fx-modal-col .fx-textarea { min-height: 96px; font-size: 15px; }
+  .fx-tagpicker { padding: 12px; }
+  .fx-tagpicker-input { font-size: 14px; min-height: 28px; }
+
+  /* The preview image on the side panel shrinks slightly so it doesn't
+     dominate the screen when stacked under the form. */
+  .fx-modal-side-ogwrap { max-height: 200px; }
+  .fx-modal-side-ogimg { height: 200px; }
+
+  /* Sticky footer: the Save/Cancel pair pins to the bottom edge so the
+     user doesn't have to scroll back up after editing a long form. */
+  .fx-modal-foot {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    background: var(--fx-surface);
+    border-top: 1px solid var(--fx-border-2);
+    padding: 12px 16px;
+    /* Honour the iOS home-indicator safe area so the buttons stay tappable. */
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  /* Stretch the action pair across the full width — primary right,
+     cancel left, both with serious thumb targets. */
+  .fx-modal-foot .fx-confirm-btn {
+    flex: 1;
+    min-height: 46px;
+    font-size: 15px;
+    justify-content: center;
   }
 }
 
@@ -1755,12 +1880,20 @@
 @media (max-width: 768px) {
   .fx-mobile-more { display: inline-flex; }
   .fx-fab { display: inline-flex; }
-  /* On mobile, the in-topbar "New folder" + "New link" CTAs are
-     redundant — the overflow menu has folder, the FAB has link. Hide
-     them to recover horizontal space + avoid duplicate affordances. */
-  .fx-topbar > .fx-cta { display: none; }
-  /* Re-show the sort + view segments hidden by the earlier ≤768px rule
-     — they now live in the overflow menu, so the topbar only stays
-     clean if we DROP them from the grid entirely. The rule from the
-     previous commit already covers that (`display: none` above). */
 }
+
+/* Sub-list inside the overflow popover (currently: language picker
+   expanded inline). Renders flat-stacked rows under its parent row,
+   no nested popover, so taps stay on a single z-plane. */
+.fx-mobile-more-sublist {
+  padding: 4px 0 4px 24px;
+  border-left: 2px solid var(--fx-border-2);
+  margin-left: 14px;
+  display: flex;
+  flex-direction: column;
+}
+.fx-mobile-more-row-accent {
+  color: var(--fx-accent);
+  font-weight: 700;
+}
+.fx-mobile-more-row-accent .fx-mobile-more-row-icon { color: var(--fx-accent); }

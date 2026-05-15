@@ -255,9 +255,10 @@ export function Topbar({
         <Icon d={dark ? I.sun : I.moon} size={16} />
       </button>
 
-      {/* Mobile-only overflow menu — desktop hides it via CSS. Owns the
-          sort/view/density choices + an extra "New folder" entry so the
-          topbar's second row stays tappable on a phone. */}
+      {/* Mobile-only overflow menu — desktop hides it via CSS. Hosts every
+          control that doesn't fit the three-affordance mobile bar
+          (search + Home + Stats): sort, view, density, new link, new
+          folder, import/export, theme, language. */}
       <MobileOverflowMenu
         sort={sort}
         setSort={setSort}
@@ -266,6 +267,11 @@ export function Topbar({
         gridCols={gridCols}
         setGridCols={setGridCols}
         onNewFolder={onNewFolder}
+        onNewLink={onNewLink}
+        dark={dark}
+        setDark={setDark}
+        view={view}
+        setView={setView}
       />
 
       <button className="fx-cta fx-cta-folder" onClick={onNewFolder} aria-label={t('topbar.new_folder')}>

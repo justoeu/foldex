@@ -84,6 +84,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   const [imageRemoved, setImageRemoved] = useState(false)
   const [imageBusy, setImageBusy] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const urlInputRef = useRef<HTMLInputElement>(null)
   const qc = useQueryClient()
 
   useEffect(() => {
@@ -112,6 +113,19 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
     if (slugDirty) return
     setSlug(slugifyClient(title))
   }, [title, slugDirty])
+
+  // Focus the URL field on open. Using a deferred `.focus({ preventScroll })`
+  // instead of the native `autoFocus` attribute because the latter triggers
+  // iOS Safari's "scrollIntoView" heuristic, which horizontally scrolls the
+  // entire page when the modal mounts on a 390px viewport — leaving the
+  // form labels clipped off the left edge after the keyboard opens.
+  useEffect(() => {
+    if (!open) return
+    const id = requestAnimationFrame(() => {
+      urlInputRef.current?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(id)
+  }, [open])
 
   useEscape(onClose, open)
 
@@ -310,10 +324,10 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
               <div className="fx-input fx-input-url">
                 <Icon d={I.link} size={15} />
                 <input
+                  ref={urlInputRef}
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder={t('link_dialog.url_placeholder')}
-                  autoFocus
                   aria-label="URL"
                 />
               </div>
