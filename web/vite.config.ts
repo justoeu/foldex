@@ -7,8 +7,8 @@ export default defineConfig(({ mode }) => {
   const target = env.VITE_API_BASE || 'http://localhost:9089'
   // Stamp the build date so the sidebar footer can show "v1.2.3 · 2026-05-15"
   // without needing a pre-build script that mutates a source file. The
-  // VERSION itself comes from package.json (which release-please bumps —
-  // see web/src/version.ts).
+  // VERSION itself comes from web/package.json (bumped by
+  // `make release-{patch,minor,major}` — see web/src/version.ts).
   const buildDate = new Date().toISOString().slice(0, 10)
   return {
     define: {
