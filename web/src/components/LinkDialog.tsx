@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
+import { FolderPicker } from './FolderPicker'
 import { TagChip } from './TagChip'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useCreateLink, useUpdateLink, uploadLinkImage, removeLinkImage } from '../api/links'
 import { useCreateTag, useTags } from '../api/tags'
-import { useFolders } from '../api/folders'
 import { useQueryClient } from '@tanstack/react-query'
 import type { Link, Tag } from '../api/types'
 
@@ -58,7 +58,6 @@ const INLINE_PALETTE = [
 export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }: Props) {
   const { t } = useTranslation()
   const { data: tags = [] } = useTags()
-  const { data: folders = [] } = useFolders()
   const createTag = useCreateTag()
   const createLink = useCreateLink()
   const updateLink = useUpdateLink()
@@ -500,23 +499,11 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
 
             <label className="fx-field">
               <span className="fx-field-label">{t('link_dialog.folder_label')}</span>
-              <div className="fx-input">
-                <select
-                  className="fx-folder-select"
-                  value={folderId == null ? '' : String(folderId)}
-                  onChange={(e) =>
-                    setFolderId(e.target.value === '' ? null : Number(e.target.value))
-                  }
-                  aria-label="folder"
-                >
-                  <option value="">{t('link_dialog.folder_none')}</option>
-                  {folders.map((f) => (
-                    <option key={f.id} value={String(f.id)}>
-                      {f.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <FolderPicker
+                selected={folderId}
+                onChange={setFolderId}
+                parentId={defaultFolderId ?? null}
+              />
             </label>
 
             <label className="fx-toggle-row">
