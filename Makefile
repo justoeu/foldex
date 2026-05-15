@@ -11,6 +11,13 @@ ifneq (,$(wildcard $(ENV_FILE)))
   export
 endif
 
+# Decide whether to spin up the bundled foldex-db (postgres:18-alpine) based
+# on the user's POSTGRES_HOST in .env:
+#   POSTGRES_HOST=db (or empty)                     → yes, foldex owns Postgres
+#   POSTGRES_HOST=localhost / host.docker.internal /
+#     external host                                 → no, user has their own DB
+NEED_FOLDEX_DB := $(if $(POSTGRES_HOST),$(if $(filter db,$(POSTGRES_HOST)),yes,no),yes)
+
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"; printf "\nTargets:\n\n"} /^[a-zA-Z_-]+:.*?##/{printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
@@ -18,7 +25,10 @@ env: ## Create .env from .env.example if missing
 	@test -f $(ENV_FILE) || cp .env.example $(ENV_FILE)
 	@echo "$(ENV_FILE) ready"
 
-db-up: env ## Start Postgres (separate compose project)
+network: ## Ensure the shared `foldex` Docker network exists
+	@docker network inspect foldex >/dev/null 2>&1 || docker network create foldex >/dev/null
+
+db-up: env network ## Start the bundled Postgres (skip if your POSTGRES_HOST != db)
 	$(COMPOSE_DB) up -d
 
 db-down: ## Stop Postgres (keep volume)
@@ -30,16 +40,26 @@ db-nuke: ## Stop Postgres AND drop its volume (destructive)
 db-logs: ## Tail Postgres logs
 	$(COMPOSE_DB) logs -f
 
-up: env db-up ## Start the full stack from Docker Hub images (Postgres + backend + web)
+up: env network ## Start the full stack from Docker Hub (Postgres only when POSTGRES_HOST=db)
+ifeq ($(NEED_FOLDEX_DB),yes)
+	@$(MAKE) db-up
+else
+	@echo "POSTGRES_HOST=$(POSTGRES_HOST) → skipping foldex-db (using your existing Postgres)"
+endif
 	$(COMPOSE_APP) up -d
 
-apps-up: env ## Start only backend + web from Docker Hub (assumes Postgres already running)
+apps-up: env network ## Start only backend + web from Docker Hub (assumes Postgres already running)
 	$(COMPOSE_APP) up -d
 
-up-build: env db-up ## Build images locally from source and start the full stack (dev mode)
+up-build: env network ## Build images locally from source and start the full stack (dev mode)
+ifeq ($(NEED_FOLDEX_DB),yes)
+	@$(MAKE) db-up
+else
+	@echo "POSTGRES_HOST=$(POSTGRES_HOST) → skipping foldex-db (using your existing Postgres)"
+endif
 	$(COMPOSE_APP) up -d --build
 
-apps-up-build: env ## Build apps locally and start them (dev mode, assumes Postgres running)
+apps-up-build: env network ## Build apps locally and start them (dev mode, assumes Postgres running)
 	$(COMPOSE_APP) up -d --build
 
 pull: ## Refresh backend + web images from Docker Hub (does not restart)
