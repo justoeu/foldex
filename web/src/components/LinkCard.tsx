@@ -139,7 +139,9 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
           </div>
         </header>
 
-        {link.description && <p className="fx-card-desc">{link.description}</p>}
+        {link.description && (
+          <p className="fx-card-desc">{truncateDesc(link.description)}</p>
+        )}
 
         {link.tags.length > 0 && (
           <div className="fx-card-tags">
@@ -232,6 +234,20 @@ function hostOf(u: string) {
   } catch {
     return u
   }
+}
+
+// Cap the visible description at ~200 chars so a verbose Thingiverse-style
+// blurb (X-Axis upgrade compatibility lists, mod instructions, BOMs…)
+// doesn't blow the card to 30+ lines and crush the rest of the grid. We
+// prefer breaking at the last whitespace inside the budget so the cut
+// doesn't land mid-word; if there's no decent space in the last 30 chars
+// we fall back to a hard slice.
+function truncateDesc(s: string, max = 200): string {
+  if (s.length <= max) return s
+  const slice = s.slice(0, max)
+  const lastSpace = slice.lastIndexOf(' ')
+  if (lastSpace > max - 30) return slice.slice(0, lastSpace).trimEnd() + '…'
+  return slice.trimEnd() + '…'
 }
 
 function lastClick(link: Link, t: (key: string, opts?: Record<string, unknown>) => string): string {

@@ -39,6 +39,29 @@ describe('LinkCard', () => {
     expect(screen.getByText('7')).toBeInTheDocument()
   })
 
+  it('truncates description longer than 200 chars with an ellipsis', () => {
+    // 400-char description — should get cut around 200 (at a word boundary)
+    // and gain a trailing "…".
+    const longDesc = (
+      'The revised X-Axis is fully compatible with stock Prusa frame (MK2/MK3), as well as ' +
+      'with the Haribo/Zaribo/Bear frames. The compatibility with different extruders comes ' +
+      'from the X-carriages provided in this listing, stock ones will NOT work unless ' +
+      'explicitly stated.'
+    )
+    expect(longDesc.length).toBeGreaterThan(200)
+    renderWithProviders(<LinkCard link={{ ...baseLink, description: longDesc }} onEdit={vi.fn()} />)
+    const desc = document.querySelector('.fx-card-desc')
+    expect(desc).not.toBeNull()
+    expect(desc!.textContent!.length).toBeLessThanOrEqual(201) // 200 + the "…"
+    expect(desc!.textContent!.endsWith('…')).toBe(true)
+  })
+
+  it('keeps short descriptions untouched (no ellipsis)', () => {
+    renderWithProviders(<LinkCard link={baseLink} onEdit={vi.fn()} />)
+    const desc = document.querySelector('.fx-card-desc')
+    expect(desc?.textContent).toBe('Tech news.')
+  })
+
   it('title is a link that opens via /go/{slug}', () => {
     renderWithProviders(<LinkCard link={baseLink} onEdit={vi.fn()} />)
     const titleLink = screen.getByText('Hacker News').closest('a')
