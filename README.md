@@ -1,7 +1,7 @@
 # Foldex
 
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="foldex — self-hosted bookmark manager" width="100%"/>
+  <img src="docs/assets/home-empty.png" alt="foldex — self-hosted bookmark manager (home view with empty state, tag sidebar, topbar with search + sort + density controls, New folder / New link CTAs)" width="100%"/>
 </p>
 
 > Self-hosted bookmark manager with rich tagging, nestable folders, click tracking, visual URL previews, full backup, and a browser extension.
@@ -179,20 +179,15 @@ A vanilla Manifest V3 extension lives in `extension/`. Load it as **unpacked** f
 
 ## Screenshots
 
-<p align="center">
-  <img src="docs/assets/home-empty.png" alt="Foldex home view — empty state showing the tag sidebar, topbar, and the CTA card to add the first link" width="100%"/>
-</p>
+The empty-state hero up top is the Home view on a fresh install. More captures
+to come as the project gets more populated content:
 
-<p align="center"><sub><em>Home view (no links yet) — tag sidebar on the left, topbar with search + filters, New link / New folder CTAs on the right, empty-state card inviting the first import.</em></sub></p>
-
-> *Other captures pending:*
->
-> - Populated home grid (cards + 3/5/8-column density)
-> - Command palette (`⌥K`)
-> - New link dialog with tag autocomplete
-> - Import page (drag-drop) + preview with the mode picker
-> - Stats page (KPIs, top hosts, tag distribution)
-> - Extension popup
+- Populated home grid (cards + 3/5/8-column density)
+- Command palette (`⌥K`)
+- New link dialog with tag autocomplete
+- Import page (drag-drop) + preview with the mode picker
+- Stats page (KPIs, top hosts, tag distribution)
+- Extension popup
 
 ## Layout
 
