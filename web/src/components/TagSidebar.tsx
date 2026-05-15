@@ -13,6 +13,11 @@ type Props = {
   totalLinks: number
   collapsed: boolean
   onToggleCollapsed: () => void
+  // Mobile drawer: when true and viewport is ≤768px, the sidebar slides
+  // in from the left as an overlay. `onMobileClose` closes the drawer
+  // without otherwise affecting the desktop collapsed state.
+  mobileOpen?: boolean
+  onMobileClose?: () => void
 }
 
 // Bucket sizes: top 5 by usage live in the always-shown "Frequentes" group.
@@ -38,6 +43,8 @@ export function TagSidebar({
   totalLinks,
   collapsed,
   onToggleCollapsed,
+  mobileOpen = false,
+  onMobileClose,
 }: Props) {
   const { t } = useTranslation()
   const { data: tags = [], isLoading } = useTags()
@@ -57,9 +64,25 @@ export function TagSidebar({
     localStorage.setItem(OTHER_OPEN_KEY, otherOpen ? '1' : '0')
   }, [otherOpen])
 
+  // Esc closes the mobile drawer when it's open. Hooked unconditionally
+  // (handler no-ops when mobileOpen is false) so React doesn't see a
+  // changing hook count.
+  useEffect(() => {
+    if (!mobileOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onMobileClose?.()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [mobileOpen, onMobileClose])
+
+  const railClass = mobileOpen ? ' fx-sidebar-mobile-open' : ''
+
   // Collapsed = thin rail. Keeps the two tag-management actions accessible so
   // the user doesn't have to expand → click → collapse just to add a tag.
-  if (collapsed) {
+  // Note: the desktop-collapsed branch is skipped on mobile because mobileOpen
+  // always wants the full view as a drawer.
+  if (collapsed && !mobileOpen) {
     return (
       <aside className="fx-sidebar fx-sidebar-rail">
         <button
@@ -108,14 +131,24 @@ export function TagSidebar({
   const otherHidden = Math.max(0, other.length - otherVisible.length)
 
   return (
-    <aside className="fx-sidebar">
+    <aside className={'fx-sidebar' + railClass}>
       <div className="fx-side-head">
         <div className="fx-side-title">
           <Icon d={I.tag} size={15} /> <span>{t('sidebar.tags')}</span>
         </div>
         <div className="fx-side-head-actions">
+          {mobileOpen && (
+            <button
+              className="fx-iconbtn fx-sidebar-mobile-close"
+              aria-label={t('common.close')}
+              data-tooltip={t('common.close')}
+              onClick={onMobileClose}
+            >
+              <Icon d={I.x} size={14} />
+            </button>
+          )}
           <button
-            className="fx-iconbtn"
+            className="fx-iconbtn fx-sidebar-collapse-btn"
             aria-label={t('sidebar.collapse')}
             data-tooltip={t('sidebar.collapse')}
             onClick={onToggleCollapsed}

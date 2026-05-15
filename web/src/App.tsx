@@ -60,6 +60,11 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => typeof localStorage !== 'undefined' && localStorage.getItem('foldex.sidebar.collapsed') === '1',
   )
+  // Drawer-style sidebar on mobile (≤768px). Stays in-memory only — phone
+  // users almost never want it open by default after navigation. The
+  // toggle button on the topbar flips this, and tapping the backdrop or
+  // pressing Esc closes it.
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [gridCols, setGridCols] = useState<3 | 5 | 8>(() => {
     if (typeof localStorage === 'undefined') return 5
     const raw = parseInt(localStorage.getItem('foldex.grid.cols') ?? '5', 10)
@@ -271,19 +276,32 @@ export default function App() {
       </div>
 
       <div
-        className="fx-frame"
+        className={'fx-frame' + (mobileSidebarOpen ? ' fx-frame-mobile-drawer-open' : '')}
         style={{ ['--fx-sidebar-w' as never]: sidebarCollapsed ? '64px' : '252px' }}
       >
+        {mobileSidebarOpen && (
+          <div
+            className="fx-mobile-backdrop"
+            aria-hidden="true"
+            onClick={() => setMobileSidebarOpen(false)}
+          />
+        )}
         <TagSidebar
           collapsed={sidebarCollapsed}
           onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
+          mobileOpen={mobileSidebarOpen}
+          onMobileClose={() => setMobileSidebarOpen(false)}
           selected={selectedTags}
-          onToggle={(id) =>
+          onToggle={(id) => {
             setSelectedTags((prev) =>
               prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
             )
-          }
-          onClear={() => setSelectedTags([])}
+            setMobileSidebarOpen(false) // collapse drawer after a tap on mobile
+          }}
+          onClear={() => {
+            setSelectedTags([])
+            setMobileSidebarOpen(false)
+          }}
           totalLinks={Math.max(totalLinks, links.data?.length ?? 0)}
         />
 
@@ -291,6 +309,7 @@ export default function App() {
           <Topbar
             view={view}
             setView={setView}
+            onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
             onHome={() => {
               setView('home')
               setOpenFolder(null)

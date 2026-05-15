@@ -13,6 +13,8 @@ type Props = {
   // any open folder. Without this, clicking 🏠 from inside a folder is a
   // no-op (view is already 'home', only openFolder needs reset).
   onHome: () => void
+  // Hamburger button on mobile — opens the sidebar drawer in App.tsx.
+  onOpenMobileSidebar?: () => void
   q: string
   setQ: (v: string) => void
   onOpenPalette: () => void
@@ -32,6 +34,7 @@ export function Topbar({
   view,
   setView,
   onHome,
+  onOpenMobileSidebar,
   q,
   setQ,
   onOpenPalette,
@@ -49,6 +52,20 @@ export function Topbar({
   const { t } = useTranslation()
   return (
     <header className="fx-topbar">
+      {/* Hamburger only paints on ≤768px viewports (CSS-controlled). On
+          desktop it's hidden so the existing 9-column grid stays intact. */}
+      <button
+        className="fx-topbar-hamburger"
+        aria-label={t('sidebar.expand')}
+        data-tooltip={t('sidebar.expand')}
+        onClick={onOpenMobileSidebar}
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+          <line x1="3" y1="6"  x2="21" y2="6"  />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+      </button>
       <div className="fx-brand">
         <div className="fx-brand-mark">
           <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">

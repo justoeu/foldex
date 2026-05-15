@@ -1510,3 +1510,143 @@
   cursor: progress;
   pointer-events: none;
 }
+
+/* ──────────────────────────────────────────────────────────────────────
+   Mobile (≤768px) — sidebar as drawer + topbar compact + dialogs full
+   ──────────────────────────────────────────────────────────────────────
+   Desktop layout is preserved unchanged. These rules only activate on
+   narrow viewports so the desktop experience never pays a CSS cost.
+   ────────────────────────────────────────────────────────────────────── */
+
+/* Hamburger button — desktop-hidden, mobile-shown. */
+.fx-topbar-hamburger {
+  display: none;
+  width: 36px; height: 36px;
+  align-items: center; justify-content: center;
+  color: var(--fx-ink-2);
+  border-radius: 9px;
+  background: var(--fx-bg-tint);
+}
+.fx-topbar-hamburger:hover { background: var(--fx-surface-3); color: var(--fx-ink); }
+
+/* Mobile drawer backdrop — covers the rest of the screen when the
+   sidebar is slid in. Tap to close. */
+.fx-mobile-backdrop {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+  z-index: 80;
+  animation: fx-fade-in 0.18s ease-out;
+}
+@keyframes fx-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Default sidebar mobile-close button hidden on desktop. */
+.fx-sidebar-mobile-close { display: none; }
+
+@media (max-width: 768px) {
+  /* Shell: single column. Sidebar floats over the main content as a
+     drawer; main owns the full row. */
+  .fx-frame { grid-template-columns: 1fr; }
+
+  /* Sidebar becomes a drawer. Off-canvas by default, slides in when the
+     parent gets `fx-frame-mobile-drawer-open` (set by App.tsx). */
+  .fx-sidebar {
+    position: fixed;
+    top: 0; bottom: 0; left: 0;
+    width: min(86vw, 320px);
+    margin: 0;
+    border-radius: 0 18px 18px 0;
+    z-index: 90;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease-out;
+    box-shadow: var(--fx-shadow-2);
+  }
+  .fx-frame-mobile-drawer-open .fx-sidebar { transform: translateX(0); }
+  .fx-frame-mobile-drawer-open .fx-mobile-backdrop { display: block; }
+
+  /* The desktop "collapse to rail" toggle is meaningless on mobile —
+     the drawer is the affordance. Hide that button to declutter. */
+  .fx-sidebar-collapse-btn { display: none; }
+  .fx-sidebar-mobile-close { display: inline-flex; }
+
+  /* Main: a bit less padding to recover screen real estate. */
+  .fx-main { padding: 10px 10px 14px 10px; gap: 12px; }
+
+  /* Hamburger now visible. */
+  .fx-topbar-hamburger { display: inline-flex; }
+
+  /* Topbar simplification: collapse to two rows so each row stays in
+     viewport. Row 1: hamburger + brand-mark + search. Row 2: action
+     icons. Brand-text already hidden by the existing ≤1500px rule. */
+  .fx-topbar {
+    grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+    grid-template-rows: auto auto;
+    grid-template-areas:
+      "ham brand search search search"
+      "nav nav    nav    actions actions";
+    gap: 8px;
+    padding: 10px 12px;
+    overflow: visible;
+  }
+  .fx-topbar > .fx-topbar-hamburger { grid-area: ham; }
+  .fx-topbar > .fx-brand            { grid-area: brand; }
+  .fx-topbar > .fx-search           { grid-area: search; }
+  .fx-topbar > .fx-quicknav         { grid-area: nav; }
+
+  /* Everything after .fx-viewseg lives on the second row right side. */
+  .fx-topbar > .fx-segment,
+  .fx-topbar > .fx-viewseg {
+    display: none; /* sort + density move to the kebab menu — TODO Phase 2 */
+  }
+
+  /* Locale + theme + folder CTA + link CTA collapse onto the second row.
+     CTAs go icon-only on mobile to save width — labels move to tooltips. */
+  .fx-topbar > .fx-themetoggle,
+  .fx-topbar > .fx-cta-folder,
+  .fx-topbar > .fx-cta { /* nothing extra here — kbd hides below */ }
+
+  .fx-topbar .fx-kbd { display: none; }    /* keyboard shortcut chips */
+  .fx-topbar .fx-kbd-cta { display: none; }
+
+  /* Hide brand-mark subtitle wrapper (already hidden via the existing
+     ≤1500px rule), but ensure brand-name still fits a 32px tile. */
+  .fx-brand-name { font-size: 15px; }
+
+  /* Search input slightly shorter so it fits side-by-side with brand+ham. */
+  .fx-search { height: 38px; padding: 0 10px; }
+
+  /* CTAs go compact: icon-prominent, label optional. */
+  .fx-cta {
+    padding: 0 12px;
+    height: 38px;
+    font-size: 13px;
+    gap: 6px;
+  }
+
+  /* Search kbd chip suppressed by the .fx-topbar .fx-kbd rule above. */
+}
+
+/* Phone-narrow (≤480px): hide non-essential nav icons + CTA labels. */
+@media (max-width: 480px) {
+  .fx-topbar > .fx-quicknav { display: none; }
+  .fx-cta span:not([class]) { display: none; }   /* hide label, keep icon */
+  .fx-cta { padding: 0 10px; }
+}
+
+/* Dialogs go full-screen on small viewports. The default `.fx-modal` has
+   max-width 520-720px which is fine on desktop but leaves a tiny window
+   on a phone. Below 600px the modal claims the full viewport and the
+   overlay loses its centred padding. */
+@media (max-width: 600px) {
+  .fx-overlay { padding: 0 !important; }
+  .fx-overlay-modal { align-items: stretch; }
+  .fx-modal {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    margin: 0;
+  }
+}
