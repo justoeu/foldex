@@ -186,7 +186,24 @@
 
 .fx-topbar {
   display: grid;
-  grid-template-columns: auto auto 1fr auto auto auto;
+  /* 9 explicit columns matching the 9 children in Topbar.tsx (brand,
+     quicknav, search, sort segment, view segment, locale picker, theme
+     toggle, new-folder CTA, new-link CTA). Only the search column has a
+     flexible track — `minmax(0, 1fr)` lets it shrink below its content's
+     intrinsic width when the row is tight, so the right-side CTAs never
+     pop out of the rounded surface. Adding the locale picker pushed an
+     `auto auto 1fr auto auto auto` grid over the available width at
+     normal viewports; declaring all 9 tracks fixes that. */
+  grid-template-columns:
+    auto                 /* brand */
+    auto                 /* quicknav */
+    minmax(140px, 1fr)   /* search — shrink target */
+    auto                 /* sort */
+    auto                 /* view + density */
+    auto                 /* locale picker */
+    auto                 /* theme toggle */
+    auto                 /* nova pasta CTA */
+    auto;                /* novo link CTA */
   align-items: center;
   gap: 14px;
   padding: 10px 14px;
@@ -196,6 +213,23 @@
   border: 1px solid var(--fx-border);
   border-radius: 16px;
   box-shadow: var(--fx-shadow-1);
+  min-width: 0;
+  /* Belt-and-suspenders: nothing in the topbar should ever paint outside
+     the rounded card if the children overflow. min-width on children +
+     minmax(0, 1fr) on search should already prevent it, but if a future
+     change adds another fixed-size item this stops a regression cold. */
+  overflow: hidden;
+}
+
+/* Below ~1500px the brand subtitle ("personal · self-hosted") earns its
+   keep less than the CTAs do — hide it so search keeps a usable width. */
+@media (max-width: 1500px) {
+  .fx-brand-sub { display: none; }
+}
+
+/* Even tighter: compact sort labels — keep the row navigable. */
+@media (max-width: 1320px) {
+  .fx-seg { padding: 0 8px; font-size: 12px; }
 }
 
 .fx-brand { display: flex; align-items: center; gap: 10px; }
