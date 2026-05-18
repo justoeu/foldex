@@ -22,15 +22,21 @@ func (f *fakeScreenshotter) Capture(_ context.Context, _ string) ([]byte, error)
 }
 
 type fakeUploader struct {
-	calls int
-	last  struct{ key, ct string; data []byte }
-	err   error
+	calls   int
+	last    struct{ key, ct string; data []byte }
+	deleted []string
+	err     error
 }
 
 func (f *fakeUploader) Upload(_ context.Context, key string, data []byte, ct string) error {
 	f.calls++
 	f.last.key, f.last.data, f.last.ct = key, data, ct
 	return f.err
+}
+
+func (f *fakeUploader) DeleteObject(_ context.Context, key string) error {
+	f.deleted = append(f.deleted, key)
+	return nil
 }
 
 // These unit tests exercise the worker's branching that does not require a

@@ -9,7 +9,16 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/imageopt"
 	"foldex/internal/links"
+)
+
+// Same defaults as the upload handler — see internal/links.imageMaxDim. JPEG
+// q≈82 with a 1024 px cap on the longest side. Worker output goes through
+// the same pipeline so screenshots aren't a special case.
+const (
+	screenshotMaxDim  = 1024
+	screenshotQuality = 82
 )
 
 // Screenshotter captures a URL and returns PNG bytes. Optional fallback.
@@ -17,9 +26,12 @@ type Screenshotter interface {
 	Capture(ctx context.Context, pageURL string) ([]byte, error)
 }
 
-// Uploader stores PNG bytes to object storage under a key. Optional fallback.
+// Uploader stores image bytes to object storage under a key. DeleteObject is
+// used to purge sibling-extension orphans when a re-encoded screenshot lands
+// at a new key (e.g. legacy .png replaced by .jpg).
 type Uploader interface {
 	Upload(ctx context.Context, key string, data []byte, contentType string) error
+	DeleteObject(ctx context.Context, key string) error
 }
 
 type Worker struct {
@@ -207,8 +219,31 @@ func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string) 
 		w.logger.Warn("screenshot fallback capture failed", "link_id", id, "err", err)
 		return
 	}
-	key := fmt.Sprintf("screenshots/%d.png", id)
-	if err := w.uploader.Upload(shotCtx, key, png, "image/png"); err != nil {
+
+	opt, err := imageopt.Optimize(png, imageopt.Options{MaxDim: screenshotMaxDim, Quality: screenshotQuality})
+	if err != nil {
+		// Fall back to storing the raw PNG so a re-encode bug never blocks
+		// the fallback that's already past the expensive screenshot step.
+		w.logger.Warn("screenshot fallback optimize failed, storing original PNG",
+			"link_id", id, "err", err)
+		opt = imageopt.Result{Data: png, ContentType: "image/png", Ext: "png"}
+	}
+
+	key := fmt.Sprintf("screenshots/%d.%s", id, opt.Ext)
+	// Purge stale sibling-extension keys so the bucket doesn't accumulate
+	// orphans when a link's screenshot moves from .png to .jpg (or vice
+	// versa via the fallback path). DeleteObject is idempotent.
+	for _, ext := range []string{"png", "jpg", "gif", "webp"} {
+		if ext == opt.Ext {
+			continue
+		}
+		stale := fmt.Sprintf("screenshots/%d.%s", id, ext)
+		if delErr := w.uploader.DeleteObject(shotCtx, stale); delErr != nil {
+			w.logger.Warn("screenshot fallback purge legacy failed",
+				"link_id", id, "key", stale, "err", delErr)
+		}
+	}
+	if err := w.uploader.Upload(shotCtx, key, opt.Data, opt.ContentType); err != nil {
 		w.logger.Warn("screenshot fallback upload failed", "link_id", id, "err", err)
 		return
 	}
@@ -217,7 +252,11 @@ func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string) 
 		w.logger.Warn("screenshot fallback db update failed", "link_id", id, "err", err)
 		return
 	}
-	w.logger.Info("screenshot fallback ok", "link_id", id, "key", key)
+	w.logger.Info("screenshot fallback ok",
+		"link_id", id, "key", key,
+		"source_bytes", len(png), "stored_bytes", len(opt.Data),
+		"resized", opt.Resized, "reencoded", opt.Reencoded,
+	)
 }
 
 func (w *Worker) requeuePending(ctx context.Context) {

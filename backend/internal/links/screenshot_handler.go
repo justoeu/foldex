@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/imageopt"
 	"foldex/internal/pkg/httperr"
 )
 
@@ -28,6 +29,14 @@ var allowedUploadMIMEs = map[string]string{
 	"image/webp": "webp",
 }
 
+// Image optimization defaults — JPEG q≈82 caps thumbnails at 1024 px on the
+// longest side. UI cards render at 150 px; 1024 leaves headroom for retina
+// and zoom.
+const (
+	imageMaxDim  = 1024
+	imageQuality = 82
+)
+
 // Screenshotter captures a URL and returns PNG bytes.
 type Screenshotter interface {
 	Capture(ctx context.Context, pageURL string) ([]byte, error)
@@ -37,28 +46,37 @@ type Screenshotter interface {
 type Uploader interface {
 	Upload(ctx context.Context, key string, data []byte, contentType string) error
 	GetObject(ctx context.Context, key string) ([]byte, string, error)
+	DeleteObject(ctx context.Context, key string) error
+}
+
+// screenshotRepo is the slice of the Repository that ScreenshotHandler needs.
+// Defined as an interface so unit tests can inject a fake without a real DB.
+type screenshotRepo interface {
+	Get(ctx context.Context, id int64) (Link, error)
+	UpdateOGImage(ctx context.Context, id int64, imageURL string) error
+	ClearOGImage(ctx context.Context, id int64) error
 }
 
 // ScreenshotHandler handles screenshot capture and file proxy routes.
 type ScreenshotHandler struct {
-	repo         *Repository
+	repo          screenshotRepo
 	screenshotter Screenshotter
-	storage      Uploader
-	logger       *slog.Logger
+	storage       Uploader
+	logger        *slog.Logger
 }
 
 // NewScreenshotHandler creates a ScreenshotHandler.
 func NewScreenshotHandler(repo *Repository, sc Screenshotter, st Uploader, logger *slog.Logger) *ScreenshotHandler {
 	return &ScreenshotHandler{
-		repo:         repo,
+		repo:          repo,
 		screenshotter: sc,
-		storage:      st,
-		logger:       logger,
+		storage:       st,
+		logger:        logger,
 	}
 }
 
-// CaptureAndStore captures a screenshot of the link's URL, saves it to
-// object storage under screenshots/{id}.png and returns the proxy URL.
+// CaptureAndStore captures a screenshot of the link's URL, optimizes it, saves
+// it to object storage under screenshots/{id}.{ext}, and returns the proxy URL.
 func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r)
 	if err != nil {
@@ -79,13 +97,21 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	key := fmt.Sprintf("screenshots/%d.png", id)
-	if err := h.storage.Upload(r.Context(), key, png, "image/png"); err != nil {
+	opt := optimizeOrFallback(png, "image/png", "png", h.logger, "screenshot", id)
+
+	key := fmt.Sprintf("screenshots/%d.%s", id, opt.Ext)
+	h.purgeLegacyVariants(r.Context(), "screenshots", id, opt.Ext)
+	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
 		h.logger.Error("screenshot upload failed", "id", id, "key", key, "err", err)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store screenshot"))
 		return
 	}
 
+	h.logger.Info("screenshot stored",
+		"id", id, "key", key,
+		"source_bytes", len(png), "stored_bytes", len(opt.Data),
+		"resized", opt.Resized, "reencoded", opt.Reencoded,
+	)
 	httperr.JSON(w, http.StatusOK, map[string]string{
 		"url": "/api/files/" + key,
 	})
@@ -152,8 +178,9 @@ func isAllowedServeMIME(m string) bool {
 	return false
 }
 
-// UploadImage accepts a multipart upload (field "image"), stores it in object
-// storage under images/{id}.{ext}, and updates the link's og_image_url.
+// UploadImage accepts a multipart upload (field "image"), optimizes it
+// (downscale + JPEG re-encode), stores the result in object storage under
+// images/{id}.{ext}, and updates the link's og_image_url.
 // Mounted at POST /api/links/{id}/image.
 func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r)
@@ -199,15 +226,18 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	// `image/png` declaration that would later be served back as that MIME
 	// (stored XSS via the ProxyFile cache).
 	detected := http.DetectContentType(data)
-	ext, ok := allowedUploadMIMEs[detected]
+	srcExt, ok := allowedUploadMIMEs[detected]
 	if !ok {
 		h.logger.Warn("image upload: rejected MIME", "id", id, "detected", detected)
 		httperr.Write(w, httperr.New(http.StatusUnsupportedMediaType, "invalid_mime", "file must be a PNG, JPEG, GIF, or WebP image"))
 		return
 	}
-	key := fmt.Sprintf("images/%d.%s", id, ext)
 
-	if err := h.storage.Upload(r.Context(), key, data, detected); err != nil {
+	opt := optimizeOrFallback(data, detected, srcExt, h.logger, "image upload", id)
+
+	key := fmt.Sprintf("images/%d.%s", id, opt.Ext)
+	h.purgeLegacyVariants(r.Context(), "images", id, opt.Ext)
+	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
 		h.logger.Error("image upload: storage upload failed", "id", id, "key", key, "err", err)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store image"))
 		return
@@ -220,7 +250,12 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	h.logger.Info("image uploaded", "id", id, "key", key)
+	h.logger.Info("image uploaded",
+		"id", id, "key", key,
+		"source_mime", opt.SourceMIME,
+		"source_bytes", len(data), "stored_bytes", len(opt.Data),
+		"resized", opt.Resized, "reencoded", opt.Reencoded,
+	)
 	httperr.JSON(w, http.StatusOK, map[string]string{"url": proxyURL})
 }
 
@@ -237,6 +272,42 @@ func (h *ScreenshotHandler) DeleteImage(w http.ResponseWriter, r *http.Request) 
 	}
 	h.logger.Info("image cleared", "id", id)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// optimizeOrFallback runs imageopt.Optimize and, on failure, returns a Result
+// that wraps the original bytes so the upload pipeline never blocks on a
+// re-encode bug. The fallback decision is logged at warn level.
+func optimizeOrFallback(data []byte, sourceMIME, sourceExt string, logger *slog.Logger, op string, id int64) imageopt.Result {
+	res, err := imageopt.Optimize(data, imageopt.Options{MaxDim: imageMaxDim, Quality: imageQuality})
+	if err != nil {
+		logger.Warn(op+": optimize failed, storing original",
+			"id", id, "source_mime", sourceMIME, "err", err)
+		return imageopt.Result{
+			Data:        data,
+			ContentType: sourceMIME,
+			Ext:         sourceExt,
+			SourceMIME:  sourceMIME,
+		}
+	}
+	return res
+}
+
+// purgeLegacyVariants removes every sibling-extension object for the same id
+// under the given prefix except the one we just wrote. Keeps MinIO from
+// accumulating orphans when a link previously had a .png/.gif/.webp upload
+// and the new upload writes .jpg (or vice versa via the fallback path).
+// DeleteObject is idempotent — NoSuchKey is treated as success.
+func (h *ScreenshotHandler) purgeLegacyVariants(ctx context.Context, prefix string, id int64, keepExt string) {
+	for _, ext := range allowedUploadMIMEs {
+		if ext == keepExt {
+			continue
+		}
+		key := fmt.Sprintf("%s/%d.%s", prefix, id, ext)
+		if err := h.storage.DeleteObject(ctx, key); err != nil {
+			h.logger.Warn("purge legacy variant failed",
+				"key", key, "err", err)
+		}
+	}
 }
 
 // mimeToExt maps common image MIME types to file extensions.

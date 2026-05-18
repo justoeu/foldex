@@ -5,11 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -21,11 +25,27 @@ import (
 // looks at the first 512 bytes; this is enough to be classified as image/png.
 var pngHeader = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
 
+// fakePNG returns bytes that http.DetectContentType classifies as image/png
+// but that are NOT a decodable PNG. Used to test fallback paths.
 func fakePNG(payload string) []byte {
 	out := make([]byte, 0, len(pngHeader)+len(payload))
 	out = append(out, pngHeader...)
 	out = append(out, []byte(payload)...)
 	return out
+}
+
+// realPNG returns a decodable solid-color PNG at the given dimensions.
+func realPNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.SetNRGBA(x, y, color.NRGBA{R: uint8(x % 255), G: uint8(y % 255), B: 128, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, img))
+	return buf.Bytes()
 }
 
 // --- fakes ---
@@ -39,8 +59,16 @@ func (f *fakeScreenshotter) Capture(_ context.Context, _ string) ([]byte, error)
 	return f.png, f.err
 }
 
+type uploadOp struct {
+	key         string
+	contentType string
+	bytes       []byte
+}
+
 type fakeUploader struct {
 	uploaded map[string][]byte
+	ops      []uploadOp // ordered call log
+	deleted  []string   // ordered DeleteObject call log
 	err      error
 	getErr   error
 }
@@ -49,11 +77,12 @@ func newFakeUploader() *fakeUploader {
 	return &fakeUploader{uploaded: map[string][]byte{}}
 }
 
-func (f *fakeUploader) Upload(_ context.Context, key string, data []byte, _ string) error {
+func (f *fakeUploader) Upload(_ context.Context, key string, data []byte, ct string) error {
 	if f.err != nil {
 		return f.err
 	}
 	f.uploaded[key] = data
+	f.ops = append(f.ops, uploadOp{key: key, contentType: ct, bytes: data})
 	return nil
 }
 
@@ -68,26 +97,69 @@ func (f *fakeUploader) GetObject(_ context.Context, key string) ([]byte, string,
 	return d, "image/png", nil
 }
 
+func (f *fakeUploader) DeleteObject(_ context.Context, key string) error {
+	f.deleted = append(f.deleted, key)
+	// fakeUploader treats every delete as success (matches the production
+	// idempotent behaviour where NoSuchKey is swallowed).
+	delete(f.uploaded, key)
+	return nil
+}
+
+type fakeRepo struct {
+	links       map[int64]Link
+	updatedURL  map[int64]string
+	clearedIDs  []int64
+	getErr      error
+	updateErr   error
+	clearErr    error
+}
+
+func newFakeRepo() *fakeRepo {
+	return &fakeRepo{links: map[int64]Link{}, updatedURL: map[int64]string{}}
+}
+
+func (f *fakeRepo) Get(_ context.Context, id int64) (Link, error) {
+	if f.getErr != nil {
+		return Link{}, f.getErr
+	}
+	l, ok := f.links[id]
+	if !ok {
+		return Link{}, errors.New("not found")
+	}
+	return l, nil
+}
+
+func (f *fakeRepo) UpdateOGImage(_ context.Context, id int64, imageURL string) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	f.updatedURL[id] = imageURL
+	return nil
+}
+
+func (f *fakeRepo) ClearOGImage(_ context.Context, id int64) error {
+	if f.clearErr != nil {
+		return f.clearErr
+	}
+	f.clearedIDs = append(f.clearedIDs, id)
+	return nil
+}
+
 // --- helpers ---
 
 func newTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// buildRouter creates a chi router that mounts the screenshot handler with a
-// fake repository seeded with one link. It does not touch a real database.
-func buildRouter(t *testing.T, sc Screenshotter, up Uploader) (*chi.Mux, *fakeUploader) {
+// buildRouter mounts the real ScreenshotHandler methods backed by fakes —
+// no inlined closures, so production code paths (including imageopt) run.
+func buildRouter(t *testing.T, sc Screenshotter, up Uploader, repo screenshotRepo) (*chi.Mux, *fakeUploader, *fakeRepo) {
 	t.Helper()
-	// We need a real *Repository for the handler. Use a nil pool — that
-	// means Get/List/etc. will panic if called. The fakeScreenshotter and
-	// fakeUploader control all I/O paths in these unit tests.
-	//
-	// Instead, inject a custom repo via a small test double for the repo
-	// *get* call that the screenshot handler uses.
-	fakeUp := up.(*fakeUploader)
+	fakeUp, _ := up.(*fakeUploader)
+	fakeRp, _ := repo.(*fakeRepo)
 
 	sh := &ScreenshotHandler{
-		repo:          nil, // replaced below via a custom handler wrapper
+		repo:          repo,
 		screenshotter: sc,
 		storage:       up,
 		logger:        newTestLogger(),
@@ -95,107 +167,53 @@ func buildRouter(t *testing.T, sc Screenshotter, up Uploader) (*chi.Mux, *fakeUp
 
 	r := chi.NewRouter()
 	r.Route("/api", func(api chi.Router) {
-		// POST /api/links/{id}/screenshot — we override CaptureAndStore
-		// with a closure that injects a fake link without needing a DB.
-		api.Post("/links/{id}/screenshot", func(w http.ResponseWriter, r *http.Request) {
-			id, err := parseID(r)
-			if err != nil {
-				writeSimpleErr(w, &simpleErr{status: http.StatusBadRequest, code: "invalid_id", message: err.Error()})
-				return
-			}
-			// Fake link for test purposes.
-			link := Link{ID: id, URL: "https://example.com"}
-
-			png, captErr := sh.screenshotter.Capture(r.Context(), link.URL)
-			if captErr != nil {
-				writeSimpleErr(w, httperrInternal("screenshot_failed", captErr.Error()))
-				return
-			}
-
-			key := formKey(id)
-			if upErr := sh.storage.Upload(r.Context(), key, png, "image/png"); upErr != nil {
-				writeSimpleErr(w, httperrInternal("upload_failed", upErr.Error()))
-				return
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]string{"url": "/api/files/" + key})
-		})
-
-		// GET /api/files/* — use the real ProxyFile handler.
+		api.Post("/links/{id}/screenshot", sh.CaptureAndStore)
+		api.Post("/links/{id}/image", sh.UploadImage)
 		api.Get("/files/*", sh.ProxyFile)
 	})
-
-	return r, fakeUp
-}
-
-// small helpers to avoid importing httperr from within the package test.
-type simpleErr struct {
-	status  int
-	code    string
-	message string
-}
-
-func writeSimpleErr(w http.ResponseWriter, e *simpleErr) {
-	type envelope struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	var env envelope
-	env.Error.Code = e.code
-	env.Error.Message = e.message
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(e.status)
-	_ = json.NewEncoder(w).Encode(env)
-}
-
-func httperrInternal(code, msg string) *simpleErr {
-	return &simpleErr{status: http.StatusInternalServerError, code: code, message: msg}
-}
-
-func formKey(id int64) string {
-	return "screenshots/" + itoa(id) + ".png"
-}
-
-func itoa(n int64) string {
-	return http.StatusText(0)[:0] + func() string {
-		b := []byte{}
-		if n == 0 {
-			return "0"
-		}
-		for n > 0 {
-			b = append([]byte{byte('0' + n%10)}, b...)
-			n /= 10
-		}
-		return string(b)
-	}()
+	return r, fakeUp, fakeRp
 }
 
 // --- unit tests for ScreenshotHandler ---
 
 func TestCaptureAndStore_Success(t *testing.T) {
-	sc := &fakeScreenshotter{png: []byte("PNG_DATA")}
+	src := realPNG(t, 1500, 900)
+	sc := &fakeScreenshotter{png: src}
 	up := newFakeUploader()
-	r, fakeUp := buildRouter(t, sc, up)
+	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
+	r, fakeUp, _ := buildRouter(t, sc, up, repo)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, w.Code)
 	var body map[string]string
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
-	assert.Equal(t, "/api/files/screenshots/1.png", body["url"])
-	assert.Equal(t, []byte("PNG_DATA"), fakeUp.uploaded["screenshots/1.png"])
+	assert.Equal(t, "/api/files/screenshots/1.jpg", body["url"])
+
+	// Stored object is a real JPEG with the long side downscaled to 1024.
+	// Size-vs-source isn't asserted: synthetic test PNGs compress better
+	// with DEFLATE than JPEG. The production case (real screenshots /
+	// photos) is exercised via integration tests.
+	stored, ok := fakeUp.uploaded["screenshots/1.jpg"]
+	require.True(t, ok, "expected screenshots/1.jpg in uploaded map")
+	assert.Equal(t, "image/jpeg", http.DetectContentType(stored))
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(stored))
+	require.NoError(t, err)
+	assert.Equal(t, 1024, cfg.Width)
+	// No legacy .png left in the map (would only matter if seeded — assert
+	// the cleanup call happened).
+	assert.Contains(t, fakeUp.deleted, "screenshots/1.png")
 }
 
 func TestCaptureAndStore_ScreenshotFails(t *testing.T) {
 	sc := &fakeScreenshotter{err: errors.New("chromium crashed")}
 	up := newFakeUploader()
-	r, _ := buildRouter(t, sc, up)
+	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
+	r, _, _ := buildRouter(t, sc, up, repo)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
 	w := httptest.NewRecorder()
@@ -209,10 +227,12 @@ func TestCaptureAndStore_ScreenshotFails(t *testing.T) {
 }
 
 func TestCaptureAndStore_UploadFails(t *testing.T) {
-	sc := &fakeScreenshotter{png: []byte("PNG")}
+	sc := &fakeScreenshotter{png: realPNG(t, 300, 200)}
 	up := newFakeUploader()
 	up.err = errors.New("minio down")
-	r, _ := buildRouter(t, sc, up)
+	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
+	r, _, _ := buildRouter(t, sc, up, repo)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
 	w := httptest.NewRecorder()
@@ -226,11 +246,11 @@ func TestCaptureAndStore_UploadFails(t *testing.T) {
 }
 
 func TestCaptureAndStore_InvalidID(t *testing.T) {
-	sc := &fakeScreenshotter{png: []byte("PNG")}
+	sc := &fakeScreenshotter{png: realPNG(t, 50, 50)}
 	up := newFakeUploader()
-	r, _ := buildRouter(t, sc, up)
+	repo := newFakeRepo()
+	r, _, _ := buildRouter(t, sc, up, repo)
 
-	// "abc" is matched by chi as a string param; parseID then returns 400.
 	req := httptest.NewRequest(http.MethodPost, "/api/links/abc/screenshot", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -238,11 +258,33 @@ func TestCaptureAndStore_InvalidID(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestCaptureAndStore_OptimizeFailureFallsBackToPNG(t *testing.T) {
+	// fakePNG sniffs as image/png but isn't a decodable PNG — Optimize
+	// returns ErrDecode, handler falls back to storing the raw bytes under
+	// the legacy .png extension.
+	bad := fakePNG("not really a png")
+	sc := &fakeScreenshotter{png: bad}
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	repo.links[7] = Link{ID: 7, URL: "https://example.com"}
+	r, fakeUp, _ := buildRouter(t, sc, up, repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/links/7/screenshot", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, bad, fakeUp.uploaded["screenshots/7.png"])
+	require.Len(t, fakeUp.ops, 1)
+	assert.Equal(t, "image/png", fakeUp.ops[0].contentType)
+}
+
 func TestProxyFile_Success(t *testing.T) {
-	sc := &fakeScreenshotter{png: fakePNG("payload")}
+	sc := &fakeScreenshotter{}
 	up := newFakeUploader()
 	up.uploaded["screenshots/42.png"] = fakePNG("IMG_CONTENT")
-	r, _ := buildRouter(t, sc, up)
+	repo := newFakeRepo()
+	r, _, _ := buildRouter(t, sc, up, repo)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/files/screenshots/42.png", nil)
 	w := httptest.NewRecorder()
@@ -258,7 +300,8 @@ func TestProxyFile_NotFound(t *testing.T) {
 	sc := &fakeScreenshotter{}
 	up := newFakeUploader()
 	up.getErr = errors.New("key does not exist")
-	r, _ := buildRouter(t, sc, up)
+	repo := newFakeRepo()
+	r, _, _ := buildRouter(t, sc, up, repo)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/files/screenshots/999.png", nil)
 	w := httptest.NewRecorder()
@@ -272,7 +315,8 @@ func TestProxyFile_NotFound(t *testing.T) {
 func TestProxyFile_RejectsTraversalKey(t *testing.T) {
 	sc := &fakeScreenshotter{}
 	up := newFakeUploader()
-	r, _ := buildRouter(t, sc, up)
+	repo := newFakeRepo()
+	r, _, _ := buildRouter(t, sc, up, repo)
 
 	for _, bad := range []string{
 		"/api/files/../etc/passwd",
@@ -293,7 +337,8 @@ func TestProxyFile_RejectsNonImageContent(t *testing.T) {
 	// A malicious upload that slipped past UploadImage with valid prefix but
 	// non-image contents must not be served back as text/html.
 	up.uploaded["images/13.png"] = []byte("<html><script>alert(1)</script></html>")
-	r, _ := buildRouter(t, sc, up)
+	repo := newFakeRepo()
+	r, _, _ := buildRouter(t, sc, up, repo)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/files/images/13.png", nil)
 	w := httptest.NewRecorder()
@@ -329,29 +374,9 @@ func TestIsAllowedServeMIME(t *testing.T) {
 	assert.False(t, isAllowedServeMIME(""))
 }
 
-// --- UploadImage hardening tests ---
-//
-// These call the real UploadImage method (with a nil repo) so we have to short-
-// circuit the repository call. The test builds a router that mounts UploadImage
-// only with the storage layer; we patch around the repo write by intercepting
-// the storage success path: the test asserts the request was REJECTED before
-// reaching the repo (or accepted and reached storage). Repo-success cases are
-// covered by the integration test; here we cover the new validation gates.
+// --- UploadImage tests ---
 
-func newUploadRouter(t *testing.T, up Uploader) *chi.Mux {
-	t.Helper()
-	sh := &ScreenshotHandler{
-		repo:          nil,
-		screenshotter: nil,
-		storage:       up,
-		logger:        newTestLogger(),
-	}
-	r := chi.NewRouter()
-	r.Post("/api/links/{id}/image", sh.UploadImage)
-	return r
-}
-
-func buildMultipart(t *testing.T, field, filename, declaredCT string, body []byte) (*http.Request, string) {
+func buildMultipart(t *testing.T, id int64, field, filename, declaredCT string, body []byte) (*http.Request, string) {
 	t.Helper()
 	buf := &bytes.Buffer{}
 	mw := multipart.NewWriter(buf)
@@ -365,15 +390,16 @@ func buildMultipart(t *testing.T, field, filename, declaredCT string, body []byt
 	_, err = part.Write(body)
 	require.NoError(t, err)
 	require.NoError(t, mw.Close())
-	req := httptest.NewRequest(http.MethodPost, "/api/links/1/image", buf)
+	req := httptest.NewRequest(http.MethodPost, "/api/links/"+strconv.FormatInt(id, 10)+"/image", buf)
 	return req, mw.FormDataContentType()
 }
 
 func TestUploadImage_RejectsHTMLDisguisedAsPNG(t *testing.T) {
 	up := newFakeUploader()
-	r := newUploadRouter(t, up)
+	repo := newFakeRepo()
+	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 	// Client lies — declares image/png but body is plain HTML.
-	req, ct := buildMultipart(t, "image", "evil.png", "image/png", []byte("<html><script>alert(1)</script></html>"))
+	req, ct := buildMultipart(t, 1, "image", "evil.png", "image/png", []byte("<html><script>alert(1)</script></html>"))
 	req.Header.Set("Content-Type", ct)
 
 	w := httptest.NewRecorder()
@@ -384,8 +410,9 @@ func TestUploadImage_RejectsHTMLDisguisedAsPNG(t *testing.T) {
 
 func TestUploadImage_RejectsEmptyFile(t *testing.T) {
 	up := newFakeUploader()
-	r := newUploadRouter(t, up)
-	req, ct := buildMultipart(t, "image", "empty.png", "image/png", []byte{})
+	repo := newFakeRepo()
+	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
+	req, ct := buildMultipart(t, 1, "image", "empty.png", "image/png", []byte{})
 	req.Header.Set("Content-Type", ct)
 
 	w := httptest.NewRecorder()
@@ -396,9 +423,10 @@ func TestUploadImage_RejectsEmptyFile(t *testing.T) {
 
 func TestUploadImage_RejectsMissingField(t *testing.T) {
 	up := newFakeUploader()
-	r := newUploadRouter(t, up)
+	repo := newFakeRepo()
+	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 	// Form field is wrong name.
-	req, ct := buildMultipart(t, "other", "x.png", "image/png", fakePNG("data"))
+	req, ct := buildMultipart(t, 1, "other", "x.png", "image/png", fakePNG("data"))
 	req.Header.Set("Content-Type", ct)
 
 	w := httptest.NewRecorder()
@@ -406,7 +434,127 @@ func TestUploadImage_RejectsMissingField(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// Test that NewScreenshotHandler wires everything correctly.
+func TestUploadImage_OptimizesPNGToJPEG(t *testing.T) {
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	r, fakeUp, fakeRp := buildRouter(t, &fakeScreenshotter{}, up, repo)
+
+	src := realPNG(t, 1500, 1000)
+	req, ct := buildMultipart(t, 42, "image", "large.png", "image/png", src)
+	req.Header.Set("Content-Type", ct)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var body map[string]string
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	assert.Equal(t, "/api/files/images/42.jpg", body["url"])
+	assert.Equal(t, "/api/files/images/42.jpg", fakeRp.updatedURL[42])
+
+	require.Len(t, fakeUp.ops, 1)
+	assert.Equal(t, "images/42.jpg", fakeUp.ops[0].key)
+	assert.Equal(t, "image/jpeg", fakeUp.ops[0].contentType)
+	assert.Equal(t, "image/jpeg", http.DetectContentType(fakeUp.ops[0].bytes))
+
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(fakeUp.ops[0].bytes))
+	require.NoError(t, err)
+	assert.Equal(t, 1024, cfg.Width)
+}
+
+func TestUploadImage_PurgesLegacyExtensions(t *testing.T) {
+	up := newFakeUploader()
+	// Seed a stale .png and .webp for link 5 — they must be deleted when
+	// the new upload writes .jpg.
+	up.uploaded["images/5.png"] = []byte("old png")
+	up.uploaded["images/5.webp"] = []byte("old webp")
+	repo := newFakeRepo()
+	r, fakeUp, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
+
+	src := realPNG(t, 800, 600)
+	req, ct := buildMultipart(t, 5, "image", "new.png", "image/png", src)
+	req.Header.Set("Content-Type", ct)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	assert.Contains(t, fakeUp.deleted, "images/5.png")
+	assert.Contains(t, fakeUp.deleted, "images/5.webp")
+	assert.Contains(t, fakeUp.deleted, "images/5.gif")
+	assert.NotContains(t, fakeUp.deleted, "images/5.jpg", "must not delete the key we are about to write")
+	_, oldStillThere := fakeUp.uploaded["images/5.png"]
+	assert.False(t, oldStillThere, "fakeUploader DeleteObject should have removed the stale .png")
+}
+
+func TestUploadImage_OptimizeFailureStoresOriginal(t *testing.T) {
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	r, fakeUp, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
+
+	// PNG-sniff header but body isn't a real PNG — Optimize returns
+	// ErrDecode, handler falls back to storing original under .png.
+	bad := fakePNG("nope")
+	req, ct := buildMultipart(t, 9, "image", "broken.png", "image/png", bad)
+	req.Header.Set("Content-Type", ct)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	require.Len(t, fakeUp.ops, 1)
+	assert.Equal(t, "images/9.png", fakeUp.ops[0].key)
+	assert.Equal(t, "image/png", fakeUp.ops[0].contentType)
+	assert.Equal(t, bad, fakeUp.ops[0].bytes)
+}
+
+func TestUploadImage_UploadFails(t *testing.T) {
+	up := newFakeUploader()
+	up.err = errors.New("minio down")
+	repo := newFakeRepo()
+	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
+
+	req, ct := buildMultipart(t, 3, "image", "x.png", "image/png", realPNG(t, 100, 100))
+	req.Header.Set("Content-Type", ct)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestUploadImage_RepoUpdateFails(t *testing.T) {
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	repo.updateErr = errors.New("db down")
+	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
+
+	req, ct := buildMultipart(t, 3, "image", "x.png", "image/png", realPNG(t, 100, 100))
+	req.Header.Set("Content-Type", ct)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// --- DeleteImage tests ---
+
+func TestDeleteImage_Success(t *testing.T) {
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	sh := &ScreenshotHandler{repo: repo, storage: up, logger: newTestLogger()}
+	r := chi.NewRouter()
+	r.Delete("/api/links/{id}/image", sh.DeleteImage)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/links/8/image", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNoContent, w.Code)
+	assert.Equal(t, []int64{8}, repo.clearedIDs)
+}
+
+// --- Construction sanity ---
+
 func TestNewScreenshotHandler(t *testing.T) {
 	sc := &fakeScreenshotter{}
 	up := newFakeUploader()

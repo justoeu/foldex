@@ -215,10 +215,33 @@ Erros em JSON uniforme: `{ "error": { "code": "not_found", "message": "..." } }`
 - **Upload manual mexe em 3 colunas no mesmo UPDATE.** `repository.UpdateOGImage` seta `og_image_url`, `preview_status='ok'` e `preview_error=NULL` atomicamente. Sem race com o worker (transação no mesmo row).
 - **Screenshot fallback** (`Worker.maybeScreenshot`): após o fetch HTML, **se** `og:image` veio vazio **e** o link ainda não tem `og_image_url` (não foi feito upload manual) **e** o host resolve pra IP público (via `IsPublicURL`) **e** o worker foi inicializado com `WithScreenshotFallback(sc, up)`, então:
   1. `sc.Capture(ctx, url)` — Chromium headless via `internal/screenshot/` (`go-rod`), viewport 1280×800
-  2. `up.Upload(ctx, "screenshots/{id}.png", png, "image/png")` — MinIO
-  3. `repo.UpdateOGImage(ctx, id, "/api/files/screenshots/{id}.png")`
+  2. `imageopt.Optimize(png, …)` — downscale ≤ 1024 px + re-encode JPEG q≈82 (ver "Pipeline de imagens" abaixo)
+  3. `up.DeleteObject(ctx, "screenshots/{id}.{png,gif,webp}")` — purga extensões legadas pra esse id
+  4. `up.Upload(ctx, "screenshots/{id}.jpg", jpg, "image/jpeg")` — MinIO
+  5. `repo.UpdateOGImage(ctx, id, "/api/files/screenshots/{id}.jpg")`
   
-  O fallback é **silencioso em falha** (apenas loga) — o link permanece sem imagem. Falhas comuns: site bloqueando bots, JS-heavy page sem og:image, Chromium ausente.
+  O fallback é **silencioso em falha** (apenas loga) — o link permanece sem imagem. Falhas comuns: site bloqueando bots, JS-heavy page sem og:image, Chromium ausente. Se `imageopt.Optimize` retornar erro (corrupção rara), o worker armazena o PNG cru em `screenshots/{id}.png` como fallback — nunca aborta a etapa só por causa do re-encode.
+
+## Pipeline de imagens (`internal/imageopt`)
+
+Todo byte que entra no MinIO via upload do usuário ou via screenshot fallback passa por `imageopt.Optimize(data, Options{MaxDim: 1024, Quality: 82})` antes do `Upload`. Implementação 100% Go (`image/png|jpeg|gif` da stdlib + `golang.org/x/image/draw` pra resize Catmull-Rom + `golang.org/x/image/webp` só pra decode); sem CGO, sem libwebp no Dockerfile.
+
+**Algoritmo:**
+
+1. `http.DetectContentType` sniff dos bytes; rejeita qualquer MIME fora de `{image/png, image/jpeg, image/gif, image/webp}` → `ErrUnsupportedFormat`.
+2. `image.Decode` decodifica usando o decoder registrado pelo MIME sniffed. Falha → `ErrDecode`.
+3. Se algum lado > 1024 px, calcula `(W', H')` preservando aspect ratio.
+4. Cria `*image.RGBA` no tamanho final preenchido com branco, depois `draw.CatmullRom.Scale(…, draw.Over)` pra blendar a fonte. Isso resolve resize + composição de alpha sobre branco numa só operação (JPEG não tem alpha — sem o branco, pixels transparentes virariam pretos).
+5. `jpeg.Encode` com `Quality: 82`.
+6. **Guard de não-regressão (só pra JPEG de entrada):** se a entrada já era JPEG, não foi feito resize, e o output ficou ≥ ao input, devolve os bytes originais. Pra PNG/GIF/WebP, sempre re-encoda — garante que `images/{id}.jpg` é o caminho canônico no MinIO.
+
+**Pontos de chamada:**
+
+- `internal/links/screenshot_handler.go:UploadImage` — uploads manuais (`POST /api/links/{id}/image`).
+- `internal/links/screenshot_handler.go:CaptureAndStore` — screenshot sob demanda (`POST /api/links/{id}/screenshot`).
+- `internal/preview/worker.go:maybeScreenshot` — screenshot fallback do worker.
+
+Cada um, além do `Optimize`, dispara `DeleteObject` nas extensões irmãs do mesmo id (purga de orphans quando o formato muda de `.png` pra `.jpg`). `DeleteObject` é idempotente (NoSuchKey = sucesso). **Arquivos antigos pré-deploy ficam intocados** — o `ProxyFile` continua servindo `.png/.gif/.webp` históricos sem mudança.
 
 ## Portas, hostnames e deploy local
 

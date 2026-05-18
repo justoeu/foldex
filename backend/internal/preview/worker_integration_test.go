@@ -85,6 +85,14 @@ func (m *memUploader) Upload(_ context.Context, key string, data []byte, _ strin
 	return nil
 }
 
+func (m *memUploader) DeleteObject(_ context.Context, key string) error {
+	if m.objs == nil {
+		return nil
+	}
+	delete(m.objs, key)
+	return nil
+}
+
 // When the preview HTML has no og:image but the URL is publicly resolvable,
 // the worker should fall back to a screenshot and set og_image_url to the
 // proxy path.

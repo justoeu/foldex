@@ -198,6 +198,19 @@ func (c *Client) ObjectExists(ctx context.Context, key string) (bool, error) {
 	return false, fmt.Errorf("storage: stat %q: %w", key, err)
 }
 
+// DeleteObject removes a single object. A NoSuchKey response is treated as
+// success — callers use this to clean up stale key variants and shouldn't
+// care if the previous key was already gone.
+func (c *Client) DeleteObject(ctx context.Context, key string) error {
+	if err := c.mc.RemoveObject(ctx, c.bucket, key, minio.RemoveObjectOptions{}); err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return nil
+		}
+		return fmt.Errorf("storage: delete %q: %w", key, err)
+	}
+	return nil
+}
+
 // DeleteObjectsPrefix removes every object under `prefix`. Used by
 // restore-wipe to clear the bucket before re-uploading.
 func (c *Client) DeleteObjectsPrefix(ctx context.Context, prefix string) error {
