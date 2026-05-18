@@ -18,7 +18,7 @@ RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build
 
-FROM nginx:1.27-alpine
+FROM nginx:1.28-alpine
 
 # Patch base packages + add openssl (for the runtime cert generator). Closes
 # 30+ HIGH/CRITICAL CVEs sitting in the upstream nginx:alpine pkgs (libcrypto3,
