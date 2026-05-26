@@ -66,31 +66,132 @@ jobs:
   # On `push: tags v*`           → tags semver (`vX.Y.Z`, `vX.Y`, `vX`) + `latest`
   # On PRs                       → builds for validation, does NOT push
   #
-  # Multi-arch (linux/amd64 + linux/arm64) so Mac M-series can pull native
-  # images. QEMU handles arm64 on x86 runners; build is ~2× slower than amd64
-  # alone but still under 5min with the layer cache.
+  # Build topology: 2 images × 2 architectures = 4 runners in parallel.
+  # Each cell builds a **single-arch** image on a **native** runner
+  # (ubuntu-latest for amd64, ubuntu-24.04-arm for arm64) — no QEMU
+  # emulation. Per-arch images are pushed *by digest only* (no tags yet).
+  # The `publish-manifest` job below then assembles the per-arch digests
+  # into a single multi-arch tag list using `docker buildx imagetools`.
+  #
+  # Why this beats the old layout:
+  #   - arm64 ran emulated under QEMU on an amd64 runner — `bun install`,
+  #     `bun run build`, and `apk upgrade` ran 5-10× slower. Native arm64
+  #     runners bring it to wall-clock parity with amd64.
+  #   - backend + web used to build sequentially in the same job. Now both
+  #     start at the same minute on independent runners.
+  # Reference: https://docs.docker.com/build/ci/github-actions/multi-platform/
   #
   # Requires repository secrets:
   #   DOCKERHUB_USERNAME — Docker Hub login
   #   DOCKERHUB_TOKEN    — Docker Hub Personal Access Token (NOT the password)
   publish:
     needs: [backend, frontend]
-    runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: backend
+            context: ./backend
+            repo: justoeu/foldex-backend
+          - name: web
+            # web/Dockerfile no longer COPYs certs into the image — the
+            # entrypoint generates an ephemeral self-signed pair at
+            # container start (or the operator mounts their own pair as a
+            # volume). Keeps private keys OUT of the published image.
+            context: ./web
+            repo: justoeu/foldex-web
+        platform:
+          - tag: amd64
+            id: linux/amd64
+            runner: ubuntu-latest
+          - tag: arm64
+            id: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.platform.runner }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
         # Only logs in when we're going to push (i.e. not a PR). PR builds
-        # validate the Dockerfile compiles cleanly without needing credentials.
+        # validate the Dockerfile compiles cleanly without needing creds.
         if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.image.context }}
+          file: ${{ matrix.image.context }}/Dockerfile
+          platforms: ${{ matrix.platform.id }}
+          # push-by-digest=true: upload the image to the registry without
+          # any tag. The manifest job below stitches the per-arch digests
+          # into the canonical tags so a half-finished build can never
+          # half-overwrite `latest`.
+          outputs: |
+            type=image,name=${{ matrix.image.repo }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          # Scope cache by image AND arch — sharing across archs poisons
+          # the cache (an amd64 layer can't satisfy an arm64 build).
+          cache-from: type=gha,scope=foldex-${{ matrix.image.name }}-${{ matrix.platform.tag }}
+          cache-to: type=gha,scope=foldex-${{ matrix.image.name }}-${{ matrix.platform.tag }},mode=max
+
+      - name: Export digest
+        if: github.event_name != 'pull_request'
+        # Drop a sentinel file named after the digest; the manifest job
+        # downloads every per-image-per-arch artifact and reads the
+        # filenames to assemble the final manifest list.
+        run: |
+          mkdir -p /tmp/digests
+          digest='${{ steps.build.outputs.digest }}'
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.image.name }}-${{ matrix.platform.tag }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Assemble the per-arch digests of each image into a single multi-arch
+  # manifest under the canonical tags. Runs in parallel for backend + web
+  # via a matrix; each cell waits on its two `publish` matrix cells.
+  publish-manifest:
+    needs: publish
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: backend
+            repo: justoeu/foldex-backend
+          - name: web
+            repo: justoeu/foldex-web
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          # Picks up both `digests-<image>-amd64` and `digests-<image>-arm64`.
+          pattern: digests-${{ matrix.image.name }}-*
+          merge-multiple: true
+          path: /tmp/digests
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -98,11 +199,11 @@ jobs:
 
       # Tag computation: branch/tag → `latest` and `v1.2.3` style + a short
       # SHA on every push so a deploy can pin to an exact commit if needed.
-      - name: Extract metadata (backend)
-        id: meta_backend
+      - name: Extract metadata
+        id: meta
         uses: docker/metadata-action@v5
         with:
-          images: justoeu/foldex-backend
+          images: ${{ matrix.image.repo }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -111,44 +212,12 @@ jobs:
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build & push foldex-backend
-        uses: docker/build-push-action@v6
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta_backend.outputs.tags }}
-          labels: ${{ steps.meta_backend.outputs.labels }}
-          cache-from: type=gha,scope=foldex-backend
-          cache-to: type=gha,scope=foldex-backend,mode=max
+      - name: Create + push manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ matrix.image.repo }}@sha256:%s ' *)
 
-      - name: Extract metadata (web)
-        id: meta_web
-        uses: docker/metadata-action@v5
-        with:
-          images: justoeu/foldex-web
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      # web/Dockerfile no longer COPYs certs into the image — the entrypoint
-      # generates an ephemeral self-signed pair at container start, or the
-      # operator mounts their own pair as a volume. This keeps private keys
-      # OUT of the published image (Trivy/Scout flagged the previous baked
-      # placeholder as a HIGH-severity secret leak).
-      - name: Build & push foldex-web
-        uses: docker/build-push-action@v6
-        with:
-          context: ./web
-          file: ./web/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta_web.outputs.tags }}
-          labels: ${{ steps.meta_web.outputs.labels }}
-          cache-from: type=gha,scope=foldex-web
-          cache-to: type=gha,scope=foldex-web,mode=max
+      - name: Inspect manifest
+        run: docker buildx imagetools inspect ${{ matrix.image.repo }}:${{ steps.meta.outputs.version }}
