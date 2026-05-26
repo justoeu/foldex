@@ -50,7 +50,9 @@
     "stats": "Estadísticas",
     "import_export": "Importar / Exportar",
     "toggle_theme": "Cambiar tema",
-    "language": "Idioma"
+    "language": "Idioma",
+    "folders_compact_on": "Minimizar carpetas (RapidView al pasar el ratón)",
+    "folders_compact_off": "Expandir carpetas (mostrar previsualizaciones)"
   },
   "sort": {
     "new": "Nuevos",
@@ -219,7 +221,9 @@
     "links_count_one": "{{count}} enlace",
     "links_count_other": "{{count}} enlaces",
     "folders_count_one": "{{count}} carpeta",
-    "folders_count_other": "{{count}} carpetas"
+    "folders_count_other": "{{count}} carpetas",
+    "rapidview_more_one": "+{{count}} más",
+    "rapidview_more_other": "+{{count}} más"
   },
   "tag_dialog": {
     "create_title": "Crear etiqueta",

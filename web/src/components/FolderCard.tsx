@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { primaryColor } from '../lib/tagColor'
+import { FolderRapidView } from './FolderRapidView'
 import type { Folder, PreviewTile, PreviewFolderTile } from '../api/types'
 
 // A single tile inside the 2x2 preview grid. Either a link (with image or
@@ -23,6 +24,10 @@ type Props = {
   // child of target. App.tsx checks for cycles (target descendant of source)
   // before issuing the PATCH — FolderCard only signals the gesture.
   onDropFolder?: (sourceId: number, targetId: number) => void
+  // When true, hide the 2x2 preview tile area entirely and render the card as
+  // a thin one-line strip (icon + name + count). Hovering or focusing the
+  // title opens the RapidView popover listing preview_folders + preview_links.
+  compact?: boolean
 }
 
 const MIME_LINK = 'application/x-foldex-link'
@@ -31,7 +36,7 @@ const MIME_FOLDER = 'application/x-foldex-folder'
 // iPhone-style folder card: 2x2 grid of mini-thumbnails (preview_links) inside
 // the preview area, folder name + link count in the body. Empty folder shows
 // dashed tiles + "Pasta vazia" label.
-export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder }: Props) {
+export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder, compact }: Props) {
   const { t } = useTranslation()
   const tiles = mixTiles(folder.preview_links, folder.preview_folders)
   const total = folder.link_count + folder.folder_count
@@ -50,6 +55,7 @@ export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder }:
     <div
       className={
         'fx-card fx-folder-card' +
+        (compact ? ' fx-folder-card-compact' : '') +
         (dragOver ? ' fx-card-drop-over' : '') +
         (dragging ? ' fx-card-dragging' : '')
       }
@@ -104,33 +110,46 @@ export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder }:
         }
       }}
     >
-      <button
-        type="button"
-        className="fx-folder-preview"
-        onClick={() => onOpen(folder.id)}
-        aria-label={t('folder_card.open_folder_aria', { name: folder.name })}
-        style={{ ['--fx-folder-accent' as never]: accent, background: folder.color }}
-      >
-        <div className="fx-folder-tiles">
-          {tiles.map((tile, i) => (
-            <FolderTile key={i} tile={tile} overflow={i === 3 ? overflow : 0} />
-          ))}
-        </div>
-        {total === 0 && (
-          <span className="fx-folder-empty-label">{t('folder_card.empty')}</span>
-        )}
-      </button>
+      {!compact && (
+        <button
+          type="button"
+          className="fx-folder-preview"
+          onClick={() => onOpen(folder.id)}
+          aria-label={t('folder_card.open_folder_aria', { name: folder.name })}
+          style={{ ['--fx-folder-accent' as never]: accent, background: folder.color }}
+        >
+          <div className="fx-folder-tiles">
+            {tiles.map((tile, i) => (
+              <FolderTile key={i} tile={tile} overflow={i === 3 ? overflow : 0} />
+            ))}
+          </div>
+          {total === 0 && (
+            <span className="fx-folder-empty-label">{t('folder_card.empty')}</span>
+          )}
+        </button>
+      )}
       <div className="fx-card-body">
         <header className="fx-card-head">
+          {compact && (
+            <span
+              className="fx-folder-compact-mark"
+              aria-hidden="true"
+              style={{ color: accent, background: folder.color }}
+            >
+              <Icon d={I.folder} size={14} stroke={2.2} />
+            </span>
+          )}
           <div className="fx-card-head-text">
             <h3 className="fx-card-title">
-              <button
-                type="button"
-                className="fx-card-title-link"
-                onClick={() => onOpen(folder.id)}
-              >
-                {folder.name}
-              </button>
+              <FolderRapidView folder={folder} enabled={!!compact}>
+                <button
+                  type="button"
+                  className="fx-card-title-link"
+                  onClick={() => onOpen(folder.id)}
+                >
+                  {folder.name}
+                </button>
+              </FolderRapidView>
             </h3>
             <div className="fx-card-host">
               {t('folder_card.links_count', { count: folder.link_count })}

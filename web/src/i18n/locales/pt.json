@@ -50,7 +50,9 @@
     "stats": "Estatísticas",
     "import_export": "Importar / Exportar",
     "toggle_theme": "Alternar tema",
-    "language": "Idioma"
+    "language": "Idioma",
+    "folders_compact_on": "Minimizar pastas (RapidView ao passar o mouse)",
+    "folders_compact_off": "Expandir pastas (mostrar prévias)"
   },
   "sort": {
     "new": "Novos",
@@ -219,7 +221,9 @@
     "links_count_one": "{{count}} link",
     "links_count_other": "{{count}} links",
     "folders_count_one": "{{count}} pasta",
-    "folders_count_other": "{{count}} pastas"
+    "folders_count_other": "{{count}} pastas",
+    "rapidview_more_one": "+{{count}} a mais",
+    "rapidview_more_other": "+{{count}} a mais"
   },
   "tag_dialog": {
     "create_title": "Criar tag",

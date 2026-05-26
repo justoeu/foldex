@@ -14,6 +14,8 @@ type Props = {
   setViewMode: (m: ViewMode) => void
   gridCols: 3 | 5 | 8
   setGridCols: (n: 3 | 5 | 8) => void
+  foldersCompact: boolean
+  setFoldersCompact: (v: boolean) => void
   onNewFolder: () => void
   onNewLink: () => void
   dark: boolean
@@ -34,6 +36,8 @@ export function MobileOverflowMenu({
   setViewMode,
   gridCols,
   setGridCols,
+  foldersCompact,
+  setFoldersCompact,
   onNewFolder,
   onNewLink,
   dark,
@@ -190,6 +194,14 @@ export function MobileOverflowMenu({
                 ))}
                 <span className="fx-mobile-more-density-label">{t('view.density')}</span>
               </div>
+            )}
+            {viewMode === 'cards' && (
+              <Row
+                icon={I.folder}
+                label={foldersCompact ? t('topbar.folders_compact_off') : t('topbar.folders_compact_on')}
+                active={foldersCompact}
+                onClick={() => { setFoldersCompact(!foldersCompact); closeAll() }}
+              />
             )}
           </Section>
 

@@ -25,6 +25,12 @@ type Props = {
   setViewMode: (m: ViewMode) => void
   gridCols: 3 | 5 | 8
   setGridCols: (n: 3 | 5 | 8) => void
+  // Per-context toggle: when on, FolderCard hides its 2x2 preview tiles and
+  // renders a thin one-line strip. Only relevant in viewMode === 'cards'
+  // (compact/list already hide previews). Persisted in App via
+  // foldex.foldersCompact.map.
+  foldersCompact: boolean
+  setFoldersCompact: (v: boolean) => void
   onNewLink: () => void
   onNewFolder: () => void
   dark: boolean
@@ -45,6 +51,8 @@ export function Topbar({
   setViewMode,
   gridCols,
   setGridCols,
+  foldersCompact,
+  setFoldersCompact,
   onNewLink,
   onNewFolder,
   dark,
@@ -242,6 +250,26 @@ export function Topbar({
             ))}
           </>
         )}
+        {/* Folder compactor: only meaningful in 'cards' (compact/list already
+            hide the preview tiles). Persisted per-context by App. */}
+        {viewMode === 'cards' && (
+          <>
+            <span className="fx-viewseg-sep" aria-hidden="true" />
+            <button
+              className={'fx-vs' + (foldersCompact ? ' fx-vs-active' : '')}
+              data-tooltip={
+                foldersCompact ? t('topbar.folders_compact_off') : t('topbar.folders_compact_on')
+              }
+              aria-label={
+                foldersCompact ? t('topbar.folders_compact_off') : t('topbar.folders_compact_on')
+              }
+              aria-pressed={foldersCompact}
+              onClick={() => setFoldersCompact(!foldersCompact)}
+            >
+              <Icon d={I.folderMin} size={14} />
+            </button>
+          </>
+        )}
       </div>
 
       <LocalePicker />
@@ -266,6 +294,8 @@ export function Topbar({
         setViewMode={setViewMode}
         gridCols={gridCols}
         setGridCols={setGridCols}
+        foldersCompact={foldersCompact}
+        setFoldersCompact={setFoldersCompact}
         onNewFolder={onNewFolder}
         onNewLink={onNewLink}
         dark={dark}

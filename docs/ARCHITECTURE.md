@@ -407,6 +407,7 @@ A captura de tela headless (`internal/screenshot/` via `go-rod`) **só roda** qu
 - "Nova pasta" criada dentro de uma pasta vira **subpasta** (POST `/api/folders` com `parent_id = openFolder`).
 - Esc / "← Pastas" sobe **um nível** (não pula direto pra raiz) — implementado via `setFolderPath(path.slice(0, -1))`.
 - `LinkDialog` e `CommandPalette` continuam usando `useFolders()` flat (sem scope) — pickers globais que precisam ver tudo.
+- **Compactar pastas (RapidView).** Quando muitos folders cheios estouram a tela, o toggle do Topbar (`fx-viewseg`, visível só em `viewMode === 'cards'`) colapsa cada `FolderCard` numa tira fina (esconde a preview 2×2 e mantém só nome+contagem). O estado é per-context, persistido em `foldex.foldersCompact.map` keyed `home`/`folder.<id>` — mesma estratégia do `viewMode.map`, com o mesmo `useEffect` de pruning de chaves órfãs. Hover/focus no nome do folder dispara o `FolderRapidView`: um popover portal-mounted que lista as subpastas + primeiros links **lendo `preview_folders`/`preview_links` que já vêm em `useFolders`** — sem fetch extra. Cap de 10 itens com footer `+N mais` derivado de `link_count + folder_count − rows.length`; folders vazios não montam o popover.
 
 **Delete behavior** (2 paths):
 - `DELETE /api/folders/{id}` (manter links): só a pasta morre. Links voltam pra root (ON DELETE SET NULL em `link.folder_id`). Subpastas viram root (ON DELETE SET NULL em `folder.parent_id`).

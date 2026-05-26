@@ -49,6 +49,20 @@ export default function App() {
       return {}
     }
   })
+  // foldersCompact is per-context (home vs each folder), persisted under
+  // `foldex.foldersCompact.map`. When true the FolderCard hides its 2x2
+  // preview area and enables the RapidView popover on the folder title.
+  // Defaults to false (full previews) for any context without a saved choice.
+  const [foldersCompactMap, setFoldersCompactMap] = useState<Record<string, boolean>>(() => {
+    if (typeof localStorage === 'undefined') return {}
+    try {
+      const raw = localStorage.getItem('foldex.foldersCompact.map')
+      const parsed = raw ? JSON.parse(raw) : {}
+      return typeof parsed === 'object' && parsed !== null ? parsed : {}
+    } catch {
+      return {}
+    }
+  })
   const [linkDialogOpen, setLinkDialogOpen] = useState(false)
   const [editLink, setEditLink] = useState<LinkT | null>(null)
   // Carries a URL the user pasted onto the page so LinkDialog can mount
@@ -111,11 +125,20 @@ export default function App() {
     }
   }, [viewModeMap])
 
+  useEffect(() => {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('foldex.foldersCompact.map', JSON.stringify(foldersCompactMap))
+    }
+  }, [foldersCompactMap])
+
   // Derive the active viewMode + setter from openFolder. Home and each folder
   // get their own slot in the map; switching context surfaces the saved choice.
   const viewModeKey = openFolder !== null ? `folder.${openFolder}` : 'home'
   const viewMode: ViewMode = viewModeMap[viewModeKey] ?? 'cards'
   const setViewMode = (m: ViewMode) => setViewModeMap((prev) => ({ ...prev, [viewModeKey]: m }))
+  const foldersCompact: boolean = foldersCompactMap[viewModeKey] ?? false
+  const setFoldersCompact = (v: boolean) =>
+    setFoldersCompactMap((prev) => ({ ...prev, [viewModeKey]: v }))
 
   // Strip any stale `?folder=N` left over from a previous URL-bookmarked
   // session — internal IDs no longer belong in the address bar.
@@ -172,6 +195,24 @@ export default function App() {
     setViewModeMap((prev) => {
       let mutated = false
       const next: Record<string, ViewMode> = {}
+      for (const [key, val] of Object.entries(prev)) {
+        if (key === 'home') {
+          next[key] = val
+          continue
+        }
+        const m = key.match(/^folder\.(\d+)$/)
+        if (m && !validIds.has(Number(m[1]))) {
+          mutated = true
+          continue
+        }
+        next[key] = val
+      }
+      return mutated ? next : prev
+    })
+
+    setFoldersCompactMap((prev) => {
+      let mutated = false
+      const next: Record<string, boolean> = {}
       for (const [key, val] of Object.entries(prev)) {
         if (key === 'home') {
           next[key] = val
@@ -339,6 +380,8 @@ export default function App() {
             setViewMode={setViewMode}
             gridCols={gridCols}
             setGridCols={setGridCols}
+            foldersCompact={foldersCompact}
+            setFoldersCompact={setFoldersCompact}
             onNewLink={() => {
               setEditLink(null)
               setLinkDialogOpen(true)
@@ -377,6 +420,7 @@ export default function App() {
               onImport={() => setView('import')}
               viewMode={viewMode}
               gridCols={gridCols}
+              foldersCompact={foldersCompact}
               sort={sort}
               onReload={() => {
                 links.refetch()
@@ -470,6 +514,7 @@ type HomeProps = {
   onImport: () => void
   viewMode: ViewMode
   gridCols: 3 | 5 | 8
+  foldersCompact: boolean
   sort: Sort
   onReload: () => void
   reloading: boolean
@@ -492,6 +537,7 @@ function Home({
   onImport,
   viewMode,
   gridCols,
+  foldersCompact,
   sort,
   onReload,
   reloading,
@@ -565,6 +611,7 @@ function Home({
           links={links}
           sort={sort}
           isLoading={isLoading}
+          foldersCompact={foldersCompact}
           onEdit={onEdit}
           onOpenFolder={onOpenFolder}
           onEditFolder={onEditFolder}
@@ -603,6 +650,7 @@ function CardsView({
   links,
   sort,
   isLoading,
+  foldersCompact,
   onEdit,
   onOpenFolder,
   onEditFolder,
@@ -615,6 +663,7 @@ function CardsView({
   links: LinkT[]
   sort: Sort
   isLoading: boolean
+  foldersCompact: boolean
   onEdit: (l: LinkT) => void
   onOpenFolder: (id: number) => void
   onEditFolder: (f: FolderT) => void
@@ -655,6 +704,7 @@ function CardsView({
             <FolderCard
               key={`folder-${c.folder.id}`}
               folder={c.folder}
+              compact={foldersCompact}
               onOpen={onOpenFolder}
               onEdit={onEditFolder}
               onDropLink={onMoveLinkToFolder}
@@ -678,6 +728,7 @@ function CardsView({
         <FolderCard
           key={`folder-${f.id}`}
           folder={f}
+          compact={foldersCompact}
           onOpen={onOpenFolder}
           onEdit={onEditFolder}
           onDropLink={onMoveLinkToFolder}

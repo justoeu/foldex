@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { FolderCard } from './FolderCard'
 import type { Folder, PreviewTile } from '../api/types'
@@ -227,5 +227,119 @@ describe('FolderCard', () => {
       />,
     )
     expect(screen.getByLabelText(/edit folder/i)).toBeInTheDocument()
+  })
+
+  describe('compact mode', () => {
+    it('hides the 2x2 preview area when compact', () => {
+      const { container } = render(
+        <FolderCard
+          folder={makeFolder({ link_count: 3, preview_links: [makeTile(1), makeTile(2)] })}
+          onOpen={vi.fn()}
+          compact
+        />,
+      )
+      expect(container.querySelector('.fx-folder-preview')).toBeNull()
+      expect(container.querySelector('.fx-folder-card-compact')).not.toBeNull()
+    })
+
+    it('still renders the name, count and open button in compact mode', () => {
+      render(
+        <FolderCard
+          folder={makeFolder({ link_count: 4, preview_links: [] })}
+          onOpen={vi.fn()}
+          compact
+        />,
+      )
+      expect(screen.getByText('Trabalho')).toBeInTheDocument()
+      expect(screen.getByText(/4 link/)).toBeInTheDocument()
+      expect(screen.getByLabelText(/open folder/i)).toBeInTheDocument()
+    })
+
+    it('shows the RapidView popover on hover when compact and the folder has content', async () => {
+      render(
+        <FolderCard
+          folder={makeFolder({
+            name: 'Pesquisa',
+            link_count: 2,
+            folder_count: 1,
+            preview_links: [
+              { id: 1, title: 'Artigo alpha', og_image_url: null, favicon_url: null },
+              { id: 2, title: 'Artigo beta', og_image_url: null, favicon_url: null },
+            ],
+            preview_folders: [{ id: 99, name: 'Subpasta zeta', color: '#10B981' }],
+          })}
+          onOpen={vi.fn()}
+          compact
+        />,
+      )
+      // Initial: popover not mounted.
+      expect(document.querySelector('.fx-rapidview')).toBeNull()
+      // The RapidView trigger wraps the title — fire the hover on it directly
+      // so we don't need to coordinate userEvent + fake timers.
+      const titleBtn = screen.getByRole('button', { name: 'Pesquisa' })
+      const trigger = titleBtn.closest('.fx-rapidview-trigger') as HTMLElement
+      fireEvent.mouseEnter(trigger)
+      // 220ms show delay + a small render buffer.
+      await waitFor(
+        () => expect(document.querySelector('.fx-rapidview')).not.toBeNull(),
+        { timeout: 1000 },
+      )
+      const popover = document.querySelector('.fx-rapidview')!
+      // Subfolder listed first, then both links.
+      expect(popover.textContent).toMatch(/Subpasta zeta/)
+      expect(popover.textContent).toMatch(/Artigo alpha/)
+      expect(popover.textContent).toMatch(/Artigo beta/)
+    })
+
+    it('shows "+N more" in the popover when the folder has more items than fit', async () => {
+      const previewLinks = Array.from({ length: 4 }, (_, i) => ({
+        id: i + 1,
+        title: `link-${i + 1}`,
+        og_image_url: null,
+        favicon_url: null,
+      }))
+      render(
+        <FolderCard
+          folder={makeFolder({
+            link_count: 50,
+            folder_count: 0,
+            preview_links: previewLinks,
+          })}
+          onOpen={vi.fn()}
+          compact
+        />,
+      )
+      const titleBtn = screen.getByRole('button', { name: 'Trabalho' })
+      const trigger = titleBtn.closest('.fx-rapidview-trigger') as HTMLElement
+      fireEvent.mouseEnter(trigger)
+      await waitFor(
+        () => expect(document.querySelector('.fx-rapidview-more')).not.toBeNull(),
+        { timeout: 1000 },
+      )
+      // Backend's preview window already caps at 4; the +N more footer fills
+      // the gap to the folder's actual total count.
+      expect(document.querySelector('.fx-rapidview-more')?.textContent).toMatch(/\+46 more/)
+    })
+
+    it('does not render the RapidView popover for an empty folder', async () => {
+      render(
+        <FolderCard
+          folder={makeFolder({
+            link_count: 0,
+            folder_count: 0,
+            preview_links: [],
+            preview_folders: [],
+          })}
+          onOpen={vi.fn()}
+          compact
+        />,
+      )
+      const titleBtn = screen.getByRole('button', { name: 'Trabalho' })
+      const trigger = titleBtn.closest('.fx-rapidview-trigger') as HTMLElement
+      fireEvent.mouseEnter(trigger)
+      // Wait past the show delay, then assert the popover never appeared.
+      await new Promise((r) => setTimeout(r, 400))
+      expect(document.querySelector('.fx-rapidview')).toBeNull()
+    })
   })
 })

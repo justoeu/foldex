@@ -96,6 +96,14 @@ export const I = {
   folder: (
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
   ),
+  // Folder with a downward chevron — signals "minimize / collapse folder
+  // previews into the RapidView popover". Used by the Topbar toggle.
+  folderMin: (
+    <>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+      <path d="m9 13 3 3 3-3" />
+    </>
+  ),
   // Bidirectional arrows for "swap two things"
   swap: (
     <>

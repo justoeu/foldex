@@ -50,7 +50,9 @@
     "stats": "Stats",
     "import_export": "Import / Export",
     "toggle_theme": "Toggle theme",
-    "language": "Language"
+    "language": "Language",
+    "folders_compact_on": "Minimize folders (RapidView on hover)",
+    "folders_compact_off": "Expand folders (show previews)"
   },
   "sort": {
     "new": "Newest",
@@ -218,7 +220,9 @@
     "links_count_one": "{{count}} link",
     "links_count_other": "{{count}} links",
     "folders_count_one": "{{count}} folder",
-    "folders_count_other": "{{count}} folders"
+    "folders_count_other": "{{count}} folders",
+    "rapidview_more_one": "+{{count}} more",
+    "rapidview_more_other": "+{{count}} more"
   },
   "tag_dialog": {
     "create_title": "Create tag",

@@ -946,3 +946,125 @@ html.fx-dark { background: #0E1014; }
     0 1px 2px rgba(20, 16, 46, 0.06),
     0 14px 28px -14px color-mix(in srgb, var(--fx-accent) 40%, transparent);
 }
+
+/* ─── compact folder card ──────────────────────────────────────────────
+   Activated by the topbar's folder-compact toggle (per-context, persisted in
+   foldex.foldersCompact.map). Hides the 2x2 preview tile area entirely and
+   shrinks the body to a thin one-line strip: icon + name + count. Hovering
+   or focusing the name opens the FolderRapidView portal popover, which lists
+   the same preview_folders + preview_links already in the payload — no extra
+   API call. The whole card stays draggable / droppable like in expanded
+   mode. */
+.fx-folder-card-compact .fx-folder-preview { display: none; }
+.fx-folder-card-compact {
+  /* Strip-style: kill the card's vertical padding and let the body collapse
+     to a single inline row. Border + shadow stay, so the card still reads
+     as a separate object. */
+  min-height: 0;
+}
+.fx-folder-card-compact .fx-card-body {
+  padding: 10px 12px;
+  gap: 4px;
+}
+.fx-folder-card-compact .fx-card-head {
+  align-items: center;
+  gap: 10px;
+}
+.fx-folder-card-compact .fx-card-title { margin: 0; }
+.fx-folder-card-compact .fx-card-host {
+  margin: 0;
+  font-size: 11.5px;
+}
+.fx-folder-card-compact .fx-card-foot {
+  padding-top: 4px;
+  border-top: 0;
+  margin-top: 0;
+}
+/* Tiny folder swatch that replaces the giant preview in compact mode. Uses
+   the folder's own color (solid or gradient) as the chip background. */
+.fx-folder-compact-mark {
+  display: inline-grid; place-items: center;
+  flex: 0 0 auto;
+  width: 28px; height: 28px;
+  border-radius: 8px;
+  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .25), 0 1px 2px rgba(0,0,0,.16);
+}
+
+/* ─── folder RapidView popover ─────────────────────────────────────────
+   Portal-mounted hover popover triggered by the folder name in compact
+   mode. Lists subfolders first (with a colored folder glyph), then the
+   first link titles (favicon when available, generic link icon otherwise).
+   Capped at 10 entries plus a "+N more" footer. Styled like .fx-tip but
+   with a vertical list and a wider chip. */
+.fx-rapidview-trigger { display: inline; }
+.fx-rapidview {
+  pointer-events: none;
+  z-index: 9999;
+  min-width: 200px;
+  max-width: min(86vw, 320px);
+  padding: 8px 4px 6px;
+  background: var(--fx-ink);
+  color: var(--fx-bg);
+  font-family: var(--fx-ui);
+  border-radius: 8px;
+  box-shadow: 0 8px 22px -4px rgba(0, 0, 0, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  transition: opacity 120ms ease-out;
+}
+.fx-rapidview-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 10px 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--fx-bg) 70%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--fx-bg) 16%, transparent);
+}
+.fx-rapidview-head-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.fx-rapidview-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.fx-rapidview-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.fx-rapidview-icon {
+  display: grid; place-items: center;
+  flex: 0 0 14px;
+  width: 14px; height: 14px;
+  color: color-mix(in srgb, var(--fx-bg) 70%, transparent);
+}
+.fx-rapidview-favicon {
+  width: 12px; height: 12px;
+  object-fit: contain;
+  border-radius: 2px;
+}
+.fx-rapidview-label {
+  flex: 1; min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.fx-rapidview-more {
+  margin-top: 4px;
+  padding: 4px 10px 0;
+  font-family: var(--fx-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--fx-bg) 60%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--fx-bg) 14%, transparent);
+}
