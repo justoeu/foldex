@@ -341,5 +341,78 @@ describe('FolderCard', () => {
       await new Promise((r) => setTimeout(r, 400))
       expect(document.querySelector('.fx-rapidview')).toBeNull()
     })
+
+    it('closes the RapidView popover when Escape is pressed', async () => {
+      render(
+        <FolderCard
+          folder={makeFolder({
+            link_count: 3,
+            preview_links: [makeTile(1), makeTile(2), makeTile(3)],
+          })}
+          onOpen={vi.fn()}
+          compact
+        />,
+      )
+      const trigger = screen
+        .getByRole('button', { name: 'Trabalho' })
+        .closest('.fx-rapidview-trigger') as HTMLElement
+      fireEvent.mouseEnter(trigger)
+      await waitFor(
+        () => expect(document.querySelector('.fx-rapidview')).not.toBeNull(),
+        { timeout: 1000 },
+      )
+      fireEvent.keyDown(window, { key: 'Escape' })
+      // Esc handler calls setOpen(false) synchronously; the popover should be
+      // gone on the next tick.
+      await waitFor(
+        () => expect(document.querySelector('.fx-rapidview')).toBeNull(),
+        { timeout: 200 },
+      )
+    })
+
+    it('closes the RapidView popover on mouseLeave', async () => {
+      render(
+        <FolderCard
+          folder={makeFolder({
+            link_count: 2,
+            preview_links: [makeTile(1), makeTile(2)],
+          })}
+          onOpen={vi.fn()}
+          compact
+        />,
+      )
+      const trigger = screen
+        .getByRole('button', { name: 'Trabalho' })
+        .closest('.fx-rapidview-trigger') as HTMLElement
+      fireEvent.mouseEnter(trigger)
+      await waitFor(
+        () => expect(document.querySelector('.fx-rapidview')).not.toBeNull(),
+        { timeout: 1000 },
+      )
+      fireEvent.mouseLeave(trigger)
+      await waitFor(
+        () => expect(document.querySelector('.fx-rapidview')).toBeNull(),
+        { timeout: 200 },
+      )
+    })
+
+    it('compact=false (default) never opens the RapidView popover on hover', async () => {
+      render(
+        <FolderCard
+          folder={makeFolder({
+            link_count: 3,
+            preview_links: [makeTile(1), makeTile(2), makeTile(3)],
+          })}
+          onOpen={vi.fn()}
+        />, // compact omitted → undefined → passthrough
+      )
+      const trigger = screen
+        .getByRole('button', { name: 'Trabalho' })
+        .closest('.fx-rapidview-trigger') as HTMLElement
+      fireEvent.mouseEnter(trigger)
+      // Wait past the show delay, then assert nothing mounted.
+      await new Promise((r) => setTimeout(r, 400))
+      expect(document.querySelector('.fx-rapidview')).toBeNull()
+    })
   })
 })

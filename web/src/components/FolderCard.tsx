@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { primaryColor } from '../lib/tagColor'
+import { safeImageUrl } from '../lib/url'
 import { FolderRapidView } from './FolderRapidView'
 import type { Folder, PreviewTile, PreviewFolderTile } from '../api/types'
 
@@ -209,12 +210,14 @@ function FolderTile({ tile, overflow }: { tile: Tile; overflow: number }) {
     )
   }
   const link = tile.data
+  const ogSrc = safeImageUrl(link.og_image_url)
+  const faviconSrc = safeImageUrl(link.favicon_url)
   return (
     <div className="fx-folder-tile">
-      {link.og_image_url ? (
-        <img src={link.og_image_url} alt="" referrerPolicy="no-referrer" />
-      ) : link.favicon_url ? (
-        <img src={link.favicon_url} alt="" referrerPolicy="no-referrer" className="fx-folder-tile-favicon" />
+      {ogSrc ? (
+        <img src={ogSrc} alt="" referrerPolicy="no-referrer" />
+      ) : faviconSrc ? (
+        <img src={faviconSrc} alt="" referrerPolicy="no-referrer" className="fx-folder-tile-favicon" />
       ) : (
         <span className="fx-folder-tile-letter">{(link.title[0] ?? '?').toUpperCase()}</span>
       )}

@@ -6,6 +6,7 @@ import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
 import { useConfirm } from './ConfirmDialog'
 import { goHref, useDeleteLink, useRefreshPreview, useUpdateLink } from '../api/links'
+import { safeImageUrl } from '../lib/url'
 import type { Link } from '../api/types'
 
 type Props = {
@@ -36,7 +37,8 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
   const confirm = useConfirm()
   const qc = useQueryClient()
   const [previewErrored, setPreviewErrored] = useState(false)
-  const showPreview = !!link.og_image_url && !previewErrored
+  const previewSrc = safeImageUrl(link.og_image_url)
+  const showPreview = !!previewSrc && !previewErrored
   const density = densityFor(link, showPreview)
   const togglePin = () => update.mutate({ id: link.id, body: { pinned: !link.pinned } })
   const [dragOver, setDragOver] = useState(false)
@@ -118,7 +120,7 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
       {showPreview && (
         <a className="fx-preview fx-preview-img" href={goHref(link)} target="_blank" rel="noopener noreferrer" onClick={onGo}>
           <img
-            src={link.og_image_url ?? undefined}
+            src={previewSrc}
             alt=""
             referrerPolicy="no-referrer"
             onError={() => setPreviewErrored(true)}
