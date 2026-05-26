@@ -8,6 +8,7 @@ import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useCreateLink, useUpdateLink, uploadLinkImage, removeLinkImage } from '../api/links'
 import { useCreateTag, useTags } from '../api/tags'
 import { useQueryClient } from '@tanstack/react-query'
+import { safeImageUrl } from '../lib/url'
 import type { Link, Tag } from '../api/types'
 
 type Props = {
@@ -287,7 +288,11 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   const busy = createLink.isPending || updateLink.isPending || createTag.isPending || imageBusy
   const isEdit = !!link
   const hasImage = !imageRemoved && !!(pendingImagePreview || link?.og_image_url)
-  const currentImageUrl = pendingImagePreview ?? (imageRemoved ? null : link?.og_image_url ?? null)
+  // `pendingImagePreview` is a `blob:` URL from URL.createObjectURL (local file
+  // picker — trusted). The remote `og_image_url` is stamped by the preview
+  // worker from arbitrary remote pages, so it must go through `safeImageUrl`.
+  const currentImageUrl =
+    pendingImagePreview ?? (imageRemoved ? undefined : safeImageUrl(link?.og_image_url))
 
   const handleRemoveImage = () => {
     // Stage the deletion only — the actual DELETE fires in submit() so that

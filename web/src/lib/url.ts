@@ -55,9 +55,12 @@ export function looksLikeUrl(raw: string): boolean {
 // `<img src={undefined}>` skips the network request entirely.
 //
 // Accepts: absolute http(s) URLs and site-relative paths starting with a
-// single `/`. Protocol-relative `//host/path` is rejected deliberately —
-// the caller can pick a scheme. Everything else (data:, file:, javascript:,
-// vbscript:, bare hostnames) is rejected.
+// single `/`. The site-relative branch is defensive — no current caller
+// produces such URLs (the preview worker stamps absolute URLs only), so
+// removing it would be a behavior change visible only to future writers.
+// Protocol-relative `//host/path` is rejected deliberately — the caller
+// can pick a scheme. Everything else (data:, file:, javascript:, vbscript:,
+// bare hostnames) is rejected.
 export function safeImageUrl(raw: string | null | undefined): string | undefined {
   if (!raw) return undefined
   const trimmed = raw.trim()

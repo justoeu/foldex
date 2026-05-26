@@ -25,11 +25,10 @@ export function FolderRapidView({ folder, children, enabled }: Props) {
   const [rect, setRect] = useState<DOMRect | null>(null)
   const showTimer = useRef<number | null>(null)
 
-  // Drop the pending show timer on unmount AND whenever `enabled` flips off
-  // (e.g. compact mode toggled while hovering). Without this, a pending
-  // setTimeout can fire after the wrapper is gone and call setState on an
-  // unmounted node — React 19 warns, and in production the stale popover
-  // briefly appears on the next render of any FolderCard.
+  // Without the cleanup, a pending setTimeout can fire after the wrapper is
+  // gone (or after `enabled` flipped) and call setState on an unmounted node:
+  // React 19 warns, and in production the stale popover briefly appears on
+  // the next render of any FolderCard.
   useEffect(() => {
     if (!enabled) {
       setOpen(false)
@@ -115,11 +114,9 @@ function RapidViewPopover({
     ready: false,
   })
 
-  // Folders come first, then links. Both already trimmed by the backend to a
-  // small preview window — we additionally cap at MAX_ITEMS for the popover.
   const rows: Array<
     | { kind: 'folder'; id: number; name: string; color: string }
-    | { kind: 'link'; id: number; title: string; favicon?: string | null }
+    | { kind: 'link'; id: number; title: string; favSrc: string | undefined }
   > = []
   for (const f of folder.preview_folders) {
     if (rows.length >= MAX_ITEMS) break
@@ -127,7 +124,7 @@ function RapidViewPopover({
   }
   for (const l of folder.preview_links) {
     if (rows.length >= MAX_ITEMS) break
-    rows.push({ kind: 'link', id: l.id, title: l.title, favicon: l.favicon_url })
+    rows.push({ kind: 'link', id: l.id, title: l.title, favSrc: safeImageUrl(l.favicon_url) })
   }
   const total = folder.link_count + folder.folder_count
   const moreCount = Math.max(0, total - rows.length)
@@ -179,9 +176,9 @@ function RapidViewPopover({
           ) : (
             <li key={`l-${r.id}`} className="fx-rapidview-item">
               <span className="fx-rapidview-icon">
-                {safeImageUrl(r.favicon) ? (
+                {r.favSrc ? (
                   <img
-                    src={safeImageUrl(r.favicon)}
+                    src={r.favSrc}
                     alt=""
                     referrerPolicy="no-referrer"
                     className="fx-rapidview-favicon"

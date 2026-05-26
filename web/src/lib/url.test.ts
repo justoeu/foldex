@@ -53,6 +53,11 @@ describe('safeImageUrl', () => {
     ['relative/no/slash.png'],       // not absolute, not site-relative
     ['example.com/icon.png'],        // missing scheme — ambiguous
     ['//cdn.example.com/x.png'],     // protocol-relative deliberately rejected (consumer should pick a scheme)
+    ['https:javascript:alert(1)'],   // chimera — `new URL` accepts but no `//` after scheme, regex blocks
+    ['\tjavascript:alert(1)'],       // leading tab (trim removes it then regex rejects)
+    ['JavaScript:alert(1)'],         // mixed-case javascript scheme
+    ['%6Aavascript:alert(1)'],       // URL-encoded scheme prefix
+    ['blob:https://example.com/abc'],// blob URLs not allowed (only the LinkDialog path supplies blobs, and it bypasses the helper)
   ])('rejects %j', (input) => {
     expect(safeImageUrl(input as never)).toBeUndefined()
   })
