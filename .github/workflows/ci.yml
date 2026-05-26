@@ -214,10 +214,18 @@ jobs:
 
       - name: Create + push manifest list
         working-directory: /tmp/digests
+        # The digest list comes from sentinel files dropped by the publish
+        # job — one filename per arch, named after the layer digest. Filter
+        # by 64 hex chars so a stray artifact (log, README, hidden file) can
+        # never sneak into the manifest as a fake digest.
         run: |
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ matrix.image.repo }}@sha256:%s ' *)
+            $(ls -1 | grep -E '^[a-f0-9]{64}$' | sed 's|^|${{ matrix.image.repo }}@sha256:|')
 
+      # `steps.meta.outputs.version` resolves to `pr-N` on PR triggers — the
+      # whole job is gated by the `if: != 'pull_request'` at the top, so the
+      # value is always a real tag here. Don't strip the gate without also
+      # picking a different inspect target.
       - name: Inspect manifest
         run: docker buildx imagetools inspect ${{ matrix.image.repo }}:${{ steps.meta.outputs.version }}
