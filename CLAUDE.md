@@ -173,6 +173,7 @@ Before you announce "done," verify each item below. If any fails, the change is 
 - [ ] Invariants in §4 and §5 not violated.
 - [ ] If a migration was added: applied to the running Postgres (`docker run migrate/migrate ... up`) and the backend recompiled to use the new schema.
 - [ ] User-visible UI changes manually validated in a real browser when behavior changes (not just type-check).
+- [ ] **Post-implementation agent sweep run** — see §9. Spawn the three agents (code-review, test-quality, security) in parallel against this session's diff and surface every HIGH finding before declaring done. This is **mandatory for every implementation task**, no exceptions.
 
 ## 7. Style choices — the project's defaults
 
@@ -186,6 +187,27 @@ Before you announce "done," verify each item below. If any fails, the change is 
 ## 8. Architecture in one paragraph
 
 Two docker-compose projects: **`docker-compose.db.yml`** brings up Postgres on the shared `foldex` Docker network (default-off host port binding, exposed only inside the network). **`docker-compose.yml`** brings up the backend (Go + Chi on `:9089`) and web (nginx serving the Vite build on `:9088`). The user can also point at an existing Postgres already running on the host by setting `POSTGRES_HOST=localhost` in `.env` — the backend container resolves `localhost` to the host gateway via `extra_hosts`. Backend talks to db, web proxies `/api` and `/go` to the backend through nginx. The preview worker runs in-process inside the backend as a goroutine pool. Schema: `tag`, `link`, `link_tag` (M:N), `click_log` (single source of truth for clicks; `link.click_count` and `link.last_clicked_at` are derived at read time via LATERAL join).
+
+## 9. Post-implementation agent sweep — MANDATORY for every change
+
+Before declaring any implementation task done (and before opening a PR), spawn the three agents below **in parallel** via the `Agent` tool and surface every HIGH finding inline. Skipping the sweep is not allowed — it is part of the Definition of Done in §6.
+
+The full prompts for each agent live in [`AGENTS.md`](./AGENTS.md) — copy them verbatim and only substitute the **session scope** placeholder (the commit hashes / branches the agent should focus on).
+
+**The three agents** (always spawn all three, always in parallel, always in the same single message so they run concurrently):
+
+1. **Code Review agent** — checks architectural coherence, CLAUDE.md invariants (§4 + §5), code quality (naming, dead code, unnecessary comments per §7), React idiomaticity, workflow correctness. Explicitly **does not** review tests or security.
+2. **Test Quality agent** — checks whether new code paths are actually tested (positive + negative + edge cases), looks for missing critical cases, flags test antipatterns (excessive mocks, flaky waits, weak asserts), and gives a coverage-gap recommendation. Explicitly **does not** review production code or security.
+3. **Security Review agent** — checks XSS / DoS / secret-leak / injection / supply-chain risks across both runtime code and CI workflows. Bucketed HIGH / MEDIUM / LOW / FYI. Explicitly **does not** review code quality or test quality.
+
+**Workflow:**
+
+1. After typecheck + tests + coverage pass, call `Agent(...)` three times in one tool-use block — one per agent — with `run_in_background: true` and the session scope filled in.
+2. Continue with docs / commit prep while they run; the harness notifies on completion. Do **not** sleep or poll.
+3. When each agent reports back, surface its findings to the user. **Treat every HIGH as a blocker** — fix in this session, then re-run the relevant agent against the patched diff. MEDIUM and LOW go to the PR description as known follow-ups (or get fixed if cheap).
+4. Only declare done after the three reports are visible to the user and every HIGH is resolved.
+
+The three agent definitions are split by concern on purpose — they must not duplicate work. If you find yourself merging them or skipping one "because the change is small," stop: the sweep is also the safety net for changes that *look* small.
 
 ---
 
