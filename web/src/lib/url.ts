@@ -44,3 +44,37 @@ export function looksLikeUrl(raw: string): boolean {
     return false
   }
 }
+
+// Gate any URL we hand to `<img src>`. `favicon_url` and `og_image_url`
+// are stamped by the preview worker from whatever the remote page declared
+// (`<link rel="icon">` / `<meta property="og:image">`), so an attacker-
+// controlled page could try to slip in `data:`, `file:`, `javascript:`,
+// or other non-http schemes. React 19 blocks `javascript:` in `<img src>`
+// in practice but `data:`/`file:` pass; we'd rather not depend on the
+// renderer's default. Returns the URL when safe, `undefined` otherwise so
+// `<img src={undefined}>` skips the network request entirely.
+//
+// Accepts: absolute http(s) URLs and site-relative paths starting with a
+// single `/`. The site-relative branch is defensive — no current caller
+// produces such URLs (the preview worker stamps absolute URLs only), so
+// removing it would be a behavior change visible only to future writers.
+// Protocol-relative `//host/path` is rejected deliberately — the caller
+// can pick a scheme. Everything else (data:, file:, javascript:, vbscript:,
+// bare hostnames) is rejected.
+export function safeImageUrl(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined
+  const trimmed = raw.trim()
+  if (!trimmed) return undefined
+  // Single leading slash = site-relative path. `//` would be a
+  // protocol-relative URL ("//host/x"), which we deliberately reject above.
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) return trimmed
+  // Strict whitelist — `new URL` is too lenient (it happily parses
+  // `javascript:alert(1)` as `protocol: 'javascript:'`).
+  if (!/^https?:\/\//i.test(trimmed)) return undefined
+  try {
+    new URL(trimmed) // throws on malformed authority
+    return trimmed
+  } catch {
+    return undefined
+  }
+}

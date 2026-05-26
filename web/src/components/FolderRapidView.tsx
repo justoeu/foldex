@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { primaryColor } from '../lib/tagColor'
+import { safeImageUrl } from '../lib/url'
 import type { Folder } from '../api/types'
 
 const MAX_ITEMS = 10
@@ -11,18 +12,12 @@ const SHOW_DELAY_MS = 220
 
 type Props = {
   folder: Folder
-  // The trigger element. Hover/focus on this (or anywhere inside it) shows the
-  // popover; pointerleave / blur hide it. Click semantics are preserved.
   children: ReactNode
   // When false, behaves as a passthrough wrapper (no popover). Lets the
   // FolderCard mount the same JSX subtree regardless of compact mode.
   enabled: boolean
 }
 
-// Rich hover/focus popover for the compact FolderCard. Lists the folder's
-// preview_folders (with mini folder glyphs) then preview_links (favicons or
-// initials), capped at 10. "+N more" footer when total > 10. The folder
-// payload already carries these previews so the popover needs no extra API.
 export function FolderRapidView({ folder, children, enabled }: Props) {
   const { t } = useTranslation()
   const wrapRef = useRef<HTMLSpanElement>(null)
@@ -30,10 +25,16 @@ export function FolderRapidView({ folder, children, enabled }: Props) {
   const [rect, setRect] = useState<DOMRect | null>(null)
   const showTimer = useRef<number | null>(null)
 
+  // Without the cleanup, a pending setTimeout can fire after the wrapper is
+  // gone (or after `enabled` flipped) and call setState on an unmounted node:
+  // React 19 warns, and in production the stale popover briefly appears on
+  // the next render of any FolderCard.
   useEffect(() => {
     if (!enabled) {
       setOpen(false)
       setRect(null)
+    }
+    return () => {
       if (showTimer.current !== null) {
         window.clearTimeout(showTimer.current)
         showTimer.current = null
@@ -113,11 +114,9 @@ function RapidViewPopover({
     ready: false,
   })
 
-  // Folders come first, then links. Both already trimmed by the backend to a
-  // small preview window — we additionally cap at MAX_ITEMS for the popover.
   const rows: Array<
     | { kind: 'folder'; id: number; name: string; color: string }
-    | { kind: 'link'; id: number; title: string; favicon?: string | null }
+    | { kind: 'link'; id: number; title: string; favSrc: string | undefined }
   > = []
   for (const f of folder.preview_folders) {
     if (rows.length >= MAX_ITEMS) break
@@ -125,7 +124,7 @@ function RapidViewPopover({
   }
   for (const l of folder.preview_links) {
     if (rows.length >= MAX_ITEMS) break
-    rows.push({ kind: 'link', id: l.id, title: l.title, favicon: l.favicon_url })
+    rows.push({ kind: 'link', id: l.id, title: l.title, favSrc: safeImageUrl(l.favicon_url) })
   }
   const total = folder.link_count + folder.folder_count
   const moreCount = Math.max(0, total - rows.length)
@@ -147,7 +146,7 @@ function RapidViewPopover({
     left = Math.max(edge, Math.min(left, vpW - tip.width - edge))
     top = Math.max(edge, Math.min(top, vpH - tip.height - edge))
     setPos({ left, top, ready: true })
-  }, [rect.top, rect.left, rect.right, rect.bottom])
+  }, [rect])
 
   return createPortal(
     <div
@@ -177,9 +176,9 @@ function RapidViewPopover({
           ) : (
             <li key={`l-${r.id}`} className="fx-rapidview-item">
               <span className="fx-rapidview-icon">
-                {r.favicon ? (
+                {r.favSrc ? (
                   <img
-                    src={r.favicon}
+                    src={r.favSrc}
                     alt=""
                     referrerPolicy="no-referrer"
                     className="fx-rapidview-favicon"

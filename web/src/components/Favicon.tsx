@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { safeImageUrl } from '../lib/url'
 import type { Link } from '../api/types'
 
 type Props = {
@@ -26,7 +27,8 @@ export function Favicon({ link, size = 32 }: Props) {
     setErrored(false)
   }, [link.favicon_url])
 
-  const showImg = !!link.favicon_url && !errored
+  const safeSrc = safeImageUrl(link.favicon_url)
+  const showImg = !!safeSrc && !errored
 
   return (
     <div
@@ -41,7 +43,7 @@ export function Favicon({ link, size = 32 }: Props) {
     >
       {showImg ? (
         <img
-          src={link.favicon_url ?? undefined}
+          src={safeSrc}
           alt=""
           referrerPolicy="no-referrer"
           width={size}
