@@ -100,7 +100,7 @@ function CompactLink({ link: l, onEdit }: { link: Link; onEdit: (l: Link) => voi
           target="_blank"
           rel="noopener noreferrer"
           data-tooltip={t('link_card.open_action')}
-          aria-label={`open ${l.title}`}
+          aria-label={t('common.open_link_aria', { title: l.title })}
         >
           {t('link_card.open_action')}
         </a>
@@ -140,7 +140,7 @@ function CompactFolder({
             width: '100%',
           }}
           data-tooltip={t('folder_card.open_folder')}
-          aria-label={`open folder ${f.name}`}
+          aria-label={t('common.open_folder_aria', { name: f.name })}
         >
           <div className="fx-compact-title" style={{ color: primaryColor(f.color) }}>{f.name}</div>
           <div className="fx-compact-url">
@@ -153,7 +153,7 @@ function CompactFolder({
           className="fx-iconbtn"
           onClick={() => onEdit(f)}
           data-tooltip={t('common.edit')}
-          aria-label={`edit folder ${f.name}`}
+          aria-label={t('common.edit_folder_aria', { name: f.name })}
         >
           <Icon d={I.pen} size={13} />
         </button>

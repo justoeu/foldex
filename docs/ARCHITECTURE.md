@@ -237,11 +237,15 @@ Todo byte que entra no MinIO via upload do usuário ou via screenshot fallback p
 
 **Pontos de chamada:**
 
-- `internal/links/screenshot_handler.go:UploadImage` — uploads manuais (`POST /api/links/{id}/image`).
-- `internal/links/screenshot_handler.go:CaptureAndStore` — screenshot sob demanda (`POST /api/links/{id}/screenshot`).
-- `internal/preview/worker.go:maybeScreenshot` — screenshot fallback do worker.
+- `internal/links/screenshot_handler.go:UploadImage` — uploads manuais (`POST /api/links/{id}/image`). Cap de body = 5 MiB (`MaxBytesReader`), pixel cap = 50 MP via `imageopt.DecodeConfig`.
+- `internal/links/screenshot_handler.go:CaptureAndStore` — screenshot sob demanda (`POST /api/links/{id}/screenshot`). **Gate SSRF obrigatório**: chama `links.URLPolicy` (passada por `main.go` como `preview.IsPublicURL`) antes de invocar o Chromium — rejeita scheme não-http(s) com 400 `invalid_scheme` e IMDS/RFC1918/loopback com 400 `private_target`. Policy nil = fail-closed (deny). Sem esse gate o endpoint vira read-anywhere (`file:///etc/passwd` → screenshot → `/api/files/`).
+- `internal/preview/worker.go:maybeScreenshot` — screenshot fallback do worker (mesma `IsPublicURL`).
 
 Cada um, além do `Optimize`, dispara `DeleteObject` nas extensões irmãs do mesmo id (purga de orphans quando o formato muda de `.png` pra `.jpg`). `DeleteObject` é idempotente (NoSuchKey = sucesso). **Arquivos antigos pré-deploy ficam intocados** — o `ProxyFile` continua servindo `.png/.gif/.webp` históricos sem mudança.
+
+### imageopt — decode-bomb guard
+
+`imageopt.Optimize` chama `image.DecodeConfig` antes de `image.Decode` e rejeita com `ErrTooLarge` qualquer payload cujas dimensões declaradas excedam `maxPixels = 50_000_000` (50 MP). Sem isso, um PNG de ~30 KB declarando 60000×60000 alocaria ~14 GB de RGBA em `image.NewRGBA` e travaria o backend. O cap é generoso para qualquer foto de celular (top consumer é ~108 MP, mas esses comprimem para >5 MB e o upload pré-cap de 5 MiB já corta antes).
 
 ## Portas, hostnames e deploy local
 

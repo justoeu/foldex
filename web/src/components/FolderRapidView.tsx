@@ -181,6 +181,8 @@ function RapidViewPopover({
                     src={r.favSrc}
                     alt=""
                     referrerPolicy="no-referrer"
+                    loading="lazy"
+                    decoding="async"
                     className="fx-rapidview-favicon"
                   />
                 ) : (

@@ -122,3 +122,37 @@ func TestAttrAndIsVoid(t *testing.T) {
 	require.True(t, isVoid("img"))
 	require.False(t, isVoid("div"))
 }
+
+// TestCheckRemoteAddrSSRF_BlocksRebinding locks the P2.8 post-dial guard.
+// The pre-dial LookupIP can be fooled by a DNS server that returns a public
+// IP for the first query and a private IP for the resolver's internal call;
+// the post-dial peer check is the line of defense that catches that.
+func TestCheckRemoteAddrSSRF_BlocksRebinding(t *testing.T) {
+	cases := []struct {
+		name   string
+		strict bool
+		peer   net.Addr
+		want   string // substring expected in the error; "" = nil error
+	}{
+		{"public IP passes permissive", false, &net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 443}, ""},
+		{"public IP passes strict", true, &net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 443}, ""},
+		{"IMDS refused even permissive", false, &net.TCPAddr{IP: net.ParseIP("169.254.169.254"), Port: 80}, "IMDS"},
+		{"IMDS refused strict", true, &net.TCPAddr{IP: net.ParseIP("169.254.169.254"), Port: 80}, "IMDS"},
+		{"RFC1918 refused only when strict", true, &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 80}, "refusing peer"},
+		{"RFC1918 passes permissive", false, &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 80}, ""},
+		{"loopback refused strict", true, &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 80}, "refusing peer"},
+		{"IPv6 ULA refused strict", true, &net.TCPAddr{IP: net.ParseIP("fc00::1"), Port: 80}, "refusing peer"},
+		{"non-TCP addr refused", false, &net.UDPAddr{IP: net.ParseIP("8.8.8.8"), Port: 53}, "non-TCP"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkRemoteAddrSSRF(tc.strict, tc.peer, "example.com")
+			if tc.want == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}

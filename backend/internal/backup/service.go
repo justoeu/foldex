@@ -58,27 +58,91 @@ func NewService(pool *pgxpool.Pool, storage StorageBucket, logger *slog.Logger) 
 // ────────────────────────────────────────────────────────────────────────────
 // Export — produces the ZIP.
 
-// Export streams a full backup ZIP into w. Calls io.Writer.Write in chunks; no
-// in-memory buffer of the whole zip.
-func (s *Service) Export(ctx context.Context, w io.Writer) (ExportReport, error) {
+// Export streams a full backup ZIP into w. Counts are known after the
+// snapshot read and the bucket listing complete — onCountsReady (optional) is
+// invoked at that point so HTTP callers can flush response headers BEFORE the
+// first byte of zip data hits the wire. Returning an error from onCountsReady
+// aborts the export; returning nil lets it proceed. nil = no callback.
+//
+// Memory profile: O(snapshot DB rows) + O(largest single object in the
+// bucket). The previous handler buffered the entire ZIP in memory, which made
+// a 2 GiB backup a 2 GiB heap allocation; this path streams every entry.
+func (s *Service) Export(ctx context.Context, w io.Writer, onCountsReady func(Counts) error) (ExportReport, error) {
 	start := time.Now()
 	var rep ExportReport
 
-	zw := zip.NewWriter(w)
-
 	// Pull a consistent snapshot under REPEATABLE READ so the 5 SELECTs and
-	// the MinIO listing all see the same point in time.
+	// the MinIO listing all see the same point in time. The tx is committed
+	// as soon as the snapshot + bucket listings finish — keeping it open
+	// across the actual ZIP stream would let a slow client peg WAL retention
+	// and trip Postgres' idle_in_transaction_session_timeout on multi-GB
+	// downloads.
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return rep, fmt.Errorf("backup: begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	// Use a flag so the deferred rollback skips when we've already committed.
+	// A double-Rollback is a no-op in pgx, but the explicit flag documents
+	// the intent for readers who don't know that.
+	txDone := false
+	defer func() {
+		if !txDone {
+			_ = tx.Rollback(ctx)
+		}
+	}()
 
 	snap, err := readSnapshot(ctx, tx)
 	if err != nil {
 		return rep, fmt.Errorf("backup: read snapshot: %w", err)
 	}
 
+	// Pre-list every bucket prefix while we still hold the REPEATABLE READ tx,
+	// so file count + bytes are known to the caller before any zip byte is
+	// flushed. Object payloads are streamed lazily below — only the metadata
+	// is buffered here.
+	type objList struct {
+		prefix string
+		objs   []ObjectInfo
+	}
+	var lists []objList
+	var fileCount, fileBytes int64
+	for _, prefix := range bucketPrefixes {
+		objs, err := s.storage.ListObjects(ctx, prefix)
+		if err != nil {
+			return rep, fmt.Errorf("backup: list %q: %w", prefix, err)
+		}
+		lists = append(lists, objList{prefix: prefix, objs: objs})
+		for _, o := range objs {
+			fileCount++
+			fileBytes += o.Size
+		}
+	}
+
+	// Snapshot is fully captured; the tx no longer needs to be held while we
+	// stream bytes to the client. Commit (read-only tx — semantically the
+	// same as rollback for visibility) and release the WAL hold.
+	if err := tx.Commit(ctx); err != nil {
+		return rep, fmt.Errorf("backup: commit snapshot tx: %w", err)
+	}
+	txDone = true
+
+	counts := Counts{
+		Links:     int64(len(snap.Links)),
+		Tags:      int64(len(snap.Tags)),
+		Folders:   int64(len(snap.Folders)),
+		LinkTags:  int64(len(snap.LinkTags)),
+		ClickLogs: int64(len(snap.ClickLogs)),
+		Files:     fileCount,
+		FileBytes: fileBytes,
+	}
+
+	if onCountsReady != nil {
+		if err := onCountsReady(counts); err != nil {
+			return rep, fmt.Errorf("backup: header hook: %w", err)
+		}
+	}
+
+	zw := zip.NewWriter(w)
 	checksums := map[string]string{}
 
 	// database.json
@@ -91,30 +155,13 @@ func (s *Service) Export(ctx context.Context, w io.Writer) (ExportReport, error)
 	}
 
 	// files/
-	var fileCount, fileBytes int64
-	for _, prefix := range bucketPrefixes {
-		objs, err := s.storage.ListObjects(ctx, prefix)
-		if err != nil {
-			return rep, fmt.Errorf("backup: list %q: %w", prefix, err)
-		}
-		for _, o := range objs {
+	for _, l := range lists {
+		for _, o := range l.objs {
 			entryName := "files/" + o.Key
 			if err := s.streamObjectIntoZip(ctx, zw, entryName, o.Key, checksums); err != nil {
 				return rep, err
 			}
-			fileCount++
-			fileBytes += o.Size
 		}
-	}
-
-	counts := Counts{
-		Links:     int64(len(snap.Links)),
-		Tags:      int64(len(snap.Tags)),
-		Folders:   int64(len(snap.Folders)),
-		LinkTags:  int64(len(snap.LinkTags)),
-		ClickLogs: int64(len(snap.ClickLogs)),
-		Files:     fileCount,
-		FileBytes: fileBytes,
 	}
 
 	manifest := Manifest{

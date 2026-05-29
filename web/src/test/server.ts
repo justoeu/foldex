@@ -138,6 +138,11 @@ function patchFolder(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Moc
   if (!f) throw notFound()
   if (data.name !== undefined) f.name = data.name
   if (data.color !== undefined) f.color = data.color
+  // parent_id ships in DnD folder-merge gestures (folder→folder drop) and
+  // anywhere the backend PATCH accepts it. Skipping the field here made the
+  // App.test DnD assertions vacuous — onMoveFolder fired and the mock did
+  // nothing.
+  if ('parent_id' in data) f.parent_id = data.parent_id ?? null
   return f
 }
 
@@ -206,8 +211,10 @@ function createLink(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Moc
     description: data.description ?? null,
     favicon_url: null,
     og_image_url: null,
+    folder_id: data.folder_id ?? null,
     click_count: 0,
-    preview_status: 'pending', pinned: false,
+    preview_status: 'pending',
+    pinned: !!data.pinned,
     preview_error: null,
     last_clicked_at: null,
     created_at: new Date().toISOString(),
@@ -225,6 +232,12 @@ function patchLink(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockS
   if (data.url !== undefined) l.url = data.url
   if (data.title !== undefined) l.title = data.title
   if (data.description !== undefined) l.description = data.description
+  // folder_id + pinned + slug were silently ignored before. DnD link→folder
+  // gestures and the pin badge depend on the mock applying these — without it
+  // the App tests pass even when the production mutations are broken.
+  if ('folder_id' in data) l.folder_id = data.folder_id ?? null
+  if (data.pinned !== undefined) l.pinned = !!data.pinned
+  if (data.slug !== undefined) l.slug = data.slug
   if (data.tag_ids !== undefined) {
     l.tags = data.tag_ids
       .map((id: number) => s.tags.find((x) => x.id === id))

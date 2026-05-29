@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
 import { useConfirm } from './ConfirmDialog'
-import { goHref, useDeleteLink, useRefreshPreview, useUpdateLink } from '../api/links'
+import { goHref, useDeleteLink, usePinLink, useRefreshPreview } from '../api/links'
 import { safeImageUrl } from '../lib/url'
 import type { Link } from '../api/types'
 
@@ -29,18 +29,27 @@ function densityFor(link: Link, imageOk: boolean): 'tall' | 'medium' | 'short' {
   return 'short'
 }
 
-export function LinkCard({ link, onEdit, onMergeWith }: Props) {
+// memo guards re-render storms in dense grids (200+ cards). LinkCard is a
+// pure function of (link, onEdit, onMergeWith) — the callbacks are stable
+// across App.tsx renders (lifted to module scope or wrapped in useCallback
+// at the container) so the default shallow compare is correct.
+export const LinkCard = memo(LinkCardImpl)
+LinkCard.displayName = 'LinkCard'
+
+function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
   const { t } = useTranslation()
   const del = useDeleteLink()
   const refresh = useRefreshPreview()
-  const update = useUpdateLink()
+  const pin = usePinLink()
   const confirm = useConfirm()
   const qc = useQueryClient()
   const [previewErrored, setPreviewErrored] = useState(false)
   const previewSrc = safeImageUrl(link.og_image_url)
   const showPreview = !!previewSrc && !previewErrored
   const density = densityFor(link, showPreview)
-  const togglePin = () => update.mutate({ id: link.id, body: { pinned: !link.pinned } })
+  // Optimistic — see usePinLink. Badge flips immediately; server-side reorder
+  // catches up on onSettled invalidation.
+  const togglePin = () => pin.mutate({ id: link.id, pinned: !link.pinned })
   const [dragOver, setDragOver] = useState(false)
   const [dragging, setDragging] = useState(false)
 
@@ -123,6 +132,8 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
             src={previewSrc}
             alt=""
             referrerPolicy="no-referrer"
+            loading="lazy"
+            decoding="async"
             onError={() => setPreviewErrored(true)}
             style={{ width: '100%', height: '100%', objectFit: 'scale-down', display: 'block' }}
           />
@@ -196,7 +207,7 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
               className="fx-iconbtn"
               data-tooltip={t('link_card.edit_link')}
               data-tooltip-side="top"
-              aria-label="edit"
+              aria-label={t('common.edit')}
               onClick={() => onEdit(link)}
             >
               <Icon d={I.pen} size={14} />
@@ -205,7 +216,7 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
               className="fx-iconbtn fx-iconbtn-danger"
               data-tooltip={t('link_card.delete_link')}
               data-tooltip-side="top"
-              aria-label="delete"
+              aria-label={t('common.delete')}
               onClick={onDelete}
             >
               <Icon d={I.trash} size={14} />
@@ -217,7 +228,7 @@ export function LinkCard({ link, onEdit, onMergeWith }: Props) {
               rel="noopener noreferrer"
               data-tooltip={t('link_card.open_action')}
               data-tooltip-side="top"
-              aria-label={`open ${link.title}`}
+              aria-label={t('common.open_link_aria', { title: link.title })}
               onClick={onGo}
             >
               <span className="fx-openbtn-go">{t('link_card.open_action')}</span>

@@ -32,9 +32,22 @@ func TestCreateInput_Validate(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "name too long")
 
+	// Color validation now follows the cssvalid allowlist — long+invalid both
+	// surface as "color must be ...".
 	err = CreateInput{Name: "x", Color: strings.Repeat("a", 201)}.Validate()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "color too long")
+	assert.Contains(t, err.Error(), "color must be")
+
+	// CSS injection vectors must be rejected.
+	for _, hostile := range []string{
+		`red url("https://evil/exfil")`,
+		"expression(alert(1))",
+		"linear-gradient(90deg, #abc, #def)",
+	} {
+		err := CreateInput{Name: "x", Color: hostile}.Validate()
+		require.Error(t, err, "color %q must be refused", hostile)
+		assert.Contains(t, err.Error(), "color must be")
+	}
 }
 
 func TestUpdateInput_Empty(t *testing.T) {
@@ -71,5 +84,5 @@ func TestUpdateInput_Validate(t *testing.T) {
 	longColor := strings.Repeat("a", 201)
 	err = UpdateInput{Color: &longColor}.Validate()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "color too long")
+	assert.Contains(t, err.Error(), "color must be")
 }

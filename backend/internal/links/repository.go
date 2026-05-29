@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/pkg/httperr"
@@ -89,6 +90,9 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Link, error) {
 		if err == nil {
 			break
 		}
+		if isURLUniqueViolation(err) {
+			return Link{}, httperr.New(409, "url_taken", "url already in use")
+		}
 		if isSlugUniqueViolation(err) {
 			if userSupplied {
 				return Link{}, httperr.New(409, "slug_taken", "slug already in use")
@@ -119,12 +123,25 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Link, error) {
 	return r.Get(ctx, id)
 }
 
-// isSlugUniqueViolation matches the link_slug_unique constraint name from the
-// 000009 migration. Plain string match because the pgx driver surfaces the
-// error wrapped — switching on `*pgconn.PgError.ConstraintName` requires
-// importing pgconn into the repository.
+// uniqueConstraint returns the violated constraint name when err is a Postgres
+// 23505 unique-violation, or "" otherwise. errors.As survives `%w` wrapping —
+// the older string-match approach worked because the constraint name landed in
+// the formatted message, but it would silently break if any wrapping layer
+// ever omitted Unwrap or changed the format.
+func uniqueConstraint(err error) string {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		return ""
+	}
+	return pgErr.ConstraintName
+}
+
 func isSlugUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "link_slug_unique")
+	return uniqueConstraint(err) == "link_slug_unique"
+}
+
+func isURLUniqueViolation(err error) bool {
+	return uniqueConstraint(err) == "link_url_unique"
 }
 
 func (r *Repository) Get(ctx context.Context, id int64) (Link, error) {
@@ -349,6 +366,9 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Link
 		q := fmt.Sprintf(`UPDATE link SET %s WHERE id = $%d`, strings.Join(sets, ", "), i)
 		ct, err := tx.Exec(ctx, q, args...)
 		if err != nil {
+			if isURLUniqueViolation(err) {
+				return Link{}, httperr.New(409, "url_taken", "url already in use")
+			}
 			if isSlugUniqueViolation(err) {
 				return Link{}, httperr.New(409, "slug_taken", "slug already in use")
 			}

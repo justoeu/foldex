@@ -82,7 +82,7 @@ export function TagManagerDialog({ open, onClose }: Props) {
               </div>
               <button
                 className="fx-iconbtn"
-                aria-label={`edit ${tag.name}`}
+                aria-label={t('common.edit_tag_aria', { name: tag.name })}
                 data-tooltip={t('tag_manager.edit_tooltip')}
                 data-tooltip-side="top"
                 onClick={() => setEditing(tag)}
@@ -91,7 +91,7 @@ export function TagManagerDialog({ open, onClose }: Props) {
               </button>
               <button
                 className="fx-iconbtn fx-iconbtn-danger"
-                aria-label={`delete ${tag.name}`}
+                aria-label={t('common.delete_tag_aria', { name: tag.name })}
                 data-tooltip={t('tag_manager.delete_tooltip')}
                 data-tooltip-side="top"
                 onClick={() => askDelete(tag)}

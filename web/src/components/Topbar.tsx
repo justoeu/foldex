@@ -201,7 +201,7 @@ export function Topbar({
         </button>
       </div>
 
-      <div className="fx-viewseg" role="group" aria-label="view mode">
+      <div className="fx-viewseg" role="group" aria-label={t('common.view_mode_aria')}>
         <button
           className={'fx-vs' + (viewMode === 'cards' ? ' fx-vs-active' : '')}
           data-tooltip={t('view.cards')}

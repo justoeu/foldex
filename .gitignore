@@ -15,6 +15,9 @@ dist/
 .vite/
 *.local
 
+# Vitest coverage HTML reports — local-only artifact
+web/coverage/
+
 # Extension build
 extension/dist/
 

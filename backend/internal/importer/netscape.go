@@ -1,7 +1,9 @@
 package importer
 
 import (
+	"errors"
 	"io"
+	"net/url"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -34,11 +36,11 @@ func ParseNetscape(r io.Reader) ([]Item, error) {
 		tt := z.Next()
 		switch tt {
 		case html.ErrorToken:
-			if err := z.Err(); err == io.EOF {
+			err := z.Err()
+			if errors.Is(err, io.EOF) {
 				return items, nil
-			} else {
-				return items, err
 			}
+			return items, err
 		case html.StartTagToken, html.SelfClosingTagToken:
 			t := z.Token()
 			switch strings.ToLower(t.Data) {
@@ -51,6 +53,15 @@ func ParseNetscape(r io.Reader) ([]Item, error) {
 			case "a":
 				href := attr(t, "href")
 				if href == "" {
+					continue
+				}
+				// Netscape exports are user-supplied and can carry javascript:,
+				// data:, file:, vbscript:, etc. The JSON importer (json.go) and
+				// API DTO both reject non-http(s); the Netscape path used to
+				// trust href blindly, letting hostile URLs reach link.url and
+				// then render as <a href={url}> in LinkDialog or feed the
+				// screenshot endpoint (read-anywhere via file://).
+				if !isHTTPScheme(href) {
 					continue
 				}
 				title := readText(z)
@@ -99,6 +110,18 @@ func readText(z *html.Tokenizer) string {
 		return z.Token().Data
 	}
 	return ""
+}
+
+// isHTTPScheme reports whether href parses to an http or https URL. Treats
+// parse errors, missing schemes, and anything else (javascript:, data:, file:,
+// vbscript:, mailto:, tel:, etc.) as rejected.
+func isHTTPScheme(href string) bool {
+	u, err := url.Parse(strings.TrimSpace(href))
+	if err != nil {
+		return false
+	}
+	s := strings.ToLower(u.Scheme)
+	return s == "http" || s == "https"
 }
 
 func attr(t html.Token, key string) string {

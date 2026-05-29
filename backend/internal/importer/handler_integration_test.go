@@ -23,7 +23,7 @@ import (
 
 type fakeEnqueuer struct{ ids []int64 }
 
-func (f *fakeEnqueuer) Enqueue(id int64) { f.ids = append(f.ids, id) }
+func (f *fakeEnqueuer) Enqueue(id int64) error { f.ids = append(f.ids, id); return nil }
 
 func multipartBody(t *testing.T, format, content string) (*bytes.Buffer, string) {
 	t.Helper()

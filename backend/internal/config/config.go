@@ -18,6 +18,7 @@ type MinIOConfig struct {
 
 type Config struct {
 	Port               string
+	BindAddr           string // listen address; default 127.0.0.1 (single-user threat model)
 	DBURL              string
 	PreviewConcurrency int
 	PreviewTimeoutSec  int
@@ -29,6 +30,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		Port:               envOr("BACKEND_PORT", "9089"),
+		BindAddr:           envOr("BACKEND_BIND", "127.0.0.1"),
 		DBURL:              os.Getenv("DB_URL"),
 		PreviewConcurrency: envInt("PREVIEW_WORKER_CONCURRENCY", 4),
 		PreviewTimeoutSec:  envInt("PREVIEW_FETCH_TIMEOUT_SEC", 5),
@@ -48,7 +50,43 @@ func Load() (Config, error) {
 	if cfg.PreviewConcurrency < 1 {
 		cfg.PreviewConcurrency = 1
 	}
+	if err := cfg.validateSecureDefaults(); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+// validateSecureDefaults refuses to boot in the worst-case combination:
+// open CORS (`*`) AND no SharedSecret AND bound to a public address. The
+// permissive defaults are fine for the single-user/localhost threat model,
+// but the moment any of those three knobs flips (binding to 0.0.0.0 behind
+// a reverse proxy is the usual mistake) the backend becomes a wide-open API.
+func (c Config) validateSecureDefaults() error {
+	if !isLocalBind(c.BindAddr) && c.SharedSecret == "" && hasWildcardCORS(c.CORSOrigins) {
+		return errors.New(
+			"insecure config: BACKEND_BIND=" + c.BindAddr +
+				" (non-loopback) AND SHARED_SECRET is empty AND CORS_ORIGINS=* — " +
+				"set SHARED_SECRET, or restrict CORS_ORIGINS, or bind to 127.0.0.1",
+		)
+	}
+	return nil
+}
+
+func isLocalBind(addr string) bool {
+	switch addr {
+	case "", "127.0.0.1", "localhost", "::1", "[::1]":
+		return true
+	}
+	return false
+}
+
+func hasWildcardCORS(origins []string) bool {
+	for _, o := range origins {
+		if o == "*" {
+			return true
+		}
+	}
+	return false
 }
 
 func envOr(k, def string) string {

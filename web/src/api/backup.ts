@@ -1,3 +1,4 @@
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
 
 export type BackupManifest = {
@@ -123,6 +124,22 @@ export async function restoreBackup(file: File, mode: 'wipe' | 'skip' | 'duplica
     headers: { 'Content-Type': 'multipart/form-data' },
   })
   return data
+}
+
+// useRestoreBackup mirrors useApplyImport — restore mutates every domain
+// table, so the Home view must invalidate links/folders/tags/stats post-restore.
+export function useRestoreBackup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (args: { file: File; mode: 'wipe' | 'skip' | 'duplicate' }) =>
+      restoreBackup(args.file, args.mode),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['links'] })
+      qc.invalidateQueries({ queryKey: ['folders'] })
+      qc.invalidateQueries({ queryKey: ['tags'] })
+      qc.invalidateQueries({ queryKey: ['stats'] })
+    },
+  })
 }
 
 // ────────────────────────────────────────────────────────────────────────────

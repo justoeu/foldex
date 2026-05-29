@@ -80,18 +80,31 @@ func TestWorker_EnqueueDropsWhenChannelFull(t *testing.T) {
 	// Saturate the channel without starting any consumers.
 	capacity := cap(w.jobs)
 	for i := 0; i < capacity; i++ {
-		w.Enqueue(int64(i))
+		assert.NoError(t, w.Enqueue(int64(i)), "first %d sends must succeed", capacity)
 	}
-	// The next one must hit the `default` branch (warn + drop) without
-	// blocking.
-	done := make(chan struct{})
+	// The next one must hit the `default` branch and return ErrQueueFull
+	// without blocking.
+	done := make(chan error, 1)
 	go func() {
-		w.Enqueue(99999)
-		close(done)
+		done <- w.Enqueue(99999)
 	}()
 	select {
-	case <-done:
+	case err := <-done:
+		assert.ErrorIs(t, err, ErrQueueFull)
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Enqueue blocked when channel was full")
 	}
+}
+
+// TestWorker_EnqueueAfterStopReturnsErrStopped locks the Stop drain semantics:
+// post-Stop sends must not silently fill the buffer (would let new HTTP
+// requests succeed but never get processed). Tests Stop+Enqueue without Start
+// because Start spawns requeuePending which needs a real *pgxpool.Pool.
+func TestWorker_EnqueueAfterStopReturnsErrStopped(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	w := NewWorker(nil, 1, time.Second, logger)
+	w.Stop() // safe without Start — cancel guard is nil-safe
+
+	err := w.Enqueue(42)
+	assert.ErrorIs(t, err, ErrStopped)
 }

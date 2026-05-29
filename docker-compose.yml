@@ -23,11 +23,25 @@ services:
       # Override DB_URL entirely for non-derivable DSNs (TLS, schema, etc.).
       DB_URL: ${DB_URL:-postgres://${POSTGRES_USER:-foldex}:${POSTGRES_PASSWORD:-foldex}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-foldex}?sslmode=${POSTGRES_SSLMODE:-disable}}
       BACKEND_PORT: ${BACKEND_PORT:-9089}
+      # Inside a container, listening on the loopback (127.0.0.1) means nginx
+      # in the sibling container cannot reach the backend over the `foldex`
+      # network. The backend's own config default IS 127.0.0.1 for the
+      # bare-host case ("single-user threat model"); inside compose we
+      # override to 0.0.0.0 so the inter-container address works. The host
+      # port mapping at the bottom (BIND_HOST:127.0.0.1:…) keeps the outer
+      # surface loopback-only.
+      BACKEND_BIND: ${BACKEND_BIND:-0.0.0.0}
       PREVIEW_WORKER_CONCURRENCY: ${PREVIEW_WORKER_CONCURRENCY:-4}
       PREVIEW_FETCH_TIMEOUT_SEC: ${PREVIEW_FETCH_TIMEOUT_SEC:-5}
       PREVIEW_STRICT_SSRF: ${PREVIEW_STRICT_SSRF:-}
       SHARED_SECRET: ${SHARED_SECRET:-}
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      # CORS scope: inside compose, the SPA is served from nginx (same origin)
+      # and its /api/ calls are same-origin too — CORS only matters for
+      # browser cross-origin calls. Default to https://localhost so the
+      # secure-defaults validator (refuses wildcard + no secret + non-loopback
+      # bind) is happy in the typical local deployment. Override in .env when
+      # serving the SPA from a different hostname.
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost}
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}

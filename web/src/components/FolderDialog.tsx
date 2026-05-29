@@ -239,7 +239,7 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                       key={c}
                       type="button"
                       onClick={() => setSolid(c)}
-                      aria-label={`color ${c}`}
+                      aria-label={t('common.color_swatch_aria', { c })}
                       style={{
                         width: 26,
                         height: 26,
@@ -286,7 +286,7 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                 className="fx-confirm-btn fx-confirm-btn-warn"
                 onClick={onDeleteKeepLinks}
                 disabled={busy}
-                aria-label="delete folder keep links"
+                aria-label={t('common.delete_folder_keep_links_aria')}
                 data-tooltip={t('folder_dialog.delete_button_tooltip')}
                 data-tooltip-side="top"
               >
@@ -296,7 +296,7 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                 className="fx-confirm-btn fx-confirm-btn-danger"
                 onClick={onDeleteCascade}
                 disabled={busy}
-                aria-label="delete folder and links"
+                aria-label={t('common.delete_folder_and_links_aria')}
                 data-tooltip={t('folder_dialog.delete_with_links_button_tooltip')}
                 data-tooltip-side="top"
               >

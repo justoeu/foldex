@@ -157,7 +157,7 @@ export function TagDialog({ open, onClose, tag }: Props) {
                       key={c}
                       type="button"
                       onClick={() => setSolid(c)}
-                      aria-label={`color ${c}`}
+                      aria-label={t('common.color_swatch_aria', { c })}
                       style={{
                         width: 26,
                         height: 26,

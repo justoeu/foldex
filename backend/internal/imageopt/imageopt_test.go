@@ -178,6 +178,52 @@ func TestScaledDims(t *testing.T) {
 func TestErrors_AreDistinct(t *testing.T) {
 	assert.False(t, errors.Is(ErrDecode, ErrUnsupportedFormat))
 	assert.False(t, errors.Is(ErrUnsupportedFormat, ErrDecode))
+	assert.False(t, errors.Is(ErrTooLarge, ErrDecode))
+	assert.False(t, errors.Is(ErrTooLarge, ErrUnsupportedFormat))
+}
+
+// TestOptimize_RejectsDecodeBomb locks the H4 fix. A single-color 8000x8000
+// PNG compresses to ~30 KB but, if decoded blindly, would allocate ~256 MB of
+// RGBA in image.NewRGBA. DecodeConfig reads only the header, so we can refuse
+// BEFORE the framebuffer commits.
+func TestOptimize_RejectsDecodeBomb(t *testing.T) {
+	bomb := encodePNG(t, makeSolid(8000, 8000))
+	// Sanity check: the payload is small (proves it's a "bomb"), but the
+	// declared dimensions exceed the 50MP cap. A naive image.Decode on this
+	// payload would allocate ~256 MB RGBA — we're showing the bytes are
+	// orders of magnitude smaller (~200 KB) than the decoded surface.
+	assert.Less(t, len(bomb), 1_000_000, "single-color PNG should compress small")
+	_, err := Optimize(bomb, Options{MaxDim: 1024, Quality: 82})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrTooLarge)
+}
+
+func TestOptimize_AcceptsUpToPixelCap(t *testing.T) {
+	// 5000x5000 = 25MP — half the cap. Must succeed and downscale.
+	img := encodePNG(t, makeSolid(5000, 5000))
+	res, err := Optimize(img, Options{MaxDim: 1024, Quality: 82})
+	require.NoError(t, err)
+	assert.True(t, res.Resized)
+	cfg := decodeConfig(t, res.Data)
+	assert.Equal(t, 1024, cfg.Width)
+	assert.Equal(t, 1024, cfg.Height)
+}
+
+// TestOptimize_PixelCapBoundary locks the exact pixel-cap comparison: 50_000_000
+// is rejected (cap is strictly `>`, not `>=`) and 49_999_999 is accepted.
+// Catches the most likely future regression — an off-by-one when the cap is
+// edited.
+func TestOptimize_PixelCapBoundary(t *testing.T) {
+	// 7072 x 7072 = 50_013_184 > 50_000_000 → rejected.
+	just := encodePNG(t, makeSolid(7072, 7072))
+	_, err := Optimize(just, Options{MaxDim: 1024})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrTooLarge, "7072x7072 (50.01 MP) must be rejected")
+
+	// 7071 x 7071 = 49_999_041 < 50_000_000 → accepted.
+	under := encodePNG(t, makeSolid(7071, 7071))
+	_, err = Optimize(under, Options{MaxDim: 1024})
+	require.NoError(t, err, "7071x7071 (49.99 MP) must be accepted")
 }
 
 // --- helpers ---
@@ -196,6 +242,20 @@ func makeGradient(w, h int, alpha bool) image.Image {
 				B: uint8(((x + y) * 255) / (w + h)),
 				A: a,
 			})
+		}
+	}
+	return img
+}
+
+// makeSolid returns a single-color image — used by decode-bomb tests because
+// flat colors compress aggressively, mimicking the small-payload-large-decode
+// pattern attackers use.
+func makeSolid(w, h int) image.Image {
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	c := color.NRGBA{R: 200, G: 80, B: 120, A: 255}
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.SetNRGBA(x, y, c)
 		}
 	}
 	return img

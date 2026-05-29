@@ -104,9 +104,3 @@ func TestRemapFileKey_IdentityWhenSameID(t *testing.T) {
 	assert.False(t, ok, "identity mapping must be reported as no-op")
 }
 
-func TestStartsWithIndexByte(t *testing.T) {
-	assert.True(t, startsWith("screenshots/1.png", "screenshots/"))
-	assert.False(t, startsWith("images/1.png", "screenshots/"))
-	assert.Equal(t, 11, indexByte("screenshots/1.png", '/'))
-	assert.Equal(t, -1, indexByte("nope", '/'))
-}

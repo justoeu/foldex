@@ -15,17 +15,31 @@ func TestCreateInput_Normalize(t *testing.T) {
 }
 
 func TestCreateInput_Validate(t *testing.T) {
-	require.NoError(t, CreateInput{Name: "Docs"}.Validate())
+	// Color is required for validation to pass — handlers Normalize() first
+	// (which fills in the default), so callers always reach Validate() with
+	// a non-empty color. Tests must mirror that.
+	require.NoError(t, CreateInput{Name: "Docs", Color: "#6366F1"}.Validate())
 
-	err := CreateInput{Name: ""}.Validate()
+	err := CreateInput{Name: "", Color: "#abc"}.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "name is required")
+
+	// CSS injection vectors rejected.
+	for _, hostile := range []string{
+		`red url("https://evil/exfil")`,
+		"expression(alert(1))",
+		"linear-gradient(90deg, #abc, #def)",
+	} {
+		err := CreateInput{Name: "x", Color: hostile}.Validate()
+		require.Error(t, err, "color %q must be refused", hostile)
+		assert.Contains(t, err.Error(), "color must be")
+	}
 
 	long := make([]byte, 81)
 	for i := range long {
 		long[i] = 'a'
 	}
-	err = CreateInput{Name: string(long)}.Validate()
+	err = CreateInput{Name: string(long), Color: "#abc"}.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "too long")
 }

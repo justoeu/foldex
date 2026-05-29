@@ -212,7 +212,11 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 			return Folder{}, fmt.Errorf("cycle check: %w", err)
 		}
 		if cycles {
-			return Folder{}, fmt.Errorf("parent_id would create a cycle")
+			// Typed 409 so the API client sees a clean conflict (extension /
+			// frontend handle "user picked a descendant as parent"). Without
+			// this, httperr.Write fell through to 500 and the UI couldn't tell
+			// the user-fixable case apart from a real server error.
+			return Folder{}, httperr.New(409, "parent_cycle", "parent_id would create a folder cycle")
 		}
 	}
 

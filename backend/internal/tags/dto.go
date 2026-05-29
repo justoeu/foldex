@@ -1,6 +1,10 @@
 package tags
 
-import "strings"
+import (
+	"strings"
+
+	"foldex/internal/pkg/cssvalid"
+)
 
 type CreateInput struct {
 	Name  string  `json:"name"`
@@ -22,6 +26,9 @@ func (c CreateInput) Validate() error {
 	}
 	if len(c.Name) > 80 {
 		return errMsg("name too long (max 80)")
+	}
+	if !cssvalid.IsValidColor(c.Color) {
+		return errMsg("color must be a hex (#abc, #aabbcc) or linear-gradient(135deg, #hex, #hex)")
 	}
 	return nil
 }
@@ -55,6 +62,9 @@ func (u UpdateInput) Validate() error {
 		if len(*u.Name) > 80 {
 			return errMsg("name too long (max 80)")
 		}
+	}
+	if u.Color != nil && !cssvalid.IsValidColor(*u.Color) {
+		return errMsg("color must be a hex (#abc, #aabbcc) or linear-gradient(135deg, #hex, #hex)")
 	}
 	return nil
 }

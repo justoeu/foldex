@@ -98,8 +98,12 @@ func migrationsDir() string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "db", "migrations"))
 }
 
-// Reset truncates all tables but keeps the schema.
+// Reset truncates all data tables but keeps the schema. CASCADE handles FK
+// dependencies inside the TRUNCATE, so order is not load-bearing — but every
+// data table must appear. Missing one (as the previous list missed `folder`
+// and `click_log`) lets stale rows leak across subtests and produces
+// non-deterministic failures.
 func Reset(ctx context.Context, pool *pgxpool.Pool) error {
-	_, err := pool.Exec(ctx, `TRUNCATE link, tag, link_tag RESTART IDENTITY CASCADE`)
+	_, err := pool.Exec(ctx, `TRUNCATE click_log, link_tag, link, folder, tag RESTART IDENTITY CASCADE`)
 	return err
 }

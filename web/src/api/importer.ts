@@ -1,3 +1,4 @@
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
 
 export type ImportFormat = 'netscape' | 'json'
@@ -66,4 +67,25 @@ export async function applyImport(
     headers: { 'Content-Type': 'multipart/form-data' },
   })
   return data
+}
+
+// useApplyImport wraps the bare applyImport call with the mutation lifecycle
+// + cache invalidation. Without this the user landed on Home after an import
+// and saw stale link/folder/tag data for up to 30 s (the global staleTime).
+export function useApplyImport() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (args: {
+      file: File
+      format: ImportFormat
+      mode: ImportMode
+      excludeFolders: string[]
+    }) => applyImport(args.file, args.format, args.mode, args.excludeFolders),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['links'] })
+      qc.invalidateQueries({ queryKey: ['folders'] })
+      qc.invalidateQueries({ queryKey: ['tags'] })
+      qc.invalidateQueries({ queryKey: ['stats'] })
+    },
+  })
 }

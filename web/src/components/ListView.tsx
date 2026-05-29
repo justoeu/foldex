@@ -121,7 +121,7 @@ function LinkRow({
           className="fx-iconbtn"
           data-tooltip={t('link_card.edit_link')}
           data-tooltip-side="top"
-          aria-label="edit"
+          aria-label={t('common.edit')}
           onClick={() => onEdit(l)}
         >
           <Icon d={I.pen} size={13} />
@@ -130,7 +130,7 @@ function LinkRow({
           className="fx-iconbtn fx-iconbtn-danger"
           data-tooltip={t('link_card.delete_link')}
           data-tooltip-side="top"
-          aria-label="delete"
+          aria-label={t('common.delete')}
           onClick={() => onDelete(l)}
         >
           <Icon d={I.trash} size={13} />
@@ -142,7 +142,7 @@ function LinkRow({
           rel="noopener noreferrer"
           data-tooltip={t('link_card.open_action')}
           data-tooltip-side="top"
-          aria-label={`open ${l.title}`}
+          aria-label={t('common.open_link_aria', { title: l.title })}
         >
           <Icon d={I.open} size={12} />
           <span>{t('link_card.open_action')}</span>
@@ -193,7 +193,7 @@ function FolderRow({
           className="fx-iconbtn"
           data-tooltip={t('common.edit')}
           data-tooltip-side="top"
-          aria-label={`edit folder ${f.name}`}
+          aria-label={t('common.edit_folder_aria', { name: f.name })}
           onClick={() => onEdit(f)}
         >
           <Icon d={I.pen} size={13} />
@@ -203,7 +203,7 @@ function FolderRow({
           onClick={() => onOpen(f.id)}
           data-tooltip={t('folder_card.open_folder')}
           data-tooltip-side="top"
-          aria-label={`open folder ${f.name}`}
+          aria-label={t('common.open_folder_aria', { name: f.name })}
         >
           <Icon d={I.open} size={12} />
           <span>{t('common.open')}</span>

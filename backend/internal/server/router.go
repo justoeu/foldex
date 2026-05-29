@@ -36,10 +36,11 @@ type Deps struct {
 	Worker         links.Enqueuer
 	Logger         *slog.Logger
 	Config         config.Config
-	Screenshotter  links.Screenshotter   // optional — nil disables the endpoint
-	Storage        links.Uploader        // optional — nil disables the endpoint
-	StorageStatter stats.StorageStatter  // optional — surfaces bucket usage on /stats/storage
-	StorageBucket  backup.StorageBucket  // optional — enables /api/backup/* when MinIO is up
+	Screenshotter  links.Screenshotter  // optional — nil disables the endpoint
+	Storage        links.Uploader       // optional — nil disables the endpoint
+	ScreenshotURL  links.URLPolicy      // required iff Screenshotter is set — gates the SSRF surface
+	StorageStatter stats.StorageStatter // optional — surfaces bucket usage on /stats/storage
+	StorageBucket  backup.StorageBucket // optional — enables /api/backup/* when MinIO is up
 }
 
 func New(d Deps) http.Handler {
@@ -74,7 +75,14 @@ func New(d Deps) http.Handler {
 		// Screenshot and file-proxy endpoints are only registered when both
 		// a Screenshotter and Storage implementation are provided.
 		if d.Screenshotter != nil && d.Storage != nil {
-			sh := links.NewScreenshotHandler(linksRepo, d.Screenshotter, d.Storage, d.Logger)
+			// Boot-time validation: mounting the screenshot endpoint without
+			// the URL policy wired would still fail closed at request time,
+			// but a hard panic at startup surfaces the misconfig immediately
+			// instead of leaving every request returning 500 in production.
+			if d.ScreenshotURL == nil {
+				panic("server: Screenshotter is set but ScreenshotURL is nil — refusing to mount /api/links/{id}/screenshot without an SSRF gate")
+			}
+			sh := links.NewScreenshotHandler(linksRepo, d.Screenshotter, d.Storage, d.ScreenshotURL, d.Logger)
 			api.Post("/links/{id}/screenshot", sh.CaptureAndStore)
 			api.Post("/links/{id}/image", sh.UploadImage)
 			api.Delete("/links/{id}/image", sh.DeleteImage)

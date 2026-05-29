@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -520,15 +521,15 @@ func newIDMapping() idMapping {
 func (m idMapping) remapFileKey(key string) (string, bool) {
 	var prefix string
 	switch {
-	case startsWith(key, "screenshots/"):
+	case strings.HasPrefix(key, "screenshots/"):
 		prefix = "screenshots/"
-	case startsWith(key, "images/"):
+	case strings.HasPrefix(key, "images/"):
 		prefix = "images/"
 	default:
 		return key, false
 	}
 	rest := key[len(prefix):]
-	dot := indexByte(rest, '.')
+	dot := strings.IndexByte(rest, '.')
 	if dot <= 0 {
 		return key, false
 	}
@@ -595,15 +596,3 @@ func scanRows(ctx context.Context, tx pgx.Tx, sql string, fn func(pgx.Rows) erro
 	return rows.Err()
 }
 
-// Mini-helpers to avoid pulling in `strings` for two operations.
-func startsWith(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
-}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -42,6 +43,17 @@ type Screenshotter interface {
 	Capture(ctx context.Context, pageURL string) ([]byte, error)
 }
 
+// URLPolicy decides whether the given URL is safe to feed into Chromium.
+// CaptureAndStore calls this BEFORE launching the browser. Implementations
+// must reject IMDS (169.254.169.254), private/loopback IPs, and any
+// non-http(s) scheme — otherwise the manual screenshot endpoint becomes a
+// read-anywhere primitive (file:///etc/passwd, cloud-metadata exfil, etc.).
+//
+// The function form keeps the links package decoupled from preview.IsPublicURL,
+// which would otherwise create a circular import (preview already imports
+// links).
+type URLPolicy func(ctx context.Context, pageURL string) bool
+
 // Uploader stores bytes to object storage.
 type Uploader interface {
 	Upload(ctx context.Context, key string, data []byte, contentType string) error
@@ -62,15 +74,19 @@ type ScreenshotHandler struct {
 	repo          screenshotRepo
 	screenshotter Screenshotter
 	storage       Uploader
+	urlPolicy     URLPolicy
 	logger        *slog.Logger
 }
 
-// NewScreenshotHandler creates a ScreenshotHandler.
-func NewScreenshotHandler(repo *Repository, sc Screenshotter, st Uploader, logger *slog.Logger) *ScreenshotHandler {
+// NewScreenshotHandler creates a ScreenshotHandler. urlPolicy gates
+// CaptureAndStore — pass preview.IsPublicURL from main.go. A nil policy is
+// treated as "deny all", which fails closed.
+func NewScreenshotHandler(repo *Repository, sc Screenshotter, st Uploader, urlPolicy URLPolicy, logger *slog.Logger) *ScreenshotHandler {
 	return &ScreenshotHandler{
 		repo:          repo,
 		screenshotter: sc,
 		storage:       st,
+		urlPolicy:     urlPolicy,
 		logger:        logger,
 	}
 }
@@ -87,6 +103,30 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 	link, err := h.repo.Get(r.Context(), id)
 	if err != nil {
 		httperr.Write(w, err)
+		return
+	}
+
+	// SSRF gate. Without this, Chromium happily navigates to file://,
+	// 169.254.169.254 (IMDS), 127.0.0.1, RFC1918 hosts, etc., and the
+	// resulting screenshot would be served back to the caller via
+	// /api/files/screenshots/{id} — a read-anywhere primitive.
+	if !isHTTPScheme(link.URL) {
+		h.logger.Warn("screenshot rejected: non-http scheme", "id", id, "url", link.URL)
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_scheme", "screenshot target must use http or https"))
+		return
+	}
+	// Nil policy = misconfiguration (handler mounted without the SSRF gate
+	// wired in main.go). Distinct error code so ops can tell apart
+	// "operator forgot to set ScreenshotURL" from "user picked a private URL".
+	// Router boot validation should catch this — guard remains for defense.
+	if h.urlPolicy == nil {
+		h.logger.Error("screenshot rejected: URLPolicy not configured", "id", id)
+		httperr.Write(w, httperr.New(http.StatusInternalServerError, "policy_unconfigured", "screenshot policy is not configured"))
+		return
+	}
+	if !h.urlPolicy(r.Context(), link.URL) {
+		h.logger.Warn("screenshot rejected: non-public target", "id", id, "url", link.URL)
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "private_target", "screenshot target must resolve to a public address"))
 		return
 	}
 
@@ -152,6 +192,18 @@ func (h *ScreenshotHandler) ProxyFile(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+// isHTTPScheme returns true iff pageURL parses to an http or https URL.
+// Used to fail-fast before the SSRF policy check (the policy does DNS, this
+// catches non-network schemes for free).
+func isHTTPScheme(pageURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(pageURL))
+	if err != nil {
+		return false
+	}
+	s := strings.ToLower(u.Scheme)
+	return s == "http" || s == "https"
+}
+
 // isAllowedKey rejects empty keys, anything containing ".." or starting with
 // "/", and anything outside the allowed prefixes.
 func isAllowedKey(key string) bool {
@@ -189,7 +241,11 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	const maxSize = 20 << 20 // 20 MB — comfortable headroom for phone-camera shots
+	// 5 MiB is a generous ceiling for a single bookmark thumbnail — a 5 MB
+	// JPEG already covers any phone-camera shot once downscaled to 1024 px.
+	// imageopt.Optimize additionally caps decoded pixel area to 50 MP, so
+	// a payload-size-vs-decoded-size mismatch (decode bomb) is bounded.
+	const maxSize = 5 << 20
 	// Cap the whole request body — ParseMultipartForm's `maxMemory` only
 	// controls when parts spill to a temp file, not the total upload size.
 	r.Body = http.MaxBytesReader(w, r.Body, maxSize)
@@ -217,7 +273,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if int64(len(data)) > maxSize {
-		httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "too_large", "image exceeds 20MB limit"))
+		httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "too_large", "image exceeds 5MB limit"))
 		return
 	}
 
@@ -310,25 +366,3 @@ func (h *ScreenshotHandler) purgeLegacyVariants(ctx context.Context, prefix stri
 	}
 }
 
-// mimeToExt maps common image MIME types to file extensions.
-// Kept for callers that still need the broader mapping (e.g. arriving via the
-// preview pipeline). UploadImage no longer uses it — it pins to the closed set
-// in allowedUploadMIMEs.
-func mimeToExt(mime string) string {
-	switch mime {
-	case "image/jpeg", "image/jpg":
-		return "jpg"
-	case "image/png":
-		return "png"
-	case "image/gif":
-		return "gif"
-	case "image/webp":
-		return "webp"
-	default:
-		// Fall back to the subtype (e.g. "image/avif" → "avif").
-		if idx := strings.Index(mime, "/"); idx >= 0 {
-			return mime[idx+1:]
-		}
-		return "bin"
-	}
-}
