@@ -13,9 +13,11 @@ import (
 )
 
 // Enqueuer is implemented by the preview worker. We keep it tiny to avoid an
-// import cycle between links and preview.
+// import cycle between links and preview. Enqueue returns an error so handlers
+// can decide whether to surface backpressure to the client; the typical choice
+// is to log + carry on (the link row already exists, the user gets 201).
 type Enqueuer interface {
-	Enqueue(linkID int64)
+	Enqueue(linkID int64) error
 }
 
 type Handler struct {
@@ -35,6 +37,13 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Delete("/{id}", h.delete)
 	r.Post("/{id}/refresh-preview", h.refreshPreview)
 }
+
+// jsonBodyCap is the hard ceiling for JSON request bodies. ParseMultipartForm
+// already has its own cap on /image and /backup; this protects the plain JSON
+// endpoints (links/folders/tags Create+Update) from a 100 MB payload tying up
+// memory inside json.Decoder. 64 KiB is generous — a Link with description,
+// tags array, and slug is well under 4 KiB.
+const jsonBodyCap = 64 << 10
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	q := ListQuery{
@@ -74,6 +83,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	var in CreateInput
+	r.Body = http.MaxBytesReader(w, r.Body, jsonBodyCap)
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_json", err.Error()))
 		return
@@ -94,7 +104,9 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.worker != nil {
-		h.worker.Enqueue(l.ID)
+		// Fire-and-forget: ErrQueueFull/ErrStopped don't fail the request — the
+		// link row exists, the next requeuePending tick picks it up.
+		_ = h.worker.Enqueue(l.ID)
 	}
 	httperr.JSON(w, http.StatusCreated, l)
 }
@@ -120,6 +132,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in UpdateInput
+	r.Body = http.MaxBytesReader(w, r.Body, jsonBodyCap)
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_json", err.Error()))
 		return
@@ -174,7 +187,7 @@ func (h *Handler) refreshPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.worker != nil {
-		h.worker.Enqueue(id)
+		_ = h.worker.Enqueue(id)
 	}
 	w.WriteHeader(http.StatusAccepted)
 }

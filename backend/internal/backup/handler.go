@@ -2,12 +2,13 @@ package backup
 
 import (
 	"archive/zip"
-	"bytes"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -40,38 +41,50 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 	stamp := time.Now().UTC().Format("20060102T150405Z")
 	filename := fmt.Sprintf("foldex-backup-%s.zip", stamp)
 
-	// Buffer the ZIP so we can set the X-Foldex-Backup-* headers BEFORE the
-	// first byte of the body is flushed. The streaming alternative was wrong:
-	// the response headers were lost because Export's first Write already
-	// committed them. For a personal-scale backup this is a few MB to ~hundreds
-	// of MB at the extreme — well within memory budget.
-	buf := &bytes.Buffer{}
-	rep, err := h.svc.Export(r.Context(), buf)
+	// Streaming export. The Service computes counts up front (snapshot read
+	// + bucket listings under REPEATABLE READ) and calls onCountsReady
+	// BEFORE the first zip byte; the hook flushes response headers, then
+	// every entry streams straight to w. X-Foldex-Backup-Duration-Ms used to
+	// land in the headers but the duration is only known after the zip is
+	// closed — clients that need it can derive from request start.
+	headersWritten := false
+	rep, err := h.svc.Export(r.Context(), w, func(c Counts) error {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+		w.Header().Set("X-Foldex-Backup-Filename", filename)
+		w.Header().Set("X-Foldex-Backup-Counts-Links", fmt.Sprintf("%d", c.Links))
+		w.Header().Set("X-Foldex-Backup-Counts-Files", fmt.Sprintf("%d", c.Files))
+		w.WriteHeader(http.StatusOK)
+		headersWritten = true
+		return nil
+	})
 	if err != nil {
-		h.logger.Error("backup export failed", "err", err)
-		httperr.Write(w, httperr.New(http.StatusInternalServerError, "export_failed", "failed to produce backup"))
+		// If headers already shipped, the response is in progress; the best
+		// we can do is log and let the chunked stream truncate (the client
+		// zip parser will surface a corrupt-archive error).
+		h.logger.Error("backup export failed", "err", err, "headers_written", headersWritten)
+		if !headersWritten {
+			httperr.Write(w, httperr.New(http.StatusInternalServerError, "export_failed", "failed to produce backup"))
+		}
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", buf.Len()))
-	w.Header().Set("X-Foldex-Backup-Filename", filename)
-	w.Header().Set("X-Foldex-Backup-Counts-Links", fmt.Sprintf("%d", rep.Counts.Links))
-	w.Header().Set("X-Foldex-Backup-Counts-Files", fmt.Sprintf("%d", rep.Counts.Files))
-	w.Header().Set("X-Foldex-Backup-Duration-Ms", fmt.Sprintf("%d", rep.DurationMs))
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		h.logger.Error("backup export: write response failed", "err", err)
-	}
+	h.logger.Info("backup export ok",
+		"filename", filename,
+		"links", rep.Counts.Links, "files", rep.Counts.Files,
+		"duration_ms", rep.DurationMs,
+	)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
 // POST /api/backup/validate
 
 func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
-	zr, cleanup, err := readZipFromRequest(r)
+	zr, cleanup, err := readZipFromRequest(w, r)
 	if err != nil {
+		if errors.Is(err, ErrPayloadTooLarge) {
+			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "payload_too_large", err.Error()))
+			return
+		}
 		httperr.JSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "bad_zip", "message": err.Error()}})
 		return
 	}
@@ -98,8 +111,12 @@ func (h *Handler) restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	zr, cleanup, err := readZipFromRequest(r)
+	zr, cleanup, err := readZipFromRequest(w, r)
 	if err != nil {
+		if errors.Is(err, ErrPayloadTooLarge) {
+			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "payload_too_large", err.Error()))
+			return
+		}
 		httperr.JSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "bad_zip", "message": err.Error()}})
 		return
 	}
@@ -113,31 +130,27 @@ func (h *Handler) restore(w http.ResponseWriter, r *http.Request) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// readZipFromRequest reads either a raw application/zip body or a multipart
-// upload with a `file` field. Buffers in memory up to a 2GB cap.
+// readZipFromRequest streams either a raw application/zip body or a multipart
+// upload with a `file` field to a temp file on disk, then opens it as a
+// zip.Reader (which only needs a ReaderAt). Streaming to disk keeps heap usage
+// bounded at O(1) regardless of backup size — a multi-GB upload used to
+// allocate the same multi-GB on the heap.
 
 const maxBackupBytes = int64(2 << 30) // 2 GiB
 
-func readZipFromRequest(r *http.Request) (*zip.Reader, func(), error) {
+func readZipFromRequest(w http.ResponseWriter, r *http.Request) (*zip.Reader, func(), error) {
 	ct := r.Header.Get("Content-Type")
 	noop := func() {}
 
 	// Hard cap on the entire request body, regardless of transport (raw zip
-	// or multipart). Without this, a multipart upload with many parts could
-	// individually respect maxBackupBytes per part but still blow through it
-	// in aggregate.
-	r.Body = http.MaxBytesReader(nil, r.Body, maxBackupBytes)
+	// or multipart). Applies to both branches below — multipart parts that
+	// would individually pass maxBackupBytes still trip this when summed.
+	// Passing the real ResponseWriter (not nil) lets the cap surface as a
+	// 413 instead of a 500 when streamToTempZip wraps the limit error.
+	r.Body = http.MaxBytesReader(w, r.Body, maxBackupBytes)
 
-	if len(ct) >= len("application/zip") && ct[:len("application/zip")] == "application/zip" {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			return nil, noop, fmt.Errorf("read body: %w", err)
-		}
-		zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
-		if err != nil {
-			return nil, noop, fmt.Errorf("parse zip: %w", err)
-		}
-		return zr, noop, nil
+	if strings.HasPrefix(ct, "application/zip") {
+		return streamToTempZip(r.Body)
 	}
 
 	// multipart/form-data
@@ -147,7 +160,7 @@ func readZipFromRequest(r *http.Request) (*zip.Reader, func(), error) {
 	}
 	for {
 		part, err := mr.NextPart()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -157,20 +170,49 @@ func readZipFromRequest(r *http.Request) (*zip.Reader, func(), error) {
 			part.Close()
 			continue
 		}
-		buf := &bytes.Buffer{}
-		if _, err := io.Copy(buf, io.LimitReader(part, maxBackupBytes)); err != nil {
-			part.Close()
-			return nil, noop, fmt.Errorf("multipart copy: %w", err)
-		}
-		part.Close()
-		zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-		if err != nil {
-			return nil, noop, fmt.Errorf("parse zip: %w", err)
-		}
-		return zr, noop, nil
+		defer part.Close()
+		return streamToTempZip(io.LimitReader(part, maxBackupBytes))
 	}
 	return nil, noop, fmt.Errorf("no `file` part in multipart upload")
 }
 
-// JSON helper for non-error JSON responses.
-var _ = json.Marshal
+// ErrPayloadTooLarge is returned by streamToTempZip when the body exceeded
+// maxBackupBytes. Callers map it to 413 instead of a generic 500.
+var ErrPayloadTooLarge = fmt.Errorf("backup: upload exceeds %d-byte limit", maxBackupBytes)
+
+// streamToTempZip copies src to a temp file, opens it as a zip.Reader, and
+// returns a cleanup that closes + removes the temp file. The temp file lives
+// only for the duration of the restore — successful and failed paths both go
+// through the cleanup closure. Permissions default to 0600 via os.CreateTemp.
+func streamToTempZip(src io.Reader) (*zip.Reader, func(), error) {
+	tmp, err := os.CreateTemp("", "foldex-backup-*.zip")
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("create temp: %w", err)
+	}
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}
+	n, err := io.Copy(tmp, src)
+	if err != nil {
+		cleanup()
+		// http.MaxBytesError signals the body cap was tripped — surface as a
+		// typed sentinel so the handler can return 413 instead of 500.
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			return nil, func() {}, ErrPayloadTooLarge
+		}
+		return nil, func() {}, fmt.Errorf("copy upload to temp: %w", err)
+	}
+	if n == 0 {
+		cleanup()
+		return nil, func() {}, fmt.Errorf("upload is empty")
+	}
+	zr, err := zip.NewReader(tmp, n)
+	if err != nil {
+		cleanup()
+		return nil, func() {}, fmt.Errorf("parse zip: %w", err)
+	}
+	return zr, cleanup, nil
+}
+

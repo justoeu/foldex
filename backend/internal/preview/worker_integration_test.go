@@ -50,7 +50,7 @@ func TestWorker_ProcessesEnqueuedJob(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w.Enqueue(link.ID)
+	_ = w.Enqueue(link.ID)
 
 	// Poll for status=ok
 	deadline := time.Now().Add(8 * time.Second)
@@ -125,7 +125,7 @@ func TestWorker_ScreenshotFallback_RunsWhenNoOGImage(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w.Enqueue(link.ID)
+	_ = w.Enqueue(link.ID)
 
 	// httptest binds to 127.0.0.1 — IsPublicURL rejects it, so the fallback
 	// should NOT run for this URL.
@@ -179,7 +179,7 @@ func TestWorker_ShortCircuitsWhenImageAlreadyPresent(t *testing.T) {
 	// Simulate a user upload landing BEFORE the worker picks up the job.
 	require.NoError(t, lrepo.UpdateOGImage(context.Background(), link.ID, "/api/files/images/1.png"))
 
-	w.Enqueue(link.ID)
+	_ = w.Enqueue(link.ID)
 
 	deadline := time.Now().Add(4 * time.Second)
 	var got links.Link
@@ -218,7 +218,7 @@ func TestWorker_MarksFailureOnUnreachable(t *testing.T) {
 		URL: "http://192.0.2.1:1", Title: "doomed",
 	})
 
-	w.Enqueue(link.ID)
+	_ = w.Enqueue(link.ID)
 
 	deadline := time.Now().Add(10 * time.Second)
 	var got links.Link

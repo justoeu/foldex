@@ -34,7 +34,18 @@ const (
 	defaultQuality = 82
 	jpegMIME       = "image/jpeg"
 	jpegExt        = "jpg"
+
+	// maxPixels caps decoded image area to avoid memory blow-up via decode
+	// bombs. A ~50 KB PNG can declare 60000x60000 → image.NewRGBA would
+	// allocate ~14 GB and OOM the backend. 50 MP comfortably covers any
+	// consumer phone camera (current top is ~108 MP but those compress to
+	// 8-15 MB and we cap raw upload bytes upstream).
+	maxPixels = 50_000_000
 )
+
+// ErrTooLarge is returned when an image's declared pixel area would exceed
+// maxPixels. Decoding is rejected BEFORE image.Decode allocates the framebuffer.
+var ErrTooLarge = errors.New("imageopt: image dimensions exceed limit")
 
 // supportedInputs is the closed whitelist of MIME types Optimize will accept.
 // Mirrors links.allowedUploadMIMEs by design — duplicated so this package
@@ -74,6 +85,17 @@ func Optimize(data []byte, opts Options) (Result, error) {
 	srcExt, ok := supportedInputs[mime]
 	if !ok {
 		return Result{}, fmt.Errorf("%w: %s", ErrUnsupportedFormat, mime)
+	}
+
+	// DecodeConfig reads only the header (a few hundred bytes typically) so we
+	// can reject decode bombs without paying the full-buffer allocation. Must
+	// happen BEFORE image.Decode — that call commits the framebuffer.
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrDecode, err)
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > maxPixels {
+		return Result{}, fmt.Errorf("%w: %dx%d (%d pixels) > %d", ErrTooLarge, cfg.Width, cfg.Height, int64(cfg.Width)*int64(cfg.Height), maxPixels)
 	}
 
 	src, _, err := image.Decode(bytes.NewReader(data))

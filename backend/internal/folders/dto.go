@@ -3,6 +3,8 @@ package folders
 import (
 	"encoding/json"
 	"strings"
+
+	"foldex/internal/pkg/cssvalid"
 )
 
 type CreateInput struct {
@@ -26,8 +28,8 @@ func (c CreateInput) Validate() error {
 	if len(c.Name) > 200 {
 		return errMsg("name too long (max 200)")
 	}
-	if len(c.Color) > 200 {
-		return errMsg("color too long (max 200)")
+	if !cssvalid.IsValidColor(c.Color) {
+		return errMsg("color must be a hex (#abc, #aabbcc) or linear-gradient(135deg, #hex, #hex)")
 	}
 	return nil
 }
@@ -94,8 +96,8 @@ func (u UpdateInput) Validate() error {
 			return errMsg("name too long (max 200)")
 		}
 	}
-	if u.Color != nil && len(*u.Color) > 200 {
-		return errMsg("color too long (max 200)")
+	if u.Color != nil && !cssvalid.IsValidColor(*u.Color) {
+		return errMsg("color must be a hex (#abc, #aabbcc) or linear-gradient(135deg, #hex, #hex)")
 	}
 	return nil
 }

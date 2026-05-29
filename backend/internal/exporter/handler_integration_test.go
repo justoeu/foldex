@@ -80,3 +80,41 @@ func TestExport_BadFormat(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
+
+// TestExportNetscape_EscapesHostileURL locks the H3 fix: %q produces Go-syntax
+// quoting (\" escapes), which is NOT HTML-attribute safe. A URL containing `"`
+// would break out of HREF and inject markup. With html.EscapeString the inner
+// double-quote becomes &#34; and the markup stays attribute-safe.
+func TestExportNetscape_EscapesHostileURL(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	lrepo := links.NewRepository(pool)
+
+	// Repository.Create does NOT call dto.Validate (that lives in the handler
+	// layer) so we can seed an attribute-breakout URL directly. Realistic
+	// vector: a Netscape import file containing the hostile href — once the
+	// pre-existing import path is hardened (this branch), nothing reaches
+	// the DB, but rows seeded by older versions or a manual /api/links POST
+	// before the fix must still export safely.
+	_, err := lrepo.Create(ctx, links.CreateInput{
+		URL:   `https://x/"><script>alert(1)</script>`,
+		Title: "ok title",
+	})
+	require.NoError(t, err)
+
+	r := chi.NewMux()
+	exporter.NewHandler(pool).Mount(r)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/?format=netscape")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	got := string(body)
+
+	assert.NotContains(t, got, `<script>alert(1)</script>`, "unescaped <script> must never reach the export")
+	assert.Contains(t, got, `&lt;script&gt;`, "expected HTML-encoded angle brackets")
+	assert.Contains(t, got, `&#34;`, "expected HTML-encoded double quote inside HREF")
+}

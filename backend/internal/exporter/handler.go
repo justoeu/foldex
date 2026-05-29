@@ -118,8 +118,11 @@ func (h *Handler) exportNetscape(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "  <DT><H3>%s</H3>\n", html.EscapeString(key))
 		fmt.Fprintln(w, "  <DL><p>")
 		for _, l := range groups[key] {
-			fmt.Fprintf(w, `    <DT><A HREF=%q ADD_DATE="%d">%s</A>`+"\n",
-				l.URL, l.CreatedAt.Unix(), html.EscapeString(l.Title))
+			// %q emits Go-syntax quoting (\" escapes), which is NOT HTML-attribute
+			// safe — a URL containing a literal `"` would break out of HREF and
+			// inject markup. html.EscapeString handles `"`, `'`, `<`, `>`, `&`.
+			fmt.Fprintf(w, `    <DT><A HREF="%s" ADD_DATE="%d">%s</A>`+"\n",
+				html.EscapeString(l.URL), l.CreatedAt.Unix(), html.EscapeString(l.Title))
 		}
 		fmt.Fprintln(w, "  </DL><p>")
 	}

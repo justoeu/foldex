@@ -4,6 +4,7 @@ package server_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -41,7 +42,39 @@ func newServer(t *testing.T, secret string) (*httptest.Server, func()) {
 
 type nopWorker struct{}
 
-func (nopWorker) Enqueue(int64) {}
+func (nopWorker) Enqueue(int64) error { return nil }
+
+// TestServerNewPanicsWhenScreenshotterMissingPolicy locks the P2.7 boot-time
+// guard: mounting the screenshot endpoint without an SSRF gate is a misconfig
+// that must fail at startup, not silently return 500 per request. Without
+// this assertion, removing the panic guard in router.go would ship green.
+func TestServerNewPanicsWhenScreenshotterMissingPolicy(t *testing.T) {
+	pool := testdb.New(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	assert.Panics(t, func() {
+		_ = server.New(server.Deps{
+			Pool:          pool,
+			Worker:        nopWorker{},
+			Logger:        logger,
+			Config:        config.Config{CORSOrigins: []string{"*"}},
+			Screenshotter: stubScreenshotter{},
+			Storage:       stubStorage{},
+			// ScreenshotURL is deliberately nil — must panic.
+		})
+	})
+}
+
+type stubScreenshotter struct{}
+
+func (stubScreenshotter) Capture(_ context.Context, _ string) ([]byte, error) { return nil, nil }
+
+type stubStorage struct{}
+
+func (stubStorage) Upload(_ context.Context, _ string, _ []byte, _ string) error { return nil }
+func (stubStorage) GetObject(_ context.Context, _ string) ([]byte, string, error) {
+	return nil, "", nil
+}
+func (stubStorage) DeleteObject(_ context.Context, _ string) error { return nil }
 
 func TestHealthzOK(t *testing.T) {
 	srv, done := newServer(t, "")

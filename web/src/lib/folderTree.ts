@@ -15,7 +15,11 @@ export function flattenFolderTree(folders: Folder[]): FolderNode[] {
     else byParent.set(key, [f])
   }
   for (const arr of byParent.values()) {
-    arr.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }))
+    // Use the active locale (undefined = browser default, which matches
+     // the user's i18n choice). Hardcoding 'pt-BR' here biased sort order
+     // for English/Spanish users; the rest of the codebase already uses
+     // locale-aware compare with undefined.
+    arr.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
   }
   const out: FolderNode[] = []
   function walk(parentId: number | null, depth: number, ancestors: string[]) {

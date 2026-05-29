@@ -81,6 +81,12 @@ func main() {
 	}
 	if storageClient != nil {
 		deps.Screenshotter = screenshotFunc(screenshot.Capture)
+		// SSRF gate for the manual /api/links/{id}/screenshot endpoint. Same
+		// helper the preview worker uses for its fallback path — rejects
+		// IMDS, RFC1918, loopback, link-local, IPv6 ULA, and non-http(s)
+		// schemes. Without this, the endpoint becomes a read-anywhere
+		// primitive (file:///etc/passwd → screenshot → /api/files).
+		deps.ScreenshotURL = preview.IsPublicURL
 		deps.StorageStatter = storageStatsAdapter{c: storageClient}
 		deps.StorageBucket = backupStorageAdapter{c: storageClient}
 	}
@@ -88,7 +94,11 @@ func main() {
 	router := server.New(deps)
 
 	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
+		// BindAddr defaults to 127.0.0.1 (single-user threat model). Override
+		// via BACKEND_BIND only when fronting with a reverse proxy AND
+		// SHARED_SECRET is set — config.validateSecureDefaults refuses the
+		// "wide open" combo at boot.
+		Addr:              cfg.BindAddr + ":" + cfg.Port,
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 		// Generous body timeouts so backup restore (up to a few hundred MB)

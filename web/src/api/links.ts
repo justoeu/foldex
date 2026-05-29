@@ -14,7 +14,10 @@ const linksKey = (p: LinkListParams) =>
   [
     'links',
     p.q ?? '',
-    (p.tagIds ?? []).join(','),
+    // Sort the tag IDs before joining so toggling A→B vs B→A produces the
+    // same cache key for the same logical filter. Without the sort, the same
+    // result set would be fetched twice on different orderings.
+    [...(p.tagIds ?? [])].sort((a, b) => a - b).join(','),
     p.sort ?? 'created',
     p.folderId ?? (p.ungrouped ? 'ungrouped' : 'all'),
   ] as const
@@ -96,6 +99,46 @@ export function useDeleteLink() {
       // Folder cards on the home grid carry `link_count` and `preview_links`
       // (the 2x2 mini-thumbs). Any link mutation can shift those — invalidate
       // so the UI re-fetches and the card updates in real time.
+      qc.invalidateQueries({ queryKey: ['folders'] })
+    },
+  })
+}
+
+// usePinLink optimistically flips link.pinned in every cached list so the
+// badge animates instantly instead of waiting for the PATCH + refetch. Pin
+// is the most-clicked stateful action in the UI; a 300-500 ms round-trip
+// before the badge moves felt sluggish.
+//
+// onMutate: snapshot every ['links', ...] query and patch the target link in
+// place. onError: rollback to the snapshot. onSettled: invalidate to reconcile
+// (server is the source of truth — the sort order may need to shift).
+export function usePinLink() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, pinned }: { id: number; pinned: boolean }) => {
+      const { data } = await http.patch<Link>(`/api/links/${id}`, { pinned })
+      return data
+    },
+    onMutate: async ({ id, pinned }) => {
+      await qc.cancelQueries({ queryKey: ['links'] })
+      const snapshots = qc.getQueriesData<Link[]>({ queryKey: ['links'] })
+      for (const [key, list] of snapshots) {
+        if (!list) continue
+        qc.setQueryData<Link[]>(
+          key,
+          list.map((l) => (l.id === id ? { ...l, pinned } : l)),
+        )
+      }
+      return { snapshots }
+    },
+    onError: (_err, _vars, ctx) => {
+      if (!ctx) return
+      for (const [key, list] of ctx.snapshots) {
+        qc.setQueryData(key, list)
+      }
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['links'] })
       qc.invalidateQueries({ queryKey: ['folders'] })
     },
   })

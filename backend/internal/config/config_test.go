@@ -7,6 +7,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestValidateSecureDefaults locks the P5.3 boot guard. The three knobs
+// (bind, secret, cors) only trigger refusal in the exact combination
+// "non-loopback bind + empty secret + wildcard CORS" — any single knob
+// flipped to a safe value clears the check.
+func TestValidateSecureDefaults(t *testing.T) {
+	cases := []struct {
+		name    string
+		bind    string
+		secret  string
+		cors    []string
+		wantErr bool
+	}{
+		{"localhost loopback default", "127.0.0.1", "", []string{"*"}, false},
+		{"loopback alias", "localhost", "", []string{"*"}, false},
+		{"ipv6 loopback", "::1", "", []string{"*"}, false},
+		{"empty bind is loopback", "", "", []string{"*"}, false},
+		// The dangerous combo:
+		{"public bind + no secret + wildcard CORS", "0.0.0.0", "", []string{"*"}, true},
+		{"public bind + LAN IP + no secret + wildcard CORS", "192.168.1.10", "", []string{"*"}, true},
+		// Public bind but one knob constrained:
+		{"public bind + secret set", "0.0.0.0", "topsecret", []string{"*"}, false},
+		{"public bind + restricted CORS", "0.0.0.0", "", []string{"https://example"}, false},
+		{"public bind + multi-origin without wildcard", "0.0.0.0", "", []string{"https://a", "https://b"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Config{BindAddr: tc.bind, SharedSecret: tc.secret, CORSOrigins: tc.cors}
+			err := c.validateSecureDefaults()
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "insecure config")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestLoad_RequiresDBURL(t *testing.T) {
 	t.Setenv("DB_URL", "")
 	_, err := Load()

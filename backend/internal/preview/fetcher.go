@@ -191,6 +191,12 @@ func (d *safeDialer) DialContext(ctx context.Context, network, addr string) (net
 	if err != nil {
 		return nil, err
 	}
+	// Pre-dial guard. The pre-dial check fails fast for cleanly-resolved bad
+	// hosts (cheap LookupIP, no TCP RTT, no socket leak). But by itself it is
+	// vulnerable to DNS rebinding — the resolver can return a public IP for
+	// this lookup and a private IP for the resolver call that net.Dialer
+	// performs internally. The post-dial RemoteAddr check below closes that
+	// gap, since RemoteAddr reflects the IP we actually connected to.
 	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 	if err != nil {
 		return nil, err
@@ -206,7 +212,36 @@ func (d *safeDialer) DialContext(ctx context.Context, network, addr string) (net
 			return nil, fmt.Errorf("ssrf: refusing to dial %s (%s)", host, ip)
 		}
 	}
-	return d.base.DialContext(ctx, network, addr)
+	conn, err := d.base.DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkRemoteAddrSSRF(d.strict, conn.RemoteAddr(), host); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// checkRemoteAddrSSRF validates the post-dial peer address against the SSRF
+// policy. Extracted so the rebinding defense can be unit-tested without a
+// real Dial — feed it a faked net.Addr.
+//
+// HTTP transport always dials TCP (tcp4/tcp6), so the type assertion is
+// expected to succeed. Fail closed if it ever doesn't: a non-TCP conn path
+// would silently re-open the rebinding hole.
+func checkRemoteAddrSSRF(strict bool, addr net.Addr, host string) error {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return fmt.Errorf("ssrf: non-TCP remote addr %T — refusing", addr)
+	}
+	if isIMDS(tcp.IP) {
+		return fmt.Errorf("ssrf: refusing IMDS endpoint %s (post-dial)", tcp.IP)
+	}
+	if strict && isPrivateIP(tcp.IP) {
+		return fmt.Errorf("ssrf: refusing peer %s for host %s (post-dial)", tcp.IP, host)
+	}
+	return nil
 }
 
 // strictSSRF reports whether PREVIEW_STRICT_SSRF is enabled. When true the

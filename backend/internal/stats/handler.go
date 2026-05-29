@@ -66,12 +66,10 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) daily(w http.ResponseWriter, r *http.Request) {
-	days := 60
-	if v := r.URL.Query().Get("days"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			days = n
-		}
-	}
+	// Clamp to [1, 365]. Without the cap, `?days=2147483647` lands in a
+	// `generate_series(now() - 2.1e9 * interval '1 day', ...)` and the
+	// planner happily attempts it — auth-gated DoS otherwise.
+	days := clampInt(r.URL.Query().Get("days"), 60, 1, 365)
 	out, err := h.repo.Daily(r.Context(), days)
 	if err != nil {
 		httperr.Write(w, err)
@@ -81,18 +79,36 @@ func (h *Handler) daily(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) top(w http.ResponseWriter, r *http.Request) {
-	limit := 10
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			limit = n
-		}
-	}
+	// Clamp to [1, 100] — `?limit=999999999` would `ORDER BY clicks DESC` on
+	// every link before slicing.
+	limit := clampInt(r.URL.Query().Get("limit"), 10, 1, 100)
 	out, err := h.repo.TopLinks(r.Context(), limit)
 	if err != nil {
 		httperr.Write(w, err)
 		return
 	}
 	httperr.JSON(w, http.StatusOK, out)
+}
+
+// clampInt parses a query-string integer and forces it into [min,max]. Any
+// parse failure or empty string returns def. Used to harden every stats
+// query knob — without this, ?days=2147483647 / ?limit=999999999 are an
+// auth-gated DoS vector.
+func clampInt(s string, def, min, max int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	if n < min {
+		return min
+	}
+	if n > max {
+		return max
+	}
+	return n
 }
 
 func (h *Handler) tags(w http.ResponseWriter, r *http.Request) {

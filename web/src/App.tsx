@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useHotkeys } from 'react-hotkeys-hook'
 import { usePasteUrl } from './hooks/usePasteUrl'
 import { Trans, useTranslation } from 'react-i18next'
@@ -18,8 +18,12 @@ import { FolderDialog } from './components/FolderDialog'
 import { CommandPalette } from './components/CommandPalette'
 import { TooltipPortal } from './components/TooltipPortal'
 import { EmptyState } from './components/EmptyState'
-import { ImportPage } from './pages/ImportPage'
-import { StatsPage } from './pages/StatsPage'
+// Code-split the two off-hot-path views. Home is by far the most-visited
+// view; lazy-loading ImportPage + StatsPage trims the initial JS bundle by
+// the chart code, backup card, and dialog plumbing they pull in. The Suspense
+// boundary below renders a tiny fallback while the chunk loads.
+const ImportPage = lazy(() => import('./pages/ImportPage').then((m) => ({ default: m.ImportPage })))
+const StatsPage = lazy(() => import('./pages/StatsPage').then((m) => ({ default: m.StatsPage })))
 import { useLinks, useUpdateLink } from './api/links'
 import { useTags } from './api/tags'
 import { useFolders, useCreateFolder, useUpdateFolder } from './api/folders'
@@ -435,12 +439,16 @@ export default function App() {
           )}
           {view === 'import' && (
             <div className="fx-mainarea">
-              <ImportPage onDone={() => setView('home')} />
+              <Suspense fallback={<div className="fx-empty">…</div>}>
+                <ImportPage onDone={() => setView('home')} />
+              </Suspense>
             </div>
           )}
           {view === 'stats' && (
             <div className="fx-mainarea">
-              <StatsPage />
+              <Suspense fallback={<div className="fx-empty">…</div>}>
+                <StatsPage />
+              </Suspense>
             </div>
           )}
 
@@ -772,7 +780,7 @@ function FolderBreadcrumb({
             className={'fx-confirm-btn fx-confirm-btn-icon' + (reloading ? ' fx-confirm-btn-spinning' : '')}
             onClick={onReload}
             disabled={reloading}
-            aria-label="reload folder"
+            aria-label={t('common.reload_folder_aria')}
             data-tooltip={t('home.breadcrumb_reload_tooltip')}
           >
             <Icon d={I.refresh} size={14} stroke={2} />
@@ -780,7 +788,7 @@ function FolderBreadcrumb({
           <button
             className="fx-confirm-btn"
             onClick={onEdit}
-            aria-label="edit folder"
+            aria-label={t('common.edit_folder_aria', { name: folder?.name ?? '' })}
             data-tooltip={t('home.breadcrumb_edit_tooltip')}
           >
             {t('home.breadcrumb_edit_label')}

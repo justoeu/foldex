@@ -151,6 +151,12 @@ func newTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// allowAllPolicy is a test-only URLPolicy that approves every URL. Production
+// uses preview.IsPublicURL, but here we want to exercise the handler logic
+// without going through real DNS — the SSRF gate itself is tested separately
+// via TestCaptureAndStore_Rejects*.
+func allowAllPolicy(_ context.Context, _ string) bool { return true }
+
 // buildRouter mounts the real ScreenshotHandler methods backed by fakes —
 // no inlined closures, so production code paths (including imageopt) run.
 func buildRouter(t *testing.T, sc Screenshotter, up Uploader, repo screenshotRepo) (*chi.Mux, *fakeUploader, *fakeRepo) {
@@ -162,6 +168,7 @@ func buildRouter(t *testing.T, sc Screenshotter, up Uploader, repo screenshotRep
 		repo:          repo,
 		screenshotter: sc,
 		storage:       up,
+		urlPolicy:     allowAllPolicy,
 		logger:        newTestLogger(),
 	}
 
@@ -243,6 +250,112 @@ func TestCaptureAndStore_UploadFails(t *testing.T) {
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
 	errBlock, _ := body["error"].(map[string]any)
 	assert.Equal(t, "upload_failed", errBlock["code"])
+}
+
+// TestCaptureAndStore_RejectsNonHTTPScheme locks the H1 fix part 1: Chrome
+// happily navigates to file:// — without scheme validation, a single API call
+// turns into a local-file read primitive.
+func TestCaptureAndStore_RejectsNonHTTPScheme(t *testing.T) {
+	for _, badURL := range []string{
+		"file:///etc/passwd",
+		"javascript:alert(1)",
+		"data:text/html,<script>",
+		"ftp://intranet/x",
+	} {
+		t.Run(badURL, func(t *testing.T) {
+			sc := &fakeScreenshotter{png: realPNG(t, 50, 50)}
+			up := newFakeUploader()
+			repo := newFakeRepo()
+			repo.links[1] = Link{ID: 1, URL: badURL}
+			r, _, _ := buildRouter(t, sc, up, repo)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "must reject non-http(s) target")
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+			errBlock, _ := body["error"].(map[string]any)
+			assert.Equal(t, "invalid_scheme", errBlock["code"])
+			assert.Empty(t, up.uploaded, "no upload should happen for rejected URL")
+		})
+	}
+}
+
+// TestCaptureAndStore_RejectsNonPublicTarget locks the H1 fix part 2: even
+// when the scheme is http(s), private/loopback/IMDS hosts must be refused.
+// Also captures the URL the policy received — a future refactor that
+// sanitized/rewrote link.URL before the policy check would silently weaken
+// the SSRF gate; this asserts the policy sees the exact stored URL.
+func TestCaptureAndStore_RejectsNonPublicTarget(t *testing.T) {
+	sc := &fakeScreenshotter{png: realPNG(t, 50, 50)}
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	const storedURL = "http://169.254.169.254/latest/meta-data/"
+	repo.links[1] = Link{ID: 1, URL: storedURL}
+
+	var captured []string
+	denyPolicy := func(_ context.Context, u string) bool {
+		captured = append(captured, u)
+		return false
+	}
+	sh := &ScreenshotHandler{
+		repo:          repo,
+		screenshotter: sc,
+		storage:       up,
+		urlPolicy:     denyPolicy,
+		logger:        newTestLogger(),
+	}
+	r := chi.NewRouter()
+	r.Post("/api/links/{id}/screenshot", sh.CaptureAndStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	errBlock, _ := body["error"].(map[string]any)
+	assert.Equal(t, "private_target", errBlock["code"])
+	assert.Empty(t, up.uploaded)
+	require.Len(t, captured, 1, "policy must be called exactly once")
+	assert.Equal(t, storedURL, captured[0], "policy must receive the canonical link.URL")
+}
+
+// TestCaptureAndStore_NilPolicyFailsClosed locks the H1 invariant: a missing
+// policy must not silently bypass the SSRF gate. Misconfiguration (forgotten
+// wiring in main.go) returns 500 policy_unconfigured — distinct from the 400
+// private_target a real SSRF attempt produces, so ops can tell them apart.
+// Router boot panics on this same condition; the handler check is the
+// defense-in-depth layer.
+func TestCaptureAndStore_NilPolicyFailsClosed(t *testing.T) {
+	sc := &fakeScreenshotter{png: realPNG(t, 50, 50)}
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
+
+	sh := &ScreenshotHandler{
+		repo:          repo,
+		screenshotter: sc,
+		storage:       up,
+		urlPolicy:     nil, // simulates a misconfigured deploy
+		logger:        newTestLogger(),
+	}
+	r := chi.NewRouter()
+	r.Post("/api/links/{id}/screenshot", sh.CaptureAndStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code, "nil policy must deny with a config error")
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	errBlock, _ := body["error"].(map[string]any)
+	assert.Equal(t, "policy_unconfigured", errBlock["code"])
+	assert.Empty(t, up.uploaded)
 }
 
 func TestCaptureAndStore_InvalidID(t *testing.T) {
@@ -508,6 +621,31 @@ func TestUploadImage_OptimizeFailureStoresOriginal(t *testing.T) {
 	assert.Equal(t, bad, fakeUp.ops[0].bytes)
 }
 
+// TestUploadImage_Rejects5MBPlus locks the H4 follow-on: the cap dropped from
+// 20 MB to 5 MiB. A 5 MiB+1 body must trip MaxBytesReader and return 400
+// invalid_multipart (the multipart parser surfaces the size cap as a parse
+// failure — the handler can't distinguish from a malformed body without an
+// extra syscall, so we accept the broader code).
+func TestUploadImage_Rejects5MBPlus(t *testing.T) {
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
+
+	// 5 MiB + 64 KiB: comfortably over the cap once multipart framing is
+	// added. Body content doesn't need to be a valid PNG — MaxBytesReader
+	// fires first.
+	const tooBig = (5 << 20) + (64 << 10)
+	payload := make([]byte, tooBig)
+	req, ct := buildMultipart(t, 1, "image", "big.png", "image/png", payload)
+	req.Header.Set("Content-Type", ct)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "request body over 5 MiB must be refused")
+	assert.Empty(t, up.uploaded)
+}
+
 func TestUploadImage_UploadFails(t *testing.T) {
 	up := newFakeUploader()
 	up.err = errors.New("minio down")
@@ -559,7 +697,7 @@ func TestNewScreenshotHandler(t *testing.T) {
 	sc := &fakeScreenshotter{}
 	up := newFakeUploader()
 	logger := newTestLogger()
-	sh := NewScreenshotHandler(nil, sc, up, logger)
+	sh := NewScreenshotHandler(nil, sc, up, allowAllPolicy, logger)
 	require.NotNil(t, sh)
 	assert.Equal(t, sc, sh.screenshotter)
 	assert.Equal(t, up, sh.storage)

@@ -46,6 +46,8 @@ export function Favicon({ link, size = 32 }: Props) {
           src={safeSrc}
           alt=""
           referrerPolicy="no-referrer"
+          loading="lazy"
+          decoding="async"
           width={size}
           height={size}
           onError={() => setErrored(true)}

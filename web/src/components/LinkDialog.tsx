@@ -129,6 +129,16 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
 
   useEscape(onClose, open)
 
+  // Free the staged blob URL on dialog close and on unmount. The cleanup
+  // runs whenever `pendingImagePreview` changes too — but the setter in
+  // handleImageFile already revokes the previous URL there, so the only
+  // free path that ever fires here is the close/unmount one.
+  useEffect(() => {
+    return () => {
+      if (pendingImagePreview) URL.revokeObjectURL(pendingImagePreview)
+    }
+  }, [pendingImagePreview])
+
   const available = useMemo(
     () => tags.filter((tag) => !selected.some((s) => s.id === tag.id)),
     [tags, selected],
@@ -186,7 +196,13 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
     setImageRemoved(false)
     // Always store locally — upload happens on Save for both new and edit
     setPendingImage(file)
-    setPendingImagePreview(URL.createObjectURL(file))
+    // Free any previously-staged blob URL before replacing it. Without this,
+    // the user picking three files in a row leaks two blob URLs until the
+    // page unloads.
+    setPendingImagePreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return URL.createObjectURL(file)
+    })
   }
 
   const submit = async () => {
@@ -429,7 +445,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                     }
                   }}
                   placeholder={t('link_dialog.tags_search_placeholder')}
-                  aria-label="tag filter"
+                  aria-label={t('common.tag_filter_aria')}
                 />
               </div>
               {selected.some((tag) => tag._pending) && (

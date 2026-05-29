@@ -2,9 +2,11 @@ package preview
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,6 +14,18 @@ import (
 	"foldex/internal/imageopt"
 	"foldex/internal/links"
 )
+
+// ErrQueueFull is returned by Enqueue when the bounded jobs channel has no
+// available slot. Callers can decide to retry, log + drop, or fail the request.
+// Returning an error (instead of silent drop) lets handlers surface
+// backpressure to the client rather than pretending success.
+var ErrQueueFull = errors.New("preview: queue full")
+
+// ErrStopped is returned by Enqueue when the worker has been Stop()ped. The
+// jobs channel stays open by design (sending to a closed channel panics, and
+// requeuePending could race a shutdown), so this flag is the explicit signal
+// that no further work will be processed.
+var ErrStopped = errors.New("preview: worker stopped")
 
 // Same defaults as the upload handler — see internal/links.imageMaxDim. JPEG
 // q≈82 with a 1024 px cap on the longest side. Worker output goes through
@@ -51,6 +65,7 @@ type Worker struct {
 	wg       sync.WaitGroup
 	cancel   context.CancelFunc
 	stopOnce sync.Once
+	stopped  atomic.Bool
 }
 
 func NewWorker(pool *pgxpool.Pool, concurrency int, timeout time.Duration, logger *slog.Logger) *Worker {
@@ -86,9 +101,11 @@ func (w *Worker) Start(ctx context.Context) {
 // Stop signals shutdown via the context and waits for all goroutines to drain.
 // The jobs channel is intentionally not closed: Enqueue may be called from
 // requeuePending or in-flight HTTP handlers, and a closed-channel send would
-// panic. Goroutines exit on ctx.Done().
+// panic. Goroutines exit on ctx.Done(). After Stop returns, Enqueue rejects
+// with ErrStopped so callers don't push into a queue with no consumers.
 func (w *Worker) Stop() {
 	w.stopOnce.Do(func() {
+		w.stopped.Store(true)
 		if w.cancel != nil {
 			w.cancel()
 		}
@@ -107,11 +124,23 @@ func (w *Worker) WithScreenshotFallback(sc Screenshotter, up Uploader) {
 	w.uploader = up
 }
 
-func (w *Worker) Enqueue(linkID int64) {
+// Enqueue tries to schedule a preview job for linkID. Non-blocking — returns
+// ErrQueueFull when the bounded jobs channel has no slot and ErrStopped after
+// Stop has been called. The caller decides what to do with the error; today
+// the API handlers and importer treat it as fire-and-forget (the link row
+// already exists; requeuePending will pick stragglers up on next start). The
+// internal Warn on ErrQueueFull keeps the operational signal even when
+// callers discard the return.
+func (w *Worker) Enqueue(linkID int64) error {
+	if w.stopped.Load() {
+		return ErrStopped
+	}
 	select {
 	case w.jobs <- linkID:
+		return nil
 	default:
 		w.logger.Warn("preview queue full, dropping job", "link_id", linkID)
+		return ErrQueueFull
 	}
 }
 
@@ -222,8 +251,18 @@ func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string) 
 
 	opt, err := imageopt.Optimize(png, imageopt.Options{MaxDim: screenshotMaxDim, Quality: screenshotQuality})
 	if err != nil {
-		// Fall back to storing the raw PNG so a re-encode bug never blocks
-		// the fallback that's already past the expensive screenshot step.
+		// ErrTooLarge means a hostile page returned a decode-bomb image
+		// (small payload, huge declared dimensions). Storing the raw PNG
+		// would let any browser opening /api/files/screenshots/{id} OOM
+		// on decode. Abort the fallback entirely — link keeps og_image_url
+		// empty, UI just shows no preview.
+		if errors.Is(err, imageopt.ErrTooLarge) {
+			w.logger.Warn("screenshot fallback rejected: decode bomb", "link_id", id, "err", err)
+			return
+		}
+		// Other errors (truncated/corrupt encode) fall back to storing the
+		// raw PNG so a re-encode bug never blocks a working screenshot —
+		// ProxyFile streams bytes without re-decoding, so backend stays safe.
 		w.logger.Warn("screenshot fallback optimize failed, storing original PNG",
 			"link_id", id, "err", err)
 		opt = imageopt.Result{Data: png, ContentType: "image/png", Ext: "png"}
@@ -269,7 +308,10 @@ func (w *Worker) requeuePending(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		w.Enqueue(id)
+		// Discard the Enqueue result inside requeuePending — if the queue is
+		// full we already logged at the Warn level, and the next requeuePending
+		// run will re-pick the still-pending IDs.
+		_ = w.Enqueue(id)
 	}
 	if len(ids) > 0 {
 		w.logger.Info("requeued pending previews", "count", len(ids))

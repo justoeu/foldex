@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { primaryColor } from '../lib/tagColor'
@@ -37,7 +37,12 @@ const MIME_FOLDER = 'application/x-foldex-folder'
 // iPhone-style folder card: 2x2 grid of mini-thumbnails (preview_links) inside
 // the preview area, folder name + link count in the body. Empty folder shows
 // dashed tiles + "Pasta vazia" label.
-export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder, compact }: Props) {
+// memo: same rationale as LinkCard — dense grids re-render hot when App state
+// flips (sidebar toggle, dialog open) and props are stable.
+export const FolderCard = memo(FolderCardImpl)
+FolderCard.displayName = 'FolderCard'
+
+function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropFolder, compact }: Props) {
   const { t } = useTranslation()
   const tiles = mixTiles(folder.preview_links, folder.preview_folders)
   const total = folder.link_count + folder.folder_count
@@ -175,7 +180,7 @@ export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder, c
                 className="fx-iconbtn"
                 data-tooltip={t('folder_card.edit_folder')}
                 data-tooltip-side="top"
-                aria-label="edit folder"
+                aria-label={t('common.edit_folder_aria', { name: folder.name })}
                 onClick={() => onEdit(folder)}
               >
                 <Icon d={I.pen} size={14} />
@@ -185,7 +190,7 @@ export function FolderCard({ folder, onOpen, onEdit, onDropLink, onDropFolder, c
               className="fx-iconbtn fx-iconbtn-primary"
               data-tooltip={t('folder_card.open_folder')}
               data-tooltip-side="top"
-              aria-label="open folder"
+              aria-label={t('common.open_folder_aria', { name: folder.name })}
               onClick={() => onOpen(folder.id)}
             >
               <Icon d={I.arrowR} size={14} stroke={2.2} />
@@ -215,9 +220,9 @@ function FolderTile({ tile, overflow }: { tile: Tile; overflow: number }) {
   return (
     <div className="fx-folder-tile">
       {ogSrc ? (
-        <img src={ogSrc} alt="" referrerPolicy="no-referrer" />
+        <img src={ogSrc} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" />
       ) : faviconSrc ? (
-        <img src={faviconSrc} alt="" referrerPolicy="no-referrer" className="fx-folder-tile-favicon" />
+        <img src={faviconSrc} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" className="fx-folder-tile-favicon" />
       ) : (
         <span className="fx-folder-tile-letter">{(link.title[0] ?? '?').toUpperCase()}</span>
       )}

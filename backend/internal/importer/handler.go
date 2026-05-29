@@ -331,7 +331,7 @@ func (h *Handler) importItemsWithMode(ctx context.Context, items []Item, mode im
 	}
 	if h.worker != nil {
 		for _, id := range freshIDs {
-			h.worker.Enqueue(id)
+			_ = h.worker.Enqueue(id)
 		}
 	}
 	return imported, skipped, wiped, warnings, nil
@@ -363,7 +363,7 @@ func (h *Handler) importItems(ctx context.Context, items []Item) (int, int, erro
 		}
 		imported++
 		if h.worker != nil {
-			h.worker.Enqueue(id)
+			_ = h.worker.Enqueue(id)
 		}
 	}
 	return imported, skipped, nil
@@ -422,7 +422,7 @@ func (h *Handler) importJSON(ctx context.Context, f JSONFile) (int, int, error) 
 		}
 		imported++
 		if h.worker != nil {
-			h.worker.Enqueue(id)
+			_ = h.worker.Enqueue(id)
 		}
 	}
 	return imported, skipped, nil
