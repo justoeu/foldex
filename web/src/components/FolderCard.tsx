@@ -180,7 +180,7 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropFolder, comp
                 className="fx-iconbtn"
                 data-tooltip={t('folder_card.edit_folder')}
                 data-tooltip-side="top"
-                aria-label={t('common.edit_folder_aria', { name: folder.name })}
+                aria-label={t('folder_card.edit_folder')}
                 onClick={() => onEdit(folder)}
               >
                 <Icon d={I.pen} size={14} />
@@ -190,7 +190,7 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropFolder, comp
               className="fx-iconbtn fx-iconbtn-primary"
               data-tooltip={t('folder_card.open_folder')}
               data-tooltip-side="top"
-              aria-label={t('common.open_folder_aria', { name: folder.name })}
+              aria-label={t('folder_card.open_folder')}
               onClick={() => onOpen(folder.id)}
             >
               <Icon d={I.arrowR} size={14} stroke={2.2} />
