@@ -274,7 +274,7 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Link, error) {
 			&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
 			&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
 			&l.CheckInterval, &l.LastCheckedAt, &l.LastFingerprint,
-			&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError, &l.LastCheckError,
+			&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError,
 		); err != nil {
 			return nil, err
 		}
@@ -579,7 +579,7 @@ func (r *Repository) ListRecentChanges(ctx context.Context, sinceSeconds, limit 
 			&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
 			&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
 			&l.CheckInterval, &l.LastCheckedAt, &l.LastFingerprint,
-			&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError, &l.LastCheckError,
+			&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError,
 		); err != nil {
 			return nil, err
 		}
