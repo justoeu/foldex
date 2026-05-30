@@ -168,35 +168,6 @@ func (r *Repository) Get(ctx context.Context, id int64) (Link, error) {
 	return l, nil
 }
 
-// MinimalLink is the slice the preview worker needs — no LATERAL click_count,
-// no tag fetch. Skips the per-job `linkColumns` LATERAL join, which saves one
-// aggregate per preview run (the worker doesn't use click counts).
-type MinimalLink struct {
-	ID            int64
-	URL           string
-	Title         string
-	OGImageURL    *string
-	PreviewStatus string
-}
-
-// GetMinimal returns just the fields the preview worker reads. Used by the
-// worker's process/maybeScreenshot path so each job doesn't trigger the full
-// `linkColumns` LATERAL join + tag fan-out.
-func (r *Repository) GetMinimal(ctx context.Context, id int64) (MinimalLink, error) {
-	var m MinimalLink
-	err := r.pool.QueryRow(ctx, `
-        SELECT id, url, title, og_image_url, preview_status
-        FROM link WHERE id = $1
-    `, id).Scan(&m.ID, &m.URL, &m.Title, &m.OGImageURL, &m.PreviewStatus)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return MinimalLink{}, httperr.ErrNotFound
-	}
-	if err != nil {
-		return MinimalLink{}, fmt.Errorf("get minimal link: %w", err)
-	}
-	return m, nil
-}
-
 // GetBySlug is the slug-keyed sibling of Get. Used by the redirect handler's
 // fallback path (ID-first → slug fallback) and by anywhere that needs to
 // resolve a public-facing slug back to the full link row.
