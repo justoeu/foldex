@@ -32,10 +32,16 @@ func NewHandler(repo *Repository, worker Enqueuer) *Handler {
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/", h.list)
 	r.Post("/", h.create)
+	// /recent-changes is static, must be registered before /{id} so Chi
+	// routes it to listRecentChanges (Chi matches longest/most-specific path
+	// regardless of registration order, but keeping the source order
+	// intuitive avoids surprises during refactors).
+	r.Get("/recent-changes", h.listRecentChanges)
 	r.Get("/{id}", h.get)
 	r.Patch("/{id}", h.update)
 	r.Delete("/{id}", h.delete)
 	r.Post("/{id}/refresh-preview", h.refreshPreview)
+	r.Post("/{id}/seen-change", h.seenChange)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -189,10 +195,54 @@ func (h *Handler) refreshPreview(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+func (h *Handler) seenChange(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	if err := h.repo.MarkChangeSeen(r.Context(), id); err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) listRecentChanges(w http.ResponseWriter, r *http.Request) {
+	days := clampInt(r.URL.Query().Get("days"), 7, 1, 30)
+	limit := clampInt(r.URL.Query().Get("limit"), 20, 1, 100)
+	out, err := h.repo.ListRecentChanges(r.Context(), days*24*60*60, limit)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	httperr.JSON(w, http.StatusOK, out)
+}
+
 func parseID(r *http.Request) (int64, error) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil || id <= 0 {
 		return 0, httperr.New(http.StatusBadRequest, "invalid_id", "id must be a positive integer")
 	}
 	return id, nil
+}
+
+// clampInt parses a query string int and clamps it to [min, max]. Defaults
+// to `def` on empty/invalid input. Mirrors the helper in internal/stats so
+// numeric query knobs can't be used as DoS amplifiers (e.g. ?days=2147483647).
+func clampInt(raw string, def, lo, hi int) int {
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return def
+	}
+	if n < lo {
+		return lo
+	}
+	if n > hi {
+		return hi
+	}
+	return n
 }

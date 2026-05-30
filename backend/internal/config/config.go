@@ -25,6 +25,22 @@ type Config struct {
 	SharedSecret       string
 	CORSOrigins        []string
 	MinIO              MinIOConfig
+
+	// Change-check worker (internal/changecheck). Per-link opt-in, runs
+	// hourly/daily/weekly diffs and fires Web Push notifications.
+	ChangeCheckEnabled         bool
+	ChangeCheckConcurrency     int
+	ChangeCheckScanIntervalSec int
+	ChangeCheckFetchTimeoutSec int
+
+	// Web Push / VAPID (internal/push). When all three VAPID values are
+	// empty and VAPID_AUTO_GENERATE=1 (default), the push package generates
+	// and persists a keypair under /data/vapid.json on first boot.
+	VAPIDPublicKey    string
+	VAPIDPrivateKey   string
+	VAPIDSubject      string
+	VAPIDAutoGenerate bool
+	VAPIDStatePath    string
 }
 
 func Load() (Config, error) {
@@ -43,6 +59,15 @@ func Load() (Config, error) {
 			Bucket:    envOr("MINIO_BUCKET", "foldex-screenshots"),
 			UseSSL:    envBool("MINIO_USE_SSL", false),
 		},
+		ChangeCheckEnabled:         envBool("CHANGECHECK_ENABLED", true),
+		ChangeCheckConcurrency:     envInt("CHANGECHECK_WORKER_CONCURRENCY", 2),
+		ChangeCheckScanIntervalSec: envInt("CHANGECHECK_SCAN_INTERVAL_SEC", 60),
+		ChangeCheckFetchTimeoutSec: envInt("CHANGECHECK_FETCH_TIMEOUT_SEC", 20),
+		VAPIDPublicKey:             os.Getenv("VAPID_PUBLIC_KEY"),
+		VAPIDPrivateKey:            os.Getenv("VAPID_PRIVATE_KEY"),
+		VAPIDSubject:               envOr("VAPID_SUBJECT", "mailto:foldex@localhost"),
+		VAPIDAutoGenerate:          envBool("VAPID_AUTO_GENERATE", true),
+		VAPIDStatePath:             envOr("VAPID_STATE_PATH", "/data/vapid.json"),
 	}
 	if cfg.DBURL == "" {
 		return cfg, errors.New("DB_URL is required")

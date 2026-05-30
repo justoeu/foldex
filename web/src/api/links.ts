@@ -194,6 +194,55 @@ export async function removeLinkImage(id: number): Promise<void> {
   await http.delete(`/api/links/${id}/image`)
 }
 
+// useRecentChanges feeds the sidebar's "Recent updates" section. Server
+// caps days ∈ [1,30] and limit ∈ [1,100] via clampInt so passing bigger
+// values is harmless. Keyed on `[ 'links', 'recent-changes', days, limit ]`
+// so the badge update path (useMarkChangeSeen below) can target this query
+// for invalidation without touching the main `['links']` cache.
+export function useRecentChanges(days = 7, limit = 20) {
+  return useQuery<Link[]>({
+    queryKey: ['links', 'recent-changes', days, limit],
+    queryFn: async () => {
+      const { data } = await http.get<Link[]>(`/api/links/recent-changes?days=${days}&limit=${limit}`)
+      return data
+    },
+    // Background refetch every minute so the sidebar reflects fresh
+    // changes without requiring a full page reload.
+    refetchInterval: 60_000,
+  })
+}
+
+// useMarkChangeSeen flips change_seen_at on the link, which hides the
+// "unseen update" badge in the card. Optimistic update mirrors the
+// usePinLink pattern so the UI responds before the network roundtrip.
+export function useMarkChangeSeen() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: number) => {
+      await http.post(`/api/links/${id}/seen-change`)
+    },
+    onMutate: async (id) => {
+      // Optimistic: bump change_seen_at to now() across every cached page
+      // that holds this link. The server will overwrite with its own
+      // timestamp on success.
+      await qc.cancelQueries({ queryKey: ['links'] })
+      const now = new Date().toISOString()
+      qc.setQueriesData<Link[]>({ queryKey: ['links'] }, (prev) => {
+        if (!prev) return prev
+        return prev.map((l) => (l.id === id ? { ...l, change_seen_at: now } : l))
+      })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['links', 'recent-changes'] })
+    },
+    onError: () => {
+      // The optimistic write may now be wrong — full refetch is cheaper
+      // than reconciling the touched ids manually.
+      qc.invalidateQueries({ queryKey: ['links'] })
+    },
+  })
+}
+
 // Builds the public short link. Prefers the slug when given a Link object —
 // `/go/jira-board` is the share-friendly path. Falls back to `/go/{id}` for
 // callers that only have the numeric id (legacy, optimistic UI updates that

@@ -17,10 +17,13 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       VitePWA({
-        // Generate the SW + manifest. The previously hand-written
-        // public/manifest.webmanifest is replaced by this config so the
-        // manifest stays in sync with the actual build output (revisioned
-        // asset URLs in the precache match the SW's `precacheAndRoute`).
+        // injectManifest hands us full control of the SW (web/src/sw.ts).
+        // Required because the SW now handles Web Push (`push` +
+        // `notificationclick` listeners) on top of the precache + runtime
+        // strategies — generateSW can't express custom event handlers.
+        strategies: 'injectManifest',
+        srcDir: 'src',
+        filename: 'sw.ts',
         registerType: 'autoUpdate',
         injectRegister: 'auto',
         manifestFilename: 'manifest.webmanifest',
@@ -43,49 +46,13 @@ export default defineConfig(({ mode }) => {
             { src: '/favicon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
           ],
         },
-        workbox: {
-          // Bump this when something in the cache strategy itself changes
-          // (precache pattern, runtime handlers, navigation fallback…) and
-          // we need every client to forget what it cached under the old
-          // policy. Plain version bumps for code changes are handled
-          // automatically by the Workbox revision hashes — this is the
-          // big-hammer escape hatch.
-          cacheId: 'foldex-v2',
-          // Precache every built asset Vite produced. Revisioned URLs mean
-          // stale caches roll forward automatically on next page load.
+        // Inject the precache manifest into web/src/sw.ts. The runtime
+        // caching strategy and push handlers live in sw.ts directly — see
+        // its top-of-file rationale for why we don't depend on workbox-*
+        // runtime packages.
+        injectManifest: {
           globPatterns: ['**/*.{js,css,html,svg,png,webp,jpg,jpeg,gif,woff2}'],
-          // Don't precache the build's source maps — they're large and
-          // useless to most users.
           globIgnores: ['**/*.map'],
-          // Navigation requests fall back to index.html when offline so
-          // the SPA shell still mounts (router takes over from there).
-          navigateFallback: '/index.html',
-          // The API and the short-link redirect are NOT cacheable — they
-          // mutate state on click and must always hit the backend.
-          navigateFallbackDenylist: [/^\/api\//, /^\/go\//, /^\/healthz/],
-          // skipWaiting + clientsClaim ensures a new SW activates and
-          // takes over open tabs immediately — no need to close all
-          // foldex tabs to receive updates.
-          skipWaiting: true,
-          clientsClaim: true,
-          // Drops cache entries that don't match the current precache
-          // manifest. With cacheId bumped above, this evicts the entire
-          // previous-version cache on next activation.
-          cleanupOutdatedCaches: true,
-          runtimeCaching: [
-            {
-              // Favicons / og:images we proxy from /api/files/. Network-
-              // first so a refreshed image lands on the next view, with a
-              // 30-day cache fallback for offline.
-              urlPattern: /^https?:\/\/[^/]+\/api\/files\//,
-              handler: 'NetworkFirst',
-              options: {
-                cacheName: 'foldex-files',
-                expiration: { maxEntries: 200, maxAgeSeconds: 30 * 24 * 60 * 60 },
-                cacheableResponse: { statuses: [0, 200] },
-              },
-            },
-          ],
         },
         devOptions: {
           // Disable in `vite dev` — the SW caches stale chunks and makes

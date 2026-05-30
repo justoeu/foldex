@@ -20,6 +20,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/importer"
 	"foldex/internal/links"
+	"foldex/internal/push"
 	"foldex/internal/redirect"
 	"foldex/internal/stats"
 	"foldex/internal/tags"
@@ -42,6 +43,11 @@ type Deps struct {
 	ScreenshotURL  links.URLPolicy      // required iff Screenshotter is set — gates the SSRF surface
 	StorageStatter stats.StorageStatter // optional — surfaces bucket usage on /stats/storage
 	StorageBucket  backup.StorageBucket // optional — enables /api/backup/* when MinIO is up
+
+	// Web Push wiring. Setting PushHandler also mounts /api/push/vapid-key
+	// (kept inside /api so it inherits the SHARED_SECRET guard — see CLAUDE.md
+	// §4 invariant). Leaving it nil keeps the routes off entirely.
+	PushHandler *push.Handler
 }
 
 func New(d Deps) http.Handler {
@@ -99,6 +105,9 @@ func New(d Deps) http.Handler {
 		api.Route("/stats", statsHandler.Mount)
 		if d.StorageBucket != nil {
 			api.Route("/backup", backup.NewHandler(backup.NewService(d.Pool, d.StorageBucket, d.Logger), d.Logger).Mount)
+		}
+		if d.PushHandler != nil {
+			api.Route("/push", d.PushHandler.Mount)
 		}
 	})
 

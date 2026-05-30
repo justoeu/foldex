@@ -16,6 +16,9 @@ type CreateInput struct {
 	TagIDs      []int64 `json:"tag_ids"`
 	Pinned      bool    `json:"pinned"`
 	FolderID    *int64  `json:"folder_id"`
+	// CheckInterval opts the link into the changecheck worker. Nil/empty =
+	// disabled. Must be one of "hourly"/"daily"/"weekly" or Validate rejects.
+	CheckInterval *string `json:"check_interval"`
 }
 
 func (c *CreateInput) Normalize() {
@@ -30,6 +33,14 @@ func (c *CreateInput) Normalize() {
 			c.Slug = nil
 		} else {
 			c.Slug = &s
+		}
+	}
+	if c.CheckInterval != nil {
+		s := strings.TrimSpace(*c.CheckInterval)
+		if s == "" {
+			c.CheckInterval = nil
+		} else {
+			c.CheckInterval = &s
 		}
 	}
 }
@@ -50,6 +61,9 @@ func (c CreateInput) Validate() error {
 	}
 	if c.Slug != nil && !SlugIsValid(*c.Slug) {
 		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
+	}
+	if c.CheckInterval != nil && !ValidCheckInterval(*c.CheckInterval) {
+		return errMsg("check_interval must be one of hourly, daily, weekly")
 	}
 	return nil
 }
@@ -74,6 +88,11 @@ type UpdateInput struct {
 	// from title via Slugify().
 	Slug    *string `json:"-"`
 	SlugSet bool    `json:"-"`
+	// CheckInterval tri-state: absent → don't touch, {"check_interval": "daily"}
+	// → set, {"check_interval": null} → opt out (clears all change-check state
+	// in the repository).
+	CheckInterval    *string `json:"-"`
+	CheckIntervalSet bool    `json:"-"`
 }
 
 func (u *UpdateInput) Normalize() {
@@ -114,6 +133,9 @@ func (u UpdateInput) Validate() error {
 	if u.SlugSet && u.Slug != nil && !SlugIsValid(*u.Slug) {
 		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
 	}
+	if u.CheckIntervalSet && u.CheckInterval != nil && !ValidCheckInterval(*u.CheckInterval) {
+		return errMsg("check_interval must be one of hourly, daily, weekly")
+	}
 	return nil
 }
 
@@ -134,8 +156,9 @@ type ListQuery struct {
 func (u *UpdateInput) UnmarshalJSON(data []byte) error {
 	type alias UpdateInput
 	aux := struct {
-		FolderID json.RawMessage `json:"folder_id"`
-		Slug     json.RawMessage `json:"slug"`
+		FolderID      json.RawMessage `json:"folder_id"`
+		Slug          json.RawMessage `json:"slug"`
+		CheckInterval json.RawMessage `json:"check_interval"`
 		*alias
 	}{alias: (*alias)(u)}
 	if err := json.Unmarshal(data, &aux); err != nil {
@@ -175,6 +198,27 @@ func (u *UpdateInput) UnmarshalJSON(data []byte) error {
 				u.Slug = nil
 			} else {
 				u.Slug = &s
+			}
+		}
+	}
+
+	if len(aux.CheckInterval) == 0 {
+		u.CheckIntervalSet = false
+		u.CheckInterval = nil
+	} else {
+		u.CheckIntervalSet = true
+		if string(aux.CheckInterval) == "null" {
+			u.CheckInterval = nil
+		} else {
+			var s string
+			if err := json.Unmarshal(aux.CheckInterval, &s); err != nil {
+				return err
+			}
+			s = strings.TrimSpace(s)
+			if s == "" {
+				u.CheckInterval = nil
+			} else {
+				u.CheckInterval = &s
 			}
 		}
 	}

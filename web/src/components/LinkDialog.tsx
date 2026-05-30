@@ -74,6 +74,10 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   const [description, setDescription] = useState('')
   const [pinned, setPinned] = useState(false)
   const [folderId, setFolderId] = useState<number | null>(null)
+  // null = opt-out (default); 'hourly'/'daily'/'weekly' = opt-in.
+  // Tracked separately from "interval" string so we can pass either an
+  // explicit value or null through to the backend tri-state DTO.
+  const [checkInterval, setCheckInterval] = useState<'hourly' | 'daily' | 'weekly' | null>(null)
   const [selected, setSelected] = useState<SelectedTag[]>([])
   const [tagFilter, setTagFilter] = useState('')
   const [tagPage, setTagPage] = useState(0)
@@ -98,6 +102,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
     setDescription(link?.description ?? '')
     setPinned(link?.pinned ?? false)
     setFolderId(link?.folder_id ?? defaultFolderId ?? null)
+    setCheckInterval(link?.check_interval ?? null)
     setSelected(link?.tags ?? [])
     setTagFilter('')
     setTagPage(0)
@@ -242,6 +247,10 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
           tag_ids: tagIds,
           pinned,
           folder_id: folderId,
+          // Always send check_interval — null clears the opt-in cleanly.
+          // The backend tri-state DTO needs an explicit field to know
+          // "the user changed this" vs "leave it alone".
+          check_interval: checkInterval,
           ...slugPayload,
         },
       })
@@ -282,6 +291,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
         tag_ids: tagIds,
         pinned,
         folder_id: folderId,
+        check_interval: checkInterval,
         ...createSlug,
       })
       if (pendingImage && newLink?.id) {
@@ -541,6 +551,29 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                 <Icon d={I.pin} size={12} /> {t('link_dialog.pinned_label')}
                 <span className="fx-toggle-hint">{t('link_dialog.pinned_hint')}</span>
               </span>
+            </label>
+
+            <label className="fx-field">
+              <span className="fx-field-label">
+                <Icon d={I.bell} size={12} /> {t('link_dialog.check_updates_label')}
+              </span>
+              <select
+                className="fx-input"
+                value={checkInterval ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setCheckInterval(
+                    v === 'hourly' || v === 'daily' || v === 'weekly' ? v : null,
+                  )
+                }}
+                aria-label={t('link_dialog.check_updates_label')}
+              >
+                <option value="">{t('link_dialog.check_updates_off')}</option>
+                <option value="hourly">{t('link_dialog.check_updates_hourly')}</option>
+                <option value="daily">{t('link_dialog.check_updates_daily')}</option>
+                <option value="weekly">{t('link_dialog.check_updates_weekly')}</option>
+              </select>
+              <span className="fx-field-hint">{t('link_dialog.check_updates_hint')}</span>
             </label>
           </div>
 

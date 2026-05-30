@@ -37,19 +37,26 @@ const buildRoutes = (): Record<Method, Route[]> => ({
   get: [
     { url: /^\/api\/tags$/, handle: (_m, _d, _p, s) => s.tags },
     { url: /^\/api\/folders$/, handle: listFolders },
+    // /recent-changes is static — keep it before /api/links so the static
+    // path matches first; the catch-all /api/links handler is fine after.
+    { url: /^\/api\/links\/recent-changes$/, handle: listRecentChanges },
     { url: /^\/api\/links$/, handle: listLinks },
+    { url: /^\/api\/push\/vapid-key$/, handle: () => ({ public_key: 'MOCK_VAPID_PUBLIC' }) },
   ],
   post: [
     { url: /^\/api\/tags$/, handle: createTag },
     { url: /^\/api\/folders$/, handle: createFolder },
     { url: /^\/api\/links\/(\d+)\/refresh-preview$/, handle: () => null },
     { url: /^\/api\/links\/(\d+)\/screenshot$/, handle: captureScreenshot },
+    { url: /^\/api\/links\/(\d+)\/seen-change$/, handle: seenChange },
     { url: /^\/api\/links$/, handle: createLink },
     { url: /^\/api\/backup$/, handle: backupExport },
     { url: /^\/api\/backup\/validate$/, handle: backupValidate },
     { url: /^\/api\/backup\/restore$/, handle: backupRestore },
     { url: /^\/api\/import\/validate$/, handle: importValidate },
     { url: /^\/api\/import\/apply$/, handle: importApply },
+    { url: /^\/api\/push\/subscriptions$/, handle: () => ({ id: 1, created_at: new Date().toISOString() }) },
+    { url: /^\/api\/push\/test$/, handle: () => null },
   ],
   patch: [
     { url: /^\/api\/tags\/(\d+)$/, handle: patchTag },
@@ -60,8 +67,34 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/tags\/(\d+)$/, handle: deleteTag },
     { url: /^\/api\/folders\/(\d+)$/, handle: deleteFolder },
     { url: /^\/api\/links\/(\d+)$/, handle: deleteLink },
+    { url: /^\/api\/push\/subscriptions$/, handle: () => null },
   ],
 })
+
+function listRecentChanges(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState) {
+  // Days clamp mirrors the backend (1..30, default 7) and limit (1..100).
+  // The real backend filters by last_change_detected_at > now() - days; the
+  // mock just returns links that have last_change_detected_at set, sorted
+  // descending, capped at limit.
+  const limit = Math.min(100, Math.max(1, Number(params.get('limit') ?? '20')))
+  const out = s.links
+    .filter((l) => !!l.last_change_detected_at)
+    .sort((a, b) => (b.last_change_detected_at ?? '').localeCompare(a.last_change_detected_at ?? ''))
+    .slice(0, limit)
+  return out
+}
+
+function seenChange(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
+  const id = Number(m[1])
+  const idx = s.links.findIndex((l) => l.id === id)
+  if (idx < 0) {
+    const e: any = new Error('not found')
+    e.response = { status: 404, data: { error: { code: 'not_found', message: 'link not found' } } }
+    throw e
+  }
+  s.links[idx] = { ...s.links[idx], change_seen_at: new Date().toISOString() }
+  return null
+}
 
 export function installAxiosMock(state: MockState) {
   const routes = buildRoutes()
@@ -219,6 +252,9 @@ function createLink(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Moc
     last_clicked_at: null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    // check_interval round-trips so LinkDialog tests can assert the
+    // submitted value lands on the (mock) row.
+    check_interval: data.check_interval ?? null,
     tags,
   }
   s.links.push(link)
@@ -238,6 +274,8 @@ function patchLink(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockS
   if ('folder_id' in data) l.folder_id = data.folder_id ?? null
   if (data.pinned !== undefined) l.pinned = !!data.pinned
   if (data.slug !== undefined) l.slug = data.slug
+  // check_interval tri-state: presence flips, null clears.
+  if ('check_interval' in data) l.check_interval = data.check_interval ?? null
   if (data.tag_ids !== undefined) {
     l.tags = data.tag_ids
       .map((id: number) => s.tags.find((x) => x.id === id))

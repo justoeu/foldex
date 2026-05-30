@@ -106,6 +106,50 @@ func TestUpdateInput_Validate(t *testing.T) {
 	}
 }
 
+// CheckInterval rides on the same tri-state UnmarshalJSON contract as
+// FolderID/Slug: absent → don't touch; null → opt out (clears state); string
+// → set new interval. The repository turns the "clear" case into a NULL on
+// the column plus a wipe of fingerprint/timestamps.
+
+func TestUpdateInput_CheckInterval_AbsentMeansDoNotTouch(t *testing.T) {
+	var u UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"title": "x"}`), &u))
+	assert.False(t, u.CheckIntervalSet)
+	assert.Nil(t, u.CheckInterval)
+}
+
+func TestUpdateInput_CheckInterval_NullMeansOptOut(t *testing.T) {
+	var u UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"check_interval": null}`), &u))
+	assert.True(t, u.CheckIntervalSet)
+	assert.Nil(t, u.CheckInterval)
+}
+
+func TestUpdateInput_CheckInterval_StringMeansSet(t *testing.T) {
+	var u UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"check_interval": "daily"}`), &u))
+	assert.True(t, u.CheckIntervalSet)
+	require.NotNil(t, u.CheckInterval)
+	assert.Equal(t, "daily", *u.CheckInterval)
+}
+
+func TestUpdateInput_CheckInterval_InvalidValueRejected(t *testing.T) {
+	in := UpdateInput{CheckInterval: ptrS("bogus"), CheckIntervalSet: true}
+	require.Error(t, in.Validate())
+}
+
+func TestCreateInput_CheckInterval_InvalidValueRejected(t *testing.T) {
+	in := CreateInput{URL: "https://x.test", Title: "x", CheckInterval: ptrS("yearly")}
+	require.Error(t, in.Validate())
+}
+
+func TestCreateInput_CheckInterval_ValidValuesAccepted(t *testing.T) {
+	for _, v := range []string{"hourly", "daily", "weekly"} {
+		in := CreateInput{URL: "https://x.test", Title: "x", CheckInterval: ptrS(v)}
+		require.NoErrorf(t, in.Validate(), "expected %q to validate", v)
+	}
+}
+
 func ptrS(s string) *string { return &s }
 
 func longString(n int) string {

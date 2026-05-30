@@ -168,4 +168,75 @@ describe('LinkCard', () => {
     )
     expect(screen.getByText(/capturing/i)).toBeInTheDocument()
   })
+
+  // ─── unseen-change badge (Phase 5) ─────────────────────────────────────
+  // The badge appears only when the changecheck worker has detected a
+  // change AND the user hasn't acknowledged it. Clicking it fires
+  // useMarkChangeSeen, which the mock server applies optimistically;
+  // the badge disappears on the next render.
+
+  it('does NOT render unseen-change badge when last_change_detected_at is null', () => {
+    renderWithProviders(<LinkCard link={baseLink} onEdit={vi.fn()} />)
+    expect(screen.queryByLabelText(/mark update as seen/i)).not.toBeInTheDocument()
+    expect(document.querySelector('.fx-card-update-badge')).toBeNull()
+    expect(document.querySelector('.fx-card-update-alert')).toBeNull()
+  })
+
+  it('renders unseen-change badge when detection is newer than change_seen_at', () => {
+    renderWithProviders(
+      <LinkCard
+        link={{
+          ...baseLink,
+          last_change_detected_at: '2026-05-30T10:00:00Z',
+          change_seen_at: '2026-05-29T00:00:00Z',
+        }}
+        onEdit={vi.fn()}
+      />,
+    )
+    expect(screen.getByLabelText(/mark update as seen/i)).toBeInTheDocument()
+    // The card itself also gets the alert halo so the user notices.
+    expect(document.querySelector('.fx-card-update-alert')).not.toBeNull()
+  })
+
+  it('does NOT render badge when change_seen_at is newer than last_change_detected_at', () => {
+    // User already acknowledged the latest change — badge must clear even
+    // though last_change_detected_at is still set.
+    renderWithProviders(
+      <LinkCard
+        link={{
+          ...baseLink,
+          last_change_detected_at: '2026-05-29T00:00:00Z',
+          change_seen_at: '2026-05-30T10:00:00Z',
+        }}
+        onEdit={vi.fn()}
+      />,
+    )
+    expect(screen.queryByLabelText(/mark update as seen/i)).not.toBeInTheDocument()
+  })
+
+  it('clicking the unseen-change badge calls POST /api/links/:id/seen-change', async () => {
+    // Seed the mock state with the link so the server-side seenChange path
+    // can flip change_seen_at and the optimistic update can converge.
+    state.links = [
+      {
+        ...baseLink,
+        last_change_detected_at: '2026-05-30T10:00:00Z',
+        change_seen_at: null,
+      },
+    ]
+    renderWithProviders(
+      <LinkCard
+        link={state.links[0]}
+        onEdit={vi.fn()}
+      />,
+    )
+    const badge = screen.getByLabelText(/mark update as seen/i)
+    await userEvent.click(badge)
+    // The mock applies the seen timestamp; assert by waiting for state to
+    // mutate (the production code optimistically updates the cache too,
+    // but mutating state lets us see the round-trip).
+    await waitFor(() => {
+      expect(state.links[0].change_seen_at).toBeTruthy()
+    })
+  })
 })
