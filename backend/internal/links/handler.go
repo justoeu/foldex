@@ -84,7 +84,9 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	var in CreateInput
 	r.Body = http.MaxBytesReader(w, r.Body, jsonBodyCap)
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_json", err.Error()))
 		return
 	}
@@ -133,7 +135,9 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	var in UpdateInput
 	r.Body = http.MaxBytesReader(w, r.Body, jsonBodyCap)
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_json", err.Error()))
 		return
 	}

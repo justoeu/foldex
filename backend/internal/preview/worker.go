@@ -157,7 +157,9 @@ func (w *Worker) loop(ctx context.Context) {
 }
 
 func (w *Worker) process(ctx context.Context, id int64) {
-	link, err := w.repo.Get(ctx, id)
+	// GetMinimal skips the linkColumns LATERAL click_count join — the
+	// worker doesn't need click stats. Saves one aggregate per preview run.
+	link, err := w.repo.GetMinimal(ctx, id)
 	if err != nil {
 		w.logger.Warn("preview job: link not found", "link_id", id, "err", err)
 		return
@@ -229,7 +231,10 @@ func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string) 
 	if w.screenshotter == nil || w.uploader == nil {
 		return
 	}
-	cur, err := w.repo.Get(ctx, id)
+	// Same MinimalLink read as `process` — we only need og_image_url here
+	// to decide whether the user uploaded an image while we were fetching
+	// HTML; skipping the LATERAL click_count saves another aggregate.
+	cur, err := w.repo.GetMinimal(ctx, id)
 	if err != nil {
 		return
 	}

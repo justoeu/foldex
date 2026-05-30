@@ -59,10 +59,23 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
     setPreviewErrored(false)
   }, [link.og_image_url])
 
-  // Invalidate after a short delay so the backend has time to log the click
+  // Optimistic bump: patch click_count + last_clicked_at in every cached
+  // links list immediately. The old code waited 800 ms and then invalidated
+  // every ['links'] query (full refetch of every visible page) — wasteful
+  // when the user clicks a card, and the badge would lag the click anyway.
+  // The /go/:id redirect handler is the source of truth; the bump here is a
+  // hint that's reconciled the next time the user navigates / refetches.
   const onGo = useCallback(() => {
-    setTimeout(() => qc.invalidateQueries({ queryKey: ['links'] }), 800)
-  }, [qc])
+    const nowISO = new Date().toISOString()
+    qc.setQueriesData<Link[] | undefined>({ queryKey: ['links'] }, (old) => {
+      if (!old) return old
+      return old.map((l) =>
+        l.id === link.id
+          ? { ...l, click_count: (l.click_count ?? 0) + 1, last_clicked_at: nowISO }
+          : l,
+      )
+    })
+  }, [qc, link.id])
 
   const onDelete = async () => {
     const ok = await confirm({

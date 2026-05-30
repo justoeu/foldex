@@ -21,6 +21,12 @@ export function useFolders(params?: FolderListParams) {
       const { data } = await http.get<Folder[]>(`/api/folders${qs ? '?' + qs : ''}`)
       return data
     },
+    // The flat-list (`scope: null`) query is used by the LinkDialog folder
+    // picker and the breadcrumb/folder-tree builder. It changes only on
+    // CRUD (create/update/delete) — those mutations already invalidate
+    // ['folders'], so a long staleTime here just avoids the parallel
+    // refetch alongside the scoped query on first paint of Home.
+    staleTime: scope === null ? 5 * 60_000 : 30_000,
   })
 }
 

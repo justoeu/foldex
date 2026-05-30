@@ -2,7 +2,8 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -122,10 +123,19 @@ func healthz(pool *pgxpool.Pool) http.HandlerFunc {
 }
 
 func sharedSecretGuard(expected string) func(http.Handler) http.Handler {
+	// HMAC both sides to a fixed-length digest before comparing. The raw
+	// subtle.ConstantTimeCompare returns 0 immediately when the lengths
+	// differ, leaking the secret length to a remote timing attacker.
+	// HMAC-SHA256 always yields 32 bytes, so the compare is now length-
+	// uniform. The HMAC key is fixed — we're not authenticating a payload,
+	// just normalizing the inputs to a constant size before comparison.
+	const compareKey = "foldex/shared-secret/compare"
+	expectedSum := hmac256(compareKey, expected)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			got := r.Header.Get("X-Foldex-Secret")
-			if subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+			gotSum := hmac256(compareKey, got)
+			if !hmac.Equal(gotSum, expectedSum) {
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte(`{"error":{"code":"unauthorized","message":"invalid or missing secret"}}`))
 				return
@@ -133,6 +143,12 @@ func sharedSecretGuard(expected string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func hmac256(key, msg string) []byte {
+	mac := hmac.New(sha256.New, []byte(key))
+	mac.Write([]byte(msg))
+	return mac.Sum(nil)
 }
 
 func slogRequest(logger *slog.Logger) func(http.Handler) http.Handler {

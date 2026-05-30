@@ -3,6 +3,7 @@ package screenshot
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -38,7 +39,14 @@ func Capture(ctx context.Context, pageURL string) ([]byte, error) {
 	if err := browser.Connect(); err != nil {
 		return nil, fmt.Errorf("screenshot: connect browser: %w", err)
 	}
-	defer browser.MustClose()
+	// MustClose panics on error; the older code accepted that, but a panic
+	// inside the screenshot worker takes the goroutine down. Plain Close +
+	// log keeps the worker healthy and surfaces the failure for ops.
+	defer func() {
+		if err := browser.Close(); err != nil {
+			slog.Warn("screenshot: browser close failed", "err", err)
+		}
+	}()
 
 	page, err := browser.Page(proto.TargetCreateTarget{URL: pageURL})
 	if err != nil {
@@ -46,9 +54,12 @@ func Capture(ctx context.Context, pageURL string) ([]byte, error) {
 	}
 
 	// Wait until the network is idle (or 10 s, whichever comes first).
+	// Non-fatal: a slow third-party script doesn't justify failing the
+	// screenshot. Log at debug so it's findable when investigating but
+	// doesn't flood normal logs.
 	if err := page.WaitLoad(); err != nil {
-		// Non-fatal: we still take the screenshot even if some resources fail.
-		_ = err
+		slog.Debug("screenshot: WaitLoad timeout, proceeding anyway",
+			"url", pageURL, "err", err)
 	}
 
 	// Set viewport to a standard 1280×800 desktop size.

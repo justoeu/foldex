@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"foldex/internal/pkg/slug"
 )
 
 func TestSlugify(t *testing.T) {
@@ -35,7 +37,7 @@ func TestSlugify(t *testing.T) {
 func TestSlugify_LongTitleCappedOnHyphen(t *testing.T) {
 	long := "Refactor the issuing flow for cross-border international wire transfers in the post-migration codebase to make sure observability still holds end to end"
 	got := Slugify(long)
-	assert.LessOrEqual(t, len(got), slugMaxLen, "must respect slugMaxLen")
+	assert.LessOrEqual(t, len(got), slug.MaxLen, "must respect slug.MaxLen")
 	assert.False(t, strings.HasSuffix(got, "-"), "should not end with hyphen")
 	// All segments are non-empty (collapse worked correctly).
 	for _, seg := range strings.Split(got, "-") {
@@ -62,8 +64,8 @@ func TestSlugIsValid(t *testing.T) {
 		{"foo bar", false}, // space
 		{"foo.bar", false}, // dot
 		{"café", false},   // non-ASCII
-		{strings.Repeat("a", slugMaxLen), true},     // exactly at cap
-		{strings.Repeat("a", slugMaxLen+1), false},  // one over
+		{strings.Repeat("a", slug.MaxLen), true},     // exactly at cap
+		{strings.Repeat("a", slug.MaxLen+1), false},  // one over
 	}
 	for _, tc := range cases {
 		t.Run(tc.slug, func(t *testing.T) {

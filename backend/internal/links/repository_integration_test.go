@@ -219,6 +219,34 @@ type nopEnqueuer struct{}
 
 func (nopEnqueuer) Enqueue(int64) error { return nil }
 
+// TestRepository_PinnedAlwaysComesFirst locks the §5 invariant: pinned links
+// outrank everything else, including the selected sort. Without this test,
+// dropping `l.pinned DESC` from the ORDER BY in any sort branch ships green.
+func TestRepository_PinnedAlwaysComesFirst(t *testing.T) {
+	ctx, lrepo, _ := setup(t)
+
+	// Newer link first (default "created" sort) but NOT pinned.
+	newer, err := lrepo.Create(ctx, links.CreateInput{URL: "https://newer", Title: "Newer"})
+	require.NoError(t, err)
+	// Older link, pinned — should appear FIRST despite being older.
+	older, err := lrepo.Create(ctx, links.CreateInput{URL: "https://older", Title: "Older"})
+	require.NoError(t, err)
+	pinTrue := true
+	_, err = lrepo.Update(ctx, older.ID, links.UpdateInput{Pinned: &pinTrue})
+	require.NoError(t, err)
+
+	for _, sort := range []string{"", "recent", "clicks", "alpha", "alpha_desc"} {
+		t.Run("sort="+sort, func(t *testing.T) {
+			out, err := lrepo.List(ctx, links.ListQuery{Sort: sort})
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, len(out), 2)
+			assert.True(t, out[0].Pinned, "pinned link must always come first under sort=%q", sort)
+			assert.Equal(t, older.ID, out[0].ID)
+		})
+	}
+	_ = newer
+}
+
 // TestRepository_UpdateDuplicateURLReturns409 mirrors the above for the Update
 // path — folding a link onto another's URL via PATCH should also surface as
 // 409, not 500.
