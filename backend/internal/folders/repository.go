@@ -58,6 +58,10 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Folder, error) {
 	} else if q.RootOnly {
 		where = "WHERE f.parent_id IS NULL"
 	}
+	// link_count / folder_count via LATERAL scoped by FK instead of a
+	// whole-table GROUP BY subquery — the planner can use the
+	// link_folder / folder_parent indexes per parent row instead of
+	// hash-aggregating every link/folder once per request.
 	sql := `
         SELECT f.id, f.name, f.color, f.parent_id, f.created_at,
                COALESCE(c.cnt, 0) AS link_count,
@@ -65,16 +69,12 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Folder, error) {
                COALESCE(p.previews, '[]'::jsonb) AS previews,
                COALESCE(pf.previews, '[]'::jsonb) AS preview_folders
         FROM folder f
-        LEFT JOIN (
-            SELECT folder_id, COUNT(*) AS cnt
-            FROM link WHERE folder_id IS NOT NULL
-            GROUP BY folder_id
-        ) c ON c.folder_id = f.id
-        LEFT JOIN (
-            SELECT parent_id, COUNT(*) AS cnt
-            FROM folder WHERE parent_id IS NOT NULL
-            GROUP BY parent_id
-        ) fc ON fc.parent_id = f.id
+        LEFT JOIN LATERAL (
+            SELECT count(*) AS cnt FROM link WHERE folder_id = f.id
+        ) c ON true
+        LEFT JOIN LATERAL (
+            SELECT count(*) AS cnt FROM folder WHERE parent_id = f.id
+        ) fc ON true
         LEFT JOIN LATERAL (
             SELECT jsonb_agg(jsonb_build_object(
                 'id', l.id, 'title', l.title,

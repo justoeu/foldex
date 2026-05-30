@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import { isGradient, primaryColor } from '../lib/tagColor'
 import type { Tag } from '../api/types'
@@ -13,7 +14,11 @@ type Props = {
 export function TagChip({ tag, onClick, active, closable, onClose }: Props) {
   const { t } = useTranslation()
   const cls = 'fx-chip' + (active ? ' fx-chip-active' : '')
-  const style = { ['--chip-c' as never]: primaryColor(tag.color) }
+  // CSS custom properties aren't in the React.CSSProperties index type;
+  // the canonical workaround is to cast the whole object via CSSProperties
+  // rather than the property key. Same trick used at every other site that
+  // assigns a `--fx-*` var via inline style.
+  const style = { '--chip-c': primaryColor(tag.color) } as CSSProperties
   const dotStyle = isGradient(tag.color) ? { background: tag.color } : undefined
 
   const closeBtn = closable && (

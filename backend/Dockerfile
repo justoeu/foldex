@@ -1,13 +1,18 @@
 # syntax=docker/dockerfile:1
-FROM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 WORKDIR /src
-ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+# Cross-compile target arch comes from buildkit via $TARGETARCH (set when the
+# build runs with `--platform linux/arm64` or `linux/amd64`). Hardcoding
+# GOARCH=amd64 here used to silently produce amd64 binaries even for the
+# arm64 CI matrix cell, breaking arm64 deployments.
+ARG TARGETARCH
+ENV CGO_ENABLED=0 GOOS=linux
 
 COPY go.mod go.sum* ./
 RUN go mod download || true
 
 COPY . .
-RUN go build -ldflags="-s -w" -o /out/foldex ./cmd/server
+RUN GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/foldex ./cmd/server
 
 # Use alpine as the final image so we can install chromium for go-rod.
 # distroless/static does not include the necessary system libs.

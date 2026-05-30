@@ -78,3 +78,23 @@ export function safeImageUrl(raw: string | null | undefined): string | undefined
     return undefined
   }
 }
+
+// Gate user-supplied URLs that flow into an `<a href={url}>`. React 19
+// sanitizes `javascript:` automatically but `data:`, `file:`, `vbscript:`,
+// `mailto:`, `tel:` pass through. The Netscape importer now rejects those
+// at ingest, but rows seeded before that fix (or via the raw repository
+// before any handler) may still contain hostile URLs — defense-in-depth
+// rejects them at render. Returns the URL when safe, `undefined` otherwise
+// so `<a href={undefined}>` renders as a plain anchor with no destination.
+export function safeLinkHref(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined
+  const trimmed = raw.trim()
+  if (!trimmed) return undefined
+  if (!/^https?:\/\//i.test(trimmed)) return undefined
+  try {
+    new URL(trimmed)
+    return trimmed
+  } catch {
+    return undefined
+  }
+}

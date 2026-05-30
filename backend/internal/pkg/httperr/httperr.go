@@ -10,9 +10,14 @@ type Error struct {
 	Status  int    `json:"-"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// cause is the underlying error, preserved for errors.Is / errors.As.
+	// Never serialized — internal-only via Unwrap.
+	cause error
 }
 
 func (e *Error) Error() string { return e.Message }
+
+func (e *Error) Unwrap() error { return e.cause }
 
 func New(status int, code, msg string) *Error {
 	return &Error{Status: status, Code: code, Message: msg}
@@ -25,6 +30,20 @@ var (
 	ErrInternal     = New(http.StatusInternalServerError, "internal", "internal error")
 	ErrUnauthorized = New(http.StatusUnauthorized, "unauthorized", "unauthorized")
 )
+
+// JSONBodyCap is the shared 64 KiB ceiling for plain JSON POST/PATCH bodies on
+// links / folders / tags. ParseMultipartForm endpoints (image upload, backup)
+// have their own larger caps. 64 KiB is generous — a Link payload with
+// description + tags + slug is well under 4 KiB.
+const JSONBodyCap = 64 << 10
+
+// Wrap returns a *Error that preserves `cause` via Unwrap. Use when you have
+// a domain typed error but also want the underlying cause to survive
+// errors.Is / errors.As checks downstream (e.g. matching pgx.ErrNoRows). The
+// envelope writer ignores the cause; only Status/Code/Message reach the wire.
+func Wrap(status int, code, msg string, cause error) *Error {
+	return &Error{Status: status, Code: code, Message: msg, cause: cause}
+}
 
 // envelope is the JSON shape used in responses: {"error": {...}}.
 type envelope struct {

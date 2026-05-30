@@ -133,14 +133,25 @@ func (r *Repository) TopLinks(ctx context.Context, limit int) ([]TopLink, error)
 
 // TagBuckets returns each tag with its click total (summed across all linked
 // links) and how many links it covers, ordered by clicks DESC.
+//
+// The naive "LEFT JOIN link_tag LEFT JOIN click_log GROUP BY t.id" runs at
+// O(tags × links_per_tag × clicks_per_link) — for a power user with 10k
+// clicks across 50 tags that's a fan-out of millions of intermediate rows.
+// The CTE below pre-aggregates clicks per link ONCE, then joins, dropping the
+// total cost to O(clicks) for the aggregate + O(link_tag rows) for the join.
 func (r *Repository) TagBuckets(ctx context.Context) ([]TagBucket, error) {
 	rows, err := r.pool.Query(ctx, `
+        WITH link_clicks AS (
+            SELECT link_id, count(*)::bigint AS cnt
+            FROM click_log
+            GROUP BY link_id
+        )
         SELECT t.id, t.name, t.color,
-               count(cl.id)::bigint                 AS clicks,
+               COALESCE(sum(lc.cnt), 0)::bigint     AS clicks,
                count(DISTINCT lt.link_id)::bigint   AS links
         FROM tag t
-        LEFT JOIN link_tag lt ON lt.tag_id = t.id
-        LEFT JOIN click_log cl ON cl.link_id = lt.link_id
+        LEFT JOIN link_tag lt   ON lt.tag_id = t.id
+        LEFT JOIN link_clicks lc ON lc.link_id = lt.link_id
         GROUP BY t.id
         ORDER BY clicks DESC, t.name ASC
     `)

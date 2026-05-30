@@ -8,7 +8,7 @@ import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useCreateLink, useUpdateLink, uploadLinkImage, removeLinkImage } from '../api/links'
 import { useCreateTag, useTags } from '../api/tags'
 import { useQueryClient } from '@tanstack/react-query'
-import { safeImageUrl } from '../lib/url'
+import { safeImageUrl, safeLinkHref } from '../lib/url'
 import type { Link, Tag } from '../api/types'
 
 type Props = {
@@ -348,7 +348,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder={t('link_dialog.url_placeholder')}
-                  aria-label="URL"
+                  aria-label={t('common.url_aria')}
                 />
               </div>
             </label>
@@ -360,7 +360,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder={t('link_dialog.title_placeholder')}
-                  aria-label="Title"
+                  aria-label={t('common.title_aria')}
                 />
               </div>
             </label>
@@ -409,7 +409,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                   onChange={(e) => setDescription(e.target.value.slice(0, 1000))}
                   rows={3}
                   maxLength={1000}
-                  aria-label="Description"
+                  aria-label={t('common.description_aria')}
                 />
                 <span className={
                   'fx-textarea-count' +
@@ -565,8 +565,8 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
             <div className="fx-modal-side-preview" style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div className="fx-modal-side-label">{t('link_dialog.image_label')}</div>
-                {url && (
-                  <a href={url} target="_blank" rel="noopener noreferrer" className="fx-modal-side-open-link">
+                {safeLinkHref(url) && (
+                  <a href={safeLinkHref(url)} target="_blank" rel="noopener noreferrer" className="fx-modal-side-open-link">
                     <Icon d={I.arrowR} size={11} /> {t('link_dialog.image_open_browser')}
                   </a>
                 )}

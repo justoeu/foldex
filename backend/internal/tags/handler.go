@@ -18,10 +18,6 @@ type Handler struct {
 
 func NewHandler(repo *Repository) *Handler { return &Handler{repo: repo} }
 
-// jsonBodyCap mirrors links.jsonBodyCap — 64 KiB is generous for a Tag
-// payload (name + color + optional icon).
-const jsonBodyCap = 64 << 10
-
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/", h.list)
 	r.Post("/", h.create)
@@ -41,8 +37,10 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	var in CreateInput
-	r.Body = http.MaxBytesReader(w, r.Body, jsonBodyCap)
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, httperr.JSONBodyCap)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_json", err.Error()))
 		return
 	}
@@ -85,8 +83,10 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in UpdateInput
-	r.Body = http.MaxBytesReader(w, r.Body, jsonBodyCap)
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, httperr.JSONBodyCap)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_json", err.Error()))
 		return
 	}

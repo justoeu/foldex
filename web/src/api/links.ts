@@ -76,13 +76,23 @@ export function useUpdateLink() {
       const { data } = await http.patch<Link>(`/api/links/${id}`, body)
       return data
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['tags'] })
-      // Folder cards on the home grid carry `link_count` and `preview_links`
-      // (the 2x2 mini-thumbs). Any link mutation can shift those — invalidate
-      // so the UI re-fetches and the card updates in real time.
-      qc.invalidateQueries({ queryKey: ['folders'] })
+    // Narrow invalidation: patch the changed link in every cached list via
+    // setQueryData; only invalidate folders/tags when the mutation actually
+    // touched those associations. The previous "invalidate everything"
+    // recipe triggered 3 full refetches per drag-and-drop or edit.
+    onSuccess: (data, vars) => {
+      qc.setQueriesData<Link[] | undefined>({ queryKey: ['links'] }, (old) => {
+        if (!old) return old
+        return old.map((l) => (l.id === data.id ? data : l))
+      })
+      if (vars.body.tag_ids !== undefined) {
+        qc.invalidateQueries({ queryKey: ['tags'] })
+      }
+      // folder_id touched OR cross-folder move → folder cards' link_count
+      // and preview_links may have shifted; invalidate so they reconcile.
+      if ('folder_id' in vars.body) {
+        qc.invalidateQueries({ queryKey: ['folders'] })
+      }
     },
   })
 }

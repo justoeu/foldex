@@ -38,13 +38,6 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Post("/{id}/refresh-preview", h.refreshPreview)
 }
 
-// jsonBodyCap is the hard ceiling for JSON request bodies. ParseMultipartForm
-// already has its own cap on /image and /backup; this protects the plain JSON
-// endpoints (links/folders/tags Create+Update) from a 100 MB payload tying up
-// memory inside json.Decoder. 64 KiB is generous — a Link with description,
-// tags array, and slug is well under 4 KiB.
-const jsonBodyCap = 64 << 10
-
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	q := ListQuery{
 		Q:    strings.TrimSpace(r.URL.Query().Get("q")),
@@ -83,8 +76,10 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	var in CreateInput
-	r.Body = http.MaxBytesReader(w, r.Body, jsonBodyCap)
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, httperr.JSONBodyCap)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_json", err.Error()))
 		return
 	}
@@ -132,8 +127,10 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in UpdateInput
-	r.Body = http.MaxBytesReader(w, r.Body, jsonBodyCap)
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, httperr.JSONBodyCap)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_json", err.Error()))
 		return
 	}

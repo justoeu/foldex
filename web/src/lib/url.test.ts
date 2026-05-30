@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { looksLikeUrl, safeImageUrl } from './url'
+import { looksLikeUrl, safeImageUrl, safeLinkHref } from './url'
 
 describe('looksLikeUrl', () => {
   it.each([
@@ -60,5 +60,37 @@ describe('safeImageUrl', () => {
     ['blob:https://example.com/abc'],// blob URLs not allowed (only the LinkDialog path supplies blobs, and it bypasses the helper)
   ])('rejects %j', (input) => {
     expect(safeImageUrl(input as never)).toBeUndefined()
+  })
+})
+
+describe('safeLinkHref', () => {
+  // The helper is stricter than safeImageUrl: NO site-relative paths (only
+  // absolute http(s)). The LinkDialog "open in browser" link must always be
+  // a navigable absolute URL.
+  it.each([
+    ['http://example.com', 'http://example.com'],
+    ['https://example.com/path', 'https://example.com/path'],
+    ['HTTPS://EXAMPLE.com', 'HTTPS://EXAMPLE.com'],
+    ['  https://example.com  ', 'https://example.com'],
+  ])('accepts %j', (input, expected) => {
+    expect(safeLinkHref(input)).toBe(expected)
+  })
+
+  it.each([
+    [null],
+    [undefined],
+    [''],
+    ['   '],
+    ['javascript:alert(1)'],
+    ['data:text/html,<script>alert(1)</script>'],
+    ['file:///etc/passwd'],
+    ['vbscript:msgbox(1)'],
+    ['mailto:a@b.c'],
+    ['tel:+5511'],
+    ['/site-relative'],          // safeLinkHref rejects site-relative — safeImageUrl accepts
+    ['//cdn.example.com'],
+    ['example.com'],
+  ])('rejects %j', (input) => {
+    expect(safeLinkHref(input as never)).toBeUndefined()
   })
 })

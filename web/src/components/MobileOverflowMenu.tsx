@@ -90,8 +90,8 @@ export function MobileOverflowMenu({
         className="fx-iconbtn"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={t('common.next', { defaultValue: 'More' })}
-        data-tooltip="More"
+        aria-label={t('common.more')}
+        data-tooltip={t('common.more')}
         onClick={() => setOpen((v) => !v)}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
