@@ -34,6 +34,9 @@ RUN addgroup -S foldex && adduser -S foldex -G foldex
 # working without a privileged init container. The /data directory ships
 # 0o700 so even if a future mount widens read access on the volume, the
 # private key file (0o600) plus the parent's narrow mode keeps it locked.
+# 0700 is intentional — the only resident is the VAPID private key
+# (push.LoadOrGenerate writes 0600 vapid.json here). If a future feature
+# adds a world-readable file, widen the dir then.
 RUN mkdir -p /data && chown foldex:foldex /data && chmod 0700 /data
 USER foldex:foldex
 ENTRYPOINT ["/foldex"]
