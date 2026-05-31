@@ -244,10 +244,10 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
                 <span
                   className="fx-meta-stat fx-meta-monitor"
                   data-tooltip={t('link_card.monitoring_tooltip', {
-                    interval: t('link_dialog.check_updates_' + link.check_interval),
+                    interval: t('link_card.interval_' + link.check_interval),
                   })}
                   aria-label={t('link_card.monitoring_tooltip', {
-                    interval: t('link_dialog.check_updates_' + link.check_interval),
+                    interval: t('link_card.interval_' + link.check_interval),
                   })}
                 >
                   <Icon d={I.bell} size={13} /> {t('link_card.monitoring')}

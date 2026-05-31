@@ -41,6 +41,12 @@ jobs:
         # (see CLAUDE.md §2); job stays green when below threshold.
         run: make coverage-check
         continue-on-error: true
+      - name: coverage-check shell harness
+        # Locks the missing-file + threshold-pass + threshold-fail branches
+        # of `make coverage-check`. Cheap (re-uses the cssvalid package
+        # already exercised by the previous step) so it never inflates the
+        # backend job materially.
+        run: bash backend/scripts/test-coverage-check.sh
       - name: govulncheck (informational)
         # Pre-built action avoids `go run` recompiling govulncheck from
         # source on every CI run (was ~30-45s per job). Same informational
@@ -87,6 +93,13 @@ jobs:
             if (!linesOK || !branchesOK) process.exit(1);
           "
         continue-on-error: true
+      - name: release.sh awk regression
+        # Locks the "first-match-only" invariant of update_version() in
+        # scripts/release.sh. Without it, a future sed/awk swap could
+        # silently rewrite nested "version": "x.y.z" fields (e.g. inside
+        # a dependencies block of a lockfile-shaped file) and corrupt
+        # the release commit.
+        run: bash scripts/test-release-awk.sh
       - name: bun audit (informational)
         working-directory: web
         # CVE scan for npm packages. Same informational-only contract as
