@@ -947,6 +947,70 @@ html.fx-dark { background: #0E1014; }
     0 14px 28px -14px color-mix(in srgb, var(--fx-accent) 40%, transparent);
 }
 
+/* ─── unseen-change badge on link cards ─────────────────────────────────
+   Painted when the changecheck worker detected a content change since the
+   user last acknowledged this link (link.last_change_detected_at >
+   link.change_seen_at). Sits LEFT of the pin badge so the two don't
+   collide visually when both apply. Amber gradient + soft pulse on the
+   card border so the user notices without the badge itself jumping. */
+.fx-card-update-badge {
+  position: absolute;
+  top: 10px;
+  /* Pin badge owns right: 10px. We sit 42px left of it so the two
+     never overlap regardless of card width. */
+  right: 42px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #F59E0B, #D97706);
+  color: #fff;
+  box-shadow: 0 6px 14px -4px color-mix(in srgb, #F59E0B 60%, transparent);
+  z-index: 2;
+  cursor: pointer;
+  border: 0;
+  transition: transform .12s;
+}
+.fx-card-update-badge:hover { transform: scale(1.08) rotate(4deg); }
+.fx-card-update-alert {
+  /* Amber-tinted border + halo so the card itself reads "fresh". Kept
+     subtle so a wall of monitored links doesn't become a wall of
+     warnings. */
+  border-color: color-mix(in srgb, #F59E0B 38%, var(--fx-border));
+  box-shadow:
+    0 1px 2px rgba(20, 16, 46, 0.06),
+    0 14px 28px -14px color-mix(in srgb, #F59E0B 50%, transparent);
+}
+
+/* ─── recent updates section in the sidebar ─────────────────────────────
+   Lives above "Frequent" tags. Each row is a thin link styled like the
+   other side rows but with an amber dot + a relative-time count. The
+   whole row is an <a target="_blank" rel="noopener noreferrer"> so the
+   user can jump straight to /go/<slug> without leaving the page. */
+.fx-side-recent { text-decoration: none; color: inherit; }
+.fx-side-recent .fx-side-count {
+  /* Time stamps tend to be longer than tag counts ("há 2d") — let them
+     breathe a bit and dim them so the title remains the focal point. */
+  font-variant-numeric: tabular-nums;
+  color: var(--fx-ink-4);
+  font-size: .72rem;
+}
+.fx-side-dot-recent {
+  /* Override the default tag-style dot color: amber so this section reads
+     as a distinct "updates" surface from the tag picker below. */
+  background: #F59E0B;
+}
+
+/* ─── push subscribe bell (Topbar) ───────────────────────────────────────
+   Shares geometry with the theme toggle; we only repaint the active state
+   (subscribed) so the user has visual feedback that pushes are wired. */
+.fx-themetoggle-active {
+  background: linear-gradient(135deg, var(--fx-accent), var(--fx-accent-3));
+  color: #fff;
+}
+.fx-themetoggle-active:hover { filter: brightness(1.05); }
+
 /* ─── compact folder card ──────────────────────────────────────────────
    Activated by the topbar's folder-compact toggle (per-context, persisted in
    foldex.foldersCompact.map). Hides the 2x2 preview tile area entirely and

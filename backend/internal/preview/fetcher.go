@@ -28,17 +28,10 @@ type Fetcher struct {
 }
 
 func NewFetcher(timeout time.Duration) *Fetcher {
-	tr := &http.Transport{
-		DialContext: (&safeDialer{base: &net.Dialer{Timeout: timeout}, strict: strictSSRF()}).DialContext,
-		// Keep TLS handshake bounded inside the overall client timeout.
-		TLSHandshakeTimeout:   timeout,
-		ResponseHeaderTimeout: timeout,
-		IdleConnTimeout:       30 * time.Second,
-	}
 	return &Fetcher{
 		client: &http.Client{
-			Timeout: timeout,
-			Transport: tr,
+			Timeout:   timeout,
+			Transport: NewSafeTransport(timeout),
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
 					return errors.New("too many redirects")
@@ -47,6 +40,56 @@ func NewFetcher(timeout time.Duration) *Fetcher {
 			},
 		},
 	}
+}
+
+// NewSafeTransport returns the same SSRF-guarded *http.Transport the preview
+// Fetcher uses internally. Exposed so adjacent packages (notably
+// internal/push, which fans Web Push notifications out to user-supplied
+// endpoint URLs) can route through the SAME dialer instead of re-rolling
+// their own — CLAUDE.md §4 invariant "the SSRF dialer is checked twice"
+// applies to every outbound user-controlled URL, not just preview fetches.
+//
+// `timeout` bounds dial + TLS handshake + response header read; the caller
+// still owns the *http.Client's overall Timeout.
+func NewSafeTransport(timeout time.Duration) *http.Transport {
+	return &http.Transport{
+		DialContext:           (&safeDialer{base: &net.Dialer{Timeout: timeout}, strict: strictSSRF()}).DialContext,
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
+		IdleConnTimeout:       30 * time.Second,
+	}
+}
+
+// GetRaw fetches the raw body of pageURL through the SSRF-guarded transport
+// and returns ([]byte, contentType, err). Used by the changecheck worker:
+// the preview pipeline only needs the head metadata (Fetch), but content
+// fingerprinting and feed parsing both need the full bytes. Body is capped
+// at 4 MiB — feeds and HTML pages we care about are well under that, and
+// without a cap a single oversized response could pin a worker's memory.
+func (f *Fetcher) GetRaw(ctx context.Context, pageURL string) ([]byte, string, error) {
+	u, err := url.Parse(pageURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, "", fmt.Errorf("invalid url")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("User-Agent", "FoldexChangeCheckBot/1.0 (+local)")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/rss+xml,application/atom+xml")
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, "", fmt.Errorf("status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, "", err
+	}
+	return body, resp.Header.Get("Content-Type"), nil
 }
 
 // Fetch returns the metadata for pageURL. SSRF guard is enforced in the dialer.

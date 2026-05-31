@@ -191,4 +191,20 @@ export const I = {
       <path d="M9 4h6l-1 6 4 4H6l4-4-1-6z" />
     </>
   ),
+  bell: (
+    <>
+      <path d="M6 19V12a6 6 0 0 1 12 0v7" />
+      <path d="M5 19h14" />
+      <path d="M10 22a2 2 0 0 0 4 0" />
+    </>
+  ),
+  bellOff: (
+    <>
+      <path d="M6 19V12a6 6 0 0 1 9.5-4.9" />
+      <path d="M18 12v7" />
+      <path d="M5 19h14" />
+      <path d="M10 22a2 2 0 0 0 4 0" />
+      <path d="M3 3l18 18" />
+    </>
+  ),
 }

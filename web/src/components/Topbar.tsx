@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { LocalePicker } from './LocalePicker'
 import { MobileOverflowMenu } from './MobileOverflowMenu'
+import { PushToggle } from './PushToggle'
 
 type View = 'home' | 'import' | 'stats'
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
@@ -273,6 +274,8 @@ export function Topbar({
       </div>
 
       <LocalePicker />
+
+      <PushToggle />
 
       <button
         className="fx-themetoggle"

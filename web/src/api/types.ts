@@ -25,6 +25,13 @@ export type Link = {
   folder_id?: number | null
   created_at: string
   updated_at: string
+  // Change-detection fields (migration 000010). Nullable across the board —
+  // a link with check_interval=null is opted out.
+  check_interval?: 'hourly' | 'daily' | 'weekly' | null
+  last_checked_at?: string | null
+  last_fingerprint?: string | null
+  last_change_detected_at?: string | null
+  change_seen_at?: string | null
   tags: Tag[]
 }
 
@@ -37,6 +44,7 @@ export type LinkCreate = {
   tag_ids?: number[]
   pinned?: boolean
   folder_id?: number | null
+  check_interval?: 'hourly' | 'daily' | 'weekly' | null
 }
 
 export type LinkUpdate = Partial<{
@@ -48,6 +56,8 @@ export type LinkUpdate = Partial<{
   tag_ids: number[]
   pinned: boolean
   folder_id: number | null
+  // null on PATCH = opt out (backend wipes fingerprint + timestamps).
+  check_interval: 'hourly' | 'daily' | 'weekly' | null
 }>
 
 export type TagCreate = {

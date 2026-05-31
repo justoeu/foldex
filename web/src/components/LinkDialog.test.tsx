@@ -92,4 +92,72 @@ describe('LinkDialog', () => {
     await waitFor(() => expect(state.links).toHaveLength(1))
     expect(state.links[0].tags[0].name).toBe('jira')
   })
+
+  // ─── change-detection select (Phase 5) ─────────────────────────────────
+  // The select drives link.check_interval — null/empty = opt-out,
+  // 'hourly'/'daily'/'weekly' = opt-in. We assert each value lands on the
+  // POST/PATCH body so the backend's tri-state DTO receives the explicit
+  // value (or null) rather than "field absent".
+
+  it('CREATE: ships check_interval=null when the select stays at "Disabled"', async () => {
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://x.test/a')
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
+    await waitFor(() => expect(state.links).toHaveLength(1))
+    // null in body == backend opt-out (default).
+    expect(state.links[0].check_interval ?? null).toBeNull()
+  })
+
+  it('CREATE: ships check_interval=daily when the user picks "Every day"', async () => {
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://x.test/b')
+    const select = screen.getByRole('combobox', { name: /check for changes/i })
+    await user.selectOptions(select, 'daily')
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
+    await waitFor(() => expect(state.links).toHaveLength(1))
+    expect(state.links[0].check_interval).toBe('daily')
+  })
+
+  it.each(['hourly', 'weekly'] as const)('CREATE: ships check_interval=%s', async (interval) => {
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), `https://x.test/${interval}`)
+    const select = screen.getByRole('combobox', { name: /check for changes/i })
+    await user.selectOptions(select, interval)
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
+    await waitFor(() => expect(state.links).toHaveLength(1))
+    expect(state.links[0].check_interval).toBe(interval)
+  })
+
+  it('EDIT: setting "Disabled" sends check_interval=null on PATCH', async () => {
+    // Seed an opted-in link, open it for edit, switch the select to off.
+    state.links = [{
+      id: 42,
+      url: 'https://x.test/edit',
+      title: 'editme',
+      slug: 'editme',
+      description: null,
+      favicon_url: null,
+      og_image_url: null,
+      click_count: 0,
+      preview_status: 'ok',
+      preview_error: null,
+      last_clicked_at: null,
+      pinned: false,
+      folder_id: null,
+      created_at: '',
+      updated_at: '',
+      check_interval: 'daily',
+      tags: [],
+    }]
+    renderWithProviders(<LinkDialog open link={state.links[0]} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    const select = screen.getByRole('combobox', { name: /check for changes/i })
+    expect((select as HTMLSelectElement).value).toBe('daily')
+    await user.selectOptions(select, '')
+    await user.click(screen.getByRole('button', { name: /Save changes/i }))
+    await waitFor(() => expect(state.links[0].check_interval ?? null).toBeNull())
+  })
 })

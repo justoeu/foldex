@@ -39,7 +39,9 @@ const linkColumns = `
     COALESCE(cl.cnt, 0) AS click_count,
     l.preview_status, l.preview_error,
     cl.last_at AS last_clicked_at,
-    l.pinned, l.folder_id, l.created_at, l.updated_at
+    l.pinned, l.folder_id, l.created_at, l.updated_at,
+    l.check_interval, l.last_checked_at, l.last_fingerprint,
+    l.last_change_detected_at, l.change_seen_at, l.last_check_error
 `
 
 const linkFrom = `
@@ -83,10 +85,10 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Link, error) {
 			candidate = fmt.Sprintf("%s-%d", slug, attempt+1)
 		}
 		err = tx.QueryRow(ctx, `
-            INSERT INTO link (url, title, slug, description, pinned, folder_id)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO link (url, title, slug, description, pinned, folder_id, check_interval)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id
-        `, in.URL, in.Title, candidate, in.Description, in.Pinned, in.FolderID).Scan(&id)
+        `, in.URL, in.Title, candidate, in.Description, in.Pinned, in.FolderID, in.CheckInterval).Scan(&id)
 		if err == nil {
 			break
 		}
@@ -150,6 +152,8 @@ func (r *Repository) Get(ctx context.Context, id int64) (Link, error) {
 		&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
 		&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
 		&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
+		&l.CheckInterval, &l.LastCheckedAt, &l.LastFingerprint,
+		&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Link{}, httperr.ErrNotFound
@@ -177,6 +181,8 @@ func (r *Repository) GetBySlug(ctx context.Context, slug string) (Link, error) {
 		&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
 		&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
 		&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
+		&l.CheckInterval, &l.LastCheckedAt, &l.LastFingerprint,
+		&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Link{}, httperr.ErrNotFound
@@ -267,6 +273,8 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Link, error) {
 			&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
 			&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
 			&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
+			&l.CheckInterval, &l.LastCheckedAt, &l.LastFingerprint,
+			&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError,
 		); err != nil {
 			return nil, err
 		}
@@ -359,6 +367,25 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Link
 		sets = append(sets, fmt.Sprintf("slug = $%d", i))
 		args = append(args, newSlug)
 		i++
+	}
+	// check_interval: tri-state. CheckIntervalSet=true + CheckInterval=nil means
+	// "opt-out" — clearing the full change-check column group (fingerprint,
+	// detection timestamps, seen marker) so re-enabling later doesn't replay
+	// a stale "you have updates" badge from before. CheckInterval set to a
+	// value just flips the opt-in flag; we let the worker establish a fresh
+	// fingerprint on its first pass.
+	if in.CheckIntervalSet {
+		sets = append(sets, fmt.Sprintf("check_interval = $%d", i))
+		args = append(args, in.CheckInterval)
+		i++
+		if in.CheckInterval == nil {
+			sets = append(sets,
+				"last_checked_at = NULL",
+				"last_fingerprint = NULL",
+				"last_change_detected_at = NULL",
+				"change_seen_at = NULL",
+			)
+		}
 	}
 	if len(sets) > 0 {
 		sets = append(sets, "updated_at = now()")
@@ -495,6 +522,169 @@ func (r *Repository) ClearOGImage(ctx context.Context, id int64) error {
     `, id)
 	if err != nil {
 		return fmt.Errorf("clear og_image_url: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return httperr.ErrNotFound
+	}
+	return nil
+}
+
+// MarkChangeSeen flips `change_seen_at` to now() so the unseen-badge in the
+// UI clears. No-op (404) if the link has no detected change yet — without
+// that guard a stale `change_seen_at > last_change_detected_at` row could
+// suppress the badge forever once the next detection fires.
+func (r *Repository) MarkChangeSeen(ctx context.Context, id int64) error {
+	ct, err := r.pool.Exec(ctx, `
+        UPDATE link
+        SET change_seen_at = now()
+        WHERE id = $1 AND last_change_detected_at IS NOT NULL
+    `, id)
+	if err != nil {
+		return fmt.Errorf("mark change seen: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return httperr.ErrNotFound
+	}
+	return nil
+}
+
+// ListRecentChanges feeds the sidebar's "Recent updates" section. Returns the
+// most recently changed links within the given window (capped at limit).
+// Pinned ordering does NOT apply here — sort is purely by detection time, so
+// the user sees the freshest update first.
+func (r *Repository) ListRecentChanges(ctx context.Context, sinceSeconds, limit int) ([]Link, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if sinceSeconds <= 0 {
+		sinceSeconds = 7 * 24 * 60 * 60
+	}
+	sql := `SELECT ` + linkColumns + linkFrom + `
+        WHERE l.last_change_detected_at IS NOT NULL
+          AND l.last_change_detected_at > now() - make_interval(secs => $1::int)
+        ORDER BY l.last_change_detected_at DESC
+        LIMIT $2`
+	rows, err := r.pool.Query(ctx, sql, sinceSeconds, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list recent changes: %w", err)
+	}
+	defer rows.Close()
+
+	links := make([]Link, 0)
+	ids := []int64{}
+	for rows.Next() {
+		var l Link
+		if err := rows.Scan(
+			&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
+			&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
+			&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
+			&l.CheckInterval, &l.LastCheckedAt, &l.LastFingerprint,
+			&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError,
+		); err != nil {
+			return nil, err
+		}
+		l.Tags = []Tag{}
+		links = append(links, l)
+		ids = append(ids, l.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return links, nil
+	}
+	tagsByLink, err := r.tagsFor(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range links {
+		if t, ok := tagsByLink[links[i].ID]; ok {
+			links[i].Tags = t
+		}
+	}
+	return links, nil
+}
+
+// FindDueForCheck returns link IDs whose check_interval has elapsed since
+// the last check (or which have never been checked). Used by the changecheck
+// worker's tick. Cap at limit so a single tick can't enqueue an unbounded
+// backlog — anything left waits one more interval, which is fine.
+func (r *Repository) FindDueForCheck(ctx context.Context, limit int) ([]int64, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 256
+	}
+	rows, err := r.pool.Query(ctx, `
+        SELECT id FROM link
+        WHERE check_interval IS NOT NULL
+          AND (
+              last_checked_at IS NULL
+              OR last_checked_at < now() - CASE check_interval
+                  WHEN 'hourly' THEN interval '1 hour'
+                  WHEN 'daily'  THEN interval '1 day'
+                  WHEN 'weekly' THEN interval '7 days'
+              END
+          )
+        ORDER BY COALESCE(last_checked_at, 'epoch'::timestamptz) ASC, id ASC
+        LIMIT $1
+    `, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find due for check: %w", err)
+	}
+	defer rows.Close()
+	out := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// CheckResult is the outcome of a single worker run against a link.
+type CheckResult struct {
+	Fingerprint string // "feed:<hex>" or "content:<hex>" — empty when err non-nil
+	Changed     bool   // true only when previous fingerprint existed AND differs
+	FetchErr    string // free-form; nil-safe, "" means success
+}
+
+// RecordCheckResult bumps last_checked_at always, last_fingerprint when we got
+// one, and last_change_detected_at only when Changed is true. The "first
+// observation never counts as a change" rule lives here — the caller passes
+// `Changed=false` when the previous fingerprint was empty, so opt-in alone
+// doesn't trigger a spurious push on the very first scan.
+//
+// last_check_error is set to the FetchErr message on failure and cleared on
+// success. Importantly we do NOT touch preview_error — that column belongs
+// to the preview worker (CLAUDE.md §4 invariant: "Worker is the only writer
+// of preview_status"). Cross-writing would confuse LinkCard's preview
+// failure surface the next time someone renders preview_error.
+func (r *Repository) RecordCheckResult(ctx context.Context, id int64, res CheckResult) error {
+	var fp any = nil
+	if res.Fingerprint != "" {
+		fp = res.Fingerprint
+	}
+	// Empty FetchErr → clear last_check_error so a recovering link drops
+	// the error message. Non-empty → stamp it.
+	var checkErr any = nil
+	if res.FetchErr != "" {
+		checkErr = res.FetchErr
+	}
+	sql := `
+        UPDATE link
+        SET last_checked_at = now(),
+            last_fingerprint = COALESCE($1, last_fingerprint),
+            last_check_error = $2`
+	if res.Changed {
+		sql += `,
+            last_change_detected_at = now(),
+            change_seen_at = NULL`
+	}
+	sql += ` WHERE id = $3`
+	ct, err := r.pool.Exec(ctx, sql, fp, checkErr, id)
+	if err != nil {
+		return fmt.Errorf("record check result: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
 		return httperr.ErrNotFound

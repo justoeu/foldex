@@ -12,9 +12,12 @@ import (
 	"time"
 
 	"foldex/internal/backup"
+	"foldex/internal/changecheck"
 	"foldex/internal/config"
 	"foldex/internal/db"
+	"foldex/internal/links"
 	"foldex/internal/preview"
+	"foldex/internal/push"
 	"foldex/internal/screenshot"
 	"foldex/internal/server"
 	"foldex/internal/stats"
@@ -72,12 +75,50 @@ func main() {
 	}
 	worker.Start(rootCtx)
 
+	// VAPID + push.Sender — loaded BEFORE the changecheck worker so we can
+	// inject the sender as its Notify dep. A keypair load failure is fatal
+	// only when an operator pinned VAPID_PUBLIC_KEY/PRIVATE_KEY partially;
+	// otherwise the autogen path keeps booting going.
+	vapid, err := push.LoadOrGenerate(
+		cfg.VAPIDPublicKey, cfg.VAPIDPrivateKey, cfg.VAPIDSubject,
+		cfg.VAPIDStatePath, cfg.VAPIDAutoGenerate, logger,
+	)
+	if err != nil {
+		logger.Error("vapid setup failed", "err", err)
+		os.Exit(1)
+	}
+	pushRepo := push.NewRepository(pool)
+	pushSender := push.NewSender(vapid, pushRepo, logger)
+	pushHandler := push.NewHandler(vapid, pushRepo, pushSender)
+
+	// Change-check worker is opt-in per link (link.check_interval). When the
+	// kill-switch is off OR no link is opted in the worker still runs but its
+	// scan returns an empty list, so the cost is essentially a goroutine + a
+	// ticker.
+	var ccWorker *changecheck.Worker
+	if cfg.ChangeCheckEnabled {
+		ccFetcher := preview.NewFetcher(time.Duration(cfg.ChangeCheckFetchTimeoutSec) * time.Second)
+		ccWorker = changecheck.New(
+			links.NewRepository(pool),
+			ccFetcher,
+			pushSenderAdapter{s: pushSender},
+			changecheck.Options{
+				Concurrency:  cfg.ChangeCheckConcurrency,
+				ScanInterval: time.Duration(cfg.ChangeCheckScanIntervalSec) * time.Second,
+				FetchTimeout: time.Duration(cfg.ChangeCheckFetchTimeoutSec) * time.Second,
+			},
+			logger,
+		)
+		ccWorker.Start(rootCtx)
+	}
+
 	deps := server.Deps{
-		Pool:    pool,
-		Worker:  worker,
-		Logger:  logger,
-		Config:  cfg,
-		Storage: storageClient,
+		Pool:        pool,
+		Worker:      worker,
+		Logger:      logger,
+		Config:      cfg,
+		Storage:     storageClient,
+		PushHandler: pushHandler,
 	}
 	if storageClient != nil {
 		deps.Screenshotter = screenshotFunc(screenshot.Capture)
@@ -128,6 +169,9 @@ func main() {
 		logger.Error("graceful shutdown failed", "err", err)
 	}
 	worker.Stop()
+	if ccWorker != nil {
+		ccWorker.Stop()
+	}
 	logger.Info("bye")
 }
 
@@ -136,6 +180,21 @@ type screenshotFunc func(ctx context.Context, pageURL string) ([]byte, error)
 
 func (f screenshotFunc) Capture(ctx context.Context, pageURL string) ([]byte, error) {
 	return f(ctx, pageURL)
+}
+
+// pushSenderAdapter bridges *push.Sender (which speaks push.Notification) to
+// changecheck.Sender (which speaks changecheck.Notification). Both shapes
+// are field-for-field identical — the adapter exists to avoid an import
+// cycle between the two packages.
+type pushSenderAdapter struct{ s *push.Sender }
+
+func (a pushSenderAdapter) Notify(ctx context.Context, n changecheck.Notification) error {
+	return a.s.Notify(ctx, push.Notification{
+		LinkID: n.LinkID,
+		Title:  n.Title,
+		URL:    n.URL,
+		Kind:   n.Kind,
+	})
 }
 
 // storageStatsAdapter bridges storage.Client to the stats.StorageStatter

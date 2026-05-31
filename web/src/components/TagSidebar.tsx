@@ -4,6 +4,8 @@ import { Icon, I } from './icons'
 import { TagDialog } from './TagDialog'
 import { TagManagerDialog } from './TagManagerDialog'
 import { useTags } from '../api/tags'
+import { useRecentChanges } from '../api/links'
+import { relativeTime } from '../lib/time'
 import { VERSION, BUILD_DATE } from '../version'
 
 type Props = {
@@ -28,6 +30,7 @@ const OTHER_INITIAL = 15
 
 const FREQ_OPEN_KEY = 'foldex.sidebar.freqOpen'
 const OTHER_OPEN_KEY = 'foldex.sidebar.otherOpen'
+const RECENT_OPEN_KEY = 'foldex.sidebar.recentOpen'
 
 function readBool(key: string, def: boolean): boolean {
   if (typeof localStorage === 'undefined') return def
@@ -172,6 +175,8 @@ export function TagSidebar({
           <span className="fx-side-count">{totalLinks}</span>
         </button>
 
+        <RecentChangesSection />
+
         {isLoading && <div style={{ padding: 12, color: 'var(--fx-ink-4)' }}>{t('sidebar.loading')}</div>}
 
         {freq.length > 0 && (
@@ -256,6 +261,45 @@ export function TagSidebar({
       <TagDialog open={creating} onClose={() => setCreating(false)} />
       <TagManagerDialog open={managing} onClose={() => setManaging(false)} />
     </aside>
+  )
+}
+
+function RecentChangesSection() {
+  const { t } = useTranslation()
+  const { data: links = [], isLoading } = useRecentChanges(7, 10)
+  const [open, setOpen] = useState(() => readBool(RECENT_OPEN_KEY, true))
+
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(RECENT_OPEN_KEY, open ? '1' : '0')
+  }, [open])
+
+  if (!isLoading && links.length === 0) return null
+
+  return (
+    <>
+      <SectionHeader
+        label={t('sidebar.recent_updates')}
+        open={open}
+        onToggle={() => setOpen((v) => !v)}
+      />
+      {open && links.map((link) => (
+        <a
+          key={link.id}
+          className="fx-side-row fx-side-recent"
+          href={`/go/${link.slug || link.id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-tooltip={link.title}
+        >
+          <span className="fx-side-dot fx-side-dot-recent" />
+          <span className="fx-side-label">{link.title}</span>
+          <span className="fx-side-count">
+            {link.last_change_detected_at ? relativeTime(link.last_change_detected_at, t) : ''}
+          </span>
+        </a>
+      ))}
+    </>
   )
 }
 

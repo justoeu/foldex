@@ -5,8 +5,15 @@ import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
 import { useConfirm } from './ConfirmDialog'
-import { goHref, useDeleteLink, usePinLink, useRefreshPreview } from '../api/links'
+import {
+  goHref,
+  useDeleteLink,
+  useMarkChangeSeen,
+  usePinLink,
+  useRefreshPreview,
+} from '../api/links'
 import { safeImageUrl } from '../lib/url'
+import { relativeTime } from '../lib/time'
 import type { Link } from '../api/types'
 
 type Props = {
@@ -41,6 +48,7 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
   const del = useDeleteLink()
   const refresh = useRefreshPreview()
   const pin = usePinLink()
+  const markSeen = useMarkChangeSeen()
   const confirm = useConfirm()
   const qc = useQueryClient()
   const [previewErrored, setPreviewErrored] = useState(false)
@@ -50,6 +58,14 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
   // Optimistic — see usePinLink. Badge flips immediately; server-side reorder
   // catches up on onSettled invalidation.
   const togglePin = () => pin.mutate({ id: link.id, pinned: !link.pinned })
+
+  // "Unseen update" badge shows when:
+  //   - the worker has ever recorded a change for this link, AND
+  //   - the user hasn't acknowledged it (either change_seen_at is unset, or
+  //     it's older than the most recent change).
+  const hasUnseenChange =
+    !!link.last_change_detected_at &&
+    (!link.change_seen_at || link.change_seen_at < link.last_change_detected_at)
   const [dragOver, setDragOver] = useState(false)
   const [dragging, setDragging] = useState(false)
 
@@ -92,6 +108,7 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
       className={
         'fx-card fx-card-' + density +
         (link.pinned ? ' fx-card-pinned' : '') +
+        (hasUnseenChange ? ' fx-card-update-alert' : '') +
         (dragging ? ' fx-card-dragging' : '') +
         (dragOver ? ' fx-card-drop-over' : '')
       }
@@ -138,6 +155,23 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
       >
         <Icon d={I.pin} size={13} stroke={2} />
       </button>
+
+      {hasUnseenChange && (
+        <button
+          className="fx-card-update-badge"
+          onClick={(e) => {
+            e.stopPropagation()
+            markSeen.mutate(link.id)
+          }}
+          aria-label={t('link_card.mark_seen_aria')}
+          data-tooltip={t('link_card.update_detected_tooltip', {
+            when: relativeTime(link.last_change_detected_at!, t),
+          })}
+          data-tooltip-side="left"
+        >
+          <Icon d={I.bell} size={13} stroke={2} />
+        </button>
+      )}
 
       {showPreview && (
         <a className="fx-preview fx-preview-img" href={goHref(link)} target="_blank" rel="noopener noreferrer" onClick={onGo}>
