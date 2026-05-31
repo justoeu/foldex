@@ -27,5 +27,13 @@ COPY db/migrations /migrations
 EXPOSE 9089
 # Run as non-root for security (chromium requires --no-sandbox when running as root).
 RUN addgroup -S foldex && adduser -S foldex -G foldex
+# /data holds operator-persisted state: the autogen VAPID keypair lands at
+# /data/vapid.json (config.VAPID_STATE_PATH default). Docker named volumes
+# inherit ownership of the underlying directory on first mount, so creating
+# it pre-owned by foldex:foldex is what keeps the LoadOrGenerate write path
+# working without a privileged init container. The /data directory ships
+# 0o700 so even if a future mount widens read access on the volume, the
+# private key file (0o600) plus the parent's narrow mode keeps it locked.
+RUN mkdir -p /data && chown foldex:foldex /data && chmod 0700 /data
 USER foldex:foldex
 ENTRYPOINT ["/foldex"]
