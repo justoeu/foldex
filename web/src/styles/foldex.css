@@ -186,14 +186,15 @@
 
 .fx-topbar {
   display: grid;
-  /* 9 explicit columns matching the 9 children in Topbar.tsx (brand,
-     quicknav, search, sort segment, view segment, locale picker, theme
-     toggle, new-folder CTA, new-link CTA). Only the search column has a
-     flexible track — `minmax(0, 1fr)` lets it shrink below its content's
-     intrinsic width when the row is tight, so the right-side CTAs never
-     pop out of the rounded surface. Adding the locale picker pushed an
-     `auto auto 1fr auto auto auto` grid over the available width at
-     normal viewports; declaring all 9 tracks fixes that. */
+  /* 10 explicit columns matching the 10 children in Topbar.tsx (brand,
+     quicknav, search, sort segment, view segment, locale picker, push
+     toggle, theme toggle, new-folder CTA, new-link CTA). Only the search
+     column has a flexible track — `minmax(140px, 1fr)` lets it shrink
+     below its content's intrinsic width when the row is tight, so the
+     right-side CTAs never pop out of the rounded surface. The push
+     toggle was added in the change-detection feature; without its own
+     explicit track the implicit-grid 10th child overflowed the surface
+     and cut the "New link" CTA in half. */
   grid-template-columns:
     auto                 /* brand */
     auto                 /* quicknav */
@@ -201,6 +202,7 @@
     auto                 /* sort */
     auto                 /* view + density */
     auto                 /* locale picker */
+    auto                 /* push toggle (bell) */
     auto                 /* theme toggle */
     auto                 /* nova pasta CTA */
     auto;                /* novo link CTA */
