@@ -236,6 +236,29 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
                 </span>
               </>
             )}
+            {/* "Monitored" indicator — surfaces the per-link change_interval
+                opt-in state regardless of whether a change has been detected
+                yet. Reserved space + amber halo (.fx-card-update-alert) keep
+                signalling "has unseen update"; this gray-toned chip just
+                signals "this link is being watched". Click count + last
+                click still own the leftmost slots so the foot stays
+                scannable at a glance. */}
+            {link.check_interval && (
+              <>
+                <span className="fx-meta-sep" />
+                <span
+                  className="fx-meta-stat fx-meta-monitor"
+                  data-tooltip={t('link_card.monitoring_tooltip', {
+                    interval: t('link_dialog.check_updates_' + link.check_interval),
+                  })}
+                  aria-label={t('link_card.monitoring_tooltip', {
+                    interval: t('link_dialog.check_updates_' + link.check_interval),
+                  })}
+                >
+                  <Icon d={I.bell} size={13} /> {t('link_card.monitoring')}
+                </span>
+              </>
+            )}
           </div>
 
           <div className="fx-card-actions">
