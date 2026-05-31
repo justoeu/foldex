@@ -200,6 +200,7 @@ Before you announce "done," verify each item below. If any fails, the change is 
 - [ ] If a migration was added: applied to the running Postgres (`docker run migrate/migrate ... up`) and the backend recompiled to use the new schema.
 - [ ] User-visible UI changes manually validated in a real browser when behavior changes (not just type-check).
 - [ ] **Post-implementation agent sweep run** — see §9. Spawn the three agents (code-review, test-quality, security) in parallel against this session's diff and surface every HIGH finding before declaring done. This is **mandatory for every implementation task**, no exceptions.
+- [ ] **Semver bump shipped** — see §6.2. After the merge to main, run `make release-{patch,minor,major}` and push the tag. `:latest` is not a release; only a `vX.Y.Z` tag is.
 
 ### 6.1 Pre-push gate — MANDATORY before ANY commit / push / PR
 
@@ -219,6 +220,29 @@ Concrete checklist that must pass locally before pushing:
 If the workflow file itself changed, also `grep -E '^\s+run:' .github/workflows/ci.yml` and execute each `run:` line locally — it takes a minute and catches workflow drift before it hits the runner.
 
 The only exception is a change that **cannot** be validated locally (e.g. matrix arm64 runner specifics, secrets-gated steps). In that case, document the exception in the PR description and ask the user to confirm the CI run is acceptable before merge.
+
+### 6.2 Version bump — MANDATORY after every merge to main
+
+Every merge to main ships code. Every shipment gets a version. `:latest` keeps moving on each merge but **a moving tag is not a release** — operators can't pin to it deterministically, rollbacks have nothing to roll back to, and a regression that lands days later is impossible to bisect without `vX.Y.Z` tags.
+
+Bump policy:
+
+| Merged work               | Command              | Example       |
+|---------------------------|----------------------|---------------|
+| feat (backwards-compat)   | `make release-minor` | 1.0.8 → 1.1.0 |
+| fix / chore / ci / docs   | `make release-patch` | 1.0.8 → 1.0.9 |
+| breaking API/schema change | `make release-major` | 1.0.8 → 2.0.0 |
+| mixed (feat + fix in same window) | `make release-minor` (features dominate) | |
+
+`make release-X` runs `scripts/release.sh`, which refuses to run with a dirty tree OR off-main. It bumps `web/package.json` + `extension/manifest.json`, commits, tags `vX.Y.Z`, and prompts to push. Pushing the tag triggers `ci.yml` (it watches `tags: ['v*']`), which publishes `:vX.Y.Z`, `:vX.Y`, `:vX`, `:latest` for both `foldex-backend` and `foldex-web`.
+
+After the bump, surface the new version to the user with the matching docker pin instruction:
+
+```
+FOLDEX_VERSION=v1.2.0  # in .env
+```
+
+If the user explicitly opts out for the current session ("don't bump yet, I'm batching the next 3 PRs into one release"), record the deferral in the session log and resume the policy on the next merge. Default is bump-every-merge — silence is not opt-out.
 
 ## 7. Style choices — the project's defaults
 
