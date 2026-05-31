@@ -89,9 +89,19 @@ echo
 # manifest_version or a dependency version.
 update_version() {
   local file="$1"
-  # macOS sed needs the empty -i suffix.
-  sed -i.bak -E "0,/(\"version\"[[:space:]]*:[[:space:]]*)\"[0-9]+\.[0-9]+\.[0-9]+\"/s//\1\"$NEW\"/" "$file"
-  rm -f "$file.bak"
+  # Cross-platform first-match-only replace via awk — BSD sed (macOS)
+  # rejects the GNU `0,/regex/` range form and there's no portable
+  # equivalent without spelunking through `1,/regex/` quirks. awk
+  # tracks `done` itself, so the substitution fires once regardless
+  # of how many "version" strings appear later (e.g. dep versions).
+  awk -v new="$NEW" '
+    !done && /"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"/ {
+      sub(/"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"/,
+          "\"version\": \"" new "\"")
+      done = 1
+    }
+    { print }
+  ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
 }
 
 update_version "$PKG"
