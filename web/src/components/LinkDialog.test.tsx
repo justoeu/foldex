@@ -160,4 +160,22 @@ describe('LinkDialog', () => {
     await user.click(screen.getByRole('button', { name: /Save changes/i }))
     await waitFor(() => expect(state.links[0].check_interval ?? null).toBeNull())
   })
+
+  // Next-check preview hint — locks the conditional render so removing the
+  // span fails a test rather than silently dropping the UX.
+  it('NEXT-CHECK PREVIEW: hidden when interval stays "Disabled"', () => {
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    expect(screen.queryByTestId('check-next-preview')).not.toBeInTheDocument()
+  })
+
+  it('NEXT-CHECK PREVIEW: appears when user picks an interval', async () => {
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    const select = screen.getByRole('combobox', { name: /check for changes/i })
+    await user.selectOptions(select, 'daily')
+    const hint = await screen.findByTestId('check-next-preview')
+    // A fresh create (no last_checked_at) always renders the "soon" copy.
+    expect(hint.textContent).toMatch(/Next check:/i)
+    expect(hint.textContent).toMatch(/soon/i)
+  })
 })

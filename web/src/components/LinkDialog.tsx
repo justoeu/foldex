@@ -9,6 +9,7 @@ import { useCreateLink, useUpdateLink, uploadLinkImage, removeLinkImage } from '
 import { useCreateTag, useTags } from '../api/tags'
 import { useQueryClient } from '@tanstack/react-query'
 import { safeImageUrl, safeLinkHref } from '../lib/url'
+import { nextCheckPreview, type CheckInterval } from '../lib/time'
 import type { Link, Tag } from '../api/types'
 
 type Props = {
@@ -77,7 +78,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   // null = opt-out (default); 'hourly'/'daily'/'weekly' = opt-in.
   // Tracked separately from "interval" string so we can pass either an
   // explicit value or null through to the backend tri-state DTO.
-  const [checkInterval, setCheckInterval] = useState<'hourly' | 'daily' | 'weekly' | null>(null)
+  const [checkInterval, setCheckInterval] = useState<CheckInterval | null>(null)
   const [selected, setSelected] = useState<SelectedTag[]>([])
   const [tagFilter, setTagFilter] = useState('')
   const [tagPage, setTagPage] = useState(0)
@@ -562,9 +563,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                 value={checkInterval ?? ''}
                 onChange={(e) => {
                   const v = e.target.value
-                  setCheckInterval(
-                    v === 'hourly' || v === 'daily' || v === 'weekly' ? v : null,
-                  )
+                  setCheckInterval(v === 'hourly' || v === 'daily' || v === 'weekly' ? v : null)
                 }}
                 aria-label={t('link_dialog.check_updates_label')}
               >
@@ -574,6 +573,13 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                 <option value="weekly">{t('link_dialog.check_updates_weekly')}</option>
               </select>
               <span className="fx-field-hint">{t('link_dialog.check_updates_hint')}</span>
+              {checkInterval && (
+                <span className="fx-field-hint" data-testid="check-next-preview">
+                  {t('link_dialog.check_updates_next', {
+                    when: nextCheckPreview(checkInterval, link?.last_checked_at, t),
+                  })}
+                </span>
+              )}
             </label>
           </div>
 
