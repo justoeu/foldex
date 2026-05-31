@@ -983,6 +983,20 @@ html.fx-dark { background: #0E1014; }
     0 14px 28px -14px color-mix(in srgb, #F59E0B 50%, transparent);
 }
 
+/* ─── "monitored" footer chip on link cards ─────────────────────────────
+   Surfaces link.check_interval opt-in independently of detection state.
+   Reserved gray tone so it doesn't compete visually with the amber halo
+   (.fx-card-update-alert) that signals "you have an unseen update". The
+   bell icon reuses the topbar push toggle's symbol — bell = change
+   detection across the whole UI. */
+.fx-meta-monitor {
+  color: var(--fx-ink-4);
+}
+.fx-meta-monitor svg {
+  color: var(--fx-accent);
+  opacity: 0.7;
+}
+
 /* ─── recent updates section in the sidebar ─────────────────────────────
    Lives above "Frequent" tags. Each row is a thin link styled like the
    other side rows but with an amber dot + a relative-time count. The

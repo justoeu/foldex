@@ -145,6 +145,8 @@
     "unpin_tooltip": "Desafixar",
     "mark_seen_aria": "Marcar atualização como vista",
     "update_detected_tooltip": "Atualizado {{when}} — clique para descartar",
+    "monitoring": "Monitorado",
+    "monitoring_tooltip": "Verificando alterações ({{interval}})",
     "edit_link": "Editar link",
     "delete_link": "Apagar link",
     "refresh_preview": "Recapturar preview",
