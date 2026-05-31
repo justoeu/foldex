@@ -6,9 +6,9 @@
   <img src="docs/assets/home-empty.png" alt="foldex — self-hosted bookmark manager (home view with empty state, tag sidebar, topbar with search + sort + density controls, New folder / New link CTAs)" width="100%"/>
 </p>
 
-> Self-hosted bookmark manager with rich tagging, nestable folders, click tracking, visual URL previews, full backup, and a browser extension.
+> Self-hosted bookmark manager with rich tagging, nestable folders, click tracking, visual URL previews, **per-link change detection + Web Push**, full backup, and a browser extension.
 
-Foldex is a personal "smart bookmarks bar" — it stores links organized by **nestable folders + M:N tags**, shows **what you actually click** (telemetry via `/go/:id`), captures every URL visually (OG image / favicon / screenshot fallback), and runs **entirely on your own machine** (Postgres + MinIO + Go + React in containers).
+Foldex is a personal "smart bookmarks bar" — it stores links organized by **nestable folders + M:N tags**, shows **what you actually click** (telemetry via `/go/:id`), captures every URL visually (OG image / favicon / screenshot fallback), **watches the pages you care about** (RSS/Atom feed fingerprint with content-hash fallback) and pings you via Web Push when they change, and runs **entirely on your own machine** (Postgres + MinIO + Go + React in containers).
 
 > Stack: **Go 1.26 · PostgreSQL 16 · MinIO · Vite 8 + React 19 + bun · Vitest 4**. Versioning policy + invariants in [`CLAUDE.md`](CLAUDE.md).
 
@@ -30,6 +30,7 @@ Native bookmarks are fine for "save a page quickly and forget it". Once you pass
 | **Vendor lock-in.** Leaving Chrome = export HTML + lose metadata.               | Export to **Netscape HTML** (universal compat) **OR** JSON v2 (with folders + click_count) **OR** full backup ZIP. Importer accepts all three. |
 | **Pinned/favorites = a tiny separate folder.** Visual only.                     | `pinned` is a real column on the table. `ORDER BY pinned DESC, …` applies in every sort mode. Gradient badge always visible. |
 | **Data embedded in the browser.** Switched machines? Reinstalled Chrome? Pray. | Postgres + MinIO in containers. `make up` on a new machine and your backup ZIP restores everything (DB + images) in ~minutes. |
+| **No way to know when a page you bookmarked changes.** A board, a release notes page, a status page — you find out by opening it. | Per-link opt-in (hourly/daily/weekly). Backend runs a fingerprint worker (RSS/Atom feed if present, content-hash fallback) and fires a **Web Push notification** when content changes. Bell in the Topbar manages the subscription; amber badge on the card flags unseen changes; "Recent updates" section in the sidebar lists the last N. Works with the tab closed (Service Worker). |
 
 ### Real scenarios that flipped the switch (native bookmarks → foldex)
 
@@ -38,6 +39,7 @@ Native bookmarks are fine for "save a page quickly and forget it". Once you pass
 - **"Switch machines without losing anything."** → 1 button in the UI generates the full backup ZIP. Another button on the new machine restores with `mode=wipe`.
 - **"The same link lives in 3 contexts (work + ai + architecture)."** → 3 tags. It shows up in all 3 filters.
 - **"I want to know visually which link is which before clicking."** → every card shows an OG/screenshot/upload preview at 150px.
+- **"Tell me when the on-call rotation page or the release notes change."** → flip the link to `daily` in the dialog, allow Web Push once, walk away. Notification fires the next time the fingerprint diverges. The card grows a "Monitored" chip and an amber badge until you mark it seen.
 
 ### When foldex is overkill
 

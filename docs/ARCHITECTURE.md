@@ -3,37 +3,40 @@
 ## Visão de sistema
 
 ```
-                ┌──────────────┐         ┌──────────────┐
-                │   Web SPA    │         │  Extension   │
-                │  (Vite/MUI)  │         │   (MV3)      │
-                └──────┬───────┘         └──────┬───────┘
-                       │     HTTP /api          │
-                       └────────┬───────────────┘
-                                ▼
-                       ┌──────────────────┐
-                       │   Backend (Go)   │
-                       │   Chi router     │
-                       │ ┌──────────────┐ │
-                       │ │ links / tags │ │
-                       │ │ /go/:id      │ │
-                       │ │ import/export│ │
-                       │ └──────┬───────┘ │
-                       │        │ enqueue │
-                       │ ┌──────▼───────┐ │      fetch
-                       │ │ preview      │─┼──── HTML ──▶ external URLs
-                       │ │ worker pool  │ │
-                       │ └──────────────┘ │
-                       └─────────┬────────┘
-                                 │ pgxpool
-                                 ▼
-                       ┌──────────────────┐
-                       │  PostgreSQL 16   │
-                       │  link · tag      │
-                       │  link_tag (M:N)  │
-                       └──────────────────┘
+        ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+        │   Web SPA    │     │  Extension   │     │ Service Wkr  │
+        │ (Vite/React) │     │   (MV3)      │     │ (push, PWA)  │
+        └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
+               │ HTTP /api                                │ push
+               └──────────┬───────────────────────────────┘
+                          ▼                                 ▲
+              ┌───────────────────────┐                     │ webpush-go
+              │     Backend (Go)      │       ┌─────────────┴───────┐
+              │     Chi router        │       │  internal/push      │
+              │ ┌───────────────────┐ │       │  VAPID + sender     │
+              │ │ links · tags ·    │ │       └─────────────▲───────┘
+              │ │ folders · stats · │ │                     │
+              │ │ /go · backup ·    │ │                     │
+              │ │ push · import     │ │  enqueue        ┌───┴────────┐
+              │ └───────┬───────────┘ │◀───── change ───│ changecheck│
+              │ ┌───────▼───────────┐ │                 │ worker     │
+              │ │ preview worker    │─┼─── HTML ─▶ ext. │ (fingerprt)│
+              │ │ + screenshot ───▶ │ │      URLs       └────────────┘
+              │ │   MinIO           │ │
+              │ └───────────────────┘ │
+              └────────┬───────┬──────┘
+                pgxpool │       │ S3 SDK
+                        ▼       ▼
+              ┌────────────────────┐   ┌───────────┐
+              │   PostgreSQL 16    │   │  MinIO    │
+              │  tag · link ·      │   │  bucket   │
+              │  link_tag · folder │   │ screensh. │
+              │  click_log ·       │   │  images   │
+              │  push_subscription │   └───────────┘
+              └────────────────────┘
 ```
 
-Todos os componentes rodam num único `docker-compose`. Backend e web bindam só em `127.0.0.1`.
+Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `127.0.0.1` por default. O changecheck worker e o push sender são goroutines in-process no mesmo binário do backend (nenhum broker externo).
 
 ## Stack & rationale
 
@@ -41,26 +44,35 @@ Todos os componentes rodam num único `docker-compose`. Backend e web bindam só
 |--------------|----------------------------------------------------------------------|---------|
 | Runtime API  | **Go 1.26** + Chi v5.2 + pgx/v5.9 + `slog`                          | Minimal router, pgxpool com tipos, log estruturado nativo. |
 | DB           | **PostgreSQL 16** + `pg_trgm`                                        | Busca por substring com índice GIN, suficiente single-user. |
-| Migrations   | `golang-migrate` (`000NNN_*.up/down.sql`)                            | Reversível por padrão; mesma convenção do `app-genfin`. |
-| Worker       | Goroutine pool in-process (canal buffered)                           | Zero dependência operacional (sem Redis/queue). |
-| Testes Go    | `testify` (unit) + `testcontainers-go` (integration, build tag)      | Suite real contra Postgres efêmero; gate ≥85% (ver `CLAUDE.md`). |
-| SPA          | **Vite 8 + React 19 + TypeScript 6 + MUI 7**                          | UI library madura, command palette / autocomplete prontos. MUI fica em v7 por enquanto: v8/v9 quebram `Stack`/`Typography` exigindo `component=` em todos os nós, migração com custo alto pra ganho zero. |
+| Object store | **MinIO** (S3 SDK)                                                   | Backup/screenshots/uploads vivem fora do Postgres; bucket único, prefixos `screenshots/`/`images/`. |
+| Migrations   | `golang-migrate` (`000NNN_*.up/down.sql`)                            | Reversível por padrão; mesma convenção compartilhada. |
+| Workers      | Goroutine pools in-process (preview, changecheck) + buffered channels | Zero dependência operacional (sem Redis/queue). |
+| Web Push     | `github.com/SherClockHolmes/webpush-go v1.4.0` + VAPID auto-gen      | RFC 8030. VAPID key persistida em `/data/vapid.json` (volume `foldex-data`), 0o600. |
+| Imagem       | `golang.org/x/image` + stdlib decoders (pure Go, sem CGO)            | Re-encode JPEG q82 + downscale Catmull-Rom + decode-bomb guard 50 MP (`internal/imageopt`). |
+| Headless     | `github.com/go-rod/rod v0.116` (Chromium)                            | Screenshot fallback quando o site não tem `og:image`. SSRF guard antes do launch. |
+| Testes Go    | `testify` (unit) + `testcontainers-go v0.42` (integration, build tag)| Suite real contra Postgres efêmero; gate ≥85% (ver `CLAUDE.md`). |
+| SPA          | **Vite 8 + React 19.2 + TypeScript 6 + MUI 9**                        | MUI só pra `createTheme`/`ThemeProvider`; visual vive em `web/src/styles/foldex.css` (CSS handoff). Bundle ~80 kB. |
 | Server state | **TanStack Query 5**                                                  | Cache + invalidação por mutation + optimistic updates. |
-| Testes web   | **Vitest 4** + `@testing-library/react` + jsdom                       | Mesmo gate ≥85% (`vitest.config.ts`). |
+| i18n         | **react-i18next 17** + i18next 26 (en/pt/es)                          | Locale picker no topbar persiste em `localStorage["foldex.locale"]`. Plurais via `_one`/`_other`. |
+| PWA          | **vite-plugin-pwa 1.3** com `strategies: 'injectManifest'`            | SW hand-rolled em `web/src/sw.ts` (Cache API + push/notificationclick listeners). Workbox só injeta `__WB_MANIFEST` no build. |
+| Testes web   | **Vitest 4** + `@testing-library/react 16` + jsdom 29                 | Mesmo gate ≥85% (`vitest.config.ts`). |
 | Extension    | Vanilla MV3 (sem bundler)                                            | Popup tem ~80 LoC. Sem build = "load unpacked" direto. |
-| Node runtime | **Node 24** (LTS) — usada só pro build do front e pra rodar testes   | Bate com Vite 8 / Vitest 4. |
+| Node runtime | **bun 1.3** (oven/bun:1.3-alpine)                                    | Bate com Vite 8 / Vitest 4 e resolve melhor packages platform-specific que npm em mirror privado. |
 
-## Data model (estado atual, depois de 6 migrations)
+## Data model (estado atual, após 11 migrations)
 
 ```sql
--- 000001_init.up.sql  (+ pg_trgm)
--- 000002_constraints  → ADDed link_preview_status_check + link_url_unique
--- 000003_click_log    → tabela de eventos de clique
--- 000004_click_log_backfill  → data migration idempotente
--- 000005_link_pinned  → coluna `pinned` + índice
--- 000006_drop_link_counters  → REMOVE link.click_count + last_clicked_at
--- 000007_folders      → tabela `folder` + `link.folder_id` (1:N)
--- 000008_folder_nesting → `folder.parent_id` (self-FK ON DELETE SET NULL)
+-- 000001_init.up.sql        (+ pg_trgm)
+-- 000002_constraints        → link_preview_status_check + link_url_unique
+-- 000003_click_log          → tabela de eventos de clique
+-- 000004_click_log_backfill → data migration idempotente
+-- 000005_link_pinned        → coluna `pinned` + índice
+-- 000006_drop_link_counters → REMOVE link.click_count + last_clicked_at
+-- 000007_folders            → tabela `folder` + `link.folder_id` (1:N)
+-- 000008_folder_nesting     → `folder.parent_id` (self-FK ON DELETE SET NULL)
+-- 000009_link_slug          → `link.slug NOT NULL UNIQUE` + CHECK + backfill
+-- 000010_link_change_check  → 6 colunas em `link` p/ change-detection per-link + 2 índices parciais
+-- 000011_push_subscription  → tabela `push_subscription` (RFC 8030 + VAPID)
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -89,6 +101,7 @@ CREATE INDEX folder_parent ON folder (parent_id) WHERE parent_id IS NOT NULL;
 CREATE TABLE link (
   id             BIGSERIAL PRIMARY KEY,
   url            TEXT NOT NULL UNIQUE,
+  slug           TEXT NOT NULL UNIQUE,                   -- 000009 (CHECK [a-z0-9]+(-[a-z0-9]+)* AND NOT all-numeric)
   title          TEXT NOT NULL,
   description    TEXT,
   favicon_url    TEXT,
@@ -97,13 +110,39 @@ CREATE TABLE link (
                  CHECK (preview_status IN ('pending', 'ok', 'failed')),
   preview_error  TEXT,
   pinned         BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  -- 000010: change-detection per-link (todos nullable, opt-in)
+  check_interval          TEXT,                          -- CHECK NULL OR IN ('hourly','daily','weekly')
+  last_checked_at         TIMESTAMPTZ,
+  last_fingerprint        TEXT,                          -- 'feed:<sha256>' OU 'content:<sha256>' (prefixo = discriminador)
+  last_change_detected_at TIMESTAMPTZ,
+  change_seen_at          TIMESTAMPTZ,
+  last_check_error        TEXT,                          -- isolado de preview_error (workers diferentes)
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX link_title_trgm     ON link USING gin (title gin_trgm_ops);
-CREATE INDEX link_url_trgm       ON link USING gin (url   gin_trgm_ops);
-CREATE INDEX link_created        ON link (created_at DESC);
-CREATE INDEX link_pinned_created ON link (pinned DESC, created_at DESC);
+CREATE INDEX link_title_trgm        ON link USING gin (title gin_trgm_ops);
+CREATE INDEX link_url_trgm          ON link USING gin (url   gin_trgm_ops);
+CREATE INDEX link_created           ON link (created_at DESC);
+CREATE INDEX link_pinned_created    ON link (pinned DESC, created_at DESC);
+-- 000010: scanner do worker enxerga só os opt-in (O(opt-in), não O(total)).
+CREATE INDEX link_check_due_idx     ON link (check_interval, last_checked_at)
+                                      WHERE check_interval IS NOT NULL;
+-- 000010: sidebar "Atualizações recentes" (últimos N dias).
+CREATE INDEX link_change_recent_idx ON link (last_change_detected_at DESC)
+                                      WHERE last_change_detected_at IS NOT NULL;
+
+-- 000011: Web Push subscriptions. Single-user → sem user_id.
+-- `endpoint UNIQUE` suporta upsert quando o navegador renova a subscription
+-- (mesma URL com keys rotacionados). Sender remove o row em 404/410.
+CREATE TABLE push_subscription (
+  id           BIGSERIAL PRIMARY KEY,
+  endpoint     TEXT NOT NULL,
+  p256dh       TEXT NOT NULL,
+  auth         TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at TIMESTAMPTZ,
+  CONSTRAINT push_subscription_endpoint_unique UNIQUE (endpoint)
+);
 
 CREATE TABLE link_tag (
   link_id BIGINT NOT NULL REFERENCES link(id) ON DELETE CASCADE,
@@ -173,11 +212,17 @@ LIMIT $3 OFFSET $4;
 | Grupo  | Método | Path                                  | Propósito                                          |
 |--------|--------|---------------------------------------|----------------------------------------------------|
 | Links  | GET    | `/api/links`                          | List; query: `q`, `tag` (repeatable), `limit`, `offset`, `sort=created\|clicks\|recent\|alpha\|alpha_desc`, **`folder_id=N`** (links na pasta), **`ungrouped=1`** (links sem pasta). Pinados sempre vêm primeiro. `alpha`/`alpha_desc` ordenam por `lower(title)`. |
-|        | POST   | `/api/links`                          | Body: `{url, title, description?, tag_ids?, pinned?, folder_id?}` → enqueue preview |
+|        | GET    | `/api/links/recent-changes`           | Últimos links com `last_change_detected_at IS NOT NULL`. Query: `?days` (1..365, default 7), `?limit` (1..100, default 10), via `clampInt`. Powering a seção "Atualizações recentes" da sidebar (refetch 60 s). |
+|        | POST   | `/api/links`                          | Body: `{url, title, description?, tag_ids?, pinned?, folder_id?, slug?, check_interval?}` → enqueue preview |
 |        | GET    | `/api/links/{id}`                     | One link with tags (`click_count` derivado)        |
-|        | PATCH  | `/api/links/{id}`                     | Update qualquer campo, `tag_ids` (replace set), `pinned`. `folder_id` é tri-state: ausente=não toca, `N`=atribui, `null`=limpa |
+|        | PATCH  | `/api/links/{id}`                     | Update qualquer campo + `tag_ids` (replace set), `pinned`. `folder_id`/`slug`/`check_interval` são tri-state: ausente=não toca, valor=atribui, `null`=limpa. Em opt-out de `check_interval`, repository limpa também `last_checked_at`/`last_fingerprint`/`last_change_detected_at`/`change_seen_at` na mesma UPDATE. |
 |        | DELETE | `/api/links/{id}`                     | Hard delete (cascade em `link_tag` e `click_log`)  |
 |        | POST   | `/api/links/{id}/refresh-preview`     | Re-enqueue meta fetch                              |
+|        | POST   | `/api/links/{id}/seen-change`         | Marca o badge "atualizado" como lido (bump `change_seen_at = now()`). 404 quando `last_change_detected_at IS NULL` — bloqueia bump out-of-band antes de qualquer detecção. |
+|        | POST   | `/api/links/{id}/screenshot`          | Captura sob demanda via Chromium headless. SSRF gate obrigatório (`links.URLPolicy`, default `preview.IsPublicURL`); rejeita scheme não-http(s) com 400 `invalid_scheme` e privado/IMDS com 400 `private_target`. Policy nil = 500 `policy_unconfigured`. |
+|        | POST   | `/api/links/{id}/image`               | Upload manual de imagem (multipart `file`). Cap de body 5 MiB; aceita `{png, jpeg, gif, webp}` (SVG cai fora). Pipeline `imageopt` re-encoda em JPEG q82, downscale ≤1024 px, decode-bomb guard 50 MP. Curto-circuita o worker. |
+|        | DELETE | `/api/links/{id}/image`               | Remove `og_image_url` + DELETE no objeto MinIO + zera `preview_status`. |
+| Files  | GET    | `/api/files/*`                        | Proxy pro MinIO. Key precisa cair em `screenshots/`/`images/` (rejeita `..` e prefixo arbitrário). `DetectContentType` no objeto servido + `X-Content-Type-Options: nosniff`. |
 | Tags   | GET    | `/api/tags`                           | List with `link_count`                             |
 |        | POST   | `/api/tags`                           | Body: `{name, color?, icon?}`                      |
 |        | PATCH  | `/api/tags/{id}`                      |                                                    |
@@ -197,7 +242,11 @@ LIMIT $3 OFFSET $4;
 |        | POST   | `/api/backup/validate`                | Multipart `file=<zip>` → `{ok, manifest, conflicts, warnings, errors}` sem aplicar |
 |        | POST   | `/api/backup/restore?mode=…`          | Multipart `file=<zip>` + `mode=wipe\|skip\|duplicate` (default `skip`) → `{inserted, skipped, wiped, files, duration_ms}` |
 | Stats  | GET    | `/api/stats/storage`                  | `{objects, total_bytes}` do bucket MinIO; registrado só quando o storage está disponível |
-| Redir  | GET    | `/go/{id}`                            | 302 + INSERT no click_log (fora de `/api`)         |
+| Push   | GET    | `/api/push/vapid-key`                 | Retorna a chave pública VAPID (base64url) — front usa em `PushManager.subscribe({applicationServerKey})`. Atrás do `SHARED_SECRET` quando set. |
+|        | POST   | `/api/push/subscriptions`             | Upsert por `endpoint` (UNIQUE) com p256dh/auth atualizados. Renovação do navegador é silenciosa. |
+|        | DELETE | `/api/push/subscriptions`             | Remove a subscription pelo endpoint (chamado no unsubscribe do usuário). |
+|        | POST   | `/api/push/test`                      | Dispara notificação de teste pra todas as subscriptions ativas. Útil pra validar VAPID/SW. |
+| Redir  | GET    | `/go/{id-or-slug}`                    | 302 + INSERT no click_log (fora de `/api`). ID-first; fallback pra slug (mig 000009). |
 | Health | GET    | `/healthz`                            | `{status, db}` + 200/503                           |
 
 Erros em JSON uniforme: `{ "error": { "code": "not_found", "message": "..." } }`.
@@ -221,6 +270,30 @@ Erros em JSON uniforme: `{ "error": { "code": "not_found", "message": "..." } }`
   5. `repo.UpdateOGImage(ctx, id, "/api/files/screenshots/{id}.jpg")`
   
   O fallback é **silencioso em falha** (apenas loga) — o link permanece sem imagem. Falhas comuns: site bloqueando bots, JS-heavy page sem og:image, Chromium ausente. Se `imageopt.Optimize` retornar erro (corrupção rara), o worker armazena o PNG cru em `screenshots/{id}.png` como fallback — nunca aborta a etapa só por causa do re-encode.
+
+## Change-check worker (`internal/changecheck`)
+
+Detecção periódica per-link de mudança de conteúdo. Opt-in via `link.check_interval ∈ {hourly, daily, weekly}` (default NULL = desativado). Disparo de Web Push quando o fingerprint muda.
+
+- **Worker** (`worker.go`): pool de N goroutines (`CHANGECHECK_WORKER_CONCURRENCY`, default 2) + scanner que roda a cada `CHANGECHECK_SCAN_INTERVAL_SEC` (default 60s). Skeleton idêntico ao `preview.Worker`: `atomic.Bool stopped`, `sync.Once Stop`, channel buffered (256). `Enqueue` retorna `ErrQueueFull`/`ErrStopped`.
+- **Scanner** (`scan`): SELECT com `CASE WHEN check_interval='hourly' THEN '1 hour' ...` resolve "due" sem hardcode no Go. O índice `link_check_due_idx` é parcial — varre só os opt-in, O(opt-in) não O(total).
+- **Janela rolante, NÃO horário fixo.** O agendamento NÃO é cron-style — não roda "à meia-noite" nem "às 3am". Um link `daily` rodado pela primeira vez às 14:37 do dia 1 fica due novamente em ~14:37 do dia 2 (com drift de até `CHANGECHECK_SCAN_INTERVAL_SEC` + tempo do fetch HTTP). A predicação é `last_checked_at < now() - interval` e o tie-break é `ORDER BY COALESCE(last_checked_at,'epoch') ASC, id ASC` — links opt-in pela primeira vez (`last_checked_at IS NULL`) entram no scan imediatamente. Sem timezone awareness: usa `now()` do Postgres (UTC no container). Sem jitter — 100 links marcados juntos rodam juntos em batches de até 256 por tick. Catch-up automático no boot do backend: tudo que ficou vencido durante o downtime é processado em ordem pelo `last_checked_at` mais antigo.
+- **Fingerprinter** (`fingerprint.go`): híbrido. Primeiro extrai `<link rel="alternate" type="application/(rss|atom)+xml">` e hashea os IDs/GUIDs ordenados. Se não tem feed, fallback content hash em `<main>`/`<article>` (whitespace-normalized; remove `<script>`/`<style>`/`<nav>`/`<header>`/`<footer>`).
+- **Prefixo `feed:`/`content:` no hash armazenado é discriminador** — quando uma página content-only ganha um feed novo, a troca `content:` → `feed:` é tratada como "novo baseline", **não** como mudança. Sem o prefixo o primeiro scan pós-feed dispararia push falso.
+- **First observation nunca conta como change.** `last_fingerprint IS NULL` → grava o novo hash sem bumpar `last_change_detected_at`. Sem isso, todo opt-in viraria push no primeiro scan.
+- **Reusa o `preview.Fetcher`** via interface `HTTPGetter` (`GetRaw`) — o mesmo `safeDialer` com pre-dial LookupIP + post-dial RemoteAddr. Forkar um HTTP client aqui dividiria a postura SSRF.
+- **Push é fire-and-forget.** `worker.process` lança `sender.Notify` em goroutine com `context.Background()` + 15s timeout, isolado do `RecordCheckResult` durável. Falha de push nunca rolla back a detecção.
+- **Erros isolados em `last_check_error`** — não polui `preview_error` (worker diferente, surface diferente no LinkCard).
+
+## Web Push (`internal/push`)
+
+Notificação background quando o changecheck detecta change. RFC 8030 + VAPID via `github.com/SherClockHolmes/webpush-go`.
+
+- **VAPID** (`vapid.go`): `LoadOrGenerate` prioriza env (`VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT`) → state file (`VAPID_STATE_PATH`, default `/data/vapid.json`) → autogen + persiste com `os.WriteFile(..., 0o600)` (umask não confiável). Volume `foldex-data:/data` no compose preserva entre recreations; pinar em `.env` mantém subscriptions estáveis.
+- **Subscription repo** (`subscription.go`): `INSERT … ON CONFLICT (endpoint) DO UPDATE SET p256dh, auth` — renovação do browser converge no mesmo row.
+- **Sender** (`sender.go`): fan-out paralelo. 404/410 → `DeleteByEndpoint` (RFC 8030 §7.3 — endpoint morto). 2xx → `MarkUsed`. Transport errors → log + segue (blip de rede não apaga subscription).
+- **Handler** (`handler.go`): rotas montadas só quando `PushHandler != nil`. Tudo herda o `SHARED_SECRET` middleware (inclusive `vapid-key` — não vaza superfície).
+- **Service Worker hand-rolled** (`web/src/sw.ts`): Cache API + `push` listener + `notificationclick` listener. `vite-plugin-pwa` com `strategies: 'injectManifest'` injeta `__WB_MANIFEST` no build sem trazer runtime workbox-* (que exigiria regenerar `bun.lock`).
 
 ## Pipeline de imagens (`internal/imageopt`)
 
@@ -273,6 +346,20 @@ PREVIEW_FETCH_TIMEOUT_SEC=5
 PREVIEW_STRICT_SSRF=        # vazio = permissivo; "1" = strict
 SHARED_SECRET=              # vazio = sem auth; setado = exige X-Foldex-Secret nos /api/*
 CORS_ORIGINS=*
+BACKEND_BIND=127.0.0.1      # bind do backend; non-loopback + SHARED_SECRET vazio + CORS=* recusa boot
+
+# Change-check worker (mig 000010)
+CHANGECHECK_ENABLED=1
+CHANGECHECK_WORKER_CONCURRENCY=2
+CHANGECHECK_SCAN_INTERVAL_SEC=60
+CHANGECHECK_FETCH_TIMEOUT_SEC=20
+
+# Web Push / VAPID (mig 000011) — autogen on first boot se *_KEY vazios; pinar pra subscriptions estáveis
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=mailto:foldex@localhost
+VAPID_AUTO_GENERATE=1
+VAPID_STATE_PATH=/data/vapid.json   # 0o600; volume `foldex-data:/data` no compose
 ```
 
 DB_URL é DERIVADO desses (em `docker-compose.yml` e `backend/Makefile`). Não duplicar.
@@ -498,10 +585,37 @@ estão escopados em `@media (min-width: 769px)`. Adicionar nova regra
 "desktop-only" em `overrides.css` exige o mesmo wrapping ou a mobile
 quebra silenciosamente.
 
-PWA: `vite-plugin-pwa` (Workbox) gera `sw.js` + `manifest.webmanifest`,
-`skipWaiting + clientsClaim` faz o SW novo assumir tabs abertas, `cacheId`
-versionado deixa rolar limpeza geral. Service worker NetworkFirst pra
-`/api/files/`, precache pra build assets, navigateFallback pra `/index.html`.
+PWA: `vite-plugin-pwa` com `strategies: 'injectManifest'` (Workbox SÓ pra injetar a precache list em `self.__WB_MANIFEST`; runtime workbox-* NÃO entra no bundle). SW hand-rolled em `web/src/sw.ts`: Cache API + `push` + `notificationclick` listeners. Detalhe completo no ADR-24.
+
+### ADR-23 — Change detection: hybrid fingerprint (feed + content), prefix discriminator
+**Status:** Done (migration 000010, PR #5).
+
+Per-link opt-in via `link.check_interval ∈ {hourly, daily, weekly}`. Worker em `internal/changecheck` faz fingerprint híbrido: extrai `<link rel="alternate" type="application/(rss|atom)+xml">`, hashea GUIDs ordenados; fallback content hash em `<main>`/`<article>` (whitespace-normalized, sem `<script>`/`<style>`/`<nav>`/`<header>`/`<footer>`).
+
+**Por quê duas estratégias.** Feed é o caminho ouro — mudança de feed quase sempre é mudança de conteúdo real, e enumerar items ordenados é estável (reordenação no servidor não dispara push). Content hash é fallback porque a maioria das páginas internas (Jira boards, Confluence) não tem feed; sem ele, o opt-in só funcionaria pra blogs.
+
+**Por quê o prefixo `feed:`/`content:` no hash.** Páginas content-only mudam pra ter feed um dia. Sem o discriminador, a troca `content:` → `feed:` ia disparar push falso ("conteúdo mudou!"). O worker em `process()` exige `prevKind == newKind && prevHash != newHash` pra contar como change; troca de kind = re-baseline silencioso.
+
+**Por quê "first observation nunca conta".** `last_fingerprint IS NULL` é o sinal — grava hash sem bumpar `last_change_detected_at`. Sem essa regra, todo opt-in dispararia push no primeiro scan, que é o oposto de útil.
+
+**Por quê reusar `preview.Fetcher`.** O SSRF guard (pre-dial LookupIP + post-dial RemoteAddr, IMDS sempre bloqueado) é load-bearing. Forkar um HTTP client em `changecheck` dividiria a postura — duas pernas pra defender contra a mesma classe de bug. Interface mínima `HTTPGetter` exporta só `GetRaw`.
+
+**Por quê `last_check_error` separado de `preview_error`.** Workers diferentes, superfícies diferentes. `preview_error` aparece no LinkCard como "preview falhou"; sobrepor erros de changecheck ali ia confundir o usuário (link tem preview ok, mas o card diria falhou). CLAUDE.md §4 "Worker is the only writer" — preview worker é dono daquele par de colunas.
+
+### ADR-24 — Web Push: VAPID auto-gen on boot + hand-rolled SW
+**Status:** Done (migration 000011, PR #5).
+
+Notificações background quando o changecheck detecta change. RFC 8030 com VAPID via `webpush-go`. Single-user: `push_subscription` sem `user_id` (revisitar quando multi-user landar).
+
+**Por quê VAPID auto-gen on first boot.** Plug-and-play: `make up` em um host limpo gera a key, persiste em `/data/vapid.json` (0o600), e o front busca via `GET /api/push/vapid-key`. Pinar `VAPID_*` em `.env` quando quiser manter subscriptions estáveis entre recreations. O volume nomeado `foldex-data` cobre o caso "esqueci de pinar".
+
+**Por quê 404/410 → DELETE.** Convenção RFC 8030 §7.3 — endpoint morto. Sem cleanup, `push_subscription` acumula rows zumbis pra cada Chrome reinstalado / Safari resetado / device descartado. Transport errors (DNS, timeout) NUNCA disparam DELETE — um blip de rede apagaria subscriptions vivas.
+
+**Por quê o sender é fire-and-forget no worker.** `worker.process` lança `sender.Notify` em goroutine com `context.Background()` + 15s timeout. Push lento não pode rollback o `RecordCheckResult` que é a fonte da verdade pra "este link mudou?". Falha de push = log, segue.
+
+**Por quê SW hand-rolled em vez de `workbox-*` runtime.** `bun.lock` é fonte da verdade (CLAUDE.md §1) e adicionar workbox-* runtime exigiria regenerar lock + revalidar 200+ deps transitivas. Um par de `cache.put` + `push`/`notificationclick` listeners cabe em ~80 linhas (`web/src/sw.ts`). `vite-plugin-pwa` com `strategies: 'injectManifest'` injeta só o `__WB_MANIFEST` no build — zero runtime workbox.
+
+**Por quê `/api/push/vapid-key` atrás do `SHARED_SECRET` middleware.** "É só a chave pública" não justifica vazar superfície — um attacker remoto enumerando endpoints saberia que foldex tem push wired. Tudo `/api/push/*` herda o guard.
 
 ## Future considerations
 

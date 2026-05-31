@@ -13,12 +13,13 @@ Foldex resolve isso como um **app pessoal self-hosted**: bookmark com cara de pr
 
 ## Goals
 
-1. **Listar e abrir links em segundos.** Grid visual com favicon e og:image, filtro instantâneo por texto + tags, atalho `⌘K` pra command palette.
-2. **Classificações livres em M:N + organização em pastas 1:N.** Tags coexistem com pastas no estilo iPhone: tag = label (M:N, várias por link), pasta = containment (1:N, link mora em UMA pasta). Drag-and-drop de link sobre pasta move; soltar link sobre outro link cria uma pasta nova com os dois dentro. Detalhes em ADR-19.
-3. **Métricas de uso.** Cada clique via `/go/:id` incrementa contador atomicamente; lista pode ser ordenada por "mais usados" / "usados recentemente".
-4. **Preview automático.** Ao criar, backend busca `<title>`, `og:image`, favicon. Card renderiza visualmente parecido ao que o link representa.
-5. **Import/Export sem fricção.** Aceita o `bookmarks.html` (Netscape) que qualquer browser exporta + um JSON versionado próprio. Export volta no mesmo formato (sem lock-in).
-6. **Captura via extensão.** Manifest V3 popup que pré-preenche URL + título da aba atual, escolhe tags, salva.
+1. **Listar e abrir links em segundos.** Grid visual com favicon e og:image, filtro instantâneo por texto + tags, atalho `⌥K` pra command palette.
+2. **Classificações livres em M:N + organização em pastas 1:N (aninháveis).** Tags coexistem com pastas no estilo iPhone: tag = label (M:N, várias por link), pasta = containment (1:N, link mora em UMA pasta). Pastas se aninham em N níveis via `parent_id` self-FK. Drag-and-drop de link sobre pasta move; soltar link sobre outro link cria uma pasta nova com os dois dentro. Detalhes em ADR-19.
+3. **Métricas de uso.** Cada clique via `/go/:id` insere uma row em `click_log` (single source of truth); lista pode ser ordenada por "mais usados" / "usados recentemente".
+4. **Preview automático.** Ao criar, backend busca `<title>`, `og:image`, favicon. Quando o site não tem og:image e o host resolve pra IP público, Chromium headless captura um screenshot como fallback. Card renderiza visualmente parecido ao que o link representa.
+5. **Monitorar links + Web Push.** Per-link opt-in (horário/diário/semanal) — o changecheck worker faz fingerprint híbrido (feed RSS/Atom se existir, content hash do `<main>` como fallback) e dispara notificação push quando o conteúdo muda. Sino no Topbar liga/desliga a permissão; badge âmbar no card aparece até o usuário clicar pra marcar como visto. ADR-23 e ADR-24.
+6. **Import/Export + Backup completo.** Aceita o `bookmarks.html` (Netscape) que qualquer browser exporta + um JSON versionado próprio. Backup ZIP com `manifest.json` + `database.json` (5 tabelas) + todos os arquivos do MinIO — round-trip lossless com 3 modos de conflito (wipe/skip/duplicate).
+7. **Captura via extensão.** Manifest V3 popup que pré-preenche URL + título da aba atual, escolhe tags, salva.
 
 ## Non-goals (v1)
 
@@ -36,21 +37,21 @@ Engenheiro/PM que vive em browser, abre dezenas de ferramentas internas por sema
 
 | Experiência                | Como acontece                                                                                  |
 |----------------------------|-----------------------------------------------------------------------------------------------|
-| **Bookmarks bar visual**   | Página inicial: grid de cards (folder cards + links soltos), filtro por tag, densidade 3/5/8 colunas. Card mostra favicon, título, og:image, contador. Pasta mostra 2×2 mini-thumbnails do conteúdo. |
-| **Pastas iPhone-style**    | Clicar uma pasta entra nela (Esc / botão "← Pastas" volta). URL bookmarkável (`?folder=N`). Drag-and-drop: link → pasta (move), link → link (cria nova pasta com os dois). `⌥F` cria nova pasta. |
-| **Command palette**        | `⌥K` abre overlay com busca fuzzy (título + URL + tag). `Enter` abre o link via `/go/:id`.    |
+| **Bookmarks bar visual**   | Página inicial: grid de cards (folder cards + links soltos), filtro por tag, densidade 3/5/8 colunas. Card mostra favicon, título, og:image, contador. Pasta mostra 2×2 mini-thumbnails (ou RapidView popover no modo compacto). |
+| **Pastas iPhone-style + aninhadas** | Clicar uma pasta entra nela (Esc / botão "← Pastas" sobe um nível). Navegação 100% em memória — IDs nunca aparecem na URL. Drag-and-drop: link → pasta (move), link → link (cria nova pasta com os dois). `⌥F` cria nova pasta — dentro de uma pasta cria subpasta. |
+| **Command palette**        | `⌥K` abre overlay com busca fuzzy (título + URL + tag). `Enter` abre o link via `/go/{id-or-slug}`. |
 | **New link**               | `⌥N` ou botão `+` abre dialog. URL → cola → backend resolve preview em background.            |
 | **Paste-to-create**        | `⌘V`/`Ctrl+V` (ou "Paste" no menu de seleção do celular) em qualquer canto da página sniffa o clipboard; se for uma URL, o dialog de New Link abre com ela pré-preenchida. No-op dentro de inputs ou com outro modal aberto. ADR-21. |
+| **Monitor + Push**         | Em qualquer link, escolher frequência (horário/diário/semanal) no `LinkDialog`. Sino do Topbar pede permissão de Web Push; quando o conteúdo do link muda, o sistema operacional recebe a notificação (mesmo com a aba fechada — Service Worker). Badge âmbar no card até o usuário clicar pra dispensar. Lista "Atualizações recentes" na sidebar. ADR-23, ADR-24. |
 | **Captura via extension**  | Pin do popup MV3 no Chrome/Edge. Clique → URL e título preenchidos → escolhe tag → salva.     |
 | **Import**                 | Drag-drop do `bookmarks.html` ou `.json` → backend cria links idempotentemente.               |
-| **Export**                 | Botão "Export" → download em Netscape HTML (reimportável no Chrome) ou JSON nosso.            |
+| **Export / Backup**        | Botão "Export" → download em Netscape HTML (reimportável no Chrome) ou JSON v2. Card "Backup completo" gera ZIP DB+MinIO; restore com 3 modos de conflito. |
 
 ## Out of scope
 
 - Compartilhamento de links com outros usuários (não há outros usuários).
-- Histórico de visitas (só `click_count` + `last_clicked_at`).
-- Pastas aninhadas (folders são flat — 1 nível). Aninhamento ainda fica fora de escopo; tags resolvem o caso multidimensional.
-- Notificações, lembretes, due-dates em links.
+- Histórico granular de visitas (só agregados a partir de `click_log` — sem trilha por sessão / por device).
+- Lembretes / due-dates em links (notificações de change-detection ≠ lembretes manuais).
 - Search semântica via embeddings.
 
 ## Critérios de sucesso (definição de "MVP pronto")
