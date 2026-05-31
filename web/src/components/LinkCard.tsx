@@ -236,13 +236,8 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
                 </span>
               </>
             )}
-            {/* "Monitored" indicator — surfaces the per-link change_interval
-                opt-in state regardless of whether a change has been detected
-                yet. Reserved space + amber halo (.fx-card-update-alert) keep
-                signalling "has unseen update"; this gray-toned chip just
-                signals "this link is being watched". Click count + last
-                click still own the leftmost slots so the foot stays
-                scannable at a glance. */}
+            {/* Gray-toned because the amber halo `.fx-card-update-alert`
+                owns the "you have an unseen update" signal. */}
             {link.check_interval && (
               <>
                 <span className="fx-meta-sep" />

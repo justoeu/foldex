@@ -239,4 +239,52 @@ describe('LinkCard', () => {
       expect(state.links[0].change_seen_at).toBeTruthy()
     })
   })
+
+  // ─── "Monitored" footer chip (PR #8) ──────────────────────────────────
+  // The chip surfaces link.check_interval regardless of detection state.
+  // The unseen-change badge above signals "you have an UPDATE"; this
+  // chip signals "this link is being WATCHED". Both can coexist.
+  // The tooltip's interval label is interpolated via a CONSTRUCTED i18n
+  // key (`link_dialog.check_updates_` + interval) — that path is the
+  // fragile bit, so the three tests below specifically exercise each
+  // valid interval value to catch any silent fallback.
+
+  it('does NOT render the "Monitored" chip when check_interval is null', () => {
+    renderWithProviders(<LinkCard link={baseLink} onEdit={vi.fn()} />)
+    expect(document.querySelector('.fx-meta-monitor')).toBeNull()
+    expect(screen.queryByText(/monitored/i)).not.toBeInTheDocument()
+  })
+
+  it('renders the "Monitored" chip when check_interval is "daily"', () => {
+    renderWithProviders(
+      <LinkCard link={{ ...baseLink, check_interval: 'daily' }} onEdit={vi.fn()} />,
+    )
+    const chip = document.querySelector('.fx-meta-monitor')
+    expect(chip).not.toBeNull()
+    expect(chip!.textContent).toMatch(/monitored/i)
+    // Tooltip carries the interval label resolved through the cross-
+    // namespace i18n lookup — locks the construction shape.
+    expect(chip!.getAttribute('data-tooltip')).toMatch(/every day/i)
+  })
+
+  it('renders the chip with the correct tooltip for each interval', () => {
+    for (const interval of ['hourly', 'daily', 'weekly'] as const) {
+      const { unmount } = renderWithProviders(
+        <LinkCard link={{ ...baseLink, check_interval: interval }} onEdit={vi.fn()} />,
+      )
+      const chip = document.querySelector('.fx-meta-monitor')
+      expect(chip, `interval=${interval}`).not.toBeNull()
+      const tip = chip!.getAttribute('data-tooltip') ?? ''
+      // Locks i18n fallback hazard: if the constructed key
+      // `link_dialog.check_updates_<interval>` were missing, t() would
+      // return the raw key — none of these substrings would match.
+      const expected = {
+        hourly: /every hour/i,
+        daily: /every day/i,
+        weekly: /every week/i,
+      }[interval]
+      expect(tip, `interval=${interval}`).toMatch(expected)
+      unmount()
+    }
+  })
 })

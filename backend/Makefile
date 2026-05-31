@@ -88,4 +88,4 @@ migrate-down: ## Revert the most recent migration
 migrate-create: ## Create a new migration: make migrate-create NAME=add_x
 	$(MIGRATE) create -ext sql -dir /migrations -seq $(NAME)
 
-.PHONY: help tidy run build test test-integration coverage coverage-html migrate-up migrate-down migrate-create
+.PHONY: help tidy run build test test-integration coverage coverage-run coverage-check coverage-html migrate-up migrate-down migrate-create
