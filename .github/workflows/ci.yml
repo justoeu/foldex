@@ -67,11 +67,11 @@ jobs:
         run: bun run typecheck
       - name: tests (with coverage)
         working-directory: web
-        # Coverage script already runs the full test suite under c8/v8 —
-        # there's no point invoking `bun run test` and `bun run coverage`
-        # back-to-back. Failures still block CI; threshold is enforced in
-        # the next informational step.
-        run: bun run coverage
+        # `coverage:nogate` runs the full suite under v8 and writes
+        # coverage-summary.json without enforcing the thresholds baked
+        # into vitest.config.ts — that aspirational check lives in the
+        # next informational step. Test failures still block CI.
+        run: bun run coverage:nogate
       - name: coverage threshold (informational; goal 85% lines, 80% branches)
         working-directory: web
         # vitest emits coverage-summary.json — parse + threshold-check in
