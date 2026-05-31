@@ -10,6 +10,8 @@ This file holds the **canonical prompts for the three post-implementation review
 
 After every implementation task, once typecheck + tests + coverage pass, **before** declaring done and **before** opening a PR. Mandatory — no exceptions for "small changes."
 
+> **Pre-push gate (CLAUDE.md §6.1) is the hard prerequisite.** Run the EXACT commands the CI workflow runs (not the ones it used to run) and confirm they're green LOCALLY before any `git commit`, `git push`, or `gh pr create`. Pushing relying on "the CI will catch it" wastes minutes per round-trip AND consumes GitHub Actions billing for a check that should have happened in 30s locally. If the change touches `.github/workflows/*.yml`, grep `^\s+run:` from the new YAML and execute every line locally before pushing.
+
 ## How to run
 
 In a single tool-use block, issue three `Agent` calls (`run_in_background: true`) with `subagent_type: general-purpose`. The harness notifies as each one finishes; do not poll or sleep.
