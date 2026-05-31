@@ -201,6 +201,25 @@ Before you announce "done," verify each item below. If any fails, the change is 
 - [ ] User-visible UI changes manually validated in a real browser when behavior changes (not just type-check).
 - [ ] **Post-implementation agent sweep run** — see §9. Spawn the three agents (code-review, test-quality, security) in parallel against this session's diff and surface every HIGH finding before declaring done. This is **mandatory for every implementation task**, no exceptions.
 
+### 6.1 Pre-push gate — MANDATORY before ANY commit / push / PR
+
+Before `git commit`, `git push`, or `gh pr create`, **run the exact same commands the CI workflow runs** and confirm they're all green locally. NEVER push relying on "the CI will catch it" — that wastes minutes per round-trip AND consumes GitHub Actions billing for a check that should have happened in 30 seconds locally.
+
+If the change touches `.github/workflows/*.yml`, run the **new** commands locally (not the ones the workflow used to run). A typical failure mode: the workflow swaps `bun run test` for `bun run coverage`, you forget to re-validate, push, and the new step trips a threshold gate that was previously hidden behind `continue-on-error`. This is a process bug, not a CI bug.
+
+Concrete checklist that must pass locally before pushing:
+
+```bash
+# Backend
+( cd backend && go vet ./... && make coverage-run )
+# Frontend
+( cd web && bun run typecheck && bun run coverage:nogate )
+```
+
+If the workflow file itself changed, also `grep -E '^\s+run:' .github/workflows/ci.yml` and execute each `run:` line locally — it takes a minute and catches workflow drift before it hits the runner.
+
+The only exception is a change that **cannot** be validated locally (e.g. matrix arm64 runner specifics, secrets-gated steps). In that case, document the exception in the PR description and ask the user to confirm the CI run is acceptable before merge.
+
 ## 7. Style choices — the project's defaults
 
 - **Backend:** Chi router, pgx + pgxpool, slog. No ORMs, no global state, no service locators.
