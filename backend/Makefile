@@ -56,7 +56,7 @@ test: ## Run UNIT tests only (no Docker)
 test-integration: ## Run unit + integration tests (Docker required)
 	$(TESTCONTAINERS_ENV) go test -tags=integration -timeout=10m ./...
 
-coverage: ## Run all tests with coverage and enforce COVERAGE_MIN (default 85)
+coverage-run: ## Run all tests with coverage instrumentation (no threshold gate)
 	# `-covermode=atomic` is required when running multi-package coverage with
 	# `-coverpkg=...` — default `set`/`count` produces a deflated total because
 	# each test binary writes its own profile and the merge averages instead
@@ -66,10 +66,15 @@ coverage: ## Run all tests with coverage and enforce COVERAGE_MIN (default 85)
 	# instrumented (or which tests exercise which lines) silently shows the
 	# wrong total. Worth the rerun cost for honest numbers.
 	$(TESTCONTAINERS_ENV) go test -tags=integration -covermode=atomic -coverpkg=$(COVER_PKGS) -coverprofile=coverage.out -count=1 -timeout=10m ./internal/...
+
+coverage-check: ## Read coverage.out and fail if below COVERAGE_MIN (default 85)
+	@test -f coverage.out || (echo "coverage.out missing — run 'make coverage-run' first" && exit 1)
 	@total=$$(go tool cover -func=coverage.out | tail -1 | awk '{print $$3}' | tr -d '%'); \
 	echo "Total coverage: $$total% (min $(COVERAGE_MIN)%)"; \
 	awk -v t=$$total -v m=$(COVERAGE_MIN) 'BEGIN{exit (t+0 < m+0)}' \
 	  || (echo "FAIL: coverage $$total% < $(COVERAGE_MIN)%"; exit 1)
+
+coverage: coverage-run coverage-check ## Run tests + enforce coverage gate (kept for local convenience)
 
 coverage-html: coverage ## Open coverage report in the browser
 	go tool cover -html=coverage.out
