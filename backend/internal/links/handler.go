@@ -21,22 +21,33 @@ type Enqueuer interface {
 }
 
 type Handler struct {
-	repo   *Repository
-	worker Enqueuer
+	repo    *Repository
+	worker  Enqueuer
+	fetcher MetadataFetcher // optional — disables /url-metadata when nil
 }
 
 func NewHandler(repo *Repository, worker Enqueuer) *Handler {
 	return &Handler{repo: repo, worker: worker}
 }
 
+// WithMetadataFetcher wires the synchronous URL-metadata fetch endpoint. Kept
+// as an optional dependency so router.go can pass it in at startup without
+// breaking the existing NewHandler call sites and so tests can omit it when
+// they don't exercise the route.
+func (h *Handler) WithMetadataFetcher(f MetadataFetcher) *Handler {
+	h.fetcher = f
+	return h
+}
+
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/", h.list)
 	r.Post("/", h.create)
-	// /recent-changes is static, must be registered before /{id} so Chi
-	// routes it to listRecentChanges (Chi matches longest/most-specific path
-	// regardless of registration order, but keeping the source order
-	// intuitive avoids surprises during refactors).
+	// /recent-changes and /url-metadata are static — must be registered
+	// before /{id} so Chi routes them to the right handler. Chi matches
+	// longest/most-specific path regardless of registration order, but
+	// keeping the source order intuitive avoids surprises during refactors.
 	r.Get("/recent-changes", h.listRecentChanges)
+	r.Get("/url-metadata", h.fetchURLMetadata)
 	r.Get("/{id}", h.get)
 	r.Patch("/{id}", h.update)
 	r.Delete("/{id}", h.delete)

@@ -51,6 +51,13 @@ func main() {
 
 	worker := preview.NewWorker(pool, cfg.PreviewConcurrency, time.Duration(cfg.PreviewTimeoutSec)*time.Second, logger)
 
+	// Dedicated Fetcher for the synchronous GET /api/links/url-metadata
+	// endpoint that pre-fills the LinkDialog Title/Description. Reuses
+	// preview.NewFetcher so the SSRF guards (IMDS always blocked, RFC1918
+	// gated by PREVIEW_STRICT_SSRF) are identical to the async worker —
+	// per CLAUDE.md §4 we never re-roll a second HTTP client / SSRF posture.
+	metadataFetcher := preview.NewFetcher(time.Duration(cfg.PreviewTimeoutSec) * time.Second)
+
 	// MinIO storage is optional — if it cannot be reached, we log a warning
 	// and disable the screenshot endpoints rather than refusing to start.
 	var storageClient *storage.Client
@@ -113,12 +120,13 @@ func main() {
 	}
 
 	deps := server.Deps{
-		Pool:        pool,
-		Worker:      worker,
-		Logger:      logger,
-		Config:      cfg,
-		Storage:     storageClient,
-		PushHandler: pushHandler,
+		Pool:                pool,
+		Worker:              worker,
+		Logger:              logger,
+		Config:              cfg,
+		Storage:             storageClient,
+		PushHandler:         pushHandler,
+		LinkMetadataFetcher: linkMetadataAdapter{f: metadataFetcher},
 	}
 	if storageClient != nil {
 		deps.Screenshotter = screenshotFunc(screenshot.Capture)
@@ -180,6 +188,25 @@ type screenshotFunc func(ctx context.Context, pageURL string) ([]byte, error)
 
 func (f screenshotFunc) Capture(ctx context.Context, pageURL string) ([]byte, error) {
 	return f(ctx, pageURL)
+}
+
+// linkMetadataAdapter bridges *preview.Fetcher (returning preview.Result) to
+// links.MetadataFetcher (returning links.URLMetadata). The two shapes are
+// field-for-field identical — the adapter exists to keep the links package
+// from depending on preview directly.
+type linkMetadataAdapter struct{ f *preview.Fetcher }
+
+func (a linkMetadataAdapter) FetchMetadata(ctx context.Context, pageURL string) (links.URLMetadata, error) {
+	r, err := a.f.Fetch(ctx, pageURL)
+	if err != nil {
+		return links.URLMetadata{}, err
+	}
+	return links.URLMetadata{
+		Title:       r.Title,
+		Description: r.Description,
+		FaviconURL:  r.FaviconURL,
+		OGImageURL:  r.OGImageURL,
+	}, nil
 }
 
 // pushSenderAdapter bridges *push.Sender (which speaks push.Notification) to

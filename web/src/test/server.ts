@@ -20,10 +20,17 @@ export type MockState = {
   importApply?: any
   lastImportMode?: string
   lastImportExcluded?: string[]
+  // URL-metadata fetch state. Tests set `urlMetadata` to control the mock
+  // response, or `urlMetadataError` to simulate a 502 from the real handler.
+  // `urlMetadataCalls` records every fetched URL so tests can assert the
+  // debounce + never-overwrite behaviors of LinkDialog.
+  urlMetadata?: { title?: string; description?: string; favicon_url?: string; og_image_url?: string }
+  urlMetadataError?: any
+  urlMetadataCalls: string[]
 }
 
 export function freshState(): MockState {
-  return { tags: [], links: [], folders: [] }
+  return { tags: [], links: [], folders: [], urlMetadataCalls: [] }
 }
 
 type Method = 'get' | 'post' | 'patch' | 'delete'
@@ -40,6 +47,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     // /recent-changes is static — keep it before /api/links so the static
     // path matches first; the catch-all /api/links handler is fine after.
     { url: /^\/api\/links\/recent-changes$/, handle: listRecentChanges },
+    { url: /^\/api\/links\/url-metadata$/, handle: fetchUrlMetadata },
     { url: /^\/api\/links$/, handle: listLinks },
     { url: /^\/api\/push\/vapid-key$/, handle: () => ({ public_key: 'MOCK_VAPID_PUBLIC' }) },
   ],
@@ -71,6 +79,19 @@ const buildRoutes = (): Record<Method, Route[]> => ({
   ],
 })
 
+function fetchUrlMetadata(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState) {
+  const requested = params.get('url') ?? ''
+  s.urlMetadataCalls.push(requested)
+  if (s.urlMetadataError) throw s.urlMetadataError
+  const md = s.urlMetadata ?? {}
+  return {
+    title: md.title ?? '',
+    description: md.description ?? '',
+    favicon_url: md.favicon_url ?? '',
+    og_image_url: md.og_image_url ?? '',
+  }
+}
+
 function listRecentChanges(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState) {
   // Days clamp mirrors the backend (1..30, default 7) and limit (1..100).
   // The real backend filters by last_change_detected_at > now() - days; the
@@ -101,8 +122,19 @@ export function installAxiosMock(state: MockState) {
   for (const method of ['get', 'post', 'patch', 'delete'] as Method[]) {
     vi.spyOn(http, method).mockImplementation((async (url: string, ...rest: any[]) => {
       const data = method === 'get' || method === 'delete' ? undefined : rest[0]
+      // For methods that carry a body the request config is rest[1]; for GET/
+      // DELETE it's rest[0]. axios callers pass query params via `config.params`
+      // rather than embedding them in the URL — merge those into the URLSearchParams
+      // so route handlers see the same shape regardless of the caller style.
+      const configIdx = method === 'get' || method === 'delete' ? 0 : 1
+      const config = (rest[configIdx] ?? {}) as { params?: Record<string, unknown> }
       const [path, queryStr = ''] = url.split('?')
       const params = new URLSearchParams(queryStr)
+      if (config.params && typeof config.params === 'object') {
+        for (const [k, v] of Object.entries(config.params)) {
+          if (v != null) params.append(k, String(v))
+        }
+      }
       for (const route of routes[method]) {
         const m = path.match(route.url)
         if (m) {

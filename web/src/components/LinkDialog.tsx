@@ -5,10 +5,10 @@ import { FolderPicker } from './FolderPicker'
 import { TagChip } from './TagChip'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
-import { useCreateLink, useUpdateLink, uploadLinkImage, removeLinkImage } from '../api/links'
+import { useCreateLink, useUpdateLink, uploadLinkImage, removeLinkImage, useFetchUrlMetadata } from '../api/links'
 import { useCreateTag, useTags } from '../api/tags'
 import { useQueryClient } from '@tanstack/react-query'
-import { safeImageUrl, safeLinkHref } from '../lib/url'
+import { safeImageUrl, safeLinkHref, looksLikeUrl } from '../lib/url'
 import { nextCheckPreview, type CheckInterval } from '../lib/time'
 import type { Link, Tag } from '../api/types'
 
@@ -63,6 +63,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   const createTag = useCreateTag()
   const createLink = useCreateLink()
   const updateLink = useUpdateLink()
+  const fetchMetadata = useFetchUrlMetadata()
 
   const [url, setUrl] = useState('')
   const [title, setTitle] = useState('')
@@ -119,6 +120,56 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
     if (slugDirty) return
     setSlug(slugifyClient(title))
   }, [title, slugDirty])
+
+  // Auto-fetch the page title/description as the user pastes or types a URL,
+  // then pre-fill the corresponding fields IF the user hasn't already filled
+  // them. Trigger: debounce 500ms on `url` change. Skip in edit mode (the
+  // link already has its own title/description). Skip if URL doesn't look
+  // like one (the heuristic also rules out partial typing like "https:").
+  // Per-effect AbortController cancels any in-flight request when the user
+  // keeps typing — only the last debounced value matters.
+  //
+  // The handlers `setTitle` and `setDescription` intentionally check the
+  // current state before assigning: the fetch result must NEVER overwrite
+  // content the user already typed (alignment decision from the plan).
+  useEffect(() => {
+    // Edit mode: link already has its own title/description — skip auto-fetch.
+    if (link) return
+    const trimmed = url.trim()
+    if (!trimmed || !looksLikeUrl(trimmed)) return
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      fetchMetadata.mutate(
+        { url: trimmed, signal: controller.signal },
+        {
+          onSuccess: (data) => {
+            // Never overwrite — user-typed content always wins. The state
+            // setters use functional form so we read the freshest value at
+            // the moment of the network response (not the snapshot captured
+            // when the effect ran).
+            if (data.title) {
+              setTitle((cur) => (cur.trim() ? cur : data.title))
+            }
+            if (data.description) {
+              setDescription((cur) => (cur.trim() ? cur : data.description))
+            }
+          },
+          // Failure is silent — the user can still type the title. Logging
+          // would clutter the console for every preview-failed URL.
+          onError: () => {},
+        },
+      )
+    }, 500)
+
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchMetadata is a
+  // stable mutation object from useMutation; including it would re-run the
+  // effect on every render and defeat the debounce.
+  }, [url, link])
 
   // Focus the URL field on open. Using a deferred `.focus({ preventScroll })`
   // instead of the native `autoFocus` attribute because the latter triggers

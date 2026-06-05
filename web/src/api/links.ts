@@ -176,6 +176,32 @@ export function useCaptureScreenshot() {
   })
 }
 
+// URL-metadata shape returned by GET /api/links/url-metadata. Mirrors what the
+// preview worker eventually stamps on the link asynchronously — exposing it
+// synchronously lets the LinkDialog pre-fill Title / Description before save.
+export type UrlMetadata = {
+  title: string
+  description: string
+  favicon_url: string
+  og_image_url: string
+}
+
+// useFetchUrlMetadata wraps the metadata endpoint as a mutation rather than a
+// query because: (1) we never want to cache across distinct URLs, (2) we want
+// to trigger fetches imperatively from a debounce effect, (3) any failure is
+// silent UX (the user can still type the title manually).
+export function useFetchUrlMetadata() {
+  return useMutation({
+    mutationFn: async ({ url, signal }: { url: string; signal?: AbortSignal }) => {
+      const { data } = await http.get<UrlMetadata>('/api/links/url-metadata', {
+        params: { url },
+        signal,
+      })
+      return data
+    },
+  })
+}
+
 export async function captureScreenshot(id: number): Promise<{ url: string }> {
   const { data } = await http.post<{ url: string }>(`/api/links/${id}/screenshot`)
   return data

@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+// Maximum byte lengths enforced by the Create/Update DTOs. Exported so the
+// URL-metadata pre-fetch handler (and any future surface that produces text
+// destined for these fields) can truncate to the same limits the Save path
+// will accept — pre-fill that returns a title longer than the DTO accepts
+// would be a self-inflicted UX bug (user clicks Save → 400 invalid_input).
+const (
+	MaxTitleBytes = 500
+)
+
 type CreateInput struct {
 	URL         string  `json:"url"`
 	Title       string  `json:"title"`
@@ -56,7 +65,7 @@ func (c CreateInput) Validate() error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return errMsg("url scheme must be http or https")
 	}
-	if len(c.Title) > 500 {
+	if len(c.Title) > MaxTitleBytes {
 		return errMsg("title too long (max 500)")
 	}
 	if c.Slug != nil && !SlugIsValid(*c.Slug) {
@@ -123,7 +132,7 @@ func (u UpdateInput) Validate() error {
 		if *u.Title == "" {
 			return errMsg("title is required")
 		}
-		if len(*u.Title) > 500 {
+		if len(*u.Title) > MaxTitleBytes {
 			return errMsg("title too long (max 500)")
 		}
 	}

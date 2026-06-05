@@ -44,6 +44,11 @@ type Deps struct {
 	StorageStatter stats.StorageStatter // optional — surfaces bucket usage on /stats/storage
 	StorageBucket  backup.StorageBucket // optional — enables /api/backup/* when MinIO is up
 
+	// LinkMetadataFetcher gates GET /api/links/url-metadata. When nil the route
+	// is still registered but responds 503 — the dialog falls back to manual
+	// title entry without breaking the create flow.
+	LinkMetadataFetcher links.MetadataFetcher
+
 	// Web Push wiring. Setting PushHandler also mounts /api/push/vapid-key
 	// (kept inside /api so it inherits the SHARED_SECRET guard — see CLAUDE.md
 	// §4 invariant). Leaving it nil keeps the routes off entirely.
@@ -77,7 +82,7 @@ func New(d Deps) http.Handler {
 		api.Route("/folders", folders.NewHandler(folders.NewRepository(d.Pool)).Mount)
 
 		linksRepo := links.NewRepository(d.Pool)
-		api.Route("/links", links.NewHandler(linksRepo, d.Worker).Mount)
+		api.Route("/links", links.NewHandler(linksRepo, d.Worker).WithMetadataFetcher(d.LinkMetadataFetcher).Mount)
 
 		// Screenshot and file-proxy endpoints are only registered when both
 		// a Screenshotter and Storage implementation are provided.

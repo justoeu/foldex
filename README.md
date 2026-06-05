@@ -214,7 +214,7 @@ to come as the project gets more populated content:
 
 - Populated home grid (cards + 3/5/8-column density)
 - Command palette (`⌥K`)
-- New link dialog with tag autocomplete
+- New link dialog with tag autocomplete + auto-detect of title/description (500 ms after you paste a URL)
 - Import page (drag-drop) + preview with the mode picker
 - Stats page (KPIs, top hosts, tag distribution)
 - Extension popup
