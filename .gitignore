@@ -39,3 +39,7 @@ backups/
 
 # Playwright MCP artifacts (snapshots, console logs from in-session debugging)
 .playwright-mcp/
+
+# graphify knowledge-graph output — regenerated on demand via `graphify update .`
+# (AST-only, no API cost). Treat as cache: keep current locally, never commit.
+graphify-out/
