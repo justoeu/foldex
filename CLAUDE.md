@@ -84,6 +84,7 @@ Schema + behavior contracts. Tests lock these.
 - **SSRF dialer is checked twice.** `preview.safeDialer.DialContext` runs `LookupIP` + IMDS/private guard pre-dial AND `conn.RemoteAddr().(*net.TCPAddr)` post-dial. The pre-dial leg is fast-fail; the post-dial leg defeats DNS rebinding. Post-dial type-assert is fail-closed.
 - **Screenshot is a FALLBACK, never default.** `preview.Worker.maybeScreenshot` runs only when **all** of: (a) HTML fetch returned empty `og:image`, (b) link still has no `og_image_url`, (c) `preview.IsPublicURL(url)` is true, (d) worker was wired with `WithScreenshotFallback(sc, up)`. Decode-bomb errors abort the fallback (don't write raw PNG to MinIO). Detail: ADR-16.
 - **Manual screenshot endpoint applies the same SSRF gate.** `internal/links/screenshot_handler.go:CaptureAndStore` takes a `links.URLPolicy` (wired to `preview.IsPublicURL`). Rejects non-http(s) → 400 `invalid_scheme`; private/IMDS → 400 `private_target`. **Nil policy is a config error, not SSRF rejection**: 500 `policy_unconfigured`. Router additionally panics at boot if `Screenshotter != nil && ScreenshotURL == nil` — surface wiring errors at deploy, not per-request.
+- **`GET /api/links/url-metadata` reuses the preview `Fetcher` — same SSRF posture, no duplicate HTTP client.** `internal/links/metadata_handler.go` injects `links.MetadataFetcher` (adapter over `*preview.Fetcher` constructed in `main.go`). Endpoint rejects non-http(s) → 400 `invalid_scheme`, URL > 2 KiB → 400 `invalid_url`; every fetch failure (DNS, SSRF, TLS, 4xx, timeout) collapses to 502 `fetch_failed` with no internal text. Returned fields are truncated via UTF-8-aware `truncateRunes`: **title at `links.MaxTitleBytes`** (single source of truth — same constant the Create/Update DTOs enforce, so a pre-filled title always passes Save), description at 4 KiB, favicon/og_image URLs at 2 KiB. Returning longer fields than `MaxTitleBytes` would be a self-inflicted UX bug (Save → 400 `invalid_input`).
 - **JSON request bodies are capped at 64 KiB.** Every POST/PATCH handler in `links`/`folders`/`tags` wraps `r.Body` with `http.MaxBytesReader` before `Decode`. Realistic payloads are well under 4 KiB; surface is hostile.
 - **Stats handler clamps every numeric knob via `clampInt`.** `?days` ∈ [1,365], `?limit` ∈ [1,100]. Without the cap, `?days=2147483647` lands in a `generate_series(...)` and the planner attempts it.
 - **Boot refuses the insecure-by-default combo.** `config.validateSecureDefaults` errors if `BACKEND_BIND` is non-loopback AND `SHARED_SECRET == ""` AND `CORS_ORIGINS` includes `*`. Defaults are fine for single-user/localhost; flipping any one forces the operator to set at least one knob.
@@ -116,6 +117,7 @@ Part of the product contract, not nice-to-haves.
 - **Every dialog closes on `Esc`** via `useEscape(onClose, open)`. **No `window.confirm()`** — always `useConfirm({ title, message, destructive })`. Focus trap via `useFocusTrap(ref, open)` on every dialog (Tab/Shift+Tab cycle inside, focus restored on close).
 - **Destructive actions** render with `fx-confirm-btn-danger` + trash icon + monospace `⚠ AÇÃO DESTRUTIVA` kicker. Cancel = ghost.
 - **Tag creation inside New Link dialog is deferred until save.** Pending tags use `id: 0`. The link's submit handler creates real tags first, then saves. Pending chips let the user cycle colors by clicking the dot (palette in `LinkDialog.tsx:INLINE_PALETTE`, Tailwind 500-weight to minimize collisions).
+- **LinkDialog auto-fills Title/Description from the URL after a 500 ms debounce** — only on **create** (edit mode skips entirely; the link already has its own copy), only when the field is **empty** (`setTitle((cur) => cur.trim() ? cur : data.title)` — user input always wins), and only when `looksLikeUrl(url)` passes. Effect uses `AbortController` so a fresh keystroke cancels the previous in-flight fetch AND unmounting the dialog aborts cleanly (no setState on dead component). Failure is silent (no toast, no submit block). Image stays async via the preview worker.
 - **Tooltips are CSS-only via `data-tooltip` (+ optional `data-tooltip-side`)** rendered through `<TooltipPortal>` (portal to `document.body`, viewport-clamped). Never use native `title` on visible UI. Keep `aria-label` for a11y.
 - **Sidebar stays clean** — no per-row edit/delete. Editing goes through `TagManagerDialog` (opened by "Gerenciar tags" footer button). Collapsed sidebar = 44 px rail with expand chevron; state in `localStorage["foldex.sidebar.collapsed"]`.
 - **Pinned links always come first.** `ORDER BY l.pinned DESC, ...` applies in every sort mode. Card shows gradient pin badge (always visible when pinned, on-hover when not).
@@ -149,7 +151,8 @@ Before announcing "done", verify each. If any fails, the change is not done.
 - [ ] Invariants in §4 and §5 not violated.
 - [ ] If a migration was added: applied to the running Postgres and backend recompiled to use the new schema.
 - [ ] User-visible UI changes manually validated in a real browser when behavior changes (not just type-check).
-- [ ] **Post-implementation agent sweep run** — see §9. Mandatory for every implementation task.
+- [ ] **Post-implementation agent sweep run** — see §9. Mandatory for every implementation task. **4 agents** (Code Review, Test Quality, Security, Performance) in parallel — never serialize, never skip "because the change is small."
+- [ ] **`graphify update .` run after any code change** — keeps `graphify-out/` in sync with the AST. Free (no API cost). Skipping means future codebase queries return stale results.
 - [ ] **Semver bump shipped** — see §6.2. `:latest` is not a release; only a `vX.Y.Z` tag is.
 
 ### 6.1 Pre-push gate — MANDATORY before ANY commit / push / PR
@@ -199,24 +202,25 @@ Two docker-compose projects: **`docker-compose.db.yml`** brings up Postgres on t
 
 ## 9. Post-implementation agent sweep — MANDATORY for every change
 
-Before declaring any implementation task done (and before opening a PR), spawn the three agents below **in parallel** via the `Agent` tool and surface every HIGH finding inline. Skipping the sweep is not allowed — it is part of the Definition of Done in §6.
+Before declaring any implementation task done (and before opening a PR), spawn the **four agents** below **in parallel** via the `Agent` tool and surface every HIGH finding inline. Skipping the sweep is not allowed — it is part of the Definition of Done in §6.
 
 Full prompts in [`AGENTS.md`](./AGENTS.md) — copy verbatim and only substitute the **session scope** placeholder.
 
-**The three agents** (always spawn all three, always parallel, always in a single tool-use block):
+**The four agents** (always spawn all four, always parallel, always in a single tool-use block):
 
-1. **Code Review agent** — architectural coherence, CLAUDE.md invariants (§4 + §5), code quality (naming, dead code, unnecessary comments per §7), React idiomaticity, workflow correctness. Does NOT review tests or security.
-2. **Test Quality agent** — whether new code paths are actually tested (positive + negative + edge), missing critical cases, test antipatterns (excessive mocks, flaky waits, weak asserts), coverage-gap recommendation. Does NOT review production code or security.
-3. **Security Review agent** — XSS / DoS / secret-leak / injection / supply-chain across runtime code AND CI workflows. Bucketed HIGH / MEDIUM / LOW / FYI. Does NOT review code quality or test quality.
+1. **Code Review agent** — architectural coherence, CLAUDE.md invariants (§4 + §5), code quality (naming, dead code, unnecessary comments per §7), React idiomaticity, workflow correctness. Does NOT review tests, security, or performance.
+2. **Test Quality agent** — whether new code paths are actually tested (positive + negative + edge), missing critical cases, test antipatterns (excessive mocks, flaky waits, weak asserts), coverage-gap recommendation. Does NOT review production code, security, or performance.
+3. **Security Review agent** — XSS / DoS / secret-leak / injection / supply-chain across runtime code AND CI workflows. Bucketed HIGH / MEDIUM / LOW / FYI. Does NOT review code quality, tests, or performance.
+4. **Performance Review agent** — re-render storms, missing memoization that actually pays off, debounce/throttle correctness, network waste (duplicated requests, missing cache invalidation, over-eager refetch), bundle impact (heavy imports, missed code-split), unbounded loops on user data, SQL N+1 / missing index. Bucketed HIGH / MEDIUM / LOW / FYI. Does NOT review code quality, tests, or security.
 
 **Workflow:**
 
-1. After typecheck + tests + coverage pass, call `Agent(...)` three times in one tool-use block — one per agent — with `run_in_background: true` and the session scope filled in.
-2. Continue with docs / commit prep while they run; harness notifies on completion. Do NOT sleep or poll.
+1. After typecheck + tests + coverage pass, call `Agent(...)` four times in one tool-use block — one per agent — with `run_in_background: true` and the session scope filled in.
+2. Continue with docs / commit prep / `graphify update .` while they run; harness notifies on completion. Do NOT sleep or poll.
 3. When each agent reports back, surface findings to the user. **Treat every HIGH as a blocker** — fix in this session, then re-run the relevant agent against the patched diff. MEDIUM and LOW go to the PR description (or get fixed if cheap).
-4. Only declare done after the three reports are visible and every HIGH is resolved.
+4. Only declare done after the four reports are visible AND every HIGH is resolved AND `graphify update .` completed.
 
-The three agents are split by concern on purpose — don't merge them or skip one "because the change is small." The sweep is also the safety net for changes that *look* small.
+The four agents are split by concern on purpose — don't merge them or skip one "because the change is small." The sweep is also the safety net for changes that *look* small.
 
 ---
 

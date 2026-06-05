@@ -2,7 +2,7 @@
 
 > **Project invariants live in [`CLAUDE.md`](./CLAUDE.md).** Read it before making any change.
 
-This file holds the **canonical prompts for the three post-implementation review agents** required by CLAUDE.md §6 (Definition of Done) and §9 (Post-implementation agent sweep). Spawn all three in parallel via the `Agent` tool — never skip and never serialize.
+This file holds the **canonical prompts for the four post-implementation review agents** required by CLAUDE.md §6 (Definition of Done) and §9 (Post-implementation agent sweep). Spawn all four in parallel via the `Agent` tool — never skip and never serialize.
 
 ---
 
@@ -14,7 +14,7 @@ After every implementation task, once typecheck + tests + coverage pass, **befor
 
 ## How to run
 
-In a single tool-use block, issue three `Agent` calls (`run_in_background: true`) with `subagent_type: general-purpose`. The harness notifies as each one finishes; do not poll or sleep.
+In a single tool-use block, issue four `Agent` calls (`run_in_background: true`) with `subagent_type: general-purpose`. The harness notifies as each one finishes; do not poll or sleep. While they run, kick off `graphify update .` in another background shell (also required by CLAUDE.md §6 DoD).
 
 For each prompt below, replace the `<SESSION SCOPE>` placeholder with the actual artifacts the agent should focus on — typically the commit hashes added this session, plus the branch they live on. Be specific: list the commit SHAs and the file globs that changed.
 
@@ -157,11 +157,79 @@ Hard cap: 400 words.
 
 ---
 
+---
+
+## Agent 4 — Performance Review
+
+```text
+You are acting as **performance reviewer** for the changes made in this session at
+/Users/justoeu/Developer/Workspace/foldex.
+
+Scope of review:
+<SESSION SCOPE — list commit SHAs, branch, and the files that changed>
+
+Inspection helpers:
+- `git show <SHA> --stat` and `git show <SHA> -- <paths>`
+- The repo's CLAUDE.md §5 has UI invariants (viewMode persistence, density picker, mobile
+  breakpoints). §4 has data invariants relevant to query shape (LEFT JOIN LATERAL for
+  click_count, indexed columns, etc.).
+
+What you do NOT review (parallel agents cover):
+- Architectural / style code review — owned by the Code Review agent
+- Test quality / coverage — owned by the Test Quality agent
+- Security risks — owned by the Security agent
+
+What YOU review:
+
+### Frontend
+1. **Re-render storms** — components newly mounted in hot paths (cards, grids) without React.memo
+   when props are stable references. Look at parent `.map()` callbacks that allocate new objects
+   per render and force children to re-render.
+2. **Missing or wrong memoization** — `useMemo`/`useCallback` deps arrays that include unstable
+   references (new arrays, new objects); deps that miss stable values that ARE used in the body.
+3. **Effects that fire too often** — `useEffect` deps too broad (e.g. depending on full `link`
+   object when only `link.id` matters), missing cleanup that leaks listeners/timers/subscriptions.
+4. **Debounce / throttle correctness** — does the debounce actually coalesce? Is the cleanup
+   clearing the timer? Are AbortControllers wired to network calls so a stale response can't
+   write into a fresh dialog?
+5. **Network waste** — duplicated requests across components, missing TanStack Query cache hits,
+   over-eager `refetchInterval` that doesn't stop when no work remains, missing optimistic
+   updates that force a roundtrip before the UI reflects the change.
+6. **Bundle impact** — heavy imports that should be `React.lazy` + Suspense (the project already
+   lazy-loads StatsPage / ImportPage; any new heavy page or modal should follow).
+
+### Backend
+7. **SQL N+1** — loops that issue one query per element instead of a single batched query
+   (or a LEFT JOIN LATERAL for derived fields like `click_count`).
+8. **Missing index for new query shape** — new WHERE / ORDER BY / GROUP BY on columns that have
+   no index. Check `internal/db/migrations/` for what's actually indexed.
+9. **Unbounded loops on user data** — `for _, x := range userInput` without a cap; could amplify
+   payload-size into compute.
+10. **Connection / goroutine churn** — new code creating per-request `http.Client`/`pgxpool`
+    instances instead of reusing a shared one. Goroutine spawns without bounded concurrency.
+
+### Wall-clock impact
+11. **Critical-path latency** — does the change add to a hot path the user waits on (boot, first
+    paint, modal open, save, login)? Quantify if possible.
+
+Reporting format:
+- **HIGH** (fix immediately): bullet — `file:line` — description — concrete remediation, with a
+  quick napkin-math estimate when relevant ("3× per card × 200 cards = 600 extra renders/scroll").
+- **MEDIUM** (worth addressing): same shape.
+- **LOW / FYI** (informational): same shape.
+- If a bucket is empty, say so explicitly ("no HIGH findings").
+
+Hard cap: 400 words.
+```
+
+---
+
 ## After the sweep
 
 1. Surface each agent's report to the user.
 2. **Every HIGH finding is a blocker** — fix in this session, then re-run that specific agent against the patched diff.
 3. MEDIUM / LOW get listed in the PR description as known follow-ups, or fixed if cheap.
-4. Only declare the implementation done once the three reports are visible and every HIGH is resolved.
+4. Run `graphify update .` (AST-only, no API cost) so codebase queries reflect the new code.
+5. Only declare the implementation done once the four reports are visible, every HIGH is resolved, AND graphify is in sync.
 
-The three agents are split by concern on purpose. **Never merge them into one** ("the change is small") — the sweep is precisely the safety net for changes that look small.
+The four agents are split by concern on purpose. **Never merge them into one** ("the change is small") — the sweep is precisely the safety net for changes that look small.
