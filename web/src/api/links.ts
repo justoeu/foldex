@@ -186,17 +186,38 @@ export type UrlMetadata = {
   og_image_url: string
 }
 
-// useFetchUrlMetadata wraps the metadata endpoint as a mutation rather than a
-// query because: (1) we never want to cache across distinct URLs, (2) we want
-// to trigger fetches imperatively from a debounce effect, (3) any failure is
-// silent UX (the user can still type the title manually).
+// Module-level memo for url-metadata responses, keyed by the exact URL. Saves
+// a backend round-trip for the "paste → close → re-paste same URL" loop
+// (Cmd+V duplicates, dialog close-then-reopen). 5-min TTL is short enough
+// that a stale og:title from a freshly-edited source page only lingers for
+// a few minutes; OG tags rarely change minute-to-minute in practice.
+const URL_METADATA_CACHE_TTL_MS = 5 * 60 * 1000
+const urlMetadataCache = new Map<string, { data: UrlMetadata; expiresAt: number }>()
+
+// Exposed for tests so each case starts with an empty cache. Production code
+// never needs to call this — entries expire by TTL.
+export function _clearUrlMetadataCacheForTests() {
+  urlMetadataCache.clear()
+}
+
+// useFetchUrlMetadata wraps the metadata endpoint as a mutation because we
+// trigger fetches imperatively from a debounce effect AND any failure is
+// silent UX (the user can still type manually). The module-level Map gives
+// us the cross-dialog-mount dedup that useQuery would give us, without
+// paying the queryKey ceremony for fire-and-forget calls.
 export function useFetchUrlMetadata() {
   return useMutation({
-    mutationFn: async ({ url, signal }: { url: string; signal?: AbortSignal }) => {
+    mutationFn: async ({ url, signal }: { url: string; signal?: AbortSignal }): Promise<UrlMetadata> => {
+      const now = Date.now()
+      const hit = urlMetadataCache.get(url)
+      if (hit && hit.expiresAt > now) {
+        return hit.data
+      }
       const { data } = await http.get<UrlMetadata>('/api/links/url-metadata', {
         params: { url },
         signal,
       })
+      urlMetadataCache.set(url, { data, expiresAt: now + URL_METADATA_CACHE_TTL_MS })
       return data
     },
   })

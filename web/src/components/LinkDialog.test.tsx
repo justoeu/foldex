@@ -5,6 +5,7 @@ import { LinkDialog } from './LinkDialog'
 import { renderWithProviders } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import type { Link } from '../api/types'
+import { _clearUrlMetadataCacheForTests } from '../api/links'
 
 let state: MockState
 
@@ -12,6 +13,10 @@ beforeEach(() => {
   state = freshState()
   state.tags.push({ id: 1, name: 'jira', color: '#1f6feb', icon: null })
   installAxiosMock(state)
+  // Tests must NOT inherit cached metadata from a previous case — without
+  // this reset, AUTO-FILL tests that share the same URL string would
+  // silently get a cache hit and skip the mock route entirely.
+  _clearUrlMetadataCacheForTests()
 })
 
 describe('LinkDialog', () => {
@@ -315,6 +320,48 @@ describe('LinkDialog', () => {
     await waitFor(() => expect(state.urlMetadataCalls).toContain('https://example.com'), { timeout: 2000 })
     await new Promise((r) => setTimeout(r, 200))
     expect(desc.value).toBe('my custom desc')
+  })
+
+  it('AUTO-FILL: in-memory cache dedups the same URL across dialog mounts', async () => {
+    // Open dialog → fetch fires once → unmount → reopen with the SAME URL.
+    // The second mount must hit the module-level cache and skip the network
+    // entirely. Saves a roundtrip on the Cmd+V duplicate / close-reopen loop.
+    state.urlMetadata = { title: 'Cached Title' }
+    const { unmount } = renderWithProviders(
+      <LinkDialog open link={null} initialUrl="https://cache-me.example" onClose={vi.fn()} />,
+    )
+    await waitFor(() => expect(state.urlMetadataCalls).toHaveLength(1), { timeout: 2000 })
+    unmount()
+
+    renderWithProviders(<LinkDialog open link={null} initialUrl="https://cache-me.example" onClose={vi.fn()} />)
+    // Give the debounce + a beat for any network call to happen — none should.
+    await new Promise((r) => setTimeout(r, 800))
+    expect(state.urlMetadataCalls).toHaveLength(1)
+    // The title should still be pre-filled from the cache hit.
+    const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
+    expect(titleInput.value).toBe('Cached Title')
+  })
+
+  it('AUTO-FILL: cache key is the URL — distinct URLs each fetch once', async () => {
+    // Defensive: locks that the cache lookup uses the URL as key. A bug that
+    // ignored the key (e.g. memoizing on something stable like a constant)
+    // would return the FIRST URL's metadata for the second URL — silently
+    // mislabeling links.
+    state.urlMetadata = { title: 'Title A' }
+    const { unmount } = renderWithProviders(
+      <LinkDialog open link={null} initialUrl="https://a.example" onClose={vi.fn()} />,
+    )
+    await waitFor(() => expect(state.urlMetadataCalls).toEqual(['https://a.example']), { timeout: 2000 })
+    unmount()
+
+    state.urlMetadata = { title: 'Title B' }
+    renderWithProviders(<LinkDialog open link={null} initialUrl="https://b.example" onClose={vi.fn()} />)
+    await waitFor(
+      () => expect(state.urlMetadataCalls).toEqual(['https://a.example', 'https://b.example']),
+      { timeout: 2000 },
+    )
+    const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
+    await waitFor(() => expect(titleInput.value).toBe('Title B'), { timeout: 2000 })
   })
 
   it('AUTO-FILL: tolerates a 502 from the backend silently', async () => {
