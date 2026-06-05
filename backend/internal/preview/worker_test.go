@@ -22,8 +22,11 @@ func (f *fakeScreenshotter) Capture(_ context.Context, _ string) ([]byte, error)
 }
 
 type fakeUploader struct {
-	calls   int
-	last    struct{ key, ct string; data []byte }
+	calls int
+	last  struct {
+		key, ct string
+		data    []byte
+	}
 	deleted []string
 	err     error
 }

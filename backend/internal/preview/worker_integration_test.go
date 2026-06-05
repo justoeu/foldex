@@ -67,7 +67,10 @@ func TestWorker_ProcessesEnqueuedJob(t *testing.T) {
 	assert.Contains(t, *got.FaviconURL, "fav.ico")
 }
 
-type stubScreenshotter struct{ payload []byte; err error }
+type stubScreenshotter struct {
+	payload []byte
+	err     error
+}
 
 func (s stubScreenshotter) Capture(_ context.Context, _ string) ([]byte, error) {
 	return s.payload, s.err

@@ -21,6 +21,11 @@ type Result struct {
 	Description string
 	FaviconURL  string
 	OGImageURL  string
+	// OEmbedURL is the value of <link rel="alternate" type="application/json+oembed">
+	// when the HTML page advertises one. Captured by parseHead so Fetch can
+	// run an enrichment pass against that endpoint; never surfaced to callers
+	// (the adapter in main.go drops it when mapping to links.URLMetadata).
+	OEmbedURL string
 }
 
 type Fetcher struct {
@@ -93,11 +98,41 @@ func (f *Fetcher) GetRaw(ctx context.Context, pageURL string) ([]byte, string, e
 }
 
 // Fetch returns the metadata for pageURL. SSRF guard is enforced in the dialer.
+//
+// Resolution order:
+//  1. Known oEmbed providers (YouTube, Vimeo, …) short-circuit straight to
+//     the provider's oEmbed JSON endpoint — these are sites we've confirmed
+//     serve degraded HTML to bot fingerprints (UA/headers/cookies don't help,
+//     it's IP/TLS-level). On success we return the oEmbed result without
+//     touching the page HTML at all.
+//  2. Otherwise we fetch the page HTML and parse `<head>`. If the page
+//     advertises oEmbed (`<link rel="alternate" type="application/json+oembed">`)
+//     AND any of {Title, Description, OGImageURL} came back empty, run a
+//     second fetch to that endpoint and merge only the fields the HTML
+//     pass didn't fill. HTML always wins what it has — oEmbed never
+//     overwrites a non-empty HTML value.
 func (f *Fetcher) Fetch(ctx context.Context, pageURL string) (Result, error) {
 	u, err := url.Parse(pageURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return Result{}, fmt.Errorf("invalid url")
 	}
+
+	// (1) Hardcoded-provider shortcut. If oEmbed errors or returns an empty
+	// title (TrimSpace — a single-space title from a misbehaving provider
+	// shouldn't satisfy us), fall through to HTML — degraded but better
+	// than nothing. Sub-deadline of 5s caps the shortcut even when the
+	// caller's ctx has a long budget left, so a slow oEmbed provider can't
+	// dominate the overall Fetch latency.
+	if oembedURL := hardcodedOEmbedURL(pageURL); oembedURL != "" {
+		oeCtx, oeCancel := context.WithTimeout(ctx, oembedSubDeadline)
+		r, err := f.fetchOEmbed(oeCtx, oembedURL)
+		oeCancel()
+		if err == nil && strings.TrimSpace(r.Title) != "" {
+			r.FaviconURL = u.Scheme + "://" + u.Host + "/favicon.ico"
+			return r, nil
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
 		return Result{}, err
@@ -120,6 +155,25 @@ func (f *Fetcher) Fetch(ctx context.Context, pageURL string) (Result, error) {
 	if resolved.FaviconURL == "" {
 		resolved.FaviconURL = finalURL.Scheme + "://" + finalURL.Host + "/favicon.ico"
 	}
+
+	// (2) Generic oEmbed discovery enrichment. Skip when every field we
+	// care about is already filled (TrimSpace — placeholder whitespace from
+	// SPAs doesn't count as "filled"). Errors are silent (HTML is the
+	// baseline). Sub-deadline so an enrichment call can't drag the total
+	// past the caller's expectation.
+	titleFilled := strings.TrimSpace(resolved.Title) != ""
+	descFilled := strings.TrimSpace(resolved.Description) != ""
+	imageFilled := strings.TrimSpace(resolved.OGImageURL) != ""
+	if resolved.OEmbedURL != "" && !(titleFilled && descFilled && imageFilled) {
+		oeCtx, oeCancel := context.WithTimeout(ctx, oembedSubDeadline)
+		if oe, err := f.fetchOEmbed(oeCtx, resolved.OEmbedURL); err == nil {
+			resolved = mergeOEmbed(resolved, oe)
+		}
+		oeCancel()
+	}
+	// OEmbedURL is an internal signal — clear it before returning so adapters
+	// don't accidentally surface it to the API.
+	resolved.OEmbedURL = ""
 	return resolved, nil
 }
 
@@ -165,9 +219,15 @@ loop:
 				}
 			case "link":
 				rel := strings.ToLower(attr(tok, "rel"))
+				typ := strings.ToLower(attr(tok, "type"))
 				href := attr(tok, "href")
 				if (rel == "icon" || rel == "shortcut icon" || strings.Contains(rel, "icon")) && out.FaviconURL == "" {
 					out.FaviconURL = href
+				}
+				// Capture an oEmbed discovery link for post-parse enrichment.
+				// Spec: <link rel="alternate" type="application/json+oembed" href="…">.
+				if strings.Contains(rel, "alternate") && typ == "application/json+oembed" && out.OEmbedURL == "" {
+					out.OEmbedURL = href
 				}
 			}
 			if tt == html.StartTagToken && !isVoid(name) {
@@ -205,6 +265,11 @@ func isVoid(name string) bool {
 func resolveRelatives(r Result, base *url.URL) Result {
 	r.FaviconURL = resolveOne(r.FaviconURL, base)
 	r.OGImageURL = resolveOne(r.OGImageURL, base)
+	// Pages whose oEmbed discovery link is host-relative (`/oembed?url=…`)
+	// or path-relative (`oembed?url=…`) — WordPress, SoundCloud, Flickr —
+	// would otherwise fail the second fetch with an `invalid url` error
+	// inside http.NewRequest.
+	r.OEmbedURL = resolveOne(r.OEmbedURL, base)
 	return r
 }
 
