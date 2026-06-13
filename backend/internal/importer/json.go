@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+// maxImportClickCount bounds the per-link click_count an import may request.
+// insertLinkInTx materializes one click_log row per count via generate_series,
+// so an unbounded value is a single-field OOM/disk-fill amplifier.
+const maxImportClickCount = 1_000_000
+
 type JSONFile struct {
 	Version    int          `json:"version"`
 	ExportedAt string       `json:"exported_at,omitempty"`
@@ -83,6 +88,9 @@ func (f JSONFile) Validate() error {
 		}
 		if len(strings.TrimSpace(l.Title)) > 500 {
 			return fmt.Errorf("links[%d]: title too long (max 500)", i)
+		}
+		if l.ClickCount < 0 || l.ClickCount > maxImportClickCount {
+			return fmt.Errorf("links[%d]: click_count out of range (0..%d)", i, maxImportClickCount)
 		}
 		for j, tagName := range l.Tags {
 			tname := strings.TrimSpace(tagName)

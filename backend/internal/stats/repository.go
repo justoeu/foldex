@@ -169,4 +169,3 @@ func (r *Repository) TagBuckets(ctx context.Context) ([]TagBucket, error) {
 	}
 	return out, rows.Err()
 }
-

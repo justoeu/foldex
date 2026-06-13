@@ -12,31 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeMinIO implements just enough of the minio.Client surface that our
-// wrapper uses. It is not a real MinIO client — it is used exclusively to
-// drive unit tests without a running server.
-
-type fakeMinio struct {
-	buckets map[string]bool
-	objects map[string]fakeObject
-}
-
-type fakeObject struct {
-	data        []byte
-	contentType string
-}
-
-func newFakeMinio() *fakeMinio {
-	return &fakeMinio{
-		buckets: map[string]bool{},
-		objects: map[string]fakeObject{},
-	}
-}
-
-// We cannot use fakeMinio directly in Client because Client holds a
-// *minio.Client (concrete). Instead we test through a thin constructor that
-// accepts pre-built clients. To keep the production code simple, we test the
-// helpers (readAll) and error cases directly.
+// Client holds a concrete *minio.Client, so we can't swap in a fake. The unit
+// tests here drive the helpers (readAll) and the construction/error paths
+// directly; the full PutObject/GetObject surface is covered by
+// storage_integration_test.go against a real MinIO.
 
 func TestReadAll(t *testing.T) {
 	t.Run("reads full content", func(t *testing.T) {

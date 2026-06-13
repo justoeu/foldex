@@ -50,6 +50,13 @@ run: ## Run backend locally (expects local Postgres on :5432)
 build: ## Build binary into ./bin
 	go build -o bin/foldex ./cmd/server
 
+fmt-check: ## Fail if any Go file under ./internal or ./cmd is not gofmt-clean
+	@unformatted=$$(gofmt -l ./internal ./cmd); \
+	if [ -n "$$unformatted" ]; then \
+	  echo "gofmt: the following files are not formatted:"; echo "$$unformatted"; \
+	  echo "run 'gofmt -w ./internal ./cmd'"; exit 1; \
+	fi
+
 test: ## Run UNIT tests only (no Docker)
 	go test ./...
 
@@ -88,4 +95,4 @@ migrate-down: ## Revert the most recent migration
 migrate-create: ## Create a new migration: make migrate-create NAME=add_x
 	$(MIGRATE) create -ext sql -dir /migrations -seq $(NAME)
 
-.PHONY: help tidy run build test test-integration coverage coverage-run coverage-check coverage-html migrate-up migrate-down migrate-create
+.PHONY: help tidy run build fmt-check test test-integration coverage coverage-run coverage-check coverage-html migrate-up migrate-down migrate-create

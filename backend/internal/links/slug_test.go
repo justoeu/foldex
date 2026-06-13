@@ -55,17 +55,17 @@ func TestSlugIsValid(t *testing.T) {
 		{"jira-board-inv-1", true},
 		{"42-board", true}, // mixed numeric + word OK
 		{"", false},
-		{"42", false},     // pure digits forbidden — would shadow /go/42
-		{"0001", false},   // even with leading zeros, still pure digits
-		{"-foo", false},   // leading hyphen
-		{"foo-", false},   // trailing hyphen
-		{"foo--bar", false}, // double hyphen
-		{"Foo", false},    // uppercase
-		{"foo bar", false}, // space
-		{"foo.bar", false}, // dot
-		{"café", false},   // non-ASCII
-		{strings.Repeat("a", slug.MaxLen), true},     // exactly at cap
-		{strings.Repeat("a", slug.MaxLen+1), false},  // one over
+		{"42", false},                            // pure digits forbidden — would shadow /go/42
+		{"0001", false},                          // even with leading zeros, still pure digits
+		{"-foo", false},                          // leading hyphen
+		{"foo-", false},                          // trailing hyphen
+		{"foo--bar", false},                      // double hyphen
+		{"Foo", false},                           // uppercase
+		{"foo bar", false},                       // space
+		{"foo.bar", false},                       // dot
+		{"café", false},                          // non-ASCII
+		{strings.Repeat("a", slug.MaxLen), true}, // exactly at cap
+		{strings.Repeat("a", slug.MaxLen+1), false}, // one over
 	}
 	for _, tc := range cases {
 		t.Run(tc.slug, func(t *testing.T) {

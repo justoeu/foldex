@@ -595,4 +595,3 @@ func scanRows(ctx context.Context, tx pgx.Tx, sql string, fn func(pgx.Rows) erro
 	}
 	return rows.Err()
 }
-

@@ -160,8 +160,8 @@ func TestOptimize_NoMaxDimPreservesDimensions(t *testing.T) {
 
 func TestScaledDims(t *testing.T) {
 	tests := []struct {
-		w, h, max         int
-		wantW, wantH      int
+		w, h, max    int
+		wantW, wantH int
 	}{
 		{2000, 1000, 1024, 1024, 512},
 		{1000, 2000, 1024, 512, 1024},

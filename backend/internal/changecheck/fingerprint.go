@@ -359,4 +359,3 @@ func normalizeWhitespace(s string) string {
 	}
 	return strings.TrimRight(b.String(), " ")
 }
-

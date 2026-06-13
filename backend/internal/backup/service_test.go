@@ -17,9 +17,9 @@ func TestHasAllowedPrefix(t *testing.T) {
 		{"images/", true},
 		{"other/1.png", false},
 		{"", false},
-		{"/screenshots/1.png", false},  // leading slash
-		{"sshots/1.png", false},        // partial match
-		{"screenshotsfoo.png", false},  // no trailing slash
+		{"/screenshots/1.png", false}, // leading slash
+		{"sshots/1.png", false},       // partial match
+		{"screenshotsfoo.png", false}, // no trailing slash
 	}
 	for _, tc := range cases {
 		t.Run(tc.key, func(t *testing.T) {

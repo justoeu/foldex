@@ -126,4 +126,3 @@ func isValidPushEndpoint(endpoint string) bool {
 	}
 	return true
 }
-

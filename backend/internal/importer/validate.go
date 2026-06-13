@@ -38,7 +38,7 @@ type ValidationLink struct {
 	Title    string   `json:"title"`
 	Folder   string   `json:"folder,omitempty"` // matches a Folders[].Path
 	Tags     []string `json:"tags,omitempty"`
-	Conflict bool     `json:"conflict"`         // URL already exists in the DB
+	Conflict bool     `json:"conflict"` // URL already exists in the DB
 }
 
 // Validate parses the upload and computes conflict counts against the live

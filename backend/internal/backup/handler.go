@@ -215,4 +215,3 @@ func streamToTempZip(src io.Reader) (*zip.Reader, func(), error) {
 	}
 	return zr, cleanup, nil
 }
-

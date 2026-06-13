@@ -106,12 +106,12 @@ func (f *fakeUploader) DeleteObject(_ context.Context, key string) error {
 }
 
 type fakeRepo struct {
-	links       map[int64]Link
-	updatedURL  map[int64]string
-	clearedIDs  []int64
-	getErr      error
-	updateErr   error
-	clearErr    error
+	links      map[int64]Link
+	updatedURL map[int64]string
+	clearedIDs []int64
+	getErr     error
+	updateErr  error
+	clearErr   error
 }
 
 func newFakeRepo() *fakeRepo {
