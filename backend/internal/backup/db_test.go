@@ -103,4 +103,3 @@ func TestRemapFileKey_IdentityWhenSameID(t *testing.T) {
 	assert.Equal(t, "screenshots/7.png", got)
 	assert.False(t, ok, "identity mapping must be reported as no-op")
 }
-

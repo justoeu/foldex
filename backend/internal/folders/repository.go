@@ -165,7 +165,7 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 	}
 	if in.Color != nil {
 		sets = append(sets, fmt.Sprintf("color = $%d", i))
-			args = append(args, *in.Color)
+		args = append(args, *in.Color)
 		i++
 	}
 

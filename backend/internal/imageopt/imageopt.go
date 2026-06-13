@@ -17,10 +17,10 @@ import (
 	xdraw "golang.org/x/image/draw"
 
 	// Register decoders so image.Decode dispatches by sniffed format.
+	_ "golang.org/x/image/webp"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	_ "golang.org/x/image/webp"
 )
 
 // ErrUnsupportedFormat is returned when the bytes don't sniff to one of the

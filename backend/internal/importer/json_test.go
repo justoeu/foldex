@@ -131,6 +131,33 @@ func TestValidate_LinkTitleTooLong(t *testing.T) {
 	require.Error(t, f.Validate())
 }
 
+func TestValidate_LinkClickCountAtCapOK(t *testing.T) {
+	f := JSONFile{
+		Version: 1,
+		Tags:    []JSONTag{},
+		Links:   []JSONLink{{URL: "https://example.com", Title: "t", ClickCount: maxImportClickCount}},
+	}
+	require.NoError(t, f.Validate())
+}
+
+func TestValidate_LinkClickCountTooLarge(t *testing.T) {
+	f := JSONFile{
+		Version: 1,
+		Tags:    []JSONTag{},
+		Links:   []JSONLink{{URL: "https://example.com", Title: "t", ClickCount: maxImportClickCount + 1}},
+	}
+	require.Error(t, f.Validate())
+}
+
+func TestValidate_LinkClickCountNegative(t *testing.T) {
+	f := JSONFile{
+		Version: 1,
+		Tags:    []JSONTag{},
+		Links:   []JSONLink{{URL: "https://example.com", Title: "t", ClickCount: -1}},
+	}
+	require.Error(t, f.Validate())
+}
+
 func TestValidate_LinkTagNameEmpty(t *testing.T) {
 	f := JSONFile{
 		Version: 1,

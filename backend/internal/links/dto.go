@@ -16,8 +16,8 @@ const (
 )
 
 type CreateInput struct {
-	URL         string  `json:"url"`
-	Title       string  `json:"title"`
+	URL   string `json:"url"`
+	Title string `json:"title"`
 	// Slug is optional on create — when nil/empty the repository derives it
 	// from Title via Slugify (with auto-suffix on collision).
 	Slug        *string `json:"slug"`

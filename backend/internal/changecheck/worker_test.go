@@ -349,4 +349,3 @@ func drain(t *testing.T, w *Worker, n int) []int64 {
 	}
 	return got
 }
-

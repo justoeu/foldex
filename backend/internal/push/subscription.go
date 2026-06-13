@@ -97,4 +97,3 @@ func (r *Repository) MarkUsed(ctx context.Context, id int64) error {
 	}
 	return nil
 }
-

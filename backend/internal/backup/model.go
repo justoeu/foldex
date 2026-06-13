@@ -30,24 +30,24 @@ type Counts struct {
 }
 
 type Manifest struct {
-	Kind           string            `json:"kind"`
-	Version        string            `json:"version"`
-	SchemaVersion  int               `json:"schema_version"`
-	CreatedAt      time.Time         `json:"created_at"`
-	FoldexVersion  string            `json:"foldex_version,omitempty"`
-	Counts         Counts            `json:"counts"`
-	Checksums      map[string]string `json:"checksums"`
+	Kind          string            `json:"kind"`
+	Version       string            `json:"version"`
+	SchemaVersion int               `json:"schema_version"`
+	CreatedAt     time.Time         `json:"created_at"`
+	FoldexVersion string            `json:"foldex_version,omitempty"`
+	Counts        Counts            `json:"counts"`
+	Checksums     map[string]string `json:"checksums"`
 }
 
 // Snapshot is the in-memory shape of database.json. Field names are
 // snake_case JSON to match what the existing exporter/importer use.
 type Snapshot struct {
-	Version    int          `json:"version"`
-	Tags       []TagRow     `json:"tags"`
-	Folders    []FolderRow  `json:"folders"`
-	Links      []LinkRow    `json:"links"`
-	LinkTags   []LinkTagRow `json:"link_tags"`
-	ClickLogs  []ClickRow   `json:"click_logs"`
+	Version   int          `json:"version"`
+	Tags      []TagRow     `json:"tags"`
+	Folders   []FolderRow  `json:"folders"`
+	Links     []LinkRow    `json:"links"`
+	LinkTags  []LinkTagRow `json:"link_tags"`
+	ClickLogs []ClickRow   `json:"click_logs"`
 }
 
 type TagRow struct {
@@ -126,13 +126,13 @@ func (m ConflictMode) Valid() bool {
 }
 
 type RestoreReport struct {
-	Mode       ConflictMode  `json:"mode"`
-	Inserted   Counts        `json:"inserted"`
-	Skipped    Counts        `json:"skipped"`
-	Wiped      Counts        `json:"wiped"`
-	Files      FileReport    `json:"files"`
-	Warnings   []string      `json:"warnings"`
-	DurationMs int64         `json:"duration_ms"`
+	Mode       ConflictMode `json:"mode"`
+	Inserted   Counts       `json:"inserted"`
+	Skipped    Counts       `json:"skipped"`
+	Wiped      Counts       `json:"wiped"`
+	Files      FileReport   `json:"files"`
+	Warnings   []string     `json:"warnings"`
+	DurationMs int64        `json:"duration_ms"`
 }
 
 type FileReport struct {

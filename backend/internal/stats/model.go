@@ -3,12 +3,12 @@ package stats
 import "time"
 
 type Summary struct {
-	TotalLinks     int64 `json:"total_links"`
-	TotalTags      int64 `json:"total_tags"`
-	TotalClicks    int64 `json:"total_clicks"`
-	ClicksLast30d  int64 `json:"clicks_last_30d"`
-	ClicksPrev30d  int64 `json:"clicks_prev_30d"`
-	NewLinksLast30 int64 `json:"new_links_last_30d"`
+	TotalLinks     int64  `json:"total_links"`
+	TotalTags      int64  `json:"total_tags"`
+	TotalClicks    int64  `json:"total_clicks"`
+	ClicksLast30d  int64  `json:"clicks_last_30d"`
+	ClicksPrev30d  int64  `json:"clicks_prev_30d"`
+	NewLinksLast30 int64  `json:"new_links_last_30d"`
 	TopHost        string `json:"top_host"`
 	TopHostClicks  int64  `json:"top_host_clicks"`
 }
@@ -30,9 +30,9 @@ type TopLink struct {
 }
 
 type TagBucket struct {
-	ID      int64  `json:"id"`
-	Name    string `json:"name"`
-	Color   string `json:"color"`
-	Clicks  int64  `json:"clicks"`
-	Links   int64  `json:"links"`
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	Color  string `json:"color"`
+	Clicks int64  `json:"clicks"`
+	Links  int64  `json:"links"`
 }

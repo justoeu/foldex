@@ -13,15 +13,15 @@ func TestClampInt(t *testing.T) {
 		max  int
 		want int
 	}{
-		{"", 60, 1, 365, 60},          // empty → default
-		{"abc", 60, 1, 365, 60},       // parse failure → default
-		{"30", 60, 1, 365, 30},        // in-range stays
-		{"-5", 60, 1, 365, 1},         // below min → clamp to min
-		{"999999", 60, 1, 365, 365},   // above max → clamp to max
-		{"0", 60, 1, 365, 1},          // zero is below min=1
-		{"1", 60, 1, 365, 1},          // boundary low
-		{"365", 60, 1, 365, 365},      // boundary high
-		{" 30 ", 60, 1, 365, 60},      // strconv.Atoi rejects whitespace → default
+		{"", 60, 1, 365, 60},        // empty → default
+		{"abc", 60, 1, 365, 60},     // parse failure → default
+		{"30", 60, 1, 365, 30},      // in-range stays
+		{"-5", 60, 1, 365, 1},       // below min → clamp to min
+		{"999999", 60, 1, 365, 365}, // above max → clamp to max
+		{"0", 60, 1, 365, 1},        // zero is below min=1
+		{"1", 60, 1, 365, 1},        // boundary low
+		{"365", 60, 1, 365, 365},    // boundary high
+		{" 30 ", 60, 1, 365, 60},    // strconv.Atoi rejects whitespace → default
 	}
 	for _, tc := range cases {
 		t.Run(tc.s, func(t *testing.T) {

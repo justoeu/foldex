@@ -11,7 +11,6 @@ import (
 	"foldex/internal/pkg/httperr"
 )
 
-
 type Handler struct {
 	repo *Repository
 }

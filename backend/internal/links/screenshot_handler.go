@@ -365,4 +365,3 @@ func (h *ScreenshotHandler) purgeLegacyVariants(ctx context.Context, prefix stri
 		}
 	}
 }
-

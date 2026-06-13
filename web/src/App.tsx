@@ -99,10 +99,13 @@ export default function App() {
   // address bar). `openFolder` is just the top of the stack.
   const [folderPath, setFolderPath] = useState<number[]>([])
   const openFolder = folderPath.at(-1) ?? null
-  const setOpenFolder = (id: number | null) => {
-    setFolderPath(id == null ? [] : [...folderPath, id])
-  }
-  const navigateBack = () => setFolderPath(folderPath.slice(0, -1))
+  // Functional setState so these stay referentially stable across renders —
+  // they're threaded down to memoized cards, where a fresh reference every
+  // render would defeat the React.memo shallow compare.
+  const setOpenFolder = useCallback((id: number | null) => {
+    setFolderPath((prev) => (id == null ? [] : [...prev, id]))
+  }, [])
+  const navigateBack = useCallback(() => setFolderPath((prev) => prev.slice(0, -1)), [])
 
   // Theme toggle drives a class on the shell wrapper so all .fx-* tokens flip.
   useEffect(() => {
@@ -243,15 +246,15 @@ export default function App() {
   //   and PATCH both links into it; open the FolderDialog in edit mode so the
   //   user can immediately rename it. Sequential calls; race-tolerant for a
   //   single-user local app.
-  const onMoveLinkToFolder = (linkId: number, folderId: number) => {
+  const onMoveLinkToFolder = useCallback((linkId: number, folderId: number) => {
     updateLink.mutate({ id: linkId, body: { folder_id: folderId } })
-  }
+  }, [updateLink.mutate])
   // Move folder `sourceId` to be a child of `targetId`. Refuses the move when
   // the target is `sourceId` itself or sits inside `sourceId`'s subtree —
   // that would create a cycle (A → B → A). The backend has its own guard
   // too, but checking client-side keeps the UI snappy and avoids a roundtrip
   // for the obvious bad cases.
-  const onMoveFolder = (sourceId: number, targetId: number) => {
+  const onMoveFolder = useCallback((sourceId: number, targetId: number) => {
     if (sourceId === targetId) return
     const all = allFolders.data ?? []
     // Walk descendants of sourceId; if we find targetId, the move would
@@ -270,8 +273,8 @@ export default function App() {
       }
     }
     updateFolder.mutate({ id: sourceId, body: { parent_id: targetId } })
-  }
-  const onMergeLinks = async (aId: number, bId: number) => {
+  }, [allFolders.data, updateFolder.mutate])
+  const onMergeLinks = useCallback(async (aId: number, bId: number) => {
     if (aId === bId) return
     try {
       // If we're already inside a folder, the merged-pair lives under it
@@ -287,7 +290,20 @@ export default function App() {
     } catch {
       // Mutation errors surface via toast/console; non-fatal here.
     }
-  }
+  }, [createFolder.mutateAsync, updateLink.mutateAsync, openFolder, t])
+
+  // Stable across renders so the memoized cards they're threaded into don't
+  // re-render on every unrelated App state change (search keystroke, sidebar
+  // toggle, background refetch).
+  const handleEditLink = useCallback((l: LinkT) => {
+    setEditLink(l)
+    setLinkDialogOpen(true)
+  }, [])
+  const handleEditFolder = useCallback((f: FolderT) => {
+    setEditFolder(f)
+    setFolderJustCreated(false)
+    setFolderDialogOpen(true)
+  }, [])
 
   const totalLinks = useMemo(
     () => allTags.reduce((acc, t) => acc + (t.link_count ?? 0), 0),
@@ -408,15 +424,8 @@ export default function App() {
               onOpenFolder={setOpenFolder}
               onNavigateBack={navigateBack}
               isLoading={links.isLoading}
-              onEdit={(l) => {
-                setEditLink(l)
-                setLinkDialogOpen(true)
-              }}
-              onEditFolder={(f) => {
-                setEditFolder(f)
-                setFolderJustCreated(false)
-                setFolderDialogOpen(true)
-              }}
+              onEdit={handleEditLink}
+              onEditFolder={handleEditFolder}
               onNewLink={() => {
                 setEditLink(null)
                 setLinkDialogOpen(true)

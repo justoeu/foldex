@@ -164,7 +164,7 @@ If the change touches `.github/workflows/*.yml`, run the **new** commands locall
 
 ```bash
 # Backend
-( cd backend && go vet ./... && make coverage-run )
+( cd backend && make fmt-check && go vet ./... && make coverage-run )
 # Frontend
 ( cd web && bun run typecheck && bun run coverage:nogate )
 ```

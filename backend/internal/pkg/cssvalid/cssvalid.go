@@ -20,6 +20,7 @@ import "regexp"
 // expression(), HSL with extras, CSS custom properties, named colors,
 // multi-stop gradients) is rejected.
 var hexPart = `#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})`
+
 // Whitespace is intentionally limited to spaces and tabs (not the broader `\s`
 // which includes newlines) — a newline inside the gradient string can split
 // the value across CSS declarations once concatenated, and the comment above
