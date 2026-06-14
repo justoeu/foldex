@@ -18,7 +18,7 @@ Currently pinned (re-verify on every upgrade with `bun pm ls` / `go list -m all`
 |---|---|---|
 | Go | `1.26.x` | `go.mod` + `golang:X.Y-alpine` base image |
 | bun (Docker) | `oven/bun:1.3-alpine` | `web/Dockerfile` |
-| Postgres | `18.2-alpine` | compose (`docker-compose.db.yml`) + prod; host's Postgres ≥16 also works. **Drift to fix: `internal/testdb` testcontainers still pins `16-alpine` — align it to 18 so tests mirror prod.** |
+| Postgres | `18.2-alpine` | pinned in THREE places that MUST stay in lockstep: `docker-compose.db.yml`, `docker-compose.services.yml`, and `internal/testdb` testcontainers — so tests mirror prod (a version-specific planner/default change can't hide behind an older test engine); host's Postgres ≥16 also works |
 | Chi / pgx / testcontainers / golang-migrate | `v5.2 / v5.9 / v0.42 / v4.17` | |
 | webpush-go | `v1.4` | Web Push (RFC 8030) |
 | Vite / React / TS / Vitest / jsdom | `^8 / ^19.2 / ^6 / ^4.1 / ^29` | |

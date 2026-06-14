@@ -21,15 +21,27 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// New starts a Postgres 16 container, applies migrations from db/migrations,
+// pgImage is the Postgres image tests run against. It MUST equal the image
+// pinned in docker-compose.db.yml AND docker-compose.services.yml so tests
+// mirror prod (a version-specific planner/default change can't hide behind an
+// older test engine). TestPostgresImageMatchesCompose enforces this — bump all
+// three together. See CLAUDE.md §1.
+const pgImage = "postgres:18.2-alpine"
+
+// New starts a Postgres container, applies migrations from db/migrations,
 // and returns a pgxpool.Pool. The container is terminated via t.Cleanup.
 func New(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// Generous timeout: this budget covers a COLD image pull (the ~400 MB
+	// postgres:18.2-alpine layer) which happens inside pgmod.Run, plus connect
+	// + migrations. 90s was enough only while the image stayed warm; a fresh
+	// runner pulling under parallel package load (each package spins its own
+	// container) blew past it. Once cached, startup is a few seconds.
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 
 	container, err := pgmod.Run(ctx,
-		"postgres:16-alpine",
+		pgImage,
 		pgmod.WithDatabase("foldex"),
 		pgmod.WithUsername("foldex"),
 		pgmod.WithPassword("foldex"),
