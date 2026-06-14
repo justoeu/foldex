@@ -1,0 +1,91 @@
+name: dast
+
+# DAST — OWASP ZAP baseline (passive, non-destructive) against a fully
+# booted stack. Runs MONTHLY (the user asked for ~1×/month) plus on-demand via
+# the Actions "Run workflow" button. The baseline scan spiders the SPA and runs
+# passive rules only — it never sends active attack payloads, so the ephemeral
+# CI database stays clean.
+#
+# The stack is built from source (docker compose --build) so the scan reflects
+# the current main, not whatever `:latest` happens to be on Docker Hub.
+on:
+  schedule:
+    - cron: '0 6 1 * *' # 06:00 UTC on the 1st of every month
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  zap-baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Prepare environment
+        run: cp .env.example .env
+
+      - name: Generate self-signed TLS pair for nginx
+        # docker-compose.yml bind-mounts ./web/certs read-only; without a real
+        # pair here the container entrypoint can't write its ephemeral cert into
+        # the ro mount and nginx fails to start. Pre-seed a throwaway pair whose
+        # SAN covers the in-network hostname `web` and `localhost`.
+        run: |
+          mkdir -p web/certs
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout web/certs/key.pem -out web/certs/cert.pem \
+            -days 365 -subj "/CN=web" \
+            -addext "subjectAltName=DNS:web,DNS:localhost,IP:127.0.0.1"
+
+      - name: Boot the stack
+        run: |
+          docker network inspect foldex >/dev/null 2>&1 || docker network create foldex
+          docker compose -f docker-compose.db.yml up -d
+          docker compose up -d --build
+
+      - name: Wait for the app to be healthy
+        run: |
+          # 90 × 3s = 4.5 min headroom — a cold `--build` (Go + bun + Vite)
+          # plus Postgres init can exceed 3 min on a loaded runner.
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:9089/healthz >/dev/null 2>&1 \
+               && curl -fsSk https://127.0.0.1:9444/healthz >/dev/null 2>&1; then
+              echo "stack healthy after ${i} tries"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::stack did not become healthy in time"
+          docker compose logs --no-color --tail 200 || true
+          exit 1
+
+      - name: ZAP baseline scan
+        # Run ZAP on the shared `foldex` network so it reaches nginx by its
+        # service name `web` (TLS on 443). ZAP accepts self-signed upstream
+        # certs by default. `|| true` keeps this an informational gate
+        # (CLAUDE.md §2 posture); reports land in the mounted workspace.
+        # Image digest-pinned (`:stable` is a moving tag — CLAUDE.md §4).
+        run: |
+          docker run --rm --network foldex \
+            -v "$PWD:/zap/wrk:rw" -t \
+            ghcr.io/zaproxy/zaproxy@sha256:7c2f8afc893e4e4000be8ad3fd22013fc36e5cce59359349f5a2d45626e2ccb9 \
+            zap-baseline.py -t https://web -I \
+              -r zap-report.html -w zap-report.md -J zap-report.json || true
+
+      - name: Upload ZAP reports
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: zap-baseline-report
+          path: |
+            zap-report.html
+            zap-report.md
+            zap-report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose down -v || true
+          docker compose -f docker-compose.db.yml down -v || true
