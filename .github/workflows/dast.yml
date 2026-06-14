@@ -72,11 +72,14 @@ jobs:
         # Run ZAP on the shared `foldex` network so it reaches nginx by its
         # service name `web` (TLS on 443). ZAP accepts self-signed upstream
         # certs by default. `|| true` keeps this an informational gate
-        # (CLAUDE.md §2 posture); reports land in the mounted workspace.
-        # Image digest-pinned (`:stable` is a moving tag — CLAUDE.md §4).
+        # (CLAUDE.md §2 posture). Image digest-pinned (`:stable` is a moving
+        # tag — CLAUDE.md §4). ZAP runs as the non-root `zap` user, so the
+        # bind-mounted report dir must be world-writable or report generation
+        # fails with AccessDeniedException — hence the dedicated chmod 0777 dir.
         run: |
+          mkdir -p zap-out && chmod 0777 zap-out
           docker run --rm --network foldex \
-            -v "$PWD:/zap/wrk:rw" -t \
+            -v "$PWD/zap-out:/zap/wrk:rw" -t \
             ghcr.io/zaproxy/zaproxy@sha256:7c2f8afc893e4e4000be8ad3fd22013fc36e5cce59359349f5a2d45626e2ccb9 \
             zap-baseline.py -t https://web -I \
               -r zap-report.html -w zap-report.md -J zap-report.json || true
@@ -87,9 +90,9 @@ jobs:
         with:
           name: zap-baseline-report
           path: |
-            zap-report.html
-            zap-report.md
-            zap-report.json
+            zap-out/zap-report.html
+            zap-out/zap-report.md
+            zap-out/zap-report.json
           if-no-files-found: warn
           retention-days: 30
 
