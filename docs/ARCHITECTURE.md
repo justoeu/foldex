@@ -618,6 +618,15 @@ Notificações background quando o changecheck detecta change. RFC 8030 com VAPI
 
 **Por quê `/api/push/vapid-key` atrás do `SHARED_SECRET` middleware.** "É só a chave pública" não justifica vazar superfície — um attacker remoto enumerando endpoints saberia que foldex tem push wired. Tudo `/api/push/*` herda o guard.
 
+### ADR-25 — oEmbed enrichment via o mesmo `preview.Fetcher`
+**Status:** Done (v1.4.0).
+
+Preview/metadata enriquecem título/descrição/imagem com oEmbed quando o HTML é pobre (ex: YouTube serve HTML degraded pra fingerprint de container). `internal/preview/oembed.go:fetchOEmbed` reusa `f.client` (o transport SSRF-guarded) — **nunca** um segundo HTTP stack.
+
+**Por quê o scheme guard no edge é crítico.** O `OEmbedURL` é capturado de `<link rel="alternate" type="application/json+oembed">` — HTML controlado por atacante. O transport default do Go lê `file:///etc/passwd` feliz porque o dialer a nível de IP não dispara pra schemes não-http(s). Por isso `fetchOEmbed` força `u.Scheme ∈ {http, https}` ANTES do `http.NewRequestWithContext` (mesma postura do metadata handler).
+
+**Detalhes de implementação.** A discovery URL é resolvida contra o `finalURL` da página via `resolveRelatives`, pra `href`s path-relative (WordPress, SoundCloud, Flickr) baterem no host certo. Sub-deadline de 5s por leg oEmbed limita wall-clock independente do ctx do caller. `knownOEmbedProviders` (hosts YouTube + Vimeo) atalha direto pro oEmbed quando o host bate; o resto leva HTML fetch + enrichment oportunista por discovery. **Merge contract:** HTML sempre ganha o que tem — oEmbed só preenche campos vazios.
+
 ## Future considerations
 
 - **Auth + multi-user.** Login local (bcrypt + JWT) ou OAuth Google. Tabelas `user_id` em `link`/`tag`.
