@@ -1,0 +1,54 @@
+# Dependabot — automated dependency PRs across every ecosystem in the repo.
+#
+# Pairs with CLAUDE.md §4 "All CI actions are SHA-pinned": each `uses:` line
+# carries a 40-char SHA + `# vX.Y.Z` comment, and Dependabot reads that comment
+# to know which release the pinned SHA maps to — so it can bump the SHA on a
+# new release without us hand-resolving commits.
+#
+# Updates are grouped (minor + patch together) to keep the PR count sane on a
+# single-maintainer repo; majors stay separate so breaking changes get their
+# own review (CLAUDE.md §1 "evaluate breaking changes if major").
+version: 2
+updates:
+  # ── GitHub Actions (all workflow `uses:` lines live under .github/) ──
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [dependencies, ci]
+    groups:
+      actions-minor:
+        update-types: [minor, patch]
+
+  # ── Backend Go modules ──
+  - package-ecosystem: gomod
+    directory: /backend
+    schedule:
+      interval: weekly
+    labels: [dependencies, backend]
+    groups:
+      gomod-minor:
+        update-types: [minor, patch]
+
+  # ── Frontend npm (bun reads the same package.json / lockfile) ──
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    labels: [dependencies, frontend]
+    groups:
+      npm-minor:
+        update-types: [minor, patch]
+
+  # ── Container base images (FROM lines) ──
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+    labels: [dependencies, docker]
+
+  - package-ecosystem: docker
+    directory: /web
+    schedule:
+      interval: weekly
+    labels: [dependencies, docker]

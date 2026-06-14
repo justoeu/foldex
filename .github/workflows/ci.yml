@@ -11,6 +11,20 @@ permissions:
   contents: read
 
 jobs:
+  # Lint every workflow under .github/workflows — syntax, shellcheck on `run:`
+  # blocks, and malformed `uses:` refs — so a broken or unpinned action is
+  # caught here instead of on a live run. The rhysd/actionlint image bundles
+  # shellcheck; digest-pinned (`1.7.12`) per CLAUDE.md §4.
+  workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: actionlint
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color
+
   backend:
     runs-on: ubuntu-latest
     services:

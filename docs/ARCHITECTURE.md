@@ -627,6 +627,17 @@ Preview/metadata enriquecem título/descrição/imagem com oEmbed quando o HTML 
 
 **Detalhes de implementação.** A discovery URL é resolvida contra o `finalURL` da página via `resolveRelatives`, pra `href`s path-relative (WordPress, SoundCloud, Flickr) baterem no host certo. Sub-deadline de 5s por leg oEmbed limita wall-clock independente do ctx do caller. `knownOEmbedProviders` (hosts YouTube + Vimeo) atalha direto pro oEmbed quando o host bate; o resto leva HTML fetch + enrichment oportunista por discovery. **Merge contract:** HTML sempre ganha o que tem — oEmbed só preenche campos vazios.
 
+### ADR-26 — Camadas de segurança no CI: SAST + DAST + Dependabot
+**Status:** Done (v1.4.7).
+
+Empilhamos múltiplos scanners em vez de um só, pra comparar cobertura e não depender de um único engine:
+
+- **SAST estático** — três engines em paralelo: **CodeQL** (`security-extended`, Go com `build-mode: manual` porque o `go.mod` fica em `backend/`, + JS/TS) em `codeql.yml`; **Semgrep** (packs OWASP/secrets/golang/typescript/react/dockerfile/github-actions, imagem digest-pinned) + **gosec** (linter Go: SSRF, crypto fraca, SQLi) em `sast.yml`. Todos sobem SARIF pra aba **Security ▸ Code scanning**; o upload é guardado por `hashFiles()` pra um scan que não gerou arquivo não virar o job vermelho.
+- **DAST dinâmico** — **OWASP ZAP baseline** (passivo, não-destrutivo, imagem digest-pinned) em `dast.yml`, rodando **mensalmente** (`cron: 0 6 1 * *`) + dispatch manual. Builda a stack do código (`docker compose --build`), espera `/healthz` (nginx faz `proxy_pass` de `/healthz` → backend), escaneia o nginx pela rede `foldex` mirando `https://web` (ZAP aceita cert self-signed upstream por default). Relatório HTML/MD/JSON como artefato de 30 dias.
+- **Dependabot** — `dependabot.yml` cobre os 5 ecossistemas (github-actions, gomod, npm, docker ×2), agrupando minor+patch pra reduzir ruído de PR; major fica separado pra review de breaking change. (Limitação conhecida: o ecossistema docker do Dependabot só lê `FROM` em Dockerfiles, não os `image:` dos `docker-compose.*.yml` — o pin triplo do Postgres do §1 continua manual.)
+
+**Por quê informativos primeiro.** Todos seguem a postura do CLAUDE.md §2 (govulncheck/bun audit): `|| true` / `-no-fail` / `continue-on-error`, então surfam achados sem travar merge. Vira gate rígido removendo essas válvulas quando houver baseline limpa. SAST roda com `paths-ignore` pra commits só-docs (não queima runner). O DAST precisa de cert pré-gerado em `web/certs` porque o compose monta esse dir `:ro` e o entrypoint do nginx não consegue escrever o par efêmero num mount read-only. Imagens de container (Semgrep, ZAP) são pinadas por **digest** — a regra de SHA-pin do §4 vale igual pra elas, já que tag mutável tem o mesmo risco de swap silencioso. Um job `actionlint` em `ci.yml` (imagem digest-pinned, traz shellcheck) linta todos os workflows em cada PR pra pegar regressão de sintaxe / action não-pinada antes de um run real.
+
 ## Future considerations
 
 - **Auth + multi-user.** Login local (bcrypt + JWT) ou OAuth Google. Tabelas `user_id` em `link`/`tag`.

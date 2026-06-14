@@ -1,0 +1,93 @@
+name: sast
+
+# Extra SAST layers stacked alongside CodeQL (codeql.yml) so we can compare
+# coverage across engines (CodeQL deep dataflow + Semgrep broad rulesets +
+# gosec Go-specific). Both jobs are informational: the scan step is `|| true` and
+# SARIF is uploaded for the Security tab, mirroring CLAUDE.md §2's non-gating
+# govulncheck / bun audit contract. Promote to a hard gate later by dropping the
+# `|| true` once the baseline is clean.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**'] # docs-only commits don't need a code scan
+  pull_request:
+    branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**']
+  schedule:
+    - cron: '23 6 * * 3' # weekly Wednesday, a different day from codeql to spread load
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Semgrep: multi-language ruleset (registry packs), broad + fast ──
+  semgrep:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Semgrep scan
+        # Run the Semgrep image as a container (no third-party action to manage);
+        # the SARIF is consumed by the runner's upload step below, which has the
+        # node runtime the in-container job would lack. Pinned by digest, not the
+        # mutable Docker Hub tag (same supply-chain reasoning as CLAUDE.md §4's
+        # SHA-pin rule for actions). Docker tag is `1.166.0` (no `v` prefix).
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            semgrep/semgrep@sha256:c180f0c93a17b420c0af5006214a29d3c747c5459c732b740191adf657dd0068 \
+            semgrep scan \
+              --config p/security-audit \
+              --config p/secrets \
+              --config p/owasp-top-ten \
+              --config p/golang \
+              --config p/typescript \
+              --config p/react \
+              --config p/dockerfile \
+              --config p/github-actions \
+              --metrics off \
+              --sarif --output semgrep.sarif || true
+
+      - name: Upload Semgrep SARIF
+        # Guard on the file existing rather than `always()`: if the scan step
+        # dies before writing SARIF (image pull failure, etc.), uploading a
+        # missing file would flip this informational job red.
+        if: ${{ hashFiles('semgrep.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3.36.2
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # ── gosec: Go-specific security linter (SSRF, weak crypto, SQLi, etc.) ──
+  gosec:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Install gosec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: gosec scan
+        working-directory: backend
+        # `-no-fail` keeps the step green even with findings (informational);
+        # SARIF still captures everything for the Security tab.
+        run: gosec -no-fail -fmt sarif -out gosec.sarif ./...
+
+      - name: Upload gosec SARIF
+        if: ${{ hashFiles('backend/gosec.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3.36.2
+        with:
+          sarif_file: backend/gosec.sarif
+          category: gosec

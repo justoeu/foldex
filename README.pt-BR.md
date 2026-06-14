@@ -147,6 +147,20 @@ Regras de coverage, exclusões e o **pre-push gate** completo (gofmt + vet + cov
 Outros targets: `make logs`, `make psql`, `make healthz`, `make down`.
 Veja `make help`.
 
+## Varredura de segurança (CI)
+
+Ferramentas em camadas (defense-in-depth) — todas **informativas** hoje (mostram achados sem bloquear merge; vire gate rígido removendo o `|| true` / `continue-on-error` quando houver uma baseline limpa):
+
+| Camada | Ferramenta(s) | Workflow | Gatilho |
+|---|---|---|---|
+| **SAST** | CodeQL (`security-extended`, Go + JS/TS) | `.github/workflows/codeql.yml` | push · PR · semanal |
+| **SAST** | Semgrep (packs OWASP/secrets/linguagem) + gosec | `.github/workflows/sast.yml` | push · PR · semanal |
+| **DAST** | OWASP ZAP baseline (passivo) contra a stack viva | `.github/workflows/dast.yml` | **mensal** · dispatch manual |
+| **SCA** | govulncheck + `bun audit` | `.github/workflows/ci.yml` | push · PR |
+| **Deps** | Dependabot (gomod · npm · docker ×2 · actions) | `.github/dependabot.yml` | PRs semanais |
+
+Os achados de SAST aparecem na aba **Security ▸ Code scanning** do repositório (upload SARIF). O job de DAST builda a stack do código via `docker compose --build`, espera o `/healthz`, roda o ZAP baseline contra o nginx pela rede compartilhada `foldex` e sobe o relatório HTML/MD/JSON como artefato de 30 dias. Rode sob demanda em **Actions** → *dast* → *Run workflow*.
+
 ## Smoke test (sanity check depois de `make up`)
 
 ```bash
