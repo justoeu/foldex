@@ -28,7 +28,7 @@
                 pgxpool │       │ S3 SDK
                         ▼       ▼
               ┌────────────────────┐   ┌───────────┐
-              │   PostgreSQL 16    │   │  MinIO    │
+              │   PostgreSQL 18    │   │  MinIO    │
               │  tag · link ·      │   │  bucket   │
               │  link_tag · folder │   │ screensh. │
               │  click_log ·       │   │  images   │
@@ -43,7 +43,7 @@ Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `12
 | Camada       | Escolha                                                              | Por quê |
 |--------------|----------------------------------------------------------------------|---------|
 | Runtime API  | **Go 1.26** + Chi v5.2 + pgx/v5.9 + `slog`                          | Minimal router, pgxpool com tipos, log estruturado nativo. |
-| DB           | **PostgreSQL 16** + `pg_trgm`                                        | Busca por substring com índice GIN, suficiente single-user. |
+| DB           | **PostgreSQL 18** + `pg_trgm`                                        | Busca por substring com índice GIN, suficiente single-user. |
 | Object store | **MinIO** (S3 SDK)                                                   | Backup/screenshots/uploads vivem fora do Postgres; bucket único, prefixos `screenshots/`/`images/`. |
 | Migrations   | `golang-migrate` (`000NNN_*.up/down.sql`)                            | Reversível por padrão; mesma convenção compartilhada. |
 | Workers      | Goroutine pools in-process (preview, changecheck) + buffered channels | Zero dependência operacional (sem Redis/queue). |
@@ -325,7 +325,7 @@ Cada um, além do `Optimize`, dispara `DeleteObject` nas extensões irmãs do me
 
 - **Backend:** `127.0.0.1:9089` no host, `9089` no container. Lê `BACKEND_PORT` do env.
 - **Web (nginx servindo bundle Vite):** `127.0.0.1:9088 → nginx:80` no container. Proxa `/api` e `/go` pro `backend:9089` na rede `foldex`.
-- **Postgres:** o `docker-compose.db.yml` traz `foldex-db` (postgres:16) na rede `foldex` **sem publicar porta no host** por default (evita conflito com outras instâncias). Pra reusar um Postgres já rodando no host (ex: `postgres18`), setar `POSTGRES_HOST=localhost` em `.env` — o container backend resolve `localhost` pro host real via `extra_hosts`.
+- **Postgres:** o `docker-compose.db.yml` traz `foldex-db` (postgres:18.2-alpine) na rede `foldex` **sem publicar porta no host** por default (evita conflito com outras instâncias). Pra reusar um Postgres já rodando no host (ex: `postgres18`), setar `POSTGRES_HOST=localhost` em `.env` — o container backend resolve `localhost` pro host real via `extra_hosts`.
 - **Network compose:** rede `foldex` externa (nomeada), pra que apps e db sejam composes separados.
 
 ## Variáveis de ambiente

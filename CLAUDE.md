@@ -18,7 +18,7 @@ Currently pinned (re-verify on every upgrade with `bun pm ls` / `go list -m all`
 |---|---|---|
 | Go | `1.26.x` | `go.mod` + `golang:X.Y-alpine` base image |
 | bun (Docker) | `oven/bun:1.3-alpine` | `web/Dockerfile` |
-| Postgres | `16-alpine` | host's Postgres ≥16 also works |
+| Postgres | `18.2-alpine` | compose (`docker-compose.db.yml`) + prod; host's Postgres ≥16 also works. **Drift to fix: `internal/testdb` testcontainers still pins `16-alpine` — align it to 18 so tests mirror prod.** |
 | Chi / pgx / testcontainers / golang-migrate | `v5.2 / v5.9 / v0.42 / v4.17` | |
 | webpush-go | `v1.4` | Web Push (RFC 8030) |
 | Vite / React / TS / Vitest / jsdom | `^8 / ^19.2 / ^6 / ^4.1 / ^29` | |
@@ -50,12 +50,12 @@ Two Makefile gotchas (both burned in): `-covermode=atomic` (default deflates und
 | Feature scope, goals, MVP boundary | `docs/VISION.md` |
 | API surface, data model, stack, ADRs | `docs/ARCHITECTURE.md` |
 | Task done / lessons learned / followups | `docs/TASKS.md` (append to "Log de conclusão") |
-| Stack version bump | `docs/ARCHITECTURE.md` + this `CLAUDE.md` §1 table |
-| README quickstart, smoke test, shortcuts | `README.md` |
+| Stack version bump | `docs/ARCHITECTURE.md` + this `CLAUDE.md` §1 table + `README.md` stack line |
+| **Any user-visible feature, flow, quickstart, smoke test, shortcut, stack version, or screenshot** | **`README.md` (source) AND `README.pt-BR.md` (mirror — keep in parity)** |
 | Browser extension behavior | `extension/README.md` |
 | Database schema (migration) | `docs/ARCHITECTURE.md` (data model) + comment block at top of `.up.sql` |
 
-A change that ships code but skips doc updates is **incomplete**.
+**The README is NOT optional.** Treat `README.md` as part of the product surface: if a change alters what a user sees or does, or what the stack is, the README MUST be updated in the same change — and the `README.pt-BR.md` mirror kept in sync. Before declaring done, re-read the README sections your change touches and confirm none went stale (versions, feature table, shortcuts, smoke test, screenshots). A change that ships code but skips doc updates — README included — is **incomplete**.
 
 ## 4. Data invariants — what must always hold
 
@@ -148,11 +148,12 @@ Before announcing "done", verify each. If any fails, the change is not done.
 - [ ] Existing tests still pass (`make test-integration` for backend, `bun run test` for web).
 - [ ] Coverage ≥ 85% (`make coverage-backend`, `bun run coverage`).
 - [ ] Docs updated per §3 matrix.
+- [ ] **`README.md` reviewed and updated** (and `README.pt-BR.md` mirror) — see §3. Any user-visible/stack/feature change MUST land in the README in the same change; re-read the touched sections to confirm nothing went stale.
 - [ ] Versions still on latest stable per §1.
 - [ ] Invariants in §4 and §5 not violated.
 - [ ] If a migration was added: applied to the running Postgres and backend recompiled to use the new schema.
 - [ ] User-visible UI changes manually validated in a real browser when behavior changes (not just type-check).
-- [ ] **Post-implementation agent sweep run** — see §9. Mandatory for every implementation task. **4 agents** (Code Review, Test Quality, Security, Performance) in parallel — never serialize, never skip "because the change is small."
+- [ ] **Post-implementation agent sweep run** — see §9. Mandatory for every implementation task. **5 agents** (Code Review, Code Quality, Test Quality, Performance, Security) in parallel — never serialize, never skip "because the change is small."
 - [ ] **`graphify update .` run after any code change** — keeps `graphify-out/` in sync with the AST. Free (no API cost). Skipping means future codebase queries return stale results.
 - [ ] **Semver bump shipped** — see §6.2. `:latest` is not a release; only a `vX.Y.Z` tag is.
 
@@ -203,25 +204,26 @@ Two docker-compose projects: **`docker-compose.db.yml`** brings up Postgres on t
 
 ## 9. Post-implementation agent sweep — MANDATORY for every change
 
-Before declaring any implementation task done (and before opening a PR), spawn the **four agents** below **in parallel** via the `Agent` tool and surface every HIGH finding inline. Skipping the sweep is not allowed — it is part of the Definition of Done in §6.
+Before declaring any implementation task done (and before opening a PR), spawn the **five agents** below **in parallel** via the `Agent` tool and surface every HIGH finding inline. Skipping the sweep is not allowed — it is part of the Definition of Done in §6.
 
 Full prompts in [`AGENTS.md`](./AGENTS.md) — copy verbatim and only substitute the **session scope** placeholder.
 
-**The four agents** (always spawn all four, always parallel, always in a single tool-use block):
+**The five agents** (always spawn all five, always parallel, always in a single tool-use block):
 
-1. **Code Review agent** — architectural coherence, CLAUDE.md invariants (§4 + §5), code quality (naming, dead code, unnecessary comments per §7), React idiomaticity, workflow correctness. Does NOT review tests, security, or performance.
-2. **Test Quality agent** — whether new code paths are actually tested (positive + negative + edge), missing critical cases, test antipatterns (excessive mocks, flaky waits, weak asserts), coverage-gap recommendation. Does NOT review production code, security, or performance.
-3. **Security Review agent** — XSS / DoS / secret-leak / injection / supply-chain across runtime code AND CI workflows. Bucketed HIGH / MEDIUM / LOW / FYI. Does NOT review code quality, tests, or performance.
+1. **Code Review agent** — architectural coherence, CLAUDE.md invariants (§4 + §5), React/backend idiomaticity (hooks correctness, Chi/pgx/slog patterns, error envelope per §7), CI/workflow correctness, decisions that could be better. Does NOT review code-quality micro-issues, tests, security, or performance.
+2. **Code Quality agent** — dirty code, naming clarity, dead code, duplication that begs abstraction, comment hygiene (no "what" comments / task refs / commit ids per §7), magic numbers/strings, oversized functions/components, **cyclomatic + cognitive complexity hotspots**, and clean-architecture/layering smells (dependency direction, god packages/components, leaky abstractions). Does NOT review architectural coherence vs invariants (Code Review owns that), tests, security, or performance.
+3. **Test Quality agent** — whether new code paths are actually tested (positive + negative + edge), missing critical cases, test antipatterns (excessive mocks, flaky waits, weak asserts), coverage-gap recommendation. Does NOT review production code, security, or performance.
 4. **Performance Review agent** — re-render storms, missing memoization that actually pays off, debounce/throttle correctness, network waste (duplicated requests, missing cache invalidation, over-eager refetch), bundle impact (heavy imports, missed code-split), unbounded loops on user data, SQL N+1 / missing index. Bucketed HIGH / MEDIUM / LOW / FYI. Does NOT review code quality, tests, or security.
+5. **Security Review agent** — XSS / DoS / secret-leak / injection / supply-chain across runtime code AND CI workflows. Bucketed HIGH / MEDIUM / LOW / FYI. Does NOT review code quality, tests, or performance.
 
 **Workflow:**
 
-1. After typecheck + tests + coverage pass, call `Agent(...)` four times in one tool-use block — one per agent — with `run_in_background: true` and the session scope filled in.
+1. After typecheck + tests + coverage pass, call `Agent(...)` five times in one tool-use block — one per agent — with `run_in_background: true` and the session scope filled in.
 2. Continue with docs / commit prep / `graphify update .` while they run; harness notifies on completion. Do NOT sleep or poll.
 3. When each agent reports back, surface findings to the user. **Treat every HIGH as a blocker** — fix in this session, then re-run the relevant agent against the patched diff. MEDIUM and LOW go to the PR description (or get fixed if cheap).
-4. Only declare done after the four reports are visible AND every HIGH is resolved AND `graphify update .` completed.
+4. Only declare done after the five reports are visible AND every HIGH is resolved AND `graphify update .` completed.
 
-The four agents are split by concern on purpose — don't merge them or skip one "because the change is small." The sweep is also the safety net for changes that *look* small.
+The five agents are split by concern on purpose — don't merge them or skip one "because the change is small." (Code Review owns "is it correct/coherent?"; Code Quality owns "is it clean/maintainable?" — keep them separate.) The sweep is also the safety net for changes that *look* small.
 
 ---
 
