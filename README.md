@@ -282,4 +282,4 @@ Full design rationale: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 
 ## License
 
-Personal project. No license granted.
+[MIT](LICENSE) © 2026 Valmir Justo.
