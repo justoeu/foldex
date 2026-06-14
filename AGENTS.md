@@ -2,7 +2,7 @@
 
 > **Project invariants live in [`CLAUDE.md`](./CLAUDE.md).** Read it before making any change.
 
-This file holds the **canonical prompts for the four post-implementation review agents** required by CLAUDE.md §6 (Definition of Done) and §9 (Post-implementation agent sweep). Spawn all four in parallel via the `Agent` tool — never skip and never serialize.
+This file holds the **canonical prompts for the five post-implementation review agents** required by CLAUDE.md §6 (Definition of Done) and §9 (Post-implementation agent sweep). Spawn all five in parallel via the `Agent` tool — never skip and never serialize.
 
 ---
 
@@ -14,9 +14,11 @@ After every implementation task, once typecheck + tests + coverage pass, **befor
 
 ## How to run
 
-In a single tool-use block, issue four `Agent` calls (`run_in_background: true`) with `subagent_type: general-purpose`. The harness notifies as each one finishes; do not poll or sleep. While they run, kick off `graphify update .` in another background shell (also required by CLAUDE.md §6 DoD).
+In a single tool-use block, issue five `Agent` calls (`run_in_background: true`) with `subagent_type: general-purpose`. The harness notifies as each one finishes; do not poll or sleep. While they run, kick off `graphify update .` in another background shell (also required by CLAUDE.md §6 DoD).
 
 For each prompt below, replace the `<SESSION SCOPE>` placeholder with the actual artifacts the agent should focus on — typically the commit hashes added this session, plus the branch they live on. Be specific: list the commit SHAs and the file globs that changed.
+
+The five agents are split by concern on purpose. **Never merge them into one** ("the change is small") — the sweep is precisely the safety net for changes that look small. In particular **Code Review** ("is it correct & coherent?") and **Code Quality** ("is it clean & maintainable?") are deliberately distinct — keep them separate.
 
 ---
 
@@ -34,20 +36,21 @@ Inspection helpers:
 - The repo's CLAUDE.md has hard invariants (§4 data, §5 UI/UX). Read it before reviewing.
 
 What you do NOT review (parallel agents cover):
+- Code-quality micro-issues (naming, dead code, duplication, complexity) — owned by the Code Quality agent
 - Test quality / coverage — owned by the Test Quality agent
 - Security (XSS, secret leak, injection, supply chain) — owned by the Security agent
+- Performance — owned by the Performance agent
 
 What YOU review:
 1. **Architectural coherence** — do the changes violate any CLAUDE.md §4 or §5 invariant?
-2. **Code quality** — naming, organization, complexity, dead code, comments that violate the
-   "no what comments, no task references" rule in §7.
-3. **React idiomaticity** (frontend) — hooks correctness, missing cleanup, prop design, unnecessary
-   re-renders, memoization where it actually pays off.
-4. **Backend idiomaticity** (when applicable) — Chi handlers, pgx tx scoping, slog usage, error
+2. **React idiomaticity** (frontend) — hooks correctness, missing cleanup, prop design, effect
+   dependencies, memoization where it actually pays off.
+3. **Backend idiomaticity** (when applicable) — Chi handlers, pgx tx scoping, slog usage, error
    envelope per §7.
-5. **CI / workflow correctness** (when applicable) — matrix shape, cache scoping, race conditions
+4. **CI / workflow correctness** (when applicable) — matrix shape, cache scoping, race conditions
    between jobs, missing permissions.
-6. **Decisions that could be better** — inconsistent naming, real (not premature) simplifications.
+5. **Decisions that could be better** — wrong abstraction, missed reuse of an existing helper, a
+   simpler correct approach.
 
 Reporting format:
 - **Blockers** (must fix before merge): bullet — `file:line` — why.
@@ -59,7 +62,55 @@ Hard cap: 400 words. Focus on what matters.
 
 ---
 
-## Agent 2 — Test Quality
+## Agent 2 — Code Quality
+
+```text
+You are acting as **code-quality reviewer** for the changes made in this session at
+/Users/justoeu/Developer/Workspace/foldex.
+
+Scope of review:
+<SESSION SCOPE — list commit SHAs, branch, and the files that changed>
+
+Inspection helpers:
+- `git show <SHA> --stat` and `git show <SHA> -- <paths>` to see the diff
+- The repo's CLAUDE.md §7 documents style defaults (comment hygiene, no ORMs/global state, uniform
+  error envelope). Read it before reviewing.
+- Complexity tooling (install on the fly; skip if network-blocked):
+  `cd backend && go install github.com/fzipp/gocyclo/cmd/gocyclo@latest github.com/uudashr/gocognit/cmd/gocognit@latest`
+  then `$(go env GOPATH)/bin/gocyclo -over 10 .` and `$(go env GOPATH)/bin/gocognit -over 15 .`.
+  For Go formatting: `gofmt -l ./internal ./cmd` (or `make fmt-check`).
+
+What you do NOT review (parallel agents cover):
+- Architectural coherence vs invariants / idiomaticity — owned by the Code Review agent
+- Test quality — owned by the Test Quality agent
+- Security — owned by the Security agent
+- Performance — owned by the Performance agent
+
+What YOU review:
+1. **Dirty code** — unclear naming, dead code / unused exports / commented-out blocks, magic
+   numbers/strings that should be named constants, inconsistent patterns across siblings.
+2. **Duplication that begs abstraction** — copy-pasted SQL scans, handler boilerplate, repeated
+   constants/types defined in N files. Flag the canonical place it should live.
+3. **Comment hygiene (§7)** — no "what" comments, no task references, no commit ids; comments only
+   where *why* is non-obvious. Flag stale comments that now contradict the code.
+4. **Complexity hotspots** — functions/components with high cyclomatic OR cognitive complexity, or
+   that are simply too long (Go funcs, oversized React components). Cite the score where you ran a tool.
+5. **Clean architecture / layering** — dependency direction (handlers → service → repository; no
+   pgx in handlers, no net/http in repos), god packages/components, leaky or inconsistent
+   abstractions (some consumers take a narrow interface, others the concrete god-type).
+6. **Formatting** — gofmt-clean? TypeScript free of unsafe `any` casts in production?
+
+Reporting format:
+- **HIGH** (genuinely unmaintainable / a latent-bug shape): bullet — `file:line` — why + fix.
+- **MEDIUM** / **LOW** / **FYI**: same shape.
+- If a bucket is empty, say so explicitly.
+
+Hard cap: 400 words. Distinguish real problems from taste.
+```
+
+---
+
+## Agent 3 — Test Quality
 
 ```text
 You are acting as **test quality reviewer** for the changes made in this session at
@@ -74,8 +125,10 @@ Inspection helpers:
 - The repo's coverage gate is documented in CLAUDE.md §2 (≥85% statements, ≥80% branches)
 
 What you do NOT review (parallel agents cover):
-- General code quality — owned by the Code Review agent
+- General code quality — owned by the Code Quality agent
+- Architectural coherence — owned by the Code Review agent
 - Security risks — owned by the Security agent
+- Performance — owned by the Performance agent
 
 What YOU review:
 1. **The new tests** — do they actually exercise behavior, or just assert "something renders"?
@@ -102,63 +155,6 @@ Hard cap: 400 words.
 
 ---
 
-## Agent 3 — Security Review
-
-```text
-You are acting as **security reviewer** for the changes made in this session at
-/Users/justoeu/Developer/Workspace/foldex.
-
-Scope of review:
-<SESSION SCOPE — list commit SHAs, branches, and the files that changed. Include both runtime
-code and CI workflows; both are in scope.>
-
-Inspection helpers:
-- `git show <SHA> --stat` and the changed files
-- The repo's threat model is documented in CLAUDE.md §0: self-hosted single-user, no PII, no
-  public exposure. §4 lists the security invariants (IMDS blocked, SHARED_SECRET gating,
-  certs never baked, etc.).
-
-What you do NOT review (parallel agents cover):
-- General code quality — owned by the Code Review agent
-- Test coverage — owned by the Test Quality agent
-
-What YOU review:
-
-### Runtime code (frontend + backend)
-1. **XSS / injection** — any user-controlled value flowing into HTML, `dangerouslySetInnerHTML`,
-   raw SQL, shell commands, or `eval`-like sinks? Check `<img src={...}>` for `javascript:`
-   schemes, etc.
-2. **Client-side DoS** — unbounded loops over user data? Missing caps on rendered lists?
-3. **localStorage / cookie misuse** — parsing untrusted JSON without try/catch? Storing secrets?
-4. **SSRF** — fetcher accepting user URLs without the IMDS / private-IP guards already in
-   `internal/preview`?
-5. **Auth bypass** — handler skipping the `SHARED_SECRET` gate or leaking pgx errors?
-
-### CI / workflow
-6. **Secret leak** — `secrets.*` written to logs, env files, or artifacts? Triggers running on
-   `pull_request_target` (giving forks access to secrets)?
-7. **Command injection** in `run:` blocks — variables from `${{ github.* }}` or step outputs
-   interpolated into shell without quoting?
-8. **Build-context tampering** — manifest jobs reading from artifacts uploaded by earlier jobs
-   without verifying digests / shapes?
-9. **Permissions** — `permissions:` block minimal? `packages: write` needed? `id-token: write`
-   leaked anywhere?
-10. **Supply chain** — new actions pinned by tag or full SHA? Any third-party action with high
-    permissions added this session?
-
-Reporting format:
-- **HIGH** (fix immediately): bullet — `file:line` — description — concrete remediation.
-- **MEDIUM** (worth addressing): same shape.
-- **LOW / FYI** (informational): same shape.
-- If a bucket is empty, say so explicitly ("no HIGH findings").
-
-Hard cap: 400 words.
-```
-
----
-
----
-
 ## Agent 4 — Performance Review
 
 ```text
@@ -175,7 +171,7 @@ Inspection helpers:
   click_count, indexed columns, etc.).
 
 What you do NOT review (parallel agents cover):
-- Architectural / style code review — owned by the Code Review agent
+- Architectural / style code review — owned by the Code Review + Code Quality agents
 - Test quality / coverage — owned by the Test Quality agent
 - Security risks — owned by the Security agent
 
@@ -224,12 +220,69 @@ Hard cap: 400 words.
 
 ---
 
+## Agent 5 — Security Review
+
+```text
+You are acting as **security reviewer** for the changes made in this session at
+/Users/justoeu/Developer/Workspace/foldex.
+
+Scope of review:
+<SESSION SCOPE — list commit SHAs, branches, and the files that changed. Include both runtime
+code and CI workflows; both are in scope.>
+
+Inspection helpers:
+- `git show <SHA> --stat` and the changed files
+- The repo's threat model is documented in CLAUDE.md §0: self-hosted single-user, no PII, no
+  public exposure. §4 lists the security invariants (IMDS blocked, SHARED_SECRET gating,
+  certs never baked, etc.).
+
+What you do NOT review (parallel agents cover):
+- General code quality — owned by the Code Quality agent
+- Architectural coherence — owned by the Code Review agent
+- Test coverage — owned by the Test Quality agent
+- Performance — owned by the Performance agent
+
+What YOU review:
+
+### Runtime code (frontend + backend)
+1. **XSS / injection** — any user-controlled value flowing into HTML, `dangerouslySetInnerHTML`,
+   raw SQL, shell commands, or `eval`-like sinks? Check `<img src={...}>` for `javascript:`
+   schemes, etc.
+2. **Client-side DoS** — unbounded loops over user data? Missing caps on rendered lists?
+3. **localStorage / cookie misuse** — parsing untrusted JSON without try/catch? Storing secrets?
+4. **SSRF** — fetcher accepting user URLs without the IMDS / private-IP guards already in
+   `internal/preview`?
+5. **Auth bypass** — handler skipping the `SHARED_SECRET` gate or leaking pgx errors?
+
+### CI / workflow
+6. **Secret leak** — `secrets.*` written to logs, env files, or artifacts? Triggers running on
+   `pull_request_target` (giving forks access to secrets)?
+7. **Command injection** in `run:` blocks — variables from `${{ github.* }}` or step outputs
+   interpolated into shell without quoting?
+8. **Build-context tampering** — manifest jobs reading from artifacts uploaded by earlier jobs
+   without verifying digests / shapes?
+9. **Permissions** — `permissions:` block minimal? `packages: write` needed? `id-token: write`
+   leaked anywhere?
+10. **Supply chain** — new actions pinned by tag or full SHA? Any third-party action with high
+    permissions added this session?
+
+Reporting format:
+- **HIGH** (fix immediately): bullet — `file:line` — description — concrete remediation.
+- **MEDIUM** (worth addressing): same shape.
+- **LOW / FYI** (informational): same shape.
+- If a bucket is empty, say so explicitly ("no HIGH findings").
+
+Hard cap: 400 words.
+```
+
+---
+
 ## After the sweep
 
 1. Surface each agent's report to the user.
 2. **Every HIGH finding is a blocker** — fix in this session, then re-run that specific agent against the patched diff.
 3. MEDIUM / LOW get listed in the PR description as known follow-ups, or fixed if cheap.
 4. Run `graphify update .` (AST-only, no API cost) so codebase queries reflect the new code.
-5. Only declare the implementation done once the four reports are visible, every HIGH is resolved, AND graphify is in sync.
+5. Only declare the implementation done once the five reports are visible, every HIGH is resolved, AND graphify is in sync.
 
-The four agents are split by concern on purpose. **Never merge them into one** ("the change is small") — the sweep is precisely the safety net for changes that look small.
+The five agents are split by concern on purpose. **Never merge them into one** ("the change is small") — the sweep is precisely the safety net for changes that look small.

@@ -6,11 +6,11 @@
   <img src="docs/assets/home-empty.png" alt="foldex — gerenciador de bookmarks self-hosted (home view com empty state, sidebar de tags, topbar com busca + sort + density, CTAs Nova pasta / Novo link)" width="100%"/>
 </p>
 
-> Gerenciador de bookmarks self-hosted com tagging avançado, pastas aninháveis, contagem de cliques, previews visuais de URL, backup completo e extensão de navegador.
+> Gerenciador de bookmarks self-hosted com tagging avançado, pastas aninháveis, contagem de cliques, previews visuais de URL, **detecção de mudança por link + Web Push**, backup completo, UI em en/pt/es e extensão de navegador.
 
 Foldex é uma "smart bookmarks bar" pessoal — guarda links organizados por **pastas aninháveis + tags M:N**, mostra **o que você de fato clica** (telemetria via `/go/:id`), captura visualmente cada URL (OG image / favicon / fallback de screenshot) e roda **inteiramente na sua máquina** (Postgres + MinIO + Go + React em containers).
 
-> Stack: **Go 1.26 · PostgreSQL 16 · MinIO · Vite 8 + React 19 + bun · Vitest 4**. Política de versionamento + invariantes em [`CLAUDE.md`](CLAUDE.md).
+> Stack: **Go 1.26 (Chi · pgx) · PostgreSQL 18 · MinIO · Vite 8 + React 19 + TypeScript + bun · TanStack Query · react-i18next (en/pt/es) · Vitest 4**. Política de versionamento + invariantes em [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
@@ -27,7 +27,8 @@ Bookmark nativo é ótimo para "salvar uma página rápida e esquecer". Quando v
 | **Busca fraca.** Match só no título/URL.                                                | Busca full-text via Postgres `pg_trgm` em título + URL + descrição. Compõe com filtro por tag (AND-multi-tag) e escopo de pasta. |
 | **Backup = arquivo Netscape opaco.** Imagens? Cliques? Hierarquia? Tudo perdido.        | ZIP de backup único com `manifest.json` + `database.json` (5 tabelas) + **todas as imagens do MinIO**. Round-trip lossless, verificação por checksum SHA-256, 3 modos de conflito (wipe/skip/duplicate). |
 | **Atalhos engessados.** Cmd+D abre o diálogo nativo do navegador.                       | Extensão MV3 + Alt-K (palette), Alt-N (novo link), Alt-F (nova pasta). Drag-and-drop iPhone-style entre cards/pastas. |
-| **Lock-in do fornecedor.** Sair do Chrome = exportar HTML + perder metadados.           | Export para **Netscape HTML** (compat universal) **OU** JSON v2 (com pastas + click_count) **OU** ZIP de backup completo. Importer aceita os três. |
+| **Lock-in do fornecedor.** Sair do Chrome = exportar HTML + perder metadados.           | Export para **Netscape HTML** (compat universal) **OU** JSON v2 (com pastas + click_count) **OU** ZIP de backup completo. Importer aceita os três (idempotente por URL; `click_count` é limitado na importação pra um arquivo hostil não inflar o log de cliques). |
+| **Só em inglês / sem localização.**                                                      | UI totalmente localizada em **English / Português / Español** via `react-i18next`. Seletor de idioma no topbar; autodetecção pelo idioma do navegador no primeiro acesso; escolha persiste no `localStorage`. |
 | **Pinned/favoritos = uma pastinha à parte.** Só visual.                                 | `pinned` é coluna real na tabela. `ORDER BY pinned DESC, …` aplica em todo modo de ordenação. Badge gradient sempre visível. |
 | **Dados embutidos no navegador.** Trocou de máquina? Reinstalou Chrome? Reza.           | Postgres + MinIO em containers. `make up` numa máquina nova e seu ZIP de backup restaura tudo (DB + imagens) em ~minutos. |
 
@@ -62,7 +63,7 @@ open http://localhost:9088
 | Quer … | Rode | Notas |
 |---|---|---|
 | Só rodar Foldex | `make up` | Puxa `justoeu/foldex-{backend,web}:${FOLDEX_VERSION}` do Docker Hub. Tag default é `latest`. |
-| Pinar num build específico | setar `FOLDEX_VERSION=sha-3f6cc06` (ou `v1.2.3`) no `.env` e `make up` | Tags publicadas por commit + por release semver. |
+| Pinar num build específico | setar `FOLDEX_VERSION=sha-3f6cc06` (ou `v1.4.1`) no `.env` e `make up` | Tags publicadas por commit + por release semver. |
 | Atualizar pra última tag | `make pull && make up` | `pull` re-baixa sem reiniciar; `up` percebe a imagem nova e reinicia. |
 | Desenvolver / buildar do source | `make up-build` | Usa os mesmos `Dockerfile`s mas builda local, ignorando a imagem do registry. Precisa de Docker; NÃO precisa de Go/bun no host (rodam dentro dos build stages). |
 | Aplicar mudanças locais | `make restart-backend` / `make restart-web` | Igual ao `up-build` mas só do serviço nomeado. |
@@ -138,10 +139,10 @@ make test-integration   # unit + integration (Docker necessário)
 make coverage-backend   # garante 85% no backend
 make coverage-web       # garante 85% no frontend (Vitest)
 make coverage-all       # ambos
+( cd backend && make fmt-check )   # gate de gofmt — parte do pre-push gate
 ```
 
-Regras de coverage e exclusões em [`CLAUDE.md`](CLAUDE.md). Leia antes
-de abrir um PR.
+Regras de coverage, exclusões e o **pre-push gate** completo (gofmt + vet + coverage, rodados localmente antes de cada commit) estão em [`CLAUDE.md`](CLAUDE.md) §6.1. Toda implementação também roda um **sweep obrigatório de 5 agentes** (Code Review · Code Quality · Test Quality · Performance · Security) antes do merge — veja §9. Leia antes de abrir um PR.
 
 Outros targets: `make logs`, `make psql`, `make healthz`, `make down`.
 Veja `make help`.
@@ -168,7 +169,7 @@ sleep 3 && curl -s localhost:9089/api/links/1 | jq '.preview_status, .og_image_u
 # 5. Resolve o short link (302 + bump no contador).
 curl -sI localhost:9089/go/1 | head -3
 
-# 6. Abre a SPA e tenta ⌘K (busca) / ⌘N (novo link).
+# 6. Abre a SPA e tenta ⌥K (palette) / ⌥N (novo link).
 open http://localhost:9088
 ```
 
@@ -186,6 +187,16 @@ open http://localhost:9088
 > engolem a maioria das combinações com `⌘` (⌘K = focus URL bar, ⌘N =
 > nova janela, ⌘P = imprimir), então atalhos com prefixo Alt são os
 > únicos que chegam à SPA com confiança.
+
+## Internacionalização
+
+Toda a UI passa por `react-i18next`. **Inglês é a fonte da verdade**; **Português** e **Español** são mantidos em paridade total (toda chave espelhada nos três).
+
+- **Trocar idioma**: seletor no topbar. A escolha persiste em `localStorage["foldex.locale"]`; no primeiro acesso autodetecta de `navigator.language`, com fallback pra inglês.
+- **Arquivos de locale**: `web/src/i18n/locales/{en,pt,es}.json`.
+- **Adicionar locale**: solte um novo `<lang>.json`, liste em `SUPPORTED_LOCALES` e popule toda chave a partir de `en.json`. Plurais usam o sufixo `_one` / `_other`.
+
+Toda string visível ao usuário precisa passar por `t('key')` e existir nos três locales — invariante no `CLAUDE.md`.
 
 ## Extensão de navegador
 
@@ -210,7 +221,7 @@ Mais capturas vêm conforme o projeto ganha conteúdo:
 
 | Path           | O que tem |
 |----------------|-----------|
-| `backend/`     | Serviço Go (Chi + pgx + Postgres 16) — REST API, redirect, preview worker |
+| `backend/`     | Serviço Go (Chi + pgx + Postgres 18) — REST API, redirect, workers de preview + change-check + push |
 | `web/`         | SPA Vite + React + TypeScript. CSS handoff (`styles/foldex.css`) + `overrides.css` local. |
 | `extension/`   | Extensão Manifest V3 para capturar a aba atual |
 | `docs/`        | Docs SDD: `VISION.md`, `ARCHITECTURE.md`, `TASKS.md` |
@@ -248,6 +259,8 @@ card **💾 Backup completo**. Arrasta um `.zip` em cima pra revisar o
 sumário de validação e escolher o modo no `BackupRestoreDialog`.
 Histórico (últimos 10 backups: data, duração, tamanho, counts) persiste
 em `localStorage`.
+
+> **Ressalva de idempotência no restore.** O `mode=skip` é idempotente para as entidades com UNIQUE (tags por nome, links por URL — re-rodar o mesmo zip não insere nada). `click_log` e `folder` não têm chave natural, então um segundo skip do mesmo zip **re-insere** essas linhas. Rode o skip uma vez; use `mode=wipe` pra rebaselinar do zero.
 
 Design completo: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 
