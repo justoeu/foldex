@@ -26,7 +26,7 @@ The five agents are split by concern on purpose. **Never merge them into one** (
 
 ```text
 You are acting as **code reviewer** for the changes made in this session at
-/Users/justoeu/Developer/Workspace/foldex.
+<repo-root>.
 
 Scope of review:
 <SESSION SCOPE — list commit SHAs, branch, and the files that changed>
@@ -66,7 +66,7 @@ Hard cap: 400 words. Focus on what matters.
 
 ```text
 You are acting as **code-quality reviewer** for the changes made in this session at
-/Users/justoeu/Developer/Workspace/foldex.
+<repo-root>.
 
 Scope of review:
 <SESSION SCOPE — list commit SHAs, branch, and the files that changed>
@@ -114,7 +114,7 @@ Hard cap: 400 words. Distinguish real problems from taste.
 
 ```text
 You are acting as **test quality reviewer** for the changes made in this session at
-/Users/justoeu/Developer/Workspace/foldex.
+<repo-root>.
 
 Scope of review:
 <SESSION SCOPE — list commit SHAs and the test files added/modified, plus the production files
@@ -139,8 +139,8 @@ What YOU review:
 3. **Test antipatterns** — excessive mocks, flaky `setTimeout`-based waits, weak asserts
    (`not.toBeNull()` instead of `toBeInTheDocument()`), unfocused tests that render too much.
 4. **Run the tests** to confirm they still pass:
-   `cd /Users/justoeu/Developer/Workspace/foldex/web && npx bun run vitest run <files>`
-   `cd /Users/justoeu/Developer/Workspace/foldex/backend && go test ./...`
+   `cd <repo-root>/web && npx bun run vitest run <files>`
+   `cd <repo-root>/backend && go test ./...`
 5. **Coverage gap recommendation** — was anything skipped that the author should have covered
    in this PR? Or is the scope correct and the gap belongs to a follow-up?
 
@@ -159,7 +159,7 @@ Hard cap: 400 words.
 
 ```text
 You are acting as **performance reviewer** for the changes made in this session at
-/Users/justoeu/Developer/Workspace/foldex.
+<repo-root>.
 
 Scope of review:
 <SESSION SCOPE — list commit SHAs, branch, and the files that changed>
@@ -224,7 +224,7 @@ Hard cap: 400 words.
 
 ```text
 You are acting as **security reviewer** for the changes made in this session at
-/Users/justoeu/Developer/Workspace/foldex.
+<repo-root>.
 
 Scope of review:
 <SESSION SCOPE — list commit SHAs, branches, and the files that changed. Include both runtime
