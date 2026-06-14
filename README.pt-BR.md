@@ -273,4 +273,4 @@ Design completo: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 
 ## Licença
 
-Projeto pessoal. Sem licença concedida.
+[MIT](LICENSE) © 2026 Valmir Justo.
