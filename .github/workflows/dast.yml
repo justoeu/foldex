@@ -38,6 +38,15 @@ jobs:
             -addext "subjectAltName=DNS:web,DNS:localhost,IP:127.0.0.1"
 
       - name: Boot the stack
+        # The backend refuses to start on the insecure trifecta (non-loopback
+        # bind + empty SHARED_SECRET + wildcard CORS — config.validateSecureDefaults,
+        # CLAUDE.md §4). Compose forces BACKEND_BIND=0.0.0.0 (so nginx can reach
+        # it) and .env.example ships CORS_ORIGINS=*, so we restrict CORS to one
+        # concrete origin — breaking just one leg of the trifecta — while keeping
+        # /api reachable for the scan. Shell env outranks .env in compose
+        # interpolation, so this wins over the .env value.
+        env:
+          CORS_ORIGINS: https://localhost
         run: |
           docker network inspect foldex >/dev/null 2>&1 || docker network create foldex
           docker compose -f docker-compose.db.yml up -d
@@ -63,11 +72,14 @@ jobs:
         # Run ZAP on the shared `foldex` network so it reaches nginx by its
         # service name `web` (TLS on 443). ZAP accepts self-signed upstream
         # certs by default. `|| true` keeps this an informational gate
-        # (CLAUDE.md §2 posture); reports land in the mounted workspace.
-        # Image digest-pinned (`:stable` is a moving tag — CLAUDE.md §4).
+        # (CLAUDE.md §2 posture). Image digest-pinned (`:stable` is a moving
+        # tag — CLAUDE.md §4). ZAP runs as the non-root `zap` user, so the
+        # bind-mounted report dir must be world-writable or report generation
+        # fails with AccessDeniedException — hence the dedicated chmod 0777 dir.
         run: |
+          mkdir -p zap-out && chmod 0777 zap-out
           docker run --rm --network foldex \
-            -v "$PWD:/zap/wrk:rw" -t \
+            -v "$PWD/zap-out:/zap/wrk:rw" -t \
             ghcr.io/zaproxy/zaproxy@sha256:7c2f8afc893e4e4000be8ad3fd22013fc36e5cce59359349f5a2d45626e2ccb9 \
             zap-baseline.py -t https://web -I \
               -r zap-report.html -w zap-report.md -J zap-report.json || true
@@ -78,9 +90,9 @@ jobs:
         with:
           name: zap-baseline-report
           path: |
-            zap-report.html
-            zap-report.md
-            zap-report.json
+            zap-out/zap-report.html
+            zap-out/zap-report.md
+            zap-out/zap-report.json
           if-no-files-found: warn
           retention-days: 30
 
