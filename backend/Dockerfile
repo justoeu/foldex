@@ -16,7 +16,7 @@ RUN GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/foldex ./cmd/server
 
 # Use alpine as the final image so we can install chromium for go-rod.
 # distroless/static does not include the necessary system libs.
-FROM alpine:3.21
+FROM alpine:3.24
 RUN apk add --no-cache \
     chromium \
     ca-certificates \
