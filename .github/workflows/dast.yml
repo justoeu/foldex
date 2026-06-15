@@ -38,13 +38,11 @@ jobs:
             -addext "subjectAltName=DNS:web,DNS:localhost,IP:127.0.0.1"
 
       - name: Boot the stack
-        # The backend refuses to start on the insecure trifecta (non-loopback
-        # bind + empty SHARED_SECRET + wildcard CORS — config.validateSecureDefaults,
-        # CLAUDE.md §4). Compose forces BACKEND_BIND=0.0.0.0 (so nginx can reach
-        # it) and .env.example ships CORS_ORIGINS=*, so we restrict CORS to one
-        # concrete origin — breaking just one leg of the trifecta — while keeping
-        # /api reachable for the scan. Shell env outranks .env in compose
-        # interpolation, so this wins over the .env value.
+        # Pin CORS to a concrete origin so the backend's secure-defaults guard
+        # (non-loopback bind + empty SHARED_SECRET + wildcard CORS refuses to
+        # boot — config.validateSecureDefaults, CLAUDE.md §4) can't trip even if
+        # a future .env.example reintroduces a wildcard. Shell env outranks .env
+        # in compose interpolation. Keeps /api reachable for the scan.
         env:
           CORS_ORIGINS: https://localhost
         run: |
