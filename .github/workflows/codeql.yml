@@ -48,7 +48,7 @@ jobs:
       # The Go module lives in backend/, not the repo root, so point setup-go's
       # cache key at backend/go.sum (Go 1.26.x per CLAUDE.md §1).
       - if: matrix.language == 'go'
-        uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: '1.26'
           cache: true
