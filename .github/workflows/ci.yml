@@ -289,6 +289,9 @@ jobs:
         # by 64 hex chars so a stray artifact (log, README, hidden file) can
         # never sneak into the manifest as a fake digest.
         run: |
+          # SC2046/SC2010: the word-splitting IS the point — each `-t <tag>` and
+          # each `<repo>@sha256:<digest>` must land as a separate argv entry.
+          # shellcheck disable=SC2046,SC2010
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") \
             $(ls -1 | grep -E '^[a-f0-9]{64}$' | sed 's|^|${{ matrix.image.repo }}@sha256:|')
