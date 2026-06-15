@@ -30,15 +30,12 @@ updates:
       gomod-minor:
         update-types: [minor, patch]
 
-  # ── Frontend npm (bun reads the same package.json / lockfile) ──
-  - package-ecosystem: npm
-    directory: /web
-    schedule:
-      interval: weekly
-    labels: [dependencies, frontend]
-    groups:
-      npm-minor:
-        update-types: [minor, patch]
+  # ── Frontend deps are NOT managed here ──
+  # The web app uses bun (CLAUDE.md §1) and the lockfile is `web/bun.lock`.
+  # Dependabot's `npm` ecosystem only rewrites `package.json` — it cannot
+  # regenerate `bun.lock`, so every PR it opened left the frozen lockfile out
+  # of sync and CI's `bun install --frozen-lockfile` failed. Update frontend
+  # deps manually with `cd web && bun update` (the §1 flow) instead.
 
   # ── Container base images (FROM lines) ──
   - package-ecosystem: docker

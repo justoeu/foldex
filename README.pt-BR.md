@@ -157,7 +157,7 @@ Ferramentas em camadas (defense-in-depth) — todas **informativas** hoje (mostr
 | **SAST** | Semgrep (packs OWASP/secrets/linguagem) + gosec | `.github/workflows/sast.yml` | push · PR · semanal |
 | **DAST** | OWASP ZAP baseline (passivo) contra a stack viva | `.github/workflows/dast.yml` | **mensal** · dispatch manual |
 | **SCA** | govulncheck + `bun audit` | `.github/workflows/ci.yml` | push · PR |
-| **Deps** | Dependabot (gomod · npm · docker ×2 · actions) | `.github/dependabot.yml` | PRs semanais |
+| **Deps** | Dependabot (gomod · docker ×2 · actions) | `.github/dependabot.yml` | PRs semanais |
 
 Os achados de SAST aparecem na aba **Security ▸ Code scanning** do repositório (upload SARIF). O job de DAST builda a stack do código via `docker compose --build`, espera o `/healthz`, roda o ZAP baseline contra o nginx pela rede compartilhada `foldex` e sobe o relatório HTML/MD/JSON como artefato de 30 dias. Rode sob demanda em **Actions** → *dast* → *Run workflow*.
 

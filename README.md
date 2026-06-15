@@ -176,7 +176,7 @@ Layered, defense-in-depth tooling — all **informational** today (they surface 
 | **SAST** | Semgrep (OWASP/secrets/lang packs) + gosec | `.github/workflows/sast.yml` | push · PR · weekly |
 | **DAST** | OWASP ZAP baseline (passive) vs a live stack | `.github/workflows/dast.yml` | **monthly** · manual dispatch |
 | **SCA** | govulncheck + `bun audit` | `.github/workflows/ci.yml` | push · PR |
-| **Deps** | Dependabot (gomod · npm · docker ×2 · actions) | `.github/dependabot.yml` | weekly PRs |
+| **Deps** | Dependabot (gomod · docker ×2 · actions) | `.github/dependabot.yml` | weekly PRs |
 
 SAST findings land in the repo **Security ▸ Code scanning** tab (SARIF upload). The DAST job builds the stack from source via `docker compose --build`, waits for `/healthz`, runs the ZAP baseline against nginx over the shared `foldex` network, and uploads the HTML/MD/JSON report as a 30-day artifact. Run it on demand from the **Actions** tab → *dast* → *Run workflow*.
 
