@@ -151,62 +151,105 @@ func wipeAll(ctx context.Context, tx pgx.Tx) (Counts, error) {
 // restoreIdentity inserts everything from snap with the original IDs
 // preserved. After all INSERTs, advances each sequence to max(id)+1 so future
 // auto-IDs don't collide.
+//
+// All five loops use pgx.CopyFrom (PostgreSQL COPY protocol) instead of
+// per-row INSERTs. The wipe path handles the worst-case restore volume
+// (a power-user backup of hundreds of thousands of click_logs); per-row
+// INSERTs amortized to one network round-trip per row turned a 1M-row
+// click_log restore into 1M sequential INSERTs. CopyFrom batches them in a
+// single streaming upload — typically 10-50× fewer round-trips. CopyFrom
+// is safe here because wipe mode already TRUNCATEd, so there are no
+// conflicts to handle and no RETURNING values to capture.
 func restoreIdentity(ctx context.Context, tx pgx.Tx, snap *Snapshot) (idMapping, error) {
 	m := newIDMapping()
 
-	for _, t := range snap.Tags {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO tag (id, name, color, icon, created_at) VALUES ($1,$2,$3,$4,$5)`,
-			t.ID, t.Name, t.Color, t.Icon, t.CreatedAt); err != nil {
-			return m, fmt.Errorf("insert tag %d: %w", t.ID, err)
+	if len(snap.Tags) > 0 {
+		rows := make([][]any, 0, len(snap.Tags))
+		for _, t := range snap.Tags {
+			rows = append(rows, []any{t.ID, t.Name, t.Color, t.Icon, t.CreatedAt})
+			m.tagMap[t.ID] = t.ID
 		}
-		m.tagMap[t.ID] = t.ID
+		if _, err := tx.CopyFrom(ctx,
+			pgx.Identifier{"tag"},
+			[]string{"id", "name", "color", "icon", "created_at"},
+			pgx.CopyFromRows(rows),
+		); err != nil {
+			return m, fmt.Errorf("copy tag: %w", err)
+		}
 	}
+
 	// folders must be topologically sorted: parent_id is itself a foreign key
-	// inside the same table.
-	for _, f := range topoSortFolders(snap.Folders) {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO folder (id, name, color, parent_id, created_at) VALUES ($1,$2,$3,$4,$5)`,
-			f.ID, f.Name, f.Color, f.ParentID, f.CreatedAt); err != nil {
-			return m, fmt.Errorf("insert folder %d: %w", f.ID, err)
+	// inside the same table. CopyFrom preserves slice order.
+	if len(snap.Folders) > 0 {
+		rows := make([][]any, 0, len(snap.Folders))
+		for _, f := range topoSortFolders(snap.Folders) {
+			rows = append(rows, []any{f.ID, f.Name, f.Color, f.ParentID, f.CreatedAt})
+			m.folderMap[f.ID] = f.ID
 		}
-		m.folderMap[f.ID] = f.ID
+		if _, err := tx.CopyFrom(ctx,
+			pgx.Identifier{"folder"},
+			[]string{"id", "name", "color", "parent_id", "created_at"},
+			pgx.CopyFromRows(rows),
+		); err != nil {
+			return m, fmt.Errorf("copy folder: %w", err)
+		}
 	}
-	for _, l := range snap.Links {
-		// Wipe-mode preserves original IDs; slug comes straight from the
-		// snapshot. If a backup somehow lacks slug (older format), derive
-		// from title with a fallback to the id pattern that matches
-		// migration 000009's backfill convention.
-		slug := l.Slug
-		if slug == "" {
-			slug = links.Slugify(l.Title)
+
+	if len(snap.Links) > 0 {
+		rows := make([][]any, 0, len(snap.Links))
+		for _, l := range snap.Links {
+			// Slug fallback for older backups predating migration 000009:
+			// derive from title, fall back to the id pattern matching the
+			// migration's backfill convention. Computed up-front since
+			// CopyFrom can't run a RETURNING clause.
+			slug := l.Slug
 			if slug == "" {
-				slug = fmt.Sprintf("link-%d", l.ID)
+				slug = links.Slugify(l.Title)
+				if slug == "" {
+					slug = fmt.Sprintf("link-%d", l.ID)
+				}
 			}
+			rows = append(rows, []any{
+				l.ID, l.URL, l.Title, slug, l.Description, l.FaviconURL, l.OGImageURL,
+				l.Pinned, l.PreviewStatus, l.PreviewError, l.FolderID, l.CreatedAt, l.UpdatedAt,
+			})
+			m.linkMap[l.ID] = l.ID
 		}
-		if _, err := tx.Exec(ctx, `
-            INSERT INTO link (id, url, title, slug, description, favicon_url, og_image_url,
-                              pinned, preview_status, preview_error, folder_id,
-                              created_at, updated_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-			l.ID, l.URL, l.Title, slug, l.Description, l.FaviconURL, l.OGImageURL,
-			l.Pinned, l.PreviewStatus, l.PreviewError, l.FolderID, l.CreatedAt, l.UpdatedAt); err != nil {
-			return m, fmt.Errorf("insert link %d: %w", l.ID, err)
-		}
-		m.linkMap[l.ID] = l.ID
-	}
-	for _, lt := range snap.LinkTags {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO link_tag (link_id, tag_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-			lt.LinkID, lt.TagID); err != nil {
-			return m, fmt.Errorf("insert link_tag %d/%d: %w", lt.LinkID, lt.TagID, err)
+		if _, err := tx.CopyFrom(ctx,
+			pgx.Identifier{"link"},
+			[]string{"id", "url", "title", "slug", "description", "favicon_url", "og_image_url",
+				"pinned", "preview_status", "preview_error", "folder_id", "created_at", "updated_at"},
+			pgx.CopyFromRows(rows),
+		); err != nil {
+			return m, fmt.Errorf("copy link: %w", err)
 		}
 	}
-	for _, c := range snap.ClickLogs {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO click_log (link_id, clicked_at) VALUES ($1,$2)`,
-			c.LinkID, c.ClickedAt); err != nil {
-			return m, fmt.Errorf("insert click_log: %w", err)
+
+	if len(snap.LinkTags) > 0 {
+		rows := make([][]any, 0, len(snap.LinkTags))
+		for _, lt := range snap.LinkTags {
+			rows = append(rows, []any{lt.LinkID, lt.TagID})
+		}
+		if _, err := tx.CopyFrom(ctx,
+			pgx.Identifier{"link_tag"},
+			[]string{"link_id", "tag_id"},
+			pgx.CopyFromRows(rows),
+		); err != nil {
+			return m, fmt.Errorf("copy link_tag: %w", err)
+		}
+	}
+
+	if len(snap.ClickLogs) > 0 {
+		rows := make([][]any, 0, len(snap.ClickLogs))
+		for _, c := range snap.ClickLogs {
+			rows = append(rows, []any{c.LinkID, c.ClickedAt})
+		}
+		if _, err := tx.CopyFrom(ctx,
+			pgx.Identifier{"click_log"},
+			[]string{"link_id", "clicked_at"},
+			pgx.CopyFromRows(rows),
+		); err != nil {
+			return m, fmt.Errorf("copy click_log: %w", err)
 		}
 	}
 
@@ -326,17 +369,31 @@ func restoreSkip(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, Counts
 		}
 	}
 
-	for _, c := range snap.ClickLogs {
-		linkID, ok := m.linkMap[c.LinkID]
-		if !ok {
-			skipped.ClickLogs++
-			continue
+	// click_log is the highest-volume table in a power-user backup (often
+	// 100k+ rows). Per-row INSERT turned this loop into the dominant restore
+	// cost; CopyFrom streams it in a single COPY. The id-mapping filter
+	// (linkID must exist in the restored set) is applied up-front while
+	// building rows; unmapped clicks are counted as skipped.
+	if len(snap.ClickLogs) > 0 {
+		rows := make([][]any, 0, len(snap.ClickLogs))
+		for _, c := range snap.ClickLogs {
+			linkID, ok := m.linkMap[c.LinkID]
+			if !ok {
+				skipped.ClickLogs++
+				continue
+			}
+			rows = append(rows, []any{linkID, c.ClickedAt})
 		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO click_log (link_id, clicked_at) VALUES ($1,$2)`, linkID, c.ClickedAt); err != nil {
-			return inserted, skipped, m, fmt.Errorf("insert click_log: %w", err)
+		if len(rows) > 0 {
+			if _, err := tx.CopyFrom(ctx,
+				pgx.Identifier{"click_log"},
+				[]string{"link_id", "clicked_at"},
+				pgx.CopyFromRows(rows),
+			); err != nil {
+				return inserted, skipped, m, fmt.Errorf("copy click_log: %w", err)
+			}
 		}
-		inserted.ClickLogs++
+		inserted.ClickLogs += int64(len(rows))
 	}
 
 	return inserted, skipped, m, nil
@@ -436,16 +493,27 @@ func restoreDuplicate(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, [
 		inserted.LinkTags++
 	}
 
-	for _, c := range snap.ClickLogs {
-		linkID, ok := m.linkMap[c.LinkID]
-		if !ok {
-			continue
+	// click_log: CopyFrom for the same reason as restoreSkip — high-volume,
+	// no conflict handling needed. Pre-filter by mapping presence.
+	if len(snap.ClickLogs) > 0 {
+		rows := make([][]any, 0, len(snap.ClickLogs))
+		for _, c := range snap.ClickLogs {
+			linkID, ok := m.linkMap[c.LinkID]
+			if !ok {
+				continue
+			}
+			rows = append(rows, []any{linkID, c.ClickedAt})
 		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO click_log (link_id, clicked_at) VALUES ($1,$2)`, linkID, c.ClickedAt); err != nil {
-			return inserted, warnings, m, fmt.Errorf("insert click_log: %w", err)
+		if len(rows) > 0 {
+			if _, err := tx.CopyFrom(ctx,
+				pgx.Identifier{"click_log"},
+				[]string{"link_id", "clicked_at"},
+				pgx.CopyFromRows(rows),
+			); err != nil {
+				return inserted, warnings, m, fmt.Errorf("copy click_log: %w", err)
+			}
 		}
-		inserted.ClickLogs++
+		inserted.ClickLogs += int64(len(rows))
 	}
 
 	return inserted, warnings, m, nil
