@@ -85,7 +85,7 @@ func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "payload_too_large", err.Error()))
 			return
 		}
-		httperr.JSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "bad_zip", "message": err.Error()}})
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "bad_zip", err.Error()))
 		return
 	}
 	defer cleanup()
@@ -107,7 +107,7 @@ func (h *Handler) restore(w http.ResponseWriter, r *http.Request) {
 	}
 	mode := ConflictMode(modeStr)
 	if !mode.Valid() {
-		httperr.JSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "bad_mode", "message": fmt.Sprintf("mode %q is not one of wipe|skip|duplicate", modeStr)}})
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "bad_mode", fmt.Sprintf("mode %q is not one of wipe|skip|duplicate", modeStr)))
 		return
 	}
 
@@ -117,7 +117,7 @@ func (h *Handler) restore(w http.ResponseWriter, r *http.Request) {
 			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "payload_too_large", err.Error()))
 			return
 		}
-		httperr.JSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "bad_zip", "message": err.Error()}})
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "bad_zip", err.Error()))
 		return
 	}
 	defer cleanup()

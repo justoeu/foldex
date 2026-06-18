@@ -103,3 +103,42 @@ func TestRemapFileKey_IdentityWhenSameID(t *testing.T) {
 	assert.Equal(t, "screenshots/7.png", got)
 	assert.False(t, ok, "identity mapping must be reported as no-op")
 }
+
+// TestSnapshot_Sanitize is the security-boundary guard: a snapshot loaded
+// from an attacker-controlled backup zip can carry `red url("https://evil/exfil")`
+// as a tag/folder color, which would render as a tracking pixel on every chip
+// (CLAUDE.md §4). Sanitize must coerce every such value to the indigo default
+// before any restore mode writes it to the DB.
+func TestSnapshot_Sanitize(t *testing.T) {
+	s := &Snapshot{
+		Tags: []TagRow{
+			{ID: 1, Name: "ok-hex", Color: "#abc"},
+			{ID: 2, Name: "ok-gradient", Color: "linear-gradient(135deg, #8B85FF, #6366F1)"},
+			{ID: 3, Name: "empty", Color: ""},
+			{ID: 4, Name: "tracking-pixel", Color: `red url("https://evil/exfil")`},
+			{ID: 5, Name: "named", Color: "red"},
+		},
+		Folders: []FolderRow{
+			{ID: 1, Name: "ok", Color: "#aabbcc"},
+			{ID: 2, Name: "css-injection", Color: "expression(alert(1))"},
+		},
+	}
+	coerced := s.Sanitize()
+
+	assert.Equal(t, "#abc", s.Tags[0].Color, "valid hex passes through")
+	assert.Equal(t, "linear-gradient(135deg, #8B85FF, #6366F1)", s.Tags[1].Color, "valid gradient passes through")
+	assert.Equal(t, defaultColor, s.Tags[2].Color, "empty falls back to default")
+	assert.Equal(t, defaultColor, s.Tags[3].Color, "tracking-pixel vector MUST be coerced")
+	assert.Equal(t, defaultColor, s.Tags[4].Color, "named color coerced")
+	assert.Equal(t, "#aabbcc", s.Folders[0].Color, "folder valid hex passes through")
+	assert.Equal(t, defaultColor, s.Folders[1].Color, "folder expression() coerced")
+
+	// 4 coercions: tag empty, tag url(), tag named, folder expression().
+	// Valid colors (including gradient) pass through untouched.
+	assert.Equal(t, 4, coerced, "coerced count must reflect only the actually-changed values")
+}
+
+func TestSnapshot_Sanitize_Empty(t *testing.T) {
+	s := &Snapshot{}
+	assert.Equal(t, 0, s.Sanitize(), "empty snapshot coerces nothing")
+}

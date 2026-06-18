@@ -123,11 +123,15 @@ func healthz(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
+		// Healthz is intentionally public (no SHARED_SECRET gate) so external
+		// probes can check liveness. Surface only the boolean state — the raw
+		// `pool.Ping` error can carry internal host/DSN text that doesn't
+		// belong in a response an unauthenticated caller can read.
 		body := map[string]any{"status": "ok", "db": "ok"}
 		status := http.StatusOK
 		if err := pool.Ping(ctx); err != nil {
 			body["status"] = "degraded"
-			body["db"] = err.Error()
+			body["db"] = "unreachable"
 			status = http.StatusServiceUnavailable
 		}
 		w.Header().Set("Content-Type", "application/json")

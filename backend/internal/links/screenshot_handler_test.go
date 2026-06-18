@@ -231,6 +231,17 @@ func TestCaptureAndStore_ScreenshotFails(t *testing.T) {
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
 	errBlock, _ := body["error"].(map[string]any)
 	assert.Equal(t, "screenshot_failed", errBlock["code"])
+
+	// Defense-in-depth on the leak fix (screenshot_handler.go): Chromium's
+	// raw error can include local binary paths / system state. The wire
+	// message must be generic; the full err stays only in slog. Asserting
+	// both the expected literal AND the absence of the planted payload.
+	assert.Equal(t, "failed to capture screenshot", errBlock["message"],
+		"wire message must be the generic literal, not the formatted err")
+	assert.NotContains(t, errBlock["message"], "chromium crashed",
+		"internal Chromium error text must NOT reach the response body")
+	assert.NotContains(t, errBlock["message"], "chromium",
+		"no part of the planted payload may leak")
 }
 
 func TestCaptureAndStore_UploadFails(t *testing.T) {

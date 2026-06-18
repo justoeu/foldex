@@ -1,6 +1,10 @@
 package backup
 
-import "time"
+import (
+	"time"
+
+	"foldex/internal/pkg/cssvalid"
+)
 
 // Magic discriminator written into every manifest. Reject zips that don't have
 // this in `manifest.kind` — keeps random-zip-upload from doing damage.
@@ -48,6 +52,37 @@ type Snapshot struct {
 	Links     []LinkRow    `json:"links"`
 	LinkTags  []LinkTagRow `json:"link_tags"`
 	ClickLogs []ClickRow   `json:"click_logs"`
+}
+
+// defaultColor is the indigo the DTO layer defaults to on Create/Update. Kept
+// here (not in cssvalid) so the cssvalid leaf package stays free of any
+// business default — each consumer picks its own fallback.
+const defaultColor = "#6366F1"
+
+// Sanitize coerces every tag/folder color through the cssvalid allowlist,
+// defaulting to indigo on empty or invalid input. The backup zip is a trust
+// boundary — a shared/edited/manually-crafted snapshot can carry
+// `red url("https://evil/exfil")` and turn every chip render into a tracking
+// pixel (CLAUDE.md §4). Called once at load (readSnapshotFromZip) so all
+// three restore modes (identity/skip/duplicate) inherit the guard for free.
+// Returns the count of coerced colors so the caller can surface a warning.
+func (s *Snapshot) Sanitize() int {
+	coerced := 0
+	for i := range s.Tags {
+		before := s.Tags[i].Color
+		s.Tags[i].Color = cssvalid.Sanitize(before, defaultColor)
+		if s.Tags[i].Color != before {
+			coerced++
+		}
+	}
+	for i := range s.Folders {
+		before := s.Folders[i].Color
+		s.Folders[i].Color = cssvalid.Sanitize(before, defaultColor)
+		if s.Folders[i].Color != before {
+			coerced++
+		}
+	}
+	return coerced
 }
 
 type TagRow struct {

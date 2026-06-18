@@ -53,6 +53,26 @@ const linkFrom = `
     ) cl ON TRUE
 `
 
+// rowScanner is the Scan method shared by pgx.Row and pgx.Rows. Letting one
+// helper read into a *Link from either single-row or multi-row results keeps
+// the 21-column scan list in exactly one place — adding a column used to mean
+// editing four near-identical Scan(...) blocks (Get, GetBySlug, List,
+// ListRecentChanges) and silently dropping one was a latent bug.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanLink reads one link row (in linkColumns order) into l.
+func scanLink(s rowScanner, l *Link) error {
+	return s.Scan(
+		&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
+		&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
+		&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
+		&l.CheckInterval, &l.LastCheckedAt, &l.LastFingerprint,
+		&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError,
+	)
+}
+
 func (r *Repository) Create(ctx context.Context, in CreateInput) (Link, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -148,13 +168,7 @@ func isURLUniqueViolation(err error) bool {
 
 func (r *Repository) Get(ctx context.Context, id int64) (Link, error) {
 	var l Link
-	err := r.pool.QueryRow(ctx, `SELECT `+linkColumns+linkFrom+` WHERE l.id = $1`, id).Scan(
-		&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
-		&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
-		&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
-		&l.CheckInterval, &l.LastCheckedAt, &l.LastFingerprint,
-		&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError,
-	)
+	err := scanLink(r.pool.QueryRow(ctx, `SELECT `+linkColumns+linkFrom+` WHERE l.id = $1`, id), &l)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Link{}, httperr.ErrNotFound
 	}
@@ -177,13 +191,7 @@ func (r *Repository) Get(ctx context.Context, id int64) (Link, error) {
 // resolve a public-facing slug back to the full link row.
 func (r *Repository) GetBySlug(ctx context.Context, slug string) (Link, error) {
 	var l Link
-	err := r.pool.QueryRow(ctx, `SELECT `+linkColumns+linkFrom+` WHERE l.slug = $1`, slug).Scan(
-		&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
-		&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
-		&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
-		&l.CheckInterval, &l.LastCheckedAt, &l.LastFingerprint,
-		&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError,
-	)
+	err := scanLink(r.pool.QueryRow(ctx, `SELECT `+linkColumns+linkFrom+` WHERE l.slug = $1`, slug), &l)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Link{}, httperr.ErrNotFound
 	}
@@ -269,13 +277,7 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Link, error) {
 	ids := []int64{}
 	for rows.Next() {
 		var l Link
-		if err := rows.Scan(
-			&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
-			&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
-			&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
-			&l.CheckInterval, &l.LastCheckedAt, &l.LastFingerprint,
-			&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError,
-		); err != nil {
+		if err := scanLink(rows, &l); err != nil {
 			return nil, err
 		}
 		l.Tags = []Tag{}
@@ -574,13 +576,7 @@ func (r *Repository) ListRecentChanges(ctx context.Context, sinceSeconds, limit 
 	ids := []int64{}
 	for rows.Next() {
 		var l Link
-		if err := rows.Scan(
-			&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
-			&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
-			&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
-			&l.CheckInterval, &l.LastCheckedAt, &l.LastFingerprint,
-			&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError,
-		); err != nil {
+		if err := scanLink(rows, &l); err != nil {
 			return nil, err
 		}
 		l.Tags = []Tag{}

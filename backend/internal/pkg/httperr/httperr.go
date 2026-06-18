@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 )
 
 type Error struct {
@@ -66,4 +67,16 @@ func JSON(w http.ResponseWriter, status int, body any) {
 	if body != nil {
 		_ = json.NewEncoder(w).Encode(body)
 	}
+}
+
+// ParseID parses a chi URL param value as a positive int64. Returns a 400
+// *Error when the value is missing, non-numeric, or <= 0. Takes the raw
+// string (typically chi.URLParam(r, "id")) so this package stays router-
+// agnostic — handlers already import chi, the pkg layer does not.
+func ParseID(raw string) (int64, error) {
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, New(http.StatusBadRequest, "invalid_id", "id must be a positive integer")
+	}
+	return id, nil
 }

@@ -44,3 +44,28 @@ func TestIsValidColor(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitize(t *testing.T) {
+	const fb = "#6366F1"
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty falls back", "", fb},
+		{"whitespace falls back", "   ", fb},
+		{"tracking-pixel url() falls back", `red url("https://evil/exfil")`, fb},
+		{"named color falls back", "red", fb},
+		{"expression() falls back", "expression(alert(1))", fb},
+		{"valid hex passes through", "#abc", "#abc"},
+		{"valid gradient passes through", "linear-gradient(135deg, #8B85FF, #6366F1)", "linear-gradient(135deg, #8B85FF, #6366F1)"},
+		{"whitespace trimmed on valid", "  #abc  ", "#abc"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Sanitize(tc.in, fb); got != tc.want {
+				t.Fatalf("Sanitize(%q, %q) = %q; want %q", tc.in, fb, got, tc.want)
+			}
+		})
+	}
+}

@@ -193,3 +193,47 @@ func TestValidate_LinkCreatedAtAbsent(t *testing.T) {
 	}
 	require.NoError(t, f.Validate())
 }
+
+func TestValidate_TagBadColor(t *testing.T) {
+	// A url(...) color is exactly the tracking-pixel vector cssvalid exists
+	// to block. The importer is a trust boundary (shared/edited JSON), so a
+	// bad color must fail validation up front rather than reach the DB.
+	f := JSONFile{
+		Version: 1,
+		Tags:    []JSONTag{{Name: "evil", Color: `red url("https://evil/exfil")`}},
+		Links:   []JSONLink{},
+	}
+	require.Error(t, f.Validate())
+}
+
+func TestValidate_FolderBadColor(t *testing.T) {
+	f := JSONFile{
+		Version: 2,
+		Folders: []JSONFolder{{Name: "evil", Color: `red url("https://evil/exfil")`}},
+		Links:   []JSONLink{},
+	}
+	require.Error(t, f.Validate())
+}
+
+func TestValidate_TagGradientColorOK(t *testing.T) {
+	// linear-gradient(135deg, #hex, #hex) is the only gradient form the UI
+	// produces; it must round-trip through import without being rejected.
+	f := JSONFile{
+		Version: 1,
+		Tags:    []JSONTag{{Name: "grad", Color: "linear-gradient(135deg, #8B85FF, #6366F1)"}},
+		Links:   []JSONLink{},
+	}
+	require.NoError(t, f.Validate())
+}
+
+func TestValidate_EmptyColorOK(t *testing.T) {
+	// Empty color means "apply layer will default it"; Validate must not
+	// reject it (otherwise legacy v1 exports without colors would all fail).
+	f := JSONFile{
+		Version: 1,
+		Tags:    []JSONTag{{Name: "ok", Color: ""}},
+		Folders: []JSONFolder{{Name: "ok", Color: ""}},
+		Links:   []JSONLink{},
+	}
+	require.NoError(t, f.Validate())
+}

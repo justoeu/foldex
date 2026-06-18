@@ -14,8 +14,22 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/links"
+	"foldex/internal/pkg/cssvalid"
 	"foldex/internal/pkg/httperr"
 )
+
+// defaultImportColor mirrors the indigo the DTO layer defaults to when a
+// create/update omits color. Kept local so the importer stays self-contained.
+const defaultImportColor = "#6366F1"
+
+// sanitizeImportColor delegates to cssvalid.Sanitize so the importer shares
+// the single trust-boundary helper with the backup restore path. Defense-in-
+// depth for the apply path: Validate() already rejects bad colors, but
+// ensureFolder/importJSON are also reachable directly and a tracking-pixel
+// color (CLAUDE.md §4) must never reach the DB.
+func sanitizeImportColor(c string) string {
+	return cssvalid.Sanitize(c, defaultImportColor)
+}
 
 // dbtx is the narrow subset of methods this package needs from either a
 // *pgxpool.Pool or a pgx.Tx. Lets the per-item helpers run either standalone
@@ -372,17 +386,20 @@ func (h *Handler) importItems(ctx context.Context, items []Item) (int, int, erro
 func (h *Handler) importJSON(ctx context.Context, f JSONFile) (int, int, error) {
 	for _, t := range f.Tags {
 		name := strings.TrimSpace(t.Name)
+		color := sanitizeImportColor(t.Color)
+		// color is guaranteed non-empty by sanitizeImportColor (defaults to
+		// indigo on empty/invalid), so the INSERT can use it verbatim.
 		_, err := h.pool.Exec(ctx, `
             INSERT INTO tag (name, color, icon)
-            VALUES ($1, COALESCE(NULLIF($2,''), '#6366F1'), $3)
+            VALUES ($1, $2, $3)
             ON CONFLICT (name) DO NOTHING
-        `, name, t.Color, t.Icon)
+        `, name, color, t.Icon)
 		if err != nil {
 			return 0, 0, fmt.Errorf("upsert tag: %w", err)
 		}
 	}
 	for _, fl := range f.Folders {
-		if _, err := ensureFolder(ctx, h.pool, fl.Name, fl.Color); err != nil {
+		if _, err := ensureFolder(ctx, h.pool, fl.Name, sanitizeImportColor(fl.Color)); err != nil {
 			return 0, 0, err
 		}
 	}
@@ -475,16 +492,17 @@ func nextAvailableSlug(ctx context.Context, q dbtx, base string) (string, error)
 // ensureFolder finds-or-creates a folder by name. folder.name has no UNIQUE
 // constraint (iPhone allows duplicate names) so we do a SELECT-then-INSERT
 // dance: the import contract is "match existing by name; create a new row
-// only when there's no match yet". An empty `color` defaults to indigo.
+// only when there's no match yet". An empty `color` defaults to indigo; a
+// non-empty but cssvalid-invalid color ALSO defaults to indigo — the importer
+// is a trust boundary (shared/edited JSON files) and a `red url("…")` color
+// would otherwise become a tracking pixel on every chip render (CLAUDE.md §4).
 // Accepts either *pgxpool.Pool or pgx.Tx (see ensureTags).
 func ensureFolder(ctx context.Context, q dbtx, name, color string) (int64, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return 0, fmt.Errorf("ensureFolder: empty name")
 	}
-	if c := strings.TrimSpace(color); c == "" {
-		color = "#6366F1"
-	}
+	color = sanitizeImportColor(color)
 	var id int64
 	err := q.QueryRow(ctx, `SELECT id FROM folder WHERE name = $1 LIMIT 1`, name).Scan(&id)
 	if err == nil {

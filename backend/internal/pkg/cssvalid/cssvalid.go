@@ -6,7 +6,10 @@
 // but defense-in-depth keeps this safe if the deployment is ever exposed.
 package cssvalid
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // colorPattern accepts:
 //   - 3, 4, 6, or 8-digit hex colors (#abc, #abcd, #aabbcc, #aabbccdd) —
@@ -34,4 +37,19 @@ func IsValidColor(c string) bool {
 		return false
 	}
 	return colorPattern.MatchString(c)
+}
+
+// Sanitize returns c when it is a valid color, otherwise fallback. The input
+// is trimmed first. This is the trust-boundary helper every importer/restore
+// path should call before writing a user-supplied color to the DB: a shared
+// or edited JSON / backup zip is attacker-controlled input, and a value like
+// `red url("https://evil/exfil")` would otherwise become a tracking pixel on
+// every chip render (CLAUDE.md §4). Callers pick the fallback that matches
+// their default UI indigo (currently `#6366F1`).
+func Sanitize(c, fallback string) string {
+	c = strings.TrimSpace(c)
+	if c == "" || !IsValidColor(c) {
+		return fallback
+	}
+	return c
 }

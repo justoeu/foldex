@@ -294,3 +294,52 @@ func TestRestore_RejectsFileEntryOutsideAllowedPrefix(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not under")
 }
+
+// TestRestore_CoercesTrackingPixelColors is the end-to-end guard for the
+// cssvalid trust boundary on the backup zip path. A snapshot carrying
+// `red url("https://evil/exfil")` as a tag/folder color would render as a
+// tracking pixel on every chip (CLAUDE.md §4). Sanitize runs at zip-load
+// time (readSnapshotFromZip), so by the time any restore mode writes rows
+// the value must already be the indigo default. Verified against wipe mode
+// (the most direct path — every row comes from the snapshot).
+func TestRestore_CoercesTrackingPixelColors(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	svc := backup.NewService(pool, newStubBucket(), discardLogger())
+
+	// Craft a minimal zip whose snapshot has one tag and one folder, both
+	// with the tracking-pixel color. Restore must NOT write that value.
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	writeJSON := func(name string, v any) {
+		w, err := zw.Create(name)
+		require.NoError(t, err)
+		require.NoError(t, json.NewEncoder(w).Encode(v))
+	}
+	writeJSON("manifest.json", backup.Manifest{
+		Kind:          backup.ManifestKind,
+		Version:       backup.ManifestVersion,
+		SchemaVersion: backup.CurrentSchemaVersion,
+	})
+	malicious := `red url("https://evil/exfil")`
+	writeJSON("database.json", backup.Snapshot{
+		Version: backup.DatabaseSnapshotVersion,
+		Tags:    []backup.TagRow{{ID: 1, Name: "evil-tag", Color: malicious}},
+		Folders: []backup.FolderRow{{ID: 1, Name: "evil-folder", Color: malicious}},
+	})
+	require.NoError(t, zw.Close())
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+
+	_, err = svc.Restore(ctx, zr, backup.ModeWipe)
+	require.NoError(t, err)
+
+	var tagColor, folderColor string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT color FROM tag WHERE name='evil-tag'`).Scan(&tagColor))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT color FROM folder WHERE name='evil-folder'`).Scan(&folderColor))
+
+	assert.Equal(t, "#6366F1", tagColor, "tracking-pixel tag color MUST be coerced to indigo default")
+	assert.Equal(t, "#6366F1", folderColor, "tracking-pixel folder color MUST be coerced to indigo default")
+	assert.NotContains(t, tagColor, "evil", "no part of the malicious payload may survive")
+	assert.NotContains(t, folderColor, "evil", "no part of the malicious payload may survive")
+}

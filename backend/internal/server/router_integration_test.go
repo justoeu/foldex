@@ -89,6 +89,44 @@ func TestHealthzOK(t *testing.T) {
 	assert.Equal(t, "ok", body["db"])
 }
 
+// TestHealthzDegradedDoesNotLeakErr locks the §4-ish leak fix: healthz is the
+// only endpoint mounted BEFORE the SHARED_SECRET gate, so a degraded response
+// must surface the boolean state only — the raw pool.Ping error can carry
+// internal DSN/host text that an unauthenticated caller can read. Closing the
+// pool before the request simulates "db unreachable" without a separate
+// container misconfiguration.
+func TestHealthzDegradedDoesNotLeakErr(t *testing.T) {
+	pool := testdb.New(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	router := server.New(server.Deps{
+		Pool:   pool,
+		Worker: nopWorker{},
+		Logger: logger,
+		Config: config.Config{Port: "0", CORSOrigins: []string{"*"}, PreviewConcurrency: 1, PreviewTimeoutSec: 1},
+	})
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	pool.Close() // make Ping fail
+
+	resp, err := http.Get(srv.URL + "/healthz")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "degraded", body["status"], "status must reflect db-down")
+	assert.Equal(t, "unreachable", body["db"], "db field must be the fixed marker, not the raw err")
+
+	// Defense-in-depth: scan the db field for typical DSN/err substrings that
+	// pool.Ping would otherwise leak. Catches regressions even if the field
+	// name were ever changed.
+	for _, leak := range []string{"connection", "dsn", "foldex@", "127.0.0.1", "dial"} {
+		assert.NotContains(t, body["db"], leak, "leaked substring %q in db field", leak)
+	}
+}
+
 func TestFullCRUDFlow(t *testing.T) {
 	srv, done := newServer(t, "")
 	defer done()
@@ -271,7 +309,7 @@ func TestBadRequestPaths(t *testing.T) {
 	resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 
-	// Tag invalid id (links handler shares parseID)
+	// Tag invalid id (links handler shares httperr.ParseID)
 	resp, err = c.Get(srv.URL + "/api/links/abc")
 	require.NoError(t, err)
 	resp.Body.Close()
