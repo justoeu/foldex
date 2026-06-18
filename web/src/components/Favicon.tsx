@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { safeImageUrl } from '../lib/url'
 import type { Link } from '../api/types'
 
@@ -15,7 +15,15 @@ type Props = {
 // at runtime (404, CORS block, etc.). Without this, the browser would
 // render its built-in broken-image icon — visually jarring, defeats the
 // whole point of the favicon row.
-export function Favicon({ link, size = 32 }: Props) {
+//
+// memo guards re-render storms: every LinkCard/LinkRow/CompactLink mounts
+// a Favicon, and a 200-card grid otherwise re-renders 200 favatars on every
+// parent state change. Props are {link, size} — link is a stable reference
+// from the query cache, size is a literal.
+export const Favicon = memo(FaviconImpl)
+Favicon.displayName = 'Favicon'
+
+function FaviconImpl({ link, size = 32 }: Props) {
   const host = safeHost(link.url)
   const letter = (host[0] ?? link.title[0] ?? '?').toUpperCase()
   const { bg, fg } = paletteFor(host)

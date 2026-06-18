@@ -180,6 +180,10 @@ func main() {
 	if ccWorker != nil {
 		ccWorker.Stop()
 	}
+	// Tear down the pooled Chromium so the process can exit cleanly instead
+	// of leaving an orphan headless browser. No-op when the screenshot
+	// endpoints were never wired or no Capture ever fired.
+	screenshot.Close()
 	logger.Info("bye")
 }
 

@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import { memo, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import { isGradient, primaryColor } from '../lib/tagColor'
 import type { Tag } from '../api/types'
@@ -11,7 +11,14 @@ type Props = {
   onClose?: () => void
 }
 
-export function TagChip({ tag, onClick, active, closable, onClose }: Props) {
+// memo guards re-render storms: every LinkCard/Row mounts up to 3 TagChips
+// (cards) or 2 (compact) and a 200-card grid otherwise re-renders 600 chips
+// on every parent state change. Props are stable: tag is a cached reference,
+// onClick/active are typically literals or useCallback'd.
+export const TagChip = memo(TagChipImpl)
+TagChip.displayName = 'TagChip'
+
+function TagChipImpl({ tag, onClick, active, closable, onClose }: Props) {
   const { t } = useTranslation()
   const cls = 'fx-chip' + (active ? ' fx-chip-active' : '')
   // CSS custom properties aren't in the React.CSSProperties index type;

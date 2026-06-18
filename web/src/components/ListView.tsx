@@ -1,3 +1,4 @@
+import { memo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
@@ -26,15 +27,23 @@ export function ListView({ folders, links, sort, onEdit, onOpenFolder, onEditFol
   const { t } = useTranslation()
   const del = useDeleteLink()
   const confirm = useConfirm()
-  const askDelete = async (l: Link) => {
-    const ok = await confirm({
-      title: t('link_card.delete_confirm_title', { title: l.title }),
-      message: t('link_card.delete_confirm_body_short'),
-      confirmLabel: t('link_card.delete_confirm_action'),
-      destructive: true,
-    })
-    if (ok) del.mutate(l.id)
-  }
+  // useCallback is REQUIRED here, not optional: this closure is passed as
+  // `onDelete` to every <LinkRow>, which is React.memo'd. A new identity per
+  // render would defeat the memo (every parent keystroke would re-render all
+  // rows). del.mutate and confirm are stable hook returns; t from
+  // useTranslation is stable per i18n instance.
+  const askDelete = useCallback(
+    async (l: Link) => {
+      const ok = await confirm({
+        title: t('link_card.delete_confirm_title', { title: l.title }),
+        message: t('link_card.delete_confirm_body_short'),
+        confirmLabel: t('link_card.delete_confirm_action'),
+        destructive: true,
+      })
+      if (ok) del.mutate(l.id)
+    },
+    [confirm, del, t],
+  )
 
   const isAlpha = sort === 'alpha' || sort === 'alpha_desc'
 
@@ -86,7 +95,15 @@ export function ListView({ folders, links, sort, onEdit, onOpenFolder, onEditFol
   )
 }
 
-function LinkRow({
+// memo guards re-render storms in long lists (100+ rows). Each row mounts
+// Favicon + up to 3 TagChips and calls useTranslation; without memo, every
+// parent state change (keystroke in search, sidebar toggle, optimistic click
+// bump) re-renders all rows. App.tsx wires onEdit/onDelete via useCallback so
+// the default shallow compare is correct — props are stable across renders.
+const LinkRow = memo(LinkRowImpl)
+LinkRow.displayName = 'LinkRow'
+
+function LinkRowImpl({
   link: l,
   onEdit,
   onDelete,
@@ -152,7 +169,12 @@ function LinkRow({
   )
 }
 
-function FolderRow({
+// memo on FolderRow mirrors LinkRow: stable props (folder + onOpen/onEdit
+// useCallbacks from App) → no re-render when siblings change.
+const FolderRow = memo(FolderRowImpl)
+FolderRow.displayName = 'FolderRow'
+
+function FolderRowImpl({
   folder: f,
   onOpen,
   onEdit,

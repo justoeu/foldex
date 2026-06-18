@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
@@ -60,7 +61,12 @@ export function CompactGrid({ folders, links, sort, onEdit, onOpenFolder, onEdit
   )
 }
 
-function CompactLink({ link: l, onEdit }: { link: Link; onEdit: (l: Link) => void }) {
+// memo on CompactLink mirrors LinkCard/LinkRow: stable props (link + onEdit
+// useCallback from App) → no re-render when siblings change.
+const CompactLink = memo(CompactLinkImpl)
+CompactLink.displayName = 'CompactLink'
+
+function CompactLinkImpl({ link: l, onEdit }: { link: Link; onEdit: (l: Link) => void }) {
   const { t } = useTranslation()
   return (
     <article className="fx-compact">
@@ -109,7 +115,11 @@ function CompactLink({ link: l, onEdit }: { link: Link; onEdit: (l: Link) => voi
   )
 }
 
-function CompactFolder({
+// memo on CompactFolder mirrors CompactLink.
+const CompactFolder = memo(CompactFolderImpl)
+CompactFolder.displayName = 'CompactFolder'
+
+function CompactFolderImpl({
   folder: f,
   onOpen,
   onEdit,
