@@ -140,6 +140,11 @@
     "breadcrumb_edit_label": "Editar carpeta",
     "merge_new_folder_name": "Nueva carpeta"
   },
+  "links": {
+    "load_more": "Cargar más",
+    "loading_more": "Cargando…",
+    "load_more_aria": "Cargar más enlaces"
+  },
   "link_card": {
     "open_action": "Abrir",
     "clicks_tooltip": "Clics",

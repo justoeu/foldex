@@ -7,6 +7,21 @@ import (
 	"strconv"
 )
 
+// DecodeJSON is a shared decode+cap+strict-parse helper for POST/PATCH
+// handlers. Every handler that accepts a JSON body MUST go through a
+// MaxBytesReader with JSONBodyCap; this function bakes that in so a new
+// handler can't accidentally skip it.
+func DecodeJSON[T any](w http.ResponseWriter, r *http.Request) (T, error) {
+	var in T
+	r.Body = http.MaxBytesReader(w, r.Body, JSONBodyCap)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		return in, New(http.StatusBadRequest, "invalid_json", err.Error())
+	}
+	return in, nil
+}
+
 type Error struct {
 	Status  int    `json:"-"`
 	Code    string `json:"code"`

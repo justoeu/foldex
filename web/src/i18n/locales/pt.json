@@ -140,6 +140,11 @@
     "breadcrumb_edit_label": "Editar pasta",
     "merge_new_folder_name": "Nova pasta"
   },
+  "links": {
+    "load_more": "Carregar mais",
+    "loading_more": "Carregando…",
+    "load_more_aria": "Carregar mais links"
+  },
   "link_card": {
     "open_action": "Acessar",
     "clicks_tooltip": "Cliques",

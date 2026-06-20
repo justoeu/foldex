@@ -169,7 +169,14 @@ function listLinks(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: Mo
   }
   const sort = params.get('sort')
   if (sort === 'clicks') out.sort((a, b) => b.click_count - a.click_count)
-  return out
+  // Honor limit/offset so tests exercising useInfiniteQuery see the same
+  // shape the backend produces (page slices, not the full list). Mirrors
+  // the clamps in backend/internal/links/repository.go: default 100, cap
+  // 500, offset >= 0. Without this, getNextPageParam would compare against
+  // the full list length and never terminate.
+  const limit = Math.min(500, Math.max(1, Number(params.get('limit') ?? '100')))
+  const offset = Math.max(0, Number(params.get('offset') ?? '0'))
+  return out.slice(offset, offset + limit)
 }
 
 function listFolders(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState) {

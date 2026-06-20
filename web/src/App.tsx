@@ -1,6 +1,7 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useHotkeys } from 'react-hotkeys-hook'
 import { usePasteUrl } from './hooks/usePasteUrl'
+import { usePersistedState, usePersistedMap } from './hooks/usePersistedState'
 import { Trans, useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import './styles/foldex.css'
@@ -24,7 +25,7 @@ import { EmptyState } from './components/EmptyState'
 // boundary below renders a tiny fallback while the chunk loads.
 const ImportPage = lazy(() => import('./pages/ImportPage').then((m) => ({ default: m.ImportPage })))
 const StatsPage = lazy(() => import('./pages/StatsPage').then((m) => ({ default: m.StatsPage })))
-import { useLinks, useUpdateLink } from './api/links'
+import { flattenLinks, useLinks, useUpdateLink } from './api/links'
 import { useTags } from './api/tags'
 import { useFolders, useCreateFolder, useUpdateFolder } from './api/folders'
 import { useEscape } from './hooks/useEscape'
@@ -43,30 +44,12 @@ export default function App() {
   // viewMode is per-context (home vs each folder) — a Record mapped by
   // `home` or `folder.<id>`. Persisted under `foldex.viewMode.map`. Default
   // is 'cards' for any context without a saved choice.
-  const [viewModeMap, setViewModeMap] = useState<Record<string, ViewMode>>(() => {
-    if (typeof localStorage === 'undefined') return {}
-    try {
-      const raw = localStorage.getItem('foldex.viewMode.map')
-      const parsed = raw ? JSON.parse(raw) : {}
-      return typeof parsed === 'object' && parsed !== null ? parsed : {}
-    } catch {
-      return {}
-    }
-  })
-  // foldersCompact is per-context (home vs each folder), persisted under
-  // `foldex.foldersCompact.map`. When true the FolderCard hides its 2x2
-  // preview area and enables the RapidView popover on the folder title.
-  // Defaults to false (full previews) for any context without a saved choice.
-  const [foldersCompactMap, setFoldersCompactMap] = useState<Record<string, boolean>>(() => {
-    if (typeof localStorage === 'undefined') return {}
-    try {
-      const raw = localStorage.getItem('foldex.foldersCompact.map')
-      const parsed = raw ? JSON.parse(raw) : {}
-      return typeof parsed === 'object' && parsed !== null ? parsed : {}
-    } catch {
-      return {}
-    }
-  })
+  // viewModeMap is per-context (home vs each folder), persisted under
+  // `foldex.viewMode.map`. Default is 'cards' for any context without a save.
+  const viewModeMap = usePersistedMap<ViewMode>('foldex.viewMode.map', 'cards')
+  // foldersCompact is per-context (home vs each folder). When true the
+  // FolderCard hides its 2x2 preview and enables the RapidView popover.
+  const foldersCompactMap = usePersistedMap<boolean>('foldex.foldersCompact.map', false)
   const [linkDialogOpen, setLinkDialogOpen] = useState(false)
   const [editLink, setEditLink] = useState<LinkT | null>(null)
   // Carries a URL the user pasted onto the page so LinkDialog can mount
@@ -79,20 +62,14 @@ export default function App() {
   // FolderDialog hides destructive actions and shows naming copy.
   const [folderJustCreated, setFolderJustCreated] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [dark, setDark] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    () => typeof localStorage !== 'undefined' && localStorage.getItem('foldex.sidebar.collapsed') === '1',
-  )
+  const [dark, setDark] = usePersistedState('foldex.dark', false)
+  const [sidebarCollapsed, setSidebarCollapsed] = usePersistedState('foldex.sidebar.collapsed', false)
   // Drawer-style sidebar on mobile (≤768px). Stays in-memory only — phone
   // users almost never want it open by default after navigation. The
   // toggle button on the topbar flips this, and tapping the backdrop or
   // pressing Esc closes it.
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
-  const [gridCols, setGridCols] = useState<3 | 5 | 8>(() => {
-    if (typeof localStorage === 'undefined') return 5
-    const raw = parseInt(localStorage.getItem('foldex.grid.cols') ?? '5', 10)
-    return raw === 3 || raw === 8 ? raw : 5
-  })
+  const [gridCols, setGridCols] = usePersistedState<3 | 5 | 8>('foldex.grid.cols', 5)
   // Folder navigation is a stack of ids — last entry is the currently open
   // folder; each push enters a child, each pop goes back one level. Lives
   // purely in-memory (no URL exposure: internal IDs shouldn't bleed into the
@@ -111,41 +88,19 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle('fx-dark', dark)
     document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+    return () => {
+      document.documentElement.classList.remove('fx-dark')
+      document.documentElement.style.colorScheme = ''
+    }
   }, [dark])
-
-  // Persist sidebar state across reloads.
-  useEffect(() => {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem('foldex.sidebar.collapsed', sidebarCollapsed ? '1' : '0')
-    }
-  }, [sidebarCollapsed])
-
-  useEffect(() => {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem('foldex.grid.cols', String(gridCols))
-    }
-  }, [gridCols])
-
-  useEffect(() => {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem('foldex.viewMode.map', JSON.stringify(viewModeMap))
-    }
-  }, [viewModeMap])
-
-  useEffect(() => {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem('foldex.foldersCompact.map', JSON.stringify(foldersCompactMap))
-    }
-  }, [foldersCompactMap])
 
   // Derive the active viewMode + setter from openFolder. Home and each folder
   // get their own slot in the map; switching context surfaces the saved choice.
   const viewModeKey = openFolder !== null ? `folder.${openFolder}` : 'home'
-  const viewMode: ViewMode = viewModeMap[viewModeKey] ?? 'cards'
-  const setViewMode = (m: ViewMode) => setViewModeMap((prev) => ({ ...prev, [viewModeKey]: m }))
-  const foldersCompact: boolean = foldersCompactMap[viewModeKey] ?? false
-  const setFoldersCompact = (v: boolean) =>
-    setFoldersCompactMap((prev) => ({ ...prev, [viewModeKey]: v }))
+  const viewMode: ViewMode = viewModeMap.get(viewModeKey)
+  const setViewMode = (m: ViewMode) => viewModeMap.set(viewModeKey, m)
+  const foldersCompact: boolean = foldersCompactMap.get(viewModeKey)
+  const setFoldersCompact = (v: boolean) => foldersCompactMap.set(viewModeKey, v)
 
   // Strip any stale `?folder=N` left over from a previous URL-bookmarked
   // session — internal IDs no longer belong in the address bar.
@@ -199,7 +154,7 @@ export default function App() {
       }
     }
 
-    setViewModeMap((prev) => {
+    viewModeMap.setAll((prev) => {
       let mutated = false
       const next: Record<string, ViewMode> = {}
       for (const [key, val] of Object.entries(prev)) {
@@ -217,7 +172,7 @@ export default function App() {
       return mutated ? next : prev
     })
 
-    setFoldersCompactMap((prev) => {
+    foldersCompactMap.setAll((prev) => {
       let mutated = false
       const next: Record<string, boolean> = {}
       for (const [key, val] of Object.entries(prev)) {
@@ -354,7 +309,7 @@ export default function App() {
 
       <div
         className={'fx-frame' + (mobileSidebarOpen ? ' fx-frame-mobile-drawer-open' : '')}
-        style={{ ['--fx-sidebar-w' as never]: sidebarCollapsed ? '64px' : '252px' }}
+        style={{ '--fx-sidebar-w': sidebarCollapsed ? '64px' : '252px' } as CSSProperties}
       >
         {mobileSidebarOpen && (
           <div
@@ -379,7 +334,7 @@ export default function App() {
             setSelectedTags([])
             setMobileSidebarOpen(false)
           }}
-          totalLinks={Math.max(totalLinks, links.data?.length ?? 0)}
+          totalLinks={Math.max(totalLinks, flattenLinks(links.data).length)}
         />
 
         <main className="fx-main">
@@ -417,7 +372,7 @@ export default function App() {
 
           {view === 'home' && (
             <Home
-              links={links.data ?? []}
+              links={flattenLinks(links.data)}
               folders={folders.data ?? []}
               allFolders={allFolders.data ?? []}
               openFolder={openFolder}
@@ -441,6 +396,9 @@ export default function App() {
                 allFolders.refetch()
               }}
               reloading={links.isFetching || folders.isFetching || allFolders.isFetching}
+              hasMoreLinks={links.hasNextPage === true}
+              loadingMoreLinks={links.isFetchingNextPage}
+              onLoadMoreLinks={() => links.fetchNextPage()}
               onMoveLinkToFolder={onMoveLinkToFolder}
               onMergeLinks={onMergeLinks}
               onMoveFolder={onMoveFolder}
@@ -538,6 +496,13 @@ type HomeProps = {
   onMoveLinkToFolder: (linkId: number, folderId: number) => void
   onMergeLinks: (aId: number, bId: number) => void
   onMoveFolder: (sourceId: number, targetId: number) => void
+  // Pagination: when the backend reports more pages exist, Home shows a
+  // "Load more" button under the grid (all three viewModes). fetchNextPage
+  // appends the next page to the InfiniteData cache; flattenLinks above
+  // already merges it into the `links` array passed in.
+  hasMoreLinks: boolean
+  loadingMoreLinks: boolean
+  onLoadMoreLinks: () => void
 }
 
 function Home({
@@ -561,6 +526,9 @@ function Home({
   onMoveLinkToFolder,
   onMergeLinks,
   onMoveFolder,
+  hasMoreLinks,
+  loadingMoreLinks,
+  onLoadMoreLinks,
 }: HomeProps) {
   const { t } = useTranslation()
   const totalClicks = useMemo(() => links.reduce((acc, l) => acc + l.click_count, 0), [links])
@@ -590,7 +558,7 @@ function Home({
   }
 
   return (
-    <div className="fx-mainarea" style={{ ['--fx-cols' as never]: String(gridCols) }}>
+    <div className="fx-mainarea" style={{ '--fx-cols': String(gridCols) } as CSSProperties}>
       {openFolder !== null ? (
         <FolderBreadcrumb
           folder={currentFolder ? { id: currentFolder.id, name: currentFolder.name } : null}
@@ -657,6 +625,23 @@ function Home({
           onOpenFolder={onOpenFolder}
           onEditFolder={onEditFolder}
         />
+      )}
+      {/* "Load more" — only shown when the backend reported additional
+          pages exist. Hidden during initial load (then isEmpty handles the
+          empty state above) and when the user is mid-fetch on this click.
+          The button is full-width with subtle padding so it doesn't compete
+          with the grid but stays reachable on mobile. */}
+      {hasMoreLinks && (
+        <div className="fx-loadmore">
+          <button
+            className="fx-loadmore-btn"
+            onClick={onLoadMoreLinks}
+            disabled={loadingMoreLinks}
+            aria-label={t('links.load_more_aria')}
+          >
+            {loadingMoreLinks ? t('links.loading_more') : t('links.load_more')}
+          </button>
+        </div>
       )}
     </div>
   )

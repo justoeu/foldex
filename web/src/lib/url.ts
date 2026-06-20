@@ -79,6 +79,16 @@ export function safeImageUrl(raw: string | null | undefined): string | undefined
   }
 }
 
+// Extract the hostname from a URL, stripping the "www." prefix.
+// Used by LinkCard and LinkDialog for the domain badge.
+export function hostOf(u: string): string {
+  try {
+    return new URL(u).hostname.replace(/^www\./, '')
+  } catch {
+    return ''
+  }
+}
+
 // Gate user-supplied URLs that flow into an `<a href={url}>`. React 19
 // sanitizes `javascript:` automatically but `data:`, `file:`, `vbscript:`,
 // `mailto:`, `tel:` pass through. The Netscape importer now rejects those

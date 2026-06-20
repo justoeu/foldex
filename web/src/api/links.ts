@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useInfiniteQuery, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query'
 import { http } from './client'
 import type { Link, LinkCreate, LinkUpdate } from './types'
 
@@ -9,6 +9,12 @@ export type LinkListParams = {
   folderId?: number | null  // null = ungrouped, number = inside folder, undefined = all
   ungrouped?: boolean
 }
+
+// PAGE_SIZE is the per-request cap sent to GET /api/links. The backend caps
+// at 500; we send 100 so a "Load more" UX surfaces naturally once the user
+// has more than this many bookmarks in a single view. Lower = snappier first
+// paint, higher = fewer "Load more" clicks for power users.
+export const LINK_PAGE_SIZE = 100
 
 const linksKey = (p: LinkListParams) =>
   [
@@ -22,10 +28,40 @@ const linksKey = (p: LinkListParams) =>
     p.folderId ?? (p.ungrouped ? 'ungrouped' : 'all'),
   ] as const
 
+// Cached shape for ['links'] queries: TanStack InfiniteData<Link[]>. Each
+// page is a single GET /api/links?offset=N response. Optimistic updates
+// (pin, mark-seen, etc.) need to walk every page, hence the helpers below.
+type LinksCache = InfiniteData<Link[]>
+
+// flattenLinks extracts a single flat array out of an InfiniteData cache
+// entry. Returns [] when the cache is empty/undefined so consumers can
+// safely treat the result as Link[].
+export function flattenLinks(data: LinksCache | undefined): Link[] {
+  if (!data?.pages) return []
+  const out: Link[] = []
+  for (const page of data.pages) out.push(...page)
+  return out
+}
+
+// mapCachedLinks applies fn to every Link in every page of every ['links']
+// query in the cache. Used by optimistic updates that patch a single link
+// across all loaded pages without invalidating — keeps the badge flip
+// instant and avoids a refetch roundtrip. Exported so LinkCard's onGo can
+// reuse the same pattern (optimistic click bump).
+export function mapCachedLinks(qc: QueryClient, fn: (l: Link) => Link) {
+  qc.setQueriesData<LinksCache>({ queryKey: ['links'] }, (old) => {
+    if (!old) return old
+    return {
+      ...old,
+      pages: old.pages.map((page) => page.map(fn)),
+    }
+  })
+}
+
 export function useLinks(params: LinkListParams, options?: { enabled?: boolean }) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: linksKey(params),
-    queryFn: async () => {
+    queryFn: async ({ pageParam }) => {
       const search = new URLSearchParams()
       if (params.q) search.set('q', params.q)
       for (const id of params.tagIds ?? []) search.append('tag', String(id))
@@ -35,17 +71,25 @@ export function useLinks(params: LinkListParams, options?: { enabled?: boolean }
       } else if (params.ungrouped) {
         search.set('ungrouped', '1')
       }
+      search.set('limit', String(LINK_PAGE_SIZE))
+      search.set('offset', String(pageParam))
       const { data } = await http.get<Link[]>(`/api/links?${search.toString()}`)
       return data
     },
+    initialPageParam: 0,
+    // If we got a full page, there might be more — offer "Load more".
+    // If we got less than a full page, we've reached the tail.
+    getNextPageParam: (lastPage, _allPages, lastPageParam) =>
+      lastPage.length < LINK_PAGE_SIZE ? undefined : (lastPageParam as number) + lastPage.length,
     enabled: options?.enabled ?? true,
-    // Auto-poll while ANY link in the current page is still pending so the
+    // Auto-poll while ANY link in any loaded page is still pending so the
     // user doesn't have to refresh to see "capturando…" flip to a real
     // preview. Backend worker takes a few seconds per link; we re-poll every
     // 3s and stop the moment nothing is pending. Stale links are unaffected.
     refetchInterval: (query) => {
-      const data = query.state.data as Link[] | undefined
-      if (data?.some((l) => l.preview_status === 'pending')) return 3000
+      const data = query.state.data as LinksCache | undefined
+      const all = flattenLinks(data)
+      if (all.some((l) => l.preview_status === 'pending')) return 3000
       return false
     },
   })
@@ -76,15 +120,12 @@ export function useUpdateLink() {
       const { data } = await http.patch<Link>(`/api/links/${id}`, body)
       return data
     },
-    // Narrow invalidation: patch the changed link in every cached list via
-    // setQueryData; only invalidate folders/tags when the mutation actually
+    // Narrow invalidation: patch the changed link in every cached page via
+    // mapCachedLinks; only invalidate folders/tags when the mutation actually
     // touched those associations. The previous "invalidate everything"
     // recipe triggered 3 full refetches per drag-and-drop or edit.
     onSuccess: (data, vars) => {
-      qc.setQueriesData<Link[] | undefined>({ queryKey: ['links'] }, (old) => {
-        if (!old) return old
-        return old.map((l) => (l.id === data.id ? data : l))
-      })
+      mapCachedLinks(qc, (l) => (l.id === data.id ? data : l))
       if (vars.body.tag_ids !== undefined) {
         qc.invalidateQueries({ queryKey: ['tags'] })
       }
@@ -131,20 +172,17 @@ export function usePinLink() {
     },
     onMutate: async ({ id, pinned }) => {
       await qc.cancelQueries({ queryKey: ['links'] })
-      const snapshots = qc.getQueriesData<Link[]>({ queryKey: ['links'] })
-      for (const [key, list] of snapshots) {
-        if (!list) continue
-        qc.setQueryData<Link[]>(
-          key,
-          list.map((l) => (l.id === id ? { ...l, pinned } : l)),
-        )
-      }
+      // Snapshot every ['links'] query (InfiniteData<Link[]>) so we can roll
+      // back on error. mapCachedLinks patches every page; the snapshot
+      // preserves the original InfiniteData shape per query key.
+      const snapshots = qc.getQueriesData<LinksCache>({ queryKey: ['links'] })
+      mapCachedLinks(qc, (l) => (l.id === id ? { ...l, pinned } : l))
       return { snapshots }
     },
     onError: (_err, _vars, ctx) => {
       if (!ctx) return
-      for (const [key, list] of ctx.snapshots) {
-        qc.setQueryData(key, list)
+      for (const [key, snapshot] of ctx.snapshots) {
+        qc.setQueryData(key, snapshot)
       }
     },
     onSettled: () => {
@@ -246,7 +284,7 @@ export async function removeLinkImage(id: number): Promise<void> {
 // values is harmless. Keyed on `[ 'links', 'recent-changes', days, limit ]`
 // so the badge update path (useMarkChangeSeen below) can target this query
 // for invalidation without touching the main `['links']` cache.
-export function useRecentChanges(days = 7, limit = 20) {
+export function useRecentChanges(days = 7, limit = 20, enabled = true) {
   return useQuery<Link[]>({
     queryKey: ['links', 'recent-changes', days, limit],
     queryFn: async () => {
@@ -256,6 +294,7 @@ export function useRecentChanges(days = 7, limit = 20) {
     // Background refetch every minute so the sidebar reflects fresh
     // changes without requiring a full page reload.
     refetchInterval: 60_000,
+    enabled,
   })
 }
 
@@ -274,10 +313,7 @@ export function useMarkChangeSeen() {
       // timestamp on success.
       await qc.cancelQueries({ queryKey: ['links'] })
       const now = new Date().toISOString()
-      qc.setQueriesData<Link[]>({ queryKey: ['links'] }, (prev) => {
-        if (!prev) return prev
-        return prev.map((l) => (l.id === id ? { ...l, change_seen_at: now } : l))
-      })
+      mapCachedLinks(qc, (l) => (l.id === id ? { ...l, change_seen_at: now } : l))
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['links', 'recent-changes'] })

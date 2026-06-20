@@ -175,7 +175,7 @@ export function TagSidebar({
           <span className="fx-side-count">{totalLinks}</span>
         </button>
 
-        <RecentChangesSection />
+        <RecentChangesSection enabled={!collapsed} />
 
         {isLoading && <div style={{ padding: 12, color: 'var(--fx-ink-4)' }}>{t('sidebar.loading')}</div>}
 
@@ -264,9 +264,9 @@ export function TagSidebar({
   )
 }
 
-function RecentChangesSection() {
+function RecentChangesSection({ enabled }: { enabled: boolean }) {
   const { t } = useTranslation()
-  const { data: links = [], isLoading } = useRecentChanges(7, 10)
+  const { data: links = [], isLoading } = useRecentChanges(7, 10, enabled)
   const [open, setOpen] = useState(() => readBool(RECENT_OPEN_KEY, true))
 
   useEffect(() => {

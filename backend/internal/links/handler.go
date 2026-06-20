@@ -1,7 +1,6 @@
 package links
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -9,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/pkg/clampint"
 	"foldex/internal/pkg/httperr"
 )
 
@@ -92,12 +92,9 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
-	var in CreateInput
-	r.Body = http.MaxBytesReader(w, r.Body, httperr.JSONBodyCap)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&in); err != nil {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_json", err.Error()))
+	in, err := httperr.DecodeJSON[CreateInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
 		return
 	}
 	in.Normalize()
@@ -143,12 +140,9 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	var in UpdateInput
-	r.Body = http.MaxBytesReader(w, r.Body, httperr.JSONBodyCap)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&in); err != nil {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_json", err.Error()))
+	in, err := httperr.DecodeJSON[UpdateInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
 		return
 	}
 	in.Normalize()
@@ -220,8 +214,8 @@ func (h *Handler) seenChange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listRecentChanges(w http.ResponseWriter, r *http.Request) {
-	days := clampInt(r.URL.Query().Get("days"), 7, 1, 30)
-	limit := clampInt(r.URL.Query().Get("limit"), 20, 1, 100)
+	days := clampint.Int(r.URL.Query().Get("days"), 7, 1, 30)
+	limit := clampint.Int(r.URL.Query().Get("limit"), 20, 1, 100)
 	out, err := h.repo.ListRecentChanges(r.Context(), days*24*60*60, limit)
 	if err != nil {
 		httperr.Write(w, err)
@@ -230,22 +224,4 @@ func (h *Handler) listRecentChanges(w http.ResponseWriter, r *http.Request) {
 	httperr.JSON(w, http.StatusOK, out)
 }
 
-// clampInt parses a query string int and clamps it to [min, max]. Defaults
-// to `def` on empty/invalid input. Mirrors the helper in internal/stats so
-// numeric query knobs can't be used as DoS amplifiers (e.g. ?days=2147483647).
-func clampInt(raw string, def, lo, hi int) int {
-	if raw == "" {
-		return def
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil {
-		return def
-	}
-	if n < lo {
-		return lo
-	}
-	if n > hi {
-		return hi
-	}
-	return n
-}
+

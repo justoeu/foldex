@@ -140,6 +140,11 @@
     "breadcrumb_edit_label": "Edit folder",
     "merge_new_folder_name": "New folder"
   },
+  "links": {
+    "load_more": "Load more",
+    "loading_more": "Loading…",
+    "load_more_aria": "Load more links"
+  },
   "link_card": {
     "open_action": "Open",
     "clicks_tooltip": "Clicks",

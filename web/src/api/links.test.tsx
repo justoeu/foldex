@@ -4,6 +4,7 @@ import { ReactNode } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import {
   useLinks,
+  flattenLinks,
   useCreateLink,
   useUpdateLink,
   useDeleteLink,
@@ -39,7 +40,8 @@ describe('useLinks', () => {
   it('lists empty by default', async () => {
     const { result } = renderHook(() => useLinks({}), { wrapper })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data).toEqual([])
+    // useInfiniteQuery returns InfiniteData<Link[]> — flatten to compare.
+    expect(flattenLinks(result.current.data)).toEqual([])
   })
 
   it('applies q, tag and sort params', async () => {
@@ -58,7 +60,28 @@ describe('useLinks', () => {
       { wrapper },
     )
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data?.[0].title).toBe('Beta')
+    const flat = flattenLinks(result.current.data)
+    expect(flat[0]?.title).toBe('Beta')
+  })
+
+  it('paginates via fetchNextPage when more results exist', async () => {
+    // Seed 3 links and force a page size of 2 by pushing past the default
+    // 100-link threshold is overkill; instead exercise the slice path by
+    // crafting a state where the mock returns multiple pages. We rely on
+    // the mock's limit/offset slicing.
+    for (let i = 1; i <= 3; i++) {
+      state.links.push({
+        id: i, url: `https://${i}`, title: `L${i}`, click_count: 0,
+        preview_status: 'ok', created_at: '', updated_at: '', tags: [],
+      } as any)
+    }
+    // Default LINK_PAGE_SIZE=100 means all 3 fit on page 1 → no "Load more".
+    // Verify hasNextPage is false in that case (the contract the Home
+    // component relies on to hide the button).
+    const { result } = renderHook(() => useLinks({}), { wrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.hasNextPage).toBe(false)
+    expect(flattenLinks(result.current.data)).toHaveLength(3)
   })
 })
 

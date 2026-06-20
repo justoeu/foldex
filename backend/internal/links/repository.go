@@ -99,7 +99,10 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Link, error) {
 	}
 
 	var id int64
-	for attempt := 0; attempt < 1000; attempt++ {
+	// A personal bookmark manager will never see more than a handful of
+	// slug collisions (two links with the same title). Cap at 100 so a
+	// bug that spins the loop is caught fast by an operator reading logs.
+	for attempt := 0; attempt < 100; attempt++ {
 		candidate := slug
 		if attempt > 0 {
 			candidate = fmt.Sprintf("%s-%d", slug, attempt+1)
@@ -132,7 +135,7 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Link, error) {
 		return Link{}, fmt.Errorf("insert link: %w", err)
 	}
 	if id == 0 {
-		return Link{}, fmt.Errorf("could not allocate a unique slug after 1000 attempts")
+		return Link{}, fmt.Errorf("could not allocate a unique slug after 100 attempts")
 	}
 
 	if err := setLinkTags(ctx, tx, id, in.TagIDs); err != nil {

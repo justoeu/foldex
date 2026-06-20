@@ -1,7 +1,6 @@
 package tags
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -34,12 +33,9 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
-	var in CreateInput
-	r.Body = http.MaxBytesReader(w, r.Body, httperr.JSONBodyCap)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&in); err != nil {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_json", err.Error()))
+	in, err := httperr.DecodeJSON[CreateInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
 		return
 	}
 	in.Normalize()
@@ -80,12 +76,9 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	var in UpdateInput
-	r.Body = http.MaxBytesReader(w, r.Body, httperr.JSONBodyCap)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&in); err != nil {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_json", err.Error()))
+	in, err := httperr.DecodeJSON[UpdateInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
 		return
 	}
 	in.Normalize()

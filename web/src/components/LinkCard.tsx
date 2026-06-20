@@ -5,8 +5,10 @@ import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
 import { useConfirm } from './ConfirmDialog'
+import { hostOf } from '../lib/url'
 import {
   goHref,
+  mapCachedLinks,
   useDeleteLink,
   useMarkChangeSeen,
   usePinLink,
@@ -83,14 +85,11 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
   // hint that's reconciled the next time the user navigates / refetches.
   const onGo = useCallback(() => {
     const nowISO = new Date().toISOString()
-    qc.setQueriesData<Link[] | undefined>({ queryKey: ['links'] }, (old) => {
-      if (!old) return old
-      return old.map((l) =>
-        l.id === link.id
-          ? { ...l, click_count: (l.click_count ?? 0) + 1, last_clicked_at: nowISO }
-          : l,
-      )
-    })
+    mapCachedLinks(qc, (l) =>
+      l.id === link.id
+        ? { ...l, click_count: (l.click_count ?? 0) + 1, last_clicked_at: nowISO }
+        : l,
+    )
   }, [qc, link.id])
 
   const onDelete = async () => {
@@ -304,14 +303,6 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
       </div>
     </article>
   )
-}
-
-function hostOf(u: string) {
-  try {
-    return new URL(u).hostname.replace(/^www\./, '')
-  } catch {
-    return u
-  }
 }
 
 // Cap the visible description at ~200 chars so a verbose Thingiverse-style

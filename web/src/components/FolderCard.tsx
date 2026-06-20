@@ -122,7 +122,7 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropFolder, comp
           className="fx-folder-preview"
           onClick={() => onOpen(folder.id)}
           aria-label={t('folder_card.open_folder_aria', { name: folder.name })}
-          style={{ ['--fx-folder-accent' as never]: accent, background: folder.color }}
+          style={{ '--fx-folder-accent': accent, background: folder.color } as React.CSSProperties}
         >
           <div className="fx-folder-tiles">
             {tiles.map((tile, i) => (

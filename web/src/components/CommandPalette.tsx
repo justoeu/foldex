@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
-import { goHref, useLinks } from '../api/links'
+import { goHref, useLinks, flattenLinks } from '../api/links'
 import { useTags } from '../api/tags'
 import { useFolders } from '../api/folders'
 import { searchFolderTree } from '../lib/folderTree'
@@ -36,7 +36,8 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
   // folder's navigateBack).
   useEscape(onClose, open)
 
-  const { data: links = [] } = useLinks({ q: debounced }, { enabled: open })
+  const linksQuery = useLinks({ q: debounced }, { enabled: open })
+  const links = useMemo(() => flattenLinks(linksQuery.data), [linksQuery.data])
   const { data: tags = [] } = useTags()
   const { data: folders = [] } = useFolders()
 

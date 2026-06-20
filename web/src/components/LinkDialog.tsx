@@ -8,7 +8,7 @@ import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useCreateLink, useUpdateLink, uploadLinkImage, removeLinkImage, useFetchUrlMetadata } from '../api/links'
 import { useCreateTag, useTags } from '../api/tags'
 import { useQueryClient } from '@tanstack/react-query'
-import { safeImageUrl, safeLinkHref, looksLikeUrl } from '../lib/url'
+import { safeImageUrl, safeLinkHref, looksLikeUrl, hostOf } from '../lib/url'
 import { nextCheckPreview, type CheckInterval } from '../lib/time'
 import type { Link, Tag } from '../api/types'
 
@@ -760,14 +760,6 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
       </div>
     </div>
   )
-}
-
-function hostOf(u: string) {
-  try {
-    return new URL(u).hostname.replace(/^www\./, '')
-  } catch {
-    return ''
-  }
 }
 
 // Mirror of the backend Slugify (internal/links/slug.go) — used to render

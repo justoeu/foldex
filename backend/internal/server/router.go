@@ -89,9 +89,10 @@ func New(d Deps) http.Handler {
 		if d.Screenshotter != nil && d.Storage != nil {
 			// Boot-time validation: mounting the screenshot endpoint without
 			// the URL policy wired would still fail closed at request time,
-			// but a hard panic at startup surfaces the misconfig immediately
+			// but a hard exit at startup surfaces the misconfig immediately
 			// instead of leaving every request returning 500 in production.
 			if d.ScreenshotURL == nil {
+				d.Logger.Error("server: Screenshotter is set but ScreenshotURL is nil — refusing to mount /api/links/{id}/screenshot without an SSRF gate")
 				panic("server: Screenshotter is set but ScreenshotURL is nil — refusing to mount /api/links/{id}/screenshot without an SSRF gate")
 			}
 			sh := links.NewScreenshotHandler(linksRepo, d.Screenshotter, d.Storage, d.ScreenshotURL, d.Logger)

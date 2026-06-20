@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -41,7 +42,7 @@ func (h *Handler) redirect(w http.ResponseWriter, r *http.Request) {
 	if id, err := strconv.ParseInt(raw, 10, 64); err == nil && id > 0 {
 		dest, err := h.repo.ClickAndResolve(r.Context(), id)
 		if err == nil {
-			http.Redirect(w, r, dest, http.StatusFound)
+			redirect(w, r, dest)
 			return
 		}
 		// A pure-numeric value can never be a slug (CHECK constraint), so
@@ -57,6 +58,18 @@ func (h *Handler) redirect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		httperr.Write(w, err)
+		return
+	}
+	redirect(w, r, dest)
+}
+
+// redirect validates the destination scheme before issuing the redirect.
+// All write paths enforce http(s)://, but defense-in-depth here catches any
+// future regression or direct-DB manipulation that could plant a
+// javascript:/data:/file: URL in the link table.
+func redirect(w http.ResponseWriter, r *http.Request, dest string) {
+	if !strings.HasPrefix(dest, "http://") && !strings.HasPrefix(dest, "https://") {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_target", "unsupported scheme"))
 		return
 	}
 	http.Redirect(w, r, dest, http.StatusFound)
