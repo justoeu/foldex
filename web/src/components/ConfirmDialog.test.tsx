@@ -84,16 +84,30 @@ describe('ConfirmDialog', () => {
     expect(screen.queryByText('Delete?')).not.toBeInTheDocument()
   })
 
-  it('renders destructive kicker when destructive is true', async () => {
+  it('renders destructive button with trash icon when destructive is true', async () => {
     renderWithProviders(
       <ConfirmProvider>
         <TriggerFlow title="Delete item?" destructive />
       </ConfirmProvider>,
     )
     await userEvent.setup().click(screen.getByTestId('trigger'))
-    // The destructive kicker text should be present in the modal header
-    const dialog = screen.getByRole('dialog')
-    expect(dialog).toBeInTheDocument()
-    expect(screen.getByText('Delete item?')).toBeInTheDocument()
+    // The confirm button should have the danger class
+    const confirmBtn = screen.getByRole('button', { name: /confirm/i })
+    expect(confirmBtn.className).toContain('fx-confirm-btn-danger')
+    // And should contain a trash icon (SVG inside the button)
+    const svg = confirmBtn.querySelector('svg')
+    expect(svg).toBeInTheDocument()
+  })
+
+  it('renders normal confirm button (no danger style) when not destructive', async () => {
+    renderWithProviders(
+      <ConfirmProvider>
+        <TriggerFlow title="Confirm action?" destructive={false} />
+      </ConfirmProvider>,
+    )
+    await userEvent.setup().click(screen.getByTestId('trigger'))
+    const confirmBtn = screen.getByRole('button', { name: /confirm/i })
+    expect(confirmBtn.className).toContain('fx-confirm-btn-primary')
+    expect(confirmBtn.className).not.toContain('fx-confirm-btn-danger')
   })
 })

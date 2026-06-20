@@ -14,14 +14,40 @@ beforeEach(() => {
 describe('StatsPage', () => {
   it('renders without crashing', async () => {
     renderWithProviders(<StatsPage />)
-    // The page has a heading — wait for it to resolve
     await screen.findByRole('heading', { level: 1 })
   })
 
-  it('renders summary statistics', async () => {
+  it('displays the stats heading with correct title', async () => {
     renderWithProviders(<StatsPage />)
-    // The page should render at least one visible stat card
     const heading = await screen.findByRole('heading', { level: 1 })
-    expect(heading).toBeInTheDocument()
+    expect(heading).toHaveTextContent('Stats')
+  })
+
+  it('renders KPI cards section', async () => {
+    renderWithProviders(<StatsPage />)
+    await screen.findByRole('heading', { level: 1 })
+    // KPIs are rendered as stat cards with labels
+    expect(screen.getByText('Clicks · 30d')).toBeInTheDocument()
+    expect(screen.getByText('Total links')).toBeInTheDocument()
+    expect(screen.getByText('Top host')).toBeInTheDocument()
+  })
+
+  it('renders the daily clicks chart section', async () => {
+    renderWithProviders(<StatsPage />)
+    await screen.findByRole('heading', { level: 1 })
+    // The daily clicks card has a title
+    expect(screen.getByText('Daily clicks')).toBeInTheDocument()
+  })
+
+  it('renders the top links section', async () => {
+    renderWithProviders(<StatsPage />)
+    await screen.findByRole('heading', { level: 1 })
+    expect(screen.getByText('Top links · 30d')).toBeInTheDocument()
+  })
+
+  it('renders the distribution by tag section', async () => {
+    renderWithProviders(<StatsPage />)
+    await screen.findByRole('heading', { level: 1 })
+    expect(screen.getByText('Distribution by tag')).toBeInTheDocument()
   })
 })

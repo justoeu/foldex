@@ -65,16 +65,11 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			q.TagIDs = append(q.TagIDs, id)
 		}
 	}
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			q.Limit = n
-		}
-	}
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			q.Offset = n
-		}
-	}
+	// Clamp to [1,500] / [0,100000] — the repo already enforces these caps,
+	// but clamping at the handler level keeps the same posture used in
+	// listRecentChanges and the stats handler (defense-in-depth).
+	q.Limit = clampint.Int(r.URL.Query().Get("limit"), 100, 1, 500)
+	q.Offset = clampint.Int(r.URL.Query().Get("offset"), 0, 0, 100000)
 	if v := r.URL.Query().Get("folder_id"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
 			q.FolderID = &n

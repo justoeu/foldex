@@ -1,19 +1,35 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
+import { isPushSupported, urlBase64ToUint8Array } from '../lib/push'
 
-// Mock the push module
-vi.mock('../lib/push', () => ({
-  isPushSupported: vi.fn(() => true),
-  urlBase64ToUint8Array: vi.fn(() => new Uint8Array(65)),
-}))
+describe('push utilities', () => {
+  describe('urlBase64ToUint8Array', () => {
+    it('returns a Uint8Array', () => {
+      // A valid unpadded base64url string (43 chars → 32 bytes)
+      const key = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+      const result = urlBase64ToUint8Array(key)
+      expect(result).toBeInstanceOf(Uint8Array)
+      expect(result.length).toBe(32)
+    })
 
-describe('useWebPush', () => {
-  it('isPushSupported is mocked correctly', async () => {
-    const { isPushSupported } = await import('../lib/push')
-    expect(isPushSupported()).toBe(true)
+    it('handles padding correctly', () => {
+      // Shorter key that needs padding
+      const key = 'AQIDBAUG'
+      const result = urlBase64ToUint8Array(key)
+      expect(result).toBeInstanceOf(Uint8Array)
+    })
+
+    it('returns empty Uint8Array for empty string', () => {
+      const result = urlBase64ToUint8Array('')
+      expect(result).toBeInstanceOf(Uint8Array)
+      expect(result.length).toBe(0)
+    })
   })
 
-  it('urlBase64ToUint8Array returns a Uint8Array', async () => {
-    const { urlBase64ToUint8Array } = await import('../lib/push')
-    expect(urlBase64ToUint8Array('test')).toBeInstanceOf(Uint8Array)
+  describe('isPushSupported', () => {
+    it('returns a boolean', () => {
+      // In jsdom, serviceWorker and PushManager are usually absent
+      const result = isPushSupported()
+      expect(typeof result).toBe('boolean')
+    })
   })
 })

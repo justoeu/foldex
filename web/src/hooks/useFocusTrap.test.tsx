@@ -20,7 +20,7 @@ describe('useFocusTrap', () => {
     render(<Dialog />)
     expect(screen.getByTestId('first')).toBeInTheDocument()
     expect(screen.getByTestId('last')).toBeInTheDocument()
-    expect(screen.getByTestId('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 
   it('does not trap focus when open is false', () => {
@@ -29,8 +29,33 @@ describe('useFocusTrap', () => {
     expect(document.activeElement).not.toBe(first)
   })
 
-  it('dialog element is present and has the dialog role', () => {
+  it('dialog element has correct role and test-id', () => {
     render(<Dialog />)
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    const dialog = screen.getByTestId('dialog')
+    expect(dialog.getAttribute('role')).toBe('dialog')
+  })
+
+  it('all three focusable elements are rendered in order', () => {
+    render(<Dialog />)
+    const dialog = screen.getByTestId('dialog')
+    const focusable = dialog.querySelectorAll('button, input')
+    expect(focusable).toHaveLength(3)
+    expect(focusable[0]).toHaveTextContent('First')
+    expect(focusable[2]).toHaveTextContent('Last')
+  })
+
+  it('handles a container with no focusable elements gracefully', () => {
+    function Empty() {
+      const ref = useRef<HTMLDivElement>(null)
+      useFocusTrap(ref, true)
+      return (
+        <div ref={ref} data-testid="empty">
+          <span>nothing focusable</span>
+        </div>
+      )
+    }
+    render(<Empty />)
+    expect(screen.getByTestId('empty')).toBeInTheDocument()
+    expect(screen.getByText('nothing focusable')).toBeInTheDocument()
   })
 })
