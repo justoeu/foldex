@@ -218,5 +218,3 @@ func (h *Handler) listRecentChanges(w http.ResponseWriter, r *http.Request) {
 	}
 	httperr.JSON(w, http.StatusOK, out)
 }
-
-
