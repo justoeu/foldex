@@ -183,9 +183,9 @@ Every merge ships code; every shipment gets a version. `:latest` keeps moving bu
 | breaking API/schema | `make release-major` | 1.0.8 → 2.0.0 |
 | mixed (feat + fix same window) | `make release-minor` (features dominate) | |
 
-`make release-X` runs `scripts/release.sh` (refuses dirty tree / off-main). Bumps `web/package.json` + `extension/manifest.json`, commits, tags `vX.Y.Z`, prompts to push. Pushing the tag triggers `release.yml` (it watches `push: main` + `tags: ['v*']`) which publishes `:vX.Y.Z`, `:vX.Y`, `:vX`, `:latest` for both images. `ci.yml` is the PR gate (`on: pull_request` only) — it does NOT run on push to main/tags, so a merge never re-runs the test suite; the release trusts the gate that already passed on the PR.
+`make release-X` runs `scripts/release.sh` (refuses dirty tree / off-main). Bumps `web/package.json` + `extension/manifest.json`, commits, tags `vX.Y.Z`, prompts to push. Pushing the tag triggers `release.yml` (it watches `push: main` + `tags: ['v*']`) which publishes `:X.Y.Z`, `:X.Y`, `:X`, `:latest` for both images — **`docker/metadata-action` strips the leading `v`**, so the git tag is `vX.Y.Z` but the Docker image tags carry NO `v` (pin `FOLDEX_VERSION=X.Y.Z`). `ci.yml` is the PR gate (`on: pull_request` only) — it does NOT run on push to main/tags, so a merge never re-runs the test suite; the release trusts the gate that already passed on the PR.
 
-After the bump, surface the new pin to the user: `FOLDEX_VERSION=v1.2.0` in `.env`.
+After the bump, surface the new pin to the user: `FOLDEX_VERSION=1.2.0` in `.env` (no `v` — Docker image tags drop it even though the git tag is `v1.2.0`).
 
 If the user explicitly opts out for the current session ("don't bump yet, batching the next 3 PRs"), record the deferral in the session log and resume the policy on the next merge. Default is bump-every-merge — silence is not opt-out.
 

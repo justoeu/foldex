@@ -7,9 +7,11 @@
 # then commits, tags `vX.Y.Z`, and (with your confirmation) pushes.
 #
 # Pushing the tag triggers release.yml (it watches `tags: ['v*']`), which
-# publishes Docker images tagged `:vX.Y.Z` + `:vX.Y` + `:vX` + `:latest`
-# for both `foldex-backend` and `foldex-web`. (ci.yml is the PR gate and
-# does NOT run on push to main/tags.)
+# publishes Docker images tagged `:X.Y.Z` + `:X.Y` + `:X` + `:latest` —
+# NOTE: docker/metadata-action strips the leading `v`, so the git tag is
+# `vX.Y.Z` but the image tags carry NO `v` (pin FOLDEX_VERSION=X.Y.Z, not
+# vX.Y.Z). Applies to both `foldex-backend` and `foldex-web`. (ci.yml is the
+# PR gate and does NOT run on push to main/tags.)
 #
 # Usage:
 #   ./scripts/release.sh patch     # 1.0.8 → 1.0.9
@@ -125,4 +127,4 @@ git tag -a "v$NEW" -m "v$NEW"
 echo
 echo "✓ tagged v$NEW locally."
 echo "  Push with: git push origin main && git push origin v$NEW"
-echo "  CI will publish justoeu/foldex-{backend,web}:v$NEW + :latest"
+echo "  CI will publish justoeu/foldex-{backend,web}:$NEW + :latest (image tags drop the 'v')"

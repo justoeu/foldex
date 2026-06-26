@@ -65,7 +65,7 @@ open http://localhost:9088
 | Want to … | Run | Notes |
 |---|---|---|
 | Just run Foldex | `make up` | Pulls `justoeu/foldex-{backend,web}:${FOLDEX_VERSION}` from Docker Hub. Default tag is `latest`. |
-| Pin to a specific build | set `FOLDEX_VERSION=sha-3f6cc06` (or `v1.4.1`) in `.env` then `make up` | Image tags published per commit + per semver tag. |
+| Pin to a specific build | set `FOLDEX_VERSION=sha-3f6cc06` (or `1.4.1` — image tags drop the `v`) in `.env` then `make up` | Image tags published per commit + per semver tag. |
 | Refresh to the latest tag | `make pull && make up` | `pull` re-fetches without restarting; `up` notices the new image and rolls. |
 | Develop / build from source | `make up-build` | Uses the same `Dockerfile`s but builds locally, ignoring the registry image. Needs Docker; does NOT need Go/bun on the host (they run inside the build stages). |
 | Apply local code changes | `make restart-backend` / `make restart-web` | Same as `up-build` but only the named service. |
