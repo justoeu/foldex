@@ -1,12 +1,14 @@
 name: ci
 
+# Pull-request gate ONLY. Lint, unit/integration tests, coverage, and a
+# no-push Docker build validation — everything that must pass before code
+# lands on main. Publishing the images lives in release.yml (push: main +
+# tags v*) so a merge to main never re-runs this whole suite; release trusts
+# the gate that already ran on the PR.
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
   pull_request:
 
-# Least-privilege default for every job; publish jobs opt back into what they need.
+# Least-privilege default for every job.
 permissions:
   contents: read
 
@@ -130,31 +132,15 @@ jobs:
         continue-on-error: true
 
   # ────────────────────────────────────────────────────────────────────────
-  # Docker Hub publish — only runs AFTER backend + frontend gates pass.
+  # Docker build validation — PR-only, NEVER pushes. Confirms both images
+  # still build cleanly across both architectures before the change can land
+  # on main. The actual push lives in release.yml; gating it here means a
+  # broken Dockerfile fails the PR instead of failing the release.
   #
-  # On `push: main`              → tags `latest` + short git SHA
-  # On `push: tags v*`           → tags semver (`vX.Y.Z`, `vX.Y`, `vX`) + `latest`
-  # On PRs                       → builds for validation, does NOT push
-  #
-  # Build topology: 2 images × 2 architectures = 4 runners in parallel.
-  # Each cell builds a **single-arch** image on a **native** runner
-  # (ubuntu-latest for amd64, ubuntu-24.04-arm for arm64) — no QEMU
-  # emulation. Per-arch images are pushed *by digest only* (no tags yet).
-  # The `publish-manifest` job below then assembles the per-arch digests
-  # into a single multi-arch tag list using `docker buildx imagetools`.
-  #
-  # Why this beats the old layout:
-  #   - arm64 ran emulated under QEMU on an amd64 runner — `bun install`,
-  #     `bun run build`, and `apk upgrade` ran 5-10× slower. Native arm64
-  #     runners bring it to wall-clock parity with amd64.
-  #   - backend + web used to build sequentially in the same job. Now both
-  #     start at the same minute on independent runners.
-  # Reference: https://docs.docker.com/build/ci/github-actions/multi-platform/
-  #
-  # Requires repository secrets:
-  #   DOCKERHUB_USERNAME — Docker Hub login
-  #   DOCKERHUB_TOKEN    — Docker Hub Personal Access Token (NOT the password)
-  publish:
+  # Build topology mirrors release.yml: 2 images × 2 architectures = 4
+  # runners in parallel, each building a single-arch image on a native
+  # runner (no QEMU emulation).
+  build-validation:
     needs: [backend, frontend]
     permissions:
       contents: read
@@ -162,16 +148,18 @@ jobs:
       fail-fast: false
       matrix:
         image:
+          # No `repo:` here — this job never pushes, so the image name is
+          # unused. release.yml's publish matrix keeps it. Mirror that matrix
+          # when editing platforms/contexts so the gate and the release build
+          # the same images.
           - name: backend
             context: ./backend
-            repo: justoeu/foldex-backend
           - name: web
             # web/Dockerfile no longer COPYs certs into the image — the
             # entrypoint generates an ephemeral self-signed pair at
             # container start (or the operator mounts their own pair as a
             # volume). Keeps private keys OUT of the published image.
             context: ./web
-            repo: justoeu/foldex-web
         platform:
           - tag: amd64
             id: linux/amd64
@@ -186,119 +174,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      - name: Log in to Docker Hub
-        # Only logs in when we're going to push (i.e. not a PR). PR builds
-        # validate the Dockerfile compiles cleanly without needing creds.
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build & push by digest
-        id: build
+      - name: Build (no push)
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: ${{ matrix.image.context }}
           file: ${{ matrix.image.context }}/Dockerfile
           platforms: ${{ matrix.platform.id }}
-          # push-by-digest=true: upload the image to the registry without
-          # any tag. The manifest job below stitches the per-arch digests
-          # into the canonical tags so a half-finished build can never
-          # half-overwrite `latest`.
-          outputs: |
-            type=image,name=${{ matrix.image.repo }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
-          # Scope cache by image AND arch — sharing across archs poisons
-          # the cache (an amd64 layer can't satisfy an arm64 build).
+          push: false
+          # Same scope key as release.yml, but note GitHub Actions cache is
+          # branch-scoped: a PR-branch cache is NOT readable from the default
+          # branch, so this mainly speeds up RE-RUNS of the same PR — it does
+          # not warm the release build on main. Scope by image+arch so an amd64
+          # layer never satisfies an arm64 build.
           cache-from: type=gha,scope=foldex-${{ matrix.image.name }}-${{ matrix.platform.tag }}
           cache-to: type=gha,scope=foldex-${{ matrix.image.name }}-${{ matrix.platform.tag }},mode=max
-
-      - name: Export digest
-        if: github.event_name != 'pull_request'
-        # Drop a sentinel file named after the digest; the manifest job
-        # downloads every per-image-per-arch artifact and reads the
-        # filenames to assemble the final manifest list.
-        run: |
-          mkdir -p /tmp/digests
-          digest='${{ steps.build.outputs.digest }}'
-          touch "/tmp/digests/${digest#sha256:}"
-
-      - name: Upload digest
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: digests-${{ matrix.image.name }}-${{ matrix.platform.tag }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
-  # Assemble the per-arch digests of each image into a single multi-arch
-  # manifest under the canonical tags. Runs in parallel for backend + web
-  # via a matrix; each cell waits on its two `publish` matrix cells.
-  publish-manifest:
-    needs: publish
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        image:
-          - name: backend
-            repo: justoeu/foldex-backend
-          - name: web
-            repo: justoeu/foldex-web
-    steps:
-      - name: Download digests
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          # Picks up both `digests-<image>-amd64` and `digests-<image>-arm64`.
-          pattern: digests-${{ matrix.image.name }}-*
-          merge-multiple: true
-          path: /tmp/digests
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # Tag computation: branch/tag → `latest` and `v1.2.3` style + a short
-      # SHA on every push so a deploy can pin to an exact commit if needed.
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ${{ matrix.image.repo }}
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Create + push manifest list
-        working-directory: /tmp/digests
-        # The digest list comes from sentinel files dropped by the publish
-        # job — one filename per arch, named after the layer digest. Filter
-        # by 64 hex chars so a stray artifact (log, README, hidden file) can
-        # never sneak into the manifest as a fake digest.
-        run: |
-          # SC2046/SC2010: the word-splitting IS the point — each `-t <tag>` and
-          # each `<repo>@sha256:<digest>` must land as a separate argv entry.
-          # shellcheck disable=SC2046,SC2010
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") \
-            $(ls -1 | grep -E '^[a-f0-9]{64}$' | sed 's|^|${{ matrix.image.repo }}@sha256:|')
-
-      # `steps.meta.outputs.version` resolves to `pr-N` on PR triggers — the
-      # whole job is gated by the `if: != 'pull_request'` at the top, so the
-      # value is always a real tag here. Don't strip the gate without also
-      # picking a different inspect target.
-      - name: Inspect manifest
-        run: docker buildx imagetools inspect ${{ matrix.image.repo }}:${{ steps.meta.outputs.version }}

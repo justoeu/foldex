@@ -183,7 +183,7 @@ Every merge ships code; every shipment gets a version. `:latest` keeps moving bu
 | breaking API/schema | `make release-major` | 1.0.8 → 2.0.0 |
 | mixed (feat + fix same window) | `make release-minor` (features dominate) | |
 
-`make release-X` runs `scripts/release.sh` (refuses dirty tree / off-main). Bumps `web/package.json` + `extension/manifest.json`, commits, tags `vX.Y.Z`, prompts to push. Pushing the tag triggers `ci.yml` (it watches `tags: ['v*']`) which publishes `:vX.Y.Z`, `:vX.Y`, `:vX`, `:latest` for both images.
+`make release-X` runs `scripts/release.sh` (refuses dirty tree / off-main). Bumps `web/package.json` + `extension/manifest.json`, commits, tags `vX.Y.Z`, prompts to push. Pushing the tag triggers `release.yml` (it watches `push: main` + `tags: ['v*']`) which publishes `:vX.Y.Z`, `:vX.Y`, `:vX`, `:latest` for both images. `ci.yml` is the PR gate (`on: pull_request` only) — it does NOT run on push to main/tags, so a merge never re-runs the test suite; the release trusts the gate that already passed on the PR.
 
 After the bump, surface the new pin to the user: `FOLDEX_VERSION=v1.2.0` in `.env`.
 

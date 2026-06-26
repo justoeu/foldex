@@ -6,9 +6,10 @@
 #   - extension/manifest.json (browser extension MV3 manifest)
 # then commits, tags `vX.Y.Z`, and (with your confirmation) pushes.
 #
-# Pushing the tag triggers ci.yml (it watches `tags: ['v*']`), which
+# Pushing the tag triggers release.yml (it watches `tags: ['v*']`), which
 # publishes Docker images tagged `:vX.Y.Z` + `:vX.Y` + `:vX` + `:latest`
-# for both `foldex-backend` and `foldex-web`.
+# for both `foldex-backend` and `foldex-web`. (ci.yml is the PR gate and
+# does NOT run on push to main/tags.)
 #
 # Usage:
 #   ./scripts/release.sh patch     # 1.0.8 → 1.0.9
