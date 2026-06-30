@@ -324,7 +324,7 @@ Cada um, além do `Optimize`, dispara `DeleteObject` nas extensões irmãs do me
 ## Portas, hostnames e deploy local
 
 - **Backend:** `127.0.0.1:9089` no host, `9089` no container. Lê `BACKEND_PORT` do env.
-- **Web (nginx servindo bundle Vite):** `127.0.0.1:9088 → nginx:80` no container. Proxa `/api` e `/go` pro `backend:9089` na rede `foldex`.
+- **Web (nginx servindo bundle Vite):** `127.0.0.1:9088 → nginx:8080` no container (HTTP) / `127.0.0.1:9444 → nginx:8443` (HTTPS). Roda como user `nginx` non-root — ports internos >1024 por isso. Proxa `/api` e `/go` pro `backend:9089` na rede `foldex`.
 - **Postgres:** o `docker-compose.db.yml` traz `foldex-db` (postgres:18.2-alpine) na rede `foldex` **sem publicar porta no host** por default (evita conflito com outras instâncias). Pra reusar um Postgres já rodando no host (ex: `postgres18`), setar `POSTGRES_HOST=localhost` em `.env` — o container backend resolve `localhost` pro host real via `extra_hosts`.
 - **Network compose:** rede `foldex` externa (nomeada), pra que apps e db sejam composes separados.
 

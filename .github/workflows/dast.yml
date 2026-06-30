@@ -66,6 +66,21 @@ jobs:
           docker compose logs --no-color --tail 200 || true
           exit 1
 
+      - name: Assert web runs as non-root
+        # Defense against a silent revert of `USER nginx` in web/Dockerfile.
+        # Without this, a future commit dropping the directive ships green
+        # and re-opens the "No default non-root user" scanner finding until
+        # the next monthly DAST — which never checks UID. Cheap to assert
+        # here because the stack is already booted for the ZAP scan.
+        run: |
+          uid="$(docker compose exec -T web id -u)"
+          if [ "$uid" != "101" ]; then
+            echo "::error::web container is running as uid $uid, expected 101 (nginx)"
+            docker compose logs --no-color --tail 50 web || true
+            exit 1
+          fi
+          echo "web container runs as non-root uid $uid"
+
       - name: ZAP baseline scan
         # Run ZAP on the shared `foldex` network so it reaches nginx by its
         # service name `web` (TLS on 443). ZAP accepts self-signed upstream

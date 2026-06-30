@@ -99,6 +99,24 @@ jobs:
           # half-overwrite `latest`.
           outputs: |
             type=image,name=${{ matrix.image.repo }},push-by-digest=true,name-canonical=true,push=true
+          # Supply-chain attestations: SLSA provenance + SBOM are attached
+          # to each per-arch image as OCI referrers. Docker Scout/Snyk
+          # surface these as "supply chain attestation present" and they
+          # back the in-platform CVE traceability. They reference the
+          # digest, so the manifest job's tag-assembly below doesn't
+          # detach them (buildx imagetools re-anchors the referrer
+          # descriptors to the new manifest-list digest).
+          #
+          # Posture note: these are SELF-ATTESTED (unsigned). The job's
+          # `permissions: contents: read` deliberately omits
+          # `id-token: write`, so buildx cannot do Sigstore keyless
+          # signing. Anyone with push creds could mint equivalent
+          # provenance — sufficient to close the "missing attestation"
+          # scanner finding, NOT a cryptographic trust chain. Promote to
+          # cosign keyless + Rekor transparency if real verifiability is
+          # ever required.
+          provenance: true
+          sbom: true
           # Scope cache by image AND arch — sharing across archs poisons
           # the cache (an amd64 layer can't satisfy an arm64 build).
           cache-from: type=gha,scope=foldex-${{ matrix.image.name }}-${{ matrix.platform.tag }}
