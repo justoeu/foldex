@@ -34,8 +34,9 @@ type ObjectInfo struct {
 	Size int64
 }
 
-// File prefixes inside the bucket that backups should cover.
-var bucketPrefixes = []string{"screenshots/", "images/"}
+// File prefixes inside the bucket that backups should cover. "notes/" holds
+// inline images uploaded through the note rich-text editor.
+var bucketPrefixes = []string{"screenshots/", "images/", "notes/"}
 
 // maxManifestEntries caps Validate's checksum iteration so a hostile zip can't
 // drive unbounded CPU/RAM before sanity checks run.
@@ -128,10 +129,11 @@ func (s *Service) Export(ctx context.Context, w io.Writer, onCountsReady func(Co
 
 	counts := Counts{
 		Links:     int64(len(snap.Links)),
+		Notes:     int64(len(snap.Notes)),
 		Tags:      int64(len(snap.Tags)),
 		Folders:   int64(len(snap.Folders)),
-		LinkTags:  int64(len(snap.LinkTags)),
-		ClickLogs: int64(len(snap.ClickLogs)),
+		LinkTags:  int64(len(snap.LinkTags)) + int64(len(snap.NoteTags)),
+		ClickLogs: int64(len(snap.ClickLogs)) + int64(len(snap.NoteClicks)),
 		Files:     fileCount,
 		FileBytes: fileBytes,
 	}
@@ -380,9 +382,10 @@ func (s *Service) Restore(ctx context.Context, zr *zip.Reader, mode ConflictMode
 		}
 		// Counts inserted = sizes of slices in snap.
 		rep.Inserted = Counts{
-			Links: int64(len(snap.Links)), Tags: int64(len(snap.Tags)),
-			Folders: int64(len(snap.Folders)), LinkTags: int64(len(snap.LinkTags)),
-			ClickLogs: int64(len(snap.ClickLogs)),
+			Links: int64(len(snap.Links)), Notes: int64(len(snap.Notes)), Tags: int64(len(snap.Tags)),
+			Folders:   int64(len(snap.Folders)),
+			LinkTags:  int64(len(snap.LinkTags)) + int64(len(snap.NoteTags)),
+			ClickLogs: int64(len(snap.ClickLogs)) + int64(len(snap.NoteClicks)),
 		}
 	case ModeSkip:
 		inserted, skipped, m, err := restoreSkip(ctx, tx, snap)

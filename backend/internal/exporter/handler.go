@@ -57,11 +57,11 @@ func (h *Handler) queryAll(r *http.Request) ([]linkRow, error) {
 	// link isn't in a folder.
 	rows, err := h.pool.Query(r.Context(), `
         SELECT l.url, l.title, l.slug, l.description, l.created_at,
-               (SELECT count(*) FROM click_log WHERE link_id = l.id)::bigint AS click_count,
+               (SELECT count(*) FROM click_log WHERE entity_kind = 'link' AND entity_id = l.id)::bigint AS click_count,
                COALESCE(array_agg(t.name) FILTER (WHERE t.name IS NOT NULL), '{}'),
                f.name AS folder_name
         FROM link l
-        LEFT JOIN link_tag lt ON lt.link_id = l.id
+        LEFT JOIN link_tag lt ON lt.entity_kind = 'link' AND lt.entity_id = l.id
         LEFT JOIN tag t       ON t.id = lt.tag_id
         LEFT JOIN folder f    ON f.id = l.folder_id
         GROUP BY l.id, f.name

@@ -605,8 +605,8 @@ func insertLinkInTx(ctx context.Context, tx pgx.Tx, url, title string, descripti
 	// inserts — we don't want re-import to inflate counts on existing links.
 	if !dup && clickCount > 0 {
 		if _, err := tx.Exec(ctx, `
-            INSERT INTO click_log (link_id, clicked_at)
-            SELECT $1, COALESCE($2::timestamptz, now())
+            INSERT INTO click_log (entity_kind, entity_id, clicked_at)
+            SELECT 'link', $1, COALESCE($2::timestamptz, now())
             FROM generate_series(1, $3::int)
         `, id, createdAt, clickCount); err != nil {
 			return 0, false, false, fmt.Errorf("backfill click_log: %w", err)
@@ -614,16 +614,16 @@ func insertLinkInTx(ctx context.Context, tx pgx.Tx, url, title string, descripti
 	}
 
 	if len(tagIDs) > 0 {
-		if _, err := tx.Exec(ctx, `DELETE FROM link_tag WHERE link_id = $1`, id); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM link_tag WHERE entity_kind = 'link' AND entity_id = $1`, id); err != nil {
 			return 0, false, false, err
 		}
 		rows := make([][]any, 0, len(tagIDs))
 		for _, tid := range tagIDs {
-			rows = append(rows, []any{id, tid})
+			rows = append(rows, []any{"link", id, tid})
 		}
 		if _, err := tx.CopyFrom(ctx,
 			pgx.Identifier{"link_tag"},
-			[]string{"link_id", "tag_id"},
+			[]string{"entity_kind", "entity_id", "tag_id"},
 			pgx.CopyFromRows(rows),
 		); err != nil {
 			return 0, false, false, err

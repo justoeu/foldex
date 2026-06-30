@@ -20,13 +20,16 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 func (r *Repository) Summary(ctx context.Context) (Summary, error) {
 	var s Summary
 
+	// click_log is polymorphic (entity_kind/entity_id) — every clause here
+	// filters entity_kind = 'link' so the stats page keeps its pre-notes
+	// meaning (link clicks only, not note views).
 	if err := r.pool.QueryRow(ctx, `
         SELECT
             (SELECT count(*) FROM link),
             (SELECT count(*) FROM tag),
-            (SELECT count(*) FROM click_log),
-            (SELECT count(*) FROM click_log WHERE clicked_at >= now() - interval '30 days'),
-            (SELECT count(*) FROM click_log WHERE clicked_at <  now() - interval '30 days'
+            (SELECT count(*) FROM click_log WHERE entity_kind = 'link'),
+            (SELECT count(*) FROM click_log WHERE entity_kind = 'link' AND clicked_at >= now() - interval '30 days'),
+            (SELECT count(*) FROM click_log WHERE entity_kind = 'link' AND clicked_at <  now() - interval '30 days'
                                               AND clicked_at >= now() - interval '60 days'),
             (SELECT count(*) FROM link      WHERE created_at >= now() - interval '30 days')
     `).Scan(&s.TotalLinks, &s.TotalTags, &s.TotalClicks, &s.ClicksLast30d, &s.ClicksPrev30d, &s.NewLinksLast30); err != nil {
@@ -41,7 +44,8 @@ func (r *Repository) Summary(ctx context.Context) (Summary, error) {
         FROM (
             SELECT regexp_replace(l.url, '^https?://([^/]+).*$', '\1') AS host
             FROM click_log cl
-            JOIN link l ON l.id = cl.link_id
+            JOIN link l ON l.id = cl.entity_id
+            WHERE cl.entity_kind = 'link'
         ) t
         WHERE host <> ''
         GROUP BY host
@@ -72,7 +76,8 @@ func (r *Repository) Daily(ctx context.Context, days int) ([]DailyPoint, error) 
         agg AS (
             SELECT date_trunc('day', clicked_at)::date AS d, count(*)::bigint AS c
             FROM click_log
-            WHERE clicked_at >= date_trunc('day', now()) - ($1::int - 1) * interval '1 day'
+            WHERE entity_kind = 'link'
+              AND clicked_at >= date_trunc('day', now()) - ($1::int - 1) * interval '1 day'
             GROUP BY 1
         )
         SELECT s.d, COALESCE(a.c, 0)
@@ -111,7 +116,7 @@ func (r *Repository) TopLinks(ctx context.Context, limit int) ([]TopLink, error)
             COALESCE(sum(CASE WHEN cl.clicked_at <  now() - interval '30 days'
                               AND cl.clicked_at >= now() - interval '60 days' THEN 1 END), 0)::bigint AS cprev
         FROM link l
-        LEFT JOIN click_log cl ON cl.link_id = l.id
+        LEFT JOIN click_log cl ON cl.entity_kind = 'link' AND cl.entity_id = l.id
         GROUP BY l.id
         ORDER BY clicks DESC, l.id ASC
         LIMIT $1
@@ -140,18 +145,23 @@ func (r *Repository) TopLinks(ctx context.Context, limit int) ([]TopLink, error)
 // The CTE below pre-aggregates clicks per link ONCE, then joins, dropping the
 // total cost to O(clicks) for the aggregate + O(link_tag rows) for the join.
 func (r *Repository) TagBuckets(ctx context.Context) ([]TagBucket, error) {
+	// link_tag/click_log are polymorphic — entity_id values overlap between
+	// link and note id spaces, so every join here MUST filter
+	// entity_kind = 'link' or a tag attached to a note could silently join
+	// against an unrelated link/click row that happens to share the same id.
 	rows, err := r.pool.Query(ctx, `
         WITH link_clicks AS (
-            SELECT link_id, count(*)::bigint AS cnt
+            SELECT entity_id, count(*)::bigint AS cnt
             FROM click_log
-            GROUP BY link_id
+            WHERE entity_kind = 'link'
+            GROUP BY entity_id
         )
         SELECT t.id, t.name, t.color,
                COALESCE(sum(lc.cnt), 0)::bigint     AS clicks,
-               count(DISTINCT lt.link_id)::bigint   AS links
+               count(DISTINCT lt.entity_id)::bigint AS links
         FROM tag t
-        LEFT JOIN link_tag lt   ON lt.tag_id = t.id
-        LEFT JOIN link_clicks lc ON lc.link_id = lt.link_id
+        LEFT JOIN link_tag lt   ON lt.tag_id = t.id AND lt.entity_kind = 'link'
+        LEFT JOIN link_clicks lc ON lc.entity_id = lt.entity_id
         GROUP BY t.id
         ORDER BY clicks DESC, t.name ASC
     `)

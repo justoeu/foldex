@@ -59,7 +59,7 @@ Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `12
 | Extension    | Vanilla MV3 (sem bundler)                                            | Popup tem ~80 LoC. Sem build = "load unpacked" direto. |
 | Node runtime | **bun 1.3** (oven/bun:1.3-alpine)                                    | Bate com Vite 8 / Vitest 4 e resolve melhor packages platform-specific que npm em mirror privado. |
 
-## Data model (estado atual, após 11 migrations)
+## Data model (estado atual, após 14 migrations)
 
 ```sql
 -- 000001_init.up.sql        (+ pg_trgm)
@@ -73,6 +73,9 @@ Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `12
 -- 000009_link_slug          → `link.slug NOT NULL UNIQUE` + CHECK + backfill
 -- 000010_link_change_check  → 6 colunas em `link` p/ change-detection per-link + 2 índices parciais
 -- 000011_push_subscription  → tabela `push_subscription` (RFC 8030 + VAPID)
+-- 000012_link_folder_preview_index → índice coberto p/ preview de pastas
+-- 000013_link_title_lower_index    → índice funcional p/ sort alpha sem runtime sort
+-- 000014_notes              → tabela `note` + polimorfiza link_tag/click_log via entity_kind (ADR-27)
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -144,33 +147,63 @@ CREATE TABLE push_subscription (
   CONSTRAINT push_subscription_endpoint_unique UNIQUE (endpoint)
 );
 
+-- 000014: note mirrors link's title/slug/folder/pinned shape, swapping the
+-- URL-specific fields (no preview pipeline, no favicon) for rich-content
+-- ones. Same slug-format CHECK as link so /n/{slug} never shadows /n/{id}.
+CREATE TABLE note (
+  id         BIGSERIAL PRIMARY KEY,
+  title      TEXT NOT NULL,
+  slug       TEXT NOT NULL UNIQUE,             -- CHECK same as link.slug
+  body_html  TEXT NOT NULL DEFAULT '',         -- sanitized server-side (internal/pkg/htmlsanitize) before every write
+  body_text  TEXT NOT NULL DEFAULT '',         -- denormalized plain text, ILIKE/trigram search only
+  pinned     BOOLEAN NOT NULL DEFAULT FALSE,
+  folder_id  BIGINT REFERENCES folder(id) ON DELETE SET NULL,
+  cover_url  TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX note_title_trgm ON note USING gin (title gin_trgm_ops);
+CREATE INDEX note_body_trgm  ON note USING gin (body_text gin_trgm_ops);
+CREATE INDEX note_pinned_created_idx ON note (pinned DESC, created_at DESC);
+
+-- 000014 polymorphizes link_tag/click_log so notes can share them without
+-- duplicating the M:N/event tables — see ADR-27. `link_id` renamed to
+-- `entity_id`, `entity_kind` discriminates ('link' | 'note'). The FK to
+-- link(id) is dropped (a polymorphic column can't reference two tables);
+-- cascade moves to app-level (links.Repository.Delete / notes.Repository.Delete
+-- delete their own link_tag/click_log rows in the same tx as the entity row).
 CREATE TABLE link_tag (
-  link_id BIGINT NOT NULL REFERENCES link(id) ON DELETE CASCADE,
-  tag_id  BIGINT NOT NULL REFERENCES tag(id)  ON DELETE CASCADE,
-  PRIMARY KEY (link_id, tag_id)
+  entity_kind TEXT   NOT NULL CHECK (entity_kind IN ('link', 'note')),
+  entity_id   BIGINT NOT NULL,
+  tag_id      BIGINT NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
+  PRIMARY KEY (entity_kind, entity_id, tag_id)
 );
 CREATE INDEX link_tag_tag ON link_tag (tag_id);
 
--- Single source of truth for click events. `link.click_count` and
--- `link.last_clicked_at` are NOT stored — they are derived at read time.
+-- Single source of truth for click/view events, link AND note alike.
+-- `link.click_count`/`note.click_count` are NOT stored — derived at read
+-- time via a LATERAL join scoped by entity_kind.
 CREATE TABLE click_log (
-  id         BIGSERIAL PRIMARY KEY,
-  link_id    BIGINT NOT NULL REFERENCES link(id) ON DELETE CASCADE,
-  clicked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  id          BIGSERIAL PRIMARY KEY,
+  entity_kind TEXT   NOT NULL CHECK (entity_kind IN ('link', 'note')),
+  entity_id   BIGINT NOT NULL,
+  clicked_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX click_log_clicked_at ON click_log (clicked_at DESC);
-CREATE INDEX click_log_link_id_ts ON click_log (link_id, clicked_at DESC);
+CREATE INDEX click_log_entity_ts  ON click_log (entity_kind, entity_id, clicked_at DESC);
 ```
 
 Click registration is **append-only** to `click_log`. The /go handler does:
 
 ```sql
 -- inside a tx
-SELECT url FROM link WHERE id = $1;            -- 404 check
-INSERT INTO click_log (link_id) VALUES ($1);   -- the only writer
+SELECT url FROM link WHERE id = $1;                                  -- 404 check
+INSERT INTO click_log (entity_kind, entity_id) VALUES ('link', $1);  -- the only writer
 ```
 
-Every SELECT that needs `click_count` / `last_clicked_at` derives them via a LATERAL join, e.g.:
+`/n/{id-or-slug}` (note render, ADR-27) does the same with `entity_kind='note'` in the same tx as resolving the note row.
+
+Every SELECT that needs `click_count` / `last_clicked_at` derives them via a LATERAL join scoped to the entity's own kind — **every link_tag/click_log query MUST filter `entity_kind`**, since `entity_id` values overlap between link and note id spaces (a link and a note can share the same numeric id):
 
 ```sql
 SELECT l.id, l.url, l.title, ...,
@@ -180,7 +213,7 @@ SELECT l.id, l.url, l.title, ...,
 FROM link l
 LEFT JOIN LATERAL (
   SELECT count(*) AS cnt, max(clicked_at) AS last_at
-  FROM click_log WHERE link_id = l.id
+  FROM click_log WHERE entity_kind = 'link' AND entity_id = l.id
 ) cl ON TRUE
 ORDER BY l.pinned DESC, COALESCE(cl.cnt, 0) DESC;
 ```
@@ -190,22 +223,24 @@ Listagem com filtro (texto OR substring em title/url; tags como AND quando múlt
 ```sql
 SELECT l.*, COALESCE(array_agg(t.id) FILTER (WHERE t.id IS NOT NULL), '{}') AS tag_ids
 FROM link l
-LEFT JOIN link_tag lt ON lt.link_id = l.id
+LEFT JOIN link_tag lt ON lt.entity_kind = 'link' AND lt.entity_id = l.id
 LEFT JOIN tag t       ON t.id = lt.tag_id
 WHERE ($1::text IS NULL
        OR l.title ILIKE '%'||$1||'%'
        OR l.url   ILIKE '%'||$1||'%')
   AND ($2::bigint[] IS NULL
        OR l.id IN (
-         SELECT link_id FROM link_tag
-         WHERE tag_id = ANY($2)
-         GROUP BY link_id
+         SELECT entity_id FROM link_tag
+         WHERE entity_kind = 'link' AND tag_id = ANY($2)
+         GROUP BY entity_id
          HAVING count(DISTINCT tag_id) = array_length($2,1)
        ))
 GROUP BY l.id
 ORDER BY l.created_at DESC
 LIMIT $3 OFFSET $4;
 ```
+
+`internal/entries` runs the link/note equivalents of the query above as the two arms of a `UNION ALL` (wrapped in a derived table so `ORDER BY lower(title)` is legal post-union — Postgres forbids expressions directly under a set operation's `ORDER BY`), giving the frontend one paginated, sorted, searched endpoint instead of merging two independently-paginated queries client-side. See ADR-27.
 
 ## API surface
 
@@ -639,6 +674,23 @@ Empilhamos múltiplos scanners em vez de um só, pra comparar cobertura e não d
 **Por quê informativos primeiro.** Todos seguem a postura do CLAUDE.md §2 (govulncheck/bun audit): `|| true` / `-no-fail` / `continue-on-error`, então surfam achados sem travar merge. Vira gate rígido removendo essas válvulas quando houver baseline limpa. SAST roda com `paths-ignore` pra commits só-docs (não queima runner). O DAST precisa de cert pré-gerado em `web/certs` porque o compose monta esse dir `:ro` e o entrypoint do nginx não consegue escrever o par efêmero num mount read-only. Imagens de container (Semgrep, ZAP) são pinadas por **digest** — a regra de SHA-pin do §4 vale igual pra elas, já que tag mutável tem o mesmo risco de swap silencioso. Um job `actionlint` em `ci.yml` (imagem digest-pinned, traz shellcheck) linta todos os workflows em cada PR pra pegar regressão de sintaxe / action não-pinada antes de um run real.
 
 **Baseline triada (1ª passada, 21 alertas → 0 reais).** O primeiro scan abriu 21 alertas (CodeQL 3, gosec 14, Semgrep 4); todos triados e **dispensados** na aba Security — **nenhum acionável**. 6 `false positive` (sanitizadores que as ferramentas não modelam: `safeLinkHref` só passa `^https?://`; `http.Redirect` limpa CR/LF; `<img src>` não é sink de script; MIME já validado; sem captura de loop-var; misfire de regra em `json.Marshal`) e 15 `won't fix` (mitigações por design: o `safeDialer` SSRF pré+pós-dial que o CodeQL não enxerga; `http.MaxBytesReader` + cap de 50 MP; segredo VAPID `0o600`; path de config do operador; `$host` do nginx inofensivo num deploy single-user localhost). Cada dismiss carrega comentário com o motivo. **Antes de tratar um achado novo como real, conferir se não é uma re-emissão (fingerprint novo) de um destes padrões já triados** — refatorar uma dessas linhas pode reabrir o mesmo "não-problema". Se a re-emissão virar recorrente num ponto, migrar pra supressão inline (`#nosec` / `# nosemgrep`) que viaja com o código.
+
+### ADR-27 — Notes como terceira entidade polimórfica, compartilhando link_tag/click_log/folder
+**Status:** Done (migration 000014).
+
+Notes são entradas pastebin-style — título + corpo HTML rico (Tiptap, markdown paste, imagens inline) — que se comportam como um terceiro tipo de entidade de primeira classe ao lado de `link`/`folder`: mesmo grid, mesma busca, mesmo sistema de tags/pastas, badge diferenciado no card.
+
+**Por quê tabela `note` separada em vez de uma coluna `kind` em `link`.** `link` carrega invariantes URL-específicas (UNIQUE url, pipeline de preview, change-detection) que não se aplicam a notes. Um `kind` discriminador em `link` significaria uma dúzia de colunas nullable e um CHECK cada vez mais largo — pior que duas tabelas com o overlap real (título/slug/folder/pinned) replicado, que é pequeno.
+
+**Por quê polimorfizar `link_tag`/`click_log` em vez de duplicá-las.** A alternativa óbvia — `note_tag`/`note_click_log` — duplicaria a lógica de M:N e de agregação de cliques (já não-trivial: `tagsFor`, `setLinkTags`, o LATERAL join de click_count, os índices de busca por tag). Em vez disso, `link_id` virou `entity_id` + um novo `entity_kind TEXT CHECK (IN ('link','note'))`. Custo: a FK pra `link(id)` precisou ser dropada (uma coluna polimórfica não pode referenciar duas tabelas), então o cascade de delete que antes vinha de `ON DELETE CASCADE` virou app-level — `links.Repository.Delete` e `notes.Repository.Delete` agora apagam suas próprias rows de `link_tag`/`click_log` na mesma tx do delete da entidade. **Toda query contra essas duas tabelas DEVE filtrar `entity_kind`** — sem isso, um id de note pode colidir com um id de link (mesmo espaço numérico) e vazar tag/clique pro lado errado. `TestCrossContamination_LinkAndNoteRowsDoNotLeak` (`internal/notes`) é o regression guard.
+
+**Por quê `internal/entries` (UNION ALL) em vez de merge client-side.** O grid interleaved precisa de busca + sort + paginação unificados entre link e note. Hoje folders "interleiam" com links só porque folders carregam tudo de uma vez (não paginado) enquanto links são paginados — não existe precedente de merge entre dois streams independentemente paginados, e notes precisam de paginação real. Um merge client-side de duas `useInfiniteQuery` mantendo ordem global consistente através de pinned + 5 modos de sort seria um subsistema novo e frágil. Uma única query SQL `UNION ALL` (cada braço com o mesmo filtro/ordenação que `links.List`/`notes.List` já fazem) mantém sort/paginação numa única fonte, no padrão "busca é 100% server-driven" que o resto do projeto já segue. `internal/entries` é **somente leitura** — `GET /api/entries` é a única rota; mutações continuam em `/api/links` e `/api/notes`. Detalhe de implementação: o `ORDER BY` precisa estar fora do `UNION ALL` (numa subquery/derived table) porque Postgres proíbe expressões como `lower(title)` direto sob um set operation.
+
+**Por quê `/n/{id-or-slug}` renderiza em vez de redirecionar.** `/go/{id-or-slug}` resolve pra uma URL externa e redireciona; uma note não tem URL externa — `/n/` precisa renderizar o conteúdo. Fica fora de `/api` (junto com `/go/`) pra ficar compartilhável sem o guard de `SHARED_SECRET`, mesma postura de link. Loga em `click_log` (`entity_kind='note'`) na mesma tx da resolução — é o que justifica ter polimorfizado `click_log` em primeiro lugar, e dá a notes um `click_count` de graça via o mesmo padrão de LATERAL join.
+
+**Por quê sanitização server-side obrigatória (`internal/pkg/htmlsanitize`).** O body da note é HTML renderizado cru tanto no app (dialog/editor) quanto na página pública `/n/`. O cliente nunca é confiável — um cliente de API malicioso pode mandar qualquer coisa. `htmlsanitize.Sanitize` roda em todo Create/Update, allowlist explícita (`bluemonday.NewPolicy()`, não um preset) batendo exatamente no output do Tiptap StarterKit: sem `<table>` (extensão não usada ainda — fechar a allowlist em vez de abrir especulativamente), sem URL scheme `data:` (força toda imagem inline a passar pelo endpoint de upload em vez de embutir base64). `body_text` (coluna de busca ILIKE/trigram) é **sempre** derivado server-side do HTML já sanitizado — nunca aceito do cliente — pra search não poder divergir do que está armazenado/renderizado.
+
+**Gaps conhecidos do v1.** Imagens inline removidas do editor antes de salvar (nunca chegaram a `body_html`) não são limpas do object storage — só o delete de uma note faz best-effort cleanup das imagens ainda referenciadas no `body_html` no momento do delete; não existe um job de sweep de órfãos. `<table>` fica fora da allowlist até uma extensão de tabela ser adicionada ao editor.
 
 ## Future considerations
 

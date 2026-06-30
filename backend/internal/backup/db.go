@@ -61,7 +61,25 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 		return nil, fmt.Errorf("links: %w", err)
 	}
 
-	if err := scanRows(ctx, tx, `SELECT link_id, tag_id FROM link_tag ORDER BY link_id, tag_id`,
+	if err := scanRows(ctx, tx, `
+        SELECT id, title, slug, body_html, body_text, pinned, folder_id, cover_url, created_at, updated_at
+        FROM note ORDER BY id`,
+		func(rows pgx.Rows) error {
+			var n NoteRow
+			if err := rows.Scan(&n.ID, &n.Title, &n.Slug, &n.BodyHTML, &n.BodyText, &n.Pinned,
+				&n.FolderID, &n.CoverURL, &n.CreatedAt, &n.UpdatedAt); err != nil {
+				return err
+			}
+			snap.Notes = append(snap.Notes, n)
+			return nil
+		},
+	); err != nil {
+		return nil, fmt.Errorf("notes: %w", err)
+	}
+
+	// link_tag/click_log are polymorphized (migration 000014) — split the read
+	// by entity_kind so the JSON wire shape stays one array per entity kind.
+	if err := scanRows(ctx, tx, `SELECT entity_id, tag_id FROM link_tag WHERE entity_kind = 'link' ORDER BY entity_id, tag_id`,
 		func(rows pgx.Rows) error {
 			var lt LinkTagRow
 			if err := rows.Scan(&lt.LinkID, &lt.TagID); err != nil {
@@ -74,7 +92,20 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 		return nil, fmt.Errorf("link_tags: %w", err)
 	}
 
-	if err := scanRows(ctx, tx, `SELECT link_id, clicked_at FROM click_log ORDER BY id`,
+	if err := scanRows(ctx, tx, `SELECT entity_id, tag_id FROM link_tag WHERE entity_kind = 'note' ORDER BY entity_id, tag_id`,
+		func(rows pgx.Rows) error {
+			var nt NoteTagRow
+			if err := rows.Scan(&nt.NoteID, &nt.TagID); err != nil {
+				return err
+			}
+			snap.NoteTags = append(snap.NoteTags, nt)
+			return nil
+		},
+	); err != nil {
+		return nil, fmt.Errorf("note_tags: %w", err)
+	}
+
+	if err := scanRows(ctx, tx, `SELECT entity_id, clicked_at FROM click_log WHERE entity_kind = 'link' ORDER BY id`,
 		func(rows pgx.Rows) error {
 			var c ClickRow
 			if err := rows.Scan(&c.LinkID, &c.ClickedAt); err != nil {
@@ -85,6 +116,19 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 		},
 	); err != nil {
 		return nil, fmt.Errorf("click_logs: %w", err)
+	}
+
+	if err := scanRows(ctx, tx, `SELECT entity_id, clicked_at FROM click_log WHERE entity_kind = 'note' ORDER BY id`,
+		func(rows pgx.Rows) error {
+			var c NoteClickRow
+			if err := rows.Scan(&c.NoteID, &c.ClickedAt); err != nil {
+				return err
+			}
+			snap.NoteClicks = append(snap.NoteClicks, c)
+			return nil
+		},
+	); err != nil {
+		return nil, fmt.Errorf("note_clicks: %w", err)
 	}
 
 	return snap, nil
@@ -125,7 +169,9 @@ func countConflicts(ctx context.Context, pool *pgxpool.Pool, snap *Snapshot) (Co
 
 func wipeAll(ctx context.Context, tx pgx.Tx) (Counts, error) {
 	var c Counts
-	// Count what we're about to delete (for the report).
+	// Count what we're about to delete (for the report). click_log/link_tag
+	// are polymorphic — these counts span both link and note rows, matching
+	// the combined LinkTags/ClickLogs fields restoreIdentity reports back.
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM click_log`).Scan(&c.ClickLogs); err != nil {
 		return c, err
 	}
@@ -135,14 +181,20 @@ func wipeAll(ctx context.Context, tx pgx.Tx) (Counts, error) {
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM link`).Scan(&c.Links); err != nil {
 		return c, err
 	}
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM note`).Scan(&c.Notes); err != nil {
+		return c, err
+	}
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM folder`).Scan(&c.Folders); err != nil {
 		return c, err
 	}
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tag`).Scan(&c.Tags); err != nil {
 		return c, err
 	}
-	// TRUNCATE order respects FKs through CASCADE.
-	if _, err := tx.Exec(ctx, `TRUNCATE TABLE click_log, link_tag, link, folder, tag RESTART IDENTITY CASCADE`); err != nil {
+	// TRUNCATE order respects FKs through CASCADE. `note` has no FK CASCADE
+	// dependents of its own (link_tag/click_log lost their FK to link/note in
+	// migration 000014 — cascade is app-level elsewhere, but a blanket TRUNCATE
+	// here doesn't need it since every listed table is wiped together).
+	if _, err := tx.Exec(ctx, `TRUNCATE TABLE click_log, link_tag, note, link, folder, tag RESTART IDENTITY CASCADE`); err != nil {
 		return c, err
 	}
 	return c, nil
@@ -225,28 +277,64 @@ func restoreIdentity(ctx context.Context, tx pgx.Tx, snap *Snapshot) (idMapping,
 		}
 	}
 
-	if len(snap.LinkTags) > 0 {
-		rows := make([][]any, 0, len(snap.LinkTags))
+	if len(snap.Notes) > 0 {
+		rows := make([][]any, 0, len(snap.Notes))
+		for _, n := range snap.Notes {
+			// Same slug fallback as links, for older/hand-edited snapshots.
+			slug := n.Slug
+			if slug == "" {
+				slug = links.Slugify(n.Title)
+				if slug == "" {
+					slug = fmt.Sprintf("note-%d", n.ID)
+				}
+			}
+			rows = append(rows, []any{
+				n.ID, n.Title, slug, n.BodyHTML, n.BodyText, n.Pinned, n.FolderID, n.CoverURL,
+				n.CreatedAt, n.UpdatedAt,
+			})
+			m.noteMap[n.ID] = n.ID
+		}
+		if _, err := tx.CopyFrom(ctx,
+			pgx.Identifier{"note"},
+			[]string{"id", "title", "slug", "body_html", "body_text", "pinned", "folder_id", "cover_url",
+				"created_at", "updated_at"},
+			pgx.CopyFromRows(rows),
+		); err != nil {
+			return m, fmt.Errorf("copy note: %w", err)
+		}
+	}
+
+	// link_tag/click_log are polymorphic — combine the link-kind and note-kind
+	// rows from the snapshot into one CopyFrom batch per table, each row
+	// carrying its own entity_kind.
+	if len(snap.LinkTags)+len(snap.NoteTags) > 0 {
+		rows := make([][]any, 0, len(snap.LinkTags)+len(snap.NoteTags))
 		for _, lt := range snap.LinkTags {
-			rows = append(rows, []any{lt.LinkID, lt.TagID})
+			rows = append(rows, []any{"link", lt.LinkID, lt.TagID})
+		}
+		for _, nt := range snap.NoteTags {
+			rows = append(rows, []any{"note", nt.NoteID, nt.TagID})
 		}
 		if _, err := tx.CopyFrom(ctx,
 			pgx.Identifier{"link_tag"},
-			[]string{"link_id", "tag_id"},
+			[]string{"entity_kind", "entity_id", "tag_id"},
 			pgx.CopyFromRows(rows),
 		); err != nil {
 			return m, fmt.Errorf("copy link_tag: %w", err)
 		}
 	}
 
-	if len(snap.ClickLogs) > 0 {
-		rows := make([][]any, 0, len(snap.ClickLogs))
+	if len(snap.ClickLogs)+len(snap.NoteClicks) > 0 {
+		rows := make([][]any, 0, len(snap.ClickLogs)+len(snap.NoteClicks))
 		for _, c := range snap.ClickLogs {
-			rows = append(rows, []any{c.LinkID, c.ClickedAt})
+			rows = append(rows, []any{"link", c.LinkID, c.ClickedAt})
+		}
+		for _, c := range snap.NoteClicks {
+			rows = append(rows, []any{"note", c.NoteID, c.ClickedAt})
 		}
 		if _, err := tx.CopyFrom(ctx,
 			pgx.Identifier{"click_log"},
-			[]string{"link_id", "clicked_at"},
+			[]string{"entity_kind", "entity_id", "clicked_at"},
 			pgx.CopyFromRows(rows),
 		); err != nil {
 			return m, fmt.Errorf("copy click_log: %w", err)
@@ -254,7 +342,7 @@ func restoreIdentity(ctx context.Context, tx pgx.Tx, snap *Snapshot) (idMapping,
 	}
 
 	// Bump sequences past the largest restored id.
-	for _, t := range []string{"tag", "folder", "link", "click_log"} {
+	for _, t := range []string{"tag", "folder", "link", "note", "click_log"} {
 		if _, err := tx.Exec(ctx,
 			fmt.Sprintf(`SELECT setval(pg_get_serial_sequence('%s', 'id'), COALESCE((SELECT MAX(id)+1 FROM %s), 1), false)`, t, t)); err != nil {
 			return m, fmt.Errorf("setval %s: %w", t, err)
@@ -349,6 +437,34 @@ func restoreSkip(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, Counts
 		m.linkMap[l.ID] = newID
 	}
 
+	// Notes have no natural content-identity key the way links have URL — two
+	// distinct notes can legitimately share a title. Skip mode therefore
+	// always inserts a fresh row (slug uniquified the same way links handle
+	// slug collisions); there is no "this note already exists, leave it
+	// alone" detection for notes in v1.
+	for _, n := range snap.Notes {
+		var folderID *int64
+		if n.FolderID != nil {
+			if mapped, ok := m.folderMap[*n.FolderID]; ok {
+				folderID = &mapped
+			}
+		}
+		slug, err := uniqueNoteSlug(ctx, tx, n.Slug, n.Title)
+		if err != nil {
+			return inserted, skipped, m, err
+		}
+		var newID int64
+		if err := tx.QueryRow(ctx, `
+            INSERT INTO note (title, slug, body_html, body_text, pinned, folder_id, cover_url, created_at, updated_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            RETURNING id`,
+			n.Title, slug, n.BodyHTML, n.BodyText, n.Pinned, folderID, n.CoverURL, n.CreatedAt, n.UpdatedAt).Scan(&newID); err != nil {
+			return inserted, skipped, m, fmt.Errorf("insert note: %w", err)
+		}
+		m.noteMap[n.ID] = newID
+		inserted.Notes++
+	}
+
 	for _, lt := range snap.LinkTags {
 		linkID, lok := m.linkMap[lt.LinkID]
 		tagID, tok := m.tagMap[lt.TagID]
@@ -357,10 +473,30 @@ func restoreSkip(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, Counts
 			continue
 		}
 		ct, err := tx.Exec(ctx,
-			`INSERT INTO link_tag (link_id, tag_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+			`INSERT INTO link_tag (entity_kind, entity_id, tag_id) VALUES ('link', $1,$2) ON CONFLICT DO NOTHING`,
 			linkID, tagID)
 		if err != nil {
 			return inserted, skipped, m, fmt.Errorf("insert link_tag: %w", err)
+		}
+		if ct.RowsAffected() == 0 {
+			skipped.LinkTags++
+		} else {
+			inserted.LinkTags++
+		}
+	}
+
+	for _, nt := range snap.NoteTags {
+		noteID, nok := m.noteMap[nt.NoteID]
+		tagID, tok := m.tagMap[nt.TagID]
+		if !nok || !tok {
+			skipped.LinkTags++
+			continue
+		}
+		ct, err := tx.Exec(ctx,
+			`INSERT INTO link_tag (entity_kind, entity_id, tag_id) VALUES ('note', $1,$2) ON CONFLICT DO NOTHING`,
+			noteID, tagID)
+		if err != nil {
+			return inserted, skipped, m, fmt.Errorf("insert note tag: %w", err)
 		}
 		if ct.RowsAffected() == 0 {
 			skipped.LinkTags++
@@ -373,21 +509,30 @@ func restoreSkip(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, Counts
 	// 100k+ rows). Per-row INSERT turned this loop into the dominant restore
 	// cost; CopyFrom streams it in a single COPY. The id-mapping filter
 	// (linkID must exist in the restored set) is applied up-front while
-	// building rows; unmapped clicks are counted as skipped.
-	if len(snap.ClickLogs) > 0 {
-		rows := make([][]any, 0, len(snap.ClickLogs))
+	// building rows; unmapped clicks are counted as skipped. Note clicks are
+	// folded into the same CopyFrom batch (combined ClickLogs counters).
+	if len(snap.ClickLogs)+len(snap.NoteClicks) > 0 {
+		rows := make([][]any, 0, len(snap.ClickLogs)+len(snap.NoteClicks))
 		for _, c := range snap.ClickLogs {
 			linkID, ok := m.linkMap[c.LinkID]
 			if !ok {
 				skipped.ClickLogs++
 				continue
 			}
-			rows = append(rows, []any{linkID, c.ClickedAt})
+			rows = append(rows, []any{"link", linkID, c.ClickedAt})
+		}
+		for _, c := range snap.NoteClicks {
+			noteID, ok := m.noteMap[c.NoteID]
+			if !ok {
+				skipped.ClickLogs++
+				continue
+			}
+			rows = append(rows, []any{"note", noteID, c.ClickedAt})
 		}
 		if len(rows) > 0 {
 			if _, err := tx.CopyFrom(ctx,
 				pgx.Identifier{"click_log"},
-				[]string{"link_id", "clicked_at"},
+				[]string{"entity_kind", "entity_id", "clicked_at"},
 				pgx.CopyFromRows(rows),
 			); err != nil {
 				return inserted, skipped, m, fmt.Errorf("copy click_log: %w", err)
@@ -479,6 +624,32 @@ func restoreDuplicate(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, [
 		m.linkMap[l.ID] = newID
 	}
 
+	// Notes always duplicate cleanly (no UNIQUE-url-style identity collision
+	// like links can hit) — every note gets a brand new row with a
+	// collision-resolved slug.
+	for _, n := range snap.Notes {
+		var folderID *int64
+		if n.FolderID != nil {
+			if mapped, ok := m.folderMap[*n.FolderID]; ok {
+				folderID = &mapped
+			}
+		}
+		slug, err := uniqueNoteSlug(ctx, tx, n.Slug, n.Title)
+		if err != nil {
+			return inserted, warnings, m, err
+		}
+		var newID int64
+		if err := tx.QueryRow(ctx, `
+            INSERT INTO note (title, slug, body_html, body_text, pinned, folder_id, cover_url, created_at, updated_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            RETURNING id`,
+			n.Title, slug, n.BodyHTML, n.BodyText, n.Pinned, folderID, n.CoverURL, n.CreatedAt, n.UpdatedAt).Scan(&newID); err != nil {
+			return inserted, warnings, m, fmt.Errorf("insert note: %w", err)
+		}
+		m.noteMap[n.ID] = newID
+		inserted.Notes++
+	}
+
 	for _, lt := range snap.LinkTags {
 		linkID, lok := m.linkMap[lt.LinkID]
 		tagID, tok := m.tagMap[lt.TagID]
@@ -486,28 +657,49 @@ func restoreDuplicate(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, [
 			continue
 		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO link_tag (link_id, tag_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+			`INSERT INTO link_tag (entity_kind, entity_id, tag_id) VALUES ('link', $1,$2) ON CONFLICT DO NOTHING`,
 			linkID, tagID); err != nil {
 			return inserted, warnings, m, fmt.Errorf("insert link_tag: %w", err)
 		}
 		inserted.LinkTags++
 	}
 
+	for _, nt := range snap.NoteTags {
+		noteID, nok := m.noteMap[nt.NoteID]
+		tagID, tok := m.tagMap[nt.TagID]
+		if !nok || !tok {
+			continue
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO link_tag (entity_kind, entity_id, tag_id) VALUES ('note', $1,$2) ON CONFLICT DO NOTHING`,
+			noteID, tagID); err != nil {
+			return inserted, warnings, m, fmt.Errorf("insert note tag: %w", err)
+		}
+		inserted.LinkTags++
+	}
+
 	// click_log: CopyFrom for the same reason as restoreSkip — high-volume,
 	// no conflict handling needed. Pre-filter by mapping presence.
-	if len(snap.ClickLogs) > 0 {
-		rows := make([][]any, 0, len(snap.ClickLogs))
+	if len(snap.ClickLogs)+len(snap.NoteClicks) > 0 {
+		rows := make([][]any, 0, len(snap.ClickLogs)+len(snap.NoteClicks))
 		for _, c := range snap.ClickLogs {
 			linkID, ok := m.linkMap[c.LinkID]
 			if !ok {
 				continue
 			}
-			rows = append(rows, []any{linkID, c.ClickedAt})
+			rows = append(rows, []any{"link", linkID, c.ClickedAt})
+		}
+		for _, c := range snap.NoteClicks {
+			noteID, ok := m.noteMap[c.NoteID]
+			if !ok {
+				continue
+			}
+			rows = append(rows, []any{"note", noteID, c.ClickedAt})
 		}
 		if len(rows) > 0 {
 			if _, err := tx.CopyFrom(ctx,
 				pgx.Identifier{"click_log"},
-				[]string{"link_id", "clicked_at"},
+				[]string{"entity_kind", "entity_id", "clicked_at"},
 				pgx.CopyFromRows(rows),
 			); err != nil {
 				return inserted, warnings, m, fmt.Errorf("copy click_log: %w", err)
@@ -545,6 +737,31 @@ func uniqueLinkSlug(ctx context.Context, tx pgx.Tx, slug, title string) (string,
 	return "", fmt.Errorf("uniqueLinkSlug: exhausted attempts for %q", base)
 }
 
+// uniqueNoteSlug is the note-table sibling of uniqueLinkSlug — same
+// fallback/collision-suffix strategy, against the `note` table instead of
+// `link`.
+func uniqueNoteSlug(ctx context.Context, tx pgx.Tx, slug, title string) (string, error) {
+	base := slug
+	if base == "" {
+		base = links.Slugify(title)
+		if base == "" {
+			base = "note-restored"
+		}
+	}
+	candidate := base
+	for attempt := 1; attempt < 1000; attempt++ {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM note WHERE slug = $1)`, candidate).Scan(&exists); err != nil {
+			return "", fmt.Errorf("check note slug availability: %w", err)
+		}
+		if !exists {
+			return candidate, nil
+		}
+		candidate = fmt.Sprintf("%s-%d", base, attempt+1)
+	}
+	return "", fmt.Errorf("uniqueNoteSlug: exhausted attempts for %q", base)
+}
+
 // uniqueTagName returns `base` if free, else `base (2)`, `base (3)`, ...
 func uniqueTagName(ctx context.Context, tx pgx.Tx, base string) (string, error) {
 	var exists bool
@@ -573,6 +790,7 @@ type idMapping struct {
 	tagMap    map[int64]int64
 	folderMap map[int64]int64
 	linkMap   map[int64]int64
+	noteMap   map[int64]int64
 }
 
 func newIDMapping() idMapping {
@@ -580,12 +798,19 @@ func newIDMapping() idMapping {
 		tagMap:    make(map[int64]int64),
 		folderMap: make(map[int64]int64),
 		linkMap:   make(map[int64]int64),
+		noteMap:   make(map[int64]int64),
 	}
 }
 
 // remapFileKey translates `screenshots/123.png` → `screenshots/456.png` when
 // link 123 was remapped to 456 by ModeDuplicate. Returns (newKey, true) if a
 // mapping applies, (key, false) otherwise.
+//
+// Note inline images are NOT handled here: their object keys are UUID-named
+// (`notes/<uuid>.jpg`, written by the note image-upload endpoint) rather than
+// id-named, so the key never encodes a note id that ModeDuplicate could remap
+// — the same UUID-keyed object is valid for both the original and the
+// duplicated note row.
 func (m idMapping) remapFileKey(key string) (string, bool) {
 	var prefix string
 	switch {

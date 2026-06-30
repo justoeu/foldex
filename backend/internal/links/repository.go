@@ -49,7 +49,7 @@ const linkFrom = `
     LEFT JOIN LATERAL (
         SELECT count(*) AS cnt, max(clicked_at) AS last_at
         FROM click_log
-        WHERE link_id = l.id
+        WHERE entity_kind = 'link' AND entity_id = l.id
     ) cl ON TRUE
 `
 
@@ -225,9 +225,9 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Link, error) {
 		args = append(args, q.TagIDs)
 		idx := len(args)
 		where = append(where, fmt.Sprintf(`l.id IN (
-            SELECT link_id FROM link_tag
-            WHERE tag_id = ANY($%d)
-            GROUP BY link_id
+            SELECT entity_id FROM link_tag
+            WHERE entity_kind = 'link' AND tag_id = ANY($%d)
+            GROUP BY entity_id
             HAVING count(DISTINCT tag_id) = %d
         )`, idx, len(q.TagIDs)))
 	}
@@ -421,13 +421,32 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Link
 	return r.Get(ctx, id)
 }
 
+// Delete removes a link and its dependent link_tag/click_log rows. The
+// migration 000014 FK CASCADE (link_tag/click_log → link) was dropped when
+// those tables were polymorphized for notes, so the cascade is now app-level:
+// both child tables are cleared inside the same tx as the link row delete.
 func (r *Repository) Delete(ctx context.Context, id int64) error {
-	ct, err := r.pool.Exec(ctx, `DELETE FROM link WHERE id = $1`, id)
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin delete tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM link_tag WHERE entity_kind = 'link' AND entity_id = $1`, id); err != nil {
+		return fmt.Errorf("delete link_tag: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM click_log WHERE entity_kind = 'link' AND entity_id = $1`, id); err != nil {
+		return fmt.Errorf("delete click_log: %w", err)
+	}
+	ct, err := tx.Exec(ctx, `DELETE FROM link WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete link: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
 		return httperr.ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete tx: %w", err)
 	}
 	return nil
 }
@@ -467,7 +486,7 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg
 		return "", fmt.Errorf("resolve link: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `INSERT INTO click_log (link_id) VALUES ($1)`, id); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id) VALUES ('link', $1)`, id); err != nil {
 		return "", fmt.Errorf("insert click_log: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -698,10 +717,10 @@ func (r *Repository) tagsFor(ctx context.Context, linkIDs []int64) (map[int64][]
 		return out, nil
 	}
 	rows, err := r.pool.Query(ctx, `
-        SELECT lt.link_id, t.id, t.name, t.color, t.icon
+        SELECT lt.entity_id, t.id, t.name, t.color, t.icon
         FROM link_tag lt
         JOIN tag t ON t.id = lt.tag_id
-        WHERE lt.link_id = ANY($1)
+        WHERE lt.entity_kind = 'link' AND lt.entity_id = ANY($1)
         ORDER BY t.name ASC
     `, linkIDs)
 	if err != nil {
@@ -721,7 +740,7 @@ func (r *Repository) tagsFor(ctx context.Context, linkIDs []int64) (map[int64][]
 
 // setLinkTags replaces the tag set for a link inside a tx.
 func setLinkTags(ctx context.Context, tx pgx.Tx, linkID int64, tagIDs []int64) error {
-	if _, err := tx.Exec(ctx, `DELETE FROM link_tag WHERE link_id = $1`, linkID); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM link_tag WHERE entity_kind = 'link' AND entity_id = $1`, linkID); err != nil {
 		return fmt.Errorf("clear link_tag: %w", err)
 	}
 	if len(tagIDs) == 0 {
@@ -729,11 +748,11 @@ func setLinkTags(ctx context.Context, tx pgx.Tx, linkID int64, tagIDs []int64) e
 	}
 	rows := make([][]any, 0, len(tagIDs))
 	for _, tid := range tagIDs {
-		rows = append(rows, []any{linkID, tid})
+		rows = append(rows, []any{"link", linkID, tid})
 	}
 	_, err := tx.CopyFrom(ctx,
 		pgx.Identifier{"link_tag"},
-		[]string{"link_id", "tag_id"},
+		[]string{"entity_kind", "entity_id", "tag_id"},
 		pgx.CopyFromRows(rows),
 	)
 	if err != nil {

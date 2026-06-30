@@ -20,6 +20,7 @@ import (
 	"foldex/internal/backup"
 	"foldex/internal/folders"
 	"foldex/internal/links"
+	"foldex/internal/notes"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
 )
@@ -55,7 +56,7 @@ func seedSnapshot(t *testing.T, pool *pgxpool.Pool, bucket *stubBucket) seeded {
 	require.NoError(t, err)
 
 	for i := 0; i < 3; i++ {
-		_, err := pool.Exec(ctx, `INSERT INTO click_log (link_id, clicked_at) VALUES ($1, now())`, la.ID)
+		_, err := pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id, clicked_at) VALUES ('link', $1, now())`, la.ID)
 		require.NoError(t, err)
 	}
 	bucket.objs[fmt.Sprintf("screenshots/%d.jpg", la.ID)] = []byte("img-A")
@@ -161,11 +162,12 @@ func TestRestore_SkipLeavesCollisionsAndIsIdempotentForUniqueEntities(t *testing
 	assert.EqualValues(t, 2, count(t, pool, "link"), "skip must not duplicate links")
 
 	// Re-key check: the snapshot's link_tag must resolve to the SURVIVING link
-	// and tag ids (old→new mapping), not create a dangling row. link_tag is
-	// UNIQUE(link_id, tag_id) so the existing pair is kept, not doubled.
+	// and tag ids (old→new mapping), not create a dangling row. link_tag's PK
+	// is (entity_kind, entity_id, tag_id) so the existing pair is kept, not
+	// doubled.
 	assert.EqualValues(t, 1, count(t, pool, "link_tag"), "link_tag must not be duplicated under skip")
 	assert.EqualValues(t, 1, scalar(t, pool,
-		`SELECT count(*) FROM link_tag lt JOIN link l ON l.id=lt.link_id JOIN tag t ON t.id=lt.tag_id
+		`SELECT count(*) FROM link_tag lt JOIN link l ON l.id=lt.entity_id AND lt.entity_kind='link' JOIN tag t ON t.id=lt.tag_id
 		 WHERE l.url='https://a.example' AND t.name='work'`),
 		"the surviving link must keep its tag after a skip restore")
 
@@ -284,6 +286,106 @@ func TestRestore_RejectsPathTraversalFileEntry(t *testing.T) {
 	_, err := svc.Restore(context.Background(), zr, backup.ModeSkip)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "path traversal")
+}
+
+// TestRestore_NotesRoundTripWipeMode locks that notes (plus their note_tag
+// and note_click rows, both living in the polymorphic link_tag/click_log
+// tables) survive an export→wipe→restore cycle with identity preserved —
+// the note-specific sibling of TestRestore_WipePreservesIdentityAndBumpsSequence.
+func TestRestore_NotesRoundTripWipeMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+
+	tag, err := tags.NewRepository(pool).Create(ctx, tags.CreateInput{Name: "pastebin", Color: "#abc"})
+	require.NoError(t, err)
+	nrepo := notes.NewRepository(pool)
+	n, err := nrepo.Create(ctx, notes.CreateInput{Title: "Recipe", BodyHTML: "<p>flour</p>", TagIDs: []int64{tag.ID}})
+	require.NoError(t, err)
+	_, err = nrepo.ViewAndResolve(ctx, n.Slug)
+	require.NoError(t, err)
+
+	zr := exportToReader(t, svc)
+	rep, err := svc.Restore(ctx, zr, backup.ModeWipe)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, 1, rep.Wiped.Notes)
+	assert.EqualValues(t, 1, rep.Inserted.Notes)
+	assert.True(t, rowExists(t, pool, "note", n.ID), "original note id must survive wipe restore")
+	assert.EqualValues(t, 1, scalar(t, pool, `SELECT count(*) FROM link_tag WHERE entity_kind='note' AND entity_id=$1`, n.ID))
+	assert.EqualValues(t, 1, scalar(t, pool, `SELECT count(*) FROM click_log WHERE entity_kind='note' AND entity_id=$1`, n.ID))
+
+	// Sequence bumped past the restored note id too.
+	n2, err := nrepo.Create(ctx, notes.CreateInput{Title: "After restore"})
+	require.NoError(t, err)
+	assert.Greater(t, n2.ID, n.ID)
+}
+
+// TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow documents the
+// deliberate divergence from links' skip semantics: notes have no natural
+// content-identity key (unlike link's UNIQUE url), so restoreSkip always
+// inserts a fresh note row rather than detecting "already restored" — see
+// db.go's restoreSkip comment.
+func TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+	_, err := notes.NewRepository(pool).Create(ctx, notes.CreateInput{Title: "Idempotency-immune"})
+	require.NoError(t, err)
+
+	zr := exportToReader(t, svc)
+	rep, err := svc.Restore(ctx, zr, backup.ModeSkip)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, rep.Inserted.Notes)
+	assert.EqualValues(t, 2, count(t, pool, "note"))
+
+	rep2, err := svc.Restore(ctx, zr, backup.ModeSkip)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, rep2.Inserted.Notes)
+	assert.EqualValues(t, 3, count(t, pool, "note"), "skip mode has no identity key for notes — every restore inserts another row")
+}
+
+// TestRestore_OldFormatBackupWithoutNotesKeyStillRestores is the forward-
+// compat guard: a backup produced before migration 000014 (DatabaseSnapshotVersion
+// 3, no "notes"/"note_tags"/"note_clicks" keys in database.json) must still
+// restore cleanly — the missing fields decode as nil slices and every note
+// loop becomes a no-op.
+func TestRestore_OldFormatBackupWithoutNotesKeyStillRestores(t *testing.T) {
+	pool := testdb.New(t)
+	svc := backup.NewService(pool, newStubBucket(), discardLogger())
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	writeJSON := func(name string, raw string) {
+		w, err := zw.Create(name)
+		require.NoError(t, err)
+		_, err = w.Write([]byte(raw))
+		require.NoError(t, err)
+	}
+	manifestJSON, err := json.Marshal(backup.Manifest{
+		Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: 8,
+	})
+	require.NoError(t, err)
+	writeJSON("manifest.json", string(manifestJSON))
+	// Pre-000014 shape: version 3, no notes/note_tags/note_clicks keys at all.
+	writeJSON("database.json", `{
+		"version": 3,
+		"tags": [{"id": 1, "name": "old-tag", "color": "#abc", "created_at": "2024-01-01T00:00:00Z"}],
+		"folders": [],
+		"links": [],
+		"link_tags": [],
+		"click_logs": []
+	}`)
+	require.NoError(t, zw.Close())
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+
+	rep, err := svc.Restore(context.Background(), zr, backup.ModeWipe)
+	require.NoError(t, err, "an old-format backup with no notes key must still restore")
+	assert.EqualValues(t, 0, rep.Inserted.Notes)
+	assert.True(t, tagNameExists(t, pool, "old-tag"))
 }
 
 func TestRestore_RejectsFileEntryOutsideAllowedPrefix(t *testing.T) {

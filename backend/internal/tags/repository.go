@@ -37,11 +37,14 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Tag, error) {
 }
 
 func (r *Repository) List(ctx context.Context) ([]Tag, error) {
+	// link_tag is polymorphic (entity_kind/entity_id) — LinkCount keeps its
+	// pre-notes meaning (links only) by filtering entity_kind='link' in the
+	// join condition rather than counting note-tagged rows too.
 	rows, err := r.pool.Query(ctx, `
         SELECT t.id, t.name, t.color, t.icon, t.created_at,
-               COUNT(lt.link_id) AS link_count
+               COUNT(lt.entity_id) AS link_count
         FROM tag t
-        LEFT JOIN link_tag lt ON lt.tag_id = t.id
+        LEFT JOIN link_tag lt ON lt.tag_id = t.id AND lt.entity_kind = 'link'
         GROUP BY t.id
         ORDER BY t.name ASC
     `)
