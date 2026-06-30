@@ -552,11 +552,26 @@ func insertLinkIfNew(ctx context.Context, pool *pgxpool.Pool, url, title string,
 func insertLinkInTx(ctx context.Context, tx pgx.Tx, url, title string, description *string, tagIDs []int64, folderID *int64, clickCount int64, createdAt *time.Time, wipeFirst bool) (int64, bool, bool, error) {
 	wiped := false
 	if wipeFirst {
-		ct, err := tx.Exec(ctx, `DELETE FROM link WHERE url = $1`, url)
-		if err != nil {
-			return 0, false, false, fmt.Errorf("wipe delete %q: %w", url, err)
+		// Resolve the id first so link_tag/click_log can be purged before the
+		// link row itself — migration 000014 dropped the FK ON DELETE CASCADE
+		// those tables used to carry (polymorphized via entity_kind, can't
+		// reference two tables), so cleanup is app-level now, same pattern as
+		// links.Repository.Delete.
+		var existingID int64
+		err := tx.QueryRow(ctx, `SELECT id FROM link WHERE url = $1`, url).Scan(&existingID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, false, fmt.Errorf("resolve wipe target %q: %w", url, err)
 		}
-		if ct.RowsAffected() > 0 {
+		if err == nil {
+			if _, err := tx.Exec(ctx, `DELETE FROM link_tag WHERE entity_kind = 'link' AND entity_id = $1`, existingID); err != nil {
+				return 0, false, false, fmt.Errorf("wipe link_tag %q: %w", url, err)
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM click_log WHERE entity_kind = 'link' AND entity_id = $1`, existingID); err != nil {
+				return 0, false, false, fmt.Errorf("wipe click_log %q: %w", url, err)
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM link WHERE id = $1`, existingID); err != nil {
+				return 0, false, false, fmt.Errorf("wipe delete %q: %w", url, err)
+			}
 			wiped = true
 		}
 	}

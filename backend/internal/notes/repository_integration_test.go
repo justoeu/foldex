@@ -317,6 +317,13 @@ func TestCrossContamination_LinkAndNoteRowsDoNotLeak(t *testing.T) {
 	require.NoError(t, err)
 	note, err := nrepo.Create(ctx, notes.CreateInput{Title: "N", TagIDs: []int64{tag.ID}})
 	require.NoError(t, err)
+	// The whole point of this test is that link.ID and note.ID collide (a
+	// fresh testdb gives both BIGSERIALs the same starting value) — without
+	// this, entity_id alone can't be ambiguous and the test would pass for a
+	// trivial reason instead of proving cross-kind isolation. Assert it
+	// explicitly so a future fixture-ordering change that breaks the
+	// collision fails loudly here instead of silently testing nothing.
+	require.Equal(t, link.ID, note.ID, "test premise: link and note must share the same numeric id")
 
 	_, err = lrepo.ClickAndResolve(ctx, link.ID)
 	require.NoError(t, err)

@@ -71,7 +71,12 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Note, error) {
 		}
 	}
 
-	bodyText := htmlsanitize.PlainText(in.BodyHTML)
+	// Defense in depth: CreateInput.Normalize() (called by the handler) already
+	// sanitizes BodyHTML, but sanitizing again here — idempotent, cheap — means
+	// the repository is safe even if a future caller (a script, a new
+	// endpoint) reaches it directly without going through the DTO layer.
+	bodyHTML := htmlsanitize.Sanitize(in.BodyHTML)
+	bodyText := htmlsanitize.PlainText(bodyHTML)
 
 	var id int64
 	for attempt := 0; attempt < 100; attempt++ {
@@ -83,7 +88,7 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Note, error) {
             INSERT INTO note (title, slug, body_html, body_text, pinned, folder_id)
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id
-        `, in.Title, candidate, in.BodyHTML, bodyText, in.Pinned, in.FolderID).Scan(&id)
+        `, in.Title, candidate, bodyHTML, bodyText, in.Pinned, in.FolderID).Scan(&id)
 		if err == nil {
 			break
 		}
@@ -272,11 +277,13 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Note
 		i++
 	}
 	if in.BodyHTML != nil {
+		// Defense in depth — see the matching comment in Create.
+		bodyHTML := htmlsanitize.Sanitize(*in.BodyHTML)
 		sets = append(sets, fmt.Sprintf("body_html = $%d", i))
-		args = append(args, *in.BodyHTML)
+		args = append(args, bodyHTML)
 		i++
 		sets = append(sets, fmt.Sprintf("body_text = $%d", i))
-		args = append(args, htmlsanitize.PlainText(*in.BodyHTML))
+		args = append(args, htmlsanitize.PlainText(bodyHTML))
 		i++
 	}
 	if in.Pinned != nil {

@@ -252,11 +252,16 @@ func (r *Repository) Delete(ctx context.Context, id int64) error {
 // DeleteCascade removes the folder AND every link inside it — recursively
 // through any subfolder tree. Wrapped in a transaction so a failure on any
 // step rolls back together. `link_tag` and `click_log` rows for the deleted
-// links clean up automatically via their existing `ON DELETE CASCADE` FKs;
-// tags themselves survive (only the link-side associations vanish).
+// links are purged explicitly below — migration 000014 polymorphized both
+// tables and DROPPED their FK to link(id) (a polymorphic column can't
+// reference two tables), so the `ON DELETE CASCADE` this comment used to
+// describe no longer exists; cleanup is app-level now, same as
+// links.Repository.Delete. Tags themselves survive (only the link-side
+// associations vanish).
 //
 // The recursive CTE collects every descendant folder id (including the
-// target), then deletes their links and finally the folders themselves.
+// target), then purges link_tag/click_log for their links, deletes the
+// links, and finally the folders themselves.
 func (r *Repository) DeleteCascade(ctx context.Context, id int64) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -264,6 +269,32 @@ func (r *Repository) DeleteCascade(ctx context.Context, id int64) error {
 	}
 	defer tx.Rollback(ctx)
 
+	if _, err := tx.Exec(ctx, `
+        WITH RECURSIVE subtree AS (
+          SELECT id FROM folder WHERE id = $1
+          UNION ALL
+          SELECT f.id FROM folder f
+          JOIN subtree s ON f.parent_id = s.id
+        )
+        DELETE FROM link_tag WHERE entity_kind = 'link' AND entity_id IN (
+          SELECT l.id FROM link l WHERE l.folder_id IN (SELECT id FROM subtree)
+        )
+    `, id); err != nil {
+		return fmt.Errorf("delete link_tag for links in subtree: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+        WITH RECURSIVE subtree AS (
+          SELECT id FROM folder WHERE id = $1
+          UNION ALL
+          SELECT f.id FROM folder f
+          JOIN subtree s ON f.parent_id = s.id
+        )
+        DELETE FROM click_log WHERE entity_kind = 'link' AND entity_id IN (
+          SELECT l.id FROM link l WHERE l.folder_id IN (SELECT id FROM subtree)
+        )
+    `, id); err != nil {
+		return fmt.Errorf("delete click_log for links in subtree: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `
         WITH RECURSIVE subtree AS (
           SELECT id FROM folder WHERE id = $1

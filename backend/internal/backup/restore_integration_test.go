@@ -347,6 +347,59 @@ func TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow(t *testing.T) {
 	assert.EqualValues(t, 3, count(t, pool, "note"), "skip mode has no identity key for notes — every restore inserts another row")
 }
 
+// TestRestore_SanitizesNoteBodyHTMLFromHostileZip is the regression lock for
+// the XSS gap a malicious backup zip could otherwise exploit: restore writes
+// note rows straight to SQL (CopyFrom/INSERT), bypassing
+// notes.Repository/notes.CreateInput.Normalize entirely, so the database.json
+// is a trust boundary in its own right — the same way Snapshot.Sanitize
+// already treats tag/folder colors. GET /n/{id-or-slug} renders body_html as
+// raw, unescaped template.HTML on the assumption it was sanitized at write
+// time; without this guard a crafted backup plants a payload that executes on
+// every visitor of that public, unauthenticated route.
+func TestRestore_SanitizesNoteBodyHTMLFromHostileZip(t *testing.T) {
+	pool := testdb.New(t)
+	svc := backup.NewService(pool, newStubBucket(), discardLogger())
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	writeJSON := func(name string, raw string) {
+		w, err := zw.Create(name)
+		require.NoError(t, err)
+		_, err = w.Write([]byte(raw))
+		require.NoError(t, err)
+	}
+	manifestJSON, err := json.Marshal(backup.Manifest{
+		Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
+	})
+	require.NoError(t, err)
+	writeJSON("manifest.json", string(manifestJSON))
+	writeJSON("database.json", `{
+		"version": 4,
+		"tags": [], "folders": [], "links": [], "link_tags": [], "click_logs": [],
+		"notes": [{
+			"id": 1, "title": "hostile",
+			"body_html": "<p>hi</p><script>alert(1)</script><img src=\"x\" onerror=\"alert(2)\">",
+			"body_text": "doesn't matter — server re-derives it",
+			"pinned": false, "folder_id": null, "cover_url": null,
+			"created_at": "2024-01-01T00:00:00Z", "updated_at": "2024-01-01T00:00:00Z"
+		}],
+		"note_tags": [], "note_clicks": []
+	}`)
+	require.NoError(t, zw.Close())
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+
+	rep, err := svc.Restore(context.Background(), zr, backup.ModeWipe)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, rep.Inserted.Notes)
+
+	var bodyHTML string
+	require.NoError(t, pool.QueryRow(context.Background(), `SELECT body_html FROM note WHERE title = 'hostile'`).Scan(&bodyHTML))
+	assert.NotContains(t, bodyHTML, "<script", "restore must sanitize note body_html from the zip")
+	assert.NotContains(t, bodyHTML, "onerror", "restore must strip event handler attributes")
+	assert.Contains(t, bodyHTML, "<p>hi</p>", "legitimate markup must survive sanitization")
+}
+
 // TestRestore_OldFormatBackupWithoutNotesKeyStillRestores is the forward-
 // compat guard: a backup produced before migration 000014 (DatabaseSnapshotVersion
 // 3, no "notes"/"note_tags"/"note_clicks" keys in database.json) must still

@@ -10,7 +10,21 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/links"
+	"foldex/internal/pkg/htmlsanitize"
 )
+
+// sanitizeNoteBody re-derives a note's body_html/body_text the same way
+// notes.CreateInput.Normalize() does. The backup zip is a trust boundary —
+// database.json's note rows are attacker-controlled the same way tag/folder
+// colors are (Snapshot.Sanitize's rationale) — and restore writes go straight
+// to SQL via CopyFrom/INSERT, bypassing notes.Repository (and therefore
+// notes.CreateInput.Normalize) entirely. Without this, a crafted backup zip
+// could plant <script>/onerror=/javascript: payloads that later render as raw
+// template.HTML on the public, unauthenticated GET /n/{id-or-slug} route.
+func sanitizeNoteBody(bodyHTML string) (string, string) {
+	clean := htmlsanitize.Sanitize(bodyHTML)
+	return clean, htmlsanitize.PlainText(clean)
+}
 
 // readSnapshot reads all 5 tables inside the given tx and returns a Snapshot.
 // Caller is responsible for the transaction (and the isolation level).
@@ -288,8 +302,9 @@ func restoreIdentity(ctx context.Context, tx pgx.Tx, snap *Snapshot) (idMapping,
 					slug = fmt.Sprintf("note-%d", n.ID)
 				}
 			}
+			bodyHTML, bodyText := sanitizeNoteBody(n.BodyHTML)
 			rows = append(rows, []any{
-				n.ID, n.Title, slug, n.BodyHTML, n.BodyText, n.Pinned, n.FolderID, n.CoverURL,
+				n.ID, n.Title, slug, bodyHTML, bodyText, n.Pinned, n.FolderID, n.CoverURL,
 				n.CreatedAt, n.UpdatedAt,
 			})
 			m.noteMap[n.ID] = n.ID
@@ -453,12 +468,13 @@ func restoreSkip(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, Counts
 		if err != nil {
 			return inserted, skipped, m, err
 		}
+		bodyHTML, bodyText := sanitizeNoteBody(n.BodyHTML)
 		var newID int64
 		if err := tx.QueryRow(ctx, `
             INSERT INTO note (title, slug, body_html, body_text, pinned, folder_id, cover_url, created_at, updated_at)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
             RETURNING id`,
-			n.Title, slug, n.BodyHTML, n.BodyText, n.Pinned, folderID, n.CoverURL, n.CreatedAt, n.UpdatedAt).Scan(&newID); err != nil {
+			n.Title, slug, bodyHTML, bodyText, n.Pinned, folderID, n.CoverURL, n.CreatedAt, n.UpdatedAt).Scan(&newID); err != nil {
 			return inserted, skipped, m, fmt.Errorf("insert note: %w", err)
 		}
 		m.noteMap[n.ID] = newID
@@ -638,12 +654,13 @@ func restoreDuplicate(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, [
 		if err != nil {
 			return inserted, warnings, m, err
 		}
+		bodyHTML, bodyText := sanitizeNoteBody(n.BodyHTML)
 		var newID int64
 		if err := tx.QueryRow(ctx, `
             INSERT INTO note (title, slug, body_html, body_text, pinned, folder_id, cover_url, created_at, updated_at)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
             RETURNING id`,
-			n.Title, slug, n.BodyHTML, n.BodyText, n.Pinned, folderID, n.CoverURL, n.CreatedAt, n.UpdatedAt).Scan(&newID); err != nil {
+			n.Title, slug, bodyHTML, bodyText, n.Pinned, folderID, n.CoverURL, n.CreatedAt, n.UpdatedAt).Scan(&newID); err != nil {
 			return inserted, warnings, m, fmt.Errorf("insert note: %w", err)
 		}
 		m.noteMap[n.ID] = newID
