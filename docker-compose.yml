@@ -108,8 +108,8 @@ services:
       # The cert needs to include your LAN IP in its SAN — see README HTTPS
       # section. WITHOUT a SAN match the browser rejects the connection
       # before nginx even decides what to serve.
-      - "${WEB_BIND_HOST:-127.0.0.1}:${WEB_PORT:-9088}:80"
-      - "${WEB_BIND_HOST:-127.0.0.1}:${WEB_HTTPS_PORT:-9444}:443"
+      - "${WEB_BIND_HOST:-127.0.0.1}:${WEB_PORT:-9088}:8080"
+      - "${WEB_BIND_HOST:-127.0.0.1}:${WEB_HTTPS_PORT:-9444}:8443"
     # Mount the mkcert pair from the host so the image stays generic.
     # The path is gitignored locally — `make up` after `mkcert ...` lands
     # the cert here; the entrypoint detects it and skips the ephemeral

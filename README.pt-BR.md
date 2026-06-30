@@ -70,7 +70,7 @@ open http://localhost:9088
 
 ### HTTPS (dev local) via mkcert
 
-Nginx serve o container web em HTTPS na `:443` interna, exposto no host em
+Nginx serve o container web em HTTPS na `:8443` interna, exposto no host em
 `WEB_HTTPS_PORT` (default **9444**). O cert é assinado por uma CA local —
 para o navegador confiar sem warnings, instale o
 [`mkcert`](https://github.com/FiloSottile/mkcert) uma vez no host e emita

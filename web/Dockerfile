@@ -27,6 +27,7 @@ FROM nginx:1.31-alpine
 RUN apk upgrade --no-cache && apk add --no-cache openssl
 
 COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.main.conf /etc/nginx/nginx.conf
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Cert bootstrap — generates an ephemeral self-signed pair when no volume is
@@ -36,4 +37,16 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY entrypoint-certs.sh /docker-entrypoint.d/40-foldex-certs.sh
 RUN chmod +x /docker-entrypoint.d/40-foldex-certs.sh
 
-EXPOSE 80 443
+# Run as the non-root `nginx` user (UID 101, shipped by the base image).
+# nginx listens on 8080/8443 inside the container (see nginx.conf) so no
+# privileged ports are needed — docker-compose maps the host ports to the
+# unprivileged in-container ports, keeping the operator-facing URLs
+# (https://host:9444) unchanged. Pre-create and chown the dirs the
+# entrypoint + worker need to write to: /etc/nginx/certs (entrypoint cert
+# bootstrap) and /var/cache/nginx (proxy temp dirs). The PID lives in
+# /tmp (nginx.main.conf override) which is already world-writable.
+RUN mkdir -p /etc/nginx/certs /var/cache/nginx && \
+    chown -R nginx:nginx /etc/nginx/certs /var/cache/nginx
+USER nginx
+
+EXPOSE 8080 8443
