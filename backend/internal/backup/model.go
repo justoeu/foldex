@@ -17,14 +17,19 @@ const ManifestVersion = "1.0"
 // SchemaVersion mirrors the latest applied DB migration. Restoring a backup
 // with a higher SchemaVersion than the server's current = fatal error
 // (server doesn't know the layout). Lower = warning (defaults applied).
-const CurrentSchemaVersion = 8
+const CurrentSchemaVersion = 9
 
 // DatabaseSnapshotVersion is the schema of database.json itself. v3 = adds
-// link_tags + click_logs to v2 (which had tags/folders/links only).
-const DatabaseSnapshotVersion = 3
+// link_tags + click_logs to v2 (which had tags/folders/links only). v4 = adds
+// notes + note_tags + note_clicks (migration 000014 polymorphized link_tag/
+// click_log via entity_kind; the JSON wire shape of existing link rows is
+// unchanged). An older backup (no "notes" key) decodes fine — missing array
+// fields default to nil/empty.
+const DatabaseSnapshotVersion = 4
 
 type Counts struct {
 	Links     int64 `json:"links"`
+	Notes     int64 `json:"notes"`
 	Tags      int64 `json:"tags"`
 	Folders   int64 `json:"folders"`
 	LinkTags  int64 `json:"link_tags"`
@@ -45,13 +50,24 @@ type Manifest struct {
 
 // Snapshot is the in-memory shape of database.json. Field names are
 // snake_case JSON to match what the existing exporter/importer use.
+//
+// Notes, NoteTags, NoteClicks are kept as separate arrays (rather than
+// folding into LinkTags/ClickLogs) even though both pairs ultimately write to
+// the same polymorphic link_tag/click_log tables — keeping the wire format
+// split by entity kind means an old backup (DatabaseSnapshotVersion < 4, no
+// "notes"/"note_tags"/"note_clicks" keys) decodes with these as nil slices
+// and every restore mode's note loop is simply a no-op, with zero special
+// casing required.
 type Snapshot struct {
-	Version   int          `json:"version"`
-	Tags      []TagRow     `json:"tags"`
-	Folders   []FolderRow  `json:"folders"`
-	Links     []LinkRow    `json:"links"`
-	LinkTags  []LinkTagRow `json:"link_tags"`
-	ClickLogs []ClickRow   `json:"click_logs"`
+	Version    int            `json:"version"`
+	Tags       []TagRow       `json:"tags"`
+	Folders    []FolderRow    `json:"folders"`
+	Links      []LinkRow      `json:"links"`
+	Notes      []NoteRow      `json:"notes"`
+	LinkTags   []LinkTagRow   `json:"link_tags"`
+	NoteTags   []NoteTagRow   `json:"note_tags"`
+	ClickLogs  []ClickRow     `json:"click_logs"`
+	NoteClicks []NoteClickRow `json:"note_clicks"`
 }
 
 // defaultColor is the indigo the DTO layer defaults to on Create/Update. Kept
@@ -124,6 +140,31 @@ type LinkTagRow struct {
 
 type ClickRow struct {
 	LinkID    int64     `json:"link_id"`
+	ClickedAt time.Time `json:"clicked_at"`
+}
+
+// NoteRow mirrors LinkRow's shape minus URL/Favicon/PreviewStatus/PreviewError
+// (notes have no external resource to preview) plus the rich-content fields.
+type NoteRow struct {
+	ID        int64     `json:"id"`
+	Title     string    `json:"title"`
+	Slug      string    `json:"slug"`
+	BodyHTML  string    `json:"body_html"`
+	BodyText  string    `json:"body_text"`
+	Pinned    bool      `json:"pinned"`
+	FolderID  *int64    `json:"folder_id"`
+	CoverURL  *string   `json:"cover_url"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type NoteTagRow struct {
+	NoteID int64 `json:"note_id"`
+	TagID  int64 `json:"tag_id"`
+}
+
+type NoteClickRow struct {
+	NoteID    int64     `json:"note_id"`
 	ClickedAt time.Time `json:"clicked_at"`
 }
 

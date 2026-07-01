@@ -16,15 +16,16 @@ import {
 } from '../api/links'
 import { safeImageUrl } from '../lib/url'
 import { relativeTime } from '../lib/time'
-import type { Link } from '../api/types'
+import type { Link, MergeSource } from '../api/types'
 
 type Props = {
   link: Link
   onEdit: (l: Link) => void
   density?: 'normal' | 'short' | 'medium' | 'tall'
-  // Drag-and-drop: card is the source of `dnd:link/<id>` and accepts a drop
-  // FROM another link card (which triggers the link↔link merge — see App.tsx).
-  onMergeWith?: (sourceId: number, targetId: number) => void
+  // Drag-and-drop: card is the source of `application/x-foldex-link/<id>` and
+  // accepts a drop from another link card OR a note card (which triggers a
+  // link↔link or link↔note merge — see App.tsx's onMergeEntries).
+  onMergeWith?: (source: MergeSource, targetId: number) => void
 }
 
 // Decide card height purely from how much content we have. Tall when a real
@@ -119,14 +120,16 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
       }}
       onDragEnd={() => setDragging(false)}
       onDragOver={(e) => {
-        // Accept only OTHER link cards. Folder targets handle their own drop.
+        // Accept other link cards AND note cards. Folder targets handle
+        // their own drop.
         const raw = e.dataTransfer.types
-        if (!raw.includes('application/x-foldex-link')) return
+        if (!raw.includes('application/x-foldex-link') && !raw.includes('application/x-foldex-note')) return
         e.preventDefault()
         e.dataTransfer.dropEffect = 'move'
       }}
       onDragEnter={(e) => {
-        if (e.dataTransfer.types.includes('application/x-foldex-link')) setDragOver(true)
+        const raw = e.dataTransfer.types
+        if (raw.includes('application/x-foldex-link') || raw.includes('application/x-foldex-note')) setDragOver(true)
       }}
       onDragLeave={(e) => {
         // Only clear when the leave is to outside the card (not a child).
@@ -135,11 +138,17 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
       }}
       onDrop={(e) => {
         setDragOver(false)
-        const raw = e.dataTransfer.getData('application/x-foldex-link')
-        const sourceId = Number(raw)
-        if (!sourceId || sourceId === link.id) return
+        const linkRaw = e.dataTransfer.getData('application/x-foldex-link')
+        const noteRaw = e.dataTransfer.getData('application/x-foldex-note')
+        const source: MergeSource | null = linkRaw
+          ? { kind: 'link', id: Number(linkRaw) }
+          : noteRaw
+            ? { kind: 'note', id: Number(noteRaw) }
+            : null
+        if (!source || !source.id) return
+        if (source.kind === 'link' && source.id === link.id) return
         e.preventDefault()
-        onMergeWith?.(sourceId, link.id)
+        onMergeWith?.(source, link.id)
       }}
     >
       <button

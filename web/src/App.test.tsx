@@ -174,6 +174,68 @@ describe('App', () => {
     expect(first).toMatch(/Zebra/)
   })
 
+  it('renders notes interleaved with links in the default cards grid', async () => {
+    state.links.push({
+      id: 10, url: 'https://a', title: 'A link', click_count: 0,
+      preview_status: 'ok', created_at: '', updated_at: '', tags: [],
+    } as any)
+    state.notes.push({
+      id: 1, title: 'A note', slug: 'a-note', body_html: '<p>hi</p>', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    renderWithProviders(<App />)
+    await waitFor(() => expect(screen.getByText('A link')).toBeInTheDocument())
+    expect(screen.getByText('A note')).toBeInTheDocument()
+    expect(document.querySelector('.fx-card-note-badge')).not.toBeNull()
+  })
+
+  it('A→Z sort interleaves folders, links, and notes by name', async () => {
+    state.folders.push({
+      id: 1, name: 'Zebra folder', color: '#000', link_count: 0, preview_links: [], preview_folders: [],
+      created_at: '',
+    } as any)
+    state.links.push({
+      id: 10, url: 'https://a', title: 'Apple link', click_count: 0,
+      preview_status: 'ok', created_at: '', updated_at: '', tags: [],
+    } as any)
+    state.notes.push({
+      id: 1, title: 'Mango note', slug: 'mango-note', body_html: '', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByText('Apple link')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /A→Z/ }))
+    const cards = document.querySelectorAll('.fx-card')
+    const titles = Array.from(cards).map((c) => c.textContent ?? '')
+    expect(titles[0]).toMatch(/Apple link/)
+    expect(titles[1]).toMatch(/Mango note/)
+    expect(titles[2]).toMatch(/Zebra folder/)
+  })
+
+  it('opens the new-note dialog via ⌥M', async () => {
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await user.keyboard('{Alt>}m{/Alt}')
+    expect(await screen.findByRole('dialog', { name: /new note/i })).toBeInTheDocument()
+  })
+
+  it('opens edit dialog with loaded fields from a note card', async () => {
+    state.notes.push({
+      id: 1, title: 'Editable note', slug: 'editable-note', body_html: '<p>content</p>', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByText('Editable note')).toBeInTheDocument())
+    await user.click(screen.getByText('Editable note'))
+    await waitFor(() => expect(screen.getByRole('dialog', { name: /edit note/i })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByPlaceholderText('Give your note a title…')).toHaveValue('Editable note'))
+  })
+
   it('Esc closes a modal without popping the folder underneath it', async () => {
     state.folders.push({
       id: 1, name: 'A', color: '#000', parent_id: null, link_count: 0, folder_count: 0,

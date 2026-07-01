@@ -16,10 +16,12 @@ import (
 
 	"foldex/internal/backup"
 	"foldex/internal/config"
+	"foldex/internal/entries"
 	"foldex/internal/exporter"
 	"foldex/internal/folders"
 	"foldex/internal/importer"
 	"foldex/internal/links"
+	"foldex/internal/notes"
 	"foldex/internal/push"
 	"foldex/internal/redirect"
 	"foldex/internal/stats"
@@ -71,8 +73,13 @@ func New(d Deps) http.Handler {
 
 	r.Get("/healthz", healthz(d.Pool))
 
-	// Redirect outside /api keeps the URL short and avoids CORS preflight.
+	// Redirect/view routes outside /api keep the URL short, avoid CORS
+	// preflight, and stay reachable without the SHARED_SECRET guard — both
+	// /go/{id-or-slug} (link redirect) and /n/{id-or-slug} (note render) are
+	// meant to be shareable the same way.
+	notesRepo := notes.NewRepository(d.Pool)
 	redirect.NewHandler(links.NewRepository(d.Pool)).Mount(r)
+	notes.NewPublicHandler(notesRepo).Mount(r)
 
 	r.Route("/api", func(api chi.Router) {
 		if d.Config.SharedSecret != "" {
@@ -83,6 +90,13 @@ func New(d Deps) http.Handler {
 
 		linksRepo := links.NewRepository(d.Pool)
 		api.Route("/links", links.NewHandler(linksRepo, d.Worker).WithMetadataFetcher(d.LinkMetadataFetcher).Mount)
+
+		// d.Storage is optional — when nil, Handler.Delete's image cleanup is
+		// a no-op (CRUD itself doesn't need storage). The actual upload route
+		// (POST /api/notes/images) is mounted further below, gated the same
+		// way links' image upload is.
+		api.Route("/notes", notes.NewHandler(notesRepo, d.Storage).Mount)
+		api.Route("/entries", entries.NewHandler(entries.NewRepository(d.Pool)).Mount)
 
 		// Screenshot and file-proxy endpoints are only registered when both
 		// a Screenshotter and Storage implementation are provided.
@@ -100,6 +114,13 @@ func New(d Deps) http.Handler {
 			api.Post("/links/{id}/image", sh.UploadImage)
 			api.Delete("/links/{id}/image", sh.DeleteImage)
 			api.Get("/files/*", sh.ProxyFile)
+
+			// Note inline-image upload lives in this same gate (rather than its
+			// own `d.Storage != nil` check) so it can never be mounted without
+			// ProxyFile also being mounted — an uploaded note image would
+			// otherwise have nowhere to be served back from.
+			nih := notes.NewImageHandler(d.Storage, d.Logger)
+			api.Post("/notes/images", nih.Upload)
 		}
 
 		api.Route("/import", importer.NewHandler(d.Pool, d.Worker).Mount)

@@ -21,6 +21,9 @@ type Props = {
   // Called when a link card is dropped on this folder. App.tsx handles the
   // PATCH and query invalidation; FolderCard only signals the gesture.
   onDropLink?: (linkId: number, folderId: number) => void
+  // Called when a note card is dropped on this folder — same contract as
+  // onDropLink, PATCHing the note's folder_id instead.
+  onDropNote?: (noteId: number, folderId: number) => void
   // Called when ANOTHER folder card is dropped on this one. Source becomes
   // child of target. App.tsx checks for cycles (target descendant of source)
   // before issuing the PATCH — FolderCard only signals the gesture.
@@ -32,6 +35,7 @@ type Props = {
 }
 
 const MIME_LINK = 'application/x-foldex-link'
+const MIME_NOTE = 'application/x-foldex-note'
 const MIME_FOLDER = 'application/x-foldex-folder'
 
 // iPhone-style folder card: 2x2 grid of mini-thumbnails (preview_links) inside
@@ -42,7 +46,7 @@ const MIME_FOLDER = 'application/x-foldex-folder'
 export const FolderCard = memo(FolderCardImpl)
 FolderCard.displayName = 'FolderCard'
 
-function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropFolder, compact }: Props) {
+function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropNote, onDropFolder, compact }: Props) {
   const { t } = useTranslation()
   const tiles = mixTiles(folder.preview_links, folder.preview_folders)
   const total = folder.link_count + folder.folder_count
@@ -51,8 +55,9 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropFolder, comp
   const [dragOver, setDragOver] = useState(false)
   const [dragging, setDragging] = useState(false)
 
-  const acceptsDrop = (types: ReadonlyArray<string>): 'link' | 'folder' | null => {
+  const acceptsDrop = (types: ReadonlyArray<string>): 'link' | 'note' | 'folder' | null => {
     if (types.includes(MIME_LINK)) return 'link'
+    if (types.includes(MIME_NOTE)) return 'note'
     if (types.includes(MIME_FOLDER)) return 'folder'
     return null
   }
@@ -100,12 +105,20 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropFolder, comp
       onDrop={(e) => {
         setDragOver(false)
         const linkRaw = e.dataTransfer.getData(MIME_LINK)
+        const noteRaw = e.dataTransfer.getData(MIME_NOTE)
         const folderRaw = e.dataTransfer.getData(MIME_FOLDER)
         if (linkRaw) {
           const sourceId = Number(linkRaw)
           if (!sourceId) return
           e.preventDefault()
           onDropLink?.(sourceId, folder.id)
+          return
+        }
+        if (noteRaw) {
+          const sourceId = Number(noteRaw)
+          if (!sourceId) return
+          e.preventDefault()
+          onDropNote?.(sourceId, folder.id)
           return
         }
         if (folderRaw) {

@@ -6,11 +6,11 @@
   <img src="docs/assets/home-empty.png" alt="foldex — self-hosted bookmark manager (home view with empty state, tag sidebar, topbar with search + sort + density controls, New folder / New link CTAs)" width="100%"/>
 </p>
 
-> Self-hosted bookmark manager with rich tagging, nestable folders, click tracking, visual URL previews, **per-link change detection + Web Push**, full backup, and a browser extension.
+> Self-hosted bookmark manager with rich tagging, nestable folders, click tracking, visual URL previews, **pastebin-style rich-text notes**, **per-link change detection + Web Push**, full backup, and a browser extension.
 
-Foldex is a personal "smart bookmarks bar" — it stores links organized by **nestable folders + M:N tags**, shows **what you actually click** (telemetry via `/go/:id`), captures every URL visually (OG image / favicon / screenshot fallback), **watches the pages you care about** (RSS/Atom feed fingerprint with content-hash fallback) and pings you via Web Push when they change, and runs **entirely on your own machine** (Postgres + MinIO + Go + React in containers).
+Foldex is a personal "smart bookmarks bar" — it stores links organized by **nestable folders + M:N tags**, shows **what you actually click** (telemetry via `/go/:id`), captures every URL visually (OG image / favicon / screenshot fallback), lets you jot down **rich-text notes** (Tiptap editor with inline images) that live in the same grid/search/tags/folders as links, **watches the pages you care about** (RSS/Atom feed fingerprint with content-hash fallback) and pings you via Web Push when they change, and runs **entirely on your own machine** (Postgres + MinIO + Go + React in containers).
 
-> Stack: **Go 1.26 (Chi · pgx) · PostgreSQL 18 · MinIO · Vite 8 + React 19 + TypeScript + bun · TanStack Query · react-i18next (en/pt/es) · Vitest 4**. Versioning policy + invariants in [`CLAUDE.md`](CLAUDE.md).
+> Stack: **Go 1.26 (Chi · pgx) · PostgreSQL 18 · MinIO · Vite 8 + React 19 + TypeScript + bun · TanStack Query · Tiptap 3 · react-i18next (en/pt/es) · Vitest 4**. Versioning policy + invariants in [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
@@ -32,6 +32,7 @@ Native bookmarks are fine for "save a page quickly and forget it". Once you pass
 | **Pinned/favorites = a tiny separate folder.** Visual only.                     | `pinned` is a real column on the table. `ORDER BY pinned DESC, …` applies in every sort mode. Gradient badge always visible. |
 | **Data embedded in the browser.** Switched machines? Reinstalled Chrome? Pray. | Postgres + MinIO in containers. `make up` on a new machine and your backup ZIP restores everything (DB + images) in ~minutes. |
 | **No way to know when a page you bookmarked changes.** A board, a release notes page, a status page — you find out by opening it. | Per-link opt-in (hourly/daily/weekly). Backend runs a fingerprint worker (RSS/Atom feed if present, content-hash fallback) and fires a **Web Push notification** when content changes. Bell in the Topbar manages the subscription; amber badge on the card flags unseen changes; "Recent updates" section in the sidebar lists the last N. Works with the tab closed (Service Worker). |
+| **Pastebin/notes app is a separate tool.** Snippets and links live in different places. | **Notes** (`⌥M`) are a first-class entity alongside links: rich-text editor (Tiptap — bold/headings/lists/code/inline images), same tags/folders/pin/search as links, interleaved in the same grid with an emerald badge, shareable via a public `/n/{slug}` page. |
 
 ### Real scenarios that flipped the switch (native bookmarks → foldex)
 
@@ -202,7 +203,13 @@ sleep 3 && curl -s localhost:9089/api/links/1 | jq '.preview_status, .og_image_u
 # 5. Resolve the short link (302 + counter bump).
 curl -sI localhost:9089/go/1 | head -3
 
-# 6. Open the SPA and try ⌥K (palette) / ⌥N (new link).
+# 6. Create a note (server-side sanitized rich HTML) and render its public page.
+curl -s -X POST localhost:9089/api/notes \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Scratchpad","body_html":"<p>Hello <strong>world</strong></p>"}' | jq .
+curl -s localhost:9089/n/scratchpad | grep -o '<h1>.*</h1>'
+
+# 7. Open the SPA and try ⌥K (palette) / ⌥N (new link) / ⌥M (new note).
 open http://localhost:9088
 ```
 
@@ -213,6 +220,7 @@ open http://localhost:9088
 | `⌥K` / `Alt+K`   | Command palette (fuzzy search). `⌘K` conflicts with browsers' URL-bar focus. |
 | `⌥N` / `Alt+N`   | New link (⌘N is hard-claimed by browser for "New window") |
 | `⌥F` / `Alt+F`   | New folder (⌥P collided with other handlers; "F" for Folder) |
+| `⌥M` / `Alt+M`   | New note (⌘M is hard-claimed by macOS for "Minimize window") |
 | `⌘V` / `Ctrl+V`  | Paste a URL anywhere on the page → New Link dialog opens with it pre-filled. No-ops when typing in a field or when any dialog is already open. |
 | `Esc`            | Close any open modal / exit folder view |
 | `⌘Enter` (popup) | Save (in the browser extension) |

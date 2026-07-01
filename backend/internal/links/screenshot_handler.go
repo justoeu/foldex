@@ -17,8 +17,10 @@ import (
 
 // allowedFilePrefixes is the closed set of object-key prefixes ProxyFile is
 // allowed to serve. Keeps the proxy from being a generic read-any-key MinIO
-// gateway.
-var allowedFilePrefixes = []string{"screenshots/", "images/"}
+// gateway. "notes/" holds inline images uploaded through the note rich-text
+// editor (notes.ImageHandler) — ProxyFile is shared infrastructure so notes
+// reuses it rather than standing up a second file-serving endpoint.
+var allowedFilePrefixes = []string{"screenshots/", "images/", "notes/"}
 
 // allowedUploadMIMEs is the closed set of MIME types accepted by UploadImage,
 // detected from the actual upload bytes (NOT from the client-supplied header).

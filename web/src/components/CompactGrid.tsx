@@ -4,47 +4,45 @@ import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
 import { goHref } from '../api/links'
+import { goNoteHref } from '../api/notes'
 import { primaryColor } from '../lib/tagColor'
-import type { Folder, Link } from '../api/types'
+import { mergeAlphaCells } from '../lib/mergeAlphaCells'
+import type { Entry, Folder, Link } from '../api/types'
 
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
+type NoteEntry = Extract<Entry, { kind: 'note' }>
 
 type Props = {
   folders: Folder[]
-  links: Link[]
+  entries: Entry[]
   sort: Sort
   onEdit: (l: Link) => void
+  onEditNote: (id: number) => void
   onOpenFolder: (id: number) => void
   onEditFolder: (f: Folder) => void
 }
 
 // Compact view: dense grid of one-line rows. Honours the same --fx-cols
 // CSS variable the cards grid uses, so the topbar's 3/5/8 density picker
-// changes column count here too. Folders and links live side-by-side
-// — folders first by default, interleaved by name in alpha sort (mirrors
+// changes column count here too. Folders and entries live side-by-side —
+// folders first by default, interleaved by name in alpha sort (mirrors
 // CardsView's contract from §4 invariants).
-export function CompactGrid({ folders, links, sort, onEdit, onOpenFolder, onEditFolder }: Props) {
+export function CompactGrid({ folders, entries, sort, onEdit, onEditNote, onOpenFolder, onEditFolder }: Props) {
   const isAlpha = sort === 'alpha' || sort === 'alpha_desc'
 
   if (isAlpha) {
-    type Cell =
-      | { kind: 'folder'; name: string; folder: Folder }
-      | { kind: 'link'; name: string; link: Link }
-    const cells: Cell[] = [
-      ...folders.map<Cell>((f) => ({ kind: 'folder', name: f.name, folder: f })),
-      ...links.map<Cell>((l) => ({ kind: 'link', name: l.title, link: l })),
-    ]
-    const dir = sort === 'alpha' ? 1 : -1
-    cells.sort((a, b) => dir * a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    const cells = mergeAlphaCells(folders, entries, sort === 'alpha' ? 1 : -1)
     return (
       <div className="fx-compactgrid">
-        {cells.map((c) =>
-          c.kind === 'folder' ? (
-            <CompactFolder key={`folder-${c.folder.id}`} folder={c.folder} onOpen={onOpenFolder} onEdit={onEditFolder} />
-          ) : (
-            <CompactLink key={`link-${c.link.id}`} link={c.link} onEdit={onEdit} />
-          ),
-        )}
+        {cells.map((c) => {
+          if (c.kind === 'folder') {
+            return <CompactFolder key={`folder-${c.folder.id}`} folder={c.folder} onOpen={onOpenFolder} onEdit={onEditFolder} />
+          }
+          if (c.kind === 'link') {
+            return <CompactLink key={`link-${c.entry.id}`} link={c.entry} onEdit={onEdit} />
+          }
+          return <CompactNote key={`note-${c.entry.id}`} note={c.entry} onEdit={onEditNote} />
+        })}
       </div>
     )
   }
@@ -54,9 +52,13 @@ export function CompactGrid({ folders, links, sort, onEdit, onOpenFolder, onEdit
       {folders.map((f) => (
         <CompactFolder key={`folder-${f.id}`} folder={f} onOpen={onOpenFolder} onEdit={onEditFolder} />
       ))}
-      {links.map((l) => (
-        <CompactLink key={`link-${l.id}`} link={l} onEdit={onEdit} />
-      ))}
+      {entries.map((e) =>
+        e.kind === 'link' ? (
+          <CompactLink key={`link-${e.id}`} link={e} onEdit={onEdit} />
+        ) : (
+          <CompactNote key={`note-${e.id}`} note={e} onEdit={onEditNote} />
+        ),
+      )}
     </div>
   )
 }
@@ -109,6 +111,61 @@ function CompactLinkImpl({ link: l, onEdit }: { link: Link; onEdit: (l: Link) =>
           aria-label={t('common.open_link_aria', { title: l.title })}
         >
           {t('link_card.open_action')}
+        </a>
+      </div>
+    </article>
+  )
+}
+
+// memo on CompactNote mirrors CompactLink.
+const CompactNote = memo(CompactNoteImpl)
+CompactNote.displayName = 'CompactNote'
+
+function CompactNoteImpl({ note: n, onEdit }: { note: NoteEntry; onEdit: (id: number) => void }) {
+  const { t } = useTranslation()
+  return (
+    <article className="fx-compact">
+      <span className="fx-compact-note-icon" aria-hidden="true">
+        <Icon d={I.note} size={18} stroke={2.2} />
+      </span>
+      <div className="fx-compact-text">
+        <button
+          onClick={() => onEdit(n.id)}
+          style={{
+            background: 'transparent',
+            border: 0,
+            padding: 0,
+            cursor: 'pointer',
+            textAlign: 'left',
+            width: '100%',
+          }}
+          data-tooltip={t('common.edit')}
+          aria-label={t('common.edit')}
+        >
+          <div className="fx-compact-title">{n.title}</div>
+          {n.body_text_snippet && <div className="fx-compact-url">{n.body_text_snippet}</div>}
+        </button>
+        {n.tags.length > 0 && (
+          <div className="fx-compact-tags">
+            {n.tags.slice(0, 2).map((tag) => (
+              <TagChip key={tag.id} tag={tag} />
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="fx-compact-side">
+        <div className="fx-compact-clicks">
+          <Icon d={I.flame} size={11} /> {n.click_count}
+        </div>
+        <a
+          className="fx-openbtn fx-openbtn-list"
+          href={goNoteHref(n)}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-tooltip={t('note_card.open_action')}
+          aria-label={t('common.open_link_aria', { title: n.title })}
+        >
+          {t('note_card.open_action')}
         </a>
       </div>
     </article>

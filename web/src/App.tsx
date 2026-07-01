@@ -11,6 +11,7 @@ import { Icon, I } from './components/icons'
 import { TagSidebar } from './components/TagSidebar'
 import { Topbar } from './components/Topbar'
 import { LinkCard } from './components/LinkCard'
+import { NoteCard } from './components/NoteCard'
 import { FolderCard } from './components/FolderCard'
 import { ListView } from './components/ListView'
 import { CompactGrid } from './components/CompactGrid'
@@ -25,11 +26,18 @@ import { EmptyState } from './components/EmptyState'
 // boundary below renders a tiny fallback while the chunk loads.
 const ImportPage = lazy(() => import('./pages/ImportPage').then((m) => ({ default: m.ImportPage })))
 const StatsPage = lazy(() => import('./pages/StatsPage').then((m) => ({ default: m.StatsPage })))
-import { flattenLinks, useLinks, useUpdateLink } from './api/links'
+// NoteDialog pulls in Tiptap/ProseMirror (~140 KB gzip) — unlike LinkDialog/
+// FolderDialog it's lazy-loaded so that weight only ships once a user
+// actually opens a note, not on every visit to the app.
+const NoteDialog = lazy(() => import('./components/NoteDialog').then((m) => ({ default: m.NoteDialog })))
+import { useUpdateLink } from './api/links'
+import { flattenEntries, useEntries } from './api/entries'
+import { useUpdateNote } from './api/notes'
 import { useTags } from './api/tags'
 import { useFolders, useCreateFolder, useUpdateFolder } from './api/folders'
 import { useEscape } from './hooks/useEscape'
-import type { Link as LinkT, Folder as FolderT } from './api/types'
+import { mergeAlphaCells } from './lib/mergeAlphaCells'
+import type { Link as LinkT, Folder as FolderT, Entry, MergeSource } from './api/types'
 
 type View = 'home' | 'import' | 'stats'
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
@@ -61,6 +69,8 @@ export default function App() {
   // Distinguishes "just-merged" naming flow from normal edit. When true the
   // FolderDialog hides destructive actions and shows naming copy.
   const [folderJustCreated, setFolderJustCreated] = useState(false)
+  const [noteDialogOpen, setNoteDialogOpen] = useState(false)
+  const [editNoteId, setEditNoteId] = useState<number | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [dark, setDark] = usePersistedState('foldex.dark', false)
   const [sidebarCollapsed, setSidebarCollapsed] = usePersistedState('foldex.sidebar.collapsed', false)
@@ -114,9 +124,13 @@ export default function App() {
   }, [])
 
   // Tag filter and folder scope compose via AND on the backend — selecting a
-  // tag inside a folder narrows that folder's links by tag. Home view always
-  // shows ungrouped links (folder cards represent the rest).
-  const links = useLinks({
+  // tag inside a folder narrows that folder's entries by tag. Home view
+  // always shows ungrouped entries (folder cards represent the rest).
+  // useEntries (GET /api/entries) replaces useLinks as the grid's data
+  // source — one paginated, sorted, searched stream spanning both links and
+  // notes instead of merging two independently-paginated queries client-side
+  // (see ADR-27 in docs/ARCHITECTURE.md).
+  const entries = useEntries({
     q,
     tagIds: selectedTags,
     sort,
@@ -191,19 +205,23 @@ export default function App() {
     })
   }, [allFoldersData, folderPath])
   const updateLink = useUpdateLink()
+  const updateNote = useUpdateNote()
   const createFolder = useCreateFolder()
   const updateFolder = useUpdateFolder()
 
-  // Drag-and-drop handlers wired down to FolderCard / LinkCard.
+  // Drag-and-drop handlers wired down to FolderCard / LinkCard / NoteCard.
   //
-  // Move: PATCH the dragged link with the target folder's id.
-  // Merge: when two link cards collide, create a fresh folder ("Nova pasta")
-  //   and PATCH both links into it; open the FolderDialog in edit mode so the
-  //   user can immediately rename it. Sequential calls; race-tolerant for a
-  //   single-user local app.
+  // Move: PATCH the dragged entry with the target folder's id.
+  // Merge: when two cards collide (link↔link, link↔note, note↔note), create
+  //   a fresh folder ("Nova pasta") and PATCH both entries into it; open the
+  //   FolderDialog in edit mode so the user can immediately rename it.
+  //   Sequential calls; race-tolerant for a single-user local app.
   const onMoveLinkToFolder = useCallback((linkId: number, folderId: number) => {
     updateLink.mutate({ id: linkId, body: { folder_id: folderId } })
   }, [updateLink.mutate])
+  const onMoveNoteToFolder = useCallback((noteId: number, folderId: number) => {
+    updateNote.mutate({ id: noteId, body: { folder_id: folderId } })
+  }, [updateNote.mutate])
   // Move folder `sourceId` to be a child of `targetId`. Refuses the move when
   // the target is `sourceId` itself or sits inside `sourceId`'s subtree —
   // that would create a cycle (A → B → A). The backend has its own guard
@@ -229,23 +247,25 @@ export default function App() {
     }
     updateFolder.mutate({ id: sourceId, body: { parent_id: targetId } })
   }, [allFolders.data, updateFolder.mutate])
-  const onMergeLinks = useCallback(async (aId: number, bId: number) => {
-    if (aId === bId) return
+  const moveEntryToFolder = useCallback((source: MergeSource, folderId: number) => (
+    source.kind === 'link'
+      ? updateLink.mutateAsync({ id: source.id, body: { folder_id: folderId } })
+      : updateNote.mutateAsync({ id: source.id, body: { folder_id: folderId } })
+  ), [updateLink.mutateAsync, updateNote.mutateAsync])
+  const onMergeEntries = useCallback(async (a: MergeSource, b: MergeSource) => {
+    if (a.kind === b.kind && a.id === b.id) return
     try {
       // If we're already inside a folder, the merged-pair lives under it
       // (subfolder); otherwise it's a root folder.
       const f = await createFolder.mutateAsync({ name: t('home.merge_new_folder_name'), parent_id: openFolder ?? null })
-      await Promise.all([
-        updateLink.mutateAsync({ id: aId, body: { folder_id: f.id } }),
-        updateLink.mutateAsync({ id: bId, body: { folder_id: f.id } }),
-      ])
+      await Promise.all([moveEntryToFolder(a, f.id), moveEntryToFolder(b, f.id)])
       setEditFolder(f)
       setFolderJustCreated(true)
       setFolderDialogOpen(true)
     } catch {
       // Mutation errors surface via toast/console; non-fatal here.
     }
-  }, [createFolder.mutateAsync, updateLink.mutateAsync, openFolder, t])
+  }, [createFolder.mutateAsync, moveEntryToFolder, openFolder, t])
 
   // Stable across renders so the memoized cards they're threaded into don't
   // re-render on every unrelated App state change (search keystroke, sidebar
@@ -253,6 +273,10 @@ export default function App() {
   const handleEditLink = useCallback((l: LinkT) => {
     setEditLink(l)
     setLinkDialogOpen(true)
+  }, [])
+  const handleEditNote = useCallback((id: number) => {
+    setEditNoteId(id)
+    setNoteDialogOpen(true)
   }, [])
   const handleEditFolder = useCallback((f: FolderT) => {
     setEditFolder(f)
@@ -296,6 +320,13 @@ export default function App() {
     setFolderJustCreated(false)
     setFolderDialogOpen(true)
   })
+  // ⌥M — Nova nota ("M" for Note — kept the Alt-based convention from
+  // ⌥N/⌥F; ⌘M is browser-minimize on macOS, never reaches the SPA).
+  useHotkeys('alt+m', (e) => {
+    e.preventDefault()
+    setEditNoteId(null)
+    setNoteDialogOpen(true)
+  })
 
   return (
     <div className={'fx-shell' + (dark ? ' fx-dark-shell' : '')}>
@@ -334,7 +365,7 @@ export default function App() {
             setSelectedTags([])
             setMobileSidebarOpen(false)
           }}
-          totalLinks={Math.max(totalLinks, flattenLinks(links.data).length)}
+          totalLinks={Math.max(totalLinks, flattenEntries(entries.data).length)}
         />
 
         <main className="fx-main">
@@ -366,20 +397,25 @@ export default function App() {
               setFolderJustCreated(false)
               setFolderDialogOpen(true)
             }}
+            onNewNote={() => {
+              setEditNoteId(null)
+              setNoteDialogOpen(true)
+            }}
             dark={dark}
             setDark={setDark}
           />
 
           {view === 'home' && (
             <Home
-              links={flattenLinks(links.data)}
+              entries={flattenEntries(entries.data)}
               folders={folders.data ?? []}
               allFolders={allFolders.data ?? []}
               openFolder={openFolder}
               onOpenFolder={setOpenFolder}
               onNavigateBack={navigateBack}
-              isLoading={links.isLoading}
+              isLoading={entries.isLoading}
               onEdit={handleEditLink}
+              onEditNote={handleEditNote}
               onEditFolder={handleEditFolder}
               onNewLink={() => {
                 setEditLink(null)
@@ -391,16 +427,17 @@ export default function App() {
               foldersCompact={foldersCompact}
               sort={sort}
               onReload={() => {
-                links.refetch()
+                entries.refetch()
                 folders.refetch()
                 allFolders.refetch()
               }}
-              reloading={links.isFetching || folders.isFetching || allFolders.isFetching}
-              hasMoreLinks={links.hasNextPage === true}
-              loadingMoreLinks={links.isFetchingNextPage}
-              onLoadMoreLinks={() => links.fetchNextPage()}
+              reloading={entries.isFetching || folders.isFetching || allFolders.isFetching}
+              hasMoreLinks={entries.hasNextPage === true}
+              loadingMoreLinks={entries.isFetchingNextPage}
+              onLoadMoreLinks={() => entries.fetchNextPage()}
               onMoveLinkToFolder={onMoveLinkToFolder}
-              onMergeLinks={onMergeLinks}
+              onMoveNoteToFolder={onMoveNoteToFolder}
+              onMergeEntries={onMergeEntries}
               onMoveFolder={onMoveFolder}
             />
           )}
@@ -459,6 +496,19 @@ export default function App() {
           setFolderJustCreated(false)
         }}
       />
+      {noteDialogOpen && (
+        <Suspense fallback={<div className="fx-overlay fx-overlay-modal" />}>
+          <NoteDialog
+            open={noteDialogOpen}
+            noteId={editNoteId}
+            defaultFolderId={openFolder}
+            onClose={() => {
+              setNoteDialogOpen(false)
+              setEditNoteId(null)
+            }}
+          />
+        </Suspense>
+      )}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -473,7 +523,7 @@ export default function App() {
 }
 
 type HomeProps = {
-  links: LinkT[]
+  entries: Entry[]
   folders: FolderT[]
   // Flat list of every folder (any depth). Used to resolve the current
   // folder's name/parent for the breadcrumb; `folders` itself is scoped
@@ -484,6 +534,7 @@ type HomeProps = {
   onNavigateBack: () => void
   isLoading: boolean
   onEdit: (l: LinkT) => void
+  onEditNote: (id: number) => void
   onEditFolder: (f: FolderT) => void
   onNewLink: () => void
   onImport: () => void
@@ -494,19 +545,20 @@ type HomeProps = {
   onReload: () => void
   reloading: boolean
   onMoveLinkToFolder: (linkId: number, folderId: number) => void
-  onMergeLinks: (aId: number, bId: number) => void
+  onMoveNoteToFolder: (noteId: number, folderId: number) => void
+  onMergeEntries: (a: MergeSource, b: MergeSource) => void
   onMoveFolder: (sourceId: number, targetId: number) => void
   // Pagination: when the backend reports more pages exist, Home shows a
   // "Load more" button under the grid (all three viewModes). fetchNextPage
-  // appends the next page to the InfiniteData cache; flattenLinks above
-  // already merges it into the `links` array passed in.
+  // appends the next page to the InfiniteData cache; flattenEntries above
+  // already merges it into the `entries` array passed in.
   hasMoreLinks: boolean
   loadingMoreLinks: boolean
   onLoadMoreLinks: () => void
 }
 
 function Home({
-  links,
+  entries,
   folders,
   allFolders,
   openFolder,
@@ -514,6 +566,7 @@ function Home({
   onNavigateBack,
   isLoading,
   onEdit,
+  onEditNote,
   onEditFolder,
   onNewLink,
   onImport,
@@ -524,22 +577,23 @@ function Home({
   onReload,
   reloading,
   onMoveLinkToFolder,
-  onMergeLinks,
+  onMoveNoteToFolder,
+  onMergeEntries,
   onMoveFolder,
   hasMoreLinks,
   loadingMoreLinks,
   onLoadMoreLinks,
 }: HomeProps) {
   const { t } = useTranslation()
-  const totalClicks = useMemo(() => links.reduce((acc, l) => acc + l.click_count, 0), [links])
+  const totalClicks = useMemo(() => entries.reduce((acc, e) => acc + e.click_count, 0), [entries])
   const { data: tags = [] } = useTags()
   const currentFolder = openFolder !== null ? allFolders.find((f) => f.id === openFolder) : null
   // Esc goes back one level (matches the breadcrumb "← Pastas" affordance).
   useEscape(onNavigateBack, openFolder !== null)
 
-  // Empty only when BOTH links AND folders are empty — inside a nested
-  // folder with subfolders but no direct links, the view is NOT empty.
-  const isEmpty = !isLoading && links.length === 0 && folders.length === 0
+  // Empty only when BOTH entries AND folders are empty — inside a nested
+  // folder with subfolders but no direct entries, the view is NOT empty.
+  const isEmpty = !isLoading && entries.length === 0 && folders.length === 0
   if (isEmpty) {
     return (
       <div className="fx-mainarea">
@@ -575,7 +629,7 @@ function Home({
           </div>
           <div className="fx-pagehead-stats">
             <div className="fx-stat">
-              <div className="fx-stat-num">{links.length + folders.reduce((a, f) => a + f.link_count, 0)}</div>
+              <div className="fx-stat-num">{entries.length + folders.reduce((a, f) => a + f.link_count, 0)}</div>
               <div className="fx-stat-cap">{t('home.stat_links')}</div>
             </div>
             <div className="fx-stat">
@@ -593,15 +647,17 @@ function Home({
       {viewMode === 'cards' && (
         <CardsView
           folders={folders}
-          links={links}
+          entries={entries}
           sort={sort}
           isLoading={isLoading}
           foldersCompact={foldersCompact}
           onEdit={onEdit}
+          onEditNote={onEditNote}
           onOpenFolder={onOpenFolder}
           onEditFolder={onEditFolder}
           onMoveLinkToFolder={onMoveLinkToFolder}
-          onMergeLinks={onMergeLinks}
+          onMoveNoteToFolder={onMoveNoteToFolder}
+          onMergeEntries={onMergeEntries}
           onMoveFolder={onMoveFolder}
           t={t}
         />
@@ -609,9 +665,10 @@ function Home({
       {viewMode === 'list' && (
         <ListView
           folders={folders}
-          links={links}
+          entries={entries}
           sort={sort}
           onEdit={onEdit}
+          onEditNote={onEditNote}
           onOpenFolder={onOpenFolder}
           onEditFolder={onEditFolder}
         />
@@ -619,9 +676,10 @@ function Home({
       {viewMode === 'compact' && (
         <CompactGrid
           folders={folders}
-          links={links}
+          entries={entries}
           sort={sort}
           onEdit={onEdit}
+          onEditNote={onEditNote}
           onOpenFolder={onOpenFolder}
           onEditFolder={onEditFolder}
         />
@@ -649,78 +707,95 @@ function Home({
 
 function CardsView({
   folders,
-  links,
+  entries,
   sort,
   isLoading,
   foldersCompact,
   onEdit,
+  onEditNote,
   onOpenFolder,
   onEditFolder,
   onMoveLinkToFolder,
-  onMergeLinks,
+  onMoveNoteToFolder,
+  onMergeEntries,
   onMoveFolder,
   t,
 }: {
   folders: FolderT[]
-  links: LinkT[]
+  entries: Entry[]
   sort: Sort
   isLoading: boolean
   foldersCompact: boolean
   onEdit: (l: LinkT) => void
+  onEditNote: (id: number) => void
   onOpenFolder: (id: number) => void
   onEditFolder: (f: FolderT) => void
   onMoveLinkToFolder: (linkId: number, folderId: number) => void
-  onMergeLinks: (aId: number, bId: number) => void
+  onMoveNoteToFolder: (noteId: number, folderId: number) => void
+  onMergeEntries: (a: MergeSource, b: MergeSource) => void
   onMoveFolder: (sourceId: number, targetId: number) => void
   t: TFunction
 }) {
+  const onMergeIntoLink = useCallback(
+    (source: MergeSource, targetId: number) => onMergeEntries(source, { kind: 'link', id: targetId }),
+    [onMergeEntries],
+  )
+  const onMergeIntoNote = useCallback(
+    (source: MergeSource, targetId: number) => onMergeEntries(source, { kind: 'note', id: targetId }),
+    [onMergeEntries],
+  )
+
+  // Default order: folders first (rule from CLAUDE.md), then entries in the
+  // order the backend already returned them (pinned-first + active sort,
+  // links and notes interleaved server-side — see internal/entries). Alpha
+  // sort breaks the "folders first" rule on purpose — when the user picks
+  // A→Z / Z→A, folders and entries interleave by name/title via
+  // mergeAlphaCells so the alphabetical order is honest.
+  const isAlpha = sort === 'alpha' || sort === 'alpha_desc'
+  const dir = sort === 'alpha' ? 1 : -1
+  // Hooks must run unconditionally every render (isLoading/empty-state below
+  // return early), so this memo always computes — it just skips the actual
+  // interleave work when the active sort isn't alpha, since that result is
+  // unused in that branch anyway.
+  const alphaCells = useMemo(
+    () => (isAlpha ? mergeAlphaCells(folders, entries, dir) : []),
+    [isAlpha, folders, entries, dir],
+  )
+
   if (isLoading) {
     return <div style={{ padding: 48, color: 'var(--fx-ink-4)' }}>{t('home.loading')}</div>
   }
-  if (folders.length === 0 && links.length === 0) {
+  if (folders.length === 0 && entries.length === 0) {
     return (
       <div style={{ padding: '48px 6px', color: 'var(--fx-ink-4)' }}>
         <Trans i18nKey="home.cards_empty_html" components={{ kbd: <kbd className="fx-kbd" /> }} />
       </div>
     )
   }
-  // Default order: folders first (rule from CLAUDE.md), then links. Alpha sort
-  // breaks that rule on purpose — when the user picks A→Z / Z→A, folders and
-  // links are interleaved by name/title so the alphabetical order is honest.
-  // Pinned links still sort first within the link group (server-side prefix).
-  const isAlpha = sort === 'alpha' || sort === 'alpha_desc'
   if (isAlpha) {
-    type Cell =
-      | { kind: 'folder'; name: string; folder: FolderT }
-      | { kind: 'link'; name: string; link: LinkT }
-    const cells: Cell[] = [
-      ...folders.map<Cell>((f) => ({ kind: 'folder', name: f.name, folder: f })),
-      ...links.map<Cell>((l) => ({ kind: 'link', name: l.title, link: l })),
-    ]
-    const dir = sort === 'alpha' ? 1 : -1
-    cells.sort((a, b) => dir * a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    const cells = alphaCells
     return (
       <div className="fx-grid">
-        {cells.map((c) =>
-          c.kind === 'folder' ? (
-            <FolderCard
-              key={`folder-${c.folder.id}`}
-              folder={c.folder}
-              compact={foldersCompact}
-              onOpen={onOpenFolder}
-              onEdit={onEditFolder}
-              onDropLink={onMoveLinkToFolder}
-              onDropFolder={onMoveFolder}
-            />
-          ) : (
-            <LinkCard
-              key={`link-${c.link.id}`}
-              link={c.link}
-              onEdit={onEdit}
-              onMergeWith={onMergeLinks}
-            />
-          ),
-        )}
+        {cells.map((c) => {
+          if (c.kind === 'folder') {
+            return (
+              <FolderCard
+                key={`folder-${c.folder.id}`}
+                folder={c.folder}
+                compact={foldersCompact}
+                onOpen={onOpenFolder}
+                onEdit={onEditFolder}
+                onDropLink={onMoveLinkToFolder}
+                onDropNote={onMoveNoteToFolder}
+                onDropFolder={onMoveFolder}
+              />
+            )
+          }
+          if (c.kind === 'link') {
+            return <LinkCard key={`link-${c.entry.id}`} link={c.entry} onEdit={onEdit} onMergeWith={onMergeIntoLink} />
+          }
+          return <NoteCard key={`note-${c.entry.id}`} note={c.entry} onEdit={onEditNote} onMergeWith={onMergeIntoNote} />
+        })}
       </div>
     )
   }
@@ -734,12 +809,17 @@ function CardsView({
           onOpen={onOpenFolder}
           onEdit={onEditFolder}
           onDropLink={onMoveLinkToFolder}
+          onDropNote={onMoveNoteToFolder}
           onDropFolder={onMoveFolder}
         />
       ))}
-      {links.map((l) => (
-        <LinkCard key={l.id} link={l} onEdit={onEdit} onMergeWith={onMergeLinks} />
-      ))}
+      {entries.map((e) =>
+        e.kind === 'link' ? (
+          <LinkCard key={`link-${e.id}`} link={e} onEdit={onEdit} onMergeWith={onMergeIntoLink} />
+        ) : (
+          <NoteCard key={`note-${e.id}`} note={e} onEdit={onEditNote} onMergeWith={onMergeIntoNote} />
+        ),
+      )}
     </div>
   )
 }

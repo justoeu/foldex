@@ -18,6 +18,7 @@ type Props = {
   setFoldersCompact: (v: boolean) => void
   onNewFolder: () => void
   onNewLink: () => void
+  onNewNote: () => void
   dark: boolean
   setDark: (d: boolean) => void
   view: View
@@ -40,6 +41,7 @@ export function MobileOverflowMenu({
   setFoldersCompact,
   onNewFolder,
   onNewLink,
+  onNewNote,
   dark,
   setDark,
   view,
@@ -118,6 +120,11 @@ export function MobileOverflowMenu({
               icon={I.folder}
               label={t('topbar.new_folder')}
               onClick={() => { onNewFolder(); closeAll() }}
+            />
+            <Row
+              icon={I.note}
+              label={t('topbar.new_note')}
+              onClick={() => { onNewNote(); closeAll() }}
             />
             <Row
               icon={I.upload}

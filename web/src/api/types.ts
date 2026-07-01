@@ -102,3 +102,67 @@ export type FolderUpdate = Partial<{
   color: string
   parent_id: number | null
 }>
+
+export type Note = {
+  id: number
+  title: string
+  slug: string
+  body_html: string
+  pinned: boolean
+  folder_id?: number | null
+  cover_url?: string | null
+  click_count: number
+  last_clicked_at?: string | null
+  created_at: string
+  updated_at: string
+  tags: Tag[]
+}
+
+export type NoteCreate = {
+  title: string
+  // Optional: backend auto-derives from title when omitted.
+  slug?: string
+  body_html: string
+  tag_ids?: number[]
+  pinned?: boolean
+  folder_id?: number | null
+}
+
+export type NoteUpdate = Partial<{
+  title: string
+  // null = regenerate from current title; explicit string = set verbatim.
+  slug: string | null
+  body_html: string
+  tag_ids: number[]
+  pinned: boolean
+  folder_id: number | null
+}>
+
+// Entry is the discriminated union GET /api/entries returns — one row per
+// link or note, sorted/searched/paginated together by the backend (see
+// internal/entries' UNION ALL, ADR-27). The link variant mirrors the full
+// Link shape (including change-detection fields) so a kind:'link' Entry can
+// be passed anywhere a Link is expected (LinkCard's Monitored chip / unseen-
+// change badge / preview-failed indicator all keep working unmodified).
+export type Entry =
+  | ({ kind: 'link' } & Link)
+  | ({
+      kind: 'note'
+      id: number
+      title: string
+      slug: string
+      pinned: boolean
+      folder_id?: number | null
+      created_at: string
+      updated_at: string
+      click_count: number
+      last_clicked_at?: string | null
+      tags: Tag[]
+      cover_url?: string | null
+      body_text_snippet?: string | null
+    })
+
+// Drag-merge source discriminator shared by LinkCard/NoteCard/FolderCard —
+// lives here (not in either card component) so neither card has to import
+// the other just to reference the merge-target shape.
+export type MergeSource = { kind: 'link' | 'note'; id: number }

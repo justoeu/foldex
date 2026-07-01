@@ -6,11 +6,11 @@
   <img src="docs/assets/home-empty.png" alt="foldex — gerenciador de bookmarks self-hosted (home view com empty state, sidebar de tags, topbar com busca + sort + density, CTAs Nova pasta / Novo link)" width="100%"/>
 </p>
 
-> Gerenciador de bookmarks self-hosted com tagging avançado, pastas aninháveis, contagem de cliques, previews visuais de URL, **detecção de mudança por link + Web Push**, backup completo, UI em en/pt/es e extensão de navegador.
+> Gerenciador de bookmarks self-hosted com tagging avançado, pastas aninháveis, contagem de cliques, previews visuais de URL, **notas em rich-text estilo pastebin**, **detecção de mudança por link + Web Push**, backup completo, UI em en/pt/es e extensão de navegador.
 
-Foldex é uma "smart bookmarks bar" pessoal — guarda links organizados por **pastas aninháveis + tags M:N**, mostra **o que você de fato clica** (telemetria via `/go/:id`), captura visualmente cada URL (OG image / favicon / fallback de screenshot) e roda **inteiramente na sua máquina** (Postgres + MinIO + Go + React em containers).
+Foldex é uma "smart bookmarks bar" pessoal — guarda links organizados por **pastas aninháveis + tags M:N**, mostra **o que você de fato clica** (telemetria via `/go/:id`), captura visualmente cada URL (OG image / favicon / fallback de screenshot), deixa você anotar **notas em rich-text** (editor Tiptap com imagens inline) que vivem no mesmo grid/busca/tags/pastas dos links, e roda **inteiramente na sua máquina** (Postgres + MinIO + Go + React em containers).
 
-> Stack: **Go 1.26 (Chi · pgx) · PostgreSQL 18 · MinIO · Vite 8 + React 19 + TypeScript + bun · TanStack Query · react-i18next (en/pt/es) · Vitest 4**. Política de versionamento + invariantes em [`CLAUDE.md`](CLAUDE.md).
+> Stack: **Go 1.26 (Chi · pgx) · PostgreSQL 18 · MinIO · Vite 8 + React 19 + TypeScript + bun · TanStack Query · Tiptap 3 · react-i18next (en/pt/es) · Vitest 4**. Política de versionamento + invariantes em [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
@@ -31,6 +31,7 @@ Bookmark nativo é ótimo para "salvar uma página rápida e esquecer". Quando v
 | **Só em inglês / sem localização.**                                                      | UI totalmente localizada em **English / Português / Español** via `react-i18next`. Seletor de idioma no topbar; autodetecção pelo idioma do navegador no primeiro acesso; escolha persiste no `localStorage`. |
 | **Pinned/favoritos = uma pastinha à parte.** Só visual.                                 | `pinned` é coluna real na tabela. `ORDER BY pinned DESC, …` aplica em todo modo de ordenação. Badge gradient sempre visível. |
 | **Dados embutidos no navegador.** Trocou de máquina? Reinstalou Chrome? Reza.           | Postgres + MinIO em containers. `make up` numa máquina nova e seu ZIP de backup restaura tudo (DB + imagens) em ~minutos. |
+| **Pastebin/app de notas é outra ferramenta.** Snippets e links vivem em lugares diferentes. | **Notas** (`⌥M`) são uma entidade de primeira classe junto com os links: editor rich-text (Tiptap — negrito/títulos/listas/código/imagens inline), mesmas tags/pastas/pin/busca dos links, intercaladas no mesmo grid com badge esmeralda, compartilháveis via página pública `/n/{slug}`. |
 
 ### Cenários reais que viraram a chave (bookmark nativo → foldex)
 
@@ -183,7 +184,13 @@ sleep 3 && curl -s localhost:9089/api/links/1 | jq '.preview_status, .og_image_u
 # 5. Resolve o short link (302 + bump no contador).
 curl -sI localhost:9089/go/1 | head -3
 
-# 6. Abre a SPA e tenta ⌥K (palette) / ⌥N (novo link).
+# 6. Cria uma nota (HTML sanitizado server-side) e renderiza a página pública.
+curl -s -X POST localhost:9089/api/notes \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Rascunho","body_html":"<p>Olá <strong>mundo</strong></p>"}' | jq .
+curl -s localhost:9089/n/rascunho | grep -o '<h1>.*</h1>'
+
+# 7. Abre a SPA e tenta ⌥K (palette) / ⌥N (novo link) / ⌥M (nova nota).
 open http://localhost:9088
 ```
 
@@ -194,6 +201,7 @@ open http://localhost:9088
 | `⌥K` / `Alt+K`   | Command palette (busca fuzzy). `⌘K` conflita com o foco da URL bar do navegador. |
 | `⌥N` / `Alt+N`   | Novo link (⌘N é hard-claimed pelo navegador para "Nova janela") |
 | `⌥F` / `Alt+F`   | Nova pasta (⌥P colidia com outros handlers; "F" de Folder) |
+| `⌥M` / `Alt+M`   | Nova nota (⌘M é hard-claimed pelo macOS para "Minimizar janela") |
 | `Esc`            | Fecha qualquer modal aberto / sai da view de pasta |
 | `⌘Enter` (popup) | Salva (na extensão do navegador) |
 

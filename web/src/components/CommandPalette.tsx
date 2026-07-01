@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
-import { goHref, useLinks, flattenLinks } from '../api/links'
+import { goHref } from '../api/links'
+import { goNoteHref } from '../api/notes'
+import { useEntries, flattenEntries } from '../api/entries'
 import { useTags } from '../api/tags'
 import { useFolders } from '../api/folders'
 import { searchFolderTree } from '../lib/folderTree'
@@ -36,13 +38,16 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
   // folder's navigateBack).
   useEscape(onClose, open)
 
-  const linksQuery = useLinks({ q: debounced }, { enabled: open })
-  const links = useMemo(() => flattenLinks(linksQuery.data), [linksQuery.data])
+  const entriesQuery = useEntries({ q: debounced }, { enabled: open })
+  const entries = useMemo(() => flattenEntries(entriesQuery.data), [entriesQuery.data])
+  const links = useMemo(() => entries.filter((e) => e.kind === 'link'), [entries])
+  const notes = useMemo(() => entries.filter((e) => e.kind === 'note'), [entries])
   const { data: tags = [] } = useTags()
   const { data: folders = [] } = useFolders()
 
   const suggested = useMemo(() => [...links].sort((a, b) => b.click_count - a.click_count).slice(0, 3), [links])
   const matches = useMemo(() => links.slice(0, 12), [links])
+  const noteMatches = useMemo(() => notes.slice(0, 12), [notes])
   const tagMatches = useMemo(() => {
     if (!debounced) return []
     const f = debounced.toLowerCase()
@@ -159,6 +164,36 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
             </div>
           )}
 
+          {noteMatches.length > 0 && (
+            <div className="fx-cmdk-group">
+              <div className="fx-cmdk-grouplabel">{t('command_palette.notes_section')}</div>
+              {noteMatches.map((n) => (
+                <a
+                  key={n.id}
+                  className="fx-cmdk-row"
+                  href={goNoteHref(n)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={onClose}
+                >
+                  <span className="fx-cmdk-note-icon" aria-hidden="true">
+                    <Icon d={I.note} size={16} />
+                  </span>
+                  <div className="fx-cmdk-main">
+                    <div className="fx-cmdk-title">{n.title}</div>
+                    {n.body_text_snippet && <div className="fx-cmdk-sub">{n.body_text_snippet}</div>}
+                  </div>
+                  <div className="fx-cmdk-tags">
+                    {n.tags.slice(0, 2).map((tag) => (
+                      <TagChip key={tag.id} tag={tag} />
+                    ))}
+                  </div>
+                  <span className="fx-cmdk-hint">/n/{n.slug}</span>
+                </a>
+              ))}
+            </div>
+          )}
+
           {folderMatches.length > 0 && (
             <div className="fx-cmdk-group">
               <div className="fx-cmdk-grouplabel">
@@ -230,7 +265,7 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
             </div>
           )}
 
-          {debounced && matches.length === 0 && tagMatches.length === 0 && folderMatches.length === 0 && (
+          {debounced && matches.length === 0 && noteMatches.length === 0 && tagMatches.length === 0 && folderMatches.length === 0 && (
             <div style={{ padding: 24, textAlign: 'center', color: 'var(--fx-ink-4)', fontSize: 13 }}>
               {t('command_palette.no_results')}
             </div>
@@ -246,7 +281,7 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
           </span>
           <span className="fx-cmdk-foot-grow" />
           <span className="fx-cmdk-foot-item fx-cmdk-foot-stat">
-            {t('command_palette.footer_indexed', { count: links.length })}
+            {t('command_palette.footer_indexed', { count: entries.length })}
           </span>
         </div>
       </div>

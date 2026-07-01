@@ -12,6 +12,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/tags"
 	"foldex/internal/testdb"
 )
 
@@ -112,6 +113,41 @@ func TestRepository_DeleteCascadeRemovesSubtree(t *testing.T) {
 		_, err := lrepo.Get(ctx, lid)
 		assert.ErrorIs(t, err, httperr.ErrNotFound, "link %d must be gone after cascade", lid)
 	}
+}
+
+// TestRepository_DeleteCascadeDoesNotOrphanTagsOrClicks is the regression
+// lock for the gap migration 000014 introduced: link_tag/click_log lost
+// their ON DELETE CASCADE FK to link(id) when those tables were
+// polymorphized, so DeleteCascade's `DELETE FROM link` alone would silently
+// leave dangling link_tag/click_log rows behind (entity_id pointing at a
+// link that no longer exists) unless the repository purges them itself.
+func TestRepository_DeleteCascadeDoesNotOrphanTagsOrClicks(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	frepo := folders.NewRepository(pool)
+	lrepo := links.NewRepository(pool)
+	trepo := tags.NewRepository(pool)
+
+	folder, err := frepo.Create(ctx, folders.CreateInput{Name: "Doomed", Color: "#abc"})
+	require.NoError(t, err)
+	tag, err := trepo.Create(ctx, tags.CreateInput{Name: "work", Color: "#fff"})
+	require.NoError(t, err)
+	link, err := lrepo.Create(ctx, links.CreateInput{
+		URL: "https://orphan-check.example", Title: "L", FolderID: &folder.ID, TagIDs: []int64{tag.ID},
+	})
+	require.NoError(t, err)
+	_, err = lrepo.ClickAndResolve(ctx, link.ID)
+	require.NoError(t, err)
+
+	require.NoError(t, frepo.DeleteCascade(ctx, folder.ID))
+
+	var tagRows, clickRows int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM link_tag WHERE entity_kind = 'link' AND entity_id = $1`, link.ID).Scan(&tagRows))
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM click_log WHERE entity_kind = 'link' AND entity_id = $1`, link.ID).Scan(&clickRows))
+	assert.EqualValues(t, 0, tagRows, "DeleteCascade must not leave an orphaned link_tag row")
+	assert.EqualValues(t, 0, clickRows, "DeleteCascade must not leave an orphaned click_log row")
 }
 
 // TestRepository_DeleteCascadeOnEmptyFolder confirms the cascade path also

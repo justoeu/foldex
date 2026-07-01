@@ -144,7 +144,22 @@ describe('LinkCard', () => {
         getData: (k: string) => (k === 'application/x-foldex-link' ? '7' : ''),
       },
     })
-    expect(onMerge).toHaveBeenCalledWith(7, 99)
+    expect(onMerge).toHaveBeenCalledWith({ kind: 'link', id: 7 }, 99)
+  })
+
+  it('drag-and-drop: dropping a note onto this card fires onMergeWith({kind:"note",...}, target)', () => {
+    const onMerge = vi.fn()
+    const { container } = renderWithProviders(
+      <LinkCard link={{ ...baseLink, id: 99 }} onEdit={vi.fn()} onMergeWith={onMerge} />,
+    )
+    const card = container.querySelector('.fx-card') as HTMLElement
+    fireEvent.drop(card, {
+      dataTransfer: {
+        types: ['application/x-foldex-note'],
+        getData: (k: string) => (k === 'application/x-foldex-note' ? '3' : ''),
+      },
+    })
+    expect(onMerge).toHaveBeenCalledWith({ kind: 'note', id: 3 }, 99)
   })
 
   it('drag-and-drop: dropping a link onto itself is a no-op (no merge call)', () => {

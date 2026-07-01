@@ -53,6 +53,7 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 		w.Header().Set("X-Foldex-Backup-Filename", filename)
 		w.Header().Set("X-Foldex-Backup-Counts-Links", fmt.Sprintf("%d", c.Links))
+		w.Header().Set("X-Foldex-Backup-Counts-Notes", fmt.Sprintf("%d", c.Notes))
 		w.Header().Set("X-Foldex-Backup-Counts-Files", fmt.Sprintf("%d", c.Files))
 		w.WriteHeader(http.StatusOK)
 		headersWritten = true
@@ -70,7 +71,7 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 	}
 	h.logger.Info("backup export ok",
 		"filename", filename,
-		"links", rep.Counts.Links, "files", rep.Counts.Files,
+		"links", rep.Counts.Links, "notes", rep.Counts.Notes, "files", rep.Counts.Files,
 		"duration_ms", rep.DurationMs,
 	)
 }

@@ -12,8 +12,15 @@ import (
 // MaxBytesReader with JSONBodyCap; this function bakes that in so a new
 // handler can't accidentally skip it.
 func DecodeJSON[T any](w http.ResponseWriter, r *http.Request) (T, error) {
+	return DecodeJSONWithCap[T](w, r, JSONBodyCap)
+}
+
+// DecodeJSONWithCap is DecodeJSON with a caller-supplied body cap, for
+// handlers whose payload legitimately exceeds the default 64 KiB (e.g. note
+// bodies, which can exceed it even before sanitization overhead).
+func DecodeJSONWithCap[T any](w http.ResponseWriter, r *http.Request, capBytes int64) (T, error) {
 	var in T
-	r.Body = http.MaxBytesReader(w, r.Body, JSONBodyCap)
+	r.Body = http.MaxBytesReader(w, r.Body, capBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
