@@ -59,7 +59,7 @@ Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `12
 | Extension    | Vanilla MV3 (sem bundler)                                            | Popup tem ~80 LoC. Sem build = "load unpacked" direto. |
 | Node runtime | **bun 1.3** (oven/bun:1.3-alpine)                                    | Bate com Vite 8 / Vitest 4 e resolve melhor packages platform-specific que npm em mirror privado. |
 
-## Data model (estado atual, após 14 migrations)
+## Data model (estado atual, após 15 migrations)
 
 ```sql
 -- 000001_init.up.sql        (+ pg_trgm)
@@ -76,6 +76,7 @@ Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `12
 -- 000012_link_folder_preview_index → índice coberto p/ preview de pastas
 -- 000013_link_title_lower_index    → índice funcional p/ sort alpha sem runtime sort
 -- 000014_notes              → tabela `note` + polimorfiza link_tag/click_log via entity_kind (ADR-27)
+-- 000015_folder_password    → `folder.password_hash` nullable, bcrypt (ADR-28)
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -100,6 +101,10 @@ CREATE INDEX link_folder ON link (folder_id) WHERE folder_id IS NOT NULL;
 -- 000008_folder_nesting → folders aninhadas (parent_id self-FK)
 ALTER TABLE folder ADD COLUMN parent_id BIGINT REFERENCES folder(id) ON DELETE SET NULL;
 CREATE INDEX folder_parent ON folder (parent_id) WHERE parent_id IS NOT NULL;
+
+-- 000015_folder_password → NULL = sem proteção (padrão). Não-NULL = hash
+-- bcrypt (internal/folders/password.go); plaintext nunca é armazenado. ADR-28.
+ALTER TABLE folder ADD COLUMN password_hash TEXT;
 
 CREATE TABLE link (
   id             BIGSERIAL PRIMARY KEY,
@@ -263,10 +268,11 @@ LIMIT $3 OFFSET $4;
 |        | POST   | `/api/tags`                           | Body: `{name, color?, icon?}`                      |
 |        | PATCH  | `/api/tags/{id}`                      |                                                    |
 |        | DELETE | `/api/tags/{id}`                      | Cascades junction                                  |
-| Folders| GET    | `/api/folders`                        | Query: `?root=1` (só pastas raiz, `parent_id IS NULL`), `?parent_id=N` (filhas diretas de N), ausente (flat, todas). Retorna `link_count` + `preview_links` (até 4, LATERAL+jsonb_agg, ordem pinned DESC, created DESC) + `parent_id`. |
-|        | POST   | `/api/folders`                        | Body: `{name, color?, parent_id?}` — `parent_id` opcional (null = raiz). |
+| Folders| GET    | `/api/folders`                        | Query: `?root=1` (só pastas raiz, `parent_id IS NULL`), `?parent_id=N` (filhas diretas de N), ausente (flat, todas). Retorna `link_count` + `has_password` + `preview_links` (até 4, LATERAL+jsonb_agg, ordem pinned DESC, created DESC — **sempre vazio quando `has_password=true`**, redação incondicional, ADR-28) + `parent_id`. `?parent_id=N` numa pasta protegida exige `X-Foldex-Folder-Unlock` válido, senão `403 folder_locked` (ADR-28). |
+|        | POST   | `/api/folders`                        | Body: `{name, color?, parent_id?, password?}` — `parent_id` opcional (null = raiz); `password` opcional (min 4 chars), define proteção já na criação. |
 |        | GET    | `/api/folders/{id}`                   |                                                    |
-|        | PATCH  | `/api/folders/{id}`                   | `parent_id` é tri-state (absent=não toca, N=move pra dentro de N, null=promove pra raiz). |
+|        | PATCH  | `/api/folders/{id}`                   | `parent_id` é tri-state (absent=não toca, N=move pra dentro de N, null=promove pra raiz). `password` é tri-state igual (absent=não toca, string=troca/define, null=remove proteção) — trocar/remover uma senha JÁ existente exige `current_password` correto no mesmo body, senão `401 wrong_password` (ADR-28; sem bypass de admin). |
+|        | POST   | `/api/folders/{id}/unlock`            | Body: `{password}`. Verifica via bcrypt; `200 {unlock_token, expires_at}` (TTL 24h) ou `401 wrong_password`/`400 not_protected`. Token inclui o `password_hash` atual no HMAC — trocar/remover a senha invalida todo token emitido antes (ADR-28). |
 |        | DELETE | `/api/folders/{id}`                   | Default: SET NULL em links E em subpastas (filhas viram raiz). Com `?cascade=1`: recursivo via CTE — apaga toda a subtree de pastas + links. |
 | Stats  | GET    | `/api/stats/summary`                  | Totals: links, tags, clicks 30d/prev30d, novos 30d, top host |
 |        | GET    | `/api/stats/daily?days=N`             | Array `[{date, clicks}]` zero-filled via `generate_series` |
@@ -691,6 +697,21 @@ Notes são entradas pastebin-style — título + corpo HTML rico (Tiptap, markdo
 **Por quê sanitização server-side obrigatória (`internal/pkg/htmlsanitize`).** O body da note é HTML renderizado cru tanto no app (dialog/editor) quanto na página pública `/n/`. O cliente nunca é confiável — um cliente de API malicioso pode mandar qualquer coisa. `htmlsanitize.Sanitize` roda em todo Create/Update, allowlist explícita (`bluemonday.NewPolicy()`, não um preset) batendo exatamente no output do Tiptap StarterKit: sem `<table>` (extensão não usada ainda — fechar a allowlist em vez de abrir especulativamente), sem URL scheme `data:` (força toda imagem inline a passar pelo endpoint de upload em vez de embutir base64). `body_text` (coluna de busca ILIKE/trigram) é **sempre** derivado server-side do HTML já sanitizado — nunca aceito do cliente — pra search não poder divergir do que está armazenado/renderizado.
 
 **Gaps conhecidos do v1.** Imagens inline removidas do editor antes de salvar (nunca chegaram a `body_html`) não são limpas do object storage — só o delete de uma note faz best-effort cleanup das imagens ainda referenciadas no `body_html` no momento do delete; não existe um job de sweep de órfãos. `<table>` fica fora da allowlist até uma extensão de tabela ser adicionada ao editor.
+
+### ADR-28 — Senha por pasta: redação sempre-ativa + gate por token curto-vivo
+**Status:** Done (migration 000015).
+
+Feature de **privacidade**, não de segurança dura: Foldex é single-user atrás de um `SHARED_SECRET` único; uma senha por pasta protege contra "alguém olhando por cima do ombro / compartilhando tela", não contra um atacante que já tem acesso à API. Isso guiou toda decisão de escopo abaixo — proteção real o suficiente pra não ser teatro, mas sem inventar um segundo sistema de auth completo.
+
+**Por quê `password_hash` nullable em `folder` em vez de uma tabela separada.** Mesma lógica de `link.slug`/`link.pinned`: é um atributo 1:1 da pasta, não uma entidade própria. `NULL` = sem proteção (todo folder existente após a migração). bcrypt (`golang.org/x/crypto/bcrypt`, já presente em `go.sum` como indireto — zero deps novas) hasheia; o plaintext nunca é armazenado nem logado.
+
+**Por quê dois mecanismos separados — redação sempre-ativa vs. gate por token.** São dois vazamentos diferentes: (1) um card de pasta protegida ainda aparece na listagem (nome, cor, contadores) — mas seu preview (thumbnails de links/subpastas dentro dela) não pode vazar por hover, mesmo sem tentar abrir; (2) efetivamente *entrar* na pasta (ver seus links/notes reais, ou listar suas subpastas) precisa de prova de senha. `folders.Repository.List`/`Get` **sempre** zeram `preview_links`/`preview_folders` quando `has_password=true`, incondicionalmente — nenhum request, com ou sem token, vê esse preview numa listagem. Isso significa que `FolderRapidView` (hover popover do frontend) fica vazio de graça, sem precisar de lógica extra no client. Já o gate por token cobre as DUAS operações que revelam conteúdo real: `GET /api/entries?folder_id=X` (links+notes da pasta) e `GET /api/folders?parent_id=X` (subpastas da pasta) — ambas exigem um token válido pra `X` quando `X` é protegida, senão `403 folder_locked`.
+
+**Por quê um token HMAC curto-vivo em vez de sessão server-side ou reenvio da senha a cada request.** `POST /api/folders/{id}/unlock` verifica a senha via bcrypt e emite `hex(HMAC-SHA256(secret, "<folderID>:<expiresAt>:<passwordHashATUAL>")) + "." + expiresAt`. O truque: o HMAC inclui o `password_hash` **atual** da pasta, buscado fresco do banco a cada verificação — trocar ou remover a senha invalida automaticamente todo token emitido antes, sem precisar de uma lista de revogação. TTL de 24h é só um teto de segurança; a sessão real do usuário é mais curta que isso porque o frontend nunca persiste o token além do reload da página (decisão do usuário — unlock é por sessão de browser, não sobrevive a restart). O secret HMAC (`internal/folders/password.go:LoadOrGenerateFolderUnlockKey`) segue o mesmo padrão env→file→autogen(`0600`) que `push.LoadOrGenerate` já estabeleceu pro VAPID — mesmo volume `foldex-data`.
+
+**Por quê trocar/remover uma senha existente exige a senha atual, mas renomear/recolorir/mover não.** Decisão explícita do usuário (registrada em memory/sessão): editar metadados de uma pasta nunca precisa de senha — só *trocar ou remover uma senha já existente* exige prová-la primeiro, verificado dentro da mesma tx SERIALIZABLE que já protege o cycle-check de `parent_id` (`folders.Repository.Update`). **Sem bypass de admin** — se o usuário esquecer a senha, a única recuperação é editar o banco diretamente. Setar uma senha pela primeira vez (pasta ainda sem proteção) não exige `current_password`, porque não há nada pra autorizar contra ainda.
+
+**Escopo explicitamente fora do v1 (documentado, não esquecido).** Sem cascata pra subpastas — proteger uma pasta não protege automaticamente o que está dentro dela; cada pasta precisa da própria senha (decisão do usuário: modelo mental mais simples, sem precedente de permissão herdada em nenhum outro lugar do app). Mover um link/note PRA DENTRO de uma pasta trancada (drag-and-drop ou folder picker) não exige desbloqueio — é escrita, não revela conteúdo existente. `exporter`/`importer`/backup não são gateados — são operações já-confiadas do dono autenticado, equivalentes a acesso direto ao banco; mas o hash em si atravessa backup/restore **verbatim** (nunca re-hasheado, nunca dropado — `backup.FolderRow.PasswordHash`, presente nos 3 modos de restore) pra um restore não remover silenciosamente a proteção. Sem rate-limiting além do custo intrínseco do bcrypt (~100ms/tentativa) — proporcional ao modelo de ameaça single-user local.
 
 ## Future considerations
 

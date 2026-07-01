@@ -185,3 +185,183 @@ func TestRepository_UpdateRejectsCycle(t *testing.T) {
 	assert.Equal(t, 409, he.Status)
 	assert.Equal(t, "parent_cycle", he.Code)
 }
+
+// TestRepository_CreateWithPassword locks the basic write path: a password
+// on create hashes to something stored server-side, never the plaintext,
+// and HasPassword reflects it on every read.
+func TestRepository_CreateWithPassword(t *testing.T) {
+	ctx, frepo, _ := setup(t)
+
+	pw := "hunter22"
+	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+	assert.True(t, f.HasPassword)
+
+	hash, err := frepo.PasswordHashFor(ctx, f.ID)
+	require.NoError(t, err)
+	require.NotNil(t, hash)
+	assert.NotEqual(t, pw, *hash, "stored value must be a hash, not the plaintext")
+	assert.True(t, folders.VerifyPassword(*hash, pw))
+
+	unprotected, err := frepo.Create(ctx, folders.CreateInput{Name: "Open", Color: "#def"})
+	require.NoError(t, err)
+	assert.False(t, unprotected.HasPassword)
+	hash, err = frepo.PasswordHashFor(ctx, unprotected.ID)
+	require.NoError(t, err)
+	assert.Nil(t, hash)
+}
+
+// TestRepository_List_RedactsPreviewsForProtectedFolders locks the
+// always-on redaction rule (CLAUDE.md folder-password invariant): a
+// protected folder's preview_links/preview_folders are cleared in EVERY
+// list response, independent of any unlock token — that gate is the
+// handler's job for the SEPARATE "list what's inside" call, not this one.
+func TestRepository_List_RedactsPreviewsForProtectedFolders(t *testing.T) {
+	ctx, frepo, lrepo := setup(t)
+
+	pw := "hunter22"
+	protected, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://hidden.example", Title: "Hidden", FolderID: &protected.ID})
+	require.NoError(t, err)
+
+	open, err := frepo.Create(ctx, folders.CreateInput{Name: "Open", Color: "#def"})
+	require.NoError(t, err)
+	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://visible.example", Title: "Visible", FolderID: &open.ID})
+	require.NoError(t, err)
+
+	list, err := frepo.List(ctx, folders.ListQuery{RootOnly: true})
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+
+	byName := map[string]folders.Folder{}
+	for _, f := range list {
+		byName[f.Name] = f
+	}
+
+	secret := byName["Secret"]
+	assert.True(t, secret.HasPassword)
+	assert.EqualValues(t, 1, secret.LinkCount, "counts still show — only the preview content is redacted")
+	assert.Empty(t, secret.Previews, "a protected folder's preview_links must be redacted in every List response")
+
+	visible := byName["Open"]
+	assert.False(t, visible.HasPassword)
+	assert.NotEmpty(t, visible.Previews, "an unprotected folder's previews must NOT be redacted")
+
+	got, err := frepo.Get(ctx, protected.ID)
+	require.NoError(t, err)
+	assert.True(t, got.HasPassword)
+	assert.Empty(t, got.Previews)
+}
+
+// TestRepository_Update_SetPasswordFirstTime_NoCurrentPasswordNeeded covers
+// the "no admin bypass, but setting a password for the first time doesn't
+// need one either" half of the CLAUDE.md-documented decision — there's
+// nothing to authorize against yet.
+func TestRepository_Update_SetPasswordFirstTime_NoCurrentPasswordNeeded(t *testing.T) {
+	ctx, frepo, _ := setup(t)
+
+	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Open", Color: "#abc"})
+	require.NoError(t, err)
+	require.False(t, f.HasPassword)
+
+	pw := "newpass1"
+	updated, err := frepo.Update(ctx, f.ID, folders.UpdateInput{PasswordSet: true, Password: &pw})
+	require.NoError(t, err, "setting a password for the first time must not require CurrentPassword")
+	assert.True(t, updated.HasPassword)
+
+	hash, err := frepo.PasswordHashFor(ctx, f.ID)
+	require.NoError(t, err)
+	require.NotNil(t, hash)
+	assert.True(t, folders.VerifyPassword(*hash, pw))
+}
+
+// TestRepository_Update_ChangePassword_RequiresCurrentPassword locks the
+// CLAUDE.md-documented decision: changing OR removing an EXISTING password
+// requires proving you know the current one, with no admin bypass.
+func TestRepository_Update_ChangePassword_RequiresCurrentPassword(t *testing.T) {
+	ctx, frepo, _ := setup(t)
+
+	oldPW := "oldpass1"
+	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &oldPW})
+	require.NoError(t, err)
+
+	newPW := "newpass1"
+
+	// Missing CurrentPassword entirely.
+	_, err = frepo.Update(ctx, f.ID, folders.UpdateInput{PasswordSet: true, Password: &newPW})
+	require.Error(t, err)
+	assertWrongPassword(t, err)
+
+	// Wrong CurrentPassword.
+	wrong := "definitely-not-it"
+	_, err = frepo.Update(ctx, f.ID, folders.UpdateInput{PasswordSet: true, Password: &newPW, CurrentPassword: &wrong})
+	require.Error(t, err)
+	assertWrongPassword(t, err)
+
+	// The password must be UNCHANGED after both rejected attempts.
+	hash, err := frepo.PasswordHashFor(ctx, f.ID)
+	require.NoError(t, err)
+	require.NotNil(t, hash)
+	assert.True(t, folders.VerifyPassword(*hash, oldPW), "rejected change attempts must not mutate the stored hash")
+
+	// Correct CurrentPassword succeeds.
+	updated, err := frepo.Update(ctx, f.ID, folders.UpdateInput{PasswordSet: true, Password: &newPW, CurrentPassword: &oldPW})
+	require.NoError(t, err)
+	assert.True(t, updated.HasPassword)
+
+	hash, err = frepo.PasswordHashFor(ctx, f.ID)
+	require.NoError(t, err)
+	require.NotNil(t, hash)
+	assert.True(t, folders.VerifyPassword(*hash, newPW))
+	assert.False(t, folders.VerifyPassword(*hash, oldPW), "old password must no longer verify")
+}
+
+// TestRepository_Update_RemovePassword_RequiresCurrentPassword mirrors the
+// change-password test for the null (remove-protection) branch.
+func TestRepository_Update_RemovePassword_RequiresCurrentPassword(t *testing.T) {
+	ctx, frepo, _ := setup(t)
+
+	pw := "correctpw"
+	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+
+	// No CurrentPassword → rejected, folder stays protected.
+	_, err = frepo.Update(ctx, f.ID, folders.UpdateInput{PasswordSet: true, Password: nil})
+	require.Error(t, err)
+	assertWrongPassword(t, err)
+	hash, err := frepo.PasswordHashFor(ctx, f.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, hash, "rejected removal must leave the folder protected")
+
+	// Correct CurrentPassword → removed.
+	updated, err := frepo.Update(ctx, f.ID, folders.UpdateInput{PasswordSet: true, Password: nil, CurrentPassword: &pw})
+	require.NoError(t, err)
+	assert.False(t, updated.HasPassword)
+	hash, err = frepo.PasswordHashFor(ctx, f.ID)
+	require.NoError(t, err)
+	assert.Nil(t, hash)
+}
+
+// TestRepository_Update_RemovePassword_OnUnprotectedFolder_IsIdempotent
+// covers the redundant-no-op case: removing a password from a folder that
+// never had one succeeds without requiring (or even accepting) a
+// CurrentPassword, since there's nothing to authorize against.
+func TestRepository_Update_RemovePassword_OnUnprotectedFolder_IsIdempotent(t *testing.T) {
+	ctx, frepo, _ := setup(t)
+
+	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Open", Color: "#abc"})
+	require.NoError(t, err)
+
+	updated, err := frepo.Update(ctx, f.ID, folders.UpdateInput{PasswordSet: true, Password: nil})
+	require.NoError(t, err)
+	assert.False(t, updated.HasPassword)
+}
+
+func assertWrongPassword(t *testing.T, err error) {
+	t.Helper()
+	var he *httperr.Error
+	require.ErrorAs(t, err, &he, "must be a typed httperr.Error, not raw")
+	assert.Equal(t, 401, he.Status)
+	assert.Equal(t, "wrong_password", he.Code)
+}

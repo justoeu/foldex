@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -11,10 +12,16 @@ import (
 )
 
 type Handler struct {
-	repo *Repository
+	repo      *Repository
+	unlockKey []byte
 }
 
-func NewHandler(repo *Repository) *Handler { return &Handler{repo: repo} }
+// NewHandler takes the folder-unlock-token HMAC secret (see
+// LoadOrGenerateFolderUnlockKey) so it can gate list(parent_id=X) and mint/
+// verify tokens for the /unlock endpoint.
+func NewHandler(repo *Repository, unlockKey []byte) *Handler {
+	return &Handler{repo: repo, unlockKey: unlockKey}
+}
 
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/", h.list)
@@ -22,6 +29,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/{id}", h.get)
 	r.Patch("/{id}", h.update)
 	r.Delete("/{id}", h.delete)
+	r.Post("/{id}/unlock", h.unlock)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -34,12 +42,67 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("root"); v == "1" || v == "true" {
 		q.RootOnly = true
 	}
+	// Content-gate: listing a protected folder's CHILDREN reveals its
+	// contents just as much as reading its links would, so it needs the
+	// same unlock-token proof. Root/flat listings (ParentID == nil) are
+	// never gated — only each protected folder's own preview_links/
+	// preview_folders are redacted there (see Repository.List).
+	if q.ParentID != nil {
+		hash, err := h.repo.PasswordHashFor(r.Context(), *q.ParentID)
+		if err != nil {
+			httperr.Write(w, err)
+			return
+		}
+		if err := CheckUnlock(h.unlockKey, *q.ParentID, hash, r.Header.Get(UnlockHeader)); err != nil {
+			httperr.Write(w, err)
+			return
+		}
+	}
 	out, err := h.repo.List(r.Context(), q)
 	if err != nil {
 		httperr.Write(w, err)
 		return
 	}
 	httperr.JSON(w, http.StatusOK, out)
+}
+
+type unlockInput struct {
+	Password string `json:"password"`
+}
+
+type unlockOutput struct {
+	UnlockToken string    `json:"unlock_token"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
+	id, err := httperr.ParseID(chi.URLParam(r, "id"))
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	in, err := httperr.DecodeJSON[unlockInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	hash, err := h.repo.PasswordHashFor(r.Context(), id)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	if hash == nil {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "not_protected", "this folder has no password set"))
+		return
+	}
+	if !VerifyPassword(*hash, in.Password) {
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "wrong_password", "incorrect password"))
+		return
+	}
+	httperr.JSON(w, http.StatusOK, unlockOutput{
+		UnlockToken: IssueUnlockToken(h.unlockKey, id, *hash),
+		ExpiresAt:   time.Now().Add(unlockTokenTTL),
+	})
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {

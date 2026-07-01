@@ -41,6 +41,12 @@ type Config struct {
 	VAPIDSubject      string
 	VAPIDAutoGenerate bool
 	VAPIDStatePath    string
+
+	// Folder-unlock-token HMAC secret (internal/folders). Same env→file→
+	// autogen shape as VAPID above — see folders.LoadOrGenerateFolderUnlockKey.
+	FolderUnlockKey          string
+	FolderUnlockKeyPath      string
+	FolderUnlockAutoGenerate bool
 }
 
 func Load() (Config, error) {
@@ -68,6 +74,9 @@ func Load() (Config, error) {
 		VAPIDSubject:               envOr("VAPID_SUBJECT", "mailto:foldex@localhost"),
 		VAPIDAutoGenerate:          envBool("VAPID_AUTO_GENERATE", true),
 		VAPIDStatePath:             envOr("VAPID_STATE_PATH", "/data/vapid.json"),
+		FolderUnlockKey:            os.Getenv("FOLDER_UNLOCK_KEY"),
+		FolderUnlockKeyPath:        envOr("FOLDER_UNLOCK_KEY_PATH", "/data/folder_unlock.key"),
+		FolderUnlockAutoGenerate:   envBool("FOLDER_UNLOCK_AUTO_GENERATE", true),
 	}
 	if cfg.DBURL == "" {
 		return cfg, errors.New("DB_URL is required")

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -20,18 +21,46 @@ type Repository struct {
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
 func (r *Repository) Create(ctx context.Context, in CreateInput) (Folder, error) {
+	var passwordHash *string
+	if in.Password != nil {
+		h, err := HashPassword(*in.Password)
+		if err != nil {
+			return Folder{}, fmt.Errorf("hash password: %w", err)
+		}
+		passwordHash = &h
+	}
+
 	var f Folder
+	var scannedHash *string
 	err := r.pool.QueryRow(ctx, `
-        INSERT INTO folder (name, color, parent_id)
-        VALUES ($1, $2, $3)
-        RETURNING id, name, color, parent_id, created_at
-    `, in.Name, in.Color, in.ParentID).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt)
+        INSERT INTO folder (name, color, parent_id, password_hash)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, name, color, parent_id, created_at, password_hash
+    `, in.Name, in.Color, in.ParentID, passwordHash).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &scannedHash)
 	if err != nil {
 		return Folder{}, fmt.Errorf("insert folder: %w", err)
 	}
+	f.HasPassword = scannedHash != nil
 	f.Previews = []PreviewTile{}
 	f.PreviewFolders = []PreviewFolder{}
 	return f, nil
+}
+
+// PasswordHashFor returns the folder's current password_hash (nil when the
+// folder is unprotected). Kept separate from Get so the unlock endpoint and
+// the content-gate checks in this package's List and internal/entries' List
+// don't pay for the preview-aggregation LATERAL joins just to check a lock
+// state.
+func (r *Repository) PasswordHashFor(ctx context.Context, id int64) (*string, error) {
+	var hash *string
+	err := r.pool.QueryRow(ctx, `SELECT password_hash FROM folder WHERE id = $1`, id).Scan(&hash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, httperr.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get folder password hash: %w", err)
+	}
+	return hash, nil
 }
 
 // ListQuery filters the folder list by hierarchical position. Default
@@ -63,7 +92,7 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Folder, error) {
 	// link_folder / folder_parent indexes per parent row instead of
 	// hash-aggregating every link/folder once per request.
 	sql := `
-        SELECT f.id, f.name, f.color, f.parent_id, f.created_at,
+        SELECT f.id, f.name, f.color, f.parent_id, f.created_at, f.password_hash,
                COALESCE(c.cnt, 0) AS link_count,
                COALESCE(fc.cnt, 0) AS folder_count,
                COALESCE(p.previews, '[]'::jsonb) AS previews,
@@ -111,26 +140,33 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Folder, error) {
 	out := make([]Folder, 0)
 	for rows.Next() {
 		var f Folder
+		var passwordHash *string
 		var previewsJSON []byte
 		var previewFoldersJSON []byte
-		if err := rows.Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &f.LinkCount, &f.FolderCount, &previewsJSON, &previewFoldersJSON); err != nil {
+		if err := rows.Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &passwordHash, &f.LinkCount, &f.FolderCount, &previewsJSON, &previewFoldersJSON); err != nil {
 			return nil, err
 		}
-		if len(previewsJSON) > 0 {
-			if err := json.Unmarshal(previewsJSON, &f.Previews); err != nil {
-				return nil, fmt.Errorf("unmarshal previews: %w", err)
+		f.HasPassword = passwordHash != nil
+		f.Previews = []PreviewTile{}
+		f.PreviewFolders = []PreviewFolder{}
+		// Redaction: a protected folder's actual contents (link/subfolder
+		// names, thumbnails) never leave the server via a list response,
+		// regardless of whether the caller unlocked it — CheckUnlock gates
+		// the SEPARATE "list what's inside" call (List(ParentID=X) or
+		// entries.List(FolderID=X)), not this one. Skipping the unmarshal
+		// entirely (rather than unmarshaling then discarding) also avoids
+		// doing pointless work for every protected folder in a listing.
+		if !f.HasPassword {
+			if len(previewsJSON) > 0 {
+				if err := json.Unmarshal(previewsJSON, &f.Previews); err != nil {
+					return nil, fmt.Errorf("unmarshal previews: %w", err)
+				}
 			}
-		}
-		if f.Previews == nil {
-			f.Previews = []PreviewTile{}
-		}
-		if len(previewFoldersJSON) > 0 {
-			if err := json.Unmarshal(previewFoldersJSON, &f.PreviewFolders); err != nil {
-				return nil, fmt.Errorf("unmarshal preview_folders: %w", err)
+			if len(previewFoldersJSON) > 0 {
+				if err := json.Unmarshal(previewFoldersJSON, &f.PreviewFolders); err != nil {
+					return nil, fmt.Errorf("unmarshal preview_folders: %w", err)
+				}
 			}
-		}
-		if f.PreviewFolders == nil {
-			f.PreviewFolders = []PreviewFolder{}
 		}
 		out = append(out, f)
 	}
@@ -139,16 +175,20 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Folder, error) {
 
 func (r *Repository) Get(ctx context.Context, id int64) (Folder, error) {
 	var f Folder
+	var passwordHash *string
 	err := r.pool.QueryRow(ctx, `
-        SELECT id, name, color, parent_id, created_at
+        SELECT id, name, color, parent_id, created_at, password_hash
         FROM folder WHERE id = $1
-    `, id).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt)
+    `, id).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &passwordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Folder{}, httperr.ErrNotFound
 	}
 	if err != nil {
 		return Folder{}, fmt.Errorf("get folder: %w", err)
 	}
+	f.HasPassword = passwordHash != nil
+	// Get never populates real preview data (only List does), so there's
+	// nothing to redact here — empty arrays either way.
 	f.Previews = []PreviewTile{}
 	f.PreviewFolders = []PreviewFolder{}
 	return f, nil
@@ -166,6 +206,24 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 	if in.Color != nil {
 		sets = append(sets, fmt.Sprintf("color = $%d", i))
 		args = append(args, *in.Color)
+		i++
+	}
+
+	// Hashing (pure, no DB) happens upfront; the actual authorization check
+	// — "does CurrentPassword match the folder's CURRENT hash" — has to read
+	// live state, so it happens inside the tx below alongside the cycle
+	// check, under the same SERIALIZABLE isolation.
+	var newPasswordHash *string
+	if in.PasswordSet && in.Password != nil {
+		h, err := HashPassword(*in.Password)
+		if err != nil {
+			return Folder{}, fmt.Errorf("hash new password: %w", err)
+		}
+		newPasswordHash = &h
+	}
+	if in.PasswordSet {
+		sets = append(sets, fmt.Sprintf("password_hash = $%d", i))
+		args = append(args, newPasswordHash)
 		i++
 	}
 
@@ -188,7 +246,7 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 	}
 	args = append(args, id)
 	q := fmt.Sprintf(`UPDATE folder SET %s WHERE id = $%d
-                      RETURNING id, name, color, parent_id, created_at`, strings.Join(sets, ", "), i)
+                      RETURNING id, name, color, parent_id, created_at, password_hash`, strings.Join(sets, ", "), i)
 
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -196,32 +254,20 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 	}
 	defer tx.Rollback(ctx)
 
-	if cycleCheckNeeded {
-		var cycles bool
-		err := tx.QueryRow(ctx, `
-            WITH RECURSIVE ancestors AS (
-                SELECT id, parent_id FROM folder WHERE id = $1
-                UNION ALL
-                SELECT f.id, f.parent_id
-                FROM folder f
-                JOIN ancestors a ON a.parent_id = f.id
-            )
-            SELECT EXISTS(SELECT 1 FROM ancestors WHERE id = $2)
-        `, *in.ParentID, id).Scan(&cycles)
-		if err != nil {
-			return Folder{}, fmt.Errorf("cycle check: %w", err)
+	if in.PasswordSet {
+		if err := checkPasswordChangeAuthorized(ctx, tx, id, in.CurrentPassword); err != nil {
+			return Folder{}, err
 		}
-		if cycles {
-			// Typed 409 so the API client sees a clean conflict (extension /
-			// frontend handle "user picked a descendant as parent"). Without
-			// this, httperr.Write fell through to 500 and the UI couldn't tell
-			// the user-fixable case apart from a real server error.
-			return Folder{}, httperr.New(409, "parent_cycle", "parent_id would create a folder cycle")
+	}
+	if cycleCheckNeeded {
+		if err := checkParentCycle(ctx, tx, id, *in.ParentID); err != nil {
+			return Folder{}, err
 		}
 	}
 
 	var f Folder
-	err = tx.QueryRow(ctx, q, args...).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt)
+	var scannedHash *string
+	err = tx.QueryRow(ctx, q, args...).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &scannedHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Folder{}, httperr.ErrNotFound
 	}
@@ -231,9 +277,62 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 	if err := tx.Commit(ctx); err != nil {
 		return Folder{}, fmt.Errorf("commit update folder: %w", err)
 	}
+	f.HasPassword = scannedHash != nil
 	f.Previews = []PreviewTile{}
 	f.PreviewFolders = []PreviewFolder{}
 	return f, nil
+}
+
+// checkPasswordChangeAuthorized enforces the CLAUDE.md-documented decision:
+// changing OR removing an existing password requires proving you know the
+// current one, with deliberately no admin bypass (recovery is a direct DB
+// edit). Setting a password for the FIRST time (currentHash == nil) needs no
+// proof — there's nothing to authorize against yet. Runs inside Update's
+// SERIALIZABLE tx so the read and the eventual write share one snapshot.
+func checkPasswordChangeAuthorized(ctx context.Context, tx pgx.Tx, id int64, currentPassword *string) error {
+	var currentHash *string
+	if err := tx.QueryRow(ctx, `SELECT password_hash FROM folder WHERE id = $1`, id).Scan(&currentHash); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return httperr.ErrNotFound
+		}
+		return fmt.Errorf("read current password hash: %w", err)
+	}
+	if currentHash != nil {
+		if currentPassword == nil || !VerifyPassword(*currentHash, *currentPassword) {
+			return httperr.New(http.StatusUnauthorized, "wrong_password", "current password is required to change or remove an existing password")
+		}
+	}
+	return nil
+}
+
+// checkParentCycle guards against a reassignment that would create a
+// folder→...→folder cycle (e.g. moving A under its own descendant B).
+// Runs inside Update's SERIALIZABLE tx so the check and the eventual UPDATE
+// see the same snapshot — a naive check-then-update on the pool let another
+// request slip a move between the two reads and create the cycle anyway.
+func checkParentCycle(ctx context.Context, tx pgx.Tx, id, newParentID int64) error {
+	var cycles bool
+	err := tx.QueryRow(ctx, `
+        WITH RECURSIVE ancestors AS (
+            SELECT id, parent_id FROM folder WHERE id = $1
+            UNION ALL
+            SELECT f.id, f.parent_id
+            FROM folder f
+            JOIN ancestors a ON a.parent_id = f.id
+        )
+        SELECT EXISTS(SELECT 1 FROM ancestors WHERE id = $2)
+    `, newParentID, id).Scan(&cycles)
+	if err != nil {
+		return fmt.Errorf("cycle check: %w", err)
+	}
+	if cycles {
+		// Typed 409 so the API client sees a clean conflict (extension /
+		// frontend handle "user picked a descendant as parent"). Without
+		// this, httperr.Write fell through to 500 and the UI couldn't tell
+		// the user-fixable case apart from a real server error.
+		return httperr.New(409, "parent_cycle", "parent_id would create a folder cycle")
+	}
+	return nil
 }
 
 // Delete removes the folder. ON DELETE SET NULL in the FK makes every contained

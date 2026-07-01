@@ -44,10 +44,10 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 		return nil, fmt.Errorf("tags: %w", err)
 	}
 
-	if err := scanRows(ctx, tx, `SELECT id, name, color, parent_id, created_at FROM folder ORDER BY id`,
+	if err := scanRows(ctx, tx, `SELECT id, name, color, parent_id, password_hash, created_at FROM folder ORDER BY id`,
 		func(rows pgx.Rows) error {
 			var f FolderRow
-			if err := rows.Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt); err != nil {
+			if err := rows.Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.PasswordHash, &f.CreatedAt); err != nil {
 				return err
 			}
 			snap.Folders = append(snap.Folders, f)
@@ -249,12 +249,12 @@ func restoreIdentity(ctx context.Context, tx pgx.Tx, snap *Snapshot) (idMapping,
 	if len(snap.Folders) > 0 {
 		rows := make([][]any, 0, len(snap.Folders))
 		for _, f := range topoSortFolders(snap.Folders) {
-			rows = append(rows, []any{f.ID, f.Name, f.Color, f.ParentID, f.CreatedAt})
+			rows = append(rows, []any{f.ID, f.Name, f.Color, f.ParentID, f.PasswordHash, f.CreatedAt})
 			m.folderMap[f.ID] = f.ID
 		}
 		if _, err := tx.CopyFrom(ctx,
 			pgx.Identifier{"folder"},
-			[]string{"id", "name", "color", "parent_id", "created_at"},
+			[]string{"id", "name", "color", "parent_id", "password_hash", "created_at"},
 			pgx.CopyFromRows(rows),
 		); err != nil {
 			return m, fmt.Errorf("copy folder: %w", err)
@@ -406,8 +406,8 @@ func restoreSkip(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, Counts
 		}
 		var newID int64
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO folder (name, color, parent_id, created_at) VALUES ($1,$2,$3,$4) RETURNING id`,
-			f.Name, f.Color, parentID, f.CreatedAt).Scan(&newID); err != nil {
+			`INSERT INTO folder (name, color, parent_id, password_hash, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+			f.Name, f.Color, parentID, f.PasswordHash, f.CreatedAt).Scan(&newID); err != nil {
 			return inserted, skipped, m, fmt.Errorf("insert folder: %w", err)
 		}
 		m.folderMap[f.ID] = newID
@@ -595,8 +595,8 @@ func restoreDuplicate(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, [
 		}
 		var newID int64
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO folder (name, color, parent_id, created_at) VALUES ($1,$2,$3,$4) RETURNING id`,
-			f.Name, f.Color, parentID, f.CreatedAt).Scan(&newID); err != nil {
+			`INSERT INTO folder (name, color, parent_id, password_hash, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+			f.Name, f.Color, parentID, f.PasswordHash, f.CreatedAt).Scan(&newID); err != nil {
 			return inserted, warnings, m, fmt.Errorf("insert folder: %w", err)
 		}
 		m.folderMap[f.ID] = newID

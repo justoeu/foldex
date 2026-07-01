@@ -347,6 +347,101 @@ func TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow(t *testing.T) {
 	assert.EqualValues(t, 3, count(t, pool, "note"), "skip mode has no identity key for notes — every restore inserts another row")
 }
 
+// TestRestore_FolderPasswordRoundTripWipeMode locks the CLAUDE.md-documented
+// contract that a folder's password_hash round-trips VERBATIM through
+// backup/restore — it's already a bcrypt hash, restore must copy it as-is
+// (never re-hash it, never drop it, never treat it as plaintext).
+func TestRestore_FolderPasswordRoundTripWipeMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+
+	pw := "correct-horse-battery"
+	frepo := folders.NewRepository(pool)
+	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+	require.True(t, f.HasPassword)
+
+	zr := exportToReader(t, svc)
+	_, err = svc.Restore(ctx, zr, backup.ModeWipe)
+	require.NoError(t, err)
+
+	got, err := frepo.Get(ctx, f.ID)
+	require.NoError(t, err, "original folder id must survive wipe restore")
+	assert.True(t, got.HasPassword)
+	hash, err := frepo.PasswordHashFor(ctx, f.ID)
+	require.NoError(t, err)
+	require.NotNil(t, hash)
+	assert.True(t, folders.VerifyPassword(*hash, pw), "the restored hash must still verify the ORIGINAL password — restore must never re-hash")
+}
+
+// TestRestore_FolderPasswordRoundTripSkipMode documents the same "no
+// identity key" divergence as notes (see
+// TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow): folder has no
+// unique constraint, so restoreSkip always inserts a fresh row — but that
+// fresh row must still carry the original password_hash forward.
+func TestRestore_FolderPasswordRoundTripSkipMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+
+	pw := "correct-horse-battery"
+	frepo := folders.NewRepository(pool)
+	_, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+
+	zr := exportToReader(t, svc)
+	rep, err := svc.Restore(ctx, zr, backup.ModeSkip)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, rep.Inserted.Folders)
+	assert.EqualValues(t, 2, count(t, pool, "folder"), "skip has no identity key for folders — restore inserts a second row")
+
+	list, err := frepo.List(ctx, folders.ListQuery{RootOnly: true})
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	for _, f := range list {
+		assert.True(t, f.Name == "Secret", "both the original and the skip-restored copy must be named Secret")
+		hash, err := frepo.PasswordHashFor(ctx, f.ID)
+		require.NoError(t, err)
+		require.NotNil(t, hash, "the skip-restored copy must carry the password forward, not drop it")
+		assert.True(t, folders.VerifyPassword(*hash, pw))
+	}
+}
+
+// TestRestore_FolderPasswordRoundTripDuplicateMode mirrors the skip-mode
+// test for the third restore mode: folders are ALWAYS duplicated as new rows
+// (no rename-on-collision the way tags get, since folder.name has no unique
+// constraint) — the duplicated copy must still carry password_hash forward.
+func TestRestore_FolderPasswordRoundTripDuplicateMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+
+	pw := "correct-horse-battery"
+	frepo := folders.NewRepository(pool)
+	_, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+
+	zr := exportToReader(t, svc)
+	rep, err := svc.Restore(ctx, zr, backup.ModeDuplicate)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, rep.Inserted.Folders)
+	assert.EqualValues(t, 2, count(t, pool, "folder"))
+
+	list, err := frepo.List(ctx, folders.ListQuery{RootOnly: true})
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	for _, f := range list {
+		hash, err := frepo.PasswordHashFor(ctx, f.ID)
+		require.NoError(t, err)
+		require.NotNil(t, hash, "the duplicate-restored copy must carry the password forward, not drop it")
+		assert.True(t, folders.VerifyPassword(*hash, pw))
+	}
+}
+
 // TestRestore_SanitizesNoteBodyHTMLFromHostileZip is the regression lock for
 // the XSS gap a malicious backup zip could otherwise exploit: restore writes
 // note rows straight to SQL (CopyFrom/INSERT), bypassing

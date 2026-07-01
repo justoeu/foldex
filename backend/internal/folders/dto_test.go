@@ -1,6 +1,7 @@
 package folders
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -85,4 +86,58 @@ func TestUpdateInput_Validate(t *testing.T) {
 	err = UpdateInput{Color: &longColor}.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "color must be")
+}
+
+func TestCreateInput_Validate_Password(t *testing.T) {
+	require.NoError(t, CreateInput{Name: "Docs", Color: "#abc"}.Validate(), "no password is valid — folder just isn't protected")
+
+	ok := "1234"
+	require.NoError(t, CreateInput{Name: "Docs", Color: "#abc", Password: &ok}.Validate())
+
+	short := "abc"
+	err := CreateInput{Name: "Docs", Color: "#abc", Password: &short}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least 4 characters")
+}
+
+func TestUpdateInput_UnmarshalJSON_PasswordTriState(t *testing.T) {
+	// Absent → unchanged.
+	var absent UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"x"}`), &absent))
+	assert.False(t, absent.PasswordSet)
+	assert.Nil(t, absent.Password)
+
+	// Explicit null → remove protection.
+	var removed UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"password":null,"current_password":"old"}`), &removed))
+	assert.True(t, removed.PasswordSet)
+	assert.Nil(t, removed.Password)
+	require.NotNil(t, removed.CurrentPassword)
+	assert.Equal(t, "old", *removed.CurrentPassword)
+
+	// String value → set/replace.
+	var set UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"password":"new-pass"}`), &set))
+	assert.True(t, set.PasswordSet)
+	require.NotNil(t, set.Password)
+	assert.Equal(t, "new-pass", *set.Password)
+}
+
+func TestUpdateInput_Empty_PasswordSet(t *testing.T) {
+	assert.True(t, UpdateInput{}.Empty())
+	var withPassword UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"password":null}`), &withPassword))
+	assert.False(t, withPassword.Empty(), "an explicit password change/removal is not an empty update even with no other fields")
+}
+
+func TestUpdateInput_Validate_Password(t *testing.T) {
+	var setShort UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"password":"abc"}`), &setShort))
+	err := setShort.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least 4 characters")
+
+	var removed UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"password":null}`), &removed))
+	require.NoError(t, removed.Validate(), "removing a password (null) never needs the length check")
 }
