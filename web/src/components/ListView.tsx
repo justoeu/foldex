@@ -5,27 +5,33 @@ import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
 import { useConfirm } from './ConfirmDialog'
 import { goHref, useDeleteLink } from '../api/links'
+import { goNoteHref, useDeleteNote } from '../api/notes'
 import { primaryColor } from '../lib/tagColor'
-import type { Folder, Link } from '../api/types'
+import { mergeAlphaCells } from '../lib/mergeAlphaCells'
+import type { Entry, Folder, Link } from '../api/types'
 
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
+type NoteEntry = Extract<Entry, { kind: 'note' }>
 
 type Props = {
   folders: Folder[]
-  links: Link[]
+  entries: Entry[]
   sort: Sort
   onEdit: (l: Link) => void
+  onEditNote: (id: number) => void
   onOpenFolder: (id: number) => void
   onEditFolder: (f: Folder) => void
 }
 
-// Table-style list view. Folders rendered as rows alongside links. Density
-// picker doesn't apply here — the list is one column by design. Sorting
-// rules match CardsView/CompactGrid: folders-first by default, but alpha
-// modes interleave folders and links by name/title.
-export function ListView({ folders, links, sort, onEdit, onOpenFolder, onEditFolder }: Props) {
+// Table-style list view. Folders rendered as rows alongside links and notes.
+// Density picker doesn't apply here — the list is one column by design.
+// Sorting rules mirror CardsView/CompactGrid: default order is folders-first
+// then entries in the backend's already-sorted order; alpha modes interleave
+// folders + entries by name/title via the shared mergeAlphaCells helper.
+export function ListView({ folders, entries, sort, onEdit, onEditNote, onOpenFolder, onEditFolder }: Props) {
   const { t } = useTranslation()
   const del = useDeleteLink()
+  const delNote = useDeleteNote()
   const confirm = useConfirm()
   // useCallback is REQUIRED here, not optional: this closure is passed as
   // `onDelete` to every <LinkRow>, which is React.memo'd. A new identity per
@@ -44,26 +50,37 @@ export function ListView({ folders, links, sort, onEdit, onOpenFolder, onEditFol
     },
     [confirm, del, t],
   )
+  const askDeleteNote = useCallback(
+    async (n: NoteEntry) => {
+      const ok = await confirm({
+        title: t('note_card.delete_confirm_title', { title: n.title }),
+        message: t('note_card.delete_confirm_body'),
+        confirmLabel: t('note_card.delete_confirm_action'),
+        destructive: true,
+      })
+      if (ok) delNote.mutate(n.id)
+    },
+    [confirm, delNote, t],
+  )
 
   const isAlpha = sort === 'alpha' || sort === 'alpha_desc'
 
-  type Row = { kind: 'folder'; folder: Folder } | { kind: 'link'; link: Link }
-  const rows: Row[] = (() => {
-    if (isAlpha) {
-      type Cell = Row & { name: string }
-      const cells: Cell[] = [
-        ...folders.map<Cell>((f) => ({ kind: 'folder', name: f.name, folder: f })),
-        ...links.map<Cell>((l) => ({ kind: 'link', name: l.title, link: l })),
+  type Row =
+    | { kind: 'folder'; folder: Folder }
+    | { kind: 'link'; link: Link }
+    | { kind: 'note'; note: NoteEntry }
+  const rows: Row[] = isAlpha
+    ? mergeAlphaCells(folders, entries, sort === 'alpha' ? 1 : -1).map((c) =>
+        c.kind === 'folder'
+          ? { kind: 'folder', folder: c.folder }
+          : c.kind === 'link'
+            ? { kind: 'link', link: c.entry }
+            : { kind: 'note', note: c.entry },
+      )
+    : [
+        ...folders.map<Row>((f) => ({ kind: 'folder', folder: f })),
+        ...entries.map<Row>((e) => (e.kind === 'link' ? { kind: 'link', link: e } : { kind: 'note', note: e })),
       ]
-      const dir = sort === 'alpha' ? 1 : -1
-      cells.sort((a, b) => dir * a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-      return cells
-    }
-    return [
-      ...folders.map<Row>((f) => ({ kind: 'folder', folder: f })),
-      ...links.map<Row>((l) => ({ kind: 'link', link: l })),
-    ]
-  })()
 
   return (
     <div className="fx-list">
@@ -74,23 +91,15 @@ export function ListView({ folders, links, sort, onEdit, onOpenFolder, onEditFol
         <div>{t('link_card.list_header_last')}</div>
         <div />
       </div>
-      {rows.map((row) =>
-        row.kind === 'folder' ? (
-          <FolderRow
-            key={`folder-${row.folder.id}`}
-            folder={row.folder}
-            onOpen={onOpenFolder}
-            onEdit={onEditFolder}
-          />
-        ) : (
-          <LinkRow
-            key={`link-${row.link.id}`}
-            link={row.link}
-            onEdit={onEdit}
-            onDelete={askDelete}
-          />
-        ),
-      )}
+      {rows.map((row) => {
+        if (row.kind === 'folder') {
+          return <FolderRow key={`folder-${row.folder.id}`} folder={row.folder} onOpen={onOpenFolder} onEdit={onEditFolder} />
+        }
+        if (row.kind === 'link') {
+          return <LinkRow key={`link-${row.link.id}`} link={row.link} onEdit={onEdit} onDelete={askDelete} />
+        }
+        return <NoteRow key={`note-${row.note.id}`} note={row.note} onEdit={onEditNote} onDelete={askDeleteNote} />
+      })}
     </div>
   )
 }
@@ -132,7 +141,7 @@ function LinkRowImpl({
           <Icon d={I.flame} size={12} /> {l.click_count}
         </span>
       </div>
-      <div className="fx-list-last">{shortLast(l)}</div>
+      <div className="fx-list-last">{shortLast(l.last_clicked_at)}</div>
       <div className="fx-list-actions">
         <button
           className="fx-iconbtn"
@@ -163,6 +172,84 @@ function LinkRowImpl({
         >
           <Icon d={I.open} size={12} />
           <span>{t('link_card.open_action')}</span>
+        </a>
+      </div>
+    </div>
+  )
+}
+
+// memo mirrors LinkRow — same stable-props rationale.
+const NoteRow = memo(NoteRowImpl)
+NoteRow.displayName = 'NoteRow'
+
+function NoteRowImpl({
+  note: n,
+  onEdit,
+  onDelete,
+}: {
+  note: NoteEntry
+  onEdit: (id: number) => void
+  onDelete: (n: NoteEntry) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="fx-list-row">
+      <div className="fx-list-main">
+        <span className="fx-list-note-icon" aria-hidden="true">
+          <Icon d={I.note} size={14} stroke={2.2} />
+        </span>
+        <div className="fx-list-text">
+          <button
+            type="button"
+            className="fx-list-title fx-list-title-btn"
+            onClick={() => onEdit(n.id)}
+          >
+            {n.title}
+          </button>
+          {n.body_text_snippet && <div className="fx-list-url">{n.body_text_snippet}</div>}
+        </div>
+      </div>
+      <div className="fx-list-tags">
+        {n.tags.slice(0, 3).map((tag) => (
+          <TagChip key={tag.id} tag={tag} />
+        ))}
+      </div>
+      <div className="fx-list-clicks">
+        <span>
+          <Icon d={I.flame} size={12} /> {n.click_count}
+        </span>
+      </div>
+      <div className="fx-list-last">{shortLast(n.last_clicked_at)}</div>
+      <div className="fx-list-actions">
+        <button
+          className="fx-iconbtn"
+          data-tooltip={t('note_card.edit_note')}
+          data-tooltip-side="top"
+          aria-label={t('common.edit')}
+          onClick={() => onEdit(n.id)}
+        >
+          <Icon d={I.pen} size={13} />
+        </button>
+        <button
+          className="fx-iconbtn fx-iconbtn-danger"
+          data-tooltip={t('note_card.delete_note')}
+          data-tooltip-side="top"
+          aria-label={t('common.delete')}
+          onClick={() => onDelete(n)}
+        >
+          <Icon d={I.trash} size={13} />
+        </button>
+        <a
+          className="fx-openbtn fx-openbtn-list"
+          href={goNoteHref(n)}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-tooltip={t('note_card.open_action')}
+          data-tooltip-side="top"
+          aria-label={t('common.open_link_aria', { title: n.title })}
+        >
+          <Icon d={I.open} size={12} />
+          <span>{t('note_card.open_action')}</span>
         </a>
       </div>
     </div>
@@ -235,9 +322,9 @@ function FolderRowImpl({
   )
 }
 
-function shortLast(l: Link) {
-  if (!l.last_clicked_at) return '—'
-  const ms = Date.now() - new Date(l.last_clicked_at).getTime()
+function shortLast(lastClickedAt: string | null | undefined) {
+  if (!lastClickedAt) return '—'
+  const ms = Date.now() - new Date(lastClickedAt).getTime()
   const min = Math.round(ms / 60000)
   if (min < 60) return `${min}m`
   const h = Math.round(min / 60)

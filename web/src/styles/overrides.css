@@ -451,6 +451,63 @@
     inset 0 1px 2px rgba(120, 53, 15, .25);
 }
 
+/* Note CTA — emerald→green. Cool-warm-cool triplet reads as three
+   distinct verbs at a glance: indigo (link) / amber (folder) /
+   emerald (note). Same shape as the siblings so the bar stays
+   balanced now that there are 3 CTAs instead of 2. */
+.fx-topbar .fx-cta-note {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.22), rgba(255,255,255,0) 36%),
+    linear-gradient(180deg, #34D399, #10B981);
+  box-shadow:
+    0 1px 2px rgba(16,185,129,.4),
+    0 10px 22px -6px rgba(52,211,153,.55),
+    inset 0 1px 0 rgba(255,255,255,.35),
+    inset 0 -1px 0 rgba(6, 78, 59, .18);
+}
+.fx-topbar .fx-cta-note:hover {
+  box-shadow:
+    0 1px 2px rgba(16,185,129,.4),
+    0 14px 28px -6px rgba(52,211,153,.7),
+    inset 0 1px 0 rgba(255,255,255,.4),
+    inset 0 -1px 0 rgba(6, 78, 59, .18);
+}
+.fx-topbar .fx-cta-note:active {
+  box-shadow:
+    0 1px 2px rgba(16,185,129,.4),
+    0 6px 14px -6px rgba(52,211,153,.55),
+    inset 0 1px 2px rgba(6, 78, 59, .25);
+}
+
+/* Three CTAs now share the topbar row (link + folder + note). Compact
+   them so the row stays navigable below ~1400px. Reductions: height
+   44→38, padding 18→12, font 14→13. The kbd chip shrinks too. */
+.fx-topbar .fx-cta,
+.fx-topbar .fx-cta-folder,
+.fx-topbar .fx-cta-note {
+  height: 38px;
+  padding: 0 12px 0 10px;
+  font-size: 13px;
+  gap: 7px;
+  border-radius: 12px;
+}
+.fx-topbar .fx-cta .fx-kbd-cta,
+.fx-topbar .fx-cta-folder .fx-kbd-cta,
+.fx-topbar .fx-cta-note .fx-kbd-cta {
+  padding: 2px 6px;
+  font-size: 10px;
+  border-radius: 5px;
+}
+
+/* Below ~1280px hide the kbd chips on the 3 CTAs so the labels breathe —
+   the hotkeys are still documented in the tooltips + command palette
+   footer. The CTA width drops ~32px each, freeing ~96px for search. */
+@media (max-width: 1280px) {
+  .fx-topbar .fx-cta .fx-kbd-cta,
+  .fx-topbar .fx-cta-folder .fx-kbd-cta,
+  .fx-topbar .fx-cta-note .fx-kbd-cta { display: none; }
+}
+
 /* kbd chip inside the CTA — readable white symbols on a translucent-dark
    chip so it pops against the indigo gradient. */
 .fx-topbar .fx-cta .fx-kbd-cta,
@@ -983,6 +1040,117 @@ html.fx-dark { background: #0E1014; }
     0 14px 28px -14px color-mix(in srgb, #F59E0B 50%, transparent);
 }
 
+/* ─── note badge (kind discriminator) on note cards ─────────────────────
+   Always visible — unlike the pin badge (conditional) or the update badge
+   (link-only), every note card carries this. Placed at the OPPOSITE corner
+   (top-left) from the pin badge's right-side slot rather than stacking a
+   third offset into that already-crowded corner (pin at right:10px, update
+   badge at right:42px) — a kind discriminator present on every card needs a
+   collision-proof spot, not another offset to keep track of. */
+.fx-card-note-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #34D399, #10B981);
+  color: #fff;
+  box-shadow: 0 6px 14px -4px color-mix(in srgb, #10B981 60%, transparent);
+  z-index: 2;
+}
+
+/* ─── note icon tiles — cards/list/compact/palette ──────────────────────
+   Notes have no favicon/cover-image fallback the way links do, so every
+   surface that would show a Favicon for a link shows this fixed emerald
+   tile instead (same signature color as the note badge / topbar CTA). */
+.fx-card-note-icon {
+  display: grid; place-items: center;
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #34D399, #10B981);
+  color: #fff;
+  flex: 0 0 auto;
+}
+.fx-list-note-icon {
+  display: grid; place-items: center;
+  width: 28px; height: 28px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, #34D399, #10B981);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.25);
+  flex: 0 0 auto;
+}
+.fx-compact-note-icon {
+  display: grid; place-items: center;
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #34D399, #10B981);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.25);
+}
+.fx-cmdk-note-icon {
+  display: grid; place-items: center;
+  width: 22px; height: 22px;
+  color: #10B981;
+}
+.fx-list-title-btn {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+/* ─── Tiptap editor (NoteDialog) ─────────────────────────────────────────
+   Wraps EditorContent in the same visual language as .fx-textarea (border,
+   surface, radius) since Tiptap renders its own contenteditable rather than
+   an <textarea>, so it can't inherit that class directly. */
+.fx-tiptap-wrap {
+  border: 1px solid var(--fx-border);
+  border-radius: 10px;
+  background: var(--fx-surface-2);
+  min-height: 220px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+.fx-tiptap .ProseMirror {
+  outline: none;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--fx-ink-2);
+}
+.fx-tiptap .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--fx-ink-4);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+.fx-tiptap .ProseMirror img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 8px 0;
+}
+.fx-tiptap .ProseMirror pre {
+  background: var(--fx-surface-3);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.fx-tiptap .ProseMirror code {
+  background: var(--fx-surface-3);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: var(--fx-mono);
+  font-size: 12px;
+}
+
 /* ─── "monitored" footer chip on link cards ─────────────────────────────
    Surfaces link.check_interval opt-in independently of detection state.
    Reserved gray tone so it doesn't compete visually with the amber halo
@@ -1146,3 +1314,32 @@ html.fx-dark { background: #0E1014; }
   color: color-mix(in srgb, var(--fx-bg) 60%, transparent);
   border-top: 1px solid color-mix(in srgb, var(--fx-bg) 14%, transparent);
 }
+
+/* ─── NoteDialog scaffolding ───────────────────────────────────────────
+   Visual layer for the Notes feature. The emerald accent matches the
+   Topbar CTA so the dialog reads as "the same thing, expanded". The
+   pending-notice surfaces the backend-not-shipped state explicitly
+   rather than letting the Save button pretend to write. */
+.fx-modal-kicker-note {
+  color: #10B981;
+}
+.fx-btn-note {
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(180deg, #34D399, #10B981);
+  box-shadow: 0 1px 2px rgba(16,185,129,.4), 0 6px 14px -4px rgba(52,211,153,.45);
+  transition: transform .12s, box-shadow .15s;
+}
+.fx-btn-note:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 1px 2px rgba(16,185,129,.4), 0 10px 20px -6px rgba(52,211,153,.65);
+}
+.fx-btn-note:active { transform: translateY(0); }
+.fx-btn-note * { color: inherit; }

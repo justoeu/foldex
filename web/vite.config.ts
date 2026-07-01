@@ -67,6 +67,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': { target, changeOrigin: true },
         '/go':  { target, changeOrigin: true },
+        '/n':   { target, changeOrigin: true },
       },
     },
     build: {

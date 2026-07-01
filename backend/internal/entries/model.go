@@ -30,12 +30,24 @@ type Entry struct {
 	LastClickedAt *time.Time  `json:"last_clicked_at,omitempty"`
 	Tags          []links.Tag `json:"tags"`
 
-	// link-only — nil/empty for kind="note".
-	URL           *string `json:"url,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	FaviconURL    *string `json:"favicon_url,omitempty"`
-	OGImageURL    *string `json:"og_image_url,omitempty"`
-	PreviewStatus *string `json:"preview_status,omitempty"`
+	// link-only — nil/empty for kind="note". Mirrors links.Link's full shape
+	// (including change-detection columns) so the frontend can treat a
+	// kind="link" Entry as a drop-in Link for LinkCard's "Monitored" chip /
+	// unseen-change badge / preview-failed indicator (CLAUDE.md §5) — those
+	// invariants must not regress just because the home grid's data source
+	// switched from useLinks to useEntries.
+	URL                  *string    `json:"url,omitempty"`
+	Description          *string    `json:"description,omitempty"`
+	FaviconURL           *string    `json:"favicon_url,omitempty"`
+	OGImageURL           *string    `json:"og_image_url,omitempty"`
+	PreviewStatus        *string    `json:"preview_status,omitempty"`
+	PreviewError         *string    `json:"preview_error,omitempty"`
+	CheckInterval        *string    `json:"check_interval,omitempty"`
+	LastCheckedAt        *time.Time `json:"last_checked_at,omitempty"`
+	LastFingerprint      *string    `json:"last_fingerprint,omitempty"`
+	LastChangeDetectedAt *time.Time `json:"last_change_detected_at,omitempty"`
+	ChangeSeenAt         *time.Time `json:"change_seen_at,omitempty"`
+	LastCheckError       *string    `json:"last_check_error,omitempty"`
 
 	// note-only — nil/empty for kind="link".
 	CoverURL        *string `json:"cover_url,omitempty"`

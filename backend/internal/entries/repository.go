@@ -104,7 +104,9 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
 
 	linkSQL := `SELECT 'link' AS kind, l.id, l.title, l.slug, l.pinned, l.folder_id, l.created_at, l.updated_at,
             COALESCE(clk.cnt, 0) AS click_count, clk.last_at AS last_clicked_at,
-            l.url, l.description, l.favicon_url, l.og_image_url, l.preview_status,
+            l.url, l.description, l.favicon_url, l.og_image_url, l.preview_status, l.preview_error,
+            l.check_interval, l.last_checked_at, l.last_fingerprint, l.last_change_detected_at,
+            l.change_seen_at, l.last_check_error,
             NULL::text AS cover_url, NULL::text AS body_snippet
         FROM link l
         LEFT JOIN LATERAL (
@@ -118,7 +120,10 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
 	noteSQL := `SELECT 'note' AS kind, n.id, n.title, n.slug, n.pinned, n.folder_id, n.created_at, n.updated_at,
             COALESCE(clk.cnt, 0) AS click_count, clk.last_at AS last_clicked_at,
             NULL::text AS url, NULL::text AS description, NULL::text AS favicon_url,
-            NULL::text AS og_image_url, NULL::text AS preview_status,
+            NULL::text AS og_image_url, NULL::text AS preview_status, NULL::text AS preview_error,
+            NULL::text AS check_interval, NULL::timestamptz AS last_checked_at, NULL::text AS last_fingerprint,
+            NULL::timestamptz AS last_change_detected_at, NULL::timestamptz AS change_seen_at,
+            NULL::text AS last_check_error,
             n.cover_url, left(n.body_text, 240) AS body_snippet
         FROM note n
         LEFT JOIN LATERAL (
@@ -150,7 +155,9 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
 		if err := rows.Scan(
 			&e.Kind, &e.ID, &e.Title, &e.Slug, &e.Pinned, &e.FolderID, &e.CreatedAt, &e.UpdatedAt,
 			&e.ClickCount, &e.LastClickedAt,
-			&e.URL, &e.Description, &e.FaviconURL, &e.OGImageURL, &e.PreviewStatus,
+			&e.URL, &e.Description, &e.FaviconURL, &e.OGImageURL, &e.PreviewStatus, &e.PreviewError,
+			&e.CheckInterval, &e.LastCheckedAt, &e.LastFingerprint, &e.LastChangeDetectedAt,
+			&e.ChangeSeenAt, &e.LastCheckError,
 			&e.CoverURL, &e.BodyTextSnippet,
 		); err != nil {
 			return nil, err

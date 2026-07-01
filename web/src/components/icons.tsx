@@ -207,4 +207,20 @@ export const I = {
       <path d="M3 3l18 18" />
     </>
   ),
+  // Note (document with lines) — distinguishes the Notes feature from
+  // link/folder CTAs in the Topbar and dialog kickers.
+  note: (
+    <>
+      <path d="M5 3h9l5 5v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M14 3v6h6" />
+      <path d="M8 13h8M8 17h8M8 9h3" />
+    </>
+  ),
+  info: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5" />
+      <path d="M12 8h0" />
+    </>
+  ),
 }

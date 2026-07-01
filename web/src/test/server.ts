@@ -1,6 +1,6 @@
 import { http } from '../api/client'
 import { vi } from 'vitest'
-import type { Folder, Link, Tag } from '../api/types'
+import type { Entry, Folder, Link, Note, Tag } from '../api/types'
 
 // Minimal in-memory mock state that intercepts the axios instance used by the
 // app. Each test installs the spy once and mutates state to set up scenarios.
@@ -8,6 +8,7 @@ import type { Folder, Link, Tag } from '../api/types'
 export type MockState = {
   tags: Tag[]
   links: Link[]
+  notes: Note[]
   folders: Folder[]
   // Backup-related state. Tests can drive validation/restore responses by
   // mutating these or by intercepting the route directly.
@@ -30,7 +31,7 @@ export type MockState = {
 }
 
 export function freshState(): MockState {
-  return { tags: [], links: [], folders: [], urlMetadataCalls: [] }
+  return { tags: [], links: [], notes: [], folders: [], urlMetadataCalls: [] }
 }
 
 type Method = 'get' | 'post' | 'patch' | 'delete'
@@ -49,6 +50,9 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/links\/recent-changes$/, handle: listRecentChanges },
     { url: /^\/api\/links\/url-metadata$/, handle: fetchUrlMetadata },
     { url: /^\/api\/links$/, handle: listLinks },
+    { url: /^\/api\/entries$/, handle: listEntries },
+    { url: /^\/api\/notes\/(\d+)$/, handle: getNote },
+    { url: /^\/api\/notes$/, handle: listNotes },
     { url: /^\/api\/push\/vapid-key$/, handle: () => ({ public_key: 'MOCK_VAPID_PUBLIC' }) },
   ],
   post: [
@@ -58,6 +62,8 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/links\/(\d+)\/screenshot$/, handle: captureScreenshot },
     { url: /^\/api\/links\/(\d+)\/seen-change$/, handle: seenChange },
     { url: /^\/api\/links$/, handle: createLink },
+    { url: /^\/api\/notes\/images$/, handle: uploadNoteImage },
+    { url: /^\/api\/notes$/, handle: createNote },
     { url: /^\/api\/backup$/, handle: backupExport },
     { url: /^\/api\/backup\/validate$/, handle: backupValidate },
     { url: /^\/api\/backup\/restore$/, handle: backupRestore },
@@ -70,11 +76,13 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/tags\/(\d+)$/, handle: patchTag },
     { url: /^\/api\/folders\/(\d+)$/, handle: patchFolder },
     { url: /^\/api\/links\/(\d+)$/, handle: patchLink },
+    { url: /^\/api\/notes\/(\d+)$/, handle: patchNote },
   ],
   delete: [
     { url: /^\/api\/tags\/(\d+)$/, handle: deleteTag },
     { url: /^\/api\/folders\/(\d+)$/, handle: deleteFolder },
     { url: /^\/api\/links\/(\d+)$/, handle: deleteLink },
+    { url: /^\/api\/notes\/(\d+)$/, handle: deleteNote },
     { url: /^\/api\/push\/subscriptions$/, handle: () => null },
   ],
 })
@@ -336,6 +344,135 @@ function captureScreenshot(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s:
   const link = s.links.find((x) => x.id === id)
   if (!link) throw notFound()
   return { url: `/api/files/screenshots/${id}.png` }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Notes + entries mock handlers.
+
+function slugifyForMockNote(s: string): string {
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'note-untitled'
+  )
+}
+
+function listNotes(_m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): Note[] {
+  return s.notes
+}
+
+function getNote(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): Note {
+  const id = Number(m[1])
+  const n = s.notes.find((x) => x.id === id)
+  if (!n) throw notFound()
+  return n
+}
+
+function createNote(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState): Note {
+  const tags = (data.tag_ids ?? [])
+    .map((id: number) => s.tags.find((x) => x.id === id))
+    .filter((t: Tag | undefined): t is Tag => Boolean(t))
+  const note: Note = {
+    id: (s.notes.at(-1)?.id ?? 0) + 1,
+    title: data.title,
+    slug: data.slug ?? slugifyForMockNote(data.title),
+    body_html: data.body_html ?? '',
+    pinned: !!data.pinned,
+    folder_id: data.folder_id ?? null,
+    cover_url: null,
+    click_count: 0,
+    last_clicked_at: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    tags,
+  }
+  s.notes.push(note)
+  return note
+}
+
+function patchNote(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState): Note {
+  const id = Number(m[1])
+  const n = s.notes.find((x) => x.id === id)
+  if (!n) throw notFound()
+  if (data.title !== undefined) n.title = data.title
+  if (data.body_html !== undefined) n.body_html = data.body_html
+  if ('folder_id' in data) n.folder_id = data.folder_id ?? null
+  if (data.pinned !== undefined) n.pinned = !!data.pinned
+  if (data.slug !== undefined) n.slug = data.slug
+  if (data.tag_ids !== undefined) {
+    n.tags = data.tag_ids
+      .map((id: number) => s.tags.find((x) => x.id === id))
+      .filter((t: Tag | undefined): t is Tag => Boolean(t))
+  }
+  n.updated_at = new Date().toISOString()
+  return n
+}
+
+function deleteNote(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
+  const id = Number(m[1])
+  const idx = s.notes.findIndex((x) => x.id === id)
+  if (idx < 0) throw notFound()
+  s.notes.splice(idx, 1)
+  return null
+}
+
+function uploadNoteImage(): { url: string } {
+  return { url: '/api/files/notes/mock-uuid.jpg' }
+}
+
+// listEntries mirrors listLinks' filter/pagination shape but merges links +
+// notes into one Entry[] result — the mock sibling of GET /api/entries. Sort
+// support intentionally matches listLinks' existing fidelity level (only
+// 'clicks' is explicitly handled; other sort values fall through to
+// insertion order) rather than reimplementing the backend's full ORDER BY —
+// tests that need a specific order create fixtures in that order already.
+function listEntries(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState): Entry[] {
+  let linkOut = [...s.links]
+  let noteOut = [...s.notes]
+  const q = params.get('q')?.toLowerCase()
+  if (q) {
+    linkOut = linkOut.filter((l) => l.title.toLowerCase().includes(q) || l.url.toLowerCase().includes(q))
+    noteOut = noteOut.filter((n) => n.title.toLowerCase().includes(q) || n.body_html.toLowerCase().includes(q))
+  }
+  const tagIds = params.getAll('tag').map(Number).filter((n) => n > 0)
+  if (tagIds.length) {
+    linkOut = linkOut.filter((l) => tagIds.every((id) => l.tags.some((t) => t.id === id)))
+    noteOut = noteOut.filter((n) => tagIds.every((id) => n.tags.some((t) => t.id === id)))
+  }
+  const folderID = Number(params.get('folder_id') ?? '')
+  if (folderID > 0) {
+    linkOut = linkOut.filter((l) => l.folder_id === folderID)
+    noteOut = noteOut.filter((n) => n.folder_id === folderID)
+  } else if (params.get('ungrouped') === '1') {
+    linkOut = linkOut.filter((l) => l.folder_id == null)
+    noteOut = noteOut.filter((n) => n.folder_id == null)
+  }
+
+  const out: Entry[] = [
+    ...linkOut.map<Entry>((l) => ({ kind: 'link', ...l })),
+    ...noteOut.map<Entry>((n) => ({
+      kind: 'note',
+      id: n.id,
+      title: n.title,
+      slug: n.slug,
+      pinned: n.pinned,
+      folder_id: n.folder_id,
+      created_at: n.created_at,
+      updated_at: n.updated_at,
+      click_count: n.click_count,
+      last_clicked_at: n.last_clicked_at,
+      tags: n.tags,
+      cover_url: n.cover_url,
+      body_text_snippet: n.body_html ? n.body_html.replace(/<[^>]+>/g, '').slice(0, 240) : null,
+    })),
+  ]
+  const sort = params.get('sort')
+  if (sort === 'clicks') out.sort((a, b) => b.click_count - a.click_count)
+
+  const limit = Math.min(500, Math.max(1, Number(params.get('limit') ?? '100')))
+  const offset = Math.max(0, Number(params.get('offset') ?? '0'))
+  return out.slice(offset, offset + limit)
 }
 
 function notFound() {

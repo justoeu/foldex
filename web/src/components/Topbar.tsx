@@ -34,6 +34,7 @@ type Props = {
   setFoldersCompact: (v: boolean) => void
   onNewLink: () => void
   onNewFolder: () => void
+  onNewNote: () => void
   dark: boolean
   setDark: (d: boolean) => void
 }
@@ -56,6 +57,7 @@ export function Topbar({
   setFoldersCompact,
   onNewLink,
   onNewFolder,
+  onNewNote,
   dark,
   setDark,
 }: Props) {
@@ -301,6 +303,7 @@ export function Topbar({
         setFoldersCompact={setFoldersCompact}
         onNewFolder={onNewFolder}
         onNewLink={onNewLink}
+        onNewNote={onNewNote}
         dark={dark}
         setDark={setDark}
         view={view}
@@ -308,12 +311,17 @@ export function Topbar({
       />
 
       <button className="fx-cta fx-cta-folder" onClick={onNewFolder} aria-label={t('topbar.new_folder')}>
-        <Icon d={I.folder} size={16} stroke={2.2} /> {t('topbar.new_folder')}
+        <Icon d={I.folder} size={15} stroke={2.2} /> {t('topbar.new_folder')}
         <kbd className="fx-kbd fx-kbd-cta">⌥F</kbd>
       </button>
 
+      <button className="fx-cta fx-cta-note" onClick={onNewNote} aria-label={t('topbar.new_note')}>
+        <Icon d={I.note} size={15} stroke={2.2} /> {t('topbar.new_note')}
+        <kbd className="fx-kbd fx-kbd-cta">⌥M</kbd>
+      </button>
+
       <button className="fx-cta" onClick={onNewLink} aria-label={t('topbar.new_link')}>
-        <Icon d={I.plus} size={16} stroke={2.2} /> {t('topbar.new_link')}
+        <Icon d={I.plus} size={15} stroke={2.2} /> {t('topbar.new_link')}
         <kbd className="fx-kbd fx-kbd-cta">⌥N</kbd>
       </button>
     </header>
