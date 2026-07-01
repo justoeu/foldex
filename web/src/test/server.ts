@@ -349,6 +349,23 @@ function captureScreenshot(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s:
 // ────────────────────────────────────────────────────────────────────────────
 // Notes + entries mock handlers.
 
+// A single-pass tag-strip (`replace(/<[^>]+>/g, '')`) is "incomplete
+// sanitization" against a crafted input like `<<script>script>` — the outer
+// `<...>` match leaves `<script>` behind. Loop to a fixed point instead.
+// This value is only ever compared as a plain string in test assertions
+// (never rendered as HTML), but the mock should still model the real
+// backend's htmlsanitize.PlainText behavior faithfully rather than take a
+// shortcut a scanner would flag.
+function stripTagsForMock(html: string): string {
+  let prev: string
+  let out = html
+  do {
+    prev = out
+    out = out.replace(/<[^>]*>/g, '')
+  } while (out !== prev)
+  return out
+}
+
 function slugifyForMockNote(s: string): string {
   return (
     s
@@ -464,7 +481,7 @@ function listEntries(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: 
       last_clicked_at: n.last_clicked_at,
       tags: n.tags,
       cover_url: n.cover_url,
-      body_text_snippet: n.body_html ? n.body_html.replace(/<[^>]+>/g, '').slice(0, 240) : null,
+      body_text_snippet: n.body_html ? stripTagsForMock(n.body_html).slice(0, 240) : null,
     })),
   ]
   const sort = params.get('sort')
