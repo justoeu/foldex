@@ -131,18 +131,22 @@ export function NoteDialog({ open, noteId, defaultFolderId, onClose }: Props) {
     setTagFilter('')
     setTagPage(0)
     setImgUploadError(null)
-    // isInitialized guards a real race: this effect's deps include `note`,
-    // which can update (edit mode's useNote resolving async) before Tiptap's
-    // own mount effect has finished wiring the editor's internal
-    // commandManager — calling .commands before that throws. `open` flipping
-    // true recreates the editor (see useEditor deps above) fresh + initialized
-    // on the next tick, so a skipped call here just means the upcoming
-    // initialized render carries the right content instead.
-    if (editor?.isInitialized) {
-      editor.commands.setContent(note?.body_html ?? '')
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- editor is recreated per `open` (see useEditor deps above); including it would re-run on every keystroke.
   }, [open, note, defaultFolderId])
+
+  // Separate from the form-fields effect above: `note` (edit mode's useNote
+  // resolving async) and the editor's own readiness (Tiptap wires its internal
+  // commandManager on mount, not synchronously with useEditor()) arrive
+  // independently, and whichever settles last must be the one that applies
+  // the content. Depending on `editor?.isInitialized` — not just `editor` —
+  // means this effect re-runs on the render where isInitialized flips true,
+  // even if `note` hasn't changed since. Without it, a `note` that resolves
+  // before the editor initializes would never get its content applied: the
+  // guard would skip once and nothing would ever retry.
+  useEffect(() => {
+    if (!open || !editor?.isInitialized) return
+    editor.commands.setContent(note?.body_html ?? '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- editor is recreated per `open` (see useEditor deps above); including the whole object would re-run on every transaction.
+  }, [open, note, editor?.isInitialized])
 
   useEffect(() => {
     if (slugDirty) return
@@ -355,7 +359,7 @@ export function NoteDialog({ open, noteId, defaultFolderId, onClose }: Props) {
               </div>
               {selected.some((tag) => tag._pending) && (
                 <div className="fx-tag-hint">
-                  <Trans i18nKey="link_dialog.pending_tag_color_hint_html" components={{ strong: <strong /> }} />
+                  <Trans i18nKey="note_dialog.pending_tag_color_hint_html" components={{ strong: <strong /> }} />
                 </div>
               )}
               {(filteredAvailable.length > 0 || canCreateFromFilter) && (() => {

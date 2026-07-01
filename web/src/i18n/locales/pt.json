@@ -345,7 +345,8 @@
     "pinned_hint": "Notas fixadas sempre aparecem primeiro",
     "image_error_generic": "Falha ao enviar imagem",
     "submit_create": "Criar nota",
-    "submit_save": "Salvar alterações"
+    "submit_save": "Salvar alterações",
+    "pending_tag_color_hint_html": "Clique no <strong>círculo colorido</strong> de uma tag nova pra trocar a cor. Tags só são criadas quando você salva a nota."
   },
   "note_card": {
     "delete_confirm_title": "Apagar \"{{title}}\"?",

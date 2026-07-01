@@ -55,6 +55,55 @@ describe('NoteDialog', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('includes the selected tag, folder, and pinned state in the create payload', async () => {
+    state.tags.push({ id: 1, name: 'jira', color: '#1f6feb', icon: null })
+    state.folders.push({
+      id: 5, name: 'Work', color: '#6366F1', parent_id: null,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    })
+    renderWithProviders(<NoteDialog open noteId={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+
+    await user.type(screen.getByPlaceholderText('Give your note a title…'), 'Tagged note')
+
+    const tagsInput = screen.getByLabelText('tag filter')
+    await user.type(tagsInput, 'j')
+    const jiraChip = await screen.findByText('jira')
+    await user.click(jiraChip)
+
+    const folderInput = screen.getByLabelText('folder')
+    await user.click(folderInput)
+    await user.click(await screen.findByText('Work'))
+
+    await user.click(screen.getByRole('checkbox', { name: 'Pin this note' }))
+
+    await user.click(screen.getByRole('button', { name: /Create note/i }))
+    await waitFor(() => expect(state.notes).toHaveLength(1))
+    expect(state.notes[0].tags[0].name).toBe('jira')
+    expect(state.notes[0].folder_id).toBe(5)
+    expect(state.notes[0].pinned).toBe(true)
+  })
+
+  it('round-trips the loaded body_html back into the edit PATCH payload unmodified', async () => {
+    state.notes.push({
+      id: 1, title: 'Existing note', slug: 'existing-note', body_html: '<p>hello</p>', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    const onClose = vi.fn()
+    renderWithProviders(<NoteDialog open noteId={1} onClose={onClose} />)
+    // Guards the isInitialized-race fix in NoteDialog: the editor's content
+    // must actually be populated from the loaded note (not just the title
+    // field), otherwise saving without touching the body would silently
+    // overwrite body_html with an empty string.
+    await waitFor(() => expect(screen.getByText('hello')).toBeInTheDocument())
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /Save changes/i }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(state.notes[0].body_html).toContain('hello')
+  })
+
   it('closes on Escape', async () => {
     const onClose = vi.fn()
     renderWithProviders(<NoteDialog open noteId={null} onClose={onClose} />)

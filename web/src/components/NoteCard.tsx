@@ -7,14 +7,9 @@ import { useConfirm } from './ConfirmDialog'
 import { goNoteHref, useDeleteNote, usePinNote } from '../api/notes'
 import { mapCachedEntries } from '../api/entries'
 import { safeImageUrl } from '../lib/url'
-import type { Entry } from '../api/types'
+import type { Entry, MergeSource } from '../api/types'
 
 export type NoteEntry = Extract<Entry, { kind: 'note' }>
-
-// Merge-to-folder drag source, shared between NoteCard and LinkCard so a
-// note↔note, note↔link, or link↔note drag all resolve to the same
-// App.tsx handler (onMergeEntries) regardless of which card initiated it.
-export type MergeSource = { kind: 'link' | 'note'; id: number }
 
 type Props = {
   note: NoteEntry

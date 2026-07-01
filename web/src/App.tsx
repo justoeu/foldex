@@ -11,13 +11,12 @@ import { Icon, I } from './components/icons'
 import { TagSidebar } from './components/TagSidebar'
 import { Topbar } from './components/Topbar'
 import { LinkCard } from './components/LinkCard'
-import { NoteCard, type MergeSource } from './components/NoteCard'
+import { NoteCard } from './components/NoteCard'
 import { FolderCard } from './components/FolderCard'
 import { ListView } from './components/ListView'
 import { CompactGrid } from './components/CompactGrid'
 import { LinkDialog } from './components/LinkDialog'
 import { FolderDialog } from './components/FolderDialog'
-import { NoteDialog } from './components/NoteDialog'
 import { CommandPalette } from './components/CommandPalette'
 import { TooltipPortal } from './components/TooltipPortal'
 import { EmptyState } from './components/EmptyState'
@@ -27,6 +26,10 @@ import { EmptyState } from './components/EmptyState'
 // boundary below renders a tiny fallback while the chunk loads.
 const ImportPage = lazy(() => import('./pages/ImportPage').then((m) => ({ default: m.ImportPage })))
 const StatsPage = lazy(() => import('./pages/StatsPage').then((m) => ({ default: m.StatsPage })))
+// NoteDialog pulls in Tiptap/ProseMirror (~140 KB gzip) — unlike LinkDialog/
+// FolderDialog it's lazy-loaded so that weight only ships once a user
+// actually opens a note, not on every visit to the app.
+const NoteDialog = lazy(() => import('./components/NoteDialog').then((m) => ({ default: m.NoteDialog })))
 import { useUpdateLink } from './api/links'
 import { flattenEntries, useEntries } from './api/entries'
 import { useUpdateNote } from './api/notes'
@@ -34,7 +37,7 @@ import { useTags } from './api/tags'
 import { useFolders, useCreateFolder, useUpdateFolder } from './api/folders'
 import { useEscape } from './hooks/useEscape'
 import { mergeAlphaCells } from './lib/mergeAlphaCells'
-import type { Link as LinkT, Folder as FolderT, Entry } from './api/types'
+import type { Link as LinkT, Folder as FolderT, Entry, MergeSource } from './api/types'
 
 type View = 'home' | 'import' | 'stats'
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
@@ -263,17 +266,6 @@ export default function App() {
       // Mutation errors surface via toast/console; non-fatal here.
     }
   }, [createFolder.mutateAsync, moveEntryToFolder, openFolder, t])
-  // Bound per card kind so LinkCard/NoteCard each get a stable 2-arg
-  // (source, targetId) callback — matching what their onMergeWith prop
-  // expects — without re-deriving the target's MergeSource on every render.
-  const onMergeIntoLink = useCallback(
-    (source: MergeSource, targetId: number) => { void onMergeEntries(source, { kind: 'link', id: targetId }) },
-    [onMergeEntries],
-  )
-  const onMergeIntoNote = useCallback(
-    (source: MergeSource, targetId: number) => { void onMergeEntries(source, { kind: 'note', id: targetId }) },
-    [onMergeEntries],
-  )
 
   // Stable across renders so the memoized cards they're threaded into don't
   // re-render on every unrelated App state change (search keystroke, sidebar
@@ -504,15 +496,19 @@ export default function App() {
           setFolderJustCreated(false)
         }}
       />
-      <NoteDialog
-        open={noteDialogOpen}
-        noteId={editNoteId}
-        defaultFolderId={openFolder}
-        onClose={() => {
-          setNoteDialogOpen(false)
-          setEditNoteId(null)
-        }}
-      />
+      {noteDialogOpen && (
+        <Suspense fallback={<div className="fx-overlay fx-overlay-modal" />}>
+          <NoteDialog
+            open={noteDialogOpen}
+            noteId={editNoteId}
+            defaultFolderId={openFolder}
+            onClose={() => {
+              setNoteDialogOpen(false)
+              setEditNoteId(null)
+            }}
+          />
+        </Suspense>
+      )}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -749,6 +745,23 @@ function CardsView({
     [onMergeEntries],
   )
 
+  // Default order: folders first (rule from CLAUDE.md), then entries in the
+  // order the backend already returned them (pinned-first + active sort,
+  // links and notes interleaved server-side — see internal/entries). Alpha
+  // sort breaks the "folders first" rule on purpose — when the user picks
+  // A→Z / Z→A, folders and entries interleave by name/title via
+  // mergeAlphaCells so the alphabetical order is honest.
+  const isAlpha = sort === 'alpha' || sort === 'alpha_desc'
+  const dir = sort === 'alpha' ? 1 : -1
+  // Hooks must run unconditionally every render (isLoading/empty-state below
+  // return early), so this memo always computes — it just skips the actual
+  // interleave work when the active sort isn't alpha, since that result is
+  // unused in that branch anyway.
+  const alphaCells = useMemo(
+    () => (isAlpha ? mergeAlphaCells(folders, entries, dir) : []),
+    [isAlpha, folders, entries, dir],
+  )
+
   if (isLoading) {
     return <div style={{ padding: 48, color: 'var(--fx-ink-4)' }}>{t('home.loading')}</div>
   }
@@ -759,16 +772,8 @@ function CardsView({
       </div>
     )
   }
-  // Default order: folders first (rule from CLAUDE.md), then entries in the
-  // order the backend already returned them (pinned-first + active sort,
-  // links and notes interleaved server-side — see internal/entries). Alpha
-  // sort breaks the "folders first" rule on purpose — when the user picks
-  // A→Z / Z→A, folders and entries interleave by name/title via
-  // mergeAlphaCells so the alphabetical order is honest.
-  const isAlpha = sort === 'alpha' || sort === 'alpha_desc'
   if (isAlpha) {
-    const dir = sort === 'alpha' ? 1 : -1
-    const cells = mergeAlphaCells(folders, entries, dir)
+    const cells = alphaCells
     return (
       <div className="fx-grid">
         {cells.map((c) => {

@@ -161,3 +161,8 @@ export type Entry =
       cover_url?: string | null
       body_text_snippet?: string | null
     })
+
+// Drag-merge source discriminator shared by LinkCard/NoteCard/FolderCard —
+// lives here (not in either card component) so neither card has to import
+// the other just to reference the merge-target shape.
+export type MergeSource = { kind: 'link' | 'note'; id: number }

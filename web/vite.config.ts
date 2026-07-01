@@ -79,6 +79,14 @@ export default defineConfig(({ mode }) => {
         output: {
           manualChunks(id: string) {
             if (!id.includes('node_modules')) return
+            // Tiptap/ProseMirror are only reachable through NoteDialog's dynamic
+            // import — leave them out of the eager vendor buckets below (in
+            // particular, `@tiptap/react`'s path matches the `/react` rule and
+            // would otherwise get pulled into vendor-react, which loads on
+            // every page view regardless of whether a note is ever opened).
+            // Returning undefined lets rolldown keep it colocated with its
+            // sole importer's async chunk.
+            if (id.includes('@tiptap') || id.includes('prosemirror')) return
             if (id.includes('@mui') || id.includes('@emotion')) return 'vendor-mui'
             if (id.includes('@tanstack') || id.includes('/axios/')) return 'vendor-query'
             if (id.includes('/react')) return 'vendor-react'

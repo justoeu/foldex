@@ -345,7 +345,8 @@
     "pinned_hint": "Pinned notes always sort first",
     "image_error_generic": "Failed to upload image",
     "submit_create": "Create note",
-    "submit_save": "Save changes"
+    "submit_save": "Save changes",
+    "pending_tag_color_hint_html": "Click the <strong>colored circle</strong> on a new tag to change its color. Tags are only created when you save the note."
   },
   "note_card": {
     "delete_confirm_title": "Delete \"{{title}}\"?",

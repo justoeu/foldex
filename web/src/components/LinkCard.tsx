@@ -16,8 +16,7 @@ import {
 } from '../api/links'
 import { safeImageUrl } from '../lib/url'
 import { relativeTime } from '../lib/time'
-import type { Link } from '../api/types'
-import type { MergeSource } from './NoteCard'
+import type { Link, MergeSource } from '../api/types'
 
 type Props = {
   link: Link
