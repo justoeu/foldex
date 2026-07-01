@@ -66,6 +66,11 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
   const [newPassword, setNewPassword] = useState('')
   const [removePassword, setRemovePassword] = useState(false)
   const [passwordError, setPasswordError] = useState<string | null>(null)
+  // Separate from passwordError (which is scoped to the password section and
+  // only ever means "wrong current password") — this covers any OTHER save
+  // failure (network, unexpected 5xx, etc.) so it isn't silently dropped as
+  // an unhandled rejection. Shown near the footer, visible in every mode.
+  const [saveError, setSaveError] = useState<string | null>(null)
   const create = useCreateFolder()
   const update = useUpdateFolder()
   const del = useDeleteFolder()
@@ -106,6 +111,7 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
     setNewPassword('')
     setRemovePassword(false)
     setPasswordError(null)
+    setSaveError(null)
   }, [open, folder])
 
   useEscape(onClose, open)
@@ -119,6 +125,7 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
     const trimmed = name.trim()
     if (!trimmed) return
     setPasswordError(null)
+    setSaveError(null)
     try {
       if (isEdit && folder) {
         // Only send parent_id when the user actually touched the picker —
@@ -162,7 +169,11 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
         setPasswordError(t('folder_dialog.wrong_password_error'))
         return
       }
-      throw e
+      // Anything else (network failure, unexpected 5xx, a future error code
+      // this dialog doesn't special-case) must still surface SOMETHING —
+      // silently rethrowing from an onClick handler becomes an unhandled
+      // promise rejection with no user-visible feedback at all.
+      setSaveError(t('folder_dialog.save_error_generic'))
     }
   }
 
@@ -262,6 +273,7 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                 <div className="fx-input">
                   <input
                     type="password"
+                    autoComplete="new-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder={t('folder_dialog.password_placeholder')}
@@ -294,6 +306,7 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                       <input
                         type="password"
                         autoFocus
+                        autoComplete="off"
                         value={currentPassword}
                         onChange={(e) => {
                           setCurrentPassword(e.target.value)
@@ -307,6 +320,7 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                       <div className="fx-input">
                         <input
                           type="password"
+                          autoComplete="new-password"
                           value={newPassword}
                           onChange={(e) => setNewPassword(e.target.value)}
                           placeholder={t('folder_dialog.password_placeholder')}
@@ -417,6 +431,12 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
             </div>
           </div>
         </div>
+
+        {saveError && (
+          <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 20px 8px' }}>
+            <Icon d={I.alert} size={12} /> {saveError}
+          </div>
+        )}
 
         <footer className="fx-modal-foot">
           {isEdit && !isNaming && (

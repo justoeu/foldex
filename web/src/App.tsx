@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useHotkeys } from 'react-hotkeys-hook'
 import { usePasteUrl } from './hooks/usePasteUrl'
 import { usePersistedState, usePersistedMap } from './hooks/usePersistedState'
@@ -43,6 +43,14 @@ import type { Link as LinkT, Folder as FolderT, Entry, MergeSource } from './api
 type View = 'home' | 'import' | 'stats'
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
 type ViewMode = 'cards' | 'compact' | 'list'
+
+// Shared expiry check for a folder's cached unlock — used both when
+// deciding whether to skip the password prompt and when deciding whether to
+// attach the token header to a query, so the two can't drift (previously
+// only the prompt-skip path checked expiresAt).
+function validUnlockToken(unlocked: { token: string; expiresAt: number } | undefined): string | undefined {
+  return unlocked && unlocked.expiresAt > Date.now() ? unlocked.token : undefined
+}
 
 export default function App() {
   const { t } = useTranslation()
@@ -98,6 +106,17 @@ export default function App() {
   // Deliberately in-memory only (no localStorage) — unlock state resets on
   // page reload, same "purely in-memory" precedent as folderPath itself.
   const [unlockedFolders, setUnlockedFolders] = useState<Record<number, { token: string; expiresAt: number }>>({})
+  // Mirrors unlockedFolders for requestOpenFolder's read below. A plain
+  // dependency on the state itself would recreate that useCallback on every
+  // unlock (a new object each time), churning identity through to every
+  // memoized FolderCard/FolderRow/CompactFolder on screen via the shared
+  // onOpenFolder prop — negligible today (unlocks are rare), but decoupling
+  // the read from the callback's identity is cheap insurance against that
+  // regression class (CLAUDE.md §5) if unlock ever became more frequent.
+  const unlockedFoldersRef = useRef(unlockedFolders)
+  useEffect(() => {
+    unlockedFoldersRef.current = unlockedFolders
+  }, [unlockedFolders])
   const passwordPrompt = usePasswordPrompt()
 
   // Theme toggle drives a class on the shell wrapper so all .fx-* tokens flip.
@@ -140,7 +159,7 @@ export default function App() {
   // header on the two content-gated queries below (ADR-28). Undefined for
   // an unprotected folder (no header sent, backend never gates it) and for
   // Home itself (openFolder === null, root/ungrouped are never gated).
-  const currentUnlockToken = openFolder !== null ? unlockedFolders[openFolder]?.token : undefined
+  const currentUnlockToken = openFolder !== null ? validUnlockToken(unlockedFolders[openFolder]) : undefined
   const entries = useEntries({
     q,
     tagIds: selectedTags,
@@ -165,8 +184,7 @@ export default function App() {
   // requiring every call site to pass the full Folder object.
   const requestOpenFolder = useCallback(async (id: number) => {
     const folder = allFolders.data?.find((f) => f.id === id)
-    const unlocked = unlockedFolders[id]
-    const isUnlocked = !!unlocked && unlocked.expiresAt > Date.now()
+    const isUnlocked = !!validUnlockToken(unlockedFoldersRef.current[id])
     if (!folder?.has_password || isUnlocked) {
       setOpenFolder(id)
       return
@@ -176,7 +194,7 @@ export default function App() {
       setUnlockedFolders((prev) => ({ ...prev, [id]: result }))
       setOpenFolder(id)
     }
-  }, [allFolders.data, unlockedFolders, passwordPrompt, setOpenFolder])
+  }, [allFolders.data, passwordPrompt, setOpenFolder])
 
   // Defensive 403 handling: a token can go stale mid-session (password
   // changed/removed in another tab). If the currently-open folder's gated

@@ -259,7 +259,12 @@ export function FolderPicker({ selected, onChange, parentId, excludeIds }: Props
                 </span>
                 <span className="fx-folderpicker-row-label">
                   {row.kind === 'folder' && row.hasPassword && (
-                    <span className="fx-folder-lock-icon" aria-hidden="true">
+                    <span
+                      className="fx-folder-lock-icon"
+                      aria-hidden="true"
+                      data-tooltip={t('folder_card.locked_tooltip')}
+                      data-tooltip-side="top"
+                    >
                       <Icon d={I.lock} size={12} />
                     </span>
                   )}

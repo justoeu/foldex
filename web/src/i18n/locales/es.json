@@ -275,7 +275,8 @@
     "current_password_label": "Contraseña actual",
     "new_password_label": "Nueva contraseña",
     "remove_password_action": "Quitar protección con contraseña",
-    "wrong_password_error": "La contraseña actual es incorrecta."
+    "wrong_password_error": "La contraseña actual es incorrecta.",
+    "save_error_generic": "No se pudo guardar esta carpeta. Intenta de nuevo."
   },
   "folder_card": {
     "empty": "Carpeta vacía",

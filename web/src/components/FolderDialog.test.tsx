@@ -135,4 +135,50 @@ describe('FolderDialog', () => {
     expect(state.folderPasswords[1]).toBeUndefined()
     expect(state.folders[0]?.has_password).toBe(false)
   })
+
+  it('resets the change-password sub-flow when the dialog is reopened after a cancel', async () => {
+    const folder = { id: 1, name: 'Secret', color: '#6366F1', parent_id: null, link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], has_password: true }
+    state.folders.push(folder)
+    state.folderPasswords[1] = 'oldpass1'
+    const onClose = vi.fn()
+    const { rerender } = renderWithProviders(<FolderDialog open onClose={onClose} folder={folder} />)
+    const user = userEvent.setup()
+    // Enter the change-password sub-flow, type something, then close
+    // WITHOUT saving (cancel — no submit).
+    await user.click(screen.getByRole('button', { name: /change password/i }))
+    await user.click(screen.getByLabelText(/remove password protection/i))
+    await user.type(screen.getByLabelText('Current password'), 'typed-but-not-submitted')
+    rerender(<FolderDialog open={false} onClose={onClose} folder={folder} />)
+    // Reopen on the SAME folder — the reset effect (deps [open, folder])
+    // must clear passwordEditing/currentPassword/removePassword, or a
+    // canceled attempt's stale current-password/remove-checkbox state would
+    // leak into the next submit.
+    rerender(<FolderDialog open onClose={onClose} folder={folder} />)
+    expect(screen.getByText(/password protected/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /change password/i }))
+    expect(screen.getByLabelText('Current password')).toHaveValue('')
+    expect(screen.queryByLabelText(/remove password protection/i)).not.toBeChecked()
+  })
+
+  it('does not leak password-flow state when reopened on a different folder', async () => {
+    const protectedFolder = { id: 1, name: 'Secret', color: '#6366F1', parent_id: null, link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], has_password: true }
+    const otherFolder = { id: 2, name: 'Public', color: '#6366F1', parent_id: null, link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], has_password: false }
+    state.folders.push(protectedFolder, otherFolder)
+    state.folderPasswords[1] = 'oldpass1'
+    const onClose = vi.fn()
+    const { rerender } = renderWithProviders(<FolderDialog open onClose={onClose} folder={protectedFolder} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /change password/i }))
+    await user.type(screen.getByLabelText('Current password'), 'some-value')
+    rerender(<FolderDialog open={false} onClose={onClose} folder={protectedFolder} />)
+    // Reopen on a DIFFERENT, unprotected folder — must show the plain
+    // create/first-time-set field, not the protected folder's leftover
+    // change-password sub-flow.
+    rerender(<FolderDialog open onClose={onClose} folder={otherFolder} />)
+    expect(screen.queryByText(/password protected/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /change password/i })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Password')).toHaveValue('')
+  })
 })

@@ -275,7 +275,8 @@
     "current_password_label": "Current password",
     "new_password_label": "New password",
     "remove_password_action": "Remove password protection",
-    "wrong_password_error": "Current password is incorrect."
+    "wrong_password_error": "Current password is incorrect.",
+    "save_error_generic": "Couldn't save this folder. Try again."
   },
   "folder_card": {
     "empty": "Empty folder",

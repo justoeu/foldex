@@ -275,7 +275,8 @@
     "current_password_label": "Senha atual",
     "new_password_label": "Nova senha",
     "remove_password_action": "Remover proteção por senha",
-    "wrong_password_error": "A senha atual está incorreta."
+    "wrong_password_error": "A senha atual está incorreta.",
+    "save_error_generic": "Não foi possível salvar esta pasta. Tente de novo."
   },
   "folder_card": {
     "empty": "Pasta vazia",
