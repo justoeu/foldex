@@ -209,7 +209,19 @@ function CompactFolderImpl({
           data-tooltip={t('folder_card.open_folder')}
           aria-label={t('common.open_folder_aria', { name: f.name })}
         >
-          <div className="fx-compact-title" style={{ color: primaryColor(f.color) }}>{f.name}</div>
+          <div className="fx-compact-title" style={{ color: primaryColor(f.color) }}>
+            {f.has_password && (
+              <span
+                className="fx-folder-lock-icon"
+                aria-hidden="true"
+                data-tooltip={t('folder_card.locked_tooltip')}
+                data-tooltip-side="top"
+              >
+                <Icon d={I.lock} size={12} />
+              </span>
+            )}
+            {f.name}
+          </div>
           <div className="fx-compact-url">
             {t('folder_card.links_count', { count: f.link_count })}
           </div>

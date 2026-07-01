@@ -266,7 +266,16 @@
     "delete_cascade_confirm_action": "Delete everything",
     "submit_create": "Create folder",
     "submit_save": "Save",
-    "submit_done": "Done"
+    "submit_done": "Done",
+    "password_label": "Password",
+    "password_placeholder": "Leave blank for no password",
+    "password_hint": "Anyone opening this folder will need this password. You can change or remove it later.",
+    "password_protected_label": "Password protected",
+    "change_password_action": "Change password",
+    "current_password_label": "Current password",
+    "new_password_label": "New password",
+    "remove_password_action": "Remove password protection",
+    "wrong_password_error": "Current password is incorrect."
   },
   "folder_card": {
     "empty": "Empty folder",
@@ -276,12 +285,24 @@
     "edit_folder": "Edit folder",
     "folder_label": "folder",
     "folder_label_tooltip": "Folder",
+    "locked_tooltip": "Password protected",
     "links_count_one": "{{count}} link",
     "links_count_other": "{{count}} links",
     "folders_count_one": "{{count}} folder",
     "folders_count_other": "{{count}} folders",
     "rapidview_more_one": "+{{count}} more",
     "rapidview_more_other": "+{{count}} more"
+  },
+  "folder_lock": {
+    "kicker": "Locked folder",
+    "title": "Enter password for \"{{name}}\"",
+    "body": "This folder is password protected.",
+    "input_label": "folder password",
+    "input_placeholder": "Password",
+    "submit": "Unlock",
+    "error_incorrect": "Incorrect password.",
+    "error_generic": "Couldn't unlock this folder. Try again.",
+    "dialog_aria": "Enter password for {{name}}"
   },
   "tag_dialog": {
     "create_title": "Create tag",

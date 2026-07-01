@@ -1062,6 +1062,21 @@ html.fx-dark { background: #0E1014; }
   z-index: 2;
 }
 
+/* ─── folder lock icon — cards/list/compact/palette/picker ──────────────
+   Password-protected folders (ADR-28) get a small lock glyph inline before
+   the name, everywhere a folder's name renders — unlike the note badge
+   this isn't a corner overlay: folders have no favicon/cover-image slot to
+   compete with, so inline-before-text is simpler and reads naturally next
+   to the name in every density (card title, list row, compact row, palette
+   result, folder-picker option). Still selectable as a drag/move target or
+   picker choice while locked — only entering it is gated. */
+.fx-folder-lock-icon {
+  display: inline-flex;
+  vertical-align: -2px;
+  margin-right: 4px;
+  color: var(--fx-ink-4);
+}
+
 /* ─── note icon tiles — cards/list/compact/palette ──────────────────────
    Notes have no favicon/cover-image fallback the way links do, so every
    surface that would show a Favicon for a link shows this fixed emerald

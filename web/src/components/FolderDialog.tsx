@@ -55,6 +55,17 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
   // parent_id in the PATCH body.
   const [parentChoice, setParentChoice] = useState<number | null>(null)
   const [parentDirty, setParentDirty] = useState(false)
+  // Password (ADR-28). `password` covers both create and "set for the first
+  // time" edit — no current-password proof needed either way. Editing an
+  // ALREADY-protected folder's password is a distinct flow (passwordEditing
+  // reveals current/new fields) since changing/removing it requires proving
+  // the current one.
+  const [password, setPassword] = useState('')
+  const [passwordEditing, setPasswordEditing] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [removePassword, setRemovePassword] = useState(false)
+  const [passwordError, setPasswordError] = useState<string | null>(null)
   const create = useCreateFolder()
   const update = useUpdateFolder()
   const del = useDeleteFolder()
@@ -89,6 +100,12 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
       setGradFrom('#6366F1')
       setGradTo('#EC4899')
     }
+    setPassword('')
+    setPasswordEditing(false)
+    setCurrentPassword('')
+    setNewPassword('')
+    setRemovePassword(false)
+    setPasswordError(null)
   }, [open, folder])
 
   useEscape(onClose, open)
@@ -101,20 +118,52 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
   const submit = async () => {
     const trimmed = name.trim()
     if (!trimmed) return
-    if (isEdit && folder) {
-      // Only send parent_id when the user actually touched the picker —
-      // sending an unchanged value adds zero info and would surprise on
-      // a future cycle-check change.
-      const body: { name: string; color: string; parent_id?: number | null } = {
-        name: trimmed,
-        color: finalColor,
+    setPasswordError(null)
+    try {
+      if (isEdit && folder) {
+        // Only send parent_id when the user actually touched the picker —
+        // sending an unchanged value adds zero info and would surprise on
+        // a future cycle-check change. Same idea for password: only
+        // include it when the user actually touched a password field this
+        // session (first-time set, or the change/remove flow).
+        const body: {
+          name: string
+          color: string
+          parent_id?: number | null
+          password?: string | null
+          current_password?: string
+        } = { name: trimmed, color: finalColor }
+        if (parentDirty) body.parent_id = parentChoice
+        if (!folder.has_password) {
+          if (password) body.password = password
+        } else if (passwordEditing) {
+          if (removePassword) {
+            body.password = null
+            body.current_password = currentPassword
+          } else if (newPassword) {
+            body.password = newPassword
+            body.current_password = currentPassword
+          }
+        }
+        await update.mutateAsync({ id: folder.id, body })
+      } else {
+        const body: { name: string; color: string; parent_id: number | null; password?: string } = {
+          name: trimmed,
+          color: finalColor,
+          parent_id: parentId ?? null,
+        }
+        if (password) body.password = password
+        await create.mutateAsync(body)
       }
-      if (parentDirty) body.parent_id = parentChoice
-      await update.mutateAsync({ id: folder.id, body })
-    } else {
-      await create.mutateAsync({ name: trimmed, color: finalColor, parent_id: parentId ?? null })
+      onClose()
+    } catch (e: unknown) {
+      const code = (e as { response?: { data?: { error?: { code?: string } } } })?.response?.data?.error?.code
+      if (code === 'wrong_password') {
+        setPasswordError(t('folder_dialog.wrong_password_error'))
+        return
+      }
+      throw e
     }
-    onClose()
   }
 
   const onDeleteKeepLinks = async () => {
@@ -205,6 +254,96 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
                 />
                 <span className="fx-field-hint">{t('folder_dialog.parent_help')}</span>
               </label>
+            )}
+
+            {!isNaming && (!isEdit || (folder && !folder.has_password)) && (
+              <label className="fx-field">
+                <span className="fx-field-label">{t('folder_dialog.password_label')}</span>
+                <div className="fx-input">
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={t('folder_dialog.password_placeholder')}
+                    aria-label={t('folder_dialog.password_label')}
+                  />
+                </div>
+                <span className="fx-field-hint">{t('folder_dialog.password_hint')}</span>
+              </label>
+            )}
+
+            {!isNaming && isEdit && folder?.has_password && (
+              <div className="fx-field">
+                <span className="fx-field-label">{t('folder_dialog.password_label')}</span>
+                {!passwordEditing ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--fx-ink-3)' }}>
+                      <Icon d={I.lock} size={13} /> {t('folder_dialog.password_protected_label')}
+                    </span>
+                    <button
+                      type="button"
+                      className="fx-pillbtn"
+                      onClick={() => setPasswordEditing(true)}
+                    >
+                      {t('folder_dialog.change_password_action')}
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div className="fx-input">
+                      <input
+                        type="password"
+                        autoFocus
+                        value={currentPassword}
+                        onChange={(e) => {
+                          setCurrentPassword(e.target.value)
+                          setPasswordError(null)
+                        }}
+                        placeholder={t('folder_dialog.current_password_label')}
+                        aria-label={t('folder_dialog.current_password_label')}
+                      />
+                    </div>
+                    {!removePassword && (
+                      <div className="fx-input">
+                        <input
+                          type="password"
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          placeholder={t('folder_dialog.password_placeholder')}
+                          aria-label={t('folder_dialog.new_password_label')}
+                        />
+                      </div>
+                    )}
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--fx-ink-3)' }}>
+                      <input
+                        type="checkbox"
+                        checked={removePassword}
+                        onChange={(e) => setRemovePassword(e.target.checked)}
+                      />
+                      {t('folder_dialog.remove_password_action')}
+                    </label>
+                    <button
+                      type="button"
+                      className="fx-pillbtn"
+                      onClick={() => {
+                        setPasswordEditing(false)
+                        setCurrentPassword('')
+                        setNewPassword('')
+                        setRemovePassword(false)
+                        setPasswordError(null)
+                      }}
+                      style={{ alignSelf: 'flex-start' }}
+                    >
+                      {t('common.cancel')}
+                    </button>
+                  </div>
+                )}
+                {passwordError && (
+                  <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, marginTop: 6 }}>
+                    <Icon d={I.alert} size={12} /> {passwordError}
+                  </div>
+                )}
+              </div>
             )}
 
             <div className="fx-field">

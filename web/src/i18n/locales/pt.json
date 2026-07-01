@@ -266,7 +266,16 @@
     "delete_cascade_confirm_action": "Excluir tudo",
     "submit_create": "Criar pasta",
     "submit_save": "Salvar",
-    "submit_done": "Pronto"
+    "submit_done": "Pronto",
+    "password_label": "Senha",
+    "password_placeholder": "Deixe em branco para não ter senha",
+    "password_hint": "Quem for abrir esta pasta vai precisar dessa senha. Você pode trocar ou remover depois.",
+    "password_protected_label": "Protegida por senha",
+    "change_password_action": "Trocar senha",
+    "current_password_label": "Senha atual",
+    "new_password_label": "Nova senha",
+    "remove_password_action": "Remover proteção por senha",
+    "wrong_password_error": "A senha atual está incorreta."
   },
   "folder_card": {
     "empty": "Pasta vazia",
@@ -276,12 +285,24 @@
     "edit_folder": "Editar pasta",
     "folder_label": "pasta",
     "folder_label_tooltip": "Pasta",
+    "locked_tooltip": "Protegida por senha",
     "links_count_one": "{{count}} link",
     "links_count_other": "{{count}} links",
     "folders_count_one": "{{count}} pasta",
     "folders_count_other": "{{count}} pastas",
     "rapidview_more_one": "+{{count}} a mais",
     "rapidview_more_other": "+{{count}} a mais"
+  },
+  "folder_lock": {
+    "kicker": "Pasta trancada",
+    "title": "Digite a senha de \"{{name}}\"",
+    "body": "Esta pasta é protegida por senha.",
+    "input_label": "senha da pasta",
+    "input_placeholder": "Senha",
+    "submit": "Desbloquear",
+    "error_incorrect": "Senha incorreta.",
+    "error_generic": "Não foi possível desbloquear esta pasta. Tente de novo.",
+    "dialog_aria": "Digite a senha de {{name}}"
   },
   "tag_dialog": {
     "create_title": "Criar tag",

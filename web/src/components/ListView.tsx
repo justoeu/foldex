@@ -285,7 +285,19 @@ function FolderRowImpl({
           <Icon d={I.folder} size={14} stroke={2.2} />
         </span>
         <div className="fx-list-text">
-          <div className="fx-list-title" style={{ color: primaryColor(f.color) }}>{f.name}</div>
+          <div className="fx-list-title" style={{ color: primaryColor(f.color) }}>
+            {f.has_password && (
+              <span
+                className="fx-folder-lock-icon"
+                aria-hidden="true"
+                data-tooltip={t('folder_card.locked_tooltip')}
+                data-tooltip-side="top"
+              >
+                <Icon d={I.lock} size={12} />
+              </span>
+            )}
+            {f.name}
+          </div>
           <div className="fx-list-url">
             {t('folder_card.links_count', { count: f.link_count })}
           </div>

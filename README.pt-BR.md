@@ -32,6 +32,7 @@ Bookmark nativo é ótimo para "salvar uma página rápida e esquecer". Quando v
 | **Pinned/favoritos = uma pastinha à parte.** Só visual.                                 | `pinned` é coluna real na tabela. `ORDER BY pinned DESC, …` aplica em todo modo de ordenação. Badge gradient sempre visível. |
 | **Dados embutidos no navegador.** Trocou de máquina? Reinstalou Chrome? Reza.           | Postgres + MinIO em containers. `make up` numa máquina nova e seu ZIP de backup restaura tudo (DB + imagens) em ~minutos. |
 | **Pastebin/app de notas é outra ferramenta.** Snippets e links vivem em lugares diferentes. | **Notas** (`⌥M`) são uma entidade de primeira classe junto com os links: editor rich-text (Tiptap — negrito/títulos/listas/código/imagens inline), mesmas tags/pastas/pin/busca dos links, intercaladas no mesmo grid com badge esmeralda, compartilháveis via página pública `/n/{slug}`. |
+| **Sem como manter uma pasta privada** numa tela/máquina compartilhada sem criar uma segunda conta inteira. | **Senha por pasta.** Defina uma senha (hash bcrypt) em qualquer pasta — os links/notas dela ficam ocultos (e os thumbnails de preview são redigidos, mesmo no hover) até você desbloquear pra aquela sessão. Aplicado no backend, não só na UI: a API em si recusa entregar o conteúdo de uma pasta trancada sem prova da senha. |
 
 ### Cenários reais que viraram a chave (bookmark nativo → foldex)
 
@@ -190,7 +191,18 @@ curl -s -X POST localhost:9089/api/notes \
   -d '{"title":"Rascunho","body_html":"<p>Olá <strong>mundo</strong></p>"}' | jq .
 curl -s localhost:9089/n/rascunho | grep -o '<h1>.*</h1>'
 
-# 7. Abre a SPA e tenta ⌥K (palette) / ⌥N (novo link) / ⌥M (nova nota).
+# 7. Cria uma pasta protegida por senha, confirma que o conteúdo fica
+#    bloqueado sem o token de desbloqueio, depois confirma que desbloqueia
+#    com ele.
+curl -s -X POST localhost:9089/api/folders \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Privada","password":"hunter22"}' | jq .
+curl -s localhost:9089/api/entries?folder_id=1 | jq .              # 403 folder_locked
+TOKEN=$(curl -s -X POST localhost:9089/api/folders/1/unlock \
+  -H 'Content-Type: application/json' -d '{"password":"hunter22"}' | jq -r .unlock_token)
+curl -s -H "X-Foldex-Folder-Unlock: $TOKEN" localhost:9089/api/entries?folder_id=1 | jq .   # 200
+
+# 8. Abre a SPA e tenta ⌥K (palette) / ⌥N (novo link) / ⌥M (nova nota).
 open http://localhost:9088
 ```
 

@@ -266,7 +266,16 @@
     "delete_cascade_confirm_action": "Eliminar todo",
     "submit_create": "Crear carpeta",
     "submit_save": "Guardar",
-    "submit_done": "Listo"
+    "submit_done": "Listo",
+    "password_label": "Contraseña",
+    "password_placeholder": "Déjalo en blanco para no usar contraseña",
+    "password_hint": "Quien abra esta carpeta necesitará esta contraseña. Puedes cambiarla o quitarla después.",
+    "password_protected_label": "Protegida con contraseña",
+    "change_password_action": "Cambiar contraseña",
+    "current_password_label": "Contraseña actual",
+    "new_password_label": "Nueva contraseña",
+    "remove_password_action": "Quitar protección con contraseña",
+    "wrong_password_error": "La contraseña actual es incorrecta."
   },
   "folder_card": {
     "empty": "Carpeta vacía",
@@ -276,12 +285,24 @@
     "edit_folder": "Editar carpeta",
     "folder_label": "carpeta",
     "folder_label_tooltip": "Carpeta",
+    "locked_tooltip": "Protegida con contraseña",
     "links_count_one": "{{count}} enlace",
     "links_count_other": "{{count}} enlaces",
     "folders_count_one": "{{count}} carpeta",
     "folders_count_other": "{{count}} carpetas",
     "rapidview_more_one": "+{{count}} más",
     "rapidview_more_other": "+{{count}} más"
+  },
+  "folder_lock": {
+    "kicker": "Carpeta bloqueada",
+    "title": "Ingresa la contraseña de \"{{name}}\"",
+    "body": "Esta carpeta está protegida con contraseña.",
+    "input_label": "contraseña de la carpeta",
+    "input_placeholder": "Contraseña",
+    "submit": "Desbloquear",
+    "error_incorrect": "Contraseña incorrecta.",
+    "error_generic": "No se pudo desbloquear esta carpeta. Intenta de nuevo.",
+    "dialog_aria": "Ingresa la contraseña de {{name}}"
   },
   "tag_dialog": {
     "create_title": "Crear etiqueta",

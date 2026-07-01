@@ -10,6 +10,12 @@ export type MockState = {
   links: Link[]
   notes: Note[]
   folders: Folder[]
+  // Side-channel for folder passwords (ADR-28) — the real Folder type never
+  // carries the hash/plaintext, so this mirrors backend/internal/folders'
+  // password_hash column outside the public shape. Keyed by folder id;
+  // presence of a key = protected. Plaintext is fine here, this is a test
+  // double, not a security boundary.
+  folderPasswords: Record<number, string>
   // Backup-related state. Tests can drive validation/restore responses by
   // mutating these or by intercepting the route directly.
   backupBlob?: Uint8Array
@@ -31,14 +37,14 @@ export type MockState = {
 }
 
 export function freshState(): MockState {
-  return { tags: [], links: [], notes: [], folders: [], urlMetadataCalls: [] }
+  return { tags: [], links: [], notes: [], folders: [], folderPasswords: {}, urlMetadataCalls: [] }
 }
 
 type Method = 'get' | 'post' | 'patch' | 'delete'
 
 type Route = {
   url: RegExp
-  handle: (m: RegExpMatchArray, data: any, params: URLSearchParams, state: MockState) => any
+  handle: (m: RegExpMatchArray, data: any, params: URLSearchParams, state: MockState, headers: Record<string, string>) => any
 }
 
 const buildRoutes = (): Record<Method, Route[]> => ({
@@ -71,6 +77,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/import\/apply$/, handle: importApply },
     { url: /^\/api\/push\/subscriptions$/, handle: () => ({ id: 1, created_at: new Date().toISOString() }) },
     { url: /^\/api\/push\/test$/, handle: () => null },
+    { url: /^\/api\/folders\/(\d+)\/unlock$/, handle: unlockFolder },
   ],
   patch: [
     { url: /^\/api\/tags\/(\d+)$/, handle: patchTag },
@@ -135,7 +142,7 @@ export function installAxiosMock(state: MockState) {
       // rather than embedding them in the URL — merge those into the URLSearchParams
       // so route handlers see the same shape regardless of the caller style.
       const configIdx = method === 'get' || method === 'delete' ? 0 : 1
-      const config = (rest[configIdx] ?? {}) as { params?: Record<string, unknown> }
+      const config = (rest[configIdx] ?? {}) as { params?: Record<string, unknown>; headers?: Record<string, string> }
       const [path, queryStr = ''] = url.split('?')
       const params = new URLSearchParams(queryStr)
       if (config.params && typeof config.params === 'object') {
@@ -143,11 +150,12 @@ export function installAxiosMock(state: MockState) {
           if (v != null) params.append(k, String(v))
         }
       }
+      const headers = config.headers ?? {}
       for (const route of routes[method]) {
         const m = path.match(route.url)
         if (m) {
           try {
-            const out = route.handle(m, data, params, state)
+            const out = route.handle(m, data, params, state, headers)
             return { data: out }
           } catch (e: any) {
             return Promise.reject(e)
@@ -187,21 +195,61 @@ function listLinks(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: Mo
   return out.slice(offset, offset + limit)
 }
 
-function listFolders(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState) {
+// mockUnlockToken/verifyMockUnlockToken stand in for the real HMAC token
+// (folders.IssueUnlockToken/VerifyUnlockToken) — no crypto needed in a test
+// double, just something that (a) round-trips through the unlock endpoint,
+// (b) is folder-specific (a token for folder 1 must not work for folder 2),
+// and (c) changes when the password changes, mirroring the real
+// invalidate-on-password-change property.
+function mockUnlockToken(id: number, password: string): string {
+  return `mock-unlock:${id}:${password}`
+}
+function verifyMockUnlockToken(id: number, s: MockState, token: string | undefined): boolean {
+  const pw = s.folderPasswords[id]
+  if (pw === undefined) return true // unprotected — nothing to verify
+  return !!token && token === mockUnlockToken(id, pw)
+}
+function folderLocked() {
+  const e: any = new Error('folder locked')
+  e.response = { status: 403, data: { error: { code: 'folder_locked', message: 'this folder is password-protected' } } }
+  return e
+}
+function wrongPassword() {
+  const e: any = new Error('wrong password')
+  e.response = { status: 401, data: { error: { code: 'wrong_password', message: 'incorrect password' } } }
+  return e
+}
+
+// Redaction mirrors folders.Repository.List's always-on rule (ADR-28): a
+// protected folder's preview_links/preview_folders are cleared regardless of
+// any unlock token — that token only gates the SEPARATE "list what's inside"
+// call, not this one.
+function withRedaction(f: Folder): Folder {
+  if (!f.has_password) return f
+  return { ...f, preview_links: [], preview_folders: [] }
+}
+
+function listFolders(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState, headers: Record<string, string>) {
   const root = params.get('root') === '1' || params.get('root') === 'true'
   const parentRaw = params.get('parent_id')
   const parentID = parentRaw ? Number(parentRaw) : null
-  if (parentID && parentID > 0) return s.folders.filter((f) => f.parent_id === parentID)
-  if (root) return s.folders.filter((f) => f.parent_id == null)
-  return s.folders
+  if (parentID && parentID > 0) {
+    if (!verifyMockUnlockToken(parentID, s, headers['X-Foldex-Folder-Unlock'])) throw folderLocked()
+    return s.folders.filter((f) => f.parent_id === parentID).map(withRedaction)
+  }
+  if (root) return s.folders.filter((f) => f.parent_id == null).map(withRedaction)
+  return s.folders.map(withRedaction)
 }
 
 function createFolder(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState): Folder {
+  const id = (s.folders.at(-1)?.id ?? 0) + 1
+  if (data.password) s.folderPasswords[id] = data.password
   const f: Folder = {
-    id: (s.folders.at(-1)?.id ?? 0) + 1,
+    id,
     name: data.name,
     color: data.color ?? '#6366F1',
     parent_id: data.parent_id ?? null,
+    has_password: !!data.password,
     link_count: 0,
     folder_count: 0,
     preview_links: [],
@@ -223,7 +271,39 @@ function patchFolder(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Moc
   // App.test DnD assertions vacuous — onMoveFolder fired and the mock did
   // nothing.
   if ('parent_id' in data) f.parent_id = data.parent_id ?? null
+  // password is tri-state (ADR-28): absent = unchanged, string = set/
+  // replace, null = remove. Changing/removing an EXISTING password requires
+  // current_password to match, mirroring folders.Repository.Update.
+  if ('password' in data) {
+    const currentPw = s.folderPasswords[id]
+    if (currentPw !== undefined) {
+      if (data.current_password !== currentPw) throw wrongPassword()
+    }
+    if (data.password == null) {
+      delete s.folderPasswords[id]
+    } else {
+      s.folderPasswords[id] = data.password
+    }
+    f.has_password = data.password != null
+  }
   return f
+}
+
+function unlockFolder(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState) {
+  const id = Number(m[1])
+  const f = s.folders.find((x) => x.id === id)
+  if (!f) throw notFound()
+  const pw = s.folderPasswords[id]
+  if (pw === undefined) {
+    const e: any = new Error('not protected')
+    e.response = { status: 400, data: { error: { code: 'not_protected', message: 'this folder has no password set' } } }
+    throw e
+  }
+  if (data.password !== pw) throw wrongPassword()
+  return {
+    unlock_token: mockUnlockToken(id, pw),
+    expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+  }
 }
 
 function deleteFolder(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
@@ -231,6 +311,7 @@ function deleteFolder(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: Mock
   const idx = s.folders.findIndex((x) => x.id === id)
   if (idx < 0) throw notFound()
   s.folders.splice(idx, 1)
+  delete s.folderPasswords[id]
   for (const l of s.links) {
     if (l.folder_id === id) l.folder_id = null
   }
@@ -444,7 +525,7 @@ function uploadNoteImage(): { url: string } {
 // 'clicks' is explicitly handled; other sort values fall through to
 // insertion order) rather than reimplementing the backend's full ORDER BY —
 // tests that need a specific order create fixtures in that order already.
-function listEntries(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState): Entry[] {
+function listEntries(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState, headers: Record<string, string>): Entry[] {
   let linkOut = [...s.links]
   let noteOut = [...s.notes]
   const q = params.get('q')?.toLowerCase()
@@ -459,6 +540,9 @@ function listEntries(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: 
   }
   const folderID = Number(params.get('folder_id') ?? '')
   if (folderID > 0) {
+    // Content-gate mirrors entries.Handler.list (ADR-28): reading a
+    // protected folder's links/notes requires proof of the password.
+    if (!verifyMockUnlockToken(folderID, s, headers['X-Foldex-Folder-Unlock'])) throw folderLocked()
     linkOut = linkOut.filter((l) => l.folder_id === folderID)
     noteOut = noteOut.filter((n) => n.folder_id === folderID)
   } else if (params.get('ungrouped') === '1') {

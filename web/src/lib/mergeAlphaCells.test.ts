@@ -3,7 +3,7 @@ import { mergeAlphaCells } from './mergeAlphaCells'
 import type { Entry, Folder } from '../api/types'
 
 function folder(id: number, name: string): Folder {
-  return { id, name, color: '#000', link_count: 0, folder_count: 0, preview_links: [], preview_folders: [] }
+  return { id, name, color: '#000', link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], has_password: false }
 }
 
 function linkEntry(id: number, title: string): Entry {

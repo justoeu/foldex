@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, waitFor, fireEvent } from '@testing-library/react'
+import { screen, waitFor, fireEvent, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { renderWithProviders } from './test/renderWithProviders'
@@ -327,5 +327,73 @@ describe('App', () => {
     const editBtns = screen.getAllByRole('button', { name: /^edit$/i })
     await user.click(editBtns[0])
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('clicking a locked folder shows the password prompt instead of navigating', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
+    // The password prompt appears; the folder itself never opens (the
+    // home page-head, which only shows outside a folder, must still be gone
+    // — we're just asserting the PROMPT is what's on top, not navigation).
+    expect(await screen.findByText(/Secret/, { selector: 'h2' })).toBeInTheDocument()
+    expect(screen.getByLabelText('folder password')).toBeInTheDocument()
+  })
+
+  it('entering the correct password unlocks and navigates into the folder', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
+    await user.type(await screen.findByLabelText('folder password'), 'hunter22')
+    await user.click(screen.getByRole('button', { name: /unlock/i }))
+    // Prompt closes and we're now inside the folder — the breadcrumb back
+    // control is folder-view-only, and the prompt input is gone.
+    await waitFor(() => expect(screen.queryByLabelText('folder password')).not.toBeInTheDocument())
+    expect(screen.queryByText(/Your link base/i)).not.toBeInTheDocument()
+  })
+
+  it('wrong password keeps the prompt open with an inline error and never navigates', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
+    await user.type(await screen.findByLabelText('folder password'), 'wrong-guess')
+    await user.click(screen.getByRole('button', { name: /unlock/i }))
+    expect(await screen.findByText(/incorrect password/i)).toBeInTheDocument()
+    expect(screen.getByLabelText('folder password')).toBeInTheDocument()
+  })
+
+  it('jumping to a locked folder via the Command Palette also prompts for the password', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await user.keyboard('{Alt>}k{/Alt}')
+    const palette = await screen.findByRole('dialog')
+    await user.type(within(palette).getByPlaceholderText(/Search by.*action/i), 'Secret')
+    await user.click(await within(palette).findByRole('button', { name: /open folder Secret/i }))
+    // Palette closes; the password prompt takes over.
+    await waitFor(() => expect(screen.queryByPlaceholderText(/Search by.*action/i)).not.toBeInTheDocument())
+    expect(await screen.findByLabelText('folder password')).toBeInTheDocument()
   })
 })

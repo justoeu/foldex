@@ -24,7 +24,7 @@ const baseNote: Entry = {
 }
 
 const baseFolder: Folder = {
-  id: 3, name: 'A folder', color: '#000', link_count: 0, folder_count: 0, preview_links: [], preview_folders: [],
+  id: 3, name: 'A folder', color: '#000', link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], has_password: false,
 }
 
 describe('ListView', () => {

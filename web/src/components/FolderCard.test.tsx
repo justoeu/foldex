@@ -17,6 +17,7 @@ function makeFolder(opts: Partial<Folder> & { link_count: number; preview_links:
     folder_count: opts.folder_count ?? 0,
     preview_links: opts.preview_links,
     preview_folders: opts.preview_folders ?? [],
+    has_password: opts.has_password ?? false,
     created_at: new Date().toISOString(),
   }
 }

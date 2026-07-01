@@ -36,6 +36,7 @@ import { useUpdateNote } from './api/notes'
 import { useTags } from './api/tags'
 import { useFolders, useCreateFolder, useUpdateFolder } from './api/folders'
 import { useEscape } from './hooks/useEscape'
+import { usePasswordPrompt } from './components/PasswordPromptDialog'
 import { mergeAlphaCells } from './lib/mergeAlphaCells'
 import type { Link as LinkT, Folder as FolderT, Entry, MergeSource } from './api/types'
 
@@ -93,6 +94,11 @@ export default function App() {
     setFolderPath((prev) => (id == null ? [] : [...prev, id]))
   }, [])
   const navigateBack = useCallback(() => setFolderPath((prev) => prev.slice(0, -1)), [])
+  // Proof-of-password for protected folders (ADR-28), keyed by folder id.
+  // Deliberately in-memory only (no localStorage) — unlock state resets on
+  // page reload, same "purely in-memory" precedent as folderPath itself.
+  const [unlockedFolders, setUnlockedFolders] = useState<Record<number, { token: string; expiresAt: number }>>({})
+  const passwordPrompt = usePasswordPrompt()
 
   // Theme toggle drives a class on the shell wrapper so all .fx-* tokens flip.
   useEffect(() => {
@@ -130,10 +136,16 @@ export default function App() {
   // source — one paginated, sorted, searched stream spanning both links and
   // notes instead of merging two independently-paginated queries client-side
   // (see ADR-27 in docs/ARCHITECTURE.md).
+  // Unlock token for the currently-open folder, if any — attached as a
+  // header on the two content-gated queries below (ADR-28). Undefined for
+  // an unprotected folder (no header sent, backend never gates it) and for
+  // Home itself (openFolder === null, root/ungrouped are never gated).
+  const currentUnlockToken = openFolder !== null ? unlockedFolders[openFolder]?.token : undefined
   const entries = useEntries({
     q,
     tagIds: selectedTags,
     sort,
+    unlockToken: currentUnlockToken,
     ...(openFolder !== null ? { folderId: openFolder } : { ungrouped: true }),
   })
   // Folder list scope:
@@ -141,9 +153,49 @@ export default function App() {
   //   inside folder (openFolder)  → only direct children ({scope: openFolder})
   // LinkDialog still loads the full flat list via a separate hook call so the
   // folder picker can target anything regardless of position.
-  const folders = useFolders({ scope: openFolder === null ? 'root' : openFolder })
+  const folders = useFolders({ scope: openFolder === null ? 'root' : openFolder, unlockToken: currentUnlockToken })
   const allFolders = useFolders({ scope: null })
   const { data: allTags = [] } = useTags()
+
+  // Centralized "open a folder" gate (ADR-28) — the single chokepoint every
+  // card kind, view (cards/list/compact), and the Command Palette route
+  // through instead of calling setOpenFolder directly. Looks the target up
+  // in allFolders (the full flat list, guaranteed to be a superset of
+  // whatever scoped `folders` list the caller rendered from) rather than
+  // requiring every call site to pass the full Folder object.
+  const requestOpenFolder = useCallback(async (id: number) => {
+    const folder = allFolders.data?.find((f) => f.id === id)
+    const unlocked = unlockedFolders[id]
+    const isUnlocked = !!unlocked && unlocked.expiresAt > Date.now()
+    if (!folder?.has_password || isUnlocked) {
+      setOpenFolder(id)
+      return
+    }
+    const result = await passwordPrompt(folder)
+    if (result) {
+      setUnlockedFolders((prev) => ({ ...prev, [id]: result }))
+      setOpenFolder(id)
+    }
+  }, [allFolders.data, unlockedFolders, passwordPrompt, setOpenFolder])
+
+  // Defensive 403 handling: a token can go stale mid-session (password
+  // changed/removed in another tab). If the currently-open folder's gated
+  // query comes back locked, drop the stale entry and bail out to the
+  // parent — re-entering will correctly re-prompt via requestOpenFolder.
+  useEffect(() => {
+    if (openFolder === null) return
+    const err = (entries.error ?? folders.error) as
+      | { response?: { status?: number; data?: { error?: { code?: string } } } }
+      | null
+    if (err?.response?.status !== 403 || err.response?.data?.error?.code !== 'folder_locked') return
+    setUnlockedFolders((prev) => {
+      if (!(openFolder in prev)) return prev
+      const next = { ...prev }
+      delete next[openFolder]
+      return next
+    })
+    navigateBack()
+  }, [entries.error, folders.error, openFolder, navigateBack])
 
   // Self-healing folder navigation: if a folder in the current path no longer
   // exists (e.g. user deleted it from the dialog while inside it), prune it.
@@ -411,7 +463,7 @@ export default function App() {
               folders={folders.data ?? []}
               allFolders={allFolders.data ?? []}
               openFolder={openFolder}
-              onOpenFolder={setOpenFolder}
+              onOpenFolder={requestOpenFolder}
               onNavigateBack={navigateBack}
               isLoading={entries.isLoading}
               onEdit={handleEditLink}
@@ -513,8 +565,8 @@ export default function App() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         onOpenFolder={(id) => {
-          setOpenFolder(id)
           setPaletteOpen(false)
+          void requestOpenFolder(id)
         }}
       />
       <TooltipPortal />
@@ -530,7 +582,12 @@ type HomeProps = {
   // (root folders on home, immediate children inside a folder).
   allFolders: FolderT[]
   openFolder: number | null
-  onOpenFolder: (id: number | null) => void
+  // Gated open request (ADR-28) — routes through App.tsx's requestOpenFolder,
+  // which prompts for a password first when the target folder is protected.
+  // Never called with null; "go home" is a separate action (Topbar's onHome
+  // calls setOpenFolder(null) directly, bypassing this gate entirely since
+  // leaving a folder never needs to prove anything).
+  onOpenFolder: (id: number) => void
   onNavigateBack: () => void
   isLoading: boolean
   onEdit: (l: LinkT) => void
