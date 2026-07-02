@@ -15,6 +15,10 @@ type Props = {
   onEditFolder?: (folderId: number) => void
 }
 
+// A locked folder's master-verified action: `reset` clears the password and
+// nudges you to set a new one; `remove` clears it and leaves the folder open.
+type FolderPwMode = 'reset' | 'remove'
+
 export function SettingsPage({ onEditFolder }: Props) {
   const { t } = useTranslation()
   return (
@@ -235,7 +239,7 @@ function LockedFoldersSection({ onEditFolder }: Props) {
   // want its success row (and "set new password" affordance) to persist. Track
   // reset folders separately and render them as done rows even after they leave
   // the locked set.
-  const [resetDone, setResetDone] = useState<{ id: number; name: string; color: string }[]>([])
+  const [resetDone, setResetDone] = useState<{ id: number; name: string; color: string; mode: FolderPwMode }[]>([])
   const doneIds = new Set(resetDone.map((f) => f.id))
   const locked = folders.filter((f) => f.has_password && !doneIds.has(f.id))
   const isEmpty = locked.length === 0 && resetDone.length === 0
@@ -258,11 +262,11 @@ function LockedFoldersSection({ onEditFolder }: Props) {
                 id={f.id}
                 name={f.name}
                 color={f.color}
-                onDone={() => setResetDone((prev) => [...prev, { id: f.id, name: f.name, color: f.color }])}
+                onDone={(mode) => setResetDone((prev) => [...prev, { id: f.id, name: f.name, color: f.color, mode }])}
               />
             ))}
             {resetDone.map((f) => (
-              <DoneFolderRow key={f.id} id={f.id} name={f.name} color={f.color} onEditFolder={onEditFolder} />
+              <DoneFolderRow key={f.id} id={f.id} name={f.name} color={f.color} mode={f.mode} onEditFolder={onEditFolder} />
             ))}
           </ul>
         )}
@@ -275,11 +279,13 @@ function DoneFolderRow({
   id,
   name,
   color,
+  mode,
   onEditFolder,
 }: {
   id: number
   name: string
   color: string
+  mode: FolderPwMode
   onEditFolder?: (folderId: number) => void
 }) {
   const { t } = useTranslation()
@@ -297,9 +303,11 @@ function DoneFolderRow({
       <span style={{ width: 12, height: 12, borderRadius: 4, background: color, flex: '0 0 auto' }} />
       <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{name}</span>
       <span style={{ fontSize: 12, color: 'var(--fx-ok, #10B981)', display: 'flex', alignItems: 'center', gap: 4 }}>
-        <Icon d={I.check} size={13} /> {t('settings.reset_done')}
+        <Icon d={I.check} size={13} /> {mode === 'remove' ? t('settings.remove_done') : t('settings.reset_done')}
       </span>
-      {onEditFolder && (
+      {/* Only the recovery ("redefinir") flow nudges you to set a new password;
+          "remover" intentionally leaves the folder unprotected. */}
+      {mode === 'reset' && onEditFolder && (
         <button className="fx-pillbtn" onClick={() => onEditFolder(id)}>
           {t('settings.reset_set_new')}
         </button>
@@ -317,22 +325,34 @@ function LockedFolderRow({
   id: number
   name: string
   color: string
-  onDone: () => void
+  onDone: (mode: FolderPwMode) => void
 }) {
   const { t } = useTranslation()
   const reset = useResetFolderPassword()
   const { data: masterStatus } = useMasterPasswordStatus()
-  const [open, setOpen] = useState(false)
+  // null = collapsed; otherwise which action the master-password prompt serves.
+  const [mode, setMode] = useState<FolderPwMode | null>(null)
   const [master, setMaster] = useState('')
   const [error, setError] = useState<string | null>(null)
 
+  const openFor = (m: FolderPwMode) => {
+    setMode((cur) => (cur === m ? null : m))
+    setMaster('')
+    setError(null)
+  }
+
   const submit = async () => {
+    if (!mode) return
     setError(null)
     try {
+      // Both actions clear the folder password via the master-verified reset
+      // endpoint; they differ only in the follow-up UX (remove leaves the
+      // folder unprotected; reset offers to set a new password).
       await reset.mutateAsync({ id, masterPassword: master })
       setMaster('')
-      setOpen(false)
-      onDone()
+      const m = mode
+      setMode(null)
+      onDone(m)
     } catch (e) {
       const code = errCode(e)
       if (code === 'master_not_configured') setError(t('settings.reset_no_master'))
@@ -355,13 +375,19 @@ function LockedFolderRow({
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ width: 12, height: 12, borderRadius: 4, background: color, flex: '0 0 auto' }} />
         <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{name}</span>
-        <button className="fx-pillbtn" onClick={() => setOpen((v) => !v)}>
+        <button className="fx-pillbtn" onClick={() => openFor('reset')}>
           {t('settings.reset_action')}
+        </button>
+        <button className="fx-pillbtn fx-pillbtn-danger" onClick={() => openFor('remove')}>
+          {t('settings.remove_action')}
         </button>
       </div>
 
-      {open && (
+      {mode && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontSize: 12, color: 'var(--fx-ink-3)' }}>
+            {mode === 'remove' ? t('settings.remove_explain') : t('settings.reset_explain')}
+          </div>
           {masterStatus?.hint && (
             <div className="fx-field-hint" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <Icon d={I.info} size={12} /> {t('settings.reset_master_hint', { hint: masterStatus.hint })}
@@ -393,7 +419,7 @@ function LockedFolderRow({
             </div>
           )}
           <div style={{ display: 'flex', gap: 8 }}>
-            <button className="fx-confirm-btn" onClick={() => setOpen(false)}>
+            <button className="fx-confirm-btn" onClick={() => setMode(null)}>
               {t('common.cancel')}
             </button>
             <button
@@ -401,7 +427,8 @@ function LockedFolderRow({
               onClick={submit}
               disabled={!master || reset.isPending}
             >
-              <Icon d={I.refresh} size={13} stroke={2} /> {t('settings.reset_confirm')}
+              <Icon d={mode === 'remove' ? I.trash : I.refresh} size={13} stroke={2} />{' '}
+              {mode === 'remove' ? t('settings.remove_confirm') : t('settings.reset_confirm')}
             </button>
           </div>
         </div>

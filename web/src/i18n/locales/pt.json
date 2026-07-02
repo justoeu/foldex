@@ -639,7 +639,12 @@
     "master_hint_equals": "O lembrete não pode ser igual à senha.",
     "reset_master_hint": "Lembrete: {{hint}}",
     "master_current_hint": "Lembrete atual: {{hint}}",
-    "master_hint_placeholder_keep": "Deixe em branco para manter o atual"
+    "master_hint_placeholder_keep": "Deixe em branco para manter o atual",
+    "remove_action": "Remover senha",
+    "remove_confirm": "Remover",
+    "remove_done": "Senha removida — pasta desprotegida",
+    "remove_explain": "A pasta ficará sem senha (desprotegida). Informe a senha master para confirmar.",
+    "reset_explain": "Informe a senha master para limpar a senha e depois definir uma nova."
   },
   "note_toolbar": {
     "aria": "Formatação de texto",

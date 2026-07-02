@@ -742,6 +742,8 @@ O ADR-28 deixou a recuperação de uma senha de pasta esquecida como "edite o ba
 
 **Backup.** `app_setting` e `folder.password_hint` atravessam backup/restore **verbatim** nos 3 modos (`backup.AppSettingRow`, `backup.FolderRow.PasswordHint`) — o snapshot continua completo. Wipe restaura exatamente as settings do zip (inclusive "sem master" pra um backup antigo, ADR-28-era); skip/duplicate não clobberam uma setting singleton já existente (`ON CONFLICT DO NOTHING`). Consequência de segurança: o zip de backup agora carrega o hash da master (como já carregava os hashes de pasta) — mesma postura.
 
+**Duas ações por pasta em Configurações** (ambas via o mesmo endpoint master-verified, diferindo só no follow-up): **Redefinir senha** limpa e oferece "Definir nova senha" (recuperação: esqueci, quero trocar); **Remover senha** limpa e deixa a pasta desprotegida (sem sugerir nova). Ambas exigem a senha master.
+
 **Escopo fora do v1.** Sem "limpar todas as pastas de uma vez" (reset é por-pasta, cirúrgico, a partir de uma lista em Configurações). Sem recuperação da própria master esquecida (aí sim volta a ser edição direta no banco — é o segredo raiz). Sem dica pra master (só pra pastas).
 
 ## Future considerations

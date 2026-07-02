@@ -639,7 +639,12 @@
     "master_hint_equals": "The reminder must not be the same as the password.",
     "reset_master_hint": "Reminder: {{hint}}",
     "master_current_hint": "Current reminder: {{hint}}",
-    "master_hint_placeholder_keep": "Leave blank to keep the current one"
+    "master_hint_placeholder_keep": "Leave blank to keep the current one",
+    "remove_action": "Remove password",
+    "remove_confirm": "Remove",
+    "remove_done": "Password removed — folder unlocked",
+    "remove_explain": "The folder will be left with no password (unprotected). Enter the master password to confirm.",
+    "reset_explain": "Enter the master password to clear the password, then set a new one."
   },
   "note_toolbar": {
     "aria": "Text formatting",
