@@ -728,6 +728,53 @@ html.fx-dark { background: #0E1014; }
   white-space: normal;
 }
 
+/* ─── folder unlock modal (PasswordPromptDialog) ──────────────────────── */
+.fx-lockmodal .fx-modal-kicker { color: var(--fx-accent-3); }
+.fx-lockmodal .fx-modal-title { margin-top: 3px; }
+.fx-lock-badge {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  background: var(--fx-accent-soft);
+  color: var(--fx-accent-3);
+  border: 1px solid var(--fx-accent-soft-2);
+}
+.fx-lock-error {
+  font-size: 12px;
+  color: var(--fx-danger);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+}
+.fx-lock-hint {
+  font-size: 12px;
+  color: var(--fx-ink-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--fx-accent) 8%, transparent);
+}
+.fx-lock-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--fx-danger) 9%, transparent);
+  color: var(--fx-ink-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.fx-lock-banner strong { color: var(--fx-danger); display: block; margin-bottom: 2px; }
+.fx-lock-banner > svg { color: var(--fx-danger); flex: 0 0 auto; margin-top: 2px; }
+
 .fx-confirm-foot {
   margin-top: 18px;
   padding: 14px 0 18px;
@@ -1129,9 +1176,80 @@ html.fx-dark { background: #0E1014; }
   border: 1px solid var(--fx-border);
   border-radius: 10px;
   background: var(--fx-surface-2);
-  min-height: 220px;
-  max-height: 420px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* Formatting toolbar: wraps to multiple rows on narrow widths, stays pinned
+   above the scrollable editor body. */
+.fx-tt-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--fx-border);
+  background: color-mix(in srgb, var(--fx-bg-tint) 45%, transparent);
+}
+.fx-tt-btn {
+  height: 28px;
+  min-width: 28px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: var(--fx-ink-3);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.fx-tt-btn:hover { background: var(--fx-bg-tint); color: var(--fx-ink); }
+.fx-tt-active {
+  background: var(--fx-accent-soft);
+  color: var(--fx-accent-3);
+  border-color: var(--fx-accent-soft-2);
+}
+.fx-tt-txt { font-size: 12px; font-weight: 700; }
+.fx-tt-sep { width: 1px; height: 18px; background: var(--fx-border); margin: 0 3px; flex: 0 0 auto; }
+.fx-tt-select {
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--fx-border);
+  background: var(--fx-surface-2);
+  color: var(--fx-ink-2);
+  font-size: 12px;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.fx-tt-color {
+  position: relative;
+  height: 28px;
+  width: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.fx-tt-color:hover { background: var(--fx-bg-tint); }
+.fx-tt-color-swatch { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--fx-border); }
+.fx-tt-color input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: 0;
+  padding: 0;
+}
+.fx-tiptap {
   overflow-y: auto;
+  min-height: 180px;
+  max-height: 360px;
   padding: 10px 12px;
 }
 .fx-tiptap .ProseMirror {
@@ -1164,6 +1282,20 @@ html.fx-dark { background: #0E1014; }
   padding: 1px 4px;
   font-family: var(--fx-mono);
   font-size: 12px;
+}
+/* Rich-text block rendering so toolbar actions are visible while editing
+   (markers, heading scale, quote rule). Alignment rides on the inline
+   text-align style TextAlign emits — no rule needed. */
+.fx-tiptap .ProseMirror ul { list-style: disc; padding-left: 22px; margin: 4px 0; }
+.fx-tiptap .ProseMirror ol { list-style: decimal; padding-left: 22px; margin: 4px 0; }
+.fx-tiptap .ProseMirror h1 { font-size: 20px; font-weight: 700; margin: 8px 0 4px; color: var(--fx-ink); }
+.fx-tiptap .ProseMirror h2 { font-size: 17px; font-weight: 700; margin: 8px 0 4px; color: var(--fx-ink); }
+.fx-tiptap .ProseMirror h3 { font-size: 15px; font-weight: 700; margin: 6px 0 4px; color: var(--fx-ink); }
+.fx-tiptap .ProseMirror blockquote {
+  border-left: 3px solid var(--fx-border);
+  padding-left: 10px;
+  margin: 6px 0;
+  color: var(--fx-ink-3);
 }
 
 /* ─── "monitored" footer chip on link cards ─────────────────────────────
@@ -1338,6 +1470,34 @@ html.fx-dark { background: #0E1014; }
 .fx-modal-kicker-note {
   color: #10B981;
 }
+
+/* ─── password strength meter (complexity matrix) ─────────────────────── */
+.fx-pwstrength { margin-top: 8px; }
+.fx-pwstrength-bars { display: flex; align-items: center; gap: 4px; }
+.fx-pwstrength-seg {
+  height: 4px;
+  flex: 1;
+  border-radius: 2px;
+  background: var(--fx-border);
+  transition: background .2s;
+}
+.fx-pwstrength-label { font-size: 11px; font-weight: 700; margin-left: 6px; min-width: 48px; }
+.fx-pwstrength-rules {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 3px 12px;
+}
+.fx-pwstrength-rules li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--fx-ink-4);
+}
+.fx-pwstrength-rules li.fx-pwrule-ok { color: var(--fx-ok, #10B981); }
 .fx-btn-note {
   height: 38px;
   padding: 0 14px;

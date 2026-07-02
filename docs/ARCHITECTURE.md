@@ -77,6 +77,7 @@ Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `12
 -- 000013_link_title_lower_index    → índice funcional p/ sort alpha sem runtime sort
 -- 000014_notes              → tabela `note` + polimorfiza link_tag/click_log via entity_kind (ADR-27)
 -- 000015_folder_password    → `folder.password_hash` nullable, bcrypt (ADR-28)
+-- 000016_master_password_and_hint → tabela `app_setting` (KV, master password) + `folder.password_hint` (ADR-29)
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -105,6 +106,15 @@ CREATE INDEX folder_parent ON folder (parent_id) WHERE parent_id IS NOT NULL;
 -- 000015_folder_password → NULL = sem proteção (padrão). Não-NULL = hash
 -- bcrypt (internal/folders/password.go); plaintext nunca é armazenado. ADR-28.
 ALTER TABLE folder ADD COLUMN password_hash TEXT;
+
+-- 000016_master_password_and_hint → dica não-secreta exibida no unlock (≠ senha)
+-- + tabela KV genérica p/ settings mutáveis pela UI (hoje só a master). ADR-29.
+ALTER TABLE folder ADD COLUMN password_hint TEXT;
+CREATE TABLE app_setting (
+  key        TEXT PRIMARY KEY,            -- ex.: 'master_password_hash' (bcrypt via internal/pkg/pwhash)
+  value      TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE TABLE link (
   id             BIGSERIAL PRIMARY KEY,
@@ -269,11 +279,15 @@ LIMIT $3 OFFSET $4;
 |        | PATCH  | `/api/tags/{id}`                      |                                                    |
 |        | DELETE | `/api/tags/{id}`                      | Cascades junction                                  |
 | Folders| GET    | `/api/folders`                        | Query: `?root=1` (só pastas raiz, `parent_id IS NULL`), `?parent_id=N` (filhas diretas de N), ausente (flat, todas). Retorna `link_count` + `has_password` + `preview_links` (até 4, LATERAL+jsonb_agg, ordem pinned DESC, created DESC — **sempre vazio quando `has_password=true`**, redação incondicional, ADR-28) + `parent_id`. `?parent_id=N` numa pasta protegida exige `X-Foldex-Folder-Unlock` válido, senão `403 folder_locked` (ADR-28). |
-|        | POST   | `/api/folders`                        | Body: `{name, color?, parent_id?, password?}` — `parent_id` opcional (null = raiz); `password` opcional (min 4 chars), define proteção já na criação. |
-|        | GET    | `/api/folders/{id}`                   |                                                    |
-|        | PATCH  | `/api/folders/{id}`                   | `parent_id` é tri-state (absent=não toca, N=move pra dentro de N, null=promove pra raiz). `password` é tri-state igual (absent=não toca, string=troca/define, null=remove proteção) — trocar/remover uma senha JÁ existente exige `current_password` correto no mesmo body, senão `401 wrong_password` (ADR-28; sem bypass de admin). |
-|        | POST   | `/api/folders/{id}/unlock`            | Body: `{password}`. Verifica via bcrypt; `200 {unlock_token, expires_at}` (TTL 24h) ou `401 wrong_password`/`400 not_protected`. Token inclui o `password_hash` atual no HMAC — trocar/remover a senha invalida todo token emitido antes (ADR-28). |
+|        | POST   | `/api/folders`                        | Body: `{name, color?, parent_id?, password?, password_hint?}` — `parent_id` opcional (null = raiz); `password` opcional (min 4 chars), define proteção já na criação; `password_hint` opcional (≠ senha, ADR-29). |
+|        | GET    | `/api/folders/{id}`                   | Retorna `password_hint` (não-secreto) quando presente (ADR-29). |
+|        | PATCH  | `/api/folders/{id}`                   | `parent_id`/`password`/`password_hint` são tri-state (absent=não toca, valor=define, null=remove). Trocar/remover uma senha JÁ existente exige `current_password` (ADR-28). `password_hint` ≠ senha (checado via bcrypt na tx); remover a senha limpa a dica (ADR-29). |
+|        | POST   | `/api/folders/{id}/unlock`            | Body: `{password}`. Verifica via bcrypt; `200 {unlock_token, expires_at}` (TTL 24h). Token inclui o `password_hash` atual no HMAC — trocar/remover a senha invalida todo token emitido antes. `400 not_protected`; `401 wrong_password` traz `failed_attempts`/`attempts_remaining`; após 5 erros seguidos → `429 too_many_attempts` com `locked_until`/`retry_after_seconds` + header `Retry-After` (bloqueio de 1h por pasta, em memória; acerto zera o contador). Detalhe: ADR-28. |
+|        | POST   | `/api/folders/{id}/reset-password`    | Body: `{master_password}`. Recuperação (ADR-29): verifica a master e **limpa** senha+dica da pasta (não abre a pasta, não emite token). `400 master_not_configured` / `401 wrong_master_password`. |
 |        | DELETE | `/api/folders/{id}`                   | Default: SET NULL em links E em subpastas (filhas viram raiz). Com `?cascade=1`: recursivo via CTE — apaga toda a subtree de pastas + links. |
+| Settings| GET   | `/api/settings/master-password`       | `{configured: bool}` — nunca retorna o hash (ADR-29). |
+|        | PUT    | `/api/settings/master-password`       | Body: `{password (min 8), current_password?}`. Primeiro-set não exige atual; trocar exige `current_password` (`401 wrong_password`). |
+|        | DELETE | `/api/settings/master-password`       | Body: `{current_password}`. Remove a master (`401 wrong_password` se errada; idempotente se não configurada). |
 | Stats  | GET    | `/api/stats/summary`                  | Totals: links, tags, clicks 30d/prev30d, novos 30d, top host |
 |        | GET    | `/api/stats/daily?days=N`             | Array `[{date, clicks}]` zero-filled via `generate_series` |
 |        | GET    | `/api/stats/top?limit=N`              | Top links por cliques (lifetime + janelas 30d / prev) |
@@ -711,7 +725,24 @@ Feature de **privacidade**, não de segurança dura: Foldex é single-user atrá
 
 **Por quê trocar/remover uma senha existente exige a senha atual, mas renomear/recolorir/mover não.** Decisão explícita do usuário (registrada em memory/sessão): editar metadados de uma pasta nunca precisa de senha — só *trocar ou remover uma senha já existente* exige prová-la primeiro, verificado dentro da mesma tx SERIALIZABLE que já protege o cycle-check de `parent_id` (`folders.Repository.Update`). **Sem bypass de admin** — se o usuário esquecer a senha, a única recuperação é editar o banco diretamente. Setar uma senha pela primeira vez (pasta ainda sem proteção) não exige `current_password`, porque não há nada pra autorizar contra ainda.
 
+**Rate limiting + revelação da dica (por pasta).** O endpoint de unlock tem um limitador **em memória por pasta** (`internal/folders/ratelimit.go`): 5 senhas erradas seguidas → bloqueio de **1 hora** (`429 too_many_attempts`, com `Retry-After`), e um acerto zera o contador; o estado é in-memory (reinício do backend limpa — aceitável no modelo single-user/local, o custo do bcrypt é o piso real). O frontend (`PasswordPromptDialog`) mostra tentativas restantes, faz a contagem regressiva do bloqueio, e **só revela a `password_hint` depois da 3ª tentativa errada** (a dica é não-secreta, mas segurá-la até o 3º erro incentiva lembrar de cabeça antes).
+
 **Escopo explicitamente fora do v1 (documentado, não esquecido).** Sem cascata pra subpastas — proteger uma pasta não protege automaticamente o que está dentro dela; cada pasta precisa da própria senha (decisão do usuário: modelo mental mais simples, sem precedente de permissão herdada em nenhum outro lugar do app). Mover um link/note PRA DENTRO de uma pasta trancada (drag-and-drop ou folder picker) não exige desbloqueio — é escrita, não revela conteúdo existente. `exporter`/`importer`/backup não são gateados — são operações já-confiadas do dono autenticado, equivalentes a acesso direto ao banco; mas o hash em si atravessa backup/restore **verbatim** (nunca re-hasheado, nunca dropado — `backup.FolderRow.PasswordHash`, presente nos 3 modos de restore) pra um restore não remover silenciosamente a proteção. Sem rate-limiting além do custo intrínseco do bcrypt (~100ms/tentativa) — proporcional ao modelo de ameaça single-user local.
+
+### ADR-29 — Senha master (recuperação) + palavra-dica por pasta
+**Status:** Done (migration 000016). **Relaxa** a cláusula "sem bypass de admin" do ADR-28 — apenas para recuperação.
+
+O ADR-28 deixou a recuperação de uma senha de pasta esquecida como "edite o banco direto". Na prática isso é hostil pro dono single-user. O ADR-29 adiciona um mecanismo de **recuperação** — nunca um bypass de visualização.
+
+**Senha master: só recuperação, nunca unlock.** `POST /api/folders/{id}/reset-password` recebe `{master_password}`, verifica-a e, se correta, **limpa** `password_hash` + `password_hint` da pasta (`folders.Repository.ResetPasswordByMaster`). Depois disso a pasta fica desprotegida e o dono define uma nova senha pelo fluxo normal de primeiro-set (PATCH sem `current_password`). Deliberadamente NÃO tocamos a semântica de unlock/token nem criamos um branch de bypass em `checkPasswordChangeAuthorized`: a master não abre pasta pra visualização, não emite `unlock_token`. Como o HMAC do token de unlock inclui o `password_hash`, zerá-lo já invalida todo token vivo (mesma propriedade do ADR-28, de graça). `400 master_not_configured` se não há master; `401 wrong_master_password` se errada.
+
+**Por quê `app_setting(key,value)` (KV) em vez de env var ou coluna.** A master precisa ser definível/alterável **pela UI** — env var (imutável em runtime) não serve. Uma tabela KV genérica (`internal/settings`) é a única opção mutável e é future-proof pra outras settings singleton sem nova migração. Duas chaves hoje: `master_password_hash` (bcrypt via o leaf `internal/pkg/pwhash`, compartilhado com `folders` — mesma função de hash pra toda senha do app) e `master_password_hint` (frase-lembrete NÃO-secreta, análoga a `folder.password_hint` — retornada verbatim, nunca hasheada, nunca igual à senha). O hint é **tri-state** no `SetMasterPassword` (mesma tx do hash): `nil` = mantém o hint atual (trocar a senha com o campo vazio NÃO apaga o lembrete), `""` = remove, valor = define; `ClearMasterPassword` remove hash + hint juntos. Após salvar, o form da UI limpa tudo e mostra o hint atual como linha somente-leitura. O plaintext da senha nunca é armazenado nem logado; `GET /api/settings/master-password` retorna só `{configured: bool, hint}` (a dica, nunca o hash). Política de comprimento mais forte que a de pasta (≥8 vs ≥4) — a master é a chave de recuperação de tudo. Trocar exige a master atual; remover exige a master atual; setar pela primeira vez não exige nada. A UI ainda adiciona **medidor de complexidade** e **confirmar senha** como guias client-side (o backend só força o mínimo de comprimento — o medidor é orientação, não gate).
+
+**Palavra-dica (`folder.password_hint`): não-secreta por design.** Uma frase-lembrete opcional, exibida no popup de unlock pra ajudar o dono a lembrar a senha. Ao contrário de `password_hash`, ela é retornada **verbatim** em toda resposta de folder (não redigida) — expô-la é o propósito, e o modelo single-user/local torna isso aceitável. Invariante travada em teste: a dica **nunca pode ser igual à senha**. No create a comparação é de plaintext; no update (onde a senha pode não estar mudando) a verificação é `bcrypt.CompareHashAndPassword(effectiveHash, hint)` dentro da mesma tx SERIALIZABLE — pega a igualdade mesmo sem o plaintext. Remover a senha limpa a dica junto (dica sem senha é dado morto).
+
+**Backup.** `app_setting` e `folder.password_hint` atravessam backup/restore **verbatim** nos 3 modos (`backup.AppSettingRow`, `backup.FolderRow.PasswordHint`) — o snapshot continua completo. Wipe restaura exatamente as settings do zip (inclusive "sem master" pra um backup antigo, ADR-28-era); skip/duplicate não clobberam uma setting singleton já existente (`ON CONFLICT DO NOTHING`). Consequência de segurança: o zip de backup agora carrega o hash da master (como já carregava os hashes de pasta) — mesma postura.
+
+**Escopo fora do v1.** Sem "limpar todas as pastas de uma vez" (reset é por-pasta, cirúrgico, a partir de uma lista em Configurações). Sem recuperação da própria master esquecida (aí sim volta a ser edição direta no banco — é o segredo raiz). Sem dica pra master (só pra pastas).
 
 ## Future considerations
 

@@ -24,6 +24,7 @@ import (
 	"foldex/internal/notes"
 	"foldex/internal/push"
 	"foldex/internal/redirect"
+	"foldex/internal/settings"
 	"foldex/internal/stats"
 	"foldex/internal/tags"
 )
@@ -93,8 +94,10 @@ func New(d Deps) http.Handler {
 			api.Use(sharedSecretGuard(d.Config.SharedSecret))
 		}
 		api.Route("/tags", tags.NewHandler(tags.NewRepository(d.Pool)).Mount)
+		settingsRepo := settings.NewRepository(d.Pool)
+		api.Route("/settings", settings.NewHandler(settingsRepo).Mount)
 		foldersRepo := folders.NewRepository(d.Pool)
-		api.Route("/folders", folders.NewHandler(foldersRepo, d.FolderUnlockKey).Mount)
+		api.Route("/folders", folders.NewHandler(foldersRepo, d.FolderUnlockKey, settingsRepo).Mount)
 
 		linksRepo := links.NewRepository(d.Pool)
 		api.Route("/links", links.NewHandler(linksRepo, d.Worker).WithMetadataFetcher(d.LinkMetadataFetcher).Mount)

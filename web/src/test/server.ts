@@ -34,13 +34,20 @@ export type MockState = {
   urlMetadata?: { title?: string; description?: string; favicon_url?: string; og_image_url?: string }
   urlMetadataError?: any
   urlMetadataCalls: string[]
+  // Master recovery password (ADR-29). undefined = not configured. Plaintext
+  // is fine here — test double, not a security boundary.
+  masterPassword?: string
+  // Non-secret reminder hint for the master password.
+  masterHint?: string
+  // Per-folder unlock attempt tracking (mirrors the backend rate limiter).
+  unlockAttempts?: Record<number, { fails: number; lockedUntil: number }>
 }
 
 export function freshState(): MockState {
   return { tags: [], links: [], notes: [], folders: [], folderPasswords: {}, urlMetadataCalls: [] }
 }
 
-type Method = 'get' | 'post' | 'patch' | 'delete'
+type Method = 'get' | 'post' | 'put' | 'patch' | 'delete'
 
 type Route = {
   url: RegExp
@@ -60,6 +67,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/notes\/(\d+)$/, handle: getNote },
     { url: /^\/api\/notes$/, handle: listNotes },
     { url: /^\/api\/push\/vapid-key$/, handle: () => ({ public_key: 'MOCK_VAPID_PUBLIC' }) },
+    { url: /^\/api\/settings\/master-password$/, handle: (_m, _d, _p, s) => ({ configured: s.masterPassword !== undefined, hint: s.masterHint ?? null }) },
   ],
   post: [
     { url: /^\/api\/tags$/, handle: createTag },
@@ -78,6 +86,10 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/push\/subscriptions$/, handle: () => ({ id: 1, created_at: new Date().toISOString() }) },
     { url: /^\/api\/push\/test$/, handle: () => null },
     { url: /^\/api\/folders\/(\d+)\/unlock$/, handle: unlockFolder },
+    { url: /^\/api\/folders\/(\d+)\/reset-password$/, handle: resetFolderPassword },
+  ],
+  put: [
+    { url: /^\/api\/settings\/master-password$/, handle: setMaster },
   ],
   patch: [
     { url: /^\/api\/tags\/(\d+)$/, handle: patchTag },
@@ -91,6 +103,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/links\/(\d+)$/, handle: deleteLink },
     { url: /^\/api\/notes\/(\d+)$/, handle: deleteNote },
     { url: /^\/api\/push\/subscriptions$/, handle: () => null },
+    { url: /^\/api\/settings\/master-password$/, handle: clearMaster },
   ],
 })
 
@@ -134,9 +147,10 @@ function seenChange(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockSt
 
 export function installAxiosMock(state: MockState) {
   const routes = buildRoutes()
-  for (const method of ['get', 'post', 'patch', 'delete'] as Method[]) {
+  for (const method of ['get', 'post', 'put', 'patch', 'delete'] as Method[]) {
     vi.spyOn(http, method).mockImplementation((async (url: string, ...rest: any[]) => {
-      const data = method === 'get' || method === 'delete' ? undefined : rest[0]
+      // GET has no body; DELETE may carry one via axios's `config.data`.
+      const data = method === 'get' ? undefined : method === 'delete' ? rest[0]?.data : rest[0]
       // For methods that carry a body the request config is rest[1]; for GET/
       // DELETE it's rest[0]. axios callers pass query params via `config.params`
       // rather than embedding them in the URL — merge those into the URLSearchParams
@@ -254,6 +268,7 @@ function createFolder(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: M
     folder_count: 0,
     preview_links: [],
     preview_folders: [],
+    password_hint: data.password && data.password_hint ? data.password_hint : null,
     created_at: new Date().toISOString(),
   }
   s.folders.push(f)
@@ -281,25 +296,110 @@ function patchFolder(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Moc
     }
     if (data.password == null) {
       delete s.folderPasswords[id]
+      f.password_hint = null // removing the password clears the hint (ADR-29)
     } else {
       s.folderPasswords[id] = data.password
     }
     f.has_password = data.password != null
   }
+  if ('password_hint' in data) f.password_hint = data.password_hint ?? null
   return f
+}
+
+function setMaster(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState) {
+  if ((data.password ?? '').length < 8) {
+    const e: any = new Error('too short')
+    e.response = { status: 400, data: { error: { code: 'invalid_input', message: 'master password must be at least 8 characters' } } }
+    throw e
+  }
+  if (s.masterPassword !== undefined && data.current_password !== s.masterPassword) throw wrongPassword()
+  s.masterPassword = data.password
+  // Tri-state (mirrors backend): hint key absent → keep existing; present →
+  // set the trimmed value, empty clears it.
+  if (typeof data.hint === 'string') {
+    const h = data.hint.trim()
+    s.masterHint = h === '' ? undefined : h
+  }
+  return { configured: true, hint: s.masterHint ?? null }
+}
+
+function clearMaster(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState) {
+  if (s.masterPassword === undefined) return { configured: false, hint: null }
+  if (data?.current_password !== s.masterPassword) throw wrongPassword()
+  s.masterPassword = undefined
+  s.masterHint = undefined
+  return { configured: false, hint: null }
+}
+
+function resetFolderPassword(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState) {
+  const id = Number(m[1])
+  const f = s.folders.find((x) => x.id === id)
+  if (!f) throw notFound()
+  if (s.masterPassword === undefined) {
+    const e: any = new Error('master not configured')
+    e.response = { status: 400, data: { error: { code: 'master_not_configured', message: 'no master password configured' } } }
+    throw e
+  }
+  if (data.master_password !== s.masterPassword) {
+    const e: any = new Error('wrong master')
+    e.response = { status: 401, data: { error: { code: 'wrong_master_password', message: 'incorrect master password' } } }
+    throw e
+  }
+  delete s.folderPasswords[id]
+  f.has_password = false
+  f.password_hint = null
+  return null
+}
+
+const MOCK_MAX_UNLOCK = 5
+const MOCK_LOCKOUT_MS = 60 * 60_000
+
+function tooManyAttempts(lockedUntil: number) {
+  const e: any = new Error('too many attempts')
+  e.response = {
+    status: 429,
+    data: {
+      error: { code: 'too_many_attempts', message: 'too many wrong attempts; folder temporarily locked' },
+      locked_until: new Date(lockedUntil).toISOString(),
+      retry_after_seconds: Math.max(1, Math.ceil((lockedUntil - Date.now()) / 1000)),
+    },
+  }
+  return e
 }
 
 function unlockFolder(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState) {
   const id = Number(m[1])
   const f = s.folders.find((x) => x.id === id)
   if (!f) throw notFound()
+  s.unlockAttempts ??= {}
+  const st = s.unlockAttempts[id] ?? { fails: 0, lockedUntil: 0 }
+  const now = Date.now()
+  if (st.lockedUntil > now) throw tooManyAttempts(st.lockedUntil)
+
   const pw = s.folderPasswords[id]
   if (pw === undefined) {
     const e: any = new Error('not protected')
     e.response = { status: 400, data: { error: { code: 'not_protected', message: 'this folder has no password set' } } }
     throw e
   }
-  if (data.password !== pw) throw wrongPassword()
+  if (data.password !== pw) {
+    if (st.lockedUntil && st.lockedUntil <= now) st.fails = 0
+    st.fails += 1
+    if (st.fails >= MOCK_MAX_UNLOCK) st.lockedUntil = now + MOCK_LOCKOUT_MS
+    s.unlockAttempts[id] = st
+    if (st.lockedUntil > now) throw tooManyAttempts(st.lockedUntil)
+    const e: any = new Error('wrong password')
+    e.response = {
+      status: 401,
+      data: {
+        error: { code: 'wrong_password', message: 'incorrect password' },
+        failed_attempts: st.fails,
+        attempts_remaining: MOCK_MAX_UNLOCK - st.fails,
+      },
+    }
+    throw e
+  }
+  delete s.unlockAttempts[id]
   return {
     unlock_token: mockUnlockToken(id, pw),
     expires_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),

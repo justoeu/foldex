@@ -4,7 +4,7 @@ import { LocalePicker } from './LocalePicker'
 import { MobileOverflowMenu } from './MobileOverflowMenu'
 import { PushToggle } from './PushToggle'
 
-type View = 'home' | 'import' | 'stats'
+type View = 'home' | 'import' | 'stats' | 'settings'
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
 type ViewMode = 'cards' | 'compact' | 'list'
 
@@ -142,6 +142,14 @@ export function Topbar({
           onClick={() => setView('import')}
         >
           <Icon d={I.upload} size={16} />
+        </button>
+        <button
+          className={'fx-qn' + (view === 'settings' ? ' fx-qn-active' : '')}
+          aria-label={t('topbar.settings')}
+          data-tooltip={t('topbar.settings')}
+          onClick={() => setView('settings')}
+        >
+          <Icon d={I.gear} size={16} />
         </button>
       </nav>
 
@@ -310,19 +318,16 @@ export function Topbar({
         setView={setView}
       />
 
-      <button className="fx-cta fx-cta-folder" onClick={onNewFolder} aria-label={t('topbar.new_folder')}>
-        <Icon d={I.folder} size={15} stroke={2.2} /> {t('topbar.new_folder')}
-        <kbd className="fx-kbd fx-kbd-cta">⌥F</kbd>
+      <button className="fx-cta fx-cta-folder" onClick={onNewFolder} aria-label={t('topbar.new_folder')} data-tooltip={`${t('topbar.new_folder')} · ⌥F`} data-tooltip-side="bottom">
+        <Icon d={I.folder} size={14} stroke={2.2} /> {t('topbar.new_folder')}
       </button>
 
-      <button className="fx-cta fx-cta-note" onClick={onNewNote} aria-label={t('topbar.new_note')}>
-        <Icon d={I.note} size={15} stroke={2.2} /> {t('topbar.new_note')}
-        <kbd className="fx-kbd fx-kbd-cta">⌥M</kbd>
+      <button className="fx-cta fx-cta-note" onClick={onNewNote} aria-label={t('topbar.new_note')} data-tooltip={`${t('topbar.new_note')} · ⌥M`} data-tooltip-side="bottom">
+        <Icon d={I.note} size={14} stroke={2.2} /> {t('topbar.new_note')}
       </button>
 
-      <button className="fx-cta" onClick={onNewLink} aria-label={t('topbar.new_link')}>
-        <Icon d={I.plus} size={15} stroke={2.2} /> {t('topbar.new_link')}
-        <kbd className="fx-kbd fx-kbd-cta">⌥N</kbd>
+      <button className="fx-cta" onClick={onNewLink} aria-label={t('topbar.new_link')} data-tooltip={`${t('topbar.new_link')} · ⌥N`} data-tooltip-side="bottom">
+        <Icon d={I.plus} size={14} stroke={2.2} /> {t('topbar.new_link')}
       </button>
     </header>
   )

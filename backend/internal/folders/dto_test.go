@@ -141,3 +141,66 @@ func TestUpdateInput_Validate_Password(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(`{"password":null}`), &removed))
 	require.NoError(t, removed.Validate(), "removing a password (null) never needs the length check")
 }
+
+// ── password_hint (ADR-29) ────────────────────────────────────────────────
+
+func TestCreateInput_Normalize_Hint(t *testing.T) {
+	pw := "secret"
+	hint := "  my dog's name  "
+	in := CreateInput{Name: "x", Password: &pw, PasswordHint: &hint}
+	in.Normalize()
+	require.NotNil(t, in.PasswordHint)
+	assert.Equal(t, "my dog's name", *in.PasswordHint, "hint is trimmed")
+
+	blank := "   "
+	in2 := CreateInput{Name: "x", PasswordHint: &blank}
+	in2.Normalize()
+	assert.Nil(t, in2.PasswordHint, "blank hint collapses to nil")
+}
+
+func TestCreateInput_Validate_Hint(t *testing.T) {
+	pw := "correct-horse"
+
+	// hint equal to the password (case-insensitive) is rejected.
+	same := "Correct-Horse"
+	err := CreateInput{Name: "x", Color: "#abc", Password: &pw, PasswordHint: &same}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be the same")
+
+	// distinct hint is fine.
+	ok := "rhymes with force"
+	require.NoError(t, CreateInput{Name: "x", Color: "#abc", Password: &pw, PasswordHint: &ok}.Validate())
+
+	// over-long hint is rejected.
+	long := strings.Repeat("a", maxPasswordHintLen+1)
+	err = CreateInput{Name: "x", Color: "#abc", Password: &pw, PasswordHint: &long}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "too long")
+}
+
+func TestUpdateInput_Unmarshal_HintTristate(t *testing.T) {
+	var absent UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"x"}`), &absent))
+	assert.False(t, absent.PasswordHintSet)
+
+	var cleared UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"password_hint":null}`), &cleared))
+	assert.True(t, cleared.PasswordHintSet)
+	assert.Nil(t, cleared.PasswordHint)
+	assert.False(t, cleared.Empty(), "an explicit hint change is not an empty update")
+
+	var set UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"password_hint":"a clue"}`), &set))
+	assert.True(t, set.PasswordHintSet)
+	require.NotNil(t, set.PasswordHint)
+	assert.Equal(t, "a clue", *set.PasswordHint)
+}
+
+func TestUpdateInput_Validate_HintEqualsNewPassword(t *testing.T) {
+	var in UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"password":"hunter2","password_hint":"hunter2"}`), &in))
+	in.Normalize()
+	err := in.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be the same")
+}

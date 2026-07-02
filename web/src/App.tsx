@@ -26,6 +26,7 @@ import { EmptyState } from './components/EmptyState'
 // boundary below renders a tiny fallback while the chunk loads.
 const ImportPage = lazy(() => import('./pages/ImportPage').then((m) => ({ default: m.ImportPage })))
 const StatsPage = lazy(() => import('./pages/StatsPage').then((m) => ({ default: m.StatsPage })))
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
 // NoteDialog pulls in Tiptap/ProseMirror (~140 KB gzip) — unlike LinkDialog/
 // FolderDialog it's lazy-loaded so that weight only ships once a user
 // actually opens a note, not on every visit to the app.
@@ -40,7 +41,7 @@ import { usePasswordPrompt } from './components/PasswordPromptDialog'
 import { mergeAlphaCells } from './lib/mergeAlphaCells'
 import type { Link as LinkT, Folder as FolderT, Entry, MergeSource } from './api/types'
 
-type View = 'home' | 'import' | 'stats'
+type View = 'home' | 'import' | 'stats' | 'settings'
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
 type ViewMode = 'cards' | 'compact' | 'list'
 
@@ -353,6 +354,12 @@ export default function App() {
     setFolderJustCreated(false)
     setFolderDialogOpen(true)
   }, [])
+  // Settings page hands back a folder id after a master-password reset so the
+  // user can immediately set a fresh password — resolve it from the flat list.
+  const handleEditFolderById = useCallback((id: number) => {
+    const f = allFolders.data?.find((x) => x.id === id)
+    if (f) handleEditFolder(f)
+  }, [allFolders.data, handleEditFolder])
 
   const totalLinks = useMemo(
     () => allTags.reduce((acc, t) => acc + (t.link_count ?? 0), 0),
@@ -522,6 +529,13 @@ export default function App() {
             <div className="fx-mainarea">
               <Suspense fallback={<div className="fx-empty">…</div>}>
                 <StatsPage />
+              </Suspense>
+            </div>
+          )}
+          {view === 'settings' && (
+            <div className="fx-mainarea">
+              <Suspense fallback={<div className="fx-empty">…</div>}>
+                <SettingsPage onEditFolder={handleEditFolderById} />
               </Suspense>
             </div>
           )}

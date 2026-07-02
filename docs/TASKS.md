@@ -79,6 +79,7 @@ Lista faseada de tasks `T1..T30`. Cada fase desbloqueia a próxima — segue em 
 
 | Data       | Task   | Hash | Notas |
 |------------|--------|------|-------|
+| 2026-07-01 | ADR-29 | —    | Senha master (recuperação) + palavra-dica por pasta. Migration 000016 (`app_setting` KV + `folder.password_hint`). Novo pacote `internal/settings` + leaf `internal/pkg/pwhash`. `POST /api/folders/{id}/reset-password` (recuperação, não bypass de view). Frontend: 4º view `SettingsPage` (lazy) + `api/settings.ts` + campo de dica no `FolderDialog` + dica no `PasswordPromptDialog`. Backup round-trip verbatim (`app_setting` + `password_hint`, snapshot v5, schema v11). i18n en/pt/es. Docs: SDD-FOLDER-MASTER-PASSWORD.md + ADR-29 + CLAUDE.md §4/§8 + README (pt/en). Lição: a linha de reset some da lista `locked` no refetch — a seção mantém uma linha "done" persistente em estado separado. |
 | 2026-05-11 | T1     | —    | Repo + Makefile + .env.example + docker-compose.yml (Postgres 16 com healthcheck, ports só em 127.0.0.1). |
 | 2026-05-11 | T2     | —    | Docs SDD: VISION.md, ARCHITECTURE.md, TASKS.md. |
 | 2026-05-11 | T3     | —    | Backend Dockerfile (distroless) + go.mod + cmd/server/main.go (graceful shutdown) + healthz. |

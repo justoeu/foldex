@@ -182,3 +182,53 @@ describe('FolderDialog', () => {
     expect(screen.getByLabelText('Password')).toHaveValue('')
   })
 })
+
+describe('FolderDialog — password hint (ADR-29)', () => {
+  it('sends password_hint when creating with a password + hint', async () => {
+    renderWithProviders(<FolderDialog open onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText(/folder.*name|nome/i), 'Secret')
+    await user.type(screen.getByLabelText('Password'), 'folder-pass')
+    // Hint field appears only once a password is entered.
+    await user.type(screen.getByLabelText('Reminder hint'), 'rhymes with force')
+    await user.click(screen.getByRole('button', { name: /create folder/i }))
+    expect(state.folders).toHaveLength(1)
+    expect(state.folders[0]?.password_hint).toBe('rhymes with force')
+  })
+
+  it('blocks a hint equal to the password client-side', async () => {
+    renderWithProviders(<FolderDialog open onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText(/folder.*name|nome/i), 'Secret')
+    await user.type(screen.getByLabelText('Password'), 'samevalue')
+    await user.type(screen.getByLabelText('Reminder hint'), 'samevalue')
+    await user.click(screen.getByRole('button', { name: /create folder/i }))
+    expect(await screen.findByText(/must not be the same as the password/i)).toBeInTheDocument()
+    expect(state.folders).toHaveLength(0)
+  })
+
+  it('edits the hint of an already-protected folder', async () => {
+    const folder = {
+      id: 2,
+      name: 'Locked',
+      color: '#6366F1',
+      parent_id: null,
+      has_password: true,
+      password_hint: 'old clue',
+      link_count: 0,
+      folder_count: 0,
+      preview_links: [],
+      preview_folders: [],
+    }
+    state.folders.push({ ...folder })
+    state.folderPasswords[2] = 'folder-pass'
+    renderWithProviders(<FolderDialog open onClose={vi.fn()} folder={folder} />)
+    const user = userEvent.setup()
+    const hintInput = screen.getByLabelText('Reminder hint')
+    expect(hintInput).toHaveValue('old clue')
+    await user.clear(hintInput)
+    await user.type(hintInput, 'new clue')
+    await user.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(state.folders[0]?.password_hint).toBe('new clue')
+  })
+})

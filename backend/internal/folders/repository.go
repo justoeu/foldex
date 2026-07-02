@@ -30,13 +30,20 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Folder, error)
 		passwordHash = &h
 	}
 
+	// A hint is meaningless without a password (it's only ever shown on the
+	// unlock prompt), so drop it when the folder is unprotected.
+	hint := in.PasswordHint
+	if passwordHash == nil {
+		hint = nil
+	}
+
 	var f Folder
 	var scannedHash *string
 	err := r.pool.QueryRow(ctx, `
-        INSERT INTO folder (name, color, parent_id, password_hash)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, name, color, parent_id, created_at, password_hash
-    `, in.Name, in.Color, in.ParentID, passwordHash).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &scannedHash)
+        INSERT INTO folder (name, color, parent_id, password_hash, password_hint)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, name, color, parent_id, created_at, password_hash, password_hint
+    `, in.Name, in.Color, in.ParentID, passwordHash, hint).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &scannedHash, &f.PasswordHint)
 	if err != nil {
 		return Folder{}, fmt.Errorf("insert folder: %w", err)
 	}
@@ -92,7 +99,7 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Folder, error) {
 	// link_folder / folder_parent indexes per parent row instead of
 	// hash-aggregating every link/folder once per request.
 	sql := `
-        SELECT f.id, f.name, f.color, f.parent_id, f.created_at, f.password_hash,
+        SELECT f.id, f.name, f.color, f.parent_id, f.created_at, f.password_hash, f.password_hint,
                COALESCE(c.cnt, 0) AS link_count,
                COALESCE(fc.cnt, 0) AS folder_count,
                COALESCE(p.previews, '[]'::jsonb) AS previews,
@@ -143,7 +150,7 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Folder, error) {
 		var passwordHash *string
 		var previewsJSON []byte
 		var previewFoldersJSON []byte
-		if err := rows.Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &passwordHash, &f.LinkCount, &f.FolderCount, &previewsJSON, &previewFoldersJSON); err != nil {
+		if err := rows.Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &passwordHash, &f.PasswordHint, &f.LinkCount, &f.FolderCount, &previewsJSON, &previewFoldersJSON); err != nil {
 			return nil, err
 		}
 		f.HasPassword = passwordHash != nil
@@ -177,9 +184,9 @@ func (r *Repository) Get(ctx context.Context, id int64) (Folder, error) {
 	var f Folder
 	var passwordHash *string
 	err := r.pool.QueryRow(ctx, `
-        SELECT id, name, color, parent_id, created_at, password_hash
+        SELECT id, name, color, parent_id, created_at, password_hash, password_hint
         FROM folder WHERE id = $1
-    `, id).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &passwordHash)
+    `, id).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &passwordHash, &f.PasswordHint)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Folder{}, httperr.ErrNotFound
 	}
@@ -227,6 +234,25 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 		i++
 	}
 
+	// Hint handling. Removing the password (PasswordSet && Password == nil)
+	// also clears any hint — a hint for a nonexistent password is dead data.
+	// Otherwise apply an explicit hint change. The equality check (hint must
+	// not equal the effective password) needs the folder's live hash, so it
+	// runs inside the tx below via hintToValidate.
+	clearHintWithPassword := in.PasswordSet && in.Password == nil
+	var hintToValidate *string
+	var noHint *string
+	if clearHintWithPassword {
+		sets = append(sets, fmt.Sprintf("password_hint = $%d", i))
+		args = append(args, noHint)
+		i++
+	} else if in.PasswordHintSet {
+		sets = append(sets, fmt.Sprintf("password_hint = $%d", i))
+		args = append(args, in.PasswordHint)
+		i++
+		hintToValidate = in.PasswordHint
+	}
+
 	// parent_id reassignment needs a tx so the cycle check and the UPDATE see
 	// the same snapshot. A naive check-then-update on the pool let another
 	// request slip a move between the two reads and create A→B→A in spite of
@@ -246,7 +272,7 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 	}
 	args = append(args, id)
 	q := fmt.Sprintf(`UPDATE folder SET %s WHERE id = $%d
-                      RETURNING id, name, color, parent_id, created_at, password_hash`, strings.Join(sets, ", "), i)
+                      RETURNING id, name, color, parent_id, created_at, password_hash, password_hint`, strings.Join(sets, ", "), i)
 
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -264,10 +290,15 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 			return Folder{}, err
 		}
 	}
+	if hintToValidate != nil {
+		if err := checkHintNotPassword(ctx, tx, id, in.PasswordSet, newPasswordHash, *hintToValidate); err != nil {
+			return Folder{}, err
+		}
+	}
 
 	var f Folder
 	var scannedHash *string
-	err = tx.QueryRow(ctx, q, args...).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &scannedHash)
+	err = tx.QueryRow(ctx, q, args...).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &scannedHash, &f.PasswordHint)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Folder{}, httperr.ErrNotFound
 	}
@@ -301,6 +332,46 @@ func checkPasswordChangeAuthorized(ctx context.Context, tx pgx.Tx, id int64, cur
 		if currentPassword == nil || !VerifyPassword(*currentHash, *currentPassword) {
 			return httperr.New(http.StatusUnauthorized, "wrong_password", "current password is required to change or remove an existing password")
 		}
+	}
+	return nil
+}
+
+// checkHintNotPassword enforces the ADR-29 invariant that a folder's reminder
+// hint must never equal its password. The effective password hash is the new
+// one when the same request also sets a password, otherwise the folder's
+// current hash (read inside the tx). A hint on a folder with no effective
+// password is rejected — a hint is meaningless without a password to hint at.
+func checkHintNotPassword(ctx context.Context, tx pgx.Tx, id int64, passwordSet bool, newHash *string, hint string) error {
+	effHash := newHash
+	if !passwordSet {
+		if err := tx.QueryRow(ctx, `SELECT password_hash FROM folder WHERE id = $1`, id).Scan(&effHash); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return httperr.ErrNotFound
+			}
+			return fmt.Errorf("read password hash for hint check: %w", err)
+		}
+	}
+	if effHash == nil {
+		return httperr.New(http.StatusBadRequest, "invalid_input", "cannot set a password hint on a folder without a password")
+	}
+	if VerifyPassword(*effHash, hint) {
+		return httperr.New(http.StatusBadRequest, "invalid_input", "password hint must not be the same as the password")
+	}
+	return nil
+}
+
+// ResetPasswordByMaster clears a folder's password AND hint. Used by the
+// master-password recovery flow (ADR-29) after the master has been verified by
+// the handler. Because the unlock-token HMAC input includes the folder's
+// password_hash, nulling it here invalidates every previously issued unlock
+// token automatically. Returns ErrNotFound when the folder does not exist.
+func (r *Repository) ResetPasswordByMaster(ctx context.Context, id int64) error {
+	ct, err := r.pool.Exec(ctx, `UPDATE folder SET password_hash = NULL, password_hint = NULL WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("reset folder password: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return httperr.ErrNotFound
 	}
 	return nil
 }

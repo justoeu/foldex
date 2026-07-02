@@ -379,7 +379,8 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
     await user.type(await screen.findByLabelText('folder password'), 'wrong-guess')
     await user.click(screen.getByRole('button', { name: /unlock/i }))
-    expect(await screen.findByText(/incorrect password/i)).toBeInTheDocument()
+    // First wrong attempt surfaces the attempts-remaining message (ADR-28 rate limit).
+    expect(await screen.findByText(/attempts left before lockout/i)).toBeInTheDocument()
     expect(screen.getByLabelText('folder password')).toBeInTheDocument()
   })
 

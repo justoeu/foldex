@@ -31,8 +31,8 @@ Bookmark nativo é ótimo para "salvar uma página rápida e esquecer". Quando v
 | **Só em inglês / sem localização.**                                                      | UI totalmente localizada em **English / Português / Español** via `react-i18next`. Seletor de idioma no topbar; autodetecção pelo idioma do navegador no primeiro acesso; escolha persiste no `localStorage`. |
 | **Pinned/favoritos = uma pastinha à parte.** Só visual.                                 | `pinned` é coluna real na tabela. `ORDER BY pinned DESC, …` aplica em todo modo de ordenação. Badge gradient sempre visível. |
 | **Dados embutidos no navegador.** Trocou de máquina? Reinstalou Chrome? Reza.           | Postgres + MinIO em containers. `make up` numa máquina nova e seu ZIP de backup restaura tudo (DB + imagens) em ~minutos. |
-| **Pastebin/app de notas é outra ferramenta.** Snippets e links vivem em lugares diferentes. | **Notas** (`⌥M`) são uma entidade de primeira classe junto com os links: editor rich-text (Tiptap — negrito/títulos/listas/código/imagens inline), mesmas tags/pastas/pin/busca dos links, intercaladas no mesmo grid com badge esmeralda, compartilháveis via página pública `/n/{slug}`. |
-| **Sem como manter uma pasta privada** numa tela/máquina compartilhada sem criar uma segunda conta inteira. | **Senha por pasta.** Defina uma senha (hash bcrypt) em qualquer pasta — os links/notas dela ficam ocultos (e os thumbnails de preview são redigidos, mesmo no hover) até você desbloquear pra aquela sessão. Aplicado no backend, não só na UI: a API em si recusa entregar o conteúdo de uma pasta trancada sem prova da senha. |
+| **Pastebin/app de notas é outra ferramenta.** Snippets e links vivem em lugares diferentes. | **Notas** (`⌥M`) são uma entidade de primeira classe junto com os links: editor rich-text (Tiptap) com **barra de formatação** — negrito/itálico/sublinhado/tachado, títulos, listas com marcadores e numeradas, alinhamento, cor do texto, fonte, citações/código, links e imagens inline —, mesmas tags/pastas/pin/busca dos links, intercaladas no mesmo grid com badge esmeralda, compartilháveis via página pública `/n/{slug}`. |
+| **Sem como manter uma pasta privada** numa tela/máquina compartilhada sem criar uma segunda conta inteira. | **Senha por pasta.** Defina uma senha (hash bcrypt) em qualquer pasta — os links/notas dela ficam ocultos (e os thumbnails de preview são redigidos, mesmo no hover) até você desbloquear pra aquela sessão. Aplicado no backend, não só na UI: a API em si recusa entregar o conteúdo de uma pasta trancada sem prova da senha. Adicione uma **palavra-dica** opcional (exibida no popup de unlock; não pode ser a própria senha) e configure uma **senha master** em **Configurações** (com medidor de complexidade, confirmação e um lembrete próprio) pra redefinir a senha de uma pasta caso você esqueça. |
 
 ### Cenários reais que viraram a chave (bookmark nativo → foldex)
 
@@ -202,7 +202,14 @@ TOKEN=$(curl -s -X POST localhost:9089/api/folders/1/unlock \
   -H 'Content-Type: application/json' -d '{"password":"hunter22"}' | jq -r .unlock_token)
 curl -s -H "X-Foldex-Folder-Unlock: $TOKEN" localhost:9089/api/entries?folder_id=1 | jq .   # 200
 
-# 8. Abre a SPA e tenta ⌥K (palette) / ⌥N (novo link) / ⌥M (nova nota).
+# 7b. Define uma senha master (Configurações) e recupera a pasta esquecida.
+curl -s -X PUT localhost:9089/api/settings/master-password \
+  -H 'Content-Type: application/json' -d '{"password":"master-recover-1"}' | jq .
+curl -s -X POST localhost:9089/api/folders/1/reset-password \
+  -H 'Content-Type: application/json' -d '{"master_password":"master-recover-1"}' -o /dev/null -w '%{http_code}\n'  # 204
+curl -s localhost:9089/api/entries?folder_id=1 | jq .              # 200 — pasta agora desprotegida
+
+# 8. Abre a SPA e tenta ⌥K (paleta) / ⌥N (novo link) / ⌥M (nova nota); engrenagem de Configurações no topo.
 open http://localhost:9088
 ```
 

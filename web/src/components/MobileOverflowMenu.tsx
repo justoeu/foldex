@@ -5,7 +5,7 @@ import { SUPPORTED_LOCALES, type LocaleCode } from '../i18n'
 
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
 type ViewMode = 'cards' | 'compact' | 'list'
-type View = 'home' | 'import' | 'stats'
+type View = 'home' | 'import' | 'stats' | 'settings'
 
 type Props = {
   sort: Sort
@@ -131,6 +131,12 @@ export function MobileOverflowMenu({
               label={t('topbar.import_export')}
               active={view === 'import'}
               onClick={() => { setView('import'); closeAll() }}
+            />
+            <Row
+              icon={I.gear}
+              label={t('topbar.settings')}
+              active={view === 'settings'}
+              onClick={() => { setView('settings'); closeAll() }}
             />
           </Section>
 

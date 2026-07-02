@@ -14,11 +14,16 @@ import (
 // near-empty password, not to enforce a "strong password" policy.
 const minPasswordLen = 4
 
+// maxPasswordHintLen caps the reminder phrase. It's non-secret display text,
+// not a password, so a generous-but-bounded ceiling is enough.
+const maxPasswordHintLen = 200
+
 type CreateInput struct {
-	Name     string  `json:"name"`
-	Color    string  `json:"color"`
-	ParentID *int64  `json:"parent_id"`
-	Password *string `json:"password"`
+	Name         string  `json:"name"`
+	Color        string  `json:"color"`
+	ParentID     *int64  `json:"parent_id"`
+	Password     *string `json:"password"`
+	PasswordHint *string `json:"password_hint"`
 }
 
 func (c *CreateInput) Normalize() {
@@ -27,6 +32,7 @@ func (c *CreateInput) Normalize() {
 	if c.Color == "" {
 		c.Color = "#6366F1"
 	}
+	c.PasswordHint = normalizeHint(c.PasswordHint)
 }
 
 func (c CreateInput) Validate() error {
@@ -41,6 +47,9 @@ func (c CreateInput) Validate() error {
 	}
 	if c.Password != nil && len(*c.Password) < minPasswordLen {
 		return errMsg(fmt.Sprintf("password must be at least %d characters", minPasswordLen))
+	}
+	if err := validateHint(c.PasswordHint, c.Password); err != nil {
+		return err
 	}
 	return nil
 }
@@ -65,17 +74,24 @@ type UpdateInput struct {
 	Password        *string `json:"-"`
 	PasswordSet     bool    `json:"-"`
 	CurrentPassword *string `json:"current_password"`
+	// PasswordHint is the same tri-state shape as Password:
+	//   field absent            → hint unchanged
+	//   {"password_hint": "x"}  → set/replace the hint
+	//   {"password_hint": null} → remove the hint
+	PasswordHint    *string `json:"-"`
+	PasswordHintSet bool    `json:"-"`
 }
 
 func (u UpdateInput) Empty() bool {
-	return u.Name == nil && u.Color == nil && !u.ParentIDSet && !u.PasswordSet
+	return u.Name == nil && u.Color == nil && !u.ParentIDSet && !u.PasswordSet && !u.PasswordHintSet
 }
 
 func (u *UpdateInput) UnmarshalJSON(data []byte) error {
 	type alias UpdateInput
 	aux := struct {
-		ParentID json.RawMessage `json:"parent_id"`
-		Password json.RawMessage `json:"password"`
+		ParentID     json.RawMessage `json:"parent_id"`
+		Password     json.RawMessage `json:"password"`
+		PasswordHint json.RawMessage `json:"password_hint"`
 		*alias
 	}{alias: (*alias)(u)}
 	if err := json.Unmarshal(data, &aux); err != nil {
@@ -111,6 +127,21 @@ func (u *UpdateInput) UnmarshalJSON(data []byte) error {
 			u.Password = &s
 		}
 	}
+	if len(aux.PasswordHint) == 0 {
+		u.PasswordHintSet = false
+		u.PasswordHint = nil
+	} else {
+		u.PasswordHintSet = true
+		if string(aux.PasswordHint) == "null" {
+			u.PasswordHint = nil
+		} else {
+			var s string
+			if err := json.Unmarshal(aux.PasswordHint, &s); err != nil {
+				return err
+			}
+			u.PasswordHint = &s
+		}
+	}
 	return nil
 }
 
@@ -122,6 +153,9 @@ func (u *UpdateInput) Normalize() {
 	if u.Color != nil {
 		s := strings.TrimSpace(*u.Color)
 		u.Color = &s
+	}
+	if u.PasswordHintSet {
+		u.PasswordHint = normalizeHint(u.PasswordHint)
 	}
 }
 
@@ -139,6 +173,48 @@ func (u UpdateInput) Validate() error {
 	}
 	if u.PasswordSet && u.Password != nil && len(*u.Password) < minPasswordLen {
 		return errMsg(fmt.Sprintf("password must be at least %d characters", minPasswordLen))
+	}
+	// hint == password equality is checked in the repository (it needs the
+	// folder's effective hash); here we only bound length. When the hint is
+	// set alongside a new password, we can also catch equality early.
+	if u.PasswordHintSet {
+		var pw *string
+		if u.PasswordSet {
+			pw = u.Password
+		}
+		if err := validateHint(u.PasswordHint, pw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// normalizeHint trims a hint and collapses an empty/blank result to nil so a
+// whitespace-only hint is treated as "no hint" rather than stored.
+func normalizeHint(hint *string) *string {
+	if hint == nil {
+		return nil
+	}
+	s := strings.TrimSpace(*hint)
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// validateHint bounds the hint length and rejects a hint equal to the plaintext
+// password when both are known here (create, or update setting both at once).
+// The repository does the authoritative equality check against the stored hash
+// for the update-hint-only case. hint is assumed already normalized.
+func validateHint(hint, password *string) error {
+	if hint == nil {
+		return nil
+	}
+	if len(*hint) > maxPasswordHintLen {
+		return errMsg(fmt.Sprintf("password hint too long (max %d)", maxPasswordHintLen))
+	}
+	if password != nil && strings.EqualFold(strings.TrimSpace(*password), *hint) {
+		return errMsg("password hint must not be the same as the password")
 	}
 	return nil
 }

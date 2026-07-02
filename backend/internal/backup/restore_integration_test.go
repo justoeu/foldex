@@ -21,6 +21,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
+	"foldex/internal/settings"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
 )
@@ -592,4 +593,75 @@ func TestRestore_CoercesTrackingPixelColors(t *testing.T) {
 	assert.Equal(t, "#6366F1", folderColor, "tracking-pixel folder color MUST be coerced to indigo default")
 	assert.NotContains(t, tagColor, "evil", "no part of the malicious payload may survive")
 	assert.NotContains(t, folderColor, "evil", "no part of the malicious payload may survive")
+}
+
+// TestRestore_HintAndMasterPasswordRoundTripWipeMode locks the ADR-29
+// additions to the backup snapshot: a folder's password_hint and the
+// app_setting master-password hash both round-trip verbatim through a wipe
+// restore (hint shown as-is, master hash never re-hashed).
+func TestRestore_HintAndMasterPasswordRoundTripWipeMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+
+	pw := "correct-horse-battery"
+	hint := "rhymes with force"
+	frepo := folders.NewRepository(pool)
+	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw, PasswordHint: &hint})
+	require.NoError(t, err)
+	require.NotNil(t, f.PasswordHint)
+
+	srepo := settings.NewRepository(pool)
+	masterHint := "starts with the-"
+	require.NoError(t, srepo.SetMasterPassword(ctx, "the-master-recovery-pass", &masterHint))
+
+	zr := exportToReader(t, svc)
+	_, err = svc.Restore(ctx, zr, backup.ModeWipe)
+	require.NoError(t, err)
+
+	got, err := frepo.Get(ctx, f.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.PasswordHint)
+	assert.Equal(t, hint, *got.PasswordHint, "hint must survive wipe restore verbatim")
+
+	ok, configured, err := srepo.VerifyMaster(ctx, "the-master-recovery-pass")
+	require.NoError(t, err)
+	assert.True(t, configured, "master password must survive wipe restore")
+	assert.True(t, ok, "restored master hash must still verify the original password — never re-hashed")
+
+	gotHint, err := srepo.MasterPasswordHint(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, gotHint, "master hint must survive wipe restore")
+	assert.Equal(t, masterHint, *gotHint)
+}
+
+// TestRestore_AppSettingSkipMode_DoesNotClobberExistingMaster locks the
+// ON CONFLICT DO NOTHING branch of restoreAppSettings: skip/duplicate restore
+// must PRESERVE this instance's existing master password rather than overwrite
+// it with the snapshot's (a singleton setting can't be "duplicated").
+func TestRestore_AppSettingSkipMode_DoesNotClobberExistingMaster(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+
+	// Snapshot instance has master "snapshot-master".
+	srcSvc := backup.NewService(pool, bucket, discardLogger())
+	srepo := settings.NewRepository(pool)
+	require.NoError(t, srepo.SetMasterPassword(ctx, "snapshot-master", nil))
+	zr := exportToReader(t, srcSvc)
+
+	// Now change THIS instance's master to something else, then skip-restore.
+	require.NoError(t, srepo.SetMasterPassword(ctx, "local-master-wins", nil))
+	_, err := srcSvc.Restore(ctx, zr, backup.ModeSkip)
+	require.NoError(t, err)
+
+	// The local master must survive — the snapshot's value must NOT clobber it.
+	ok, configured, err := srepo.VerifyMaster(ctx, "local-master-wins")
+	require.NoError(t, err)
+	assert.True(t, configured)
+	assert.True(t, ok, "skip restore must not overwrite an existing app_setting")
+	ok, _, err = srepo.VerifyMaster(ctx, "snapshot-master")
+	require.NoError(t, err)
+	assert.False(t, ok, "the snapshot's master must NOT win under skip mode")
 }

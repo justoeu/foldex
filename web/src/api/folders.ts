@@ -86,6 +86,23 @@ export function useUnlockFolder() {
   })
 }
 
+// Master-password RECOVERY (ADR-29): clears a folder's password + hint after
+// the backend verifies the master password, so a new one can be set. Never
+// unlocks the folder for viewing. Invalidates ['folders']/['entries'] since
+// has_password/redaction flip.
+export function useResetFolderPassword() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, masterPassword }: { id: number; masterPassword: string }) => {
+      await http.post(`/api/folders/${id}/reset-password`, { master_password: masterPassword })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['folders'] })
+      qc.invalidateQueries({ queryKey: ['entries'] })
+    },
+  })
+}
+
 // Deleting a folder defaults to `ON DELETE SET NULL` on `link.folder_id`
 // server-side (links survive and unflag back to ungrouped). Passing
 // `{ cascade: true }` flips to `?cascade=1`, which deletes every link inside

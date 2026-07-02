@@ -4,8 +4,11 @@ import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Image from '@tiptap/extension-image'
 import Placeholder from '@tiptap/extension-placeholder'
+import { TextStyle, Color, FontFamily } from '@tiptap/extension-text-style'
+import TextAlign from '@tiptap/extension-text-align'
 import type { EditorView } from '@tiptap/pm/view'
 import { Icon, I } from './icons'
+import { NoteToolbar } from './NoteToolbar'
 import { FolderPicker } from './FolderPicker'
 import { TagChip } from './TagChip'
 import { useEscape } from '../hooks/useEscape'
@@ -97,6 +100,13 @@ export function NoteDialog({ open, noteId, defaultFolderId, onClose }: Props) {
         StarterKit.configure({ link: { openOnClick: false } }),
         Image,
         Placeholder.configure({ placeholder: t('note_dialog.body_placeholder') }),
+        // Rich-text toolbar support: TextStyle carries the Color/FontFamily
+        // marks (rendered as <span style>), TextAlign styles block elements.
+        // The server sanitizer allowlists exactly these (see htmlsanitize).
+        TextStyle,
+        Color,
+        FontFamily,
+        TextAlign.configure({ types: ['heading', 'paragraph'] }),
       ],
       editorProps: {
         handlePaste: (view, event) => {
@@ -155,6 +165,7 @@ export function NoteDialog({ open, noteId, defaultFolderId, onClose }: Props) {
 
   useEscape(onClose, open)
   const dialogRef = useRef<HTMLDivElement>(null)
+  const imgInputRef = useRef<HTMLInputElement>(null)
   useFocusTrap(dialogRef, open)
 
   const available = useMemo(
@@ -318,17 +329,29 @@ export function NoteDialog({ open, noteId, defaultFolderId, onClose }: Props) {
               <span className="fx-field-hint">{t('note_dialog.slug_hint')}</span>
             </label>
 
-            <label className="fx-field">
+            <div className="fx-field">
               <span className="fx-field-label">{t('note_dialog.body_label')}</span>
               <div className="fx-tiptap-wrap">
+                <NoteToolbar editor={editor} onInsertImage={() => imgInputRef.current?.click()} />
                 <EditorContent editor={editor} className="fx-tiptap" />
+                <input
+                  ref={imgInputRef}
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file && editor) handleUpload(editor.view, file)
+                    e.target.value = ''
+                  }}
+                />
               </div>
               {imgUploadError && (
                 <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 }}>
                   <Icon d={I.alert} size={12} /> {imgUploadError}
                 </div>
               )}
-            </label>
+            </div>
 
             <label className="fx-field">
               <span className="fx-field-label">{t('note_dialog.tags_label')}</span>
@@ -446,16 +469,16 @@ export function NoteDialog({ open, noteId, defaultFolderId, onClose }: Props) {
         </div>
 
         <footer className="fx-modal-foot">
-          <button type="button" className="fx-btn fx-btn-ghost" onClick={onClose}>
+          <button type="button" className="fx-confirm-btn" onClick={onClose}>
             {t('common.cancel')}
           </button>
           <button
             type="button"
-            className="fx-btn fx-btn-note"
+            className="fx-confirm-btn fx-confirm-btn-primary"
             onClick={submit}
             disabled={!title.trim() || busy}
           >
-            <Icon d={isEdit ? I.check : I.plus} size={14} />
+            <Icon d={isEdit ? I.check : I.plus} size={13} stroke={2.2} />{' '}
             {isEdit ? t('note_dialog.submit_save') : t('note_dialog.submit_create')}
           </button>
         </footer>
