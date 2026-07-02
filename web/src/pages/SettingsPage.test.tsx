@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SettingsPage } from './SettingsPage'
 import { renderWithProviders } from '../test/renderWithProviders'
@@ -136,6 +136,48 @@ describe('SettingsPage — locked folders reset', () => {
 
     await waitFor(() => expect(state.folderPasswords[7]).toBeUndefined())
     expect(screen.getByText(/password cleared/i)).toBeInTheDocument()
+  })
+
+  it('toggles between the reset and remove prompts on the same row', async () => {
+    state.masterPassword = 'master-pass'
+    lockedFolder(13, 'VaultToggle')
+    renderWithProviders(<SettingsPage />)
+    await waitFor(() => expect(screen.getByText('VaultToggle')).toBeInTheDocument())
+    const user = userEvent.setup()
+    const row = within(screen.getByText('VaultToggle').closest('li') as HTMLElement)
+
+    await user.click(row.getByRole('button', { name: /reset password/i }))
+    expect(row.getByText(/then set a new one/i)).toBeInTheDocument()
+
+    // Switching to remove swaps the prompt (single shared input, new copy).
+    await user.click(row.getByRole('button', { name: /remove password/i }))
+    expect(row.getByText(/left with no password/i)).toBeInTheDocument()
+    expect(row.queryByText(/then set a new one/i)).not.toBeInTheDocument()
+
+    // Re-clicking the same action collapses it.
+    await user.click(row.getByRole('button', { name: /remove password/i }))
+    expect(row.queryByText(/left with no password/i)).not.toBeInTheDocument()
+  })
+
+  it('removes a folder password with the master and leaves it unprotected', async () => {
+    state.masterPassword = 'master-pass'
+    lockedFolder(12, 'VaultRemove')
+    const onEditFolder = vi.fn()
+    renderWithProviders(<SettingsPage onEditFolder={onEditFolder} />)
+
+    await waitFor(() => expect(screen.getByText('VaultRemove')).toBeInTheDocument())
+    const user = userEvent.setup()
+    // Scope to the folder's row — the master section also has a "Remove" button.
+    const row = within(screen.getByText('VaultRemove').closest('li') as HTMLElement)
+    await user.click(row.getByRole('button', { name: /remove password/i }))
+    await user.type(row.getByLabelText('Master password'), 'master-pass')
+    await user.click(row.getByRole('button', { name: /^remove$/i }))
+
+    await waitFor(() => expect(state.folderPasswords[12]).toBeUndefined())
+    expect(screen.getByText(/folder unlocked/i)).toBeInTheDocument()
+    // Remove flow does NOT offer to set a new password.
+    expect(screen.queryByRole('button', { name: /set new password/i })).not.toBeInTheDocument()
+    expect(onEditFolder).not.toHaveBeenCalled()
   })
 
   it('shows the master hint on the reset prompt when set', async () => {

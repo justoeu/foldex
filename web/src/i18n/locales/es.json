@@ -639,7 +639,12 @@
     "master_hint_equals": "El recordatorio no puede ser igual a la contraseña.",
     "reset_master_hint": "Recordatorio: {{hint}}",
     "master_current_hint": "Recordatorio actual: {{hint}}",
-    "master_hint_placeholder_keep": "Déjalo en blanco para mantener el actual"
+    "master_hint_placeholder_keep": "Déjalo en blanco para mantener el actual",
+    "remove_action": "Quitar contraseña",
+    "remove_confirm": "Quitar",
+    "remove_done": "Contraseña quitada — carpeta desprotegida",
+    "remove_explain": "La carpeta quedará sin contraseña (desprotegida). Introduce la contraseña maestra para confirmar.",
+    "reset_explain": "Introduce la contraseña maestra para borrar la contraseña y luego definir una nueva."
   },
   "note_toolbar": {
     "aria": "Formato de texto",
