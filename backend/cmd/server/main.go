@@ -15,6 +15,7 @@ import (
 	"foldex/internal/changecheck"
 	"foldex/internal/config"
 	"foldex/internal/db"
+	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/preview"
 	"foldex/internal/push"
@@ -98,6 +99,17 @@ func main() {
 	pushSender := push.NewSender(vapid, pushRepo, logger)
 	pushHandler := push.NewHandler(vapid, pushRepo, pushSender)
 
+	// Folder-unlock-token HMAC secret — same load-or-generate shape as VAPID
+	// above. A failure here is fatal only when the operator pinned
+	// FOLDER_UNLOCK_KEY to something invalid; the autogen path always boots.
+	folderUnlockKey, err := folders.LoadOrGenerateFolderUnlockKey(
+		cfg.FolderUnlockKey, cfg.FolderUnlockKeyPath, cfg.FolderUnlockAutoGenerate, logger,
+	)
+	if err != nil {
+		logger.Error("folder unlock key setup failed", "err", err)
+		os.Exit(1)
+	}
+
 	// Change-check worker is opt-in per link (link.check_interval). When the
 	// kill-switch is off OR no link is opted in the worker still runs but its
 	// scan returns an empty list, so the cost is essentially a goroutine + a
@@ -127,6 +139,7 @@ func main() {
 		Storage:             storageClient,
 		PushHandler:         pushHandler,
 		LinkMetadataFetcher: linkMetadataAdapter{f: metadataFetcher},
+		FolderUnlockKey:     folderUnlockKey,
 	}
 	if storageClient != nil {
 		deps.Screenshotter = screenshotFunc(screenshot.Capture)

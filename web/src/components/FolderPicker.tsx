@@ -81,7 +81,7 @@ export function FolderPicker({ selected, onChange, parentId, excludeIds }: Props
   type Row =
     | { kind: 'create'; label: string }
     | { kind: 'none'; label: string }
-    | { kind: 'folder'; id: number; label: string }
+    | { kind: 'folder'; id: number; label: string; hasPassword: boolean }
   const rows: Row[] = useMemo(() => {
     const r: Row[] = []
     if (showCreateRow) {
@@ -93,7 +93,10 @@ export function FolderPicker({ selected, onChange, parentId, excludeIds }: Props
       })
     }
     r.push({ kind: 'none', label: t('folder_picker.none') })
-    for (const f of filtered) r.push({ kind: 'folder', id: f.id, label: f.name })
+    // Locked folders remain selectable — the picker is a move-target, not a
+    // read path (ADR-28's write-doesn't-require-unlock scope boundary), it
+    // just shows the lock glyph so the user knows what they're picking.
+    for (const f of filtered) r.push({ kind: 'folder', id: f.id, label: f.name, hasPassword: f.has_password })
     return r
   }, [filtered, showCreateRow, t, trimmedFilter])
 
@@ -254,7 +257,19 @@ export function FolderPicker({ selected, onChange, parentId, excludeIds }: Props
                     <Icon d={I.x} size={11} />
                   )}
                 </span>
-                <span className="fx-folderpicker-row-label">{row.label}</span>
+                <span className="fx-folderpicker-row-label">
+                  {row.kind === 'folder' && row.hasPassword && (
+                    <span
+                      className="fx-folder-lock-icon"
+                      aria-hidden="true"
+                      data-tooltip={t('folder_card.locked_tooltip')}
+                      data-tooltip-side="top"
+                    >
+                      <Icon d={I.lock} size={12} />
+                    </span>
+                  )}
+                  {row.label}
+                </span>
                 {isChosen && (
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
                     <path d="M5 12l5 5 9-12" />

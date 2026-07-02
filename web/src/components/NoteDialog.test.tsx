@@ -59,7 +59,7 @@ describe('NoteDialog', () => {
     state.tags.push({ id: 1, name: 'jira', color: '#1f6feb', icon: null })
     state.folders.push({
       id: 5, name: 'Work', color: '#6366F1', parent_id: null,
-      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], has_password: false, created_at: '',
     })
     renderWithProviders(<NoteDialog open noteId={null} onClose={vi.fn()} />)
     const user = userEvent.setup()

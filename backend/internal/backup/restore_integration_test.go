@@ -21,6 +21,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
+	"foldex/internal/settings"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
 )
@@ -347,6 +348,101 @@ func TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow(t *testing.T) {
 	assert.EqualValues(t, 3, count(t, pool, "note"), "skip mode has no identity key for notes — every restore inserts another row")
 }
 
+// TestRestore_FolderPasswordRoundTripWipeMode locks the CLAUDE.md-documented
+// contract that a folder's password_hash round-trips VERBATIM through
+// backup/restore — it's already a bcrypt hash, restore must copy it as-is
+// (never re-hash it, never drop it, never treat it as plaintext).
+func TestRestore_FolderPasswordRoundTripWipeMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+
+	pw := "correct-horse-battery"
+	frepo := folders.NewRepository(pool)
+	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+	require.True(t, f.HasPassword)
+
+	zr := exportToReader(t, svc)
+	_, err = svc.Restore(ctx, zr, backup.ModeWipe)
+	require.NoError(t, err)
+
+	got, err := frepo.Get(ctx, f.ID)
+	require.NoError(t, err, "original folder id must survive wipe restore")
+	assert.True(t, got.HasPassword)
+	hash, err := frepo.PasswordHashFor(ctx, f.ID)
+	require.NoError(t, err)
+	require.NotNil(t, hash)
+	assert.True(t, folders.VerifyPassword(*hash, pw), "the restored hash must still verify the ORIGINAL password — restore must never re-hash")
+}
+
+// TestRestore_FolderPasswordRoundTripSkipMode documents the same "no
+// identity key" divergence as notes (see
+// TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow): folder has no
+// unique constraint, so restoreSkip always inserts a fresh row — but that
+// fresh row must still carry the original password_hash forward.
+func TestRestore_FolderPasswordRoundTripSkipMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+
+	pw := "correct-horse-battery"
+	frepo := folders.NewRepository(pool)
+	_, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+
+	zr := exportToReader(t, svc)
+	rep, err := svc.Restore(ctx, zr, backup.ModeSkip)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, rep.Inserted.Folders)
+	assert.EqualValues(t, 2, count(t, pool, "folder"), "skip has no identity key for folders — restore inserts a second row")
+
+	list, err := frepo.List(ctx, folders.ListQuery{RootOnly: true})
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	for _, f := range list {
+		assert.True(t, f.Name == "Secret", "both the original and the skip-restored copy must be named Secret")
+		hash, err := frepo.PasswordHashFor(ctx, f.ID)
+		require.NoError(t, err)
+		require.NotNil(t, hash, "the skip-restored copy must carry the password forward, not drop it")
+		assert.True(t, folders.VerifyPassword(*hash, pw))
+	}
+}
+
+// TestRestore_FolderPasswordRoundTripDuplicateMode mirrors the skip-mode
+// test for the third restore mode: folders are ALWAYS duplicated as new rows
+// (no rename-on-collision the way tags get, since folder.name has no unique
+// constraint) — the duplicated copy must still carry password_hash forward.
+func TestRestore_FolderPasswordRoundTripDuplicateMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+
+	pw := "correct-horse-battery"
+	frepo := folders.NewRepository(pool)
+	_, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+
+	zr := exportToReader(t, svc)
+	rep, err := svc.Restore(ctx, zr, backup.ModeDuplicate)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, rep.Inserted.Folders)
+	assert.EqualValues(t, 2, count(t, pool, "folder"))
+
+	list, err := frepo.List(ctx, folders.ListQuery{RootOnly: true})
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	for _, f := range list {
+		hash, err := frepo.PasswordHashFor(ctx, f.ID)
+		require.NoError(t, err)
+		require.NotNil(t, hash, "the duplicate-restored copy must carry the password forward, not drop it")
+		assert.True(t, folders.VerifyPassword(*hash, pw))
+	}
+}
+
 // TestRestore_SanitizesNoteBodyHTMLFromHostileZip is the regression lock for
 // the XSS gap a malicious backup zip could otherwise exploit: restore writes
 // note rows straight to SQL (CopyFrom/INSERT), bypassing
@@ -497,4 +593,75 @@ func TestRestore_CoercesTrackingPixelColors(t *testing.T) {
 	assert.Equal(t, "#6366F1", folderColor, "tracking-pixel folder color MUST be coerced to indigo default")
 	assert.NotContains(t, tagColor, "evil", "no part of the malicious payload may survive")
 	assert.NotContains(t, folderColor, "evil", "no part of the malicious payload may survive")
+}
+
+// TestRestore_HintAndMasterPasswordRoundTripWipeMode locks the ADR-29
+// additions to the backup snapshot: a folder's password_hint and the
+// app_setting master-password hash both round-trip verbatim through a wipe
+// restore (hint shown as-is, master hash never re-hashed).
+func TestRestore_HintAndMasterPasswordRoundTripWipeMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+
+	pw := "correct-horse-battery"
+	hint := "rhymes with force"
+	frepo := folders.NewRepository(pool)
+	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw, PasswordHint: &hint})
+	require.NoError(t, err)
+	require.NotNil(t, f.PasswordHint)
+
+	srepo := settings.NewRepository(pool)
+	masterHint := "starts with the-"
+	require.NoError(t, srepo.SetMasterPassword(ctx, "the-master-recovery-pass", &masterHint))
+
+	zr := exportToReader(t, svc)
+	_, err = svc.Restore(ctx, zr, backup.ModeWipe)
+	require.NoError(t, err)
+
+	got, err := frepo.Get(ctx, f.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.PasswordHint)
+	assert.Equal(t, hint, *got.PasswordHint, "hint must survive wipe restore verbatim")
+
+	ok, configured, err := srepo.VerifyMaster(ctx, "the-master-recovery-pass")
+	require.NoError(t, err)
+	assert.True(t, configured, "master password must survive wipe restore")
+	assert.True(t, ok, "restored master hash must still verify the original password — never re-hashed")
+
+	gotHint, err := srepo.MasterPasswordHint(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, gotHint, "master hint must survive wipe restore")
+	assert.Equal(t, masterHint, *gotHint)
+}
+
+// TestRestore_AppSettingSkipMode_DoesNotClobberExistingMaster locks the
+// ON CONFLICT DO NOTHING branch of restoreAppSettings: skip/duplicate restore
+// must PRESERVE this instance's existing master password rather than overwrite
+// it with the snapshot's (a singleton setting can't be "duplicated").
+func TestRestore_AppSettingSkipMode_DoesNotClobberExistingMaster(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+
+	// Snapshot instance has master "snapshot-master".
+	srcSvc := backup.NewService(pool, bucket, discardLogger())
+	srepo := settings.NewRepository(pool)
+	require.NoError(t, srepo.SetMasterPassword(ctx, "snapshot-master", nil))
+	zr := exportToReader(t, srcSvc)
+
+	// Now change THIS instance's master to something else, then skip-restore.
+	require.NoError(t, srepo.SetMasterPassword(ctx, "local-master-wins", nil))
+	_, err := srcSvc.Restore(ctx, zr, backup.ModeSkip)
+	require.NoError(t, err)
+
+	// The local master must survive — the snapshot's value must NOT clobber it.
+	ok, configured, err := srepo.VerifyMaster(ctx, "local-master-wins")
+	require.NoError(t, err)
+	assert.True(t, configured)
+	assert.True(t, ok, "skip restore must not overwrite an existing app_setting")
+	ok, _, err = srepo.VerifyMaster(ctx, "snapshot-master")
+	require.NoError(t, err)
+	assert.False(t, ok, "the snapshot's master must NOT win under skip mode")
 }

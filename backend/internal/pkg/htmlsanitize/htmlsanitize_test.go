@@ -133,3 +133,47 @@ func TestPlainText_TrimsWhitespace(t *testing.T) {
 	got := PlainText("  <p>  hi  </p>  ")
 	assert.Equal(t, "hi", got)
 }
+
+// ── rich-text toolbar styles (TextAlign / Color / FontFamily) ──────────────
+
+func TestSanitize_AllowsTextAlign(t *testing.T) {
+	got := Sanitize(`<p style="text-align:center">centered</p>`)
+	assert.Contains(t, got, "text-align")
+	assert.Contains(t, got, "center")
+}
+
+func TestSanitize_AllowsColorSpan(t *testing.T) {
+	got := Sanitize(`<p><span style="color: #ff0000">red</span></p>`)
+	assert.Contains(t, got, "<span")
+	assert.Contains(t, got, "color")
+	assert.Contains(t, got, "#ff0000")
+}
+
+func TestSanitize_AllowsFontFamily(t *testing.T) {
+	got := Sanitize(`<span style="font-family: Georgia, serif">serif</span>`)
+	assert.Contains(t, got, "font-family")
+	assert.Contains(t, got, "Georgia")
+}
+
+func TestSanitize_RejectsDangerousStyleValues(t *testing.T) {
+	// url() / expression() must never survive in any style value.
+	cases := []string{
+		`<span style="color: url('https://evil/x')">x</span>`,
+		`<span style="font-family: expression(alert(1))">x</span>`,
+		`<span style="font-family: url(javascript:alert(1))">x</span>`,
+		`<p style="text-align: url(evil)">x</p>`,
+		`<span style="background: red; color: red url('https://evil')">x</span>`,
+	}
+	for _, in := range cases {
+		got := Sanitize(in)
+		assert.NotContains(t, got, "url(", "url() must be stripped from %q → %q", in, got)
+		assert.NotContains(t, got, "expression", "expression() must be stripped from %q → %q", in, got)
+	}
+}
+
+func TestSanitize_StripsUnlistedStyleProperty(t *testing.T) {
+	// A property not in the allowlist (position) must be dropped even when a
+	// sibling allowed property (color) is present.
+	got := Sanitize(`<span style="position: fixed; color: #abc">x</span>`)
+	assert.NotContains(t, got, "position")
+}

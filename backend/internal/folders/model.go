@@ -3,10 +3,20 @@ package folders
 import "time"
 
 type Folder struct {
-	ID             int64           `json:"id"`
-	Name           string          `json:"name"`
-	Color          string          `json:"color"`
-	ParentID       *int64          `json:"parent_id,omitempty"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Color    string `json:"color"`
+	ParentID *int64 `json:"parent_id,omitempty"`
+	// HasPassword never carries the hash itself — repository methods scan
+	// folder.password_hash into a local variable and set this bool inline,
+	// they never store the hash on the struct. See CheckUnlock/List's
+	// redaction rule in repository.go.
+	HasPassword bool `json:"has_password"`
+	// PasswordHint is a NON-SECRET reminder phrase shown on the unlock prompt
+	// (ADR-29). Unlike the hash it IS returned to clients — surfacing it is the
+	// whole point. nil when the folder has no hint. Enforced to never equal the
+	// password (see dto/repository).
+	PasswordHint   *string         `json:"password_hint,omitempty"`
 	LinkCount      int64           `json:"link_count"`
 	FolderCount    int64           `json:"folder_count"`
 	Previews       []PreviewTile   `json:"preview_links"`

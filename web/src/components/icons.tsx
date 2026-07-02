@@ -175,6 +175,37 @@ export const I = {
     <path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M6 18l2-2M16 8l2-2" />
   ),
   bolt: <path d="m13 2-9 12h7l-1 8 9-12h-7l1-8z" />,
+  // ── rich-text toolbar (NoteDialog) ──
+  bold: <path d="M6 4h8a4 4 0 0 1 0 8H6zM6 12h9a4 4 0 0 1 0 8H6z" />,
+  italic: <path d="M19 4h-9M14 20H5M15 4L9 20" />,
+  underline: <path d="M6 4v6a6 6 0 0 0 12 0V4M4 21h16" />,
+  strike: <path d="M16 4H9a3 3 0 0 0-2.83 4M14 12a4 4 0 0 1 0 8H8M4 12h16" />,
+  listBullet: (
+    <>
+      <path d="M8 6h13M8 12h13M8 18h13" />
+      <path d="M3 6h.01M3 12h.01M3 18h.01" />
+    </>
+  ),
+  listOrdered: <path d="M10 6h11M10 12h11M10 18h11M4 6h1v4M4 10h2M6 18H4c0-1 2-2 2-3s-1-1.5-2-1" />,
+  alignLeft: <path d="M3 6h18M3 12h12M3 18h15" />,
+  alignCenter: <path d="M3 6h18M6 12h12M4 18h16" />,
+  alignRight: <path d="M3 6h18M9 12h12M6 18h15" />,
+  alignJustify: <path d="M3 6h18M3 12h18M3 18h18" />,
+  quote: <path d="M9 7H6a2 2 0 0 0-2 2v3h4v-3zM18 7h-3a2 2 0 0 0-2 2v3h4v-3z" />,
+  code: <path d="M16 18l6-6-6-6M8 6l-6 6 6 6" />,
+  image: (
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="9" cy="9" r="1.6" />
+      <path d="M21 15l-5-5L5 21" />
+    </>
+  ),
+  gear: (
+    <>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </>
+  ),
   sun: (
     <>
       <circle cx="12" cy="12" r="4" />
@@ -221,6 +252,12 @@ export const I = {
       <circle cx="12" cy="12" r="9" />
       <path d="M12 11v5" />
       <path d="M12 8h0" />
+    </>
+  ),
+  lock: (
+    <>
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
     </>
   ),
 }

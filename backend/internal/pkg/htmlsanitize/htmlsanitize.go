@@ -18,13 +18,32 @@ import (
 // against anything riding along in those attribute values.
 var numericAttr = regexp.MustCompile(`^[0-9]+$`)
 
-// policy is an explicit allowlist matching exactly what Tiptap's StarterKit
-// (plus the Image and Link extensions) emits — built with bluemonday.NewPolicy()
-// rather than a preset (UGCPolicy/StrictPolicy) so nothing is silently
-// over-permitted. Notably absent: <table> (no table extension wired into the
-// editor yet — keep the allowlist closed rather than speculatively widen it)
-// and the `data:` URL scheme (forces every inline image through the upload
-// endpoint instead of an embedded base64 blob).
+// Value allowlists for the three inline-style properties the Tiptap toolbar
+// emits (TextAlign / Color / FontFamily). Every style value is matched against
+// one of these before it survives sanitization, so no url(), expression(),
+// behavior, or arbitrary CSS can ride in through the style attribute — the
+// property NAMES are already restricted by AllowStyles; these pin the VALUES.
+var (
+	textAlignValue = regexp.MustCompile(`^(?:left|right|center|justify)$`)
+	// Hex (#abc / #aabbcc) or rgb()/rgba() with integer channels — exactly what
+	// Tiptap's Color extension serializes. No named colors / url() / var().
+	colorValue = regexp.MustCompile(`^(?:#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})|rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)|rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0|1|0?\.\d+)\s*\))$`)
+	// Font stacks are a comma-separated list of family names — letters, digits,
+	// spaces, hyphens and quotes only. Blocks parentheses (url(), expression()).
+	fontFamilyValue = regexp.MustCompile(`^[a-zA-Z0-9 ,"'\-]+$`)
+)
+
+// policy is an explicit allowlist matching exactly what the Tiptap editor
+// emits: StarterKit (plus the Image and Link extensions) AND the formatting
+// toolbar's TextAlign / Color / FontFamily (rendered as text-align styles on
+// block elements and a <span style="color|font-family"> TextStyle mark). Built
+// with bluemonday.NewPolicy() rather than a preset (UGCPolicy/StrictPolicy) so
+// nothing is silently over-permitted. Notably absent: <table> (no table
+// extension wired into the editor — keep the allowlist closed rather than
+// speculatively widen it) and the `data:` URL scheme (forces every inline
+// image through the upload endpoint instead of an embedded base64 blob).
+// Inline-style VALUES are regexp-pinned (see textAlignValue/colorValue/
+// fontFamilyValue) so the style attribute can't smuggle url()/expression().
 var policy = newPolicy()
 
 // stripPolicy removes every tag, used by PlainText to derive a search-index
@@ -39,7 +58,19 @@ func newPolicy() *bluemonday.Policy {
 		"strong", "em", "u", "s", "code", "pre", "blockquote",
 		"ul", "ol", "li",
 		"h1", "h2", "h3", "h4", "h5", "h6",
+		// span carries the TextStyle mark (Color / FontFamily) — inline only,
+		// no attributes beyond the style allowlist below.
+		"span",
 	)
+
+	// Inline rich-text styling from the Tiptap toolbar (TextAlign on block
+	// elements; Color / FontFamily via the TextStyle <span> mark). Property
+	// names are restricted here and every value is regexp-matched (see the
+	// *Value patterns) so the style attribute can't smuggle url()/expression().
+	blockEls := []string{"p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "li"}
+	p.AllowStyles("text-align").Matching(textAlignValue).OnElements(blockEls...)
+	p.AllowStyles("color").Matching(colorValue).Globally()
+	p.AllowStyles("font-family").Matching(fontFamilyValue).Globally()
 
 	// Links: only href is user-controlled. rel/target are derived by
 	// bluemonday's Require/Add helpers below, never taken from the input —

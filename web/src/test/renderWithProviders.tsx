@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider } from '@mui/material'
 import { theme } from '../theme/theme'
 import { ConfirmProvider } from '../components/ConfirmDialog'
+import { PasswordPromptProvider } from '../components/PasswordPromptDialog'
 
 export function makeQueryClient() {
   return new QueryClient({
@@ -22,7 +23,9 @@ export function renderWithProviders(
   const wrapper = ({ children }: { children: ReactNode }) => (
     <ThemeProvider theme={theme}>
       <QueryClientProvider client={client}>
-        <ConfirmProvider>{children}</ConfirmProvider>
+        <ConfirmProvider>
+          <PasswordPromptProvider>{children}</PasswordPromptProvider>
+        </ConfirmProvider>
       </QueryClientProvider>
     </ThemeProvider>
   )

@@ -1,5 +1,6 @@
 import { useInfiniteQuery, type InfiniteData, type QueryClient } from '@tanstack/react-query'
 import { http } from './client'
+import { FOLDER_UNLOCK_HEADER } from './folders'
 import type { Entry } from './types'
 
 export type EntryListParams = {
@@ -8,6 +9,10 @@ export type EntryListParams = {
   sort?: 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
   folderId?: number | null
   ungrouped?: boolean
+  // Required to read a protected folder's contents (ADR-28) — the backend
+  // gates GET /api/entries?folder_id=X the same way it gates the folders
+  // list. Ignored when folderId is unset.
+  unlockToken?: string
 }
 
 // Same page size as links (ENTRY_PAGE_SIZE mirrors LINK_PAGE_SIZE) — the
@@ -21,6 +26,9 @@ const entriesKey = (p: EntryListParams) =>
     [...(p.tagIds ?? [])].sort((a, b) => a - b).join(','),
     p.sort ?? 'created',
     p.folderId ?? (p.ungrouped ? 'ungrouped' : 'all'),
+    // Same rationale as useFolders: presence-only, not the raw token, so a
+    // fresh unlock of the same folder doesn't needlessly bust the cache.
+    p.folderId != null && p.unlockToken ? 'unlocked' : 'locked',
   ] as const
 
 type EntriesCache = InfiniteData<Entry[]>
@@ -62,7 +70,9 @@ export function useEntries(params: EntryListParams, options?: { enabled?: boolea
       }
       search.set('limit', String(ENTRY_PAGE_SIZE))
       search.set('offset', String(pageParam))
-      const { data } = await http.get<Entry[]>(`/api/entries?${search.toString()}`)
+      const { data } = await http.get<Entry[]>(`/api/entries?${search.toString()}`, {
+        headers: params.unlockToken ? { [FOLDER_UNLOCK_HEADER]: params.unlockToken } : undefined,
+      })
       return data
     },
     initialPageParam: 0,

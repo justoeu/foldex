@@ -166,6 +166,16 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropNote, onDrop
                   className="fx-card-title-link"
                   onClick={() => onOpen(folder.id)}
                 >
+                  {folder.has_password && (
+                    <span
+                      className="fx-folder-lock-icon"
+                      aria-hidden="true"
+                      data-tooltip={t('folder_card.locked_tooltip')}
+                      data-tooltip-side="top"
+                    >
+                      <Icon d={I.lock} size={12} />
+                    </span>
+                  )}
                   {folder.name}
                 </button>
               </FolderRapidView>

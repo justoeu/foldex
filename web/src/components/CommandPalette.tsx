@@ -240,7 +240,19 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
                       </span>
                     )}
                   </span>
-                  <span className="fx-cmdk-folder-name">{f.name}</span>
+                  <span className="fx-cmdk-folder-name">
+                    {f.has_password && (
+                      <span
+                        className="fx-folder-lock-icon"
+                        aria-hidden="true"
+                        data-tooltip={t('folder_card.locked_tooltip')}
+                        data-tooltip-side="top"
+                      >
+                        <Icon d={I.lock} size={12} />
+                      </span>
+                    )}
+                    {f.name}
+                  </span>
                   <span className="fx-cmdk-hint">{t('command_palette.folder_hint')}</span>
                 </button>
               ))}

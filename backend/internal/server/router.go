@@ -24,6 +24,7 @@ import (
 	"foldex/internal/notes"
 	"foldex/internal/push"
 	"foldex/internal/redirect"
+	"foldex/internal/settings"
 	"foldex/internal/stats"
 	"foldex/internal/tags"
 )
@@ -55,6 +56,13 @@ type Deps struct {
 	// (kept inside /api so it inherits the SHARED_SECRET guard — see CLAUDE.md
 	// §4 invariant). Leaving it nil keeps the routes off entirely.
 	PushHandler *push.Handler
+
+	// FolderUnlockKey is the HMAC secret for folder-password unlock tokens
+	// (see folders.LoadOrGenerateFolderUnlockKey) — shared between the
+	// folders handler (mints tokens, gates list(parent_id=X)) and the
+	// entries handler (gates list(folder_id=X)) so a token issued by one
+	// verifies against the other.
+	FolderUnlockKey []byte
 }
 
 func New(d Deps) http.Handler {
@@ -66,7 +74,7 @@ func New(d Deps) http.Handler {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   d.Config.CORSOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Content-Type", "X-Foldex-Secret"},
+		AllowedHeaders:   []string{"Content-Type", "X-Foldex-Secret", folders.UnlockHeader},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
@@ -86,7 +94,10 @@ func New(d Deps) http.Handler {
 			api.Use(sharedSecretGuard(d.Config.SharedSecret))
 		}
 		api.Route("/tags", tags.NewHandler(tags.NewRepository(d.Pool)).Mount)
-		api.Route("/folders", folders.NewHandler(folders.NewRepository(d.Pool)).Mount)
+		settingsRepo := settings.NewRepository(d.Pool)
+		api.Route("/settings", settings.NewHandler(settingsRepo).Mount)
+		foldersRepo := folders.NewRepository(d.Pool)
+		api.Route("/folders", folders.NewHandler(foldersRepo, d.FolderUnlockKey, settingsRepo).Mount)
 
 		linksRepo := links.NewRepository(d.Pool)
 		api.Route("/links", links.NewHandler(linksRepo, d.Worker).WithMetadataFetcher(d.LinkMetadataFetcher).Mount)
@@ -96,7 +107,7 @@ func New(d Deps) http.Handler {
 		// (POST /api/notes/images) is mounted further below, gated the same
 		// way links' image upload is.
 		api.Route("/notes", notes.NewHandler(notesRepo, d.Storage).Mount)
-		api.Route("/entries", entries.NewHandler(entries.NewRepository(d.Pool)).Mount)
+		api.Route("/entries", entries.NewHandler(entries.NewRepository(d.Pool), foldersRepo, d.FolderUnlockKey).Mount)
 
 		// Screenshot and file-proxy endpoints are only registered when both
 		// a Screenshotter and Storage implementation are provided.

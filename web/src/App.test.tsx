@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, waitFor, fireEvent } from '@testing-library/react'
+import { screen, waitFor, fireEvent, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { renderWithProviders } from './test/renderWithProviders'
@@ -327,5 +327,133 @@ describe('App', () => {
     const editBtns = screen.getAllByRole('button', { name: /^edit$/i })
     await user.click(editBtns[0])
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('clicking a locked folder shows the password prompt instead of navigating', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
+    // The password prompt appears...
+    expect(await screen.findByText(/Secret/, { selector: 'h2' })).toBeInTheDocument()
+    expect(screen.getByLabelText('folder password')).toBeInTheDocument()
+    // ...and we never actually navigated: the SAME "Open folder Secret" card
+    // is still on screen underneath the prompt (it would be gone — replaced
+    // by the folder's own contents/breadcrumb — had requestOpenFolder called
+    // setOpenFolder before/instead of prompting).
+    expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument()
+  })
+
+  it('entering the correct password unlocks and navigates into the folder', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
+    await user.type(await screen.findByLabelText('folder password'), 'hunter22')
+    await user.click(screen.getByRole('button', { name: /unlock/i }))
+    // Prompt closes and we're now inside the folder — the breadcrumb back
+    // control is folder-view-only, and the prompt input is gone.
+    await waitFor(() => expect(screen.queryByLabelText('folder password')).not.toBeInTheDocument())
+    expect(screen.queryByText(/Your link base/i)).not.toBeInTheDocument()
+  })
+
+  it('wrong password keeps the prompt open with an inline error and never navigates', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
+    await user.type(await screen.findByLabelText('folder password'), 'wrong-guess')
+    await user.click(screen.getByRole('button', { name: /unlock/i }))
+    // First wrong attempt surfaces the attempts-remaining message (ADR-28 rate limit).
+    expect(await screen.findByText(/attempts left before lockout/i)).toBeInTheDocument()
+    expect(screen.getByLabelText('folder password')).toBeInTheDocument()
+  })
+
+  it('jumping to a locked folder via the Command Palette also prompts for the password', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await user.keyboard('{Alt>}k{/Alt}')
+    const palette = await screen.findByRole('dialog')
+    await user.type(within(palette).getByPlaceholderText(/Search by.*action/i), 'Secret')
+    await user.click(await within(palette).findByRole('button', { name: /open folder Secret/i }))
+    // Palette closes; the password prompt takes over.
+    await waitFor(() => expect(screen.queryByPlaceholderText(/Search by.*action/i)).not.toBeInTheDocument())
+    expect(await screen.findByLabelText('folder password')).toBeInTheDocument()
+  })
+
+  it('does not reprompt for a folder already unlocked this session', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    // Unlock once.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
+    await user.type(await screen.findByLabelText('folder password'), 'hunter22')
+    await user.click(screen.getByRole('button', { name: /unlock/i }))
+    await waitFor(() => expect(screen.queryByLabelText('folder password')).not.toBeInTheDocument())
+    // Leave the folder (Esc pops the folder-navigation stack — same
+    // affordance as the breadcrumb's "back" button).
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    // Re-enter: the cached unlock token must skip the prompt entirely.
+    await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
+    await waitFor(() => expect(screen.queryByText(/Your link base/i)).not.toBeInTheDocument())
+    expect(screen.queryByLabelText('folder password')).not.toBeInTheDocument()
+  })
+
+  it('recovers from a stale unlock token (password changed elsewhere mid-session)', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    // Unlock and enter.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
+    await user.type(await screen.findByLabelText('folder password'), 'hunter22')
+    await user.click(screen.getByRole('button', { name: /unlock/i }))
+    await waitFor(() => expect(screen.queryByLabelText('folder password')).not.toBeInTheDocument())
+    // Simulate the password having been changed in another tab: the cached
+    // token is now stale server-side. A subsequent gated request (the search
+    // box re-triggering the entries query — via fireEvent.change, not
+    // userEvent.type, which triggers the palette's parent-div onClick in
+    // this suite, see the "Use fireEvent.change" precedent above) must come
+    // back 403 folder_locked, which App.tsx's defensive effect should catch
+    // by dropping the stale token and navigating back out — never getting
+    // stuck showing a broken/empty folder view.
+    state.folderPasswords[1] = 'new-password-set-elsewhere'
+    fireEvent.change(screen.getByLabelText(/^Search$/i), { target: { value: 'x' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument(), { timeout: 3000 })
+    expect(screen.queryByText(/Your link base/i)).toBeInTheDocument()
+    // Back on the home grid — re-entering must prompt again (the stale
+    // token was dropped, not silently reused).
+    await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
+    expect(await screen.findByLabelText('folder password')).toBeInTheDocument()
   })
 })

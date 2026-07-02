@@ -32,7 +32,8 @@ Native bookmarks are fine for "save a page quickly and forget it". Once you pass
 | **Pinned/favorites = a tiny separate folder.** Visual only.                     | `pinned` is a real column on the table. `ORDER BY pinned DESC, …` applies in every sort mode. Gradient badge always visible. |
 | **Data embedded in the browser.** Switched machines? Reinstalled Chrome? Pray. | Postgres + MinIO in containers. `make up` on a new machine and your backup ZIP restores everything (DB + images) in ~minutes. |
 | **No way to know when a page you bookmarked changes.** A board, a release notes page, a status page — you find out by opening it. | Per-link opt-in (hourly/daily/weekly). Backend runs a fingerprint worker (RSS/Atom feed if present, content-hash fallback) and fires a **Web Push notification** when content changes. Bell in the Topbar manages the subscription; amber badge on the card flags unseen changes; "Recent updates" section in the sidebar lists the last N. Works with the tab closed (Service Worker). |
-| **Pastebin/notes app is a separate tool.** Snippets and links live in different places. | **Notes** (`⌥M`) are a first-class entity alongside links: rich-text editor (Tiptap — bold/headings/lists/code/inline images), same tags/folders/pin/search as links, interleaved in the same grid with an emerald badge, shareable via a public `/n/{slug}` page. |
+| **Pastebin/notes app is a separate tool.** Snippets and links live in different places. | **Notes** (`⌥M`) are a first-class entity alongside links: rich-text editor (Tiptap) with a **formatting toolbar** — bold/italic/underline/strike, headings, bullet & numbered lists, text alignment, text color, font family, quotes/code, links and inline images, same tags/folders/pin/search as links, interleaved in the same grid with an emerald badge, shareable via a public `/n/{slug}` page. |
+| **No way to keep a folder private** on a shared screen/machine without a whole second account. | **Folder passwords.** Set a bcrypt-hashed password on any folder — its links/notes stay hidden (and its preview thumbnails redacted, even on hover) until you unlock it for the session. Backend-enforced, not just a UI prompt: the API itself refuses a locked folder's contents without proof of the password. Add an optional **reminder hint** (shown on the unlock prompt; can't be the password itself), and set a **master password** in **Settings** (with a strength meter, confirm field, and its own reminder hint) to reset a folder's password if you ever forget it. |
 
 ### Real scenarios that flipped the switch (native bookmarks → foldex)
 
@@ -209,7 +210,24 @@ curl -s -X POST localhost:9089/api/notes \
   -d '{"title":"Scratchpad","body_html":"<p>Hello <strong>world</strong></p>"}' | jq .
 curl -s localhost:9089/n/scratchpad | grep -o '<h1>.*</h1>'
 
-# 7. Open the SPA and try ⌥K (palette) / ⌥N (new link) / ⌥M (new note).
+# 7. Create a password-protected folder, confirm its contents are gated
+#    without the unlock token, then confirm they unlock with it.
+curl -s -X POST localhost:9089/api/folders \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Private","password":"hunter22"}' | jq .
+curl -s localhost:9089/api/entries?folder_id=1 | jq .              # 403 folder_locked
+TOKEN=$(curl -s -X POST localhost:9089/api/folders/1/unlock \
+  -H 'Content-Type: application/json' -d '{"password":"hunter22"}' | jq -r .unlock_token)
+curl -s -H "X-Foldex-Folder-Unlock: $TOKEN" localhost:9089/api/entries?folder_id=1 | jq .   # 200
+
+# 7b. Set a master password (Settings), then recover the forgotten folder.
+curl -s -X PUT localhost:9089/api/settings/master-password \
+  -H 'Content-Type: application/json' -d '{"password":"master-recover-1"}' | jq .
+curl -s -X POST localhost:9089/api/folders/1/reset-password \
+  -H 'Content-Type: application/json' -d '{"master_password":"master-recover-1"}' -o /dev/null -w '%{http_code}\n'  # 204
+curl -s localhost:9089/api/entries?folder_id=1 | jq .              # 200 — folder is now unprotected
+
+# 8. Open the SPA and try ⌥K (palette) / ⌥N (new link) / ⌥M (new note); Settings gear in the topbar.
 open http://localhost:9088
 ```
 

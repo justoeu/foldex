@@ -17,15 +17,24 @@ const ManifestVersion = "1.0"
 // SchemaVersion mirrors the latest applied DB migration. Restoring a backup
 // with a higher SchemaVersion than the server's current = fatal error
 // (server doesn't know the layout). Lower = warning (defaults applied).
-const CurrentSchemaVersion = 9
+// v10 = migration 000015 adds folder.password_hash.
+// v11 = migration 000016 adds app_setting + folder.password_hint.
+const CurrentSchemaVersion = 11
 
 // DatabaseSnapshotVersion is the schema of database.json itself. v3 = adds
 // link_tags + click_logs to v2 (which had tags/folders/links only). v4 = adds
 // notes + note_tags + note_clicks (migration 000014 polymorphized link_tag/
 // click_log via entity_kind; the JSON wire shape of existing link rows is
 // unchanged). An older backup (no "notes" key) decodes fine — missing array
-// fields default to nil/empty.
-const DatabaseSnapshotVersion = 4
+// fields default to nil/empty. Stays at v4 for the 000015 folder.password_hash
+// addition: FolderRow just gained one more nullable field, no new top-level
+// snapshot key or decoder options (no DisallowUnknownFields anywhere in this
+// package) — an old backup without "password_hash" restores every folder as
+// unprotected, exactly like any other missing-field default. v5 = adds
+// app_settings (the master recovery password hash, ADR-29) + folder rows gain
+// a password_hint field; an older backup lacking either restores with the
+// setting absent / hint nil, no special casing.
+const DatabaseSnapshotVersion = 5
 
 type Counts struct {
 	Links     int64 `json:"links"`
@@ -68,6 +77,11 @@ type Snapshot struct {
 	NoteTags   []NoteTagRow   `json:"note_tags"`
 	ClickLogs  []ClickRow     `json:"click_logs"`
 	NoteClicks []NoteClickRow `json:"note_clicks"`
+	// AppSettings round-trips the app_setting KV table verbatim (ADR-29) —
+	// currently just the master recovery password hash. Kept a separate array
+	// so an old backup (DatabaseSnapshotVersion < 5, no "app_settings" key)
+	// decodes as a nil slice and every restore mode's loop is a no-op.
+	AppSettings []AppSettingRow `json:"app_settings"`
 }
 
 // defaultColor is the indigo the DTO layer defaults to on Create/Update. Kept
@@ -110,11 +124,25 @@ type TagRow struct {
 }
 
 type FolderRow struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	Color     string    `json:"color"`
-	ParentID  *int64    `json:"parent_id"`
-	CreatedAt time.Time `json:"created_at"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Color    string `json:"color"`
+	ParentID *int64 `json:"parent_id"`
+	// PasswordHash is copied VERBATIM on restore — it's already a bcrypt
+	// hash (or nil), never a plaintext password. Never re-hash it.
+	PasswordHash *string `json:"password_hash"`
+	// PasswordHint is the non-secret reminder phrase (ADR-29), copied verbatim.
+	PasswordHint *string   `json:"password_hint"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// AppSettingRow is one app_setting KV pair. value for the master_password_hash
+// key is a bcrypt hash (or the row is absent) — copied verbatim on restore,
+// never re-hashed.
+type AppSettingRow struct {
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type LinkRow struct {

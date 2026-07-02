@@ -8,6 +8,7 @@ import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useConfirm } from './ConfirmDialog'
 import { isGradient, makeGradient, parseGradient } from '../lib/tagColor'
+import { apiErrorCode } from '../lib/apiError'
 import type { Folder } from '../api/types'
 
 type Props = {
@@ -55,6 +56,26 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
   // parent_id in the PATCH body.
   const [parentChoice, setParentChoice] = useState<number | null>(null)
   const [parentDirty, setParentDirty] = useState(false)
+  // Password (ADR-28). `password` covers both create and "set for the first
+  // time" edit — no current-password proof needed either way. Editing an
+  // ALREADY-protected folder's password is a distinct flow (passwordEditing
+  // reveals current/new fields) since changing/removing it requires proving
+  // the current one.
+  const [password, setPassword] = useState('')
+  const [passwordEditing, setPasswordEditing] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [removePassword, setRemovePassword] = useState(false)
+  // Reminder hint (ADR-29). Prefilled from the folder's existing hint in edit
+  // mode; must never equal the password (validated client-side before save and
+  // authoritatively by the backend).
+  const [hint, setHint] = useState('')
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  // Separate from passwordError (which is scoped to the password section and
+  // only ever means "wrong current password") — this covers any OTHER save
+  // failure (network, unexpected 5xx, etc.) so it isn't silently dropped as
+  // an unhandled rejection. Shown near the footer, visible in every mode.
+  const [saveError, setSaveError] = useState<string | null>(null)
   const create = useCreateFolder()
   const update = useUpdateFolder()
   const del = useDeleteFolder()
@@ -89,6 +110,14 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
       setGradFrom('#6366F1')
       setGradTo('#EC4899')
     }
+    setPassword('')
+    setPasswordEditing(false)
+    setCurrentPassword('')
+    setNewPassword('')
+    setRemovePassword(false)
+    setHint(folder?.password_hint ?? '')
+    setPasswordError(null)
+    setSaveError(null)
   }, [open, folder])
 
   useEscape(onClose, open)
@@ -101,20 +130,85 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
   const submit = async () => {
     const trimmed = name.trim()
     if (!trimmed) return
-    if (isEdit && folder) {
-      // Only send parent_id when the user actually touched the picker —
-      // sending an unchanged value adds zero info and would surprise on
-      // a future cycle-check change.
-      const body: { name: string; color: string; parent_id?: number | null } = {
-        name: trimmed,
-        color: finalColor,
-      }
-      if (parentDirty) body.parent_id = parentChoice
-      await update.mutateAsync({ id: folder.id, body })
-    } else {
-      await create.mutateAsync({ name: trimmed, color: finalColor, parent_id: parentId ?? null })
+    setPasswordError(null)
+    setSaveError(null)
+    // Client-side hint≠password guard (backend also enforces). The password
+    // being set is `newPassword` in the change flow, else `password`.
+    const settingPw = folder?.has_password && passwordEditing && !removePassword ? newPassword : password
+    const trimmedHint = hint.trim()
+    if (trimmedHint && settingPw && trimmedHint.toLowerCase() === settingPw.toLowerCase()) {
+      setPasswordError(t('folder_dialog.hint_equals_password_error'))
+      return
     }
-    onClose()
+    try {
+      if (isEdit && folder) {
+        // Only send parent_id when the user actually touched the picker —
+        // sending an unchanged value adds zero info and would surprise on
+        // a future cycle-check change. Same idea for password: only
+        // include it when the user actually touched a password field this
+        // session (first-time set, or the change/remove flow).
+        const body: {
+          name: string
+          color: string
+          parent_id?: number | null
+          password?: string | null
+          current_password?: string
+          password_hint?: string | null
+        } = { name: trimmed, color: finalColor }
+        if (parentDirty) body.parent_id = parentChoice
+        if (!folder.has_password) {
+          if (password) {
+            body.password = password
+            if (trimmedHint) body.password_hint = trimmedHint
+          }
+        } else if (passwordEditing) {
+          if (removePassword) {
+            body.password = null
+            body.current_password = currentPassword
+            // Password removal auto-clears the hint server-side; nothing to send.
+          } else if (newPassword) {
+            body.password = newPassword
+            body.current_password = currentPassword
+          }
+        }
+        // Standalone hint change on an already-protected folder (not removing
+        // the password): send the tri-state only when it actually changed.
+        if (folder.has_password && !(passwordEditing && removePassword)) {
+          const current = folder.password_hint ?? ''
+          if (trimmedHint !== current) body.password_hint = trimmedHint || null
+        }
+        await update.mutateAsync({ id: folder.id, body })
+      } else {
+        const body: {
+          name: string
+          color: string
+          parent_id: number | null
+          password?: string
+          password_hint?: string
+        } = {
+          name: trimmed,
+          color: finalColor,
+          parent_id: parentId ?? null,
+        }
+        if (password) {
+          body.password = password
+          if (trimmedHint) body.password_hint = trimmedHint
+        }
+        await create.mutateAsync(body)
+      }
+      onClose()
+    } catch (e: unknown) {
+      const code = apiErrorCode(e)
+      if (code === 'wrong_password') {
+        setPasswordError(t('folder_dialog.wrong_password_error'))
+        return
+      }
+      // Anything else (network failure, unexpected 5xx, a future error code
+      // this dialog doesn't special-case) must still surface SOMETHING —
+      // silently rethrowing from an onClick handler becomes an unhandled
+      // promise rejection with no user-visible feedback at all.
+      setSaveError(t('folder_dialog.save_error_generic'))
+    }
   }
 
   const onDeleteKeepLinks = async () => {
@@ -207,6 +301,147 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
               </label>
             )}
 
+            {!isNaming && (!isEdit || (folder && !folder.has_password)) && (
+              <label className="fx-field">
+                <span className="fx-field-label">{t('folder_dialog.password_label')}</span>
+                <div className="fx-input">
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={t('folder_dialog.password_placeholder')}
+                    aria-label={t('folder_dialog.password_label')}
+                  />
+                </div>
+                <span className="fx-field-hint">{t('folder_dialog.password_hint')}</span>
+              </label>
+            )}
+
+            {!isNaming && (!isEdit || (folder && !folder.has_password)) && password && (
+              <label className="fx-field">
+                <span className="fx-field-label">{t('folder_dialog.hint_label')}</span>
+                <div className="fx-input">
+                  <input
+                    type="text"
+                    value={hint}
+                    maxLength={200}
+                    onChange={(e) => {
+                      setHint(e.target.value)
+                      setPasswordError(null)
+                    }}
+                    placeholder={t('folder_dialog.hint_placeholder')}
+                    aria-label={t('folder_dialog.hint_label')}
+                  />
+                </div>
+                <span className="fx-field-hint">{t('folder_dialog.hint_help')}</span>
+              </label>
+            )}
+
+            {/* Create/first-set mode: passwordError only ever carries the
+                hint≠password validation message (wrong_password is edit-only). */}
+            {!isNaming && (!isEdit || (folder && !folder.has_password)) && passwordError && (
+              <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Icon d={I.alert} size={12} /> {passwordError}
+              </div>
+            )}
+
+            {!isNaming && isEdit && folder?.has_password && (
+              <div className="fx-field">
+                <span className="fx-field-label">{t('folder_dialog.password_label')}</span>
+                {!passwordEditing ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--fx-ink-3)' }}>
+                      <Icon d={I.lock} size={13} /> {t('folder_dialog.password_protected_label')}
+                    </span>
+                    <button
+                      type="button"
+                      className="fx-pillbtn"
+                      onClick={() => setPasswordEditing(true)}
+                    >
+                      {t('folder_dialog.change_password_action')}
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div className="fx-input">
+                      <input
+                        type="password"
+                        autoFocus
+                        autoComplete="off"
+                        value={currentPassword}
+                        onChange={(e) => {
+                          setCurrentPassword(e.target.value)
+                          setPasswordError(null)
+                        }}
+                        placeholder={t('folder_dialog.current_password_label')}
+                        aria-label={t('folder_dialog.current_password_label')}
+                      />
+                    </div>
+                    {!removePassword && (
+                      <div className="fx-input">
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          placeholder={t('folder_dialog.password_placeholder')}
+                          aria-label={t('folder_dialog.new_password_label')}
+                        />
+                      </div>
+                    )}
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--fx-ink-3)' }}>
+                      <input
+                        type="checkbox"
+                        checked={removePassword}
+                        onChange={(e) => setRemovePassword(e.target.checked)}
+                      />
+                      {t('folder_dialog.remove_password_action')}
+                    </label>
+                    <button
+                      type="button"
+                      className="fx-pillbtn"
+                      onClick={() => {
+                        setPasswordEditing(false)
+                        setCurrentPassword('')
+                        setNewPassword('')
+                        setRemovePassword(false)
+                        setPasswordError(null)
+                      }}
+                      style={{ alignSelf: 'flex-start' }}
+                    >
+                      {t('common.cancel')}
+                    </button>
+                  </div>
+                )}
+                {passwordError && (
+                  <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, marginTop: 6 }}>
+                    <Icon d={I.alert} size={12} /> {passwordError}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!isNaming && isEdit && folder?.has_password && !(passwordEditing && removePassword) && (
+              <label className="fx-field">
+                <span className="fx-field-label">{t('folder_dialog.hint_label')}</span>
+                <div className="fx-input">
+                  <input
+                    type="text"
+                    value={hint}
+                    maxLength={200}
+                    onChange={(e) => {
+                      setHint(e.target.value)
+                      setPasswordError(null)
+                    }}
+                    placeholder={t('folder_dialog.hint_placeholder')}
+                    aria-label={t('folder_dialog.hint_label')}
+                  />
+                </div>
+                <span className="fx-field-hint">{t('folder_dialog.hint_help')}</span>
+              </label>
+            )}
+
             <div className="fx-field">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                 <span className="fx-field-label" style={{ margin: 0 }}>{t('folder_dialog.color_label')}</span>
@@ -278,6 +513,12 @@ export function FolderDialog({ open, onClose, folder, justCreated, parentId }: P
             </div>
           </div>
         </div>
+
+        {saveError && (
+          <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 20px 8px' }}>
+            <Icon d={I.alert} size={12} /> {saveError}
+          </div>
+        )}
 
         <footer className="fx-modal-foot">
           {isEdit && !isNaming && (

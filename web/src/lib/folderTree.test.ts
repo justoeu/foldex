@@ -12,6 +12,7 @@ function f(id: number, name: string, parent_id: number | null = null): Folder {
     folder_count: 0,
     preview_links: [],
     preview_folders: [],
+    has_password: false,
   }
 }
 

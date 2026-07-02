@@ -84,6 +84,13 @@ export type Folder = {
   name: string
   color: string
   parent_id?: number | null
+  // True when the folder has a password set (ADR-28). preview_links/
+  // preview_folders are always empty when this is true — the backend
+  // redacts them unconditionally, not just when locked for the viewer.
+  has_password: boolean
+  // Non-secret reminder phrase shown on the unlock prompt (ADR-29). Present
+  // only when a hint was set; never equals the password. Returned verbatim.
+  password_hint?: string | null
   link_count: number
   folder_count: number
   preview_links: PreviewTile[]
@@ -95,12 +102,25 @@ export type FolderCreate = {
   name: string
   color?: string
   parent_id?: number | null
+  // Optional — sets protection at creation time. Omit/undefined = no
+  // password.
+  password?: string
+  // Optional reminder phrase (ADR-29). Must not equal the password.
+  password_hint?: string | null
 }
 
 export type FolderUpdate = Partial<{
   name: string
   color: string
   parent_id: number | null
+  // Tri-state (ADR-28): absent = unchanged, string = set/replace, null =
+  // remove protection. Changing/removing an EXISTING password requires
+  // current_password in the same request.
+  password: string | null
+  current_password: string
+  // Tri-state (ADR-29): absent = unchanged, string = set/replace, null =
+  // remove the hint. Removing the password auto-clears the hint server-side.
+  password_hint: string | null
 }>
 
 export type Note = {

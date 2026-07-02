@@ -44,10 +44,10 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 		return nil, fmt.Errorf("tags: %w", err)
 	}
 
-	if err := scanRows(ctx, tx, `SELECT id, name, color, parent_id, created_at FROM folder ORDER BY id`,
+	if err := scanRows(ctx, tx, `SELECT id, name, color, parent_id, password_hash, password_hint, created_at FROM folder ORDER BY id`,
 		func(rows pgx.Rows) error {
 			var f FolderRow
-			if err := rows.Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt); err != nil {
+			if err := rows.Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.PasswordHash, &f.PasswordHint, &f.CreatedAt); err != nil {
 				return err
 			}
 			snap.Folders = append(snap.Folders, f)
@@ -145,6 +145,19 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 		return nil, fmt.Errorf("note_clicks: %w", err)
 	}
 
+	if err := scanRows(ctx, tx, `SELECT key, value, updated_at FROM app_setting ORDER BY key`,
+		func(rows pgx.Rows) error {
+			var s AppSettingRow
+			if err := rows.Scan(&s.Key, &s.Value, &s.UpdatedAt); err != nil {
+				return err
+			}
+			snap.AppSettings = append(snap.AppSettings, s)
+			return nil
+		},
+	); err != nil {
+		return nil, fmt.Errorf("app_settings: %w", err)
+	}
+
 	return snap, nil
 }
 
@@ -211,6 +224,12 @@ func wipeAll(ctx context.Context, tx pgx.Tx) (Counts, error) {
 	if _, err := tx.Exec(ctx, `TRUNCATE TABLE click_log, link_tag, note, link, folder, tag RESTART IDENTITY CASCADE`); err != nil {
 		return c, err
 	}
+	// app_setting is a standalone KV table (no FK edges), wiped separately so a
+	// wipe restores to EXACTLY the snapshot's settings — including "no master
+	// password" when the snapshot predates ADR-29.
+	if _, err := tx.Exec(ctx, `TRUNCATE TABLE app_setting`); err != nil {
+		return c, err
+	}
 	return c, nil
 }
 
@@ -249,12 +268,12 @@ func restoreIdentity(ctx context.Context, tx pgx.Tx, snap *Snapshot) (idMapping,
 	if len(snap.Folders) > 0 {
 		rows := make([][]any, 0, len(snap.Folders))
 		for _, f := range topoSortFolders(snap.Folders) {
-			rows = append(rows, []any{f.ID, f.Name, f.Color, f.ParentID, f.CreatedAt})
+			rows = append(rows, []any{f.ID, f.Name, f.Color, f.ParentID, f.PasswordHash, f.PasswordHint, f.CreatedAt})
 			m.folderMap[f.ID] = f.ID
 		}
 		if _, err := tx.CopyFrom(ctx,
 			pgx.Identifier{"folder"},
-			[]string{"id", "name", "color", "parent_id", "created_at"},
+			[]string{"id", "name", "color", "parent_id", "password_hash", "password_hint", "created_at"},
 			pgx.CopyFromRows(rows),
 		); err != nil {
 			return m, fmt.Errorf("copy folder: %w", err)
@@ -363,7 +382,31 @@ func restoreIdentity(ctx context.Context, tx pgx.Tx, snap *Snapshot) (idMapping,
 			return m, fmt.Errorf("setval %s: %w", t, err)
 		}
 	}
+	// app_setting was TRUNCATEd by wipeAll, so overwrite semantics are moot —
+	// but keep them explicit so the snapshot's settings always win in wipe mode.
+	if err := restoreAppSettings(ctx, tx, snap, true); err != nil {
+		return m, err
+	}
 	return m, nil
+}
+
+// restoreAppSettings writes the snapshot's app_setting KV rows verbatim (never
+// re-hashing the master password value). overwrite=true (wipe mode) lets the
+// snapshot's value win on key conflict; overwrite=false (skip/duplicate) leaves
+// any existing setting untouched — a singleton setting can't be "duplicated".
+func restoreAppSettings(ctx context.Context, tx pgx.Tx, snap *Snapshot, overwrite bool) error {
+	conflict := `ON CONFLICT (key) DO NOTHING`
+	if overwrite {
+		conflict = `ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`
+	}
+	for _, s := range snap.AppSettings {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO app_setting (key, value, updated_at) VALUES ($1,$2,$3) `+conflict,
+			s.Key, s.Value, s.UpdatedAt); err != nil {
+			return fmt.Errorf("restore app_setting %q: %w", s.Key, err)
+		}
+	}
+	return nil
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -406,8 +449,8 @@ func restoreSkip(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, Counts
 		}
 		var newID int64
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO folder (name, color, parent_id, created_at) VALUES ($1,$2,$3,$4) RETURNING id`,
-			f.Name, f.Color, parentID, f.CreatedAt).Scan(&newID); err != nil {
+			`INSERT INTO folder (name, color, parent_id, password_hash, password_hint, created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+			f.Name, f.Color, parentID, f.PasswordHash, f.PasswordHint, f.CreatedAt).Scan(&newID); err != nil {
 			return inserted, skipped, m, fmt.Errorf("insert folder: %w", err)
 		}
 		m.folderMap[f.ID] = newID
@@ -557,6 +600,13 @@ func restoreSkip(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, Counts
 		inserted.ClickLogs += int64(len(rows))
 	}
 
+	// Singleton settings can't be "skipped into" a new row — leave any existing
+	// setting (e.g. a master password already configured on this instance)
+	// untouched, only filling keys that don't exist yet.
+	if err := restoreAppSettings(ctx, tx, snap, false); err != nil {
+		return inserted, skipped, m, err
+	}
+
 	return inserted, skipped, m, nil
 }
 
@@ -595,8 +645,8 @@ func restoreDuplicate(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, [
 		}
 		var newID int64
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO folder (name, color, parent_id, created_at) VALUES ($1,$2,$3,$4) RETURNING id`,
-			f.Name, f.Color, parentID, f.CreatedAt).Scan(&newID); err != nil {
+			`INSERT INTO folder (name, color, parent_id, password_hash, password_hint, created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+			f.Name, f.Color, parentID, f.PasswordHash, f.PasswordHint, f.CreatedAt).Scan(&newID); err != nil {
 			return inserted, warnings, m, fmt.Errorf("insert folder: %w", err)
 		}
 		m.folderMap[f.ID] = newID
@@ -723,6 +773,11 @@ func restoreDuplicate(ctx context.Context, tx pgx.Tx, snap *Snapshot) (Counts, [
 			}
 		}
 		inserted.ClickLogs += int64(len(rows))
+	}
+
+	// Same as skip mode: don't clobber an existing singleton setting.
+	if err := restoreAppSettings(ctx, tx, snap, false); err != nil {
+		return inserted, warnings, m, err
 	}
 
 	return inserted, warnings, m, nil
