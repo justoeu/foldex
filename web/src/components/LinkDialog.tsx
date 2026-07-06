@@ -9,6 +9,7 @@ import { useCreateLink, useUpdateLink, uploadLinkImage, removeLinkImage, useFetc
 import { useCreateTag, useTags } from '../api/tags'
 import { useQueryClient } from '@tanstack/react-query'
 import { safeImageUrl, safeLinkHref, looksLikeUrl, hostOf } from '../lib/url'
+import { apiErrorCode } from '../lib/apiError'
 import { nextCheckPreview, type CheckInterval } from '../lib/time'
 import type { Link, Tag } from '../api/types'
 
@@ -93,6 +94,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   // the scraper with 403/5xx). Drives a subtle hint under the title field so
   // the user knows auto-fill was attempted and they should type manually.
   const [autofillFailed, setAutofillFailed] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const urlInputRef = useRef<HTMLInputElement>(null)
   const qc = useQueryClient()
@@ -118,6 +120,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
     setPendingImagePreview(null)
     setImageRemoved(false)
     setAutofillFailed(false)
+    setSaveError(null)
   }, [open, link, initialUrl])
 
   // Live auto-derive the slug from the title until the user takes over.
@@ -276,8 +279,9 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   const submit = async () => {
     const trimmed = url.trim()
     if (!trimmed) return
-
-    // Resolve pending tags now — only when the user is committing the link.
+    setSaveError(null)
+    try {
+      // Resolve pending tags now — only when the user is committing the link.
     // If any of these fail (e.g. duplicate name vs another tag we don't know
     // about), the link save also fails so the user sees the error and can
     // recover without ending up with orphan tags.
@@ -373,8 +377,18 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
         }
         setImageBusy(false)
       }
+      }
+      onClose()
+    } catch (e: unknown) {
+      const code = apiErrorCode(e)
+      if (code === 'url_taken') setSaveError(t('link_dialog.error_url_taken'))
+      else if (code === 'slug_taken') setSaveError(t('link_dialog.error_slug_taken'))
+      else if (code === 'tag_name_taken') setSaveError(t('link_dialog.error_tag_taken'))
+      else {
+        const msg = (e as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
+        setSaveError(msg || t('link_dialog.error_generic'))
+      }
     }
-    onClose()
   }
 
   const busy = createLink.isPending || updateLink.isPending || createTag.isPending || imageBusy
@@ -754,6 +768,12 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
             </div>
           </aside>
         </div>
+
+        {saveError && (
+          <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 20px 8px' }}>
+            <Icon d={I.alert} size={12} /> {saveError}
+          </div>
+        )}
 
         <footer className="fx-modal-foot">
           <button className="fx-confirm-btn" onClick={onClose}>
