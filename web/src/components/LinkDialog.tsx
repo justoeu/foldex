@@ -311,6 +311,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
         try {
           await uploadLinkImage(link.id, pendingImage)
           qc.invalidateQueries({ queryKey: ['links'] })
+          qc.invalidateQueries({ queryKey: ['entries'] })
           qc.invalidateQueries({ queryKey: ['folders'] })
         } catch (e: unknown) {
           setImgUploadError(extractUploadErr(e, t('link_dialog.image_error_generic')))
@@ -323,6 +324,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
         try {
           await removeLinkImage(link.id)
           qc.invalidateQueries({ queryKey: ['links'] })
+          qc.invalidateQueries({ queryKey: ['entries'] })
           qc.invalidateQueries({ queryKey: ['folders'] })
         } catch { /* non-fatal */ }
         setImageBusy(false)
@@ -351,6 +353,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
         try {
           await uploadLinkImage(newLink.id, pendingImage)
           qc.invalidateQueries({ queryKey: ['links'] })
+          qc.invalidateQueries({ queryKey: ['entries'] })
           qc.invalidateQueries({ queryKey: ['folders'] })
         } catch (e: unknown) {
           setImgUploadError(extractUploadErr(e, t('link_dialog.image_error_generic')))
