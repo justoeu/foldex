@@ -89,6 +89,10 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   const [pendingImagePreview, setPendingImagePreview] = useState<string | null>(null)
   const [imageRemoved, setImageRemoved] = useState(false)
   const [imageBusy, setImageBusy] = useState(false)
+  // True when the url-metadata fetch failed for the current URL (site blocked
+  // the scraper with 403/5xx). Drives a subtle hint under the title field so
+  // the user knows auto-fill was attempted and they should type manually.
+  const [autofillFailed, setAutofillFailed] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const urlInputRef = useRef<HTMLInputElement>(null)
   const qc = useQueryClient()
@@ -113,6 +117,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
     setPendingImage(null)
     setPendingImagePreview(null)
     setImageRemoved(false)
+    setAutofillFailed(false)
   }, [open, link, initialUrl])
 
   // Live auto-derive the slug from the title until the user takes over.
@@ -139,6 +144,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
     if (!trimmed || !looksLikeUrl(trimmed)) return
 
     const controller = new AbortController()
+    setAutofillFailed(false)
     const timer = window.setTimeout(() => {
       fetchMetadata.mutate(
         { url: trimmed, signal: controller.signal },
@@ -155,9 +161,14 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
               setDescription((cur) => (cur.trim() ? cur : data.description))
             }
           },
-          // Failure is silent — the user can still type the title. Logging
-          // would clutter the console for every preview-failed URL.
-          onError: () => {},
+          // A real failure (403/5xx from the target site) surfaces a hint
+          // under the title field. Aborted requests (ERR_CANCELED from the
+          // debounce cleanup) are NOT real failures — they fire on every
+          // keystroke during fast typing.
+          onError: (_err) => {
+            const code = (_err as { code?: string })?.code
+            setAutofillFailed(code !== 'ERR_CANCELED')
+          },
         },
       )
     }, 500)
@@ -428,6 +439,11 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
                   aria-label={t('common.title_aria')}
                 />
               </div>
+              {autofillFailed && !title.trim() && (
+                <span className="fx-field-hint fx-field-hint-warn">
+                  {t('link_dialog.autofill_failed')}
+                </span>
+              )}
             </label>
 
             <label className="fx-field">

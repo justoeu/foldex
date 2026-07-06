@@ -1324,6 +1324,8 @@
 
 .fx-field { display: flex; flex-direction: column; gap: 6px; }
 .fx-field-label { font-family: var(--fx-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fx-ink-4); }
+.fx-field-hint { font-size: 12px; line-height: 1.35; color: var(--fx-ink-4); }
+.fx-field-hint-warn { color: var(--fx-amber, #b45309); }
 .fx-input {
   display: flex; align-items: center; gap: 9px;
   height: 42px; padding: 0 12px;

@@ -191,6 +191,7 @@
     "url_placeholder": "https://",
     "title_label": "Título",
     "title_placeholder": "Derivado da URL se vazio",
+    "autofill_failed": "Não foi possível preencher automaticamente — o site bloqueou o pedido. Escreve o título manualmente.",
     "slug_label": "URL curta",
     "slug_aria": "slug da URL curta",
     "slug_hint": "Auto-derivado do título. Edite se quiser um /go/{slug} diferente.",
