@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { ReactNode } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { useEntries, flattenEntries } from './entries'
+import { useEntries, flattenEntries, mapCachedLinkEntries } from './entries'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import { makeQueryClient } from '../test/renderWithProviders'
 
@@ -74,5 +74,34 @@ describe('useEntries', () => {
     const entries = flattenEntries(result.current.data)
     expect(entries).toHaveLength(1)
     expect(entries[0].kind).toBe('link')
+  })
+})
+
+describe('mapCachedLinkEntries', () => {
+  // Regression for the "folder doesn't reload" bug: link mutations
+  // (create/update/pin/delete) used to invalidate only ['links'] but the
+  // grid renders from ['entries'] (ADR-27). mapCachedLinkEntries is the
+  // optimistic-update bridge — it must patch link-kind entries and leave
+  // notes untouched.
+  it('patches link entries in place and passes notes through untouched', () => {
+    const client = makeQueryClient()
+    client.setQueryData(['entries', '', '', 'created', 'all', 'locked'], {
+      pages: [[
+        { kind: 'link', id: 1, url: 'https://a', title: 'A', click_count: 0,
+          preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [] } as any,
+        { kind: 'note', id: 2, title: 'Note', slug: 'n', pinned: false,
+          click_count: 0, created_at: '', updated_at: '', tags: [] } as any,
+      ]],
+      pageParams: [0],
+    })
+
+    mapCachedLinkEntries(client, (l) => ({ ...l, pinned: true }))
+
+    const cached = client.getQueryData<{ pages: any[] }>(['entries', '', '', 'created', 'all', 'locked'])
+    const [linkEntry, noteEntry] = cached!.pages[0]
+    expect(linkEntry.pinned).toBe(true)
+    expect(linkEntry.kind).toBe('link')
+    expect(noteEntry.pinned).toBe(false)
+    expect(noteEntry.kind).toBe('note')
   })
 })

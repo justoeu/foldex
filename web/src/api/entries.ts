@@ -1,7 +1,7 @@
 import { useInfiniteQuery, type InfiniteData, type QueryClient } from '@tanstack/react-query'
 import { http } from './client'
 import { FOLDER_UNLOCK_HEADER } from './folders'
-import type { Entry } from './types'
+import type { Entry, Link } from './types'
 
 export type EntryListParams = {
   q?: string
@@ -44,12 +44,22 @@ export function flattenEntries(data: EntriesCache | undefined): Entry[] {
 // ['entries'] query — the interleaved-grid sibling of mapCachedLinks.
 export function mapCachedEntries(qc: QueryClient, fn: (e: Entry) => Entry) {
   qc.setQueriesData<EntriesCache>({ queryKey: ['entries'] }, (old) => {
-    if (!old) return old
+    if (!old || !Array.isArray(old.pages)) return old
     return {
       ...old,
-      pages: old.pages.map((page) => page.map(fn)),
+      pages: old.pages.map((page) => (page ? page.map(fn) : page)),
     }
   })
+}
+
+// mapCachedLinkEntries is the link-only view over mapCachedEntries: fn is
+// expressed in terms of Link (not the full Entry union), and notes are
+// passed through untouched. Callers that already have a (Link) => Link
+// transform (e.g. every link mutation's optimistic update) can reuse the
+// same fn for BOTH ['links'] and ['entries'] caches without restating the
+// discrimination at every call site.
+export function mapCachedLinkEntries(qc: QueryClient, fn: (l: Link) => Link) {
+  mapCachedEntries(qc, (e) => (e.kind === 'link' ? { ...e, ...fn(e) } : e))
 }
 
 // useEntries replaces useLinks as the Home/folder grid's data source — one

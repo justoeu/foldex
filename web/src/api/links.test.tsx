@@ -12,6 +12,7 @@ import {
   useCaptureScreenshot,
   captureScreenshot,
   goHref,
+  mapCachedLinks,
 } from './links'
 import { useTags } from './tags'
 import { http } from './client'
@@ -146,6 +147,43 @@ describe('captureScreenshot', () => {
     } as any)
     const out = await captureScreenshot(11)
     expect(out.url).toBe('/api/files/screenshots/11.png')
+  })
+})
+
+describe('mapCachedLinks', () => {
+  // Regression: setQueriesData({ queryKey: ['links'] }) is a PREFIX match in
+  // TanStack v5, so it also hits useRecentChanges' entry whose key is
+  // ['links','recent-changes',...] and whose value is a flat Link[], NOT
+  // InfiniteData<Link[]>. Without the shape guard, old.pages.map throws
+  // "Cannot read properties of undefined (reading 'map')" the moment a link
+  // update/pin/seen-change fires while the sidebar's recent-changes query is
+  // active.
+  it('skips non-InfiniteData entries under the [links] prefix without throwing', async () => {
+    const client = makeQueryClient()
+    // Seed an InfiniteData entry (real useLinks shape) AND a flat Link[]
+    // (useRecentChanges shape) under the shared ['links'] prefix.
+    client.setQueryData(['links', '', '', 'created', 'all'], {
+      pages: [[
+        { id: 1, url: 'https://a', title: 'A', click_count: 0,
+          preview_status: 'ok', created_at: '', updated_at: '', tags: [] } as any,
+      ]],
+      pageParams: [0],
+    })
+    const recentChanges = [
+      { id: 9, url: 'https://rc', title: 'RC', click_count: 0,
+        preview_status: 'ok', created_at: '', updated_at: '', tags: [] } as any,
+    ]
+    client.setQueryData(['links', 'recent-changes', 7, 10], recentChanges)
+
+    expect(() =>
+      mapCachedLinks(client, (l) => ({ ...l, title: `(${l.title})` })),
+    ).not.toThrow()
+
+    // InfiniteData page was patched in place.
+    const inf = client.getQueryData<{ pages: any[] }>(['links', '', '', 'created', 'all'])
+    expect(inf?.pages[0][0].title).toBe('(A)')
+    // Flat Link[] was left untouched (not InfiniteData).
+    expect(client.getQueryData(['links', 'recent-changes', 7, 10])).toBe(recentChanges)
   })
 })
 

@@ -1,5 +1,6 @@
 import { useMutation, useInfiniteQuery, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query'
 import { http } from './client'
+import { mapCachedLinkEntries } from './entries'
 import type { Link, LinkCreate, LinkUpdate } from './types'
 
 export type LinkListParams = {
@@ -50,10 +51,15 @@ export function flattenLinks(data: LinksCache | undefined): Link[] {
 // reuse the same pattern (optimistic click bump).
 export function mapCachedLinks(qc: QueryClient, fn: (l: Link) => Link) {
   qc.setQueriesData<LinksCache>({ queryKey: ['links'] }, (old) => {
-    if (!old) return old
+    // setQueriesData({ queryKey: ['links'] }) is a PREFIX match, so it also
+    // hits useRecentChanges (key ['links','recent-changes',...]) whose value
+    // is a flat Link[] — not InfiniteData<Link[]>. Guard on the pages array
+    // so non-InfiniteData entries are passed through untouched instead of
+    // crashing on old.pages.map when old.pages is undefined.
+    if (!old || !Array.isArray(old.pages)) return old
     return {
       ...old,
-      pages: old.pages.map((page) => page.map(fn)),
+      pages: old.pages.map((page) => (page ? page.map(fn) : page)),
     }
   })
 }
@@ -104,6 +110,10 @@ export function useCreateLink() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['links'] })
+      // The Home/folder grid renders from ['entries'], not ['links']
+      // (ADR-27). A new link introduces a row the grid has never seen —
+      // only a full refetch can place it at the right sort position.
+      qc.invalidateQueries({ queryKey: ['entries'] })
       qc.invalidateQueries({ queryKey: ['tags'] })
       // Folder cards on the home grid carry `link_count` and `preview_links`
       // (the 2x2 mini-thumbs). Any link mutation can shift those — invalidate
@@ -126,6 +136,7 @@ export function useUpdateLink() {
     // recipe triggered 3 full refetches per drag-and-drop or edit.
     onSuccess: (data, vars) => {
       mapCachedLinks(qc, (l) => (l.id === data.id ? data : l))
+      mapCachedLinkEntries(qc, (l) => (l.id === data.id ? data : l))
       if (vars.body.tag_ids !== undefined) {
         qc.invalidateQueries({ queryKey: ['tags'] })
       }
@@ -146,6 +157,7 @@ export function useDeleteLink() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['links'] })
+      qc.invalidateQueries({ queryKey: ['entries'] })
       qc.invalidateQueries({ queryKey: ['tags'] })
       // Folder cards on the home grid carry `link_count` and `preview_links`
       // (the 2x2 mini-thumbs). Any link mutation can shift those — invalidate
@@ -172,21 +184,26 @@ export function usePinLink() {
     },
     onMutate: async ({ id, pinned }) => {
       await qc.cancelQueries({ queryKey: ['links'] })
-      // Snapshot every ['links'] query (InfiniteData<Link[]>) so we can roll
-      // back on error. mapCachedLinks patches every page; the snapshot
-      // preserves the original InfiniteData shape per query key.
-      const snapshots = qc.getQueriesData<LinksCache>({ queryKey: ['links'] })
+      await qc.cancelQueries({ queryKey: ['entries'] })
+      // Snapshot every ['links'] AND ['entries'] query so we can roll back
+      // on error. Both caches hold the pinned link (the grid renders from
+      // ['entries'] per ADR-27; ['links'] still feeds recent-changes and
+      // tests).
+      const linkSnapshots = qc.getQueriesData<LinksCache>({ queryKey: ['links'] })
+      const entrySnapshots = qc.getQueriesData<LinksCache>({ queryKey: ['entries'] })
       mapCachedLinks(qc, (l) => (l.id === id ? { ...l, pinned } : l))
-      return { snapshots }
+      mapCachedLinkEntries(qc, (l) => (l.id === id ? { ...l, pinned } : l))
+      return { linkSnapshots, entrySnapshots }
     },
     onError: (_err, _vars, ctx) => {
       if (!ctx) return
-      for (const [key, snapshot] of ctx.snapshots) {
+      for (const [key, snapshot] of [...ctx.linkSnapshots, ...ctx.entrySnapshots]) {
         qc.setQueryData(key, snapshot)
       }
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['links'] })
+      qc.invalidateQueries({ queryKey: ['entries'] })
       qc.invalidateQueries({ queryKey: ['folders'] })
     },
   })
@@ -200,6 +217,7 @@ export function useRefreshPreview() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['links'] })
+      qc.invalidateQueries({ queryKey: ['entries'] })
       qc.invalidateQueries({ queryKey: ['folders'] })
     },
   })
@@ -312,16 +330,20 @@ export function useMarkChangeSeen() {
       // that holds this link. The server will overwrite with its own
       // timestamp on success.
       await qc.cancelQueries({ queryKey: ['links'] })
+      await qc.cancelQueries({ queryKey: ['entries'] })
       const now = new Date().toISOString()
       mapCachedLinks(qc, (l) => (l.id === id ? { ...l, change_seen_at: now } : l))
+      mapCachedLinkEntries(qc, (l) => (l.id === id ? { ...l, change_seen_at: now } : l))
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['links', 'recent-changes'] })
+      qc.invalidateQueries({ queryKey: ['entries'] })
     },
     onError: () => {
       // The optimistic write may now be wrong — full refetch is cheaper
       // than reconciling the touched ids manually.
       qc.invalidateQueries({ queryKey: ['links'] })
+      qc.invalidateQueries({ queryKey: ['entries'] })
     },
   })
 }

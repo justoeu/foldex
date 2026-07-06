@@ -14,6 +14,7 @@ import {
   usePinLink,
   useRefreshPreview,
 } from '../api/links'
+import { mapCachedLinkEntries } from '../api/entries'
 import { safeImageUrl } from '../lib/url'
 import { relativeTime } from '../lib/time'
 import type { Link, MergeSource } from '../api/types'
@@ -87,6 +88,11 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
   const onGo = useCallback(() => {
     const nowISO = new Date().toISOString()
     mapCachedLinks(qc, (l) =>
+      l.id === link.id
+        ? { ...l, click_count: (l.click_count ?? 0) + 1, last_clicked_at: nowISO }
+        : l,
+    )
+    mapCachedLinkEntries(qc, (l) =>
       l.id === link.id
         ? { ...l, click_count: (l.click_count ?? 0) + 1, last_clicked_at: nowISO }
         : l,
