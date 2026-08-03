@@ -229,7 +229,7 @@ func slogRequest(logger *slog.Logger) func(http.Handler) http.Handler {
 			next.ServeHTTP(ww, r)
 			logger.Info("http",
 				"method", r.Method,
-				"path", logsafe.String(r.URL.Path),
+				"path_class", logsafe.HTTPPath(r.URL.Path),
 				"status", ww.Status(),
 				"bytes", ww.BytesWritten(),
 				"dur_ms", time.Since(start).Milliseconds(),

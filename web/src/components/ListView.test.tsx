@@ -63,7 +63,7 @@ describe('ListView', () => {
     expect(screen.getByText('A note')).toBeInTheDocument()
     expect(screen.getByText('a snippet')).toBeInTheDocument()
     expect(screen.getByText('A folder')).toBeInTheDocument()
-    expect(screen.getByText(/2m|5m|m$/)).toBeInTheDocument()
+    expect(screen.getByText(/^\d+m$/)).toBeInTheDocument()
   })
 
   it('interleaves by name in alpha sort and reverses for alpha_desc', () => {

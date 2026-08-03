@@ -76,7 +76,7 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 	if err != nil {
 		return fmt.Errorf("storage: upload %q: %w", key, err)
 	}
-	c.logger.Info("storage: uploaded object", "key", logsafe.String(key), "bytes", len(data))
+	c.logger.Info("storage: uploaded object", "key_prefix", logsafe.ObjectKey(key), "bytes", len(data))
 	return nil
 }
 
@@ -214,7 +214,7 @@ func (c *Client) PutObjectStream(ctx context.Context, key string, r io.Reader, s
 	if err != nil {
 		return fmt.Errorf("storage: put stream %q: %w", key, err)
 	}
-	c.logger.Info("storage: uploaded object (stream)", "key", logsafe.String(key), "bytes", size)
+	c.logger.Info("storage: uploaded object (stream)", "key_prefix", logsafe.ObjectKey(key), "bytes", size)
 	return nil
 }
 

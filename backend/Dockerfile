@@ -20,8 +20,10 @@ RUN GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/rustfs-bootstrap ./cmd/
 # One-shot init image: create app IAM user + bucket-scoped policy on RustFS.
 # Used by docker-compose.services.yml `rustfs-init` (target: rustfs-bootstrap).
 FROM alpine:3.24 AS rustfs-bootstrap
-RUN apk upgrade --no-cache && apk add --no-cache ca-certificates
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates \
+    && addgroup -S bootstrap && adduser -S -G bootstrap -H bootstrap
 COPY --from=build /out/rustfs-bootstrap /rustfs-bootstrap
+USER bootstrap:bootstrap
 ENTRYPOINT ["/rustfs-bootstrap"]
 
 # Use alpine as the final image so we can install chromium for go-rod.

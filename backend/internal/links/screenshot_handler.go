@@ -128,7 +128,7 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 	// resulting screenshot would be served back to the caller via
 	// /api/files/screenshots/{id} — a read-anywhere primitive.
 	if !isHTTPScheme(link.URL) {
-		h.logger.Warn("screenshot rejected: non-http scheme", "id", id, "url", logsafe.String(link.URL))
+		h.logger.Warn("screenshot rejected: non-http scheme", "id", id)
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_scheme", "screenshot target must use http or https"))
 		return
 	}
@@ -142,7 +142,7 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if !h.urlPolicy(r.Context(), link.URL) {
-		h.logger.Warn("screenshot rejected: non-public target", "id", id, "url", logsafe.String(link.URL))
+		h.logger.Warn("screenshot rejected: non-public target", "id", id)
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "private_target", "screenshot target must resolve to a public address"))
 		return
 	}
@@ -151,7 +151,7 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 	// pin of the resolved IP into Chromium, but raises the bar vs a single
 	// pre-check far earlier in the handler.
 	if !h.urlPolicy(r.Context(), link.URL) {
-		h.logger.Warn("screenshot rejected: non-public target on recheck", "id", id, "url", logsafe.String(link.URL))
+		h.logger.Warn("screenshot rejected: non-public target on recheck", "id", id)
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "private_target", "screenshot target must resolve to a public address"))
 		return
 	}
@@ -163,7 +163,7 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 		// Log the underlying error with full detail; the wire response gets
 		// a generic message — Chromium errors can include local binary paths
 		// / system state that shouldn't reach a (possibly remote) caller.
-		h.logger.Error("screenshot capture failed", "id", id, "url", logsafe.String(link.URL), "err", err)
+		h.logger.Error("screenshot capture failed", "id", id, "err", err)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "screenshot_failed", "failed to capture screenshot"))
 		return
 	}
@@ -173,13 +173,13 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 	key := fmt.Sprintf("screenshots/%d.%s", id, opt.Ext)
 	h.purgeLegacyVariants(r.Context(), "screenshots", id, opt.Ext)
 	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
-		h.logger.Error("screenshot upload failed", "id", id, "key", logsafe.String(key), "err", err)
+		h.logger.Error("screenshot upload failed", "id", id, "key_prefix", logsafe.ObjectKey(key), "err", err)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store screenshot"))
 		return
 	}
 
 	h.logger.Info("screenshot stored",
-		"id", id, "key", logsafe.String(key),
+		"id", id, "key_prefix", logsafe.ObjectKey(key),
 		"source_bytes", len(png), "stored_bytes", len(opt.Data),
 		"resized", opt.Resized, "reencoded", opt.Reencoded,
 	)
@@ -199,14 +199,14 @@ func (h *ScreenshotHandler) ProxyFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, contentType, err := h.storage.GetObject(r.Context(), key)
+	data, _, err := h.storage.GetObject(r.Context(), key)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectTooLarge) {
-			h.logger.Warn("proxy file: object exceeds serve ceiling", "key", logsafe.String(key), "err", err)
+			h.logger.Warn("proxy file: object exceeds serve ceiling", "key_prefix", logsafe.ObjectKey(key), "err", err)
 			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "too_large", "file exceeds maximum serve size"))
 			return
 		}
-		h.logger.Error("proxy file: get object failed", "key", logsafe.String(key), "err", err)
+		h.logger.Error("proxy file: get object failed", "key_prefix", logsafe.ObjectKey(key), "err", err)
 		httperr.Write(w, httperr.New(http.StatusNotFound, "not_found", "file not found"))
 		return
 	}
@@ -221,7 +221,7 @@ func (h *ScreenshotHandler) ProxyFile(w http.ResponseWriter, r *http.Request) {
 	}
 	detected := http.DetectContentType(sniff)
 	if !isAllowedServeMIME(detected) {
-		h.logger.Warn("proxy file: refusing to serve non-image content", "key", logsafe.String(key), "detected", logsafe.String(detected), "stored", logsafe.String(contentType))
+		h.logger.Warn("proxy file: refusing to serve non-image content", "key_prefix", logsafe.ObjectKey(key), "reason", "non_image")
 		httperr.Write(w, httperr.New(http.StatusUnsupportedMediaType, "unsupported_media", "stored object is not a supported image"))
 		return
 	}
@@ -328,7 +328,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	detected := http.DetectContentType(data)
 	srcExt, ok := allowedUploadMIMEs[detected]
 	if !ok {
-		h.logger.Warn("image upload: rejected MIME", "id", id, "detected", logsafe.String(detected))
+		h.logger.Warn("image upload: rejected MIME", "id", id, "reason", "non_image")
 		httperr.Write(w, httperr.New(http.StatusUnsupportedMediaType, "invalid_mime", "file must be a PNG, JPEG, GIF, or WebP image"))
 		return
 	}
@@ -338,7 +338,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	key := fmt.Sprintf("images/%d.%s", id, opt.Ext)
 	h.purgeLegacyVariants(r.Context(), "images", id, opt.Ext)
 	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
-		h.logger.Error("image upload: storage upload failed", "id", id, "key", logsafe.String(key), "err", err)
+		h.logger.Error("image upload: storage upload failed", "id", id, "key_prefix", logsafe.ObjectKey(key), "err", err)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store image"))
 		return
 	}
@@ -351,7 +351,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	h.logger.Info("image uploaded",
-		"id", id, "key", logsafe.String(key),
+		"id", id, "key_prefix", logsafe.ObjectKey(key),
 		"source_mime", opt.SourceMIME,
 		"source_bytes", len(data), "stored_bytes", len(opt.Data),
 		"resized", opt.Resized, "reencoded", opt.Reencoded,
@@ -405,7 +405,7 @@ func (h *ScreenshotHandler) purgeLegacyVariants(ctx context.Context, prefix stri
 		key := fmt.Sprintf("%s/%d.%s", prefix, id, ext)
 		if err := h.storage.DeleteObject(ctx, key); err != nil {
 			h.logger.Warn("purge legacy variant failed",
-				"key", logsafe.String(key), "err", err)
+				"key_prefix", logsafe.ObjectKey(key), "err", err)
 		}
 	}
 }
