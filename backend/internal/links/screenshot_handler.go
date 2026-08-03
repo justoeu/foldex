@@ -15,7 +15,6 @@ import (
 
 	"foldex/internal/imageopt"
 	"foldex/internal/pkg/httperr"
-	"foldex/internal/pkg/logsafe"
 	"foldex/internal/ports"
 	"foldex/internal/storage"
 )
@@ -173,13 +172,13 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 	key := fmt.Sprintf("screenshots/%d.%s", id, opt.Ext)
 	h.purgeLegacyVariants(r.Context(), "screenshots", id, opt.Ext)
 	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
-		h.logger.Error("screenshot upload failed", "id", id, "key_prefix", logsafe.ObjectKey(key), "err", err)
+		h.logger.Error("screenshot upload failed", "id", id)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store screenshot"))
 		return
 	}
 
 	h.logger.Info("screenshot stored",
-		"id", id, "key_prefix", logsafe.ObjectKey(key),
+		"id", id,
 		"source_bytes", len(png), "stored_bytes", len(opt.Data),
 		"resized", opt.Resized, "reencoded", opt.Reencoded,
 	)
@@ -202,11 +201,11 @@ func (h *ScreenshotHandler) ProxyFile(w http.ResponseWriter, r *http.Request) {
 	data, _, err := h.storage.GetObject(r.Context(), key)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectTooLarge) {
-			h.logger.Warn("proxy file: object exceeds serve ceiling", "key_prefix", logsafe.ObjectKey(key), "err", err)
+			h.logger.Warn("proxy file: object exceeds serve ceiling")
 			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "too_large", "file exceeds maximum serve size"))
 			return
 		}
-		h.logger.Error("proxy file: get object failed", "key_prefix", logsafe.ObjectKey(key), "err", err)
+		h.logger.Error("proxy file: get object failed")
 		httperr.Write(w, httperr.New(http.StatusNotFound, "not_found", "file not found"))
 		return
 	}
@@ -221,7 +220,7 @@ func (h *ScreenshotHandler) ProxyFile(w http.ResponseWriter, r *http.Request) {
 	}
 	detected := http.DetectContentType(sniff)
 	if !isAllowedServeMIME(detected) {
-		h.logger.Warn("proxy file: refusing to serve non-image content", "key_prefix", logsafe.ObjectKey(key), "reason", "non_image")
+		h.logger.Warn("proxy file: refusing to serve non-image content", "reason", "non_image")
 		httperr.Write(w, httperr.New(http.StatusUnsupportedMediaType, "unsupported_media", "stored object is not a supported image"))
 		return
 	}
@@ -338,7 +337,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	key := fmt.Sprintf("images/%d.%s", id, opt.Ext)
 	h.purgeLegacyVariants(r.Context(), "images", id, opt.Ext)
 	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
-		h.logger.Error("image upload: storage upload failed", "id", id, "key_prefix", logsafe.ObjectKey(key), "err", err)
+		h.logger.Error("image upload: storage upload failed", "id", id)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store image"))
 		return
 	}
@@ -351,7 +350,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	h.logger.Info("image uploaded",
-		"id", id, "key_prefix", logsafe.ObjectKey(key),
+		"id", id,
 		"source_mime", opt.SourceMIME,
 		"source_bytes", len(data), "stored_bytes", len(opt.Data),
 		"resized", opt.Resized, "reencoded", opt.Reencoded,
@@ -404,8 +403,7 @@ func (h *ScreenshotHandler) purgeLegacyVariants(ctx context.Context, prefix stri
 		}
 		key := fmt.Sprintf("%s/%d.%s", prefix, id, ext)
 		if err := h.storage.DeleteObject(ctx, key); err != nil {
-			h.logger.Warn("purge legacy variant failed",
-				"key_prefix", logsafe.ObjectKey(key), "err", err)
+			h.logger.Warn("purge legacy variant failed")
 		}
 	}
 }

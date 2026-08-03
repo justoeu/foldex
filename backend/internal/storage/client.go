@@ -10,8 +10,6 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-
-	"foldex/internal/pkg/logsafe"
 )
 
 // Client wraps an S3-compatible client (RustFS via minio-go) and exposes a minimal interface for foldex.
@@ -76,7 +74,7 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 	if err != nil {
 		return fmt.Errorf("storage: upload %q: %w", key, err)
 	}
-	c.logger.Info("storage: uploaded object", "key_prefix", logsafe.ObjectKey(key), "bytes", len(data))
+	c.logger.Info("storage: uploaded object", "bytes", len(data))
 	return nil
 }
 
@@ -214,7 +212,7 @@ func (c *Client) PutObjectStream(ctx context.Context, key string, r io.Reader, s
 	if err != nil {
 		return fmt.Errorf("storage: put stream %q: %w", key, err)
 	}
-	c.logger.Info("storage: uploaded object (stream)", "key_prefix", logsafe.ObjectKey(key), "bytes", size)
+	c.logger.Info("storage: uploaded object (stream)", "bytes", size)
 	return nil
 }
 
