@@ -63,6 +63,11 @@ type Worker struct {
 	scanInterval time.Duration
 	fetchTimeout time.Duration
 
+	// pushSem bounds concurrent Notify goroutines; pushWg lets Stop wait for
+	// in-flight pushes so we don't leak after cancel.
+	pushSem chan struct{}
+	pushWg  sync.WaitGroup
+
 	wg       sync.WaitGroup
 	cancel   context.CancelFunc
 	stopOnce sync.Once
@@ -92,6 +97,14 @@ func defaultOptions(o Options) Options {
 
 func New(repo Repo, fetcher Fetcher, sender Sender, opts Options, logger *slog.Logger) *Worker {
 	opts = defaultOptions(opts)
+	// Cap concurrent push deliveries to worker concurrency (not unbounded).
+	pushN := opts.Concurrency
+	if pushN < 1 {
+		pushN = 1
+	}
+	if pushN > 8 {
+		pushN = 8
+	}
 	return &Worker{
 		repo:         repo,
 		fetcher:      fetcher,
@@ -102,6 +115,7 @@ func New(repo Repo, fetcher Fetcher, sender Sender, opts Options, logger *slog.L
 		concurrent:   opts.Concurrency,
 		scanInterval: opts.ScanInterval,
 		fetchTimeout: opts.FetchTimeout,
+		pushSem:      make(chan struct{}, pushN),
 	}
 }
 
@@ -132,6 +146,16 @@ func (w *Worker) Stop() {
 		}
 	})
 	w.wg.Wait()
+	w.pushWg.Wait()
+	// Drain leftover buffered jobs so Enqueue-vs-Stop TOCTOU cannot park work
+	// with no consumer (RACE-HER-010).
+	for {
+		select {
+		case <-w.jobs:
+		default:
+			return
+		}
+	}
 }
 
 // Enqueue schedules an immediate check for linkID. Non-blocking — returns
@@ -143,6 +167,9 @@ func (w *Worker) Enqueue(linkID int64) error {
 	}
 	select {
 	case w.jobs <- linkID:
+		if w.stopped.Load() {
+			return ErrStopped
+		}
 		return nil
 	default:
 		w.logger.Warn("changecheck queue full, dropping job", "link_id", linkID)
@@ -219,22 +246,26 @@ func (w *Worker) process(ctx context.Context, id int64) {
 	body, _, err := w.fetcher.GetRaw(fetchCtx, link.URL)
 	if err != nil {
 		w.logger.Info("process: fetch failed", "link_id", id, "err", err)
-		_ = w.repo.RecordCheckResult(ctx, id, links.CheckResult{
+		if recErr := w.repo.RecordCheckResult(ctx, id, links.CheckResult{
 			Fingerprint: "",
 			Changed:     false,
 			FetchErr:    err.Error(),
-		})
+		}); recErr != nil {
+			w.logger.Error("process: record result failed", "link_id", id, "err", recErr)
+		}
 		return
 	}
 
-	kind, hash, err := w.fingerprint.Compute(fetchCtx, link.URL, string(body))
+	kind, hash, err := w.fingerprint.Compute(fetchCtx, link.URL, body)
 	if err != nil {
 		w.logger.Info("process: fingerprint failed", "link_id", id, "err", err)
-		_ = w.repo.RecordCheckResult(ctx, id, links.CheckResult{
+		if recErr := w.repo.RecordCheckResult(ctx, id, links.CheckResult{
 			Fingerprint: "",
 			Changed:     false,
 			FetchErr:    "fingerprint: " + err.Error(),
-		})
+		}); recErr != nil {
+			w.logger.Error("process: record result failed", "link_id", id, "err", recErr)
+		}
 		return
 	}
 	newFp := FormatFingerprint(kind, hash)
@@ -259,12 +290,19 @@ func (w *Worker) process(ctx context.Context, id int64) {
 	}
 
 	if changed && w.sender != nil {
-		// Fire push outside the record tx — push failures must not block the
-		// fingerprint update (which is the durable source of truth for "did
-		// this link change?"). Background context: the request context may
-		// already be cancelled by Stop, and we don't want a fresh write to
-		// roll back because the SSE-style notify timed out.
+		// Fire push outside the record path — failures must not block the
+		// fingerprint update. Bounded by pushSem so a flood of changes can't
+		// spawn unbounded goroutines; Stop waits on pushWg.
+		w.pushWg.Add(1)
 		go func(linkID int64, title, url string) {
+			defer w.pushWg.Done()
+			select {
+			case w.pushSem <- struct{}{}:
+				defer func() { <-w.pushSem }()
+			case <-time.After(30 * time.Second):
+				w.logger.Warn("push notify dropped: semaphore timeout", "link_id", linkID)
+				return
+			}
 			pushCtx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer pcancel()
 			if err := w.sender.Notify(pushCtx, Notification{

@@ -2,35 +2,33 @@ package links
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/imageopt"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/logsafe"
+	"foldex/internal/ports"
+	"foldex/internal/storage"
 )
 
 // allowedFilePrefixes is the closed set of object-key prefixes ProxyFile is
-// allowed to serve. Keeps the proxy from being a generic read-any-key MinIO
+// allowed to serve. Keeps the proxy from being a generic read-any-key object-store
 // gateway. "notes/" holds inline images uploaded through the note rich-text
 // editor (notes.ImageHandler) — ProxyFile is shared infrastructure so notes
 // reuses it rather than standing up a second file-serving endpoint.
 var allowedFilePrefixes = []string{"screenshots/", "images/", "notes/"}
 
-// allowedUploadMIMEs is the closed set of MIME types accepted by UploadImage,
-// detected from the actual upload bytes (NOT from the client-supplied header).
-// SVG is intentionally excluded — it can carry executable script.
-var allowedUploadMIMEs = map[string]string{
-	"image/png":  "png",
-	"image/jpeg": "jpg",
-	"image/gif":  "gif",
-	"image/webp": "webp",
-}
+// allowedUploadMIMEs is the single imageopt allowlist (ARCH-ATL-009).
+var allowedUploadMIMEs = imageopt.AllowedUploadMIMEs
 
 // Image optimization defaults — JPEG q≈82 caps thumbnails at 1024 px on the
 // longest side. UI cards render at 150 px; 1024 leaves headroom for retina
@@ -56,12 +54,8 @@ type Screenshotter interface {
 // links).
 type URLPolicy func(ctx context.Context, pageURL string) bool
 
-// Uploader stores bytes to object storage.
-type Uploader interface {
-	Upload(ctx context.Context, key string, data []byte, contentType string) error
-	GetObject(ctx context.Context, key string) ([]byte, string, error)
-	DeleteObject(ctx context.Context, key string) error
-}
+// Uploader stores bytes to object storage (canonical: ports.Uploader).
+type Uploader = ports.Uploader
 
 // screenshotRepo is the slice of the Repository that ScreenshotHandler needs.
 // Defined as an interface so unit tests can inject a fake without a real DB.
@@ -71,6 +65,13 @@ type screenshotRepo interface {
 	ClearOGImage(ctx context.Context, id int64) error
 }
 
+// maxCaptureInFlight bounds concurrent CaptureAndStore requests so a flood
+// cannot pin unbounded goroutines waiting on Chromium.
+const maxCaptureInFlight = 2
+
+// captureTimeout is the handler-level ceiling for a single Capture call.
+const captureTimeout = 45 * time.Second
+
 // ScreenshotHandler handles screenshot capture and file proxy routes.
 type ScreenshotHandler struct {
 	repo          screenshotRepo
@@ -78,6 +79,7 @@ type ScreenshotHandler struct {
 	storage       Uploader
 	urlPolicy     URLPolicy
 	logger        *slog.Logger
+	captureSem    chan struct{}
 }
 
 // NewScreenshotHandler creates a ScreenshotHandler. urlPolicy gates
@@ -90,6 +92,7 @@ func NewScreenshotHandler(repo *Repository, sc Screenshotter, st Uploader, urlPo
 		storage:       st,
 		urlPolicy:     urlPolicy,
 		logger:        logger,
+		captureSem:    make(chan struct{}, maxCaptureInFlight),
 	}
 }
 
@@ -99,6 +102,18 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
 		httperr.Write(w, err)
+		return
+	}
+
+	if h.captureSem == nil {
+		h.captureSem = make(chan struct{}, maxCaptureInFlight)
+	}
+	select {
+	case h.captureSem <- struct{}{}:
+		defer func() { <-h.captureSem }()
+	default:
+		w.Header().Set("Retry-After", "5")
+		httperr.Write(w, httperr.New(http.StatusTooManyRequests, "screenshot_busy", "too many screenshot captures in flight"))
 		return
 	}
 
@@ -113,7 +128,7 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 	// resulting screenshot would be served back to the caller via
 	// /api/files/screenshots/{id} — a read-anywhere primitive.
 	if !isHTTPScheme(link.URL) {
-		h.logger.Warn("screenshot rejected: non-http scheme", "id", id, "url", link.URL)
+		h.logger.Warn("screenshot rejected: non-http scheme", "id", id)
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_scheme", "screenshot target must use http or https"))
 		return
 	}
@@ -127,17 +142,28 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if !h.urlPolicy(r.Context(), link.URL) {
-		h.logger.Warn("screenshot rejected: non-public target", "id", id, "url", link.URL)
+		h.logger.Warn("screenshot rejected: non-public target", "id", id)
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "private_target", "screenshot target must resolve to a public address"))
+		return
+	}
+	// Re-check immediately before Chromium navigates to shrink the DNS-
+	// rebinding window between LookupIP and page load (TOCTOU). Not a full
+	// pin of the resolved IP into Chromium, but raises the bar vs a single
+	// pre-check far earlier in the handler.
+	if !h.urlPolicy(r.Context(), link.URL) {
+		h.logger.Warn("screenshot rejected: non-public target on recheck", "id", id)
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "private_target", "screenshot target must resolve to a public address"))
 		return
 	}
 
-	png, err := h.screenshotter.Capture(r.Context(), link.URL)
+	capCtx, cancel := context.WithTimeout(r.Context(), captureTimeout)
+	defer cancel()
+	png, err := h.screenshotter.Capture(capCtx, link.URL)
 	if err != nil {
 		// Log the underlying error with full detail; the wire response gets
 		// a generic message — Chromium errors can include local binary paths
 		// / system state that shouldn't reach a (possibly remote) caller.
-		h.logger.Error("screenshot capture failed", "id", id, "url", link.URL, "err", err)
+		h.logger.Error("screenshot capture failed", "id", id, "err", err)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "screenshot_failed", "failed to capture screenshot"))
 		return
 	}
@@ -147,13 +173,13 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 	key := fmt.Sprintf("screenshots/%d.%s", id, opt.Ext)
 	h.purgeLegacyVariants(r.Context(), "screenshots", id, opt.Ext)
 	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
-		h.logger.Error("screenshot upload failed", "id", id, "key", key, "err", err)
+		h.logger.Error("screenshot upload failed", "id", id, "key_prefix", logsafe.ObjectKey(key), "err", err)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store screenshot"))
 		return
 	}
 
 	h.logger.Info("screenshot stored",
-		"id", id, "key", key,
+		"id", id, "key_prefix", logsafe.ObjectKey(key),
 		"source_bytes", len(png), "stored_bytes", len(opt.Data),
 		"resized", opt.Resized, "reencoded", opt.Reencoded,
 	)
@@ -173,20 +199,29 @@ func (h *ScreenshotHandler) ProxyFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, contentType, err := h.storage.GetObject(r.Context(), key)
+	data, _, err := h.storage.GetObject(r.Context(), key)
 	if err != nil {
-		h.logger.Error("proxy file: get object failed", "key", key, "err", err)
+		if errors.Is(err, storage.ErrObjectTooLarge) {
+			h.logger.Warn("proxy file: object exceeds serve ceiling", "key_prefix", logsafe.ObjectKey(key), "err", err)
+			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "too_large", "file exceeds maximum serve size"))
+			return
+		}
+		h.logger.Error("proxy file: get object failed", "key_prefix", logsafe.ObjectKey(key), "err", err)
 		httperr.Write(w, httperr.New(http.StatusNotFound, "not_found", "file not found"))
 		return
 	}
 
 	// Never trust the stored content-type for the response — pin it to what
-	// http.DetectContentType reads from the actual bytes. Stops a malicious
+	// http.DetectContentType reads from the first 512 bytes. Stops a malicious
 	// upload that slipped past UploadImage (or arrived via another vector)
 	// from being served as text/html and executing in the browser.
-	detected := http.DetectContentType(data)
+	sniff := data
+	if len(sniff) > 512 {
+		sniff = sniff[:512]
+	}
+	detected := http.DetectContentType(sniff)
 	if !isAllowedServeMIME(detected) {
-		h.logger.Warn("proxy file: refusing to serve non-image content", "key", key, "detected", detected, "stored", contentType)
+		h.logger.Warn("proxy file: refusing to serve non-image content", "key_prefix", logsafe.ObjectKey(key), "reason", "non_image")
 		httperr.Write(w, httperr.New(http.StatusUnsupportedMediaType, "unsupported_media", "stored object is not a supported image"))
 		return
 	}
@@ -254,9 +289,13 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	// Cap the whole request body — ParseMultipartForm's `maxMemory` only
 	// controls when parts spill to a temp file, not the total upload size.
 	r.Body = http.MaxBytesReader(w, r.Body, maxSize)
-	if err := r.ParseMultipartForm(maxSize); err != nil {
+	// Spill to disk after 1 MiB (gosec G120); body already capped by MaxBytesReader.
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_multipart", "request too large or malformed"))
 		return
+	}
+	if r.MultipartForm != nil {
+		defer func() { _ = r.MultipartForm.RemoveAll() }()
 	}
 
 	file, _, err := r.FormFile("image")
@@ -289,7 +328,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	detected := http.DetectContentType(data)
 	srcExt, ok := allowedUploadMIMEs[detected]
 	if !ok {
-		h.logger.Warn("image upload: rejected MIME", "id", id, "detected", detected)
+		h.logger.Warn("image upload: rejected MIME", "id", id, "reason", "non_image")
 		httperr.Write(w, httperr.New(http.StatusUnsupportedMediaType, "invalid_mime", "file must be a PNG, JPEG, GIF, or WebP image"))
 		return
 	}
@@ -299,7 +338,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	key := fmt.Sprintf("images/%d.%s", id, opt.Ext)
 	h.purgeLegacyVariants(r.Context(), "images", id, opt.Ext)
 	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
-		h.logger.Error("image upload: storage upload failed", "id", id, "key", key, "err", err)
+		h.logger.Error("image upload: storage upload failed", "id", id, "key_prefix", logsafe.ObjectKey(key), "err", err)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store image"))
 		return
 	}
@@ -312,7 +351,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	h.logger.Info("image uploaded",
-		"id", id, "key", key,
+		"id", id, "key_prefix", logsafe.ObjectKey(key),
 		"source_mime", opt.SourceMIME,
 		"source_bytes", len(data), "stored_bytes", len(opt.Data),
 		"resized", opt.Resized, "reencoded", opt.Reencoded,
@@ -354,7 +393,7 @@ func optimizeOrFallback(data []byte, sourceMIME, sourceExt string, logger *slog.
 }
 
 // purgeLegacyVariants removes every sibling-extension object for the same id
-// under the given prefix except the one we just wrote. Keeps MinIO from
+// under the given prefix except the one we just wrote. Keeps the object store from
 // accumulating orphans when a link previously had a .png/.gif/.webp upload
 // and the new upload writes .jpg (or vice versa via the fallback path).
 // DeleteObject is idempotent — NoSuchKey is treated as success.
@@ -366,7 +405,7 @@ func (h *ScreenshotHandler) purgeLegacyVariants(ctx context.Context, prefix stri
 		key := fmt.Sprintf("%s/%d.%s", prefix, id, ext)
 		if err := h.storage.DeleteObject(ctx, key); err != nil {
 			h.logger.Warn("purge legacy variant failed",
-				"key", key, "err", err)
+				"key_prefix", logsafe.ObjectKey(key), "err", err)
 		}
 	}
 }

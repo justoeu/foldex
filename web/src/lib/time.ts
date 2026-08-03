@@ -23,7 +23,15 @@ export function relativeTime(
   if (wk < 5) return t('common.time_wk_ago', { count: wk, defaultValue: '{{count}}w ago' })
   // For older dates just show the date itself — relative time loses meaning
   // past a few weeks and the user usually wants the absolute marker anyway.
-  return then.toISOString().slice(0, 10)
+  // Local civil date (not UTC) so evening stamps don't flip the calendar day.
+  return formatLocalYMD(then)
+}
+
+function formatLocalYMD(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 export type CheckInterval = 'hourly' | 'daily' | 'weekly'
@@ -69,7 +77,7 @@ export function nextCheckPreview(
   const day = Math.floor(hr / 24)
   // Clock skew / hostile timestamp could land last_checked_at in the
   // far future and produce "in 3650000d". Past a year we fall back to
-  // an ISO date stamp — same shape `relativeTime` uses for ancient values.
-  if (day > 365) return new Date(nextMs).toISOString().slice(0, 10)
+  // a local Y-M-D stamp — same shape `relativeTime` uses for ancient values.
+  if (day > 365) return formatLocalYMD(new Date(nextMs))
   return t('common.next_check_in_day', { count: day, defaultValue: 'in {{count}}d' })
 }

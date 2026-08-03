@@ -39,8 +39,26 @@ describe('relativeTime', () => {
     expect(relativeTime('2026-05-16T12:00:00Z', t)).toBe('2|common.time_wk_ago')
   })
 
-  it('returns an ISO date for older timestamps', () => {
+  it('returns a local Y-M-D date for older timestamps', () => {
+    // Noon UTC is the same civil day in every realistic offset (−12..+14).
     expect(relativeTime('2026-01-01T12:00:00Z', t)).toBe('2026-01-01')
+  })
+
+  it('formats absolute fallback with local civil date, not UTC', () => {
+    // 2026-01-01 03:00 UTC → still Dec 31 evening in America/Los_Angeles.
+    // Force a west-of-UTC zone via a fixed Date + local getters.
+    const d = new Date(2026, 0, 1, 2, 0, 0) // local Jan 1 02:00
+    // Make it "old" so we hit the absolute branch (>5 weeks).
+    vi.setSystemTime(new Date(2026, 5, 30, 12, 0, 0))
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    expect(relativeTime(d, t)).toBe(`${y}-${m}-${day}`)
+    // Must NOT be the UTC slice when local ≠ UTC day.
+    const utcSlice = d.toISOString().slice(0, 10)
+    if (utcSlice !== `${y}-${m}-${day}`) {
+      expect(relativeTime(d, t)).not.toBe(utcSlice)
+    }
   })
 
   it('returns "" for invalid input', () => {
@@ -134,9 +152,14 @@ describe('nextCheckPreview', () => {
     }
   })
 
-  // Far-future timestamp (clock skew / hostile value) collapses to ISO date.
-  it('returns an ISO date stamp for far-future check times (> 1 year out)', () => {
+  // Far-future timestamp (clock skew / hostile value) collapses to local Y-M-D.
+  it('returns a local Y-M-D stamp for far-future check times (> 1 year out)', () => {
     // weekly with last_checked in year 9999 → ~9000 years remaining
-    expect(nextCheckPreview('weekly', '9999-01-01T00:00:00Z', t, now)).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    const out = nextCheckPreview('weekly', '9999-01-01T00:00:00Z', t, now)
+    expect(out).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    const nextMs = new Date('9999-01-01T00:00:00Z').getTime() + 7 * 24 * 60 * 60 * 1000
+    const next = new Date(nextMs)
+    const local = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`
+    expect(out).toBe(local)
   })
 })

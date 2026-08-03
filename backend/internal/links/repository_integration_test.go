@@ -127,6 +127,35 @@ func TestRepository_UpdatePreview(t *testing.T) {
 	assert.Equal(t, fav, *got.FaviconURL)
 }
 
+// TestUpdatePreview_StatusCAS_PendingOnly locks RACE-HER-009: terminal ok/failed
+// only apply while status is still pending; a second ok after ok is a no-op.
+func TestUpdatePreview_StatusCAS_PendingOnly(t *testing.T) {
+	ctx, lrepo, _ := setup(t)
+	created, err := lrepo.Create(ctx, links.CreateInput{URL: "https://cas.example", Title: "cas"})
+	require.NoError(t, err)
+	require.Equal(t, string(links.StatusPending), created.PreviewStatus)
+
+	require.NoError(t, lrepo.UpdatePreview(ctx, created.ID, links.StatusOK, nil, nil, nil, nil))
+	got, err := lrepo.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(links.StatusOK), got.PreviewStatus)
+
+	// Stale worker finishing after status left pending must not flip ok→ok via
+	// overwriting metadata path when already ok — CAS rejects non-pending.
+	msg := "stale"
+	require.NoError(t, lrepo.UpdatePreview(ctx, created.ID, links.StatusFailed, nil, nil, nil, &msg))
+	got, err = lrepo.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(links.StatusOK), got.PreviewStatus, "failed must not overwrite ok")
+
+	// refresh → pending is unconditional, then ok CAS succeeds again.
+	require.NoError(t, lrepo.UpdatePreview(ctx, created.ID, links.StatusPending, nil, nil, nil, nil))
+	require.NoError(t, lrepo.UpdatePreview(ctx, created.ID, links.StatusOK, nil, nil, nil, nil))
+	got, err = lrepo.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(links.StatusOK), got.PreviewStatus)
+}
+
 func TestRepository_DeleteCascadesLinkTag(t *testing.T) {
 	ctx, lrepo, trepo := setup(t)
 	tag, _ := trepo.Create(ctx, tags.CreateInput{Name: "t", Color: "#fff"})

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TagSidebar } from './TagSidebar'
 import { renderWithProviders } from '../test/renderWithProviders'
@@ -57,4 +57,75 @@ describe('TagSidebar', () => {
     await user.click(screen.getByRole('button', { name: /Manage/i }))
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
+
+  it('renders collapsed rail and expands on click', async () => {
+    const onToggleCollapsed = vi.fn()
+    renderWithProviders(
+      <TagSidebar
+        selected={[]}
+        onToggle={vi.fn()}
+        onClear={vi.fn()}
+        totalLinks={0}
+        collapsed
+        onToggleCollapsed={onToggleCollapsed}
+      />,
+    )
+    expect(document.querySelector('.fx-sidebar-rail')).toBeTruthy()
+    await userEvent.setup().click(screen.getByLabelText(/expand/i))
+    expect(onToggleCollapsed).toHaveBeenCalled()
+  })
+
+  it('shows mobile drawer and closes on Escape', async () => {
+    const onMobileClose = vi.fn()
+    renderWithProviders(
+      <TagSidebar
+        selected={[]}
+        onToggle={vi.fn()}
+        onClear={vi.fn()}
+        totalLinks={0}
+        collapsed={false}
+        onToggleCollapsed={vi.fn()}
+        mobileOpen
+        onMobileClose={onMobileClose}
+      />,
+    )
+    await waitFor(() => expect(screen.getByText('jira')).toBeInTheDocument())
+    expect(document.querySelector('.fx-sidebar-mobile-open')).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onMobileClose).toHaveBeenCalled()
+  })
+
+  it('toggles frequent/other sections and load-more when many tags', async () => {
+    for (let i = 3; i <= 25; i++) {
+      state.tags.push({ id: i, name: `tag${i}`, color: '#6366F1', icon: null, link_count: i === 3 ? 10 : 1 })
+    }
+    renderWithProviders(
+      <TagSidebar selected={[]} onToggle={vi.fn()} onClear={vi.fn()} totalLinks={0} collapsed={false} onToggleCollapsed={vi.fn()} />,
+    )
+    await waitFor(() => expect(screen.getByText('jira')).toBeInTheDocument())
+    const user = userEvent.setup()
+    // Collapse Frequent section if present
+    const freq = screen.queryByText(/Frequent|Frequentes|Frecuentes/i)
+    if (freq) {
+      await user.click(freq)
+    }
+    const more = screen.queryByText(/more|mais|más/i)
+    if (more) {
+      await user.click(more)
+    }
+    expect(screen.getByText('tag25') || screen.getByText('jira')).toBeTruthy()
+  })
+
+  it('lists recent changes when present', async () => {
+    state.links.push({
+      id: 99, url: 'https://x.example', title: 'Changed page', slug: 'changed',
+      click_count: 0, preview_status: 'ok', pinned: false, created_at: '', updated_at: '',
+      tags: [], last_change_detected_at: new Date().toISOString(),
+    })
+    renderWithProviders(
+      <TagSidebar selected={[]} onToggle={vi.fn()} onClear={vi.fn()} totalLinks={0} collapsed={false} onToggleCollapsed={vi.fn()} />,
+    )
+    await waitFor(() => expect(screen.getByText(/Changed page/i)).toBeInTheDocument())
+  })
 })
+

@@ -425,6 +425,29 @@ describe('App', () => {
     expect(screen.queryByLabelText('folder password')).not.toBeInTheDocument()
   })
 
+  // RACE-HER-011: ref is updated synchronously on unlock so a rapid second
+  // open (before useEffect paint sync) must not re-open the password dialog.
+  it('double-open after unlock does not reprompt (sync unlockedFoldersRef)', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
+    await user.type(await screen.findByLabelText('folder password'), 'hunter22')
+    await user.click(screen.getByRole('button', { name: /unlock/i }))
+    await waitFor(() => expect(screen.queryByLabelText('folder password')).not.toBeInTheDocument())
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    const openBtn = screen.getByRole('button', { name: /Open folder Secret/i })
+    await user.dblClick(openBtn)
+    await waitFor(() => expect(screen.queryByText(/Your link base/i)).not.toBeInTheDocument())
+    expect(screen.queryByLabelText('folder password')).not.toBeInTheDocument()
+  })
+
   it('recovers from a stale unlock token (password changed elsewhere mid-session)', async () => {
     state.folders.push({
       id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,

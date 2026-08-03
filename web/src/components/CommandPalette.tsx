@@ -38,12 +38,15 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
   // folder's navigateBack).
   useEscape(onClose, open)
 
-  const entriesQuery = useEntries({ q: debounced }, { enabled: open })
+  // When searching, request up to 200 matches so palette doesn't silently
+  // drop hits beyond the default Home page size of 100 (N1-NEX-015).
+  const paletteLimit = debounced ? 200 : 50
+  const entriesQuery = useEntries({ q: debounced, limit: paletteLimit }, { enabled: open })
   const entries = useMemo(() => flattenEntries(entriesQuery.data), [entriesQuery.data])
   const links = useMemo(() => entries.filter((e) => e.kind === 'link'), [entries])
   const notes = useMemo(() => entries.filter((e) => e.kind === 'note'), [entries])
   const { data: tags = [] } = useTags()
-  const { data: folders = [] } = useFolders()
+  const { data: folders = [] } = useFolders({ fields: 'minimal' })
 
   const suggested = useMemo(() => [...links].sort((a, b) => b.click_count - a.click_count).slice(0, 3), [links])
   const matches = useMemo(() => links.slice(0, 12), [links])

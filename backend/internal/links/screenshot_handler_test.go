@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -14,11 +15,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/storage"
 )
 
 // pngHeader is the 8-byte magic prefix every PNG starts with. http.DetectContentType
@@ -66,11 +72,12 @@ type uploadOp struct {
 }
 
 type fakeUploader struct {
-	uploaded map[string][]byte
-	ops      []uploadOp // ordered call log
-	deleted  []string   // ordered DeleteObject call log
-	err      error
-	getErr   error
+	uploaded  map[string][]byte
+	ops       []uploadOp // ordered call log
+	deleted   []string   // ordered DeleteObject call log
+	err       error
+	getErr    error
+	deleteErr error
 }
 
 func newFakeUploader() *fakeUploader {
@@ -99,6 +106,9 @@ func (f *fakeUploader) GetObject(_ context.Context, key string) ([]byte, string,
 
 func (f *fakeUploader) DeleteObject(_ context.Context, key string) error {
 	f.deleted = append(f.deleted, key)
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	// fakeUploader treats every delete as success (matches the production
 	// idempotent behaviour where NoSuchKey is swallowed).
 	delete(f.uploaded, key)
@@ -170,6 +180,7 @@ func buildRouter(t *testing.T, sc Screenshotter, up Uploader, repo screenshotRep
 		storage:       up,
 		urlPolicy:     allowAllPolicy,
 		logger:        newTestLogger(),
+		captureSem:    make(chan struct{}, maxCaptureInFlight),
 	}
 
 	r := chi.NewRouter()
@@ -247,7 +258,7 @@ func TestCaptureAndStore_ScreenshotFails(t *testing.T) {
 func TestCaptureAndStore_UploadFails(t *testing.T) {
 	sc := &fakeScreenshotter{png: realPNG(t, 300, 200)}
 	up := newFakeUploader()
-	up.err = errors.New("minio down")
+	up.err = errors.New("object store down")
 	repo := newFakeRepo()
 	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
 	r, _, _ := buildRouter(t, sc, up, repo)
@@ -432,6 +443,88 @@ func TestProxyFile_NotFound(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestProxyFile_RejectsOversizedObject(t *testing.T) {
+	sc := &fakeScreenshotter{}
+	up := newFakeUploader()
+	up.getErr = fmt.Errorf("storage: get object: %w", storage.ErrObjectTooLarge)
+	repo := newFakeRepo()
+	r, _, _ := buildRouter(t, sc, up, repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/files/screenshots/1.png", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	assert.Contains(t, w.Body.String(), "too_large")
+}
+
+func TestCaptureAndStore_Returns429WhenSaturated(t *testing.T) {
+	// Hold both admission slots with blocking Captures, then assert extras 429.
+	entered := make(chan struct{}, maxCaptureInFlight)
+	release := make(chan struct{})
+	var inFlight atomic.Int32
+	pngBytes := realPNG(t, 40, 30)
+	sc := &blockingScreenshotter{entered: entered, release: release, inFlight: &inFlight, png: pngBytes}
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
+	r, _, _ := buildRouter(t, sc, up, repo)
+
+	var holdWG sync.WaitGroup
+	holdCodes := make(chan int, maxCaptureInFlight)
+	for i := 0; i < maxCaptureInFlight; i++ {
+		holdWG.Add(1)
+		go func() {
+			defer holdWG.Done()
+			req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			holdCodes <- w.Code
+		}()
+	}
+	for i := 0; i < maxCaptureInFlight; i++ {
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for captures to enter")
+		}
+	}
+	// Slots full — further requests must be rejected immediately.
+	for i := 0; i < 4; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusTooManyRequests, w.Code)
+		assert.Equal(t, "5", w.Header().Get("Retry-After"))
+		assert.Contains(t, w.Body.String(), "screenshot_busy")
+	}
+	close(release)
+	holdWG.Wait()
+	close(holdCodes)
+	for code := range holdCodes {
+		assert.Equal(t, http.StatusOK, code)
+	}
+	assert.LessOrEqual(t, int(inFlight.Load()), maxCaptureInFlight)
+}
+
+type blockingScreenshotter struct {
+	entered  chan struct{}
+	release  chan struct{}
+	inFlight *atomic.Int32
+	png      []byte
+}
+
+func (b *blockingScreenshotter) Capture(_ context.Context, _ string) ([]byte, error) {
+	b.inFlight.Add(1)
+	defer b.inFlight.Add(-1)
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	<-b.release
+	return b.png, nil
 }
 
 // --- ProxyFile hardening tests ---
@@ -659,7 +752,7 @@ func TestUploadImage_Rejects5MBPlus(t *testing.T) {
 
 func TestUploadImage_UploadFails(t *testing.T) {
 	up := newFakeUploader()
-	up.err = errors.New("minio down")
+	up.err = errors.New("object store down")
 	repo := newFakeRepo()
 	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 
@@ -700,6 +793,36 @@ func TestDeleteImage_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusNoContent, w.Code)
 	assert.Equal(t, []int64{8}, repo.clearedIDs)
+}
+
+func TestDeleteImage_InvalidID(t *testing.T) {
+	sh := &ScreenshotHandler{repo: newFakeRepo(), storage: newFakeUploader(), logger: newTestLogger()}
+	r := chi.NewRouter()
+	r.Delete("/api/links/{id}/image", sh.DeleteImage)
+	req := httptest.NewRequest(http.MethodDelete, "/api/links/abc/image", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestDeleteImage_RepoError(t *testing.T) {
+	repo := newFakeRepo()
+	repo.clearErr = errors.New("db")
+	sh := &ScreenshotHandler{repo: repo, storage: newFakeUploader(), logger: newTestLogger()}
+	r := chi.NewRouter()
+	r.Delete("/api/links/{id}/image", sh.DeleteImage)
+	req := httptest.NewRequest(http.MethodDelete, "/api/links/1/image", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.NotEqual(t, http.StatusNoContent, w.Code)
+}
+
+func TestPurgeLegacyVariants_DeleteErrorLogged(t *testing.T) {
+	up := newFakeUploader()
+	up.deleteErr = errors.New("object store down")
+	sh := &ScreenshotHandler{storage: up, logger: newTestLogger()}
+	sh.purgeLegacyVariants(context.Background(), "og", 42, "jpg")
+	assert.NotEmpty(t, up.deleted)
 }
 
 // --- Construction sanity ---

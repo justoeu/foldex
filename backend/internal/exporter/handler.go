@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -14,11 +15,20 @@ import (
 	"foldex/internal/pkg/httperr"
 )
 
-type Handler struct {
-	pool *pgxpool.Pool
+// ExportReader is satisfied by *Repository.
+type ExportReader interface {
+	ListAllLinks(ctx context.Context) ([]linkRow, error)
+	ListTags(ctx context.Context) ([]tagRow, error)
+	ListFolders(ctx context.Context) ([]folderRow, error)
 }
 
-func NewHandler(pool *pgxpool.Pool) *Handler { return &Handler{pool: pool} }
+type Handler struct {
+	repo ExportReader
+}
+
+func NewHandler(pool *pgxpool.Pool) *Handler {
+	return &Handler{repo: NewRepository(pool)}
+}
 
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/", h.export)
@@ -39,47 +49,8 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type linkRow struct {
-	URL         string
-	Title       string
-	Slug        string
-	Description *string
-	CreatedAt   time.Time
-	ClickCount  int64
-	TagNames    []string
-	FolderName  *string
-}
-
 func (h *Handler) queryAll(r *http.Request) ([]linkRow, error) {
-	// click_count is derived from click_log (no longer denormalized on
-	// `link`). Counting in a subquery avoids double-counting with the
-	// link_tag join. Folder name comes from the LEFT JOIN — NULL when the
-	// link isn't in a folder.
-	rows, err := h.pool.Query(r.Context(), `
-        SELECT l.url, l.title, l.slug, l.description, l.created_at,
-               (SELECT count(*) FROM click_log WHERE entity_kind = 'link' AND entity_id = l.id)::bigint AS click_count,
-               COALESCE(array_agg(t.name) FILTER (WHERE t.name IS NOT NULL), '{}'),
-               f.name AS folder_name
-        FROM link l
-        LEFT JOIN link_tag lt ON lt.entity_kind = 'link' AND lt.entity_id = l.id
-        LEFT JOIN tag t       ON t.id = lt.tag_id
-        LEFT JOIN folder f    ON f.id = l.folder_id
-        GROUP BY l.id, f.name
-        ORDER BY l.created_at ASC
-    `)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []linkRow{}
-	for rows.Next() {
-		var l linkRow
-		if err := rows.Scan(&l.URL, &l.Title, &l.Slug, &l.Description, &l.CreatedAt, &l.ClickCount, &l.TagNames, &l.FolderName); err != nil {
-			return nil, err
-		}
-		out = append(out, l)
-	}
-	return out, rows.Err()
+	return h.repo.ListAllLinks(r.Context())
 }
 
 func (h *Handler) exportNetscape(w http.ResponseWriter, r *http.Request) {
@@ -160,12 +131,12 @@ func (h *Handler) exportJSON(w http.ResponseWriter, r *http.Request) {
 	// Drain each query into a slice and release the connection back to the pool
 	// before starting the next one. The whole point is that we don't want three
 	// connections held simultaneously across the JSON encode at the end.
-	tags, err := queryTags(r, h.pool)
+	tags, err := h.repo.ListTags(r.Context())
 	if err != nil {
 		httperr.Write(w, err)
 		return
 	}
-	folders, err := queryFolders(r, h.pool)
+	folders, err := h.repo.ListFolders(r.Context())
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -198,49 +169,4 @@ func (h *Handler) exportJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="foldex-bookmarks.json"`)
 	_ = json.NewEncoder(w).Encode(out)
-}
-
-type tagRow struct {
-	Name  string
-	Color string
-	Icon  *string
-}
-
-type folderRow struct {
-	Name  string
-	Color string
-}
-
-func queryTags(r *http.Request, pool *pgxpool.Pool) ([]tagRow, error) {
-	rows, err := pool.Query(r.Context(), `SELECT name, color, icon FROM tag ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []tagRow{}
-	for rows.Next() {
-		var t tagRow
-		if err := rows.Scan(&t.Name, &t.Color, &t.Icon); err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
-}
-
-func queryFolders(r *http.Request, pool *pgxpool.Pool) ([]folderRow, error) {
-	rows, err := pool.Query(r.Context(), `SELECT name, color FROM folder ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []folderRow{}
-	for rows.Next() {
-		var f folderRow
-		if err := rows.Scan(&f.Name, &f.Color); err != nil {
-			return nil, err
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
 }

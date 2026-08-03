@@ -73,8 +73,8 @@ export function StatsPage() {
           label={t('stats.kpi_storage_objects')}
           value={storage.data ? storage.data.objects.toLocaleString() : '—'}
           delta={storage.data
-            ? t('stats.kpi_storage_minio_delta', { size: formatBytes(storage.data.total_bytes) })
-            : t('stats.kpi_storage_minio_unavailable')}
+            ? t('stats.kpi_storage_object_delta', { size: formatBytes(storage.data.total_bytes) })
+            : t('stats.kpi_storage_object_unavailable')}
           deltaKind="neutral"
         />
       </div>
@@ -85,7 +85,7 @@ export function StatsPage() {
             <div>
               <div className="fx-statcard-title">{t('stats.section_clicks_day')}</div>
               <div className="fx-statcard-sub">
-                {t('stats.section_clicks_day_sub', { count: totalDaily.toLocaleString() })}
+                {t('stats.section_clicks_day_sub', { count: totalDaily })}
               </div>
             </div>
             <div className="fx-statcard-legend">
@@ -347,8 +347,14 @@ function AreaChart({ data, width, height, t }: { data: DailyPoint[]; width: numb
   )
 }
 
-function formatChartDate(iso: string) {
-  const d = new Date(iso)
+/** Exported for unit tests — calendar-date safe (no UTC day-shift). */
+export function formatChartDate(iso: string) {
+  // Backend day buckets are calendar dates (often `YYYY-MM-DD` or midnight UTC).
+  // Parsing as UTC Date then using local getDate() shifts the day west of UTC.
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+  const d = m
+    ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    : new Date(iso)
   const day = d.getDate()
   const month = d.toLocaleDateString(undefined, { month: 'short' }).replace('.', '')
   const wd = d.toLocaleDateString(undefined, { weekday: 'short' }).replace('.', '')
@@ -375,7 +381,7 @@ function MomCompare({ prev, curr, t }: { prev: number; curr: number; t: TFunctio
       </div>
       <div className="fx-mom-foot">
         <span>
-          <Icon d={I.flame} size={12} /> {t('stats.section_mom_delta', { count: (curr - prev).toLocaleString() })}
+          <Icon d={I.flame} size={12} /> {t('stats.section_mom_delta', { count: curr - prev })}
         </span>
       </div>
     </div>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { FolderDialog } from './FolderDialog'
 import { renderWithProviders } from '../test/renderWithProviders'
@@ -230,5 +230,126 @@ describe('FolderDialog — password hint (ADR-29)', () => {
     await user.type(hintInput, 'new clue')
     await user.click(screen.getByRole('button', { name: /^save$/i }))
     expect(state.folders[0]?.password_hint).toBe('new clue')
+  })
+})
+
+describe('FolderDialog — delete + color + parent', () => {
+  it('deletes folder keeping links after confirm', async () => {
+    const folder = {
+      id: 10, name: 'Gone', color: '#6366F1', parent_id: null, link_count: 2,
+      folder_count: 0, preview_links: [], preview_folders: [], has_password: false,
+    }
+    state.folders.push(folder)
+    const onClose = vi.fn()
+    renderWithProviders(<FolderDialog open onClose={onClose} folder={folder} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByLabelText(/delete folder, keep links/i))
+    await user.click(await screen.findByRole('button', { name: /^Delete folder$/i }))
+    await waitFor(() => expect(state.folders.find((f) => f.id === 10)).toBeUndefined())
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('cascade-deletes folder after confirm', async () => {
+    const folder = {
+      id: 11, name: 'Nuke', color: '#6366F1', parent_id: null, link_count: 0,
+      folder_count: 0, preview_links: [], preview_folders: [], has_password: false,
+    }
+    state.folders.push(folder)
+    const onClose = vi.fn()
+    renderWithProviders(<FolderDialog open onClose={onClose} folder={folder} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByLabelText(/delete folder and links/i))
+    await user.click(await screen.findByRole('button', { name: /^Delete everything$/i }))
+    await waitFor(() => expect(state.folders.find((f) => f.id === 11)).toBeUndefined())
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('cancels delete when confirm is dismissed', async () => {
+    const folder = {
+      id: 12, name: 'Stay', color: '#6366F1', parent_id: null, link_count: 0,
+      folder_count: 0, preview_links: [], preview_folders: [], has_password: false,
+    }
+    state.folders.push(folder)
+    renderWithProviders(<FolderDialog open onClose={vi.fn()} folder={folder} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByLabelText(/delete folder, keep links/i))
+    const cancels = screen.getAllByRole('button', { name: /cancel/i })
+    await user.click(cancels[cancels.length - 1])
+    expect(state.folders.find((f) => f.id === 12)).toBeDefined()
+  })
+
+  it('shows naming kicker when justCreated and hides password field', () => {
+    const folder = {
+      id: 13, name: 'Nova pasta', color: '#6366F1', parent_id: null, link_count: 0,
+      folder_count: 0, preview_links: [], preview_folders: [], has_password: false,
+    }
+    renderWithProviders(<FolderDialog open onClose={vi.fn()} folder={folder} justCreated />)
+    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument()
+    expect(screen.getByDisplayValue('Nova pasta')).toBeInTheDocument()
+  })
+
+  it('switches to gradient color mode and saves', async () => {
+    const onClose = vi.fn()
+    renderWithProviders(<FolderDialog open onClose={onClose} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText(/folder.*name|nome/i), 'Grad')
+    await user.click(screen.getByRole('tab', { name: /gradient/i }))
+    await user.click(screen.getByRole('button', { name: /create|create folder|criar/i }))
+    await waitFor(() => expect(state.folders).toHaveLength(1))
+    expect(state.folders[0]?.color).toMatch(/^linear-gradient/)
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('closes via X button', async () => {
+    const onClose = vi.fn()
+    renderWithProviders(<FolderDialog open onClose={onClose} />)
+    await userEvent.setup().click(screen.getByRole('button', { name: /close/i }))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('edits name of existing folder', async () => {
+    const folder = {
+      id: 14, name: 'Old', color: '#6366F1', parent_id: null, link_count: 0,
+      folder_count: 0, preview_links: [], preview_folders: [], has_password: false,
+    }
+    state.folders.push(folder)
+    const onClose = vi.fn()
+    renderWithProviders(<FolderDialog open onClose={onClose} folder={folder} />)
+    const user = userEvent.setup()
+    const name = screen.getByDisplayValue('Old')
+    await user.clear(name)
+    await user.type(name, 'Renamed')
+    await user.click(screen.getByRole('button', { name: /save|salvar/i }))
+    await waitFor(() => expect(state.folders[0]?.name).toBe('Renamed'))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('loads gradient folder color into gradient mode', () => {
+    const folder = {
+      id: 15,
+      name: 'Pretty',
+      color: 'linear-gradient(135deg, #6366F1, #EC4899)',
+      parent_id: null,
+      link_count: 0,
+      folder_count: 0,
+      preview_links: [],
+      preview_folders: [],
+      has_password: false,
+    }
+    renderWithProviders(<FolderDialog open onClose={vi.fn()} folder={folder} />)
+    expect(screen.getByDisplayValue('Pretty')).toBeInTheDocument()
+  })
+
+  it('creates with parentId when provided', async () => {
+    state.folders.push({
+      id: 1, name: 'Parent', color: '#6366F1', parent_id: null, link_count: 0,
+      folder_count: 0, preview_links: [], preview_folders: [], has_password: false, created_at: '',
+    })
+    const onClose = vi.fn()
+    renderWithProviders(<FolderDialog open onClose={onClose} parentId={1} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText(/folder.*name|nome/i), 'Child')
+    await user.click(screen.getByRole('button', { name: /create|create folder|criar/i }))
+    await waitFor(() => expect(state.folders.some((f) => f.name === 'Child' && f.parent_id === 1)).toBe(true))
   })
 })

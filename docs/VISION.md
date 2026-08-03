@@ -18,7 +18,7 @@ Foldex resolve isso como um **app pessoal self-hosted**: bookmark com cara de pr
 3. **Métricas de uso.** Cada clique via `/go/:id` insere uma row em `click_log` (single source of truth); lista pode ser ordenada por "mais usados" / "usados recentemente".
 4. **Preview automático.** Ao criar, backend busca `<title>`, `og:image`, favicon. Quando o site não tem og:image e o host resolve pra IP público, Chromium headless captura um screenshot como fallback. Card renderiza visualmente parecido ao que o link representa.
 5. **Monitorar links + Web Push.** Per-link opt-in (horário/diário/semanal) — o changecheck worker faz fingerprint híbrido (feed RSS/Atom se existir, content hash do `<main>` como fallback) e dispara notificação push quando o conteúdo muda. Sino no Topbar liga/desliga a permissão; badge âmbar no card aparece até o usuário clicar pra marcar como visto. ADR-23 e ADR-24.
-6. **Import/Export + Backup completo.** Aceita o `bookmarks.html` (Netscape) que qualquer browser exporta + um JSON versionado próprio. Backup ZIP com `manifest.json` + `database.json` (5 tabelas) + todos os arquivos do MinIO — round-trip lossless com 3 modos de conflito (wipe/skip/duplicate).
+6. **Import/Export + Backup completo.** Aceita o `bookmarks.html` (Netscape) que qualquer browser exporta + um JSON versionado próprio. Backup ZIP com `manifest.json` + `database.json` (5 tabelas) + todos os arquivos do RustFS — round-trip lossless com 3 modos de conflito (wipe/skip/duplicate).
 7. **Captura via extensão.** Manifest V3 popup que pré-preenche URL + título da aba atual, escolhe tags, salva.
 
 ## Non-goals (v1)
@@ -45,7 +45,7 @@ Engenheiro/PM que vive em browser, abre dezenas de ferramentas internas por sema
 | **Monitor + Push**         | Em qualquer link, escolher frequência (horário/diário/semanal) no `LinkDialog`. Sino do Topbar pede permissão de Web Push; quando o conteúdo do link muda, o sistema operacional recebe a notificação (mesmo com a aba fechada — Service Worker). Badge âmbar no card até o usuário clicar pra dispensar. Lista "Atualizações recentes" na sidebar. ADR-23, ADR-24. |
 | **Captura via extension**  | Pin do popup MV3 no Chrome/Edge. Clique → URL e título preenchidos → escolhe tag → salva.     |
 | **Import**                 | Drag-drop do `bookmarks.html` ou `.json` → backend cria links idempotentemente.               |
-| **Export / Backup**        | Botão "Export" → download em Netscape HTML (reimportável no Chrome) ou JSON v2. Card "Backup completo" gera ZIP DB+MinIO; restore com 3 modos de conflito. |
+| **Export / Backup**        | Botão "Export" → download em Netscape HTML (reimportável no Chrome) ou JSON v2. Card "Backup completo" gera ZIP DB+RustFS; restore com 3 modos de conflito. |
 
 ## Out of scope
 

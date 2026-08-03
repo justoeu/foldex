@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { http } from '../api/client'
+import { createPushSubscription, deletePushSubscription, fetchVapidKey } from '../api/push'
 import { isPushSupported, urlBase64ToUint8Array } from '../lib/push'
 
 export type PushStatus =
@@ -35,7 +35,7 @@ export function useSubscribePush() {
       const perm = await Notification.requestPermission()
       if (perm !== 'granted') throw new Error('permission_denied')
 
-      const { data } = await http.get<{ public_key: string }>('/api/push/vapid-key')
+      const data = await fetchVapidKey()
       const reg = await navigator.serviceWorker.ready
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
@@ -43,7 +43,7 @@ export function useSubscribePush() {
       })
       const json = sub.toJSON()
       const keys = json.keys ?? {}
-      await http.post('/api/push/subscriptions', {
+      await createPushSubscription({
         endpoint: sub.endpoint,
         p256dh: keys.p256dh,
         auth: keys.auth,
@@ -65,7 +65,7 @@ export function useUnsubscribePush() {
       // user has unsubscribed and won't see more push from this device.
       await sub.unsubscribe()
       try {
-        await http.delete('/api/push/subscriptions', { data: { endpoint } })
+        await deletePushSubscription(endpoint)
       } catch {
         // Server-side cleanup is best-effort — the next time the server
         // sees this endpoint return 410, it'll prune the row on its own.

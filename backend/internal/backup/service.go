@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"path"
 	"sort"
 	"strings"
@@ -17,10 +18,18 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"foldex/internal/pkg/httperr"
 )
 
+// RestoreAdvisoryLockKey is the process-wide pg advisory lock for Restore so
+// two concurrent restores cannot interleave wipe/insert (RACE-HER-007). Chosen
+// as a stable int64 unrelated to row ids ('FOLDXRST' as hex-ish constant).
+// Exported so integration tests can hold the lock and assert 409.
+const RestoreAdvisoryLockKey int64 = 0x464F4C4458525354
+
 // StorageBucket is the contract the backup module needs from object storage.
-// Kept narrow so tests can mock it without standing up MinIO.
+// Kept narrow so tests can mock it without standing up RustFS.
 type StorageBucket interface {
 	ListObjects(ctx context.Context, prefix string) ([]ObjectInfo, error)
 	OpenObject(ctx context.Context, key string) (io.ReadCloser, error)
@@ -73,7 +82,7 @@ func (s *Service) Export(ctx context.Context, w io.Writer, onCountsReady func(Co
 	var rep ExportReport
 
 	// Pull a consistent snapshot under REPEATABLE READ so the 5 SELECTs and
-	// the MinIO listing all see the same point in time. The tx is committed
+	// the object-store listing all see the same point in time. The tx is committed
 	// as soon as the snapshot + bucket listings finish — keeping it open
 	// across the actual ZIP stream would let a slow client peg WAL retention
 	// and trip Postgres' idle_in_transaction_session_timeout on multi-GB
@@ -367,6 +376,16 @@ func (s *Service) Restore(ctx context.Context, zr *zip.Reader, mode ConflictMode
 		return rep, fmt.Errorf("backup: begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	// Exclusive restore: second concurrent Restore fails fast with 409 rather
+	// than blocking behind wipe/insert (RACE-HER-007).
+	var gotLock bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, RestoreAdvisoryLockKey).Scan(&gotLock); err != nil {
+		return rep, fmt.Errorf("backup: advisory lock: %w", err)
+	}
+	if !gotLock {
+		return rep, httperr.New(http.StatusConflict, "restore_in_progress", "another restore is already in progress")
+	}
 
 	var mapping idMapping
 	switch mode {

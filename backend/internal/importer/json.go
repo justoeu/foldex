@@ -14,7 +14,7 @@ import (
 // maxImportClickCount bounds the per-link click_count an import may request.
 // insertLinkInTx materializes one click_log row per count via generate_series,
 // so an unbounded value is a single-field OOM/disk-fill amplifier.
-const maxImportClickCount = 1_000_000
+const maxImportClickCount = 10_000
 
 type JSONFile struct {
 	Version    int          `json:"version"`

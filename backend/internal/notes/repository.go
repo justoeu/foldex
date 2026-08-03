@@ -8,13 +8,15 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/pkg/htmlsanitize"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/pgerr"
 	"foldex/internal/pkg/slug"
+	"foldex/internal/tags"
 )
 
 type Repository struct {
@@ -25,8 +27,17 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 
 // click_count/last_clicked_at are derived from click_log via the LATERAL
 // join, mirroring links — there is no denormalized counter on `note` either.
-const noteColumns = `
+// noteDetailColumns is for Get/GetBySlug (full body). noteListColumns omits
+// body_html/body_text so List never ships up to 512 KiB of HTML per row.
+const noteDetailColumns = `
     n.id, n.title, n.slug, n.body_html, n.body_text,
+    COALESCE(cl.cnt, 0) AS click_count,
+    cl.last_at AS last_clicked_at,
+    n.pinned, n.folder_id, n.cover_url, n.created_at, n.updated_at
+`
+
+const noteListColumns = `
+    n.id, n.title, n.slug, ''::text AS body_html, ''::text AS body_text,
     COALESCE(cl.cnt, 0) AS click_count,
     cl.last_at AS last_clicked_at,
     n.pinned, n.folder_id, n.cover_url, n.created_at, n.updated_at
@@ -119,21 +130,13 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Note, error) {
 	return r.Get(ctx, id)
 }
 
-func uniqueConstraint(err error) string {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
-		return ""
-	}
-	return pgErr.ConstraintName
-}
-
 func isSlugUniqueViolation(err error) bool {
-	return uniqueConstraint(err) == "note_slug_unique"
+	return pgerr.UniqueConstraint(err) == "note_slug_unique"
 }
 
 func (r *Repository) Get(ctx context.Context, id int64) (Note, error) {
 	var n Note
-	err := scanNote(r.pool.QueryRow(ctx, `SELECT `+noteColumns+noteFrom+` WHERE n.id = $1`, id), &n)
+	err := scanNote(r.pool.QueryRow(ctx, `SELECT `+noteDetailColumns+noteFrom+` WHERE n.id = $1`, id), &n)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Note{}, httperr.ErrNotFound
 	}
@@ -154,7 +157,7 @@ func (r *Repository) Get(ctx context.Context, id int64) (Note, error) {
 // GetBySlug is the slug-keyed sibling of Get, used by the public /n/{slug} route.
 func (r *Repository) GetBySlug(ctx context.Context, s string) (Note, error) {
 	var n Note
-	err := scanNote(r.pool.QueryRow(ctx, `SELECT `+noteColumns+noteFrom+` WHERE n.slug = $1`, s), &n)
+	err := scanNote(r.pool.QueryRow(ctx, `SELECT `+noteDetailColumns+noteFrom+` WHERE n.slug = $1`, s), &n)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Note{}, httperr.ErrNotFound
 	}
@@ -196,6 +199,8 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Note, error) {
 		where = append(where, fmt.Sprintf("n.folder_id = $%d", len(args)))
 	} else if q.Ungrouped {
 		where = append(where, "n.folder_id IS NULL")
+	} else {
+		where = append(where, folders.SQLNotInLockedFolder("n"))
 	}
 
 	order := "n.pinned DESC, n.created_at DESC"
@@ -220,7 +225,7 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Note, error) {
 	}
 	args = append(args, limit, offset)
 
-	sql := `SELECT ` + noteColumns + noteFrom
+	sql := `SELECT ` + noteListColumns + noteFrom
 	if len(where) > 0 {
 		sql += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -297,25 +302,9 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Note
 		i++
 	}
 	if in.SlugSet {
-		newSlug := ""
-		if in.Slug != nil {
-			newSlug = *in.Slug
-		} else {
-			currentTitle := ""
-			if in.Title != nil {
-				currentTitle = *in.Title
-			} else {
-				if err := tx.QueryRow(ctx, `SELECT title FROM note WHERE id = $1`, id).Scan(&currentTitle); err != nil {
-					if errors.Is(err, pgx.ErrNoRows) {
-						return Note{}, httperr.ErrNotFound
-					}
-					return Note{}, fmt.Errorf("read title for slug regen: %w", err)
-				}
-			}
-			newSlug = slug.Slugify(currentTitle)
-			if newSlug == "" {
-				newSlug = fmt.Sprintf("note-%d", id)
-			}
+		newSlug, err := resolveUpdateSlug(ctx, tx, "note", id, in.Slug, in.Title)
+		if err != nil {
+			return Note{}, err
 		}
 		sets = append(sets, fmt.Sprintf("slug = $%d", i))
 		args = append(args, newSlug)
@@ -324,7 +313,13 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Note
 	if len(sets) > 0 {
 		sets = append(sets, "updated_at = now()")
 		args = append(args, id)
-		q := fmt.Sprintf(`UPDATE note SET %s WHERE id = $%d`, strings.Join(sets, ", "), i)
+		where := fmt.Sprintf(`WHERE id = $%d`, i)
+		if in.IfMatchUpdatedAt != nil {
+			i++
+			args = append(args, *in.IfMatchUpdatedAt)
+			where += fmt.Sprintf(` AND updated_at = $%d`, i)
+		}
+		q := fmt.Sprintf(`UPDATE note SET %s %s`, strings.Join(sets, ", "), where)
 		ct, err := tx.Exec(ctx, q, args...)
 		if err != nil {
 			if isSlugUniqueViolation(err) {
@@ -333,6 +328,15 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Note
 			return Note{}, fmt.Errorf("update note: %w", err)
 		}
 		if ct.RowsAffected() == 0 {
+			if in.IfMatchUpdatedAt != nil {
+				var exists bool
+				if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM note WHERE id = $1)`, id).Scan(&exists); err != nil {
+					return Note{}, fmt.Errorf("check note exists: %w", err)
+				}
+				if exists {
+					return Note{}, httperr.New(409, "conflict", "note was modified; refetch and retry")
+				}
+			}
 			return Note{}, httperr.ErrNotFound
 		}
 	}
@@ -424,11 +428,14 @@ func (r *Repository) ViewAndResolve(ctx context.Context, idOrSlug string) (Note,
 	defer tx.Rollback(ctx)
 
 	var id int64
-	where, arg := "slug = $1", any(idOrSlug)
+	where, arg := "n.slug = $1", any(idOrSlug)
 	if n, ok := parsePositiveID(idOrSlug); ok {
-		where, arg = "id = $1", any(n)
+		where, arg = "n.id = $1", any(n)
 	}
-	err = tx.QueryRow(ctx, `SELECT id FROM note WHERE `+where, arg).Scan(&id)
+	// Public /n must 404 for notes inside password-protected folders.
+	err = tx.QueryRow(ctx, `
+        SELECT n.id FROM note n
+        WHERE `+where+` AND `+folders.SQLNotInLockedFolder("n"), arg).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Note{}, httperr.ErrNotFound
 	}
@@ -460,50 +467,9 @@ func parsePositiveID(s string) (int64, bool) {
 }
 
 func (r *Repository) tagsFor(ctx context.Context, noteIDs []int64) (map[int64][]links.Tag, error) {
-	out := map[int64][]links.Tag{}
-	if len(noteIDs) == 0 {
-		return out, nil
-	}
-	rows, err := r.pool.Query(ctx, `
-        SELECT lt.entity_id, t.id, t.name, t.color, t.icon
-        FROM link_tag lt
-        JOIN tag t ON t.id = lt.tag_id
-        WHERE lt.entity_kind = 'note' AND lt.entity_id = ANY($1)
-        ORDER BY t.name ASC
-    `, noteIDs)
-	if err != nil {
-		return nil, fmt.Errorf("tags for notes: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var noteID int64
-		var t links.Tag
-		if err := rows.Scan(&noteID, &t.ID, &t.Name, &t.Color, &t.Icon); err != nil {
-			return nil, err
-		}
-		out[noteID] = append(out[noteID], t)
-	}
-	return out, rows.Err()
+	return tags.TagsForEntities(ctx, r.pool, "note", noteIDs)
 }
 
 func setNoteTags(ctx context.Context, tx pgx.Tx, noteID int64, tagIDs []int64) error {
-	if _, err := tx.Exec(ctx, `DELETE FROM link_tag WHERE entity_kind = 'note' AND entity_id = $1`, noteID); err != nil {
-		return fmt.Errorf("clear note tags: %w", err)
-	}
-	if len(tagIDs) == 0 {
-		return nil
-	}
-	rows := make([][]any, 0, len(tagIDs))
-	for _, tid := range tagIDs {
-		rows = append(rows, []any{"note", noteID, tid})
-	}
-	_, err := tx.CopyFrom(ctx,
-		pgx.Identifier{"link_tag"},
-		[]string{"entity_kind", "entity_id", "tag_id"},
-		pgx.CopyFromRows(rows),
-	)
-	if err != nil {
-		return fmt.Errorf("insert note tags: %w", err)
-	}
-	return nil
+	return tags.SetEntityTags(ctx, tx, "note", noteID, tagIDs)
 }

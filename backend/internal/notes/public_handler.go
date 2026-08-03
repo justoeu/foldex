@@ -47,7 +47,11 @@ func (h *PublicHandler) view(w http.ResponseWriter, r *http.Request) {
 	// inject as template.HTML here without re-sanitizing on read. n.Title
 	// goes through {{.Title}} (auto-escaped) since titles are plain text,
 	// never HTML.
-	if err := pageTemplate.Execute(w, pageData{Title: n.Title, Body: template.HTML(n.BodyHTML)}); err != nil { //nolint:gosec // BodyHTML sanitized at write time
+	// BodyHTML is re-sanitized at every write (DTO + repo + backup restore).
+	// template.HTML is required so the note page can render the allowlisted
+	// markup; Title stays auto-escaped via {{.Title}}.
+	body := template.HTML(n.BodyHTML) // #nosec G203 -- sanitized at write time (htmlsanitize)
+	if err := pageTemplate.Execute(w, pageData{Title: n.Title, Body: body}); err != nil {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}

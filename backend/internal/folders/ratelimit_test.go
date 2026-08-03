@@ -1,6 +1,8 @@
 package folders
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -74,5 +76,64 @@ func TestUnlockLimiter_IsolatesFolders(t *testing.T) {
 	}
 	if !l.lockedUntil(11).IsZero() {
 		t.Fatal("folder 11 must be unaffected")
+	}
+}
+
+// TestUnlockLimiter_ConcurrentBurstRespectsMax locks RACE-HER-004: N parallel
+// beginAttempt calls must admit at most maxUnlockAttempts slots; the rest see
+// lockout without ever reaching bcrypt (commitFail).
+func TestUnlockLimiter_ConcurrentBurstRespectsMax(t *testing.T) {
+	l := newUnlockLimiter()
+	const n = 100
+	var admitted atomic.Int64
+	var rejected atomic.Int64
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			if _, ok := l.beginAttempt(42); !ok {
+				rejected.Add(1)
+				return
+			}
+			admitted.Add(1)
+			l.commitFail(42)
+		}()
+	}
+	wg.Wait()
+	if got := admitted.Load(); got > int64(maxUnlockAttempts) {
+		t.Fatalf("admitted %d concurrent attempts, want ≤%d", got, maxUnlockAttempts)
+	}
+	if rejected.Load() == 0 {
+		t.Fatal("expected some rejections under burst")
+	}
+	if l.lockedUntil(42).IsZero() {
+		t.Fatal("folder should be locked after concurrent fails")
+	}
+}
+
+func TestUnlockLimiter_BeginReleaseDoesNotCountFail(t *testing.T) {
+	l := newUnlockLimiter()
+	if _, ok := l.beginAttempt(7); !ok {
+		t.Fatal("first begin should succeed")
+	}
+	l.releaseAttempt(7)
+	if fails, until := l.fail(7); fails != 1 || !until.IsZero() {
+		t.Fatalf("after release, next fail should be count 1 unlocked, got fails=%d locked=%v", fails, !until.IsZero())
+	}
+}
+
+func TestUnlockLimiter_CommitSuccessClears(t *testing.T) {
+	l := newUnlockLimiter()
+	if _, ok := l.beginAttempt(8); !ok {
+		t.Fatal("begin")
+	}
+	l.commitFail(8)
+	if _, ok := l.beginAttempt(8); !ok {
+		t.Fatal("second begin")
+	}
+	l.commitSuccess(8)
+	if fails, _ := l.fail(8); fails != 1 {
+		t.Fatalf("after success, counter must restart at 1, got %d", fails)
 	}
 }

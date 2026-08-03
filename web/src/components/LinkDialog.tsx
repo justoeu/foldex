@@ -5,12 +5,15 @@ import { FolderPicker } from './FolderPicker'
 import { TagChip } from './TagChip'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
-import { useCreateLink, useUpdateLink, uploadLinkImage, removeLinkImage, useFetchUrlMetadata } from '../api/links'
+import { useCreateLink, useUpdateLink, uploadLinkImage, removeLinkImage } from '../api/links'
+import { useUrlMetadataPrefill } from '../hooks/useUrlMetadataPrefill'
 import { useCreateTag, useTags } from '../api/tags'
 import { useQueryClient } from '@tanstack/react-query'
-import { safeImageUrl, safeLinkHref, looksLikeUrl, hostOf } from '../lib/url'
+import { safeImageUrl, safeLinkHref, hostOf } from '../lib/url'
 import { apiErrorCode } from '../lib/apiError'
 import { nextCheckPreview, type CheckInterval } from '../lib/time'
+import { slugifyClient } from '../lib/slugify'
+import { INLINE_PALETTE } from '../lib/inlinePalette'
 import type { Link, Tag } from '../api/types'
 
 type Props = {
@@ -31,40 +34,12 @@ type Props = {
 // to the DB if you bail out).
 type SelectedTag = Tag & { _pending?: boolean }
 
-// Click-to-cycle palette for pending tag chips. Spread evenly around the hue
-// wheel at Tailwind's 500-weight so adjacent picks are visually distinct AND
-// the chance of colliding with an existing tag is low — 20 swatches > the
-// typical tag-count of personal-scale users.
-const INLINE_PALETTE = [
-  '#6366F1', // indigo
-  '#3B82F6', // blue
-  '#0EA5E9', // sky
-  '#06B6D4', // cyan
-  '#14B8A6', // teal
-  '#10B981', // emerald
-  '#22C55E', // green
-  '#84CC16', // lime
-  '#EAB308', // yellow
-  '#F59E0B', // amber
-  '#F97316', // orange
-  '#EF4444', // red
-  '#F43F5E', // rose
-  '#EC4899', // pink
-  '#D946EF', // fuchsia
-  '#A855F7', // purple
-  '#8B5CF6', // violet
-  '#64748B', // slate
-  '#78716C', // stone
-  '#6B7280', // gray
-]
-
 export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }: Props) {
   const { t } = useTranslation()
   const { data: tags = [] } = useTags()
   const createTag = useCreateTag()
   const createLink = useCreateLink()
   const updateLink = useUpdateLink()
-  const fetchMetadata = useFetchUrlMetadata()
 
   const [url, setUrl] = useState('')
   const [title, setTitle] = useState('')
@@ -129,61 +104,13 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
     setSlug(slugifyClient(title))
   }, [title, slugDirty])
 
-  // Auto-fetch the page title/description as the user pastes or types a URL,
-  // then pre-fill the corresponding fields IF the user hasn't already filled
-  // them. Trigger: debounce 500ms on `url` change. Skip in edit mode (the
-  // link already has its own title/description). Skip if URL doesn't look
-  // like one (the heuristic also rules out partial typing like "https:").
-  // Per-effect AbortController cancels any in-flight request when the user
-  // keeps typing — only the last debounced value matters.
-  //
-  // The handlers `setTitle` and `setDescription` intentionally check the
-  // current state before assigning: the fetch result must NEVER overwrite
-  // content the user already typed (alignment decision from the plan).
-  useEffect(() => {
-    // Edit mode: link already has its own title/description — skip auto-fetch.
-    if (link) return
-    const trimmed = url.trim()
-    if (!trimmed || !looksLikeUrl(trimmed)) return
-
-    const controller = new AbortController()
-    setAutofillFailed(false)
-    const timer = window.setTimeout(() => {
-      fetchMetadata.mutate(
-        { url: trimmed, signal: controller.signal },
-        {
-          onSuccess: (data) => {
-            // Never overwrite — user-typed content always wins. The state
-            // setters use functional form so we read the freshest value at
-            // the moment of the network response (not the snapshot captured
-            // when the effect ran).
-            if (data.title) {
-              setTitle((cur) => (cur.trim() ? cur : data.title))
-            }
-            if (data.description) {
-              setDescription((cur) => (cur.trim() ? cur : data.description))
-            }
-          },
-          // A real failure (403/5xx from the target site) surfaces a hint
-          // under the title field. Aborted requests (ERR_CANCELED from the
-          // debounce cleanup) are NOT real failures — they fire on every
-          // keystroke during fast typing.
-          onError: (_err) => {
-            const code = (_err as { code?: string })?.code
-            setAutofillFailed(code !== 'ERR_CANCELED')
-          },
-        },
-      )
-    }, 500)
-
-    return () => {
-      window.clearTimeout(timer)
-      controller.abort()
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchMetadata is a
-  // stable mutation object from useMutation; including it would re-run the
-  // effect on every render and defeat the debounce.
-  }, [url, link])
+  useUrlMetadataPrefill({
+    url,
+    skip: !!link,
+    setTitle,
+    setDescription,
+    setAutofillFailed,
+  })
 
   // Focus the URL field on open. Using a deferred `.focus({ preventScroll })`
   // instead of the native `autoFocus` attribute because the latter triggers
@@ -341,7 +268,11 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
           qc.invalidateQueries({ queryKey: ['links'] })
           qc.invalidateQueries({ queryKey: ['entries'] })
           qc.invalidateQueries({ queryKey: ['folders'] })
-        } catch { /* non-fatal */ }
+        } catch (e: unknown) {
+          setImgUploadError(extractUploadErr(e, t('link_dialog.image_error_generic')))
+          setImageBusy(false)
+          return
+        }
         setImageBusy(false)
       }
     } else {
@@ -799,22 +730,6 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
       </div>
     </div>
   )
-}
-
-// Mirror of the backend Slugify (internal/links/slug.go) — used to render
-// the live "Auto: jira-board" placeholder under the slug field as the user
-// types a title. Keep both in sync; the source of truth lives on the
-// backend (the value posted is what gets persisted, not whatever this
-// returns).
-function slugifyClient(title: string): string {
-  return title
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '') // strip combining marks
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80)
-    .replace(/-+$/g, '')
 }
 
 function extractUploadErr(e: unknown, fallback: string): string {

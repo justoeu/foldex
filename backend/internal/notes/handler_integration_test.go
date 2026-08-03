@@ -102,6 +102,46 @@ func TestHandler_List(t *testing.T) {
 	assert.Len(t, out, 2)
 }
 
+// TestHandler_List_OmitsBodyHTML locks N1-NEX-005: List must not ship full
+// body_html (up to 512 KiB/row). Get still returns the full sanitized body.
+func TestHandler_List_OmitsBodyHTML(t *testing.T) {
+	h, _ := newRouter(t)
+	body := "<p>" + string(make([]byte, 0, 200))
+	// Build a non-trivial body so omitempty isn't hiding an always-empty field.
+	for i := 0; i < 50; i++ {
+		body += "paragraph with content "
+	}
+	body += "</p>"
+	created := doJSON(t, h, http.MethodPost, "/notes/", map[string]any{
+		"title":     "Big body",
+		"body_html": body,
+	})
+	require.Equal(t, http.StatusCreated, created.Code)
+	var n notes.Note
+	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &n))
+	require.NotEmpty(t, n.BodyHTML, "Create response must include body_html")
+
+	rr := doJSON(t, h, http.MethodGet, "/notes/", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	// Raw JSON: body_html must be absent or empty on every list row.
+	var raw []map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &raw))
+	require.NotEmpty(t, raw)
+	for _, row := range raw {
+		v, ok := row["body_html"]
+		if ok {
+			s, _ := v.(string)
+			assert.Empty(t, s, "List must not ship full body_html")
+		}
+	}
+
+	get := doJSON(t, h, http.MethodGet, "/notes/"+strconv.FormatInt(n.ID, 10), nil)
+	require.Equal(t, http.StatusOK, get.Code)
+	var got notes.Note
+	require.NoError(t, json.Unmarshal(get.Body.Bytes(), &got))
+	assert.Contains(t, got.BodyHTML, "paragraph with content")
+}
+
 func TestHandler_List_QueryParams(t *testing.T) {
 	h, _ := newRouter(t)
 	doJSON(t, h, http.MethodPost, "/notes/", map[string]any{"title": "Alpha", "pinned": true})

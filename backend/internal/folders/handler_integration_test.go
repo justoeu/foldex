@@ -251,15 +251,20 @@ func TestHandler_Update_HintEqualsExistingPassword(t *testing.T) {
 	f, err := repo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
 	require.NoError(t, err)
 
-	// Setting a hint equal to the (unchanged) password must be rejected by the
-	// repository's bcrypt equality check inside the tx.
+	// Hint mutation on a protected folder requires current_password (oracle fix).
 	rr := doJSON(t, h, http.MethodPatch, "/folders/"+strconv.FormatInt(f.ID, 10),
 		map[string]any{"password_hint": "folder-pass"})
+	assert.Equal(t, http.StatusUnauthorized, rr.Code, "hint change without current_password must 401")
+
+	// Setting a hint equal to the (unchanged) password must be rejected by the
+	// repository's bcrypt equality check inside the tx.
+	rr = doJSON(t, h, http.MethodPatch, "/folders/"+strconv.FormatInt(f.ID, 10),
+		map[string]any{"password_hint": "folder-pass", "current_password": pw})
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 
 	// A distinct hint succeeds and round-trips.
 	rr = doJSON(t, h, http.MethodPatch, "/folders/"+strconv.FormatInt(f.ID, 10),
-		map[string]any{"password_hint": "rhymes with holder"})
+		map[string]any{"password_hint": "rhymes with holder", "current_password": pw})
 	assert.Equal(t, http.StatusOK, rr.Code)
 	got := getFolder(t, h, f.ID)
 	require.NotNil(t, got.PasswordHint)

@@ -3,14 +3,12 @@ package entries
 import (
 	"context"
 	"net/http"
-	"strconv"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/folders"
-	"foldex/internal/pkg/clampint"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/listquery"
 )
 
 // FolderPasswordLookup resolves a folder's current password hash for the
@@ -21,15 +19,20 @@ type FolderPasswordLookup interface {
 	PasswordHashFor(ctx context.Context, id int64) (*string, error)
 }
 
+// Lister is satisfied by *Repository.
+type Lister interface {
+	List(ctx context.Context, q ListQuery) ([]Entry, error)
+}
+
 // Handler exposes the single read-only GET /api/entries route. No
 // Create/Update/Delete — mutations stay on /api/links and /api/notes.
 type Handler struct {
-	repo         *Repository
+	repo         Lister
 	folderLookup FolderPasswordLookup
 	unlockKey    []byte
 }
 
-func NewHandler(repo *Repository, folderLookup FolderPasswordLookup, unlockKey []byte) *Handler {
+func NewHandler(repo Lister, folderLookup FolderPasswordLookup, unlockKey []byte) *Handler {
 	return &Handler{repo: repo, folderLookup: folderLookup, unlockKey: unlockKey}
 }
 
@@ -38,39 +41,33 @@ func (h *Handler) Mount(r chi.Router) {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+	p := listquery.Parse(r)
 	q := ListQuery{
-		Q:    strings.TrimSpace(r.URL.Query().Get("q")),
-		Sort: r.URL.Query().Get("sort"),
-	}
-	for _, raw := range r.URL.Query()["tag"] {
-		if id, err := strconv.ParseInt(raw, 10, 64); err == nil && id > 0 {
-			q.TagIDs = append(q.TagIDs, id)
-		}
-	}
-	q.Limit = clampint.Int(r.URL.Query().Get("limit"), 100, 1, 500)
-	q.Offset = clampint.Int(r.URL.Query().Get("offset"), 0, 0, 100000)
-	if v := r.URL.Query().Get("folder_id"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
-			q.FolderID = &n
-		}
-	}
-	if v := r.URL.Query().Get("ungrouped"); v == "1" || v == "true" {
-		q.Ungrouped = true
+		Q: p.Q, TagIDs: p.TagIDs, Sort: p.Sort, Limit: p.Limit, Offset: p.Offset,
+		FolderID: p.FolderID, Ungrouped: p.Ungrouped,
 	}
 	// Content-gate: this is the ONE read path that returns a folder's real
 	// links+notes (see internal/entries package doc). Same proof-of-password
 	// requirement as folders.List(parent_id=X) — see CLAUDE.md's folder-
-	// password invariant.
+	// password invariant. Re-check after List so a password change mid-request
+	// cannot leak one more response (RACE-HER-005).
 	if q.FolderID != nil {
-		hash, err := h.folderLookup.PasswordHashFor(r.Context(), *q.FolderID)
+		token := r.Header.Get(folders.UnlockHeader)
+		if err := h.enforceFolderUnlock(r.Context(), *q.FolderID, token); err != nil {
+			httperr.Write(w, err)
+			return
+		}
+		out, err := h.repo.List(r.Context(), q)
 		if err != nil {
 			httperr.Write(w, err)
 			return
 		}
-		if err := folders.CheckUnlock(h.unlockKey, *q.FolderID, hash, r.Header.Get(folders.UnlockHeader)); err != nil {
+		if err := h.enforceFolderUnlock(r.Context(), *q.FolderID, token); err != nil {
 			httperr.Write(w, err)
 			return
 		}
+		httperr.JSON(w, http.StatusOK, out)
+		return
 	}
 	out, err := h.repo.List(r.Context(), q)
 	if err != nil {
@@ -78,4 +75,12 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httperr.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) enforceFolderUnlock(ctx context.Context, folderID int64, token string) error {
+	hash, err := h.folderLookup.PasswordHashFor(ctx, folderID)
+	if err != nil {
+		return err
+	}
+	return folders.CheckUnlock(h.unlockKey, folderID, hash, token)
 }

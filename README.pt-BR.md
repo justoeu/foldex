@@ -8,9 +8,9 @@
 
 > Gerenciador de bookmarks self-hosted com tagging avançado, pastas aninháveis, contagem de cliques, previews visuais de URL, **notas em rich-text estilo pastebin**, **detecção de mudança por link + Web Push**, backup completo, UI em en/pt/es e extensão de navegador.
 
-Foldex é uma "smart bookmarks bar" pessoal — guarda links organizados por **pastas aninháveis + tags M:N**, mostra **o que você de fato clica** (telemetria via `/go/:id`), captura visualmente cada URL (OG image / favicon / fallback de screenshot), deixa você anotar **notas em rich-text** (editor Tiptap com imagens inline) que vivem no mesmo grid/busca/tags/pastas dos links, e roda **inteiramente na sua máquina** (Postgres + MinIO + Go + React em containers).
+Foldex é uma "smart bookmarks bar" pessoal — guarda links organizados por **pastas aninháveis + tags M:N**, mostra **o que você de fato clica** (telemetria via `/go/:id`), captura visualmente cada URL (OG image / favicon / fallback de screenshot), deixa você anotar **notas em rich-text** (editor Tiptap com imagens inline) que vivem no mesmo grid/busca/tags/pastas dos links, e roda **inteiramente na sua máquina** (Postgres + RustFS + Go + React em containers).
 
-> Stack: **Go 1.26 (Chi · pgx) · PostgreSQL 18 · MinIO · Vite 8 + React 19 + TypeScript + bun · TanStack Query · Tiptap 3 · react-i18next (en/pt/es) · Vitest 4**. Política de versionamento + invariantes em [`CLAUDE.md`](CLAUDE.md).
+> Stack: **Go 1.26 (Chi · pgx) · PostgreSQL 18 · RustFS · Vite 8 + React 19 + TypeScript + bun · TanStack Query · Tiptap 3 · react-i18next (en/pt/es) · Vitest 4**. Política de versionamento + invariantes em [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
@@ -23,14 +23,14 @@ Bookmark nativo é ótimo para "salvar uma página rápida e esquecer". Quando v
 | **Preso a um navegador.** Chrome ↔ Safari ↔ Firefox = 3 silos. Sync exige conta no fornecedor. | Seu próprio servidor. Acessa de qualquer browser, em qualquer máquina da sua rede. Os dados ficam num Postgres que **você** controla. |
 | **Só árvore.** Um bookmark mora em UMA pasta. Quer "trabalho + ia + notebookLLM"? Triplica. | **Tags M:N** (um link pode ter N labels) **+ pastas 1:N aninháveis** (containment iPhone-style). Os dois sistemas coexistem. |
 | **Zero telemetria.** Você "favorita" 200 links e usa 8. Não sabe quais.                 | Toda navegação passa por `/go/:id` que insere em `click_log`. Página de stats mostra cliques por dia, top hosts, top links (últimos 30d), distribuição por tag. |
-| **Preview = favicon 16×16.** Lista cinza com mini-ícones.                               | Card visual com OG image. Se a página não tem, foldex **captura screenshot** automaticamente (Chromium headless → MinIO). Você pode também subir uma imagem manual. |
+| **Preview = favicon 16×16.** Lista cinza com mini-ícones.                               | Card visual com OG image. Se a página não tem, foldex **captura screenshot** automaticamente (Chromium headless → RustFS). Você pode também subir uma imagem manual. |
 | **Busca fraca.** Match só no título/URL.                                                | Busca full-text via Postgres `pg_trgm` em título + URL + descrição. Compõe com filtro por tag (AND-multi-tag) e escopo de pasta. |
-| **Backup = arquivo Netscape opaco.** Imagens? Cliques? Hierarquia? Tudo perdido.        | ZIP de backup único com `manifest.json` + `database.json` (5 tabelas) + **todas as imagens do MinIO**. Round-trip lossless, verificação por checksum SHA-256, 3 modos de conflito (wipe/skip/duplicate). |
+| **Backup = arquivo Netscape opaco.** Imagens? Cliques? Hierarquia? Tudo perdido.        | ZIP de backup único com `manifest.json` + `database.json` (5 tabelas) + **todas as imagens do RustFS**. Round-trip lossless, verificação por checksum SHA-256, 3 modos de conflito (wipe/skip/duplicate). |
 | **Atalhos engessados.** Cmd+D abre o diálogo nativo do navegador.                       | Extensão MV3 + Alt-K (palette), Alt-N (novo link), Alt-F (nova pasta). Drag-and-drop iPhone-style entre cards/pastas. |
 | **Lock-in do fornecedor.** Sair do Chrome = exportar HTML + perder metadados.           | Export para **Netscape HTML** (compat universal) **OU** JSON v2 (com pastas + click_count) **OU** ZIP de backup completo. Importer aceita os três (idempotente por URL; `click_count` é limitado na importação pra um arquivo hostil não inflar o log de cliques). |
 | **Só em inglês / sem localização.**                                                      | UI totalmente localizada em **English / Português / Español** via `react-i18next`. Seletor de idioma no topbar; autodetecção pelo idioma do navegador no primeiro acesso; escolha persiste no `localStorage`. |
 | **Pinned/favoritos = uma pastinha à parte.** Só visual.                                 | `pinned` é coluna real na tabela. `ORDER BY pinned DESC, …` aplica em todo modo de ordenação. Badge gradient sempre visível. |
-| **Dados embutidos no navegador.** Trocou de máquina? Reinstalou Chrome? Reza.           | Postgres + MinIO em containers. `make up` numa máquina nova e seu ZIP de backup restaura tudo (DB + imagens) em ~minutos. |
+| **Dados embutidos no navegador.** Trocou de máquina? Reinstalou Chrome? Reza.           | Postgres + RustFS em containers. `make up` numa máquina nova e seu ZIP de backup restaura tudo (DB + imagens) em ~minutos. |
 | **Pastebin/app de notas é outra ferramenta.** Snippets e links vivem em lugares diferentes. | **Notas** (`⌥M`) são uma entidade de primeira classe junto com os links: editor rich-text (Tiptap) com **barra de formatação** — negrito/itálico/sublinhado/tachado, títulos, listas com marcadores e numeradas, alinhamento, cor do texto, fonte, citações/código, links e imagens inline —, mesmas tags/pastas/pin/busca dos links, intercaladas no mesmo grid com badge esmeralda, compartilháveis via página pública `/n/{slug}`. |
 | **Sem como manter uma pasta privada** numa tela/máquina compartilhada sem criar uma segunda conta inteira. | **Senha por pasta.** Defina uma senha (hash bcrypt) em qualquer pasta — os links/notas dela ficam ocultos (e os thumbnails de preview são redigidos, mesmo no hover) até você desbloquear pra aquela sessão. Aplicado no backend, não só na UI: a API em si recusa entregar o conteúdo de uma pasta trancada sem prova da senha. Adicione uma **palavra-dica** opcional (exibida no popup de unlock; não pode ser a própria senha) e configure uma **senha master** em **Configurações** (com medidor de complexidade, confirmação e um lembrete próprio) pra redefinir a senha de uma pasta caso você esqueça. |
 
@@ -270,7 +270,7 @@ Mais capturas vêm conforme o projeto ganha conteúdo:
 
 ## Backup & Restore
 
-Snapshot completo do DB **e** do bucket MinIO num único ZIP. Três
+Snapshot completo do DB **e** do bucket RustFS num único ZIP. Três
 endpoints:
 
 ```bash
@@ -310,7 +310,7 @@ Design completo: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 - [Vision](docs/VISION.md) — problema, goals, critérios de sucesso
 - [Architecture](docs/ARCHITECTURE.md) — stack, modelo de dados, API, ADRs
 - [Tasks](docs/TASKS.md) — log de implementação por fase
-- [SDD: Backup & Restore](docs/SDD-BACKUP-RESTORE.md) — ZIP de snapshot DB + MinIO, modos de conflito, fluxo de validação
+- [SDD: Backup & Restore](docs/SDD-BACKUP-RESTORE.md) — ZIP de snapshot DB + RustFS, modos de conflito, fluxo de validação
 
 ## Licença
 

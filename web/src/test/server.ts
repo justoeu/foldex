@@ -41,6 +41,33 @@ export type MockState = {
   masterHint?: string
   // Per-folder unlock attempt tracking (mirrors the backend rate limiter).
   unlockAttempts?: Record<number, { fails: number; lockedUntil: number }>
+  // Stats endpoints. Tests populate these to drive StatsPage charts/KPIs.
+  statsSummary?: {
+    total_links: number
+    total_tags: number
+    total_clicks: number
+    clicks_last_30d: number
+    clicks_prev_30d: number
+    new_links_last_30d: number
+    top_host: string
+    top_host_clicks: number
+  }
+  statsDaily?: { date: string; clicks: number }[]
+  statsTop?: {
+    id: number
+    url: string
+    title: string
+    slug: string
+    host: string
+    clicks: number
+    clicks_30d: number
+    clicks_prev_30d: number
+  }[]
+  statsTags?: { id: number; name: string; color: string; clicks: number; links: number }[]
+  statsStorage?: { objects: number; total_bytes: number } | null
+  statsStorageError?: boolean
+  // When set, DELETE /api/links/:id/image rejects with this error object.
+  linkImageRemoveError?: { status?: number; code?: string; message: string }
 }
 
 export function freshState(): MockState {
@@ -66,8 +93,25 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/entries$/, handle: listEntries },
     { url: /^\/api\/notes\/(\d+)$/, handle: getNote },
     { url: /^\/api\/notes$/, handle: listNotes },
-    { url: /^\/api\/push\/vapid-key$/, handle: () => ({ public_key: 'MOCK_VAPID_PUBLIC' }) },
+    // 32-byte zero key, unpadded base64url — valid input for urlBase64ToUint8Array.
+    { url: /^\/api\/push\/vapid-key$/, handle: () => ({ public_key: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }) },
     { url: /^\/api\/settings\/master-password$/, handle: (_m, _d, _p, s) => ({ configured: s.masterPassword !== undefined, hint: s.masterHint ?? null }) },
+    { url: /^\/api\/stats\/summary$/, handle: (_m, _d, _p, s) => s.statsSummary ?? {
+      total_links: 0, total_tags: 0, total_clicks: 0,
+      clicks_last_30d: 0, clicks_prev_30d: 0, new_links_last_30d: 0,
+      top_host: '', top_host_clicks: 0,
+    } },
+    { url: /^\/api\/stats\/daily$/, handle: (_m, _d, _p, s) => s.statsDaily ?? [] },
+    { url: /^\/api\/stats\/top$/, handle: (_m, _d, _p, s) => s.statsTop ?? [] },
+    { url: /^\/api\/stats\/tags$/, handle: (_m, _d, _p, s) => s.statsTags ?? [] },
+    { url: /^\/api\/stats\/storage$/, handle: (_m, _d, _p, s) => {
+      if (s.statsStorageError) {
+        const e: any = new Error('storage unavailable')
+        e.response = { status: 503, data: { error: { code: 'unavailable', message: 'object store down' } } }
+        throw e
+      }
+      return s.statsStorage ?? { objects: 0, total_bytes: 0 }
+    } },
   ],
   post: [
     { url: /^\/api\/tags$/, handle: createTag },
@@ -75,6 +119,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/links\/(\d+)\/refresh-preview$/, handle: () => null },
     { url: /^\/api\/links\/(\d+)\/screenshot$/, handle: captureScreenshot },
     { url: /^\/api\/links\/(\d+)\/seen-change$/, handle: seenChange },
+    { url: /^\/api\/links\/(\d+)\/image$/, handle: uploadLinkImage },
     { url: /^\/api\/links$/, handle: createLink },
     { url: /^\/api\/notes\/images$/, handle: uploadNoteImage },
     { url: /^\/api\/notes$/, handle: createNote },
@@ -100,6 +145,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
   delete: [
     { url: /^\/api\/tags\/(\d+)$/, handle: deleteTag },
     { url: /^\/api\/folders\/(\d+)$/, handle: deleteFolder },
+    { url: /^\/api\/links\/(\d+)\/image$/, handle: removeLinkImage },
     { url: /^\/api\/links\/(\d+)$/, handle: deleteLink },
     { url: /^\/api\/notes\/(\d+)$/, handle: deleteNote },
     { url: /^\/api\/push\/subscriptions$/, handle: () => null },
@@ -461,6 +507,16 @@ function slugifyForMock(s: string): string {
 }
 
 function createLink(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState): Link {
+  if (s.links.some((l) => l.url === data.url)) {
+    const e: any = new Error('url taken')
+    e.response = { status: 409, data: { error: { code: 'url_taken', message: 'url already bookmarked' } } }
+    throw e
+  }
+  if (data.slug && s.links.some((l) => l.slug === data.slug)) {
+    const e: any = new Error('slug taken')
+    e.response = { status: 409, data: { error: { code: 'slug_taken', message: 'slug already in use' } } }
+    throw e
+  }
   const tags = (data.tag_ids ?? [])
     .map((id: number) => s.tags.find((x) => x.id === id))
     .filter((t: Tag | undefined): t is Tag => Boolean(t))
@@ -487,6 +543,37 @@ function createLink(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Moc
   }
   s.links.push(link)
   return link
+}
+
+function uploadLinkImage(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): { url: string } {
+  const id = Number(m[1])
+  const link = s.links.find((x) => x.id === id)
+  if (!link) throw notFound()
+  const url = `/api/files/links/${id}.jpg`
+  link.og_image_url = url
+  link.preview_status = 'ok'
+  return { url }
+}
+
+function removeLinkImage(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
+  if (s.linkImageRemoveError) {
+    const e: any = new Error(s.linkImageRemoveError.message)
+    e.response = {
+      status: s.linkImageRemoveError.status ?? 500,
+      data: {
+        error: {
+          code: s.linkImageRemoveError.code ?? 'storage',
+          message: s.linkImageRemoveError.message,
+        },
+      },
+    }
+    throw e
+  }
+  const id = Number(m[1])
+  const link = s.links.find((x) => x.id === id)
+  if (!link) throw notFound()
+  link.og_image_url = null
+  return null
 }
 
 function patchLink(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState): Link {

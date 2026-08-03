@@ -16,7 +16,7 @@ describe('BackupCard', () => {
   it('renders the generate button and a hint about scope', () => {
     render(<BackupCard onRestored={vi.fn()} />)
     expect(screen.getByRole('button', { name: /Generate full backup/i })).toBeInTheDocument()
-    expect(screen.getByText(/DB \+ MinIO/i)).toBeInTheDocument()
+    expect(screen.getByText(/DB \+ RustFS/i)).toBeInTheDocument()
   })
 
   it('shows empty history by default', () => {

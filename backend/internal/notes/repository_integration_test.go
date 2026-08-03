@@ -237,6 +237,39 @@ func TestRepository_Update_TagIDs(t *testing.T) {
 	assert.Equal(t, tagA.ID, updated.Tags[0].ID)
 }
 
+// TestNoteUpdate_ConflictOnStaleUpdatedAt locks RACE-HER-012 optional CAS.
+func TestNoteUpdate_ConflictOnStaleUpdatedAt(t *testing.T) {
+	ctx, nrepo, _, _ := setup(t)
+	created, err := nrepo.Create(ctx, notes.CreateInput{Title: "v1"})
+	require.NoError(t, err)
+	seen := created.UpdatedAt
+
+	title := "v2"
+	updated, err := nrepo.Update(ctx, created.ID, notes.UpdateInput{Title: &title})
+	require.NoError(t, err)
+	assert.Equal(t, "v2", updated.Title)
+
+	stale := "stale-loser"
+	_, err = nrepo.Update(ctx, created.ID, notes.UpdateInput{
+		Title:            &stale,
+		IfMatchUpdatedAt: &seen,
+	})
+	require.Error(t, err)
+	var he *httperr.Error
+	require.ErrorAs(t, err, &he)
+	assert.Equal(t, 409, he.Status)
+	assert.Equal(t, "conflict", he.Code)
+
+	// Fresh match still works.
+	fresh := "v3"
+	ok, err := nrepo.Update(ctx, created.ID, notes.UpdateInput{
+		Title:            &fresh,
+		IfMatchUpdatedAt: &updated.UpdatedAt,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "v3", ok.Title)
+}
+
 func TestRepository_Update_NotFound(t *testing.T) {
 	ctx, nrepo, _, _ := setup(t)
 	title := "x"

@@ -83,6 +83,7 @@ export function useApplyImport() {
     }) => applyImport(args.file, args.format, args.mode, args.excludeFolders),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['links'] })
+      qc.invalidateQueries({ queryKey: ['entries'] })
       qc.invalidateQueries({ queryKey: ['folders'] })
       qc.invalidateQueries({ queryKey: ['tags'] })
       qc.invalidateQueries({ queryKey: ['stats'] })

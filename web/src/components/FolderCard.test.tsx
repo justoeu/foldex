@@ -474,4 +474,148 @@ describe('FolderCard', () => {
       expect(popover.querySelector('img')).toBeNull()
     })
   })
+
+  it('accepts a note drop and calls onDropNote', () => {
+    const onDropNote = vi.fn()
+    const { container } = render(
+      <FolderCard
+        folder={makeFolder({ link_count: 0, preview_links: [] })}
+        onOpen={vi.fn()}
+        onDropNote={onDropNote}
+      />,
+    )
+    fireEvent.drop(container.querySelector('.fx-folder-card')!, {
+      dataTransfer: {
+        types: ['application/x-foldex-note'],
+        getData: (k: string) => (k === 'application/x-foldex-note' ? '55' : ''),
+      },
+    })
+    expect(onDropNote).toHaveBeenCalledWith(55, 1)
+  })
+
+  it('ignores note/link drops with zero id', () => {
+    const onDropNote = vi.fn()
+    const onDropLink = vi.fn()
+    const { container } = render(
+      <FolderCard
+        folder={makeFolder({ link_count: 0, preview_links: [] })}
+        onOpen={vi.fn()}
+        onDropNote={onDropNote}
+        onDropLink={onDropLink}
+      />,
+    )
+    const root = container.querySelector('.fx-folder-card') as HTMLElement
+    fireEvent.drop(root, {
+      dataTransfer: {
+        types: ['application/x-foldex-note'],
+        getData: () => '0',
+      },
+    })
+    fireEvent.drop(root, {
+      dataTransfer: {
+        types: ['application/x-foldex-link'],
+        getData: () => '0',
+      },
+    })
+    expect(onDropNote).not.toHaveBeenCalled()
+    expect(onDropLink).not.toHaveBeenCalled()
+  })
+
+  it('shows lock icon when folder has_password', () => {
+    const { container } = render(
+      <FolderCard
+        folder={makeFolder({ link_count: 0, preview_links: [], has_password: true })}
+        onOpen={vi.fn()}
+      />,
+    )
+    expect(container.querySelector('.fx-folder-lock-icon')).not.toBeNull()
+  })
+
+  it('calls onEdit when edit button is clicked', async () => {
+    const onEdit = vi.fn()
+    const folder = makeFolder({ link_count: 0, preview_links: [] })
+    render(<FolderCard folder={folder} onOpen={vi.fn()} onEdit={onEdit} />)
+    await userEvent.click(screen.getByLabelText(/edit folder/i))
+    expect(onEdit).toHaveBeenCalledWith(folder)
+  })
+
+  it('calls onOpen from the footer open button', async () => {
+    const onOpen = vi.fn()
+    render(<FolderCard folder={makeFolder({ link_count: 0, preview_links: [] })} onOpen={onOpen} />)
+    const buttons = screen.getAllByLabelText(/open folder/i)
+    await userEvent.click(buttons[buttons.length - 1])
+    expect(onOpen).toHaveBeenCalledWith(1)
+  })
+
+  it('sets dragging class on drag start/end', () => {
+    const { container } = render(
+      <FolderCard folder={makeFolder({ link_count: 0, preview_links: [] })} onOpen={vi.fn()} />,
+    )
+    const root = container.querySelector('.fx-folder-card') as HTMLElement
+    fireEvent.dragStart(root, { dataTransfer: { setData: vi.fn(), effectAllowed: '' } })
+    expect(root.className).toMatch(/dragging/)
+    fireEvent.dragEnd(root)
+    expect(root.className).not.toMatch(/dragging/)
+  })
+
+  it('highlights on drag enter and clears on leave', () => {
+    const { container } = render(
+      <FolderCard folder={makeFolder({ link_count: 0, preview_links: [] })} onOpen={vi.fn()} />,
+    )
+    const root = container.querySelector('.fx-folder-card') as HTMLElement
+    fireEvent.dragEnter(root, { dataTransfer: { types: ['application/x-foldex-link'] } })
+    expect(root.className).toMatch(/drop-over/)
+    fireEvent.dragLeave(root, { relatedTarget: document.body })
+    expect(root.className).not.toMatch(/drop-over/)
+  })
+
+  it('accepts dragOver for link/note/folder MIME types', () => {
+    const { container } = render(
+      <FolderCard folder={makeFolder({ link_count: 0, preview_links: [] })} onOpen={vi.fn()} />,
+    )
+    const root = container.querySelector('.fx-folder-card') as HTMLElement
+    fireEvent.dragOver(root, {
+      dataTransfer: { types: ['application/x-foldex-link'], dropEffect: '' },
+    })
+    fireEvent.dragOver(root, {
+      dataTransfer: { types: ['application/x-foldex-note'], dropEffect: '' },
+    })
+    fireEvent.dragOver(root, {
+      dataTransfer: { types: ['application/x-foldex-folder'], getData: () => '99', dropEffect: '' },
+    })
+    fireEvent.dragOver(root, {
+      dataTransfer: { types: ['text/plain'], dropEffect: '' },
+    })
+  })
+
+  it('renders og image, favicon, and letter fallback tiles', () => {
+    const { container } = render(
+      <FolderCard
+        folder={makeFolder({
+          link_count: 3,
+          preview_links: [
+            { id: 1, title: 'With OG', og_image_url: 'https://cdn.example/a.png', favicon_url: null },
+            { id: 2, title: 'With Fav', og_image_url: null, favicon_url: 'https://cdn.example/f.ico' },
+            { id: 3, title: 'Letter', og_image_url: null, favicon_url: null },
+          ],
+        })}
+        onOpen={vi.fn()}
+      />,
+    )
+    expect(container.querySelectorAll('.fx-folder-tile img').length).toBeGreaterThanOrEqual(2)
+    expect(container.querySelector('.fx-folder-tile-letter')?.textContent).toBe('L')
+  })
+
+  it('renders title button click in compact mode', async () => {
+    const onOpen = vi.fn()
+    render(
+      <FolderCard
+        folder={makeFolder({ link_count: 1, preview_links: [makeTile(1)] })}
+        onOpen={onOpen}
+        compact
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Trabalho' }))
+    expect(onOpen).toHaveBeenCalledWith(1)
+  })
 })

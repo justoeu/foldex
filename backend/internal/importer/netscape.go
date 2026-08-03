@@ -2,18 +2,26 @@ package importer
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"strings"
+	"time"
 
 	"golang.org/x/net/html"
 )
 
+// ErrTooManyItems is returned when a Netscape/JSON import exceeds maxImportItems.
+var ErrTooManyItems = errors.New("import exceeds maximum item count")
+
 type Item struct {
-	URL    string
-	Title  string
-	Tags   []string
-	Folder *string // innermost H3 in scope; nil when the link is at root
+	URL         string
+	Title       string
+	Tags        []string
+	Folder      *string // innermost H3 in scope; nil when the link is at root
+	Description *string
+	ClickCount  int64
+	CreatedAt   *time.Time // optional; set by JSON import
 }
 
 // ParseNetscape walks a Netscape Bookmark HTML file and returns one Item per
@@ -26,7 +34,9 @@ func ParseNetscape(r io.Reader) ([]Item, error) {
 	z := html.NewTokenizer(r)
 	var (
 		items []Item
-		// stack of tag names from H3 headers; pushed at H3, popped at </DL>
+		// stack of tag names from H3 headers; pushed at H3, popped at </DL>.
+		// Empty H3s push "" so stack depth stays in sync with nesting (a bare
+		// </DL> must not pop a parent folder that was never closed).
 		tagStack []string
 		// pendingTag captures the latest H3 text until we hit a closing tag
 		captureTag bool
@@ -70,14 +80,29 @@ func ParseNetscape(r io.Reader) ([]Item, error) {
 					it.Title = href
 				}
 				if len(tagStack) > 0 {
-					// Deepest H3 = folder. Outer H3s above it = tags.
-					f := tagStack[len(tagStack)-1]
-					it.Folder = &f
-					if len(tagStack) > 1 {
-						it.Tags = append(it.Tags, tagStack[:len(tagStack)-1]...)
+					// Deepest non-empty H3 = folder. Outer non-empty H3s = tags.
+					// Empty placeholders (blank H3) keep stack depth but are ignored.
+					folderIdx := -1
+					for i := len(tagStack) - 1; i >= 0; i-- {
+						if tagStack[i] != "" {
+							folderIdx = i
+							break
+						}
+					}
+					if folderIdx >= 0 {
+						f := tagStack[folderIdx]
+						it.Folder = &f
+						for _, name := range tagStack[:folderIdx] {
+							if name != "" {
+								it.Tags = append(it.Tags, name)
+							}
+						}
 					}
 				}
 				items = append(items, it)
+				if len(items) > maxImportItems {
+					return nil, fmt.Errorf("%w: max %d", ErrTooManyItems, maxImportItems)
+				}
 			}
 		case html.TextToken:
 			if captureTag {
@@ -88,10 +113,9 @@ func ParseNetscape(r io.Reader) ([]Item, error) {
 			switch strings.ToLower(t.Data) {
 			case "h3":
 				if captureTag {
-					name := strings.TrimSpace(pendingTag)
-					if name != "" {
-						tagStack = append(tagStack, name)
-					}
+					// Always push (empty string for blank H3) so </DL> pops
+					// match 1:1 with H3 opens — empty names never become folders.
+					tagStack = append(tagStack, strings.TrimSpace(pendingTag))
 					captureTag = false
 					pendingTag = ""
 				}

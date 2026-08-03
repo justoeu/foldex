@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"foldex/internal/pkg/cssvalid"
+	"foldex/internal/pkg/jsonopt"
 )
 
 // minPasswordLen is deliberately low — this protects against casual
@@ -97,50 +98,15 @@ func (u *UpdateInput) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
-	if len(aux.ParentID) == 0 {
-		u.ParentIDSet = false
-		u.ParentID = nil
-	} else {
-		u.ParentIDSet = true
-		if string(aux.ParentID) == "null" {
-			u.ParentID = nil
-		} else {
-			var n int64
-			if err := json.Unmarshal(aux.ParentID, &n); err != nil {
-				return err
-			}
-			u.ParentID = &n
-		}
+	var err error
+	if u.ParentIDSet, u.ParentID, err = jsonopt.DecodeOptionalInt64(aux.ParentID); err != nil {
+		return err
 	}
-	if len(aux.Password) == 0 {
-		u.PasswordSet = false
-		u.Password = nil
-	} else {
-		u.PasswordSet = true
-		if string(aux.Password) == "null" {
-			u.Password = nil
-		} else {
-			var s string
-			if err := json.Unmarshal(aux.Password, &s); err != nil {
-				return err
-			}
-			u.Password = &s
-		}
+	if u.PasswordSet, u.Password, err = jsonopt.DecodeOptionalStringRaw(aux.Password); err != nil {
+		return err
 	}
-	if len(aux.PasswordHint) == 0 {
-		u.PasswordHintSet = false
-		u.PasswordHint = nil
-	} else {
-		u.PasswordHintSet = true
-		if string(aux.PasswordHint) == "null" {
-			u.PasswordHint = nil
-		} else {
-			var s string
-			if err := json.Unmarshal(aux.PasswordHint, &s); err != nil {
-				return err
-			}
-			u.PasswordHint = &s
-		}
+	if u.PasswordHintSet, u.PasswordHint, err = jsonopt.DecodeOptionalStringRaw(aux.PasswordHint); err != nil {
+		return err
 	}
 	return nil
 }

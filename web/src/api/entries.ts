@@ -13,6 +13,10 @@ export type EntryListParams = {
   // gates GET /api/entries?folder_id=X the same way it gates the folders
   // list. Ignored when folderId is unset.
   unlockToken?: string
+  // Optional page size override (default ENTRY_PAGE_SIZE). Command palette
+  // uses a higher limit when searching so matches beyond the first page
+  // are visible (N1-NEX-015). Backend clamps to [1, 500].
+  limit?: number
 }
 
 // Same page size as links (ENTRY_PAGE_SIZE mirrors LINK_PAGE_SIZE) — the
@@ -29,6 +33,7 @@ const entriesKey = (p: EntryListParams) =>
     // Same rationale as useFolders: presence-only, not the raw token, so a
     // fresh unlock of the same folder doesn't needlessly bust the cache.
     p.folderId != null && p.unlockToken ? 'unlocked' : 'locked',
+    p.limit ?? ENTRY_PAGE_SIZE,
   ] as const
 
 type EntriesCache = InfiniteData<Entry[]>
@@ -66,6 +71,7 @@ export function mapCachedLinkEntries(qc: QueryClient, fn: (l: Link) => Link) {
 // paginated, sorted, searched query spanning both links and notes instead of
 // merging two independently-paginated streams client-side. See ADR-27.
 export function useEntries(params: EntryListParams, options?: { enabled?: boolean }) {
+  const pageSize = params.limit && params.limit > 0 ? Math.min(params.limit, 500) : ENTRY_PAGE_SIZE
   return useInfiniteQuery({
     queryKey: entriesKey(params),
     queryFn: async ({ pageParam }) => {
@@ -78,7 +84,7 @@ export function useEntries(params: EntryListParams, options?: { enabled?: boolea
       } else if (params.ungrouped) {
         search.set('ungrouped', '1')
       }
-      search.set('limit', String(ENTRY_PAGE_SIZE))
+      search.set('limit', String(pageSize))
       search.set('offset', String(pageParam))
       const { data } = await http.get<Entry[]>(`/api/entries?${search.toString()}`, {
         headers: params.unlockToken ? { [FOLDER_UNLOCK_HEADER]: params.unlockToken } : undefined,
@@ -87,7 +93,7 @@ export function useEntries(params: EntryListParams, options?: { enabled?: boolea
     },
     initialPageParam: 0,
     getNextPageParam: (lastPage, _allPages, lastPageParam) =>
-      lastPage.length < ENTRY_PAGE_SIZE ? undefined : (lastPageParam as number) + lastPage.length,
+      lastPage.length < pageSize ? undefined : (lastPageParam as number) + lastPage.length,
     enabled: options?.enabled ?? true,
     // Same auto-poll rationale as useLinks — a link entry can still be
     // 'pending' while the preview worker runs; notes never carry that state,

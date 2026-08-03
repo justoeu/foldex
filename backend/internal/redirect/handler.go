@@ -1,6 +1,7 @@
 package redirect
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -8,15 +9,20 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"foldex/internal/links"
 	"foldex/internal/pkg/httperr"
 )
 
-type Handler struct {
-	repo *links.Repository
+// LinkResolver resolves /go targets (satisfied by *links.Repository).
+type LinkResolver interface {
+	ClickAndResolve(ctx context.Context, id int64) (string, error)
+	ClickAndResolveBySlug(ctx context.Context, slug string) (string, error)
 }
 
-func NewHandler(repo *links.Repository) *Handler { return &Handler{repo: repo} }
+type Handler struct {
+	repo LinkResolver
+}
+
+func NewHandler(repo LinkResolver) *Handler { return &Handler{repo: repo} }
 
 func (h *Handler) Mount(r chi.Router) {
 	// Param name stays "id" so the chi route doesn't change shape — what

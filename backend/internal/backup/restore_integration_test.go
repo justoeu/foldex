@@ -21,6 +21,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
+	"foldex/internal/pkg/httperr"
 	"foldex/internal/settings"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
@@ -104,7 +105,7 @@ func scalar(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) int64 {
 
 // TestRestore_WipePreservesIdentityAndBumpsSequence locks the §4 wipe contract:
 // TRUNCATE + restore with ORIGINAL ids, sequences bumped past max(id) so a
-// later insert can't collide, and the MinIO prefix replaced from the zip.
+// later insert can't collide, and the object-store prefix replaced from the zip.
 func TestRestore_WipePreservesIdentityAndBumpsSequence(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -664,4 +665,30 @@ func TestRestore_AppSettingSkipMode_DoesNotClobberExistingMaster(t *testing.T) {
 	ok, _, err = srepo.VerifyMaster(ctx, "snapshot-master")
 	require.NoError(t, err)
 	assert.False(t, ok, "the snapshot's master must NOT win under skip mode")
+}
+
+// TestRestore_AdvisoryLockRejectsConcurrentRestore locks RACE-HER-007: a second
+// Restore while another session holds the advisory lock fails with 409
+// restore_in_progress (pg_try_advisory_xact_lock) rather than interleaving.
+func TestRestore_AdvisoryLockRejectsConcurrentRestore(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+
+	conn, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	defer conn.Release()
+	tx, err := conn.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+	var got bool
+	require.NoError(t, tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, backup.RestoreAdvisoryLockKey).Scan(&got))
+	require.True(t, got, "test setup must hold the restore lock")
+
+	svc := backup.NewService(pool, newStubBucket(), discardLogger())
+	_, err = svc.Restore(ctx, minimalZipWithFile(t, "files/images/1.jpg"), backup.ModeSkip)
+	require.Error(t, err)
+	var he *httperr.Error
+	require.ErrorAs(t, err, &he)
+	assert.Equal(t, 409, he.Status)
+	assert.Equal(t, "restore_in_progress", he.Code)
 }

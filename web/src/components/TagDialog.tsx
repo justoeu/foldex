@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
-import { GradientPicker } from './GradientPicker'
+import { ColorModeFields, type ColorMode } from './ColorModeFields'
 import { useCreateTag, useUpdateTag } from '../api/tags'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -16,24 +16,11 @@ type Props = {
   tag?: Tag | null
 }
 
-const DEFAULT_COLORS = [
-  '#6366F1',
-  '#0EA5E9',
-  '#8B5CF6',
-  '#EC4899',
-  '#F59E0B',
-  '#10B981',
-  '#64748B',
-  '#FFD400',
-]
-
-type Mode = 'solid' | 'gradient'
-
 export function TagDialog({ open, onClose, tag }: Props) {
   const { t } = useTranslation()
   const isEdit = !!tag
   const [name, setName] = useState('')
-  const [mode, setMode] = useState<Mode>('solid')
+  const [mode, setMode] = useState<ColorMode>('solid')
   const [solid, setSolid] = useState('#6366F1')
   const [gradFrom, setGradFrom] = useState('#6366F1')
   const [gradTo, setGradTo] = useState('#EC4899')
@@ -125,75 +112,19 @@ export function TagDialog({ open, onClose, tag }: Props) {
               </div>
             </label>
 
-            <div className="fx-field">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <span className="fx-field-label" style={{ margin: 0 }}>{t('tag_dialog.color_label')}</span>
-                <div className="fx-mode-toggle" role="tablist" aria-label={t('tag_dialog.color_mode_aria')}>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={mode === 'solid'}
-                    className={'fx-mode-tab' + (mode === 'solid' ? ' fx-mode-tab-active' : '')}
-                    onClick={() => setMode('solid')}
-                  >
-                    <Icon d={I.solid} size={11} /> {t('tag_dialog.color_solid')}
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={mode === 'gradient'}
-                    className={'fx-mode-tab' + (mode === 'gradient' ? ' fx-mode-tab-active' : '')}
-                    onClick={() => setMode('gradient')}
-                  >
-                    <Icon d={I.gradient} size={11} /> {t('tag_dialog.color_gradient')}
-                  </button>
-                </div>
-              </div>
-
-              {mode === 'solid' ? (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                  {DEFAULT_COLORS.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setSolid(c)}
-                      aria-label={t('common.color_swatch_aria', { c })}
-                      style={{
-                        width: 26,
-                        height: 26,
-                        borderRadius: 8,
-                        background: c,
-                        border:
-                          c === solid ? '2px solid var(--fx-ink)' : '1px solid var(--fx-border)',
-                        cursor: 'pointer',
-                      }}
-                    />
-                  ))}
-                  <input
-                    type="color"
-                    value={solid}
-                    onChange={(e) => setSolid(e.target.value)}
-                    style={{
-                      width: 36,
-                      height: 28,
-                      border: 0,
-                      background: 'transparent',
-                      cursor: 'pointer',
-                    }}
-                    aria-label={t('tag_dialog.custom_color_aria')}
-                  />
-                </div>
-              ) : (
-                <GradientPicker
-                  from={gradFrom}
-                  to={gradTo}
-                  onChange={(f, to) => {
-                    setGradFrom(f)
-                    setGradTo(to)
-                  }}
-                />
-              )}
-            </div>
+            <ColorModeFields
+              mode={mode}
+              onModeChange={setMode}
+              solid={solid}
+              onSolidChange={setSolid}
+              gradFrom={gradFrom}
+              gradTo={gradTo}
+              onGradientChange={(f, to) => {
+                setGradFrom(f)
+                setGradTo(to)
+              }}
+              i18nPrefix="tag_dialog"
+            />
 
             <label className="fx-field">
               <span className="fx-field-label">{t('tag_dialog.icon_label')}</span>

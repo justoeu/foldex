@@ -47,6 +47,54 @@ func TestCreateInput_NormalizeFillsTitleFromURL(t *testing.T) {
 	assert.Equal(t, "https://x", in.Title, "empty title must fall back to URL")
 }
 
+func TestCreateInput_Normalize_EmptySlugAndIntervalBecomeNil(t *testing.T) {
+	empty := "  "
+	in := CreateInput{URL: "https://x", Title: "t", Slug: &empty, CheckInterval: &empty}
+	in.Normalize()
+	assert.Nil(t, in.Slug)
+	assert.Nil(t, in.CheckInterval)
+
+	slug := "  my-slug  "
+	interval := " daily "
+	in2 := CreateInput{URL: "https://x", Title: "t", Slug: &slug, CheckInterval: &interval}
+	in2.Normalize()
+	require.NotNil(t, in2.Slug)
+	assert.Equal(t, "my-slug", *in2.Slug)
+	require.NotNil(t, in2.CheckInterval)
+	assert.Equal(t, "daily", *in2.CheckInterval)
+}
+
+func TestCreateInput_Validate_Slug(t *testing.T) {
+	bad := "BAD SLUG!"
+	err := CreateInput{URL: "https://x.com", Title: "t", Slug: &bad}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "slug must match")
+}
+
+func TestUpdateInput_Unmarshal_SlugTriState(t *testing.T) {
+	var absent UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"title":"x"}`), &absent))
+	assert.False(t, absent.SlugSet)
+
+	var clear UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"slug":null}`), &clear))
+	assert.True(t, clear.SlugSet)
+	assert.Nil(t, clear.Slug)
+
+	var set UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"slug":"foo-bar"}`), &set))
+	assert.True(t, set.SlugSet)
+	require.NotNil(t, set.Slug)
+	assert.Equal(t, "foo-bar", *set.Slug)
+}
+
+func TestUpdateInput_Validate_InvalidSlug(t *testing.T) {
+	bad := "NOPE"
+	err := UpdateInput{Slug: &bad, SlugSet: true}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "slug must match")
+}
+
 func TestCreateInput_Validate(t *testing.T) {
 	require.NoError(t, CreateInput{URL: "https://example.com", Title: "x"}.Validate())
 

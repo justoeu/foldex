@@ -1,6 +1,9 @@
 package slug
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestSlugify(t *testing.T) {
 	cases := []struct {
@@ -78,5 +81,18 @@ func TestIsValid(t *testing.T) {
 				t.Fatalf("IsValid(%q) = true; want false", tc.s)
 			}
 		})
+	}
+}
+
+func TestUniqueAvailable(t *testing.T) {
+	taken := map[string]bool{"foo": true, "foo-2": true}
+	got, err := UniqueAvailable(context.Background(), "foo", func(_ context.Context, c string) (bool, error) {
+		return taken[c], nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "foo-3" {
+		t.Fatalf("got %q want foo-3", got)
 	}
 }

@@ -15,26 +15,55 @@ import (
 // Client holds a concrete *minio.Client, so we can't swap in a fake. The unit
 // tests here drive the helpers (readAll) and the construction/error paths
 // directly; the full PutObject/GetObject surface is covered by
-// storage_integration_test.go against a real MinIO.
+// client_integration_test.go against a real RustFS.
 
 func TestReadAll(t *testing.T) {
 	t.Run("reads full content", func(t *testing.T) {
 		payload := []byte("hello world")
-		// Create a real minio.Object-like reader from a strings.Reader.
-		// We wrap it inside a struct that satisfies io.ReadCloser.
-		rc := io.NopCloser(bytes.NewReader(payload))
-		buf := bytes.NewBuffer(make([]byte, 0, int64(len(payload))))
-		_, err := buf.ReadFrom(rc)
+		got, err := readAll(bytes.NewReader(payload), int64(len(payload)))
 		require.NoError(t, err)
-		assert.Equal(t, payload, buf.Bytes())
+		assert.Equal(t, payload, got)
+	})
+	t.Run("empty reader", func(t *testing.T) {
+		got, err := readAll(bytes.NewReader(nil), 0)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+	t.Run("error reader", func(t *testing.T) {
+		_, err := readAll(errReader{}, 8)
+		require.Error(t, err)
 	})
 }
+
+func TestCheckServeSize(t *testing.T) {
+	require.NoError(t, checkServeSize(0))
+	require.NoError(t, checkServeSize(1024))
+	require.NoError(t, checkServeSize(MaxServeObjectBytes))
+	err := checkServeSize(MaxServeObjectBytes + 1)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrObjectTooLarge)
+	err = checkServeSize(-1)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrObjectTooLarge)
+}
+
+func TestReadAll_RejectsOverCeiling(t *testing.T) {
+	// Stream larger than MaxServeObjectBytes must fail closed.
+	payload := bytes.Repeat([]byte("x"), int(MaxServeObjectBytes)+8)
+	_, err := readAll(bytes.NewReader(payload), int64(len(payload)))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrObjectTooLarge)
+}
+
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 
 func TestConfigDefaults(t *testing.T) {
 	cfg := Config{
 		Endpoint:  "localhost:9000",
-		AccessKey: "minioadmin",
-		SecretKey: "minioadmin",
+		AccessKey: "rustfsadmin",
+		SecretKey: "rustfsadmin",
 		Bucket:    "test-bucket",
 		UseSSL:    false,
 	}
@@ -44,9 +73,9 @@ func TestConfigDefaults(t *testing.T) {
 }
 
 func TestNew_InvalidEndpoint(t *testing.T) {
-	// minio.New accepts any endpoint string — connection failure happens at
+	// s3 client accepts any endpoint string — connection failure happens at
 	// BucketExists, not at construction. We verify that a blank endpoint
-	// returns an error from the minio library itself.
+	// returns an error from the S3 SDK itself.
 	ctx := context.Background()
 	_, err := minio.New("", &minio.Options{})
 	assert.Error(t, err, "blank endpoint should fail")
@@ -82,7 +111,7 @@ func TestUpload_ContentType(t *testing.T) {
 	var got *call
 
 	// Build a minimal stub by monkey-patching through the testable wrapper.
-	// Because we can't swap *minio.Client internals, we test the high-level
+	// Because we can't swap *minio.Client (S3 SDK) internals, we test the high-level
 	// behaviour through integration (see storage_integration_test.go).
 	// Here we only verify that our readAll helper correctly drains a reader.
 	payload := []byte("PNG data here")

@@ -45,6 +45,8 @@ func TestIsPrivateIP_NilIsPrivate(t *testing.T) {
 
 func TestIsIMDS(t *testing.T) {
 	assert.True(t, isIMDS(net.ParseIP("169.254.169.254")))
+	assert.True(t, isIMDS(net.ParseIP("100.100.100.200")), "Alibaba metadata must always be blocked")
+	assert.True(t, isIMDS(net.ParseIP("fd00:ec2::254")), "AWS IPv6 IMDS must always be blocked")
 	assert.False(t, isIMDS(net.ParseIP("169.254.1.1")), "other link-local IPs are not IMDS")
 	assert.False(t, isIMDS(net.ParseIP("10.0.0.1")))
 	assert.False(t, isIMDS(nil))

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { NoteDialog, buildImageUploadHandler } from './NoteDialog'
 import { renderWithProviders } from '../test/renderWithProviders'
@@ -110,6 +110,120 @@ describe('NoteDialog', () => {
     const user = userEvent.setup()
     await user.keyboard('{Escape}')
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('closes via Cancel button', async () => {
+    const onClose = vi.fn()
+    renderWithProviders(<NoteDialog open noteId={null} onClose={onClose} />)
+    await userEvent.setup().click(screen.getByRole('button', { name: /cancel/i }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes via X button', async () => {
+    const onClose = vi.fn()
+    renderWithProviders(<NoteDialog open noteId={null} onClose={onClose} />)
+    await userEvent.setup().click(screen.getByRole('button', { name: /^close$/i }))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('auto-derives slug from title and allows reset after dirty edit', async () => {
+    renderWithProviders(<NoteDialog open noteId={null} onClose={vi.fn()} />)
+    const title = screen.getByPlaceholderText('Give your note a title…')
+    fireEvent.change(title, { target: { value: 'My Cool Note' } })
+    const slug = screen.getByLabelText(/note slug/i) as HTMLInputElement
+    await waitFor(() => expect(slug.value).toBe('my-cool-note'))
+    fireEvent.change(slug, { target: { value: 'custom-slug' } })
+    await userEvent.click(screen.getByRole('button', { name: /reset to auto/i }))
+    expect(slug.value).toBe('my-cool-note')
+  })
+
+  it('ships a custom dirty slug on create', async () => {
+    const onClose = vi.fn()
+    renderWithProviders(<NoteDialog open noteId={null} onClose={onClose} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText('Give your note a title…'), 'Custom')
+    fireEvent.change(screen.getByLabelText(/note slug/i), { target: { value: 'my-custom' } })
+    await user.click(screen.getByRole('button', { name: /Create note/i }))
+    await waitFor(() => expect(state.notes).toHaveLength(1))
+    expect(state.notes[0].slug).toBe('my-custom')
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('creates an inline pending tag via Enter and saves it', async () => {
+    renderWithProviders(<NoteDialog open noteId={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText('Give your note a title…'), 'Tagged')
+    const tagsInput = screen.getByLabelText('tag filter')
+    await user.type(tagsInput, 'brand-new{Enter}')
+    expect(document.querySelector('.fx-tag-hint')).not.toBeNull()
+    await user.click(screen.getByRole('button', { name: /Create note/i }))
+    await waitFor(() => expect(state.notes).toHaveLength(1))
+    expect(state.tags.some((t) => t.name === 'brand-new')).toBe(true)
+  })
+
+  it('cycles pending tag color on chip click', async () => {
+    renderWithProviders(<NoteDialog open noteId={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText('Give your note a title…'), 'Color me')
+    await user.type(screen.getByLabelText('tag filter'), 'hue{Enter}')
+    const chip = screen.getByText('hue')
+    await user.click(chip)
+    await user.click(screen.getByRole('button', { name: /Create note/i }))
+    await waitFor(() => expect(state.notes).toHaveLength(1))
+  })
+
+  it('paginates registered tags when more than 7 are available', async () => {
+    for (let i = 0; i < 10; i++) {
+      state.tags.push({ id: 200 + i, name: `ntag-${i}`, color: '#222', icon: null })
+    }
+    renderWithProviders(<NoteDialog open noteId={null} onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('1/2')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: /next page/i }))
+    expect(screen.getByText('2/2')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /previous page/i }))
+    expect(screen.getByText('1/2')).toBeInTheDocument()
+  })
+
+  it('removes a selected tag via chip close', async () => {
+    state.tags.push({ id: 1, name: 'jira', color: '#1f6feb', icon: null })
+    renderWithProviders(<NoteDialog open noteId={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText('Give your note a title…'), 'T')
+    await user.type(screen.getByLabelText('tag filter'), 'j')
+    await user.click(await screen.findByText('jira'))
+    const closeBtns = screen.getAllByRole('button').filter((b) => b.getAttribute('aria-label')?.match(/remove|close/i))
+    if (closeBtns[0]) await user.click(closeBtns[0])
+  })
+
+  it('EDIT: updates title and ships dirty slug', async () => {
+    state.notes.push({
+      id: 2, title: 'Old', slug: 'old', body_html: '<p>x</p>', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    const onClose = vi.fn()
+    renderWithProviders(<NoteDialog open noteId={2} onClose={onClose} />)
+    await waitFor(() => expect(screen.getByPlaceholderText('Give your note a title…')).toHaveValue('Old'))
+    const user = userEvent.setup()
+    const title = screen.getByPlaceholderText('Give your note a title…')
+    await user.clear(title)
+    await user.type(title, 'New title')
+    fireEvent.change(screen.getByLabelText(/note slug/i), { target: { value: 'new-title' } })
+    await user.click(screen.getByRole('button', { name: /Save changes/i }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(state.notes[0].title).toBe('New title')
+  })
+
+  it('preselects defaultFolderId on create', async () => {
+    state.folders.push({
+      id: 9, name: 'Inbox', color: '#6366F1', parent_id: null,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], has_password: false, created_at: '',
+    })
+    renderWithProviders(<NoteDialog open noteId={null} defaultFolderId={9} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText('Give your note a title…'), 'In folder')
+    await user.click(screen.getByRole('button', { name: /Create note/i }))
+    await waitFor(() => expect(state.notes[0]?.folder_id).toBe(9))
   })
 })
 

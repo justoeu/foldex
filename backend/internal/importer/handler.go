@@ -13,9 +13,10 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"foldex/internal/links"
 	"foldex/internal/pkg/cssvalid"
 	"foldex/internal/pkg/httperr"
+	slugpkg "foldex/internal/pkg/slug"
+	"foldex/internal/ports"
 )
 
 // defaultImportColor mirrors the indigo the DTO layer defaults to when a
@@ -43,10 +44,10 @@ type dbtx interface {
 
 type Handler struct {
 	pool   *pgxpool.Pool
-	worker links.Enqueuer
+	worker ports.Enqueuer
 }
 
-func NewHandler(pool *pgxpool.Pool, worker links.Enqueuer) *Handler {
+func NewHandler(pool *pgxpool.Pool, worker ports.Enqueuer) *Handler {
 	return &Handler{pool: pool, worker: worker}
 }
 
@@ -65,7 +66,16 @@ type result struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-const maxUploadBytes = 100 << 20 // 100 MB — bumped from 20MB; a power user Chrome export of 50k+ links easily exceeds 20MB uncompressed. Backups already cap at 2GiB, so 100MB here is the consistent middle ground.
+const (
+	// maxUploadBytes is the total request body ceiling (MaxBytesReader).
+	maxUploadBytes = 100 << 20 // 100 MB
+	// maxMultipartMemory is how much of a multipart body stays on the heap
+	// before parts spill to temp files. Kept well below maxUploadBytes so a
+	// large Chrome export doesn't pin ~100 MB RSS while parsing.
+	maxMultipartMemory = 32 << 20 // 32 MB
+	// maxImportItems caps bookmark rows materialized from Netscape/JSON.
+	maxImportItems = 50_000
+)
 
 // Conflict mode for /api/import/apply. Mirrors the backup module's modes so
 // the UX is consistent between "restore backup" and "import HTML".
@@ -89,76 +99,43 @@ func parseMode(s string) (importMode, bool) {
 	return "", false
 }
 
+// handle is the legacy single-shot import endpoint. It now shares the
+// transactional importItemsWithMode(modeSkip) path with /apply (no more
+// non-transactional importItems / importJSON forks).
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
-	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
-		httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "upload_too_large", "upload exceeds 100 MB limit"))
-		return
-	}
-	format := strings.ToLower(r.FormValue("format"))
-	if format == "" {
-		format = "netscape"
-	}
-	file, _, err := r.FormFile("file")
+	up, err := h.parseUpload(w, r)
 	if err != nil {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "missing_file", "file field is required"))
 		return
 	}
-	defer file.Close()
-
-	res := result{Format: format}
-	switch format {
-	case "netscape":
-		items, err := ParseNetscape(file)
-		if err != nil {
-			httperr.Write(w, httperr.New(http.StatusBadRequest, "parse_failed", err.Error()))
-			return
-		}
-		imp, skipped, err := h.importItems(r.Context(), items)
-		if err != nil {
-			httperr.Write(w, err)
-			return
-		}
-		res.Imported = imp
-		res.Skipped = skipped
-	case "json":
-		f, err := ParseJSON(file)
-		if err != nil {
-			httperr.Write(w, httperr.New(http.StatusBadRequest, "parse_failed", err.Error()))
-			return
-		}
-		if err := f.Validate(); err != nil {
-			httperr.Write(w, httperr.New(http.StatusBadRequest, "validation_failed", err.Error()))
-			return
-		}
-		imp, skipped, err := h.importJSON(r.Context(), f)
-		if err != nil {
-			httperr.Write(w, err)
-			return
-		}
-		res.Imported = imp
-		res.Skipped = skipped
-	default:
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "unknown_format", "format must be netscape or json"))
+	imp, skipped, wiped, warnings, err := h.importItemsWithMode(r.Context(), up.items, modeSkip, up.seed)
+	if err != nil {
+		httperr.Write(w, err)
 		return
 	}
-	httperr.JSON(w, http.StatusOK, res)
+	httperr.JSON(w, http.StatusOK, result{
+		Format:   up.format,
+		Mode:     string(modeSkip),
+		Imported: imp,
+		Skipped:  skipped,
+		Wiped:    wiped,
+		Warnings: warnings,
+	})
 }
 
 // validate parses the upload and computes conflict counts WITHOUT writing.
 // Used by the frontend preview dialog to drive the mode picker + selection.
 func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
-	items, format, err := h.parseUpload(w, r)
+	up, err := h.parseUpload(w, r)
 	if err != nil {
 		// parseUpload already wrote the error response.
 		return
 	}
-	rep, err := Validate(r.Context(), h.pool, items)
+	rep, err := Validate(r.Context(), h.pool, up.items)
 	if err != nil {
 		httperr.Write(w, err)
 		return
 	}
-	rep.Format = format
+	rep.Format = up.format
 	httperr.JSON(w, http.StatusOK, rep)
 }
 
@@ -166,7 +143,7 @@ func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 // exclusion list. Body shape: multipart with `file`, `format`, `mode`, and
 // `exclude_folders` (CSV of folder paths to skip).
 func (h *Handler) apply(w http.ResponseWriter, r *http.Request) {
-	items, format, err := h.parseUpload(w, r)
+	up, err := h.parseUpload(w, r)
 	if err != nil {
 		return
 	}
@@ -176,16 +153,17 @@ func (h *Handler) apply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	excluded := parseExcludedFolders(r.FormValue("exclude_folders"))
+	items := up.items
 	if len(excluded) > 0 {
 		items = filterByFolder(items, excluded)
 	}
-	imp, skipped, wiped, warnings, err := h.importItemsWithMode(r.Context(), items, mode)
+	imp, skipped, wiped, warnings, err := h.importItemsWithMode(r.Context(), items, mode, up.seed)
 	if err != nil {
 		httperr.Write(w, err)
 		return
 	}
 	httperr.JSON(w, http.StatusOK, result{
-		Format:   format,
+		Format:   up.format,
 		Mode:     string(mode),
 		Imported: imp,
 		Skipped:  skipped,
@@ -196,12 +174,28 @@ func (h *Handler) apply(w http.ResponseWriter, r *http.Request) {
 
 // parseUpload is the parse-and-validate prefix shared by handle, validate,
 // and apply. Writes the HTTP error response itself on failure so callers can
+// uploadParse is the shared result of multipart parse for validate/apply/handle.
+type uploadParse struct {
+	items  []Item
+	format string
+	seed   *jsonSeed // non-nil for Foldex JSON (tag/folder colors)
+}
+
+// jsonSeed carries catalog rows from a JSON export so import can restore colors.
+type jsonSeed struct {
+	tags    []JSONTag
+	folders []JSONFolder
+}
+
 // just `if err != nil { return }`.
-func (h *Handler) parseUpload(w http.ResponseWriter, r *http.Request) ([]Item, string, error) {
+func (h *Handler) parseUpload(w http.ResponseWriter, r *http.Request) (uploadParse, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
-	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+	if err := r.ParseMultipartForm(maxMultipartMemory); err != nil {
 		httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "upload_too_large", "upload exceeds 100 MB limit"))
-		return nil, "", err
+		return uploadParse{}, err
+	}
+	if r.MultipartForm != nil {
+		defer func() { _ = r.MultipartForm.RemoveAll() }()
 	}
 	format := strings.ToLower(r.FormValue("format"))
 	if format == "" {
@@ -210,7 +204,7 @@ func (h *Handler) parseUpload(w http.ResponseWriter, r *http.Request) ([]Item, s
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "missing_file", "file field is required"))
-		return nil, "", err
+		return uploadParse{}, err
 	}
 	defer file.Close()
 
@@ -218,26 +212,38 @@ func (h *Handler) parseUpload(w http.ResponseWriter, r *http.Request) ([]Item, s
 	case "netscape":
 		items, err := ParseNetscape(file)
 		if err != nil {
+			if errors.Is(err, ErrTooManyItems) {
+				httperr.Write(w, httperr.New(http.StatusBadRequest, "too_many_items", err.Error()))
+				return uploadParse{}, err
+			}
 			httperr.Write(w, httperr.New(http.StatusBadRequest, "parse_failed", err.Error()))
-			return nil, "", err
+			return uploadParse{}, err
 		}
-		return items, format, nil
+		return uploadParse{items: items, format: format}, nil
 	case "json":
 		f, err := ParseJSON(file)
 		if err != nil {
 			httperr.Write(w, httperr.New(http.StatusBadRequest, "parse_failed", err.Error()))
-			return nil, "", err
+			return uploadParse{}, err
+		}
+		if len(f.Links) > maxImportItems {
+			err := fmt.Errorf("%w: got %d links (max %d)", ErrTooManyItems, len(f.Links), maxImportItems)
+			httperr.Write(w, httperr.New(http.StatusBadRequest, "too_many_items", err.Error()))
+			return uploadParse{}, err
 		}
 		if err := f.Validate(); err != nil {
 			httperr.Write(w, httperr.New(http.StatusBadRequest, "validation_failed", err.Error()))
-			return nil, "", err
+			return uploadParse{}, err
 		}
-		// Adapt JSON file → []Item so validate/apply can share logic.
-		return jsonToItems(f), format, nil
+		return uploadParse{
+			items:  jsonToItems(f),
+			format: format,
+			seed:   &jsonSeed{tags: f.Tags, folders: f.Folders},
+		}, nil
 	default:
 		err := httperr.New(http.StatusBadRequest, "unknown_format", "format must be netscape or json")
 		httperr.Write(w, err)
-		return nil, "", err
+		return uploadParse{}, err
 	}
 }
 
@@ -246,10 +252,26 @@ func (h *Handler) parseUpload(w http.ResponseWriter, r *http.Request) ([]Item, s
 func jsonToItems(f JSONFile) []Item {
 	out := make([]Item, 0, len(f.Links))
 	for _, l := range f.Links {
-		it := Item{URL: l.URL, Title: l.Title, Tags: l.Tags}
+		rawURL := strings.TrimSpace(l.URL)
+		title := strings.TrimSpace(l.Title)
+		if title == "" {
+			title = rawURL
+		}
+		it := Item{
+			URL:         rawURL,
+			Title:       title,
+			Tags:        l.Tags,
+			Description: l.Description,
+			ClickCount:  l.ClickCount,
+		}
 		if l.Folder != nil && strings.TrimSpace(*l.Folder) != "" {
 			fp := strings.TrimSpace(*l.Folder)
 			it.Folder = &fp
+		}
+		if l.CreatedAt != "" {
+			if t, err := time.Parse(time.RFC3339, l.CreatedAt); err == nil {
+				it.CreatedAt = &t
+			}
 		}
 		out = append(out, it)
 	}
@@ -298,7 +320,7 @@ func filterByFolder(items []Item, excluded map[string]struct{}) []Item {
 // Enqueueing preview-worker jobs happens AFTER commit — emitting them before
 // would race with the tx visibility (worker reads a link that doesn't exist
 // yet from another connection).
-func (h *Handler) importItemsWithMode(ctx context.Context, items []Item, mode importMode) (int, int, int, []string, error) {
+func (h *Handler) importItemsWithMode(ctx context.Context, items []Item, mode importMode, seed *jsonSeed) (int, int, int, []string, error) {
 	imported, skipped, wiped := 0, 0, 0
 	warnings := []string{}
 
@@ -308,21 +330,37 @@ func (h *Handler) importItemsWithMode(ctx context.Context, items []Item, mode im
 	}
 	defer tx.Rollback(ctx)
 
+	// Preload tag/folder name→id once (avoids per-item SELECT/INSERT N+1).
+	tagCache, err := loadTagNameCache(ctx, tx)
+	if err != nil {
+		return 0, 0, 0, nil, err
+	}
+	folderCache, err := loadFolderNameCache(ctx, tx)
+	if err != nil {
+		return 0, 0, 0, nil, err
+	}
+	// JSON exports carry tag colors + folder colors — seed before link inserts.
+	if seed != nil {
+		if err := seedJSONCatalog(ctx, tx, seed, tagCache, folderCache); err != nil {
+			return 0, 0, 0, nil, err
+		}
+	}
+
 	freshIDs := make([]int64, 0, len(items))
 	for _, it := range items {
-		tagIDs, err := ensureTags(ctx, tx, it.Tags)
+		tagIDs, err := ensureTagsCached(ctx, tx, tagCache, it.Tags)
 		if err != nil {
 			return imported, skipped, wiped, warnings, err
 		}
 		var folderID *int64
 		if it.Folder != nil {
-			fid, err := ensureFolder(ctx, tx, *it.Folder, "")
+			fid, err := ensureFolderCached(ctx, tx, folderCache, *it.Folder, "")
 			if err != nil {
 				return imported, skipped, wiped, warnings, err
 			}
 			folderID = &fid
 		}
-		id, dup, wipedHere, err := insertLinkInTx(ctx, tx, it.URL, it.Title, nil, tagIDs, folderID, 0, nil, mode == modeWipe)
+		id, dup, wipedHere, err := insertLinkInTx(ctx, tx, it.URL, it.Title, it.Description, tagIDs, folderID, it.ClickCount, it.CreatedAt, mode == modeWipe)
 		if err != nil {
 			return imported, skipped, wiped, warnings, err
 		}
@@ -351,108 +389,82 @@ func (h *Handler) importItemsWithMode(ctx context.Context, items []Item, mode im
 	return imported, skipped, wiped, warnings, nil
 }
 
-// importItems inserts links + their tags + folder. Duplicate URLs are skipped.
-func (h *Handler) importItems(ctx context.Context, items []Item) (int, int, error) {
-	imported, skipped := 0, 0
-	for _, it := range items {
-		tagIDs, err := ensureTags(ctx, h.pool, it.Tags)
-		if err != nil {
-			return imported, skipped, err
-		}
-		var folderID *int64
-		if it.Folder != nil {
-			fid, err := ensureFolder(ctx, h.pool, *it.Folder, "")
-			if err != nil {
-				return imported, skipped, err
-			}
-			folderID = &fid
-		}
-		id, dup, _, err := insertLinkIfNew(ctx, h.pool, it.URL, it.Title, nil, tagIDs, folderID, 0, nil, false)
-		if err != nil {
-			return imported, skipped, err
-		}
-		if dup {
-			skipped++
+func seedJSONCatalog(ctx context.Context, q dbtx, seed *jsonSeed, tagCache, folderCache map[string]int64) error {
+	for _, t := range seed.tags {
+		name := strings.TrimSpace(t.Name)
+		if name == "" {
 			continue
 		}
-		imported++
-		if h.worker != nil {
-			_ = h.worker.Enqueue(id)
-		}
-	}
-	return imported, skipped, nil
-}
-
-func (h *Handler) importJSON(ctx context.Context, f JSONFile) (int, int, error) {
-	for _, t := range f.Tags {
-		name := strings.TrimSpace(t.Name)
 		color := sanitizeImportColor(t.Color)
-		// color is guaranteed non-empty by sanitizeImportColor (defaults to
-		// indigo on empty/invalid), so the INSERT can use it verbatim.
-		_, err := h.pool.Exec(ctx, `
+		var id int64
+		err := q.QueryRow(ctx, `
             INSERT INTO tag (name, color, icon)
             VALUES ($1, $2, $3)
-            ON CONFLICT (name) DO NOTHING
-        `, name, color, t.Icon)
+            ON CONFLICT (name) DO UPDATE SET color = EXCLUDED.color, icon = COALESCE(EXCLUDED.icon, tag.icon)
+            RETURNING id
+        `, name, color, t.Icon).Scan(&id)
 		if err != nil {
-			return 0, 0, fmt.Errorf("upsert tag: %w", err)
+			return fmt.Errorf("seed tag %q: %w", name, err)
+		}
+		tagCache[name] = id
+	}
+	for _, fl := range seed.folders {
+		if _, err := ensureFolderCached(ctx, q, folderCache, fl.Name, sanitizeImportColor(fl.Color)); err != nil {
+			return err
 		}
 	}
-	for _, fl := range f.Folders {
-		if _, err := ensureFolder(ctx, h.pool, fl.Name, sanitizeImportColor(fl.Color)); err != nil {
-			return 0, 0, err
-		}
-	}
-	imported, skipped := 0, 0
-	for _, l := range f.Links {
-		rawURL := strings.TrimSpace(l.URL)
-		title := strings.TrimSpace(l.Title)
-		if title == "" {
-			title = rawURL
-		}
-
-		var createdAt *time.Time
-		if l.CreatedAt != "" {
-			t, _ := time.Parse(time.RFC3339, l.CreatedAt) // already validated
-			createdAt = &t
-		}
-
-		tagIDs, err := ensureTags(ctx, h.pool, l.Tags)
-		if err != nil {
-			return imported, skipped, err
-		}
-		var folderID *int64
-		if l.Folder != nil && strings.TrimSpace(*l.Folder) != "" {
-			fid, err := ensureFolder(ctx, h.pool, *l.Folder, "")
-			if err != nil {
-				return imported, skipped, err
-			}
-			folderID = &fid
-		}
-		id, dup, _, err := insertLinkIfNew(ctx, h.pool, rawURL, title, l.Description, tagIDs, folderID, l.ClickCount, createdAt, false)
-		if err != nil {
-			return imported, skipped, err
-		}
-		if dup {
-			skipped++
-			continue
-		}
-		imported++
-		if h.worker != nil {
-			_ = h.worker.Enqueue(id)
-		}
-	}
-	return imported, skipped, nil
+	return nil
 }
 
-// ensureTags upserts tag names and returns their IDs. Accepts either a
-// *pgxpool.Pool (single-shot use from importItems / importJSON) or a pgx.Tx
-// (so importItemsWithMode can wrap the whole loop in one transaction).
-func ensureTags(ctx context.Context, q dbtx, names []string) ([]int64, error) {
+func loadTagNameCache(ctx context.Context, q dbtx) (map[string]int64, error) {
+	rows, err := q.Query(ctx, `SELECT id, name FROM tag`)
+	if err != nil {
+		return nil, fmt.Errorf("load tags: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out[name] = id
+	}
+	return out, rows.Err()
+}
+
+func loadFolderNameCache(ctx context.Context, q dbtx) (map[string]int64, error) {
+	rows, err := q.Query(ctx, `SELECT id, name FROM folder`)
+	if err != nil {
+		return nil, fmt.Errorf("load folders: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		// First id wins for duplicate names (same as ensureFolder LIMIT 1).
+		if _, ok := out[name]; !ok {
+			out[name] = id
+		}
+	}
+	return out, rows.Err()
+}
+
+// ensureTagsCached resolves tag names via cache, inserting only on miss.
+func ensureTagsCached(ctx context.Context, q dbtx, cache map[string]int64, names []string) ([]int64, error) {
 	ids := make([]int64, 0, len(names))
 	for _, name := range names {
 		name = strings.TrimSpace(name)
 		if name == "" {
+			continue
+		}
+		if id, ok := cache[name]; ok {
+			ids = append(ids, id)
 			continue
 		}
 		var id int64
@@ -465,28 +477,36 @@ func ensureTags(ctx context.Context, q dbtx, names []string) ([]int64, error) {
 		if err != nil {
 			return nil, fmt.Errorf("ensure tag %q: %w", name, err)
 		}
+		cache[name] = id
 		ids = append(ids, id)
 	}
 	return ids, nil
 }
 
-// nextAvailableSlug returns `base` if no link uses it, else `base-2`,
-// `base-3`, … (capped at 999 to prevent pathological loops). Used by the
-// importer's insertLinkInTx — bulk imports of similarly-titled pages
-// shouldn't fail just because the first slug already exists.
-func nextAvailableSlug(ctx context.Context, q dbtx, base string) (string, error) {
-	candidate := base
-	for attempt := 1; attempt < 1000; attempt++ {
-		var exists bool
-		if err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM link WHERE slug = $1)`, candidate).Scan(&exists); err != nil {
-			return "", fmt.Errorf("check slug availability: %w", err)
-		}
-		if !exists {
-			return candidate, nil
-		}
-		candidate = fmt.Sprintf("%s-%d", base, attempt+1)
+func ensureFolderCached(ctx context.Context, q dbtx, cache map[string]int64, name, color string) (int64, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return 0, fmt.Errorf("ensureFolder: empty name")
 	}
-	return "", fmt.Errorf("nextAvailableSlug: exhausted attempts for %q", base)
+	if id, ok := cache[name]; ok {
+		return id, nil
+	}
+	id, err := ensureFolder(ctx, q, name, color)
+	if err != nil {
+		return 0, err
+	}
+	cache[name] = id
+	return id, nil
+}
+
+// nextAvailableSlug returns `base` if no link uses it, else `base-2`,
+// `base-3`, … Used by the importer's insertLinkInTx.
+func nextAvailableSlug(ctx context.Context, q dbtx, base string) (string, error) {
+	return slugpkg.UniqueAvailable(ctx, base, func(ctx context.Context, candidate string) (bool, error) {
+		var exists bool
+		err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM link WHERE slug = $1)`, candidate).Scan(&exists)
+		return exists, err
+	})
 }
 
 // ensureFolder finds-or-creates a folder by name. folder.name has no UNIQUE
@@ -587,7 +607,7 @@ func insertLinkInTx(ctx context.Context, tx pgx.Tx, url, title string, descripti
 	// imports targeting the same slug) — but importers are single-user single-
 	// machine, and the unique constraint catches it as a hard error if it
 	// ever happens.
-	slugBase := links.Slugify(title)
+	slugBase := slugpkg.Slugify(title)
 	if slugBase == "" {
 		slugBase = "link-imported"
 	}

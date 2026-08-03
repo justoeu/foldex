@@ -1,5 +1,5 @@
 // Package imageopt downscales and re-encodes user uploads and screenshots
-// before they reach MinIO. Output is always JPEG — lossy is fine because the
+// before they reach the object store. Output is always JPEG — lossy is fine because the
 // frontend uses these as 150 px thumbnails. Transparency is composited over
 // white; animated GIFs collapse to their first frame.
 package imageopt
@@ -47,15 +47,19 @@ const (
 // maxPixels. Decoding is rejected BEFORE image.Decode allocates the framebuffer.
 var ErrTooLarge = errors.New("imageopt: image dimensions exceed limit")
 
-// supportedInputs is the closed whitelist of MIME types Optimize will accept.
-// Mirrors links.allowedUploadMIMEs by design — duplicated so this package
-// stays usable without depending on internal/links.
-var supportedInputs = map[string]string{
+// AllowedUploadMIMEs is the single closed whitelist of MIME types accepted for
+// user uploads and Optimize. SVG is intentionally excluded (executable script).
+// Handlers (links.ScreenshotHandler, notes.ImageHandler) import this map —
+// do not fork another copy.
+var AllowedUploadMIMEs = map[string]string{
 	"image/png":  "png",
 	"image/jpeg": "jpg",
 	"image/gif":  "gif",
 	"image/webp": "webp",
 }
+
+// supportedInputs aliases AllowedUploadMIMEs for Optimize internals.
+var supportedInputs = AllowedUploadMIMEs
 
 // Options tunes Optimize. Zero values mean "use defaults".
 type Options struct {
@@ -133,7 +137,7 @@ func Optimize(data []byte, opts Options) (Result, error) {
 
 	// No-regression guard, scoped to JPEG sources only. A small already-tuned
 	// JPEG can grow under default settings, in which case we keep the source.
-	// PNG/GIF/WebP always re-encode — we want predictable .jpg keys in MinIO
+	// PNG/GIF/WebP always re-encode — we want predictable .jpg keys in the object store
 	// even when DEFLATE happens to beat JPEG on a synthetic gradient.
 	if mime == jpegMIME && !resized && buf.Len() >= len(data) {
 		return Result{

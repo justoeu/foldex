@@ -2,6 +2,7 @@ package backup
 
 import (
 	"archive/zip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -16,12 +17,19 @@ import (
 	"foldex/internal/pkg/httperr"
 )
 
+// BackupService is the application port used by HTTP handlers (testable fake).
+type BackupService interface {
+	Export(ctx context.Context, w io.Writer, onCountsReady func(Counts) error) (ExportReport, error)
+	Validate(ctx context.Context, zr *zip.Reader) (Validation, error)
+	Restore(ctx context.Context, zr *zip.Reader, mode ConflictMode) (RestoreReport, error)
+}
+
 type Handler struct {
-	svc    *Service
+	svc    BackupService
 	logger *slog.Logger
 }
 
-func NewHandler(svc *Service, logger *slog.Logger) *Handler {
+func NewHandler(svc BackupService, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -52,9 +60,16 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/zip")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 		w.Header().Set("X-Foldex-Backup-Filename", filename)
+		// Full count set so the SPA can record history without buffering the
+		// entire zip twice (blob + arrayBuffer) just to walk the EOCD.
 		w.Header().Set("X-Foldex-Backup-Counts-Links", fmt.Sprintf("%d", c.Links))
 		w.Header().Set("X-Foldex-Backup-Counts-Notes", fmt.Sprintf("%d", c.Notes))
+		w.Header().Set("X-Foldex-Backup-Counts-Tags", fmt.Sprintf("%d", c.Tags))
+		w.Header().Set("X-Foldex-Backup-Counts-Folders", fmt.Sprintf("%d", c.Folders))
+		w.Header().Set("X-Foldex-Backup-Counts-Link-Tags", fmt.Sprintf("%d", c.LinkTags))
+		w.Header().Set("X-Foldex-Backup-Counts-Click-Logs", fmt.Sprintf("%d", c.ClickLogs))
 		w.Header().Set("X-Foldex-Backup-Counts-Files", fmt.Sprintf("%d", c.Files))
+		w.Header().Set("X-Foldex-Backup-Counts-File-Bytes", fmt.Sprintf("%d", c.FileBytes))
 		w.WriteHeader(http.StatusOK)
 		headersWritten = true
 		return nil

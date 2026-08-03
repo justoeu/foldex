@@ -26,6 +26,37 @@ const sampleNetscape = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
 </DL><p>
 `
 
+func TestParseNetscape_RejectsTooManyItems(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`<!DOCTYPE NETSCAPE-Bookmark-file-1><DL><p>`)
+	// maxImportItems+1 unique http links
+	for i := 0; i < maxImportItems+1; i++ {
+		b.WriteString(`<DT><A HREF="https://example.com/`)
+		b.WriteString(strings.Repeat("a", 1))
+		// unique path
+		b.WriteString(itoa(i))
+		b.WriteString(`">t</A>`)
+	}
+	b.WriteString(`</DL><p>`)
+	_, err := ParseNetscape(strings.NewReader(b.String()))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrTooManyItems)
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var d [20]byte
+	i := len(d)
+	for n > 0 {
+		i--
+		d[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(d[i:])
+}
+
 func TestParseNetscape_FlatAndNested(t *testing.T) {
 	items, err := ParseNetscape(strings.NewReader(sampleNetscape))
 	require.NoError(t, err)
@@ -59,6 +90,43 @@ func TestParseNetscape_EmptyInput(t *testing.T) {
 	items, err := ParseNetscape(strings.NewReader(""))
 	require.NoError(t, err)
 	assert.Empty(t, items)
+}
+
+// Empty <H3></H3> must not desync the folder stack: previously we skipped
+// pushing blank names but still popped on </DL>, so a sibling after an empty
+// folder lost its parent scope.
+func TestParseNetscape_EmptyH3KeepsParentFolder(t *testing.T) {
+	body := `<!DOCTYPE NETSCAPE-Bookmark-file-1>
+<DL><p>
+  <DT><H3>Parent</H3>
+  <DL><p>
+    <DT><H3></H3>
+    <DL><p>
+      <DT><A HREF="https://inside-empty.example">Inside empty</A>
+    </DL><p>
+    <DT><A HREF="https://sibling.example">Sibling after empty</A>
+  </DL><p>
+  <DT><A HREF="https://root.example">Root again</A>
+</DL><p>
+`
+	items, err := ParseNetscape(strings.NewReader(body))
+	require.NoError(t, err)
+	require.Len(t, items, 3)
+
+	// Link nested under blank H3 still inherits Parent (blank is not a folder).
+	assert.Equal(t, "https://inside-empty.example", items[0].URL)
+	require.NotNil(t, items[0].Folder)
+	assert.Equal(t, "Parent", *items[0].Folder)
+
+	// Sibling after the empty folder's </DL> must still be under Parent.
+	assert.Equal(t, "https://sibling.example", items[1].URL)
+	require.NotNil(t, items[1].Folder)
+	assert.Equal(t, "Parent", *items[1].Folder)
+	assert.Empty(t, items[1].Tags)
+
+	// After Parent closes, root again.
+	assert.Equal(t, "https://root.example", items[2].URL)
+	assert.Nil(t, items[2].Folder)
 }
 
 func TestParseNetscape_LinkWithoutTitleFallsBackToURL(t *testing.T) {

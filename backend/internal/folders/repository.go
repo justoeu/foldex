@@ -9,10 +9,16 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/pkg/httperr"
 )
+
+// maxSerializationRetries bounds SERIALIZABLE update retries on SQLSTATE 40001
+// (RACE-HER-008). Concurrent nest moves under load surface as transparent
+// retries instead of 500 to the client.
+const maxSerializationRetries = 3
 
 type Repository struct {
 	pool *pgxpool.Pool
@@ -77,14 +83,17 @@ func (r *Repository) PasswordHashFor(ctx context.Context, id int64) (*string, er
 //	RootOnly = true       → only folders with parent_id IS NULL
 //	ParentID = &N         → only folders whose parent_id = N
 //	both zero/false       → no scoping, flat list
+//	Slim = true           → skip preview LATERALs (and counts); metadata only
+//	                        for pickers / flat tree consumers (N1-NEX-006)
 type ListQuery struct {
 	RootOnly bool
 	ParentID *int64
+	Slim     bool
 }
 
-// List returns every folder matching the query, with link_count and up to 4
-// preview tiles. Preview is built via LATERAL + jsonb_agg in a single
-// round-trip (no N+1). Sort inside each preview: pinned first, then recent.
+// List returns every folder matching the query. Full mode includes link_count,
+// folder_count and up to 4 preview tiles via LATERAL + jsonb_agg (RapidView).
+// Slim mode returns only base columns + has_password — used by flat pickers.
 func (r *Repository) List(ctx context.Context, q ListQuery) ([]Folder, error) {
 	where := ""
 	args := []any{}
@@ -94,10 +103,11 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Folder, error) {
 	} else if q.RootOnly {
 		where = "WHERE f.parent_id IS NULL"
 	}
-	// link_count / folder_count via LATERAL scoped by FK instead of a
-	// whole-table GROUP BY subquery — the planner can use the
-	// link_folder / folder_parent indexes per parent row instead of
-	// hash-aggregating every link/folder once per request.
+	if q.Slim {
+		return r.listSlim(ctx, where, args)
+	}
+	// link_count = links + notes in the folder (card badges / cascade confirm).
+	// folder_count via LATERAL scoped by FK instead of a whole-table GROUP BY.
 	sql := `
         SELECT f.id, f.name, f.color, f.parent_id, f.created_at, f.password_hash, f.password_hint,
                COALESCE(c.cnt, 0) AS link_count,
@@ -106,7 +116,10 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Folder, error) {
                COALESCE(pf.previews, '[]'::jsonb) AS preview_folders
         FROM folder f
         LEFT JOIN LATERAL (
-            SELECT count(*) AS cnt FROM link WHERE folder_id = f.id
+            SELECT (
+                (SELECT count(*) FROM link WHERE folder_id = f.id) +
+                (SELECT count(*) FROM note WHERE folder_id = f.id)
+            ) AS cnt
         ) c ON true
         LEFT JOIN LATERAL (
             SELECT count(*) AS cnt FROM folder WHERE parent_id = f.id
@@ -175,6 +188,36 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Folder, error) {
 				}
 			}
 		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// listSlim is the picker/flat-tree projection: base folder columns only.
+// Counts and RapidView previews are zeroed — consumers that need them use
+// the scoped (non-slim) List.
+func (r *Repository) listSlim(ctx context.Context, where string, args []any) ([]Folder, error) {
+	sql := `
+        SELECT f.id, f.name, f.color, f.parent_id, f.created_at, f.password_hash, f.password_hint
+        FROM folder f
+        ` + where + `
+        ORDER BY f.name ASC
+    `
+	rows, err := r.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list folders slim: %w", err)
+	}
+	defer rows.Close()
+	out := make([]Folder, 0)
+	for rows.Next() {
+		var f Folder
+		var passwordHash *string
+		if err := rows.Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &passwordHash, &f.PasswordHint); err != nil {
+			return nil, err
+		}
+		f.HasPassword = passwordHash != nil
+		f.Previews = []PreviewTile{}
+		f.PreviewFolders = []PreviewFolder{}
 		out = append(out, f)
 	}
 	return out, rows.Err()
@@ -274,6 +317,30 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 	q := fmt.Sprintf(`UPDATE folder SET %s WHERE id = $%d
                       RETURNING id, name, color, parent_id, created_at, password_hash, password_hint`, strings.Join(sets, ", "), i)
 
+	var lastErr error
+	for attempt := 0; attempt < maxSerializationRetries; attempt++ {
+		f, err := r.updateOnce(ctx, id, in, q, args, cycleCheckNeeded, newPasswordHash, hintToValidate)
+		if err == nil {
+			return f, nil
+		}
+		if !isSerializationFailure(err) {
+			return Folder{}, err
+		}
+		lastErr = err
+	}
+	return Folder{}, lastErr
+}
+
+func (r *Repository) updateOnce(
+	ctx context.Context,
+	id int64,
+	in UpdateInput,
+	q string,
+	args []any,
+	cycleCheckNeeded bool,
+	newPasswordHash *string,
+	hintToValidate *string,
+) (Folder, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Folder{}, fmt.Errorf("begin update tx: %w", err)
@@ -281,6 +348,14 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 	defer tx.Rollback(ctx)
 
 	if in.PasswordSet {
+		if err := checkPasswordChangeAuthorized(ctx, tx, id, in.CurrentPassword); err != nil {
+			return Folder{}, err
+		}
+	}
+	// Hint mutation on an already-protected folder is a bcrypt oracle without
+	// CurrentPassword (distinct 400 on hint==password). Require the same
+	// authorization as a password change whenever the folder already has a hash.
+	if in.PasswordHintSet && !in.PasswordSet {
 		if err := checkPasswordChangeAuthorized(ctx, tx, id, in.CurrentPassword); err != nil {
 			return Folder{}, err
 		}
@@ -312,6 +387,15 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 	f.Previews = []PreviewTile{}
 	f.PreviewFolders = []PreviewFolder{}
 	return f, nil
+}
+
+// isSerializationFailure reports Postgres SQLSTATE 40001 (serialization_failure).
+func isSerializationFailure(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "40001"
+	}
+	return false
 }
 
 // checkPasswordChangeAuthorized enforces the CLAUDE.md-documented decision:
@@ -419,19 +503,15 @@ func (r *Repository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-// DeleteCascade removes the folder AND every link inside it — recursively
-// through any subfolder tree. Wrapped in a transaction so a failure on any
-// step rolls back together. `link_tag` and `click_log` rows for the deleted
-// links are purged explicitly below — migration 000014 polymorphized both
-// tables and DROPPED their FK to link(id) (a polymorphic column can't
-// reference two tables), so the `ON DELETE CASCADE` this comment used to
-// describe no longer exists; cleanup is app-level now, same as
-// links.Repository.Delete. Tags themselves survive (only the link-side
-// associations vanish).
+// DeleteCascade removes the folder AND every link AND note inside it —
+// recursively through any subfolder tree. Wrapped in a transaction so a
+// failure on any step rolls back together. `link_tag` and `click_log` rows
+// for the deleted entities are purged explicitly — migration 000014
+// polymorphized both tables and DROPPED their FKs, so cleanup is app-level
+// (same as links.Repository.Delete / notes.Repository.Delete).
 //
-// The recursive CTE collects every descendant folder id (including the
-// target), then purges link_tag/click_log for their links, deletes the
-// links, and finally the folders themselves.
+// Subtree ids are materialized once into a temp table (N1-NEX-008) so the
+// recursive walk is not recomputed for every DML statement.
 func (r *Repository) DeleteCascade(ctx context.Context, id int64) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -440,51 +520,59 @@ func (r *Repository) DeleteCascade(ctx context.Context, id int64) error {
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx, `
+        CREATE TEMP TABLE _cascade_subtree ON COMMIT DROP AS
         WITH RECURSIVE subtree AS (
           SELECT id FROM folder WHERE id = $1
           UNION ALL
           SELECT f.id FROM folder f
           JOIN subtree s ON f.parent_id = s.id
         )
-        DELETE FROM link_tag WHERE entity_kind = 'link' AND entity_id IN (
-          SELECT l.id FROM link l WHERE l.folder_id IN (SELECT id FROM subtree)
-        )
+        SELECT id FROM subtree
     `, id); err != nil {
+		return fmt.Errorf("materialize cascade subtree: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+        DELETE FROM link_tag WHERE entity_kind = 'link' AND entity_id IN (
+          SELECT l.id FROM link l WHERE l.folder_id IN (SELECT id FROM _cascade_subtree)
+        )
+    `); err != nil {
 		return fmt.Errorf("delete link_tag for links in subtree: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-        WITH RECURSIVE subtree AS (
-          SELECT id FROM folder WHERE id = $1
-          UNION ALL
-          SELECT f.id FROM folder f
-          JOIN subtree s ON f.parent_id = s.id
-        )
         DELETE FROM click_log WHERE entity_kind = 'link' AND entity_id IN (
-          SELECT l.id FROM link l WHERE l.folder_id IN (SELECT id FROM subtree)
+          SELECT l.id FROM link l WHERE l.folder_id IN (SELECT id FROM _cascade_subtree)
         )
-    `, id); err != nil {
+    `); err != nil {
 		return fmt.Errorf("delete click_log for links in subtree: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-        WITH RECURSIVE subtree AS (
-          SELECT id FROM folder WHERE id = $1
-          UNION ALL
-          SELECT f.id FROM folder f
-          JOIN subtree s ON f.parent_id = s.id
+        DELETE FROM link_tag WHERE entity_kind = 'note' AND entity_id IN (
+          SELECT n.id FROM note n WHERE n.folder_id IN (SELECT id FROM _cascade_subtree)
         )
-        DELETE FROM link WHERE folder_id IN (SELECT id FROM subtree)
-    `, id); err != nil {
+    `); err != nil {
+		return fmt.Errorf("delete link_tag for notes in subtree: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+        DELETE FROM click_log WHERE entity_kind = 'note' AND entity_id IN (
+          SELECT n.id FROM note n WHERE n.folder_id IN (SELECT id FROM _cascade_subtree)
+        )
+    `); err != nil {
+		return fmt.Errorf("delete click_log for notes in subtree: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+        DELETE FROM link WHERE folder_id IN (SELECT id FROM _cascade_subtree)
+    `); err != nil {
 		return fmt.Errorf("delete links in subtree: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `
+        DELETE FROM note WHERE folder_id IN (SELECT id FROM _cascade_subtree)
+    `); err != nil {
+		return fmt.Errorf("delete notes in subtree: %w", err)
+	}
 	ct, err := tx.Exec(ctx, `
-        WITH RECURSIVE subtree AS (
-          SELECT id FROM folder WHERE id = $1
-          UNION ALL
-          SELECT f.id FROM folder f
-          JOIN subtree s ON f.parent_id = s.id
-        )
-        DELETE FROM folder WHERE id IN (SELECT id FROM subtree)
-    `, id)
+        DELETE FROM folder WHERE id IN (SELECT id FROM _cascade_subtree)
+    `)
 	if err != nil {
 		return fmt.Errorf("delete folder subtree: %w", err)
 	}

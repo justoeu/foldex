@@ -36,16 +36,20 @@ func (r *Repository) Summary(ctx context.Context) (Summary, error) {
 		return s, fmt.Errorf("summary scalars: %w", err)
 	}
 
-	// Top host by click count over the lifetime of the data. The host is a
-	// derived column extracted at read time. Counts come from click_log
-	// since `link.click_count` no longer exists.
+	// Top host: pre-aggregate clicks per entity once, then join link and run
+	// regexp_replace once per link (not once per click_log row) — N1-NEX-007.
 	err := r.pool.QueryRow(ctx, `
-        SELECT host, count(*)::bigint
+        WITH link_clicks AS (
+            SELECT entity_id, count(*)::bigint AS cnt
+            FROM click_log
+            WHERE entity_kind = 'link'
+            GROUP BY entity_id
+        )
+        SELECT host, sum(cnt)::bigint
         FROM (
-            SELECT regexp_replace(l.url, '^https?://([^/]+).*$', '\1') AS host
-            FROM click_log cl
-            JOIN link l ON l.id = cl.entity_id
-            WHERE cl.entity_kind = 'link'
+            SELECT regexp_replace(l.url, '^https?://([^/]+).*$', '\1') AS host, lc.cnt
+            FROM link_clicks lc
+            JOIN link l ON l.id = lc.entity_id
         ) t
         WHERE host <> ''
         GROUP BY host
@@ -107,17 +111,30 @@ func (r *Repository) TopLinks(ctx context.Context, limit int) ([]TopLink, error)
 	if limit <= 0 || limit > 100 {
 		limit = 10
 	}
+	// Aggregate click_log once, then join links — avoids hashing every click
+	// row against every link before LIMIT.
 	rows, err := r.pool.Query(ctx, `
+        WITH link_clicks AS (
+            SELECT entity_id,
+                   count(*)::bigint AS clicks,
+                   COALESCE(sum(CASE WHEN clicked_at >= now() - interval '30 days' THEN 1 END), 0)::bigint AS c30,
+                   COALESCE(sum(CASE WHEN clicked_at <  now() - interval '30 days'
+                                     AND clicked_at >= now() - interval '60 days' THEN 1 END), 0)::bigint AS cprev
+            FROM click_log
+            WHERE entity_kind = 'link'
+            GROUP BY entity_id
+        )
         SELECT
             l.id, l.url, l.title, l.slug,
             regexp_replace(l.url, '^https?://([^/]+).*$', '\1') AS host,
-            count(cl.id)::bigint AS clicks,
-            COALESCE(sum(CASE WHEN cl.clicked_at >= now() - interval '30 days' THEN 1 END), 0)::bigint AS c30,
-            COALESCE(sum(CASE WHEN cl.clicked_at <  now() - interval '30 days'
-                              AND cl.clicked_at >= now() - interval '60 days' THEN 1 END), 0)::bigint AS cprev
+            COALESCE(lc.clicks, 0) AS clicks,
+            COALESCE(lc.c30, 0) AS c30,
+            COALESCE(lc.cprev, 0) AS cprev
         FROM link l
-        LEFT JOIN click_log cl ON cl.entity_kind = 'link' AND cl.entity_id = l.id
-        GROUP BY l.id
+        LEFT JOIN link_clicks lc ON lc.entity_id = l.id
+        WHERE l.folder_id IS NULL OR NOT EXISTS (
+            SELECT 1 FROM folder _lf WHERE _lf.id = l.folder_id AND _lf.password_hash IS NOT NULL
+        )
         ORDER BY clicks DESC, l.id ASC
         LIMIT $1
     `, limit)

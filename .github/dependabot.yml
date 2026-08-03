@@ -15,6 +15,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Wait before proposing brand-new package versions (supply-chain cooldown).
+    cooldown:
+      default-days: 7
     labels: [dependencies, ci]
     groups:
       actions-minor:
@@ -25,6 +28,8 @@ updates:
     directory: /backend
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     labels: [dependencies, backend]
     groups:
       gomod-minor:
@@ -42,10 +47,14 @@ updates:
     directory: /backend
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     labels: [dependencies, docker]
 
   - package-ecosystem: docker
     directory: /web
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     labels: [dependencies, docker]

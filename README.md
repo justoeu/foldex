@@ -8,9 +8,9 @@
 
 > Self-hosted bookmark manager with rich tagging, nestable folders, click tracking, visual URL previews, **pastebin-style rich-text notes**, **per-link change detection + Web Push**, full backup, and a browser extension.
 
-Foldex is a personal "smart bookmarks bar" — it stores links organized by **nestable folders + M:N tags**, shows **what you actually click** (telemetry via `/go/:id`), captures every URL visually (OG image / favicon / screenshot fallback), lets you jot down **rich-text notes** (Tiptap editor with inline images) that live in the same grid/search/tags/folders as links, **watches the pages you care about** (RSS/Atom feed fingerprint with content-hash fallback) and pings you via Web Push when they change, and runs **entirely on your own machine** (Postgres + MinIO + Go + React in containers).
+Foldex is a personal "smart bookmarks bar" — it stores links organized by **nestable folders + M:N tags**, shows **what you actually click** (telemetry via `/go/:id`), captures every URL visually (OG image / favicon / screenshot fallback), lets you jot down **rich-text notes** (Tiptap editor with inline images) that live in the same grid/search/tags/folders as links, **watches the pages you care about** (RSS/Atom feed fingerprint with content-hash fallback) and pings you via Web Push when they change, and runs **entirely on your own machine** (Postgres + RustFS + Go + React in containers).
 
-> Stack: **Go 1.26 (Chi · pgx) · PostgreSQL 18 · MinIO · Vite 8 + React 19 + TypeScript + bun · TanStack Query · Tiptap 3 · react-i18next (en/pt/es) · Vitest 4**. Versioning policy + invariants in [`CLAUDE.md`](CLAUDE.md).
+> Stack: **Go 1.26 (Chi · pgx) · PostgreSQL 18 · RustFS · Vite 8 + React 19 + TypeScript + bun · TanStack Query · Tiptap 3 · react-i18next (en/pt/es) · Vitest 4**. Versioning policy + invariants in [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
@@ -23,14 +23,14 @@ Native bookmarks are fine for "save a page quickly and forget it". Once you pass
 | **Locked to one browser.** Chrome ↔ Safari ↔ Firefox = 3 silos. Sync requires a vendor account. | Your own server. Reach it from any browser, on any machine on your network. Data lives in a Postgres **you** control. |
 | **Tree-only.** A bookmark lives in ONE folder. Want "work + ai + notebookLLM"? You triplicate. | **M:N tags** (a link can carry N labels) **+ 1:N nestable folders** (iPhone-style containment). The two systems coexist. |
 | **Zero telemetry.** You "favorite" 200 links and use 8. You don't know which.   | Every navigation goes through `/go/:id` which inserts into `click_log`. Stats page shows clicks per day, top hosts, top links (last 30d), tag distribution. |
-| **Preview = 16×16 favicon.** A gray list with tiny icons.                       | Visual card with OG image. If the page has none, foldex **captures a screenshot** automatically (headless Chromium → MinIO). You can also upload any image manually. |
+| **Preview = 16×16 favicon.** A gray list with tiny icons.                       | Visual card with OG image. If the page has none, foldex **captures a screenshot** automatically (headless Chromium → RustFS). You can also upload any image manually. |
 | **Weak search.** Title/URL match only.                                          | Full-text search via Postgres `pg_trgm` over title + URL + description. Composes with tag filter (AND-multi-tag) and folder scope. |
-| **Backup = opaque Netscape file.** Images? Clicks? Hierarchy? All lost.         | Single backup ZIP with `manifest.json` + `database.json` (5 tables) + **every MinIO image**. Lossless round-trip, SHA-256 checksum verification, 3 conflict modes (wipe/skip/duplicate). |
+| **Backup = opaque Netscape file.** Images? Clicks? Hierarchy? All lost.         | Single backup ZIP with `manifest.json` + `database.json` (5 tables) + **every RustFS image**. Lossless round-trip, SHA-256 checksum verification, 3 conflict modes (wipe/skip/duplicate). |
 | **Fixed shortcuts.** Cmd+D opens the browser's native dialog.                   | MV3 extension + Alt-K (palette), Alt-N (new link), Alt-F (new folder). iPhone-style drag-and-drop between cards/folders. |
 | **Vendor lock-in.** Leaving Chrome = export HTML + lose metadata.               | Export to **Netscape HTML** (universal compat) **OR** JSON v2 (with folders + click_count) **OR** full backup ZIP. Importer accepts all three (idempotent by URL; `click_count` is bounded on import to keep a hostile file from ballooning the click log). |
 | **English-only / no localization.**                                             | UI fully localized in **English / Português / Español** via `react-i18next`. Locale picker in the topbar; browser-language autodetect on first load; choice persists in `localStorage`. |
 | **Pinned/favorites = a tiny separate folder.** Visual only.                     | `pinned` is a real column on the table. `ORDER BY pinned DESC, …` applies in every sort mode. Gradient badge always visible. |
-| **Data embedded in the browser.** Switched machines? Reinstalled Chrome? Pray. | Postgres + MinIO in containers. `make up` on a new machine and your backup ZIP restores everything (DB + images) in ~minutes. |
+| **Data embedded in the browser.** Switched machines? Reinstalled Chrome? Pray. | Postgres + RustFS in containers. `make up` on a new machine and your backup ZIP restores everything (DB + images) in ~minutes. |
 | **No way to know when a page you bookmarked changes.** A board, a release notes page, a status page — you find out by opening it. | Per-link opt-in (hourly/daily/weekly). Backend runs a fingerprint worker (RSS/Atom feed if present, content-hash fallback) and fires a **Web Push notification** when content changes. Bell in the Topbar manages the subscription; amber badge on the card flags unseen changes; "Recent updates" section in the sidebar lists the last N. Works with the tab closed (Service Worker). |
 | **Pastebin/notes app is a separate tool.** Snippets and links live in different places. | **Notes** (`⌥M`) are a first-class entity alongside links: rich-text editor (Tiptap) with a **formatting toolbar** — bold/italic/underline/strike, headings, bullet & numbered lists, text alignment, text color, font family, quotes/code, links and inline images, same tags/folders/pin/search as links, interleaved in the same grid with an emerald badge, shareable via a public `/n/{slug}` page. |
 | **No way to keep a folder private** on a shared screen/machine without a whole second account. | **Folder passwords.** Set a bcrypt-hashed password on any folder — its links/notes stay hidden (and its preview thumbnails redacted, even on hover) until you unlock it for the session. Backend-enforced, not just a UI prompt: the API itself refuses a locked folder's contents without proof of the password. Add an optional **reminder hint** (shown on the unlock prompt; can't be the password itself), and set a **master password** in **Settings** (with a strength meter, confirm field, and its own reminder hint) to reset a folder's password if you ever forget it. |
@@ -283,7 +283,7 @@ to come as the project gets more populated content:
 
 ## Backup & Restore
 
-Full snapshot of the DB **and** the MinIO bucket into a single ZIP. Three endpoints:
+Full snapshot of the DB **and** the RustFS bucket into a single ZIP. Three endpoints:
 
 ```bash
 # Generate — streams a ZIP. Headers expose counts + duration.
@@ -318,7 +318,7 @@ Full design rationale: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 - [Vision](docs/VISION.md) — problem, goals, success criteria
 - [Architecture](docs/ARCHITECTURE.md) — stack, data model, API, ADRs
 - [Tasks](docs/TASKS.md) — phased implementation log
-- [SDD: Backup & Restore](docs/SDD-BACKUP-RESTORE.md) — DB + MinIO snapshot ZIP, conflict modes, validation flow
+- [SDD: Backup & Restore](docs/SDD-BACKUP-RESTORE.md) — DB + RustFS snapshot ZIP, conflict modes, validation flow
 
 ## License
 

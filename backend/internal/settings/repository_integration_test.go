@@ -99,3 +99,23 @@ func TestRepository_MasterHint_Tristate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
+
+func TestRepository_ClosedPoolErrors(t *testing.T) {
+	pool := testdb.New(t)
+	repo := settings.NewRepository(pool)
+	ctx := context.Background()
+	require.NoError(t, repo.SetMasterPassword(ctx, "seeded-master", nil))
+	pool.Close()
+
+	_, err := repo.MasterPasswordConfigured(ctx)
+	require.Error(t, err)
+
+	_, err = repo.MasterPasswordHint(ctx)
+	require.Error(t, err)
+
+	_, _, err = repo.VerifyMaster(ctx, "x")
+	require.Error(t, err)
+
+	require.Error(t, repo.SetMasterPassword(ctx, "another-one", nil))
+	require.Error(t, repo.ClearMasterPassword(ctx))
+}

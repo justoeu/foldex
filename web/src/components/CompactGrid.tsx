@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
@@ -29,12 +29,16 @@ type Props = {
 // CardsView's contract from §4 invariants).
 export function CompactGrid({ folders, entries, sort, onEdit, onEditNote, onOpenFolder, onEditFolder }: Props) {
   const isAlpha = sort === 'alpha' || sort === 'alpha_desc'
+  const dir = sort === 'alpha' ? 1 : -1
+  const alphaCells = useMemo(
+    () => (isAlpha ? mergeAlphaCells(folders, entries, dir) : []),
+    [isAlpha, folders, entries, dir],
+  )
 
   if (isAlpha) {
-    const cells = mergeAlphaCells(folders, entries, sort === 'alpha' ? 1 : -1)
     return (
       <div className="fx-compactgrid">
-        {cells.map((c) => {
+        {alphaCells.map((c) => {
           if (c.kind === 'folder') {
             return <CompactFolder key={`folder-${c.folder.id}`} folder={c.folder} onOpen={onOpenFolder} onEdit={onEditFolder} />
           }

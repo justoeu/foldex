@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -22,11 +23,23 @@ import (
 	"foldex/internal/importer"
 	"foldex/internal/links"
 	"foldex/internal/notes"
+	"foldex/internal/pkg/logsafe"
 	"foldex/internal/push"
 	"foldex/internal/redirect"
 	"foldex/internal/settings"
 	"foldex/internal/stats"
 	"foldex/internal/tags"
+)
+
+// Body size ceilings for defaultBodyLimit middleware. net/http.Server has no
+// MaxRequestBodyBytes field in Go 1.26, so path-aware MaxBytesReader is the
+// defense-in-depth global cap. Per-handler caps (JSON 64 KiB, images 5 MiB)
+// still apply on top.
+const (
+	maxBodyDefault = 1 << 20 // 1 MiB — JSON / non-upload
+	maxBodyImage   = 6 << 20 // 5 MiB image + multipart overhead
+	maxBodyImport  = 100 << 20
+	maxBodyBackup  = 2 << 30 // match backup maxBackupBytes
 )
 
 // These interfaces are defined here to keep the router decoupled from the
@@ -45,7 +58,7 @@ type Deps struct {
 	Storage        links.Uploader       // optional — nil disables the endpoint
 	ScreenshotURL  links.URLPolicy      // required iff Screenshotter is set — gates the SSRF surface
 	StorageStatter stats.StorageStatter // optional — surfaces bucket usage on /stats/storage
-	StorageBucket  backup.StorageBucket // optional — enables /api/backup/* when MinIO is up
+	StorageBucket  backup.StorageBucket // optional — enables /api/backup/* when the object store is up
 
 	// LinkMetadataFetcher gates GET /api/links/url-metadata. When nil the route
 	// is still registered but responds 503 — the dialog falls back to manual
@@ -70,6 +83,7 @@ func New(d Deps) http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
+	r.Use(defaultBodyLimit)
 	r.Use(slogRequest(d.Logger))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   d.Config.CORSOrigins,
@@ -100,13 +114,18 @@ func New(d Deps) http.Handler {
 		api.Route("/folders", folders.NewHandler(foldersRepo, d.FolderUnlockKey, settingsRepo).Mount)
 
 		linksRepo := links.NewRepository(d.Pool)
-		api.Route("/links", links.NewHandler(linksRepo, d.Worker).WithMetadataFetcher(d.LinkMetadataFetcher).Mount)
+		api.Route("/links", links.NewHandler(linksRepo, d.Worker).
+			WithMetadataFetcher(d.LinkMetadataFetcher).
+			WithFolderGate(foldersRepo, d.FolderUnlockKey).
+			Mount)
 
 		// d.Storage is optional — when nil, Handler.Delete's image cleanup is
 		// a no-op (CRUD itself doesn't need storage). The actual upload route
 		// (POST /api/notes/images) is mounted further below, gated the same
 		// way links' image upload is.
-		api.Route("/notes", notes.NewHandler(notesRepo, d.Storage).Mount)
+		api.Route("/notes", notes.NewHandler(notesRepo, d.Storage).
+			WithFolderGate(foldersRepo, d.FolderUnlockKey).
+			Mount)
 		api.Route("/entries", entries.NewHandler(entries.NewRepository(d.Pool), foldersRepo, d.FolderUnlockKey).Mount)
 
 		// Screenshot and file-proxy endpoints are only registered when both
@@ -210,11 +229,37 @@ func slogRequest(logger *slog.Logger) func(http.Handler) http.Handler {
 			next.ServeHTTP(ww, r)
 			logger.Info("http",
 				"method", r.Method,
-				"path", r.URL.Path,
+				"path_class", logsafe.HTTPPath(r.URL.Path),
 				"status", ww.Status(),
 				"bytes", ww.BytesWritten(),
 				"dur_ms", time.Since(start).Milliseconds(),
 			)
 		})
+	}
+}
+
+// defaultBodyLimit applies a path-aware MaxBytesReader before handlers run.
+// Go 1.26's http.Server has no MaxRequestBodyBytes; this is the global
+// absolute ceiling so a future handler that forgets its own cap cannot
+// body-bomb within ReadTimeout.
+func defaultBodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && r.Body != http.NoBody {
+			r.Body = http.MaxBytesReader(w, r.Body, bodyLimitForPath(r.URL.Path))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func bodyLimitForPath(path string) int64 {
+	switch {
+	case strings.HasPrefix(path, "/api/backup"):
+		return maxBodyBackup
+	case strings.HasPrefix(path, "/api/import"):
+		return maxBodyImport
+	case strings.HasSuffix(path, "/image") || strings.HasSuffix(path, "/images") || strings.Contains(path, "/notes/images"):
+		return maxBodyImage
+	default:
+		return maxBodyDefault
 	}
 }

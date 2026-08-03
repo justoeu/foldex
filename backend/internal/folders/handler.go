@@ -56,21 +56,34 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("root"); v == "1" || v == "true" {
 		q.RootOnly = true
 	}
+	// fields=minimal → slim projection (no preview LATERALs). Used by flat
+	// pickers and App's allFolders metadata query (N1-NEX-006 / N1-NEX-011).
+	if v := r.URL.Query().Get("fields"); v == "minimal" {
+		q.Slim = true
+	}
 	// Content-gate: listing a protected folder's CHILDREN reveals its
 	// contents just as much as reading its links would, so it needs the
 	// same unlock-token proof. Root/flat listings (ParentID == nil) are
 	// never gated — only each protected folder's own preview_links/
 	// preview_folders are redacted there (see Repository.List).
+	// Re-check after List closes the password-change TOCTOU window (RACE-HER-005).
 	if q.ParentID != nil {
-		hash, err := h.repo.PasswordHashFor(r.Context(), *q.ParentID)
+		token := r.Header.Get(UnlockHeader)
+		if err := h.enforceFolderUnlock(r.Context(), *q.ParentID, token); err != nil {
+			httperr.Write(w, err)
+			return
+		}
+		out, err := h.repo.List(r.Context(), q)
 		if err != nil {
 			httperr.Write(w, err)
 			return
 		}
-		if err := CheckUnlock(h.unlockKey, *q.ParentID, hash, r.Header.Get(UnlockHeader)); err != nil {
+		if err := h.enforceFolderUnlock(r.Context(), *q.ParentID, token); err != nil {
 			httperr.Write(w, err)
 			return
 		}
+		httperr.JSON(w, http.StatusOK, out)
+		return
 	}
 	out, err := h.repo.List(r.Context(), q)
 	if err != nil {
@@ -78,6 +91,14 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httperr.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) enforceFolderUnlock(ctx context.Context, folderID int64, token string) error {
+	hash, err := h.repo.PasswordHashFor(ctx, folderID)
+	if err != nil {
+		return err
+	}
+	return CheckUnlock(h.unlockKey, folderID, hash, token)
 }
 
 type unlockInput struct {
@@ -128,28 +149,39 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	// Lockout check comes BEFORE reading the body / hashing so a locked-out
-	// folder costs nothing and can't be probed.
-	if until := h.limiter.lockedUntil(id); !until.IsZero() {
+	// Reserve an attempt slot under one lock BEFORE bcrypt so parallel wrong
+	// passwords cannot all race past maxUnlockAttempts (RACE-HER-004).
+	if until, ok := h.limiter.beginAttempt(id); !ok {
 		h.writeLocked(w, until)
 		return
 	}
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			h.limiter.releaseAttempt(id)
+		}
+	}
 	in, err := httperr.DecodeJSON[unlockInput](w, r)
 	if err != nil {
+		release()
 		httperr.Write(w, err)
 		return
 	}
 	hash, err := h.repo.PasswordHashFor(r.Context(), id)
 	if err != nil {
+		release()
 		httperr.Write(w, err)
 		return
 	}
 	if hash == nil {
+		release()
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "not_protected", "this folder has no password set"))
 		return
 	}
 	if !VerifyPassword(*hash, in.Password) {
-		fails, lockedUntil := h.limiter.fail(id)
+		released = true
+		fails, lockedUntil := h.limiter.commitFail(id)
 		if !lockedUntil.IsZero() {
 			h.writeLocked(w, lockedUntil)
 			return
@@ -165,7 +197,8 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	h.limiter.reset(id)
+	released = true
+	h.limiter.commitSuccess(id)
 	httperr.JSON(w, http.StatusOK, unlockOutput{
 		UnlockToken: IssueUnlockToken(h.unlockKey, id, *hash),
 		ExpiresAt:   time.Now().Add(unlockTokenTTL),
