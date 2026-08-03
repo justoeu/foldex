@@ -11,7 +11,6 @@ import (
 	"foldex/internal/imageopt"
 	"foldex/internal/links"
 	"foldex/internal/pkg/httperr"
-	"foldex/internal/pkg/logsafe"
 )
 
 // allowedUploadMIMEs is the single imageopt allowlist (ARCH-ATL-009).
@@ -107,13 +106,12 @@ func (h *ImageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	key := fmt.Sprintf("notes/%s.%s", uuid.NewString(), opt.Ext)
 	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
-		h.logger.Error("note image upload: storage upload failed", "key_prefix", logsafe.ObjectKey(key), "err", err)
+		h.logger.Error("note image upload: storage upload failed")
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store image"))
 		return
 	}
 
 	h.logger.Info("note image uploaded",
-		"key_prefix", logsafe.ObjectKey(key),
 		"source_bytes", len(data), "stored_bytes", len(opt.Data),
 		"resized", opt.Resized, "reencoded", opt.Reencoded,
 	)
