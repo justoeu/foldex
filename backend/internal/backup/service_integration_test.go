@@ -21,7 +21,7 @@ import (
 )
 
 // stubBucket is the minimum StorageBucket the Service needs. Tests inject it
-// directly rather than spinning up MinIO — backup.Service treats its storage
+// directly rather than spinning up RustFS — backup.Service treats its storage
 // as opaque, and the SHA-256 checksums + ZIP layout are what we care about.
 type stubBucket struct {
 	objs map[string][]byte
@@ -67,7 +67,7 @@ func (s *stubBucket) DeleteObjectsPrefix(_ context.Context, prefix string) error
 }
 
 // TestService_ExportProducesValidZipWithManifest locks the §4 invariant:
-// backup is a complete DB + MinIO snapshot, manifest is uncompressed Store,
+// backup is a complete DB + RustFS snapshot, manifest is uncompressed Store,
 // every entry has a SHA-256 checksum.
 func TestService_ExportProducesValidZipWithManifest(t *testing.T) {
 	pool := testdb.New(t)
@@ -133,6 +133,29 @@ func TestService_ExportProducesValidZipWithManifest(t *testing.T) {
 	assert.Contains(t, files, "files/screenshots/1.jpg")
 	assert.Contains(t, files, "files/images/2.jpg")
 	assert.Equal(t, []byte("img-1-bytes"), files["files/screenshots/1.jpg"])
+
+	// Round-trip Validate on the produced zip (covers Service.Validate).
+	v, err := svc.Validate(ctx, zr)
+	require.NoError(t, err)
+	assert.True(t, v.OK, "fresh export must validate: %v", v.Errors)
+	require.NotNil(t, v.Manifest)
+}
+
+func TestService_Validate_RejectsEmptyZip(t *testing.T) {
+	pool := testdb.New(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := backup.NewService(pool, newStubBucket(), logger)
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	require.NoError(t, zw.Close())
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+
+	v, err := svc.Validate(context.Background(), zr)
+	require.NoError(t, err)
+	assert.False(t, v.OK)
+	assert.NotEmpty(t, v.Errors)
 }
 
 // TestService_ExportAbortsWhenCallbackErrors confirms a header hook that

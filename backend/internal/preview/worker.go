@@ -83,7 +83,9 @@ func NewWorker(pool *pgxpool.Pool, concurrency int, timeout time.Duration, logge
 }
 
 // Start spins up the goroutine pool. It also re-enqueues any link still in
-// preview_status='pending' (crash recovery).
+// preview_status='pending' (crash recovery) and periodically re-runs that
+// sweep so jobs dropped on a full queue are not stuck forever (FE polls
+// pending until status flips).
 func (w *Worker) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
@@ -92,17 +94,30 @@ func (w *Worker) Start(ctx context.Context) {
 		go w.loop(ctx)
 	}
 	w.wg.Add(1)
-	go func() {
-		defer w.wg.Done()
-		w.requeuePending(ctx)
-	}()
+	go w.requeueLoop(ctx)
+}
+
+func (w *Worker) requeueLoop(ctx context.Context) {
+	defer w.wg.Done()
+	w.requeuePending(ctx)
+	t := time.NewTicker(45 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			w.requeuePending(ctx)
+		}
+	}
 }
 
 // Stop signals shutdown via the context and waits for all goroutines to drain.
 // The jobs channel is intentionally not closed: Enqueue may be called from
 // requeuePending or in-flight HTTP handlers, and a closed-channel send would
-// panic. Goroutines exit on ctx.Done(). After Stop returns, Enqueue rejects
-// with ErrStopped so callers don't push into a queue with no consumers.
+// panic. Goroutines exit on ctx.Done(). After workers exit, leftover buffered
+// jobs are drained so Enqueue-vs-Stop TOCTOU cannot park work forever
+// (RACE-HER-010). After Stop returns, Enqueue rejects with ErrStopped.
 func (w *Worker) Stop() {
 	w.stopOnce.Do(func() {
 		w.stopped.Store(true)
@@ -111,6 +126,13 @@ func (w *Worker) Stop() {
 		}
 	})
 	w.wg.Wait()
+	for {
+		select {
+		case <-w.jobs:
+		default:
+			return
+		}
+	}
 }
 
 // WithScreenshotFallback enables the post-fetch screenshot capture when the
@@ -137,6 +159,12 @@ func (w *Worker) Enqueue(linkID int64) error {
 	}
 	select {
 	case w.jobs <- linkID:
+		// Re-check after send: Stop may have begun between Load and send.
+		// Job sits in the buffer until Stop drains; surface ErrStopped so
+		// callers know it will not be processed (RACE-HER-010).
+		if w.stopped.Load() {
+			return ErrStopped
+		}
 		return nil
 	default:
 		w.logger.Warn("preview queue full, dropping job", "link_id", linkID)

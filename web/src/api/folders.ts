@@ -15,20 +15,27 @@ export type FolderListParams = {
   // the backend gates GET /api/folders?parent_id=X on this exact case
   // (root/flat listings are never gated, only "list what's inside X").
   unlockToken?: string
+  // fields=minimal → backend skips preview LATERALs (N1-NEX-006/011). Use
+  // for flat metadata (pickers, App allFolders); keep full for RapidView
+  // card grids (scoped root/parent lists).
+  fields?: 'minimal' | 'full'
 }
 
 export function useFolders(params?: FolderListParams) {
   const scope = params?.scope ?? null
   const unlockToken = params?.unlockToken
+  // Default flat lists to minimal; scoped grid lists stay full (previews).
+  const fields = params?.fields ?? (scope === null ? 'minimal' : 'full')
   return useQuery({
     // The token itself isn't part of the key (a fresh unlock shouldn't
     // bust the cache) — only whether one is present, so the locked→
     // unlocked transition still triggers a refetch.
-    queryKey: ['folders', scope, unlockToken ? 'unlocked' : 'locked'],
+    queryKey: ['folders', scope, unlockToken ? 'unlocked' : 'locked', fields],
     queryFn: async () => {
       const search = new URLSearchParams()
       if (scope === 'root') search.set('root', '1')
       else if (typeof scope === 'number') search.set('parent_id', String(scope))
+      if (fields === 'minimal') search.set('fields', 'minimal')
       const qs = search.toString()
       const { data } = await http.get<Folder[]>(`/api/folders${qs ? '?' + qs : ''}`, {
         headers: unlockToken ? { [FOLDER_UNLOCK_HEADER]: unlockToken } : undefined,
@@ -54,6 +61,7 @@ export function useCreateFolder() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['folders'] })
       qc.invalidateQueries({ queryKey: ['links'] })
+      qc.invalidateQueries({ queryKey: ['entries'] })
     },
   })
 }
@@ -68,6 +76,7 @@ export function useUpdateFolder() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['folders'] })
       qc.invalidateQueries({ queryKey: ['links'] })
+      qc.invalidateQueries({ queryKey: ['entries'] })
     },
   })
 }
@@ -98,16 +107,17 @@ export function useResetFolderPassword() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['folders'] })
+      qc.invalidateQueries({ queryKey: ['links'] })
       qc.invalidateQueries({ queryKey: ['entries'] })
     },
   })
 }
 
+
 // Deleting a folder defaults to `ON DELETE SET NULL` on `link.folder_id`
 // server-side (links survive and unflag back to ungrouped). Passing
-// `{ cascade: true }` flips to `?cascade=1`, which deletes every link inside
-// the folder too (transactional). Both modes invalidate ['folders'] AND
-// ['links'] since membership / counts shift.
+// `{ cascade: true }` flips to `?cascade=1`, which deletes every link+note
+// inside the folder too (transactional). Invalidate folders/links/entries.
 export function useDeleteFolder() {
   const qc = useQueryClient()
   return useMutation({
@@ -119,6 +129,7 @@ export function useDeleteFolder() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['folders'] })
       qc.invalidateQueries({ queryKey: ['links'] })
+      qc.invalidateQueries({ queryKey: ['entries'] })
     },
   })
 }

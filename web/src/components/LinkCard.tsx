@@ -4,16 +4,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
-import { useConfirm } from './ConfirmDialog'
 import { hostOf } from '../lib/url'
-import {
-  goHref,
-  mapCachedLinks,
-  useDeleteLink,
-  useMarkChangeSeen,
-  usePinLink,
-  useRefreshPreview,
-} from '../api/links'
+import { goHref, mapCachedLinks } from '../api/links'
 import { mapCachedLinkEntries } from '../api/entries'
 import { safeImageUrl } from '../lib/url'
 import { relativeTime } from '../lib/time'
@@ -27,6 +19,12 @@ type Props = {
   // accepts a drop from another link card OR a note card (which triggers a
   // link↔link or link↔note merge — see App.tsx's onMergeEntries).
   onMergeWith?: (source: MergeSource, targetId: number) => void
+  // Mutations lifted to parent (N1-NEX-010) so N cards don't each mount
+  // useDeleteLink/usePinLink/useRefreshPreview/useMarkChangeSeen/useConfirm.
+  onDelete: (l: Link) => void
+  onPin: (l: Link, pinned: boolean) => void
+  onRefreshPreview: (id: number) => void
+  onMarkSeen: (id: number) => void
 }
 
 // Decide card height purely from how much content we have. Tall when a real
@@ -41,27 +39,27 @@ function densityFor(link: Link, imageOk: boolean): 'tall' | 'medium' | 'short' {
 }
 
 // memo guards re-render storms in dense grids (200+ cards). LinkCard is a
-// pure function of (link, onEdit, onMergeWith) — the callbacks are stable
-// across App.tsx renders (lifted to module scope or wrapped in useCallback
-// at the container) so the default shallow compare is correct.
+// pure function of (link, callbacks) — the callbacks are stable across parent
+// renders (useCallback) so the default shallow compare is correct.
 export const LinkCard = memo(LinkCardImpl)
 LinkCard.displayName = 'LinkCard'
 
-function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
+function LinkCardImpl({
+  link,
+  onEdit,
+  onMergeWith,
+  onDelete,
+  onPin,
+  onRefreshPreview,
+  onMarkSeen,
+}: Props) {
   const { t } = useTranslation()
-  const del = useDeleteLink()
-  const refresh = useRefreshPreview()
-  const pin = usePinLink()
-  const markSeen = useMarkChangeSeen()
-  const confirm = useConfirm()
   const qc = useQueryClient()
   const [previewErrored, setPreviewErrored] = useState(false)
   const previewSrc = safeImageUrl(link.og_image_url)
   const showPreview = !!previewSrc && !previewErrored
   const density = densityFor(link, showPreview)
-  // Optimistic — see usePinLink. Badge flips immediately; server-side reorder
-  // catches up on onSettled invalidation.
-  const togglePin = () => pin.mutate({ id: link.id, pinned: !link.pinned })
+  const togglePin = () => onPin(link, !link.pinned)
 
   // "Unseen update" badge shows when:
   //   - the worker has ever recorded a change for this link, AND
@@ -80,11 +78,9 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
   }, [link.og_image_url])
 
   // Optimistic bump: patch click_count + last_clicked_at in every cached
-  // links list immediately. The old code waited 800 ms and then invalidated
-  // every ['links'] query (full refetch of every visible page) — wasteful
-  // when the user clicks a card, and the badge would lag the click anyway.
-  // The /go/:id redirect handler is the source of truth; the bump here is a
-  // hint that's reconciled the next time the user navigates / refetches.
+  // links list immediately. The /go/:id redirect handler is the source of
+  // truth; the bump here is a hint that's reconciled the next time the user
+  // navigates / refetches.
   const onGo = useCallback(() => {
     const nowISO = new Date().toISOString()
     mapCachedLinks(qc, (l) =>
@@ -98,16 +94,6 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
         : l,
     )
   }, [qc, link.id])
-
-  const onDelete = async () => {
-    const ok = await confirm({
-      title: t('link_card.delete_confirm_title', { title: link.title }),
-      message: t('link_card.delete_confirm_body', { url: link.url }),
-      confirmLabel: t('link_card.delete_confirm_action'),
-      destructive: true,
-    })
-    if (ok) del.mutate(link.id)
-  }
 
   return (
     <article
@@ -175,7 +161,7 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
           className="fx-card-update-badge"
           onClick={(e) => {
             e.stopPropagation()
-            markSeen.mutate(link.id)
+            onMarkSeen(link.id)
           }}
           aria-label={t('link_card.mark_seen_aria')}
           data-tooltip={t('link_card.update_detected_tooltip', {
@@ -277,7 +263,7 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
                 data-tooltip={t('link_card.refresh_preview')}
                 data-tooltip-side="top"
                 aria-label={t('link_card.refresh_preview')}
-                onClick={() => refresh.mutate(link.id)}
+                onClick={() => onRefreshPreview(link.id)}
               >
                 <Icon d={I.refresh} size={14} />
               </button>
@@ -296,7 +282,7 @@ function LinkCardImpl({ link, onEdit, onMergeWith }: Props) {
               data-tooltip={t('link_card.delete_link')}
               data-tooltip-side="top"
               aria-label={t('common.delete')}
-              onClick={onDelete}
+              onClick={() => onDelete(link)}
             >
               <Icon d={I.trash} size={14} />
             </button>
@@ -337,12 +323,12 @@ function truncateDesc(s: string, max = 200): string {
 function lastClick(link: Link, t: (key: string, opts?: Record<string, unknown>) => string): string {
   if (!link.last_clicked_at) return t('link_card.never_clicked')
   const ms = Date.now() - new Date(link.last_clicked_at).getTime()
-  const min = Math.round(ms / 60000)
+  const min = Math.floor(ms / 60000)
   if (min < 1) return t('link_card.last_click_now')
   if (min < 60) return t('link_card.last_click_minutes', { count: min })
-  const h = Math.round(min / 60)
+  const h = Math.floor(min / 60)
   if (h < 24) return t('link_card.last_click_hours', { count: h })
-  const d = Math.round(h / 24)
+  const d = Math.floor(h / 24)
   if (d === 1) return t('link_card.last_click_yesterday')
   if (d < 30) return t('link_card.last_click_days', { count: d })
   return new Date(link.last_clicked_at).toLocaleDateString()

@@ -401,25 +401,48 @@ func TestDuplicateAndConflict(t *testing.T) {
 func TestSharedSecretGuard(t *testing.T) {
 	srv, done := newServer(t, "topsecret")
 	defer done()
+	c := srv.Client()
 
 	// /healthz is outside /api and ignores the secret
-	resp, err := srv.Client().Get(srv.URL + "/healthz")
+	resp, err := c.Get(srv.URL + "/healthz")
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// /api requires the header
-	resp, err = srv.Client().Get(srv.URL + "/api/tags")
+	resp, err = c.Get(srv.URL + "/api/tags")
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 
+	// Wrong secret is also 401 (not only missing header)
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/tags", nil)
+	req.Header.Set("X-Foldex-Secret", "wrong-secret")
+	resp, err = c.Do(req)
+	require.NoError(t, err)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	assert.Contains(t, string(body), "unauthorized")
+
+	// Correct secret allows /api
+	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/api/tags", nil)
 	req.Header.Set("X-Foldex-Secret", "topsecret")
-	resp, err = srv.Client().Do(req)
+	resp, err = c.Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Public share surfaces stay reachable without the secret header
+	resp, err = c.Get(srv.URL + "/go/does-not-exist")
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+
+	resp, err = c.Get(srv.URL + "/n/does-not-exist")
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
 func intToStr(n int64) string {

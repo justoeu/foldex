@@ -1,4 +1,6 @@
 # syntax=docker/dockerfile:1
+# Base tags are minor-pinned (golang:1.26-alpine, alpine:3.24). Digest pins are
+# refreshed on intentional base upgrades via `docker buildx imagetools inspect`.
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 WORKDIR /src
 # Cross-compile target arch comes from buildkit via $TARGETARCH (set when the
@@ -13,6 +15,14 @@ RUN go mod download || true
 
 COPY . .
 RUN GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/foldex ./cmd/server
+RUN GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/rustfs-bootstrap ./cmd/rustfs-bootstrap
+
+# One-shot init image: create app IAM user + bucket-scoped policy on RustFS.
+# Used by docker-compose.services.yml `rustfs-init` (target: rustfs-bootstrap).
+FROM alpine:3.24 AS rustfs-bootstrap
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates
+COPY --from=build /out/rustfs-bootstrap /rustfs-bootstrap
+ENTRYPOINT ["/rustfs-bootstrap"]
 
 # Use alpine as the final image so we can install chromium for go-rod.
 # distroless/static does not include the necessary system libs.
@@ -26,6 +36,9 @@ RUN apk upgrade --no-cache && apk add --no-cache \
     tzdata
 ENV CHROME_PATH=/usr/bin/chromium-browser
 COPY --from=build /out/foldex /foldex
+# Ship bootstrap alongside the server so operators can re-run it from the
+# backend image without a separate pull (`docker compose run …`).
+COPY --from=build /out/rustfs-bootstrap /rustfs-bootstrap
 COPY db/migrations /migrations
 EXPOSE 9089
 # Run as non-root for security (chromium requires --no-sandbox when running as root).

@@ -76,7 +76,7 @@ export function useStatsStorage() {
       try {
         return (await http.get<StorageStats>('/api/stats/storage')).data
       } catch {
-        // Endpoint is absent when MinIO is unreachable — render the card as
+        // Endpoint is absent when the object store is unreachable — render the card as
         // "—" rather than crashing the whole page.
         return null
       }

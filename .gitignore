@@ -46,3 +46,6 @@ backups/
 # graphify knowledge-graph output — regenerated on demand via `graphify update .`
 # (AST-only, no API cost). Treat as cache: keep current locally, never commit.
 graphify-out/
+
+# Local audit packs (ultra-deep etc.) — never commit
+docs/audit/

@@ -30,7 +30,11 @@ export function useUpdateTag() {
       const { data } = await http.patch<Tag>(`/api/tags/${id}`, body)
       return data
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['tags'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tags'] })
+      qc.invalidateQueries({ queryKey: ['links'] })
+      qc.invalidateQueries({ queryKey: ['entries'] })
+    },
   })
 }
 
@@ -43,6 +47,7 @@ export function useDeleteTag() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tags'] })
       qc.invalidateQueries({ queryKey: ['links'] })
+      qc.invalidateQueries({ queryKey: ['entries'] })
     },
   })
 }

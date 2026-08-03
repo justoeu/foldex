@@ -22,6 +22,9 @@ declare const self: ServiceWorkerGlobalScope & {
 // pipeline. New value lives ONLY here now that the SW is hand-written.
 const PRECACHE = 'foldex-precache-v3'
 const FILES_CACHE = 'foldex-files-v1'
+// LRU-ish bound for /api/files/* entries. Cache.keys() returns insertion
+// order in Chromium; drop the oldest until under the cap.
+export const FILES_CACHE_MAX_ENTRIES = 200
 
 // Compute the precache key once per build — revisions in `__WB_MANIFEST`
 // only change when an asset's content does, so the lookup is content-hash
@@ -103,13 +106,32 @@ async function networkFirst(req: Request, cacheName: string): Promise<Response> 
     const res = await fetch(req)
     if (res && res.status === 200) {
       // Clone before stashing — Response bodies are single-use streams.
-      cache.put(req, res.clone()).catch(() => undefined)
+      // Await put + prune so FILES_CACHE stays bounded (LEAK-HYD-008).
+      try {
+        await cache.put(req, res.clone())
+        if (cacheName === FILES_CACHE) {
+          await pruneCacheLRU(cache, FILES_CACHE_MAX_ENTRIES)
+        }
+      } catch {
+        // Quota / opaque failures are non-fatal — still return the network response.
+      }
     }
     return res
   } catch {
     const cached = await cache.match(req)
     if (cached) return cached
     throw new Error('offline + no cache')
+  }
+}
+
+/** Drop oldest entries until cache has at most maxEntries keys. */
+export async function pruneCacheLRU(cache: Cache, maxEntries: number): Promise<void> {
+  if (maxEntries <= 0) return
+  const keys = await cache.keys()
+  if (keys.length <= maxEntries) return
+  const excess = keys.length - maxEntries
+  for (let i = 0; i < excess; i++) {
+    await cache.delete(keys[i]!)
   }
 }
 

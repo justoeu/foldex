@@ -28,15 +28,25 @@ import (
 //
 // Self-healing: if a page-open fails (the cached Chromium may have crashed),
 // the pool is reset so the next call re-launches instead of failing forever.
-// Use Close() at process shutdown to tear the browser down cleanly.
+// resetBrowser swaps the generation out and only Close()s the old browser once
+// in-flight Capture refs drain — concurrent Capture cannot use a Closed browser
+// (RACE-HER-006). Use Close() at process shutdown to tear the browser down.
 func Capture(ctx context.Context, pageURL string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	browser, err := getBrowser()
+	select {
+	case captureSem <- struct{}{}:
+		defer func() { <-captureSem }()
+	case <-ctx.Done():
+		return nil, fmt.Errorf("screenshot: wait for slot: %w", ctx.Err())
+	}
+
+	browser, hold, err := acquireBrowser()
 	if err != nil {
 		return nil, err
 	}
+	defer releaseBrowser(hold)
 
 	// browser.Context(ctx) returns a *rod.Browser that threads the per-call
 	// deadline through every subsequent CDP call on this page — without it,
@@ -88,26 +98,41 @@ func Capture(ctx context.Context, pageURL string) ([]byte, error) {
 	return png, nil
 }
 
-// pool guards poolBrowser. The browser itself is goroutine-safe (CDP supports
-// concurrent targets), so the mutex only serializes the launch + connect path
-// — concurrent Capture callers can open pages in parallel once connected.
+// pooledBrowser is one generation of the shared Chromium. Capture holds a
+// reference for the duration of page work; resetBrowser retires the generation
+// and Close runs only when refs hit zero.
+type pooledBrowser struct {
+	browser *rod.Browser
+	refs    int
+	retired bool
+}
+
+// pool guards current. The browser itself is goroutine-safe (CDP supports
+// concurrent targets), so the mutex only serializes launch + refcount + reset.
+// captureSem caps concurrent tabs (preview workers + HTTP CaptureAndStore)
+// so Chromium cannot open unbounded pages under load.
 var (
-	poolMu      sync.Mutex
-	poolBrowser *rod.Browser
+	poolMu       sync.Mutex
+	current      *pooledBrowser
+	captureSem   = make(chan struct{}, 2)
+	closeBrowser = func(b *rod.Browser) error {
+		if b == nil {
+			return nil
+		}
+		return b.Close()
+	}
 )
 
-// getBrowser returns the cached headless Chromium, launching it on first call.
-// ctx is intentionally NOT propagated to launcher.Launch / rod.Connect: the
-// cached browser must outlive any single caller, and binding it to a caller's
-// ctx would tear down the pool when that ctx expires. Cold-start latency is
-// bounded in practice (sub-second once the Chromium binary is warm) and the
-// per-Capture 30s deadline still applies to every subsequent page-open via
-// browser.Context(ctx).Page(...) in Capture above.
-func getBrowser() (*rod.Browser, error) {
+// acquireBrowser returns the cached headless Chromium (launching on first call)
+// and a hold the caller must releaseBrowser. ctx is intentionally NOT propagated
+// to launcher.Launch / rod.Connect: the cached browser must outlive any single
+// caller.
+func acquireBrowser() (*rod.Browser, *pooledBrowser, error) {
 	poolMu.Lock()
 	defer poolMu.Unlock()
-	if poolBrowser != nil {
-		return poolBrowser, nil
+	if current != nil {
+		current.refs++
+		return current.browser, current, nil
 	}
 
 	l := launcher.New().
@@ -121,30 +146,54 @@ func getBrowser() (*rod.Browser, error) {
 
 	url, err := l.Launch()
 	if err != nil {
-		return nil, fmt.Errorf("screenshot: launch browser: %w", err)
+		return nil, nil, fmt.Errorf("screenshot: launch browser: %w", err)
 	}
 	b := rod.New().ControlURL(url)
 	if err := b.Connect(); err != nil {
-		return nil, fmt.Errorf("screenshot: connect browser: %w", err)
+		return nil, nil, fmt.Errorf("screenshot: connect browser: %w", err)
 	}
-	poolBrowser = b
-	return b, nil
+	pb := &pooledBrowser{browser: b, refs: 1}
+	current = pb
+	return b, pb, nil
 }
 
-// resetBrowser closes (best-effort) and forgets the cached Chromium. Called
-// from two paths: (a) self-healing when a page-open failed, and (b) graceful
-// shutdown via Close(). The log message intentionally says "stale" only on
-// the failure path; Close()'s shutdown close is silent on success.
+// releaseBrowser drops one Capture hold. If the generation was retired while
+// refs > 0, the last release closes Chromium.
+func releaseBrowser(pb *pooledBrowser) {
+	if pb == nil {
+		return
+	}
+	poolMu.Lock()
+	defer poolMu.Unlock()
+	if pb.refs > 0 {
+		pb.refs--
+	}
+	if pb.retired && pb.refs == 0 {
+		if err := closeBrowser(pb.browser); err != nil {
+			slog.Warn("screenshot: pooled browser close failed", "err", err)
+		}
+		pb.browser = nil
+	}
+}
+
+// resetBrowser retires the cached Chromium. Close is deferred until in-flight
+// Capture holders release, so concurrent Capture does not race Close on a live
+// Browser/Page.
 func resetBrowser() {
 	poolMu.Lock()
 	defer poolMu.Unlock()
-	if poolBrowser == nil {
+	if current == nil {
 		return
 	}
-	if err := poolBrowser.Close(); err != nil {
-		slog.Warn("screenshot: pooled browser close failed", "err", err)
+	old := current
+	current = nil
+	old.retired = true
+	if old.refs == 0 {
+		if err := closeBrowser(old.browser); err != nil {
+			slog.Warn("screenshot: pooled browser close failed", "err", err)
+		}
+		old.browser = nil
 	}
-	poolBrowser = nil
 }
 
 // Close tears down the pooled Chromium. Intended for graceful shutdown from
@@ -152,4 +201,14 @@ func resetBrowser() {
 // cached (e.g. screenshot endpoints were never wired or never hit).
 func Close() {
 	resetBrowser()
+}
+
+// getBrowser is retained for tests that only need launch/connect error paths.
+func getBrowser() (*rod.Browser, error) {
+	b, pb, err := acquireBrowser()
+	if err != nil {
+		return nil, err
+	}
+	releaseBrowser(pb)
+	return b, nil
 }

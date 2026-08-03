@@ -6,6 +6,8 @@
 package slug
 
 import (
+	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode"
@@ -14,6 +16,31 @@ import (
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
 )
+
+// MaxUniqueAttempts caps collision suffixes (-2, -3, …) for UniqueAvailable.
+const MaxUniqueAttempts = 1000
+
+// ExistsFn reports whether candidate is already taken.
+type ExistsFn func(ctx context.Context, candidate string) (exists bool, err error)
+
+// UniqueAvailable returns base if free, else base-2, base-3, …
+func UniqueAvailable(ctx context.Context, base string, exists ExistsFn) (string, error) {
+	if base == "" {
+		return "", fmt.Errorf("unique slug: empty base")
+	}
+	candidate := base
+	for attempt := 1; attempt < MaxUniqueAttempts; attempt++ {
+		taken, err := exists(ctx, candidate)
+		if err != nil {
+			return "", fmt.Errorf("check slug availability: %w", err)
+		}
+		if !taken {
+			return candidate, nil
+		}
+		candidate = fmt.Sprintf("%s-%d", base, attempt+1)
+	}
+	return "", fmt.Errorf("unique slug: exhausted attempts for %q", base)
+}
 
 // MaxLen is the upper bound the DB CHECK constraint enforces too. Long titles
 // get truncated on a hyphen boundary so we don't slice through a word.
@@ -64,6 +91,16 @@ func Slugify(title string) string {
 		cut = cut[:i]
 	}
 	return strings.Trim(cut, "-")
+}
+
+// FromTitleOrFallback slugifies title and falls back to "{prefix}-{id}" when
+// the title yields an empty slug (punctuation-only titles).
+func FromTitleOrFallback(title, prefix string, id int64) string {
+	s := Slugify(title)
+	if s == "" {
+		return fmt.Sprintf("%s-%d", prefix, id)
+	}
+	return s
 }
 
 // IsValid mirrors the DB CHECK constraint exactly. Used by the DTO layer

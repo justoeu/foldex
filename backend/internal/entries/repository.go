@@ -7,7 +7,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/folders"
 	"foldex/internal/links"
+	"foldex/internal/tags"
 )
 
 type Repository struct {
@@ -28,52 +30,8 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
 	args := []any{}
 	linkWhere := []string{}
 	noteWhere := []string{}
-
-	if q.Q != "" {
-		pattern := "%" + q.Q + "%"
-		args = append(args, pattern)
-		idx := len(args)
-		linkWhere = append(linkWhere, fmt.Sprintf("(l.title ILIKE $%d OR l.url ILIKE $%d OR COALESCE(l.description,'') ILIKE $%d)", idx, idx, idx))
-	}
-	if len(q.TagIDs) > 0 {
-		args = append(args, q.TagIDs)
-		idx := len(args)
-		linkWhere = append(linkWhere, fmt.Sprintf(`l.id IN (
-            SELECT entity_id FROM link_tag
-            WHERE entity_kind = 'link' AND tag_id = ANY($%d)
-            GROUP BY entity_id
-            HAVING count(DISTINCT tag_id) = %d
-        )`, idx, len(q.TagIDs)))
-	}
-	if q.FolderID != nil {
-		args = append(args, *q.FolderID)
-		linkWhere = append(linkWhere, fmt.Sprintf("l.folder_id = $%d", len(args)))
-	} else if q.Ungrouped {
-		linkWhere = append(linkWhere, "l.folder_id IS NULL")
-	}
-
-	if q.Q != "" {
-		pattern := "%" + q.Q + "%"
-		args = append(args, pattern)
-		idx := len(args)
-		noteWhere = append(noteWhere, fmt.Sprintf("(n.title ILIKE $%d OR n.body_text ILIKE $%d)", idx, idx))
-	}
-	if len(q.TagIDs) > 0 {
-		args = append(args, q.TagIDs)
-		idx := len(args)
-		noteWhere = append(noteWhere, fmt.Sprintf(`n.id IN (
-            SELECT entity_id FROM link_tag
-            WHERE entity_kind = 'note' AND tag_id = ANY($%d)
-            GROUP BY entity_id
-            HAVING count(DISTINCT tag_id) = %d
-        )`, idx, len(q.TagIDs)))
-	}
-	if q.FolderID != nil {
-		args = append(args, *q.FolderID)
-		noteWhere = append(noteWhere, fmt.Sprintf("n.folder_id = $%d", len(args)))
-	} else if q.Ungrouped {
-		noteWhere = append(noteWhere, "n.folder_id IS NULL")
-	}
+	appendScopeFilters(&linkWhere, &args, "l", "link", q, true)
+	appendScopeFilters(&noteWhere, &args, "n", "note", q, false)
 
 	// References the UNIONed result's output column names (established by
 	// the link arm's aliases — Postgres requires both arms agree, which they
@@ -102,6 +60,9 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
 	limitIdx := len(args) - 1
 	offsetIdx := len(args)
 
+	// Pre-aggregate click_log once per entity_kind instead of LATERAL count(*)
+	// per row (which forces full candidate evaluation before LIMIT on
+	// sort=clicks|recent).
 	linkSQL := `SELECT 'link' AS kind, l.id, l.title, l.slug, l.pinned, l.folder_id, l.created_at, l.updated_at,
             COALESCE(clk.cnt, 0) AS click_count, clk.last_at AS last_clicked_at,
             l.url, l.description, l.favicon_url, l.og_image_url, l.preview_status, l.preview_error,
@@ -109,10 +70,11 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
             l.change_seen_at, l.last_check_error,
             NULL::text AS cover_url, NULL::text AS body_snippet
         FROM link l
-        LEFT JOIN LATERAL (
-            SELECT count(*) AS cnt, max(clicked_at) AS last_at
-            FROM click_log WHERE entity_kind = 'link' AND entity_id = l.id
-        ) clk ON TRUE`
+        LEFT JOIN (
+            SELECT entity_id, count(*)::bigint AS cnt, max(clicked_at) AS last_at
+            FROM click_log WHERE entity_kind = 'link'
+            GROUP BY entity_id
+        ) clk ON clk.entity_id = l.id`
 	if len(linkWhere) > 0 {
 		linkSQL += " WHERE " + strings.Join(linkWhere, " AND ")
 	}
@@ -126,10 +88,11 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
             NULL::text AS last_check_error,
             n.cover_url, left(n.body_text, 240) AS body_snippet
         FROM note n
-        LEFT JOIN LATERAL (
-            SELECT count(*) AS cnt, max(clicked_at) AS last_at
-            FROM click_log WHERE entity_kind = 'note' AND entity_id = n.id
-        ) clk ON TRUE`
+        LEFT JOIN (
+            SELECT entity_id, count(*)::bigint AS cnt, max(clicked_at) AS last_at
+            FROM click_log WHERE entity_kind = 'note'
+            GROUP BY entity_id
+        ) clk ON clk.entity_id = n.id`
 	if len(noteWhere) > 0 {
 		noteSQL += " WHERE " + strings.Join(noteWhere, " AND ")
 	}
@@ -177,55 +140,48 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
 		return out, nil
 	}
 
-	linkTags, err := r.tagsFor(ctx, "link", linkIDs)
-	if err != nil {
-		return nil, err
-	}
-	noteTags, err := r.tagsFor(ctx, "note", noteIDs)
+	byKind, err := tags.TagsForLinkAndNote(ctx, r.pool, linkIDs, noteIDs)
 	if err != nil {
 		return nil, err
 	}
 	for i := range out {
-		var tagMap map[int64][]links.Tag
-		if out[i].Kind == "link" {
-			tagMap = linkTags
-		} else {
-			tagMap = noteTags
-		}
-		if t, ok := tagMap[out[i].ID]; ok {
+		if t, ok := byKind[out[i].Kind][out[i].ID]; ok {
 			out[i].Tags = t
 		}
 	}
 	return out, nil
 }
 
-// tagsFor batches a tag lookup for one entity kind — mirrors
-// links.Repository.tagsFor/notes.Repository.tagsFor's shape, kept separate
-// per kind (rather than one call spanning both) since link ids and note ids
-// occupy the same numeric space and must never be conflated.
-func (r *Repository) tagsFor(ctx context.Context, kind string, ids []int64) (map[int64][]links.Tag, error) {
-	out := map[int64][]links.Tag{}
-	if len(ids) == 0 {
-		return out, nil
-	}
-	rows, err := r.pool.Query(ctx, `
-        SELECT lt.entity_id, t.id, t.name, t.color, t.icon
-        FROM link_tag lt
-        JOIN tag t ON t.id = lt.tag_id
-        WHERE lt.entity_kind = $1 AND lt.entity_id = ANY($2)
-        ORDER BY t.name ASC
-    `, kind, ids)
-	if err != nil {
-		return nil, fmt.Errorf("tags for entries (%s): %w", kind, err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var entityID int64
-		var t links.Tag
-		if err := rows.Scan(&entityID, &t.ID, &t.Name, &t.Color, &t.Icon); err != nil {
-			return nil, err
+// appendScopeFilters adds Q/TagIDs/FolderID/Ungrouped predicates for one UNION
+// arm. linkSearch=true uses title|url|description; notes use title|body_text.
+func appendScopeFilters(where *[]string, args *[]any, alias, kind string, q ListQuery, linkSearch bool) {
+	if q.Q != "" {
+		pattern := "%" + q.Q + "%"
+		*args = append(*args, pattern)
+		idx := len(*args)
+		if linkSearch {
+			*where = append(*where, fmt.Sprintf("(%s.title ILIKE $%d OR %s.url ILIKE $%d OR COALESCE(%s.description,'') ILIKE $%d)", alias, idx, alias, idx, alias, idx))
+		} else {
+			*where = append(*where, fmt.Sprintf("(%s.title ILIKE $%d OR %s.body_text ILIKE $%d)", alias, idx, alias, idx))
 		}
-		out[entityID] = append(out[entityID], t)
 	}
-	return out, rows.Err()
+	if len(q.TagIDs) > 0 {
+		*args = append(*args, q.TagIDs)
+		idx := len(*args)
+		*where = append(*where, fmt.Sprintf(`%s.id IN (
+            SELECT entity_id FROM link_tag
+            WHERE entity_kind = '%s' AND tag_id = ANY($%d)
+            GROUP BY entity_id
+            HAVING count(DISTINCT tag_id) = %d
+        )`, alias, kind, idx, len(q.TagIDs)))
+	}
+	if q.FolderID != nil {
+		*args = append(*args, *q.FolderID)
+		*where = append(*where, fmt.Sprintf("%s.folder_id = $%d", alias, len(*args)))
+	} else if q.Ungrouped {
+		*where = append(*where, alias+".folder_id IS NULL")
+	} else {
+		// Unscoped grid: never surface content from password-protected folders.
+		*where = append(*where, folders.SQLNotInLockedFolder(alias))
+	}
 }

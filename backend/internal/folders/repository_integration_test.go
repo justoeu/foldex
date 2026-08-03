@@ -56,6 +56,31 @@ func TestRepository_NestedCRUD(t *testing.T) {
 	assert.Len(t, flat, 2)
 }
 
+// TestRepository_List_SlimSkipsPreviews locks N1-NEX-006: slim mode returns
+// metadata only (no RapidView preview tiles / counts).
+func TestRepository_List_SlimSkipsPreviews(t *testing.T) {
+	ctx, frepo, lrepo := setup(t)
+	root, err := frepo.Create(ctx, folders.CreateInput{Name: "SlimRoot", Color: "#abc"})
+	require.NoError(t, err)
+	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://slim.example/a", Title: "A", FolderID: &root.ID})
+	require.NoError(t, err)
+
+	full, err := frepo.List(ctx, folders.ListQuery{RootOnly: true})
+	require.NoError(t, err)
+	require.Len(t, full, 1)
+	assert.EqualValues(t, 1, full[0].LinkCount)
+	assert.NotEmpty(t, full[0].Previews)
+
+	slim, err := frepo.List(ctx, folders.ListQuery{RootOnly: true, Slim: true})
+	require.NoError(t, err)
+	require.Len(t, slim, 1)
+	assert.Equal(t, root.ID, slim[0].ID)
+	assert.Equal(t, "SlimRoot", slim[0].Name)
+	assert.EqualValues(t, 0, slim[0].LinkCount, "slim omits counts")
+	assert.Empty(t, slim[0].Previews, "slim omits preview_links")
+	assert.Empty(t, slim[0].PreviewFolders, "slim omits preview_folders")
+}
+
 // TestRepository_DeleteSetsChildrenAndLinksToNull locks the invariant from
 // CLAUDE.md §4: "Both FKs are ON DELETE SET NULL — deleting a folder promotes
 // children to root and ungroups its links." This invariant was previously

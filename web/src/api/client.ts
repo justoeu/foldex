@@ -37,20 +37,30 @@ http.interceptors.request.use((config) => {
   return config
 })
 
-// On 401: drop the stale secret and prompt for a new one once. Prevents an
-// infinite loop where every queued request triggers its own prompt.
+// On 401: drop the stale secret, prompt once, and retry the failed request
+// with the fresh secret. `_retried` on the config prevents infinite loops if
+// the new secret is still wrong.
 let promptInFlight = false
 http.interceptors.response.use(
   (resp) => resp,
   async (error) => {
     const status = error?.response?.status
-    if (status === 401 && typeof window !== 'undefined' && !promptInFlight) {
+    const config = error?.config as (typeof error.config & { _retried?: boolean }) | undefined
+    if (
+      status === 401 &&
+      typeof window !== 'undefined' &&
+      config &&
+      !config._retried &&
+      !promptInFlight
+    ) {
       promptInFlight = true
       try {
         setStoredSecret('')
         const fresh = window.prompt('Foldex: enter SHARED_SECRET to authenticate /api requests')
         if (fresh) {
           setStoredSecret(fresh)
+          config._retried = true
+          return http.request(config)
         }
       } finally {
         promptInFlight = false

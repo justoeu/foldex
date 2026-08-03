@@ -33,4 +33,23 @@ func TestSetMasterInput_HintValidation(t *testing.T) {
 	// blank hint normalizes to nil.
 	blank := "   "
 	assert.Nil(t, setMasterInput{Password: "longenough1", Hint: &blank}.NormalizedHint())
+
+	// nil hint → NormalizedHint nil.
+	assert.Nil(t, setMasterInput{Password: "longenough1"}.NormalizedHint())
+
+	// too-long hint rejected.
+	long := strings.Repeat("h", maxMasterHintLen+1)
+	err = setMasterInput{Password: "longenough1", Hint: &long}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hint too long")
+
+	// max length accepted.
+	max := strings.Repeat("h", maxMasterHintLen)
+	require.NoError(t, setMasterInput{Password: "longenough1", Hint: &max}.Validate())
+
+	// non-blank trims.
+	raw := "  remember this  "
+	got := setMasterInput{Password: "longenough1", Hint: &raw}.NormalizedHint()
+	require.NotNil(t, got)
+	assert.Equal(t, "remember this", *got)
 }

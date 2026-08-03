@@ -203,32 +203,11 @@ loop:
 					}
 				}
 			case "meta":
-				if !inHead && depth > 1 {
-					continue
-				}
-				property := attr(tok, "property")
-				nameAttr := attr(tok, "name")
-				content := attr(tok, "content")
-				switch {
-				case property == "og:image" && out.OGImageURL == "":
-					out.OGImageURL = content
-				case (property == "og:description" || nameAttr == "description") && out.Description == "":
-					out.Description = content
-				case property == "og:title" && out.Title == "":
-					out.Title = content
+				if inHead || depth <= 1 {
+					applyMetaTag(&out, tok)
 				}
 			case "link":
-				rel := strings.ToLower(attr(tok, "rel"))
-				typ := strings.ToLower(attr(tok, "type"))
-				href := attr(tok, "href")
-				if (rel == "icon" || rel == "shortcut icon" || strings.Contains(rel, "icon")) && out.FaviconURL == "" {
-					out.FaviconURL = href
-				}
-				// Capture an oEmbed discovery link for post-parse enrichment.
-				// Spec: <link rel="alternate" type="application/json+oembed" href="…">.
-				if strings.Contains(rel, "alternate") && typ == "application/json+oembed" && out.OEmbedURL == "" {
-					out.OEmbedURL = href
-				}
+				applyLinkTag(&out, tok)
 			}
 			if tt == html.StartTagToken && !isVoid(name) {
 				depth++
@@ -242,6 +221,33 @@ loop:
 		}
 	}
 	return out
+}
+
+func applyMetaTag(out *Result, tok html.Token) {
+	property := attr(tok, "property")
+	nameAttr := attr(tok, "name")
+	content := attr(tok, "content")
+	switch {
+	case property == "og:image" && out.OGImageURL == "":
+		out.OGImageURL = content
+	case (property == "og:description" || nameAttr == "description") && out.Description == "":
+		out.Description = content
+	case property == "og:title" && out.Title == "":
+		out.Title = content
+	}
+}
+
+func applyLinkTag(out *Result, tok html.Token) {
+	rel := strings.ToLower(attr(tok, "rel"))
+	typ := strings.ToLower(attr(tok, "type"))
+	href := attr(tok, "href")
+	if (rel == "icon" || rel == "shortcut icon" || strings.Contains(rel, "icon")) && out.FaviconURL == "" {
+		out.FaviconURL = href
+	}
+	// Spec: <link rel="alternate" type="application/json+oembed" href="…">.
+	if strings.Contains(rel, "alternate") && typ == "application/json+oembed" && out.OEmbedURL == "" {
+		out.OEmbedURL = href
+	}
 }
 
 func attr(t html.Token, key string) string {
@@ -361,12 +367,32 @@ func strictSSRF() bool {
 	return v == "1" || v == "true" || v == "TRUE" || v == "yes"
 }
 
+// awsIMDSv6 is the well-known AWS Instance Metadata Service IPv6 address
+// (fd00:ec2::254). Always blocked — same posture as 169.254.169.254.
+var awsIMDSv6 = net.ParseIP("fd00:ec2::254")
+
+// alibabaMetadata is Alibaba Cloud's metadata endpoint (100.100.100.200).
+// Not RFC1918 and not classic AWS IMDS — always blocked.
+var alibabaMetadata = net.ParseIP("100.100.100.200")
+
 func isIMDS(ip net.IP) bool {
 	if ip == nil {
 		return false
 	}
 	if ip4 := ip.To4(); ip4 != nil {
-		return ip4[0] == 169 && ip4[1] == 254 && ip4[2] == 169 && ip4[3] == 254
+		// AWS/GCP classic link-local metadata
+		if ip4[0] == 169 && ip4[1] == 254 && ip4[2] == 169 && ip4[3] == 254 {
+			return true
+		}
+		// Alibaba Cloud metadata (always refuse — not covered by isPrivateIP)
+		if alibabaMetadata != nil && ip4.Equal(alibabaMetadata.To4()) {
+			return true
+		}
+		return false
+	}
+	// AWS IPv6 IMDS — always refuse regardless of PREVIEW_STRICT_SSRF
+	if awsIMDSv6 != nil && ip.Equal(awsIMDSv6) {
+		return true
 	}
 	return false
 }

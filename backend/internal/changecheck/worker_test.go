@@ -223,6 +223,35 @@ func TestProcess_FetchFailure_RecordsWithoutPush(t *testing.T) {
 	assert.Empty(t, sender.seen())
 }
 
+// RecordCheckResult failures on the fetch-error path must not panic and must
+// still be attempted (logging is verified by not swallowing silently — the
+// call reaches the repo even when it returns an error).
+func TestProcess_FetchFailure_LogsRecordCheckResultError(t *testing.T) {
+	repo := &fakeRepo{
+		links: map[int64]links.Link{
+			1: {ID: 1, URL: "https://x.test/", Title: "x", CheckInterval: ptrStr("daily")},
+		},
+		recErr: errors.New("db down"),
+	}
+	w := New(repo, fakeFetcher{err: errors.New("network down")}, &fakeSender{}, Options{}, testLogger())
+	// Must not panic; RecordCheckResult error is logged like the success path.
+	w.process(context.Background(), 1)
+	assert.Empty(t, repo.snapshotResults(), "recErr means result was not stored")
+}
+
+func TestProcess_FingerprintFailure_LogsRecordCheckResultError(t *testing.T) {
+	// Empty body → fingerprintContent returns "no extractable content".
+	repo := &fakeRepo{
+		links: map[int64]links.Link{
+			1: {ID: 1, URL: "https://x.test/", Title: "x", CheckInterval: ptrStr("daily")},
+		},
+		recErr: errors.New("db down"),
+	}
+	w := New(repo, fakeFetcher{body: []byte("")}, &fakeSender{}, Options{}, testLogger())
+	w.process(context.Background(), 1)
+	assert.Empty(t, repo.snapshotResults())
+}
+
 func TestProcess_KindSwitchDoesNotFirePush(t *testing.T) {
 	// Previous run was content kind, page now declares a feed → kind=feed
 	// after this pass. The kind mismatch must suppress the push (fresh
@@ -302,7 +331,7 @@ func ptrStr(s string) *string { return &s }
 
 func contentHash(s string) string {
 	// Compute the canonical content fingerprint for `<main>s</main>`.
-	h, err := fingerprintContent(newPage("x", s))
+	h, err := fingerprintContent([]byte(newPage("x", s)))
 	if err != nil {
 		panic(err)
 	}

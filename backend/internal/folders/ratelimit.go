@@ -11,6 +11,10 @@ import (
 // single-user/local threat model, so a backend restart clearing the counters
 // (and thus lifting a lockout early) is acceptable; the bcrypt cost per attempt
 // is the real floor. A correct password resets the counter.
+//
+// Concurrency: beginAttempt reserves a slot under one Lock before bcrypt runs
+// so N parallel wrong-password requests cannot all bypass the 5-attempt cap
+// (check-then-act on lockedUntil+fail alone would admit every racer).
 const (
 	maxUnlockAttempts = 5
 	unlockLockout     = time.Hour
@@ -18,6 +22,7 @@ const (
 
 type unlockAttempt struct {
 	fails       int
+	inFlight    int
 	lockedUntil time.Time
 }
 
@@ -46,22 +51,70 @@ func (l *unlockLimiter) lockedUntil(id int64) time.Time {
 	return time.Time{}
 }
 
-// fail records a wrong-password attempt and returns the running fail count plus
-// the lockout expiry (zero when not yet locked). An expired lockout resets the
-// counter before this attempt is tallied, so the window is rolling.
-func (l *unlockLimiter) fail(id int64) (fails int, lockedUntil time.Time) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.now()
+func (l *unlockLimiter) entry(id int64) *unlockAttempt {
 	e := l.entries[id]
 	if e == nil {
 		e = &unlockAttempt{}
 		l.entries[id] = e
 	}
+	return e
+}
+
+func (l *unlockLimiter) clearExpiredLocked(e *unlockAttempt, now time.Time) {
 	if !e.lockedUntil.IsZero() && !e.lockedUntil.After(now) {
 		e.fails = 0
 		e.lockedUntil = time.Time{}
 	}
+}
+
+// beginAttempt reserves one attempt slot under the mutex. ok=false means the
+// folder is locked out (or the concurrent cap is exhausted); lockedUntil is
+// the Retry-After expiry. Callers MUST pair a successful begin with exactly
+// one of releaseAttempt / commitFail / commitSuccess.
+func (l *unlockLimiter) beginAttempt(id int64) (lockedUntil time.Time, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	e := l.entry(id)
+	l.clearExpiredLocked(e, now)
+	if e.lockedUntil.After(now) {
+		return e.lockedUntil, false
+	}
+	if e.fails+e.inFlight >= maxUnlockAttempts {
+		e.lockedUntil = now.Add(unlockLockout)
+		return e.lockedUntil, false
+	}
+	e.inFlight++
+	return time.Time{}, true
+}
+
+// releaseAttempt drops a reserved slot without counting a failure (bad JSON,
+// folder not found, not protected, etc.).
+func (l *unlockLimiter) releaseAttempt(id int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e := l.entries[id]
+	if e == nil || e.inFlight == 0 {
+		return
+	}
+	e.inFlight--
+	if e.fails == 0 && e.inFlight == 0 && e.lockedUntil.IsZero() {
+		delete(l.entries, id)
+	}
+}
+
+// commitFail records a wrong-password attempt for a previously reserved slot
+// and returns the running fail count plus lockout expiry (zero when not yet
+// locked).
+func (l *unlockLimiter) commitFail(id int64) (fails int, lockedUntil time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	e := l.entry(id)
+	if e.inFlight > 0 {
+		e.inFlight--
+	}
+	l.clearExpiredLocked(e, now)
 	e.fails++
 	if e.fails >= maxUnlockAttempts {
 		e.lockedUntil = now.Add(unlockLockout)
@@ -69,7 +122,31 @@ func (l *unlockLimiter) fail(id int64) (fails int, lockedUntil time.Time) {
 	return e.fails, e.lockedUntil
 }
 
-// reset clears a folder's attempt state — called on a successful unlock.
+// commitSuccess clears attempt state after a correct password (reserved slot
+// included).
+func (l *unlockLimiter) commitSuccess(id int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.entries, id)
+}
+
+// fail records a wrong-password attempt without a prior beginAttempt. Kept for
+// tests and any non-handler call sites; production unlock uses begin/commit.
+func (l *unlockLimiter) fail(id int64) (fails int, lockedUntil time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	e := l.entry(id)
+	l.clearExpiredLocked(e, now)
+	e.fails++
+	if e.fails >= maxUnlockAttempts {
+		e.lockedUntil = now.Add(unlockLockout)
+	}
+	return e.fails, e.lockedUntil
+}
+
+// reset clears a folder's attempt state — called on a successful unlock when
+// not using begin/commitSuccess.
 func (l *unlockLimiter) reset(id int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

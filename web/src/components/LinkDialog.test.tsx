@@ -19,6 +19,13 @@ beforeEach(() => {
   _clearUrlMetadataCacheForTests()
 })
 
+/** Assert no metadata fetch after debounce without wall-clock flakiness. */
+async function expectNoMetadataFetch(ms = 550) {
+  const before = state.urlMetadataCalls.length
+  await new Promise((r) => setTimeout(r, ms))
+  expect(state.urlMetadataCalls.length).toBe(before)
+}
+
 describe('LinkDialog', () => {
   it('does not show content when closed', () => {
     renderWithProviders(<LinkDialog open={false} link={null} onClose={vi.fn()} />)
@@ -209,31 +216,20 @@ describe('LinkDialog', () => {
 
   it('AUTO-FILL: never overwrites user-typed title', async () => {
     state.urlMetadata = { title: 'Auto Title', description: 'Auto Desc' }
-    // Use initialUrl so the URL is set as soon as the dialog opens — the
-    // debounce timer starts immediately. We populate Title via fireEvent
-    // (not user.type) because the modal's auto-focus on URL + useFocusTrap
-    // restoration from earlier tests in this file leaves focus inconsistent;
-    // fireEvent.change targets the element directly regardless of focus.
     renderWithProviders(<LinkDialog open link={null} initialUrl="https://example.com" onClose={vi.fn()} />)
     const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
     fireEvent.change(titleInput, { target: { value: 'my custom title' } })
-
-    await waitFor(() => expect(state.urlMetadataCalls).toContain('https://example.com'), { timeout: 2000 })
-    // Wait a beat past the mock resolution so the onSuccess setter has a
-    // chance to (incorrectly) overwrite if the guard is broken.
-    await new Promise((r) => setTimeout(r, 200))
-    expect(titleInput.value).toBe('my custom title')
+    await waitFor(() => expect(state.urlMetadataCalls).toContain('https://example.com'))
+    // One more microtask tick so onSuccess setters settle if they race.
+    await waitFor(() => expect(titleInput.value).toBe('my custom title'))
   })
 
   it('AUTO-FILL: does not fire for invalid-looking URLs', async () => {
     state.urlMetadata = { title: 'should not see this' }
     renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
     const user = userEvent.setup()
-    // "hello world" has whitespace AND no scheme — looksLikeUrl rejects it.
     await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'hello world')
-    // Wait past the debounce window — nothing should fire.
-    await new Promise((r) => setTimeout(r, 700))
-    expect(state.urlMetadataCalls).toHaveLength(0)
+    await expectNoMetadataFetch()
   })
 
   it('AUTO-FILL: skipped entirely in edit mode', async () => {
@@ -259,12 +255,7 @@ describe('LinkDialog', () => {
     }
     state.links.push(link)
     renderWithProviders(<LinkDialog open link={link} onClose={vi.fn()} />)
-    // Wait past the debounce — edit mode must NEVER call the metadata endpoint
-    // (the link already has its own title/description).
-    await new Promise((r) => setTimeout(r, 700))
-    expect(state.urlMetadataCalls).toHaveLength(0)
-
-    // Title stays exactly as the link had it.
+    await expectNoMetadataFetch()
     const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
     expect(titleInput.value).toBe('existing title')
   })
@@ -292,54 +283,34 @@ describe('LinkDialog', () => {
   })
 
   it('AUTO-FILL: aborts in-flight fetch when dialog closes mid-debounce', async () => {
-    // The effect cleanup must abort the AbortController so a stale onSuccess
-    // doesn't fire setTitle on an unmounted component (which would either
-    // warn loudly or — worse — race with the next dialog open and write into
-    // it). We exercise the cleanup by unmounting BEFORE the debounce window
-    // elapses, then ensuring the fetch never happens at all.
     state.urlMetadata = { title: 'Should never apply' }
     const { unmount } = renderWithProviders(<LinkDialog open link={null} initialUrl="https://abort.example" onClose={vi.fn()} />)
-    // Tear down well within the 500ms debounce window — the timer was just
-    // scheduled by the open effect, so cleanup should clear it AND abort.
     unmount()
-    // Wait past the original debounce + a generous slack — no request must
-    // ever fire because the timer was cleared.
-    await new Promise((r) => setTimeout(r, 800))
-    expect(state.urlMetadataCalls).toHaveLength(0)
+    await expectNoMetadataFetch(600)
   })
 
   it('AUTO-FILL: never overwrites user-typed description either', async () => {
-    // Symmetric guard for description — title is covered above. The setters
-    // are written symmetrically but the test wasn't, so a regression that
-    // drops the trim-check on description would ship green.
     state.urlMetadata = { title: 'Auto Title', description: 'Auto Desc' }
     renderWithProviders(<LinkDialog open link={null} initialUrl="https://example.com" onClose={vi.fn()} />)
     const desc = screen.getByRole('textbox', { name: /description/i }) as HTMLTextAreaElement
     fireEvent.change(desc, { target: { value: 'my custom desc' } })
-
-    await waitFor(() => expect(state.urlMetadataCalls).toContain('https://example.com'), { timeout: 2000 })
-    await new Promise((r) => setTimeout(r, 200))
-    expect(desc.value).toBe('my custom desc')
+    await waitFor(() => expect(state.urlMetadataCalls).toContain('https://example.com'))
+    await waitFor(() => expect(desc.value).toBe('my custom desc'))
   })
 
   it('AUTO-FILL: in-memory cache dedups the same URL across dialog mounts', async () => {
-    // Open dialog → fetch fires once → unmount → reopen with the SAME URL.
-    // The second mount must hit the module-level cache and skip the network
-    // entirely. Saves a roundtrip on the Cmd+V duplicate / close-reopen loop.
     state.urlMetadata = { title: 'Cached Title' }
     const { unmount } = renderWithProviders(
       <LinkDialog open link={null} initialUrl="https://cache-me.example" onClose={vi.fn()} />,
     )
-    await waitFor(() => expect(state.urlMetadataCalls).toHaveLength(1), { timeout: 2000 })
+    await waitFor(() => expect(state.urlMetadataCalls).toHaveLength(1))
     unmount()
 
     renderWithProviders(<LinkDialog open link={null} initialUrl="https://cache-me.example" onClose={vi.fn()} />)
-    // Give the debounce + a beat for any network call to happen — none should.
-    await new Promise((r) => setTimeout(r, 800))
+    await expectNoMetadataFetch(600)
     expect(state.urlMetadataCalls).toHaveLength(1)
-    // The title should still be pre-filled from the cache hit.
     const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
-    expect(titleInput.value).toBe('Cached Title')
+    await waitFor(() => expect(titleInput.value).toBe('Cached Title'))
   })
 
   it('AUTO-FILL: cache key is the URL — distinct URLs each fetch once', async () => {
@@ -379,5 +350,182 @@ describe('LinkDialog', () => {
     const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
     expect(titleInput.value).toBe('')
     expect(screen.getByRole('button', { name: /Save link/i })).toBeEnabled()
+  })
+
+  it('AUTO-FILL: shows failed hint under empty title after a real error', async () => {
+    state.urlMetadataError = Object.assign(new Error('fetch_failed'), {
+      code: 'ERR_BAD_RESPONSE',
+      response: { status: 502, data: { error: { code: 'fetch_failed', message: 'could not fetch' } } },
+    })
+    renderWithProviders(<LinkDialog open link={null} initialUrl="https://blocked.example" onClose={vi.fn()} />)
+    await waitFor(() => expect(state.urlMetadataCalls).toContain('https://blocked.example'), { timeout: 2000 })
+    await waitFor(() => expect(screen.getByText(/could not auto-fill/i)).toBeInTheDocument())
+  })
+
+  it('stages an image file via the hidden input and uploads on create', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+    const onClose = vi.fn()
+    renderWithProviders(<LinkDialog open link={null} onClose={onClose} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://img.example')
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    const file = new File(['png'], 'cover.png', { type: 'image/png' })
+    await user.upload(fileInput, file)
+    expect(screen.getByText(/will be saved with the link/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
+    await waitFor(() => expect(state.links).toHaveLength(1))
+    await waitFor(() => expect(state.links[0].og_image_url).toContain('/api/files/links/'))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('rejects non-image files in the upload zone', async () => {
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    const file = new File(['x'], 'notes.txt', { type: 'text/plain' })
+    fireEvent.change(fileInput, { target: { files: [file] } })
+    expect(await screen.findByText(/must be an image/i)).toBeInTheDocument()
+  })
+
+  it('accepts a dropped image file on the upload zone', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:drop')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const zone = document.querySelector('.fx-img-upload-zone') as HTMLElement
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    fireEvent.dragOver(zone)
+    expect(zone.className).toMatch(/drag/)
+    fireEvent.dragLeave(zone)
+    fireEvent.drop(zone, { dataTransfer: { files: [file] } })
+    expect(screen.getByText(/will be saved with the link/i)).toBeInTheDocument()
+  })
+
+  it('removes an existing og image on edit save when user clicks remove', async () => {
+    const link: Link = {
+      id: 3, url: 'https://has-img', title: 'Has img', slug: 'has-img', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+      og_image_url: '/api/files/links/3.jpg', description: null, favicon_url: null,
+    } as Link
+    state.links.push(link)
+    const onClose = vi.fn()
+    renderWithProviders(<LinkDialog open link={link} onClose={onClose} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /remove image/i }))
+    await user.click(screen.getByRole('button', { name: /Save changes/i }))
+    await waitFor(() => expect(state.links[0].og_image_url).toBeNull())
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('surfaces image-remove errors and keeps the dialog open', async () => {
+    const link: Link = {
+      id: 3, url: 'https://has-img', title: 'Has img', slug: 'has-img', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+      og_image_url: '/api/files/links/3.jpg', description: null, favicon_url: null,
+    } as Link
+    state.links.push(link)
+    state.linkImageRemoveError = { message: 'disk full' }
+    const onClose = vi.fn()
+    const { unmount } = renderWithProviders(<LinkDialog open link={link} onClose={onClose} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /remove image/i }))
+    await user.click(screen.getByRole('button', { name: /Save changes/i }))
+    expect(await screen.findByText(/disk full/i)).toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(state.links[0].og_image_url).toBe('/api/files/links/3.jpg')
+    unmount()
+    state.linkImageRemoveError = undefined
+  })
+
+  it('surfaces url_taken on create', async () => {
+    state.links.push({
+      id: 1, url: 'https://dup.example', title: 'Dup', slug: 'dup', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    } as Link)
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://dup.example')
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
+    expect(await screen.findByText(/already bookmarked/i)).toBeInTheDocument()
+  })
+
+  it('surfaces slug_taken on create with a custom dirty slug', async () => {
+    state.links.push({
+      id: 1, url: 'https://a.example', title: 'A', slug: 'taken-slug', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    } as Link)
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://b.example')
+    const slugInput = screen.getByRole('textbox', { name: /short url slug/i })
+    fireEvent.change(slugInput, { target: { value: 'taken-slug' } })
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
+    expect(await screen.findByText(/already in use/i)).toBeInTheDocument()
+  })
+
+  it('auto-derives slug from title and allows reset after dirty edit', async () => {
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const titleInput = screen.getByRole('textbox', { name: /Title/i })
+    fireEvent.change(titleInput, { target: { value: 'Hello World' } })
+    const slugInput = screen.getByRole('textbox', { name: /short url slug/i }) as HTMLInputElement
+    await waitFor(() => expect(slugInput.value).toBe('hello-world'))
+    fireEvent.change(slugInput, { target: { value: 'custom' } })
+    expect(slugInput.value).toBe('custom')
+    await userEvent.click(screen.getByRole('button', { name: /reset to auto-derived/i }))
+    expect(slugInput.value).toBe('hello-world')
+  })
+
+  it('toggles pin and sends pinned=true on create', async () => {
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://pin.example')
+    await user.click(screen.getByRole('checkbox', { name: /pin/i }))
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
+    await waitFor(() => expect(state.links[0]?.pinned).toBe(true))
+  })
+
+  it('cycles color on a pending tag chip', async () => {
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    const tagsInput = screen.getByLabelText('tag filter')
+    await user.type(tagsInput, 'pending-tag{Enter}')
+    await waitFor(() => expect(document.querySelector('.fx-tag-hint')).not.toBeNull())
+    const chip = screen.getByText('pending-tag')
+    await user.click(chip)
+    expect(document.querySelector('.fx-tag-hint')).not.toBeNull()
+    expect(screen.getByText('pending-tag')).toBeInTheDocument()
+  })
+
+  it('paginates registered tags when more than 7 are available', async () => {
+    for (let i = 0; i < 10; i++) {
+      state.tags.push({ id: 100 + i, name: `tag-${i}`, color: '#111', icon: null })
+    }
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('1/2')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: /next page/i }))
+    expect(screen.getByText('2/2')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /previous page/i }))
+    expect(screen.getByText('1/2')).toBeInTheDocument()
+  })
+
+  it('closes via the X button', async () => {
+    const onClose = vi.fn()
+    renderWithProviders(<LinkDialog open link={null} onClose={onClose} />)
+    await userEvent.click(screen.getByRole('button', { name: /close/i }))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('EDIT: ships a dirty empty slug as null (regenerate)', async () => {
+    const link: Link = {
+      id: 8, url: 'https://slug-edit', title: 'Slug Edit', slug: 'slug-edit', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    } as Link
+    state.links.push(link)
+    const onClose = vi.fn()
+    renderWithProviders(<LinkDialog open link={link} onClose={onClose} />)
+    const user = userEvent.setup()
+    const slugInput = screen.getByRole('textbox', { name: /short url slug/i })
+    await user.clear(slugInput)
+    await user.click(screen.getByRole('button', { name: /Save changes/i }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 })

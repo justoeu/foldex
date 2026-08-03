@@ -7,10 +7,12 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/folders"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/pgerr"
+	"foldex/internal/tags"
 )
 
 type PreviewStatus string
@@ -148,25 +150,12 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Link, error) {
 	return r.Get(ctx, id)
 }
 
-// uniqueConstraint returns the violated constraint name when err is a Postgres
-// 23505 unique-violation, or "" otherwise. errors.As survives `%w` wrapping —
-// the older string-match approach worked because the constraint name landed in
-// the formatted message, but it would silently break if any wrapping layer
-// ever omitted Unwrap or changed the format.
-func uniqueConstraint(err error) string {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
-		return ""
-	}
-	return pgErr.ConstraintName
-}
-
 func isSlugUniqueViolation(err error) bool {
-	return uniqueConstraint(err) == "link_slug_unique"
+	return pgerr.UniqueConstraint(err) == "link_slug_unique"
 }
 
 func isURLUniqueViolation(err error) bool {
-	return uniqueConstraint(err) == "link_url_unique"
+	return pgerr.UniqueConstraint(err) == "link_url_unique"
 }
 
 func (r *Repository) Get(ctx context.Context, id int64) (Link, error) {
@@ -232,11 +221,15 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Link, error) {
         )`, idx, len(q.TagIDs)))
 	}
 	// Folder filter: explicit FolderID wins over Ungrouped if both are set.
+	// Unscoped lists omit password-protected folders (handler gates scoped
+	// folder_id via CheckUnlock when wired).
 	if q.FolderID != nil {
 		args = append(args, *q.FolderID)
 		where = append(where, fmt.Sprintf("l.folder_id = $%d", len(args)))
 	} else if q.Ungrouped {
 		where = append(where, "l.folder_id IS NULL")
+	} else {
+		where = append(where, folders.SQLNotInLockedFolder("l"))
 	}
 
 	// Pinned links always come first regardless of the requested sort.
@@ -348,26 +341,9 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Link
 	// the live title for that, so resolve it inside the same tx so we read
 	// the about-to-be-updated value if `in.Title` was also set.
 	if in.SlugSet {
-		newSlug := ""
-		if in.Slug != nil {
-			newSlug = *in.Slug
-		} else {
-			// Use the just-staged title if present, else read current.
-			currentTitle := ""
-			if in.Title != nil {
-				currentTitle = strings.TrimSpace(*in.Title)
-			} else {
-				if err := tx.QueryRow(ctx, `SELECT title FROM link WHERE id = $1`, id).Scan(&currentTitle); err != nil {
-					if errors.Is(err, pgx.ErrNoRows) {
-						return Link{}, httperr.ErrNotFound
-					}
-					return Link{}, fmt.Errorf("read title for slug regen: %w", err)
-				}
-			}
-			newSlug = Slugify(currentTitle)
-			if newSlug == "" {
-				newSlug = fmt.Sprintf("link-%d", id)
-			}
+		newSlug, err := resolveUpdateSlug(ctx, tx, "link", id, in.Slug, in.Title)
+		if err != nil {
+			return Link{}, err
 		}
 		sets = append(sets, fmt.Sprintf("slug = $%d", i))
 		args = append(args, newSlug)
@@ -395,7 +371,13 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Link
 	if len(sets) > 0 {
 		sets = append(sets, "updated_at = now()")
 		args = append(args, id)
-		q := fmt.Sprintf(`UPDATE link SET %s WHERE id = $%d`, strings.Join(sets, ", "), i)
+		where := fmt.Sprintf(`WHERE id = $%d`, i)
+		if in.IfMatchUpdatedAt != nil {
+			i++
+			args = append(args, *in.IfMatchUpdatedAt)
+			where += fmt.Sprintf(` AND updated_at = $%d`, i)
+		}
+		q := fmt.Sprintf(`UPDATE link SET %s %s`, strings.Join(sets, ", "), where)
 		ct, err := tx.Exec(ctx, q, args...)
 		if err != nil {
 			if isURLUniqueViolation(err) {
@@ -407,6 +389,15 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Link
 			return Link{}, fmt.Errorf("update link: %w", err)
 		}
 		if ct.RowsAffected() == 0 {
+			if in.IfMatchUpdatedAt != nil {
+				var exists bool
+				if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM link WHERE id = $1)`, id).Scan(&exists); err != nil {
+					return Link{}, fmt.Errorf("check link exists: %w", err)
+				}
+				if exists {
+					return Link{}, httperr.New(409, "conflict", "link was modified; refetch and retry")
+				}
+			}
 			return Link{}, httperr.ErrNotFound
 		}
 	}
@@ -460,13 +451,13 @@ func (r *Repository) Delete(ctx context.Context, id int64) error {
 // a transaction so a missing link returns 404 instead of producing an
 // orphan click_log row via FK violation.
 func (r *Repository) ClickAndResolve(ctx context.Context, id int64) (string, error) {
-	return r.clickAndResolveWhere(ctx, "id = $1", id)
+	return r.clickAndResolveWhere(ctx, "l.id = $1", id)
 }
 
 // ClickAndResolveBySlug is the slug-keyed sibling of ClickAndResolve. Same
 // invariants — atomic resolve + click insert in one tx.
 func (r *Repository) ClickAndResolveBySlug(ctx context.Context, slug string) (string, error) {
-	return r.clickAndResolveWhere(ctx, "slug = $1", slug)
+	return r.clickAndResolveWhere(ctx, "l.slug = $1", slug)
 }
 
 func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg any) (string, error) {
@@ -478,7 +469,11 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg
 
 	var id int64
 	var u string
-	err = tx.QueryRow(ctx, `SELECT id, url FROM link WHERE `+where, arg).Scan(&id, &u)
+	// 404 for links inside password-protected folders — public /go must not
+	// leak destinations (or inflate click_log) without unlock.
+	err = tx.QueryRow(ctx, `
+        SELECT l.id, l.url FROM link l
+        WHERE `+where+` AND `+folders.SQLNotInLockedFolder("l"), arg).Scan(&id, &u)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", httperr.ErrNotFound
 	}
@@ -496,20 +491,31 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg
 }
 
 // UpdatePreview is called by the preview worker once metadata is fetched (or fails).
+// Manual OG upload wins: never overwrite a non-empty og_image_url (CAS vs
+// concurrent UpdateOGImage).
+//
+// Terminal statuses (ok/failed) only apply while preview_status is still
+// 'pending' (CAS — RACE-HER-009). A concurrent refreshPreview that already
+// flipped back to pending keeps its turn; a stale worker finishing after a
+// newer job was re-enqueued cannot overwrite a non-pending status. Setting
+// pending itself is unconditional so refresh/retry always restarts the poll.
 func (r *Repository) UpdatePreview(ctx context.Context, id int64, status PreviewStatus, favicon, ogImage, description, errMsg *string) error {
 	if !status.Valid() {
 		return fmt.Errorf("invalid preview status %q", status)
 	}
-	_, err := r.pool.Exec(ctx, `
+	q := `
         UPDATE link
         SET preview_status = $1,
             favicon_url    = COALESCE($2, favicon_url),
-            og_image_url   = COALESCE($3, og_image_url),
+            og_image_url   = COALESCE(NULLIF(og_image_url, ''), $3),
             description    = COALESCE($4, description),
             preview_error  = $5,
             updated_at     = now()
-        WHERE id = $6
-    `, status, favicon, ogImage, description, errMsg, id)
+        WHERE id = $6`
+	if status != StatusPending {
+		q += ` AND preview_status = 'pending'`
+	}
+	_, err := r.pool.Exec(ctx, q, status, favicon, ogImage, description, errMsg, id)
 	return err
 }
 
@@ -586,6 +592,7 @@ func (r *Repository) ListRecentChanges(ctx context.Context, sinceSeconds, limit 
 	sql := `SELECT ` + linkColumns + linkFrom + `
         WHERE l.last_change_detected_at IS NOT NULL
           AND l.last_change_detected_at > now() - make_interval(secs => $1::int)
+          AND ` + folders.SQLNotInLockedFolder("l") + `
         ORDER BY l.last_change_detected_at DESC
         LIMIT $2`
 	rows, err := r.pool.Query(ctx, sql, sinceSeconds, limit)
@@ -631,19 +638,27 @@ func (r *Repository) FindDueForCheck(ctx context.Context, limit int) ([]int64, e
 	if limit <= 0 || limit > 1000 {
 		limit = 256
 	}
+	// Claim due rows by bumping last_checked_at under SKIP LOCKED so two
+	// worker ticks (or replicas) cannot process the same link concurrently.
 	rows, err := r.pool.Query(ctx, `
-        SELECT id FROM link
-        WHERE check_interval IS NOT NULL
-          AND (
-              last_checked_at IS NULL
-              OR last_checked_at < now() - CASE check_interval
-                  WHEN 'hourly' THEN interval '1 hour'
-                  WHEN 'daily'  THEN interval '1 day'
-                  WHEN 'weekly' THEN interval '7 days'
-              END
-          )
-        ORDER BY COALESCE(last_checked_at, 'epoch'::timestamptz) ASC, id ASC
-        LIMIT $1
+        UPDATE link
+        SET last_checked_at = now()
+        WHERE id IN (
+            SELECT id FROM link
+            WHERE check_interval IS NOT NULL
+              AND (
+                  last_checked_at IS NULL
+                  OR last_checked_at < now() - CASE check_interval
+                      WHEN 'hourly' THEN interval '1 hour'
+                      WHEN 'daily'  THEN interval '1 day'
+                      WHEN 'weekly' THEN interval '7 days'
+                  END
+              )
+            ORDER BY COALESCE(last_checked_at, 'epoch'::timestamptz) ASC, id ASC
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+        )
+        RETURNING id
     `, limit)
 	if err != nil {
 		return nil, fmt.Errorf("find due for check: %w", err)
@@ -699,64 +714,24 @@ func (r *Repository) RecordCheckResult(ctx context.Context, id int64, res CheckR
             last_change_detected_at = now(),
             change_seen_at = NULL`
 	}
-	sql += ` WHERE id = $3`
+	// Only write when still opted-in — concurrent opt-out must not restore a
+	// fingerprint after the user cleared check_interval.
+	sql += ` WHERE id = $3 AND check_interval IS NOT NULL`
 	ct, err := r.pool.Exec(ctx, sql, fp, checkErr, id)
 	if err != nil {
 		return fmt.Errorf("record check result: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return httperr.ErrNotFound
-	}
-	return nil
-}
-
-// tagsFor returns a map of link_id -> []Tag for the given link IDs.
-func (r *Repository) tagsFor(ctx context.Context, linkIDs []int64) (map[int64][]Tag, error) {
-	out := map[int64][]Tag{}
-	if len(linkIDs) == 0 {
-		return out, nil
-	}
-	rows, err := r.pool.Query(ctx, `
-        SELECT lt.entity_id, t.id, t.name, t.color, t.icon
-        FROM link_tag lt
-        JOIN tag t ON t.id = lt.tag_id
-        WHERE lt.entity_kind = 'link' AND lt.entity_id = ANY($1)
-        ORDER BY t.name ASC
-    `, linkIDs)
-	if err != nil {
-		return nil, fmt.Errorf("tags for links: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var linkID int64
-		var t Tag
-		if err := rows.Scan(&linkID, &t.ID, &t.Name, &t.Color, &t.Icon); err != nil {
-			return nil, err
-		}
-		out[linkID] = append(out[linkID], t)
-	}
-	return out, rows.Err()
-}
-
-// setLinkTags replaces the tag set for a link inside a tx.
-func setLinkTags(ctx context.Context, tx pgx.Tx, linkID int64, tagIDs []int64) error {
-	if _, err := tx.Exec(ctx, `DELETE FROM link_tag WHERE entity_kind = 'link' AND entity_id = $1`, linkID); err != nil {
-		return fmt.Errorf("clear link_tag: %w", err)
-	}
-	if len(tagIDs) == 0 {
+		// Not found OR opted out mid-flight — treat as success (no work left).
 		return nil
 	}
-	rows := make([][]any, 0, len(tagIDs))
-	for _, tid := range tagIDs {
-		rows = append(rows, []any{"link", linkID, tid})
-	}
-	_, err := tx.CopyFrom(ctx,
-		pgx.Identifier{"link_tag"},
-		[]string{"entity_kind", "entity_id", "tag_id"},
-		pgx.CopyFromRows(rows),
-	)
-	if err != nil {
-		return fmt.Errorf("insert link_tag: %w", err)
-	}
 	return nil
+}
+
+func (r *Repository) tagsFor(ctx context.Context, linkIDs []int64) (map[int64][]Tag, error) {
+	return tags.TagsForEntities(ctx, r.pool, "link", linkIDs)
+}
+
+func setLinkTags(ctx context.Context, tx pgx.Tx, linkID int64, tagIDs []int64) error {
+	return tags.SetEntityTags(ctx, tx, "link", linkID, tagIDs)
 }

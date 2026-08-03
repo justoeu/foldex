@@ -166,21 +166,22 @@ func TestWorker_ShortCircuitsWhenImageAlreadyPresent(t *testing.T) {
 	up := &memUploader{}
 	w.WithScreenshotFallback(stubScreenshotter{payload: []byte("nope")}, up)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	w.Start(ctx)
-	defer func() {
-		cancel()
-		w.Stop()
-	}()
-
 	lrepo := links.NewRepository(pool)
 	link, err := lrepo.Create(context.Background(), links.CreateInput{
 		URL: target.URL, Title: "preuploaded",
 	})
 	require.NoError(t, err)
 
-	// Simulate a user upload landing BEFORE the worker picks up the job.
+	// Simulate a user upload landing BEFORE the worker starts / picks the job
+	// (avoids racing Start's requeuePending ticker against the OG write).
 	require.NoError(t, lrepo.UpdateOGImage(context.Background(), link.ID, "/api/files/images/1.png"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Start(ctx)
+	defer func() {
+		cancel()
+		w.Stop()
+	}()
 
 	_ = w.Enqueue(link.ID)
 

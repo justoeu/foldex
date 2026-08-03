@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// MinIOConfig holds the object-storage connection parameters.
-type MinIOConfig struct {
+// ObjectStoreConfig holds S3-compatible object-storage parameters (RustFS).
+type ObjectStoreConfig struct {
 	Endpoint  string
 	AccessKey string
 	SecretKey string
@@ -24,7 +24,7 @@ type Config struct {
 	PreviewTimeoutSec  int
 	SharedSecret       string
 	CORSOrigins        []string
-	MinIO              MinIOConfig
+	ObjectStore        ObjectStoreConfig
 
 	// Change-check worker (internal/changecheck). Per-link opt-in, runs
 	// hourly/daily/weekly diffs and fires Web Push notifications.
@@ -58,12 +58,14 @@ func Load() (Config, error) {
 		PreviewTimeoutSec:  envInt("PREVIEW_FETCH_TIMEOUT_SEC", 5),
 		SharedSecret:       os.Getenv("SHARED_SECRET"),
 		CORSOrigins:        splitCSV(envOr("CORS_ORIGINS", "*")),
-		MinIO: MinIOConfig{
-			Endpoint:  envOr("MINIO_ENDPOINT", "localhost:9000"),
-			AccessKey: envOr("MINIO_ACCESS_KEY", "minioadmin"),
-			SecretKey: envOr("MINIO_SECRET_KEY", "minioadmin"),
-			Bucket:    envOr("MINIO_BUCKET", "foldex-screenshots"),
-			UseSSL:    envBool("MINIO_USE_SSL", false),
+		ObjectStore: ObjectStoreConfig{
+			// RUSTFS_* is canonical. MINIO_* is accepted as a one-release
+			// migration fallback so existing .env files keep working.
+			Endpoint:  envFirst("RUSTFS_ENDPOINT", "MINIO_ENDPOINT", "localhost:9000"),
+			AccessKey: envFirst("RUSTFS_ACCESS_KEY", "MINIO_ACCESS_KEY", "foldex"),
+			SecretKey: envFirst("RUSTFS_SECRET_KEY", "MINIO_SECRET_KEY", "foldex-change-me"),
+			Bucket:    envFirst("RUSTFS_BUCKET", "MINIO_BUCKET", "foldex-screenshots"),
+			UseSSL:    envBoolFirst("RUSTFS_USE_SSL", "MINIO_USE_SSL", false),
 		},
 		ChangeCheckEnabled:         envBool("CHANGECHECK_ENABLED", true),
 		ChangeCheckConcurrency:     envInt("CHANGECHECK_WORKER_CONCURRENCY", 2),
@@ -90,17 +92,19 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-// validateSecureDefaults refuses to boot in the worst-case combination:
-// open CORS (`*`) AND no SharedSecret AND bound to a public address. The
-// permissive defaults are fine for the single-user/localhost threat model,
-// but the moment any of those three knobs flips (binding to 0.0.0.0 behind
-// a reverse proxy is the usual mistake) the backend becomes a wide-open API.
+// validateSecureDefaults refuses to boot when the API would be network-
+// reachable without SHARED_SECRET. CORS is NOT authentication — a restricted
+// origin list does not stop curl/scripts from hitting the API.
+//
+// Loopback binds (127.0.0.1 / ::1 / localhost) may omit SHARED_SECRET for the
+// single-user local threat model. Any non-loopback bind requires a non-empty
+// SHARED_SECRET.
 func (c Config) validateSecureDefaults() error {
-	if !isLocalBind(c.BindAddr) && c.SharedSecret == "" && hasWildcardCORS(c.CORSOrigins) {
+	if !isLocalBind(c.BindAddr) && c.SharedSecret == "" {
 		return errors.New(
 			"insecure config: BACKEND_BIND=" + c.BindAddr +
-				" (non-loopback) AND SHARED_SECRET is empty AND CORS_ORIGINS=* — " +
-				"set SHARED_SECRET, or restrict CORS_ORIGINS, or bind to 127.0.0.1",
+				" (non-loopback) AND SHARED_SECRET is empty — " +
+				"set SHARED_SECRET, or bind to 127.0.0.1",
 		)
 	}
 	return nil
@@ -114,13 +118,31 @@ func isLocalBind(addr string) bool {
 	return false
 }
 
-func hasWildcardCORS(origins []string) bool {
-	for _, o := range origins {
-		if o == "*" {
-			return true
+// envFirst returns the first non-empty env among keys, else def.
+func envFirst(primary, legacy, def string) string {
+	if v := os.Getenv(primary); v != "" {
+		return v
+	}
+	if v := os.Getenv(legacy); v != "" {
+		return v
+	}
+	return def
+}
+
+func envBoolFirst(primary, legacy string, def bool) bool {
+	if v := os.Getenv(primary); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err == nil {
+			return b
 		}
 	}
-	return false
+	if v := os.Getenv(legacy); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err == nil {
+			return b
+		}
+	}
+	return def
 }
 
 func envOr(k, def string) string {

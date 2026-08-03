@@ -1,13 +1,13 @@
 package links
 
-import "time"
+import (
+	"time"
 
-type Tag struct {
-	ID    int64   `json:"id"`
-	Name  string  `json:"name"`
-	Color string  `json:"color"`
-	Icon  *string `json:"icon,omitempty"`
-}
+	"foldex/internal/tags"
+)
+
+// Tag is the nested chip on Link JSON — single definition lives in tags.Chip.
+type Tag = tags.Chip
 
 type Link struct {
 	ID            int64      `json:"id"`

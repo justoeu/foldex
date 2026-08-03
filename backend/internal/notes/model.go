@@ -11,10 +11,13 @@ import (
 // ClickCount/LastClickedAt are derived from click_log the same way links
 // derives them — via a LATERAL join, never a denormalized column.
 type Note struct {
-	ID       int64  `json:"id"`
-	Title    string `json:"title"`
-	Slug     string `json:"slug"`
-	BodyHTML string `json:"body_html"`
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	Slug  string `json:"slug"`
+	// BodyHTML is the full rich body on Get/GetBySlug/Create/Update. List
+	// leaves it empty so list responses omit the field (omitempty) — clients
+	// that need the editor payload must GET by id.
+	BodyHTML string `json:"body_html,omitempty"`
 	// BodyText is the server-derived plain-text search column — never sent
 	// to clients (the frontend renders BodyHTML; BodyText only feeds
 	// ILIKE/trigram search). Excluded from JSON to keep response payloads

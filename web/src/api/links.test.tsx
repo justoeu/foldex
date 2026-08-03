@@ -13,6 +13,13 @@ import {
   captureScreenshot,
   goHref,
   mapCachedLinks,
+  usePinLink,
+  useRecentChanges,
+  useMarkChangeSeen,
+  uploadLinkImage,
+  removeLinkImage,
+  useFetchUrlMetadata,
+  _clearUrlMetadataCacheForTests,
 } from './links'
 import { useTags } from './tags'
 import { http } from './client'
@@ -230,5 +237,127 @@ describe('tag cache invalidation', () => {
     await deleteHook.result.current.mutateAsync(5)
 
     await waitFor(() => expect(tagGetCount()).toBeGreaterThan(before))
+  })
+})
+
+describe('goHref slug preference', () => {
+  it('prefers slug over id when given a Link-like object', () => {
+    expect(goHref({ id: 9, slug: 'hello' })).toBe('/go/hello')
+    expect(goHref({ id: 9, slug: '' })).toBe('/go/9')
+  })
+})
+
+describe('flattenLinks', () => {
+  it('returns empty for undefined or missing pages', () => {
+    expect(flattenLinks(undefined)).toEqual([])
+    expect(flattenLinks({ pages: undefined } as any)).toEqual([])
+  })
+
+  it('flattens multiple pages', () => {
+    expect(flattenLinks({
+      pages: [[{ id: 1 } as any], [{ id: 2 } as any]],
+      pageParams: [0, 1],
+    })).toHaveLength(2)
+  })
+})
+
+describe('usePinLink', () => {
+  it('pins a link via PATCH', async () => {
+    state.links.push({
+      id: 3, url: 'https://p', title: 'P', click_count: 0, pinned: false,
+      preview_status: 'ok', created_at: '', updated_at: '', tags: [],
+    } as any)
+    const { result } = renderHook(() => usePinLink(), { wrapper })
+    const out = await result.current.mutateAsync({ id: 3, pinned: true })
+    expect(out.pinned).toBe(true)
+    expect(state.links[0].pinned).toBe(true)
+  })
+})
+
+describe('useRecentChanges', () => {
+  it('lists recent-changes endpoint', async () => {
+    state.links.push({
+      id: 1, url: 'https://rc', title: 'RC', click_count: 0,
+      preview_status: 'ok', created_at: '', updated_at: '', tags: [],
+      last_change_detected_at: '2026-01-01T00:00:00Z',
+    } as any)
+    const { result } = renderHook(() => useRecentChanges(7, 10), { wrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(Array.isArray(result.current.data)).toBe(true)
+  })
+})
+
+describe('useMarkChangeSeen', () => {
+  it('marks a change as seen', async () => {
+    state.links.push({
+      id: 4, url: 'https://s', title: 'S', click_count: 0,
+      preview_status: 'ok', created_at: '', updated_at: '', tags: [],
+      last_change_detected_at: '2026-05-30T10:00:00Z', change_seen_at: null,
+    } as any)
+    const { result } = renderHook(() => useMarkChangeSeen(), { wrapper })
+    await result.current.mutateAsync(4)
+    await waitFor(() => expect(state.links[0].change_seen_at).toBeTruthy())
+  })
+})
+
+describe('uploadLinkImage / removeLinkImage', () => {
+  it('uploads and removes an image', async () => {
+    state.links.push({
+      id: 6, url: 'https://img', title: 'Img', click_count: 0,
+      preview_status: 'ok', created_at: '', updated_at: '', tags: [],
+      og_image_url: null,
+    } as any)
+    const up = await uploadLinkImage(6, new File(['x'], 'a.png', { type: 'image/png' }))
+    expect(up.url).toContain('/api/files/links/6')
+    expect(state.links[0].og_image_url).toBeTruthy()
+    await removeLinkImage(6)
+    expect(state.links[0].og_image_url).toBeNull()
+  })
+})
+
+describe('useFetchUrlMetadata', () => {
+  beforeEach(() => {
+    _clearUrlMetadataCacheForTests()
+  })
+
+  it('fetches and caches metadata', async () => {
+    state.urlMetadata = { title: 'T', description: 'D' }
+    const { result } = renderHook(() => useFetchUrlMetadata(), { wrapper })
+    const a = await result.current.mutateAsync({ url: 'https://meta.example' })
+    expect(a.title).toBe('T')
+    const b = await result.current.mutateAsync({ url: 'https://meta.example' })
+    expect(b.title).toBe('T')
+    expect(state.urlMetadataCalls).toHaveLength(1)
+  })
+})
+
+describe('useUpdateLink invalidation branches', () => {
+  it('invalidates tags when tag_ids present and folders when folder_id present', async () => {
+    state.links.push({
+      id: 20, url: 'https://u', title: 'U', click_count: 0,
+      preview_status: 'ok', created_at: '', updated_at: '', tags: [], folder_id: null,
+    } as any)
+    state.tags.push({ id: 1, name: 'jira', color: '#1f6feb', icon: null })
+    const { result } = renderHook(() => useUpdateLink(), { wrapper })
+    await result.current.mutateAsync({
+      id: 20,
+      body: { title: 'U2', tag_ids: [1], folder_id: null },
+    })
+    expect(state.links[0].title).toBe('U2')
+  })
+})
+
+describe('useLinks filters', () => {
+  it('applies folderId and ungrouped params', async () => {
+    state.links.push(
+      { id: 1, url: 'https://a', title: 'A', click_count: 0, preview_status: 'ok', created_at: '', updated_at: '', tags: [], folder_id: 5 } as any,
+      { id: 2, url: 'https://b', title: 'B', click_count: 0, preview_status: 'ok', created_at: '', updated_at: '', tags: [], folder_id: null } as any,
+    )
+    const { result: r1 } = renderHook(() => useLinks({ folderId: 5 }), { wrapper })
+    await waitFor(() => expect(r1.current.isSuccess).toBe(true))
+    const { result: r2 } = renderHook(() => useLinks({ ungrouped: true }), { wrapper })
+    await waitFor(() => expect(r2.current.isSuccess).toBe(true))
+    const { result: r3 } = renderHook(() => useLinks({ tagIds: [1, 2] }), { wrapper })
+    await waitFor(() => expect(r3.current.isSuccess).toBe(true))
   })
 })

@@ -1,4 +1,4 @@
-# SDD — Backup & Restore (DB + MinIO)
+# SDD — Backup & Restore (DB + RustFS)
 
 > Software Design Document. Status: **Approved · v1.0 · 2026-05-13**
 > Owner: foldex
@@ -14,7 +14,7 @@ O foldex hoje tem dois caminhos de export/import — JSON v2 e Netscape HTML —
 
 - Só exportam `tag`, `folder`, `link` (e relações via campos embarcados).
 - **Não** exportam `click_log` (histórico de cliques que alimenta o dashboard de estatísticas).
-- **Não** exportam os arquivos do MinIO (screenshots automáticos + uploads manuais de OG image).
+- **Não** exportam os arquivos do RustFS (screenshots automáticos + uploads manuais de OG image).
 
 Quando o usuário precisa migrar de máquina, restaurar após corrupção, ou só quer um snapshot pra dormir tranquilo, o caminho atual perde dados. Pior: a relação `link.og_image_url → /api/files/<key>` é silenciosamente quebrada quando o bucket é zerado.
 
@@ -24,7 +24,7 @@ Introduzir um par de endpoints `POST /api/backup` / `POST /api/backup/restore` q
 
 1. `manifest.json` — versão do schema, contagens, checksums, timestamp.
 2. `database.json` — snapshot completo de **todas** as tabelas (`tag`, `folder`, `link`, `link_tag`, `click_log`).
-3. `files/screenshots/{id}.png` e `files/images/{id}.{ext}` — todos os objetos do bucket MinIO.
+3. `files/screenshots/{id}.png` e `files/images/{id}.{ext}` — todos os objetos do bucket RustFS.
 
 Adicionar um terceiro endpoint `POST /api/backup/validate` pra inspecionar o ZIP **sem aplicar** — usado pelo frontend pra mostrar contagens + conflitos + checksum status antes do usuário confirmar o restore.
 
@@ -41,7 +41,7 @@ Adicionar um terceiro endpoint `POST /api/backup/validate` pra inspecionar o ZIP
 - **Backup incremental** (delta desde último backup). v1 é full snapshot. Justificativa: o volume de dados de um single-user bookmark manager é pequeno (~MBs), simplicidade > eficiência.
 - **Criptografia do ZIP**. Confiamos no threat model do foldex (single-user, local network). Recomendação no README: guardar o ZIP em local seguro (1Password, disco encriptado).
 - **Cross-version automatic migration**. Backup gerado em `schema_version=8` só restaura em instância rodando `schema_version=8`. Migração de schemas antigos fica como follow-up.
-- **Atomicidade DB+MinIO via 2-phase commit**. Workaround: writes idempotentes + ordem (DB primeiro, files depois).
+- **Atomicidade DB+RustFS via 2-phase commit**. Workaround: writes idempotentes + ordem (DB primeiro, files depois).
 
 ---
 
@@ -58,7 +58,7 @@ Adicionar um terceiro endpoint `POST /api/backup/validate` pra inspecionar o ZIP
                   ┌────────────────────────┼────────────────────────┐
                   ▼                        ▼                        ▼
             ┌─────────┐              ┌──────────┐            ┌──────────┐
-            │ Postgres│              │  MinIO   │            │   ZIP    │
+            │ Postgres│              │  RustFS   │            │   ZIP    │
             │ (RR tx) │              │  ListObj │            │  Writer  │
             └────┬────┘              └────┬─────┘            └────▲─────┘
                  │  SELECT *             │ GetObject              │
@@ -93,7 +93,7 @@ Browser uploads zip ──▶ /api/backup/validate ──▶ {ok, manifest, conf
 Restore aplica em duas fases:
 
 1. **DB phase** (transação): WIPE | INSERT-ON-CONFLICT | INSERT-WITH-REKEY conforme modo.
-2. **Files phase** (post-commit): para cada arquivo no zip, PUT no MinIO (skip se já existe quando mode=skip; sempre overwrite quando mode=wipe).
+2. **Files phase** (post-commit): para cada arquivo no zip, PUT no RustFS (skip se já existe quando mode=skip; sempre overwrite quando mode=wipe).
 
 Se o servidor crashar entre as duas fases, re-rodar com o mesmo ZIP **converge** (files faltantes serão escritos; nenhuma duplicação porque key = `{id}.{ext}` é idempotente).
 
@@ -172,7 +172,7 @@ Keys preservadas pra que restore possa fazer 1-1 mapping. Em ModeWipe, o `link.i
 - Body: o ZIP streaming.
 
 **Erros**:
-- `503 Service Unavailable` se MinIO está fora (sem o bucket, backup é incompleto e enganoso — preferimos falhar).
+- `503 Service Unavailable` se RustFS está fora (sem o bucket, backup é incompleto e enganoso — preferimos falhar).
 
 ### 4.2 `POST /api/backup/validate` — inspeção sem efeito colateral
 
@@ -223,7 +223,7 @@ Keys preservadas pra que restore possa fazer 1-1 mapping. Em ModeWipe, o `link.i
 }
 ```
 
-**Erros**: `400` (manifest inválido), `422` (checksum mismatch), `500` (DB ou MinIO falhou no meio).
+**Erros**: `400` (manifest inválido), `422` (checksum mismatch), `500` (DB ou RustFS falhou no meio).
 
 ---
 
@@ -238,7 +238,7 @@ Keys preservadas pra que restore possa fazer 1-1 mapping. Em ModeWipe, o `link.i
 | `link` (UNIQUE url) | TRUNCATE; INSERT com IDs originais        | `INSERT ON CONFLICT (url) DO NOTHING`; mapping `oldID→curID`         | colisão de URL → **fallback skip + warning**. (URL unique não permite duplicata real; preferimos não corromper dado existente.) |
 | `link_tag` (PK link_id,tag_id) | TRUNCATE; INSERT com IDs originais | INSERT re-key (mapping); `ON CONFLICT DO NOTHING`            | INSERT re-key (mapping); `ON CONFLICT DO NOTHING`                        |
 | `click_log` (sem unique) | TRUNCATE; INSERT com IDs originais   | INSERT re-key (mapping); todos os logs adicionados                   | INSERT re-key (mapping); todos os logs adicionados                       |
-| Files MinIO     | DELETE prefix; PUT all                       | PUT skip se key já existe; senão upload                              | PUT com keys baseadas no link.id novo                                    |
+| Files RustFS     | DELETE prefix; PUT all                       | PUT skip se key já existe; senão upload                              | PUT com keys baseadas no link.id novo                                    |
 
 ### 5.2 Justificativa dos defaults
 
@@ -317,7 +317,7 @@ Garante que as 5 SELECTs vejam o mesmo snapshot. Sem isso, um INSERT no `click_l
 
 | Limitação                                    | Mitigação                                                                                 |
 | -------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Restore não é atômico DB + MinIO             | Writes idempotentes; re-rodar com mesmo zip converge. Warning no UI.                      |
+| Restore não é atômico DB + RustFS             | Writes idempotentes; re-rodar com mesmo zip converge. Warning no UI.                      |
 | Sem backup incremental                       | Aceito pra v1. Re-avaliar quando bucket passar de 1 GB.                                   |
 | Sem criptografia                             | Threat model permite. README orienta guardar em local seguro.                             |
 | ModeDuplicate não duplica links com URL conflict | Reportado em warnings; user pode editar URLs manualmente e re-importar.                  |
@@ -338,7 +338,7 @@ Garante que as 5 SELECTs vejam o mesmo snapshot. Sem isso, um INSERT no `click_l
 ## 10. Testing strategy
 
 ### Backend
-- **Round-trip integration test** (testcontainers Postgres + MinIO fake):
+- **Round-trip integration test** (testcontainers Postgres + RustFS fake):
   1. Seed: 5 tags, 3 folders, 25 links com 3 og_images, 412 click_logs
   2. `Export()` para `bytes.Buffer`
   3. TRUNCATE all
@@ -376,4 +376,4 @@ Quando o `version` do ZIP (não schema_version) bumper: major bump significa que
 - ~~Embed bytes em base64 vs files/ separado?~~ → files/ separado (§7.3)
 - ~~tar.gz vs zip?~~ → zip (§7.1)
 - ~~Como duplicar link com URL única?~~ → não duplica, reporta (§5.2)
-- ~~Atomicidade DB+MinIO?~~ → idempotência (§2.2, §8)
+- ~~Atomicidade DB+RustFS?~~ → idempotência (§2.2, §8)

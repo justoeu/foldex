@@ -9,7 +9,7 @@ import (
 // IsPublicURL reports whether the URL's hostname resolves to ONLY public IP
 // addresses. Used as a gate before triggering an expensive screenshot fallback:
 // we never screenshot intranet hosts (the page would usually be a login wall
-// and the bytes would leak to MinIO unnecessarily).
+// and the bytes would leak to the object store unnecessarily).
 //
 // Unlike the SSRF guard in the dialer, this is strict by design — there is no
 // env opt-out. The default preview HTML fetch keeps the permissive behavior

@@ -7,10 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestValidateSecureDefaults locks the P5.3 boot guard. The three knobs
-// (bind, secret, cors) only trigger refusal in the exact combination
-// "non-loopback bind + empty secret + wildcard CORS" — any single knob
-// flipped to a safe value clears the check.
+// TestValidateSecureDefaults: non-loopback bind requires SHARED_SECRET.
+// CORS is irrelevant to the auth decision.
 func TestValidateSecureDefaults(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -23,13 +21,13 @@ func TestValidateSecureDefaults(t *testing.T) {
 		{"loopback alias", "localhost", "", []string{"*"}, false},
 		{"ipv6 loopback", "::1", "", []string{"*"}, false},
 		{"empty bind is loopback", "", "", []string{"*"}, false},
-		// The dangerous combo:
 		{"public bind + no secret + wildcard CORS", "0.0.0.0", "", []string{"*"}, true},
-		{"public bind + LAN IP + no secret + wildcard CORS", "192.168.1.10", "", []string{"*"}, true},
-		// Public bind but one knob constrained:
+		{"public bind + LAN IP + no secret", "192.168.1.10", "", []string{"*"}, true},
+		// Restricted CORS must NOT exempt missing secret on public bind:
+		{"public bind + restricted CORS still needs secret", "0.0.0.0", "", []string{"https://example"}, true},
+		{"public bind + multi-origin without secret", "0.0.0.0", "", []string{"https://a", "https://b"}, true},
 		{"public bind + secret set", "0.0.0.0", "topsecret", []string{"*"}, false},
-		{"public bind + restricted CORS", "0.0.0.0", "", []string{"https://example"}, false},
-		{"public bind + multi-origin without wildcard", "0.0.0.0", "", []string{"https://a", "https://b"}, false},
+		{"public bind + secret + restricted CORS", "0.0.0.0", "topsecret", []string{"https://example"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -38,6 +36,7 @@ func TestValidateSecureDefaults(t *testing.T) {
 			if tc.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "insecure config")
+				assert.Contains(t, err.Error(), "SHARED_SECRET")
 			} else {
 				require.NoError(t, err)
 			}
@@ -108,38 +107,64 @@ func TestSplitCSV_TrimsAndDropsEmpty(t *testing.T) {
 	assert.Empty(t, splitCSV(",,, ,"))
 }
 
-func TestLoad_MinIODefaults(t *testing.T) {
+func TestLoad_ObjectStoreDefaults(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x@y/z")
-	t.Setenv("MINIO_ENDPOINT", "")
-	t.Setenv("MINIO_ACCESS_KEY", "")
-	t.Setenv("MINIO_SECRET_KEY", "")
-	t.Setenv("MINIO_BUCKET", "")
-	t.Setenv("MINIO_USE_SSL", "")
+	for _, k := range []string{
+		"RUSTFS_ENDPOINT", "RUSTFS_ACCESS_KEY", "RUSTFS_SECRET_KEY", "RUSTFS_BUCKET", "RUSTFS_USE_SSL",
+		"MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_BUCKET", "MINIO_USE_SSL",
+	} {
+		t.Setenv(k, "")
+	}
 
 	cfg, err := Load()
 	require.NoError(t, err)
-	assert.Equal(t, "localhost:9000", cfg.MinIO.Endpoint)
-	assert.Equal(t, "minioadmin", cfg.MinIO.AccessKey)
-	assert.Equal(t, "minioadmin", cfg.MinIO.SecretKey)
-	assert.Equal(t, "foldex-screenshots", cfg.MinIO.Bucket)
-	assert.False(t, cfg.MinIO.UseSSL)
+	assert.Equal(t, "localhost:9000", cfg.ObjectStore.Endpoint)
+	assert.Equal(t, "foldex", cfg.ObjectStore.AccessKey)
+	assert.Equal(t, "foldex-change-me", cfg.ObjectStore.SecretKey)
+	assert.Equal(t, "foldex-screenshots", cfg.ObjectStore.Bucket)
+	assert.False(t, cfg.ObjectStore.UseSSL)
 }
 
-func TestLoad_MinIOOverrides(t *testing.T) {
+func TestLoad_ObjectStoreOverrides(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x@y/z")
+	t.Setenv("RUSTFS_ENDPOINT", "rustfs:9000")
+	t.Setenv("RUSTFS_ACCESS_KEY", "mykey")
+	t.Setenv("RUSTFS_SECRET_KEY", "mysecret")
+	t.Setenv("RUSTFS_BUCKET", "mybucket")
+	t.Setenv("RUSTFS_USE_SSL", "true")
+	// Legacy keys must lose to RUSTFS_*.
 	t.Setenv("MINIO_ENDPOINT", "minio:9000")
-	t.Setenv("MINIO_ACCESS_KEY", "mykey")
-	t.Setenv("MINIO_SECRET_KEY", "mysecret")
-	t.Setenv("MINIO_BUCKET", "mybucket")
+	t.Setenv("MINIO_ACCESS_KEY", "old")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "rustfs:9000", cfg.ObjectStore.Endpoint)
+	assert.Equal(t, "mykey", cfg.ObjectStore.AccessKey)
+	assert.Equal(t, "mysecret", cfg.ObjectStore.SecretKey)
+	assert.Equal(t, "mybucket", cfg.ObjectStore.Bucket)
+	assert.True(t, cfg.ObjectStore.UseSSL)
+}
+
+func TestLoad_ObjectStoreLegacyMinIOFallback(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x@y/z")
+	for _, k := range []string{
+		"RUSTFS_ENDPOINT", "RUSTFS_ACCESS_KEY", "RUSTFS_SECRET_KEY", "RUSTFS_BUCKET", "RUSTFS_USE_SSL",
+	} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("MINIO_ENDPOINT", "legacy:9000")
+	t.Setenv("MINIO_ACCESS_KEY", "legacykey")
+	t.Setenv("MINIO_SECRET_KEY", "legacysecret")
+	t.Setenv("MINIO_BUCKET", "legacybucket")
 	t.Setenv("MINIO_USE_SSL", "true")
 
 	cfg, err := Load()
 	require.NoError(t, err)
-	assert.Equal(t, "minio:9000", cfg.MinIO.Endpoint)
-	assert.Equal(t, "mykey", cfg.MinIO.AccessKey)
-	assert.Equal(t, "mysecret", cfg.MinIO.SecretKey)
-	assert.Equal(t, "mybucket", cfg.MinIO.Bucket)
-	assert.True(t, cfg.MinIO.UseSSL)
+	assert.Equal(t, "legacy:9000", cfg.ObjectStore.Endpoint)
+	assert.Equal(t, "legacykey", cfg.ObjectStore.AccessKey)
+	assert.Equal(t, "legacysecret", cfg.ObjectStore.SecretKey)
+	assert.Equal(t, "legacybucket", cfg.ObjectStore.Bucket)
+	assert.True(t, cfg.ObjectStore.UseSSL)
 }
 
 func TestEnvBool(t *testing.T) {

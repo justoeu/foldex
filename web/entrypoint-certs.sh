@@ -23,6 +23,22 @@ CERT_DIR=/etc/nginx/certs
 CERT_FILE="$CERT_DIR/cert.pem"
 KEY_FILE="$CERT_DIR/key.pem"
 
+# Bake the public hostname into the HTTP→HTTPS redirect. Never use $host /
+# $http_host (attacker-controlled Host header). Operators set WEB_PUBLIC_HOST
+# when serving under a LAN name or custom domain (default: localhost).
+PUBLIC_HOST=${WEB_PUBLIC_HOST:-localhost}
+# Allowlist: hostname / IPv4 / optional :port — reject anything else.
+case "$PUBLIC_HOST" in
+  ''|*[!A-Za-z0-9._:-]* ) PUBLIC_HOST=localhost ;;
+esac
+NGINX_CONF=/etc/nginx/conf.d/default.conf
+if [ -f "$NGINX_CONF" ] && grep -q '__WEB_PUBLIC_HOST__' "$NGINX_CONF" 2>/dev/null; then
+  # BusyBox sed -i needs a writable file (Dockerfile chowns conf.d to nginx).
+  sed "s/__WEB_PUBLIC_HOST__/${PUBLIC_HOST}/g" "$NGINX_CONF" > "${NGINX_CONF}.tmp"
+  mv "${NGINX_CONF}.tmp" "$NGINX_CONF"
+  echo "[foldex/web] HTTPS redirect host → ${PUBLIC_HOST}"
+fi
+
 mkdir -p "$CERT_DIR"
 
 if [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then

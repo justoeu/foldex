@@ -30,9 +30,17 @@ const baseLink: Link = {
   tags: [{ id: 1, name: 'jira', color: '#1f6feb', icon: null }],
 }
 
+const noopCardProps = {
+  onEdit: vi.fn(),
+  onDelete: vi.fn(),
+  onPin: vi.fn(),
+  onRefreshPreview: vi.fn(),
+  onMarkSeen: vi.fn(),
+}
+
 describe('LinkCard', () => {
   it('renders title, hostname, tag chips and click counter', () => {
-    renderWithProviders(<LinkCard link={baseLink} onEdit={vi.fn()} />)
+    renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
     expect(screen.getByText('Hacker News')).toBeInTheDocument()
     expect(screen.getByText('news.ycombinator.com')).toBeInTheDocument()
     expect(screen.getByText('jira')).toBeInTheDocument()
@@ -49,7 +57,7 @@ describe('LinkCard', () => {
       'explicitly stated.'
     )
     expect(longDesc.length).toBeGreaterThan(200)
-    renderWithProviders(<LinkCard link={{ ...baseLink, description: longDesc }} onEdit={vi.fn()} />)
+    renderWithProviders(<LinkCard link={{ ...baseLink, description: longDesc }} {...noopCardProps} />)
     const desc = document.querySelector('.fx-card-desc')
     expect(desc).not.toBeNull()
     expect(desc!.textContent!.length).toBeLessThanOrEqual(201) // 200 + the "…"
@@ -57,13 +65,13 @@ describe('LinkCard', () => {
   })
 
   it('keeps short descriptions untouched (no ellipsis)', () => {
-    renderWithProviders(<LinkCard link={baseLink} onEdit={vi.fn()} />)
+    renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
     const desc = document.querySelector('.fx-card-desc')
     expect(desc?.textContent).toBe('Tech news.')
   })
 
   it('title is a link that opens via /go/{slug}', () => {
-    renderWithProviders(<LinkCard link={baseLink} onEdit={vi.fn()} />)
+    renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
     const titleLink = screen.getByText('Hacker News').closest('a')
     expect(titleLink).not.toBeNull()
     // goHref(link) prefers slug over id — the share-friendly path.
@@ -75,7 +83,7 @@ describe('LinkCard', () => {
     renderWithProviders(
       <LinkCard
         link={{ ...baseLink, og_image_url: 'https://cdn.example/cover.png' }}
-        onEdit={vi.fn()}
+        {...noopCardProps}
       />,
     )
     const imgs = document.querySelectorAll('img')
@@ -94,7 +102,7 @@ describe('LinkCard', () => {
         { id: 5, name: 'e', color: '#fff' },
       ],
     }
-    renderWithProviders(<LinkCard link={many} onEdit={vi.fn()} />)
+    renderWithProviders(<LinkCard link={many} {...noopCardProps} />)
     expect(screen.getByText('a')).toBeInTheDocument()
     expect(screen.getByText('e')).toBeInTheDocument()
   })
@@ -102,32 +110,30 @@ describe('LinkCard', () => {
   it('shows retry button when preview failed and triggers mutation', async () => {
     state.links.push({ ...baseLink, preview_status: 'failed' })
     const failed = { ...baseLink, preview_status: 'failed' as const }
-    renderWithProviders(<LinkCard link={failed} onEdit={vi.fn()} />)
+    renderWithProviders(<LinkCard link={failed} {...noopCardProps} />)
     const buttons = screen.getAllByRole('button')
     expect(buttons.length).toBeGreaterThan(2)
   })
 
   it('calls onEdit when edit button is clicked', async () => {
     const onEdit = vi.fn()
-    renderWithProviders(<LinkCard link={baseLink} onEdit={onEdit} />)
+    renderWithProviders(<LinkCard link={baseLink} onEdit={onEdit} onDelete={vi.fn()} onPin={vi.fn()} onRefreshPreview={vi.fn()} onMarkSeen={vi.fn()} />)
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /edit/i }))
     expect(onEdit).toHaveBeenCalledWith(baseLink)
   })
 
-  it('confirms then deletes when delete button is clicked', async () => {
-    state.links.push(baseLink)
-    renderWithProviders(<LinkCard link={baseLink} onEdit={vi.fn()} />)
+  it('calls onDelete when delete button is clicked (confirm lives in parent)', async () => {
+    const onDelete = vi.fn()
+    renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} onDelete={onDelete} />)
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /delete/i }))
-    const confirmBtn = await screen.findByRole('button', { name: /Delete link/i })
-    await user.click(confirmBtn)
-    await waitFor(() => expect(state.links).toHaveLength(0))
+    expect(onDelete).toHaveBeenCalledWith(baseLink)
   })
 
   it('handles invalid URL gracefully (no throw)', () => {
     renderWithProviders(
-      <LinkCard link={{ ...baseLink, url: 'not a url' }} onEdit={vi.fn()} />,
+      <LinkCard link={{ ...baseLink, url: 'not a url' }} {...noopCardProps} />,
     )
     expect(screen.getByText('Hacker News')).toBeInTheDocument()
   })
@@ -135,7 +141,7 @@ describe('LinkCard', () => {
   it('drag-and-drop: dropping another link onto this card fires onMergeWith(source, target)', () => {
     const onMerge = vi.fn()
     const { container } = renderWithProviders(
-      <LinkCard link={{ ...baseLink, id: 99 }} onEdit={vi.fn()} onMergeWith={onMerge} />,
+      <LinkCard link={{ ...baseLink, id: 99 }} {...noopCardProps} onMergeWith={onMerge} />,
     )
     const card = container.querySelector('.fx-card') as HTMLElement
     fireEvent.drop(card, {
@@ -150,7 +156,7 @@ describe('LinkCard', () => {
   it('drag-and-drop: dropping a note onto this card fires onMergeWith({kind:"note",...}, target)', () => {
     const onMerge = vi.fn()
     const { container } = renderWithProviders(
-      <LinkCard link={{ ...baseLink, id: 99 }} onEdit={vi.fn()} onMergeWith={onMerge} />,
+      <LinkCard link={{ ...baseLink, id: 99 }} {...noopCardProps} onMergeWith={onMerge} />,
     )
     const card = container.querySelector('.fx-card') as HTMLElement
     fireEvent.drop(card, {
@@ -165,7 +171,7 @@ describe('LinkCard', () => {
   it('drag-and-drop: dropping a link onto itself is a no-op (no merge call)', () => {
     const onMerge = vi.fn()
     const { container } = renderWithProviders(
-      <LinkCard link={{ ...baseLink, id: 7 }} onEdit={vi.fn()} onMergeWith={onMerge} />,
+      <LinkCard link={{ ...baseLink, id: 7 }} {...noopCardProps} onMergeWith={onMerge} />,
     )
     const card = container.querySelector('.fx-card') as HTMLElement
     fireEvent.drop(card, {
@@ -179,7 +185,7 @@ describe('LinkCard', () => {
 
   it('shows "capturando" status when preview is pending', () => {
     renderWithProviders(
-      <LinkCard link={{ ...baseLink, preview_status: 'pending' }} onEdit={vi.fn()} />,
+      <LinkCard link={{ ...baseLink, preview_status: 'pending' }} {...noopCardProps} />,
     )
     expect(screen.getByText(/capturing/i)).toBeInTheDocument()
   })
@@ -191,7 +197,7 @@ describe('LinkCard', () => {
   // the badge disappears on the next render.
 
   it('does NOT render unseen-change badge when last_change_detected_at is null', () => {
-    renderWithProviders(<LinkCard link={baseLink} onEdit={vi.fn()} />)
+    renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
     expect(screen.queryByLabelText(/mark update as seen/i)).not.toBeInTheDocument()
     expect(document.querySelector('.fx-card-update-badge')).toBeNull()
     expect(document.querySelector('.fx-card-update-alert')).toBeNull()
@@ -205,7 +211,7 @@ describe('LinkCard', () => {
           last_change_detected_at: '2026-05-30T10:00:00Z',
           change_seen_at: '2026-05-29T00:00:00Z',
         }}
-        onEdit={vi.fn()}
+        {...noopCardProps}
       />,
     )
     expect(screen.getByLabelText(/mark update as seen/i)).toBeInTheDocument()
@@ -223,36 +229,29 @@ describe('LinkCard', () => {
           last_change_detected_at: '2026-05-29T00:00:00Z',
           change_seen_at: '2026-05-30T10:00:00Z',
         }}
-        onEdit={vi.fn()}
+        {...noopCardProps}
       />,
     )
     expect(screen.queryByLabelText(/mark update as seen/i)).not.toBeInTheDocument()
   })
 
-  it('clicking the unseen-change badge calls POST /api/links/:id/seen-change', async () => {
-    // Seed the mock state with the link so the server-side seenChange path
-    // can flip change_seen_at and the optimistic update can converge.
-    state.links = [
-      {
-        ...baseLink,
-        last_change_detected_at: '2026-05-30T10:00:00Z',
-        change_seen_at: null,
-      },
-    ]
+  it('clicking the unseen-change badge calls onMarkSeen', async () => {
+    const onMarkSeen = vi.fn()
+    const link = {
+      ...baseLink,
+      last_change_detected_at: '2026-05-30T10:00:00Z',
+      change_seen_at: null,
+    }
     renderWithProviders(
       <LinkCard
-        link={state.links[0]}
-        onEdit={vi.fn()}
+        link={link}
+        {...noopCardProps}
+        onMarkSeen={onMarkSeen}
       />,
     )
     const badge = screen.getByLabelText(/mark update as seen/i)
     await userEvent.click(badge)
-    // The mock applies the seen timestamp; assert by waiting for state to
-    // mutate (the production code optimistically updates the cache too,
-    // but mutating state lets us see the round-trip).
-    await waitFor(() => {
-      expect(state.links[0].change_seen_at).toBeTruthy()
-    })
+    expect(onMarkSeen).toHaveBeenCalledWith(link.id)
   })
 
   // ─── "Monitored" footer chip (PR #8) ──────────────────────────────────
@@ -265,14 +264,14 @@ describe('LinkCard', () => {
   // valid interval value to catch any silent fallback.
 
   it('does NOT render the "Monitored" chip when check_interval is null', () => {
-    renderWithProviders(<LinkCard link={baseLink} onEdit={vi.fn()} />)
+    renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
     expect(document.querySelector('.fx-meta-monitor')).toBeNull()
     expect(screen.queryByText(/monitored/i)).not.toBeInTheDocument()
   })
 
   it('renders the "Monitored" chip when check_interval is "daily"', () => {
     renderWithProviders(
-      <LinkCard link={{ ...baseLink, check_interval: 'daily' }} onEdit={vi.fn()} />,
+      <LinkCard link={{ ...baseLink, check_interval: 'daily' }} {...noopCardProps} />,
     )
     const chip = document.querySelector('.fx-meta-monitor')
     expect(chip).not.toBeNull()
@@ -285,7 +284,7 @@ describe('LinkCard', () => {
   it('renders the chip with the correct tooltip for each interval', () => {
     for (const interval of ['hourly', 'daily', 'weekly'] as const) {
       const { unmount } = renderWithProviders(
-        <LinkCard link={{ ...baseLink, check_interval: interval }} onEdit={vi.fn()} />,
+        <LinkCard link={{ ...baseLink, check_interval: interval }} {...noopCardProps} />,
       )
       const chip = document.querySelector('.fx-meta-monitor')
       expect(chip, `interval=${interval}`).not.toBeNull()
@@ -301,5 +300,153 @@ describe('LinkCard', () => {
       expect(tip, `interval=${interval}`).toMatch(expected)
       unmount()
     }
+  })
+
+  it('calls onPin via the pin badge', async () => {
+    const onPin = vi.fn()
+    const link = { ...baseLink, pinned: false }
+    renderWithProviders(<LinkCard link={link} {...noopCardProps} onPin={onPin} />)
+    await userEvent.click(screen.getByRole('button', { name: /^pin$/i }))
+    expect(onPin).toHaveBeenCalledWith(link, true)
+  })
+
+  it('shows unpin label when already pinned', () => {
+    renderWithProviders(<LinkCard link={{ ...baseLink, pinned: true }} {...noopCardProps} />)
+    expect(screen.getByRole('button', { name: /unpin/i })).toBeInTheDocument()
+    expect(document.querySelector('.fx-card-pinned')).not.toBeNull()
+  })
+
+  it('formats last_clicked_at across time buckets', () => {
+    const cases: Array<{ agoMs: number; re: RegExp }> = [
+      { agoMs: 10_000, re: /just now/i },
+      { agoMs: 5 * 60_000, re: /5m ago/i },
+      { agoMs: 3 * 60 * 60_000, re: /3h ago/i },
+      { agoMs: 25 * 60 * 60_000, re: /yesterday/i },
+      { agoMs: 5 * 24 * 60 * 60_000, re: /5d ago/i },
+      { agoMs: 60 * 24 * 60 * 60_000, re: /\d/ },
+    ]
+    for (const c of cases) {
+      const { unmount } = renderWithProviders(
+        <LinkCard
+          link={{ ...baseLink, last_clicked_at: new Date(Date.now() - c.agoMs).toISOString() }}
+          {...noopCardProps}
+        />,
+      )
+      expect(screen.getByLabelText(/last click/i).textContent).toMatch(c.re)
+      unmount()
+    }
+  })
+
+  it('floors last_click units near hour/day boundaries (no Math.round bump)', () => {
+    // 59.6 minutes → still minutes with floor; round would show 1h.
+    const almostHour = 59 * 60_000 + 40_000
+    const { unmount: u1 } = renderWithProviders(
+      <LinkCard
+        link={{ ...baseLink, last_clicked_at: new Date(Date.now() - almostHour).toISOString() }}
+        {...noopCardProps}
+      />,
+    )
+    expect(screen.getByLabelText(/last click/i).textContent).toMatch(/59m ago/i)
+    u1()
+
+    // 23.6 hours → still hours with floor; round would show 1d/yesterday.
+    const almostDay = 23 * 60 * 60_000 + 40 * 60_000
+    const { unmount: u2 } = renderWithProviders(
+      <LinkCard
+        link={{ ...baseLink, last_clicked_at: new Date(Date.now() - almostDay).toISOString() }}
+        {...noopCardProps}
+      />,
+    )
+    expect(screen.getByLabelText(/last click/i).textContent).toMatch(/23h ago/i)
+    u2()
+  })
+
+  it('shows never when last_clicked_at is null', () => {
+    renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
+    expect(screen.getByLabelText(/last click/i)).toHaveTextContent(/never/i)
+  })
+
+  it('bumps click_count optimistically when open is clicked', async () => {
+    renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
+    const open = screen.getByRole('link', { name: /open/i })
+    fireEvent.click(open)
+    expect(open).toHaveAttribute('href', '/go/hacker-news')
+  })
+
+  it('fires onRefreshPreview when status is not ok', async () => {
+    const onRefreshPreview = vi.fn()
+    renderWithProviders(
+      <LinkCard
+        link={{ ...baseLink, preview_status: 'failed', og_image_url: null }}
+        {...noopCardProps}
+        onRefreshPreview={onRefreshPreview}
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: /recapture preview/i }))
+    expect(onRefreshPreview).toHaveBeenCalledWith(baseLink.id)
+  })
+
+  it('sets dragging class on drag start and clears on drag end', () => {
+    const { container } = renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
+    const card = container.querySelector('.fx-card') as HTMLElement
+    fireEvent.dragStart(card, {
+      dataTransfer: { setData: vi.fn(), effectAllowed: 'move' },
+    })
+    expect(card.className).toMatch(/dragging/)
+    fireEvent.dragEnd(card)
+    expect(card.className).not.toMatch(/dragging/)
+  })
+
+  it('highlights on drag enter of another link and clears on leave', () => {
+    const { container } = renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
+    const card = container.querySelector('.fx-card') as HTMLElement
+    fireEvent.dragEnter(card, {
+      dataTransfer: { types: ['application/x-foldex-link'] },
+    })
+    expect(card.className).toMatch(/drop-over/)
+    fireEvent.dragLeave(card, { relatedTarget: document.body })
+    expect(card.className).not.toMatch(/drop-over/)
+  })
+
+  it('accepts dragOver for link and note MIME types', () => {
+    const { container } = renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
+    const card = container.querySelector('.fx-card') as HTMLElement
+    const ev = { preventDefault: vi.fn(), dataTransfer: { types: ['application/x-foldex-note'], dropEffect: '' } }
+    fireEvent.dragOver(card, ev)
+    fireEvent.dragOver(card, {
+      dataTransfer: { types: ['text/plain'], dropEffect: '' },
+    })
+  })
+
+  it('collapses density when og:image errors at runtime', async () => {
+    const { container } = renderWithProviders(
+      <LinkCard
+        link={{ ...baseLink, og_image_url: 'https://cdn.example/broken.png' }}
+        {...noopCardProps}
+      />,
+    )
+    expect(container.querySelector('.fx-card-tall')).not.toBeNull()
+    const img = container.querySelector('.fx-preview img') as HTMLImageElement
+    fireEvent.error(img)
+    await waitFor(() => expect(container.querySelector('.fx-card-tall')).toBeNull())
+  })
+
+  it('hard-truncates description with no whitespace near the cut', () => {
+    const longDesc = 'a'.repeat(250)
+    renderWithProviders(<LinkCard link={{ ...baseLink, description: longDesc }} {...noopCardProps} />)
+    const desc = document.querySelector('.fx-card-desc')
+    expect(desc!.textContent!.endsWith('…')).toBe(true)
+    expect(desc!.textContent!.length).toBeLessThanOrEqual(201)
+  })
+
+  it('ignores drop with empty payload', () => {
+    const onMerge = vi.fn()
+    const { container } = renderWithProviders(
+      <LinkCard link={baseLink} {...noopCardProps} onMergeWith={onMerge} />,
+    )
+    fireEvent.drop(container.querySelector('.fx-card')!, {
+      dataTransfer: { types: [], getData: () => '' },
+    })
+    expect(onMerge).not.toHaveBeenCalled()
   })
 })

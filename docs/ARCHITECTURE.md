@@ -22,13 +22,13 @@
               │ ┌───────▼───────────┐ │                 │ worker     │
               │ │ preview worker    │─┼─── HTML ─▶ ext. │ (fingerprt)│
               │ │ + screenshot ───▶ │ │      URLs       └────────────┘
-              │ │   MinIO           │ │
+              │ │   RustFS           │ │
               │ └───────────────────┘ │
               └────────┬───────┬──────┘
                 pgxpool │       │ S3 SDK
                         ▼       ▼
               ┌────────────────────┐   ┌───────────┐
-              │   PostgreSQL 18    │   │  MinIO    │
+              │   PostgreSQL 18    │   │  RustFS    │
               │  tag · link ·      │   │  bucket   │
               │  link_tag · folder │   │ screensh. │
               │  click_log ·       │   │  images   │
@@ -44,7 +44,7 @@ Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `12
 |--------------|----------------------------------------------------------------------|---------|
 | Runtime API  | **Go 1.26** + Chi v5.2 + pgx/v5.9 + `slog`                          | Minimal router, pgxpool com tipos, log estruturado nativo. |
 | DB           | **PostgreSQL 18** + `pg_trgm`                                        | Busca por substring com índice GIN, suficiente single-user. |
-| Object store | **MinIO** (S3 SDK)                                                   | Backup/screenshots/uploads vivem fora do Postgres; bucket único, prefixos `screenshots/`/`images/`. |
+| Object store | **RustFS** (S3 SDK)                                                   | Backup/screenshots/uploads vivem fora do Postgres; bucket único, prefixos `screenshots/`/`images/`. |
 | Migrations   | `golang-migrate` (`000NNN_*.up/down.sql`)                            | Reversível por padrão; mesma convenção compartilhada. |
 | Workers      | Goroutine pools in-process (preview, changecheck) + buffered channels | Zero dependência operacional (sem Redis/queue). |
 | Web Push     | `github.com/SherClockHolmes/webpush-go v1.4.0` + VAPID auto-gen      | RFC 8030. VAPID key persistida em `/data/vapid.json` (volume `foldex-data`), 0o600. |
@@ -272,8 +272,8 @@ LIMIT $3 OFFSET $4;
 |        | POST   | `/api/links/{id}/seen-change`         | Marca o badge "atualizado" como lido (bump `change_seen_at = now()`). 404 quando `last_change_detected_at IS NULL` — bloqueia bump out-of-band antes de qualquer detecção. |
 |        | POST   | `/api/links/{id}/screenshot`          | Captura sob demanda via Chromium headless. SSRF gate obrigatório (`links.URLPolicy`, default `preview.IsPublicURL`); rejeita scheme não-http(s) com 400 `invalid_scheme` e privado/IMDS com 400 `private_target`. Policy nil = 500 `policy_unconfigured`. |
 |        | POST   | `/api/links/{id}/image`               | Upload manual de imagem (multipart `file`). Cap de body 5 MiB; aceita `{png, jpeg, gif, webp}` (SVG cai fora). Pipeline `imageopt` re-encoda em JPEG q82, downscale ≤1024 px, decode-bomb guard 50 MP. Curto-circuita o worker. |
-|        | DELETE | `/api/links/{id}/image`               | Remove `og_image_url` + DELETE no objeto MinIO + zera `preview_status`. |
-| Files  | GET    | `/api/files/*`                        | Proxy pro MinIO. Key precisa cair em `screenshots/`/`images/` (rejeita `..` e prefixo arbitrário). `DetectContentType` no objeto servido + `X-Content-Type-Options: nosniff`. |
+|        | DELETE | `/api/links/{id}/image`               | Remove `og_image_url` + DELETE no objeto RustFS + zera `preview_status`. |
+| Files  | GET    | `/api/files/*`                        | Proxy pro RustFS. Key precisa cair em `screenshots/`/`images/` (rejeita `..` e prefixo arbitrário). `DetectContentType` no objeto servido + `X-Content-Type-Options: nosniff`. |
 | Tags   | GET    | `/api/tags`                           | List with `link_count`                             |
 |        | POST   | `/api/tags`                           | Body: `{name, color?, icon?}`                      |
 |        | PATCH  | `/api/tags/{id}`                      |                                                    |
@@ -294,10 +294,10 @@ LIMIT $3 OFFSET $4;
 |        | GET    | `/api/stats/tags`                     | Distribuição: por tag, soma de cliques + nº de links |
 | I/O    | POST   | `/api/import`                         | Multipart `file` + `format=netscape\|json` (JSON restaura cliques via click_log) |
 |        | GET    | `/api/export?format=netscape\|json`   | Download (click_count derivado em subquery)        |
-| Backup | POST   | `/api/backup`                         | Stream ZIP completo (DB + MinIO). `Content-Type: application/zip`. Disponível só quando MinIO está acessível. Ver [SDD-BACKUP-RESTORE.md](./SDD-BACKUP-RESTORE.md). |
+| Backup | POST   | `/api/backup`                         | Stream ZIP completo (DB + RustFS). `Content-Type: application/zip`. Disponível só quando RustFS está acessível. Ver [SDD-BACKUP-RESTORE.md](./SDD-BACKUP-RESTORE.md). |
 |        | POST   | `/api/backup/validate`                | Multipart `file=<zip>` → `{ok, manifest, conflicts, warnings, errors}` sem aplicar |
 |        | POST   | `/api/backup/restore?mode=…`          | Multipart `file=<zip>` + `mode=wipe\|skip\|duplicate` (default `skip`) → `{inserted, skipped, wiped, files, duration_ms}` |
-| Stats  | GET    | `/api/stats/storage`                  | `{objects, total_bytes}` do bucket MinIO; registrado só quando o storage está disponível |
+| Stats  | GET    | `/api/stats/storage`                  | `{objects, total_bytes}` do bucket RustFS; registrado só quando o storage está disponível |
 | Push   | GET    | `/api/push/vapid-key`                 | Retorna a chave pública VAPID (base64url) — front usa em `PushManager.subscribe({applicationServerKey})`. Atrás do `SHARED_SECRET` quando set. |
 |        | POST   | `/api/push/subscriptions`             | Upsert por `endpoint` (UNIQUE) com p256dh/auth atualizados. Renovação do navegador é silenciosa. |
 |        | DELETE | `/api/push/subscriptions`             | Remove a subscription pelo endpoint (chamado no unsubscribe do usuário). |
@@ -322,7 +322,7 @@ Erros em JSON uniforme: `{ "error": { "code": "not_found", "message": "..." } }`
   1. `sc.Capture(ctx, url)` — Chromium headless via `internal/screenshot/` (`go-rod`), viewport 1280×800
   2. `imageopt.Optimize(png, …)` — downscale ≤ 1024 px + re-encode JPEG q≈82 (ver "Pipeline de imagens" abaixo)
   3. `up.DeleteObject(ctx, "screenshots/{id}.{png,gif,webp}")` — purga extensões legadas pra esse id
-  4. `up.Upload(ctx, "screenshots/{id}.jpg", jpg, "image/jpeg")` — MinIO
+  4. `up.Upload(ctx, "screenshots/{id}.jpg", jpg, "image/jpeg")` — RustFS
   5. `repo.UpdateOGImage(ctx, id, "/api/files/screenshots/{id}.jpg")`
   
   O fallback é **silencioso em falha** (apenas loga) — o link permanece sem imagem. Falhas comuns: site bloqueando bots, JS-heavy page sem og:image, Chromium ausente. Se `imageopt.Optimize` retornar erro (corrupção rara), o worker armazena o PNG cru em `screenshots/{id}.png` como fallback — nunca aborta a etapa só por causa do re-encode.
@@ -353,7 +353,7 @@ Notificação background quando o changecheck detecta change. RFC 8030 + VAPID v
 
 ## Pipeline de imagens (`internal/imageopt`)
 
-Todo byte que entra no MinIO via upload do usuário ou via screenshot fallback passa por `imageopt.Optimize(data, Options{MaxDim: 1024, Quality: 82})` antes do `Upload`. Implementação 100% Go (`image/png|jpeg|gif` da stdlib + `golang.org/x/image/draw` pra resize Catmull-Rom + `golang.org/x/image/webp` só pra decode); sem CGO, sem libwebp no Dockerfile.
+Todo byte que entra no RustFS via upload do usuário ou via screenshot fallback passa por `imageopt.Optimize(data, Options{MaxDim: 1024, Quality: 82})` antes do `Upload`. Implementação 100% Go (`image/png|jpeg|gif` da stdlib + `golang.org/x/image/draw` pra resize Catmull-Rom + `golang.org/x/image/webp` só pra decode); sem CGO, sem libwebp no Dockerfile.
 
 **Algoritmo:**
 
@@ -362,7 +362,7 @@ Todo byte que entra no MinIO via upload do usuário ou via screenshot fallback p
 3. Se algum lado > 1024 px, calcula `(W', H')` preservando aspect ratio.
 4. Cria `*image.RGBA` no tamanho final preenchido com branco, depois `draw.CatmullRom.Scale(…, draw.Over)` pra blendar a fonte. Isso resolve resize + composição de alpha sobre branco numa só operação (JPEG não tem alpha — sem o branco, pixels transparentes virariam pretos).
 5. `jpeg.Encode` com `Quality: 82`.
-6. **Guard de não-regressão (só pra JPEG de entrada):** se a entrada já era JPEG, não foi feito resize, e o output ficou ≥ ao input, devolve os bytes originais. Pra PNG/GIF/WebP, sempre re-encoda — garante que `images/{id}.jpg` é o caminho canônico no MinIO.
+6. **Guard de não-regressão (só pra JPEG de entrada):** se a entrada já era JPEG, não foi feito resize, e o output ficou ≥ ao input, devolve os bytes originais. Pra PNG/GIF/WebP, sempre re-encoda — garante que `images/{id}.jpg` é o caminho canônico no RustFS.
 
 **Pontos de chamada:**
 
@@ -537,7 +537,7 @@ Definido em `CLAUDE.md`. Backend: `make coverage` roda unit + integration tests 
 Antes de pinar uma dep nova, conferir `https://go.dev/dl/` e `npm view <pkg> version --registry=https://registry.npmjs.org/` (sempre o registro público, nunca um mirror privado, pra checagem de versão). Tabela de versões correntes vive em `CLAUDE.md` §1.
 
 ### ADR-16 — Screenshot só como fallback (nunca obrigatório)
-A captura de tela headless (`internal/screenshot/` via `go-rod`) **só roda** quando o fetch HTML não devolveu `og:image`, o usuário ainda não fez upload manual, **e** o host resolve pra IP público (`preview.IsPublicURL`). Os três gates são curto-circuito — qualquer falha desliga o screenshot e o link fica sem imagem (em vez de mostrar uma tela de login interna ou consumir Chromium em vão). MinIO ausente = fallback desligado, demais endpoints continuam ok. **Por quê:** screenshot é caro (Chromium + I/O), arrisca expor páginas internas, e na maioria dos sites públicos o `og:image` já cobre. Fallback troca "imagem pobre" por "alguma imagem" sem dar custo no caminho feliz.
+A captura de tela headless (`internal/screenshot/` via `go-rod`) **só roda** quando o fetch HTML não devolveu `og:image`, o usuário ainda não fez upload manual, **e** o host resolve pra IP público (`preview.IsPublicURL`). Os três gates são curto-circuito — qualquer falha desliga o screenshot e o link fica sem imagem (em vez de mostrar uma tela de login interna ou consumir Chromium em vão). RustFS ausente = fallback desligado, demais endpoints continuam ok. **Por quê:** screenshot é caro (Chromium + I/O), arrisca expor páginas internas, e na maioria dos sites públicos o `og:image` já cobre. Fallback troca "imagem pobre" por "alguma imagem" sem dar custo no caminho feliz.
 
 ### ADR-19 — Folders 1:N exclusivo (containment) coexistindo com tags M:N (labels). Pastas aninhadas via self-FK.
 `folder` é uma tabela nova, separada de `tag`, e `link.folder_id` é 1:N (`ON DELETE SET NULL` — quando uma pasta some, os links voltam pra raiz soltos). Folders também são **aninhadas** entre si via `folder.parent_id` (também `ON DELETE SET NULL` — quando pasta-pai some, filhas viram root).
@@ -579,16 +579,16 @@ A captura de tela headless (`internal/screenshot/` via `go-rod`) **só roda** qu
 Detalhe completo em [SDD-BACKUP-RESTORE.md](./SDD-BACKUP-RESTORE.md). Resumo das decisões load-bearing:
 
 - **Um ZIP é a unidade de backup.** Contém `manifest.json` + `database.json` (todas as 5 tabelas) + `files/screenshots/` + `files/images/`. `og_image_url` continua como proxy URL `/api/files/<key>` — não embarca bytes inline em base64.
-- **Streaming end-to-end.** Export usa `zip.NewWriter(http.ResponseWriter)` + `io.Copy` direto do MinIO GetObject. Restore usa `MultipartReader` (não `ParseMultipartForm`). Bucket de centenas de MBs sobrevive sem buffer.
+- **Streaming end-to-end.** Export usa `zip.NewWriter(http.ResponseWriter)` + `io.Copy` direto do RustFS GetObject. Restore usa `MultipartReader` (não `ParseMultipartForm`). Bucket de centenas de MBs sobrevive sem buffer.
 - **3 endpoints**: `/api/backup` (gera), `/api/backup/validate` (sem efeito colateral — confere checksums + manifest + conflitos com DB atual), `/api/backup/restore?mode=…`.
 - **3 modos de conflito**:
-  - `wipe`: TRUNCATE 5 tabelas + DELETE prefix MinIO + restore com IDs originais preservados. UI exige confirm destrutivo.
+  - `wipe`: TRUNCATE 5 tabelas + DELETE prefix RustFS + restore com IDs originais preservados. UI exige confirm destrutivo.
   - `skip` (default): `ON CONFLICT DO NOTHING` em `tag.name`/`link.url`, mapping `oldID→curID` pra link_tag/click_log re-key.
   - `duplicate`: tags renomeiam pra `nome (N)`, folders sempre criam novo, links com URL conflict caem pra skip + warning (URL é UNIQUE — duplicar quebraria invariant).
 - **REPEATABLE READ no export** garante que as 5 SELECTs vejam um snapshot consistente.
 - **Validação prévia** é obrigatória no frontend: usuário vê manifest + counts + conflitos antes de escolher modo e confirmar.
 - **`schema_version` no manifest** rejeita backups de futuro; backups antigos podem rodar com warning (campos novos default).
-- **Restore não é atômico DB+MinIO** (sem 2PC entre Postgres e S3). Writes idempotentes + re-rodar com mesmo zip converge.
+- **Restore não é atômico DB+RustFS** (sem 2PC entre Postgres e S3). Writes idempotentes + re-rodar com mesmo zip converge.
 
 ### ADR-21 — Paste anywhere = New Link dialog pre-filled
 **Status:** Done.

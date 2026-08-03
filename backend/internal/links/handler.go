@@ -1,29 +1,34 @@
 package links
 
 import (
+	"context"
 	"errors"
 	"net/http"
-	"strconv"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/folders"
 	"foldex/internal/pkg/clampint"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/listquery"
+	"foldex/internal/ports"
 )
 
-// Enqueuer is implemented by the preview worker. We keep it tiny to avoid an
-// import cycle between links and preview. Enqueue returns an error so handlers
-// can decide whether to surface backpressure to the client; the typical choice
-// is to log + carry on (the link row already exists, the user gets 201).
-type Enqueuer interface {
-	Enqueue(linkID int64) error
+// FolderPasswordLookup resolves a folder's password hash for content-gate
+// on GET /api/links?folder_id=X (same posture as entries).
+type FolderPasswordLookup interface {
+	PasswordHashFor(ctx context.Context, id int64) (*string, error)
 }
 
+// Enqueuer is the preview-worker port (canonical: ports.Enqueuer).
+type Enqueuer = ports.Enqueuer
+
 type Handler struct {
-	repo    *Repository
-	worker  Enqueuer
-	fetcher MetadataFetcher // optional — disables /url-metadata when nil
+	repo         *Repository
+	worker       Enqueuer
+	fetcher      MetadataFetcher // optional — disables /url-metadata when nil
+	folderLookup FolderPasswordLookup
+	unlockKey    []byte
 }
 
 func NewHandler(repo *Repository, worker Enqueuer) *Handler {
@@ -36,6 +41,13 @@ func NewHandler(repo *Repository, worker Enqueuer) *Handler {
 // they don't exercise the route.
 func (h *Handler) WithMetadataFetcher(f MetadataFetcher) *Handler {
 	h.fetcher = f
+	return h
+}
+
+// WithFolderGate enables unlock-token content-gate on ?folder_id= lists.
+func (h *Handler) WithFolderGate(lookup FolderPasswordLookup, unlockKey []byte) *Handler {
+	h.folderLookup = lookup
+	h.unlockKey = unlockKey
 	return h
 }
 
@@ -56,27 +68,28 @@ func (h *Handler) Mount(r chi.Router) {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+	p := listquery.Parse(r)
 	q := ListQuery{
-		Q:    strings.TrimSpace(r.URL.Query().Get("q")),
-		Sort: r.URL.Query().Get("sort"),
+		Q: p.Q, TagIDs: p.TagIDs, Sort: p.Sort, Limit: p.Limit, Offset: p.Offset,
+		FolderID: p.FolderID, Ungrouped: p.Ungrouped,
 	}
-	for _, raw := range r.URL.Query()["tag"] {
-		if id, err := strconv.ParseInt(raw, 10, 64); err == nil && id > 0 {
-			q.TagIDs = append(q.TagIDs, id)
+	if q.FolderID != nil && h.folderLookup != nil {
+		token := r.Header.Get(folders.UnlockHeader)
+		if err := h.enforceFolderUnlock(r.Context(), *q.FolderID, token); err != nil {
+			httperr.Write(w, err)
+			return
 		}
-	}
-	// Clamp to [1,500] / [0,100000] — the repo already enforces these caps,
-	// but clamping at the handler level keeps the same posture used in
-	// listRecentChanges and the stats handler (defense-in-depth).
-	q.Limit = clampint.Int(r.URL.Query().Get("limit"), 100, 1, 500)
-	q.Offset = clampint.Int(r.URL.Query().Get("offset"), 0, 0, 100000)
-	if v := r.URL.Query().Get("folder_id"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
-			q.FolderID = &n
+		out, err := h.repo.List(r.Context(), q)
+		if err != nil {
+			httperr.Write(w, err)
+			return
 		}
-	}
-	if v := r.URL.Query().Get("ungrouped"); v == "1" || v == "true" {
-		q.Ungrouped = true
+		if err := h.enforceFolderUnlock(r.Context(), *q.FolderID, token); err != nil {
+			httperr.Write(w, err)
+			return
+		}
+		httperr.JSON(w, http.StatusOK, out)
+		return
 	}
 	out, err := h.repo.List(r.Context(), q)
 	if err != nil {
@@ -84,6 +97,14 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httperr.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) enforceFolderUnlock(ctx context.Context, folderID int64, token string) error {
+	hash, err := h.folderLookup.PasswordHashFor(ctx, folderID)
+	if err != nil {
+		return err
+	}
+	return folders.CheckUnlock(h.unlockKey, folderID, hash, token)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {

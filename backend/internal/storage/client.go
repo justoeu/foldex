@@ -10,16 +10,18 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
+	"foldex/internal/pkg/logsafe"
 )
 
-// Client wraps a MinIO client and exposes a minimal interface for foldex.
+// Client wraps an S3-compatible client (RustFS via minio-go) and exposes a minimal interface for foldex.
 type Client struct {
 	mc     *minio.Client
 	bucket string
 	logger *slog.Logger
 }
 
-// Config holds the MinIO connection parameters.
+// Config holds S3-compatible object-store connection parameters (RustFS).
 type Config struct {
 	Endpoint  string
 	AccessKey string
@@ -35,7 +37,7 @@ func New(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, error) 
 		Secure: cfg.UseSSL,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("storage: create minio client: %w", err)
+		return nil, fmt.Errorf("storage: create s3 client: %w", err)
 	}
 
 	exists, err := mc.BucketExists(ctx, cfg.Bucket)
@@ -52,7 +54,7 @@ func New(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, error) 
 				"BucketAlreadyOwnedByYou": true,
 				"BucketAlreadyExists":     true,
 				"AccessDenied":            true,
-				"NoSuchBucket":            true, // some MinIO versions on create
+				"NoSuchBucket":            true, // some S3 servers on create
 			}
 			if !toleratedCodes[errCode] {
 				return nil, fmt.Errorf("storage: make bucket %q at %s (code=%s): %w", cfg.Bucket, cfg.Endpoint, errCode, mkErr)
@@ -74,11 +76,29 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 	if err != nil {
 		return fmt.Errorf("storage: upload %q: %w", key, err)
 	}
-	c.logger.Info("storage: uploaded object", "key", key, "bytes", len(data))
+	c.logger.Info("storage: uploaded object", "key", logsafe.String(key), "bytes", len(data))
 	return nil
 }
 
-// GetObject returns the raw bytes stored at key.
+// MaxServeObjectBytes is the hard ceiling for buffered GetObject reads used by
+// the image proxy. Upload paths already cap images at 5 MiB; 16 MiB leaves
+// headroom for legacy objects while blocking multi-GB backup keys from being
+// fully buffered. Large objects must use OpenObject (streaming).
+const MaxServeObjectBytes int64 = 16 << 20
+
+// ErrObjectTooLarge is returned when Stat reports a size above MaxServeObjectBytes
+// or when a stream exceeds that ceiling mid-read.
+var ErrObjectTooLarge = errors.New("storage: object exceeds max serve size")
+
+// checkServeSize rejects objects that would blow the buffered-serve budget.
+func checkServeSize(size int64) error {
+	if size < 0 || size > MaxServeObjectBytes {
+		return fmt.Errorf("%w: size=%d max=%d", ErrObjectTooLarge, size, MaxServeObjectBytes)
+	}
+	return nil
+}
+
+// GetObject returns the raw bytes stored at key, capped at MaxServeObjectBytes.
 func (c *Client) GetObject(ctx context.Context, key string) ([]byte, string, error) {
 	obj, err := c.mc.GetObject(ctx, c.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
@@ -88,29 +108,41 @@ func (c *Client) GetObject(ctx context.Context, key string) ([]byte, string, err
 
 	info, err := obj.Stat()
 	if err != nil {
-		// A MinIO "not found" comes back as an error on Stat, not on GetObject.
+		// A "not found" comes back as an error on Stat, not on GetObject.
 		return nil, "", fmt.Errorf("storage: stat object %q: %w", key, err)
 	}
+	if err := checkServeSize(info.Size); err != nil {
+		return nil, "", fmt.Errorf("storage: get object %q: %w", key, err)
+	}
 
-	buf := make([]byte, info.Size)
-	if _, err := io.ReadFull(obj, buf); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-		// Stat may report a stale size if the object was concurrently rewritten.
-		// Fall back to draining whatever the reader still has so we return the
-		// real payload instead of partial junk.
-		n, rerr := readAll(obj, info.Size)
-		if rerr != nil {
-			return nil, "", fmt.Errorf("storage: read object %q: %w", key, rerr)
-		}
-		return n, info.ContentType, nil
+	// LimitReader caps mid-stream growth if Stat was stale/under-reported.
+	limited := io.LimitReader(obj, MaxServeObjectBytes+1)
+	buf, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, "", fmt.Errorf("storage: read object %q: %w", key, err)
+	}
+	if int64(len(buf)) > MaxServeObjectBytes {
+		return nil, "", fmt.Errorf("storage: get object %q: %w", key, ErrObjectTooLarge)
 	}
 	return buf, info.ContentType, nil
 }
 
 // readAll reads all bytes from an io.Reader when a pre-allocated read fails.
+// Retained for unit tests that exercise the drain helper shape.
 func readAll(obj io.Reader, size int64) ([]byte, error) {
+	if size > MaxServeObjectBytes {
+		size = MaxServeObjectBytes
+	}
+	if size < 0 {
+		size = 0
+	}
+	limited := io.LimitReader(obj, MaxServeObjectBytes+1)
 	buf := bytes.NewBuffer(make([]byte, 0, size))
-	if _, err := buf.ReadFrom(obj); err != nil {
+	if _, err := buf.ReadFrom(limited); err != nil {
 		return nil, err
+	}
+	if int64(buf.Len()) > MaxServeObjectBytes {
+		return nil, ErrObjectTooLarge
 	}
 	return buf.Bytes(), nil
 }
@@ -137,7 +169,7 @@ func (c *Client) Stats(ctx context.Context) (Stats, error) {
 }
 
 // ObjectInfo is the minimal metadata the backup module needs to enumerate the
-// bucket without coupling to minio-go's full ObjectInfo type.
+// bucket without coupling to the SDK's full ObjectInfo type.
 type ObjectInfo struct {
 	Key  string
 	Size int64
@@ -182,7 +214,7 @@ func (c *Client) PutObjectStream(ctx context.Context, key string, r io.Reader, s
 	if err != nil {
 		return fmt.Errorf("storage: put stream %q: %w", key, err)
 	}
-	c.logger.Info("storage: uploaded object (stream)", "key", key, "bytes", size)
+	c.logger.Info("storage: uploaded object (stream)", "key", logsafe.String(key), "bytes", size)
 	return nil
 }
 

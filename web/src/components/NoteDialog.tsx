@@ -15,6 +15,8 @@ import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useCreateNote, useUpdateNote, useNote, uploadNoteImage } from '../api/notes'
 import { useCreateTag, useTags } from '../api/tags'
+import { INLINE_PALETTE } from '../lib/inlinePalette'
+import { slugifyClient } from '../lib/slugify'
 import type { Tag } from '../api/types'
 
 type Props = {
@@ -33,14 +35,6 @@ type Props = {
 // inline live with id === 0 until save, when they're created and attached.
 type SelectedTag = Tag & { _pending?: boolean }
 
-// Same palette LinkDialog uses for pending-tag color cycling — kept in sync
-// so a tag queued from either dialog looks the same before it's saved.
-const INLINE_PALETTE = [
-  '#6366F1', '#3B82F6', '#0EA5E9', '#06B6D4', '#14B8A6', '#10B981', '#22C55E', '#84CC16',
-  '#EAB308', '#F59E0B', '#F97316', '#EF4444', '#F43F5E', '#EC4899', '#D946EF', '#A855F7',
-  '#8B5CF6', '#64748B', '#78716C', '#6B7280',
-]
-
 // Inserts an uploaded image at the current selection. Exported so tests can
 // exercise the upload-and-insert logic without mounting the full ProseMirror
 // DOM (jsdom doesn't implement enough of the contenteditable/selection APIs
@@ -58,17 +52,6 @@ export function buildImageUploadHandler(
       })
       .catch(() => onError('upload_failed'))
   }
-}
-
-function slugifyClient(title: string): string {
-  return title
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80)
-    .replace(/-+$/g, '')
 }
 
 export function NoteDialog({ open, noteId, defaultFolderId, onClose }: Props) {

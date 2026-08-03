@@ -17,6 +17,7 @@
 package changecheck
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -52,8 +53,9 @@ func NewFingerprinter(g HTTPGetter) *Fingerprinter { return &Fingerprinter{httpC
 
 // Compute returns the (kind, value) tuple for a page. `pageHTML` is the HTML
 // already fetched by the worker — passing it in avoids a double GET on every
-// scan. `pageURL` is needed to resolve relative feed hrefs.
-func (f *Fingerprinter) Compute(ctx context.Context, pageURL, pageHTML string) (kind string, value string, err error) {
+// scan. Accepts []byte so the worker need not allocate a full string copy of
+// a body that can be up to 4 MiB. `pageURL` is needed to resolve relative feed hrefs.
+func (f *Fingerprinter) Compute(ctx context.Context, pageURL string, pageHTML []byte) (kind string, value string, err error) {
 	if feedURL := extractFeedURL(pageHTML, pageURL); feedURL != "" {
 		if hash, ferr := f.fingerprintFeed(ctx, feedURL); ferr == nil {
 			return KindFeed, hash, nil
@@ -86,8 +88,8 @@ func SplitFingerprint(stored string) (kind, hash string) {
 // <link rel="alternate" type="application/(rss|atom)+xml" href="...">.
 // Resolves a relative href against pageURL. Returns "" when no feed is
 // declared. Tokenizer stops at </head> to avoid scanning the body.
-func extractFeedURL(pageHTML, pageURL string) string {
-	z := html.NewTokenizer(strings.NewReader(pageHTML))
+func extractFeedURL(pageHTML []byte, pageURL string) string {
+	z := html.NewTokenizer(bytes.NewReader(pageHTML))
 	base, _ := url.Parse(pageURL)
 	for {
 		tt := z.Next()
@@ -96,45 +98,19 @@ func extractFeedURL(pageHTML, pageURL string) string {
 			return ""
 		case html.StartTagToken, html.SelfClosingTagToken:
 			name, hasAttr := z.TagName()
-			if string(name) == "head" {
+			n := string(name)
+			if n == "head" {
 				continue
 			}
-			if string(name) == "body" {
+			if n == "body" {
 				return ""
 			}
-			if string(name) != "link" || !hasAttr {
+			if n != "link" || !hasAttr {
 				continue
 			}
-			var rel, typ, href string
-			for {
-				k, v, more := z.TagAttr()
-				switch strings.ToLower(string(k)) {
-				case "rel":
-					rel = strings.ToLower(string(v))
-				case "type":
-					typ = strings.ToLower(string(v))
-				case "href":
-					href = string(v)
-				}
-				if !more {
-					break
-				}
+			if href := feedLinkHref(z); href != "" {
+				return resolveHref(base, href)
 			}
-			if !strings.Contains(rel, "alternate") {
-				continue
-			}
-			if typ != "application/rss+xml" && typ != "application/atom+xml" {
-				continue
-			}
-			if href == "" {
-				continue
-			}
-			if base != nil {
-				if ref, err := url.Parse(href); err == nil {
-					return base.ResolveReference(ref).String()
-				}
-			}
-			return href
 		case html.EndTagToken:
 			name, _ := z.TagName()
 			if string(name) == "head" {
@@ -142,6 +118,43 @@ func extractFeedURL(pageHTML, pageURL string) string {
 			}
 		}
 	}
+}
+
+func feedLinkHref(z *html.Tokenizer) string {
+	var rel, typ, href string
+	for {
+		k, v, more := z.TagAttr()
+		switch strings.ToLower(string(k)) {
+		case "rel":
+			rel = strings.ToLower(string(v))
+		case "type":
+			typ = strings.ToLower(string(v))
+		case "href":
+			href = string(v)
+		}
+		if !more {
+			break
+		}
+	}
+	if !strings.Contains(rel, "alternate") {
+		return ""
+	}
+	if typ != "application/rss+xml" && typ != "application/atom+xml" {
+		return ""
+	}
+	return href
+}
+
+func resolveHref(base *url.URL, href string) string {
+	if href == "" {
+		return ""
+	}
+	if base != nil {
+		if ref, err := url.Parse(href); err == nil {
+			return base.ResolveReference(ref).String()
+		}
+	}
+	return href
 }
 
 // fingerprintFeed fetches the declared feed URL and hashes a sorted slice of
@@ -158,7 +171,7 @@ func (f *Fingerprinter) fingerprintFeed(ctx context.Context, feedURL string) (st
 	if err != nil {
 		return "", fmt.Errorf("fetch feed: %w", err)
 	}
-	ids := extractFeedItemIDs(string(body))
+	ids := extractFeedItemIDs(body)
 	if len(ids) == 0 {
 		return "", fmt.Errorf("feed had no item ids (%s)", feedURL)
 	}
@@ -173,72 +186,85 @@ func (f *Fingerprinter) fingerprintFeed(ctx context.Context, feedURL string) (st
 // parser here, and avoiding encoding/xml keeps the surface area small).
 // Returns text contents of <guid>, <id>, and the href attribute of <link>
 // when it's inside <item> or <entry>.
-func extractFeedItemIDs(feedXML string) []string {
-	z := html.NewTokenizer(strings.NewReader(feedXML))
-	var (
-		inItem bool
-		ids    []string
-		buf    strings.Builder
-		grab   bool
-	)
-	flush := func() {
-		if grab {
-			v := strings.TrimSpace(buf.String())
-			if v != "" {
-				ids = append(ids, v)
+type feedIDCollector struct {
+	inItem bool
+	ids    []string
+	buf    strings.Builder
+	grab   bool
+}
+
+func (c *feedIDCollector) flush() {
+	if c.grab {
+		v := strings.TrimSpace(c.buf.String())
+		if v != "" {
+			c.ids = append(c.ids, v)
+		}
+	}
+	c.buf.Reset()
+	c.grab = false
+}
+
+func (c *feedIDCollector) onStart(z *html.Tokenizer, name string, hasAttr bool) {
+	switch name {
+	case "item", "entry":
+		c.inItem = true
+	case "guid", "id":
+		if c.inItem {
+			c.flush()
+			c.grab = true
+		}
+	case "link":
+		if c.inItem && hasAttr {
+			if href := attrValue(z, "href"); href != "" {
+				c.ids = append(c.ids, strings.TrimSpace(href))
 			}
 		}
-		buf.Reset()
-		grab = false
 	}
+}
+
+func (c *feedIDCollector) onEnd(name string) {
+	switch name {
+	case "item", "entry":
+		c.flush()
+		c.inItem = false
+	case "guid", "id":
+		c.flush()
+	}
+}
+
+func attrValue(z *html.Tokenizer, key string) string {
+	var out string
+	for {
+		k, v, more := z.TagAttr()
+		if strings.ToLower(string(k)) == key {
+			out = string(v)
+		}
+		if !more {
+			break
+		}
+	}
+	return out
+}
+
+func extractFeedItemIDs(feedXML []byte) []string {
+	z := html.NewTokenizer(bytes.NewReader(feedXML))
+	var c feedIDCollector
 	for {
 		tt := z.Next()
 		if tt == html.ErrorToken {
-			return ids
+			return c.ids
 		}
 		switch tt {
 		case html.StartTagToken, html.SelfClosingTagToken:
 			name, hasAttr := z.TagName()
-			n := strings.ToLower(string(name))
-			switch n {
-			case "item", "entry":
-				inItem = true
-			case "guid", "id":
-				if inItem {
-					flush()
-					grab = true
-				}
-			case "link":
-				if inItem && hasAttr {
-					var href string
-					for {
-						k, v, more := z.TagAttr()
-						if strings.ToLower(string(k)) == "href" {
-							href = string(v)
-						}
-						if !more {
-							break
-						}
-					}
-					if href != "" {
-						ids = append(ids, strings.TrimSpace(href))
-					}
-				}
-			}
+			c.onStart(z, strings.ToLower(string(name)), hasAttr)
 		case html.TextToken:
-			if grab {
-				buf.Write(z.Text())
+			if c.grab {
+				c.buf.Write(z.Text())
 			}
 		case html.EndTagToken:
 			name, _ := z.TagName()
-			n := strings.ToLower(string(name))
-			switch n {
-			case "item", "entry":
-				flush()
-				inItem = false
-			case "guid", "id":
-				flush()
-			}
+			c.onEnd(strings.ToLower(string(name)))
 		}
 	}
 }
@@ -251,7 +277,7 @@ func extractFeedItemIDs(feedXML string) []string {
 // Whitespace is collapsed to single spaces and the result trimmed so
 // minor reformatting (extra blank lines, indentation changes) doesn't
 // flip the hash.
-func fingerprintContent(pageHTML string) (string, error) {
+func fingerprintContent(pageHTML []byte) (string, error) {
 	text := extractMainContent(pageHTML)
 	text = normalizeWhitespace(text)
 	if text == "" {
@@ -265,8 +291,8 @@ func fingerprintContent(pageHTML string) (string, error) {
 // or <article> element, falling back to <body> when neither exists. Skips
 // any text inside <script>, <style>, <nav>, <header>, <footer>, including
 // nested children.
-func extractMainContent(pageHTML string) string {
-	doc, err := html.Parse(strings.NewReader(pageHTML))
+func extractMainContent(pageHTML []byte) string {
+	doc, err := html.Parse(bytes.NewReader(pageHTML))
 	if err != nil {
 		return ""
 	}

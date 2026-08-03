@@ -11,7 +11,7 @@ import (
 )
 
 // StorageStatter abstracts the object-storage size lookup so the stats handler
-// stays decoupled from the concrete MinIO client.
+// stays decoupled from the concrete object-store client.
 type StorageStatter interface {
 	Stats(ctx context.Context) (StorageStats, error)
 }
@@ -23,12 +23,20 @@ type StorageStats struct {
 	TotalBytes int64 `json:"total_bytes"`
 }
 
+// StatsReader is satisfied by *Repository.
+type StatsReader interface {
+	Summary(ctx context.Context) (Summary, error)
+	Daily(ctx context.Context, days int) ([]DailyPoint, error)
+	TopLinks(ctx context.Context, limit int) ([]TopLink, error)
+	TagBuckets(ctx context.Context) ([]TagBucket, error)
+}
+
 type Handler struct {
-	repo    *Repository
+	repo    StatsReader
 	storage StorageStatter // optional — nil disables /stats/storage
 }
 
-func NewHandler(repo *Repository) *Handler { return &Handler{repo: repo} }
+func NewHandler(repo StatsReader) *Handler { return &Handler{repo: repo} }
 
 // WithStorage attaches an object-storage source so the storage endpoint is
 // registered when the bucket is reachable.

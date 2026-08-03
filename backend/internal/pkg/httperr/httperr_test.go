@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -66,4 +67,81 @@ func TestJSON_NilBody(t *testing.T) {
 	res := w.Result()
 	defer res.Body.Close()
 	assert.Equal(t, http.StatusNoContent, res.StatusCode)
+}
+
+func TestDecodeJSON_OK(t *testing.T) {
+	type body struct {
+		Name string `json:"name"`
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"x"}`))
+	w := httptest.NewRecorder()
+	got, err := DecodeJSON[body](w, req)
+	require.NoError(t, err)
+	assert.Equal(t, "x", got.Name)
+}
+
+func TestDecodeJSON_InvalidJSON(t *testing.T) {
+	type body struct {
+		Name string `json:"name"`
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{not`))
+	w := httptest.NewRecorder()
+	_, err := DecodeJSON[body](w, req)
+	require.Error(t, err)
+	var he *Error
+	require.ErrorAs(t, err, &he)
+	assert.Equal(t, "invalid_json", he.Code)
+	assert.Equal(t, http.StatusBadRequest, he.Status)
+}
+
+func TestDecodeJSON_UnknownField(t *testing.T) {
+	type body struct {
+		Name string `json:"name"`
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"x","extra":1}`))
+	w := httptest.NewRecorder()
+	_, err := DecodeJSON[body](w, req)
+	require.Error(t, err)
+	var he *Error
+	require.ErrorAs(t, err, &he)
+	assert.Equal(t, "invalid_json", he.Code)
+}
+
+func TestDecodeJSONWithCap_TooLarge(t *testing.T) {
+	type body struct {
+		Data string `json:"data"`
+	}
+	// Cap of 8 bytes — body exceeds it.
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"data":"0123456789"}`))
+	w := httptest.NewRecorder()
+	_, err := DecodeJSONWithCap[body](w, req, 8)
+	require.Error(t, err)
+	var he *Error
+	require.ErrorAs(t, err, &he)
+	assert.Equal(t, "invalid_json", he.Code)
+}
+
+func TestWrap_UnwrapAndErrorsIs(t *testing.T) {
+	cause := errors.New("root cause")
+	e := Wrap(http.StatusConflict, "wrapped", "surface msg", cause)
+	assert.Equal(t, "surface msg", e.Error())
+	assert.Equal(t, cause, e.Unwrap())
+	assert.True(t, errors.Is(e, cause))
+	assert.Equal(t, http.StatusConflict, e.Status)
+	assert.Equal(t, "wrapped", e.Code)
+}
+
+func TestParseID(t *testing.T) {
+	id, err := ParseID("42")
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), id)
+
+	for _, raw := range []string{"", "abc", "0", "-3", "1.5"} {
+		_, err := ParseID(raw)
+		require.Error(t, err, "raw=%q", raw)
+		var he *Error
+		require.ErrorAs(t, err, &he)
+		assert.Equal(t, "invalid_id", he.Code)
+		assert.Equal(t, http.StatusBadRequest, he.Status)
+	}
 }

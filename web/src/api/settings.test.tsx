@@ -37,7 +37,9 @@ describe('settings hooks', () => {
     const { result } = renderHook(() => useSetMasterPassword(), { wrapper })
     await expect(
       result.current.mutateAsync({ password: 'new-password', currentPassword: 'wrong' }),
-    ).rejects.toBeTruthy()
+    ).rejects.toMatchObject({
+      response: { data: { error: { code: 'wrong_password' } } },
+    })
     expect(state.masterPassword).toBe('original-pass')
   })
 

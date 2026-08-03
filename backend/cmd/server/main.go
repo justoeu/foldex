@@ -59,25 +59,26 @@ func main() {
 	// per CLAUDE.md §4 we never re-roll a second HTTP client / SSRF posture.
 	metadataFetcher := preview.NewFetcher(time.Duration(cfg.PreviewTimeoutSec) * time.Second)
 
-	// MinIO storage is optional — if it cannot be reached, we log a warning
-	// and disable the screenshot endpoints rather than refusing to start.
+	// Object store (RustFS / S3 API) is optional — if it cannot be reached, we
+	// log a warning and disable screenshot/upload endpoints rather than
+	// refusing to start.
 	var storageClient *storage.Client
 	sc, err := storage.New(rootCtx, storage.Config{
-		Endpoint:  cfg.MinIO.Endpoint,
-		AccessKey: cfg.MinIO.AccessKey,
-		SecretKey: cfg.MinIO.SecretKey,
-		Bucket:    cfg.MinIO.Bucket,
-		UseSSL:    cfg.MinIO.UseSSL,
+		Endpoint:  cfg.ObjectStore.Endpoint,
+		AccessKey: cfg.ObjectStore.AccessKey,
+		SecretKey: cfg.ObjectStore.SecretKey,
+		Bucket:    cfg.ObjectStore.Bucket,
+		UseSSL:    cfg.ObjectStore.UseSSL,
 	}, logger)
 	if err != nil {
-		logger.Warn("minio unavailable — screenshot endpoints disabled", "err", err)
+		logger.Warn("object store unavailable — screenshot endpoints disabled", "err", err)
 	} else {
 		storageClient = sc
 	}
 
-	// Wire the screenshot fallback before starting the worker. When MinIO is
-	// up the worker will, after each preview, capture a screenshot for links
-	// that have no og:image AND resolve to a public host.
+	// Wire the screenshot fallback before starting the worker. When the object
+	// store is up the worker will, after each preview, capture a screenshot
+	// for links that have no og:image AND resolve to a public host.
 	if storageClient != nil {
 		worker.WithScreenshotFallback(screenshotFunc(screenshot.Capture), storageClient)
 	}
@@ -155,6 +156,10 @@ func main() {
 
 	router := server.New(deps)
 
+	// NOTE: http.Server has no MaxRequestBodyBytes in Go 1.26. Absolute body
+	// ceilings live in server.defaultBodyLimit (path-aware MaxBytesReader:
+	// 1 MiB default, 6 MiB images, 100 MiB import, 2 GiB backup) plus the
+	// per-handler caps already on JSON/multipart routes.
 	srv := &http.Server{
 		// BindAddr defaults to 127.0.0.1 (single-user threat model). Override
 		// via BACKEND_BIND only when fronting with a reverse proxy AND

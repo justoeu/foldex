@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"net/url"
 	"strings"
+	"time"
+
+	"foldex/internal/pkg/jsonopt"
 )
 
 // Maximum byte lengths enforced by the Create/Update DTOs. Exported so the
@@ -102,6 +105,10 @@ type UpdateInput struct {
 	// in the repository).
 	CheckInterval    *string `json:"-"`
 	CheckIntervalSet bool    `json:"-"`
+	// IfMatchUpdatedAt is optional optimistic concurrency (RACE-HER-012):
+	// when set, UPDATE requires row.updated_at equality; 0 rows → 409 conflict.
+	// Omitted = last-writer-wins (default single-user clients).
+	IfMatchUpdatedAt *time.Time `json:"if_match_updated_at"`
 }
 
 func (u *UpdateInput) Normalize() {
@@ -173,63 +180,15 @@ func (u *UpdateInput) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
-
-	if len(aux.FolderID) == 0 {
-		u.FolderIDSet = false
-		u.FolderID = nil
-	} else {
-		u.FolderIDSet = true
-		if string(aux.FolderID) == "null" {
-			u.FolderID = nil
-		} else {
-			var n int64
-			if err := json.Unmarshal(aux.FolderID, &n); err != nil {
-				return err
-			}
-			u.FolderID = &n
-		}
+	var err error
+	if u.FolderIDSet, u.FolderID, err = jsonopt.DecodeOptionalInt64(aux.FolderID); err != nil {
+		return err
 	}
-
-	if len(aux.Slug) == 0 {
-		u.SlugSet = false
-		u.Slug = nil
-	} else {
-		u.SlugSet = true
-		if string(aux.Slug) == "null" {
-			u.Slug = nil
-		} else {
-			var s string
-			if err := json.Unmarshal(aux.Slug, &s); err != nil {
-				return err
-			}
-			s = strings.TrimSpace(s)
-			if s == "" {
-				u.Slug = nil
-			} else {
-				u.Slug = &s
-			}
-		}
+	if u.SlugSet, u.Slug, err = jsonopt.DecodeOptionalString(aux.Slug, true); err != nil {
+		return err
 	}
-
-	if len(aux.CheckInterval) == 0 {
-		u.CheckIntervalSet = false
-		u.CheckInterval = nil
-	} else {
-		u.CheckIntervalSet = true
-		if string(aux.CheckInterval) == "null" {
-			u.CheckInterval = nil
-		} else {
-			var s string
-			if err := json.Unmarshal(aux.CheckInterval, &s); err != nil {
-				return err
-			}
-			s = strings.TrimSpace(s)
-			if s == "" {
-				u.CheckInterval = nil
-			} else {
-				u.CheckInterval = &s
-			}
-		}
+	if u.CheckIntervalSet, u.CheckInterval, err = jsonopt.DecodeOptionalString(aux.CheckInterval, true); err != nil {
+		return err
 	}
 	return nil
 }

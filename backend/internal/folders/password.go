@@ -140,7 +140,14 @@ func LoadOrGenerateFolderUnlockKey(envKeyB64, statePath string, autoGen bool, lo
 }
 
 func readUnlockKeyState(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
+	// path comes from FOLDER_UNLOCK_KEY_PATH (operator config), never from an
+	// HTTP request. Clean + reject empty/relative-escape before ReadFile so
+	// gosec G304 is satisfied without weakening the operator-controlled path.
+	path = filepath.Clean(path)
+	if path == "." || path == "" {
+		return nil, errors.New("empty unlock key path")
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // G304: operator-configured path only
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +162,11 @@ func readUnlockKeyState(path string) ([]byte, error) {
 }
 
 func writeUnlockKeyState(path string, key []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	path = filepath.Clean(path)
+	if path == "." || path == "" {
+		return errors.New("empty unlock key path")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
 	encoded := base64.StdEncoding.EncodeToString(key)

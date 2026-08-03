@@ -111,3 +111,31 @@ func TestWorker_EnqueueAfterStopReturnsErrStopped(t *testing.T) {
 	err := w.Enqueue(42)
 	assert.ErrorIs(t, err, ErrStopped)
 }
+
+// TestWorker_StopDrainsBufferedJobs locks RACE-HER-010: jobs accepted into the
+// channel before/during Stop must not sit forever with no consumer.
+func TestWorker_StopDrainsBufferedJobs(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	w := NewWorker(nil, 1, time.Second, logger)
+	assert.NoError(t, w.Enqueue(1))
+	assert.NoError(t, w.Enqueue(2))
+	w.Stop() // no Start — Wait is no-op; drain empties buffer
+	assert.Equal(t, 0, len(w.jobs))
+	assert.ErrorIs(t, w.Enqueue(3), ErrStopped)
+}
+
+func TestWorker_EnqueueDuringStop_ReturnsErrStopped(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	w := NewWorker(nil, 1, time.Second, logger)
+	w.stopped.Store(true)
+	assert.ErrorIs(t, w.Enqueue(1), ErrStopped)
+
+	w2 := NewWorker(nil, 1, time.Second, logger)
+	assert.NoError(t, w2.Enqueue(9))
+	w2.stopped.Store(true)
+	// Channel still has capacity; send succeeds then post-check fails.
+	err := w2.Enqueue(10)
+	assert.ErrorIs(t, err, ErrStopped)
+	w2.Stop()
+	assert.Equal(t, 0, len(w2.jobs), "Stop must drain leftover jobs")
+}

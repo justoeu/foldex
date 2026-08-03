@@ -1,4 +1,4 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
@@ -69,18 +69,21 @@ export function ListView({ folders, entries, sort, onEdit, onEditNote, onOpenFol
     | { kind: 'folder'; folder: Folder }
     | { kind: 'link'; link: Link }
     | { kind: 'note'; note: NoteEntry }
-  const rows: Row[] = isAlpha
-    ? mergeAlphaCells(folders, entries, sort === 'alpha' ? 1 : -1).map((c) =>
+  const rows: Row[] = useMemo(() => {
+    if (isAlpha) {
+      return mergeAlphaCells(folders, entries, sort === 'alpha' ? 1 : -1).map((c) =>
         c.kind === 'folder'
-          ? { kind: 'folder', folder: c.folder }
+          ? { kind: 'folder' as const, folder: c.folder }
           : c.kind === 'link'
-            ? { kind: 'link', link: c.entry }
-            : { kind: 'note', note: c.entry },
+            ? { kind: 'link' as const, link: c.entry }
+            : { kind: 'note' as const, note: c.entry },
       )
-    : [
-        ...folders.map<Row>((f) => ({ kind: 'folder', folder: f })),
-        ...entries.map<Row>((e) => (e.kind === 'link' ? { kind: 'link', link: e } : { kind: 'note', note: e })),
-      ]
+    }
+    return [
+      ...folders.map<Row>((f) => ({ kind: 'folder', folder: f })),
+      ...entries.map<Row>((e) => (e.kind === 'link' ? { kind: 'link', link: e } : { kind: 'note', note: e })),
+    ]
+  }, [isAlpha, folders, entries, sort])
 
   return (
     <div className="fx-list">

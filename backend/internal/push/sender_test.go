@@ -15,11 +15,13 @@ import (
 )
 
 type fakeSubStore struct {
-	mu      sync.Mutex
-	subs    []Subscription
-	deleted []string
-	usedIDs []int64
-	listErr error
+	mu        sync.Mutex
+	subs      []Subscription
+	deleted   []string
+	usedIDs   []int64
+	listErr   error
+	deleteErr error
+	usedErr   error
 }
 
 func (s *fakeSubStore) List(_ context.Context) ([]Subscription, error) {
@@ -35,14 +37,14 @@ func (s *fakeSubStore) DeleteByEndpoint(_ context.Context, endpoint string) erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.deleted = append(s.deleted, endpoint)
-	return nil
+	return s.deleteErr
 }
 
 func (s *fakeSubStore) MarkUsed(_ context.Context, id int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.usedIDs = append(s.usedIDs, id)
-	return nil
+	return s.usedErr
 }
 
 // fakeNotifier intercepts webpush dispatch BEFORE encryption — bypasses
@@ -176,6 +178,59 @@ func TestSender_Notify_MixedStatuses(t *testing.T) {
 	assert.Equal(t, []string{"https://push.example/gone"}, repo.deleted)
 	assert.Len(t, repo.usedIDs, 2, "two 201 responses must mark two subs used")
 }
+
+func TestSender_Notify_Non2xxDoesNotMarkOrDelete(t *testing.T) {
+	repo := &fakeSubStore{subs: []Subscription{fakeSub("https://push.example/5xx")}}
+	n := &fakeNotifier{status: http.StatusInternalServerError}
+	s := NewSender(testKeys(), repo, testLogger()).WithNotifyFunc(n.notify)
+	require.NoError(t, s.Notify(context.Background(), Notification{}))
+	assert.Empty(t, repo.deleted)
+	assert.Empty(t, repo.usedIDs)
+}
+
+func TestSender_Notify_DeleteGoneErrorLogged(t *testing.T) {
+	repo := &fakeSubStore{
+		subs:      []Subscription{fakeSub("https://push.example/gone")},
+		deleteErr: errors.New("db delete fail"),
+	}
+	// extend fake to return delete error
+	n := &fakeNotifier{status: http.StatusGone}
+	s := NewSender(testKeys(), repo, testLogger()).WithNotifyFunc(n.notify)
+	require.NoError(t, s.Notify(context.Background(), Notification{}))
+}
+
+func TestSender_Notify_MarkUsedErrorLogged(t *testing.T) {
+	repo := &fakeSubStore{
+		subs:    []Subscription{{ID: 1, Endpoint: "https://push.example/ok", P256dh: "p", Auth: "a"}},
+		usedErr: errors.New("mark fail"),
+	}
+	n := &fakeNotifier{status: 201}
+	s := NewSender(testKeys(), repo, testLogger()).WithNotifyFunc(n.notify)
+	require.NoError(t, s.Notify(context.Background(), Notification{}))
+}
+
+func TestAsStdClient_ConcreteAndDoer(t *testing.T) {
+	c := &http.Client{Timeout: time.Second}
+	assert.Same(t, c, asStdClient(c))
+
+	var hit bool
+	fake := doerFunc(func(req *http.Request) (*http.Response, error) {
+		hit = true
+		return &http.Response{StatusCode: 200, Body: newNopBody(), Header: make(http.Header)}, nil
+	})
+	adapted := asStdClient(fake)
+	require.NotNil(t, adapted)
+	req, err := http.NewRequest(http.MethodGet, "http://example.invalid/", nil)
+	require.NoError(t, err)
+	resp, err := adapted.Transport.RoundTrip(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.True(t, hit)
+}
+
+type doerFunc func(*http.Request) (*http.Response, error)
+
+func (f doerFunc) Do(req *http.Request) (*http.Response, error) { return f(req) }
 
 // ---- helpers ----
 
