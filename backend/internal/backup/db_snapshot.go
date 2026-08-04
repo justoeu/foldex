@@ -183,7 +183,15 @@ func countConflicts(ctx context.Context, pool *pgxpool.Pool, uid authctx.UserID,
 
 // objectKeyRE pulls the bucket key out of a stored proxy URL
 // (/api/files/screenshots/12.jpg → screenshots/12.jpg).
-var objectKeyRE = regexp.MustCompile(`/api/files/((?:screenshots|images|notes)/[A-Za-z0-9._-]+)`)
+//
+// The leading boundary group is a guard, not decoration. og_image_url is filled
+// by preview.Worker straight from a page's <meta property="og:image">, and that
+// page belongs to whoever the user bookmarked — so its value is attacker-chosen
+// text. Unanchored, `https://attacker.example/x/api/files/screenshots/9.jpg`
+// matches and hands out key `screenshots/9.jpg`. Requiring the path to start at
+// a string boundary or an HTML attribute delimiter means only a genuinely LOCAL
+// proxy path matches; a remote URL always carries a host character in front.
+var objectKeyRE = regexp.MustCompile(`(?:^|["'\s(=])/api/files/((?:screenshots|images|notes)/[A-Za-z0-9._-]+)`)
 
 // userObjectKeys enumerates the object-store keys referenced by uid's rows.
 //
@@ -225,10 +233,47 @@ func userObjectKeys(ctx context.Context, tx pgx.Tx, uid authctx.UserID) ([]strin
 		}); err != nil {
 		return nil, fmt.Errorf("note object keys: %w", err)
 	}
+	// REFERENCING a key is not OWNING it. og_image_url is server-written, but
+	// note body_html is user-authored rich text and the sanitizer allows
+	// <img src> with relative URLs by design — so a user can put
+	// `/api/files/screenshots/{someone else's link id}.jpg` in a note and this
+	// scan would hand them that key. Export would then pack the victim's image
+	// into their ZIP, and wipe-mode restore would DELETE it. The key is the same
+	// flat-namespace confusion the rest of this file guards against, arriving
+	// through a different door.
+	//
+	// Id-derived keys are therefore checked against the ids uid actually owns.
+	// notes/{uuid} keys need no such check: the UUIDv4 appears nowhere but
+	// inside the owning note, so referencing one already implies having seen it.
+	ownedLinks, err := ownedLinkIDs(ctx, tx, uid)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]string, 0, len(seen))
 	for k := range seen {
+		if _, id, _, isLinkKey := linkObjectID(k); isLinkKey {
+			if _, ok := ownedLinks[id]; !ok {
+				continue
+			}
+		}
 		out = append(out, k)
 	}
 	sort.Strings(out) // deterministic delete order keeps failures reproducible
+	return out, nil
+}
+
+func ownedLinkIDs(ctx context.Context, tx pgx.Tx, uid authctx.UserID) (map[int64]struct{}, error) {
+	out := map[int64]struct{}{}
+	if err := scanRows(ctx, tx, `SELECT id FROM link WHERE user_id = $1`, []any{int64(uid)},
+		func(rows pgx.Rows) error {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			out[id] = struct{}{}
+			return nil
+		}); err != nil {
+		return nil, fmt.Errorf("owned link ids: %w", err)
+	}
 	return out, nil
 }

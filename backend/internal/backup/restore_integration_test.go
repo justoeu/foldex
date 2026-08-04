@@ -60,10 +60,16 @@ func seedSnapshot(t *testing.T, pool *pgxpool.Pool, uid authctx.UserID, bucket *
 	require.NoError(t, err)
 
 	for i := 0; i < 3; i++ {
-		_, err := pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id, clicked_at) VALUES ('link', $1, now())`, la.ID)
+		_, err := pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id, clicked_at, user_id) VALUES ('link', $1, now(), $2)`, la.ID, int64(uid))
 		require.NoError(t, err)
 	}
-	bucket.objs[fmt.Sprintf("screenshots/%d.jpg", la.ID)] = []byte("img-A")
+	// The bucket object and the row that references it are seeded together on
+	// purpose: object keys carry no tenant segment, so a row pointing at the key
+	// is the ONLY thing that makes it attributable to a user. An orphan object
+	// belongs to nobody and no longer travels in that user's export.
+	key := fmt.Sprintf("screenshots/%d.jpg", la.ID)
+	bucket.objs[key] = []byte("img-A")
+	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, la.ID, "/api/files/"+key))
 	return seeded{tagID: tag.ID, folderID: folder.ID, linkA: la.ID, linkB: lb.ID}
 }
 

@@ -96,12 +96,27 @@ func TestRemapFileKey(t *testing.T) {
 	}
 }
 
-func TestRemapFileKey_IdentityWhenSameID(t *testing.T) {
+// TestRemapFileKey_IdentityStillCountsAsMapped pins the CHANGED meaning of
+// remapFileKey's boolean. It used to answer "did the key change", so an
+// identity mapping (old id == new id) reported false.
+//
+// It now answers "did THIS restore produce the link this key names", because
+// applyFiles uses false to DROP the entry — object keys are flat, so honouring
+// a key the restore did not produce would write over whichever tenant currently
+// holds that id. Under the old meaning an identity mapping would be discarded,
+// silently losing a legitimate image; under the new one it is kept, and only a
+// genuinely unmapped key is refused.
+func TestRemapFileKey_IdentityStillCountsAsMapped(t *testing.T) {
 	m := newIDMapping()
 	m.linkMap[7] = 7
 	got, ok := m.remapFileKey("screenshots/7.png")
 	assert.Equal(t, "screenshots/7.png", got)
-	assert.False(t, ok, "identity mapping must be reported as no-op")
+	assert.True(t, ok, "a link this restore produced is mapped even when the id is unchanged")
+
+	// The contrast that matters: an id this restore never produced.
+	got, ok = m.remapFileKey("screenshots/8.png")
+	assert.Equal(t, "screenshots/8.png", got)
+	assert.False(t, ok, "an unmapped id must be refused so applyFiles drops the entry")
 }
 
 // TestSnapshot_Sanitize is the security-boundary guard: a snapshot loaded

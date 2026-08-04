@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -483,4 +484,45 @@ func TestHandler_Update_SlugViaJSON(t *testing.T) {
 	var updated links.Link
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &updated))
 	assert.Equal(t, "handler-slug", updated.Slug)
+}
+
+// TestRepository_Create_SlugRetryDoesNotLeakConnections is the regression lock
+// for a pool-exhaustion bug that took the whole package down.
+//
+// Create retries on a slug collision by rolling back and opening a NEW tx. The
+// rollback registered at the top was `defer tx.Rollback(ctx)`, which captures
+// the receiver at defer time — so it always rolled back the FIRST tx and never
+// the replacement. Each retry that then returned an error (same URL as well as
+// same slug) left a connection checked out of the pool with an aborted
+// transaction open, permanently. In tests this surfaced as pgxpool.Close
+// hanging forever in cleanup; in production it is a backend that serves fewer
+// and fewer requests until it serves none.
+//
+// The bounded context is what makes this fail loudly instead of hanging: once
+// the pool is drained, Begin blocks on Acquire and the deadline fires.
+func TestRepository_Create_SlugRetryDoesNotLeakConnections(t *testing.T) {
+	_, uid, lrepo, _ := setup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const url, title = "https://leak.example", "Leaky Title"
+	_, err := lrepo.Create(ctx, uid, links.CreateInput{URL: url, Title: title})
+	require.NoError(t, err)
+
+	// Every one of these collides on BOTH slug and url: the slug collision
+	// drives the retry, the url collision then ends it with 409. That is the
+	// exact path that leaked. Comfortably more iterations than any default
+	// pool size, so a per-retry leak cannot survive the loop.
+	for i := 0; i < 30; i++ {
+		_, err := lrepo.Create(ctx, uid, links.CreateInput{URL: url, Title: title})
+		require.Error(t, err, "iteration %d must be refused as a duplicate url", i)
+		require.NotErrorIs(t, err, context.DeadlineExceeded,
+			"iteration %d blocked acquiring a connection — the retry path is leaking them", i)
+		require.Contains(t, err.Error(), "url", "iteration %d must be refused for the URL, not something else", i)
+	}
+
+	// The pool must still be usable afterwards; a leak that stopped just short
+	// of exhaustion would pass the loop above but leave the app degraded.
+	_, err = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://after.example", Title: "After"})
+	require.NoError(t, err, "pool must still serve new work after 30 retry-and-fail creates")
 }

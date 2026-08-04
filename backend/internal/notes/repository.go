@@ -70,7 +70,11 @@ func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateIn
 	if err != nil {
 		return Note{}, err
 	}
-	defer tx.Rollback(ctx)
+	// Closure, not `defer tx.Rollback(ctx)`: the slug-collision loop reassigns
+	// tx, and a bare defer captures the receiver at defer time — the FIRST
+	// transaction — so every replacement tx would leak its pooled connection
+	// with an aborted transaction still open. Same trap as links.Create.
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	userSupplied := in.Slug != nil
 	var baseSlug string

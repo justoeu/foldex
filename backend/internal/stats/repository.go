@@ -25,9 +25,15 @@ func (r *Repository) Summary(ctx context.Context, uid authctx.UserID) (Summary, 
 	// click_log is polymorphic (entity_kind/entity_id) — every clause here
 	// filters entity_kind = 'link' so the stats page keeps its pre-notes
 	// meaning (link clicks only, not note views).
-	// click_log carries no user_id (migration 000017 §10: it has no FK to link,
-	// so a denormalized owner could drift). Every click aggregate therefore
-	// reaches the owner through a semi-join on link.
+	//
+	// Ownership goes through a semi-join on link rather than the denormalized
+	// click_log.user_id (migration 000018), and that is a correctness choice,
+	// not an oversight. click_log lost its FK in migration 000014, so the
+	// app-level cascade is best-effort: a row can outlive the link it points at.
+	// The semi-join drops those orphans because they no longer join; a plain
+	// `click_log.user_id = $1` would keep counting them, inflating the totals a
+	// user sees against links they can no longer find. /api/entries reads
+	// user_id directly precisely because it aggregates PER link and joins anyway.
 	if err := r.pool.QueryRow(ctx, `
         SELECT
             (SELECT count(*) FROM link WHERE user_id = $1),

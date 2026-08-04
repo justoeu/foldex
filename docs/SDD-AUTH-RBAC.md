@@ -776,7 +776,20 @@ Não vão `app_user`, `session`, `totp_secret`, `recovery_code`, `api_token`, `i
 
 **O modo wipe deixa de preservar ids.** `restoreIdentity` existia para manter os ids originais e depois dar `setval` nas sequências; nenhuma das duas coisas é válida agora (outro tenant pode ter aqueles ids, e mexer numa sequência global a partir do restore de um usuário é errado). Depois do `wipeUser`, o caminho mapeado do modo skip roda com zero conflitos e produz o resultado certo com ids novos. `CLAUDE.md §4` e `docs/SDD-BACKUP-RESTORE.md` precisam ser reescritos por causa disso.
 
-**As chaves de objeto são planas** — `screenshots/{id}.jpg`, `images/{id}.jpg`, `notes/` (`backup/service.go:46`, `db_mapping.go:40-45`). Logo, `DeleteObjectsPrefix` no wipe apagaria arquivos de outros tenants. Correção **sem re-keying**: o wipe apaga uma **lista explícita de chaves** derivada das linhas do próprio usuário. Re-particionar as chaves por usuário exigiria reescrever `og_image_url` em todas as linhas e mover objetos já existentes — desproporcional para o ganho.
+### 10.4 Object store — as quatro superfícies
+
+**As chaves são planas** — `screenshots/{link_id}.ext`, `images/{link_id}.ext`, `notes/{uuid}.ext`. Não há segmento de tenant, então **a posse de um arquivo é estabelecida pela LINHA que o referencia**, nunca pela chave. Re-particionar por usuário exigiria reescrever `og_image_url` em todas as linhas e mover objetos vivos — desproporcional. A alternativa adotada escopa as quatro superfícies onde a chave é lida ou escrita. Cada uma falhava de forma independente, e **a suíte single-tenant passava em todas elas**:
+
+| Superfície | Falha | Correção |
+|---|---|---|
+| `Export` | empacotava o bucket inteiro (`ListObjects` por prefixo) — o ZIP que o usuário baixa e repassa levava screenshots dos outros | intersecta com `userObjectKeys`; objeto que nenhuma linha referencia não pertence a ninguém e fica para trás |
+| `GET /api/files/*` | id denso e enumerável ⇒ qualquer autenticado varria o range e lia imagem alheia | `repo.Get(uid, id)` para chaves derivadas de id; chave alheia devolve o **404 byte a byte idêntico** ao de chave inexistente (§4 404-não-403 vale para chave, não só para linha) |
+| `POST /api/links/{id}/image` | `Upload` + `purgeLegacyVariants` rodavam **antes** do check; o `UpdateOGImage` escopado devolvia 404 depois de o objeto da vítima já ter sido sobrescrito e as variantes irmãs apagadas | posse verificada no topo, antes de ler um byte |
+| `restore` (`applyFiles`) | chave declarada pelo ZIP era honrada quando o remap não casava ⇒ ZIP forjado sobrescrevia objeto de quem detém aquele id | só grava chave que saiu de `mapping.remapFileKey`; entrada órfã é descartada |
+
+**`notes/` é deliberadamente exceção**: a página pública `/n/{slug}` renderiza `body_html` **sem sessão**, e o browser busca essas imagens sem principal nenhum. Gatear quebraria toda nota publicada. A proteção é o UUIDv4 de 122 bits, que só aparece dentro da nota dona — é uma *capability URL*, e está registrado como tal, não como esquecimento.
+
+**Consequência do "nenhum modo preserva id"**: uma linha restaurada com o `og_image_url` do snapshot aponta para um id que agora é de outra pessoa, ou de ninguém. `realignLinkImageURLs` re-aponta cada `og_image_url` para o id da própria linha (o id dentro de uma chave derivada de id é sempre o da linha dona — a reescrita é posicional, não precisa consultar o mapping). Sem isso o wipe termina "com sucesso" e **toda imagem quebra**.
 
 `db_slugs.go` é a assimetria a comentar no código: slug global, nome de tag por usuário. É exatamente o ponto que um leitor futuro “corrige” errado.
 

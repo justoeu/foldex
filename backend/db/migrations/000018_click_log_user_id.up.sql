@@ -55,8 +55,11 @@ ALTER TABLE click_log ALTER COLUMN user_id SET NOT NULL;
 -- entity_id last so per-entity aggregation still uses the index.
 CREATE INDEX click_log_user_entity_idx ON click_log (entity_kind, user_id, entity_id);
 
--- Serves the daily/window aggregates (stats.Daily, Summary's 30d/60d clauses),
--- which filter by owner and range over clicked_at.
+-- Serves owner-scoped range scans over clicked_at. Note that internal/stats
+-- deliberately keeps its semi-join through link instead of reading this column
+-- (see the comment in stats/repository.go: the semi-join drops click_log rows
+-- that outlived their link, which a direct user_id filter would keep counting).
+-- The index is here for /api/entries and for future owner-scoped time queries.
 CREATE INDEX click_log_user_clicked_idx ON click_log (user_id, clicked_at DESC);
 
 -- click_log_entity_ts (entity_kind, entity_id, clicked_at DESC) stays: the

@@ -301,7 +301,7 @@ curl -X POST -F file=@foldex-backup-*.zip \
 # Restore — 3 conflict modes
 curl -X POST -F file=@foldex-backup-*.zip \
   'http://localhost:9089/api/backup/restore?mode=skip' | jq
-#   mode=wipe       — TRUNCATE everything + restore with original IDs (DESTRUCTIVE)
+#   mode=wipe       — delete YOUR rows and YOUR files, then restore (DESTRUCTIVE)
 #   mode=skip       — preserve existing (ON CONFLICT DO NOTHING; default)
 #   mode=duplicate  — rename conflicting tags to "nome (2)"; folders always new;
 #                     links with URL collision fall back to skip + warning
@@ -310,6 +310,8 @@ curl -X POST -F file=@foldex-backup-*.zip \
 Via UI: open the **Import / Export** page → the right column hosts the **💾 Full backup** card. Drag a `.zip` onto it to review the validation summary and pick a mode in `BackupRestoreDialog`. History (last 10 backups: date, duration, size, counts) persists in `localStorage`.
 
 > **Restore idempotency caveat.** `mode=skip` is idempotent for the UNIQUE-constrained entities (tags by name, links by URL — re-running the same zip inserts none). `click_log` and `folder` have no natural key, so a second skip restore of the same zip **re-inserts** those rows. Run a skip restore once; use `mode=wipe` for a clean re-baseline.
+
+> **Restore no longer preserves IDs, in any mode.** Row ids come from sequences that are shared across accounts, so re-using the ids inside a backup could collide with rows that already exist. Every restore mints fresh ids and re-points image keys and click history at them; what round-trips is the content and its relationships, not the integers. A backup also carries **no login data** — no passwords, no sessions, no 2FA secrets — and restoring one always creates content owned by whoever is restoring it, never by whoever exported it. Restoring someone else's backup is allowed and simply shows a warning that the content is changing hands.
 
 Full design rationale: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 

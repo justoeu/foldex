@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +62,7 @@ type Uploader = ports.Uploader
 // Defined as an interface so unit tests can inject a fake without a real DB.
 type screenshotRepo interface {
 	Get(ctx context.Context, uid authctx.UserID, id int64) (Link, error)
+	AssertOwned(ctx context.Context, uid authctx.UserID, id int64) error
 	UpdateOGImage(ctx context.Context, uid authctx.UserID, id int64, imageURL string) error
 	ClearOGImage(ctx context.Context, uid authctx.UserID, id int64) error
 }
@@ -198,6 +200,10 @@ func (h *ScreenshotHandler) ProxyFile(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_key", "key is required and must be under screenshots/ or images/"))
 		return
 	}
+	if err := h.authorizeKey(r.Context(), key); err != nil {
+		httperr.Write(w, err)
+		return
+	}
 
 	data, _, err := h.storage.GetObject(r.Context(), key)
 	if err != nil {
@@ -230,6 +236,66 @@ func (h *ScreenshotHandler) ProxyFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// authorizeKey decides whether the caller may read `key`.
+//
+// Object keys are FLAT — there is no tenant segment — so the prefix alone says
+// nothing about ownership. The two families are gated differently because they
+// are reachable differently:
+//
+//   - screenshots/{id}.ext and images/{id}.ext embed a LINK id drawn from a
+//     dense BIGSERIAL space, so they are trivially enumerable. They are gated on
+//     the caller owning that link. A foreign or absent link is reported as the
+//     same 404 the object-store miss returns, so the endpoint never
+//     distinguishes "someone else's image" from "no image" (the 404-not-403 rule
+//     in CLAUDE.md §4 applies to object keys for the same reason it applies to
+//     rows).
+//   - notes/{uuid}.ext is a capability URL: a 122-bit random UUIDv4 that appears
+//     nowhere but inside the owning note's body_html. It CANNOT be ownership-
+//     gated, because the public, session-less /n/{slug} page renders that
+//     body_html and the browser fetches the images with no principal at all.
+//     Gating it would break every published note.
+func (h *ScreenshotHandler) authorizeKey(ctx context.Context, key string) error {
+	notFound := httperr.New(http.StatusNotFound, "not_found", "file not found")
+	switch {
+	case strings.HasPrefix(key, "notes/"):
+		return nil
+	case strings.HasPrefix(key, "screenshots/"), strings.HasPrefix(key, "images/"):
+		id, ok := linkKeyID(key)
+		if !ok {
+			// Nothing under these prefixes is written with a non-numeric name,
+			// so an unparseable key cannot name a real object. Fail closed
+			// rather than fall through to an ungated read.
+			return notFound
+		}
+		if err := h.repo.AssertOwned(ctx, authctx.MustUser(ctx), id); err != nil {
+			return notFound
+		}
+		return nil
+	default:
+		return notFound
+	}
+}
+
+// linkKeyID extracts the link id from an id-derived object key
+// (`screenshots/12.jpg` → 12). Reports false for anything that is not
+// `{prefix}/{digits}.{ext}`.
+func linkKeyID(key string) (int64, bool) {
+	slash := strings.IndexByte(key, '/')
+	if slash < 0 {
+		return 0, false
+	}
+	rest := key[slash+1:]
+	dot := strings.IndexByte(rest, '.')
+	if dot <= 0 {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(rest[:dot], 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
 }
 
 // isHTTPScheme returns true iff pageURL parses to an http or https URL.
@@ -277,6 +343,18 @@ func isAllowedServeMIME(m string) bool {
 func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+
+	// Ownership FIRST, before a single byte is read or written. The object key
+	// is images/{id}.ext with no tenant segment, so uploading under another
+	// user's link id overwrites THEIR image and purgeLegacyVariants deletes
+	// their sibling extensions — both irreversible, and both happen before the
+	// scoped UpdateOGImage below would have returned 404. Checking here turns a
+	// destructive cross-tenant write into a plain not-found.
+	uid := authctx.MustUser(r.Context())
+	if err := h.repo.AssertOwned(r.Context(), uid, id); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -344,7 +422,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	proxyURL := "/api/files/" + key
-	if err := h.repo.UpdateOGImage(r.Context(), authctx.MustUser(r.Context()), id, proxyURL); err != nil {
+	if err := h.repo.UpdateOGImage(r.Context(), uid, id, proxyURL); err != nil {
 		h.logger.Error("image upload: db update failed", "id", id, "err", err)
 		httperr.Write(w, err)
 		return

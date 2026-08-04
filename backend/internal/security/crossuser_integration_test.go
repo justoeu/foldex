@@ -274,9 +274,12 @@ func TestCrossUser_SlugStaysGloballyUnique(t *testing.T) {
 
 // ── Derived data ─────────────────────────────────────────────────────────
 
-// click_log carries no user_id (it has no FK to link, so a denormalized owner
-// could drift). Every stats aggregate reaches the owner via a semi-join; this
-// proves the semi-joins are actually there.
+// Every stats aggregate has to reach the owner, and each one does it its own
+// way — some through a semi-join on link, some through click_log.user_id since
+// migration 000018. That per-query independence is why this test walks ALL of
+// them: Summary's top-host clause once shipped with no owner predicate at all
+// while the rest of Summary was correctly scoped, and the suite stayed green
+// because nothing asserted on that particular field.
 func TestCrossUser_StatsExcludeAnotherUsersClicks(t *testing.T) {
 	ctx, f := setup(t)
 
@@ -292,9 +295,37 @@ func TestCrossUser_StatsExcludeAnotherUsersClicks(t *testing.T) {
 	assert.EqualValues(t, 1, sumA.TotalLinks)
 	assert.EqualValues(t, 1, sumA.TotalTags)
 
+	// Top host is a SEPARATE query from the scalars above, and it is the one
+	// that shipped unscoped: it reads FROM click_log and reaches link only
+	// through a JOIN, so both the static detector and the assertions missed it.
+	assert.Empty(t, sumA.TopHost, "A has no clicks, so A has no top host — B's must not surface")
+	assert.EqualValues(t, 0, sumA.TopHostClicks)
+
 	sumB, err := f.srepo.Summary(ctx, f.b.uid)
 	require.NoError(t, err)
 	assert.EqualValues(t, 3, sumB.TotalClicks)
+	assert.Equal(t, "bravo.example", sumB.TopHost)
+	assert.EqualValues(t, 3, sumB.TopHostClicks)
+
+	// Daily is its own query with its own owner predicate, and it was the last
+	// aggregate with no cross-tenant coverage — a mutation dropping its
+	// predicate passed every test in the tree.
+	dailyA, err := f.srepo.Daily(ctx, f.a.uid, 7)
+	require.NoError(t, err)
+	require.Len(t, dailyA, 7)
+	var totalA int64
+	for _, p := range dailyA {
+		totalA += p.Clicks
+	}
+	assert.EqualValues(t, 0, totalA, "A's daily buckets must not count B's clicks")
+
+	dailyB, err := f.srepo.Daily(ctx, f.b.uid, 7)
+	require.NoError(t, err)
+	var totalB int64
+	for _, p := range dailyB {
+		totalB += p.Clicks
+	}
+	assert.EqualValues(t, 3, totalB, "B's own clicks must still be counted")
 
 	topA, err := f.srepo.TopLinks(ctx, f.a.uid, 10)
 	require.NoError(t, err)
@@ -323,4 +354,51 @@ func TestCrossUser_PublicRoutesResolveWithoutASession(t *testing.T) {
 	n, err := f.nrepo.SystemViewAndResolve(ctx, f.b.note.Slug)
 	require.NoError(t, err)
 	assert.Equal(t, f.b.note.ID, n.ID)
+}
+
+// TestClickLogOwnerMatchesEntityOwner is the drift guard migration 000018 names
+// in its header. Denormalizing user_id onto click_log created a SECOND source of
+// truth for ownership — entity_kind/entity_id still say WHICH row was clicked,
+// user_id now says WHOSE — and two sources of truth can disagree. Nothing in the
+// schema prevents it: click_log lost its FK to link in migration 000014, so the
+// database cannot check that click_log.user_id equals link.user_id.
+//
+// Every writer sets the column from the row it just resolved, so the invariant
+// holds by construction today. This test is what makes a future writer that
+// forgets fail loudly instead of quietly attributing one tenant's clicks to
+// another.
+func TestClickLogOwnerMatchesEntityOwner(t *testing.T) {
+	ctx, f := setup(t)
+
+	// Exercise every production writer of click_log: the public link route, the
+	// public note route, both for both tenants.
+	for _, tn := range []tenant{f.a, f.b} {
+		_, err := f.lrepo.ClickAndResolve(ctx, tn.link.ID)
+		require.NoError(t, err)
+		_, err = f.lrepo.ClickAndResolveBySlug(ctx, tn.link.Slug)
+		require.NoError(t, err)
+		_, err = f.nrepo.SystemViewAndResolve(ctx, tn.note.Slug)
+		require.NoError(t, err)
+	}
+
+	var mismatches int64
+	require.NoError(t, f.pool.QueryRow(ctx, `
+        SELECT count(*) FROM click_log c
+        LEFT JOIN link l ON c.entity_kind = 'link' AND l.id = c.entity_id
+        LEFT JOIN note n ON c.entity_kind = 'note' AND n.id = c.entity_id
+        WHERE c.user_id IS DISTINCT FROM COALESCE(l.user_id, n.user_id)
+    `).Scan(&mismatches))
+	assert.Zero(t, mismatches,
+		"every click_log row must be attributed to the owner of the entity it references")
+
+	// And the counts landed where they belong, not merely consistently.
+	assert.EqualValues(t, 3, scalarOf(t, f.pool, `SELECT count(*) FROM click_log WHERE user_id = $1`, int64(f.a.uid)))
+	assert.EqualValues(t, 3, scalarOf(t, f.pool, `SELECT count(*) FROM click_log WHERE user_id = $1`, int64(f.b.uid)))
+}
+
+func scalarOf(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) int64 {
+	t.Helper()
+	var n int64
+	require.NoError(t, pool.QueryRow(context.Background(), sql, args...).Scan(&n))
+	return n
 }

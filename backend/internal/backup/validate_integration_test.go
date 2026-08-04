@@ -358,21 +358,24 @@ func TestExport_FullSnapshotRoundTrip(t *testing.T) {
 		URL: "https://full-export.example", Title: "Full", TagIDs: []int64{tag.ID}, FolderID: &f.ID,
 	})
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id) VALUES ('link', $1)`, l.ID)
+	_, err = pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id, user_id) VALUES ('link', $1, $2)`, l.ID, int64(uid))
 	require.NoError(t, err)
 
 	n, err := notes.NewRepository(pool).Create(ctx, uid, notes.CreateInput{
 		Title: "Full Note", BodyHTML: "<p>body</p>", TagIDs: []int64{tag.ID}, FolderID: &f.ID,
 	})
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id) VALUES ('note', $1)`, n.ID)
+	_, err = pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id, user_id) VALUES ('note', $1, $2)`, n.ID, int64(uid))
 	require.NoError(t, err)
 
 	// Master password setting (app_setting arm of readSnapshot).
 	srepo := settings.NewRepository(pool)
 	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "master-pass-ok", nil))
 
-	bucket.objs[fmt.Sprintf("screenshots/%d.jpg", l.ID)] = []byte("img")
+	shotKey := fmt.Sprintf("screenshots/%d.jpg", l.ID)
+	bucket.objs[shotKey] = []byte("img")
+	require.NoError(t, links.NewRepository(pool).UpdateOGImage(ctx, uid, l.ID, "/api/files/"+shotKey))
+	// Referenced by no row, so attributable to no user — export leaves it behind.
 	bucket.objs["images/orphan.jpg"] = []byte("orphan")
 
 	var buf bytes.Buffer

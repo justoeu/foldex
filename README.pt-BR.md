@@ -289,7 +289,7 @@ curl -X POST -F file=@foldex-backup-*.zip \
 # Restaura — 3 modos de conflito
 curl -X POST -F file=@foldex-backup-*.zip \
   'http://localhost:9089/api/backup/restore?mode=skip' | jq
-#   mode=wipe       — TRUNCATE tudo + restaura com IDs originais (DESTRUTIVO)
+#   mode=wipe       — apaga SUAS linhas e SEUS arquivos, depois restaura (DESTRUTIVO)
 #   mode=skip       — preserva existentes (ON CONFLICT DO NOTHING; default)
 #   mode=duplicate  — renomeia tags conflitantes pra "nome (2)"; pastas sempre novas;
 #                     links com colisão de URL caem para skip + warning
@@ -302,6 +302,8 @@ Histórico (últimos 10 backups: data, duração, tamanho, counts) persiste
 em `localStorage`.
 
 > **Ressalva de idempotência no restore.** O `mode=skip` é idempotente para as entidades com UNIQUE (tags por nome, links por URL — re-rodar o mesmo zip não insere nada). `click_log` e `folder` não têm chave natural, então um segundo skip do mesmo zip **re-insere** essas linhas. Rode o skip uma vez; use `mode=wipe` pra rebaselinar do zero.
+
+> **O restore não preserva mais os IDs, em nenhum modo.** Os ids das linhas vêm de sequências compartilhadas entre contas, então reaproveitar os ids que estão dentro do backup poderia colidir com linhas que já existem. Todo restore gera ids novos e reaponta as chaves de imagem e o histórico de cliques para eles; o que faz round-trip é o conteúdo e suas relações, não os números. O backup também **não carrega dado de login** — nem senha, nem sessão, nem segredo de 2FA — e restaurar um backup sempre cria conteúdo pertencente a quem está restaurando, nunca a quem exportou. Restaurar o backup de outra pessoa é permitido e só mostra um aviso de que o conteúdo está mudando de dono.
 
 Design completo: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 

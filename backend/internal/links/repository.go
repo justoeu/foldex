@@ -81,7 +81,13 @@ func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateIn
 	if err != nil {
 		return Link{}, err
 	}
-	defer tx.Rollback(ctx)
+	// The closure is load-bearing: the slug-collision loop below REASSIGNS tx,
+	// and `defer tx.Rollback(ctx)` would capture the receiver at defer time —
+	// i.e. the FIRST transaction — leaving every replacement tx neither
+	// committed nor rolled back. Its connection then stays checked out of the
+	// pool forever holding an aborted transaction, so the pool bleeds one
+	// connection per retry until Acquire blocks and the backend stops serving.
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Slug strategy:
 	//   - User-supplied: use as-is, surface UNIQUE violations as ErrConflict.
@@ -160,6 +166,27 @@ func isSlugUniqueViolation(err error) bool {
 
 func isURLUniqueViolation(err error) bool {
 	return pgerr.UniqueConstraint(err) == "link_user_url_unique"
+}
+
+// AssertOwned reports httperr.ErrNotFound unless uid owns link id. It is the
+// ownership check for callers that need the ANSWER but not the ROW.
+//
+// Get is the wrong tool for that: it runs a LEFT JOIN LATERAL over click_log
+// plus a second query for tags, and ProxyFile — which serves every card image
+// on every grid page load — would discard both. Three round-trips per image
+// against the same pool that /api/entries is competing for is a real cost on a
+// cold cache; this is one indexed hit on the (user_id, id) unique index.
+func (r *Repository) AssertOwned(ctx context.Context, uid authctx.UserID, id int64) error {
+	var ok bool
+	if err := r.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM link WHERE user_id = $1 AND id = $2)`,
+		int64(uid), id).Scan(&ok); err != nil {
+		return fmt.Errorf("assert link owned: %w", err)
+	}
+	if !ok {
+		return httperr.ErrNotFound
+	}
+	return nil
 }
 
 // Get returns the link owned by uid. A link belonging to another user reports

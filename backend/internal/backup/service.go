@@ -112,6 +112,26 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 		return rep, fmt.Errorf("backup: read snapshot: %w", err)
 	}
 
+	// Which of the bucket's objects belong to the caller. Keys are FLAT
+	// ({prefix}/{id}.ext, no tenant segment), so the prefix listing alone cannot
+	// tell whose file is whose — exporting every listed key would put every
+	// other tenant's screenshots and note images inside a ZIP the caller
+	// downloads. Ownership is established from the caller's own rows.
+	//
+	// Consequence worth stating: an object nobody references — a leftover from a
+	// deleted link, say — is attributable to no one and therefore no longer
+	// travels in the backup. That is the correct trade for a flat key space; the
+	// alternative is re-keying every object under a tenant segment, which means
+	// rewriting og_image_url on every row and moving live objects.
+	owned, err := userObjectKeys(ctx, tx, uid)
+	if err != nil {
+		return rep, fmt.Errorf("backup: enumerate own objects: %w", err)
+	}
+	ownedSet := make(map[string]struct{}, len(owned))
+	for _, k := range owned {
+		ownedSet[k] = struct{}{}
+	}
+
 	// Pre-list every bucket prefix while we still hold the REPEATABLE READ tx,
 	// so file count + bytes are known to the caller before any zip byte is
 	// flushed. Object payloads are streamed lazily below — only the metadata
@@ -127,11 +147,16 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 		if err != nil {
 			return rep, fmt.Errorf("backup: list %q: %w", prefix, err)
 		}
-		lists = append(lists, objList{prefix: prefix, objs: objs})
+		mine := make([]ObjectInfo, 0, len(objs))
 		for _, o := range objs {
+			if _, ok := ownedSet[o.Key]; !ok {
+				continue
+			}
+			mine = append(mine, o)
 			fileCount++
 			fileBytes += o.Size
 		}
+		lists = append(lists, objList{prefix: prefix, objs: mine})
 	}
 
 	// Snapshot is fully captured; the tx no longer needs to be held while we
@@ -407,7 +432,8 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 	// The ZIP's declared owner is informational only: every row below is
 	// written with the CALLING user's id, never the snapshot's. That is what
 	// makes a hand-crafted backup unable to plant rows in another account
-	// (TestCrossUser_RestoreIgnoresOwnerEmail). Surface a mismatch so a user
+	// (TestCrossUser_RestoreIgnoresOwnerEmail, internal/backup). Surface a
+	// mismatch so a user
 	// restoring someone else's export is not surprised by the result.
 	if snap.OwnerEmail != "" {
 		var email string
@@ -464,6 +490,10 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 		mapping = m
 	}
 
+	if err := realignLinkImageURLs(ctx, tx, uid, mapping); err != nil {
+		return rep, fmt.Errorf("backup: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return rep, fmt.Errorf("backup: commit: %w", err)
 	}
@@ -507,16 +537,37 @@ func (s *Service) applyFiles(ctx context.Context, zr *zip.Reader, snap *Snapshot
 			return rep, fmt.Errorf("backup: rejected entry %q (not under %v)", entry.Name, bucketPrefixes)
 		}
 
-		// Re-key whenever ids were re-minted. Since ADR-30 that is wipe as well
-		// as duplicate — wipe no longer preserves ids, so a zip key naming the
-		// snapshot's id would no longer match the restored row's og_image_url.
-		if mode == ModeDuplicate || mode == ModeWipe {
-			if newKey, ok := mapping.remapFileKey(key); ok {
-				key = newKey
+		// Id-derived keys are re-keyed onto the row this restore produced, in
+		// EVERY mode — since ADR-30 no mode preserves ids, so a key naming the
+		// snapshot's id would not match the restored row's og_image_url.
+		//
+		// An entry whose link id this restore did not produce is dropped rather
+		// than written at its declared key: that key belongs to whichever tenant
+		// currently holds that link id, and honouring it would let a crafted ZIP
+		// overwrite their image.
+		_, _, _, isLinkKey := linkObjectID(key)
+		if isLinkKey {
+			newKey, ok := mapping.remapFileKey(key)
+			if !ok {
+				rep.Skipped++
+				continue
 			}
+			key = newKey
 		}
 
-		if mode == ModeSkip {
+		// A notes/{uuid} key cannot be re-keyed — it encodes no row id — so the
+		// only defence is never to OVERWRITE one. The UUID is unguessable, but
+		// it is not secret: it appears in the body_html that the PUBLIC,
+		// session-less /n/{slug} page renders, so anyone who opens a published
+		// note can read it off the markup and put that exact key in a crafted
+		// ZIP. Create-only makes that write a no-op instead of defacing the
+		// image for every viewer of the victim's note.
+		//
+		// Nothing legitimate is lost: a UUID key is effectively content-
+		// addressed, so if the object is already there it is already the right
+		// object, and restoring your own backup still creates whatever is
+		// missing.
+		if mode == ModeSkip || !isLinkKey {
 			exists, err := s.storage.ObjectExists(ctx, key)
 			if err != nil {
 				return rep, err

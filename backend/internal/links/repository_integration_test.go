@@ -476,6 +476,21 @@ func TestRepository_CheckInterval_TriStateOnUpdate(t *testing.T) {
 	assert.Nil(t, cleared.ChangeSeenAt, "opt-out must wipe change_seen_at")
 }
 
+// dueIDs projects the DueLink rows to bare ids.
+//
+// SystemFindDueForCheck returns []links.DueLink{ID, UserID} since ADR-30 — the
+// worker needs the owner to attribute the push. Asserting Contains/NotContains
+// with a bare int64 against that slice is VACUOUS: the element types never
+// match, so NotContains passes unconditionally and Contains can only ever fail.
+// Project first, then assert.
+func dueIDs(due []links.DueLink) []int64 {
+	out := make([]int64, 0, len(due))
+	for _, d := range due {
+		out = append(out, d.ID)
+	}
+	return out
+}
+
 func TestRepository_FindDueForCheck_OnlyOptedIn(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
 	// Opted-in (daily): due immediately because last_checked_at IS NULL.
@@ -487,10 +502,13 @@ func TestRepository_FindDueForCheck_OnlyOptedIn(t *testing.T) {
 	// Opted-OUT link must NOT appear.
 	_, _ = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/b", Title: "b"})
 
-	ids, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	due, err := lrepo.SystemFindDueForCheck(ctx, 100)
 	require.NoError(t, err)
-	assert.Contains(t, ids, a.ID, "opted-in link with NULL last_checked_at must be due")
-	assert.Len(t, ids, 1, "only opted-in links may be due")
+	assert.Contains(t, dueIDs(due), a.ID, "opted-in link with NULL last_checked_at must be due")
+	assert.Len(t, due, 1, "only opted-in links may be due")
+	// The sweep is deliberately unscoped (it serves every tenant), so the owner
+	// has to travel WITH the row or the push would go to whoever ran the worker.
+	assert.Equal(t, uid, due[0].UserID, "the due row must carry its owner")
 }
 
 func TestRepository_FindDueForCheck_RespectsInterval(t *testing.T) {
@@ -510,16 +528,17 @@ func TestRepository_FindDueForCheck_RespectsInterval(t *testing.T) {
 	_, err = pool.Exec(ctx, `UPDATE link SET last_checked_at = now() - interval '30 minutes' WHERE id = $1`, l.ID)
 	require.NoError(t, err)
 
-	ids, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	due, err := lrepo.SystemFindDueForCheck(ctx, 100)
 	require.NoError(t, err)
-	assert.NotContains(t, ids, l.ID, "30 minutes < 1 hour: must NOT be due")
+	assert.NotContains(t, dueIDs(due), l.ID, "30 minutes < 1 hour: must NOT be due")
 
 	// Backdate further → past 1h → now due.
 	_, err = pool.Exec(ctx, `UPDATE link SET last_checked_at = now() - interval '2 hours' WHERE id = $1`, l.ID)
 	require.NoError(t, err)
-	ids, err = lrepo.SystemFindDueForCheck(ctx, 100)
+	due, err = lrepo.SystemFindDueForCheck(ctx, 100)
 	require.NoError(t, err)
-	assert.Contains(t, ids, l.ID, "2h > 1h: hourly link is due")
+	assert.Contains(t, dueIDs(due), l.ID, "2h > 1h: hourly link is due")
+	assert.Equal(t, uid, due[0].UserID, "the due row must carry its owner")
 }
 
 func TestRepository_RecordCheckResult_FirstObservationDoesNotMarkChange(t *testing.T) {
