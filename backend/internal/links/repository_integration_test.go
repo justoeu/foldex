@@ -19,23 +19,29 @@ import (
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
-func setup(t *testing.T) (context.Context, *links.Repository, *tags.Repository) {
+func setup(t *testing.T) (context.Context, authctx.UserID, *links.Repository, *tags.Repository) {
 	t.Helper()
 	pool := testdb.New(t)
-	return context.Background(), links.NewRepository(pool), tags.NewRepository(pool)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	return context.Background(), uid, links.NewRepository(pool), tags.NewRepository(pool)
 }
 
 func TestRepository_CreateAndGetWithTags(t *testing.T) {
-	ctx, lrepo, trepo := setup(t)
+	ctx, uid, lrepo, trepo := setup(t)
 
-	tagJira, err := trepo.Create(ctx, tags.CreateInput{Name: "jira", Color: "#1f6feb"})
+	tagJira, err := trepo.Create(ctx, uid, tags.CreateInput{Name: "jira", Color: "#1f6feb"})
 	require.NoError(t, err)
-	tagDocs, err := trepo.Create(ctx, tags.CreateInput{Name: "docs", Color: "#a78bfa"})
+	tagDocs, err := trepo.Create(ctx, uid, tags.CreateInput{Name: "docs", Color: "#a78bfa"})
 	require.NoError(t, err)
 
-	created, err := lrepo.Create(ctx, links.CreateInput{
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{
 		URL:    "https://jira.example/INV-1",
 		Title:  "INV-1",
 		TagIDs: []int64{tagJira.ID, tagDocs.ID},
@@ -46,38 +52,38 @@ func TestRepository_CreateAndGetWithTags(t *testing.T) {
 	require.Len(t, created.Tags, 2)
 
 	// Verify Get also returns tags
-	got, err := lrepo.Get(ctx, created.ID)
+	got, err := lrepo.Get(ctx, uid, created.ID)
 	require.NoError(t, err)
 	assert.Len(t, got.Tags, 2)
 }
 
 func TestRepository_ListFiltersByQAndTagAND(t *testing.T) {
-	ctx, lrepo, trepo := setup(t)
-	tagA, _ := trepo.Create(ctx, tags.CreateInput{Name: "a", Color: "#fff"})
-	tagB, _ := trepo.Create(ctx, tags.CreateInput{Name: "b", Color: "#fff"})
+	ctx, uid, lrepo, trepo := setup(t)
+	tagA, _ := trepo.Create(ctx, uid, tags.CreateInput{Name: "a", Color: "#fff"})
+	tagB, _ := trepo.Create(ctx, uid, tags.CreateInput{Name: "b", Color: "#fff"})
 
-	_, _ = lrepo.Create(ctx, links.CreateInput{URL: "https://example.com/alpha", Title: "Alpha", TagIDs: []int64{tagA.ID}})
-	_, _ = lrepo.Create(ctx, links.CreateInput{URL: "https://example.com/beta", Title: "Beta", TagIDs: []int64{tagA.ID, tagB.ID}})
-	_, _ = lrepo.Create(ctx, links.CreateInput{URL: "https://other.com/gamma", Title: "Gamma", TagIDs: []int64{tagB.ID}})
+	_, _ = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://example.com/alpha", Title: "Alpha", TagIDs: []int64{tagA.ID}})
+	_, _ = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://example.com/beta", Title: "Beta", TagIDs: []int64{tagA.ID, tagB.ID}})
+	_, _ = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://other.com/gamma", Title: "Gamma", TagIDs: []int64{tagB.ID}})
 
 	// Text filter
-	out, err := lrepo.List(ctx, links.ListQuery{Q: "example.com"})
+	out, err := lrepo.List(ctx, uid, links.ListQuery{Q: "example.com"})
 	require.NoError(t, err)
 	assert.Len(t, out, 2)
 
 	// Tag AND filter: must have BOTH a and b
-	out, err = lrepo.List(ctx, links.ListQuery{TagIDs: []int64{tagA.ID, tagB.ID}})
+	out, err = lrepo.List(ctx, uid, links.ListQuery{TagIDs: []int64{tagA.ID, tagB.ID}})
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	assert.Equal(t, "Beta", out[0].Title)
 }
 
 func TestRepository_UpdateReplacesTagSet(t *testing.T) {
-	ctx, lrepo, trepo := setup(t)
-	tagA, _ := trepo.Create(ctx, tags.CreateInput{Name: "a", Color: "#fff"})
-	tagB, _ := trepo.Create(ctx, tags.CreateInput{Name: "b", Color: "#fff"})
+	ctx, uid, lrepo, trepo := setup(t)
+	tagA, _ := trepo.Create(ctx, uid, tags.CreateInput{Name: "a", Color: "#fff"})
+	tagB, _ := trepo.Create(ctx, uid, tags.CreateInput{Name: "b", Color: "#fff"})
 
-	link, err := lrepo.Create(ctx, links.CreateInput{
+	link, err := lrepo.Create(ctx, uid, links.CreateInput{
 		URL: "https://x", Title: "x", TagIDs: []int64{tagA.ID},
 	})
 	require.NoError(t, err)
@@ -85,7 +91,7 @@ func TestRepository_UpdateReplacesTagSet(t *testing.T) {
 
 	newTitle := "renamed"
 	newTags := []int64{tagB.ID}
-	updated, err := lrepo.Update(ctx, link.ID, links.UpdateInput{
+	updated, err := lrepo.Update(ctx, uid, link.ID, links.UpdateInput{
 		Title:  &newTitle,
 		TagIDs: &newTags,
 	})
@@ -96,32 +102,32 @@ func TestRepository_UpdateReplacesTagSet(t *testing.T) {
 }
 
 func TestRepository_ClickAndResolveIsAtomic(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	created, err := lrepo.Create(ctx, links.CreateInput{URL: "https://hn.example", Title: "HN"})
+	ctx, uid, lrepo, _ := setup(t)
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://hn.example", Title: "HN"})
 	require.NoError(t, err)
 
 	url, err := lrepo.ClickAndResolve(ctx, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "https://hn.example", url)
 
-	got, _ := lrepo.Get(ctx, created.ID)
+	got, _ := lrepo.Get(ctx, uid, created.ID)
 	assert.EqualValues(t, 1, got.ClickCount)
 	require.NotNil(t, got.LastClickedAt)
 }
 
 func TestRepository_ClickAndResolveNotFound(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
+	ctx, _, lrepo, _ := setup(t)
 	_, err := lrepo.ClickAndResolve(ctx, 999)
 	assert.ErrorIs(t, err, httperr.ErrNotFound)
 }
 
 func TestRepository_UpdatePreview(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	created, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://x", Title: "x"})
+	ctx, uid, lrepo, _ := setup(t)
+	created, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x", Title: "x"})
 	fav, og, desc := "https://x/fav.ico", "https://x/og.png", "desc"
-	require.NoError(t, lrepo.UpdatePreview(ctx, created.ID, links.StatusOK, &fav, &og, &desc, nil))
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusOK, &fav, &og, &desc, nil))
 
-	got, _ := lrepo.Get(ctx, created.ID)
+	got, _ := lrepo.Get(ctx, uid, created.ID)
 	assert.Equal(t, string(links.StatusOK), got.PreviewStatus)
 	require.NotNil(t, got.FaviconURL)
 	assert.Equal(t, fav, *got.FaviconURL)
@@ -130,39 +136,39 @@ func TestRepository_UpdatePreview(t *testing.T) {
 // TestUpdatePreview_StatusCAS_PendingOnly locks RACE-HER-009: terminal ok/failed
 // only apply while status is still pending; a second ok after ok is a no-op.
 func TestUpdatePreview_StatusCAS_PendingOnly(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	created, err := lrepo.Create(ctx, links.CreateInput{URL: "https://cas.example", Title: "cas"})
+	ctx, uid, lrepo, _ := setup(t)
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://cas.example", Title: "cas"})
 	require.NoError(t, err)
 	require.Equal(t, string(links.StatusPending), created.PreviewStatus)
 
-	require.NoError(t, lrepo.UpdatePreview(ctx, created.ID, links.StatusOK, nil, nil, nil, nil))
-	got, err := lrepo.Get(ctx, created.ID)
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusOK, nil, nil, nil, nil))
+	got, err := lrepo.Get(ctx, uid, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(links.StatusOK), got.PreviewStatus)
 
 	// Stale worker finishing after status left pending must not flip ok→ok via
 	// overwriting metadata path when already ok — CAS rejects non-pending.
 	msg := "stale"
-	require.NoError(t, lrepo.UpdatePreview(ctx, created.ID, links.StatusFailed, nil, nil, nil, &msg))
-	got, err = lrepo.Get(ctx, created.ID)
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusFailed, nil, nil, nil, &msg))
+	got, err = lrepo.Get(ctx, uid, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(links.StatusOK), got.PreviewStatus, "failed must not overwrite ok")
 
 	// refresh → pending is unconditional, then ok CAS succeeds again.
-	require.NoError(t, lrepo.UpdatePreview(ctx, created.ID, links.StatusPending, nil, nil, nil, nil))
-	require.NoError(t, lrepo.UpdatePreview(ctx, created.ID, links.StatusOK, nil, nil, nil, nil))
-	got, err = lrepo.Get(ctx, created.ID)
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, nil, nil, nil, nil))
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusOK, nil, nil, nil, nil))
+	got, err = lrepo.Get(ctx, uid, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(links.StatusOK), got.PreviewStatus)
 }
 
 func TestRepository_DeleteCascadesLinkTag(t *testing.T) {
-	ctx, lrepo, trepo := setup(t)
-	tag, _ := trepo.Create(ctx, tags.CreateInput{Name: "t", Color: "#fff"})
-	link, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://x", Title: "x", TagIDs: []int64{tag.ID}})
+	ctx, uid, lrepo, trepo := setup(t)
+	tag, _ := trepo.Create(ctx, uid, tags.CreateInput{Name: "t", Color: "#fff"})
+	link, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x", Title: "x", TagIDs: []int64{tag.ID}})
 
-	require.NoError(t, lrepo.Delete(ctx, link.ID))
-	_, err := lrepo.Get(ctx, link.ID)
+	require.NoError(t, lrepo.Delete(ctx, uid, link.ID))
+	_, err := lrepo.Get(ctx, uid, link.ID)
 	assert.ErrorIs(t, err, httperr.ErrNotFound)
 }
 
@@ -171,11 +177,11 @@ func TestRepository_DeleteCascadesLinkTag(t *testing.T) {
 // fell through to 500. The browser extension and bulk import flows rely on a
 // typed 409 url_taken to converge to a no-op.
 func TestRepository_CreateDuplicateURLReturns409(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	_, err := lrepo.Create(ctx, links.CreateInput{URL: "https://dup.example", Title: "first"})
+	ctx, uid, lrepo, _ := setup(t)
+	_, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://dup.example", Title: "first"})
 	require.NoError(t, err)
 
-	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://dup.example", Title: "second"})
+	_, err = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://dup.example", Title: "second"})
 	require.Error(t, err)
 	var he *httperr.Error
 	require.ErrorAs(t, err, &he, "duplicate URL must surface as *httperr.Error, not a raw pgx wrap")
@@ -187,10 +193,11 @@ func TestRepository_CreateDuplicateURLReturns409(t *testing.T) {
 // a body over 64 KiB is refused with invalid_json (the MaxBytesReader trip
 // surfaces as a parse failure to json.Decoder — sufficient for clients).
 func TestHandler_CreateRejectsLargeBody(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
+	ctx, uid, lrepo, _ := setup(t)
 	_ = ctx
 	h := links.NewHandler(lrepo, nopEnqueuer{})
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/api/links", h.Mount)
 
 	// 64 KiB + 1 of valid-looking JSON ("description":"AAAA..."). The decoder
@@ -221,10 +228,11 @@ func TestHandler_CreateRejectsLargeBody(t *testing.T) {
 // failed enqueue is operational (next requeuePending picks it up), not a
 // client-facing error.
 func TestHandler_CreateStillReturns201WhenEnqueueFails(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
+	ctx, uid, lrepo, _ := setup(t)
 	_ = ctx
 	h := links.NewHandler(lrepo, fullEnqueuer{})
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/api/links", h.Mount)
 
 	body := `{"url":"https://example.com","title":"t"}`
@@ -252,21 +260,21 @@ func (nopEnqueuer) Enqueue(int64) error { return nil }
 // outrank everything else, including the selected sort. Without this test,
 // dropping `l.pinned DESC` from the ORDER BY in any sort branch ships green.
 func TestRepository_PinnedAlwaysComesFirst(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
+	ctx, uid, lrepo, _ := setup(t)
 
 	// Newer link first (default "created" sort) but NOT pinned.
-	newer, err := lrepo.Create(ctx, links.CreateInput{URL: "https://newer", Title: "Newer"})
+	newer, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://newer", Title: "Newer"})
 	require.NoError(t, err)
 	// Older link, pinned — should appear FIRST despite being older.
-	older, err := lrepo.Create(ctx, links.CreateInput{URL: "https://older", Title: "Older"})
+	older, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://older", Title: "Older"})
 	require.NoError(t, err)
 	pinTrue := true
-	_, err = lrepo.Update(ctx, older.ID, links.UpdateInput{Pinned: &pinTrue})
+	_, err = lrepo.Update(ctx, uid, older.ID, links.UpdateInput{Pinned: &pinTrue})
 	require.NoError(t, err)
 
 	for _, sort := range []string{"", "recent", "clicks", "alpha", "alpha_desc"} {
 		t.Run("sort="+sort, func(t *testing.T) {
-			out, err := lrepo.List(ctx, links.ListQuery{Sort: sort})
+			out, err := lrepo.List(ctx, uid, links.ListQuery{Sort: sort})
 			require.NoError(t, err)
 			require.GreaterOrEqual(t, len(out), 2)
 			assert.True(t, out[0].Pinned, "pinned link must always come first under sort=%q", sort)
@@ -280,14 +288,14 @@ func TestRepository_PinnedAlwaysComesFirst(t *testing.T) {
 // path — folding a link onto another's URL via PATCH should also surface as
 // 409, not 500.
 func TestRepository_UpdateDuplicateURLReturns409(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	a, err := lrepo.Create(ctx, links.CreateInput{URL: "https://a.example", Title: "A"})
+	ctx, uid, lrepo, _ := setup(t)
+	a, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://a.example", Title: "A"})
 	require.NoError(t, err)
-	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://b.example", Title: "B"})
+	_, err = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b.example", Title: "B"})
 	require.NoError(t, err)
 
 	bURL := "https://b.example"
-	_, err = lrepo.Update(ctx, a.ID, links.UpdateInput{URL: &bURL})
+	_, err = lrepo.Update(ctx, uid, a.ID, links.UpdateInput{URL: &bURL})
 	require.Error(t, err)
 	var he *httperr.Error
 	require.ErrorAs(t, err, &he)
@@ -301,24 +309,26 @@ func TestRepository_UpdateDuplicateURLReturns409(t *testing.T) {
 // on the home grid, double-rendered.
 func TestRepository_UngroupedExcludesLinksInFolders(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	frepo := folders.NewRepository(pool)
 	lrepo := links.NewRepository(pool)
 
-	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Inbox", Color: "#abc"})
+	f, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Inbox", Color: "#abc"})
 	require.NoError(t, err)
-	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://in", Title: "InFolder", FolderID: &f.ID})
+	_, err = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://in", Title: "InFolder", FolderID: &f.ID})
 	require.NoError(t, err)
-	ungrouped, err := lrepo.Create(ctx, links.CreateInput{URL: "https://out", Title: "Ungrouped"})
+	ungrouped, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://out", Title: "Ungrouped"})
 	require.NoError(t, err)
 
-	got, err := lrepo.List(ctx, links.ListQuery{Ungrouped: true})
+	got, err := lrepo.List(ctx, uid, links.ListQuery{Ungrouped: true})
 	require.NoError(t, err)
 	require.Len(t, got, 1, "?ungrouped=1 must surface only links with folder_id IS NULL")
 	assert.Equal(t, ungrouped.ID, got[0].ID)
 
 	// Unscoped list returns both.
-	all, err := lrepo.List(ctx, links.ListQuery{})
+	all, err := lrepo.List(ctx, uid, links.ListQuery{})
 	require.NoError(t, err)
 	assert.Len(t, all, 2)
 }
@@ -328,30 +338,32 @@ func TestRepository_UngroupedExcludesLinksInFolders(t *testing.T) {
 // tag X narrows the result to links in F that also have X.
 func TestRepository_ListByFolderANDTag(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	frepo := folders.NewRepository(pool)
 	trepo := tags.NewRepository(pool)
 	lrepo := links.NewRepository(pool)
 
-	folder, err := frepo.Create(ctx, folders.CreateInput{Name: "Work", Color: "#abc"})
+	folder, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Work", Color: "#abc"})
 	require.NoError(t, err)
-	tagX, err := trepo.Create(ctx, tags.CreateInput{Name: "x", Color: "#fff"})
+	tagX, err := trepo.Create(ctx, uid, tags.CreateInput{Name: "x", Color: "#fff"})
 	require.NoError(t, err)
 
-	withTag, err := lrepo.Create(ctx, links.CreateInput{
+	withTag, err := lrepo.Create(ctx, uid, links.CreateInput{
 		URL: "https://withtag", Title: "WithTag", FolderID: &folder.ID, TagIDs: []int64{tagX.ID},
 	})
 	require.NoError(t, err)
-	noTag, err := lrepo.Create(ctx, links.CreateInput{
+	noTag, err := lrepo.Create(ctx, uid, links.CreateInput{
 		URL: "https://notag", Title: "NoTag", FolderID: &folder.ID,
 	})
 	require.NoError(t, err)
 
-	folderOnly, err := lrepo.List(ctx, links.ListQuery{FolderID: &folder.ID})
+	folderOnly, err := lrepo.List(ctx, uid, links.ListQuery{FolderID: &folder.ID})
 	require.NoError(t, err)
 	require.Len(t, folderOnly, 2, "folder scope alone returns both")
 
-	combined, err := lrepo.List(ctx, links.ListQuery{FolderID: &folder.ID, TagIDs: []int64{tagX.ID}})
+	combined, err := lrepo.List(ctx, uid, links.ListQuery{FolderID: &folder.ID, TagIDs: []int64{tagX.ID}})
 	require.NoError(t, err)
 	require.Len(t, combined, 1, "folder + tag must AND, not OR")
 	assert.Equal(t, withTag.ID, combined[0].ID)
@@ -363,23 +375,23 @@ func TestRepository_ListByFolderANDTag(t *testing.T) {
 // that inserts into it. Reading a link via Get/List/GetBySlug must NOT bump
 // the count.
 func TestRepository_GoEndpointIsOnlyClickInserter(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	link, err := lrepo.Create(ctx, links.CreateInput{URL: "https://only-go", Title: "OnlyGo"})
+	ctx, uid, lrepo, _ := setup(t)
+	link, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://only-go", Title: "OnlyGo"})
 	require.NoError(t, err)
 
 	// Exercise every read path that is NOT /go/:id.
-	_, _ = lrepo.Get(ctx, link.ID)
-	_, _ = lrepo.GetBySlug(ctx, link.Slug)
-	_, _ = lrepo.List(ctx, links.ListQuery{})
+	_, _ = lrepo.Get(ctx, uid, link.ID)
+	_, _ = lrepo.GetBySlug(ctx, uid, link.Slug)
+	_, _ = lrepo.List(ctx, uid, links.ListQuery{})
 
-	got, err := lrepo.Get(ctx, link.ID)
+	got, err := lrepo.Get(ctx, uid, link.ID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, got.ClickCount, "no read path may write click_log")
 
 	// Now exercise the /go/:id atomic path and confirm count moves to 1.
 	_, err = lrepo.ClickAndResolve(ctx, link.ID)
 	require.NoError(t, err)
-	got, err = lrepo.Get(ctx, link.ID)
+	got, err = lrepo.Get(ctx, uid, link.ID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, got.ClickCount)
 }
@@ -391,6 +403,8 @@ func TestRepository_GoEndpointIsOnlyClickInserter(t *testing.T) {
 // surfaces it at boot.
 func TestSchema_NoCachedClickColumns(t *testing.T) {
 	pool := testdb.New(t)
+
+	_ = testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	rows, err := pool.Query(ctx, `
         SELECT column_name FROM information_schema.columns
@@ -409,16 +423,16 @@ func TestSchema_NoCachedClickColumns(t *testing.T) {
 }
 
 func TestRepository_SortByClicks(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	a, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://a", Title: "A"})
-	b, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://b", Title: "B"})
+	ctx, uid, lrepo, _ := setup(t)
+	a, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://a", Title: "A"})
+	b, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b", Title: "B"})
 
 	// Bump b twice, a once.
 	_, _ = lrepo.ClickAndResolve(ctx, b.ID)
 	_, _ = lrepo.ClickAndResolve(ctx, b.ID)
 	_, _ = lrepo.ClickAndResolve(ctx, a.ID)
 
-	out, err := lrepo.List(ctx, links.ListQuery{Sort: "clicks"})
+	out, err := lrepo.List(ctx, uid, links.ListQuery{Sort: "clicks"})
 	require.NoError(t, err)
 	require.Len(t, out, 2)
 	assert.Equal(t, "B", out[0].Title, "highest click_count first")
@@ -427,14 +441,14 @@ func TestRepository_SortByClicks(t *testing.T) {
 // ---- Change-detection methods (migration 000010) ----------------------------
 
 func TestRepository_CheckInterval_TriStateOnUpdate(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	l, err := lrepo.Create(ctx, links.CreateInput{URL: "https://x.test/a", Title: "x"})
+	ctx, uid, lrepo, _ := setup(t)
+	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/a", Title: "x"})
 	require.NoError(t, err)
 	assert.Nil(t, l.CheckInterval, "default opt-out")
 
 	// Opt in to daily.
 	interval := "daily"
-	updated, err := lrepo.Update(ctx, l.ID, links.UpdateInput{
+	updated, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{
 		CheckInterval: &interval, CheckIntervalSet: true,
 	})
 	require.NoError(t, err)
@@ -442,16 +456,16 @@ func TestRepository_CheckInterval_TriStateOnUpdate(t *testing.T) {
 	assert.Equal(t, "daily", *updated.CheckInterval)
 
 	// Simulate worker stamping a fingerprint + detection.
-	require.NoError(t, lrepo.RecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "content:abc"}))
-	require.NoError(t, lrepo.RecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "content:def", Changed: true}))
+	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "content:abc"}))
+	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "content:def", Changed: true}))
 
-	withState, err := lrepo.Get(ctx, l.ID)
+	withState, err := lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
 	require.NotNil(t, withState.LastFingerprint)
 	require.NotNil(t, withState.LastChangeDetectedAt)
 
 	// Opt out → ALL change-check state must clear (CLAUDE.md §4 invariant).
-	cleared, err := lrepo.Update(ctx, l.ID, links.UpdateInput{
+	cleared, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{
 		CheckInterval: nil, CheckIntervalSet: true,
 	})
 	require.NoError(t, err)
@@ -463,17 +477,17 @@ func TestRepository_CheckInterval_TriStateOnUpdate(t *testing.T) {
 }
 
 func TestRepository_FindDueForCheck_OnlyOptedIn(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
+	ctx, uid, lrepo, _ := setup(t)
 	// Opted-in (daily): due immediately because last_checked_at IS NULL.
-	a, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://x.test/a", Title: "a"})
+	a, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/a", Title: "a"})
 	di := "daily"
-	_, err := lrepo.Update(ctx, a.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, a.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
 	require.NoError(t, err)
 
 	// Opted-OUT link must NOT appear.
-	_, _ = lrepo.Create(ctx, links.CreateInput{URL: "https://x.test/b", Title: "b"})
+	_, _ = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/b", Title: "b"})
 
-	ids, err := lrepo.FindDueForCheck(ctx, 100)
+	ids, err := lrepo.SystemFindDueForCheck(ctx, 100)
 	require.NoError(t, err)
 	assert.Contains(t, ids, a.ID, "opted-in link with NULL last_checked_at must be due")
 	assert.Len(t, ids, 1, "only opted-in links may be due")
@@ -484,41 +498,43 @@ func TestRepository_FindDueForCheck_RespectsInterval(t *testing.T) {
 	// a fresh container per call, so we share one pool between repo + raw SQL.
 	ctx := context.Background()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 
 	// Hourly link checked 30 minutes ago → NOT due.
-	l, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://x.test/h", Title: "h"})
+	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/h", Title: "h"})
 	hi := "hourly"
-	_, err := lrepo.Update(ctx, l.ID, links.UpdateInput{CheckInterval: &hi, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &hi, CheckIntervalSet: true})
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `UPDATE link SET last_checked_at = now() - interval '30 minutes' WHERE id = $1`, l.ID)
 	require.NoError(t, err)
 
-	ids, err := lrepo.FindDueForCheck(ctx, 100)
+	ids, err := lrepo.SystemFindDueForCheck(ctx, 100)
 	require.NoError(t, err)
 	assert.NotContains(t, ids, l.ID, "30 minutes < 1 hour: must NOT be due")
 
 	// Backdate further → past 1h → now due.
 	_, err = pool.Exec(ctx, `UPDATE link SET last_checked_at = now() - interval '2 hours' WHERE id = $1`, l.ID)
 	require.NoError(t, err)
-	ids, err = lrepo.FindDueForCheck(ctx, 100)
+	ids, err = lrepo.SystemFindDueForCheck(ctx, 100)
 	require.NoError(t, err)
 	assert.Contains(t, ids, l.ID, "2h > 1h: hourly link is due")
 }
 
 func TestRepository_RecordCheckResult_FirstObservationDoesNotMarkChange(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	l, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://x.test/f", Title: "f"})
+	ctx, uid, lrepo, _ := setup(t)
+	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/f", Title: "f"})
 	di := "daily"
-	_, _ = lrepo.Update(ctx, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, _ = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
 
 	// Worker passes Changed=false on the first observation (no previous fp).
-	require.NoError(t, lrepo.RecordCheckResult(ctx, l.ID, links.CheckResult{
+	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{
 		Fingerprint: "content:abc",
 		Changed:     false,
 	}))
 
-	got, err := lrepo.Get(ctx, l.ID)
+	got, err := lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got.LastFingerprint)
 	assert.Equal(t, "content:abc", *got.LastFingerprint)
@@ -527,31 +543,31 @@ func TestRepository_RecordCheckResult_FirstObservationDoesNotMarkChange(t *testi
 }
 
 func TestRepository_RecordCheckResult_BumpsDetectionAndNullsSeen(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	l, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://x.test/c", Title: "c"})
+	ctx, uid, lrepo, _ := setup(t)
+	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/c", Title: "c"})
 	di := "daily"
-	_, _ = lrepo.Update(ctx, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, _ = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
 
 	// Seed a first observation and pretend the user already saw an OLD change.
-	require.NoError(t, lrepo.RecordCheckResult(ctx, l.ID, links.CheckResult{
+	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{
 		Fingerprint: "content:abc",
 	}))
-	require.NoError(t, lrepo.RecordCheckResult(ctx, l.ID, links.CheckResult{
+	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{
 		Fingerprint: "content:def",
 		Changed:     true,
 	}))
-	require.NoError(t, lrepo.MarkChangeSeen(ctx, l.ID))
+	require.NoError(t, lrepo.MarkChangeSeen(ctx, uid, l.ID))
 
-	got, err := lrepo.Get(ctx, l.ID)
+	got, err := lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got.ChangeSeenAt, "MarkChangeSeen must stamp change_seen_at")
 
 	// NEW change → must null out change_seen_at again so the badge re-shows.
-	require.NoError(t, lrepo.RecordCheckResult(ctx, l.ID, links.CheckResult{
+	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{
 		Fingerprint: "content:ghi",
 		Changed:     true,
 	}))
-	got2, err := lrepo.Get(ctx, l.ID)
+	got2, err := lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
 	assert.Nil(t, got2.ChangeSeenAt, "new detection must reset change_seen_at to NULL")
 	require.NotNil(t, got2.LastChangeDetectedAt)
@@ -562,24 +578,24 @@ func TestRepository_RecordCheckResult_BumpsDetectionAndNullsSeen(t *testing.T) {
 }
 
 func TestRepository_RecordCheckResult_StoresErrorInLastCheckErrorNotPreviewError(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	l, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://x.test/e", Title: "e"})
+	ctx, uid, lrepo, _ := setup(t)
+	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/e", Title: "e"})
 	di := "daily"
-	_, _ = lrepo.Update(ctx, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, _ = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
 
 	beforePreviewErr := ""
 	{
-		got, _ := lrepo.Get(ctx, l.ID)
+		got, _ := lrepo.Get(ctx, uid, l.ID)
 		if got.PreviewError != nil {
 			beforePreviewErr = *got.PreviewError
 		}
 	}
 
-	require.NoError(t, lrepo.RecordCheckResult(ctx, l.ID, links.CheckResult{
+	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{
 		FetchErr: "timeout",
 	}))
 
-	got, err := lrepo.Get(ctx, l.ID)
+	got, err := lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got.LastCheckError, "FetchErr must land in last_check_error")
 	assert.Equal(t, "timeout", *got.LastCheckError)
@@ -594,31 +610,31 @@ func TestRepository_RecordCheckResult_StoresErrorInLastCheckErrorNotPreviewError
 }
 
 func TestRepository_MarkChangeSeen_404WhenNeverDetected(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	l, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://x.test/n", Title: "n"})
+	ctx, uid, lrepo, _ := setup(t)
+	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/n", Title: "n"})
 
-	err := lrepo.MarkChangeSeen(ctx, l.ID)
+	err := lrepo.MarkChangeSeen(ctx, uid, l.ID)
 	require.Error(t, err, "MarkChangeSeen must 404 when no change has been detected")
 	assert.ErrorIs(t, err, httperr.ErrNotFound)
 }
 
 func TestRepository_ListRecentChanges_FiltersAndSorts(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	older, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://x.test/old", Title: "older"})
-	newer, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://x.test/new", Title: "newer"})
-	skipped, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://x.test/skip", Title: "no change"})
+	ctx, uid, lrepo, _ := setup(t)
+	older, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/old", Title: "older"})
+	newer, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/new", Title: "newer"})
+	skipped, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/skip", Title: "no change"})
 
 	di := "daily"
-	_, _ = lrepo.Update(ctx, older.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
-	_, _ = lrepo.Update(ctx, newer.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, _ = lrepo.Update(ctx, uid, older.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, _ = lrepo.Update(ctx, uid, newer.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
 
 	// Seed older detection, then newer.
-	_ = lrepo.RecordCheckResult(ctx, older.ID, links.CheckResult{Fingerprint: "content:1"})
-	_ = lrepo.RecordCheckResult(ctx, older.ID, links.CheckResult{Fingerprint: "content:2", Changed: true})
-	_ = lrepo.RecordCheckResult(ctx, newer.ID, links.CheckResult{Fingerprint: "content:1"})
-	_ = lrepo.RecordCheckResult(ctx, newer.ID, links.CheckResult{Fingerprint: "content:9", Changed: true})
+	_ = lrepo.SystemRecordCheckResult(ctx, older.ID, links.CheckResult{Fingerprint: "content:1"})
+	_ = lrepo.SystemRecordCheckResult(ctx, older.ID, links.CheckResult{Fingerprint: "content:2", Changed: true})
+	_ = lrepo.SystemRecordCheckResult(ctx, newer.ID, links.CheckResult{Fingerprint: "content:1"})
+	_ = lrepo.SystemRecordCheckResult(ctx, newer.ID, links.CheckResult{Fingerprint: "content:9", Changed: true})
 
-	out, err := lrepo.ListRecentChanges(ctx, 7*24*60*60, 50)
+	out, err := lrepo.ListRecentChanges(ctx, uid, 7*24*60*60, 50)
 	require.NoError(t, err)
 	require.Len(t, out, 2, "only links with last_change_detected_at != NULL are returned")
 	assert.Equal(t, "newer", out[0].Title, "DESC by last_change_detected_at: newer first")
@@ -630,18 +646,20 @@ func TestRepository_ListRecentChanges_WindowFiltersOut(t *testing.T) {
 	// Same pool-sharing rationale as FindDueForCheck_RespectsInterval.
 	ctx := context.Background()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 
-	l, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://x.test/w", Title: "w"})
+	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/w", Title: "w"})
 	di := "daily"
-	_, _ = lrepo.Update(ctx, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
-	_ = lrepo.RecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "content:1"})
-	_ = lrepo.RecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "content:2", Changed: true})
+	_, _ = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_ = lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "content:1"})
+	_ = lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "content:2", Changed: true})
 
 	_, err := pool.Exec(ctx, `UPDATE link SET last_change_detected_at = now() - interval '8 days' WHERE id = $1`, l.ID)
 	require.NoError(t, err)
 
-	out, err := lrepo.ListRecentChanges(ctx, 7*24*60*60, 50)
+	out, err := lrepo.ListRecentChanges(ctx, uid, 7*24*60*60, 50)
 	require.NoError(t, err)
 	assert.Empty(t, out, "8-day-old change must fall outside the 7-day window")
 }

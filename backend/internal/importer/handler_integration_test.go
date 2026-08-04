@@ -19,6 +19,8 @@ import (
 	"foldex/internal/importer"
 	"foldex/internal/links"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 type fakeEnqueuer struct{ ids []int64 }
@@ -40,8 +42,11 @@ func multipartBody(t *testing.T, format, content string) (*bytes.Buffer, string)
 
 func TestImportNetscape_HappyPath(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	enq := &fakeEnqueuer{}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, enq).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -90,7 +95,10 @@ func TestImportNetscape_HappyPath(t *testing.T) {
 
 func TestImportJSON_RoundTrip(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -113,7 +121,7 @@ func TestImportJSON_RoundTrip(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	lrepo := links.NewRepository(pool)
-	list, err := lrepo.List(context.Background(), links.ListQuery{})
+	list, err := lrepo.List(context.Background(), uid, links.ListQuery{})
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 
@@ -130,7 +138,10 @@ func TestImportJSON_RoundTrip(t *testing.T) {
 
 func TestImportJSON_EmptyTitleFallsBackToURL(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -143,7 +154,7 @@ func TestImportJSON_EmptyTitleFallsBackToURL(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	lrepo := links.NewRepository(pool)
-	list, err := lrepo.List(context.Background(), links.ListQuery{})
+	list, err := lrepo.List(context.Background(), uid, links.ListQuery{})
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	assert.Equal(t, "https://notitle.example", list[0].Title)
@@ -151,7 +162,10 @@ func TestImportJSON_EmptyTitleFallsBackToURL(t *testing.T) {
 
 func TestImportJSON_InvalidVersion(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -166,7 +180,10 @@ func TestImportJSON_InvalidVersion(t *testing.T) {
 
 func TestImportJSON_InvalidURL(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -181,7 +198,10 @@ func TestImportJSON_InvalidURL(t *testing.T) {
 
 func TestImport_BadFormat(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -195,7 +215,10 @@ func TestImport_BadFormat(t *testing.T) {
 
 func TestImport_BodyTooLarge(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -224,7 +247,10 @@ func TestImport_BodyTooLarge(t *testing.T) {
 
 func TestImport_MissingFile(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()

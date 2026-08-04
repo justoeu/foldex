@@ -14,6 +14,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 func TestNewHandler_NilLogger(t *testing.T) {
@@ -177,6 +179,7 @@ func TestReadZipFromRequest_MultipartRestore(t *testing.T) {
 func TestHandler_Mount_RoutesExist(t *testing.T) {
 	h := NewHandler(&fakeBackupSvc{}, nil)
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Route("/backup", h.Mount)
 
 	for _, path := range []string{"/backup", "/backup/validate", "/backup/restore"} {

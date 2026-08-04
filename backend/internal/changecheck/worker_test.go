@@ -29,7 +29,7 @@ type fakeRepo struct {
 	recDelay time.Duration
 }
 
-func (r *fakeRepo) Get(_ context.Context, id int64) (links.Link, error) {
+func (r *fakeRepo) SystemGet(_ context.Context, id int64) (links.Link, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	l, ok := r.links[id]
@@ -39,18 +39,24 @@ func (r *fakeRepo) Get(_ context.Context, id int64) (links.Link, error) {
 	return l, nil
 }
 
-func (r *fakeRepo) FindDueForCheck(_ context.Context, _ int) ([]int64, error) {
+func (r *fakeRepo) SystemFindDueForCheck(_ context.Context, _ int) ([]links.DueLink, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.findErr != nil {
 		return nil, r.findErr
 	}
-	out := append([]int64(nil), r.due...)
+	out := make([]links.DueLink, 0, len(r.due))
+	for _, id := range r.due {
+		// Owner is fixed at 1 here: these tests exercise fingerprint diffing and
+		// queue behaviour, not tenant routing. Cross-user push scoping is locked
+		// by internal/security's TestCrossUser_ChangeCheckPushGoesOnlyToOwner.
+		out = append(out, links.DueLink{ID: id, UserID: 1})
+	}
 	r.due = nil
 	return out, nil
 }
 
-func (r *fakeRepo) RecordCheckResult(_ context.Context, _ int64, res links.CheckResult) error {
+func (r *fakeRepo) SystemRecordCheckResult(_ context.Context, _ int64, res links.CheckResult) error {
 	if r.recDelay > 0 {
 		time.Sleep(r.recDelay)
 	}
@@ -113,7 +119,7 @@ func TestEnqueue_ReturnsErrStoppedAfterStop(t *testing.T) {
 	w := New(&fakeRepo{}, fakeFetcher{}, nil, Options{ScanInterval: time.Hour}, testLogger())
 	w.Start(context.Background())
 	w.Stop()
-	err := w.Enqueue(1)
+	err := w.Enqueue(links.DueLink{ID: 1, UserID: 1})
 	assert.ErrorIs(t, err, ErrStopped)
 }
 
@@ -122,9 +128,9 @@ func TestEnqueue_ReturnsErrQueueFullWhenSaturated(t *testing.T) {
 	// pin it to capacity.
 	w := New(&fakeRepo{}, fakeFetcher{}, nil, Options{ScanInterval: time.Hour}, testLogger())
 	for i := 0; i < cap(w.jobs); i++ {
-		require.NoError(t, w.Enqueue(int64(i)))
+		require.NoError(t, w.Enqueue(links.DueLink{ID: int64(i), UserID: 1}))
 	}
-	err := w.Enqueue(99999)
+	err := w.Enqueue(links.DueLink{ID: 99999, UserID: 1})
 	assert.ErrorIs(t, err, ErrQueueFull)
 }
 
@@ -143,7 +149,7 @@ func TestProcess_FirstObservation_RecordsFingerprintNoPush(t *testing.T) {
 	sender := &fakeSender{}
 	w := New(repo, fakeFetcher{body: []byte(newPage("x", "hello"))}, sender, Options{}, testLogger())
 
-	w.process(context.Background(), 1)
+	w.process(context.Background(), links.DueLink{ID: 1, UserID: 1})
 
 	rs := repo.snapshotResults()
 	require.Len(t, rs, 1)
@@ -168,7 +174,7 @@ func TestProcess_SecondObservation_SameContent_NoChange(t *testing.T) {
 	sender := &fakeSender{}
 	w := New(repo, fakeFetcher{body: []byte(newPage("x", "hello"))}, sender, Options{}, testLogger())
 
-	w.process(context.Background(), 1)
+	w.process(context.Background(), links.DueLink{ID: 1, UserID: 1})
 
 	rs := repo.snapshotResults()
 	require.Len(t, rs, 1)
@@ -192,7 +198,7 @@ func TestProcess_ContentDrift_DetectsChangeAndNotifies(t *testing.T) {
 	sender := &fakeSender{}
 	w := New(repo, fakeFetcher{body: []byte(newPage("x", "world"))}, sender, Options{}, testLogger())
 
-	w.process(context.Background(), 1)
+	w.process(context.Background(), links.DueLink{ID: 1, UserID: 1})
 
 	rs := repo.snapshotResults()
 	require.Len(t, rs, 1)
@@ -213,7 +219,7 @@ func TestProcess_FetchFailure_RecordsWithoutPush(t *testing.T) {
 	sender := &fakeSender{}
 	w := New(repo, fakeFetcher{err: errors.New("network down")}, sender, Options{}, testLogger())
 
-	w.process(context.Background(), 1)
+	w.process(context.Background(), links.DueLink{ID: 1, UserID: 1})
 
 	rs := repo.snapshotResults()
 	require.Len(t, rs, 1)
@@ -235,7 +241,7 @@ func TestProcess_FetchFailure_LogsRecordCheckResultError(t *testing.T) {
 	}
 	w := New(repo, fakeFetcher{err: errors.New("network down")}, &fakeSender{}, Options{}, testLogger())
 	// Must not panic; RecordCheckResult error is logged like the success path.
-	w.process(context.Background(), 1)
+	w.process(context.Background(), links.DueLink{ID: 1, UserID: 1})
 	assert.Empty(t, repo.snapshotResults(), "recErr means result was not stored")
 }
 
@@ -248,7 +254,7 @@ func TestProcess_FingerprintFailure_LogsRecordCheckResultError(t *testing.T) {
 		recErr: errors.New("db down"),
 	}
 	w := New(repo, fakeFetcher{body: []byte("")}, &fakeSender{}, Options{}, testLogger())
-	w.process(context.Background(), 1)
+	w.process(context.Background(), links.DueLink{ID: 1, UserID: 1})
 	assert.Empty(t, repo.snapshotResults())
 }
 
@@ -280,7 +286,7 @@ func TestProcess_KindSwitchDoesNotFirePush(t *testing.T) {
 	seq := newQueueFetcher([]byte(page), []byte(feedBody))
 	w := New(repo, seq, sender, Options{}, testLogger())
 
-	w.process(context.Background(), 1)
+	w.process(context.Background(), links.DueLink{ID: 1, UserID: 1})
 
 	rs := repo.snapshotResults()
 	require.Len(t, rs, 1)
@@ -298,7 +304,7 @@ func TestProcess_OptOutBetweenScanAndProcess_NoOp(t *testing.T) {
 	sender := &fakeSender{}
 	w := New(repo, fakeFetcher{body: []byte(newPage("x", "y"))}, sender, Options{}, testLogger())
 
-	w.process(context.Background(), 1)
+	w.process(context.Background(), links.DueLink{ID: 1, UserID: 1})
 
 	assert.Empty(t, repo.snapshotResults())
 	assert.Empty(t, sender.seen())
@@ -370,8 +376,8 @@ func drain(t *testing.T, w *Worker, n int) []int64 {
 	deadline := time.After(time.Second)
 	for len(got) < n {
 		select {
-		case id := <-w.jobs:
-			got = append(got, id)
+		case job := <-w.jobs:
+			got = append(got, job.ID)
 		case <-deadline:
 			t.Fatalf("timed out draining jobs (got %d/%d)", len(got), n)
 		}

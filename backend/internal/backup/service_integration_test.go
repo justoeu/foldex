@@ -57,6 +57,11 @@ func (s *stubBucket) ObjectExists(_ context.Context, key string) (bool, error) {
 	return ok, nil
 }
 
+func (s *stubBucket) DeleteObject(_ context.Context, key string) error {
+	delete(s.objs, key)
+	return nil
+}
+
 func (s *stubBucket) DeleteObjectsPrefix(_ context.Context, prefix string) error {
 	for k := range s.objs {
 		if strings.HasPrefix(k, prefix) {
@@ -71,16 +76,18 @@ func (s *stubBucket) DeleteObjectsPrefix(_ context.Context, prefix string) error
 // every entry has a SHA-256 checksum.
 func TestService_ExportProducesValidZipWithManifest(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 
 	// Seed: one tag, two links, two files.
 	trepo := tags.NewRepository(pool)
-	tag, err := trepo.Create(ctx, tags.CreateInput{Name: "work", Color: "#abc"})
+	tag, err := trepo.Create(ctx, uid, tags.CreateInput{Name: "work", Color: "#abc"})
 	require.NoError(t, err)
 	lrepo := links.NewRepository(pool)
-	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://a", Title: "A", TagIDs: []int64{tag.ID}})
+	_, err = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://a", Title: "A", TagIDs: []int64{tag.ID}})
 	require.NoError(t, err)
-	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://b", Title: "B"})
+	_, err = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b", Title: "B"})
 	require.NoError(t, err)
 
 	bucket := newStubBucket()
@@ -92,7 +99,7 @@ func TestService_ExportProducesValidZipWithManifest(t *testing.T) {
 
 	var buf bytes.Buffer
 	var callbackCounts backup.Counts
-	rep, err := svc.Export(ctx, &buf, func(c backup.Counts) error {
+	rep, err := svc.Export(ctx, uid, &buf, func(c backup.Counts) error {
 		callbackCounts = c
 		return nil
 	})
@@ -135,7 +142,7 @@ func TestService_ExportProducesValidZipWithManifest(t *testing.T) {
 	assert.Equal(t, []byte("img-1-bytes"), files["files/screenshots/1.jpg"])
 
 	// Round-trip Validate on the produced zip (covers Service.Validate).
-	v, err := svc.Validate(ctx, zr)
+	v, err := svc.Validate(ctx, uid, zr)
 	require.NoError(t, err)
 	assert.True(t, v.OK, "fresh export must validate: %v", v.Errors)
 	require.NotNil(t, v.Manifest)
@@ -143,6 +150,8 @@ func TestService_ExportProducesValidZipWithManifest(t *testing.T) {
 
 func TestService_Validate_RejectsEmptyZip(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	svc := backup.NewService(pool, newStubBucket(), logger)
 
@@ -152,7 +161,7 @@ func TestService_Validate_RejectsEmptyZip(t *testing.T) {
 	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
 
-	v, err := svc.Validate(context.Background(), zr)
+	v, err := svc.Validate(context.Background(), uid, zr)
 	require.NoError(t, err)
 	assert.False(t, v.OK)
 	assert.NotEmpty(t, v.Errors)
@@ -163,13 +172,15 @@ func TestService_Validate_RejectsEmptyZip(t *testing.T) {
 // refuse a request before flushing response bytes.
 func TestService_ExportAbortsWhenCallbackErrors(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	svc := backup.NewService(pool, newStubBucket(), logger)
 
 	var buf bytes.Buffer
-	_, err := svc.Export(ctx, &buf, func(_ backup.Counts) error {
+	_, err := svc.Export(ctx, uid, &buf, func(_ backup.Counts) error {
 		return io.ErrUnexpectedEOF // sentinel, anything non-nil works
 	})
 	require.Error(t, err)

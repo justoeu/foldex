@@ -3,6 +3,8 @@ package backup
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -177,4 +179,56 @@ func countConflicts(ctx context.Context, pool *pgxpool.Pool, uid authctx.UserID,
 	// folders have no unique constraint => 0 conflicts by construction.
 
 	return c, nil
+}
+
+// objectKeyRE pulls the bucket key out of a stored proxy URL
+// (/api/files/screenshots/12.jpg → screenshots/12.jpg).
+var objectKeyRE = regexp.MustCompile(`/api/files/((?:screenshots|images|notes)/[A-Za-z0-9._-]+)`)
+
+// userObjectKeys enumerates the object-store keys referenced by uid's rows.
+//
+// Wipe-mode restore needs this because object keys are FLAT — screenshots/{id}.jpg
+// with no tenant segment — so the pre-000017 DeleteObjectsPrefix would delete
+// every other user's screenshots. Re-keying the whole bucket by user was
+// rejected as disproportionate (it would mean rewriting og_image_url on every
+// row and moving existing objects); enumerating the caller's own keys achieves
+// the same isolation with no migration.
+func userObjectKeys(ctx context.Context, tx pgx.Tx, uid authctx.UserID) ([]string, error) {
+	seen := map[string]struct{}{}
+	add := func(s string) {
+		for _, m := range objectKeyRE.FindAllStringSubmatch(s, -1) {
+			seen[m[1]] = struct{}{}
+		}
+	}
+	if err := scanRows(ctx, tx,
+		`SELECT COALESCE(og_image_url, '') FROM link WHERE user_id = $1`, []any{int64(uid)},
+		func(rows pgx.Rows) error {
+			var u string
+			if err := rows.Scan(&u); err != nil {
+				return err
+			}
+			add(u)
+			return nil
+		}); err != nil {
+		return nil, fmt.Errorf("link object keys: %w", err)
+	}
+	if err := scanRows(ctx, tx,
+		`SELECT COALESCE(cover_url, ''), body_html FROM note WHERE user_id = $1`, []any{int64(uid)},
+		func(rows pgx.Rows) error {
+			var cover, body string
+			if err := rows.Scan(&cover, &body); err != nil {
+				return err
+			}
+			add(cover)
+			add(body)
+			return nil
+		}); err != nil {
+		return nil, fmt.Errorf("note object keys: %w", err)
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out) // deterministic delete order keeps failures reproducible
+	return out, nil
 }

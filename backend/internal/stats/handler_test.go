@@ -9,6 +9,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
+
+	"foldex/internal/pkg/authctx"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 type fakeRepo struct {
@@ -19,10 +23,16 @@ type fakeRepo struct {
 	err     error
 }
 
-func (f *fakeRepo) Summary(context.Context) (Summary, error)         { return f.summary, f.err }
-func (f *fakeRepo) Daily(context.Context, int) ([]DailyPoint, error) { return f.daily, f.err }
-func (f *fakeRepo) TopLinks(context.Context, int) ([]TopLink, error) { return f.top, f.err }
-func (f *fakeRepo) TagBuckets(context.Context) ([]TagBucket, error)  { return f.tags, f.err }
+func (f *fakeRepo) Summary(context.Context, authctx.UserID) (Summary, error) { return f.summary, f.err }
+func (f *fakeRepo) Daily(context.Context, authctx.UserID, int) ([]DailyPoint, error) {
+	return f.daily, f.err
+}
+func (f *fakeRepo) TopLinks(context.Context, authctx.UserID, int) ([]TopLink, error) {
+	return f.top, f.err
+}
+func (f *fakeRepo) TagBuckets(context.Context, authctx.UserID) ([]TagBucket, error) {
+	return f.tags, f.err
+}
 
 type fakeStorage struct {
 	s   StorageStats
@@ -33,6 +43,7 @@ func (f *fakeStorage) Stats(context.Context) (StorageStats, error) { return f.s,
 
 func mount(h *Handler) http.Handler {
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	h.Mount(r)
 	return r
 }

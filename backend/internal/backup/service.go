@@ -38,6 +38,10 @@ type StorageBucket interface {
 	PutObjectStream(ctx context.Context, key string, r io.Reader, size int64, contentType string) error
 	ObjectExists(ctx context.Context, key string) (bool, error)
 	DeleteObjectsPrefix(ctx context.Context, prefix string) error
+	// DeleteObject removes ONE key. Wipe-mode restore uses it instead of
+	// DeleteObjectsPrefix: object keys are flat ({prefix}/{id}.ext, no tenant
+	// segment), so prefix-deleting would destroy every other user's files.
+	DeleteObject(ctx context.Context, key string) error
 }
 
 type ObjectInfo struct {
@@ -389,6 +393,17 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 		return rep, httperr.New(http.StatusConflict, "restore_in_progress", "another restore is already in progress")
 	}
 
+	// Enumerate the caller's object keys BEFORE the wipe deletes the rows that
+	// reference them. Nothing is deleted here — applyFiles does that after the
+	// DB tx commits, so a rolled-back restore leaves the bucket untouched.
+	var ownedKeys []string
+	if mode == ModeWipe {
+		var err error
+		if ownedKeys, err = userObjectKeys(ctx, tx, uid); err != nil {
+			return rep, fmt.Errorf("backup: enumerate own objects: %w", err)
+		}
+	}
+
 	// The ZIP's declared owner is informational only: every row below is
 	// written with the CALLING user's id, never the snapshot's. That is what
 	// makes a hand-crafted backup unable to plant rows in another account
@@ -454,7 +469,7 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 	}
 
 	// Files phase — runs after commit. Idempotent.
-	fileRep, err := s.applyFiles(ctx, zr, snap, mapping, mode)
+	fileRep, err := s.applyFiles(ctx, zr, snap, mapping, mode, ownedKeys)
 	if err != nil {
 		return rep, fmt.Errorf("backup: files: %w", err)
 	}
@@ -464,15 +479,17 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 	return rep, nil
 }
 
-func (s *Service) applyFiles(ctx context.Context, zr *zip.Reader, snap *Snapshot, mapping idMapping, mode ConflictMode) (FileReport, error) {
+func (s *Service) applyFiles(ctx context.Context, zr *zip.Reader, snap *Snapshot, mapping idMapping, mode ConflictMode, ownedKeys []string) (FileReport, error) {
 	var rep FileReport
 	if mode == ModeWipe {
-		for _, prefix := range bucketPrefixes {
-			if err := s.storage.DeleteObjectsPrefix(ctx, prefix); err != nil {
-				return rep, err
+		// Delete exactly the caller's objects, enumerated from their rows BEFORE
+		// the DB wipe. Prefix-deleting is not an option: keys are flat
+		// ({prefix}/{id}.ext), so it would take every tenant's files with it.
+		for _, key := range ownedKeys {
+			if err := s.storage.DeleteObject(ctx, key); err != nil {
+				return rep, fmt.Errorf("backup: delete own object %q: %w", key, err)
 			}
 		}
-		// Don't bother counting wiped — wipe is bulk.
 	}
 	for _, entry := range zr.File {
 		if !strings.HasPrefix(entry.Name, "files/") {
@@ -490,8 +507,10 @@ func (s *Service) applyFiles(ctx context.Context, zr *zip.Reader, snap *Snapshot
 			return rep, fmt.Errorf("backup: rejected entry %q (not under %v)", entry.Name, bucketPrefixes)
 		}
 
-		// Re-key when mode=duplicate AND we have a mapping for this link id.
-		if mode == ModeDuplicate {
+		// Re-key whenever ids were re-minted. Since ADR-30 that is wipe as well
+		// as duplicate — wipe no longer preserves ids, so a zip key naming the
+		// snapshot's id would no longer match the restored row's og_image_url.
+		if mode == ModeDuplicate || mode == ModeWipe {
 			if newKey, ok := mapping.remapFileKey(key); ok {
 				key = newKey
 			}

@@ -20,6 +20,10 @@ import (
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 type recordingEnqueuer struct{ ids []int64 }
@@ -34,21 +38,24 @@ type stubFolderLookup struct {
 	err  error
 }
 
-func (s stubFolderLookup) PasswordHashFor(context.Context, int64) (*string, error) {
+func (s stubFolderLookup) PasswordHashFor(context.Context, authctx.UserID, int64) (*string, error) {
 	return s.hash, s.err
 }
 
-func newLinksRouter(t *testing.T, worker links.Enqueuer, lookup links.FolderPasswordLookup, key []byte) (http.Handler, *links.Repository) {
+func newLinksRouter(t *testing.T, worker links.Enqueuer, lookup links.FolderPasswordLookup, key []byte) (http.Handler, *links.Repository, authctx.UserID) {
 	t.Helper()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := links.NewRepository(pool)
 	h := links.NewHandler(repo, worker)
 	if lookup != nil {
 		h = h.WithFolderGate(lookup, key)
 	}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/links", h.Mount)
-	return r, repo
+	return r, repo, uid
 }
 
 func doLinkJSON(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
@@ -68,7 +75,7 @@ func linkID(id int64) string { return strconv.FormatInt(id, 10) }
 
 func TestHandler_CRUD(t *testing.T) {
 	enq := &recordingEnqueuer{}
-	h, _ := newLinksRouter(t, enq, nil, nil)
+	h, _, _ := newLinksRouter(t, enq, nil, nil)
 
 	rr := doLinkJSON(t, h, http.MethodPost, "/links/", map[string]any{
 		"url":   "https://example.com/a",
@@ -107,14 +114,14 @@ func TestHandler_CRUD(t *testing.T) {
 }
 
 func TestHandler_Create_InvalidInput(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, nil, nil)
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
 	rr := doLinkJSON(t, h, http.MethodPost, "/links/", map[string]any{"url": "not-a-url", "title": "x"})
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	assert.Contains(t, rr.Body.String(), "invalid_input")
 }
 
 func TestHandler_Create_InvalidJSON(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, nil, nil)
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/links/", bytes.NewBufferString(`{`))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -124,7 +131,7 @@ func TestHandler_Create_InvalidJSON(t *testing.T) {
 }
 
 func TestHandler_Create_DuplicateURL(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, nil, nil)
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
 	body := map[string]any{"url": "https://dup.example", "title": "a"}
 	require.Equal(t, http.StatusCreated, doLinkJSON(t, h, http.MethodPost, "/links/", body).Code)
 	rr := doLinkJSON(t, h, http.MethodPost, "/links/", body)
@@ -133,19 +140,19 @@ func TestHandler_Create_DuplicateURL(t *testing.T) {
 }
 
 func TestHandler_Get_InvalidID(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, nil, nil)
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
 	rr := doLinkJSON(t, h, http.MethodGet, "/links/nope", nil)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestHandler_Update_InvalidID(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, nil, nil)
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
 	rr := doLinkJSON(t, h, http.MethodPatch, "/links/x", map[string]any{"title": "y"})
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestHandler_Update_InvalidInput(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, nil, nil)
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
 	created := doLinkJSON(t, h, http.MethodPost, "/links/", map[string]any{"url": "https://u.example", "title": "u"})
 	var l links.Link
 	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &l))
@@ -155,26 +162,26 @@ func TestHandler_Update_InvalidInput(t *testing.T) {
 }
 
 func TestHandler_Update_NotFound(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, nil, nil)
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
 	rr := doLinkJSON(t, h, http.MethodPatch, "/links/99999", map[string]any{"title": "ghost"})
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
 func TestHandler_Delete_InvalidID(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, nil, nil)
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
 	rr := doLinkJSON(t, h, http.MethodDelete, "/links/abc", nil)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestHandler_Delete_NotFound(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, nil, nil)
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
 	rr := doLinkJSON(t, h, http.MethodDelete, "/links/99999", nil)
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
 func TestHandler_RefreshPreview(t *testing.T) {
 	enq := &recordingEnqueuer{}
-	h, _ := newLinksRouter(t, enq, nil, nil)
+	h, _, _ := newLinksRouter(t, enq, nil, nil)
 	created := doLinkJSON(t, h, http.MethodPost, "/links/", map[string]any{"url": "https://rp.example", "title": "rp"})
 	var l links.Link
 	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &l))
@@ -191,27 +198,27 @@ func TestHandler_RefreshPreview(t *testing.T) {
 }
 
 func TestHandler_RefreshPreview_NotFound(t *testing.T) {
-	h, _ := newLinksRouter(t, &recordingEnqueuer{}, nil, nil)
+	h, _, _ := newLinksRouter(t, &recordingEnqueuer{}, nil, nil)
 	rr := doLinkJSON(t, h, http.MethodPost, "/links/99999/refresh-preview", nil)
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
 func TestHandler_RefreshPreview_InvalidID(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, nil, nil)
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
 	rr := doLinkJSON(t, h, http.MethodPost, "/links/bad/refresh-preview", nil)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestHandler_SeenChange(t *testing.T) {
-	h, repo := newLinksRouter(t, nil, nil, nil)
+	h, repo, uid := newLinksRouter(t, nil, nil, nil)
 	ctx := context.Background()
-	l, err := repo.Create(ctx, links.CreateInput{URL: "https://sc.example", Title: "sc"})
+	l, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://sc.example", Title: "sc"})
 	require.NoError(t, err)
 	di := "daily"
-	_, err = repo.Update(ctx, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err = repo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
 	require.NoError(t, err)
-	require.NoError(t, repo.RecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "a"}))
-	require.NoError(t, repo.RecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "b", Changed: true}))
+	require.NoError(t, repo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "a"}))
+	require.NoError(t, repo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "b", Changed: true}))
 
 	rr := doLinkJSON(t, h, http.MethodPost, "/links/"+linkID(l.ID)+"/seen-change", nil)
 	require.Equal(t, http.StatusNoContent, rr.Code)
@@ -224,15 +231,15 @@ func TestHandler_SeenChange(t *testing.T) {
 }
 
 func TestHandler_ListRecentChanges(t *testing.T) {
-	h, repo := newLinksRouter(t, nil, nil, nil)
+	h, repo, uid := newLinksRouter(t, nil, nil, nil)
 	ctx := context.Background()
-	l, err := repo.Create(ctx, links.CreateInput{URL: "https://rc.example", Title: "rc"})
+	l, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://rc.example", Title: "rc"})
 	require.NoError(t, err)
 	di := "daily"
-	_, err = repo.Update(ctx, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err = repo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
 	require.NoError(t, err)
-	require.NoError(t, repo.RecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "a"}))
-	require.NoError(t, repo.RecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "b", Changed: true}))
+	require.NoError(t, repo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "a"}))
+	require.NoError(t, repo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "b", Changed: true}))
 
 	rr := doLinkJSON(t, h, http.MethodGet, "/links/recent-changes?days=7&limit=10", nil)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -244,17 +251,20 @@ func TestHandler_ListRecentChanges(t *testing.T) {
 
 func TestHandler_List_FolderGate(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	frepo := folders.NewRepository(pool)
 	lrepo := links.NewRepository(pool)
-	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Locked", Color: "#abc"})
+	f, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Locked", Color: "#abc"})
 	require.NoError(t, err)
-	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://in-locked", Title: "In", FolderID: &f.ID})
+	_, err = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://in-locked", Title: "In", FolderID: &f.ID})
 	require.NoError(t, err)
 
 	hash := "bcrypt-hash-placeholder"
 	h := links.NewHandler(lrepo, nil).WithFolderGate(stubFolderLookup{hash: &hash}, []byte("secret-key-at-least-32-bytes-long!!"))
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/links", h.Mount)
 
 	rr := doLinkJSON(t, r, http.MethodGet, "/links/?folder_id="+linkID(f.ID), nil)
@@ -263,7 +273,7 @@ func TestHandler_List_FolderGate(t *testing.T) {
 }
 
 func TestHandler_List_FolderLookupErr(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, stubFolderLookup{err: assert.AnError}, nil)
+	h, _, _ := newLinksRouter(t, nil, stubFolderLookup{err: assert.AnError}, nil)
 	rr := doLinkJSON(t, h, http.MethodGet, "/links/?folder_id=1", nil)
 	require.NotEqual(t, http.StatusOK, rr.Code)
 }
@@ -274,36 +284,36 @@ func TestHandler_WithMetadataFetcher_Chains(t *testing.T) {
 }
 
 func TestRepository_UpdateOGImageAndClear(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	l, err := lrepo.Create(ctx, links.CreateInput{URL: "https://og.example", Title: "og"})
+	ctx, uid, lrepo, _ := setup(t)
+	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://og.example", Title: "og"})
 	require.NoError(t, err)
 
-	require.NoError(t, lrepo.UpdateOGImage(ctx, l.ID, "/api/files/og/1.jpg"))
-	got, err := lrepo.Get(ctx, l.ID)
+	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, l.ID, "/api/files/og/1.jpg"))
+	got, err := lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got.OGImageURL)
 	assert.Equal(t, "/api/files/og/1.jpg", *got.OGImageURL)
 	assert.Equal(t, "ok", got.PreviewStatus)
 
-	require.NoError(t, lrepo.ClearOGImage(ctx, l.ID))
-	got, err = lrepo.Get(ctx, l.ID)
+	require.NoError(t, lrepo.ClearOGImage(ctx, uid, l.ID))
+	got, err = lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
 	assert.Nil(t, got.OGImageURL)
 
-	assert.ErrorIs(t, lrepo.UpdateOGImage(ctx, 99999, "/x"), httperr.ErrNotFound)
-	assert.ErrorIs(t, lrepo.ClearOGImage(ctx, 99999), httperr.ErrNotFound)
+	assert.ErrorIs(t, lrepo.UpdateOGImage(ctx, uid, 99999, "/x"), httperr.ErrNotFound)
+	assert.ErrorIs(t, lrepo.ClearOGImage(ctx, uid, 99999), httperr.ErrNotFound)
 }
 
 func TestRepository_ClickAndResolveBySlug(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	l, err := lrepo.Create(ctx, links.CreateInput{URL: "https://slug-go.example", Title: "Slug Go"})
+	ctx, uid, lrepo, _ := setup(t)
+	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://slug-go.example", Title: "Slug Go"})
 	require.NoError(t, err)
 
 	url, err := lrepo.ClickAndResolveBySlug(ctx, l.Slug)
 	require.NoError(t, err)
 	assert.Equal(t, "https://slug-go.example", url)
 
-	got, err := lrepo.Get(ctx, l.ID)
+	got, err := lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, got.ClickCount)
 
@@ -312,50 +322,52 @@ func TestRepository_ClickAndResolveBySlug(t *testing.T) {
 }
 
 func TestRepository_Create_UserSlugTaken(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
+	ctx, uid, lrepo, _ := setup(t)
 	slug := "my-slug"
-	_, err := lrepo.Create(ctx, links.CreateInput{URL: "https://s1.example", Title: "A", Slug: &slug})
+	_, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://s1.example", Title: "A", Slug: &slug})
 	require.NoError(t, err)
-	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://s2.example", Title: "B", Slug: &slug})
+	_, err = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://s2.example", Title: "B", Slug: &slug})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "slug")
 }
 
 func TestRepository_Create_AutoSlugCollision(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	a, err := lrepo.Create(ctx, links.CreateInput{URL: "https://c1.example", Title: "Same Title"})
+	ctx, uid, lrepo, _ := setup(t)
+	a, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://c1.example", Title: "Same Title"})
 	require.NoError(t, err)
-	b, err := lrepo.Create(ctx, links.CreateInput{URL: "https://c2.example", Title: "Same Title"})
+	b, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://c2.example", Title: "Same Title"})
 	require.NoError(t, err)
 	assert.NotEqual(t, a.Slug, b.Slug)
 	assert.Contains(t, b.Slug, a.Slug)
 }
 
 func TestRepository_Delete_NotFound(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	err := lrepo.Delete(ctx, 99999)
+	ctx, uid, lrepo, _ := setup(t)
+	err := lrepo.Delete(ctx, uid, 99999)
 	require.Error(t, err)
 }
 
 func TestRepository_GetBySlug_NotFound(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	_, err := lrepo.GetBySlug(ctx, "missing")
+	ctx, uid, lrepo, _ := setup(t)
+	_, err := lrepo.GetBySlug(ctx, uid, "missing")
 	require.Error(t, err)
 }
 
 func TestRepository_Create_WithTagsAndFolder(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	lrepo := links.NewRepository(pool)
 	trepo := tags.NewRepository(pool)
 	frepo := folders.NewRepository(pool)
 
-	tag, err := trepo.Create(ctx, tags.CreateInput{Name: "t", Color: "#abc"})
+	tag, err := trepo.Create(ctx, uid, tags.CreateInput{Name: "t", Color: "#abc"})
 	require.NoError(t, err)
-	f, err := frepo.Create(ctx, folders.CreateInput{Name: "F", Color: "#def"})
+	f, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "F", Color: "#def"})
 	require.NoError(t, err)
 
-	l, err := lrepo.Create(ctx, links.CreateInput{
+	l, err := lrepo.Create(ctx, uid, links.CreateInput{
 		URL: "https://tf.example", Title: "TF", TagIDs: []int64{tag.ID}, FolderID: &f.ID,
 	})
 	require.NoError(t, err)
@@ -366,16 +378,18 @@ func TestRepository_Create_WithTagsAndFolder(t *testing.T) {
 
 func TestRepository_Update_FullFieldCoverage(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	lrepo := links.NewRepository(pool)
 	trepo := tags.NewRepository(pool)
 	frepo := folders.NewRepository(pool)
 
-	tag, err := trepo.Create(ctx, tags.CreateInput{Name: "u", Color: "#abc"})
+	tag, err := trepo.Create(ctx, uid, tags.CreateInput{Name: "u", Color: "#abc"})
 	require.NoError(t, err)
-	f, err := frepo.Create(ctx, folders.CreateInput{Name: "UF", Color: "#def"})
+	f, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "UF", Color: "#def"})
 	require.NoError(t, err)
-	l, err := lrepo.Create(ctx, links.CreateInput{URL: "https://full.example", Title: "Full"})
+	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://full.example", Title: "Full"})
 	require.NoError(t, err)
 
 	newURL := "https://full-renamed.example"
@@ -383,7 +397,7 @@ func TestRepository_Update_FullFieldCoverage(t *testing.T) {
 	desc := "a description"
 	slug := "custom-full-slug"
 	tags := []int64{tag.ID}
-	updated, err := lrepo.Update(ctx, l.ID, links.UpdateInput{
+	updated, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{
 		URL:         &newURL,
 		Title:       &newTitle,
 		Description: &desc,
@@ -404,7 +418,7 @@ func TestRepository_Update_FullFieldCoverage(t *testing.T) {
 	require.Len(t, updated.Tags, 1)
 
 	// Clear folder + regenerate slug from title.
-	cleared, err := lrepo.Update(ctx, l.ID, links.UpdateInput{
+	cleared, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{
 		FolderIDSet: true,
 		FolderID:    nil,
 		SlugSet:     true,
@@ -415,20 +429,20 @@ func TestRepository_Update_FullFieldCoverage(t *testing.T) {
 	assert.NotEmpty(t, cleared.Slug)
 
 	// Empty patch still returns the row.
-	same, err := lrepo.Update(ctx, l.ID, links.UpdateInput{})
+	same, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{})
 	require.NoError(t, err)
 	assert.Equal(t, cleared.ID, same.ID)
 }
 
 func TestRepository_Update_SlugTaken(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
+	ctx, uid, lrepo, _ := setup(t)
 	slugA := "taken-slug"
-	_, err := lrepo.Create(ctx, links.CreateInput{URL: "https://a1.example", Title: "A", Slug: &slugA})
+	_, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://a1.example", Title: "A", Slug: &slugA})
 	require.NoError(t, err)
-	b, err := lrepo.Create(ctx, links.CreateInput{URL: "https://b1.example", Title: "B"})
+	b, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b1.example", Title: "B"})
 	require.NoError(t, err)
 
-	_, err = lrepo.Update(ctx, b.ID, links.UpdateInput{Slug: &slugA, SlugSet: true})
+	_, err = lrepo.Update(ctx, uid, b.ID, links.UpdateInput{Slug: &slugA, SlugSet: true})
 	require.Error(t, err)
 	var he *httperr.Error
 	require.ErrorAs(t, err, &he)
@@ -436,15 +450,15 @@ func TestRepository_Update_SlugTaken(t *testing.T) {
 }
 
 func TestRepository_UpdatePreview_InvalidStatus(t *testing.T) {
-	ctx, lrepo, _ := setup(t)
-	l, err := lrepo.Create(ctx, links.CreateInput{URL: "https://pv.example", Title: "pv"})
+	ctx, uid, lrepo, _ := setup(t)
+	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://pv.example", Title: "pv"})
 	require.NoError(t, err)
-	err = lrepo.UpdatePreview(ctx, l.ID, links.PreviewStatus("nope"), nil, nil, nil, nil)
+	err = lrepo.SystemUpdatePreview(ctx, l.ID, links.PreviewStatus("nope"), nil, nil, nil, nil)
 	require.Error(t, err)
 }
 
 func TestHandler_Update_InvalidJSON(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, nil, nil)
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
 	created := doLinkJSON(t, h, http.MethodPost, "/links/", map[string]any{"url": "https://ij.example", "title": "ij"})
 	var l links.Link
 	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &l))
@@ -456,7 +470,7 @@ func TestHandler_Update_InvalidJSON(t *testing.T) {
 }
 
 func TestHandler_Update_SlugViaJSON(t *testing.T) {
-	h, _ := newLinksRouter(t, nil, nil, nil)
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
 	created := doLinkJSON(t, h, http.MethodPost, "/links/", map[string]any{"url": "https://sj.example", "title": "SJ"})
 	var l links.Link
 	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &l))

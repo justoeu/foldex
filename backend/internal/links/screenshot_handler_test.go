@@ -25,6 +25,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/storage"
+
+	"foldex/internal/pkg/authctx"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 // pngHeader is the 8-byte magic prefix every PNG starts with. http.DetectContentType
@@ -128,7 +132,7 @@ func newFakeRepo() *fakeRepo {
 	return &fakeRepo{links: map[int64]Link{}, updatedURL: map[int64]string{}}
 }
 
-func (f *fakeRepo) Get(_ context.Context, id int64) (Link, error) {
+func (f *fakeRepo) Get(_ context.Context, _ authctx.UserID, id int64) (Link, error) {
 	if f.getErr != nil {
 		return Link{}, f.getErr
 	}
@@ -139,7 +143,7 @@ func (f *fakeRepo) Get(_ context.Context, id int64) (Link, error) {
 	return l, nil
 }
 
-func (f *fakeRepo) UpdateOGImage(_ context.Context, id int64, imageURL string) error {
+func (f *fakeRepo) UpdateOGImage(_ context.Context, _ authctx.UserID, id int64, imageURL string) error {
 	if f.updateErr != nil {
 		return f.updateErr
 	}
@@ -147,7 +151,7 @@ func (f *fakeRepo) UpdateOGImage(_ context.Context, id int64, imageURL string) e
 	return nil
 }
 
-func (f *fakeRepo) ClearOGImage(_ context.Context, id int64) error {
+func (f *fakeRepo) ClearOGImage(_ context.Context, _ authctx.UserID, id int64) error {
 	if f.clearErr != nil {
 		return f.clearErr
 	}
@@ -184,6 +188,7 @@ func buildRouter(t *testing.T, sc Screenshotter, up Uploader, repo screenshotRep
 	}
 
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Route("/api", func(api chi.Router) {
 		api.Post("/links/{id}/screenshot", sh.CaptureAndStore)
 		api.Post("/links/{id}/image", sh.UploadImage)
@@ -330,6 +335,7 @@ func TestCaptureAndStore_RejectsNonPublicTarget(t *testing.T) {
 		logger:        newTestLogger(),
 	}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Post("/api/links/{id}/screenshot", sh.CaptureAndStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
@@ -366,6 +372,7 @@ func TestCaptureAndStore_NilPolicyFailsClosed(t *testing.T) {
 		logger:        newTestLogger(),
 	}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Post("/api/links/{id}/screenshot", sh.CaptureAndStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
@@ -785,6 +792,7 @@ func TestDeleteImage_Success(t *testing.T) {
 	repo := newFakeRepo()
 	sh := &ScreenshotHandler{repo: repo, storage: up, logger: newTestLogger()}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Delete("/api/links/{id}/image", sh.DeleteImage)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/links/8/image", nil)
@@ -798,6 +806,7 @@ func TestDeleteImage_Success(t *testing.T) {
 func TestDeleteImage_InvalidID(t *testing.T) {
 	sh := &ScreenshotHandler{repo: newFakeRepo(), storage: newFakeUploader(), logger: newTestLogger()}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Delete("/api/links/{id}/image", sh.DeleteImage)
 	req := httptest.NewRequest(http.MethodDelete, "/api/links/abc/image", nil)
 	w := httptest.NewRecorder()
@@ -810,6 +819,7 @@ func TestDeleteImage_RepoError(t *testing.T) {
 	repo.clearErr = errors.New("db")
 	sh := &ScreenshotHandler{repo: repo, storage: newFakeUploader(), logger: newTestLogger()}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Delete("/api/links/{id}/image", sh.DeleteImage)
 	req := httptest.NewRequest(http.MethodDelete, "/api/links/1/image", nil)
 	w := httptest.NewRecorder()

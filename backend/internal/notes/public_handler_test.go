@@ -19,8 +19,10 @@ import (
 
 func TestPublicHandler_RendersSanitizedHTML(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := notes.NewRepository(pool)
-	created, err := repo.Create(context.Background(), notes.CreateInput{
+	created, err := repo.Create(context.Background(), uid, notes.CreateInput{
 		Title:    "<b>Bold</b> Title",
 		BodyHTML: "<p>hello <strong>world</strong></p>",
 	})
@@ -43,15 +45,17 @@ func TestPublicHandler_RendersSanitizedHTML(t *testing.T) {
 	assert.Contains(t, html, "&lt;b&gt;Bold&lt;/b&gt; Title")
 	assert.NotContains(t, html, "<b>Bold</b> Title")
 
-	got, err := repo.Get(context.Background(), created.ID)
+	got, err := repo.Get(context.Background(), uid, created.ID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, got.ClickCount, "viewing the public page must log a click")
 }
 
 func TestPublicHandler_ByID(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := notes.NewRepository(pool)
-	created, err := repo.Create(context.Background(), notes.CreateInput{Title: "ById", BodyHTML: "<p>x</p>"})
+	created, err := repo.Create(context.Background(), uid, notes.CreateInput{Title: "ById", BodyHTML: "<p>x</p>"})
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
@@ -65,6 +69,8 @@ func TestPublicHandler_ByID(t *testing.T) {
 
 func TestPublicHandler_NotFound(t *testing.T) {
 	pool := testdb.New(t)
+
+	_ = testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := notes.NewRepository(pool)
 	r := chi.NewRouter()
 	notes.NewPublicHandler(repo).Mount(r)

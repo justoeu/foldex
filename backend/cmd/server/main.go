@@ -283,6 +283,10 @@ func (a backupStorageAdapter) OpenObject(ctx context.Context, key string) (io.Re
 	return a.c.OpenObject(ctx, key)
 }
 
+func (a backupStorageAdapter) DeleteObject(ctx context.Context, key string) error {
+	return a.c.DeleteObject(ctx, key)
+}
+
 func (a backupStorageAdapter) PutObjectStream(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
 	return a.c.PutObjectStream(ctx, key, r, size, contentType)
 }
