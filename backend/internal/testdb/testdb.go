@@ -112,6 +112,16 @@ func migrationsDir() string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "db", "migrations"))
 }
 
+// resetStatement is a package var so TestResetCoversEveryTable can check it
+// against information_schema instead of relying on review.
+var resetStatement = `TRUNCATE
+	    click_log, link_tag, note, link, folder, tag,
+	    push_subscription, app_setting,
+	    session_used_token, session, oauth_state, api_token,
+	    recovery_code, totp_secret, email_otp, auth_challenge,
+	    password_reset, invite, user_identity, app_user
+	    RESTART IDENTITY CASCADE`
+
 // Reset truncates all data tables but keeps the schema. CASCADE handles FK
 // dependencies inside the TRUNCATE, so order is not load-bearing — but every
 // data table must appear. Missing one (as the previous list missed `folder`
@@ -124,13 +134,7 @@ func Reset(ctx context.Context, pool *pgxpool.Pool) error {
 	// note, then app_setting, each time producing cross-test leakage.
 	// TestResetCoversEveryTable in drift_test.go fails if a new table is added
 	// without being listed here.
-	_, err := pool.Exec(ctx, `TRUNCATE
-	    click_log, link_tag, note, link, folder, tag,
-	    push_subscription, app_setting,
-	    session_used_token, session, oauth_state, api_token,
-	    recovery_code, totp_secret, email_otp, auth_challenge,
-	    password_reset, invite, user_identity, app_user
-	    RESTART IDENTITY CASCADE`)
+	_, err := pool.Exec(ctx, resetStatement)
 	return err
 }
 
