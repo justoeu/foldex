@@ -59,7 +59,7 @@ Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `12
 | Extension    | Vanilla MV3 (sem bundler)                                            | Popup tem ~80 LoC. Sem build = "load unpacked" direto. |
 | Node runtime | **bun 1.3** (oven/bun:1.3-alpine)                                    | Bate com Vite 8 / Vitest 4 e resolve melhor packages platform-specific que npm em mirror privado. |
 
-## Data model (estado atual, após 15 migrations)
+## Data model (estado atual, após 17 migrations)
 
 ```sql
 -- 000001_init.up.sql        (+ pg_trgm)
@@ -78,6 +78,14 @@ Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `12
 -- 000014_notes              → tabela `note` + polimorfiza link_tag/click_log via entity_kind (ADR-27)
 -- 000015_folder_password    → `folder.password_hash` nullable, bcrypt (ADR-28)
 -- 000016_master_password_and_hint → tabela `app_setting` (KV, master password) + `folder.password_hint` (ADR-29)
+-- 000017_multi_user_auth → multi-tenant (ADR-30/31/32). 12 tabelas de identidade
+--   (app_user, user_identity, session, session_used_token, invite, password_reset,
+--    auth_challenge, email_otp, totp_secret, recovery_code, api_token, oauth_state);
+--   `user_id NOT NULL` em link/note/folder/tag/push_subscription; `link.url` e
+--   `tag.name` viram UNIQUE (user_id, …) — `link.slug`/`note.slug` continuam
+--   GLOBAIS porque /go/{slug} e /n/{slug} resolvem sem sessão; FKs COMPOSTAS
+--   (user_id, folder_id) impedem referência cross-tenant no próprio banco; a
+--   master password do ADR-29 migra de `app_setting` para `app_user`.
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 

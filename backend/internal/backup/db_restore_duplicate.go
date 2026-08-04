@@ -62,7 +62,7 @@ func restoreDuplicate(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap *
 		if errors.Is(err, pgx.ErrNoRows) {
 			// URL UNIQUE — attach tags/clicks to existing row.
 			warnings = append(warnings, fmt.Sprintf("link %q já existia — não duplicado (URL é UNIQUE)", l.URL))
-			if err2 := tx.QueryRow(ctx, `SELECT id FROM link WHERE url=$1`, l.URL).Scan(&newID); err2 != nil {
+			if err2 := tx.QueryRow(ctx, `SELECT id FROM link WHERE user_id=$2 AND url=$1`, l.URL, int64(uid)).Scan(&newID); err2 != nil {
 				return inserted, warnings, m, fmt.Errorf("fetch existing link: %w", err2)
 			}
 		} else if err != nil {
