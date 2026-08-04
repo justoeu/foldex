@@ -125,7 +125,7 @@ func attachPolymorphicTags(ctx context.Context, tx pgx.Tx, m idMapping, snap *Sn
 }
 
 // copyPolymorphicClicks bulk-inserts click_log for mapped links and notes.
-func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, m idMapping, snap *Snapshot, inserted, skipped *Counts, countSkips bool) error {
+func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m idMapping, snap *Snapshot, inserted, skipped *Counts, countSkips bool) error {
 	if len(snap.ClickLogs)+len(snap.NoteClicks) == 0 {
 		return nil
 	}
@@ -138,7 +138,7 @@ func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, m idMapping, snap *Sn
 			}
 			continue
 		}
-		rows = append(rows, []any{"link", linkID, c.ClickedAt})
+		rows = append(rows, []any{"link", linkID, c.ClickedAt, int64(uid)})
 	}
 	for _, c := range snap.NoteClicks {
 		noteID, ok := m.noteMap[c.NoteID]
@@ -148,14 +148,14 @@ func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, m idMapping, snap *Sn
 			}
 			continue
 		}
-		rows = append(rows, []any{"note", noteID, c.ClickedAt})
+		rows = append(rows, []any{"note", noteID, c.ClickedAt, int64(uid)})
 	}
 	if len(rows) == 0 {
 		return nil
 	}
 	if _, err := tx.CopyFrom(ctx,
 		pgx.Identifier{"click_log"},
-		[]string{"entity_kind", "entity_id", "clicked_at"},
+		[]string{"entity_kind", "entity_id", "clicked_at", "user_id"},
 		pgx.CopyFromRows(rows),
 	); err != nil {
 		return fmt.Errorf("copy click_log: %w", err)

@@ -83,7 +83,7 @@ func restoreDuplicate(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap *
 	if err := attachPolymorphicTags(ctx, tx, m, snap, &inserted, nil, false); err != nil {
 		return inserted, warnings, m, err
 	}
-	if err := copyPolymorphicClicks(ctx, tx, m, snap, &inserted, nil, false); err != nil {
+	if err := copyPolymorphicClicks(ctx, tx, uid, m, snap, &inserted, nil, false); err != nil {
 		return inserted, warnings, m, err
 	}
 

@@ -645,10 +645,10 @@ func insertLinkInTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, url, tit
 	// inserts — we don't want re-import to inflate counts on existing links.
 	if !dup && clickCount > 0 {
 		if _, err := tx.Exec(ctx, `
-            INSERT INTO click_log (entity_kind, entity_id, clicked_at)
-            SELECT 'link', $1, COALESCE($2::timestamptz, now())
+            INSERT INTO click_log (entity_kind, entity_id, clicked_at, user_id)
+            SELECT 'link', $1, COALESCE($2::timestamptz, now()), $4
             FROM generate_series(1, $3::int)
-        `, id, createdAt, clickCount); err != nil {
+        `, id, createdAt, clickCount, int64(uid)); err != nil {
 			return 0, false, false, fmt.Errorf("backfill click_log: %w", err)
 		}
 	}

@@ -88,7 +88,7 @@ func restoreSkip(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap *Snaps
 	if err := attachPolymorphicTags(ctx, tx, m, snap, &inserted, &skipped, true); err != nil {
 		return inserted, skipped, m, err
 	}
-	if err := copyPolymorphicClicks(ctx, tx, m, snap, &inserted, &skipped, true); err != nil {
+	if err := copyPolymorphicClicks(ctx, tx, uid, m, snap, &inserted, &skipped, true); err != nil {
 		return inserted, skipped, m, err
 	}
 

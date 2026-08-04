@@ -29,14 +29,15 @@ func (r *Repository) SystemViewAndResolve(ctx context.Context, idOrSlug string) 
 	defer tx.Rollback(ctx)
 
 	var id int64
+	var owner int64
 	where, arg := "n.slug = $1", any(idOrSlug)
 	if n, ok := parsePositiveID(idOrSlug); ok {
 		where, arg = "n.id = $1", any(n)
 	}
 	// Public /n must 404 for notes inside password-protected folders.
 	err = tx.QueryRow(ctx, `
-        SELECT n.id FROM note n
-        WHERE `+where+` AND `+folders.SQLNotInLockedFolder("n"), arg).Scan(&id)
+        SELECT n.id, n.user_id FROM note n
+        WHERE `+where+` AND `+folders.SQLNotInLockedFolder("n"), arg).Scan(&id, &owner)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Note{}, httperr.ErrNotFound
 	}
@@ -44,7 +45,10 @@ func (r *Repository) SystemViewAndResolve(ctx context.Context, idOrSlug string) 
 		return Note{}, fmt.Errorf("resolve note: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id) VALUES ('note', $1)`, id); err != nil {
+	// Owner from the resolved row — /n/ is public, there is no session here.
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO click_log (entity_kind, entity_id, user_id) VALUES ('note', $1, $2)`,
+		id, owner); err != nil {
 		return Note{}, fmt.Errorf("insert click_log: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

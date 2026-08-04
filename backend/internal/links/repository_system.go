@@ -47,12 +47,13 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg
 	defer tx.Rollback(ctx)
 
 	var id int64
+	var owner int64
 	var u string
 	// 404 for links inside password-protected folders — public /go must not
 	// leak destinations (or inflate click_log) without unlock.
 	err = tx.QueryRow(ctx, `
-        SELECT l.id, l.url FROM link l
-        WHERE `+where+` AND `+folders.SQLNotInLockedFolder("l"), arg).Scan(&id, &u)
+        SELECT l.id, l.user_id, l.url FROM link l
+        WHERE `+where+` AND `+folders.SQLNotInLockedFolder("l"), arg).Scan(&id, &owner, &u)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", httperr.ErrNotFound
 	}
@@ -60,7 +61,12 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg
 		return "", fmt.Errorf("resolve link: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id) VALUES ('link', $1)`, id); err != nil {
+	// user_id comes from the row we just resolved, not from a session — /go/ is
+	// public. It is a denormalized accelerator (migration 000018); entity_kind /
+	// entity_id remain authoritative for WHAT was clicked.
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO click_log (entity_kind, entity_id, user_id) VALUES ('link', $1, $2)`,
+		id, owner); err != nil {
 		return "", fmt.Errorf("insert click_log: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
