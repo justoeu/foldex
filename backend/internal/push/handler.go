@@ -88,7 +88,7 @@ func (h *Handler) unsubscribe(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_endpoint", "endpoint is required"))
 		return
 	}
-	if err := h.repo.DeleteByEndpoint(r.Context(), in.Endpoint); err != nil {
+	if err := h.repo.DeleteByEndpointForUser(r.Context(), authctx.MustUser(r.Context()), in.Endpoint); err != nil {
 		httperr.Write(w, err)
 		return
 	}

@@ -62,7 +62,7 @@ func TestHandler_List_QueryParams(t *testing.T) {
 	ctx := context.Background()
 	tag, err := func() (int64, error) {
 		var id int64
-		err := pool.QueryRow(ctx, `INSERT INTO tag (name, color) VALUES ('t', '#fff') RETURNING id`).Scan(&id)
+		err := pool.QueryRow(ctx, `INSERT INTO tag (user_id, name, color) VALUES ($1, 't', '#fff') RETURNING id`, int64(uid)).Scan(&id)
 		return id, err
 	}()
 	require.NoError(t, err)

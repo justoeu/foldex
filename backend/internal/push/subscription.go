@@ -88,11 +88,17 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID) ([]Subscripti
 // DeleteByEndpoint is invoked by the sender when the push service returns
 // 404/410 — the convention for "this endpoint is gone, stop sending". No-op
 // when the row doesn't exist (idempotent).
-// DeleteByEndpoint is deliberately NOT owner-scoped: it is called from the
-// sender's 404/410 handling (RFC 8030 §7.3), where the push service has told us
-// the channel is dead. The endpoint is globally unique, so removing it by
-// endpoint alone is correct regardless of who currently owns the row.
+// DeleteByEndpoint is deliberately NOT owner-scoped: it is called ONLY from the
+// sender's 404/410 handling (RFC 8030 §7.3), where the push service itself has
+// told us the channel is dead. The endpoint is globally unique, so removing it
+// by endpoint alone is correct regardless of who currently owns the row.
+//
+// The user-facing DELETE /api/push/subscriptions must NOT use this — it takes
+// the endpoint from the request body, so an unscoped delete would let anyone who
+// learns another user's endpoint silence their notifications. Use
+// DeleteByEndpointForUser there.
 func (r *Repository) DeleteByEndpoint(ctx context.Context, endpoint string) error {
+	//nolint:tenantscope // sender-only; see doc comment above
 	_, err := r.pool.Exec(ctx, `DELETE FROM push_subscription WHERE endpoint = $1`, endpoint)
 	if err != nil {
 		return fmt.Errorf("delete push subscription: %w", err)
@@ -103,6 +109,18 @@ func (r *Repository) DeleteByEndpoint(ctx context.Context, endpoint string) erro
 // MarkUsed bumps last_used_at after a successful Notify. Used for
 // observability — old `last_used_at` values are candidates for pruning when
 // the user dropped the foldex tab/extension years ago.
+// DeleteByEndpointForUser is the user-facing unsubscribe. Silent no-op when the
+// endpoint belongs to someone else — the caller returns 204 either way, so this
+// cannot be used to probe whether an endpoint exists on another account.
+func (r *Repository) DeleteByEndpointForUser(ctx context.Context, uid authctx.UserID, endpoint string) error {
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM push_subscription WHERE user_id = $1 AND endpoint = $2`, int64(uid), endpoint)
+	if err != nil {
+		return fmt.Errorf("delete push subscription: %w", err)
+	}
+	return nil
+}
+
 func (r *Repository) MarkUsed(ctx context.Context, id int64) error {
 	_, err := r.pool.Exec(ctx, `UPDATE push_subscription SET last_used_at = now() WHERE id = $1`, id)
 	if err != nil {

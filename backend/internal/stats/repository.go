@@ -51,19 +51,20 @@ func (r *Repository) Summary(ctx context.Context, uid authctx.UserID) (Summary, 
             SELECT entity_id, count(*)::bigint AS cnt
             FROM click_log
             WHERE entity_kind = 'link'
+              AND entity_id IN (SELECT id FROM link WHERE user_id = $1)
             GROUP BY entity_id
         )
         SELECT host, sum(cnt)::bigint
         FROM (
             SELECT regexp_replace(l.url, '^https?://([^/]+).*$', '\1') AS host, lc.cnt
             FROM link_clicks lc
-            JOIN link l ON l.id = lc.entity_id
+            JOIN link l ON l.id = lc.entity_id AND l.user_id = $1
         ) t
         WHERE host <> ''
         GROUP BY host
         ORDER BY 2 DESC
         LIMIT 1
-    `).Scan(&s.TopHost, &s.TopHostClicks)
+    `, int64(uid)).Scan(&s.TopHost, &s.TopHostClicks)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return s, fmt.Errorf("top host: %w", err)
 	}

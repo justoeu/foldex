@@ -17,7 +17,11 @@ import (
 // tenantTables are the tables that gained user_id in migration 000017. A query
 // reading from one of them without a user_id predicate is a cross-tenant leak
 // unless it lives in a file that declares itself system-scoped.
-var tenantTablePat = regexp.MustCompile(`(?i)\b(?:FROM|INTO|UPDATE)\s+(link|note|folder|tag)\b`)
+// JOIN is in the alternation because leaving it out is exactly how a real leak
+// got past this check: stats.Summary's top-host query reads `FROM click_log`
+// and reaches the tenant table only via `JOIN link l`, so the pattern never
+// inspected it and the query shipped with no user_id at all.
+var tenantTablePat = regexp.MustCompile(`(?i)\b(?:FROM|INTO|UPDATE|JOIN)\s+(link|note|folder|tag|push_subscription)\b`)
 
 // exemptFiles are allowed to query tenant tables unscoped. Each is either a
 // public session-less route or a background worker that sweeps every tenant by
@@ -36,13 +40,16 @@ var exemptFiles = map[string]string{
 // Keyed by a distinctive substring. Each needs a reason; the list is short on
 // purpose — anything longer means the rule is wrong, not the code.
 var exemptQueries = map[string]string{
-	"EXISTS(SELECT 1 FROM link WHERE slug =": "slug is globally unique (public /go/{slug})",
-	"EXISTS(SELECT 1 FROM note WHERE slug =": "slug is globally unique (public /n/{slug})",
-	"SELECT id FROM link WHERE slug = $1":    "slug is globally unique",
-	"FROM folder _lf":                        "lock-filter fragment; the caller supplies the tenant predicate",
-	"FROM _cascade_subtree":                  "subtree table is materialized owner-scoped by DeleteCascade",
-	"FROM _restore_link_tags":                "temp table built from an owner-scoped id mapping",
-	"FROM _restore_clicks":                   "temp table built from an owner-scoped id mapping",
+	"EXISTS(SELECT 1 FROM link WHERE slug =":            "slug is globally unique (public /go/{slug})",
+	"EXISTS(SELECT 1 FROM note WHERE slug =":            "slug is globally unique (public /n/{slug})",
+	"SELECT id FROM link WHERE slug = $1":               "slug is globally unique",
+	"FROM folder _lf":                                   "lock-filter fragment; the caller supplies the tenant predicate",
+	"FROM _cascade_subtree":                             "subtree table is materialized owner-scoped by DeleteCascade",
+	"FROM _restore_link_tags":                           "temp table built from an owner-scoped id mapping",
+	"FROM _restore_clicks":                              "temp table built from an owner-scoped id mapping",
+	"DELETE FROM push_subscription WHERE endpoint = $1": "sender-only RFC 8030 404/410 cleanup; the user-facing unsubscribe uses DeleteByEndpointForUser",
+	"ON CONFLICT (endpoint) DO UPDATE":                  "endpoint is a physical browser channel and stays globally unique (migration 000017 §8)",
+	"UPDATE push_subscription SET last_used_at":         "id comes straight from the owner-scoped List(ctx, uid) the sender just ran",
 
 	// The five below are FRAGMENTS: named constants and UNION arms whose OUTER
 	// WHERE is appended by the caller (links.linkFrom, notes.noteFrom, the two

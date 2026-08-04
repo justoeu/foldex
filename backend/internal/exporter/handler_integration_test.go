@@ -18,6 +18,8 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 func seed(t *testing.T) (*chi.Mux, func()) {
@@ -35,6 +37,7 @@ func seed(t *testing.T) (*chi.Mux, func()) {
 	})
 
 	r := chi.NewMux()
+	r.Use(authctxtest.Middleware(uid))
 	exporter.NewHandler(pool).Mount(r)
 	return r, pool.Close
 }
@@ -107,6 +110,7 @@ func TestExportNetscape_EscapesHostileURL(t *testing.T) {
 	require.NoError(t, err)
 
 	r := chi.NewMux()
+	r.Use(authctxtest.Middleware(uid))
 	exporter.NewHandler(pool).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()

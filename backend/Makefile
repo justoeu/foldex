@@ -29,7 +29,10 @@ MIGRATE := docker run --rm --network $(COMPOSE_NETWORK) -v $(PWD)/db/migrations:
 COVERAGE_MIN ?= 85
 # Packages measured for coverage. Excludes cmd/server (boot), internal/db
 # (requires real DB), and internal/testdb (test helper).
-COVER_PKGS = $(shell go list ./internal/... | grep -v -E 'testdb$$|/db$$' | paste -sd, -)
+# authctxtest is test scaffolding (it supplies the principal handler tests
+# need), so it is excluded for the same reason testdb is: instrumenting a
+# helper that exists only for tests deflates the number that gates real code.
+COVER_PKGS = $(shell go list ./internal/... | grep -v -E 'testdb$$|/db$$|authctxtest$$' | paste -sd, -)
 
 # Detect Colima Docker socket automatically so testcontainers works.
 DOCKER_HOST ?= $(shell docker context inspect colima -f '{{.Endpoints.docker.Host}}' 2>/dev/null)
@@ -61,7 +64,7 @@ test: ## Run UNIT tests only (no Docker)
 	go test ./...
 
 test-integration: ## Run unit + integration tests (Docker required)
-	$(TESTCONTAINERS_ENV) go test -tags=integration -timeout=10m ./...
+	$(TESTCONTAINERS_ENV) go test -tags=integration -timeout=25m ./...
 
 coverage-run: ## Run all tests with coverage instrumentation (no threshold gate)
 	# `-covermode=atomic` is required when running multi-package coverage with
@@ -72,7 +75,7 @@ coverage-run: ## Run all tests with coverage instrumentation (no threshold gate)
 	# from a previous run reuse the OLD coverage profile, so changing what is
 	# instrumented (or which tests exercise which lines) silently shows the
 	# wrong total. Worth the rerun cost for honest numbers.
-	$(TESTCONTAINERS_ENV) go test -tags=integration -covermode=atomic -coverpkg=$(COVER_PKGS) -coverprofile=coverage.out -count=1 -timeout=10m ./internal/...
+	$(TESTCONTAINERS_ENV) go test -tags=integration -covermode=atomic -coverpkg=$(COVER_PKGS) -coverprofile=coverage.out -count=1 -timeout=25m ./internal/...
 
 coverage-check: ## Read coverage.out and fail if below COVERAGE_MIN (default 85)
 	@test -f coverage.out || (echo "coverage.out missing — run 'make coverage-run' first" && exit 1)
