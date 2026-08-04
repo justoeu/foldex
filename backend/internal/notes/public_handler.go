@@ -31,7 +31,7 @@ func (h *PublicHandler) view(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_target", "target is required"))
 		return
 	}
-	n, err := h.repo.ViewAndResolve(r.Context(), raw)
+	n, err := h.repo.SystemViewAndResolve(r.Context(), raw)
 	if err != nil {
 		if errors.Is(err, httperr.ErrNotFound) {
 			httperr.Write(w, httperr.ErrNotFound)

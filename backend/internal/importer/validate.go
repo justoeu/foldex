@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // ValidationReport is what /api/import/validate returns. It mirrors what the
@@ -44,7 +46,7 @@ type ValidationLink struct {
 // Validate parses the upload and computes conflict counts against the live
 // DB without writing anything. The frontend uses the resulting report to
 // drive the preview dialog (mode picker + folder selection).
-func Validate(ctx context.Context, pool *pgxpool.Pool, items []Item) (ValidationReport, error) {
+func Validate(ctx context.Context, pool *pgxpool.Pool, uid authctx.UserID, items []Item) (ValidationReport, error) {
 	rep := ValidationReport{
 		Counts:   ValidationCounts{},
 		Warnings: []string{},
@@ -100,7 +102,7 @@ func Validate(ctx context.Context, pool *pgxpool.Pool, items []Item) (Validation
 			urlIdx[l.URL] = i
 		}
 		rows, err := pool.Query(ctx,
-			`SELECT url FROM link WHERE url = ANY($1::text[])`, urls)
+			`SELECT url FROM link WHERE user_id = $2 AND url = ANY($1::text[])`, urls, int64(uid))
 		if err != nil {
 			return rep, fmt.Errorf("conflict links: %w", err)
 		}
@@ -125,7 +127,7 @@ func Validate(ctx context.Context, pool *pgxpool.Pool, items []Item) (Validation
 			names = append(names, n)
 		}
 		if err := pool.QueryRow(ctx,
-			`SELECT count(*) FROM tag WHERE name = ANY($1::text[])`, names).Scan(&rep.Conflicts.Tags); err != nil {
+			`SELECT count(*) FROM tag WHERE user_id = $2 AND name = ANY($1::text[])`, names, int64(uid)).Scan(&rep.Conflicts.Tags); err != nil {
 			return rep, fmt.Errorf("conflict tags: %w", err)
 		}
 	}

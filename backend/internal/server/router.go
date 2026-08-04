@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,6 +24,8 @@ import (
 	"foldex/internal/importer"
 	"foldex/internal/links"
 	"foldex/internal/notes"
+	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/logsafe"
 	"foldex/internal/push"
 	"foldex/internal/redirect"
@@ -107,6 +110,11 @@ func New(d Deps) http.Handler {
 		if d.Config.SharedSecret != "" {
 			api.Use(sharedSecretGuard(d.Config.SharedSecret))
 		}
+		// Principal resolution. Until the auth stack lands (PR2+), AUTH_ENABLED
+		// is false and every request is attributed to the bootstrap admin, so a
+		// single-user deployment behaves exactly as it did before migration
+		// 000017 — the segmentation is in place and exercised, but invisible.
+		api.Use(bootstrapPrincipal(d.Pool, d.Logger))
 		api.Route("/tags", tags.NewHandler(tags.NewRepository(d.Pool)).Mount)
 		settingsRepo := settings.NewRepository(d.Pool)
 		api.Route("/settings", settings.NewHandler(settingsRepo).Mount)
@@ -169,6 +177,54 @@ func New(d Deps) http.Handler {
 	})
 
 	return r
+}
+
+// bootstrapPrincipal attributes every request to the single bootstrap admin.
+//
+// It exists ONLY while AUTH_ENABLED is false (PR1–PR3 of ADR-30). Repositories
+// now require an explicit owner, and a zero UserID would match no rows — so
+// something has to supply one until real authentication does. Resolution is
+// "the oldest admin", which on an upgraded install is the row migration 000017
+// created and adopted every pre-existing row into.
+//
+// The lookup is cached after the first success: it is the same row on every
+// request, and a per-request SELECT on the hot path buys nothing. A failure is
+// NOT cached, so a database that comes up late recovers on the next request.
+func bootstrapPrincipal(pool *pgxpool.Pool, logger *slog.Logger) func(http.Handler) http.Handler {
+	var (
+		mu     sync.Mutex
+		cached authctx.UserID
+	)
+	resolve := func(ctx context.Context) (authctx.UserID, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if cached != 0 {
+			return cached, nil
+		}
+		var id int64
+		if err := pool.QueryRow(ctx,
+			`SELECT id FROM app_user WHERE role = 'admin' ORDER BY id LIMIT 1`).Scan(&id); err != nil {
+			return 0, err
+		}
+		cached = authctx.UserID(id)
+		return cached, nil
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			uid, err := resolve(r.Context())
+			if err != nil {
+				logger.Error("bootstrap principal unavailable", "err", err)
+				httperr.Write(w, httperr.New(http.StatusServiceUnavailable,
+					"principal_unavailable", "no bootstrap administrator is available"))
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(authctx.WithPrincipal(r.Context(), authctx.Principal{
+				UserID: uid,
+				Role:   authctx.RoleAdmin,
+				Via:    authctx.ViaSession,
+			})))
+		})
+	}
 }
 
 func healthz(pool *pgxpool.Pool) http.HandlerFunc {

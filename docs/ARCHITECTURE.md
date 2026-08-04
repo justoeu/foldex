@@ -746,9 +746,70 @@ O ADR-28 deixou a recuperação de uma senha de pasta esquecida como "edite o ba
 
 **Escopo fora do v1.** Sem "limpar todas as pastas de uma vez" (reset é por-pasta, cirúrgico, a partir de uma lista em Configurações). Sem recuperação da própria master esquecida (aí sim volta a ser edição direta no banco — é o segredo raiz). Sem dica pra master (só pra pastas).
 
+### ADR-30 — Autenticação multi-usuário: sessão por cookie, CSRF assinado, RBAC e posse por linha
+**Status:** Planned (migration 000017). **Supersede o ADR-3** ("Sem auth no MVP"). Detalhe de implementação em [`docs/SDD-AUTH-RBAC.md`](SDD-AUTH-RBAC.md).
+
+O foldex era single-user em três camadas que se sustentavam mutuamente: sem identidade (`SHARED_SECRET` responde "sim/não", nunca "quem"), sem posse (nenhuma tabela de conteúdo tem dono, e `tag.name`/`link.url` são UNIQUE **globais** — restrições que só fazem sentido com um usuário), e sem recuperação por pessoa (a master do ADR-29 é da instância). O ADR-30 troca as três de uma vez.
+
+**Posse por parâmetro explícito, não por RLS.** Todo método de repositório passa a receber `uid authctx.UserID` — um tipo distinto, não `int64`, para que argumentos trocados sejam erro de compilação. Descartamos RLS com `SET LOCAL app.user_id` por três motivos concretos: (1) quase todo método é `r.pool.Query(...)` direto em conexão pooled, então RLS exigiria converter ~60 métodos para transação explícita — **mais** churn que adicionar um parâmetro; (2) RLS **falha em vazio** — esquecer o `SET LOCAL` devolve zero linhas, indistinguível de "usuário sem dados", e isso vai para produção; o parâmetro explícito **falha na compilação** e `go build ./...` enumera todos os call sites; (3) há leitores cross-tenant legítimos (`preview.Worker.requeuePending`, `links.FindDueForCheck`) que sob RLS precisariam de `BYPASSRLS`, segundo role e segunda DSN. Convenção de reforço: toda query sem escopo mora em `repository_system.go` com métodos prefixados `System*`, e um grep no CI barra `FROM link|note|folder` sem `user_id` fora desses arquivos.
+
+**Integridade cross-tenant é do banco, não do handler.** `folder` ganha `UNIQUE (user_id, id)`, e as FKs de `link.folder_id`, `note.folder_id` e `folder.parent_id` viram compostas `(user_id, folder_id)` com `ON DELETE SET NULL (folder_id)` (lista de colunas, PG15+). Uma linha não consegue apontar para a pasta de outro tenant nem se um repositório perder o filtro. A lista de colunas é obrigatória: sem ela, apagar uma pasta tentaria anular também `user_id`, que é `NOT NULL`. Sobra **um** buraco que a FK não fecha — `link_tag` perdeu a FK para `link(id)` na 000014 ao ser polimorfizada, e `tag_id` não carrega `user_id` para compor; anexar tag alheia é barrado em `tags.SetEntityTags` e travado por teste.
+
+**`link.slug` e `note.slug` continuam UNIQUE globais.** `/go/{slug}` e `/n/{slug}` resolvem **sem sessão**, logo sem tenant — se o slug fosse único por usuário, a rota pública não teria como escolher entre dois donos. Colisão entre usuários cai no sufixo `-2`/`-3` que já existe. Pela mesma lógica invertida, `link.url` e `tag.name` viram `UNIQUE (user_id, …)`: dois usuários podem salvar a mesma URL.
+
+**Sessão: access curto em cookie + refresh opaco rotativo com detecção de reuso.** `fx_at` (15 min, `SameSite=Lax`, `Path=/`), `fx_rt` (30 d, `Strict`, `Path=/api/auth`, teto **absoluto** de 90 d porque a expiração desliza a cada rotação), `fx_csrf` (legível por JS). Todos guardados como `sha256` em `BYTEA`, nunca em claro — um dump do banco não pode ser um kit de sequestro de sessão. É `sha256` e não bcrypt porque são 256 bits de `crypto/rand` (não há dicionário a atacar) e a resolução está no hot path de toda request. Refresh consumido entra em `session_used_token`; um hit **fora** de uma janela de graça de 10 s revoga a *família* inteira. A janela existe porque sem ela qualquer duplo-mount do SPA (StrictMode, duas abas, reload rápido) é classificado como reuso e mata a sessão — o trade-off é uma janela de 10 s em que um replay muito rápido não é detectado.
+
+**CSRF é double-submit *assinado*.** O header `X-Foldex-CSRF` é comparado contra `session.csrf_token_hash` — a linha da sessão, **não** o cookie. Double-submit ingênuo (header == cookie) é derrotado por cookie injection de subdomínio irmão, porque o atacante escolhe os dois lados; amarrando à sessão, ele precisaria forjar um valor cujo `sha256` bata com o guardado. Só verbos inseguros, e só quando a autenticação veio de sessão — bearer não tem credencial ambiente para carona.
+
+**Revogação é instantânea**, para sessão e token de API, porque ambos são resolvidos no banco a cada request. Troca deliberada de um lookup indexado por request em favor de revogação exata.
+
+**Linha alheia responde 404, nunca 403.** 403 confirmaria que o id existe, e num espaço BIGSERIAL denso isso enumera o conteúdo dos outros sem ler nada.
+
+**Login indistinguível.** E-mail inexistente, senha errada e conta desabilitada devolvem `401 invalid_credentials` byte-idêntico. bcrypt **sempre** roda (contra um hash dummy no miss — pular é o oráculo clássico de ~80 ms), o bucket de rate limit por e-mail incrementa **também** para e-mails inexistentes (não incrementar é por si só um oráculo), e há um **piso** de 250 ms — piso e não jitter, porque jitter só adiciona variância que o atacante remove com média amostral.
+
+**2FA: TOTP obrigatório para admin, OTP por e-mail como fallback.** O estado entre "senha OK" e "2FA OK" é um `auth_challenge` + cookie `fx_pa` que só autoriza `/api/auth/2fa/*` — nunca alcança endpoint de dados. O contador de tentativas mora **no banco**, não no limitador em memória: o ADR-28 aceita explicitamente que um restart zere o estado do unlock de pasta, mas um restart não pode zerar o orçamento de tentativas de um segundo fator. O seed TOTP é **cifrado** (AES-256-GCM), não hasheado — verificar exige o seed em claro, e um seed base32 num `pg_dump` é bypass permanente. Códigos de recuperação usam `sha256` e não bcrypt, deliberadamente: a verificação precisa ser lookup indexado, e com ~50 bits de entropia é a entropia que os protege, não o custo do hash.
+
+**Master password migra de `app_setting` para `app_user`.** Uma master global deixaria qualquer admin limpar a senha de pasta de **outro** usuário — exatamente o bypass que o ADR-28 recusou.
+
+**Backup muda de contrato.** Nenhuma tabela de auth entra no ZIP (hashes, seeds TOTP e refresh tokens vivos num arquivo que se joga no Drive converteriam uma conveniência em primitiva de roubo de credencial), e o restore **sempre** escreve para quem chamou — `user_id` nunca vem do ZIP, o que torna impossível forjar um backup que planta linhas na conta alheia. Consequência: `wipeAll` vira `wipeUser`, e **o modo wipe deixa de preservar ids** (`restoreIdentity` é removido; outro tenant pode ter aqueles ids, e dar `setval` numa sequência global a partir do restore de um usuário é errado). Como as chaves de objeto são planas (`screenshots/{id}.jpg`), o wipe passa a apagar uma **lista explícita de chaves** derivada das linhas do próprio usuário, em vez de `DeleteObjectsPrefix`.
+
+**`SHARED_SECRET` coexiste e é rebaixado** a header de perímetro ("não autentica ninguém e não identifica ninguém"); com os dois configurados, a request precisa do header **e** da sessão. Removido no release seguinte. A extensão MV3 migra para `Authorization: Bearer` com escopo `content`, rejeitado em `/api/auth/*`, `/api/admin/*` e `/api/backup/*` — um token de extensão roubado não pode cunhar sessão, desligar 2FA nem exfiltrar um backup.
+
+**Escopo explicitamente fora do v1 (documentado, não esquecido).** Compartilhamento entre usuários (é colaboração, com modelo de ACL próprio). Papéis além de `admin`/`user` (a coluna é TEXT com CHECK — adicionar é uma migration de uma linha; RBAC especulativo envelhece mal). SSO genérico SAML/OIDC. Rotação de `AUTH_ENCRYPTION_KEY`. `user_id` em `click_log` — sem FK para `link`, seria segunda fonte de verdade sujeita a divergir; as queries alcançam o dono por semi-join, com a `000018` como plano B se `stats.Daily` regredir.
+
+### ADR-31 — OAuth Google: `sub` é a chave, e-mail coincidente abre conversão (nunca login)
+**Status:** Planned. Detalhe em [`docs/SDD-AUTH-RBAC.md`](SDD-AUTH-RBAC.md) §7.
+
+**`user_identity.subject` é a única chave usada para encontrar uma conta.** E-mail nunca resolve login: trocar o e-mail no Google não move vínculo nenhum. Duas UNIQUEs travam as duas metades da regra — `(provider, subject)` garante que uma conta Google mapeia para no máximo um usuário foldex, e `(user_id, provider)` que um usuário vincula no máximo uma conta por provider.
+
+**Sem auto-provisionamento e sem auto-vínculo por e-mail.** `sub` desconhecido e e-mail inexistente → `403 oauth_not_linked`. Se existisse auto-vínculo por e-mail coincidente, quem controlasse uma conta Google com o endereço da vítima entraria na conta dela.
+
+**Portabilidade: e-mail coincidente abre *conversão*, que exige a senha atual.** Quando o `sub` é desconhecido mas o e-mail bate com uma conta existente, o fluxo não loga e não recusa: emite um `auth_challenge('convert_google')` e devolve `convert_password_account`. Só depois de `POST /api/auth/oauth/google/convert` com a **senha atual** correta é que a identidade é criada, `password_hash` vira `NULL` (a conta passa a ser Google-only) e as demais sessões são revogadas — tudo numa transação. Exigimos `email_verified == true` do Google, e conta não-ativa devolve **a mesma resposta** do caso inexistente, para não confirmar que ela existe.
+
+Isso é deliberadamente mais estrito do que o argumento "o e-mail já é a raiz da identidade" permitiria — o reset de senha já entrega a conta a quem controla a caixa postal. A escolha foi tornar a conversão uma **migração deliberada**, não um caminho de recuperação. **Trade-off aceito: "esqueci a senha, entro com Google" não funciona**; quem esqueceu usa o reset e converte depois.
+
+**OAuth nunca pula 2FA.** O retorno do Google — login normal ou conversão — desemboca no mesmo `auth_challenge` de TOTP. Sem isso, com TOTP obrigatório para admin, o OAuth seria um furo direto na regra.
+
+**Vincular exige sessão viva** (`purpose=link`), e a conta vinculada é a **da sessão**, nunca uma derivada do e-mail do Google — os e-mails nem precisam coincidir, porque a sessão já provou a posse. É exatamente por isso que vincular sem sessão nunca pode acontecer. Aceitar convite via Google exige `email_verified` **e** e-mail idêntico ao do convite: permitir outra conta Google deixaria um link vazado ser reivindicado em silêncio.
+
+**PKCE `S256` apenas**, com o `code_verifier` no servidor (`oauth_state`) e só o `state` no cookie `fx_oauth` — ambos precisam bater no callback, e é isso que impede login-CSRF. `fx_oauth` é `SameSite=Lax` por necessidade: o redirect do Google é um GET top-level cross-site e `Strict` o descartaria, quebrando 100% dos callbacks.
+
+**O `id_token` não é parseado** — chamamos `/v1/userinfo`. O foldex não tem lib JWT como dependência direta, e adotar uma significa assumir fetch/rotação de JWKS, `alg` confusion e validação de `aud`/`iss`/`exp` (uma classe inteira de CVEs) para economizar uma chamada HTTPS num fluxo mensal.
+
+**Lockout de conta Google-only** tem três saídas: `force-password-reset` pelo admin; "Definir senha" em Configurações estando logado via Google (e só então desvincular passa a ser permitido); e `/password/forgot` respondendo o mesmo `202` mas enviando "esta conta entra pelo Google" **em vez** de um link de reset — deixar o link ressuscitaria, só com a caixa postal, exatamente a credencial que a exigência de senha descartou. Resta um caso sem saída pela UI: o **último admin Google-only que perde o Google** sai por edição direta no banco, mesmo status da master esquecida no ADR-29.
+
+### ADR-32 — `/go/{id}` numérico vira opt-in quando há múltiplos usuários
+**Status:** Planned (PR4 do ADR-30).
+
+`redirect.Handler` resolve `/go/{id-or-slug}` tentando primeiro `strconv` e caindo para slug (ADR-7). Com um usuário, o ramo numérico é conveniência. Com vários, é uma **primitiva de enumeração cross-tenant**: um visitante anônimo caminha por ids sequenciais e descobre a URL de destino de todos os usuários, sem sessão e sem ler nada.
+
+Decisão: o ramo numérico passa por `PUBLIC_ID_REDIRECT_ENABLED`, default **`false`**, de modo que `/go/42` responde 404 e só `/go/{slug}` resolve. Mesmo tratamento para `/n/{42}`. O slug é a superfície de compartilhamento documentada (`CLAUDE.md` §4: "The slug IS exposed in LinkDialog") e tem entropia suficiente na prática. O ADR-7 continua válido para quem religar a flag.
+
+Isso é **mudança de comportamento numa URL pública**, por isso um ADR próprio em vez de uma nota no ADR-30. Chega no PR4, não no PR1, para que a migração de dados e a de comportamento não caiam juntas.
+
 ## Future considerations
 
-- **Auth + multi-user.** Login local (bcrypt + JWT) ou OAuth Google. Tabelas `user_id` em `link`/`tag`.
+- ~~**Auth + multi-user.**~~ → em execução: ADR-30/31/32 + [`docs/SDD-AUTH-RBAC.md`](SDD-AUTH-RBAC.md).
 - **Sync entre máquinas.** Hospedar Postgres remoto, ou criar `foldex-sync` que replica via litestream.
 - **AI suggestions.** Sugerir tags ao criar (LLM lê título + descrição), agrupar duplicatas.
 - **Favicon cache local.** Worker baixa e armazena em volume; resolve broken icons offline/VPN.

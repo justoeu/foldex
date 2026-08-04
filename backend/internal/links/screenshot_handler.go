@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/imageopt"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/ports"
 	"foldex/internal/storage"
@@ -59,9 +60,9 @@ type Uploader = ports.Uploader
 // screenshotRepo is the slice of the Repository that ScreenshotHandler needs.
 // Defined as an interface so unit tests can inject a fake without a real DB.
 type screenshotRepo interface {
-	Get(ctx context.Context, id int64) (Link, error)
-	UpdateOGImage(ctx context.Context, id int64, imageURL string) error
-	ClearOGImage(ctx context.Context, id int64) error
+	Get(ctx context.Context, uid authctx.UserID, id int64) (Link, error)
+	UpdateOGImage(ctx context.Context, uid authctx.UserID, id int64, imageURL string) error
+	ClearOGImage(ctx context.Context, uid authctx.UserID, id int64) error
 }
 
 // maxCaptureInFlight bounds concurrent CaptureAndStore requests so a flood
@@ -116,7 +117,7 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	link, err := h.repo.Get(r.Context(), id)
+	link, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -343,7 +344,7 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	proxyURL := "/api/files/" + key
-	if err := h.repo.UpdateOGImage(r.Context(), id, proxyURL); err != nil {
+	if err := h.repo.UpdateOGImage(r.Context(), authctx.MustUser(r.Context()), id, proxyURL); err != nil {
 		h.logger.Error("image upload: db update failed", "id", id, "err", err)
 		httperr.Write(w, err)
 		return
@@ -365,7 +366,7 @@ func (h *ScreenshotHandler) DeleteImage(w http.ResponseWriter, r *http.Request) 
 		httperr.Write(w, httperr.ErrBadRequest)
 		return
 	}
-	if err := h.repo.ClearOGImage(r.Context(), id); err != nil {
+	if err := h.repo.ClearOGImage(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
 		httperr.Write(w, err)
 		return
 	}

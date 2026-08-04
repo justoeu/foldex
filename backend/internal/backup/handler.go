@@ -15,13 +15,15 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/pkg/httperr"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // BackupService is the application port used by HTTP handlers (testable fake).
 type BackupService interface {
-	Export(ctx context.Context, w io.Writer, onCountsReady func(Counts) error) (ExportReport, error)
-	Validate(ctx context.Context, zr *zip.Reader) (Validation, error)
-	Restore(ctx context.Context, zr *zip.Reader, mode ConflictMode) (RestoreReport, error)
+	Export(ctx context.Context, uid authctx.UserID, w io.Writer, onCountsReady func(Counts) error) (ExportReport, error)
+	Validate(ctx context.Context, uid authctx.UserID, zr *zip.Reader) (Validation, error)
+	Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reader, mode ConflictMode) (RestoreReport, error)
 }
 
 type Handler struct {
@@ -56,7 +58,7 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 	// land in the headers but the duration is only known after the zip is
 	// closed — clients that need it can derive from request start.
 	headersWritten := false
-	rep, err := h.svc.Export(r.Context(), w, func(c Counts) error {
+	rep, err := h.svc.Export(r.Context(), authctx.MustUser(r.Context()), w, func(c Counts) error {
 		w.Header().Set("Content-Type", "application/zip")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 		w.Header().Set("X-Foldex-Backup-Filename", filename)
@@ -105,7 +107,7 @@ func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer cleanup()
-	v, err := h.svc.Validate(r.Context(), zr)
+	v, err := h.svc.Validate(r.Context(), authctx.MustUser(r.Context()), zr)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -137,7 +139,7 @@ func (h *Handler) restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer cleanup()
-	rep, err := h.svc.Restore(r.Context(), zr, mode)
+	rep, err := h.svc.Restore(r.Context(), authctx.MustUser(r.Context()), zr, mode)
 	if err != nil {
 		httperr.Write(w, err)
 		return

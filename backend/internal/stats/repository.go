@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"foldex/internal/pkg/authctx"
 )
 
 type Repository struct {
@@ -17,22 +19,28 @@ type Repository struct {
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
 // Summary collects the headline KPIs the stats page needs in one round-trip.
-func (r *Repository) Summary(ctx context.Context) (Summary, error) {
+func (r *Repository) Summary(ctx context.Context, uid authctx.UserID) (Summary, error) {
 	var s Summary
 
 	// click_log is polymorphic (entity_kind/entity_id) — every clause here
 	// filters entity_kind = 'link' so the stats page keeps its pre-notes
 	// meaning (link clicks only, not note views).
+	// click_log carries no user_id (migration 000017 §10: it has no FK to link,
+	// so a denormalized owner could drift). Every click aggregate therefore
+	// reaches the owner through a semi-join on link.
 	if err := r.pool.QueryRow(ctx, `
         SELECT
-            (SELECT count(*) FROM link),
-            (SELECT count(*) FROM tag),
-            (SELECT count(*) FROM click_log WHERE entity_kind = 'link'),
-            (SELECT count(*) FROM click_log WHERE entity_kind = 'link' AND clicked_at >= now() - interval '30 days'),
+            (SELECT count(*) FROM link WHERE user_id = $1),
+            (SELECT count(*) FROM tag  WHERE user_id = $1),
+            (SELECT count(*) FROM click_log WHERE entity_kind = 'link'
+                AND entity_id IN (SELECT id FROM link WHERE user_id = $1)),
+            (SELECT count(*) FROM click_log WHERE entity_kind = 'link' AND clicked_at >= now() - interval '30 days'
+                AND entity_id IN (SELECT id FROM link WHERE user_id = $1)),
             (SELECT count(*) FROM click_log WHERE entity_kind = 'link' AND clicked_at <  now() - interval '30 days'
-                                              AND clicked_at >= now() - interval '60 days'),
-            (SELECT count(*) FROM link      WHERE created_at >= now() - interval '30 days')
-    `).Scan(&s.TotalLinks, &s.TotalTags, &s.TotalClicks, &s.ClicksLast30d, &s.ClicksPrev30d, &s.NewLinksLast30); err != nil {
+                                              AND clicked_at >= now() - interval '60 days'
+                AND entity_id IN (SELECT id FROM link WHERE user_id = $1)),
+            (SELECT count(*) FROM link WHERE user_id = $1 AND created_at >= now() - interval '30 days')
+    `, int64(uid)).Scan(&s.TotalLinks, &s.TotalTags, &s.TotalClicks, &s.ClicksLast30d, &s.ClicksPrev30d, &s.NewLinksLast30); err != nil {
 		return s, fmt.Errorf("summary scalars: %w", err)
 	}
 
@@ -65,7 +73,7 @@ func (r *Repository) Summary(ctx context.Context) (Summary, error) {
 // Daily returns one bucket per day for the past `days` days (inclusive), in
 // ascending date order. Days with no clicks are emitted with Clicks=0 so the
 // frontend doesn't have to backfill.
-func (r *Repository) Daily(ctx context.Context, days int) ([]DailyPoint, error) {
+func (r *Repository) Daily(ctx context.Context, uid authctx.UserID, days int) ([]DailyPoint, error) {
 	if days <= 0 || days > 365 {
 		days = 60
 	}
@@ -82,12 +90,13 @@ func (r *Repository) Daily(ctx context.Context, days int) ([]DailyPoint, error) 
             FROM click_log
             WHERE entity_kind = 'link'
               AND clicked_at >= date_trunc('day', now()) - ($1::int - 1) * interval '1 day'
+              AND entity_id IN (SELECT id FROM link WHERE user_id = $2)
             GROUP BY 1
         )
         SELECT s.d, COALESCE(a.c, 0)
         FROM series s LEFT JOIN agg a USING (d)
         ORDER BY s.d ASC
-    `, days)
+    `, days, int64(uid))
 	if err != nil {
 		return nil, fmt.Errorf("daily query: %w", err)
 	}
@@ -107,7 +116,7 @@ func (r *Repository) Daily(ctx context.Context, days int) ([]DailyPoint, error) 
 
 // TopLinks ranks links by total clicks in the lifetime, but also includes the
 // 30d / previous-30d windows so the UI can render a delta arrow.
-func (r *Repository) TopLinks(ctx context.Context, limit int) ([]TopLink, error) {
+func (r *Repository) TopLinks(ctx context.Context, uid authctx.UserID, limit int) ([]TopLink, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 10
 	}
@@ -122,6 +131,7 @@ func (r *Repository) TopLinks(ctx context.Context, limit int) ([]TopLink, error)
                                      AND clicked_at >= now() - interval '60 days' THEN 1 END), 0)::bigint AS cprev
             FROM click_log
             WHERE entity_kind = 'link'
+              AND entity_id IN (SELECT id FROM link WHERE user_id = $2)
             GROUP BY entity_id
         )
         SELECT
@@ -132,12 +142,12 @@ func (r *Repository) TopLinks(ctx context.Context, limit int) ([]TopLink, error)
             COALESCE(lc.cprev, 0) AS cprev
         FROM link l
         LEFT JOIN link_clicks lc ON lc.entity_id = l.id
-        WHERE l.folder_id IS NULL OR NOT EXISTS (
+        WHERE l.user_id = $2 AND (l.folder_id IS NULL OR NOT EXISTS (
             SELECT 1 FROM folder _lf WHERE _lf.id = l.folder_id AND _lf.password_hash IS NOT NULL
-        )
+        ))
         ORDER BY clicks DESC, l.id ASC
         LIMIT $1
-    `, limit)
+    `, limit, int64(uid))
 	if err != nil {
 		return nil, fmt.Errorf("top links: %w", err)
 	}
@@ -161,7 +171,7 @@ func (r *Repository) TopLinks(ctx context.Context, limit int) ([]TopLink, error)
 // clicks across 50 tags that's a fan-out of millions of intermediate rows.
 // The CTE below pre-aggregates clicks per link ONCE, then joins, dropping the
 // total cost to O(clicks) for the aggregate + O(link_tag rows) for the join.
-func (r *Repository) TagBuckets(ctx context.Context) ([]TagBucket, error) {
+func (r *Repository) TagBuckets(ctx context.Context, uid authctx.UserID) ([]TagBucket, error) {
 	// link_tag/click_log are polymorphic — entity_id values overlap between
 	// link and note id spaces, so every join here MUST filter
 	// entity_kind = 'link' or a tag attached to a note could silently join
@@ -171,6 +181,7 @@ func (r *Repository) TagBuckets(ctx context.Context) ([]TagBucket, error) {
             SELECT entity_id, count(*)::bigint AS cnt
             FROM click_log
             WHERE entity_kind = 'link'
+              AND entity_id IN (SELECT id FROM link WHERE user_id = $1)
             GROUP BY entity_id
         )
         SELECT t.id, t.name, t.color,
@@ -179,9 +190,10 @@ func (r *Repository) TagBuckets(ctx context.Context) ([]TagBucket, error) {
         FROM tag t
         LEFT JOIN link_tag lt   ON lt.tag_id = t.id AND lt.entity_kind = 'link'
         LEFT JOIN link_clicks lc ON lc.entity_id = lt.entity_id
+        WHERE t.user_id = $1
         GROUP BY t.id
         ORDER BY clicks DESC, t.name ASC
-    `)
+    `, int64(uid))
 	if err != nil {
 		return nil, fmt.Errorf("tag buckets: %w", err)
 	}

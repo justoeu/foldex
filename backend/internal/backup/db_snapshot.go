@@ -6,14 +6,33 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"foldex/internal/pkg/authctx"
 )
 
-// readSnapshot reads all 5 tables inside the given tx and returns a Snapshot.
+// readSnapshot reads uid's content inside the given tx and returns a Snapshot.
 // Caller is responsible for the transaction (and the isolation level).
-func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
+//
+// NO auth table is exported — not app_user, session, totp_secret,
+// recovery_code, api_token, invite, user_identity or password_reset. The ZIP is
+// a file users download and hand around; putting bcrypt hashes, TOTP seeds and
+// live refresh tokens in it would turn a convenience feature into a
+// credential-theft primitive. See docs/SDD-AUTH-RBAC.md §10.1.
+//
+// app_setting is no longer exported either: after migration 000017 the only
+// keys it held (the master password + hint) live on app_user, per user.
+func readSnapshot(ctx context.Context, tx pgx.Tx, uid authctx.UserID) (*Snapshot, error) {
 	snap := &Snapshot{Version: DatabaseSnapshotVersion}
 
-	if err := scanRows(ctx, tx, `SELECT id, name, color, icon, created_at FROM tag ORDER BY id`,
+	// Informational only. Restore NEVER takes user_id from the ZIP (§10.2), so
+	// this cannot be used to plant rows in someone else's account — a mismatch
+	// only produces a warning.
+	if err := tx.QueryRow(ctx, `SELECT email FROM app_user WHERE id = $1`, int64(uid)).
+		Scan(&snap.OwnerEmail); err != nil {
+		return nil, fmt.Errorf("owner email: %w", err)
+	}
+
+	if err := scanRows(ctx, tx, `SELECT id, name, color, icon, created_at FROM tag WHERE user_id = $1 ORDER BY id`, []any{int64(uid)},
 		func(rows pgx.Rows) error {
 			var t TagRow
 			if err := rows.Scan(&t.ID, &t.Name, &t.Color, &t.Icon, &t.CreatedAt); err != nil {
@@ -26,7 +45,7 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 		return nil, fmt.Errorf("tags: %w", err)
 	}
 
-	if err := scanRows(ctx, tx, `SELECT id, name, color, parent_id, password_hash, password_hint, created_at FROM folder ORDER BY id`,
+	if err := scanRows(ctx, tx, `SELECT id, name, color, parent_id, password_hash, password_hint, created_at FROM folder WHERE user_id = $1 ORDER BY id`, []any{int64(uid)},
 		func(rows pgx.Rows) error {
 			var f FolderRow
 			if err := rows.Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.PasswordHash, &f.PasswordHint, &f.CreatedAt); err != nil {
@@ -42,7 +61,7 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 	if err := scanRows(ctx, tx, `
         SELECT id, url, title, slug, description, favicon_url, og_image_url, pinned,
                preview_status, preview_error, folder_id, created_at, updated_at
-        FROM link ORDER BY id`,
+        FROM link WHERE user_id = $1 ORDER BY id`, []any{int64(uid)},
 		func(rows pgx.Rows) error {
 			var l LinkRow
 			if err := rows.Scan(&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL,
@@ -59,7 +78,7 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 
 	if err := scanRows(ctx, tx, `
         SELECT id, title, slug, body_html, body_text, pinned, folder_id, cover_url, created_at, updated_at
-        FROM note ORDER BY id`,
+        FROM note WHERE user_id = $1 ORDER BY id`, []any{int64(uid)},
 		func(rows pgx.Rows) error {
 			var n NoteRow
 			if err := rows.Scan(&n.ID, &n.Title, &n.Slug, &n.BodyHTML, &n.BodyText, &n.Pinned,
@@ -75,7 +94,7 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 
 	// link_tag/click_log are polymorphized (migration 000014) — split the read
 	// by entity_kind so the JSON wire shape stays one array per entity kind.
-	if err := scanRows(ctx, tx, `SELECT entity_id, tag_id FROM link_tag WHERE entity_kind = 'link' ORDER BY entity_id, tag_id`,
+	if err := scanRows(ctx, tx, `SELECT entity_id, tag_id FROM link_tag WHERE entity_kind = 'link' AND entity_id IN (SELECT id FROM link WHERE user_id = $1) ORDER BY entity_id, tag_id`, []any{int64(uid)},
 		func(rows pgx.Rows) error {
 			var lt LinkTagRow
 			if err := rows.Scan(&lt.LinkID, &lt.TagID); err != nil {
@@ -88,7 +107,7 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 		return nil, fmt.Errorf("link_tags: %w", err)
 	}
 
-	if err := scanRows(ctx, tx, `SELECT entity_id, tag_id FROM link_tag WHERE entity_kind = 'note' ORDER BY entity_id, tag_id`,
+	if err := scanRows(ctx, tx, `SELECT entity_id, tag_id FROM link_tag WHERE entity_kind = 'note' AND entity_id IN (SELECT id FROM note WHERE user_id = $1) ORDER BY entity_id, tag_id`, []any{int64(uid)},
 		func(rows pgx.Rows) error {
 			var nt NoteTagRow
 			if err := rows.Scan(&nt.NoteID, &nt.TagID); err != nil {
@@ -101,7 +120,7 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 		return nil, fmt.Errorf("note_tags: %w", err)
 	}
 
-	if err := scanRows(ctx, tx, `SELECT entity_id, clicked_at FROM click_log WHERE entity_kind = 'link' ORDER BY id`,
+	if err := scanRows(ctx, tx, `SELECT entity_id, clicked_at FROM click_log WHERE entity_kind = 'link' AND entity_id IN (SELECT id FROM link WHERE user_id = $1) ORDER BY id`, []any{int64(uid)},
 		func(rows pgx.Rows) error {
 			var c ClickRow
 			if err := rows.Scan(&c.LinkID, &c.ClickedAt); err != nil {
@@ -114,7 +133,7 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 		return nil, fmt.Errorf("click_logs: %w", err)
 	}
 
-	if err := scanRows(ctx, tx, `SELECT entity_id, clicked_at FROM click_log WHERE entity_kind = 'note' ORDER BY id`,
+	if err := scanRows(ctx, tx, `SELECT entity_id, clicked_at FROM click_log WHERE entity_kind = 'note' AND entity_id IN (SELECT id FROM note WHERE user_id = $1) ORDER BY id`, []any{int64(uid)},
 		func(rows pgx.Rows) error {
 			var c NoteClickRow
 			if err := rows.Scan(&c.NoteID, &c.ClickedAt); err != nil {
@@ -127,25 +146,12 @@ func readSnapshot(ctx context.Context, tx pgx.Tx) (*Snapshot, error) {
 		return nil, fmt.Errorf("note_clicks: %w", err)
 	}
 
-	if err := scanRows(ctx, tx, `SELECT key, value, updated_at FROM app_setting ORDER BY key`,
-		func(rows pgx.Rows) error {
-			var s AppSettingRow
-			if err := rows.Scan(&s.Key, &s.Value, &s.UpdatedAt); err != nil {
-				return err
-			}
-			snap.AppSettings = append(snap.AppSettings, s)
-			return nil
-		},
-	); err != nil {
-		return nil, fmt.Errorf("app_settings: %w", err)
-	}
-
 	return snap, nil
 }
 
 // countConflicts checks how many incoming rows would collide with existing
 // UNIQUE constraints, without writing.
-func countConflicts(ctx context.Context, pool *pgxpool.Pool, snap *Snapshot) (Conflicts, error) {
+func countConflicts(ctx context.Context, pool *pgxpool.Pool, uid authctx.UserID, snap *Snapshot) (Conflicts, error) {
 	var c Conflicts
 
 	if len(snap.Links) > 0 {
@@ -154,7 +160,7 @@ func countConflicts(ctx context.Context, pool *pgxpool.Pool, snap *Snapshot) (Co
 			urls[i] = l.URL
 		}
 		if err := pool.QueryRow(ctx,
-			`SELECT count(*) FROM link WHERE url = ANY($1::text[])`, urls).Scan(&c.Links); err != nil {
+			`SELECT count(*) FROM link WHERE user_id = $2 AND url = ANY($1::text[])`, urls, int64(uid)).Scan(&c.Links); err != nil {
 			return c, fmt.Errorf("conflict links: %w", err)
 		}
 	}
@@ -164,7 +170,7 @@ func countConflicts(ctx context.Context, pool *pgxpool.Pool, snap *Snapshot) (Co
 			names[i] = t.Name
 		}
 		if err := pool.QueryRow(ctx,
-			`SELECT count(*) FROM tag WHERE name = ANY($1::text[])`, names).Scan(&c.Tags); err != nil {
+			`SELECT count(*) FROM tag WHERE user_id = $2 AND name = ANY($1::text[])`, names, int64(uid)).Scan(&c.Tags); err != nil {
 			return c, fmt.Errorf("conflict tags: %w", err)
 		}
 	}

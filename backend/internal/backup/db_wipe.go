@@ -4,59 +4,96 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
 // Wipe mode.
 
-func wipeAll(ctx context.Context, tx pgx.Tx) (Counts, error) {
+// wipeUser deletes every content row owned by uid, and nothing else.
+//
+// It replaces the pre-000017 wipeAll, which did
+// `TRUNCATE click_log, link_tag, note, link, folder, tag RESTART IDENTITY
+// CASCADE`. That is no longer survivable for two independent reasons:
+//
+//  1. TRUNCATE is table-wide. In a multi-tenant install one user restoring a
+//     backup would delete every other user's data.
+//  2. RESTART IDENTITY resets sequences that are now SHARED across tenants.
+//
+// The loss of RESTART IDENTITY is why wipe mode no longer preserves original
+// ids — see restoreMapped's comment and docs/SDD-AUTH-RBAC.md §10.3.
+func wipeUser(ctx context.Context, tx pgx.Tx, uid authctx.UserID) (Counts, error) {
 	var c Counts
-	// Count what we're about to delete (for the report). click_log/link_tag
-	// are polymorphic — these counts span both link and note rows, matching
-	// the combined LinkTags/ClickLogs fields restoreIdentity reports back.
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM click_log`).Scan(&c.ClickLogs); err != nil {
+	u := int64(uid)
+
+	// Counts first, for the report. click_log/link_tag are polymorphic and
+	// carry no user_id, so they are reached through a semi-join on the owner's
+	// link/note rows — the same shape the DELETEs use below.
+	if err := tx.QueryRow(ctx, `
+        SELECT count(*) FROM click_log
+        WHERE (entity_kind = 'link' AND entity_id IN (SELECT id FROM link WHERE user_id = $1))
+           OR (entity_kind = 'note' AND entity_id IN (SELECT id FROM note WHERE user_id = $1))
+    `, u).Scan(&c.ClickLogs); err != nil {
 		return c, err
 	}
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM link_tag`).Scan(&c.LinkTags); err != nil {
+	if err := tx.QueryRow(ctx, `
+        SELECT count(*) FROM link_tag
+        WHERE (entity_kind = 'link' AND entity_id IN (SELECT id FROM link WHERE user_id = $1))
+           OR (entity_kind = 'note' AND entity_id IN (SELECT id FROM note WHERE user_id = $1))
+    `, u).Scan(&c.LinkTags); err != nil {
 		return c, err
 	}
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM link`).Scan(&c.Links); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM link WHERE user_id = $1`, u).Scan(&c.Links); err != nil {
 		return c, err
 	}
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM note`).Scan(&c.Notes); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM note WHERE user_id = $1`, u).Scan(&c.Notes); err != nil {
 		return c, err
 	}
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM folder`).Scan(&c.Folders); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM folder WHERE user_id = $1`, u).Scan(&c.Folders); err != nil {
 		return c, err
 	}
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tag`).Scan(&c.Tags); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tag WHERE user_id = $1`, u).Scan(&c.Tags); err != nil {
 		return c, err
 	}
-	// TRUNCATE order respects FKs through CASCADE. `note` has no FK CASCADE
-	// dependents of its own (link_tag/click_log lost their FK to link/note in
-	// migration 000014 — cascade is app-level elsewhere, but a blanket TRUNCATE
-	// here doesn't need it since every listed table is wiped together).
-	if _, err := tx.Exec(ctx, `TRUNCATE TABLE click_log, link_tag, note, link, folder, tag RESTART IDENTITY CASCADE`); err != nil {
+
+	if _, err := tx.Exec(ctx, `
+        DELETE FROM click_log
+        WHERE (entity_kind = 'link' AND entity_id IN (SELECT id FROM link WHERE user_id = $1))
+           OR (entity_kind = 'note' AND entity_id IN (SELECT id FROM note WHERE user_id = $1))
+    `, u); err != nil {
 		return c, err
 	}
-	// app_setting is a standalone KV table (no FK edges), wiped separately so a
-	// wipe restores to EXACTLY the snapshot's settings — including "no master
-	// password" when the snapshot predates ADR-29.
-	if _, err := tx.Exec(ctx, `TRUNCATE TABLE app_setting`); err != nil {
+	if _, err := tx.Exec(ctx, `
+        DELETE FROM link_tag
+        WHERE (entity_kind = 'link' AND entity_id IN (SELECT id FROM link WHERE user_id = $1))
+           OR (entity_kind = 'note' AND entity_id IN (SELECT id FROM note WHERE user_id = $1))
+    `, u); err != nil {
 		return c, err
 	}
+	if _, err := tx.Exec(ctx, `DELETE FROM note WHERE user_id = $1`, u); err != nil {
+		return c, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM link WHERE user_id = $1`, u); err != nil {
+		return c, err
+	}
+	// Flatten the self-FK before deleting: folder_parent_same_user_fkey is
+	// ON DELETE SET NULL, so a nested tree would otherwise need delete order to
+	// match depth. Nulling first makes the delete order irrelevant.
+	if _, err := tx.Exec(ctx, `UPDATE folder SET parent_id = NULL WHERE user_id = $1`, u); err != nil {
+		return c, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM folder WHERE user_id = $1`, u); err != nil {
+		return c, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM tag WHERE user_id = $1`, u); err != nil {
+		return c, err
+	}
+
+	// app_setting is NOT touched. Before 000017 it held the master password and
+	// was wiped so a restore reproduced the snapshot's settings exactly; that
+	// hash is now a per-user column on app_user and is deliberately outside the
+	// backup (ADR-30). The table now holds only instance-wide config, which one
+	// user's restore has no business clearing.
 	return c, nil
 }
-
-// restoreIdentity inserts everything from snap with the original IDs
-// preserved. After all INSERTs, advances each sequence to max(id)+1 so future
-// auto-IDs don't collide.
-//
-// All five loops use pgx.CopyFrom (PostgreSQL COPY protocol) instead of
-// per-row INSERTs. The wipe path handles the worst-case restore volume
-// (a power-user backup of hundreds of thousands of click_logs); per-row
-// INSERTs amortized to one network round-trip per row turned a 1M-row
-// click_log restore into 1M sequential INSERTs. CopyFrom batches them in a
-// single streaming upload — typically 10-50× fewer round-trips. CopyFrom
-// is safe here because wipe mode already TRUNCATEd, so there are no
-// conflicts to handle and no RETURNING values to capture.

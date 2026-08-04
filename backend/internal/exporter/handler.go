@@ -13,13 +13,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/pkg/httperr"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // ExportReader is satisfied by *Repository.
 type ExportReader interface {
-	ListAllLinks(ctx context.Context) ([]linkRow, error)
-	ListTags(ctx context.Context) ([]tagRow, error)
-	ListFolders(ctx context.Context) ([]folderRow, error)
+	ListAllLinks(ctx context.Context, uid authctx.UserID) ([]linkRow, error)
+	ListTags(ctx context.Context, uid authctx.UserID) ([]tagRow, error)
+	ListFolders(ctx context.Context, uid authctx.UserID) ([]folderRow, error)
 }
 
 type Handler struct {
@@ -50,7 +52,7 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) queryAll(r *http.Request) ([]linkRow, error) {
-	return h.repo.ListAllLinks(r.Context())
+	return h.repo.ListAllLinks(r.Context(), authctx.MustUser(r.Context()))
 }
 
 func (h *Handler) exportNetscape(w http.ResponseWriter, r *http.Request) {
@@ -131,12 +133,12 @@ func (h *Handler) exportJSON(w http.ResponseWriter, r *http.Request) {
 	// Drain each query into a slice and release the connection back to the pool
 	// before starting the next one. The whole point is that we don't want three
 	// connections held simultaneously across the JSON encode at the end.
-	tags, err := h.repo.ListTags(r.Context())
+	tags, err := h.repo.ListTags(r.Context(), authctx.MustUser(r.Context()))
 	if err != nil {
 		httperr.Write(w, err)
 		return
 	}
-	folders, err := h.repo.ListFolders(r.Context())
+	folders, err := h.repo.ListFolders(r.Context(), authctx.MustUser(r.Context()))
 	if err != nil {
 		httperr.Write(w, err)
 		return

@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/pkg/httperr"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // Subscription mirrors a row of push_subscription (migration 000011).
@@ -31,19 +33,20 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 // Save upserts by endpoint. The browser may re-subscribe with the same
 // endpoint after a re-permission flow but with new p256dh/auth — keeping the
 // row and just refreshing the keys avoids subscription bloat.
-func (r *Repository) Save(ctx context.Context, endpoint, p256dh, auth string) (Subscription, error) {
+func (r *Repository) Save(ctx context.Context, uid authctx.UserID, endpoint, p256dh, auth string) (Subscription, error) {
 	if endpoint == "" || p256dh == "" || auth == "" {
 		return Subscription{}, httperr.New(400, "invalid_subscription", "endpoint, p256dh and auth are required")
 	}
 	var s Subscription
 	err := r.pool.QueryRow(ctx, `
-        INSERT INTO push_subscription (endpoint, p256dh, auth, last_used_at)
-        VALUES ($1, $2, $3, NULL)
+        INSERT INTO push_subscription (user_id, endpoint, p256dh, auth, last_used_at)
+        VALUES ($1, $2, $3, $4, NULL)
         ON CONFLICT (endpoint) DO UPDATE
-            SET p256dh = EXCLUDED.p256dh,
-                auth   = EXCLUDED.auth
+            SET p256dh  = EXCLUDED.p256dh,
+                auth    = EXCLUDED.auth,
+                user_id = EXCLUDED.user_id
         RETURNING id, endpoint, p256dh, auth, created_at, last_used_at
-    `, endpoint, p256dh, auth).Scan(
+    `, int64(uid), endpoint, p256dh, auth).Scan(
 		&s.ID, &s.Endpoint, &s.P256dh, &s.Auth, &s.CreatedAt, &s.LastUsedAt,
 	)
 	if err != nil {
@@ -52,15 +55,21 @@ func (r *Repository) Save(ctx context.Context, endpoint, p256dh, auth string) (S
 	return s, nil
 }
 
-// List returns all live subscriptions. Used by the sender as the fan-out
-// target — single-user means "everyone" is fine; revisit when scoping by
-// user becomes necessary.
-func (r *Repository) List(ctx context.Context) ([]Subscription, error) {
+// List returns uid's live subscriptions — the fan-out target for a
+// notification about that user's link.
+//
+// push_subscription.endpoint stays GLOBALLY unique (migration 000017 §8): an
+// endpoint is a physical browser channel, not user data. Two users sharing one
+// browser profile produce the same endpoint, and Save re-points user_id to
+// whoever subscribed last, which is correct — the previous owner is no longer
+// logged in there.
+func (r *Repository) List(ctx context.Context, uid authctx.UserID) ([]Subscription, error) {
 	rows, err := r.pool.Query(ctx, `
         SELECT id, endpoint, p256dh, auth, created_at, last_used_at
         FROM push_subscription
+        WHERE user_id = $1
         ORDER BY id ASC
-    `)
+    `, int64(uid))
 	if err != nil {
 		return nil, fmt.Errorf("list push subscriptions: %w", err)
 	}
@@ -79,6 +88,10 @@ func (r *Repository) List(ctx context.Context) ([]Subscription, error) {
 // DeleteByEndpoint is invoked by the sender when the push service returns
 // 404/410 — the convention for "this endpoint is gone, stop sending". No-op
 // when the row doesn't exist (idempotent).
+// DeleteByEndpoint is deliberately NOT owner-scoped: it is called from the
+// sender's 404/410 handling (RFC 8030 §7.3), where the push service has told us
+// the channel is dead. The endpoint is globally unique, so removing it by
+// endpoint alone is correct regardless of who currently owns the row.
 func (r *Repository) DeleteByEndpoint(ctx context.Context, endpoint string) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM push_subscription WHERE endpoint = $1`, endpoint)
 	if err != nil {

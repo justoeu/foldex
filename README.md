@@ -319,6 +319,8 @@ Full design rationale: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 - [Architecture](docs/ARCHITECTURE.md) — stack, data model, API, ADRs
 - [Tasks](docs/TASKS.md) — phased implementation log
 - [SDD: Backup & Restore](docs/SDD-BACKUP-RESTORE.md) — DB + RustFS snapshot ZIP, conflict modes, validation flow
+- [SDD: Folder master password](docs/SDD-FOLDER-MASTER-PASSWORD.md) — per-folder password recovery and hint
+- [SDD: Auth, RBAC & multi-user](docs/SDD-AUTH-RBAC.md) — sessions, 2FA, Google OAuth, per-user data segmentation
 
 ## License
 

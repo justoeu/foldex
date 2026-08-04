@@ -13,6 +13,8 @@ import (
 	webpush "github.com/SherClockHolmes/webpush-go"
 
 	"foldex/internal/preview"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // Notification is the payload encrypted and shipped to every live
@@ -23,12 +25,16 @@ type Notification struct {
 	Title  string `json:"title"`
 	URL    string `json:"url"`
 	Kind   string `json:"kind"`
+	// UserID scopes the fan-out to the link owner's subscriptions. It is
+	// json:"-" so it never reaches the browser payload — the client already
+	// knows who it is, and echoing an internal id buys nothing.
+	UserID authctx.UserID `json:"-"`
 }
 
 // SubscriptionStore is the contract the sender needs from the repo. Kept
 // tiny so the test sender can mock it without standing up Postgres.
 type SubscriptionStore interface {
-	List(ctx context.Context) ([]Subscription, error)
+	List(ctx context.Context, uid authctx.UserID) ([]Subscription, error)
 	DeleteByEndpoint(ctx context.Context, endpoint string) error
 	MarkUsed(ctx context.Context, id int64) error
 }
@@ -91,7 +97,7 @@ func (s *Sender) WithNotifyFunc(
 // abort the rest of the fan-out. The aggregate return value is non-nil
 // only when the repo lookup itself fails (an actually unactionable error).
 func (s *Sender) Notify(ctx context.Context, n Notification) error {
-	subs, err := s.repo.List(ctx)
+	subs, err := s.repo.List(ctx, n.UserID)
 	if err != nil {
 		return fmt.Errorf("list subscriptions: %w", err)
 	}

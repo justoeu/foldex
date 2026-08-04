@@ -19,6 +19,8 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // pgImage is the Postgres image tests run against. It MUST equal the image
@@ -116,6 +118,43 @@ func migrationsDir() string {
 // and `click_log`, and later `note`) lets stale rows leak across subtests and
 // produces non-deterministic failures.
 func Reset(ctx context.Context, pool *pgxpool.Pool) error {
-	_, err := pool.Exec(ctx, `TRUNCATE click_log, link_tag, note, link, folder, tag RESTART IDENTITY CASCADE`)
+	// app_user is listed last but CASCADE does the real work: every content and
+	// auth table FKs to it. It is enumerated anyway so this stays a literal
+	// inventory — the previous list silently missed folder, then click_log, then
+	// note, then app_setting, each time producing cross-test leakage.
+	// TestResetCoversEveryTable in drift_test.go fails if a new table is added
+	// without being listed here.
+	_, err := pool.Exec(ctx, `TRUNCATE
+	    click_log, link_tag, note, link, folder, tag,
+	    push_subscription, app_setting,
+	    session_used_token, session, oauth_state, api_token,
+	    recovery_code, totp_secret, email_otp, auth_challenge,
+	    password_reset, invite, user_identity, app_user
+	    RESTART IDENTITY CASCADE`)
 	return err
+}
+
+// SeedUser inserts an active app_user and returns its id.
+//
+// Content tests call this instead of relying on migration 000017's bootstrap
+// placeholder: Reset truncates that row away, and depending on a migration
+// side effect for test fixtures is exactly the kind of coupling that breaks
+// silently when the migration changes.
+//
+// email must be unique per test (app_user_email_norm_uniq).
+func SeedUser(t *testing.T, pool *pgxpool.Pool, email string, role string) authctx.UserID {
+	t.Helper()
+	if role == "" {
+		role = string(authctx.RoleUser)
+	}
+	var id int64
+	err := pool.QueryRow(context.Background(), `
+        INSERT INTO app_user (email, email_normalized, name, role, status)
+        VALUES ($1, lower(btrim($1)), $2, $3, 'active')
+        RETURNING id
+    `, email, email, role).Scan(&id)
+	if err != nil {
+		t.Fatalf("testdb: seed user %q: %v", email, err)
+	}
+	return authctx.UserID(id)
 }

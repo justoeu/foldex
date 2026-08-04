@@ -20,6 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/pkg/httperr"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // RestoreAdvisoryLockKey is the process-wide pg advisory lock for Restore so
@@ -77,7 +79,7 @@ func NewService(pool *pgxpool.Pool, storage StorageBucket, logger *slog.Logger) 
 // Memory profile: O(snapshot DB rows) + O(largest single object in the
 // bucket). The previous handler buffered the entire ZIP in memory, which made
 // a 2 GiB backup a 2 GiB heap allocation; this path streams every entry.
-func (s *Service) Export(ctx context.Context, w io.Writer, onCountsReady func(Counts) error) (ExportReport, error) {
+func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, onCountsReady func(Counts) error) (ExportReport, error) {
 	start := time.Now()
 	var rep ExportReport
 
@@ -101,7 +103,7 @@ func (s *Service) Export(ctx context.Context, w io.Writer, onCountsReady func(Co
 		}
 	}()
 
-	snap, err := readSnapshot(ctx, tx)
+	snap, err := readSnapshot(ctx, tx, uid)
 	if err != nil {
 		return rep, fmt.Errorf("backup: read snapshot: %w", err)
 	}
@@ -250,7 +252,7 @@ func writeZipEntryRaw(zw *zip.Writer, name string, data []byte) error {
 // ────────────────────────────────────────────────────────────────────────────
 // Validate — inspects a ZIP without applying it.
 
-func (s *Service) Validate(ctx context.Context, zr *zip.Reader) (Validation, error) {
+func (s *Service) Validate(ctx context.Context, uid authctx.UserID, zr *zip.Reader) (Validation, error) {
 	v := Validation{Conflicts: Conflicts{}, Warnings: []string{}, Errors: []string{}}
 
 	manifest, err := readManifest(zr)
@@ -334,7 +336,7 @@ func (s *Service) Validate(ctx context.Context, zr *zip.Reader) (Validation, err
 	}
 
 	// Conflict detection against the live DB.
-	conflicts, err := countConflicts(ctx, s.pool, snap)
+	conflicts, err := countConflicts(ctx, s.pool, uid, snap)
 	if err != nil {
 		return v, fmt.Errorf("backup: conflicts: %w", err)
 	}
@@ -347,7 +349,7 @@ func (s *Service) Validate(ctx context.Context, zr *zip.Reader) (Validation, err
 // ────────────────────────────────────────────────────────────────────────────
 // Restore — applies a ZIP.
 
-func (s *Service) Restore(ctx context.Context, zr *zip.Reader, mode ConflictMode) (RestoreReport, error) {
+func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reader, mode ConflictMode) (RestoreReport, error) {
 	start := time.Now()
 	rep := RestoreReport{Mode: mode, Warnings: []string{}}
 	if !mode.Valid() {
@@ -387,27 +389,50 @@ func (s *Service) Restore(ctx context.Context, zr *zip.Reader, mode ConflictMode
 		return rep, httperr.New(http.StatusConflict, "restore_in_progress", "another restore is already in progress")
 	}
 
+	// The ZIP's declared owner is informational only: every row below is
+	// written with the CALLING user's id, never the snapshot's. That is what
+	// makes a hand-crafted backup unable to plant rows in another account
+	// (TestCrossUser_RestoreIgnoresOwnerEmail). Surface a mismatch so a user
+	// restoring someone else's export is not surprised by the result.
+	if snap.OwnerEmail != "" {
+		var email string
+		if err := tx.QueryRow(ctx, `SELECT email FROM app_user WHERE id = $1`, int64(uid)).Scan(&email); err == nil && email != snap.OwnerEmail {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+				"backup foi exportado por %q e está sendo restaurado na conta %q — todo o conteúdo passa a pertencer a %q",
+				snap.OwnerEmail, email, email))
+		}
+	}
+	if len(snap.AppSettings) > 0 {
+		// Pre-v6 snapshot: app_setting carried the master password hash
+		// (ADR-29). It is per-user on app_user now and deliberately outside the
+		// backup, so the array is dropped rather than applied.
+		rep.Warnings = append(rep.Warnings,
+			"configurações globais do backup foram ignoradas: a senha master agora é por usuário e não trafega no backup")
+	}
+
 	var mapping idMapping
 	switch mode {
 	case ModeWipe:
-		w, err := wipeAll(ctx, tx)
+		w, err := wipeUser(ctx, tx, uid)
 		if err != nil {
 			return rep, fmt.Errorf("backup: wipe db: %w", err)
 		}
 		rep.Wiped = w
-		mapping, err = restoreIdentity(ctx, tx, snap)
+		// Wipe no longer preserves original ids. Before migration 000017 this
+		// branch used restoreIdentity, which re-inserted with the snapshot's ids
+		// and then setval'd the sequences; neither is valid multi-tenant —
+		// another user may already hold those ids, and bumping a SHARED sequence
+		// from one user's restore is simply wrong. Since wipeUser just removed
+		// every row this user owns, the skip path runs with zero conflicts and
+		// produces the correct result with fresh ids. See ADR-30 / SDD §10.3.
+		inserted, _, m, err := restoreSkip(ctx, tx, uid, snap)
 		if err != nil {
 			return rep, fmt.Errorf("backup: insert (wipe): %w", err)
 		}
-		// Counts inserted = sizes of slices in snap.
-		rep.Inserted = Counts{
-			Links: int64(len(snap.Links)), Notes: int64(len(snap.Notes)), Tags: int64(len(snap.Tags)),
-			Folders:   int64(len(snap.Folders)),
-			LinkTags:  int64(len(snap.LinkTags)) + int64(len(snap.NoteTags)),
-			ClickLogs: int64(len(snap.ClickLogs)) + int64(len(snap.NoteClicks)),
-		}
+		rep.Inserted = inserted
+		mapping = m
 	case ModeSkip:
-		inserted, skipped, m, err := restoreSkip(ctx, tx, snap)
+		inserted, skipped, m, err := restoreSkip(ctx, tx, uid, snap)
 		if err != nil {
 			return rep, fmt.Errorf("backup: insert (skip): %w", err)
 		}
@@ -415,7 +440,7 @@ func (s *Service) Restore(ctx context.Context, zr *zip.Reader, mode ConflictMode
 		rep.Skipped = skipped
 		mapping = m
 	case ModeDuplicate:
-		inserted, warnings, m, err := restoreDuplicate(ctx, tx, snap)
+		inserted, warnings, m, err := restoreDuplicate(ctx, tx, uid, snap)
 		if err != nil {
 			return rep, fmt.Errorf("backup: insert (duplicate): %w", err)
 		}

@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // linkRow is one exported link with denormalized tag names and folder name.
@@ -38,12 +40,13 @@ type Repository struct {
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
 // ListAllLinks returns every non-locked-folder link for export.
-func (r *Repository) ListAllLinks(ctx context.Context) ([]linkRow, error) {
+func (r *Repository) ListAllLinks(ctx context.Context, uid authctx.UserID) ([]linkRow, error) {
 	rows, err := r.pool.Query(ctx, `
         WITH link_clicks AS (
             SELECT entity_id, count(*)::bigint AS cnt
             FROM click_log
             WHERE entity_kind = 'link'
+              AND entity_id IN (SELECT id FROM link WHERE user_id = $1)
             GROUP BY entity_id
         )
         SELECT l.url, l.title, l.slug, l.description, l.created_at,
@@ -55,10 +58,10 @@ func (r *Repository) ListAllLinks(ctx context.Context) ([]linkRow, error) {
         LEFT JOIN link_tag lt ON lt.entity_kind = 'link' AND lt.entity_id = l.id
         LEFT JOIN tag t       ON t.id = lt.tag_id
         LEFT JOIN folder f    ON f.id = l.folder_id
-        WHERE l.folder_id IS NULL OR f.password_hash IS NULL
+        WHERE l.user_id = $1 AND (l.folder_id IS NULL OR f.password_hash IS NULL)
         GROUP BY l.id, f.name, f.password_hash, lc.cnt
         ORDER BY l.created_at ASC
-    `)
+    `, int64(uid))
 	if err != nil {
 		return nil, err
 	}
@@ -74,8 +77,8 @@ func (r *Repository) ListAllLinks(ctx context.Context) ([]linkRow, error) {
 	return out, rows.Err()
 }
 
-func (r *Repository) ListTags(ctx context.Context) ([]tagRow, error) {
-	rows, err := r.pool.Query(ctx, `SELECT name, color, icon FROM tag ORDER BY name`)
+func (r *Repository) ListTags(ctx context.Context, uid authctx.UserID) ([]tagRow, error) {
+	rows, err := r.pool.Query(ctx, `SELECT name, color, icon FROM tag WHERE user_id = $1 ORDER BY name`, int64(uid))
 	if err != nil {
 		return nil, err
 	}
@@ -91,8 +94,8 @@ func (r *Repository) ListTags(ctx context.Context) ([]tagRow, error) {
 	return out, rows.Err()
 }
 
-func (r *Repository) ListFolders(ctx context.Context) ([]folderRow, error) {
-	rows, err := r.pool.Query(ctx, `SELECT name, color FROM folder ORDER BY name`)
+func (r *Repository) ListFolders(ctx context.Context, uid authctx.UserID) ([]folderRow, error) {
+	rows, err := r.pool.Query(ctx, `SELECT name, color FROM folder WHERE user_id = $1 ORDER BY name`, int64(uid))
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/folders"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/clampint"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/listquery"
@@ -17,7 +18,7 @@ import (
 // FolderPasswordLookup resolves a folder's password hash for content-gate
 // on GET /api/links?folder_id=X (same posture as entries).
 type FolderPasswordLookup interface {
-	PasswordHashFor(ctx context.Context, id int64) (*string, error)
+	PasswordHashFor(ctx context.Context, uid authctx.UserID, id int64) (*string, error)
 }
 
 // Enqueuer is the preview-worker port (canonical: ports.Enqueuer).
@@ -79,7 +80,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			httperr.Write(w, err)
 			return
 		}
-		out, err := h.repo.List(r.Context(), q)
+		out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()), q)
 		if err != nil {
 			httperr.Write(w, err)
 			return
@@ -91,7 +92,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httperr.JSON(w, http.StatusOK, out)
 		return
 	}
-	out, err := h.repo.List(r.Context(), q)
+	out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()), q)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -100,7 +101,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) enforceFolderUnlock(ctx context.Context, folderID int64, token string) error {
-	hash, err := h.folderLookup.PasswordHashFor(ctx, folderID)
+	hash, err := h.folderLookup.PasswordHashFor(ctx, authctx.MustUser(ctx), folderID)
 	if err != nil {
 		return err
 	}
@@ -123,7 +124,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	l, err := h.repo.Create(r.Context(), in)
+	l, err := h.repo.Create(r.Context(), authctx.MustUser(r.Context()), in)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -142,7 +143,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	l, err := h.repo.Get(r.Context(), id)
+	l, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -171,7 +172,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	l, err := h.repo.Update(r.Context(), id, in)
+	l, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -185,7 +186,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if err := h.repo.Delete(r.Context(), id); err != nil {
+	if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -198,7 +199,7 @@ func (h *Handler) refreshPreview(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if _, err := h.repo.Get(r.Context(), id); err != nil {
+	if _, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -206,7 +207,7 @@ func (h *Handler) refreshPreview(w http.ResponseWriter, r *http.Request) {
 	// sees "capturando…" and the auto-polling in useLinks kicks in. Without
 	// this, a previously 'failed' link stays 'failed' visually and the user
 	// has no signal the retry is running.
-	if err := h.repo.UpdatePreview(r.Context(), id, StatusPending, nil, nil, nil, nil); err != nil {
+	if err := h.repo.SystemUpdatePreview(r.Context(), id, StatusPending, nil, nil, nil, nil); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -222,7 +223,7 @@ func (h *Handler) seenChange(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if err := h.repo.MarkChangeSeen(r.Context(), id); err != nil {
+	if err := h.repo.MarkChangeSeen(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -232,7 +233,7 @@ func (h *Handler) seenChange(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) listRecentChanges(w http.ResponseWriter, r *http.Request) {
 	days := clampint.Int(r.URL.Query().Get("days"), 7, 1, 30)
 	limit := clampint.Int(r.URL.Query().Get("limit"), 20, 1, 100)
-	out, err := h.repo.ListRecentChanges(r.Context(), days*24*60*60, limit)
+	out, err := h.repo.ListRecentChanges(r.Context(), authctx.MustUser(r.Context()), days*24*60*60, limit)
 	if err != nil {
 		httperr.Write(w, err)
 		return

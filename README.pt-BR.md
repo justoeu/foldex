@@ -311,6 +311,8 @@ Design completo: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 - [Architecture](docs/ARCHITECTURE.md) — stack, modelo de dados, API, ADRs
 - [Tasks](docs/TASKS.md) — log de implementação por fase
 - [SDD: Backup & Restore](docs/SDD-BACKUP-RESTORE.md) — ZIP de snapshot DB + RustFS, modos de conflito, fluxo de validação
+- [SDD: Senha master de pastas](docs/SDD-FOLDER-MASTER-PASSWORD.md) — recuperação de senha por pasta e palavra-dica
+- [SDD: Auth, RBAC e multi-usuário](docs/SDD-AUTH-RBAC.md) — sessões, 2FA, OAuth Google, segmentação de dados por usuário
 
 ## Licença
 

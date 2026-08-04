@@ -9,6 +9,7 @@ import (
 
 	"foldex/internal/folders"
 	"foldex/internal/links"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/tags"
 )
 
@@ -26,12 +27,12 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 // updated_at, click_count, last_clicked_at, url, description, favicon_url,
 // og_image_url, preview_status, cover_url, body_snippet — link-only columns
 // are NULL on the note arm and vice versa.
-func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
+func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) ([]Entry, error) {
 	args := []any{}
 	linkWhere := []string{}
 	noteWhere := []string{}
-	appendScopeFilters(&linkWhere, &args, "l", "link", q, true)
-	appendScopeFilters(&noteWhere, &args, "n", "note", q, false)
+	appendScopeFilters(&linkWhere, &args, uid, "l", "link", q, true)
+	appendScopeFilters(&noteWhere, &args, uid, "n", "note", q, false)
 
 	// References the UNIONed result's output column names (established by
 	// the link arm's aliases — Postgres requires both arms agree, which they
@@ -140,7 +141,7 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
 		return out, nil
 	}
 
-	byKind, err := tags.TagsForLinkAndNote(ctx, r.pool, linkIDs, noteIDs)
+	byKind, err := tags.TagsForLinkAndNote(ctx, r.pool, uid, linkIDs, noteIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +155,17 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
 
 // appendScopeFilters adds Q/TagIDs/FolderID/Ungrouped predicates for one UNION
 // arm. linkSearch=true uses title|url|description; notes use title|body_text.
-func appendScopeFilters(where *[]string, args *[]any, alias, kind string, q ListQuery, linkSearch bool) {
+// appendScopeFilters builds one arm's WHERE. uid is appended FIRST so the
+// tenant predicate leads and the (user_id, …) composite indexes from migration
+// 000017 can be used.
+//
+// Note the two arms each get their OWN $n for user_id: placeholder indices come
+// from len(*args) and the arms are built by separate calls into ONE shared args
+// slice, so they must never assume a fixed offset.
+func appendScopeFilters(where *[]string, args *[]any, uid authctx.UserID, alias, kind string, q ListQuery, linkSearch bool) {
+	*args = append(*args, int64(uid))
+	*where = append(*where, fmt.Sprintf("%s.user_id = $%d", alias, len(*args)))
+
 	if q.Q != "" {
 		pattern := "%" + q.Q + "%"
 		*args = append(*args, pattern)

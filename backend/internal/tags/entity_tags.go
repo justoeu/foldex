@@ -3,8 +3,12 @@ package tags
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/jackc/pgx/v5"
+
+	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/httperr"
 )
 
 // Querier is satisfied by *pgxpool.Pool (and pgx.Tx for tests).
@@ -14,12 +18,22 @@ type Querier interface {
 
 // SetEntityTags replaces the tag set for a polymorphic link_tag row
 // (entity_kind ∈ {link, note}) inside an open transaction.
-func SetEntityTags(ctx context.Context, tx pgx.Tx, kind string, entityID int64, tagIDs []int64) error {
+//
+// This is the ONE place where cross-tenant leakage cannot be caught by a
+// foreign key. link_tag lost its FK to link(id) in migration 000014 when it was
+// polymorphized, and tag_id's FK to tag(id) carries no user_id to compose with,
+// so migration 000017's composite-FK net does not cover it. Ownership of every
+// incoming tag id is therefore verified here, in the same transaction, before
+// any row is written. TestCrossUser_CannotAttachAnotherUsersTag locks it.
+func SetEntityTags(ctx context.Context, tx pgx.Tx, uid authctx.UserID, kind string, entityID int64, tagIDs []int64) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM link_tag WHERE entity_kind = $1 AND entity_id = $2`, kind, entityID); err != nil {
 		return fmt.Errorf("clear %s tags: %w", kind, err)
 	}
 	if len(tagIDs) == 0 {
 		return nil
+	}
+	if err := assertTagsOwned(ctx, tx, uid, tagIDs); err != nil {
+		return err
 	}
 	rows := make([][]any, 0, len(tagIDs))
 	for _, tid := range tagIDs {
@@ -36,9 +50,47 @@ func SetEntityTags(ctx context.Context, tx pgx.Tx, kind string, entityID int64, 
 	return nil
 }
 
+// assertTagsOwned fails unless every id belongs to uid. It reports the generic
+// 400 invalid_input rather than naming which id was foreign: replying "tag 7 is
+// not yours" would confirm that tag 7 exists on some other account.
+func assertTagsOwned(ctx context.Context, q Querier, uid authctx.UserID, tagIDs []int64) error {
+	rows, err := q.Query(ctx, `SELECT count(*) FROM tag WHERE user_id = $1 AND id = ANY($2)`,
+		int64(uid), tagIDs)
+	if err != nil {
+		return fmt.Errorf("verify tag ownership: %w", err)
+	}
+	defer rows.Close()
+	var owned int
+	if rows.Next() {
+		if err := rows.Scan(&owned); err != nil {
+			return fmt.Errorf("verify tag ownership: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("verify tag ownership: %w", err)
+	}
+	// Compare against the DISTINCT count: a payload repeating one owned id must
+	// not pass a check that a payload of that id plus a foreign one would fail.
+	if owned != distinctCount(tagIDs) {
+		return httperr.New(http.StatusBadRequest, "invalid_input", "unknown tag id")
+	}
+	return nil
+}
+
+func distinctCount(ids []int64) int {
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		seen[id] = struct{}{}
+	}
+	return len(seen)
+}
+
 // TagsForEntities batches chip lookup for one entity_kind. Link and note ids
 // share the numeric space — never pass mixed kinds in one call.
-func TagsForEntities(ctx context.Context, q Querier, kind string, ids []int64) (map[int64][]Chip, error) {
+//
+// The tag join is owner-filtered as belt and suspenders: callers already pass
+// owner-scoped entity ids, but this closes the hole if one ever does not.
+func TagsForEntities(ctx context.Context, q Querier, uid authctx.UserID, kind string, ids []int64) (map[int64][]Chip, error) {
 	out := map[int64][]Chip{}
 	if len(ids) == 0 {
 		return out, nil
@@ -47,9 +99,9 @@ func TagsForEntities(ctx context.Context, q Querier, kind string, ids []int64) (
         SELECT lt.entity_id, t.id, t.name, t.color, t.icon
         FROM link_tag lt
         JOIN tag t ON t.id = lt.tag_id
-        WHERE lt.entity_kind = $1 AND lt.entity_id = ANY($2)
+        WHERE lt.entity_kind = $1 AND lt.entity_id = ANY($2) AND t.user_id = $3
         ORDER BY t.name ASC
-    `, kind, ids)
+    `, kind, ids, int64(uid))
 	if err != nil {
 		return nil, fmt.Errorf("tags for %s: %w", kind, err)
 	}
@@ -68,7 +120,7 @@ func TagsForEntities(ctx context.Context, q Querier, kind string, ids []int64) (
 // TagsForLinkAndNote loads chips for both entity kinds in one round-trip
 // (N1-NEX-014). Results are keyed by entity_kind then entity_id so overlapping
 // numeric ids never cross-contaminate.
-func TagsForLinkAndNote(ctx context.Context, q Querier, linkIDs, noteIDs []int64) (map[string]map[int64][]Chip, error) {
+func TagsForLinkAndNote(ctx context.Context, q Querier, uid authctx.UserID, linkIDs, noteIDs []int64) (map[string]map[int64][]Chip, error) {
 	out := map[string]map[int64][]Chip{
 		"link": {},
 		"note": {},
@@ -80,10 +132,11 @@ func TagsForLinkAndNote(ctx context.Context, q Querier, linkIDs, noteIDs []int64
         SELECT lt.entity_kind, lt.entity_id, t.id, t.name, t.color, t.icon
         FROM link_tag lt
         JOIN tag t ON t.id = lt.tag_id
-        WHERE (lt.entity_kind = 'link' AND lt.entity_id = ANY($1))
-           OR (lt.entity_kind = 'note' AND lt.entity_id = ANY($2))
+        WHERE ((lt.entity_kind = 'link' AND lt.entity_id = ANY($1))
+            OR (lt.entity_kind = 'note' AND lt.entity_id = ANY($2)))
+          AND t.user_id = $3
         ORDER BY t.name ASC
-    `, linkIDs, noteIDs)
+    `, linkIDs, noteIDs, int64(uid))
 	if err != nil {
 		return nil, fmt.Errorf("tags for link+note: %w", err)
 	}

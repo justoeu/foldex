@@ -100,8 +100,8 @@ func topoSortFolders(in []FolderRow) []FolderRow {
 // ────────────────────────────────────────────────────────────────────────────
 // scanRows is a tiny helper around pgx.Rows that calls back per row.
 
-func scanRows(ctx context.Context, tx pgx.Tx, sql string, fn func(pgx.Rows) error) error {
-	rows, err := tx.Query(ctx, sql)
+func scanRows(ctx context.Context, tx pgx.Tx, sql string, args []any, fn func(pgx.Rows) error) error {
+	rows, err := tx.Query(ctx, sql, args...)
 	if err != nil {
 		return err
 	}

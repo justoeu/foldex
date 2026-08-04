@@ -243,6 +243,10 @@ func (a pushSenderAdapter) Notify(ctx context.Context, n changecheck.Notificatio
 		Title:  n.Title,
 		URL:    n.URL,
 		Kind:   n.Kind,
+		// UserID is what scopes the fan-out to the link owner. Dropping it here
+		// would compile fine and silently deliver to nobody (user 0 owns no
+		// subscriptions) — TestChangeCheckPushGoesOnlyToTheLinkOwner locks it.
+		UserID: n.UserID,
 	})
 }
 
