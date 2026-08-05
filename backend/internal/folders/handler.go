@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/pkg/attemptlimit"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 )
@@ -26,7 +27,7 @@ type Handler struct {
 	repo      *Repository
 	unlockKey []byte
 	master    MasterPasswordVerifier
-	limiter   *unlockLimiter
+	limiter   *attemptlimit.Limiter
 }
 
 // NewHandler takes the folder-unlock-token HMAC secret (see
@@ -150,39 +151,40 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	// Reserve an attempt slot under one lock BEFORE bcrypt so parallel wrong
-	// passwords cannot all race past maxUnlockAttempts (RACE-HER-004).
-	if until, ok := h.limiter.beginAttempt(id); !ok {
+	key := unlockKeyFor(id)
+	// Fast path: a locked-out folder answers 429 without touching the database.
+	if until := h.limiter.LockedUntil(key); !until.IsZero() {
 		h.writeLocked(w, until)
 		return
 	}
-	released := false
-	release := func() {
-		if !released {
-			released = true
-			h.limiter.releaseAttempt(id)
-		}
-	}
 	in, err := httperr.DecodeJSON[unlockInput](w, r)
 	if err != nil {
-		release()
 		httperr.Write(w, err)
 		return
 	}
+	// Ownership is proven here, BEFORE any attempt slot is reserved. Reserving
+	// first would let a request for someone else's folder id hold in-flight
+	// slots against that folder's budget while this lookup ran — five parallel
+	// ones would trip an hour-long lockout on a folder the caller does not own.
 	hash, err := h.repo.PasswordHashFor(r.Context(), authctx.MustUser(r.Context()), id)
 	if err != nil {
-		release()
 		httperr.Write(w, err)
 		return
 	}
 	if hash == nil {
-		release()
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "not_protected", "this folder has no password set"))
 		return
 	}
+	// Reserve an attempt slot under one lock immediately before bcrypt, so
+	// parallel wrong passwords cannot all race past maxUnlockAttempts
+	// (RACE-HER-004). Everything between Begin and the commit below is pure
+	// CPU, so there is no path that leaks the slot.
+	if until, ok := h.limiter.Begin(key); !ok {
+		h.writeLocked(w, until)
+		return
+	}
 	if !VerifyPassword(*hash, in.Password) {
-		released = true
-		fails, lockedUntil := h.limiter.commitFail(id)
+		fails, lockedUntil := h.limiter.CommitFail(key)
 		if !lockedUntil.IsZero() {
 			h.writeLocked(w, lockedUntil)
 			return
@@ -198,8 +200,7 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	released = true
-	h.limiter.commitSuccess(id)
+	h.limiter.CommitSuccess(key)
 	httperr.JSON(w, http.StatusOK, unlockOutput{
 		UnlockToken: IssueUnlockToken(h.unlockKey, id, *hash),
 		ExpiresAt:   time.Now().Add(unlockTokenTTL),

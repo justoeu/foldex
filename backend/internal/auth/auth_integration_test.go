@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1965,4 +1966,68 @@ func TestAcceptInvite_ConflictsWhenTheAddressWasClaimedMeanwhile(t *testing.T) {
 	require.NoError(t, h.pool.QueryRow(context.Background(),
 		`SELECT accepted_at::text FROM invite WHERE email_normalized = 'racer@example.com'`).Scan(&accepted))
 	assert.Nil(t, accepted, "a failed acceptance must not consume the invitation")
+}
+
+// TestAdmin_ConcurrentMutualDemotionCannotEmptyTheAdminSet drives the guard at
+// the REPOSITORY level, which is the only layer where the race it defends
+// against actually exists.
+//
+// The HTTP-level sibling of this test (above) is worth keeping — it proves the
+// handler surfaces the right status codes — but it cannot reliably force the
+// interleaving: each request first resolves a session, and that variable work
+// happens before UpdateUser opens its transaction, so the two critical
+// sections rarely overlap. Calling UpdateUser directly puts the barrier
+// immediately before the transaction, where a missing advisory lock has
+// nowhere to hide: both transactions would count two admins, both would demote,
+// and the instance would be left with none — a state only direct SQL can undo.
+//
+// Rounds, rather than a single attempt, because the failure being excluded is
+// probabilistic: one lucky serialisation would let a broken guard pass.
+func TestAdmin_ConcurrentMutualDemotionCannotEmptyTheAdminSet(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	userRole := authctx.RoleUser
+
+	const rounds = 20
+	for round := range rounds {
+		// The guard counts every active admin, so the round is only meaningful
+		// when these two are the only ones. Survivors of earlier rounds are
+		// demoted rather than deleted (cheaper, and it keeps their ids taken).
+		_, err := h.pool.Exec(ctx, `UPDATE app_user SET role = 'user' WHERE role = 'admin'`)
+		require.NoError(t, err)
+		a := testdb.SeedUser(t, h.pool, fmt.Sprintf("race-a%d@example.com", round), "admin")
+		b := testdb.SeedUser(t, h.pool, fmt.Sprintf("race-b%d@example.com", round), "admin")
+
+		var errs [2]error
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[0] = h.repo.UpdateUser(ctx, a, nil, &userRole, nil)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[1] = h.repo.UpdateUser(ctx, b, nil, &userRole, nil)
+		}()
+		close(start)
+		wg.Wait()
+
+		var admins int
+		require.NoError(t, h.pool.QueryRow(ctx,
+			`SELECT count(*) FROM app_user WHERE role = 'admin' AND status = 'active'`).Scan(&admins))
+		require.GreaterOrEqual(t, admins, 1,
+			"round %d: both demotions landed (errs=%v) — no administrator left", round, errs)
+
+		refused := 0
+		for _, e := range errs {
+			if errors.Is(e, auth.ErrLastAdmin) {
+				refused++
+			}
+		}
+		require.Equal(t, 1, refused,
+			"round %d: exactly one demotion must trip ErrLastAdmin, got %v", round, errs)
+	}
 }
