@@ -153,12 +153,18 @@ export function AuthProvider({
   const signOut = useCallback(async () => {
     try {
       await apiLogout()
-    } finally {
-      // Always drop to anonymous, even if the request failed. The user asked to
-      // be forgotten; leaving them apparently signed in because the network
-      // blipped is the one outcome that is clearly wrong.
-      applySession({ status: 'anonymous', features: defaultFeatures })
+    } catch {
+      // Swallowed, not rethrown. Signing out is best-effort by design: the
+      // server call only revokes the session row, and the local state below is
+      // what the user actually asked for. Rethrowing would make the natural
+      // call site — `onClick={() => void signOut()}` — an unhandled rejection
+      // in the console, and would give callers an error they can do nothing
+      // useful with.
     }
+    // Always drop to anonymous, even if the request failed. The user asked to
+    // be forgotten; leaving them apparently signed in because the network
+    // blipped is the one outcome that is clearly wrong.
+    applySession({ status: 'anonymous', features: defaultFeatures })
   }, [applySession])
 
   const value = useMemo<AuthContextValue>(
