@@ -1,20 +1,23 @@
-import axios from 'axios'
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios'
 
 // In production (nginx) we hit relative /api. In dev (vite), the proxy in
 // vite.config.ts forwards /api -> backend.
 export const http = axios.create({
   baseURL: '/',
   headers: { 'Content-Type': 'application/json' },
+  // Cookies ARE the session (ADR-30). Without this, axios drops them on any
+  // cross-origin call — which is exactly the dev setup, where the SPA is on
+  // :9088 and the API on :9089.
+  withCredentials: true,
   // 30s ceiling so a wedged backend doesn't leave the UI spinning forever.
   // Backup export/restore can stream multi-second payloads — those call paths
   // override the timeout explicitly when needed (api/backup.ts).
   timeout: 30_000,
 })
 
-// SHARED_SECRET wiring. When the backend is started with SHARED_SECRET set,
-// every /api/* request needs X-Foldex-Secret. The user pastes the secret into
-// the prompt (or stores it manually in localStorage under `foldex.secret`).
-// Empty string = no header sent (backend's default off mode).
+// SHARED_SECRET wiring. Deprecated by the auth stack but still honoured: an
+// operator can run with both, and PR4 retires it. When the backend is started
+// with SHARED_SECRET set, every /api/* request needs X-Foldex-Secret.
 const SECRET_KEY = 'foldex.secret'
 
 export function getStoredSecret(): string {
@@ -28,44 +31,110 @@ export function setStoredSecret(value: string): void {
   else localStorage.removeItem(SECRET_KEY)
 }
 
+export const CSRF_COOKIE = 'fx_csrf'
+export const CSRF_HEADER = 'X-Foldex-CSRF'
+
+/**
+ * Reads the CSRF token from its cookie.
+ *
+ * fx_csrf is the one auth cookie deliberately left readable by JavaScript,
+ * because the double-submit scheme requires the SPA to echo it in a header.
+ * That is not a weakness: its security comes from a cross-origin attacker
+ * being unable to READ it, not from our own script being unable to.
+ */
+export function readCsrfToken(): string {
+  if (typeof document === 'undefined') return ''
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${CSRF_COOKIE}=([^;]*)`))
+  return match ? decodeURIComponent(match[1]) : ''
+}
+
+const UNSAFE_METHODS = new Set(['post', 'put', 'patch', 'delete'])
+
 http.interceptors.request.use((config) => {
   const secret = getStoredSecret()
-  if (secret) {
-    config.headers = config.headers ?? {}
-    ;(config.headers as Record<string, string>)['X-Foldex-Secret'] = secret
+  const headers = (config.headers ?? {}) as Record<string, string>
+  if (secret) headers['X-Foldex-Secret'] = secret
+
+  if (UNSAFE_METHODS.has((config.method ?? 'get').toLowerCase())) {
+    const csrf = readCsrfToken()
+    // Never overwrite a header a caller set explicitly — tests and the
+    // bootstrap flow both need to drive this directly.
+    if (csrf && !headers[CSRF_HEADER]) headers[CSRF_HEADER] = csrf
   }
+  config.headers = headers as never
   return config
 })
 
-// On 401: drop the stale secret, prompt once, and retry the failed request
-// with the fresh secret. `_retried` on the config prevents infinite loops if
-// the new secret is still wrong.
-let promptInFlight = false
+// ─────────────────────────────────────────────────────────────────────
+// Single-flight refresh
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * The one in-flight refresh, shared by every request that 401s.
+ *
+ * The App mounts four authenticated queries at once (entries, folders ×2,
+ * tags). When the access cookie expires they all 401 within milliseconds of
+ * each other. Without this promise each would fire its own
+ * POST /api/auth/refresh with the SAME refresh cookie — and the backend's
+ * reuse detector exists precisely to treat a re-presented refresh token as an
+ * attack. The server's 10-second grace window forgives that race, but relying
+ * on it from the client would be building on someone else's safety net;
+ * sharing one call means the race never happens.
+ */
+let refreshPromise: Promise<void> | null = null
+
+/** Called by AuthProvider when a refresh definitively fails. */
+let onSessionLost: (() => void) | null = null
+export function setSessionLostHandler(fn: (() => void) | null): void {
+  onSessionLost = fn
+}
+
+/** Test seam: drops the cached refresh so cases cannot bleed into each other. */
+export function resetRefreshState(): void {
+  refreshPromise = null
+}
+
+function refreshOnce(): Promise<void> {
+  if (!refreshPromise) {
+    refreshPromise = http
+      .post('/api/auth/refresh', null, { _skipAuthRetry: true } as never)
+      .then(() => undefined)
+      .finally(() => {
+        // Cleared in `finally`, not in `then`: leaving a rejected promise
+        // cached would make every later 401 reuse the same failure, and the app
+        // could never recover — not even after a fresh sign-in.
+        refreshPromise = null
+      })
+  }
+  return refreshPromise
+}
+
+type RetryConfig = InternalAxiosRequestConfig & {
+  _retried?: boolean
+  _skipAuthRetry?: boolean
+}
+
 http.interceptors.response.use(
   (resp) => resp,
-  async (error) => {
-    const status = error?.response?.status
-    const config = error?.config as (typeof error.config & { _retried?: boolean }) | undefined
-    if (
-      status === 401 &&
-      typeof window !== 'undefined' &&
-      config &&
-      !config._retried &&
-      !promptInFlight
-    ) {
-      promptInFlight = true
-      try {
-        setStoredSecret('')
-        const fresh = window.prompt('Foldex: enter SHARED_SECRET to authenticate /api requests')
-        if (fresh) {
-          setStoredSecret(fresh)
-          config._retried = true
-          return http.request(config)
-        }
-      } finally {
-        promptInFlight = false
-      }
+  async (error: AxiosError) => {
+    const status = error.response?.status
+    const config = error.config as RetryConfig | undefined
+    if (status !== 401 || !config || config._retried || config._skipAuthRetry) {
+      return Promise.reject(error)
     }
-    return Promise.reject(error)
+
+    // The auth endpoints are the ones that ESTABLISH a session, so retrying
+    // them through a refresh would be circular — and /api/auth/me is
+    // contractually always 200 anyway.
+    if ((config.url ?? '').includes('/api/auth/')) return Promise.reject(error)
+
+    try {
+      await refreshOnce()
+    } catch {
+      onSessionLost?.()
+      return Promise.reject(error)
+    }
+    config._retried = true
+    return http.request(config)
   },
 )

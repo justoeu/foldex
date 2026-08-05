@@ -218,6 +218,11 @@ describe('App', () => {
   it('opens the new-note dialog via ⌥M', async () => {
     renderWithProviders(<App />)
     const user = userEvent.setup()
+    // Wait for the shell before pressing. A keystroke dispatched before the
+    // hotkey handler is bound is simply dropped — and findByRole's retries
+    // cannot recover from that, because the dialog never opens at all, so the
+    // test fails on a timeout that looks like a missing element.
+    await screen.findAllByLabelText(/new link/i)
     await user.keyboard('{Alt>}m{/Alt}')
     expect(await screen.findByRole('dialog', { name: /new note/i })).toBeInTheDocument()
   })
@@ -312,6 +317,7 @@ describe('App', () => {
   it('opens the new-link dialog via ⌥N', async () => {
     renderWithProviders(<App />)
     const user = userEvent.setup()
+    await screen.findAllByLabelText(/new link/i)
     await user.keyboard('{Alt>}n{/Alt}')
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })

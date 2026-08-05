@@ -11,12 +11,14 @@ import (
 	"syscall"
 	"time"
 
+	"foldex/internal/auth"
 	"foldex/internal/backup"
 	"foldex/internal/changecheck"
 	"foldex/internal/config"
 	"foldex/internal/db"
 	"foldex/internal/folders"
 	"foldex/internal/links"
+	"foldex/internal/mailer"
 	"foldex/internal/preview"
 	"foldex/internal/push"
 	"foldex/internal/screenshot"
@@ -132,6 +134,52 @@ func main() {
 		ccWorker.Start(rootCtx)
 	}
 
+	// Auth stack (ADR-30). Wired unconditionally so /api/auth/me answers even
+	// with AUTH_ENABLED=0 — what the flag gates is whether the session
+	// middleware REPLACES the bootstrap principal, not whether the endpoints
+	// exist. A missing /api/auth would make the SPA's boot probe 404 and leave
+	// it unable to tell "auth is off" from "backend is broken".
+	mail, err := mailer.New(mailer.Config{
+		Driver:             cfg.Mail.Driver,
+		Host:               cfg.Mail.Host,
+		Port:               cfg.Mail.Port,
+		Username:           cfg.Mail.Username,
+		Password:           cfg.Mail.Password,
+		From:               cfg.Mail.From,
+		FromName:           cfg.Mail.FromName,
+		STARTTLS:           cfg.Mail.STARTTLS,
+		TLS:                cfg.Mail.TLS,
+		InsecureSkipVerify: cfg.Mail.InsecureSkipVerify,
+	}, logger)
+	if err != nil {
+		logger.Error("mailer setup failed", "err", err)
+		os.Exit(1)
+	}
+	authRepo := auth.NewRepository(pool)
+	cookieOpts := auth.CookieOptions{Secure: cfg.AuthCookieSecure, Domain: cfg.AuthCookieDomain}
+	authMW := auth.NewMiddleware(authRepo, cookieOpts, logger)
+	authTTL := auth.SessionTTL{
+		Access:   time.Duration(cfg.AuthAccessTTLMin) * time.Minute,
+		Refresh:  time.Duration(cfg.AuthRefreshTTLDays) * 24 * time.Hour,
+		Absolute: time.Duration(cfg.AuthAbsoluteTTLDays) * 24 * time.Hour,
+		Grace:    time.Duration(cfg.AuthRefreshGraceSec) * time.Second,
+	}
+	authHandler := auth.NewHandler(auth.HandlerConfig{
+		Repo: authRepo, MW: authMW, Mailer: mail, Cookies: cookieOpts,
+		TTL: authTTL, Logger: logger, BaseURL: cfg.AuthPublicURL,
+	})
+	adminHandler := auth.NewAdminHandler(authRepo, mail, logger, cfg.AuthPublicURL)
+
+	// The sweeper prunes the DB rows AND the two process-local caches that grow
+	// with traffic: the rate-limit buckets (keyed by attacker-supplied e-mail on
+	// an unauthenticated endpoint) and the last_seen_at throttle map. Neither is
+	// trimmed anywhere else, so leaving them off this ticker is a memory leak.
+	sweeper := auth.NewSweeper(authRepo, logger,
+		time.Duration(cfg.AuthSweepIntervalMin)*time.Minute,
+		time.Duration(cfg.AuthSweepRetainDays)*24*time.Hour).
+		WithInMemory(authHandler.SweepLimiters, authMW.SweepTouch)
+	sweeper.Start(rootCtx)
+
 	deps := server.Deps{
 		Pool:                pool,
 		Worker:              worker,
@@ -141,6 +189,9 @@ func main() {
 		PushHandler:         pushHandler,
 		LinkMetadataFetcher: linkMetadataAdapter{f: metadataFetcher},
 		FolderUnlockKey:     folderUnlockKey,
+		AuthHandler:         authHandler,
+		AdminHandler:        adminHandler,
+		AuthMiddleware:      authMW,
 	}
 	if storageClient != nil {
 		deps.Screenshotter = screenshotFunc(screenshot.Capture)

@@ -9,6 +9,14 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // Vitest defaults to 5s. That is comfortable for the plain run (~30ms per
+    // test) but not under v8 coverage instrumentation, which multiplies the
+    // wall clock of a jsdom render by roughly five — enough for the heavier
+    // dialog tests to trip the default and fail as timeouts that say nothing
+    // about the code. The gate is coverage, not speed, so the ceiling is only
+    // here to catch a genuine hang.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary', 'html'],
@@ -17,7 +25,6 @@ export default defineConfig({
         'src/main.tsx',
         'src/**/*.test.{ts,tsx}',
         'src/test/**',
-        'src/api/client.ts',
         'src/theme/**',
       ],
       thresholds: {

@@ -21,6 +21,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/pwhash"
 )
 
 // pgImage is the Postgres image tests run against. It MUST equal the image
@@ -161,4 +162,35 @@ func SeedUser(t *testing.T, pool *pgxpool.Pool, email string, role string) authc
 		t.Fatalf("testdb: seed user %q: %v", email, err)
 	}
 	return authctx.UserID(id)
+}
+
+// SeedUserWithPassword is SeedUser plus a real bcrypt credential, for the auth
+// tests that have to drive the login endpoint end to end.
+//
+// It goes through pwhash rather than a fixture hash on purpose: a hardcoded
+// digest would keep passing if the cost or algorithm changed underneath it,
+// which is precisely the change that ought to break a login test loudly.
+func SeedUserWithPassword(t *testing.T, pool *pgxpool.Pool, email, password, role string) authctx.UserID {
+	t.Helper()
+	id := SeedUser(t, pool, email, role)
+	hash, err := pwhash.Hash(password)
+	if err != nil {
+		t.Fatalf("testdb: hash password: %v", err)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE app_user SET password_hash = $2, email_verified_at = now() WHERE id = $1`,
+		int64(id), hash); err != nil {
+		t.Fatalf("testdb: set password for %q: %v", email, err)
+	}
+	return id
+}
+
+// SetUserStatus flips an account's status, so tests can exercise the disabled
+// and pending paths without hand-writing SQL in each one.
+func SetUserStatus(t *testing.T, pool *pgxpool.Pool, id authctx.UserID, status string) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE app_user SET status = $2 WHERE id = $1`, int64(id), status); err != nil {
+		t.Fatalf("testdb: set status: %v", err)
+	}
 }

@@ -7,6 +7,25 @@ import (
 	"strings"
 )
 
+// MailConfig holds transactional-mail wiring (internal/mailer).
+//
+// Driver defaults to "log", which writes the message body — invite link
+// included — to the structured log instead of sending it. That is the right
+// default for a self-hosted product: an operator who never configures SMTP
+// must still be able to complete an invite flow.
+type MailConfig struct {
+	Driver             string
+	Host               string
+	Port               int
+	Username           string
+	Password           string
+	From               string
+	FromName           string
+	STARTTLS           bool
+	TLS                bool
+	InsecureSkipVerify bool
+}
+
 // ObjectStoreConfig holds S3-compatible object-storage parameters (RustFS).
 type ObjectStoreConfig struct {
 	Endpoint  string
@@ -32,6 +51,29 @@ type Config struct {
 	// deployment keeps working exactly as before while the segmentation work
 	// lands. PR4 flips the default to true.
 	AuthEnabled bool
+
+	// AuthPublicURL is the origin baked into invite links.
+	//
+	// It cannot be derived from the request: Host and X-Forwarded-Host are
+	// attacker-supplied, and building a credential-bearing link from them is
+	// the classic reset-poisoning primitive — the mail reaches the real user
+	// but points at the attacker's host.
+	AuthPublicURL string
+	// AuthCookieSecure marks session cookies HTTPS-only. It defaults to the
+	// inverse of a loopback bind: a local dev server on plain HTTP must not set
+	// Secure (the browser silently drops the cookie and login appears to
+	// succeed then immediately forget), while anything network-reachable must.
+	AuthCookieSecure bool
+	AuthCookieDomain string
+
+	AuthAccessTTLMin     int
+	AuthRefreshTTLDays   int
+	AuthAbsoluteTTLDays  int
+	AuthRefreshGraceSec  int
+	AuthSweepIntervalMin int
+	AuthSweepRetainDays  int
+
+	Mail        MailConfig
 	ObjectStore ObjectStoreConfig
 
 	// Change-check worker (internal/changecheck). Per-link opt-in, runs
@@ -67,6 +109,27 @@ func Load() (Config, error) {
 		SharedSecret:       os.Getenv("SHARED_SECRET"),
 		CORSOrigins:        splitCSV(envOr("CORS_ORIGINS", "*")),
 		AuthEnabled:        envBool("AUTH_ENABLED", false),
+		AuthPublicURL:      envOr("AUTH_PUBLIC_URL", "http://localhost:9088"),
+		AuthCookieDomain:   os.Getenv("AUTH_COOKIE_DOMAIN"),
+		// Clamped in Load(): see normalizeAuth.
+		AuthAccessTTLMin:     envInt("AUTH_ACCESS_TTL_MIN", 15),
+		AuthRefreshTTLDays:   envInt("AUTH_REFRESH_TTL_DAYS", 30),
+		AuthAbsoluteTTLDays:  envInt("AUTH_ABSOLUTE_TTL_DAYS", 90),
+		AuthRefreshGraceSec:  envInt("AUTH_REFRESH_GRACE_SEC", 10),
+		AuthSweepIntervalMin: envInt("AUTH_SWEEP_INTERVAL_MIN", 60),
+		AuthSweepRetainDays:  envInt("AUTH_SWEEP_RETAIN_DAYS", 7),
+		Mail: MailConfig{
+			Driver:             envOr("MAIL_DRIVER", "log"),
+			Host:               os.Getenv("MAIL_HOST"),
+			Port:               envInt("MAIL_PORT", 587),
+			Username:           os.Getenv("MAIL_USERNAME"),
+			Password:           os.Getenv("MAIL_PASSWORD"),
+			From:               envOr("MAIL_FROM", "foldex@localhost"),
+			FromName:           envOr("MAIL_FROM_NAME", "Foldex"),
+			STARTTLS:           envBool("MAIL_STARTTLS", true),
+			TLS:                envBool("MAIL_TLS", false),
+			InsecureSkipVerify: envBool("MAIL_INSECURE_SKIP_VERIFY", false),
+		},
 		ObjectStore: ObjectStoreConfig{
 			// RUSTFS_* is canonical. MINIO_* is accepted as a one-release
 			// migration fallback so existing .env files keep working.
@@ -95,10 +158,52 @@ func Load() (Config, error) {
 	if cfg.PreviewConcurrency < 1 {
 		cfg.PreviewConcurrency = 1
 	}
+	cfg.normalizeAuth()
 	if err := cfg.validateSecureDefaults(); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// normalizeAuth clamps the session knobs and derives the cookie Secure flag.
+//
+// Clamping rather than rejecting: these are tuning values, and an operator who
+// typos AUTH_ACCESS_TTL_MIN=0 should get the default, not a backend that
+// refuses to boot. The one value with a security floor is the absolute TTL,
+// which must exceed the sliding refresh TTL or the ceiling it exists to impose
+// would be lower than the window it caps.
+func (c *Config) normalizeAuth() {
+	if c.AuthAccessTTLMin < 1 {
+		c.AuthAccessTTLMin = 15
+	}
+	if c.AuthRefreshTTLDays < 1 {
+		c.AuthRefreshTTLDays = 30
+	}
+	if c.AuthAbsoluteTTLDays < c.AuthRefreshTTLDays {
+		c.AuthAbsoluteTTLDays = c.AuthRefreshTTLDays
+	}
+	// A negative grace would classify every racing tab as a replay and sign the
+	// user out at random; an unbounded one would let a genuinely stolen token be
+	// replayed indefinitely.
+	if c.AuthRefreshGraceSec < 0 {
+		c.AuthRefreshGraceSec = 0
+	}
+	if c.AuthRefreshGraceSec > 60 {
+		c.AuthRefreshGraceSec = 60
+	}
+	if c.AuthSweepIntervalMin < 1 {
+		c.AuthSweepIntervalMin = 60
+	}
+	if c.AuthSweepRetainDays < 1 {
+		c.AuthSweepRetainDays = 7
+	}
+
+	// Secure is not read from the environment. Getting it wrong is a silent,
+	// baffling failure — a Secure cookie over plain HTTP is dropped by the
+	// browser without a word, so login "succeeds" and the very next request is
+	// anonymous. Deriving it from the bind removes the footgun: loopback (dev,
+	// plain HTTP) gets Secure=false, anything network-reachable gets true.
+	c.AuthCookieSecure = !isLocalBind(c.BindAddr)
 }
 
 // validateSecureDefaults refuses to boot when the API would be network-
@@ -114,6 +219,17 @@ func (c Config) validateSecureDefaults() error {
 			"insecure config: BACKEND_BIND=" + c.BindAddr +
 				" (non-loopback) AND SHARED_SECRET is empty — " +
 				"set SHARED_SECRET, or bind to 127.0.0.1",
+		)
+	}
+	// MAIL_INSECURE_SKIP_VERIFY exists for a self-signed dev SMTP server. Aimed
+	// at a real host it silently turns TLS into obfuscation: the connection is
+	// encrypted to whoever answered, which for an active attacker is them. The
+	// credential riding on it is the SMTP password, and the payload is invite
+	// and password-reset links.
+	if c.Mail.InsecureSkipVerify && !isLocalBind(c.Mail.Host) {
+		return errors.New(
+			"insecure config: MAIL_INSECURE_SKIP_VERIFY=1 with MAIL_HOST=" + c.Mail.Host +
+				" (non-loopback) — certificate verification may only be disabled for a local test server",
 		)
 	}
 	return nil

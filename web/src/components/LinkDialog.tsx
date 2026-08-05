@@ -120,6 +120,16 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   useEffect(() => {
     if (!open) return
     const id = requestAnimationFrame(() => {
+      // Only claim focus if the user has not already taken it themselves.
+      //
+      // The focus is deferred by a frame, which opens a window where a fast
+      // user can start typing in another field — the tag filter, most often —
+      // and then have the rest of their word yanked into the URL input
+      // mid-keystroke. Checking the active element first keeps the iOS
+      // workaround while making the steal impossible.
+      const active = document.activeElement
+      const claimed = active && active !== document.body && dialogRef.current?.contains(active)
+      if (claimed) return
       urlInputRef.current?.focus({ preventScroll: true })
     })
     return () => cancelAnimationFrame(id)

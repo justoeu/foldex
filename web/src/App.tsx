@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { useHotkeys } from 'react-hotkeys-hook'
 import { usePasteUrl } from './hooks/usePasteUrl'
 import { usePersistedState, usePersistedMap } from './hooks/usePersistedState'
+import { useDarkMode } from './hooks/useDarkMode'
 import { useTranslation } from 'react-i18next'
 import './styles/foldex.css'
 import './styles/overrides.css'
@@ -72,7 +73,9 @@ export default function App() {
   const [noteDialogOpen, setNoteDialogOpen] = useState(false)
   const [editNoteId, setEditNoteId] = useState<number | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [dark, setDark] = usePersistedState('foldex.dark', false)
+  // Dark mode lives in a hook so main.tsx can run it ABOVE the auth gate —
+  // otherwise a dark-mode user sees a white login screen (see useDarkMode).
+  const [dark, setDark] = useDarkMode()
   const [sidebarCollapsed, setSidebarCollapsed] = usePersistedState('foldex.sidebar.collapsed', false)
   // Drawer-style sidebar on mobile (≤768px). Stays in-memory only — phone
   // users almost never want it open by default after navigation. The
@@ -113,15 +116,6 @@ export default function App() {
   }, [unlockedFolders])
   const passwordPrompt = usePasswordPrompt()
 
-  // Theme toggle drives a class on the shell wrapper so all .fx-* tokens flip.
-  useEffect(() => {
-    document.documentElement.classList.toggle('fx-dark', dark)
-    document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
-    return () => {
-      document.documentElement.classList.remove('fx-dark')
-      document.documentElement.style.colorScheme = ''
-    }
-  }, [dark])
 
   // Derive the active viewMode + setter from openFolder. Home and each folder
   // get their own slot in the map; switching context surfaces the saved choice.

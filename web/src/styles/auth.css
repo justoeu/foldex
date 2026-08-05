@@ -1,0 +1,358 @@
+/*
+ * Auth screens (ADR-30).
+ *
+ * Everything is scoped under `.fx-auth` so nothing here can reach the app
+ * shell. The layout, radii and rhythm come from the design mockup; the PALETTE
+ * does not — it aliases the app's own `--fx-*` tokens instead. The mockup is
+ * light-only and its accent (#6c4ff7) sits one hue away from `--fx-accent`
+ * (#6366F1), which is close enough that side by side it reads as a rendering
+ * bug rather than as branding. Aliasing also means the login screen inherits
+ * dark mode for free.
+ *
+ * Keyframes MUST stay `fx-auth-*` prefixed: `@keyframes fx-spin` already exists
+ * in foldex.css, and a same-named copy here would silently redefine the
+ * spinner used by the entire app.
+ */
+
+.fx-auth {
+  --fxa-bg: var(--fx-bg);
+  --fxa-surface: var(--fx-surface-3);
+  --fxa-border: var(--fx-border);
+  --fxa-ink: var(--fx-ink);
+  --fxa-ink-soft: var(--fx-ink-3);
+  --fxa-accent: var(--fx-accent);
+  --fxa-accent-2: var(--fx-accent-2);
+  --fxa-danger: var(--fx-danger);
+  --fxa-radius: 18px;
+
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--fxa-bg);
+  background-image:
+    radial-gradient(1200px 600px at 12% -10%, var(--fx-accent-soft), transparent 60%),
+    radial-gradient(900px 500px at 105% 110%, var(--fx-accent-soft-2), transparent 55%);
+  font-family: var(--fx-ui);
+  color: var(--fxa-ink);
+  overflow-y: auto;
+}
+
+.fx-auth-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  width: min(980px, 100%);
+  min-height: 560px;
+  background: var(--fxa-surface);
+  border: 1px solid var(--fxa-border);
+  border-radius: var(--fxa-radius);
+  box-shadow: var(--fx-shadow-2);
+  overflow: hidden;
+  backdrop-filter: blur(12px);
+}
+
+.fx-auth-form-pane {
+  display: flex;
+  align-items: center;
+  padding: 48px 44px;
+}
+
+.fx-auth-form-inner {
+  width: 100%;
+  max-width: 380px;
+  margin: 0 auto;
+}
+
+/* Brand ------------------------------------------------------------ */
+
+.fx-auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 32px;
+}
+
+.fx-auth-logo {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--fxa-accent), var(--fxa-accent-2));
+  color: #fff;
+  font-family: var(--fx-display);
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: -0.02em;
+}
+
+.fx-auth-brandname {
+  font-family: var(--fx-display);
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+
+/* Headings --------------------------------------------------------- */
+
+.fx-auth-kicker {
+  font-family: var(--fx-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fxa-accent);
+  margin-bottom: 8px;
+}
+
+.fx-auth-title {
+  font-family: var(--fx-display);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin-bottom: 8px;
+}
+
+.fx-auth-subtitle {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fxa-ink-soft);
+  margin-bottom: 26px;
+}
+
+/* Form ------------------------------------------------------------- */
+
+.fx-auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fx-auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fx-auth-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fxa-ink);
+}
+
+.fx-auth-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--fxa-border);
+  border-radius: 11px;
+  background: var(--fx-surface-3);
+  color: var(--fxa-ink);
+  font-family: inherit;
+  font-size: 14px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.fx-auth-input:focus-visible {
+  outline: none;
+  border-color: var(--fxa-accent);
+  box-shadow: 0 0 0 3px var(--fx-accent-soft-2);
+}
+
+.fx-auth-input[readonly] {
+  background: var(--fx-bg-tint);
+  color: var(--fxa-ink-soft);
+  cursor: not-allowed;
+}
+
+.fx-auth-input[aria-invalid='true'] {
+  border-color: var(--fxa-danger);
+}
+
+.fx-auth-hint {
+  font-size: 12px;
+  color: var(--fxa-ink-soft);
+}
+
+.fx-auth-hint-error {
+  color: var(--fxa-danger);
+}
+
+.fx-auth-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  margin-top: 6px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--fxa-accent), var(--fxa-accent-2));
+  color: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+
+.fx-auth-submit:hover:not(:disabled) { filter: brightness(1.06); }
+.fx-auth-submit:active:not(:disabled) { transform: translateY(1px); }
+
+.fx-auth-submit:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.fx-auth-error {
+  padding: 11px 14px;
+  border: 1px solid color-mix(in srgb, var(--fxa-danger) 40%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--fxa-danger) 10%, transparent);
+  color: var(--fxa-danger);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.fx-auth-footer {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--fx-border-2);
+  font-size: 13px;
+  color: var(--fxa-ink-soft);
+}
+
+/* Spinner ---------------------------------------------------------- */
+
+.fx-auth-spinner {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: fx-auth-spin 0.7s linear infinite;
+}
+
+.fx-auth-spinner-lg {
+  width: 26px;
+  height: 26px;
+  border-width: 3px;
+  color: var(--fxa-accent);
+}
+
+@keyframes fx-auth-spin {
+  to { transform: rotate(360deg); }
+}
+
+.fx-auth-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--fxa-ink-soft);
+  font-size: 14px;
+}
+
+.fx-auth-boot {
+  flex-direction: column;
+  gap: 14px;
+}
+
+.fx-auth-boot-label {
+  font-size: 13px;
+  color: var(--fxa-ink-soft);
+}
+
+/* Marketing pane --------------------------------------------------- */
+
+.fx-auth-marketing {
+  display: flex;
+  align-items: center;
+  padding: 48px 44px;
+  background: linear-gradient(150deg, var(--fxa-accent), var(--fxa-accent-2));
+  color: #fff;
+}
+
+.fx-auth-marketing-inner { max-width: 340px; }
+
+.fx-auth-marketing-kicker {
+  font-family: var(--fx-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.8;
+  margin-bottom: 12px;
+}
+
+.fx-auth-marketing-title {
+  font-family: var(--fx-display);
+  font-size: 25px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  margin-bottom: 22px;
+}
+
+.fx-auth-marketing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  list-style: none;
+  font-size: 14px;
+  line-height: 1.5;
+  opacity: 0.95;
+}
+
+.fx-auth-marketing-list li {
+  position: relative;
+  padding-left: 22px;
+}
+
+.fx-auth-marketing-list li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+/* Responsive ------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .fx-auth-panel {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+  /* The marketing pane carries nothing the user needs in order to sign in, so
+     on a narrow screen it is dropped rather than stacked below the form. */
+  .fx-auth-marketing { display: none; }
+}
+
+@media (max-width: 600px) {
+  .fx-auth {
+    padding: 0;
+    align-items: stretch;
+  }
+  .fx-auth-panel {
+    width: 100%;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .fx-auth-form-pane {
+    padding: 32px 20px calc(32px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-auth-spinner { animation-duration: 2s; }
+  .fx-auth-submit { transition: none; }
+}

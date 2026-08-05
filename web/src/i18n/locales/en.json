@@ -686,5 +686,57 @@
     "rule_case": "Upper & lower case",
     "rule_digit": "A number",
     "rule_symbol": "A symbol"
+  },
+  "auth": {
+    "email": "E-mail",
+    "password": "Password",
+    "confirm_password": "Confirm password",
+    "name": "Name",
+    "loading": "Loading…",
+    "password_min_one": "At least {{count}} character",
+    "password_min_other": "At least {{count}} characters",
+    "sign_out": "Sign out"
+  },
+  "auth_login": {
+    "kicker": "welcome back",
+    "title": "Sign in to Foldex",
+    "subtitle": "Your bookmarks, notes and folders — right where you left them.",
+    "submit": "Sign in"
+  },
+  "auth_setup": {
+    "kicker": "first run",
+    "title": "Create the administrator account",
+    "subtitle": "This is the first account on this instance. It becomes the administrator and adopts any existing content.",
+    "submit": "Create account and sign in"
+  },
+  "auth_invite": {
+    "kicker": "invitation",
+    "title": "Activate your account",
+    "subtitle": "Choose a password to finish setting up your Foldex account.",
+    "email_locked": "This address comes from your invitation and cannot be changed.",
+    "submit": "Activate and sign in",
+    "invalid_title": "This invitation is no longer valid",
+    "invalid_body": "The link may have expired, been revoked, or already been used. Ask an administrator to send a new one.",
+    "back_to_login": "Go to sign in"
+  },
+  "auth_marketing": {
+    "kicker": "self-hosted",
+    "title": "Everything you save, in one place you control.",
+    "point_organize": "Nestable folders, tags and full-text search across links and notes.",
+    "point_monitor": "Watch any page for changes and get a push notification.",
+    "point_private": "Your data stays on your server. Every account sees only its own."
+  },
+  "auth_errors": {
+    "invalid_credentials": "Invalid e-mail or password.",
+    "too_many_attempts": "Too many attempts. Please wait a few minutes and try again.",
+    "already_configured": "This instance already has an account. Reload the page to sign in.",
+    "email_taken": "That e-mail address is already registered.",
+    "invalid_email": "Enter a valid e-mail address.",
+    "password_too_short_one": "The password must be at least {{count}} character.",
+    "password_too_short_other": "The password must be at least {{count}} characters.",
+    "password_too_long": "The password is too long (maximum 72 bytes).",
+    "password_mismatch": "The two passwords do not match.",
+    "network": "Could not reach the server. Check your connection and try again.",
+    "generic": "Something went wrong. Please try again."
   }
 }

@@ -315,6 +315,55 @@ Via UI: open the **Import / Export** page → the right column hosts the **💾 
 
 Full design rationale: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 
+## Accounts & sign-in (opt-in)
+
+Foldex ships single-user by default. Every link, note, folder and tag already has an
+owner in the database, but with `AUTH_ENABLED=0` (the default) the backend attributes
+every request to the bootstrap administrator, so an existing install behaves exactly as
+it always has — `SHARED_SECRET` stays the only gate and nothing in the UI changes.
+
+Set `AUTH_ENABLED=1` in `.env` and restart to turn on real accounts:
+
+```bash
+AUTH_ENABLED=1
+AUTH_PUBLIC_URL=https://localhost   # the origin baked into invitation links
+```
+
+**First run.** The SPA shows a setup screen. The account you create there becomes the
+administrator and **adopts every link, note, folder and tag that already existed** — an
+upgraded install keeps all of its content.
+
+**Adding people.** There is no public sign-up: an administrator sends an invitation, and
+only the address on that invitation can accept it. The invite link is shown once when
+you create it, and is also e-mailed.
+
+**E-mail.** `MAIL_DRIVER` defaults to `log`, which prints the invitation — link included
+— to the backend log instead of sending it. That is deliberate: a self-hosted instance
+with no SMTP server must still be able to invite someone. Read it with
+`docker compose logs backend`, or copy the link the admin screen shows. For real
+delivery set `MAIL_DRIVER=smtp` and the `MAIL_*` values; `make up-mail` starts
+[Mailpit](https://mailpit.axllent.org/) with a local inbox at <http://localhost:8025>
+for development.
+
+**What each account can see.** Everything is private per account — administrators
+included. An admin can create, disable and delete users, but never sees another
+account's links or notes. Content is separated in the database itself, not by a
+filter the UI applies.
+
+**Sessions.** Sign-in sets httpOnly cookies: a short-lived access token plus a
+30-day refresh token that rotates on every use. If a refresh token is ever replayed —
+the signature of a stolen one — every session for that account is signed out and the
+owner is e-mailed. Signing out is available everywhere; "sign out everywhere" revokes
+every device. Changing your password keeps the device you are on and drops the rest.
+
+**Locked out?** With `AUTH_ENABLED=1` and no way back into the only administrator
+account, recovery is a direct database edit — the same status the master folder password
+already has. Set `AUTH_ENABLED=0`, restart, and the instance reverts to the
+single-user behaviour with all content intact.
+
+Design rationale, threat model and the full API surface:
+[docs/SDD-AUTH-RBAC.md](docs/SDD-AUTH-RBAC.md).
+
 ## Docs
 
 - [Vision](docs/VISION.md) — problem, goals, success criteria

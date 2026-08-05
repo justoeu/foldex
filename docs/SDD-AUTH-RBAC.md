@@ -917,12 +917,24 @@ Backend ≥ 85% (`-covermode=atomic -coverpkg` sobre `./internal/...`); frontend
 
 | PR | Escopo | Flag / fronteira |
 |---|---|---|
-| **1 — Segmentação** | Migration 000017; `pkg/{authctx,keyfile,attemptlimit,secrets}`; ~60 métodos com `uid`; convenção `repository_system.go`; rework completo do backup; `testdb.Reset` + `SeedUser`; suíte cross-user inteira | `AUTH_ENABLED=0`: um shim injeta o admin de bootstrap. **Zero mudança visível.** Fecha quando o build está limpo, a cobertura ≥ 85% e a suíte cross-user passa com dois usuários reais no lugar do shim |
-| **2 — Identidade** | `internal/mailer` + Mailpit; `internal/auth` core (sessão, CSRF, RBAC); bootstrap; convites; login/logout/refresh; `/api/auth/me`; `/api/admin/users`; sweeper. CORS credencial + `PUT` + headers novos. Master password migra para `app_user`. Frontend: `AuthProvider`/`AuthGate`, `client.ts`, telas login + setup, `auth.css`, `useDarkMode` | `AUTH_ENABLED` ainda `0` (opt-in do operador). Fecha quando dá para configurar o primeiro admin, convidar um segundo e cada um só ver o seu |
+| **1 — Segmentação** ✅ | Migration 000017; `pkg/{authctx,keyfile,attemptlimit,secrets}`; ~60 métodos com `uid`; convenção `repository_system.go`; rework completo do backup; `testdb.Reset` + `SeedUser`; suíte cross-user inteira | `AUTH_ENABLED=0`: um shim injeta o admin de bootstrap. **Zero mudança visível.** Fecha quando o build está limpo, a cobertura ≥ 85% e a suíte cross-user passa com dois usuários reais no lugar do shim |
+| **2 — Identidade** ✅ | `internal/mailer` + Mailpit; `internal/auth` core (sessão, CSRF, RBAC); bootstrap; convites; login/logout/refresh; `/api/auth/me`; `/api/admin/users`; sweeper. CORS credencial + `PUT` + headers novos. Master password migra para `app_user`. Frontend: `AuthProvider`/`AuthGate`, `client.ts`, telas login + setup, `auth.css`, `useDarkMode` | `AUTH_ENABLED` ainda `0` (opt-in do operador). Fecha quando dá para configurar o primeiro admin, convidar um segundo e cada um só ver o seu |
 | **3 — 2FA** | `pquerna/otp`; TOTP + QR server-side + AES-GCM no seed; códigos de recuperação; `auth_challenge`; OTP por e-mail; obrigatório para admin; todos os buckets; piso de timing; redações do `logsafe`. Frontend: `OtpInput` e as telas otp/forgot/sent/reset/verify/invite | `AUTH_REQUIRE_2FA_FOR_ADMINS=1`. Fecha quando admin não consegue sessão sem TOTP e todo caminho de recuperação tem teste |
 | **4 — Federação + default-on** | `internal/oauthgoogle` + 6 endpoints (inclusive `/convert`); fluxo de conversão + tela `convert` + “Definir senha”; `api_token` + bearer + escopos; extensão MV3 para `Authorization: Bearer` (transição com as duas credenciais); `PUBLIC_ID_REDIRECT_ENABLED=0`; `SHARED_SECRET` deprecado; tela de admin de usuários; docs | **`AUTH_ENABLED` passa a `1`.** Fecha quando a extensão funciona só com token e o aviso de depreciação dispara no boot |
 
 Cada PR passa pelo gate pré-push do `CLAUDE.md` §6.1 exatamente como o CI roda, pelo sweep obrigatório dos 5 agentes (§9), por `graphify update .` e por um bump de versão.
+
+### 15.1 Desvios do plano, registrados na entrega
+
+Três coisas saíram diferentes do desenho acima e valem registro, porque um leitor futuro tropeçaria nelas:
+
+1. **A janela de graça emite uma sessão IRMÃ, não novos tokens na mesma linha** (§2.3 descrevia "reemite os tokens correntes da família", que é irrealizável: o servidor guarda só hashes). Ver ADR-30 em `ARCHITECTURE.md` para o raciocínio completo — resumidamente, regravar a linha invalida o trio que a requisição vencedora está segurando, e como as duas vêm do mesmo cookie jar a aba perdedora é deslogada. A irmã herda `family_id` **e** `created_at`.
+
+2. **`internal/pkg/keyfile` não foi extraído.** O plano previa generalizar `folders.LoadOrGenerateFolderUnlockKey`, mas o PR2 não precisou de nenhuma chave em arquivo — o segredo de sessão são os próprios tokens aleatórios, não uma chave derivada. A extração faz sentido no PR3, que precisa de `AUTH_ENCRYPTION_KEY` para o seed TOTP; puxá-la agora seria abstração sem segundo consumidor (`CLAUDE.md` §7).
+
+3. **A master password já havia migrado no PR1**, não no PR2 como a tabela de faseamento sugere: a 000017 criou `app_user.master_password_{hash,hint}`, moveu os valores e esvaziou as chaves correspondentes de `app_setting`, e `internal/settings` lê e escreve nas colunas do usuário desde então. Nada a fazer aqui — o item só está registrado porque a linha do PR2 na tabela acima o menciona.
+
+4. **`POST /api/auth/password/change` entrou no PR2**, embora a §4.2 o liste junto do resto do grupo de senha. Ele não precisa de e-mail nem de token — só da senha atual — então segurá-lo até o PR3 deixaria uma conta sem nenhuma forma de trocar a própria senha. `forgot`/`reset` seguem no PR3, que é onde a entrega por e-mail passa a ser obrigatória.
 
 ---
 

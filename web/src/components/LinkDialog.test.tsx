@@ -487,12 +487,38 @@ describe('LinkDialog', () => {
     renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
     const user = userEvent.setup()
     const tagsInput = screen.getByLabelText('tag filter')
-    await user.type(tagsInput, 'pending-tag{Enter}')
+    // Typed and submitted in two steps on purpose. Sending 'name{Enter}' as one
+    // string races the controlled input: the keydown handler reads `tagFilter`
+    // from its closure, and if React has not yet committed the final
+    // keystroke's setState, `canCreateFromFilter` is still false and Enter is a
+    // no-op — so no pending tag is ever queued. Asserting the input's value
+    // first pins the commit, and only then is Enter meaningful.
+    await user.type(tagsInput, 'pending-tag')
+    await waitFor(() => expect(tagsInput).toHaveValue('pending-tag'))
+    await user.keyboard('{Enter}')
     await waitFor(() => expect(document.querySelector('.fx-tag-hint')).not.toBeNull())
     const chip = screen.getByText('pending-tag')
     await user.click(chip)
     expect(document.querySelector('.fx-tag-hint')).not.toBeNull()
     expect(screen.getByText('pending-tag')).toBeInTheDocument()
+  })
+
+  // Regression: the URL field is focused a frame after mount (an iOS Safari
+  // workaround), which used to yank focus away from whatever the user had
+  // already started typing in. It surfaced as an intermittently failing tag
+  // test; the underlying bug was that typing a tag name immediately after
+  // opening the dialog scattered half the word into the URL field.
+  it('does not steal focus from a field the user already started typing in', async () => {
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    const tagsInput = screen.getByLabelText('tag filter')
+
+    await user.click(tagsInput)
+    await user.type(tagsInput, 'my-new-tag')
+
+    expect(tagsInput).toHaveValue('my-new-tag')
+    expect(tagsInput).toHaveFocus()
+    expect(screen.getByRole('textbox', { name: /^URL$/i })).toHaveValue('')
   })
 
   it('paginates registered tags when more than 7 are available', async () => {
