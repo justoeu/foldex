@@ -9,6 +9,7 @@ import (
 
 	"foldex/internal/folders"
 	"foldex/internal/links"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/tags"
 )
 
@@ -26,12 +27,15 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 // updated_at, click_count, last_clicked_at, url, description, favicon_url,
 // og_image_url, preview_status, cover_url, body_snippet — link-only columns
 // are NULL on the note arm and vice versa.
-func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
+func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) ([]Entry, error) {
 	args := []any{}
 	linkWhere := []string{}
 	noteWhere := []string{}
-	appendScopeFilters(&linkWhere, &args, "l", "link", q, true)
-	appendScopeFilters(&noteWhere, &args, "n", "note", q, false)
+	// Each arm appends its OWN uid placeholder into the shared args slice, so
+	// the click_log aggregates below must reference that arm's index — not a
+	// fixed $1. appendScopeFilters returns it for exactly that reason.
+	linkUIDIdx := appendScopeFilters(&linkWhere, &args, uid, "l", "link", q, true)
+	noteUIDIdx := appendScopeFilters(&noteWhere, &args, uid, "n", "note", q, false)
 
 	// References the UNIONed result's output column names (established by
 	// the link arm's aliases — Postgres requires both arms agree, which they
@@ -63,7 +67,7 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
 	// Pre-aggregate click_log once per entity_kind instead of LATERAL count(*)
 	// per row (which forces full candidate evaluation before LIMIT on
 	// sort=clicks|recent).
-	linkSQL := `SELECT 'link' AS kind, l.id, l.title, l.slug, l.pinned, l.folder_id, l.created_at, l.updated_at,
+	linkSQL := fmt.Sprintf(`SELECT 'link' AS kind, l.id, l.title, l.slug, l.pinned, l.folder_id, l.created_at, l.updated_at,
             COALESCE(clk.cnt, 0) AS click_count, clk.last_at AS last_clicked_at,
             l.url, l.description, l.favicon_url, l.og_image_url, l.preview_status, l.preview_error,
             l.check_interval, l.last_checked_at, l.last_fingerprint, l.last_change_detected_at,
@@ -72,14 +76,14 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
         FROM link l
         LEFT JOIN (
             SELECT entity_id, count(*)::bigint AS cnt, max(clicked_at) AS last_at
-            FROM click_log WHERE entity_kind = 'link'
+            FROM click_log WHERE entity_kind = 'link' AND user_id = $%d
             GROUP BY entity_id
-        ) clk ON clk.entity_id = l.id`
+        ) clk ON clk.entity_id = l.id`, linkUIDIdx)
 	if len(linkWhere) > 0 {
 		linkSQL += " WHERE " + strings.Join(linkWhere, " AND ")
 	}
 
-	noteSQL := `SELECT 'note' AS kind, n.id, n.title, n.slug, n.pinned, n.folder_id, n.created_at, n.updated_at,
+	noteSQL := fmt.Sprintf(`SELECT 'note' AS kind, n.id, n.title, n.slug, n.pinned, n.folder_id, n.created_at, n.updated_at,
             COALESCE(clk.cnt, 0) AS click_count, clk.last_at AS last_clicked_at,
             NULL::text AS url, NULL::text AS description, NULL::text AS favicon_url,
             NULL::text AS og_image_url, NULL::text AS preview_status, NULL::text AS preview_error,
@@ -90,9 +94,9 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
         FROM note n
         LEFT JOIN (
             SELECT entity_id, count(*)::bigint AS cnt, max(clicked_at) AS last_at
-            FROM click_log WHERE entity_kind = 'note'
+            FROM click_log WHERE entity_kind = 'note' AND user_id = $%d
             GROUP BY entity_id
-        ) clk ON clk.entity_id = n.id`
+        ) clk ON clk.entity_id = n.id`, noteUIDIdx)
 	if len(noteWhere) > 0 {
 		noteSQL += " WHERE " + strings.Join(noteWhere, " AND ")
 	}
@@ -140,7 +144,7 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
 		return out, nil
 	}
 
-	byKind, err := tags.TagsForLinkAndNote(ctx, r.pool, linkIDs, noteIDs)
+	byKind, err := tags.TagsForLinkAndNote(ctx, r.pool, uid, linkIDs, noteIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +158,18 @@ func (r *Repository) List(ctx context.Context, q ListQuery) ([]Entry, error) {
 
 // appendScopeFilters adds Q/TagIDs/FolderID/Ungrouped predicates for one UNION
 // arm. linkSearch=true uses title|url|description; notes use title|body_text.
-func appendScopeFilters(where *[]string, args *[]any, alias, kind string, q ListQuery, linkSearch bool) {
+// appendScopeFilters builds one arm's WHERE. uid is appended FIRST so the
+// tenant predicate leads and the (user_id, …) composite indexes from migration
+// 000017 can be used.
+//
+// Note the two arms each get their OWN $n for user_id: placeholder indices come
+// from len(*args) and the arms are built by separate calls into ONE shared args
+// slice, so they must never assume a fixed offset.
+func appendScopeFilters(where *[]string, args *[]any, uid authctx.UserID, alias, kind string, q ListQuery, linkSearch bool) int {
+	*args = append(*args, int64(uid))
+	uidIdx := len(*args)
+	*where = append(*where, fmt.Sprintf("%s.user_id = $%d", alias, uidIdx))
+
 	if q.Q != "" {
 		pattern := "%" + q.Q + "%"
 		*args = append(*args, pattern)
@@ -184,4 +199,5 @@ func appendScopeFilters(where *[]string, args *[]any, alias, kind string, q List
 		// Unscoped grid: never surface content from password-protected folders.
 		*where = append(*where, folders.SQLNotInLockedFolder(alias))
 	}
+	return uidIdx
 }

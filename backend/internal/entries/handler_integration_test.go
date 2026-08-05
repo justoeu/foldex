@@ -19,6 +19,8 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/notes"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 // testUnlockKey is a fixed 32-byte HMAC key for tests — real deployments get
@@ -28,14 +30,17 @@ var testUnlockKey = []byte("01234567890123456789012345678901")
 
 func TestHandler_List(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
-	_, err := links.NewRepository(pool).Create(ctx, links.CreateInput{URL: "https://example.com/x", Title: "A link"})
+	_, err := links.NewRepository(pool).Create(ctx, uid, links.CreateInput{URL: "https://example.com/x", Title: "A link"})
 	require.NoError(t, err)
-	_, err = notes.NewRepository(pool).Create(ctx, notes.CreateInput{Title: "A note"})
+	_, err = notes.NewRepository(pool).Create(ctx, uid, notes.CreateInput{Title: "A note"})
 	require.NoError(t, err)
 
 	foldersRepo := folders.NewRepository(pool)
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/entries", entries.NewHandler(entries.NewRepository(pool), foldersRepo, testUnlockKey).Mount)
 
 	req := httptest.NewRequest(http.MethodGet, "/entries/?sort=alpha", nil)
@@ -52,19 +57,22 @@ func TestHandler_List(t *testing.T) {
 
 func TestHandler_List_QueryParams(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	tag, err := func() (int64, error) {
 		var id int64
-		err := pool.QueryRow(ctx, `INSERT INTO tag (name, color) VALUES ('t', '#fff') RETURNING id`).Scan(&id)
+		err := pool.QueryRow(ctx, `INSERT INTO tag (user_id, name, color) VALUES ($1, 't', '#fff') RETURNING id`, int64(uid)).Scan(&id)
 		return id, err
 	}()
 	require.NoError(t, err)
-	_, err = links.NewRepository(pool).Create(ctx, links.CreateInput{URL: "https://example.com/x", Title: "Tagged", TagIDs: []int64{tag}})
+	_, err = links.NewRepository(pool).Create(ctx, uid, links.CreateInput{URL: "https://example.com/x", Title: "Tagged", TagIDs: []int64{tag}})
 	require.NoError(t, err)
-	_, err = notes.NewRepository(pool).Create(ctx, notes.CreateInput{Title: "Untagged note"})
+	_, err = notes.NewRepository(pool).Create(ctx, uid, notes.CreateInput{Title: "Untagged note"})
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/entries", entries.NewHandler(entries.NewRepository(pool), folders.NewRepository(pool), testUnlockKey).Mount)
 
 	req := httptest.NewRequest(http.MethodGet, "/entries/?q=Tagged&tag="+strconv.FormatInt(tag, 10)+"&limit=5&offset=0&ungrouped=1&sort=clicks", nil)
@@ -85,7 +93,10 @@ func TestHandler_List_QueryParams(t *testing.T) {
 
 func TestHandler_List_NoMutationRoutes(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/entries", entries.NewHandler(entries.NewRepository(pool), folders.NewRepository(pool), testUnlockKey).Mount)
 
 	for _, method := range []string{http.MethodPost, http.MethodPatch, http.MethodDelete} {
@@ -102,25 +113,28 @@ func TestHandler_List_NoMutationRoutes(t *testing.T) {
 // folder-password invariant).
 func TestHandler_List_FolderGate(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	foldersRepo := folders.NewRepository(pool)
 
 	pw := "hunter22"
-	protected, err := foldersRepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	protected, err := foldersRepo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
 	require.NoError(t, err)
-	_, err = links.NewRepository(pool).Create(ctx, links.CreateInput{
+	_, err = links.NewRepository(pool).Create(ctx, uid, links.CreateInput{
 		URL: "https://hidden.example", Title: "Hidden", FolderID: &protected.ID,
 	})
 	require.NoError(t, err)
 
-	open, err := foldersRepo.Create(ctx, folders.CreateInput{Name: "Open", Color: "#def"})
+	open, err := foldersRepo.Create(ctx, uid, folders.CreateInput{Name: "Open", Color: "#def"})
 	require.NoError(t, err)
-	_, err = links.NewRepository(pool).Create(ctx, links.CreateInput{
+	_, err = links.NewRepository(pool).Create(ctx, uid, links.CreateInput{
 		URL: "https://visible.example", Title: "Visible", FolderID: &open.ID,
 	})
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/entries", entries.NewHandler(entries.NewRepository(pool), foldersRepo, testUnlockKey).Mount)
 
 	// No token at all → 403 folder_locked, no content leaked.
@@ -140,7 +154,7 @@ func TestHandler_List_FolderGate(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 
 	// Valid token for the RIGHT folder → 200 with the real content.
-	hash, err := foldersRepo.PasswordHashFor(ctx, protected.ID)
+	hash, err := foldersRepo.PasswordHashFor(ctx, uid, protected.ID)
 	require.NoError(t, err)
 	require.NotNil(t, hash)
 	token := folders.IssueUnlockToken(testUnlockKey, protected.ID, *hash)
@@ -156,9 +170,9 @@ func TestHandler_List_FolderGate(t *testing.T) {
 
 	// A token minted for a DIFFERENT protected folder must not unlock this one.
 	otherPW := "other-pass"
-	other, err := foldersRepo.Create(ctx, folders.CreateInput{Name: "Other Secret", Color: "#123", Password: &otherPW})
+	other, err := foldersRepo.Create(ctx, uid, folders.CreateInput{Name: "Other Secret", Color: "#123", Password: &otherPW})
 	require.NoError(t, err)
-	otherHash, err := foldersRepo.PasswordHashFor(ctx, other.ID)
+	otherHash, err := foldersRepo.PasswordHashFor(ctx, uid, other.ID)
 	require.NoError(t, err)
 	require.NotNil(t, otherHash)
 	wrongFolderToken := folders.IssueUnlockToken(testUnlockKey, other.ID, *otherHash)

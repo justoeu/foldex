@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/folders"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/listquery"
 )
@@ -16,12 +17,12 @@ import (
 // *folders.Repository. Kept as a narrow interface so this package doesn't
 // need the full folders.Repository surface (just the one lookup it needs).
 type FolderPasswordLookup interface {
-	PasswordHashFor(ctx context.Context, id int64) (*string, error)
+	PasswordHashFor(ctx context.Context, uid authctx.UserID, id int64) (*string, error)
 }
 
 // Lister is satisfied by *Repository.
 type Lister interface {
-	List(ctx context.Context, q ListQuery) ([]Entry, error)
+	List(ctx context.Context, uid authctx.UserID, q ListQuery) ([]Entry, error)
 }
 
 // Handler exposes the single read-only GET /api/entries route. No
@@ -57,7 +58,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			httperr.Write(w, err)
 			return
 		}
-		out, err := h.repo.List(r.Context(), q)
+		out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()), q)
 		if err != nil {
 			httperr.Write(w, err)
 			return
@@ -69,7 +70,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httperr.JSON(w, http.StatusOK, out)
 		return
 	}
-	out, err := h.repo.List(r.Context(), q)
+	out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()), q)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -78,7 +79,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) enforceFolderUnlock(ctx context.Context, folderID int64, token string) error {
-	hash, err := h.folderLookup.PasswordHashFor(ctx, folderID)
+	hash, err := h.folderLookup.PasswordHashFor(ctx, authctx.MustUser(ctx), folderID)
 	if err != nil {
 		return err
 	}

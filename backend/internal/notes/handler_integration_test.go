@@ -16,15 +16,22 @@ import (
 
 	"foldex/internal/notes"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
-func newRouter(t *testing.T) (http.Handler, *notes.Repository) {
+func newRouter(t *testing.T) (http.Handler, *notes.Repository, authctx.UserID) {
 	t.Helper()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := notes.NewRepository(pool)
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/notes", notes.NewHandler(repo, nil).Mount)
-	return r, repo
+	return r, repo, uid
 }
 
 func doJSON(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
@@ -41,7 +48,7 @@ func doJSON(t *testing.T, h http.Handler, method, path string, body any) *httpte
 }
 
 func TestHandler_CreateGetUpdateDelete(t *testing.T) {
-	h, _ := newRouter(t)
+	h, _, _ := newRouter(t)
 
 	rr := doJSON(t, h, http.MethodPost, "/notes/", map[string]any{
 		"title":     "Hello",
@@ -70,7 +77,7 @@ func TestHandler_CreateGetUpdateDelete(t *testing.T) {
 }
 
 func TestHandler_Create_InvalidInput(t *testing.T) {
-	h, _ := newRouter(t)
+	h, _, _ := newRouter(t)
 	rr := doJSON(t, h, http.MethodPost, "/notes/", map[string]any{"title": ""})
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	var body map[string]map[string]string
@@ -79,7 +86,7 @@ func TestHandler_Create_InvalidInput(t *testing.T) {
 }
 
 func TestHandler_Create_SlugConflict(t *testing.T) {
-	h, _ := newRouter(t)
+	h, _, _ := newRouter(t)
 	rr := doJSON(t, h, http.MethodPost, "/notes/", map[string]any{"title": "A", "slug": "dup"})
 	require.Equal(t, http.StatusCreated, rr.Code)
 
@@ -91,7 +98,7 @@ func TestHandler_Create_SlugConflict(t *testing.T) {
 }
 
 func TestHandler_List(t *testing.T) {
-	h, _ := newRouter(t)
+	h, _, _ := newRouter(t)
 	doJSON(t, h, http.MethodPost, "/notes/", map[string]any{"title": "First"})
 	doJSON(t, h, http.MethodPost, "/notes/", map[string]any{"title": "Second"})
 
@@ -105,7 +112,7 @@ func TestHandler_List(t *testing.T) {
 // TestHandler_List_OmitsBodyHTML locks N1-NEX-005: List must not ship full
 // body_html (up to 512 KiB/row). Get still returns the full sanitized body.
 func TestHandler_List_OmitsBodyHTML(t *testing.T) {
-	h, _ := newRouter(t)
+	h, _, _ := newRouter(t)
 	body := "<p>" + string(make([]byte, 0, 200))
 	// Build a non-trivial body so omitempty isn't hiding an always-empty field.
 	for i := 0; i < 50; i++ {
@@ -143,7 +150,7 @@ func TestHandler_List_OmitsBodyHTML(t *testing.T) {
 }
 
 func TestHandler_List_QueryParams(t *testing.T) {
-	h, _ := newRouter(t)
+	h, _, _ := newRouter(t)
 	doJSON(t, h, http.MethodPost, "/notes/", map[string]any{"title": "Alpha", "pinned": true})
 	doJSON(t, h, http.MethodPost, "/notes/", map[string]any{"title": "Beta"})
 
@@ -156,7 +163,7 @@ func TestHandler_List_QueryParams(t *testing.T) {
 }
 
 func TestHandler_List_TagAndFolderIDParams(t *testing.T) {
-	h, _ := newRouter(t)
+	h, _, _ := newRouter(t)
 	// Malformed tag/folder_id values must be ignored, not error — same
 	// permissive parsing convention as links' list handler.
 	rr := doJSON(t, h, http.MethodGet, "/notes/?tag=abc&tag=-1&folder_id=abc", nil)
@@ -164,7 +171,7 @@ func TestHandler_List_TagAndFolderIDParams(t *testing.T) {
 }
 
 func TestHandler_Update_InvalidInput(t *testing.T) {
-	h, _ := newRouter(t)
+	h, _, _ := newRouter(t)
 	created := doJSON(t, h, http.MethodPost, "/notes/", map[string]any{"title": "Valid"})
 	var n notes.Note
 	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &n))
@@ -178,19 +185,19 @@ func TestHandler_Update_InvalidInput(t *testing.T) {
 }
 
 func TestHandler_Update_InvalidID(t *testing.T) {
-	h, _ := newRouter(t)
+	h, _, _ := newRouter(t)
 	rr := doJSON(t, h, http.MethodPatch, "/notes/not-a-number", map[string]any{"title": "x"})
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestHandler_Get_InvalidID(t *testing.T) {
-	h, _ := newRouter(t)
+	h, _, _ := newRouter(t)
 	rr := doJSON(t, h, http.MethodGet, "/notes/not-a-number", nil)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestHandler_Delete_NotFound(t *testing.T) {
-	h, _ := newRouter(t)
+	h, _, _ := newRouter(t)
 	rr := doJSON(t, h, http.MethodDelete, "/notes/999999", nil)
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }

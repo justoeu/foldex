@@ -34,6 +34,8 @@ func TestWorker_ProcessesEnqueuedJob(t *testing.T) {
 	defer target.Close()
 
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := preview.NewWorker(pool, 1, 3*time.Second, logger)
 
@@ -45,7 +47,7 @@ func TestWorker_ProcessesEnqueuedJob(t *testing.T) {
 	}()
 
 	lrepo := links.NewRepository(pool)
-	link, err := lrepo.Create(context.Background(), links.CreateInput{
+	link, err := lrepo.Create(context.Background(), uid, links.CreateInput{
 		URL: target.URL, Title: "before",
 	})
 	require.NoError(t, err)
@@ -56,7 +58,7 @@ func TestWorker_ProcessesEnqueuedJob(t *testing.T) {
 	deadline := time.Now().Add(8 * time.Second)
 	var got links.Link
 	for time.Now().Before(deadline) {
-		got, _ = lrepo.Get(context.Background(), link.ID)
+		got, _ = lrepo.Get(context.Background(), uid, link.ID)
 		if got.PreviewStatus == "ok" {
 			break
 		}
@@ -109,6 +111,8 @@ func TestWorker_ScreenshotFallback_RunsWhenNoOGImage(t *testing.T) {
 	defer target.Close()
 
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := preview.NewWorker(pool, 1, 3*time.Second, logger)
 
@@ -123,7 +127,7 @@ func TestWorker_ScreenshotFallback_RunsWhenNoOGImage(t *testing.T) {
 	}()
 
 	lrepo := links.NewRepository(pool)
-	link, err := lrepo.Create(context.Background(), links.CreateInput{
+	link, err := lrepo.Create(context.Background(), uid, links.CreateInput{
 		URL: target.URL, Title: "plain",
 	})
 	require.NoError(t, err)
@@ -135,7 +139,7 @@ func TestWorker_ScreenshotFallback_RunsWhenNoOGImage(t *testing.T) {
 	deadline := time.Now().Add(6 * time.Second)
 	var got links.Link
 	for time.Now().Before(deadline) {
-		got, _ = lrepo.Get(context.Background(), link.ID)
+		got, _ = lrepo.Get(context.Background(), uid, link.ID)
 		if got.PreviewStatus == "ok" {
 			break
 		}
@@ -160,6 +164,8 @@ func TestWorker_ShortCircuitsWhenImageAlreadyPresent(t *testing.T) {
 	defer target.Close()
 
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := preview.NewWorker(pool, 1, 3*time.Second, logger)
 
@@ -167,14 +173,14 @@ func TestWorker_ShortCircuitsWhenImageAlreadyPresent(t *testing.T) {
 	w.WithScreenshotFallback(stubScreenshotter{payload: []byte("nope")}, up)
 
 	lrepo := links.NewRepository(pool)
-	link, err := lrepo.Create(context.Background(), links.CreateInput{
+	link, err := lrepo.Create(context.Background(), uid, links.CreateInput{
 		URL: target.URL, Title: "preuploaded",
 	})
 	require.NoError(t, err)
 
 	// Simulate a user upload landing BEFORE the worker starts / picks the job
 	// (avoids racing Start's requeuePending ticker against the OG write).
-	require.NoError(t, lrepo.UpdateOGImage(context.Background(), link.ID, "/api/files/images/1.png"))
+	require.NoError(t, lrepo.UpdateOGImage(context.Background(), uid, link.ID, "/api/files/images/1.png"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	w.Start(ctx)
@@ -188,7 +194,7 @@ func TestWorker_ShortCircuitsWhenImageAlreadyPresent(t *testing.T) {
 	deadline := time.Now().Add(4 * time.Second)
 	var got links.Link
 	for time.Now().Before(deadline) {
-		got, _ = lrepo.Get(context.Background(), link.ID)
+		got, _ = lrepo.Get(context.Background(), uid, link.ID)
 		if got.PreviewStatus == "ok" {
 			break
 		}
@@ -204,6 +210,8 @@ func TestWorker_ShortCircuitsWhenImageAlreadyPresent(t *testing.T) {
 func TestWorker_MarksFailureOnUnreachable(t *testing.T) {
 	t.Setenv("PREVIEW_STRICT_SSRF", "")
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := preview.NewWorker(pool, 1, 500*time.Millisecond, logger)
 
@@ -218,7 +226,7 @@ func TestWorker_MarksFailureOnUnreachable(t *testing.T) {
 	// Use a port nothing listens on; the SSRF guard rejects localhost, so use
 	// 192.0.2.1 (TEST-NET-1, documented as non-routable) which the public
 	// address check allows but won't connect.
-	link, _ := lrepo.Create(context.Background(), links.CreateInput{
+	link, _ := lrepo.Create(context.Background(), uid, links.CreateInput{
 		URL: "http://192.0.2.1:1", Title: "doomed",
 	})
 
@@ -227,7 +235,7 @@ func TestWorker_MarksFailureOnUnreachable(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	var got links.Link
 	for time.Now().Before(deadline) {
-		got, _ = lrepo.Get(context.Background(), link.ID)
+		got, _ = lrepo.Get(context.Background(), uid, link.ID)
 		if got.PreviewStatus == "failed" {
 			break
 		}

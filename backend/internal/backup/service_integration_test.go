@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -57,6 +58,11 @@ func (s *stubBucket) ObjectExists(_ context.Context, key string) (bool, error) {
 	return ok, nil
 }
 
+func (s *stubBucket) DeleteObject(_ context.Context, key string) error {
+	delete(s.objs, key)
+	return nil
+}
+
 func (s *stubBucket) DeleteObjectsPrefix(_ context.Context, prefix string) error {
 	for k := range s.objs {
 		if strings.HasPrefix(k, prefix) {
@@ -71,28 +77,37 @@ func (s *stubBucket) DeleteObjectsPrefix(_ context.Context, prefix string) error
 // every entry has a SHA-256 checksum.
 func TestService_ExportProducesValidZipWithManifest(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 
 	// Seed: one tag, two links, two files.
 	trepo := tags.NewRepository(pool)
-	tag, err := trepo.Create(ctx, tags.CreateInput{Name: "work", Color: "#abc"})
+	tag, err := trepo.Create(ctx, uid, tags.CreateInput{Name: "work", Color: "#abc"})
 	require.NoError(t, err)
 	lrepo := links.NewRepository(pool)
-	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://a", Title: "A", TagIDs: []int64{tag.ID}})
+	la, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://a", Title: "A", TagIDs: []int64{tag.ID}})
 	require.NoError(t, err)
-	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://b", Title: "B"})
+	lb, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b", Title: "B"})
 	require.NoError(t, err)
 
+	// Objects are attributed to a user through the row that references them —
+	// keys themselves carry no tenant segment — so each one is seeded together
+	// with the og_image_url that claims it.
 	bucket := newStubBucket()
-	bucket.objs["screenshots/1.jpg"] = []byte("img-1-bytes")
-	bucket.objs["images/2.jpg"] = []byte("img-2-bytes")
+	shotA := fmt.Sprintf("screenshots/%d.jpg", la.ID)
+	imgB := fmt.Sprintf("images/%d.jpg", lb.ID)
+	bucket.objs[shotA] = []byte("img-1-bytes")
+	bucket.objs[imgB] = []byte("img-2-bytes")
+	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, la.ID, "/api/files/"+shotA))
+	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, lb.ID, "/api/files/"+imgB))
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	svc := backup.NewService(pool, bucket, logger)
 
 	var buf bytes.Buffer
 	var callbackCounts backup.Counts
-	rep, err := svc.Export(ctx, &buf, func(c backup.Counts) error {
+	rep, err := svc.Export(ctx, uid, &buf, func(c backup.Counts) error {
 		callbackCounts = c
 		return nil
 	})
@@ -130,12 +145,12 @@ func TestService_ExportProducesValidZipWithManifest(t *testing.T) {
 	assert.EqualValues(t, zip.Store, manifestCompression, "manifest must be stored uncompressed so the frontend can read counts without inflate")
 
 	// Both bucket objects must appear under files/.
-	assert.Contains(t, files, "files/screenshots/1.jpg")
-	assert.Contains(t, files, "files/images/2.jpg")
-	assert.Equal(t, []byte("img-1-bytes"), files["files/screenshots/1.jpg"])
+	assert.Contains(t, files, "files/"+shotA)
+	assert.Contains(t, files, "files/"+imgB)
+	assert.Equal(t, []byte("img-1-bytes"), files["files/"+shotA])
 
 	// Round-trip Validate on the produced zip (covers Service.Validate).
-	v, err := svc.Validate(ctx, zr)
+	v, err := svc.Validate(ctx, uid, zr)
 	require.NoError(t, err)
 	assert.True(t, v.OK, "fresh export must validate: %v", v.Errors)
 	require.NotNil(t, v.Manifest)
@@ -143,6 +158,8 @@ func TestService_ExportProducesValidZipWithManifest(t *testing.T) {
 
 func TestService_Validate_RejectsEmptyZip(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	svc := backup.NewService(pool, newStubBucket(), logger)
 
@@ -152,7 +169,7 @@ func TestService_Validate_RejectsEmptyZip(t *testing.T) {
 	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
 
-	v, err := svc.Validate(context.Background(), zr)
+	v, err := svc.Validate(context.Background(), uid, zr)
 	require.NoError(t, err)
 	assert.False(t, v.OK)
 	assert.NotEmpty(t, v.Errors)
@@ -163,13 +180,15 @@ func TestService_Validate_RejectsEmptyZip(t *testing.T) {
 // refuse a request before flushing response bytes.
 func TestService_ExportAbortsWhenCallbackErrors(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	svc := backup.NewService(pool, newStubBucket(), logger)
 
 	var buf bytes.Buffer
-	_, err := svc.Export(ctx, &buf, func(_ backup.Counts) error {
+	_, err := svc.Export(ctx, uid, &buf, func(_ backup.Counts) error {
 		return io.ErrUnexpectedEOF // sentinel, anything non-nil works
 	})
 	require.Error(t, err)

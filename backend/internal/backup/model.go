@@ -19,7 +19,8 @@ const ManifestVersion = "1.0"
 // (server doesn't know the layout). Lower = warning (defaults applied).
 // v10 = migration 000015 adds folder.password_hash.
 // v11 = migration 000016 adds app_setting + folder.password_hint.
-const CurrentSchemaVersion = 11
+// v12 = migration 000017 multi-user (user_id on every content table).
+const CurrentSchemaVersion = 12
 
 // DatabaseSnapshotVersion is the schema of database.json itself. v3 = adds
 // link_tags + click_logs to v2 (which had tags/folders/links only). v4 = adds
@@ -33,8 +34,12 @@ const CurrentSchemaVersion = 11
 // unprotected, exactly like any other missing-field default. v5 = adds
 // app_settings (the master recovery password hash, ADR-29) + folder rows gain
 // a password_hint field; an older backup lacking either restores with the
-// setting absent / hint nil, no special casing.
-const DatabaseSnapshotVersion = 5
+// setting absent / hint nil, no special casing. v6 = per-user export (ADR-30):
+// adds owner_email, and app_settings became read-but-IGNORED — the master
+// password is a per-user secret now and no auth material ships in the ZIP at
+// all. A v5 backup still restores; its app_settings array is dropped with a
+// warning.
+const DatabaseSnapshotVersion = 6
 
 type Counts struct {
 	Links     int64 `json:"links"`
@@ -77,11 +82,17 @@ type Snapshot struct {
 	NoteTags   []NoteTagRow   `json:"note_tags"`
 	ClickLogs  []ClickRow     `json:"click_logs"`
 	NoteClicks []NoteClickRow `json:"note_clicks"`
-	// AppSettings round-trips the app_setting KV table verbatim (ADR-29) —
-	// currently just the master recovery password hash. Kept a separate array
-	// so an old backup (DatabaseSnapshotVersion < 5, no "app_settings" key)
-	// decodes as a nil slice and every restore mode's loop is a no-op.
+	// AppSettings is READ BUT IGNORED since snapshot v6 (ADR-30). Before
+	// migration 000017 it round-tripped the master recovery password hash
+	// (ADR-29); that hash is now a per-user column on app_user, and no auth
+	// material goes into the ZIP at all. The field is retained so a pre-v6
+	// backup still decodes; restore emits a warning and drops it.
 	AppSettings []AppSettingRow `json:"app_settings"`
+	// OwnerEmail records who exported the snapshot. Informational ONLY —
+	// restore always writes rows owned by the CALLING user, never by whoever
+	// the ZIP names, which is what makes a forged backup unable to plant rows
+	// in another account. A mismatch produces a warning.
+	OwnerEmail string `json:"owner_email"`
 }
 
 // defaultColor is the indigo the DTO layer defaults to on Create/Update. Kept

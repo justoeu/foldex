@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 )
 
@@ -19,13 +20,13 @@ type Repository struct {
 
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
-func (r *Repository) Create(ctx context.Context, in CreateInput) (Tag, error) {
+func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateInput) (Tag, error) {
 	var t Tag
 	err := r.pool.QueryRow(ctx, `
-        INSERT INTO tag (name, color, icon)
-        VALUES ($1, $2, $3)
+        INSERT INTO tag (user_id, name, color, icon)
+        VALUES ($1, $2, $3, $4)
         RETURNING id, name, color, icon, created_at
-    `, in.Name, in.Color, in.Icon).Scan(&t.ID, &t.Name, &t.Color, &t.Icon, &t.CreatedAt)
+    `, int64(uid), in.Name, in.Color, in.Icon).Scan(&t.ID, &t.Name, &t.Color, &t.Icon, &t.CreatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -36,7 +37,7 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Tag, error) {
 	return t, nil
 }
 
-func (r *Repository) List(ctx context.Context) ([]Tag, error) {
+func (r *Repository) List(ctx context.Context, uid authctx.UserID) ([]Tag, error) {
 	// link_tag is polymorphic (entity_kind/entity_id) — LinkCount keeps its
 	// pre-notes meaning (links only) by filtering entity_kind='link' in the
 	// join condition rather than counting note-tagged rows too.
@@ -45,9 +46,10 @@ func (r *Repository) List(ctx context.Context) ([]Tag, error) {
                COUNT(lt.entity_id) AS link_count
         FROM tag t
         LEFT JOIN link_tag lt ON lt.tag_id = t.id AND lt.entity_kind = 'link'
+        WHERE t.user_id = $1
         GROUP BY t.id
         ORDER BY t.name ASC
-    `)
+    `, int64(uid))
 	if err != nil {
 		return nil, fmt.Errorf("list tags: %w", err)
 	}
@@ -63,12 +65,15 @@ func (r *Repository) List(ctx context.Context) ([]Tag, error) {
 	return out, rows.Err()
 }
 
-func (r *Repository) Get(ctx context.Context, id int64) (Tag, error) {
+// Get returns the tag owned by uid. A tag belonging to another user reports
+// httperr.ErrNotFound, never 403 — a 403 would confirm the id exists and turn
+// this into a cross-tenant enumeration oracle.
+func (r *Repository) Get(ctx context.Context, uid authctx.UserID, id int64) (Tag, error) {
 	var t Tag
 	err := r.pool.QueryRow(ctx, `
         SELECT id, name, color, icon, created_at
-        FROM tag WHERE id = $1
-    `, id).Scan(&t.ID, &t.Name, &t.Color, &t.Icon, &t.CreatedAt)
+        FROM tag WHERE user_id = $1 AND id = $2
+    `, int64(uid), id).Scan(&t.ID, &t.Name, &t.Color, &t.Icon, &t.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Tag{}, httperr.ErrNotFound
 	}
@@ -78,7 +83,7 @@ func (r *Repository) Get(ctx context.Context, id int64) (Tag, error) {
 	return t, nil
 }
 
-func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Tag, error) {
+func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, in UpdateInput) (Tag, error) {
 	sets := []string{}
 	args := []any{}
 	i := 1
@@ -98,11 +103,11 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Tag,
 		i++
 	}
 	if len(sets) == 0 {
-		return r.Get(ctx, id)
+		return r.Get(ctx, uid, id)
 	}
-	args = append(args, id)
-	q := fmt.Sprintf(`UPDATE tag SET %s WHERE id = $%d
-                      RETURNING id, name, color, icon, created_at`, strings.Join(sets, ", "), i)
+	args = append(args, int64(uid), id)
+	q := fmt.Sprintf(`UPDATE tag SET %s WHERE user_id = $%d AND id = $%d
+                      RETURNING id, name, color, icon, created_at`, strings.Join(sets, ", "), i, i+1)
 	var t Tag
 	err := r.pool.QueryRow(ctx, q, args...).Scan(&t.ID, &t.Name, &t.Color, &t.Icon, &t.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -118,8 +123,8 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Tag,
 	return t, nil
 }
 
-func (r *Repository) Delete(ctx context.Context, id int64) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM tag WHERE id = $1`, id)
+func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM tag WHERE user_id = $1 AND id = $2`, int64(uid), id)
 	if err != nil {
 		return fmt.Errorf("delete tag: %w", err)
 	}

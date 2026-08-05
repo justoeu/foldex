@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 )
 
@@ -18,7 +19,7 @@ import (
 // satisfies it, avoiding an import cycle. configured=false means no master is
 // set (recovery disabled); ok=false with configured=true means wrong password.
 type MasterPasswordVerifier interface {
-	VerifyMaster(ctx context.Context, plain string) (ok bool, configured bool, err error)
+	VerifyMaster(ctx context.Context, uid authctx.UserID, plain string) (ok bool, configured bool, err error)
 }
 
 type Handler struct {
@@ -73,7 +74,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			httperr.Write(w, err)
 			return
 		}
-		out, err := h.repo.List(r.Context(), q)
+		out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()), q)
 		if err != nil {
 			httperr.Write(w, err)
 			return
@@ -85,7 +86,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httperr.JSON(w, http.StatusOK, out)
 		return
 	}
-	out, err := h.repo.List(r.Context(), q)
+	out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()), q)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -94,7 +95,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) enforceFolderUnlock(ctx context.Context, folderID int64, token string) error {
-	hash, err := h.repo.PasswordHashFor(ctx, folderID)
+	hash, err := h.repo.PasswordHashFor(ctx, authctx.MustUser(ctx), folderID)
 	if err != nil {
 		return err
 	}
@@ -168,7 +169,7 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	hash, err := h.repo.PasswordHashFor(r.Context(), id)
+	hash, err := h.repo.PasswordHashFor(r.Context(), authctx.MustUser(r.Context()), id)
 	if err != nil {
 		release()
 		httperr.Write(w, err)
@@ -226,7 +227,7 @@ func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	ok, configured, err := h.master.VerifyMaster(r.Context(), in.MasterPassword)
+	ok, configured, err := h.master.VerifyMaster(r.Context(), authctx.MustUser(r.Context()), in.MasterPassword)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -239,7 +240,7 @@ func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "wrong_master_password", "incorrect master password"))
 		return
 	}
-	if err := h.repo.ResetPasswordByMaster(r.Context(), id); err != nil {
+	if err := h.repo.ResetPasswordByMaster(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -262,7 +263,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	f, err := h.repo.Create(r.Context(), in)
+	f, err := h.repo.Create(r.Context(), authctx.MustUser(r.Context()), in)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -276,7 +277,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	f, err := h.repo.Get(r.Context(), id)
+	f, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -305,7 +306,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	f, err := h.repo.Update(r.Context(), id, in)
+	f, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -326,12 +327,12 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		cascade = true
 	}
 	if cascade {
-		if err := h.repo.DeleteCascade(r.Context(), id); err != nil {
+		if err := h.repo.DeleteCascade(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
 			httperr.Write(w, err)
 			return
 		}
 	} else {
-		if err := h.repo.Delete(r.Context(), id); err != nil {
+		if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
 			httperr.Write(w, err)
 			return
 		}

@@ -8,6 +8,8 @@ import (
 
 	"foldex/internal/pkg/clampint"
 	"foldex/internal/pkg/httperr"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // StorageStatter abstracts the object-storage size lookup so the stats handler
@@ -25,10 +27,10 @@ type StorageStats struct {
 
 // StatsReader is satisfied by *Repository.
 type StatsReader interface {
-	Summary(ctx context.Context) (Summary, error)
-	Daily(ctx context.Context, days int) ([]DailyPoint, error)
-	TopLinks(ctx context.Context, limit int) ([]TopLink, error)
-	TagBuckets(ctx context.Context) ([]TagBucket, error)
+	Summary(ctx context.Context, uid authctx.UserID) (Summary, error)
+	Daily(ctx context.Context, uid authctx.UserID, days int) ([]DailyPoint, error)
+	TopLinks(ctx context.Context, uid authctx.UserID, limit int) ([]TopLink, error)
+	TagBuckets(ctx context.Context, uid authctx.UserID) ([]TagBucket, error)
 }
 
 type Handler struct {
@@ -65,7 +67,7 @@ func (h *Handler) storageStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
-	s, err := h.repo.Summary(r.Context())
+	s, err := h.repo.Summary(r.Context(), authctx.MustUser(r.Context()))
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -78,7 +80,7 @@ func (h *Handler) daily(w http.ResponseWriter, r *http.Request) {
 	// `generate_series(now() - 2.1e9 * interval '1 day', ...)` and the
 	// planner happily attempts it — auth-gated DoS otherwise.
 	days := clampint.Int(r.URL.Query().Get("days"), 60, 1, 365)
-	out, err := h.repo.Daily(r.Context(), days)
+	out, err := h.repo.Daily(r.Context(), authctx.MustUser(r.Context()), days)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -90,7 +92,7 @@ func (h *Handler) top(w http.ResponseWriter, r *http.Request) {
 	// Clamp to [1, 100] — `?limit=999999999` would `ORDER BY clicks DESC` on
 	// every link before slicing.
 	limit := clampint.Int(r.URL.Query().Get("limit"), 10, 1, 100)
-	out, err := h.repo.TopLinks(r.Context(), limit)
+	out, err := h.repo.TopLinks(r.Context(), authctx.MustUser(r.Context()), limit)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -99,7 +101,7 @@ func (h *Handler) top(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) tags(w http.ResponseWriter, r *http.Request) {
-	out, err := h.repo.TagBuckets(r.Context())
+	out, err := h.repo.TagBuckets(r.Context(), authctx.MustUser(r.Context()))
 	if err != nil {
 		httperr.Write(w, err)
 		return

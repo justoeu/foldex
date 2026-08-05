@@ -12,6 +12,10 @@ import (
 
 	"foldex/internal/folders"
 	"foldex/internal/pkg/httperr"
+
+	"foldex/internal/pkg/authctx"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 type fakeList struct {
@@ -20,7 +24,7 @@ type fakeList struct {
 	q   ListQuery
 }
 
-func (f *fakeList) List(_ context.Context, q ListQuery) ([]Entry, error) {
+func (f *fakeList) List(_ context.Context, _ authctx.UserID, q ListQuery) ([]Entry, error) {
 	f.q = q
 	return f.out, f.err
 }
@@ -35,7 +39,7 @@ type fakeFolder struct {
 	flipAfter int
 }
 
-func (f *fakeFolder) PasswordHashFor(context.Context, int64) (*string, error) {
+func (f *fakeFolder) PasswordHashFor(context.Context, authctx.UserID, int64) (*string, error) {
 	f.calls++
 	if f.flipAfter > 0 && f.calls > f.flipAfter {
 		return f.hash2, f.err
@@ -45,6 +49,7 @@ func (f *fakeFolder) PasswordHashFor(context.Context, int64) (*string, error) {
 
 func mount(h *Handler) http.Handler {
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	h.Mount(r)
 	return r
 }

@@ -7,6 +7,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/pkg/httperr"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // Handler exposes the HTTP surface needed by the frontend subscribe flow:
@@ -58,7 +60,7 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_endpoint", "endpoint must be an absolute https URL"))
 		return
 	}
-	sub, err := h.repo.Save(r.Context(), in.Endpoint, in.P256dh, in.Auth)
+	sub, err := h.repo.Save(r.Context(), authctx.MustUser(r.Context()), in.Endpoint, in.P256dh, in.Auth)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -86,7 +88,7 @@ func (h *Handler) unsubscribe(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_endpoint", "endpoint is required"))
 		return
 	}
-	if err := h.repo.DeleteByEndpoint(r.Context(), in.Endpoint); err != nil {
+	if err := h.repo.DeleteByEndpointForUser(r.Context(), authctx.MustUser(r.Context()), in.Endpoint); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -103,6 +105,7 @@ func (h *Handler) test(w http.ResponseWriter, r *http.Request) {
 		Title:  "Foldex test notification",
 		URL:    "/",
 		Kind:   "test",
+		UserID: authctx.MustUser(r.Context()),
 	})
 	if err != nil {
 		httperr.Write(w, err)

@@ -24,7 +24,15 @@ type Config struct {
 	PreviewTimeoutSec  int
 	SharedSecret       string
 	CORSOrigins        []string
-	ObjectStore        ObjectStoreConfig
+
+	// AuthEnabled turns on the multi-user authentication stack (ADR-30).
+	//
+	// Defaults to FALSE through PR3. With it off the router injects the
+	// bootstrap admin as the principal for every request, so a single-user
+	// deployment keeps working exactly as before while the segmentation work
+	// lands. PR4 flips the default to true.
+	AuthEnabled bool
+	ObjectStore ObjectStoreConfig
 
 	// Change-check worker (internal/changecheck). Per-link opt-in, runs
 	// hourly/daily/weekly diffs and fires Web Push notifications.
@@ -58,6 +66,7 @@ func Load() (Config, error) {
 		PreviewTimeoutSec:  envInt("PREVIEW_FETCH_TIMEOUT_SEC", 5),
 		SharedSecret:       os.Getenv("SHARED_SECRET"),
 		CORSOrigins:        splitCSV(envOr("CORS_ORIGINS", "*")),
+		AuthEnabled:        envBool("AUTH_ENABLED", false),
 		ObjectStore: ObjectStoreConfig{
 			// RUSTFS_* is canonical. MINIO_* is accepted as a one-release
 			// migration fallback so existing .env files keep working.

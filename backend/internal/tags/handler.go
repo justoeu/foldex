@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 )
 
@@ -24,7 +25,7 @@ func (h *Handler) Mount(r chi.Router) {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	out, err := h.repo.List(r.Context())
+	out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()))
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -48,7 +49,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	t, err := h.repo.Create(r.Context(), in)
+	t, err := h.repo.Create(r.Context(), authctx.MustUser(r.Context()), in)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -62,7 +63,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	t, err := h.repo.Get(r.Context(), id)
+	t, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -91,7 +92,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	t, err := h.repo.Update(r.Context(), id, in)
+	t, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -105,7 +106,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if err := h.repo.Delete(r.Context(), id); err != nil {
+	if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
 		httperr.Write(w, err)
 		return
 	}

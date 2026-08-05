@@ -9,6 +9,7 @@ import (
 
 	"foldex/internal/folders"
 	"foldex/internal/links"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/listquery"
 )
@@ -16,7 +17,7 @@ import (
 // FolderPasswordLookup resolves a folder's password hash for content-gate
 // on GET /api/notes?folder_id=X.
 type FolderPasswordLookup interface {
-	PasswordHashFor(ctx context.Context, id int64) (*string, error)
+	PasswordHashFor(ctx context.Context, uid authctx.UserID, id int64) (*string, error)
 }
 
 // notesJSONBodyCap is larger than httperr.JSONBodyCap (64 KiB) — note bodies
@@ -63,7 +64,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			httperr.Write(w, err)
 			return
 		}
-		out, err := h.repo.List(r.Context(), q)
+		out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()), q)
 		if err != nil {
 			httperr.Write(w, err)
 			return
@@ -75,7 +76,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httperr.JSON(w, http.StatusOK, out)
 		return
 	}
-	out, err := h.repo.List(r.Context(), q)
+	out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()), q)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -84,7 +85,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) enforceFolderUnlock(ctx context.Context, folderID int64, token string) error {
-	hash, err := h.folderLookup.PasswordHashFor(ctx, folderID)
+	hash, err := h.folderLookup.PasswordHashFor(ctx, authctx.MustUser(ctx), folderID)
 	if err != nil {
 		return err
 	}
@@ -107,7 +108,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	n, err := h.repo.Create(r.Context(), in)
+	n, err := h.repo.Create(r.Context(), authctx.MustUser(r.Context()), in)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -121,7 +122,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	n, err := h.repo.Get(r.Context(), id)
+	n, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -150,7 +151,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	n, err := h.repo.Update(r.Context(), id, in)
+	n, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -164,7 +165,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if err := h.repo.Delete(r.Context(), id, h.storage); err != nil {
+	if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id, h.storage); err != nil {
 		httperr.Write(w, err)
 		return
 	}

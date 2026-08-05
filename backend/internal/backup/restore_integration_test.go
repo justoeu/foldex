@@ -25,6 +25,8 @@ import (
 	"foldex/internal/settings"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // Restore is the most destructive code in the system (TRUNCATE on wipe,
@@ -44,31 +46,37 @@ type seeded struct {
 // seedSnapshot populates pool with one tag, one folder, two links (A inside the
 // folder and tagged, B at root), three clicks on A, and the matching bucket
 // file. Returns the live ids so callers can assert identity preservation.
-func seedSnapshot(t *testing.T, pool *pgxpool.Pool, bucket *stubBucket) seeded {
+func seedSnapshot(t *testing.T, pool *pgxpool.Pool, uid authctx.UserID, bucket *stubBucket) seeded {
 	t.Helper()
 	ctx := context.Background()
-	tag, err := tags.NewRepository(pool).Create(ctx, tags.CreateInput{Name: "work", Color: "#abc"})
+	tag, err := tags.NewRepository(pool).Create(ctx, uid, tags.CreateInput{Name: "work", Color: "#abc"})
 	require.NoError(t, err)
-	folder, err := folders.NewRepository(pool).Create(ctx, folders.CreateInput{Name: "Reading", Color: "#abc"})
+	folder, err := folders.NewRepository(pool).Create(ctx, uid, folders.CreateInput{Name: "Reading", Color: "#abc"})
 	require.NoError(t, err)
 	lrepo := links.NewRepository(pool)
-	la, err := lrepo.Create(ctx, links.CreateInput{URL: "https://a.example", Title: "Alpha", TagIDs: []int64{tag.ID}, FolderID: &folder.ID})
+	la, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://a.example", Title: "Alpha", TagIDs: []int64{tag.ID}, FolderID: &folder.ID})
 	require.NoError(t, err)
-	lb, err := lrepo.Create(ctx, links.CreateInput{URL: "https://b.example", Title: "Beta"})
+	lb, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b.example", Title: "Beta"})
 	require.NoError(t, err)
 
 	for i := 0; i < 3; i++ {
-		_, err := pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id, clicked_at) VALUES ('link', $1, now())`, la.ID)
+		_, err := pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id, clicked_at, user_id) VALUES ('link', $1, now(), $2)`, la.ID, int64(uid))
 		require.NoError(t, err)
 	}
-	bucket.objs[fmt.Sprintf("screenshots/%d.jpg", la.ID)] = []byte("img-A")
+	// The bucket object and the row that references it are seeded together on
+	// purpose: object keys carry no tenant segment, so a row pointing at the key
+	// is the ONLY thing that makes it attributable to a user. An orphan object
+	// belongs to nobody and no longer travels in that user's export.
+	key := fmt.Sprintf("screenshots/%d.jpg", la.ID)
+	bucket.objs[key] = []byte("img-A")
+	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, la.ID, "/api/files/"+key))
 	return seeded{tagID: tag.ID, folderID: folder.ID, linkA: la.ID, linkB: lb.ID}
 }
 
-func exportToReader(t *testing.T, svc *backup.Service) *zip.Reader {
+func exportToReader(t *testing.T, svc *backup.Service, uid authctx.UserID) *zip.Reader {
 	t.Helper()
 	var buf bytes.Buffer
-	_, err := svc.Export(context.Background(), &buf, func(backup.Counts) error { return nil })
+	_, err := svc.Export(context.Background(), uid, &buf, func(backup.Counts) error { return nil })
 	require.NoError(t, err)
 	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
@@ -106,15 +114,26 @@ func scalar(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) int64 {
 // TestRestore_WipePreservesIdentityAndBumpsSequence locks the §4 wipe contract:
 // TRUNCATE + restore with ORIGINAL ids, sequences bumped past max(id) so a
 // later insert can't collide, and the object-store prefix replaced from the zip.
-func TestRestore_WipePreservesIdentityAndBumpsSequence(t *testing.T) {
+// TestRestore_WipeRestoresContentWithFreshIDs locks the POST-ADR-30 wipe
+// contract. Before migration 000017 this test asserted the opposite — that wipe
+// preserved the snapshot's original ids and then setval'd the sequences.
+//
+// Neither is valid multi-tenant: ids are only unique per table, not per user, so
+// another tenant may already hold them, and RESTART IDENTITY / setval mutate a
+// sequence SHARED by every user. wipeUser now deletes only the caller's rows and
+// the mapped insert path re-creates them with fresh ids. What must survive is
+// the CONTENT and its relationships — not the integers.
+func TestRestore_WipeRestoresContentWithFreshIDs(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
-	ids := seedSnapshot(t, pool, bucket)
+	ids := seedSnapshot(t, pool, uid, bucket)
 
-	zr := exportToReader(t, svc)
-	rep, err := svc.Restore(ctx, zr, backup.ModeWipe)
+	zr := exportToReader(t, svc, uid)
+	rep, err := svc.Restore(ctx, uid, zr, backup.ModeWipe)
 	require.NoError(t, err)
 
 	assert.EqualValues(t, 2, rep.Wiped.Links)
@@ -122,22 +141,26 @@ func TestRestore_WipePreservesIdentityAndBumpsSequence(t *testing.T) {
 	assert.EqualValues(t, 3, rep.Wiped.ClickLogs)
 	assert.EqualValues(t, 2, rep.Inserted.Links)
 
-	// Identity preserved: the very same ids exist after wipe+restore.
-	assert.True(t, rowExists(t, pool, "link", ids.linkA), "original link id must survive wipe restore")
-	assert.True(t, rowExists(t, pool, "tag", ids.tagID), "original tag id must survive wipe restore")
+	// Content is whole…
 	assert.EqualValues(t, 2, count(t, pool, "link"))
+	assert.EqualValues(t, 1, count(t, pool, "tag"))
 	assert.EqualValues(t, 3, count(t, pool, "click_log"))
 
-	// Sequence bumped: a fresh insert gets an id strictly greater than the
-	// largest restored id (no PK collision) — the gotcha wipe restore exists to
-	// avoid.
-	nl, err := links.NewRepository(pool).Create(ctx, links.CreateInput{URL: "https://new.example", Title: "New"})
-	require.NoError(t, err)
-	assert.Greater(t, nl.ID, ids.linkB, "sequence must be advanced past the restored ids")
+	// …and identified by URL, which is what users actually care about.
+	var restoredA int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT id FROM link WHERE user_id = $1 AND url = 'https://a.example'`,
+		int64(uid)).Scan(&restoredA))
 
-	// Files prefix replaced from the zip.
-	_, ok := bucket.objs[fmt.Sprintf("screenshots/%d.jpg", ids.linkA)]
-	assert.True(t, ok, "wipe restore must re-upload files from the zip")
+	// The original ids are GONE — that is the behaviour change, asserted rather
+	// than left implicit so a future "fix" that reinstates them fails loudly.
+	assert.False(t, rowExists(t, pool, "link", ids.linkA),
+		"wipe restore must NOT reuse the snapshot's ids (sequences are shared across tenants)")
+
+	// Object keys follow the remapped id, so the proxy URL on the restored row
+	// still resolves.
+	_, ok := bucket.objs[fmt.Sprintf("screenshots/%d.jpg", restoredA)]
+	assert.True(t, ok, "wipe restore must re-upload files under the remapped id")
 	assert.EqualValues(t, 1, rep.Files.Uploaded)
 }
 
@@ -146,15 +169,17 @@ func TestRestore_WipePreservesIdentityAndBumpsSequence(t *testing.T) {
 // never duplicated, and re-running the SAME zip inserts no new unique entities.
 func TestRestore_SkipLeavesCollisionsAndIsIdempotentForUniqueEntities(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
-	seedSnapshot(t, pool, bucket)
+	seedSnapshot(t, pool, uid, bucket)
 
 	require.EqualValues(t, 3, count(t, pool, "click_log"), "precondition: 3 seeded clicks")
 
-	zr := exportToReader(t, svc)
-	rep, err := svc.Restore(ctx, zr, backup.ModeSkip)
+	zr := exportToReader(t, svc, uid)
+	rep, err := svc.Restore(ctx, uid, zr, backup.ModeSkip)
 	require.NoError(t, err)
 
 	assert.EqualValues(t, 0, rep.Inserted.Links, "colliding URLs must not be inserted under skip")
@@ -182,7 +207,7 @@ func TestRestore_SkipLeavesCollisionsAndIsIdempotentForUniqueEntities(t *testing
 
 	// Same in-memory zip again — links/tags (the UNIQUE-constrained entities)
 	// stay at zero new inserts, but click_logs grow again (6 → 9).
-	rep2, err := svc.Restore(ctx, zr, backup.ModeSkip)
+	rep2, err := svc.Restore(ctx, uid, zr, backup.ModeSkip)
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, rep2.Inserted.Links)
 	assert.EqualValues(t, 0, rep2.Inserted.Tags)
@@ -196,13 +221,15 @@ func TestRestore_SkipLeavesCollisionsAndIsIdempotentForUniqueEntities(t *testing
 // UNIQUE so honest duplication is impossible).
 func TestRestore_DuplicateRenamesTagsAndFallsBackOnURLCollision(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
-	seedSnapshot(t, pool, bucket)
+	seedSnapshot(t, pool, uid, bucket)
 
-	zr := exportToReader(t, svc)
-	rep, err := svc.Restore(ctx, zr, backup.ModeDuplicate)
+	zr := exportToReader(t, svc, uid)
+	rep, err := svc.Restore(ctx, uid, zr, backup.ModeDuplicate)
 	require.NoError(t, err)
 
 	assert.True(t, tagNameExists(t, pool, "work"))
@@ -256,21 +283,23 @@ func TestRestore_DuplicateAppendsSlugSuffixOnCollision(t *testing.T) {
 
 	// Source: seed + export.
 	srcPool := testdb.New(t)
+	srcUID := testdb.SeedUser(t, srcPool, "src@test.local", "admin")
 	srcBucket := newStubBucket()
 	srcSvc := backup.NewService(srcPool, srcBucket, discardLogger())
-	seedSnapshot(t, srcPool, srcBucket) // link A: url https://a.example, slug "alpha"
-	zr := exportToReader(t, srcSvc)
+	seedSnapshot(t, srcPool, srcUID, srcBucket) // link A: url https://a.example, slug "alpha"
+	zr := exportToReader(t, srcSvc, srcUID)
 
 	// Target: a pre-existing, different-URL link occupying slug "alpha".
 	tgtPool := testdb.New(t)
+	tgtUID := testdb.SeedUser(t, tgtPool, "tgt@test.local", "admin")
 	occupy := "alpha"
-	_, err := links.NewRepository(tgtPool).Create(ctx, links.CreateInput{
+	_, err := links.NewRepository(tgtPool).Create(ctx, tgtUID, links.CreateInput{
 		URL: "https://occupied.example", Title: "Occupier", Slug: &occupy,
 	})
 	require.NoError(t, err)
 
 	tgtSvc := backup.NewService(tgtPool, newStubBucket(), discardLogger())
-	_, err = tgtSvc.Restore(ctx, zr, backup.ModeDuplicate)
+	_, err = tgtSvc.Restore(ctx, tgtUID, zr, backup.ModeDuplicate)
 	require.NoError(t, err)
 
 	// Link A had no URL collision in the target, so it inserts — but slug
@@ -283,9 +312,11 @@ func TestRestore_DuplicateAppendsSlugSuffixOnCollision(t *testing.T) {
 
 func TestRestore_RejectsPathTraversalFileEntry(t *testing.T) {
 	pool := testdb.New(t)
+
+	tgtUID := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 	zr := minimalZipWithFile(t, "files/../evil.txt")
-	_, err := svc.Restore(context.Background(), zr, backup.ModeSkip)
+	_, err := svc.Restore(context.Background(), tgtUID, zr, backup.ModeSkip)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "path traversal")
 }
@@ -296,32 +327,34 @@ func TestRestore_RejectsPathTraversalFileEntry(t *testing.T) {
 // the note-specific sibling of TestRestore_WipePreservesIdentityAndBumpsSequence.
 func TestRestore_NotesRoundTripWipeMode(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
 
-	tag, err := tags.NewRepository(pool).Create(ctx, tags.CreateInput{Name: "pastebin", Color: "#abc"})
+	tag, err := tags.NewRepository(pool).Create(ctx, uid, tags.CreateInput{Name: "pastebin", Color: "#abc"})
 	require.NoError(t, err)
 	nrepo := notes.NewRepository(pool)
-	n, err := nrepo.Create(ctx, notes.CreateInput{Title: "Recipe", BodyHTML: "<p>flour</p>", TagIDs: []int64{tag.ID}})
+	n, err := nrepo.Create(ctx, uid, notes.CreateInput{Title: "Recipe", BodyHTML: "<p>flour</p>", TagIDs: []int64{tag.ID}})
 	require.NoError(t, err)
-	_, err = nrepo.ViewAndResolve(ctx, n.Slug)
+	_, err = nrepo.SystemViewAndResolve(ctx, n.Slug)
 	require.NoError(t, err)
 
-	zr := exportToReader(t, svc)
-	rep, err := svc.Restore(ctx, zr, backup.ModeWipe)
+	zr := exportToReader(t, svc, uid)
+	rep, err := svc.Restore(ctx, uid, zr, backup.ModeWipe)
 	require.NoError(t, err)
 
 	assert.EqualValues(t, 1, rep.Wiped.Notes)
 	assert.EqualValues(t, 1, rep.Inserted.Notes)
-	assert.True(t, rowExists(t, pool, "note", n.ID), "original note id must survive wipe restore")
-	assert.EqualValues(t, 1, scalar(t, pool, `SELECT count(*) FROM link_tag WHERE entity_kind='note' AND entity_id=$1`, n.ID))
-	assert.EqualValues(t, 1, scalar(t, pool, `SELECT count(*) FROM click_log WHERE entity_kind='note' AND entity_id=$1`, n.ID))
-
-	// Sequence bumped past the restored note id too.
-	n2, err := nrepo.Create(ctx, notes.CreateInput{Title: "After restore"})
-	require.NoError(t, err)
-	assert.Greater(t, n2.ID, n.ID)
+	// Ids are re-minted (ADR-30 — see TestRestore_WipeRestoresContentWithFreshIDs);
+	// what must survive is the note and its polymorphic tag/click rows, re-keyed
+	// onto the new id.
+	var restored int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT id FROM note WHERE user_id = $1`, int64(uid)).Scan(&restored))
+	assert.EqualValues(t, 1, scalar(t, pool, `SELECT count(*) FROM link_tag WHERE entity_kind='note' AND entity_id=$1`, restored))
+	assert.EqualValues(t, 1, scalar(t, pool, `SELECT count(*) FROM click_log WHERE entity_kind='note' AND entity_id=$1`, restored))
 }
 
 // TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow documents the
@@ -331,19 +364,21 @@ func TestRestore_NotesRoundTripWipeMode(t *testing.T) {
 // db.go's restoreSkip comment.
 func TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
-	_, err := notes.NewRepository(pool).Create(ctx, notes.CreateInput{Title: "Idempotency-immune"})
+	_, err := notes.NewRepository(pool).Create(ctx, uid, notes.CreateInput{Title: "Idempotency-immune"})
 	require.NoError(t, err)
 
-	zr := exportToReader(t, svc)
-	rep, err := svc.Restore(ctx, zr, backup.ModeSkip)
+	zr := exportToReader(t, svc, uid)
+	rep, err := svc.Restore(ctx, uid, zr, backup.ModeSkip)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep.Inserted.Notes)
 	assert.EqualValues(t, 2, count(t, pool, "note"))
 
-	rep2, err := svc.Restore(ctx, zr, backup.ModeSkip)
+	rep2, err := svc.Restore(ctx, uid, zr, backup.ModeSkip)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep2.Inserted.Notes)
 	assert.EqualValues(t, 3, count(t, pool, "note"), "skip mode has no identity key for notes — every restore inserts another row")
@@ -355,24 +390,30 @@ func TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow(t *testing.T) {
 // (never re-hash it, never drop it, never treat it as plaintext).
 func TestRestore_FolderPasswordRoundTripWipeMode(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
 
 	pw := "correct-horse-battery"
 	frepo := folders.NewRepository(pool)
-	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	f, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
 	require.NoError(t, err)
 	require.True(t, f.HasPassword)
 
-	zr := exportToReader(t, svc)
-	_, err = svc.Restore(ctx, zr, backup.ModeWipe)
+	zr := exportToReader(t, svc, uid)
+	_, err = svc.Restore(ctx, uid, zr, backup.ModeWipe)
 	require.NoError(t, err)
 
-	got, err := frepo.Get(ctx, f.ID)
-	require.NoError(t, err, "original folder id must survive wipe restore")
+	// Ids are re-minted by wipe restore (ADR-30); resolve the folder by name.
+	var restoredFolder int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT id FROM folder WHERE user_id = $1 AND name = $2`, int64(uid), f.Name).Scan(&restoredFolder))
+	got, err := frepo.Get(ctx, uid, restoredFolder)
+	require.NoError(t, err)
 	assert.True(t, got.HasPassword)
-	hash, err := frepo.PasswordHashFor(ctx, f.ID)
+	hash, err := frepo.PasswordHashFor(ctx, uid, restoredFolder)
 	require.NoError(t, err)
 	require.NotNil(t, hash)
 	assert.True(t, folders.VerifyPassword(*hash, pw), "the restored hash must still verify the ORIGINAL password — restore must never re-hash")
@@ -385,27 +426,29 @@ func TestRestore_FolderPasswordRoundTripWipeMode(t *testing.T) {
 // fresh row must still carry the original password_hash forward.
 func TestRestore_FolderPasswordRoundTripSkipMode(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
 
 	pw := "correct-horse-battery"
 	frepo := folders.NewRepository(pool)
-	_, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	_, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
 	require.NoError(t, err)
 
-	zr := exportToReader(t, svc)
-	rep, err := svc.Restore(ctx, zr, backup.ModeSkip)
+	zr := exportToReader(t, svc, uid)
+	rep, err := svc.Restore(ctx, uid, zr, backup.ModeSkip)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep.Inserted.Folders)
 	assert.EqualValues(t, 2, count(t, pool, "folder"), "skip has no identity key for folders — restore inserts a second row")
 
-	list, err := frepo.List(ctx, folders.ListQuery{RootOnly: true})
+	list, err := frepo.List(ctx, uid, folders.ListQuery{RootOnly: true})
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 	for _, f := range list {
 		assert.True(t, f.Name == "Secret", "both the original and the skip-restored copy must be named Secret")
-		hash, err := frepo.PasswordHashFor(ctx, f.ID)
+		hash, err := frepo.PasswordHashFor(ctx, uid, f.ID)
 		require.NoError(t, err)
 		require.NotNil(t, hash, "the skip-restored copy must carry the password forward, not drop it")
 		assert.True(t, folders.VerifyPassword(*hash, pw))
@@ -418,26 +461,28 @@ func TestRestore_FolderPasswordRoundTripSkipMode(t *testing.T) {
 // constraint) — the duplicated copy must still carry password_hash forward.
 func TestRestore_FolderPasswordRoundTripDuplicateMode(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
 
 	pw := "correct-horse-battery"
 	frepo := folders.NewRepository(pool)
-	_, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	_, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
 	require.NoError(t, err)
 
-	zr := exportToReader(t, svc)
-	rep, err := svc.Restore(ctx, zr, backup.ModeDuplicate)
+	zr := exportToReader(t, svc, uid)
+	rep, err := svc.Restore(ctx, uid, zr, backup.ModeDuplicate)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep.Inserted.Folders)
 	assert.EqualValues(t, 2, count(t, pool, "folder"))
 
-	list, err := frepo.List(ctx, folders.ListQuery{RootOnly: true})
+	list, err := frepo.List(ctx, uid, folders.ListQuery{RootOnly: true})
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 	for _, f := range list {
-		hash, err := frepo.PasswordHashFor(ctx, f.ID)
+		hash, err := frepo.PasswordHashFor(ctx, uid, f.ID)
 		require.NoError(t, err)
 		require.NotNil(t, hash, "the duplicate-restored copy must carry the password forward, not drop it")
 		assert.True(t, folders.VerifyPassword(*hash, pw))
@@ -455,6 +500,8 @@ func TestRestore_FolderPasswordRoundTripDuplicateMode(t *testing.T) {
 // every visitor of that public, unauthenticated route.
 func TestRestore_SanitizesNoteBodyHTMLFromHostileZip(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 
 	var buf bytes.Buffer
@@ -486,7 +533,7 @@ func TestRestore_SanitizesNoteBodyHTMLFromHostileZip(t *testing.T) {
 	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
 
-	rep, err := svc.Restore(context.Background(), zr, backup.ModeWipe)
+	rep, err := svc.Restore(context.Background(), uid, zr, backup.ModeWipe)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, rep.Inserted.Notes)
 
@@ -504,6 +551,8 @@ func TestRestore_SanitizesNoteBodyHTMLFromHostileZip(t *testing.T) {
 // loop becomes a no-op.
 func TestRestore_OldFormatBackupWithoutNotesKeyStillRestores(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 
 	var buf bytes.Buffer
@@ -532,7 +581,7 @@ func TestRestore_OldFormatBackupWithoutNotesKeyStillRestores(t *testing.T) {
 	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
 
-	rep, err := svc.Restore(context.Background(), zr, backup.ModeWipe)
+	rep, err := svc.Restore(context.Background(), uid, zr, backup.ModeWipe)
 	require.NoError(t, err, "an old-format backup with no notes key must still restore")
 	assert.EqualValues(t, 0, rep.Inserted.Notes)
 	assert.True(t, tagNameExists(t, pool, "old-tag"))
@@ -540,9 +589,11 @@ func TestRestore_OldFormatBackupWithoutNotesKeyStillRestores(t *testing.T) {
 
 func TestRestore_RejectsFileEntryOutsideAllowedPrefix(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 	zr := minimalZipWithFile(t, "files/secret/passwd")
-	_, err := svc.Restore(context.Background(), zr, backup.ModeSkip)
+	_, err := svc.Restore(context.Background(), uid, zr, backup.ModeSkip)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not under")
 }
@@ -557,6 +608,8 @@ func TestRestore_RejectsFileEntryOutsideAllowedPrefix(t *testing.T) {
 func TestRestore_CoercesTrackingPixelColors(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 
 	// Craft a minimal zip whose snapshot has one tag and one folder, both
@@ -583,7 +636,7 @@ func TestRestore_CoercesTrackingPixelColors(t *testing.T) {
 	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
 
-	_, err = svc.Restore(ctx, zr, backup.ModeWipe)
+	_, err = svc.Restore(ctx, uid, zr, backup.ModeWipe)
 	require.NoError(t, err)
 
 	var tagColor, folderColor string
@@ -602,6 +655,8 @@ func TestRestore_CoercesTrackingPixelColors(t *testing.T) {
 // restore (hint shown as-is, master hash never re-hashed).
 func TestRestore_HintAndMasterPasswordRoundTripWipeMode(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
@@ -609,29 +664,37 @@ func TestRestore_HintAndMasterPasswordRoundTripWipeMode(t *testing.T) {
 	pw := "correct-horse-battery"
 	hint := "rhymes with force"
 	frepo := folders.NewRepository(pool)
-	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw, PasswordHint: &hint})
+	f, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw, PasswordHint: &hint})
 	require.NoError(t, err)
 	require.NotNil(t, f.PasswordHint)
 
 	srepo := settings.NewRepository(pool)
 	masterHint := "starts with the-"
-	require.NoError(t, srepo.SetMasterPassword(ctx, "the-master-recovery-pass", &masterHint))
+	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "the-master-recovery-pass", &masterHint))
 
-	zr := exportToReader(t, svc)
-	_, err = svc.Restore(ctx, zr, backup.ModeWipe)
+	zr := exportToReader(t, svc, uid)
+	_, err = svc.Restore(ctx, uid, zr, backup.ModeWipe)
 	require.NoError(t, err)
 
-	got, err := frepo.Get(ctx, f.ID)
+	// The folder id is re-minted by wipe restore, so resolve it by name.
+	var restoredFolder int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT id FROM folder WHERE user_id = $1 AND name = $2`, int64(uid), f.Name).Scan(&restoredFolder))
+	got, err := frepo.Get(ctx, uid, restoredFolder)
 	require.NoError(t, err)
 	require.NotNil(t, got.PasswordHint)
 	assert.Equal(t, hint, *got.PasswordHint, "hint must survive wipe restore verbatim")
 
-	ok, configured, err := srepo.VerifyMaster(ctx, "the-master-recovery-pass")
+	// Since ADR-30 the master password is a per-user column on app_user and is
+	// deliberately NOT exported (no auth material ships in the ZIP). It survives
+	// a wipe restore because wipeUser only deletes content rows — never because
+	// it round-tripped through the backup.
+	ok, configured, err := srepo.VerifyMaster(ctx, uid, "the-master-recovery-pass")
 	require.NoError(t, err)
-	assert.True(t, configured, "master password must survive wipe restore")
-	assert.True(t, ok, "restored master hash must still verify the original password — never re-hashed")
+	assert.True(t, configured, "master password must be untouched by a wipe restore")
+	assert.True(t, ok, "master hash must still verify — wipe restore must not clear it")
 
-	gotHint, err := srepo.MasterPasswordHint(ctx)
+	gotHint, err := srepo.MasterPasswordHint(ctx, uid)
 	require.NoError(t, err)
 	require.NotNil(t, gotHint, "master hint must survive wipe restore")
 	assert.Equal(t, masterHint, *gotHint)
@@ -643,26 +706,28 @@ func TestRestore_HintAndMasterPasswordRoundTripWipeMode(t *testing.T) {
 // it with the snapshot's (a singleton setting can't be "duplicated").
 func TestRestore_AppSettingSkipMode_DoesNotClobberExistingMaster(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	bucket := newStubBucket()
 
 	// Snapshot instance has master "snapshot-master".
 	srcSvc := backup.NewService(pool, bucket, discardLogger())
 	srepo := settings.NewRepository(pool)
-	require.NoError(t, srepo.SetMasterPassword(ctx, "snapshot-master", nil))
-	zr := exportToReader(t, srcSvc)
+	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "snapshot-master", nil))
+	zr := exportToReader(t, srcSvc, uid)
 
 	// Now change THIS instance's master to something else, then skip-restore.
-	require.NoError(t, srepo.SetMasterPassword(ctx, "local-master-wins", nil))
-	_, err := srcSvc.Restore(ctx, zr, backup.ModeSkip)
+	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "local-master-wins", nil))
+	_, err := srcSvc.Restore(ctx, uid, zr, backup.ModeSkip)
 	require.NoError(t, err)
 
 	// The local master must survive — the snapshot's value must NOT clobber it.
-	ok, configured, err := srepo.VerifyMaster(ctx, "local-master-wins")
+	ok, configured, err := srepo.VerifyMaster(ctx, uid, "local-master-wins")
 	require.NoError(t, err)
 	assert.True(t, configured)
 	assert.True(t, ok, "skip restore must not overwrite an existing app_setting")
-	ok, _, err = srepo.VerifyMaster(ctx, "snapshot-master")
+	ok, _, err = srepo.VerifyMaster(ctx, uid, "snapshot-master")
 	require.NoError(t, err)
 	assert.False(t, ok, "the snapshot's master must NOT win under skip mode")
 }
@@ -672,6 +737,8 @@ func TestRestore_AppSettingSkipMode_DoesNotClobberExistingMaster(t *testing.T) {
 // restore_in_progress (pg_try_advisory_xact_lock) rather than interleaving.
 func TestRestore_AdvisoryLockRejectsConcurrentRestore(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 
 	conn, err := pool.Acquire(ctx)
@@ -685,7 +752,7 @@ func TestRestore_AdvisoryLockRejectsConcurrentRestore(t *testing.T) {
 	require.True(t, got, "test setup must hold the restore lock")
 
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
-	_, err = svc.Restore(ctx, minimalZipWithFile(t, "files/images/1.jpg"), backup.ModeSkip)
+	_, err = svc.Restore(ctx, uid, minimalZipWithFile(t, "files/images/1.jpg"), backup.ModeSkip)
 	require.Error(t, err)
 	var he *httperr.Error
 	require.ErrorAs(t, err, &he)

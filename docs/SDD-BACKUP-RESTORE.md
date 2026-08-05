@@ -1,6 +1,14 @@
 # SDD — Backup & Restore (DB + RustFS)
 
-> Software Design Document. Status: **Approved · v1.0 · 2026-05-13**
+> Software Design Document. Status: **Approved · v1.1 · 2026-08-03**
+>
+> **v1.1 (ADR-30, migration 000017 — multi-user).** Backup became per-user and
+> stopped carrying auth material. Three contracts in this document changed and
+> the affected sections carry an inline note: (a) **`wipe` no longer preserves
+> ids** — §7.5 is superseded; (b) `wipe` deletes only the CALLING user's rows and
+> object keys, never a TRUNCATE or a bucket-prefix delete; (c) `user_id` is never
+> read from the ZIP, so a hand-crafted backup cannot plant rows in another
+> account. See `docs/SDD-AUTH-RBAC.md` §10.
 > Owner: foldex
 > Related ADR: **ADR-20** (`docs/ARCHITECTURE.md`)
 
@@ -233,11 +241,17 @@ Keys preservadas pra que restore possa fazer 1-1 mapping. Em ModeWipe, o `link.i
 
 | Entidade        | `wipe`                                       | `skip` (default)                                                    | `duplicate`                                                              |
 | --------------- | -------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `tag` (UNIQUE name) | TRUNCATE; INSERT com IDs originais       | `INSERT ON CONFLICT (name) DO NOTHING`; mapping `oldID→curID`        | colisão de nome → renomeia pra `nome (2)`, `nome (3)`, … (menor N livre) |
-| `folder` (sem unique) | TRUNCATE; INSERT com IDs originais     | INSERT new; mapping `oldID→newID`                                    | INSERT new (sempre); mapping `oldID→newID`                               |
-| `link` (UNIQUE url) | TRUNCATE; INSERT com IDs originais        | `INSERT ON CONFLICT (url) DO NOTHING`; mapping `oldID→curID`         | colisão de URL → **fallback skip + warning**. (URL unique não permite duplicata real; preferimos não corromper dado existente.) |
-| `link_tag` (PK link_id,tag_id) | TRUNCATE; INSERT com IDs originais | INSERT re-key (mapping); `ON CONFLICT DO NOTHING`            | INSERT re-key (mapping); `ON CONFLICT DO NOTHING`                        |
-| `click_log` (sem unique) | TRUNCATE; INSERT com IDs originais   | INSERT re-key (mapping); todos os logs adicionados                   | INSERT re-key (mapping); todos os logs adicionados                       |
+| `tag` (UNIQUE user_id,name) | DELETE do usuário; INSERT com **id novo** | `INSERT ON CONFLICT (user_id, name) DO NOTHING`; mapping `oldID→curID` | colisão de nome → renomeia pra `nome (2)`, `nome (3)`, … (menor N livre) |
+| `folder` (sem unique) | DELETE do usuário; INSERT com **id novo** | INSERT new; mapping `oldID→newID`                                    | INSERT new (sempre); mapping `oldID→newID`                               |
+| `link` (UNIQUE user_id,url) | DELETE do usuário; INSERT com **id novo** | `INSERT ON CONFLICT (user_id, url) DO NOTHING`; mapping `oldID→curID` | colisão de URL → **fallback skip + warning**. (URL unique não permite duplicata real; preferimos não corromper dado existente.) |
+| `link_tag` (PK kind,entity,tag) | DELETE do usuário; INSERT re-key | INSERT re-key (mapping); `ON CONFLICT DO NOTHING`            | INSERT re-key (mapping); `ON CONFLICT DO NOTHING`                        |
+| `click_log` (sem unique) | DELETE do usuário; INSERT re-key      | INSERT re-key (mapping); todos os logs adicionados                   | INSERT re-key (mapping); todos os logs adicionados                       |
+
+> **v1.1.** A coluna `wipe` dizia "TRUNCATE; INSERT com IDs originais" até a
+> migration 000017. TRUNCATE é table-wide (apagaria os outros tenants) e
+> `RESTART IDENTITY`/`setval` mexem em sequências agora **compartilhadas**, então
+> `wipe` virou `DELETE ... WHERE user_id` seguido do mesmo caminho mapeado do
+> `skip` — que, depois do delete, roda sem conflito nenhum.
 | Files RustFS     | DELETE prefix; PUT all                       | PUT skip se key já existe; senão upload                              | PUT com keys baseadas no link.id novo                                    |
 
 ### 5.2 Justificativa dos defaults
@@ -303,9 +317,18 @@ Manter o campo como `/api/files/<key>` (e não embarcar bytes em base64 no `data
 
 Já justificado em §5.2. Documentado nos warnings do restore report pra que o usuário saiba o que aconteceu.
 
-### 7.5 Why store `id` in the export?
+### 7.5 Why store `id` in the export? — ~~bit-perfect wipe~~ **SUPERSEDIDO (v1.1)**
 
-Preservar `id` permite **wipe restore** ser bit-perfect: depois do restore, `link.id` antigo é igual ao novo, então URLs internas (logs externos que referenciam `/go/N`, bookmarks salvos) continuam funcionando. Skip mode usa o id apenas como key local pra building o mapping — o id real é re-atribuído.
+~~Preservar `id` permite wipe restore ser bit-perfect.~~ Isso valeu enquanto
+havia um usuário só. Com multi-tenant o argumento cai por dois motivos
+independentes: outro tenant pode já ocupar aqueles ids, e `setval` numa sequência
+compartilhada a partir do restore de UM usuário é simplesmente errado.
+
+O `id` continua no export, mas **só como chave local para montar o mapping** —
+exatamente o papel que ele já tinha no modo `skip`. Nenhum modo reinsere com o id
+original. A identidade estável que o usuário enxerga é o **slug** (`/go/{slug}`),
+que atravessa o backup verbatim; `/go/{N}` numérico deixa de ser garantia
+atravessável de backup e, pelo ADR-32, vira opt-in de qualquer forma.
 
 ### 7.6 `REPEATABLE READ` no export
 

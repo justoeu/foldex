@@ -185,7 +185,7 @@ func (w *Worker) loop(ctx context.Context) {
 }
 
 func (w *Worker) process(ctx context.Context, id int64) {
-	link, err := w.repo.Get(ctx, id)
+	link, err := w.repo.SystemGet(ctx, id)
 	if err != nil {
 		w.logger.Warn("preview job: link not found", "link_id", id, "err", err)
 		return
@@ -195,7 +195,7 @@ func (w *Worker) process(ctx context.Context, id int64) {
 	// — and lift the "capturando…" label by flipping preview_status to ok.
 	if link.OGImageURL != nil && *link.OGImageURL != "" {
 		if links.PreviewStatus(link.PreviewStatus) == links.StatusPending {
-			if uErr := w.repo.UpdatePreview(ctx, id, links.StatusOK, nil, nil, nil, nil); uErr != nil {
+			if uErr := w.repo.SystemUpdatePreview(ctx, id, links.StatusOK, nil, nil, nil, nil); uErr != nil {
 				w.logger.Error("preview short-circuit update failed", "link_id", id, "err", uErr)
 			}
 		}
@@ -207,7 +207,7 @@ func (w *Worker) process(ctx context.Context, id int64) {
 	res, err := w.fetcher.Fetch(fetchCtx, link.URL)
 	if err != nil {
 		msg := err.Error()
-		if uErr := w.repo.UpdatePreview(ctx, id, links.StatusFailed, nil, nil, nil, &msg); uErr != nil {
+		if uErr := w.repo.SystemUpdatePreview(ctx, id, links.StatusFailed, nil, nil, nil, &msg); uErr != nil {
 			w.logger.Error("update preview failure row", "err", uErr)
 		}
 		w.logger.Info("preview failed", "link_id", id, "err", err)
@@ -233,7 +233,7 @@ func (w *Worker) process(ctx context.Context, id int64) {
 	if willTryScreenshot {
 		firstStatus = links.StatusPending
 	}
-	if err := w.repo.UpdatePreview(ctx, id, firstStatus, favicon, ogImage, description, nil); err != nil {
+	if err := w.repo.SystemUpdatePreview(ctx, id, firstStatus, favicon, ogImage, description, nil); err != nil {
 		w.logger.Error("update preview row", "err", err)
 		return
 	}
@@ -244,7 +244,7 @@ func (w *Worker) process(ctx context.Context, id int64) {
 		// Always converge to 'ok' once the screenshot phase is over. If it
 		// succeeded, UpdateOGImage already set status='ok' (this is a no-op).
 		// If it was skipped/failed, this flip releases the frontend poll.
-		if uErr := w.repo.UpdatePreview(ctx, id, links.StatusOK, nil, nil, nil, nil); uErr != nil {
+		if uErr := w.repo.SystemUpdatePreview(ctx, id, links.StatusOK, nil, nil, nil, nil); uErr != nil {
 			w.logger.Error("status flip after screenshot fallback", "err", uErr)
 		}
 	}
@@ -257,7 +257,7 @@ func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string) 
 	if w.screenshotter == nil || w.uploader == nil {
 		return
 	}
-	cur, err := w.repo.Get(ctx, id)
+	cur, err := w.repo.SystemGet(ctx, id)
 	if err != nil {
 		return
 	}
@@ -315,7 +315,7 @@ func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string) 
 		return
 	}
 	proxyURL := "/api/files/" + key
-	if err := w.repo.UpdateOGImage(ctx, id, proxyURL); err != nil {
+	if err := w.repo.SystemUpdateOGImage(ctx, id, proxyURL); err != nil {
 		w.logger.Warn("screenshot fallback db update failed", "link_id", id, "err", err)
 		return
 	}
@@ -347,6 +347,10 @@ func (w *Worker) requeuePending(ctx context.Context) {
 }
 
 func (w *Worker) pendingIDs(ctx context.Context) ([]int64, error) {
+	// Deliberately UNSCOPED: the preview worker sweeps every tenant's pending
+	// links on boot. Nothing here is returned to a user — the ids feed the
+	// worker's own queue, and each job writes only preview metadata back to the
+	// row it came from. See docs/SDD-AUTH-RBAC.md §8.2.
 	rows, err := w.pool.Query(ctx, `SELECT id FROM link WHERE preview_status = 'pending' ORDER BY id ASC LIMIT 1000`)
 	if err != nil {
 		return nil, err

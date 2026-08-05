@@ -243,6 +243,10 @@ func (a pushSenderAdapter) Notify(ctx context.Context, n changecheck.Notificatio
 		Title:  n.Title,
 		URL:    n.URL,
 		Kind:   n.Kind,
+		// UserID is what scopes the fan-out to the link owner. Dropping it here
+		// would compile fine and silently deliver to nobody (user 0 owns no
+		// subscriptions) — TestChangeCheckPushGoesOnlyToTheLinkOwner locks it.
+		UserID: n.UserID,
 	})
 }
 
@@ -277,6 +281,10 @@ func (a backupStorageAdapter) ListObjects(ctx context.Context, prefix string) ([
 
 func (a backupStorageAdapter) OpenObject(ctx context.Context, key string) (io.ReadCloser, error) {
 	return a.c.OpenObject(ctx, key)
+}
+
+func (a backupStorageAdapter) DeleteObject(ctx context.Context, key string) error {
+	return a.c.DeleteObject(ctx, key)
 }
 
 func (a backupStorageAdapter) PutObjectStream(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {

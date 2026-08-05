@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"foldex/internal/links"
+	"foldex/internal/pkg/authctx"
 )
 
 // ErrQueueFull is returned by Enqueue when the bounded jobs channel has no
@@ -36,14 +37,18 @@ type Notification struct {
 	Title  string `json:"title"`
 	URL    string `json:"url"`
 	Kind   string `json:"kind"` // "change_detected"
+	// UserID scopes delivery: the notification goes only to the link owner's
+	// push subscriptions. Without it a multi-tenant install would broadcast one
+	// user's page-change (title and URL included) to everyone subscribed.
+	UserID authctx.UserID `json:"-"`
 }
 
 // Repo is the storage contract used by the worker. Narrowed from
 // *links.Repository so tests can mock it without standing up Postgres.
 type Repo interface {
-	Get(ctx context.Context, id int64) (links.Link, error)
-	FindDueForCheck(ctx context.Context, limit int) ([]int64, error)
-	RecordCheckResult(ctx context.Context, id int64, res links.CheckResult) error
+	SystemGet(ctx context.Context, id int64) (links.Link, error)
+	SystemFindDueForCheck(ctx context.Context, limit int) ([]links.DueLink, error)
+	SystemRecordCheckResult(ctx context.Context, id int64, res links.CheckResult) error
 }
 
 // Fetcher is the HTTP dependency. preview.Fetcher.GetRaw satisfies it via
@@ -58,7 +63,7 @@ type Worker struct {
 	fingerprint  *Fingerprinter
 	sender       Sender
 	logger       *slog.Logger
-	jobs         chan int64
+	jobs         chan links.DueLink
 	concurrent   int
 	scanInterval time.Duration
 	fetchTimeout time.Duration
@@ -111,7 +116,7 @@ func New(repo Repo, fetcher Fetcher, sender Sender, opts Options, logger *slog.L
 		fingerprint:  NewFingerprinter(fetcher),
 		sender:       sender,
 		logger:       logger.With("component", "changecheck"),
-		jobs:         make(chan int64, 256),
+		jobs:         make(chan links.DueLink, 256),
 		concurrent:   opts.Concurrency,
 		scanInterval: opts.ScanInterval,
 		fetchTimeout: opts.FetchTimeout,
@@ -158,21 +163,21 @@ func (w *Worker) Stop() {
 	}
 }
 
-// Enqueue schedules an immediate check for linkID. Non-blocking — returns
+// Enqueue schedules an immediate check for job.ID. Non-blocking — returns
 // ErrQueueFull / ErrStopped without sending so callers can decide whether to
 // retry, log, or just drop.
-func (w *Worker) Enqueue(linkID int64) error {
+func (w *Worker) Enqueue(job links.DueLink) error {
 	if w.stopped.Load() {
 		return ErrStopped
 	}
 	select {
-	case w.jobs <- linkID:
+	case w.jobs <- job:
 		if w.stopped.Load() {
 			return ErrStopped
 		}
 		return nil
 	default:
-		w.logger.Warn("changecheck queue full, dropping job", "link_id", linkID)
+		w.logger.Warn("changecheck queue full, dropping job", "link_id", job.ID)
 		return ErrQueueFull
 	}
 }
@@ -207,19 +212,19 @@ func (w *Worker) tick(ctx context.Context) {
 }
 
 func (w *Worker) scan(ctx context.Context) {
-	ids, err := w.repo.FindDueForCheck(ctx, 256)
+	due, err := w.repo.SystemFindDueForCheck(ctx, 256)
 	if err != nil {
 		w.logger.Warn("scan: find due failed", "err", err)
 		return
 	}
-	for _, id := range ids {
+	for _, job := range due {
 		if ctx.Err() != nil {
 			return
 		}
-		_ = w.Enqueue(id) // ErrQueueFull is fine — next tick re-picks
+		_ = w.Enqueue(job) // ErrQueueFull is fine — next tick re-picks
 	}
-	if len(ids) > 0 {
-		w.logger.Info("scan: enqueued due links", "count", len(ids))
+	if len(due) > 0 {
+		w.logger.Info("scan: enqueued due links", "count", len(due))
 	}
 }
 
@@ -229,8 +234,9 @@ func (w *Worker) scan(ctx context.Context) {
 // path tolerates fetch failures — the worker still records the attempt
 // (so the link isn't re-tried every tick) and stores the error message in
 // preview_error for surfacing in the UI later.
-func (w *Worker) process(ctx context.Context, id int64) {
-	link, err := w.repo.Get(ctx, id)
+func (w *Worker) process(ctx context.Context, job links.DueLink) {
+	id := job.ID
+	link, err := w.repo.SystemGet(ctx, id)
 	if err != nil {
 		w.logger.Warn("process: link not found", "link_id", id, "err", err)
 		return
@@ -246,7 +252,7 @@ func (w *Worker) process(ctx context.Context, id int64) {
 	body, _, err := w.fetcher.GetRaw(fetchCtx, link.URL)
 	if err != nil {
 		w.logger.Info("process: fetch failed", "link_id", id, "err", err)
-		if recErr := w.repo.RecordCheckResult(ctx, id, links.CheckResult{
+		if recErr := w.repo.SystemRecordCheckResult(ctx, id, links.CheckResult{
 			Fingerprint: "",
 			Changed:     false,
 			FetchErr:    err.Error(),
@@ -259,7 +265,7 @@ func (w *Worker) process(ctx context.Context, id int64) {
 	kind, hash, err := w.fingerprint.Compute(fetchCtx, link.URL, body)
 	if err != nil {
 		w.logger.Info("process: fingerprint failed", "link_id", id, "err", err)
-		if recErr := w.repo.RecordCheckResult(ctx, id, links.CheckResult{
+		if recErr := w.repo.SystemRecordCheckResult(ctx, id, links.CheckResult{
 			Fingerprint: "",
 			Changed:     false,
 			FetchErr:    "fingerprint: " + err.Error(),
@@ -280,7 +286,7 @@ func (w *Worker) process(ctx context.Context, id int64) {
 	// the new baseline gets stored, but no push fires.
 	changed := prevHash != "" && prevKind == kind && prevHash != hash
 
-	if err := w.repo.RecordCheckResult(ctx, id, links.CheckResult{
+	if err := w.repo.SystemRecordCheckResult(ctx, id, links.CheckResult{
 		Fingerprint: newFp,
 		Changed:     changed,
 		FetchErr:    "",
@@ -294,7 +300,7 @@ func (w *Worker) process(ctx context.Context, id int64) {
 		// fingerprint update. Bounded by pushSem so a flood of changes can't
 		// spawn unbounded goroutines; Stop waits on pushWg.
 		w.pushWg.Add(1)
-		go func(linkID int64, title, url string) {
+		go func(linkID int64, owner authctx.UserID, title, url string) {
 			defer w.pushWg.Done()
 			select {
 			case w.pushSem <- struct{}{}:
@@ -310,10 +316,11 @@ func (w *Worker) process(ctx context.Context, id int64) {
 				Title:  title,
 				URL:    url,
 				Kind:   "change_detected",
+				UserID: owner,
 			}); err != nil {
 				w.logger.Warn("push notify failed", "link_id", linkID, "err", err)
 			}
-		}(link.ID, link.Title, link.URL)
+		}(link.ID, job.UserID, link.Title, link.URL)
 		w.logger.Info("change detected", "link_id", id, "kind", kind)
 	}
 }

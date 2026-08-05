@@ -23,19 +23,21 @@ import (
 func TestInsertLinkInTx_WipeFirstDoesNotOrphanTagsOrClicks(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 	trepo := tags.NewRepository(pool)
 
-	tag, err := trepo.Create(ctx, tags.CreateInput{Name: "work", Color: "#fff"})
+	tag, err := trepo.Create(ctx, uid, tags.CreateInput{Name: "work", Color: "#fff"})
 	require.NoError(t, err)
-	original, err := lrepo.Create(ctx, links.CreateInput{
+	original, err := lrepo.Create(ctx, uid, links.CreateInput{
 		URL: "https://wipe-target.example", Title: "Original", TagIDs: []int64{tag.ID},
 	})
 	require.NoError(t, err)
 	_, err = lrepo.ClickAndResolve(ctx, original.ID)
 	require.NoError(t, err)
 
-	newID, dup, wiped, err := insertLinkIfNew(ctx, pool, "https://wipe-target.example", "Replacement", nil, nil, nil, 0, nil, true)
+	newID, dup, wiped, err := insertLinkIfNew(ctx, pool, uid, "https://wipe-target.example", "Replacement", nil, nil, nil, 0, nil, true)
 	require.NoError(t, err)
 	assert.False(t, dup)
 	assert.True(t, wiped)

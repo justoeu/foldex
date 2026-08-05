@@ -16,12 +16,17 @@ import (
 
 	"foldex/internal/settings"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 func newSettingsRouter(t *testing.T) http.Handler {
 	t.Helper()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/settings", settings.NewHandler(settings.NewRepository(pool)).Mount)
 	return r
 }
@@ -173,11 +178,14 @@ func TestHandler_Status_UnconfiguredHasNilHint(t *testing.T) {
 
 func TestHandler_ClosedPool_SurfacesErrors(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := settings.NewRepository(pool)
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/settings", settings.NewHandler(repo).Mount)
 	// Seed then close so subsequent handler calls hit repo errors.
-	require.NoError(t, repo.SetMasterPassword(context.Background(), "seeded-master-pw", nil))
+	require.NoError(t, repo.SetMasterPassword(context.Background(), uid, "seeded-master-pw", nil))
 	pool.Close()
 
 	rr := do(t, r, http.MethodGet, "/settings/master-password", nil)
@@ -192,6 +200,7 @@ func TestHandler_ClosedPool_SurfacesErrors(t *testing.T) {
 	// First-set path on closed pool (fresh handler without seed would still fail Configured check).
 	pool2 := testdb.New(t)
 	r2 := chi.NewRouter()
+	r2.Use(authctxtest.Middleware(uid))
 	r2.Route("/settings", settings.NewHandler(settings.NewRepository(pool2)).Mount)
 	pool2.Close()
 	rr = do(t, r2, http.MethodPut, "/settings/master-password", map[string]any{"password": "brand-new-pw"})

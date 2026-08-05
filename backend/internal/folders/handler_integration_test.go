@@ -17,6 +17,10 @@ import (
 
 	"foldex/internal/folders"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 // testUnlockKey is a fixed 32-byte HMAC key — real deployments get one from
@@ -33,24 +37,27 @@ type fakeMaster struct {
 	password   string
 }
 
-func (f fakeMaster) VerifyMaster(_ context.Context, plain string) (ok bool, configured bool, err error) {
+func (f fakeMaster) VerifyMaster(_ context.Context, _ authctx.UserID, plain string) (ok bool, configured bool, err error) {
 	if !f.configured {
 		return false, false, nil
 	}
 	return plain == f.password, true, nil
 }
 
-func newHandlerRouter(t *testing.T) (http.Handler, *folders.Repository) {
+func newHandlerRouter(t *testing.T) (http.Handler, *folders.Repository, authctx.UserID) {
 	return newHandlerRouterMaster(t, fakeMaster{})
 }
 
-func newHandlerRouterMaster(t *testing.T, master folders.MasterPasswordVerifier) (http.Handler, *folders.Repository) {
+func newHandlerRouterMaster(t *testing.T, master folders.MasterPasswordVerifier) (http.Handler, *folders.Repository, authctx.UserID) {
 	t.Helper()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := folders.NewRepository(pool)
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, master).Mount)
-	return r, repo
+	return r, repo, uid
 }
 
 func doJSON(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
@@ -69,13 +76,13 @@ func doJSON(t *testing.T, h http.Handler, method, path string, body any) *httpte
 // TestHandler_Unlock_HappyPath_WrongPassword_NotProtected covers all three
 // /unlock outcomes end-to-end through the real HTTP handler.
 func TestHandler_Unlock_HappyPath_WrongPassword_NotProtected(t *testing.T) {
-	h, repo := newHandlerRouter(t)
+	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()
 
 	pw := "correct-horse"
-	protected, err := repo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	protected, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
 	require.NoError(t, err)
-	open, err := repo.Create(ctx, folders.CreateInput{Name: "Open", Color: "#def"})
+	open, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Open", Color: "#def"})
 	require.NoError(t, err)
 
 	// Wrong password → 401 wrong_password.
@@ -100,7 +107,7 @@ func TestHandler_Unlock_HappyPath_WrongPassword_NotProtected(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &out))
 	assert.NotEmpty(t, out.UnlockToken)
 
-	hash, err := repo.PasswordHashFor(ctx, protected.ID)
+	hash, err := repo.PasswordHashFor(ctx, uid, protected.ID)
 	require.NoError(t, err)
 	require.NotNil(t, hash)
 	assert.True(t, folders.VerifyUnlockToken(testUnlockKey, protected.ID, *hash, out.UnlockToken))
@@ -111,13 +118,13 @@ func TestHandler_Unlock_HappyPath_WrongPassword_NotProtected(t *testing.T) {
 // read as listing its links, so GET /api/folders?parent_id=X needs the same
 // unlock-token proof.
 func TestHandler_List_ParentIDGate(t *testing.T) {
-	h, repo := newHandlerRouter(t)
+	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()
 
 	pw := "hunter22"
-	protected, err := repo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	protected, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
 	require.NoError(t, err)
-	_, err = repo.Create(ctx, folders.CreateInput{Name: "Hidden Child", Color: "#def", ParentID: &protected.ID})
+	_, err = repo.Create(ctx, uid, folders.CreateInput{Name: "Hidden Child", Color: "#def", ParentID: &protected.ID})
 	require.NoError(t, err)
 
 	// No token → 403 folder_locked, child names never leave the server.
@@ -128,7 +135,7 @@ func TestHandler_List_ParentIDGate(t *testing.T) {
 	assertErrorCode(t, rr, "folder_locked")
 
 	// Valid token → 200 with the real children.
-	hash, err := repo.PasswordHashFor(ctx, protected.ID)
+	hash, err := repo.PasswordHashFor(ctx, uid, protected.ID)
 	require.NoError(t, err)
 	require.NotNil(t, hash)
 	token := folders.IssueUnlockToken(testUnlockKey, protected.ID, *hash)
@@ -156,11 +163,11 @@ func TestHandler_List_ParentIDGate(t *testing.T) {
 // generic httperr.Write already round-trips it, this just confirms the
 // wiring end-to-end.
 func TestHandler_Update_PasswordChange_WrongCurrentPassword_Returns401(t *testing.T) {
-	h, repo := newHandlerRouter(t)
+	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()
 
 	oldPW := "old-pass1"
-	f, err := repo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &oldPW})
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &oldPW})
 	require.NoError(t, err)
 
 	rr := doJSON(t, h, http.MethodPatch, "/folders/"+strconv.FormatInt(f.ID, 10), map[string]any{
@@ -202,12 +209,12 @@ func getFolder(t *testing.T, h http.Handler, id int64) folderResp {
 
 func TestHandler_ResetPassword_Master(t *testing.T) {
 	master := fakeMaster{configured: true, password: "the-master-pass"}
-	h, repo := newHandlerRouterMaster(t, master)
+	h, repo, uid := newHandlerRouterMaster(t, master)
 	ctx := context.Background()
 
 	pw := "folder-pass"
 	hint := "a clue"
-	f, err := repo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw, PasswordHint: &hint})
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw, PasswordHint: &hint})
 	require.NoError(t, err)
 	require.True(t, f.HasPassword)
 
@@ -230,11 +237,11 @@ func TestHandler_ResetPassword_Master(t *testing.T) {
 }
 
 func TestHandler_ResetPassword_MasterNotConfigured(t *testing.T) {
-	h, repo := newHandlerRouterMaster(t, fakeMaster{configured: false})
+	h, repo, uid := newHandlerRouterMaster(t, fakeMaster{configured: false})
 	ctx := context.Background()
 
 	pw := "folder-pass"
-	f, err := repo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
 	require.NoError(t, err)
 
 	rr := doJSON(t, h, http.MethodPost, "/folders/"+strconv.FormatInt(f.ID, 10)+"/reset-password",
@@ -244,11 +251,11 @@ func TestHandler_ResetPassword_MasterNotConfigured(t *testing.T) {
 }
 
 func TestHandler_Update_HintEqualsExistingPassword(t *testing.T) {
-	h, repo := newHandlerRouter(t)
+	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()
 
 	pw := "folder-pass"
-	f, err := repo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
 	require.NoError(t, err)
 
 	// Hint mutation on a protected folder requires current_password (oracle fix).
@@ -281,10 +288,10 @@ func TestHandler_Update_HintEqualsExistingPassword(t *testing.T) {
 }
 
 func TestHandler_HintOnUnprotectedFolder_Rejected(t *testing.T) {
-	h, repo := newHandlerRouter(t)
+	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()
 
-	f, err := repo.Create(ctx, folders.CreateInput{Name: "Open", Color: "#abc"})
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Open", Color: "#abc"})
 	require.NoError(t, err)
 
 	rr := doJSON(t, h, http.MethodPatch, "/folders/"+strconv.FormatInt(f.ID, 10),
@@ -295,11 +302,11 @@ func TestHandler_HintOnUnprotectedFolder_Rejected(t *testing.T) {
 // ── unlock rate limiting (ADR-28) ──────────────────────────────────────────
 
 func TestHandler_Unlock_LocksOutAfterFiveWrongAttempts(t *testing.T) {
-	h, repo := newHandlerRouter(t)
+	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()
 
 	pw := "correct-horse"
-	f, err := repo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
 	require.NoError(t, err)
 	path := "/folders/" + strconv.FormatInt(f.ID, 10) + "/unlock"
 
@@ -329,11 +336,11 @@ func TestHandler_Unlock_LocksOutAfterFiveWrongAttempts(t *testing.T) {
 }
 
 func TestHandler_Unlock_SuccessResetsAttemptCounter(t *testing.T) {
-	h, repo := newHandlerRouter(t)
+	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()
 
 	pw := "correct-horse"
-	f, err := repo.Create(ctx, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
 	require.NoError(t, err)
 	path := "/folders/" + strconv.FormatInt(f.ID, 10) + "/unlock"
 

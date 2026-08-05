@@ -17,6 +17,8 @@ import (
 	"foldex/internal/pkg/httperr"
 	slugpkg "foldex/internal/pkg/slug"
 	"foldex/internal/ports"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // defaultImportColor mirrors the indigo the DTO layer defaults to when a
@@ -107,7 +109,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	imp, skipped, wiped, warnings, err := h.importItemsWithMode(r.Context(), up.items, modeSkip, up.seed)
+	imp, skipped, wiped, warnings, err := h.importItemsWithMode(r.Context(), authctx.MustUser(r.Context()), up.items, modeSkip, up.seed)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -130,7 +132,7 @@ func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 		// parseUpload already wrote the error response.
 		return
 	}
-	rep, err := Validate(r.Context(), h.pool, up.items)
+	rep, err := Validate(r.Context(), h.pool, authctx.MustUser(r.Context()), up.items)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -157,7 +159,7 @@ func (h *Handler) apply(w http.ResponseWriter, r *http.Request) {
 	if len(excluded) > 0 {
 		items = filterByFolder(items, excluded)
 	}
-	imp, skipped, wiped, warnings, err := h.importItemsWithMode(r.Context(), items, mode, up.seed)
+	imp, skipped, wiped, warnings, err := h.importItemsWithMode(r.Context(), authctx.MustUser(r.Context()), items, mode, up.seed)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -320,7 +322,7 @@ func filterByFolder(items []Item, excluded map[string]struct{}) []Item {
 // Enqueueing preview-worker jobs happens AFTER commit — emitting them before
 // would race with the tx visibility (worker reads a link that doesn't exist
 // yet from another connection).
-func (h *Handler) importItemsWithMode(ctx context.Context, items []Item, mode importMode, seed *jsonSeed) (int, int, int, []string, error) {
+func (h *Handler) importItemsWithMode(ctx context.Context, uid authctx.UserID, items []Item, mode importMode, seed *jsonSeed) (int, int, int, []string, error) {
 	imported, skipped, wiped := 0, 0, 0
 	warnings := []string{}
 
@@ -331,36 +333,36 @@ func (h *Handler) importItemsWithMode(ctx context.Context, items []Item, mode im
 	defer tx.Rollback(ctx)
 
 	// Preload tag/folder name→id once (avoids per-item SELECT/INSERT N+1).
-	tagCache, err := loadTagNameCache(ctx, tx)
+	tagCache, err := loadTagNameCache(ctx, tx, uid)
 	if err != nil {
 		return 0, 0, 0, nil, err
 	}
-	folderCache, err := loadFolderNameCache(ctx, tx)
+	folderCache, err := loadFolderNameCache(ctx, tx, uid)
 	if err != nil {
 		return 0, 0, 0, nil, err
 	}
 	// JSON exports carry tag colors + folder colors — seed before link inserts.
 	if seed != nil {
-		if err := seedJSONCatalog(ctx, tx, seed, tagCache, folderCache); err != nil {
+		if err := seedJSONCatalog(ctx, tx, uid, seed, tagCache, folderCache); err != nil {
 			return 0, 0, 0, nil, err
 		}
 	}
 
 	freshIDs := make([]int64, 0, len(items))
 	for _, it := range items {
-		tagIDs, err := ensureTagsCached(ctx, tx, tagCache, it.Tags)
+		tagIDs, err := ensureTagsCached(ctx, tx, uid, tagCache, it.Tags)
 		if err != nil {
 			return imported, skipped, wiped, warnings, err
 		}
 		var folderID *int64
 		if it.Folder != nil {
-			fid, err := ensureFolderCached(ctx, tx, folderCache, *it.Folder, "")
+			fid, err := ensureFolderCached(ctx, tx, uid, folderCache, *it.Folder, "")
 			if err != nil {
 				return imported, skipped, wiped, warnings, err
 			}
 			folderID = &fid
 		}
-		id, dup, wipedHere, err := insertLinkInTx(ctx, tx, it.URL, it.Title, it.Description, tagIDs, folderID, it.ClickCount, it.CreatedAt, mode == modeWipe)
+		id, dup, wipedHere, err := insertLinkInTx(ctx, tx, uid, it.URL, it.Title, it.Description, tagIDs, folderID, it.ClickCount, it.CreatedAt, mode == modeWipe)
 		if err != nil {
 			return imported, skipped, wiped, warnings, err
 		}
@@ -389,7 +391,7 @@ func (h *Handler) importItemsWithMode(ctx context.Context, items []Item, mode im
 	return imported, skipped, wiped, warnings, nil
 }
 
-func seedJSONCatalog(ctx context.Context, q dbtx, seed *jsonSeed, tagCache, folderCache map[string]int64) error {
+func seedJSONCatalog(ctx context.Context, q dbtx, uid authctx.UserID, seed *jsonSeed, tagCache, folderCache map[string]int64) error {
 	for _, t := range seed.tags {
 		name := strings.TrimSpace(t.Name)
 		if name == "" {
@@ -398,26 +400,26 @@ func seedJSONCatalog(ctx context.Context, q dbtx, seed *jsonSeed, tagCache, fold
 		color := sanitizeImportColor(t.Color)
 		var id int64
 		err := q.QueryRow(ctx, `
-            INSERT INTO tag (name, color, icon)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (name) DO UPDATE SET color = EXCLUDED.color, icon = COALESCE(EXCLUDED.icon, tag.icon)
+            INSERT INTO tag (user_id, name, color, icon)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (user_id, name) DO UPDATE SET color = EXCLUDED.color, icon = COALESCE(EXCLUDED.icon, tag.icon)
             RETURNING id
-        `, name, color, t.Icon).Scan(&id)
+        `, int64(uid), name, color, t.Icon).Scan(&id)
 		if err != nil {
 			return fmt.Errorf("seed tag %q: %w", name, err)
 		}
 		tagCache[name] = id
 	}
 	for _, fl := range seed.folders {
-		if _, err := ensureFolderCached(ctx, q, folderCache, fl.Name, sanitizeImportColor(fl.Color)); err != nil {
+		if _, err := ensureFolderCached(ctx, q, uid, folderCache, fl.Name, sanitizeImportColor(fl.Color)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func loadTagNameCache(ctx context.Context, q dbtx) (map[string]int64, error) {
-	rows, err := q.Query(ctx, `SELECT id, name FROM tag`)
+func loadTagNameCache(ctx context.Context, q dbtx, uid authctx.UserID) (map[string]int64, error) {
+	rows, err := q.Query(ctx, `SELECT id, name FROM tag WHERE user_id = $1`, int64(uid))
 	if err != nil {
 		return nil, fmt.Errorf("load tags: %w", err)
 	}
@@ -434,8 +436,8 @@ func loadTagNameCache(ctx context.Context, q dbtx) (map[string]int64, error) {
 	return out, rows.Err()
 }
 
-func loadFolderNameCache(ctx context.Context, q dbtx) (map[string]int64, error) {
-	rows, err := q.Query(ctx, `SELECT id, name FROM folder`)
+func loadFolderNameCache(ctx context.Context, q dbtx, uid authctx.UserID) (map[string]int64, error) {
+	rows, err := q.Query(ctx, `SELECT id, name FROM folder WHERE user_id = $1`, int64(uid))
 	if err != nil {
 		return nil, fmt.Errorf("load folders: %w", err)
 	}
@@ -456,7 +458,7 @@ func loadFolderNameCache(ctx context.Context, q dbtx) (map[string]int64, error) 
 }
 
 // ensureTagsCached resolves tag names via cache, inserting only on miss.
-func ensureTagsCached(ctx context.Context, q dbtx, cache map[string]int64, names []string) ([]int64, error) {
+func ensureTagsCached(ctx context.Context, q dbtx, uid authctx.UserID, cache map[string]int64, names []string) ([]int64, error) {
 	ids := make([]int64, 0, len(names))
 	for _, name := range names {
 		name = strings.TrimSpace(name)
@@ -469,11 +471,11 @@ func ensureTagsCached(ctx context.Context, q dbtx, cache map[string]int64, names
 		}
 		var id int64
 		err := q.QueryRow(ctx, `
-            INSERT INTO tag (name)
-            VALUES ($1)
-            ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+            INSERT INTO tag (user_id, name)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id, name) DO UPDATE SET name = EXCLUDED.name
             RETURNING id
-        `, name).Scan(&id)
+        `, int64(uid), name).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("ensure tag %q: %w", name, err)
 		}
@@ -483,7 +485,7 @@ func ensureTagsCached(ctx context.Context, q dbtx, cache map[string]int64, names
 	return ids, nil
 }
 
-func ensureFolderCached(ctx context.Context, q dbtx, cache map[string]int64, name, color string) (int64, error) {
+func ensureFolderCached(ctx context.Context, q dbtx, uid authctx.UserID, cache map[string]int64, name, color string) (int64, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return 0, fmt.Errorf("ensureFolder: empty name")
@@ -491,7 +493,7 @@ func ensureFolderCached(ctx context.Context, q dbtx, cache map[string]int64, nam
 	if id, ok := cache[name]; ok {
 		return id, nil
 	}
-	id, err := ensureFolder(ctx, q, name, color)
+	id, err := ensureFolder(ctx, q, uid, name, color)
 	if err != nil {
 		return 0, err
 	}
@@ -517,14 +519,14 @@ func nextAvailableSlug(ctx context.Context, q dbtx, base string) (string, error)
 // is a trust boundary (shared/edited JSON files) and a `red url("…")` color
 // would otherwise become a tracking pixel on every chip render (CLAUDE.md §4).
 // Accepts either *pgxpool.Pool or pgx.Tx (see ensureTags).
-func ensureFolder(ctx context.Context, q dbtx, name, color string) (int64, error) {
+func ensureFolder(ctx context.Context, q dbtx, uid authctx.UserID, name, color string) (int64, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return 0, fmt.Errorf("ensureFolder: empty name")
 	}
 	color = sanitizeImportColor(color)
 	var id int64
-	err := q.QueryRow(ctx, `SELECT id FROM folder WHERE name = $1 LIMIT 1`, name).Scan(&id)
+	err := q.QueryRow(ctx, `SELECT id FROM folder WHERE user_id = $1 AND name = $2 LIMIT 1`, int64(uid), name).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
@@ -532,8 +534,8 @@ func ensureFolder(ctx context.Context, q dbtx, name, color string) (int64, error
 		return 0, fmt.Errorf("lookup folder %q: %w", name, err)
 	}
 	if err := q.QueryRow(ctx, `
-        INSERT INTO folder (name, color) VALUES ($1, $2) RETURNING id
-    `, name, color).Scan(&id); err != nil {
+        INSERT INTO folder (user_id, name, color) VALUES ($1, $2, $3) RETURNING id
+    `, int64(uid), name, color).Scan(&id); err != nil {
 		return 0, fmt.Errorf("create folder %q: %w", name, err)
 	}
 	return id, nil
@@ -542,13 +544,13 @@ func ensureFolder(ctx context.Context, q dbtx, name, color string) (int64, error
 // insertLinkIfNew is the pool-level wrapper: opens its own tx, performs the
 // upsert via insertLinkInTx, commits. Use this from per-item callers
 // (importItems, importJSON) where each item is independently atomic.
-func insertLinkIfNew(ctx context.Context, pool *pgxpool.Pool, url, title string, description *string, tagIDs []int64, folderID *int64, clickCount int64, createdAt *time.Time, wipeFirst bool) (int64, bool, bool, error) {
+func insertLinkIfNew(ctx context.Context, pool *pgxpool.Pool, uid authctx.UserID, url, title string, description *string, tagIDs []int64, folderID *int64, clickCount int64, createdAt *time.Time, wipeFirst bool) (int64, bool, bool, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return 0, false, false, err
 	}
 	defer tx.Rollback(ctx)
-	id, dup, wiped, err := insertLinkInTx(ctx, tx, url, title, description, tagIDs, folderID, clickCount, createdAt, wipeFirst)
+	id, dup, wiped, err := insertLinkInTx(ctx, tx, uid, url, title, description, tagIDs, folderID, clickCount, createdAt, wipeFirst)
 	if err != nil {
 		return 0, false, false, err
 	}
@@ -569,7 +571,7 @@ func insertLinkIfNew(ctx context.Context, pool *pgxpool.Pool, url, title string,
 // URL inside the same transaction, so a failure can never leave the link
 // deleted without its replacement. Returns wiped=true when the DELETE actually
 // removed a row.
-func insertLinkInTx(ctx context.Context, tx pgx.Tx, url, title string, description *string, tagIDs []int64, folderID *int64, clickCount int64, createdAt *time.Time, wipeFirst bool) (int64, bool, bool, error) {
+func insertLinkInTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, url, title string, description *string, tagIDs []int64, folderID *int64, clickCount int64, createdAt *time.Time, wipeFirst bool) (int64, bool, bool, error) {
 	wiped := false
 	if wipeFirst {
 		// Resolve the id first so link_tag/click_log can be purged before the
@@ -578,18 +580,21 @@ func insertLinkInTx(ctx context.Context, tx pgx.Tx, url, title string, descripti
 		// reference two tables), so cleanup is app-level now, same pattern as
 		// links.Repository.Delete.
 		var existingID int64
-		err := tx.QueryRow(ctx, `SELECT id FROM link WHERE url = $1`, url).Scan(&existingID)
+		err := tx.QueryRow(ctx, `SELECT id FROM link WHERE user_id = $1 AND url = $2`, int64(uid), url).Scan(&existingID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return 0, false, false, fmt.Errorf("resolve wipe target %q: %w", url, err)
 		}
 		if err == nil {
+			// existingID came from the owner-scoped SELECT above, so these two
+			// unscoped child DELETEs (link_tag/click_log carry no user_id)
+			// cannot reach another tenant's rows.
 			if _, err := tx.Exec(ctx, `DELETE FROM link_tag WHERE entity_kind = 'link' AND entity_id = $1`, existingID); err != nil {
 				return 0, false, false, fmt.Errorf("wipe link_tag %q: %w", url, err)
 			}
 			if _, err := tx.Exec(ctx, `DELETE FROM click_log WHERE entity_kind = 'link' AND entity_id = $1`, existingID); err != nil {
 				return 0, false, false, fmt.Errorf("wipe click_log %q: %w", url, err)
 			}
-			if _, err := tx.Exec(ctx, `DELETE FROM link WHERE id = $1`, existingID); err != nil {
+			if _, err := tx.Exec(ctx, `DELETE FROM link WHERE user_id = $1 AND id = $2`, int64(uid), existingID); err != nil {
 				return 0, false, false, fmt.Errorf("wipe delete %q: %w", url, err)
 			}
 			wiped = true
@@ -618,18 +623,18 @@ func insertLinkInTx(ctx context.Context, tx pgx.Tx, url, title string, descripti
 
 	var id int64
 	err = tx.QueryRow(ctx, `
-        INSERT INTO link (url, title, slug, description, folder_id, created_at)
-        VALUES ($1, $2, $3, $4, $5, COALESCE($6, now()))
-        ON CONFLICT (url) DO NOTHING
+        INSERT INTO link (user_id, url, title, slug, description, folder_id, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, now()))
+        ON CONFLICT (user_id, url) DO NOTHING
         RETURNING id
-    `, url, title, slug, description, folderID, createdAt).Scan(&id)
+    `, int64(uid), url, title, slug, description, folderID, createdAt).Scan(&id)
 	dup := false
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return 0, false, false, err
 		}
 		// Conflict path — fetch the existing row.
-		if err := tx.QueryRow(ctx, `SELECT id FROM link WHERE url = $1`, url).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT id FROM link WHERE user_id = $1 AND url = $2`, int64(uid), url).Scan(&id); err != nil {
 			return 0, false, false, fmt.Errorf("resolve duplicate url: %w", err)
 		}
 		dup = true
@@ -640,10 +645,10 @@ func insertLinkInTx(ctx context.Context, tx pgx.Tx, url, title string, descripti
 	// inserts — we don't want re-import to inflate counts on existing links.
 	if !dup && clickCount > 0 {
 		if _, err := tx.Exec(ctx, `
-            INSERT INTO click_log (entity_kind, entity_id, clicked_at)
-            SELECT 'link', $1, COALESCE($2::timestamptz, now())
+            INSERT INTO click_log (entity_kind, entity_id, clicked_at, user_id)
+            SELECT 'link', $1, COALESCE($2::timestamptz, now()), $4
             FROM generate_series(1, $3::int)
-        `, id, createdAt, clickCount); err != nil {
+        `, id, createdAt, clickCount, int64(uid)); err != nil {
 			return 0, false, false, fmt.Errorf("backfill click_log: %w", err)
 		}
 	}

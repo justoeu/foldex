@@ -19,11 +19,17 @@ import (
 
 	"foldex/internal/push"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
-func newPushRouter(t *testing.T, withSender bool) (http.Handler, *push.Repository) {
+func newPushRouter(t *testing.T, withSender bool) (http.Handler, *push.Repository, authctx.UserID) {
 	t.Helper()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := push.NewRepository(pool)
 	keys := push.VAPIDKeys{PublicKey: "PUB", PrivateKey: "PRIV", Subject: "mailto:t@h"}
 	var sender *push.Sender
@@ -36,8 +42,9 @@ func newPushRouter(t *testing.T, withSender bool) (http.Handler, *push.Repositor
 		)
 	}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/push", push.NewHandler(keys, repo, sender).Mount)
-	return r, repo
+	return r, repo, uid
 }
 
 func doPush(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
@@ -54,7 +61,7 @@ func doPush(t *testing.T, h http.Handler, method, path string, body any) *httpte
 }
 
 func TestHandler_SubscribeUnsubscribe_OK(t *testing.T) {
-	h, repo := newPushRouter(t, false)
+	h, repo, uid := newPushRouter(t, false)
 
 	rr := doPush(t, h, http.MethodPost, "/push/subscriptions", map[string]any{
 		"endpoint": "https://fcm.googleapis.com/fcm/send/abc123xyz",
@@ -68,7 +75,7 @@ func TestHandler_SubscribeUnsubscribe_OK(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &created))
 	assert.Positive(t, created.ID)
 
-	list, err := repo.List(context.Background())
+	list, err := repo.List(context.Background(), uid)
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 
@@ -77,13 +84,13 @@ func TestHandler_SubscribeUnsubscribe_OK(t *testing.T) {
 	})
 	require.Equal(t, http.StatusNoContent, rr.Code)
 
-	list, err = repo.List(context.Background())
+	list, err = repo.List(context.Background(), uid)
 	require.NoError(t, err)
 	assert.Empty(t, list)
 }
 
 func TestHandler_Subscribe_InvalidJSON(t *testing.T) {
-	h, _ := newPushRouter(t, false)
+	h, _, _ := newPushRouter(t, false)
 	req := httptest.NewRequest(http.MethodPost, "/push/subscriptions", bytes.NewBufferString(`{`))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -92,7 +99,7 @@ func TestHandler_Subscribe_InvalidJSON(t *testing.T) {
 }
 
 func TestHandler_Unsubscribe_InvalidJSON(t *testing.T) {
-	h, _ := newPushRouter(t, false)
+	h, _, _ := newPushRouter(t, false)
 	req := httptest.NewRequest(http.MethodDelete, "/push/subscriptions", bytes.NewBufferString(`{`))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -101,7 +108,7 @@ func TestHandler_Unsubscribe_InvalidJSON(t *testing.T) {
 }
 
 func TestHandler_Test_Accepted(t *testing.T) {
-	h, _ := newPushRouter(t, true)
+	h, _, _ := newPushRouter(t, true)
 	// Seed a subscription so Notify has work (or empty is also OK).
 	_ = doPush(t, h, http.MethodPost, "/push/subscriptions", map[string]any{
 		"endpoint": "https://fcm.googleapis.com/fcm/send/test-ep-long",
@@ -119,6 +126,7 @@ func TestHandler_Test_RepoListError(t *testing.T) {
 	failStore := &failListStore{}
 	sender := push.NewSender(keys, failStore, logger)
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Route("/push", push.NewHandler(keys, nil, sender).Mount)
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/push/test", nil))
@@ -127,7 +135,7 @@ func TestHandler_Test_RepoListError(t *testing.T) {
 
 type failListStore struct{}
 
-func (f *failListStore) List(context.Context) ([]push.Subscription, error) {
+func (f *failListStore) List(context.Context, authctx.UserID) ([]push.Subscription, error) {
 	return nil, assert.AnError
 }
 func (f *failListStore) DeleteByEndpoint(context.Context, string) error { return nil }

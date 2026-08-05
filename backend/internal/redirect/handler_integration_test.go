@@ -15,14 +15,18 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/redirect"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 func TestRedirect_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 
-	created, err := lrepo.Create(ctx, links.CreateInput{URL: "https://example.com", Title: "ex"})
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://example.com", Title: "ex"})
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
@@ -41,13 +45,16 @@ func TestRedirect_HappyPath(t *testing.T) {
 	assert.Equal(t, http.StatusFound, resp.StatusCode)
 	assert.Equal(t, "https://example.com", resp.Header.Get("Location"))
 
-	got, _ := lrepo.Get(ctx, created.ID)
+	got, _ := lrepo.Get(ctx, uid, created.ID)
 	assert.EqualValues(t, 1, got.ClickCount)
 }
 
 func TestRedirect_NotFound(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	redirect.NewHandler(links.NewRepository(pool)).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -62,7 +69,10 @@ func TestRedirect_NotFound(t *testing.T) {
 // candidate slug — we just don't have any link with that slug, so it 404s.
 func TestRedirect_NonNumericTargetUnknownSlug404(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	redirect.NewHandler(links.NewRepository(pool)).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -78,9 +88,11 @@ func TestRedirect_NonNumericTargetUnknownSlug404(t *testing.T) {
 func TestRedirect_BySlugHappyPath(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 
-	created, err := lrepo.Create(ctx, links.CreateInput{URL: "https://news.ycombinator.com", Title: "Hacker News"})
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://news.ycombinator.com", Title: "Hacker News"})
 	require.NoError(t, err)
 	require.Equal(t, "hacker-news", created.Slug, "slug auto-derived from title")
 
@@ -100,7 +112,7 @@ func TestRedirect_BySlugHappyPath(t *testing.T) {
 	assert.Equal(t, http.StatusFound, resp.StatusCode)
 	assert.Equal(t, "https://news.ycombinator.com", resp.Header.Get("Location"))
 
-	got, _ := lrepo.Get(ctx, created.ID)
+	got, _ := lrepo.Get(ctx, uid, created.ID)
 	assert.EqualValues(t, 1, got.ClickCount)
 }
 
@@ -110,9 +122,11 @@ func TestRedirect_BySlugHappyPath(t *testing.T) {
 func TestRedirect_ByIDStillWorksAfterSlugFeature(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 
-	created, err := lrepo.Create(ctx, links.CreateInput{URL: "https://example.com", Title: "ex"})
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://example.com", Title: "ex"})
 	require.NoError(t, err)
 
 	r := chi.NewRouter()

@@ -23,7 +23,7 @@ Foldex resolve isso como um **app pessoal self-hosted**: bookmark com cara de pr
 
 ## Non-goals (v1)
 
-- **Sem multi-user.** Roda como app de uma pessoa, sem login, atrás do `127.0.0.1`.
+- ~~**Sem multi-user.**~~ **Revisto (2026-08-03, ADR-30).** O v1 rodou como app de uma pessoa, sem login, atrás do `127.0.0.1`. Multi-usuário com autenticação, RBAC e segmentação de dados por usuário passou a ser escopo — ver [`docs/SDD-AUTH-RBAC.md`](SDD-AUTH-RBAC.md). O modo single-user continua sendo o default de instalação: quem não liga `AUTH_ENABLED` não vê tela de login.
 - **Sem sync entre máquinas.** O dado vive num Postgres local; backup é responsabilidade do usuário (script `pg_dump` sugerido).
 - **Sem app mobile nativo.** A SPA virou PWA-grade (manifest + service worker offline + install via "Adicionar à tela inicial") e tem layout responsivo dedicado em ≤768px e ≤600px (topbar single-row com kebab, dialogs full-screen, FAB). Pra alcançar do celular, basta `WEB_BIND_HOST=0.0.0.0` e o LAN IP no SAN do cert. Extensão MV3 segue desktop only.
 - **Sem AI tagging automático.** Sugestão de tags por LLM fica pra v2.
@@ -49,7 +49,7 @@ Engenheiro/PM que vive em browser, abre dezenas de ferramentas internas por sema
 
 ## Out of scope
 
-- Compartilhamento de links com outros usuários (não há outros usuários).
+- Compartilhamento de links **entre** usuários. Continua fora mesmo com multi-user (ADR-30): cada conta é uma base isolada, e nem admin enxerga conteúdo alheio. Compartilhar é colaboração, com modelo de ACL por objeto próprio.
 - Histórico granular de visitas (só agregados a partir de `click_log` — sem trilha por sessão / por device).
 - Lembretes / due-dates em links (notificações de change-detection ≠ lembretes manuais).
 - Search semântica via embeddings.

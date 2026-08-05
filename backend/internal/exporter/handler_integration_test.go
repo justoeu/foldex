@@ -18,21 +18,26 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 func seed(t *testing.T) (*chi.Mux, func()) {
 	t.Helper()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	trepo := tags.NewRepository(pool)
 	lrepo := links.NewRepository(pool)
 
-	tag, _ := trepo.Create(ctx, tags.CreateInput{Name: "jira", Color: "#1f6feb"})
-	_, _ = lrepo.Create(ctx, links.CreateInput{
+	tag, _ := trepo.Create(ctx, uid, tags.CreateInput{Name: "jira", Color: "#1f6feb"})
+	_, _ = lrepo.Create(ctx, uid, links.CreateInput{
 		URL: "https://jira.example/INV-1", Title: "INV-1", TagIDs: []int64{tag.ID},
 	})
 
 	r := chi.NewMux()
+	r.Use(authctxtest.Middleware(uid))
 	exporter.NewHandler(pool).Mount(r)
 	return r, pool.Close
 }
@@ -87,6 +92,8 @@ func TestExport_BadFormat(t *testing.T) {
 // double-quote becomes &#34; and the markup stays attribute-safe.
 func TestExportNetscape_EscapesHostileURL(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	lrepo := links.NewRepository(pool)
 
@@ -96,13 +103,14 @@ func TestExportNetscape_EscapesHostileURL(t *testing.T) {
 	// pre-existing import path is hardened (this branch), nothing reaches
 	// the DB, but rows seeded by older versions or a manual /api/links POST
 	// before the fix must still export safely.
-	_, err := lrepo.Create(ctx, links.CreateInput{
+	_, err := lrepo.Create(ctx, uid, links.CreateInput{
 		URL:   `https://x/"><script>alert(1)</script>`,
 		Title: "ok title",
 	})
 	require.NoError(t, err)
 
 	r := chi.NewMux()
+	r.Use(authctxtest.Middleware(uid))
 	exporter.NewHandler(pool).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()

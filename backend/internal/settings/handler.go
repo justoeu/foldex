@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 )
 
@@ -22,14 +23,14 @@ func (h *Handler) Mount(r chi.Router) {
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
-	configured, err := h.repo.MasterPasswordConfigured(r.Context())
+	configured, err := h.repo.MasterPasswordConfigured(r.Context(), authctx.MustUser(r.Context()))
 	if err != nil {
 		httperr.Write(w, err)
 		return
 	}
 	var hint *string
 	if configured {
-		if hint, err = h.repo.MasterPasswordHint(r.Context()); err != nil {
+		if hint, err = h.repo.MasterPasswordHint(r.Context(), authctx.MustUser(r.Context())); err != nil {
 			httperr.Write(w, err)
 			return
 		}
@@ -47,7 +48,7 @@ func (h *Handler) setMaster(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_input", err.Error()))
 		return
 	}
-	configured, err := h.repo.MasterPasswordConfigured(r.Context())
+	configured, err := h.repo.MasterPasswordConfigured(r.Context(), authctx.MustUser(r.Context()))
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -59,7 +60,7 @@ func (h *Handler) setMaster(w http.ResponseWriter, r *http.Request) {
 			httperr.Write(w, httperr.New(http.StatusUnauthorized, "wrong_password", "current master password is required to change it"))
 			return
 		}
-		ok, _, err := h.repo.VerifyMaster(r.Context(), *in.CurrentPassword)
+		ok, _, err := h.repo.VerifyMaster(r.Context(), authctx.MustUser(r.Context()), *in.CurrentPassword)
 		if err != nil {
 			httperr.Write(w, err)
 			return
@@ -77,11 +78,11 @@ func (h *Handler) setMaster(w http.ResponseWriter, r *http.Request) {
 		s := strings.TrimSpace(*in.Hint)
 		hintArg = &s
 	}
-	if err := h.repo.SetMasterPassword(r.Context(), in.Password, hintArg); err != nil {
+	if err := h.repo.SetMasterPassword(r.Context(), authctx.MustUser(r.Context()), in.Password, hintArg); err != nil {
 		httperr.Write(w, err)
 		return
 	}
-	resHint, err := h.repo.MasterPasswordHint(r.Context())
+	resHint, err := h.repo.MasterPasswordHint(r.Context(), authctx.MustUser(r.Context()))
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -95,7 +96,7 @@ func (h *Handler) clearMaster(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	ok, configured, err := h.repo.VerifyMaster(r.Context(), in.CurrentPassword)
+	ok, configured, err := h.repo.VerifyMaster(r.Context(), authctx.MustUser(r.Context()), in.CurrentPassword)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -109,7 +110,7 @@ func (h *Handler) clearMaster(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "wrong_password", "current master password is incorrect"))
 		return
 	}
-	if err := h.repo.ClearMasterPassword(r.Context()); err != nil {
+	if err := h.repo.ClearMasterPassword(r.Context(), authctx.MustUser(r.Context())); err != nil {
 		httperr.Write(w, err)
 		return
 	}

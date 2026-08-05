@@ -15,20 +15,24 @@ import (
 	"foldex/internal/stats"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx"
 )
 
-func setup(t *testing.T) (context.Context, *stats.Repository, *links.Repository, *tags.Repository) {
+func setup(t *testing.T) (context.Context, authctx.UserID, *stats.Repository, *links.Repository, *tags.Repository) {
 	t.Helper()
 	pool := testdb.New(t)
-	return context.Background(),
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	return context.Background(), uid,
 		stats.NewRepository(pool),
 		links.NewRepository(pool),
 		tags.NewRepository(pool)
 }
 
 func TestSummary_EmptyDB(t *testing.T) {
-	ctx, srepo, _, _ := setup(t)
-	s, err := srepo.Summary(ctx)
+	ctx, uid, srepo, _, _ := setup(t)
+	s, err := srepo.Summary(ctx, uid)
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, s.TotalLinks)
 	assert.EqualValues(t, 0, s.TotalTags)
@@ -36,10 +40,10 @@ func TestSummary_EmptyDB(t *testing.T) {
 }
 
 func TestSummary_AfterClicks(t *testing.T) {
-	ctx, srepo, lrepo, trepo := setup(t)
-	tagX, err := trepo.Create(ctx, tags.CreateInput{Name: "x", Color: "#fff"})
+	ctx, uid, srepo, lrepo, trepo := setup(t)
+	tagX, err := trepo.Create(ctx, uid, tags.CreateInput{Name: "x", Color: "#fff"})
 	require.NoError(t, err)
-	link, err := lrepo.Create(ctx, links.CreateInput{URL: "https://example.com", Title: "ex", TagIDs: []int64{tagX.ID}})
+	link, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://example.com", Title: "ex", TagIDs: []int64{tagX.ID}})
 	require.NoError(t, err)
 
 	// 3 clicks → click_log has 3 rows.
@@ -48,7 +52,7 @@ func TestSummary_AfterClicks(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	s, err := srepo.Summary(ctx)
+	s, err := srepo.Summary(ctx, uid)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, s.TotalLinks)
 	assert.EqualValues(t, 1, s.TotalTags)
@@ -60,11 +64,11 @@ func TestSummary_AfterClicks(t *testing.T) {
 }
 
 func TestDaily_BackfillsEmptyDays(t *testing.T) {
-	ctx, srepo, lrepo, _ := setup(t)
-	link, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://a", Title: "a"})
+	ctx, uid, srepo, lrepo, _ := setup(t)
+	link, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://a", Title: "a"})
 	_, _ = lrepo.ClickAndResolve(ctx, link.ID)
 
-	out, err := srepo.Daily(ctx, 7)
+	out, err := srepo.Daily(ctx, uid, 7)
 	require.NoError(t, err)
 	require.Len(t, out, 7, "must emit one bucket per day even with zero clicks")
 
@@ -79,21 +83,21 @@ func TestDaily_BackfillsEmptyDays(t *testing.T) {
 }
 
 func TestDaily_ClampsBadInput(t *testing.T) {
-	ctx, srepo, _, _ := setup(t)
-	out, err := srepo.Daily(ctx, 0) // 0 → default 60
+	ctx, uid, srepo, _, _ := setup(t)
+	out, err := srepo.Daily(ctx, uid, 0) // 0 → default 60
 	require.NoError(t, err)
 	assert.Len(t, out, 60)
 
-	out, err = srepo.Daily(ctx, 1000) // > 365 → default 60
+	out, err = srepo.Daily(ctx, uid, 1000) // > 365 → default 60
 	require.NoError(t, err)
 	assert.Len(t, out, 60)
 }
 
 func TestTopLinks_OrdersByClicks(t *testing.T) {
-	ctx, srepo, lrepo, _ := setup(t)
-	a, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://a", Title: "A"})
-	b, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://b", Title: "B"})
-	c, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://c", Title: "C"})
+	ctx, uid, srepo, lrepo, _ := setup(t)
+	a, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://a", Title: "A"})
+	b, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b", Title: "B"})
+	c, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://c", Title: "C"})
 
 	for i := 0; i < 3; i++ {
 		_, _ = lrepo.ClickAndResolve(ctx, b.ID)
@@ -103,7 +107,7 @@ func TestTopLinks_OrdersByClicks(t *testing.T) {
 	}
 	_, _ = lrepo.ClickAndResolve(ctx, c.ID)
 
-	out, err := srepo.TopLinks(ctx, 10)
+	out, err := srepo.TopLinks(ctx, uid, 10)
 	require.NoError(t, err)
 	require.Len(t, out, 3)
 	assert.Equal(t, "B", out[0].Title)
@@ -115,23 +119,23 @@ func TestTopLinks_OrdersByClicks(t *testing.T) {
 }
 
 func TestTopLinks_ClampsBadLimit(t *testing.T) {
-	ctx, srepo, lrepo, _ := setup(t)
+	ctx, uid, srepo, lrepo, _ := setup(t)
 	for i := 0; i < 3; i++ {
-		_, err := lrepo.Create(ctx, links.CreateInput{URL: fmt.Sprintf("https://x-%d", i), Title: "x"})
+		_, err := lrepo.Create(ctx, uid, links.CreateInput{URL: fmt.Sprintf("https://x-%d", i), Title: "x"})
 		require.NoError(t, err)
 	}
-	out, err := srepo.TopLinks(ctx, 0) // 0 → default 10
+	out, err := srepo.TopLinks(ctx, uid, 0) // 0 → default 10
 	require.NoError(t, err)
 	assert.Len(t, out, 3)
 }
 
 func TestTagBuckets_AggregatesClicks(t *testing.T) {
-	ctx, srepo, lrepo, trepo := setup(t)
-	t1, _ := trepo.Create(ctx, tags.CreateInput{Name: "alpha", Color: "#a"})
-	t2, _ := trepo.Create(ctx, tags.CreateInput{Name: "beta", Color: "#b"})
+	ctx, uid, srepo, lrepo, trepo := setup(t)
+	t1, _ := trepo.Create(ctx, uid, tags.CreateInput{Name: "alpha", Color: "#a"})
+	t2, _ := trepo.Create(ctx, uid, tags.CreateInput{Name: "beta", Color: "#b"})
 
-	la, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://a", Title: "A", TagIDs: []int64{t1.ID}})
-	lb, _ := lrepo.Create(ctx, links.CreateInput{URL: "https://b", Title: "B", TagIDs: []int64{t1.ID, t2.ID}})
+	la, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://a", Title: "A", TagIDs: []int64{t1.ID}})
+	lb, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b", Title: "B", TagIDs: []int64{t1.ID, t2.ID}})
 	for i := 0; i < 5; i++ {
 		_, _ = lrepo.ClickAndResolve(ctx, la.ID)
 	}
@@ -139,7 +143,7 @@ func TestTagBuckets_AggregatesClicks(t *testing.T) {
 		_, _ = lrepo.ClickAndResolve(ctx, lb.ID)
 	}
 
-	out, err := srepo.TagBuckets(ctx)
+	out, err := srepo.TagBuckets(ctx, uid)
 	require.NoError(t, err)
 	require.Len(t, out, 2)
 

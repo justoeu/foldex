@@ -55,6 +55,8 @@ func sha256hex(b []byte) string {
 
 func TestValidate_ErrorBranches(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 	ctx := context.Background()
 
@@ -62,7 +64,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 		zr := zipFromEntries(t, map[string][]byte{
 			"database.json": mustJSON(t, backup.Snapshot{Version: backup.DatabaseSnapshotVersion}),
 		})
-		v, err := svc.Validate(ctx, zr)
+		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.False(t, v.OK)
 		require.NotEmpty(t, v.Errors)
@@ -75,7 +77,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 				Kind: "not-foldex", Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
 			}),
 		})
-		v, err := svc.Validate(ctx, zr)
+		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.False(t, v.OK)
 		assert.Contains(t, v.Errors[0], "kind mismatch")
@@ -87,7 +89,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 				Kind: backup.ManifestKind, Version: "2.0", SchemaVersion: backup.CurrentSchemaVersion,
 			}),
 		})
-		v, err := svc.Validate(ctx, zr)
+		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.False(t, v.OK)
 		assert.Contains(t, v.Errors[0], "major version")
@@ -99,7 +101,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 				Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion + 50,
 			}),
 		})
-		v, err := svc.Validate(ctx, zr)
+		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.False(t, v.OK)
 		assert.Contains(t, v.Errors[0], "schema_version too new")
@@ -114,7 +116,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 			}),
 			"database.json": db,
 		})
-		v, err := svc.Validate(ctx, zr)
+		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.True(t, v.OK)
 		require.NotEmpty(t, v.Warnings)
@@ -133,7 +135,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 			}),
 			"database.json": db,
 		})
-		v, err := svc.Validate(ctx, zr)
+		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.False(t, v.OK)
 		joined := fmt.Sprint(v.Errors)
@@ -149,7 +151,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 			}),
 			"database.json": db,
 		})
-		v, err := svc.Validate(ctx, zr)
+		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.False(t, v.OK)
 		assert.Contains(t, v.Errors[0], "checksum mismatch")
@@ -162,7 +164,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 				Checksums: map[string]string{},
 			}),
 		})
-		v, err := svc.Validate(ctx, zr)
+		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.False(t, v.OK)
 		joined := fmt.Sprint(v.Errors)
@@ -178,7 +180,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 			}),
 			"database.json": db,
 		})
-		v, err := svc.Validate(ctx, zr)
+		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.False(t, v.OK)
 		joined := fmt.Sprint(v.Errors)
@@ -202,7 +204,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 			}),
 			"database.json": db,
 		})
-		v, err := svc.Validate(ctx, zr)
+		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.True(t, v.OK)
 		require.NotEmpty(t, v.Warnings)
@@ -226,13 +228,13 @@ func TestValidate_ErrorBranches(t *testing.T) {
 			}),
 			"database.json": db,
 		})
-		v, err := svc.Validate(ctx, zr)
+		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.True(t, v.OK)
 	})
 
 	t.Run("conflicts_against_live_db", func(t *testing.T) {
-		_, err := links.NewRepository(pool).Create(ctx, links.CreateInput{
+		_, err := links.NewRepository(pool).Create(ctx, uid, links.CreateInput{
 			URL: "https://conflict-val.example", Title: "C",
 		})
 		require.NoError(t, err)
@@ -252,7 +254,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 			}),
 			"database.json": db,
 		})
-		v, err := svc.Validate(ctx, zr)
+		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.True(t, v.OK)
 		assert.EqualValues(t, 1, v.Conflicts.Links)
@@ -261,6 +263,8 @@ func TestValidate_ErrorBranches(t *testing.T) {
 
 func TestRestore_EmptySlugAndNoteTags(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
@@ -300,7 +304,7 @@ func TestRestore_EmptySlugAndNoteTags(t *testing.T) {
 		"database.json": db,
 	})
 
-	rep, err := svc.Restore(ctx, zr, backup.ModeWipe)
+	rep, err := svc.Restore(ctx, uid, zr, backup.ModeWipe)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep.Inserted.Links)
 	assert.EqualValues(t, 1, rep.Inserted.Notes)
@@ -326,7 +330,7 @@ func TestRestore_EmptySlugAndNoteTags(t *testing.T) {
 		}),
 		"database.json": db2,
 	})
-	rep2, err := svc.Restore(ctx, zr2, backup.ModeSkip)
+	rep2, err := svc.Restore(ctx, uid, zr2, backup.ModeSkip)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep2.Skipped.Links)
 	assert.GreaterOrEqual(t, rep2.Skipped.LinkTags, int64(1), "unmapped link_tag/note_tag must count as skipped")
@@ -337,6 +341,8 @@ func TestExport_FullSnapshotRoundTrip(t *testing.T) {
 	// Covers readSnapshot arms for notes/note_tags/note_clicks/app_settings
 	// and folders with password_hash/hint — the branches empty-DB exports skip.
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
@@ -344,33 +350,36 @@ func TestExport_FullSnapshotRoundTrip(t *testing.T) {
 	pw := "folder-secret"
 	hint := "not-secret"
 	frepo := folders.NewRepository(pool)
-	f, err := frepo.Create(ctx, folders.CreateInput{Name: "Locked", Color: "#aabbcc", Password: &pw, PasswordHint: &hint})
+	f, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Locked", Color: "#aabbcc", Password: &pw, PasswordHint: &hint})
 	require.NoError(t, err)
-	tag, err := tags.NewRepository(pool).Create(ctx, tags.CreateInput{Name: "full-tag", Color: "#abc"})
+	tag, err := tags.NewRepository(pool).Create(ctx, uid, tags.CreateInput{Name: "full-tag", Color: "#abc"})
 	require.NoError(t, err)
-	l, err := links.NewRepository(pool).Create(ctx, links.CreateInput{
+	l, err := links.NewRepository(pool).Create(ctx, uid, links.CreateInput{
 		URL: "https://full-export.example", Title: "Full", TagIDs: []int64{tag.ID}, FolderID: &f.ID,
 	})
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id) VALUES ('link', $1)`, l.ID)
+	_, err = pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id, user_id) VALUES ('link', $1, $2)`, l.ID, int64(uid))
 	require.NoError(t, err)
 
-	n, err := notes.NewRepository(pool).Create(ctx, notes.CreateInput{
+	n, err := notes.NewRepository(pool).Create(ctx, uid, notes.CreateInput{
 		Title: "Full Note", BodyHTML: "<p>body</p>", TagIDs: []int64{tag.ID}, FolderID: &f.ID,
 	})
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id) VALUES ('note', $1)`, n.ID)
+	_, err = pool.Exec(ctx, `INSERT INTO click_log (entity_kind, entity_id, user_id) VALUES ('note', $1, $2)`, n.ID, int64(uid))
 	require.NoError(t, err)
 
 	// Master password setting (app_setting arm of readSnapshot).
 	srepo := settings.NewRepository(pool)
-	require.NoError(t, srepo.SetMasterPassword(ctx, "master-pass-ok", nil))
+	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "master-pass-ok", nil))
 
-	bucket.objs[fmt.Sprintf("screenshots/%d.jpg", l.ID)] = []byte("img")
+	shotKey := fmt.Sprintf("screenshots/%d.jpg", l.ID)
+	bucket.objs[shotKey] = []byte("img")
+	require.NoError(t, links.NewRepository(pool).UpdateOGImage(ctx, uid, l.ID, "/api/files/"+shotKey))
+	// Referenced by no row, so attributable to no user — export leaves it behind.
 	bucket.objs["images/orphan.jpg"] = []byte("orphan")
 
 	var buf bytes.Buffer
-	rep, err := svc.Export(ctx, &buf, func(c backup.Counts) error {
+	rep, err := svc.Export(ctx, uid, &buf, func(c backup.Counts) error {
 		assert.GreaterOrEqual(t, c.Links, int64(1))
 		assert.GreaterOrEqual(t, c.Notes, int64(1))
 		assert.GreaterOrEqual(t, c.Files, int64(1))
@@ -382,17 +391,19 @@ func TestExport_FullSnapshotRoundTrip(t *testing.T) {
 
 	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
-	v, err := svc.Validate(ctx, zr)
+	v, err := svc.Validate(ctx, uid, zr)
 	require.NoError(t, err)
 	assert.True(t, v.OK)
 }
 
 func TestRestore_UniqueTagNameWalksPast2(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 
-	_, err := pool.Exec(ctx, `INSERT INTO tag (name, color) VALUES ('walk', '#abc'), ('walk (2)', '#abc')`)
+	_, err := pool.Exec(ctx, `INSERT INTO tag (user_id, name, color) VALUES ($1, 'walk', '#abc'), ($1, 'walk (2)', '#abc')`, int64(uid))
 	require.NoError(t, err)
 
 	now := time.Now().UTC()
@@ -408,7 +419,7 @@ func TestRestore_UniqueTagNameWalksPast2(t *testing.T) {
 		}),
 		"database.json": db,
 	})
-	rep, err := svc.Restore(ctx, zr, backup.ModeDuplicate)
+	rep, err := svc.Restore(ctx, uid, zr, backup.ModeDuplicate)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep.Inserted.Tags)
 	assert.True(t, tagNameExists(t, pool, "walk (3)"))
@@ -417,6 +428,8 @@ func TestRestore_UniqueTagNameWalksPast2(t *testing.T) {
 func TestRestore_SkipIntoEmptyDB_InsertsEverything(t *testing.T) {
 	// Exercises restoreSkip's *inserted* branches (not just ON CONFLICT skip).
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 
@@ -451,7 +464,7 @@ func TestRestore_SkipIntoEmptyDB_InsertsEverything(t *testing.T) {
 		}),
 		"database.json": db,
 	})
-	rep, err := svc.Restore(ctx, zr, backup.ModeSkip)
+	rep, err := svc.Restore(ctx, uid, zr, backup.ModeSkip)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep.Inserted.Links)
 	assert.EqualValues(t, 1, rep.Inserted.Notes)
@@ -464,6 +477,8 @@ func TestRestore_SkipIntoEmptyDB_InsertsEverything(t *testing.T) {
 
 func TestRestore_DuplicateIntoEmptyDB(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 
@@ -496,7 +511,7 @@ func TestRestore_DuplicateIntoEmptyDB(t *testing.T) {
 		}),
 		"database.json": db,
 	})
-	rep, err := svc.Restore(ctx, zr, backup.ModeDuplicate)
+	rep, err := svc.Restore(ctx, uid, zr, backup.ModeDuplicate)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep.Inserted.Links)
 	assert.EqualValues(t, 1, rep.Inserted.Notes)
@@ -508,20 +523,22 @@ func TestRestore_DuplicateIntoEmptyDB(t *testing.T) {
 
 func TestRestore_InvalidModeAndBadManifest(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 	ctx := context.Background()
 
-	_, err := svc.Restore(ctx, zipFromEntries(t, map[string][]byte{"x": []byte("y")}), backup.ConflictMode("nope"))
+	_, err := svc.Restore(ctx, uid, zipFromEntries(t, map[string][]byte{"x": []byte("y")}), backup.ConflictMode("nope"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid mode")
 
-	_, err = svc.Restore(ctx, zipFromEntries(t, map[string][]byte{
+	_, err = svc.Restore(ctx, uid, zipFromEntries(t, map[string][]byte{
 		"manifest.json": mustJSON(t, backup.Manifest{Kind: "other", Version: "1.0", SchemaVersion: 1}),
 	}), backup.ModeSkip)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a foldex backup")
 
-	_, err = svc.Restore(ctx, zipFromEntries(t, map[string][]byte{
+	_, err = svc.Restore(ctx, uid, zipFromEntries(t, map[string][]byte{
 		"manifest.json": mustJSON(t, backup.Manifest{
 			Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion + 99,
 		}),
@@ -530,7 +547,7 @@ func TestRestore_InvalidModeAndBadManifest(t *testing.T) {
 	assert.Contains(t, err.Error(), "too new")
 
 	// Missing database.json after valid manifest
-	_, err = svc.Restore(ctx, zipFromEntries(t, map[string][]byte{
+	_, err = svc.Restore(ctx, uid, zipFromEntries(t, map[string][]byte{
 		"manifest.json": mustJSON(t, backup.Manifest{
 			Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
 		}),
@@ -540,11 +557,13 @@ func TestRestore_InvalidModeAndBadManifest(t *testing.T) {
 
 func TestRestore_Duplicate_EmptySlugAndRenames(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 
 	// Pre-seed colliding tag name so uniqueTagName walks to "(2)".
-	_, err := pool.Exec(ctx, `INSERT INTO tag (name, color) VALUES ('dup-tag', '#abc')`)
+	_, err := pool.Exec(ctx, `INSERT INTO tag (user_id, name, color) VALUES ($1, 'dup-tag', '#abc')`, int64(uid))
 	require.NoError(t, err)
 
 	now := time.Now().UTC()
@@ -572,7 +591,7 @@ func TestRestore_Duplicate_EmptySlugAndRenames(t *testing.T) {
 		}),
 		"database.json": db,
 	})
-	rep, err := svc.Restore(ctx, zr, backup.ModeDuplicate)
+	rep, err := svc.Restore(ctx, uid, zr, backup.ModeDuplicate)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep.Inserted.Tags)
 	assert.True(t, tagNameExists(t, pool, "dup-tag (2)"))

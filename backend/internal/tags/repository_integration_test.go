@@ -17,45 +17,49 @@ import (
 func TestRepository_CRUD(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := tags.NewRepository(pool)
 
 	icon := "🪲"
-	created, err := repo.Create(ctx, tags.CreateInput{Name: "jira", Color: "#1f6feb", Icon: &icon})
+	created, err := repo.Create(ctx, uid, tags.CreateInput{Name: "jira", Color: "#1f6feb", Icon: &icon})
 	require.NoError(t, err)
 	assert.Equal(t, "jira", created.Name)
 	assert.NotZero(t, created.ID)
 
 	// Get
-	got, err := repo.Get(ctx, created.ID)
+	got, err := repo.Get(ctx, uid, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "jira", got.Name)
 
 	// List shows the row with link_count=0
-	all, err := repo.List(ctx)
+	all, err := repo.List(ctx, uid)
 	require.NoError(t, err)
 	require.Len(t, all, 1)
 	assert.EqualValues(t, 0, all[0].LinkCount)
 
 	// Update
 	newName := "Jira"
-	upd, err := repo.Update(ctx, created.ID, tags.UpdateInput{Name: &newName})
+	upd, err := repo.Update(ctx, uid, created.ID, tags.UpdateInput{Name: &newName})
 	require.NoError(t, err)
 	assert.Equal(t, "Jira", upd.Name)
 
 	// Delete
-	require.NoError(t, repo.Delete(ctx, created.ID))
-	_, err = repo.Get(ctx, created.ID)
+	require.NoError(t, repo.Delete(ctx, uid, created.ID))
+	_, err = repo.Get(ctx, uid, created.ID)
 	assert.ErrorIs(t, err, httperr.ErrNotFound)
 }
 
 func TestRepository_CreateDuplicateNameConflict(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := tags.NewRepository(pool)
 
-	_, err := repo.Create(ctx, tags.CreateInput{Name: "docs", Color: "#fff"})
+	_, err := repo.Create(ctx, uid, tags.CreateInput{Name: "docs", Color: "#fff"})
 	require.NoError(t, err)
-	_, err = repo.Create(ctx, tags.CreateInput{Name: "docs", Color: "#000"})
+	_, err = repo.Create(ctx, uid, tags.CreateInput{Name: "docs", Color: "#000"})
 	require.Error(t, err)
 	var he *httperr.Error
 	require.ErrorAs(t, err, &he)
@@ -65,19 +69,23 @@ func TestRepository_CreateDuplicateNameConflict(t *testing.T) {
 func TestRepository_DeleteMissing(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := tags.NewRepository(pool)
-	err := repo.Delete(ctx, 999)
+	err := repo.Delete(ctx, uid, 999)
 	assert.ErrorIs(t, err, httperr.ErrNotFound)
 }
 
 func TestRepository_UpdateEmptyPatchReturnsCurrent(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := tags.NewRepository(pool)
 
-	created, err := repo.Create(ctx, tags.CreateInput{Name: "x", Color: "#abc"})
+	created, err := repo.Create(ctx, uid, tags.CreateInput{Name: "x", Color: "#abc"})
 	require.NoError(t, err)
-	got, err := repo.Update(ctx, created.ID, tags.UpdateInput{})
+	got, err := repo.Update(ctx, uid, created.ID, tags.UpdateInput{})
 	require.NoError(t, err)
 	assert.Equal(t, "x", got.Name)
 }

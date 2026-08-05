@@ -20,6 +20,8 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 func multipartFields(t *testing.T, fields map[string]string, content string) (*bytes.Buffer, string) {
@@ -39,17 +41,20 @@ func multipartFields(t *testing.T, fields map[string]string, content string) (*b
 
 func TestValidate_ReportsConflictsAndFolders(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 	trepo := tags.NewRepository(pool)
 	ctx := context.Background()
 
 	// Outer H3 becomes a tag; seed it so Conflicts.Tags increments.
-	_, err := trepo.Create(ctx, tags.CreateInput{Name: "Outer", Color: "#abc"})
+	_, err := trepo.Create(ctx, uid, tags.CreateInput{Name: "Outer", Color: "#abc"})
 	require.NoError(t, err)
-	_, err = lrepo.Create(ctx, links.CreateInput{URL: "https://exists.example", Title: "Exists"})
+	_, err = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://exists.example", Title: "Exists"})
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -96,7 +101,10 @@ func TestValidate_ReportsConflictsAndFolders(t *testing.T) {
 
 func TestValidate_EmptyFile(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -115,12 +123,15 @@ func TestValidate_EmptyFile(t *testing.T) {
 
 func TestApply_SkipMode_Default(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 	ctx := context.Background()
-	_, err := lrepo.Create(ctx, links.CreateInput{URL: "https://dup.example", Title: "Old"})
+	_, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://dup.example", Title: "Old"})
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -148,12 +159,15 @@ func TestApply_SkipMode_Default(t *testing.T) {
 
 func TestApply_WipeMode(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 	ctx := context.Background()
-	old, err := lrepo.Create(ctx, links.CreateInput{URL: "https://wipe-me.example", Title: "Old"})
+	old, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://wipe-me.example", Title: "Old"})
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -174,7 +188,7 @@ func TestApply_WipeMode(t *testing.T) {
 	assert.Equal(t, 1, out.Imported)
 	assert.Equal(t, 1, out.Wiped)
 
-	list, err := lrepo.List(ctx, links.ListQuery{})
+	list, err := lrepo.List(ctx, uid, links.ListQuery{})
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	assert.Equal(t, "Replaced", list[0].Title)
@@ -183,12 +197,15 @@ func TestApply_WipeMode(t *testing.T) {
 
 func TestApply_DuplicateMode_WarnsOnURLCollision(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 	ctx := context.Background()
-	_, err := lrepo.Create(ctx, links.CreateInput{URL: "https://keep.example", Title: "Keep"})
+	_, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://keep.example", Title: "Keep"})
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -218,10 +235,13 @@ func TestApply_DuplicateMode_WarnsOnURLCollision(t *testing.T) {
 
 func TestApply_ExcludeFolders(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 	ctx := context.Background()
 
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -247,7 +267,7 @@ func TestApply_ExcludeFolders(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
 	assert.Equal(t, 1, out.Imported)
 
-	list, err := lrepo.List(ctx, links.ListQuery{})
+	list, err := lrepo.List(ctx, uid, links.ListQuery{})
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	assert.Equal(t, "https://keep-folder.example", list[0].URL)
@@ -255,10 +275,13 @@ func TestApply_ExcludeFolders(t *testing.T) {
 
 func TestApply_JSONWithSeedColors(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 	ctx := context.Background()
 
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -272,7 +295,7 @@ func TestApply_JSONWithSeedColors(t *testing.T) {
 	raw, _ := io.ReadAll(resp.Body)
 	require.Equal(t, http.StatusOK, resp.StatusCode, "body: %s", raw)
 
-	list, err := lrepo.List(ctx, links.ListQuery{})
+	list, err := lrepo.List(ctx, uid, links.ListQuery{})
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	assert.EqualValues(t, 3, list[0].ClickCount)
@@ -287,7 +310,10 @@ func TestApply_JSONWithSeedColors(t *testing.T) {
 
 func TestApply_EmptyModeDefaultsToSkip(t *testing.T) {
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -307,12 +333,15 @@ func TestApply_EmptyModeDefaultsToSkip(t *testing.T) {
 func TestApply_JSONValidateViaApply(t *testing.T) {
 	// validate endpoint with JSON format + existing URL conflict
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
 	ctx := context.Background()
-	_, err := lrepo.Create(ctx, links.CreateInput{URL: "https://json-exists.example", Title: "X"})
+	_, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://json-exists.example", Title: "X"})
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()

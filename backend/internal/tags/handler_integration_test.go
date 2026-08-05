@@ -16,12 +16,17 @@ import (
 
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 func newRouter(t *testing.T) http.Handler {
 	t.Helper()
 	pool := testdb.New(t)
+
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
 	r.Route("/tags", tags.NewHandler(tags.NewRepository(pool)).Mount)
 	return r
 }

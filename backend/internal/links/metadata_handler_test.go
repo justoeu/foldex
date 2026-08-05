@@ -13,6 +13,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 // stubMetadataFetcher lets the handler tests exercise the JSON contract
@@ -42,6 +44,7 @@ func (s *stubMetadataFetcher) FetchMetadata(_ context.Context, pageURL string) (
 // is the same shape the handler sees here.
 func newMetadataRouter(f MetadataFetcher) http.Handler {
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	h := &Handler{fetcher: f}
 	r.Get("/url-metadata", h.fetchURLMetadata)
 	return r

@@ -14,6 +14,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/pkg/authctx"
+
+	"foldex/internal/pkg/authctx/authctxtest"
 )
 
 type fakeBackupSvc struct {
@@ -22,7 +26,7 @@ type fakeBackupSvc struct {
 	restoreErr  error
 }
 
-func (f *fakeBackupSvc) Export(_ context.Context, w io.Writer, onCountsReady func(Counts) error) (ExportReport, error) {
+func (f *fakeBackupSvc) Export(_ context.Context, _ authctx.UserID, w io.Writer, onCountsReady func(Counts) error) (ExportReport, error) {
 	if f.exportErr != nil {
 		return ExportReport{}, f.exportErr
 	}
@@ -35,14 +39,14 @@ func (f *fakeBackupSvc) Export(_ context.Context, w io.Writer, onCountsReady fun
 	return ExportReport{Counts: Counts{Links: 2}, DurationMs: 5}, nil
 }
 
-func (f *fakeBackupSvc) Validate(_ context.Context, _ *zip.Reader) (Validation, error) {
+func (f *fakeBackupSvc) Validate(_ context.Context, _ authctx.UserID, _ *zip.Reader) (Validation, error) {
 	if f.validateErr != nil {
 		return Validation{}, f.validateErr
 	}
 	return Validation{OK: true}, nil
 }
 
-func (f *fakeBackupSvc) Restore(_ context.Context, _ *zip.Reader, mode ConflictMode) (RestoreReport, error) {
+func (f *fakeBackupSvc) Restore(_ context.Context, _ authctx.UserID, _ *zip.Reader, mode ConflictMode) (RestoreReport, error) {
 	if f.restoreErr != nil {
 		return RestoreReport{}, f.restoreErr
 	}
@@ -53,6 +57,7 @@ func mount(t *testing.T, f *fakeBackupSvc) http.Handler {
 	t.Helper()
 	h := NewHandler(f, slog.Default())
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Route("/backup", h.Mount)
 	return r
 }

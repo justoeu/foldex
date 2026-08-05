@@ -25,6 +25,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/storage"
+
+	"foldex/internal/pkg/authctx"
+
+	"foldex/internal/pkg/authctx/authctxtest"
+	"foldex/internal/pkg/httperr"
 )
 
 // pngHeader is the 8-byte magic prefix every PNG starts with. http.DetectContentType
@@ -115,8 +120,16 @@ func (f *fakeUploader) DeleteObject(_ context.Context, key string) error {
 	return nil
 }
 
+// fakeRepo stands in for links.Repository. It ENFORCES ownership rather than
+// ignoring the uid the handler passes: the real repository scopes every query by
+// user_id and reports another user's row as not-found, so a fake that answered
+// regardless of uid would let a handler drop the principal entirely and still
+// go green. gotUID records what was actually passed, so a test can assert the
+// handler forwarded the authenticated principal instead of a zero value.
 type fakeRepo struct {
 	links      map[int64]Link
+	owners     map[int64]authctx.UserID // absent ⇒ owned by authctxtest.DefaultUser
+	gotUID     []authctx.UserID
 	updatedURL map[int64]string
 	clearedIDs []int64
 	getErr     error
@@ -125,31 +138,77 @@ type fakeRepo struct {
 }
 
 func newFakeRepo() *fakeRepo {
-	return &fakeRepo{links: map[int64]Link{}, updatedURL: map[int64]string{}}
+	return &fakeRepo{
+		links:      map[int64]Link{},
+		owners:     map[int64]authctx.UserID{},
+		updatedURL: map[int64]string{},
+	}
 }
 
-func (f *fakeRepo) Get(_ context.Context, id int64) (Link, error) {
+// ownedBy registers a link belonging to someone other than the default user.
+func (f *fakeRepo) ownedBy(id int64, uid authctx.UserID, l Link) {
+	f.links[id] = l
+	f.owners[id] = uid
+}
+
+func (f *fakeRepo) ownerOf(id int64) authctx.UserID {
+	if uid, ok := f.owners[id]; ok {
+		return uid
+	}
+	return authctxtest.DefaultUser
+}
+
+// errNotFound mirrors what the scoped repository returns for a row that either
+// does not exist or belongs to another user — the two are deliberately
+// indistinguishable (CLAUDE.md §4). It is the same httperr.ErrNotFound the real
+// Repository returns, so handler tests observe production's 404 rather than the
+// 500 a bare error would produce.
+var errNotFound = httperr.ErrNotFound
+
+func (f *fakeRepo) Get(_ context.Context, uid authctx.UserID, id int64) (Link, error) {
+	f.gotUID = append(f.gotUID, uid)
 	if f.getErr != nil {
 		return Link{}, f.getErr
 	}
 	l, ok := f.links[id]
-	if !ok {
-		return Link{}, errors.New("not found")
+	if !ok || f.ownerOf(id) != uid {
+		return Link{}, errNotFound
 	}
 	return l, nil
 }
 
-func (f *fakeRepo) UpdateOGImage(_ context.Context, id int64, imageURL string) error {
+func (f *fakeRepo) AssertOwned(_ context.Context, uid authctx.UserID, id int64) error {
+	f.gotUID = append(f.gotUID, uid)
+	if f.getErr != nil {
+		return f.getErr
+	}
+	if _, ok := f.links[id]; !ok || f.ownerOf(id) != uid {
+		return errNotFound
+	}
+	return nil
+}
+
+func (f *fakeRepo) UpdateOGImage(_ context.Context, uid authctx.UserID, id int64, imageURL string) error {
+	f.gotUID = append(f.gotUID, uid)
 	if f.updateErr != nil {
 		return f.updateErr
+	}
+	if _, ok := f.links[id]; !ok || f.ownerOf(id) != uid {
+		return errNotFound
 	}
 	f.updatedURL[id] = imageURL
 	return nil
 }
 
-func (f *fakeRepo) ClearOGImage(_ context.Context, id int64) error {
+func (f *fakeRepo) ClearOGImage(_ context.Context, uid authctx.UserID, id int64) error {
+	f.gotUID = append(f.gotUID, uid)
 	if f.clearErr != nil {
 		return f.clearErr
+	}
+	// Seeded-link tests aside, a fake that cleared regardless of owner would let
+	// DeleteImage drop its scoping unnoticed.
+	if _, ok := f.links[id]; ok && f.ownerOf(id) != uid {
+		return errNotFound
 	}
 	f.clearedIDs = append(f.clearedIDs, id)
 	return nil
@@ -184,6 +243,7 @@ func buildRouter(t *testing.T, sc Screenshotter, up Uploader, repo screenshotRep
 	}
 
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Route("/api", func(api chi.Router) {
 		api.Post("/links/{id}/screenshot", sh.CaptureAndStore)
 		api.Post("/links/{id}/image", sh.UploadImage)
@@ -330,6 +390,7 @@ func TestCaptureAndStore_RejectsNonPublicTarget(t *testing.T) {
 		logger:        newTestLogger(),
 	}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Post("/api/links/{id}/screenshot", sh.CaptureAndStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
@@ -366,6 +427,7 @@ func TestCaptureAndStore_NilPolicyFailsClosed(t *testing.T) {
 		logger:        newTestLogger(),
 	}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Post("/api/links/{id}/screenshot", sh.CaptureAndStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
@@ -419,6 +481,7 @@ func TestProxyFile_Success(t *testing.T) {
 	up := newFakeUploader()
 	up.uploaded["screenshots/42.png"] = fakePNG("IMG_CONTENT")
 	repo := newFakeRepo()
+	repo.links[42] = Link{ID: 42}
 	r, _, _ := buildRouter(t, sc, up, repo)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/files/screenshots/42.png", nil)
@@ -436,6 +499,7 @@ func TestProxyFile_NotFound(t *testing.T) {
 	up := newFakeUploader()
 	up.getErr = errors.New("key does not exist")
 	repo := newFakeRepo()
+	repo.links[999] = Link{ID: 999}
 	r, _, _ := buildRouter(t, sc, up, repo)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/files/screenshots/999.png", nil)
@@ -450,6 +514,7 @@ func TestProxyFile_RejectsOversizedObject(t *testing.T) {
 	up := newFakeUploader()
 	up.getErr = fmt.Errorf("storage: get object: %w", storage.ErrObjectTooLarge)
 	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1}
 	r, _, _ := buildRouter(t, sc, up, repo)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/files/screenshots/1.png", nil)
@@ -555,6 +620,7 @@ func TestProxyFile_RejectsNonImageContent(t *testing.T) {
 	// non-image contents must not be served back as text/html.
 	up.uploaded["images/13.png"] = []byte("<html><script>alert(1)</script></html>")
 	repo := newFakeRepo()
+	repo.links[13] = Link{ID: 13}
 	r, _, _ := buildRouter(t, sc, up, repo)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/files/images/13.png", nil)
@@ -614,6 +680,7 @@ func buildMultipart(t *testing.T, id int64, field, filename, declaredCT string, 
 func TestUploadImage_RejectsHTMLDisguisedAsPNG(t *testing.T) {
 	up := newFakeUploader()
 	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1}
 	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 	// Client lies — declares image/png but body is plain HTML.
 	req, ct := buildMultipart(t, 1, "image", "evil.png", "image/png", []byte("<html><script>alert(1)</script></html>"))
@@ -628,6 +695,7 @@ func TestUploadImage_RejectsHTMLDisguisedAsPNG(t *testing.T) {
 func TestUploadImage_RejectsEmptyFile(t *testing.T) {
 	up := newFakeUploader()
 	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1}
 	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 	req, ct := buildMultipart(t, 1, "image", "empty.png", "image/png", []byte{})
 	req.Header.Set("Content-Type", ct)
@@ -641,6 +709,7 @@ func TestUploadImage_RejectsEmptyFile(t *testing.T) {
 func TestUploadImage_RejectsMissingField(t *testing.T) {
 	up := newFakeUploader()
 	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1}
 	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 	// Form field is wrong name.
 	req, ct := buildMultipart(t, 1, "other", "x.png", "image/png", fakePNG("data"))
@@ -654,6 +723,7 @@ func TestUploadImage_RejectsMissingField(t *testing.T) {
 func TestUploadImage_OptimizesPNGToJPEG(t *testing.T) {
 	up := newFakeUploader()
 	repo := newFakeRepo()
+	repo.links[42] = Link{ID: 42}
 	r, fakeUp, fakeRp := buildRouter(t, &fakeScreenshotter{}, up, repo)
 
 	src := realPNG(t, 1500, 1000)
@@ -686,6 +756,7 @@ func TestUploadImage_PurgesLegacyExtensions(t *testing.T) {
 	up.uploaded["images/5.png"] = []byte("old png")
 	up.uploaded["images/5.webp"] = []byte("old webp")
 	repo := newFakeRepo()
+	repo.links[5] = Link{ID: 5}
 	r, fakeUp, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 
 	src := realPNG(t, 800, 600)
@@ -707,6 +778,7 @@ func TestUploadImage_PurgesLegacyExtensions(t *testing.T) {
 func TestUploadImage_OptimizeFailureStoresOriginal(t *testing.T) {
 	up := newFakeUploader()
 	repo := newFakeRepo()
+	repo.links[9] = Link{ID: 9}
 	r, fakeUp, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 
 	// PNG-sniff header but body isn't a real PNG — Optimize returns
@@ -733,6 +805,7 @@ func TestUploadImage_OptimizeFailureStoresOriginal(t *testing.T) {
 func TestUploadImage_Rejects5MBPlus(t *testing.T) {
 	up := newFakeUploader()
 	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1}
 	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 
 	// 5 MiB + 64 KiB: comfortably over the cap once multipart framing is
@@ -754,6 +827,7 @@ func TestUploadImage_UploadFails(t *testing.T) {
 	up := newFakeUploader()
 	up.err = errors.New("object store down")
 	repo := newFakeRepo()
+	repo.links[3] = Link{ID: 3}
 	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 
 	req, ct := buildMultipart(t, 3, "image", "x.png", "image/png", realPNG(t, 100, 100))
@@ -767,6 +841,7 @@ func TestUploadImage_UploadFails(t *testing.T) {
 func TestUploadImage_RepoUpdateFails(t *testing.T) {
 	up := newFakeUploader()
 	repo := newFakeRepo()
+	repo.links[3] = Link{ID: 3}
 	repo.updateErr = errors.New("db down")
 	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 
@@ -785,6 +860,7 @@ func TestDeleteImage_Success(t *testing.T) {
 	repo := newFakeRepo()
 	sh := &ScreenshotHandler{repo: repo, storage: up, logger: newTestLogger()}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Delete("/api/links/{id}/image", sh.DeleteImage)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/links/8/image", nil)
@@ -798,6 +874,7 @@ func TestDeleteImage_Success(t *testing.T) {
 func TestDeleteImage_InvalidID(t *testing.T) {
 	sh := &ScreenshotHandler{repo: newFakeRepo(), storage: newFakeUploader(), logger: newTestLogger()}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Delete("/api/links/{id}/image", sh.DeleteImage)
 	req := httptest.NewRequest(http.MethodDelete, "/api/links/abc/image", nil)
 	w := httptest.NewRecorder()
@@ -810,6 +887,7 @@ func TestDeleteImage_RepoError(t *testing.T) {
 	repo.clearErr = errors.New("db")
 	sh := &ScreenshotHandler{repo: repo, storage: newFakeUploader(), logger: newTestLogger()}
 	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Delete("/api/links/{id}/image", sh.DeleteImage)
 	req := httptest.NewRequest(http.MethodDelete, "/api/links/1/image", nil)
 	w := httptest.NewRecorder()
@@ -835,4 +913,130 @@ func TestNewScreenshotHandler(t *testing.T) {
 	require.NotNil(t, sh)
 	assert.Equal(t, sc, sh.screenshotter)
 	assert.Equal(t, up, sh.storage)
+}
+
+// --- cross-tenant object-store tests ---
+
+// otherUser is a principal that is not the one buildRouter authenticates as.
+const otherUser = authctx.UserID(authctxtest.DefaultUser + 1)
+
+// TestProxyFile_ForeignLinkKeyIs404 locks the ownership gate on id-derived
+// object keys. `screenshots/{id}.jpg` embeds a link id from a dense BIGSERIAL
+// space, so without this gate any authenticated user could walk the range and
+// pull every other tenant's screenshots and uploaded thumbnails straight out of
+// the bucket — the row scoping in the repository never comes into play, because
+// this route reads the object store directly.
+func TestProxyFile_ForeignLinkKeyIs404(t *testing.T) {
+	up := newFakeUploader()
+	up.uploaded["screenshots/77.png"] = fakePNG("SECRET")
+	up.uploaded["images/78.png"] = fakePNG("ALSO_SECRET")
+	repo := newFakeRepo()
+	repo.ownedBy(77, otherUser, Link{ID: 77})
+	repo.ownedBy(78, otherUser, Link{ID: 78})
+	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
+
+	for _, key := range []string{"screenshots/77.png", "images/78.png"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/files/"+key, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code, "key %q belongs to another user", key)
+		assert.NotContains(t, w.Body.String(), "SECRET", "no byte of the object may leak")
+	}
+}
+
+// TestProxyFile_ForeignKeyIsIndistinguishableFromMissing keeps the 404-not-403
+// rule (CLAUDE.md §4) alive at the object layer: a distinct status or code for
+// "exists but is not yours" would turn the proxy into an existence oracle over
+// another tenant's ids.
+func TestProxyFile_ForeignKeyIsIndistinguishableFromMissing(t *testing.T) {
+	up := newFakeUploader()
+	up.uploaded["screenshots/77.png"] = fakePNG("SECRET")
+	repo := newFakeRepo()
+	repo.ownedBy(77, otherUser, Link{ID: 77})
+	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
+
+	get := func(key string) (int, string) {
+		req := httptest.NewRequest(http.MethodGet, "/api/files/"+key, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code, w.Body.String()
+	}
+	foreignCode, foreignBody := get("screenshots/77.png") // exists, owned by other
+	missingCode, missingBody := get("screenshots/12345.png")
+
+	assert.Equal(t, missingCode, foreignCode)
+	assert.Equal(t, missingBody, foreignBody,
+		"a foreign key and an absent key must be byte-identical, or the response enumerates other tenants' ids")
+}
+
+// TestProxyFile_NoteImagesStayReadableWithoutOwnership documents the deliberate
+// asymmetry: notes/{uuid} keys are NOT ownership-gated, because the public,
+// session-less /n/{slug} page renders body_html and the browser fetches those
+// images with no principal at all. Their protection is the 122-bit random UUID,
+// which appears nowhere but inside the owning note.
+func TestProxyFile_NoteImagesStayReadableWithoutOwnership(t *testing.T) {
+	up := newFakeUploader()
+	const key = "notes/3f2504e0-4f89-11d3-9a0c-0305e82c3301.png"
+	up.uploaded[key] = fakePNG("NOTE_IMAGE")
+	repo := newFakeRepo() // no link rows at all
+	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/files/"+key, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code, "gating this would break every published note")
+}
+
+// TestUploadImage_ForeignLinkWritesNothing is the destructive half. The object
+// key is images/{id}.ext with no tenant segment, so uploading under another
+// user's link id used to overwrite THEIR image and purge their sibling
+// extensions before the scoped DB update ever returned 404 — the 404 arrived
+// after the damage.
+func TestUploadImage_ForeignLinkWritesNothing(t *testing.T) {
+	up := newFakeUploader()
+	up.uploaded["images/77.jpg"] = []byte("victims-image")
+	up.uploaded["images/77.webp"] = []byte("victims-legacy-variant")
+	repo := newFakeRepo()
+	repo.ownedBy(77, otherUser, Link{ID: 77})
+	r, fakeUp, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
+
+	req, ct := buildMultipart(t, 77, "image", "x.png", "image/png", realPNG(t, 100, 100))
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Equal(t, []byte("victims-image"), fakeUp.uploaded["images/77.jpg"],
+		"the victim's object must be byte-identical after a rejected upload")
+	assert.Equal(t, []byte("victims-legacy-variant"), fakeUp.uploaded["images/77.webp"],
+		"purgeLegacyVariants must not run for a link the caller does not own")
+	assert.Empty(t, fakeUp.deleted, "no delete may be issued before ownership is established")
+	assert.Empty(t, fakeUp.ops, "no write may be issued before ownership is established")
+}
+
+// TestScreenshotHandler_ForwardsTheAuthenticatedPrincipal closes the fake-level
+// gap: every handler here calls the repository with a uid, and a fake that
+// ignored it would let a handler pass a zero value — or the wrong user — and
+// still go green on all of the above.
+func TestScreenshotHandler_ForwardsTheAuthenticatedPrincipal(t *testing.T) {
+	up := newFakeUploader()
+	up.uploaded["screenshots/1.png"] = fakePNG("x")
+	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
+	r, _, _ := buildRouter(t, &fakeScreenshotter{png: realPNG(t, 10, 10)}, up, repo)
+
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/api/files/screenshots/1.png", nil),
+		httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil),
+	} {
+		r.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	require.NotEmpty(t, repo.gotUID, "the repository must have been reached")
+	for _, got := range repo.gotUID {
+		assert.Equal(t, authctxtest.DefaultUser, got,
+			"handlers must forward the request principal, not a zero or hardcoded id")
+	}
 }

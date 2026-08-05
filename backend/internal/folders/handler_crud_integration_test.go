@@ -17,7 +17,7 @@ import (
 )
 
 func TestHandler_Create_HappyAndValidation(t *testing.T) {
-	h, _ := newHandlerRouter(t)
+	h, _, _ := newHandlerRouter(t)
 
 	rr := doJSON(t, h, http.MethodPost, "/folders/", map[string]any{
 		"name":  "New Folder",
@@ -52,7 +52,7 @@ func TestHandler_Create_HappyAndValidation(t *testing.T) {
 }
 
 func TestHandler_Create_WithPasswordAndParent(t *testing.T) {
-	h, _ := newHandlerRouter(t)
+	h, _, _ := newHandlerRouter(t)
 
 	rr := doJSON(t, h, http.MethodPost, "/folders/", map[string]any{
 		"name":  "Parent",
@@ -90,9 +90,9 @@ func TestHandler_Create_WithPasswordAndParent(t *testing.T) {
 }
 
 func TestHandler_Get_OKAndNotFound(t *testing.T) {
-	h, repo := newHandlerRouter(t)
+	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()
-	f, err := repo.Create(ctx, folders.CreateInput{Name: "G", Color: "#abc"})
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "G", Color: "#abc"})
 	require.NoError(t, err)
 
 	rr := doJSON(t, h, http.MethodGet, "/folders/"+strconv.FormatInt(f.ID, 10), nil)
@@ -109,9 +109,9 @@ func TestHandler_Get_OKAndNotFound(t *testing.T) {
 }
 
 func TestHandler_Update_HappyAndValidation(t *testing.T) {
-	h, repo := newHandlerRouter(t)
+	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()
-	f, err := repo.Create(ctx, folders.CreateInput{Name: "Old", Color: "#abc"})
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Old", Color: "#abc"})
 	require.NoError(t, err)
 
 	rr := doJSON(t, h, http.MethodPatch, "/folders/"+strconv.FormatInt(f.ID, 10), map[string]any{
@@ -137,10 +137,10 @@ func TestHandler_Update_HappyAndValidation(t *testing.T) {
 }
 
 func TestHandler_Delete_DefaultAndCascade(t *testing.T) {
-	h, repo := newHandlerRouter(t)
+	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()
 
-	f, err := repo.Create(ctx, folders.CreateInput{Name: "ToDelete", Color: "#abc"})
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "ToDelete", Color: "#abc"})
 	require.NoError(t, err)
 
 	rr := doJSON(t, h, http.MethodDelete, "/folders/"+strconv.FormatInt(f.ID, 10), nil)
@@ -149,9 +149,9 @@ func TestHandler_Delete_DefaultAndCascade(t *testing.T) {
 	rr = doJSON(t, h, http.MethodGet, "/folders/"+strconv.FormatInt(f.ID, 10), nil)
 	require.Equal(t, http.StatusNotFound, rr.Code)
 
-	parent, err := repo.Create(ctx, folders.CreateInput{Name: "CascParent", Color: "#111"})
+	parent, err := repo.Create(ctx, uid, folders.CreateInput{Name: "CascParent", Color: "#111"})
 	require.NoError(t, err)
-	child, err := repo.Create(ctx, folders.CreateInput{Name: "CascChild", Color: "#222", ParentID: &parent.ID})
+	child, err := repo.Create(ctx, uid, folders.CreateInput{Name: "CascChild", Color: "#222", ParentID: &parent.ID})
 	require.NoError(t, err)
 
 	rr = doJSON(t, h, http.MethodDelete, "/folders/"+strconv.FormatInt(parent.ID, 10)+"?cascade=1", nil)
@@ -162,7 +162,7 @@ func TestHandler_Delete_DefaultAndCascade(t *testing.T) {
 	rr = doJSON(t, h, http.MethodGet, "/folders/"+strconv.FormatInt(child.ID, 10), nil)
 	require.Equal(t, http.StatusNotFound, rr.Code)
 
-	p3, err := repo.Create(ctx, folders.CreateInput{Name: "P3", Color: "#ccc"})
+	p3, err := repo.Create(ctx, uid, folders.CreateInput{Name: "P3", Color: "#ccc"})
 	require.NoError(t, err)
 	rr = doJSON(t, h, http.MethodDelete, "/folders/"+strconv.FormatInt(p3.ID, 10)+"?cascade=true", nil)
 	require.Equal(t, http.StatusNoContent, rr.Code)
@@ -176,7 +176,7 @@ func TestHandler_Delete_DefaultAndCascade(t *testing.T) {
 
 func TestHandler_ResetPassword_NotFoundAndBadJSON(t *testing.T) {
 	master := fakeMaster{configured: true, password: "master-ok"}
-	h, _ := newHandlerRouterMaster(t, master)
+	h, _, _ := newHandlerRouterMaster(t, master)
 
 	rr := doJSON(t, h, http.MethodPost, "/folders/999999/reset-password",
 		map[string]any{"master_password": "master-ok"})
@@ -194,11 +194,11 @@ func TestHandler_ResetPassword_NotFoundAndBadJSON(t *testing.T) {
 }
 
 func TestHandler_List_RootAndFlat(t *testing.T) {
-	h, repo := newHandlerRouter(t)
+	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()
-	root, err := repo.Create(ctx, folders.CreateInput{Name: "R", Color: "#aabbcc"})
+	root, err := repo.Create(ctx, uid, folders.CreateInput{Name: "R", Color: "#aabbcc"})
 	require.NoError(t, err)
-	_, err = repo.Create(ctx, folders.CreateInput{Name: "C", Color: "#ddeeff", ParentID: &root.ID})
+	_, err = repo.Create(ctx, uid, folders.CreateInput{Name: "C", Color: "#ddeeff", ParentID: &root.ID})
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/folders/?root=true", nil)
@@ -219,9 +219,9 @@ func TestHandler_List_RootAndFlat(t *testing.T) {
 }
 
 func TestHandler_List_FieldsMinimal(t *testing.T) {
-	h, repo := newHandlerRouter(t)
+	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()
-	_, err := repo.Create(ctx, folders.CreateInput{Name: "Min", Color: "#112233"})
+	_, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Min", Color: "#112233"})
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/folders/?fields=minimal", nil)
@@ -236,7 +236,7 @@ func TestHandler_List_FieldsMinimal(t *testing.T) {
 }
 
 func TestHandler_Unlock_BadIDAndNotFound(t *testing.T) {
-	h, _ := newHandlerRouter(t)
+	h, _, _ := newHandlerRouter(t)
 
 	rr := doJSON(t, h, http.MethodPost, "/folders/xyz/unlock", map[string]string{"password": "x"})
 	require.Equal(t, http.StatusBadRequest, rr.Code)

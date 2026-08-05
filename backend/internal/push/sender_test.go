@@ -12,6 +12,8 @@ import (
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/pkg/authctx"
 )
 
 type fakeSubStore struct {
@@ -24,7 +26,7 @@ type fakeSubStore struct {
 	usedErr   error
 }
 
-func (s *fakeSubStore) List(_ context.Context) ([]Subscription, error) {
+func (s *fakeSubStore) List(_ context.Context, _ authctx.UserID) ([]Subscription, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.listErr != nil {

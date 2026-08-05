@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 )
 
@@ -26,7 +27,7 @@ type Repository struct {
 
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
-func (r *Repository) Create(ctx context.Context, in CreateInput) (Folder, error) {
+func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateInput) (Folder, error) {
 	var passwordHash *string
 	if in.Password != nil {
 		h, err := HashPassword(*in.Password)
@@ -46,10 +47,10 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Folder, error)
 	var f Folder
 	var scannedHash *string
 	err := r.pool.QueryRow(ctx, `
-        INSERT INTO folder (name, color, parent_id, password_hash, password_hint)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO folder (user_id, name, color, parent_id, password_hash, password_hint)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id, name, color, parent_id, created_at, password_hash, password_hint
-    `, in.Name, in.Color, in.ParentID, passwordHash, hint).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &scannedHash, &f.PasswordHint)
+    `, int64(uid), in.Name, in.Color, in.ParentID, passwordHash, hint).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &scannedHash, &f.PasswordHint)
 	if err != nil {
 		return Folder{}, fmt.Errorf("insert folder: %w", err)
 	}
@@ -64,9 +65,9 @@ func (r *Repository) Create(ctx context.Context, in CreateInput) (Folder, error)
 // the content-gate checks in this package's List and internal/entries' List
 // don't pay for the preview-aggregation LATERAL joins just to check a lock
 // state.
-func (r *Repository) PasswordHashFor(ctx context.Context, id int64) (*string, error) {
+func (r *Repository) PasswordHashFor(ctx context.Context, uid authctx.UserID, id int64) (*string, error) {
 	var hash *string
-	err := r.pool.QueryRow(ctx, `SELECT password_hash FROM folder WHERE id = $1`, id).Scan(&hash)
+	err := r.pool.QueryRow(ctx, `SELECT password_hash FROM folder WHERE user_id = $1 AND id = $2`, int64(uid), id).Scan(&hash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, httperr.ErrNotFound
 	}
@@ -94,14 +95,16 @@ type ListQuery struct {
 // List returns every folder matching the query. Full mode includes link_count,
 // folder_count and up to 4 preview tiles via LATERAL + jsonb_agg (RapidView).
 // Slim mode returns only base columns + has_password — used by flat pickers.
-func (r *Repository) List(ctx context.Context, q ListQuery) ([]Folder, error) {
-	where := ""
-	args := []any{}
+func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) ([]Folder, error) {
+	// The tenant predicate always leads, so folder_user_parent_name_idx /
+	// folder_user_root_name_idx (migration 000017) can serve the ORDER BY.
+	args := []any{int64(uid)}
+	where := "WHERE f.user_id = $1"
 	if q.ParentID != nil {
 		args = append(args, *q.ParentID)
-		where = "WHERE f.parent_id = $1"
+		where += " AND f.parent_id = $2"
 	} else if q.RootOnly {
-		where = "WHERE f.parent_id IS NULL"
+		where += " AND f.parent_id IS NULL"
 	}
 	if q.Slim {
 		return r.listSlim(ctx, where, args)
@@ -223,13 +226,13 @@ func (r *Repository) listSlim(ctx context.Context, where string, args []any) ([]
 	return out, rows.Err()
 }
 
-func (r *Repository) Get(ctx context.Context, id int64) (Folder, error) {
+func (r *Repository) Get(ctx context.Context, uid authctx.UserID, id int64) (Folder, error) {
 	var f Folder
 	var passwordHash *string
 	err := r.pool.QueryRow(ctx, `
         SELECT id, name, color, parent_id, created_at, password_hash, password_hint
-        FROM folder WHERE id = $1
-    `, id).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &passwordHash, &f.PasswordHint)
+        FROM folder WHERE user_id = $1 AND id = $2
+    `, int64(uid), id).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &passwordHash, &f.PasswordHint)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Folder{}, httperr.ErrNotFound
 	}
@@ -244,7 +247,7 @@ func (r *Repository) Get(ctx context.Context, id int64) (Folder, error) {
 	return f, nil
 }
 
-func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Folder, error) {
+func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, in UpdateInput) (Folder, error) {
 	sets := []string{}
 	args := []any{}
 	i := 1
@@ -311,15 +314,15 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 		i++
 	}
 	if len(sets) == 0 {
-		return r.Get(ctx, id)
+		return r.Get(ctx, uid, id)
 	}
-	args = append(args, id)
-	q := fmt.Sprintf(`UPDATE folder SET %s WHERE id = $%d
-                      RETURNING id, name, color, parent_id, created_at, password_hash, password_hint`, strings.Join(sets, ", "), i)
+	args = append(args, int64(uid), id)
+	q := fmt.Sprintf(`UPDATE folder SET %s WHERE user_id = $%d AND id = $%d
+                      RETURNING id, name, color, parent_id, created_at, password_hash, password_hint`, strings.Join(sets, ", "), i, i+1)
 
 	var lastErr error
 	for attempt := 0; attempt < maxSerializationRetries; attempt++ {
-		f, err := r.updateOnce(ctx, id, in, q, args, cycleCheckNeeded, newPasswordHash, hintToValidate)
+		f, err := r.updateOnce(ctx, uid, id, in, q, args, cycleCheckNeeded, newPasswordHash, hintToValidate)
 		if err == nil {
 			return f, nil
 		}
@@ -333,6 +336,7 @@ func (r *Repository) Update(ctx context.Context, id int64, in UpdateInput) (Fold
 
 func (r *Repository) updateOnce(
 	ctx context.Context,
+	uid authctx.UserID,
 	id int64,
 	in UpdateInput,
 	q string,
@@ -348,7 +352,7 @@ func (r *Repository) updateOnce(
 	defer tx.Rollback(ctx)
 
 	if in.PasswordSet {
-		if err := checkPasswordChangeAuthorized(ctx, tx, id, in.CurrentPassword); err != nil {
+		if err := checkPasswordChangeAuthorized(ctx, tx, uid, id, in.CurrentPassword); err != nil {
 			return Folder{}, err
 		}
 	}
@@ -356,17 +360,17 @@ func (r *Repository) updateOnce(
 	// CurrentPassword (distinct 400 on hint==password). Require the same
 	// authorization as a password change whenever the folder already has a hash.
 	if in.PasswordHintSet && !in.PasswordSet {
-		if err := checkPasswordChangeAuthorized(ctx, tx, id, in.CurrentPassword); err != nil {
+		if err := checkPasswordChangeAuthorized(ctx, tx, uid, id, in.CurrentPassword); err != nil {
 			return Folder{}, err
 		}
 	}
 	if cycleCheckNeeded {
-		if err := checkParentCycle(ctx, tx, id, *in.ParentID); err != nil {
+		if err := checkParentCycle(ctx, tx, uid, id, *in.ParentID); err != nil {
 			return Folder{}, err
 		}
 	}
 	if hintToValidate != nil {
-		if err := checkHintNotPassword(ctx, tx, id, in.PasswordSet, newPasswordHash, *hintToValidate); err != nil {
+		if err := checkHintNotPassword(ctx, tx, uid, id, in.PasswordSet, newPasswordHash, *hintToValidate); err != nil {
 			return Folder{}, err
 		}
 	}
@@ -404,9 +408,9 @@ func isSerializationFailure(err error) bool {
 // edit). Setting a password for the FIRST time (currentHash == nil) needs no
 // proof — there's nothing to authorize against yet. Runs inside Update's
 // SERIALIZABLE tx so the read and the eventual write share one snapshot.
-func checkPasswordChangeAuthorized(ctx context.Context, tx pgx.Tx, id int64, currentPassword *string) error {
+func checkPasswordChangeAuthorized(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int64, currentPassword *string) error {
 	var currentHash *string
-	if err := tx.QueryRow(ctx, `SELECT password_hash FROM folder WHERE id = $1`, id).Scan(&currentHash); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT password_hash FROM folder WHERE user_id = $1 AND id = $2`, int64(uid), id).Scan(&currentHash); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return httperr.ErrNotFound
 		}
@@ -425,10 +429,10 @@ func checkPasswordChangeAuthorized(ctx context.Context, tx pgx.Tx, id int64, cur
 // one when the same request also sets a password, otherwise the folder's
 // current hash (read inside the tx). A hint on a folder with no effective
 // password is rejected — a hint is meaningless without a password to hint at.
-func checkHintNotPassword(ctx context.Context, tx pgx.Tx, id int64, passwordSet bool, newHash *string, hint string) error {
+func checkHintNotPassword(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int64, passwordSet bool, newHash *string, hint string) error {
 	effHash := newHash
 	if !passwordSet {
-		if err := tx.QueryRow(ctx, `SELECT password_hash FROM folder WHERE id = $1`, id).Scan(&effHash); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT password_hash FROM folder WHERE user_id = $1 AND id = $2`, int64(uid), id).Scan(&effHash); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return httperr.ErrNotFound
 			}
@@ -449,8 +453,8 @@ func checkHintNotPassword(ctx context.Context, tx pgx.Tx, id int64, passwordSet 
 // the handler. Because the unlock-token HMAC input includes the folder's
 // password_hash, nulling it here invalidates every previously issued unlock
 // token automatically. Returns ErrNotFound when the folder does not exist.
-func (r *Repository) ResetPasswordByMaster(ctx context.Context, id int64) error {
-	ct, err := r.pool.Exec(ctx, `UPDATE folder SET password_hash = NULL, password_hint = NULL WHERE id = $1`, id)
+func (r *Repository) ResetPasswordByMaster(ctx context.Context, uid authctx.UserID, id int64) error {
+	ct, err := r.pool.Exec(ctx, `UPDATE folder SET password_hash = NULL, password_hint = NULL WHERE user_id = $1 AND id = $2`, int64(uid), id)
 	if err != nil {
 		return fmt.Errorf("reset folder password: %w", err)
 	}
@@ -465,18 +469,19 @@ func (r *Repository) ResetPasswordByMaster(ctx context.Context, id int64) error 
 // Runs inside Update's SERIALIZABLE tx so the check and the eventual UPDATE
 // see the same snapshot — a naive check-then-update on the pool let another
 // request slip a move between the two reads and create the cycle anyway.
-func checkParentCycle(ctx context.Context, tx pgx.Tx, id, newParentID int64) error {
+func checkParentCycle(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id, newParentID int64) error {
 	var cycles bool
 	err := tx.QueryRow(ctx, `
         WITH RECURSIVE ancestors AS (
-            SELECT id, parent_id FROM folder WHERE id = $1
+            SELECT id, parent_id FROM folder WHERE user_id = $3 AND id = $1
             UNION ALL
             SELECT f.id, f.parent_id
             FROM folder f
             JOIN ancestors a ON a.parent_id = f.id
+            WHERE f.user_id = $3
         )
         SELECT EXISTS(SELECT 1 FROM ancestors WHERE id = $2)
-    `, newParentID, id).Scan(&cycles)
+    `, newParentID, id, int64(uid)).Scan(&cycles)
 	if err != nil {
 		return fmt.Errorf("cycle check: %w", err)
 	}
@@ -492,8 +497,8 @@ func checkParentCycle(ctx context.Context, tx pgx.Tx, id, newParentID int64) err
 
 // Delete removes the folder. ON DELETE SET NULL in the FK makes every contained
 // link survive — `link.folder_id` flips back to NULL.
-func (r *Repository) Delete(ctx context.Context, id int64) error {
-	ct, err := r.pool.Exec(ctx, `DELETE FROM folder WHERE id = $1`, id)
+func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64) error {
+	ct, err := r.pool.Exec(ctx, `DELETE FROM folder WHERE user_id = $1 AND id = $2`, int64(uid), id)
 	if err != nil {
 		return fmt.Errorf("delete folder: %w", err)
 	}
@@ -512,7 +517,7 @@ func (r *Repository) Delete(ctx context.Context, id int64) error {
 //
 // Subtree ids are materialized once into a temp table (N1-NEX-008) so the
 // recursive walk is not recomputed for every DML statement.
-func (r *Repository) DeleteCascade(ctx context.Context, id int64) error {
+func (r *Repository) DeleteCascade(ctx context.Context, uid authctx.UserID, id int64) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin cascade delete tx: %w", err)
@@ -522,13 +527,14 @@ func (r *Repository) DeleteCascade(ctx context.Context, id int64) error {
 	if _, err := tx.Exec(ctx, `
         CREATE TEMP TABLE _cascade_subtree ON COMMIT DROP AS
         WITH RECURSIVE subtree AS (
-          SELECT id FROM folder WHERE id = $1
+          SELECT id FROM folder WHERE user_id = $2 AND id = $1
           UNION ALL
           SELECT f.id FROM folder f
           JOIN subtree s ON f.parent_id = s.id
+          WHERE f.user_id = $2
         )
         SELECT id FROM subtree
-    `, id); err != nil {
+    `, id, int64(uid)); err != nil {
 		return fmt.Errorf("materialize cascade subtree: %w", err)
 	}
 
@@ -571,8 +577,8 @@ func (r *Repository) DeleteCascade(ctx context.Context, id int64) error {
 		return fmt.Errorf("delete notes in subtree: %w", err)
 	}
 	ct, err := tx.Exec(ctx, `
-        DELETE FROM folder WHERE id IN (SELECT id FROM _cascade_subtree)
-    `)
+        DELETE FROM folder WHERE user_id = $1 AND id IN (SELECT id FROM _cascade_subtree)
+    `, int64(uid))
 	if err != nil {
 		return fmt.Errorf("delete folder subtree: %w", err)
 	}

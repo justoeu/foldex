@@ -23,6 +23,10 @@ import (
 func newServer(t *testing.T, secret string) (*httptest.Server, func()) {
 	t.Helper()
 	pool := testdb.New(t)
+
+	// server.New mounts bootstrapPrincipal, which resolves the admin itself;
+	// the seed just has to exist.
+	_ = testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router := server.New(server.Deps{
 		Pool:   pool,
@@ -50,6 +54,10 @@ func (nopWorker) Enqueue(int64) error { return nil }
 // this assertion, removing the panic guard in router.go would ship green.
 func TestServerNewPanicsWhenScreenshotterMissingPolicy(t *testing.T) {
 	pool := testdb.New(t)
+
+	// server.New mounts bootstrapPrincipal, which resolves the admin itself;
+	// the seed just has to exist.
+	_ = testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	assert.Panics(t, func() {
 		_ = server.New(server.Deps{
@@ -97,6 +105,10 @@ func TestHealthzOK(t *testing.T) {
 // container misconfiguration.
 func TestHealthzDegradedDoesNotLeakErr(t *testing.T) {
 	pool := testdb.New(t)
+
+	// server.New mounts bootstrapPrincipal, which resolves the admin itself;
+	// the seed just has to exist.
+	_ = testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router := server.New(server.Deps{
 		Pool:   pool,

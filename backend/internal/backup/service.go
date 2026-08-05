@@ -20,6 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/pkg/httperr"
+
+	"foldex/internal/pkg/authctx"
 )
 
 // RestoreAdvisoryLockKey is the process-wide pg advisory lock for Restore so
@@ -36,6 +38,10 @@ type StorageBucket interface {
 	PutObjectStream(ctx context.Context, key string, r io.Reader, size int64, contentType string) error
 	ObjectExists(ctx context.Context, key string) (bool, error)
 	DeleteObjectsPrefix(ctx context.Context, prefix string) error
+	// DeleteObject removes ONE key. Wipe-mode restore uses it instead of
+	// DeleteObjectsPrefix: object keys are flat ({prefix}/{id}.ext, no tenant
+	// segment), so prefix-deleting would destroy every other user's files.
+	DeleteObject(ctx context.Context, key string) error
 }
 
 type ObjectInfo struct {
@@ -77,7 +83,7 @@ func NewService(pool *pgxpool.Pool, storage StorageBucket, logger *slog.Logger) 
 // Memory profile: O(snapshot DB rows) + O(largest single object in the
 // bucket). The previous handler buffered the entire ZIP in memory, which made
 // a 2 GiB backup a 2 GiB heap allocation; this path streams every entry.
-func (s *Service) Export(ctx context.Context, w io.Writer, onCountsReady func(Counts) error) (ExportReport, error) {
+func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, onCountsReady func(Counts) error) (ExportReport, error) {
 	start := time.Now()
 	var rep ExportReport
 
@@ -101,9 +107,29 @@ func (s *Service) Export(ctx context.Context, w io.Writer, onCountsReady func(Co
 		}
 	}()
 
-	snap, err := readSnapshot(ctx, tx)
+	snap, err := readSnapshot(ctx, tx, uid)
 	if err != nil {
 		return rep, fmt.Errorf("backup: read snapshot: %w", err)
+	}
+
+	// Which of the bucket's objects belong to the caller. Keys are FLAT
+	// ({prefix}/{id}.ext, no tenant segment), so the prefix listing alone cannot
+	// tell whose file is whose — exporting every listed key would put every
+	// other tenant's screenshots and note images inside a ZIP the caller
+	// downloads. Ownership is established from the caller's own rows.
+	//
+	// Consequence worth stating: an object nobody references — a leftover from a
+	// deleted link, say — is attributable to no one and therefore no longer
+	// travels in the backup. That is the correct trade for a flat key space; the
+	// alternative is re-keying every object under a tenant segment, which means
+	// rewriting og_image_url on every row and moving live objects.
+	owned, err := userObjectKeys(ctx, tx, uid)
+	if err != nil {
+		return rep, fmt.Errorf("backup: enumerate own objects: %w", err)
+	}
+	ownedSet := make(map[string]struct{}, len(owned))
+	for _, k := range owned {
+		ownedSet[k] = struct{}{}
 	}
 
 	// Pre-list every bucket prefix while we still hold the REPEATABLE READ tx,
@@ -121,11 +147,16 @@ func (s *Service) Export(ctx context.Context, w io.Writer, onCountsReady func(Co
 		if err != nil {
 			return rep, fmt.Errorf("backup: list %q: %w", prefix, err)
 		}
-		lists = append(lists, objList{prefix: prefix, objs: objs})
+		mine := make([]ObjectInfo, 0, len(objs))
 		for _, o := range objs {
+			if _, ok := ownedSet[o.Key]; !ok {
+				continue
+			}
+			mine = append(mine, o)
 			fileCount++
 			fileBytes += o.Size
 		}
+		lists = append(lists, objList{prefix: prefix, objs: mine})
 	}
 
 	// Snapshot is fully captured; the tx no longer needs to be held while we
@@ -250,7 +281,7 @@ func writeZipEntryRaw(zw *zip.Writer, name string, data []byte) error {
 // ────────────────────────────────────────────────────────────────────────────
 // Validate — inspects a ZIP without applying it.
 
-func (s *Service) Validate(ctx context.Context, zr *zip.Reader) (Validation, error) {
+func (s *Service) Validate(ctx context.Context, uid authctx.UserID, zr *zip.Reader) (Validation, error) {
 	v := Validation{Conflicts: Conflicts{}, Warnings: []string{}, Errors: []string{}}
 
 	manifest, err := readManifest(zr)
@@ -334,7 +365,7 @@ func (s *Service) Validate(ctx context.Context, zr *zip.Reader) (Validation, err
 	}
 
 	// Conflict detection against the live DB.
-	conflicts, err := countConflicts(ctx, s.pool, snap)
+	conflicts, err := countConflicts(ctx, s.pool, uid, snap)
 	if err != nil {
 		return v, fmt.Errorf("backup: conflicts: %w", err)
 	}
@@ -347,7 +378,7 @@ func (s *Service) Validate(ctx context.Context, zr *zip.Reader) (Validation, err
 // ────────────────────────────────────────────────────────────────────────────
 // Restore — applies a ZIP.
 
-func (s *Service) Restore(ctx context.Context, zr *zip.Reader, mode ConflictMode) (RestoreReport, error) {
+func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reader, mode ConflictMode) (RestoreReport, error) {
 	start := time.Now()
 	rep := RestoreReport{Mode: mode, Warnings: []string{}}
 	if !mode.Valid() {
@@ -387,27 +418,62 @@ func (s *Service) Restore(ctx context.Context, zr *zip.Reader, mode ConflictMode
 		return rep, httperr.New(http.StatusConflict, "restore_in_progress", "another restore is already in progress")
 	}
 
+	// Enumerate the caller's object keys BEFORE the wipe deletes the rows that
+	// reference them. Nothing is deleted here — applyFiles does that after the
+	// DB tx commits, so a rolled-back restore leaves the bucket untouched.
+	var ownedKeys []string
+	if mode == ModeWipe {
+		var err error
+		if ownedKeys, err = userObjectKeys(ctx, tx, uid); err != nil {
+			return rep, fmt.Errorf("backup: enumerate own objects: %w", err)
+		}
+	}
+
+	// The ZIP's declared owner is informational only: every row below is
+	// written with the CALLING user's id, never the snapshot's. That is what
+	// makes a hand-crafted backup unable to plant rows in another account
+	// (TestCrossUser_RestoreIgnoresOwnerEmail, internal/backup). Surface a
+	// mismatch so a user
+	// restoring someone else's export is not surprised by the result.
+	if snap.OwnerEmail != "" {
+		var email string
+		if err := tx.QueryRow(ctx, `SELECT email FROM app_user WHERE id = $1`, int64(uid)).Scan(&email); err == nil && email != snap.OwnerEmail {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+				"backup foi exportado por %q e está sendo restaurado na conta %q — todo o conteúdo passa a pertencer a %q",
+				snap.OwnerEmail, email, email))
+		}
+	}
+	if len(snap.AppSettings) > 0 {
+		// Pre-v6 snapshot: app_setting carried the master password hash
+		// (ADR-29). It is per-user on app_user now and deliberately outside the
+		// backup, so the array is dropped rather than applied.
+		rep.Warnings = append(rep.Warnings,
+			"configurações globais do backup foram ignoradas: a senha master agora é por usuário e não trafega no backup")
+	}
+
 	var mapping idMapping
 	switch mode {
 	case ModeWipe:
-		w, err := wipeAll(ctx, tx)
+		w, err := wipeUser(ctx, tx, uid)
 		if err != nil {
 			return rep, fmt.Errorf("backup: wipe db: %w", err)
 		}
 		rep.Wiped = w
-		mapping, err = restoreIdentity(ctx, tx, snap)
+		// Wipe no longer preserves original ids. Before migration 000017 this
+		// branch used restoreIdentity, which re-inserted with the snapshot's ids
+		// and then setval'd the sequences; neither is valid multi-tenant —
+		// another user may already hold those ids, and bumping a SHARED sequence
+		// from one user's restore is simply wrong. Since wipeUser just removed
+		// every row this user owns, the skip path runs with zero conflicts and
+		// produces the correct result with fresh ids. See ADR-30 / SDD §10.3.
+		inserted, _, m, err := restoreSkip(ctx, tx, uid, snap)
 		if err != nil {
 			return rep, fmt.Errorf("backup: insert (wipe): %w", err)
 		}
-		// Counts inserted = sizes of slices in snap.
-		rep.Inserted = Counts{
-			Links: int64(len(snap.Links)), Notes: int64(len(snap.Notes)), Tags: int64(len(snap.Tags)),
-			Folders:   int64(len(snap.Folders)),
-			LinkTags:  int64(len(snap.LinkTags)) + int64(len(snap.NoteTags)),
-			ClickLogs: int64(len(snap.ClickLogs)) + int64(len(snap.NoteClicks)),
-		}
+		rep.Inserted = inserted
+		mapping = m
 	case ModeSkip:
-		inserted, skipped, m, err := restoreSkip(ctx, tx, snap)
+		inserted, skipped, m, err := restoreSkip(ctx, tx, uid, snap)
 		if err != nil {
 			return rep, fmt.Errorf("backup: insert (skip): %w", err)
 		}
@@ -415,7 +481,7 @@ func (s *Service) Restore(ctx context.Context, zr *zip.Reader, mode ConflictMode
 		rep.Skipped = skipped
 		mapping = m
 	case ModeDuplicate:
-		inserted, warnings, m, err := restoreDuplicate(ctx, tx, snap)
+		inserted, warnings, m, err := restoreDuplicate(ctx, tx, uid, snap)
 		if err != nil {
 			return rep, fmt.Errorf("backup: insert (duplicate): %w", err)
 		}
@@ -424,12 +490,16 @@ func (s *Service) Restore(ctx context.Context, zr *zip.Reader, mode ConflictMode
 		mapping = m
 	}
 
+	if err := realignLinkImageURLs(ctx, tx, uid, mapping); err != nil {
+		return rep, fmt.Errorf("backup: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return rep, fmt.Errorf("backup: commit: %w", err)
 	}
 
 	// Files phase — runs after commit. Idempotent.
-	fileRep, err := s.applyFiles(ctx, zr, snap, mapping, mode)
+	fileRep, err := s.applyFiles(ctx, zr, snap, mapping, mode, ownedKeys)
 	if err != nil {
 		return rep, fmt.Errorf("backup: files: %w", err)
 	}
@@ -439,15 +509,17 @@ func (s *Service) Restore(ctx context.Context, zr *zip.Reader, mode ConflictMode
 	return rep, nil
 }
 
-func (s *Service) applyFiles(ctx context.Context, zr *zip.Reader, snap *Snapshot, mapping idMapping, mode ConflictMode) (FileReport, error) {
+func (s *Service) applyFiles(ctx context.Context, zr *zip.Reader, snap *Snapshot, mapping idMapping, mode ConflictMode, ownedKeys []string) (FileReport, error) {
 	var rep FileReport
 	if mode == ModeWipe {
-		for _, prefix := range bucketPrefixes {
-			if err := s.storage.DeleteObjectsPrefix(ctx, prefix); err != nil {
-				return rep, err
+		// Delete exactly the caller's objects, enumerated from their rows BEFORE
+		// the DB wipe. Prefix-deleting is not an option: keys are flat
+		// ({prefix}/{id}.ext), so it would take every tenant's files with it.
+		for _, key := range ownedKeys {
+			if err := s.storage.DeleteObject(ctx, key); err != nil {
+				return rep, fmt.Errorf("backup: delete own object %q: %w", key, err)
 			}
 		}
-		// Don't bother counting wiped — wipe is bulk.
 	}
 	for _, entry := range zr.File {
 		if !strings.HasPrefix(entry.Name, "files/") {
@@ -465,14 +537,37 @@ func (s *Service) applyFiles(ctx context.Context, zr *zip.Reader, snap *Snapshot
 			return rep, fmt.Errorf("backup: rejected entry %q (not under %v)", entry.Name, bucketPrefixes)
 		}
 
-		// Re-key when mode=duplicate AND we have a mapping for this link id.
-		if mode == ModeDuplicate {
-			if newKey, ok := mapping.remapFileKey(key); ok {
-				key = newKey
+		// Id-derived keys are re-keyed onto the row this restore produced, in
+		// EVERY mode — since ADR-30 no mode preserves ids, so a key naming the
+		// snapshot's id would not match the restored row's og_image_url.
+		//
+		// An entry whose link id this restore did not produce is dropped rather
+		// than written at its declared key: that key belongs to whichever tenant
+		// currently holds that link id, and honouring it would let a crafted ZIP
+		// overwrite their image.
+		_, _, _, isLinkKey := linkObjectID(key)
+		if isLinkKey {
+			newKey, ok := mapping.remapFileKey(key)
+			if !ok {
+				rep.Skipped++
+				continue
 			}
+			key = newKey
 		}
 
-		if mode == ModeSkip {
+		// A notes/{uuid} key cannot be re-keyed — it encodes no row id — so the
+		// only defence is never to OVERWRITE one. The UUID is unguessable, but
+		// it is not secret: it appears in the body_html that the PUBLIC,
+		// session-less /n/{slug} page renders, so anyone who opens a published
+		// note can read it off the markup and put that exact key in a crafted
+		// ZIP. Create-only makes that write a no-op instead of defacing the
+		// image for every viewer of the victim's note.
+		//
+		// Nothing legitimate is lost: a UUID key is effectively content-
+		// addressed, so if the object is already there it is already the right
+		// object, and restoring your own backup still creates whatever is
+		// missing.
+		if mode == ModeSkip || !isLinkKey {
 			exists, err := s.storage.ObjectExists(ctx, key)
 			if err != nil {
 				return rep, err

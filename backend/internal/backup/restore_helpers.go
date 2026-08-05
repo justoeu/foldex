@@ -7,7 +7,52 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"foldex/internal/notes"
+
+	"foldex/internal/pkg/authctx"
 )
+
+// realignLinkImageURLs points every restored link's og_image_url at its OWN id.
+//
+// Link images live at an id-derived key (`/api/files/images/{id}.jpg`), and no
+// restore mode preserves ids any more (ADR-30) — so a row inserted with the
+// snapshot's og_image_url verbatim names an id that is now somebody else's row,
+// or nobody's. applyFiles writes the object under the NEW id; without this pass
+// the row would point at the old key, which wipe mode has just deleted. The
+// result was a restore that completed "successfully" with every image broken.
+//
+// The rewrite needs no mapping lookup because the invariant is positional: the
+// id inside an id-derived key is always the owning row's id, so `id` from the
+// UPDATE's own row is the correct value by construction.
+//
+// Both the match and the predicate are ANCHORED to `^/api/files/`, and that
+// anchor is load-bearing: og_image_url is NOT always an internal proxy path.
+// preview.Fetcher stores the page's own <meta property="og:image"> verbatim, so
+// the column routinely holds arbitrary external URLs — and plenty of CDNs serve
+// paths like `https://cdn.example/images/1234.jpg`. An unanchored pattern would
+// silently rewrite those to a local key that does not exist, turning a working
+// external preview into a dead image.
+func realignLinkImageURLs(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m idMapping) error {
+	if len(m.linkMap) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(m.linkMap))
+	for _, newID := range m.linkMap {
+		ids = append(ids, newID)
+	}
+	_, err := tx.Exec(ctx, `
+        UPDATE link
+        SET og_image_url = regexp_replace(og_image_url,
+                                          '^/api/files/(screenshots|images)/[0-9]+\.',
+                                          '/api/files/\1/' || id || '.')
+        WHERE user_id = $1
+          AND id = ANY($2::bigint[])
+          AND og_image_url ~ '^/api/files/(screenshots|images)/[0-9]+\.'
+    `, int64(uid), ids)
+	if err != nil {
+		return fmt.Errorf("realign link image urls: %w", err)
+	}
+	return nil
+}
 
 // mapOptionalID remaps *old through m when present.
 func mapOptionalID(m map[int64]int64, old *int64) *int64 {
@@ -21,12 +66,12 @@ func mapOptionalID(m map[int64]int64, old *int64) *int64 {
 }
 
 // insertFolderMapped inserts one folder with parent remapped via m.folderMap.
-func insertFolderMapped(ctx context.Context, tx pgx.Tx, m *idMapping, f FolderRow) (int64, error) {
+func insertFolderMapped(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m *idMapping, f FolderRow) (int64, error) {
 	parentID := mapOptionalID(m.folderMap, f.ParentID)
 	var newID int64
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO folder (name, color, parent_id, password_hash, password_hint, created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-		f.Name, f.Color, parentID, f.PasswordHash, f.PasswordHint, f.CreatedAt).Scan(&newID); err != nil {
+		`INSERT INTO folder (user_id, name, color, parent_id, password_hash, password_hint, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+		int64(uid), f.Name, f.Color, parentID, f.PasswordHash, f.PasswordHint, f.CreatedAt).Scan(&newID); err != nil {
 		return 0, fmt.Errorf("insert folder: %w", err)
 	}
 	m.folderMap[f.ID] = newID
@@ -34,7 +79,7 @@ func insertFolderMapped(ctx context.Context, tx pgx.Tx, m *idMapping, f FolderRo
 }
 
 // insertNoteMapped inserts one note with folder remapped and body sanitized.
-func insertNoteMapped(ctx context.Context, tx pgx.Tx, m *idMapping, n NoteRow) (int64, error) {
+func insertNoteMapped(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m *idMapping, n NoteRow) (int64, error) {
 	folderID := mapOptionalID(m.folderMap, n.FolderID)
 	slug, err := uniqueNoteSlug(ctx, tx, n.Slug, n.Title)
 	if err != nil {
@@ -43,10 +88,10 @@ func insertNoteMapped(ctx context.Context, tx pgx.Tx, m *idMapping, n NoteRow) (
 	bodyHTML, bodyText := notes.SanitizeBody(n.BodyHTML)
 	var newID int64
 	if err := tx.QueryRow(ctx, `
-            INSERT INTO note (title, slug, body_html, body_text, pinned, folder_id, cover_url, created_at, updated_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            INSERT INTO note (user_id, title, slug, body_html, body_text, pinned, folder_id, cover_url, created_at, updated_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
             RETURNING id`,
-		n.Title, slug, bodyHTML, bodyText, n.Pinned, folderID, n.CoverURL, n.CreatedAt, n.UpdatedAt).Scan(&newID); err != nil {
+		int64(uid), n.Title, slug, bodyHTML, bodyText, n.Pinned, folderID, n.CoverURL, n.CreatedAt, n.UpdatedAt).Scan(&newID); err != nil {
 		return 0, fmt.Errorf("insert note: %w", err)
 	}
 	m.noteMap[n.ID] = newID
@@ -123,7 +168,7 @@ func attachPolymorphicTags(ctx context.Context, tx pgx.Tx, m idMapping, snap *Sn
 }
 
 // copyPolymorphicClicks bulk-inserts click_log for mapped links and notes.
-func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, m idMapping, snap *Snapshot, inserted, skipped *Counts, countSkips bool) error {
+func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m idMapping, snap *Snapshot, inserted, skipped *Counts, countSkips bool) error {
 	if len(snap.ClickLogs)+len(snap.NoteClicks) == 0 {
 		return nil
 	}
@@ -136,7 +181,7 @@ func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, m idMapping, snap *Sn
 			}
 			continue
 		}
-		rows = append(rows, []any{"link", linkID, c.ClickedAt})
+		rows = append(rows, []any{"link", linkID, c.ClickedAt, int64(uid)})
 	}
 	for _, c := range snap.NoteClicks {
 		noteID, ok := m.noteMap[c.NoteID]
@@ -146,14 +191,14 @@ func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, m idMapping, snap *Sn
 			}
 			continue
 		}
-		rows = append(rows, []any{"note", noteID, c.ClickedAt})
+		rows = append(rows, []any{"note", noteID, c.ClickedAt, int64(uid)})
 	}
 	if len(rows) == 0 {
 		return nil
 	}
 	if _, err := tx.CopyFrom(ctx,
 		pgx.Identifier{"click_log"},
-		[]string{"entity_kind", "entity_id", "clicked_at"},
+		[]string{"entity_kind", "entity_id", "clicked_at", "user_id"},
 		pgx.CopyFromRows(rows),
 	); err != nil {
 		return fmt.Errorf("copy click_log: %w", err)
