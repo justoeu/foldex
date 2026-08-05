@@ -4,11 +4,18 @@ import { cleanup } from '@testing-library/react'
 
 // Initialise i18n before any component renders so `useTranslation()` returns
 // real translations. English is the default — tests assert against en.json.
-import '../i18n'
+import i18n from '../i18n'
 
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  // i18n is a module singleton shared by every test FILE in a worker, so a
+  // suite that exercises the locale picker leaves the language switched for
+  // whatever runs next — and a Spanish "Correo electrónico" does not match a
+  // /e-mail/i query. Two suites already worked around this by forcing 'en' in
+  // their own beforeEach; resetting centrally fixes the class instead of the
+  // instances, and makes the failure impossible to reintroduce.
+  if (i18n.language !== 'en') void i18n.changeLanguage('en')
 })
 
 // jsdom does not implement window.matchMedia (MUI uses it for breakpoints).

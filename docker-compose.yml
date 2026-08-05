@@ -91,6 +91,28 @@ services:
       PREVIEW_FETCH_TIMEOUT_SEC: ${PREVIEW_FETCH_TIMEOUT_SEC:-5}
       PREVIEW_STRICT_SSRF: ${PREVIEW_STRICT_SSRF:-}
       SHARED_SECRET: ${SHARED_SECRET:-}
+      # Multi-user auth (ADR-30). Off by default; see .env.example.
+      AUTH_ENABLED: ${AUTH_ENABLED:-0}
+      AUTH_PUBLIC_URL: ${AUTH_PUBLIC_URL:-https://localhost}
+      AUTH_COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:-}
+      AUTH_ACCESS_TTL_MIN: ${AUTH_ACCESS_TTL_MIN:-15}
+      AUTH_REFRESH_TTL_DAYS: ${AUTH_REFRESH_TTL_DAYS:-30}
+      AUTH_ABSOLUTE_TTL_DAYS: ${AUTH_ABSOLUTE_TTL_DAYS:-90}
+      AUTH_REFRESH_GRACE_SEC: ${AUTH_REFRESH_GRACE_SEC:-10}
+      AUTH_SWEEP_INTERVAL_MIN: ${AUTH_SWEEP_INTERVAL_MIN:-60}
+      AUTH_SWEEP_RETAIN_DAYS: ${AUTH_SWEEP_RETAIN_DAYS:-7}
+      # Transactional mail. The `log` default prints the invite link to the
+      # backend log rather than sending it — see .env.example for why.
+      MAIL_DRIVER: ${MAIL_DRIVER:-log}
+      MAIL_HOST: ${MAIL_HOST:-}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-foldex@localhost}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-Foldex}
+      MAIL_STARTTLS: ${MAIL_STARTTLS:-1}
+      MAIL_TLS: ${MAIL_TLS:-0}
+      MAIL_INSECURE_SKIP_VERIFY: ${MAIL_INSECURE_SKIP_VERIFY:-0}
       # CORS scope: inside compose, the SPA is served from nginx (same origin)
       # and its /api/ calls are same-origin too — CORS only matters for
       # browser cross-origin calls. Default to https://localhost so the

@@ -1,0 +1,37 @@
+# Mailpit — a local SMTP sink with a web inbox, for developing the e-mail
+# flows (invitations now; password reset and OTP in later releases).
+#
+# It is a SEPARATE compose file, not a service in docker-compose.yml, because
+# nothing in the product requires it: the default `log` mail driver prints the
+# invite link to the backend log precisely so a self-hosted operator never has
+# to run an SMTP server. This is a development convenience.
+#
+#   make up-mail                       # start it
+#   open http://localhost:8025         # the inbox
+#
+# Then point the backend at it in .env:
+#   MAIL_DRIVER=smtp
+#   MAIL_HOST=mailpit        (or host.docker.internal when running the backend
+#   MAIL_PORT=1025            outside compose)
+#   MAIL_STARTTLS=0          Mailpit speaks plaintext on 1025 by default.
+
+services:
+  mailpit:
+    image: axllent/mailpit:v1.28.2
+    container_name: foldex-mailpit
+    restart: unless-stopped
+    ports:
+      - '${MAILPIT_SMTP_PORT:-1025}:1025'
+      - '${MAILPIT_WEB_PORT:-8025}:8025'
+    environment:
+      # Cap the in-memory store so a runaway loop in a test cannot fill the
+      # disk of whoever left this running.
+      MP_MAX_MESSAGES: 500
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    networks:
+      - foldex
+
+networks:
+  foldex:
+    external: true

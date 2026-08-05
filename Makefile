@@ -68,7 +68,15 @@ pull: ## Refresh backend + web images from Docker Hub (does not restart)
 down: ## Stop apps (Postgres keeps running — use db-down for that)
 	$(COMPOSE_APP) down
 
-stop-all: down db-down ## Stop everything (apps + Postgres)
+up-mail: network ## Start Mailpit (local SMTP sink + inbox at :8025) for e-mail flows
+	docker compose -f docker-compose.mail.yml up -d
+	@echo "Mailpit inbox: http://localhost:$${MAILPIT_WEB_PORT:-8025}"
+	@echo "Point .env at it: MAIL_DRIVER=smtp MAIL_HOST=mailpit MAIL_PORT=1025 MAIL_STARTTLS=0"
+
+down-mail: ## Stop Mailpit
+	docker compose -f docker-compose.mail.yml down
+
+stop-all: down down-mail db-down ## Stop everything (apps + Mailpit + Postgres)
 
 nuke: ## Stop everything and drop the Postgres volume (destructive)
 	$(COMPOSE_APP) down
@@ -134,7 +142,7 @@ release-minor: ## Bump minor (1.0.8 → 1.1.0) and tag locally
 release-major: ## Bump major (1.0.8 → 2.0.0) and tag locally
 	@./scripts/release.sh major
 
-.PHONY: help env up apps-up down stop-all nuke logs ps \
+.PHONY: help env up apps-up down stop-all nuke logs ps up-mail down-mail \
         db-up db-down db-nuke db-logs \
         restart-backend restart-web migrate-up migrate-down seed psql healthz \
         test-backend test-integration coverage-backend test-web coverage-web test-all coverage-all \

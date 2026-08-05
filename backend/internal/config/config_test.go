@@ -185,3 +185,84 @@ func TestEnvBool(t *testing.T) {
 		assert.Equal(t, tc.want, envBool("TEST_BOOL", false), "value: %q", tc.val)
 	}
 }
+
+// normalizeAuth clamps rather than rejects: these are tuning values, and an
+// operator who typos AUTH_ACCESS_TTL_MIN=0 should get the default, not a
+// backend that refuses to boot.
+func TestNormalizeAuthClampsTuningValues(t *testing.T) {
+	c := Config{
+		AuthAccessTTLMin:     0,
+		AuthRefreshTTLDays:   -5,
+		AuthAbsoluteTTLDays:  0,
+		AuthRefreshGraceSec:  -1,
+		AuthSweepIntervalMin: 0,
+		AuthSweepRetainDays:  0,
+	}
+	c.normalizeAuth()
+
+	assert.Equal(t, 15, c.AuthAccessTTLMin)
+	assert.Equal(t, 30, c.AuthRefreshTTLDays)
+	assert.Equal(t, 0, c.AuthRefreshGraceSec, "a negative grace must floor at 0, not stay negative")
+	assert.Equal(t, 60, c.AuthSweepIntervalMin)
+	assert.Equal(t, 7, c.AuthSweepRetainDays)
+}
+
+// The absolute ceiling exists to retire a refresh token that keeps rotating.
+// If it were allowed below the sliding refresh TTL, the ceiling would be lower
+// than the window it caps — the sessions would expire on the wrong clock.
+func TestNormalizeAuthKeepsTheAbsoluteCeilingAboveTheSlidingWindow(t *testing.T) {
+	c := Config{AuthRefreshTTLDays: 30, AuthAbsoluteTTLDays: 5}
+	c.normalizeAuth()
+	assert.GreaterOrEqual(t, c.AuthAbsoluteTTLDays, c.AuthRefreshTTLDays)
+
+	c = Config{AuthRefreshTTLDays: 30, AuthAbsoluteTTLDays: 90}
+	c.normalizeAuth()
+	assert.Equal(t, 90, c.AuthAbsoluteTTLDays, "a sane value must be left alone")
+}
+
+// An unbounded grace window would let a genuinely stolen refresh token be
+// replayed for as long as the window lasts.
+func TestNormalizeAuthCapsTheGraceWindow(t *testing.T) {
+	c := Config{AuthRefreshGraceSec: 86_400}
+	c.normalizeAuth()
+	assert.Equal(t, 60, c.AuthRefreshGraceSec)
+}
+
+// Cookie Secure is derived, never read from the environment: getting it wrong
+// fails silently, because a browser drops a Secure cookie over plain HTTP
+// without a word — login "succeeds" and the next request is anonymous.
+func TestAuthCookieSecureIsDerivedFromTheBind(t *testing.T) {
+	for _, bind := range []string{"127.0.0.1", "localhost", "::1", ""} {
+		c := Config{BindAddr: bind}
+		c.normalizeAuth()
+		assert.False(t, c.AuthCookieSecure, "loopback bind %q runs plain HTTP in dev", bind)
+	}
+	for _, bind := range []string{"0.0.0.0", "10.0.0.5"} {
+		c := Config{BindAddr: bind}
+		c.normalizeAuth()
+		assert.True(t, c.AuthCookieSecure, "network-reachable bind %q must set Secure", bind)
+	}
+}
+
+// MAIL_INSECURE_SKIP_VERIFY aimed at a real host turns TLS into obfuscation:
+// the connection is encrypted to whoever answered, which for an active attacker
+// is them. The credential riding on it is the SMTP password; the payload is
+// invite links.
+func TestValidateSecureDefaultsRefusesInsecureMailAgainstARealHost(t *testing.T) {
+	c := Config{BindAddr: "127.0.0.1"}
+	c.Mail.InsecureSkipVerify = true
+	c.Mail.Host = "smtp.gmail.com"
+	require.Error(t, c.validateSecureDefaults())
+
+	// A local test server is the one legitimate use.
+	c.Mail.Host = "localhost"
+	require.NoError(t, c.validateSecureDefaults())
+
+	c.Mail.Host = "127.0.0.1"
+	require.NoError(t, c.validateSecureDefaults())
+
+	// Off entirely is always fine.
+	c.Mail.InsecureSkipVerify = false
+	c.Mail.Host = "smtp.gmail.com"
+	require.NoError(t, c.validateSecureDefaults())
+}

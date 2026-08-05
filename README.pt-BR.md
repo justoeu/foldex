@@ -307,6 +307,54 @@ em `localStorage`.
 
 Design completo: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 
+## Contas e login (opcional)
+
+O foldex continua single-user por padrão. Todo link, nota, pasta e tag já tem um dono
+no banco, mas com `AUTH_ENABLED=0` (o padrão) o backend atribui toda requisição ao
+administrador de bootstrap — então uma instalação existente se comporta exatamente como
+sempre: o `SHARED_SECRET` segue sendo o único portão e nada muda na interface.
+
+Para ligar contas de verdade, ajuste o `.env` e reinicie:
+
+```bash
+AUTH_ENABLED=1
+AUTH_PUBLIC_URL=https://localhost   # a origem embutida nos links de convite
+```
+
+**Primeira execução.** A SPA mostra uma tela de setup. A conta criada ali vira
+administradora e **adota todos os links, notas, pastas e tags que já existiam** — uma
+instalação atualizada mantém todo o conteúdo.
+
+**Adicionando pessoas.** Não existe cadastro aberto: um administrador envia um convite,
+e só o endereço daquele convite consegue aceitá-lo. O link aparece uma vez, no momento
+em que o convite é criado, e também é enviado por e-mail.
+
+**E-mail.** `MAIL_DRIVER` é `log` por padrão, o que imprime o convite — link incluído —
+no log do backend em vez de enviá-lo. Isso é proposital: uma instância self-hosted sem
+servidor SMTP precisa conseguir convidar alguém mesmo assim. Leia com
+`docker compose logs backend`, ou copie o link que a tela de admin mostra. Para envio
+real, use `MAIL_DRIVER=smtp` e as variáveis `MAIL_*`; `make up-mail` sobe o
+[Mailpit](https://mailpit.axllent.org/) com uma caixa de entrada local em
+<http://localhost:8025> para desenvolvimento.
+
+**O que cada conta enxerga.** Tudo é privado por conta — administradores inclusive. Um
+admin cria, desabilita e apaga usuários, mas nunca vê os links ou notas de outra conta.
+A separação está no próprio banco, não em um filtro que a interface aplica.
+
+**Sessões.** O login grava cookies httpOnly: um token de acesso curto e um de refresh de
+30 dias que rotaciona a cada uso. Se um token de refresh for reapresentado — a assinatura
+de um token roubado — todas as sessões daquela conta são encerradas e o dono recebe um
+e-mail. Sair está disponível em qualquer lugar; "sair de todos os dispositivos" revoga
+tudo. Trocar a senha mantém o dispositivo atual e derruba os demais.
+
+**Ficou trancado para fora?** Com `AUTH_ENABLED=1` e sem acesso à única conta
+administradora, a recuperação é edição direta no banco — o mesmo status que a senha
+mestra de pastas já tem. Voltar `AUTH_ENABLED=0` e reiniciar devolve o comportamento
+single-user com todo o conteúdo intacto.
+
+Racional de design, threat model e a superfície de API completa:
+[docs/SDD-AUTH-RBAC.md](docs/SDD-AUTH-RBAC.md).
+
 ## Docs
 
 - [Vision](docs/VISION.md) — problema, goals, critérios de sucesso

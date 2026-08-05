@@ -686,5 +686,57 @@
     "rule_case": "Mayúsculas y minúsculas",
     "rule_digit": "Un número",
     "rule_symbol": "Un símbolo"
+  },
+  "auth": {
+    "email": "Correo electrónico",
+    "password": "Contraseña",
+    "confirm_password": "Confirmar contraseña",
+    "name": "Nombre",
+    "loading": "Cargando…",
+    "password_min_one": "Al menos {{count}} carácter",
+    "password_min_other": "Al menos {{count}} caracteres",
+    "sign_out": "Cerrar sesión"
+  },
+  "auth_login": {
+    "kicker": "bienvenido de nuevo",
+    "title": "Entrar en Foldex",
+    "subtitle": "Tus enlaces, notas y carpetas — justo donde los dejaste.",
+    "submit": "Entrar"
+  },
+  "auth_setup": {
+    "kicker": "primera ejecución",
+    "title": "Crear la cuenta de administrador",
+    "subtitle": "Esta es la primera cuenta de esta instancia. Será la administradora y adoptará todo el contenido existente.",
+    "submit": "Crear cuenta y entrar"
+  },
+  "auth_invite": {
+    "kicker": "invitación",
+    "title": "Activar tu cuenta",
+    "subtitle": "Elige una contraseña para terminar de configurar tu cuenta de Foldex.",
+    "email_locked": "Esta dirección viene de tu invitación y no se puede cambiar.",
+    "submit": "Activar y entrar",
+    "invalid_title": "Esta invitación ya no es válida",
+    "invalid_body": "El enlace puede haber caducado, haber sido revocado o ya haberse usado. Pide uno nuevo a un administrador.",
+    "back_to_login": "Ir al inicio de sesión"
+  },
+  "auth_marketing": {
+    "kicker": "self-hosted",
+    "title": "Todo lo que guardas, en un lugar que controlas tú.",
+    "point_organize": "Carpetas anidadas, etiquetas y búsqueda de texto completo en enlaces y notas.",
+    "point_monitor": "Vigila cualquier página y recibe una notificación cuando cambie.",
+    "point_private": "Tus datos se quedan en tu servidor. Cada cuenta ve solo lo suyo."
+  },
+  "auth_errors": {
+    "invalid_credentials": "Correo o contraseña inválidos.",
+    "too_many_attempts": "Demasiados intentos. Espera unos minutos e inténtalo de nuevo.",
+    "already_configured": "Esta instancia ya tiene una cuenta. Recarga la página para entrar.",
+    "email_taken": "Ese correo ya está registrado.",
+    "invalid_email": "Introduce un correo válido.",
+    "password_too_short_one": "La contraseña debe tener al menos {{count}} carácter.",
+    "password_too_short_other": "La contraseña debe tener al menos {{count}} caracteres.",
+    "password_too_long": "La contraseña es demasiado larga (máximo 72 bytes).",
+    "password_mismatch": "Las dos contraseñas no coinciden.",
+    "network": "No se pudo contactar con el servidor. Comprueba la conexión e inténtalo de nuevo.",
+    "generic": "Algo salió mal. Inténtalo de nuevo."
   }
 }

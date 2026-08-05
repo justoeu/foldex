@@ -686,5 +686,57 @@
     "rule_case": "Maiúsculas e minúsculas",
     "rule_digit": "Um número",
     "rule_symbol": "Um símbolo"
+  },
+  "auth": {
+    "email": "E-mail",
+    "password": "Senha",
+    "confirm_password": "Confirmar senha",
+    "name": "Nome",
+    "loading": "Carregando…",
+    "password_min_one": "Pelo menos {{count}} caractere",
+    "password_min_other": "Pelo menos {{count}} caracteres",
+    "sign_out": "Sair"
+  },
+  "auth_login": {
+    "kicker": "bem-vindo de volta",
+    "title": "Entrar no Foldex",
+    "subtitle": "Seus links, notas e pastas — exatamente onde você parou.",
+    "submit": "Entrar"
+  },
+  "auth_setup": {
+    "kicker": "primeira execução",
+    "title": "Criar a conta de administrador",
+    "subtitle": "Esta é a primeira conta desta instância. Ela vira administradora e adota todo o conteúdo já existente.",
+    "submit": "Criar conta e entrar"
+  },
+  "auth_invite": {
+    "kicker": "convite",
+    "title": "Ativar sua conta",
+    "subtitle": "Escolha uma senha para concluir a configuração da sua conta Foldex.",
+    "email_locked": "Este endereço vem do seu convite e não pode ser alterado.",
+    "submit": "Ativar e entrar",
+    "invalid_title": "Este convite não é mais válido",
+    "invalid_body": "O link pode ter expirado, sido revogado ou já ter sido usado. Peça um novo a um administrador.",
+    "back_to_login": "Ir para o login"
+  },
+  "auth_marketing": {
+    "kicker": "self-hosted",
+    "title": "Tudo o que você salva, em um lugar que é seu.",
+    "point_organize": "Pastas aninhadas, tags e busca em texto completo em links e notas.",
+    "point_monitor": "Monitore qualquer página e receba uma notificação quando ela mudar.",
+    "point_private": "Seus dados ficam no seu servidor. Cada conta vê apenas o que é dela."
+  },
+  "auth_errors": {
+    "invalid_credentials": "E-mail ou senha inválidos.",
+    "too_many_attempts": "Tentativas demais. Aguarde alguns minutos e tente de novo.",
+    "already_configured": "Esta instância já tem uma conta. Recarregue a página para entrar.",
+    "email_taken": "Este e-mail já está cadastrado.",
+    "invalid_email": "Informe um e-mail válido.",
+    "password_too_short_one": "A senha precisa ter pelo menos {{count}} caractere.",
+    "password_too_short_other": "A senha precisa ter pelo menos {{count}} caracteres.",
+    "password_too_long": "A senha é longa demais (máximo de 72 bytes).",
+    "password_mismatch": "As duas senhas não coincidem.",
+    "network": "Não foi possível falar com o servidor. Verifique a conexão e tente de novo.",
+    "generic": "Algo deu errado. Tente novamente."
   }
 }
