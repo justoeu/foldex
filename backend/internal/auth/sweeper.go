@@ -93,6 +93,16 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 		// of whether the DELETE succeeded.
 	}
 
+	// Challenges, e-mail OTPs and reset tokens are all written on
+	// UNAUTHENTICATED paths, so they accumulate at whatever rate an attacker
+	// chooses. Sweeping them is not housekeeping — it is the only thing
+	// bounding three tables anyone on the network can insert into.
+	tf, err := s.repo.SweepTwoFactor(ctx, s.retain)
+	if err != nil {
+		s.logger.Error("two-factor sweep", "err", err)
+	}
+	n += tf
+
 	evicted := 0
 	for _, prune := range s.inMemory {
 		evicted += prune(s.memoryRetain())

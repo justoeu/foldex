@@ -152,11 +152,13 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := unlockKeyFor(id)
-	// Fast path: a locked-out folder answers 429 without touching the database.
-	if until := h.limiter.LockedUntil(key); !until.IsZero() {
-		h.writeLocked(w, until)
-		return
-	}
+	// There is deliberately NO lockout fast-path before the ownership lookup.
+	// Folder ids are globally unique, so an early 429-vs-404 split would tell a
+	// caller who does not own the folder whether it is currently locked out —
+	// a smaller version of the same cross-tenant leak that moving the attempt
+	// reservation below this lookup closed. Begin (further down) reports the
+	// lockout anyway, so the only thing skipping the check bought was one
+	// database round-trip on an already-throttled request.
 	in, err := httperr.DecodeJSON[unlockInput](w, r)
 	if err != nil {
 		httperr.Write(w, err)

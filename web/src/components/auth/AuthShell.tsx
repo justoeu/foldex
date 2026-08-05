@@ -94,9 +94,18 @@ export function AuthField({
   )
 }
 
-export function AuthSubmit({ busy, children }: { busy: boolean; children: ReactNode }) {
+export function AuthSubmit({
+  busy,
+  disabled,
+  children,
+}: {
+  busy: boolean
+  /** Additional reason to block submission, e.g. an incomplete OTP field. */
+  disabled?: boolean
+  children: ReactNode
+}) {
   return (
-    <button type="submit" className="fx-auth-submit" disabled={busy}>
+    <button type="submit" className="fx-auth-submit" disabled={busy || disabled}>
       {busy ? <span className="fx-auth-spinner" aria-hidden="true" /> : null}
       {children}
     </button>

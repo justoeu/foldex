@@ -356,6 +356,32 @@ the signature of a stolen one — every session for that account is signed out a
 owner is e-mailed. Signing out is available everywhere; "sign out everywhere" revokes
 every device. Changing your password keeps the device you are on and drops the rest.
 
+**Two-step verification.** Turn it on from **Settings → Two-step verification**: scan
+the QR with any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden),
+confirm one code, and save the ten single-use **recovery codes** — they are shown once
+and the server keeps only their hashes, so it genuinely cannot show them again. At
+sign-in the same six-digit field accepts a code from your app, a recovery code, or a
+code e-mailed to you. Administrators are required to have it: with
+`AUTH_REQUIRE_2FA_FOR_ADMINS=1` (the default) an admin without an authenticator is
+walked through setting one up before their first session, rather than being locked out.
+
+> **Running outside Docker?** `AUTH_ENCRYPTION_KEY_PATH` defaults to
+> `/data/auth_encryption.key`, which a bare-host `make run` cannot write. Point it
+> somewhere writable (`AUTH_ENCRYPTION_KEY_PATH=./.foldex/auth_encryption.key`) or
+> set `AUTH_ENCRYPTION_KEY` directly — the backend refuses to start rather than
+> run with a key it cannot persist.
+
+> **Back up `/data/auth_encryption.key` with your database.** It encrypts the
+> authenticator secrets, and unlike the folder-unlock key it **cannot be regenerated**:
+> without it every enrolled account loses its second factor and needs an administrator
+> to clear the enrollment. The backend refuses to start rather than quietly minting a
+> replacement.
+
+**Forgot your password.** **Reset it** from the sign-in screen — a link arrives by
+e-mail (or in the backend log with the default `log` driver), is good for 30 minutes and
+can be used once. Using it signs you out of every other device, and an account with
+two-step verification still has to present a code: a mailbox alone is never enough.
+
 **Locked out?** With `AUTH_ENABLED=1` and no way back into the only administrator
 account, recovery is a direct database edit — the same status the master folder password
 already has. Set `AUTH_ENABLED=0`, restart, and the instance reverts to the

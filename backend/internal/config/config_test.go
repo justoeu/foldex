@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -265,4 +266,57 @@ func TestValidateSecureDefaultsRefusesInsecureMailAgainstARealHost(t *testing.T)
 	c.Mail.InsecureSkipVerify = false
 	c.Mail.Host = "smtp.gmail.com"
 	require.NoError(t, c.validateSecureDefaults())
+}
+
+// The issuer is the label an authenticator app shows next to the code. A user
+// running two Foldex instances would otherwise get two indistinguishable
+// entries and no way to tell which code belongs to which.
+func TestIssuerFromURL(t *testing.T) {
+	cases := map[string]string{
+		"https://foldex.example.com":    "Foldex (foldex.example.com)",
+		"http://localhost:9088":         "Foldex (localhost)", // the port is dropped
+		"https://foldex.test/some/path": "Foldex (foldex.test)",
+		"":                              "Foldex",
+		"not a url":                     "Foldex",
+		"::::":                          "Foldex",
+	}
+	for in, want := range cases {
+		if got := issuerFromURL(in); got != want {
+			t.Errorf("issuerFromURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A colon separates issuer from account in the otpauth:// label grammar, so one
+// inside the issuer makes some apps display the account as part of the issuer.
+func TestIssuerFromURLHasNoColon(t *testing.T) {
+	for _, in := range []string{"https://foldex.test:8443", "http://[::1]:9088"} {
+		got := issuerFromURL(in)
+		if strings.Contains(strings.TrimPrefix(got, "Foldex "), ":") {
+			t.Errorf("issuerFromURL(%q) = %q, which contains a colon", in, got)
+		}
+	}
+}
+
+func TestTwoFactorDefaults(t *testing.T) {
+	t.Setenv("BACKEND_BIND", "127.0.0.1")
+	t.Setenv("DB_URL", "postgres://u:p@localhost:5432/foldex?sslmode=disable")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Administrators can invite, promote and delete accounts, so the policy is
+	// on unless an operator deliberately turns it off.
+	if !cfg.AuthRequire2FAForAdmins {
+		t.Error("AUTH_REQUIRE_2FA_FOR_ADMINS should default to true")
+	}
+	if cfg.AuthEncryptionKeyPath == "" {
+		t.Error("the encryption key must have a default persistence path — it cannot be session-only")
+	}
+	if !cfg.AuthEncryptionAutoGen {
+		t.Error("auto-generation should be on so a fresh install boots without manual key material")
+	}
+	if cfg.AuthTOTPIssuer == "" {
+		t.Error("the issuer must be derived when not set explicitly")
+	}
 }

@@ -347,6 +347,34 @@ de um token roubado — todas as sessões daquela conta são encerradas e o dono
 e-mail. Sair está disponível em qualquer lugar; "sair de todos os dispositivos" revoga
 tudo. Trocar a senha mantém o dispositivo atual e derruba os demais.
 
+**Verificação em duas etapas.** Ative em **Configurações → Verificação em duas etapas**:
+escaneie o QR com qualquer app autenticador (Google Authenticator, Authy, 1Password,
+Bitwarden), confirme um código e guarde os dez **códigos de recuperação** de uso único —
+eles aparecem uma vez só e o servidor guarda apenas os hashes, então ele realmente não
+consegue mostrá-los de novo. No login, o mesmo campo de seis dígitos aceita um código do
+app, um código de recuperação ou um código enviado por e-mail. Administradores são
+obrigados a ter: com `AUTH_REQUIRE_2FA_FOR_ADMINS=1` (o padrão), um admin sem
+autenticador é conduzido pela configuração antes da primeira sessão, em vez de ficar
+trancado para fora.
+
+> **Rodando fora do Docker?** `AUTH_ENCRYPTION_KEY_PATH` tem default
+> `/data/auth_encryption.key`, que um `make run` direto no host não consegue
+> escrever. Aponte para um caminho gravável
+> (`AUTH_ENCRYPTION_KEY_PATH=./.foldex/auth_encryption.key`) ou defina
+> `AUTH_ENCRYPTION_KEY` direto — o backend se recusa a subir em vez de rodar com
+> uma chave que não consegue persistir.
+
+> **Faça backup de `/data/auth_encryption.key` junto com o banco.** Ela cifra os segredos
+> do autenticador e, diferente da chave de unlock de pastas, **não pode ser regerada**:
+> sem ela toda conta cadastrada perde o segundo fator e precisa de um administrador para
+> limpar o cadastro. O backend se recusa a subir em vez de gerar uma substituta em
+> silêncio.
+
+**Esqueceu a senha.** **Redefina** pela tela de acesso — o link chega por e-mail (ou no
+log do backend, com o driver `log` padrão), vale 30 minutos e pode ser usado uma vez.
+Usá-lo desconecta todos os outros dispositivos, e uma conta com verificação em duas
+etapas ainda precisa apresentar um código: a caixa postal sozinha nunca basta.
+
 **Ficou trancado para fora?** Com `AUTH_ENABLED=1` e sem acesso à única conta
 administradora, a recuperação é edição direta no banco — o mesmo status que a senha
 mestra de pastas já tem. Voltar `AUTH_ENABLED=0` e reiniciar devolve o comportamento

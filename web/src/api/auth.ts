@@ -2,10 +2,15 @@ import { http } from './client'
 import type { AuthFeatures, AuthUser, Role } from '../auth/types'
 
 export type MeResponse = {
-  status: 'anonymous' | 'setup_required' | 'authenticated'
+  status: 'anonymous' | 'setup_required' | 'authenticated' | 'two_factor_required'
   user?: AuthUser
   csrf_token?: string
   features: AuthFeatures
+  // Present only on `two_factor_required`. The e-mail is masked by the server.
+  purpose?: 'totp' | 'enroll_2fa'
+  email?: string
+  methods?: string[]
+  max_attempts?: number
 }
 
 export async function fetchMe(): Promise<MeResponse> {
@@ -41,6 +46,22 @@ export async function changePassword(currentPassword: string, newPassword: strin
     current_password: currentPassword,
     new_password: newPassword,
   })
+}
+
+/**
+ * Requests a password-reset link.
+ *
+ * Resolves for every input, including an unknown address — the backend answers
+ * 202 unconditionally so the endpoint cannot be used to enumerate accounts, and
+ * the UI must not undo that by branching on anything it gets back.
+ */
+export async function forgotPassword(email: string): Promise<void> {
+  await http.post('/api/auth/password/forgot', { email })
+}
+
+export async function resetPassword(token: string, password: string): Promise<MeResponse> {
+  const { data } = await http.post<MeResponse>('/api/auth/password/reset', { token, password })
+  return data
 }
 
 export type InvitePreview = { email: string; role: Role; expires_at: string }

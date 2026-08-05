@@ -4,7 +4,7 @@ import { login, errorCode, errorStatus } from '../../api/auth'
 import { useAuth } from '../../auth/AuthProvider'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 
-export function LoginScreen() {
+export function LoginScreen({ onForgotPassword }: { onForgotPassword?: () => void }) {
   const { t } = useTranslation()
   const { adopt } = useAuth()
   const [email, setEmail] = useState('')
@@ -59,6 +59,14 @@ export function LoginScreen() {
         </AuthField>
 
         <AuthSubmit busy={busy}>{t('auth_login.submit')}</AuthSubmit>
+
+        {onForgotPassword && (
+          <div className="fx-auth-alt">
+            <button type="button" className="fx-auth-link" onClick={onForgotPassword}>
+              {t('auth_login.forgot')}
+            </button>
+          </div>
+        )}
       </form>
     </AuthShell>
   )

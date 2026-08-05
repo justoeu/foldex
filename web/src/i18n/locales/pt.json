@@ -701,7 +701,8 @@
     "kicker": "bem-vindo de volta",
     "title": "Entrar no Foldex",
     "subtitle": "Seus links, notas e pastas — exatamente onde você parou.",
-    "submit": "Entrar"
+    "submit": "Entrar",
+    "forgot": "Esqueceu a senha?"
   },
   "auth_setup": {
     "kicker": "primeira execução",
@@ -737,6 +738,85 @@
     "password_too_long": "A senha é longa demais (máximo de 72 bytes).",
     "password_mismatch": "As duas senhas não coincidem.",
     "network": "Não foi possível falar com o servidor. Verifique a conexão e tente de novo.",
-    "generic": "Algo deu errado. Tente novamente."
+    "generic": "Algo deu errado. Tente novamente.",
+    "invalid_code": "Esse código não é válido."
+  },
+  "auth_otp": {
+    "kicker": "verificação em duas etapas",
+    "title": "Digite seu código",
+    "subtitle": "Abra seu app autenticador e digite o código de 6 dígitos de {{email}}.",
+    "field_label": "Código de verificação de seis dígitos",
+    "digit_label": "Dígito {{n}} de {{total}}",
+    "submit": "Verificar",
+    "use_recovery": "Usar um código de recuperação",
+    "use_app": "Usar meu app autenticador",
+    "send_email": "Enviar um código por e-mail",
+    "cancel": "Entrar com outra conta",
+    "recovery_label": "Código de recuperação",
+    "recovery_placeholder": "XXXXX-XXXXX",
+    "email_sent": "Se um código puder ser enviado, ele está a caminho de {{email}}.",
+    "expired": "Esta tentativa de acesso expirou. Entre novamente.",
+    "locked_out": "Códigos incorretos demais. Entre novamente.",
+    "invalid_with_attempts_one": "Esse código não é válido. Resta {{count}} tentativa.",
+    "invalid_with_attempts_other": "Esse código não é válido. Restam {{count}} tentativas."
+  },
+  "auth_forgot": {
+    "kicker": "recuperação de conta",
+    "title": "Redefinir sua senha",
+    "subtitle": "Informe seu e-mail e enviaremos um link para escolher uma nova senha.",
+    "submit": "Enviar link de redefinição",
+    "back_to_login": "Voltar para o acesso"
+  },
+  "auth_sent": {
+    "kicker": "confira sua caixa de entrada",
+    "title": "Confira seu e-mail",
+    "subtitle": "Se existir uma conta para esse endereço, um link de redefinição está a caminho.",
+    "body": "O link expira em 30 minutos e pode ser usado uma vez. Se nada chegar, verifique o spam.",
+    "back_to_login": "Voltar para o acesso",
+    "try_again": "Usar outro endereço"
+  },
+  "auth_reset": {
+    "kicker": "escolha uma nova senha",
+    "title": "Defina uma nova senha",
+    "subtitle": "Será necessário entrar de novo em todos os outros dispositivos após esta mudança.",
+    "new_password": "Nova senha",
+    "confirm_password": "Confirme a nova senha",
+    "link_invalid": "Este link de redefinição não é mais válido. Solicite outro.",
+    "submit": "Salvar e entrar",
+    "back_to_login": "Voltar para o acesso"
+  },
+  "twofa": {
+    "enroll_kicker": "obrigatório para administradores",
+    "enroll_title": "Configurar verificação em duas etapas",
+    "enroll_subtitle": "Escaneie o código com seu app autenticador e digite o código de 6 dígitos que ele mostrar.",
+    "enroll_failed": "Não foi possível iniciar a configuração. Tente de novo.",
+    "qr_alt": "QR code para seu app autenticador",
+    "cannot_scan": "Não consegue escanear? Mostrar a chave",
+    "hide_secret": "Ocultar a chave",
+    "enter_code_hint": "Digite o código de 6 dígitos do seu app para concluir.",
+    "confirm": "Ativar verificação em duas etapas",
+    "codes_kicker": "guarde agora",
+    "codes_title": "Seus códigos de recuperação",
+    "codes_subtitle": "Cada código funciona uma vez, e esta é a única vez que eles aparecem.",
+    "codes_ack": "Guardei estes códigos em um lugar seguro.",
+    "codes_continue": "Continuar",
+    "copy": "Copiar códigos",
+    "copied": "Copiado",
+    "download": "Baixar como .txt",
+    "status_on": "A verificação em duas etapas está ativa.",
+    "status_off": "A verificação em duas etapas está desativada.",
+    "remaining_one": "Resta {{count}} código de recuperação.",
+    "remaining_other": "Restam {{count}} códigos de recuperação.",
+    "required_note": "Administradores não podem desativar.",
+    "disable": "Desativar verificação em duas etapas",
+    "regenerate": "Gerar novos códigos de recuperação",
+    "current_password": "Senha atual",
+    "current_code": "Código atual de 6 dígitos",
+    "enable": "Ativar verificação em duas etapas",
+    "section_title": "Verificação em duas etapas",
+    "section_desc": "Exigir um código do seu app autenticador além da senha.",
+    "disable_warning": "Seus códigos de recuperação também serão apagados. Quem tiver só a sua senha conseguirá entrar.",
+    "wrong_password": "Essa senha está incorreta.",
+    "already_enabled": "A verificação em duas etapas já está ativa."
   }
 }

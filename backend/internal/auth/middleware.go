@@ -70,16 +70,30 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// Optional resolves a principal when one is present but never rejects.
+// Optional resolves a principal when one is present but never rejects for the
+// LACK of one.
 //
-// Only /api/auth/me uses it, and only because that endpoint's contract is
-// "always 200". A 401 there would recurse through the SPA's refresh
-// interceptor on every cold boot: me → 401 → refresh → me → 401 …
+// /api/auth/me needs it because that endpoint's contract is "always 200" — a
+// 401 there would recurse through the SPA's refresh interceptor on every cold
+// boot: me → 401 → refresh → me → 401 … The 2FA enrollment routes need it
+// because they serve two callers: a signed-in user adding a factor, and an
+// admin mid-login who has only a pre-auth challenge.
+//
+// It DOES reject on a failed CSRF check. Not rejecting would make "optional
+// authentication" a way to mount an unsafe verb outside CSRF protection
+// entirely: the browser attaches the session cookie to a cross-site POST
+// regardless, so a resolved principal on an unsafe method needs the header
+// exactly as much here as under Authenticate. Safe methods are unaffected,
+// which is why /me is untouched by this.
 func (m *Middleware) Optional(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, _, err := m.resolve(r)
+		p, csrfHash, err := m.resolve(r)
 		if err != nil {
 			next.ServeHTTP(w, r)
+			return
+		}
+		if cerr := m.verifyCSRF(r, p, csrfHash); cerr != nil {
+			httperr.Write(w, cerr)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(authctx.WithPrincipal(r.Context(), p)))

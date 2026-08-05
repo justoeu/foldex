@@ -42,7 +42,9 @@ type User struct {
 	// HasPassword is false for an account that has not been claimed yet, and
 	// (from PR4) for one converted to Google-only.
 	HasPassword bool `json:"has_password"`
-	// TOTPEnabled is always false until PR3 lands the 2FA tables' read path.
+	// TOTPEnabled is true when the account has a CONFIRMED authenticator. An
+	// enrollment that was started and abandoned does not count — it would make
+	// the UI claim protection the user cannot actually satisfy.
 	TOTPEnabled bool `json:"totp_enabled"`
 }
 
