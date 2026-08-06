@@ -138,19 +138,23 @@ func LoginCodeMessage(to, code string, expiresInMinutes int) Message {
 	return Message{To: to, Subject: "Foldex sign-in code: " + code, Text: text, HTML: htmlBody}
 }
 
-// VerifyEmailMessage builds the address-confirmation e-mail.
-func VerifyEmailMessage(to, code string, expiresInMinutes int) Message {
+// VerifyEmailMessage builds the address-confirmation e-mail. verifyURL carries
+// a raw token and is therefore a credential, like the invite and reset links.
+func VerifyEmailMessage(to, verifyURL string, expiresInMinutes int) Message {
 	text := strings.Join([]string{
-		"Your Foldex e-mail confirmation code is: " + code,
+		"Confirm this address for your Foldex account by opening the link below:",
+		verifyURL,
 		"",
-		fmt.Sprintf("It expires in %d minutes.", expiresInMinutes),
+		fmt.Sprintf("The link expires in %d minutes and can be used once.", expiresInMinutes),
+		"If you did not ask for this, you can ignore this message.",
 	}, "\n")
 
 	htmlBody := fmt.Sprintf(
-		`<p>Your <strong>Foldex</strong> e-mail confirmation code is:</p>`+
-			`<p style="font-size:28px;letter-spacing:6px;font-weight:700">%s</p>`+
-			`<p style="color:#666;font-size:13px">It expires in %d minutes.</p>`,
-		html.EscapeString(code), expiresInMinutes,
+		`<p>Confirm this address for your <strong>Foldex</strong> account:</p>`+
+			`<p><a href="%s">Confirm my e-mail address</a></p>`+
+			`<p style="color:#666;font-size:13px">The link expires in %d minutes and can be `+
+			`used once. If you did not ask for this, you can ignore this message.</p>`,
+		html.EscapeString(verifyURL), expiresInMinutes,
 	)
 
 	return Message{To: to, Subject: "Confirm your Foldex e-mail", Text: text, HTML: htmlBody}

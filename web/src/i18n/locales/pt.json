@@ -818,5 +818,16 @@
     "disable_warning": "Seus códigos de recuperação também serão apagados. Quem tiver só a sua senha conseguirá entrar.",
     "wrong_password": "Essa senha está incorreta.",
     "already_enabled": "A verificação em duas etapas já está ativa."
+  },
+  "auth_verify": {
+    "kicker": "confirme seu endereço",
+    "working_title": "Confirmando seu e-mail…",
+    "done_title": "E-mail confirmado",
+    "done_body": "Pronto — este endereço está confirmado.",
+    "invalid_title": "Este link não é mais válido",
+    "invalid_body": "Links de confirmação expiram e podem ser usados uma vez. Peça outro nas configurações da sua conta.",
+    "failed_title": "Não deu para confirmar agora",
+    "failed_body": "Não foi possível falar com o servidor. O link continua válido — tente de novo daqui a pouco.",
+    "continue": "Continuar"
   }
 }

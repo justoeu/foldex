@@ -179,6 +179,9 @@ func (h *Handler) Mount(r chi.Router) {
 
 	r.Post("/password/forgot", h.ForgotPassword)
 	r.Post("/password/reset", h.ResetPassword)
+	// Unauthenticated: the confirmation link is followed from a mail client,
+	// often on a device with no session. The 256-bit token is the credential.
+	r.Post("/email/verify", h.VerifyEmail)
 
 	// The second-factor routes authenticate with the PRE-AUTH cookie, not a
 	// session — a session is exactly what they exist to produce.
@@ -206,7 +209,6 @@ func (h *Handler) Mount(r chi.Router) {
 		pr.Get("/sessions", h.Sessions)
 		pr.Delete("/sessions/{id}", h.RevokeSession)
 		pr.Post("/password/change", h.ChangePassword)
-		pr.Post("/email/verify", h.VerifyEmail)
 		pr.Post("/email/resend", h.SendEmailVerification)
 		pr.Get("/2fa", h.TwoFactorStatus)
 		pr.Post("/2fa/totp/disable", h.DisableTOTP)
@@ -745,11 +747,16 @@ func validateEmail(email string) error {
 
 // clientIP returns the peer address for rate-limit keys.
 //
-// It uses RemoteAddr, which chi's middleware.RealIP has already overwritten
-// from X-Forwarded-For when the request came through the proxy. That header is
-// forgeable on a direct bind — which is precisely why the login path ALSO keys
-// a bucket by e-mail: if the IP bucket can be evaded by rotating a header, the
-// e-mail bucket still caps guesses against any single account.
+// It reads RemoteAddr, which server.trustedProxyRealIP has rewritten from
+// X-Forwarded-For only when the request arrived from a peer in
+// TRUSTED_PROXY_IPS. (That middleware replaced chi's middleware.RealIP, which
+// honoured the header from anyone.) Our middleware writes a bare IP with no
+// port, so SplitHostPort errors and the fallback below returns it unchanged.
+//
+// The login path ALSO keys a bucket by e-mail, and that redundancy is the
+// point: if the IP key is ever wrong — a misconfigured proxy list, a header we
+// were talked into believing — the e-mail bucket still caps guesses against any
+// single account.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

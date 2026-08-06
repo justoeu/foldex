@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -91,7 +92,26 @@ type Deps struct {
 
 func New(d Deps) http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RealIP)
+	// NOT chi's middleware.RealIP: that one rewrites RemoteAddr from
+	// X-Forwarded-For unconditionally, which is correct behind nginx and
+	// forgeable on a direct bind. See realip.go.
+	trustedNets, badProxies := parseTrustedProxies(d.Config.TrustedProxyIPs)
+	for _, entry := range badProxies {
+		d.Logger.Error("TRUSTED_PROXY_IPS: ignoring unparseable entry — "+
+			"the proxy it names is NOT trusted, so client addresses behind it "+
+			"will be recorded as the proxy's own", "entry", logsafe.String(entry))
+	}
+	// Empty on a network-reachable bind almost always means a proxy in front
+	// that nobody told us about — and then EVERY request is attributed to that
+	// proxy, collapsing the per-IP login bucket into one global budget where
+	// 20 bad passwords lock out every user at once. Loopback binds are silent:
+	// there is nothing in front of them.
+	if len(trustedNets) == 0 && !isLoopbackBind(d.Config.BindAddr) {
+		d.Logger.Warn("TRUSTED_PROXY_IPS is empty on a non-loopback bind — if a reverse " +
+			"proxy sits in front, every request will be attributed to it and the per-IP " +
+			"rate limits will apply to all users as one")
+	}
+	r.Use(trustedProxyRealIP(trustedNets))
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 	r.Use(defaultBodyLimit)
@@ -319,6 +339,19 @@ func requireAdmin(mw *auth.Middleware) func(http.Handler) http.Handler {
 
 // containsWildcard reports whether the configured origin list includes "*",
 // which the Fetch spec forbids alongside credentialed requests.
+// isLoopbackBind reports whether the listen address is local-only.
+func isLoopbackBind(addr string) bool {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	if host == "localhost" || host == "" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func containsWildcard(origins []string) bool {
 	for _, o := range origins {
 		if o == "*" {

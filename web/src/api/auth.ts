@@ -64,6 +64,21 @@ export async function resetPassword(token: string, password: string): Promise<Me
   return data
 }
 
+/**
+ * Confirms an address from a mailed link.
+ *
+ * Unauthenticated: the 256-bit token IS the credential, which is what lets the
+ * link work on a device that has never signed in.
+ */
+export async function verifyEmail(token: string): Promise<void> {
+  await http.post('/api/auth/email/verify', { token })
+}
+
+/** Mails a fresh confirmation link to the signed-in user's own address. */
+export async function resendEmailVerification(): Promise<void> {
+  await http.post('/api/auth/email/resend')
+}
+
 export type InvitePreview = { email: string; role: Role; expires_at: string }
 
 export async function lookupInvite(token: string): Promise<InvitePreview> {

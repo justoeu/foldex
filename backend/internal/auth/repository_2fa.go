@@ -604,6 +604,45 @@ func (r *Repository) ConsumePasswordReset(ctx context.Context, rawToken, newPass
 	return u, nil
 }
 
+// ConsumeEmailVerification spends a verification token and returns its owner.
+//
+// Unlike the login OTP this resolves by HASH ALONE, with no user_id — the
+// caller has no session yet, which is the whole point of a link. That is safe
+// only because the value is 256 bits from crypto/rand rather than a six-digit
+// code: the token IS the identifier. A six-digit code looked up this way would
+// be guessable across the whole user base at once.
+// It also MARKS the address verified, in the same statement.
+//
+// Spending the token and recording the result have to be one write. Split in
+// two, a cancelled request or a pool blip between them burns the token while
+// leaving the address unverified — and the only way to get another is
+// /email/resend, which needs a session, so someone following the link on a
+// device that never signed in is simply stuck.
+func (r *Repository) ConsumeEmailVerification(ctx context.Context, tokenHash []byte) (authctx.UserID, error) {
+	var uid int64
+	err := r.pool.QueryRow(ctx, `
+		WITH spent AS (
+			UPDATE email_otp SET consumed_at = now()
+			WHERE code_hash = $1 AND purpose = $2
+			  AND consumed_at IS NULL AND expires_at > now()
+			RETURNING user_id
+		), verified AS (
+			UPDATE app_user u
+			SET email_verified_at = COALESCE(u.email_verified_at, now()), updated_at = now()
+			FROM spent
+			WHERE u.id = spent.user_id
+			RETURNING u.id
+		)
+		SELECT user_id FROM spent`, tokenHash, OTPPurposeVerifyEmail).Scan(&uid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrBadCredentials
+	}
+	if err != nil {
+		return 0, fmt.Errorf("consume email verification: %w", err)
+	}
+	return authctx.UserID(uid), nil
+}
+
 // MarkEmailVerified records that the address has been proven.
 func (r *Repository) MarkEmailVerified(ctx context.Context, uid authctx.UserID) error {
 	if _, err := r.pool.Exec(ctx, `

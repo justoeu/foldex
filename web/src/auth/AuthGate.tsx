@@ -18,6 +18,8 @@ const ResetScreen = lazy(() =>
   import('../components/auth/ResetScreen').then((m) => ({ default: m.ResetScreen })))
 const ForgotScreen = lazy(() =>
   import('../components/auth/ForgotScreen').then((m) => ({ default: m.ForgotScreen })))
+const VerifyEmailScreen = lazy(() =>
+  import('../components/auth/VerifyEmailScreen').then((m) => ({ default: m.VerifyEmailScreen })))
 
 /**
  * Decides between the app and an auth screen.
@@ -40,6 +42,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   // dismissing the invite screen does not resurrect it on the next render.
   const [inviteToken, setInviteToken] = useState(urlTokens.invite ?? '')
   const [resetToken, setResetToken] = useState(urlTokens.reset ?? '')
+  const [verifyToken, setVerifyToken] = useState(urlTokens.verify ?? '')
   const [forgot, setForgot] = useState(false)
 
   const boot = (
@@ -50,6 +53,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
   )
 
   if (session.status === 'loading') return boot
+
+  // Above the authenticated short-circuit on purpose: a signed-in user who
+  // follows the link from their inbox must still be told whether it worked,
+  // rather than being dropped into the app with no feedback at all.
+  if (verifyToken) {
+    return (
+      <Suspense fallback={boot}>
+        <VerifyEmailScreen token={verifyToken} onDone={() => setVerifyToken('')} />
+      </Suspense>
+    )
+  }
 
   if (session.status === 'authenticated') return <>{children}</>
 

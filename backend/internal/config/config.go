@@ -88,6 +88,13 @@ type Config struct {
 	// two entries apart.
 	AuthTOTPIssuer string
 
+	// TrustedProxyIPs (CSV of IPs or CIDRs) is the set of peers whose
+	// X-Forwarded-For header may be believed. Empty means "believe nobody",
+	// which is the right default for the loopback bind that ships: a spoofable
+	// client address is worse than a coarse one, because it lets an attacker
+	// both evade their own rate-limit bucket and pin the cost on someone else.
+	TrustedProxyIPs string
+
 	// AuthRequire2FAForAdmins forces administrators through TOTP enrollment
 	// before they can use the app. An admin can invite, promote and delete
 	// accounts, so a stolen admin password should not be one factor away from
@@ -145,6 +152,7 @@ func Load() (Config, error) {
 		AuthEncryptionAutoGen: envBool("AUTH_ENCRYPTION_AUTO_GENERATE", true),
 		AuthTOTPIssuer:        os.Getenv("AUTH_TOTP_ISSUER"),
 
+		TrustedProxyIPs:         os.Getenv("TRUSTED_PROXY_IPS"),
 		AuthRequire2FAForAdmins: envBool("AUTH_REQUIRE_2FA_FOR_ADMINS", true),
 		Mail: MailConfig{
 			Driver:             envOr("MAIL_DRIVER", "log"),

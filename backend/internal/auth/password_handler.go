@@ -166,7 +166,7 @@ func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 const emailVerifyTTL = emailOTPTTL
 
 type verifyEmailInput struct {
-	Code string `json:"code"`
+	Token string `json:"token"`
 }
 
 // SendEmailVerification mails a confirmation code to the caller's own address.
@@ -189,51 +189,63 @@ func (h *Handler) SendEmailVerification(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	code, err := secrets.NewNumericCode(totpDigits)
+	// A LINK, not a six-digit code. Confirming an address is a one-click action
+	// the user performs from their inbox; a code would force them to switch
+	// back to the app and retype it for no gain. The token is 256 bits from
+	// crypto/rand, which is what lets the endpoint that consumes it work with
+	// no session at all.
+	token, hash, err := secrets.NewToken()
 	if err != nil {
-		h.logger.Error("verify email code", "err", err)
+		h.logger.Error("verify email token", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
 	if err := h.repo.CreateEmailOTP(r.Context(), user.ID, nil, OTPPurposeVerifyEmail,
-		secrets.Hash(code), emailVerifyTTL); err != nil {
+		hash, emailVerifyTTL); err != nil {
 		h.logger.Error("verify email store", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	h.sendAsync(mailer.VerifyEmailMessage(user.Email, code, int(emailVerifyTTL.Minutes())),
-		"verify email")
+	h.sendAsync(mailer.VerifyEmailMessage(user.Email,
+		h.baseURL+"/?verify="+token, int(emailVerifyTTL.Minutes())), "verify email")
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// VerifyEmail consumes a confirmation code and marks the address proven.
+// VerifyEmail consumes a confirmation token and marks the address proven.
+//
+// UNAUTHENTICATED by design: the link is followed from a mail client, and
+// requiring a session first would mean the common case — a new user who has
+// not signed in on this device — is met with a login form and a token that
+// expires while they find their password. The token itself is the credential.
+//
+// It answers 204 on success and one 404 for every failure — unknown, expired,
+// already spent. Distinguishing them would let an unauthenticated caller probe
+// which tokens ever existed.
 func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
-	p, _ := authctx.FromContext(r.Context())
 	in, err := httperr.DecodeJSON[verifyEmailInput](w, r)
 	if err != nil {
 		httperr.Write(w, err)
 		return
 	}
-	code, ok := numericOTP(in.Code)
-	if !ok {
-		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
+	if in.Token == "" {
+		httperr.Write(w, errVerifyInvalid())
 		return
 	}
-	if err := h.repo.ConsumeEmailOTP(r.Context(), p.UserID, OTPPurposeVerifyEmail,
-		secrets.Hash(code), nil); err != nil {
+	// One statement spends the token AND records the result — see the
+	// repository method for why they cannot be two.
+	if _, err := h.repo.ConsumeEmailVerification(r.Context(), secrets.Hash(in.Token)); err != nil {
 		if errors.Is(err, ErrBadCredentials) {
-			httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code",
-				"that code is not valid"))
+			httperr.Write(w, errVerifyInvalid())
 			return
 		}
 		h.logger.Error("verify email consume", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	if err := h.repo.MarkEmailVerified(r.Context(), p.UserID); err != nil {
-		h.logger.Error("mark email verified", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func errVerifyInvalid() error {
+	return httperr.New(http.StatusNotFound, "verify_invalid",
+		"this confirmation link is no longer valid")
 }

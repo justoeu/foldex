@@ -20,6 +20,7 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/keyfile"
+	"foldex/internal/pkg/logsafe"
 	"foldex/internal/pkg/secrets"
 	"foldex/internal/preview"
 	"foldex/internal/push"
@@ -30,7 +31,13 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// Every logger in the process descends from this one, so the redactor wraps
+	// the ROOT handler rather than being applied per call site. Nothing here
+	// logs a credential today; this exists so that the next log line added in a
+	// hurry — during an incident, by whoever is debugging — cannot make one
+	// permanent. See internal/pkg/logsafe.RedactHandler.
+	logger := slog.New(logsafe.NewRedactHandler(
+		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	slog.SetDefault(logger)
 
 	cfg, err := config.Load()

@@ -10,7 +10,7 @@ import { http } from '../api/client'
 // it — re-importing under vi.resetModules() would instead build a second copy
 // of the whole module graph, giving AuthGate a different React context object
 // than the provider the harness renders, and useAuth would not find it.
-const mockedTokens: { invite?: string; reset?: string } = {}
+const mockedTokens: { invite?: string; reset?: string; verify?: string } = {}
 vi.mock('./authUrl', () => ({
   get urlTokens() {
     return mockedTokens
@@ -211,6 +211,60 @@ describe('AuthGate password recovery', () => {
       await screen.findByRole('heading', { name: /set a new password/i }),
     ).toBeInTheDocument()
     mockedTokens.reset = undefined
+  })
+})
+
+describe('AuthGate e-mail confirmation', () => {
+  it('consumes a ?verify= token from the URL', async () => {
+    mockedTokens.verify = 'VERIFYTOKEN'
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+    mockMe({ status: 'anonymous', features })
+
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: null },
+    )
+
+    expect(await screen.findByRole('heading', { name: /e-mail confirmed/i })).toBeInTheDocument()
+    expect(post).toHaveBeenCalledWith('/api/auth/email/verify', { token: 'VERIFYTOKEN' })
+    mockedTokens.verify = undefined
+  })
+
+  // The branch sits ABOVE the authenticated short-circuit: a signed-in user who
+  // follows the link from their inbox must still learn whether it worked,
+  // rather than landing in the app with no feedback.
+  it('shows the outcome even to an already signed-in user', async () => {
+    mockedTokens.verify = 'VERIFYTOKEN'
+    vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: testAdminSession },
+    )
+
+    expect(await screen.findByRole('heading', { name: /e-mail confirmed/i })).toBeInTheDocument()
+    expect(screen.queryByText('the app')).not.toBeInTheDocument()
+    mockedTokens.verify = undefined
+  })
+
+  it('falls through to the app once dismissed', async () => {
+    mockedTokens.verify = 'VERIFYTOKEN'
+    vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: testAdminSession },
+    )
+
+    await userEvent.click(await screen.findByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(screen.getByText('the app')).toBeInTheDocument())
+    mockedTokens.verify = undefined
   })
 })
 

@@ -298,7 +298,24 @@ func TestIssuerFromURLHasNoColon(t *testing.T) {
 	}
 }
 
+// A test about DEFAULTS has to isolate itself from the ambient environment.
+//
+// backend/Makefile includes ../.env and exports it, so `make coverage-run` runs
+// with the operator's real configuration in scope — and the moment someone sets
+// one of these in their own .env, a test that reads the ambient value starts
+// asserting their config instead of the default. It failed exactly that way the
+// first time an AUTH_ENCRYPTION_AUTO_GENERATE=0 landed in .env. Note it would
+// still have passed in CI, which has no .env: a local-only failure is worse
+// than a loud one, because it looks like a broken checkout.
+//
+// envOr/envBool treat "" as absent, so clearing is enough to reach the default.
 func TestTwoFactorDefaults(t *testing.T) {
+	for _, k := range []string{
+		"AUTH_REQUIRE_2FA_FOR_ADMINS", "AUTH_ENCRYPTION_KEY", "AUTH_ENCRYPTION_KEY_PATH",
+		"AUTH_ENCRYPTION_AUTO_GENERATE", "AUTH_TOTP_ISSUER", "AUTH_PUBLIC_URL",
+	} {
+		t.Setenv(k, "")
+	}
 	t.Setenv("BACKEND_BIND", "127.0.0.1")
 	t.Setenv("DB_URL", "postgres://u:p@localhost:5432/foldex?sslmode=disable")
 	cfg, err := Load()

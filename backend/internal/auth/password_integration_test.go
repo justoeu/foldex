@@ -17,6 +17,7 @@ import (
 
 	"foldex/internal/auth"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/secrets"
 	"foldex/internal/testdb"
 )
 
@@ -452,22 +453,24 @@ func TestVerifyEmail_RoundTrip(t *testing.T) {
 
 	h.mail.reset()
 	require.Equal(t, http.StatusAccepted, c.do(http.MethodPost, "/api/auth/email/resend", nil).Code)
-	code := extractSixDigits(t, h.mail.waitFor(t, "admin@example.com").Text)
+	token := verifyTokenFrom(t, h.mail.waitFor(t, "admin@example.com").Text)
 
-	require.Equal(t, http.StatusNoContent,
-		c.do(http.MethodPost, "/api/auth/email/verify", map[string]string{"code": code}).Code)
+	// Deliberately from a client with NO session: the link is followed from a
+	// mail client, often on a device that has never signed in.
+	require.Equal(t, http.StatusNoContent, h.client(t).do(http.MethodPost,
+		"/api/auth/email/verify", map[string]string{"token": token}).Code)
 
 	var verified *time.Time
 	require.NoError(t, h.pool.QueryRow(context.Background(),
 		`SELECT email_verified_at FROM app_user WHERE email = 'admin@example.com'`).Scan(&verified))
 	assert.NotNil(t, verified)
 
-	// Single use, like every other code here.
-	assert.Equal(t, http.StatusUnauthorized,
-		c.do(http.MethodPost, "/api/auth/email/verify", map[string]string{"code": code}).Code)
+	// Single use, like every other credential here.
+	assert.Equal(t, http.StatusNotFound, h.client(t).do(http.MethodPost,
+		"/api/auth/email/verify", map[string]string{"token": token}).Code)
 }
 
-func TestVerifyEmail_RejectsAWrongCode(t *testing.T) {
+func TestVerifyEmail_RejectsAnUnusableToken(t *testing.T) {
 	h := newHarnessWith(t, testdb.New(t), harnessOpts{SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
@@ -475,42 +478,61 @@ func TestVerifyEmail_RejectsAWrongCode(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, http.StatusAccepted, c.do(http.MethodPost, "/api/auth/email/resend", nil).Code)
-	for _, bad := range []string{"000000", "abc", ""} {
-		rec := c.do(http.MethodPost, "/api/auth/email/verify", map[string]string{"code": bad})
-		assert.Equal(t, http.StatusUnauthorized, rec.Code, "code %q", bad)
-		assert.Equal(t, "invalid_code", errCode(t, rec))
+	// One answer for unknown, malformed and empty: distinguishing them would
+	// let an unauthenticated caller probe which tokens ever existed.
+	for _, bad := range []string{"not-a-real-token", "", "0000000000"} {
+		rec := h.client(t).do(http.MethodPost, "/api/auth/email/verify",
+			map[string]string{"token": bad})
+		assert.Equal(t, http.StatusNotFound, rec.Code, "token %q", bad)
+		assert.Equal(t, "verify_invalid", errCode(t, rec))
 	}
 }
 
-// Another user's verification code must not verify THIS account.
-func TestVerifyEmail_CodeIsScopedToItsOwner(t *testing.T) {
+// The token expires. A confirmation link that stayed valid forever would sit in
+// a mailbox as a standing way to prove an address the owner may have since
+// given up.
+func TestVerifyEmail_ExpiredTokenIsRefused(t *testing.T) {
 	h := newHarnessWith(t, testdb.New(t), harnessOpts{SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
-	alice := h.bootstrapAdmin(t, "alice@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "bob@example.com", "a good password", "user")
+	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	_, err := h.pool.Exec(context.Background(), `UPDATE app_user SET email_verified_at = NULL`)
 	require.NoError(t, err)
 
 	h.mail.reset()
-	require.Equal(t, http.StatusAccepted, alice.do(http.MethodPost, "/api/auth/email/resend", nil).Code)
-	aliceCode := extractSixDigits(t, h.mail.waitFor(t, "alice@example.com").Text)
+	require.Equal(t, http.StatusAccepted, c.do(http.MethodPost, "/api/auth/email/resend", nil).Code)
+	token := verifyTokenFrom(t, h.mail.waitFor(t, "admin@example.com").Text)
 
-	bob := h.client(t)
-	require.Equal(t, http.StatusOK, bob.do(http.MethodPost, "/api/auth/login", map[string]string{
-		"email": "bob@example.com", "password": "a good password"}).Code)
+	_, err = h.pool.Exec(context.Background(),
+		`UPDATE email_otp SET expires_at = now() - interval '1 minute'`)
+	require.NoError(t, err)
 
-	assert.Equal(t, http.StatusUnauthorized,
-		bob.do(http.MethodPost, "/api/auth/email/verify", map[string]string{"code": aliceCode}).Code,
-		"alice's confirmation code verified bob's address")
+	rec := h.client(t).do(http.MethodPost, "/api/auth/email/verify",
+		map[string]string{"token": token})
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 
 	var verified *time.Time
 	require.NoError(t, h.pool.QueryRow(context.Background(),
-		`SELECT email_verified_at FROM app_user WHERE email = 'bob@example.com'`).Scan(&verified))
-	assert.Nil(t, verified)
+		`SELECT email_verified_at FROM app_user WHERE email = 'admin@example.com'`).Scan(&verified))
+	assert.Nil(t, verified, "an expired link still verified the address")
+}
+
+// verifyTokenFrom pulls the raw token out of the confirmation link.
+func verifyTokenFrom(t *testing.T, body string) string {
+	t.Helper()
+	const marker = "?verify="
+	i := strings.Index(body, marker)
+	require.GreaterOrEqual(t, i, 0, "no confirmation link in mail: %q", body)
+	tok := body[i+len(marker):]
+	if j := strings.IndexAny(tok, "\n\r "); j >= 0 {
+		tok = tok[:j]
+	}
+	require.NotEmpty(t, tok)
+	return tok
 }
 
 // The recipient is whoever is signed in — never a value from the request — so
-// the endpoint cannot be turned into a mail relay.
+// /email/resend cannot be turned into a mail relay. And once the address is
+// already verified there is nothing to prove, so nothing is sent.
 func TestVerifyEmail_ResendIsANoOpOnceVerified(t *testing.T) {
 	h := newHarnessWith(t, testdb.New(t), harnessOpts{SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
@@ -648,4 +670,38 @@ func TestForgotPassword_TakesTheSameTimeForKnownAndUnknownAddresses(t *testing.T
 		"an unknown address returned in %v — the duration floor is not being applied", miss)
 	assert.GreaterOrEqual(t, hit, 240*time.Millisecond,
 		"a known address returned in %v", hit)
+}
+
+// Spending the token and marking the address verified are ONE statement. Split
+// in two, a failure between them burns the token while leaving the address
+// unverified — and /email/resend needs a session, so someone following the link
+// on a device that never signed in would be stuck with no way to get another.
+func TestVerifyEmail_SpendAndMarkAreOneStatement(t *testing.T) {
+	h := newHarnessWith(t, testdb.New(t), harnessOpts{SMTP: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	ctx := context.Background()
+	_, err := h.pool.Exec(ctx, `UPDATE app_user SET email_verified_at = NULL`)
+	require.NoError(t, err)
+
+	h.mail.reset()
+	require.Equal(t, http.StatusAccepted, c.do(http.MethodPost, "/api/auth/email/resend", nil).Code)
+	token := verifyTokenFrom(t, h.mail.waitFor(t, "admin@example.com").Text)
+
+	// Drive the repository directly: the two writes must land together or not
+	// at all, with no HTTP layer in between to mask a partial result.
+	uid, err := h.repo.ConsumeEmailVerification(ctx, secrets.Hash(token))
+	require.NoError(t, err)
+	assert.Equal(t, authctx.UserID(1), uid)
+
+	var consumed, verified *time.Time
+	require.NoError(t, h.pool.QueryRow(ctx,
+		`SELECT o.consumed_at, u.email_verified_at
+		   FROM email_otp o JOIN app_user u ON u.id = o.user_id`).Scan(&consumed, &verified))
+	assert.NotNil(t, consumed, "the token was not spent")
+	assert.NotNil(t, verified, "the token was spent without the address being marked verified")
+
+	// And it is still single-use.
+	_, err = h.repo.ConsumeEmailVerification(ctx, secrets.Hash(token))
+	assert.ErrorIs(t, err, auth.ErrBadCredentials)
 }

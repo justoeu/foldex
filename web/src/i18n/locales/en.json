@@ -818,5 +818,16 @@
     "disable_warning": "Your recovery codes will be deleted too. Anyone with your password alone will be able to sign in.",
     "wrong_password": "That password is incorrect.",
     "already_enabled": "Two-step verification is already enabled."
+  },
+  "auth_verify": {
+    "kicker": "confirm your address",
+    "working_title": "Confirming your e-mail…",
+    "done_title": "E-mail confirmed",
+    "done_body": "Thanks — this address is now confirmed.",
+    "invalid_title": "This link is no longer valid",
+    "invalid_body": "Confirmation links expire and can be used once. Request a new one from your account settings.",
+    "failed_title": "Could not confirm right now",
+    "failed_body": "The server could not be reached. The link is still valid — try again in a moment.",
+    "continue": "Continue"
   }
 }

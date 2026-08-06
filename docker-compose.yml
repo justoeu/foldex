@@ -101,6 +101,25 @@ services:
       AUTH_REFRESH_GRACE_SEC: ${AUTH_REFRESH_GRACE_SEC:-10}
       AUTH_SWEEP_INTERVAL_MIN: ${AUTH_SWEEP_INTERVAL_MIN:-60}
       AUTH_SWEEP_RETAIN_DAYS: ${AUTH_SWEEP_RETAIN_DAYS:-7}
+      # TOTP seed encryption. The key is NOT regenerable: losing it makes every
+      # stored seed undecryptable. Set AUTH_ENCRYPTION_KEY in .env to keep it
+      # with your other secrets, or leave it empty and let the backend persist
+      # one in the foldex-data volume — but then back that volume up.
+      AUTH_ENCRYPTION_KEY: ${AUTH_ENCRYPTION_KEY:-}
+      AUTH_ENCRYPTION_KEY_PATH: ${AUTH_ENCRYPTION_KEY_PATH:-/data/auth_encryption.key}
+      AUTH_ENCRYPTION_AUTO_GENERATE: ${AUTH_ENCRYPTION_AUTO_GENERATE:-1}
+      AUTH_TOTP_ISSUER: ${AUTH_TOTP_ISSUER:-}
+      AUTH_REQUIRE_2FA_FOR_ADMINS: ${AUTH_REQUIRE_2FA_FOR_ADMINS:-1}
+      # nginx sits in front of this container and sets X-Forwarded-For, so its
+      # address must be trusted or EVERY request is attributed to the proxy and
+      # the per-IP login bucket becomes one global bucket — 20 bad passwords
+      # from anyone would lock out every user at once.
+      #
+      # The default names the private ranges Docker allocates from, because the
+      # `foldex` network is external and declares no subnet, so its address
+      # cannot be hardcoded here. Anything on that network is already inside the
+      # trust boundary. On a direct bind (no proxy), set this to empty.
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       # Transactional mail. The `log` default prints the invite link to the
       # backend log rather than sending it — see .env.example for why.
       MAIL_DRIVER: ${MAIL_DRIVER:-log}

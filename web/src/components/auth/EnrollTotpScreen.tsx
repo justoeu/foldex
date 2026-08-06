@@ -26,31 +26,23 @@ export function EnrollTotpScreen() {
   const [busy, setBusy] = useState(false)
   const [showSecret, setShowSecret] = useState(false)
 
-  // A ref, not a cleanup flag, because what has to be prevented is the second
-  // REQUEST, not the second setState.
+  // A ref, and DELIBERATELY no per-effect `alive` flag — see the same guard in
+  // VerifyEmailScreen for why the flag breaks it.
   //
+  // What must be prevented is the second REQUEST, not the second setState:
   // `startTotp` mints a new secret and overwrites the pending row, so firing it
-  // twice replaces the seed under a user who is already scanning the first QR —
-  // and if the two responses land out of order, the manual-entry key on screen
-  // disagrees with what the server stored, so confirming fails with nothing to
-  // explain it. Both StrictMode's double mount and a mid-enrollment language
-  // change would do exactly that: `t` is a new function identity on every
-  // locale switch, so it must not be a dependency here.
+  // twice replaces the seed under a user already scanning the first QR, and
+  // out-of-order responses leave the manual-entry key disagreeing with what the
+  // server stored. Both StrictMode's double mount and a mid-enrollment language
+  // change would do that — `t` is a new function identity on every locale
+  // switch, so it must not be a dependency here.
   const started = useRef(false)
   useEffect(() => {
     if (started.current) return
     started.current = true
-    let alive = true
     startTotp()
-      .then((e) => {
-        if (alive) setEnrollment(e)
-      })
-      .catch(() => {
-        if (alive) setError(t('twofa.enroll_failed'))
-      })
-    return () => {
-      alive = false
-    }
+      .then(setEnrollment)
+      .catch(() => setError(t('twofa.enroll_failed')))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see the ref above:
     // re-running this effect replaces a live enrollment secret.
   }, [])

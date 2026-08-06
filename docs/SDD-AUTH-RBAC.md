@@ -956,7 +956,13 @@ Cinco, e os dois primeiros são correções de desenho:
 
 8. **Os caminhos de step-up autenticados por sessão ganharam teto de tentativas.** `Verify2FA` é limitado por `auth_challenge.attempts`, mas `/2fa/totp/disable` e `/2fa/recovery-codes/regenerate` não têm desafio — nada limitava o palpite de TOTP ali. `attemptlimit` por id de usuário, 5 em 15 min.
 
-9. **A tela de segundo fator fica `busy` para sempre depois de um sucesso.** O `AuthGate` a desmonta assim que a sessão é adotada, mas até esse render chegar o formulário continuaria aceitando submit sobre um código de uso único já gasto — o segundo request falharia e pintaria erro por cima de um login que deu certo. Locked por `TwoFactorScreen.test.tsx`.
+9. **A verificação de e-mail é LINK, não código — e o endpoint que a consome não pede sessão.** A primeira implementação usava um código de seis dígitos numa rota autenticada, o que obrigava o usuário a entrar, ir em configurações, pedir o código e digitá-lo. A §4.2 sempre disse `token`, e a razão fica clara no caso comum: o link é aberto no cliente de e-mail, num aparelho que nunca fez login. Resolver por hash sem `user_id` só é seguro porque o token tem 256 bits — um código de seis dígitos buscado assim seria adivinhável contra toda a base de uma vez.
+
+10. **O `logsafe` ganhou um handler de redação no lugar de uma convenção.** A §9.2 pedia redação por campo; implementado como `RedactHandler` envolvendo o handler RAIZ em `main.go`, não como regra por call site. Nada loga credencial hoje — a lista de campos foi conferida antes — então o valor está em cobrir o próximo `logger.Info` escrito às pressas durante um incidente. Ele redige também via `WithAttrs` (um `logger.With("token", raw)` guarda o atributo uma vez e o repete em todo registro) e resolve `LogValuer` antes de checar a chave.
+
+11. **`TRUSTED_PROXY_IPS` fecha a §9.1, e o default é não confiar em ninguém.** A cadeia é percorrida da DIREITA para a esquerda pulando hops confiáveis: com mais de um proxy, a entrada mais à esquerda é o que o cliente mandou e continua sob controle dele.
+
+12. **A tela de segundo fator fica `busy` para sempre depois de um sucesso.** O `AuthGate` a desmonta assim que a sessão é adotada, mas até esse render chegar o formulário continuaria aceitando submit sobre um código de uso único já gasto — o segundo request falharia e pintaria erro por cima de um login que deu certo. Locked por `TwoFactorScreen.test.tsx`.
 
 ---
 

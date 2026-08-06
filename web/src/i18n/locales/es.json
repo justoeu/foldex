@@ -818,5 +818,16 @@
     "disable_warning": "Tus códigos de recuperación también se borrarán. Quien tenga solo tu contraseña podrá entrar.",
     "wrong_password": "Esa contraseña es incorrecta.",
     "already_enabled": "La verificación en dos pasos ya está activada."
+  },
+  "auth_verify": {
+    "kicker": "confirma tu dirección",
+    "working_title": "Confirmando tu correo…",
+    "done_title": "Correo confirmado",
+    "done_body": "Listo — esta dirección está confirmada.",
+    "invalid_title": "Este enlace ya no es válido",
+    "invalid_body": "Los enlaces de confirmación caducan y se usan una vez. Pide otro en los ajustes de tu cuenta.",
+    "failed_title": "No se pudo confirmar ahora",
+    "failed_body": "No se pudo contactar con el servidor. El enlace sigue siendo válido — inténtalo en un momento.",
+    "continue": "Continuar"
   }
 }

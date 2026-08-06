@@ -57,7 +57,7 @@ func New(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, error) 
 			if !toleratedCodes[errCode] {
 				return nil, fmt.Errorf("storage: make bucket %q at %s (code=%s): %w", cfg.Bucket, cfg.Endpoint, errCode, mkErr)
 			}
-			logger.Warn("storage: bucket create returned tolerated error, assuming bucket exists", "bucket", cfg.Bucket, "code", errCode)
+			logger.Warn("storage: bucket create returned tolerated error, assuming bucket exists", "bucket", cfg.Bucket, "s3_error_code", errCode)
 		} else {
 			logger.Info("storage: created bucket", "bucket", cfg.Bucket)
 		}
