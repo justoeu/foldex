@@ -26,8 +26,13 @@ const APITokenPrefix = "fx_"
 // identity or backup surfaces.
 const ScopeContent = "content"
 
-// ErrTokenInvalid covers unknown, revoked and expired bearer tokens alike.
-var ErrTokenInvalid = errors.New("auth: api token invalid")
+var (
+	// ErrTokenInvalid covers unknown, revoked and expired bearer tokens alike.
+	ErrTokenInvalid = errors.New("auth: api token invalid")
+	// ErrTokenNotFound means the caller owns no token with that id. Distinct
+	// from ErrTokenInvalid, which is about a PRESENTED credential.
+	ErrTokenNotFound = errors.New("auth: api token not found")
+)
 
 // APIToken is one long-lived credential, as its owner sees it.
 type APIToken struct {
@@ -161,7 +166,7 @@ func (r *Repository) RevokeAPIToken(ctx context.Context, uid authctx.UserID, id 
 		return fmt.Errorf("revoke api token: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return ErrNoUser
+		return ErrTokenNotFound
 	}
 	return nil
 }

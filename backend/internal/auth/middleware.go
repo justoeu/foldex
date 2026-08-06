@@ -154,8 +154,10 @@ func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 // file equivalent to the account itself. The scope column says `content`; this
 // middleware is what makes that word mean something.
 //
-// 404, not 403, on the admin surface — mounted alongside RequireAdmin, which
-// answers the same way for the same reason.
+// It answers 403, always. The 404 a non-admin sees on /api/admin comes from
+// RequireAdmin, which the router mounts FIRST precisely so that a caller who
+// lacks the role never learns the surface exists — this middleware only ever
+// speaks to someone whose role already passed.
 func (m *Middleware) RejectAPIToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if p, ok := authctx.FromContext(r.Context()); ok && p.Via == authctx.ViaAPIToken {
@@ -202,14 +204,11 @@ func bearerToken(r *http.Request) (string, bool) {
 	if h == "" {
 		return "", false
 	}
-	rest, found := strings.CutPrefix(h, "Bearer ")
-	if !found {
-		if len(h) < 7 || !strings.EqualFold(h[:7], "bearer ") {
-			return "", false
-		}
-		rest = h[7:]
+	const scheme = "bearer "
+	if len(h) < len(scheme) || !strings.EqualFold(h[:len(scheme)], scheme) {
+		return "", false
 	}
-	rest = strings.TrimSpace(rest)
+	rest := strings.TrimSpace(h[len(scheme):])
 	return rest, rest != ""
 }
 
@@ -225,7 +224,7 @@ func (m *Middleware) verifyCSRF(r *http.Request, p authctx.Principal, csrfHash [
 	if isSafeMethod(r.Method) {
 		return nil
 	}
-	// API tokens (PR4) carry no ambient credential, so there is nothing for a
+	// API tokens carry no ambient credential, so there is nothing for a
 	// cross-site request to ride on and nothing for CSRF to protect against.
 	if p.Via != authctx.ViaSession {
 		return nil

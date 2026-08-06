@@ -225,7 +225,15 @@ func (h *Handler) Mount(r chi.Router) {
 	// exactly like /2fa/verify, and protected the same way: fx_pa is Strict, so
 	// a cross-site POST never carries it.
 	r.Route("/oauth", func(or chi.Router) {
-		or.With(h.mw.Optional).Get("/google/start", h.OAuthStart)
+		// RejectAPIToken sits on /start even though the route is Optional, and
+		// it is NOT decoration: purpose=link binds the account the principal
+		// names, so without it a stolen content-scoped token would attach the
+		// thief's OWN Google account to the victim — and the callback needs no
+		// credential at all, only the state cookie the thief already has. A
+		// token pasted into an extension's config would be account takeover.
+		// The middleware passes anonymous callers straight through, which is
+		// what purpose=login and purpose=accept_invite need.
+		or.With(h.mw.Optional, h.mw.RejectAPIToken).Get("/google/start", h.OAuthStart)
 		or.Get("/google/callback", h.OAuthCallback)
 		or.Post("/google/convert", h.OAuthConvert)
 		or.With(h.mw.Authenticate, h.mw.RejectAPIToken).Delete("/google", h.OAuthUnlink)

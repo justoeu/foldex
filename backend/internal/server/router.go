@@ -213,7 +213,16 @@ func New(d Deps) http.Handler {
 
 			pr.Route("/tags", tags.NewHandler(tags.NewRepository(d.Pool)).Mount)
 			settingsRepo := settings.NewRepository(d.Pool)
-			pr.Route("/settings", settings.NewHandler(settingsRepo).Mount)
+			// /settings is ENTIRELY the master recovery password, which can
+			// clear any folder's password. That is a credential operation,
+			// not content, so a bearer token has no business here — and
+			// setting a master needs no proof when none is configured yet,
+			// so a leaked token would otherwise be: set a master, then reset
+			// every locked folder and read it.
+			pr.Route("/settings", func(sr chi.Router) {
+				sr.Use(rejectAPIToken(d.AuthMiddleware))
+				settings.NewHandler(settingsRepo).Mount(sr)
+			})
 			foldersRepo := folders.NewRepository(d.Pool)
 			pr.Route("/folders", folders.NewHandler(foldersRepo, d.FolderUnlockKey, settingsRepo).Mount)
 
@@ -307,7 +316,14 @@ func bootstrapPrincipal(pool *pgxpool.Pool, logger *slog.Logger) func(http.Handl
 		}
 		var id int64
 		if err := pool.QueryRow(ctx,
-			`SELECT id FROM app_user WHERE role = 'admin' ORDER BY id LIMIT 1`).Scan(&id); err != nil {
+			// ACTIVE, not merely admin. Without the status filter this resolves to
+			// the still-`pending` bootstrap placeholder on a fresh database, or to
+			// a DISABLED administrator on an instance where someone was removed —
+			// and every request would then be attributed to an account that is
+			// not supposed to be able to sign in at all. This is the documented
+			// escape hatch out of a lockout, so it has to land somewhere real.
+			`SELECT id FROM app_user WHERE role = 'admin' AND status = 'active'
+			 ORDER BY id LIMIT 1`).Scan(&id); err != nil {
 			return 0, err
 		}
 		cached = authctx.UserID(id)

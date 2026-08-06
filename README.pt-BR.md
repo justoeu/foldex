@@ -57,7 +57,7 @@ make up                 # puxa justoeu/foldex-{backend,web}:latest do Docker Hub
 make migrate-up         # aplica as migrations SQL
 make seed               # opcional: tags + links de exemplo
 
-open http://localhost:9088
+open https://localhost:9444
 ```
 
 ### Escolher entre imagens pré-buildadas e build local
@@ -165,7 +165,7 @@ Os achados de SAST aparecem na aba **Security ▸ Code scanning** do repositóri
 
 ## Smoke test (sanity check depois de `make up`)
 
-Contas estão ligadas, então `/api/*` precisa de credencial. Abra <http://localhost:9088>,
+Contas estão ligadas, então `/api/*` precisa de credencial. Abra <https://localhost:9444>,
 conclua a tela de setup, crie um **token de API** em Configurações → Tokens de API e exporte:
 
 ```bash
@@ -216,12 +216,12 @@ curl -s -X POST localhost:9089/api/folders/1/reset-password -H "$AUTH" -H "$JSON
 curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/entries?folder_id=1 | jq .   # 200 — pasta destravada
 
 # 8. O escopo do token é real — tudo abaixo tem que ser recusado.
-curl -s -H "$AUTH" localhost:9089/api/auth/sessions -o /dev/null -w '%{http_code}\n'  # 403
-curl -s -H "$AUTH" localhost:9089/api/admin/users  -o /dev/null -w '%{http_code}\n'  # 403 (admin) / 404 (user)
-curl -s -H "$AUTH" -X POST localhost:9089/api/backup/export -o /dev/null -w '%{http_code}\n'  # 403
+curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/auth/sessions -o /dev/null -w '%{http_code}\n'  # 403
+curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/admin/users  -o /dev/null -w '%{http_code}\n'  # 403 (admin) / 404 (user)
+curl -s -H "$AUTH" -H "$JSON" -X POST localhost:9089/api/backup/export -o /dev/null -w '%{http_code}\n'  # 403
 
 # 9. Abre a SPA e testa ⌥K (paleta) / ⌥N (novo link) / ⌥M (nova nota); engrenagem na topbar.
-open http://localhost:9088
+open https://localhost:9444
 ```
 
 ## Atalhos de teclado (SPA)
@@ -290,7 +290,7 @@ endpoints:
 
 ```bash
 # Gera — streama um ZIP. Headers expõem counts + duração.
-curl -OJ http://localhost:9089/api/backup
+curl -OJ -X POST http://localhost:9089/api/backup
 unzip -l foldex-backup-*.zip
 #   manifest.json
 #   database.json
@@ -333,7 +333,7 @@ com a origem que você realmente acessa, porque é dela que saem os links de con
 redefinição.
 
 ```bash
-AUTH_PUBLIC_URL=https://localhost
+AUTH_PUBLIC_URL=https://localhost:9444
 ```
 
 Prefere o comportamento antigo? `AUTH_ENABLED=0` mantém: toda requisição é atribuída ao

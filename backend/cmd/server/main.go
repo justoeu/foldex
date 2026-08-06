@@ -75,6 +75,15 @@ func main() {
 	}
 	defer pool.Close()
 
+	// Refuse to run against an un-migrated database. Migrations are applied
+	// deliberately in this project, so an image upgrade can outrun the schema —
+	// and with authentication on, that failure is both delayed and
+	// irreversible unless it is caught here. See db.CheckSchemaVersion.
+	if err := db.CheckSchemaVersion(rootCtx, pool); err != nil {
+		logger.Error("schema check failed", "err", err)
+		os.Exit(1)
+	}
+
 	worker := preview.NewWorker(pool, cfg.PreviewConcurrency, time.Duration(cfg.PreviewTimeoutSec)*time.Second, logger)
 
 	// Dedicated Fetcher for the synchronous GET /api/links/url-metadata

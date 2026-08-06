@@ -25,7 +25,7 @@ type Handler struct {
 	allowNumericIDs bool
 }
 
-// NewHandler builds the /go handler. allowNumericIDs is the GO_NUMERIC_IDS
+// NewHandler builds the /go handler. allowNumericIDs is the PUBLIC_NUMERIC_IDS
 // escape hatch for an instance that has old /go/42 links in the wild.
 func NewHandler(repo LinkResolver, allowNumericIDs bool) *Handler {
 	return &Handler{repo: repo, allowNumericIDs: allowNumericIDs}

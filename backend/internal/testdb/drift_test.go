@@ -60,18 +60,72 @@ func TestResetCoversEveryTable(t *testing.T) {
 	require.NoError(t, err)
 	defer rows.Close()
 
-	var missing []string
+	var tables []string
 	for rows.Next() {
 		var name string
 		require.NoError(t, rows.Scan(&name))
-		// Seed one row, run Reset, and assert it is gone. Asserting behaviour
-		// beats string-matching the TRUNCATE statement: a table listed but
-		// spelled wrong would still pass a textual check.
-		if !strings.Contains(resetStatement, name) {
+		tables = append(tables, name)
+	}
+	require.NoError(t, rows.Err())
+	require.NotEmpty(t, tables, "fixture precondition: migrations created tables")
+
+	// Word-boundary match, not strings.Contains.
+	//
+	// The comment above this test used to say "asserting behaviour beats
+	// string-matching the TRUNCATE statement" while the code did exactly the
+	// string match it disclaimed — and the failure mode is specific: a new
+	// table whose name is a SUBSTRING of a listed one passes without ever being
+	// truncated. `user` inside `app_user`, `session` inside
+	// `session_used_token`, `token` inside `api_token` are all live examples.
+	//
+	// That was one leaky test before; since the suite moved to one shared
+	// database per package, Reset is the ONLY isolation there is, so a missed
+	// table leaks rows into every later test in the package.
+	var missing []string
+	for _, name := range tables {
+		if !truncatesTable(resetStatement, name) {
 			missing = append(missing, name)
 		}
 	}
-	require.NoError(t, rows.Err())
 	assert.Empty(t, missing,
-		"these tables exist but are not truncated by testdb.Reset — add them or subtests will leak rows")
+		"these tables exist but are not truncated by testdb.Reset — add them or every "+
+			"later test in the package inherits their rows")
+}
+
+// truncatesTable reports whether stmt names table as a whole word.
+func truncatesTable(stmt, table string) bool {
+	for _, field := range strings.FieldsFunc(stmt, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\n' || r == '\t'
+	}) {
+		if field == table {
+			return true
+		}
+	}
+	return false
+}
+
+// Reset is the only thing standing between one test's rows and the next test's
+// assertions now that a package shares one database. This proves it actually
+// empties them rather than merely naming them.
+func TestResetActuallyEmptiesTheTables(t *testing.T) {
+	ctx := context.Background()
+	pool := New(t)
+
+	uid := SeedUser(t, pool, "drift@test.local", "user")
+	_, err := pool.Exec(ctx,
+		`INSERT INTO link (user_id, url, title, slug) VALUES ($1, 'https://x.test', 'x', 'x')`,
+		int64(uid))
+	require.NoError(t, err)
+
+	require.NoError(t, Reset(ctx, pool))
+
+	for _, table := range []string{"app_user", "link"} {
+		var n int
+		require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&n))
+		assert.Zero(t, n, "%s still holds rows after Reset", table)
+	}
+
+	// RESTART IDENTITY is load-bearing too: tests assert on uid = 1.
+	next := SeedUser(t, pool, "again@test.local", "user")
+	assert.EqualValues(t, 1, next, "Reset must restart the identity sequences")
 }

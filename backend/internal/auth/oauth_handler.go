@@ -110,6 +110,15 @@ func (h *Handler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 				"sign in before linking an account"))
 			return
 		}
+		// Belt and braces with RejectAPIToken on the mount. Linking is the one
+		// place where "which principal" decides whose account a NEW credential
+		// gets attached to, so it re-checks here rather than trusting that
+		// whoever mounts this route in future remembers the middleware.
+		if p.Via != authctx.ViaSession {
+			httperr.Write(w, httperr.New(http.StatusForbidden, "token_scope",
+				"an API token cannot link a provider account"))
+			return
+		}
 		uid := p.UserID
 		owner = &uid
 	case OAuthPurposeAcceptInvite:
@@ -457,13 +466,29 @@ func (h *Handler) OAuthConvert(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
+	// Re-read the status, the way Verify2FA does. The challenge is valid for ten
+	// minutes, and an administrator who disables an account inside that window
+	// expects it to stop — not to have its password silently retired and its
+	// credential set rewritten on the way out.
+	if user.Status != StatusActive {
+		httperr.Write(w, errInvalidCredentials())
+		return
+	}
 	if err := h.repo.ConvertToProvider(r.Context(), ch.UserID, ProviderGoogle,
 		ch.OAuthSubject, ch.OAuthEmail, ch.ID); err != nil {
-		if errors.Is(err, ErrIdentityTaken) || errors.Is(err, ErrIdentityExists) {
+		if errors.Is(err, ErrIdentityTaken) {
 			// The subject was linked elsewhere between the callback and this
 			// request. Rare, but it is the window a racing attacker would aim at.
 			httperr.Write(w, httperr.New(http.StatusConflict, "oauth_already_linked",
 				"that Google account is already linked to another user"))
+			return
+		}
+		if errors.Is(err, ErrIdentityExists) {
+			// THIS account already has Google linked — two convert requests
+			// raced and the other one won. Saying "another user" here would be
+			// simply false, and the honest answer is that it is already done.
+			httperr.Write(w, httperr.New(http.StatusConflict, "already_converted",
+				"this account is already linked to Google"))
 			return
 		}
 		h.logger.Error("convert", "err", err)

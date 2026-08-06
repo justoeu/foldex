@@ -84,7 +84,7 @@ func (h *Handler) emailFactorAvailable(purpose string, mailboxAlreadyProven bool
 // completeLogin issues a session, or diverts into the second factor.
 //
 // Every credential path that ends in "the first factor is proven" funnels
-// through here — login, password reset, and (from PR4) the OAuth callback — so
+// through here — login, password reset and the OAuth callback — so
 // there is exactly one place that decides whether a proven password IS a login.
 func (h *Handler) completeLogin(w http.ResponseWriter, r *http.Request, user User, mailboxAlreadyProven bool) {
 	if purpose := h.secondFactorPurpose(user); purpose != "" {

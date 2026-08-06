@@ -44,8 +44,29 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/{id}", h.get)
 	r.Patch("/{id}", h.update)
 	r.Delete("/{id}", h.delete)
-	r.Post("/{id}/unlock", h.unlock)
-	r.Post("/{id}/reset-password", h.resetPassword)
+	// Folder CRUD is content and stays token-reachable. These two are not:
+	// unlock verifies a password (and is the brute-force surface the rate
+	// limiter exists for), and reset-password clears one after checking the
+	// master. A credential presented by a script, with no human present and no
+	// step-up available, must not drive either.
+	r.With(refuseAPIToken).Post("/{id}/unlock", h.unlock)
+	r.With(refuseAPIToken).Post("/{id}/reset-password", h.resetPassword)
+}
+
+// refuseAPIToken blocks bearer credentials on the folder-password routes.
+//
+// Declared here rather than reused from internal/auth because folders must not
+// import auth (see MasterPasswordVerifier for the same reason); authctx is a
+// leaf and carries everything the check needs.
+func refuseAPIToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p, ok := authctx.FromContext(r.Context()); ok && p.Via == authctx.ViaAPIToken {
+			httperr.Write(w, httperr.New(http.StatusForbidden, "token_scope",
+				"an API token cannot be used on this endpoint"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {

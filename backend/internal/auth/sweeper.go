@@ -112,6 +112,15 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 	}
 	n += os
 
+	// Revoked and expired bearer tokens. Not a detector either — a dead token
+	// tells nobody anything — so the rows go rather than being retained the way
+	// session_used_token's are.
+	at, err := s.repo.SweepAPITokens(ctx, s.retain)
+	if err != nil {
+		s.logger.Error("api token sweep", "err", err)
+	}
+	n += at
+
 	evicted := 0
 	for _, prune := range s.inMemory {
 		evicted += prune(s.memoryRetain())

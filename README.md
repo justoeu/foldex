@@ -59,7 +59,7 @@ make up                 # pulls justoeu/foldex-{backend,web}:latest from Docker 
 make migrate-up         # applies SQL migrations
 make seed               # optional: sample tags + links
 
-open http://localhost:9088
+open https://localhost:9444
 ```
 
 ### Choosing between pre-built images and local build
@@ -184,7 +184,7 @@ SAST findings land in the repo **Security ▸ Code scanning** tab (SARIF upload)
 
 ## Smoke test (sanity check after `make up`)
 
-Accounts are on, so `/api/*` needs a credential. Open <http://localhost:9088>, complete the
+Accounts are on, so `/api/*` needs a credential. Open <https://localhost:9444>, complete the
 setup screen, then create an **API token** under Settings → API tokens and export it:
 
 ```bash
@@ -240,7 +240,7 @@ curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/admin/users  -o /dev/null -w '%
 curl -s -H "$AUTH" -H "$JSON" -X POST localhost:9089/api/backup/export -o /dev/null -w '%{http_code}\n'  # 403
 
 # 9. Open the SPA and try ⌥K (palette) / ⌥N (new link) / ⌥M (new note); Settings gear in the topbar.
-open http://localhost:9088
+open https://localhost:9444
 ```
 
 ## Keyboard shortcuts (SPA)
@@ -301,7 +301,7 @@ Full snapshot of the DB **and** the RustFS bucket into a single ZIP. Three endpo
 
 ```bash
 # Generate — streams a ZIP. Headers expose counts + duration.
-curl -OJ http://localhost:9089/api/backup
+curl -OJ -X POST http://localhost:9089/api/backup
 unzip -l foldex-backup-*.zip
 #   manifest.json
 #   database.json
@@ -340,7 +340,7 @@ that already existed**: nothing is lost and nothing has to be re-imported. Set
 and reset links are built from.
 
 ```bash
-AUTH_PUBLIC_URL=https://localhost
+AUTH_PUBLIC_URL=https://localhost:9444
 ```
 
 Prefer the old behaviour? `AUTH_ENABLED=0` keeps it: every request is attributed to the

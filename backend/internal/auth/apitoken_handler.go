@@ -110,7 +110,7 @@ func (h *Handler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 	// rule content rows follow, and for the same reason: a 403 confirms the id
 	// exists and turns a dense BIGSERIAL space into an enumeration oracle.
 	if err := h.repo.RevokeAPIToken(r.Context(), p.UserID, id); err != nil {
-		if errors.Is(err, ErrNoUser) {
+		if errors.Is(err, ErrTokenNotFound) {
 			httperr.Write(w, httperr.ErrNotFound)
 			return
 		}
