@@ -19,6 +19,9 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/mailer"
+	"foldex/internal/pkg/keyfile"
+	"foldex/internal/pkg/logsafe"
+	"foldex/internal/pkg/secrets"
 	"foldex/internal/preview"
 	"foldex/internal/push"
 	"foldex/internal/screenshot"
@@ -28,7 +31,13 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// Every logger in the process descends from this one, so the redactor wraps
+	// the ROOT handler rather than being applied per call site. Nothing here
+	// logs a credential today; this exists so that the next log line added in a
+	// hurry — during an incident, by whoever is debugging — cannot make one
+	// permanent. See internal/pkg/logsafe.RedactHandler.
+	logger := slog.New(logsafe.NewRedactHandler(
+		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	slog.SetDefault(logger)
 
 	cfg, err := config.Load()
@@ -164,9 +173,34 @@ func main() {
 		Absolute: time.Duration(cfg.AuthAbsoluteTTLDays) * 24 * time.Hour,
 		Grace:    time.Duration(cfg.AuthRefreshGraceSec) * time.Second,
 	}
+	// The TOTP seed-encryption key. AllowEphemeral is FALSE: unlike the folder
+	// unlock key, a regenerated one makes every stored seed undecryptable and
+	// locks every 2FA user out of their own account permanently. Better to
+	// refuse to boot than to succeed and destroy the seeds at the next restart.
+	authKey, err := keyfile.Load(keyfile.Config{
+		Name:           "auth encryption key",
+		EnvVar:         "AUTH_ENCRYPTION_KEY",
+		PathVar:        "AUTH_ENCRYPTION_KEY_PATH",
+		EnvValue:       cfg.AuthEncryptionKey,
+		Path:           cfg.AuthEncryptionKeyPath,
+		AutoGenerate:   cfg.AuthEncryptionAutoGen,
+		AllowEphemeral: false,
+	}, logger)
+	if err != nil {
+		logger.Error("auth encryption key", "err", err)
+		os.Exit(1)
+	}
+	authCipher, err := secrets.NewCipher(authKey)
+	if err != nil {
+		logger.Error("auth cipher", "err", err)
+		os.Exit(1)
+	}
+
 	authHandler := auth.NewHandler(auth.HandlerConfig{
 		Repo: authRepo, MW: authMW, Mailer: mail, Cookies: cookieOpts,
 		TTL: authTTL, Logger: logger, BaseURL: cfg.AuthPublicURL,
+		Cipher: authCipher, TOTPIssuer: cfg.AuthTOTPIssuer,
+		Require2FAForAdmins: cfg.AuthRequire2FAForAdmins,
 	})
 	adminHandler := auth.NewAdminHandler(authRepo, mail, logger, cfg.AuthPublicURL)
 

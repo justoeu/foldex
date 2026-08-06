@@ -356,6 +356,31 @@ the signature of a stolen one — every session for that account is signed out a
 owner is e-mailed. Signing out is available everywhere; "sign out everywhere" revokes
 every device. Changing your password keeps the device you are on and drops the rest.
 
+**Two-step verification.** Turn it on from **Settings → Two-step verification**: scan
+the QR with any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden),
+confirm one code, and save the ten single-use **recovery codes** — they are shown once
+and the server keeps only their hashes, so it genuinely cannot show them again. At
+sign-in the same six-digit field accepts a code from your app, a recovery code, or a
+code e-mailed to you. Administrators are required to have it: with
+`AUTH_REQUIRE_2FA_FOR_ADMINS=1` (the default) an admin without an authenticator is
+walked through setting one up before their first session, rather than being locked out.
+
+> **The key that encrypts the authenticator secrets must be backed up with your
+> database.** Either let the backend generate `/data/auth_encryption.key` on first
+> boot, or set `AUTH_ENCRYPTION_KEY` in `.env` (`openssl rand -base64 32`) — the env
+> value wins, and if you use it, set `AUTH_ENCRYPTION_AUTO_GENERATE=0` so a
+> dropped line becomes a boot failure instead of a fresh key that silently orphans
+> every enrolled authenticator.
+>
+> Unlike the folder-unlock key it **cannot be regenerated** and there is no
+> re-encryption: without it every enrolled account loses its second factor and needs
+> an administrator to clear the enrollment.
+
+**Forgot your password.** **Reset it** from the sign-in screen — a link arrives by
+e-mail (or in the backend log with the default `log` driver), is good for 30 minutes and
+can be used once. Using it signs you out of every other device, and an account with
+two-step verification still has to present a code: a mailbox alone is never enough.
+
 **Locked out?** With `AUTH_ENABLED=1` and no way back into the only administrator
 account, recovery is a direct database edit — the same status the master folder password
 already has. Set `AUTH_ENABLED=0`, restart, and the instance reverts to the

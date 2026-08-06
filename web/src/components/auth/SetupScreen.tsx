@@ -3,10 +3,10 @@ import { useTranslation } from 'react-i18next'
 import { bootstrap, errorCode, errorStatus } from '../../api/auth'
 import { useAuth } from '../../auth/AuthProvider'
 import { PasswordStrength } from '../PasswordStrength'
+import { MIN_PASSWORD_LEN } from '../../auth/types'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 
 /** Mirrors auth.MinPasswordLen; the backend is the authority. */
-const MIN_PASSWORD = 8
 
 export function SetupScreen() {
   const { t } = useTranslation()
@@ -19,7 +19,7 @@ export function SetupScreen() {
   const [busy, setBusy] = useState(false)
 
   const mismatch = confirm.length > 0 && password !== confirm
-  const tooShort = password.length > 0 && password.length < MIN_PASSWORD
+  const tooShort = password.length > 0 && password.length < MIN_PASSWORD_LEN
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -77,7 +77,7 @@ export function SetupScreen() {
         <AuthField
           id="fx-setup-password"
           label={t('auth.password')}
-          hint={t('auth.password_min', { count: MIN_PASSWORD })}
+          hint={t('auth.password_min', { count: MIN_PASSWORD_LEN })}
         >
           <input
             id="fx-setup-password"
@@ -123,7 +123,7 @@ function messageFor(err: unknown, t: (k: string, o?: Record<string, unknown>) =>
     case 'invalid_email':
       return t('auth_errors.invalid_email')
     case 'password_too_short':
-      return t('auth_errors.password_too_short', { count: MIN_PASSWORD })
+      return t('auth_errors.password_too_short', { count: MIN_PASSWORD_LEN })
     case 'password_too_long':
       return t('auth_errors.password_too_long')
     default:

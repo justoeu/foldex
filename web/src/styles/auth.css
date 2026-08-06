@@ -356,3 +356,143 @@
   .fx-auth-spinner { animation-duration: 2s; }
   .fx-auth-submit { transition: none; }
 }
+
+/* ── PR3: second factor, recovery and reset ─────────────────────────────── */
+
+/* Secondary actions under a form: "use a recovery code", "back to sign in". */
+.fx-auth .fx-auth-alt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.fx-auth .fx-auth-link {
+  background: none;
+  border: 0;
+  padding: 4px 2px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fxa-accent);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.fx-auth .fx-auth-link:hover { text-decoration: underline; }
+.fx-auth .fx-auth-link:focus-visible {
+  outline: 2px solid var(--fxa-accent);
+  outline-offset: 2px;
+}
+
+.fx-auth .fx-auth-notice {
+  margin: 0 0 4px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: var(--fx-accent-soft);
+  color: var(--fxa-ink);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* ── OTP field ──────────────────────────────────────────────────────────── */
+
+.fx-auth .fx-auth-otp {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin: 4px 0 2px;
+}
+
+.fx-auth .fx-auth-otp-cell {
+  width: 100%;
+  /* A hard min-height rather than padding: the cells must stay square-ish and
+     tappable at 44px on a phone even when the container squeezes them. */
+  min-height: 52px;
+  padding: 0;
+  text-align: center;
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  color: var(--fxa-ink);
+  background: var(--fx-surface-3);
+  border: 1px solid var(--fxa-border);
+  border-radius: 11px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.fx-auth .fx-auth-otp-cell:focus {
+  outline: none;
+  border-color: var(--fxa-accent);
+  box-shadow: 0 0 0 3px var(--fx-accent-soft-2);
+}
+.fx-auth .fx-auth-otp-invalid .fx-auth-otp-cell {
+  border-color: var(--fxa-danger);
+}
+
+.fx-auth .fx-auth-input-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.fx-auth .fx-auth-input-invalid { border-color: var(--fxa-danger); }
+
+/* ── Enrollment ─────────────────────────────────────────────────────────── */
+
+.fx-auth .fx-auth-qr {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  background: #fff; /* QR contrast is a scanning requirement, not a theme choice */
+  border: 1px solid var(--fxa-border);
+  border-radius: 11px;
+}
+.fx-auth .fx-auth-qr img { display: block; width: 240px; height: 240px; }
+
+.fx-auth .fx-auth-secret {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  letter-spacing: .12em;
+  word-break: break-all;
+  text-align: center;
+  background: var(--fx-surface-3);
+  border: 1px dashed var(--fxa-border);
+  border-radius: 11px;
+}
+
+/* ── Recovery codes ─────────────────────────────────────────────────────── */
+
+.fx-auth .fx-auth-codes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin: 0;
+  padding: 14px;
+  list-style: none;
+  background: var(--fx-surface-3);
+  border: 1px solid var(--fxa-border);
+  border-radius: 11px;
+}
+@media (max-width: 420px) {
+  .fx-auth .fx-auth-codes { grid-template-columns: 1fr; }
+}
+
+.fx-auth .fx-auth-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  letter-spacing: .06em;
+  text-align: center;
+  user-select: all; /* one click selects a whole code for copying */
+}
+
+.fx-auth .fx-auth-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fxa-ink-soft);
+  cursor: pointer;
+}
+.fx-auth .fx-auth-check input { margin-top: 2px; accent-color: var(--fxa-accent); }

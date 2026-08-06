@@ -49,14 +49,24 @@ var (
 	ErrPasswordMissing = errors.New("auth: account has no password credential")
 )
 
-const userColumns = `id, email, name, role, status, email_verified_at, last_login_at,
-	created_at, (password_hash IS NOT NULL) AS has_password`
+// userColumns is the projection behind every User the API returns.
+//
+// totp_enabled is derived with EXISTS rather than cached on app_user so there
+// is one source of truth: an account has a second factor exactly when it has a
+// CONFIRMED totp_secret row. A boolean column would need updating in four
+// places (enroll, confirm, disable, admin reset) and would silently disagree
+// with reality the first time one was missed — and the direction it disagrees
+// in decides whether a login demands a code the user cannot produce.
+const userColumns = `app_user.id, email, name, role, status, email_verified_at, last_login_at,
+	created_at, (password_hash IS NOT NULL) AS has_password,
+	EXISTS (SELECT 1 FROM totp_secret ts
+	         WHERE ts.user_id = app_user.id AND ts.confirmed_at IS NOT NULL) AS totp_enabled`
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
 	var id int64
 	err := row.Scan(&id, &u.Email, &u.Name, &u.Role, &u.Status,
-		&u.EmailVerifiedAt, &u.LastLoginAt, &u.CreatedAt, &u.HasPassword)
+		&u.EmailVerifiedAt, &u.LastLoginAt, &u.CreatedAt, &u.HasPassword, &u.TOTPEnabled)
 	u.ID = authctx.UserID(id)
 	return u, err
 }
@@ -110,7 +120,7 @@ func (r *Repository) verifyPassword(ctx context.Context, email, password string)
 		SELECT `+userColumns+`, password_hash
 		FROM app_user WHERE email_normalized = $1`, NormalizeEmail(email))
 	err = row.Scan(&id, &u.Email, &u.Name, &u.Role, &u.Status, &u.EmailVerifiedAt,
-		&u.LastLoginAt, &u.CreatedAt, &u.HasPassword, &hash)
+		&u.LastLoginAt, &u.CreatedAt, &u.HasPassword, &u.TOTPEnabled, &hash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, false, nil
 	}

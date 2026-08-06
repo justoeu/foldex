@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -359,4 +360,59 @@ func TestHandler_Unlock_SuccessResetsAttemptCounter(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
 	assert.Equal(t, 1, body.FailedAttempts)
+}
+
+// TestHandler_Unlock_ForeignAttemptsCannotLockTheOwnerOut locks the ordering
+// of the attempt reservation against the ownership check.
+//
+// The limiter is keyed by folder id, and folder ids are globally unique — so
+// user B can address user A's folder. If the slot were reserved BEFORE the
+// uid-scoped lookup that rejects B (as it was until this test landed), each of
+// B's in-flight requests would hold a slot against A's budget for the duration
+// of a database round-trip, and enough parallel ones would trip an hour-long
+// lockout on a folder B cannot even read. Reserving only after ownership is
+// proven makes B's requests cost A nothing.
+func TestHandler_Unlock_ForeignAttemptsCannotLockTheOwnerOut(t *testing.T) {
+	pool := testdb.New(t)
+	alice := testdb.SeedUser(t, pool, "alice@test.local", "user")
+	bob := testdb.SeedUser(t, pool, "bob@test.local", "user")
+
+	repo := folders.NewRepository(pool)
+	// ONE handler — the limiter lives on it, so both routers share the state
+	// an attacker would be trying to poison.
+	h := folders.NewHandler(repo, testUnlockKey, fakeMaster{})
+	routerFor := func(uid authctx.UserID) http.Handler {
+		r := chi.NewRouter()
+		r.Use(authctxtest.Middleware(uid))
+		r.Route("/folders", h.Mount)
+		return r
+	}
+
+	pw := "correct-horse"
+	f, err := repo.Create(context.Background(), alice, folders.CreateInput{Name: "Alice secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+	path := "/folders/" + strconv.FormatInt(f.ID, 10) + "/unlock"
+
+	// Bob hammers Alice's folder id in parallel. Every one of these must 404
+	// (the folder is not his) — the point is what they leave behind.
+	const burst = 50
+	var wg sync.WaitGroup
+	wg.Add(burst)
+	codes := make([]int, burst)
+	bobRouter := routerFor(bob)
+	for i := range burst {
+		go func() {
+			defer wg.Done()
+			rr := doJSON(t, bobRouter, http.MethodPost, path, map[string]string{"password": "guess"})
+			codes[i] = rr.Code
+		}()
+	}
+	wg.Wait()
+	for i, c := range codes {
+		require.Equal(t, http.StatusNotFound, c, "bob's request %d should be 404", i)
+	}
+
+	// Alice's budget must be untouched: the correct password still unlocks.
+	rr := doJSON(t, routerFor(alice), http.MethodPost, path, map[string]string{"password": pw})
+	require.Equal(t, http.StatusOK, rr.Code, "alice must not be locked out by bob's attempts")
 }

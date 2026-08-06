@@ -347,6 +347,32 @@ de um token roubado — todas as sessões daquela conta são encerradas e o dono
 e-mail. Sair está disponível em qualquer lugar; "sair de todos os dispositivos" revoga
 tudo. Trocar a senha mantém o dispositivo atual e derruba os demais.
 
+**Verificação em duas etapas.** Ative em **Configurações → Verificação em duas etapas**:
+escaneie o QR com qualquer app autenticador (Google Authenticator, Authy, 1Password,
+Bitwarden), confirme um código e guarde os dez **códigos de recuperação** de uso único —
+eles aparecem uma vez só e o servidor guarda apenas os hashes, então ele realmente não
+consegue mostrá-los de novo. No login, o mesmo campo de seis dígitos aceita um código do
+app, um código de recuperação ou um código enviado por e-mail. Administradores são
+obrigados a ter: com `AUTH_REQUIRE_2FA_FOR_ADMINS=1` (o padrão), um admin sem
+autenticador é conduzido pela configuração antes da primeira sessão, em vez de ficar
+trancado para fora.
+
+> **A chave que cifra os segredos do autenticador tem que ir no backup junto com o
+> banco.** Ou deixe o backend gerar `/data/auth_encryption.key` no primeiro boot, ou
+> defina `AUTH_ENCRYPTION_KEY` no `.env` (`openssl rand -base64 32`) — o valor da env
+> tem precedência, e se usar ele defina `AUTH_ENCRYPTION_AUTO_GENERATE=0`, para que
+> apagar a linha por engano vire falha de boot em vez de uma chave nova que abandona
+> em silêncio todo autenticador cadastrado.
+>
+> Diferente da chave de unlock de pastas, ela **não pode ser regerada** e não existe
+> re-cifra: sem ela toda conta cadastrada perde o segundo fator e precisa de um
+> administrador para limpar o cadastro.
+
+**Esqueceu a senha.** **Redefina** pela tela de acesso — o link chega por e-mail (ou no
+log do backend, com o driver `log` padrão), vale 30 minutos e pode ser usado uma vez.
+Usá-lo desconecta todos os outros dispositivos, e uma conta com verificação em duas
+etapas ainda precisa apresentar um código: a caixa postal sozinha nunca basta.
+
 **Ficou trancado para fora?** Com `AUTH_ENABLED=1` e sem acesso à única conta
 administradora, a recuperação é edição direta no banco — o mesmo status que a senha
 mestra de pastas já tem. Voltar `AUTH_ENABLED=0` e reiniciar devolve o comportamento

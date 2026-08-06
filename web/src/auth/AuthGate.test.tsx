@@ -10,7 +10,7 @@ import { http } from '../api/client'
 // it — re-importing under vi.resetModules() would instead build a second copy
 // of the whole module graph, giving AuthGate a different React context object
 // than the provider the harness renders, and useAuth would not find it.
-const mockedTokens: { invite?: string } = {}
+const mockedTokens: { invite?: string; reset?: string; verify?: string } = {}
 vi.mock('./authUrl', () => ({
   get urlTokens() {
     return mockedTokens
@@ -97,6 +97,174 @@ describe('AuthGate', () => {
     )
     expect(screen.getByRole('status')).toBeInTheDocument()
     expect(screen.queryByText('the app')).not.toBeInTheDocument()
+  })
+})
+
+describe('AuthGate second-factor routing', () => {
+  const pending = {
+    email: 'ad•••••@foldex.test',
+    methods: ['totp', 'recovery_code'],
+    maxAttempts: 5,
+  }
+
+  // The branch every administrator hits on their first sign-in once
+  // AUTH_REQUIRE_2FA_FOR_ADMINS is on — which is the default. Routing it to the
+  // ordinary code screen would show a six-digit field for an authenticator that
+  // does not exist yet.
+  it('shows the enrollment screen for an enroll_2fa challenge', async () => {
+    vi.spyOn(http, 'post').mockResolvedValue({
+      data: { secret: 'JBSWY3DPEHPK3PXP', qr_url: '/api/auth/2fa/totp/qr.png' },
+    } as never)
+
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      {
+        session: {
+          status: 'two_factor_required',
+          pending: { ...pending, purpose: 'enroll_2fa' },
+          features,
+        },
+      },
+    )
+
+    expect(
+      await screen.findByRole('heading', { name: /set up two-step verification/i }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('the app')).not.toBeInTheDocument()
+  })
+
+  it('shows the code screen for a totp challenge', async () => {
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      {
+        session: {
+          status: 'two_factor_required',
+          pending: { ...pending, purpose: 'totp' },
+          features,
+        },
+      },
+    )
+
+    expect(await screen.findByRole('heading', { name: /enter your code/i })).toBeInTheDocument()
+    expect(screen.queryByText('the app')).not.toBeInTheDocument()
+  })
+
+  // A half-finished login outranks a reset token: the user is mid-flow with a
+  // live pre-auth challenge, and dropping them on the reset form would strand
+  // it.
+  it('prefers the second factor over a reset token in the URL', async () => {
+    mockedTokens.reset = 'RESETTOKEN'
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      {
+        session: {
+          status: 'two_factor_required',
+          pending: { ...pending, purpose: 'totp' },
+          features,
+        },
+      },
+    )
+
+    expect(await screen.findByRole('heading', { name: /enter your code/i })).toBeInTheDocument()
+    mockedTokens.reset = undefined
+  })
+})
+
+describe('AuthGate password recovery', () => {
+  it('opens the forgot screen from the login screen and comes back', async () => {
+    mockMe({ status: 'anonymous', features })
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: null },
+    )
+
+    await userEvent.click(await screen.findByRole('button', { name: /forgot your password/i }))
+    expect(await screen.findByRole('heading', { name: /reset your password/i })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /back to sign in/i }))
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /sign in to foldex/i })).toBeInTheDocument(),
+    )
+  })
+
+  // A reset link is a credential that expires in 30 minutes; honouring it
+  // before the ordinary login form is the whole point of reading the URL.
+  it('shows the reset screen when the URL carries a token', async () => {
+    mockedTokens.reset = 'RESETTOKEN'
+    mockMe({ status: 'anonymous', features })
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: null },
+    )
+
+    expect(
+      await screen.findByRole('heading', { name: /set a new password/i }),
+    ).toBeInTheDocument()
+    mockedTokens.reset = undefined
+  })
+})
+
+describe('AuthGate e-mail confirmation', () => {
+  it('consumes a ?verify= token from the URL', async () => {
+    mockedTokens.verify = 'VERIFYTOKEN'
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+    mockMe({ status: 'anonymous', features })
+
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: null },
+    )
+
+    expect(await screen.findByRole('heading', { name: /e-mail confirmed/i })).toBeInTheDocument()
+    expect(post).toHaveBeenCalledWith('/api/auth/email/verify', { token: 'VERIFYTOKEN' })
+    mockedTokens.verify = undefined
+  })
+
+  // The branch sits ABOVE the authenticated short-circuit: a signed-in user who
+  // follows the link from their inbox must still learn whether it worked,
+  // rather than landing in the app with no feedback.
+  it('shows the outcome even to an already signed-in user', async () => {
+    mockedTokens.verify = 'VERIFYTOKEN'
+    vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: testAdminSession },
+    )
+
+    expect(await screen.findByRole('heading', { name: /e-mail confirmed/i })).toBeInTheDocument()
+    expect(screen.queryByText('the app')).not.toBeInTheDocument()
+    mockedTokens.verify = undefined
+  })
+
+  it('falls through to the app once dismissed', async () => {
+    mockedTokens.verify = 'VERIFYTOKEN'
+    vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: testAdminSession },
+    )
+
+    await userEvent.click(await screen.findByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(screen.getByText('the app')).toBeInTheDocument())
+    mockedTokens.verify = undefined
   })
 })
 

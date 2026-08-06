@@ -48,6 +48,22 @@ function toState(me: MeResponse): SessionState {
   if (me.status === 'setup_required') {
     return { status: 'setup_required', features: me.features ?? defaultFeatures }
   }
+  if (me.status === 'two_factor_required') {
+    // A half-finished login. It is a SESSION state rather than local state in
+    // the login screen because three different screens can produce it — login,
+    // invite acceptance and password reset — and all three funnel through
+    // `adopt`. Keeping it here means none of them needs to know the flow exists.
+    return {
+      status: 'two_factor_required',
+      pending: {
+        purpose: me.purpose ?? 'totp',
+        email: me.email ?? '',
+        methods: me.methods ?? [],
+        maxAttempts: me.max_attempts ?? 5,
+      },
+      features: me.features ?? defaultFeatures,
+    }
+  }
   return { status: 'anonymous', features: me.features ?? defaultFeatures }
 }
 

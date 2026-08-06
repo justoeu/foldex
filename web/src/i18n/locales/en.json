@@ -701,7 +701,8 @@
     "kicker": "welcome back",
     "title": "Sign in to Foldex",
     "subtitle": "Your bookmarks, notes and folders — right where you left them.",
-    "submit": "Sign in"
+    "submit": "Sign in",
+    "forgot": "Forgot your password?"
   },
   "auth_setup": {
     "kicker": "first run",
@@ -737,6 +738,96 @@
     "password_too_long": "The password is too long (maximum 72 bytes).",
     "password_mismatch": "The two passwords do not match.",
     "network": "Could not reach the server. Check your connection and try again.",
-    "generic": "Something went wrong. Please try again."
+    "generic": "Something went wrong. Please try again.",
+    "invalid_code": "That code is not valid."
+  },
+  "auth_otp": {
+    "kicker": "two-step verification",
+    "title": "Enter your code",
+    "subtitle": "Open your authenticator app and enter the 6-digit code for {{email}}.",
+    "field_label": "Six-digit verification code",
+    "digit_label": "Digit {{n}} of {{total}}",
+    "submit": "Verify",
+    "use_recovery": "Use a recovery code",
+    "use_app": "Use my authenticator app",
+    "send_email": "E-mail me a code",
+    "cancel": "Sign in as someone else",
+    "recovery_label": "Recovery code",
+    "recovery_placeholder": "XXXXX-XXXXX",
+    "email_sent": "If a code could be sent, it is on its way to {{email}}.",
+    "expired": "This sign-in attempt expired. Please sign in again.",
+    "locked_out": "Too many incorrect codes. Please sign in again.",
+    "invalid_with_attempts_one": "That code is not valid. {{count}} attempt left.",
+    "invalid_with_attempts_other": "That code is not valid. {{count}} attempts left."
+  },
+  "auth_forgot": {
+    "kicker": "account recovery",
+    "title": "Reset your password",
+    "subtitle": "Enter your e-mail address and we will send you a link to choose a new password.",
+    "submit": "Send reset link",
+    "back_to_login": "Back to sign in"
+  },
+  "auth_sent": {
+    "kicker": "check your inbox",
+    "title": "Check your e-mail",
+    "subtitle": "If an account exists for that address, a reset link is on its way.",
+    "body": "The link expires in 30 minutes and can be used once. If nothing arrives, check your spam folder.",
+    "back_to_login": "Back to sign in",
+    "try_again": "Use a different address"
+  },
+  "auth_reset": {
+    "kicker": "choose a new password",
+    "title": "Set a new password",
+    "subtitle": "Signing in everywhere else will be required again after this change.",
+    "new_password": "New password",
+    "confirm_password": "Confirm new password",
+    "link_invalid": "This reset link is no longer valid. Request a new one.",
+    "submit": "Save and sign in",
+    "back_to_login": "Back to sign in"
+  },
+  "twofa": {
+    "enroll_kicker": "required for administrators",
+    "enroll_title": "Set up two-step verification",
+    "enroll_subtitle": "Scan the code with your authenticator app, then enter the 6-digit code it shows.",
+    "enroll_failed": "Could not start the setup. Please try again.",
+    "qr_alt": "QR code for your authenticator app",
+    "cannot_scan": "Cannot scan? Show the setup key",
+    "hide_secret": "Hide the setup key",
+    "enter_code_hint": "Enter the 6-digit code from your app to finish.",
+    "confirm": "Turn on two-step verification",
+    "codes_kicker": "save these now",
+    "codes_title": "Your recovery codes",
+    "codes_subtitle": "Each code works once, and this is the only time they are shown.",
+    "codes_ack": "I have saved these codes somewhere safe.",
+    "codes_continue": "Continue",
+    "copy": "Copy codes",
+    "copied": "Copied",
+    "download": "Download as .txt",
+    "status_on": "Two-step verification is on.",
+    "status_off": "Two-step verification is off.",
+    "remaining_one": "{{count}} recovery code left.",
+    "remaining_other": "{{count}} recovery codes left.",
+    "required_note": "Administrators cannot turn this off.",
+    "disable": "Turn off two-step verification",
+    "regenerate": "Generate new recovery codes",
+    "current_password": "Current password",
+    "current_code": "Current 6-digit code",
+    "enable": "Turn on two-step verification",
+    "section_title": "Two-step verification",
+    "section_desc": "Require a code from your authenticator app in addition to your password.",
+    "disable_warning": "Your recovery codes will be deleted too. Anyone with your password alone will be able to sign in.",
+    "wrong_password": "That password is incorrect.",
+    "already_enabled": "Two-step verification is already enabled."
+  },
+  "auth_verify": {
+    "kicker": "confirm your address",
+    "working_title": "Confirming your e-mail…",
+    "done_title": "E-mail confirmed",
+    "done_body": "Thanks — this address is now confirmed.",
+    "invalid_title": "This link is no longer valid",
+    "invalid_body": "Confirmation links expire and can be used once. Request a new one from your account settings.",
+    "failed_title": "Could not confirm right now",
+    "failed_body": "The server could not be reached. The link is still valid — try again in a moment.",
+    "continue": "Continue"
   }
 }

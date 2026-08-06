@@ -18,6 +18,7 @@ import (
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/pwhash"
+	"foldex/internal/pkg/secrets"
 )
 
 // Password policy. The minimum matches the master recovery password (ADR-29) so
@@ -82,10 +83,23 @@ type Handler struct {
 	logger  *slog.Logger
 	baseURL string
 
+	// cipher encrypts TOTP seeds at rest. Nil only when the auth stack is not
+	// wired at all; every 2FA route checks it before use.
+	cipher              *secrets.Cipher
+	totpIssuer          string
+	require2FAForAdmins bool
+
 	loginByIP    *attemptlimit.Limiter
 	loginByEmail *attemptlimit.Limiter
 	bootstrapIP  *attemptlimit.Limiter
 	inviteIP     *attemptlimit.Limiter
+	pwResetIP    *attemptlimit.Limiter
+	pwResetEmail *attemptlimit.Limiter
+	// stepUpUser caps TOTP guesses on the SESSION-authenticated paths (disable,
+	// regenerate). Verify2FA is bounded by auth_challenge.attempts, which does
+	// not apply here because there is no challenge — without this the two
+	// step-up endpoints accept unlimited codes.
+	stepUpUser *attemptlimit.Limiter
 
 	// features is echoed on /me so the SPA can render the right affordances
 	// (e.g. "check the server log" instead of "check your inbox").
@@ -105,6 +119,15 @@ type HandlerConfig struct {
 	// and a link built from them is a password-reset-poisoning primitive — the
 	// mail goes to the real user but points at the attacker's host.
 	BaseURL string
+
+	// Cipher encrypts TOTP seeds at rest. Loaded via internal/pkg/keyfile with
+	// AllowEphemeral=false, because a regenerated key would make every stored
+	// seed undecryptable and lock every 2FA user out permanently.
+	Cipher     *secrets.Cipher
+	TOTPIssuer string
+	// Require2FAForAdmins diverts an administrator without an authenticator
+	// into mandatory enrollment instead of straight into a session.
+	Require2FAForAdmins bool
 }
 
 func NewHandler(cfg HandlerConfig) *Handler {
@@ -117,14 +140,24 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		logger:  cfg.Logger,
 		baseURL: strings.TrimRight(cfg.BaseURL, "/"),
 
+		cipher:              cfg.Cipher,
+		totpIssuer:          cfg.TOTPIssuer,
+		require2FAForAdmins: cfg.Require2FAForAdmins,
+
 		loginByIP:    attemptlimit.New(20, 15*time.Minute),
 		loginByEmail: attemptlimit.New(5, 15*time.Minute),
 		bootstrapIP:  attemptlimit.New(5, time.Hour),
 		inviteIP:     attemptlimit.New(20, time.Hour),
+		// A reset request costs an e-mail to a third party, so the per-address
+		// budget is tighter than the per-IP one: the abuse worth preventing is
+		// mailbombing one victim, not making many requests.
+		pwResetIP:    attemptlimit.New(10, time.Hour),
+		pwResetEmail: attemptlimit.New(3, time.Hour),
+		stepUpUser:   attemptlimit.New(5, 15*time.Minute),
 
 		features: map[string]any{
 			"google_oauth":   false, // PR4
-			"two_factor":     false, // PR3
+			"two_factor":     cfg.Cipher != nil,
 			"email_delivery": cfg.Mailer.Driver() == "smtp",
 		},
 	}
@@ -144,6 +177,25 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/invites/{token}", h.LookupInvite)
 	r.Post("/invites/accept", h.AcceptInvite)
 
+	r.Post("/password/forgot", h.ForgotPassword)
+	r.Post("/password/reset", h.ResetPassword)
+	// Unauthenticated: the confirmation link is followed from a mail client,
+	// often on a device with no session. The 256-bit token is the credential.
+	r.Post("/email/verify", h.VerifyEmail)
+
+	// The second-factor routes authenticate with the PRE-AUTH cookie, not a
+	// session — a session is exactly what they exist to produce.
+	r.Post("/2fa/verify", h.Verify2FA)
+	r.Post("/2fa/email", h.SendEmailOTP)
+
+	// Enrollment is reachable BOTH from a live session (adding a factor in
+	// settings) and from a pre-auth challenge (an admin forced to enrol before
+	// the login completes). Optional resolves a principal when one exists and
+	// lets the handler fall back to the challenge when it does not.
+	r.With(h.mw.Optional).Post("/2fa/totp/start", h.StartTOTP)
+	r.With(h.mw.Optional).Get("/2fa/totp/qr.png", h.TOTPQR)
+	r.With(h.mw.Optional).Post("/2fa/totp/confirm", h.ConfirmTOTP)
+
 	// /me resolves a principal when there is one but never rejects.
 	r.With(h.mw.Optional).Get("/me", h.Me)
 	// Logout must work on a half-dead session, so it reads the cookie directly
@@ -157,6 +209,10 @@ func (h *Handler) Mount(r chi.Router) {
 		pr.Get("/sessions", h.Sessions)
 		pr.Delete("/sessions/{id}", h.RevokeSession)
 		pr.Post("/password/change", h.ChangePassword)
+		pr.Post("/email/resend", h.SendEmailVerification)
+		pr.Get("/2fa", h.TwoFactorStatus)
+		pr.Post("/2fa/totp/disable", h.DisableTOTP)
+		pr.Post("/2fa/recovery-codes/regenerate", h.RegenerateRecoveryCodes)
 	})
 }
 
@@ -171,7 +227,10 @@ func (h *Handler) Mount(r chi.Router) {
 // documentation true.
 func (h *Handler) SweepLimiters(olderThan time.Duration) int {
 	n := 0
-	for _, l := range []*attemptlimit.Limiter{h.loginByIP, h.loginByEmail, h.bootstrapIP, h.inviteIP} {
+	for _, l := range []*attemptlimit.Limiter{
+		h.loginByIP, h.loginByEmail, h.bootstrapIP, h.inviteIP,
+		h.pwResetIP, h.pwResetEmail, h.stepUpUser,
+	} {
 		n += l.Sweep(olderThan)
 	}
 	return n
@@ -316,10 +375,9 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	h.loginByIP.CommitSuccess(ipKey)
 	h.loginByEmail.CommitSuccess(emailKey)
 
-	// PR3 diverts here into an auth_challenge when the account has a confirmed
-	// TOTP secret, or when an admin still has to enrol one. Until then a
-	// successful password IS the whole login.
-	h.issueAndRespond(w, r, user)
+	// The password is proven. Whether that IS the login depends on the account's
+	// second factor and on the admin policy.
+	h.completeLogin(w, r, user, false)
 }
 
 // Logout revokes the current session and always answers 204.
@@ -689,11 +747,16 @@ func validateEmail(email string) error {
 
 // clientIP returns the peer address for rate-limit keys.
 //
-// It uses RemoteAddr, which chi's middleware.RealIP has already overwritten
-// from X-Forwarded-For when the request came through the proxy. That header is
-// forgeable on a direct bind — which is precisely why the login path ALSO keys
-// a bucket by e-mail: if the IP bucket can be evaded by rotating a header, the
-// e-mail bucket still caps guesses against any single account.
+// It reads RemoteAddr, which server.trustedProxyRealIP has rewritten from
+// X-Forwarded-For only when the request arrived from a peer in
+// TRUSTED_PROXY_IPS. (That middleware replaced chi's middleware.RealIP, which
+// honoured the header from anyone.) Our middleware writes a bare IP with no
+// port, so SplitHostPort errors and the fallback below returns it unchanged.
+//
+// The login path ALSO keys a bucket by e-mail, and that redundancy is the
+// point: if the IP key is ever wrong — a misconfigured proxy list, a header we
+// were talked into believing — the e-mail bucket still caps guesses against any
+// single account.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

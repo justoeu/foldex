@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,6 +32,7 @@ import (
 	"foldex/internal/auth"
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/secrets"
 	"foldex/internal/testdb"
 )
 
@@ -40,12 +42,65 @@ import (
 
 // captureMailer records what would have been sent, so tests can read an invite
 // link without standing up an SMTP server.
-type captureMailer struct{ sent []mailer.Message }
+// captureMailer records what would have been sent.
+//
+// It is mutex-guarded because most sends are fire-and-forget from a detached
+// goroutine (reuse notifications, OTP delivery, recovery-code warnings), so the
+// test goroutine polling for a message races the sender writing it. Without the
+// lock this is a genuine data race that `go test -race` reports and a plain run
+// hides.
+type captureMailer struct {
+	mu sync.Mutex
+	// driver is what Driver() reports. It matters: the e-mail second factor is
+	// only offered when real SMTP is configured, because the `log` driver prints
+	// the message body to stdout and a second factor in the container log is not
+	// a second factor. Tests that exercise the OTP path set this to "smtp".
+	driver string
+	sent   []mailer.Message
+}
 
-func (c *captureMailer) Driver() string { return "log" }
+func (c *captureMailer) Driver() string {
+	if c.driver == "" {
+		return "log"
+	}
+	return c.driver
+}
 func (c *captureMailer) Send(_ context.Context, m mailer.Message) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.sent = append(c.sent, m)
 	return nil
+}
+
+// all returns a snapshot. Callers must not hold on to the slice header across
+// another send.
+func (c *captureMailer) all() []mailer.Message {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]mailer.Message(nil), c.sent...)
+}
+
+func (c *captureMailer) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sent = nil
+}
+
+// waitFor blocks until a message addressed to `to` arrives, and returns the
+// most recent one.
+func (c *captureMailer) waitFor(t *testing.T, to string) mailer.Message {
+	t.Helper()
+	var found mailer.Message
+	require.Eventually(t, func() bool {
+		for _, m := range c.all() {
+			if m.To == to {
+				found = m
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 10*time.Millisecond, "no mail delivered to %s", to)
+	return found
 }
 
 type harness struct {
@@ -53,6 +108,7 @@ type harness struct {
 	router http.Handler
 	mail   *captureMailer
 	repo   *auth.Repository
+	cipher *secrets.Cipher
 }
 
 const testBaseURL = "https://foldex.test"
@@ -68,17 +124,63 @@ func newHarness(t *testing.T) *harness {
 // FRESH rate-limit budget (the limiters are per-Handler, in memory) can rebuild
 // the router without paying for another container.
 func newHarnessOn(t *testing.T, pool *pgxpool.Pool) *harness {
+	return newHarnessWith(t, pool, harnessOpts{})
+}
+
+// harnessOpts turns on the parts of the stack that are off by default, so the
+// pre-2FA tests keep exercising the pre-2FA behaviour and only the tests that
+// mean to opt in pay for it.
+type harnessOpts struct {
+	TwoFactor           bool
+	Require2FAForAdmins bool
+	// SMTP makes the fake mailer report the "smtp" driver, which is what
+	// unlocks the e-mail second factor.
+	SMTP bool
+	// CipherSeed varies the encryption key. Non-zero stands up a stack that
+	// CANNOT read seeds another harness wrote.
+	CipherSeed byte
+}
+
+// testCipher is a FIXED key, so a test can assert that a seed encrypted in one
+// harness is readable by another — which is the property a rotated
+// AUTH_ENCRYPTION_KEY would break.
+func testCipher(t *testing.T) *secrets.Cipher { return testCipherSeeded(t, 0) }
+
+// testCipherSeeded builds a DIFFERENT key per seed, so a test can stand up a
+// second stack over the same database with the wrong key — which is exactly
+// what a regenerated key file produces on the next boot.
+func testCipherSeeded(t *testing.T, seed byte) *secrets.Cipher {
+	t.Helper()
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = seed + byte(i*7)
+	}
+	c, err := secrets.NewCipher(key)
+	require.NoError(t, err)
+	return c
+}
+
+func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness {
 	t.Helper()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	repo := auth.NewRepository(pool)
 	mail := &captureMailer{}
+	if opts.SMTP {
+		mail.driver = "smtp"
+	}
 	cookies := auth.CookieOptions{Secure: true}
 	mw := auth.NewMiddleware(repo, cookies, logger)
 
-	h := auth.NewHandler(auth.HandlerConfig{
+	cfg := auth.HandlerConfig{
 		Repo: repo, MW: mw, Mailer: mail, Cookies: cookies,
 		TTL: auth.DefaultTTL(), Logger: logger, BaseURL: testBaseURL,
-	})
+		Require2FAForAdmins: opts.Require2FAForAdmins,
+	}
+	if opts.TwoFactor || opts.Require2FAForAdmins {
+		cfg.Cipher = testCipherSeeded(t, opts.CipherSeed)
+		cfg.TOTPIssuer = "Foldex (test)"
+	}
+	h := auth.NewHandler(cfg)
 	admin := auth.NewAdminHandler(repo, mail, logger, testBaseURL)
 
 	r := chi.NewRouter()
@@ -100,7 +202,7 @@ func newHarnessOn(t *testing.T, pool *pgxpool.Pool) *harness {
 			})
 		})
 	})
-	return &harness{pool: pool, router: r, mail: mail, repo: repo}
+	return &harness{pool: pool, router: r, mail: mail, repo: repo, cipher: cfg.Cipher}
 }
 
 // client is a tiny cookie-jar HTTP client over the in-process router.
@@ -831,10 +933,10 @@ func TestRefresh_WarnsTheOwnerAboutReuse(t *testing.T) {
 
 	// The notification is fire-and-forget on a detached context so the response
 	// never waits on SMTP; poll briefly rather than sleeping a fixed amount.
-	require.Eventually(t, func() bool { return len(h.mail.sent) > 0 },
+	require.Eventually(t, func() bool { return len(h.mail.all()) > 0 },
 		3*time.Second, 25*time.Millisecond, "the owner must be told their sessions were killed")
-	assert.Equal(t, "admin@example.com", h.mail.sent[0].To)
-	assert.NotContains(t, h.mail.sent[0].Text, "http",
+	assert.Equal(t, "admin@example.com", h.mail.all()[0].To)
+	assert.NotContains(t, h.mail.all()[0].Text, "http",
 		"the warning must carry no link — that shape is indistinguishable from phishing")
 }
 
@@ -1074,9 +1176,9 @@ func TestInvite_FullRoundTrip(t *testing.T) {
 	tok := inviteToken(t, rec)
 
 	// The link must have been mailed too, not only returned.
-	require.Len(t, h.mail.sent, 1)
-	assert.Equal(t, "newcomer@example.com", h.mail.sent[0].To)
-	assert.Contains(t, h.mail.sent[0].Text, tok)
+	require.Len(t, h.mail.all(), 1)
+	assert.Equal(t, "newcomer@example.com", h.mail.all()[0].To)
+	assert.Contains(t, h.mail.all()[0].Text, tok)
 
 	// The accept screen resolves the token to show which address it binds.
 	newcomer := h.client(t)
@@ -1662,7 +1764,9 @@ func TestSweeper_PrunesMemoryEvenWhenTheDatabaseSweepFails(t *testing.T) {
 // the alternative is a fault-injecting driver wrapper for what is mechanical
 // error handling.
 func TestHandlers_DegradeCleanlyWhenTheDatabaseIsUnreachable(t *testing.T) {
-	h := newHarness(t)
+	pool := testdb.New(t)
+	require.NoError(t, testdb.Reset(context.Background(), pool))
+	h := newHarnessWith(t, pool, harnessOpts{TwoFactor: true, SMTP: true})
 	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
 	// Snapshot the cookies while the session still resolves, so the requests
@@ -1695,6 +1799,26 @@ func TestHandlers_DegradeCleanlyWhenTheDatabaseIsUnreachable(t *testing.T) {
 		{"logout all", http.MethodPost, "/api/auth/logout-all", nil},
 		{"change password", http.MethodPost, "/api/auth/password/change", map[string]string{
 			"current_password": "a good password", "new_password": "another good password"}},
+
+		// The PR3 surface. Same contract: a dead database is a clean refusal,
+		// never a partial success and never a driver string on the wire.
+		{"reset password", http.MethodPost, "/api/auth/password/reset", map[string]string{
+			"token": "t", "password": "a good password"}},
+		{"2fa verify", http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": "123456"}},
+		{"2fa email", http.MethodPost, "/api/auth/2fa/email", nil},
+		{"2fa totp start", http.MethodPost, "/api/auth/2fa/totp/start", map[string]string{
+			"password": "a good password"}},
+		{"2fa totp qr", http.MethodGet, "/api/auth/2fa/totp/qr.png", nil},
+		{"2fa totp confirm", http.MethodPost, "/api/auth/2fa/totp/confirm", map[string]string{
+			"code": "123456"}},
+		{"2fa status", http.MethodGet, "/api/auth/2fa", nil},
+		{"2fa totp disable", http.MethodPost, "/api/auth/2fa/totp/disable", map[string]string{
+			"password": "a good password", "code": "123456"}},
+		{"2fa regenerate codes", http.MethodPost, "/api/auth/2fa/recovery-codes/regenerate",
+			map[string]string{"password": "a good password", "code": "123456"}},
+		{"email verify", http.MethodPost, "/api/auth/email/verify", map[string]string{
+			"code": "123456"}},
+		{"email resend", http.MethodPost, "/api/auth/email/resend", nil},
 	}
 
 	for _, tc := range cases {
@@ -1711,6 +1835,24 @@ func TestHandlers_DegradeCleanlyWhenTheDatabaseIsUnreachable(t *testing.T) {
 			}
 		})
 	}
+}
+
+// /password/forgot is the ONE endpoint that must still answer 202 with the
+// database gone.
+//
+// Its contract is "the response never depends on what the server found", and a
+// database outage is exactly the kind of thing that would otherwise turn it
+// into an oracle: a 500 for a lookup that failed and a 202 for one that
+// succeeded would separate the two cases the endpoint exists to blur.
+func TestForgotPassword_StillAnswers202WithoutADatabase(t *testing.T) {
+	h := newHarness(t)
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	h.pool.Close()
+
+	rec := h.client(t).do(http.MethodPost, "/api/auth/password/forgot",
+		map[string]string{"email": "admin@example.com"})
+	assert.Equal(t, http.StatusAccepted, rec.Code,
+		"a database outage made the reset endpoint distinguishable")
 }
 
 // Logout must succeed even with no database at all. It is the one operation
@@ -1965,4 +2107,68 @@ func TestAcceptInvite_ConflictsWhenTheAddressWasClaimedMeanwhile(t *testing.T) {
 	require.NoError(t, h.pool.QueryRow(context.Background(),
 		`SELECT accepted_at::text FROM invite WHERE email_normalized = 'racer@example.com'`).Scan(&accepted))
 	assert.Nil(t, accepted, "a failed acceptance must not consume the invitation")
+}
+
+// TestAdmin_ConcurrentMutualDemotionCannotEmptyTheAdminSet drives the guard at
+// the REPOSITORY level, which is the only layer where the race it defends
+// against actually exists.
+//
+// The HTTP-level sibling of this test (above) is worth keeping — it proves the
+// handler surfaces the right status codes — but it cannot reliably force the
+// interleaving: each request first resolves a session, and that variable work
+// happens before UpdateUser opens its transaction, so the two critical
+// sections rarely overlap. Calling UpdateUser directly puts the barrier
+// immediately before the transaction, where a missing advisory lock has
+// nowhere to hide: both transactions would count two admins, both would demote,
+// and the instance would be left with none — a state only direct SQL can undo.
+//
+// Rounds, rather than a single attempt, because the failure being excluded is
+// probabilistic: one lucky serialisation would let a broken guard pass.
+func TestAdmin_ConcurrentMutualDemotionCannotEmptyTheAdminSet(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	userRole := authctx.RoleUser
+
+	const rounds = 20
+	for round := range rounds {
+		// The guard counts every active admin, so the round is only meaningful
+		// when these two are the only ones. Survivors of earlier rounds are
+		// demoted rather than deleted (cheaper, and it keeps their ids taken).
+		_, err := h.pool.Exec(ctx, `UPDATE app_user SET role = 'user' WHERE role = 'admin'`)
+		require.NoError(t, err)
+		a := testdb.SeedUser(t, h.pool, fmt.Sprintf("race-a%d@example.com", round), "admin")
+		b := testdb.SeedUser(t, h.pool, fmt.Sprintf("race-b%d@example.com", round), "admin")
+
+		var errs [2]error
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[0] = h.repo.UpdateUser(ctx, a, nil, &userRole, nil)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[1] = h.repo.UpdateUser(ctx, b, nil, &userRole, nil)
+		}()
+		close(start)
+		wg.Wait()
+
+		var admins int
+		require.NoError(t, h.pool.QueryRow(ctx,
+			`SELECT count(*) FROM app_user WHERE role = 'admin' AND status = 'active'`).Scan(&admins))
+		require.GreaterOrEqual(t, admins, 1,
+			"round %d: both demotions landed (errs=%v) — no administrator left", round, errs)
+
+		refused := 0
+		for _, e := range errs {
+			if errors.Is(e, auth.ErrLastAdmin) {
+				refused++
+			}
+		}
+		require.Equal(t, 1, refused,
+			"round %d: exactly one demotion must trip ErrLastAdmin, got %v", round, errs)
+	}
 }

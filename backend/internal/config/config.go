@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -73,6 +74,33 @@ type Config struct {
 	AuthSweepIntervalMin int
 	AuthSweepRetainDays  int
 
+	// AuthEncryptionKey (base64) encrypts TOTP seeds at rest. Unlike the
+	// folder-unlock key, this one CANNOT be regenerated: losing it makes every
+	// stored seed undecryptable and locks every 2FA user out permanently. That
+	// is why the path variable is mandatory when auto-generating — see
+	// internal/pkg/keyfile's AllowEphemeral.
+	AuthEncryptionKey     string
+	AuthEncryptionKeyPath string
+	AuthEncryptionAutoGen bool
+
+	// AuthTOTPIssuer is the label authenticator apps display. It defaults to
+	// the public URL's host so a user with two foldex instances can tell the
+	// two entries apart.
+	AuthTOTPIssuer string
+
+	// TrustedProxyIPs (CSV of IPs or CIDRs) is the set of peers whose
+	// X-Forwarded-For header may be believed. Empty means "believe nobody",
+	// which is the right default for the loopback bind that ships: a spoofable
+	// client address is worse than a coarse one, because it lets an attacker
+	// both evade their own rate-limit bucket and pin the cost on someone else.
+	TrustedProxyIPs string
+
+	// AuthRequire2FAForAdmins forces administrators through TOTP enrollment
+	// before they can use the app. An admin can invite, promote and delete
+	// accounts, so a stolen admin password should not be one factor away from
+	// the whole instance.
+	AuthRequire2FAForAdmins bool
+
 	Mail        MailConfig
 	ObjectStore ObjectStoreConfig
 
@@ -118,6 +146,14 @@ func Load() (Config, error) {
 		AuthRefreshGraceSec:  envInt("AUTH_REFRESH_GRACE_SEC", 10),
 		AuthSweepIntervalMin: envInt("AUTH_SWEEP_INTERVAL_MIN", 60),
 		AuthSweepRetainDays:  envInt("AUTH_SWEEP_RETAIN_DAYS", 7),
+
+		AuthEncryptionKey:     os.Getenv("AUTH_ENCRYPTION_KEY"),
+		AuthEncryptionKeyPath: envOr("AUTH_ENCRYPTION_KEY_PATH", "/data/auth_encryption.key"),
+		AuthEncryptionAutoGen: envBool("AUTH_ENCRYPTION_AUTO_GENERATE", true),
+		AuthTOTPIssuer:        os.Getenv("AUTH_TOTP_ISSUER"),
+
+		TrustedProxyIPs:         os.Getenv("TRUSTED_PROXY_IPS"),
+		AuthRequire2FAForAdmins: envBool("AUTH_REQUIRE_2FA_FOR_ADMINS", true),
 		Mail: MailConfig{
 			Driver:             envOr("MAIL_DRIVER", "log"),
 			Host:               os.Getenv("MAIL_HOST"),
@@ -204,6 +240,31 @@ func (c *Config) normalizeAuth() {
 	// anonymous. Deriving it from the bind removes the footgun: loopback (dev,
 	// plain HTTP) gets Secure=false, anything network-reachable gets true.
 	c.AuthCookieSecure = !isLocalBind(c.BindAddr)
+
+	// The issuer is what an authenticator app shows next to the code. Falling
+	// back to the public URL's host beats a hardcoded "Foldex": a user running
+	// two instances would otherwise get two indistinguishable entries and no
+	// way to tell which code belongs to which.
+	if c.AuthTOTPIssuer == "" {
+		c.AuthTOTPIssuer = issuerFromURL(c.AuthPublicURL)
+	}
+}
+
+// issuerFromURL reduces a public URL to a display label.
+func issuerFromURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "Foldex"
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "Foldex"
+	}
+	// A colon in the issuer breaks the otpauth:// label grammar, which uses it
+	// as the issuer/account separator — some apps then display the account name
+	// as part of the issuer. Hostname() already dropped the port; this guards
+	// the remaining exotic cases.
+	return "Foldex (" + strings.ReplaceAll(host, ":", "-") + ")"
 }
 
 // validateSecureDefaults refuses to boot when the API would be network-

@@ -1,3 +1,12 @@
+/**
+ * The minimum password length, mirroring the backend's auth.MinPasswordLen.
+ *
+ * Shared rather than repeated per screen: the value is duplicated across a
+ * process boundary already, and a third copy inside the frontend is the one
+ * that silently disagrees with the hint shown next to the field.
+ */
+export const MIN_PASSWORD_LEN = 8
+
 export type Role = 'admin' | 'user'
 
 export type AuthUser = {
@@ -20,7 +29,22 @@ export type AuthFeatures = {
 }
 
 /**
- * The four states GET /api/auth/me can report.
+ * A login that stopped at the second factor.
+ *
+ * `email` is MASKED by the server. The client never receives the full address
+ * here, because this payload is also what a successful credential-stuffing hit
+ * would see.
+ */
+export type TwoFactorPending = {
+  /** 'totp' = present a code; 'enroll_2fa' = an admin must set one up first. */
+  purpose: 'totp' | 'enroll_2fa'
+  email: string
+  methods: string[]
+  maxAttempts: number
+}
+
+/**
+ * The states GET /api/auth/me and the credential endpoints can report.
  *
  * `setup_required` is distinct from `anonymous` on purpose: the gate has to
  * decide between the login screen and the first-run setup screen before it can
@@ -31,6 +55,7 @@ export type SessionState =
   | { status: 'loading' }
   | { status: 'anonymous'; features: AuthFeatures }
   | { status: 'setup_required'; features: AuthFeatures }
+  | { status: 'two_factor_required'; pending: TwoFactorPending; features: AuthFeatures }
   | { status: 'authenticated'; user: AuthUser; csrfToken: string; features: AuthFeatures }
 
 export const defaultFeatures: AuthFeatures = {

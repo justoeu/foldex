@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from '../components/icons'
 import { PasswordStrength } from '../components/PasswordStrength'
+import { TwoFactorSection } from '../components/TwoFactorSection'
 import { useFolders, useResetFolderPassword } from '../api/folders'
 import {
   useMasterPasswordStatus,
@@ -31,6 +32,7 @@ export function SettingsPage({ onEditFolder }: Props) {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <TwoFactorSection />
         <MasterPasswordSection />
         <LockedFoldersSection onEditFolder={onEditFolder} />
       </div>

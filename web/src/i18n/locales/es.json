@@ -701,7 +701,8 @@
     "kicker": "bienvenido de nuevo",
     "title": "Entrar en Foldex",
     "subtitle": "Tus enlaces, notas y carpetas — justo donde los dejaste.",
-    "submit": "Entrar"
+    "submit": "Entrar",
+    "forgot": "¿Olvidaste tu contraseña?"
   },
   "auth_setup": {
     "kicker": "primera ejecución",
@@ -737,6 +738,96 @@
     "password_too_long": "La contraseña es demasiado larga (máximo 72 bytes).",
     "password_mismatch": "Las dos contraseñas no coinciden.",
     "network": "No se pudo contactar con el servidor. Comprueba la conexión e inténtalo de nuevo.",
-    "generic": "Algo salió mal. Inténtalo de nuevo."
+    "generic": "Algo salió mal. Inténtalo de nuevo.",
+    "invalid_code": "Ese código no es válido."
+  },
+  "auth_otp": {
+    "kicker": "verificación en dos pasos",
+    "title": "Introduce tu código",
+    "subtitle": "Abre tu aplicación de autenticación e introduce el código de 6 dígitos de {{email}}.",
+    "field_label": "Código de verificación de seis dígitos",
+    "digit_label": "Dígito {{n}} de {{total}}",
+    "submit": "Verificar",
+    "use_recovery": "Usar un código de recuperación",
+    "use_app": "Usar mi aplicación de autenticación",
+    "send_email": "Enviarme un código por correo",
+    "cancel": "Entrar con otra cuenta",
+    "recovery_label": "Código de recuperación",
+    "recovery_placeholder": "XXXXX-XXXXX",
+    "email_sent": "Si se pudo enviar un código, va camino a {{email}}.",
+    "expired": "Este intento de acceso ha caducado. Inicia sesión de nuevo.",
+    "locked_out": "Demasiados códigos incorrectos. Inicia sesión de nuevo.",
+    "invalid_with_attempts_one": "Ese código no es válido. Queda {{count}} intento.",
+    "invalid_with_attempts_other": "Ese código no es válido. Quedan {{count}} intentos."
+  },
+  "auth_forgot": {
+    "kicker": "recuperación de cuenta",
+    "title": "Restablecer tu contraseña",
+    "subtitle": "Introduce tu correo y te enviaremos un enlace para elegir una nueva contraseña.",
+    "submit": "Enviar enlace",
+    "back_to_login": "Volver al acceso"
+  },
+  "auth_sent": {
+    "kicker": "revisa tu bandeja",
+    "title": "Revisa tu correo",
+    "subtitle": "Si existe una cuenta para esa dirección, el enlace va en camino.",
+    "body": "El enlace caduca en 30 minutos y se puede usar una vez. Si no llega nada, revisa el spam.",
+    "back_to_login": "Volver al acceso",
+    "try_again": "Usar otra dirección"
+  },
+  "auth_reset": {
+    "kicker": "elige una nueva contraseña",
+    "title": "Define una nueva contraseña",
+    "subtitle": "Tras este cambio habrá que iniciar sesión de nuevo en los demás dispositivos.",
+    "new_password": "Nueva contraseña",
+    "confirm_password": "Confirma la nueva contraseña",
+    "link_invalid": "Este enlace ya no es válido. Solicita uno nuevo.",
+    "submit": "Guardar y entrar",
+    "back_to_login": "Volver al acceso"
+  },
+  "twofa": {
+    "enroll_kicker": "obligatorio para administradores",
+    "enroll_title": "Configurar la verificación en dos pasos",
+    "enroll_subtitle": "Escanea el código con tu aplicación de autenticación e introduce el código de 6 dígitos que muestre.",
+    "enroll_failed": "No se pudo iniciar la configuración. Inténtalo de nuevo.",
+    "qr_alt": "Código QR para tu aplicación de autenticación",
+    "cannot_scan": "¿No puedes escanear? Mostrar la clave",
+    "hide_secret": "Ocultar la clave",
+    "enter_code_hint": "Introduce el código de 6 dígitos de tu aplicación para terminar.",
+    "confirm": "Activar la verificación en dos pasos",
+    "codes_kicker": "guárdalos ahora",
+    "codes_title": "Tus códigos de recuperación",
+    "codes_subtitle": "Cada código funciona una vez, y esta es la única vez que se muestran.",
+    "codes_ack": "He guardado estos códigos en un lugar seguro.",
+    "codes_continue": "Continuar",
+    "copy": "Copiar códigos",
+    "copied": "Copiado",
+    "download": "Descargar como .txt",
+    "status_on": "La verificación en dos pasos está activada.",
+    "status_off": "La verificación en dos pasos está desactivada.",
+    "remaining_one": "Queda {{count}} código de recuperación.",
+    "remaining_other": "Quedan {{count}} códigos de recuperación.",
+    "required_note": "Los administradores no pueden desactivarla.",
+    "disable": "Desactivar la verificación en dos pasos",
+    "regenerate": "Generar nuevos códigos de recuperación",
+    "current_password": "Contraseña actual",
+    "current_code": "Código actual de 6 dígitos",
+    "enable": "Activar la verificación en dos pasos",
+    "section_title": "Verificación en dos pasos",
+    "section_desc": "Exigir un código de tu aplicación de autenticación además de la contraseña.",
+    "disable_warning": "Tus códigos de recuperación también se borrarán. Quien tenga solo tu contraseña podrá entrar.",
+    "wrong_password": "Esa contraseña es incorrecta.",
+    "already_enabled": "La verificación en dos pasos ya está activada."
+  },
+  "auth_verify": {
+    "kicker": "confirma tu dirección",
+    "working_title": "Confirmando tu correo…",
+    "done_title": "Correo confirmado",
+    "done_body": "Listo — esta dirección está confirmada.",
+    "invalid_title": "Este enlace ya no es válido",
+    "invalid_body": "Los enlaces de confirmación caducan y se usan una vez. Pide otro en los ajustes de tu cuenta.",
+    "failed_title": "No se pudo confirmar ahora",
+    "failed_body": "No se pudo contactar con el servidor. El enlace sigue siendo válido — inténtalo en un momento.",
+    "continue": "Continuar"
   }
 }

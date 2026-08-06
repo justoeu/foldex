@@ -76,6 +76,27 @@ func (o CookieOptions) SetSession(w http.ResponseWriter, tok issuedTokens) {
 	http.SetCookie(w, csrf)
 }
 
+// SetPreAuth writes the between-password-and-second-factor cookie.
+//
+// It is scoped to /api/auth like the refresh cookie, and for a stronger reason:
+// this credential proves only that a password was accepted, so it must not be
+// attached to a single data route. Strict SameSite because nothing legitimate
+// ever navigates cross-site into a half-finished login.
+func (o CookieOptions) SetPreAuth(w http.ResponseWriter, token string, ttl time.Duration) {
+	http.SetCookie(w, o.base(CookiePreAuth, token, refreshPath, http.SameSiteStrictMode, int(ttl.Seconds())))
+}
+
+// ClearPreAuth expires the pre-auth cookie without touching the session.
+//
+// Needed on its own because the two lifecycles diverge: finishing a second
+// factor clears the pre-auth cookie and SETS the session cookies, so calling
+// ClearSession there would wipe the credentials just issued.
+func (o CookieOptions) ClearPreAuth(w http.ResponseWriter) {
+	ck := o.base(CookiePreAuth, "", refreshPath, http.SameSiteStrictMode, -1)
+	ck.Expires = time.Unix(0, 0)
+	http.SetCookie(w, ck)
+}
+
 // ClearSession expires every auth cookie.
 //
 // Each one is cleared with the SAME path it was set with. A browser keys
