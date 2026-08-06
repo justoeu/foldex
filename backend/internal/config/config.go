@@ -313,11 +313,20 @@ func issuerFromURL(raw string) string {
 // single-user local threat model. Any non-loopback bind requires a non-empty
 // SHARED_SECRET.
 func (c Config) validateSecureDefaults() error {
-	if !isLocalBind(c.BindAddr) && c.SharedSecret == "" {
+	// The question this asks is "can anyone who reaches the port read the
+	// data", and until ADR-30 the only possible answer was SHARED_SECRET. Now
+	// AUTH_ENABLED answers it properly: it does not merely gate the surface,
+	// it identifies the caller and scopes every row to them. Continuing to
+	// demand a header that authenticates nobody would mean the documentation
+	// (which deprecates it) and the boot check disagree — and the shipped
+	// compose stack, which binds 0.0.0.0 for nginx and ships no secret, would
+	// refuse to start.
+	if !isLocalBind(c.BindAddr) && !c.AuthEnabled && c.SharedSecret == "" {
 		return errors.New(
 			"insecure config: BACKEND_BIND=" + c.BindAddr +
-				" (non-loopback) AND SHARED_SECRET is empty — " +
-				"set SHARED_SECRET, or bind to 127.0.0.1",
+				" (non-loopback) with AUTH_ENABLED=0 AND SHARED_SECRET empty — " +
+				"every request would be attributed to the bootstrap administrator " +
+				"with no credential at all. Turn AUTH_ENABLED on, or bind to 127.0.0.1",
 		)
 	}
 	// MAIL_INSECURE_SKIP_VERIFY exists for a self-signed dev SMTP server. Aimed

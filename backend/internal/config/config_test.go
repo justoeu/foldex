@@ -390,3 +390,29 @@ func TestLoad_PublicNumericIDsOptIn(t *testing.T) {
 		t.Error("PUBLIC_NUMERIC_IDS=1 must re-enable the legacy numeric form")
 	}
 }
+
+// The shipped compose stack binds 0.0.0.0 so nginx can reach the backend, and
+// .env.example ships no SHARED_SECRET. Before authentication existed that
+// combination was genuinely unsafe and the guard was right to refuse it; now
+// AUTH_ENABLED answers the same question properly, and demanding a deprecated
+// header on top would mean the quickstart cannot boot.
+func TestValidateSecureDefaults_AuthSatisfiesTheNonLoopbackGuard(t *testing.T) {
+	shipped := Config{BindAddr: "0.0.0.0", SharedSecret: "", AuthEnabled: true}
+	if err := shipped.validateSecureDefaults(); err != nil {
+		t.Fatalf("the shipped compose configuration must boot: %v", err)
+	}
+
+	// Turning auth OFF on that same bind is the case worth refusing: every
+	// request would be attributed to the bootstrap administrator, so anyone who
+	// reaches the port owns the library.
+	unguarded := Config{BindAddr: "0.0.0.0", SharedSecret: "", AuthEnabled: false}
+	if err := unguarded.validateSecureDefaults(); err == nil {
+		t.Error("AUTH_ENABLED=0 with no SHARED_SECRET on a network bind must be refused")
+	}
+
+	// And the old escape hatch still works for someone who wants auth off.
+	legacy := Config{BindAddr: "0.0.0.0", SharedSecret: "s3cret", AuthEnabled: false}
+	if err := legacy.validateSecureDefaults(); err != nil {
+		t.Errorf("SHARED_SECRET must still satisfy the guard: %v", err)
+	}
+}
