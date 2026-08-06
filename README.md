@@ -365,17 +365,16 @@ code e-mailed to you. Administrators are required to have it: with
 `AUTH_REQUIRE_2FA_FOR_ADMINS=1` (the default) an admin without an authenticator is
 walked through setting one up before their first session, rather than being locked out.
 
-> **Running outside Docker?** `AUTH_ENCRYPTION_KEY_PATH` defaults to
-> `/data/auth_encryption.key`, which a bare-host `make run` cannot write. Point it
-> somewhere writable (`AUTH_ENCRYPTION_KEY_PATH=./.foldex/auth_encryption.key`) or
-> set `AUTH_ENCRYPTION_KEY` directly — the backend refuses to start rather than
-> run with a key it cannot persist.
-
-> **Back up `/data/auth_encryption.key` with your database.** It encrypts the
-> authenticator secrets, and unlike the folder-unlock key it **cannot be regenerated**:
-> without it every enrolled account loses its second factor and needs an administrator
-> to clear the enrollment. The backend refuses to start rather than quietly minting a
-> replacement.
+> **The key that encrypts the authenticator secrets must be backed up with your
+> database.** Either let the backend generate `/data/auth_encryption.key` on first
+> boot, or set `AUTH_ENCRYPTION_KEY` in `.env` (`openssl rand -base64 32`) — the env
+> value wins, and if you use it, set `AUTH_ENCRYPTION_AUTO_GENERATE=0` so a
+> dropped line becomes a boot failure instead of a fresh key that silently orphans
+> every enrolled authenticator.
+>
+> Unlike the folder-unlock key it **cannot be regenerated** and there is no
+> re-encryption: without it every enrolled account loses its second factor and needs
+> an administrator to clear the enrollment.
 
 **Forgot your password.** **Reset it** from the sign-in screen — a link arrives by
 e-mail (or in the backend log with the default `log` driver), is good for 30 minutes and

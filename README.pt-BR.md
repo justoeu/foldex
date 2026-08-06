@@ -357,18 +357,16 @@ obrigados a ter: com `AUTH_REQUIRE_2FA_FOR_ADMINS=1` (o padrão), um admin sem
 autenticador é conduzido pela configuração antes da primeira sessão, em vez de ficar
 trancado para fora.
 
-> **Rodando fora do Docker?** `AUTH_ENCRYPTION_KEY_PATH` tem default
-> `/data/auth_encryption.key`, que um `make run` direto no host não consegue
-> escrever. Aponte para um caminho gravável
-> (`AUTH_ENCRYPTION_KEY_PATH=./.foldex/auth_encryption.key`) ou defina
-> `AUTH_ENCRYPTION_KEY` direto — o backend se recusa a subir em vez de rodar com
-> uma chave que não consegue persistir.
-
-> **Faça backup de `/data/auth_encryption.key` junto com o banco.** Ela cifra os segredos
-> do autenticador e, diferente da chave de unlock de pastas, **não pode ser regerada**:
-> sem ela toda conta cadastrada perde o segundo fator e precisa de um administrador para
-> limpar o cadastro. O backend se recusa a subir em vez de gerar uma substituta em
-> silêncio.
+> **A chave que cifra os segredos do autenticador tem que ir no backup junto com o
+> banco.** Ou deixe o backend gerar `/data/auth_encryption.key` no primeiro boot, ou
+> defina `AUTH_ENCRYPTION_KEY` no `.env` (`openssl rand -base64 32`) — o valor da env
+> tem precedência, e se usar ele defina `AUTH_ENCRYPTION_AUTO_GENERATE=0`, para que
+> apagar a linha por engano vire falha de boot em vez de uma chave nova que abandona
+> em silêncio todo autenticador cadastrado.
+>
+> Diferente da chave de unlock de pastas, ela **não pode ser regerada** e não existe
+> re-cifra: sem ela toda conta cadastrada perde o segundo fator e precisa de um
+> administrador para limpar o cadastro.
 
 **Esqueceu a senha.** **Redefina** pela tela de acesso — o link chega por e-mail (ou no
 log do backend, com o driver `log` padrão), vale 30 minutos e pode ser usado uma vez.
