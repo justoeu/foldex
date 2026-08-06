@@ -184,50 +184,62 @@ SAST findings land in the repo **Security ▸ Code scanning** tab (SARIF upload)
 
 ## Smoke test (sanity check after `make up`)
 
+Accounts are on, so `/api/*` needs a credential. Open <http://localhost:9088>, complete the
+setup screen, then create an **API token** under Settings → API tokens and export it:
+
 ```bash
-# 1. Backend up?
+AUTH="Authorization: Bearer fx_1_your-token-here"
+JSON="Content-Type: application/json"
+```
+
+```bash
+# 1. Backend up? (/healthz is public — it is the one endpoint that needs nothing.)
 curl -s localhost:9089/healthz | jq .
 
 # 2. Create a tag.
-curl -s -X POST localhost:9089/api/tags \
-  -H 'Content-Type: application/json' \
+curl -s -X POST localhost:9089/api/tags -H "$AUTH" -H "$JSON" \
   -d '{"name":"jira","color":"#1f6feb","icon":"🪲"}' | jq .
 
 # 3. Create a link tied to that tag (preview is enqueued async).
-curl -s -X POST localhost:9089/api/links \
-  -H 'Content-Type: application/json' \
+curl -s -X POST localhost:9089/api/links -H "$AUTH" -H "$JSON" \
   -d '{"url":"https://news.ycombinator.com","title":"HN","tag_ids":[1]}' | jq .
 
 # 4. Wait ~2s for the worker; then fetch — `preview_status` should be "ok".
-sleep 3 && curl -s localhost:9089/api/links/1 | jq '.preview_status, .og_image_url'
+sleep 3 && curl -s localhost:9089/api/links/1 -H "$AUTH" -H "$JSON" | jq '.preview_status, .og_image_url'
 
-# 5. Resolve the short link (302 + counter bump).
-curl -sI localhost:9089/go/1 | head -3
+# 5. Resolve the short link (302 + counter bump). By SLUG: numeric /go/1 is off
+#    by default now, because that route resolves with no session and link ids
+#    are shared across accounts. See PUBLIC_NUMERIC_IDS.
+curl -sI localhost:9089/go/hn | head -3
 
 # 6. Create a note (server-side sanitized rich HTML) and render its public page.
-curl -s -X POST localhost:9089/api/notes \
-  -H 'Content-Type: application/json' \
+curl -s -X POST localhost:9089/api/notes -H "$AUTH" -H "$JSON" \
   -d '{"title":"Scratchpad","body_html":"<p>Hello <strong>world</strong></p>"}' | jq .
 curl -s localhost:9089/n/scratchpad | grep -o '<h1>.*</h1>'
 
 # 7. Create a password-protected folder, confirm its contents are gated
 #    without the unlock token, then confirm they unlock with it.
-curl -s -X POST localhost:9089/api/folders \
-  -H 'Content-Type: application/json' \
+curl -s -X POST localhost:9089/api/folders -H "$AUTH" -H "$JSON" \
   -d '{"name":"Private","password":"hunter22"}' | jq .
-curl -s localhost:9089/api/entries?folder_id=1 | jq .              # 403 folder_locked
-TOKEN=$(curl -s -X POST localhost:9089/api/folders/1/unlock \
-  -H 'Content-Type: application/json' -d '{"password":"hunter22"}' | jq -r .unlock_token)
-curl -s -H "X-Foldex-Folder-Unlock: $TOKEN" localhost:9089/api/entries?folder_id=1 | jq .   # 200
+curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/entries?folder_id=1 | jq .    # 403 folder_locked
+UNLOCK=$(curl -s -X POST localhost:9089/api/folders/1/unlock -H "$AUTH" -H "$JSON" \
+  -d '{"password":"hunter22"}' | jq -r .unlock_token)
+curl -s -H "$AUTH" -H "$JSON" -H "X-Foldex-Folder-Unlock: $UNLOCK" \
+  localhost:9089/api/entries?folder_id=1 | jq .                    # 200
 
 # 7b. Set a master password (Settings), then recover the forgotten folder.
-curl -s -X PUT localhost:9089/api/settings/master-password \
-  -H 'Content-Type: application/json' -d '{"password":"master-recover-1"}' | jq .
-curl -s -X POST localhost:9089/api/folders/1/reset-password \
-  -H 'Content-Type: application/json' -d '{"master_password":"master-recover-1"}' -o /dev/null -w '%{http_code}\n'  # 204
-curl -s localhost:9089/api/entries?folder_id=1 | jq .              # 200 — folder is now unprotected
+curl -s -X PUT localhost:9089/api/settings/master-password -H "$AUTH" -H "$JSON" \
+  -d '{"password":"master-recover-1"}' | jq .
+curl -s -X POST localhost:9089/api/folders/1/reset-password -H "$AUTH" -H "$JSON" \
+  -d '{"master_password":"master-recover-1"}' -o /dev/null -w '%{http_code}\n'  # 204
+curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/entries?folder_id=1 | jq .    # 200 — folder is now unprotected
 
-# 8. Open the SPA and try ⌥K (palette) / ⌥N (new link) / ⌥M (new note); Settings gear in the topbar.
+# 8. The token's scope is real — these must all be refused.
+curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/auth/sessions -o /dev/null -w '%{http_code}\n'  # 403
+curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/admin/users  -o /dev/null -w '%{http_code}\n'  # 403 (admin) / 404 (user)
+curl -s -H "$AUTH" -H "$JSON" -X POST localhost:9089/api/backup/export -o /dev/null -w '%{http_code}\n'  # 403
+
+# 9. Open the SPA and try ⌥K (palette) / ⌥N (new link) / ⌥M (new note); Settings gear in the topbar.
 open http://localhost:9088
 ```
 
@@ -257,7 +269,9 @@ Every user-visible string must go through `t('key')` and ship in all three local
 
 ## Browser extension
 
-A vanilla Manifest V3 extension lives in `extension/`. Load it as **unpacked** from `chrome://extensions` → Developer mode → Load unpacked → pick the `extension/` folder. Then click its icon on any tab and hit Save. See `extension/README.md`.
+A vanilla Manifest V3 extension lives in `extension/`. Load it as **unpacked** from `chrome://extensions` → Developer mode → Load unpacked → pick the `extension/` folder.
+
+Open its options and paste an **API token** (Foldex → **Settings → API tokens**). The extension has no cookie jar shared with the app, so a session would not reach it; the token is what identifies your account. Then click the icon on any tab and hit Save. See `extension/README.md`.
 
 ## Screenshots
 
@@ -315,27 +329,35 @@ Via UI: open the **Import / Export** page → the right column hosts the **💾 
 
 Full design rationale: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 
-## Accounts & sign-in (opt-in)
+## Accounts & sign-in
 
-Foldex ships single-user by default. Every link, note, folder and tag already has an
-owner in the database, but with `AUTH_ENABLED=0` (the default) the backend attributes
-every request to the bootstrap administrator, so an existing install behaves exactly as
-it always has — `SHARED_SECRET` stays the only gate and nothing in the UI changes.
+Accounts are **on by default** since 1.13.0.
 
-Set `AUTH_ENABLED=1` in `.env` and restart to turn on real accounts:
+**First run — including an upgrade.** The SPA shows a setup screen. The account you
+create there becomes the administrator and **adopts every link, note, folder and tag
+that already existed**: nothing is lost and nothing has to be re-imported. Set
+`AUTH_PUBLIC_URL` to the origin you actually browse to, because it is what invitation
+and reset links are built from.
 
 ```bash
-AUTH_ENABLED=1
-AUTH_PUBLIC_URL=https://localhost   # the origin baked into invitation links
+AUTH_PUBLIC_URL=https://localhost
 ```
 
-**First run.** The SPA shows a setup screen. The account you create there becomes the
-administrator and **adopts every link, note, folder and tag that already existed** — an
-upgraded install keeps all of its content.
+Prefer the old behaviour? `AUTH_ENABLED=0` keeps it: every request is attributed to the
+bootstrap administrator and nothing ever asks for a password. That is a genuine option
+for a single-user machine on a private network — but on that setting anyone who can
+reach the port owns the whole library, so keep the loopback bind.
 
-**Adding people.** There is no public sign-up: an administrator sends an invitation, and
-only the address on that invitation can accept it. The invite link is shown once when
-you create it, and is also e-mailed.
+**Adding people.** There is no public sign-up: an administrator sends an invitation from
+**Users** in the topbar, and only the address on that invitation can accept it — with a
+password or with the matching Google account. The invite link is shown once when you
+create it, and is also e-mailed.
+
+**Managing people.** The **Users** screen (administrators only) lists every account and
+lets you promote, disable, delete, sign out everywhere, and hand back a password. Two
+guards are enforced by the server, not just hidden in the UI: you cannot demote, disable
+or delete **yourself**, and the **last active administrator** cannot be removed by
+anyone. Zero administrators is not recoverable through any API call.
 
 **E-mail.** `MAIL_DRIVER` defaults to `log`, which prints the invitation — link included
 — to the backend log instead of sending it. That is deliberate: a self-hosted instance
@@ -376,15 +398,70 @@ walked through setting one up before their first session, rather than being lock
 > re-encryption: without it every enrolled account loses its second factor and needs
 > an administrator to clear the enrollment.
 
+**Sign in with Google.** Optional, and off until you configure it. Create an OAuth
+client of type *Web application* in the Google Cloud console, register
+`<AUTH_PUBLIC_URL>/api/auth/oauth/google/callback` as the redirect URI **exactly**, and
+set:
+
+```bash
+GOOGLE_CLIENT_ID=…apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=…
+```
+
+Two things it deliberately does not do. It **never creates an account** — the instance
+is invite-only, and auto-provisioning would quietly bypass that. And it **never skips
+two-step verification**: signing in with Google lands on the same code screen a password
+login does.
+
+**Already have a password account with the same address?** Signing in with Google does
+not log you in and does not refuse you — it asks for your **current password** once, and
+then links Google and **removes the password**. From that point the account is
+Google-only. Requiring the password is the whole point: an e-mail address is not a
+secret, and anyone can put one in a Google profile, so a matching address alone must
+never hand over an account. The trade is that *"I forgot my password, let me just use
+Google"* does not work — reset first, convert afterwards.
+
+Three ways back into a Google-only account that loses its Google:
+
+1. An administrator uses **Reset password** on the Users screen and gives you the
+   temporary password directly.
+2. While still signed in via Google, **Settings → How you sign in → Set a password**.
+   Only after that can you disconnect Google — doing it the other way round would leave
+   the account with no way in at all, which the database refuses outright.
+3. Asking for a password reset on such an account e-mails you *"this account signs in
+   with Google"* rather than a reset link. That is on purpose: a link there would let
+   control of the mailbox alone resurrect the password the conversion retired.
+
+**API tokens (browser extension, scripts).** **Settings → API tokens** mints a
+long-lived bearer credential, shown **once** — the server keeps only a hash. It reads
+and writes your links and notes and nothing else: it is refused on password changes,
+sessions, invitations, user administration and backups, so a token pasted into an
+extension's configuration is not the account. Revoke one and it stops working
+immediately.
+
 **Forgot your password.** **Reset it** from the sign-in screen — a link arrives by
 e-mail (or in the backend log with the default `log` driver), is good for 30 minutes and
 can be used once. Using it signs you out of every other device, and an account with
 two-step verification still has to present a code: a mailbox alone is never enough.
 
-**Locked out?** With `AUTH_ENABLED=1` and no way back into the only administrator
-account, recovery is a direct database edit — the same status the master folder password
-already has. Set `AUTH_ENABLED=0`, restart, and the instance reverts to the
-single-user behaviour with all content intact.
+**Locked out?** With no way back into the only administrator account, recovery is a
+direct database edit — the same status the master folder password already has. The one
+case with no way out through the UI at all is the **last administrator, Google-only,
+whose Google access is gone**: no other admin exists to reset their password. Setting
+`AUTH_ENABLED=0` and restarting reverts the instance to single-user behaviour with all
+content intact, which is the fastest way back in.
+
+> **`SHARED_SECRET` is deprecated.** It predates accounts: it gates `/api` as a whole,
+> identifies nobody, and cannot scope a single row. Real authentication replaced it.
+> Keep it only while older browser extensions are still configured with it — the backend
+> warns at boot while it is set, and it will be removed in a future release.
+
+> **Old `/go/42` links stopped working?** Numeric ids in `/go/{id}` and `/n/{id}` are off
+> by default now. Those routes resolve with no session — they are public share links —
+> and link ids are a counter shared across every account, so leaving them on would let
+> anyone walk 1, 2, 3… and enumerate every link and note on the instance, other people's
+> included. Slugs are unaffected. Set `PUBLIC_NUMERIC_IDS=1` if you have old numeric
+> links already shared and would rather keep them working.
 
 Design rationale, threat model and the full API surface:
 [docs/SDD-AUTH-RBAC.md](docs/SDD-AUTH-RBAC.md).

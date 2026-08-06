@@ -27,7 +27,18 @@ type Middleware struct {
 	logger  *slog.Logger
 
 	mu        sync.Mutex
-	lastTouch map[int64]time.Time
+	lastTouch map[touchKey]time.Time
+}
+
+// touchKey namespaces the throttle map by credential kind.
+//
+// Session ids and API token ids are both dense BIGSERIALs from different
+// sequences, so a map keyed on the bare integer would have session 7 and token
+// 7 suppressing each other's writes — a bug that shows up as a stale
+// "last used" column and nothing else.
+type touchKey struct {
+	via string
+	id  int64
 }
 
 func NewMiddleware(repo *Repository, cookies CookieOptions, logger *slog.Logger) *Middleware {
@@ -35,7 +46,7 @@ func NewMiddleware(repo *Repository, cookies CookieOptions, logger *slog.Logger)
 		repo:      repo,
 		cookies:   cookies,
 		logger:    logger,
-		lastTouch: make(map[int64]time.Time),
+		lastTouch: make(map[touchKey]time.Time),
 	}
 }
 
@@ -65,9 +76,26 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 			httperr.Write(w, err)
 			return
 		}
-		m.maybeTouch(r.Context(), p.SessionID)
+		m.touch(r.Context(), p)
 		next.ServeHTTP(w, r.WithContext(authctx.WithPrincipal(r.Context(), p)))
 	})
+}
+
+// touch records activity against whichever credential authenticated the
+// request, throttled the same way for both.
+//
+// Split by Via rather than by "is SessionID zero", because zero is a
+// valid-looking id and the branch should read as a decision, not as a
+// coincidence. Token traffic is scripted and can be far heavier than a human's,
+// so it needs the throttle at least as much as a session does.
+func (m *Middleware) touch(ctx context.Context, p authctx.Principal) {
+	if p.Via == authctx.ViaAPIToken {
+		if m.shouldTouch(touchKey{authctx.ViaAPIToken, p.TokenID}) {
+			m.repo.TouchAPIToken(ctx, p.TokenID)
+		}
+		return
+	}
+	m.maybeTouch(ctx, p.SessionID)
 }
 
 // Optional resolves a principal when one is present but never rejects for the
@@ -117,16 +145,72 @@ func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 	})
 }
 
+// RejectAPIToken refuses a bearer credential on surfaces it must never reach.
+//
+// API tokens exist for the browser extension and for scripts: they are
+// long-lived, stored in plain configuration, and their whole point is that no
+// human is present. Letting one change a password, mint an invite, promote an
+// account or download a full backup would make a token pasted into a config
+// file equivalent to the account itself. The scope column says `content`; this
+// middleware is what makes that word mean something.
+//
+// 404, not 403, on the admin surface — mounted alongside RequireAdmin, which
+// answers the same way for the same reason.
+func (m *Middleware) RejectAPIToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p, ok := authctx.FromContext(r.Context()); ok && p.Via == authctx.ViaAPIToken {
+			httperr.Write(w, httperr.New(http.StatusForbidden, "token_scope",
+				"an API token cannot be used on this endpoint"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// resolve turns whichever credential the request carries into a principal.
+//
+// The session cookie wins when both are present. A browser that has an
+// Authorization header AND a live session is almost always a developer testing
+// with curl-copied headers, and silently preferring the token would give them a
+// principal with no CSRF protection and no admin routes — a confusing failure
+// far from its cause.
 func (m *Middleware) resolve(r *http.Request) (authctx.Principal, []byte, error) {
-	raw := cookieValue(r, CookieAccess)
-	if raw == "" {
-		return authctx.Principal{}, nil, errNoCredential
+	if raw := cookieValue(r, CookieAccess); raw != "" {
+		res, err := m.repo.ResolveAccess(r.Context(), raw)
+		if err != nil {
+			return authctx.Principal{}, nil, err
+		}
+		return res.Principal, res.CSRFHash, nil
 	}
-	res, err := m.repo.ResolveAccess(r.Context(), raw)
-	if err != nil {
-		return authctx.Principal{}, nil, err
+	if bearer, ok := bearerToken(r); ok {
+		p, err := m.repo.ResolveAPIToken(r.Context(), bearer)
+		if err != nil {
+			return authctx.Principal{}, nil, err
+		}
+		return p, nil, nil
 	}
-	return res.Principal, res.CSRFHash, nil
+	return authctx.Principal{}, nil, errNoCredential
+}
+
+// bearerToken extracts an `Authorization: Bearer …` value.
+//
+// The scheme is matched case-insensitively (RFC 7235 says it is), and anything
+// that is not our own prefix is left for ResolveAPIToken to reject — this
+// function's job is parsing, not policy.
+func bearerToken(r *http.Request) (string, bool) {
+	h := r.Header.Get("Authorization")
+	if h == "" {
+		return "", false
+	}
+	rest, found := strings.CutPrefix(h, "Bearer ")
+	if !found {
+		if len(h) < 7 || !strings.EqualFold(h[:7], "bearer ") {
+			return "", false
+		}
+		rest = h[7:]
+	}
+	rest = strings.TrimSpace(rest)
+	return rest, rest != ""
 }
 
 // verifyCSRF enforces the signed double-submit on unsafe verbs.
@@ -155,23 +239,29 @@ func (m *Middleware) verifyCSRF(r *http.Request, p authctx.Principal, csrfHash [
 
 // maybeTouch updates last_seen_at at most once per touchInterval per session.
 func (m *Middleware) maybeTouch(ctx context.Context, sessionID int64) {
+	if m.shouldTouch(touchKey{authctx.ViaSession, sessionID}) {
+		m.repo.TouchSession(ctx, sessionID)
+	}
+}
+
+// shouldTouch reports whether enough time has passed to write again, recording
+// the decision. It returns true at most once per touchInterval per key.
+func (m *Middleware) shouldTouch(k touchKey) bool {
 	now := time.Now()
 	m.mu.Lock()
-	last, seen := m.lastTouch[sessionID]
-	if seen && now.Sub(last) < touchInterval {
-		m.mu.Unlock()
-		return
+	defer m.mu.Unlock()
+	if last, seen := m.lastTouch[k]; seen && now.Sub(last) < touchInterval {
+		return false
 	}
-	m.lastTouch[sessionID] = now
-	m.mu.Unlock()
-	m.repo.TouchSession(ctx, sessionID)
+	m.lastTouch[k] = now
+	return true
 }
 
 // forgetTouch drops a session from the throttle map. Called on the logout
 // paths that know a specific session id.
 func (m *Middleware) forgetTouch(sessionID int64) {
 	m.mu.Lock()
-	delete(m.lastTouch, sessionID)
+	delete(m.lastTouch, touchKey{authctx.ViaSession, sessionID})
 	m.mu.Unlock()
 }
 
@@ -193,9 +283,9 @@ func (m *Middleware) SweepTouch(olderThan time.Duration) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n := 0
-	for id, seen := range m.lastTouch {
+	for k, seen := range m.lastTouch {
 		if seen.Before(cutoff) {
-			delete(m.lastTouch, id)
+			delete(m.lastTouch, k)
 			n++
 		}
 	}

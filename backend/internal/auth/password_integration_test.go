@@ -194,10 +194,11 @@ func TestForgotPassword_PasswordlessAccountGetsAnExplanationNotALink(t *testing.
 	h := newHarness(t)
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	uid := testdb.SeedUserWithPassword(t, h.pool, "google@example.com", "a good password", "user")
-	// Strip the credential, the way an ADR-31 conversion will.
-	_, err := h.pool.Exec(context.Background(),
-		`UPDATE app_user SET password_hash = NULL WHERE id = $1`, int64(uid))
-	require.NoError(t, err)
+	// Exactly what an ADR-31 conversion leaves behind: a linked Google identity
+	// and no password. Stripping the password ALONE is not a state the database
+	// permits — an active account must hold a credential — so a fixture that
+	// only nulled the hash would be testing a shape the product cannot reach.
+	testdb.ConvertToGoogleOnly(t, h.pool, uid, "google@example.com", "google-sub-1")
 
 	h.mail.reset()
 	rec := h.client(t).do(http.MethodPost, "/api/auth/password/forgot",
@@ -213,7 +214,7 @@ func TestForgotPassword_PasswordlessAccountGetsAnExplanationNotALink(t *testing.
 // A reset proves the FIRST factor only. An account with an authenticator must
 // still present a code, or a compromised mailbox would bypass 2FA entirely.
 func TestResetPassword_StillRequiresTheSecondFactor(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -334,7 +335,7 @@ func TestExpiry_ResetTokenStopsWorking(t *testing.T) {
 }
 
 func TestExpiry_PreAuthChallengeStopsWorking(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -355,7 +356,7 @@ func TestExpiry_PreAuthChallengeStopsWorking(t *testing.T) {
 }
 
 func TestExpiry_MailedCodeStopsWorking(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true, SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	enrolUser(t, h, "admin@example.com", "a good password")
@@ -380,7 +381,7 @@ func TestExpiry_MailedCodeStopsWorking(t *testing.T) {
 // callers can insert into, so "it runs" is not enough — it has to actually
 // delete.
 func TestSweepTwoFactor_DeletesExpiredRows(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	enrolUser(t, h, "admin@example.com", "a good password")
@@ -416,7 +417,7 @@ func TestSweepTwoFactor_DeletesExpiredRows(t *testing.T) {
 // A row inside the retention window must SURVIVE — a sweep that deletes
 // everything would silently sign users out mid-login.
 func TestSweepTwoFactor_KeepsLiveRows(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	enrolUser(t, h, "admin@example.com", "a good password")
@@ -445,7 +446,7 @@ func countRows(t *testing.T, pool *pgxpool.Pool) int {
 // ─────────────────────────────────────────────────────────────────────
 
 func TestVerifyEmail_RoundTrip(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	_, err := h.pool.Exec(context.Background(), `UPDATE app_user SET email_verified_at = NULL`)
@@ -471,7 +472,7 @@ func TestVerifyEmail_RoundTrip(t *testing.T) {
 }
 
 func TestVerifyEmail_RejectsAnUnusableToken(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	_, err := h.pool.Exec(context.Background(), `UPDATE app_user SET email_verified_at = NULL`)
@@ -492,7 +493,7 @@ func TestVerifyEmail_RejectsAnUnusableToken(t *testing.T) {
 // a mailbox as a standing way to prove an address the owner may have since
 // given up.
 func TestVerifyEmail_ExpiredTokenIsRefused(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	_, err := h.pool.Exec(context.Background(), `UPDATE app_user SET email_verified_at = NULL`)
@@ -534,7 +535,7 @@ func verifyTokenFrom(t *testing.T, body string) string {
 // /email/resend cannot be turned into a mail relay. And once the address is
 // already verified there is nothing to prove, so nothing is sent.
 func TestVerifyEmail_ResendIsANoOpOnceVerified(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -551,7 +552,7 @@ func TestVerifyEmail_ResendIsANoOpOnceVerified(t *testing.T) {
 // proves is worth having: each one must return an ERROR, never a zero value
 // that a caller could mistake for "no rows" and treat as success.
 func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -560,7 +561,9 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 	h.pool.Close() // every subsequent query fails
 
 	t.Run("challenges", func(t *testing.T) {
-		_, _, err := h.repo.CreateChallenge(ctx, uid, auth.PurposeTOTP, time.Minute, "", "", false)
+		_, _, err := h.repo.CreateChallenge(ctx, auth.NewChallenge{
+			UserID: uid, Purpose: auth.PurposeTOTP, TTL: time.Minute,
+		})
 		assert.Error(t, err)
 		_, err = h.repo.ResolveChallenge(ctx, "whatever")
 		assert.Error(t, err)
@@ -606,7 +609,7 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 // handlers can tell "no such row" from "the database is on fire" — the two
 // deserve a 404 and a 500 respectively.
 func TestTwoFactorRepository_NotFoundIsTyped(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	ctx := context.Background()
@@ -677,7 +680,7 @@ func TestForgotPassword_TakesTheSameTimeForKnownAndUnknownAddresses(t *testing.T
 // unverified — and /email/resend needs a session, so someone following the link
 // on a device that never signed in would be stuck with no way to get another.
 func TestVerifyEmail_SpendAndMarkAreOneStatement(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	ctx := context.Background()

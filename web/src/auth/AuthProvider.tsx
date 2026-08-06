@@ -56,11 +56,21 @@ function toState(me: MeResponse): SessionState {
     return {
       status: 'two_factor_required',
       pending: {
-        purpose: me.purpose ?? 'totp',
+        // Narrowed rather than cast: the server only ever sends the two code
+        // purposes with this status, and defaulting anything else to 'totp'
+        // keeps a future third purpose from rendering a blank screen.
+        purpose: me.purpose === 'enroll_2fa' ? 'enroll_2fa' : 'totp',
         email: me.email ?? '',
         methods: me.methods ?? [],
         maxAttempts: me.max_attempts ?? 5,
       },
+      features: me.features ?? defaultFeatures,
+    }
+  }
+  if (me.status === 'convert_password_account') {
+    return {
+      status: 'convert_password_account',
+      email: me.email ?? '',
       features: me.features ?? defaultFeatures,
     }
   }

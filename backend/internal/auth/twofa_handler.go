@@ -94,23 +94,49 @@ func (h *Handler) completeLogin(w http.ResponseWriter, r *http.Request, user Use
 	h.issueAndRespond(w, r, user)
 }
 
-// startChallenge mints the pre-auth cookie and writes the pending payload.
-func (h *Handler) startChallenge(w http.ResponseWriter, r *http.Request, u User, purpose string, mailboxAlreadyProven bool) {
-	raw, _, err := h.repo.CreateChallenge(r.Context(), u.ID, purpose, challengeTTL,
-		clientIP(r), r.UserAgent(), mailboxAlreadyProven)
+// beginChallenge mints the pre-auth cookie, returning false once it has already
+// written an error response.
+//
+// Separate from startChallenge because the OAuth callback needs the cookie
+// without a JSON body: it answers a top-level browser navigation and must end
+// in a redirect, not in a payload the browser would render as text.
+func (h *Handler) beginChallenge(w http.ResponseWriter, r *http.Request, u User, purpose string, mailboxAlreadyProven bool) bool {
+	return h.beginChallengeFor(w, r, NewChallenge{
+		UserID:               u.ID,
+		Purpose:              purpose,
+		TTL:                  challengeTTL,
+		IP:                   clientIP(r),
+		UserAgent:            r.UserAgent(),
+		MailboxAlreadyProven: mailboxAlreadyProven,
+	})
+}
+
+// beginChallengeFor is the full-control form, used by the OAuth callback to
+// pin the Google subject onto the row it creates.
+func (h *Handler) beginChallengeFor(w http.ResponseWriter, r *http.Request, in NewChallenge) bool {
+	raw, _, err := h.repo.CreateChallenge(r.Context(), in)
 	if err != nil {
 		h.logger.Error("create challenge", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
-		return
+		return false
 	}
 	h.cookies.SetPreAuth(w, raw, challengeTTL)
+	return true
+}
 
+// pendingPayload describes a half-finished login.
+//
+// Built in one place because two endpoints emit it: the credential path that
+// creates the challenge, and /me — which reports it on a cold boot so a reload
+// during the code step, or the fresh page load an OAuth redirect produces,
+// lands back on the code screen instead of on the login form.
+func (h *Handler) pendingPayload(u User, purpose string, mailboxAlreadyProven bool) map[string]any {
 	methods := []string{methodTOTP, methodRecovery}
 	if h.emailFactorAvailable(purpose, mailboxAlreadyProven) {
 		methods = append(methods, methodEmailOTP)
 	}
 	body := map[string]any{
-		"status":  "two_factor_required",
+		"status":  statusTwoFactorRequired,
 		"purpose": purpose,
 		// The address is MASKED. The caller has proven the password, but this
 		// response is also what an attacker sees after a successful credential
@@ -119,17 +145,33 @@ func (h *Handler) startChallenge(w http.ResponseWriter, r *http.Request, u User,
 		"email":   MaskEmail(u.Email),
 		"methods": methods,
 		// The raw token is NOT echoed here. It travels only in the httpOnly,
-		// Strict, /api/auth-scoped cookie SetPreAuth just wrote — putting it in
-		// the body would hand it to any script on the page and to whatever
+		// Strict, /api/auth-scoped cookie SetPreAuth writes — putting it in the
+		// body would hand it to any script on the page and to whatever
 		// client-side error reporter happens to capture a response.
 		"expires_in":   int(challengeTTL.Seconds()),
 		"max_attempts": maxChallengeAttempts,
+		"features":     h.features,
 	}
-	if purpose == PurposeEnroll2FA {
+	switch purpose {
+	case PurposeEnroll2FA:
 		body["methods"] = []string{}
 		body["reason"] = "admin_enrollment_required"
+	case PurposeConvertGoogle:
+		// Not a second factor at all: the account owes its CURRENT PASSWORD
+		// before the Google identity is attached. Reusing the two_factor status
+		// would put the SPA on the six-digit code screen.
+		body["status"] = statusConvertPasswordAccount
+		body["methods"] = []string{}
 	}
-	httperr.JSON(w, http.StatusOK, body)
+	return body
+}
+
+// startChallenge mints the pre-auth cookie and writes the pending payload.
+func (h *Handler) startChallenge(w http.ResponseWriter, r *http.Request, u User, purpose string, mailboxAlreadyProven bool) {
+	if !h.beginChallenge(w, r, u, purpose, mailboxAlreadyProven) {
+		return
+	}
+	httperr.JSON(w, http.StatusOK, h.pendingPayload(u, purpose, mailboxAlreadyProven))
 }
 
 // ─────────────────────────────────────────────────────────────────────

@@ -22,6 +22,9 @@ import { Home, type Sort, type ViewMode } from './components/HomeView'
 const ImportPage = lazy(() => import('./pages/ImportPage').then((m) => ({ default: m.ImportPage })))
 const StatsPage = lazy(() => import('./pages/StatsPage').then((m) => ({ default: m.StatsPage })))
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
+// Lazy for a stronger reason than the others: most accounts are not admins, so
+// for them this chunk would be dead weight downloaded on every visit.
+const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage').then((m) => ({ default: m.AdminUsersPage })))
 // NoteDialog pulls in Tiptap/ProseMirror (~140 KB gzip) — unlike LinkDialog/
 // FolderDialog it's lazy-loaded so that weight only ships once a user
 // actually opens a note, not on every visit to the app.
@@ -34,7 +37,7 @@ import { useFolders, useCreateFolder, useUpdateFolder } from './api/folders'
 import { usePasswordPrompt } from './components/PasswordPromptDialog'
 import type { Link as LinkT, Folder as FolderT, Entry, MergeSource } from './api/types'
 
-type View = 'home' | 'import' | 'stats' | 'settings'
+type View = 'home' | 'import' | 'stats' | 'settings' | 'admin'
 
 // Shared expiry check for a folder's cached unlock — used both when
 // deciding whether to skip the password prompt and when deciding whether to
@@ -530,6 +533,13 @@ export default function App() {
             <div className="fx-mainarea">
               <Suspense fallback={<div className="fx-empty">…</div>}>
                 <SettingsPage onEditFolder={handleEditFolderById} />
+              </Suspense>
+            </div>
+          )}
+          {view === 'admin' && (
+            <div className="fx-mainarea">
+              <Suspense fallback={<div className="fx-empty">…</div>}>
+                <AdminUsersPage />
               </Suspense>
             </div>
           )}

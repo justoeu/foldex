@@ -165,51 +165,62 @@ Os achados de SAST aparecem na aba **Security ▸ Code scanning** do repositóri
 
 ## Smoke test (sanity check depois de `make up`)
 
+Contas estão ligadas, então `/api/*` precisa de credencial. Abra <http://localhost:9088>,
+conclua a tela de setup, crie um **token de API** em Configurações → Tokens de API e exporte:
+
 ```bash
-# 1. Backend de pé?
+AUTH="Authorization: Bearer fx_1_seu-token-aqui"
+JSON="Content-Type: application/json"
+```
+
+```bash
+# 1. Backend no ar? (/healthz é público — é o único endpoint que não pede nada.)
 curl -s localhost:9089/healthz | jq .
 
 # 2. Cria uma tag.
-curl -s -X POST localhost:9089/api/tags \
-  -H 'Content-Type: application/json' \
+curl -s -X POST localhost:9089/api/tags -H "$AUTH" -H "$JSON" \
   -d '{"name":"jira","color":"#1f6feb","icon":"🪲"}' | jq .
 
-# 3. Cria um link associado àquela tag (preview é enfileirado async).
-curl -s -X POST localhost:9089/api/links \
-  -H 'Content-Type: application/json' \
+# 3. Cria um link com essa tag (o preview é enfileirado async).
+curl -s -X POST localhost:9089/api/links -H "$AUTH" -H "$JSON" \
   -d '{"url":"https://news.ycombinator.com","title":"HN","tag_ids":[1]}' | jq .
 
-# 4. Espera ~2s pelo worker; depois fetch — `preview_status` deve ser "ok".
-sleep 3 && curl -s localhost:9089/api/links/1 | jq '.preview_status, .og_image_url'
+# 4. Espera ~2s pelo worker; então busca — `preview_status` deve ser "ok".
+sleep 3 && curl -s localhost:9089/api/links/1 -H "$AUTH" -H "$JSON" | jq '.preview_status, .og_image_url'
 
-# 5. Resolve o short link (302 + bump no contador).
-curl -sI localhost:9089/go/1 | head -3
+# 5. Resolve o link curto (302 + contador). Por SLUG: o /go/1 numérico agora vem
+#    desligado, porque essa rota resolve sem sessão e os ids de link são
+#    compartilhados entre contas. Veja PUBLIC_NUMERIC_IDS.
+curl -sI localhost:9089/go/hn | head -3
 
-# 6. Cria uma nota (HTML sanitizado server-side) e renderiza a página pública.
-curl -s -X POST localhost:9089/api/notes \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"Rascunho","body_html":"<p>Olá <strong>mundo</strong></p>"}' | jq .
-curl -s localhost:9089/n/rascunho | grep -o '<h1>.*</h1>'
+# 6. Cria uma nota (HTML rico sanitizado no servidor) e renderiza a página pública.
+curl -s -X POST localhost:9089/api/notes -H "$AUTH" -H "$JSON" \
+  -d '{"title":"Scratchpad","body_html":"<p>Olá <strong>mundo</strong></p>"}' | jq .
+curl -s localhost:9089/n/scratchpad | grep -o '<h1>.*</h1>'
 
-# 7. Cria uma pasta protegida por senha, confirma que o conteúdo fica
-#    bloqueado sem o token de desbloqueio, depois confirma que desbloqueia
-#    com ele.
-curl -s -X POST localhost:9089/api/folders \
-  -H 'Content-Type: application/json' \
+# 7. Cria uma pasta com senha, confirma que o conteúdo fica bloqueado sem o
+#    token de unlock e que destrava com ele.
+curl -s -X POST localhost:9089/api/folders -H "$AUTH" -H "$JSON" \
   -d '{"name":"Privada","password":"hunter22"}' | jq .
-curl -s localhost:9089/api/entries?folder_id=1 | jq .              # 403 folder_locked
-TOKEN=$(curl -s -X POST localhost:9089/api/folders/1/unlock \
-  -H 'Content-Type: application/json' -d '{"password":"hunter22"}' | jq -r .unlock_token)
-curl -s -H "X-Foldex-Folder-Unlock: $TOKEN" localhost:9089/api/entries?folder_id=1 | jq .   # 200
+curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/entries?folder_id=1 | jq .   # 403 folder_locked
+UNLOCK=$(curl -s -X POST localhost:9089/api/folders/1/unlock -H "$AUTH" -H "$JSON" \
+  -d '{"password":"hunter22"}' | jq -r .unlock_token)
+curl -s -H "$AUTH" -H "$JSON" -H "X-Foldex-Folder-Unlock: $UNLOCK" \
+  localhost:9089/api/entries?folder_id=1 | jq .                              # 200
 
-# 7b. Define uma senha master (Configurações) e recupera a pasta esquecida.
-curl -s -X PUT localhost:9089/api/settings/master-password \
-  -H 'Content-Type: application/json' -d '{"password":"master-recover-1"}' | jq .
-curl -s -X POST localhost:9089/api/folders/1/reset-password \
-  -H 'Content-Type: application/json' -d '{"master_password":"master-recover-1"}' -o /dev/null -w '%{http_code}\n'  # 204
-curl -s localhost:9089/api/entries?folder_id=1 | jq .              # 200 — pasta agora desprotegida
+# 7b. Define a senha mestra (Configurações) e recupera a pasta esquecida.
+curl -s -X PUT localhost:9089/api/settings/master-password -H "$AUTH" -H "$JSON" \
+  -d '{"password":"master-recover-1"}' | jq .
+curl -s -X POST localhost:9089/api/folders/1/reset-password -H "$AUTH" -H "$JSON" \
+  -d '{"master_password":"master-recover-1"}' -o /dev/null -w '%{http_code}\n'  # 204
+curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/entries?folder_id=1 | jq .   # 200 — pasta destravada
 
-# 8. Abre a SPA e tenta ⌥K (paleta) / ⌥N (novo link) / ⌥M (nova nota); engrenagem de Configurações no topo.
+# 8. O escopo do token é real — tudo abaixo tem que ser recusado.
+curl -s -H "$AUTH" localhost:9089/api/auth/sessions -o /dev/null -w '%{http_code}\n'  # 403
+curl -s -H "$AUTH" localhost:9089/api/admin/users  -o /dev/null -w '%{http_code}\n'  # 403 (admin) / 404 (user)
+curl -s -H "$AUTH" -X POST localhost:9089/api/backup/export -o /dev/null -w '%{http_code}\n'  # 403
+
+# 9. Abre a SPA e testa ⌥K (paleta) / ⌥N (novo link) / ⌥M (nova nota); engrenagem na topbar.
 open http://localhost:9088
 ```
 
@@ -243,8 +254,12 @@ Toda string visível ao usuário precisa passar por `t('key')` e existir nos tr�
 
 Uma extensão Manifest V3 vanilla vive em `extension/`. Carregue como
 **unpacked** em `chrome://extensions` → Modo de desenvolvedor → Carregar
-sem compactação → escolhe a pasta `extension/`. Depois clica no ícone
-em qualquer aba e aperta Salvar. Veja `extension/README.md`.
+sem compactação → escolhe a pasta `extension/`.
+
+Abra as opções e cole um **token de API** (Foldex → **Configurações → Tokens de API**).
+A extensão não compartilha cookies com o app, então uma sessão não chegaria até ela; o
+token é o que identifica sua conta. Depois clica no ícone em qualquer aba e aperta
+Salvar. Veja `extension/README.md`.
 
 ## Screenshots
 
@@ -307,27 +322,35 @@ em `localStorage`.
 
 Design completo: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 
-## Contas e login (opcional)
+## Contas e login
 
-O foldex continua single-user por padrão. Todo link, nota, pasta e tag já tem um dono
-no banco, mas com `AUTH_ENABLED=0` (o padrão) o backend atribui toda requisição ao
-administrador de bootstrap — então uma instalação existente se comporta exatamente como
-sempre: o `SHARED_SECRET` segue sendo o único portão e nada muda na interface.
+Contas vêm **ligadas por padrão** desde a 1.13.0.
 
-Para ligar contas de verdade, ajuste o `.env` e reinicie:
+**Primeira execução — inclusive numa atualização.** A SPA mostra uma tela de setup. A
+conta criada ali vira administradora e **adota todos os links, notas, pastas e tags que
+já existiam**: nada se perde e nada precisa ser reimportado. Defina `AUTH_PUBLIC_URL`
+com a origem que você realmente acessa, porque é dela que saem os links de convite e de
+redefinição.
 
 ```bash
-AUTH_ENABLED=1
-AUTH_PUBLIC_URL=https://localhost   # a origem embutida nos links de convite
+AUTH_PUBLIC_URL=https://localhost
 ```
 
-**Primeira execução.** A SPA mostra uma tela de setup. A conta criada ali vira
-administradora e **adota todos os links, notas, pastas e tags que já existiam** — uma
-instalação atualizada mantém todo o conteúdo.
+Prefere o comportamento antigo? `AUTH_ENABLED=0` mantém: toda requisição é atribuída ao
+administrador de bootstrap e nada nunca pede senha. É uma opção legítima para uma
+máquina de um usuário só numa rede privada — mas nessa configuração qualquer um que
+alcance a porta é dono da biblioteca inteira, então mantenha o bind em loopback.
 
-**Adicionando pessoas.** Não existe cadastro aberto: um administrador envia um convite,
-e só o endereço daquele convite consegue aceitá-lo. O link aparece uma vez, no momento
-em que o convite é criado, e também é enviado por e-mail.
+**Adicionando pessoas.** Não existe cadastro aberto: um administrador envia um convite
+pela tela **Usuários** na topbar, e só o endereço daquele convite consegue aceitá-lo —
+com senha ou com a conta Google correspondente. O link aparece uma vez, no momento em
+que o convite é criado, e também é enviado por e-mail.
+
+**Administrando pessoas.** A tela **Usuários** (só para administradores) lista todas as
+contas e permite promover, desativar, excluir, encerrar sessões e devolver uma senha.
+Duas travas são do servidor, não apenas escondidas na interface: você não pode rebaixar,
+desativar ou excluir **a si mesmo**, e o **último administrador ativo** não pode ser
+removido por ninguém. Zero administradores não se recupera por nenhuma chamada de API.
 
 **E-mail.** `MAIL_DRIVER` é `log` por padrão, o que imprime o convite — link incluído —
 no log do backend em vez de enviá-lo. Isso é proposital: uma instância self-hosted sem
@@ -368,15 +391,71 @@ trancado para fora.
 > re-cifra: sem ela toda conta cadastrada perde o segundo fator e precisa de um
 > administrador para limpar o cadastro.
 
+**Entrar com o Google.** Opcional, e desligado até você configurar. Crie um cliente
+OAuth do tipo *Aplicativo Web* no console do Google Cloud, registre
+`<AUTH_PUBLIC_URL>/api/auth/oauth/google/callback` como redirect URI **exatamente
+assim**, e defina:
+
+```bash
+GOOGLE_CLIENT_ID=…apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=…
+```
+
+Duas coisas que ele deliberadamente não faz. **Nunca cria conta** — a instância é só por
+convite, e auto-provisionar burlaria isso em silêncio. E **nunca pula a verificação em
+duas etapas**: entrar pelo Google desemboca na mesma tela de código que o login por
+senha.
+
+**Já tem conta com senha no mesmo endereço?** Entrar pelo Google não te loga e não te
+recusa — ele pede a **sua senha atual** uma vez, e então vincula o Google e **remove a
+senha**. Dali em diante a conta é só-Google. Exigir a senha é o ponto inteiro: um
+endereço de e-mail não é segredo, e qualquer pessoa pode colocar um num perfil do
+Google, então um endereço coincidente sozinho nunca pode entregar uma conta. A troca é
+que *"esqueci a senha, deixa eu entrar pelo Google"* não funciona — redefina primeiro,
+converta depois.
+
+Três saídas para uma conta só-Google que perde o Google:
+
+1. Um administrador usa **Redefinir senha** na tela Usuários e te entrega a senha
+   temporária diretamente.
+2. Ainda logado pelo Google, **Configurações → Como você entra → Definir senha**. Só
+   depois disso dá para desvincular o Google — na ordem inversa a conta ficaria sem
+   nenhuma forma de entrar, o que o banco recusa de saída.
+3. Pedir redefinição de senha numa conta assim envia *"esta conta entra pelo Google"* em
+   vez de um link. Isso é proposital: um link ali deixaria a posse da caixa postal
+   sozinha ressuscitar a senha que a conversão aposentou.
+
+**Tokens de API (extensão, scripts).** **Configurações → Tokens de API** cria uma
+credencial de longa duração, exibida **uma vez** — o servidor guarda só um hash. Ela lê
+e escreve seus links e notas e nada além disso: é recusada em troca de senha, sessões,
+convites, administração de usuários e backup, então um token colado na configuração de
+uma extensão não é a sua conta. Revogue e ele para de funcionar na hora.
+
 **Esqueceu a senha.** **Redefina** pela tela de acesso — o link chega por e-mail (ou no
 log do backend, com o driver `log` padrão), vale 30 minutos e pode ser usado uma vez.
 Usá-lo desconecta todos os outros dispositivos, e uma conta com verificação em duas
 etapas ainda precisa apresentar um código: a caixa postal sozinha nunca basta.
 
-**Ficou trancado para fora?** Com `AUTH_ENABLED=1` e sem acesso à única conta
-administradora, a recuperação é edição direta no banco — o mesmo status que a senha
-mestra de pastas já tem. Voltar `AUTH_ENABLED=0` e reiniciar devolve o comportamento
-single-user com todo o conteúdo intacto.
+**Ficou trancado para fora?** Sem acesso à única conta administradora, a recuperação é
+edição direta no banco — o mesmo status que a senha mestra de pastas já tem. O único
+caso sem saída nenhuma pela interface é o **último administrador, só-Google, que perdeu
+o acesso ao Google**: não existe outro admin para redefinir a senha dele. Voltar
+`AUTH_ENABLED=0` e reiniciar devolve o comportamento single-user com todo o conteúdo
+intacto, e é o caminho mais rápido de volta.
+
+> **`SHARED_SECRET` está depreciado.** Ele é anterior às contas: guarda `/api` como um
+> todo, não identifica ninguém e não consegue escopar uma linha sequer. A autenticação
+> de verdade o substituiu. Mantenha só enquanto extensões antigas ainda estiverem
+> configuradas com ele — o backend avisa no boot enquanto estiver definido, e ele será
+> removido num release futuro.
+
+> **Links `/go/42` antigos pararam de funcionar?** Ids numéricos em `/go/{id}` e
+> `/n/{id}` agora vêm desligados. Essas rotas resolvem sem sessão — são links públicos
+> de compartilhamento — e o id de link é um contador compartilhado entre todas as
+> contas, então deixá-los ligados permitiria caminhar 1, 2, 3… e enumerar todo link e
+> nota da instância, inclusive de outras pessoas. Slugs não são afetados. Use
+> `PUBLIC_NUMERIC_IDS=1` se você tem links numéricos antigos já compartilhados e prefere
+> mantê-los funcionando.
 
 Racional de design, threat model e a superfície de API completa:
 [docs/SDD-AUTH-RBAC.md](docs/SDD-AUTH-RBAC.md).

@@ -103,6 +103,15 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 	}
 	n += tf
 
+	// Same reasoning, one table further: /oauth/google/start writes a row for
+	// any caller who can reach it. The per-IP cap bounds the rate; this is what
+	// bounds the total.
+	os, err := s.repo.SweepOAuthState(ctx, s.retain)
+	if err != nil {
+		s.logger.Error("oauth state sweep", "err", err)
+	}
+	n += os
+
 	evicted := 0
 	for _, prune := range s.inMemory {
 		evicted += prune(s.memoryRetain())

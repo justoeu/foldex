@@ -2,12 +2,18 @@ import { http } from './client'
 import type { AuthFeatures, AuthUser, Role } from '../auth/types'
 
 export type MeResponse = {
-  status: 'anonymous' | 'setup_required' | 'authenticated' | 'two_factor_required'
+  status:
+    | 'anonymous'
+    | 'setup_required'
+    | 'authenticated'
+    | 'two_factor_required'
+    | 'convert_password_account'
   user?: AuthUser
   csrf_token?: string
   features: AuthFeatures
-  // Present only on `two_factor_required`. The e-mail is masked by the server.
-  purpose?: 'totp' | 'enroll_2fa'
+  // Present on `two_factor_required` and `convert_password_account`. The e-mail
+  // is masked by the server.
+  purpose?: 'totp' | 'enroll_2fa' | 'convert_google'
   email?: string
   methods?: string[]
   max_attempts?: number
@@ -89,6 +95,71 @@ export async function lookupInvite(token: string): Promise<InvitePreview> {
 export async function acceptInvite(token: string, name: string, password: string): Promise<MeResponse> {
   const { data } = await http.post<MeResponse>('/api/auth/invites/accept', { token, name, password })
   return data
+}
+
+/**
+ * Adds a password to an account that has none — the Google-only escape hatch.
+ *
+ * `code` is required when the account has an authenticator: there is no current
+ * password to prove, so the second factor is the only step-up available.
+ */
+export async function setPassword(password: string, code?: string): Promise<void> {
+  await http.post('/api/auth/password/set', { password, code: code ?? '' })
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Google
+// ─────────────────────────────────────────────────────────────────────
+
+export type OAuthPurpose = 'login' | 'link' | 'accept_invite'
+
+/**
+ * Builds the URL that starts the flow.
+ *
+ * Split from the navigation below so the part with actual logic — query
+ * encoding of an invitation token, which is a credential and may contain
+ * characters that would otherwise terminate the query string — is testable
+ * without stubbing `window.location`, which jsdom refuses to let anyone
+ * redefine.
+ */
+export function googleStartUrl(purpose: OAuthPurpose, invite?: string): string {
+  const params = new URLSearchParams({ purpose })
+  if (invite) params.set('invite', invite)
+  return `/api/auth/oauth/google/start?${params}`
+}
+
+/**
+ * Leaves the SPA for Google's consent screen.
+ *
+ * A full-page navigation, not fetch: the flow ends in a redirect back to this
+ * origin carrying cookies the server sets, and an XHR could neither follow the
+ * cross-origin hop nor let the user see what they are consenting to.
+ */
+export function startGoogleOAuth(purpose: OAuthPurpose, invite?: string): void {
+  window.location.assign(googleStartUrl(purpose, invite))
+}
+
+/** Confirms the current password, attaching Google and retiring the password. */
+export async function convertToGoogle(password: string): Promise<MeResponse> {
+  const { data } = await http.post<MeResponse>('/api/auth/oauth/google/convert', { password })
+  return data
+}
+
+export type Identity = {
+  provider: string
+  email_at_link?: string
+  created_at: string
+  last_login_at?: string
+}
+
+export async function listIdentities(): Promise<Identity[]> {
+  const { data } = await http.get<{ identities: Identity[] }>('/api/auth/identities')
+  return data.identities
+}
+
+/** Detaches Google. Refused when it would leave the account with no way in. */
+export async function unlinkGoogle(password: string): Promise<void> {
+  await http.delete('/api/auth/oauth/google', { data: { password } })
 }
 
 export type SessionRow = {

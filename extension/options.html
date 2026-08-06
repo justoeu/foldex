@@ -13,6 +13,8 @@
     button { background: #6366F1; color: white; border: 0; border-radius: 6px;
       padding: 8px 14px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 14px; }
     button.secondary { background: transparent; color: #94a3b8; }
+    .hint { font-size: 11px; color: #64748b; line-height: 1.5; margin: 6px 0 0; }
+    .hint code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .status { margin-top: 12px; font-size: 13px; }
     .status.ok { color: #34d399; }
     .status.error { color: #f87171; }
@@ -22,8 +24,21 @@
   <h2>Foldex extension settings</h2>
   <label for="baseUrl">Backend base URL</label>
   <input id="baseUrl" type="url" placeholder="http://localhost:9089" />
-  <label for="sharedSecret">Shared secret (optional)</label>
-  <input id="sharedSecret" type="text" placeholder="leave empty unless SHARED_SECRET is set" />
+
+  <label for="apiToken">API token</label>
+  <input id="apiToken" type="password" placeholder="fx_…" autocomplete="off" />
+  <p class="hint">
+    Create one in Foldex under <strong>Settings → API tokens</strong>. It reads and writes
+    your links and notes; it cannot change your password, manage users or download a backup.
+  </p>
+
+  <label for="sharedSecret">Shared secret (deprecated)</label>
+  <input id="sharedSecret" type="password" placeholder="leave empty unless SHARED_SECRET is set" autocomplete="off" />
+  <p class="hint">
+    A perimeter header from before Foldex had accounts. It identifies nobody. Leave it empty
+    unless your server still sets <code>SHARED_SECRET</code>; it will be removed in a future release.
+  </p>
+
   <div>
     <button id="save">Save</button>
     <button id="test" class="secondary">Test connection</button>

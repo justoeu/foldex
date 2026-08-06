@@ -18,7 +18,7 @@ import (
 )
 
 func TestPublicHandler_RendersSanitizedHTML(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := notes.NewRepository(pool)
@@ -29,7 +29,7 @@ func TestPublicHandler_RendersSanitizedHTML(t *testing.T) {
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
-	notes.NewPublicHandler(repo).Mount(r)
+	notes.NewPublicHandler(repo, true).Mount(r)
 
 	req := httptest.NewRequest(http.MethodGet, "/n/"+created.Slug, nil)
 	rr := httptest.NewRecorder()
@@ -51,7 +51,7 @@ func TestPublicHandler_RendersSanitizedHTML(t *testing.T) {
 }
 
 func TestPublicHandler_ByID(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := notes.NewRepository(pool)
@@ -59,7 +59,7 @@ func TestPublicHandler_ByID(t *testing.T) {
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
-	notes.NewPublicHandler(repo).Mount(r)
+	notes.NewPublicHandler(repo, true).Mount(r)
 
 	req := httptest.NewRequest(http.MethodGet, "/n/"+idStr(created.ID), nil)
 	rr := httptest.NewRecorder()
@@ -68,12 +68,12 @@ func TestPublicHandler_ByID(t *testing.T) {
 }
 
 func TestPublicHandler_NotFound(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	_ = testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := notes.NewRepository(pool)
 	r := chi.NewRouter()
-	notes.NewPublicHandler(repo).Mount(r)
+	notes.NewPublicHandler(repo, true).Mount(r)
 
 	req := httptest.NewRequest(http.MethodGet, "/n/does-not-exist", nil)
 	rr := httptest.NewRecorder()

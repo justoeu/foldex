@@ -24,6 +24,17 @@ const (
 	ReasonUserDisabled    = "user_disabled"
 )
 
+// The `status` field every session-shaped response carries. Named constants
+// because the SPA switches on them and a typo on either side of the wire is a
+// screen that never renders.
+const (
+	statusAnonymous              = "anonymous"
+	statusSetupRequired          = "setup_required"
+	statusAuthenticated          = "authenticated"
+	statusTwoFactorRequired      = "two_factor_required"
+	statusConvertPasswordAccount = "convert_password_account"
+)
+
 // User is one row of app_user, minus the secrets.
 //
 // PasswordHash is deliberately NOT here. It is loaded by the single repository

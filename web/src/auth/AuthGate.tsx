@@ -20,6 +20,8 @@ const ForgotScreen = lazy(() =>
   import('../components/auth/ForgotScreen').then((m) => ({ default: m.ForgotScreen })))
 const VerifyEmailScreen = lazy(() =>
   import('../components/auth/VerifyEmailScreen').then((m) => ({ default: m.VerifyEmailScreen })))
+const ConvertScreen = lazy(() =>
+  import('../components/auth/ConvertScreen').then((m) => ({ default: m.ConvertScreen })))
 
 /**
  * Decides between the app and an auth screen.
@@ -83,6 +85,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
       ) : (
         <TwoFactorScreen pending={session.pending} />
       )
+    }
+
+    // Same reasoning, one flow over: a live convert challenge is a half-finished
+    // sign-in with a 10-minute pre-auth cookie behind it. Showing anything else
+    // strands it, and the user has no way back to this screen except starting
+    // the whole Google round-trip again.
+    if (session.status === 'convert_password_account') {
+      return <ConvertScreen email={session.email} />
     }
 
     // A reset token means the user is holding a credential that expires in 30

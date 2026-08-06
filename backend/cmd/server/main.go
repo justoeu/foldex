@@ -19,6 +19,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/mailer"
+	"foldex/internal/oauthgoogle"
 	"foldex/internal/pkg/keyfile"
 	"foldex/internal/pkg/logsafe"
 	"foldex/internal/pkg/secrets"
@@ -46,9 +47,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	if cfg.SharedSecret == "" {
-		logger.Warn("SHARED_SECRET not set — /api/* is reachable without authentication. " +
-			"Safe for localhost-only deployments; set SHARED_SECRET before exposing this server to any network.")
+	// SHARED_SECRET predates accounts. It is a perimeter header: it gates
+	// /api/* as a whole and identifies nobody, so it can neither tell two users
+	// apart nor scope a single row. Real authentication replaced it in ADR-30;
+	// what is left is a second lock on the front door, and it is on its way out.
+	switch {
+	case cfg.SharedSecret != "":
+		logger.Warn("SHARED_SECRET is DEPRECATED and will be removed in a future release. " +
+			"It authenticates nobody and identifies nobody — AUTH_ENABLED does both. " +
+			"Keep it only while older browser extensions are still configured with it.")
+	case !cfg.AuthEnabled:
+		// The one genuinely dangerous combination: no accounts AND no perimeter.
+		// Every request is attributed to the bootstrap admin, so anyone who can
+		// reach the port owns the whole library.
+		logger.Warn("AUTH_ENABLED=0 and SHARED_SECRET is empty — /api/* is reachable with no " +
+			"credential at all, and every request is attributed to the bootstrap administrator. " +
+			"Safe only on a loopback bind; turn AUTH_ENABLED back on before exposing this server.")
 	}
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -196,11 +210,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Built unconditionally. With no client credentials it reports itself
+	// disabled, /api/auth/me advertises google_oauth:false so the SPA hides
+	// the button, and the routes answer a readable "not configured" rather
+	// than 404 — which is what an operator who set only one of the two
+	// variables needs to see.
+	google := oauthgoogle.New(oauthgoogle.Config{
+		ClientID:     cfg.GoogleClientID,
+		ClientSecret: cfg.GoogleClientSecret,
+		RedirectURL:  cfg.GoogleRedirectURL(),
+	})
+	if google.Enabled() {
+		logger.Info("google oauth enabled", "redirect_uri", cfg.GoogleRedirectURL())
+	}
+
 	authHandler := auth.NewHandler(auth.HandlerConfig{
 		Repo: authRepo, MW: authMW, Mailer: mail, Cookies: cookieOpts,
 		TTL: authTTL, Logger: logger, BaseURL: cfg.AuthPublicURL,
 		Cipher: authCipher, TOTPIssuer: cfg.AuthTOTPIssuer,
 		Require2FAForAdmins: cfg.AuthRequire2FAForAdmins,
+		Google:              google,
 	})
 	adminHandler := auth.NewAdminHandler(authRepo, mail, logger, cfg.AuthPublicURL)
 

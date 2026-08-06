@@ -5,7 +5,7 @@ import { SUPPORTED_LOCALES, type LocaleCode } from '../i18n'
 
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
 type ViewMode = 'cards' | 'compact' | 'list'
-type View = 'home' | 'import' | 'stats' | 'settings'
+type View = 'home' | 'import' | 'stats' | 'settings' | 'admin'
 
 type Props = {
   sort: Sort

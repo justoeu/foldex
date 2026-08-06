@@ -176,6 +176,41 @@ describe('AuthGate second-factor routing', () => {
   })
 })
 
+describe('AuthGate Google conversion', () => {
+  // The conversion challenge is a half-finished sign-in with a live pre-auth
+  // cookie behind it, so it outranks everything except the app itself. It is
+  // NOT a second factor: routing it to the six-digit screen would put the user
+  // in front of a field they can never satisfy.
+  it('shows the convert screen for a convert challenge', async () => {
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: { status: 'convert_password_account', email: 'a••@b.test', features } },
+    )
+
+    expect(
+      await screen.findByRole('heading', { name: /confirm your password/i }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('the app')).not.toBeInTheDocument()
+  })
+
+  it('prefers the conversion over an invite token in the URL', async () => {
+    mockedTokens.invite = 'INVITETOKEN'
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: { status: 'convert_password_account', email: 'a••@b.test', features } },
+    )
+
+    expect(
+      await screen.findByRole('heading', { name: /confirm your password/i }),
+    ).toBeInTheDocument()
+    mockedTokens.invite = undefined
+  })
+})
+
 describe('AuthGate password recovery', () => {
   it('opens the forgot screen from the login screen and comes back', async () => {
     mockMe({ status: 'anonymous', features })

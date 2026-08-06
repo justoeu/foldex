@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +36,18 @@ import (
 	"foldex/internal/pkg/secrets"
 	"foldex/internal/testdb"
 )
+
+// TestMain owns the lifetime of the package's shared Postgres container.
+//
+// It has to be here rather than in a t.Cleanup because os.Exit skips deferred
+// work and a cleanup hung off whichever test ran first would tear the database
+// down while the rest of the package still needed it. The Makefile disables
+// testcontainers' reaper, so nothing else would collect it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	testdb.StopShared()
+	os.Exit(code)
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // Harness
@@ -115,7 +128,7 @@ const testBaseURL = "https://foldex.test"
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 	require.NoError(t, testdb.Reset(context.Background(), pool))
 	return newHarnessOn(t, pool)
 }
@@ -139,6 +152,10 @@ type harnessOpts struct {
 	// CipherSeed varies the encryption key. Non-zero stands up a stack that
 	// CANNOT read seeds another harness wrote.
 	CipherSeed byte
+	// Google injects an OAuth provider double. Nil leaves the routes mounted
+	// but reporting "not configured", which is what an instance without client
+	// credentials does.
+	Google auth.GoogleProvider
 }
 
 // testCipher is a FIXED key, so a test can assert that a seed encrypted in one
@@ -175,6 +192,7 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 		Repo: repo, MW: mw, Mailer: mail, Cookies: cookies,
 		TTL: auth.DefaultTTL(), Logger: logger, BaseURL: testBaseURL,
 		Require2FAForAdmins: opts.Require2FAForAdmins,
+		Google:              opts.Google,
 	}
 	if opts.TwoFactor || opts.Require2FAForAdmins {
 		cfg.Cipher = testCipherSeeded(t, opts.CipherSeed)
@@ -189,7 +207,12 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 		api.Group(func(pr chi.Router) {
 			pr.Use(mw.Authenticate)
 			pr.Route("/admin", func(ar chi.Router) {
+				// Same order as internal/server: the role gate answers 404
+				// first, so a non-admin cannot learn the surface exists, and
+				// the token gate answers 403 only to an admin who presents a
+				// bearer credential.
 				ar.Use(mw.RequireAdmin)
+				ar.Use(mw.RejectAPIToken)
 				admin.Mount(ar)
 			})
 			// A stand-in for the content surface, so tests can assert that a
@@ -1764,7 +1787,7 @@ func TestSweeper_PrunesMemoryEvenWhenTheDatabaseSweepFails(t *testing.T) {
 // the alternative is a fault-injecting driver wrapper for what is mechanical
 // error handling.
 func TestHandlers_DegradeCleanlyWhenTheDatabaseIsUnreachable(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 	require.NoError(t, testdb.Reset(context.Background(), pool))
 	h := newHarnessWith(t, pool, harnessOpts{TwoFactor: true, SMTP: true})
 	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")

@@ -337,3 +337,56 @@ func TestTwoFactorDefaults(t *testing.T) {
 		t.Error("the issuer must be derived when not set explicitly")
 	}
 }
+
+// The redirect URI is DERIVED, never configured. It must match what is
+// registered in the Google Cloud console byte for byte — Google's
+// redirect_uri_mismatch says nothing about which side is wrong — so the one
+// thing worth locking is that a trailing slash on AUTH_PUBLIC_URL does not
+// silently produce a double slash.
+func TestGoogleRedirectURL(t *testing.T) {
+	for _, tc := range []struct{ public, want string }{
+		{"https://foldex.example", "https://foldex.example/api/auth/oauth/google/callback"},
+		{"https://foldex.example/", "https://foldex.example/api/auth/oauth/google/callback"},
+		{"https://foldex.example///", "https://foldex.example/api/auth/oauth/google/callback"},
+		{"http://localhost:9088", "http://localhost:9088/api/auth/oauth/google/callback"},
+	} {
+		got := Config{AuthPublicURL: tc.public}.GoogleRedirectURL()
+		if got != tc.want {
+			t.Errorf("GoogleRedirectURL(%q) = %q, want %q", tc.public, got, tc.want)
+		}
+	}
+}
+
+func TestLoad_GoogleOAuthIsOffByDefault(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("GOOGLE_CLIENT_ID", "")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GoogleClientID != "" || cfg.GoogleClientSecret != "" {
+		t.Error("Google OAuth must stay unconfigured unless both values are set")
+	}
+	// Numeric share links are off by default: /go/{id} and /n/{id} resolve with
+	// no session, and link ids are a counter shared across every account.
+	if cfg.PublicNumericIDs {
+		t.Error("PUBLIC_NUMERIC_IDS must default to false")
+	}
+	// And accounts are ON, since PR4.
+	if !cfg.AuthEnabled {
+		t.Error("AUTH_ENABLED must default to true")
+	}
+}
+
+func TestLoad_PublicNumericIDsOptIn(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("PUBLIC_NUMERIC_IDS", "1")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.PublicNumericIDs {
+		t.Error("PUBLIC_NUMERIC_IDS=1 must re-enable the legacy numeric form")
+	}
+}

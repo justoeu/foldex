@@ -89,6 +89,10 @@ type Handler struct {
 	totpIssuer          string
 	require2FAForAdmins bool
 
+	// google is nil when the build wires no provider at all; every OAuth route
+	// checks oauthEnabled(), which covers both nil and "configured with nothing".
+	google GoogleProvider
+
 	loginByIP    *attemptlimit.Limiter
 	loginByEmail *attemptlimit.Limiter
 	bootstrapIP  *attemptlimit.Limiter
@@ -100,6 +104,10 @@ type Handler struct {
 	// not apply here because there is no challenge — without this the two
 	// step-up endpoints accept unlimited codes.
 	stepUpUser *attemptlimit.Limiter
+	// oauthIP bounds how many redirect states one address can mint. Each one is
+	// a row an unauthenticated caller creates, so without a cap the table is a
+	// pre-auth disk-fill primitive.
+	oauthIP *attemptlimit.Limiter
 
 	// features is echoed on /me so the SPA can render the right affordances
 	// (e.g. "check the server log" instead of "check your inbox").
@@ -128,6 +136,15 @@ type HandlerConfig struct {
 	// Require2FAForAdmins diverts an administrator without an authenticator
 	// into mandatory enrollment instead of straight into a session.
 	Require2FAForAdmins bool
+
+	// Google is the OAuth provider. Safe to pass one built from empty
+	// credentials: it reports Enabled() == false and the routes answer
+	// "not configured" instead of 404.
+	//
+	// Typed as the interface, not *oauthgoogle.Provider, so a nil concrete
+	// pointer stored in it would still be caught: oauthEnabled() checks the
+	// interface for nil AND calls Enabled().
+	Google GoogleProvider
 }
 
 func NewHandler(cfg HandlerConfig) *Handler {
@@ -143,6 +160,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		cipher:              cfg.Cipher,
 		totpIssuer:          cfg.TOTPIssuer,
 		require2FAForAdmins: cfg.Require2FAForAdmins,
+		google:              cfg.Google,
 
 		loginByIP:    attemptlimit.New(20, 15*time.Minute),
 		loginByEmail: attemptlimit.New(5, 15*time.Minute),
@@ -154,9 +172,10 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		pwResetIP:    attemptlimit.New(10, time.Hour),
 		pwResetEmail: attemptlimit.New(3, time.Hour),
 		stepUpUser:   attemptlimit.New(5, 15*time.Minute),
+		oauthIP:      attemptlimit.New(30, time.Hour),
 
 		features: map[string]any{
-			"google_oauth":   false, // PR4
+			"google_oauth":   cfg.Google != nil && cfg.Google.Enabled(),
 			"two_factor":     cfg.Cipher != nil,
 			"email_delivery": cfg.Mailer.Driver() == "smtp",
 		},
@@ -196,6 +215,22 @@ func (h *Handler) Mount(r chi.Router) {
 	r.With(h.mw.Optional).Get("/2fa/totp/qr.png", h.TOTPQR)
 	r.With(h.mw.Optional).Post("/2fa/totp/confirm", h.ConfirmTOTP)
 
+	// Google OAuth. Mounted unconditionally: with no client credentials the
+	// provider reports Enabled() == false and the routes answer a readable
+	// "not configured", which beats a 404 on a route the operator believes they
+	// turned on.
+	//
+	// /start uses Optional because purpose=link needs the session while the
+	// other purposes have none, and /convert runs on the pre-auth cookie —
+	// exactly like /2fa/verify, and protected the same way: fx_pa is Strict, so
+	// a cross-site POST never carries it.
+	r.Route("/oauth", func(or chi.Router) {
+		or.With(h.mw.Optional).Get("/google/start", h.OAuthStart)
+		or.Get("/google/callback", h.OAuthCallback)
+		or.Post("/google/convert", h.OAuthConvert)
+		or.With(h.mw.Authenticate, h.mw.RejectAPIToken).Delete("/google", h.OAuthUnlink)
+	})
+
 	// /me resolves a principal when there is one but never rejects.
 	r.With(h.mw.Optional).Get("/me", h.Me)
 	// Logout must work on a half-dead session, so it reads the cookie directly
@@ -205,14 +240,24 @@ func (h *Handler) Mount(r chi.Router) {
 
 	r.Group(func(pr chi.Router) {
 		pr.Use(h.mw.Authenticate)
+		// Nothing under here may be driven by a bearer token. These routes
+		// change credentials, list devices and mint new tokens; a value pasted
+		// into an extension's configuration must not reach any of them, or the
+		// token stops being scoped to content and becomes the account.
+		pr.Use(h.mw.RejectAPIToken)
 		pr.Post("/logout-all", h.LogoutAll)
 		pr.Get("/sessions", h.Sessions)
 		pr.Delete("/sessions/{id}", h.RevokeSession)
 		pr.Post("/password/change", h.ChangePassword)
+		pr.Post("/password/set", h.SetPassword)
+		pr.Get("/identities", h.ListIdentities)
 		pr.Post("/email/resend", h.SendEmailVerification)
 		pr.Get("/2fa", h.TwoFactorStatus)
 		pr.Post("/2fa/totp/disable", h.DisableTOTP)
 		pr.Post("/2fa/recovery-codes/regenerate", h.RegenerateRecoveryCodes)
+		pr.Get("/tokens", h.ListAPITokens)
+		pr.Post("/tokens", h.CreateAPIToken)
+		pr.Delete("/tokens/{id}", h.RevokeAPIToken)
 	})
 }
 
@@ -229,7 +274,7 @@ func (h *Handler) SweepLimiters(olderThan time.Duration) int {
 	n := 0
 	for _, l := range []*attemptlimit.Limiter{
 		h.loginByIP, h.loginByEmail, h.bootstrapIP, h.inviteIP,
-		h.pwResetIP, h.pwResetEmail, h.stepUpUser,
+		h.pwResetIP, h.pwResetEmail, h.stepUpUser, h.oauthIP,
 	} {
 		n += l.Sweep(olderThan)
 	}
@@ -484,15 +529,28 @@ func (h *Handler) notifyReuse(uid authctx.UserID) {
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	p, ok := authctx.FromContext(r.Context())
 	if !ok {
+		// A live pre-auth cookie means the caller is mid-login: they proved a
+		// password (or came back from Google) and owe a code, or owe the
+		// password that converts their account. Reporting it here is what makes
+		// the step survive a page reload — and it is the ONLY way the SPA learns
+		// about it after an OAuth callback, which lands as a fresh navigation
+		// with no response body of its own.
+		if ch, err := h.repo.ResolveChallenge(r.Context(), cookieValue(r, CookiePreAuth)); err == nil {
+			if u, err := h.repo.GetUser(r.Context(), ch.UserID); err == nil {
+				httperr.JSON(w, http.StatusOK,
+					h.pendingPayload(u, ch.Purpose, ch.MailboxAlreadyProven))
+				return
+			}
+		}
 		needs, err := h.repo.NeedsBootstrap(r.Context())
 		if err != nil {
 			h.logger.Error("me bootstrap check", "err", err)
 			httperr.Write(w, httperr.ErrInternal)
 			return
 		}
-		status := "anonymous"
+		status := statusAnonymous
 		if needs {
-			status = "setup_required"
+			status = statusSetupRequired
 		}
 		httperr.JSON(w, http.StatusOK, map[string]any{
 			"status":   status,
@@ -515,7 +573,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) authenticatedPayload(u User, csrf string) map[string]any {
 	return map[string]any{
-		"status":     "authenticated",
+		"status":     statusAuthenticated,
 		"user":       u,
 		"csrf_token": csrf,
 		"features":   h.features,

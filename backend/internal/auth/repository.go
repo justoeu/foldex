@@ -47,6 +47,9 @@ var (
 	ErrSelfTarget      = errors.New("auth: cannot perform this action on your own account")
 	ErrUserNotActive   = errors.New("auth: account is not active")
 	ErrPasswordMissing = errors.New("auth: account has no password credential")
+	// ErrInviteEmailMismatch means a provider account tried to claim an
+	// invitation issued to a different address.
+	ErrInviteEmailMismatch = errors.New("auth: provider address does not match the invitation")
 )
 
 // userColumns is the projection behind every User the API returns.
@@ -57,8 +60,16 @@ var (
 // places (enroll, confirm, disable, admin reset) and would silently disagree
 // with reality the first time one was missed — and the direction it disagrees
 // in decides whether a login demands a code the user cannot produce.
-const userColumns = `app_user.id, email, name, role, status, email_verified_at, last_login_at,
-	created_at, (password_hash IS NOT NULL) AS has_password,
+//
+// EVERY column is qualified with app_user, and that is load-bearing rather than
+// tidy: UserByIdentity selects this projection from `app_user JOIN
+// user_identity`, and user_identity carries its own `created_at` and
+// `last_login_at`. Unqualified, those two are ambiguous and Postgres refuses
+// the whole query — which surfaced as an opaque "server error" on the Google
+// login path, in a branch no single-table test could reach.
+const userColumns = `app_user.id, app_user.email, app_user.name, app_user.role, app_user.status,
+	app_user.email_verified_at, app_user.last_login_at, app_user.created_at,
+	(app_user.password_hash IS NOT NULL) AS has_password,
 	EXISTS (SELECT 1 FROM totp_secret ts
 	         WHERE ts.user_id = app_user.id AND ts.confirmed_at IS NOT NULL) AS totp_enabled`
 
@@ -514,6 +525,60 @@ func (r *Repository) AcceptInvite(ctx context.Context, rawToken, name, password 
 	if err != nil {
 		return User{}, err
 	}
+	return r.acceptInvite(ctx, inviteBy{tokenHash: secrets.Hash(rawToken)}, name,
+		inviteCredential{passwordHash: &hash})
+}
+
+// AcceptInviteWithIdentityByID accepts an invitation using a provider account
+// instead of a password, producing an account that is provider-only from birth.
+//
+// Located by id rather than by token because the OAuth round-trip already
+// resolved the token at START time and stored the id on the state row — the raw
+// token is not carried through Google and back, so it is not available here.
+// That is also the safer shape: the token never appears in a redirect URL, in
+// browser history, or in Google's logs.
+//
+// The Google address must equal the invited one. An invitation is issued TO a
+// specific mailbox, so letting a leaked link be claimed by any Google account
+// would turn "I sent Ana an invite" into "whoever saw the URL is now a user" —
+// and silently, since the account would carry the role meant for Ana.
+func (r *Repository) AcceptInviteWithIdentityByID(ctx context.Context, inviteID int64, name, provider, subject, email string) (User, error) {
+	return r.acceptInvite(ctx, inviteBy{id: &inviteID}, name, inviteCredential{
+		identity: &linkedIdentity{provider: provider, subject: subject, email: email},
+	})
+}
+
+// inviteBy locates the invitation to claim. Exactly one field is set.
+type inviteBy struct {
+	tokenHash []byte
+	id        *int64
+}
+
+// inviteCredential is how a newly claimed account will sign in. Exactly one of
+// the two is set; the type exists so the shared transaction below cannot be
+// called with neither, which would create an account nobody can ever use.
+type inviteCredential struct {
+	passwordHash *string
+	identity     *linkedIdentity
+}
+
+type linkedIdentity struct {
+	provider string
+	subject  string
+	email    string
+}
+
+func (r *Repository) acceptInvite(ctx context.Context, by inviteBy, name string, cred inviteCredential) (User, error) {
+	if cred.passwordHash == nil && cred.identity == nil {
+		return User{}, ErrPasswordMissing
+	}
+	// Fail closed on an empty locator. Both predicates below are written as
+	// "$n IS NULL OR …", so a zero-valued inviteBy would match the OLDEST live
+	// invitation on the instance and hand the caller an account they were never
+	// invited to. No caller does that today; this is what keeps it that way.
+	if by.tokenHash == nil && by.id == nil {
+		return User{}, ErrInviteInvalid
+	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return User{}, fmt.Errorf("accept begin: %w", err)
@@ -523,10 +588,16 @@ func (r *Repository) AcceptInvite(ctx context.Context, rawToken, name, password 
 	var inviteID int64
 	var email string
 	var role authctx.Role
+	// The liveness predicates are identical for both locators, and stay in ONE
+	// statement: an id-located invite that skipped the accepted/revoked/expired
+	// checks would let a completed OAuth round-trip claim an invitation revoked
+	// while the user was on Google's consent screen.
 	err = tx.QueryRow(ctx, `
 		SELECT id, email, role FROM invite
-		WHERE token_hash = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
-		FOR UPDATE`, secrets.Hash(rawToken)).Scan(&inviteID, &email, &role)
+		WHERE ($1::bytea IS NULL OR token_hash = $1)
+		  AND ($2::bigint IS NULL OR id = $2)
+		  AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
+		FOR UPDATE`, by.tokenHash, by.id).Scan(&inviteID, &email, &role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrInviteInvalid
 	}
@@ -535,15 +606,28 @@ func (r *Repository) AcceptInvite(ctx context.Context, rawToken, name, password 
 	}
 
 	norm := NormalizeEmail(email)
+	if cred.identity != nil && NormalizeEmail(cred.identity.email) != norm {
+		return User{}, ErrInviteEmailMismatch
+	}
+
 	u, err := scanUser(tx.QueryRow(ctx, `
 		INSERT INTO app_user (email, email_normalized, name, password_hash, role, status, email_verified_at)
 		VALUES ($1, $2, $3, $4, $5, 'active', now())
-		RETURNING `+userColumns, strings.TrimSpace(email), norm, name, hash, role))
+		RETURNING `+userColumns, strings.TrimSpace(email), norm, name, cred.passwordHash, role))
 	if err != nil {
 		if pgerr.UniqueConstraint(err) == "app_user_email_norm_uniq" {
 			return User{}, ErrEmailTaken
 		}
 		return User{}, fmt.Errorf("accept insert user: %w", err)
+	}
+	if cred.identity != nil {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO user_identity (user_id, provider, subject, email_at_link, last_login_at)
+			VALUES ($1, $2, $3, $4, now())`,
+			int64(u.ID), cred.identity.provider, cred.identity.subject,
+			nullString(cred.identity.email)); err != nil {
+			return User{}, mapIdentityConflict(err)
+		}
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE invite SET accepted_at = now(), accepted_user_id = $2 WHERE id = $1`,

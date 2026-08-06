@@ -16,6 +16,13 @@ export type UrlTokens = {
   invite?: string
   reset?: string
   verify?: string
+  /**
+   * The OAuth callback's outcome. It is a marker, not state: the actual result
+   * — a session, or a pending challenge — lives in cookies, and the SPA
+   * discovers it by calling /me on boot. This only decides what to SAY, e.g.
+   * confirming that a Google account was linked.
+   */
+  oauth?: string
   oauthError?: string
 }
 
@@ -28,10 +35,11 @@ function readAndStrip(): UrlTokens {
     invite: params.get('invite') ?? undefined,
     reset: params.get('reset') ?? undefined,
     verify: params.get('verify') ?? undefined,
+    oauth: params.get('oauth') ?? undefined,
     oauthError: params.get('oauth_error') ?? undefined,
   }
 
-  const consumed = ['invite', 'reset', 'verify', 'oauth_error']
+  const consumed = ['invite', 'reset', 'verify', 'oauth', 'oauth_error']
   const hadAny = consumed.some((k) => params.has(k))
   if (hadAny) {
     consumed.forEach((k) => params.delete(k))

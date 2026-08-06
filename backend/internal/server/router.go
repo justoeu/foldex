@@ -154,8 +154,11 @@ func New(d Deps) http.Handler {
 	// /go/{id-or-slug} (link redirect) and /n/{id-or-slug} (note render) are
 	// meant to be shareable the same way.
 	notesRepo := notes.NewRepository(d.Pool)
-	redirect.NewHandler(links.NewRepository(d.Pool)).Mount(r)
-	notes.NewPublicHandler(notesRepo).Mount(r)
+	// Both public share routes resolve with NO session, so a numeric id there
+	// is an enumeration oracle across every tenant — see ADR-32. Off unless the
+	// operator opts in for the sake of already-shared /go/42 links.
+	redirect.NewHandler(links.NewRepository(d.Pool), d.Config.PublicNumericIDs).Mount(r)
+	notes.NewPublicHandler(notesRepo, d.Config.PublicNumericIDs).Mount(r)
 
 	r.Route("/api", func(api chi.Router) {
 		if d.Config.SharedSecret != "" {
@@ -195,7 +198,15 @@ func New(d Deps) http.Handler {
 				// principal is an admin, so the routes stay reachable for the
 				// single-user case.
 				pr.Route("/admin", func(ar chi.Router) {
+					// Role gate FIRST, token gate second, and the order is the
+					// whole point: a non-admin — token or not — must get the
+					// same 404 as a route that does not exist. Rejecting tokens
+					// first would answer 403 to any token holder, confirming
+					// /api/admin exists to accounts that are not supposed to
+					// know. An ADMIN presenting a token gets the 403, which
+					// tells them something true about their own credential.
 					ar.Use(requireAdmin(d.AuthMiddleware))
+					ar.Use(rejectAPIToken(d.AuthMiddleware))
 					d.AdminHandler.Mount(ar)
 				})
 			}
@@ -254,7 +265,14 @@ func New(d Deps) http.Handler {
 			}
 			pr.Route("/stats", statsHandler.Mount)
 			if d.StorageBucket != nil {
-				pr.Route("/backup", backup.NewHandler(backup.NewService(d.Pool, d.StorageBucket, d.Logger), d.Logger).Mount)
+				// Backup export is every row and every file the caller owns, in
+				// one download. A bearer token pasted into an extension's
+				// configuration must not be able to produce that, and restore
+				// must not be able to overwrite it.
+				pr.Route("/backup", func(br chi.Router) {
+					br.Use(rejectAPIToken(d.AuthMiddleware))
+					backup.NewHandler(backup.NewService(d.Pool, d.StorageBucket, d.Logger), d.Logger).Mount(br)
+				})
 			}
 			if d.PushHandler != nil {
 				pr.Route("/push", d.PushHandler.Mount)
@@ -309,6 +327,26 @@ func bootstrapPrincipal(pool *pgxpool.Pool, logger *slog.Logger) func(http.Handl
 				Role:   authctx.RoleAdmin,
 				Via:    authctx.ViaSession,
 			})))
+		})
+	}
+}
+
+// rejectAPIToken adapts the auth middleware's bearer-token gate, with the same
+// fail-closed fallback requireAdmin uses: when the auth stack is not wired the
+// rule is applied in line rather than skipped, because a nil middleware is a
+// wiring mistake and must not read as permission.
+func rejectAPIToken(mw *auth.Middleware) func(http.Handler) http.Handler {
+	if mw != nil {
+		return mw.RejectAPIToken
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if p, ok := authctx.FromContext(r.Context()); ok && p.Via == authctx.ViaAPIToken {
+				httperr.Write(w, httperr.New(http.StatusForbidden, "token_scope",
+					"an API token cannot be used on this endpoint"))
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }

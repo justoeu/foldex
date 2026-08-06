@@ -17,9 +17,16 @@ import (
 // a note has no external URL to forward to.
 type PublicHandler struct {
 	repo *Repository
+	// allowNumericIDs re-enables /n/42 — off by default since ADR-32, and for
+	// a sharper reason than /go: this route RENDERS the note's content, so a
+	// walkable id space would expose other tenants' text, not just their
+	// destination URLs.
+	allowNumericIDs bool
 }
 
-func NewPublicHandler(repo *Repository) *PublicHandler { return &PublicHandler{repo: repo} }
+func NewPublicHandler(repo *Repository, allowNumericIDs bool) *PublicHandler {
+	return &PublicHandler{repo: repo, allowNumericIDs: allowNumericIDs}
+}
 
 func (h *PublicHandler) Mount(r chi.Router) {
 	r.Get("/n/{id}", h.view)
@@ -29,6 +36,13 @@ func (h *PublicHandler) view(w http.ResponseWriter, r *http.Request) {
 	raw := chi.URLParam(r, "id")
 	if raw == "" {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_target", "target is required"))
+		return
+	}
+	// A plain 404, identical to an unknown slug — see redirect.Handler for the
+	// full argument. The note slug carries no session and no tenant, so id
+	// lookup here is an enumeration oracle over every account's notes.
+	if _, numeric := parsePositiveID(raw); numeric && !h.allowNumericIDs {
+		httperr.Write(w, httperr.ErrNotFound)
 		return
 	}
 	n, err := h.repo.SystemViewAndResolve(r.Context(), raw)

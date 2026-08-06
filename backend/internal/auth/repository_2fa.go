@@ -72,11 +72,40 @@ type Challenge struct {
 	// go to the same inbox the link came from, so both steps would be
 	// satisfiable by one compromised mailbox.
 	MailboxAlreadyProven bool
+	// OAuthSubject / OAuthEmail describe the provider account a
+	// convert_google challenge is about, empty for every other purpose. They
+	// are read from the row rather than from the request so the conversion
+	// attaches the identity Google authenticated, not one the client names.
+	OAuthSubject string
+	OAuthEmail   string
 }
 
 // ─────────────────────────────────────────────────────────────────────
 // Challenges
 // ─────────────────────────────────────────────────────────────────────
+
+// NewChallenge is everything a pre-auth challenge is born with.
+//
+// A struct rather than a parameter list because the list had already reached
+// seven, and the two booleans in it — mailbox_already_proven and, at the call
+// site, whichever flag comes next — are exactly the arguments that get swapped
+// silently. Named fields make that a visible mistake.
+type NewChallenge struct {
+	UserID  authctx.UserID
+	Purpose string
+	TTL     time.Duration
+	IP      string
+	// UserAgent is recorded for the "a code was requested from…" mail.
+	UserAgent string
+	// MailboxAlreadyProven marks a challenge whose FIRST factor was a link sent
+	// to the account's address, which disqualifies the e-mail second factor —
+	// otherwise one channel would satisfy both steps.
+	MailboxAlreadyProven bool
+	// Identity is the provider account a convert_google challenge is about. It
+	// is stored server-side precisely so the convert request cannot name a
+	// different subject than the one Google authenticated.
+	Identity *linkedIdentity
+}
 
 // CreateChallenge mints a pre-auth token and returns its raw value.
 //
@@ -84,7 +113,7 @@ type Challenge struct {
 // Without that, a user who retries the password form accumulates challenges,
 // and each one carries its own fresh attempt budget — turning the 5-guess cap
 // into "5 guesses per password entry", which is no cap at all.
-func (r *Repository) CreateChallenge(ctx context.Context, uid authctx.UserID, purpose string, ttl time.Duration, ip, ua string, mailboxAlreadyProven bool) (string, int64, error) {
+func (r *Repository) CreateChallenge(ctx context.Context, in NewChallenge) (string, int64, error) {
 	raw, hash, err := secrets.NewToken()
 	if err != nil {
 		return "", 0, fmt.Errorf("challenge token: %w", err)
@@ -98,17 +127,24 @@ func (r *Repository) CreateChallenge(ctx context.Context, uid authctx.UserID, pu
 	if _, err := tx.Exec(ctx, `
 		UPDATE auth_challenge SET consumed_at = now()
 		WHERE user_id = $1 AND purpose = $2 AND consumed_at IS NULL`,
-		int64(uid), purpose); err != nil {
+		int64(in.UserID), in.Purpose); err != nil {
 		return "", 0, fmt.Errorf("supersede challenges: %w", err)
+	}
+
+	var provider, subject, email *string
+	if in.Identity != nil {
+		provider, subject = &in.Identity.provider, &in.Identity.subject
+		email = nullString(in.Identity.email)
 	}
 
 	var id int64
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO auth_challenge (user_id, token_hash, purpose, expires_at, ip, user_agent,
-		                            mailbox_already_proven)
-		VALUES ($1, $2, $3, now() + $4::interval, $5, $6, $7)
+		                            mailbox_already_proven, oauth_provider, oauth_subject, oauth_email)
+		VALUES ($1, $2, $3, now() + $4::interval, $5, $6, $7, $8, $9, $10)
 		RETURNING id`,
-		int64(uid), hash, purpose, intervalArg(ttl), nullIP(ip), ua, mailboxAlreadyProven).Scan(&id); err != nil {
+		int64(in.UserID), hash, in.Purpose, intervalArg(in.TTL), nullIP(in.IP), in.UserAgent,
+		in.MailboxAlreadyProven, provider, subject, email).Scan(&id); err != nil {
 		return "", 0, fmt.Errorf("insert challenge: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -129,11 +165,12 @@ func (r *Repository) ResolveChallenge(ctx context.Context, rawToken string, purp
 	var c Challenge
 	var uid int64
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, user_id, purpose, attempts, sends, mailbox_already_proven
+		SELECT id, user_id, purpose, attempts, sends, mailbox_already_proven,
+		       COALESCE(oauth_subject, ''), COALESCE(oauth_email, '')
 		FROM auth_challenge
 		WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()`,
 		secrets.Hash(rawToken)).Scan(&c.ID, &uid, &c.Purpose, &c.Attempts, &c.Sends,
-		&c.MailboxAlreadyProven)
+		&c.MailboxAlreadyProven, &c.OAuthSubject, &c.OAuthEmail)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Challenge{}, ErrChallengeInvalid
 	}

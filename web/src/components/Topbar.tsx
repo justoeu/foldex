@@ -3,8 +3,9 @@ import { Icon, I } from './icons'
 import { LocalePicker } from './LocalePicker'
 import { MobileOverflowMenu } from './MobileOverflowMenu'
 import { PushToggle } from './PushToggle'
+import { useCurrentUser } from '../auth/AuthProvider'
 
-type View = 'home' | 'import' | 'stats' | 'settings'
+type View = 'home' | 'import' | 'stats' | 'settings' | 'admin'
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
 type ViewMode = 'cards' | 'compact' | 'list'
 
@@ -62,6 +63,10 @@ export function Topbar({
   setDark,
 }: Props) {
   const { t } = useTranslation()
+  // Read from the session rather than passed in as a prop: the role is not
+  // something App knows or should thread through, and every other consumer of
+  // "who am I" in this tree reads it the same way.
+  const isAdmin = useCurrentUser()?.role === 'admin'
   return (
     <header className="fx-topbar">
       {/* Hamburger only paints on ≤768px viewports (CSS-controlled). On
@@ -143,6 +148,19 @@ export function Topbar({
         >
           <Icon d={I.upload} size={16} />
         </button>
+        {/* Admin-only. Hidden rather than disabled: the whole /api/admin surface
+            answers 404 for a non-admin, so showing a control that leads there
+            would promise something the server denies existing. */}
+        {isAdmin && (
+          <button
+            className={'fx-qn' + (view === 'admin' ? ' fx-qn-active' : '')}
+            aria-label={t('topbar.admin')}
+            data-tooltip={t('topbar.admin')}
+            onClick={() => setView('admin')}
+          >
+            <Icon d={I.users} size={16} />
+          </button>
+        )}
         <button
           className={'fx-qn' + (view === 'settings' ? ' fx-qn-active' : '')}
           aria-label={t('topbar.settings')}
