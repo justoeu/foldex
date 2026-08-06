@@ -682,3 +682,35 @@ func TestRepository_ListRecentChanges_WindowFiltersOut(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, out, "8-day-old change must fall outside the 7-day window")
 }
+
+// AssertOwned is the ownership gate ProxyFile uses instead of Get, so it needs
+// its own test: the handler suite exercises the branch through a fake
+// repository, which proves the handler reacts to the answer but nothing about
+// how the answer is reached.
+//
+// The foreign case is the one that matters. Object keys are FLAT
+// (`images/{link_id}.jpg` — no tenant segment), so the id embedded in the key
+// is attacker-supplied and this query is the only thing standing between a
+// guessed id and another tenant's image. It must answer the byte-identical 404
+// an absent id gets: a distinguishable error would turn the proxy into an
+// enumeration oracle over a dense BIGSERIAL.
+func TestRepository_AssertOwned(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+
+	alice := testdb.SeedUser(t, pool, "alice@test.local", "user")
+	bob := testdb.SeedUser(t, pool, "bob@test.local", "user")
+	repo := links.NewRepository(pool)
+
+	mine, err := repo.Create(ctx, alice, links.CreateInput{URL: "https://a.test/own", Title: "own"})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.AssertOwned(ctx, alice, mine.ID), "the owner must pass")
+
+	foreign := repo.AssertOwned(ctx, bob, mine.ID)
+	absent := repo.AssertOwned(ctx, bob, mine.ID+10_000)
+	require.ErrorIs(t, foreign, httperr.ErrNotFound)
+	require.ErrorIs(t, absent, httperr.ErrNotFound)
+	assert.Equal(t, absent, foreign,
+		"a foreign id and an absent id must be indistinguishable, or the file proxy leaks which ids exist")
+}

@@ -515,11 +515,17 @@ Tudo sob `RequireRole(admin)`. Tokens de API são **rejeitados** aqui.
 
 | Método | Rota |
 |---|---|
-| `GET` / `POST` | `/api/admin/users` (listar / criar) |
-| `GET` / `PATCH` / `DELETE` | `/api/admin/users/{id}` |
-| `POST` | `/api/admin/users/invite` |
+| `GET` | `/api/admin/users` |
+| `PATCH` / `DELETE` | `/api/admin/users/{id}` |
 | `POST` | `/api/admin/users/{id}/force-password-reset` |
 | `POST` | `/api/admin/users/{id}/sessions/revoke` |
+| `GET` / `POST` | `/api/admin/invites` (listar / criar) |
+| `DELETE` | `/api/admin/invites/{id}` |
+
+Não existe rota que **crie** uma conta diretamente: a instância é invite-only, então
+`POST /api/admin/invites` é o único caminho de entrada e a conta nasce quando o convite é aceito.
+Também não existe `GET /api/admin/users/{id}` — a listagem já carrega a projeção inteira, e uma
+rota de leitura por id seria uma segunda superfície para manter escopada sem nenhum consumidor.
 
 Guardas travadas no servidor (o frontend só espelha): não é possível rebaixar, desabilitar ou apagar **a si mesmo**, nem **o último admin ativo**.
 
@@ -734,9 +740,17 @@ O preview worker e o change-check worker são cross-tenant por natureza. `FindDu
 | `2fa/email` | `auth_challenge.sends` (**banco**) | 3 + intervalo de 60 s |
 | `password/forgot` | `pwreset:ip` / `pwreset:em` | 10/h e 3/h |
 | `password/reset`, `invites/accept` | `:ip` | 20/h |
-| bearer inválido | `apitoken:ip` | 30/min |
 | `bootstrap` | `bootstrap:ip` | 5/h |
-| `oauth/callback` | `oauthcb:ip` | 30 / 15 min |
+| `2fa` de step-up (`totp/disable`, `recovery-codes/regenerate`) | `stepup:<uid>` | 5 / 15 min |
+| `oauth/google/start` | `oauth:<ip>` | 30/h |
+
+Duas ausências deliberadas. **Bearer inválido não tem bucket próprio**: resolver um token é um
+`SELECT` por id seguido de uma comparação em tempo constante — não há hash caro para exaurir, e o
+segredo tem 256 bits, então limitar palpites não muda nada que a entropia já não decida.
+E o limite de OAuth fica no **`start`**, não no `callback`: é o `start` que gasta trabalho antes de
+qualquer prova (grava `oauth_state`, monta PKCE), enquanto o `callback` precisa de um `state`
+válido emitido por um `start` que já pagou o bucket. Limitar o callback puniria o retorno legítimo
+do Google numa rede compartilhada, sem fechar nada que o `start` não feche antes.
 
 **`middleware.RealIP` confia em `X-Forwarded-For` incondicionalmente.** Atrás do nginx está certo; em bind direto é spoofável, o que torna os buckets por IP decorativos. Entra `TRUSTED_PROXY_IPS` (CSV): `X-Forwarded-For` só é honrado vindo desses peers, senão vale `RemoteAddr`. É por isso que o desenho tem **duas** chaves — a de e-mail e as do banco seguram mesmo se a de IP falhar.
 

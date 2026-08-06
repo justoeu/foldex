@@ -1411,6 +1411,87 @@ func TestAdmin_CannotRemoveTheLastAdmin(t *testing.T) {
 	assert.Equal(t, "self_target", errCode(t, rec))
 }
 
+// The test above never reaches the `last_admin` answer, and cannot: the role is
+// read live from app_user on every request, so a caller who is an active admin
+// is always counted in the guard's own tally. No SEQUENTIAL request can be the
+// one that empties the set — the only sequential way to try is to target
+// yourself, which the self-target guard refuses first.
+//
+// Concurrency is the only way in, and it is what the guard exists for: two
+// admins demoting each other at the same instant. A read-then-write check would
+// let both observe two admins and both proceed, leaving zero — a state no API
+// call can undo.
+//
+// The loser is refused by whichever guard it reaches first, and WHICH one is a
+// genuine race: if it clears RequireAdmin before the winner commits it lands in
+// guardLastAdminTx and gets 409 `last_admin`; if the commit beats it there, its
+// own role is already `user` and RequireAdmin answers 404. Both are correct
+// refusals, so this asserts the invariant that holds either way rather than
+// pinning a timing. Rounds are repeated because a single pass exercises only
+// one side of the race.
+func TestAdmin_ConcurrentDemotionsAlwaysLeaveAnAdmin(t *testing.T) {
+	for round := range 5 {
+		// A fresh harness per round: it resets the schema (restoring the
+		// bootstrap placeholder the first client claims) and rebuilds the
+		// router, so the round's login does not spend the previous round's
+		// rate-limit budget.
+		h := newHarness(t)
+
+		first := h.bootstrapAdmin(t, fmt.Sprintf("admin%d@example.com", round), "a good password")
+		const firstID = 1 // bootstrap claims the placeholder row
+		email2 := fmt.Sprintf("admin2-%d@example.com", round)
+		secondID := testdb.SeedUserWithPassword(t, h.pool, email2, "a good password", "admin")
+
+		second := h.client(t)
+		require.Equal(t, http.StatusOK, second.do(http.MethodPost, "/api/auth/login", map[string]string{
+			"email": email2, "password": "a good password",
+		}).Code)
+
+		// Each client owns its own cookie map, so the two goroutines share
+		// nothing but the router and the pool.
+		var recs [2]*httptest.ResponseRecorder
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			recs[0] = first.do(http.MethodPatch, fmt.Sprintf("/api/admin/users/%d", int64(secondID)),
+				map[string]string{"role": "user"})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			recs[1] = second.do(http.MethodPatch, fmt.Sprintf("/api/admin/users/%d", int64(firstID)),
+				map[string]string{"role": "user"})
+		}()
+		close(start)
+		wg.Wait()
+
+		var admins int
+		require.NoError(t, h.pool.QueryRow(context.Background(),
+			`SELECT count(*) FROM app_user WHERE role = 'admin' AND status = 'active'`).Scan(&admins))
+		require.GreaterOrEqual(t, admins, 1,
+			"round %d: both demotions landed (%d/%d) — no administrator left",
+			round, recs[0].Code, recs[1].Code)
+
+		refused := 0
+		for _, rec := range recs {
+			switch rec.Code {
+			case http.StatusConflict:
+				refused++
+				// Not merely "a 409": self_target is also a 409 and would be
+				// the wrong refusal here, since neither call targets itself.
+				assert.Equal(t, "last_admin", errCode(t, rec))
+			case http.StatusNotFound:
+				refused++
+			}
+		}
+		assert.Equal(t, 1, refused, "round %d: exactly one demotion must be refused (%d/%d)",
+			round, recs[0].Code, recs[1].Code)
+	}
+}
+
 func TestAdmin_DeleteCascadesTheUsersContent(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
