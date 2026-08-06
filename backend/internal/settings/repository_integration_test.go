@@ -14,7 +14,7 @@ import (
 )
 
 func TestRepository_MasterPassword_Lifecycle(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := settings.NewRepository(pool)
@@ -67,7 +67,7 @@ func TestRepository_MasterPassword_Lifecycle(t *testing.T) {
 }
 
 func TestRepository_MasterHint_Tristate(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := settings.NewRepository(pool)
@@ -105,7 +105,7 @@ func TestRepository_MasterHint_Tristate(t *testing.T) {
 }
 
 func TestRepository_ClosedPoolErrors(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := settings.NewRepository(pool)

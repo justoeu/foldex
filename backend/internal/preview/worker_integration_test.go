@@ -18,7 +18,20 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/preview"
 	"foldex/internal/testdb"
+	"os"
 )
+
+// TestMain owns the lifetime of this package's shared Postgres container.
+//
+// It cannot be a t.Cleanup: os.Exit skips deferred work, and a cleanup hung off
+// whichever test ran first would tear the database down while the rest of the
+// package still needed it. The Makefile disables testcontainers' reaper, so
+// nothing else would collect it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	testdb.StopShared()
+	os.Exit(code)
+}
 
 func TestWorker_ProcessesEnqueuedJob(t *testing.T) {
 	t.Setenv("PREVIEW_STRICT_SSRF", "")
@@ -33,7 +46,7 @@ func TestWorker_ProcessesEnqueuedJob(t *testing.T) {
 	}))
 	defer target.Close()
 
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -110,7 +123,7 @@ func TestWorker_ScreenshotFallback_RunsWhenNoOGImage(t *testing.T) {
 	}))
 	defer target.Close()
 
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -163,7 +176,7 @@ func TestWorker_ShortCircuitsWhenImageAlreadyPresent(t *testing.T) {
 	}))
 	defer target.Close()
 
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -209,7 +222,7 @@ func TestWorker_ShortCircuitsWhenImageAlreadyPresent(t *testing.T) {
 
 func TestWorker_MarksFailureOnUnreachable(t *testing.T) {
 	t.Setenv("PREVIEW_STRICT_SSRF", "")
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

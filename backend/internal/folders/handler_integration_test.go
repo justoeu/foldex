@@ -22,7 +22,20 @@ import (
 	"foldex/internal/pkg/authctx"
 
 	"foldex/internal/pkg/authctx/authctxtest"
+	"os"
 )
+
+// TestMain owns the lifetime of this package's shared Postgres container.
+//
+// It cannot be a t.Cleanup: os.Exit skips deferred work, and a cleanup hung off
+// whichever test ran first would tear the database down while the rest of the
+// package still needed it. The Makefile disables testcontainers' reaper, so
+// nothing else would collect it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	testdb.StopShared()
+	os.Exit(code)
+}
 
 // testUnlockKey is a fixed 32-byte HMAC key — real deployments get one from
 // folders.LoadOrGenerateFolderUnlockKey, but these tests only need
@@ -51,7 +64,7 @@ func newHandlerRouter(t *testing.T) (http.Handler, *folders.Repository, authctx.
 
 func newHandlerRouterMaster(t *testing.T, master folders.MasterPasswordVerifier) (http.Handler, *folders.Repository, authctx.UserID) {
 	t.Helper()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := folders.NewRepository(pool)
@@ -373,7 +386,7 @@ func TestHandler_Unlock_SuccessResetsAttemptCounter(t *testing.T) {
 // lockout on a folder B cannot even read. Reserving only after ownership is
 // proven makes B's requests cost A nothing.
 func TestHandler_Unlock_ForeignAttemptsCannotLockTheOwnerOut(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 	alice := testdb.SeedUser(t, pool, "alice@test.local", "user")
 	bob := testdb.SeedUser(t, pool, "bob@test.local", "user")
 

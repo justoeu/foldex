@@ -22,7 +22,7 @@ import (
 
 func setup(t *testing.T) (context.Context, authctx.UserID, *notes.Repository, *tags.Repository, *folders.Repository) {
 	t.Helper()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	return context.Background(), uid, notes.NewRepository(pool), tags.NewRepository(pool), folders.NewRepository(pool)
@@ -343,7 +343,7 @@ func TestRepository_ViewAndResolve_NotFound(t *testing.T) {
 // other entity kind, even when the two share the same numeric id.
 func TestCrossContamination_LinkAndNoteRowsDoNotLeak(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	nrepo := notes.NewRepository(pool)

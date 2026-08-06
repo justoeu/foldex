@@ -54,7 +54,7 @@ func sha256hex(b []byte) string {
 }
 
 func TestValidate_ErrorBranches(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
@@ -262,7 +262,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 }
 
 func TestRestore_EmptySlugAndNoteTags(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -340,7 +340,7 @@ func TestRestore_EmptySlugAndNoteTags(t *testing.T) {
 func TestExport_FullSnapshotRoundTrip(t *testing.T) {
 	// Covers readSnapshot arms for notes/note_tags/note_clicks/app_settings
 	// and folders with password_hash/hint — the branches empty-DB exports skip.
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -397,7 +397,7 @@ func TestExport_FullSnapshotRoundTrip(t *testing.T) {
 }
 
 func TestRestore_UniqueTagNameWalksPast2(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -427,7 +427,7 @@ func TestRestore_UniqueTagNameWalksPast2(t *testing.T) {
 
 func TestRestore_SkipIntoEmptyDB_InsertsEverything(t *testing.T) {
 	// Exercises restoreSkip's *inserted* branches (not just ON CONFLICT skip).
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -476,7 +476,7 @@ func TestRestore_SkipIntoEmptyDB_InsertsEverything(t *testing.T) {
 }
 
 func TestRestore_DuplicateIntoEmptyDB(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -522,7 +522,7 @@ func TestRestore_DuplicateIntoEmptyDB(t *testing.T) {
 }
 
 func TestRestore_InvalidModeAndBadManifest(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
@@ -556,7 +556,7 @@ func TestRestore_InvalidModeAndBadManifest(t *testing.T) {
 }
 
 func TestRestore_Duplicate_EmptySlugAndRenames(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()

@@ -27,7 +27,7 @@ import (
 
 func setup(t *testing.T) (context.Context, authctx.UserID, *links.Repository, *tags.Repository) {
 	t.Helper()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	return context.Background(), uid, links.NewRepository(pool), tags.NewRepository(pool)
@@ -308,7 +308,7 @@ func TestRepository_UpdateDuplicateURLReturns409(t *testing.T) {
 // Without this, a link in a folder would appear both in the folder card AND
 // on the home grid, double-rendered.
 func TestRepository_UngroupedExcludesLinksInFolders(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -337,7 +337,7 @@ func TestRepository_UngroupedExcludesLinksInFolders(t *testing.T) {
 // and a tag filter must compose with AND, not OR. Inside folder F, toggling
 // tag X narrows the result to links in F that also have X.
 func TestRepository_ListByFolderANDTag(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -402,7 +402,7 @@ func TestRepository_GoEndpointIsOnlyClickInserter(t *testing.T) {
 // the LATERAL but also re-introduce the denormalization drift; this test
 // surfaces it at boot.
 func TestSchema_NoCachedClickColumns(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	_ = testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -515,7 +515,7 @@ func TestRepository_FindDueForCheck_RespectsInterval(t *testing.T) {
 	// Need direct pool access to backdate last_checked_at — testdb.New spins
 	// a fresh container per call, so we share one pool between repo + raw SQL.
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
@@ -664,7 +664,7 @@ func TestRepository_ListRecentChanges_FiltersAndSorts(t *testing.T) {
 func TestRepository_ListRecentChanges_WindowFiltersOut(t *testing.T) {
 	// Same pool-sharing rationale as FindDueForCheck_RespectsInterval.
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)

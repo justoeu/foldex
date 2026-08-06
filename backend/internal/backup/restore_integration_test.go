@@ -124,7 +124,7 @@ func scalar(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) int64 {
 // the mapped insert path re-creates them with fresh ids. What must survive is
 // the CONTENT and its relationships — not the integers.
 func TestRestore_WipeRestoresContentWithFreshIDs(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -168,7 +168,7 @@ func TestRestore_WipeRestoresContentWithFreshIDs(t *testing.T) {
 // §4 skip contract: URL/name collisions are preserved (ON CONFLICT DO NOTHING),
 // never duplicated, and re-running the SAME zip inserts no new unique entities.
 func TestRestore_SkipLeavesCollisionsAndIsIdempotentForUniqueEntities(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -220,7 +220,7 @@ func TestRestore_SkipLeavesCollisionsAndIsIdempotentForUniqueEntities(t *testing
 // new, and a link whose URL already exists falls back to skip + warning (URL is
 // UNIQUE so honest duplication is impossible).
 func TestRestore_DuplicateRenamesTagsAndFallsBackOnURLCollision(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -282,6 +282,10 @@ func TestRestore_DuplicateAppendsSlugSuffixOnCollision(t *testing.T) {
 	ctx := context.Background()
 
 	// Source: seed + export.
+	// TWO INDEPENDENT databases, so these get dedicated containers rather than
+	// the shared one: the whole test is "export from here, restore into there,
+	// and watch the slug collide". On one database the collision would be with
+	// itself and the test would prove nothing.
 	srcPool := testdb.New(t)
 	srcUID := testdb.SeedUser(t, srcPool, "src@test.local", "admin")
 	srcBucket := newStubBucket()
@@ -311,7 +315,7 @@ func TestRestore_DuplicateAppendsSlugSuffixOnCollision(t *testing.T) {
 }
 
 func TestRestore_RejectsPathTraversalFileEntry(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	tgtUID := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
@@ -326,7 +330,7 @@ func TestRestore_RejectsPathTraversalFileEntry(t *testing.T) {
 // tables) survive an export→wipe→restore cycle with identity preserved —
 // the note-specific sibling of TestRestore_WipePreservesIdentityAndBumpsSequence.
 func TestRestore_NotesRoundTripWipeMode(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -363,7 +367,7 @@ func TestRestore_NotesRoundTripWipeMode(t *testing.T) {
 // inserts a fresh note row rather than detecting "already restored" — see
 // db.go's restoreSkip comment.
 func TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -389,7 +393,7 @@ func TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow(t *testing.T) {
 // backup/restore — it's already a bcrypt hash, restore must copy it as-is
 // (never re-hash it, never drop it, never treat it as plaintext).
 func TestRestore_FolderPasswordRoundTripWipeMode(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -425,7 +429,7 @@ func TestRestore_FolderPasswordRoundTripWipeMode(t *testing.T) {
 // unique constraint, so restoreSkip always inserts a fresh row — but that
 // fresh row must still carry the original password_hash forward.
 func TestRestore_FolderPasswordRoundTripSkipMode(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -460,7 +464,7 @@ func TestRestore_FolderPasswordRoundTripSkipMode(t *testing.T) {
 // (no rename-on-collision the way tags get, since folder.name has no unique
 // constraint) — the duplicated copy must still carry password_hash forward.
 func TestRestore_FolderPasswordRoundTripDuplicateMode(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -499,7 +503,7 @@ func TestRestore_FolderPasswordRoundTripDuplicateMode(t *testing.T) {
 // time; without this guard a crafted backup plants a payload that executes on
 // every visitor of that public, unauthenticated route.
 func TestRestore_SanitizesNoteBodyHTMLFromHostileZip(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
@@ -550,7 +554,7 @@ func TestRestore_SanitizesNoteBodyHTMLFromHostileZip(t *testing.T) {
 // restore cleanly — the missing fields decode as nil slices and every note
 // loop becomes a no-op.
 func TestRestore_OldFormatBackupWithoutNotesKeyStillRestores(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
@@ -588,7 +592,7 @@ func TestRestore_OldFormatBackupWithoutNotesKeyStillRestores(t *testing.T) {
 }
 
 func TestRestore_RejectsFileEntryOutsideAllowedPrefix(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
@@ -607,7 +611,7 @@ func TestRestore_RejectsFileEntryOutsideAllowedPrefix(t *testing.T) {
 // (the most direct path — every row comes from the snapshot).
 func TestRestore_CoercesTrackingPixelColors(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
@@ -654,7 +658,7 @@ func TestRestore_CoercesTrackingPixelColors(t *testing.T) {
 // app_setting master-password hash both round-trip verbatim through a wipe
 // restore (hint shown as-is, master hash never re-hashed).
 func TestRestore_HintAndMasterPasswordRoundTripWipeMode(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -705,7 +709,7 @@ func TestRestore_HintAndMasterPasswordRoundTripWipeMode(t *testing.T) {
 // must PRESERVE this instance's existing master password rather than overwrite
 // it with the snapshot's (a singleton setting can't be "duplicated").
 func TestRestore_AppSettingSkipMode_DoesNotClobberExistingMaster(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -736,7 +740,7 @@ func TestRestore_AppSettingSkipMode_DoesNotClobberExistingMaster(t *testing.T) {
 // Restore while another session holds the advisory lock fails with 409
 // restore_in_progress (pg_try_advisory_xact_lock) rather than interleaving.
 func TestRestore_AdvisoryLockRejectsConcurrentRestore(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()

@@ -20,7 +20,7 @@ import (
 
 func setup(t *testing.T) (context.Context, authctx.UserID, *folders.Repository, *links.Repository) {
 	t.Helper()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	return context.Background(), uid, folders.NewRepository(pool), links.NewRepository(pool)
@@ -152,7 +152,7 @@ func TestRepository_DeleteCascadeRemovesSubtree(t *testing.T) {
 // link that no longer exists) unless the repository purges them itself.
 func TestRepository_DeleteCascadeDoesNotOrphanTagsOrClicks(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	frepo := folders.NewRepository(pool)
