@@ -65,6 +65,14 @@ type Config struct {
 	// attacker-supplied, and building a credential-bearing link from them is
 	// the classic reset-poisoning primitive — the mail reaches the real user
 	// but points at the attacker's host.
+	//
+	// The default is http://localhost:9088 and that is NOT a stale copy of the
+	// compose stack's origin — it is the Vite dev server (web/vite.config.ts
+	// listens on 9088 and proxies /api, /go and /n), which is the only setup
+	// that runs this binary with no environment at all. The compose stack sets
+	// the variable explicitly, to https://localhost:${WEB_HTTPS_PORT}. Do not
+	// "align" this with the compose value: that would point the dev workflow's
+	// invite links at a port the dev workflow does not serve.
 	AuthPublicURL string
 	// AuthCookieSecure marks session cookies HTTPS-only. It defaults to the
 	// inverse of a loopback bind: a local dev server on plain HTTP must not set
