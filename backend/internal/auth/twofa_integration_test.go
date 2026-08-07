@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/auth"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/testdb"
 )
 
@@ -101,7 +102,7 @@ func enrolUser(t *testing.T, h *harness, email, password string) enrolled {
 // ─────────────────────────────────────────────────────────────────────
 
 func TestTOTP_EnrollmentRoundTrip(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -121,7 +122,7 @@ func TestTOTP_EnrollmentRoundTrip(t *testing.T) {
 // The seed must never be readable from the database alone: a pg_dump that
 // contained plaintext seeds would be a permanent 2FA bypass for every user.
 func TestTOTP_SeedIsEncryptedAtRest(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -145,7 +146,7 @@ func TestTOTP_SeedIsEncryptedAtRest(t *testing.T) {
 // Starting a second enrollment over a CONFIRMED one would be a quiet way to
 // swap the second factor of an account whose session was stolen.
 func TestTOTP_CannotReEnrolOverAConfirmedFactor(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -159,7 +160,7 @@ func TestTOTP_CannotReEnrolOverAConfirmedFactor(t *testing.T) {
 // Enrolment from a live session still demands the password: a hijacked cookie
 // must not be enough to attach an authenticator the real owner cannot satisfy.
 func TestTOTP_EnrollmentRequiresThePassword(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -177,7 +178,7 @@ func TestTOTP_EnrollmentRequiresThePassword(t *testing.T) {
 }
 
 func TestTOTP_ConfirmRejectsAWrongCode(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -198,7 +199,7 @@ func TestTOTP_ConfirmRejectsAWrongCode(t *testing.T) {
 }
 
 func TestTOTP_QRIsRenderedAndNotCached(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -222,7 +223,7 @@ func TestTOTP_QRIsRenderedAndNotCached(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 
 func TestLogin_WithTOTPStopsAtTheChallenge(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -263,7 +264,7 @@ func TestLogin_WithTOTPStopsAtTheChallenge(t *testing.T) {
 // The pre-auth cookie proves a password and nothing else. If it reached the
 // data surface it would BE the session it exists to withhold.
 func TestPreAuthCookieDoesNotReachTheDataSurface(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	enrolUser(t, h, "admin@example.com", "a good password")
@@ -286,7 +287,7 @@ func TestPreAuthCookieDoesNotReachTheDataSurface(t *testing.T) {
 // A code seen over the user's shoulder must not be spendable a second time
 // inside its own 30-second window.
 func TestTOTP_CodeCannotBeReplayedWithinItsWindow(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -314,7 +315,7 @@ func TestTOTP_CodeCannotBeReplayedWithinItsWindow(t *testing.T) {
 // Enrolment consumed the current step, so this verification uses the following
 // one. That it succeeds is exactly the property under test.
 func TestTOTP_NextWindowIsStillAccepted(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -332,7 +333,7 @@ func TestTOTP_NextWindowIsStillAccepted(t *testing.T) {
 // The code the user typed to ENROL must not still work afterwards: it is spent
 // the moment it proves the enrollment.
 func TestTOTP_EnrollmentCodeIsConsumedByConfirming(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -362,7 +363,7 @@ func TestTOTP_EnrollmentCodeIsConsumedByConfirming(t *testing.T) {
 // The attempt budget lives in the DATABASE, on auth_challenge.attempts. That is
 // the whole point: a restart must not hand an attacker a fresh set of guesses.
 func TestTwoFactor_AttemptBudgetIsSpentAndSurvivesARestart(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 	h := newHarnessWith(t, pool, harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
@@ -399,7 +400,7 @@ func TestTwoFactor_AttemptBudgetIsSpentAndSurvivesARestart(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 
 func TestRecoveryCode_SignsInOnceAndOnlyOnce(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -426,7 +427,7 @@ func TestRecoveryCode_SignsInOnceAndOnlyOnce(t *testing.T) {
 
 // Codes are printed with a hyphen and typed however the user manages.
 func TestRecoveryCode_AcceptsLooselyTypedInput(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -444,7 +445,7 @@ func TestRecoveryCode_AcceptsLooselyTypedInput(t *testing.T) {
 // The unique index on code_hash makes the lookup succeed globally; only the
 // user_id predicate makes it wrong for the wrong user.
 func TestRecoveryCode_IsScopedToItsOwner(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "alice@example.com", "a good password")
 	testdb.SeedUserWithPassword(t, h.pool, "bob@example.com", "a good password", "user")
@@ -474,7 +475,7 @@ func TestRecoveryCode_IsScopedToItsOwner(t *testing.T) {
 }
 
 func TestRecoveryCodes_RegenerateInvalidatesTheOldSheet(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -506,7 +507,7 @@ func TestRecoveryCodes_RegenerateInvalidatesTheOldSheet(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 
 func TestEmailOTP_DeliversACodeThatSignsIn(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true, SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	enrolUser(t, h, "admin@example.com", "a good password")
@@ -528,7 +529,7 @@ func TestEmailOTP_DeliversACodeThatSignsIn(t *testing.T) {
 
 // A mailed code is single-use, like every other credential here.
 func TestEmailOTP_CannotBeUsedTwice(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true, SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	enrolUser(t, h, "admin@example.com", "a good password")
@@ -553,7 +554,7 @@ func TestEmailOTP_CannotBeUsedTwice(t *testing.T) {
 // produce two mails. It answers 202 either way — a distinct status would let
 // the endpoint be used to probe the send counter.
 func TestEmailOTP_ResendIsThrottledButAlwaysAnswers202(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true, SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	enrolUser(t, h, "admin@example.com", "a good password")
@@ -584,7 +585,7 @@ func TestEmailOTP_ResendIsThrottledButAlwaysAnswers202(t *testing.T) {
 // admin out the moment the flag flips) or admitted (which would make the rule
 // meaningless).
 func TestAdminPolicy_AdminWithoutTOTPMustEnrolBeforeGettingASession(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{Require2FAForAdmins: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{Require2FAForAdmins: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -620,7 +621,7 @@ func TestAdminPolicy_AdminWithoutTOTPMustEnrolBeforeGettingASession(t *testing.T
 
 // A non-admin is unaffected by the admin policy.
 func TestAdminPolicy_PlainUserIsNotForcedToEnrol(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{Require2FAForAdmins: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{Require2FAForAdmins: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
@@ -634,7 +635,7 @@ func TestAdminPolicy_PlainUserIsNotForcedToEnrol(t *testing.T) {
 
 // An admin must not be able to strip the factor the policy requires.
 func TestAdminPolicy_AdminCannotDisableTOTP(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{Require2FAForAdmins: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{Require2FAForAdmins: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -660,7 +661,7 @@ func TestAdminPolicy_AdminCannotDisableTOTP(t *testing.T) {
 
 // A plain user may disable it, but only with BOTH proofs.
 func TestTOTP_DisableRequiresPasswordAndCode(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
@@ -715,7 +716,7 @@ func extractSixDigits(t *testing.T, body string) string {
 // hit the 4% shape is precisely how this reached the suite as a one-in-twenty
 // flake instead of a failing test.
 func TestRecoveryCode_WithSixDigitsIsNotMistakenForATOTPCode(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -767,7 +768,7 @@ func TestRecoveryCode_WithSixDigitsIsNotMistakenForATOTPCode(t *testing.T) {
 // e-mail factor is refused for it. An authenticator code still works, because
 // that is a credential the mailbox does not contain.
 func TestReset_MailboxAloneCannotSatisfyBothFactors(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true, SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -811,7 +812,7 @@ func TestReset_MailboxAloneCannotSatisfyBothFactors(t *testing.T) {
 // An ordinary password login DOES get the e-mail factor: there the first factor
 // was the password, so the mailbox is still an independent channel.
 func TestLogin_OffersTheEmailFactorWhenTheFirstFactorWasThePassword(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true, SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	enrolUser(t, h, "admin@example.com", "a good password")
@@ -834,7 +835,7 @@ func TestLogin_OffersTheEmailFactorWhenTheFirstFactorWasThePassword(t *testing.T
 // the mailbox — but a second factor written to the container log is readable by
 // anyone with the docker group or a log shipper, so it stops being a factor.
 func TestEmailOTP_IsNotOfferedWhenMailOnlyGoesToTheLog(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true}) // log driver
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true}) // log driver
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	enrolUser(t, h, "admin@example.com", "a good password")
@@ -859,7 +860,7 @@ func TestEmailOTP_IsNotOfferedWhenMailOnlyGoesToTheLog(t *testing.T) {
 // A challenge is minted before the second factor; an administrator who disables
 // the account in that window expects the half-finished login to die with it.
 func TestVerify2FA_RefusesAnAccountDisabledMidChallenge(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
@@ -884,7 +885,7 @@ func TestVerify2FA_RefusesAnAccountDisabledMidChallenge(t *testing.T) {
 // Touching the wrong endpoint must not DESTROY a live challenge — an
 // enroll_2fa user who lands on /2fa/verify should still be able to enrol.
 func TestChallenge_WrongEndpointDoesNotKillIt(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{Require2FAForAdmins: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{Require2FAForAdmins: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -906,7 +907,7 @@ func TestChallenge_WrongEndpointDoesNotKillIt(t *testing.T) {
 // The raw pre-auth token lives in an httpOnly cookie so JS cannot read it.
 // Echoing it in the body would hand it straight back to any script on the page.
 func TestChallengeResponseDoesNotEchoTheRawPreAuthToken(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	enrolUser(t, h, "admin@example.com", "a good password")
@@ -926,7 +927,7 @@ func TestChallengeResponseDoesNotEchoTheRawPreAuthToken(t *testing.T) {
 // The session-authenticated step-up paths have no challenge, so nothing bounded
 // their guessing until an explicit limiter was added.
 func TestStepUp_TOTPGuessingIsCapped(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
@@ -952,7 +953,7 @@ func TestStepUp_TOTPGuessingIsCapped(t *testing.T) {
 // The settings screen hides the "turn off" button when `required` is true, so
 // the flag has to be right — a wrong one offers a dead end the server refuses.
 func TestTwoFactorStatus_ReportsThePolicyPerRole(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{Require2FAForAdmins: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{Require2FAForAdmins: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
@@ -1001,7 +1002,7 @@ func TestTwoFactorStatus_ReportsThePolicyPerRole(t *testing.T) {
 // would hand out the live second factor in visual form to anyone holding the
 // session; serving it before there is one would be a confusing 500.
 func TestTOTPQR_OnlyExistsForAPendingEnrollment(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -1029,7 +1030,7 @@ func TestTOTPQR_OnlyExistsForAPendingEnrollment(t *testing.T) {
 }
 
 func TestConfirmTOTP_RefusesWithoutAndAfterAnEnrollment(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -1061,7 +1062,7 @@ func TestConfirmTOTP_RefusesWithoutAndAfterAnEnrollment(t *testing.T) {
 // did — a hijacked session alone must not be able to mint a fresh set of
 // long-lived bypass credentials and lock the owner's copy out of date.
 func TestRegenerateRecoveryCodes_RequiresPasswordAndCode(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -1096,7 +1097,7 @@ func TestRegenerateRecoveryCodes_RequiresPasswordAndCode(t *testing.T) {
 // hint that the server's own state is broken — because the caller is
 // unauthenticated and cannot be told anything useful.
 func TestTOTP_UndecryptableSeedFailsClosed(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 	h := newHarnessWith(t, pool, harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
@@ -1126,7 +1127,7 @@ func TestTOTP_UndecryptableSeedFailsClosed(t *testing.T) {
 // what makes that a loud server-side error instead of a user who simply cannot
 // sign in.
 func TestTOTP_UnsupportedStoredParametersFailClosed(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -1153,7 +1154,7 @@ func TestTOTP_UnsupportedStoredParametersFailClosed(t *testing.T) {
 // holding the printed sheet. Only the owner can tell, and only if told — this
 // mail is the entire signal.
 func TestRecoveryCode_UseNotifiesTheOwner(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true, SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -1178,7 +1179,7 @@ func TestRecoveryCode_UseNotifiesTheOwner(t *testing.T) {
 // A TOTP sign-in must NOT send that warning — it is the ordinary path, and a
 // mail on every login would train the user to ignore the one that matters.
 func TestTOTP_SuccessfulSignInSendsNoMail(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true, SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
@@ -1199,7 +1200,7 @@ func TestTOTP_SuccessfulSignInSendsNoMail(t *testing.T) {
 // from mailbombing an address one code per minute for as long as the challenge
 // lives.
 func TestEmailOTP_TotalSendCapIsEnforced(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true, SMTP: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	enrolUser(t, h, "admin@example.com", "a good password")
@@ -1237,7 +1238,7 @@ func TestEmailOTP_TotalSendCapIsEnforced(t *testing.T) {
 // exactly that reason, and is the mirror image of refusing to replace a
 // confirmed one.
 func TestTOTP_AnUnconfirmedEnrollmentCanBeRestarted(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -1274,7 +1275,7 @@ func TestTOTP_AnUnconfirmedEnrollmentCanBeRestarted(t *testing.T) {
 // (new phone, lost device). Each half is covered; what this adds is that the
 // second enrollment is not blocked by remnants of the first.
 func TestTOTP_DisableThenReEnrol(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
@@ -1300,7 +1301,7 @@ func TestTOTP_DisableThenReEnrol(t *testing.T) {
 // endpoint demands the password, and there is none to give. It must say so as a
 // credential failure rather than a 500.
 func TestTOTP_EnrollmentOnAPasswordlessAccountIsRefused(t *testing.T) {
-	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
@@ -1308,9 +1309,10 @@ func TestTOTP_EnrollmentOnAPasswordlessAccountIsRefused(t *testing.T) {
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "admin@example.com", "password": "a good password"}).Code)
 
-	// Strip the credential the way an ADR-31 Google conversion will.
-	_, err := h.pool.Exec(context.Background(), `UPDATE app_user SET password_hash = NULL`)
-	require.NoError(t, err)
+	// Exactly what an ADR-31 Google conversion leaves behind. Nulling the hash
+	// alone is not a state the database permits: an active account must hold a
+	// credential, so the identity has to arrive in the same transaction.
+	testdb.ConvertToGoogleOnly(t, h.pool, authctx.UserID(1), "admin@example.com", "google-sub-1")
 
 	rec := c.do(http.MethodPost, "/api/auth/2fa/totp/start", map[string]string{"password": "anything"})
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)

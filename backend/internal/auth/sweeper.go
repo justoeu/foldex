@@ -103,6 +103,24 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 	}
 	n += tf
 
+	// Same reasoning, one table further: /oauth/google/start writes a row for
+	// any caller who can reach it. The per-IP cap bounds the rate; this is what
+	// bounds the total.
+	os, err := s.repo.SweepOAuthState(ctx, s.retain)
+	if err != nil {
+		s.logger.Error("oauth state sweep", "err", err)
+	}
+	n += os
+
+	// Revoked and expired bearer tokens. Not a detector either — a dead token
+	// tells nobody anything — so the rows go rather than being retained the way
+	// session_used_token's are.
+	at, err := s.repo.SweepAPITokens(ctx, s.retain)
+	if err != nil {
+		s.logger.Error("api token sweep", "err", err)
+	}
+	n += at
+
 	evicted := 0
 	for _, prune := range s.inMemory {
 		evicted += prune(s.memoryRetain())

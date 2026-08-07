@@ -25,7 +25,20 @@ import (
 	"foldex/internal/pkg/authctx"
 
 	"foldex/internal/pkg/authctx/authctxtest"
+	"os"
 )
+
+// TestMain owns the lifetime of this package's shared Postgres container.
+//
+// It cannot be a t.Cleanup: os.Exit skips deferred work, and a cleanup hung off
+// whichever test ran first would tear the database down while the rest of the
+// package still needed it. The Makefile disables testcontainers' reaper, so
+// nothing else would collect it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	testdb.StopShared()
+	os.Exit(code)
+}
 
 type recordingEnqueuer struct{ ids []int64 }
 
@@ -45,7 +58,7 @@ func (s stubFolderLookup) PasswordHashFor(context.Context, authctx.UserID, int64
 
 func newLinksRouter(t *testing.T, worker links.Enqueuer, lookup links.FolderPasswordLookup, key []byte) (http.Handler, *links.Repository, authctx.UserID) {
 	t.Helper()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := links.NewRepository(pool)
@@ -251,7 +264,7 @@ func TestHandler_ListRecentChanges(t *testing.T) {
 }
 
 func TestHandler_List_FolderGate(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -355,7 +368,7 @@ func TestRepository_GetBySlug_NotFound(t *testing.T) {
 }
 
 func TestRepository_Create_WithTagsAndFolder(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -378,7 +391,7 @@ func TestRepository_Create_WithTagsAndFolder(t *testing.T) {
 }
 
 func TestRepository_Update_FullFieldCoverage(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()

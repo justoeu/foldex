@@ -47,10 +47,16 @@ type Config struct {
 
 	// AuthEnabled turns on the multi-user authentication stack (ADR-30).
 	//
-	// Defaults to FALSE through PR3. With it off the router injects the
-	// bootstrap admin as the principal for every request, so a single-user
-	// deployment keeps working exactly as before while the segmentation work
-	// lands. PR4 flips the default to true.
+	// Defaults to TRUE since PR4. On an upgraded install the first visit lands
+	// on the setup screen, which CLAIMS the placeholder admin migration 000017
+	// created — the row every pre-existing link, note, folder and tag was
+	// adopted into — so the operator's library is intact behind their new
+	// account rather than stranded under an unreachable pending row.
+	//
+	// Setting it to 0 keeps the old behaviour: the router injects the bootstrap
+	// admin as the principal for every request and nothing ever asks for a
+	// password. That is a real escape hatch for a machine on a private network
+	// with one user, not a deprecated flag.
 	AuthEnabled bool
 
 	// AuthPublicURL is the origin baked into invite links.
@@ -101,6 +107,24 @@ type Config struct {
 	// the whole instance.
 	AuthRequire2FAForAdmins bool
 
+	// Google OAuth (ADR-31). All three are required together; with any of them
+	// empty the provider reports itself disabled and the routes answer
+	// "not configured" instead of failing halfway through a redirect.
+	//
+	// The redirect URI is DERIVED from AuthPublicURL rather than configured
+	// separately, so it cannot drift from the origin the invite and reset links
+	// already use — and so an operator cannot point it at a host they do not
+	// control.
+	GoogleClientID     string
+	GoogleClientSecret string
+
+	// PublicNumericIDs re-enables the legacy /go/{42} and /n/{42} forms (ADR-32).
+	// Off by default: both routes resolve without a session, so with content
+	// now shared across accounts a dense BIGSERIAL in the path lets anyone
+	// enumerate — and click-log — every link and note on the instance. The
+	// escape hatch exists for instances with old /go/42 links already shared.
+	PublicNumericIDs bool
+
 	Mail        MailConfig
 	ObjectStore ObjectStoreConfig
 
@@ -136,7 +160,7 @@ func Load() (Config, error) {
 		PreviewTimeoutSec:  envInt("PREVIEW_FETCH_TIMEOUT_SEC", 5),
 		SharedSecret:       os.Getenv("SHARED_SECRET"),
 		CORSOrigins:        splitCSV(envOr("CORS_ORIGINS", "*")),
-		AuthEnabled:        envBool("AUTH_ENABLED", false),
+		AuthEnabled:        envBool("AUTH_ENABLED", true),
 		AuthPublicURL:      envOr("AUTH_PUBLIC_URL", "http://localhost:9088"),
 		AuthCookieDomain:   os.Getenv("AUTH_COOKIE_DOMAIN"),
 		// Clamped in Load(): see normalizeAuth.
@@ -154,6 +178,9 @@ func Load() (Config, error) {
 
 		TrustedProxyIPs:         os.Getenv("TRUSTED_PROXY_IPS"),
 		AuthRequire2FAForAdmins: envBool("AUTH_REQUIRE_2FA_FOR_ADMINS", true),
+		GoogleClientID:          os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientSecret:      os.Getenv("GOOGLE_CLIENT_SECRET"),
+		PublicNumericIDs:        envBool("PUBLIC_NUMERIC_IDS", false),
 		Mail: MailConfig{
 			Driver:             envOr("MAIL_DRIVER", "log"),
 			Host:               os.Getenv("MAIL_HOST"),
@@ -250,6 +277,17 @@ func (c *Config) normalizeAuth() {
 	}
 }
 
+// GoogleRedirectURL is the callback URI, derived from the public origin.
+//
+// Derived rather than configured so it cannot drift from the origin the invite
+// and reset links already use. This exact string must also be registered in the
+// Google Cloud console — Google compares it byte for byte, and a trailing slash
+// or an http/https mismatch produces a redirect_uri_mismatch that says nothing
+// about which of the two sides is wrong.
+func (c Config) GoogleRedirectURL() string {
+	return strings.TrimRight(c.AuthPublicURL, "/") + "/api/auth/oauth/google/callback"
+}
+
 // issuerFromURL reduces a public URL to a display label.
 func issuerFromURL(raw string) string {
 	u, err := url.Parse(raw)
@@ -275,11 +313,20 @@ func issuerFromURL(raw string) string {
 // single-user local threat model. Any non-loopback bind requires a non-empty
 // SHARED_SECRET.
 func (c Config) validateSecureDefaults() error {
-	if !isLocalBind(c.BindAddr) && c.SharedSecret == "" {
+	// The question this asks is "can anyone who reaches the port read the
+	// data", and until ADR-30 the only possible answer was SHARED_SECRET. Now
+	// AUTH_ENABLED answers it properly: it does not merely gate the surface,
+	// it identifies the caller and scopes every row to them. Continuing to
+	// demand a header that authenticates nobody would mean the documentation
+	// (which deprecates it) and the boot check disagree — and the shipped
+	// compose stack, which binds 0.0.0.0 for nginx and ships no secret, would
+	// refuse to start.
+	if !isLocalBind(c.BindAddr) && !c.AuthEnabled && c.SharedSecret == "" {
 		return errors.New(
 			"insecure config: BACKEND_BIND=" + c.BindAddr +
-				" (non-loopback) AND SHARED_SECRET is empty — " +
-				"set SHARED_SECRET, or bind to 127.0.0.1",
+				" (non-loopback) with AUTH_ENABLED=0 AND SHARED_SECRET empty — " +
+				"every request would be attributed to the bootstrap administrator " +
+				"with no credential at all. Turn AUTH_ENABLED on, or bind to 127.0.0.1",
 		)
 	}
 	// MAIL_INSECURE_SKIP_VERIFY exists for a self-signed dev SMTP server. Aimed

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -33,6 +34,7 @@ func (h *AdminHandler) Mount(r chi.Router) {
 	r.Patch("/users/{id}", h.UpdateUser)
 	r.Delete("/users/{id}", h.DeleteUser)
 	r.Post("/users/{id}/sessions/revoke", h.RevokeUserSessions)
+	r.Post("/users/{id}/force-password-reset", h.ForcePasswordReset)
 	r.Get("/invites", h.ListInvites)
 	r.Post("/invites", h.CreateInvite)
 	r.Delete("/invites/{id}", h.RevokeInvite)
@@ -166,6 +168,74 @@ func (h *AdminHandler) RevokeUserSessions(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ForcePasswordReset gives an account a fresh, randomly generated password and
+// returns it to the administrator exactly once.
+//
+// This is ADR-31's first lockout exit, and the only one that works when the
+// user has lost the provider they converted to. It deliberately does NOT mail a
+// reset link: the account may have no password at all, and /password/forgot
+// answers such accounts with "you sign in with Google" precisely so that
+// control of the mailbox alone cannot resurrect a password credential. The
+// administrator is the out-of-band channel.
+//
+// Every session dies, because the credential set changed. Refused on the
+// caller's own account: an admin who has forgotten their own password is in the
+// one situation this cannot solve, and pretending otherwise would let a
+// half-remembered click log them out of the session they still hold.
+//
+// The second factor is untouched. An account with an authenticator still owes a
+// code after signing in with the temporary password, so this hands the admin a
+// way to restore access — not a way to walk into someone's account.
+func (h *AdminHandler) ForcePasswordReset(w http.ResponseWriter, r *http.Request) {
+	caller, _ := authctx.FromContext(r.Context())
+	id, err := httperr.ParseID(chi.URLParam(r, "id"))
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	target := authctx.UserID(id)
+	if target == caller.UserID {
+		httperr.Write(w, httperr.New(http.StatusConflict, "self_target",
+			"use the change-password form for your own account"))
+		return
+	}
+	user, err := h.repo.GetUser(r.Context(), target)
+	if err != nil {
+		httperr.Write(w, httperr.ErrNotFound)
+		return
+	}
+
+	temp, err := newTemporaryPassword()
+	if err != nil {
+		h.logger.Error("admin force reset generate", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	if err := h.repo.SetPassword(r.Context(), target, temp); err != nil {
+		h.logger.Error("admin force reset", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	if err := h.repo.RevokeAllForUser(r.Context(), target, ReasonAdminRevoked); err != nil {
+		h.logger.Error("admin force reset revoke", "err", err)
+	}
+	// The owner is told, without the password in it. A silent credential change
+	// on someone else's account is how a rogue administrator would take one
+	// over unnoticed — and admins cannot read another user's content, so this
+	// is not a power they already have by other means.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := h.mailer.Send(ctx, mailer.PasswordForciblyResetMessage(user.Email)); err != nil {
+			h.logger.Error("admin force reset notify", "err", err)
+		}
+	}()
+
+	// Shown ONCE. Nothing stores the plaintext, so a lost response means running
+	// this again rather than looking it up.
+	httperr.JSON(w, http.StatusOK, map[string]any{"temporary_password": temp})
 }
 
 // errLastAdmin is the response for an operation the repository refused because

@@ -4,6 +4,7 @@ package notes_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,17 +15,31 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"foldex/internal/folders"
 	"foldex/internal/notes"
 	"foldex/internal/testdb"
 
 	"foldex/internal/pkg/authctx"
 
 	"foldex/internal/pkg/authctx/authctxtest"
+	"os"
 )
+
+// TestMain owns the lifetime of this package's shared Postgres container.
+//
+// It cannot be a t.Cleanup: os.Exit skips deferred work, and a cleanup hung off
+// whichever test ran first would tear the database down while the rest of the
+// package still needed it. The Makefile disables testcontainers' reaper, so
+// nothing else would collect it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	testdb.StopShared()
+	os.Exit(code)
+}
 
 func newRouter(t *testing.T) (http.Handler, *notes.Repository, authctx.UserID) {
 	t.Helper()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := notes.NewRepository(pool)
@@ -204,4 +219,67 @@ func TestHandler_Delete_NotFound(t *testing.T) {
 
 func idStr(id int64) string {
 	return strconv.FormatInt(id, 10)
+}
+
+// The folder content-gate on /api/notes?folder_id= had no test at all: the
+// router the rest of this file builds never calls WithFolderGate, so every
+// existing case runs with the gate absent.
+//
+// It is the same invariant folders and entries enforce (CLAUDE.md §4): a
+// password-protected folder reveals its CONTENTS only to a caller holding a
+// valid unlock token. Without this, notes would be the one listing surface that
+// walks straight past a folder password — and notes are the kind of content the
+// password is most likely there to protect.
+func TestHandler_ListInsideALockedFolderNeedsAnUnlockToken(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+
+	frepo := folders.NewRepository(pool)
+	password := "a good folder password"
+	locked, err := frepo.Create(context.Background(), uid, folders.CreateInput{
+		Name: "Private", Color: "#6366F1", Password: &password,
+	})
+	require.NoError(t, err)
+
+	nrepo := notes.NewRepository(pool)
+	created, err := nrepo.Create(context.Background(), uid, notes.CreateInput{
+		Title: "Secret", BodyHTML: "<p>inside</p>", FolderID: &locked.ID,
+	})
+	require.NoError(t, err)
+
+	unlockKey := []byte("unlock-key-for-tests-only-32byte")
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
+	r.Route("/notes", notes.NewHandler(nrepo, nil).WithFolderGate(frepo, unlockKey).Mount)
+
+	path := "/notes/?folder_id=" + strconv.FormatInt(locked.ID, 10)
+
+	rr := doJSON(t, r, http.MethodGet, path, nil)
+	require.Equal(t, http.StatusForbidden, rr.Code, "no token must not list a locked folder: %s", rr.Body.String())
+
+	// A token minted for a DIFFERENT folder must not travel: the folder id is
+	// part of the HMAC input precisely so one unlock cannot open another.
+	other, err := frepo.Create(context.Background(), uid, folders.CreateInput{
+		Name: "Other", Color: "#6366F1", Password: &password,
+	})
+	require.NoError(t, err)
+	otherHash, err := frepo.PasswordHashFor(context.Background(), uid, other.ID)
+	require.NoError(t, err)
+	rr = doWithUnlock(t, r, path, folders.IssueUnlockToken(unlockKey, other.ID, *otherHash))
+	require.Equal(t, http.StatusForbidden, rr.Code, "a token for another folder must not open this one")
+
+	hash, err := frepo.PasswordHashFor(context.Background(), uid, locked.ID)
+	require.NoError(t, err)
+	rr = doWithUnlock(t, r, path, folders.IssueUnlockToken(unlockKey, locked.ID, *hash))
+	require.Equal(t, http.StatusOK, rr.Code, "a valid token must list: %s", rr.Body.String())
+	assert.Contains(t, rr.Body.String(), created.Title)
+}
+
+func doWithUnlock(t *testing.T, h http.Handler, path, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set(folders.UnlockHeader, token)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
 }

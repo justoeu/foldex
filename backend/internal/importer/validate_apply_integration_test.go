@@ -40,7 +40,7 @@ func multipartFields(t *testing.T, fields map[string]string, content string) (*b
 }
 
 func TestValidate_ReportsConflictsAndFolders(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
@@ -100,7 +100,7 @@ func TestValidate_ReportsConflictsAndFolders(t *testing.T) {
 }
 
 func TestValidate_EmptyFile(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
@@ -122,7 +122,7 @@ func TestValidate_EmptyFile(t *testing.T) {
 }
 
 func TestApply_SkipMode_Default(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
@@ -158,7 +158,7 @@ func TestApply_SkipMode_Default(t *testing.T) {
 }
 
 func TestApply_WipeMode(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
@@ -196,7 +196,7 @@ func TestApply_WipeMode(t *testing.T) {
 }
 
 func TestApply_DuplicateMode_WarnsOnURLCollision(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
@@ -234,7 +234,7 @@ func TestApply_DuplicateMode_WarnsOnURLCollision(t *testing.T) {
 }
 
 func TestApply_ExcludeFolders(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
@@ -274,7 +274,7 @@ func TestApply_ExcludeFolders(t *testing.T) {
 }
 
 func TestApply_JSONWithSeedColors(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
@@ -309,7 +309,7 @@ func TestApply_JSONWithSeedColors(t *testing.T) {
 }
 
 func TestApply_EmptyModeDefaultsToSkip(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
@@ -332,7 +332,7 @@ func TestApply_EmptyModeDefaultsToSkip(t *testing.T) {
 
 func TestApply_JSONValidateViaApply(t *testing.T) {
 	// validate endpoint with JSON format + existing URL conflict
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)

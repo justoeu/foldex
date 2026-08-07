@@ -41,7 +41,7 @@ func (f *fakeResolver) ClickAndResolveBySlug(_ context.Context, slug string) (st
 }
 
 func mount(f *fakeResolver) http.Handler {
-	h := NewHandler(f)
+	h := NewHandler(f, true)
 	r := chi.NewRouter()
 	h.Mount(r)
 	return r

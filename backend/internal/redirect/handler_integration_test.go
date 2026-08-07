@@ -17,11 +17,24 @@ import (
 	"foldex/internal/testdb"
 
 	"foldex/internal/pkg/authctx/authctxtest"
+	"os"
 )
+
+// TestMain owns the lifetime of this package's shared Postgres container.
+//
+// It cannot be a t.Cleanup: os.Exit skips deferred work, and a cleanup hung off
+// whichever test ran first would tear the database down while the rest of the
+// package still needed it. The Makefile disables testcontainers' reaper, so
+// nothing else would collect it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	testdb.StopShared()
+	os.Exit(code)
+}
 
 func TestRedirect_HappyPath(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
@@ -30,7 +43,7 @@ func TestRedirect_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
-	redirect.NewHandler(lrepo).Mount(r)
+	redirect.NewHandler(lrepo, true).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -50,12 +63,12 @@ func TestRedirect_HappyPath(t *testing.T) {
 }
 
 func TestRedirect_NotFound(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	redirect.NewHandler(links.NewRepository(pool)).Mount(r)
+	redirect.NewHandler(links.NewRepository(pool), true).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -68,12 +81,12 @@ func TestRedirect_NotFound(t *testing.T) {
 // /go/abc used to be a 400 (bad ID). With slug-fallback, "abc" is a valid
 // candidate slug — we just don't have any link with that slug, so it 404s.
 func TestRedirect_NonNumericTargetUnknownSlug404(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	redirect.NewHandler(links.NewRepository(pool)).Mount(r)
+	redirect.NewHandler(links.NewRepository(pool), true).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -87,7 +100,7 @@ func TestRedirect_NonNumericTargetUnknownSlug404(t *testing.T) {
 // click counter incremented post-redirect.
 func TestRedirect_BySlugHappyPath(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
@@ -97,7 +110,7 @@ func TestRedirect_BySlugHappyPath(t *testing.T) {
 	require.Equal(t, "hacker-news", created.Slug, "slug auto-derived from title")
 
 	r := chi.NewRouter()
-	redirect.NewHandler(lrepo).Mount(r)
+	redirect.NewHandler(lrepo, true).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 	client := &http.Client{
@@ -121,7 +134,7 @@ func TestRedirect_BySlugHappyPath(t *testing.T) {
 // on.
 func TestRedirect_ByIDStillWorksAfterSlugFeature(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
@@ -130,7 +143,7 @@ func TestRedirect_ByIDStillWorksAfterSlugFeature(t *testing.T) {
 	require.NoError(t, err)
 
 	r := chi.NewRouter()
-	redirect.NewHandler(lrepo).Mount(r)
+	redirect.NewHandler(lrepo, true).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 	client := &http.Client{

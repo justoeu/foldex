@@ -492,8 +492,22 @@ Um endpoint de verificação, três fontes de código. O frontend tem uma tela d
 |---|---|---|---|
 | `GET` | `/api/auth/oauth/google/start` | — / sessão | `login` · `link` (exige sessão) · `accept_invite` |
 | `GET` | `/api/auth/oauth/google/callback` | — | — |
-| `POST` | `/api/auth/oauth/google/convert` | `fx_pa` + CSRF | Confirma a senha e converte (§7.4) |
+| `POST` | `/api/auth/oauth/google/convert` | `fx_pa` | Confirma a senha e converte (§7.4) |
 | `DELETE` | `/api/auth/oauth/google` | sessão + CSRF + senha | Desvincula |
+| `GET` | `/api/auth/identities` | sessão | Quais providers esta conta vinculou |
+
+`/convert` roda no cookie pré-auth, sem CSRF — exatamente como `/2fa/verify`, e protegido do mesmo jeito: `fx_pa` é `SameSite=Strict`, então um POST cross-site nunca o carrega. Não há sessão para um ataque CSRF montar em cima.
+
+`/callback` **sempre termina em redirect**, nunca em JSON: ele responde a uma navegação top-level vinda do Google, e um corpo ali renderizaria como texto cru na barra de endereço. O desfecho viaja como `?oauth=` / `?oauth_error=`; o ESTADO (sessão ou desafio pendente) viaja em cookie, e a SPA o descobre chamando `/me` no boot.
+
+### 4.4b Tokens de API
+
+| Método | Rota | Auth |
+|---|---|---|
+| `GET` / `POST` | `/api/auth/tokens` | sessão + CSRF (token rejeitado) |
+| `DELETE` | `/api/auth/tokens/{id}` | sessão + CSRF (token rejeitado) |
+
+`Authorization: Bearer fx_<id>_<secret>`. Escopo `content` e só: `Middleware.RejectAPIToken` cobre todo o grupo autenticado de `/api/auth`, `/api/admin` e `/api/backup`. Token de outro dono devolve **404**, nunca 403 — mesma regra das linhas de conteúdo.
 
 ### 4.5 Administração
 
@@ -501,11 +515,17 @@ Tudo sob `RequireRole(admin)`. Tokens de API são **rejeitados** aqui.
 
 | Método | Rota |
 |---|---|
-| `GET` / `POST` | `/api/admin/users` (listar / criar) |
-| `GET` / `PATCH` / `DELETE` | `/api/admin/users/{id}` |
-| `POST` | `/api/admin/users/invite` |
+| `GET` | `/api/admin/users` |
+| `PATCH` / `DELETE` | `/api/admin/users/{id}` |
 | `POST` | `/api/admin/users/{id}/force-password-reset` |
 | `POST` | `/api/admin/users/{id}/sessions/revoke` |
+| `GET` / `POST` | `/api/admin/invites` (listar / criar) |
+| `DELETE` | `/api/admin/invites/{id}` |
+
+Não existe rota que **crie** uma conta diretamente: a instância é invite-only, então
+`POST /api/admin/invites` é o único caminho de entrada e a conta nasce quando o convite é aceito.
+Também não existe `GET /api/admin/users/{id}` — a listagem já carrega a projeção inteira, e uma
+rota de leitura por id seria uma segunda superfície para manter escopada sem nenhum consumidor.
 
 Guardas travadas no servidor (o frontend só espelha): não é possível rebaixar, desabilitar ou apagar **a si mesmo**, nem **o último admin ativo**.
 
@@ -599,7 +619,11 @@ Quando o `sub` é desconhecido mas o e-mail bate com uma conta existente, o flux
 
 ```
 callback (purpose=login), sub desconhecido, e-mail bate
-   ├─ google.email_verified != true          → 403 oauth_email_unverified
+   ├─ google.email_verified != true          → oauth_error=not_linked
+   │                                            ↑ verificado ANTES do lookup por
+   │                                              e-mail: uma resposta própria só
+   │                                              quando o endereço casa viraria
+   │                                              oráculo de existência
    ├─ app_user.status != 'active'            → 403 oauth_not_linked
    │                                            ↑ MESMA resposta do caso inexistente:
    │                                              não confirma que a conta existe
@@ -716,9 +740,17 @@ O preview worker e o change-check worker são cross-tenant por natureza. `FindDu
 | `2fa/email` | `auth_challenge.sends` (**banco**) | 3 + intervalo de 60 s |
 | `password/forgot` | `pwreset:ip` / `pwreset:em` | 10/h e 3/h |
 | `password/reset`, `invites/accept` | `:ip` | 20/h |
-| bearer inválido | `apitoken:ip` | 30/min |
 | `bootstrap` | `bootstrap:ip` | 5/h |
-| `oauth/callback` | `oauthcb:ip` | 30 / 15 min |
+| `2fa` de step-up (`totp/disable`, `recovery-codes/regenerate`) | `stepup:<uid>` | 5 / 15 min |
+| `oauth/google/start` | `oauth:<ip>` | 30/h |
+
+Duas ausências deliberadas. **Bearer inválido não tem bucket próprio**: resolver um token é um
+`SELECT` por id seguido de uma comparação em tempo constante — não há hash caro para exaurir, e o
+segredo tem 256 bits, então limitar palpites não muda nada que a entropia já não decida.
+E o limite de OAuth fica no **`start`**, não no `callback`: é o `start` que gasta trabalho antes de
+qualquer prova (grava `oauth_state`, monta PKCE), enquanto o `callback` precisa de um `state`
+válido emitido por um `start` que já pagou o bucket. Limitar o callback puniria o retorno legítimo
+do Google numa rede compartilhada, sem fechar nada que o `start` não feche antes.
 
 **`middleware.RealIP` confia em `X-Forwarded-For` incondicionalmente.** Atrás do nginx está certo; em bind direto é spoofável, o que torna os buckets por IP decorativos. Entra `TRUSTED_PROXY_IPS` (CSV): `X-Forwarded-For` só é honrado vindo desses peers, senão vale `RemoteAddr`. É por isso que o desenho tem **duas** chaves — a de e-mail e as do banco seguram mesmo se a de IP falhar.
 
@@ -920,7 +952,7 @@ Backend ≥ 85% (`-covermode=atomic -coverpkg` sobre `./internal/...`); frontend
 | **1 — Segmentação** ✅ | Migration 000017; `pkg/{authctx,keyfile,attemptlimit,secrets}`; ~60 métodos com `uid`; convenção `repository_system.go`; rework completo do backup; `testdb.Reset` + `SeedUser`; suíte cross-user inteira | `AUTH_ENABLED=0`: um shim injeta o admin de bootstrap. **Zero mudança visível.** Fecha quando o build está limpo, a cobertura ≥ 85% e a suíte cross-user passa com dois usuários reais no lugar do shim |
 | **2 — Identidade** ✅ | `internal/mailer` + Mailpit; `internal/auth` core (sessão, CSRF, RBAC); bootstrap; convites; login/logout/refresh; `/api/auth/me`; `/api/admin/users`; sweeper. CORS credencial + `PUT` + headers novos. Master password migra para `app_user`. Frontend: `AuthProvider`/`AuthGate`, `client.ts`, telas login + setup, `auth.css`, `useDarkMode` | `AUTH_ENABLED` ainda `0` (opt-in do operador). Fecha quando dá para configurar o primeiro admin, convidar um segundo e cada um só ver o seu |
 | **3 — 2FA** ✅ | `pquerna/otp`; TOTP + QR server-side + AES-GCM no seed; códigos de recuperação; `auth_challenge`; OTP por e-mail; obrigatório para admin; todos os buckets; piso de timing; redações do `logsafe`. Frontend: `OtpInput` e as telas otp/forgot/sent/reset/verify/invite | `AUTH_REQUIRE_2FA_FOR_ADMINS=1`. Fecha quando admin não consegue sessão sem TOTP e todo caminho de recuperação tem teste |
-| **4 — Federação + default-on** | `internal/oauthgoogle` + 6 endpoints (inclusive `/convert`); fluxo de conversão + tela `convert` + “Definir senha”; `api_token` + bearer + escopos; extensão MV3 para `Authorization: Bearer` (transição com as duas credenciais); `PUBLIC_ID_REDIRECT_ENABLED=0`; `SHARED_SECRET` deprecado; tela de admin de usuários; docs | **`AUTH_ENABLED` passa a `1`.** Fecha quando a extensão funciona só com token e o aviso de depreciação dispara no boot |
+| **4 — Federação + default-on** ✅ | `internal/oauthgoogle` + 4 endpoints (`start`/`callback`/`convert`/unlink) + `/identities`; fluxo de conversão + tela `convert` + “Definir senha”; `api_token` + bearer + escopo `content`; extensão MV3 para `Authorization: Bearer` (transição com as duas credenciais); `PUBLIC_NUMERIC_IDS=0`; `SHARED_SECRET` deprecado; `force-password-reset`; tela de admin de usuários | **`AUTH_ENABLED` passa a `1`.** Fecha quando a extensão funciona só com token e o aviso de depreciação dispara no boot |
 
 Cada PR passa pelo gate pré-push do `CLAUDE.md` §6.1 exatamente como o CI roda, pelo sweep obrigatório dos 5 agentes (§9), por `graphify update .` e por um bump de versão.
 
@@ -963,6 +995,32 @@ Cinco, e os dois primeiros são correções de desenho:
 11. **`TRUSTED_PROXY_IPS` fecha a §9.1, e o default é não confiar em ninguém.** A cadeia é percorrida da DIREITA para a esquerda pulando hops confiáveis: com mais de um proxy, a entrada mais à esquerda é o que o cliente mandou e continua sob controle dele.
 
 12. **A tela de segundo fator fica `busy` para sempre depois de um sucesso.** O `AuthGate` a desmonta assim que a sessão é adotada, mas até esse render chegar o formulário continuaria aceitando submit sobre um código de uso único já gasto — o segundo request falharia e pintaria erro por cima de um login que deu certo. Locked por `TwoFactorScreen.test.tsx`.
+
+### 15.3 Desvios do PR4, registrados na entrega
+
+Onze. O primeiro é um bug que só existia porque nenhum teste anterior chegava naquela query.
+
+1. **`userColumns` não era qualificado, e o login por Google era impossível.** A projeção começava em `app_user.id` e seguia com colunas nuas (`email`, `created_at`, `last_login_at`, …). Isso funciona em toda query de tabela única — que eram todas, até o PR4. `UserByIdentity` seleciona a mesma projeção de `app_user JOIN user_identity`, e `user_identity` tem seu PRÓPRIO `created_at` e `last_login_at`: o Postgres recusa a query inteira por ambiguidade, e o callback devolvia `server_error` sem nada apontando para a causa. Agora **toda** coluna leva o prefixo `app_user.`, e o comentário na constante diz por quê — não é arrumação, é o que mantém o JOIN legal.
+
+2. **Migration `000021` traz um CONSTRAINT TRIGGER, não um CHECK.** O plano pedia “um CHECK de coerência: conta ativa precisa de `password_hash` ou de uma linha em `user_identity`”. Um CHECK não atravessa tabelas. Um trigger `DEFERRABLE INITIALLY DEFERRED` atravessa e — mais importante — só julga o estado no COMMIT, que é obrigatório aqui: a conversão anula a senha e insere a identidade em statements separados, então dentro da transação a conta fica momentaneamente sem credencial. `pending` e `disabled` ficam de fora da regra de propósito: a linha de bootstrap nasce `pending` sem senha nenhuma, e é exatamente ela que a tela de setup reivindica.
+
+3. **O `sub` do Google mora na linha do desafio, não no corpo do request.** A `000021` adiciona `auth_challenge.oauth_{provider,subject,email}`. Se o POST de conversão pudesse nomear um `subject`, alguém que provou a senha poderia anexar uma conta Google DIFERENTE da que foi autenticada. Duas coisas seguram isso, e o teste checa as duas: o DTO recusa um corpo com campo desconhecido (`DecodeJSON` usa `DisallowUnknownFields`), e a conversão lê o subject da linha de qualquer forma.
+
+4. **`oauthgoogle.UserInfo.EmailVerified` é `bool` simples, com `UnmarshalJSON` na struct.** A primeira versão usava um tipo `oidcBool` não-exportado, o que tornava a struct **inconstruível fora do pacote** — e o duplo de teste do `internal/auth` precisa construí-la. As esquisitices do JSON (provedores que mandam `"true"` como string) mudaram para o `UnmarshalJSON` da própria `UserInfo`, fail-closed: qualquer coisa que não seja um `true` de verdade — inclusive campo ausente — decodifica como `false`. Esse campo é o que separa “endereço que o Google atesta” de “endereço que alguém digitou”, e um parser leniente ali deixaria um endereço não verificado dirigir a conversão.
+
+5. **O handler consome uma INTERFACE `GoogleProvider`, não `*oauthgoogle.Provider`.** Os endpoints do Google são constantes, deliberadamente: um token endpoint configurável pelo operador é um canal de exfiltração de credencial fantasiado de knob. Mas isso deixa os testes de integração sem como apontar para um stub. A interface resolve os dois: a política (qual conta um `sub` resolve, o que um e-mail coincidente destrava, se o 2FA continua valendo) é exercitada contra um duplo, e o protocolo de fio segue coberto pelos testes unitários do `oauthgoogle` contra um `httptest` real.
+
+6. **`/n/{42}` recebeu o mesmo tratamento de `/go/{42}`, com argumento mais forte.** O ADR-32 só falava do redirect. A rota da nota **renderiza o conteúdo**, então um espaço de ids caminhável exporia o texto de outros usuários, não apenas a URL de destino. Mesmo flag, mesmo 404.
+
+7. **A ordem no `/api/admin` é papel primeiro, token depois.** Invertida, qualquer portador de token receberia 403 e aprenderia que `/api/admin` existe. Com `RequireAdmin` na frente, um não-admin — com token ou sem — recebe o mesmo 404 de uma rota inexistente; o 403 `token_scope` só chega a um admin, a quem ele diz algo verdadeiro sobre a própria credencial.
+
+8. **`SetPassword` não é apelido de `password/change`, e recusa quando já existe senha.** Sobrescrever sem provar a atual transformaria uma sessão roubada em tomada permanente da conta. Com autenticador configurado exige o código: não há senha atual para provar, e a credencial criada sobrevive à sessão que a pediu.
+
+9. **`force-password-reset` devolve a senha na RESPOSTA e não manda por e-mail.** A caixa postal pode ser justamente o canal que a conta perdeu; e `/password/forgot` recusa mandar link de reset para conta sem senha, exatamente para que a posse do e-mail sozinha não ressuscite a credencial. O admin é o canal fora de banda. O dono recebe um aviso — sem a senha dentro — porque troca silenciosa de credencial alheia é como um admin malicioso tomaria uma conta sem ninguém notar, e admin **não** lê conteúdo alheio, então não é um poder que ele já tenha por outra via.
+
+10. **O mapa de throttle do `last_seen_at` passou a ser chaveado por `(via, id)`.** Ids de sessão e de token são `BIGSERIAL`s densos de sequências diferentes: com a chave inteira nua, sessão 7 e token 7 suprimiriam a escrita um do outro. O sintoma seria uma coluna “último uso” desatualizada e nada mais — o tipo de bug que não aparece em teste nenhum.
+
+11. **`AUTH_ENABLED=0` continua sendo saída de verdade, não flag depreciada.** O default virou `1`, mas uma instalação de um usuário só numa rede privada tem motivo legítimo para não querer tela de login. O que mudou é o aviso de boot: com `AUTH_ENABLED=0` **e** `SHARED_SECRET` vazio o backend avisa que qualquer um que alcance a porta é dono da biblioteca inteira.
 
 ---
 

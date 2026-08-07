@@ -24,6 +24,17 @@ const (
 	ReasonUserDisabled    = "user_disabled"
 )
 
+// The `status` field every session-shaped response carries. Named constants
+// because the SPA switches on them and a typo on either side of the wire is a
+// screen that never renders.
+const (
+	statusAnonymous              = "anonymous"
+	statusSetupRequired          = "setup_required"
+	statusAuthenticated          = "authenticated"
+	statusTwoFactorRequired      = "two_factor_required"
+	statusConvertPasswordAccount = "convert_password_account"
+)
+
 // User is one row of app_user, minus the secrets.
 //
 // PasswordHash is deliberately NOT here. It is loaded by the single repository
@@ -40,7 +51,7 @@ type User struct {
 	LastLoginAt     *time.Time     `json:"last_login_at,omitempty"`
 	CreatedAt       time.Time      `json:"created_at"`
 	// HasPassword is false for an account that has not been claimed yet, and
-	// (from PR4) for one converted to Google-only.
+	// for one converted to Google-only.
 	HasPassword bool `json:"has_password"`
 	// TOTPEnabled is true when the account has a CONFIRMED authenticator. An
 	// enrollment that was started and abandoned does not count — it would make

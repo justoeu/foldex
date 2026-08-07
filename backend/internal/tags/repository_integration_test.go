@@ -16,7 +16,7 @@ import (
 
 func TestRepository_CRUD(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := tags.NewRepository(pool)
@@ -52,7 +52,7 @@ func TestRepository_CRUD(t *testing.T) {
 
 func TestRepository_CreateDuplicateNameConflict(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := tags.NewRepository(pool)
@@ -68,7 +68,7 @@ func TestRepository_CreateDuplicateNameConflict(t *testing.T) {
 
 func TestRepository_DeleteMissing(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := tags.NewRepository(pool)
@@ -78,7 +78,7 @@ func TestRepository_DeleteMissing(t *testing.T) {
 
 func TestRepository_UpdateEmptyPatchReturnsCurrent(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := tags.NewRepository(pool)

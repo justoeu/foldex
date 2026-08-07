@@ -6,15 +6,38 @@ const selected = new Set();
 
 async function getConfig() {
   return new Promise((resolve) => {
-    chrome.storage.local.get({ baseUrl: 'http://localhost:9089', sharedSecret: '' }, resolve);
+    chrome.storage.local.get(
+      { baseUrl: 'http://localhost:9089', apiToken: '', sharedSecret: '' },
+      resolve,
+    );
   });
 }
 
+/**
+ * Builds the request headers.
+ *
+ * The API token is the credential that identifies an account; SHARED_SECRET is
+ * a perimeter header that identifies nobody and is on its way out. Both are
+ * sent when both are configured, so the backend and the extension can be
+ * upgraded in either order without a window where saving a link fails.
+ *
+ * No CSRF header, and none is needed: a bearer credential is not attached
+ * automatically by the browser, so there is no ambient authority for a
+ * cross-site request to ride on.
+ */
 async function authHeaders() {
   const cfg = await getConfig();
   const headers = { 'Content-Type': 'application/json' };
+  if (cfg.apiToken) headers['Authorization'] = 'Bearer ' + cfg.apiToken;
   if (cfg.sharedSecret) headers['X-Foldex-Secret'] = cfg.sharedSecret;
   return { cfg, headers };
+}
+
+/** Turns a rejected request into advice the popup can act on. */
+function credentialProblem(status) {
+  if (status === 401) return 'not signed in — set an API token in settings';
+  if (status === 403) return 'this token is not allowed here';
+  return null;
 }
 
 function setStatus(msg, level) {
@@ -33,7 +56,7 @@ async function loadTags() {
   const { cfg, headers } = await authHeaders();
   try {
     const resp = await fetch(cfg.baseUrl + '/api/tags', { headers });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    if (!resp.ok) throw new Error(credentialProblem(resp.status) || 'HTTP ' + resp.status);
     const tags = await resp.json();
     renderTags(tags);
   } catch (e) {
@@ -86,6 +109,8 @@ async function save() {
       }),
     });
     if (!resp.ok) {
+      const problem = credentialProblem(resp.status);
+      if (problem) throw new Error(problem);
       const body = await resp.text();
       throw new Error('HTTP ' + resp.status + ' ' + body.slice(0, 120));
     }

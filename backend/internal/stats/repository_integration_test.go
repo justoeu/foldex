@@ -21,7 +21,7 @@ import (
 
 func setup(t *testing.T) (context.Context, authctx.UserID, *stats.Repository, *links.Repository, *tags.Repository) {
 	t.Helper()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	return context.Background(), uid,

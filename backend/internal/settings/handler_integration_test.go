@@ -18,11 +18,24 @@ import (
 	"foldex/internal/testdb"
 
 	"foldex/internal/pkg/authctx/authctxtest"
+	"os"
 )
+
+// TestMain owns the lifetime of this package's shared Postgres container.
+//
+// It cannot be a t.Cleanup: os.Exit skips deferred work, and a cleanup hung off
+// whichever test ran first would tear the database down while the rest of the
+// package still needed it. The Makefile disables testcontainers' reaper, so
+// nothing else would collect it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	testdb.StopShared()
+	os.Exit(code)
+}
 
 func newSettingsRouter(t *testing.T) http.Handler {
 	t.Helper()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
@@ -177,7 +190,7 @@ func TestHandler_Status_UnconfiguredHasNilHint(t *testing.T) {
 }
 
 func TestHandler_ClosedPool_SurfacesErrors(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := settings.NewRepository(pool)
@@ -198,7 +211,7 @@ func TestHandler_ClosedPool_SurfacesErrors(t *testing.T) {
 	assert.NotEqual(t, http.StatusOK, rr.Code)
 
 	// First-set path on closed pool (fresh handler without seed would still fail Configured check).
-	pool2 := testdb.New(t)
+	pool2 := testdb.Shared(t)
 	r2 := chi.NewRouter()
 	r2.Use(authctxtest.Middleware(uid))
 	r2.Route("/settings", settings.NewHandler(settings.NewRepository(pool2)).Mount)

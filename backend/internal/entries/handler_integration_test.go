@@ -21,7 +21,20 @@ import (
 	"foldex/internal/testdb"
 
 	"foldex/internal/pkg/authctx/authctxtest"
+	"os"
 )
+
+// TestMain owns the lifetime of this package's shared Postgres container.
+//
+// It cannot be a t.Cleanup: os.Exit skips deferred work, and a cleanup hung off
+// whichever test ran first would tear the database down while the rest of the
+// package still needed it. The Makefile disables testcontainers' reaper, so
+// nothing else would collect it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	testdb.StopShared()
+	os.Exit(code)
+}
 
 // testUnlockKey is a fixed 32-byte HMAC key for tests — real deployments get
 // one from folders.LoadOrGenerateFolderUnlockKey, but these tests only need
@@ -29,7 +42,7 @@ import (
 var testUnlockKey = []byte("01234567890123456789012345678901")
 
 func TestHandler_List(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -56,7 +69,7 @@ func TestHandler_List(t *testing.T) {
 }
 
 func TestHandler_List_QueryParams(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -92,7 +105,7 @@ func TestHandler_List_QueryParams(t *testing.T) {
 }
 
 func TestHandler_List_NoMutationRoutes(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
@@ -112,7 +125,7 @@ func TestHandler_List_NoMutationRoutes(t *testing.T) {
 // folder's real links+notes (see internal/entries package doc + CLAUDE.md's
 // folder-password invariant).
 func TestHandler_List_FolderGate(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()

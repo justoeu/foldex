@@ -802,7 +802,7 @@ O foldex era single-user em três camadas que se sustentavam mutuamente: sem ide
 **Escopo explicitamente fora do v1 (documentado, não esquecido).** Compartilhamento entre usuários (é colaboração, com modelo de ACL próprio). Papéis além de `admin`/`user` (a coluna é TEXT com CHECK — adicionar é uma migration de uma linha; RBAC especulativo envelhece mal). SSO genérico SAML/OIDC. Rotação de `AUTH_ENCRYPTION_KEY`. `user_id` em `click_log` — sem FK para `link`, seria segunda fonte de verdade sujeita a divergir; as queries alcançam o dono por semi-join, com a `000018` como plano B se `stats.Daily` regredir.
 
 ### ADR-31 — OAuth Google: `sub` é a chave, e-mail coincidente abre conversão (nunca login)
-**Status:** Planned. Detalhe em [`docs/SDD-AUTH-RBAC.md`](SDD-AUTH-RBAC.md) §7.
+**Status:** Accepted — implementado no PR4 (v1.13.0). Detalhe em [`docs/SDD-AUTH-RBAC.md`](SDD-AUTH-RBAC.md) §7.
 
 **`user_identity.subject` é a única chave usada para encontrar uma conta.** E-mail nunca resolve login: trocar o e-mail no Google não move vínculo nenhum. Duas UNIQUEs travam as duas metades da regra — `(provider, subject)` garante que uma conta Google mapeia para no máximo um usuário foldex, e `(user_id, provider)` que um usuário vincula no máximo uma conta por provider.
 
@@ -823,11 +823,13 @@ Isso é deliberadamente mais estrito do que o argumento "o e-mail já é a raiz 
 **Lockout de conta Google-only** tem três saídas: `force-password-reset` pelo admin; "Definir senha" em Configurações estando logado via Google (e só então desvincular passa a ser permitido); e `/password/forgot` respondendo o mesmo `202` mas enviando "esta conta entra pelo Google" **em vez** de um link de reset — deixar o link ressuscitaria, só com a caixa postal, exatamente a credencial que a exigência de senha descartou. Resta um caso sem saída pela UI: o **último admin Google-only que perde o Google** sai por edição direta no banco, mesmo status da master esquecida no ADR-29.
 
 ### ADR-32 — `/go/{id}` numérico vira opt-in quando há múltiplos usuários
-**Status:** Planned (PR4 do ADR-30).
+**Status:** Accepted — implementado no PR4 (v1.13.0).
 
 `redirect.Handler` resolve `/go/{id-or-slug}` tentando primeiro `strconv` e caindo para slug (ADR-7). Com um usuário, o ramo numérico é conveniência. Com vários, é uma **primitiva de enumeração cross-tenant**: um visitante anônimo caminha por ids sequenciais e descobre a URL de destino de todos os usuários, sem sessão e sem ler nada.
 
-Decisão: o ramo numérico passa por `PUBLIC_ID_REDIRECT_ENABLED`, default **`false`**, de modo que `/go/42` responde 404 e só `/go/{slug}` resolve. Mesmo tratamento para `/n/{42}`. O slug é a superfície de compartilhamento documentada (`CLAUDE.md` §4: "The slug IS exposed in LinkDialog") e tem entropia suficiente na prática. O ADR-7 continua válido para quem religar a flag.
+Decisão: o ramo numérico passa por `PUBLIC_NUMERIC_IDS`, default **`false`**, de modo que `/go/42` responde 404 e só `/go/{slug}` resolve. Mesmo tratamento para `/n/{42}` — e ali o argumento é mais forte, porque essa rota **renderiza o conteúdo** da nota em vez de redirecionar: um espaço de ids caminhável exporia o texto alheio, não só a URL de destino. O 404 é o mesmo que um slug inexistente recebe; dizer "lookup numérico está desligado" confirmaria que o espaço de ids é real e vale sondar quando a flag mudar.
+
+(O nome do knob mudou de `PUBLIC_ID_REDIRECT_ENABLED` no plano para `PUBLIC_NUMERIC_IDS` na entrega: "redirect" não descrevia `/n/`, que renderiza.) O slug é a superfície de compartilhamento documentada (`CLAUDE.md` §4: "The slug IS exposed in LinkDialog") e tem entropia suficiente na prática. O ADR-7 continua válido para quem religar a flag.
 
 Isso é **mudança de comportamento numa URL pública**, por isso um ADR próprio em vez de uma nota no ADR-30. Chega no PR4, não no PR1, para que a migração de dados e a de comportamento não caiam juntas.
 

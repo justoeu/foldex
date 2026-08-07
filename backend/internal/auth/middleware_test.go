@@ -1,12 +1,18 @@
 package auth
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/pkg/authctx"
 )
+
+func sessionTouch(id int64) touchKey { return touchKey{authctx.ViaSession, id} }
 
 // SweepTouch is what makes the last_seen_at throttle map bounded.
 //
@@ -17,23 +23,23 @@ import (
 // for the life of the process.
 func TestSweepTouchDropsIdleEntriesAndKeepsFreshOnes(t *testing.T) {
 	t.Parallel()
-	m := &Middleware{lastTouch: map[int64]time.Time{
-		1: time.Now().Add(-2 * time.Hour),
-		2: time.Now().Add(-90 * time.Minute),
-		3: time.Now(),
+	m := &Middleware{lastTouch: map[touchKey]time.Time{
+		sessionTouch(1): time.Now().Add(-2 * time.Hour),
+		sessionTouch(2): time.Now().Add(-90 * time.Minute),
+		sessionTouch(3): time.Now(),
 	}}
 
 	dropped := m.SweepTouch(time.Hour)
 
 	assert.Equal(t, 2, dropped)
 	assert.Len(t, m.lastTouch, 1)
-	_, fresh := m.lastTouch[3]
+	_, fresh := m.lastTouch[sessionTouch(3)]
 	assert.True(t, fresh, "an entry seen just now must survive")
 }
 
 func TestSweepTouchOnAnEmptyMap(t *testing.T) {
 	t.Parallel()
-	m := &Middleware{lastTouch: map[int64]time.Time{}}
+	m := &Middleware{lastTouch: map[touchKey]time.Time{}}
 	assert.Zero(t, m.SweepTouch(time.Hour))
 }
 
@@ -41,14 +47,16 @@ func TestSweepTouchOnAnEmptyMap(t *testing.T) {
 // extra UPDATE and re-seeds it — so the sweep is allowed to be aggressive.
 func TestSweepTouchIsSafeToOverPrune(t *testing.T) {
 	t.Parallel()
-	m := &Middleware{lastTouch: map[int64]time.Time{7: time.Now()}}
+	m := &Middleware{lastTouch: map[touchKey]time.Time{sessionTouch(7): time.Now()}}
 	assert.Equal(t, 1, m.SweepTouch(0))
 	assert.Empty(t, m.lastTouch)
 }
 
 func TestForgetTouchRemovesOneEntry(t *testing.T) {
 	t.Parallel()
-	m := &Middleware{lastTouch: map[int64]time.Time{1: time.Now(), 2: time.Now()}}
+	m := &Middleware{lastTouch: map[touchKey]time.Time{
+		sessionTouch(1): time.Now(), sessionTouch(2): time.Now(),
+	}}
 	m.forgetTouch(1)
 	assert.Len(t, m.lastTouch, 1)
 	m.forgetTouch(999) // absent id must be a no-op, not a panic
@@ -123,4 +131,52 @@ func TestNullIP(t *testing.T) {
 	got := nullIP("192.0.2.1")
 	require.NotNil(t, got)
 	assert.Equal(t, "192.0.2.1", *got)
+}
+
+// bearerToken parses an attacker-supplied header, so every shape has to land
+// somewhere definite. RFC 7235 makes the scheme case-insensitive, and a client
+// that sends "bearer" rather than "Bearer" is not doing anything wrong.
+func TestBearerToken(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		header string
+		want   string
+		ok     bool
+	}{
+		{"Bearer fx_1_secret", "fx_1_secret", true},
+		{"bearer fx_1_secret", "fx_1_secret", true},
+		{"BEARER fx_1_secret", "fx_1_secret", true},
+		{"Bearer   fx_1_secret  ", "fx_1_secret", true},
+		{"", "", false},
+		{"Bearer", "", false},
+		{"Bearer ", "", false},
+		{"Basic dXNlcjpwYXNz", "", false},
+		// A token with no scheme is not a bearer credential. Accepting it would
+		// make the header's meaning depend on what happens to be in it.
+		{"fx_1_secret", "", false},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/api/links", nil)
+		if tc.header != "" {
+			req.Header.Set("Authorization", tc.header)
+		}
+		got, ok := bearerToken(req)
+		assert.Equal(t, tc.ok, ok, "header %q", tc.header)
+		assert.Equal(t, tc.want, got, "header %q", tc.header)
+	}
+}
+
+// The throttle map is keyed by (credential kind, id). Session ids and token ids
+// are dense BIGSERIALs from DIFFERENT sequences, so a map keyed on the bare
+// integer would have session 7 and token 7 suppressing each other's writes —
+// a bug whose only symptom is a stale "last used" column.
+func TestTouchKeyNamespacesSessionsAndTokens(t *testing.T) {
+	t.Parallel()
+	m := &Middleware{lastTouch: map[touchKey]time.Time{}}
+
+	assert.True(t, m.shouldTouch(touchKey{authctx.ViaSession, 7}))
+	assert.True(t, m.shouldTouch(touchKey{authctx.ViaAPIToken, 7}),
+		"token 7 must not be suppressed by session 7")
+
+	// And the throttle itself still holds within one kind.
+	assert.False(t, m.shouldTouch(touchKey{authctx.ViaSession, 7}))
 }

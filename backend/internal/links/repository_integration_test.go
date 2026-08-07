@@ -27,7 +27,7 @@ import (
 
 func setup(t *testing.T) (context.Context, authctx.UserID, *links.Repository, *tags.Repository) {
 	t.Helper()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	return context.Background(), uid, links.NewRepository(pool), tags.NewRepository(pool)
@@ -308,7 +308,7 @@ func TestRepository_UpdateDuplicateURLReturns409(t *testing.T) {
 // Without this, a link in a folder would appear both in the folder card AND
 // on the home grid, double-rendered.
 func TestRepository_UngroupedExcludesLinksInFolders(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -337,7 +337,7 @@ func TestRepository_UngroupedExcludesLinksInFolders(t *testing.T) {
 // and a tag filter must compose with AND, not OR. Inside folder F, toggling
 // tag X narrows the result to links in F that also have X.
 func TestRepository_ListByFolderANDTag(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -402,7 +402,7 @@ func TestRepository_GoEndpointIsOnlyClickInserter(t *testing.T) {
 // the LATERAL but also re-introduce the denormalization drift; this test
 // surfaces it at boot.
 func TestSchema_NoCachedClickColumns(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	_ = testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -515,7 +515,7 @@ func TestRepository_FindDueForCheck_RespectsInterval(t *testing.T) {
 	// Need direct pool access to backdate last_checked_at — testdb.New spins
 	// a fresh container per call, so we share one pool between repo + raw SQL.
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
@@ -664,7 +664,7 @@ func TestRepository_ListRecentChanges_FiltersAndSorts(t *testing.T) {
 func TestRepository_ListRecentChanges_WindowFiltersOut(t *testing.T) {
 	// Same pool-sharing rationale as FindDueForCheck_RespectsInterval.
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)
@@ -681,4 +681,36 @@ func TestRepository_ListRecentChanges_WindowFiltersOut(t *testing.T) {
 	out, err := lrepo.ListRecentChanges(ctx, uid, 7*24*60*60, 50)
 	require.NoError(t, err)
 	assert.Empty(t, out, "8-day-old change must fall outside the 7-day window")
+}
+
+// AssertOwned is the ownership gate ProxyFile uses instead of Get, so it needs
+// its own test: the handler suite exercises the branch through a fake
+// repository, which proves the handler reacts to the answer but nothing about
+// how the answer is reached.
+//
+// The foreign case is the one that matters. Object keys are FLAT
+// (`images/{link_id}.jpg` — no tenant segment), so the id embedded in the key
+// is attacker-supplied and this query is the only thing standing between a
+// guessed id and another tenant's image. It must answer the byte-identical 404
+// an absent id gets: a distinguishable error would turn the proxy into an
+// enumeration oracle over a dense BIGSERIAL.
+func TestRepository_AssertOwned(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+
+	alice := testdb.SeedUser(t, pool, "alice@test.local", "user")
+	bob := testdb.SeedUser(t, pool, "bob@test.local", "user")
+	repo := links.NewRepository(pool)
+
+	mine, err := repo.Create(ctx, alice, links.CreateInput{URL: "https://a.test/own", Title: "own"})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.AssertOwned(ctx, alice, mine.ID), "the owner must pass")
+
+	foreign := repo.AssertOwned(ctx, bob, mine.ID)
+	absent := repo.AssertOwned(ctx, bob, mine.ID+10_000)
+	require.ErrorIs(t, foreign, httperr.ErrNotFound)
+	require.ErrorIs(t, absent, httperr.ErrNotFound)
+	assert.Equal(t, absent, foreign,
+		"a foreign id and an absent id must be indistinguishable, or the file proxy leaks which ids exist")
 }

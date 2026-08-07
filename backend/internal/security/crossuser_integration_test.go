@@ -28,7 +28,20 @@ import (
 	"foldex/internal/stats"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
+	"os"
 )
+
+// TestMain owns the lifetime of this package's shared Postgres container.
+//
+// It cannot be a t.Cleanup: os.Exit skips deferred work, and a cleanup hung off
+// whichever test ran first would tear the database down while the rest of the
+// package still needed it. The Makefile disables testcontainers' reaper, so
+// nothing else would collect it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	testdb.StopShared()
+	os.Exit(code)
+}
 
 type tenant struct {
 	uid    authctx.UserID
@@ -55,7 +68,7 @@ type fixture struct {
 func setup(t *testing.T) (context.Context, fixture) {
 	t.Helper()
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	f := fixture{
 		pool:  pool,

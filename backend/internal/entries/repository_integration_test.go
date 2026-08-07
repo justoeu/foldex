@@ -29,7 +29,7 @@ type fixture struct {
 
 func setup(t *testing.T) (context.Context, authctx.UserID, fixture) {
 	t.Helper()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	return context.Background(), uid, fixture{

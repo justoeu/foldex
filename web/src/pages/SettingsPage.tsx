@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { Icon, I } from '../components/icons'
 import { PasswordStrength } from '../components/PasswordStrength'
 import { TwoFactorSection } from '../components/TwoFactorSection'
+import { AccountSection } from '../components/AccountSection'
+import { ApiTokensSection } from '../components/ApiTokensSection'
 import { useFolders, useResetFolderPassword } from '../api/folders'
 import {
   useMasterPasswordStatus,
@@ -32,7 +34,9 @@ export function SettingsPage({ onEditFolder }: Props) {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <AccountSection />
         <TwoFactorSection />
+        <ApiTokensSection />
         <MasterPasswordSection />
         <LockedFoldersSection onEditFolder={onEditFolder} />
       </div>

@@ -32,23 +32,49 @@ const recoveryCodeChars = 10
 func newRecoveryCodes(n int) ([]string, error) {
 	codes := make([]string, 0, n)
 	for range n {
-		buf := make([]byte, recoveryCodeChars)
-		if _, err := rand.Read(buf); err != nil {
-			return nil, fmt.Errorf("generate recovery code: %w", err)
+		// Grouped 5-5: transcription from paper is the expected path, and
+		// unbroken 10-character strings are where people lose their place.
+		c, err := randomCode(recoveryCodeChars, recoveryCodeChars/2)
+		if err != nil {
+			return nil, err
 		}
-		var sb strings.Builder
-		for i, b := range buf {
-			// Grouped 5-5 with a hyphen: transcription from paper is the
-			// expected path, and unbroken 10-character strings are where people
-			// lose their place.
-			if i == recoveryCodeChars/2 {
-				sb.WriteByte('-')
-			}
-			sb.WriteByte(recoveryAlphabet[int(b)%len(recoveryAlphabet)])
-		}
-		codes = append(codes, sb.String())
+		codes = append(codes, c)
 	}
 	return codes, nil
+}
+
+// temporaryPasswordChars is 15 symbols × 5 bits = 75 bits, comfortably more
+// than the 50 a recovery code carries. The extra margin is because this value
+// is a PASSWORD: it is typed into a login form that an attacker can reach,
+// where a recovery code is only usable once a first factor already passed.
+const temporaryPasswordChars = 15
+
+// newTemporaryPassword mints the credential an administrator hands to a user
+// who can no longer sign in.
+//
+// The same alphabet as recovery codes, for the same reason: it will be read
+// aloud or copied by hand, and I/L/O/U are the characters that get transcribed
+// wrongly. It is shown to the admin exactly once — nothing stores the
+// plaintext.
+func newTemporaryPassword() (string, error) {
+	return randomCode(temporaryPasswordChars, 5)
+}
+
+// randomCode returns `symbols` characters from recoveryAlphabet, hyphenated
+// every `group` characters (group <= 0 disables grouping).
+func randomCode(symbols, group int) (string, error) {
+	buf := make([]byte, symbols)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate code: %w", err)
+	}
+	var sb strings.Builder
+	for i, b := range buf {
+		if group > 0 && i > 0 && i%group == 0 {
+			sb.WriteByte('-')
+		}
+		sb.WriteByte(recoveryAlphabet[int(b)%len(recoveryAlphabet)])
+	}
+	return sb.String(), nil
 }
 
 // normalizeRecoveryCode makes verification insensitive to how the code was

@@ -157,6 +157,68 @@ func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	h.completeLogin(w, r, user, true)
 }
 
+type setPasswordInput struct {
+	Password string `json:"password"`
+	// Code is a TOTP or recovery code, required when the account has an
+	// authenticator. It is the only proof available: there is no current
+	// password to ask for, which is the entire situation this endpoint exists
+	// for.
+	Code string `json:"code"`
+}
+
+// SetPassword adds a password to an account that has none.
+//
+// This is the second of ADR-31's three lockout exits: a user signed in through
+// Google re-acquires a password credential, and only then may they unlink
+// Google. Doing it in the other order would leave the account with no way in at
+// all — which the database refuses outright (migration 000021).
+//
+// It is NOT an alias for password/change, and refusing when a password already
+// exists is the point: change requires the current password, and letting this
+// endpoint overwrite one without that proof would turn a stolen session into
+// permanent account takeover.
+func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request) {
+	p, _ := authctx.FromContext(r.Context())
+	in, err := httperr.DecodeJSON[setPasswordInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	if err := validatePassword(in.Password); err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	user, err := h.repo.GetUser(r.Context(), p.UserID)
+	if err != nil {
+		h.logger.Error("set password load user", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	if user.HasPassword {
+		httperr.Write(w, httperr.New(http.StatusConflict, "password_exists",
+			"this account already has a password; change it instead"))
+		return
+	}
+	// Step up with the second factor when there is one. A session cookie alone
+	// is a weaker proof than the credential being created, and this endpoint
+	// mints a way to sign in that survives the session's death.
+	if user.TOTPEnabled && !h.checkStepUpCode(w, r, p.UserID, in.Code) {
+		return
+	}
+	if err := h.repo.SetPassword(r.Context(), p.UserID, in.Password); err != nil {
+		h.logger.Error("set password", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	// Other sessions die, this one lives — the same treatment a password change
+	// gets, and for the same reason: the credential set changed, but signing the
+	// user out of the browser they are using right now would be hostile.
+	if err := h.repo.RevokeAllExcept(r.Context(), p.UserID, p.SessionID, ReasonPasswordChanged); err != nil {
+		h.logger.Error("set password revoke others", "err", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // E-mail verification
 // ─────────────────────────────────────────────────────────────────────

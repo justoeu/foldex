@@ -14,7 +14,7 @@ import (
 )
 
 func TestSubscriptionRepo_SaveListDelete(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := push.NewRepository(pool)

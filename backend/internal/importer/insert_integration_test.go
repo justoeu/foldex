@@ -22,7 +22,7 @@ import (
 // path purges them itself before re-inserting the replacement row.
 func TestInsertLinkInTx_WipeFirstDoesNotOrphanTagsOrClicks(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	lrepo := links.NewRepository(pool)

@@ -36,7 +36,12 @@ export type AuthFeatures = {
  * would see.
  */
 export type TwoFactorPending = {
-  /** 'totp' = present a code; 'enroll_2fa' = an admin must set one up first. */
+  /**
+   * 'totp' = present a code; 'enroll_2fa' = an admin must set one up first.
+   *
+   * 'convert_google' never appears here — it produces its own session status,
+   * because the screen it needs is a password field, not a code field.
+   */
   purpose: 'totp' | 'enroll_2fa'
   email: string
   methods: string[]
@@ -56,6 +61,17 @@ export type SessionState =
   | { status: 'anonymous'; features: AuthFeatures }
   | { status: 'setup_required'; features: AuthFeatures }
   | { status: 'two_factor_required'; pending: TwoFactorPending; features: AuthFeatures }
+  /**
+   * Came back from Google with an address that matches an existing PASSWORD
+   * account. Not a login: the account's current password still has to be
+   * proven before the Google identity is attached and the password retired.
+   *
+   * A separate status rather than a flavour of `two_factor_required` because
+   * the screen is different — one password field, not a six-digit code — and
+   * because conflating them would put a user on a code screen they can never
+   * satisfy.
+   */
+  | { status: 'convert_password_account'; email: string; features: AuthFeatures }
   | { status: 'authenticated'; user: AuthUser; csrfToken: string; features: AuthFeatures }
 
 export const defaultFeatures: AuthFeatures = {

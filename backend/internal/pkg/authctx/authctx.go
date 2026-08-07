@@ -42,10 +42,18 @@ const (
 )
 
 // Principal is the authenticated identity behind a request.
+//
+// SessionID and TokenID are mutually exclusive, and the zero value of each is
+// load-bearing: an endpoint that revokes "every session except SessionID" would
+// revoke ALL of them if handed a token principal. That is why every such
+// endpoint sits behind Middleware.RejectAPIToken rather than checking Via
+// itself — one guard at the mount point instead of a rule each handler must
+// remember.
 type Principal struct {
 	UserID    UserID
 	Role      Role
 	SessionID int64 // 0 when Via is ViaAPIToken
+	TokenID   int64 // 0 when Via is ViaSession
 	Via       string
 }
 

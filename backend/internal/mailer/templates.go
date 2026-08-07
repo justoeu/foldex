@@ -160,6 +160,65 @@ func VerifyEmailMessage(to, verifyURL string, expiresInMinutes int) Message {
 	return Message{To: to, Subject: "Confirm your Foldex e-mail", Text: text, HTML: htmlBody}
 }
 
+// PasswordForciblyResetMessage warns that an administrator replaced the
+// account's password.
+//
+// It carries no password. The temporary credential is shown to the
+// administrator and handed over out of band — mailing it would put a working
+// credential in an inbox, which is exactly the channel the account may have
+// lost control of.
+func PasswordForciblyResetMessage(to string) Message {
+	text := strings.Join([]string{
+		"An administrator reset the password on your Foldex account.",
+		"",
+		"They will give you a temporary password directly. Sign in with it and",
+		"choose a new one straight away. Every session was signed out.",
+		"",
+		"If you did not ask for this, tell your administrator now.",
+	}, "\n")
+
+	htmlBody := `<p>An administrator reset the password on your <strong>Foldex</strong> account.</p>` +
+		`<p>They will give you a temporary password directly. Sign in with it and choose a ` +
+		`new one straight away. Every session was signed out.</p>` +
+		`<p style="color:#666;font-size:13px">If you did not ask for this, tell your ` +
+		`administrator now.</p>`
+
+	return Message{To: to, Subject: "Your Foldex password was reset by an administrator",
+		Text: text, HTML: htmlBody}
+}
+
+// AccountConvertedMessage warns that the account now signs in with Google and
+// no longer has a password.
+//
+// It is sent because the conversion RETIRES a credential. Someone who reads
+// this and did not do it has had their password used — the conversion required
+// it — and the only remedy left is an administrator, because the password reset
+// flow no longer applies to an account without a password. Saying that plainly
+// is more useful than a generic "your account was updated".
+func AccountConvertedMessage(to, googleEmail string) Message {
+	text := strings.Join([]string{
+		"Your Foldex account now signs in with Google (" + googleEmail + ").",
+		"",
+		"Its password has been removed, and every other session was signed out.",
+		"",
+		"If this was not you, contact your Foldex administrator immediately:",
+		"whoever did this knew your password, and password reset no longer",
+		"applies to this account.",
+	}, "\n")
+
+	htmlBody := fmt.Sprintf(
+		`<p>Your <strong>Foldex</strong> account now signs in with Google (%s).</p>`+
+			`<p>Its password has been removed, and every other session was signed out.</p>`+
+			`<p style="color:#666;font-size:13px">If this was not you, contact your Foldex `+
+			`administrator immediately: whoever did this knew your password, and password `+
+			`reset no longer applies to this account.</p>`,
+		html.EscapeString(googleEmail),
+	)
+
+	return Message{To: to, Subject: "Your Foldex account now uses Google sign-in",
+		Text: text, HTML: htmlBody}
+}
+
 // RecoveryCodeUsedMessage warns that a single-use recovery code was spent.
 //
 // Recovery codes bypass the authenticator, so spending one is either the user

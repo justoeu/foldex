@@ -16,7 +16,20 @@ import (
 	"foldex/internal/notes"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/testdb"
+	"os"
 )
+
+// TestMain owns the lifetime of this package's shared Postgres container.
+//
+// It cannot be a t.Cleanup: os.Exit skips deferred work, and a cleanup hung off
+// whichever test ran first would tear the database down while the rest of the
+// package still needed it. The Makefile disables testcontainers' reaper, so
+// nothing else would collect it.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	testdb.StopShared()
+	os.Exit(code)
+}
 
 // The backup suite seeds a SINGLE user everywhere else, which makes
 // `DELETE ... WHERE user_id = $1` and `DELETE ... WHERE true` observationally
@@ -69,7 +82,7 @@ func seedTenant(t *testing.T, pool *pgxpool.Pool, bucket *stubBucket, email, hos
 // independently: wipeUser once ran TRUNCATE, and applyFiles once called
 // DeleteObjectsPrefix on a flat key space.
 func TestRestore_WipeTouchesOnlyTheCallersRowsAndObjects(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
@@ -137,7 +150,7 @@ func TestRestore_WipeTouchesOnlyTheCallersRowsAndObjects(t *testing.T) {
 // tenant's files; a backup is a file the user downloads and hands around, and
 // another tenant's screenshots must not be inside it.
 func TestExport_CarriesOnlyTheCallersObjects(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
 
@@ -161,7 +174,7 @@ func TestExport_CarriesOnlyTheCallersObjects(t *testing.T) {
 // bucket, where the danger is different:
 // user_id is never read from the ZIP, but the object KEY is, and keys are flat.
 func TestRestore_CraftedZipCannotOverwriteAnotherTenantsObject(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
@@ -188,7 +201,7 @@ func TestRestore_CraftedZipCannotOverwriteAnotherTenantsObject(t *testing.T) {
 // hand-craft a backup that plants content in another account. The mismatch
 // produces a warning and nothing else.
 func TestCrossUser_RestoreIgnoresOwnerEmail(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
@@ -225,7 +238,7 @@ func TestCrossUser_RestoreIgnoresOwnerEmail(t *testing.T) {
 // /n/{slug} page serves to anyone. Harvest it from the markup, put it in a ZIP,
 // restore, and the victim's image is replaced for every viewer.
 func TestRestore_CraftedZipCannotOverwriteANoteImage(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
@@ -249,7 +262,7 @@ func TestRestore_CraftedZipCannotOverwriteANoteImage(t *testing.T) {
 // manually-uploaded thumbnails broken after a restore while the whole suite
 // stays green.
 func TestRestore_RealignsImagesPrefixToo(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
@@ -284,7 +297,7 @@ func TestRestore_RealignsImagesPrefixToo(t *testing.T) {
 // therefore attacker-chosen text that userObjectKeys scans, so mere reference
 // must never be mistaken for ownership.
 func TestExport_ReferencingAKeyIsNotOwningIt(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())

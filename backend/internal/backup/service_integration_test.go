@@ -76,7 +76,7 @@ func (s *stubBucket) DeleteObjectsPrefix(_ context.Context, prefix string) error
 // backup is a complete DB + RustFS snapshot, manifest is uncompressed Store,
 // every entry has a SHA-256 checksum.
 func TestService_ExportProducesValidZipWithManifest(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
@@ -157,7 +157,7 @@ func TestService_ExportProducesValidZipWithManifest(t *testing.T) {
 }
 
 func TestService_Validate_RejectsEmptyZip(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -179,7 +179,7 @@ func TestService_Validate_RejectsEmptyZip(t *testing.T) {
 // returns an error short-circuits the export — the handler can use this to
 // refuse a request before flushing response bytes.
 func TestService_ExportAbortsWhenCallbackErrors(t *testing.T) {
-	pool := testdb.New(t)
+	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
