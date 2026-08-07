@@ -416,3 +416,70 @@ func TestValidateSecureDefaults_AuthSatisfiesTheNonLoopbackGuard(t *testing.T) {
 		t.Errorf("SHARED_SECRET must still satisfy the guard: %v", err)
 	}
 }
+
+// The cookie Secure flag is decided by the scheme of the origin THE BROWSER
+// talks to, not by how the backend binds. The two disagree in the topology this
+// project recommends — loopback bind, nginx terminating TLS — and the old
+// bind-only derivation got that case wrong, shipping session cookies with no
+// Secure flag to a browser on HTTPS.
+func TestLoad_CookieSecureFollowsThePublicURLScheme(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		publicURL string
+		bind      string
+		want      bool
+	}{
+		{
+			// The regression this exists for: the documented reverse-proxy
+			// deployment. Bind says "local"; the browser is on HTTPS.
+			name:      "loopback bind behind an https proxy is Secure",
+			publicURL: "https://foldex.example", bind: "127.0.0.1", want: true,
+		},
+		{
+			// And the mirror image: reachable bind, but the operator genuinely
+			// serves plain HTTP. A Secure cookie here is dropped in silence.
+			name:      "network bind serving plain http is not Secure",
+			publicURL: "http://192.168.1.10:9089", bind: "0.0.0.0", want: false,
+		},
+		{
+			name:      "the shipped compose origin is Secure",
+			publicURL: "https://localhost:9444", bind: "0.0.0.0", want: true,
+		},
+		{
+			// No public URL configured: fall back to the bind heuristic, which
+			// is the plain-HTTP dev server the footgun warning is about.
+			name:      "no public url falls back to the bind",
+			publicURL: "", bind: "127.0.0.1", want: false,
+		},
+		{
+			// The regression guard. AuthPublicURL carries a default of
+			// http://localhost:9088, so deriving from the DEFAULTED field
+			// instead of the environment would turn Secure off for every
+			// deployment that binds 0.0.0.0 without configuring a public URL —
+			// including the shipped compose stack with the value left unset.
+			name:      "no public url with a reachable bind falls back to Secure",
+			publicURL: "", bind: "0.0.0.0", want: true,
+		},
+		{
+			// A malformed value must not decide cookie policy from a scheme
+			// nobody meant to set.
+			name:      "a relative public url falls back to the bind",
+			publicURL: "/app", bind: "0.0.0.0", want: true,
+		},
+		{
+			name:      "a non-http scheme falls back to the bind",
+			publicURL: "ftp://foldex.example", bind: "127.0.0.1", want: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("DB_URL", "postgres://x@y/z")
+			t.Setenv("AUTH_PUBLIC_URL", tc.publicURL)
+			t.Setenv("BACKEND_BIND", tc.bind)
+			t.Setenv("SHARED_SECRET", "")
+
+			cfg, err := Load()
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, cfg.AuthCookieSecure)
+		})
+	}
+}

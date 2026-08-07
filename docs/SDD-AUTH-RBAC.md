@@ -549,6 +549,12 @@ Guardas travadas no servidor (o frontend só espelha): não é possível rebaixa
 
 `fx_rt` combina Strict com `Path=/api/auth` porque só é enviado para `/refresh` e `/logout`. Não se perde nada tornando-o o mais restrito possível.
 
+**`Secure` é derivado do esquema de `AUTH_PUBLIC_URL`, não do bind.** Errar essa flag falha em silêncio — o browser descarta um cookie `Secure` sobre HTTP puro sem dizer nada, e o sintoma é "o login funciona e a request seguinte é anônima" — então ela não vem do ambiente. A pergunta que decide o valor é o esquema da origem que **o browser** acessa, e o endereço de bind responde outra coisa ("o backend é alcançável pela rede?"). As duas divergem exatamente na topologia recomendada aqui: binário em `127.0.0.1` com nginx terminando TLS na frente. Derivar do bind ali conclui "dev, HTTP puro" e emite cookies de sessão sem `Secure` para um browser em HTTPS, e qualquer request `http://` os põe em claro no fio — o 301 do nginx só chega depois que a request que os carregava já saiu.
+
+A leitura é do **ambiente**, não do campo já defaultado: `AuthPublicURL` cai para `http://localhost:9088` quando ninguém configura, e isso é um palpite sobre para onde os links apontam, não uma declaração de que o browser está em HTTP puro. Confiar no valor defaultado desligaria `Secure` em toda instalação que faz bind em `0.0.0.0` sem configurar URL pública — regressão pior que o bug. Sem `AUTH_PUBLIC_URL` explícito, vale o bind.
+
+**`SetSession` expira o `fx_pa`.** Sessão viva e login pela metade são estados mutuamente exclusivos, então estabelecer um encerra o outro na única função que define "autenticado no fio" — antes disso só o caminho de 2FA limpava, e um desafio abandonado deixava o cookie ao lado de uma sessão nova pelo resto do TTL.
+
 Toda resposta de `/api/auth/*` sai com `Cache-Control: no-store`; `/api/*` ganha `Vary: Cookie`.
 
 ### 5.2 CSRF — double-submit **assinado**

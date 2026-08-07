@@ -2276,3 +2276,46 @@ func TestAdmin_ConcurrentMutualDemotionCannotEmptyTheAdminSet(t *testing.T) {
 			"round %d: exactly one demotion must trip ErrLastAdmin, got %v", round, errs)
 	}
 }
+
+// A live session and a half-finished login are mutually exclusive states, so
+// establishing one must end the other.
+//
+// Before this, only the 2FA path cleared fx_pa — the password and OAuth paths
+// did not, so a challenge abandoned mid-flight left its cookie sitting beside a
+// fresh session for the rest of its TTL. Not redeemable without the code, which
+// is why it is hardening rather than a hole; the point is that the guarantee
+// now comes from SetSession, the one function that defines "signed in on the
+// wire", instead of from four call sites each remembering.
+func TestLogin_ClearsAStalePreAuthCookie(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	testdb.SeedUserWithPassword(t, h.pool, "2fa@example.com", "a good password", "user")
+	enrolUser(t, h, "2fa@example.com", "a good password")
+
+	// A FRESH client, so the enrollment's own session does not mask the
+	// behaviour under test. Its login stops at the second factor, leaving fx_pa.
+	c := h.client(t)
+	rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "2fa@example.com", "password": "a good password",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "two_factor_required", decode(t, rec)["status"])
+	require.NotEmpty(t, c.cookies[auth.CookiePreAuth], "the challenge must have set fx_pa")
+
+	// Abandon it and sign in as an account that needs no second factor.
+	testdb.SeedUserWithPassword(t, h.pool, "plain@example.com", "a good password", "user")
+	rec = c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "plain@example.com", "password": "a good password",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "authenticated", decode(t, rec)["status"])
+
+	pa := cookieByName(rec, auth.CookiePreAuth)
+	require.NotNil(t, pa, "the response must expire fx_pa rather than ignore it")
+	assert.Less(t, pa.MaxAge, 0, "fx_pa must be expired, not refreshed")
+	// Cleared with the SAME path it was set with: a browser keys cookies by
+	// (name, domain, path), so expiring it at "/" would leave the real one at
+	// /api/auth untouched.
+	assert.Equal(t, "/api/auth", pa.Path)
+	assert.Empty(t, c.cookies[auth.CookiePreAuth], "the client must no longer hold one")
+}
