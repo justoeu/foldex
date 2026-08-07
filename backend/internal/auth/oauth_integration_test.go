@@ -1331,3 +1331,71 @@ func TestOAuthAndTokenHandlers_DegradeWithoutLeakingDriverText(t *testing.T) {
 		})
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// The credential-coherence trigger (mig 000021)
+// ─────────────────────────────────────────────────────────────────────
+
+// TestOAuth_GoogleOnlyAccountCannotUnlinkUntilItSetsAPassword covers the
+// APPLICATION guard — UnlinkIdentity re-checks and answers 409. This covers the
+// DATABASE one, which exists precisely because that discipline can fail: the
+// trigger is what makes "an active account always holds at least one
+// credential" true of any writer, including a future handler, a migration, or
+// an operator at psql.
+//
+// Written against SQL rather than the API on purpose. Every route into this
+// state is already refused upstream, so a test that went through handlers could
+// only prove the handlers say no — and would keep passing if the trigger were
+// dropped tomorrow.
+func TestInvariant_NoActiveUserEndsUpWithoutAnyCredential(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	t.Run("dropping the password of an account with no identity is refused", func(t *testing.T) {
+		uid := testdb.SeedUserWithPassword(t, h.pool, "pw-only@example.com", "a good password", "user")
+		_, err := h.pool.Exec(ctx,
+			`UPDATE app_user SET password_hash = NULL WHERE id = $1`, int64(uid))
+		require.Error(t, err, "the last credential was removed and the database allowed it")
+		assert.Contains(t, err.Error(), "no way to sign in")
+	})
+
+	t.Run("deleting the last identity of a Google-only account is refused", func(t *testing.T) {
+		uid := testdb.SeedUserWithPassword(t, h.pool, "google-only@example.com", "a good password", "user")
+		testdb.ConvertToGoogleOnly(t, h.pool, uid, "google-only@example.com", "sub-lockout")
+
+		_, err := h.pool.Exec(ctx, `DELETE FROM user_identity WHERE user_id = $1`, int64(uid))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no way to sign in")
+	})
+
+	// DEFERRABLE is not a detail: the conversion legitimately violates the rule
+	// mid-transaction — nulling the password and inserting the identity are two
+	// statements, and one of them has to go first. What must hold is the state
+	// at COMMIT. An immediate trigger would make the supported flow impossible.
+	t.Run("swapping one credential for another inside a transaction commits", func(t *testing.T) {
+		uid := testdb.SeedUserWithPassword(t, h.pool, "swap@example.com", "a good password", "user")
+
+		tx, err := h.pool.Begin(ctx)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		_, err = tx.Exec(ctx, `UPDATE app_user SET password_hash = NULL WHERE id = $1`, int64(uid))
+		require.NoError(t, err, "the check must not fire mid-transaction")
+		_, err = tx.Exec(ctx,
+			`INSERT INTO user_identity (user_id, provider, subject, email_at_link) VALUES ($1, 'google', $2, $3)`,
+			int64(uid), "sub-swap", "swap@example.com")
+		require.NoError(t, err)
+		require.NoError(t, tx.Commit(ctx), "the state at COMMIT is coherent and must be accepted")
+	})
+
+	// pending and disabled are outside the rule deliberately: the bootstrap
+	// placeholder ships pending with no password at all, and that row is what
+	// the setup screen claims. Including them would make a fresh install
+	// unbootable.
+	t.Run("a non-active account may hold no credential", func(t *testing.T) {
+		uid := testdb.SeedUserWithPassword(t, h.pool, "pending@example.com", "a good password", "user")
+		_, err := h.pool.Exec(ctx,
+			`UPDATE app_user SET status = 'disabled', password_hash = NULL WHERE id = $1`, int64(uid))
+		require.NoError(t, err, "a disabled account with no credential is a legitimate state")
+	})
+}
