@@ -43,6 +43,9 @@ type fakeGoogle struct {
 	// lastVerifier records what was sent, so a test can prove the PKCE verifier
 	// travelled server-side rather than through the browser.
 	lastVerifier string
+	// authURL overrides what AuthCodeURL returns, so a test can stand up a
+	// provider that hands back a target the handler must refuse.
+	authURL string
 }
 
 func (f *fakeGoogle) Enabled() bool { return f.enabled }
@@ -50,6 +53,9 @@ func (f *fakeGoogle) Enabled() bool { return f.enabled }
 func (f *fakeGoogle) AuthCodeURL(state, challenge string) (string, error) {
 	if !f.enabled {
 		return "", oauthgoogle.ErrDisabled
+	}
+	if f.authURL != "" {
+		return f.authURL, nil
 	}
 	return "https://accounts.google.test/o/oauth2/v2/auth?state=" + url.QueryEscape(state) +
 		"&code_challenge=" + url.QueryEscape(challenge), nil
@@ -190,6 +196,39 @@ func TestOAuthStart_RejectsAnUnknownPurpose(t *testing.T) {
 	rec := h.client(t).do(http.MethodGet, "/api/auth/oauth/google/start?purpose=whatever", nil)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, "invalid_purpose", errCode(t, rec))
+}
+
+// The redirect target is built by the provider from a package constant, so no
+// request input reaches it — Semgrep flags the http.Redirect anyway, since its
+// taint analysis cannot see through AuthCodeURL. The guard is real regardless:
+// it bounds what a provider bug (or a future configurable endpoint) can do at
+// the one moment the browser is handed a URL carrying the state token.
+//
+// Each case would fail differently and silently without it: a plain http target
+// puts the state on the wire in cleartext; `//evil.test` is protocol-relative
+// and sends the browser off-origin; a relative path resolves against foldex
+// itself and dies far from the cause.
+func TestOAuthStart_RefusesANonHTTPSTarget(t *testing.T) {
+	for _, target := range []string{
+		"http://accounts.google.test/o/oauth2/v2/auth",
+		"//evil.test/o/oauth2/v2/auth",
+		"/o/oauth2/v2/auth",
+		"javascript:alert(1)",
+	} {
+		t.Run(target, func(t *testing.T) {
+			h, g := newGoogleHarness(t, harnessOpts{})
+			g.authURL = target
+
+			rec := h.client(t).do(http.MethodGet, "/api/auth/oauth/google/start?purpose=login", nil)
+			require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+			assert.Empty(t, rec.Header().Get("Location"), "no redirect may be issued")
+			// The state cookie is set immediately before the redirect, so a
+			// guard placed after it would leave the browser holding a state for
+			// a flow that never started.
+			assert.Nil(t, cookieByName(rec, auth.CookieOAuth),
+				"a refused start must not leave a state cookie behind")
+		})
+	}
 }
 
 func TestOAuth_DisabledProviderAnswersReadablyRatherThan404(t *testing.T) {

@@ -154,8 +154,25 @@ func (h *Handler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
+	// Nothing from the request reaches `target`: AuthCodeURL builds it from a
+	// package CONSTANT endpoint plus url.Values-encoded parameters the server
+	// generated itself. This check is defence in depth against the provider
+	// implementation, not against the caller — the same posture, and the same
+	// reasoning, as the scheme check in internal/redirect.
+	//
+	// https and not merely "absolute": the state token travels in this URL's
+	// query, so a downgrade to http would put it on the wire in cleartext and
+	// hand a network attacker the value that authorises the callback. A relative
+	// or scheme-less target would be worse still, since the browser would
+	// resolve it against foldex's own origin and the flow would fail somewhere
+	// far from the cause.
+	if !strings.HasPrefix(target, "https://") {
+		h.logger.Error("oauth auth url is not absolute https")
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
 	h.cookies.SetOAuthState(w, state, oauthStateTTL)
-	http.Redirect(w, r, target, http.StatusFound)
+	http.Redirect(w, r, target, http.StatusFound) // nosemgrep: go.lang.security.injection.open-redirect.open-redirect
 }
 
 // ─────────────────────────────────────────────────────────────────────
