@@ -264,9 +264,32 @@ func (c *Config) normalizeAuth() {
 	// Secure is not read from the environment. Getting it wrong is a silent,
 	// baffling failure — a Secure cookie over plain HTTP is dropped by the
 	// browser without a word, so login "succeeds" and the very next request is
-	// anonymous. Deriving it from the bind removes the footgun: loopback (dev,
-	// plain HTTP) gets Secure=false, anything network-reachable gets true.
-	c.AuthCookieSecure = !isLocalBind(c.BindAddr)
+	// anonymous. So it is derived; the question is derived FROM WHAT.
+	//
+	// From AUTH_PUBLIC_URL, because the only thing that decides whether Secure
+	// is correct is the scheme of the origin THE BROWSER talks to. The bind
+	// address answers a different question — "is the backend reachable from the
+	// network?" — and the two disagree in exactly the topology this project
+	// recommends: the binary on 127.0.0.1 with nginx terminating TLS in front.
+	// There the bind heuristic concludes "dev, plain HTTP" and ships session
+	// cookies with no Secure flag to a browser that is on HTTPS, so any http://
+	// request to that host puts them on the wire in cleartext — nginx's 301
+	// arrives only after the request carrying them has already been sent.
+	//
+	// Read from the ENVIRONMENT, not from c.AuthPublicURL, and the distinction
+	// is load-bearing: that field carries a default of http://localhost:9088,
+	// which is a guess about where links should point, not a statement that the
+	// browser is on plain HTTP. Trusting the defaulted value would turn Secure
+	// OFF for every deployment that binds 0.0.0.0 without configuring a public
+	// URL — a worse regression than the bug being fixed. Only an operator who
+	// explicitly wrote http:// has declared plain HTTP; everyone else falls
+	// back to the bind heuristic, which is the plain-HTTP dev server the
+	// footgun warning above is about.
+	if scheme, ok := urlScheme(os.Getenv("AUTH_PUBLIC_URL")); ok {
+		c.AuthCookieSecure = scheme == "https"
+	} else {
+		c.AuthCookieSecure = !isLocalBind(c.BindAddr)
+	}
 
 	// The issuer is what an authenticator app shows next to the code. Falling
 	// back to the public URL's host beats a hardcoded "Foldex": a user running
@@ -341,6 +364,24 @@ func (c Config) validateSecureDefaults() error {
 		)
 	}
 	return nil
+}
+
+// urlScheme reports the scheme of a configured absolute URL.
+//
+// It refuses anything that is not http or https rather than reporting whatever
+// it parsed: a typo'd or relative AUTH_PUBLIC_URL must fall back to the bind
+// heuristic, not silently decide the cookie policy from a scheme nobody meant
+// to set.
+func urlScheme(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return "", false
+	}
+	switch u.Scheme {
+	case "http", "https":
+		return u.Scheme, true
+	}
+	return "", false
 }
 
 func isLocalBind(addr string) bool {
