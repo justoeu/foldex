@@ -1,8 +1,5 @@
-// Package slug owns the URL-slug helpers shared by links, importer, and
-// backup. Lives outside `internal/links` so the importer and backup packages
-// can use it without pulling the whole links domain (which would be a
-// circular-ish coupling — backup ALREADY imports links for one function;
-// this package breaks that).
+// Package slug owns URL-slug allocation shared by links, notes, importer, and
+// backup without coupling those domains to one another.
 package slug
 
 import (

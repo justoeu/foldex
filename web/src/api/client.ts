@@ -51,6 +51,8 @@ export function readCsrfToken(): string {
 const UNSAFE_METHODS = new Set(['post', 'put', 'patch', 'delete'])
 
 http.interceptors.request.use((config) => {
+  const authConfig = config as RetryConfig
+  authConfig._authEpoch ??= authEpoch
   const secret = getStoredSecret()
   const headers = (config.headers ?? {}) as Record<string, string>
   if (secret) headers['X-Foldex-Secret'] = secret
@@ -70,7 +72,8 @@ http.interceptors.request.use((config) => {
 // ─────────────────────────────────────────────────────────────────────
 
 /**
- * The one in-flight refresh, shared by every request that 401s.
+ * The in-flight refresh for one auth generation, shared by every request that
+ * 401s in that generation.
  *
  * The App mounts four authenticated queries at once (entries, folders ×2,
  * tags). When the access cookie expires they all 401 within milliseconds of
@@ -81,7 +84,19 @@ http.interceptors.request.use((config) => {
  * on it from the client would be building on someone else's safety net;
  * sharing one call means the race never happens.
  */
-let refreshPromise: Promise<void> | null = null
+let authEpoch = 0
+
+type RefreshFlight = {
+  epoch: number
+  promise: Promise<void>
+}
+
+let refreshFlight: RefreshFlight | null = null
+
+/** Starts a new auth generation, invalidating work begun for the previous one. */
+export function advanceAuthEpoch(): void {
+  authEpoch++
+}
 
 /** Called by AuthProvider when a refresh definitively fails. */
 let onSessionLost: (() => void) | null = null
@@ -89,29 +104,33 @@ export function setSessionLostHandler(fn: (() => void) | null): void {
   onSessionLost = fn
 }
 
-/** Test seam: drops the cached refresh so cases cannot bleed into each other. */
+/** Test seam: resets the refresh flight and generation between cases. */
 export function resetRefreshState(): void {
-  refreshPromise = null
+  refreshFlight = null
+  authEpoch = 0
 }
 
-function refreshOnce(): Promise<void> {
-  if (!refreshPromise) {
-    refreshPromise = http
+function refreshOnce(epoch: number): Promise<void> {
+  if (!refreshFlight || refreshFlight.epoch !== epoch) {
+    const flight: RefreshFlight = { epoch, promise: Promise.resolve() }
+    flight.promise = http
       .post('/api/auth/refresh', null, { _skipAuthRetry: true } as never)
       .then(() => undefined)
       .finally(() => {
         // Cleared in `finally`, not in `then`: leaving a rejected promise
         // cached would make every later 401 reuse the same failure, and the app
         // could never recover — not even after a fresh sign-in.
-        refreshPromise = null
+        if (refreshFlight === flight) refreshFlight = null
       })
+    refreshFlight = flight
   }
-  return refreshPromise
+  return refreshFlight.promise
 }
 
 type RetryConfig = InternalAxiosRequestConfig & {
   _retried?: boolean
   _skipAuthRetry?: boolean
+  _authEpoch?: number
 }
 
 http.interceptors.response.use(
@@ -119,6 +138,7 @@ http.interceptors.response.use(
   async (error: AxiosError) => {
     const status = error.response?.status
     const config = error.config as RetryConfig | undefined
+    if (config) config._authEpoch ??= authEpoch
     if (status !== 401 || !config || config._retried || config._skipAuthRetry) {
       return Promise.reject(error)
     }
@@ -128,12 +148,16 @@ http.interceptors.response.use(
     // contractually always 200 anyway.
     if ((config.url ?? '').includes('/api/auth/')) return Promise.reject(error)
 
+    const requestEpoch = config._authEpoch
+    if (requestEpoch !== authEpoch) return Promise.reject(error)
+
     try {
-      await refreshOnce()
+      await refreshOnce(requestEpoch)
     } catch {
-      onSessionLost?.()
+      if (requestEpoch === authEpoch) onSessionLost?.()
       return Promise.reject(error)
     }
+    if (requestEpoch !== authEpoch) return Promise.reject(error)
     config._retried = true
     return http.request(config)
   },

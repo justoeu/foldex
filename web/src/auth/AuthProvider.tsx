@@ -10,7 +10,7 @@ import {
 } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { fetchMe, logout as apiLogout, type MeResponse } from '../api/auth'
-import { setSessionLostHandler } from '../api/client'
+import { advanceAuthEpoch, setSessionLostHandler } from '../api/client'
 import { defaultFeatures, type SessionState } from './types'
 
 type AuthContextValue = {
@@ -169,28 +169,33 @@ export function AuthProvider({
   // the login screen instead of leaving a dead session rendering 401s.
   useEffect(() => {
     setSessionLostHandler(() => {
+      advanceAuthEpoch()
       applySession({ status: 'anonymous', features: defaultFeatures })
     })
     return () => setSessionLostHandler(null)
   }, [applySession])
 
-  const adopt = useCallback((me: MeResponse) => applySession(toState(me)), [applySession])
+  const adopt = useCallback(
+    (me: MeResponse) => {
+      advanceAuthEpoch()
+      applySession(toState(me))
+    },
+    [applySession],
+  )
 
   const signOut = useCallback(async () => {
+    advanceAuthEpoch()
+    applySession({ status: 'anonymous', features: defaultFeatures })
     try {
       await apiLogout()
     } catch {
       // Swallowed, not rethrown. Signing out is best-effort by design: the
-      // server call only revokes the session row, and the local state below is
+      // server call only revokes the session family, and the local state above is
       // what the user actually asked for. Rethrowing would make the natural
       // call site — `onClick={() => void signOut()}` — an unhandled rejection
       // in the console, and would give callers an error they can do nothing
       // useful with.
     }
-    // Always drop to anonymous, even if the request failed. The user asked to
-    // be forgotten; leaving them apparently signed in because the network
-    // blipped is the one outcome that is clearly wrong.
-    applySession({ status: 'anonymous', features: defaultFeatures })
   }, [applySession])
 
   const value = useMemo<AuthContextValue>(

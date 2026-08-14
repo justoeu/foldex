@@ -177,12 +177,8 @@ func (r *Repository) handleConsumed(ctx context.Context, tx pgx.Tx, familyID str
 			!errors.Is(err, pgx.ErrNoRows) {
 			return RotateResult{}, fmt.Errorf("rotate reuse owner: %w", err)
 		}
-		if err := revokeFamily(ctx, tx, familyID, ReasonReuseDetected); err != nil {
+		if err := revokeAndPurgeFamily(ctx, tx, familyID); err != nil {
 			return RotateResult{}, err
-		}
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM session_used_token WHERE family_id = $1::uuid`, familyID); err != nil {
-			return RotateResult{}, fmt.Errorf("rotate purge family: %w", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return RotateResult{}, fmt.Errorf("rotate reuse commit: %w", err)
@@ -228,12 +224,8 @@ func (r *Repository) handleConsumed(ctx context.Context, tx pgx.Tx, familyID str
 		return RotateResult{}, fmt.Errorf("rotate grace family size: %w", err)
 	}
 	if liveInFamily >= maxLiveSessionsPerFamily {
-		if err := revokeFamily(ctx, tx, familyID, ReasonReuseDetected); err != nil {
+		if err := revokeAndPurgeFamily(ctx, tx, familyID); err != nil {
 			return RotateResult{}, err
-		}
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM session_used_token WHERE family_id = $1::uuid`, familyID); err != nil {
-			return RotateResult{}, fmt.Errorf("rotate purge family: %w", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return RotateResult{}, fmt.Errorf("rotate grace cap commit: %w", err)
@@ -258,43 +250,19 @@ func (r *Repository) handleConsumed(ctx context.Context, tx pgx.Tx, familyID str
 	// family's birth. Without inheriting created_at, a client could ride the
 	// grace window on every rotation and reset the ceiling forever, which is
 	// exactly the immortality the ceiling exists to prevent.
-	access, accessHash, err := secrets.NewToken()
+	issue, err := newSessionIssue(ttl)
 	if err != nil {
 		return RotateResult{}, err
 	}
-	refresh, refreshHash, err := secrets.NewToken()
+	siblingID, err := insertSessionTx(ctx, tx, authctx.UserID(uid), issue, familyID, &bornAt, ip, ua)
 	if err != nil {
-		return RotateResult{}, err
-	}
-	csrf, csrfHash, err := secrets.NewToken()
-	if err != nil {
-		return RotateResult{}, err
-	}
-	now := time.Now()
-	tok := issuedTokens{
-		Access:        access,
-		Refresh:       refresh,
-		CSRF:          csrf,
-		AccessExpiry:  now.Add(ttl.Access),
-		RefreshExpiry: now.Add(ttl.Refresh),
-	}
-	var siblingID int64
-	if err := tx.QueryRow(ctx, `
-		INSERT INTO session (user_id, family_id, access_token_hash, access_expires_at,
-		                     refresh_token_hash, refresh_expires_at, csrf_token_hash,
-		                     created_at, ip, user_agent)
-		VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id`,
-		uid, familyID, accessHash, tok.AccessExpiry, refreshHash, tok.RefreshExpiry,
-		csrfHash, bornAt, ip, ua,
-	).Scan(&siblingID); err != nil {
 		return RotateResult{}, fmt.Errorf("rotate grace sibling: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return RotateResult{}, fmt.Errorf("rotate grace commit: %w", err)
 	}
 	return RotateResult{
-		Tokens:   tok,
+		Tokens:   issue.tokens,
 		UserID:   authctx.UserID(uid),
 		Session:  siblingID,
 		Replayed: true,
@@ -304,25 +272,9 @@ func (r *Repository) handleConsumed(ctx context.Context, tx pgx.Tx, familyID str
 // writeNewTokens mints and installs a fresh access/refresh/CSRF triple on an
 // existing session row.
 func writeNewTokens(ctx context.Context, tx pgx.Tx, sessionID int64, ttl SessionTTL, ip, ua string) (issuedTokens, error) {
-	access, accessHash, err := secrets.NewToken()
+	issue, err := newSessionIssue(ttl)
 	if err != nil {
 		return issuedTokens{}, err
-	}
-	refresh, refreshHash, err := secrets.NewToken()
-	if err != nil {
-		return issuedTokens{}, err
-	}
-	csrf, csrfHash, err := secrets.NewToken()
-	if err != nil {
-		return issuedTokens{}, err
-	}
-	now := time.Now()
-	tok := issuedTokens{
-		Access:        access,
-		Refresh:       refresh,
-		CSRF:          csrf,
-		AccessExpiry:  now.Add(ttl.Access),
-		RefreshExpiry: now.Add(ttl.Refresh),
 	}
 	// ip/user_agent are only overwritten when supplied, so the grace path (which
 	// passes empty strings) does not blank out the device fingerprint the
@@ -335,11 +287,23 @@ func writeNewTokens(ctx context.Context, tx pgx.Tx, sessionID int64, ttl Session
 			ip = COALESCE($7, ip), user_agent = COALESCE(NULLIF($8, ''), user_agent),
 			rotated_at = now(), last_seen_at = now()
 		WHERE id = $1`,
-		sessionID, accessHash, tok.AccessExpiry, refreshHash, tok.RefreshExpiry,
-		csrfHash, nullIP(ip), truncate(ua, 512)); err != nil {
+		sessionID, issue.hashes.access, issue.tokens.AccessExpiry,
+		issue.hashes.refresh, issue.tokens.RefreshExpiry,
+		issue.hashes.csrf, nullIP(ip), truncate(ua, 512)); err != nil {
 		return issuedTokens{}, fmt.Errorf("rotate write tokens: %w", err)
 	}
-	return tok, nil
+	return issue.tokens, nil
+}
+
+func revokeAndPurgeFamily(ctx context.Context, tx pgx.Tx, familyID string) error {
+	if err := revokeFamily(ctx, tx, familyID, ReasonReuseDetected); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM session_used_token WHERE family_id = $1::uuid`, familyID); err != nil {
+		return fmt.Errorf("rotate purge family: %w", err)
+	}
+	return nil
 }
 
 func revokeFamily(ctx context.Context, tx pgx.Tx, familyID, reason string) error {

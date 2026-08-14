@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Locks the two branches of `make coverage-check`:
+# Locks the threshold contract of `make coverage-check`:
 #
 #   1. coverage.out missing → exit non-zero with an actionable message.
 #   2. coverage.out present, total ≥ COVERAGE_MIN → exit 0.
@@ -21,8 +21,6 @@ BACKEND_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$BACKEND_DIR"
 
 TMPDIR=$(mktemp -d)
-# Re-anchor so we don't trample a real coverage.out at the backend root.
-COVER_OUT="$TMPDIR/coverage.out"
 trap 'rm -rf "$TMPDIR"; rm -f coverage.out' EXIT
 
 # Capture an existing coverage.out (if a contributor was mid-run) so we
@@ -101,6 +99,14 @@ if ! grep -qE "FAIL: coverage.*< $HIGH_MIN" <<<"$out"; then
   exit 1
 fi
 echo "✓ case 3: below-threshold fails with both numbers named ($REAL_PCT% < $HIGH_MIN%)"
+
+# ─── case 4: project default remains the documented blocking threshold ─
+
+if ! grep -Eq '^COVERAGE_MIN[[:space:]]*\?=[[:space:]]*85$' Makefile; then
+  echo "✗ case 4: backend COVERAGE_MIN must default to 85" >&2
+  exit 1
+fi
+echo "✓ case 4: default threshold is 85%"
 
 echo
 echo "make coverage-check — all branches asserted."

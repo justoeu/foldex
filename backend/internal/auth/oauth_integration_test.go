@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"foldex/internal/auth"
 	"foldex/internal/oauthgoogle"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/secrets"
 	"foldex/internal/testdb"
 )
 
@@ -113,6 +115,41 @@ func (c *client) startOAuth(t *testing.T, query string) string {
 	return state
 }
 
+func (c *client) startOAuthLink(t *testing.T, password, code string) string {
+	t.Helper()
+	rec := c.do(http.MethodPost, "/api/auth/oauth/google/start", map[string]string{
+		"current_password": password,
+		"code":             code,
+	})
+	require.Equal(t, http.StatusOK, rec.Code, "link start: %s", rec.Body.String())
+
+	target, ok := decode(t, rec)["redirect_url"].(string)
+	require.True(t, ok)
+	loc, err := url.Parse(target)
+	require.NoError(t, err)
+	state := loc.Query().Get("state")
+	require.NotEmpty(t, state, "the redirect must carry a state")
+	require.Equal(t, state, c.cookies[auth.CookieOAuth],
+		"the cookie and the redirect must carry the SAME state")
+	return state
+}
+
+func (c *client) startOAuthInvite(t *testing.T, invite string) string {
+	t.Helper()
+	rec := c.do(http.MethodPost, "/api/auth/oauth/google/invite/start",
+		map[string]string{"invite": invite})
+	require.Equal(t, http.StatusOK, rec.Code, "invite start: %s", rec.Body.String())
+
+	target, ok := decode(t, rec)["redirect_url"].(string)
+	require.True(t, ok)
+	loc, err := url.Parse(target)
+	require.NoError(t, err)
+	state := loc.Query().Get("state")
+	require.NotEmpty(t, state, "the redirect must carry a state")
+	require.Equal(t, state, c.cookies[auth.CookieOAuth])
+	return state
+}
+
 // callback replays Google's redirect back to us and returns the outcome markers.
 func (c *client) callback(t *testing.T, state, code string) (outcome, failure string) {
 	t.Helper()
@@ -130,6 +167,11 @@ func (c *client) googleRoundTrip(t *testing.T, purpose string) (outcome, failure
 	t.Helper()
 	state := c.startOAuth(t, "purpose="+purpose)
 	return c.callback(t, state, "auth-code")
+}
+
+func (c *client) googleLinkRoundTrip(t *testing.T, password, code string) (outcome, failure string) {
+	t.Helper()
+	return c.callback(t, c.startOAuthLink(t, password, code), "auth-code")
 }
 
 func newGoogleHarness(t *testing.T, opts harnessOpts) (*harness, *fakeGoogle) {
@@ -181,14 +223,220 @@ func TestOAuthStart_NeverPutsTheVerifierInTheRedirect(t *testing.T) {
 	assert.Equal(t, verifier, g.verifier())
 }
 
-// Linking binds the account the SESSION proves, captured at START time.
-// Reading it at callback time would bind whatever session happens to exist when
-// Google redirects back — and the redirect's timing is attacker-controlled.
-func TestOAuthStart_LinkWithoutASessionIsRefused(t *testing.T) {
+func TestOAuthStart_LinkCannotUseTheProoflessGETFlow(t *testing.T) {
 	h, _ := newGoogleHarness(t, harnessOpts{})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 
-	rec := h.client(t).do(http.MethodGet, "/api/auth/oauth/google/start?purpose=link", nil)
+	rec := admin.do(http.MethodGet, "/api/auth/oauth/google/start?purpose=link", nil)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	assert.Empty(t, rec.Header().Get("Location"))
+	assert.Empty(t, admin.cookies[auth.CookieOAuth])
+}
+
+func TestOAuthInviteStart_AcceptsTheTokenOnlyInAPOSTBody(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	token := h.createInvite(t, admin, "invited@example.com")
+
+	rec := h.client(t).do(http.MethodGet,
+		"/api/auth/oauth/google/start?purpose=accept_invite&invite="+url.QueryEscape(token), nil)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	assert.Empty(t, rec.Header().Get("Location"))
+
+	c := h.client(t)
+	assert.NotEmpty(t, c.startOAuthInvite(t, token))
+}
+
+func TestOAuthInviteStart_OptionalSessionStillEnforcesCSRF(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	token := h.createInvite(t, admin, "invited@example.com")
+
+	rec := admin.doRaw(http.MethodPost, "/api/auth/oauth/google/invite/start",
+		map[string]string{"invite": token}, nil)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, "csrf_failed", errCode(t, rec))
+}
+
+func TestOAuthInviteStart_RejectsDisabledProviderAndUnknownInput(t *testing.T) {
+	t.Run("provider disabled", func(t *testing.T) {
+		h, g := newGoogleHarness(t, harnessOpts{})
+		g.enabled = false
+
+		rec := h.client(t).do(http.MethodPost, "/api/auth/oauth/google/invite/start",
+			map[string]string{"invite": "not-reached"})
+		assert.Equal(t, http.StatusNotImplemented, rec.Code)
+		assert.Equal(t, "oauth_disabled", errCode(t, rec))
+	})
+
+	t.Run("unknown JSON field", func(t *testing.T) {
+		h, _ := newGoogleHarness(t, harnessOpts{})
+
+		rec := h.client(t).do(http.MethodPost, "/api/auth/oauth/google/invite/start",
+			map[string]string{"invite": "not-reached", "subject": "must-not-be-accepted"})
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Equal(t, "invalid_json", errCode(t, rec))
+	})
+}
+
+func TestOAuthInviteStart_RefusesANonHTTPSTarget(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	token := h.createInvite(t, admin, "invited@example.com")
+	g.authURL = "http://accounts.google.test/o/oauth2/v2/auth"
+
+	rec := h.client(t).do(http.MethodPost, "/api/auth/oauth/google/invite/start",
+		map[string]string{"invite": token})
+	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	assert.Nil(t, cookieByName(rec, auth.CookieOAuth))
+}
+
+func TestOAuthLinkStart_RequiresASessionAndCSRF(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	body := map[string]string{"current_password": "correct horse battery"}
+
+	rec := h.client(t).do(http.MethodPost, "/api/auth/oauth/google/start", body)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	rec = admin.doRaw(http.MethodPost, "/api/auth/oauth/google/start", body, nil)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, "csrf_failed", errCode(t, rec))
+}
+
+func TestOAuthLinkStart_RequiresTheCurrentPassword(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+
+	rec := admin.do(http.MethodPost, "/api/auth/oauth/google/start", map[string]string{
+		"current_password": "wrong password",
+	})
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, "invalid_credentials", errCode(t, rec))
+	assert.Empty(t, admin.cookies[auth.CookieOAuth])
+
+	var states int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `SELECT count(*) FROM oauth_state`).Scan(&states))
+	assert.Zero(t, states, "a failed proof must not mint OAuth state")
+}
+
+func TestOAuthLinkStart_RejectsDisabledProviderAndUnknownInput(t *testing.T) {
+	t.Run("provider disabled", func(t *testing.T) {
+		h, g := newGoogleHarness(t, harnessOpts{})
+		admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+		g.enabled = false
+
+		rec := admin.do(http.MethodPost, "/api/auth/oauth/google/start", map[string]string{
+			"current_password": "correct horse battery",
+		})
+		assert.Equal(t, http.StatusNotImplemented, rec.Code)
+		assert.Equal(t, "oauth_disabled", errCode(t, rec))
+	})
+
+	t.Run("unknown JSON field", func(t *testing.T) {
+		h, _ := newGoogleHarness(t, harnessOpts{})
+		admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+
+		rec := admin.do(http.MethodPost, "/api/auth/oauth/google/start", map[string]string{
+			"current_password": "correct horse battery",
+			"subject":          "must-not-come-from-the-browser",
+		})
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Equal(t, "invalid_json", errCode(t, rec))
+	})
+}
+
+func TestOAuthLinkStart_ValidProofReturnsARedirectWithoutCredentials(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+
+	rec := admin.do(http.MethodPost, "/api/auth/oauth/google/start", map[string]string{
+		"current_password": "correct horse battery",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	target := decode(t, rec)["redirect_url"].(string)
+	assert.NotContains(t, target, "correct horse battery")
+	assert.NotContains(t, target, "current_password")
+	assert.NotContains(t, target, "code=")
+
+	var uid, sessionID int64
+	var tokenVersion int
+	var proofAt time.Time
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT user_id, session_id, token_version, proof_at
+		FROM oauth_state WHERE consumed_at IS NULL`).
+		Scan(&uid, &sessionID, &tokenVersion, &proofAt))
+	assert.Equal(t, int64(1), uid)
+	assert.Positive(t, sessionID)
+	assert.Zero(t, tokenVersion)
+	assert.WithinDuration(t, time.Now(), proofAt, 5*time.Second)
+}
+
+func TestOAuthLinkStart_RequiresCurrentTOTPOrRecoveryWhenEnabled(t *testing.T) {
+	t.Run("wrong TOTP is refused", func(t *testing.T) {
+		h, _ := newGoogleHarness(t, harnessOpts{TwoFactor: true})
+		h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+		e := enrolUser(t, h, "admin@example.com", "correct horse battery")
+
+		rec := e.client.do(http.MethodPost, "/api/auth/oauth/google/start", map[string]string{
+			"current_password": "correct horse battery", "code": "000000",
+		})
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+		assert.Equal(t, "invalid_code", errCode(t, rec))
+		assert.Empty(t, e.client.cookies[auth.CookieOAuth])
+	})
+
+	t.Run("current TOTP starts the flow", func(t *testing.T) {
+		h, _ := newGoogleHarness(t, harnessOpts{TwoFactor: true})
+		h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+		e := enrolUser(t, h, "admin@example.com", "correct horse battery")
+
+		assert.NotEmpty(t, e.client.startOAuthLink(t,
+			"correct horse battery", codeNextStep(t, e.secret)))
+	})
+
+	t.Run("recovery code starts the flow once", func(t *testing.T) {
+		h, _ := newGoogleHarness(t, harnessOpts{TwoFactor: true})
+		h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+		e := enrolUser(t, h, "admin@example.com", "correct horse battery")
+
+		assert.NotEmpty(t, e.client.startOAuthLink(t, "correct horse battery", e.codes[0]))
+		var used bool
+		require.NoError(t, h.pool.QueryRow(context.Background(), `
+			SELECT used_at IS NOT NULL FROM recovery_code ORDER BY id LIMIT 1`).Scan(&used))
+		assert.True(t, used, "a recovery credential must remain single-use")
+	})
+}
+
+func TestOAuthLinkStart_RateLimitsPasswordAndSecondFactorGuesses(t *testing.T) {
+	t.Run("password", func(t *testing.T) {
+		h, _ := newGoogleHarness(t, harnessOpts{})
+		admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+		for range 5 {
+			rec := admin.do(http.MethodPost, "/api/auth/oauth/google/start",
+				map[string]string{"current_password": "wrong password"})
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+		}
+		rec := admin.do(http.MethodPost, "/api/auth/oauth/google/start",
+			map[string]string{"current_password": "wrong password"})
+		assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	})
+
+	t.Run("second factor", func(t *testing.T) {
+		h, _ := newGoogleHarness(t, harnessOpts{TwoFactor: true})
+		h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+		e := enrolUser(t, h, "admin@example.com", "correct horse battery")
+		for range 5 {
+			rec := e.client.do(http.MethodPost, "/api/auth/oauth/google/start", map[string]string{
+				"current_password": "correct horse battery", "code": "000000",
+			})
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+		}
+		rec := e.client.do(http.MethodPost, "/api/auth/oauth/google/start", map[string]string{
+			"current_password": "correct horse battery", "code": "000000",
+		})
+		assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	})
 }
 
 func TestOAuthStart_RejectsAnUnknownPurpose(t *testing.T) {
@@ -274,6 +522,116 @@ func TestOAuthCallback_StateIsSpentOnFirstUse(t *testing.T) {
 	c.cookies[auth.CookieOAuth] = state
 	_, failure := c.callback(t, state, "code")
 	assert.Equal(t, "state_invalid", failure)
+}
+
+func TestOAuthLinkCallback_RejectsADeadOrChangedProof(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(t *testing.T, h *harness, c *client)
+	}{
+		{
+			name: "logout",
+			mutate: func(t *testing.T, _ *harness, c *client) {
+				require.Equal(t, http.StatusNoContent,
+					c.do(http.MethodPost, "/api/auth/logout", nil).Code)
+			},
+		},
+		{
+			name: "password reset",
+			mutate: func(t *testing.T, h *harness, c *client) {
+				token, err := h.repo.CreatePasswordReset(context.Background(), authctx.UserID(1), time.Minute, "192.0.2.10")
+				require.NoError(t, err)
+				rec := c.do(http.MethodPost, "/api/auth/password/reset", map[string]string{
+					"token": token, "password": "new correct horse battery",
+				})
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			},
+		},
+		{
+			name: "session revoke",
+			mutate: func(t *testing.T, h *harness, _ *client) {
+				var sid int64
+				require.NoError(t, h.pool.QueryRow(context.Background(), `
+					SELECT id FROM session WHERE user_id = 1 AND revoked_at IS NULL`).Scan(&sid))
+				require.NoError(t, h.repo.RevokeSession(context.Background(), authctx.UserID(1), sid, auth.ReasonLogout))
+			},
+		},
+		{
+			name: "password change bumps the credential epoch",
+			mutate: func(t *testing.T, _ *harness, c *client) {
+				rec := c.do(http.MethodPost, "/api/auth/password/change", map[string]string{
+					"current_password": "correct horse battery",
+					"new_password":     "new correct horse battery",
+				})
+				require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, g := newGoogleHarness(t, harnessOpts{})
+			c := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+			g.as("google-sub", "personal@gmail.test", true)
+			state := c.startOAuthLink(t, "correct horse battery", "")
+
+			tc.mutate(t, h, c)
+			c.cookies[auth.CookieOAuth] = state
+			_, failure := c.callback(t, state, "code")
+			assert.Equal(t, "state_invalid", failure)
+
+			var identities int
+			require.NoError(t, h.pool.QueryRow(context.Background(),
+				`SELECT count(*) FROM user_identity`).Scan(&identities))
+			assert.Zero(t, identities, "an invalidated proof attached an identity")
+		})
+	}
+}
+
+func TestOAuthLinkCallback_StateCannotBeReplayed(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{})
+	c := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	g.as("google-sub", "personal@gmail.test", true)
+	state := c.startOAuthLink(t, "correct horse battery", "")
+
+	outcome, failure := c.callback(t, state, "code")
+	require.Equal(t, "linked", outcome, "failure: %s", failure)
+	c.cookies[auth.CookieOAuth] = state
+	_, failure = c.callback(t, state, "code")
+	assert.Equal(t, "state_invalid", failure)
+
+	var identities int
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM user_identity`).Scan(&identities))
+	assert.Equal(t, 1, identities)
+}
+
+func TestOAuthLinkCallback_RequiresTheExactSessionAndFreshProof(t *testing.T) {
+	t.Run("another live session for the same user is not enough", func(t *testing.T) {
+		h, g := newGoogleHarness(t, harnessOpts{})
+		starter := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+		other := h.login(t, "admin@example.com", "correct horse battery")
+		g.as("google-sub", "personal@gmail.test", true)
+		state := starter.startOAuthLink(t, "correct horse battery", "")
+
+		other.cookies[auth.CookieOAuth] = state
+		_, failure := other.callback(t, state, "code")
+		assert.Equal(t, "state_invalid", failure)
+		assert.Empty(t, g.verifier(), "an invalid principal reached the provider exchange")
+	})
+
+	t.Run("the step-up proof has a short lifetime", func(t *testing.T) {
+		h, g := newGoogleHarness(t, harnessOpts{})
+		c := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+		g.as("google-sub", "personal@gmail.test", true)
+		state := c.startOAuthLink(t, "correct horse battery", "")
+		_, err := h.pool.Exec(context.Background(), `
+			UPDATE oauth_state SET proof_at = now() - interval '6 minutes'
+			WHERE purpose = 'link'`)
+		require.NoError(t, err)
+
+		_, failure := c.callback(t, state, "code")
+		assert.Equal(t, "state_invalid", failure)
+		assert.Empty(t, g.verifier(), "an expired proof reached the provider exchange")
+	})
 }
 
 func TestOAuthCallback_ProviderRefusalIsReportedAsCancelled(t *testing.T) {
@@ -485,6 +843,161 @@ func TestOAuth_ConvertRetiresThePasswordAndMakesTheAccountGoogleOnly(t *testing.
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+func TestOAuth_ConversionChallengeCannotSurvivePasswordReset(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{})
+	h.bootstrapAdmin(t, "victim@example.com", "the real password")
+	g.as("google-sub", "victim@example.com", true)
+
+	c := h.client(t)
+	requireRoundTrip(t, c, "login", "convert")
+	user, err := h.repo.UserByEmail(context.Background(), "victim@example.com")
+	require.NoError(t, err)
+	reset, err := h.repo.CreatePasswordReset(context.Background(), user.ID, time.Minute, "")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	blocker, err := h.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback(ctx) }()
+	var locked int64
+	require.NoError(t, blocker.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE id = $1 FOR UPDATE`, int64(user.ID)).Scan(&locked))
+
+	resetResult := make(chan error, 1)
+	go func() {
+		_, err := h.repo.ConsumePasswordReset(ctx, reset, "the reset password")
+		resetResult <- err
+	}()
+	waitForBlockedSQL(t, h.pool, "SELECT status, token_version FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
+
+	convertResult := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		convertResult <- c.do(http.MethodPost, "/api/auth/oauth/google/convert",
+			map[string]string{"password": "the real password"})
+	}()
+	require.NoError(t, blocker.Commit(ctx))
+	require.NoError(t, <-resetResult)
+	rec := <-convertResult
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+	assert.Equal(t, "challenge_invalid", errCode(t, rec))
+
+	var identities int
+	var hasPassword bool
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT (SELECT count(*) FROM user_identity), password_hash IS NOT NULL
+		FROM app_user WHERE id = $1`, int64(user.ID)).Scan(&identities, &hasPassword))
+	assert.Zero(t, identities, "a pre-reset callback linked its identity")
+	assert.True(t, hasPassword, "a pre-reset callback removed the reset password")
+}
+
+func TestOAuth_ReplacedConversionChallengeCannotMutateCredentials(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{})
+	h.bootstrapAdmin(t, "victim@example.com", "the real password")
+
+	g.as("first-sub", "victim@example.com", true)
+	first := h.client(t)
+	requireRoundTrip(t, first, "login", "convert")
+	var oldChallengeID, uid int64
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT id, user_id FROM auth_challenge WHERE consumed_at IS NULL`).Scan(&oldChallengeID, &uid))
+
+	g.as("replacement-sub", "victim@example.com", true)
+	replacement := h.client(t)
+	state := replacement.startOAuth(t, "purpose=login")
+
+	ctx := context.Background()
+	blocker, err := h.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback(ctx) }()
+	var locked int64
+	require.NoError(t, blocker.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE id = $1 FOR UPDATE`, uid).Scan(&locked))
+
+	replacementResult := make(chan [2]string, 1)
+	go func() {
+		outcome, failure := replacement.callback(t, state, "auth-code")
+		replacementResult <- [2]string{outcome, failure}
+	}()
+	waitForBlockedSQL(t, h.pool, "SELECT id, token_version FROM app_user")
+
+	convertResult := make(chan error, 1)
+	go func() {
+		_, _, err := h.repo.ConvertToProvider(ctx, oldChallengeID, "the real password")
+		convertResult <- err
+	}()
+	require.NoError(t, blocker.Commit(ctx))
+	replaced := <-replacementResult
+	require.Equal(t, "convert", replaced[0], "replacement callback failed: %s", replaced[1])
+	err = <-convertResult
+	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+
+	var identities int
+	var hasPassword bool
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT (SELECT count(*) FROM user_identity), password_hash IS NOT NULL
+		FROM app_user WHERE id = $1`, uid).Scan(&identities, &hasPassword))
+	assert.Zero(t, identities, "the replaced callback linked its identity")
+	assert.True(t, hasPassword, "the replaced callback removed the password")
+}
+
+func TestConvertToProviderRejectsAbsentOrMalformedChallengeWithoutMutation(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{})
+	h.bootstrapAdmin(t, "victim@example.com", "the real password")
+	ctx := context.Background()
+	user, err := h.repo.UserByEmail(ctx, "victim@example.com")
+	require.NoError(t, err)
+
+	_, _, err = h.repo.ConvertToProvider(ctx, 999_999, "the real password")
+	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+
+	_, malformedID, err := h.repo.CreateChallenge(ctx, auth.NewChallenge{
+		UserID: user.ID, Purpose: auth.PurposeConvertGoogle,
+		TokenVersion: user.TokenVersion, TTL: time.Minute,
+	})
+	require.NoError(t, err)
+	_, _, err = h.repo.ConvertToProvider(ctx, malformedID, "the real password")
+	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+
+	var identities int
+	var hasPassword bool
+	var challengeLive bool
+	require.NoError(t, h.pool.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM user_identity), u.password_hash IS NOT NULL,
+		       c.consumed_at IS NULL
+		FROM app_user u JOIN auth_challenge c ON c.user_id = u.id
+		WHERE u.id = $1 AND c.id = $2`, int64(user.ID), malformedID).
+		Scan(&identities, &hasPassword, &challengeLive))
+	assert.Zero(t, identities)
+	assert.True(t, hasPassword)
+	assert.True(t, challengeLive, "a refused malformed challenge was consumed outside the rolled-back mutation")
+}
+
+func TestOAuth_ConversionChallengeCannotSurviveStatusChange(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{})
+	h.bootstrapAdmin(t, "owner@example.com", "the owner password")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "victim@example.com", "the victim password", "user")
+	g.as("victim-sub", "victim@example.com", true)
+
+	c := h.client(t)
+	requireRoundTrip(t, c, "login", "convert")
+	status := auth.StatusDisabled
+	_, err := h.repo.UpdateUser(context.Background(), uid, nil, nil, &status)
+	require.NoError(t, err)
+
+	rec := c.do(http.MethodPost, "/api/auth/oauth/google/convert",
+		map[string]string{"password": "the victim password"})
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+	assert.Equal(t, "challenge_invalid", errCode(t, rec))
+
+	var identities int
+	var hasPassword bool
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT (SELECT count(*) FROM user_identity), password_hash IS NOT NULL
+		FROM app_user WHERE id = $1`, int64(uid)).Scan(&identities, &hasPassword))
+	assert.Zero(t, identities)
+	assert.True(t, hasPassword)
+}
+
 // The conversion changes the credential set, so every session minted against
 // the old password has to die.
 func TestOAuth_ConvertRevokesEveryOtherSession(t *testing.T) {
@@ -567,7 +1080,7 @@ func TestOAuth_LinkedAccountSignsInWithoutAPassword(t *testing.T) {
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 	g.as("google-sub", "admin@example.com", true)
 
-	outcome, failure := admin.googleRoundTrip(t, "link")
+	outcome, failure := admin.googleLinkRoundTrip(t, "correct horse battery", "")
 	require.Equal(t, "linked", outcome, "failure: %s", failure)
 
 	fresh := h.client(t)
@@ -581,7 +1094,7 @@ func TestOAuth_LinkedLoginDoesNotBypassTOTP(t *testing.T) {
 	h, g := newGoogleHarness(t, harnessOpts{TwoFactor: true})
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 	g.as("google-sub", "admin@example.com", true)
-	requireRoundTrip(t, admin, "link", "linked")
+	requireLinkRoundTrip(t, admin, "correct horse battery", "", "linked")
 
 	enrolUser(t, h, "admin@example.com", "correct horse battery")
 
@@ -601,10 +1114,10 @@ func TestOAuth_SubjectAlreadyBoundToAnotherUserIsRefused(t *testing.T) {
 	_ = other
 
 	g.as("shared-sub", "admin@example.com", true)
-	requireRoundTrip(t, admin, "link", "linked")
+	requireLinkRoundTrip(t, admin, "correct horse battery", "", "linked")
 
 	second := h.login(t, "other@example.com", "another good password")
-	_, failure := second.googleRoundTrip(t, "link")
+	_, failure := second.googleLinkRoundTrip(t, "another good password", "")
 	assert.Equal(t, "already_linked", failure)
 }
 
@@ -616,8 +1129,124 @@ func TestOAuth_LinkAllowsADifferentAddress(t *testing.T) {
 	admin := h.bootstrapAdmin(t, "work@example.com", "correct horse battery")
 	g.as("personal-sub", "personal@gmail.test", true)
 
-	outcome, failure := admin.googleRoundTrip(t, "link")
+	outcome, failure := admin.googleLinkRoundTrip(t, "correct horse battery", "")
 	assert.Equal(t, "linked", outcome, "failure: %s", failure)
+}
+
+func TestLinkIdentityRefusesInvalidUserAndSessionProofs(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{})
+	c := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+	ctx := context.Background()
+	proofAt := time.Now()
+	version := user.TokenVersion
+
+	missingUser := authctx.UserID(999_999)
+	missingSession := int64(999_999)
+	state := auth.OAuthState{
+		UserID: &missingUser, SessionID: &missingSession,
+		TokenVersion: &version, ProofAt: &proofAt,
+	}
+	assert.ErrorIs(t, h.repo.LinkIdentity(ctx, state, c.cookies[auth.CookieAccess],
+		auth.ProviderGoogle, "sub", "google@example.com", time.Minute), auth.ErrOAuthLinkInvalid)
+
+	state.UserID = &user.ID
+	assert.ErrorIs(t, h.repo.LinkIdentity(ctx, state, c.cookies[auth.CookieAccess],
+		auth.ProviderGoogle, "sub", "google@example.com", time.Minute), auth.ErrOAuthLinkInvalid)
+
+	state.SessionID = nil
+	assert.ErrorIs(t, h.repo.LinkIdentity(ctx, state, c.cookies[auth.CookieAccess],
+		auth.ProviderGoogle, "sub", "google@example.com", time.Minute), auth.ErrOAuthLinkInvalid)
+}
+
+func TestValidateOAuthLinkProofRefusesInvalidAndStaleProofs(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{})
+	c := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+	ctx := context.Background()
+	var sessionID int64
+	require.NoError(t, h.pool.QueryRow(ctx,
+		`SELECT id FROM session WHERE access_token_hash = $1`, secrets.Hash(c.cookies[auth.CookieAccess])).
+		Scan(&sessionID))
+	proofAt := time.Now()
+	version := user.TokenVersion
+	state := auth.OAuthState{
+		UserID: &user.ID, SessionID: &sessionID,
+		TokenVersion: &version, ProofAt: &proofAt,
+	}
+
+	require.NoError(t, h.repo.ValidateOAuthLinkProof(ctx, state,
+		c.cookies[auth.CookieAccess], time.Minute))
+	assert.ErrorIs(t, h.repo.ValidateOAuthLinkProof(ctx, state, "wrong access token", time.Minute),
+		auth.ErrOAuthLinkInvalid)
+	state.ProofAt = nil
+	assert.ErrorIs(t, h.repo.ValidateOAuthLinkProof(ctx, state,
+		c.cookies[auth.CookieAccess], time.Minute), auth.ErrOAuthLinkInvalid)
+}
+
+func TestLinkIdentityDoesNotDeadlockWithSessionRotation(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{})
+	c := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+	ctx := context.Background()
+	var sessionID int64
+	require.NoError(t, h.pool.QueryRow(ctx,
+		`SELECT id FROM session WHERE access_token_hash = $1`, secrets.Hash(c.cookies[auth.CookieAccess])).
+		Scan(&sessionID))
+
+	rotation, err := h.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = rotation.Rollback(ctx) }()
+	var lockedSession int64
+	require.NoError(t, rotation.QueryRow(ctx,
+		`SELECT id FROM session WHERE id = $1 FOR UPDATE`, sessionID).Scan(&lockedSession))
+
+	proofAt := time.Now()
+	version := user.TokenVersion
+	state := auth.OAuthState{
+		UserID: &user.ID, SessionID: &sessionID,
+		TokenVersion: &version, ProofAt: &proofAt,
+	}
+	linkResult := make(chan error, 1)
+	go func() {
+		linkResult <- h.repo.LinkIdentity(ctx, state, c.cookies[auth.CookieAccess],
+			auth.ProviderGoogle, "google-sub", "google@example.com", time.Minute)
+	}()
+	waitForBlockedSQL(t, h.pool, "SELECT id FROM session")
+
+	var siblingID int64
+	require.NoError(t, rotation.QueryRow(ctx, `
+		INSERT INTO session (
+			user_id, family_id, access_token_hash, access_expires_at,
+			refresh_token_hash, refresh_expires_at, csrf_token_hash
+		)
+		SELECT user_id, family_id, $2, now() + interval '1 minute',
+		       $3, now() + interval '1 minute', $4
+		FROM session WHERE id = $1
+		RETURNING id`, sessionID, []byte("sibling-access"), []byte("sibling-refresh"), []byte("sibling-csrf")).
+		Scan(&siblingID), "the session FK check deadlocked with the OAuth user lock")
+	require.NoError(t, rotation.Commit(ctx))
+	require.NoError(t, <-linkResult)
+	assert.Positive(t, siblingID)
+}
+
+func TestOAuth_LinkRefusesASecondGoogleIdentityForTheSameAccount(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	g.as("first-sub", "first@gmail.test", true)
+	requireLinkRoundTrip(t, admin, "correct horse battery", "", "linked")
+
+	g.as("second-sub", "second@gmail.test", true)
+	_, failure := admin.googleLinkRoundTrip(t, "correct horse battery", "")
+	assert.Equal(t, "already_linked", failure)
+
+	var identities int
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM user_identity WHERE user_id = 1`).Scan(&identities))
+	assert.Equal(t, 1, identities)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -682,6 +1311,32 @@ func TestSetPassword_RefusesWhenAPasswordAlreadyExists(t *testing.T) {
 	assert.Equal(t, "password_exists", errCode(t, rec))
 }
 
+func TestSetPassword_RepositoryRefusalsAreTyped(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{TwoFactor: true})
+	c := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	user, err := h.repo.GetUser(context.Background(), authctx.UserID(1))
+	require.NoError(t, err)
+	var sid int64
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT id FROM session WHERE access_token_hash = $1`,
+		secrets.Hash(c.cookies[auth.CookieAccess])).Scan(&sid))
+
+	err = h.repo.SetPassword(context.Background(), user.ID, sid, user.TokenVersion,
+		"a different password", nil)
+	assert.ErrorIs(t, err, auth.ErrPasswordExists)
+	err = h.repo.SetPassword(context.Background(), authctx.UserID(999_999), sid, 0,
+		"a different password", nil)
+	assert.ErrorIs(t, err, auth.ErrNoUser)
+
+	enrolUser(t, h, "admin@example.com", "correct horse battery")
+	testdb.ConvertToGoogleOnly(t, h.pool, user.ID, "admin@example.com", "google-sub")
+	current, err := h.repo.GetUser(context.Background(), user.ID)
+	require.NoError(t, err)
+	err = h.repo.SetPassword(context.Background(), user.ID, sid, current.TokenVersion,
+		"a different password", nil)
+	assert.ErrorIs(t, err, auth.ErrTOTPReplay)
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Invite acceptance through Google
 // ─────────────────────────────────────────────────────────────────────
@@ -695,7 +1350,7 @@ func TestOAuth_InviteRefusesADifferentGoogleAddress(t *testing.T) {
 
 	g.as("interloper-sub", "someone.else@gmail.test", true)
 	c := h.client(t)
-	state := c.startOAuth(t, "purpose=accept_invite&invite="+url.QueryEscape(token))
+	state := c.startOAuthInvite(t, token)
 	_, failure := c.callback(t, state, "code")
 
 	assert.Equal(t, "invite_email_mismatch", failure)
@@ -713,7 +1368,7 @@ func TestOAuth_InviteAcceptedWithTheMatchingGoogleAccount(t *testing.T) {
 
 	g.as("invited-sub", "invited@example.com", true)
 	c := h.client(t)
-	state := c.startOAuth(t, "purpose=accept_invite&invite="+url.QueryEscape(token))
+	state := c.startOAuthInvite(t, token)
 	outcome, failure := c.callback(t, state, "code")
 
 	require.Equal(t, "signed_in", outcome, "failure: %s", failure)
@@ -734,7 +1389,7 @@ func TestOAuth_InviteRefusesAnUnverifiedGoogleAddress(t *testing.T) {
 
 	g.as("invited-sub", "invited@example.com", false)
 	c := h.client(t)
-	state := c.startOAuth(t, "purpose=accept_invite&invite="+url.QueryEscape(token))
+	state := c.startOAuthInvite(t, token)
 	_, failure := c.callback(t, state, "code")
 	assert.Equal(t, "email_unverified", failure)
 }
@@ -776,7 +1431,7 @@ func TestForgotPassword_GoogleOnlyAccountGetsAMessageButNoResetLink(t *testing.T
 // ─────────────────────────────────────────────────────────────────────
 
 func TestAdmin_ForcePasswordResetRestoresAccessToAGoogleOnlyAccount(t *testing.T) {
-	h, g := newGoogleHarness(t, harnessOpts{})
+	h, g := newGoogleHarness(t, harnessOpts{SMTP: true})
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 	h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
 
@@ -790,17 +1445,18 @@ func TestAdmin_ForcePasswordResetRestoresAccessToAGoogleOnlyAccount(t *testing.T
 	var uid int64
 	require.NoError(t, h.pool.QueryRow(context.Background(),
 		`SELECT id FROM app_user WHERE email_normalized = 'user@example.com'`).Scan(&uid))
+	h.mail.reset()
 
 	rec := admin.do(http.MethodPost, "/api/admin/users/"+itoa(uid)+"/force-password-reset", nil)
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	temp, _ := decode(t, rec)["temporary_password"].(string)
-	require.NotEmpty(t, temp)
+	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+	assert.Empty(t, strings.TrimSpace(rec.Body.String()))
+	token := resetTokenFrom(t, h.mail.waitFor(t, "user@example.com").Text)
 
-	// The temporary password actually signs in.
-	fresh := h.client(t)
-	login := fresh.do(http.MethodPost, "/api/auth/login",
-		map[string]string{"email": "user@example.com", "password": temp})
-	assert.Equal(t, http.StatusOK, login.Code, login.Body.String())
+	reset := h.client(t).do(http.MethodPost, "/api/auth/password/reset",
+		map[string]string{"token": token, "password": "a password chosen by the user"})
+	require.Equal(t, http.StatusOK, reset.Code, reset.Body.String())
+	assert.Equal(t, http.StatusOK, h.client(t).do(http.MethodPost, "/api/auth/login",
+		map[string]string{"email": "user@example.com", "password": "a password chosen by the user"}).Code)
 }
 
 // An admin who has forgotten their OWN password is in the one situation this
@@ -818,21 +1474,282 @@ func TestAdmin_ForcePasswordResetRefusesOnYourOwnAccount(t *testing.T) {
 	assert.Equal(t, "self_target", errCode(t, rec))
 }
 
-// The password is handed over out of band. Mailing it would put a working
-// credential in an inbox — possibly the very channel the account lost.
-func TestAdmin_ForcePasswordResetNeverMailsThePassword(t *testing.T) {
+func TestAdmin_ForcePasswordResetDoesNotInstallOrReturnACredential(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{SMTP: true})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	uid := h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
+	h.mail.reset()
+
+	var hashBefore string
+	var epochBefore, sessionsBefore int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT password_hash, token_version FROM app_user WHERE id = $1`, int64(uid)).
+		Scan(&hashBefore, &epochBefore))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM session WHERE user_id = $1 AND revoked_at IS NULL`, int64(uid)).
+		Scan(&sessionsBefore))
+
+	rec := admin.do(http.MethodPost, "/api/admin/users/"+itoa(int64(uid))+"/force-password-reset", nil)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	assert.Empty(t, strings.TrimSpace(rec.Body.String()), "the admin response exposed recovery material")
+	assert.NotContains(t, rec.Body.String(), "temporary_password")
+	assert.NotContains(t, rec.Body.String(), "token")
+
+	var hashAfter string
+	var epochAfter, sessionsAfter int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT password_hash, token_version FROM app_user WHERE id = $1`, int64(uid)).
+		Scan(&hashAfter, &epochAfter))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM session WHERE user_id = $1 AND revoked_at IS NULL`, int64(uid)).
+		Scan(&sessionsAfter))
+	assert.Equal(t, hashBefore, hashAfter, "the admin action installed a password before the target acted")
+	assert.Equal(t, epochBefore, epochAfter)
+	assert.Equal(t, sessionsBefore, sessionsAfter)
+	var resetEpoch int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT token_version FROM password_reset WHERE user_id = $1 AND consumed_at IS NULL`, int64(uid)).
+		Scan(&resetEpoch))
+	assert.Equal(t, epochBefore, resetEpoch, "administrator recovery did not capture the live credential epoch")
+	assert.Equal(t, http.StatusOK, h.client(t).do(http.MethodPost, "/api/auth/login",
+		map[string]string{"email": "user@example.com", "password": "the user's password"}).Code)
+
+	var sessionsAtConsumption int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM session WHERE user_id = $1 AND revoked_at IS NULL`, int64(uid)).
+		Scan(&sessionsAtConsumption))
+	token := resetTokenFrom(t, h.mail.waitFor(t, "user@example.com").Text)
+	require.Equal(t, http.StatusOK, h.client(t).do(http.MethodPost, "/api/auth/password/reset",
+		map[string]string{"token": token, "password": "the target's chosen password"}).Code)
+
+	var consumedEpoch, liveSessions, revokedSessions int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT token_version FROM app_user WHERE id = $1`, int64(uid)).Scan(&consumedEpoch))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FILTER (WHERE revoked_at IS NULL),
+		       count(*) FILTER (WHERE revoked_reason = 'password_changed')
+		FROM session WHERE user_id = $1`, int64(uid)).Scan(&liveSessions, &revokedSessions))
+	assert.Equal(t, epochBefore+1, consumedEpoch)
+	assert.Equal(t, 1, liveSessions, "only the post-recovery session should be live")
+	assert.GreaterOrEqual(t, revokedSessions, sessionsAtConsumption,
+		"pre-recovery sessions survived token consumption")
+}
+
+func TestAdmin_ForcePasswordResetLinkDiesAfterSessionRevocation(t *testing.T) {
 	h, _ := newGoogleHarness(t, harnessOpts{SMTP: true})
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 	uid := h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
 	h.mail.reset()
 
 	rec := admin.do(http.MethodPost, "/api/admin/users/"+itoa(int64(uid))+"/force-password-reset", nil)
-	require.Equal(t, http.StatusOK, rec.Code)
-	temp := decode(t, rec)["temporary_password"].(string)
+	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+	token := resetTokenFrom(t, h.mail.waitFor(t, "user@example.com").Text)
 
-	msg := h.mail.waitFor(t, "user@example.com")
-	assert.NotContains(t, msg.Text, temp)
-	assert.NotContains(t, msg.HTML, temp)
+	rec = admin.do(http.MethodPost, "/api/admin/users/"+itoa(int64(uid))+"/sessions/revoke", nil)
+	require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+	rec = h.client(t).do(http.MethodPost, "/api/auth/password/reset", map[string]string{
+		"token": token, "password": "a stale recovery password",
+	})
+	assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+	assert.Equal(t, "reset_invalid", errCode(t, rec))
+	assert.Equal(t, http.StatusOK, h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "user@example.com", "password": "the user's password",
+	}).Code)
+}
+
+func TestAdmin_ForcePasswordResetPreservesTheTargetsSecondFactor(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{SMTP: true, TwoFactor: true})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	uid := h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
+	enrolled := enrolUser(t, h, "user@example.com", "the user's password")
+	testdb.ConvertToGoogleOnly(t, h.pool, uid, "user@example.com", "google-only-with-totp")
+	h.mail.reset()
+
+	rec := admin.do(http.MethodPost, "/api/admin/users/"+itoa(int64(uid))+"/force-password-reset", nil)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	token := resetTokenFrom(t, h.mail.waitFor(t, "user@example.com").Text)
+
+	target := h.client(t)
+	rec = target.do(http.MethodPost, "/api/auth/password/reset", map[string]string{
+		"token": token, "password": "the target's chosen password",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "two_factor_required", decode(t, rec)["status"])
+	assert.Empty(t, target.cookies[auth.CookieAccess])
+
+	rec = target.do(http.MethodPost, "/api/auth/2fa/verify",
+		map[string]string{"code": codeNextStep(t, enrolled.secret)})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.NotEmpty(t, target.cookies[auth.CookieAccess])
+}
+
+func TestAdmin_ForcePasswordResetTokenRemainsSingleUseAndExpires(t *testing.T) {
+	t.Run("single use", func(t *testing.T) {
+		h, _ := newGoogleHarness(t, harnessOpts{SMTP: true})
+		admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+		uid := h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
+		h.mail.reset()
+
+		rec := admin.do(http.MethodPost, "/api/admin/users/"+itoa(int64(uid))+"/force-password-reset", nil)
+		require.Equal(t, http.StatusAccepted, rec.Code)
+		token := resetTokenFrom(t, h.mail.waitFor(t, "user@example.com").Text)
+		require.Equal(t, http.StatusOK, h.client(t).do(http.MethodPost, "/api/auth/password/reset",
+			map[string]string{"token": token, "password": "first target password"}).Code)
+		rec = h.client(t).do(http.MethodPost, "/api/auth/password/reset",
+			map[string]string{"token": token, "password": "second target password"})
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		assert.Equal(t, "reset_invalid", errCode(t, rec))
+	})
+
+	t.Run("expiry", func(t *testing.T) {
+		h, _ := newGoogleHarness(t, harnessOpts{SMTP: true})
+		admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+		uid := h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
+		h.mail.reset()
+
+		rec := admin.do(http.MethodPost, "/api/admin/users/"+itoa(int64(uid))+"/force-password-reset", nil)
+		require.Equal(t, http.StatusAccepted, rec.Code)
+		token := resetTokenFrom(t, h.mail.waitFor(t, "user@example.com").Text)
+		_, err := h.pool.Exec(context.Background(), `UPDATE password_reset SET expires_at = now() - interval '1 minute'`)
+		require.NoError(t, err)
+
+		rec = h.client(t).do(http.MethodPost, "/api/auth/password/reset",
+			map[string]string{"token": token, "password": "a target password"})
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		assert.Equal(t, http.StatusOK, h.client(t).do(http.MethodPost, "/api/auth/login",
+			map[string]string{"email": "user@example.com", "password": "the user's password"}).Code)
+	})
+}
+
+func TestAdminRecoverySupersedingAConcurrentResetCannotApplyTheOldToken(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{SMTP: true})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	uid := h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
+	oldToken, err := h.repo.CreatePasswordReset(context.Background(), uid, time.Minute, "")
+	require.NoError(t, err)
+
+	deliveryStarted := make(chan struct{})
+	releaseDelivery := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseDelivery) }) }
+	t.Cleanup(release)
+	recoveryErr := make(chan error, 1)
+	go func() {
+		recoveryErr <- h.repo.CreateAdminPasswordRecovery(context.Background(), uid, time.Minute,
+			func(string, string) error {
+				close(deliveryStarted)
+				<-releaseDelivery
+				return nil
+			})
+	}()
+	<-deliveryStarted
+
+	resetErr := make(chan error, 1)
+	go func() {
+		_, err := h.repo.ConsumePasswordReset(context.Background(), oldToken, "an attacker password")
+		resetErr <- err
+	}()
+	waitForBlockedSQL(t, h.pool, "SELECT status, token_version FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
+	release()
+	require.NoError(t, <-recoveryErr)
+	assert.ErrorIs(t, <-resetErr, auth.ErrResetInvalid)
+
+	var epoch int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT token_version FROM app_user WHERE id = $1`, int64(uid)).Scan(&epoch))
+	assert.Zero(t, epoch, "the superseded reset changed the credential epoch")
+	assert.Equal(t, http.StatusOK, h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "user@example.com", "password": "the user's password",
+	}).Code)
+	assert.Equal(t, http.StatusUnauthorized, h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "user@example.com", "password": "an attacker password",
+	}).Code)
+}
+
+func TestAdminRecoveryTokenCannotMutateAfterTargetIsDisabled(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{SMTP: true})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	uid := h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
+	h.mail.reset()
+
+	rec := admin.do(http.MethodPost, "/api/admin/users/"+itoa(int64(uid))+"/force-password-reset", nil)
+	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+	token := resetTokenFrom(t, h.mail.waitFor(t, "user@example.com").Text)
+	status := auth.StatusDisabled
+	_, err := h.repo.UpdateUser(context.Background(), uid, nil, nil, &status)
+	require.NoError(t, err)
+
+	_, err = h.repo.ConsumePasswordReset(context.Background(), token, "an attacker password")
+	assert.ErrorIs(t, err, auth.ErrResetInvalid)
+	var epoch int
+	var originalWorks bool
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT token_version, password_hash IS NOT NULL FROM app_user WHERE id = $1`, int64(uid)).
+		Scan(&epoch, &originalWorks))
+	assert.Equal(t, 1, epoch, "the refused reset bumped the status-change epoch")
+	assert.True(t, originalWorks, "the refused reset removed the existing password")
+}
+
+func TestAdmin_ForcePasswordResetSMTPFailureDoesNotMutateAnything(t *testing.T) {
+	h, _ := newGoogleHarness(t, harnessOpts{SMTP: true})
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	uid := h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
+	h.mail.reset()
+	h.mail.fail(errors.New("smtp unavailable"))
+
+	var hashBefore string
+	var epochBefore, resetsBefore, sessionsBefore int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT password_hash, token_version FROM app_user WHERE id = $1`, int64(uid)).
+		Scan(&hashBefore, &epochBefore))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `SELECT count(*) FROM password_reset`).Scan(&resetsBefore))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM session WHERE user_id = $1 AND revoked_at IS NULL`, int64(uid)).Scan(&sessionsBefore))
+
+	rec := admin.do(http.MethodPost, "/api/admin/users/"+itoa(int64(uid))+"/force-password-reset", nil)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Equal(t, "mail_unavailable", errCode(t, rec))
+
+	var hashAfter string
+	var epochAfter, resetsAfter, sessionsAfter int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT password_hash, token_version FROM app_user WHERE id = $1`, int64(uid)).
+		Scan(&hashAfter, &epochAfter))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `SELECT count(*) FROM password_reset`).Scan(&resetsAfter))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM session WHERE user_id = $1 AND revoked_at IS NULL`, int64(uid)).Scan(&sessionsAfter))
+	assert.Equal(t, hashBefore, hashAfter)
+	assert.Equal(t, epochBefore, epochAfter)
+	assert.Equal(t, resetsBefore, resetsAfter)
+	assert.Equal(t, sessionsBefore, sessionsAfter)
+}
+
+func TestAdmin_ForcePasswordResetRequiresSMTPAndAVerifiedTarget(t *testing.T) {
+	t.Run("log driver", func(t *testing.T) {
+		h, _ := newGoogleHarness(t, harnessOpts{})
+		admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+		uid := h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
+		h.mail.reset()
+
+		rec := admin.do(http.MethodPost, "/api/admin/users/"+itoa(int64(uid))+"/force-password-reset", nil)
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		assert.Equal(t, "smtp_required", errCode(t, rec))
+		assert.Empty(t, h.mail.all(), "a recovery credential was written to the log mailer")
+	})
+
+	t.Run("unverified target", func(t *testing.T) {
+		h, _ := newGoogleHarness(t, harnessOpts{SMTP: true})
+		admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+		uid := h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
+		h.mail.reset()
+		_, err := h.pool.Exec(context.Background(), `UPDATE app_user SET email_verified_at = NULL WHERE id = $1`, int64(uid))
+		require.NoError(t, err)
+
+		rec := admin.do(http.MethodPost, "/api/admin/users/"+itoa(int64(uid))+"/force-password-reset", nil)
+		assert.Equal(t, http.StatusConflict, rec.Code)
+		assert.Equal(t, "recovery_unavailable", errCode(t, rec))
+		assert.Empty(t, h.mail.all())
+	})
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -852,6 +1769,12 @@ func requireRoundTrip(t *testing.T, c *client, purpose, want string) {
 	require.Equal(t, want, outcome, "callback failed with oauth_error=%q", failure)
 }
 
+func requireLinkRoundTrip(t *testing.T, c *client, password, code, want string) {
+	t.Helper()
+	got, failure := c.googleLinkRoundTrip(t, password, code)
+	require.Equal(t, want, got, "oauth failure: %s", failure)
+}
+
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }
 
 // createInvite issues an invitation and returns the raw token from its URL.
@@ -862,8 +1785,11 @@ func (h *harness) createInvite(t *testing.T, admin *client, email string) string
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 
 	acceptURL, _ := decode(t, rec)["accept_url"].(string)
-	require.Contains(t, acceptURL, "?invite=")
-	return strings.SplitN(acceptURL, "?invite=", 2)[1]
+	parsed, err := url.Parse(acceptURL)
+	require.NoError(t, err)
+	require.Empty(t, parsed.RawQuery)
+	require.Contains(t, parsed.Fragment, "invite=")
+	return strings.TrimPrefix(parsed.Fragment, "invite=")
 }
 
 // inviteAndAccept creates a second ordinary account and returns its id.
@@ -921,7 +1847,7 @@ func TestOAuth_ListIdentitiesReflectsWhatIsLinked(t *testing.T) {
 	assert.Empty(t, decode(t, rec)["identities"])
 
 	g.as("google-sub", "personal@gmail.test", true)
-	requireRoundTrip(t, admin, "link", "linked")
+	requireLinkRoundTrip(t, admin, "correct horse battery", "", "linked")
 
 	rec = admin.do(http.MethodGet, "/api/auth/identities", nil)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -942,7 +1868,7 @@ func TestOAuth_ListIdentitiesIsScopedToTheCaller(t *testing.T) {
 	h.inviteAndAccept(t, admin, "user@example.com", "another good password")
 
 	g.as("google-sub", "admin@example.com", true)
-	requireRoundTrip(t, admin, "link", "linked")
+	requireLinkRoundTrip(t, admin, "correct horse battery", "", "linked")
 
 	other := h.login(t, "user@example.com", "another good password")
 	rec := other.do(http.MethodGet, "/api/auth/identities", nil)
@@ -970,9 +1896,15 @@ func TestOAuth_UnlinkRequiresTheCorrectPassword(t *testing.T) {
 	h, g := newGoogleHarness(t, harnessOpts{})
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 	g.as("google-sub", "admin@example.com", true)
-	requireRoundTrip(t, admin, "link", "linked")
+	requireLinkRoundTrip(t, admin, "correct horse battery", "", "linked")
 
-	rec := admin.do(http.MethodDelete, "/api/auth/oauth/google",
+	rec := admin.do(http.MethodDelete, "/api/auth/oauth/google", map[string]string{
+		"password": "correct horse battery", "subject": "must-not-be-accepted",
+	})
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "invalid_json", errCode(t, rec))
+
+	rec = admin.do(http.MethodDelete, "/api/auth/oauth/google",
 		map[string]string{"password": "not the password"})
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Equal(t, "invalid_credentials", errCode(t, rec))
@@ -981,6 +1913,124 @@ func TestOAuth_UnlinkRequiresTheCorrectPassword(t *testing.T) {
 	require.NoError(t, h.pool.QueryRow(context.Background(),
 		`SELECT count(*) FROM user_identity`).Scan(&n))
 	assert.Equal(t, 1, n, "the identity must survive a wrong password")
+}
+
+func TestOAuth_UnlinkCannotUsePasswordProofAfterConcurrentPasswordChange(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{})
+	h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	g.as("google-sub", "admin@example.com", true)
+	admin := h.login(t, "admin@example.com", "correct horse battery")
+	requireLinkRoundTrip(t, admin, "correct horse battery", "", "linked")
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	blocker, err := h.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback(ctx) }()
+	var locked int64
+	require.NoError(t, blocker.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE id = $1 FOR UPDATE`, int64(user.ID)).Scan(&locked))
+
+	changeResult := make(chan error, 1)
+	go func() {
+		changeResult <- h.repo.ChangePassword(ctx, user.ID, 1,
+			"correct horse battery", "a changed password")
+	}()
+	waitForBlockedSQL(t, h.pool, "SELECT password_hash FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
+
+	unlinkResult := make(chan error, 1)
+	go func() {
+		unlinkResult <- h.repo.UnlinkIdentity(ctx, user.ID, 1, user.TokenVersion,
+			auth.ProviderGoogle, "correct horse battery")
+	}()
+	waitForBlockedSQL(t, h.pool, "SELECT password_hash,")
+
+	require.NoError(t, blocker.Commit(ctx))
+	require.NoError(t, <-changeResult)
+	assert.ErrorIs(t, <-unlinkResult, auth.ErrSessionInvalid)
+
+	var identities int
+	require.NoError(t, h.pool.QueryRow(ctx,
+		`SELECT count(*) FROM user_identity WHERE user_id = $1`, int64(user.ID)).Scan(&identities))
+	assert.Equal(t, 1, identities)
+}
+
+func TestOAuth_UnlinkBumpsCredentialEpochAndRevokesOtherSessions(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{})
+	h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	g.as("google-sub", "admin@example.com", true)
+
+	caller := h.login(t, "admin@example.com", "correct horse battery")
+	requireLinkRoundTrip(t, caller, "correct horse battery", "", "linked")
+	other := h.login(t, "admin@example.com", "correct horse battery")
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+
+	rec := caller.do(http.MethodDelete, "/api/auth/oauth/google",
+		map[string]string{"password": "correct horse battery"})
+	require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+
+	updated, err := h.repo.GetUser(context.Background(), user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, user.TokenVersion+1, updated.TokenVersion)
+	assert.Equal(t, http.StatusUnauthorized, other.do(http.MethodGet, "/api/links", nil).Code)
+	assert.Equal(t, http.StatusOK, caller.do(http.MethodGet, "/api/links", nil).Code)
+}
+
+func TestOAuth_UnlinkRollsBackIdentityAndEpochWhenSessionRevocationFails(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{})
+	h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	g.as("google-sub", "admin@example.com", true)
+
+	caller := h.login(t, "admin@example.com", "correct horse battery")
+	requireLinkRoundTrip(t, caller, "correct horse battery", "", "linked")
+	h.login(t, "admin@example.com", "correct horse battery")
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+
+	_, err = h.pool.Exec(context.Background(), `
+		CREATE FUNCTION fail_unlink_session_revoke() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'forced unlink revocation failure'; END $$;
+		CREATE TRIGGER fail_unlink_session_revoke
+		BEFORE UPDATE OF revoked_at ON session FOR EACH ROW
+		WHEN (NEW.revoked_at IS NOT NULL AND OLD.revoked_at IS NULL)
+		EXECUTE FUNCTION fail_unlink_session_revoke()`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = h.pool.Exec(context.Background(), `
+			DROP TRIGGER IF EXISTS fail_unlink_session_revoke ON session;
+			DROP FUNCTION IF EXISTS fail_unlink_session_revoke()`)
+	})
+
+	rec := caller.do(http.MethodDelete, "/api/auth/oauth/google",
+		map[string]string{"password": "correct horse battery"})
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+
+	var identities, tokenVersion int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*), min(u.token_version)
+		FROM app_user u
+		JOIN user_identity i ON i.user_id = u.id
+		WHERE u.id = $1`, int64(user.ID)).Scan(&identities, &tokenVersion))
+	assert.Equal(t, 1, identities, "identity deletion committed without required session revocation")
+	assert.Equal(t, user.TokenVersion, tokenVersion, "credential epoch bumped despite rollback")
+}
+
+func TestOAuth_CallbackChallengeFailureStillRedirects(t *testing.T) {
+	g := &fakeGoogle{enabled: true}
+	h := newHarnessWith(t, testdb.New(t), harnessOpts{Google: g})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "victim@example.com", "the real password")
+	g.as("google-sub", "victim@example.com", true)
+	c := h.client(t)
+	state := c.startOAuth(t, "purpose=login")
+
+	_, err := h.pool.Exec(context.Background(), `DROP TABLE auth_challenge CASCADE`)
+	require.NoError(t, err)
+	outcome, failure := c.callback(t, state, "auth-code")
+	assert.Empty(t, outcome)
+	assert.Equal(t, "server_error", failure)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1055,6 +2105,68 @@ func TestSetPassword_RevokesEveryOtherSession(t *testing.T) {
 		"the caller's own session must survive")
 }
 
+func TestSetPassword_RollsBackCredentialWhenSessionRevocationFails(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{})
+	h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	g.as("google-sub", "admin@example.com", true)
+	testdb.ConvertToGoogleOnly(t, h.pool, authctx.UserID(1), "admin@example.com", "google-sub")
+
+	caller := h.client(t)
+	requireRoundTrip(t, caller, "login", "signed_in")
+	other := h.client(t)
+	requireRoundTrip(t, other, "login", "signed_in")
+	_, err := h.pool.Exec(context.Background(), `
+		CREATE FUNCTION fail_session_revoke() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'forced session revocation failure'; END $$;
+		CREATE TRIGGER fail_session_revoke
+		BEFORE UPDATE OF revoked_at ON session FOR EACH ROW
+		WHEN (NEW.revoked_at IS NOT NULL AND OLD.revoked_at IS NULL)
+		EXECUTE FUNCTION fail_session_revoke()`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = h.pool.Exec(context.Background(), `
+			DROP TRIGGER IF EXISTS fail_session_revoke ON session;
+			DROP FUNCTION IF EXISTS fail_session_revoke()`)
+	})
+
+	rec := caller.do(http.MethodPost, "/api/auth/password/set",
+		map[string]string{"password": "a brand new password"})
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+
+	user, err := h.repo.GetUser(context.Background(), authctx.UserID(1))
+	require.NoError(t, err)
+	assert.False(t, user.HasPassword, "password committed without its required session revocation")
+}
+
+func TestSetPassword_RefusesTOTPProofFromAStaleCredentialEpoch(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{TwoFactor: true})
+	h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	e := enrolUser(t, h, "admin@example.com", "correct horse battery")
+	g.as("google-sub", "admin@example.com", true)
+	testdb.ConvertToGoogleOnly(t, h.pool, authctx.UserID(1), "admin@example.com", "google-sub")
+
+	user, err := h.repo.GetUser(context.Background(), authctx.UserID(1))
+	require.NoError(t, err)
+	row, err := h.repo.LoadTOTPSecret(context.Background(), user.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row.LastUsedCounter)
+	var sid int64
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT id FROM session WHERE access_token_hash = $1`,
+		secrets.Hash(e.client.cookies[auth.CookieAccess])).Scan(&sid))
+
+	require.NoError(t, h.repo.RevokeAllForUser(context.Background(), user.ID, auth.ReasonLogoutAll))
+	err = h.repo.SetPassword(context.Background(), user.ID, sid, user.TokenVersion,
+		"a brand new password", &auth.TOTPProof{
+			Counter: *row.LastUsedCounter + 1, Ciphertext: row.Ciphertext, Nonce: row.Nonce,
+		})
+	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
+
+	current, err := h.repo.GetUser(context.Background(), user.ID)
+	require.NoError(t, err)
+	assert.False(t, current.HasPassword)
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Error surfacing
 // ─────────────────────────────────────────────────────────────────────
@@ -1099,9 +2211,16 @@ func TestOAuthRepository_SurfacesDatabaseErrors(t *testing.T) {
 
 		_, err = h.repo.ListIdentities(ctx, uid)
 		assert.Error(t, err)
-		assert.Error(t, h.repo.LinkIdentity(ctx, uid, auth.ProviderGoogle, "sub", "a@b.test"))
-		assert.Error(t, h.repo.ConvertToProvider(ctx, uid, auth.ProviderGoogle, "sub", "a@b.test", 1))
-		assert.Error(t, h.repo.UnlinkIdentity(ctx, uid, auth.ProviderGoogle))
+		sid, version, proofAt := int64(1), 0, time.Now()
+		state := auth.OAuthState{
+			UserID: &uid, SessionID: &sid, TokenVersion: &version, ProofAt: &proofAt,
+		}
+		assert.Error(t, h.repo.ValidateOAuthLinkProof(ctx, state, "access", time.Minute))
+		assert.Error(t, h.repo.LinkIdentity(ctx, state, "access", auth.ProviderGoogle,
+			"sub", "a@b.test", time.Minute))
+		_, _, err = h.repo.ConvertToProvider(ctx, 1, "password")
+		assert.Error(t, err)
+		assert.Error(t, h.repo.UnlinkIdentity(ctx, uid, 1, 0, auth.ProviderGoogle, "password"))
 		// TouchIdentity is deliberately silent — a failed "last used" write must
 		// never fail the login it belongs to — so the only thing to assert is
 		// that it does not panic.
@@ -1150,7 +2269,7 @@ func TestOAuth_InviteRevokedDuringTheRoundTripIsRefused(t *testing.T) {
 	token := h.createInvite(t, admin, "invited@example.com")
 
 	c := h.client(t)
-	state := c.startOAuth(t, "purpose=accept_invite&invite="+url.QueryEscape(token))
+	state := c.startOAuthInvite(t, token)
 
 	// The admin changes their mind while the browser is at Google.
 	rec := admin.do(http.MethodGet, "/api/admin/invites", nil)
@@ -1177,13 +2296,13 @@ func TestOAuth_InviteWithAnAlreadyLinkedSubjectIsRefused(t *testing.T) {
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 
 	g.as("shared-sub", "admin@example.com", true)
-	requireRoundTrip(t, admin, "link", "linked")
+	requireLinkRoundTrip(t, admin, "correct horse battery", "", "linked")
 
 	token := h.createInvite(t, admin, "invited@example.com")
 	g.as("shared-sub", "invited@example.com", true)
 
 	c := h.client(t)
-	state := c.startOAuth(t, "purpose=accept_invite&invite="+url.QueryEscape(token))
+	state := c.startOAuthInvite(t, token)
 	_, failure := c.callback(t, state, "code")
 	assert.Equal(t, "already_linked", failure)
 }
@@ -1192,8 +2311,8 @@ func TestOAuthStart_InviteTokenMustBeLive(t *testing.T) {
 	h, _ := newGoogleHarness(t, harnessOpts{})
 	h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 
-	rec := h.client(t).do(http.MethodGet,
-		"/api/auth/oauth/google/start?purpose=accept_invite&invite=nonsense", nil)
+	rec := h.client(t).do(http.MethodPost,
+		"/api/auth/oauth/google/invite/start", map[string]string{"invite": "nonsense"})
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Equal(t, "invite_invalid", errCode(t, rec))
 }
@@ -1281,7 +2400,7 @@ func TestOAuth_ConvertRefusesATwoFactorChallenge(t *testing.T) {
 }
 
 func TestAdmin_ForcePasswordResetOnAnUnknownUserIs404(t *testing.T) {
-	h, _ := newGoogleHarness(t, harnessOpts{})
+	h, _ := newGoogleHarness(t, harnessOpts{SMTP: true})
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 
 	assert.Equal(t, http.StatusNotFound,
@@ -1304,6 +2423,7 @@ func TestOAuthAndTokenHandlers_DegradeWithoutLeakingDriverText(t *testing.T) {
 	h := newHarnessWith(t, testdb.New(t), harnessOpts{Google: &fakeGoogle{enabled: true}})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	invite := h.createInvite(t, admin, "invited@example.com")
 
 	_, err := h.pool.Exec(context.Background(),
 		`DROP TABLE api_token, user_identity, oauth_state CASCADE`)
@@ -1320,6 +2440,8 @@ func TestOAuthAndTokenHandlers_DegradeWithoutLeakingDriverText(t *testing.T) {
 		{"unlink", http.MethodDelete, "/api/auth/oauth/google",
 			map[string]string{"password": "correct horse battery"}},
 		{"start", http.MethodGet, "/api/auth/oauth/google/start?purpose=login", nil},
+		{"invite start", http.MethodPost, "/api/auth/oauth/google/invite/start",
+			map[string]string{"invite": invite}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := admin.do(tc.method, tc.path, tc.body)

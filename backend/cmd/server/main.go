@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/mailer"
+	"foldex/internal/notemedia"
 	"foldex/internal/oauthgoogle"
 	"foldex/internal/pkg/keyfile"
 	"foldex/internal/pkg/logsafe"
@@ -47,10 +49,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// SHARED_SECRET predates accounts. It is a perimeter header: it gates
-	// /api/* as a whole and identifies nobody, so it can neither tell two users
-	// apart nor scope a single row. Real authentication replaced it in ADR-30;
-	// what is left is a second lock on the front door, and it is on its way out.
+	// SHARED_SECRET predates accounts. It is a perimeter header: except for the
+	// UUID-keyed note-media read required by public notes, it gates /api/* and
+	// identifies nobody, so it can neither tell two users apart nor scope a
+	// single row. Real authentication replaced it in ADR-30; what is left is a
+	// second lock on the front door, and it is on its way out.
 	switch {
 	case cfg.SharedSecret != "":
 		logger.Warn("SHARED_SECRET is DEPRECATED and will be removed in a future release. " +
@@ -92,6 +95,7 @@ func main() {
 	// gated by PREVIEW_STRICT_SSRF) are identical to the async worker —
 	// per CLAUDE.md §4 we never re-roll a second HTTP client / SSRF posture.
 	metadataFetcher := preview.NewFetcher(time.Duration(cfg.PreviewTimeoutSec) * time.Second)
+	screenshotPool := screenshot.NewPool()
 
 	// Object store (RustFS / S3 API) is optional — if it cannot be reached, we
 	// log a warning and disable screenshot/upload endpoints rather than
@@ -108,13 +112,14 @@ func main() {
 		logger.Warn("object store unavailable — screenshot endpoints disabled", "err", err)
 	} else {
 		storageClient = sc
+		notemedia.NewSweeper(pool, storageClient, logger).Start(rootCtx)
 	}
 
 	// Wire the screenshot fallback before starting the worker. When the object
 	// store is up the worker will, after each preview, capture a screenshot
 	// for links that have no og:image AND resolve to a public host.
 	if storageClient != nil {
-		worker.WithScreenshotFallback(screenshotFunc(screenshot.Capture), storageClient)
+		worker.WithScreenshotFallback(screenshotPool, storageClient)
 	}
 	worker.Start(rootCtx)
 
@@ -187,9 +192,13 @@ func main() {
 		logger.Error("mailer setup failed", "err", err)
 		os.Exit(1)
 	}
+	mailDispatcher := mailer.NewDispatcher(context.Background(), mail, mailer.DispatcherOptions{
+		Workers: mailer.DefaultDispatcherWorkers, QueueSize: mailer.DefaultDispatcherQueueSize,
+	}, logger)
 	authRepo := auth.NewRepository(pool)
 	cookieOpts := auth.CookieOptions{Secure: cfg.AuthCookieSecure, Domain: cfg.AuthCookieDomain}
-	authMW := auth.NewMiddleware(authRepo, cookieOpts, logger)
+	authMW := auth.NewMiddleware(authRepo, cookieOpts, logger,
+		cfg.AuthEnabled && cfg.AuthRequire2FAForAdmins)
 	authTTL := auth.SessionTTL{
 		Access:   time.Duration(cfg.AuthAccessTTLMin) * time.Minute,
 		Refresh:  time.Duration(cfg.AuthRefreshTTLDays) * 24 * time.Hour,
@@ -218,6 +227,11 @@ func main() {
 		logger.Error("auth cipher", "err", err)
 		os.Exit(1)
 	}
+	authCodeMAC, err := auth.NewCodeMAC(authKey)
+	if err != nil {
+		logger.Error("auth code MAC", "err", err)
+		os.Exit(1)
+	}
 
 	// Built unconditionally. With no client credentials it reports itself
 	// disabled, /api/auth/me advertises google_oauth:false so the SPA hides
@@ -234,13 +248,13 @@ func main() {
 	}
 
 	authHandler := auth.NewHandler(auth.HandlerConfig{
-		Repo: authRepo, MW: authMW, Mailer: mail, Cookies: cookieOpts,
+		Repo: authRepo, MW: authMW, Mailer: mail, MailDispatcher: mailDispatcher, Cookies: cookieOpts,
 		TTL: authTTL, Logger: logger, BaseURL: cfg.AuthPublicURL,
-		Cipher: authCipher, TOTPIssuer: cfg.AuthTOTPIssuer,
+		Cipher: authCipher, CodeMAC: authCodeMAC, TOTPIssuer: cfg.AuthTOTPIssuer,
 		Require2FAForAdmins: cfg.AuthRequire2FAForAdmins,
 		Google:              google,
 	})
-	adminHandler := auth.NewAdminHandler(authRepo, mail, logger, cfg.AuthPublicURL)
+	adminHandler := auth.NewAdminHandler(authRepo, mail, mailDispatcher, logger, cfg.AuthPublicURL)
 
 	// The sweeper prunes the DB rows AND the two process-local caches that grow
 	// with traffic: the rate-limit buckets (keyed by attacker-supplied e-mail on
@@ -266,7 +280,7 @@ func main() {
 		AuthMiddleware:      authMW,
 	}
 	if storageClient != nil {
-		deps.Screenshotter = screenshotFunc(screenshot.Capture)
+		deps.Screenshotter = screenshotPool
 		// SSRF gate for the manual /api/links/{id}/screenshot endpoint. Same
 		// helper the preview worker uses for its fallback path — rejects
 		// IMDS, RFC1918, loopback, link-local, IPv6 ULA, and non-http(s)
@@ -312,27 +326,43 @@ func main() {
 
 	logger.Info("shutting down")
 
-	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutCtx); err != nil {
-		logger.Error("graceful shutdown failed", "err", err)
+	var shutdownWG sync.WaitGroup
+	shutdownWG.Add(3)
+	go func() {
+		defer shutdownWG.Done()
+		if err := srv.Shutdown(shutCtx); err != nil {
+			logger.Error("graceful shutdown failed", "err", err)
+		}
+		// Drain HTTP first so no handler can hold an unpublished queue
+		// reservation when dispatcher cancellation joins its workers.
+		mailDispatcher.Stop()
+	}()
+	go func() {
+		defer shutdownWG.Done()
+		worker.Stop()
+		if ccWorker != nil {
+			ccWorker.Stop()
+		}
+	}()
+	// Cancel Chromium concurrently with HTTP/worker drain so all subsystems
+	// share one container shutdown budget instead of paying serial deadlines.
+	go func() {
+		defer shutdownWG.Done()
+		screenshotPool.Close()
+	}()
+	shutdownDone := make(chan struct{})
+	go func() {
+		shutdownWG.Wait()
+		close(shutdownDone)
+	}()
+	select {
+	case <-shutdownDone:
+	case <-shutCtx.Done():
+		logger.Error("shutdown deadline exceeded", "err", shutCtx.Err())
 	}
-	worker.Stop()
-	if ccWorker != nil {
-		ccWorker.Stop()
-	}
-	// Tear down the pooled Chromium so the process can exit cleanly instead
-	// of leaving an orphan headless browser. No-op when the screenshot
-	// endpoints were never wired or no Capture ever fired.
-	screenshot.Close()
 	logger.Info("bye")
-}
-
-// screenshotFunc is a function adapter that satisfies links.Screenshotter.
-type screenshotFunc func(ctx context.Context, pageURL string) ([]byte, error)
-
-func (f screenshotFunc) Capture(ctx context.Context, pageURL string) ([]byte, error) {
-	return f(ctx, pageURL)
 }
 
 // linkMetadataAdapter bridges *preview.Fetcher (returning preview.Result) to
@@ -390,34 +420,24 @@ func (a storageStatsAdapter) Stats(ctx context.Context) (stats.StorageStats, err
 // dependency-free of backup.
 type backupStorageAdapter struct{ c *storage.Client }
 
-func (a backupStorageAdapter) ListObjects(ctx context.Context, prefix string) ([]backup.ObjectInfo, error) {
-	in, err := a.c.ListObjects(ctx, prefix)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]backup.ObjectInfo, len(in))
-	for i, o := range in {
-		out[i] = backup.ObjectInfo{Key: o.Key, Size: o.Size}
-	}
-	return out, nil
+func (a backupStorageAdapter) WalkObjects(ctx context.Context, prefix string, visit func(backup.ObjectInfo) error) error {
+	return a.c.WalkObjects(ctx, prefix, func(object storage.ObjectInfo) error {
+		return visit(backup.ObjectInfo{Key: object.Key, Size: object.Size})
+	})
 }
 
 func (a backupStorageAdapter) OpenObject(ctx context.Context, key string) (io.ReadCloser, error) {
 	return a.c.OpenObject(ctx, key)
 }
 
-func (a backupStorageAdapter) DeleteObject(ctx context.Context, key string) error {
-	return a.c.DeleteObject(ctx, key)
-}
-
 func (a backupStorageAdapter) PutObjectStream(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
 	return a.c.PutObjectStream(ctx, key, r, size, contentType)
 }
 
-func (a backupStorageAdapter) ObjectExists(ctx context.Context, key string) (bool, error) {
-	return a.c.ObjectExists(ctx, key)
+func (a backupStorageAdapter) ExistingObjects(ctx context.Context, keys []string) (map[string]bool, error) {
+	return a.c.ExistingObjects(ctx, keys)
 }
 
-func (a backupStorageAdapter) DeleteObjectsPrefix(ctx context.Context, prefix string) error {
-	return a.c.DeleteObjectsPrefix(ctx, prefix)
+func (a backupStorageAdapter) DeleteObjects(ctx context.Context, keys []string) error {
+	return a.c.DeleteObjects(ctx, keys)
 }

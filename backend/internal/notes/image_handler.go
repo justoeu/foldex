@@ -1,6 +1,7 @@
 package notes
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 
 	"foldex/internal/imageopt"
 	"foldex/internal/links"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 )
 
@@ -30,20 +32,25 @@ const (
 // is configured.
 type ImageHandler struct {
 	storage links.Uploader
+	leases  MediaLeaseStore
 	logger  *slog.Logger
 }
 
-func NewImageHandler(storage links.Uploader, logger *slog.Logger) *ImageHandler {
-	return &ImageHandler{storage: storage, logger: logger}
+type MediaLeaseStore interface {
+	RegisterMediaLease(ctx context.Context, uid authctx.UserID, key string) error
+	ForgetMediaLease(ctx context.Context, uid authctx.UserID, key string) error
+}
+
+func NewImageHandler(storage links.Uploader, leases MediaLeaseStore, logger *slog.Logger) *ImageHandler {
+	return &ImageHandler{storage: storage, leases: leases, logger: logger}
 }
 
 // Upload accepts a multipart upload (field "image"), optimizes it, and
 // stores it under notes/<uuid>.<ext> — UUID-keyed (not note-id-keyed)
 // because Tiptap uploads images on paste/drop, which can happen before a new
 // note has been saved (no id exists yet). Returns the proxy URL immediately;
-// the note row itself never references this endpoint, the returned URL is
-// just inserted into the editor's document and persisted as part of
-// body_html on save.
+// the returned URL is inserted into the editor document. Upload registers an
+// owner-scoped pending lease; saving body_html claims it through note_media_ref.
 func (h *ImageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	// Stream multipart parts (no ParseMultipartForm) so gosec G120 stays
 	// clean; MaxBytesReader is the absolute body ceiling.
@@ -105,7 +112,19 @@ func (h *ImageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := fmt.Sprintf("notes/%s.%s", uuid.NewString(), opt.Ext)
+	uid := authctx.MustUser(r.Context())
+	if h.leases == nil {
+		h.logger.Error("note image upload: media lease repository unavailable")
+		httperr.Write(w, httperr.New(http.StatusInternalServerError, "lease_unavailable", "failed to register image ownership"))
+		return
+	}
+	if err := h.leases.RegisterMediaLease(r.Context(), uid, key); err != nil {
+		h.logger.Error("note image upload: media lease failed", "err", err)
+		httperr.Write(w, httperr.New(http.StatusInternalServerError, "lease_failed", "failed to register image ownership"))
+		return
+	}
 	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
+		_ = h.leases.ForgetMediaLease(context.WithoutCancel(r.Context()), uid, key)
 		h.logger.Error("note image upload: storage upload failed")
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store image"))
 		return

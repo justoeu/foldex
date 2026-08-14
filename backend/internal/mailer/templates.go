@@ -160,30 +160,31 @@ func VerifyEmailMessage(to, verifyURL string, expiresInMinutes int) Message {
 	return Message{To: to, Subject: "Confirm your Foldex e-mail", Text: text, HTML: htmlBody}
 }
 
-// PasswordForciblyResetMessage warns that an administrator replaced the
-// account's password.
-//
-// It carries no password. The temporary credential is shown to the
-// administrator and handed over out of band — mailing it would put a working
-// credential in an inbox, which is exactly the channel the account may have
-// lost control of.
-func PasswordForciblyResetMessage(to string) Message {
+// AdminPasswordRecoveryMessage carries a user-bound recovery link requested by
+// an administrator. It is sent only through SMTP; the log driver must never be
+// used for this credential.
+func AdminPasswordRecoveryMessage(to, resetURL string, expiresInMinutes int) Message {
 	text := strings.Join([]string{
-		"An administrator reset the password on your Foldex account.",
+		"An administrator started account recovery for your Foldex account.",
 		"",
-		"They will give you a temporary password directly. Sign in with it and",
-		"choose a new one straight away. Every session was signed out.",
+		"Open the link below to choose your own new password:",
+		resetURL,
 		"",
-		"If you did not ask for this, tell your administrator now.",
+		fmt.Sprintf("The link expires in %d minutes and can be used once.", expiresInMinutes),
+		"Your password and sessions do not change until you use the link.",
+		"If you did not expect this, tell your administrator and ignore the message.",
 	}, "\n")
 
-	htmlBody := `<p>An administrator reset the password on your <strong>Foldex</strong> account.</p>` +
-		`<p>They will give you a temporary password directly. Sign in with it and choose a ` +
-		`new one straight away. Every session was signed out.</p>` +
-		`<p style="color:#666;font-size:13px">If you did not ask for this, tell your ` +
-		`administrator now.</p>`
+	htmlBody := fmt.Sprintf(
+		`<p>An administrator started account recovery for your <strong>Foldex</strong> account.</p>`+
+			`<p><a href="%s">Choose my new password</a></p>`+
+			`<p style="color:#666;font-size:13px">The link expires in %d minutes and can be used once. `+
+			`Your password and sessions do not change until you use it. If you did not expect this, `+
+			`tell your administrator and ignore the message.</p>`,
+		html.EscapeString(resetURL), expiresInMinutes,
+	)
 
-	return Message{To: to, Subject: "Your Foldex password was reset by an administrator",
+	return Message{To: to, Subject: "Account recovery was requested for your Foldex account",
 		Text: text, HTML: htmlBody}
 }
 

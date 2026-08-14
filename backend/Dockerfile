@@ -43,7 +43,7 @@ COPY --from=build /out/foldex /foldex
 COPY --from=build /out/rustfs-bootstrap /rustfs-bootstrap
 COPY db/migrations /migrations
 EXPOSE 9089
-# Run as non-root for security (chromium requires --no-sandbox when running as root).
+# Run as non-root so Chromium can keep its process sandbox enabled.
 RUN addgroup -S foldex && adduser -S foldex -G foldex
 # /data holds operator-persisted state: the autogen VAPID keypair lands at
 # /data/vapid.json (config.VAPID_STATE_PATH default). Docker named volumes

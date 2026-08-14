@@ -1,138 +1,153 @@
-const $ = (id) => document.getElementById(id);
-const tagsEl = $('tags');
-const statusEl = $('status');
-const saveBtn = $('save');
-const selected = new Set();
+import {
+  apiUrl,
+  getStoredConfig,
+  normalizeBaseUrl,
+  requestOriginAccess,
+  requireOriginAccess,
+} from './config.js';
 
-async function getConfig() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(
-      { baseUrl: 'http://localhost:9089', apiToken: '', sharedSecret: '' },
-      resolve,
-    );
-  });
+function authHeaders(config, includeContentType = false) {
+  const headers = {};
+  if (includeContentType) headers['Content-Type'] = 'application/json';
+  if (config.apiToken) headers.Authorization = 'Bearer ' + config.apiToken;
+  if (config.sharedSecret) headers['X-Foldex-Secret'] = config.sharedSecret;
+  return headers;
 }
 
-/**
- * Builds the request headers.
- *
- * The API token is the credential that identifies an account; SHARED_SECRET is
- * a perimeter header that identifies nobody and is on its way out. Both are
- * sent when both are configured, so the backend and the extension can be
- * upgraded in either order without a window where saving a link fails.
- *
- * No CSRF header, and none is needed: a bearer credential is not attached
- * automatically by the browser, so there is no ambient authority for a
- * cross-site request to ride on.
- */
-async function authHeaders() {
-  const cfg = await getConfig();
-  const headers = { 'Content-Type': 'application/json' };
-  if (cfg.apiToken) headers['Authorization'] = 'Bearer ' + cfg.apiToken;
-  if (cfg.sharedSecret) headers['X-Foldex-Secret'] = cfg.sharedSecret;
-  return { cfg, headers };
-}
-
-/** Turns a rejected request into advice the popup can act on. */
 function credentialProblem(status) {
   if (status === 401) return 'not signed in — set an API token in settings';
   if (status === 403) return 'this token is not allowed here';
   return null;
 }
 
-function setStatus(msg, level) {
-  statusEl.textContent = msg || '';
-  statusEl.className = 'status' + (level ? ' ' + level : '');
+export async function loadTags(
+  config,
+  { chromeApi = chrome, fetchImpl = fetch } = {},
+) {
+  const baseUrl = await requireOriginAccess(config.baseUrl, chromeApi);
+  const resp = await fetchImpl(apiUrl(baseUrl, '/api/tags'), {
+    headers: authHeaders(config),
+    redirect: 'error',
+  });
+  if (!resp.ok) throw new Error(credentialProblem(resp.status) || 'HTTP ' + resp.status);
+  return resp.json();
 }
 
-async function prefill() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return;
-  $('url').value = tab.url || '';
-  $('title').value = tab.title || '';
-}
-
-async function loadTags() {
-  const { cfg, headers } = await authHeaders();
-  try {
-    const resp = await fetch(cfg.baseUrl + '/api/tags', { headers });
-    if (!resp.ok) throw new Error(credentialProblem(resp.status) || 'HTTP ' + resp.status);
-    const tags = await resp.json();
-    renderTags(tags);
-  } catch (e) {
-    setStatus('Could not load tags: ' + e.message + ' — check settings', 'error');
+export async function saveLink(
+  config,
+  input,
+  { chromeApi = chrome, fetchImpl = fetch } = {},
+) {
+  const baseUrl = await requestOriginAccess(config.baseUrl, chromeApi);
+  const resp = await fetchImpl(apiUrl(baseUrl, '/api/links'), {
+    method: 'POST',
+    headers: authHeaders(config, true),
+    body: JSON.stringify(input),
+    redirect: 'error',
+  });
+  if (!resp.ok) {
+    const problem = credentialProblem(resp.status);
+    if (problem) throw new Error(problem);
+    const body = await resp.text();
+    throw new Error('HTTP ' + resp.status + ' ' + body.slice(0, 120));
   }
 }
 
-function renderTags(tags) {
-  tagsEl.innerHTML = '';
-  for (const t of tags) {
-    const chip = document.createElement('span');
-    chip.className = 'tag';
-    chip.textContent = (t.icon ? t.icon + ' ' : '') + t.name;
-    chip.style.borderColor = t.color;
-    chip.dataset.id = t.id;
-    chip.addEventListener('click', () => {
-      const id = Number(chip.dataset.id);
-      if (selected.has(id)) {
-        selected.delete(id);
-        chip.classList.remove('selected');
-        chip.style.background = 'rgba(255,255,255,0.03)';
-      } else {
-        selected.add(id);
-        chip.classList.add('selected');
-        chip.style.background = t.color;
-      }
-    });
-    tagsEl.appendChild(chip);
-  }
-}
+function initPopup() {
+  const $ = (id) => document.getElementById(id);
+  const tagsEl = $('tags');
+  const statusEl = $('status');
+  const saveBtn = $('save');
+  const selected = new Set();
+  let config;
 
-async function save() {
-  const url = $('url').value.trim();
-  if (!url) {
-    setStatus('URL is required', 'error');
-    return;
+  function setStatus(msg, level) {
+    statusEl.textContent = msg || '';
+    statusEl.className = 'status' + (level ? ' ' + level : '');
   }
-  saveBtn.disabled = true;
-  setStatus('Saving…');
-  const { cfg, headers } = await authHeaders();
-  try {
-    const resp = await fetch(cfg.baseUrl + '/api/links', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
+
+  async function prefill() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) return;
+    $('url').value = tab.url || '';
+    $('title').value = tab.title || '';
+  }
+
+  function renderTags(tags) {
+    tagsEl.innerHTML = '';
+    for (const tag of tags) {
+      const chip = document.createElement('span');
+      chip.className = 'tag';
+      chip.textContent = (tag.icon ? tag.icon + ' ' : '') + tag.name;
+      chip.style.borderColor = tag.color;
+      chip.dataset.id = tag.id;
+      chip.addEventListener('click', () => {
+        const id = Number(chip.dataset.id);
+        if (selected.has(id)) {
+          selected.delete(id);
+          chip.classList.remove('selected');
+          chip.style.background = 'rgba(255,255,255,0.03)';
+        } else {
+          selected.add(id);
+          chip.classList.add('selected');
+          chip.style.background = tag.color;
+        }
+      });
+      tagsEl.appendChild(chip);
+    }
+  }
+
+  async function save() {
+    if (saveBtn.disabled) return;
+    const url = $('url').value.trim();
+    if (!url) {
+      setStatus('URL is required', 'error');
+      return;
+    }
+
+    saveBtn.disabled = true;
+    setStatus('Saving…');
+    try {
+      await saveLink(config, {
         url,
         title: $('title').value.trim() || url,
         description: $('description').value.trim() || null,
         tag_ids: Array.from(selected),
-      }),
-    });
-    if (!resp.ok) {
-      const problem = credentialProblem(resp.status);
-      if (problem) throw new Error(problem);
-      const body = await resp.text();
-      throw new Error('HTTP ' + resp.status + ' ' + body.slice(0, 120));
+      });
+      setStatus('Saved ✓', 'ok');
+      setTimeout(() => window.close(), 600);
+    } catch (error) {
+      setStatus('Save failed: ' + error.message, 'error');
+      saveBtn.disabled = false;
     }
-    setStatus('Saved ✓', 'ok');
-    setTimeout(() => window.close(), 600);
-  } catch (e) {
-    setStatus('Save failed: ' + e.message, 'error');
-    saveBtn.disabled = false;
   }
+
+  saveBtn.disabled = true;
+  $('save').addEventListener('click', save);
+  $('openOptions').addEventListener('click', (event) => {
+    event.preventDefault();
+    chrome.runtime.openOptionsPage();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.metaKey && event.key === 'Enter') save();
+  });
+
+  (async () => {
+    try {
+      const stored = await getStoredConfig(chrome);
+      config = { ...stored, baseUrl: normalizeBaseUrl(stored.baseUrl) };
+      saveBtn.disabled = false;
+      try {
+        renderTags(await loadTags(config));
+      } catch (error) {
+        setStatus('Could not load tags: ' + error.message + ' — check settings', 'error');
+      }
+    } catch (error) {
+      setStatus('Could not load settings: ' + error.message, 'error');
+    }
+  })();
+
+  prefill().catch((error) => setStatus('Could not read this tab: ' + error.message, 'error'));
 }
 
-$('save').addEventListener('click', save);
-$('openOptions').addEventListener('click', (e) => {
-  e.preventDefault();
-  chrome.runtime.openOptionsPage();
-});
-
-document.addEventListener('keydown', (e) => {
-  if (e.metaKey && e.key === 'Enter') save();
-});
-
-(async () => {
-  await prefill();
-  await loadTags();
-})();
+if (typeof document !== 'undefined') initPopup();

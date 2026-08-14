@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import * as auth from '../../api/auth'
 
@@ -9,25 +10,44 @@ import * as auth from '../../api/auth'
  * button whose icon silently fails to load reads as a broken page on exactly
  * the screen where trust matters most.
  */
-export function GoogleButton({
-  purpose,
-  invite,
-  label,
-}: {
-  purpose: auth.OAuthPurpose
-  invite?: string
-  label?: string
-}) {
+type GoogleButtonProps =
+  | { purpose: auth.OAuthPurpose; invite?: string; label?: string; onClick?: never }
+  | { purpose: 'link'; invite?: never; label?: string; onClick: () => void }
+
+export function GoogleButton({ purpose, invite, label, onClick }: GoogleButtonProps) {
   const { t } = useTranslation()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function start() {
+    if (purpose === 'link') {
+      onClick?.()
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await auth.startGoogleOAuth(purpose, invite)
+    } catch {
+      setError(t('auth_errors.oauth_failed'))
+      setBusy(false)
+    }
+  }
+
   return (
-    <button
-      type="button"
-      className="fx-auth-oauth"
-      onClick={() => auth.startGoogleOAuth(purpose, invite)}
-    >
-      <GoogleMark />
-      <span>{label ?? t('auth.continue_with_google')}</span>
-    </button>
+    <>
+      <button
+        type="button"
+        className="fx-auth-oauth"
+        disabled={busy}
+        aria-busy={busy || undefined}
+        onClick={() => void start()}
+      >
+        <GoogleMark />
+        <span>{label ?? t('auth.continue_with_google')}</span>
+      </button>
+      {error && <div className="fx-auth-error" role="alert">{error}</div>}
+    </>
   )
 }
 

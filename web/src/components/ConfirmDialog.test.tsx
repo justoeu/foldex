@@ -71,6 +71,41 @@ describe('ConfirmDialog', () => {
     expect(onResolved).toHaveBeenCalledWith(false)
   })
 
+  it('lets Enter activate the focused cancel button', async () => {
+    const onResolved = vi.fn()
+    renderWithProviders(
+      <ConfirmProvider>
+        <TriggerFlow title="Delete?" onResolved={onResolved} />
+      </ConfirmProvider>,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('trigger'))
+    const cancelBtn = screen.getByRole('button', { name: /cancel/i })
+    expect(cancelBtn).toHaveFocus()
+
+    await user.keyboard('{Enter}')
+
+    expect(onResolved).toHaveBeenCalledOnce()
+    expect(onResolved).toHaveBeenCalledWith(false)
+  })
+
+  it('lets Enter activate the focused confirm button', async () => {
+    const onResolved = vi.fn()
+    renderWithProviders(
+      <ConfirmProvider>
+        <TriggerFlow title="Delete?" onResolved={onResolved} />
+      </ConfirmProvider>,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('trigger'))
+    screen.getByRole('button', { name: /confirm/i }).focus()
+
+    await user.keyboard('{Enter}')
+
+    expect(onResolved).toHaveBeenCalledOnce()
+    expect(onResolved).toHaveBeenCalledWith(true)
+  })
+
   it('closes the dialog after confirmation', async () => {
     renderWithProviders(
       <ConfirmProvider>

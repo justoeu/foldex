@@ -75,17 +75,25 @@ func burnDummyHash(password string) {
 
 // Handler serves /api/auth.
 type Handler struct {
-	repo    *Repository
-	mw      *Middleware
-	mailer  mailer.Mailer
-	cookies CookieOptions
-	ttl     SessionTTL
-	logger  *slog.Logger
-	baseURL string
+	repo       *Repository
+	mw         *Middleware
+	mailer     mailer.Mailer
+	dispatcher *mailer.Dispatcher
+	cookies    CookieOptions
+	ttl        SessionTTL
+	logger     *slog.Logger
+	baseURL    string
 
 	// cipher encrypts TOTP seeds at rest. Nil only when the auth stack is not
 	// wired at all; every 2FA route checks it before use.
-	cipher              *secrets.Cipher
+	cipher  *secrets.Cipher
+	codeMAC *CodeMAC
+	// Instance-scoped so concurrency tests can stop after cryptographic
+	// verification without introducing process-global synchronization.
+	afterTOTPVerification func(context.Context, authctx.UserID, TOTPProof)
+
+	// The authenticator cipher and codeMAC are both rooted in
+	// AUTH_ENCRYPTION_KEY, but codeMAC holds only purpose-separated derived keys.
 	totpIssuer          string
 	require2FAForAdmins bool
 
@@ -104,6 +112,9 @@ type Handler struct {
 	// not apply here because there is no challenge — without this the two
 	// step-up endpoints accept unlimited codes.
 	stepUpUser *attemptlimit.Limiter
+	// stepUpPasswordUser independently caps password guesses before a session
+	// can mint a fresh credential proof.
+	stepUpPasswordUser *attemptlimit.Limiter
 	// oauthIP bounds how many redirect states one address can mint. Each one is
 	// a row an unauthenticated caller creates, so without a cap the table is a
 	// pre-auth disk-fill primitive.
@@ -116,12 +127,13 @@ type Handler struct {
 
 // HandlerConfig is the wiring internal/server hands in.
 type HandlerConfig struct {
-	Repo    *Repository
-	MW      *Middleware
-	Mailer  mailer.Mailer
-	Cookies CookieOptions
-	TTL     SessionTTL
-	Logger  *slog.Logger
+	Repo           *Repository
+	MW             *Middleware
+	Mailer         mailer.Mailer
+	MailDispatcher *mailer.Dispatcher
+	Cookies        CookieOptions
+	TTL            SessionTTL
+	Logger         *slog.Logger
 	// BaseURL is the public origin used to build invite links. It cannot be
 	// derived from the request: Host and X-Forwarded-Host are attacker-supplied,
 	// and a link built from them is a password-reset-poisoning primitive — the
@@ -131,7 +143,10 @@ type HandlerConfig struct {
 	// Cipher encrypts TOTP seeds at rest. Loaded via internal/pkg/keyfile with
 	// AllowEphemeral=false, because a regenerated key would make every stored
 	// seed undecryptable and lock every 2FA user out permanently.
-	Cipher     *secrets.Cipher
+	Cipher *secrets.Cipher
+	// CodeMAC holds purpose-separated HMAC subkeys derived from the same loaded
+	// AUTH_ENCRYPTION_KEY. The AES key itself is never reused as a code MAC key.
+	CodeMAC    *CodeMAC
 	TOTPIssuer string
 	// Require2FAForAdmins diverts an administrator without an authenticator
 	// into mandatory enrollment instead of straight into a session.
@@ -149,15 +164,17 @@ type HandlerConfig struct {
 
 func NewHandler(cfg HandlerConfig) *Handler {
 	return &Handler{
-		repo:    cfg.Repo,
-		mw:      cfg.MW,
-		mailer:  cfg.Mailer,
-		cookies: cfg.Cookies,
-		ttl:     cfg.TTL,
-		logger:  cfg.Logger,
-		baseURL: strings.TrimRight(cfg.BaseURL, "/"),
+		repo:       cfg.Repo,
+		mw:         cfg.MW,
+		mailer:     cfg.Mailer,
+		dispatcher: cfg.MailDispatcher,
+		cookies:    cfg.Cookies,
+		ttl:        cfg.TTL,
+		logger:     cfg.Logger,
+		baseURL:    strings.TrimRight(cfg.BaseURL, "/"),
 
 		cipher:              cfg.Cipher,
+		codeMAC:             cfg.CodeMAC,
 		totpIssuer:          cfg.TOTPIssuer,
 		require2FAForAdmins: cfg.Require2FAForAdmins,
 		google:              cfg.Google,
@@ -169,14 +186,15 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		// A reset request costs an e-mail to a third party, so the per-address
 		// budget is tighter than the per-IP one: the abuse worth preventing is
 		// mailbombing one victim, not making many requests.
-		pwResetIP:    attemptlimit.New(10, time.Hour),
-		pwResetEmail: attemptlimit.New(3, time.Hour),
-		stepUpUser:   attemptlimit.New(5, 15*time.Minute),
-		oauthIP:      attemptlimit.New(30, time.Hour),
+		pwResetIP:          attemptlimit.New(10, time.Hour),
+		pwResetEmail:       attemptlimit.New(3, time.Hour),
+		stepUpUser:         attemptlimit.New(5, 15*time.Minute),
+		stepUpPasswordUser: attemptlimit.New(5, 15*time.Minute),
+		oauthIP:            attemptlimit.New(30, time.Hour),
 
 		features: map[string]any{
 			"google_oauth":   cfg.Google != nil && cfg.Google.Enabled(),
-			"two_factor":     cfg.Cipher != nil,
+			"two_factor":     cfg.Cipher != nil && cfg.CodeMAC != nil,
 			"email_delivery": cfg.Mailer.Driver() == "smtp",
 		},
 	}
@@ -193,7 +211,7 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Post("/bootstrap", h.Bootstrap)
 	r.Post("/login", h.Login)
 	r.Post("/refresh", h.Refresh)
-	r.Get("/invites/{token}", h.LookupInvite)
+	r.With(h.mw.Optional).Post("/invites/lookup", h.LookupInvite)
 	r.Post("/invites/accept", h.AcceptInvite)
 
 	r.Post("/password/forgot", h.ForgotPassword)
@@ -220,20 +238,16 @@ func (h *Handler) Mount(r chi.Router) {
 	// "not configured", which beats a 404 on a route the operator believes they
 	// turned on.
 	//
-	// /start uses Optional because purpose=link needs the session while the
-	// other purposes have none, and /convert runs on the pre-auth cookie —
-	// exactly like /2fa/verify, and protected the same way: fx_pa is Strict, so
-	// a cross-site POST never carries it.
+	// GET /start serves login. Invite acceptance uses a body-only POST, while
+	// linking is a separate authenticated POST whose body proves the current
+	// password and second factor. /convert runs on the pre-auth cookie, exactly
+	// like /2fa/verify.
 	r.Route("/oauth", func(or chi.Router) {
-		// RejectAPIToken sits on /start even though the route is Optional, and
-		// it is NOT decoration: purpose=link binds the account the principal
-		// names, so without it a stolen content-scoped token would attach the
-		// thief's OWN Google account to the victim — and the callback needs no
-		// credential at all, only the state cookie the thief already has. A
-		// token pasted into an extension's config would be account takeover.
-		// The middleware passes anonymous callers straight through, which is
-		// what purpose=login and purpose=accept_invite need.
+		// The optional GET still rejects API tokens so changing its purpose
+		// parser cannot silently reopen linking to content credentials.
 		or.With(h.mw.Optional, h.mw.RejectAPIToken).Get("/google/start", h.OAuthStart)
+		or.With(h.mw.Optional, h.mw.RejectAPIToken).Post("/google/invite/start", h.OAuthInviteStart)
+		or.With(h.mw.Authenticate, h.mw.RejectAPIToken).Post("/google/start", h.OAuthLinkStart)
 		or.Get("/google/callback", h.OAuthCallback)
 		or.Post("/google/convert", h.OAuthConvert)
 		or.With(h.mw.Authenticate, h.mw.RejectAPIToken).Delete("/google", h.OAuthUnlink)
@@ -282,7 +296,7 @@ func (h *Handler) SweepLimiters(olderThan time.Duration) int {
 	n := 0
 	for _, l := range []*attemptlimit.Limiter{
 		h.loginByIP, h.loginByEmail, h.bootstrapIP, h.inviteIP,
-		h.pwResetIP, h.pwResetEmail, h.stepUpUser, h.oauthIP,
+		h.pwResetIP, h.pwResetEmail, h.stepUpUser, h.stepUpPasswordUser, h.oauthIP,
 	} {
 		n += l.Sweep(olderThan)
 	}
@@ -358,7 +372,7 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	h.bootstrapIP.CommitSuccess("bootstrap:" + ip)
 	committed = true
 
-	h.issueAndRespond(w, r, user)
+	h.completeLogin(w, r, user, false)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -436,12 +450,12 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 // Logout revokes the current session and always answers 204.
 //
 // It never fails. Signing out is a user telling the product to forget them; the
-// only wrong outcome is one where their cookies survive. So the cookies are
-// cleared unconditionally, before the (best-effort) revocation is even
-// attempted.
+// only wrong outcome is one where their cookies survive. The cookies are
+// therefore cleared even when the best-effort revocation fails.
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
-	if raw := cookieValue(r, CookieAccess); raw != "" {
-		h.repo.RevokeByAccessToken(r.Context(), raw, ReasonLogout)
+	if err := h.repo.RevokeFamilyByTokens(r.Context(), cookieValue(r, CookieAccess),
+		cookieValue(r, CookieRefresh), ReasonLogout); err != nil {
+		h.logger.Error("logout revoke family", "err", err)
 	}
 	if p, ok := authctx.FromContext(r.Context()); ok && p.SessionID != 0 {
 		h.mw.forgetTouch(p.SessionID)
@@ -475,7 +489,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		// The family is already dead by the time this returns. Warn the owner
 		// out-of-band: if the token really was stolen, this is the only signal
 		// they will get.
-		h.notifyReuse(res.UserID)
+		h.notifyReuse(r.Context(), res.UserID)
 		h.cookies.ClearSession(w)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "session_revoked",
 			"session was revoked; sign in again"))
@@ -507,25 +521,17 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, res.Tokens.CSRF))
 }
 
-// notifyReuse tells the owner their sessions were killed. Fire-and-forget on a
-// detached context: the response must not wait on SMTP, and the request's own
-// context is cancelled the moment it returns.
-func (h *Handler) notifyReuse(uid authctx.UserID) {
+// notifyReuse tells the owner their sessions were killed.
+func (h *Handler) notifyReuse(ctx context.Context, uid authctx.UserID) {
 	h.logger.Warn("refresh token reuse detected — session family revoked", "user_id", int64(uid))
 	if uid == 0 {
 		return
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		email, err := h.repo.EmailForUser(ctx, uid)
-		if err != nil {
-			return
-		}
-		if err := h.mailer.Send(ctx, mailer.SessionRevokedMessage(email)); err != nil {
-			h.logger.Error("reuse notification", "err", err)
-		}
-	}()
+	email, err := h.repo.EmailForUser(ctx, uid)
+	if err != nil {
+		return
+	}
+	h.enqueueMail(mailer.SessionRevokedMessage(email), "reuse notification")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -607,7 +613,7 @@ func (h *Handler) RevokeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.repo.RevokeSession(r.Context(), p.UserID, id, ReasonLogout); err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	h.mw.forgetTouch(id)
@@ -641,27 +647,16 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	switch err := h.repo.VerifyUserPassword(r.Context(), p.UserID, in.CurrentPassword); {
+	switch err := h.repo.ChangePassword(r.Context(), p.UserID, p.SessionID,
+		in.CurrentPassword, in.NewPassword); {
 	case errors.Is(err, ErrBadCredentials), errors.Is(err, ErrPasswordMissing):
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
 			"current password is incorrect"))
 		return
 	case err != nil:
-		h.logger.Error("change password verify", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-	if err := h.repo.SetPassword(r.Context(), p.UserID, in.NewPassword); err != nil {
 		h.logger.Error("change password", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
-	}
-	// Keep the caller signed in on THIS device and drop the rest — a password
-	// change is how a user reacts to suspected compromise, so every other
-	// session has to die, but signing them out of the browser they are actively
-	// using would be hostile.
-	if err := h.repo.RevokeAllExcept(r.Context(), p.UserID, p.SessionID, ReasonPasswordChanged); err != nil {
-		h.logger.Error("change password revoke others", "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -670,12 +665,19 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 // Invites
 // ─────────────────────────────────────────────────────────────────────
 
-// LookupInvite resolves a raw token so the accept screen can show the address
-// it is bound to. 404 for anything unusable — expired, revoked, already used —
-// so the endpoint reveals nothing beyond "this exact token works or it does
-// not".
+type lookupInviteInput struct {
+	Token string `json:"token"`
+}
+
+// LookupInvite resolves a token from the request body so reverse-proxy access
+// logs never receive it. Every unusable token has the same 404 response.
 func (h *Handler) LookupInvite(w http.ResponseWriter, r *http.Request) {
-	inv, err := h.repo.LookupInvite(r.Context(), chi.URLParam(r, "token"))
+	in, err := httperr.DecodeJSON[lookupInviteInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	inv, err := h.repo.LookupInvite(r.Context(), in.Token)
 	if err != nil {
 		httperr.Write(w, httperr.ErrNotFound)
 		return
@@ -693,7 +695,7 @@ type acceptInviteInput struct {
 	Password string `json:"password"`
 }
 
-// AcceptInvite creates the account and signs the new user straight in.
+// AcceptInvite creates the account and completes its login policy.
 func (h *Handler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	key := "invite:" + ip
@@ -739,7 +741,7 @@ func (h *Handler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 	h.inviteIP.CommitSuccess(key)
 	settled = true
 
-	h.issueAndRespond(w, r, user)
+	h.completeLogin(w, r, user, false)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -750,7 +752,8 @@ func (h *Handler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 // payload. Every successful credential path funnels through here, so there is
 // exactly one place that decides what "signed in" means on the wire.
 func (h *Handler) issueAndRespond(w http.ResponseWriter, r *http.Request, user User) {
-	tok, _, err := h.repo.IssueSession(r.Context(), user.ID, h.ttl, clientIP(r), r.UserAgent())
+	tok, _, err := h.repo.IssueSession(r.Context(), user.ID, user.TokenVersion,
+		h.ttl, clientIP(r), r.UserAgent())
 	if err != nil {
 		h.logger.Error("issue session", "err", err)
 		httperr.Write(w, httperr.ErrInternal)

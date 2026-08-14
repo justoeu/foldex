@@ -1,14 +1,23 @@
 package notes
 
 import (
+	"context"
 	"errors"
 	"html/template"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/pkg/domainerr"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/publictarget"
 )
+
+// PublicNoteResolver resolves and records views of public notes.
+type PublicNoteResolver interface {
+	SystemViewAndResolveByID(ctx context.Context, id int64) (Note, error)
+	SystemViewAndResolveBySlug(ctx context.Context, slug string) (Note, error)
+}
 
 // PublicHandler serves the read-only rendered note page at GET /n/{id-or-slug},
 // mounted outside /api (same place /go/{id-or-slug} lives) so it's reachable
@@ -16,7 +25,7 @@ import (
 // way a link is. Unlike /go/, this renders content rather than redirecting:
 // a note has no external URL to forward to.
 type PublicHandler struct {
-	repo *Repository
+	repo PublicNoteResolver
 	// allowNumericIDs re-enables /n/42 — off by default since ADR-32, and for
 	// a sharper reason than /go: this route RENDERS the note's content, so a
 	// walkable id space would expose other tenants' text, not just their
@@ -24,7 +33,7 @@ type PublicHandler struct {
 	allowNumericIDs bool
 }
 
-func NewPublicHandler(repo *Repository, allowNumericIDs bool) *PublicHandler {
+func NewPublicHandler(repo PublicNoteResolver, allowNumericIDs bool) *PublicHandler {
 	return &PublicHandler{repo: repo, allowNumericIDs: allowNumericIDs}
 }
 
@@ -38,16 +47,13 @@ func (h *PublicHandler) view(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_target", "target is required"))
 		return
 	}
-	// A plain 404, identical to an unknown slug — see redirect.Handler for the
-	// full argument. The note slug carries no session and no tenant, so id
-	// lookup here is an enumeration oracle over every account's notes.
-	if _, numeric := parsePositiveID(raw); numeric && !h.allowNumericIDs {
-		httperr.Write(w, httperr.ErrNotFound)
-		return
-	}
-	n, err := h.repo.SystemViewAndResolve(r.Context(), raw)
+	n, err := publictarget.Resolve(
+		r.Context(), raw, h.allowNumericIDs,
+		h.repo.SystemViewAndResolveByID,
+		h.repo.SystemViewAndResolveBySlug,
+	)
 	if err != nil {
-		if errors.Is(err, httperr.ErrNotFound) {
+		if errors.Is(err, domainerr.ErrNotFound) {
 			httperr.Write(w, httperr.ErrNotFound)
 			return
 		}

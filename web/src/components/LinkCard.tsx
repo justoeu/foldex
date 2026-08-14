@@ -1,335 +1,93 @@
-import { memo, useCallback, useEffect, useState } from 'react'
+import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useQueryClient } from '@tanstack/react-query'
-import { Favicon } from './Favicon'
-import { TagChip } from './TagChip'
-import { Icon, I } from './icons'
-import { hostOf } from '../lib/url'
-import { goHref, mapCachedLinks } from '../api/links'
-import { mapCachedLinkEntries } from '../api/entries'
 import { safeImageUrl } from '../lib/url'
-import { relativeTime } from '../lib/time'
 import type { Link, MergeSource } from '../api/types'
+import { hasUnseenChange, useLinkCardInteractions } from './LinkCardInteractions'
+import { LinkCardBadges, LinkCardBody, LinkCardPreview } from './LinkCardParts'
 
 type Props = {
   link: Link
-  onEdit: (l: Link) => void
+  onEdit: (link: Link) => void
   density?: 'normal' | 'short' | 'medium' | 'tall'
-  // Drag-and-drop: card is the source of `application/x-foldex-link/<id>` and
-  // accepts a drop from another link card OR a note card (which triggers a
-  // link↔link or link↔note merge — see App.tsx's onMergeEntries).
   onMergeWith?: (source: MergeSource, targetId: number) => void
-  // Mutations lifted to parent (N1-NEX-010) so N cards don't each mount
-  // useDeleteLink/usePinLink/useRefreshPreview/useMarkChangeSeen/useConfirm.
-  onDelete: (l: Link) => void
-  onPin: (l: Link, pinned: boolean) => void
+  onDelete: (link: Link) => void
+  onPin: (link: Link, pinned: boolean) => void
   onRefreshPreview: (id: number) => void
   onMarkSeen: (id: number) => void
 }
 
-// Decide card height purely from how much content we have. Tall when a real
-// og:image was fetched AND known to load; medium when there's a description;
-// short otherwise. The `imageOk` argument lets the card collapse to the
-// no-image variant when the og:image URL fails at runtime instead of leaving
-// a broken-image icon in the preview area.
-function densityFor(link: Link, imageOk: boolean): 'tall' | 'medium' | 'short' {
-  if (link.og_image_url && imageOk) return 'tall'
+function densityFor(link: Link, imageVisible: boolean): 'tall' | 'medium' | 'short' {
+  if (link.og_image_url && imageVisible) return 'tall'
   if (link.description) return 'medium'
   return 'short'
 }
 
-// memo guards re-render storms in dense grids (200+ cards). LinkCard is a
-// pure function of (link, callbacks) — the callbacks are stable across parent
-// renders (useCallback) so the default shallow compare is correct.
+function cardClass(
+  link: Link,
+  density: 'tall' | 'medium' | 'short',
+  unseenChange: boolean,
+  dragging: boolean,
+  dragOver: boolean,
+): string {
+  return 'fx-card fx-card-' + density +
+    (link.pinned ? ' fx-card-pinned' : '') +
+    (unseenChange ? ' fx-card-update-alert' : '') +
+    (dragging ? ' fx-card-dragging' : '') +
+    (dragOver ? ' fx-card-drop-over' : '')
+}
+
 export const LinkCard = memo(LinkCardImpl)
 LinkCard.displayName = 'LinkCard'
 
-function LinkCardImpl({
-  link,
-  onEdit,
-  onMergeWith,
-  onDelete,
-  onPin,
-  onRefreshPreview,
-  onMarkSeen,
-}: Props) {
+function LinkCardImpl(props: Props) {
+  const { link, onEdit, onMergeWith, onDelete, onPin, onRefreshPreview, onMarkSeen } = props
   const { t } = useTranslation()
-  const qc = useQueryClient()
-  const [previewErrored, setPreviewErrored] = useState(false)
   const previewSrc = safeImageUrl(link.og_image_url)
-  const showPreview = !!previewSrc && !previewErrored
-  const density = densityFor(link, showPreview)
-  const togglePin = () => onPin(link, !link.pinned)
-
-  // "Unseen update" badge shows when:
-  //   - the worker has ever recorded a change for this link, AND
-  //   - the user hasn't acknowledged it (either change_seen_at is unset, or
-  //     it's older than the most recent change).
-  const hasUnseenChange =
-    !!link.last_change_detected_at &&
-    (!link.change_seen_at || link.change_seen_at < link.last_change_detected_at)
-  const [dragOver, setDragOver] = useState(false)
-  const [dragging, setDragging] = useState(false)
-
-  // Reset the preview-error flag when the URL changes (e.g. preview worker
-  // re-runs and stamps a new og:image_url, or the user uploads an image).
-  useEffect(() => {
-    setPreviewErrored(false)
-  }, [link.og_image_url])
-
-  // Optimistic bump: patch click_count + last_clicked_at in every cached
-  // links list immediately. The /go/:id redirect handler is the source of
-  // truth; the bump here is a hint that's reconciled the next time the user
-  // navigates / refetches.
-  const onGo = useCallback(() => {
-    const nowISO = new Date().toISOString()
-    mapCachedLinks(qc, (l) =>
-      l.id === link.id
-        ? { ...l, click_count: (l.click_count ?? 0) + 1, last_clicked_at: nowISO }
-        : l,
-    )
-    mapCachedLinkEntries(qc, (l) =>
-      l.id === link.id
-        ? { ...l, click_count: (l.click_count ?? 0) + 1, last_clicked_at: nowISO }
-        : l,
-    )
-  }, [qc, link.id])
+  const interaction = useLinkCardInteractions({
+    linkId: link.id,
+    previewUrl: link.og_image_url,
+    onMergeWith,
+  })
+  const showPreview = !!previewSrc && !interaction.previewErrored
+  const unseenChange = hasUnseenChange(link)
+  const actions = { onEdit, onDelete, onPin, onRefreshPreview, onMarkSeen }
 
   return (
     <article
-      className={
-        'fx-card fx-card-' + density +
-        (link.pinned ? ' fx-card-pinned' : '') +
-        (hasUnseenChange ? ' fx-card-update-alert' : '') +
-        (dragging ? ' fx-card-dragging' : '') +
-        (dragOver ? ' fx-card-drop-over' : '')
-      }
+      className={cardClass(
+        link,
+        densityFor(link, showPreview),
+        unseenChange,
+        interaction.dragging,
+        interaction.dragOver,
+      )}
       draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData('application/x-foldex-link', String(link.id))
-        e.dataTransfer.effectAllowed = 'move'
-        setDragging(true)
-      }}
-      onDragEnd={() => setDragging(false)}
-      onDragOver={(e) => {
-        // Accept other link cards AND note cards. Folder targets handle
-        // their own drop.
-        const raw = e.dataTransfer.types
-        if (!raw.includes('application/x-foldex-link') && !raw.includes('application/x-foldex-note')) return
-        e.preventDefault()
-        e.dataTransfer.dropEffect = 'move'
-      }}
-      onDragEnter={(e) => {
-        const raw = e.dataTransfer.types
-        if (raw.includes('application/x-foldex-link') || raw.includes('application/x-foldex-note')) setDragOver(true)
-      }}
-      onDragLeave={(e) => {
-        // Only clear when the leave is to outside the card (not a child).
-        const next = e.relatedTarget as Node | null
-        if (!next || !(e.currentTarget as Node).contains(next)) setDragOver(false)
-      }}
-      onDrop={(e) => {
-        setDragOver(false)
-        const linkRaw = e.dataTransfer.getData('application/x-foldex-link')
-        const noteRaw = e.dataTransfer.getData('application/x-foldex-note')
-        const source: MergeSource | null = linkRaw
-          ? { kind: 'link', id: Number(linkRaw) }
-          : noteRaw
-            ? { kind: 'note', id: Number(noteRaw) }
-            : null
-        if (!source || !source.id) return
-        if (source.kind === 'link' && source.id === link.id) return
-        e.preventDefault()
-        onMergeWith?.(source, link.id)
-      }}
+      onDragStart={interaction.onDragStart}
+      onDragEnd={interaction.onDragEnd}
+      onDragOver={interaction.onDragOver}
+      onDragEnter={interaction.onDragEnter}
+      onDragLeave={interaction.onDragLeave}
+      onDrop={interaction.onDrop}
     >
-      <button
-        className={'fx-card-pin-badge' + (link.pinned ? '' : ' fx-card-pin-off')}
-        onClick={(e) => {
-          e.stopPropagation()
-          togglePin()
-        }}
-        aria-label={link.pinned ? t('link_card.unpin') : t('link_card.pin')}
-        data-tooltip={link.pinned ? t('link_card.unpin_tooltip') : t('link_card.pin_top_tooltip')}
-        data-tooltip-side="left"
-      >
-        <Icon d={I.pin} size={13} stroke={2} />
-      </button>
-
-      {hasUnseenChange && (
-        <button
-          className="fx-card-update-badge"
-          onClick={(e) => {
-            e.stopPropagation()
-            onMarkSeen(link.id)
-          }}
-          aria-label={t('link_card.mark_seen_aria')}
-          data-tooltip={t('link_card.update_detected_tooltip', {
-            when: relativeTime(link.last_change_detected_at!, t),
-          })}
-          data-tooltip-side="left"
-        >
-          <Icon d={I.bell} size={13} stroke={2} />
-        </button>
-      )}
-
-      {showPreview && (
-        <a className="fx-preview fx-preview-img" href={goHref(link)} target="_blank" rel="noopener noreferrer" onClick={onGo}>
-          <img
-            src={previewSrc}
-            alt=""
-            referrerPolicy="no-referrer"
-            loading="lazy"
-            decoding="async"
-            onError={() => setPreviewErrored(true)}
-            style={{ width: '100%', height: '100%', objectFit: 'scale-down', display: 'block' }}
-          />
-        </a>
-      )}
-      <div className="fx-card-body">
-        <header className="fx-card-head">
-          <Favicon link={link} size={showPreview ? 28 : 36} />
-          <div className="fx-card-head-text">
-            <h3 className="fx-card-title">
-              <a href={goHref(link)} target="_blank" rel="noopener noreferrer" className="fx-card-title-link" onClick={onGo}>
-                {link.title}
-              </a>
-            </h3>
-            <div className="fx-card-host">{hostOf(link.url)}</div>
-          </div>
-        </header>
-
-        {link.description && (
-          <p className="fx-card-desc">{truncateDesc(link.description)}</p>
-        )}
-
-        {link.tags.length > 0 && (
-          <div className="fx-card-tags">
-            {link.tags.map((tag) => (
-              <TagChip key={tag.id} tag={tag} />
-            ))}
-          </div>
-        )}
-
-        <footer className="fx-card-foot">
-          <div className="fx-card-meta">
-            <span className="fx-meta-stat" data-tooltip={t('link_card.clicks_tooltip')} aria-label={t('link_card.clicks_tooltip')}>
-              <Icon d={I.flame} size={13} /> {link.click_count}
-            </span>
-            <span className="fx-meta-sep" />
-            <span className="fx-meta-stat" data-tooltip={t('link_card.last_click_tooltip')} aria-label={t('link_card.last_click_tooltip')}>
-              <Icon d={I.clock} size={13} /> {lastClick(link, t)}
-            </span>
-            {link.preview_status === 'failed' && !link.og_image_url && (
-              <>
-                <span className="fx-meta-sep" />
-                <span className="fx-meta-warn">
-                  <Icon d={I.alert} size={13} /> {t('link_card.preview_failed')}
-                </span>
-              </>
-            )}
-            {link.preview_status === 'pending' && (
-              <>
-                <span className="fx-meta-sep" />
-                <span className="fx-meta-stat" style={{ color: 'var(--fx-warn)' }}>
-                  <Icon d={I.clock} size={13} /> {t('link_card.capturing')}
-                </span>
-              </>
-            )}
-            {/* Gray-toned because the amber halo `.fx-card-update-alert`
-                owns the "you have an unseen update" signal. */}
-            {link.check_interval && (
-              <>
-                <span className="fx-meta-sep" />
-                <span
-                  className="fx-meta-stat fx-meta-monitor"
-                  data-tooltip={t('link_card.monitoring_tooltip', {
-                    interval: t('link_card.interval_' + link.check_interval),
-                  })}
-                  aria-label={t('link_card.monitoring_tooltip', {
-                    interval: t('link_card.interval_' + link.check_interval),
-                  })}
-                >
-                  <Icon d={I.bell} size={13} /> {t('link_card.monitoring')}
-                </span>
-              </>
-            )}
-          </div>
-
-          <div className="fx-card-actions">
-            {link.preview_status !== 'ok' && (
-              <button
-                className="fx-iconbtn"
-                data-tooltip={t('link_card.refresh_preview')}
-                data-tooltip-side="top"
-                aria-label={t('link_card.refresh_preview')}
-                onClick={() => onRefreshPreview(link.id)}
-              >
-                <Icon d={I.refresh} size={14} />
-              </button>
-            )}
-            <button
-              className="fx-iconbtn"
-              data-tooltip={t('link_card.edit_link')}
-              data-tooltip-side="top"
-              aria-label={t('common.edit')}
-              onClick={() => onEdit(link)}
-            >
-              <Icon d={I.pen} size={14} />
-            </button>
-            <button
-              className="fx-iconbtn fx-iconbtn-danger"
-              data-tooltip={t('link_card.delete_link')}
-              data-tooltip-side="top"
-              aria-label={t('common.delete')}
-              onClick={() => onDelete(link)}
-            >
-              <Icon d={I.trash} size={14} />
-            </button>
-            <a
-              className="fx-openbtn"
-              href={goHref(link)}
-              target="_blank"
-              rel="noopener noreferrer"
-              data-tooltip={t('link_card.open_action')}
-              data-tooltip-side="top"
-              aria-label={t('common.open_link_aria', { title: link.title })}
-              onClick={onGo}
-            >
-              <span className="fx-openbtn-go">{t('link_card.open_action')}</span>
-              <Icon d={I.arrowR} size={14} />
-            </a>
-          </div>
-        </footer>
-      </div>
+      <LinkCardBadges
+        link={link}
+        unseenChange={unseenChange}
+        actions={actions}
+        t={t}
+      />
+      <LinkCardPreview
+        link={link}
+        previewSrc={showPreview ? previewSrc : undefined}
+        onGo={interaction.onGo}
+        onError={interaction.onPreviewError}
+      />
+      <LinkCardBody
+        link={link}
+        showPreview={showPreview}
+        actions={actions}
+        onGo={interaction.onGo}
+        t={t}
+      />
     </article>
   )
-}
-
-// Cap the visible description at ~200 chars so a verbose Thingiverse-style
-// blurb (X-Axis upgrade compatibility lists, mod instructions, BOMs…)
-// doesn't blow the card to 30+ lines and crush the rest of the grid. We
-// prefer breaking at the last whitespace inside the budget so the cut
-// doesn't land mid-word; if there's no decent space in the last 30 chars
-// we fall back to a hard slice.
-function truncateDesc(s: string, max = 200): string {
-  if (s.length <= max) return s
-  const slice = s.slice(0, max)
-  const lastSpace = slice.lastIndexOf(' ')
-  if (lastSpace > max - 30) return slice.slice(0, lastSpace).trimEnd() + '…'
-  return slice.trimEnd() + '…'
-}
-
-function lastClick(link: Link, t: (key: string, opts?: Record<string, unknown>) => string): string {
-  if (!link.last_clicked_at) return t('link_card.never_clicked')
-  const ms = Date.now() - new Date(link.last_clicked_at).getTime()
-  const min = Math.floor(ms / 60000)
-  if (min < 1) return t('link_card.last_click_now')
-  if (min < 60) return t('link_card.last_click_minutes', { count: min })
-  const h = Math.floor(min / 60)
-  if (h < 24) return t('link_card.last_click_hours', { count: h })
-  const d = Math.floor(h / 24)
-  if (d === 1) return t('link_card.last_click_yesterday')
-  if (d < 30) return t('link_card.last_click_days', { count: d })
-  return new Date(link.last_clicked_at).toLocaleDateString()
 }

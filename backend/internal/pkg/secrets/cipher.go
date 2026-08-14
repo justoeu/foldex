@@ -11,10 +11,11 @@ import (
 // Cipher is authenticated symmetric encryption for secrets that must be
 // RECOVERABLE, not merely verifiable.
 //
-// Everything else in this package is one-way on purpose: session tokens,
-// recovery codes and OTPs are compared by hash, so the server never needs the
-// original back. A TOTP seed is the exception — validating a code requires the
-// seed itself, so hashing is not an option. Encryption is what remains, and
+// Everything else in this package is one-way on purpose: session tokens are
+// compared by hash, while low-entropy recovery codes and OTPs use keyed MACs.
+// The server never needs the original back. A TOTP seed is the exception:
+// validating a code requires the seed itself, so hashing is not an option.
+// Encryption is what remains, and
 // AES-256-GCM is chosen for the authentication tag: without it, a database with
 // write access becomes a seed-substitution attack, since a silently corrupted
 // seed is indistinguishable from a user whose authenticator drifted.

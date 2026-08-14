@@ -96,9 +96,15 @@ describe('useLinks', () => {
 describe('useCreateLink + useUpdateLink + useDeleteLink + useRefreshPreview', () => {
   it('creates a link', async () => {
     const { result } = renderHook(() => useCreateLink(), { wrapper })
-    const link = await result.current.mutateAsync({ url: 'https://hn', title: 'HN', tag_ids: [1] })
+    const link = await result.current.mutateAsync({
+      url: 'https://hn',
+      title: 'HN',
+      tag_ids: [1],
+      pending_tags: [{ name: 'news', color: '#22C55E' }],
+    })
     expect(link.id).toBe(1)
-    expect(link.tags[0].name).toBe('jira')
+    expect(link.tags.map((tag) => tag.name)).toEqual(['jira', 'news'])
+    expect(state.tags.some((tag) => tag.name === 'news')).toBe(true)
   })
 
   it('updates a link', async () => {

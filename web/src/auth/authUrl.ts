@@ -1,5 +1,5 @@
 /**
- * Tokens that arrive in the URL from an e-mail link.
+ * Tokens that arrive in the fragment of an e-mail link.
  *
  * They are read and stripped at MODULE SCOPE — before React renders anything —
  * and that timing is the whole point. Doing it in an effect would break under
@@ -8,9 +8,9 @@
  * screen would flash and then vanish. Reading once at import time gives every
  * consumer the same answer for the lifetime of the page.
  *
- * The token is removed from the address bar immediately so it does not end up
- * in browser history, in a screenshot, or in the Referer header of the next
- * outbound request — an invite token is a credential.
+ * Fragments never reach the initial HTTP request or nginx access log. The token
+ * is also removed from the address bar immediately so it does not remain in
+ * browser history or screenshots.
  */
 export type UrlTokens = {
   invite?: string
@@ -30,22 +30,38 @@ function readAndStrip(): UrlTokens {
   if (typeof window === 'undefined') return {}
 
   const url = new URL(window.location.href)
-  const params = url.searchParams
+  const query = url.searchParams
+  const fragment = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : '')
   const tokens: UrlTokens = {
-    invite: params.get('invite') ?? undefined,
-    reset: params.get('reset') ?? undefined,
-    verify: params.get('verify') ?? undefined,
-    oauth: params.get('oauth') ?? undefined,
-    oauthError: params.get('oauth_error') ?? undefined,
+    invite: fragment.get('invite') ?? undefined,
+    reset: fragment.get('reset') ?? undefined,
+    verify: fragment.get('verify') ?? undefined,
+    oauth: query.get('oauth') ?? undefined,
+    oauthError: query.get('oauth_error') ?? undefined,
   }
 
-  const consumed = ['invite', 'reset', 'verify', 'oauth', 'oauth_error']
-  const hadAny = consumed.some((k) => params.has(k))
+  const credentialKeys = ['invite', 'reset', 'verify']
+  const markerKeys = ['oauth', 'oauth_error']
+  const hadFragmentCredential = credentialKeys.some((k) => fragment.has(k))
+  const hadAny =
+    hadFragmentCredential ||
+    credentialKeys.some((k) => query.has(k)) ||
+    markerKeys.some((k) => query.has(k))
   if (hadAny) {
-    consumed.forEach((k) => params.delete(k))
+    credentialKeys.forEach((k) => {
+      fragment.delete(k)
+      // Query credentials are never consumed, but remove stale links so they
+      // do not leak again after the already-exposed initial request.
+      query.delete(k)
+    })
+    markerKeys.forEach((k) => query.delete(k))
+    if (hadFragmentCredential) {
+      const remainingFragment = fragment.toString()
+      url.hash = remainingFragment ? `#${remainingFragment}` : ''
+    }
     // replaceState, not pushState: the URL carrying the token must not remain
     // reachable with the Back button.
-    window.history.replaceState({}, '', url.pathname + (params.toString() ? `?${params}` : '') + url.hash)
+    window.history.replaceState({}, '', url.pathname + (query.toString() ? `?${query}` : '') + url.hash)
   }
   return tokens
 }

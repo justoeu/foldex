@@ -94,6 +94,89 @@ func TestPersistedKeyIsReusedAcrossLoads(t *testing.T) {
 	}
 }
 
+func TestLoadDoesNotReplaceInvalidPersistedKey(t *testing.T) {
+	t.Parallel()
+
+	for name, original := range map[string][]byte{
+		"malformed base64": []byte("not-base64"),
+		"short key":        []byte(base64.StdEncoding.EncodeToString(make([]byte, 8))),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "key")
+			if err := os.WriteFile(path, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg := baseConfig()
+			cfg.Path = path
+			cfg.AutoGenerate = true
+
+			if _, err := Load(cfg, quietLogger()); err == nil {
+				t.Fatal("invalid persisted key was replaced instead of aborting")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, original) {
+				t.Fatalf("persisted key changed: got %q, want %q", got, original)
+			}
+		})
+	}
+}
+
+func TestLoadPropagatesPersistedKeyIOError(t *testing.T) {
+	t.Parallel()
+	path := t.TempDir()
+	cfg := baseConfig()
+	cfg.Path = path
+	cfg.AutoGenerate = true
+	cfg.AllowEphemeral = true
+
+	_, err := Load(cfg, quietLogger())
+	if err == nil {
+		t.Fatal("state-file I/O error was treated as an absent file")
+	}
+	if !strings.Contains(err.Error(), cfg.Name) || !strings.Contains(err.Error(), path) {
+		t.Fatalf("error does not identify the configured key and path: %v", err)
+	}
+}
+
+func TestLoadPropagatesPersistedKeyPermissionError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read files regardless of their mode")
+	}
+
+	path := filepath.Join(t.TempDir(), "key")
+	original := []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, MinKeyBytes)))
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+
+	cfg := baseConfig()
+	cfg.Path = path
+	cfg.AutoGenerate = true
+	cfg.AllowEphemeral = true
+	if _, err := Load(cfg, quietLogger()); err == nil {
+		t.Fatal("permission error was treated as an absent file")
+	}
+
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatal("permission failure replaced the persisted key")
+	}
+}
+
 // The persisted key must not be world- or group-readable. It is as sensitive as
 // the VAPID private key, and the process umask cannot be trusted to be strict.
 func TestPersistedKeyIs0600(t *testing.T) {
@@ -165,13 +248,13 @@ func TestEphemeralPolicy(t *testing.T) {
 
 	t.Run("refused: an unwritable path is a boot failure", func(t *testing.T) {
 		t.Parallel()
-		// A regular file used as a parent directory makes MkdirAll fail.
-		blocker := filepath.Join(t.TempDir(), "not-a-dir")
-		if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "key")
+		if err := os.Symlink(filepath.Join(dir, "missing", "key"), path); err != nil {
 			t.Fatal(err)
 		}
 		cfg := baseConfig()
-		cfg.Path = filepath.Join(blocker, "key")
+		cfg.Path = path
 		cfg.AutoGenerate = true
 		cfg.AllowEphemeral = false
 
@@ -182,12 +265,13 @@ func TestEphemeralPolicy(t *testing.T) {
 
 	t.Run("allowed: an unwritable path only warns", func(t *testing.T) {
 		t.Parallel()
-		blocker := filepath.Join(t.TempDir(), "not-a-dir")
-		if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "key")
+		if err := os.Symlink(filepath.Join(dir, "missing", "key"), path); err != nil {
 			t.Fatal(err)
 		}
 		cfg := baseConfig()
-		cfg.Path = filepath.Join(blocker, "key")
+		cfg.Path = path
 		cfg.AutoGenerate = true
 		cfg.AllowEphemeral = true
 

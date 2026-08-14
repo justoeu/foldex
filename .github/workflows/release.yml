@@ -1,13 +1,14 @@
 name: release
 
-# Publishes the Docker images to Docker Hub. Triggered by:
-#   push: main   → tags `latest` + short git SHA
-#   push: tag v* → tags semver (`vX.Y.Z`, `vX.Y`, `vX`) + `latest`
+# Publishes Docker images to Docker Hub only after a manual dispatch from main.
+# Input `vX.Y.Z` publishes semver + SHA + latest tags; a full 40-character SHA
+# publishes SHA and adds latest only at the current main tip. Pushing a branch
+# or tag never starts this workflow.
 #
 # Does NOT re-run lint/tests. The PR gate in ci.yml already validated the
-# code before it reached main; the version-bump commit that `make release-X`
-# pushes only touches version strings. Trusting the gate is the whole point
-# of the split — a merge to main no longer re-runs the test suite.
+# code before it reached main. A Docker-credential-free gate below rejects a
+# workflow loaded from any ref other than main, loose targets, and any SHA
+# outside origin/main before a publishing job can start.
 #
 # Build topology: 2 images × 2 architectures = 4 runners in parallel.
 # Each cell builds a **single-arch** image on a **native** runner
@@ -24,32 +25,80 @@ name: release
 #     start at the same minute on independent runners.
 # Reference: https://docs.docker.com/build/ci/github-actions/multi-platform/
 #
-# Requires repository secrets:
+# Requires secrets on the protected `release` GitHub environment. Delete any
+# repository-level copies: historical workflows do not declare this environment
+# and therefore cannot read environment-only credentials when an old tag is pushed.
 #   DOCKERHUB_USERNAME — Docker Hub login
 #   DOCKERHUB_TOKEN    — Docker Hub Personal Access Token (NOT the password)
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Strict vMAJOR.MINOR.PATCH tag or full 40-character commit SHA
+        required: true
+        type: string
 
 # Least-privilege default for every job.
 permissions:
   contents: read
 
-# Serialize every release.yml run into one group. `make release-X` pushes a
-# main commit AND a `v*` tag, firing two runs seconds apart — without this they
-# would both race to overwrite `:latest` via `imagetools create`. Keyed on the
-# (constant) workflow name, NOT github.ref, precisely because the two events
-# carry different refs and must share the group. cancel-in-progress: false so a
-# queued tag run waits for the in-flight main run to finish its push rather than
-# killing it mid-`imagetools create`; the tag run then publishes last and its
-# semver + latest tags win.
+# Serialize manual releases so two approved dispatches cannot race to overwrite
+# `:latest` via `imagetools create`.
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
 jobs:
+  validate-release-ref:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      create_tag: ${{ steps.validate.outputs.create_tag }}
+      is_semver: ${{ steps.validate.outputs.is_semver }}
+      publish_latest: ${{ steps.validate.outputs.publish_latest }}
+      release_tag: ${{ steps.validate.outputs.release_tag }}
+      short_sha: ${{ steps.validate.outputs.short_sha }}
+      target_sha: ${{ steps.validate.outputs.target_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prove release target
+        id: validate
+        env:
+          RELEASE_TARGET: ${{ inputs.target }}
+        run: bash scripts/validate-release-ref.sh "$RELEASE_TARGET" "$GITHUB_REF" "$GITHUB_SHA"
+
+  create-release-tag:
+    needs: [validate-release-ref, publish-manifest]
+    if: needs.validate-release-ref.outputs.create_tag == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create validated release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate-release-ref.outputs.release_tag }}
+          TARGET_SHA: ${{ needs.validate-release-ref.outputs.target_sha }}
+        run: |
+          tag_object_sha=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" \
+            -f tag="$RELEASE_TAG" \
+            -f message="Foldex release workflow run $GITHUB_RUN_ID" \
+            -f object="$TARGET_SHA" \
+            -f type=commit \
+            -f 'tagger[name]=github-actions[bot]' \
+            -f 'tagger[email]=41898282+github-actions[bot]@users.noreply.github.com' \
+            --jq .sha)
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$RELEASE_TAG" \
+            -f sha="$tag_object_sha"
+
   publish:
+    needs: validate-release-ref
+    environment: release
     permissions:
       contents: read
     strategy:
@@ -76,6 +125,9 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate-release-ref.outputs.target_sha }}
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -125,11 +177,12 @@ jobs:
       - name: Export digest
         # Drop a sentinel file named after the digest; the manifest job
         # downloads every per-image-per-arch artifact and reads the
-        # filenames to assemble the final manifest list.
+        # filenames to assemble the final manifest list. Prefixing the
+        # architecture lets the manifest job require one digest per matrix arm.
         run: |
           mkdir -p /tmp/digests
           digest='${{ steps.build.outputs.digest }}'
-          touch "/tmp/digests/${digest#sha256:}"
+          touch "/tmp/digests/${{ matrix.platform.tag }}-${digest#sha256:}"
 
       - name: Upload digest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -143,7 +196,8 @@ jobs:
   # manifest under the canonical tags. Runs in parallel for backend + web
   # via a matrix; each cell waits on its two `publish` matrix cells.
   publish-manifest:
-    needs: publish
+    needs: [validate-release-ref, publish]
+    environment: release
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -173,34 +227,57 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Tag computation: branch/tag → `latest` and `v1.2.3` style + a short
-      # SHA on every push so a deploy can pin to an exact commit if needed.
+      # Tag computation uses only outputs from the validated target. The
+      # workflow event itself always points at main and is not release data.
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ matrix.image.repo }}
           tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}},value=${{ needs.validate-release-ref.outputs.release_tag }},enable=${{ needs.validate-release-ref.outputs.is_semver == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.validate-release-ref.outputs.release_tag }},enable=${{ needs.validate-release-ref.outputs.is_semver == 'true' }}
+            type=semver,pattern={{major}},value=${{ needs.validate-release-ref.outputs.release_tag }},enable=${{ needs.validate-release-ref.outputs.is_semver == 'true' }}
+            type=raw,value=sha-${{ needs.validate-release-ref.outputs.short_sha }}
+            type=raw,value=latest,enable=${{ needs.validate-release-ref.outputs.publish_latest == 'true' }}
 
       - name: Create + push manifest list
         working-directory: /tmp/digests
         # The digest list comes from sentinel files dropped by the publish
-        # job — one filename per arch, named after the layer digest. Filter
-        # by 64 hex chars so a stray artifact (log, README, hidden file) can
-        # never sneak into the manifest as a fake digest.
+        # job — one filename per arch, named after the layer digest.
         run: |
-          # SC2046/SC2010: the word-splitting IS the point — each `-t <tag>` and
-          # each `<repo>@sha256:<digest>` must land as a separate argv entry.
-          # shellcheck disable=SC2046,SC2010
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") \
-            $(ls -1 | grep -E '^[a-f0-9]{64}$' | sed 's|^|${{ matrix.image.repo }}@sha256:|')
+          mapfile -t digest_files < <(printf '%s\n' * | grep -E '^(amd64|arm64)-[a-f0-9]{64}$')
+          if [[ ${#digest_files[@]} -ne 2 ]]; then
+            printf 'expected two architecture digests, got %d\n' "${#digest_files[@]}" >&2
+            exit 1
+          fi
+
+          declare -A seen=()
+          declare -A seen_digest=()
+          sources=()
+          for file in "${digest_files[@]}"; do
+            arch=${file%%-*}
+            digest=${file#*-}
+            if [[ -n ${seen[$arch]:-} ]]; then
+              printf 'duplicate digest for %s\n' "$arch" >&2
+              exit 1
+            fi
+            if [[ -n ${seen_digest[$digest]:-} ]]; then
+              printf 'same digest received for both architectures\n' >&2
+              exit 1
+            fi
+            seen[$arch]=1
+            seen_digest[$digest]=1
+            sources+=("${{ matrix.image.repo }}@sha256:$digest")
+          done
+          [[ -n ${seen[amd64]:-} && -n ${seen[arm64]:-} ]] || exit 1
+
+          mapfile -t tags < <(jq -r '.tags[]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            tag_args+=(-t "$tag")
+          done
+          docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
 
       - name: Inspect manifest
-        run: docker buildx imagetools inspect ${{ matrix.image.repo }}:${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect ${{ matrix.image.repo }}:sha-${{ needs.validate-release-ref.outputs.short_sha }}

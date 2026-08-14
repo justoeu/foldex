@@ -80,9 +80,6 @@ function ConfirmModal({
       role="dialog"
       aria-modal="true"
       aria-label={title}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') onConfirm()
-      }}
     >
       <div className="fx-modal fx-confirm">
         <header className="fx-modal-head">

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,7 +33,10 @@ type GoogleProvider interface {
 // oauthStateTTL bounds the redirect round-trip. Long enough to read a consent
 // screen and pick an account, short enough that an abandoned redirect is not a
 // standing invitation to complete someone else's flow.
-const oauthStateTTL = 10 * time.Minute
+const (
+	oauthStateTTL     = 10 * time.Minute
+	oauthLinkProofTTL = 5 * time.Minute
+)
 
 // CookieOAuth carries the redirect state. It is the browser half of the pair
 // whose server half lives in oauth_state; a callback must present BOTH, which
@@ -65,7 +69,8 @@ func (o CookieOptions) ClearOAuthState(w http.ResponseWriter) {
 // Start
 // ─────────────────────────────────────────────────────────────────────
 
-// OAuthStart mints PKCE + state and redirects the browser to Google.
+// OAuthStart mints PKCE + state for login or invite acceptance and redirects
+// the browser to Google. Linking uses OAuthLinkStart instead.
 //
 // A GET that writes a row, which is safe here for a specific reason: the row is
 // useless without the cookie set in the same response, and the callback demands
@@ -94,85 +99,208 @@ func (h *Handler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 		purpose = OAuthPurposeLogin
 	}
 
-	var owner *authctx.UserID
-	var inviteID *int64
-
 	switch purpose {
 	case OAuthPurposeLogin:
 	case OAuthPurposeLink:
-		// The account to link is the one the SESSION proves, resolved NOW and
-		// stored on the state row. Reading it at callback time instead would
-		// bind whatever session happens to exist when Google redirects back —
-		// and the redirect is attacker-timeable.
-		p, ok := authctx.FromContext(r.Context())
-		if !ok {
-			httperr.Write(w, httperr.New(http.StatusUnauthorized, "unauthorized",
-				"sign in before linking an account"))
-			return
-		}
-		// Belt and braces with RejectAPIToken on the mount. Linking is the one
-		// place where "which principal" decides whose account a NEW credential
-		// gets attached to, so it re-checks here rather than trusting that
-		// whoever mounts this route in future remembers the middleware.
-		if p.Via != authctx.ViaSession {
-			httperr.Write(w, httperr.New(http.StatusForbidden, "token_scope",
-				"an API token cannot link a provider account"))
-			return
-		}
-		uid := p.UserID
-		owner = &uid
+		httperr.Write(w, httperr.New(http.StatusMethodNotAllowed, "oauth_link_step_up_required",
+			"linking must start with a credential proof"))
+		return
 	case OAuthPurposeAcceptInvite:
-		inv, err := h.repo.LookupInvite(r.Context(), r.URL.Query().Get("invite"))
-		if err != nil {
-			httperr.Write(w, httperr.New(http.StatusNotFound, "invite_invalid",
-				"this invitation is no longer valid"))
-			return
-		}
-		id := inv.ID
-		inviteID = &id
+		httperr.Write(w, httperr.New(http.StatusMethodNotAllowed, "oauth_invite_post_required",
+			"invitation OAuth must start with a POST body"))
+		return
 	default:
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_purpose", "unknown purpose"))
 		return
 	}
 
-	pkce, err := oauthgoogle.NewPKCE()
+	state, target, err := h.oauthStartTarget(r.Context(), purpose, nil, nil, oauthStateTTL)
 	if err != nil {
-		h.logger.Error("oauth pkce", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-	state, err := h.repo.CreateOAuthState(r.Context(), ProviderGoogle, purpose, pkce.Verifier,
-		owner, inviteID, oauthStateTTL)
-	if err != nil {
-		h.logger.Error("oauth state", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-	target, err := h.google.AuthCodeURL(state, pkce.Challenge)
-	if err != nil {
-		h.logger.Error("oauth auth url", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-	// Nothing from the request reaches `target`: AuthCodeURL builds it from a
-	// package CONSTANT endpoint plus url.Values-encoded parameters the server
-	// generated itself. This check is defence in depth against the provider
-	// implementation, not against the caller — the same posture, and the same
-	// reasoning, as the scheme check in internal/redirect.
-	//
-	// https and not merely "absolute": the state token travels in this URL's
-	// query, so a downgrade to http would put it on the wire in cleartext and
-	// hand a network attacker the value that authorises the callback. A relative
-	// or scheme-less target would be worse still, since the browser would
-	// resolve it against foldex's own origin and the flow would fail somewhere
-	// far from the cause.
-	if !strings.HasPrefix(target, "https://") {
-		h.logger.Error("oauth auth url is not absolute https")
+		h.logger.Error("oauth start", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
 	h.cookies.SetOAuthState(w, state, oauthStateTTL)
 	http.Redirect(w, r, target, http.StatusFound) // nosemgrep: go.lang.security.injection.open-redirect.open-redirect
+}
+
+type oauthInviteStartInput struct {
+	Invite string `json:"invite"`
+}
+
+// OAuthInviteStart resolves the invitation from a POST body and returns the
+// provider URL as JSON. Optional authentication is intentional: anonymous
+// invitees can start, while an existing session still receives CSRF protection
+// from Middleware.Optional before this handler runs.
+func (h *Handler) OAuthInviteStart(w http.ResponseWriter, r *http.Request) {
+	if !h.oauthEnabled() {
+		httperr.Write(w, errOAuthDisabled())
+		return
+	}
+	in, err := httperr.DecodeJSON[oauthInviteStartInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	key := "oauth:" + clientIP(r)
+	if until, ok := h.oauthIP.Begin(key); !ok {
+		writeRateLimited(w, until)
+		return
+	}
+	defer h.oauthIP.CommitFail(key)
+
+	inv, err := h.repo.LookupInvite(r.Context(), in.Invite)
+	if err != nil {
+		httperr.Write(w, httperr.New(http.StatusNotFound, "invite_invalid",
+			"this invitation is no longer valid"))
+		return
+	}
+	state, target, err := h.oauthStartTarget(r.Context(), OAuthPurposeAcceptInvite, &inv.ID, nil, oauthStateTTL)
+	if err != nil {
+		h.logger.Error("oauth invite start", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	h.cookies.SetOAuthState(w, state, oauthStateTTL)
+	httperr.JSON(w, http.StatusOK, map[string]string{"redirect_url": target})
+}
+
+type oauthLinkStartInput struct {
+	CurrentPassword string `json:"current_password"`
+	Code            string `json:"code"`
+}
+
+type oauthLinkProof struct {
+	UserID       authctx.UserID
+	SessionID    int64
+	TokenVersion int
+}
+
+// OAuthLinkStart requires fresh credentials before minting a state that can add
+// a new sign-in method. The proofs stay in the POST body and never enter a URL.
+func (h *Handler) OAuthLinkStart(w http.ResponseWriter, r *http.Request) {
+	defer floorDuration(time.Now(), loginFloor)
+	if !h.oauthEnabled() {
+		httperr.Write(w, errOAuthDisabled())
+		return
+	}
+	in, err := httperr.DecodeJSON[oauthLinkStartInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	p, _ := authctx.FromContext(r.Context())
+	passwordKey := "stepup-password:" + strconv.FormatInt(int64(p.UserID), 10)
+	if until, ok := h.stepUpPasswordUser.Begin(passwordKey); !ok {
+		writeRateLimited(w, until)
+		return
+	}
+	tokenVersion, err := h.repo.VerifyUserPasswordEpoch(r.Context(), p.UserID, in.CurrentPassword)
+	switch {
+	case errors.Is(err, ErrBadCredentials), errors.Is(err, ErrPasswordMissing):
+		h.stepUpPasswordUser.CommitFail(passwordKey)
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
+			"current password is incorrect"))
+		return
+	case err != nil:
+		h.stepUpPasswordUser.Release(passwordKey)
+		h.logger.Error("oauth link password verification", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	default:
+		h.stepUpPasswordUser.CommitSuccess(passwordKey)
+	}
+
+	user, err := h.repo.GetUser(r.Context(), p.UserID)
+	if err != nil {
+		h.logger.Error("oauth link load user", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	if user.TOTPEnabled && !h.checkOAuthLinkSecondFactor(w, r, user, in.Code) {
+		return
+	}
+
+	oauthKey := "oauth:" + clientIP(r)
+	if until, ok := h.oauthIP.Begin(oauthKey); !ok {
+		writeRateLimited(w, until)
+		return
+	}
+	defer h.oauthIP.CommitFail(oauthKey)
+
+	proof := &oauthLinkProof{UserID: p.UserID, SessionID: p.SessionID, TokenVersion: tokenVersion}
+	state, target, err := h.oauthStartTarget(r.Context(), OAuthPurposeLink, nil, proof, oauthLinkProofTTL)
+	if errors.Is(err, ErrOAuthLinkInvalid) {
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
+			"credential proof is no longer valid"))
+		return
+	}
+	if err != nil {
+		h.logger.Error("oauth link start", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	h.cookies.SetOAuthState(w, state, oauthLinkProofTTL)
+	httperr.JSON(w, http.StatusOK, map[string]string{"redirect_url": target})
+}
+
+func (h *Handler) checkOAuthLinkSecondFactor(w http.ResponseWriter, r *http.Request, user User, code string) bool {
+	key := "stepup:" + strconv.FormatInt(int64(user.ID), 10)
+	until, ok := h.stepUpUser.Begin(key)
+	if !ok {
+		writeRateLimited(w, until)
+		return false
+	}
+
+	method := ""
+	if digits, numeric := numericOTP(code); numeric && h.cipher != nil {
+		proof := h.verifyTOTPProof(r.Context(), user.ID, digits)
+		if proof != nil && h.repo.ConsumeTOTPProof(r.Context(), user.ID, *proof) == nil {
+			method = methodTOTP
+		}
+	} else if normalized := normalizeRecoveryCode(code); len(normalized) == recoveryCodeChars && h.codeMAC != nil {
+		digest := h.codeMAC.RecoveryCodeDigest(user.ID, normalized)
+		if h.repo.ConsumeRecoveryCode(r.Context(), user.ID, digest) == nil {
+			method = methodRecovery
+		}
+	}
+	if method == "" {
+		h.stepUpUser.CommitFail(key)
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
+		return false
+	}
+	h.stepUpUser.CommitSuccess(key)
+	if method == methodRecovery {
+		h.notifyRecoveryCodeUsed(r.Context(), user)
+	}
+	return true
+}
+
+func (h *Handler) oauthStartTarget(ctx context.Context, purpose string, inviteID *int64,
+	proof *oauthLinkProof, ttl time.Duration) (state, target string, err error) {
+	pkce, err := oauthgoogle.NewPKCE()
+	if err != nil {
+		return "", "", err
+	}
+	if proof == nil {
+		state, err = h.repo.CreateOAuthState(ctx, ProviderGoogle, purpose, pkce.Verifier, nil, inviteID, ttl)
+	} else {
+		state, err = h.repo.CreateOAuthLinkState(ctx, ProviderGoogle, pkce.Verifier,
+			proof.UserID, proof.SessionID, proof.TokenVersion, ttl)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	target, err = h.google.AuthCodeURL(state, pkce.Challenge)
+	if err != nil {
+		return "", "", err
+	}
+	// The state token travels in this URL, so absolute HTTPS is mandatory even
+	// if a future provider implementation stops using a package constant.
+	if !strings.HasPrefix(target, "https://") {
+		return "", "", errors.New("oauth auth URL is not absolute HTTPS")
+	}
+	return state, target, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -226,6 +354,19 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if code == "" {
 		h.oauthRedirectError(w, r, "state_invalid")
 		return
+	}
+	if st.Purpose == OAuthPurposeLink {
+		err := h.repo.ValidateOAuthLinkProof(r.Context(), st,
+			cookieValue(r, CookieAccess), oauthLinkProofTTL)
+		switch {
+		case errors.Is(err, ErrOAuthLinkInvalid):
+			h.oauthRedirectError(w, r, "state_invalid")
+			return
+		case err != nil:
+			h.logger.Error("oauth link proof", "err", err)
+			h.oauthRedirectError(w, r, "server_error")
+			return
+		}
 	}
 	token, err := h.google.Exchange(r.Context(), code, st.Verifier)
 	if err != nil {
@@ -315,12 +456,13 @@ func (h *Handler) oauthFinishLogin(w http.ResponseWriter, r *http.Request, info 
 	// The Google subject is pinned onto the challenge row, not sent to the
 	// browser: the convert POST must attach the identity Google actually
 	// vouched for, never one the client names.
-	ok := h.beginChallengeFor(w, r, NewChallenge{
-		UserID:    candidate.ID,
-		Purpose:   PurposeConvertGoogle,
-		TTL:       challengeTTL,
-		IP:        clientIP(r),
-		UserAgent: r.UserAgent(),
+	ok := h.oauthBeginChallenge(w, r, NewChallenge{
+		UserID:       candidate.ID,
+		Purpose:      PurposeConvertGoogle,
+		TokenVersion: candidate.TokenVersion,
+		TTL:          challengeTTL,
+		IP:           clientIP(r),
+		UserAgent:    r.UserAgent(),
 		Identity: &linkedIdentity{
 			provider: ProviderGoogle, subject: info.Subject, email: info.Email,
 		},
@@ -341,8 +483,11 @@ func (h *Handler) oauthFinishLink(w http.ResponseWriter, r *http.Request, st OAu
 	// The addresses need NOT match. Linking a personal Gmail to a work account
 	// is legitimate precisely because the session already proved possession —
 	// which is also why linking without a session can never be allowed.
-	err := h.repo.LinkIdentity(r.Context(), *st.UserID, ProviderGoogle, info.Subject, info.Email)
+	err := h.repo.LinkIdentity(r.Context(), st, cookieValue(r, CookieAccess),
+		ProviderGoogle, info.Subject, info.Email, oauthLinkProofTTL)
 	switch {
+	case errors.Is(err, ErrOAuthLinkInvalid):
+		h.oauthRedirectError(w, r, "state_invalid")
 	case errors.Is(err, ErrIdentityTaken):
 		h.oauthRedirectError(w, r, "already_linked")
 	case errors.Is(err, ErrIdentityExists):
@@ -397,13 +542,17 @@ func (h *Handler) oauthFinishInvite(w http.ResponseWriter, r *http.Request, st O
 // replaces.
 func (h *Handler) oauthComplete(w http.ResponseWriter, r *http.Request, user User) {
 	if purpose := h.secondFactorPurpose(user); purpose != "" {
-		if !h.beginChallenge(w, r, user, purpose, false) {
+		if !h.oauthBeginChallenge(w, r, NewChallenge{
+			UserID: user.ID, Purpose: purpose, TokenVersion: user.TokenVersion,
+			TTL: challengeTTL, IP: clientIP(r), UserAgent: r.UserAgent(),
+		}) {
 			return
 		}
 		h.oauthRedirect(w, r, "two_factor")
 		return
 	}
-	tok, _, err := h.repo.IssueSession(r.Context(), user.ID, h.ttl, clientIP(r), r.UserAgent())
+	tok, _, err := h.repo.IssueSession(r.Context(), user.ID, user.TokenVersion,
+		h.ttl, clientIP(r), r.UserAgent())
 	if err != nil {
 		h.logger.Error("oauth issue session", "err", err)
 		h.oauthRedirectError(w, r, "server_error")
@@ -458,41 +607,16 @@ func (h *Handler) OAuthConvert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ch.OAuthSubject == "" {
-		// A convert challenge without a subject cannot exist through any code
-		// path; treating it as an internal error rather than silently linking
-		// nothing is what keeps that true.
-		h.logger.Error("convert challenge has no subject", "challenge", ch.ID)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-
-	switch err := h.repo.VerifyUserPassword(r.Context(), ch.UserID, in.Password); {
-	case errors.Is(err, ErrBadCredentials), errors.Is(err, ErrPasswordMissing):
-		httperr.Write(w, errInvalidCredentials())
-		return
-	case err != nil:
-		h.logger.Error("convert verify", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-
-	user, err := h.repo.GetUser(r.Context(), ch.UserID)
+	user, googleEmail, err := h.repo.ConvertToProvider(r.Context(), ch.ID, in.Password)
 	if err != nil {
-		h.logger.Error("convert load user", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-	// Re-read the status, the way Verify2FA does. The challenge is valid for ten
-	// minutes, and an administrator who disables an account inside that window
-	// expects it to stop — not to have its password silently retired and its
-	// credential set rewritten on the way out.
-	if user.Status != StatusActive {
-		httperr.Write(w, errInvalidCredentials())
-		return
-	}
-	if err := h.repo.ConvertToProvider(r.Context(), ch.UserID, ProviderGoogle,
-		ch.OAuthSubject, ch.OAuthEmail, ch.ID); err != nil {
+		if errors.Is(err, ErrChallengeInvalid) {
+			h.writeChallengeError(w, err)
+			return
+		}
+		if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
+			httperr.Write(w, errInvalidCredentials())
+			return
+		}
 		if errors.Is(err, ErrIdentityTaken) {
 			// The subject was linked elsewhere between the callback and this
 			// request. Rare, but it is the window a racing attacker would aim at.
@@ -517,12 +641,11 @@ func (h *Handler) OAuthConvert(w http.ResponseWriter, r *http.Request) {
 	// Set-Cookie is the one the browser keeps. Clearing afterwards would delete
 	// the credential the code screen is about to need.
 	h.cookies.ClearPreAuth(w)
-	h.sendAsync(mailer.AccountConvertedMessage(user.Email, ch.OAuthEmail), "account converted")
+	h.enqueueMail(mailer.AccountConvertedMessage(user.Email, googleEmail), "account converted")
 
 	// The password is gone, but the second factor is not: an account with an
 	// authenticator still owes a code. completeLogin is what decides that, and
 	// routing through it is why conversion cannot be used to shed 2FA.
-	user.HasPassword = false
 	h.completeLogin(w, r, user, false)
 }
 
@@ -549,28 +672,27 @@ func (h *Handler) OAuthUnlink(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	switch err := h.repo.VerifyUserPassword(r.Context(), p.UserID, in.Password); {
-	case errors.Is(err, ErrPasswordMissing):
-		httperr.Write(w, httperr.New(http.StatusConflict, "password_required",
-			"set a password before unlinking your Google account"))
-		return
-	case errors.Is(err, ErrBadCredentials):
-		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
-			"current password is incorrect"))
-		return
-	case err != nil:
-		h.logger.Error("unlink verify", "err", err)
+	user, err := h.repo.GetUser(r.Context(), p.UserID)
+	if err != nil {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-
-	switch err := h.repo.UnlinkIdentity(r.Context(), p.UserID, ProviderGoogle); {
+	switch err := h.repo.UnlinkIdentity(r.Context(), p.UserID, p.SessionID, user.TokenVersion,
+		ProviderGoogle, in.Password); {
+	case errors.Is(err, ErrPasswordMissing):
+		httperr.Write(w, httperr.New(http.StatusConflict, "password_required",
+			"set a password before unlinking your Google account"))
+	case errors.Is(err, ErrBadCredentials):
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
+			"current password is incorrect"))
 	case errors.Is(err, ErrIdentityMissing):
 		httperr.Write(w, httperr.New(http.StatusNotFound, "not_linked",
 			"no Google account is linked"))
 	case errors.Is(err, ErrLastCredential):
 		httperr.Write(w, httperr.New(http.StatusConflict, "password_required",
 			"set a password before unlinking your Google account"))
+	case errors.Is(err, ErrSessionInvalid):
+		h.writeSessionInvalid(w)
 	case err != nil:
 		h.logger.Error("unlink", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -598,6 +720,17 @@ func (h *Handler) ListIdentities(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) oauthEnabled() bool {
 	return h.google != nil && h.google.Enabled()
+}
+
+func (h *Handler) oauthBeginChallenge(w http.ResponseWriter, r *http.Request, in NewChallenge) bool {
+	raw, _, err := h.repo.CreateChallenge(r.Context(), in)
+	if err != nil {
+		h.logger.Error("create oauth challenge", "err", err)
+		h.oauthRedirectError(w, r, "server_error")
+		return false
+	}
+	h.cookies.SetPreAuth(w, raw, challengeTTL)
+	return true
 }
 
 func errOAuthDisabled() error {

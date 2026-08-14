@@ -20,7 +20,34 @@ func Hash(plain string) (string, error) {
 	return string(b), nil
 }
 
+// IsSupported reports whether hash is a structurally valid bcrypt digest at
+// the one cost this application generates and accepts.
+func IsSupported(hash string) bool {
+	if len(hash) != 60 || hash[0] != '$' || hash[1] != '2' || hash[3] != '$' || hash[6] != '$' {
+		return false
+	}
+	switch hash[2] {
+	case 'a', 'b', 'y':
+	default:
+		return false
+	}
+	cost, err := bcrypt.Cost([]byte(hash))
+	if err != nil || cost != bcrypt.DefaultCost {
+		return false
+	}
+	for i := 7; i < len(hash); i++ {
+		c := hash[i]
+		if c != '.' && c != '/' && (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
+}
+
 // Verify reports whether plain matches the bcrypt hash.
 func Verify(hash, plain string) bool {
+	if !IsSupported(hash) {
+		return false
+	}
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(plain)) == nil
 }

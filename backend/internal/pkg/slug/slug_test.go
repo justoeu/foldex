@@ -2,8 +2,25 @@ package slug
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
+
+	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/domainerr"
 )
+
+type titleScannerFunc func(context.Context, string, ...any) pgx.Row
+
+func (f titleScannerFunc) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return f(ctx, sql, args...)
+}
+
+type scanErrorRow struct{ err error }
+
+func (r scanErrorRow) Scan(...any) error { return r.err }
 
 func TestSlugify(t *testing.T) {
 	cases := []struct {
@@ -94,5 +111,41 @@ func TestUniqueAvailable(t *testing.T) {
 	}
 	if got != "foo-3" {
 		t.Fatalf("got %q want foo-3", got)
+	}
+}
+
+func TestAllocatorReservesAndReleasesInMemory(t *testing.T) {
+	a := NewAllocator([]string{"docs", "docs-2"})
+
+	got, err := a.Allocate("docs")
+	if err != nil || got != "docs-3" {
+		t.Fatalf("Allocate(docs) = %q, %v; want docs-3", got, err)
+	}
+
+	a.Release("docs-2")
+	got, err = a.Allocate("docs")
+	if err != nil || got != "docs-2" {
+		t.Fatalf("Allocate(docs) after release = %q, %v; want docs-2", got, err)
+	}
+}
+
+func TestResolveUpdateMissingRowUsesDomainNotFound(t *testing.T) {
+	var gotSQL string
+	var gotArgs []any
+	scanner := titleScannerFunc(func(_ context.Context, sql string, args ...any) pgx.Row {
+		gotSQL = sql
+		gotArgs = args
+		return scanErrorRow{err: pgx.ErrNoRows}
+	})
+
+	_, err := ResolveUpdate(t.Context(), scanner, authctx.UserID(7), "link", 42, nil, nil, "link")
+	if !errors.Is(err, domainerr.ErrNotFound) {
+		t.Fatalf("ResolveUpdate error = %v; want domainerr.ErrNotFound", err)
+	}
+	if !strings.Contains(gotSQL, "WHERE user_id = $1 AND id = $2") {
+		t.Fatalf("ResolveUpdate query = %q; want owner-first predicates", gotSQL)
+	}
+	if len(gotArgs) != 2 || gotArgs[0] != int64(7) || gotArgs[1] != int64(42) {
+		t.Fatalf("ResolveUpdate args = %#v; want owner then row id", gotArgs)
 	}
 }

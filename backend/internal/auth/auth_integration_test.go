@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -53,23 +54,21 @@ func TestMain(m *testing.M) {
 // Harness
 // ─────────────────────────────────────────────────────────────────────
 
-// captureMailer records what would have been sent, so tests can read an invite
-// link without standing up an SMTP server.
 // captureMailer records what would have been sent.
 //
-// It is mutex-guarded because most sends are fire-and-forget from a detached
-// goroutine (reuse notifications, OTP delivery, recovery-code warnings), so the
-// test goroutine polling for a message races the sender writing it. Without the
-// lock this is a genuine data race that `go test -race` reports and a plain run
-// hides.
+// It is mutex-guarded because dispatcher workers send concurrently with the
+// test goroutine polling for a message.
 type captureMailer struct {
 	mu sync.Mutex
 	// driver is what Driver() reports. It matters: the e-mail second factor is
 	// only offered when real SMTP is configured, because the `log` driver prints
 	// the message body to stdout and a second factor in the container log is not
 	// a second factor. Tests that exercise the OTP path set this to "smtp".
-	driver string
-	sent   []mailer.Message
+	driver  string
+	sent    []mailer.Message
+	err     error
+	gate    <-chan struct{}
+	started chan struct{}
 }
 
 func (c *captureMailer) Driver() string {
@@ -78,7 +77,27 @@ func (c *captureMailer) Driver() string {
 	}
 	return c.driver
 }
-func (c *captureMailer) Send(_ context.Context, m mailer.Message) error {
+func (c *captureMailer) Send(ctx context.Context, m mailer.Message) error {
+	c.mu.Lock()
+	err := c.err
+	gate := c.gate
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if c.started != nil {
+		select {
+		case c.started <- struct{}{}:
+		default:
+		}
+	}
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sent = append(c.sent, m)
@@ -97,6 +116,13 @@ func (c *captureMailer) reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sent = nil
+	c.err = nil
+}
+
+func (c *captureMailer) fail(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.err = err
 }
 
 // waitFor blocks until a message addressed to `to` arrives, and returns the
@@ -117,11 +143,13 @@ func (c *captureMailer) waitFor(t *testing.T, to string) mailer.Message {
 }
 
 type harness struct {
-	pool   *pgxpool.Pool
-	router http.Handler
-	mail   *captureMailer
-	repo   *auth.Repository
-	cipher *secrets.Cipher
+	pool     *pgxpool.Pool
+	router   http.Handler
+	mail     *captureMailer
+	dispatch *mailer.Dispatcher
+	repo     *auth.Repository
+	cipher   *secrets.Cipher
+	codeMAC  *auth.CodeMAC
 }
 
 const testBaseURL = "https://foldex.test"
@@ -155,7 +183,11 @@ type harnessOpts struct {
 	// Google injects an OAuth provider double. Nil leaves the routes mounted
 	// but reporting "not configured", which is what an instance without client
 	// credentials does.
-	Google auth.GoogleProvider
+	Google                auth.GoogleProvider
+	MailWorkers           int
+	MailQueue             int
+	MailGate              <-chan struct{}
+	AfterTOTPVerification func(context.Context, authctx.UserID, auth.TOTPProof)
 }
 
 // testCipher is a FIXED key, so a test can assert that a seed encrypted in one
@@ -168,13 +200,18 @@ func testCipher(t *testing.T) *secrets.Cipher { return testCipherSeeded(t, 0) }
 // what a regenerated key file produces on the next boot.
 func testCipherSeeded(t *testing.T, seed byte) *secrets.Cipher {
 	t.Helper()
+	key := testAuthKey(seed)
+	c, err := secrets.NewCipher(key)
+	require.NoError(t, err)
+	return c
+}
+
+func testAuthKey(seed byte) []byte {
 	key := make([]byte, 32)
 	for i := range key {
 		key[i] = seed + byte(i*7)
 	}
-	c, err := secrets.NewCipher(key)
-	require.NoError(t, err)
-	return c
+	return key
 }
 
 func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness {
@@ -182,24 +219,37 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	repo := auth.NewRepository(pool)
 	mail := &captureMailer{}
+	if opts.MailGate != nil {
+		mail.gate = opts.MailGate
+		mail.started = make(chan struct{}, 1)
+	}
 	if opts.SMTP {
 		mail.driver = "smtp"
 	}
+	dispatch := mailer.NewDispatcher(context.Background(), mail, mailer.DispatcherOptions{
+		Workers: opts.MailWorkers, QueueSize: opts.MailQueue,
+	}, logger)
+	t.Cleanup(dispatch.Stop)
 	cookies := auth.CookieOptions{Secure: true}
-	mw := auth.NewMiddleware(repo, cookies, logger)
+	mw := auth.NewMiddleware(repo, cookies, logger, opts.Require2FAForAdmins)
 
 	cfg := auth.HandlerConfig{
-		Repo: repo, MW: mw, Mailer: mail, Cookies: cookies,
+		Repo: repo, MW: mw, Mailer: mail, MailDispatcher: dispatch, Cookies: cookies,
 		TTL: auth.DefaultTTL(), Logger: logger, BaseURL: testBaseURL,
 		Require2FAForAdmins: opts.Require2FAForAdmins,
 		Google:              opts.Google,
 	}
 	if opts.TwoFactor || opts.Require2FAForAdmins {
+		key := testAuthKey(opts.CipherSeed)
 		cfg.Cipher = testCipherSeeded(t, opts.CipherSeed)
+		var err error
+		cfg.CodeMAC, err = auth.NewCodeMAC(key)
+		require.NoError(t, err)
 		cfg.TOTPIssuer = "Foldex (test)"
 	}
 	h := auth.NewHandler(cfg)
-	admin := auth.NewAdminHandler(repo, mail, logger, testBaseURL)
+	auth.SetTOTPVerificationHookForTest(h, opts.AfterTOTPVerification)
+	admin := auth.NewAdminHandler(repo, mail, dispatch, logger, testBaseURL)
 
 	r := chi.NewRouter()
 	r.Route("/api", func(api chi.Router) {
@@ -225,7 +275,24 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 			})
 		})
 	})
-	return &harness{pool: pool, router: r, mail: mail, repo: repo, cipher: cfg.Cipher}
+	return &harness{
+		pool: pool, router: r, mail: mail, dispatch: dispatch, repo: repo,
+		cipher: cfg.Cipher, codeMAC: cfg.CodeMAC,
+	}
+}
+
+func saturateMailDispatcher(t *testing.T, h *harness) {
+	t.Helper()
+	require.NoError(t, h.dispatch.Enqueue(mailer.Message{To: "active@example.com"}, "test active"))
+	select {
+	case <-h.mail.started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "mail worker did not start")
+	}
+	require.NoError(t, h.dispatch.Enqueue(mailer.Message{To: "queued@example.com"}, "test queued"))
+	assert.ErrorIs(t,
+		h.dispatch.Enqueue(mailer.Message{To: "rejected@example.com"}, "test rejected"),
+		mailer.ErrQueueFull)
 }
 
 // client is a tiny cookie-jar HTTP client over the in-process router.
@@ -235,8 +302,32 @@ type client struct {
 	cookies map[string]string
 }
 
+type delayedResponseWriter struct {
+	*httptest.ResponseRecorder
+	reached chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *delayedResponseWriter) WriteHeader(status int) {
+	w.once.Do(func() {
+		close(w.reached)
+		<-w.release
+	})
+	w.ResponseRecorder.WriteHeader(status)
+}
+
 func (h *harness) client(t *testing.T) *client {
 	return &client{t: t, h: h, cookies: map[string]string{}}
+}
+
+func clientOnHarness(t *testing.T, h *harness, from *client) *client {
+	t.Helper()
+	c := h.client(t)
+	for name, value := range from.cookies {
+		c.cookies[name] = value
+	}
+	return c
 }
 
 func (c *client) do(method, path string, body any) *httptest.ResponseRecorder {
@@ -312,6 +403,20 @@ func errCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 	e, ok := body["error"].(map[string]any)
 	require.True(t, ok, "expected an error envelope, got: %s", rec.Body.String())
 	return e["code"].(string)
+}
+
+func waitForBlockedSQL(t *testing.T, pool *pgxpool.Pool, fragment string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var blocked bool
+		err := pool.QueryRow(context.Background(), `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE datname = current_database() AND wait_event_type = 'Lock'
+				  AND query LIKE '%' || $1 || '%'
+			)`, fragment).Scan(&blocked)
+		return err == nil && blocked
+	}, 3*time.Second, 10*time.Millisecond, "query did not block on the expected row lock: %s", fragment)
 }
 
 // bootstrapAdmin claims the placeholder admin and returns a signed-in client.
@@ -804,6 +909,20 @@ func TestRefresh_RotatesEveryToken(t *testing.T) {
 	assert.NotEqual(t, oldCSRF, c.cookies[auth.CookieCSRF],
 		"the CSRF token rotates with the session, or a leaked one outlives it")
 
+	var accessHash, refreshHash, csrfHash []byte
+	var accessExpires, refreshExpires time.Time
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT access_token_hash, refresh_token_hash, csrf_token_hash,
+		       access_expires_at, refresh_expires_at
+		FROM session WHERE refresh_token_hash = $1`,
+		secrets.Hash(c.cookies[auth.CookieRefresh])).Scan(
+		&accessHash, &refreshHash, &csrfHash, &accessExpires, &refreshExpires))
+	assert.Equal(t, secrets.Hash(c.cookies[auth.CookieAccess]), accessHash)
+	assert.Equal(t, secrets.Hash(c.cookies[auth.CookieRefresh]), refreshHash)
+	assert.Equal(t, secrets.Hash(c.cookies[auth.CookieCSRF]), csrfHash)
+	assert.WithinDuration(t, time.Now().Add(auth.DefaultTTL().Access), accessExpires, time.Second)
+	assert.WithinDuration(t, time.Now().Add(auth.DefaultTTL().Refresh), refreshExpires, time.Second)
+
 	// The old access token must be dead immediately, not merely superseded.
 	stale := h.client(t)
 	stale.cookies[auth.CookieAccess] = oldAT
@@ -870,11 +989,17 @@ func TestRefresh_GraceSiblingInheritsFamilyAndAbsoluteCeiling(t *testing.T) {
 	assert.Equal(t, 1, families, "the sibling must stay in the original family")
 
 	var ageDays float64
+	var accessHash, refreshHash, csrfHash []byte
 	require.NoError(t, h.pool.QueryRow(ctx,
-		`SELECT EXTRACT(epoch FROM now() - created_at) / 86400
-		 FROM session ORDER BY id DESC LIMIT 1`).Scan(&ageDays))
+		`SELECT EXTRACT(epoch FROM now() - created_at) / 86400,
+		        access_token_hash, refresh_token_hash, csrf_token_hash
+		 FROM session ORDER BY id DESC LIMIT 1`).Scan(
+		&ageDays, &accessHash, &refreshHash, &csrfHash))
 	assert.InDelta(t, 40, ageDays, 1,
 		"the sibling must inherit the family's birth date, not reset the absolute ceiling")
+	assert.Equal(t, secrets.Hash(tab2.cookies[auth.CookieAccess]), accessHash)
+	assert.Equal(t, secrets.Hash(tab2.cookies[auth.CookieRefresh]), refreshHash)
+	assert.Equal(t, secrets.Hash(tab2.cookies[auth.CookieCSRF]), csrfHash)
 }
 
 // The sibling must die with its family. If it escaped family revocation, a
@@ -939,6 +1064,10 @@ func TestRefresh_ReplayOutsideGraceRevokesTheWholeFamily(t *testing.T) {
 	require.NoError(t, h.pool.QueryRow(context.Background(),
 		`SELECT revoked_reason FROM session ORDER BY id DESC LIMIT 1`).Scan(&reason))
 	assert.Equal(t, "reuse_detected", reason)
+	var usedTokens int
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM session_used_token`).Scan(&usedTokens))
+	assert.Zero(t, usedTokens, "replay teardown must purge the family's consumed-token trail")
 }
 
 func TestRefresh_WarnsTheOwnerAboutReuse(t *testing.T) {
@@ -1039,6 +1168,54 @@ func TestLogout_KillsTheSessionAndClearsEveryCookie(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, zombie.do(http.MethodGet, "/api/links", nil).Code)
 	zombie.cookies = map[string]string{auth.CookieRefresh: rt}
 	assert.Equal(t, http.StatusUnauthorized, zombie.do(http.MethodPost, "/api/auth/refresh", nil).Code)
+}
+
+func TestLogout_StaleCookiesRacingSuccessfulRefreshRevokeTheLiveFamily(t *testing.T) {
+	h := newHarness(t)
+	refreshed := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	stale := clientOnHarness(t, h, refreshed)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/refresh", nil)
+	req.RemoteAddr = "192.0.2.10:1234"
+	for name, value := range refreshed.cookies {
+		req.AddCookie(&http.Cookie{Name: name, Value: value})
+	}
+	gate := &delayedResponseWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		reached:          make(chan struct{}),
+		release:          make(chan struct{}),
+	}
+	done := make(chan struct{})
+	go func() {
+		h.router.ServeHTTP(gate, req)
+		close(done)
+	}()
+
+	select {
+	case <-gate.reached:
+		// Rotate has committed and set the replacement cookies, but its response
+		// has not reached the browser yet. Logout therefore carries the old jar.
+	case <-time.After(3 * time.Second):
+		close(gate.release)
+		t.Fatal("refresh did not reach its delayed response")
+	}
+
+	logout := stale.do(http.MethodPost, "/api/auth/logout", nil)
+	close(gate.release)
+	<-done
+	require.Equal(t, http.StatusNoContent, logout.Code)
+	require.Equal(t, http.StatusOK, gate.Code, gate.Body.String())
+	refreshed.absorb(gate.ResponseRecorder)
+
+	assert.Equal(t, http.StatusUnauthorized, refreshed.do(http.MethodGet, "/api/links", nil).Code,
+		"the delayed refresh response must not restore a live access token after logout")
+	assert.Equal(t, http.StatusUnauthorized, refreshed.do(http.MethodPost, "/api/auth/refresh", nil).Code,
+		"logout must revoke the family resolved through the consumed refresh token")
+
+	var live int
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM session WHERE revoked_at IS NULL`).Scan(&live))
+	assert.Zero(t, live)
 }
 
 // Logout is idempotent: the common case is a user clicking it on a stale tab,
@@ -1165,6 +1342,64 @@ func TestChangePassword_KeepsThisSessionAndKillsTheRest(t *testing.T) {
 	}).Code)
 }
 
+func TestChangePassword_ConcurrentOldProofHasExactlyOneWinner(t *testing.T) {
+	h := newHarness(t)
+	first := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	second := clientOnHarness(t, h, first)
+
+	type result struct {
+		status int
+		code   string
+	}
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, c := range []*client{first, second} {
+		wg.Add(1)
+		go func(i int, c *client) {
+			defer wg.Done()
+			<-start
+			rec := c.do(http.MethodPost, "/api/auth/password/change", map[string]string{
+				"current_password": "a good password",
+				"new_password":     fmt.Sprintf("a concurrent password %d", i+1),
+			})
+			out := result{status: rec.Code}
+			if rec.Code != http.StatusNoContent {
+				out.code = errCode(t, rec)
+			}
+			results <- out
+		}(i, c)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	successes, rejected := 0, 0
+	for got := range results {
+		switch got.status {
+		case http.StatusNoContent:
+			successes++
+		case http.StatusUnauthorized:
+			rejected++
+			assert.Equal(t, "invalid_credentials", got.code)
+		default:
+			t.Fatalf("unexpected change-password result: status=%d code=%q", got.status, got.code)
+		}
+	}
+	assert.Equal(t, 1, successes, "both requests changed the password from one old proof")
+	assert.Equal(t, 1, rejected)
+
+	workingPasswords := 0
+	for i := range 2 {
+		if h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
+			"email": "admin@example.com", "password": fmt.Sprintf("a concurrent password %d", i+1),
+		}).Code == http.StatusOK {
+			workingPasswords++
+		}
+	}
+	assert.Equal(t, 1, workingPasswords)
+}
+
 func TestChangePassword_EnforcesThePolicy(t *testing.T) {
 	h := newHarness(t)
 	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
@@ -1182,9 +1417,12 @@ func TestChangePassword_EnforcesThePolicy(t *testing.T) {
 
 func inviteToken(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
-	url, _ := decode(t, rec)["accept_url"].(string)
-	_, tok, ok := strings.Cut(url, "invite=")
-	require.True(t, ok, "accept_url %q must carry the raw token", url)
+	acceptURL, _ := decode(t, rec)["accept_url"].(string)
+	parsed, err := url.Parse(acceptURL)
+	require.NoError(t, err)
+	require.Empty(t, parsed.RawQuery, "the initial HTTP request must not carry the invite token")
+	_, tok, ok := strings.Cut(parsed.Fragment, "invite=")
+	require.True(t, ok, "accept_url %q must carry the raw token in its fragment", acceptURL)
 	return tok
 }
 
@@ -1199,13 +1437,12 @@ func TestInvite_FullRoundTrip(t *testing.T) {
 	tok := inviteToken(t, rec)
 
 	// The link must have been mailed too, not only returned.
-	require.Len(t, h.mail.all(), 1)
-	assert.Equal(t, "newcomer@example.com", h.mail.all()[0].To)
-	assert.Contains(t, h.mail.all()[0].Text, tok)
+	msg := h.mail.waitFor(t, "newcomer@example.com")
+	assert.Contains(t, msg.Text, tok)
 
 	// The accept screen resolves the token to show which address it binds.
 	newcomer := h.client(t)
-	rec = newcomer.do(http.MethodGet, "/api/auth/invites/"+tok, nil)
+	rec = newcomer.do(http.MethodPost, "/api/auth/invites/lookup", map[string]string{"token": tok})
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "newcomer@example.com", decode(t, rec)["email"])
 
@@ -1268,7 +1505,7 @@ func TestInvite_ExpiredAndRevokedTokensAreIndistinguishableFromUnknown(t *testin
 
 	var bodies []string
 	for _, tok := range []string{expiredTok, revokedTok, "a-token-that-never-existed"} {
-		rec := h.client(t).do(http.MethodGet, "/api/auth/invites/"+tok, nil)
+		rec := h.client(t).do(http.MethodPost, "/api/auth/invites/lookup", map[string]string{"token": tok})
 		require.Equal(t, http.StatusNotFound, rec.Code)
 		bodies = append(bodies, rec.Body.String())
 	}
@@ -1293,10 +1530,10 @@ func TestInvite_ReinvitingSupersedesTheOpenOne(t *testing.T) {
 
 	require.NotEqual(t, first, second)
 	assert.Equal(t, http.StatusNotFound,
-		h.client(t).do(http.MethodGet, "/api/auth/invites/"+first, nil).Code,
+		h.client(t).do(http.MethodPost, "/api/auth/invites/lookup", map[string]string{"token": first}).Code,
 		"the superseded token must stop working")
 	assert.Equal(t, http.StatusOK,
-		h.client(t).do(http.MethodGet, "/api/auth/invites/"+second, nil).Code)
+		h.client(t).do(http.MethodPost, "/api/auth/invites/lookup", map[string]string{"token": second}).Code)
 }
 
 func TestInvite_RefusedForAnExistingAccount(t *testing.T) {
@@ -1770,6 +2007,10 @@ func TestRefresh_GraceWindowCannotMintUnboundedSiblings(t *testing.T) {
 	require.NoError(t, h.pool.QueryRow(context.Background(),
 		`SELECT count(*) FROM session WHERE revoked_at IS NULL`).Scan(&live))
 	assert.Zero(t, live, "hitting the cap revokes the whole family, it does not merely stop growing")
+	var usedTokens int
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM session_used_token`).Scan(&usedTokens))
+	assert.Zero(t, usedTokens, "cap teardown must purge the family's consumed-token trail")
 	assert.Equal(t, http.StatusUnauthorized, c.do(http.MethodGet, "/api/links", nil).Code)
 }
 

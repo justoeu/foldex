@@ -5,6 +5,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"foldex/internal/entityrefs"
+	"foldex/internal/notemedia"
 	"foldex/internal/pkg/authctx"
 )
 
@@ -57,18 +59,10 @@ func wipeUser(ctx context.Context, tx pgx.Tx, uid authctx.UserID) (Counts, error
 		return c, err
 	}
 
-	if _, err := tx.Exec(ctx, `
-        DELETE FROM click_log
-        WHERE (entity_kind = 'link' AND entity_id IN (SELECT id FROM link WHERE user_id = $1))
-           OR (entity_kind = 'note' AND entity_id IN (SELECT id FROM note WHERE user_id = $1))
-    `, u); err != nil {
+	if err := notemedia.ReleaseOwnerRefs(ctx, tx, uid); err != nil {
 		return c, err
 	}
-	if _, err := tx.Exec(ctx, `
-        DELETE FROM link_tag
-        WHERE (entity_kind = 'link' AND entity_id IN (SELECT id FROM link WHERE user_id = $1))
-           OR (entity_kind = 'note' AND entity_id IN (SELECT id FROM note WHERE user_id = $1))
-    `, u); err != nil {
+	if err := entityrefs.PurgeOwner(ctx, tx, uid); err != nil {
 		return c, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM note WHERE user_id = $1`, u); err != nil {

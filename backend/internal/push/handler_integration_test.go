@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
@@ -17,13 +18,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/authctx/authctxtest"
 	"foldex/internal/push"
 	"foldex/internal/testdb"
-
-	"foldex/internal/pkg/authctx"
-
-	"foldex/internal/pkg/authctx/authctxtest"
-	"os"
 )
 
 // TestMain owns the lifetime of this package's shared Postgres container.
@@ -100,6 +98,49 @@ func TestHandler_SubscribeUnsubscribe_OK(t *testing.T) {
 	list, err = repo.List(context.Background(), uid)
 	require.NoError(t, err)
 	assert.Empty(t, list)
+}
+
+func TestHandler_Unsubscribe_CannotDeleteAnotherUsersEndpoint(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	userA := testdb.SeedUser(t, pool, "user-a@test.local", "user")
+	userB := testdb.SeedUser(t, pool, "user-b@test.local", "user")
+	repo := push.NewRepository(pool)
+	keys := push.VAPIDKeys{PublicKey: "PUB", PrivateKey: "PRIV", Subject: "mailto:t@h"}
+
+	const endpointA = "https://push.example/users/a-endpoint"
+	const endpointB = "https://push.example/users/b-endpoint"
+	_, err := repo.Save(ctx, userA, endpointA, "a-p256dh", "a-auth")
+	require.NoError(t, err)
+	_, err = repo.Save(ctx, userB, endpointB, "b-p256dh", "b-auth")
+	require.NoError(t, err)
+
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(userA))
+	r.Route("/push", push.NewHandler(keys, repo, nil).Mount)
+
+	rr := doPush(t, r, http.MethodDelete, "/push/subscriptions", map[string]any{
+		"endpoint": endpointB,
+	})
+	require.Equal(t, http.StatusNoContent, rr.Code)
+
+	subsB, err := repo.List(ctx, userB)
+	require.NoError(t, err)
+	require.Len(t, subsB, 1)
+	assert.Equal(t, endpointB, subsB[0].Endpoint)
+
+	rr = doPush(t, r, http.MethodDelete, "/push/subscriptions", map[string]any{
+		"endpoint": endpointA,
+	})
+	require.Equal(t, http.StatusNoContent, rr.Code)
+
+	subsA, err := repo.List(ctx, userA)
+	require.NoError(t, err)
+	assert.Empty(t, subsA)
+	subsB, err = repo.List(ctx, userB)
+	require.NoError(t, err)
+	require.Len(t, subsB, 1)
+	assert.Equal(t, endpointB, subsB[0].Endpoint)
 }
 
 func TestHandler_Subscribe_InvalidJSON(t *testing.T) {

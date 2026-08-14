@@ -51,22 +51,33 @@ var (
 	// ErrChallengeExhausted marks a challenge whose attempt budget is spent.
 	ErrChallengeExhausted = errors.New("auth: challenge attempts exhausted")
 	// ErrTooSoon marks a resend inside the cooldown.
-	ErrTooSoon = errors.New("auth: too soon")
+	ErrTooSoon              = errors.New("auth: too soon")
+	ErrEmailAlreadyVerified = errors.New("auth: e-mail already verified")
 	// ErrSendsExhausted marks a challenge whose send budget is spent.
 	ErrSendsExhausted = errors.New("auth: challenge sends exhausted")
 	// ErrNoTOTP marks an account with no enrollment to act on.
 	ErrNoTOTP = errors.New("auth: no TOTP secret")
+	// ErrTOTPEnrollmentChanged means the pending seed no longer matches the one
+	// whose code was verified.
+	ErrTOTPEnrollmentChanged = errors.New("auth: TOTP enrollment changed")
 	// ErrResetInvalid covers absent, expired and consumed reset tokens.
 	ErrResetInvalid = errors.New("auth: password reset token invalid")
+	// ErrRecoveryUnavailable means an administrator targeted an account that is
+	// not active or whose mailbox has not been verified.
+	ErrRecoveryUnavailable = errors.New("auth: recovery requires an active account with verified e-mail")
+	// ErrRecoveryDelivery makes SMTP failure distinguishable from database
+	// failure while preserving the transport error for server-side logging.
+	ErrRecoveryDelivery = errors.New("auth: recovery mail delivery failed")
 )
 
 // Challenge is the pre-auth state between "password OK" and "second factor OK".
 type Challenge struct {
-	ID       int64
-	UserID   authctx.UserID
-	Purpose  string
-	Attempts int
-	Sends    int
+	ID           int64
+	UserID       authctx.UserID
+	Purpose      string
+	TokenVersion int
+	Attempts     int
+	Sends        int
 	// MailboxAlreadyProven marks a challenge whose FIRST factor was a
 	// password-reset link. The e-mail OTP is refused on those: the code would
 	// go to the same inbox the link came from, so both steps would be
@@ -91,10 +102,11 @@ type Challenge struct {
 // site, whichever flag comes next — are exactly the arguments that get swapped
 // silently. Named fields make that a visible mistake.
 type NewChallenge struct {
-	UserID  authctx.UserID
-	Purpose string
-	TTL     time.Duration
-	IP      string
+	UserID       authctx.UserID
+	Purpose      string
+	TokenVersion int
+	TTL          time.Duration
+	IP           string
 	// UserAgent is recorded for the "a code was requested from…" mail.
 	UserAgent string
 	// MailboxAlreadyProven marks a challenge whose FIRST factor was a link sent
@@ -109,10 +121,10 @@ type NewChallenge struct {
 
 // CreateChallenge mints a pre-auth token and returns its raw value.
 //
-// Any earlier live challenge for the same user and purpose is consumed first.
-// Without that, a user who retries the password form accumulates challenges,
-// and each one carries its own fresh attempt budget — turning the 5-guess cap
-// into "5 guesses per password entry", which is no cap at all.
+// Any earlier live challenge for the same user and purpose is replaced while
+// preserving its counters, expiry and first-factor provenance. Without that, a
+// user who retries the password form receives a fresh attempt budget, turning
+// the 5-guess cap into "5 guesses per password entry".
 func (r *Repository) CreateChallenge(ctx context.Context, in NewChallenge) (string, int64, error) {
 	raw, hash, err := secrets.NewToken()
 	if err != nil {
@@ -124,9 +136,45 @@ func (r *Repository) CreateChallenge(ctx context.Context, in NewChallenge) (stri
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Challenge creation is serialized per user. Locking only the previous
+	// challenge cannot stop two first challenges from being inserted together.
+	var lockedUser int64
+	var liveTokenVersion int
+	if err := tx.QueryRow(ctx, `
+		SELECT id, token_version FROM app_user
+		WHERE id = $1 AND status = 'active'
+		FOR NO KEY UPDATE`, int64(in.UserID)).Scan(&lockedUser, &liveTokenVersion); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", 0, ErrChallengeInvalid
+		}
+		return "", 0, fmt.Errorf("lock challenge user: %w", err)
+	}
+	if liveTokenVersion != in.TokenVersion {
+		return "", 0, ErrChallengeInvalid
+	}
+
+	var previousID int64
+	var attempts, sends int
+	var expiresAt time.Time
+	var mailboxAlreadyProven bool
+	err = tx.QueryRow(ctx, `
+		SELECT id, attempts, sends, expires_at, mailbox_already_proven
+		FROM auth_challenge
+		WHERE user_id = $1 AND purpose = $2
+		  AND token_version = $3
+		  AND consumed_at IS NULL AND expires_at > now()
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+		FOR UPDATE`, int64(in.UserID), in.Purpose, in.TokenVersion).
+		Scan(&previousID, &attempts, &sends, &expiresAt, &mailboxAlreadyProven)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", 0, fmt.Errorf("load previous challenge: %w", err)
+	}
+
 	if _, err := tx.Exec(ctx, `
 		UPDATE auth_challenge SET consumed_at = now()
-		WHERE user_id = $1 AND purpose = $2 AND consumed_at IS NULL`,
+		WHERE user_id = $1 AND purpose = $2 AND token_version IS NOT NULL
+		  AND consumed_at IS NULL`,
 		int64(in.UserID), in.Purpose); err != nil {
 		return "", 0, fmt.Errorf("supersede challenges: %w", err)
 	}
@@ -137,15 +185,35 @@ func (r *Repository) CreateChallenge(ctx context.Context, in NewChallenge) (stri
 		email = nullString(in.Identity.email)
 	}
 
+	var inheritedExpiry *time.Time
+	if previousID != 0 {
+		inheritedExpiry = &expiresAt
+	}
+	mailboxAlreadyProven = mailboxAlreadyProven || in.MailboxAlreadyProven
+
 	var id int64
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO auth_challenge (user_id, token_hash, purpose, expires_at, ip, user_agent,
-		                            mailbox_already_proven, oauth_provider, oauth_subject, oauth_email)
-		VALUES ($1, $2, $3, now() + $4::interval, $5, $6, $7, $8, $9, $10)
+		INSERT INTO auth_challenge (user_id, token_hash, purpose, token_version, expires_at, ip, user_agent,
+		                            attempts, sends, mailbox_already_proven,
+		                            oauth_provider, oauth_subject, oauth_email)
+		VALUES ($1, $2, $3, $4, COALESCE($14::timestamptz, now() + $5::interval), $6, $7,
+		        $8, $9, $10, $11, $12, $13)
 		RETURNING id`,
-		int64(in.UserID), hash, in.Purpose, intervalArg(in.TTL), nullIP(in.IP), in.UserAgent,
-		in.MailboxAlreadyProven, provider, subject, email).Scan(&id); err != nil {
+		int64(in.UserID), hash, in.Purpose, in.TokenVersion, intervalArg(in.TTL), nullIP(in.IP), in.UserAgent,
+		attempts, sends, mailboxAlreadyProven, provider, subject, email, inheritedExpiry).Scan(&id); err != nil {
 		return "", 0, fmt.Errorf("insert challenge: %w", err)
+	}
+	if previousID != 0 {
+		// The code MAC is bound to previousID and therefore cannot move to the
+		// replacement challenge. Move only its timestamp for resend-cooldown
+		// accounting and mark it spent so it can never be presented there.
+		if _, err := tx.Exec(ctx, `
+			UPDATE email_otp
+			SET challenge_id = $2, consumed_at = COALESCE(consumed_at, now())
+			WHERE challenge_id = $1`,
+			previousID, id); err != nil {
+			return "", 0, fmt.Errorf("invalidate moved challenge codes: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", 0, fmt.Errorf("challenge commit: %w", err)
@@ -165,11 +233,13 @@ func (r *Repository) ResolveChallenge(ctx context.Context, rawToken string, purp
 	var c Challenge
 	var uid int64
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, user_id, purpose, attempts, sends, mailbox_already_proven,
+		SELECT c.id, c.user_id, c.purpose, c.token_version, c.attempts, c.sends, c.mailbox_already_proven,
 		       COALESCE(oauth_subject, ''), COALESCE(oauth_email, '')
-		FROM auth_challenge
-		WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()`,
-		secrets.Hash(rawToken)).Scan(&c.ID, &uid, &c.Purpose, &c.Attempts, &c.Sends,
+		FROM auth_challenge c
+		JOIN app_user u ON u.id = c.user_id
+		WHERE c.token_hash = $1 AND c.consumed_at IS NULL AND c.expires_at > now()
+		  AND c.token_version = u.token_version AND u.status = 'active'`,
+		secrets.Hash(rawToken)).Scan(&c.ID, &uid, &c.Purpose, &c.TokenVersion, &c.Attempts, &c.Sends,
 		&c.MailboxAlreadyProven, &c.OAuthSubject, &c.OAuthEmail)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Challenge{}, ErrChallengeInvalid
@@ -205,47 +275,111 @@ func (r *Repository) ResolveChallenge(ctx context.Context, rawToken string, purp
 // class of bug attemptlimit's reserve-then-commit API exists to prevent, solved
 // here by the row lock instead of a mutex.
 func (r *Repository) BumpChallengeAttempt(ctx context.Context, id int64) (int, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("bump challenge attempt begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockChallengeUser(ctx, tx, id); err != nil {
+		return 0, err
+	}
+
 	var attempts int
-	err := r.pool.QueryRow(ctx, `
-		UPDATE auth_challenge SET attempts = attempts + 1
-		WHERE id = $1 AND consumed_at IS NULL
-		RETURNING attempts`, id).Scan(&attempts)
+	err = tx.QueryRow(ctx, `
+		UPDATE auth_challenge c SET attempts = c.attempts + 1
+		FROM app_user u
+		WHERE c.id = $1 AND u.id = c.user_id
+		  AND c.token_version = u.token_version AND u.status = 'active'
+		  AND c.consumed_at IS NULL
+		  AND c.expires_at > now()
+		  AND c.attempts < $2
+		RETURNING c.attempts`, id, maxChallengeAttempts).Scan(&attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
+		var live bool
+		if diagErr := tx.QueryRow(ctx, `
+			SELECT c.attempts, c.consumed_at IS NULL AND c.expires_at > now()
+			       AND c.token_version = u.token_version AND u.status = 'active'
+			FROM auth_challenge c JOIN app_user u ON u.id = c.user_id
+			WHERE c.id = $1`, id).Scan(&attempts, &live); diagErr != nil {
+			if errors.Is(diagErr, pgx.ErrNoRows) {
+				return 0, ErrChallengeInvalid
+			}
+			return 0, fmt.Errorf("diagnose challenge attempt: %w", diagErr)
+		}
+		if live && attempts >= maxChallengeAttempts {
+			return attempts, ErrChallengeExhausted
+		}
 		return 0, ErrChallengeInvalid
 	}
 	if err != nil {
 		return 0, fmt.Errorf("bump challenge attempt: %w", err)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("bump challenge attempt commit: %w", err)
+	}
 	return attempts, nil
 }
 
-// ConsumeChallenge marks a challenge spent. Idempotent by construction: the
-// WHERE clause makes a second call a no-op rather than an error.
+// ConsumeChallenge marks a live challenge spent. Exactly one caller can win;
+// every other caller receives ErrChallengeInvalid and must not issue a session.
 func (r *Repository) ConsumeChallenge(ctx context.Context, id int64) error {
-	if _, err := r.pool.Exec(ctx, `
-		UPDATE auth_challenge SET consumed_at = now()
-		WHERE id = $1 AND consumed_at IS NULL`, id); err != nil {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("consume challenge begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockChallengeUser(ctx, tx, id); err != nil {
+		return err
+	}
+
+	ct, err := tx.Exec(ctx, `
+		UPDATE auth_challenge c SET consumed_at = now()
+		FROM app_user u
+		WHERE c.id = $1 AND u.id = c.user_id
+		  AND c.token_version = u.token_version AND u.status = 'active'
+		  AND c.consumed_at IS NULL AND c.expires_at > now()`, id)
+	if err != nil {
 		return fmt.Errorf("consume challenge: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrChallengeInvalid
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("consume challenge commit: %w", err)
 	}
 	return nil
 }
 
-// ReserveChallengeSend charges one e-mail send against the challenge, enforcing
-// both the total cap and the cooldown in a single statement.
+// CreateChallengeEmailOTP charges one send and publishes its code atomically,
+// while enforcing both the total cap and cooldown in one transaction.
 //
 // Doing the check in SQL rather than reading-then-writing is what makes the
 // cooldown hold when a user double-clicks "resend": both requests would
 // otherwise read the same last-send timestamp and both would send.
-func (r *Repository) ReserveChallengeSend(ctx context.Context, id int64) (int, error) {
+func (r *Repository) CreateChallengeEmailOTP(ctx context.Context, id int64, codeHash []byte,
+	ttl time.Duration) (int, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("reserve challenge send begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockChallengeUser(ctx, tx, id); err != nil {
+		return 0, err
+	}
+
 	var sends int
-	err := r.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		WITH last AS (
 			SELECT max(created_at) AS at FROM email_otp WHERE challenge_id = $1
 		)
 		UPDATE auth_challenge c SET sends = c.sends + 1
 		FROM last
 		WHERE c.id = $1
+		  AND EXISTS (SELECT 1 FROM app_user u
+		              WHERE u.id = c.user_id AND u.status = 'active'
+		                AND u.token_version = c.token_version)
 		  AND c.consumed_at IS NULL
+		  AND c.expires_at > now()
 		  AND c.sends < $2
 		  AND (last.at IS NULL OR last.at < now() - $3::interval)
 		RETURNING c.sends`, id, maxChallengeSends, intervalArg(otpResendInterval)).Scan(&sends)
@@ -253,13 +387,22 @@ func (r *Repository) ReserveChallengeSend(ctx context.Context, id int64) (int, e
 		// The UPDATE matched nothing. Separate the two refusals so the handler
 		// can tell the user whether to wait or to use another factor.
 		var total int
-		var recent bool
-		if err := r.pool.QueryRow(ctx, `
+		var recent, live bool
+		if diagErr := tx.QueryRow(ctx, `
 			SELECT c.sends,
 			       EXISTS (SELECT 1 FROM email_otp o
-			               WHERE o.challenge_id = c.id AND o.created_at >= now() - $2::interval)
-			FROM auth_challenge c WHERE c.id = $1`,
-			id, intervalArg(otpResendInterval)).Scan(&total, &recent); err != nil {
+			               WHERE o.challenge_id = c.id AND o.created_at >= now() - $2::interval),
+			       c.consumed_at IS NULL AND c.expires_at > now()
+			       AND c.token_version = u.token_version AND u.status = 'active'
+			FROM auth_challenge c JOIN app_user u ON u.id = c.user_id
+			WHERE c.id = $1`,
+			id, intervalArg(otpResendInterval)).Scan(&total, &recent, &live); diagErr != nil {
+			if !errors.Is(diagErr, pgx.ErrNoRows) {
+				return 0, fmt.Errorf("diagnose challenge send: %w", diagErr)
+			}
+			return 0, ErrChallengeInvalid
+		}
+		if !live {
 			return 0, ErrChallengeInvalid
 		}
 		if total >= maxChallengeSends {
@@ -273,7 +416,45 @@ func (r *Repository) ReserveChallengeSend(ctx context.Context, id int64) (int, e
 	if err != nil {
 		return 0, fmt.Errorf("reserve challenge send: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE email_otp SET consumed_at = now()
+		WHERE user_id = (SELECT user_id FROM auth_challenge WHERE id = $1)
+		  AND purpose = $2 AND consumed_at IS NULL`, id, OTPPurposeLogin2FA); err != nil {
+		return 0, fmt.Errorf("supersede challenge otp: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO email_otp (user_id, challenge_id, purpose, code_hash, expires_at)
+		SELECT user_id, id, $2, $3, now() + $4::interval
+		FROM auth_challenge WHERE id = $1`, id, OTPPurposeLogin2FA, codeHash, intervalArg(ttl)); err != nil {
+		return 0, fmt.Errorf("insert challenge otp: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("reserve challenge send commit: %w", err)
+	}
 	return sends, nil
+}
+
+// lockChallengeUser establishes the package-wide lock order: app_user first,
+// then the challenge row mutated by the caller. Credential epoch changes use
+// the same order, so a stale challenge can never commit a mutation after them.
+func lockChallengeUser(ctx context.Context, tx pgx.Tx, challengeID int64) error {
+	var uid int64
+	if err := tx.QueryRow(ctx,
+		`SELECT user_id FROM auth_challenge WHERE id = $1`, challengeID).Scan(&uid); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrChallengeInvalid
+		}
+		return fmt.Errorf("load challenge user: %w", err)
+	}
+	var lockedUser int64
+	if err := tx.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, uid).Scan(&lockedUser); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrChallengeInvalid
+		}
+		return fmt.Errorf("lock challenge user: %w", err)
+	}
+	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -282,11 +463,27 @@ func (r *Repository) ReserveChallengeSend(ctx context.Context, id int64) (int, e
 
 // TOTPRow is one stored enrollment, secret still encrypted.
 type TOTPRow struct {
-	Ciphertext      []byte
-	Nonce           []byte
-	Params          totpParams
-	Confirmed       bool
-	LastUsedCounter *int64
+	Ciphertext             []byte
+	Nonce                  []byte
+	Params                 totpParams
+	Confirmed              bool
+	EnrollmentTokenVersion *int
+	EnrollmentSessionID    *int64
+	LastUsedCounter        *int64
+}
+
+// TOTPProof identifies the exact encrypted seed and time-step verified by a
+// handler so the repository can consume that proof with the protected write.
+type TOTPProof struct {
+	Counter    int64
+	Ciphertext []byte
+	Nonce      []byte
+}
+
+type secondFactorProof struct {
+	totp           *TOTPProof
+	emailDigest    []byte
+	recoveryDigest []byte
 }
 
 // StartTOTPEnrollment stores a NEW, unconfirmed secret, replacing any previous
@@ -297,10 +494,37 @@ type TOTPRow struct {
 // session was stolen — the attacker would enrol their own authenticator and the
 // owner's would simply stop working. Replacing a confirmed factor goes through
 // disable, which demands the current password and a current code.
-func (r *Repository) StartTOTPEnrollment(ctx context.Context, uid authctx.UserID, ciphertext, nonce []byte) error {
-	ct, err := r.pool.Exec(ctx, `
-		INSERT INTO totp_secret (user_id, secret_ciphertext, secret_nonce, algorithm, digits, period_seconds)
-		VALUES ($1, $2, $3, $4, $5, $6)
+func (r *Repository) StartTOTPEnrollment(ctx context.Context, uid authctx.UserID, tokenVersion int,
+	sessionID int64, ciphertext, nonce []byte) error {
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("start totp enrollment begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var lockedUser int64
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM app_user
+		WHERE id = $1 AND status = 'active' AND token_version = $2
+		FOR NO KEY UPDATE`, int64(uid), tokenVersion).Scan(&lockedUser)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrChallengeInvalid
+	}
+	if err != nil {
+		return fmt.Errorf("start totp enrollment lock user: %w", err)
+	}
+	if sessionID != 0 {
+		if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
+			return err
+		}
+	}
+
+	ct, err := tx.Exec(ctx, `
+		INSERT INTO totp_secret (
+			user_id, secret_ciphertext, secret_nonce, algorithm, digits, period_seconds,
+			enrollment_token_version, enrollment_session_id
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, 0))
 		ON CONFLICT (user_id) DO UPDATE
 		SET secret_ciphertext = EXCLUDED.secret_ciphertext,
 		    secret_nonce      = EXCLUDED.secret_nonce,
@@ -309,14 +533,19 @@ func (r *Repository) StartTOTPEnrollment(ctx context.Context, uid authctx.UserID
 		    period_seconds    = EXCLUDED.period_seconds,
 		    created_at        = now(),
 		    confirmed_at      = NULL,
+		    enrollment_token_version = EXCLUDED.enrollment_token_version,
+		    enrollment_session_id = EXCLUDED.enrollment_session_id,
 		    last_used_counter = NULL
 		WHERE totp_secret.confirmed_at IS NULL`,
-		int64(uid), ciphertext, nonce, totpAlgorithm, totpDigits, totpPeriodSeconds)
+		int64(uid), ciphertext, nonce, totpAlgorithm, totpDigits, totpPeriodSeconds, tokenVersion, sessionID)
 	if err != nil {
 		return fmt.Errorf("start totp enrollment: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
 		return ErrTOTPAlreadyConfirmed
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("start totp enrollment commit: %w", err)
 	}
 	return nil
 }
@@ -330,10 +559,11 @@ func (r *Repository) LoadTOTPSecret(ctx context.Context, uid authctx.UserID) (TO
 	var confirmedAt *time.Time
 	err := r.pool.QueryRow(ctx, `
 		SELECT secret_ciphertext, secret_nonce, algorithm, digits, period_seconds,
-		       confirmed_at, last_used_counter
+		       confirmed_at, enrollment_token_version, enrollment_session_id, last_used_counter
 		FROM totp_secret WHERE user_id = $1`, int64(uid)).
 		Scan(&row.Ciphertext, &row.Nonce, &row.Params.Algorithm, &row.Params.Digits,
-			&row.Params.Period, &confirmedAt, &row.LastUsedCounter)
+			&row.Params.Period, &confirmedAt, &row.EnrollmentTokenVersion,
+			&row.EnrollmentSessionID, &row.LastUsedCounter)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TOTPRow{}, ErrNoTOTP
 	}
@@ -344,45 +574,268 @@ func (r *Repository) LoadTOTPSecret(ctx context.Context, uid authctx.UserID) (TO
 	return row, nil
 }
 
-// ConfirmTOTP marks the enrollment live and records the counter that proved it.
-//
-// Recording the counter at confirmation time matters: without it the very code
-// the user just typed to enrol would still be replayable for the rest of its
-// own window.
-func (r *Repository) ConfirmTOTP(ctx context.Context, uid authctx.UserID, counter int64) error {
-	ct, err := r.pool.Exec(ctx, `
-		UPDATE totp_secret SET confirmed_at = now(), last_used_counter = $2
-		WHERE user_id = $1 AND confirmed_at IS NULL`, int64(uid), counter)
+// HasConfirmedTOTP is the authorization-time source of truth for mandatory
+// administrator 2FA. It intentionally reads the current row rather than any
+// session-cached claim, so deleting or replacing the factor fails closed on the
+// next admin request.
+func (r *Repository) HasConfirmedTOTP(ctx context.Context, uid authctx.UserID) (bool, error) {
+	var confirmed bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM totp_secret
+			WHERE user_id = $1 AND confirmed_at IS NOT NULL
+		)`, int64(uid)).Scan(&confirmed); err != nil {
+		return false, fmt.Errorf("check confirmed totp: %w", err)
+	}
+	return confirmed, nil
+}
+
+// CompleteTOTPEnrollment activates the exact seed that was verified, replaces
+// recovery codes and, for mandatory pre-auth enrollment, consumes the challenge
+// and issues the first session in one transaction.
+func (r *Repository) CompleteTOTPEnrollment(ctx context.Context, uid authctx.UserID, tokenVersion int,
+	proof TOTPProof, recoveryHashes [][]byte, sessionID int64, challenge *Challenge, ttl SessionTTL,
+	ip, ua string) (User, issuedTokens, error) {
+
+	var issue sessionIssue
+	var err error
+	if challenge != nil {
+		issue, err = newSessionIssue(ttl)
+		if err != nil {
+			return User{}, issuedTokens{}, err
+		}
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return User{}, issuedTokens{}, fmt.Errorf("complete totp enrollment begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var lockedUser int64
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM app_user
+		WHERE id = $1 AND status = 'active' AND token_version = $2
+		FOR NO KEY UPDATE`, int64(uid), tokenVersion).Scan(&lockedUser)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, issuedTokens{}, ErrChallengeInvalid
+	}
+	if err != nil {
+		return User{}, issuedTokens{}, fmt.Errorf("complete totp enrollment lock user: %w", err)
+	}
+	if challenge == nil {
+		if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
+			return User{}, issuedTokens{}, err
+		}
+	}
+	if err := confirmTOTPRowTx(ctx, tx, uid, tokenVersion, sessionID, proof); err != nil {
+		return User{}, issuedTokens{}, err
+	}
+	if err := replaceRecoveryCodesTx(ctx, tx, uid, recoveryHashes); err != nil {
+		return User{}, issuedTokens{}, err
+	}
+
+	if challenge != nil {
+		ct, err := tx.Exec(ctx, `
+			UPDATE auth_challenge SET consumed_at = now()
+			WHERE id = $1 AND user_id = $2 AND purpose = 'enroll_2fa'
+			  AND token_version = $3 AND consumed_at IS NULL AND expires_at > now()`,
+			challenge.ID, int64(uid), tokenVersion)
+		if err != nil {
+			return User{}, issuedTokens{}, fmt.Errorf("complete enrollment consume challenge: %w", err)
+		}
+		if ct.RowsAffected() == 0 {
+			return User{}, issuedTokens{}, ErrChallengeInvalid
+		}
+		if _, err := issueSessionTx(ctx, tx, uid, issue, ip, ua); err != nil {
+			return User{}, issuedTokens{}, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(uid)); err != nil {
+			return User{}, issuedTokens{}, fmt.Errorf("complete enrollment touch user: %w", err)
+		}
+	}
+
+	user, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM app_user WHERE id = $1`, int64(uid)))
+	if err != nil {
+		return User{}, issuedTokens{}, fmt.Errorf("complete enrollment load user: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, issuedTokens{}, fmt.Errorf("complete totp enrollment commit: %w", err)
+	}
+	return user, issue.tokens, nil
+}
+
+func confirmTOTPRowTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID,
+	tokenVersion int, sessionID int64, proof TOTPProof) error {
+
+	ct, err := tx.Exec(ctx, `
+		UPDATE totp_secret SET confirmed_at = now(), last_used_counter = $2,
+		                       enrollment_session_id = NULL
+		WHERE user_id = $1 AND confirmed_at IS NULL
+		  AND enrollment_token_version = $3
+		  AND secret_ciphertext = $4 AND secret_nonce = $5
+		  AND (($6 = 0 AND enrollment_session_id IS NULL) OR enrollment_session_id = $6)`,
+		int64(uid), proof.Counter, tokenVersion, proof.Ciphertext, proof.Nonce, sessionID)
 	if err != nil {
 		return fmt.Errorf("confirm totp: %w", err)
 	}
-	if ct.RowsAffected() == 0 {
+	if ct.RowsAffected() != 0 {
+		return nil
+	}
+	var exists bool
+	var enrollmentTokenVersion *int
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM totp_secret WHERE user_id = $1),
+		       (SELECT enrollment_token_version FROM totp_secret WHERE user_id = $1)`,
+		int64(uid)).Scan(&exists, &enrollmentTokenVersion); err != nil {
+		return fmt.Errorf("diagnose totp confirmation: %w", err)
+	}
+	if !exists {
 		return ErrNoTOTP
+	}
+	if enrollmentTokenVersion == nil {
+		return ErrChallengeInvalid
+	}
+	return ErrTOTPEnrollmentChanged
+}
+
+func (r *Repository) ConsumeTOTPProof(ctx context.Context, uid authctx.UserID, proof TOTPProof) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("consume totp proof begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := consumeTOTPProofTx(ctx, tx, uid, proof); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("consume totp proof commit: %w", err)
 	}
 	return nil
 }
 
-// ConsumeTOTPCounter records a successfully used time step, refusing any
-// counter that is not strictly newer than the last one.
-//
-// This is the replay guard, and it is a CONDITIONAL UPDATE rather than a
-// read-compare-write on purpose: two requests presenting the same code at the
-// same instant would both pass a Go-side comparison, and one of them is the
-// attacker.
-func (r *Repository) ConsumeTOTPCounter(ctx context.Context, uid authctx.UserID, counter int64) error {
-	ct, err := r.pool.Exec(ctx, `
-		UPDATE totp_secret SET last_used_counter = $2
-		WHERE user_id = $1
-		  AND confirmed_at IS NOT NULL
-		  AND (last_used_counter IS NULL OR last_used_counter < $2)`,
-		int64(uid), counter)
+// Complete2FA spends exactly one accepted proof and its challenge, then creates
+// the session. A failure in any later write restores both bearer credentials.
+func (r *Repository) Complete2FA(ctx context.Context, ch Challenge, proof secondFactorProof,
+	ttl SessionTTL, ip, ua string) (issuedTokens, string, error) {
+
+	issue, err := newSessionIssue(ttl)
 	if err != nil {
-		return fmt.Errorf("consume totp counter: %w", err)
+		return issuedTokens{}, "", err
 	}
-	if ct.RowsAffected() == 0 {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return issuedTokens{}, "", fmt.Errorf("complete 2fa begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var lockedUser int64
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM app_user
+		WHERE id = $1 AND status = 'active' AND token_version = $2
+		FOR NO KEY UPDATE`, int64(ch.UserID), ch.TokenVersion).Scan(&lockedUser)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return issuedTokens{}, "", ErrChallengeInvalid
+	}
+	if err != nil {
+		return issuedTokens{}, "", fmt.Errorf("complete 2fa lock user: %w", err)
+	}
+
+	var liveChallenge int64
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM auth_challenge
+		WHERE id = $1 AND user_id = $2 AND purpose = 'totp' AND token_version = $3
+		  AND consumed_at IS NULL AND expires_at > now() AND attempts <= $4
+		FOR UPDATE`, ch.ID, int64(ch.UserID), ch.TokenVersion, maxChallengeAttempts).Scan(&liveChallenge)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return issuedTokens{}, "", ErrChallengeInvalid
+	}
+	if err != nil {
+		return issuedTokens{}, "", fmt.Errorf("complete 2fa lock challenge: %w", err)
+	}
+
+	method, err := consumeSecondFactorProofTx(ctx, tx, ch, proof)
+	if err != nil {
+		return issuedTokens{}, "", err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE auth_challenge SET consumed_at = now() WHERE id = $1`, ch.ID); err != nil {
+		return issuedTokens{}, "", fmt.Errorf("complete 2fa consume challenge: %w", err)
+	}
+	if _, err := issueSessionTx(ctx, tx, ch.UserID, issue, ip, ua); err != nil {
+		return issuedTokens{}, "", err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(ch.UserID)); err != nil {
+		return issuedTokens{}, "", fmt.Errorf("complete 2fa touch user: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return issuedTokens{}, "", fmt.Errorf("complete 2fa commit: %w", err)
+	}
+	return issue.tokens, method, nil
+}
+
+func consumeSecondFactorProofTx(ctx context.Context, tx pgx.Tx, ch Challenge,
+	proof secondFactorProof) (string, error) {
+
+	if proof.totp != nil {
+		ok, err := consumeTOTPProofIfCurrentTx(ctx, tx, ch.UserID, *proof.totp)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return methodTOTP, nil
+		}
+	}
+	if len(proof.emailDigest) != 0 {
+		ct, err := tx.Exec(ctx, `
+			UPDATE email_otp SET consumed_at = now()
+			WHERE user_id = $1 AND challenge_id = $2 AND purpose = $3
+			  AND code_hash = $4 AND consumed_at IS NULL AND expires_at > now()`,
+			int64(ch.UserID), ch.ID, OTPPurposeLogin2FA, proof.emailDigest)
+		// A numeric submission may be either TOTP or e-mail OTP. Keep a broken
+		// optional e-mail path indistinguishable from a miss so authenticator
+		// login still works while that table is unavailable.
+		if err == nil && ct.RowsAffected() != 0 {
+			return methodEmailOTP, nil
+		}
+	}
+	if len(proof.recoveryDigest) != 0 {
+		ct, err := tx.Exec(ctx, `
+			UPDATE recovery_code SET used_at = now()
+			WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL`,
+			int64(ch.UserID), proof.recoveryDigest)
+		if err != nil {
+			return "", fmt.Errorf("consume recovery proof: %w", err)
+		}
+		if ct.RowsAffected() != 0 {
+			return methodRecovery, nil
+		}
+	}
+	return "", ErrBadCredentials
+}
+
+func consumeTOTPProofTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, proof TOTPProof) error {
+	ok, err := consumeTOTPProofIfCurrentTx(ctx, tx, uid, proof)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return ErrTOTPReplay
 	}
 	return nil
+}
+
+func consumeTOTPProofIfCurrentTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID,
+	proof TOTPProof) (bool, error) {
+
+	ct, err := tx.Exec(ctx, `
+		UPDATE totp_secret SET last_used_counter = $2
+		WHERE user_id = $1 AND confirmed_at IS NOT NULL
+		  AND secret_ciphertext = $3 AND secret_nonce = $4
+		  AND (last_used_counter IS NULL OR last_used_counter < $2)`,
+		int64(uid), proof.Counter, proof.Ciphertext, proof.Nonce)
+	if err != nil {
+		return false, fmt.Errorf("consume totp proof: %w", err)
+	}
+	return ct.RowsAffected() != 0, nil
 }
 
 // DisableTOTP removes the enrollment and every recovery code with it.
@@ -390,47 +843,116 @@ func (r *Repository) ConsumeTOTPCounter(ctx context.Context, uid authctx.UserID,
 // The two must go together: recovery codes exist only to get past a second
 // factor, so leaving them behind after the factor is gone would keep a set of
 // long-lived bearer credentials alive for an account that no longer has 2FA.
-func (r *Repository) DisableTOTP(ctx context.Context, uid authctx.UserID) error {
+func (r *Repository) DisableTOTP(ctx context.Context, uid authctx.UserID, sessionID int64,
+	tokenVersion int, password string, proof TOTPProof) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("disable totp begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	var passwordHash *string
+	var liveVersion int
+	var status string
+	if err := tx.QueryRow(ctx, `
+		SELECT password_hash, token_version, status
+		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).
+		Scan(&passwordHash, &liveVersion, &status); err != nil {
+		return fmt.Errorf("disable totp lock user: %w", err)
+	}
+	if status != StatusActive || liveVersion != tokenVersion {
+		return ErrSessionInvalid
+	}
+	if passwordHash == nil {
+		return ErrPasswordMissing
+	}
+	if !pwhash.Verify(*passwordHash, password) {
+		return ErrBadCredentials
+	}
+	if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
+		return err
+	}
+	if err := consumeTOTPProofTx(ctx, tx, uid, proof); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM totp_secret WHERE user_id = $1`, int64(uid)); err != nil {
 		return fmt.Errorf("delete totp secret: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM recovery_code WHERE user_id = $1`, int64(uid)); err != nil {
 		return fmt.Errorf("delete recovery codes: %w", err)
 	}
-	return tx.Commit(ctx)
+	if _, err := tx.Exec(ctx, `
+		UPDATE app_user SET token_version = token_version + 1, updated_at = now()
+		WHERE id = $1 AND token_version = $2`, int64(uid), tokenVersion); err != nil {
+		return fmt.Errorf("disable totp bump epoch: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE session SET revoked_at = now(), revoked_reason = $3
+		WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
+		int64(uid), sessionID, ReasonPasswordChanged); err != nil {
+		return fmt.Errorf("disable totp revoke sessions: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("disable totp commit: %w", err)
+	}
+	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────
 // Recovery codes
 // ─────────────────────────────────────────────────────────────────────
 
-// ReplaceRecoveryCodes swaps the whole set atomically.
-//
-// Delete-then-insert in ONE transaction, so a user is never left with a
-// half-replaced set: the old codes stop working exactly when the new ones start.
-func (r *Repository) ReplaceRecoveryCodes(ctx context.Context, uid authctx.UserID, hashes [][]byte) error {
+func (r *Repository) RegenerateRecoveryCodes(ctx context.Context, uid authctx.UserID, sessionID int64,
+	tokenVersion int, password string, proof TOTPProof, hashes [][]byte) error {
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("replace recovery codes begin: %w", err)
+		return fmt.Errorf("regenerate recovery codes begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	var passwordHash *string
+	var liveVersion int
+	var status string
+	if err := tx.QueryRow(ctx, `
+		SELECT password_hash, token_version, status
+		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).
+		Scan(&passwordHash, &liveVersion, &status); err != nil {
+		return fmt.Errorf("regenerate recovery codes lock user: %w", err)
+	}
+	if status != StatusActive || liveVersion != tokenVersion {
+		return ErrSessionInvalid
+	}
+	if passwordHash == nil {
+		return ErrPasswordMissing
+	}
+	if !pwhash.Verify(*passwordHash, password) {
+		return ErrBadCredentials
+	}
+	if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
+		return err
+	}
+	if err := consumeTOTPProofTx(ctx, tx, uid, proof); err != nil {
+		return err
+	}
+	if err := replaceRecoveryCodesTx(ctx, tx, uid, hashes); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("regenerate recovery codes commit: %w", err)
+	}
+	return nil
+}
 
+func replaceRecoveryCodesTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, hashes [][]byte) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM recovery_code WHERE user_id = $1`, int64(uid)); err != nil {
 		return fmt.Errorf("clear recovery codes: %w", err)
 	}
-	for _, h := range hashes {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO recovery_code (user_id, code_hash) VALUES ($1, $2)`, int64(uid), h); err != nil {
-			return fmt.Errorf("insert recovery code: %w", err)
-		}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO recovery_code (user_id, code_hash)
+		SELECT $1, code_hash FROM unnest($2::bytea[]) AS code_hash`, int64(uid), hashes); err != nil {
+		return fmt.Errorf("insert recovery codes: %w", err)
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 // ConsumeRecoveryCode spends one code, or reports ErrBadCredentials.
@@ -468,7 +990,8 @@ func (r *Repository) CountRecoveryCodes(ctx context.Context, uid authctx.UserID)
 // E-mail OTP
 // ─────────────────────────────────────────────────────────────────────
 
-// CreateEmailOTP stores a hashed one-time code.
+// CreateEmailOTP stores a one-time code digest. Six-digit login codes use a
+// keyed, context-bound MAC; high-entropy e-mail verification links use SHA-256.
 //
 // Any earlier live code for the same user and purpose is consumed, so only the
 // most recently e-mailed code works. Otherwise every resend would ADD a valid
@@ -494,6 +1017,62 @@ func (r *Repository) CreateEmailOTP(ctx context.Context, uid authctx.UserID, cha
 		return fmt.Errorf("insert otp: %w", err)
 	}
 	return tx.Commit(ctx)
+}
+
+// CreateEmailVerification coalesces rapid authenticated resends while keeping
+// token superseding and publication in one transaction.
+func (r *Repository) CreateEmailVerification(ctx context.Context, uid authctx.UserID,
+	ttl time.Duration) (string, error) {
+	raw, hash, err := secrets.NewToken()
+	if err != nil {
+		return "", fmt.Errorf("verification token: %w", err)
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("create verification begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var verified bool
+	if err := tx.QueryRow(ctx, `
+		SELECT email_verified_at IS NOT NULL FROM app_user
+		WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).Scan(&verified); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrNoUser
+		}
+		return "", fmt.Errorf("lock verification user: %w", err)
+	}
+	if verified {
+		return "", ErrEmailAlreadyVerified
+	}
+	var recent bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM email_otp
+			WHERE user_id = $1 AND purpose = $2
+			  AND created_at >= now() - $3::interval
+		)`, int64(uid), OTPPurposeVerifyEmail, intervalArg(otpResendInterval)).Scan(&recent); err != nil {
+		return "", fmt.Errorf("verification cooldown: %w", err)
+	}
+	if recent {
+		return "", ErrTooSoon
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE email_otp SET consumed_at = now()
+		WHERE user_id = $1 AND purpose = $2 AND consumed_at IS NULL`,
+		int64(uid), OTPPurposeVerifyEmail); err != nil {
+		return "", fmt.Errorf("supersede verification tokens: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO email_otp (user_id, purpose, code_hash, expires_at)
+		VALUES ($1, $2, $3, now() + $4::interval)`,
+		int64(uid), OTPPurposeVerifyEmail, hash, intervalArg(ttl)); err != nil {
+		return "", fmt.Errorf("insert verification token: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("create verification commit: %w", err)
+	}
+	return raw, nil
 }
 
 // ConsumeEmailOTP spends a code for (user, purpose), or reports
@@ -558,25 +1137,103 @@ func (r *Repository) CreatePasswordReset(ctx context.Context, uid authctx.UserID
 		return "", fmt.Errorf("create reset begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	var eligible bool
+	var tokenVersion int
+	if err := tx.QueryRow(ctx, `
+		SELECT status = 'active' AND password_hash IS NOT NULL, token_version
+		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).Scan(&eligible, &tokenVersion); err != nil {
+		return "", fmt.Errorf("create reset lock user: %w", err)
+	}
+	if !eligible {
+		return "", ErrResetInvalid
+	}
 
 	// Superseding keeps exactly one link live. A user who clicks "forgot
 	// password" three times should not leave three usable tokens in three
 	// e-mails, each an independent chance for one to be intercepted.
 	if _, err := tx.Exec(ctx, `
 		UPDATE password_reset SET consumed_at = now()
-		WHERE user_id = $1 AND consumed_at IS NULL`, int64(uid)); err != nil {
+		WHERE user_id = $1 AND token_version IS NOT NULL AND consumed_at IS NULL`, int64(uid)); err != nil {
 		return "", fmt.Errorf("supersede resets: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO password_reset (user_id, token_hash, expires_at, requested_ip)
-		VALUES ($1, $2, now() + $3::interval, $4)`,
-		int64(uid), hash, intervalArg(ttl), nullIP(ip)); err != nil {
+		INSERT INTO password_reset (user_id, token_hash, token_version, expires_at, requested_ip)
+		VALUES ($1, $2, $3, now() + $4::interval, $5)`,
+		int64(uid), hash, tokenVersion, intervalArg(ttl), nullIP(ip)); err != nil {
 		return "", fmt.Errorf("insert reset: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("create reset commit: %w", err)
 	}
 	return raw, nil
+}
+
+// CreateAdminPasswordRecovery publishes a reset token only after SMTP accepts
+// it for the target's verified mailbox. The transaction remains uncommitted
+// during delivery, so a transport failure rolls back both the new token and the
+// superseding of any previous token. It does not touch the password, sessions,
+// token epoch or second factor; those change only when the target consumes the
+// token through ConsumePasswordReset.
+func (r *Repository) CreateAdminPasswordRecovery(ctx context.Context, uid authctx.UserID,
+	ttl time.Duration, deliver func(email, rawToken string) error) error {
+
+	raw, hash, err := secrets.NewToken()
+	if err != nil {
+		return fmt.Errorf("admin recovery token: %w", err)
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("admin recovery begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var email, status string
+	var verifiedAt *time.Time
+	var tokenVersion int
+	err = tx.QueryRow(ctx, `
+		SELECT email, status, email_verified_at, token_version
+		FROM app_user WHERE id = $1
+		FOR NO KEY UPDATE`, int64(uid)).Scan(&email, &status, &verifiedAt, &tokenVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNoUser
+	}
+	if err != nil {
+		return fmt.Errorf("admin recovery target: %w", err)
+	}
+	if status != StatusActive || verifiedAt == nil {
+		return ErrRecoveryUnavailable
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE password_reset SET consumed_at = now()
+		WHERE user_id = $1 AND token_version IS NOT NULL AND consumed_at IS NULL`, int64(uid)); err != nil {
+		return fmt.Errorf("admin recovery supersede: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO password_reset (user_id, token_hash, token_version, expires_at)
+		VALUES ($1, $2, $3, now() + $4::interval)`, int64(uid), hash, tokenVersion, intervalArg(ttl)); err != nil {
+		return fmt.Errorf("admin recovery insert: %w", err)
+	}
+	if err := deliver(email, raw); err != nil {
+		return fmt.Errorf("%w: %w", ErrRecoveryDelivery, err)
+	}
+	// Delivery can block on the SMTP timeout. Re-check the authorization state
+	// under the same row lock before publishing the token so a concurrently
+	// disabled account or changed mailbox cannot receive a stale recovery grant.
+	var stillEligible bool
+	if err := tx.QueryRow(ctx, `
+		SELECT status = 'active' AND email_verified_at IS NOT NULL
+		       AND email = $2 AND token_version = $3
+		FROM app_user WHERE id = $1`, int64(uid), email, tokenVersion).Scan(&stillEligible); err != nil {
+		return fmt.Errorf("admin recovery recheck: %w", err)
+	}
+	if !stillEligible {
+		return ErrRecoveryUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("admin recovery commit: %w", err)
+	}
+	return nil
 }
 
 // ConsumePasswordReset applies a new password to the account behind rawToken.
@@ -603,15 +1260,40 @@ func (r *Repository) ConsumePasswordReset(ctx context.Context, rawToken, newPass
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var uid int64
+	var resetVersion int
 	err = tx.QueryRow(ctx, `
-		UPDATE password_reset SET consumed_at = now()
-		WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()
-		RETURNING user_id`, secrets.Hash(rawToken)).Scan(&uid)
+		SELECT user_id, token_version FROM password_reset
+		WHERE token_hash = $1 AND token_version IS NOT NULL
+		  AND consumed_at IS NULL AND expires_at > now()`,
+		secrets.Hash(rawToken)).Scan(&uid, &resetVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrResetInvalid
 	}
 	if err != nil {
+		return User{}, fmt.Errorf("resolve reset: %w", err)
+	}
+
+	var status string
+	var liveVersion int
+	if err := tx.QueryRow(ctx, `
+		SELECT status, token_version FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, uid).
+		Scan(&status, &liveVersion); err != nil {
+		return User{}, fmt.Errorf("lock reset user: %w", err)
+	}
+	if status != StatusActive || liveVersion != resetVersion {
+		return User{}, ErrResetInvalid
+	}
+	ct, err := tx.Exec(ctx, `
+		UPDATE password_reset SET consumed_at = now()
+		WHERE token_hash = $1 AND user_id = $2
+		  AND token_version = $3
+		  AND consumed_at IS NULL AND expires_at > now()`,
+		secrets.Hash(rawToken), uid, liveVersion)
+	if err != nil {
 		return User{}, fmt.Errorf("consume reset: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return User{}, ErrResetInvalid
 	}
 
 	// A reset also VERIFIES the address: the user just proved they read mail
@@ -622,10 +1304,12 @@ func (r *Repository) ConsumePasswordReset(ctx context.Context, rawToken, newPass
 		SET password_hash = $2,
 		    token_version = token_version + 1,
 		    email_verified_at = COALESCE(email_verified_at, now()),
-		    status = CASE WHEN status = 'pending' THEN 'active' ELSE status END,
 		    updated_at = now()
-		WHERE id = $1
-		RETURNING `+userColumns, uid, hash))
+		WHERE id = $1 AND status = 'active' AND token_version = $3
+		RETURNING `+userColumns, uid, hash, liveVersion))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrResetInvalid
+	}
 	if err != nil {
 		return User{}, fmt.Errorf("apply reset password: %w", err)
 	}

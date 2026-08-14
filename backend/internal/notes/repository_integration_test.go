@@ -4,21 +4,46 @@ package notes_test
 
 import (
 	"context"
+	"math/big"
 	"strconv"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/domainerr"
+	sharedslug "foldex/internal/pkg/slug"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
 
 	"foldex/internal/pkg/authctx"
 )
+
+type mediaBucket struct {
+	objects map[string][]byte
+}
+
+func newMediaBucket() *mediaBucket {
+	return &mediaBucket{objects: map[string][]byte{}}
+}
+
+func (b *mediaBucket) Upload(_ context.Context, key string, data []byte, _ string) error {
+	b.objects[key] = append([]byte(nil), data...)
+	return nil
+}
+
+func (b *mediaBucket) GetObject(_ context.Context, key string) ([]byte, string, error) {
+	return b.objects[key], "image/jpeg", nil
+}
+
+func (b *mediaBucket) DeleteObject(_ context.Context, key string) error {
+	delete(b.objects, key)
+	return nil
+}
 
 func setup(t *testing.T) (context.Context, authctx.UserID, *notes.Repository, *tags.Repository, *folders.Repository) {
 	t.Helper()
@@ -35,20 +60,68 @@ func TestRepository_CreateAndGetWithTags(t *testing.T) {
 	require.NoError(t, err)
 
 	created, err := nrepo.Create(ctx, uid, notes.CreateInput{
-		Title:    "My Note",
-		BodyHTML: "<p>hello <strong>world</strong></p>",
-		TagIDs:   []int64{tagA.ID},
+		Title:       "My Note",
+		BodyHTML:    "<p>hello <strong>world</strong></p>",
+		TagIDs:      []int64{tagA.ID},
+		PendingTags: []tags.CreateInput{{Name: "queued", Color: "#22C55E"}},
 	})
 	require.NoError(t, err)
 	require.NotZero(t, created.ID)
 	assert.Equal(t, "my-note", created.Slug)
-	require.Len(t, created.Tags, 1)
+	require.Len(t, created.Tags, 2)
+	assert.Contains(t, []string{created.Tags[0].Name, created.Tags[1].Name}, "queued")
 	assert.Equal(t, "<p>hello <strong>world</strong></p>", created.BodyHTML)
 	assert.EqualValues(t, 0, created.ClickCount)
 
 	got, err := nrepo.Get(ctx, uid, created.ID)
 	require.NoError(t, err)
-	assert.Len(t, got.Tags, 1)
+	assert.Len(t, got.Tags, 2)
+}
+
+func TestRepository_CreateSlugRetryAndExhaustionReleaseTransactions(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	repo := notes.NewRepository(pool)
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO note (user_id, title, slug, body_html, body_text)
+		SELECT $1, 'Retry Note',
+		       CASE WHEN n = 1 THEN 'retry-note' ELSE 'retry-note-' || n END, '', ''
+		FROM generate_series(1, 2) n
+	`, int64(uid))
+	require.NoError(t, err)
+	before := pool.Stat().AcquiredConns()
+	created, err := repo.Create(ctx, uid, notes.CreateInput{
+		Title:       "Retry Note",
+		PendingTags: []tags.CreateInput{{Name: "retry-tag", Color: "#22C55E"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "retry-note-3", created.Slug)
+	require.Len(t, created.Tags, 1)
+	assert.Equal(t, before, pool.Stat().AcquiredConns(), "successful retries must release every replaced transaction")
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO note (user_id, title, slug, body_html, body_text)
+		SELECT $1, 'Exhaust Note',
+		       CASE WHEN n = 1 THEN 'exhaust-note' ELSE 'exhaust-note-' || n END, '', ''
+		FROM generate_series(1, $2) n
+	`, int64(uid), sharedslug.CreateMaxAttempts)
+	require.NoError(t, err)
+	before = pool.Stat().AcquiredConns()
+	beforeAttempts := pool.Stat().AcquireCount()
+	_, err = repo.Create(ctx, uid, notes.CreateInput{
+		Title:       "Exhaust Note",
+		PendingTags: []tags.CreateInput{{Name: "exhaust-tag", Color: "#22C55E"}},
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sharedslug.ErrCreateExhausted)
+	assert.EqualValues(t, sharedslug.CreateMaxAttempts, pool.Stat().AcquireCount()-beforeAttempts)
+	assert.Equal(t, before, pool.Stat().AcquiredConns(), "exhaustion must not leave a transaction checked out")
+	var tagCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM tag WHERE user_id = $1 AND name = 'exhaust-tag'`, int64(uid)).Scan(&tagCount))
+	assert.Zero(t, tagCount, "pending tags must not escape an exhausted parent create")
 }
 
 func TestRepository_Create_SanitizesBodyHTML(t *testing.T) {
@@ -81,11 +154,7 @@ func TestRepository_Create_UserSuppliedSlugConflict(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = nrepo.Create(ctx, uid, notes.CreateInput{Title: "B", Slug: &slug})
-	require.Error(t, err)
-	var herr *httperr.Error
-	require.ErrorAs(t, err, &herr)
-	assert.Equal(t, "slug_taken", herr.Code)
-	assert.Equal(t, 409, herr.Status)
+	require.ErrorIs(t, err, notes.ErrSlugTaken)
 }
 
 func TestRepository_GetBySlug(t *testing.T) {
@@ -100,7 +169,7 @@ func TestRepository_GetBySlug(t *testing.T) {
 func TestRepository_Get_NotFound(t *testing.T) {
 	ctx, uid, nrepo, _, _ := setup(t)
 	_, err := nrepo.Get(ctx, uid, 999999)
-	require.ErrorIs(t, err, httperr.ErrNotFound)
+	require.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
 func TestRepository_List_SearchTitleAndBody(t *testing.T) {
@@ -258,11 +327,7 @@ func TestNoteUpdate_ConflictOnStaleUpdatedAt(t *testing.T) {
 		Title:            &stale,
 		IfMatchUpdatedAt: &seen,
 	})
-	require.Error(t, err)
-	var he *httperr.Error
-	require.ErrorAs(t, err, &he)
-	assert.Equal(t, 409, he.Status)
-	assert.Equal(t, "conflict", he.Code)
+	require.ErrorIs(t, err, notes.ErrStaleWrite)
 
 	// Fresh match still works.
 	fresh := "v3"
@@ -278,7 +343,7 @@ func TestRepository_Update_NotFound(t *testing.T) {
 	ctx, uid, nrepo, _, _ := setup(t)
 	title := "x"
 	_, err := nrepo.Update(ctx, uid, 999999, notes.UpdateInput{Title: &title})
-	require.ErrorIs(t, err, httperr.ErrNotFound)
+	require.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
 func TestRepository_Delete_CascadesTagsAndClicks(t *testing.T) {
@@ -292,7 +357,7 @@ func TestRepository_Delete_CascadesTagsAndClicks(t *testing.T) {
 	require.NoError(t, nrepo.Delete(ctx, uid, created.ID, nil))
 
 	_, err = nrepo.Get(ctx, uid, created.ID)
-	require.ErrorIs(t, err, httperr.ErrNotFound)
+	require.ErrorIs(t, err, domainerr.ErrNotFound)
 
 	// Re-create a note and confirm the deleted note's tag/click rows didn't
 	// leave dangling entity_kind='note' rows that could surface elsewhere.
@@ -306,7 +371,78 @@ func TestRepository_Delete_CascadesTagsAndClicks(t *testing.T) {
 func TestRepository_Delete_NotFound(t *testing.T) {
 	ctx, uid, nrepo, _, _ := setup(t)
 	err := nrepo.Delete(ctx, uid, 999999, nil)
-	require.ErrorIs(t, err, httperr.ErrNotFound)
+	require.ErrorIs(t, err, domainerr.ErrNotFound)
+}
+
+func TestRepository_DeleteCannotDeletePublicMediaReferencedByAnotherTenant(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	victim := testdb.SeedUser(t, pool, "victim@test.local", "user")
+	attacker := testdb.SeedUser(t, pool, "attacker@test.local", "user")
+	repo := notes.NewRepository(pool)
+	bucket := newMediaBucket()
+
+	const key = "notes/3f2504e0-4f89-41d3-9a0c-0305e82c3301.jpg"
+	bucket.objects[key] = []byte("victim-bytes")
+	require.NoError(t, repo.RegisterMediaLease(ctx, victim, key))
+	publicImage := `<img src="/api/files/` + key + `">`
+	_, err := repo.Create(ctx, victim, notes.CreateInput{Title: "Public victim", BodyHTML: publicImage})
+	require.NoError(t, err)
+	attackNote, err := repo.Create(ctx, attacker, notes.CreateInput{Title: "Crafted reference", BodyHTML: publicImage})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Delete(ctx, attacker, attackNote.ID, bucket))
+	assert.Equal(t, []byte("victim-bytes"), bucket.objects[key],
+		"a public reference grants read access only, never authority to delete the object")
+}
+
+func TestRepository_OwnedMediaIsCleanedWhenLastReferenceIsDeleted(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	repo := notes.NewRepository(pool)
+	bucket := newMediaBucket()
+	const key = "notes/d8b98ef0-f7e6-43ae-bad7-743ece7d5dd3.jpg"
+	bucket.objects[key] = []byte("owned-bytes")
+	require.NoError(t, repo.RegisterMediaLease(ctx, uid, key))
+	note, err := repo.Create(ctx, uid, notes.CreateInput{
+		Title: "Owned media", BodyHTML: `<img src="/api/files/` + key + `">`,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Delete(ctx, uid, note.ID, bucket))
+	assert.NotContains(t, bucket.objects, key)
+	assert.Zero(t, scalarCount(t, pool,
+		`SELECT count(*) FROM note_media WHERE user_id = $1 AND object_key = $2`, int64(uid), key))
+}
+
+func TestRepository_UpdateCleansMediaAfterRemovingLastReference(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	bucket := newMediaBucket()
+	repo := notes.NewRepository(pool).WithStorage(bucket)
+	const key = "notes/0f35cd7e-80f5-4a49-9994-ec75374ea1fb.jpg"
+	bucket.objects[key] = []byte("owned-bytes")
+	require.NoError(t, repo.RegisterMediaLease(ctx, uid, key))
+	note, err := repo.Create(ctx, uid, notes.CreateInput{
+		Title: "Owned media", BodyHTML: `<img src="/api/files/` + key + `">`,
+	})
+	require.NoError(t, err)
+
+	body := "<p>image removed</p>"
+	_, err = repo.Update(ctx, uid, note.ID, notes.UpdateInput{BodyHTML: &body})
+	require.NoError(t, err)
+	assert.NotContains(t, bucket.objects, key)
+	assert.Zero(t, scalarCount(t, pool,
+		`SELECT count(*) FROM note_media WHERE user_id = $1 AND object_key = $2`, int64(uid), key))
+}
+
+func scalarCount(t *testing.T, pool *pgxpool.Pool, query string, args ...any) int64 {
+	t.Helper()
+	var count int64
+	require.NoError(t, pool.QueryRow(context.Background(), query, args...).Scan(&count))
+	return count
 }
 
 func TestRepository_ViewAndResolve_LogsClickByIDAndSlug(t *testing.T) {
@@ -334,7 +470,22 @@ func TestRepository_ViewAndResolve_LogsClickByIDAndSlug(t *testing.T) {
 func TestRepository_ViewAndResolve_NotFound(t *testing.T) {
 	ctx, _, nrepo, _, _ := setup(t)
 	_, err := nrepo.SystemViewAndResolve(ctx, "does-not-exist")
-	require.ErrorIs(t, err, httperr.ErrNotFound)
+	require.ErrorIs(t, err, domainerr.ErrNotFound)
+}
+
+func TestRepository_ViewAndResolve_OverflowDoesNotWrap(t *testing.T) {
+	ctx, uid, nrepo, _, _ := setup(t)
+	created, err := nrepo.Create(ctx, uid, notes.CreateInput{Title: "Overflow Guard"})
+	require.NoError(t, err)
+
+	overflow := new(big.Int).Lsh(big.NewInt(1), 64)
+	overflow.Add(overflow, big.NewInt(created.ID))
+	_, err = nrepo.SystemViewAndResolve(ctx, overflow.String())
+	require.ErrorIs(t, err, domainerr.ErrNotFound)
+
+	got, err := nrepo.Get(ctx, uid, created.ID)
+	require.NoError(t, err)
+	assert.EqualValues(t, 0, got.ClickCount)
 }
 
 // TestCrossContamination_LinkAndNoteRowsDoNotLeak is the regression guard for

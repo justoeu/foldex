@@ -3,12 +3,11 @@ package tags
 import (
 	"context"
 	"fmt"
-	"net/http"
 
 	"github.com/jackc/pgx/v5"
 
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/domainerr"
 )
 
 // Querier is satisfied by *pgxpool.Pool (and pgx.Tx for tests).
@@ -50,6 +49,48 @@ func SetEntityTags(ctx context.Context, tx pgx.Tx, uid authctx.UserID, kind stri
 	return nil
 }
 
+// SetEntityTagsWithPending creates inline tag definitions and replaces the
+// entity's complete tag set inside the caller's transaction.
+func SetEntityTagsWithPending(ctx context.Context, tx pgx.Tx, uid authctx.UserID, kind string, entityID int64, tagIDs []int64, pending []CreateInput) error {
+	resolved := append([]int64(nil), tagIDs...)
+	if len(pending) > 0 {
+		rows := make([][]any, 0, len(pending))
+		names := make([]string, 0, len(pending))
+		for i := range pending {
+			in := pending[i]
+			in.Normalize()
+			if err := in.Validate(); err != nil {
+				return domainerr.InvalidInput(err.Error())
+			}
+			rows = append(rows, []any{int64(uid), in.Name, in.Color, in.Icon})
+			names = append(names, in.Name)
+		}
+		if _, err := tx.CopyFrom(ctx,
+			pgx.Identifier{"tag"},
+			[]string{"user_id", "name", "color", "icon"},
+			pgx.CopyFromRows(rows),
+		); err != nil {
+			return createError(err)
+		}
+		created, err := tx.Query(ctx, `SELECT id FROM tag WHERE user_id = $1 AND name = ANY($2)`, int64(uid), names)
+		if err != nil {
+			return fmt.Errorf("resolve pending tags: %w", err)
+		}
+		defer created.Close()
+		for created.Next() {
+			var id int64
+			if err := created.Scan(&id); err != nil {
+				return fmt.Errorf("resolve pending tag: %w", err)
+			}
+			resolved = append(resolved, id)
+		}
+		if err := created.Err(); err != nil {
+			return fmt.Errorf("resolve pending tags: %w", err)
+		}
+	}
+	return SetEntityTags(ctx, tx, uid, kind, entityID, resolved)
+}
+
 // assertTagsOwned fails unless every id belongs to uid. It reports the generic
 // 400 invalid_input rather than naming which id was foreign: replying "tag 7 is
 // not yours" would confirm that tag 7 exists on some other account.
@@ -72,7 +113,7 @@ func assertTagsOwned(ctx context.Context, q Querier, uid authctx.UserID, tagIDs 
 	// Compare against the DISTINCT count: a payload repeating one owned id must
 	// not pass a check that a payload of that id plus a foreign one would fail.
 	if owned != distinctCount(tagIDs) {
-		return httperr.New(http.StatusBadRequest, "invalid_input", "unknown tag id")
+		return domainerr.InvalidInput("unknown tag id")
 	}
 	return nil
 }

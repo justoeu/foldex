@@ -280,6 +280,7 @@ CREATE TABLE password_reset (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
     token_hash BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    token_version INTEGER, -- obrigatório em linhas novas (000028); NULL legado falha fechado
     expires_at TIMESTAMPTZ NOT NULL, consumed_at TIMESTAMPTZ, requested_ip INET
 );
 CREATE UNIQUE INDEX password_reset_token_hash_uniq ON password_reset (token_hash);
@@ -290,6 +291,7 @@ CREATE TABLE auth_challenge (
     user_id BIGINT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
     token_hash BYTEA NOT NULL,
     purpose TEXT NOT NULL,
+    token_version INTEGER, -- obrigatório em linhas novas (000025); NULL legado falha fechado
     attempts SMALLINT NOT NULL DEFAULT 0,
     sends    SMALLINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ NOT NULL,
@@ -332,7 +334,7 @@ CREATE UNIQUE INDEX recovery_code_hash_uniq ON recovery_code (code_hash);
 
 **O seed TOTP é cifrado, não hasheado.** Verificar TOTP exige o seed em claro, então hash está fora de questão; e um seed base32 em claro num `pg_dump` é um bypass permanente de 2FA. AES-256-GCM com chave carregada por `AUTH_ENCRYPTION_KEY` (env base64 → arquivo → autogeração em `0600`), exatamente a forma de `FOLDER_UNLOCK_KEY`.
 
-**Códigos de recuperação usam `sha256`, não bcrypt** — e isso é uma decisão, não um descuido. A verificação precisa ser um lookup indexado `WHERE code_hash = $1`; com bcrypt seria um scan da tabela inteira comparando sequencialmente contra as 10 linhas (~1 s no `DefaultCost`), e ainda assim sem ganho: os códigos têm ~50 bits de entropia, gerados por `crypto/rand`. É a entropia que os torna seguros, não o custo do hash.
+**Códigos de recuperação usam MAC HMAC-SHA256 indexável, não hash sem chave nem bcrypt.** `AUTH_ENCRYPTION_KEY` passa por derivação HMAC-SHA256 com domínios separados para recovery e OTP de e-mail; o material AES/nonce nunca é reutilizado diretamente. Recovery vincula versão, purpose, `user_id` e o código normalizado; OTP vincula também o `challenge_id`. Cada recovery tem 16 símbolos base32 uniformes (80 bits), exibidos como `XXXX-XXXX-XXXX-XXXX`. Assim `WHERE code_hash = $1` continua um lookup O(1), mas um dump não permite enumerar o domínio sem a chave externa. A migration `000023` invalida os digests SHA-256 antigos em vez de aceitar dois formatos.
 
 O consumo é `UPDATE ... WHERE code_hash=$1 AND user_id=$2 AND used_at IS NULL RETURNING id` — o UPDATE condicional é o que torna “uso único” atômico sob concorrência, em vez de um read-then-write com corrida.
 
@@ -355,9 +357,17 @@ CREATE TABLE oauth_state (
     provider TEXT NOT NULL, purpose TEXT NOT NULL,
     user_id   BIGINT REFERENCES app_user(id) ON DELETE CASCADE,
     invite_id BIGINT REFERENCES invite(id)   ON DELETE CASCADE,
+    session_id BIGINT REFERENCES session(id) ON DELETE CASCADE,
+    token_version INTEGER,
+    proof_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ NOT NULL,
     consumed_at TIMESTAMPTZ,
-    CONSTRAINT oauth_state_purpose_check CHECK (purpose IN ('login','link','accept_invite'))
+    CONSTRAINT oauth_state_purpose_check CHECK (purpose IN ('login','link','accept_invite')),
+    CONSTRAINT oauth_state_link_proof_check CHECK (
+      purpose <> 'link' OR
+      (user_id IS NOT NULL AND session_id IS NOT NULL AND
+       token_version IS NOT NULL AND proof_at IS NOT NULL)
+    )
 );
 CREATE UNIQUE INDEX oauth_state_hash_uniq ON oauth_state (state_hash);
 ```
@@ -467,7 +477,7 @@ Reversibilidade honesta: **schema volta, dados de identidade não.** Todo `app_u
 | `POST` | `/api/auth/password/reset` | token | Consome o token; revoga todas as sessões. |
 | `POST` | `/api/auth/password/change` | sessão + CSRF | Exige senha atual. Revoga as demais sessões. |
 | `POST` | `/api/auth/password/set` | sessão + CSRF + step-up | Conta Google-only readquire senha. Saída de lockout (§7.5). |
-| `GET` | `/api/auth/invites/{token}` | — | `{email, role, expires_at}` ou **404**. |
+| `POST` | `/api/auth/invites/lookup` | token no body | `{email, role, expires_at}` ou **404**. |
 | `POST` | `/api/auth/invites/accept` | token | Define nome + senha, ativa a conta, emite sessão. |
 | `POST` | `/api/auth/email/verify` | token | Marca `email_verified_at`. |
 | `POST` | `/api/auth/email/resend` | sessão ou `fx_pa` | Cooldown de 60 s. |
@@ -490,7 +500,9 @@ Um endpoint de verificação, três fontes de código. O frontend tem uma tela d
 
 | Método | Rota | Auth | `purpose` |
 |---|---|---|---|
-| `GET` | `/api/auth/oauth/google/start` | — / sessão | `login` · `link` (exige sessão) · `accept_invite` |
+| `GET` | `/api/auth/oauth/google/start` | — | `login`; `purpose=link` e `accept_invite` são recusados |
+| `POST` | `/api/auth/oauth/google/invite/start` | token no body; `Optional` | `accept_invite`; devolve `redirect_url` |
+| `POST` | `/api/auth/oauth/google/start` | sessão + CSRF + senha + TOTP/recovery quando ativo | `link`; devolve `redirect_url` |
 | `GET` | `/api/auth/oauth/google/callback` | — | — |
 | `POST` | `/api/auth/oauth/google/convert` | `fx_pa` | Confirma a senha e converte (§7.4) |
 | `DELETE` | `/api/auth/oauth/google` | sessão + CSRF + senha | Desvincula |
@@ -593,11 +605,17 @@ Seis dígitos gerados por `crypto/rand` com **rejection sampling** — nunca `%`
 
 TTL de 5 min, máximo 3 attempts no próprio registro, máximo 3 envios por challenge com intervalo mínimo de 60 s. Responde `202` mesmo quando recusado por rate limit, para não virar sonda.
 
+Todo envio assíncrono de auth passa por um dispatcher único do processo (2 workers, fila 32), cancelado e aguardado no shutdown depois do drain HTTP. Reset, OTP de login e verificação reservam uma vaga antes de publicar/superseder a credencial; fila cheia não consome budget nem troca o token anterior, inclusive no limiter por endereço do forgot-password. O incremento de `auth_challenge.sends` e o INSERT do OTP são uma transação. `/email/resend`, autenticado, coalesce por 60 s; fila cheia retorna `503 mail_queue_full` nele e em `/2fa/email`, enquanto `/password/forgot` preserva o `202` indistinguível. O force-reset administrativo não usa a fila: SMTP continua síncrono dentro da transação, portanto erro de envio faz rollback.
+
 ### 6.3 O contador de tentativas mora no banco
 
 `auth_challenge.attempts` é incrementado por `UPDATE ... RETURNING attempts` — incremento atômico, então N palpites paralelos não correm mais rápido que o cap.
 
 Ele fica no **banco**, e não no `attemptlimit` em memória, deliberadamente: `CLAUDE.md §4` aceita explicitamente estado em memória para o unlock de pasta (“restart clears the state — acceptable”), mas um restart do backend **não pode** zerar o orçamento de tentativas de um segundo fator. É a diferença entre um limitador de conveniência e um controle de segurança.
+
+Migration `000025` grava o `app_user.token_version` que estava vivo quando a prova criou o challenge e o enrollment TOTP pendente (`totp_secret.enrollment_token_version`). A `000028` grava o mesmo epoch em cada `password_reset`, tanto no forgot normal quanto no recovery administrativo. Enrollment iniciado por Settings guarda ainda `enrollment_session_id`, enquanto o fluxo pre-auth obrigatório mantém esse campo NULL e se prende ao challenge. Linhas anteriores ficam NULL e nunca satisfazem a igualdade, sem precisar inventar um epoch durante deploy. Resolve, incremento/envio, consumo, enrollment, reset e emissão de sessão exigem o mesmo epoch sob lock de `app_user`; reset/troca de senha, logout-all e mudanças administrativas de role/status ou revogação invalidam imediatamente o estado anterior. O consumidor de reset compara igualdade exata antes de gastar o token, trocar a senha ou revogar sessões. Troca de senha trava a linha antes de verificar e escrever, e revoga as outras sessões na mesma tx: duas requests concorrentes com a senha antiga produzem um vencedor.
+
+O resultado autenticado também é atômico: TOTP/recovery/e-mail OTP, challenge e nova sessão são consumidos/criados em uma tx. Confirmar enrollment ativa o seed, grava o counter, substitui a folha de recovery e, quando veio de `enroll_2fa`, consome challenge + cria sessão no mesmo commit. Settings exige ainda a mesma sessão viva que iniciou o enrollment. Falha de INSERT/revogação tardia faz rollback inclusive da prova. Set-password, disable e regenerate seguem a mesma regra, e código criptograficamente válido porém replayed conta como falha no limiter — não reseta orçamento antes do CAS no banco.
 
 ---
 
@@ -605,7 +623,7 @@ Ele fica no **banco**, e não no `attemptlimit` em memória, deliberadamente: `C
 
 ### 7.1 PKCE e state
 
-`code_verifier` de 64 bytes → base64url; `code_challenge` = base64url(sha256(verifier)); método **`S256` apenas**, nunca `plain`. O verifier fica em `oauth_state` no servidor; o cookie `fx_oauth` carrega só o `state`. No callback, os dois precisam bater — é isso que impede login-CSRF (um atacante enxertar *a conta Google dele* no seu browser).
+`code_verifier` de 64 bytes → base64url; `code_challenge` = base64url(sha256(verifier)); método **`S256` apenas**, nunca `plain`. O verifier fica em `oauth_state` no servidor; o cookie `fx_oauth` carrega só o `state`. No callback, os dois precisam bater — é isso que impede login-CSRF (um atacante enxertar *a conta Google dele* no seu browser). Para `purpose=link`, o state também carrega `user_id`, a `session_id` exata, `token_version` e `proof_at`; a prova expira em cinco minutos.
 
 Uso único é garantido por `UPDATE ... SET consumed_at=now() WHERE state_hash=$1 AND consumed_at IS NULL AND expires_at > now() RETURNING ...` — UPDATE condicional, não read-then-write.
 
@@ -639,29 +657,36 @@ callback (purpose=login), sub desconhecido, e-mail bate
               │
               └─ POST /api/auth/oauth/google/convert {"password":"…"}
                    ├─ errada  → 401 invalid_credentials (conta no cap de 5)
-                   └─ correta → uma tx:
-                        INSERT user_identity(user_id,'google',sub)
-                        UPDATE app_user SET password_hash = NULL      ← vira Google-only
-                        RevokeAllForUser(uid,'password_changed')
-                        consome o challenge
-                      → segue para o 2FA normal; NUNCA emite sessão direto
+                    └─ correta → uma tx sob lock de app_user:
+                         consome condicionalmente challenge vivo + epoch atual
+                         INSERT user_identity(user_id,'google',sub)
+                         UPDATE app_user SET password_hash = NULL,
+                                             token_version += 1       ← vira Google-only
+                         RevokeAllForUser(uid,'password_changed')
+                       → segue para o 2FA normal; NUNCA emite sessão direto
 ```
 
 **A senha atual é a prova, não o e-mail.** Isso é deliberadamente mais estrito do que o argumento “o e-mail já é a raiz da identidade” permitiria — afinal o fluxo de reset de senha já entrega a conta a quem controla a caixa postal. A escolha foi tornar a conversão uma migração deliberada, não um caminho de recuperação. Consequência aceita: **“esqueci a senha, entro com Google” não funciona.** Quem esqueceu usa o reset e converte depois.
 
+Consumo e mutação não são separados: a conversão trava o usuário, exige `status='active'`, hash e epoch atuais, e ganha o `UPDATE ... WHERE consumed_at IS NULL ... RETURNING` do challenge antes de inserir identidade. Reset, substituição do challenge e POST concorrente fazem o perdedor retornar sem alteração de credencial.
+
 **OAuth nunca pula 2FA.** O retorno do Google — login normal ou conversão — desemboca no mesmo `auth_challenge`. Sem isso, com TOTP obrigatório para admin, o OAuth seria um furo direto na regra.
+
+**A política de admin cobre a aquisição e o uso do papel.** Bootstrap e aceite de convite admin passam por `completeLogin`; promoção revoga todas as sessões do alvo na mesma transação da troca de papel. Depois disso, `RequireAdmin` consulta o TOTP confirmado atual, de modo que sessão criada antes de ligar a política — mesmo renovada por refresh — recebe `403 admin_2fa_required`, enquanto non-admin continua recebendo 404 e `/api/auth/2fa/*` continua alcançável para concluir o enrollment. Essa gate de estado atual, combinada com revogação na promoção, evita persistir assurance na sessão.
+
+**Confirmar enrollment exige epoch original + CAS do seed verificado.** `StartTOTPEnrollment` persiste `enrollment_token_version`. A confirmação trava `app_user`, exige que esse epoch ainda seja o vivo e então grava `confirmed_at`/counter somente se `secret_ciphertext` + `secret_nonce` ainda forem os mesmos carregados antes de verificar o código. A mesma tx cria a folha de recovery e, em enrollment obrigatório, consome challenge + cria sessão; no caminho Settings ela revalida a sessão exata. Mudança de senha/status, revogação de sessão, substituição do seed ou falha tardia deixam o enrollment pendente e sem recovery parcial.
 
 ### 7.5 Vínculo, desvínculo e saídas de lockout
 
-Vincular a uma conta já logada (`purpose=link`) exige sessão viva + CSRF, e a conta vinculada é **a da sessão** — nunca uma derivada do e-mail do Google. Os e-mails não precisam coincidir: é legítimo vincular um Gmail pessoal a uma conta de trabalho, *porque a sessão já provou a posse*. É exatamente por isso que vincular sem sessão nunca pode acontecer.
+Vincular a uma conta já logada (`purpose=link`) é mudança de credencial e exige step-up: `POST` com CSRF, senha atual e, se há TOTP confirmado, TOTP atual ou recovery single-use. Os dois limitadores por usuário são independentes (senha e segundo fator, cinco falhas/15 min). Só depois a API devolve `redirect_url`; senha/código nunca entram em URL. O state fica preso por cinco minutos ao `user_id`, à sessão exata, ao `token_version` e ao instante da prova. O callback valida isso antes de chamar o Google e `LinkIdentity` valida de novo sob locks antes do INSERT. Logout, revoke, reset/troca de senha, outra sessão do mesmo principal, expiração e replay recebem `state_invalid` uniforme e não vinculam nada. A conta vinculada é **a da prova** — nunca uma derivada do e-mail do Google. Os e-mails não precisam coincidir: é legítimo vincular um Gmail pessoal a uma conta de trabalho.
 
 Aceitar convite via Google exige `email_verified == true` **e** e-mail idêntico ao do convite: o convite é emitido para um endereço específico, e permitir aceitá-lo com outra conta Google deixaria um link vazado ser reivindicado em silêncio.
 
-Desvincular exige senha e é recusado se deixasse a conta **sem credencial alguma**.
+Desvincular exige senha e é recusado se deixasse a conta **sem credencial alguma**. A escrita revalida sessão e epoch, remove a identidade, incrementa `token_version` e revoga as outras sessões no mesmo commit; set-password usa o mesmo boundary para instalar hash + consumir TOTP quando ativo + revogar outras sessões.
 
 Uma conta Google-only cujo acesso ao Google se perde tem três saídas, todas construídas de propósito:
 
-1. `POST /api/admin/users/{id}/force-password-reset` — o admin devolve uma senha à conta.
+1. `POST /api/admin/users/{id}/force-password-reset` — exige SMTP e mailbox verificada; envia recovery user-bound e preso ao epoch vivo, responde `202` vazio e nunca instala/devolve segredo ao admin. A tx só publica o token depois do envio; falha SMTP não muda nada. Qualquer bump de epoch antes do consumo invalida o link.
 2. Logado via Google, **Settings → “Definir senha”** readquire a credencial (step-up com código TOTP quando houver). Só depois disso desvincular passa a ser permitido.
 3. `/api/auth/password/forgot` numa conta Google-only responde o mesmo `202` (anti-enumeração) mas envia **“esta conta entra pelo Google”** em vez de um link de reset. Deixar o link seria ressuscitar, só com a caixa postal, exatamente a credencial que a exigência de senha na conversão descartou.
 
@@ -702,7 +727,7 @@ Habitantes: `ClickAndResolve*` e `ViewAndResolve` (rotas públicas), `FindDueFor
 
 Para cada método: `uid authctx.UserID` logo após `ctx`; `user_id = $N` como **primeiro** predicado do WHERE (para o índice composto liderar); `user_id` em toda lista de colunas de INSERT; `AND user_id = $N` em todo UPDATE/DELETE.
 
-**Linha alheia responde 404, nunca 403.** Um 403 confirmaria que o id existe, transformando a rota em oráculo de enumeração cross-tenant. Como os repositórios já devolvem `httperr.ErrNotFound` quando o `RETURNING` não traz linha, isso sai de graça — mas é intencional e está travado por teste.
+**Linha alheia responde 404, nunca 403.** Um 403 confirmaria que o id existe, transformando a rota em oráculo de enumeração cross-tenant. Os repositórios devolvem `domainerr.ErrNotFound` quando o `RETURNING` não traz linha; o handler traduz essa semântica para o envelope `404 not_found`. O comportamento é intencional e está travado por teste.
 
 Exemplo, `entries.appendScopeFilters` — o caso mais delicado, porque os dois braços do `UNION ALL` compartilham um único slice `args` e os índices dos placeholders vêm de `len(*args)`:
 
@@ -748,15 +773,17 @@ O preview worker e o change-check worker são cross-tenant por natureza. `FindDu
 | `password/reset`, `invites/accept` | `:ip` | 20/h |
 | `bootstrap` | `bootstrap:ip` | 5/h |
 | `2fa` de step-up (`totp/disable`, `recovery-codes/regenerate`) | `stepup:<uid>` | 5 / 15 min |
+| senha do step-up de vínculo OAuth | `stepup-password:<uid>` | 5 / 15 min |
+| TOTP/recovery do vínculo OAuth | `stepup:<uid>` | 5 / 15 min |
 | `oauth/google/start` | `oauth:<ip>` | 30/h |
 
 Duas ausências deliberadas. **Bearer inválido não tem bucket próprio**: resolver um token é um
 `SELECT` por id seguido de uma comparação em tempo constante — não há hash caro para exaurir, e o
 segredo tem 256 bits, então limitar palpites não muda nada que a entropia já não decida.
-E o limite de OAuth fica no **`start`**, não no `callback`: é o `start` que gasta trabalho antes de
-qualquer prova (grava `oauth_state`, monta PKCE), enquanto o `callback` precisa de um `state`
-válido emitido por um `start` que já pagou o bucket. Limitar o callback puniria o retorno legítimo
-do Google numa rede compartilhada, sem fechar nada que o `start` não feche antes.
+E o limite de OAuth fica no **`start`**, não no `callback`: os starts públicos gravam `oauth_state`
+e montam PKCE; o start de vínculo paga os buckets de senha/segundo fator antes do bucket por IP.
+O callback precisa de um `state` válido emitido por um start que já pagou os controles aplicáveis.
+Limitá-lo puniria o retorno legítimo do Google numa rede compartilhada sem fechar outra via.
 
 **`middleware.RealIP` confia em `X-Forwarded-For` incondicionalmente.** Atrás do nginx está certo; em bind direto é spoofável, o que torna os buckets por IP decorativos. Entra `TRUSTED_PROXY_IPS` (CSV): `X-Forwarded-For` só é honrado vindo desses peers, senão vale `RemoteAddr`. É por isso que o desenho tem **duas** chaves — a de e-mail e as do banco seguram mesmo se a de IP falhar.
 
@@ -779,7 +806,7 @@ defer func() {
 
 Um piso elimina o sinal enquanto exceder o pior caso de trabalho real. Jitter só adiciona variância, que o atacante remove com média sobre amostras repetidas.
 
-`/password/forgot` sempre `202`. `GET /invites/{token}` é lookup `sha256` em tempo constante, `404` no miss, sem nenhuma query por e-mail.
+`/password/forgot` sempre `202`. `POST /invites/lookup` recebe o token no body, faz lookup `sha256` em tempo constante e devolve `404` no miss, sem nenhuma query por e-mail; assim o token não entra no path nem no access log.
 
 `internal/pkg/logsafe` ganha redação para `password`, `code`, `recovery_code`, `token`, `refresh_token`, `access_token`, `code_verifier`, `state`, `secret_base32` e `sub`, e passa a logar `user_id` em vez de e-mail em nível info.
 
@@ -816,7 +843,7 @@ Não vão `app_user`, `session`, `totp_secret`, `recovery_code`, `api_token`, `i
 
 ### 10.4 Object store — as quatro superfícies
 
-**As chaves são planas** — `screenshots/{link_id}.ext`, `images/{link_id}.ext`, `notes/{uuid}.ext`. Não há segmento de tenant, então **a posse de um arquivo é estabelecida pela LINHA que o referencia**, nunca pela chave. Re-particionar por usuário exigiria reescrever `og_image_url` em todas as linhas e mover objetos vivos — desproporcional. A alternativa adotada escopa as quatro superfícies onde a chave é lida ou escrita. Cada uma falhava de forma independente, e **a suíte single-tenant passava em todas elas**:
+**As chaves são planas** — `screenshots/{link_id}.ext`, `images/{link_id}.ext`, `notes/{uuid}.ext`. Não há segmento de tenant, então a posse nunca vem da string da chave nem de mera referência: links são provados pela linha owner-scoped; desde a 000022, notes usam `note_media` + `note_media_ref`. Re-particionar o bucket por usuário exigiria mover objetos vivos e reescrever URLs; persistir ownership fecha a autorização sem quebrar URLs públicas.
 
 | Superfície | Falha | Correção |
 |---|---|---|
@@ -824,8 +851,9 @@ Não vão `app_user`, `session`, `totp_secret`, `recovery_code`, `api_token`, `i
 | `GET /api/files/*` | id denso e enumerável ⇒ qualquer autenticado varria o range e lia imagem alheia | `repo.Get(uid, id)` para chaves derivadas de id; chave alheia devolve o **404 byte a byte idêntico** ao de chave inexistente (§4 404-não-403 vale para chave, não só para linha) |
 | `POST /api/links/{id}/image` | `Upload` + `purgeLegacyVariants` rodavam **antes** do check; o `UpdateOGImage` escopado devolvia 404 depois de o objeto da vítima já ter sido sobrescrito e as variantes irmãs apagadas | posse verificada no topo, antes de ler um byte |
 | `restore` (`applyFiles`) | chave declarada pelo ZIP era honrada quando o remap não casava ⇒ ZIP forjado sobrescrevia objeto de quem detém aquele id | só grava chave que saiu de `mapping.remapFileKey`; entrada órfã é descartada |
+| `notes/<uuid>` | URL pública em `body_html` era tratada como ownership por delete/wipe/restore | upload cria lease owner-scoped; refs têm FKs compostas; destruição usa refs/owner; restore gera UUID novo e reescreve HTML/cover |
 
-**`notes/` é deliberadamente exceção**: a página pública `/n/{slug}` renderiza `body_html` **sem sessão**, e o browser busca essas imagens sem principal nenhum. Gatear quebraria toda nota publicada. A proteção é o UUIDv4 de 122 bits, que só aparece dentro da nota dona — é uma *capability URL*, e está registrado como tal, não como esquecimento.
+**`notes/` continua exceção somente para READ.** A página pública `/n/{slug}` renderiza `body_html` sem sessão, portanto o exato `GET /api/files/notes/{uuid}.{ext}` fica antes de `SHARED_SECRET` e não exige principal. O handler só aceita UUID canônico + extensão raster suportada; traversal, nomes malformados e chaves id-derived de links retornam 404 sem ler o bucket. Essa referência pública nunca autoriza upload, overwrite ou delete. A 000022 não infere owner das chaves antigas a partir de HTML: chaves UUID continuam servíveis e fail-closed para toda mutação.
 
 **Consequência do "nenhum modo preserva id"**: uma linha restaurada com o `og_image_url` do snapshot aponta para um id que agora é de outra pessoa, ou de ninguém. `realignLinkImageURLs` re-aponta cada `og_image_url` para o id da própria linha (o id dentro de uma chave derivada de id é sempre o da linha dona — a reescrita é posicional, não precisa consultar o mapping). Sem isso o wipe termina "com sucesso" e **toda imagem quebra**.
 
@@ -875,7 +903,7 @@ O PR1 é ~70% do diff (a segmentação inteira) e ~5% do risco. Separá-lo de qu
 ## 13. Segurança
 
 - **Threat model muda.** A §0 do `CLAUDE.md` (“single-user, local network, no public exposure”) deixa de valer: com auth, expor na LAN passa a ser um caso suportado. `validateSecureDefaults` acompanha — passa a aceitar bind não-loopback quando `AUTH_ENABLED=1`, e a **recusar** o boot com `CORS_ORIGINS=*` combinado com `AllowCredentials: true` (incompatíveis por spec), e `AUTH_COOKIE_SECURE=0` com bind não-loopback.
-- **`SHARED_SECRET` coexiste e é rebaixado.** No PR4 vira header de perímetro, documentado como “não autentica ninguém e não identifica ninguém”; quando os dois estão configurados, a request precisa do header **e** da sessão. Removido no release seguinte.
+- **`SHARED_SECRET` coexiste e é rebaixado.** No PR4 vira header de perímetro, documentado como “não autentica ninguém e não identifica ninguém”; quando os dois estão configurados, a request precisa do header **e** da sessão, exceto a leitura pública UUID-keyed de mídia de notas exigida por `/n/{slug}`. Removido no release seguinte.
 - **Tokens de API têm escopo.** `scope='content'` é aceito em `/api/{links,notes,folders,tags,entries,push,stats}` e rejeitado com `403 token_scope` em `/api/auth/*`, `/api/admin/*`, `/api/tokens`, `/api/backup/*` e `/api/settings/*`. Um token de extensão roubado não pode cunhar sessão, desligar 2FA nem exfiltrar um backup completo.
 - **CORS.** `AllowCredentials: true`, `AllowedHeaders` ganha `Authorization` e `X-Foldex-CSRF`. Aproveita-se para corrigir um **bug pré-existente**: `router.go:90` não lista `PUT`, embora `settings/handler.go:20` monte `r.Put("/master-password", …)` — invisível hoje porque prod é same-origin via nginx.
 - **Nada de secretos em log.** Ver §9.2.
@@ -937,7 +965,7 @@ Unitários novos: `attemptlimit` (portado de `folders/ratelimit_test.go`), `secr
 ### Frontend
 
 - `AuthProvider.test.tsx` — estados do bootstrap; logout esvazia o cache e limpa só as chaves de `localStorage` do tenant; `useAuth` fora do provider lança.
-- `AuthGate.test.tsx` — splash sem piscar o formulário; erro de rede vira splash offline, **não** tela de login; `?reset=` e `?invite=` abrem as telas certas.
+- `AuthGate.test.tsx` — splash sem piscar o formulário; erro de rede vira splash offline, **não** tela de login; `#reset=` e `#invite=` abrem as telas certas e são removidos antes do render.
 - `client.test.ts` (reescrito — o atual testa o `window.prompt` removido) — CSRF só em verbos inseguros; quatro 401 simultâneos coalescem em **um** refresh; `X-Foldex-Folder-Unlock` sobrevive ao retry.
 - `OtpInput.test.tsx` — o de maior valor: auto-avanço, backspace que limpa e volta, colar `123-456`, colar parcial, auto-submit exatamente uma vez, `aria-label` por célula, `autoComplete="one-time-code"` **só** na primeira célula (nas seis, o Safari preenche todas com o mesmo dígito).
 - `AdminUsersPage.test.tsx` — cada guarda com caso positivo e negativo; delete confirma duas vezes e reporta contagens.
@@ -982,7 +1010,7 @@ Cinco, e os dois primeiros são correções de desenho:
 
 2. **`keyfile.Config.AllowEphemeral` separa duas classes de chave que o plano tratava como uma.** `folders.LoadOrGenerateFolderUnlockKey` sempre aceitou seguir com uma chave só-de-sessão quando não conseguia persistir, e isso está certo lá: perder a chave invalida tokens de unlock e o usuário simplesmente redigita a senha da pasta. Para `AUTH_ENCRYPTION_KEY` o mesmo comportamento é destrutivo — a chave cifra dado em repouso, e um boot que gera uma nova torna todo seed TOTP indecifrável, trancando cada usuário para fora da própria conta. Com `AllowEphemeral: false` o backend **recusa subir**, o que é o resultado correto: falhar na hora é reparável, subir e descobrir no próximo restart não é.
 
-3. **O discriminador entre código numérico e código de recuperação é o comprimento SEM SEPARADORES, não a contagem de dígitos.** A primeira implementação filtrava a entrada para dígitos e perguntava "tem seis?". Um código de recuperação tem 10 símbolos de um alfabeto de 32, dos quais 10 são dígitos — então **cerca de 1 em cada 23 códigos contém exatamente seis dígitos** e era roteado para o caminho TOTP, onde nunca casa. O portador simplesmente não conseguia usar aquele código, sem nada na resposta explicando. Locked por `TestRecoveryCode_WithSixDigitsIsNotMistakenForATOTPCode`, que **constrói** o caso em vez de torcer para o acaso — foi assim que ele chegou à suíte como flake de 1-em-20 em vez de teste vermelho.
+3. **O discriminador entre código numérico e código de recuperação é o comprimento SEM SEPARADORES, não a contagem de dígitos.** A primeira implementação filtrava a entrada para dígitos e perguntava "tem seis?". No formato original de 10 símbolos isso afetava cerca de 1 em 23 códigos; no formato atual de 16 símbolos, **cerca de 18%** contêm exatamente seis dígitos e seriam roteados para TOTP, onde nunca casam. Locked por `TestRecoveryCode_WithSixDigitsIsNotMistakenForATOTPCode`, que constrói o caso em vez de depender do acaso.
 
 4. **`totp_enabled` é derivado com `EXISTS`, não uma coluna.** Uma coluna precisaria ser atualizada em quatro lugares (enroll, confirm, disable, reset administrativo) e discordaria da realidade na primeira vez que um deles fosse esquecido — e a direção do erro decide se o login exige um código que o usuário não consegue produzir.
 
@@ -1022,7 +1050,7 @@ Onze. O primeiro é um bug que só existia porque nenhum teste anterior chegava 
 
 8. **`SetPassword` não é apelido de `password/change`, e recusa quando já existe senha.** Sobrescrever sem provar a atual transformaria uma sessão roubada em tomada permanente da conta. Com autenticador configurado exige o código: não há senha atual para provar, e a credencial criada sobrevive à sessão que a pediu.
 
-9. **`force-password-reset` devolve a senha na RESPOSTA e não manda por e-mail.** A caixa postal pode ser justamente o canal que a conta perdeu; e `/password/forgot` recusa mandar link de reset para conta sem senha, exatamente para que a posse do e-mail sozinha não ressuscite a credencial. O admin é o canal fora de banda. O dono recebe um aviso — sem a senha dentro — porque troca silenciosa de credencial alheia é como um admin malicioso tomaria uma conta sem ninguém notar, e admin **não** lê conteúdo alheio, então não é um poder que ele já tenha por outra via.
+9. **`force-password-reset` nunca entrega uma credencial ao admin.** O endpoint exige autorização admin, SMTP real e mailbox verificada do target; prepara um `password_reset` user-bound sob transação, manda `#reset=` e só faz commit após o SMTP aceitar. O admin recebe `202` vazio. Falha de driver/SMTP deixa hash, epoch, sessões e resets anteriores intactos. O target escolhe a senha pelo consumidor comum; Google-only é permitido pela combinação admin + mailbox, mas TOTP continua sendo segundo fator e o consumo atomiza hash, `token_version` e revogação.
 
 10. **O mapa de throttle do `last_seen_at` passou a ser chaveado por `(via, id)`.** Ids de sessão e de token são `BIGSERIAL`s densos de sequências diferentes: com a chave inteira nua, sessão 7 e token 7 suprimiriam a escrita um do outro. O sintoma seria uma coluna “último uso” desatualizada e nada mais — o tipo de bug que não aparece em teste nenhum.
 

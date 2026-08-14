@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/pgerr"
 	"foldex/internal/pkg/pwhash"
 	"foldex/internal/pkg/secrets"
@@ -47,6 +45,9 @@ var (
 	ErrSelfTarget      = errors.New("auth: cannot perform this action on your own account")
 	ErrUserNotActive   = errors.New("auth: account is not active")
 	ErrPasswordMissing = errors.New("auth: account has no password credential")
+	ErrPasswordExists  = errors.New("auth: account already has a password credential")
+	ErrInviteNotFound  = errors.New("auth: invite not found")
+	ErrSessionNotFound = errors.New("auth: session not found")
 	// ErrInviteEmailMismatch means a provider account tried to claim an
 	// invitation issued to a different address.
 	ErrInviteEmailMismatch = errors.New("auth: provider address does not match the invitation")
@@ -71,13 +72,15 @@ const userColumns = `app_user.id, app_user.email, app_user.name, app_user.role, 
 	app_user.email_verified_at, app_user.last_login_at, app_user.created_at,
 	(app_user.password_hash IS NOT NULL) AS has_password,
 	EXISTS (SELECT 1 FROM totp_secret ts
-	         WHERE ts.user_id = app_user.id AND ts.confirmed_at IS NOT NULL) AS totp_enabled`
+	         WHERE ts.user_id = app_user.id AND ts.confirmed_at IS NOT NULL) AS totp_enabled,
+	app_user.token_version`
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
 	var id int64
 	err := row.Scan(&id, &u.Email, &u.Name, &u.Role, &u.Status,
-		&u.EmailVerifiedAt, &u.LastLoginAt, &u.CreatedAt, &u.HasPassword, &u.TOTPEnabled)
+		&u.EmailVerifiedAt, &u.LastLoginAt, &u.CreatedAt, &u.HasPassword, &u.TOTPEnabled,
+		&u.TokenVersion)
 	u.ID = authctx.UserID(id)
 	return u, err
 }
@@ -131,7 +134,7 @@ func (r *Repository) verifyPassword(ctx context.Context, email, password string)
 		SELECT `+userColumns+`, password_hash
 		FROM app_user WHERE email_normalized = $1`, NormalizeEmail(email))
 	err = row.Scan(&id, &u.Email, &u.Name, &u.Role, &u.Status, &u.EmailVerifiedAt,
-		&u.LastLoginAt, &u.CreatedAt, &u.HasPassword, &u.TOTPEnabled, &hash)
+		&u.LastLoginAt, &u.CreatedAt, &u.HasPassword, &u.TOTPEnabled, &u.TokenVersion, &hash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, false, nil
 	}
@@ -245,46 +248,153 @@ func (r *Repository) Bootstrap(ctx context.Context, email, name, password string
 	return u, nil
 }
 
-// SetPassword replaces an account's password hash and returns whether a
-// credential was actually present before (used to distinguish "changed" from
-// "set for the first time").
-func (r *Repository) SetPassword(ctx context.Context, id authctx.UserID, password string) error {
+// SetPassword adds a password only while the caller's session, credential epoch
+// and optional TOTP proof are still current. The credential write and required
+// revocation of every other session commit together.
+func (r *Repository) SetPassword(ctx context.Context, id authctx.UserID, keepSession int64,
+	tokenVersion int, password string, proof *TOTPProof) error {
+
 	hash, err := pwhash.Hash(password)
 	if err != nil {
 		return err
 	}
-	ct, err := r.pool.Exec(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("set password begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var currentHash *string
+	var liveVersion int
+	var status string
+	if err := tx.QueryRow(ctx, `
+		SELECT password_hash, token_version, status
+		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(id)).
+		Scan(&currentHash, &liveVersion, &status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNoUser
+		}
+		return fmt.Errorf("set password lock user: %w", err)
+	}
+	if status != StatusActive || liveVersion != tokenVersion {
+		return ErrSessionInvalid
+	}
+	if currentHash != nil {
+		return ErrPasswordExists
+	}
+	if err := requireLiveSessionTx(ctx, tx, id, keepSession); err != nil {
+		return err
+	}
+
+	var totpEnabled bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM totp_secret
+		               WHERE user_id = $1 AND confirmed_at IS NOT NULL)`, int64(id)).Scan(&totpEnabled); err != nil {
+		return fmt.Errorf("set password check totp: %w", err)
+	}
+	if totpEnabled {
+		if proof == nil {
+			return ErrTOTPReplay
+		}
+		if err := consumeTOTPProofTx(ctx, tx, id, *proof); err != nil {
+			return err
+		}
+	}
+
+	ct, err := tx.Exec(ctx, `
 		UPDATE app_user
 		SET password_hash = $2, token_version = token_version + 1, updated_at = now()
-		WHERE id = $1`, int64(id), hash)
+		WHERE id = $1 AND status = 'active' AND token_version = $3 AND password_hash IS NULL`,
+		int64(id), hash, tokenVersion)
 	if err != nil {
 		return fmt.Errorf("set password: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return ErrNoUser
+		return ErrSessionInvalid
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE session SET revoked_at = now(), revoked_reason = $3
+		WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
+		int64(id), keepSession, ReasonPasswordChanged); err != nil {
+		return fmt.Errorf("set password revoke: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("set password commit: %w", err)
 	}
 	return nil
 }
 
-// VerifyUserPassword checks a password for an already-identified account. Used
-// by the change-password flow, which must prove possession of the current
-// credential before accepting a new one.
-func (r *Repository) VerifyUserPassword(ctx context.Context, id authctx.UserID, password string) error {
-	var hash *string
-	if err := r.pool.QueryRow(ctx,
-		`SELECT password_hash FROM app_user WHERE id = $1`, int64(id)).Scan(&hash); err != nil {
+// ChangePassword locks the credential row before verifying and replacing it,
+// then revokes every other session in the same transaction. Two requests with
+// the same old password serialize at the lock, so the second verifies against
+// the winner's new hash and cannot overwrite it.
+func (r *Repository) ChangePassword(ctx context.Context, id authctx.UserID, keepSession int64,
+	currentPassword, newPassword string) error {
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("change password begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var currentHash *string
+	if err := tx.QueryRow(ctx, `
+		SELECT password_hash FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(id)).
+		Scan(&currentHash); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNoUser
 		}
-		return fmt.Errorf("load password: %w", err)
+		return fmt.Errorf("change password load: %w", err)
 	}
-	if hash == nil {
+	if currentHash == nil {
 		return ErrPasswordMissing
 	}
-	if !pwhash.Verify(*hash, password) {
+	if !pwhash.Verify(*currentHash, currentPassword) {
 		return ErrBadCredentials
 	}
+	newHash, err := pwhash.Hash(newPassword)
+	if err != nil {
+		return fmt.Errorf("change password hash: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE app_user
+		SET password_hash = $2, token_version = token_version + 1, updated_at = now()
+		WHERE id = $1`, int64(id), newHash); err != nil {
+		return fmt.Errorf("change password update: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE session SET revoked_at = now(), revoked_reason = $3
+		WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
+		int64(id), keepSession, ReasonPasswordChanged); err != nil {
+		return fmt.Errorf("change password revoke: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("change password commit: %w", err)
+	}
 	return nil
+}
+
+// VerifyUserPasswordEpoch verifies the password and returns the credential
+// epoch read with its hash. A caller can require the epoch to remain unchanged
+// before persisting a proof derived from this check.
+func (r *Repository) VerifyUserPasswordEpoch(ctx context.Context, id authctx.UserID, password string) (int, error) {
+	var hash *string
+	var tokenVersion int
+	if err := r.pool.QueryRow(ctx,
+		`SELECT password_hash, token_version FROM app_user WHERE id = $1`, int64(id)).Scan(&hash, &tokenVersion); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrNoUser
+		}
+		return 0, fmt.Errorf("load password: %w", err)
+	}
+	if hash == nil {
+		return 0, ErrPasswordMissing
+	}
+	if !pwhash.Verify(*hash, password) {
+		return 0, ErrBadCredentials
+	}
+	return tokenVersion, nil
 }
 
 // adminGuardLockKey serializes every operation that can change the number of
@@ -306,7 +416,7 @@ const adminGuardLockKey = 0x666F6C6465785F61 // "foldex_a"
 func guardLastAdminTx(ctx context.Context, tx pgx.Tx, target authctx.UserID) error {
 	var role, status string
 	err := tx.QueryRow(ctx,
-		`SELECT role, status FROM app_user WHERE id = $1 FOR UPDATE`, int64(target)).Scan(&role, &status)
+		`SELECT role, status FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(target)).Scan(&role, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNoUser
 	}
@@ -335,7 +445,8 @@ func guardLastAdminTx(ctx context.Context, tx pgx.Tx, target authctx.UserID) err
 // advisory lock, because it is only meaningful when it cannot interleave with
 // another admin-mutating request. The self-target guard stays in the handler:
 // it needs the CALLER's identity and cannot race, since it compares the caller
-// against themselves.
+// against themselves. A promotion revokes every existing session before this
+// transaction commits, so the new role is never inherited by an old login.
 func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *string, role *authctx.Role, status *string) (User, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -345,6 +456,13 @@ func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *st
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(adminGuardLockKey)); err != nil {
 		return User{}, fmt.Errorf("update user lock: %w", err)
+	}
+	var previousRole authctx.Role
+	if err := tx.QueryRow(ctx, `SELECT role FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(id)).Scan(&previousRole); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return User{}, ErrNoUser
+		}
+		return User{}, fmt.Errorf("update user role: %w", err)
 	}
 	demoting := role != nil && *role != authctx.RoleAdmin
 	disabling := status != nil && *status == StatusDisabled
@@ -370,6 +488,13 @@ func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *st
 	}
 	if err != nil {
 		return User{}, fmt.Errorf("update user: %w", err)
+	}
+	if role != nil && previousRole != authctx.RoleAdmin && *role == authctx.RoleAdmin {
+		if _, err := tx.Exec(ctx, `
+			UPDATE session SET revoked_at = now(), revoked_reason = $2
+			WHERE user_id = $1 AND revoked_at IS NULL`, int64(id), ReasonAdminRevoked); err != nil {
+			return User{}, fmt.Errorf("revoke sessions on admin promotion: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return User{}, fmt.Errorf("update user commit: %w", err)
@@ -507,7 +632,7 @@ func (r *Repository) RevokeInvite(ctx context.Context, id int64) error {
 		return fmt.Errorf("revoke invite: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return httperr.New(http.StatusNotFound, "not_found", "invite not found")
+		return ErrInviteNotFound
 	}
 	return nil
 }
@@ -697,41 +822,119 @@ func (r *Repository) TouchSession(ctx context.Context, id int64) {
 }
 
 // IssueSession creates a brand-new session family for a successful login.
-func (r *Repository) IssueSession(ctx context.Context, uid authctx.UserID, ttl SessionTTL, ip, ua string) (issuedTokens, int64, error) {
-	access, accessHash, err := secrets.NewToken()
+func (r *Repository) IssueSession(ctx context.Context, uid authctx.UserID, tokenVersion int,
+	ttl SessionTTL, ip, ua string) (issuedTokens, int64, error) {
+	issue, err := newSessionIssue(ttl)
 	if err != nil {
 		return issuedTokens{}, 0, err
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return issuedTokens{}, 0, fmt.Errorf("issue session begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var lockedUser int64
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM app_user
+		WHERE id = $1 AND status = 'active' AND token_version = $2
+		FOR NO KEY UPDATE`, int64(uid), tokenVersion).Scan(&lockedUser)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return issuedTokens{}, 0, ErrSessionInvalid
+	}
+	if err != nil {
+		return issuedTokens{}, 0, fmt.Errorf("issue session lock user: %w", err)
+	}
+
+	sid, err := issueSessionTx(ctx, tx, uid, issue, ip, ua)
+	if err != nil {
+		return issuedTokens{}, 0, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(uid)); err != nil {
+		return issuedTokens{}, 0, fmt.Errorf("issue session touch user: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return issuedTokens{}, 0, fmt.Errorf("issue session commit: %w", err)
+	}
+	return issue.tokens, sid, nil
+}
+
+type issuedSessionHashes struct {
+	access  []byte
+	refresh []byte
+	csrf    []byte
+}
+
+type sessionIssue struct {
+	tokens issuedTokens
+	hashes issuedSessionHashes
+}
+
+func newSessionIssue(ttl SessionTTL) (sessionIssue, error) {
+	access, accessHash, err := secrets.NewToken()
+	if err != nil {
+		return sessionIssue{}, err
 	}
 	refresh, refreshHash, err := secrets.NewToken()
 	if err != nil {
-		return issuedTokens{}, 0, err
+		return sessionIssue{}, err
 	}
 	csrf, csrfHash, err := secrets.NewToken()
 	if err != nil {
-		return issuedTokens{}, 0, err
+		return sessionIssue{}, err
 	}
-
 	now := time.Now()
-	tok := issuedTokens{
-		Access:        access,
-		Refresh:       refresh,
-		CSRF:          csrf,
-		AccessExpiry:  now.Add(ttl.Access),
-		RefreshExpiry: now.Add(ttl.Refresh),
+	return sessionIssue{
+		tokens: issuedTokens{
+			Access:        access,
+			Refresh:       refresh,
+			CSRF:          csrf,
+			AccessExpiry:  now.Add(ttl.Access),
+			RefreshExpiry: now.Add(ttl.Refresh),
+		},
+		hashes: issuedSessionHashes{access: accessHash, refresh: refreshHash, csrf: csrfHash},
+	}, nil
+}
+
+func issueSessionTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, issue sessionIssue,
+	ip, ua string) (int64, error) {
+	ua = truncate(ua, 512)
+	sid, err := insertSessionTx(ctx, tx, uid, issue, uuid.NewString(), nil, nullIP(ip), &ua)
+	if err != nil {
+		return 0, fmt.Errorf("issue session: %w", err)
 	}
+	return sid, nil
+}
+
+func insertSessionTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, issue sessionIssue,
+	familyID string, createdAt *time.Time, ip, ua *string) (int64, error) {
 	var sid int64
-	if err := r.pool.QueryRow(ctx, `
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO session (user_id, family_id, access_token_hash, access_expires_at,
-		                     refresh_token_hash, refresh_expires_at, csrf_token_hash, ip, user_agent)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id`,
-		int64(uid), uuid.New(), accessHash, tok.AccessExpiry,
-		refreshHash, tok.RefreshExpiry, csrfHash, nullIP(ip), truncate(ua, 512),
-	).Scan(&sid); err != nil {
-		return issuedTokens{}, 0, fmt.Errorf("issue session: %w", err)
+		                     refresh_token_hash, refresh_expires_at, csrf_token_hash,
+		                     created_at, ip, user_agent)
+		VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, COALESCE($8::timestamptz, now()), $9, $10)
+		RETURNING id`, int64(uid), familyID, issue.hashes.access, issue.tokens.AccessExpiry,
+		issue.hashes.refresh, issue.tokens.RefreshExpiry, issue.hashes.csrf, createdAt, ip, ua).Scan(&sid); err != nil {
+		return 0, err
 	}
-	_, _ = r.pool.Exec(ctx, `UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(uid))
-	return tok, sid, nil
+	return sid, nil
+}
+
+func requireLiveSessionTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, sessionID int64) error {
+	var locked int64
+	err := tx.QueryRow(ctx, `
+		SELECT id FROM session
+		WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+		  AND access_expires_at > now()
+		FOR UPDATE`, sessionID, int64(uid)).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrSessionInvalid
+	}
+	if err != nil {
+		return fmt.Errorf("lock live session: %w", err)
+	}
+	return nil
 }
 
 // ListSessions returns the caller's live sessions, newest first.
@@ -770,18 +973,38 @@ func (r *Repository) RevokeSession(ctx context.Context, uid authctx.UserID, id i
 		return fmt.Errorf("revoke session: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return httperr.ErrNotFound
+		return ErrSessionNotFound
 	}
 	return nil
 }
 
-// RevokeByAccessToken revokes whichever session an access cookie names.
-// Logout uses it, and it is a no-op for an already-dead session — logout must
-// be idempotent, since the common case is a user clicking it on a stale tab.
-func (r *Repository) RevokeByAccessToken(ctx context.Context, rawToken, reason string) {
-	_, _ = r.pool.Exec(ctx, `
-		UPDATE session SET revoked_at = now(), revoked_reason = $2
-		WHERE access_token_hash = $1 AND revoked_at IS NULL`, secrets.Hash(rawToken), reason)
+// RevokeFamilyByTokens revokes every live session in the family named by either
+// cookie. A stale refresh cookie can still resolve through session_used_token
+// after rotation, which keeps a delayed refresh response from undoing logout.
+func (r *Repository) RevokeFamilyByTokens(ctx context.Context, rawAccess, rawRefresh, reason string) error {
+	var accessHash, refreshHash []byte
+	if rawAccess != "" {
+		accessHash = secrets.Hash(rawAccess)
+	}
+	if rawRefresh != "" {
+		refreshHash = secrets.Hash(rawRefresh)
+	}
+	_, err := r.pool.Exec(ctx, `
+		WITH target_family AS MATERIALIZED (
+			SELECT family_id FROM session
+			WHERE ($1::bytea IS NOT NULL AND access_token_hash = $1)
+			   OR ($2::bytea IS NOT NULL AND refresh_token_hash = $2)
+			UNION
+			SELECT family_id FROM session_used_token
+			WHERE $2::bytea IS NOT NULL AND token_hash = $2
+		)
+		UPDATE session SET revoked_at = now(), revoked_reason = $3
+		WHERE family_id IN (SELECT family_id FROM target_family)
+		  AND revoked_at IS NULL`, accessHash, refreshHash, reason)
+	if err != nil {
+		return fmt.Errorf("revoke session family: %w", err)
+	}
+	return nil
 }
 
 // RevokeAllForUser kills every live session and bumps token_version.
@@ -791,29 +1014,20 @@ func (r *Repository) RevokeAllForUser(ctx context.Context, uid authctx.UserID, r
 		return fmt.Errorf("revoke all begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	ct, err := tx.Exec(ctx,
+		`UPDATE app_user SET token_version = token_version + 1 WHERE id = $1`, int64(uid))
+	if err != nil {
+		return fmt.Errorf("revoke all bump: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNoUser
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE session SET revoked_at = now(), revoked_reason = $2
 		WHERE user_id = $1 AND revoked_at IS NULL`, int64(uid), reason); err != nil {
 		return fmt.Errorf("revoke all: %w", err)
 	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE app_user SET token_version = token_version + 1 WHERE id = $1`, int64(uid)); err != nil {
-		return fmt.Errorf("revoke all bump: %w", err)
-	}
 	return tx.Commit(ctx)
-}
-
-// RevokeAllExcept kills every session except the one given. Used after a
-// password change, where signing the user out of the device they are actively
-// using would be hostile.
-func (r *Repository) RevokeAllExcept(ctx context.Context, uid authctx.UserID, keep int64, reason string) error {
-	_, err := r.pool.Exec(ctx, `
-		UPDATE session SET revoked_at = now(), revoked_reason = $3
-		WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`, int64(uid), keep, reason)
-	if err != nil {
-		return fmt.Errorf("revoke others: %w", err)
-	}
-	return nil
 }
 
 // Sweep deletes long-dead sessions and consumed refresh tokens.

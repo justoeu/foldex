@@ -1,8 +1,11 @@
 package auth
 
 import (
+	"context"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -113,10 +116,24 @@ func newLimiterOnlyHandler(t *testing.T) *Handler {
 	t.Helper()
 	m, err := mailer.New(mailer.Config{Driver: "log"}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	require.NoError(t, err)
+	d := mailer.NewDispatcher(context.Background(), m, mailer.DispatcherOptions{},
+		slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	t.Cleanup(d.Stop)
 	return NewHandler(HandlerConfig{
-		Mailer:  m,
-		TTL:     DefaultTTL(),
-		Logger:  slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		BaseURL: "https://foldex.test",
+		Mailer:         m,
+		MailDispatcher: d,
+		TTL:            DefaultTTL(),
+		Logger:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		BaseURL:        "https://foldex.test",
 	})
+}
+
+func TestWriteSessionInvalidClearsCookies(t *testing.T) {
+	h := newLimiterOnlyHandler(t)
+	rec := httptest.NewRecorder()
+	h.writeSessionInvalid(rec)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"code":"session_expired"`)
+	assert.Len(t, rec.Result().Cookies(), 4)
 }

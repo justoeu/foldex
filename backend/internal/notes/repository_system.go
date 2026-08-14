@@ -16,12 +16,29 @@ import (
 
 	"foldex/internal/folders"
 	"foldex/internal/links"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/domainerr"
+	"foldex/internal/pkg/publictarget"
 )
 
 // SystemViewAndResolve resolves id-or-slug and logs a click_log row in the same
 // tx, mirroring links.ClickAndResolve(BySlug) — used by GET /n/{id-or-slug}.
 func (r *Repository) SystemViewAndResolve(ctx context.Context, idOrSlug string) (Note, error) {
+	return publictarget.Resolve(
+		ctx, idOrSlug, true,
+		r.SystemViewAndResolveByID,
+		r.SystemViewAndResolveBySlug,
+	)
+}
+
+func (r *Repository) SystemViewAndResolveByID(ctx context.Context, id int64) (Note, error) {
+	return r.systemViewAndResolveWhere(ctx, "n.id = $1", id)
+}
+
+func (r *Repository) SystemViewAndResolveBySlug(ctx context.Context, slug string) (Note, error) {
+	return r.systemViewAndResolveWhere(ctx, "n.slug = $1", slug)
+}
+
+func (r *Repository) systemViewAndResolveWhere(ctx context.Context, where string, arg any) (Note, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return Note{}, fmt.Errorf("begin view tx: %w", err)
@@ -30,16 +47,12 @@ func (r *Repository) SystemViewAndResolve(ctx context.Context, idOrSlug string) 
 
 	var id int64
 	var owner int64
-	where, arg := "n.slug = $1", any(idOrSlug)
-	if n, ok := parsePositiveID(idOrSlug); ok {
-		where, arg = "n.id = $1", any(n)
-	}
 	// Public /n must 404 for notes inside password-protected folders.
 	err = tx.QueryRow(ctx, `
         SELECT n.id, n.user_id FROM note n
         WHERE `+where+` AND `+folders.SQLNotInLockedFolder("n"), arg).Scan(&id, &owner)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Note{}, httperr.ErrNotFound
+		return Note{}, domainerr.ErrNotFound
 	}
 	if err != nil {
 		return Note{}, fmt.Errorf("resolve note: %w", err)
@@ -65,7 +78,7 @@ func (r *Repository) systemGet(ctx context.Context, id int64) (Note, error) {
 	var n Note
 	err := scanNote(r.pool.QueryRow(ctx, `SELECT `+noteDetailColumns+noteFrom+` WHERE n.id = $1`, id), &n)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Note{}, httperr.ErrNotFound
+		return Note{}, domainerr.ErrNotFound
 	}
 	if err != nil {
 		return Note{}, fmt.Errorf("system get note: %w", err)

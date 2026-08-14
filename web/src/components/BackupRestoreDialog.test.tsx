@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { BackupRestoreDialog } from './BackupRestoreDialog'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
+import { makeQueryClient } from '../test/renderWithProviders'
 
 let state: MockState
 
@@ -15,16 +17,42 @@ function makeFile(): File {
   return new File([new Uint8Array([0])], 'backup.zip', { type: 'application/zip' })
 }
 
+function renderDialog(
+  props: Partial<React.ComponentProps<typeof BackupRestoreDialog>> = {},
+  children?: React.ReactNode,
+) {
+  const client = makeQueryClient()
+  return {
+    client,
+    ...render(
+      <QueryClientProvider client={client}>
+        {children}
+        <BackupRestoreDialog
+          file={makeFile()}
+          onClose={vi.fn()}
+          onRestored={vi.fn()}
+          {...props}
+        />
+      </QueryClientProvider>,
+    ),
+  }
+}
+
+function MountedQuery({ queryKey, queryFn }: { queryKey: string; queryFn: () => string }) {
+  useQuery({ queryKey: [queryKey, 'mounted'], queryFn })
+  return null
+}
+
 describe('BackupRestoreDialog', () => {
   it('shows validation summary and counts after validate resolves', async () => {
-    render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
+    renderDialog()
     await waitFor(() => expect(screen.getByText(/5 links · 2 tags · 1 folders/)).toBeInTheDocument())
     expect(screen.getByText(/8 clicks/)).toBeInTheDocument()
   })
 
   it('defaults to "skip" mode and switches when the user picks "wipe"', async () => {
     const user = userEvent.setup()
-    render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
+    renderDialog()
     await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
 
     // Default action button is the indigo primary (skip text).
@@ -37,13 +65,29 @@ describe('BackupRestoreDialog', () => {
 
   it('restore call uses the selected mode', async () => {
     const user = userEvent.setup()
-    render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
+    renderDialog()
     await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /Duplicate/i }))
     await user.click(screen.getByRole('button', { name: /^Restore$/i }))
     await waitFor(() => expect(state.lastRestoreMode).toBe('duplicate'))
     // The report screen replaces the picker.
     await waitFor(() => expect(screen.getByRole('button', { name: /Done/i })).toBeInTheDocument())
+  })
+
+  it('refetches every mounted content query after a successful restore', async () => {
+    const user = userEvent.setup()
+    const queries = ['links', 'entries', 'folders', 'tags', 'stats']
+      .map((key) => ({ key, queryFn: vi.fn(() => key) }))
+
+    renderDialog({}, queries.map(({ key, queryFn }) => (
+      <MountedQuery key={key} queryKey={key} queryFn={queryFn} />
+    )))
+    await waitFor(() => queries.forEach(({ queryFn }) => expect(queryFn).toHaveBeenCalledOnce()))
+    await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: /^Restore$/i }))
+
+    await waitFor(() => queries.forEach(({ queryFn }) => expect(queryFn).toHaveBeenCalledTimes(2)))
   })
 
   it('blocks restore when validate reports errors', async () => {
@@ -54,14 +98,14 @@ describe('BackupRestoreDialog', () => {
       warnings: [],
       errors: ['checksum mismatch: files/images/7.jpg'],
     }
-    render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
+    renderDialog()
     await waitFor(() => expect(screen.getByText(/checksum mismatch/i)).toBeInTheDocument())
     expect(screen.queryByText(/Restore mode/i)).toBeNull()
   })
 
   it('Esc closes the dialog', async () => {
     const onClose = vi.fn()
-    render(<BackupRestoreDialog file={makeFile()} onClose={onClose} onRestored={vi.fn()} />)
+    renderDialog({ onClose })
     await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
     await userEvent.setup().keyboard('{Escape}')
     expect(onClose).toHaveBeenCalledOnce()
@@ -80,14 +124,14 @@ describe('BackupRestoreDialog', () => {
       warnings: ['schema_version do backup (7) é mais antigo'],
       errors: [],
     }
-    render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
+    renderDialog()
     await waitFor(() => expect(screen.getByText(/schema_version do backup/i)).toBeInTheDocument())
   })
 
   it('shows the report after a successful restore and calls onRestored on "Concluído"', async () => {
     const onRestored = vi.fn()
     const user = userEvent.setup()
-    render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={onRestored} />)
+    renderDialog({ onRestored })
     await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /^Restore$/i }))
     await waitFor(() => expect(screen.getByRole('button', { name: /Done/i })).toBeInTheDocument())
@@ -110,7 +154,7 @@ describe('BackupRestoreDialog', () => {
       duration_ms: 80,
     }
     const user = userEvent.setup()
-    render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
+    renderDialog()
     await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /Duplicate/i }))
     await user.click(screen.getByRole('button', { name: /^Restore$/i }))
@@ -120,7 +164,7 @@ describe('BackupRestoreDialog', () => {
   it('Cancel button + X both call onClose', async () => {
     const onClose = vi.fn()
     const user = userEvent.setup()
-    render(<BackupRestoreDialog file={makeFile()} onClose={onClose} onRestored={vi.fn()} />)
+    renderDialog({ onClose })
     await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /Cancel/i }))
     expect(onClose).toHaveBeenCalled()
@@ -149,7 +193,7 @@ describe('BackupRestoreDialog', () => {
       throw err
     })
     const user = userEvent.setup()
-    render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
+    renderDialog()
     await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /^Restore$/i }))
     await waitFor(() => expect(screen.getByText(/backend exploded/i)).toBeInTheDocument())
@@ -162,7 +206,7 @@ describe('BackupRestoreDialog', () => {
       err.response = { data: { error: { message: 'zip parse failed' } } }
       throw err
     })
-    render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
+    renderDialog()
     await waitFor(() => expect(screen.getByText(/zip parse failed/i)).toBeInTheDocument())
   })
 
@@ -179,14 +223,14 @@ describe('BackupRestoreDialog', () => {
       warnings: [],
       errors: [],
     }
-    render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
+    renderDialog()
     await waitFor(() => expect(screen.getByText(/24 ·/)).toBeInTheDocument())
     expect(screen.getByText(/12 MB/)).toBeInTheDocument()
   })
 
   it('clicking "Pular conflitos" while already on skip stays on skip', async () => {
     const user = userEvent.setup()
-    render(<BackupRestoreDialog file={makeFile()} onClose={vi.fn()} onRestored={vi.fn()} />)
+    renderDialog()
     await waitFor(() => expect(screen.getByText(/Restore mode/i)).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /Skip conflicts/i }))
     await user.click(screen.getByRole('button', { name: /^Restore$/i }))

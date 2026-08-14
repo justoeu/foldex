@@ -24,7 +24,7 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/notes"
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/domainerr"
 	"foldex/internal/stats"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
@@ -155,16 +155,16 @@ func TestCrossUser_GetOfAnotherUsersRowIsNotFound(t *testing.T) {
 	ctx, f := setup(t)
 
 	_, err := f.lrepo.Get(ctx, f.a.uid, f.b.link.ID)
-	assert.ErrorIs(t, err, httperr.ErrNotFound)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 
 	_, err = f.nrepo.Get(ctx, f.a.uid, f.b.note.ID)
-	assert.ErrorIs(t, err, httperr.ErrNotFound)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 
 	_, err = f.frepo.Get(ctx, f.a.uid, f.b.folder.ID)
-	assert.ErrorIs(t, err, httperr.ErrNotFound)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 
 	_, err = f.trepo.Get(ctx, f.a.uid, f.b.tag.ID)
-	assert.ErrorIs(t, err, httperr.ErrNotFound)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
 func TestCrossUser_SearchNeverMatchesAnotherUsersContent(t *testing.T) {
@@ -192,12 +192,12 @@ func TestCrossUser_UpdateAndDeleteOfAnotherUsersRowIsNotFoundAndMutatesNothing(t
 	hijack := "hijacked"
 
 	_, err := f.lrepo.Update(ctx, f.a.uid, f.b.link.ID, links.UpdateInput{Title: &hijack})
-	assert.ErrorIs(t, err, httperr.ErrNotFound)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 
-	assert.ErrorIs(t, f.lrepo.Delete(ctx, f.a.uid, f.b.link.ID), httperr.ErrNotFound)
-	assert.ErrorIs(t, f.nrepo.Delete(ctx, f.a.uid, f.b.note.ID, nil), httperr.ErrNotFound)
-	assert.ErrorIs(t, f.frepo.Delete(ctx, f.a.uid, f.b.folder.ID), httperr.ErrNotFound)
-	assert.ErrorIs(t, f.trepo.Delete(ctx, f.a.uid, f.b.tag.ID), httperr.ErrNotFound)
+	assert.ErrorIs(t, f.lrepo.Delete(ctx, f.a.uid, f.b.link.ID), domainerr.ErrNotFound)
+	assert.ErrorIs(t, f.nrepo.Delete(ctx, f.a.uid, f.b.note.ID, nil), domainerr.ErrNotFound)
+	assert.ErrorIs(t, f.frepo.Delete(ctx, f.a.uid, f.b.folder.ID, nil, ""), domainerr.ErrNotFound)
+	assert.ErrorIs(t, f.trepo.Delete(ctx, f.a.uid, f.b.tag.ID), domainerr.ErrNotFound)
 
 	// B's rows are all still there, unmodified.
 	stillLink, err := f.lrepo.Get(ctx, f.b.uid, f.b.link.ID)
@@ -247,6 +247,24 @@ func TestCrossUser_CannotPointAtAnotherUsersFolder(t *testing.T) {
 	_, err = f.frepo.Update(ctx, f.a.uid, f.a.folder.ID,
 		folders.UpdateInput{ParentID: &foreign, ParentIDSet: true})
 	assert.Error(t, err, "folder must not be nestable under another tenant's folder")
+}
+
+func TestCrossUser_DatabaseRejectsForeignNoteMediaReference(t *testing.T) {
+	ctx, f := setup(t)
+	const key = "notes/5b24d8ec-2f5b-47a7-aa97-52f26c93b250.jpg"
+
+	_, err := f.pool.Exec(ctx, `
+        INSERT INTO note_media (user_id, object_key, lease_expires_at)
+        VALUES ($1, $2, now() + interval '24 hours')
+    `, int64(f.b.uid), key)
+	require.NoError(t, err, "fixture must create media owned by B")
+
+	_, err = f.pool.Exec(ctx, `
+        INSERT INTO note_media_ref (user_id, note_id, object_key)
+        VALUES ($1, $2, $3)
+    `, int64(f.a.uid), f.a.note.ID, key)
+	assert.Error(t, err,
+		"the database must reject a ref combining A's note with B's media key")
 }
 
 // ── Uniqueness contracts (migration 000017 §8) ───────────────────────────

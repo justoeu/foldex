@@ -8,7 +8,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -16,7 +18,8 @@ import (
 
 	"foldex/internal/folders"
 	"foldex/internal/links"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/domainerr"
+	sharedslug "foldex/internal/pkg/slug"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
 
@@ -42,19 +45,67 @@ func TestRepository_CreateAndGetWithTags(t *testing.T) {
 	require.NoError(t, err)
 
 	created, err := lrepo.Create(ctx, uid, links.CreateInput{
-		URL:    "https://jira.example/INV-1",
-		Title:  "INV-1",
-		TagIDs: []int64{tagJira.ID, tagDocs.ID},
+		URL:         "https://jira.example/INV-1",
+		Title:       "INV-1",
+		TagIDs:      []int64{tagJira.ID, tagDocs.ID},
+		PendingTags: []tags.CreateInput{{Name: "queued", Color: "#22C55E"}},
 	})
 	require.NoError(t, err)
 	require.NotZero(t, created.ID)
 	assert.Equal(t, "pending", created.PreviewStatus)
-	require.Len(t, created.Tags, 2)
+	require.Len(t, created.Tags, 3)
+	assert.Contains(t, []string{created.Tags[0].Name, created.Tags[1].Name, created.Tags[2].Name}, "queued")
 
 	// Verify Get also returns tags
 	got, err := lrepo.Get(ctx, uid, created.ID)
 	require.NoError(t, err)
-	assert.Len(t, got.Tags, 2)
+	assert.Len(t, got.Tags, 3)
+}
+
+func TestRepository_CreateSlugRetryAndExhaustionReleaseTransactions(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	repo := links.NewRepository(pool)
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO link (user_id, url, title, slug)
+		SELECT $1, 'https://link-retry.example/' || n, 'Retry Link',
+		       CASE WHEN n = 1 THEN 'retry-link' ELSE 'retry-link-' || n END
+		FROM generate_series(1, 2) n
+	`, int64(uid))
+	require.NoError(t, err)
+	before := pool.Stat().AcquiredConns()
+	created, err := repo.Create(ctx, uid, links.CreateInput{
+		URL: "https://link-retry.example/final", Title: "Retry Link",
+		PendingTags: []tags.CreateInput{{Name: "retry-tag", Color: "#22C55E"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "retry-link-3", created.Slug)
+	require.Len(t, created.Tags, 1)
+	assert.Equal(t, before, pool.Stat().AcquiredConns(), "successful retries must release every replaced transaction")
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO link (user_id, url, title, slug)
+		SELECT $1, 'https://link-exhaust.example/' || n, 'Exhaust Link',
+		       CASE WHEN n = 1 THEN 'exhaust-link' ELSE 'exhaust-link-' || n END
+		FROM generate_series(1, $2) n
+	`, int64(uid), sharedslug.CreateMaxAttempts)
+	require.NoError(t, err)
+	before = pool.Stat().AcquiredConns()
+	beforeAttempts := pool.Stat().AcquireCount()
+	_, err = repo.Create(ctx, uid, links.CreateInput{
+		URL: "https://link-exhaust.example/final", Title: "Exhaust Link",
+		PendingTags: []tags.CreateInput{{Name: "exhaust-tag", Color: "#22C55E"}},
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sharedslug.ErrCreateExhausted)
+	assert.EqualValues(t, sharedslug.CreateMaxAttempts, pool.Stat().AcquireCount()-beforeAttempts)
+	assert.Equal(t, before, pool.Stat().AcquiredConns(), "exhaustion must not leave a transaction checked out")
+	var tagCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM tag WHERE user_id = $1 AND name = 'exhaust-tag'`, int64(uid)).Scan(&tagCount))
+	assert.Zero(t, tagCount, "pending tags must not escape an exhausted parent create")
 }
 
 func TestRepository_ListFiltersByQAndTagAND(t *testing.T) {
@@ -118,7 +169,7 @@ func TestRepository_ClickAndResolveIsAtomic(t *testing.T) {
 func TestRepository_ClickAndResolveNotFound(t *testing.T) {
 	ctx, _, lrepo, _ := setup(t)
 	_, err := lrepo.ClickAndResolve(ctx, 999)
-	assert.ErrorIs(t, err, httperr.ErrNotFound)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
 func TestRepository_UpdatePreview(t *testing.T) {
@@ -133,7 +184,7 @@ func TestRepository_UpdatePreview(t *testing.T) {
 	assert.Equal(t, fav, *got.FaviconURL)
 }
 
-// TestUpdatePreview_StatusCAS_PendingOnly locks RACE-HER-009: terminal ok/failed
+// TestUpdatePreview_StatusCAS_PendingOnly proves terminal ok/failed
 // only apply while status is still pending; a second ok after ok is a no-op.
 func TestUpdatePreview_StatusCAS_PendingOnly(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
@@ -162,6 +213,140 @@ func TestUpdatePreview_StatusCAS_PendingOnly(t *testing.T) {
 	assert.Equal(t, string(links.StatusOK), got.PreviewStatus)
 }
 
+func TestSystemUpdateOGImage_ManualUploadWinsCAS(t *testing.T) {
+	ctx, uid, lrepo, _ := setup(t)
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://image-cas.example", Title: "cas"})
+	require.NoError(t, err)
+	expected := created.UpdatedAt
+	previous, err := lrepo.ReplaceOGImage(ctx, uid, created.ID, "/api/files/images/manual.jpg")
+	require.NoError(t, err)
+	assert.Nil(t, previous)
+
+	applied, err := lrepo.SystemUpdateOGImage(ctx, created.ID, "/api/files/screenshots/fallback.jpg", expected)
+	require.NoError(t, err)
+	assert.False(t, applied)
+	got, err := lrepo.Get(ctx, uid, created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.OGImageURL)
+	assert.Equal(t, "/api/files/images/manual.jpg", *got.OGImageURL)
+}
+
+func TestReplaceOGImage_ReturnsExactSupersededURL(t *testing.T) {
+	ctx, uid, lrepo, _ := setup(t)
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://manual-replace.example", Title: "replace"})
+	require.NoError(t, err)
+	first := "/api/files/images/first.jpg"
+	previous, err := lrepo.ReplaceOGImage(ctx, uid, created.ID, first)
+	require.NoError(t, err)
+	assert.Nil(t, previous)
+
+	previous, err = lrepo.ReplaceOGImage(ctx, uid, created.ID, "/api/files/images/second.jpg")
+	require.NoError(t, err)
+	require.NotNil(t, previous)
+	assert.Equal(t, first, *previous)
+}
+
+func TestReplaceOGImage_ConcurrentManualUploadsReturnTheirPredecessor(t *testing.T) {
+	ctx, uid, lrepo, _ := setup(t)
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://manual-concurrent.example", Title: "concurrent"})
+	require.NoError(t, err)
+	initial := "/api/files/images/initial.jpg"
+	_, err = lrepo.ReplaceOGImage(ctx, uid, created.ID, initial)
+	require.NoError(t, err)
+
+	urls := []string{"/api/files/images/a.jpg", "/api/files/images/b.jpg"}
+	previous := make(chan string, len(urls))
+	errs := make(chan error, len(urls))
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, imageURL := range urls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			old, replaceErr := lrepo.ReplaceOGImage(ctx, uid, created.ID, imageURL)
+			if replaceErr != nil {
+				errs <- replaceErr
+				return
+			}
+			previous <- *old
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for replaceErr := range errs {
+		require.NoError(t, replaceErr)
+	}
+	close(previous)
+
+	var predecessors []string
+	for value := range previous {
+		predecessors = append(predecessors, value)
+	}
+	require.Len(t, predecessors, 2)
+	assert.Contains(t, predecessors, initial)
+	got, err := lrepo.Get(ctx, uid, created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.OGImageURL)
+	assert.Contains(t, urls, *got.OGImageURL)
+	loser := urls[0]
+	if *got.OGImageURL == loser {
+		loser = urls[1]
+	}
+	assert.Contains(t, predecessors, loser, "the winner must receive the losing operation's URL for cleanup")
+}
+
+func TestSystemFinishScreenshotFallback_DoesNotFinishNewerRefresh(t *testing.T) {
+	ctx, uid, lrepo, _ := setup(t)
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://finish-cas.example", Title: "cas"})
+	require.NoError(t, err)
+	expected := created.UpdatedAt
+	time.Sleep(time.Millisecond)
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, nil, nil, nil, nil))
+
+	applied, err := lrepo.SystemFinishScreenshotFallback(ctx, created.ID, expected)
+	require.NoError(t, err)
+	assert.False(t, applied)
+	got, err := lrepo.Get(ctx, uid, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(links.StatusPending), got.PreviewStatus)
+}
+
+func TestSystemUpdatePreviewIfUnchanged_DoesNotOverwriteNewerRefresh(t *testing.T) {
+	ctx, uid, lrepo, _ := setup(t)
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://preview-cas.example", Title: "cas"})
+	require.NoError(t, err)
+	expected := created.UpdatedAt
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, nil, nil, nil, nil))
+
+	staleDescription := "stale"
+	applied, err := lrepo.SystemUpdatePreviewIfUnchanged(ctx, created.ID, expected, links.StatusOK, nil, nil, &staleDescription, nil)
+	require.NoError(t, err)
+	assert.False(t, applied)
+	got, err := lrepo.Get(ctx, uid, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(links.StatusPending), got.PreviewStatus)
+	assert.Nil(t, got.Description)
+}
+
+func TestSystemPendingPreviewIDs_ReturnsOnlyPendingWithinLimit(t *testing.T) {
+	ctx, uid, lrepo, _ := setup(t)
+	first, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://pending-one.example", Title: "one"})
+	require.NoError(t, err)
+	second, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://pending-two.example", Title: "two"})
+	require.NoError(t, err)
+	done, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://done.example", Title: "done"})
+	require.NoError(t, err)
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, done.ID, links.StatusOK, nil, nil, nil, nil))
+
+	ids, err := lrepo.SystemPendingPreviewIDs(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, []int64{first.ID}, ids)
+	assert.NotContains(t, ids, second.ID)
+	assert.NotContains(t, ids, done.ID)
+}
+
 func TestRepository_DeleteCascadesLinkTag(t *testing.T) {
 	ctx, uid, lrepo, trepo := setup(t)
 	tag, _ := trepo.Create(ctx, uid, tags.CreateInput{Name: "t", Color: "#fff"})
@@ -169,24 +354,20 @@ func TestRepository_DeleteCascadesLinkTag(t *testing.T) {
 
 	require.NoError(t, lrepo.Delete(ctx, uid, link.ID))
 	_, err := lrepo.Get(ctx, uid, link.ID)
-	assert.ErrorIs(t, err, httperr.ErrNotFound)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
 // TestRepository_CreateDuplicateURLReturns409 locks the Go #3 fix. Previously
-// the link_url_unique violation surfaced as a wrapped pgx error and httperr.Write
-// fell through to 500. The browser extension and bulk import flows rely on a
-// typed 409 url_taken to converge to a no-op.
+// the link_url_unique violation surfaced as a raw pgx error. The browser
+// extension and bulk import flows rely on the URL-taken semantic so the handler
+// can emit 409 url_taken and converge to a no-op.
 func TestRepository_CreateDuplicateURLReturns409(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
 	_, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://dup.example", Title: "first"})
 	require.NoError(t, err)
 
 	_, err = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://dup.example", Title: "second"})
-	require.Error(t, err)
-	var he *httperr.Error
-	require.ErrorAs(t, err, &he, "duplicate URL must surface as *httperr.Error, not a raw pgx wrap")
-	assert.Equal(t, 409, he.Status)
-	assert.Equal(t, "url_taken", he.Code)
+	require.ErrorIs(t, err, links.ErrURLTaken)
 }
 
 // TestHandler_CreateRejectsLargeBody locks the P2.5 fix: POST /api/links with
@@ -296,11 +477,7 @@ func TestRepository_UpdateDuplicateURLReturns409(t *testing.T) {
 
 	bURL := "https://b.example"
 	_, err = lrepo.Update(ctx, uid, a.ID, links.UpdateInput{URL: &bURL})
-	require.Error(t, err)
-	var he *httperr.Error
-	require.ErrorAs(t, err, &he)
-	assert.Equal(t, 409, he.Status)
-	assert.Equal(t, "url_taken", he.Code)
+	require.ErrorIs(t, err, links.ErrURLTaken)
 }
 
 // TestRepository_UngroupedExcludesLinksInFolders locks CLAUDE.md §4: the home
@@ -634,7 +811,7 @@ func TestRepository_MarkChangeSeen_404WhenNeverDetected(t *testing.T) {
 
 	err := lrepo.MarkChangeSeen(ctx, uid, l.ID)
 	require.Error(t, err, "MarkChangeSeen must 404 when no change has been detected")
-	assert.ErrorIs(t, err, httperr.ErrNotFound)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
 func TestRepository_ListRecentChanges_FiltersAndSorts(t *testing.T) {
@@ -709,8 +886,8 @@ func TestRepository_AssertOwned(t *testing.T) {
 
 	foreign := repo.AssertOwned(ctx, bob, mine.ID)
 	absent := repo.AssertOwned(ctx, bob, mine.ID+10_000)
-	require.ErrorIs(t, foreign, httperr.ErrNotFound)
-	require.ErrorIs(t, absent, httperr.ErrNotFound)
+	require.ErrorIs(t, foreign, domainerr.ErrNotFound)
+	require.ErrorIs(t, absent, domainerr.ErrNotFound)
 	assert.Equal(t, absent, foreign,
 		"a foreign id and an absent id must be indistinguishable, or the file proxy leaks which ids exist")
 }

@@ -1,5 +1,5 @@
-// Package listquery parses the shared list filter query-string shape used by
-// GET /api/entries, /api/links, and /api/notes.
+// Package listquery owns the shared filter parsing and SQL planning contract
+// used by GET /api/entries, /api/links, and /api/notes.
 package listquery
 
 import (

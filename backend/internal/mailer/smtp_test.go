@@ -154,7 +154,7 @@ func TestSMTPSendCompletesAConversation(t *testing.T) {
 	m := newTestMailer(t, srv.addr)
 
 	require.NoError(t, m.Send(context.Background(), Message{
-		To: "someone@example.com", Subject: "Invitation", Text: "https://foldex.test/?invite=TOK",
+		To: "someone@example.com", Subject: "Invitation", Text: "https://foldex.test/#invite=TOK",
 	}))
 
 	session := srv.lastSession(t)
@@ -162,7 +162,7 @@ func TestSMTPSendCompletesAConversation(t *testing.T) {
 	assert.Contains(t, session, "RCPT TO:<someone@example.com>")
 	assert.Contains(t, session, "DATA")
 	assert.Contains(t, session, "Subject: Invitation")
-	assert.Contains(t, session, "https://foldex.test/?invite=TOK")
+	assert.Contains(t, session, "https://foldex.test/#invite=TOK")
 	assert.Equal(t, "smtp", m.Driver())
 }
 
@@ -263,6 +263,45 @@ func TestSMTPSendHonoursAContextDeadline(t *testing.T) {
 	err = m.Send(context.Background(), Message{To: "a@b.com", Subject: "s", Text: "t"})
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second, "the send must not hang past its timeout")
+}
+
+func TestSMTPSendCancellationInterruptsAStalledConversation(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	accepted := make(chan struct{})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		close(accepted)
+		_, _ = bufio.NewReader(conn).ReadByte()
+	}()
+
+	host, port := hostPort(t, ln.Addr().String())
+	m, err := New(Config{
+		Driver: "smtp", Host: host, Port: port, From: "f@l", Timeout: time.Minute,
+	}, discardLogger())
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- m.Send(ctx, Message{To: "a@b.com", Subject: "s", Text: "t"})
+	}()
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "SMTP client did not connect")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		assert.Error(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "context cancellation did not interrupt SMTP")
+	}
 }
 
 // tlsConfig is what STARTTLS and implicit TLS both hand to the handshake, so a

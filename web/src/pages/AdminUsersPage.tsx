@@ -6,11 +6,11 @@ import { useConfirm } from '../components/ConfirmDialog'
 import {
   createInvite,
   deleteUser,
-  forcePasswordReset,
   listInvites,
   listUsers,
   revokeInvite,
   revokeUserSessions,
+  sendPasswordRecovery,
   updateUser,
   type Invite,
 } from '../api/admin'
@@ -22,8 +22,8 @@ import type { AuthUser, Role } from '../auth/types'
  * The administrator's view of every account on the instance.
  *
  * It shows accounts, never their CONTENT. Segmentation is absolute: an
- * administrator can disable, promote or delete a user, and can hand back a
- * password — but cannot read a single link or note belonging to anybody else.
+ * administrator can disable, promote or delete a user, and can send recovery
+ * to their verified mailbox — but cannot read another user's links or notes.
  * The page is deliberately built so that nothing here suggests otherwise.
  *
  * Every disabled button below mirrors a rule the SERVER enforces inside a
@@ -42,7 +42,7 @@ export function AdminUsersPage() {
   const invites = useQuery({ queryKey: ['admin', 'invites'], queryFn: listInvites })
 
   const [error, setError] = useState('')
-  const [tempPassword, setTempPassword] = useState<{ email: string; password: string } | null>(null)
+  const [recoverySent, setRecoverySent] = useState('')
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<Role>('user')
   const [lastInvite, setLastInvite] = useState<Invite | null>(null)
@@ -76,10 +76,10 @@ export function AdminUsersPage() {
   const revokeSessions = useMutation({ mutationFn: revokeUserSessions, onError })
 
   const resetPassword = useMutation({
-    mutationFn: (u: AuthUser) => forcePasswordReset(u.id).then((p) => ({ email: u.email, password: p })),
-    onSuccess: (v) => {
+    mutationFn: (u: AuthUser) => sendPasswordRecovery(u.id).then(() => u.email),
+    onSuccess: (email) => {
       setError('')
-      setTempPassword(v)
+      setRecoverySent(email)
       return refresh()
     },
     onError,
@@ -139,29 +139,13 @@ export function AdminUsersPage() {
         </div>
       )}
 
-      {/* Shown once, and never stored. The admin reads it out to the user; it
-          is deliberately NOT e-mailed, because the mailbox may be exactly what
-          the account lost access to. */}
-      {tempPassword && (
-        <div className="fx-card" style={{ marginBottom: 16 }}>
+      {recoverySent && (
+        <div className="fx-card" role="status" style={{ marginBottom: 16 }}>
           <div className="fx-card-body" style={{ gap: 8, padding: 18 }}>
-            <strong style={{ fontSize: 13 }}>
-              {t('admin.temp_password_title', { email: tempPassword.email })}
-            </strong>
-            <code
-              data-testid="temp-password"
-              style={{ fontSize: 15, fontFamily: 'var(--fx-mono)', letterSpacing: 1 }}
-            >
-              {tempPassword.password}
-            </code>
+            <strong style={{ fontSize: 13 }}>{t('admin.recovery_sent', { email: recoverySent })}</strong>
             <p style={{ fontSize: 11, color: 'var(--fx-ink-3)', margin: 0 }}>
-              {t('admin.temp_password_warning')}
+              {t('admin.recovery_sent_detail')}
             </p>
-            <div>
-              <button className="fx-btn" onClick={() => setTempPassword(null)}>
-                {t('common.close')}
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -349,6 +333,12 @@ function messageFor(err: unknown, t: (k: string, o?: Record<string, unknown>) =>
       return t('auth_errors.email_taken')
     case 'invalid_email':
       return t('auth_errors.invalid_email')
+    case 'smtp_required':
+      return t('admin.err_smtp_required')
+    case 'mail_unavailable':
+      return t('admin.err_mail_unavailable')
+    case 'recovery_unavailable':
+      return t('admin.err_recovery_unavailable')
     default:
       return t('auth_errors.generic')
   }

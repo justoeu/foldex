@@ -27,6 +27,7 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/notes"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/logsafe"
 	"foldex/internal/push"
@@ -75,22 +76,24 @@ type Deps struct {
 	// §4 invariant). Leaving it nil keeps the routes off entirely.
 	PushHandler *push.Handler
 
-	// Auth stack (ADR-30). All three are optional so router tests can build a
-	// router without a mailer or a session store; leaving them nil simply keeps
-	// /api/auth and /api/admin unmounted.
+	// Auth stack (ADR-30). The handlers are optional and control whether their
+	// route groups mount. AuthMiddleware is required whenever AuthEnabled is true.
 	AuthHandler    *auth.Handler
 	AdminHandler   *auth.AdminHandler
 	AuthMiddleware *auth.Middleware
 
 	// FolderUnlockKey is the HMAC secret for folder-password unlock tokens
 	// (see folders.LoadOrGenerateFolderUnlockKey) — shared between the
-	// folders handler (mints tokens, gates list(parent_id=X)) and the
-	// entries handler (gates list(folder_id=X)) so a token issued by one
-	// verifies against the other.
+	// folders handler (mints tokens, gates list(parent_id=X)) and the links,
+	// notes, and entries handlers (gate list(folder_id=X)) so a token issued by
+	// one verifies against the others.
 	FolderUnlockKey []byte
 }
 
 func New(d Deps) http.Handler {
+	if d.Config.AuthEnabled && d.AuthMiddleware == nil {
+		panic("server: AUTH_ENABLED requires AuthMiddleware")
+	}
 	r := chi.NewRouter()
 	// NOT chi's middleware.RealIP: that one rewrites RemoteAddr from
 	// X-Forwarded-For unconditionally, which is correct behind nginx and
@@ -153,19 +156,33 @@ func New(d Deps) http.Handler {
 	// preflight, and stay reachable without the SHARED_SECRET guard — both
 	// /go/{id-or-slug} (link redirect) and /n/{id-or-slug} (note render) are
 	// meant to be shareable the same way.
-	notesRepo := notes.NewRepository(d.Pool)
+	linksRepo := links.NewRepository(d.Pool)
+	notesRepo := notes.NewRepository(d.Pool).WithStorage(d.Storage)
+	var fileHandler *links.ScreenshotHandler
+	if d.Screenshotter != nil && d.Storage != nil {
+		if d.ScreenshotURL == nil {
+			d.Logger.Error("server: Screenshotter is set but ScreenshotURL is nil — refusing to mount /api/links/{id}/screenshot without an SSRF gate")
+			panic("server: Screenshotter is set but ScreenshotURL is nil — refusing to mount /api/links/{id}/screenshot without an SSRF gate")
+		}
+		fileHandler = links.NewScreenshotHandler(linksRepo, d.Screenshotter, d.Storage, d.ScreenshotURL, d.Logger)
+	}
 	// Both public share routes resolve with NO session, so a numeric id there
 	// is an enumeration oracle across every tenant — see ADR-32. Off unless the
 	// operator opts in for the sake of already-shared /go/42 links.
-	redirect.NewHandler(links.NewRepository(d.Pool), d.Config.PublicNumericIDs).Mount(r)
+	redirect.NewHandler(linksRepo, d.Config.PublicNumericIDs).Mount(r)
 	notes.NewPublicHandler(notesRepo, d.Config.PublicNumericIDs).Mount(r)
+	if fileHandler != nil {
+		// Public note HTML references these exact URLs. Mount this one narrow
+		// UUID-keyed read before SHARED_SECRET; all other object keys remain in
+		// the guarded, principal-scoped /api group below.
+		r.Get("/api/files/notes/*", fileHandler.ProxyNoteFile)
+	}
 
 	r.Route("/api", func(api chi.Router) {
 		if d.Config.SharedSecret != "" {
 			api.Use(sharedSecretGuard(d.Config.SharedSecret))
 		}
 		api.Use(auth.VaryCookie)
-
 		// The auth surface mounts OUTSIDE the principal middleware — most of it
 		// exists precisely to establish a principal, so requiring one would be
 		// circular. It is registered even when AUTH_ENABLED=0 so the SPA's
@@ -186,7 +203,7 @@ func New(d Deps) http.Handler {
 			// it did before migration 000017 — the segmentation is in place and
 			// exercised, but invisible. With it on, the session middleware resolves
 			// the fx_at cookie and enforces CSRF.
-			if d.Config.AuthEnabled && d.AuthMiddleware != nil {
+			if d.Config.AuthEnabled {
 				pr.Use(d.AuthMiddleware.Authenticate)
 			} else {
 				pr.Use(bootstrapPrincipal(d.Pool, d.Logger))
@@ -205,8 +222,12 @@ func New(d Deps) http.Handler {
 					// /api/admin exists to accounts that are not supposed to
 					// know. An ADMIN presenting a token gets the 403, which
 					// tells them something true about their own credential.
-					ar.Use(requireAdmin(d.AuthMiddleware))
-					ar.Use(rejectAPIToken(d.AuthMiddleware))
+					if d.Config.AuthEnabled {
+						ar.Use(d.AuthMiddleware.RequireAdmin)
+					} else {
+						ar.Use(authgate.RequireAdmin)
+					}
+					ar.Use(authgate.RejectAPIToken)
 					d.AdminHandler.Mount(ar)
 				})
 			}
@@ -220,13 +241,12 @@ func New(d Deps) http.Handler {
 			// so a leaked token would otherwise be: set a master, then reset
 			// every locked folder and read it.
 			pr.Route("/settings", func(sr chi.Router) {
-				sr.Use(rejectAPIToken(d.AuthMiddleware))
+				sr.Use(authgate.RejectAPIToken)
 				settings.NewHandler(settingsRepo).Mount(sr)
 			})
 			foldersRepo := folders.NewRepository(d.Pool)
 			pr.Route("/folders", folders.NewHandler(foldersRepo, d.FolderUnlockKey, settingsRepo).Mount)
 
-			linksRepo := links.NewRepository(d.Pool)
 			pr.Route("/links", links.NewHandler(linksRepo, d.Worker).
 				WithMetadataFetcher(d.LinkMetadataFetcher).
 				WithFolderGate(foldersRepo, d.FolderUnlockKey).
@@ -243,26 +263,17 @@ func New(d Deps) http.Handler {
 
 			// Screenshot and file-proxy endpoints are only registered when both
 			// a Screenshotter and Storage implementation are provided.
-			if d.Screenshotter != nil && d.Storage != nil {
-				// Boot-time validation: mounting the screenshot endpoint without
-				// the URL policy wired would still fail closed at request time,
-				// but a hard exit at startup surfaces the misconfig immediately
-				// instead of leaving every request returning 500 in production.
-				if d.ScreenshotURL == nil {
-					d.Logger.Error("server: Screenshotter is set but ScreenshotURL is nil — refusing to mount /api/links/{id}/screenshot without an SSRF gate")
-					panic("server: Screenshotter is set but ScreenshotURL is nil — refusing to mount /api/links/{id}/screenshot without an SSRF gate")
-				}
-				sh := links.NewScreenshotHandler(linksRepo, d.Screenshotter, d.Storage, d.ScreenshotURL, d.Logger)
-				pr.Post("/links/{id}/screenshot", sh.CaptureAndStore)
-				pr.Post("/links/{id}/image", sh.UploadImage)
-				pr.Delete("/links/{id}/image", sh.DeleteImage)
-				pr.Get("/files/*", sh.ProxyFile)
+			if fileHandler != nil {
+				pr.Post("/links/{id}/screenshot", fileHandler.CaptureAndStore)
+				pr.Post("/links/{id}/image", fileHandler.UploadImage)
+				pr.Delete("/links/{id}/image", fileHandler.DeleteImage)
+				pr.Get("/files/*", fileHandler.ProxyFile)
 
 				// Note inline-image upload lives in this same gate (rather than its
 				// own `d.Storage != nil` check) so it can never be mounted without
 				// ProxyFile also being mounted — an uploaded note image would
 				// otherwise have nowhere to be served back from.
-				nih := notes.NewImageHandler(d.Storage, d.Logger)
+				nih := notes.NewImageHandler(d.Storage, notesRepo, d.Logger)
 				pr.Post("/notes/images", nih.Upload)
 			}
 
@@ -279,7 +290,7 @@ func New(d Deps) http.Handler {
 				// configuration must not be able to produce that, and restore
 				// must not be able to overwrite it.
 				pr.Route("/backup", func(br chi.Router) {
-					br.Use(rejectAPIToken(d.AuthMiddleware))
+					br.Use(authgate.RejectAPIToken)
 					backup.NewHandler(backup.NewService(d.Pool, d.StorageBucket, d.Logger), d.Logger).Mount(br)
 				})
 			}
@@ -343,50 +354,6 @@ func bootstrapPrincipal(pool *pgxpool.Pool, logger *slog.Logger) func(http.Handl
 				Role:   authctx.RoleAdmin,
 				Via:    authctx.ViaSession,
 			})))
-		})
-	}
-}
-
-// rejectAPIToken adapts the auth middleware's bearer-token gate, with the same
-// fail-closed fallback requireAdmin uses: when the auth stack is not wired the
-// rule is applied in line rather than skipped, because a nil middleware is a
-// wiring mistake and must not read as permission.
-func rejectAPIToken(mw *auth.Middleware) func(http.Handler) http.Handler {
-	if mw != nil {
-		return mw.RejectAPIToken
-	}
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if p, ok := authctx.FromContext(r.Context()); ok && p.Via == authctx.ViaAPIToken {
-				httperr.Write(w, httperr.New(http.StatusForbidden, "token_scope",
-					"an API token cannot be used on this endpoint"))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// requireAdmin adapts the auth middleware's role gate, falling back to an
-// in-line check when the auth stack is not wired.
-//
-// The fallback is NOT permissive: it reads the principal the bootstrap
-// middleware installed and applies the same rule. Defaulting to "allow" when
-// the middleware happens to be nil would make a wiring mistake into an
-// authorization bypass — the exact failure mode a fail-closed design exists to
-// prevent.
-func requireAdmin(mw *auth.Middleware) func(http.Handler) http.Handler {
-	if mw != nil {
-		return mw.RequireAdmin
-	}
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			p, ok := authctx.FromContext(r.Context())
-			if !ok || !p.Role.IsAdmin() {
-				httperr.Write(w, httperr.ErrNotFound)
-				return
-			}
-			next.ServeHTTP(w, r)
 		})
 	}
 }

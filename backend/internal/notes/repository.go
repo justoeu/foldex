@@ -4,27 +4,44 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/entityrefs"
 	"foldex/internal/folders"
 	"foldex/internal/links"
+	"foldex/internal/notemedia"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/domainerr"
 	"foldex/internal/pkg/htmlsanitize"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/listquery"
 	"foldex/internal/pkg/pgerr"
 	"foldex/internal/pkg/slug"
 	"foldex/internal/tags"
 )
 
 type Repository struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	storage links.Uploader
 }
 
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
+
+func (r *Repository) WithStorage(storage links.Uploader) *Repository {
+	r.storage = storage
+	return r
+}
+
+func (r *Repository) RegisterMediaLease(ctx context.Context, uid authctx.UserID, key string) error {
+	return notemedia.RegisterLease(ctx, r.pool, uid, key)
+}
+
+func (r *Repository) ForgetMediaLease(ctx context.Context, uid authctx.UserID, key string) error {
+	return notemedia.ForgetLease(ctx, r.pool, uid, key)
+}
 
 // click_count/last_clicked_at are derived from click_log via the LATERAL
 // join, mirroring links — there is no denormalized counter on `note` either.
@@ -66,16 +83,6 @@ func scanNote(s rowScanner, n *Note) error {
 }
 
 func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateInput) (Note, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return Note{}, err
-	}
-	// Closure, not `defer tx.Rollback(ctx)`: the slug-collision loop reassigns
-	// tx, and a bare defer captures the receiver at defer time — the FIRST
-	// transaction — so every replacement tx would leak its pooled connection
-	// with an aborted transaction still open. Same trap as links.Create.
-	defer func() { _ = tx.Rollback(ctx) }()
-
 	userSupplied := in.Slug != nil
 	var baseSlug string
 	if userSupplied {
@@ -94,42 +101,31 @@ func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateIn
 	bodyHTML := htmlsanitize.Sanitize(in.BodyHTML)
 	bodyText := htmlsanitize.PlainText(bodyHTML)
 
-	var id int64
-	for attempt := 0; attempt < 100; attempt++ {
-		candidate := baseSlug
-		if attempt > 0 {
-			candidate = fmt.Sprintf("%s-%d", baseSlug, attempt+1)
-		}
-		err = tx.QueryRow(ctx, `
+	id, err := slug.CreateWithRetry(ctx, r.pool, baseSlug, userSupplied, isSlugUniqueViolation,
+		func(ctx context.Context, tx pgx.Tx, candidate string) (int64, error) {
+			var id int64
+			err := tx.QueryRow(ctx, `
             INSERT INTO note (user_id, title, slug, body_html, body_text, pinned, folder_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id
         `, int64(uid), in.Title, candidate, bodyHTML, bodyText, in.Pinned, in.FolderID).Scan(&id)
-		if err == nil {
-			break
-		}
-		if isSlugUniqueViolation(err) {
-			if userSupplied {
-				return Note{}, httperr.New(409, "slug_taken", "slug already in use")
+			if err != nil && !isSlugUniqueViolation(err) {
+				return 0, fmt.Errorf("insert note: %w", err)
 			}
-			_ = tx.Rollback(ctx)
-			tx, err = r.pool.Begin(ctx)
-			if err != nil {
-				return Note{}, fmt.Errorf("retry begin tx: %w", err)
+			return id, err
+		},
+		func(ctx context.Context, tx pgx.Tx, id int64) error {
+			if err := setNoteTags(ctx, tx, uid, id, in.TagIDs, in.PendingTags); err != nil {
+				return err
 			}
-			continue
-		}
-		return Note{}, fmt.Errorf("insert note: %w", err)
+			_, err := notemedia.SyncRefs(ctx, tx, uid, id, notemedia.Keys(bodyHTML))
+			return err
+		},
+	)
+	if userSupplied && isSlugUniqueViolation(err) {
+		return Note{}, ErrSlugTaken
 	}
-	if id == 0 {
-		return Note{}, fmt.Errorf("could not allocate a unique slug after 100 attempts")
-	}
-
-	if err := setNoteTags(ctx, tx, uid, id, in.TagIDs); err != nil {
-		return Note{}, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
+	if err != nil {
 		return Note{}, err
 	}
 	return r.Get(ctx, uid, id)
@@ -142,12 +138,12 @@ func isSlugUniqueViolation(err error) bool {
 }
 
 // Get returns the note owned by uid. Another user's note reports
-// httperr.ErrNotFound, never 403 — see the matching comment on links.Get.
+// domainerr.ErrNotFound, never a permission error; see links.Get.
 func (r *Repository) Get(ctx context.Context, uid authctx.UserID, id int64) (Note, error) {
 	var n Note
 	err := scanNote(r.pool.QueryRow(ctx, `SELECT `+noteDetailColumns+noteFrom+` WHERE n.user_id = $1 AND n.id = $2`, int64(uid), id), &n)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Note{}, httperr.ErrNotFound
+		return Note{}, domainerr.ErrNotFound
 	}
 	if err != nil {
 		return Note{}, fmt.Errorf("get note: %w", err)
@@ -169,7 +165,7 @@ func (r *Repository) GetBySlug(ctx context.Context, uid authctx.UserID, s string
 	var n Note
 	err := scanNote(r.pool.QueryRow(ctx, `SELECT `+noteDetailColumns+noteFrom+` WHERE n.user_id = $1 AND n.slug = $2`, int64(uid), s), &n)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Note{}, httperr.ErrNotFound
+		return Note{}, domainerr.ErrNotFound
 	}
 	if err != nil {
 		return Note{}, fmt.Errorf("get note by slug: %w", err)
@@ -186,67 +182,13 @@ func (r *Repository) GetBySlug(ctx context.Context, uid authctx.UserID, s string
 }
 
 func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) ([]Note, error) {
-	args := []any{}
-	where := []string{}
+	planner := listquery.NewPlanner(q)
+	scope := planner.AddScope(uid, listquery.NoteEntity(folders.SQLNotInLockedFolder("n")))
+	page := planner.AddPage(listquery.NoteOrder())
+	sql := `SELECT ` + noteListColumns + noteFrom + " WHERE " + strings.Join(scope.Where, " AND ")
+	sql += fmt.Sprintf(" ORDER BY %s LIMIT $%d OFFSET $%d", page.OrderBy, page.LimitArg, page.OffsetArg)
 
-	// Tenant predicate leads the WHERE so the (user_id, …) composite indexes
-	// from migration 000017 can be used.
-	args = append(args, int64(uid))
-	where = append(where, fmt.Sprintf("n.user_id = $%d", len(args)))
-
-	if q.Q != "" {
-		args = append(args, "%"+q.Q+"%")
-		idx := len(args)
-		where = append(where, fmt.Sprintf("(n.title ILIKE $%d OR n.body_text ILIKE $%d)", idx, idx))
-	}
-	if len(q.TagIDs) > 0 {
-		args = append(args, q.TagIDs)
-		idx := len(args)
-		where = append(where, fmt.Sprintf(`n.id IN (
-            SELECT entity_id FROM link_tag
-            WHERE entity_kind = 'note' AND tag_id = ANY($%d)
-            GROUP BY entity_id
-            HAVING count(DISTINCT tag_id) = %d
-        )`, idx, len(q.TagIDs)))
-	}
-	if q.FolderID != nil {
-		args = append(args, *q.FolderID)
-		where = append(where, fmt.Sprintf("n.folder_id = $%d", len(args)))
-	} else if q.Ungrouped {
-		where = append(where, "n.folder_id IS NULL")
-	} else {
-		where = append(where, folders.SQLNotInLockedFolder("n"))
-	}
-
-	order := "n.pinned DESC, n.created_at DESC"
-	switch q.Sort {
-	case "clicks":
-		order = "n.pinned DESC, COALESCE(cl.cnt, 0) DESC, n.created_at DESC"
-	case "recent":
-		order = "n.pinned DESC, COALESCE(cl.last_at, n.created_at) DESC"
-	case "alpha":
-		order = "n.pinned DESC, lower(n.title) ASC, n.created_at DESC"
-	case "alpha_desc":
-		order = "n.pinned DESC, lower(n.title) DESC, n.created_at DESC"
-	}
-
-	limit := q.Limit
-	if limit <= 0 || limit > 500 {
-		limit = 100
-	}
-	offset := q.Offset
-	if offset < 0 {
-		offset = 0
-	}
-	args = append(args, limit, offset)
-
-	sql := `SELECT ` + noteListColumns + noteFrom
-	if len(where) > 0 {
-		sql += " WHERE " + strings.Join(where, " AND ")
-	}
-	sql += fmt.Sprintf(" ORDER BY %s LIMIT $%d OFFSET $%d", order, len(args)-1, len(args))
-
-	rows, err := r.pool.Query(ctx, sql, args...)
+	rows, err := r.pool.Query(ctx, sql, planner.Args()...)
 	if err != nil {
 		return nil, fmt.Errorf("list notes: %w", err)
 	}
@@ -291,6 +233,7 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	sets := []string{}
 	args := []any{}
 	i := 1
+	var mediaKeys []string
 	if in.Title != nil {
 		sets = append(sets, fmt.Sprintf("title = $%d", i))
 		args = append(args, *in.Title)
@@ -299,6 +242,7 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	if in.BodyHTML != nil {
 		// Defense in depth — see the matching comment in Create.
 		bodyHTML := htmlsanitize.Sanitize(*in.BodyHTML)
+		mediaKeys = notemedia.Keys(bodyHTML)
 		sets = append(sets, fmt.Sprintf("body_html = $%d", i))
 		args = append(args, bodyHTML)
 		i++
@@ -317,7 +261,7 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 		i++
 	}
 	if in.SlugSet {
-		newSlug, err := resolveUpdateSlug(ctx, tx, "note", id, in.Slug, in.Title)
+		newSlug, err := resolveUpdateSlug(ctx, tx, uid, "note", id, in.Slug, in.Title)
 		if err != nil {
 			return Note{}, err
 		}
@@ -339,7 +283,7 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 		ct, err := tx.Exec(ctx, q, args...)
 		if err != nil {
 			if isSlugUniqueViolation(err) {
-				return Note{}, httperr.New(409, "slug_taken", "slug already in use")
+				return Note{}, ErrSlugTaken
 			}
 			return Note{}, fmt.Errorf("update note: %w", err)
 		}
@@ -350,24 +294,36 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 					return Note{}, fmt.Errorf("check note exists: %w", err)
 				}
 				if exists {
-					return Note{}, httperr.New(409, "conflict", "note was modified; refetch and retry")
+					return Note{}, ErrStaleWrite
 				}
 			}
-			return Note{}, httperr.ErrNotFound
+			return Note{}, domainerr.ErrNotFound
 		}
 	}
-	if in.TagIDs != nil {
+	if in.TagIDs != nil || len(in.PendingTags) > 0 {
 		// A tag-only PATCH ran no owner-scoped UPDATE above; prove ownership.
 		if err := assertNoteOwned(ctx, tx, uid, id); err != nil {
 			return Note{}, err
 		}
-		if err := setNoteTags(ctx, tx, uid, id, *in.TagIDs); err != nil {
+		tagIDs := []int64(nil)
+		if in.TagIDs != nil {
+			tagIDs = *in.TagIDs
+		}
+		if err := setNoteTags(ctx, tx, uid, id, tagIDs, in.PendingTags); err != nil {
+			return Note{}, err
+		}
+	}
+	var releasedMedia []string
+	if in.BodyHTML != nil {
+		releasedMedia, err = notemedia.SyncRefs(ctx, tx, uid, id, mediaKeys)
+		if err != nil {
 			return Note{}, err
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Note{}, err
 	}
+	r.cleanupMedia(context.WithoutCancel(ctx), uid, releasedMedia, r.storage)
 	return r.Get(ctx, uid, id)
 }
 
@@ -380,23 +336,16 @@ func assertNoteOwned(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int6
 		return fmt.Errorf("check note owner: %w", err)
 	}
 	if !exists {
-		return httperr.ErrNotFound
+		return domainerr.ErrNotFound
 	}
 	return nil
 }
 
-// imageKeyRE extracts notes/<uuid>.<ext> object keys referenced in a note's
-// body_html, used by Delete's best-effort image cleanup. Matches the proxy
-// URL shape the image-upload endpoint hands back: /api/files/notes/<key>.
-var imageKeyRE = regexp.MustCompile(`/api/files/(notes/[A-Za-z0-9._-]+)`)
-
 // Delete removes a note and its dependent link_tag/click_log rows (app-level
 // cascade — see migration 000014's comment block: the FK CASCADE that used
-// to exist for links was dropped when these tables were polymorphized, and
-// was never recreated for notes either). Inline images still referenced in
-// body_html at delete time are best-effort removed from object storage;
-// images inserted into the editor and then removed before save are a known
-// v1 gap (no orphan sweep job).
+// to exist for links was dropped when these tables were polymorphized). Media
+// cleanup is authorized only by owner-scoped note_media_ref rows; body_html is
+// attacker-authored and never grants delete authority.
 func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, storage links.Uploader) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -404,75 +353,48 @@ func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, s
 	}
 	defer tx.Rollback(ctx)
 
-	// Reading the body under the owner predicate doubles as the ownership
-	// check: link_tag and click_log carry no user_id, so their DELETEs below
-	// cannot be scoped and must not run for a note the caller does not own.
-	var bodyHTML string
-	err = tx.QueryRow(ctx, `SELECT body_html FROM note WHERE user_id = $1 AND id = $2`, int64(uid), id).Scan(&bodyHTML)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return httperr.ErrNotFound
+	if err := assertNoteOwned(ctx, tx, uid, id); err != nil {
+		return err
 	}
+	releasedMedia, err := notemedia.ReleaseNoteRefs(ctx, tx, uid, id)
 	if err != nil {
-		return fmt.Errorf("read note body for delete: %w", err)
+		return err
 	}
-
-	if _, err := tx.Exec(ctx, `DELETE FROM link_tag WHERE entity_kind = 'note' AND entity_id = $1`, id); err != nil {
-		return fmt.Errorf("delete link_tag: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM click_log WHERE entity_kind = 'note' AND entity_id = $1`, id); err != nil {
-		return fmt.Errorf("delete click_log: %w", err)
+	if err := entityrefs.PurgeOne(ctx, tx, "note", id); err != nil {
+		return err
 	}
 	ct, err := tx.Exec(ctx, `DELETE FROM note WHERE user_id = $1 AND id = $2`, int64(uid), id)
 	if err != nil {
 		return fmt.Errorf("delete note: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return httperr.ErrNotFound
+		return domainerr.ErrNotFound
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit delete tx: %w", err)
 	}
 
-	if storage != nil {
-		for _, key := range extractImageKeys(bodyHTML) {
-			_ = storage.DeleteObject(context.WithoutCancel(ctx), key)
-		}
-	}
+	r.cleanupMedia(context.WithoutCancel(ctx), uid, releasedMedia, storage)
 	return nil
 }
 
 func extractImageKeys(bodyHTML string) []string {
-	matches := imageKeyRE.FindAllStringSubmatch(bodyHTML, -1)
-	out := make([]string, 0, len(matches))
-	seen := map[string]bool{}
-	for _, m := range matches {
-		if len(m) < 2 || seen[m[1]] {
-			continue
-		}
-		seen[m[1]] = true
-		out = append(out, m[1])
-	}
-	return out
+	return notemedia.Keys(bodyHTML)
 }
 
-func parsePositiveID(s string) (int64, bool) {
-	if s == "" {
-		return 0, false
+func (r *Repository) cleanupMedia(ctx context.Context, uid authctx.UserID, keys []string, storage links.Uploader) {
+	if storage == nil || len(keys) == 0 {
+		return
 	}
-	var n int64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, false
-		}
-		n = n*10 + int64(c-'0')
-	}
-	return n, n > 0
+	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, _ = notemedia.DeleteOwnedUnreferenced(cleanupCtx, r.pool, uid, keys, storage)
 }
 
 func (r *Repository) tagsFor(ctx context.Context, uid authctx.UserID, noteIDs []int64) (map[int64][]links.Tag, error) {
 	return tags.TagsForEntities(ctx, r.pool, uid, "note", noteIDs)
 }
 
-func setNoteTags(ctx context.Context, tx pgx.Tx, uid authctx.UserID, noteID int64, tagIDs []int64) error {
-	return tags.SetEntityTags(ctx, tx, uid, "note", noteID, tagIDs)
+func setNoteTags(ctx context.Context, tx pgx.Tx, uid authctx.UserID, noteID int64, tagIDs []int64, pending []tags.CreateInput) error {
+	return tags.SetEntityTagsWithPending(ctx, tx, uid, "note", noteID, tagIDs, pending)
 }

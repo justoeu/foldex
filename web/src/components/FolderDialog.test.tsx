@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { FolderDialog } from './FolderDialog'
 import { renderWithProviders } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
+import { http } from '../api/client'
 
 let state: MockState
 
@@ -40,6 +41,21 @@ describe('FolderDialog', () => {
     renderWithProviders(<FolderDialog open onClose={onClose} />)
     await userEvent.setup().click(screen.getByRole('button', { name: /cancel/i }))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('surfaces an unexpected create failure and keeps the dialog open', async () => {
+    vi.mocked(http.post).mockRejectedValueOnce({
+      response: { status: 500, data: { error: { code: 'server_error' } } },
+    })
+    const onClose = vi.fn()
+    renderWithProviders(<FolderDialog open onClose={onClose} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText(/folder.*name|nome/i), 'Unsaved')
+    await user.click(screen.getByRole('button', { name: /create folder/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn't save/i)
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 
   it('pre-fills name when editing an existing folder', () => {
@@ -262,6 +278,97 @@ describe('FolderDialog — delete + color + parent', () => {
     await user.click(await screen.findByRole('button', { name: /^Delete everything$/i }))
     await waitFor(() => expect(state.folders.find((f) => f.id === 11)).toBeUndefined())
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('keeps the subtree and shows the protected-descendant count when cascade is refused', async () => {
+    const root = {
+      id: 20, name: 'Root', color: '#6366F1', parent_id: null, link_count: 0,
+      folder_count: 1, preview_links: [], preview_folders: [], has_password: false,
+    }
+    const child = {
+      id: 21, name: 'Vault', color: '#6366F1', parent_id: 20, link_count: 0,
+      folder_count: 0, preview_links: [], preview_folders: [], has_password: true,
+    }
+    state.folders.push(root, child)
+    state.folderPasswords[21] = 'child-secret'
+    const onClose = vi.fn()
+    renderWithProviders(<FolderDialog open onClose={onClose} folder={root} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByLabelText(/delete folder and links/i))
+    await user.click(await screen.findByRole('button', { name: /^Delete everything$/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/1 protected subfolder/i)
+    expect(state.folders.map((f) => f.id)).toEqual([20, 21])
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('shows a handled error when the retried protected-folder delete is still locked', async () => {
+    const folder = {
+      id: 22, name: 'Vault', color: '#6366F1', parent_id: null, link_count: 0,
+      folder_count: 0, preview_links: [], preview_folders: [], has_password: true,
+    }
+    state.folders.push(folder)
+    state.folderPasswords[22] = 'vault-secret'
+    vi.spyOn(http, 'delete').mockRejectedValue({
+      response: { status: 403, data: { error: { code: 'folder_locked' } } },
+    })
+    const onClose = vi.fn()
+    renderWithProviders(<FolderDialog open onClose={onClose} folder={folder} unlockToken="stale-token" />)
+    const user = userEvent.setup()
+    await user.click(screen.getByLabelText(/delete folder, keep links/i))
+    await user.click(await screen.findByRole('button', { name: /^Delete folder$/i }))
+    await user.type(await screen.findByLabelText('folder password'), 'vault-secret')
+    await user.click(screen.getByRole('button', { name: /unlock/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/folder is locked/i)
+    expect(state.folders.some((f) => f.id === 22)).toBe(true)
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('unlocks a protected folder and retries deletion with the fresh token', async () => {
+    const folder = {
+      id: 23, name: 'Vault', color: '#6366F1', parent_id: null, link_count: 0,
+      folder_count: 0, preview_links: [], preview_folders: [], has_password: true,
+    }
+    state.folders.push(folder)
+    state.folderPasswords[23] = 'vault-secret'
+    const onClose = vi.fn()
+    const onUnlocked = vi.fn()
+    renderWithProviders(
+      <FolderDialog open onClose={onClose} folder={folder} unlockToken="stale-token" onUnlocked={onUnlocked} />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByLabelText(/delete folder, keep links/i))
+    await user.click(await screen.findByRole('button', { name: /^Delete folder$/i }))
+    await user.type(await screen.findByLabelText('folder password'), 'vault-secret')
+    await user.click(screen.getByRole('button', { name: /unlock/i }))
+
+    await waitFor(() => expect(state.folders.some((item) => item.id === 23)).toBe(false))
+    expect(onUnlocked).toHaveBeenCalledWith(expect.objectContaining({ token: 'mock-unlock:23:vault-secret' }))
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(vi.mocked(http.delete).mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+      headers: { 'X-Foldex-Folder-Unlock': 'mock-unlock:23:vault-secret' },
+    }))
+  })
+
+  it('leaves a protected folder untouched when the unlock retry is canceled', async () => {
+    const folder = {
+      id: 24, name: 'Vault', color: '#6366F1', parent_id: null, link_count: 0,
+      folder_count: 0, preview_links: [], preview_folders: [], has_password: true,
+    }
+    state.folders.push(folder)
+    state.folderPasswords[24] = 'vault-secret'
+    const onClose = vi.fn()
+    renderWithProviders(<FolderDialog open onClose={onClose} folder={folder} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByLabelText(/delete folder, keep links/i))
+    await user.click(await screen.findByRole('button', { name: /^Delete folder$/i }))
+    const unlockDialog = await screen.findByRole('dialog', { name: /enter password for Vault/i })
+    await user.click(within(unlockDialog).getByRole('button', { name: /cancel/i }))
+
+    expect(state.folders.some((item) => item.id === 24)).toBe(true)
+    expect(onClose).not.toHaveBeenCalled()
+    expect(vi.mocked(http.delete)).toHaveBeenCalledOnce()
   })
 
   it('cancels delete when confirm is dismissed', async () => {

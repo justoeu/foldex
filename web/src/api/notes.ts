@@ -40,7 +40,7 @@ export function useUpdateNote() {
     },
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ['entries'] })
-      if (vars.body.tag_ids !== undefined) {
+      if (vars.body.tag_ids !== undefined || vars.body.pending_tags !== undefined) {
         qc.invalidateQueries({ queryKey: ['tags'] })
       }
       if ('folder_id' in vars.body) {

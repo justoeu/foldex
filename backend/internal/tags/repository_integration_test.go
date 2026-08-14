@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/domainerr"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
 )
@@ -47,7 +47,7 @@ func TestRepository_CRUD(t *testing.T) {
 	// Delete
 	require.NoError(t, repo.Delete(ctx, uid, created.ID))
 	_, err = repo.Get(ctx, uid, created.ID)
-	assert.ErrorIs(t, err, httperr.ErrNotFound)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
 func TestRepository_CreateDuplicateNameConflict(t *testing.T) {
@@ -60,10 +60,7 @@ func TestRepository_CreateDuplicateNameConflict(t *testing.T) {
 	_, err := repo.Create(ctx, uid, tags.CreateInput{Name: "docs", Color: "#fff"})
 	require.NoError(t, err)
 	_, err = repo.Create(ctx, uid, tags.CreateInput{Name: "docs", Color: "#000"})
-	require.Error(t, err)
-	var he *httperr.Error
-	require.ErrorAs(t, err, &he)
-	assert.Equal(t, "tag_name_taken", he.Code)
+	require.ErrorIs(t, err, tags.ErrNameTaken)
 }
 
 func TestRepository_DeleteMissing(t *testing.T) {
@@ -73,7 +70,7 @@ func TestRepository_DeleteMissing(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	repo := tags.NewRepository(pool)
 	err := repo.Delete(ctx, uid, 999)
-	assert.ErrorIs(t, err, httperr.ErrNotFound)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
 func TestRepository_UpdateEmptyPatchReturnsCurrent(t *testing.T) {

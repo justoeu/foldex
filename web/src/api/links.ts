@@ -137,7 +137,7 @@ export function useUpdateLink() {
     onSuccess: (data, vars) => {
       mapCachedLinks(qc, (l) => (l.id === data.id ? data : l))
       mapCachedLinkEntries(qc, (l) => (l.id === data.id ? data : l))
-      if (vars.body.tag_ids !== undefined) {
+      if (vars.body.tag_ids !== undefined || vars.body.pending_tags !== undefined) {
         qc.invalidateQueries({ queryKey: ['tags'] })
       }
       // folder_id touched OR cross-folder move → folder cards' link_count

@@ -7,14 +7,30 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/tags"
 )
 
 func TestCreateInput_Normalize_SanitizesBodyHTML(t *testing.T) {
-	c := CreateInput{Title: "  Hi  ", BodyHTML: `<p>ok</p><script>alert(1)</script>`}
+	c := CreateInput{
+		Title: "  Hi  ", BodyHTML: `<p>ok</p><script>alert(1)</script>`,
+		PendingTags: []tags.CreateInput{{Name: "  queued  ", Color: "  "}},
+	}
 	c.Normalize()
 	assert.Equal(t, "Hi", c.Title)
 	assert.NotContains(t, c.BodyHTML, "<script")
 	assert.Contains(t, c.BodyHTML, "<p>ok</p>")
+	require.Len(t, c.PendingTags, 1)
+	assert.Equal(t, "queued", c.PendingTags[0].Name)
+	assert.Equal(t, "#6366F1", c.PendingTags[0].Color)
+}
+
+func TestCreateInput_ValidateRejectsInvalidPendingTag(t *testing.T) {
+	c := CreateInput{
+		Title:       "ok",
+		PendingTags: []tags.CreateInput{{Name: "queued", Color: "red url(https://evil)"}},
+	}
+	require.ErrorContains(t, c.Validate(), "color")
 }
 
 func TestCreateInput_Validate_RequiresTitle(t *testing.T) {

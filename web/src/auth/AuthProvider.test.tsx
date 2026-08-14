@@ -5,7 +5,7 @@ import { AuthProvider, useAuth, useCurrentUser } from './AuthProvider'
 import { makeQueryClient, testAdminSession, testAdminUser } from '../test/renderWithProviders'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render } from '@testing-library/react'
-import { http } from '../api/client'
+import { http, resetRefreshState } from '../api/client'
 import type { SessionState } from './types'
 
 const features = { google_oauth: false, two_factor: false, email_delivery: false }
@@ -69,7 +69,18 @@ function renderProbe(initialState?: SessionState, cacheable = false) {
   return { client, ...result }
 }
 
-afterEach(() => vi.restoreAllMocks())
+async function runAuthErrorInterceptor(error: unknown) {
+  const handlers = (http.interceptors.response as unknown as {
+    handlers: Array<{ rejected?: (e: any) => any }>
+  }).handlers
+  const rejected = handlers.find((h) => h?.rejected)?.rejected
+  return rejected!(error)
+}
+
+afterEach(() => {
+  resetRefreshState()
+  vi.restoreAllMocks()
+})
 
 describe('AuthProvider', () => {
   it('uses the seeded session without probing /me', () => {
@@ -149,6 +160,48 @@ describe('AuthProvider', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /sign out/i }))
     await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('anonymous'))
+  })
+
+  it('drops to anonymous before the logout request completes', async () => {
+    let finishLogout!: () => void
+    vi.spyOn(http, 'post').mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishLogout = resolve
+      }) as never,
+    )
+    renderProbe(testAdminSession)
+
+    await userEvent.click(screen.getByRole('button', { name: /sign out/i }))
+    expect(screen.getByTestId('status')).toHaveTextContent('anonymous')
+
+    finishLogout()
+  })
+
+  it('ignores a successful refresh that completes after sign out', async () => {
+    let finishRefresh!: () => void
+    const refresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve
+    })
+    vi.spyOn(http, 'post').mockImplementation((url: string) => {
+      if (url === '/api/auth/refresh') return refresh as never
+      return Promise.resolve({ data: null }) as never
+    })
+    const retry = vi.spyOn(http, 'request').mockResolvedValue({ status: 200 } as never)
+    const originalError = {
+      response: { status: 401 },
+      config: { url: '/api/links', method: 'get', headers: {} },
+    }
+    renderProbe(testAdminSession)
+
+    const staleRequest = runAuthErrorInterceptor(originalError)
+    await vi.waitFor(() => expect(http.post).toHaveBeenCalledWith('/api/auth/refresh', null, expect.anything()))
+    await userEvent.click(screen.getByRole('button', { name: /sign out/i }))
+    expect(screen.getByTestId('status')).toHaveTextContent('anonymous')
+
+    finishRefresh()
+    await expect(staleRequest).rejects.toBe(originalError)
+    expect(retry).not.toHaveBeenCalled()
+    expect(screen.getByTestId('status')).toHaveTextContent('anonymous')
   })
 
   // The user asked to be forgotten. Leaving them apparently signed in because

@@ -230,6 +230,8 @@ func migrationsDir() string {
 // resetStatement is a package var so TestResetCoversEveryTable can check it
 // against information_schema instead of relying on review.
 var resetStatement = `TRUNCATE
+	    backup_restore_file, backup_restore_entity, backup_restore,
+	    note_media_ref, note_media,
 	    click_log, link_tag, note, link, folder, tag,
 	    push_subscription, app_setting,
 	    session_used_token, session, oauth_state, api_token,

@@ -1,353 +1,50 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useRef } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { FolderPicker } from './FolderPicker'
 import { TagChip } from './TagChip'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
-import { useCreateLink, useUpdateLink, uploadLinkImage, removeLinkImage } from '../api/links'
-import { useUrlMetadataPrefill } from '../hooks/useUrlMetadataPrefill'
-import { useCreateTag, useTags } from '../api/tags'
-import { useQueryClient } from '@tanstack/react-query'
+import { useDialogInitialFocus } from '../hooks/useDialogInitialFocus'
+import { useLinkDialogForm } from '../hooks/useLinkDialogForm'
+import { useLinkTagSelection } from '../hooks/useLinkTagSelection'
+import { useLinkDialogImage } from '../hooks/useLinkDialogImage'
+import { useLinkDialogSubmit } from '../hooks/useLinkDialogSubmit'
 import { safeImageUrl, safeLinkHref, hostOf } from '../lib/url'
-import { apiErrorCode } from '../lib/apiError'
-import { nextCheckPreview, type CheckInterval } from '../lib/time'
+import { nextCheckPreview } from '../lib/time'
 import { slugifyClient } from '../lib/slugify'
-import { INLINE_PALETTE } from '../lib/inlinePalette'
-import type { Link, Tag } from '../api/types'
+import type { Link } from '../api/types'
 
 type Props = {
   open: boolean
   link: Link | null
   initialUrl?: string
-  // Default folder for a new link — preselects the picker when the user is
-  // creating a link while inside a folder view. Ignored in edit mode (the
-  // link's own folder_id wins).
   defaultFolderId?: number | null
   onClose: () => void
 }
 
-// Tags being composed inside the link dialog. Real tags from the backend have
-// `id > 0`; tags the user typed inline live with `id === 0` until the link is
-// saved — at submit time we create them, get real ids, then attach to the
-// link. This keeps the cancel button truly destructive (nothing was written
-// to the DB if you bail out).
-type SelectedTag = Tag & { _pending?: boolean }
+type Form = ReturnType<typeof useLinkDialogForm>
+type Tags = ReturnType<typeof useLinkTagSelection>
+type Image = ReturnType<typeof useLinkDialogImage>
 
 export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }: Props) {
   const { t } = useTranslation()
-  const { data: tags = [] } = useTags()
-  const createTag = useCreateTag()
-  const createLink = useCreateLink()
-  const updateLink = useUpdateLink()
-
-  const [url, setUrl] = useState('')
-  const [title, setTitle] = useState('')
-  // Slug is auto-derived from title until the user touches the field. After
-  // that it stays "dirty" — the user is in control. On submit, an empty slug
-  // is sent as `null` (edit mode = regenerate from title) or omitted from
-  // the create payload (= backend auto-generates).
-  const [slug, setSlug] = useState('')
-  const [slugDirty, setSlugDirty] = useState(false)
-  const [description, setDescription] = useState('')
-  const [pinned, setPinned] = useState(false)
-  const [folderId, setFolderId] = useState<number | null>(null)
-  // null = opt-out (default); 'hourly'/'daily'/'weekly' = opt-in.
-  // Tracked separately from "interval" string so we can pass either an
-  // explicit value or null through to the backend tri-state DTO.
-  const [checkInterval, setCheckInterval] = useState<CheckInterval | null>(null)
-  const [selected, setSelected] = useState<SelectedTag[]>([])
-  const [tagFilter, setTagFilter] = useState('')
-  const [tagPage, setTagPage] = useState(0)
-  const [imgUploadError, setImgUploadError] = useState<string | null>(null)
-  const [isDragging, setIsDragging] = useState(false)
-  const [pendingImage, setPendingImage] = useState<File | null>(null)
-  const [pendingImagePreview, setPendingImagePreview] = useState<string | null>(null)
-  const [imageRemoved, setImageRemoved] = useState(false)
-  const [imageBusy, setImageBusy] = useState(false)
-  // True when the url-metadata fetch failed for the current URL (site blocked
-  // the scraper with 403/5xx). Drives a subtle hint under the title field so
-  // the user knows auto-fill was attempted and they should type manually.
-  const [autofillFailed, setAutofillFailed] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const urlInputRef = useRef<HTMLInputElement>(null)
-  const qc = useQueryClient()
-
-  useEffect(() => {
-    if (!open) return
-    setUrl(link?.url ?? initialUrl ?? '')
-    setTitle(link?.title ?? '')
-    setSlug(link?.slug ?? '')
-    // Treat a pre-existing slug (edit mode) as dirty so we don't overwrite
-    // the user's saved value while they edit other fields.
-    setSlugDirty(!!link?.slug)
-    setDescription(link?.description ?? '')
-    setPinned(link?.pinned ?? false)
-    setFolderId(link?.folder_id ?? defaultFolderId ?? null)
-    setCheckInterval(link?.check_interval ?? null)
-    setSelected(link?.tags ?? [])
-    setTagFilter('')
-    setTagPage(0)
-    setImgUploadError(null)
-    setIsDragging(false)
-    setPendingImage(null)
-    setPendingImagePreview(null)
-    setImageRemoved(false)
-    setAutofillFailed(false)
-    setSaveError(null)
-  }, [open, link, initialUrl])
-
-  // Live auto-derive the slug from the title until the user takes over.
-  useEffect(() => {
-    if (slugDirty) return
-    setSlug(slugifyClient(title))
-  }, [title, slugDirty])
-
-  useUrlMetadataPrefill({
-    url,
-    skip: !!link,
-    setTitle,
-    setDescription,
-    setAutofillFailed,
+  const form = useLinkDialogForm(open, link, initialUrl, defaultFolderId)
+  const tags = useLinkTagSelection(open, link)
+  const image = useLinkDialogImage(open, link)
+  const save = useLinkDialogSubmit({
+    link,
+    values: form,
+    selected: tags.selected,
+    image,
+    setSaveError: form.setSaveError,
+    onClose,
   })
-
-  // Focus the URL field on open. Using a deferred `.focus({ preventScroll })`
-  // instead of the native `autoFocus` attribute because the latter triggers
-  // iOS Safari's "scrollIntoView" heuristic, which horizontally scrolls the
-  // entire page when the modal mounts on a 390px viewport — leaving the
-  // form labels clipped off the left edge after the keyboard opens.
-  useEffect(() => {
-    if (!open) return
-    const id = requestAnimationFrame(() => {
-      // Only claim focus if the user has not already taken it themselves.
-      //
-      // The focus is deferred by a frame, which opens a window where a fast
-      // user can start typing in another field — the tag filter, most often —
-      // and then have the rest of their word yanked into the URL input
-      // mid-keystroke. Checking the active element first keeps the iOS
-      // workaround while making the steal impossible.
-      const active = document.activeElement
-      const claimed = active && active !== document.body && dialogRef.current?.contains(active)
-      if (claimed) return
-      urlInputRef.current?.focus({ preventScroll: true })
-    })
-    return () => cancelAnimationFrame(id)
-  }, [open])
-
-  useEscape(onClose, open)
-
-  // Free the staged blob URL on dialog close and on unmount. The cleanup
-  // runs whenever `pendingImagePreview` changes too — but the setter in
-  // handleImageFile already revokes the previous URL there, so the only
-  // free path that ever fires here is the close/unmount one.
-  useEffect(() => {
-    return () => {
-      if (pendingImagePreview) URL.revokeObjectURL(pendingImagePreview)
-    }
-  }, [pendingImagePreview])
-
-  const available = useMemo(
-    () => tags.filter((tag) => !selected.some((s) => s.id === tag.id)),
-    [tags, selected],
-  )
-  const filteredAvailable = useMemo(
-    () =>
-      tagFilter
-        ? available.filter((tag) => tag.name.toLowerCase().includes(tagFilter.toLowerCase()))
-        : available,
-    [available, tagFilter],
-  )
-  useEffect(() => {
-    const lastPage = Math.max(0, Math.ceil(filteredAvailable.length / 7) - 1)
-    if (tagPage > lastPage) setTagPage(lastPage)
-  }, [filteredAvailable.length, tagPage])
-  const canCreateFromFilter =
-    tagFilter.trim().length > 0 &&
-    !tags.some((tag) => tag.name.toLowerCase() === tagFilter.trim().toLowerCase()) &&
-    !selected.some((s) => s.name.toLowerCase() === tagFilter.trim().toLowerCase())
-
   const dialogRef = useRef<HTMLDivElement>(null)
+  useEscape(onClose, open)
   useFocusTrap(dialogRef, open)
+  useDialogInitialFocus(open, dialogRef, form.urlInputRef)
   if (!open) return null
-
-  // Queue a pending tag instead of creating it now. Cycling the color is done
-  // by clicking the dot on the chip (see TagChip in render).
-  const queueInlineTag = () => {
-    const name = tagFilter.trim()
-    if (!name) return
-    setSelected([
-      ...selected,
-      { id: 0, name, color: INLINE_PALETTE[0], icon: null, _pending: true },
-    ])
-    setTagFilter('')
-  }
-
-  // Cycle through INLINE_PALETTE for a pending tag (real tags ignore clicks).
-  const cycleColor = (idx: number) => {
-    setSelected(
-      selected.map((tag, i) => {
-        if (i !== idx || !tag._pending) return tag
-        const cur = INLINE_PALETTE.indexOf(tag.color)
-        const next = INLINE_PALETTE[(cur + 1) % INLINE_PALETTE.length]
-        return { ...tag, color: next }
-      }),
-    )
-  }
-
-  const handleImageFile = (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      setImgUploadError(t('link_dialog.image_error_type'))
-      return
-    }
-    setImgUploadError(null)
-    setImageRemoved(false)
-    // Always store locally — upload happens on Save for both new and edit
-    setPendingImage(file)
-    // Free any previously-staged blob URL before replacing it. Without this,
-    // the user picking three files in a row leaks two blob URLs until the
-    // page unloads.
-    setPendingImagePreview((prev) => {
-      if (prev) URL.revokeObjectURL(prev)
-      return URL.createObjectURL(file)
-    })
-  }
-
-  const submit = async () => {
-    const trimmed = url.trim()
-    if (!trimmed) return
-    setSaveError(null)
-    try {
-      // Resolve pending tags now — only when the user is committing the link.
-    // If any of these fail (e.g. duplicate name vs another tag we don't know
-    // about), the link save also fails so the user sees the error and can
-    // recover without ending up with orphan tags.
-    const tagIds: number[] = []
-    for (const tag of selected) {
-      if (tag.id) {
-        tagIds.push(tag.id)
-      } else {
-        const created = await createTag.mutateAsync({ name: tag.name, color: tag.color })
-        tagIds.push(created.id)
-      }
-    }
-
-    if (link) {
-      // Slug semantics on PATCH:
-      //   user-typed slug      → send as string (backend validates + sets)
-      //   field empty + dirty  → send as null  (backend regenerates from title)
-      //   not dirty            → don't include the field (keep current slug)
-      const slugTrimmed = slug.trim()
-      const slugPayload: { slug?: string | null } = {}
-      if (slugDirty) {
-        slugPayload.slug = slugTrimmed === '' ? null : slugTrimmed
-      }
-      await updateLink.mutateAsync({
-        id: link.id,
-        body: {
-          url: trimmed,
-          title: title.trim() || trimmed,
-          description: description.trim() || null,
-          tag_ids: tagIds,
-          pinned,
-          folder_id: folderId,
-          // Always send check_interval — null clears the opt-in cleanly.
-          // The backend tri-state DTO needs an explicit field to know
-          // "the user changed this" vs "leave it alone".
-          check_interval: checkInterval,
-          ...slugPayload,
-        },
-      })
-      if (pendingImage) {
-        setImageBusy(true)
-        try {
-          await uploadLinkImage(link.id, pendingImage)
-          qc.invalidateQueries({ queryKey: ['links'] })
-          qc.invalidateQueries({ queryKey: ['entries'] })
-          qc.invalidateQueries({ queryKey: ['folders'] })
-        } catch (e: unknown) {
-          setImgUploadError(extractUploadErr(e, t('link_dialog.image_error_generic')))
-          setImageBusy(false)
-          return
-        }
-        setImageBusy(false)
-      } else if (imageRemoved) {
-        setImageBusy(true)
-        try {
-          await removeLinkImage(link.id)
-          qc.invalidateQueries({ queryKey: ['links'] })
-          qc.invalidateQueries({ queryKey: ['entries'] })
-          qc.invalidateQueries({ queryKey: ['folders'] })
-        } catch (e: unknown) {
-          setImgUploadError(extractUploadErr(e, t('link_dialog.image_error_generic')))
-          setImageBusy(false)
-          return
-        }
-        setImageBusy(false)
-      }
-    } else {
-      // Slug on CREATE:
-      //   dirty + non-empty → ship verbatim
-      //   else              → omit (backend auto-derives via Slugify)
-      const slugTrimmed = slug.trim()
-      const createSlug: { slug?: string } = {}
-      if (slugDirty && slugTrimmed !== '') {
-        createSlug.slug = slugTrimmed
-      }
-      const newLink = await createLink.mutateAsync({
-        url: trimmed,
-        title: title.trim() || trimmed,
-        description: description.trim() || null,
-        tag_ids: tagIds,
-        pinned,
-        folder_id: folderId,
-        check_interval: checkInterval,
-        ...createSlug,
-      })
-      if (pendingImage && newLink?.id) {
-        setImageBusy(true)
-        try {
-          await uploadLinkImage(newLink.id, pendingImage)
-          qc.invalidateQueries({ queryKey: ['links'] })
-          qc.invalidateQueries({ queryKey: ['entries'] })
-          qc.invalidateQueries({ queryKey: ['folders'] })
-        } catch (e: unknown) {
-          setImgUploadError(extractUploadErr(e, t('link_dialog.image_error_generic')))
-          setImageBusy(false)
-          return
-        }
-        setImageBusy(false)
-      }
-      }
-      onClose()
-    } catch (e: unknown) {
-      const code = apiErrorCode(e)
-      if (code === 'url_taken') setSaveError(t('link_dialog.error_url_taken'))
-      else if (code === 'slug_taken') setSaveError(t('link_dialog.error_slug_taken'))
-      else if (code === 'tag_name_taken') setSaveError(t('link_dialog.error_tag_taken'))
-      else {
-        const msg = (e as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
-        setSaveError(msg || t('link_dialog.error_generic'))
-      }
-    }
-  }
-
-  const busy = createLink.isPending || updateLink.isPending || createTag.isPending || imageBusy
-  const isEdit = !!link
-  const hasImage = !imageRemoved && !!(pendingImagePreview || link?.og_image_url)
-  // `pendingImagePreview` is a `blob:` URL from URL.createObjectURL (local file
-  // picker — trusted). The remote `og_image_url` is stamped by the preview
-  // worker from arbitrary remote pages, so it must go through `safeImageUrl`.
-  const currentImageUrl =
-    pendingImagePreview ?? (imageRemoved ? undefined : safeImageUrl(link?.og_image_url))
-
-  const handleRemoveImage = () => {
-    // Stage the deletion only — the actual DELETE fires in submit() so that
-    // Cancel can still abort and Save is the single commit point.
-    setPendingImage(null)
-    setPendingImagePreview(null)
-    setImageRemoved(true)
-  }
 
   return (
     <div
@@ -355,394 +52,429 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
       className="fx-overlay fx-overlay-modal"
       role="dialog"
       aria-modal="true"
-      aria-label={isEdit ? t('link_dialog.edit_title') : t('link_dialog.kicker_create')}
+      aria-label={link ? t('link_dialog.edit_title') : t('link_dialog.kicker_create')}
     >
       <div className="fx-modal">
-        <header className="fx-modal-head">
-          <div>
-            <div className="fx-modal-kicker">{isEdit ? t('link_dialog.kicker_edit') : t('link_dialog.kicker_create')}</div>
-            <h2 className="fx-modal-title">{isEdit ? t('link_dialog.edit_title') : t('link_dialog.create_title')}</h2>
-          </div>
-          <button className="fx-confirm-x" onClick={onClose} aria-label={t('common.close')}>
-            <Icon d={I.x} size={14} />
-          </button>
-        </header>
-
-        <div className="fx-modal-body">
-          <div className="fx-modal-col">
-            <label className="fx-field">
-              <span className="fx-field-label">{t('link_dialog.url_label')}</span>
-              <div className="fx-input fx-input-url">
-                <Icon d={I.link} size={15} />
-                <input
-                  ref={urlInputRef}
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder={t('link_dialog.url_placeholder')}
-                  aria-label={t('common.url_aria')}
-                />
-              </div>
-            </label>
-
-            <label className="fx-field">
-              <span className="fx-field-label">{t('link_dialog.title_label')}</span>
-              <div className="fx-input">
-                <input
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder={t('link_dialog.title_placeholder')}
-                  aria-label={t('common.title_aria')}
-                />
-              </div>
-              {autofillFailed && !title.trim() && (
-                <span className="fx-field-hint fx-field-hint-warn">
-                  {t('link_dialog.autofill_failed')}
-                </span>
-              )}
-            </label>
-
-            <label className="fx-field">
-              <span className="fx-field-label">{t('link_dialog.slug_label')}</span>
-              <div className="fx-input">
-                <span style={{ color: 'var(--fx-ink-4)', fontFamily: 'var(--fx-mono)', fontSize: 12, paddingRight: 4 }}>
-                  /go/
-                </span>
-                <input
-                  value={slug}
-                  onChange={(e) => {
-                    setSlug(e.target.value)
-                    setSlugDirty(true)
-                  }}
-                  placeholder={slugifyClient(title) || 'jira-board'}
-                  aria-label={t('link_dialog.slug_aria')}
-                  pattern="[a-z0-9]+(-[a-z0-9]+)*"
-                  style={{ fontFamily: 'var(--fx-mono)' }}
-                />
-                {slugDirty && (
-                  <button
-                    type="button"
-                    className="fx-iconbtn"
-                    onClick={() => {
-                      setSlug(slugifyClient(title))
-                      setSlugDirty(false)
-                    }}
-                    data-tooltip={t('link_dialog.slug_reset_tooltip')}
-                    aria-label={t('link_dialog.slug_reset_tooltip')}
-                  >
-                    <Icon d={I.refresh} size={13} />
-                  </button>
-                )}
-              </div>
-              <span className="fx-field-hint">{t('link_dialog.slug_hint')}</span>
-            </label>
-
-            <label className="fx-field">
-              <span className="fx-field-label">{t('link_dialog.description_label')}</span>
-              <div className="fx-textarea-wrap">
-                <textarea
-                  className="fx-textarea"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value.slice(0, 1000))}
-                  rows={3}
-                  maxLength={1000}
-                  aria-label={t('common.description_aria')}
-                />
-                <span className={
-                  'fx-textarea-count' +
-                  (description.length >= 1000 ? ' fx-textarea-count-limit' :
-                   description.length >= 900  ? ' fx-textarea-count-warn'  : '')
-                }>
-                  {description.length}/1000
-                </span>
-              </div>
-            </label>
-
-            <label className="fx-field">
-              <span className="fx-field-label">{t('link_dialog.tags_label')}</span>
-              <div className="fx-tagpicker">
-                {selected.map((tag, i) => (
-                  <TagChip
-                    key={tag.id || `pending-${i}`}
-                    tag={tag}
-                    active
-                    closable
-                    onClick={tag._pending ? () => cycleColor(i) : undefined}
-                    onClose={() => setSelected(selected.filter((_, j) => j !== i))}
-                  />
-                ))}
-                <input
-                  className="fx-tagpicker-input"
-                  value={tagFilter}
-                  onChange={(e) => { setTagFilter(e.target.value); setTagPage(0) }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && canCreateFromFilter) {
-                      e.preventDefault()
-                      queueInlineTag()
-                    }
-                  }}
-                  placeholder={t('link_dialog.tags_search_placeholder')}
-                  aria-label={t('common.tag_filter_aria')}
-                />
-              </div>
-              {selected.some((tag) => tag._pending) && (
-                <div className="fx-tag-hint">
-                  <Trans i18nKey="link_dialog.pending_tag_color_hint_html" components={{ strong: <strong /> }} />
-                </div>
-              )}
-              {(filteredAvailable.length > 0 || canCreateFromFilter) && (() => {
-                const PAGE = 7
-                const totalPages = Math.ceil(filteredAvailable.length / PAGE)
-                const pageTags = filteredAvailable.slice(tagPage * PAGE, (tagPage + 1) * PAGE)
-                return (
-                  <div style={{ marginTop: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <span style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)' }}>
-                        {t('link_dialog.tags_registered_label')}
-                      </span>
-                      {totalPages > 1 && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                          <button
-                            type="button"
-                            className="fx-iconbtn"
-                            disabled={tagPage === 0}
-                            onClick={() => setTagPage((p) => p - 1)}
-                            aria-label={t('link_dialog.tags_page_prev_aria')}
-                            style={{ width: 22, height: 22 }}
-                          >
-                            <Icon d={I.chevronLeft} size={12} />
-                          </button>
-                          <span style={{ fontFamily: 'var(--fx-mono)', fontSize: 10, color: 'var(--fx-ink-4)', minWidth: 32, textAlign: 'center' }}>
-                            {tagPage + 1}/{totalPages}
-                          </span>
-                          <button
-                            type="button"
-                            className="fx-iconbtn"
-                            disabled={tagPage >= totalPages - 1}
-                            onClick={() => setTagPage((p) => p + 1)}
-                            aria-label={t('link_dialog.tags_page_next_aria')}
-                            style={{ width: 22, height: 22 }}
-                          >
-                            <Icon d={I.chevronRight} size={12} />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {pageTags.map((tag) => (
-                        <TagChip
-                          key={tag.id}
-                          tag={tag}
-                          onClick={() => {
-                            setSelected([...selected, tag])
-                            setTagFilter('')
-                          }}
-                        />
-                      ))}
-                      {canCreateFromFilter && (
-                        <button
-                          type="button"
-                          className="fx-pillbtn"
-                          onClick={queueInlineTag}
-                          style={{ fontSize: 11 }}
-                        >
-                          <Icon d={I.plus} size={11} /> {t('link_dialog.tags_create_inline', { name: tagFilter.trim() })}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )
-              })()}
-            </label>
-
-            <label className="fx-field">
-              <span className="fx-field-label">{t('link_dialog.folder_label')}</span>
-              <FolderPicker
-                selected={folderId}
-                onChange={setFolderId}
-                parentId={defaultFolderId ?? null}
-              />
-            </label>
-
-            <label className="fx-toggle-row">
-              <input
-                type="checkbox"
-                checked={pinned}
-                onChange={(e) => setPinned(e.target.checked)}
-                aria-label={t('link_dialog.pinned_aria')}
-              />
-              <span className="fx-toggle-track">
-                <span className="fx-toggle-knob" />
-              </span>
-              <span className="fx-toggle-label">
-                <Icon d={I.pin} size={12} /> {t('link_dialog.pinned_label')}
-                <span className="fx-toggle-hint">{t('link_dialog.pinned_hint')}</span>
-              </span>
-            </label>
-
-            <label className="fx-field">
-              <span className="fx-field-label">
-                <Icon d={I.bell} size={12} /> {t('link_dialog.check_updates_label')}
-              </span>
-              <select
-                className="fx-input"
-                value={checkInterval ?? ''}
-                onChange={(e) => {
-                  const v = e.target.value
-                  setCheckInterval(v === 'hourly' || v === 'daily' || v === 'weekly' ? v : null)
-                }}
-                aria-label={t('link_dialog.check_updates_label')}
-              >
-                <option value="">{t('link_dialog.check_updates_off')}</option>
-                <option value="hourly">{t('link_dialog.check_updates_hourly')}</option>
-                <option value="daily">{t('link_dialog.check_updates_daily')}</option>
-                <option value="weekly">{t('link_dialog.check_updates_weekly')}</option>
-              </select>
-              <span className="fx-field-hint">{t('link_dialog.check_updates_hint')}</span>
-              {checkInterval && (
-                <span className="fx-field-hint" data-testid="check-next-preview">
-                  {t('link_dialog.check_updates_next', {
-                    when: nextCheckPreview(checkInterval, link?.last_checked_at, t),
-                  })}
-                </span>
-              )}
-            </label>
-          </div>
-
-          <aside className="fx-modal-side">
-            {/* Status */}
-            <div className="fx-modal-side-label">{t('link_dialog.status_label')}</div>
-            <div className="fx-modal-side-meta">
-              <div className="fx-modal-side-meta-row">
-                <Icon d={I.globe} size={13} /> {hostOf(url) || '—'}
-              </div>
-              <div className="fx-modal-side-meta-row">
-                <Icon d={I.flame} size={13} /> {t('link_dialog.clicks_count', { count: link?.click_count ?? 0 })}
-              </div>
-              {pinned && (
-                <div className="fx-modal-side-meta-row" style={{ color: 'var(--fx-accent)' }}>
-                  <Icon d={I.pin} size={13} /> {t('link_dialog.pinned_status')}
-                </div>
-              )}
-            </div>
-
-            {/* Preview / Upload */}
-            <div className="fx-modal-side-preview" style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div className="fx-modal-side-label">{t('link_dialog.image_label')}</div>
-                {safeLinkHref(url) && (
-                  <a href={safeLinkHref(url)} target="_blank" rel="noopener noreferrer" className="fx-modal-side-open-link">
-                    <Icon d={I.arrowR} size={11} /> {t('link_dialog.image_open_browser')}
-                  </a>
-                )}
-              </div>
-
-              {/* Current image */}
-              {currentImageUrl && (
-                <div className="fx-modal-side-ogwrap">
-                  <img src={currentImageUrl} alt="preview" referrerPolicy="no-referrer" className="fx-modal-side-ogimg" />
-                  {imageBusy && (
-                    <div className="fx-modal-side-uploading" aria-live="polite">
-                      <span className="fx-spinner" aria-hidden="true" />
-                      <span>{t('link_dialog.image_uploading')}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Upload zone */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  if (file) handleImageFile(file)
-                  e.target.value = ''
-                }}
-              />
-              <div
-                className={'fx-img-upload-zone' + (isDragging ? ' fx-img-upload-zone-drag' : '') + (imageBusy ? ' fx-img-upload-zone-busy' : '')}
-                onClick={() => !imageBusy && fileInputRef.current?.click()}
-                onDragOver={(e) => { e.preventDefault(); if (!imageBusy) setIsDragging(true) }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  setIsDragging(false)
-                  if (imageBusy) return
-                  const file = e.dataTransfer.files?.[0]
-                  if (file) handleImageFile(file)
-                }}
-              >
-                {imageBusy ? (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    <span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}
-                  </span>
-                ) : pendingImagePreview
-                  ? t('link_dialog.image_selected_hint')
-                  : t('link_dialog.image_drop_hint')}
-              </div>
-
-              {/* Status messages */}
-              {pendingImagePreview && (
-                <div style={{ fontSize: 11, color: 'var(--fx-accent)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Icon d={I.check} size={12} /> {t('link_dialog.image_saved_with_link')}
-                </div>
-              )}
-              {imgUploadError && (
-                <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Icon d={I.alert} size={12} /> {imgUploadError}
-                </div>
-              )}
-
-              {/* Remove button */}
-              {hasImage && (
-                <button
-                  type="button"
-                  className="fx-confirm-btn"
-                  style={{ justifyContent: 'center', color: 'var(--fx-danger)' }}
-                  onClick={handleRemoveImage}
-                >
-                  <Icon d={I.trash} size={13} /> {t('link_dialog.image_remove')}
-                </button>
-              )}
-            </div>
-          </aside>
-        </div>
-
-        {saveError && (
-          <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 20px 8px' }}>
-            <Icon d={I.alert} size={12} /> {saveError}
-          </div>
-        )}
-
-        <footer className="fx-modal-foot">
-          <button className="fx-confirm-btn" onClick={onClose}>
-            {t('common.cancel')}
-          </button>
-          <button
-            className="fx-confirm-btn fx-confirm-btn-primary"
-            onClick={submit}
-            disabled={!url.trim() || busy}
-          >
-            {imageBusy ? (
-              <>
-                <span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}
-              </>
-            ) : (
-              <>
-                {isEdit ? t('link_dialog.submit_save') : t('link_dialog.submit_create')}
-                <Icon d={I.arrowR} size={14} stroke={2} />
-              </>
-            )}
-          </button>
-        </footer>
+        <LinkDialogHeader
+          isEdit={!!link}
+          onClose={onClose}
+        />
+        <LinkDialogBody
+          form={form}
+          tags={tags}
+          image={image}
+          link={link}
+          defaultFolderId={defaultFolderId}
+        />
+        <LinkDialogError message={form.saveError} />
+        <LinkDialogFooter
+          form={form}
+          image={image}
+          isEdit={!!link}
+          busy={save.busy}
+          onClose={onClose}
+          onSubmit={save.submit}
+        />
       </div>
     </div>
   )
 }
 
-function extractUploadErr(e: unknown, fallback: string): string {
-  const obj = e as { response?: { data?: { error?: { message?: string } } }; message?: string }
-  return obj?.response?.data?.error?.message ?? obj?.message ?? fallback
+function LinkDialogError({ message }: { message: string | null }) {
+  if (!message) return null
+  return (
+    <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 20px 8px' }}>
+      <Icon d={I.alert} size={12} /> {message}
+    </div>
+  )
+}
+
+function LinkDialogHeader({ isEdit, onClose }: { isEdit: boolean; onClose: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <header className="fx-modal-head">
+      <div>
+        <div className="fx-modal-kicker">{isEdit ? t('link_dialog.kicker_edit') : t('link_dialog.kicker_create')}</div>
+        <h2 className="fx-modal-title">{isEdit ? t('link_dialog.edit_title') : t('link_dialog.create_title')}</h2>
+      </div>
+      <button className="fx-confirm-x" onClick={onClose} aria-label={t('common.close')}>
+        <Icon d={I.x} size={14} />
+      </button>
+    </header>
+  )
+}
+
+function LinkDialogBody({
+  form,
+  tags,
+  image,
+  link,
+  defaultFolderId,
+}: {
+  form: Form
+  tags: Tags
+  image: Image
+  link: Link | null
+  defaultFolderId?: number | null
+}) {
+  return (
+    <div className="fx-modal-body">
+      <div className="fx-modal-col">
+        <LinkBasicsFields form={form} />
+        <LinkTagsField tags={tags} />
+        <LinkOrganizationFields form={form} link={link} defaultFolderId={defaultFolderId} />
+      </div>
+      <aside className="fx-modal-side">
+        <LinkStatus form={form} link={link} />
+        <LinkImagePanel form={form} image={image} link={link} />
+      </aside>
+    </div>
+  )
+}
+
+function LinkBasicsFields({ form }: { form: Form }) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <label className="fx-field">
+        <span className="fx-field-label">{t('link_dialog.url_label')}</span>
+        <div className="fx-input fx-input-url">
+          <Icon d={I.link} size={15} />
+          <input
+            ref={form.urlInputRef}
+            value={form.url}
+            onChange={(event) => form.setUrl(event.target.value)}
+            placeholder={t('link_dialog.url_placeholder')}
+            aria-label={t('common.url_aria')}
+          />
+        </div>
+      </label>
+      <label className="fx-field">
+        <span className="fx-field-label">{t('link_dialog.title_label')}</span>
+        <div className="fx-input">
+          <input
+            value={form.title}
+            onChange={(event) => form.setTitle(event.target.value)}
+            placeholder={t('link_dialog.title_placeholder')}
+            aria-label={t('common.title_aria')}
+          />
+        </div>
+        {form.autofillFailed && !form.title.trim() && (
+          <span className="fx-field-hint fx-field-hint-warn">{t('link_dialog.autofill_failed')}</span>
+        )}
+      </label>
+      <LinkSlugField form={form} />
+      <label className="fx-field">
+        <span className="fx-field-label">{t('link_dialog.description_label')}</span>
+        <div className="fx-textarea-wrap">
+          <textarea
+            className="fx-textarea"
+            value={form.description}
+            onChange={(event) => form.setDescription(event.target.value.slice(0, 1000))}
+            rows={3}
+            maxLength={1000}
+            aria-label={t('common.description_aria')}
+          />
+          <span className={descriptionCountClass(form.description.length)}>{form.description.length}/1000</span>
+        </div>
+      </label>
+    </>
+  )
+}
+
+function LinkSlugField({ form }: { form: Form }) {
+  const { t } = useTranslation()
+  const reset = () => {
+    form.setSlug(slugifyClient(form.title))
+    form.setSlugDirty(false)
+  }
+  return (
+    <label className="fx-field">
+      <span className="fx-field-label">{t('link_dialog.slug_label')}</span>
+      <div className="fx-input">
+        <span style={{ color: 'var(--fx-ink-4)', fontFamily: 'var(--fx-mono)', fontSize: 12, paddingRight: 4 }}>/go/</span>
+        <input
+          value={form.slug}
+          onChange={(event) => {
+            form.setSlug(event.target.value)
+            form.setSlugDirty(true)
+          }}
+          placeholder={slugifyClient(form.title) || 'jira-board'}
+          aria-label={t('link_dialog.slug_aria')}
+          pattern="[a-z0-9]+(-[a-z0-9]+)*"
+          style={{ fontFamily: 'var(--fx-mono)' }}
+        />
+        {form.slugDirty && (
+          <button type="button" className="fx-iconbtn" onClick={reset} data-tooltip={t('link_dialog.slug_reset_tooltip')} aria-label={t('link_dialog.slug_reset_tooltip')}>
+            <Icon d={I.refresh} size={13} />
+          </button>
+        )}
+      </div>
+      <span className="fx-field-hint">{t('link_dialog.slug_hint')}</span>
+    </label>
+  )
+}
+
+function LinkTagsField({ tags }: { tags: Tags }) {
+  const { t } = useTranslation()
+  return (
+    <label className="fx-field">
+      <span className="fx-field-label">{t('link_dialog.tags_label')}</span>
+      <div className="fx-tagpicker">
+        {tags.selected.map((tag, index) => (
+          <TagChip
+            key={tag.id || `pending-${index}`}
+            tag={tag}
+            active
+            closable
+            onClick={tag._pending ? () => tags.cycleColor(index) : undefined}
+            onClose={() => tags.remove(index)}
+          />
+        ))}
+        <input
+          className="fx-tagpicker-input"
+          value={tags.filter}
+          onChange={(event) => tags.setSearch(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && tags.canCreate) {
+              event.preventDefault()
+              tags.queue()
+            }
+          }}
+          placeholder={t('link_dialog.tags_search_placeholder')}
+          aria-label={t('common.tag_filter_aria')}
+        />
+      </div>
+      {tags.selected.some((tag) => tag._pending) && (
+        <div className="fx-tag-hint">
+          <Trans i18nKey="link_dialog.pending_tag_color_hint_html" components={{ strong: <strong /> }} />
+        </div>
+      )}
+      {(tags.filtered.length > 0 || tags.canCreate) && <LinkTagSuggestions tags={tags} />}
+    </label>
+  )
+}
+
+function LinkTagSuggestions({ tags }: { tags: Tags }) {
+  const { t } = useTranslation()
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <span style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)' }}>
+          {t('link_dialog.tags_registered_label')}
+        </span>
+        {tags.totalPages > 1 && <TagPagination tags={tags} />}
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {tags.pageTags.map((tag) => <TagChip key={tag.id} tag={tag} onClick={() => tags.add(tag)} />)}
+        {tags.canCreate && (
+          <button type="button" className="fx-pillbtn" onClick={tags.queue} style={{ fontSize: 11 }}>
+            <Icon d={I.plus} size={11} /> {t('link_dialog.tags_create_inline', { name: tags.filter.trim() })}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function TagPagination({ tags }: { tags: Tags }) {
+  const { t } = useTranslation()
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+      <button type="button" className="fx-iconbtn" disabled={tags.page === 0} onClick={() => tags.setPage((page) => page - 1)} aria-label={t('link_dialog.tags_page_prev_aria')} style={{ width: 22, height: 22 }}>
+        <Icon d={I.chevronLeft} size={12} />
+      </button>
+      <span style={{ fontFamily: 'var(--fx-mono)', fontSize: 10, color: 'var(--fx-ink-4)', minWidth: 32, textAlign: 'center' }}>
+        {tags.page + 1}/{tags.totalPages}
+      </span>
+      <button type="button" className="fx-iconbtn" disabled={tags.page >= tags.totalPages - 1} onClick={() => tags.setPage((page) => page + 1)} aria-label={t('link_dialog.tags_page_next_aria')} style={{ width: 22, height: 22 }}>
+        <Icon d={I.chevronRight} size={12} />
+      </button>
+    </div>
+  )
+}
+
+function LinkOrganizationFields({ form, link, defaultFolderId }: { form: Form; link: Link | null; defaultFolderId?: number | null }) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <label className="fx-field">
+        <span className="fx-field-label">{t('link_dialog.folder_label')}</span>
+        <FolderPicker selected={form.folderId} onChange={form.setFolderId} parentId={defaultFolderId ?? null} />
+      </label>
+      <label className="fx-toggle-row">
+        <input type="checkbox" checked={form.pinned} onChange={(event) => form.setPinned(event.target.checked)} aria-label={t('link_dialog.pinned_aria')} />
+        <span className="fx-toggle-track"><span className="fx-toggle-knob" /></span>
+        <span className="fx-toggle-label">
+          <Icon d={I.pin} size={12} /> {t('link_dialog.pinned_label')}
+          <span className="fx-toggle-hint">{t('link_dialog.pinned_hint')}</span>
+        </span>
+      </label>
+      <label className="fx-field">
+        <span className="fx-field-label"><Icon d={I.bell} size={12} /> {t('link_dialog.check_updates_label')}</span>
+        <select
+          className="fx-input"
+          value={form.checkInterval ?? ''}
+          onChange={(event) => {
+            const value = event.target.value
+            form.setCheckInterval(value === 'hourly' || value === 'daily' || value === 'weekly' ? value : null)
+          }}
+          aria-label={t('link_dialog.check_updates_label')}
+        >
+          <option value="">{t('link_dialog.check_updates_off')}</option>
+          <option value="hourly">{t('link_dialog.check_updates_hourly')}</option>
+          <option value="daily">{t('link_dialog.check_updates_daily')}</option>
+          <option value="weekly">{t('link_dialog.check_updates_weekly')}</option>
+        </select>
+        <span className="fx-field-hint">{t('link_dialog.check_updates_hint')}</span>
+        {form.checkInterval && (
+          <span className="fx-field-hint" data-testid="check-next-preview">
+            {t('link_dialog.check_updates_next', { when: nextCheckPreview(form.checkInterval, link?.last_checked_at, t) })}
+          </span>
+        )}
+      </label>
+    </>
+  )
+}
+
+function LinkStatus({ form, link }: { form: Form; link: Link | null }) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <div className="fx-modal-side-label">{t('link_dialog.status_label')}</div>
+      <div className="fx-modal-side-meta">
+        <div className="fx-modal-side-meta-row"><Icon d={I.globe} size={13} /> {hostOf(form.url) || '—'}</div>
+        <div className="fx-modal-side-meta-row"><Icon d={I.flame} size={13} /> {t('link_dialog.clicks_count', { count: link?.click_count ?? 0 })}</div>
+        {form.pinned && (
+          <div className="fx-modal-side-meta-row" style={{ color: 'var(--fx-accent)' }}>
+            <Icon d={I.pin} size={13} /> {t('link_dialog.pinned_status')}
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
+function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link: Link | null }) {
+  const { t } = useTranslation()
+  const currentImage = image.preview ?? (image.removed ? undefined : safeImageUrl(link?.og_image_url))
+  const hasImage = !image.removed && !!(image.preview || link?.og_image_url)
+  const href = safeLinkHref(form.url)
+  return (
+    <div className="fx-modal-side-preview" style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div className="fx-modal-side-label">{t('link_dialog.image_label')}</div>
+        {href && (
+          <a href={href} target="_blank" rel="noopener noreferrer" className="fx-modal-side-open-link">
+            <Icon d={I.arrowR} size={11} /> {t('link_dialog.image_open_browser')}
+          </a>
+        )}
+      </div>
+      {currentImage && <LinkImagePreview url={currentImage} busy={image.busy} />}
+      <LinkImageUploadZone image={image} />
+      {image.preview && (
+        <div style={{ fontSize: 11, color: 'var(--fx-accent)', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Icon d={I.check} size={12} /> {t('link_dialog.image_saved_with_link')}
+        </div>
+      )}
+      {image.uploadError && (
+        <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Icon d={I.alert} size={12} /> {image.uploadError}
+        </div>
+      )}
+      {hasImage && (
+        <button type="button" className="fx-confirm-btn" style={{ justifyContent: 'center', color: 'var(--fx-danger)' }} onClick={image.remove}>
+          <Icon d={I.trash} size={13} /> {t('link_dialog.image_remove')}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function LinkImagePreview({ url, busy }: { url: string; busy: boolean }) {
+  const { t } = useTranslation()
+  return (
+    <div className="fx-modal-side-ogwrap">
+      <img src={url} alt="preview" referrerPolicy="no-referrer" className="fx-modal-side-ogimg" />
+      {busy && (
+        <div className="fx-modal-side-uploading" aria-live="polite">
+          <span className="fx-spinner" aria-hidden="true" />
+          <span>{t('link_dialog.image_uploading')}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function LinkImageUploadZone({ image }: { image: Image }) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <input
+        ref={image.fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          if (file) image.selectFile(file)
+          event.target.value = ''
+        }}
+      />
+      <div
+        className={'fx-img-upload-zone' + (image.dragging ? ' fx-img-upload-zone-drag' : '') + (image.busy ? ' fx-img-upload-zone-busy' : '')}
+        onClick={() => !image.busy && image.fileInputRef.current?.click()}
+        onDragOver={(event) => {
+          event.preventDefault()
+          if (!image.busy) image.setDragging(true)
+        }}
+        onDragLeave={() => image.setDragging(false)}
+        onDrop={(event) => {
+          event.preventDefault()
+          image.setDragging(false)
+          if (image.busy) return
+          const file = event.dataTransfer.files?.[0]
+          if (file) image.selectFile(file)
+        }}
+      >
+        {image.busy
+          ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}</span>
+          : image.preview ? t('link_dialog.image_selected_hint') : t('link_dialog.image_drop_hint')}
+      </div>
+    </>
+  )
+}
+
+function LinkDialogFooter({
+  form,
+  image,
+  isEdit,
+  busy,
+  onClose,
+  onSubmit,
+}: {
+  form: Form
+  image: Image
+  isEdit: boolean
+  busy: boolean
+  onClose: () => void
+  onSubmit: () => Promise<void>
+}) {
+  const { t } = useTranslation()
+  return (
+    <footer className="fx-modal-foot">
+      <button className="fx-confirm-btn" onClick={onClose}>{t('common.cancel')}</button>
+      <button className="fx-confirm-btn fx-confirm-btn-primary" onClick={() => void onSubmit()} disabled={!form.url.trim() || busy}>
+        {image.busy
+          ? <><span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}</>
+          : <>{isEdit ? t('link_dialog.submit_save') : t('link_dialog.submit_create')}<Icon d={I.arrowR} size={14} stroke={2} /></>}
+      </button>
+    </footer>
+  )
+}
+
+function descriptionCountClass(length: number): string {
+  if (length >= 1000) return 'fx-textarea-count fx-textarea-count-limit'
+  if (length >= 900) return 'fx-textarea-count fx-textarea-count-warn'
+  return 'fx-textarea-count'
 }

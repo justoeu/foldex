@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+
+	"foldex/internal/pkg/domainerr"
 )
 
 // DecodeJSON is a shared decode+cap+strict-parse helper for POST/PATCH
@@ -47,7 +49,7 @@ func New(status int, code, msg string) *Error {
 }
 
 var (
-	ErrNotFound     = New(http.StatusNotFound, "not_found", "resource not found")
+	ErrNotFound     = Wrap(http.StatusNotFound, "not_found", "resource not found", domainerr.ErrNotFound)
 	ErrBadRequest   = New(http.StatusBadRequest, "bad_request", "invalid request")
 	ErrConflict     = New(http.StatusConflict, "conflict", "resource conflict")
 	ErrInternal     = New(http.StatusInternalServerError, "internal", "internal error")

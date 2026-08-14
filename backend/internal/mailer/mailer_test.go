@@ -148,19 +148,30 @@ func TestRenderPlainWhenNoHTML(t *testing.T) {
 
 func TestInviteMessageCarriesTheLink(t *testing.T) {
 	t.Parallel()
-	msg := InviteMessage("new@example.com", "Ana", "https://foldex.local/?invite=TOK", 168)
+	msg := InviteMessage("new@example.com", "Ana", "https://foldex.local/#invite=TOK", 168)
 
 	assert.Equal(t, "new@example.com", msg.To)
-	assert.Contains(t, msg.Text, "https://foldex.local/?invite=TOK")
-	assert.Contains(t, msg.HTML, "https://foldex.local/?invite=TOK")
+	assert.Contains(t, msg.Text, "https://foldex.local/#invite=TOK")
+	assert.Contains(t, msg.HTML, "https://foldex.local/#invite=TOK")
 	assert.Contains(t, msg.Text, "Ana")
 	assert.Contains(t, msg.Text, "168 hours")
 }
 
 func TestInviteMessageEscapesHTML(t *testing.T) {
 	t.Parallel()
-	msg := InviteMessage("a@b.com", `Ana"><script>alert(1)</script>`, "https://x/?invite=T", 1)
+	msg := InviteMessage("a@b.com", `Ana"><script>alert(1)</script>`, "https://x/#invite=T", 1)
 	assert.NotContains(t, msg.HTML, "<script>", "an inviter name must not break out of its element")
+}
+
+func TestAdminPasswordRecoveryMessageCarriesOnlyTheTargetsChoiceLink(t *testing.T) {
+	t.Parallel()
+	msg := AdminPasswordRecoveryMessage("target@example.com", "https://foldex.local/#reset=TOK", 30)
+
+	assert.Equal(t, "target@example.com", msg.To)
+	assert.Contains(t, msg.Text, "https://foldex.local/#reset=TOK")
+	assert.Contains(t, msg.HTML, "https://foldex.local/#reset=TOK")
+	assert.Contains(t, msg.Text, "choose your own new password")
+	assert.NotContains(t, strings.ToLower(msg.Text), "temporary password")
 }
 
 // The reuse warning must carry no link: an unexpected "your session was

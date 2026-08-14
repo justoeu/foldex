@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,10 +27,12 @@ import (
 
 	"foldex/internal/storage"
 
+	"foldex/internal/linkimage"
 	"foldex/internal/pkg/authctx"
 
 	"foldex/internal/pkg/authctx/authctxtest"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/domainerr"
+	"foldex/internal/pkg/netpolicy"
 )
 
 // pngHeader is the 8-byte magic prefix every PNG starts with. http.DetectContentType
@@ -62,11 +65,17 @@ func realPNG(t *testing.T, w, h int) []byte {
 // --- fakes ---
 
 type fakeScreenshotter struct {
-	png []byte
-	err error
+	png          []byte
+	err          error
+	urls         []string
+	beforeReturn func()
 }
 
-func (f *fakeScreenshotter) Capture(_ context.Context, _ string) ([]byte, error) {
+func (f *fakeScreenshotter) Capture(_ context.Context, pageURL string) ([]byte, error) {
+	f.urls = append(f.urls, pageURL)
+	if f.beforeReturn != nil {
+		f.beforeReturn()
+	}
 	return f.png, f.err
 }
 
@@ -135,6 +144,7 @@ type fakeRepo struct {
 	getErr     error
 	updateErr  error
 	clearErr   error
+	casApplied bool
 }
 
 func newFakeRepo() *fakeRepo {
@@ -142,6 +152,7 @@ func newFakeRepo() *fakeRepo {
 		links:      map[int64]Link{},
 		owners:     map[int64]authctx.UserID{},
 		updatedURL: map[int64]string{},
+		casApplied: true,
 	}
 }
 
@@ -160,10 +171,10 @@ func (f *fakeRepo) ownerOf(id int64) authctx.UserID {
 
 // errNotFound mirrors what the scoped repository returns for a row that either
 // does not exist or belongs to another user — the two are deliberately
-// indistinguishable (CLAUDE.md §4). It is the same httperr.ErrNotFound the real
+// indistinguishable (CLAUDE.md §4). It is the same domain error the real
 // Repository returns, so handler tests observe production's 404 rather than the
 // 500 a bare error would produce.
-var errNotFound = httperr.ErrNotFound
+var errNotFound = domainerr.ErrNotFound
 
 func (f *fakeRepo) Get(_ context.Context, uid authctx.UserID, id int64) (Link, error) {
 	f.gotUID = append(f.gotUID, uid)
@@ -188,16 +199,35 @@ func (f *fakeRepo) AssertOwned(_ context.Context, uid authctx.UserID, id int64) 
 	return nil
 }
 
-func (f *fakeRepo) UpdateOGImage(_ context.Context, uid authctx.UserID, id int64, imageURL string) error {
+func (f *fakeRepo) ReplaceOGImage(_ context.Context, uid authctx.UserID, id int64, imageURL string) (*string, error) {
 	f.gotUID = append(f.gotUID, uid)
 	if f.updateErr != nil {
-		return f.updateErr
+		return nil, f.updateErr
+	}
+	link, ok := f.links[id]
+	if !ok || f.ownerOf(id) != uid {
+		return nil, errNotFound
+	}
+	previous := link.OGImageURL
+	link.OGImageURL = &imageURL
+	f.links[id] = link
+	f.updatedURL[id] = imageURL
+	return previous, nil
+}
+
+func (f *fakeRepo) UpdateOGImageIfUnchanged(_ context.Context, uid authctx.UserID, id int64, imageURL string, _ time.Time) (bool, error) {
+	f.gotUID = append(f.gotUID, uid)
+	if f.updateErr != nil {
+		return false, f.updateErr
 	}
 	if _, ok := f.links[id]; !ok || f.ownerOf(id) != uid {
-		return errNotFound
+		return false, nil
+	}
+	if !f.casApplied {
+		return false, nil
 	}
 	f.updatedURL[id] = imageURL
-	return nil
+	return true, nil
 }
 
 func (f *fakeRepo) ClearOGImage(_ context.Context, uid authctx.UserID, id int64) error {
@@ -240,6 +270,7 @@ func buildRouter(t *testing.T, sc Screenshotter, up Uploader, repo screenshotRep
 		urlPolicy:     allowAllPolicy,
 		logger:        newTestLogger(),
 		captureSem:    make(chan struct{}, maxCaptureInFlight),
+		captureUsers:  make(map[authctx.UserID]int),
 	}
 
 	r := chi.NewRouter()
@@ -269,14 +300,16 @@ func TestCaptureAndStore_Success(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	var body map[string]string
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
-	assert.Equal(t, "/api/files/screenshots/1.jpg", body["url"])
+	assert.Regexp(t, `^/api/files/screenshots/1\.[0-9a-f-]{36}\.jpg$`, body["url"])
+	assert.Equal(t, body["url"], repo.updatedURL[1])
 
 	// Stored object is a real JPEG with the long side downscaled to 1024.
 	// Size-vs-source isn't asserted: synthetic test PNGs compress better
 	// with DEFLATE than JPEG. The production case (real screenshots /
 	// photos) is exercised via integration tests.
-	stored, ok := fakeUp.uploaded["screenshots/1.jpg"]
-	require.True(t, ok, "expected screenshots/1.jpg in uploaded map")
+	key := strings.TrimPrefix(body["url"], "/api/files/")
+	stored, ok := fakeUp.uploaded[key]
+	require.True(t, ok, "expected versioned screenshot in uploaded map")
 	assert.Equal(t, "image/jpeg", http.DetectContentType(stored))
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(stored))
 	require.NoError(t, err)
@@ -315,6 +348,50 @@ func TestCaptureAndStore_ScreenshotFails(t *testing.T) {
 		"no part of the planted payload may leak")
 }
 
+type deadlineScreenshotter struct {
+	remaining time.Duration
+}
+
+func (s *deadlineScreenshotter) Capture(ctx context.Context, _ string) ([]byte, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil, errors.New("capture context has no deadline")
+	}
+	s.remaining = time.Until(deadline)
+	return nil, errors.New("stop after recording deadline")
+}
+
+func TestCaptureAndStorePassesFullCaptureEnvelope(t *testing.T) {
+	sc := &deadlineScreenshotter{}
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
+	r, _, _ := buildRouter(t, sc, up, repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
+	r.ServeHTTP(httptest.NewRecorder(), req)
+
+	assert.Greater(t, sc.remaining, captureTimeout-time.Second)
+	assert.LessOrEqual(t, sc.remaining, captureTimeout)
+}
+
+func TestCaptureAndStore_LateEgressBlockStoresNothing(t *testing.T) {
+	sc := &fakeScreenshotter{err: errors.New("screenshot: blocked private subresource")}
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
+	r, fakeUp, fakeRepo := buildRouter(t, sc, up, repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "screenshot_failed")
+	assert.Empty(t, fakeUp.ops, "a capture invalidated after navigation must never reach storage")
+	assert.Empty(t, fakeRepo.updatedURL)
+}
+
 func TestCaptureAndStore_UploadFails(t *testing.T) {
 	sc := &fakeScreenshotter{png: realPNG(t, 300, 200)}
 	up := newFakeUploader()
@@ -332,6 +409,46 @@ func TestCaptureAndStore_UploadFails(t *testing.T) {
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
 	errBlock, _ := body["error"].(map[string]any)
 	assert.Equal(t, "upload_failed", errBlock["code"])
+}
+
+func TestCaptureAndStore_ConcurrentDeleteRemovesOperationObject(t *testing.T) {
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1, URL: "https://example.com", UpdatedAt: time.Now()}
+	sc := &fakeScreenshotter{png: realPNG(t, 300, 200), beforeReturn: func() {
+		delete(repo.links, 1)
+	}}
+	r, fakeUp, _ := buildRouter(t, sc, up, repo)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil))
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	require.Len(t, fakeUp.ops, 1)
+	key := fakeUp.ops[0].key
+	assert.Contains(t, fakeUp.deleted, key)
+	assert.NotContains(t, fakeUp.uploaded, key)
+}
+
+func TestCaptureAndStore_PublishFailureRemovesOnlyOperationObject(t *testing.T) {
+	up := newFakeUploader()
+	const previousKey = "images/1.jpg"
+	up.uploaded[previousKey] = []byte("previous")
+	previousURL := "/api/files/" + previousKey
+	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1, URL: "https://example.com", OGImageURL: &previousURL, UpdatedAt: time.Now()}
+	repo.updateErr = errors.New("db down")
+	r, fakeUp, _ := buildRouter(t, &fakeScreenshotter{png: realPNG(t, 300, 200)}, up, repo)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil))
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "publish_failed")
+	require.Len(t, fakeUp.ops, 1)
+	assert.Contains(t, fakeUp.deleted, fakeUp.ops[0].key)
+	assert.NotContains(t, fakeUp.deleted, previousKey)
+	assert.Equal(t, []byte("previous"), fakeUp.uploaded[previousKey])
 }
 
 // TestCaptureAndStore_RejectsNonHTTPScheme locks the H1 fix part 1: Chrome
@@ -407,6 +524,63 @@ func TestCaptureAndStore_RejectsNonPublicTarget(t *testing.T) {
 	assert.Equal(t, storedURL, captured[0], "policy must receive the canonical link.URL")
 }
 
+func TestCaptureAndStore_RejectsRFC6598WithProductionPolicy(t *testing.T) {
+	sc := &fakeScreenshotter{png: realPNG(t, 50, 50)}
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1, URL: "http://100.64.0.1/carrier-internal"}
+	sh := &ScreenshotHandler{
+		repo: repo, screenshotter: sc, storage: up,
+		urlPolicy: netpolicy.IsPublicURL, logger: newTestLogger(),
+		captureSem: make(chan struct{}, maxCaptureInFlight),
+	}
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
+	r.Post("/api/links/{id}/screenshot", sh.CaptureAndStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "private_target")
+	assert.Empty(t, up.uploaded)
+	assert.Empty(t, sc.urls, "RFC6598 must be rejected before Chromium")
+}
+
+func TestCaptureAndStore_PolicyUsesBoundedContextOnce(t *testing.T) {
+	sc := &fakeScreenshotter{png: realPNG(t, 50, 50)}
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
+	var calls int
+	var remaining time.Duration
+	sh := &ScreenshotHandler{
+		repo: repo, screenshotter: sc, storage: up,
+		urlPolicy: func(ctx context.Context, _ string) bool {
+			calls++
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			remaining = time.Until(deadline)
+			return true
+		},
+		logger: newTestLogger(), captureSem: make(chan struct{}, maxCaptureInFlight),
+	}
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
+	r.Post("/api/links/{id}/screenshot", sh.CaptureAndStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 1, calls)
+	assert.Greater(t, remaining, capturePolicyTimeout-time.Second)
+	assert.LessOrEqual(t, remaining, capturePolicyTimeout)
+	assert.Len(t, sc.urls, 1)
+}
+
 // TestCaptureAndStore_NilPolicyFailsClosed locks the H1 invariant: a missing
 // policy must not silently bypass the SSRF gate. Misconfiguration (forgotten
 // wiring in main.go) returns 500 policy_unconfigured — distinct from the 400
@@ -471,7 +645,9 @@ func TestCaptureAndStore_OptimizeFailureFallsBackToPNG(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, bad, fakeUp.uploaded["screenshots/7.png"])
+	require.Len(t, fakeUp.ops, 1)
+	assert.Regexp(t, `^screenshots/7\.[0-9a-f-]{36}\.png$`, fakeUp.ops[0].key)
+	assert.Equal(t, bad, fakeUp.uploaded[fakeUp.ops[0].key])
 	require.Len(t, fakeUp.ops, 1)
 	assert.Equal(t, "image/png", fakeUp.ops[0].contentType)
 }
@@ -491,6 +667,7 @@ func TestProxyFile_Success(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "image/png", w.Header().Get("Content-Type"))
 	assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
+	assert.Equal(t, "private, max-age=86400", w.Header().Get("Cache-Control"))
 	assert.Equal(t, fakePNG("IMG_CONTENT"), w.Body.Bytes())
 }
 
@@ -526,28 +703,46 @@ func TestProxyFile_RejectsOversizedObject(t *testing.T) {
 }
 
 func TestCaptureAndStore_Returns429WhenSaturated(t *testing.T) {
-	// Hold both admission slots with blocking Captures, then assert extras 429.
+	// One user can hold only one slot, leaving capacity for another tenant.
 	entered := make(chan struct{}, maxCaptureInFlight)
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseAll()
 	var inFlight atomic.Int32
 	pngBytes := realPNG(t, 40, 30)
 	sc := &blockingScreenshotter{entered: entered, release: release, inFlight: &inFlight, png: pngBytes}
-	up := newFakeUploader()
-	repo := newFakeRepo()
+	up := &concurrentUploader{fakeUploader: newFakeUploader()}
+	repo := &concurrentRepo{fakeRepo: newFakeRepo()}
 	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
-	r, _, _ := buildRouter(t, sc, up, repo)
+	const secondUser = authctx.UserID(authctxtest.DefaultUser + 1)
+	repo.ownedBy(2, secondUser, Link{ID: 2, URL: "https://example.org"})
+	sh := &ScreenshotHandler{
+		repo: repo, screenshotter: sc, storage: up,
+		urlPolicy: allowAllPolicy, logger: newTestLogger(),
+		captureSem: make(chan struct{}, maxCaptureInFlight),
+	}
+	r1 := chi.NewRouter()
+	r1.Use(authctxtest.Middleware(authctxtest.DefaultUser))
+	r1.Post("/api/links/{id}/screenshot", sh.CaptureAndStore)
+	r2 := chi.NewRouter()
+	r2.Use(authctxtest.Middleware(secondUser))
+	r2.Post("/api/links/{id}/screenshot", sh.CaptureAndStore)
 
 	var holdWG sync.WaitGroup
 	holdCodes := make(chan int, maxCaptureInFlight)
-	for i := 0; i < maxCaptureInFlight; i++ {
+	for _, tc := range []struct {
+		router http.Handler
+		id     int
+	}{{r1, 1}, {r2, 2}} {
 		holdWG.Add(1)
-		go func() {
+		go func(router http.Handler, id int) {
 			defer holdWG.Done()
-			req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
+			req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/links/%d/screenshot", id), nil)
 			w := httptest.NewRecorder()
-			r.ServeHTTP(w, req)
+			router.ServeHTTP(w, req)
 			holdCodes <- w.Code
-		}()
+		}(tc.router, tc.id)
 	}
 	for i := 0; i < maxCaptureInFlight; i++ {
 		select {
@@ -560,18 +755,58 @@ func TestCaptureAndStore_Returns429WhenSaturated(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/links/1/screenshot", nil)
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
+		r1.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusTooManyRequests, w.Code)
 		assert.Equal(t, "5", w.Header().Get("Retry-After"))
 		assert.Contains(t, w.Body.String(), "screenshot_busy")
 	}
-	close(release)
+	releaseAll()
 	holdWG.Wait()
 	close(holdCodes)
 	for code := range holdCodes {
 		assert.Equal(t, http.StatusOK, code)
 	}
 	assert.LessOrEqual(t, int(inFlight.Load()), maxCaptureInFlight)
+}
+
+type concurrentUploader struct {
+	*fakeUploader
+	mu sync.Mutex
+}
+
+func (f *concurrentUploader) Upload(ctx context.Context, key string, data []byte, ct string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fakeUploader.Upload(ctx, key, data, ct)
+}
+
+func (f *concurrentUploader) DeleteObject(ctx context.Context, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fakeUploader.DeleteObject(ctx, key)
+}
+
+type concurrentRepo struct {
+	*fakeRepo
+	mu sync.Mutex
+}
+
+func (f *concurrentRepo) Get(ctx context.Context, uid authctx.UserID, id int64) (Link, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fakeRepo.Get(ctx, uid, id)
+}
+
+func (f *concurrentRepo) ReplaceOGImage(ctx context.Context, uid authctx.UserID, id int64, imageURL string) (*string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fakeRepo.ReplaceOGImage(ctx, uid, id, imageURL)
+}
+
+func (f *concurrentRepo) UpdateOGImageIfUnchanged(ctx context.Context, uid authctx.UserID, id int64, imageURL string, expectedUpdatedAt time.Time) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fakeRepo.UpdateOGImageIfUnchanged(ctx, uid, id, imageURL, expectedUpdatedAt)
 }
 
 type blockingScreenshotter struct {
@@ -636,6 +871,7 @@ func TestIsAllowedKey(t *testing.T) {
 	}{
 		{"screenshots/1.png", true},
 		{"images/42.jpg", true},
+		{"notes/3f2504e0-4f89-11d3-9a0c-0305e82c3301.png", true},
 		{"", false},
 		{"/etc/passwd", false},
 		{"../etc/passwd", false},
@@ -646,6 +882,28 @@ func TestIsAllowedKey(t *testing.T) {
 		t.Run(tc.key, func(t *testing.T) {
 			assert.Equal(t, tc.ok, isAllowedKey(tc.key))
 		})
+	}
+}
+
+func TestIsValidNoteKey(t *testing.T) {
+	for _, key := range []string{
+		"notes/3f2504e0-4f89-11d3-9a0c-0305e82c3301.jpg",
+		"notes/8bcb9d80-8212-4ef3-a6a8-24f9471cf90e.jpeg",
+		"notes/8bcb9d80-8212-4ef3-a6a8-24f9471cf90e.png",
+		"notes/8bcb9d80-8212-4ef3-a6a8-24f9471cf90e.gif",
+		"notes/8bcb9d80-8212-4ef3-a6a8-24f9471cf90e.webp",
+	} {
+		assert.True(t, isValidNoteKey(key), "key %q", key)
+	}
+	for _, key := range []string{
+		"notes/1.jpg",
+		"notes/not-a-uuid.jpg",
+		"notes/8BCB9D80-8212-4EF3-A6A8-24F9471CF90E.jpg",
+		"notes/8bcb9d80-8212-4ef3-a6a8-24f9471cf90e.svg",
+		"notes/../images/1.jpg",
+		"images/8bcb9d80-8212-4ef3-a6a8-24f9471cf90e.jpg",
+	} {
+		assert.False(t, isValidNoteKey(key), "key %q", key)
 	}
 }
 
@@ -736,11 +994,11 @@ func TestUploadImage_OptimizesPNGToJPEG(t *testing.T) {
 
 	var body map[string]string
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
-	assert.Equal(t, "/api/files/images/42.jpg", body["url"])
-	assert.Equal(t, "/api/files/images/42.jpg", fakeRp.updatedURL[42])
+	assert.Regexp(t, `^/api/files/images/42\.[0-9a-f-]{36}\.jpg$`, body["url"])
+	assert.Equal(t, body["url"], fakeRp.updatedURL[42])
 
 	require.Len(t, fakeUp.ops, 1)
-	assert.Equal(t, "images/42.jpg", fakeUp.ops[0].key)
+	assert.Regexp(t, `^images/42\.[0-9a-f-]{36}\.jpg$`, fakeUp.ops[0].key)
 	assert.Equal(t, "image/jpeg", fakeUp.ops[0].contentType)
 	assert.Equal(t, "image/jpeg", http.DetectContentType(fakeUp.ops[0].bytes))
 
@@ -770,7 +1028,8 @@ func TestUploadImage_PurgesLegacyExtensions(t *testing.T) {
 	assert.Contains(t, fakeUp.deleted, "images/5.png")
 	assert.Contains(t, fakeUp.deleted, "images/5.webp")
 	assert.Contains(t, fakeUp.deleted, "images/5.gif")
-	assert.NotContains(t, fakeUp.deleted, "images/5.jpg", "must not delete the key we are about to write")
+	assert.Contains(t, fakeUp.deleted, "images/5.jpg")
+	assert.NotContains(t, fakeUp.deleted, fakeUp.ops[0].key, "must not delete the operation-owned object")
 	_, oldStillThere := fakeUp.uploaded["images/5.png"]
 	assert.False(t, oldStillThere, "fakeUploader DeleteObject should have removed the stale .png")
 }
@@ -792,7 +1051,7 @@ func TestUploadImage_OptimizeFailureStoresOriginal(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	require.Len(t, fakeUp.ops, 1)
-	assert.Equal(t, "images/9.png", fakeUp.ops[0].key)
+	assert.Regexp(t, `^images/9\.[0-9a-f-]{36}\.png$`, fakeUp.ops[0].key)
 	assert.Equal(t, "image/png", fakeUp.ops[0].contentType)
 	assert.Equal(t, bad, fakeUp.ops[0].bytes)
 }
@@ -825,9 +1084,12 @@ func TestUploadImage_Rejects5MBPlus(t *testing.T) {
 
 func TestUploadImage_UploadFails(t *testing.T) {
 	up := newFakeUploader()
+	const previousKey = "images/3.png"
+	up.uploaded[previousKey] = []byte("previous")
 	up.err = errors.New("object store down")
 	repo := newFakeRepo()
-	repo.links[3] = Link{ID: 3}
+	previousURL := "/api/files/" + previousKey
+	repo.links[3] = Link{ID: 3, OGImageURL: &previousURL}
 	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 
 	req, ct := buildMultipart(t, 3, "image", "x.png", "image/png", realPNG(t, 100, 100))
@@ -836,12 +1098,19 @@ func TestUploadImage_UploadFails(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, []byte("previous"), up.uploaded[previousKey])
+	assert.NotContains(t, up.deleted, previousKey, "failed replacement must not purge the published object")
+	require.Len(t, up.deleted, 1)
+	assert.Regexp(t, `^images/3\.[0-9a-f-]{36}\.jpg$`, up.deleted[0])
 }
 
 func TestUploadImage_RepoUpdateFails(t *testing.T) {
 	up := newFakeUploader()
+	const previousKey = "images/3.png"
+	up.uploaded[previousKey] = []byte("previous")
 	repo := newFakeRepo()
-	repo.links[3] = Link{ID: 3}
+	previousURL := "/api/files/" + previousKey
+	repo.links[3] = Link{ID: 3, OGImageURL: &previousURL}
 	repo.updateErr = errors.New("db down")
 	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 
@@ -851,6 +1120,41 @@ func TestUploadImage_RepoUpdateFails(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, []byte("previous"), up.uploaded[previousKey])
+	assert.NotContains(t, up.deleted, previousKey, "failed publication must preserve the referenced object")
+	require.Len(t, up.deleted, 1)
+	assert.Regexp(t, `^images/3\.[0-9a-f-]{36}\.jpg$`, up.deleted[0])
+}
+
+func TestUploadImage_ReplacementCleansExactSupersededObject(t *testing.T) {
+	up := newFakeUploader()
+	const previousKey = "images/3.jpg"
+	up.uploaded[previousKey] = []byte("previous")
+	repo := newFakeRepo()
+	previousURL := "/api/files/" + previousKey
+	repo.links[3] = Link{ID: 3, OGImageURL: &previousURL}
+	r, _, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
+
+	req, ct := buildMultipart(t, 3, "image", "x.png", "image/png", realPNG(t, 100, 100))
+	req.Header.Set("Content-Type", ct)
+	first := httptest.NewRecorder()
+	r.ServeHTTP(first, req)
+	require.Equal(t, http.StatusOK, first.Code)
+	var firstBody map[string]string
+	require.NoError(t, json.NewDecoder(first.Body).Decode(&firstBody))
+	firstKey := strings.TrimPrefix(firstBody["url"], "/api/files/")
+	require.Contains(t, up.uploaded, firstKey)
+
+	req, ct = buildMultipart(t, 3, "image", "y.png", "image/png", realPNG(t, 120, 120))
+	req.Header.Set("Content-Type", ct)
+	second := httptest.NewRecorder()
+	r.ServeHTTP(second, req)
+
+	assert.Equal(t, http.StatusOK, second.Code)
+	assert.Contains(t, up.deleted, previousKey)
+	assert.Contains(t, up.deleted, firstKey)
+	assert.NotContains(t, up.uploaded, firstKey)
+	assert.Regexp(t, `^/api/files/images/3\.[0-9a-f-]{36}\.jpg$`, repo.updatedURL[3])
 }
 
 // --- DeleteImage tests ---
@@ -898,9 +1202,8 @@ func TestDeleteImage_RepoError(t *testing.T) {
 func TestPurgeLegacyVariants_DeleteErrorLogged(t *testing.T) {
 	up := newFakeUploader()
 	up.deleteErr = errors.New("object store down")
-	sh := &ScreenshotHandler{storage: up, logger: newTestLogger()}
-	sh.purgeLegacyVariants(context.Background(), "og", 42, "jpg")
-	assert.NotEmpty(t, up.deleted)
+	errs := linkimage.PurgeLegacy(context.Background(), up, "og", 42)
+	assert.Len(t, errs, 4)
 }
 
 // --- Construction sanity ---
@@ -971,10 +1274,8 @@ func TestProxyFile_ForeignKeyIsIndistinguishableFromMissing(t *testing.T) {
 }
 
 // TestProxyFile_NoteImagesStayReadableWithoutOwnership documents the deliberate
-// asymmetry: notes/{uuid} keys are NOT ownership-gated, because the public,
-// session-less /n/{slug} page renders body_html and the browser fetches those
-// images with no principal at all. Their protection is the 122-bit random UUID,
-// which appears nowhere but inside the owning note.
+// read-only asymmetry: public /n/{slug} browsers fetch notes/{uuid} without a
+// principal, while migration 000022 governs write/delete authority separately.
 func TestProxyFile_NoteImagesStayReadableWithoutOwnership(t *testing.T) {
 	up := newFakeUploader()
 	const key = "notes/3f2504e0-4f89-11d3-9a0c-0305e82c3301.png"
@@ -987,6 +1288,7 @@ func TestProxyFile_NoteImagesStayReadableWithoutOwnership(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code, "gating this would break every published note")
+	assert.Equal(t, "public, max-age=86400", w.Header().Get("Cache-Control"))
 }
 
 // TestUploadImage_ForeignLinkWritesNothing is the destructive half. The object

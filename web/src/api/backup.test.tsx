@@ -9,8 +9,91 @@ import {
   validateBackup,
 } from './backup'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
+import { http } from './client'
 
 let state: MockState
+
+type ZipFixtureOptions = {
+  body?: string
+  centralFlags?: number
+  localFlags?: number
+  centralCompression?: number
+  localCompression?: number
+  centralSignature?: number
+  localSignature?: number
+  compressedSize?: number
+  localCompressedSize?: number
+  localUncompressedSize?: number
+  centralOffset?: number
+  centralSize?: number
+  localExtraLength?: number
+  localName?: string
+  centralCopies?: number
+  entryCount?: number
+  comment?: Uint8Array
+}
+
+function manifestZip(options: ZipFixtureOptions = {}): Uint8Array {
+  const encoder = new TextEncoder()
+  const name = encoder.encode('manifest.json')
+  const localName = encoder.encode(options.localName ?? 'manifest.json')
+  const data = encoder.encode(options.body ?? JSON.stringify({
+    kind: 'foldex.backup',
+    version: '1.0',
+    schema_version: 8,
+    created_at: '2026-05-14T03:00:00Z',
+    counts: { links: 9, tags: 1, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+    checksums: {},
+  }))
+  const local = new Uint8Array(30 + localName.length + data.length)
+  const ldv = new DataView(local.buffer)
+  ldv.setUint32(0, options.localSignature ?? 0x04034b50, true)
+  ldv.setUint16(6, options.localFlags ?? 0, true)
+  ldv.setUint16(8, options.localCompression ?? 0, true)
+  ldv.setUint32(18, options.localCompressedSize ?? data.length, true)
+  ldv.setUint32(22, options.localUncompressedSize ?? data.length, true)
+  ldv.setUint16(26, localName.length, true)
+  ldv.setUint16(28, options.localExtraLength ?? 0, true)
+  local.set(localName, 30)
+  local.set(data, 30 + localName.length)
+
+  const centralEntry = new Uint8Array(46 + name.length)
+  const cdv = new DataView(centralEntry.buffer)
+  cdv.setUint32(0, options.centralSignature ?? 0x02014b50, true)
+  cdv.setUint16(8, options.centralFlags ?? 0, true)
+  cdv.setUint16(10, options.centralCompression ?? 0, true)
+  cdv.setUint32(20, options.compressedSize ?? data.length, true)
+  cdv.setUint32(24, data.length, true)
+  cdv.setUint16(28, name.length, true)
+  cdv.setUint32(42, 0, true)
+  centralEntry.set(name, 46)
+  const centralCopies = options.centralCopies ?? 1
+  const cd = new Uint8Array(centralEntry.length * centralCopies)
+  for (let index = 0; index < centralCopies; index++) cd.set(centralEntry, index * centralEntry.length)
+
+  const comment = options.comment ?? new Uint8Array()
+  const eocd = new Uint8Array(22 + comment.length)
+  const edv = new DataView(eocd.buffer)
+  edv.setUint32(0, 0x06054b50, true)
+  const entryCount = options.entryCount ?? centralCopies
+  edv.setUint16(8, entryCount, true)
+  edv.setUint16(10, entryCount, true)
+  edv.setUint32(12, options.centralSize ?? cd.length, true)
+  edv.setUint32(16, options.centralOffset ?? local.length, true)
+  edv.setUint16(20, comment.length, true)
+  eocd.set(comment, 22)
+
+  const out = new Uint8Array(local.length + cd.length + eocd.length)
+  out.set(local, 0)
+  out.set(cd, local.length)
+  out.set(eocd, local.length + cd.length)
+  return out
+}
+
+function blobFromBytes(bytes: Uint8Array): Blob {
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  return new Blob([buffer])
+}
 
 beforeEach(() => {
   state = freshState()
@@ -43,10 +126,48 @@ describe('backup history (localStorage)', () => {
   it('tolerates corrupt JSON in storage', () => {
     localStorage.setItem('foldex.backups', '{not json')
     expect(readBackupHistory()).toEqual([])
+    expect(localStorage.getItem('foldex.backups')).toBeNull()
+  })
+
+  it('drops decoded history entries with invalid shapes', () => {
+    const valid = {
+      id: 'valid',
+      created_at: '2026-05-14T03:00:00Z',
+      duration_ms: 100,
+      size_bytes: 1024,
+      counts: { links: 1, tags: 2, folders: 3, link_tags: 4, click_logs: 5, files: 6, file_bytes: 7 },
+    }
+    localStorage.setItem('foldex.backups', JSON.stringify([
+      valid,
+      { id: 'missing-fields' },
+      { ...valid, id: 'bad-counts', counts: null },
+      { ...valid, id: 'negative-duration', duration_ms: -1 },
+      { ...valid, id: 'unsafe-size', size_bytes: Number.MAX_SAFE_INTEGER + 1 },
+      { ...valid, id: 'fractional-count', counts: { ...valid.counts, links: 1.5 } },
+      { ...valid, id: 'invalid-date', created_at: 'not-a-date' },
+      null,
+    ]))
+
+    expect(readBackupHistory()).toEqual([valid])
+    expect(JSON.parse(localStorage.getItem('foldex.backups') ?? '[]')).toEqual([valid])
+  })
+
+  it('removes persisted history entries beyond the maximum', () => {
+    const entries = Array.from({ length: 12 }, (_, index) => ({
+      id: `id-${index}`,
+      created_at: '2026-05-14T03:00:00Z',
+      duration_ms: index,
+      size_bytes: index,
+      counts: { links: index, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+    }))
+    localStorage.setItem('foldex.backups', JSON.stringify(entries))
+
+    expect(readBackupHistory()).toHaveLength(10)
+    expect(JSON.parse(localStorage.getItem('foldex.backups') ?? '[]')).toHaveLength(10)
   })
 
   it('swallows setItem throws so download UX is never aborted', () => {
-    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    const spy = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
       throw new Error('QuotaExceededError')
     })
     expect(() =>
@@ -64,7 +185,7 @@ describe('backup history (localStorage)', () => {
 
 describe('generateBackup with broken localStorage', () => {
   it('still triggers download when appendBackupHistory cannot persist', async () => {
-    const setSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    const setSpy = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
       throw new Error('QuotaExceededError')
     })
     const clickSpy = vi.fn()
@@ -154,6 +275,7 @@ describe('extractManifestFromZip (slice/EOCD)', () => {
     cdv.setUint32(0, 0x02014b50, true)
     cdv.setUint16(10, 0, true)
     cdv.setUint32(20, data.length, true)
+    cdv.setUint32(24, data.length, true)
     cdv.setUint16(28, name.length, true)
     cdv.setUint32(42, 0, true) // local hdr offset
     cd.set(name, 46)
@@ -179,6 +301,66 @@ describe('extractManifestFromZip (slice/EOCD)', () => {
     expect(got?.created_at).toBe('2026-05-14T03:00:00Z')
     // Only slice().arrayBuffer paths — never blob.arrayBuffer() on the whole zip.
     expect(fullAB).not.toHaveBeenCalled()
+  })
+
+  it('handles a legal ZIP comment containing a false EOCD signature', async () => {
+    const comment = new Uint8Array(32)
+    comment.set([0x50, 0x4b, 0x05, 0x06], 2)
+    const got = await extractManifestFromZip(blobFromBytes(manifestZip({ comment })))
+    expect(got?.counts.links).toBe(9)
+  })
+
+  it('reads a valid streamed ZIP that uses a data descriptor', async () => {
+    const got = await extractManifestFromZip(blobFromBytes(manifestZip({
+      centralFlags: 1 << 3,
+      localFlags: 1 << 3,
+      localCompressedSize: 0,
+      localUncompressedSize: 0,
+    })))
+    expect(got?.counts.links).toBe(9)
+  })
+
+  it('rejects a Zip64 entry count sentinel', async () => {
+    expect(await extractManifestFromZip(blobFromBytes(manifestZip({ entryCount: 0xffff })))).toBeNull()
+  })
+
+  it('rejects duplicate manifest entries', async () => {
+    expect(await extractManifestFromZip(blobFromBytes(manifestZip({ centralCopies: 2 })))).toBeNull()
+  })
+
+  it.each([
+    ['central header', { centralFlags: 1 }],
+    ['local header', { localFlags: 1 }],
+  ])('rejects an encrypted manifest in the %s', async (_name, options) => {
+    expect(await extractManifestFromZip(blobFromBytes(manifestZip(options)))).toBeNull()
+  })
+
+  it.each([
+    ['filename', { localName: 'different.json' }],
+    ['stored size', { localCompressedSize: 1 }],
+  ])('rejects a central/local %s mismatch', async (_name, options) => {
+    expect(await extractManifestFromZip(blobFromBytes(manifestZip(options)))).toBeNull()
+  })
+
+  it.each([
+    ['truncated EOCD', () => manifestZip().slice(0, -5)],
+    ['truncated central directory', () => manifestZip({ centralSize: 40 })],
+    ['truncated local extra/data', () => manifestZip({ localExtraLength: 0xffff })],
+    ['bad central signature', () => manifestZip({ centralSignature: 0x11111111 })],
+    ['bad local signature', () => manifestZip({ localSignature: 0x11111111 })],
+    ['unsupported central compression', () => manifestZip({ centralCompression: 8 })],
+    ['unsupported local compression', () => manifestZip({ localCompression: 8 })],
+    ['overflowing central offset', () => manifestZip({ centralOffset: 0xffffffff })],
+    ['overflowing manifest size', () => manifestZip({ compressedSize: 0xffffffff })],
+  ])('rejects %s', async (_name, fixture) => {
+    expect(await extractManifestFromZip(blobFromBytes(fixture()))).toBeNull()
+  })
+
+  it.each([
+    ['malformed JSON', '{not-json'],
+    ['malformed manifest shape', '{"kind":1}'],
+  ])('rejects %s', async (_name, body) => {
+    expect(await extractManifestFromZip(blobFromBytes(manifestZip({ body })))).toBeNull()
   })
 })
 
@@ -218,5 +400,16 @@ describe('restoreBackup', () => {
     const file = new File([new Uint8Array([0])], 'foo.zip', { type: 'application/zip' })
     await restoreBackup(file, 'skip')
     expect(state.lastRestoreMode).toBe('skip')
+  })
+
+  it('overrides the ordinary API timeout for large backup uploads', async () => {
+    const post = vi.spyOn(http, 'post')
+    const file = new File([new Uint8Array([0])], 'large.zip', { type: 'application/zip' })
+    await restoreBackup(file, 'skip')
+    expect(post).toHaveBeenCalledWith(
+      '/api/backup/restore?mode=skip',
+      expect.any(FormData),
+      expect.objectContaining({ timeout: 30 * 60_000 }),
+    )
   })
 })

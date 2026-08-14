@@ -13,7 +13,7 @@ services:
       - "no-new-privileges:true"
     environment:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ROOT_ACCESS_KEY:-rustfsadmin}
-      RUSTFS_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:?run make env to generate RustFS credentials}
       RUSTFS_ADDRESS: 0.0.0.0:9000
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
       RUSTFS_CONSOLE_ENABLE: "true"
@@ -52,11 +52,12 @@ services:
       RUSTFS_ENDPOINT: rustfs:9000
       RUSTFS_USE_SSL: "false"
       RUSTFS_ROOT_ACCESS_KEY: ${RUSTFS_ROOT_ACCESS_KEY:-rustfsadmin}
-      RUSTFS_ROOT_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:-rustfsadmin}
+      RUSTFS_ROOT_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:?run make env to generate RustFS credentials}
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-foldex}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-foldex-change-me}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?run make env to generate RustFS credentials}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-foldex-screenshots}
       RUSTFS_APP_POLICY: ${RUSTFS_APP_POLICY:-foldex-app}
+      RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS: ${RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS:-0}
     networks:
       - foldex
 
@@ -163,9 +164,10 @@ services:
       # Root lives only on rustfs + rustfs-init (RUSTFS_ROOT_*).
       RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-rustfs:9000}
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-foldex}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-foldex-change-me}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?run make env to generate RustFS credentials}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-foldex-screenshots}
       RUSTFS_USE_SSL: ${RUSTFS_USE_SSL:-false}
+      RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS: ${RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS:-0}
       # Change-detection worker. Opt-in per link via link.check_interval;
       # the kill-switch below stops the worker entirely (the scanner won't
       # even spin up its ticker). Defaults are safe for a single-user box

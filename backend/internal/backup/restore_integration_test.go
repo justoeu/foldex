@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -164,10 +165,10 @@ func TestRestore_WipeRestoresContentWithFreshIDs(t *testing.T) {
 	assert.EqualValues(t, 1, rep.Files.Uploaded)
 }
 
-// TestRestore_SkipLeavesCollisionsAndIsIdempotentForUniqueEntities locks the
-// §4 skip contract: URL/name collisions are preserved (ON CONFLICT DO NOTHING),
-// never duplicated, and re-running the SAME zip inserts no new unique entities.
-func TestRestore_SkipLeavesCollisionsAndIsIdempotentForUniqueEntities(t *testing.T) {
+// TestRestore_SkipConvergesAfterSuccessfulRepeat locks the default restore
+// contract across entities, associations, and events, including rows without a
+// natural uniqueness key.
+func TestRestore_SkipConvergesAfterSuccessfulRepeat(t *testing.T) {
 	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
@@ -198,21 +199,20 @@ func TestRestore_SkipLeavesCollisionsAndIsIdempotentForUniqueEntities(t *testing
 		 WHERE l.url='https://a.example' AND t.name='work'`),
 		"the surviving link must keep its tag after a skip restore")
 
-	// click_log has NO natural unique key, so skip RE-INSERTS every snapshot
-	// click against the surviving link id: 3 seeded + 3 restored = 6. This
-	// documents that skip is NOT idempotent for click_log (it inflates click
-	// counts on re-run) — a known quirk vs the §4 "idempotent by default"
-	// wording; see the follow-up note in docs/TASKS.md.
+	// The first application imports the archive's events. A repeat of that exact
+	// archive must not apply them a second time.
 	assert.EqualValues(t, 6, count(t, pool, "click_log"), "skip re-inserts click_logs against the surviving link")
+	assert.EqualValues(t, 2, count(t, pool, "folder"), "the first application inserts the archive folder")
 
-	// Same in-memory zip again — links/tags (the UNIQUE-constrained entities)
-	// stay at zero new inserts, but click_logs grow again (6 → 9).
+	// Same in-memory zip again: every table converges, including folders and
+	// click_log, which cannot infer archive identity from their own columns.
 	rep2, err := svc.Restore(ctx, uid, zr, backup.ModeSkip)
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, rep2.Inserted.Links)
 	assert.EqualValues(t, 0, rep2.Inserted.Tags)
 	assert.EqualValues(t, 2, count(t, pool, "link"))
-	assert.EqualValues(t, 9, count(t, pool, "click_log"), "second skip restore re-inserts the snapshot clicks again")
+	assert.EqualValues(t, 2, count(t, pool, "folder"), "second skip restore must not insert the folder again")
+	assert.EqualValues(t, 6, count(t, pool, "click_log"), "second skip restore must not re-insert snapshot clicks")
 }
 
 // TestRestore_DuplicateRenamesTagsAndFallsBackOnURLCollision locks the §4
@@ -361,12 +361,7 @@ func TestRestore_NotesRoundTripWipeMode(t *testing.T) {
 	assert.EqualValues(t, 1, scalar(t, pool, `SELECT count(*) FROM click_log WHERE entity_kind='note' AND entity_id=$1`, restored))
 }
 
-// TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow documents the
-// deliberate divergence from links' skip semantics: notes have no natural
-// content-identity key (unlike link's UNIQUE url), so restoreSkip always
-// inserts a fresh note row rather than detecting "already restored" — see
-// db.go's restoreSkip comment.
-func TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow(t *testing.T) {
+func TestRestore_NotesRoundTripSkipMode_ConvergesOnRepeat(t *testing.T) {
 	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
@@ -385,7 +380,7 @@ func TestRestore_NotesRoundTripSkipMode_AlwaysInsertsFreshRow(t *testing.T) {
 	rep2, err := svc.Restore(ctx, uid, zr, backup.ModeSkip)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep2.Inserted.Notes)
-	assert.EqualValues(t, 3, count(t, pool, "note"), "skip mode has no identity key for notes — every restore inserts another row")
+	assert.EqualValues(t, 2, count(t, pool, "note"), "the durable archive mapping must stop a repeated note insert")
 }
 
 // TestRestore_FolderPasswordRoundTripWipeMode locks the CLAUDE.md-documented
@@ -762,4 +757,51 @@ func TestRestore_AdvisoryLockRejectsConcurrentRestore(t *testing.T) {
 	require.ErrorAs(t, err, &he)
 	assert.Equal(t, 409, he.Status)
 	assert.Equal(t, "restore_in_progress", he.Code)
+}
+
+func TestRestore_RejectsInvalidFolderPasswordHashesBeforeWipe(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hash func(*testing.T) string
+	}{
+		{name: "malformed", hash: func(*testing.T) string { return "not-a-bcrypt-hash" }},
+		{name: "unsupported_cost", hash: cost31Hash},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := testdb.Shared(t)
+			uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+			ctx := context.Background()
+			frepo := folders.NewRepository(pool)
+			keep, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Must survive", Color: "#abc"})
+			require.NoError(t, err)
+
+			hash := tc.hash(t)
+			snap := backup.Snapshot{
+				Version: backup.DatabaseSnapshotVersion,
+				Folders: []backup.FolderRow{{
+					ID: 99, Name: "Hostile", Color: "#def", PasswordHash: &hash,
+				}},
+			}
+			db := mustJSON(t, snap)
+			zr := zipFromEntries(t, map[string][]byte{
+				"manifest.json": mustJSON(t, backup.Manifest{
+					Kind: backup.ManifestKind, Version: backup.ManifestVersion,
+					SchemaVersion: backup.CurrentSchemaVersion,
+					Checksums:     map[string]string{"database.json": sha256hex(db)},
+				}),
+				"database.json": db,
+			})
+
+			_, err = backup.NewService(pool, newStubBucket(), discardLogger()).Restore(ctx, uid, zr, backup.ModeWipe)
+			if assert.Error(t, err) {
+				var httpErr *httperr.Error
+				require.ErrorAs(t, err, &httpErr)
+				assert.Equal(t, http.StatusBadRequest, httpErr.Status)
+				assert.Equal(t, "invalid_backup", httpErr.Code)
+				assert.NotContains(t, err.Error(), hash, "restore error must not reflect credential material")
+			}
+			_, err = frepo.Get(ctx, uid, keep.ID)
+			require.NoError(t, err, "invalid backup preflight must run before wipe mutates the database")
+		})
+	}
 }

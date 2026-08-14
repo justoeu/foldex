@@ -10,6 +10,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
+	"foldex/internal/pkg/httperr"
 	"foldex/internal/settings"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
@@ -555,6 +558,183 @@ func TestRestore_InvalidModeAndBadManifest(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRestore_DirectPreflightRejectsBeforeDatabaseMutation(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	const missingKey = "notes/22c3a1e2-304d-441f-a525-713dc364bff1.png"
+	missingCover := "/api/files/" + missingKey
+
+	for _, tc := range []struct {
+		name     string
+		version  string
+		checksum string
+		bodyHTML string
+		coverURL *string
+		contains string
+	}{
+		{
+			name:     "manifest_major_version",
+			version:  "2.0",
+			contains: "major version mismatch",
+		},
+		{
+			name:     "database_checksum",
+			version:  backup.ManifestVersion,
+			checksum: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			contains: "checksum mismatch",
+		},
+		{
+			name:     "missing_local_note_media",
+			version:  backup.ManifestVersion,
+			bodyHTML: `<p><img src="/api/files/` + missingKey + `"></p>`,
+			contains: "missing note media",
+		},
+		{
+			name:     "missing_local_note_cover",
+			version:  backup.ManifestVersion,
+			coverURL: &missingCover,
+			contains: "missing note media",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			uid := testdb.SeedUser(t, pool, tc.name+"@test.local", "user")
+			keeper, err := notes.NewRepository(pool).Create(ctx, uid, notes.CreateInput{
+				Title: "must survive", BodyHTML: "<p>safe</p>",
+			})
+			require.NoError(t, err)
+
+			snap := backup.Snapshot{
+				Version: backup.DatabaseSnapshotVersion,
+				Notes: []backup.NoteRow{{
+					ID: 1, Title: "must not restore", Slug: "must-not-restore",
+					BodyHTML: tc.bodyHTML, CoverURL: tc.coverURL, CreatedAt: now, UpdatedAt: now,
+				}},
+			}
+			db := mustJSON(t, snap)
+			checksum := tc.checksum
+			if checksum == "" {
+				checksum = sha256hex(db)
+			}
+			zr := zipFromEntries(t, map[string][]byte{
+				"manifest.json": mustJSON(t, backup.Manifest{
+					Kind: backup.ManifestKind, Version: tc.version,
+					SchemaVersion: backup.CurrentSchemaVersion,
+					Checksums:     map[string]string{"database.json": checksum},
+				}),
+				"database.json": db,
+			})
+
+			_, err = backup.NewService(pool, newStubBucket(), discardLogger()).Restore(ctx, uid, zr, backup.ModeWipe)
+			require.Error(t, err)
+			var httpErr *httperr.Error
+			require.ErrorAs(t, err, &httpErr)
+			assert.Equal(t, http.StatusBadRequest, httpErr.Status)
+			assert.Equal(t, "invalid_backup", httpErr.Code)
+			assert.Contains(t, err.Error(), tc.contains)
+
+			_, err = notes.NewRepository(pool).Get(ctx, uid, keeper.ID)
+			require.NoError(t, err, "restore preflight failure must not wipe existing content")
+			assert.Zero(t, scalar(t, pool,
+				`SELECT count(*) FROM note WHERE user_id = $1 AND title = 'must not restore'`, int64(uid)))
+		})
+	}
+}
+
+func TestRestore_DirectPreflightPreservesExternalNoteMediaInAllModes(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	const bodyHTML = `<p><img src="https://cdn.example.test/legacy.png"></p>`
+	coverURL := "https://cdn.example.test/cover.jpg"
+
+	for _, mode := range []backup.ConflictMode{backup.ModeWipe, backup.ModeSkip, backup.ModeDuplicate} {
+		t.Run(string(mode), func(t *testing.T) {
+			uid := testdb.SeedUser(t, pool, string(mode)+"-external@test.local", "user")
+			snap := backup.Snapshot{
+				Version: backup.DatabaseSnapshotVersion,
+				Notes: []backup.NoteRow{{
+					ID: 1, Title: "external media", Slug: "external-media",
+					BodyHTML: bodyHTML, CoverURL: &coverURL, CreatedAt: now, UpdatedAt: now,
+				}},
+			}
+			db := mustJSON(t, snap)
+			zr := zipFromEntries(t, map[string][]byte{
+				"manifest.json": mustJSON(t, backup.Manifest{
+					Kind: backup.ManifestKind, Version: backup.ManifestVersion,
+					SchemaVersion: backup.CurrentSchemaVersion,
+					Checksums:     map[string]string{"database.json": sha256hex(db)},
+				}),
+				"database.json": db,
+			})
+
+			rep, err := backup.NewService(pool, newStubBucket(), discardLogger()).Restore(ctx, uid, zr, mode)
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, rep.Inserted.Notes)
+
+			var restoredBody, restoredCover string
+			require.NoError(t, pool.QueryRow(ctx, `
+				SELECT body_html, COALESCE(cover_url, '')
+				FROM note WHERE user_id = $1 AND title = 'external media'`, int64(uid)).Scan(&restoredBody, &restoredCover))
+			assert.Equal(t, bodyHTML, restoredBody)
+			assert.Equal(t, coverURL, restoredCover)
+		})
+	}
+}
+
+func TestRestore_DirectPreflightRekeysLocalNoteMediaInAllModes(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	const oldKey = "notes/22c3a1e2-304d-441f-a525-713dc364bff1.png"
+	oldURL := "/api/files/" + oldKey
+	media := validNotePNG(t)
+
+	for _, mode := range []backup.ConflictMode{backup.ModeWipe, backup.ModeSkip, backup.ModeDuplicate} {
+		t.Run(string(mode), func(t *testing.T) {
+			uid := testdb.SeedUser(t, pool, string(mode)+"-local@test.local", "user")
+			bucket := newStubBucket()
+			snap := backup.Snapshot{
+				Version: backup.DatabaseSnapshotVersion,
+				Notes: []backup.NoteRow{{
+					ID: 1, Title: "local media", Slug: "local-media",
+					BodyHTML: `<p><img src="` + oldURL + `"></p>`, CoverURL: &oldURL,
+					CreatedAt: now, UpdatedAt: now,
+				}},
+			}
+			db := mustJSON(t, snap)
+			zr := zipFromEntries(t, map[string][]byte{
+				"manifest.json": mustJSON(t, backup.Manifest{
+					Kind: backup.ManifestKind, Version: backup.ManifestVersion,
+					SchemaVersion: backup.CurrentSchemaVersion,
+					Checksums: map[string]string{
+						"database.json":   sha256hex(db),
+						"files/" + oldKey: sha256hex(media),
+					},
+				}),
+				"database.json":   db,
+				"files/" + oldKey: media,
+			})
+
+			rep, err := backup.NewService(pool, bucket, discardLogger()).Restore(ctx, uid, zr, mode)
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, rep.Inserted.Notes)
+			assert.EqualValues(t, 1, rep.Files.Uploaded)
+
+			var body, cover string
+			require.NoError(t, pool.QueryRow(ctx, `
+				SELECT body_html, COALESCE(cover_url, '')
+				FROM note WHERE user_id = $1 AND title = 'local media'`, int64(uid)).Scan(&body, &cover))
+			newKey := strings.TrimPrefix(cover, "/api/files/")
+			assert.NotEqual(t, oldKey, newKey)
+			assert.NotContains(t, body, oldKey)
+			assert.Contains(t, body, "/api/files/"+newKey)
+			assert.NotContains(t, bucket.objs, oldKey)
+			assert.NotEmpty(t, bucket.objs[newKey])
+		})
+	}
+}
+
 func TestRestore_Duplicate_EmptySlugAndRenames(t *testing.T) {
 	pool := testdb.Shared(t)
 
@@ -600,3 +780,70 @@ func TestRestore_Duplicate_EmptySlugAndRenames(t *testing.T) {
 }
 
 func int64Ptr(v int64) *int64 { return &v }
+
+func cost31Hash(t *testing.T) string {
+	t.Helper()
+	hash, err := folders.HashPassword("backup-password")
+	require.NoError(t, err)
+	return hash[:4] + "31" + hash[6:]
+}
+
+func TestValidate_RejectsInvalidFolderPasswordHashes(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	svc := backup.NewService(pool, newStubBucket(), discardLogger())
+
+	for _, tc := range []struct {
+		name string
+		hash string
+	}{
+		{name: "malformed", hash: "not-a-bcrypt-hash"},
+		{name: "unsupported_cost", hash: cost31Hash(t)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snap := backup.Snapshot{
+				Version: backup.DatabaseSnapshotVersion,
+				Folders: []backup.FolderRow{{
+					ID: 1, Name: "Locked", Color: "#abc", PasswordHash: &tc.hash,
+				}},
+			}
+			db := mustJSON(t, snap)
+			zr := zipFromEntries(t, map[string][]byte{
+				"manifest.json": mustJSON(t, backup.Manifest{
+					Kind: backup.ManifestKind, Version: backup.ManifestVersion,
+					SchemaVersion: backup.CurrentSchemaVersion,
+					Checksums:     map[string]string{"database.json": sha256hex(db)},
+				}),
+				"database.json": db,
+			})
+
+			v, err := svc.Validate(context.Background(), uid, zr)
+			require.NoError(t, err)
+			assert.False(t, v.OK)
+			require.NotEmpty(t, v.Errors)
+			joined := strings.Join(v.Errors, "\n")
+			assert.Contains(t, joined, "invalid password hash")
+			assert.NotContains(t, joined, tc.hash, "validation must not reflect credential material")
+		})
+	}
+}
+
+func TestValidate_RejectsUserIDAnywhereInSnapshot(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	db := []byte(`{"version":7,"tags":[{"id":1,"user_id":999,"name":"x","color":"#abc"}]}`)
+	zr := zipFromEntries(t, map[string][]byte{
+		"manifest.json": mustJSON(t, backup.Manifest{
+			Kind: backup.ManifestKind, Version: backup.ManifestVersion,
+			SchemaVersion: backup.CurrentSchemaVersion,
+			Checksums:     map[string]string{"database.json": sha256hex(db)},
+		}),
+		"database.json": db,
+	})
+
+	got, err := backup.NewService(pool, newStubBucket(), discardLogger()).Validate(context.Background(), uid, zr)
+	require.NoError(t, err)
+	assert.False(t, got.OK)
+	require.NotEmpty(t, got.Errors)
+	assert.Contains(t, got.Errors[0], "unknown field \"user_id\"")
+}

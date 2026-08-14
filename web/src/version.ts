@@ -1,9 +1,8 @@
 // Single source of truth: web/package.json is bumped by `make release-{patch,
 // minor,major}` (which runs scripts/release.sh — also bumps
-// extension/manifest.json and creates a git tag `vX.Y.Z`). Pushing that tag
-// fires ci.yml's `tags: ['v*']` trigger and publishes Docker images
-// `:vX.Y.Z` + `:vX.Y` + `:vX` + `:latest`. This file just re-exports
-// pkg.version so the sidebar footer always matches the released tag.
+// extension/manifest.json). A manual release workflow dispatch from main
+// validates the target before creating `vX.Y.Z` and publishing Docker images.
+// This file just re-exports pkg.version so the sidebar footer matches it.
 //
 // BUILD_DATE is injected at build time by Vite via `define` (see
 // vite.config.ts). In tests / dev without the define (vitest doesn't share

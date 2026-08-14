@@ -274,6 +274,17 @@ function folderLocked() {
   e.response = { status: 403, data: { error: { code: 'folder_locked', message: 'this folder is password-protected' } } }
   return e
 }
+function descendantProtected(count: number) {
+  const e: any = new Error('protected descendant')
+  e.response = {
+    status: 409,
+    data: {
+      error: { code: 'descendant_protected', message: 'folder subtree contains password-protected descendants' },
+      count,
+    },
+  }
+  return e
+}
 function wrongPassword() {
   const e: any = new Error('wrong password')
   e.response = { status: 401, data: { error: { code: 'wrong_password', message: 'incorrect password' } } }
@@ -452,19 +463,53 @@ function unlockFolder(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Mo
   }
 }
 
-function deleteFolder(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
+function deleteFolder(m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState, headers: Record<string, string>) {
   const id = Number(m[1])
   const idx = s.folders.findIndex((x) => x.id === id)
   if (idx < 0) throw notFound()
-  s.folders.splice(idx, 1)
-  delete s.folderPasswords[id]
-  for (const l of s.links) {
-    if (l.folder_id === id) l.folder_id = null
+  if (!verifyMockUnlockToken(id, s, headers['X-Foldex-Folder-Unlock'])) throw folderLocked()
+  const cascade = params.get('cascade') === '1' || params.get('cascade') === 'true'
+  const deleted = new Set<number>([id])
+  if (cascade) {
+    let added = true
+    while (added) {
+      added = false
+      for (const folder of s.folders) {
+        if (folder.parent_id != null && deleted.has(folder.parent_id) && !deleted.has(folder.id)) {
+          deleted.add(folder.id)
+          added = true
+        }
+      }
+    }
+    const count = [...deleted].filter((folderID) => folderID !== id && s.folderPasswords[folderID] !== undefined).length
+    if (count > 0) throw descendantProtected(count)
   }
+  s.folders = s.folders.filter((folder) => {
+    if (deleted.has(folder.id)) return false
+    if (!cascade && folder.parent_id === id) folder.parent_id = null
+    return true
+  })
+  for (const folderID of deleted) delete s.folderPasswords[folderID]
+  s.links = s.links.filter((link) => {
+    if (link.folder_id == null || !deleted.has(link.folder_id)) return true
+    if (cascade) return false
+    link.folder_id = null
+    return true
+  })
+  s.notes = s.notes.filter((note) => {
+    if (note.folder_id == null || !deleted.has(note.folder_id)) return true
+    if (cascade) return false
+    note.folder_id = null
+    return true
+  })
   return null
 }
 
 function createTag(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState): Tag {
+  return insertTag(data, s)
+}
+
+function insertTag(data: any, s: MockState): Tag {
   const tag: Tag = {
     id: (s.tags.at(-1)?.id ?? 0) + 1,
     name: data.name,
@@ -475,6 +520,14 @@ function createTag(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Mock
   }
   s.tags.push(tag)
   return tag
+}
+
+function resolveParentTags(data: any, s: MockState): Tag[] {
+  const existing = (data.tag_ids ?? [])
+    .map((id: number) => s.tags.find((tag) => tag.id === id))
+    .filter((tag: Tag | undefined): tag is Tag => Boolean(tag))
+  const pending = (data.pending_tags ?? []).map((tag: any) => insertTag(tag, s))
+  return [...existing, ...pending]
 }
 
 function patchTag(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState): Tag {
@@ -517,9 +570,7 @@ function createLink(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Moc
     e.response = { status: 409, data: { error: { code: 'slug_taken', message: 'slug already in use' } } }
     throw e
   }
-  const tags = (data.tag_ids ?? [])
-    .map((id: number) => s.tags.find((x) => x.id === id))
-    .filter((t: Tag | undefined): t is Tag => Boolean(t))
+  const tags = resolveParentTags(data, s)
   const link: Link = {
     id: (s.links.at(-1)?.id ?? 0) + 1,
     url: data.url,
@@ -591,10 +642,8 @@ function patchLink(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockS
   if (data.slug !== undefined) l.slug = data.slug
   // check_interval tri-state: presence flips, null clears.
   if ('check_interval' in data) l.check_interval = data.check_interval ?? null
-  if (data.tag_ids !== undefined) {
-    l.tags = data.tag_ids
-      .map((id: number) => s.tags.find((x) => x.id === id))
-      .filter((t: Tag | undefined): t is Tag => Boolean(t))
+  if (data.tag_ids !== undefined || data.pending_tags?.length) {
+    l.tags = resolveParentTags(data, s)
   }
   return l
 }
@@ -655,9 +704,7 @@ function getNote(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState
 }
 
 function createNote(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState): Note {
-  const tags = (data.tag_ids ?? [])
-    .map((id: number) => s.tags.find((x) => x.id === id))
-    .filter((t: Tag | undefined): t is Tag => Boolean(t))
+  const tags = resolveParentTags(data, s)
   const note: Note = {
     id: (s.notes.at(-1)?.id ?? 0) + 1,
     title: data.title,
@@ -685,10 +732,8 @@ function patchNote(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockS
   if ('folder_id' in data) n.folder_id = data.folder_id ?? null
   if (data.pinned !== undefined) n.pinned = !!data.pinned
   if (data.slug !== undefined) n.slug = data.slug
-  if (data.tag_ids !== undefined) {
-    n.tags = data.tag_ids
-      .map((id: number) => s.tags.find((x) => x.id === id))
-      .filter((t: Tag | undefined): t is Tag => Boolean(t))
+  if (data.tag_ids !== undefined || data.pending_tags?.length) {
+    n.tags = resolveParentTags(data, s)
   }
   n.updated_at = new Date().toISOString()
   return n

@@ -382,8 +382,15 @@ describe('NoteDialog', () => {
     await user.type(screen.getByPlaceholderText('Give your note a title…'), 'T')
     await user.type(screen.getByLabelText('tag filter'), 'j')
     await user.click(await screen.findByText('jira'))
-    const closeBtns = screen.getAllByRole('button').filter((b) => b.getAttribute('aria-label')?.match(/remove|close/i))
-    if (closeBtns[0]) await user.click(closeBtns[0])
+    const remove = screen.getByRole('button', { name: /remove jira/i })
+    await user.click(remove)
+    expect(remove).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /Create note/i }))
+    await waitFor(() => expect(state.notes).toHaveLength(1))
+    const parentCall = vi.mocked(http.post).mock.calls.find(([url]) => url === '/api/notes')
+    expect(parentCall?.[1]).toEqual(expect.objectContaining({ tag_ids: [], pending_tags: [] }))
+    expect(state.notes[0].tags).toEqual([])
   })
 
   it('EDIT: updates title and ships dirty slug', async () => {

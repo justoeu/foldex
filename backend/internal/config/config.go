@@ -29,11 +29,12 @@ type MailConfig struct {
 
 // ObjectStoreConfig holds S3-compatible object-storage parameters (RustFS).
 type ObjectStoreConfig struct {
-	Endpoint  string
-	AccessKey string
-	SecretKey string
-	Bucket    string
-	UseSSL    bool
+	Endpoint                    string
+	AccessKey                   string
+	SecretKey                   string
+	Bucket                      string
+	UseSSL                      bool
+	AllowInsecureDevCredentials bool
 }
 
 type Config struct {
@@ -204,11 +205,12 @@ func Load() (Config, error) {
 		ObjectStore: ObjectStoreConfig{
 			// RUSTFS_* is canonical. MINIO_* is accepted as a one-release
 			// migration fallback so existing .env files keep working.
-			Endpoint:  envFirst("RUSTFS_ENDPOINT", "MINIO_ENDPOINT", "localhost:9000"),
-			AccessKey: envFirst("RUSTFS_ACCESS_KEY", "MINIO_ACCESS_KEY", "foldex"),
-			SecretKey: envFirst("RUSTFS_SECRET_KEY", "MINIO_SECRET_KEY", "foldex-change-me"),
-			Bucket:    envFirst("RUSTFS_BUCKET", "MINIO_BUCKET", "foldex-screenshots"),
-			UseSSL:    envBoolFirst("RUSTFS_USE_SSL", "MINIO_USE_SSL", false),
+			Endpoint:                    envFirst("RUSTFS_ENDPOINT", "MINIO_ENDPOINT", "localhost:9000"),
+			AccessKey:                   envFirst("RUSTFS_ACCESS_KEY", "MINIO_ACCESS_KEY", "foldex"),
+			SecretKey:                   envFirst("RUSTFS_SECRET_KEY", "MINIO_SECRET_KEY", ""),
+			Bucket:                      envFirst("RUSTFS_BUCKET", "MINIO_BUCKET", "foldex-screenshots"),
+			UseSSL:                      envBoolFirst("RUSTFS_USE_SSL", "MINIO_USE_SSL", false),
+			AllowInsecureDevCredentials: envBool("RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS", false),
 		},
 		ChangeCheckEnabled:         envBool("CHANGECHECK_ENABLED", true),
 		ChangeCheckConcurrency:     envInt("CHANGECHECK_WORKER_CONCURRENCY", 2),
@@ -344,6 +346,13 @@ func issuerFromURL(raw string) string {
 // single-user local threat model. Any non-loopback bind requires a non-empty
 // SHARED_SECRET.
 func (c Config) validateSecureDefaults() error {
+	if !c.ObjectStore.AllowInsecureDevCredentials &&
+		(c.ObjectStore.SecretKey == "rustfsadmin" || c.ObjectStore.SecretKey == "foldex-change-me") {
+		return errors.New(
+			"insecure config: RustFS credential placeholder refused; run make env to generate credentials " +
+				"or explicitly set RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS=1 for isolated local development",
+		)
+	}
 	// The question this asks is "can anyone who reaches the port read the
 	// data", and until ADR-30 the only possible answer was SHARED_SECRET. Now
 	// AUTH_ENABLED answers it properly: it does not merely gate the surface,

@@ -4,14 +4,15 @@
 # Bumps the version across:
 #   - web/package.json       (SPA — read by src/version.ts → sidebar footer)
 #   - extension/manifest.json (browser extension MV3 manifest)
-# then commits, tags `vX.Y.Z`, and (with your confirmation) pushes.
+# then commits the bump. After pushing main, dispatch release.yml with the
+# strict `vX.Y.Z` target; the validated workflow creates the tag itself.
 #
-# Pushing the tag triggers release.yml (it watches `tags: ['v*']`), which
-# publishes Docker images tagged `:X.Y.Z` + `:X.Y` + `:X` + `:latest` —
+# A manual release.yml dispatch from main publishes Docker images tagged
+# `:X.Y.Z` + `:X.Y` + `:X` + `:latest` —
 # NOTE: docker/metadata-action strips the leading `v`, so the git tag is
 # `vX.Y.Z` but the image tags carry NO `v` (pin FOLDEX_VERSION=X.Y.Z, not
 # vX.Y.Z). Applies to both `foldex-backend` and `foldex-web`. (ci.yml is the
-# PR gate and does NOT run on push to main/tags.)
+# PR gate; branch and tag pushes do not publish.)
 #
 # Usage:
 #   ./scripts/release.sh patch     # 1.0.8 → 1.0.9
@@ -34,7 +35,7 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
-# Refuse off-main releases — we tag from main and CI watches main + tags.
+# Refuse off-main releases — the workflow accepts dispatches from main only.
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if [ "$BRANCH" != "main" ]; then
   echo "✗ refusing to release from '$BRANCH' (expected: main)" >&2
@@ -74,12 +75,13 @@ case "$PART" in
       patch) NEW="$MAJ.$MIN.$((PAT+1))" ;;
     esac
     ;;
-  [0-9]*.[0-9]*.[0-9]*)
-    NEW="$PART"
-    ;;
   *)
-    echo "✗ unknown bump '$PART' — expected: patch | minor | major | X.Y.Z" >&2
-    exit 1
+    if [[ "$PART" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+      NEW="$PART"
+    else
+      echo "✗ unknown bump '$PART' — expected: patch | minor | major | X.Y.Z" >&2
+      exit 1
+    fi
     ;;
 esac
 
@@ -122,9 +124,9 @@ done
 
 git add "$PKG" "$EXT"
 git commit -m "chore(release): v$NEW"
-git tag -a "v$NEW" -m "v$NEW"
 
 echo
-echo "✓ tagged v$NEW locally."
-echo "  Push with: git push origin main && git push origin v$NEW"
-echo "  CI will publish justoeu/foldex-{backend,web}:$NEW + :latest (image tags drop the 'v')"
+echo "✓ committed the v$NEW version bump."
+echo "  Push with: git push origin main"
+echo "  Publish with: gh workflow run release.yml --ref main -f target=v$NEW"
+echo "  The workflow creates v$NEW and publishes justoeu/foldex-{backend,web}:$NEW + :latest"

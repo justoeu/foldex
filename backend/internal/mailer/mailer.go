@@ -33,10 +33,10 @@ type Message struct {
 
 // Mailer sends transactional mail.
 //
-// Send returning an error is NOT a reason to fail the request that triggered
-// it. An invite whose e-mail bounced still exists and can be re-sent or
-// copied from the admin screen; rolling the invite back because the SMTP host
-// was briefly down would be strictly worse. Callers log and continue.
+// Most callers dispatch and log send failures. Credential-critical callers may
+// instead keep their transaction open until Send succeeds; administrator-forced
+// password recovery deliberately does this so a failed SMTP send publishes no
+// reset token.
 type Mailer interface {
 	Send(ctx context.Context, m Message) error
 	// Driver names the active transport, surfaced through /api/auth/me's
@@ -120,15 +120,26 @@ func (m *smtpMailer) Send(ctx context.Context, msg Message) error {
 	body := m.render(msg)
 
 	dialer := &net.Dialer{Timeout: m.cfg.Timeout}
-	var conn net.Conn
-	var err error
-	if m.cfg.TLS {
-		conn, err = tls.DialWithDialer(dialer, "tcp", addr, m.tlsConfig())
-	} else {
-		conn, err = dialer.DialContext(ctx, "tcp", addr)
-	}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("mailer: dial %s: %w", addr, err)
+	}
+	rawConn := conn
+	cancelClose := context.AfterFunc(ctx, func() { _ = rawConn.Close() })
+	defer cancelClose()
+	if m.cfg.TLS {
+		tlsConn := tls.Client(conn, m.tlsConfig())
+		handshakeCtx := ctx
+		var cancel context.CancelFunc
+		if _, ok := ctx.Deadline(); !ok {
+			handshakeCtx, cancel = context.WithTimeout(ctx, m.cfg.Timeout)
+			defer cancel()
+		}
+		if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("mailer: tls handshake: %w", err)
+		}
+		conn = tlsConn
 	}
 	// The deadline covers the whole SMTP conversation. Without it a server that
 	// accepts the connection and then stops responding pins the goroutine (and

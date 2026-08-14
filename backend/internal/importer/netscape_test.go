@@ -1,6 +1,8 @@
 package importer
 
 import (
+	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -26,35 +28,27 @@ const sampleNetscape = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
 </DL><p>
 `
 
-func TestParseNetscape_RejectsTooManyItems(t *testing.T) {
+func netscapeLinks(count int) string {
 	var b strings.Builder
 	b.WriteString(`<!DOCTYPE NETSCAPE-Bookmark-file-1><DL><p>`)
-	// maxImportItems+1 unique http links
-	for i := 0; i < maxImportItems+1; i++ {
+	for i := 0; i < count; i++ {
 		b.WriteString(`<DT><A HREF="https://example.com/`)
-		b.WriteString(strings.Repeat("a", 1))
-		// unique path
-		b.WriteString(itoa(i))
+		b.WriteString(strconv.Itoa(i))
 		b.WriteString(`">t</A>`)
 	}
 	b.WriteString(`</DL><p>`)
-	_, err := ParseNetscape(strings.NewReader(b.String()))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrTooManyItems)
+	return b.String()
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var d [20]byte
-	i := len(d)
-	for n > 0 {
-		i--
-		d[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(d[i:])
+func TestParseNetscape_ItemLimitBoundary(t *testing.T) {
+	items, err := ParseNetscape(strings.NewReader(netscapeLinks(maxImportItems)))
+	require.NoError(t, err)
+	assert.Len(t, items, maxImportItems)
+
+	items, err = ParseNetscape(strings.NewReader(netscapeLinks(maxImportItems + 1)))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrTooManyItems)
+	assert.Nil(t, items)
 }
 
 func TestParseNetscape_FlatAndNested(t *testing.T) {
@@ -127,6 +121,85 @@ func TestParseNetscape_EmptyH3KeepsParentFolder(t *testing.T) {
 	// After Parent closes, root again.
 	assert.Equal(t, "https://root.example", items[2].URL)
 	assert.Nil(t, items[2].Folder)
+}
+
+func TestParseNetscape_ToleratesMalformedCloseOrder(t *testing.T) {
+	body := `<H3>Crossed<DL></H3>
+		<A HREF="https://nested.example">Nested</A>
+	</DL></DL>
+	<A HREF="https://root.example">Root</A>`
+
+	items, err := ParseNetscape(strings.NewReader(body))
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	require.NotNil(t, items[0].Folder)
+	assert.Equal(t, "Crossed", *items[0].Folder)
+	assert.Nil(t, items[1].Folder, "surplus closing tags must not underflow the folder stack")
+}
+
+func TestParseNetscape_DeepNestingAndFullUnwind(t *testing.T) {
+	const depth = 64
+	var body strings.Builder
+	wantTags := make([]string, 0, depth-1)
+	for i := 0; i < depth; i++ {
+		name := "Level " + strconv.Itoa(i)
+		body.WriteString("<H3>" + name + "</H3><DL>")
+		if i < depth-1 {
+			wantTags = append(wantTags, name)
+		}
+	}
+	body.WriteString(`<A HREF="https://deep.example">Deep</A>`)
+	body.WriteString(strings.Repeat("</DL>", depth))
+	body.WriteString(`<A HREF="https://root.example">Root</A>`)
+
+	items, err := ParseNetscape(strings.NewReader(body.String()))
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	require.NotNil(t, items[0].Folder)
+	assert.Equal(t, "Level 63", *items[0].Folder)
+	assert.Equal(t, wantTags, items[0].Tags)
+	assert.Nil(t, items[1].Folder)
+	assert.Empty(t, items[1].Tags)
+}
+
+func TestParseNetscape_BlankNamesHrefTitleAndDescription(t *testing.T) {
+	body := `<H3>
+	</H3><DL>
+		<A HREF="   ">Skipped</A>
+		<A HREF="https://fallback.example">
+		</A><DD>
+	</DL>`
+
+	items, err := ParseNetscape(strings.NewReader(body))
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "https://fallback.example", items[0].Title)
+	assert.Nil(t, items[0].Folder)
+	assert.Empty(t, items[0].Tags)
+	assert.Nil(t, items[0].Description)
+}
+
+var errInjectedReader = errors.New("injected reader failure")
+
+type failingReader struct {
+	content *strings.Reader
+}
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if r.content.Len() == 0 {
+		return 0, errInjectedReader
+	}
+	return r.content.Read(p)
+}
+
+func TestParseNetscape_ReturnsTokenizerErrorWithPartialItems(t *testing.T) {
+	r := &failingReader{content: strings.NewReader(`<A HREF="https://kept.example">Kept</A>`)}
+
+	items, err := ParseNetscape(r)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errInjectedReader)
+	require.Len(t, items, 1)
+	assert.Equal(t, "https://kept.example", items[0].URL)
 }
 
 func TestParseNetscape_LinkWithoutTitleFallsBackToURL(t *testing.T) {

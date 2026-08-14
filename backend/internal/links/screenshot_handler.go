@@ -10,11 +10,14 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"foldex/internal/imageopt"
+	"foldex/internal/linkimage"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/ports"
@@ -28,7 +31,7 @@ import (
 // reuses it rather than standing up a second file-serving endpoint.
 var allowedFilePrefixes = []string{"screenshots/", "images/", "notes/"}
 
-// allowedUploadMIMEs is the single imageopt allowlist (ARCH-ATL-009).
+// allowedUploadMIMEs is the shared imageopt allowlist.
 var allowedUploadMIMEs = imageopt.AllowedUploadMIMEs
 
 // Image optimization defaults — JPEG q≈82 caps thumbnails at 1024 px on the
@@ -63,7 +66,8 @@ type Uploader = ports.Uploader
 type screenshotRepo interface {
 	Get(ctx context.Context, uid authctx.UserID, id int64) (Link, error)
 	AssertOwned(ctx context.Context, uid authctx.UserID, id int64) error
-	UpdateOGImage(ctx context.Context, uid authctx.UserID, id int64, imageURL string) error
+	ReplaceOGImage(ctx context.Context, uid authctx.UserID, id int64, imageURL string) (*string, error)
+	UpdateOGImageIfUnchanged(ctx context.Context, uid authctx.UserID, id int64, imageURL string, expectedUpdatedAt time.Time) (bool, error)
 	ClearOGImage(ctx context.Context, uid authctx.UserID, id int64) error
 }
 
@@ -71,8 +75,16 @@ type screenshotRepo interface {
 // cannot pin unbounded goroutines waiting on Chromium.
 const maxCaptureInFlight = 2
 
-// captureTimeout is the handler-level ceiling for a single Capture call.
-const captureTimeout = 45 * time.Second
+const maxCapturePerUser = 1
+
+// captureTimeout covers the pool's independent queue, cold-start, capture, and
+// BrowserContext cleanup budgets without shortening a later phase.
+const captureTimeout = 70 * time.Second
+
+const (
+	capturePolicyTimeout  = 5 * time.Second
+	captureStorageTimeout = 10 * time.Second
+)
 
 // ScreenshotHandler handles screenshot capture and file proxy routes.
 type ScreenshotHandler struct {
@@ -82,6 +94,8 @@ type ScreenshotHandler struct {
 	urlPolicy     URLPolicy
 	logger        *slog.Logger
 	captureSem    chan struct{}
+	captureMu     sync.Mutex
+	captureUsers  map[authctx.UserID]int
 }
 
 // NewScreenshotHandler creates a ScreenshotHandler. urlPolicy gates
@@ -95,11 +109,12 @@ func NewScreenshotHandler(repo *Repository, sc Screenshotter, st Uploader, urlPo
 		urlPolicy:     urlPolicy,
 		logger:        logger,
 		captureSem:    make(chan struct{}, maxCaptureInFlight),
+		captureUsers:  make(map[authctx.UserID]int),
 	}
 }
 
 // CaptureAndStore captures a screenshot of the link's URL, optimizes it, saves
-// it to object storage under screenshots/{id}.{ext}, and returns the proxy URL.
+// it to object storage under an operation-owned link key, and publishes that URL.
 func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Request) {
 	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -107,21 +122,17 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if h.captureSem == nil {
-		h.captureSem = make(chan struct{}, maxCaptureInFlight)
-	}
-	select {
-	case h.captureSem <- struct{}{}:
-		defer func() { <-h.captureSem }()
-	default:
+	uid := authctx.MustUser(r.Context())
+	if !h.acquireCapture(uid) {
 		w.Header().Set("Retry-After", "5")
 		httperr.Write(w, httperr.New(http.StatusTooManyRequests, "screenshot_busy", "too many screenshot captures in flight"))
 		return
 	}
+	defer h.releaseCapture(uid)
 
-	link, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
+	link, err := h.repo.Get(r.Context(), uid, id)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 
@@ -143,42 +154,55 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "policy_unconfigured", "screenshot policy is not configured"))
 		return
 	}
-	if !h.urlPolicy(r.Context(), link.URL) {
+	capCtx, cancel := context.WithTimeout(r.Context(), captureTimeout)
+	defer cancel()
+	policyCtx, policyCancel := context.WithTimeout(capCtx, capturePolicyTimeout)
+	allowed := h.urlPolicy(policyCtx, link.URL)
+	policyCancel()
+	if !allowed {
 		h.logger.Warn("screenshot rejected: non-public target", "id", id)
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "private_target", "screenshot target must resolve to a public address"))
 		return
 	}
-	// Re-check immediately before Chromium navigates to shrink the DNS-
-	// rebinding window between LookupIP and page load (TOCTOU). Not a full
-	// pin of the resolved IP into Chromium, but raises the bar vs a single
-	// pre-check far earlier in the handler.
-	if !h.urlPolicy(r.Context(), link.URL) {
-		h.logger.Warn("screenshot rejected: non-public target on recheck", "id", id)
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "private_target", "screenshot target must resolve to a public address"))
-		return
-	}
-
-	capCtx, cancel := context.WithTimeout(r.Context(), captureTimeout)
-	defer cancel()
 	png, err := h.screenshotter.Capture(capCtx, link.URL)
 	if err != nil {
-		// Log the underlying error with full detail; the wire response gets
-		// a generic message — Chromium errors can include local binary paths
-		// / system state that shouldn't reach a (possibly remote) caller.
-		h.logger.Error("screenshot capture failed", "id", id, "err", err)
+		// Chromium errors may contain credential-bearing URLs or local paths;
+		// logs and the wire response therefore use stable classifications.
+		h.logger.Error("screenshot capture failed", "id", id, "reason", screenshotOperationErrorReason(err))
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "screenshot_failed", "failed to capture screenshot"))
 		return
 	}
 
 	opt := optimizeOrFallback(png, "image/png", "png", h.logger, "screenshot", id)
 
-	key := fmt.Sprintf("screenshots/%d.%s", id, opt.Ext)
-	h.purgeLegacyVariants(r.Context(), "screenshots", id, opt.Ext)
-	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
+	storageCtx, storageCancel := context.WithTimeout(r.Context(), captureStorageTimeout)
+	defer storageCancel()
+	stored, err := linkimage.Store(storageCtx, h.storage, "screenshots", id, opt.Ext, opt.Data, opt.ContentType)
+	if err != nil {
 		h.logger.Error("screenshot upload failed", "id", id)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store screenshot"))
 		return
 	}
+	applied, err := h.repo.UpdateOGImageIfUnchanged(storageCtx, uid, id, stored.URL, link.UpdatedAt)
+	if err != nil || !applied {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), captureStorageTimeout)
+		cleanupErr := linkimage.Delete(cleanupCtx, h.storage, stored.Key)
+		cleanupCancel()
+		if cleanupErr != nil {
+			h.logger.Warn("screenshot orphan cleanup failed", "id", id)
+		}
+		if err != nil {
+			h.logger.Error("screenshot database publish failed", "id", id)
+			httperr.Write(w, httperr.New(http.StatusInternalServerError, "publish_failed", "failed to publish screenshot"))
+			return
+		}
+		httperr.Write(w, httperr.New(http.StatusConflict, "screenshot_superseded", "link changed while screenshot was captured"))
+		return
+	}
+	for _, purgeErr := range linkimage.PurgeLegacy(storageCtx, h.storage, "screenshots", id) {
+		h.logger.Warn("purge legacy screenshot failed", "id", id, "err", purgeErr)
+	}
+	h.deletePreviousLinkImage(storageCtx, link.OGImageURL, stored.Key, id)
 
 	h.logger.Info("screenshot stored",
 		"id", id,
@@ -186,8 +210,51 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 		"resized", opt.Resized, "reencoded", opt.Reencoded,
 	)
 	httperr.JSON(w, http.StatusOK, map[string]string{
-		"url": "/api/files/" + key,
+		"url": stored.URL,
 	})
+}
+
+func (h *ScreenshotHandler) acquireCapture(uid authctx.UserID) bool {
+	h.captureMu.Lock()
+	defer h.captureMu.Unlock()
+	if h.captureSem == nil {
+		h.captureSem = make(chan struct{}, maxCaptureInFlight)
+	}
+	if h.captureUsers == nil {
+		h.captureUsers = make(map[authctx.UserID]int)
+	}
+	if h.captureUsers[uid] >= maxCapturePerUser {
+		return false
+	}
+	select {
+	case h.captureSem <- struct{}{}:
+		h.captureUsers[uid]++
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *ScreenshotHandler) releaseCapture(uid authctx.UserID) {
+	h.captureMu.Lock()
+	if h.captureUsers[uid] <= 1 {
+		delete(h.captureUsers, uid)
+	} else {
+		h.captureUsers[uid]--
+	}
+	<-h.captureSem
+	h.captureMu.Unlock()
+}
+
+func screenshotOperationErrorReason(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "capture_failed"
+	}
 }
 
 // ProxyFile proxies a file from object storage to the HTTP client.
@@ -195,9 +262,24 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 // upload/screenshot prefixes so this can't be used to read arbitrary objects
 // out of the bucket.
 func (h *ScreenshotHandler) ProxyFile(w http.ResponseWriter, r *http.Request) {
-	key := chi.URLParam(r, "*")
+	h.proxyFile(w, r, chi.URLParam(r, "*"))
+}
+
+// ProxyNoteFile is mounted outside required authentication so images embedded
+// in the public /n/{slug} page remain readable. The fixed prefix prevents this
+// route from reaching id-derived link media, which still requires ownership.
+func (h *ScreenshotHandler) ProxyNoteFile(w http.ResponseWriter, r *http.Request) {
+	key := "notes/" + chi.URLParam(r, "*")
+	if !isValidNoteKey(key) {
+		httperr.Write(w, httperr.ErrNotFound)
+		return
+	}
+	h.proxyFile(w, r, key)
+}
+
+func (h *ScreenshotHandler) proxyFile(w http.ResponseWriter, r *http.Request, key string) {
 	if !isAllowedKey(key) {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_key", "key is required and must be under screenshots/ or images/"))
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_key", "key is required and must use a supported image prefix"))
 		return
 	}
 	if err := h.authorizeKey(r.Context(), key); err != nil {
@@ -233,7 +315,11 @@ func (h *ScreenshotHandler) ProxyFile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", detected)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if strings.HasPrefix(key, "notes/") {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+	} else {
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }
@@ -251,16 +337,18 @@ func (h *ScreenshotHandler) ProxyFile(w http.ResponseWriter, r *http.Request) {
 //     distinguishes "someone else's image" from "no image" (the 404-not-403 rule
 //     in CLAUDE.md §4 applies to object keys for the same reason it applies to
 //     rows).
-//   - notes/{uuid}.ext is a capability URL: a 122-bit random UUIDv4 that appears
-//     nowhere but inside the owning note's body_html. It CANNOT be ownership-
-//     gated, because the public, session-less /n/{slug} page renders that
-//     body_html and the browser fetches the images with no principal at all.
-//     Gating it would break every published note.
+//   - notes/{uuid}.ext is intentionally a public READ locator: the session-less
+//     /n/{slug} page renders body_html and its browser has no principal. The URL
+//     grants no mutation authority; uploads/deletes are governed separately by
+//     note_media ownership and refs (migration 000022).
 func (h *ScreenshotHandler) authorizeKey(ctx context.Context, key string) error {
 	notFound := httperr.New(http.StatusNotFound, "not_found", "file not found")
 	switch {
 	case strings.HasPrefix(key, "notes/"):
-		return nil
+		if isValidNoteKey(key) {
+			return nil
+		}
+		return notFound
 	case strings.HasPrefix(key, "screenshots/"), strings.HasPrefix(key, "images/"):
 		id, ok := linkKeyID(key)
 		if !ok {
@@ -279,8 +367,8 @@ func (h *ScreenshotHandler) authorizeKey(ctx context.Context, key string) error 
 }
 
 // linkKeyID extracts the link id from an id-derived object key
-// (`screenshots/12.jpg` → 12). Reports false for anything that is not
-// `{prefix}/{digits}.{ext}`.
+// (`screenshots/12.version.jpg` → 12). Reports false for anything that is not
+// `{prefix}/{digits}.{suffix}`.
 func linkKeyID(key string) (int64, bool) {
 	slash := strings.IndexByte(key, '/')
 	if slash < 0 {
@@ -296,6 +384,29 @@ func linkKeyID(key string) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+// isValidNoteKey keeps the anonymous note-media route narrower than the
+// bucket namespace: only canonical UUID names emitted by the note uploader and
+// restore paths, with supported raster-image extensions, are readable.
+func isValidNoteKey(key string) bool {
+	const prefix = "notes/"
+	if !strings.HasPrefix(key, prefix) {
+		return false
+	}
+	name := strings.TrimPrefix(key, prefix)
+	dot := strings.LastIndexByte(name, '.')
+	if dot <= 0 {
+		return false
+	}
+	ext := name[dot+1:]
+	switch ext {
+	case "jpg", "jpeg", "png", "gif", "webp":
+	default:
+		return false
+	}
+	id, err := uuid.Parse(name[:dot])
+	return err == nil && id.String() == name[:dot]
 }
 
 // isHTTPScheme returns true iff pageURL parses to an http or https URL.
@@ -337,8 +448,8 @@ func isAllowedServeMIME(m string) bool {
 }
 
 // UploadImage accepts a multipart upload (field "image"), optimizes it
-// (downscale + JPEG re-encode), stores the result in object storage under
-// images/{id}.{ext}, and updates the link's og_image_url.
+// (downscale + JPEG re-encode), stores the result under an operation-owned key,
+// and atomically replaces the link's og_image_url.
 // Mounted at POST /api/links/{id}/image.
 func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 	id, err := httperr.ParseID(chi.URLParam(r, "id"))
@@ -348,14 +459,13 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Ownership FIRST, before a single byte is read or written. The object key
-	// is images/{id}.ext with no tenant segment, so uploading under another
-	// user's link id overwrites THEIR image and purgeLegacyVariants deletes
-	// their sibling extensions — both irreversible, and both happen before the
-	// scoped UpdateOGImage below would have returned 404. Checking here turns a
-	// destructive cross-tenant write into a plain not-found.
+	// starts with images/{id}. and has no tenant segment, so uploading under another
+	// user's link id could overwrite their image before the scoped update
+	// reports not-found.
 	uid := authctx.MustUser(r.Context())
-	if err := h.repo.AssertOwned(r.Context(), uid, id); err != nil {
-		httperr.Write(w, err)
+	_, err = h.repo.Get(r.Context(), uid, id)
+	if err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 
@@ -413,20 +523,24 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 
 	opt := optimizeOrFallback(data, detected, srcExt, h.logger, "image upload", id)
 
-	key := fmt.Sprintf("images/%d.%s", id, opt.Ext)
-	h.purgeLegacyVariants(r.Context(), "images", id, opt.Ext)
-	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
+	stored, err := linkimage.Store(r.Context(), h.storage, "images", id, opt.Ext, opt.Data, opt.ContentType)
+	if err != nil {
 		h.logger.Error("image upload: storage upload failed", "id", id)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store image"))
 		return
 	}
 
-	proxyURL := "/api/files/" + key
-	if err := h.repo.UpdateOGImage(r.Context(), uid, id, proxyURL); err != nil {
+	previous, err := h.repo.ReplaceOGImage(r.Context(), uid, id, stored.URL)
+	if err != nil {
+		h.deleteUnpublishedLinkImage(stored.Key, id)
 		h.logger.Error("image upload: db update failed", "id", id, "err", err)
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
+	for _, purgeErr := range linkimage.PurgeLegacy(r.Context(), h.storage, "images", id) {
+		h.logger.Warn("purge legacy image failed", "id", id, "err", purgeErr)
+	}
+	h.deletePreviousLinkImage(r.Context(), previous, stored.Key, id)
 
 	h.logger.Info("image uploaded",
 		"id", id,
@@ -434,7 +548,30 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 		"source_bytes", len(data), "stored_bytes", len(opt.Data),
 		"resized", opt.Resized, "reencoded", opt.Reencoded,
 	)
-	httperr.JSON(w, http.StatusOK, map[string]string{"url": proxyURL})
+	httperr.JSON(w, http.StatusOK, map[string]string{"url": stored.URL})
+}
+
+func (h *ScreenshotHandler) deleteUnpublishedLinkImage(key string, id int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), captureStorageTimeout)
+	defer cancel()
+	if err := h.storage.DeleteObject(ctx, key); err != nil {
+		h.logger.Warn("unpublished link image cleanup failed", "id", id)
+	}
+}
+
+func (h *ScreenshotHandler) deletePreviousLinkImage(ctx context.Context, previous *string, keepKey string, id int64) {
+	if previous == nil {
+		return
+	}
+	key, ok := linkimage.LocalKey(*previous)
+	ownedScreenshot := fmt.Sprintf("screenshots/%d.", id)
+	ownedImage := fmt.Sprintf("images/%d.", id)
+	if !ok || key == keepKey || (!strings.HasPrefix(key, ownedScreenshot) && !strings.HasPrefix(key, ownedImage)) {
+		return
+	}
+	if err := h.storage.DeleteObject(ctx, key); err != nil {
+		h.logger.Warn("previous link image cleanup failed", "id", id)
+	}
 }
 
 // DeleteImage clears the og_image_url for a link (does not delete from storage).
@@ -445,7 +582,7 @@ func (h *ScreenshotHandler) DeleteImage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := h.repo.ClearOGImage(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	h.logger.Info("image cleared", "id", id)
@@ -468,21 +605,4 @@ func optimizeOrFallback(data []byte, sourceMIME, sourceExt string, logger *slog.
 		}
 	}
 	return res
-}
-
-// purgeLegacyVariants removes every sibling-extension object for the same id
-// under the given prefix except the one we just wrote. Keeps the object store from
-// accumulating orphans when a link previously had a .png/.gif/.webp upload
-// and the new upload writes .jpg (or vice versa via the fallback path).
-// DeleteObject is idempotent — NoSuchKey is treated as success.
-func (h *ScreenshotHandler) purgeLegacyVariants(ctx context.Context, prefix string, id int64, keepExt string) {
-	for _, ext := range allowedUploadMIMEs {
-		if ext == keepExt {
-			continue
-		}
-		key := fmt.Sprintf("%s/%d.%s", prefix, id, ext)
-		if err := h.storage.DeleteObject(ctx, key); err != nil {
-			h.logger.Warn("purge legacy variant failed")
-		}
-	}
 }

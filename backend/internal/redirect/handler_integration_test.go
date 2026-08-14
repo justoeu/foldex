@@ -159,6 +159,37 @@ func TestRedirect_ByIDStillWorksAfterSlugFeature(t *testing.T) {
 	assert.Equal(t, "https://example.com", resp.Header.Get("Location"))
 }
 
+func TestRedirect_PublicNumericIDsFeatureFlag(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	repo := links.NewRepository(pool)
+	created, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://example.com/flag", Title: "Flag Target"})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		target          string
+		allowNumericIDs bool
+		wantStatus      int
+	}{
+		{name: "numeric on", target: intToStr(created.ID), allowNumericIDs: true, wantStatus: http.StatusFound},
+		{name: "numeric off", target: intToStr(created.ID), allowNumericIDs: false, wantStatus: http.StatusNotFound},
+		{name: "slug while numeric off", target: created.Slug, allowNumericIDs: false, wantStatus: http.StatusFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := chi.NewRouter()
+			redirect.NewHandler(repo, tt.allowNumericIDs).Mount(r)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/go/"+tt.target, nil)
+			r.ServeHTTP(rec, req)
+			assert.Equal(t, tt.wantStatus, rec.Code)
+		})
+	}
+}
+
 func intToStr(n int64) string {
 	if n == 0 {
 		return "0"

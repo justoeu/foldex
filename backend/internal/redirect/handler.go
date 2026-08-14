@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/pkg/domainerr"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/publictarget"
 )
 
 // LinkResolver resolves /go targets (satisfied by *links.Repository).
@@ -63,28 +64,13 @@ func (h *Handler) redirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if id, err := strconv.ParseInt(raw, 10, 64); err == nil && id > 0 {
-		if !h.allowNumericIDs {
-			// A plain 404, the same answer an unknown slug gets. Anything more
-			// specific ("numeric lookup is disabled") would confirm the id
-			// space is real and worth probing once the flag flips.
-			httperr.Write(w, httperr.ErrNotFound)
-			return
-		}
-		dest, err := h.repo.ClickAndResolve(r.Context(), id)
-		if err == nil {
-			redirect(w, r, dest)
-			return
-		}
-		// A pure-numeric value can never be a slug (CHECK constraint), so
-		// not-found here is terminal.
-		httperr.Write(w, err)
-		return
-	}
-
-	dest, err := h.repo.ClickAndResolveBySlug(r.Context(), raw)
+	dest, err := publictarget.Resolve(
+		r.Context(), raw, h.allowNumericIDs,
+		h.repo.ClickAndResolve,
+		h.repo.ClickAndResolveBySlug,
+	)
 	if err != nil {
-		if errors.Is(err, httperr.ErrNotFound) {
+		if errors.Is(err, domainerr.ErrNotFound) {
 			httperr.Write(w, httperr.ErrNotFound)
 			return
 		}

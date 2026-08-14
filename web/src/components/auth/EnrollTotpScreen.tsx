@@ -55,7 +55,7 @@ export function EnrollTotpScreen() {
       const res = await confirmTotp(raw)
       // Show the recovery codes BEFORE adopting the session. Adopting swaps the
       // gate over to <App/>, and the codes are displayed exactly once — the
-      // server keeps only their hashes and cannot show them again.
+      // server keeps only their keyed digests and cannot show them again.
       setCodes(res.recovery_codes)
       setPendingSession(res)
     } catch (err) {

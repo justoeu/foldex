@@ -27,7 +27,7 @@ func (h *Handler) Mount(r chi.Router) {
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()))
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, out)
@@ -51,7 +51,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := h.repo.Create(r.Context(), authctx.MustUser(r.Context()), in)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusCreated, t)
@@ -65,7 +65,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, t)
@@ -94,7 +94,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, t)
@@ -107,7 +107,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

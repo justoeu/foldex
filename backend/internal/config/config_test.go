@@ -121,9 +121,24 @@ func TestLoad_ObjectStoreDefaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "localhost:9000", cfg.ObjectStore.Endpoint)
 	assert.Equal(t, "foldex", cfg.ObjectStore.AccessKey)
-	assert.Equal(t, "foldex-change-me", cfg.ObjectStore.SecretKey)
+	assert.Empty(t, cfg.ObjectStore.SecretKey)
 	assert.Equal(t, "foldex-screenshots", cfg.ObjectStore.Bucket)
 	assert.False(t, cfg.ObjectStore.UseSSL)
+}
+
+func TestLoad_RejectsKnownRustFSPlaceholderSecrets(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x@y/z")
+	t.Setenv("RUSTFS_ROOT_SECRET_KEY", "")
+	t.Setenv("RUSTFS_SECRET_KEY", "foldex-change-me")
+	t.Setenv("RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS", "")
+
+	_, err := Load()
+	require.ErrorContains(t, err, "placeholder")
+	assert.NotContains(t, err.Error(), "foldex-change-me")
+
+	t.Setenv("RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS", "1")
+	_, err = Load()
+	require.NoError(t, err)
 }
 
 func TestLoad_ObjectStoreOverrides(t *testing.T) {

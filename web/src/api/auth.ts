@@ -88,7 +88,7 @@ export async function resendEmailVerification(): Promise<void> {
 export type InvitePreview = { email: string; role: Role; expires_at: string }
 
 export async function lookupInvite(token: string): Promise<InvitePreview> {
-  const { data } = await http.get<InvitePreview>(`/api/auth/invites/${encodeURIComponent(token)}`)
+  const { data } = await http.post<InvitePreview>('/api/auth/invites/lookup', { token })
   return data
 }
 
@@ -111,20 +111,17 @@ export async function setPassword(password: string, code?: string): Promise<void
 // Google
 // ─────────────────────────────────────────────────────────────────────
 
-export type OAuthPurpose = 'login' | 'link' | 'accept_invite'
+export type OAuthPurpose = 'login' | 'accept_invite'
 
 /**
  * Builds the URL that starts the flow.
  *
- * Split from the navigation below so the part with actual logic — query
- * encoding of an invitation token, which is a credential and may contain
- * characters that would otherwise terminate the query string — is testable
- * without stubbing `window.location`, which jsdom refuses to let anyone
- * redefine.
+ * Invitation OAuth uses a body POST instead; this function deliberately returns
+ * only the endpoint path for that purpose and never serializes its token.
  */
 export function googleStartUrl(purpose: OAuthPurpose, invite?: string): string {
+  if (purpose === 'accept_invite') return '/api/auth/oauth/google/invite/start'
   const params = new URLSearchParams({ purpose })
-  if (invite) params.set('invite', invite)
   return `/api/auth/oauth/google/start?${params}`
 }
 
@@ -135,8 +132,28 @@ export function googleStartUrl(purpose: OAuthPurpose, invite?: string): string {
  * origin carrying cookies the server sets, and an XHR could neither follow the
  * cross-origin hop nor let the user see what they are consenting to.
  */
-export function startGoogleOAuth(purpose: OAuthPurpose, invite?: string): void {
-  window.location.assign(googleStartUrl(purpose, invite))
+export async function startGoogleOAuth(purpose: OAuthPurpose, invite?: string): Promise<void> {
+  if (purpose === 'accept_invite') {
+    const { data } = await http.post<{ redirect_url: string }>(googleStartUrl(purpose), {
+      invite: invite ?? '',
+    })
+    navigateToOAuth(data.redirect_url)
+    return
+  }
+  navigateToOAuth(googleStartUrl(purpose))
+}
+
+export function navigateToOAuth(url: string): void {
+  window.location.assign(url)
+}
+
+/** Proves the current credentials and returns Google's server-built URL. */
+export async function beginGoogleLink(currentPassword: string, code = ''): Promise<string> {
+  const { data } = await http.post<{ redirect_url: string }>('/api/auth/oauth/google/start', {
+    current_password: currentPassword,
+    code,
+  })
+  return data.redirect_url
 }
 
 /** Confirms the current password, attaching Google and retiring the password. */

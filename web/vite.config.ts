@@ -62,7 +62,7 @@ export default defineConfig(({ mode }) => {
       }),
     ],
     server: {
-      host: '0.0.0.0',
+      host: env.VITE_DEV_LAN === '1' ? '0.0.0.0' : '127.0.0.1',
       port: 9088,
       proxy: {
         '/api': { target, changeOrigin: true },

@@ -11,12 +11,14 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/folders"
+	"foldex/internal/pkg/domainerr"
 	"foldex/internal/testdb"
 
 	"foldex/internal/pkg/authctx"
@@ -428,4 +430,205 @@ func TestHandler_Unlock_ForeignAttemptsCannotLockTheOwnerOut(t *testing.T) {
 	// Alice's budget must be untouched: the correct password still unlocks.
 	rr := doJSON(t, routerFor(alice), http.MethodPost, path, map[string]string{"password": pw})
 	require.Equal(t, http.StatusOK, rr.Code, "alice must not be locked out by bob's attempts")
+}
+
+func TestHandler_DeleteProtectedRequiresCurrentUnlockToken(t *testing.T) {
+	h, repo, uid := newHandlerRouter(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{name: "keep_contents"},
+		{name: "cascade", query: "?cascade=1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			password := "delete-secret"
+			folder, err := repo.Create(ctx, uid, folders.CreateInput{
+				Name: "Protected " + tc.name, Color: "#abc", Password: &password,
+			})
+			require.NoError(t, err)
+			path := "/folders/" + strconv.FormatInt(folder.ID, 10) + tc.query
+
+			rr := doJSON(t, h, http.MethodDelete, path, nil)
+			require.Equal(t, http.StatusForbidden, rr.Code)
+			assertErrorCode(t, rr, "folder_locked")
+			_, err = repo.Get(ctx, uid, folder.ID)
+			require.NoError(t, err, "missing proof must not delete the folder")
+
+			req := httptest.NewRequest(http.MethodDelete, path, nil)
+			req.Header.Set(folders.UnlockHeader, "invalid-token")
+			rr = httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			require.Equal(t, http.StatusForbidden, rr.Code)
+			assertErrorCode(t, rr, "folder_locked")
+
+			hash, err := repo.PasswordHashFor(ctx, uid, folder.ID)
+			require.NoError(t, err)
+			require.NotNil(t, hash)
+			req = httptest.NewRequest(http.MethodDelete, path, nil)
+			req.Header.Set(folders.UnlockHeader, folders.IssueUnlockToken(testUnlockKey, folder.ID, *hash))
+			rr = httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			require.Equal(t, http.StatusNoContent, rr.Code)
+			_, err = repo.Get(ctx, uid, folder.ID)
+			assert.ErrorIs(t, err, domainerr.ErrNotFound)
+		})
+	}
+}
+
+func TestHandler_DeleteCascadeRejectsProtectedDescendants(t *testing.T) {
+	h, repo, uid := newHandlerRouter(t)
+	ctx := context.Background()
+	root, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Open root", Color: "#abc"})
+	require.NoError(t, err)
+	password := "child-secret"
+	child, err := repo.Create(ctx, uid, folders.CreateInput{
+		Name: "Protected child", Color: "#def", ParentID: &root.ID, Password: &password,
+	})
+	require.NoError(t, err)
+
+	rr := doJSON(t, h, http.MethodDelete,
+		"/folders/"+strconv.FormatInt(root.ID, 10)+"?cascade=1", nil)
+	require.Equal(t, http.StatusConflict, rr.Code)
+	var out struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+		Count int64 `json:"count"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &out))
+	assert.Equal(t, "descendant_protected", out.Error.Code)
+	assert.EqualValues(t, 1, out.Count)
+
+	_, err = repo.Get(ctx, uid, root.ID)
+	require.NoError(t, err, "a rejected cascade must keep the root")
+	_, err = repo.Get(ctx, uid, child.ID)
+	require.NoError(t, err, "a rejected cascade must keep protected descendants")
+}
+
+func TestHandler_DeleteRejectsAPIToken(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	repo := folders.NewRepository(pool)
+	password := "delete-secret"
+	folder, err := repo.Create(context.Background(), uid, folders.CreateInput{
+		Name: "Protected", Color: "#abc", Password: &password,
+	})
+	require.NoError(t, err)
+	hash, err := repo.PasswordHashFor(context.Background(), uid, folder.ID)
+	require.NoError(t, err)
+	require.NotNil(t, hash)
+
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			principal := authctx.Principal{UserID: uid, Role: authctx.RoleAdmin, Via: authctx.ViaAPIToken}
+			next.ServeHTTP(w, req.WithContext(authctx.WithPrincipal(req.Context(), principal)))
+		})
+	})
+	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, fakeMaster{}).Mount)
+
+	for _, query := range []string{"", "?cascade=1"} {
+		req := httptest.NewRequest(http.MethodDelete,
+			"/folders/"+strconv.FormatInt(folder.ID, 10)+query, nil)
+		req.Header.Set(folders.UnlockHeader, folders.IssueUnlockToken(testUnlockKey, folder.ID, *hash))
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusForbidden, rr.Code)
+		assertErrorCode(t, rr, "token_scope")
+		_, err = repo.Get(context.Background(), uid, folder.ID)
+		require.NoError(t, err, "API token rejection must happen before deletion")
+	}
+}
+
+func TestHandler_DeleteCrossUserIsNotFoundAndOpenFolderStillDeletes(t *testing.T) {
+	pool := testdb.Shared(t)
+	alice := testdb.SeedUser(t, pool, "alice@test.local", "user")
+	bob := testdb.SeedUser(t, pool, "bob@test.local", "user")
+	repo := folders.NewRepository(pool)
+	folder, err := repo.Create(context.Background(), alice, folders.CreateInput{Name: "Open", Color: "#abc"})
+	require.NoError(t, err)
+	h := folders.NewHandler(repo, testUnlockKey, fakeMaster{})
+	routerFor := func(uid authctx.UserID) http.Handler {
+		r := chi.NewRouter()
+		r.Use(authctxtest.Middleware(uid))
+		r.Route("/folders", h.Mount)
+		return r
+	}
+
+	path := "/folders/" + strconv.FormatInt(folder.ID, 10)
+	rr := doJSON(t, routerFor(bob), http.MethodDelete, path, nil)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	_, err = repo.Get(context.Background(), alice, folder.ID)
+	require.NoError(t, err, "cross-user DELETE must not mutate the owner's folder")
+
+	rr = doJSON(t, routerFor(bob), http.MethodDelete, path+"?cascade=1", nil)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	_, err = repo.Get(context.Background(), alice, folder.ID)
+	require.NoError(t, err, "cross-user cascade DELETE must not mutate the owner's folder")
+
+	rr = doJSON(t, routerFor(alice), http.MethodDelete, path, nil)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+}
+
+func TestHandler_DeletePasswordCheckAndMutationAreAtomic(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	repo := folders.NewRepository(pool)
+	oldPassword := "old-password"
+	folder, err := repo.Create(context.Background(), uid, folders.CreateInput{
+		Name: "Protected", Color: "#abc", Password: &oldPassword,
+	})
+	require.NoError(t, err)
+	oldHash, err := repo.PasswordHashFor(context.Background(), uid, folder.ID)
+	require.NoError(t, err)
+	require.NotNil(t, oldHash)
+	oldToken := folders.IssueUnlockToken(testUnlockKey, folder.ID, *oldHash)
+	newHash, err := folders.HashPassword("new-password")
+	require.NoError(t, err)
+
+	changeTx, err := pool.Begin(context.Background())
+	require.NoError(t, err)
+	defer changeTx.Rollback(context.Background())
+	_, err = changeTx.Exec(context.Background(),
+		`UPDATE folder SET password_hash = $3 WHERE user_id = $1 AND id = $2`, int64(uid), folder.ID, newHash)
+	require.NoError(t, err)
+
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
+	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, fakeMaster{}).Mount)
+	result := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodDelete, "/folders/"+strconv.FormatInt(folder.ID, 10), nil)
+		req.Header.Set(folders.UnlockHeader, oldToken)
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		result <- rr
+	}()
+
+	require.Eventually(t, func() bool {
+		var waiting bool
+		err := pool.QueryRow(context.Background(), `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE datname = current_database()
+				  AND pid <> pg_backend_pid()
+				  AND wait_event_type = 'Lock'
+				  AND query ILIKE '%folder%'
+			)`).Scan(&waiting)
+		return err == nil && waiting
+	}, 2*time.Second, 10*time.Millisecond, "DELETE should wait on the password-change row lock")
+	require.NoError(t, changeTx.Commit(context.Background()))
+
+	select {
+	case rr := <-result:
+		require.Equal(t, http.StatusForbidden, rr.Code)
+		assertErrorCode(t, rr, "folder_locked")
+	case <-time.After(2 * time.Second):
+		t.Fatal("DELETE did not finish after password change committed")
+	}
+	_, err = repo.Get(context.Background(), uid, folder.ID)
+	require.NoError(t, err, "stale unlock token must not delete after a concurrent password change")
 }

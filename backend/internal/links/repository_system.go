@@ -13,16 +13,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"foldex/internal/folders"
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/domainerr"
 )
 
 // ClickAndResolve appends a row to click_log and returns the destination URL.
-// Used by /go/{id}; returns httperr.ErrNotFound when no link matches.
+// Used by /go/{id}; returns domainerr.ErrNotFound when no link matches.
 //
 // click_log is the only writer for click data — there's no longer a
 // denormalized counter on `link`, so this is a single INSERT (counter views
@@ -55,7 +56,7 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg
         SELECT l.id, l.user_id, l.url FROM link l
         WHERE `+where+` AND `+folders.SQLNotInLockedFolder("l"), arg).Scan(&id, &owner, &u)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", httperr.ErrNotFound
+		return "", domainerr.ErrNotFound
 	}
 	if err != nil {
 		return "", fmt.Errorf("resolve link: %w", err)
@@ -80,7 +81,7 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg
 // concurrent UpdateOGImage).
 //
 // Terminal statuses (ok/failed) only apply while preview_status is still
-// 'pending' (CAS — RACE-HER-009). A concurrent refreshPreview that already
+// 'pending'. A concurrent refreshPreview that already
 // flipped back to pending keeps its turn; a stale worker finishing after a
 // newer job was re-enqueued cannot overwrite a non-pending status. Setting
 // pending itself is unconditional so refresh/retry always restarts the poll.
@@ -102,6 +103,30 @@ func (r *Repository) SystemUpdatePreview(ctx context.Context, id int64, status P
 	}
 	_, err := r.pool.Exec(ctx, q, status, favicon, ogImage, description, errMsg, id)
 	return err
+}
+
+// SystemUpdatePreviewIfUnchanged prevents an older fetch from overwriting a
+// refresh or edit that landed while network work was in progress.
+func (r *Repository) SystemUpdatePreviewIfUnchanged(ctx context.Context, id int64, expectedUpdatedAt time.Time, status PreviewStatus, favicon, ogImage, description, errMsg *string) (bool, error) {
+	if !status.Valid() {
+		return false, fmt.Errorf("invalid conditional preview status %q", status)
+	}
+	ct, err := r.pool.Exec(ctx, `
+		UPDATE link
+		SET preview_status = $1,
+		    favicon_url    = COALESCE($2, favicon_url),
+		    og_image_url   = COALESCE(NULLIF(og_image_url, ''), $3),
+		    description    = COALESCE($4, description),
+		    preview_error  = $5,
+		    updated_at     = now()
+		WHERE id = $6
+		  AND updated_at = $7
+		  AND preview_status = 'pending'
+	`, status, favicon, ogImage, description, errMsg, id, expectedUpdatedAt)
+	if err != nil {
+		return false, fmt.Errorf("conditionally update preview: %w", err)
+	}
+	return ct.RowsAffected() == 1, nil
 }
 
 // FindDueForCheck returns link IDs whose check_interval has elapsed since
@@ -169,7 +194,7 @@ func (r *Repository) SystemGet(ctx context.Context, id int64) (Link, error) {
 	var l Link
 	err := scanLink(r.pool.QueryRow(ctx, `SELECT `+linkColumns+linkFrom+` WHERE l.id = $1`, id), &l)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Link{}, httperr.ErrNotFound
+		return Link{}, domainerr.ErrNotFound
 	}
 	if err != nil {
 		return Link{}, fmt.Errorf("system get link: %w", err)
@@ -178,10 +203,63 @@ func (r *Repository) SystemGet(ctx context.Context, id int64) (Link, error) {
 	return l, nil
 }
 
-// SystemUpdateOGImage is the preview worker's screenshot-fallback writer. The
-// worker reached this id through its own pending sweep, so there is no session
-// to scope by; the user-facing sibling is UpdateOGImage.
-func (r *Repository) SystemUpdateOGImage(ctx context.Context, id int64, imageURL string) error {
+// PreviewWork is the narrow projection required by the preview worker. Keeping
+// it separate avoids the click-log aggregate in the full Link projection.
+type PreviewWork struct {
+	URL           string
+	OGImageURL    *string
+	PreviewStatus PreviewStatus
+	UpdatedAt     time.Time
+}
+
+func (r *Repository) SystemGetPreview(ctx context.Context, id int64) (PreviewWork, error) {
+	var work PreviewWork
+	err := r.pool.QueryRow(ctx, `
+		SELECT url, og_image_url, preview_status, updated_at
+		FROM link
+		WHERE id = $1
+	`, id).Scan(&work.URL, &work.OGImageURL, &work.PreviewStatus, &work.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PreviewWork{}, domainerr.ErrNotFound
+	}
+	if err != nil {
+		return PreviewWork{}, fmt.Errorf("system get preview: %w", err)
+	}
+	return work, nil
+}
+
+// SystemPendingPreviewIDs is the process-wide recovery projection for the
+// preview worker. It is intentionally unscoped and returns no user data.
+func (r *Repository) SystemPendingPreviewIDs(ctx context.Context, limit int) ([]int64, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id
+		FROM link
+		WHERE preview_status = 'pending'
+		ORDER BY id ASC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("system list pending previews: %w", err)
+	}
+	defer rows.Close()
+	ids := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("system scan pending preview: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("system list pending previews: %w", err)
+	}
+	return ids, nil
+}
+
+// SystemUpdateOGImage is the preview worker's screenshot-fallback writer. It
+// applies only if the row is unchanged since the worker's final pre-capture
+// read and still has no image, so a manual upload or newer preview job wins.
+func (r *Repository) SystemUpdateOGImage(ctx context.Context, id int64, imageURL string, expectedUpdatedAt time.Time) (bool, error) {
 	ct, err := r.pool.Exec(ctx, `
         UPDATE link
         SET og_image_url   = $1,
@@ -189,14 +267,33 @@ func (r *Repository) SystemUpdateOGImage(ctx context.Context, id int64, imageURL
             preview_error  = NULL,
             updated_at     = now()
         WHERE id = $2
-    `, imageURL, id)
+	      AND updated_at = $3
+	      AND preview_status = 'pending'
+	      AND COALESCE(og_image_url, '') = ''
+    `, imageURL, id, expectedUpdatedAt)
 	if err != nil {
-		return fmt.Errorf("system update og_image_url: %w", err)
+		return false, fmt.Errorf("system update og_image_url: %w", err)
 	}
-	if ct.RowsAffected() == 0 {
-		return httperr.ErrNotFound
+	return ct.RowsAffected() == 1, nil
+}
+
+// SystemFinishScreenshotFallback releases pending UI state only if no newer
+// write occurred after the fallback's final pre-capture read.
+func (r *Repository) SystemFinishScreenshotFallback(ctx context.Context, id int64, expectedUpdatedAt time.Time) (bool, error) {
+	ct, err := r.pool.Exec(ctx, `
+        UPDATE link
+        SET preview_status = 'ok',
+            preview_error  = NULL,
+            updated_at     = now()
+        WHERE id = $1
+          AND updated_at = $2
+          AND preview_status = 'pending'
+          AND COALESCE(og_image_url, '') = ''
+	`, id, expectedUpdatedAt)
+	if err != nil {
+		return false, fmt.Errorf("finish screenshot fallback: %w", err)
 	}
-	return nil
+	return ct.RowsAffected() == 1, nil
 }
 
 // CheckResult is the outcome of a single worker run against a link.

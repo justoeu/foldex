@@ -21,8 +21,8 @@ NEED_FOLDEX_DB := $(if $(POSTGRES_HOST),$(if $(filter db,$(POSTGRES_HOST)),yes,n
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"; printf "\nTargets:\n\n"} /^[a-zA-Z_-]+:.*?##/{printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-env: ## Create .env from .env.example if missing
-	@test -f $(ENV_FILE) || cp .env.example $(ENV_FILE)
+env: ## Create .env and persist generated local credentials if missing
+	@FOLDEX_ENV_FILE="$(ENV_FILE)" FOLDEX_ENV_TEMPLATE=".env.example" bash scripts/init-env.sh
 	@echo "$(ENV_FILE) ready"
 
 network: ## Ensure the shared `foldex` Docker network exists
@@ -131,15 +131,14 @@ test-all: test-integration test-web ## Run every test, every layer
 coverage-all: coverage-backend coverage-web ## Enforce coverage on every layer
 
 # ── Release ─────────────────────────────────────────────────────────────
-# Bumps web/package.json + extension/manifest.json, commits, and tags
-# vX.Y.Z locally. Pushing the tag is intentionally a separate manual step
-# (the script prints the exact command). The push triggers ci.yml which
-# publishes Docker images :vX.Y.Z + :vX.Y + :vX + :latest.
-release-patch: ## Bump patch (1.0.8 → 1.0.9) and tag locally
+# Bumps web/package.json + extension/manifest.json and commits. After pushing
+# main, dispatch release.yml with vX.Y.Z; the validated workflow creates the
+# tag and publishes Docker images without a tag-push trigger.
+release-patch: ## Bump patch (1.0.8 → 1.0.9) and commit locally
 	@./scripts/release.sh patch
-release-minor: ## Bump minor (1.0.8 → 1.1.0) and tag locally
+release-minor: ## Bump minor (1.0.8 → 1.1.0) and commit locally
 	@./scripts/release.sh minor
-release-major: ## Bump major (1.0.8 → 2.0.0) and tag locally
+release-major: ## Bump major (1.0.8 → 2.0.0) and commit locally
 	@./scripts/release.sh major
 
 .PHONY: help env up apps-up down stop-all nuke logs ps up-mail down-mail \

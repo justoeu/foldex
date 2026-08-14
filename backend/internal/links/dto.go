@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"foldex/internal/pkg/jsonopt"
+	"foldex/internal/pkg/listquery"
+	"foldex/internal/tags"
 )
 
 // Maximum byte lengths enforced by the Create/Update DTOs. Exported so the
@@ -23,11 +25,12 @@ type CreateInput struct {
 	Title string `json:"title"`
 	// Slug is optional on create — when nil/empty the repository derives it
 	// from Title via Slugify (with auto-suffix on collision).
-	Slug        *string `json:"slug"`
-	Description *string `json:"description"`
-	TagIDs      []int64 `json:"tag_ids"`
-	Pinned      bool    `json:"pinned"`
-	FolderID    *int64  `json:"folder_id"`
+	Slug        *string            `json:"slug"`
+	Description *string            `json:"description"`
+	TagIDs      []int64            `json:"tag_ids"`
+	PendingTags []tags.CreateInput `json:"pending_tags"`
+	Pinned      bool               `json:"pinned"`
+	FolderID    *int64             `json:"folder_id"`
 	// CheckInterval opts the link into the changecheck worker. Nil/empty =
 	// disabled. Must be one of "hourly"/"daily"/"weekly" or Validate rejects.
 	CheckInterval *string `json:"check_interval"`
@@ -55,6 +58,7 @@ func (c *CreateInput) Normalize() {
 			c.CheckInterval = &s
 		}
 	}
+	tags.NormalizeCreateInputs(c.PendingTags)
 }
 
 func (c CreateInput) Validate() error {
@@ -77,15 +81,19 @@ func (c CreateInput) Validate() error {
 	if c.CheckInterval != nil && !ValidCheckInterval(*c.CheckInterval) {
 		return errMsg("check_interval must be one of hourly, daily, weekly")
 	}
+	if err := tags.ValidateCreateInputs(c.PendingTags); err != nil {
+		return errMsg(err.Error())
+	}
 	return nil
 }
 
 type UpdateInput struct {
-	URL         *string  `json:"url"`
-	Title       *string  `json:"title"`
-	Description *string  `json:"description"`
-	TagIDs      *[]int64 `json:"tag_ids"`
-	Pinned      *bool    `json:"pinned"`
+	URL         *string            `json:"url"`
+	Title       *string            `json:"title"`
+	Description *string            `json:"description"`
+	TagIDs      *[]int64           `json:"tag_ids"`
+	PendingTags []tags.CreateInput `json:"pending_tags"`
+	Pinned      *bool              `json:"pinned"`
 	// FolderID has 3 states by intent:
 	//   field absent in JSON → don't touch
 	//   {"folder_id": N}     → assign to folder N
@@ -120,6 +128,7 @@ func (u *UpdateInput) Normalize() {
 		s := strings.TrimSpace(*u.Title)
 		u.Title = &s
 	}
+	tags.NormalizeCreateInputs(u.PendingTags)
 }
 
 func (u UpdateInput) Validate() error {
@@ -152,18 +161,13 @@ func (u UpdateInput) Validate() error {
 	if u.CheckIntervalSet && u.CheckInterval != nil && !ValidCheckInterval(*u.CheckInterval) {
 		return errMsg("check_interval must be one of hourly, daily, weekly")
 	}
+	if err := tags.ValidateCreateInputs(u.PendingTags); err != nil {
+		return errMsg(err.Error())
+	}
 	return nil
 }
 
-type ListQuery struct {
-	Q         string
-	TagIDs    []int64
-	Sort      string // created|clicks|recent
-	Limit     int
-	Offset    int
-	FolderID  *int64 // ?folder_id=N → links inside folder N
-	Ungrouped bool   // ?ungrouped=1 → links with folder_id IS NULL
-}
+type ListQuery = listquery.Params
 
 // UnmarshalJSON for UpdateInput preserves the "null vs absent" distinction
 // on `folder_id` and `slug` (both tri-state). For each: presence flips the

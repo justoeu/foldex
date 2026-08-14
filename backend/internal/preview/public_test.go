@@ -3,6 +3,7 @@ package preview
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // IsPublicURL is a thin wrapper around the SSRF helpers — these checks lock in
@@ -43,12 +44,15 @@ func TestIsPublicURL_RejectsEmptyHost(t *testing.T) {
 func TestIsPublicURL_RejectsUnresolvableHost(t *testing.T) {
 	// A guaranteed-NXDOMAIN host (see RFC 6761 §6.4). LookupIP returns an
 	// error, which is the same outcome as no IPs — fallback must skip.
-	if IsPublicURL(context.Background(), "http://nx.invalid./") {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if IsPublicURL(ctx, "http://nx.invalid./") {
 		t.Fatalf("invalid TLD must be rejected (lookup fails)")
 	}
 }
 
 func TestIsPublicURL_RejectsRFC1918(t *testing.T) {
+	t.Setenv("PREVIEW_STRICT_SSRF", "")
 	for _, u := range []string{
 		"http://10.0.0.5/",
 		"http://192.168.1.10/",
@@ -56,6 +60,17 @@ func TestIsPublicURL_RejectsRFC1918(t *testing.T) {
 	} {
 		if IsPublicURL(context.Background(), u) {
 			t.Fatalf("%s must be rejected as private", u)
+		}
+	}
+}
+
+func TestIsPublicURL_RejectsRFC6598(t *testing.T) {
+	for _, u := range []string{
+		"http://100.64.0.1/",
+		"http://100.127.255.254/",
+	} {
+		if IsPublicURL(context.Background(), u) {
+			t.Fatalf("%s must be rejected as RFC6598 shared address space", u)
 		}
 	}
 }

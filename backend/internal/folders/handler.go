@@ -11,6 +11,7 @@ import (
 
 	"foldex/internal/pkg/attemptlimit"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
 )
 
@@ -24,10 +25,11 @@ type MasterPasswordVerifier interface {
 }
 
 type Handler struct {
-	repo      *Repository
-	unlockKey []byte
-	master    MasterPasswordVerifier
-	limiter   *attemptlimit.Limiter
+	repo        *Repository
+	contentGate ContentGate
+	unlockKey   []byte
+	master      MasterPasswordVerifier
+	limiter     *attemptlimit.Limiter
 }
 
 // NewHandler takes the folder-unlock-token HMAC secret (see
@@ -35,7 +37,10 @@ type Handler struct {
 // verify tokens for the /unlock endpoint, plus a MasterPasswordVerifier used
 // only by the master-password recovery route.
 func NewHandler(repo *Repository, unlockKey []byte, master MasterPasswordVerifier) *Handler {
-	return &Handler{repo: repo, unlockKey: unlockKey, master: master, limiter: newUnlockLimiter()}
+	return &Handler{
+		repo: repo, contentGate: NewContentGate(repo, unlockKey), unlockKey: unlockKey,
+		master: master, limiter: newUnlockLimiter(),
+	}
 }
 
 func (h *Handler) Mount(r chi.Router) {
@@ -43,30 +48,15 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Post("/", h.create)
 	r.Get("/{id}", h.get)
 	r.Patch("/{id}", h.update)
-	r.Delete("/{id}", h.delete)
-	// Folder CRUD is content and stays token-reachable. These two are not:
+	r.With(authgate.RejectAPIToken).Delete("/{id}", h.delete)
+	// Folder CRUD is content and stays token-reachable except DELETE, which can
+	// destroy a protected subtree. These password-sensitive routes are not:
 	// unlock verifies a password (and is the brute-force surface the rate
 	// limiter exists for), and reset-password clears one after checking the
 	// master. A credential presented by a script, with no human present and no
 	// step-up available, must not drive either.
-	r.With(refuseAPIToken).Post("/{id}/unlock", h.unlock)
-	r.With(refuseAPIToken).Post("/{id}/reset-password", h.resetPassword)
-}
-
-// refuseAPIToken blocks bearer credentials on the folder-password routes.
-//
-// Declared here rather than reused from internal/auth because folders must not
-// import auth (see MasterPasswordVerifier for the same reason); authctx is a
-// leaf and carries everything the check needs.
-func refuseAPIToken(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if p, ok := authctx.FromContext(r.Context()); ok && p.Via == authctx.ViaAPIToken {
-			httperr.Write(w, httperr.New(http.StatusForbidden, "token_scope",
-				"an API token cannot be used on this endpoint"))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	r.With(authgate.RejectAPIToken).Post("/{id}/unlock", h.unlock)
+	r.With(authgate.RejectAPIToken).Post("/{id}/reset-password", h.resetPassword)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -92,17 +82,17 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	// Re-check after List closes the password-change TOCTOU window (RACE-HER-005).
 	if q.ParentID != nil {
 		token := r.Header.Get(UnlockHeader)
-		if err := h.enforceFolderUnlock(r.Context(), *q.ParentID, token); err != nil {
-			httperr.Write(w, err)
+		if err := h.contentGate.Check(r.Context(), authctx.MustUser(r.Context()), *q.ParentID, token); err != nil {
+			httperr.Write(w, HTTPError(err))
 			return
 		}
 		out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()), q)
 		if err != nil {
-			httperr.Write(w, err)
+			httperr.Write(w, HTTPError(err))
 			return
 		}
-		if err := h.enforceFolderUnlock(r.Context(), *q.ParentID, token); err != nil {
-			httperr.Write(w, err)
+		if err := h.contentGate.Check(r.Context(), authctx.MustUser(r.Context()), *q.ParentID, token); err != nil {
+			httperr.Write(w, HTTPError(err))
 			return
 		}
 		httperr.JSON(w, http.StatusOK, out)
@@ -110,18 +100,10 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()), q)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, HTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, out)
-}
-
-func (h *Handler) enforceFolderUnlock(ctx context.Context, folderID int64, token string) error {
-	hash, err := h.repo.PasswordHashFor(ctx, authctx.MustUser(ctx), folderID)
-	if err != nil {
-		return err
-	}
-	return CheckUnlock(h.unlockKey, folderID, hash, token)
 }
 
 type unlockInput struct {
@@ -151,6 +133,11 @@ type unlockLockedOutput struct {
 	Error             errEnvelope `json:"error"`
 	LockedUntil       time.Time   `json:"locked_until"`
 	RetryAfterSeconds int         `json:"retry_after_seconds"`
+}
+
+type descendantProtectedOutput struct {
+	Error errEnvelope `json:"error"`
+	Count int64       `json:"count"`
 }
 
 func (h *Handler) writeLocked(w http.ResponseWriter, until time.Time) {
@@ -191,7 +178,7 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 	// ones would trip an hour-long lockout on a folder the caller does not own.
 	hash, err := h.repo.PasswordHashFor(r.Context(), authctx.MustUser(r.Context()), id)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, HTTPError(err))
 		return
 	}
 	if hash == nil {
@@ -265,7 +252,7 @@ func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.repo.ResetPasswordByMaster(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, HTTPError(err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -289,7 +276,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := h.repo.Create(r.Context(), authctx.MustUser(r.Context()), in)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, HTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusCreated, f)
@@ -303,7 +290,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, HTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, f)
@@ -332,7 +319,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, HTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, f)
@@ -351,13 +338,21 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		cascade = true
 	}
 	if cascade {
-		if err := h.repo.DeleteCascade(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
-			httperr.Write(w, err)
+		if err := h.repo.DeleteCascade(r.Context(), authctx.MustUser(r.Context()), id, h.unlockKey, r.Header.Get(UnlockHeader)); err != nil {
+			var protected *descendantProtectedError
+			if errors.As(err, &protected) {
+				httperr.JSON(w, http.StatusConflict, descendantProtectedOutput{
+					Error: errEnvelope{Code: "descendant_protected", Message: protected.Error()},
+					Count: protected.Count,
+				})
+				return
+			}
+			httperr.Write(w, HTTPError(err))
 			return
 		}
 	} else {
-		if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
-			httperr.Write(w, err)
+		if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id, h.unlockKey, r.Header.Get(UnlockHeader)); err != nil {
+			httperr.Write(w, HTTPError(err))
 			return
 		}
 	}

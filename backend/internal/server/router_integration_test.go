@@ -10,15 +10,20 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"foldex/internal/auth"
 	"foldex/internal/config"
+	"foldex/internal/folders"
+	"foldex/internal/links"
+	"foldex/internal/notes"
 	"foldex/internal/server"
 	"foldex/internal/testdb"
-	"os"
 )
 
 // TestMain owns the lifetime of this package's shared Postgres container.
@@ -85,6 +90,243 @@ func TestServerNewPanicsWhenScreenshotterMissingPolicy(t *testing.T) {
 	})
 }
 
+func TestFolderScopedContentResponseMatrixAcrossAuthModes(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	ctx := context.Background()
+	unlockKey := []byte("01234567890123456789012345678901")
+	password := "a good folder password"
+
+	frepo := folders.NewRepository(pool)
+	folder, err := frepo.Create(ctx, uid, folders.CreateInput{
+		Name: "Private", Color: "#6366F1", Password: &password,
+	})
+	require.NoError(t, err)
+	_, err = links.NewRepository(pool).Create(ctx, uid, links.CreateInput{
+		URL: "https://private.example", Title: "Link secret", FolderID: &folder.ID,
+	})
+	require.NoError(t, err)
+	_, err = notes.NewRepository(pool).Create(ctx, uid, notes.CreateInput{
+		Title: "Note secret", BodyHTML: "<p>private</p>", FolderID: &folder.ID,
+	})
+	require.NoError(t, err)
+	hash, err := frepo.PasswordHashFor(ctx, uid, folder.ID)
+	require.NoError(t, err)
+	require.NotNil(t, hash)
+	validUnlock := folders.IssueUnlockToken(unlockKey, folder.ID, *hash)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	authRepo := auth.NewRepository(pool)
+	issued, err := authRepo.CreateAPIToken(ctx, uid, "integration", time.Hour)
+	require.NoError(t, err)
+
+	for _, mode := range []struct {
+		name          string
+		authEnabled   bool
+		middleware    *auth.Middleware
+		authorization string
+	}{
+		{name: "auth disabled"},
+		{
+			name: "auth enabled API token", authEnabled: true,
+			middleware:    auth.NewMiddleware(authRepo, auth.CookieOptions{}, logger, false),
+			authorization: "Bearer " + issued.Token,
+		},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			router := server.New(server.Deps{
+				Pool: pool, Worker: nopWorker{}, Logger: logger,
+				Config:         config.Config{AuthEnabled: mode.authEnabled, CORSOrigins: []string{"http://localhost:9088"}},
+				AuthMiddleware: mode.middleware, FolderUnlockKey: unlockKey,
+			})
+
+			for _, endpoint := range []struct {
+				path, marker string
+			}{
+				{path: "/api/links?folder_id=" + intToStr(folder.ID), marker: "Link secret"},
+				{path: "/api/notes?folder_id=" + intToStr(folder.ID), marker: "Note secret"},
+				{path: "/api/entries?folder_id=" + intToStr(folder.ID), marker: "Link secret"},
+			} {
+				for _, proof := range []struct {
+					name, token string
+					want        int
+				}{
+					{name: "missing unlock", want: http.StatusForbidden},
+					{name: "invalid unlock", token: "invalid", want: http.StatusForbidden},
+					{name: "valid unlock", token: validUnlock, want: http.StatusOK},
+				} {
+					t.Run(endpoint.path+" "+proof.name, func(t *testing.T) {
+						req := httptest.NewRequest(http.MethodGet, endpoint.path, nil)
+						if mode.authorization != "" {
+							req.Header.Set("Authorization", mode.authorization)
+						}
+						if proof.token != "" {
+							req.Header.Set(folders.UnlockHeader, proof.token)
+						}
+						rec := httptest.NewRecorder()
+
+						router.ServeHTTP(rec, req)
+
+						assert.Equal(t, proof.want, rec.Code, rec.Body.String())
+						if proof.want == http.StatusOK {
+							assert.Contains(t, rec.Body.String(), endpoint.marker)
+						} else {
+							assert.Contains(t, rec.Body.String(), "folder_locked")
+							assert.NotContains(t, rec.Body.String(), endpoint.marker)
+						}
+					})
+				}
+			}
+
+			req := httptest.NewRequest(http.MethodGet,
+				"/api/entries?folder_id="+intToStr(folder.ID), nil)
+			req.Header.Set(folders.UnlockHeader, validUnlock)
+			if !mode.authEnabled {
+				req.Header.Set("Authorization", "Bearer ignored-while-auth-is-disabled")
+			}
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if mode.authEnabled {
+				assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			} else {
+				assert.Equal(t, http.StatusOK, rec.Code)
+			}
+		})
+	}
+}
+
+func TestAdminGateResponseMatrixAcrossAuthModes(t *testing.T) {
+	pool := testdb.Shared(t)
+	adminID := testdb.SeedUser(t, pool, "admin@test.local", "admin")
+	userID := testdb.SeedUser(t, pool, "user@test.local", "user")
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	repo := auth.NewRepository(pool)
+	adminHandler := auth.NewAdminHandler(repo, nil, nil, logger, "http://localhost:9088")
+	adminToken, err := repo.CreateAPIToken(ctx, adminID, "admin", time.Hour)
+	require.NoError(t, err)
+	userToken, err := repo.CreateAPIToken(ctx, userID, "user", time.Hour)
+	require.NoError(t, err)
+
+	authOff := server.New(server.Deps{
+		Pool: pool, Logger: logger, Config: config.Config{CORSOrigins: []string{"http://localhost:9088"}},
+		AdminHandler: adminHandler,
+	})
+	middleware := auth.NewMiddleware(repo, auth.CookieOptions{}, logger, false)
+	authOn := server.New(server.Deps{
+		Pool: pool, Logger: logger,
+		Config:       config.Config{AuthEnabled: true, CORSOrigins: []string{"http://localhost:9088"}},
+		AdminHandler: adminHandler, AuthMiddleware: middleware,
+	})
+
+	for _, tc := range []struct {
+		name, authorization, code string
+		router                    http.Handler
+		want                      int
+	}{
+		{name: "auth disabled bootstrap admin", router: authOff, want: http.StatusOK},
+		{name: "auth enabled missing credential", router: authOn, want: http.StatusUnauthorized, code: "unauthorized"},
+		{name: "non-admin API token stays hidden", router: authOn, authorization: "Bearer " + userToken.Token, want: http.StatusNotFound, code: "not_found"},
+		{name: "admin API token is out of scope", router: authOn, authorization: "Bearer " + adminToken.Token, want: http.StatusForbidden, code: "token_scope"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
+			if tc.authorization != "" {
+				req.Header.Set("Authorization", tc.authorization)
+			}
+			rec := httptest.NewRecorder()
+
+			tc.router.ServeHTTP(rec, req)
+
+			assert.Equal(t, tc.want, rec.Code, rec.Body.String())
+			if tc.code != "" {
+				assert.Contains(t, rec.Body.String(), `"code":"`+tc.code+`"`)
+			}
+		})
+	}
+}
+
+func TestAdminGateRechecksLiveTOTPState(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "admin@test.local", "admin")
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	repo := auth.NewRepository(pool)
+	tokens, _, err := repo.IssueSession(ctx, uid, 0, auth.DefaultTTL(), "", "")
+	require.NoError(t, err)
+	router := server.New(server.Deps{
+		Pool: pool, Logger: logger,
+		Config:         config.Config{AuthEnabled: true, CORSOrigins: []string{"http://localhost:9088"}},
+		AdminHandler:   auth.NewAdminHandler(repo, nil, nil, logger, "http://localhost:9088"),
+		AuthMiddleware: auth.NewMiddleware(repo, auth.CookieOptions{}, logger, true),
+	})
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
+		req.AddCookie(&http.Cookie{Name: auth.CookieAccess, Value: tokens.Access})
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := request()
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "admin_2fa_required")
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO totp_secret (user_id, secret_ciphertext, secret_nonce, confirmed_at)
+		VALUES ($1, $2, $3, now())`, int64(uid), []byte("ciphertext"), []byte("nonce"))
+	require.NoError(t, err)
+
+	rec = request()
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+}
+
+func TestNoteMediaRoute_AllowsAnonymousReadWithoutExposingLinkMedia(t *testing.T) {
+	pool := testdb.Shared(t)
+	_ = testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	router := server.New(server.Deps{
+		Pool:   pool,
+		Worker: nopWorker{},
+		Logger: logger,
+		Config: config.Config{
+			AuthEnabled:  true,
+			CORSOrigins:  []string{"http://localhost:9088"},
+			SharedSecret: "topsecret",
+		},
+		AuthMiddleware: auth.NewMiddleware(auth.NewRepository(pool), auth.CookieOptions{}, logger, false),
+		Screenshotter:  stubScreenshotter{},
+		Storage:        stubStorage{},
+		ScreenshotURL:  func(context.Context, string) bool { return true },
+	})
+
+	noteReq := httptest.NewRequest(http.MethodGet,
+		"/api/files/notes/8bcb9d80-8212-4ef3-a6a8-24f9471cf90e.jpg", nil)
+	noteRec := httptest.NewRecorder()
+	router.ServeHTTP(noteRec, noteReq)
+	assert.Equal(t, http.StatusOK, noteRec.Code)
+
+	for _, path := range []string{
+		"/api/files/images/1.jpg",
+		"/api/files/screenshots/1.jpg",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, "path %s must remain secret-gated", path)
+	}
+
+	for _, path := range []string{
+		"/api/files/notes/not-a-uuid.jpg",
+		"/api/files/notes/%2e%2e%2fimages%2f1.jpg",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusNotFound, rec.Code, "path %s must fail closed", path)
+	}
+}
+
 type stubScreenshotter struct{}
 
 func (stubScreenshotter) Capture(_ context.Context, _ string) ([]byte, error) { return nil, nil }
@@ -93,7 +335,7 @@ type stubStorage struct{}
 
 func (stubStorage) Upload(_ context.Context, _ string, _ []byte, _ string) error { return nil }
 func (stubStorage) GetObject(_ context.Context, _ string) ([]byte, string, error) {
-	return nil, "", nil
+	return []byte("\x89PNG\r\n\x1a\n"), "image/png", nil
 }
 func (stubStorage) DeleteObject(_ context.Context, _ string) error { return nil }
 

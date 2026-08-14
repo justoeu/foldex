@@ -38,7 +38,7 @@ services:
       - "no-new-privileges:true"
     environment:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ROOT_ACCESS_KEY:-rustfsadmin}
-      RUSTFS_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:?run make env to generate RustFS credentials}
       RUSTFS_ADDRESS: 0.0.0.0:9000
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
       RUSTFS_CONSOLE_ENABLE: "true"
@@ -84,12 +84,13 @@ services:
       RUSTFS_ENDPOINT: rustfs:9000
       RUSTFS_USE_SSL: "false"
       RUSTFS_ROOT_ACCESS_KEY: ${RUSTFS_ROOT_ACCESS_KEY:-rustfsadmin}
-      RUSTFS_ROOT_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:-rustfsadmin}
+      RUSTFS_ROOT_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:?run make env to generate RustFS credentials}
       # App principal the backend will use.
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-foldex}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-foldex-change-me}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?run make env to generate RustFS credentials}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-foldex-screenshots}
       RUSTFS_APP_POLICY: ${RUSTFS_APP_POLICY:-foldex-app}
+      RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS: ${RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS:-0}
     networks:
       foldex:
         aliases: [rustfs-init]
