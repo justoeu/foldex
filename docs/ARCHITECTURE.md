@@ -38,6 +38,23 @@
 
 Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `127.0.0.1` por default. O changecheck worker e o push sender são goroutines in-process no mesmo binário do backend (nenhum broker externo).
 
+Defaults sensíveis falham fechados. O Vite de desenvolvimento também binda
+`127.0.0.1`; `VITE_DEV_LAN=1` é o opt-in explícito para `0.0.0.0`. `make env`
+gera uma vez e persiste no `.env` (0600, sem logar valores) segredos RustFS root
+e app independentes; Compose exige ambos e o bootstrap recusa os placeholders
+históricos fora de `RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS=1`. A policy do app
+permite somente localização/listagem do bucket e get/put/delete/multipart de
+objetos, sem `s3:*`, ACL ou administração de policies. Release é somente
+`workflow_dispatch` carregado de `refs/heads/main`; push de tag não publica. Um
+job sem credenciais Docker Hub valida target strict semver ou SHA completo,
+prova ancestralidade em `origin/main`, exige semver igual aos dois manifests e
+recusa tags preexistentes. A tag só é criada depois dos dois manifests serem
+publicados pelos jobs aprovados no environment GitHub `release`; publishers fazem
+checkout do SHA validado e recebem ali os segredos Docker Hub
+e exigir reviewers. Não podem restar cópias desses segredos no nível do
+repositório: workflows históricos não declaram o environment e ficam sem
+credenciais mesmo se alguém fizer push de uma tag antiga.
+
 ## Stack & rationale
 
 | Camada       | Escolha                                                              | Por quê |
@@ -49,7 +66,7 @@ Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `12
 | Workers      | Goroutine pools in-process (preview, changecheck) + buffered channels | Zero dependência operacional (sem Redis/queue). |
 | Web Push     | `github.com/SherClockHolmes/webpush-go v1.4.0` + VAPID auto-gen      | RFC 8030. VAPID key persistida em `/data/vapid.json` (volume `foldex-data`), 0o600. |
 | Imagem       | `golang.org/x/image` + stdlib decoders (pure Go, sem CGO)            | Re-encode JPEG q82 + downscale Catmull-Rom + decode-bomb guard 50 MP (`internal/imageopt`). |
-| Headless     | `github.com/go-rod/rod v0.116` (Chromium)                            | Screenshot fallback quando o site não tem `og:image`. SSRF guard antes do launch. |
+| Headless     | `github.com/go-rod/rod v0.116` (Chromium)                            | Screenshot fallback quando o site não tem `og:image`. BrowserContext isolado + proxy de egress estrito por captura. |
 | Testes Go    | `testify` (unit) + `testcontainers-go v0.42` (integration, build tag)| Suite real contra Postgres efêmero; gate ≥85% (ver `CLAUDE.md`). |
 | SPA          | **Vite 8 + React 19.2 + TypeScript 6 + MUI 9**                        | MUI só pra `createTheme`/`ThemeProvider`; visual vive em `web/src/styles/foldex.css` (CSS handoff). Bundle ~80 kB. |
 | Server state | **TanStack Query 5**                                                  | Cache + invalidação por mutation + optimistic updates. |
@@ -59,7 +76,7 @@ Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `12
 | Extension    | Vanilla MV3 (sem bundler)                                            | Popup tem ~80 LoC. Sem build = "load unpacked" direto. |
 | Node runtime | **bun 1.3** (oven/bun:1.3-alpine)                                    | Bate com Vite 8 / Vitest 4 e resolve melhor packages platform-specific que npm em mirror privado. |
 
-## Data model (estado atual, após 17 migrations)
+## Data model (estado atual, após 27 migrations)
 
 ```sql
 -- 000001_init.up.sql        (+ pg_trgm)
@@ -86,6 +103,17 @@ Todos os componentes rodam num `docker-compose`. Backend e web bindam só em `12
 --   GLOBAIS porque /go/{slug} e /n/{slug} resolvem sem sessão; FKs COMPOSTAS
 --   (user_id, folder_id) impedem referência cross-tenant no próprio banco; a
 --   master password do ADR-29 migra de `app_setting` para `app_user`.
+-- 000018_click_log_user_id → dono denormalizado + guard de consistência dos writers
+-- 000019_two_factor_indexes → índices dos fluxos 2FA
+-- 000020_email_otp_code_hash_index → lookup parcial do token de verificação
+-- 000021_credential_coherence → estado OAuth no challenge + trigger de credencial ativa
+-- 000022_note_media_ownership → ownership/lease/ref owner-scoped para mídia inline de notes
+-- 000023_keyed_2fa_code_digests → MACs keyed/versionados para OTP e recovery
+-- 000024_oauth_link_step_up → state de vínculo preso a sessão/epoch/prova recente
+-- 000025_auth_challenge_credential_epoch → challenge preso ao token_version; enrollment TOTP também à sessão de Settings
+-- 000026_pending_preview_index → índice parcial do recovery sweep de previews pendentes
+-- 000027_backup_restore_ledger → checkpoint/mappings owner-scoped para skip restore convergente
+-- 000028_password_reset_credential_epoch → reset preso ao token_version vivo; NULL legado falha fechado
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -189,6 +217,26 @@ CREATE INDEX note_title_trgm ON note USING gin (title gin_trgm_ops);
 CREATE INDEX note_body_trgm  ON note USING gin (body_text gin_trgm_ops);
 CREATE INDEX note_pinned_created_idx ON note (pinned DESC, created_at DESC);
 
+-- 000022: a URL pública continua legível sem sessão, mas não concede posse.
+-- Uploads novos recebem lease; refs só podem ligar note e mídia do mesmo dono.
+-- Nenhuma linha é backfilled a partir de body_html: chaves legadas ficam
+-- servíveis e fail-closed para delete/export.
+CREATE TABLE note_media (
+  object_key       TEXT PRIMARY KEY,
+  user_id          BIGINT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+  lease_expires_at TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, object_key)
+);
+CREATE TABLE note_media_ref (
+  user_id    BIGINT NOT NULL,
+  note_id    BIGINT NOT NULL,
+  object_key TEXT NOT NULL,
+  PRIMARY KEY (note_id, object_key),
+  FOREIGN KEY (user_id, note_id) REFERENCES note(user_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id, object_key) REFERENCES note_media(user_id, object_key) ON DELETE CASCADE
+);
+
 -- 000014 polymorphizes link_tag/click_log so notes can share them without
 -- duplicating the M:N/event tables — see ADR-27. `link_id` renamed to
 -- `entity_id`, `entity_kind` discriminates ('link' | 'note'). The FK to
@@ -214,6 +262,23 @@ CREATE TABLE click_log (
 );
 CREATE INDEX click_log_clicked_at ON click_log (clicked_at DESC);
 CREATE INDEX click_log_entity_ts  ON click_log (entity_kind, entity_id, clicked_at DESC);
+
+-- 000027: skip restore identity/checkpoint, never archive-provided ownership.
+CREATE TABLE backup_restore (
+  user_id            BIGINT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+  archive_digest     BYTEA NOT NULL CHECK (octet_length(archive_digest) = 32),
+  mode               TEXT NOT NULL CHECK (mode IN ('wipe', 'skip', 'duplicate')),
+  inserted           JSONB NOT NULL,
+  skipped            JSONB NOT NULL,
+  warnings           JSONB NOT NULL,
+  file_report        JSONB,
+  db_completed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  files_completed_at TIMESTAMPTZ,
+  PRIMARY KEY (user_id, archive_digest, mode)
+);
+-- backup_restore_entity: (owner/archive/mode, kind, old id) -> fresh/current id.
+-- backup_restore_file:   (owner/archive/mode, old note key) -> fresh note key.
+-- Both child tables FK-cascade from the composite backup_restore key.
 ```
 
 Click registration is **append-only** to `click_log`. The /go handler does:
@@ -281,7 +346,8 @@ LIMIT $3 OFFSET $4;
 |        | POST   | `/api/links/{id}/screenshot`          | Captura sob demanda via Chromium headless. SSRF gate obrigatório (`links.URLPolicy`, default `preview.IsPublicURL`); rejeita scheme não-http(s) com 400 `invalid_scheme` e privado/IMDS com 400 `private_target`. Policy nil = 500 `policy_unconfigured`. |
 |        | POST   | `/api/links/{id}/image`               | Upload manual de imagem (multipart `file`). Cap de body 5 MiB; aceita `{png, jpeg, gif, webp}` (SVG cai fora). Pipeline `imageopt` re-encoda em JPEG q82, downscale ≤1024 px, decode-bomb guard 50 MP. Curto-circuita o worker. |
 |        | DELETE | `/api/links/{id}/image`               | Remove `og_image_url` + DELETE no objeto RustFS + zera `preview_status`. |
-| Files  | GET    | `/api/files/*`                        | Proxy pro RustFS. Key precisa cair em `screenshots/`/`images/` (rejeita `..` e prefixo arbitrário). `DetectContentType` no objeto servido + `X-Content-Type-Options: nosniff`. |
+| Files  | GET    | `/api/files/notes/{uuid}.{ext}`       | Leitura pública exigida por `/n/{slug}`, montada antes de `SHARED_SECRET`/sessão. Aceita só UUID canônico + extensão raster suportada; traversal, chave malformada e prefixo de link retornam 404. |
+|        | GET    | `/api/files/*`                        | Proxy autenticado pro RustFS. Key precisa cair em `screenshots/`/`images/` e provar ownership do link (rejeita `..` e prefixo arbitrário). `DetectContentType` no objeto servido + `X-Content-Type-Options: nosniff`. |
 | Tags   | GET    | `/api/tags`                           | List with `link_count`                             |
 |        | POST   | `/api/tags`                           | Body: `{name, color?, icon?}`                      |
 |        | PATCH  | `/api/tags/{id}`                      |                                                    |
@@ -292,7 +358,7 @@ LIMIT $3 OFFSET $4;
 |        | PATCH  | `/api/folders/{id}`                   | `parent_id`/`password`/`password_hint` são tri-state (absent=não toca, valor=define, null=remove). Trocar/remover uma senha JÁ existente exige `current_password` (ADR-28). `password_hint` ≠ senha (checado via bcrypt na tx); remover a senha limpa a dica (ADR-29). |
 |        | POST   | `/api/folders/{id}/unlock`            | Body: `{password}`. Verifica via bcrypt; `200 {unlock_token, expires_at}` (TTL 24h). Token inclui o `password_hash` atual no HMAC — trocar/remover a senha invalida todo token emitido antes. `400 not_protected`; `401 wrong_password` traz `failed_attempts`/`attempts_remaining`; após 5 erros seguidos → `429 too_many_attempts` com `locked_until`/`retry_after_seconds` + header `Retry-After` (bloqueio de 1h por pasta, em memória; acerto zera o contador). Detalhe: ADR-28. |
 |        | POST   | `/api/folders/{id}/reset-password`    | Body: `{master_password}`. Recuperação (ADR-29): verifica a master e **limpa** senha+dica da pasta (não abre a pasta, não emite token). `400 master_not_configured` / `401 wrong_master_password`. |
-|        | DELETE | `/api/folders/{id}`                   | Default: SET NULL em links E em subpastas (filhas viram raiz). Com `?cascade=1`: recursivo via CTE — apaga toda a subtree de pastas + links. |
+|        | DELETE | `/api/folders/{id}`                   | Default: SET NULL em links E em subpastas (filhas viram raiz). Pasta raiz protegida exige `X-Foldex-Folder-Unlock`. Com `?cascade=1`: materializa e trava a subtree owner-scoped na tx; recusa atomicamente com `409 descendant_protected` + `count` se qualquer descendente (exceto a raiz já autorizada) tiver senha; caso contrário apaga toda a subtree + links/notas. API token é recusado. |
 | Settings| GET   | `/api/settings/master-password`       | `{configured: bool}` — nunca retorna o hash (ADR-29). |
 |        | PUT    | `/api/settings/master-password`       | Body: `{password (min 8), current_password?}`. Primeiro-set não exige atual; trocar exige `current_password` (`401 wrong_password`). |
 |        | DELETE | `/api/settings/master-password`       | Body: `{current_password}`. Remove a master (`401 wrong_password` se errada; idempotente se não configurada). |
@@ -315,25 +381,43 @@ LIMIT $3 OFFSET $4;
 
 Erros em JSON uniforme: `{ "error": { "code": "not_found", "message": "..." } }`.
 
+### Fronteira de erros
+
+Persistência não conhece HTTP. Todo `repository*.go`, inclusive os arquivos
+`repository_system.go`, devolve erros semânticos de `internal/pkg/domainerr` ou
+sentinels do próprio pacote (`links.ErrURLTaken`, `notes.ErrStaleWrite`,
+`folders.ErrLocked`, etc.). Helpers usados por repositórios, como o lifecycle de
+slug, resolução de target público, tags pendentes e content gate de pastas,
+seguem a mesma regra para não reintroduzir `httperr` de forma transitiva.
+
+Somente handlers traduzem esses erros para status/code/message. As matrizes em
+`handler_error_test.go` travam os envelopes existentes, incluindo 404
+cross-tenant, conflitos de URL/slug/tag/CAS, senha de pasta e revogação de
+invite/session. `internal/security.TestRepositoriesDoNotImportHTTPDelivery`
+percorre a AST e falha se qualquer `repository*.go` de produção importar
+`net/http` ou `internal/pkg/httperr`.
+
 ## Preview worker
 
 - Implementação em `internal/preview/`:
   - `worker.go`: pool de N goroutines (`PREVIEW_WORKER_CONCURRENCY`, default 4), consome de `chan PreviewJob`.
   - `fetcher.go`: `http.Client{Timeout: 5s}`, parse HTML head com `golang.org/x/net/html` — extrai `<title>`, `meta[og:title|og:image|og:description]`, `link[rel~=icon]`.
-  - `public.go`: `IsPublicURL(ctx, url)` — gate do fallback de screenshot (resolve o host e rejeita IMDS/loopback/RFC1918/link-local/ULA).
+  - `public.go`: `IsPublicURL(ctx, url)` — gate do fallback de screenshot (resolve o host e rejeita metadata/RFC6598 e todos os ranges special-purpose da IANA).
   - `enqueue.go`: `Enqueue(linkID int64)` chamado por `links.Create` e por `POST /links/:id/refresh-preview`.
 - Side effects: `UPDATE link SET preview_status, favicon_url, og_image_url, description, preview_error, updated_at` após o fetch.
-- SSRF guard: **IMDS (`169.254.169.254`) é sempre bloqueado** (sem opt-out). Loopback, RFC1918, link-local, IPv6 ULA só são bloqueados quando `PREVIEW_STRICT_SSRF=1` no `.env`. Default = permissivo, porque intranet (Jira/Grid/Confluence) é caso de uso primário do foldex.
+- SSRF guard: ranges de metadata/credenciais cloud (EC2 IMDS, ECS, EKS Pod Identity, Alibaba e Tencent, inclusive IPv6 quando aplicável) e RFC6598 (`100.64.0.0/10`) são sempre bloqueados (sem opt-out) pela policy compartilhada em `internal/pkg/netpolicy`. O fetch HTML só bloqueia os demais ranges special-purpose da IANA, como loopback, RFC1918, benchmarking/documentação/reservado, link-local e IPv6 ULA, quando `PREVIEW_STRICT_SSRF=1`. Default = permissivo para intranets reais (Jira/Grid/Confluence), sem tratar CGNAT como internet pública.
+- Screenshot Chromium tem postura deliberadamente mais estrita que o fetch HTML: o processo é pooled, mas cada `Capture` cria um BrowserContext incognito e um proxy HTTP local exclusivos. Cada proxy limita a 32 os túneis CONNECT ativos. Um segundo proxy estrito fica no launcher da geração, pois o Chromium decide o bypass implícito de localhost no proxy global; qualquer escape do proxy do contexto cai nessa camada. Ambos usam `ProxyBypassList="<-loopback>"`, bloqueiam os registries special-purpose IPv4/IPv6 da IANA antes do dial e validam o peer TCP depois, independentemente de `PREVIEW_STRICT_SSRF`. Capturas são serializadas porque o sinal de bloqueio desse proxy global pertence à geração inteira e não pode ser atribuído com segurança entre contextos concorrentes. Chromium roda como usuário não-root com sandbox habilitado; `disable-quic`, `disable-webrtc-multiple-routes` e `force-webrtc-ip-handling-policy=disable_non_proxied_udp` fecham egress UDP direto. Qualquer request bloqueado invalida a captura inteira. Worker e endpoint compartilham uma instância explícita de `screenshot.Pool`, sem estado global de lifecycle. Fila (5 s), startup/connect e execução da captura têm budgets limitados independentes sob envelope caller de 70 s; startup ocorre fora do mutex do pool. Retirement destaca teardown rastreado da latência da captura. Shutdown recusa trabalho novo, cancela launch e capturas em andamento, aguarda 7 s e força kill/cleanup de gerações ainda abertas antes de devolver controle ao deadline global de 12 s. O pool retém launcher/PID; toda falha de launch remove o profile, e falha em connect, create/dispose de contexto ou close limitado força `Kill` + cleanup context-aware. A remoção do profile usa raiz confinada, não segue symlinks e percorre entradas em lotes limitados, checando cancelamento entre lotes.
+- Resource budgets complementam a policy: no máximo 32 conexões/CONNECT e 32 MiB agregados por proxy; CDP limita cada captura a 256 requests reais, inclusive streams HTTPS multiplexados dentro de CONNECT. Qualquer excesso invalida a captura. DNS recebe 5 s e storage pós-captura recebe 10 s próprios. A admissão manual aceita duas capturas globais e uma por usuário. A fila deduplica IDs, coalesce refresh explícito durante execução em um rerun e ignora IDs já agendados no sweep de recovery. O sweep usa uma projeção estreita sem aggregate de cliques e migration 000026 adiciona índice parcial dos pendentes. Shutdown HTTP/worker/Chromium ocorre em paralelo sob deadline global de 12 s; o pool usa 7 s de grace e força kill/cleanup antes de retornar. Erros persistidos/logados usam classificações estáveis, sem URL ou texto bruto de fetch/Chromium.
 - **Short-circuit por upload manual** (`Worker.process` no topo): se `link.og_image_url` já tem valor quando o job vira processado, o worker **pula tudo** (sem fetch HTML, sem screenshot) e só flipa `preview_status` de `pending`→`ok` se ainda estiver `pending`. É a peça que garante: upload feito enquanto o job estava na fila não dispara trabalho extra, e a label "capturando…" some.
-- **Upload manual mexe em 3 colunas no mesmo UPDATE.** `repository.UpdateOGImage` seta `og_image_url`, `preview_status='ok'` e `preview_error=NULL` atomicamente. Sem race com o worker (transação no mesmo row).
+- **Upload manual mexe em 3 colunas no mesmo swap.** `repository.ReplaceOGImage` trava a linha, devolve a URL anterior exata e seta `og_image_url`, `preview_status='ok'` e `preview_error=NULL` atomicamente. O screenshot fallback e sua convergência final exigem CAS por `updated_at` + status pending + imagem vazia; upload manual ou refresh mais novo vence, e objeto fallback superseded é removido.
 - **Screenshot fallback** (`Worker.maybeScreenshot`): após o fetch HTML, **se** `og:image` veio vazio **e** o link ainda não tem `og_image_url` (não foi feito upload manual) **e** o host resolve pra IP público (via `IsPublicURL`) **e** o worker foi inicializado com `WithScreenshotFallback(sc, up)`, então:
-  1. `sc.Capture(ctx, url)` — Chromium headless via `internal/screenshot/` (`go-rod`), viewport 1280×800
+  1. `sc.Capture(ctx, url)` — Chromium headless via `internal/screenshot/` (`go-rod`), viewport 1280×800, BrowserContext + proxy estrito exclusivos da captura
   2. `imageopt.Optimize(png, …)` — downscale ≤ 1024 px + re-encode JPEG q≈82 (ver "Pipeline de imagens" abaixo)
-  3. `up.DeleteObject(ctx, "screenshots/{id}.{png,gif,webp}")` — purga extensões legadas pra esse id
-  4. `up.Upload(ctx, "screenshots/{id}.jpg", jpg, "image/jpeg")` — RustFS
-  5. `repo.UpdateOGImage(ctx, id, "/api/files/screenshots/{id}.jpg")`
+  3. `up.Upload(ctx, "screenshots/{id}.{uuid}.jpg", jpg, "image/jpeg")` — chave exclusiva da operação
+  4. CAS publica exatamente essa URL se `updated_at`, status e imagem continuam elegíveis
+  5. Só após o CAS, remove variantes determinísticas legadas e o objeto local anteriormente referenciado
   
-  O fallback é **silencioso em falha** (apenas loga) — o link permanece sem imagem. Falhas comuns: site bloqueando bots, JS-heavy page sem og:image, Chromium ausente. Se `imageopt.Optimize` retornar erro (corrupção rara), o worker armazena o PNG cru em `screenshots/{id}.png` como fallback — nunca aborta a etapa só por causa do re-encode.
+  O fallback é **silencioso em falha** (apenas loga) — o link permanece sem imagem. Falhas comuns: site bloqueando bots, JS-heavy page sem og:image, Chromium ausente. Se `imageopt.Optimize` retornar erro (corrupção rara), o worker armazena o PNG cru numa chave versionada; perda do CAS apaga somente essa chave da própria operação.
 
 ## Change-check worker (`internal/changecheck`)
 
@@ -370,15 +454,15 @@ Todo byte que entra no RustFS via upload do usuário ou via screenshot fallback 
 3. Se algum lado > 1024 px, calcula `(W', H')` preservando aspect ratio.
 4. Cria `*image.RGBA` no tamanho final preenchido com branco, depois `draw.CatmullRom.Scale(…, draw.Over)` pra blendar a fonte. Isso resolve resize + composição de alpha sobre branco numa só operação (JPEG não tem alpha — sem o branco, pixels transparentes virariam pretos).
 5. `jpeg.Encode` com `Quality: 82`.
-6. **Guard de não-regressão (só pra JPEG de entrada):** se a entrada já era JPEG, não foi feito resize, e o output ficou ≥ ao input, devolve os bytes originais. Pra PNG/GIF/WebP, sempre re-encoda — garante que `images/{id}.jpg` é o caminho canônico no RustFS.
+6. **Guard de não-regressão (só pra JPEG de entrada):** se a entrada já era JPEG, não foi feito resize, e o output ficou ≥ ao input, devolve os bytes originais. Pra PNG/GIF/WebP, sempre re-encoda; a extensão da chave operation-owned continua refletindo o conteúdo armazenado.
 
 **Pontos de chamada:**
 
-- `internal/links/screenshot_handler.go:UploadImage` — uploads manuais (`POST /api/links/{id}/image`). Cap de body = 5 MiB (`MaxBytesReader`), pixel cap = 50 MP via `imageopt.DecodeConfig`.
-- `internal/links/screenshot_handler.go:CaptureAndStore` — screenshot sob demanda (`POST /api/links/{id}/screenshot`). **Gate SSRF obrigatório**: chama `links.URLPolicy` (passada por `main.go` como `preview.IsPublicURL`) antes de invocar o Chromium — rejeita scheme não-http(s) com 400 `invalid_scheme` e IMDS/RFC1918/loopback com 400 `private_target`. Policy nil = fail-closed (deny). Sem esse gate o endpoint vira read-anywhere (`file:///etc/passwd` → screenshot → `/api/files/`).
+- `internal/links/screenshot_handler.go:UploadImage` — uploads manuais (`POST /api/links/{id}/image`). Cap de body = 5 MiB (`MaxBytesReader`), pixel cap = 50 MP via `imageopt.DecodeConfig`; grava chave operation-owned e faz swap atômico que devolve a URL superseded exata. Assim upload manual continua vencendo o worker e cleanup concorrente remove apenas bytes que já deixou de publicar.
+- `internal/links/screenshot_handler.go:CaptureAndStore` — screenshot sob demanda (`POST /api/links/{id}/screenshot`). **Gate SSRF obrigatório**: chama `links.URLPolicy` (passada por `main.go` como `preview.IsPublicURL`) antes de invocar o Chromium — rejeita scheme não-http(s) com 400 `invalid_scheme` e qualquer target special-purpose com 400 `private_target`. Policy nil = fail-closed (deny). O proxy estrito dentro de `internal/screenshot` repete a decisão em cada redirect/subresource/CONNECT e valida o peer pós-dial; o gate do handler continua necessário para rejeição barata e erro 400 estável. Sem essas camadas o endpoint vira read-anywhere (`file:///etc/passwd` → screenshot → `/api/files/`).
 - `internal/preview/worker.go:maybeScreenshot` — screenshot fallback do worker (mesma `IsPublicURL`).
 
-Cada um, além do `Optimize`, dispara `DeleteObject` nas extensões irmãs do mesmo id (purga de orphans quando o formato muda de `.png` pra `.jpg`). `DeleteObject` é idempotente (NoSuchKey = sucesso). **Arquivos antigos pré-deploy ficam intocados** — o `ProxyFile` continua servindo `.png/.gif/.webp` históricos sem mudança.
+Após publicar a URL nova, cada fluxo remove a imagem local anteriormente referenciada e as variantes determinísticas legadas do mesmo id. `DeleteObject` é idempotente (NoSuchKey = sucesso); perda do CAS remove só a chave operation-owned recém-criada. **Arquivos antigos pré-deploy não referenciados ficam intocados** — o `ProxyFile` continua servindo `.png/.gif/.webp` históricos sem mudança.
 
 ### imageopt — decode-bomb guard
 
@@ -408,7 +492,7 @@ VITE_API_BASE=http://localhost:9089
 PREVIEW_WORKER_CONCURRENCY=4
 PREVIEW_FETCH_TIMEOUT_SEC=5
 PREVIEW_STRICT_SSRF=        # vazio = permissivo; "1" = strict
-SHARED_SECRET=              # vazio = sem auth; setado = exige X-Foldex-Secret nos /api/*
+SHARED_SECRET=              # vazio = sem gate; setado = exige header nos /api/*, exceto note-media UUID público
 CORS_ORIGINS=*
 BACKEND_BIND=127.0.0.1      # bind do backend; non-loopback + SHARED_SECRET vazio + CORS=* recusa boot
 
@@ -443,7 +527,7 @@ DB_URL é DERIVADO desses (em `docker-compose.yml` e `backend/Makefile`). Não d
 </DL><p>
 ```
 
-Parser usa `golang.org/x/net/html` e percorre `<A>` + stack de `<H3>`. **Semântica atual (pós-folders):** o `<H3>` mais profundo no escopo de cada link vira `folder` (pasta), e os `<H3>` ancestrais viram `tags`. Ex: `Bookmarks Bar → Work → Issues → linkA` resulta em `linkA.folder = "Issues"` + `linkA.tags = ["Bookmarks Bar", "Work"]`. Foldex folders são flat (1 nível) — o aninhamento é colapsado pro mais profundo. Insert idempotente: `INSERT ... ON CONFLICT (url) DO NOTHING`. Folders são resolvidas via `ensureFolder(name)` (match-or-create por nome) ou criadas a partir do array `folders[]` do JSON.
+Parser usa `golang.org/x/net/html` e percorre `<A>` + stack de `<H3>`. **Semântica atual (pós-folders):** o `<H3>` mais profundo no escopo de cada link vira `folder` (pasta), e os `<H3>` ancestrais viram `tags`. Ex: `Bookmarks Bar → Work → Issues → linkA` resulta em `linkA.folder = "Issues"` + `linkA.tags = ["Bookmarks Bar", "Work"]`. Foldex folders são flat (1 nível) — o aninhamento é colapsado pro mais profundo. A aplicação inteira usa uma transação e tabelas temporárias alimentadas por `CopyFrom`: URLs são idempotentes por `(user_id, url)`, folders fazem match-or-create por nome do dono, e links/tags/clicks são gravados em operações set-based. Slugs globais relevantes são pré-carregados por uma consulta limitada e alocados em memória antes do batch.
 
 **JSON versionado** (formato próprio):
 
@@ -471,7 +555,7 @@ Parser usa `golang.org/x/net/html` e percorre `<A>` + stack de `<H3>`. **Semânt
 }
 ```
 
-**Versionamento**: importer aceita v1 (pré-folders, sem `folders[]`/`folder`) e v2 (com pastas). Exporter sempre escreve v2. Round-trip idempotente: re-importar um JSON exportado não duplica folders (match por name via `ensureFolder`).
+**Versionamento**: importer aceita v1 (pré-folders, sem `folders[]`/`folder`) e v2 (com pastas). Exporter sempre escreve v2. Round-trip idempotente: re-importar um JSON exportado não duplica folders (match por nome dentro do dono). `click_count` aceita no máximo 10.000 por link e 1.000.000 cumulativos por import; cliques sintéticos de links novos são inseridos por um único `generate_series` set-based.
 
 ## Browser extension
 
@@ -518,7 +602,7 @@ A versão original (numeric-only) foi implementada primeiro porque IDs são triv
 **Backup/import/export:** snapshot inclui slug; restore com `mode=skip|wipe|duplicate` resolve colisões com sufixo `-2`, `-3`, … via `uniqueLinkSlug`. Importer (Netscape/JSON) gera slug auto pra cada link novo.
 
 ### ADR-8 — SSRF guard no preview fetcher
-Fetcher visita URLs arbitrárias fornecidas pelo usuário. **IMDS (169.254.169.254) é sempre bloqueado**, sem opt-out — é o único alvo que nunca é legítimo num app pessoal. Os demais ranges privados (loopback, RFC1918, link-local, IPv6 ULA) só são bloqueados quando `PREVIEW_STRICT_SSRF=1`. Default é permissivo: foldex é single-user local e links de intranet (Jira/Grid/Confluence/dashboards internos) são caso de uso primário — bloquear o que o usuário visita no próprio browser todos os dias é fricção sem ganho. Revisitar se virar multi-user ou expor o backend pra rede pública.
+Fetcher visita URLs arbitrárias fornecidas pelo usuário. **Ranges de metadata/credenciais cloud e RFC6598 são sempre bloqueados**, sem opt-out. Os demais ranges special-purpose da IANA só são bloqueados quando `PREVIEW_STRICT_SSRF=1`. O default permissivo para RFC1918 é uma compatibilidade explícita com links de intranet (Jira/Grid/Confluence/dashboards internos), não uma suposição de usuário único; em modo multi-tenant o operador deve habilitar strict quando usuários não devem alcançar serviços internos do host.
 
 ### ADR-9 — Click_log como única fonte de verdade
 Migration 000006 dropou `link.click_count` e `link.last_clicked_at`. Cliques agora vivem só em `click_log`. Contagens e timestamps são derivados via `LEFT JOIN LATERAL` no SELECT. **Por quê:** durante o desenvolvimento, percebemos que mantinhamos dois lugares pra contar (UPDATE atômico no link + INSERT no click_log) e qualquer divergência seria irrecuperável (qual é a verdade?). Single source of truth elimina o problema. **Trade-off:** O(log N) lookup por link na listagem (mitigado pelo índice `click_log_link_id_ts`). Pra single-user com até 10k links, é irrelevante. Se virar gargalo no futuro: materialized view com REFRESH no /go handler.
@@ -530,7 +614,7 @@ Migration 000006 dropou `link.click_count` e `link.last_clicked_at`. Cliques ago
 `docker-compose.yml` deriva `DB_URL` de `POSTGRES_HOST` (e `POSTGRES_SSLMODE`). O backend container declara `extra_hosts: ["localhost:host-gateway", "host.docker.internal:host-gateway"]` pra que ambos os nomes resolvam pro host real, não pra ele mesmo. **Por quê:** o usuário pode ter um Postgres já rodando no host e querer reusar; também serve quando se troca pra RDS/Neon (basta setar `POSTGRES_HOST=hostname-real`). Foi importante MANTER `POSTGRES_HOST=db` como default no `.env.example` pra quem usa o `docker-compose.db.yml`.
 
 ### ADR-12 — SSRF guard permissivo por default
-IMDS (`169.254.169.254`) é sempre bloqueado (sem opt-out — único alvo que nunca é legítimo). Os outros ranges privados (loopback, RFC1918, link-local, IPv6 ULA) só são bloqueados quando `PREVIEW_STRICT_SSRF=1`. **Por quê:** foldex é single-user local; intranet (Jira, Grid, Confluence, dashboards internos) é caso de uso primário. Bloquear o que o usuário visita no browser todos os dias = fricção sem ganho. Revisitar se virar multi-user ou expor publicamente.
+Metadata/credenciais cloud (EC2 IMDS, ECS e EKS Pod Identity, inclusive IPv6) e RFC6598 são sempre bloqueados. Os demais ranges special-purpose da IANA só são bloqueados quando `PREVIEW_STRICT_SSRF=1`. **Por quê:** intranet (Jira, Grid, Confluence, dashboards internos) continua um caso de uso primário, inclusive em instalações autenticadas; o default preserva esses destinos RFC1918. Em ambientes multi-tenant onde usuários não devem alcançar a rede interna do host, o operador habilita strict.
 
 ### ADR-13 — Confirm modal próprio (não window.confirm) + Esc fecha tudo
 `useConfirm({ title, message, destructive })` retorna uma `Promise<boolean>`. Substitui qualquer `window.confirm()`. Tipografia coerente com o resto (Space Grotesk + Nunito Sans), botões com gradient indigo/vermelho, kicker mono. **Por quê:** `confirm()` quebra o tom visual e o teclado fica preso ao chrome do browser. Esc em qualquer modal cai por hook `useEscape(onClose, open)`.
@@ -539,13 +623,26 @@ IMDS (`169.254.169.254`) é sempre bloqueado (sem opt-out — único alvo que nu
 Sidebar mostra só lista enxuta (dot + nome + count). Edit/delete moveu pra `TagManagerDialog` aberto pelo botão "Gerenciar tags" no rodapé da sidebar. **Por quê:** botões inline por linha brigavam com o layout `grid-template-columns: 16px 1fr auto` e quebraram em N+1 linhas em vez de uma. Tag management é ação eventual, não navegação — modal próprio é o lugar certo.
 
 ### ADR-15 — Coverage gate de 85%
-Definido em `CLAUDE.md`. Backend: `make coverage` roda unit + integration tests com `-coverpkg` excluindo `cmd/server`, `internal/db`, `internal/testdb` e falha se total < 85%. Frontend: `vitest.config.ts` define `thresholds.lines/statements/functions: 85, branches: 80`. Toda mudança de comportamento deve vir com teste no mesmo PR.
+Definido em `CLAUDE.md`. Backend: `make coverage` executa unit + integration tests em `./...`, incluindo os testes de `cmd/server` e `cmd/rustfs-bootstrap`; `-coverpkg` continua medindo somente produção em `internal/...`, excluindo `internal/db`, `internal/testdb` e `authctxtest`, portanto boot/helpers não deflacionam o gate de 85%. No CI, `coverage-run` gera o profile uma vez e `coverage-check` aplica o mesmo gate sem repetir a suíte. O runner Ubuntu precisa fornecer `google-chrome` executável e exporta seu caminho em `CHROME_PATH` antes da suíte, então os testes `LiveChrome` não podem virar skip silencioso. Frontend: `vitest.config.ts` define `thresholds.lines/statements/functions: 85, branches: 80`, aplicados pelo único `bun run coverage`; o mesmo job executa uma vez o script `test` da extensão. Todos os testes e thresholds bloqueiam o PR.
+
+Em uma máquina sem Chrome/Chromium local, o equivalente isolado para os testes live usa Chromium como usuário não-root dentro de container (rode da raiz do repositório):
+
+```bash
+docker run --rm -v "$PWD/backend:/src" -w /src golang:1.26-alpine sh -ec '
+  apk add --no-cache chromium su-exec
+  adduser -D -h /tmp/foldex-test foldex-test
+  chown -R foldex-test:foldex-test /go /tmp/foldex-test
+  exec su-exec foldex-test env HOME=/tmp/foldex-test \
+    CHROME_PATH=/usr/bin/chromium-browser CGO_ENABLED=0 \
+    go test -count=1 ./internal/screenshot -run LiveChrome
+'
+```
 
 ### ADR-10 — Versões "always-latest-stable"
 Antes de pinar uma dep nova, conferir `https://go.dev/dl/` e `npm view <pkg> version --registry=https://registry.npmjs.org/` (sempre o registro público, nunca um mirror privado, pra checagem de versão). Tabela de versões correntes vive em `CLAUDE.md` §1.
 
 ### ADR-16 — Screenshot só como fallback (nunca obrigatório)
-A captura de tela headless (`internal/screenshot/` via `go-rod`) **só roda** quando o fetch HTML não devolveu `og:image`, o usuário ainda não fez upload manual, **e** o host resolve pra IP público (`preview.IsPublicURL`). Os três gates são curto-circuito — qualquer falha desliga o screenshot e o link fica sem imagem (em vez de mostrar uma tela de login interna ou consumir Chromium em vão). RustFS ausente = fallback desligado, demais endpoints continuam ok. **Por quê:** screenshot é caro (Chromium + I/O), arrisca expor páginas internas, e na maioria dos sites públicos o `og:image` já cobre. Fallback troca "imagem pobre" por "alguma imagem" sem dar custo no caminho feliz.
+A captura de tela headless (`internal/screenshot/` via `go-rod`) **só roda** quando o fetch HTML não devolveu `og:image`, o usuário ainda não fez upload manual, **e** o host resolve pra IP público (`preview.IsPublicURL`). Os três gates são curto-circuito — qualquer falha desliga o screenshot e o link fica sem imagem (em vez de mostrar uma tela de login interna ou consumir Chromium em vão). O processo Chromium é pooled, mas estado de navegação não é: cada captura usa BrowserContext incognito descartável e proxy de egress estrito próprio, sem bypass de loopback, com validação pré e pós-dial em toda navegação/redirect/subresource/CONNECT. Um bloqueio tardio invalida a captura. RustFS ausente = fallback desligado, demais endpoints continuam ok. **Por quê:** screenshot é caro (Chromium + I/O), arrisca expor páginas internas, e na maioria dos sites públicos o `og:image` já cobre. Fallback troca "imagem pobre" por "alguma imagem" sem dar custo no caminho feliz.
 
 ### ADR-19 — Folders 1:N exclusivo (containment) coexistindo com tags M:N (labels). Pastas aninhadas via self-FK.
 `folder` é uma tabela nova, separada de `tag`, e `link.folder_id` é 1:N (`ON DELETE SET NULL` — quando uma pasta some, os links voltam pra raiz soltos). Folders também são **aninhadas** entre si via `folder.parent_id` (também `ON DELETE SET NULL` — quando pasta-pai some, filhas viram root).
@@ -566,7 +663,7 @@ A captura de tela headless (`internal/screenshot/` via `go-rod`) **só roda** qu
 
 **Delete behavior** (2 paths):
 - `DELETE /api/folders/{id}` (manter links): só a pasta morre. Links voltam pra root (ON DELETE SET NULL em `link.folder_id`). Subpastas viram root (ON DELETE SET NULL em `folder.parent_id`).
-- `DELETE /api/folders/{id}?cascade=1` (apagar tudo): recursivo via CTE — coleta toda a subtree, deleta links em todos os níveis, então deleta as pastas.
+- `DELETE /api/folders/{id}?cascade=1` (apagar tudo): recursivo via CTE — coleta owner-scoped e trava toda a subtree na transação; se houver descendente protegido diferente da raiz, retorna `409 descendant_protected` + `count` sem mutar nada. Sem essa barreira, deleta links/notas em todos os níveis e então as pastas.
 
 ### ADR-18 — Grid layout: CSS Grid + density picker (não column-count)
 `.fx-grid` e `.fx-pingrid` usam `display: grid; grid-template-columns: repeat(var(--fx-cols, 5), minmax(0, 1fr))`. O usuário troca a densidade entre **3, 5, ou 8 colunas** via `<DensityPicker>` integrado no `fx-viewseg` do Topbar (só visível em `viewMode === 'cards'`). Estado persiste em `localStorage` como `foldex.grid.cols`.
@@ -587,16 +684,17 @@ A captura de tela headless (`internal/screenshot/` via `go-rod`) **só roda** qu
 Detalhe completo em [SDD-BACKUP-RESTORE.md](./SDD-BACKUP-RESTORE.md). Resumo das decisões load-bearing:
 
 - **Um ZIP é a unidade de backup.** Contém `manifest.json` + `database.json` (todas as 5 tabelas) + `files/screenshots/` + `files/images/`. `og_image_url` continua como proxy URL `/api/files/<key>` — não embarca bytes inline em base64.
-- **Streaming end-to-end.** Export usa `zip.NewWriter(http.ResponseWriter)` + `io.Copy` direto do RustFS GetObject. Restore usa `MultipartReader` (não `ParseMultipartForm`). Bucket de centenas de MBs sobrevive sem buffer.
+- **Streaming end-to-end.** Export não materializa `Snapshot`: sob `REPEATABLE READ`, cursor rows alimentam um spool `database.json` 0600/256 MiB com hash+counts inline; RustFS LIST visita metadados por callback e retém só matches owner-scoped; após commit, `zip.NewWriter(http.ResponseWriter)` copia o spool e faz `io.Copy` direto do GetObject. Restore usa `MultipartReader` (não `ParseMultipartForm`) e publica note media do spool em que foi validado/otimizado uma vez. Skip resolve keys existentes por LIST paginado, wipe usa multi-delete somente de keys owner-scoped, e PUTs usam pool 8.
 - **3 endpoints**: `/api/backup` (gera), `/api/backup/validate` (sem efeito colateral — confere checksums + manifest + conflitos com DB atual), `/api/backup/restore?mode=…`.
+- **Admissão é compartilhada por export/validate/restore; preflight por validate/restore.** Um slot fail-fast é adquirido antes de query/spool/body read; concorrência responde `429 backup_busy` sem chamar o service. Export retém O(owner-file-count) sob caps de 99.998 files, key 1.024 bytes e manifest 32 MiB. Antes de DB/RustFS, uploads passam por nome único, CRC e leitura real `max+1`, sob caps de 100k entries, 32 MiB de manifest, 256 MiB de database JSON, 64 MiB por arquivo e 4 GiB expandidos no total. Arrays de conteúdo têm cap de 250k; relações/eventos, 2M; `app_settings` legado, 1k.
 - **3 modos de conflito**:
-  - `wipe`: TRUNCATE 5 tabelas + DELETE prefix RustFS + restore com IDs originais preservados. UI exige confirm destrutivo.
-  - `skip` (default): `ON CONFLICT DO NOTHING` em `tag.name`/`link.url`, mapping `oldID→curID` pra link_tag/click_log re-key.
+  - `wipe`: DELETE somente das rows/keys do caller + restore com IDs frescos. UI exige confirm destrutivo.
+  - `skip` (default): `ON CONFLICT DO NOTHING` em `(user_id, tag.name/link.url)`; migration 000027 persiste digest + mappings old→new no mesmo commit do conteúdo e checkpointa files depois.
   - `duplicate`: tags renomeiam pra `nome (N)`, folders sempre criam novo, links com URL conflict caem pra skip + warning (URL é UNIQUE — duplicar quebraria invariant).
 - **REPEATABLE READ no export** garante que as 5 SELECTs vejam um snapshot consistente.
 - **Validação prévia** é obrigatória no frontend: usuário vê manifest + counts + conflitos antes de escolher modo e confirmar.
 - **`schema_version` no manifest** rejeita backups de futuro; backups antigos podem rodar com warning (campos novos default).
-- **Restore não é atômico DB+RustFS** (sem 2PC entre Postgres e S3). Writes idempotentes + re-rodar com mesmo zip converge.
+- **Restore não é atômico DB+RustFS** (sem 2PC entre Postgres e S3). No `skip`, ledger `(user_id, archive_digest, mode)` + mappings duráveis retomam files após commit falho sem reaplicar folders/notes/associações/clicks. Entity/slug writes usam staging set-based; object upload/delete usa pool cancelável de 8 workers.
 
 ### ADR-21 — Paste anywhere = New Link dialog pre-filled
 **Status:** Done.
@@ -727,11 +825,15 @@ Feature de **privacidade**, não de segurança dura: Foldex é single-user atrá
 
 **Por quê `password_hash` nullable em `folder` em vez de uma tabela separada.** Mesma lógica de `link.slug`/`link.pinned`: é um atributo 1:1 da pasta, não uma entidade própria. `NULL` = sem proteção (todo folder existente após a migração). bcrypt (`golang.org/x/crypto/bcrypt`, já presente em `go.sum` como indireto — zero deps novas) hasheia; o plaintext nunca é armazenado nem logado.
 
-**Por quê dois mecanismos separados — redação sempre-ativa vs. gate por token.** São dois vazamentos diferentes: (1) um card de pasta protegida ainda aparece na listagem (nome, cor, contadores) — mas seu preview (thumbnails de links/subpastas dentro dela) não pode vazar por hover, mesmo sem tentar abrir; (2) efetivamente *entrar* na pasta (ver seus links/notes reais, ou listar suas subpastas) precisa de prova de senha. `folders.Repository.List`/`Get` **sempre** zeram `preview_links`/`preview_folders` quando `has_password=true`, incondicionalmente — nenhum request, com ou sem token, vê esse preview numa listagem. Isso significa que `FolderRapidView` (hover popover do frontend) fica vazio de graça, sem precisar de lógica extra no client. Já o gate por token cobre as DUAS operações que revelam conteúdo real: `GET /api/entries?folder_id=X` (links+notes da pasta) e `GET /api/folders?parent_id=X` (subpastas da pasta) — ambas exigem um token válido pra `X` quando `X` é protegida, senão `403 folder_locked`.
+**Por quê dois mecanismos separados — redação sempre-ativa vs. gate por token.** São dois vazamentos diferentes: (1) um card de pasta protegida ainda aparece na listagem (nome, cor, contadores) — mas seu preview (thumbnails de links/subpastas dentro dela) não pode vazar por hover, mesmo sem tentar abrir; (2) efetivamente *entrar* na pasta (ver seus links/notes reais, ou listar suas subpastas) precisa de prova de senha. `folders.Repository.List`/`Get` **sempre** zeram `preview_links`/`preview_folders` quando `has_password=true`, incondicionalmente — nenhum request, com ou sem token, vê esse preview numa listagem. Isso significa que `FolderRapidView` (hover popover do frontend) fica vazio de graça, sem precisar de lógica extra no client. Já o gate por token cobre todas as listagens que podem revelar conteúdo real: `GET /api/{entries,links,notes}?folder_id=X` e `GET /api/folders?parent_id=X`. Todas exigem um token válido pra `X` quando `X` é protegida, senão `403 folder_locked`.
+
+**Um helper é dono do protocolo de listagem protegida.** `folders.ListWithContentGate[T]` recebe o `folder_id` opcional e uma closure `List` tipada. Sem pasta ele executa a closure diretamente; com pasta faz check owner-scoped do hash atual, executa a closure uma vez e repete o check antes de devolver o valor. O segundo check rejeita o payload se a senha mudar durante a query. Lookup nil falha fechado antes da consulta, e qualquer falha de gate devolve o valor zero de `T`, nunca o conteúdo já lido. Os handlers de entries/links/notes só parseiam a query/header, fornecem a closure concreta, mapeiam o erro e serializam seus tipos de resposta existentes. API tokens continuam credenciais de conteúdo e atravessam o mesmo protocolo; não há branch por tipo de principal.
 
 **Por quê um token HMAC curto-vivo em vez de sessão server-side ou reenvio da senha a cada request.** `POST /api/folders/{id}/unlock` verifica a senha via bcrypt e emite `hex(HMAC-SHA256(secret, "<folderID>:<expiresAt>:<passwordHashATUAL>")) + "." + expiresAt`. O truque: o HMAC inclui o `password_hash` **atual** da pasta, buscado fresco do banco a cada verificação — trocar ou remover a senha invalida automaticamente todo token emitido antes, sem precisar de uma lista de revogação. TTL de 24h é só um teto de segurança; a sessão real do usuário é mais curta que isso porque o frontend nunca persiste o token além do reload da página (decisão do usuário — unlock é por sessão de browser, não sobrevive a restart). O secret HMAC (`internal/folders/password.go:LoadOrGenerateFolderUnlockKey`) segue o mesmo padrão env→file→autogen(`0600`) que `push.LoadOrGenerate` já estabeleceu pro VAPID — mesmo volume `foldex-data`.
 
 **Por quê trocar/remover uma senha existente exige a senha atual, mas renomear/recolorir/mover não.** Decisão explícita do usuário (registrada em memory/sessão): editar metadados de uma pasta nunca precisa de senha — só *trocar ou remover uma senha já existente* exige prová-la primeiro, verificado dentro da mesma tx SERIALIZABLE que já protege o cycle-check de `parent_id` (`folders.Repository.Update`). **Sem bypass de admin** — se o usuário esquecer a senha, a única recuperação é editar o banco diretamente. Setar uma senha pela primeira vez (pasta ainda sem proteção) não exige `current_password`, porque não há nada pra autorizar contra ainda.
+
+**Cascade destrutivo para na primeira fronteira protegida.** O token de unlock é específico da raiz e não prova a senha de uma subpasta, pois proteção não é herdada. `DeleteCascade` materializa a subtree com `user_id` e trava suas linhas na mesma transação; qualquer `password_hash` em descendente diferente da raiz aborta tudo como `409 descendant_protected` com a quantidade encontrada. Uma raiz protegida ainda pode ser apagada com seu token atual quando não há descendente protegido. Na UI, DELETE sem token ou com token stale recebe `folder_locked`, abre o prompt existente, guarda o novo token só em memória e repete uma vez; nova falha e `descendant_protected` ficam inline, sem promise rejection solta.
 
 **Rate limiting + revelação da dica (por pasta).** O endpoint de unlock tem um limitador **em memória por pasta** (`internal/folders/ratelimit.go`): 5 senhas erradas seguidas → bloqueio de **1 hora** (`429 too_many_attempts`, com `Retry-After`), e um acerto zera o contador; o estado é in-memory (reinício do backend limpa — aceitável no modelo single-user/local, o custo do bcrypt é o piso real). O frontend (`PasswordPromptDialog`) mostra tentativas restantes, faz a contagem regressiva do bloqueio, e **só revela a `password_hint` depois da 3ª tentativa errada** (a dica é não-secreta, mas segurá-la até o 3º erro incentiva lembrar de cabeça antes).
 
@@ -761,7 +863,7 @@ O ADR-28 deixou a recuperação de uma senha de pasta esquecida como "edite o ba
 
 **O que o PR3 entregou:** TOTP (`pquerna/otp`, parâmetros fixos em SHA1/6/30, QR renderizado no servidor), códigos de recuperação de uso único, OTP por e-mail, `auth_challenge` + cookie `fx_pa`, enrollment obrigatório para admin, `password/forgot` + `password/reset`, `internal/pkg/keyfile` e `secrets.Cipher`. Frontend: `OtpInput`, as telas de código, esqueci-a-senha, enviado, redefinir e enrollment, mais a seção de 2FA em Configurações. **Migration `000019_two_factor_indexes`** — nenhuma tabela nova (a 000017 já criara as cinco), só dois índices que faltavam e a coluna `mailbox_already_proven`; é 19 e não 18 porque o PR1 já entregara `000018_click_log_user_id`. `AUTH_ENABLED` continua `0` por padrão.
 
-**Correção do PR3 que vale registrar: código numérico e código de recuperação se distinguem pelo comprimento SEM SEPARADORES, não pela contagem de dígitos.** A primeira implementação filtrava a entrada para dígitos e perguntava "tem seis?". Um código de recuperação tem 10 símbolos de um alfabeto de 32, dos quais 10 são dígitos — então **cerca de 1 em 23** contém exatamente seis dígitos e era roteado para o caminho TOTP, onde nunca casa: o portador não conseguia usar aquele código e nada na resposta explicava. Apareceu como flake de ~4% na suíte antes de virar bug relatado. Travado por `TestRecoveryCode_WithSixDigitsIsNotMistakenForATOTPCode`, que constrói o caso em vez de depender do acaso.
+**Correção do PR3 que vale registrar: código numérico e código de recuperação se distinguem pelo comprimento SEM SEPARADORES, não pela contagem de dígitos.** A primeira implementação filtrava a entrada para dígitos e perguntava "tem seis?". O formato atual tem 16 símbolos de um alfabeto de 32, dos quais 10 são dígitos — então **cerca de 18%** contêm exatamente seis dígitos e seriam roteados para TOTP, onde nunca casam. Travado por `TestRecoveryCode_WithSixDigitsIsNotMistakenForATOTPCode`, que constrói o caso em vez de depender do acaso.
 
 **Correção do PR3 que quase escapou: uma caixa postal comprometida emitia sessão.** O reset de senha diverge corretamente para o desafio — provou só um fator — mas o fallback de OTP por e-mail mandava o código de seis dígitos para **o mesmo endereço** que recebeu o link. `/password/forgot` → link → `/password/reset` → desafio → `/2fa/email` → código na mesma caixa → sessão: os dois passos fechavam num canal só, e o docstring do handler dizia literalmente que o desvio existia para impedir isso. `auth_challenge.mailbox_already_proven` marca os desafios nascidos de um reset e o fator e-mail é recusado para eles. Pelo mesmo raciocínio o fator e-mail passou a exigir `MAIL_DRIVER=smtp`: o driver `log` escreve o corpo no stdout, troca deliberada para link de convite (numa instância sem SMTP o log É a caixa postal) mas não para um segundo fator.
 
@@ -791,13 +893,19 @@ O foldex era single-user em três camadas que se sustentavam mutuamente: sem ide
 
 **Login indistinguível.** E-mail inexistente, senha errada e conta desabilitada devolvem `401 invalid_credentials` byte-idêntico. bcrypt **sempre** roda (contra um hash dummy no miss — pular é o oráculo clássico de ~80 ms), o bucket de rate limit por e-mail incrementa **também** para e-mails inexistentes (não incrementar é por si só um oráculo), e há um **piso** de 250 ms — piso e não jitter, porque jitter só adiciona variância que o atacante remove com média amostral.
 
-**2FA: TOTP obrigatório para admin, OTP por e-mail como fallback.** O estado entre "senha OK" e "2FA OK" é um `auth_challenge` + cookie `fx_pa` que só autoriza `/api/auth/2fa/*` — nunca alcança endpoint de dados. O contador de tentativas mora **no banco**, não no limitador em memória: o ADR-28 aceita explicitamente que um restart zere o estado do unlock de pasta, mas um restart não pode zerar o orçamento de tentativas de um segundo fator. O seed TOTP é **cifrado** (AES-256-GCM), não hasheado — verificar exige o seed em claro, e um seed base32 num `pg_dump` é bypass permanente. Códigos de recuperação usam `sha256` e não bcrypt, deliberadamente: a verificação precisa ser lookup indexado, e com ~50 bits de entropia é a entropia que os protege, não o custo do hash.
+**2FA: TOTP obrigatório para admin, OTP por e-mail como fallback.** O estado entre "senha OK" e "2FA OK" é um `auth_challenge` + cookie `fx_pa` que só autoriza `/api/auth/2fa/*` — nunca alcança endpoint de dados. Login, bootstrap, aceite de convite admin e OAuth passam pela mesma decisão; promoção `user → admin` revoga as sessões existentes na própria transação da mudança de papel. `RequireAdmin` consulta a existência atual de `totp_secret.confirmed_at`, portanto ligar `AUTH_REQUIRE_2FA_FOR_ADMINS` bloqueia poder administrativo também em access/refresh antigos sem impedir as rotas de enrollment; não há coluna de assurance. O contador de tentativas mora **no banco**, não no limitador em memória. A migration `000025` prende cada challenge e enrollment TOTP pendente ao `app_user.token_version` que recebeu a prova; linhas legadas sem epoch falham fechadas. Resolve/budget/consumo, enrollment e emissão de sessão revalidam o epoch vivo sob lock da linha do usuário, portanto reset/troca de senha, logout-all e revogação administrativa matam o estado antigo. Consumo de TOTP/recovery/e-mail OTP, challenge e emissão de sessão formam uma única transação; confirmação de enrollment inclui recovery codes e, no fluxo obrigatório, a sessão; set-password, disable e regenerate também consomem o proof na própria tx. Falha tardia não queima a prova nem deixa fator sem recovery. O seed TOTP é **cifrado** com AES-256-GCM, e cada consumo compara `secret_ciphertext` + `secret_nonce`; a confirmação também exige `enrollment_token_version` original. OTP numérico e recovery usam MACs HMAC-SHA256 indexáveis sob subchaves distintas derivadas de `AUTH_ENCRYPTION_KEY`; o material AES nunca é chave de MAC direta. A entrada inclui versão/purpose e bindings de usuário/challenge, e recovery tem 16 símbolos base32 (80 bits), formato `XXXX-XXXX-XXXX-XXXX`. A migration `000023` apaga digests legados, irreversivelmente, pois o plaintext necessário para convertê-los nunca foi armazenado; ciphertext/nonce continuam versionando o seed, enquanto `token_version` versiona a prova de credencial que autorizou o fluxo.
+
+**Reset também pertence ao epoch da credencial.** A migration `000028` grava o `app_user.token_version` vivo em resets comuns e administrativos; linhas legadas permanecem NULL e falham fechadas. O consumidor resolve o owner, trava `app_user` e exige igualdade exata antes de gastar o token, trocar a senha ou revogar sessões. Troca/reset de senha, logout-all, role/status e revogação administrativa entre emissão e consumo invalidam o link; o spend, o novo hash, o bump e a revogação continuam numa única transação. O check `NOT VALID` exige epoch em linhas novas sem inventar prova para links pré-migration, e supersede ignora esses NULLs até o sweeper removê-los.
+
+**E-mail assíncrono é bounded e process-owned.** Um único dispatcher de 2 workers e fila 32 substitui goroutines destacadas por envio; cancellation pertence ao dispatcher e `Stop` faz join depois do drain HTTP. Links de reset, OTP de login e links de verificação reservam admission antes da escrita durável, então fila cheia não supersede credencial anterior nem cobra budgets (`auth_challenge.sends` ou limiter de reset por endereço). Budget + INSERT do OTP são atômicos, e resend autenticado de verificação coalesce por 60 s. O force-reset administrativo permanece síncrono dentro da transação: só commit depois de SMTP aceitar.
 
 **Master password migra de `app_setting` para `app_user`.** Uma master global deixaria qualquer admin limpar a senha de pasta de **outro** usuário — exatamente o bypass que o ADR-28 recusou.
 
-**Backup muda de contrato.** Nenhuma tabela de auth entra no ZIP (hashes, seeds TOTP e refresh tokens vivos num arquivo que se joga no Drive converteriam uma conveniência em primitiva de roubo de credencial), e o restore **sempre** escreve para quem chamou — `user_id` nunca vem do ZIP, o que torna impossível forjar um backup que planta linhas na conta alheia. Consequência: `wipeAll` vira `wipeUser`, e **o modo wipe deixa de preservar ids** (`restoreIdentity` é removido; outro tenant pode ter aqueles ids, e dar `setval` numa sequência global a partir do restore de um usuário é errado). Como as chaves de objeto são planas (`screenshots/{id}.jpg`), o wipe passa a apagar uma **lista explícita de chaves** derivada das linhas do próprio usuário, em vez de `DeleteObjectsPrefix`.
+**Backup muda de contrato.** Nenhuma tabela de auth entra no ZIP (hashes, seeds TOTP e refresh tokens vivos num arquivo que se joga no Drive converteriam uma conveniência em primitiva de roubo de credencial), e o restore **sempre** escreve para quem chamou — `user_id` nunca vem do ZIP, o que torna impossível forjar um backup que planta linhas na conta alheia. Consequência: `wipeAll` vira `wipeUser`, e **o modo wipe deixa de preservar ids** (`restoreIdentity` é removido; outro tenant pode ter aqueles ids, e dar `setval` numa sequência global a partir do restore de um usuário é errado). Como as chaves de objeto são planas, o wipe passa a apagar uma **lista explícita de chaves** derivada das linhas do próprio usuário, em vez de `DeleteObjectsPrefix`.
 
-**`SHARED_SECRET` coexiste e é rebaixado** a header de perímetro ("não autentica ninguém e não identifica ninguém"); com os dois configurados, a request precisa do header **e** da sessão. Removido no release seguinte. A extensão MV3 migra para `Authorization: Bearer` com escopo `content`, rejeitado em `/api/auth/*`, `/api/admin/*` e `/api/backup/*` — um token de extensão roubado não pode cunhar sessão, desligar 2FA nem exfiltrar um backup.
+**A migration 000022 corrige a exceção de mídia inline sem tornar a leitura pública privada.** `note_media` persiste owner + lease e `note_media_ref` exige, por FK composta, que note e objeto tenham o mesmo `user_id`. `body_html` só fornece candidatos; `INSERT ... SELECT` owner-scoped decide quais refs existem, e os caminhos destrutivos consultam ownership/refs. Não há backfill por HTML, portanto chaves UUID legadas continuam legíveis e não podem ser apagadas. `GET /api/files/notes/{uuid}.{ext}` fica fora de `SHARED_SECRET` e `Authenticate` para a página pública `/n/{slug}` carregar imagens, mas a rota fixa o prefixo `notes/` e exige UUID canônico + extensão raster conhecida; traversal e chaves id-derived de `screenshots/`/`images/` não alcançam o bucket por ela. Mídia de link continua exigindo o segredo, principal e ownership. Restore gera UUID novo para toda chave `notes/` referenciada, reescreve `body_html`/`cover_url` e só então mapeia os bytes do ZIP; `user_id` é campo desconhecido e invalida o snapshot.
+
+**`SHARED_SECRET` coexiste e é rebaixado** a header de perímetro ("não autentica ninguém e não identifica ninguém"); com os dois configurados, a request precisa do header **e** da sessão, exceto a leitura pública UUID-keyed de mídia exigida por `/n/{slug}`. Removido no release seguinte. A extensão MV3 migra para `Authorization: Bearer` com escopo `content`, rejeitado em `/api/auth/*`, `/api/admin/*` e `/api/backup/*` — um token de extensão roubado não pode cunhar sessão, desligar 2FA nem exfiltrar um backup.
 
 **Escopo explicitamente fora do v1 (documentado, não esquecido).** Compartilhamento entre usuários (é colaboração, com modelo de ACL próprio). Papéis além de `admin`/`user` (a coluna é TEXT com CHECK — adicionar é uma migration de uma linha; RBAC especulativo envelhece mal). SSO genérico SAML/OIDC. Rotação de `AUTH_ENCRYPTION_KEY`. `user_id` em `click_log` — sem FK para `link`, seria segunda fonte de verdade sujeita a divergir; as queries alcançam o dono por semi-join, com a `000018` como plano B se `stats.Daily` regredir.
 
@@ -808,19 +916,23 @@ O foldex era single-user em três camadas que se sustentavam mutuamente: sem ide
 
 **Sem auto-provisionamento e sem auto-vínculo por e-mail.** `sub` desconhecido e e-mail inexistente → `403 oauth_not_linked`. Se existisse auto-vínculo por e-mail coincidente, quem controlasse uma conta Google com o endereço da vítima entraria na conta dela.
 
-**Portabilidade: e-mail coincidente abre *conversão*, que exige a senha atual.** Quando o `sub` é desconhecido mas o e-mail bate com uma conta existente, o fluxo não loga e não recusa: emite um `auth_challenge('convert_google')` e devolve `convert_password_account`. Só depois de `POST /api/auth/oauth/google/convert` com a **senha atual** correta é que a identidade é criada, `password_hash` vira `NULL` (a conta passa a ser Google-only) e as demais sessões são revogadas — tudo numa transação. Exigimos `email_verified == true` do Google, e conta não-ativa devolve **a mesma resposta** do caso inexistente, para não confirmar que ela existe.
+**Portabilidade: e-mail coincidente abre *conversão*, que exige a senha atual.** Quando o `sub` é desconhecido mas o e-mail bate com uma conta existente, o fluxo não loga e não recusa: emite um `auth_challenge('convert_google')` e devolve `convert_password_account`. Só depois de `POST /api/auth/oauth/google/convert` com a **senha atual** correta é que a identidade é criada, `password_hash` vira `NULL` (a conta passa a ser Google-only) e as demais sessões são revogadas — tudo numa transação. A escrita trava `app_user`, exige status/epoch/hash atuais e consome condicionalmente o challenge exato antes de qualquer mutação; reset concorrente, challenge substituído ou POST repetido não vinculam identidade nem removem senha. Exigimos `email_verified == true` do Google, e conta não-ativa devolve **a mesma resposta** do caso inexistente, para não confirmar que ela existe.
 
 Isso é deliberadamente mais estrito do que o argumento "o e-mail já é a raiz da identidade" permitiria — o reset de senha já entrega a conta a quem controla a caixa postal. A escolha foi tornar a conversão uma **migração deliberada**, não um caminho de recuperação. **Trade-off aceito: "esqueci a senha, entro com Google" não funciona**; quem esqueceu usa o reset e converte depois.
 
 **OAuth nunca pula 2FA.** O retorno do Google — login normal ou conversão — desemboca no mesmo `auth_challenge` de TOTP. Sem isso, com TOTP obrigatório para admin, o OAuth seria um furo direto na regra.
 
-**Vincular exige sessão viva** (`purpose=link`), e a conta vinculada é a **da sessão**, nunca uma derivada do e-mail do Google — os e-mails nem precisam coincidir, porque a sessão já provou a posse. É exatamente por isso que vincular sem sessão nunca pode acontecer. Aceitar convite via Google exige `email_verified` **e** e-mail idêntico ao do convite: permitir outra conta Google deixaria um link vazado ser reivindicado em silêncio.
+**Vincular exige step-up recente, não só sessão viva.** O `GET .../start?purpose=link` é recusado; Configurações faz `POST /api/auth/oauth/google/start` com CSRF, senha atual e, quando há TOTP confirmado, TOTP atual ou recovery single-use. Senha e código ficam no JSON, e a API só devolve a URL do Google depois da prova. A migration `000024_oauth_link_step_up` prende o state a `user_id`, `session_id`, `token_version` e `proof_at` de cinco minutos. O callback valida a mesma sessão/principal/epoch antes do exchange e `LinkIdentity` repete sob locks antes do INSERT, fechando TOCTOU: logout, revoke, troca/reset de senha, outra sessão do mesmo usuário, expiração e replay viram o mesmo `state_invalid`, sem vínculo. A conta vinculada continua sendo a da prova, nunca uma derivada do e-mail do Google; os e-mails não precisam coincidir. Aceitar convite via Google exige `email_verified` **e** e-mail idêntico ao do convite.
 
 **PKCE `S256` apenas**, com o `code_verifier` no servidor (`oauth_state`) e só o `state` no cookie `fx_oauth` — ambos precisam bater no callback, e é isso que impede login-CSRF. `fx_oauth` é `SameSite=Lax` por necessidade: o redirect do Google é um GET top-level cross-site e `Strict` o descartaria, quebrando 100% dos callbacks.
 
 **O `id_token` não é parseado** — chamamos `/v1/userinfo`. O foldex não tem lib JWT como dependência direta, e adotar uma significa assumir fetch/rotação de JWKS, `alg` confusion e validação de `aud`/`iss`/`exp` (uma classe inteira de CVEs) para economizar uma chamada HTTPS num fluxo mensal.
 
-**Lockout de conta Google-only** tem três saídas: `force-password-reset` pelo admin; "Definir senha" em Configurações estando logado via Google (e só então desvincular passa a ser permitido); e `/password/forgot` respondendo o mesmo `202` mas enviando "esta conta entra pelo Google" **em vez** de um link de reset — deixar o link ressuscitaria, só com a caixa postal, exatamente a credencial que a exigência de senha descartou. Resta um caso sem saída pela UI: o **último admin Google-only que perde o Google** sai por edição direta no banco, mesmo status da master esquecida no ADR-29.
+**Lockout de conta Google-only** tem três saídas: `force-password-reset` pelo admin dispara recovery SMTP somente para a caixa verificada, sem instalar/devolver segredo ao admin; "Definir senha" em Configurações estando logado via Google (e só então desvincular passa a ser permitido); e `/password/forgot` respondendo o mesmo `202` mas enviando "esta conta entra pelo Google" **em vez** de um link de reset, pois esse pedido não tem a autorização administrativa adicional. O recovery administrativo prepara token numa transação ainda aberta, envia por SMTP e só então faz commit; falha de envio não deixa token nem muda credencial. O target escolhe a senha no consumidor existente, que preserva TOTP como segundo fator e atomiza hash, `token_version` e revogação de sessões. Set-password e unlink também validam sessão/epoch vivos no write boundary, bumpam o epoch e revogam outras sessões na mesma tx da mudança de credencial. Resta um caso sem saída pela UI: o **último admin Google-only que perde o Google** sai por edição direta no banco, mesmo status da master esquecida no ADR-29.
+
+O recovery administrativo captura esse mesmo epoch ainda sob o lock usado para preparar o envio SMTP. Falha de entrega faz rollback como antes; se qualquer mutação de credencial, logout-all ou ação administrativa incrementar o epoch depois do commit, o consumidor comum recusa o link antes de qualquer alteração.
+
+**Tokens de e-mail não atravessam a requisição inicial.** Templates usam fragmentos `#invite=`, `#reset=` e `#verify=`; o frontend os captura e remove no bootstrap. Preview de convite e OAuth invite start são POST com token no body, e o último devolve a URL de autorização em JSON. `Optional` continua aplicando CSRF em sessão existente. O access log do nginx usa `$uri`, sem query, referrer ou bearer.
 
 ### ADR-32 — `/go/{id}` numérico vira opt-in quando há múltiplos usuários
 **Status:** Accepted — implementado no PR4 (v1.13.0).

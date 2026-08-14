@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { FolderPicker } from './FolderPicker'
 import { renderWithProviders } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
+import { http } from '../api/client'
 
 let state: MockState
 
@@ -104,7 +105,60 @@ describe('FolderPicker', () => {
     fireEvent.keyDown(inputEl(), { key: 'ArrowDown' })
     fireEvent.keyDown(inputEl(), { key: 'ArrowDown' })
     fireEvent.keyDown(inputEl(), { key: 'Enter' })
-    await waitFor(() => expect(onChange).toHaveBeenCalled())
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(1))
+  })
+
+  it('moves the keyboard highlight up without wrapping past the first row', async () => {
+    const onChange = vi.fn()
+    renderWithProviders(<FolderPicker selected={null} onChange={onChange} />)
+    await waitFor(() => expect(inputEl()).toBeInTheDocument())
+    await userEvent.setup().click(inputEl())
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+
+    fireEvent.keyDown(inputEl(), { key: 'ArrowDown' })
+    fireEvent.keyDown(inputEl(), { key: 'ArrowUp' })
+    fireEvent.keyDown(inputEl(), { key: 'ArrowUp' })
+    fireEvent.keyDown(inputEl(), { key: 'Enter' })
+
+    expect(onChange).not.toHaveBeenCalled()
+    expect(inputEl()).toHaveFocus()
+  })
+
+  it('clamps an active row when the available folder list shrinks', async () => {
+    const onChange = vi.fn()
+    const { rerender } = renderWithProviders(<FolderPicker selected={1} onChange={onChange} />)
+    await waitFor(() => expect(inputEl()).toBeInTheDocument())
+    await userEvent.setup().click(inputEl())
+
+    const archive = await screen.findByRole('option', { name: 'Archive' })
+    fireEvent.mouseEnter(archive)
+    expect(archive).toHaveClass('fx-folderpicker-row-active')
+
+    rerender(<FolderPicker selected={1} onChange={onChange} excludeIds={new Set([1, 2, 3])} />)
+    const noFolder = await screen.findByRole('option', { name: /No folder/i })
+    await waitFor(() => expect(noFolder).toHaveClass('fx-folderpicker-row-active'))
+    fireEvent.keyDown(inputEl(), { key: 'Enter' })
+
+    expect(onChange).toHaveBeenCalledWith(null)
+  })
+
+  it('stays usable and retries after inline folder creation is rejected', async () => {
+    vi.mocked(http.post).mockRejectedValueOnce(new Error('create failed'))
+    const onChange = vi.fn()
+    renderWithProviders(<FolderPicker selected={null} onChange={onChange} />)
+    await waitFor(() => expect(inputEl()).toBeInTheDocument())
+    const user = userEvent.setup()
+    await user.click(inputEl())
+    await user.type(inputEl(), 'BrandNew')
+
+    fireEvent.mouseDown(await screen.findByText(/Create folder "BrandNew"/i))
+    await waitFor(() => expect(inputEl()).toBeEnabled())
+    expect(inputEl()).toHaveValue('BrandNew')
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+    expect(onChange).not.toHaveBeenCalled()
+
+    fireEvent.mouseDown(screen.getByText(/Create folder "BrandNew"/i))
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(4))
   })
 
   it('closes on Escape and Tab', async () => {

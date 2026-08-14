@@ -4,8 +4,10 @@ package entries_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -13,6 +15,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
+	"foldex/internal/pkg/listquery"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
 
@@ -20,6 +23,7 @@ import (
 )
 
 type fixture struct {
+	pool  *pgxpool.Pool
 	erepo *entries.Repository
 	lrepo *links.Repository
 	nrepo *notes.Repository
@@ -33,6 +37,7 @@ func setup(t *testing.T) (context.Context, authctx.UserID, fixture) {
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	return context.Background(), uid, fixture{
+		pool:  pool,
 		erepo: entries.NewRepository(pool),
 		lrepo: links.NewRepository(pool),
 		nrepo: notes.NewRepository(pool),
@@ -203,4 +208,135 @@ func TestList_PaginationBoundarySpansBothKinds(t *testing.T) {
 	assert.Equal(t, all[0].Kind, page1[0].Kind)
 	assert.Equal(t, all[2].ID, page2[0].ID)
 	assert.Equal(t, all[4].ID, page3[0].ID)
+}
+
+func TestList_QueryParityWithLinkAndNoteRepositories(t *testing.T) {
+	ctx, uid, f := setup(t)
+	tagA, err := f.trepo.Create(ctx, uid, tags.CreateInput{Name: "parity-a", Color: "#fff"})
+	require.NoError(t, err)
+	tagB, err := f.trepo.Create(ctx, uid, tags.CreateInput{Name: "parity-b", Color: "#fff"})
+	require.NoError(t, err)
+	folder, err := f.frepo.Create(ctx, uid, folders.CreateInput{Name: "Parity", Color: "#abc"})
+	require.NoError(t, err)
+
+	rootLink, err := f.lrepo.Create(ctx, uid, links.CreateInput{
+		URL: "https://needle.example/page-link-a", Title: "Zulu link", Description: stringPtr("shared needle"),
+		Pinned: true, TagIDs: []int64{tagA.ID, tagB.ID},
+	})
+	require.NoError(t, err)
+	_, err = f.lrepo.Create(ctx, uid, links.CreateInput{
+		URL: "https://example.com/page-link-b", Title: "Alpha link", FolderID: &folder.ID, TagIDs: []int64{tagA.ID},
+	})
+	require.NoError(t, err)
+	rootNote, err := f.nrepo.Create(ctx, uid, notes.CreateInput{
+		Title: "Yankee note", BodyHTML: "<p>shared needle page-note-a</p>", TagIDs: []int64{tagA.ID, tagB.ID},
+	})
+	require.NoError(t, err)
+	_, err = f.nrepo.Create(ctx, uid, notes.CreateInput{
+		Title: "Beta note", BodyHTML: "<p>page-note-b</p>", FolderID: &folder.ID, TagIDs: []int64{tagA.ID},
+	})
+	require.NoError(t, err)
+	_, err = f.lrepo.ClickAndResolve(ctx, rootLink.ID)
+	require.NoError(t, err)
+	_, err = f.nrepo.SystemViewAndResolve(ctx, rootNote.Slug)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		q    listquery.Params
+	}{
+		{name: "default", q: listquery.Params{Limit: 500}},
+		{name: "search both entity shapes", q: listquery.Params{Q: "shared needle", Limit: 500}},
+		{name: "tag AND", q: listquery.Params{TagIDs: []int64{tagA.ID, tagB.ID}, Limit: 500}},
+		{name: "folder and tag", q: listquery.Params{FolderID: &folder.ID, TagIDs: []int64{tagA.ID}, Limit: 500}},
+		{name: "ungrouped", q: listquery.Params{Ungrouped: true, Limit: 500}},
+		{name: "folder wins over ungrouped", q: listquery.Params{FolderID: &folder.ID, Ungrouped: true, Limit: 500}},
+		{name: "clicks", q: listquery.Params{Sort: "clicks", Limit: 500}},
+		{name: "recent", q: listquery.Params{Sort: "recent", Limit: 500}},
+		{name: "alpha", q: listquery.Params{Sort: "alpha", Limit: 500}},
+		{name: "alpha desc", q: listquery.Params{Sort: "alpha_desc", Limit: 500}},
+		{name: "link-only pagination", q: listquery.Params{Q: "page-link", Sort: "alpha", Limit: 1, Offset: 1}},
+		{name: "note-only pagination", q: listquery.Params{Q: "page-note", Sort: "alpha", Limit: 1, Offset: 1}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			linkRows, err := f.lrepo.List(ctx, uid, tc.q)
+			require.NoError(t, err)
+			noteRows, err := f.nrepo.List(ctx, uid, tc.q)
+			require.NoError(t, err)
+			entryRows, err := f.erepo.List(ctx, uid, tc.q)
+			require.NoError(t, err)
+
+			require.Equal(t, linkIDs(linkRows), entryIDs(entryRows, "link"), "link UNION arm drifted")
+			require.Equal(t, noteIDs(noteRows), entryIDs(entryRows, "note"), "note UNION arm drifted")
+		})
+	}
+}
+
+func TestList_QueryCountIsConstant(t *testing.T) {
+	ctx, uid, f := setup(t)
+	tag, err := f.trepo.Create(ctx, uid, tags.CreateInput{Name: "batched", Color: "#fff"})
+	require.NoError(t, err)
+	for i := range 20 {
+		_, err := f.lrepo.Create(ctx, uid, links.CreateInput{
+			URL: fmt.Sprintf("https://query-count.example/%d", i), Title: fmt.Sprintf("Link %02d", i), TagIDs: []int64{tag.ID},
+		})
+		require.NoError(t, err)
+		_, err = f.nrepo.Create(ctx, uid, notes.CreateInput{Title: fmt.Sprintf("Note %02d", i), TagIDs: []int64{tag.ID}})
+		require.NoError(t, err)
+	}
+
+	tests := []struct {
+		name string
+		list func() error
+	}{
+		{name: "links", list: func() error {
+			_, err := f.lrepo.List(ctx, uid, links.ListQuery{Limit: 500})
+			return err
+		}},
+		{name: "notes", list: func() error {
+			_, err := f.nrepo.List(ctx, uid, notes.ListQuery{Limit: 500})
+			return err
+		}},
+		{name: "entries", list: func() error {
+			_, err := f.erepo.List(ctx, uid, entries.ListQuery{Limit: 500})
+			return err
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			before := f.pool.Stat().AcquireCount()
+			require.NoError(t, tc.list())
+			require.EqualValues(t, 2, f.pool.Stat().AcquireCount()-before,
+				"list query plus one batched tag query must stay constant as row count grows")
+		})
+	}
+}
+
+func stringPtr(v string) *string { return &v }
+
+func linkIDs(rows []links.Link) []int64 {
+	out := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.ID)
+	}
+	return out
+}
+
+func noteIDs(rows []notes.Note) []int64 {
+	out := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.ID)
+	}
+	return out
+}
+
+func entryIDs(rows []entries.Entry, kind string) []int64 {
+	out := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if row.Kind == kind {
+			out = append(out, row.ID)
+		}
+	}
+	return out
 }

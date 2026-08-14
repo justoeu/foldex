@@ -6,7 +6,7 @@ import { AuthShell, AuthError } from './AuthShell'
 type State = 'working' | 'done' | 'invalid' | 'failed'
 
 /**
- * Consumes the `?verify=` token from a confirmation e-mail.
+ * Consumes the `#verify=` token from a confirmation e-mail.
  *
  * It runs UNAUTHENTICATED and immediately on mount, because the link is
  * followed from a mail client — often on a device that has never signed in.

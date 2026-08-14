@@ -18,14 +18,19 @@ import (
 // AdminHandler serves /api/admin/users. Every route here sits behind
 // Authenticate + RequireAdmin; nothing in this file re-checks the role.
 type AdminHandler struct {
-	repo    *Repository
-	mailer  mailer.Mailer
-	logger  *slog.Logger
-	baseURL string
+	repo       *Repository
+	mailer     mailer.Mailer
+	dispatcher *mailer.Dispatcher
+	logger     *slog.Logger
+	baseURL    string
 }
 
-func NewAdminHandler(repo *Repository, m mailer.Mailer, logger *slog.Logger, baseURL string) *AdminHandler {
-	return &AdminHandler{repo: repo, mailer: m, logger: logger, baseURL: strings.TrimRight(baseURL, "/")}
+func NewAdminHandler(repo *Repository, m mailer.Mailer, dispatcher *mailer.Dispatcher,
+	logger *slog.Logger, baseURL string) *AdminHandler {
+	return &AdminHandler{
+		repo: repo, mailer: m, dispatcher: dispatcher, logger: logger,
+		baseURL: strings.TrimRight(baseURL, "/"),
+	}
 }
 
 func (h *AdminHandler) Mount(r chi.Router) {
@@ -170,24 +175,10 @@ func (h *AdminHandler) RevokeUserSessions(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ForcePasswordReset gives an account a fresh, randomly generated password and
-// returns it to the administrator exactly once.
-//
-// This is ADR-31's first lockout exit, and the only one that works when the
-// user has lost the provider they converted to. It deliberately does NOT mail a
-// reset link: the account may have no password at all, and /password/forgot
-// answers such accounts with "you sign in with Google" precisely so that
-// control of the mailbox alone cannot resurrect a password credential. The
-// administrator is the out-of-band channel.
-//
-// Every session dies, because the credential set changed. Refused on the
-// caller's own account: an admin who has forgotten their own password is in the
-// one situation this cannot solve, and pretending otherwise would let a
-// half-remembered click log them out of the session they still hold.
-//
-// The second factor is untouched. An account with an authenticator still owes a
-// code after signing in with the temporary password, so this hands the admin a
-// way to restore access — not a way to walk into someone's account.
+// ForcePasswordReset asks the target to recover through their verified mailbox.
+// No credential changes and no secret is returned to the administrator. SMTP
+// delivery and token publication are coupled by the repository transaction; the
+// target later chooses their own password through the ordinary reset consumer.
 func (h *AdminHandler) ForcePasswordReset(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authctx.FromContext(r.Context())
 	id, err := httperr.ParseID(chi.URLParam(r, "id"))
@@ -201,41 +192,34 @@ func (h *AdminHandler) ForcePasswordReset(w http.ResponseWriter, r *http.Request
 			"use the change-password form for your own account"))
 		return
 	}
-	user, err := h.repo.GetUser(r.Context(), target)
-	if err != nil {
+	if h.mailer.Driver() != "smtp" {
+		httperr.Write(w, httperr.New(http.StatusServiceUnavailable, "smtp_required",
+			"administrator recovery requires SMTP delivery"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	err = h.repo.CreateAdminPasswordRecovery(ctx, target, passwordResetTTL,
+		func(email, token string) error {
+			return h.mailer.Send(ctx, mailer.AdminPasswordRecoveryMessage(email,
+				h.baseURL+"/#reset="+token, int(passwordResetTTL.Minutes())))
+		})
+	switch {
+	case errors.Is(err, ErrNoUser):
 		httperr.Write(w, httperr.ErrNotFound)
-		return
-	}
-
-	temp, err := newTemporaryPassword()
-	if err != nil {
-		h.logger.Error("admin force reset generate", "err", err)
+	case errors.Is(err, ErrRecoveryUnavailable):
+		httperr.Write(w, httperr.New(http.StatusConflict, "recovery_unavailable",
+			"the target must be active and have a verified e-mail address"))
+	case errors.Is(err, ErrRecoveryDelivery):
+		h.logger.Error("admin recovery mail", "err", err)
+		httperr.Write(w, httperr.New(http.StatusServiceUnavailable, "mail_unavailable",
+			"the recovery e-mail could not be delivered"))
+	case err != nil:
+		h.logger.Error("admin recovery", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
-		return
+	default:
+		w.WriteHeader(http.StatusAccepted)
 	}
-	if err := h.repo.SetPassword(r.Context(), target, temp); err != nil {
-		h.logger.Error("admin force reset", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-	if err := h.repo.RevokeAllForUser(r.Context(), target, ReasonAdminRevoked); err != nil {
-		h.logger.Error("admin force reset revoke", "err", err)
-	}
-	// The owner is told, without the password in it. A silent credential change
-	// on someone else's account is how a rogue administrator would take one
-	// over unnoticed — and admins cannot read another user's content, so this
-	// is not a power they already have by other means.
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := h.mailer.Send(ctx, mailer.PasswordForciblyResetMessage(user.Email)); err != nil {
-			h.logger.Error("admin force reset notify", "err", err)
-		}
-	}()
-
-	// Shown ONCE. Nothing stores the plaintext, so a lost response means running
-	// this again rather than looking it up.
-	httperr.JSON(w, http.StatusOK, map[string]any{"temporary_password": temp})
 }
 
 // errLastAdmin is the response for an operation the repository refused because
@@ -302,12 +286,12 @@ func (h *AdminHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	inv.AcceptURL = h.baseURL + "/?invite=" + raw
+	inv.AcceptURL = h.baseURL + "/#invite=" + raw
 
 	inviter, _ := h.repo.GetUser(r.Context(), caller.UserID)
 	msg := mailer.InviteMessage(inv.Email, inviter.Name, inv.AcceptURL, int(inviteTTL/time.Hour))
-	if err := h.mailer.Send(r.Context(), msg); err != nil {
-		h.logger.Error("invite mail", "err", err, "invite_id", inv.ID)
+	if err := h.dispatcher.Enqueue(msg, "invite"); err != nil {
+		h.logger.Warn("invite mail not queued", "err", err, "invite_id", inv.ID)
 	}
 	httperr.JSON(w, http.StatusCreated, inv)
 }
@@ -319,7 +303,7 @@ func (h *AdminHandler) RevokeInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.repo.RevokeInvite(r.Context(), id); err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

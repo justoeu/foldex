@@ -57,6 +57,9 @@ type User struct {
 	// enrollment that was started and abandoned does not count — it would make
 	// the UI claim protection the user cannot actually satisfy.
 	TOTPEnabled bool `json:"totp_enabled"`
+	// TokenVersion is the credential epoch used only at repository boundaries.
+	// Keeping it off the wire prevents clients from treating it as a claim.
+	TokenVersion int `json:"-"`
 }
 
 // SessionInfo is one live session as shown on the "your devices" list.

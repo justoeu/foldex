@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/secrets"
 )
@@ -22,9 +23,10 @@ const touchInterval = time.Minute
 
 // Middleware resolves the principal and enforces CSRF and RBAC.
 type Middleware struct {
-	repo    *Repository
-	cookies CookieOptions
-	logger  *slog.Logger
+	repo                *Repository
+	cookies             CookieOptions
+	logger              *slog.Logger
+	require2FAForAdmins bool
 
 	mu        sync.Mutex
 	lastTouch map[touchKey]time.Time
@@ -41,12 +43,13 @@ type touchKey struct {
 	id  int64
 }
 
-func NewMiddleware(repo *Repository, cookies CookieOptions, logger *slog.Logger) *Middleware {
+func NewMiddleware(repo *Repository, cookies CookieOptions, logger *slog.Logger, require2FAForAdmins bool) *Middleware {
 	return &Middleware{
-		repo:      repo,
-		cookies:   cookies,
-		logger:    logger,
-		lastTouch: make(map[touchKey]time.Time),
+		repo:                repo,
+		cookies:             cookies,
+		logger:              logger,
+		require2FAForAdmins: require2FAForAdmins,
+		lastTouch:           make(map[touchKey]time.Time),
 	}
 }
 
@@ -135,14 +138,23 @@ func (m *Middleware) Optional(next http.Handler) http.Handler {
 // endpoints are worth escalating toward; 404 says nothing. This mirrors the
 // row-level rule in CLAUDE.md §4.
 func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, ok := authctx.FromContext(r.Context())
-		if !ok || !p.Role.IsAdmin() {
-			httperr.Write(w, httperr.ErrNotFound)
-			return
+	return authgate.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, _ := authctx.FromContext(r.Context())
+		if m.require2FAForAdmins {
+			confirmed, err := m.repo.HasConfirmedTOTP(r.Context(), p.UserID)
+			if err != nil {
+				m.logger.Error("admin TOTP gate", "err", err)
+				httperr.Write(w, httperr.ErrInternal)
+				return
+			}
+			if !confirmed {
+				httperr.Write(w, httperr.New(http.StatusForbidden, "admin_2fa_required",
+					"confirm an authenticator before using administrator features"))
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
-	})
+	}))
 }
 
 // RejectAPIToken refuses a bearer credential on surfaces it must never reach.
@@ -159,14 +171,7 @@ func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 // lacks the role never learns the surface exists — this middleware only ever
 // speaks to someone whose role already passed.
 func (m *Middleware) RejectAPIToken(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if p, ok := authctx.FromContext(r.Context()); ok && p.Via == authctx.ViaAPIToken {
-			httperr.Write(w, httperr.New(http.StatusForbidden, "token_scope",
-				"an API token cannot be used on this endpoint"))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	return authgate.RejectAPIToken(next)
 }
 
 // resolve turns whichever credential the request carries into a principal.

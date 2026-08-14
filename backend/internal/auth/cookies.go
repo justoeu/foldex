@@ -60,6 +60,15 @@ func (o CookieOptions) base(name, value, path string, sameSite http.SameSite, ma
 // every unsafe verb. fx_rt is Strict because nothing legitimate ever navigates
 // cross-site directly to /api/auth/refresh.
 func (o CookieOptions) SetSession(w http.ResponseWriter, tok issuedTokens) {
+	// A live session and a half-finished login are mutually exclusive states,
+	// so establishing one ends the other HERE rather than at each call site.
+	// The 2FA path already cleared it; the OAuth and password paths did not, so
+	// a challenge abandoned mid-flight left its cookie sitting next to a fresh
+	// session for the rest of its TTL. Not redeemable without the code, but the
+	// guarantee should come from the one function that defines "signed in on
+	// the wire", not from four callers each remembering.
+	o.ClearPreAuth(w)
+
 	http.SetCookie(w, o.base(CookieAccess, tok.Access, "/", http.SameSiteLaxMode,
 		int(time.Until(tok.AccessExpiry).Seconds())))
 	http.SetCookie(w, o.base(CookieRefresh, tok.Refresh, refreshPath, http.SameSiteStrictMode,

@@ -33,7 +33,7 @@ Native bookmarks are fine for "save a page quickly and forget it". Once you pass
 | **Data embedded in the browser.** Switched machines? Reinstalled Chrome? Pray. | Postgres + RustFS in containers. `make up` on a new machine and your backup ZIP restores everything (DB + images) in ~minutes. |
 | **No way to know when a page you bookmarked changes.** A board, a release notes page, a status page — you find out by opening it. | Per-link opt-in (hourly/daily/weekly). Backend runs a fingerprint worker (RSS/Atom feed if present, content-hash fallback) and fires a **Web Push notification** when content changes. Bell in the Topbar manages the subscription; amber badge on the card flags unseen changes; "Recent updates" section in the sidebar lists the last N. Works with the tab closed (Service Worker). |
 | **Pastebin/notes app is a separate tool.** Snippets and links live in different places. | **Notes** (`⌥M`) are a first-class entity alongside links: rich-text editor (Tiptap) with a **formatting toolbar** — bold/italic/underline/strike, headings, bullet & numbered lists, text alignment, text color, font family, quotes/code, links and inline images, same tags/folders/pin/search as links, interleaved in the same grid with an emerald badge, shareable via a public `/n/{slug}` page. |
-| **No way to keep a folder private** on a shared screen/machine without a whole second account. | **Folder passwords.** Set a bcrypt-hashed password on any folder — its links/notes stay hidden (and its preview thumbnails redacted, even on hover) until you unlock it for the session. Backend-enforced, not just a UI prompt: the API itself refuses a locked folder's contents without proof of the password. Add an optional **reminder hint** (shown on the unlock prompt; can't be the password itself), and set a **master password** in **Settings** (with a strength meter, confirm field, and its own reminder hint) to reset a folder's password if you ever forget it. |
+| **No way to keep a folder private** on a shared screen/machine without a whole second account. | **Folder passwords.** Set a bcrypt-hashed password on any folder — its links/notes stay hidden (and its preview thumbnails redacted, even on hover) until you unlock it for the session. Backend-enforced, not just a UI prompt: the API itself refuses a locked folder's contents without proof of the password. Deleting a protected folder prompts for that password; deleting a whole tree is refused if it contains independently protected subfolders, so unlocking only the root never erases them. Add an optional **reminder hint** (shown on the unlock prompt; can't be the password itself), and set a **master password** in **Settings** (with a strength meter, confirm field, and its own reminder hint) to reset a folder's password if you ever forget it. |
 
 ### Real scenarios that flipped the switch (native bookmarks → foldex)
 
@@ -53,8 +53,8 @@ If you have fewer than 30 links saved and use **a single browser on a single mac
 ## Quickstart
 
 ```bash
-cp .env.example .env
 make up                 # pulls justoeu/foldex-{backend,web}:latest from Docker Hub
+                        # + creates .env with persistent random RustFS secrets
                         # + boots Postgres on 127.0.0.1 (no Go/bun toolchain needed)
 make migrate-up         # applies SQL migrations
 make seed               # optional: sample tags + links
@@ -62,15 +62,37 @@ make seed               # optional: sample tags + links
 open https://localhost:9444
 ```
 
+`make env` is idempotent: it generates independent 256-bit RustFS root/app
+secrets only when missing (or when upgrading from the old public placeholders),
+stores them in the gitignored `.env` with mode `0600`, and never prints them.
+Direct `docker compose` use must provide those values; the bootstrap and backend
+reject the old placeholders unless
+`RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS=1` is explicitly set for an isolated,
+disposable development instance.
+
+For host-toolchain frontend development, `cd web && bun run dev` listens only
+on `127.0.0.1:9088`. LAN access is a deliberate opt-in:
+`VITE_DEV_LAN=1 bun run dev`.
+
 ### Choosing between pre-built images and local build
 
 | Want to … | Run | Notes |
 |---|---|---|
 | Just run Foldex | `make up` | Pulls `justoeu/foldex-{backend,web}:${FOLDEX_VERSION}` from Docker Hub. Default tag is `latest`. |
-| Pin to a specific build | set `FOLDEX_VERSION=sha-3f6cc06` (or `1.4.1` — image tags drop the `v`) in `.env` then `make up` | Image tags published per commit + per semver tag. |
+| Pin to a specific build | set `FOLDEX_VERSION=sha-3f6cc06` (or `1.4.1` — image tags drop the `v`) in `.env` then `make up` | Image tags are available for manually published commit or semver targets. |
 | Refresh to the latest tag | `make pull && make up` | `pull` re-fetches without restarting; `up` notices the new image and rolls. |
 | Develop / build from source | `make up-build` | Uses the same `Dockerfile`s but builds locally, ignoring the registry image. Needs Docker; does NOT need Go/bun on the host (they run inside the build stages). |
 | Apply local code changes | `make restart-backend` / `make restart-web` | Same as `up-build` but only the named service. |
+
+Maintainer releases are manual: dispatch `release.yml` while selecting `main`
+and provide either strict `vMAJOR.MINOR.PATCH` or a full 40-character SHA. A tag
+push never publishes. The gate accepts only commits already in `origin/main`,
+requires semver to match both version files, rejects pre-existing release tags,
+creates the tag only after both image manifests publish, and makes every publisher wait on
+the GitHub environment named `release`. Configure that environment with required
+reviewers and keep `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` as environment
+secrets. Delete repository-level copies so a workflow stored in a historical
+tag cannot read them.
 
 ### HTTPS (local dev) via mkcert
 
@@ -184,8 +206,11 @@ SAST findings land in the repo **Security ▸ Code scanning** tab (SARIF upload)
 
 ## Smoke test (sanity check after `make up`)
 
-Accounts are on, so `/api/*` needs a credential. Open <https://localhost:9444>, complete the
-setup screen, then create an **API token** under Settings → API tokens and export it:
+Accounts are on, so authenticated `/api/*` routes need a credential. The only
+session-less API read is `/api/files/notes/{uuid}.{ext}`, used by public `/n/{slug}`
+pages and still public when `SHARED_SECRET` is set. Only canonical note UUID keys
+are accepted; link media remains secret-gated and owner-scoped. Open <https://localhost:9444>, complete
+the setup screen, then create an **API token** under Settings → API tokens and export it:
 
 ```bash
 AUTH="Authorization: Bearer fx_1_your-token-here"
@@ -305,8 +330,9 @@ curl -OJ -X POST http://localhost:9089/api/backup
 unzip -l foldex-backup-*.zip
 #   manifest.json
 #   database.json
-#   files/screenshots/{id}.png
-#   files/images/{id}.{ext}
+#   files/screenshots/{id}[.{uuid}].{ext}
+#   files/images/{id}[.{uuid}].{ext}
+#   files/notes/{uuid}.{ext}
 
 # Validate (without applying)
 curl -X POST -F file=@foldex-backup-*.zip \
@@ -323,7 +349,9 @@ curl -X POST -F file=@foldex-backup-*.zip \
 
 Via UI: open the **Import / Export** page → the right column hosts the **💾 Full backup** card. Drag a `.zip` onto it to review the validation summary and pick a mode in `BackupRestoreDialog`. History (last 10 backups: date, duration, size, counts) persists in `localStorage`.
 
-> **Restore idempotency caveat.** `mode=skip` is idempotent for the UNIQUE-constrained entities (tags by name, links by URL — re-running the same zip inserts none). `click_log` and `folder` have no natural key, so a second skip restore of the same zip **re-inserts** those rows. Run a skip restore once; use `mode=wipe` for a clean re-baseline.
+Uploads are capped at 2 GiB compressed. Before validation or restore touches the database, Foldex rejects duplicate ZIP names, more than 100,000 entries, manifest/database JSON above 32/256 MiB, files above 64 MiB each, or more than 4 GiB expanded in total. Export applies the same envelopes, with at most 99,998 files (two entries are reserved for manifest/database) and 1,024-byte object keys. Only one export, validation, or restore runs at a time; a concurrent request receives `429 backup_busy` before DB, object-store, body-read, or temp-file work and can retry.
+
+> **`mode=skip` is convergent for the entire archive.** Foldex durably checkpoints the exact archive digest and its fresh-ID/media mappings per account. Re-running a completed ZIP does not reinsert folders, notes, associations, or clicks and performs no repeated object upload checks. If object upload fails after the database commit, retry the same ZIP: restore resumes the committed mapping and writes only missing files. `wipe` clears prior checkpoints because it replaces their target rows; `duplicate` intentionally creates another copy.
 
 > **Restore no longer preserves IDs, in any mode.** Row ids come from sequences that are shared across accounts, so re-using the ids inside a backup could collide with rows that already exist. Every restore mints fresh ids and re-points image keys and click history at them; what round-trips is the content and its relationships, not the integers. A backup also carries **no login data** — no passwords, no sessions, no 2FA secrets — and restoring one always creates content owned by whoever is restoring it, never by whoever exported it. Restoring someone else's backup is allowed and simply shows a warning that the content is changing hands.
 
@@ -336,8 +364,8 @@ Accounts are **on by default** since 1.13.0.
 **First run — including an upgrade.** The SPA shows a setup screen. The account you
 create there becomes the administrator and **adopts every link, note, folder and tag
 that already existed**: nothing is lost and nothing has to be re-imported. Set
-`AUTH_PUBLIC_URL` to the origin you actually browse to, because it is what invitation
-and reset links are built from.
+`AUTH_PUBLIC_URL` to the origin you actually browse to, because it is what invitation,
+reset and verification links are built from.
 
 ```bash
 AUTH_PUBLIC_URL=https://localhost:9444
@@ -351,10 +379,12 @@ reach the port owns the whole library, so keep the loopback bind.
 **Adding people.** There is no public sign-up: an administrator sends an invitation from
 **Users** in the topbar, and only the address on that invitation can accept it — with a
 password or with the matching Google account. The invite link is shown once when you
-create it, and is also e-mailed.
+create it, and is also e-mailed. Invite, reset and verification credentials live after
+`#` in those links, so the initial HTTP request and nginx access log never receive them;
+the SPA removes the fragment immediately.
 
 **Managing people.** The **Users** screen (administrators only) lists every account and
-lets you promote, disable, delete, sign out everywhere, and hand back a password. Two
+lets you promote, disable, delete, sign out everywhere, and send account recovery. Two
 guards are enforced by the server, not just hidden in the UI: you cannot demote, disable
 or delete **yourself**, and the **last active administrator** cannot be removed by
 anyone. Zero administrators is not recoverable through any API call.
@@ -376,16 +406,27 @@ filter the UI applies.
 30-day refresh token that rotates on every use. If a refresh token is ever replayed —
 the signature of a stolen one — every session for that account is signed out and the
 owner is e-mailed. Signing out is available everywhere; "sign out everywhere" revokes
-every device. Changing your password keeps the device you are on and drops the rest.
+every device. Credential changes such as changing/setting a password, disconnecting
+Google, or turning off two-step verification keep the device you are on and drop the rest.
 
 **Two-step verification.** Turn it on from **Settings → Two-step verification**: scan
 the QR with any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden),
 confirm one code, and save the ten single-use **recovery codes** — they are shown once
-and the server keeps only their hashes, so it genuinely cannot show them again. At
+in `XXXX-XXXX-XXXX-XXXX` format. The server keeps only user-bound, server-keyed
+digests, so it genuinely cannot show them again or test them from a database dump. At
 sign-in the same six-digit field accepts a code from your app, a recovery code, or a
 code e-mailed to you. Administrators are required to have it: with
 `AUTH_REQUIRE_2FA_FOR_ADMINS=1` (the default) an admin without an authenticator is
 walked through setting one up before their first session, rather than being locked out.
+This also covers the first bootstrap account and administrator invitations. Promoting a
+signed-in user to administrator signs out their existing sessions so the next login can
+enforce verification. Turning the policy on for an existing instance immediately blocks
+administrator features on old or refreshed sessions until TOTP is confirmed, while the
+enrollment routes remain available.
+
+> Upgrading through migration `000023` invalidates older recovery sheets and pending
+> e-mail codes because unkeyed digests cannot be converted without plaintext. Existing
+> authenticator enrollment remains valid; regenerate recovery codes from Settings.
 
 > **The key that encrypts the authenticator secrets must be backed up with your
 > database.** Either let the backend generate `/data/auth_encryption.key` on first
@@ -413,6 +454,14 @@ is invite-only, and auto-provisioning would quietly bypass that. And it **never 
 two-step verification**: signing in with Google lands on the same code screen a password
 login does.
 
+**Connecting Google from Settings requires fresh proof.** **Settings → How you sign in →
+Connect Google** opens a confirmation dialog for your current password and, when two-step
+verification is enabled, a current authenticator or recovery code. Only then does the API
+return the Google redirect URL. The five-minute link state is tied to that exact session and
+credential version, so signing out, revoking the session, or changing/resetting the password
+before the callback cancels the link. The password and code are sent only in the POST body,
+never in a URL.
+
 **Already have a password account with the same address?** Signing in with Google does
 not log you in and does not refuse you — it asks for your **current password** once, and
 then links Google and **removes the password**. From that point the account is
@@ -421,16 +470,20 @@ secret, and anyone can put one in a Google profile, so a matching address alone 
 never hand over an account. The trade is that *"I forgot my password, let me just use
 Google"* does not work — reset first, convert afterwards.
 
-Three ways back into a Google-only account that loses its Google:
+Ways back into a Google-only account that loses its Google:
 
-1. An administrator uses **Reset password** on the Users screen and gives you the
-   temporary password directly.
+1. An administrator uses **Send recovery** on the Users screen. Foldex sends a
+   single-use link only to your verified mailbox through SMTP; the administrator never
+   sees a password or token, and your credential and sessions do not change until you
+   use the link and choose your own password. If SMTP fails, nothing is changed.
 2. While still signed in via Google, **Settings → How you sign in → Set a password**.
    Only after that can you disconnect Google — doing it the other way round would leave
-   the account with no way in at all, which the database refuses outright.
-3. Asking for a password reset on such an account e-mails you *"this account signs in
+   the account with no way in at all, which the database refuses outright. Setting the
+   password or disconnecting Google signs out your other devices.
+3. Asking for ordinary password reset on such an account e-mails you *"this account signs in
    with Google"* rather than a reset link. That is on purpose: a link there would let
-   control of the mailbox alone resurrect the password the conversion retired.
+   an unauthenticated mailbox request resurrect the password the conversion retired.
+   Administrator-triggered recovery additionally proves admin authorization.
 
 **API tokens (browser extension, scripts).** **Settings → API tokens** mints a
 long-lived bearer credential, shown **once** — the server keeps only a hash. It reads
@@ -439,9 +492,10 @@ sessions, invitations, user administration and backups, so a token pasted into a
 extension's configuration is not the account. Revoke one and it stops working
 immediately.
 
-**Forgot your password.** **Reset it** from the sign-in screen — a link arrives by
+**Forgot your password.** **Reset it** from the sign-in screen — a fragment link arrives by
 e-mail (or in the backend log with the default `log` driver), is good for 30 minutes and
-can be used once. Using it signs you out of every other device, and an account with
+can be used once. The link is also invalidated by a password change, sign-out-everywhere,
+or an administrator changing the account's access or revoking its sessions. Using it signs you out of every other device, and an account with
 two-step verification still has to present a code: a mailbox alone is never enough.
 
 **Locked out?** With no way back into the only administrator account, recovery is a
@@ -451,7 +505,8 @@ whose Google access is gone**: no other admin exists to reset their password. Se
 `AUTH_ENABLED=0` and restarting reverts the instance to single-user behaviour with all
 content intact, which is the fastest way back in.
 
-> **`SHARED_SECRET` is deprecated.** It predates accounts: it gates `/api` as a whole,
+> **`SHARED_SECRET` is deprecated.** It predates accounts: it gates `/api` except the
+> exact UUID-keyed note-media read required by public `/n/{slug}` pages,
 > identifies nobody, and cannot scope a single row. Real authentication replaced it.
 > Keep it only while older browser extensions are still configured with it — the backend
 > warns at boot while it is set, and it will be removed in a future release.
@@ -462,6 +517,13 @@ content intact, which is the fastest way back in.
 > anyone walk 1, 2, 3… and enumerate every link and note on the instance, other people's
 > included. Slugs are unaffected. Set `PUBLIC_NUMERIC_IDS=1` if you have old numeric
 > links already shared and would rather keep them working.
+
+> **Preview network policy.** Cloud metadata/credential ranges and RFC6598 are
+> always blocked. Set `PREVIEW_STRICT_SSRF=1` when users must not reach services
+> on the host's internal network; strict mode rejects the complete IANA
+> special-purpose registries. Leaving it unset preserves ordinary RFC1918
+> intranet previews such as Jira and Confluence. Chromium screenshots always
+> use the strict policy regardless of this setting.
 
 Design rationale, threat model and the full API surface:
 [docs/SDD-AUTH-RBAC.md](docs/SDD-AUTH-RBAC.md).

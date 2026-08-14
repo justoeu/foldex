@@ -1,7 +1,6 @@
 package links
 
 import (
-	"context"
 	"errors"
 	"net/http"
 
@@ -15,21 +14,14 @@ import (
 	"foldex/internal/ports"
 )
 
-// FolderPasswordLookup resolves a folder's password hash for content-gate
-// on GET /api/links?folder_id=X (same posture as entries).
-type FolderPasswordLookup interface {
-	PasswordHashFor(ctx context.Context, uid authctx.UserID, id int64) (*string, error)
-}
-
 // Enqueuer is the preview-worker port (canonical: ports.Enqueuer).
 type Enqueuer = ports.Enqueuer
 
 type Handler struct {
-	repo         *Repository
-	worker       Enqueuer
-	fetcher      MetadataFetcher // optional — disables /url-metadata when nil
-	folderLookup FolderPasswordLookup
-	unlockKey    []byte
+	repo       *Repository
+	worker     Enqueuer
+	fetcher    MetadataFetcher // optional — disables /url-metadata when nil
+	folderGate folders.ContentGate
 }
 
 func NewHandler(repo *Repository, worker Enqueuer) *Handler {
@@ -46,9 +38,8 @@ func (h *Handler) WithMetadataFetcher(f MetadataFetcher) *Handler {
 }
 
 // WithFolderGate enables unlock-token content-gate on ?folder_id= lists.
-func (h *Handler) WithFolderGate(lookup FolderPasswordLookup, unlockKey []byte) *Handler {
-	h.folderLookup = lookup
-	h.unlockKey = unlockKey
+func (h *Handler) WithFolderGate(lookup folders.PasswordHashLookup, unlockKey []byte) *Handler {
+	h.folderGate = folders.NewContentGate(lookup, unlockKey)
 	return h
 }
 
@@ -69,43 +60,18 @@ func (h *Handler) Mount(r chi.Router) {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	p := listquery.Parse(r)
-	q := ListQuery{
-		Q: p.Q, TagIDs: p.TagIDs, Sort: p.Sort, Limit: p.Limit, Offset: p.Offset,
-		FolderID: p.FolderID, Ungrouped: p.Ungrouped,
-	}
-	if q.FolderID != nil && h.folderLookup != nil {
-		token := r.Header.Get(folders.UnlockHeader)
-		if err := h.enforceFolderUnlock(r.Context(), *q.FolderID, token); err != nil {
-			httperr.Write(w, err)
-			return
-		}
-		out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()), q)
-		if err != nil {
-			httperr.Write(w, err)
-			return
-		}
-		if err := h.enforceFolderUnlock(r.Context(), *q.FolderID, token); err != nil {
-			httperr.Write(w, err)
-			return
-		}
-		httperr.JSON(w, http.StatusOK, out)
-		return
-	}
-	out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()), q)
+	q := listquery.Parse(r)
+	ctx := r.Context()
+	uid := authctx.MustUser(ctx)
+	token := r.Header.Get(folders.UnlockHeader)
+	out, err := folders.ListWithContentGate(ctx, h.folderGate, uid, q.FolderID, token, func() ([]Link, error) {
+		return h.repo.List(ctx, uid, q)
+	})
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, out)
-}
-
-func (h *Handler) enforceFolderUnlock(ctx context.Context, folderID int64, token string) error {
-	hash, err := h.folderLookup.PasswordHashFor(ctx, authctx.MustUser(ctx), folderID)
-	if err != nil {
-		return err
-	}
-	return folders.CheckUnlock(h.unlockKey, folderID, hash, token)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +92,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	l, err := h.repo.Create(r.Context(), authctx.MustUser(r.Context()), in)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	if h.worker != nil {
@@ -145,7 +111,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	l, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, l)
@@ -174,7 +140,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	l, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, l)
@@ -187,7 +153,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -200,7 +166,7 @@ func (h *Handler) refreshPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	// Reset status to 'pending' before enqueueing so the frontend immediately
@@ -208,7 +174,7 @@ func (h *Handler) refreshPreview(w http.ResponseWriter, r *http.Request) {
 	// this, a previously 'failed' link stays 'failed' visually and the user
 	// has no signal the retry is running.
 	if err := h.repo.SystemUpdatePreview(r.Context(), id, StatusPending, nil, nil, nil, nil); err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	if h.worker != nil {
@@ -224,7 +190,7 @@ func (h *Handler) seenChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.repo.MarkChangeSeen(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -235,7 +201,7 @@ func (h *Handler) listRecentChanges(w http.ResponseWriter, r *http.Request) {
 	limit := clampint.Int(r.URL.Query().Get("limit"), 20, 1, 100)
 	out, err := h.repo.ListRecentChanges(r.Context(), authctx.MustUser(r.Context()), days*24*60*60, limit)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, out)

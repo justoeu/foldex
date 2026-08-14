@@ -27,8 +27,8 @@ DB_URL          ?= postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_H
 MIGRATE := docker run --rm --network $(COMPOSE_NETWORK) -v $(PWD)/db/migrations:/migrations migrate/migrate:v4.17.0
 
 COVERAGE_MIN ?= 85
-# Packages measured for coverage. Excludes cmd/server (boot), internal/db
-# (requires real DB), and internal/testdb (test helper).
+# Packages measured for coverage. Excludes cmd (server boot and the RustFS
+# bootstrap helper), internal/db (requires real DB), and internal/testdb.
 # authctxtest is test scaffolding (it supplies the principal handler tests
 # need), so it is excluded for the same reason testdb is: instrumenting a
 # helper that exists only for tests deflates the number that gates real code.
@@ -75,7 +75,7 @@ coverage-run: ## Run all tests with coverage instrumentation (no threshold gate)
 	# from a previous run reuse the OLD coverage profile, so changing what is
 	# instrumented (or which tests exercise which lines) silently shows the
 	# wrong total. Worth the rerun cost for honest numbers.
-	$(TESTCONTAINERS_ENV) go test -tags=integration -covermode=atomic -coverpkg=$(COVER_PKGS) -coverprofile=coverage.out -count=1 -timeout=25m ./internal/...
+	$(TESTCONTAINERS_ENV) go test -tags=integration -covermode=atomic -coverpkg=$(COVER_PKGS) -coverprofile=coverage.out -count=1 -timeout=25m ./...
 
 coverage-check: ## Read coverage.out and fail if below COVERAGE_MIN (default 85)
 	@test -f coverage.out || (echo "coverage.out missing — run 'make coverage-run' first" && exit 1)

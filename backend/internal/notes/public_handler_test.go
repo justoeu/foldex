@@ -80,3 +80,33 @@ func TestPublicHandler_NotFound(t *testing.T) {
 	r.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }
+
+func TestPublicHandler_PublicNumericIDsFeatureFlag(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	repo := notes.NewRepository(pool)
+	created, err := repo.Create(context.Background(), uid, notes.CreateInput{Title: "Flag Note", BodyHTML: "<p>x</p>"})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		target          string
+		allowNumericIDs bool
+		wantStatus      int
+	}{
+		{name: "numeric on", target: idStr(created.ID), allowNumericIDs: true, wantStatus: http.StatusOK},
+		{name: "numeric off", target: idStr(created.ID), allowNumericIDs: false, wantStatus: http.StatusNotFound},
+		{name: "slug while numeric off", target: created.Slug, allowNumericIDs: false, wantStatus: http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := chi.NewRouter()
+			notes.NewPublicHandler(repo, tt.allowNumericIDs).Mount(r)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/n/"+tt.target, nil)
+			r.ServeHTTP(rec, req)
+			assert.Equal(t, tt.wantStatus, rec.Code)
+		})
+	}
+}

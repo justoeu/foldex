@@ -134,7 +134,7 @@ func TestVerifyTOTPRejectsAMalformedStoredSecret(t *testing.T) {
 }
 
 // The routing rule that decides which credential the user typed. Getting this
-// wrong made ~1 in 23 recovery codes unusable; see the integration test that
+// wrong makes roughly 18% of current recovery codes unusable; see the integration test that
 // constructs that case.
 func TestNumericOTP(t *testing.T) {
 	t.Parallel()
@@ -153,11 +153,12 @@ func TestNumericOTP(t *testing.T) {
 		{"1234567", "", false},
 		{"", "", false},
 		{"12345a", "", false},
-		// The shapes that matter: a recovery code, with and without exactly six
-		// digits among its ten symbols. NEITHER may be treated as numeric.
+		// The shapes that matter: recovery codes, including one with exactly six
+		// digits among its sixteen symbols. NONE may be treated as numeric.
 		{"1A2B3-4C5D6", "", false},
 		{"ABCDE-FGHJK", "", false},
 		{"12345-67890", "", false},
+		{"1A2B-3C4D-5EFG-6HJK", "", false},
 	}
 	for _, tc := range cases {
 		got, ok := numericOTP(tc.in)
@@ -198,8 +199,8 @@ func TestNewRecoveryCodesShape(t *testing.T) {
 		}
 		seen[c] = true
 
-		if len(c) != recoveryCodeChars+1 || c[recoveryCodeChars/2] != '-' {
-			t.Fatalf("code %q is not grouped 5-5 with a hyphen", c)
+		if len(c) != recoveryCodeChars+3 || c[4] != '-' || c[9] != '-' || c[14] != '-' {
+			t.Fatalf("code %q is not grouped 4-4-4-4 with hyphens", c)
 		}
 		// The alphabet excludes I, L, O and U precisely because they are the
 		// characters people mistranscribe from paper.
@@ -212,6 +213,9 @@ func TestNewRecoveryCodesShape(t *testing.T) {
 		if _, ok := numericOTP(c); ok {
 			t.Fatalf("recovery code %q was classified as a six-digit code", c)
 		}
+	}
+	if recoveryCodeChars*5 != 80 {
+		t.Fatalf("recovery codes carry %d bits, want 80", recoveryCodeChars*5)
 	}
 }
 

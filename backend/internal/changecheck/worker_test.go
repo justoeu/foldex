@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/links"
+	"foldex/internal/pkg/authctx"
 )
 
 func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -22,7 +23,7 @@ func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard,
 type fakeRepo struct {
 	mu       sync.Mutex
 	links    map[int64]links.Link
-	due      []int64
+	due      []links.DueLink
 	results  []links.CheckResult
 	findErr  error
 	recErr   error
@@ -45,13 +46,7 @@ func (r *fakeRepo) SystemFindDueForCheck(_ context.Context, _ int) ([]links.DueL
 	if r.findErr != nil {
 		return nil, r.findErr
 	}
-	out := make([]links.DueLink, 0, len(r.due))
-	for _, id := range r.due {
-		// Owner is fixed at 1 here: these tests exercise fingerprint diffing and
-		// queue behaviour, not tenant routing. Cross-user push scoping is locked
-		// by internal/security's TestCrossUser_ChangeCheckPushGoesOnlyToOwner.
-		out = append(out, links.DueLink{ID: id, UserID: 1})
-	}
+	out := append([]links.DueLink(nil), r.due...)
 	r.due = nil
 	return out, nil
 }
@@ -183,6 +178,7 @@ func TestProcess_SecondObservation_SameContent_NoChange(t *testing.T) {
 }
 
 func TestProcess_ContentDrift_DetectsChangeAndNotifies(t *testing.T) {
+	owner := authctx.UserID(73)
 	prev := FormatFingerprint(KindContent, contentHash("hello"))
 	repo := &fakeRepo{
 		links: map[int64]links.Link{
@@ -198,16 +194,20 @@ func TestProcess_ContentDrift_DetectsChangeAndNotifies(t *testing.T) {
 	sender := &fakeSender{}
 	w := New(repo, fakeFetcher{body: []byte(newPage("x", "world"))}, sender, Options{}, testLogger())
 
-	w.process(context.Background(), links.DueLink{ID: 1, UserID: 1})
+	w.process(context.Background(), links.DueLink{ID: 1, UserID: owner})
 
 	rs := repo.snapshotResults()
 	require.Len(t, rs, 1)
 	assert.True(t, rs[0].Changed)
 	// Push fires on a goroutine — give it a tick.
 	assert.Eventually(t, func() bool { return len(sender.seen()) == 1 }, time.Second, 10*time.Millisecond)
-	got := sender.seen()[0]
-	assert.Equal(t, int64(1), got.LinkID)
-	assert.Equal(t, "change_detected", got.Kind)
+	assert.Equal(t, Notification{
+		LinkID: 1,
+		Title:  "x",
+		URL:    "https://x.test/",
+		Kind:   "change_detected",
+		UserID: owner,
+	}, sender.seen()[0])
 }
 
 func TestProcess_FetchFailure_RecordsWithoutPush(t *testing.T) {
@@ -312,16 +312,20 @@ func TestProcess_OptOutBetweenScanAndProcess_NoOp(t *testing.T) {
 
 // ----- scan -----
 
-func TestScan_EnqueuesDueIDs(t *testing.T) {
+func TestScan_EnqueuesDueJobsWithOwners(t *testing.T) {
+	due := []links.DueLink{
+		{ID: 1, UserID: authctx.UserID(71)},
+		{ID: 2, UserID: authctx.UserID(72)},
+		{ID: 3, UserID: authctx.UserID(73)},
+	}
 	repo := &fakeRepo{
-		due: []int64{1, 2, 3},
+		due: due,
 	}
 	w := New(repo, fakeFetcher{}, nil, Options{ScanInterval: time.Hour}, testLogger())
 	w.scan(context.Background())
 
-	// Drain to verify they landed in the channel.
 	got := drain(t, w, 3)
-	assert.ElementsMatch(t, []int64{1, 2, 3}, got)
+	assert.ElementsMatch(t, due, got)
 }
 
 func TestScan_FindDueErrorIsTolerated(t *testing.T) {
@@ -368,16 +372,15 @@ func (q *queueFetcher) GetRaw(_ context.Context, _ string) ([]byte, string, erro
 	return head, "text/html", nil
 }
 
-// drain pulls up to n IDs from the worker's jobs channel with a per-recv
-// timeout so the test never hangs.
-func drain(t *testing.T, w *Worker, n int) []int64 {
+// drain pulls up to n jobs with a per-receive timeout so the test never hangs.
+func drain(t *testing.T, w *Worker, n int) []links.DueLink {
 	t.Helper()
-	got := make([]int64, 0, n)
+	got := make([]links.DueLink, 0, n)
 	deadline := time.After(time.Second)
 	for len(got) < n {
 		select {
 		case job := <-w.jobs:
-			got = append(got, job.ID)
+			got = append(got, job)
 		case <-deadline:
 			t.Fatalf("timed out draining jobs (got %d/%d)", len(got), n)
 		}

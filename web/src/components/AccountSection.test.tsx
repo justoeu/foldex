@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { AccountSection } from './AccountSection'
 import { renderWithProviders, testAdminUser } from '../test/renderWithProviders'
 import { http } from '../api/client'
+import * as auth from '../api/auth'
 import type { AuthUser, SessionState } from '../auth/types'
 
 afterEach(() => vi.restoreAllMocks())
@@ -100,6 +101,51 @@ describe('AccountSection', () => {
   it('offers to connect Google when nothing is linked', async () => {
     render(sessionWith({ has_password: true }))
     expect(await screen.findByRole('button', { name: /connect google/i })).toBeInTheDocument()
+  })
+
+  it('opens a credential step-up dialog before connecting Google', async () => {
+    const user = userEvent.setup()
+    render(sessionWith({ has_password: true }))
+
+    await user.click(await screen.findByRole('button', { name: /connect google/i }))
+
+    expect(screen.getByRole('dialog', { name: /connect google/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/current password/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/code from your authenticator/i)).not.toBeInTheDocument()
+  })
+
+  it('posts the password proof before using the API redirect URL', async () => {
+    const user = userEvent.setup()
+    const navigate = vi.spyOn(auth, 'navigateToOAuth').mockImplementation(() => {})
+    const post = vi.spyOn(http, 'post').mockResolvedValue({
+      data: { redirect_url: 'https://accounts.google.test/oauth?state=safe-state' },
+    } as never)
+    render(sessionWith({ has_password: true }))
+
+    await user.click(await screen.findByRole('button', { name: /connect google/i }))
+    await user.type(screen.getByLabelText(/current password/i), 'hunter2hunter2')
+    await user.click(screen.getByRole('button', { name: /continue to google/i }))
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/api/auth/oauth/google/start', {
+        current_password: 'hunter2hunter2',
+        code: '',
+      }),
+    )
+    expect(post.mock.calls[0]?.[0]).not.toContain('hunter2hunter2')
+    expect(navigate).toHaveBeenCalledWith('https://accounts.google.test/oauth?state=safe-state')
+  })
+
+  it('requires TOTP or a recovery code when two-step verification is enabled', async () => {
+    const user = userEvent.setup()
+    render(sessionWith({ has_password: true, totp_enabled: true }))
+
+    await user.click(await screen.findByRole('button', { name: /connect google/i }))
+    expect(screen.getByText(/code from your authenticator/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /use a recovery code/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /use a recovery code/i }))
+    expect(screen.getByLabelText(/recovery code/i)).toBeInTheDocument()
   })
 
   it('shows the linked address once Google is connected', async () => {

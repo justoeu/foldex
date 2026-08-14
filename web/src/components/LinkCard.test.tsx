@@ -366,11 +366,25 @@ describe('LinkCard', () => {
     expect(screen.getByLabelText(/last click/i)).toHaveTextContent(/never/i)
   })
 
-  it('bumps click_count optimistically when open is clicked', async () => {
-    renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
+  it('bumps click metadata optimistically in link and interleaved-entry caches', () => {
+    const { client } = renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
+    const linkKey = ['links', 'optimistic-test']
+    const entryKey = ['entries', 'optimistic-test']
+    client.setQueryData(linkKey, { pages: [[baseLink]], pageParams: [0] })
+    client.setQueryData(entryKey, {
+      pages: [[{ ...baseLink, kind: 'link' }]],
+      pageParams: [0],
+    })
     const open = screen.getByRole('link', { name: /open/i })
     fireEvent.click(open)
+
+    const links = client.getQueryData<{ pages: Link[][] }>(linkKey)
+    const entries = client.getQueryData<{ pages: Array<Array<Link & { kind: 'link' }>> }>(entryKey)
     expect(open).toHaveAttribute('href', '/go/hacker-news')
+    expect(links?.pages[0][0].click_count).toBe(8)
+    expect(entries?.pages[0][0].click_count).toBe(8)
+    expect(links?.pages[0][0].last_clicked_at).toBeTruthy()
+    expect(entries?.pages[0][0].last_clicked_at).toBe(links?.pages[0][0].last_clicked_at)
   })
 
   it('fires onRefreshPreview when status is not ok', async () => {

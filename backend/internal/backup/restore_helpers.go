@@ -1,19 +1,173 @@
 package backup
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"foldex/internal/imageopt"
+	"foldex/internal/notemedia"
 	"foldex/internal/notes"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/httperr"
 )
+
+const maxRestoredNoteMediaBytes = 16 << 20
+
+type preparedNoteMediaFile struct {
+	offset      int64
+	size        int64
+	contentType string
+}
+
+type preparedNoteMediaRestore struct {
+	mapping map[string]string
+	files   map[string]preparedNoteMediaFile
+	spool   *os.File
+	size    int64
+}
+
+func (p *preparedNoteMediaRestore) cleanup() {
+	if p == nil || p.spool == nil {
+		return
+	}
+	name := p.spool.Name()
+	_ = p.spool.Close()
+	_ = os.Remove(name)
+}
+
+func prepareNoteMediaRestore(snap *Snapshot, zr *zip.Reader) (_ *preparedNoteMediaRestore, err error) {
+	prepared := &preparedNoteMediaRestore{
+		mapping: make(map[string]string),
+		files:   make(map[string]preparedNoteMediaFile),
+	}
+	defer func() {
+		if err != nil {
+			prepared.cleanup()
+		}
+	}()
+	fileEntries := zipFileEntries(zr, "files/")
+	for i := range snap.Notes {
+		bodyHTML, _ := notes.SanitizeBody(snap.Notes[i].BodyHTML)
+		snap.Notes[i].BodyHTML = bodyHTML
+		values := []string{bodyHTML}
+		if snap.Notes[i].CoverURL != nil {
+			values = append(values, *snap.Notes[i].CoverURL)
+		}
+		for _, oldKey := range notemedia.Keys(values...) {
+			if _, exists := prepared.mapping[oldKey]; exists {
+				continue
+			}
+			entry, exists := fileEntries["files/"+oldKey]
+			if !exists {
+				continue
+			}
+			opt, err := optimizeRestoredNoteMedia(entry)
+			if err != nil {
+				return nil, httperr.New(400, "invalid_backup", "backup contains invalid note media")
+			}
+			if len(opt.Data) > maxRestoredNoteMediaBytes || int64(len(opt.Data)) > maxArchiveExpandedBytes-prepared.size {
+				return nil, httperr.New(400, "invalid_backup", "optimized note media exceeds restore limits")
+			}
+			if prepared.spool == nil {
+				prepared.spool, err = os.CreateTemp("", "foldex-backup-note-media-*.bin")
+				if err != nil {
+					return nil, fmt.Errorf("create note media spool: %w", err)
+				}
+			}
+			offset := prepared.size
+			n, writeErr := prepared.spool.Write(opt.Data)
+			if writeErr != nil {
+				return nil, fmt.Errorf("write note media spool: %w", writeErr)
+			}
+			if n != len(opt.Data) {
+				return nil, io.ErrShortWrite
+			}
+			prepared.files[oldKey] = preparedNoteMediaFile{
+				offset: offset, size: int64(n), contentType: opt.ContentType,
+			}
+			prepared.size += int64(n)
+			prepared.mapping[oldKey] = "notes/" + uuid.NewString() + "." + opt.Ext
+		}
+		snap.Notes[i].BodyHTML = notemedia.Rewrite(snap.Notes[i].BodyHTML, prepared.mapping)
+		if snap.Notes[i].CoverURL != nil {
+			rewritten := notemedia.Rewrite(*snap.Notes[i].CoverURL, prepared.mapping)
+			snap.Notes[i].CoverURL = &rewritten
+		}
+	}
+	return prepared, nil
+}
+
+func optimizeRestoredNoteMedia(entry *zip.File) (imageopt.Result, error) {
+	if entry.UncompressedSize64 > maxRestoredNoteMediaBytes {
+		return imageopt.Result{}, fmt.Errorf("note media exceeds restore limit")
+	}
+	r, err := entry.Open()
+	if err != nil {
+		return imageopt.Result{}, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(r, maxRestoredNoteMediaBytes+1))
+	closeErr := r.Close()
+	if readErr != nil {
+		return imageopt.Result{}, readErr
+	}
+	if closeErr != nil {
+		return imageopt.Result{}, closeErr
+	}
+	if len(data) > maxRestoredNoteMediaBytes {
+		return imageopt.Result{}, fmt.Errorf("note media exceeds restore limit")
+	}
+	return imageopt.Optimize(data, imageopt.Options{MaxDim: 1024, Quality: 82})
+}
+
+func zipFileEntries(zr *zip.Reader, prefix string) map[string]*zip.File {
+	entries := make(map[string]*zip.File)
+	for _, entry := range zr.File {
+		if strings.HasPrefix(entry.Name, prefix) {
+			entries[entry.Name] = entry
+		}
+	}
+	return entries
+}
+
+func restoreNoteMediaRefs(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap *Snapshot, m idMapping) error {
+	keys := make([]string, 0, len(m.noteFiles))
+	owned := make(map[string]struct{}, len(m.noteFiles))
+	for _, key := range m.noteFiles {
+		keys = append(keys, key)
+		owned[key] = struct{}{}
+	}
+	sort.Strings(keys)
+	refs := make([]notemedia.RestoredRef, 0)
+	for _, note := range snap.Notes {
+		newNoteID, ok := m.noteMap[note.ID]
+		if !ok {
+			continue
+		}
+		values := []string{note.BodyHTML}
+		if note.CoverURL != nil {
+			values = append(values, *note.CoverURL)
+		}
+		for _, key := range notemedia.Keys(values...) {
+			if _, ok := owned[key]; ok {
+				refs = append(refs, notemedia.RestoredRef{NoteID: newNoteID, ObjectKey: key})
+			}
+		}
+	}
+	return notemedia.RestoreRefs(ctx, tx, uid, keys, refs)
+}
 
 // realignLinkImageURLs points every restored link's og_image_url at its OWN id.
 //
-// Link images live at an id-derived key (`/api/files/images/{id}.jpg`), and no
+// Link images live at an id-derived key (`/api/files/images/{id}.*`), and no
 // restore mode preserves ids any more (ADR-30) — so a row inserted with the
 // snapshot's og_image_url verbatim names an id that is now somebody else's row,
 // or nobody's. applyFiles writes the object under the NEW id; without this pass
@@ -21,8 +175,8 @@ import (
 // result was a restore that completed "successfully" with every image broken.
 //
 // The rewrite needs no mapping lookup because the invariant is positional: the
-// id inside an id-derived key is always the owning row's id, so `id` from the
-// UPDATE's own row is the correct value by construction.
+// first numeric segment is always the owning row's id. Any suffix after that id
+// (including the screenshot operation UUID) is preserved.
 //
 // Both the match and the predicate are ANCHORED to `^/api/files/`, and that
 // anchor is load-bearing: og_image_url is NOT always an internal proxy path.
@@ -52,50 +206,6 @@ func realignLinkImageURLs(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m 
 		return fmt.Errorf("realign link image urls: %w", err)
 	}
 	return nil
-}
-
-// mapOptionalID remaps *old through m when present.
-func mapOptionalID(m map[int64]int64, old *int64) *int64 {
-	if old == nil {
-		return nil
-	}
-	if mapped, ok := m[*old]; ok {
-		return &mapped
-	}
-	return nil
-}
-
-// insertFolderMapped inserts one folder with parent remapped via m.folderMap.
-func insertFolderMapped(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m *idMapping, f FolderRow) (int64, error) {
-	parentID := mapOptionalID(m.folderMap, f.ParentID)
-	var newID int64
-	if err := tx.QueryRow(ctx,
-		`INSERT INTO folder (user_id, name, color, parent_id, password_hash, password_hint, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-		int64(uid), f.Name, f.Color, parentID, f.PasswordHash, f.PasswordHint, f.CreatedAt).Scan(&newID); err != nil {
-		return 0, fmt.Errorf("insert folder: %w", err)
-	}
-	m.folderMap[f.ID] = newID
-	return newID, nil
-}
-
-// insertNoteMapped inserts one note with folder remapped and body sanitized.
-func insertNoteMapped(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m *idMapping, n NoteRow) (int64, error) {
-	folderID := mapOptionalID(m.folderMap, n.FolderID)
-	slug, err := uniqueNoteSlug(ctx, tx, n.Slug, n.Title)
-	if err != nil {
-		return 0, err
-	}
-	bodyHTML, bodyText := notes.SanitizeBody(n.BodyHTML)
-	var newID int64
-	if err := tx.QueryRow(ctx, `
-            INSERT INTO note (user_id, title, slug, body_html, body_text, pinned, folder_id, cover_url, created_at, updated_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-            RETURNING id`,
-		int64(uid), n.Title, slug, bodyHTML, bodyText, n.Pinned, folderID, n.CoverURL, n.CreatedAt, n.UpdatedAt).Scan(&newID); err != nil {
-		return 0, fmt.Errorf("insert note: %w", err)
-	}
-	m.noteMap[n.ID] = newID
-	return newID, nil
 }
 
 // attachPolymorphicTags inserts link_tag rows for links and notes using the

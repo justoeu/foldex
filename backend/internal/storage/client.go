@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
+	"strings"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -173,18 +175,22 @@ type ObjectInfo struct {
 	Size int64
 }
 
-// ListObjects returns every object under `prefix` (recursive). Use empty
-// string to list the entire bucket.
-func (c *Client) ListObjects(ctx context.Context, prefix string) ([]ObjectInfo, error) {
-	out := make([]ObjectInfo, 0, 32)
-	ch := c.mc.ListObjects(ctx, c.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true})
+// WalkObjects visits objects under prefix as the SDK yields its paginated
+// stream. The callback is synchronous: returning an error stops the walk
+// without retaining the remaining bucket metadata in memory.
+func (c *Client) WalkObjects(ctx context.Context, prefix string, visit func(ObjectInfo) error) error {
+	walkCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch := c.mc.ListObjects(walkCtx, c.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true})
 	for obj := range ch {
 		if obj.Err != nil {
-			return nil, fmt.Errorf("storage: list objects under %q: %w", prefix, obj.Err)
+			return fmt.Errorf("storage: list objects under %q: %w", prefix, obj.Err)
 		}
-		out = append(out, ObjectInfo{Key: obj.Key, Size: obj.Size})
+		if err := visit(ObjectInfo{Key: obj.Key, Size: obj.Size}); err != nil {
+			return err
+		}
 	}
-	return out, nil
+	return ctx.Err()
 }
 
 // OpenObject streams a single object. Caller MUST close the returned reader.
@@ -228,6 +234,49 @@ func (c *Client) ObjectExists(ctx context.Context, key string) (bool, error) {
 	return false, fmt.Errorf("storage: stat %q: %w", key, err)
 }
 
+// ExistingObjects resolves an explicit key set with one paginated LIST per
+// top-level namespace instead of one HEAD request per key. Only exact requested
+// keys are returned; listing a shared flat namespace never grants ownership.
+func (c *Client) ExistingObjects(ctx context.Context, keys []string) (map[string]bool, error) {
+	wanted := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		wanted[key] = struct{}{}
+	}
+	found := make(map[string]bool, len(wanted))
+	for _, prefix := range explicitKeyPrefixes(keys) {
+		objects := c.mc.ListObjects(ctx, c.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true})
+		for object := range objects {
+			if object.Err != nil {
+				return nil, fmt.Errorf("storage: list existing objects under %q: %w", prefix, object.Err)
+			}
+			if _, ok := wanted[object.Key]; ok {
+				found[object.Key] = true
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return found, nil
+}
+
+func explicitKeyPrefixes(keys []string) []string {
+	unique := make(map[string]struct{})
+	for _, key := range keys {
+		prefix := ""
+		if slash := strings.IndexByte(key, '/'); slash >= 0 {
+			prefix = key[:slash+1]
+		}
+		unique[prefix] = struct{}{}
+	}
+	prefixes := make([]string, 0, len(unique))
+	for prefix := range unique {
+		prefixes = append(prefixes, prefix)
+	}
+	sort.Strings(prefixes)
+	return prefixes
+}
+
 // DeleteObject removes a single object. A NoSuchKey response is treated as
 // success — callers use this to clean up stale key variants and shouldn't
 // care if the previous key was already gone.
@@ -239,6 +288,48 @@ func (c *Client) DeleteObject(ctx context.Context, key string) error {
 		return fmt.Errorf("storage: delete %q: %w", key, err)
 	}
 	return nil
+}
+
+// DeleteObjects removes an explicit key set through S3 multi-delete batches.
+// Missing keys are successful, matching DeleteObject's idempotent contract.
+func (c *Client) DeleteObjects(ctx context.Context, keys []string) error {
+	unique := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		unique[key] = struct{}{}
+	}
+	ordered := make([]string, 0, len(unique))
+	for key := range unique {
+		ordered = append(ordered, key)
+	}
+	sort.Strings(ordered)
+	if len(ordered) == 0 {
+		return nil
+	}
+	objects := make(chan minio.ObjectInfo)
+	go func() {
+		defer close(objects)
+		for _, key := range ordered {
+			select {
+			case objects <- minio.ObjectInfo{Key: key}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	var firstErr error
+	for result := range c.mc.RemoveObjects(ctx, c.bucket, objects, minio.RemoveObjectsOptions{}) {
+		if result.Err == nil || minio.ToErrorResponse(result.Err).Code == "NoSuchKey" {
+			continue
+		}
+		if firstErr == nil {
+			firstErr = fmt.Errorf("storage: delete %q: %w", result.ObjectName, result.Err)
+		}
+	}
+	if firstErr == nil {
+		firstErr = ctx.Err()
+	}
+	return firstErr
 }
 
 // DeleteObjectsPrefix removes every object under `prefix`. Used by

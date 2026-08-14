@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/domainerr"
 )
 
 type Repository struct {
@@ -28,13 +28,17 @@ func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateIn
         RETURNING id, name, color, icon, created_at
     `, int64(uid), in.Name, in.Color, in.Icon).Scan(&t.ID, &t.Name, &t.Color, &t.Icon, &t.CreatedAt)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return Tag{}, httperr.New(409, "tag_name_taken", "tag name already exists")
-		}
-		return Tag{}, fmt.Errorf("insert tag: %w", err)
+		return Tag{}, createError(err)
 	}
 	return t, nil
+}
+
+func createError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return ErrNameTaken
+	}
+	return fmt.Errorf("insert tag: %w", err)
 }
 
 func (r *Repository) List(ctx context.Context, uid authctx.UserID) ([]Tag, error) {
@@ -66,8 +70,8 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID) ([]Tag, error
 }
 
 // Get returns the tag owned by uid. A tag belonging to another user reports
-// httperr.ErrNotFound, never 403 — a 403 would confirm the id exists and turn
-// this into a cross-tenant enumeration oracle.
+// domainerr.ErrNotFound, never a permission error, so the id does not become a
+// cross-tenant enumeration oracle.
 func (r *Repository) Get(ctx context.Context, uid authctx.UserID, id int64) (Tag, error) {
 	var t Tag
 	err := r.pool.QueryRow(ctx, `
@@ -75,7 +79,7 @@ func (r *Repository) Get(ctx context.Context, uid authctx.UserID, id int64) (Tag
         FROM tag WHERE user_id = $1 AND id = $2
     `, int64(uid), id).Scan(&t.ID, &t.Name, &t.Color, &t.Icon, &t.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Tag{}, httperr.ErrNotFound
+		return Tag{}, domainerr.ErrNotFound
 	}
 	if err != nil {
 		return Tag{}, fmt.Errorf("get tag: %w", err)
@@ -111,12 +115,12 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	var t Tag
 	err := r.pool.QueryRow(ctx, q, args...).Scan(&t.ID, &t.Name, &t.Color, &t.Icon, &t.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Tag{}, httperr.ErrNotFound
+		return Tag{}, domainerr.ErrNotFound
 	}
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return Tag{}, httperr.New(409, "tag_name_taken", "tag name already exists")
+			return Tag{}, ErrNameTaken
 		}
 		return Tag{}, fmt.Errorf("update tag: %w", err)
 	}
@@ -129,7 +133,7 @@ func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64) e
 		return fmt.Errorf("delete tag: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return httperr.ErrNotFound
+		return domainerr.ErrNotFound
 	}
 	return nil
 }

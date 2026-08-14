@@ -2,9 +2,8 @@ name: ci
 
 # Pull-request gate ONLY. Lint, unit/integration tests, coverage, and a
 # no-push Docker build validation — everything that must pass before code
-# lands on main. Publishing the images lives in release.yml (push: main +
-# tags v*) so a merge to main never re-runs this whole suite; release trusts
-# the gate that already ran on the PR.
+# lands on main. Publishing lives in release.yml (manual dispatch from main),
+# so a merge or tag push never publishes; release trusts the PR gate.
 on:
   pull_request:
 
@@ -29,9 +28,6 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
-    services:
-      docker:
-        image: docker:dind
     steps:
       # Third-party actions pinned to full SHA — major-version tags are
       # mutable and a compromised upstream could swap them silently. Comments
@@ -42,6 +38,15 @@ jobs:
           go-version: '1.26'
           cache: true
           cache-dependency-path: backend/go.sum
+      - name: require live Chrome
+        run: |
+          chrome_path="$(command -v google-chrome || true)"
+          if [[ -z "$chrome_path" ]] || ! test -x "$chrome_path"; then
+            echo "::error::GitHub Ubuntu runner must provide an executable google-chrome" >&2
+            exit 1
+          fi
+          "$chrome_path" --version
+          printf 'CHROME_PATH=%s\n' "$chrome_path" >> "$GITHUB_ENV"
       - name: gofmt
         working-directory: backend
         run: make fmt-check
@@ -57,13 +62,12 @@ jobs:
         # coverage) used to double the integration-suite cost — each
         # testcontainers spin-up is ~3-5s × ~50 cases.
         run: make coverage-run
-      - name: coverage gate (informational; goal 85%)
+      - name: coverage gate (85% minimum)
         working-directory: backend
         # Reads coverage.out left behind by the previous step — does NOT
-        # re-run any tests. Informational while the suite catches up
-        # (see CLAUDE.md §2); job stays green when below threshold.
+        # re-run any tests. Falling below the project threshold blocks the
+        # job (see CLAUDE.md §2).
         run: make coverage-check
-        continue-on-error: true
       - name: coverage-check shell harness
         # Locks the missing-file + threshold-pass + threshold-fail branches
         # of `make coverage-check`. Cheap (re-uses the cssvalid package
@@ -94,28 +98,14 @@ jobs:
       - name: type-check
         working-directory: web
         run: bun run typecheck
-      - name: tests (with coverage)
+      - name: extension tests
+        working-directory: extension
+        run: bun run test
+      - name: tests + coverage gate
         working-directory: web
-        # `coverage:nogate` runs the full suite under v8 and writes
-        # coverage-summary.json without enforcing the thresholds baked
-        # into vitest.config.ts — that aspirational check lives in the
-        # next informational step. Test failures still block CI.
-        run: bun run coverage:nogate
-      - name: coverage threshold (informational; goal 85% lines, 80% branches)
-        working-directory: web
-        # vitest emits coverage-summary.json — parse + threshold-check in
-        # ~1s without re-running any tests. Same aspirational contract as
-        # backend (CLAUDE.md §2): never blocks merge.
-        run: |
-          node -e "
-            const s = require('./coverage/coverage-summary.json').total;
-            const linesOK = s.lines.pct >= 85;
-            const branchesOK = s.branches.pct >= 80;
-            console.log('lines', s.lines.pct + '%', linesOK ? 'OK' : 'BELOW 85%');
-            console.log('branches', s.branches.pct + '%', branchesOK ? 'OK' : 'BELOW 80%');
-            if (!linesOK || !branchesOK) process.exit(1);
-          "
-        continue-on-error: true
+        # Vitest runs the suite once under v8 and enforces the statement,
+        # line, function, and branch thresholds from vitest.config.ts.
+        run: bun run coverage
       - name: release.sh awk regression
         # Locks the "first-match-only" invariant of update_version() in
         # scripts/release.sh. Without it, a future sed/awk swap could
@@ -123,6 +113,16 @@ jobs:
         # a dependencies block of a lockfile-shaped file) and corrupt
         # the release commit.
         run: bash scripts/test-release-awk.sh
+      - name: release ref security gate
+        run: bash scripts/test-release-gate.sh
+      - name: local credential generation contract
+        run: bash scripts/test-init-env.sh
+      - name: CI coverage gate contract
+        run: bash scripts/test-ci-coverage-gates.sh
+      - name: local Bash approval contract
+        run: bash scripts/test-claude-bash-permissions.sh
+      - name: nginx access-log credential redaction
+        run: bash scripts/test-nginx-access-log.sh
       - name: bun audit (informational)
         working-directory: web
         # CVE scan for npm packages. Same informational-only contract as

@@ -10,16 +10,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
-	"path"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"foldex/internal/pkg/httperr"
 
 	"foldex/internal/pkg/authctx"
 )
@@ -33,15 +30,13 @@ const RestoreAdvisoryLockKey int64 = 0x464F4C4458525354
 // StorageBucket is the contract the backup module needs from object storage.
 // Kept narrow so tests can mock it without standing up RustFS.
 type StorageBucket interface {
-	ListObjects(ctx context.Context, prefix string) ([]ObjectInfo, error)
+	WalkObjects(ctx context.Context, prefix string, visit func(ObjectInfo) error) error
 	OpenObject(ctx context.Context, key string) (io.ReadCloser, error)
 	PutObjectStream(ctx context.Context, key string, r io.Reader, size int64, contentType string) error
-	ObjectExists(ctx context.Context, key string) (bool, error)
-	DeleteObjectsPrefix(ctx context.Context, prefix string) error
-	// DeleteObject removes ONE key. Wipe-mode restore uses it instead of
-	// DeleteObjectsPrefix: object keys are flat ({prefix}/{id}.ext, no tenant
-	// segment), so prefix-deleting would destroy every other user's files.
-	DeleteObject(ctx context.Context, key string) error
+	ExistingObjects(ctx context.Context, keys []string) (map[string]bool, error)
+	// DeleteObjects removes only the explicit keys proved owner-scoped by the
+	// database. Prefix deletion is forbidden because bucket keys are flat.
+	DeleteObjects(ctx context.Context, keys []string) error
 }
 
 type ObjectInfo struct {
@@ -52,10 +47,6 @@ type ObjectInfo struct {
 // File prefixes inside the bucket that backups should cover. "notes/" holds
 // inline images uploaded through the note rich-text editor.
 var bucketPrefixes = []string{"screenshots/", "images/", "notes/"}
-
-// maxManifestEntries caps Validate's checksum iteration so a hostile zip can't
-// drive unbounded CPU/RAM before sanity checks run.
-const maxManifestEntries = 100_000
 
 // foldexVersion is overridden at build time via -ldflags. Empty string means
 // "unknown" and is left out of the manifest.
@@ -80,9 +71,10 @@ func NewService(pool *pgxpool.Pool, storage StorageBucket, logger *slog.Logger) 
 // first byte of zip data hits the wire. Returning an error from onCountsReady
 // aborts the export; returning nil lets it proceed. nil = no callback.
 //
-// Memory profile: O(snapshot DB rows) + O(largest single object in the
-// bucket). The previous handler buffered the entire ZIP in memory, which made
-// a 2 GiB backup a 2 GiB heap allocation; this path streams every entry.
+// Memory profile: O(owner-file-count) for owner keys, selected metadata, and
+// manifest checksums, explicitly bounded by archive entry/manifest limits.
+// Global bucket metadata and DB rows are visited one at a time. database.json
+// lives in a bounded temp file so a slow HTTP client never holds a DB tx.
 func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, onCountsReady func(Counts) error) (ExportReport, error) {
 	start := time.Now()
 	var rep ExportReport
@@ -107,10 +99,11 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 		}
 	}()
 
-	snap, err := readSnapshot(ctx, tx, uid)
+	spool, err := createSnapshotSpool(ctx, tx, uid)
 	if err != nil {
-		return rep, fmt.Errorf("backup: read snapshot: %w", err)
+		return rep, fmt.Errorf("backup: spool snapshot: %w", err)
 	}
+	defer spool.cleanup()
 
 	// Which of the bucket's objects belong to the caller. Keys are FLAT
 	// ({prefix}/{id}.ext, no tenant segment), so the prefix listing alone cannot
@@ -123,7 +116,7 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 	// travels in the backup. That is the correct trade for a flat key space; the
 	// alternative is re-keying every object under a tenant segment, which means
 	// rewriting og_image_url on every row and moving live objects.
-	owned, err := userObjectKeys(ctx, tx, uid)
+	owned, err := userObjectKeys(ctx, tx, uid, false)
 	if err != nil {
 		return rep, fmt.Errorf("backup: enumerate own objects: %w", err)
 	}
@@ -132,31 +125,9 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 		ownedSet[k] = struct{}{}
 	}
 
-	// Pre-list every bucket prefix while we still hold the REPEATABLE READ tx,
-	// so file count + bytes are known to the caller before any zip byte is
-	// flushed. Object payloads are streamed lazily below — only the metadata
-	// is buffered here.
-	type objList struct {
-		prefix string
-		objs   []ObjectInfo
-	}
-	var lists []objList
-	var fileCount, fileBytes int64
-	for _, prefix := range bucketPrefixes {
-		objs, err := s.storage.ListObjects(ctx, prefix)
-		if err != nil {
-			return rep, fmt.Errorf("backup: list %q: %w", prefix, err)
-		}
-		mine := make([]ObjectInfo, 0, len(objs))
-		for _, o := range objs {
-			if _, ok := ownedSet[o.Key]; !ok {
-				continue
-			}
-			mine = append(mine, o)
-			fileCount++
-			fileBytes += o.Size
-		}
-		lists = append(lists, objList{prefix: prefix, objs: mine})
+	listing, err := listOwnedObjects(ctx, s.storage, ownedSet, spool.size)
+	if err != nil {
+		return rep, err
 	}
 
 	// Snapshot is fully captured; the tx no longer needs to be held while we
@@ -167,16 +138,9 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 	}
 	txDone = true
 
-	counts := Counts{
-		Links:     int64(len(snap.Links)),
-		Notes:     int64(len(snap.Notes)),
-		Tags:      int64(len(snap.Tags)),
-		Folders:   int64(len(snap.Folders)),
-		LinkTags:  int64(len(snap.LinkTags)) + int64(len(snap.NoteTags)),
-		ClickLogs: int64(len(snap.ClickLogs)) + int64(len(snap.NoteClicks)),
-		Files:     fileCount,
-		FileBytes: fileBytes,
-	}
+	counts := spool.counts
+	counts.Files = listing.count
+	counts.FileBytes = listing.bytes
 
 	if onCountsReady != nil {
 		if err := onCountsReady(counts); err != nil {
@@ -187,22 +151,23 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 	zw := zip.NewWriter(w)
 	checksums := map[string]string{}
 
-	// database.json
-	dbBytes, err := json.MarshalIndent(snap, "", "  ")
+	dbWriter, err := zw.CreateHeader(&zip.FileHeader{Name: "database.json", Method: zip.Deflate})
 	if err != nil {
-		return rep, fmt.Errorf("backup: marshal snapshot: %w", err)
+		return rep, fmt.Errorf("backup: zip create database.json: %w", err)
 	}
-	if err := writeZipEntry(zw, "database.json", dbBytes, checksums); err != nil {
-		return rep, err
+	if _, err := spool.file.Seek(0, io.SeekStart); err != nil {
+		return rep, fmt.Errorf("backup: seek database spool: %w", err)
 	}
+	if _, err := io.Copy(dbWriter, spool.file); err != nil {
+		return rep, fmt.Errorf("backup: stream database.json: %w", err)
+	}
+	checksums["database.json"] = spool.checksum
 
 	// files/
-	for _, l := range lists {
-		for _, o := range l.objs {
-			entryName := "files/" + o.Key
-			if err := s.streamObjectIntoZip(ctx, zw, entryName, o.Key, checksums); err != nil {
-				return rep, err
-			}
+	for _, object := range listing.objects {
+		entryName := "files/" + object.Key
+		if err := s.streamObjectIntoZip(ctx, zw, entryName, object.Key, object.Size, checksums); err != nil {
+			return rep, err
 		}
 	}
 
@@ -218,6 +183,9 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return rep, fmt.Errorf("backup: marshal manifest: %w", err)
+	}
+	if int64(len(manifestBytes)) > maxManifestJSONBytes {
+		return rep, fmt.Errorf("backup: manifest exceeds %d-byte limit", maxManifestJSONBytes)
 	}
 	// Manifest written last (and intentionally NOT included in `checksums`).
 	// Stored uncompressed (Method=Store) so the frontend can extract counts
@@ -239,7 +207,55 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 	return rep, nil
 }
 
-func (s *Service) streamObjectIntoZip(ctx context.Context, zw *zip.Writer, entryName, key string, checksums map[string]string) error {
+type ownedObjectListing struct {
+	objects []ObjectInfo
+	count   int64
+	bytes   int64
+}
+
+func listOwnedObjects(ctx context.Context, storage StorageBucket, owned map[string]struct{}, databaseBytes int64) (ownedObjectListing, error) {
+	listing := ownedObjectListing{objects: make([]ObjectInfo, 0, len(owned))}
+	selected := make(map[string]struct{}, len(owned))
+	manifestIndexBytes := checksumManifestBytes("database.json")
+	for _, prefix := range bucketPrefixes {
+		err := storage.WalkObjects(ctx, prefix, func(object ObjectInfo) error {
+			if _, ok := owned[object.Key]; !ok {
+				return nil
+			}
+			if _, duplicate := selected[object.Key]; duplicate {
+				return nil
+			}
+			if !strings.HasPrefix(object.Key, prefix) || len(object.Key) > maxBackupObjectKeyBytes {
+				return fmt.Errorf("object key %q is outside the backup key budget", object.Key)
+			}
+			if object.Size < 0 || object.Size > maxArchiveFileBytes {
+				return fmt.Errorf("object %q has size %d (max %d)", object.Key, object.Size, maxArchiveFileBytes)
+			}
+			if listing.count >= maxBackupFileEntries {
+				return fmt.Errorf("backup has more than %d file entries", maxBackupFileEntries)
+			}
+			if object.Size > maxArchiveExpandedBytes-maxManifestJSONBytes-databaseBytes-listing.bytes {
+				return fmt.Errorf("backup expanded bytes exceed %d-byte limit", maxArchiveExpandedBytes)
+			}
+			entryName := "files/" + object.Key
+			manifestIndexBytes += checksumManifestBytes(entryName)
+			if manifestIndexBytes > maxManifestJSONBytes-manifestFixedHeadroom {
+				return fmt.Errorf("backup manifest checksum index exceeds %d-byte limit", maxManifestJSONBytes)
+			}
+			selected[object.Key] = struct{}{}
+			listing.objects = append(listing.objects, object)
+			listing.count++
+			listing.bytes += object.Size
+			return nil
+		})
+		if err != nil {
+			return ownedObjectListing{}, fmt.Errorf("backup: list %q: %w", prefix, err)
+		}
+	}
+	return listing, nil
+}
+
+func (s *Service) streamObjectIntoZip(ctx context.Context, zw *zip.Writer, entryName, key string, expectedSize int64, checksums map[string]string) error {
 	rc, err := s.storage.OpenObject(ctx, key)
 	if err != nil {
 		return fmt.Errorf("backup: open %q: %w", key, err)
@@ -254,28 +270,81 @@ func (s *Service) streamObjectIntoZip(ctx context.Context, zw *zip.Writer, entry
 
 	h := sha256.New()
 	tee := io.TeeReader(rc, h)
-	if _, err := io.Copy(w, tee); err != nil {
+	n, err := io.Copy(w, io.LimitReader(tee, maxArchiveFileBytes+1))
+	if err != nil {
 		return fmt.Errorf("backup: copy %q: %w", entryName, err)
+	}
+	if n > maxArchiveFileBytes {
+		return fmt.Errorf("backup: object %q exceeds %d-byte limit", key, maxArchiveFileBytes)
+	}
+	if n != expectedSize {
+		return fmt.Errorf("backup: object %q changed after listing: listed=%d streamed=%d", key, expectedSize, n)
 	}
 	checksums[entryName] = "sha256:" + hex.EncodeToString(h.Sum(nil))
 	return nil
 }
 
-func writeZipEntry(zw *zip.Writer, name string, data []byte, checksums map[string]string) error {
-	h := sha256.Sum256(data)
-	checksums[name] = "sha256:" + hex.EncodeToString(h[:])
-	return writeZipEntryRaw(zw, name, data)
+func checksumManifestBytes(name string) int64 {
+	encodedName, _ := json.Marshal(name)
+	// Include separators, quoted hash, newline, and indentation emitted by
+	// MarshalIndent. A small overestimate keeps admission ahead of HTTP headers.
+	const formattingBytes = 12
+	return int64(len(encodedName) + formattingBytes + 2 + len("sha256:") + sha256.Size*2)
 }
 
-func writeZipEntryRaw(zw *zip.Writer, name string, data []byte) error {
-	w, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Deflate})
+type snapshotSpool struct {
+	file     *os.File
+	counts   Counts
+	checksum string
+	size     int64
+}
+
+func createSnapshotSpool(ctx context.Context, tx pgx.Tx, uid authctx.UserID) (*snapshotSpool, error) {
+	file, err := os.CreateTemp("", "foldex-backup-database-*.json")
 	if err != nil {
-		return fmt.Errorf("backup: zip create %q: %w", name, err)
+		return nil, err
 	}
-	if _, err := w.Write(data); err != nil {
-		return fmt.Errorf("backup: zip write %q: %w", name, err)
+	failed := true
+	defer func() {
+		if failed {
+			_ = file.Close()
+			_ = os.Remove(file.Name())
+		}
+	}()
+
+	hash := sha256.New()
+	bounded := &boundedWriter{w: io.MultiWriter(file, hash), max: maxDatabaseJSONBytes}
+	counts, err := streamSnapshotJSON(ctx, tx, uid, bounded)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	failed = false
+	return &snapshotSpool{
+		file:     file,
+		counts:   counts,
+		checksum: "sha256:" + hex.EncodeToString(hash.Sum(nil)),
+		size:     bounded.written,
+	}, nil
+}
+
+func (s *snapshotSpool) cleanup() {
+	_ = s.file.Close()
+	_ = os.Remove(s.file.Name())
+}
+
+type boundedWriter struct {
+	w       io.Writer
+	written int64
+	max     int64
+}
+
+func (w *boundedWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > w.max-w.written {
+		return 0, fmt.Errorf("database.json exceeds %d-byte limit", w.max)
+	}
+	n, err := w.w.Write(p)
+	w.written += int64(n)
+	return n, err
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -283,89 +352,16 @@ func writeZipEntryRaw(zw *zip.Writer, name string, data []byte) error {
 
 func (s *Service) Validate(ctx context.Context, uid authctx.UserID, zr *zip.Reader) (Validation, error) {
 	v := Validation{Conflicts: Conflicts{}, Warnings: []string{}, Errors: []string{}}
-
-	manifest, err := readManifest(zr)
-	if err != nil {
-		v.Errors = append(v.Errors, err.Error())
+	preflight := inspectBackupArchive(zr)
+	v.Manifest = preflight.manifest
+	v.Warnings = append(v.Warnings, preflight.warnings...)
+	v.Errors = append(v.Errors, preflight.errors...)
+	if len(v.Errors) > 0 {
 		return v, nil
-	}
-	v.Manifest = manifest
-
-	// Magic / version / schema checks.
-	if manifest.Kind != ManifestKind {
-		v.Errors = append(v.Errors, fmt.Sprintf("kind mismatch: got %q, want %q", manifest.Kind, ManifestKind))
-		return v, nil
-	}
-	majorWant := strings.SplitN(ManifestVersion, ".", 2)[0]
-	majorGot := strings.SplitN(manifest.Version, ".", 2)[0]
-	if majorGot != majorWant {
-		v.Errors = append(v.Errors, fmt.Sprintf("major version mismatch: backup=%s, server=%s", manifest.Version, ManifestVersion))
-		return v, nil
-	}
-	if manifest.SchemaVersion > CurrentSchemaVersion {
-		v.Errors = append(v.Errors, fmt.Sprintf("schema_version too new: backup=%d, server=%d", manifest.SchemaVersion, CurrentSchemaVersion))
-		return v, nil
-	}
-	if manifest.SchemaVersion < CurrentSchemaVersion {
-		v.Warnings = append(v.Warnings,
-			fmt.Sprintf("schema_version do backup (%d) é mais antigo que o atual (%d) — alguns campos serão default.", manifest.SchemaVersion, CurrentSchemaVersion))
-	}
-
-	// Cap manifest.Checksums to a sane upper bound — a malicious zip with
-	// millions of declared entries would otherwise spin sorting/hashing before
-	// any meaningful check ran. 100k is well beyond any realistic foldex
-	// backup (typical personal install has at most a few thousand files).
-	if len(manifest.Checksums) > maxManifestEntries {
-		v.Errors = append(v.Errors, fmt.Sprintf("manifest.checksums has %d entries (max %d) — refusing", len(manifest.Checksums), maxManifestEntries))
-		return v, nil
-	}
-
-	// Checksum verification (database.json + every files/ entry that the
-	// manifest claims a checksum for).
-	for _, name := range sortedKeys(manifest.Checksums) {
-		want := manifest.Checksums[name]
-		entry, err := openEntry(zr, name)
-		if err != nil {
-			v.Errors = append(v.Errors, fmt.Sprintf("missing entry %q listed in checksums", name))
-			continue
-		}
-		got, err := hashEntry(entry)
-		entry.Close()
-		if err != nil {
-			v.Errors = append(v.Errors, fmt.Sprintf("hash %q: %v", name, err))
-			continue
-		}
-		if got != want {
-			v.Errors = append(v.Errors, fmt.Sprintf("checksum mismatch: %s", name))
-		}
-	}
-
-	// Snapshot parse-only.
-	snap, err := readSnapshotFromZip(zr)
-	if err != nil {
-		v.Errors = append(v.Errors, fmt.Sprintf("database.json: %v", err))
-		return v, nil
-	}
-
-	// Reference integrity: every link.og_image_url that references /api/files/<key>
-	// must have a corresponding entry in files/.
-	fileEntries := zipEntries(zr, "files/")
-	for _, l := range snap.Links {
-		if l.OGImageURL == nil || *l.OGImageURL == "" {
-			continue
-		}
-		key := strings.TrimPrefix(*l.OGImageURL, "/api/files/")
-		if key == *l.OGImageURL {
-			// External URL — fine.
-			continue
-		}
-		if !fileEntries["files/"+key] {
-			v.Warnings = append(v.Warnings, fmt.Sprintf("link %d aponta para %s mas o arquivo não está no ZIP", l.ID, key))
-		}
 	}
 
 	// Conflict detection against the live DB.
-	conflicts, err := countConflicts(ctx, s.pool, uid, snap)
+	conflicts, err := countConflicts(ctx, s.pool, uid, preflight.snapshot)
 	if err != nil {
 		return v, fmt.Errorf("backup: conflicts: %w", err)
 	}
@@ -376,258 +372,19 @@ func (s *Service) Validate(ctx context.Context, uid authctx.UserID, zr *zip.Read
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Restore — applies a ZIP.
-
-func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reader, mode ConflictMode) (RestoreReport, error) {
-	start := time.Now()
-	rep := RestoreReport{Mode: mode, Warnings: []string{}}
-	if !mode.Valid() {
-		return rep, fmt.Errorf("backup: invalid mode %q", mode)
-	}
-
-	manifest, err := readManifest(zr)
-	if err != nil {
-		return rep, fmt.Errorf("backup: read manifest: %w", err)
-	}
-	if manifest.Kind != ManifestKind {
-		return rep, fmt.Errorf("backup: not a foldex backup")
-	}
-	if manifest.SchemaVersion > CurrentSchemaVersion {
-		return rep, fmt.Errorf("backup: schema_version %d too new (server is %d)", manifest.SchemaVersion, CurrentSchemaVersion)
-	}
-
-	snap, err := readSnapshotFromZip(zr)
-	if err != nil {
-		return rep, fmt.Errorf("backup: parse snapshot: %w", err)
-	}
-
-	// DB phase — one tx for atomicity within the DB world.
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return rep, fmt.Errorf("backup: begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	// Exclusive restore: second concurrent Restore fails fast with 409 rather
-	// than blocking behind wipe/insert (RACE-HER-007).
-	var gotLock bool
-	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, RestoreAdvisoryLockKey).Scan(&gotLock); err != nil {
-		return rep, fmt.Errorf("backup: advisory lock: %w", err)
-	}
-	if !gotLock {
-		return rep, httperr.New(http.StatusConflict, "restore_in_progress", "another restore is already in progress")
-	}
-
-	// Enumerate the caller's object keys BEFORE the wipe deletes the rows that
-	// reference them. Nothing is deleted here — applyFiles does that after the
-	// DB tx commits, so a rolled-back restore leaves the bucket untouched.
-	var ownedKeys []string
-	if mode == ModeWipe {
-		var err error
-		if ownedKeys, err = userObjectKeys(ctx, tx, uid); err != nil {
-			return rep, fmt.Errorf("backup: enumerate own objects: %w", err)
-		}
-	}
-
-	// The ZIP's declared owner is informational only: every row below is
-	// written with the CALLING user's id, never the snapshot's. That is what
-	// makes a hand-crafted backup unable to plant rows in another account
-	// (TestCrossUser_RestoreIgnoresOwnerEmail, internal/backup). Surface a
-	// mismatch so a user
-	// restoring someone else's export is not surprised by the result.
-	if snap.OwnerEmail != "" {
-		var email string
-		if err := tx.QueryRow(ctx, `SELECT email FROM app_user WHERE id = $1`, int64(uid)).Scan(&email); err == nil && email != snap.OwnerEmail {
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf(
-				"backup foi exportado por %q e está sendo restaurado na conta %q — todo o conteúdo passa a pertencer a %q",
-				snap.OwnerEmail, email, email))
-		}
-	}
-	if len(snap.AppSettings) > 0 {
-		// Pre-v6 snapshot: app_setting carried the master password hash
-		// (ADR-29). It is per-user on app_user now and deliberately outside the
-		// backup, so the array is dropped rather than applied.
-		rep.Warnings = append(rep.Warnings,
-			"configurações globais do backup foram ignoradas: a senha master agora é por usuário e não trafega no backup")
-	}
-
-	var mapping idMapping
-	switch mode {
-	case ModeWipe:
-		w, err := wipeUser(ctx, tx, uid)
-		if err != nil {
-			return rep, fmt.Errorf("backup: wipe db: %w", err)
-		}
-		rep.Wiped = w
-		// Wipe no longer preserves original ids. Before migration 000017 this
-		// branch used restoreIdentity, which re-inserted with the snapshot's ids
-		// and then setval'd the sequences; neither is valid multi-tenant —
-		// another user may already hold those ids, and bumping a SHARED sequence
-		// from one user's restore is simply wrong. Since wipeUser just removed
-		// every row this user owns, the skip path runs with zero conflicts and
-		// produces the correct result with fresh ids. See ADR-30 / SDD §10.3.
-		inserted, _, m, err := restoreSkip(ctx, tx, uid, snap)
-		if err != nil {
-			return rep, fmt.Errorf("backup: insert (wipe): %w", err)
-		}
-		rep.Inserted = inserted
-		mapping = m
-	case ModeSkip:
-		inserted, skipped, m, err := restoreSkip(ctx, tx, uid, snap)
-		if err != nil {
-			return rep, fmt.Errorf("backup: insert (skip): %w", err)
-		}
-		rep.Inserted = inserted
-		rep.Skipped = skipped
-		mapping = m
-	case ModeDuplicate:
-		inserted, warnings, m, err := restoreDuplicate(ctx, tx, uid, snap)
-		if err != nil {
-			return rep, fmt.Errorf("backup: insert (duplicate): %w", err)
-		}
-		rep.Inserted = inserted
-		rep.Warnings = append(rep.Warnings, warnings...)
-		mapping = m
-	}
-
-	if err := realignLinkImageURLs(ctx, tx, uid, mapping); err != nil {
-		return rep, fmt.Errorf("backup: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return rep, fmt.Errorf("backup: commit: %w", err)
-	}
-
-	// Files phase — runs after commit. Idempotent.
-	fileRep, err := s.applyFiles(ctx, zr, snap, mapping, mode, ownedKeys)
-	if err != nil {
-		return rep, fmt.Errorf("backup: files: %w", err)
-	}
-	rep.Files = fileRep
-
-	rep.DurationMs = time.Since(start).Milliseconds()
-	return rep, nil
-}
-
-func (s *Service) applyFiles(ctx context.Context, zr *zip.Reader, snap *Snapshot, mapping idMapping, mode ConflictMode, ownedKeys []string) (FileReport, error) {
-	var rep FileReport
-	if mode == ModeWipe {
-		// Delete exactly the caller's objects, enumerated from their rows BEFORE
-		// the DB wipe. Prefix-deleting is not an option: keys are flat
-		// ({prefix}/{id}.ext), so it would take every tenant's files with it.
-		for _, key := range ownedKeys {
-			if err := s.storage.DeleteObject(ctx, key); err != nil {
-				return rep, fmt.Errorf("backup: delete own object %q: %w", key, err)
-			}
-		}
-	}
-	for _, entry := range zr.File {
-		if !strings.HasPrefix(entry.Name, "files/") {
-			continue
-		}
-		if strings.Contains(entry.Name, "..") {
-			return rep, fmt.Errorf("backup: rejected path traversal entry %q", entry.Name)
-		}
-		key := strings.TrimPrefix(entry.Name, "files/")
-		// Defense in depth: even after the `..` check, force the resulting key
-		// into one of the known bucket prefixes. Rejects absolute paths, URL-
-		// encoded traversals, and any key outside the screenshots/ + images/
-		// surface area the rest of the app expects.
-		if !hasAllowedPrefix(key) {
-			return rep, fmt.Errorf("backup: rejected entry %q (not under %v)", entry.Name, bucketPrefixes)
-		}
-
-		// Id-derived keys are re-keyed onto the row this restore produced, in
-		// EVERY mode — since ADR-30 no mode preserves ids, so a key naming the
-		// snapshot's id would not match the restored row's og_image_url.
-		//
-		// An entry whose link id this restore did not produce is dropped rather
-		// than written at its declared key: that key belongs to whichever tenant
-		// currently holds that link id, and honouring it would let a crafted ZIP
-		// overwrite their image.
-		_, _, _, isLinkKey := linkObjectID(key)
-		if isLinkKey {
-			newKey, ok := mapping.remapFileKey(key)
-			if !ok {
-				rep.Skipped++
-				continue
-			}
-			key = newKey
-		}
-
-		// A notes/{uuid} key cannot be re-keyed — it encodes no row id — so the
-		// only defence is never to OVERWRITE one. The UUID is unguessable, but
-		// it is not secret: it appears in the body_html that the PUBLIC,
-		// session-less /n/{slug} page renders, so anyone who opens a published
-		// note can read it off the markup and put that exact key in a crafted
-		// ZIP. Create-only makes that write a no-op instead of defacing the
-		// image for every viewer of the victim's note.
-		//
-		// Nothing legitimate is lost: a UUID key is effectively content-
-		// addressed, so if the object is already there it is already the right
-		// object, and restoring your own backup still creates whatever is
-		// missing.
-		if mode == ModeSkip || !isLinkKey {
-			exists, err := s.storage.ObjectExists(ctx, key)
-			if err != nil {
-				return rep, err
-			}
-			if exists {
-				rep.Skipped++
-				continue
-			}
-		}
-
-		f, err := entry.Open()
-		if err != nil {
-			return rep, fmt.Errorf("backup: open zip entry %q: %w", entry.Name, err)
-		}
-		ct := contentTypeFor(key)
-		if err := s.storage.PutObjectStream(ctx, key, f, int64(entry.UncompressedSize64), ct); err != nil {
-			f.Close()
-			return rep, fmt.Errorf("backup: put %q: %w", key, err)
-		}
-		f.Close()
-		rep.Uploaded++
-	}
-	return rep, nil
-}
-
-func hasAllowedPrefix(key string) bool {
-	for _, p := range bucketPrefixes {
-		if strings.HasPrefix(key, p) {
-			return true
-		}
-	}
-	return false
-}
-
-func contentTypeFor(key string) string {
-	ext := strings.ToLower(path.Ext(key))
-	switch ext {
-	case ".png":
-		return "image/png"
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".gif":
-		return "image/gif"
-	case ".webp":
-		return "image/webp"
-	default:
-		return "application/octet-stream"
-	}
-}
-
-// ────────────────────────────────────────────────────────────────────────────
 // Helpers shared between Export and Validate.
 
-func readManifest(zr *zip.Reader) (*Manifest, error) {
-	f, err := openEntry(zr, "manifest.json")
-	if err != nil {
+func readManifest(archive *inspectedArchive) (*Manifest, error) {
+	entry, exists := archive.entries["manifest.json"]
+	if !exists {
 		return nil, fmt.Errorf("manifest.json missing")
 	}
+	f, err := entry.Open()
+	if err != nil {
+		return nil, fmt.Errorf("read manifest: %w", err)
+	}
 	defer f.Close()
-	raw, err := io.ReadAll(f)
+	raw, err := readAtMost(f, maxManifestJSONBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
@@ -638,15 +395,41 @@ func readManifest(zr *zip.Reader) (*Manifest, error) {
 	return &m, nil
 }
 
-func readSnapshotFromZip(zr *zip.Reader) (*Snapshot, error) {
-	f, err := openEntry(zr, "database.json")
-	if err != nil {
+func readSnapshotFromZip(archive *inspectedArchive) (*Snapshot, error) {
+	entry, exists := archive.entries["database.json"]
+	if !exists {
 		return nil, errors.New("database.json missing")
 	}
+	f, err := entry.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open database.json: %w", err)
+	}
 	defer f.Close()
+	limited := &io.LimitedReader{R: f, N: maxDatabaseJSONBytes + 1}
 	var snap Snapshot
-	if err := json.NewDecoder(f).Decode(&snap); err != nil {
+	decoder := json.NewDecoder(limited)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&snap); err != nil {
+		if limited.N == 0 {
+			return nil, fmt.Errorf("database.json exceeds %d-byte limit", maxDatabaseJSONBytes)
+		}
 		return nil, fmt.Errorf("parse database.json: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if limited.N == 0 {
+			return nil, fmt.Errorf("database.json exceeds %d-byte limit", maxDatabaseJSONBytes)
+		}
+		return nil, fmt.Errorf("parse database.json: trailing data")
+	}
+	if limited.N == 0 {
+		return nil, fmt.Errorf("database.json exceeds %d-byte limit", maxDatabaseJSONBytes)
+	}
+	if err := validateSnapshotCardinalities(&snap); err != nil {
+		return nil, err
+	}
+	if err := snap.validatePasswordHashes(); err != nil {
+		return nil, err
 	}
 	// The zip is a trust boundary: tag/folder colors come from attacker-
 	// controlled input and a `red url("https://evil/exfil")` value would
@@ -658,28 +441,11 @@ func readSnapshotFromZip(zr *zip.Reader) (*Snapshot, error) {
 	return &snap, nil
 }
 
-func openEntry(zr *zip.Reader, name string) (io.ReadCloser, error) {
-	for _, f := range zr.File {
-		if f.Name == name {
-			return f.Open()
-		}
-	}
-	return nil, fmt.Errorf("entry %q not found", name)
-}
-
-func hashEntry(r io.Reader) (string, error) {
-	h := sha256.New()
-	if _, err := io.Copy(h, r); err != nil {
-		return "", err
-	}
-	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func zipEntries(zr *zip.Reader, prefix string) map[string]bool {
+func zipEntries(archive *inspectedArchive, prefix string) map[string]bool {
 	out := map[string]bool{}
-	for _, f := range zr.File {
-		if strings.HasPrefix(f.Name, prefix) {
-			out[f.Name] = true
+	for name := range archive.entries {
+		if strings.HasPrefix(name, prefix) {
+			out[name] = true
 		}
 	}
 	return out

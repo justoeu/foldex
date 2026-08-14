@@ -5,6 +5,7 @@ package storage_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -39,7 +40,11 @@ func TestClient_UploadGetListDelete(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, exists)
 
-	objs, err := cli.ListObjects(ctx, "images/")
+	var objs []storage.ObjectInfo
+	err = cli.WalkObjects(ctx, "images/", func(obj storage.ObjectInfo) error {
+		objs = append(objs, obj)
+		return nil
+	})
 	require.NoError(t, err)
 	require.NotEmpty(t, objs)
 
@@ -56,13 +61,40 @@ func TestClient_UploadGetListDelete(t *testing.T) {
 	assert.Equal(t, payload, b)
 
 	require.NoError(t, cli.PutObjectStream(ctx, "images/2.bin", bytes.NewReader([]byte("xyz")), 3, "application/octet-stream"))
+	require.NoError(t, cli.Upload(ctx, "images/keep.bin", []byte("keep"), "application/octet-stream"))
+	existing, err := cli.ExistingObjects(ctx, []string{"images/1.png", "images/2.bin", "images/missing.bin"})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]bool{"images/1.png": true, "images/2.bin": true}, existing)
 
-	require.NoError(t, cli.DeleteObject(ctx, "images/1.png"))
+	require.NoError(t, cli.DeleteObjects(ctx, []string{"images/1.png", "images/2.bin", "images/missing.bin"}))
 	exists, err = cli.ObjectExists(ctx, "images/1.png")
 	require.NoError(t, err)
 	assert.False(t, exists)
+	exists, err = cli.ObjectExists(ctx, "images/keep.bin")
+	require.NoError(t, err)
+	assert.True(t, exists, "explicit-key delete must not remove an unrequested tenant key")
 
 	require.NoError(t, cli.DeleteObjectsPrefix(ctx, "images/"))
+}
+
+func TestClient_WalkObjectsStreamsAndStopsOnCallbackError(t *testing.T) {
+	ep, user, pass := startRustFS(t)
+	ctx := context.Background()
+	cli := newClientRetry(t, ctx, storage.Config{
+		Endpoint: ep, AccessKey: user, SecretKey: pass, Bucket: "walk-objects", UseSSL: false,
+	}, discardLogger())
+	for i := 0; i < 4; i++ {
+		require.NoError(t, cli.Upload(ctx, "images/"+string(rune('a'+i)), []byte("x"), "text/plain"))
+	}
+
+	stop := errors.New("stop listing")
+	callbacks := 0
+	err := cli.WalkObjects(ctx, "images/", func(storage.ObjectInfo) error {
+		callbacks++
+		return stop
+	})
+	assert.ErrorIs(t, err, stop)
+	assert.Equal(t, 1, callbacks, "listing must stop without materializing the remaining page stream")
 }
 
 func TestClient_MissingObjectPaths(t *testing.T) {
@@ -131,4 +163,8 @@ func TestClient_CancelledContextOnPrefixDelete(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_ = cli.DeleteObjectsPrefix(ctx, "p/")
+	_, err := cli.ExistingObjects(ctx, []string{"p/1", "p/2"})
+	assert.ErrorIs(t, err, context.Canceled)
+	err = cli.DeleteObjects(ctx, []string{"p/1", "p/2"})
+	assert.ErrorIs(t, err, context.Canceled)
 }

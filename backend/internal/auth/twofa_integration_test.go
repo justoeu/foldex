@@ -6,10 +6,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 
 	"foldex/internal/auth"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/secrets"
 	"foldex/internal/testdb"
 )
 
@@ -162,9 +165,7 @@ func TestTOTP_CannotReEnrolOverAConfirmedFactor(t *testing.T) {
 func TestTOTP_EnrollmentRequiresThePassword(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
-	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-
-	c := h.client(t)
+	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "admin@example.com", "password": "a good password"}).Code)
 
@@ -259,6 +260,255 @@ func TestLogin_WithTOTPStopsAtTheChallenge(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	assert.NotEmpty(t, c.cookies[auth.CookieAccess])
 	assert.Equal(t, http.StatusOK, c.do(http.MethodGet, "/api/links", nil).Code)
+}
+
+func TestAdminEnrollmentChallengeCannotSurvivePasswordReset(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{Require2FAForAdmins: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	old := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	start := old.do(http.MethodPost, "/api/auth/2fa/totp/start", nil)
+	require.Equal(t, http.StatusOK, start.Code, start.Body.String())
+	var enrollment struct {
+		Secret string `json:"secret"`
+	}
+	require.NoError(t, json.Unmarshal(start.Body.Bytes(), &enrollment))
+
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+	reset, err := h.repo.CreatePasswordReset(context.Background(), user.ID, time.Minute, "")
+	require.NoError(t, err)
+	_, err = h.repo.ConsumePasswordReset(context.Background(), reset, "a reset password")
+	require.NoError(t, err)
+
+	rec := old.do(http.MethodPost, "/api/auth/2fa/totp/confirm",
+		map[string]string{"code": codeNow(t, enrollment.Secret)})
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+	assert.Equal(t, "challenge_invalid", errCode(t, rec))
+	assert.Empty(t, old.cookies[auth.CookieAccess])
+
+	var confirmed bool
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT EXISTS (SELECT 1 FROM totp_secret WHERE user_id = $1 AND confirmed_at IS NOT NULL)`,
+		int64(user.ID)).Scan(&confirmed))
+	assert.False(t, confirmed, "the old-password challenge enrolled an authenticator after reset")
+}
+
+func TestSettingsEnrollmentCannotSurvivePasswordChange(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	invalid := c.do(http.MethodPost, "/api/auth/2fa/totp/start", map[string]string{
+		"password": "a good password", "unexpected": "refused",
+	})
+	assert.Equal(t, http.StatusBadRequest, invalid.Code)
+	assert.Equal(t, "invalid_json", errCode(t, invalid))
+
+	start := c.do(http.MethodPost, "/api/auth/2fa/totp/start",
+		map[string]string{"password": "a good password"})
+	require.Equal(t, http.StatusOK, start.Code, start.Body.String())
+	var enrollment struct {
+		Secret string `json:"secret"`
+	}
+	require.NoError(t, json.Unmarshal(start.Body.Bytes(), &enrollment))
+
+	changed := c.do(http.MethodPost, "/api/auth/password/change", map[string]string{
+		"current_password": "a good password", "new_password": "a changed password",
+	})
+	require.Equal(t, http.StatusNoContent, changed.Code, changed.Body.String())
+
+	rec := c.do(http.MethodPost, "/api/auth/2fa/totp/confirm",
+		map[string]string{"code": codeNow(t, enrollment.Secret)})
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+	assert.Equal(t, "challenge_invalid", errCode(t, rec))
+
+	var confirmed bool
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT confirmed_at IS NOT NULL FROM totp_secret WHERE user_id = 1`).Scan(&confirmed))
+	assert.False(t, confirmed, "an old-password settings proof confirmed a factor")
+}
+
+func TestChallengeMutationsCannotCommitAfterCredentialEpochChange(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*auth.Repository, int64) error
+	}{
+		{"attempt", func(repo *auth.Repository, id int64) error {
+			_, err := repo.BumpChallengeAttempt(context.Background(), id)
+			return err
+		}},
+		{"send", func(repo *auth.Repository, id int64) error {
+			_, err := repo.CreateChallengeEmailOTP(context.Background(), id, []byte("hash"), time.Minute)
+			return err
+		}},
+		{"consume", func(repo *auth.Repository, id int64) error {
+			return repo.ConsumeChallenge(context.Background(), id)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+			require.NoError(t, testdb.Reset(context.Background(), h.pool))
+			h.bootstrapAdmin(t, "admin@example.com", "a good password")
+			user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+			require.NoError(t, err)
+			_, challengeID, err := h.repo.CreateChallenge(context.Background(), auth.NewChallenge{
+				UserID: user.ID, Purpose: auth.PurposeTOTP,
+				TokenVersion: user.TokenVersion, TTL: time.Minute,
+			})
+			require.NoError(t, err)
+
+			ctx := context.Background()
+			blocker, err := h.pool.Begin(ctx)
+			require.NoError(t, err)
+			defer func() { _ = blocker.Rollback(ctx) }()
+			var locked int64
+			require.NoError(t, blocker.QueryRow(ctx,
+				`SELECT id FROM app_user WHERE id = $1 FOR UPDATE`, int64(user.ID)).Scan(&locked))
+
+			revokeResult := make(chan error, 1)
+			go func() {
+				revokeResult <- h.repo.RevokeAllForUser(ctx, user.ID, auth.ReasonLogoutAll)
+			}()
+			waitForBlockedSQL(t, h.pool, "UPDATE app_user SET token_version = token_version + 1")
+
+			mutationResult := make(chan error, 1)
+			go func() { mutationResult <- tc.mutate(h.repo, challengeID) }()
+			waitForBlockedSQL(t, h.pool, "SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
+
+			require.NoError(t, blocker.Commit(ctx))
+			require.NoError(t, <-revokeResult)
+			assert.ErrorIs(t, <-mutationResult, auth.ErrChallengeInvalid)
+		})
+	}
+}
+
+func TestIssueSessionCannotCommitAfterCredentialEpochChange(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	blocker, err := h.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback(ctx) }()
+	var locked int64
+	require.NoError(t, blocker.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE id = $1 FOR UPDATE`, int64(user.ID)).Scan(&locked))
+
+	revokeResult := make(chan error, 1)
+	go func() { revokeResult <- h.repo.RevokeAllForUser(ctx, user.ID, auth.ReasonLogoutAll) }()
+	waitForBlockedSQL(t, h.pool, "UPDATE app_user SET token_version = token_version + 1")
+
+	sessionResult := make(chan error, 1)
+	go func() {
+		_, _, err := h.repo.IssueSession(ctx, user.ID, user.TokenVersion, auth.DefaultTTL(), "", "")
+		sessionResult <- err
+	}()
+	waitForBlockedSQL(t, h.pool, "SELECT id FROM app_user")
+
+	require.NoError(t, blocker.Commit(ctx))
+	require.NoError(t, <-revokeResult)
+	assert.ErrorIs(t, <-sessionResult, auth.ErrSessionInvalid)
+}
+
+func TestVerify2FA_RollsBackProofAndChallengeWhenSessionIssueFails(t *testing.T) {
+	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	enrolled := enrolUser(t, h, "admin@example.com", "a good password")
+
+	c := h.client(t)
+	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password",
+	}).Code)
+
+	var challengeID, counter int64
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT c.id, t.last_used_counter
+		FROM auth_challenge c
+		JOIN totp_secret t ON t.user_id = c.user_id
+		WHERE c.purpose = 'totp' AND c.consumed_at IS NULL`).Scan(&challengeID, &counter))
+	_, err := h.pool.Exec(context.Background(), `
+		CREATE FUNCTION fail_auth_session_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'forced session failure'; END $$;
+		CREATE TRIGGER fail_auth_session_insert
+		BEFORE INSERT ON session FOR EACH ROW EXECUTE FUNCTION fail_auth_session_insert()`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = h.pool.Exec(context.Background(), `
+			DROP TRIGGER IF EXISTS fail_auth_session_insert ON session;
+			DROP FUNCTION IF EXISTS fail_auth_session_insert()`)
+	})
+
+	rec := c.do(http.MethodPost, "/api/auth/2fa/verify",
+		map[string]string{"code": codeNextStep(t, enrolled.secret)})
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+
+	var consumed bool
+	var counterAfter int64
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT c.consumed_at IS NOT NULL, t.last_used_counter
+		FROM auth_challenge c
+		JOIN totp_secret t ON t.user_id = c.user_id
+		WHERE c.id = $1`, challengeID).Scan(&consumed, &counterAfter))
+	assert.False(t, consumed, "a failed session insert spent the challenge")
+	assert.Equal(t, counter, counterAfter, "a failed session insert spent the TOTP proof")
+}
+
+func TestVerify2FA_ReportsProofConsumptionFailureAsInternal(t *testing.T) {
+	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	enrolled := enrolUser(t, h, "admin@example.com", "a good password")
+
+	c := h.client(t)
+	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password",
+	}).Code)
+
+	_, err := h.pool.Exec(context.Background(), `
+		CREATE FUNCTION fail_totp_proof_update() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'forced TOTP proof failure'; END $$;
+		CREATE TRIGGER fail_totp_proof_update
+		BEFORE UPDATE ON totp_secret FOR EACH ROW EXECUTE FUNCTION fail_totp_proof_update()`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = h.pool.Exec(context.Background(), `
+			DROP TRIGGER IF EXISTS fail_totp_proof_update ON totp_secret;
+			DROP FUNCTION IF EXISTS fail_totp_proof_update()`)
+	})
+
+	rec := c.do(http.MethodPost, "/api/auth/2fa/verify",
+		map[string]string{"code": codeNextStep(t, enrolled.secret)})
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "forced TOTP proof failure")
+}
+
+func TestTwoFactorChallengeCannotIssueSessionAfterPasswordReset(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	enrolled := enrolUser(t, h, "admin@example.com", "a good password")
+
+	old := h.client(t)
+	require.Equal(t, http.StatusOK, old.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password",
+	}).Code)
+
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+	reset, err := h.repo.CreatePasswordReset(context.Background(), user.ID, time.Minute, "")
+	require.NoError(t, err)
+	_, err = h.repo.ConsumePasswordReset(context.Background(), reset, "a reset password")
+	require.NoError(t, err)
+
+	rec := old.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": enrolled.codes[0]})
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+	assert.Equal(t, "challenge_invalid", errCode(t, rec))
+	assert.Empty(t, old.cookies[auth.CookieAccess])
 }
 
 // The pre-auth cookie proves a password and nothing else. If it reached the
@@ -372,6 +622,11 @@ func TestTwoFactor_AttemptBudgetIsSpentAndSurvivesARestart(t *testing.T) {
 	c := h.client(t)
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "admin@example.com", "password": "a good password"}).Code)
+	invalid := c.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{
+		"code": "000000", "unexpected": "refused",
+	})
+	assert.Equal(t, http.StatusBadRequest, invalid.Code)
+	assert.Equal(t, "invalid_json", errCode(t, invalid))
 
 	// Four wrong codes, each reporting one fewer attempt left.
 	for i := 1; i <= 4; i++ {
@@ -393,6 +648,567 @@ func TestTwoFactor_AttemptBudgetIsSpentAndSurvivesARestart(t *testing.T) {
 	rec := c2.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": "000000"})
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code,
 		"the attempt budget reset across a restart — it is not durable")
+}
+
+func TestTwoFactor_ReloginDoesNotResetAttemptBudget(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	enrolUser(t, h, "admin@example.com", "a good password")
+
+	first := h.client(t)
+	require.Equal(t, http.StatusOK, first.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password"}).Code)
+	for i := 0; i < 4; i++ {
+		rec := first.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": "000000"})
+		require.Equal(t, http.StatusUnauthorized, rec.Code, "attempt %d", i+1)
+	}
+
+	second := h.client(t)
+	require.Equal(t, http.StatusOK, second.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password"}).Code)
+	rec := second.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": "000000"})
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code,
+		"a correct-password relogin restored the five-attempt budget")
+
+	third := h.client(t)
+	require.Equal(t, http.StatusOK, third.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password"}).Code)
+	assert.Equal(t, http.StatusTooManyRequests,
+		third.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": "000000"}).Code,
+		"an exhausted budget became renewable before its window expired")
+
+	_, err := h.pool.Exec(context.Background(),
+		`UPDATE auth_challenge SET expires_at = now() - interval '1 second'`)
+	require.NoError(t, err)
+	fresh := h.client(t)
+	require.Equal(t, http.StatusOK, fresh.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password"}).Code)
+	assert.Equal(t, http.StatusUnauthorized,
+		fresh.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": "000000"}).Code,
+		"an expired window did not receive a fresh budget")
+}
+
+func TestCreateChallenge_PreservesLivePurposeState(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	ctx := context.Background()
+	user, err := h.repo.UserByEmail(ctx, "admin@example.com")
+	require.NoError(t, err)
+	uid := user.ID
+
+	firstRaw, firstID, err := h.repo.CreateChallenge(ctx, auth.NewChallenge{
+		UserID: uid, Purpose: auth.PurposeTOTP, TokenVersion: user.TokenVersion,
+		TTL: time.Minute, MailboxAlreadyProven: true,
+	})
+	require.NoError(t, err)
+	for range 2 {
+		_, err = h.repo.BumpChallengeAttempt(ctx, firstID)
+		require.NoError(t, err)
+	}
+	_, err = h.repo.CreateChallengeEmailOTP(ctx, firstID, []byte("hash"), time.Minute)
+	require.NoError(t, err)
+	var firstExpiry time.Time
+	require.NoError(t, h.pool.QueryRow(ctx,
+		`SELECT expires_at FROM auth_challenge WHERE id = $1`, firstID).Scan(&firstExpiry))
+
+	raw, secondID, err := h.repo.CreateChallenge(ctx, auth.NewChallenge{
+		UserID: uid, Purpose: auth.PurposeTOTP, TokenVersion: user.TokenVersion, TTL: time.Minute,
+	})
+	require.NoError(t, err)
+	_, err = h.repo.ResolveChallenge(ctx, firstRaw, auth.PurposeTOTP)
+	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+	challenge, err := h.repo.ResolveChallenge(ctx, raw, auth.PurposeTOTP)
+	require.NoError(t, err)
+	assert.Equal(t, 2, challenge.Attempts)
+	assert.Equal(t, 1, challenge.Sends)
+	assert.True(t, challenge.MailboxAlreadyProven,
+		"relogin discarded proof that the mailbox supplied the first factor")
+	var secondExpiry time.Time
+	require.NoError(t, h.pool.QueryRow(ctx,
+		`SELECT expires_at FROM auth_challenge WHERE id = $1`, secondID).Scan(&secondExpiry))
+	assert.True(t, firstExpiry.Equal(secondExpiry), "relogin restarted the challenge window")
+
+	otherRaw, otherID, err := h.repo.CreateChallenge(ctx, auth.NewChallenge{
+		UserID: uid, Purpose: auth.PurposeConvertGoogle, TokenVersion: user.TokenVersion, TTL: time.Minute,
+	})
+	require.NoError(t, err)
+	other, err := h.repo.ResolveChallenge(ctx, otherRaw, auth.PurposeConvertGoogle)
+	require.NoError(t, err)
+	assert.Zero(t, other.Attempts, "attempts leaked across challenge purposes")
+	_, err = h.pool.Exec(ctx, `UPDATE auth_challenge SET expires_at = now() - interval '1 second' WHERE id = $1`, otherID)
+	require.NoError(t, err)
+	_, err = h.repo.BumpChallengeAttempt(ctx, otherID)
+	assert.ErrorIs(t, err, auth.ErrChallengeInvalid, "an expired challenge reserved an attempt")
+}
+
+func TestChallengeCredentialEpochInvalidatesOnPasswordChangeAndLogoutAll(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(t *testing.T, h *harness, c *client, user auth.User)
+	}{
+		{
+			name: "password change",
+			mutate: func(t *testing.T, _ *harness, c *client, _ auth.User) {
+				rec := c.do(http.MethodPost, "/api/auth/password/change", map[string]string{
+					"current_password": "a good password", "new_password": "a changed password",
+				})
+				require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+			},
+		},
+		{
+			name: "logout all",
+			mutate: func(t *testing.T, h *harness, _ *client, user auth.User) {
+				require.NoError(t, h.repo.RevokeAllForUser(context.Background(), user.ID, auth.ReasonLogoutAll))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+			require.NoError(t, testdb.Reset(context.Background(), h.pool))
+			c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+			user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+			require.NoError(t, err)
+			raw, _, err := h.repo.CreateChallenge(context.Background(), auth.NewChallenge{
+				UserID: user.ID, Purpose: auth.PurposeTOTP,
+				TokenVersion: user.TokenVersion, TTL: time.Minute,
+			})
+			require.NoError(t, err)
+
+			tc.mutate(t, h, c, user)
+			_, err = h.repo.ResolveChallenge(context.Background(), raw, auth.PurposeTOTP)
+			assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+			_, err = h.repo.BumpChallengeAttempt(context.Background(), 1)
+			assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+			assert.ErrorIs(t, h.repo.ConsumeChallenge(context.Background(), 1), auth.ErrChallengeInvalid)
+			_, _, err = h.repo.IssueSession(context.Background(), user.ID, user.TokenVersion,
+				auth.DefaultTTL(), "", "")
+			assert.ErrorIs(t, err, auth.ErrSessionInvalid)
+		})
+	}
+}
+
+func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	ctx := context.Background()
+	user, err := h.repo.UserByEmail(ctx, "admin@example.com")
+	require.NoError(t, err)
+	stale := user.TokenVersion + 1
+
+	_, _, err = h.repo.CreateChallenge(ctx, auth.NewChallenge{
+		UserID: user.ID, Purpose: auth.PurposeTOTP, TokenVersion: stale, TTL: time.Minute,
+	})
+	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+	assert.ErrorIs(t, h.repo.StartTOTPEnrollment(ctx, user.ID, stale, 0, []byte("cipher"), []byte("nonce")),
+		auth.ErrChallengeInvalid)
+	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, user.ID, stale,
+		auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")},
+		[][]byte{[]byte("h")}, 0, nil, auth.DefaultTTL(), "", "")
+	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+	_, _, err = h.repo.IssueSession(ctx, user.ID, stale, auth.DefaultTTL(), "", "")
+	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
+
+	raw, challengeID, err := h.repo.CreateChallenge(ctx, auth.NewChallenge{
+		UserID: user.ID, Purpose: auth.PurposeTOTP, TokenVersion: user.TokenVersion, TTL: time.Minute,
+	})
+	require.NoError(t, err)
+	require.NoError(t, h.repo.StartTOTPEnrollment(ctx, user.ID, user.TokenVersion, 0,
+		[]byte("cipher"), []byte("nonce")))
+	testdb.SetUserStatus(t, h.pool, user.ID, "disabled")
+
+	_, err = h.repo.ResolveChallenge(ctx, raw, auth.PurposeTOTP)
+	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+	_, err = h.repo.BumpChallengeAttempt(ctx, challengeID)
+	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+	assert.ErrorIs(t, h.repo.ConsumeChallenge(ctx, challengeID), auth.ErrChallengeInvalid)
+	_, err = h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte("hash"), time.Minute)
+	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+	_, _, err = h.repo.CreateChallenge(ctx, auth.NewChallenge{
+		UserID: user.ID, Purpose: auth.PurposeTOTP, TokenVersion: user.TokenVersion, TTL: time.Minute,
+	})
+	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+	assert.ErrorIs(t, h.repo.StartTOTPEnrollment(ctx, user.ID, user.TokenVersion, 0,
+		[]byte("replacement"), []byte("replacement")), auth.ErrChallengeInvalid)
+	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, user.ID, user.TokenVersion,
+		auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")},
+		[][]byte{[]byte("h")}, 0, nil, auth.DefaultTTL(), "", "")
+	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
+	_, _, err = h.repo.IssueSession(ctx, user.ID, user.TokenVersion, auth.DefaultTTL(), "", "")
+	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
+	testdb.SetUserStatus(t, h.pool, user.ID, "active")
+
+	missing := authctx.UserID(999_999)
+	assert.ErrorIs(t, h.repo.ChangePassword(ctx, missing, 1, "old password", "a new password"), auth.ErrNoUser)
+	assert.ErrorIs(t, h.repo.RevokeAllForUser(ctx, missing, auth.ReasonLogoutAll), auth.ErrNoUser)
+	assert.ErrorIs(t, h.repo.ChangePassword(ctx, user.ID, 1, "wrong password", "a new password"),
+		auth.ErrBadCredentials)
+
+	testdb.ConvertToGoogleOnly(t, h.pool, user.ID, "admin@example.com", "google-sub")
+	assert.ErrorIs(t, h.repo.ChangePassword(ctx, user.ID, 1, "a good password", "a new password"),
+		auth.ErrPasswordMissing)
+	_, err = h.repo.CreatePasswordReset(ctx, user.ID, time.Minute, "")
+	assert.ErrorIs(t, err, auth.ErrResetInvalid)
+}
+
+func TestCredentialEpochRepositorySurfacesDatabaseErrors(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+
+	h.pool.Close()
+	ctx := context.Background()
+
+	assert.ErrorContains(t,
+		h.repo.ChangePassword(ctx, user.ID, 1, "a good password", "a new password"),
+		"change password begin")
+	_, _, err = h.repo.IssueSession(ctx, user.ID, user.TokenVersion, auth.DefaultTTL(), "", "")
+	assert.ErrorContains(t, err, "issue session begin")
+	assert.ErrorContains(t,
+		h.repo.RevokeAllForUser(ctx, user.ID, auth.ReasonLogoutAll),
+		"revoke all begin")
+}
+
+func TestChallengeAttemptReservationIsAtomic(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+	uid := user.ID
+	_, id, err := h.repo.CreateChallenge(context.Background(), auth.NewChallenge{
+		UserID: uid, Purpose: auth.PurposeTOTP, TokenVersion: user.TokenVersion, TTL: time.Minute,
+	})
+	require.NoError(t, err)
+
+	const requests = 20
+	errs := make(chan error, requests)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range requests {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := h.repo.BumpChallengeAttempt(context.Background(), id)
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	reserved := 0
+	exhausted := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			reserved++
+		case errors.Is(err, auth.ErrChallengeExhausted):
+			exhausted++
+		default:
+			t.Fatalf("unexpected reservation error: %v", err)
+		}
+	}
+	assert.Equal(t, 5, reserved)
+	assert.Equal(t, requests-5, exhausted)
+
+	var attempts int
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT attempts FROM auth_challenge WHERE id = $1`, id).Scan(&attempts))
+	assert.Equal(t, 5, attempts)
+}
+
+func TestChallengeConsumptionHasOneWinner(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+	uid := user.ID
+	_, id, err := h.repo.CreateChallenge(context.Background(), auth.NewChallenge{
+		UserID: uid, Purpose: auth.PurposeTOTP, TokenVersion: user.TokenVersion, TTL: time.Minute,
+	})
+	require.NoError(t, err)
+
+	errs := make(chan error, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- h.repo.ConsumeChallenge(context.Background(), id)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	winners := 0
+	losers := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			winners++
+		case errors.Is(err, auth.ErrChallengeInvalid):
+			losers++
+		default:
+			t.Fatalf("unexpected consume error: %v", err)
+		}
+	}
+	assert.Equal(t, 1, winners)
+	assert.Equal(t, 1, losers)
+}
+
+func TestTwoFactor_ParallelValidFactorsIssueOneSession(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	enrolled := enrolUser(t, h, "admin@example.com", "a good password")
+
+	first := h.client(t)
+	require.Equal(t, http.StatusOK, first.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password"}).Code)
+	second := h.client(t)
+	second.cookies[auth.CookiePreAuth] = first.cookies[auth.CookiePreAuth]
+
+	var before int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `SELECT count(*) FROM session`).Scan(&before))
+	statuses := make(chan int, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, c := range []*client{first, second} {
+		wg.Add(1)
+		go func(code string, c *client) {
+			defer wg.Done()
+			<-start
+			statuses <- c.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": code}).Code
+		}(enrolled.codes[i], c)
+	}
+	close(start)
+	wg.Wait()
+	close(statuses)
+
+	successes := 0
+	for status := range statuses {
+		if status == http.StatusOK {
+			successes++
+		}
+	}
+	assert.Equal(t, 1, successes, "more than one request issued a session from one challenge")
+
+	var after int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `SELECT count(*) FROM session`).Scan(&after))
+	assert.Equal(t, before+1, after)
+}
+
+func TestTwoFactor_ConcurrentSameTOTPCounterAcrossIndependentChallengesHasOneWinner(t *testing.T) {
+	type verificationEvent struct {
+		uid   authctx.UserID
+		proof auth.TOTPProof
+	}
+	verified := make(chan verificationEvent, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseBoth := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseBoth)
+
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{
+		TwoFactor: true,
+		AfterTOTPVerification: func(ctx context.Context, uid authctx.UserID, proof auth.TOTPProof) {
+			select {
+			case verified <- verificationEvent{uid: uid, proof: proof}:
+			case <-ctx.Done():
+				return
+			}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		},
+	})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	enrolUser(t, h, "admin@example.com", "a good password")
+
+	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
+	require.NoError(t, err)
+	baseCounter := time.Now().Unix() / 30
+	targetCounter := baseCounter + 1
+	secret := ""
+	code := ""
+	for _, candidate := range []string{
+		"JBSWY3DPEHPK3PXP",
+		"GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+		"KRSXG5DSNFXGOIDB",
+	} {
+		candidateCode := codeAt(t, candidate, time.Unix(targetCounter*30, 0))
+		collision := false
+		for counter := baseCounter - 1; counter < targetCounter; counter++ {
+			if candidateCode == codeAt(t, candidate, time.Unix(counter*30, 0)) {
+				collision = true
+				break
+			}
+		}
+		if !collision {
+			secret = candidate
+			code = candidateCode
+			break
+		}
+	}
+	require.NotEmpty(t, secret, "test seeds collided across every accepted TOTP counter")
+	ciphertext, nonce, err := h.cipher.Encrypt([]byte(secret))
+	require.NoError(t, err)
+	_, err = h.pool.Exec(context.Background(), `
+		UPDATE totp_secret
+		SET secret_ciphertext = $2, secret_nonce = $3, last_used_counter = $4
+		WHERE user_id = $1`, int64(user.ID), ciphertext, nonce, targetCounter-1)
+	require.NoError(t, err)
+
+	clients := []*client{h.client(t), h.client(t)}
+	challengeIDs := make([]int64, len(clients))
+	for i, c := range clients {
+		raw, hash, tokenErr := secrets.NewToken()
+		require.NoError(t, tokenErr)
+		require.NoError(t, h.pool.QueryRow(context.Background(), `
+			INSERT INTO auth_challenge (user_id, token_hash, purpose, token_version, expires_at)
+			VALUES ($1, $2, 'totp', $3, now() + interval '10 minutes')
+			RETURNING id`, int64(user.ID), hash, user.TokenVersion).Scan(&challengeIDs[i]))
+		c.cookies[auth.CookiePreAuth] = raw
+	}
+	var liveChallenges int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM auth_challenge
+		WHERE id IN ($1, $2) AND consumed_at IS NULL AND expires_at > now()`,
+		challengeIDs[0], challengeIDs[1]).Scan(&liveChallenges))
+	require.Equal(t, 2, liveChallenges)
+
+	var sessionsBefore int
+	var maxSessionID int64
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*), COALESCE(max(id), 0) FROM session`).Scan(&sessionsBefore, &maxSessionID))
+
+	type verifyResult struct {
+		index  int
+		status int
+		body   string
+	}
+	results := make(chan verifyResult, len(clients))
+	var wg sync.WaitGroup
+	for i, c := range clients {
+		wg.Add(1)
+		go func(index int, c *client) {
+			defer wg.Done()
+			rec := c.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": code})
+			results <- verifyResult{index: index, status: rec.Code, body: rec.Body.String()}
+		}(i, c)
+	}
+
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelWait()
+	for range clients {
+		select {
+		case event := <-verified:
+			assert.Equal(t, user.ID, event.uid)
+			assert.Equal(t, targetCounter, event.proof.Counter)
+			assert.Equal(t, ciphertext, event.proof.Ciphertext)
+			assert.Equal(t, nonce, event.proof.Nonce)
+		case <-waitCtx.Done():
+			require.FailNow(t, "both requests did not complete TOTP verification", waitCtx.Err().Error())
+		}
+	}
+	select {
+	case result := <-results:
+		require.FailNow(t, "request completed before proof-consumption release", "result: %+v", result)
+	default:
+	}
+
+	var counterAtBarrier int64
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT last_used_counter FROM totp_secret WHERE user_id = $1`, int64(user.ID)).Scan(&counterAtBarrier))
+	assert.Equal(t, targetCounter-1, counterAtBarrier,
+		"cryptographic verification consumed the counter before the transactional update")
+	for _, challengeID := range challengeIDs {
+		var attempts int
+		var consumed bool
+		require.NoError(t, h.pool.QueryRow(context.Background(), `
+			SELECT attempts, consumed_at IS NOT NULL FROM auth_challenge WHERE id = $1`, challengeID).
+			Scan(&attempts, &consumed))
+		assert.Equal(t, 1, attempts)
+		assert.False(t, consumed, "challenge was consumed before proof-consumption release")
+	}
+	var sessionsAtBarrier int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `SELECT count(*) FROM session`).Scan(&sessionsAtBarrier))
+	assert.Equal(t, sessionsBefore, sessionsAtBarrier,
+		"session committed before proof-consumption release")
+
+	releaseBoth()
+	wg.Wait()
+	close(results)
+
+	winner := -1
+	loser := -1
+	for result := range results {
+		switch result.status {
+		case http.StatusOK:
+			require.Equal(t, -1, winner, "more than one request issued a session")
+			winner = result.index
+		case http.StatusUnauthorized:
+			require.Equal(t, -1, loser, "more than one request lost the counter race")
+			loser = result.index
+			var payload struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(result.body), &payload))
+			assert.Equal(t, "invalid_code", payload.Error.Code)
+		default:
+			t.Fatalf("unexpected verification response %d: %s", result.status, result.body)
+		}
+	}
+	require.NotEqual(t, -1, winner)
+	require.NotEqual(t, -1, loser)
+	assert.NotEmpty(t, clients[winner].cookies[auth.CookieAccess])
+	assert.Empty(t, clients[winner].cookies[auth.CookiePreAuth])
+	assert.Empty(t, clients[loser].cookies[auth.CookieAccess])
+	assert.NotEmpty(t, clients[loser].cookies[auth.CookiePreAuth])
+
+	assert.Equal(t, http.StatusOK, clients[winner].do(http.MethodGet, "/api/links", nil).Code)
+	assert.Equal(t, http.StatusUnauthorized, clients[loser].do(http.MethodGet, "/api/links", nil).Code)
+
+	var sessionsAfter, newSessions int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `SELECT count(*) FROM session`).Scan(&sessionsAfter))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM session WHERE id > $1`, maxSessionID).Scan(&newSessions))
+	for i, challengeID := range challengeIDs {
+		var attempts int
+		var consumed bool
+		require.NoError(t, h.pool.QueryRow(context.Background(), `
+			SELECT attempts, consumed_at IS NOT NULL FROM auth_challenge WHERE id = $1`, challengeID).
+			Scan(&attempts, &consumed))
+		assert.Equal(t, 1, attempts)
+		assert.Equal(t, i == winner, consumed,
+			"challenge consumption did not match the client that received the session")
+	}
+	var counterAfter int64
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT last_used_counter FROM totp_secret WHERE user_id = $1`, int64(user.ID)).Scan(&counterAfter))
+	assert.Equal(t, sessionsBefore+1, sessionsAfter)
+	assert.Equal(t, 1, newSessions)
+	assert.Equal(t, targetCounter, counterAfter)
+	var winningSessionRows int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM session
+		WHERE id > $1 AND access_token_hash = $2 AND revoked_at IS NULL`,
+		maxSessionID, secrets.Hash(clients[winner].cookies[auth.CookieAccess])).Scan(&winningSessionRows))
+	assert.Equal(t, 1, winningSessionRows,
+		"the sole committed session does not belong to the sole protected-action winner")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -423,6 +1239,33 @@ func TestRecoveryCode_SignsInOnceAndOnlyOnce(t *testing.T) {
 	// A DIFFERENT code still works.
 	assert.Equal(t, http.StatusOK,
 		c2.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": e.codes[1]}).Code)
+}
+
+func TestRecoveryCode_DigestRequiresTheServerKey(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	e := enrolUser(t, h, "admin@example.com", "a good password")
+
+	var stored []byte
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT code_hash FROM recovery_code ORDER BY id LIMIT 1`).Scan(&stored))
+	rawSHA := sha256.Sum256([]byte(strings.ReplaceAll(e.codes[0], "-", "")))
+	assert.NotEqual(t, rawSHA[:], stored,
+		"a database reader can enumerate recovery codes without the server key")
+
+	c := h.client(t)
+	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password"}).Code)
+	wrongKey := newHarnessWith(t, h.pool, harnessOpts{TwoFactor: true, CipherSeed: 1})
+	wrongKeyClient := wrongKey.client(t)
+	wrongKeyClient.cookies[auth.CookiePreAuth] = c.cookies[auth.CookiePreAuth]
+	assert.Equal(t, http.StatusUnauthorized,
+		wrongKeyClient.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": e.codes[0]}).Code,
+		"a recovery code verified without the AUTH_ENCRYPTION_KEY that minted its digest")
+	assert.Equal(t, http.StatusOK,
+		c.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": e.codes[0]}).Code,
+		"the correct key no longer verifies the recovery code")
 }
 
 // Codes are printed with a hyphen and typed however the user manages.
@@ -527,6 +1370,65 @@ func TestEmailOTP_DeliversACodeThatSignsIn(t *testing.T) {
 	assert.NotEmpty(t, c.cookies[auth.CookieAccess])
 }
 
+func TestEmailOTP_QueueFullDoesNotChargeOrPublishACode(t *testing.T) {
+	gate := make(chan struct{})
+	t.Cleanup(func() { close(gate) })
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{
+		TwoFactor: true, SMTP: true, MailWorkers: 1, MailQueue: 1, MailGate: gate,
+	})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	enrolUser(t, h, "admin@example.com", "a good password")
+
+	c := h.client(t)
+	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password"}).Code)
+	saturateMailDispatcher(t, h)
+
+	rec := c.do(http.MethodPost, "/api/auth/2fa/email", nil)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Equal(t, "mail_queue_full", errCode(t, rec))
+
+	var sends, codes int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT sends FROM auth_challenge WHERE consumed_at IS NULL`).Scan(&sends))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM email_otp WHERE purpose = 'login_2fa' AND consumed_at IS NULL`).Scan(&codes))
+	assert.Zero(t, sends, "queue refusal consumed one of the persistent send budget")
+	assert.Zero(t, codes, "queue refusal published a code that cannot be mailed")
+}
+
+func TestEmailOTP_DigestRequiresTheServerKey(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	enrolUser(t, h, "admin@example.com", "a good password")
+
+	c := h.client(t)
+	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password"}).Code)
+	h.mail.reset()
+	require.Equal(t, http.StatusAccepted, c.do(http.MethodPost, "/api/auth/2fa/email", nil).Code)
+	code := extractSixDigits(t, h.mail.waitFor(t, "admin@example.com").Text)
+
+	var stored []byte
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT code_hash FROM email_otp WHERE purpose = 'login_2fa' AND consumed_at IS NULL`).Scan(&stored))
+	rawSHA := sha256.Sum256([]byte(code))
+	assert.NotEqual(t, rawSHA[:], stored,
+		"a database reader can enumerate the six-digit OTP without the server key")
+
+	wrongKey := newHarnessWith(t, h.pool, harnessOpts{TwoFactor: true, SMTP: true, CipherSeed: 1})
+	wrongKeyClient := wrongKey.client(t)
+	wrongKeyClient.cookies[auth.CookiePreAuth] = c.cookies[auth.CookiePreAuth]
+	assert.Equal(t, http.StatusUnauthorized,
+		wrongKeyClient.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": code}).Code,
+		"an e-mail OTP verified without the AUTH_ENCRYPTION_KEY that minted its digest")
+	assert.Equal(t, http.StatusOK,
+		c.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": code}).Code,
+		"the correct key no longer verifies the e-mail OTP")
+}
+
 // A mailed code is single-use, like every other credential here.
 func TestEmailOTP_CannotBeUsedTwice(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
@@ -579,6 +1481,140 @@ func TestEmailOTP_ResendIsThrottledButAlwaysAnswers202(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 // Admin enrollment policy
 // ─────────────────────────────────────────────────────────────────────
+
+func TestAdminPolicy_BootstrapMustEnrolBeforeGettingASession(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{Require2FAForAdmins: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+
+	c := h.client(t)
+	rec := c.do(http.MethodPost, "/api/auth/bootstrap", map[string]string{
+		"email": "admin@example.com", "name": "Admin", "password": "a good password",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	body := decode(t, rec)
+	assert.Equal(t, "two_factor_required", body["status"])
+	assert.Equal(t, "enroll_2fa", body["purpose"])
+	assert.Empty(t, c.cookies[auth.CookieAccess], "bootstrap issued an admin session before enrollment")
+	assert.NotEmpty(t, c.cookies[auth.CookiePreAuth])
+	assert.Equal(t, http.StatusUnauthorized, c.do(http.MethodGet, "/api/links", nil).Code)
+
+	rec = c.do(http.MethodPost, "/api/auth/2fa/totp/start", nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var start struct {
+		Secret string `json:"secret"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &start))
+	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/2fa/totp/confirm",
+		map[string]string{"code": codeNow(t, start.Secret)}).Code)
+	assert.NotEmpty(t, c.cookies[auth.CookieAccess])
+	assert.Equal(t, http.StatusOK, c.do(http.MethodGet, "/api/admin/users", nil).Code)
+}
+
+func TestAdminPolicy_AdminInviteMustEnrolBeforeGettingASession(t *testing.T) {
+	pool := testdb.Shared(t)
+	base := newHarnessWith(t, pool, harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), pool))
+	base.bootstrapAdmin(t, "owner@example.com", "a good password")
+	owner := enrolUser(t, base, "owner@example.com", "a good password")
+
+	strict := newHarnessWith(t, pool, harnessOpts{Require2FAForAdmins: true})
+	admin := clientOnHarness(t, strict, owner.client)
+	invite := admin.do(http.MethodPost, "/api/admin/invites", map[string]string{
+		"email": "invited-admin@example.com", "role": "admin",
+	})
+	require.Equal(t, http.StatusCreated, invite.Code, invite.Body.String())
+
+	invited := strict.client(t)
+	rec := invited.do(http.MethodPost, "/api/auth/invites/accept", map[string]string{
+		"token": inviteToken(t, invite), "name": "Invited Admin", "password": "a fresh password",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	body := decode(t, rec)
+	assert.Equal(t, "two_factor_required", body["status"])
+	assert.Equal(t, "enroll_2fa", body["purpose"])
+	assert.Empty(t, invited.cookies[auth.CookieAccess], "admin invite acceptance issued a session")
+	assert.NotEmpty(t, invited.cookies[auth.CookiePreAuth])
+
+	rec = invited.do(http.MethodPost, "/api/auth/2fa/totp/start", nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var start struct {
+		Secret string `json:"secret"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &start))
+	require.Equal(t, http.StatusOK, invited.do(http.MethodPost, "/api/auth/2fa/totp/confirm",
+		map[string]string{"code": codeNow(t, start.Secret)}).Code)
+	assert.NotEmpty(t, invited.cookies[auth.CookieAccess])
+	assert.Equal(t, http.StatusOK, invited.do(http.MethodGet, "/api/admin/users", nil).Code)
+}
+
+func TestAdminPolicy_PromotionRevokesTheLiveSessionAndRequiresEnrollment(t *testing.T) {
+	pool := testdb.Shared(t)
+	base := newHarnessWith(t, pool, harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), pool))
+	base.bootstrapAdmin(t, "owner@example.com", "a good password")
+	owner := enrolUser(t, base, "owner@example.com", "a good password")
+
+	strict := newHarnessWith(t, pool, harnessOpts{Require2FAForAdmins: true})
+	admin := clientOnHarness(t, strict, owner.client)
+	uid := testdb.SeedUserWithPassword(t, pool, "member@example.com", "a good password", "user")
+	member := strict.client(t)
+	require.Equal(t, http.StatusOK, member.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "member@example.com", "password": "a good password",
+	}).Code)
+	require.Equal(t, http.StatusOK, member.do(http.MethodGet, "/api/links", nil).Code)
+
+	rec := admin.do(http.MethodPatch, fmt.Sprintf("/api/admin/users/%d", int64(uid)),
+		map[string]string{"role": "admin"})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, http.StatusUnauthorized, member.do(http.MethodGet, "/api/links", nil).Code,
+		"promotion left a pre-promotion session alive")
+	assert.Equal(t, http.StatusUnauthorized, member.do(http.MethodPost, "/api/auth/refresh", nil).Code,
+		"promotion left the old refresh credential alive")
+
+	fresh := strict.client(t)
+	rec = fresh.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "member@example.com", "password": "a good password",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	body := decode(t, rec)
+	assert.Equal(t, "two_factor_required", body["status"])
+	assert.Equal(t, "enroll_2fa", body["purpose"])
+	assert.Empty(t, fresh.cookies[auth.CookieAccess])
+}
+
+func TestAdminPolicy_EnablingPolicyBlocksLegacyAndRefreshedSessionsButKeepsEnrollmentReachable(t *testing.T) {
+	pool := testdb.Shared(t)
+	loose := newHarnessWith(t, pool, harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), pool))
+	legacy := loose.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	strict := newHarnessWith(t, pool, harnessOpts{Require2FAForAdmins: true})
+	legacy = clientOnHarness(t, strict, legacy)
+	rec := legacy.do(http.MethodGet, "/api/admin/users", nil)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, "admin_2fa_required", errCode(t, rec))
+
+	// The old session remains sufficient to prove the password and enroll; only
+	// admin authority is withheld until the authenticator is confirmed.
+	rec = legacy.do(http.MethodPost, "/api/auth/2fa/totp/start", map[string]string{
+		"password": "a good password",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	require.Equal(t, http.StatusOK, legacy.do(http.MethodPost, "/api/auth/refresh", nil).Code)
+	rec = legacy.do(http.MethodGet, "/api/admin/users", nil)
+	assert.Equal(t, http.StatusForbidden, rec.Code, "refresh restored admin authority without confirmed TOTP")
+	assert.Equal(t, "admin_2fa_required", errCode(t, rec))
+
+	testdb.SeedUserWithPassword(t, pool, "user@example.com", "a good password", "user")
+	plain := strict.client(t)
+	require.Equal(t, http.StatusOK, plain.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "user@example.com", "password": "a good password",
+	}).Code)
+	assert.Equal(t, http.StatusNotFound, plain.do(http.MethodGet, "/api/admin/users", nil).Code,
+		"the policy gate changed the non-admin 404 contract")
+}
 
 // With the policy on, an admin who has no authenticator is diverted into
 // mandatory enrollment rather than refused (which would lock every existing
@@ -659,6 +1695,198 @@ func TestAdminPolicy_AdminCannotDisableTOTP(t *testing.T) {
 	assert.Equal(t, "totp_required_for_admins", errCode(t, rec))
 }
 
+func TestConfirmTOTP_SeedReplacementBetweenVerifyAndConfirmCannotActivateTheReplacement(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	_, sid, err := h.repo.IssueSession(context.Background(), uid, 0, auth.DefaultTTL(), "", "")
+	require.NoError(t, err)
+
+	firstCiphertext, firstNonce, err := h.cipher.Encrypt([]byte("JBSWY3DPEHPK3PXP"))
+	require.NoError(t, err)
+	user, err := h.repo.GetUser(context.Background(), uid)
+	require.NoError(t, err)
+	require.NoError(t, h.repo.StartTOTPEnrollment(context.Background(), uid, user.TokenVersion, sid,
+		firstCiphertext, firstNonce))
+	verified, err := h.repo.LoadTOTPSecret(context.Background(), uid)
+	require.NoError(t, err)
+
+	replacementCiphertext, replacementNonce, err := h.cipher.Encrypt([]byte("KRSXG5DSNFXGOIDB"))
+	require.NoError(t, err)
+	require.NoError(t, h.repo.StartTOTPEnrollment(context.Background(), uid, user.TokenVersion, sid,
+		replacementCiphertext, replacementNonce))
+
+	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), uid, user.TokenVersion,
+		auth.TOTPProof{Counter: time.Now().Unix() / 30,
+			Ciphertext: verified.Ciphertext, Nonce: verified.Nonce},
+		[][]byte{[]byte("h")}, sid, nil, auth.DefaultTTL(), "", "")
+	require.ErrorIs(t, err, auth.ErrTOTPEnrollmentChanged,
+		"confirmation activated a seed that was not the one verified")
+
+	current, err := h.repo.LoadTOTPSecret(context.Background(), uid)
+	require.NoError(t, err)
+	assert.False(t, current.Confirmed)
+	assert.Equal(t, replacementCiphertext, current.Ciphertext)
+	assert.Equal(t, replacementNonce, current.Nonce)
+	assert.NotEqual(t, verified.Ciphertext, current.Ciphertext)
+}
+
+func TestConfirmTOTP_RollsBackFactorWhenRecoveryCodeWriteFails(t *testing.T) {
+	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	rec := c.do(http.MethodPost, "/api/auth/2fa/totp/start", map[string]string{
+		"password": "a good password",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var start struct {
+		Secret string `json:"secret"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &start))
+
+	_, err := h.pool.Exec(context.Background(), `
+		CREATE FUNCTION fail_recovery_code_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'forced recovery-code failure'; END $$;
+		CREATE TRIGGER fail_recovery_code_insert
+		BEFORE INSERT ON recovery_code FOR EACH ROW EXECUTE FUNCTION fail_recovery_code_insert()`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = h.pool.Exec(context.Background(), `
+			DROP TRIGGER IF EXISTS fail_recovery_code_insert ON recovery_code;
+			DROP FUNCTION IF EXISTS fail_recovery_code_insert()`)
+	})
+
+	rec = c.do(http.MethodPost, "/api/auth/2fa/totp/confirm",
+		map[string]string{"code": codeNow(t, start.Secret)})
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+
+	var confirmed bool
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT confirmed_at IS NOT NULL FROM totp_secret WHERE user_id = 1`).Scan(&confirmed))
+	assert.False(t, confirmed, "the factor was activated without its recovery codes")
+}
+
+func TestConfirmTOTP_SettingsEnrollmentRefusesARevokedSession(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	rec := c.do(http.MethodPost, "/api/auth/2fa/totp/start", map[string]string{
+		"password": "a good password",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var start struct {
+		Secret string `json:"secret"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &start))
+
+	var sid int64
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT id FROM session WHERE access_token_hash = $1`,
+		secrets.Hash(c.cookies[auth.CookieAccess])).Scan(&sid))
+	require.NoError(t, h.repo.RevokeSession(context.Background(), authctx.UserID(1), sid, auth.ReasonLogout))
+
+	user, err := h.repo.GetUser(context.Background(), authctx.UserID(1))
+	require.NoError(t, err)
+	row, err := h.repo.LoadTOTPSecret(context.Background(), user.ID)
+	require.NoError(t, err)
+	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), user.ID, user.TokenVersion,
+		auth.TOTPProof{Counter: time.Now().Unix() / 30,
+			Ciphertext: row.Ciphertext, Nonce: row.Nonce},
+		[][]byte{[]byte("recovery")}, sid, nil, auth.DefaultTTL(), "", "")
+	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
+
+	var confirmed bool
+	var codes int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT confirmed_at IS NOT NULL FROM totp_secret WHERE user_id = 1`).Scan(&confirmed))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM recovery_code WHERE user_id = 1`).Scan(&codes))
+	assert.False(t, confirmed)
+	assert.Zero(t, codes)
+}
+
+func TestConfirmTOTP_SettingsEnrollmentIsBoundToTheStartingSession(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	first := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	rec := first.do(http.MethodPost, "/api/auth/2fa/totp/start", map[string]string{
+		"password": "a good password",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	second := h.client(t)
+	require.Equal(t, http.StatusOK, second.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password",
+	}).Code)
+
+	user, err := h.repo.GetUser(context.Background(), authctx.UserID(1))
+	require.NoError(t, err)
+	row, err := h.repo.LoadTOTPSecret(context.Background(), user.ID)
+	require.NoError(t, err)
+	var secondSession int64
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT id FROM session WHERE access_token_hash = $1`,
+		secrets.Hash(second.cookies[auth.CookieAccess])).Scan(&secondSession))
+
+	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), user.ID, user.TokenVersion,
+		auth.TOTPProof{Counter: time.Now().Unix() / 30,
+			Ciphertext: row.Ciphertext, Nonce: row.Nonce},
+		[][]byte{[]byte("recovery")}, secondSession, nil, auth.DefaultTTL(), "", "")
+	assert.ErrorIs(t, err, auth.ErrTOTPEnrollmentChanged)
+
+	current, err := h.repo.LoadTOTPSecret(context.Background(), user.ID)
+	require.NoError(t, err)
+	assert.False(t, current.Confirmed)
+	assert.NotNil(t, current.EnrollmentSessionID)
+}
+
+func TestConfirmTOTP_RollsBackEnrollmentWhenMandatoryLoginSessionFails(t *testing.T) {
+	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true, Require2FAForAdmins: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	c := h.client(t)
+	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "admin@example.com", "password": "a good password",
+	}).Code)
+	rec := c.do(http.MethodPost, "/api/auth/2fa/totp/start", nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var start struct {
+		Secret string `json:"secret"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &start))
+
+	_, err := h.pool.Exec(context.Background(), `
+		CREATE FUNCTION fail_enrollment_session_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'forced enrollment session failure'; END $$;
+		CREATE TRIGGER fail_enrollment_session_insert
+		BEFORE INSERT ON session FOR EACH ROW EXECUTE FUNCTION fail_enrollment_session_insert()`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = h.pool.Exec(context.Background(), `
+			DROP TRIGGER IF EXISTS fail_enrollment_session_insert ON session;
+			DROP FUNCTION IF EXISTS fail_enrollment_session_insert()`)
+	})
+
+	rec = c.do(http.MethodPost, "/api/auth/2fa/totp/confirm",
+		map[string]string{"code": codeNow(t, start.Secret)})
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+
+	var confirmed, challengeConsumed bool
+	var recoveryCodes int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT confirmed_at IS NOT NULL FROM totp_secret WHERE user_id = 1`).Scan(&confirmed))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT consumed_at IS NOT NULL FROM auth_challenge
+		WHERE user_id = 1 AND purpose = 'enroll_2fa' ORDER BY id DESC LIMIT 1`).Scan(&challengeConsumed))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM recovery_code WHERE user_id = 1`).Scan(&recoveryCodes))
+	assert.False(t, confirmed)
+	assert.False(t, challengeConsumed)
+	assert.Zero(t, recoveryCodes)
+}
+
 // A plain user may disable it, but only with BOTH proofs.
 func TestTOTP_DisableRequiresPasswordAndCode(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
@@ -692,6 +1920,88 @@ func TestTOTP_DisableRequiresPasswordAndCode(t *testing.T) {
 	assert.Zero(t, n, "recovery codes outlived the second factor they protected")
 }
 
+func TestTOTP_DisableRollsBackWhenRecoveryCodeDeletionFails(t *testing.T) {
+	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	e := enrolUser(t, h, "user@example.com", "a good password")
+
+	_, err := h.pool.Exec(context.Background(), `
+		CREATE FUNCTION fail_recovery_code_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'forced recovery-code delete failure'; END $$;
+		CREATE TRIGGER fail_recovery_code_delete
+		BEFORE DELETE ON recovery_code FOR EACH ROW EXECUTE FUNCTION fail_recovery_code_delete()`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = h.pool.Exec(context.Background(), `
+			DROP TRIGGER IF EXISTS fail_recovery_code_delete ON recovery_code;
+			DROP FUNCTION IF EXISTS fail_recovery_code_delete()`)
+	})
+
+	rec := e.client.do(http.MethodPost, "/api/auth/2fa/totp/disable", map[string]string{
+		"password": "a good password", "code": codeNextStep(t, e.secret),
+	})
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+
+	var confirmed bool
+	var codes int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT confirmed_at IS NOT NULL FROM totp_secret
+		WHERE user_id = (SELECT id FROM app_user WHERE email_normalized = 'user@example.com')`).Scan(&confirmed))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM recovery_code
+		WHERE user_id = (SELECT id FROM app_user WHERE email_normalized = 'user@example.com')`).Scan(&codes))
+	assert.True(t, confirmed)
+	assert.Equal(t, 10, codes)
+}
+
+func TestTOTPMutationsRefuseProofFromAStaleCredentialEpoch(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*auth.Repository, authctx.UserID, int64, int, auth.TOTPProof) error
+	}{
+		{"disable", func(repo *auth.Repository, uid authctx.UserID, sid int64, version int, proof auth.TOTPProof) error {
+			return repo.DisableTOTP(context.Background(), uid, sid, version, "a good password", proof)
+		}},
+		{"regenerate", func(repo *auth.Repository, uid authctx.UserID, sid int64, version int, proof auth.TOTPProof) error {
+			return repo.RegenerateRecoveryCodes(context.Background(), uid, sid, version,
+				"a good password", proof, [][]byte{[]byte("replacement")})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+			require.NoError(t, testdb.Reset(context.Background(), h.pool))
+			h.bootstrapAdmin(t, "admin@example.com", "a good password")
+			uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+			e := enrolUser(t, h, "user@example.com", "a good password")
+			user, err := h.repo.GetUser(context.Background(), uid)
+			require.NoError(t, err)
+			row, err := h.repo.LoadTOTPSecret(context.Background(), uid)
+			require.NoError(t, err)
+			require.NotNil(t, row.LastUsedCounter)
+			var sid int64
+			require.NoError(t, h.pool.QueryRow(context.Background(), `
+				SELECT id FROM session WHERE access_token_hash = $1`,
+				secrets.Hash(e.client.cookies[auth.CookieAccess])).Scan(&sid))
+
+			require.NoError(t, h.repo.RevokeAllForUser(context.Background(), uid, auth.ReasonLogoutAll))
+			err = tc.mutate(h.repo, uid, sid, user.TokenVersion, auth.TOTPProof{
+				Counter: *row.LastUsedCounter + 1, Ciphertext: row.Ciphertext, Nonce: row.Nonce,
+			})
+			assert.ErrorIs(t, err, auth.ErrSessionInvalid)
+
+			current, err := h.repo.LoadTOTPSecret(context.Background(), uid)
+			require.NoError(t, err)
+			assert.True(t, current.Confirmed)
+			var codes int
+			require.NoError(t, h.pool.QueryRow(context.Background(), `
+				SELECT count(*) FROM recovery_code WHERE user_id = $1`, int64(uid)).Scan(&codes))
+			assert.Equal(t, 10, codes)
+		})
+	}
+}
+
 // sixDigits finds the OTP inside a mail body. Anchored on a word boundary so a
 // timestamp or a port number elsewhere in the text cannot match.
 var sixDigits = regexp.MustCompile(`\b\d{6}\b`)
@@ -706,8 +2016,8 @@ func extractSixDigits(t *testing.T, body string) string {
 // TestRecoveryCode_WithSixDigitsIsNotMistakenForATOTPCode locks the routing rule
 // that decides which credential the user just typed.
 //
-// Recovery codes are ten symbols from a 32-character alphabet, ten of which are
-// digits, so roughly one code in twenty-three contains EXACTLY six digits. A
+// Recovery codes are sixteen symbols from a 32-character alphabet, ten of which
+// are digits, so roughly 18% contain EXACTLY six digits. A
 // discriminator that filters the input down to its digits and asks "is it six
 // long?" sends those to the TOTP path, where they can never match — the holder
 // simply cannot use that code, and nothing in the response explains why.
@@ -721,14 +2031,14 @@ func TestRecoveryCode_WithSixDigitsIsNotMistakenForATOTPCode(t *testing.T) {
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	e := enrolUser(t, h, "admin@example.com", "a good password")
 
-	// Plant a code with exactly six digits among its ten symbols. It is stored
-	// the way the product stores one: sha256 of the normalized form.
-	const planted = "1A2B3-4C5D6"
-	normalized := "1A2B34C5D6"
-	sum := sha256.Sum256([]byte(normalized))
+	// Plant a code with exactly six digits among its sixteen symbols. It is
+	// stored the way the product stores one: a user-bound keyed MAC.
+	const planted = "1A2B-3C4D-5EFG-6HJK"
+	normalized := strings.ReplaceAll(planted, "-", "")
+	digest := h.codeMAC.RecoveryCodeDigest(authctx.UserID(1), normalized)
 	_, err := h.pool.Exec(context.Background(),
 		`INSERT INTO recovery_code (user_id, code_hash)
-		 SELECT id, $1 FROM app_user WHERE email = 'admin@example.com'`, sum[:])
+		 SELECT id, $1 FROM app_user WHERE email = 'admin@example.com'`, digest)
 	require.NoError(t, err)
 	require.Len(t, strings.Map(func(r rune) rune {
 		if r >= '0' && r <= '9' {
@@ -946,6 +2256,28 @@ func TestStepUp_TOTPGuessingIsCapped(t *testing.T) {
 	assert.NotEmpty(t, rec.Header().Get("Retry-After"))
 }
 
+func TestStepUp_ReplayedValidTOTPDoesNotResetTheAttemptBudget(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	e := enrolUser(t, h, "user@example.com", "a good password")
+
+	// Enrollment spent the current time-step. It still verifies
+	// cryptographically, but the repository replay guard must reject it.
+	replayed := codeNow(t, e.secret)
+	for i := range 5 {
+		rec := e.client.do(http.MethodPost, "/api/auth/2fa/totp/disable", map[string]string{
+			"password": "a good password", "code": replayed})
+		require.Equal(t, http.StatusUnauthorized, rec.Code, "attempt %d", i)
+	}
+
+	rec := e.client.do(http.MethodPost, "/api/auth/2fa/totp/disable", map[string]string{
+		"password": "a good password", "code": replayed})
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code,
+		"a replayed valid code kept resetting the step-up budget")
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Remaining enrollment edges
 // ─────────────────────────────────────────────────────────────────────
@@ -1038,7 +2370,13 @@ func TestConfirmTOTP_RefusesWithoutAndAfterAnEnrollment(t *testing.T) {
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "admin@example.com", "password": "a good password"}).Code)
 
-	rec := c.do(http.MethodPost, "/api/auth/2fa/totp/confirm", map[string]string{"code": "123456"})
+	rec := c.do(http.MethodPost, "/api/auth/2fa/totp/confirm", map[string]string{
+		"code": "123456", "unexpected": "refused",
+	})
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "invalid_json", errCode(t, rec))
+
+	rec = c.do(http.MethodPost, "/api/auth/2fa/totp/confirm", map[string]string{"code": "123456"})
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, "no_enrollment", errCode(t, rec))
 
@@ -1083,6 +2421,42 @@ func TestRegenerateRecoveryCodes_RequiresPasswordAndCode(t *testing.T) {
 		"email": "admin@example.com", "password": "a good password"}).Code)
 	assert.Equal(t, http.StatusOK,
 		c.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": e.codes[0]}).Code)
+}
+
+func TestRegenerateRecoveryCodes_RollsBackOldSheetWhenInsertFails(t *testing.T) {
+	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	e := enrolUser(t, h, "admin@example.com", "a good password")
+
+	var counterBefore int64
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT last_used_counter FROM totp_secret WHERE user_id = 1`).Scan(&counterBefore))
+	_, err := h.pool.Exec(context.Background(), `
+		CREATE FUNCTION fail_recovery_code_regeneration() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'forced recovery-code insert failure'; END $$;
+		CREATE TRIGGER fail_recovery_code_regeneration
+		BEFORE INSERT ON recovery_code FOR EACH ROW EXECUTE FUNCTION fail_recovery_code_regeneration()`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = h.pool.Exec(context.Background(), `
+			DROP TRIGGER IF EXISTS fail_recovery_code_regeneration ON recovery_code;
+			DROP FUNCTION IF EXISTS fail_recovery_code_regeneration()`)
+	})
+
+	rec := e.client.do(http.MethodPost, "/api/auth/2fa/recovery-codes/regenerate", map[string]string{
+		"password": "a good password", "code": codeNextStep(t, e.secret),
+	})
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+
+	var codes int
+	var counterAfter int64
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM recovery_code WHERE user_id = 1`).Scan(&codes))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT last_used_counter FROM totp_secret WHERE user_id = 1`).Scan(&counterAfter))
+	assert.Equal(t, 10, codes)
+	assert.Equal(t, counterBefore, counterAfter)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1449,6 +2823,10 @@ func TestTwoFactorHandlers_DegradeCleanlyOnAPartialSchemaFailure(t *testing.T) {
 		// code that can never be redeemed.
 		time.Sleep(150 * time.Millisecond)
 		assert.Empty(t, h.mail.all(), "a code was mailed that the server failed to store")
+		var sends int
+		require.NoError(t, h.pool.QueryRow(context.Background(),
+			`SELECT sends FROM auth_challenge WHERE consumed_at IS NULL`).Scan(&sends))
+		assert.Zero(t, sends, "failed OTP publication consumed the persistent send budget")
 
 		// The authenticator path still works — one broken table must not take
 		// the whole login with it.

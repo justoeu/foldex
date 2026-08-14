@@ -64,42 +64,6 @@ func TestAPITokenPrefixIsStableAndDistinctive(t *testing.T) {
 	assert.Equal(t, "fx_", APITokenPrefix)
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Temporary passwords
-// ─────────────────────────────────────────────────────────────────────
-
-// The temporary password is read aloud or copied by hand from an administrator
-// to a locked-out user, so it uses the recovery-code alphabet — Crockford
-// base32 minus I, L, O and U, the four characters people transcribe wrongly.
-func TestNewTemporaryPassword(t *testing.T) {
-	t.Parallel()
-	seen := map[string]bool{}
-	for range 50 {
-		pw, err := newTemporaryPassword()
-		require.NoError(t, err)
-		require.False(t, seen[pw], "temporary password repeated: %q", pw)
-		seen[pw] = true
-
-		assert.Equal(t, "XXXXX-XXXXX-XXXXX", shape(pw), "unexpected shape: %q", pw)
-		for _, r := range strings.ReplaceAll(pw, "-", "") {
-			assert.Contains(t, recoveryAlphabet, string(r),
-				"character %q is outside the transcription-safe alphabet", r)
-		}
-		// It has to survive the same policy a user-chosen password does,
-		// otherwise the administrator hands over something the login refuses.
-		assert.NoError(t, validatePassword(pw))
-	}
-}
-
-// 15 symbols × 5 bits = 75 bits, comfortably more than a recovery code's 50.
-// The margin is because this value is typed into a login form an attacker can
-// reach, where a recovery code is only usable once a first factor already
-// passed.
-func TestTemporaryPasswordCarriesMoreEntropyThanARecoveryCode(t *testing.T) {
-	t.Parallel()
-	assert.Greater(t, temporaryPasswordChars, recoveryCodeChars)
-}
-
 func TestRandomCodeWithoutGrouping(t *testing.T) {
 	t.Parallel()
 	c, err := randomCode(8, 0)

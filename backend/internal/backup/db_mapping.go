@@ -16,6 +16,7 @@ type idMapping struct {
 	folderMap map[int64]int64
 	linkMap   map[int64]int64
 	noteMap   map[int64]int64
+	noteFiles map[string]string
 }
 
 func newIDMapping() idMapping {
@@ -24,7 +25,13 @@ func newIDMapping() idMapping {
 		folderMap: make(map[int64]int64),
 		linkMap:   make(map[int64]int64),
 		noteMap:   make(map[int64]int64),
+		noteFiles: make(map[string]string),
 	}
+}
+
+func (m idMapping) remapNoteFileKey(key string) (string, bool) {
+	newKey, ok := m.noteFiles[key]
+	return newKey, ok
 }
 
 // linkObjectID splits an id-derived object key into its parts:
@@ -32,8 +39,7 @@ func newIDMapping() idMapping {
 //
 // Note inline images never match: their keys are UUID-named
 // (`notes/<uuid>.jpg`, written by the note image-upload endpoint) rather than
-// id-named, so the key encodes no row id at all — the same UUID-keyed object is
-// valid for the original and for a duplicated note row alike.
+// id-named. Restore handles them through the separate fresh-UUID noteFiles map.
 func linkObjectID(key string) (prefix string, id int64, suffix string, ok bool) {
 	switch {
 	case strings.HasPrefix(key, "screenshots/"):
@@ -74,41 +80,6 @@ func (m idMapping) remapFileKey(key string) (string, bool) {
 		return key, false
 	}
 	return prefix + strconv.FormatInt(newID, 10) + suffix, true
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Topological sort of folders by parent_id so we can INSERT roots first.
-
-func topoSortFolders(in []FolderRow) []FolderRow {
-	// Stable topological pass: any folder whose parent has already been
-	// emitted is safe to emit next.
-	seen := make(map[int64]bool, len(in))
-	out := make([]FolderRow, 0, len(in))
-	remaining := append([]FolderRow{}, in...)
-
-	for len(remaining) > 0 {
-		progress := false
-		// Fresh slice each pass — sharing remaining's backing array would let
-		// `append(next, ...)` overwrite slots the range loop has not visited yet,
-		// silently dropping or duplicating folders.
-		next := make([]FolderRow, 0, len(remaining))
-		for _, f := range remaining {
-			if f.ParentID == nil || seen[*f.ParentID] {
-				out = append(out, f)
-				seen[f.ID] = true
-				progress = true
-				continue
-			}
-			next = append(next, f)
-		}
-		remaining = next
-		if !progress {
-			// Cycle or dangling parent — emit the rest as-is so we don't loop.
-			out = append(out, remaining...)
-			break
-		}
-	}
-	return out
 }
 
 // ────────────────────────────────────────────────────────────────────────────

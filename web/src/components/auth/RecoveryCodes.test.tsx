@@ -26,7 +26,7 @@ describe('RecoveryCodes', () => {
   })
 
   /**
-   * The gate that matters. The server keeps only sha256 of each code, so this
+   * The gate that matters. The server keeps only a keyed digest of each code, so this
    * really is the only time they exist in readable form — clicking past without
    * copying them has no undo. The checkbox is what turns "we warned you" into
    * "you confirmed".

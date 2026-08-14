@@ -100,6 +100,45 @@ func TestHandler_Create_InvalidInput(t *testing.T) {
 	assert.Equal(t, "invalid_input", body["error"]["code"])
 }
 
+func TestHandler_Create_RollsBackPendingTagWhenAssociationFails(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	repo := notes.NewRepository(pool)
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
+	r.Route("/notes", notes.NewHandler(repo, nil).Mount)
+
+	rr := doJSON(t, r, http.MethodPost, "/notes/", map[string]any{
+		"title":        "Rollback",
+		"tag_ids":      []int64{9223372036854775807},
+		"pending_tags": []map[string]any{{"name": "must-rollback", "color": "#22C55E"}},
+	})
+	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+
+	var tagCount, noteCount int
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM tag WHERE user_id = $1 AND name = 'must-rollback'`, int64(uid)).Scan(&tagCount))
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM note WHERE user_id = $1 AND title = 'Rollback'`, int64(uid)).Scan(&noteCount))
+	assert.Zero(t, tagCount, "pending tag must roll back with its failed parent")
+	assert.Zero(t, noteCount, "parent insert must roll back with its failed association")
+
+	created, err := repo.Create(context.Background(), uid, notes.CreateInput{Title: "Before"})
+	require.NoError(t, err)
+	rr = doJSON(t, r, http.MethodPatch, "/notes/"+idStr(created.ID), map[string]any{
+		"title":        "After",
+		"tag_ids":      []int64{9223372036854775807},
+		"pending_tags": []map[string]any{{"name": "update-must-rollback", "color": "#3B82F6"}},
+	})
+	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM tag WHERE user_id = $1 AND name = 'update-must-rollback'`, int64(uid)).Scan(&tagCount))
+	got, err := repo.Get(context.Background(), uid, created.ID)
+	require.NoError(t, err)
+	assert.Zero(t, tagCount, "pending tag must roll back with a failed parent update")
+	assert.Equal(t, "Before", got.Title, "parent changes must share the tag transaction")
+}
+
 func TestHandler_Create_SlugConflict(t *testing.T) {
 	h, _, _ := newRouter(t)
 	rr := doJSON(t, h, http.MethodPost, "/notes/", map[string]any{"title": "A", "slug": "dup"})
@@ -183,6 +222,15 @@ func TestHandler_List_TagAndFolderIDParams(t *testing.T) {
 	// permissive parsing convention as links' list handler.
 	rr := doJSON(t, h, http.MethodGet, "/notes/?tag=abc&tag=-1&folder_id=abc", nil)
 	require.Equal(t, http.StatusOK, rr.Code)
+}
+
+func TestHandler_List_FolderLookupMissingFailsClosed(t *testing.T) {
+	h, _, _ := newRouter(t)
+
+	rr := doJSON(t, h, http.MethodGet, "/notes/?folder_id=1", nil)
+
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.NotContains(t, rr.Body.String(), `"body_html"`)
 }
 
 func TestHandler_Update_InvalidInput(t *testing.T) {

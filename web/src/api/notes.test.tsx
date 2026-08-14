@@ -34,11 +34,17 @@ describe('goNoteHref', () => {
 describe('useCreateNote', () => {
   it('creates a note and invalidates entries/tags/folders', async () => {
     const { result } = renderHook(() => useCreateNote(), { wrapper })
-    result.current.mutate({ title: 'Recipe', body_html: '<p>flour</p>' })
+    result.current.mutate({
+      title: 'Recipe',
+      body_html: '<p>flour</p>',
+      pending_tags: [{ name: 'cooking', color: '#F97316' }],
+    })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(state.notes).toHaveLength(1)
     expect(state.notes[0].title).toBe('Recipe')
     expect(state.notes[0].slug).toBe('recipe')
+    expect(state.notes[0].tags.map((tag) => tag.name)).toEqual(['cooking'])
+    expect(state.tags.some((tag) => tag.name === 'cooking')).toBe(true)
   })
 })
 

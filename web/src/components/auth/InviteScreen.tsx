@@ -4,6 +4,7 @@ import { acceptInvite, lookupInvite, errorCode, errorStatus, type InvitePreview 
 import { useAuth } from '../../auth/AuthProvider'
 import { PasswordStrength } from '../PasswordStrength'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
+import { AuthDivider, GoogleButton } from './GoogleButton'
 
 const MIN_PASSWORD = 8
 
@@ -17,7 +18,7 @@ const MIN_PASSWORD = 8
  */
 export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () => void }) {
   const { t } = useTranslation()
-  const { adopt } = useAuth()
+  const { adopt, session } = useAuth()
   const [preview, setPreview] = useState<InvitePreview | null>(null)
   const [invalid, setInvalid] = useState(false)
   const [name, setName] = useState('')
@@ -25,6 +26,7 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const googleEnabled = session.status !== 'loading' && session.features.google_oauth
 
   useEffect(() => {
     let cancelled = false
@@ -91,6 +93,13 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
     >
       <form className="fx-auth-form" onSubmit={onSubmit} noValidate>
         <AuthError message={error} />
+
+        {googleEnabled && (
+          <>
+            <GoogleButton purpose="accept_invite" invite={token} />
+            <AuthDivider />
+          </>
+        )}
 
         <AuthField id="fx-invite-email" label={t('auth.email')} hint={t('auth_invite.email_locked')}>
           <input

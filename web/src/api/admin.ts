@@ -42,19 +42,9 @@ export async function revokeUserSessions(id: number): Promise<void> {
   await http.post(`/api/admin/users/${id}/sessions/revoke`)
 }
 
-/**
- * Gives an account a fresh password and returns it ONCE.
- *
- * This is the lockout exit for a user who converted to Google-only and then
- * lost the Google account: nothing else can put a password back, because
- * /password/forgot deliberately refuses to mail a reset link to an account with
- * no password. The administrator is the out-of-band channel.
- */
-export async function forcePasswordReset(id: number): Promise<string> {
-  const { data } = await http.post<{ temporary_password: string }>(
-    `/api/admin/users/${id}/force-password-reset`,
-  )
-  return data.temporary_password
+/** Sends a recovery link to the target's verified mailbox. No secret returns. */
+export async function sendPasswordRecovery(id: number): Promise<void> {
+  await http.post(`/api/admin/users/${id}/force-password-reset`)
 }
 
 export async function listInvites(): Promise<Invite[]> {

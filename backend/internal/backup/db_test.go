@@ -8,66 +8,29 @@ import (
 
 func int64Ptr(v int64) *int64 { return &v }
 
-// TestTopoSortFolders_RootsFirst verifies the basic invariant: every parent is
-// emitted before its children.
-func TestTopoSortFolders_RootsFirst(t *testing.T) {
-	in := []FolderRow{
+func TestNormalizeRestoreFolderParents(t *testing.T) {
+	folders := []FolderRow{
 		{ID: 3, ParentID: int64Ptr(2)},
 		{ID: 2, ParentID: int64Ptr(1)},
-		{ID: 1, ParentID: nil},
+		{ID: 1},
+		{ID: 4, ParentID: int64Ptr(99)},
+		{ID: 5, ParentID: int64Ptr(6)},
+		{ID: 6, ParentID: int64Ptr(5)},
 	}
-	out := topoSortFolders(in)
-	pos := map[int64]int{}
-	for i, f := range out {
-		pos[f.ID] = i
+	parents := normalizeRestoreFolderParents(folders)
+	requireParent := func(index int) int64 {
+		t.Helper()
+		if parents[index] == nil {
+			t.Fatalf("parent %d is nil", index)
+		}
+		return *parents[index]
 	}
-	assert.Less(t, pos[1], pos[2], "1 must come before 2")
-	assert.Less(t, pos[2], pos[3], "2 must come before 3")
-}
-
-// TestTopoSortFolders_NoLostFolders is the regression test for the slice-
-// aliasing bug. Before the fix, `next := remaining[:0]` shared the backing
-// array; `append` then overwrote slots the range loop still had to read.
-// A tree where multiple folders defer in the first pass exercised that path.
-func TestTopoSortFolders_NoLostFolders(t *testing.T) {
-	// Construct a deep tree where each pass can only emit one folder:
-	//   1 (root) → 2 → 3 → 4 → 5
-	// In input order [5,4,3,2,1] every pass has multiple deferrals and the
-	// aliasing bug would silently drop folders.
-	in := []FolderRow{
-		{ID: 5, ParentID: int64Ptr(4)},
-		{ID: 4, ParentID: int64Ptr(3)},
-		{ID: 3, ParentID: int64Ptr(2)},
-		{ID: 2, ParentID: int64Ptr(1)},
-		{ID: 1, ParentID: nil},
-	}
-	out := topoSortFolders(in)
-	assert.Len(t, out, 5, "no folders may be dropped")
-	seen := map[int64]bool{}
-	for _, f := range out {
-		seen[f.ID] = true
-	}
-	for _, want := range []int64{1, 2, 3, 4, 5} {
-		assert.True(t, seen[want], "folder %d must be present in output", want)
-	}
-}
-
-// TestTopoSortFolders_CycleEmitsAll guards against an infinite loop on a
-// dangling-parent cycle: every input folder must still appear in the output.
-func TestTopoSortFolders_CycleEmitsAll(t *testing.T) {
-	// 1 → 2 → 1 (cycle); 3 is dangling (parent = 999, which doesn't exist).
-	in := []FolderRow{
-		{ID: 1, ParentID: int64Ptr(2)},
-		{ID: 2, ParentID: int64Ptr(1)},
-		{ID: 3, ParentID: int64Ptr(999)},
-	}
-	out := topoSortFolders(in)
-	assert.Len(t, out, 3, "cycle/dangling folders must still be emitted")
-}
-
-func TestTopoSortFolders_EmptyInput(t *testing.T) {
-	assert.Empty(t, topoSortFolders(nil))
-	assert.Empty(t, topoSortFolders([]FolderRow{}))
+	assert.EqualValues(t, 2, requireParent(0))
+	assert.EqualValues(t, 1, requireParent(1))
+	assert.Nil(t, parents[2])
+	assert.Nil(t, parents[3], "dangling parent must flatten to root")
+	assert.Nil(t, parents[4], "the first row in a cycle must become a root")
+	assert.EqualValues(t, 5, requireParent(5), "remaining cycle members may attach to the new root")
 }
 
 // TestRemapFileKey covers the id mapping helper used by ModeDuplicate.
@@ -81,6 +44,7 @@ func TestRemapFileKey(t *testing.T) {
 		mapped bool
 	}{
 		{"screenshots/123.png", "screenshots/456.png", true},
+		{"screenshots/123.550e8400-e29b-41d4-a716-446655440000.jpg", "screenshots/456.550e8400-e29b-41d4-a716-446655440000.jpg", true},
 		{"images/123.jpg", "images/456.jpg", true},
 		{"screenshots/999.png", "screenshots/999.png", false}, // no mapping
 		{"other/123.png", "other/123.png", false},             // unknown prefix

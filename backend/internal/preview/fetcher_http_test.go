@@ -65,11 +65,26 @@ func TestFetcher_Fetch_BlocksLoopbackInStrictMode(t *testing.T) {
 
 func TestFetcher_Fetch_BlocksIMDSEvenWhenPermissive(t *testing.T) {
 	t.Setenv("PREVIEW_STRICT_SSRF", "")
-	// IMDS is always refused — it's the one footgun without an opt-out.
 	f := NewFetcher(500 * time.Millisecond)
-	_, err := f.Fetch(context.Background(), "http://169.254.169.254/latest/meta-data/")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "IMDS")
+	for _, target := range []string{
+		"http://169.254.169.254/latest/meta-data/",
+		"http://169.254.170.2/credentials",
+		"http://169.254.0.23/metadata/",
+	} {
+		_, err := f.Fetch(context.Background(), target)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "IMDS")
+	}
+}
+
+func TestFetcher_Fetch_BlocksRFC6598EvenWhenPermissive(t *testing.T) {
+	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	f := NewFetcher(500 * time.Millisecond)
+	for _, target := range []string{"http://100.64.0.1/", "http://100.127.255.255/"} {
+		_, err := f.Fetch(context.Background(), target)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ssrf", "shared address space must be rejected before dial")
+	}
 }
 
 func TestFetcher_Fetch_TooManyRedirects(t *testing.T) {

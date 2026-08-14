@@ -3,9 +3,19 @@
 package backup_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
+	"image"
+	"image/color"
+	"image/png"
+	"net/http"
+	"os"
+	"regexp"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -15,8 +25,8 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/notes"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/httperr"
 	"foldex/internal/testdb"
-	"os"
 )
 
 // TestMain owns the lifetime of this package's shared Postgres container.
@@ -231,12 +241,9 @@ func TestCrossUser_RestoreIgnoresOwnerEmail(t *testing.T) {
 		`SELECT count(*) FROM link WHERE user_id NOT IN ($1, $2)`, int64(a.uid), int64(b.uid)))
 }
 
-// TestRestore_CraftedZipCannotOverwriteANoteImage covers the key family that
-// CANNOT be re-keyed. notes/{uuid} encodes no row id, so the "drop what this
-// restore did not produce" rule has nothing to match on — and the UUID, while
-// unguessable, is NOT secret: it is written into the body_html that the public
-// /n/{slug} page serves to anyone. Harvest it from the markup, put it in a ZIP,
-// restore, and the victim's image is replaced for every viewer.
+// TestRestore_CraftedZipCannotOverwriteANoteImage covers the UUID key family.
+// The UUID is public in /n/{slug} markup, so an unreferenced ZIP entry must be
+// dropped; legitimate referenced entries are mapped to fresh UUIDs.
 func TestRestore_CraftedZipCannotOverwriteANoteImage(t *testing.T) {
 	pool := testdb.Shared(t)
 	ctx := context.Background()
@@ -254,6 +261,140 @@ func TestRestore_CraftedZipCannotOverwriteANoteImage(t *testing.T) {
 		assert.Equal(t, []byte("victims-note-image"), bucket.objs[victimKey],
 			"mode %q must not overwrite an existing note-image key", mode)
 	}
+}
+
+func TestRestore_WipeCraftedNoteReferenceCannotDeleteOrReplaceVictimMedia(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+
+	const victimKey = "notes/8bcb9d80-8212-4ef3-a6a8-24f9471cf90e.jpg"
+	bucket.objs[victimKey] = []byte("victim-bytes")
+	victim := testdb.SeedUser(t, pool, "victim@test.local", "user")
+	repo := notes.NewRepository(pool)
+	require.NoError(t, repo.RegisterMediaLease(ctx, victim, victimKey))
+	_, err := repo.Create(ctx, victim, notes.CreateInput{
+		Title: "public victim", BodyHTML: `<img src="/api/files/` + victimKey + `">`,
+	})
+	require.NoError(t, err)
+	attacker := testdb.SeedUser(t, pool, "attacker@test.local", "user")
+	_, err = repo.Create(ctx, attacker, notes.CreateInput{
+		Title:    "crafted reference",
+		BodyHTML: `<img src="/api/files/` + victimKey + `">`,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.Restore(ctx, attacker, minimalZipWithFile(t, "files/"+victimKey), backup.ModeWipe)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("victim-bytes"), bucket.objs[victimKey],
+		"wipe must derive delete/write authority from persisted ownership, not attacker-authored HTML")
+}
+
+func TestRestore_RekeysOwnedNoteMediaAndRewritesReferences(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	repo := notes.NewRepository(pool)
+	const oldKey = "notes/22c3a1e2-304d-441f-a525-713dc364bff1.png"
+	bucket.objs[oldKey] = validNotePNG(t)
+	require.NoError(t, repo.RegisterMediaLease(ctx, uid, oldKey))
+	created, err := repo.Create(ctx, uid, notes.CreateInput{
+		Title:    "with media",
+		BodyHTML: `<p><img src="/api/files/` + oldKey + `"></p>`,
+	})
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE note SET cover_url = $1 WHERE user_id = $2 AND id = $3`,
+		"/api/files/"+oldKey, int64(uid), created.ID)
+	require.NoError(t, err)
+
+	zr := exportToReader(t, svc, uid)
+	_, err = svc.Restore(ctx, uid, zr, backup.ModeWipe)
+	require.NoError(t, err)
+
+	var body, cover string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT body_html, COALESCE(cover_url, '') FROM note WHERE user_id = $1 AND title = 'with media'`, int64(uid)).Scan(&body, &cover))
+	match := regexp.MustCompile(`/api/files/(notes/[a-f0-9-]+\.jpg)`).FindStringSubmatch(body)
+	require.Len(t, match, 2, "restored body must contain a local note-media URL")
+	newKey := match[1]
+	assert.NotEqual(t, oldKey, newKey, "restore must never reuse the snapshot's public UUID key")
+	assert.Equal(t, "/api/files/"+newKey, cover)
+	assert.Equal(t, "image/jpeg", http.DetectContentType(bucket.objs[newKey]))
+	assert.NotContains(t, bucket.objs, oldKey)
+	assert.EqualValues(t, 1, scalar(t, pool, `
+        SELECT count(*) FROM note_media_ref r
+        JOIN note_media m ON m.user_id = r.user_id AND m.object_key = r.object_key
+        WHERE r.user_id = $1 AND r.object_key = $2
+    `, int64(uid), newKey))
+}
+
+func TestRestore_RejectsNoteMediaDecodeBombBeforeWipe(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	uid := testdb.SeedUser(t, pool, "decode-bomb@test.local", "user")
+	repo := notes.NewRepository(pool)
+	keep, err := repo.Create(ctx, uid, notes.CreateInput{Title: "must survive", BodyHTML: "<p>safe</p>"})
+	require.NoError(t, err)
+
+	const key = "notes/22c3a1e2-304d-441f-a525-713dc364bff1.png"
+	now := time.Now().UTC()
+	snap := backup.Snapshot{
+		Version: backup.DatabaseSnapshotVersion,
+		Notes: []backup.NoteRow{{
+			ID: 1, Title: "hostile", Slug: "hostile",
+			BodyHTML:  `<img src="/api/files/` + key + `">`,
+			CreatedAt: now, UpdatedAt: now,
+		}},
+	}
+	db := mustJSON(t, snap)
+	zr := zipFromEntries(t, map[string][]byte{
+		"manifest.json": mustJSON(t, backup.Manifest{
+			Kind: backup.ManifestKind, Version: backup.ManifestVersion,
+			SchemaVersion: backup.CurrentSchemaVersion,
+		}),
+		"database.json": db,
+		"files/" + key:  pngHeaderWithDimensions(8_000, 8_000),
+	})
+
+	_, err = backup.NewService(pool, newStubBucket(), discardLogger()).Restore(ctx, uid, zr, backup.ModeWipe)
+	require.Error(t, err)
+	var httpErr *httperr.Error
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Status)
+	assert.Equal(t, "invalid_backup", httpErr.Code)
+	_, err = repo.Get(ctx, uid, keep.ID)
+	require.NoError(t, err, "note-media validation must run before wipe mutates the database")
+}
+
+func pngHeaderWithDimensions(width, height uint32) []byte {
+	var out bytes.Buffer
+	out.Write([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+	data := make([]byte, 13)
+	binary.BigEndian.PutUint32(data[0:4], width)
+	binary.BigEndian.PutUint32(data[4:8], height)
+	data[8], data[9] = 8, 2
+	binary.Write(&out, binary.BigEndian, uint32(len(data)))
+	out.WriteString("IHDR")
+	out.Write(data)
+	crcInput := append([]byte("IHDR"), data...)
+	binary.Write(&out, binary.BigEndian, crc32.ChecksumIEEE(crcInput))
+	return out.Bytes()
+}
+
+func validNotePNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	for y := range 2 {
+		for x := range 2 {
+			img.Set(x, y, color.RGBA{R: 40, G: 100, B: 180, A: 255})
+		}
+	}
+	var out bytes.Buffer
+	require.NoError(t, png.Encode(&out, img))
+	return out.Bytes()
 }
 
 // TestRestore_RealignsImagesPrefixToo guards the second alternative in
@@ -288,6 +429,35 @@ func TestRestore_RealignsImagesPrefixToo(t *testing.T) {
 		"images/ keys must be realigned exactly like screenshots/")
 	_, ok := bucket.objs[fmt.Sprintf("images/%d.jpg", newID)]
 	assert.True(t, ok)
+}
+
+func TestRestore_PreservesVersionedScreenshotSuffix(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+
+	uid := testdb.SeedUser(t, pool, "versioned-shot@test.local", "user")
+	lrepo := links.NewRepository(pool)
+	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://capture.example", Title: "Captured"})
+	require.NoError(t, err)
+	const suffix = ".550e8400-e29b-41d4-a716-446655440000.jpg"
+	oldKey := fmt.Sprintf("screenshots/%d%s", l.ID, suffix)
+	bucket.objs[oldKey] = []byte("versioned-screenshot")
+	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, l.ID, "/api/files/"+oldKey))
+
+	zr := exportToReader(t, svc, uid)
+	_, err = svc.Restore(ctx, uid, zr, backup.ModeWipe)
+	require.NoError(t, err)
+
+	var newID int64
+	var ogURL string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT id, COALESCE(og_image_url,'') FROM link WHERE user_id = $1 AND url = 'https://capture.example'`,
+		int64(uid)).Scan(&newID, &ogURL))
+	newKey := fmt.Sprintf("screenshots/%d%s", newID, suffix)
+	assert.Equal(t, "/api/files/"+newKey, ogURL)
+	assert.Equal(t, []byte("versioned-screenshot"), bucket.objs[newKey])
 }
 
 // TestExport_ReferencingAKeyIsNotOwningIt is the exfiltration lock. Note

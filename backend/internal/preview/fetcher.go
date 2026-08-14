@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/net/html"
+
+	"foldex/internal/pkg/netpolicy"
 )
 
 // Result holds the metadata extracted from a page (any field may be empty).
@@ -316,13 +318,15 @@ func (d *safeDialer) DialContext(ctx context.Context, network, addr string) (net
 		return nil, err
 	}
 	for _, ip := range ips {
-		// IMDS (AWS/GCP/Azure metadata) is ALWAYS refused — no env opt-out.
-		// It's never a legitimate preview target and exposing it is the only
-		// well-known SSRF footgun on a workstation.
-		if isIMDS(ip) {
+		// Cloud metadata and credential endpoints are always refused, even
+		// when ordinary intranet previews are enabled.
+		if netpolicy.IsMetadataIP(ip) {
 			return nil, fmt.Errorf("ssrf: refusing IMDS endpoint %s", ip)
 		}
-		if d.strict && isPrivateIP(ip) {
+		if netpolicy.IsAlwaysDeniedIP(ip) {
+			return nil, fmt.Errorf("ssrf: refusing special-use endpoint %s", ip)
+		}
+		if d.strict && netpolicy.IsPrivateIP(ip) {
 			return nil, fmt.Errorf("ssrf: refusing to dial %s (%s)", host, ip)
 		}
 	}
@@ -349,74 +353,23 @@ func checkRemoteAddrSSRF(strict bool, addr net.Addr, host string) error {
 	if !ok {
 		return fmt.Errorf("ssrf: non-TCP remote addr %T — refusing", addr)
 	}
-	if isIMDS(tcp.IP) {
+	if netpolicy.IsMetadataIP(tcp.IP) {
 		return fmt.Errorf("ssrf: refusing IMDS endpoint %s (post-dial)", tcp.IP)
 	}
-	if strict && isPrivateIP(tcp.IP) {
+	if netpolicy.IsAlwaysDeniedIP(tcp.IP) {
+		return fmt.Errorf("ssrf: refusing special-use endpoint %s (post-dial)", tcp.IP)
+	}
+	if strict && netpolicy.IsPrivateIP(tcp.IP) {
 		return fmt.Errorf("ssrf: refusing peer %s for host %s (post-dial)", tcp.IP, host)
 	}
 	return nil
 }
 
 // strictSSRF reports whether PREVIEW_STRICT_SSRF is enabled. When true the
-// dialer additionally refuses loopback, RFC1918, link-local and IPv6 ULA.
-// Default (single-user / local dev) is permissive — you usually want to save
-// links from your own intranet (Jira, Grid, Confluence, internal dashboards).
+// dialer additionally refuses the IANA special-purpose address registries.
+// Default is permissive for ordinary intranet targets (Jira, Grid,
+// Confluence, internal dashboards).
 func strictSSRF() bool {
 	v := os.Getenv("PREVIEW_STRICT_SSRF")
 	return v == "1" || v == "true" || v == "TRUE" || v == "yes"
-}
-
-// awsIMDSv6 is the well-known AWS Instance Metadata Service IPv6 address
-// (fd00:ec2::254). Always blocked — same posture as 169.254.169.254.
-var awsIMDSv6 = net.ParseIP("fd00:ec2::254")
-
-// alibabaMetadata is Alibaba Cloud's metadata endpoint (100.100.100.200).
-// Not RFC1918 and not classic AWS IMDS — always blocked.
-var alibabaMetadata = net.ParseIP("100.100.100.200")
-
-func isIMDS(ip net.IP) bool {
-	if ip == nil {
-		return false
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		// AWS/GCP classic link-local metadata
-		if ip4[0] == 169 && ip4[1] == 254 && ip4[2] == 169 && ip4[3] == 254 {
-			return true
-		}
-		// Alibaba Cloud metadata (always refuse — not covered by isPrivateIP)
-		if alibabaMetadata != nil && ip4.Equal(alibabaMetadata.To4()) {
-			return true
-		}
-		return false
-	}
-	// AWS IPv6 IMDS — always refuse regardless of PREVIEW_STRICT_SSRF
-	if awsIMDSv6 != nil && ip.Equal(awsIMDSv6) {
-		return true
-	}
-	return false
-}
-
-func isPrivateIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
-		return true
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		if ip4[0] == 10 {
-			return true
-		}
-		if ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31 {
-			return true
-		}
-		if ip4[0] == 192 && ip4[1] == 168 {
-			return true
-		}
-	} else if len(ip) == 16 && ip[0]&0xfe == 0xfc {
-		// IPv6 unique local fc00::/7
-		return true
-	}
-	return false
 }

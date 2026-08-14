@@ -32,7 +32,7 @@ Bookmark nativo é ótimo para "salvar uma página rápida e esquecer". Quando v
 | **Pinned/favoritos = uma pastinha à parte.** Só visual.                                 | `pinned` é coluna real na tabela. `ORDER BY pinned DESC, …` aplica em todo modo de ordenação. Badge gradient sempre visível. |
 | **Dados embutidos no navegador.** Trocou de máquina? Reinstalou Chrome? Reza.           | Postgres + RustFS em containers. `make up` numa máquina nova e seu ZIP de backup restaura tudo (DB + imagens) em ~minutos. |
 | **Pastebin/app de notas é outra ferramenta.** Snippets e links vivem em lugares diferentes. | **Notas** (`⌥M`) são uma entidade de primeira classe junto com os links: editor rich-text (Tiptap) com **barra de formatação** — negrito/itálico/sublinhado/tachado, títulos, listas com marcadores e numeradas, alinhamento, cor do texto, fonte, citações/código, links e imagens inline —, mesmas tags/pastas/pin/busca dos links, intercaladas no mesmo grid com badge esmeralda, compartilháveis via página pública `/n/{slug}`. |
-| **Sem como manter uma pasta privada** numa tela/máquina compartilhada sem criar uma segunda conta inteira. | **Senha por pasta.** Defina uma senha (hash bcrypt) em qualquer pasta — os links/notas dela ficam ocultos (e os thumbnails de preview são redigidos, mesmo no hover) até você desbloquear pra aquela sessão. Aplicado no backend, não só na UI: a API em si recusa entregar o conteúdo de uma pasta trancada sem prova da senha. Adicione uma **palavra-dica** opcional (exibida no popup de unlock; não pode ser a própria senha) e configure uma **senha master** em **Configurações** (com medidor de complexidade, confirmação e um lembrete próprio) pra redefinir a senha de uma pasta caso você esqueça. |
+| **Sem como manter uma pasta privada** numa tela/máquina compartilhada sem criar uma segunda conta inteira. | **Senha por pasta.** Defina uma senha (hash bcrypt) em qualquer pasta — os links/notas dela ficam ocultos (e os thumbnails de preview são redigidos, mesmo no hover) até você desbloquear pra aquela sessão. Aplicado no backend, não só na UI: a API em si recusa entregar o conteúdo de uma pasta trancada sem prova da senha. Excluir uma pasta protegida pede essa senha; excluir uma árvore inteira é recusado se ela contiver subpastas protegidas independentemente, então desbloquear só a raiz nunca as apaga. Adicione uma **palavra-dica** opcional (exibida no popup de unlock; não pode ser a própria senha) e configure uma **senha master** em **Configurações** (com medidor de complexidade, confirmação e um lembrete próprio) pra redefinir a senha de uma pasta caso você esqueça. |
 
 ### Cenários reais que viraram a chave (bookmark nativo → foldex)
 
@@ -51,8 +51,8 @@ Se você tem menos de 30 links salvos e usa **um único navegador numa única m�
 ## Quickstart
 
 ```bash
-cp .env.example .env
 make up                 # puxa justoeu/foldex-{backend,web}:latest do Docker Hub
+                        # + cria .env com segredos RustFS aleatórios e persistentes
                         # + sobe Postgres em 127.0.0.1 (sem precisar de toolchain Go/bun)
 make migrate-up         # aplica as migrations SQL
 make seed               # opcional: tags + links de exemplo
@@ -60,15 +60,37 @@ make seed               # opcional: tags + links de exemplo
 open https://localhost:9444
 ```
 
+`make env` é idempotente: gera segredos RustFS root/app independentes de 256 bits
+apenas quando faltam (ou ao migrar dos placeholders públicos antigos), persiste
+no `.env` gitignored com modo `0600` e nunca imprime os valores. O uso direto de
+`docker compose` precisa fornecer esses valores; bootstrap e backend recusam os
+placeholders antigos, exceto quando
+`RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS=1` é definido explicitamente para uma
+instância de desenvolvimento isolada e descartável.
+
+No desenvolvimento frontend com toolchain no host, `cd web && bun run dev`
+escuta apenas em `127.0.0.1:9088`. Acesso pela LAN exige opt-in explícito:
+`VITE_DEV_LAN=1 bun run dev`.
+
 ### Escolher entre imagens pré-buildadas e build local
 
 | Quer … | Rode | Notas |
 |---|---|---|
 | Só rodar Foldex | `make up` | Puxa `justoeu/foldex-{backend,web}:${FOLDEX_VERSION}` do Docker Hub. Tag default é `latest`. |
-| Pinar num build específico | setar `FOLDEX_VERSION=sha-3f6cc06` (ou `1.4.1` — as tags de imagem não levam o `v`) no `.env` e `make up` | Tags publicadas por commit + por release semver. |
+| Pinar num build específico | setar `FOLDEX_VERSION=sha-3f6cc06` (ou `1.4.1` — as tags de imagem não levam o `v`) no `.env` e `make up` | Tags ficam disponíveis para targets de commit ou semver publicados manualmente. |
 | Atualizar pra última tag | `make pull && make up` | `pull` re-baixa sem reiniciar; `up` percebe a imagem nova e reinicia. |
 | Desenvolver / buildar do source | `make up-build` | Usa os mesmos `Dockerfile`s mas builda local, ignorando a imagem do registry. Precisa de Docker; NÃO precisa de Go/bun no host (rodam dentro dos build stages). |
 | Aplicar mudanças locais | `make restart-backend` / `make restart-web` | Igual ao `up-build` mas só do serviço nomeado. |
+
+Releases de mantenedor são manuais: dispare `release.yml` selecionando `main` e
+informe `vMAJOR.MINOR.PATCH` estrito ou um SHA completo de 40 caracteres. Push de
+tag nunca publica. O gate aceita apenas commits já em `origin/main`, confere a
+semver nos dois manifests, recusa tags preexistentes, cria a tag só depois da
+publicação dos dois manifests e faz todo publisher aguardar o GitHub
+environment chamado `release`. Configure esse environment com reviewers
+obrigatórios e mantenha `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` como environment
+secrets. Exclua cópias no nível do repositório para que um workflow guardado em
+uma tag histórica não consiga lê-las.
 
 ### HTTPS (dev local) via mkcert
 
@@ -165,8 +187,13 @@ Os achados de SAST aparecem na aba **Security ▸ Code scanning** do repositóri
 
 ## Smoke test (sanity check depois de `make up`)
 
-Contas estão ligadas, então `/api/*` precisa de credencial. Abra <https://localhost:9444>,
-conclua a tela de setup, crie um **token de API** em Configurações → Tokens de API e exporte:
+Contas estão ligadas, então as rotas autenticadas de `/api/*` precisam de
+credencial. A única leitura da API sem sessão é `/api/files/notes/{uuid}.{ext}`, usada
+pelas páginas públicas `/n/{slug}` e ainda pública com `SHARED_SECRET` definido. Só
+chaves UUID canônicas de notas são aceitas; mídia de link continua protegida pelo segredo
+e owner-scoped. Abra
+<https://localhost:9444>, conclua a tela de setup, crie um **token de API** em
+Configurações → Tokens de API e exporte:
 
 ```bash
 AUTH="Authorization: Bearer fx_1_seu-token-aqui"
@@ -294,8 +321,9 @@ curl -OJ -X POST http://localhost:9089/api/backup
 unzip -l foldex-backup-*.zip
 #   manifest.json
 #   database.json
-#   files/screenshots/{id}.png
-#   files/images/{id}.{ext}
+#   files/screenshots/{id}[.{uuid}].{ext}
+#   files/images/{id}[.{uuid}].{ext}
+#   files/notes/{uuid}.{ext}
 
 # Valida (sem aplicar)
 curl -X POST -F file=@foldex-backup-*.zip \
@@ -316,7 +344,9 @@ sumário de validação e escolher o modo no `BackupRestoreDialog`.
 Histórico (últimos 10 backups: data, duração, tamanho, counts) persiste
 em `localStorage`.
 
-> **Ressalva de idempotência no restore.** O `mode=skip` é idempotente para as entidades com UNIQUE (tags por nome, links por URL — re-rodar o mesmo zip não insere nada). `click_log` e `folder` não têm chave natural, então um segundo skip do mesmo zip **re-insere** essas linhas. Rode o skip uma vez; use `mode=wipe` pra rebaselinar do zero.
+Uploads têm limite comprimido de 2 GiB. Antes de validação ou restore tocar o banco, o Foldex rejeita nomes duplicados no ZIP, mais de 100.000 entries, JSON de manifest/database acima de 32/256 MiB, arquivos acima de 64 MiB cada ou mais de 4 GiB expandidos no total. Export aplica os mesmos envelopes, com no máximo 99.998 arquivos (duas entries ficam reservadas para manifest/database) e keys de objeto de 1.024 bytes. Só um export, validação ou restore roda por vez; uma request concorrente recebe `429 backup_busy` antes de trabalho no DB, object store, leitura do body ou temp file e pode tentar de novo.
+
+> **O `mode=skip` converge para o arquivo inteiro.** O Foldex persiste por conta o digest exato do arquivo e seus mappings de IDs novos/mídia. Re-rodar um ZIP concluído não reinsere pastas, notas, associações ou cliques e não repete checks/uploads de objetos. Se o upload falhar depois do commit do banco, tente o mesmo ZIP de novo: o restore retoma o mapping commitado e grava só os arquivos faltantes. `wipe` limpa checkpoints anteriores porque substitui as rows alvo; `duplicate` cria outra cópia intencionalmente.
 
 > **O restore não preserva mais os IDs, em nenhum modo.** Os ids das linhas vêm de sequências compartilhadas entre contas, então reaproveitar os ids que estão dentro do backup poderia colidir com linhas que já existem. Todo restore gera ids novos e reaponta as chaves de imagem e o histórico de cliques para eles; o que faz round-trip é o conteúdo e suas relações, não os números. O backup também **não carrega dado de login** — nem senha, nem sessão, nem segredo de 2FA — e restaurar um backup sempre cria conteúdo pertencente a quem está restaurando, nunca a quem exportou. Restaurar o backup de outra pessoa é permitido e só mostra um aviso de que o conteúdo está mudando de dono.
 
@@ -329,8 +359,8 @@ Contas vêm **ligadas por padrão** desde a 1.13.0.
 **Primeira execução — inclusive numa atualização.** A SPA mostra uma tela de setup. A
 conta criada ali vira administradora e **adota todos os links, notas, pastas e tags que
 já existiam**: nada se perde e nada precisa ser reimportado. Defina `AUTH_PUBLIC_URL`
-com a origem que você realmente acessa, porque é dela que saem os links de convite e de
-redefinição.
+com a origem que você realmente acessa, porque é dela que saem os links de convite,
+redefinição e verificação.
 
 ```bash
 AUTH_PUBLIC_URL=https://localhost:9444
@@ -344,10 +374,12 @@ alcance a porta é dono da biblioteca inteira, então mantenha o bind em loopbac
 **Adicionando pessoas.** Não existe cadastro aberto: um administrador envia um convite
 pela tela **Usuários** na topbar, e só o endereço daquele convite consegue aceitá-lo —
 com senha ou com a conta Google correspondente. O link aparece uma vez, no momento em
-que o convite é criado, e também é enviado por e-mail.
+que o convite é criado, e também é enviado por e-mail. Credenciais de convite,
+redefinição e verificação ficam depois de `#` nesses links, portanto a requisição HTTP
+inicial e o access log do nginx nunca as recebem; a SPA remove o fragmento imediatamente.
 
 **Administrando pessoas.** A tela **Usuários** (só para administradores) lista todas as
-contas e permite promover, desativar, excluir, encerrar sessões e devolver uma senha.
+contas e permite promover, desativar, excluir, encerrar sessões e enviar recuperação da conta.
 Duas travas são do servidor, não apenas escondidas na interface: você não pode rebaixar,
 desativar ou excluir **a si mesmo**, e o **último administrador ativo** não pode ser
 removido por ninguém. Zero administradores não se recupera por nenhuma chamada de API.
@@ -368,17 +400,28 @@ A separação está no próprio banco, não em um filtro que a interface aplica.
 30 dias que rotaciona a cada uso. Se um token de refresh for reapresentado — a assinatura
 de um token roubado — todas as sessões daquela conta são encerradas e o dono recebe um
 e-mail. Sair está disponível em qualquer lugar; "sair de todos os dispositivos" revoga
-tudo. Trocar a senha mantém o dispositivo atual e derruba os demais.
+tudo. Mudanças de credencial — trocar/definir senha, desvincular Google ou desligar a
+verificação em duas etapas — mantêm o dispositivo atual e derrubam os demais.
 
 **Verificação em duas etapas.** Ative em **Configurações → Verificação em duas etapas**:
 escaneie o QR com qualquer app autenticador (Google Authenticator, Authy, 1Password,
 Bitwarden), confirme um código e guarde os dez **códigos de recuperação** de uso único —
-eles aparecem uma vez só e o servidor guarda apenas os hashes, então ele realmente não
-consegue mostrá-los de novo. No login, o mesmo campo de seis dígitos aceita um código do
+eles aparecem uma vez só no formato `XXXX-XXXX-XXXX-XXXX`. O servidor guarda apenas
+digests vinculados ao usuário e protegidos por chave, então não consegue mostrá-los de
+novo nem testá-los a partir de um dump do banco. No login, o mesmo campo de seis dígitos aceita um código do
 app, um código de recuperação ou um código enviado por e-mail. Administradores são
 obrigados a ter: com `AUTH_REQUIRE_2FA_FOR_ADMINS=1` (o padrão), um admin sem
 autenticador é conduzido pela configuração antes da primeira sessão, em vez de ficar
 trancado para fora.
+Isso também cobre a primeira conta do bootstrap e convites de administrador. Promover um
+usuário logado a administrador encerra as sessões existentes para que o próximo login
+aplique a verificação. Ativar a política numa instância existente bloqueia imediatamente
+os recursos administrativos em sessões antigas ou renovadas até o TOTP ser confirmado,
+mantendo as rotas de cadastro do autenticador disponíveis.
+
+> A atualização que aplica a migration `000023` invalida folhas de recuperação antigas
+> e códigos de e-mail pendentes, pois digests sem chave não podem ser convertidos sem o
+> texto original. O autenticador existente continua válido; gere novos códigos em Configurações.
 
 > **A chave que cifra os segredos do autenticador tem que ir no backup junto com o
 > banco.** Ou deixe o backend gerar `/data/auth_encryption.key` no primeiro boot, ou
@@ -406,6 +449,14 @@ convite, e auto-provisionar burlaria isso em silêncio. E **nunca pula a verific
 duas etapas**: entrar pelo Google desemboca na mesma tela de código que o login por
 senha.
 
+**Conectar o Google pelas Configurações exige prova recente.** **Configurações → Como você
+entra → Conectar o Google** abre uma confirmação da senha atual e, quando a verificação em
+duas etapas está ativa, de um código atual do autenticador ou de recuperação. Só então a API
+devolve a URL de redirecionamento do Google. O state de vínculo vale cinco minutos e fica
+preso àquela sessão e versão de credencial exatas; sair, revogar a sessão ou trocar/redefinir
+a senha antes do callback cancela o vínculo. Senha e código seguem apenas no corpo do POST,
+nunca na URL.
+
 **Já tem conta com senha no mesmo endereço?** Entrar pelo Google não te loga e não te
 recusa — ele pede a **sua senha atual** uma vez, e então vincula o Google e **remove a
 senha**. Dali em diante a conta é só-Google. Exigir a senha é o ponto inteiro: um
@@ -414,16 +465,20 @@ Google, então um endereço coincidente sozinho nunca pode entregar uma conta. A
 que *"esqueci a senha, deixa eu entrar pelo Google"* não funciona — redefina primeiro,
 converta depois.
 
-Três saídas para uma conta só-Google que perde o Google:
+Saídas para uma conta só-Google que perde o Google:
 
-1. Um administrador usa **Redefinir senha** na tela Usuários e te entrega a senha
-   temporária diretamente.
+1. Um administrador usa **Enviar recuperação** na tela Usuários. O Foldex envia via
+   SMTP um link de uso único somente à sua caixa postal verificada; o administrador não
+   vê senha nem token, e sua credencial e sessões não mudam até você usar o link e
+   escolher sua própria senha. Se o SMTP falhar, nada é alterado.
 2. Ainda logado pelo Google, **Configurações → Como você entra → Definir senha**. Só
    depois disso dá para desvincular o Google — na ordem inversa a conta ficaria sem
-   nenhuma forma de entrar, o que o banco recusa de saída.
-3. Pedir redefinição de senha numa conta assim envia *"esta conta entra pelo Google"* em
+   nenhuma forma de entrar, o que o banco recusa de saída. Definir a senha ou desvincular
+   o Google encerra as sessões dos outros dispositivos.
+3. Pedir a redefinição comum de senha numa conta assim envia *"esta conta entra pelo Google"* em
    vez de um link. Isso é proposital: um link ali deixaria a posse da caixa postal
-   sozinha ressuscitar a senha que a conversão aposentou.
+   sem autenticação ressuscitar a senha que a conversão aposentou. A recuperação
+   disparada por administrador prova adicionalmente a autorização administrativa.
 
 **Tokens de API (extensão, scripts).** **Configurações → Tokens de API** cria uma
 credencial de longa duração, exibida **uma vez** — o servidor guarda só um hash. Ela lê
@@ -431,9 +486,10 @@ e escreve seus links e notas e nada além disso: é recusada em troca de senha, 
 convites, administração de usuários e backup, então um token colado na configuração de
 uma extensão não é a sua conta. Revogue e ele para de funcionar na hora.
 
-**Esqueceu a senha.** **Redefina** pela tela de acesso — o link chega por e-mail (ou no
+**Esqueceu a senha.** **Redefina** pela tela de acesso — o link com fragmento chega por e-mail (ou no
 log do backend, com o driver `log` padrão), vale 30 minutos e pode ser usado uma vez.
-Usá-lo desconecta todos os outros dispositivos, e uma conta com verificação em duas
+O link também é invalidado por troca de senha, sair de todos os dispositivos ou por um administrador
+alterar o acesso da conta ou revogar suas sessões. Usá-lo desconecta todos os outros dispositivos, e uma conta com verificação em duas
 etapas ainda precisa apresentar um código: a caixa postal sozinha nunca basta.
 
 **Ficou trancado para fora?** Sem acesso à única conta administradora, a recuperação é
@@ -443,8 +499,9 @@ o acesso ao Google**: não existe outro admin para redefinir a senha dele. Volta
 `AUTH_ENABLED=0` e reiniciar devolve o comportamento single-user com todo o conteúdo
 intacto, e é o caminho mais rápido de volta.
 
-> **`SHARED_SECRET` está depreciado.** Ele é anterior às contas: guarda `/api` como um
-> todo, não identifica ninguém e não consegue escopar uma linha sequer. A autenticação
+> **`SHARED_SECRET` está depreciado.** Ele é anterior às contas: guarda `/api`, exceto a
+> leitura exata de mídia UUID exigida pelas páginas públicas `/n/{slug}`, não identifica
+> ninguém e não consegue escopar uma linha sequer. A autenticação
 > de verdade o substituiu. Mantenha só enquanto extensões antigas ainda estiverem
 > configuradas com ele — o backend avisa no boot enquanto estiver definido, e ele será
 > removido num release futuro.
@@ -456,6 +513,13 @@ intacto, e é o caminho mais rápido de volta.
 > nota da instância, inclusive de outras pessoas. Slugs não são afetados. Use
 > `PUBLIC_NUMERIC_IDS=1` se você tem links numéricos antigos já compartilhados e prefere
 > mantê-los funcionando.
+
+> **Política de rede do preview.** Ranges de metadata/credenciais cloud e RFC6598 são
+> sempre bloqueados. Use `PREVIEW_STRICT_SSRF=1` quando usuários não puderem alcançar
+> serviços na rede interna do host; o modo strict rejeita os registries special-purpose
+> completos da IANA. Deixar vazio preserva previews comuns de intranet RFC1918, como
+> Jira e Confluence. Screenshots via Chromium sempre usam a política strict,
+> independentemente dessa configuração.
 
 Racional de design, threat model e a superfície de API completa:
 [docs/SDD-AUTH-RBAC.md](docs/SDD-AUTH-RBAC.md).

@@ -86,6 +86,21 @@ describe('folder CRUD mutations', () => {
     expect(delSpy).toHaveBeenCalledWith(expect.stringContaining('/api/folders/3?cascade=1'))
   })
 
+  it('sends the unlock token when deleting a protected folder', async () => {
+    state.folders.push(
+      { id: 4, name: 'Locked', color: '#abc', parent_id: null, has_password: true, link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '' },
+    )
+    state.folderPasswords[4] = 'pass'
+    const delSpy = vi.spyOn(http, 'delete')
+    const { result } = renderHook(() => useDeleteFolder(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ id: 4, unlockToken: 'mock-unlock:4:pass' })
+    })
+    expect(delSpy).toHaveBeenCalledWith('/api/folders/4', {
+      headers: { [FOLDER_UNLOCK_HEADER]: 'mock-unlock:4:pass' },
+    })
+  })
+
   it('useCreateFolder invalidates folders, links, and entries', async () => {
     const invalidate = vi.fn()
     const client = new QueryClient({

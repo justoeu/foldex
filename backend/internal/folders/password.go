@@ -6,12 +6,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/keyfile"
 	"foldex/internal/pkg/pwhash"
 )
@@ -31,8 +29,8 @@ func VerifyPassword(hash, plain string) bool { return pwhash.Verify(hash, plain)
 const unlockTokenTTL = 24 * time.Hour
 
 // UnlockHeader carries a folder unlock token on requests that read a
-// protected folder's contents — checked by both this package's own
-// parent_id-scoped List and internal/entries' folder_id-scoped List.
+// protected folder's contents — checked by the parent_id-scoped folder list
+// and the folder_id-scoped links, notes, and entries lists.
 const UnlockHeader = "X-Foldex-Folder-Unlock"
 
 // IssueUnlockToken mints a token proving the caller supplied the correct
@@ -69,18 +67,17 @@ func signUnlockToken(secret []byte, folderID int64, passwordHash string, exp int
 
 // CheckUnlock enforces the content-gate for a single folder: nil (allowed)
 // when the folder is unprotected (passwordHash == nil), or when token
-// verifies against the folder's current password hash; otherwise a typed
-// 403 folder_locked error. Redaction of preview_links/preview_folders (the
+// verifies against the folder's current password hash; otherwise ErrLocked.
+// Redaction of preview_links/preview_folders (the
 // OTHER half of the protection story) happens unconditionally in the
-// repository layer regardless of token presence — this function only gates
-// the two "reveal real contents" endpoints (entries.List folder_id, this
-// package's own List parent_id).
+// repository layer regardless of token presence — this function gates the
+// folder-scoped list endpoints.
 func CheckUnlock(secret []byte, folderID int64, passwordHash *string, token string) error {
 	if passwordHash == nil {
 		return nil
 	}
 	if token == "" || !VerifyUnlockToken(secret, folderID, *passwordHash, token) {
-		return httperr.New(http.StatusForbidden, "folder_locked", "this folder is password-protected")
+		return ErrLocked
 	}
 	return nil
 }

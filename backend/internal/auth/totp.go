@@ -172,7 +172,7 @@ func otpauthURL(issuer, account, secretB32 string) string {
 //
 // The test is on the length AFTER removing only whitespace and hyphens — never
 // after removing every non-digit. The difference decides how a recovery code is
-// routed: "3F7K9-2MQXZ" compacts to ten symbols and is correctly not a numeric
+// routed: "3F7K-9MQX-Z2AB-CDEF" compacts to sixteen symbols and is not a numeric
 // code, whereas filtering it down to its digits could leave exactly six and
 // send it to the TOTP path, where it can never match.
 func numericOTP(code string) (string, bool) {

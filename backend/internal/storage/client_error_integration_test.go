@@ -103,7 +103,7 @@ func TestClient_ErrorPaths_WrongBucket(t *testing.T) {
 	_, err = cli.Stats(ctx)
 	require.Error(t, err)
 
-	_, err = cli.ListObjects(ctx, "")
+	err = cli.WalkObjects(ctx, "", func(ObjectInfo) error { return nil })
 	require.Error(t, err)
 
 	_ = cli.DeleteObjectsPrefix(ctx, "p/")

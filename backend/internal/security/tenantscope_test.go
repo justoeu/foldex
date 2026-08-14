@@ -14,26 +14,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// tenantTables are the tables that gained user_id in migration 000017. A query
+// tenantTables are the tables that gained user_id in migration 000017 or were
+// introduced owner-scoped later. A query
 // reading from one of them without a user_id predicate is a cross-tenant leak
 // unless it lives in a file that declares itself system-scoped.
 // JOIN is in the alternation because leaving it out is exactly how a real leak
 // got past this check: stats.Summary's top-host query reads `FROM click_log`
 // and reaches the tenant table only via `JOIN link l`, so the pattern never
 // inspected it and the query shipped with no user_id at all.
-var tenantTablePat = regexp.MustCompile(`(?i)\b(?:FROM|INTO|UPDATE|JOIN)\s+(link|note|folder|tag|push_subscription)\b`)
+var tenantTablePat = regexp.MustCompile(`(?i)\b(?:FROM|INTO|UPDATE|JOIN)\s+(link|note|folder|tag|push_subscription|note_media|note_media_ref)\b`)
 
 // exemptFiles are allowed to query tenant tables unscoped. Each is either a
 // public session-less route or a background worker that sweeps every tenant by
 // design (docs/SDD-AUTH-RBAC.md §8.2). Adding a file here should be a conscious,
 // reviewed act — that is the entire point of the list.
 var exemptFiles = map[string]string{
-	"links/repository_system.go": "public /go/{id-or-slug} + preview/change-check workers",
-	"notes/repository_system.go": "public /n/{id-or-slug}",
-	"preview/worker.go":          "requeuePending sweeps every tenant's pending previews on boot",
-	"backup/db_slugs.go":         "slug uniqueness is GLOBAL by design — /go/ and /n/ have no session",
-	"server/router.go":           "bootstrapPrincipal resolves the admin before a principal exists",
-	"testdb/testdb.go":           "test fixture helper",
+	"links/repository_system.go":     "public /go/{id-or-slug} + preview/change-check workers",
+	"notes/repository_system.go":     "public /n/{id-or-slug}",
+	"notemedia/repository_system.go": "bounded expired-lease sweep across every tenant",
+	"pkg/slug/repository_system.go":  "global slug collision preload for public /go/{slug}",
+	"preview/worker.go":              "requeuePending sweeps every tenant's pending previews on boot",
+	"backup/db_slugs.go":             "slug uniqueness is GLOBAL by design — /go/ and /n/ have no session",
+	"server/router.go":               "bootstrapPrincipal resolves the admin before a principal exists",
+	"testdb/testdb.go":               "test fixture helper",
 }
 
 // exemptQueries are individual statements that are correct while looking wrong.
@@ -59,8 +62,8 @@ var exemptQueries = map[string]string{
 	// behaviourally by the cross-user suite in this package.
 	"FROM link l LEFT JOIN LATERAL":      "fragment; List/Get append the tenant predicate",
 	"FROM note n LEFT JOIN LATERAL":      "fragment; List/Get append the tenant predicate",
-	"SELECT 'link' AS kind":              "entries UNION arm; appendScopeFilters supplies user_id",
-	"SELECT 'note' AS kind":              "entries UNION arm; appendScopeFilters supplies user_id",
+	"SELECT 'link' AS kind":              "entries UNION arm; listquery.Planner supplies user_id",
+	"SELECT 'note' AS kind":              "entries UNION arm; listquery.Planner supplies user_id",
 	"COALESCE(pf.previews, '[]'::jsonb)": "folders.List fragment; the WHERE is built above it",
 
 	// Templates whose SECOND format verb IS the WHERE clause. They look like a
@@ -86,7 +89,7 @@ var exemptQueries = map[string]string{
 // and this file is the backstop — not the other way round.
 //
 //  1. RUNTIME-ASSEMBLED STATEMENTS. Several queries concatenate a constant
-//     fragment with a WHERE built at runtime (entries.appendScopeFilters,
+//     fragment with a WHERE built at runtime (listquery.Planner,
 //     folders.List, links.linkFrom). A string-literal check never sees the
 //     finished statement, so those fragments are listed in exemptQueries.
 //
@@ -185,7 +188,7 @@ func TestNoUnscopedTenantQueries(t *testing.T) {
 
 			// No WHERE at all, after the DELETE/UPDATE case above, means a
 			// FRAGMENT whose predicate is appended at runtime
-			// (entries.appendScopeFilters, folders.List). Static analysis cannot
+			// (listquery.Planner, folders.List). Static analysis cannot
 			// judge those; the behavioural cross-user suite in this package is
 			// what covers them.
 			if !strings.Contains(upper, "WHERE") {

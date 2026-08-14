@@ -1,10 +1,15 @@
 import '@testing-library/jest-dom/vitest'
 import { afterEach, vi } from 'vitest'
-import { cleanup } from '@testing-library/react'
+import { cleanup, configure } from '@testing-library/react'
 
 // Initialise i18n before any component renders so `useTranslation()` returns
 // real translations. English is the default — tests assert against en.json.
 import i18n from '../i18n'
+
+// First-time dynamic imports can exceed Testing Library's 1s retry default
+// under Vite transforms or coverage, while Vitest's 20s ceiling still catches
+// genuine hangs.
+configure({ asyncUtilTimeout: 5_000 })
 
 afterEach(() => {
   cleanup()

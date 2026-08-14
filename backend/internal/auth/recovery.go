@@ -17,11 +17,10 @@ import (
 // there would bias digits 0–5.
 const recoveryAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
-// recoveryCodeChars is the number of symbols per code: 10 × 5 bits = 50 bits of
-// entropy. That is what makes a fast sha256 hash the right choice for storage —
-// there is nothing to grind — and it is why the codes are displayed grouped,
-// since a human has to copy them onto paper.
-const recoveryCodeChars = 10
+// recoveryCodeChars is the number of symbols per code: 16 x 5 bits = 80 bits of
+// entropy. The storage digest is additionally keyed so a database snapshot
+// cannot test the finite code space without AUTH_ENCRYPTION_KEY.
+const recoveryCodeChars = 16
 
 // newRecoveryCodes returns n freshly generated codes in display form.
 //
@@ -32,32 +31,15 @@ const recoveryCodeChars = 10
 func newRecoveryCodes(n int) ([]string, error) {
 	codes := make([]string, 0, n)
 	for range n {
-		// Grouped 5-5: transcription from paper is the expected path, and
-		// unbroken 10-character strings are where people lose their place.
-		c, err := randomCode(recoveryCodeChars, recoveryCodeChars/2)
+		// Grouped 4-4-4-4: transcription from paper is the expected path, and
+		// unbroken 16-character strings are where people lose their place.
+		c, err := randomCode(recoveryCodeChars, 4)
 		if err != nil {
 			return nil, err
 		}
 		codes = append(codes, c)
 	}
 	return codes, nil
-}
-
-// temporaryPasswordChars is 15 symbols × 5 bits = 75 bits, comfortably more
-// than the 50 a recovery code carries. The extra margin is because this value
-// is a PASSWORD: it is typed into a login form that an attacker can reach,
-// where a recovery code is only usable once a first factor already passed.
-const temporaryPasswordChars = 15
-
-// newTemporaryPassword mints the credential an administrator hands to a user
-// who can no longer sign in.
-//
-// The same alphabet as recovery codes, for the same reason: it will be read
-// aloud or copied by hand, and I/L/O/U are the characters that get transcribed
-// wrongly. It is shown to the admin exactly once — nothing stores the
-// plaintext.
-func newTemporaryPassword() (string, error) {
-	return randomCode(temporaryPasswordChars, 5)
 }
 
 // randomCode returns `symbols` characters from recoveryAlphabet, hyphenated

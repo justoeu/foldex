@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   getStoredSecret,
   setStoredSecret,
+  advanceAuthEpoch,
   http,
   readCsrfToken,
   resetRefreshState,
@@ -173,6 +174,28 @@ describe('401 single-flight refresh', () => {
     )
 
     expect(refreshes).toBe(1)
+  })
+
+  it('does not retry when sign out advances the auth epoch during refresh', async () => {
+    let finishRefresh!: () => void
+    const refresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve
+    })
+    vi.spyOn(http, 'post').mockReturnValue(refresh as never)
+    const request = vi.spyOn(http, 'request').mockResolvedValue({ status: 200 } as never)
+    const originalError = {
+      response: { status: 401 },
+      config: { url: '/api/links', method: 'get', headers: {} },
+    }
+
+    const pending = runErrorInterceptor(originalError)
+    await vi.waitFor(() => expect(http.post).toHaveBeenCalledWith('/api/auth/refresh', null, expect.anything()))
+
+    advanceAuthEpoch()
+    finishRefresh()
+
+    await expect(pending).rejects.toBe(originalError)
+    expect(request).not.toHaveBeenCalled()
   })
 
   it('does not retry a request that already was retried', async () => {

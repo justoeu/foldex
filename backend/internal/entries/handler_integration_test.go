@@ -18,6 +18,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/testdb"
 
 	"foldex/internal/pkg/authctx/authctxtest"
@@ -200,4 +201,131 @@ func TestHandler_List_FolderGate(t *testing.T) {
 	rr = httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
+}
+
+type changingFolderLookup struct {
+	hashes []*string
+	calls  int
+}
+
+func (l *changingFolderLookup) PasswordHashFor(context.Context, authctx.UserID, int64) (*string, error) {
+	i := l.calls
+	l.calls++
+	return l.hashes[i], nil
+}
+
+func TestHandler_List_FolderGateProtocolAcrossEndpoints(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	owner := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	otherOwner := testdb.SeedUser(t, pool, "other@test.local", "user")
+	foldersRepo := folders.NewRepository(pool)
+
+	password := "folder-password"
+	folder, err := foldersRepo.Create(ctx, owner, folders.CreateInput{Name: "Private", Color: "#abc", Password: &password})
+	require.NoError(t, err)
+	link, err := links.NewRepository(pool).Create(ctx, owner, links.CreateInput{
+		URL: "https://private.example", Title: "Private link", FolderID: &folder.ID,
+	})
+	require.NoError(t, err)
+	note, err := notes.NewRepository(pool).Create(ctx, owner, notes.CreateInput{
+		Title: "Private note", BodyHTML: "<p>private body</p>", FolderID: &folder.ID,
+	})
+	require.NoError(t, err)
+	hash, err := foldersRepo.PasswordHashFor(ctx, owner, folder.ID)
+	require.NoError(t, err)
+	require.NotNil(t, hash)
+	key := []byte("01234567890123456789012345678901")
+	token := folders.IssueUnlockToken(key, folder.ID, *hash)
+
+	otherFolder, err := foldersRepo.Create(ctx, otherOwner, folders.CreateInput{Name: "Other private", Color: "#def", Password: &password})
+	require.NoError(t, err)
+	otherHash, err := foldersRepo.PasswordHashFor(ctx, otherOwner, otherFolder.ID)
+	require.NoError(t, err)
+	require.NotNil(t, otherHash)
+
+	endpointTests := []struct {
+		name       string
+		path       func(int64) string
+		mount      func(folders.PasswordHashLookup) http.Handler
+		assertType func(*testing.T, []byte)
+	}{
+		{
+			name: "entries", path: func(id int64) string { return "/entries/?folder_id=" + strconv.FormatInt(id, 10) },
+			mount: func(lookup folders.PasswordHashLookup) http.Handler {
+				r := chi.NewRouter()
+				r.Route("/entries", entries.NewHandler(entries.NewRepository(pool), lookup, key).Mount)
+				return r
+			},
+			assertType: func(t *testing.T, body []byte) {
+				var out []entries.Entry
+				require.NoError(t, json.Unmarshal(body, &out))
+				require.Len(t, out, 2)
+				assert.ElementsMatch(t, []string{"link", "note"}, []string{out[0].Kind, out[1].Kind})
+			},
+		},
+		{
+			name: "links", path: func(id int64) string { return "/links/?folder_id=" + strconv.FormatInt(id, 10) },
+			mount: func(lookup folders.PasswordHashLookup) http.Handler {
+				r := chi.NewRouter()
+				r.Route("/links", links.NewHandler(links.NewRepository(pool), nil).WithFolderGate(lookup, key).Mount)
+				return r
+			},
+			assertType: func(t *testing.T, body []byte) {
+				var out []links.Link
+				require.NoError(t, json.Unmarshal(body, &out))
+				require.Len(t, out, 1)
+				assert.Equal(t, link.ID, out[0].ID)
+				assert.Equal(t, link.URL, out[0].URL)
+			},
+		},
+		{
+			name: "notes", path: func(id int64) string { return "/notes/?folder_id=" + strconv.FormatInt(id, 10) },
+			mount: func(lookup folders.PasswordHashLookup) http.Handler {
+				r := chi.NewRouter()
+				r.Route("/notes", notes.NewHandler(notes.NewRepository(pool), nil).WithFolderGate(lookup, key).Mount)
+				return r
+			},
+			assertType: func(t *testing.T, body []byte) {
+				var out []notes.Note
+				require.NoError(t, json.Unmarshal(body, &out))
+				require.Len(t, out, 1)
+				assert.Equal(t, note.ID, out[0].ID)
+				assert.Empty(t, out[0].BodyHTML, "list response must retain the note summary shape")
+			},
+		},
+	}
+
+	serve := func(h http.Handler, path, unlockToken string, principal authctx.Principal) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set(folders.UnlockHeader, unlockToken)
+		req = req.WithContext(authctx.WithPrincipal(req.Context(), principal))
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+
+	for _, endpoint := range endpointTests {
+		t.Run(endpoint.name, func(t *testing.T) {
+			apiTokenPrincipal := authctx.Principal{UserID: owner, Role: authctx.RoleAdmin, Via: authctx.ViaAPIToken, TokenID: 1}
+			rr := serve(endpoint.mount(foldersRepo), endpoint.path(folder.ID), token, apiTokenPrincipal)
+			require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+			endpoint.assertType(t, rr.Body.Bytes())
+
+			rr = serve(endpoint.mount(foldersRepo), endpoint.path(folder.ID), "", apiTokenPrincipal)
+			require.Equal(t, http.StatusForbidden, rr.Code)
+			assert.NotContains(t, rr.Body.String(), "Private")
+
+			newHash := "changed-hash"
+			lookup := &changingFolderLookup{hashes: []*string{hash, &newHash}}
+			rr = serve(endpoint.mount(lookup), endpoint.path(folder.ID), token, apiTokenPrincipal)
+			require.Equal(t, http.StatusForbidden, rr.Code)
+			assert.Equal(t, 2, lookup.calls)
+			assert.NotContains(t, rr.Body.String(), "Private")
+
+			rr = serve(endpoint.mount(foldersRepo), endpoint.path(otherFolder.ID),
+				folders.IssueUnlockToken(key, otherFolder.ID, *otherHash), apiTokenPrincipal)
+			require.Equal(t, http.StatusNotFound, rr.Code, "folder lookup must remain owner-scoped")
+		})
+	}
 }

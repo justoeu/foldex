@@ -8,7 +8,9 @@ import (
 
 	"foldex/internal/pkg/htmlsanitize"
 	"foldex/internal/pkg/jsonopt"
+	"foldex/internal/pkg/listquery"
 	"foldex/internal/pkg/slug"
+	"foldex/internal/tags"
 )
 
 // MaxTitleBytes mirrors links.MaxTitleBytes' role but is kept as its own
@@ -29,11 +31,12 @@ type CreateInput struct {
 	// Slug is optional on create — when nil/empty the repository derives it
 	// from Title via slug.Slugify (with auto-suffix on collision), same as
 	// links.
-	Slug     *string `json:"slug"`
-	BodyHTML string  `json:"body_html"`
-	TagIDs   []int64 `json:"tag_ids"`
-	Pinned   bool    `json:"pinned"`
-	FolderID *int64  `json:"folder_id"`
+	Slug        *string            `json:"slug"`
+	BodyHTML    string             `json:"body_html"`
+	TagIDs      []int64            `json:"tag_ids"`
+	PendingTags []tags.CreateInput `json:"pending_tags"`
+	Pinned      bool               `json:"pinned"`
+	FolderID    *int64             `json:"folder_id"`
 }
 
 // Normalize trims text fields and sanitizes BodyHTML server-side — the
@@ -51,6 +54,7 @@ func (c *CreateInput) Normalize() {
 		}
 	}
 	c.BodyHTML = htmlsanitize.Sanitize(c.BodyHTML)
+	tags.NormalizeCreateInputs(c.PendingTags)
 }
 
 func (c CreateInput) Validate() error {
@@ -66,6 +70,9 @@ func (c CreateInput) Validate() error {
 	if len(c.BodyHTML) > MaxBodyHTMLBytes {
 		return errMsg(fmt.Sprintf("body too long (max %d bytes after sanitization)", MaxBodyHTMLBytes))
 	}
+	if err := tags.ValidateCreateInputs(c.PendingTags); err != nil {
+		return errMsg(err.Error())
+	}
 	return nil
 }
 
@@ -74,9 +81,10 @@ type UpdateInput struct {
 	// BodyHTML is a plain pointer, not tri-state — nil means "don't touch",
 	// a present empty string is a legal cleared body. Sanitized in Normalize
 	// the same way CreateInput.BodyHTML is.
-	BodyHTML *string  `json:"body_html"`
-	TagIDs   *[]int64 `json:"tag_ids"`
-	Pinned   *bool    `json:"pinned"`
+	BodyHTML    *string            `json:"body_html"`
+	TagIDs      *[]int64           `json:"tag_ids"`
+	PendingTags []tags.CreateInput `json:"pending_tags"`
+	Pinned      *bool              `json:"pinned"`
 	// FolderID: tri-state, same contract as links.UpdateInput.FolderID —
 	// absent → don't touch, {"folder_id": N} → assign, {"folder_id": null} →
 	// clear.
@@ -101,6 +109,7 @@ func (u *UpdateInput) Normalize() {
 		s := htmlsanitize.Sanitize(*u.BodyHTML)
 		u.BodyHTML = &s
 	}
+	tags.NormalizeCreateInputs(u.PendingTags)
 }
 
 func (u UpdateInput) Validate() error {
@@ -118,18 +127,13 @@ func (u UpdateInput) Validate() error {
 	if u.SlugSet && u.Slug != nil && !slug.IsValid(*u.Slug) {
 		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
 	}
+	if err := tags.ValidateCreateInputs(u.PendingTags); err != nil {
+		return errMsg(err.Error())
+	}
 	return nil
 }
 
-type ListQuery struct {
-	Q         string
-	TagIDs    []int64
-	Sort      string // created|clicks|recent|alpha|alpha_desc
-	Limit     int
-	Offset    int
-	FolderID  *int64
-	Ungrouped bool
-}
+type ListQuery = listquery.Params
 
 // UnmarshalJSON preserves the "null vs absent" distinction on folder_id and
 // slug — same pattern as links.UpdateInput.UnmarshalJSON.

@@ -27,15 +27,26 @@ type BackupService interface {
 }
 
 type Handler struct {
-	svc    BackupService
-	logger *slog.Logger
+	svc          BackupService
+	logger       *slog.Logger
+	archiveSlots chan struct{}
+	createTemp   func() (*os.File, error)
 }
+
+const maxConcurrentArchiveOperations = 1
 
 func NewHandler(svc BackupService, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{svc: svc, logger: logger}
+	return &Handler{
+		svc:          svc,
+		logger:       logger,
+		archiveSlots: make(chan struct{}, maxConcurrentArchiveOperations),
+		createTemp: func() (*os.File, error) {
+			return os.CreateTemp("", "foldex-backup-*.zip")
+		},
+	}
 }
 
 func (h *Handler) Mount(r chi.Router) {
@@ -48,6 +59,12 @@ func (h *Handler) Mount(r chi.Router) {
 // POST /api/backup — stream ZIP
 
 func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
+	release, ok := h.admitArchive(w)
+	if !ok {
+		return
+	}
+	defer release()
+
 	stamp := time.Now().UTC().Format("20060102T150405Z")
 	filename := fmt.Sprintf("foldex-backup-%s.zip", stamp)
 
@@ -97,7 +114,12 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 // POST /api/backup/validate
 
 func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
-	zr, cleanup, err := readZipFromRequest(w, r)
+	release, ok := h.admitArchive(w)
+	if !ok {
+		return
+	}
+	defer release()
+	zr, cleanup, err := readZipFromRequest(w, r, h.createTemp)
 	if err != nil {
 		if errors.Is(err, ErrPayloadTooLarge) {
 			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "payload_too_large", err.Error()))
@@ -129,7 +151,12 @@ func (h *Handler) restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	zr, cleanup, err := readZipFromRequest(w, r)
+	release, ok := h.admitArchive(w)
+	if !ok {
+		return
+	}
+	defer release()
+	zr, cleanup, err := readZipFromRequest(w, r, h.createTemp)
 	if err != nil {
 		if errors.Is(err, ErrPayloadTooLarge) {
 			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "payload_too_large", err.Error()))
@@ -156,7 +183,18 @@ func (h *Handler) restore(w http.ResponseWriter, r *http.Request) {
 
 const maxBackupBytes = int64(2 << 30) // 2 GiB
 
-func readZipFromRequest(w http.ResponseWriter, r *http.Request) (*zip.Reader, func(), error) {
+func (h *Handler) admitArchive(w http.ResponseWriter) (func(), bool) {
+	select {
+	case h.archiveSlots <- struct{}{}:
+		return func() { <-h.archiveSlots }, true
+	default:
+		w.Header().Set("Retry-After", "1")
+		httperr.Write(w, httperr.New(http.StatusTooManyRequests, "backup_busy", "another backup archive operation is in progress"))
+		return func() {}, false
+	}
+}
+
+func readZipFromRequest(w http.ResponseWriter, r *http.Request, createTemp func() (*os.File, error)) (*zip.Reader, func(), error) {
 	ct := r.Header.Get("Content-Type")
 	noop := func() {}
 
@@ -168,7 +206,7 @@ func readZipFromRequest(w http.ResponseWriter, r *http.Request) (*zip.Reader, fu
 	r.Body = http.MaxBytesReader(w, r.Body, maxBackupBytes)
 
 	if strings.HasPrefix(ct, "application/zip") {
-		return streamToTempZip(r.Body)
+		return streamToTempZipWith(r.Body, createTemp)
 	}
 
 	// multipart/form-data
@@ -189,7 +227,7 @@ func readZipFromRequest(w http.ResponseWriter, r *http.Request) (*zip.Reader, fu
 			continue
 		}
 		defer part.Close()
-		return streamToTempZip(io.LimitReader(part, maxBackupBytes))
+		return streamToTempZipWith(io.LimitReader(part, maxBackupBytes), createTemp)
 	}
 	return nil, noop, fmt.Errorf("no `file` part in multipart upload")
 }
@@ -203,7 +241,13 @@ var ErrPayloadTooLarge = fmt.Errorf("backup: upload exceeds %d-byte limit", maxB
 // only for the duration of the restore — successful and failed paths both go
 // through the cleanup closure. Permissions default to 0600 via os.CreateTemp.
 func streamToTempZip(src io.Reader) (*zip.Reader, func(), error) {
-	tmp, err := os.CreateTemp("", "foldex-backup-*.zip")
+	return streamToTempZipWith(src, func() (*os.File, error) {
+		return os.CreateTemp("", "foldex-backup-*.zip")
+	})
+}
+
+func streamToTempZipWith(src io.Reader, createTemp func() (*os.File, error)) (*zip.Reader, func(), error) {
+	tmp, err := createTemp()
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("create temp: %w", err)
 	}

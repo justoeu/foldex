@@ -10,6 +10,7 @@ import (
 
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/pgerr"
+	"foldex/internal/pkg/pwhash"
 	"foldex/internal/pkg/secrets"
 )
 
@@ -28,6 +29,9 @@ var (
 	// alike. One error for all three: a caller who can tell them apart learns
 	// whether a state they did not mint ever existed.
 	ErrOAuthStateInvalid = errors.New("auth: oauth state invalid")
+	// ErrOAuthLinkInvalid covers a stale proof, changed credential epoch or a
+	// callback presented by any session other than the one that started linking.
+	ErrOAuthLinkInvalid = errors.New("auth: oauth link proof invalid")
 	// ErrIdentityTaken means the provider account is already linked elsewhere.
 	ErrIdentityTaken = errors.New("auth: provider account is linked to another user")
 	// ErrIdentityExists means THIS account already has an identity for the
@@ -65,6 +69,11 @@ type OAuthState struct {
 	UserID *authctx.UserID
 	// InviteID is set for purpose=accept_invite.
 	InviteID *int64
+	// SessionID, TokenVersion and ProofAt are all set for purpose=link. Together
+	// they bind the recent step-up to one live login and credential epoch.
+	SessionID    *int64
+	TokenVersion *int
+	ProofAt      *time.Time
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -95,6 +104,37 @@ func (r *Repository) CreateOAuthState(ctx context.Context, provider, purpose, ve
 	return raw, nil
 }
 
+// CreateOAuthLinkState stores a recently stepped-up state only while the exact
+// session and password epoch that produced the proof are still current.
+func (r *Repository) CreateOAuthLinkState(ctx context.Context, provider, verifier string,
+	uid authctx.UserID, sessionID int64, tokenVersion int, ttl time.Duration) (string, error) {
+
+	raw, hash, err := secrets.NewToken()
+	if err != nil {
+		return "", fmt.Errorf("oauth link state token: %w", err)
+	}
+	var id int64
+	err = r.pool.QueryRow(ctx, `
+		INSERT INTO oauth_state (
+			state_hash, code_verifier, provider, purpose, user_id,
+			session_id, token_version, proof_at, expires_at
+		)
+		SELECT $1, $2, $3, 'link', u.id, s.id, u.token_version, now(), now() + $7::interval
+		FROM session s
+		JOIN app_user u ON u.id = s.user_id
+		WHERE s.id = $4 AND s.user_id = $5
+		  AND s.revoked_at IS NULL AND s.access_expires_at > now()
+		  AND u.status = 'active' AND u.token_version = $6
+		RETURNING id`, hash, verifier, provider, sessionID, int64(uid), tokenVersion, intervalArg(ttl)).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrOAuthLinkInvalid
+	}
+	if err != nil {
+		return "", fmt.Errorf("insert oauth link state: %w", err)
+	}
+	return raw, nil
+}
+
 // ConsumeOAuthState spends a state and returns it.
 //
 // A conditional UPDATE, not a read-then-write. Two callbacks arriving with the
@@ -109,8 +149,10 @@ func (r *Repository) ConsumeOAuthState(ctx context.Context, rawState string) (OA
 	err := r.pool.QueryRow(ctx, `
 		UPDATE oauth_state SET consumed_at = now()
 		WHERE state_hash = $1 AND consumed_at IS NULL AND expires_at > now()
-		RETURNING id, provider, purpose, code_verifier, user_id, invite_id`,
-		secrets.Hash(rawState)).Scan(&s.ID, &s.Provider, &s.Purpose, &s.Verifier, &uid, &s.InviteID)
+		RETURNING id, provider, purpose, code_verifier, user_id, invite_id,
+		          session_id, token_version, proof_at`,
+		secrets.Hash(rawState)).Scan(&s.ID, &s.Provider, &s.Purpose, &s.Verifier, &uid, &s.InviteID,
+		&s.SessionID, &s.TokenVersion, &s.ProofAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OAuthState{}, ErrOAuthStateInvalid
 	}
@@ -200,17 +242,89 @@ func (r *Repository) ListIdentities(ctx context.Context, uid authctx.UserID) ([]
 	return out, rows.Err()
 }
 
-// LinkIdentity attaches a provider account to an EXISTING, already-proven user.
-//
-// The caller must have established the account some other way — a live session
-// for purpose=link, an accepted invite token for purpose=accept_invite. Nothing
-// here derives an account from the Google profile.
-func (r *Repository) LinkIdentity(ctx context.Context, uid authctx.UserID, provider, subject, emailAtLink string) error {
-	_, err := r.pool.Exec(ctx, `
+// ValidateOAuthLinkProof rejects a callback before the provider exchange when
+// its state is no longer backed by the same live session and credential epoch.
+// LinkIdentity repeats this check under row locks before writing.
+func (r *Repository) ValidateOAuthLinkProof(ctx context.Context, state OAuthState,
+	rawAccess string, maxAge time.Duration) error {
+
+	if state.UserID == nil || state.SessionID == nil || state.TokenVersion == nil || state.ProofAt == nil || rawAccess == "" {
+		return ErrOAuthLinkInvalid
+	}
+	var valid bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM session s
+			JOIN app_user u ON u.id = s.user_id
+			WHERE s.id = $1 AND s.user_id = $2
+			  AND s.access_token_hash = $3
+			  AND s.revoked_at IS NULL AND s.access_expires_at > now()
+			  AND u.status = 'active' AND u.token_version = $4
+			  AND $5::timestamptz > now() - $6::interval
+		)`, *state.SessionID, int64(*state.UserID), secrets.Hash(rawAccess),
+		*state.TokenVersion, *state.ProofAt, intervalArg(maxAge)).Scan(&valid)
+	if err != nil {
+		return fmt.Errorf("validate oauth link proof: %w", err)
+	}
+	if !valid {
+		return ErrOAuthLinkInvalid
+	}
+	return nil
+}
+
+// LinkIdentity attaches the provider only if the same session, principal,
+// credential epoch and recent proof are still valid at the write boundary.
+func (r *Repository) LinkIdentity(ctx context.Context, state OAuthState, rawAccess,
+	provider, subject, emailAtLink string, maxProofAge time.Duration) error {
+
+	if state.UserID == nil || state.SessionID == nil || state.TokenVersion == nil || state.ProofAt == nil || rawAccess == "" {
+		return ErrOAuthLinkInvalid
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("link identity begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var lockedUser int64
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM app_user
+		WHERE id = $1 AND status = 'active' AND token_version = $2
+		  AND $3::timestamptz > now() - $4::interval
+		FOR NO KEY UPDATE`, int64(*state.UserID), *state.TokenVersion,
+		*state.ProofAt, intervalArg(maxProofAge)).Scan(&lockedUser)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrOAuthLinkInvalid
+	}
+	if err != nil {
+		return fmt.Errorf("lock oauth link user: %w", err)
+	}
+
+	var lockedSession int64
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM session
+		WHERE id = $1 AND user_id = $2 AND access_token_hash = $3
+		  AND revoked_at IS NULL AND access_expires_at > now()
+		FOR UPDATE`, *state.SessionID, int64(*state.UserID), secrets.Hash(rawAccess)).Scan(&lockedSession)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrOAuthLinkInvalid
+	}
+	if err != nil {
+		return fmt.Errorf("lock oauth link session: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO user_identity (user_id, provider, subject, email_at_link, last_login_at)
 		VALUES ($1, $2, $3, $4, now())`,
-		int64(uid), provider, subject, nullString(emailAtLink))
-	return mapIdentityConflict(err)
+		int64(*state.UserID), provider, subject, nullString(emailAtLink))
+	if err := mapIdentityConflict(err); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("link identity commit: %w", err)
+	}
+	return nil
 }
 
 // TouchIdentity records a successful sign-in through the provider. Best-effort:
@@ -237,43 +351,99 @@ func (r *Repository) TouchIdentity(ctx context.Context, provider, subject string
 // session minted against the old password should have to present the new proof.
 // The challenge is consumed in the same transaction so a replayed convert
 // request cannot re-run any of it.
-func (r *Repository) ConvertToProvider(ctx context.Context, uid authctx.UserID,
-	provider, subject, emailAtLink string, challengeID int64) error {
+func (r *Repository) ConvertToProvider(ctx context.Context, challengeID int64,
+	password string) (User, string, error) {
+	var uid int64
+	var challengeVersion int
+	var provedHash *string
+	err := r.pool.QueryRow(ctx, `
+		SELECT c.user_id, c.token_version, u.password_hash
+		FROM auth_challenge c
+		JOIN app_user u ON u.id = c.user_id
+		WHERE c.id = $1 AND c.purpose = 'convert_google'
+		  AND c.consumed_at IS NULL AND c.expires_at > now()
+		  AND c.token_version = u.token_version AND u.status = 'active'`, challengeID).
+		Scan(&uid, &challengeVersion, &provedHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, "", ErrChallengeInvalid
+	}
+	if err != nil {
+		return User{}, "", fmt.Errorf("load convert proof: %w", err)
+	}
+	if provedHash == nil || !pwhash.Verify(*provedHash, password) {
+		return User{}, "", ErrBadCredentials
+	}
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("convert begin: %w", err)
+		return User{}, "", fmt.Errorf("convert begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	var liveVersion int
+	var passwordHash *string
+	var status string
+	err = tx.QueryRow(ctx, `
+		SELECT password_hash, token_version, status
+		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, uid).
+		Scan(&passwordHash, &liveVersion, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, "", ErrChallengeInvalid
+	}
+	if err != nil {
+		return User{}, "", fmt.Errorf("lock convert user: %w", err)
+	}
+	if status != StatusActive || liveVersion != challengeVersion || passwordHash == nil || *passwordHash != *provedHash {
+		return User{}, "", ErrChallengeInvalid
+	}
+
+	var provider, subject, emailAtLink string
+	err = tx.QueryRow(ctx, `
+		UPDATE auth_challenge SET consumed_at = now()
+		WHERE id = $1 AND user_id = $2 AND purpose = 'convert_google'
+		  AND token_version = $3 AND consumed_at IS NULL AND expires_at > now()
+		RETURNING COALESCE(oauth_provider, ''), COALESCE(oauth_subject, ''),
+		          COALESCE(oauth_email, '')`, challengeID, uid, challengeVersion).
+		Scan(&provider, &subject, &emailAtLink)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, "", ErrChallengeInvalid
+	}
+	if err != nil {
+		return User{}, "", fmt.Errorf("convert consume challenge: %w", err)
+	}
+	if provider == "" || subject == "" {
+		return User{}, "", ErrChallengeInvalid
+	}
 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO user_identity (user_id, provider, subject, email_at_link, last_login_at)
 		VALUES ($1, $2, $3, $4, now())`,
-		int64(uid), provider, subject, nullString(emailAtLink)); err != nil {
-		return mapIdentityConflict(err)
+		uid, provider, subject, nullString(emailAtLink)); err != nil {
+		return User{}, "", mapIdentityConflict(err)
 	}
 
-	if _, err := tx.Exec(ctx, `
+	u, err := scanUser(tx.QueryRow(ctx, `
 		UPDATE app_user SET password_hash = NULL, token_version = token_version + 1,
 		                    updated_at = now()
-		WHERE id = $1`, int64(uid)); err != nil {
-		return fmt.Errorf("retire password: %w", err)
+		WHERE id = $1 AND status = 'active' AND token_version = $2 AND password_hash = $3
+		RETURNING `+userColumns, uid, challengeVersion, *passwordHash))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, "", ErrChallengeInvalid
+	}
+	if err != nil {
+		return User{}, "", fmt.Errorf("retire password: %w", err)
 	}
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE session SET revoked_at = now(), revoked_reason = $2
-		WHERE user_id = $1 AND revoked_at IS NULL`,
-		int64(uid), ReasonPasswordChanged); err != nil {
-		return fmt.Errorf("convert revoke: %w", err)
+		WHERE user_id = $1 AND revoked_at IS NULL`, uid, ReasonPasswordChanged); err != nil {
+		return User{}, "", fmt.Errorf("convert revoke: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `
-		UPDATE auth_challenge SET consumed_at = now()
-		WHERE id = $1 AND consumed_at IS NULL`, challengeID); err != nil {
-		return fmt.Errorf("convert consume challenge: %w", err)
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, "", fmt.Errorf("convert commit: %w", err)
 	}
-
-	return tx.Commit(ctx)
+	return u, emailAtLink, nil
 }
 
 // UnlinkIdentity detaches a provider, refusing to strip the last credential.
@@ -282,29 +452,42 @@ func (r *Repository) ConvertToProvider(ctx context.Context, uid authctx.UserID,
 // removal cannot slip between "you still have a password" and the DELETE. The
 // constraint trigger would catch that too, but as a 500 rather than as the
 // 409 the UI can explain.
-func (r *Repository) UnlinkIdentity(ctx context.Context, uid authctx.UserID, provider string) error {
+func (r *Repository) UnlinkIdentity(ctx context.Context, uid authctx.UserID, keepSession int64,
+	tokenVersion int, provider, password string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("unlink begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var hasPassword bool
+	var passwordHash *string
+	var liveVersion int
+	var status string
 	var identities int
 	if err := tx.QueryRow(ctx, `
-		SELECT password_hash IS NOT NULL,
+		SELECT password_hash, token_version, status,
 		       (SELECT count(*) FROM user_identity i WHERE i.user_id = app_user.id)
-		FROM app_user WHERE id = $1 FOR UPDATE`, int64(uid)).Scan(&hasPassword, &identities); err != nil {
+		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).
+		Scan(&passwordHash, &liveVersion, &status, &identities); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNoUser
 		}
 		return fmt.Errorf("unlink lookup: %w", err)
 	}
+	if status != StatusActive || liveVersion != tokenVersion {
+		return ErrSessionInvalid
+	}
+	if err := requireLiveSessionTx(ctx, tx, uid, keepSession); err != nil {
+		return err
+	}
 	if identities == 0 {
 		return ErrIdentityMissing
 	}
-	if !hasPassword && identities <= 1 {
+	if passwordHash == nil {
 		return ErrLastCredential
+	}
+	if !pwhash.Verify(*passwordHash, password) {
+		return ErrBadCredentials
 	}
 
 	ct, err := tx.Exec(ctx,
@@ -315,7 +498,21 @@ func (r *Repository) UnlinkIdentity(ctx context.Context, uid authctx.UserID, pro
 	if ct.RowsAffected() == 0 {
 		return ErrIdentityMissing
 	}
-	return tx.Commit(ctx)
+	if _, err := tx.Exec(ctx, `
+		UPDATE app_user SET token_version = token_version + 1, updated_at = now()
+		WHERE id = $1 AND token_version = $2`, int64(uid), tokenVersion); err != nil {
+		return fmt.Errorf("unlink bump epoch: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE session SET revoked_at = now(), revoked_reason = $3
+		WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
+		int64(uid), keepSession, ReasonPasswordChanged); err != nil {
+		return fmt.Errorf("unlink revoke sessions: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("unlink commit: %w", err)
+	}
+	return nil
 }
 
 // mapIdentityConflict turns the two unique indexes on user_identity into

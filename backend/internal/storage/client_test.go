@@ -47,6 +47,14 @@ func TestCheckServeSize(t *testing.T) {
 	assert.ErrorIs(t, err, ErrObjectTooLarge)
 }
 
+func TestExplicitKeyPrefixesAreBoundedByNamespace(t *testing.T) {
+	assert.Equal(t, []string{"images/", "notes/", "screenshots/"}, explicitKeyPrefixes([]string{
+		"images/1.jpg", "images/2.jpg", "notes/a.png", "screenshots/3.webp",
+	}))
+	assert.Equal(t, []string{""}, explicitKeyPrefixes([]string{"top-level"}))
+	assert.Empty(t, explicitKeyPrefixes(nil))
+}
+
 func TestReadAll_RejectsOverCeiling(t *testing.T) {
 	// Stream larger than MaxServeObjectBytes must fail closed.
 	payload := bytes.Repeat([]byte("x"), int(MaxServeObjectBytes)+8)

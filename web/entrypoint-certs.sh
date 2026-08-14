@@ -23,13 +23,24 @@ CERT_DIR=/etc/nginx/certs
 CERT_FILE="$CERT_DIR/cert.pem"
 KEY_FILE="$CERT_DIR/key.pem"
 
-# Bake the public hostname into the HTTP→HTTPS redirect. Never use $host /
+# Bake the public host into the HTTP→HTTPS redirect. Never use $host /
 # $http_host (attacker-controlled Host header). Operators set WEB_PUBLIC_HOST
-# when serving under a LAN name or custom domain (default: localhost).
+# when serving under a LAN name, a custom domain, or a non-443 port — the
+# compose default carries :${WEB_HTTPS_PORT} for exactly that reason, since a
+# portless redirect sends the browser to 443 where this stack serves nothing.
 PUBLIC_HOST=${WEB_PUBLIC_HOST:-localhost}
 # Allowlist: hostname / IPv4 / optional :port — reject anything else.
+#
+# The rejection is ANNOUNCED. It used to fall back in silence, which meant a
+# typo'd value produced a redirect that dead-ends with no trace of why — and
+# the fallback cannot restore the port, because this container is never told
+# which one the host published.
 case "$PUBLIC_HOST" in
-  ''|*[!A-Za-z0-9._:-]* ) PUBLIC_HOST=localhost ;;
+  ''|*[!A-Za-z0-9._:-]* )
+    echo "[foldex/web] WEB_PUBLIC_HOST=$PUBLIC_HOST is not a bare host[:port] — falling back to 'localhost'." >&2
+    echo "[foldex/web] The HTTP→HTTPS redirect will target port 443. Set WEB_PUBLIC_HOST=host:port if you serve elsewhere." >&2
+    PUBLIC_HOST=localhost
+    ;;
 esac
 NGINX_CONF=/etc/nginx/conf.d/default.conf
 if [ -f "$NGINX_CONF" ] && grep -q '__WEB_PUBLIC_HOST__' "$NGINX_CONF" 2>/dev/null; then

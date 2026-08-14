@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -156,6 +157,27 @@ func TestValidate_LinkClickCountNegative(t *testing.T) {
 		Links:   []JSONLink{{URL: "https://example.com", Title: "t", ClickCount: -1}},
 	}
 	require.Error(t, f.Validate())
+}
+
+func TestValidate_CumulativeClickCountCap(t *testing.T) {
+	links := make([]JSONLink, 100)
+	for i := range links {
+		links[i] = JSONLink{
+			URL:        fmt.Sprintf("https://click-cap.example/%d", i),
+			Title:      "click cap",
+			ClickCount: 10_000,
+		}
+	}
+	require.NoError(t, JSONFile{Version: 1, Links: links}.Validate())
+
+	links = append(links, JSONLink{
+		URL:        "https://click-cap.example/overflow",
+		Title:      "overflow",
+		ClickCount: 1,
+	})
+	err := JSONFile{Version: 1, Links: links}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cumulative click_count")
 }
 
 func TestValidate_LinkTagNameEmpty(t *testing.T) {

@@ -18,7 +18,7 @@ import (
 
 	"foldex/internal/folders"
 	"foldex/internal/links"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/domainerr"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
 
@@ -56,7 +56,7 @@ func (s stubFolderLookup) PasswordHashFor(context.Context, authctx.UserID, int64
 	return s.hash, s.err
 }
 
-func newLinksRouter(t *testing.T, worker links.Enqueuer, lookup links.FolderPasswordLookup, key []byte) (http.Handler, *links.Repository, authctx.UserID) {
+func newLinksRouter(t *testing.T, worker links.Enqueuer, lookup folders.PasswordHashLookup, key []byte) (http.Handler, *links.Repository, authctx.UserID) {
 	t.Helper()
 	pool := testdb.Shared(t)
 
@@ -132,6 +132,48 @@ func TestHandler_Create_InvalidInput(t *testing.T) {
 	rr := doLinkJSON(t, h, http.MethodPost, "/links/", map[string]any{"url": "not-a-url", "title": "x"})
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	assert.Contains(t, rr.Body.String(), "invalid_input")
+}
+
+func TestHandler_Create_RollsBackPendingTagWhenAssociationFails(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	repo := links.NewRepository(pool)
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
+	r.Route("/links", links.NewHandler(repo, nil).Mount)
+
+	rr := doLinkJSON(t, r, http.MethodPost, "/links/", map[string]any{
+		"url":          "https://rollback.example",
+		"title":        "Rollback",
+		"tag_ids":      []int64{9223372036854775807},
+		"pending_tags": []map[string]any{{"name": "must-rollback", "color": "#22C55E"}},
+	})
+	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+
+	var tagCount, linkCount int
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM tag WHERE user_id = $1 AND name = 'must-rollback'`, int64(uid)).Scan(&tagCount))
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM link WHERE user_id = $1 AND url = 'https://rollback.example'`, int64(uid)).Scan(&linkCount))
+	assert.Zero(t, tagCount, "pending tag must roll back with its failed parent")
+	assert.Zero(t, linkCount, "parent insert must roll back with its failed association")
+
+	created, err := repo.Create(context.Background(), uid, links.CreateInput{
+		URL: "https://update-rollback.example", Title: "Before",
+	})
+	require.NoError(t, err)
+	rr = doLinkJSON(t, r, http.MethodPatch, "/links/"+linkID(created.ID), map[string]any{
+		"title":        "After",
+		"tag_ids":      []int64{9223372036854775807},
+		"pending_tags": []map[string]any{{"name": "update-must-rollback", "color": "#3B82F6"}},
+	})
+	require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM tag WHERE user_id = $1 AND name = 'update-must-rollback'`, int64(uid)).Scan(&tagCount))
+	got, err := repo.Get(context.Background(), uid, created.ID)
+	require.NoError(t, err)
+	assert.Zero(t, tagCount, "pending tag must roll back with a failed parent update")
+	assert.Equal(t, "Before", got.Title, "parent changes must share the tag transaction")
 }
 
 func TestHandler_Create_InvalidJSON(t *testing.T) {
@@ -292,6 +334,15 @@ func TestHandler_List_FolderLookupErr(t *testing.T) {
 	require.NotEqual(t, http.StatusOK, rr.Code)
 }
 
+func TestHandler_List_FolderLookupMissingFailsClosed(t *testing.T) {
+	h, _, _ := newLinksRouter(t, nil, nil, nil)
+
+	rr := doLinkJSON(t, h, http.MethodGet, "/links/?folder_id=1", nil)
+
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.NotContains(t, rr.Body.String(), `"url"`)
+}
+
 func TestHandler_WithMetadataFetcher_Chains(t *testing.T) {
 	h := links.NewHandler(nil, nil).WithMetadataFetcher(nil)
 	assert.NotNil(t, h)
@@ -314,8 +365,8 @@ func TestRepository_UpdateOGImageAndClear(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, got.OGImageURL)
 
-	assert.ErrorIs(t, lrepo.UpdateOGImage(ctx, uid, 99999, "/x"), httperr.ErrNotFound)
-	assert.ErrorIs(t, lrepo.ClearOGImage(ctx, uid, 99999), httperr.ErrNotFound)
+	assert.ErrorIs(t, lrepo.UpdateOGImage(ctx, uid, 99999, "/x"), domainerr.ErrNotFound)
+	assert.ErrorIs(t, lrepo.ClearOGImage(ctx, uid, 99999), domainerr.ErrNotFound)
 }
 
 func TestRepository_ClickAndResolveBySlug(t *testing.T) {
@@ -457,10 +508,7 @@ func TestRepository_Update_SlugTaken(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = lrepo.Update(ctx, uid, b.ID, links.UpdateInput{Slug: &slugA, SlugSet: true})
-	require.Error(t, err)
-	var he *httperr.Error
-	require.ErrorAs(t, err, &he)
-	assert.Equal(t, "slug_taken", he.Code)
+	require.ErrorIs(t, err, links.ErrSlugTaken)
 }
 
 func TestRepository_UpdatePreview_InvalidStatus(t *testing.T) {

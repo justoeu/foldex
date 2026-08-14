@@ -87,3 +87,16 @@ func TestJSONToItems_FolderAndCreatedAt(t *testing.T) {
 	assert.Nil(t, items[1].Folder, "blank folder path must be dropped")
 	assert.Nil(t, items[1].CreatedAt, "invalid created_at must be ignored")
 }
+
+func TestValidateImportClickBudget(t *testing.T) {
+	items := make([]Item, 100)
+	for i := range items {
+		items[i].ClickCount = 10_000
+	}
+	require.NoError(t, validateImportClickBudget(items))
+
+	items = append(items, Item{ClickCount: 1})
+	err := validateImportClickBudget(items)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cumulative click_count")
+}

@@ -17,22 +17,30 @@ import (
 )
 
 type fakeSubStore struct {
-	mu        sync.Mutex
-	subs      []Subscription
-	deleted   []string
-	usedIDs   []int64
-	listErr   error
-	deleteErr error
-	usedErr   error
+	mu         sync.Mutex
+	subs       []Subscription
+	listedUIDs []authctx.UserID
+	deleted    []string
+	usedIDs    []int64
+	listErr    error
+	deleteErr  error
+	usedErr    error
 }
 
-func (s *fakeSubStore) List(_ context.Context, _ authctx.UserID) ([]Subscription, error) {
+func (s *fakeSubStore) List(_ context.Context, uid authctx.UserID) ([]Subscription, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.listedUIDs = append(s.listedUIDs, uid)
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
 	return append([]Subscription(nil), s.subs...), nil
+}
+
+func (s *fakeSubStore) listedUsers() []authctx.UserID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]authctx.UserID(nil), s.listedUIDs...)
 }
 
 func (s *fakeSubStore) DeleteByEndpoint(_ context.Context, endpoint string) error {
@@ -87,6 +95,7 @@ func (f *fakeNotifier) endpoints() []string {
 }
 
 func TestSender_Notify_FansOutAcrossAllSubs(t *testing.T) {
+	owner := authctx.UserID(73)
 	repo := &fakeSubStore{
 		subs: []Subscription{
 			fakeSub("https://push.example/a"),
@@ -96,9 +105,16 @@ func TestSender_Notify_FansOutAcrossAllSubs(t *testing.T) {
 	n := &fakeNotifier{status: 201}
 	s := NewSender(testKeys(), repo, testLogger()).WithNotifyFunc(n.notify)
 
-	err := s.Notify(context.Background(), Notification{LinkID: 1, Title: "x", URL: "/x", Kind: "test"})
+	err := s.Notify(context.Background(), Notification{
+		LinkID: 1,
+		Title:  "x",
+		URL:    "/x",
+		Kind:   "test",
+		UserID: owner,
+	})
 	require.NoError(t, err)
 
+	assert.Equal(t, []authctx.UserID{owner}, repo.listedUsers())
 	got := n.endpoints()
 	assert.Len(t, got, 2)
 	assert.ElementsMatch(t, []string{"https://push.example/a", "https://push.example/b"}, got)

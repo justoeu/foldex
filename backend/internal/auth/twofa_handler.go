@@ -52,7 +52,7 @@ func (h *Handler) secondFactorPurpose(u User) string {
 	// verify a code against, so a challenge here would be a dead end. The guard
 	// lives INSIDE this function rather than beside each call so a future third
 	// caller cannot copy the check and drop half of it.
-	if h.cipher == nil {
+	if h.cipher == nil || h.codeMAC == nil {
 		return ""
 	}
 	if u.TOTPEnabled {
@@ -104,6 +104,7 @@ func (h *Handler) beginChallenge(w http.ResponseWriter, r *http.Request, u User,
 	return h.beginChallengeFor(w, r, NewChallenge{
 		UserID:               u.ID,
 		Purpose:              purpose,
+		TokenVersion:         u.TokenVersion,
 		TTL:                  challengeTTL,
 		IP:                   clientIP(r),
 		UserAgent:            r.UserAgent(),
@@ -231,20 +232,19 @@ func (h *Handler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch method := h.checkSecondFactor(r.Context(), user, in.Code, &ch.ID); method {
-	case "":
+	proof := h.secondFactorProof(r.Context(), user, in.Code, &ch.ID)
+	tok, method, err := h.repo.Complete2FA(r.Context(), ch, proof, h.ttl, clientIP(r), r.UserAgent())
+	if errors.Is(err, ErrBadCredentials) {
 		remaining := maxChallengeAttempts - attempts
 		if remaining < 0 {
 			remaining = 0
 		}
 		if remaining == 0 {
-			// The budget is gone: kill the challenge so the pre-auth cookie is
-			// inert, and make the user re-enter their password. That re-runs
-			// the login rate limiters, which are the durable cap.
-			_ = h.repo.ConsumeChallenge(r.Context(), ch.ID)
+			// Keep the exhausted row live until its window ends so another
+			// correct-password login cannot mint a fresh set of guesses.
 			h.cookies.ClearPreAuth(w)
 			httperr.Write(w, httperr.New(http.StatusTooManyRequests, "too_many_attempts",
-				"too many incorrect codes; sign in again"))
+				"too many incorrect codes; try again later"))
 			return
 		}
 		httperr.JSON(w, http.StatusUnauthorized, map[string]any{
@@ -255,62 +255,58 @@ func (h *Handler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 			"attempts_remaining": remaining,
 		})
 		return
-
-	case methodRecovery:
+	}
+	if err != nil {
+		h.writeChallengeError(w, err)
+		return
+	}
+	if method == methodRecovery {
 		// Spending a recovery code is either a user with a new phone or an
 		// attacker holding the printed sheet. The owner is the only one who can
 		// tell, and only if told.
-		h.notifyRecoveryCodeUsed(user)
-	}
-
-	if err := h.repo.ConsumeChallenge(r.Context(), ch.ID); err != nil {
-		h.logger.Error("consume challenge", "err", err)
+		h.notifyRecoveryCodeUsed(r.Context(), user)
 	}
 	h.cookies.ClearPreAuth(w)
-	h.issueAndRespond(w, r, user)
+	h.cookies.SetSession(w, tok)
+	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, tok.CSRF))
 }
 
-// checkSecondFactor tries every accepted credential and reports which one
-// matched, or "" for none.
-//
-// Order is cheapest-and-most-common first. Each branch consumes its credential
-// on success, so a code cannot be spent twice by racing two requests — the
-// atomicity lives in the repository's conditional UPDATEs.
-func (h *Handler) checkSecondFactor(ctx context.Context, u User, code string, challengeID *int64) string {
+// secondFactorProof prepares every proof the submitted shape can represent.
+// The repository decides which one is live while consuming it with the
+// challenge and session write in one transaction.
+func (h *Handler) secondFactorProof(ctx context.Context, u User, code string,
+	challengeID *int64) secondFactorProof {
+
 	// The two kinds are told apart by the SEPARATOR-STRIPPED length, not by how
 	// many digits survive a digit-only filter.
 	//
 	// Filtering to digits and asking "is it six long?" misroutes every recovery
-	// code that happens to contain exactly six digits — with a 10-character code
-	// drawn from a 32-symbol alphabet, that is roughly one in twenty-three of
-	// them, and such a code could never be redeemed at all. A recovery code is
-	// ten symbols once its hyphen is removed, so the length alone separates them
-	// cleanly while still accepting "123 456" and "123-456" as a numeric code.
+	// code that happens to contain exactly six digits. With sixteen symbols from
+	// this alphabet that is roughly 18% of codes, and none could be redeemed at
+	// all. A recovery code is sixteen symbols once its hyphens are removed, so
+	// length separates them cleanly while still accepting "123 456" and
+	// "123-456" as a numeric code.
 	if digits, ok := numericOTP(code); ok {
-		if h.checkTOTP(ctx, u.ID, digits) {
-			return methodTOTP
+		return secondFactorProof{
+			totp:        h.verifyTOTPProof(ctx, u.ID, digits),
+			emailDigest: h.codeMAC.EmailOTPDigest(u.ID, OTPPurposeLogin2FA, challengeID, digits),
 		}
-		// A six-digit code that is not a valid TOTP may still be a mailed OTP.
-		if err := h.repo.ConsumeEmailOTP(ctx, u.ID, OTPPurposeLogin2FA, secrets.Hash(digits), challengeID); err == nil {
-			return methodEmailOTP
-		}
-		return ""
 	}
 	normalized := normalizeRecoveryCode(code)
 	if normalized == "" {
-		return ""
+		return secondFactorProof{}
 	}
-	if err := h.repo.ConsumeRecoveryCode(ctx, u.ID, secrets.Hash(normalized)); err == nil {
-		return methodRecovery
+	return secondFactorProof{
+		recoveryDigest: h.codeMAC.RecoveryCodeDigest(u.ID, normalized),
 	}
-	return ""
 }
 
-// checkTOTP verifies a code and burns its time step.
-func (h *Handler) checkTOTP(ctx context.Context, uid authctx.UserID, code string) bool {
+// verifyTOTPProof performs only the cryptographic check. The repository burns
+// the returned counter together with the protected mutation.
+func (h *Handler) verifyTOTPProof(ctx context.Context, uid authctx.UserID, code string) *TOTPProof {
 	row, err := h.repo.LoadTOTPSecret(ctx, uid)
 	if err != nil || !row.Confirmed {
-		return false
+		return nil
 	}
 	secret, err := h.cipher.Decrypt(row.Ciphertext, row.Nonce)
 	if err != nil {
@@ -319,20 +315,20 @@ func (h *Handler) checkTOTP(ctx context.Context, uid authctx.UserID, code string
 		// the response stays identical, because the caller is unauthenticated.
 		h.logger.Error("totp secret cannot be decrypted — AUTH_ENCRYPTION_KEY may have changed",
 			"user_id", int64(uid))
-		return false
+		return nil
 	}
 	counter, err := verifyTOTP(string(secret), code, row.Params, time.Now())
 	if err != nil {
 		if errors.Is(err, ErrTOTPParams) {
 			h.logger.Error("stored TOTP parameters are not the supported set", "user_id", int64(uid))
 		}
-		return false
+		return nil
 	}
-	// The replay guard is the DATABASE's conditional update, not this check.
-	if err := h.repo.ConsumeTOTPCounter(ctx, uid, counter); err != nil {
-		return false
+	proof := TOTPProof{Counter: counter, Ciphertext: row.Ciphertext, Nonce: row.Nonce}
+	if h.afterTOTPVerification != nil {
+		h.afterTOTPVerification(ctx, uid, proof)
 	}
-	return true
+	return &proof
 }
 
 // SendEmailOTP mails a one-time code for a pending challenge.
@@ -352,7 +348,29 @@ func (h *Handler) SendEmailOTP(w http.ResponseWriter, r *http.Request) {
 			"a mailed code cannot be used for this sign-in"))
 		return
 	}
-	if _, err := h.repo.ReserveChallengeSend(r.Context(), ch.ID); err != nil {
+	admission, err := h.dispatcher.Reserve()
+	if err != nil {
+		writeMailQueueUnavailable(w)
+		return
+	}
+	code, err := secrets.NewNumericCode(totpDigits)
+	if err != nil {
+		admission.Release()
+		h.logger.Error("otp generate", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	email, err := h.repo.EmailForUser(r.Context(), ch.UserID)
+	if err != nil {
+		admission.Release()
+		h.logger.Error("otp recipient", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	id := ch.ID
+	if _, err := h.repo.CreateChallengeEmailOTP(r.Context(), ch.ID,
+		h.codeMAC.EmailOTPDigest(ch.UserID, OTPPurposeLogin2FA, &id, code), emailOTPTTL); err != nil {
+		admission.Release()
 		switch {
 		case errors.Is(err, ErrTooSoon), errors.Is(err, ErrSendsExhausted):
 			w.WriteHeader(http.StatusAccepted)
@@ -361,28 +379,10 @@ func (h *Handler) SendEmailOTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-
-	code, err := secrets.NewNumericCode(totpDigits)
-	if err != nil {
-		h.logger.Error("otp generate", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
+	if err := admission.Publish(
+		mailer.LoginCodeMessage(email, code, int(emailOTPTTL.Minutes())), "login otp"); err != nil {
+		h.logger.Error("publish login otp mail", "err", err)
 	}
-	id := ch.ID
-	if err := h.repo.CreateEmailOTP(r.Context(), ch.UserID, &id, OTPPurposeLogin2FA,
-		secrets.Hash(code), emailOTPTTL); err != nil {
-		h.logger.Error("otp store", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-
-	email, err := h.repo.EmailForUser(r.Context(), ch.UserID)
-	if err != nil {
-		h.logger.Error("otp recipient", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-	h.sendAsync(mailer.LoginCodeMessage(email, code, int(emailOTPTTL.Minutes())), "login otp")
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -404,7 +404,7 @@ type totpStartInput struct {
 // second factor with nothing but a hijacked cookie would let an attacker lock
 // the real owner out of their own account.
 func (h *Handler) StartTOTP(w http.ResponseWriter, r *http.Request) {
-	uid, ok := h.enrollmentPrincipal(w, r)
+	uid, tokenVersion, sessionID, ok := h.enrollmentPrincipal(w, r)
 	if !ok {
 		return
 	}
@@ -426,10 +426,14 @@ func (h *Handler) StartTOTP(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	if err := h.repo.StartTOTPEnrollment(r.Context(), uid, ciphertext, nonce); err != nil {
+	if err := h.repo.StartTOTPEnrollment(r.Context(), uid, tokenVersion, sessionID, ciphertext, nonce); err != nil {
 		if errors.Is(err, ErrTOTPAlreadyConfirmed) {
 			httperr.Write(w, httperr.New(http.StatusConflict, "totp_already_enabled",
 				"two-factor authentication is already enabled; disable it first"))
+			return
+		}
+		if errors.Is(err, ErrChallengeInvalid) {
+			h.writeChallengeError(w, err)
 			return
 		}
 		h.logger.Error("totp store", "err", err)
@@ -454,13 +458,21 @@ func (h *Handler) StartTOTP(w http.ResponseWriter, r *http.Request) {
 // visual form — a cached copy in a shared browser profile is a copy of the
 // second factor.
 func (h *Handler) TOTPQR(w http.ResponseWriter, r *http.Request) {
-	uid, ok := h.enrollmentPrincipalNoPassword(w, r)
+	uid, tokenVersion, sessionID, ok := h.enrollmentPrincipalNoPassword(w, r)
 	if !ok {
 		return
 	}
 	row, err := h.repo.LoadTOTPSecret(r.Context(), uid)
 	if err != nil || row.Confirmed {
 		httperr.Write(w, httperr.ErrNotFound)
+		return
+	}
+	if row.EnrollmentTokenVersion == nil || *row.EnrollmentTokenVersion != tokenVersion {
+		h.writeChallengeError(w, ErrChallengeInvalid)
+		return
+	}
+	if !enrollmentSessionMatches(row.EnrollmentSessionID, sessionID) {
+		h.writeChallengeError(w, ErrChallengeInvalid)
 		return
 	}
 	secret, err := h.cipher.Decrypt(row.Ciphertext, row.Nonce)
@@ -498,11 +510,11 @@ type totpConfirmInput struct {
 
 // ConfirmTOTP activates a pending enrollment and returns the recovery codes.
 //
-// The codes are shown EXACTLY once. The server stores only their sha256, so it
+// The codes are shown EXACTLY once. The server stores only their keyed MAC, so it
 // genuinely cannot show them again — which is the property that makes "write
 // these down now" an honest instruction rather than a scare.
 func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
-	uid, ok := h.enrollmentPrincipalNoPassword(w, r)
+	uid, tokenVersion, sessionID, ok := h.enrollmentPrincipalNoPassword(w, r)
 	if !ok {
 		return
 	}
@@ -522,6 +534,14 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 			"two-factor authentication is already enabled"))
 		return
 	}
+	if row.EnrollmentTokenVersion == nil || *row.EnrollmentTokenVersion != tokenVersion {
+		h.writeChallengeError(w, ErrChallengeInvalid)
+		return
+	}
+	if !enrollmentSessionMatches(row.EnrollmentSessionID, sessionID) {
+		h.writeChallengeError(w, ErrChallengeInvalid)
+		return
+	}
 	secret, err := h.cipher.Decrypt(row.Ciphertext, row.Nonce)
 	if err != nil {
 		h.logger.Error("totp confirm decrypt", "err", err)
@@ -534,15 +554,39 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 			"that code is not valid"))
 		return
 	}
-	if err := h.repo.ConfirmTOTP(r.Context(), uid, counter); err != nil {
-		h.logger.Error("totp confirm", "err", err)
+	codes, hashes, err := h.newRecoveryCodeSet(uid)
+	if err != nil {
+		h.logger.Error("recovery codes", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-
-	codes, err := h.mintRecoveryCodes(r.Context(), uid)
+	var challenge *Challenge
+	if _, authenticated := authctx.FromContext(r.Context()); !authenticated {
+		ch, err := h.repo.ResolveChallenge(r.Context(), cookieValue(r, CookiePreAuth), PurposeEnroll2FA)
+		if err != nil {
+			h.writeChallengeError(w, err)
+			return
+		}
+		challenge = &ch
+	}
+	user, tok, err := h.repo.CompleteTOTPEnrollment(r.Context(), uid, tokenVersion,
+		TOTPProof{Counter: counter, Ciphertext: row.Ciphertext, Nonce: row.Nonce}, hashes,
+		sessionID, challenge, h.ttl, clientIP(r), r.UserAgent())
 	if err != nil {
-		h.logger.Error("recovery codes", "err", err)
+		if errors.Is(err, ErrTOTPEnrollmentChanged) {
+			httperr.Write(w, httperr.New(http.StatusConflict, "enrollment_changed",
+				"the enrollment changed; verify the current authenticator secret"))
+			return
+		}
+		if errors.Is(err, ErrChallengeInvalid) {
+			h.writeChallengeError(w, err)
+			return
+		}
+		if errors.Is(err, ErrSessionInvalid) {
+			h.writeSessionInvalid(w)
+			return
+		}
+		h.logger.Error("totp confirm", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
@@ -550,20 +594,8 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 	// Enrolling from the pre-auth (admin enrollment) flow completes the login:
 	// the password was proven to get the challenge and the authenticator has
 	// just been proven too, so there is nothing left to ask for.
-	if ch, err := h.repo.ResolveChallenge(r.Context(), cookieValue(r, CookiePreAuth), PurposeEnroll2FA); err == nil {
-		_ = h.repo.ConsumeChallenge(r.Context(), ch.ID)
+	if challenge != nil {
 		h.cookies.ClearPreAuth(w)
-		user, uerr := h.repo.GetUser(r.Context(), uid)
-		if uerr != nil {
-			httperr.Write(w, httperr.ErrInternal)
-			return
-		}
-		tok, _, ierr := h.repo.IssueSession(r.Context(), uid, h.ttl, clientIP(r), r.UserAgent())
-		if ierr != nil {
-			h.logger.Error("issue session after enrollment", "err", ierr)
-			httperr.Write(w, httperr.ErrInternal)
-			return
-		}
 		h.cookies.SetSession(w, tok)
 		payload := h.authenticatedPayload(user, tok.CSRF)
 		payload["recovery_codes"] = codes
@@ -602,13 +634,26 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 			"administrators must keep two-factor authentication enabled"))
 		return
 	}
-	if !h.verifyPasswordOr401(w, r, p.UserID, in.Password) {
+	proof, stepUpKey, ok := h.stepUpTOTPProof(w, r, p.UserID, in.Code)
+	if !ok {
 		return
 	}
-	if !h.checkStepUpCode(w, r, p.UserID, in.Code) {
+	err = h.repo.DisableTOTP(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, *proof)
+	h.settleStepUp(stepUpKey, err)
+	if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
+			"password is incorrect"))
 		return
 	}
-	if err := h.repo.DisableTOTP(r.Context(), p.UserID); err != nil {
+	if errors.Is(err, ErrTOTPReplay) {
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
+		return
+	}
+	if errors.Is(err, ErrSessionInvalid) {
+		h.writeSessionInvalid(w)
+		return
+	}
+	if err != nil {
 		h.logger.Error("disable totp", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
@@ -629,13 +674,38 @@ func (h *Handler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request
 		httperr.Write(w, err)
 		return
 	}
-	if !h.verifyPasswordOr401(w, r, p.UserID, in.Password) {
+	user, err := h.repo.GetUser(r.Context(), p.UserID)
+	if err != nil {
+		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	if !h.checkStepUpCode(w, r, p.UserID, in.Code) {
+	proof, stepUpKey, ok := h.stepUpTOTPProof(w, r, p.UserID, in.Code)
+	if !ok {
 		return
 	}
-	codes, err := h.mintRecoveryCodes(r.Context(), p.UserID)
+	codes, hashes, err := h.newRecoveryCodeSet(p.UserID)
+	if err != nil {
+		h.stepUpUser.Release(stepUpKey)
+		h.logger.Error("regenerate recovery codes", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	err = h.repo.RegenerateRecoveryCodes(r.Context(), p.UserID, p.SessionID, user.TokenVersion,
+		in.Password, *proof, hashes)
+	h.settleStepUp(stepUpKey, err)
+	if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
+			"password is incorrect"))
+		return
+	}
+	if errors.Is(err, ErrTOTPReplay) {
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
+		return
+	}
+	if errors.Is(err, ErrSessionInvalid) {
+		h.writeSessionInvalid(w)
+		return
+	}
 	if err != nil {
 		h.logger.Error("regenerate recovery codes", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -668,27 +738,41 @@ func (h *Handler) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 // Shared helpers
 // ─────────────────────────────────────────────────────────────────────
 
-// checkStepUpCode verifies a current TOTP code under an attempt budget, writing
-// the refusal itself.
+// stepUpTOTPProof verifies a current TOTP code under an attempt budget and
+// returns the exact row/counter proof for transactional consumption.
 //
 // The budget is what separates these endpoints from Verify2FA, which is capped
 // by auth_challenge.attempts. There is no challenge on a session-authenticated
 // step-up, so without a limiter an attacker holding a hijacked session could
 // grind the ~3 codes valid at any instant out of a space of a million.
-func (h *Handler) checkStepUpCode(w http.ResponseWriter, r *http.Request, uid authctx.UserID, code string) bool {
+func (h *Handler) stepUpTOTPProof(w http.ResponseWriter, r *http.Request,
+	uid authctx.UserID, code string) (*TOTPProof, string, bool) {
+
 	key := "stepup:" + strconv.FormatInt(int64(uid), 10)
 	until, ok := h.stepUpUser.Begin(key)
 	if !ok {
 		writeRateLimited(w, until)
-		return false
+		return nil, "", false
 	}
-	if !h.checkTOTP(r.Context(), uid, normalizeOTPCode(code)) {
+	proof := h.verifyTOTPProof(r.Context(), uid, normalizeOTPCode(code))
+	if proof == nil {
 		h.stepUpUser.CommitFail(key)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
-		return false
+		return nil, "", false
 	}
-	h.stepUpUser.CommitSuccess(key)
-	return true
+	return proof, key, true
+}
+
+func (h *Handler) settleStepUp(key string, err error) {
+	switch {
+	case err == nil:
+		h.stepUpUser.CommitSuccess(key)
+	case errors.Is(err, ErrTOTPReplay), errors.Is(err, ErrBadCredentials),
+		errors.Is(err, ErrPasswordMissing), errors.Is(err, ErrSessionInvalid):
+		h.stepUpUser.CommitFail(key)
+	default:
+		h.stepUpUser.Release(key)
+	}
 }
 
 // requireChallenge resolves the pre-auth cookie or writes the refusal.
@@ -712,7 +796,7 @@ func (h *Handler) writeChallengeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrChallengeExhausted):
 		h.cookies.ClearPreAuth(w)
 		httperr.Write(w, httperr.New(http.StatusTooManyRequests, "too_many_attempts",
-			"too many incorrect codes; sign in again"))
+			"too many incorrect codes; try again later"))
 	case errors.Is(err, ErrChallengeInvalid):
 		h.cookies.ClearPreAuth(w)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "challenge_invalid",
@@ -723,6 +807,11 @@ func (h *Handler) writeChallengeError(w http.ResponseWriter, err error) {
 	}
 }
 
+func (h *Handler) writeSessionInvalid(w http.ResponseWriter) {
+	h.cookies.ClearSession(w)
+	httperr.Write(w, httperr.New(http.StatusUnauthorized, "session_expired", "session expired"))
+}
+
 // enrollmentPrincipal resolves who is enrolling, demanding a password from a
 // session-authenticated caller.
 //
@@ -730,97 +819,89 @@ func (h *Handler) writeChallengeError(w http.ResponseWriter, err error) {
 // from settings, and an admin diverted into mandatory enrollment mid-login. The
 // second has no session yet and has already proven the password; the first has
 // a session and must prove it again.
-func (h *Handler) enrollmentPrincipal(w http.ResponseWriter, r *http.Request) (authctx.UserID, bool) {
+func (h *Handler) enrollmentPrincipal(w http.ResponseWriter, r *http.Request) (authctx.UserID, int, int64, bool) {
 	if p, ok := authctx.FromContext(r.Context()); ok {
 		in, err := httperr.DecodeJSON[totpStartInput](w, r)
 		if err != nil {
 			httperr.Write(w, err)
-			return 0, false
+			return 0, 0, 0, false
 		}
-		if !h.verifyPasswordOr401(w, r, p.UserID, in.Password) {
-			return 0, false
+		tokenVersion, err := h.repo.VerifyUserPasswordEpoch(r.Context(), p.UserID, in.Password)
+		if err != nil {
+			if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
+				httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
+					"password is incorrect"))
+			} else {
+				h.logger.Error("verify enrollment password", "err", err)
+				httperr.Write(w, httperr.ErrInternal)
+			}
+			return 0, 0, 0, false
 		}
-		return p.UserID, true
+		return p.UserID, tokenVersion, p.SessionID, true
 	}
 	ch, ok := h.requireChallenge(w, r, PurposeEnroll2FA)
 	if !ok {
-		return 0, false
+		return 0, 0, 0, false
 	}
-	return ch.UserID, true
+	return ch.UserID, ch.TokenVersion, 0, true
 }
 
 // enrollmentPrincipalNoPassword is the same resolution for the endpoints that
 // act on an ALREADY-CREATED pending enrollment (the QR image and the confirm
 // step), where the password was proven by the call that created it.
-func (h *Handler) enrollmentPrincipalNoPassword(w http.ResponseWriter, r *http.Request) (authctx.UserID, bool) {
+func (h *Handler) enrollmentPrincipalNoPassword(w http.ResponseWriter, r *http.Request) (authctx.UserID, int, int64, bool) {
 	if p, ok := authctx.FromContext(r.Context()); ok {
-		return p.UserID, true
+		user, err := h.repo.GetUser(r.Context(), p.UserID)
+		if err != nil {
+			httperr.Write(w, httperr.ErrInternal)
+			return 0, 0, 0, false
+		}
+		return p.UserID, user.TokenVersion, p.SessionID, true
 	}
 	ch, ok := h.requireChallenge(w, r, PurposeEnroll2FA)
 	if !ok {
-		return 0, false
+		return 0, 0, 0, false
 	}
-	return ch.UserID, true
+	return ch.UserID, ch.TokenVersion, 0, true
 }
 
-func (h *Handler) verifyPasswordOr401(w http.ResponseWriter, r *http.Request, uid authctx.UserID, password string) bool {
-	switch err := h.repo.VerifyUserPassword(r.Context(), uid, password); {
-	case err == nil:
-		return true
-	case errors.Is(err, ErrBadCredentials), errors.Is(err, ErrPasswordMissing):
-		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
-			"password is incorrect"))
-		return false
-	default:
-		h.logger.Error("verify password", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return false
+func enrollmentSessionMatches(stored *int64, current int64) bool {
+	if current == 0 {
+		return stored == nil
 	}
+	return stored != nil && *stored == current
 }
 
-// mintRecoveryCodes generates, stores and returns a fresh set.
-func (h *Handler) mintRecoveryCodes(ctx context.Context, uid authctx.UserID) ([]string, error) {
+// newRecoveryCodeSet generates a fresh display set and its stored digests.
+func (h *Handler) newRecoveryCodeSet(uid authctx.UserID) ([]string, [][]byte, error) {
 	codes, err := newRecoveryCodes(recoveryCodeCount)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	hashes := make([][]byte, 0, len(codes))
 	for _, c := range codes {
-		// Hash the NORMALIZED form, because verification normalizes too. Storing
+		// MAC the NORMALIZED form, because verification normalizes too. Storing
 		// the display form with its hyphen would make every typed code fail.
-		hashes = append(hashes, secrets.Hash(normalizeRecoveryCode(c)))
+		hashes = append(hashes, h.codeMAC.RecoveryCodeDigest(uid, normalizeRecoveryCode(c)))
 	}
-	if err := h.repo.ReplaceRecoveryCodes(ctx, uid, hashes); err != nil {
-		return nil, err
-	}
-	return codes, nil
+	return codes, hashes, nil
 }
 
-func (h *Handler) notifyRecoveryCodeUsed(u User) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		remaining, err := h.repo.CountRecoveryCodes(ctx, u.ID)
-		if err != nil {
-			return
-		}
-		if err := h.mailer.Send(ctx, mailer.RecoveryCodeUsedMessage(u.Email, remaining)); err != nil {
-			h.logger.Error("recovery code notification", "err", err)
-		}
-	}()
+func (h *Handler) notifyRecoveryCodeUsed(ctx context.Context, u User) {
+	remaining, err := h.repo.CountRecoveryCodes(ctx, u.ID)
+	if err != nil {
+		return
+	}
+	h.enqueueMail(mailer.RecoveryCodeUsedMessage(u.Email, remaining), "recovery code notification")
 }
 
-// sendAsync delivers a message on a detached context.
-//
-// The request must not wait on SMTP — a slow or dead mail server would turn
-// every code request into a timeout — and the request's own context is
-// cancelled the moment the handler returns, so it cannot be reused here.
-func (h *Handler) sendAsync(msg mailer.Message, what string) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := h.mailer.Send(ctx, msg); err != nil {
-			h.logger.Error("send mail", "what", what, "err", err)
-		}
-	}()
+func (h *Handler) enqueueMail(msg mailer.Message, what string) {
+	if err := h.dispatcher.Enqueue(msg, what); err != nil {
+		h.logger.Warn("mail not queued", "what", what, "err", err)
+	}
+}
+
+func writeMailQueueUnavailable(w http.ResponseWriter) {
+	httperr.Write(w, httperr.New(http.StatusServiceUnavailable, "mail_queue_full",
+		"mail delivery is busy; try again shortly"))
 }

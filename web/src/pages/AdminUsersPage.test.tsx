@@ -124,29 +124,25 @@ describe('AdminUsersPage', () => {
     await waitFor(() => expect(del).toHaveBeenCalledWith('/api/admin/users/2'))
   })
 
-  /**
-   * The lockout exit for a Google-only account whose Google is gone. The
-   * password is shown to the ADMIN and never mailed: the mailbox may be exactly
-   * the channel the account lost.
-   */
-  it('shows the temporary password once after a forced reset', async () => {
+  it('confirms that recovery went only to the target mailbox', async () => {
     const u = userEvent.setup()
-    vi.spyOn(http, 'post').mockResolvedValue({
-      data: { temporary_password: 'ABCDE-FGHJK-MNPQR' },
-    } as never)
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
     render([me, user({ id: 2, has_password: false })])
 
     const row = await rowFor('user2@foldex.test')
-    await u.click(row.getByRole('button', { name: /reset password/i }))
+    await u.click(row.getByRole('button', { name: /send recovery/i }))
     await u.click(await screen.findByRole('button', { name: /^confirm$/i }))
 
-    expect(await screen.findByTestId('temp-password')).toHaveTextContent('ABCDE-FGHJK-MNPQR')
-    expect(screen.getByText(/not by e-mail/i)).toBeInTheDocument()
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/api/admin/users/2/force-password-reset'),
+    )
+    expect(await screen.findByText(/recovery link was sent/i)).toBeInTheDocument()
+    expect(screen.queryByTestId('temp-password')).not.toBeInTheDocument()
   })
 
   it('refuses a forced reset on your own account', async () => {
     const row = await (render([me, user({ id: 2 })]), rowFor(me.email))
-    expect(row.getByRole('button', { name: /reset password/i })).toBeDisabled()
+    expect(row.getByRole('button', { name: /send recovery/i })).toBeDisabled()
   })
 
   // ── Invitations ─────────────────────────────────────────────────────
@@ -154,14 +150,14 @@ describe('AdminUsersPage', () => {
   it('shows the invite link once, because the log driver has no inbox', async () => {
     const u = userEvent.setup()
     vi.spyOn(http, 'post').mockResolvedValue({
-      data: { id: 1, email: 'new@foldex.test', role: 'user', accept_url: 'https://x/?invite=tok' },
+      data: { id: 1, email: 'new@foldex.test', role: 'user', accept_url: 'https://x/#invite=tok' },
     } as never)
     render([me])
 
     await u.type(await screen.findByLabelText(/e-mail address/i), 'new@foldex.test')
     await u.click(screen.getByRole('button', { name: /send invitation/i }))
 
-    expect(await screen.findByTestId('invite-link')).toHaveTextContent('https://x/?invite=tok')
+    expect(await screen.findByTestId('invite-link')).toHaveTextContent('https://x/#invite=tok')
   })
 
   it('reports a duplicate address instead of failing silently', async () => {

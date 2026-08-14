@@ -84,13 +84,42 @@ describe('App', () => {
     expect(mainarea.style.getPropertyValue('--fx-cols')).toBe('3')
   })
 
+  it('removes an unsupported persisted density and uses the default', async () => {
+    localStorage.setItem('foldex.grid.cols', '7')
+    renderWithProviders(<App />)
+
+    await waitFor(() => expect(document.querySelector('.fx-mainarea')).not.toBeNull())
+    const mainarea = document.querySelector('.fx-mainarea') as HTMLElement
+    expect(mainarea.style.getPropertyValue('--fx-cols')).toBe('5')
+    expect(localStorage.getItem('foldex.grid.cols')).toBeNull()
+  })
+
+  it('removes a garbage persisted view mode and falls back to cards', async () => {
+    localStorage.setItem('foldex.viewMode.map', JSON.stringify({ home: 'garbage' }))
+    renderWithProviders(<App />)
+
+    expect((await screen.findAllByRole('button', { name: /^Cards$/i }))
+      .some((button) => button.classList.contains('fx-vs-active'))).toBe(true)
+    expect(localStorage.getItem('foldex.viewMode.map')).toBeNull()
+  })
+
   it('toggles sort buttons (Novos/Top/Recentes)', async () => {
     renderWithProviders(<App />)
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /^Top$/i }))
     expect(screen.getByRole('button', { name: /^Top$/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(localStorage.getItem('foldex.sort')).toBe('"clicks"')
     await user.click(screen.getByRole('button', { name: /^Recent$/i }))
     expect(screen.getByRole('button', { name: /^Recent$/i })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('removes an unsupported persisted sort and uses the default', async () => {
+    localStorage.setItem('foldex.sort', '"garbage"')
+    renderWithProviders(<App />)
+
+    expect((await screen.findAllByRole('button', { name: /^Newest$/i }))
+      .some((button) => button.getAttribute('aria-pressed') === 'true')).toBe(true)
+    expect(localStorage.getItem('foldex.sort')).toBeNull()
   })
 
   it('toggles a tag filter via the sidebar', async () => {
@@ -335,6 +364,34 @@ describe('App', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 
+  it('merges a dropped note and link into a new root folder and opens the naming dialog', async () => {
+    state.links.push({
+      id: 1, url: 'https://a', title: 'Alpha', slug: 'alpha', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    })
+    state.notes.push({
+      id: 2, title: 'Beta note', slug: 'beta-note', body_html: '', click_count: 0,
+      pinned: false, folder_id: null, cover_url: null, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    renderWithProviders(<App />)
+    await waitFor(() => expect(screen.getByText('Beta note')).toBeInTheDocument())
+
+    fireEvent.drop(screen.getByText('Alpha').closest('.fx-card') as HTMLElement, {
+      dataTransfer: {
+        types: ['application/x-foldex-note'],
+        getData: (type: string) => type === 'application/x-foldex-note' ? '2' : '',
+      },
+    })
+
+    await waitFor(() => expect(state.folders).toHaveLength(1))
+    await waitFor(() => expect(state.links[0].folder_id).toBe(state.folders[0].id))
+    await waitFor(() => expect(state.notes[0].folder_id).toBe(state.folders[0].id))
+    expect(state.folders[0].parent_id).toBeNull()
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/delete folder/i)).not.toBeInTheDocument()
+  })
+
   it('clicking a locked folder shows the password prompt instead of navigating', async () => {
     state.folders.push({
       id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
@@ -371,6 +428,44 @@ describe('App', () => {
     // control is folder-view-only, and the prompt input is gone.
     await waitFor(() => expect(screen.queryByLabelText('folder password')).not.toBeInTheDocument())
     expect(screen.queryByText(/Your link base/i)).not.toBeInTheDocument()
+  })
+
+  it('forwards the current unlock token when deleting the open protected folder', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
+    await user.type(await screen.findByLabelText('folder password'), 'hunter22')
+    await user.click(screen.getByRole('button', { name: /unlock/i }))
+    await waitFor(() => expect(screen.queryByLabelText('folder password')).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: /edit folder Secret/i }))
+    await user.click(await screen.findByLabelText(/delete folder, keep links/i))
+    await user.click(await screen.findByRole('button', { name: /^Delete folder$/i }))
+    await waitFor(() => expect(state.folders).toHaveLength(0))
+  })
+
+  it('prompts for the password when deleting a protected folder from its card', async () => {
+    state.folders.push({
+      id: 1, name: 'Secret', color: '#000', parent_id: null, has_password: true,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.folderPasswords[1] = 'hunter22'
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Secret/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /^Edit folder$/i }))
+    await user.click(await screen.findByLabelText(/delete folder, keep links/i))
+    await user.click(await screen.findByRole('button', { name: /^Delete folder$/i }))
+
+    await user.type(await screen.findByLabelText('folder password'), 'hunter22')
+    await user.click(screen.getByRole('button', { name: /unlock/i }))
+    await waitFor(() => expect(state.folders).toHaveLength(0))
   })
 
   it('wrong password keeps the prompt open with an inline error and never navigates', async () => {

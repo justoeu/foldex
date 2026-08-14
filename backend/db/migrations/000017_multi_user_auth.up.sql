@@ -191,8 +191,8 @@ CREATE TABLE auth_challenge (
 CREATE UNIQUE INDEX auth_challenge_token_hash_uniq ON auth_challenge (token_hash);
 CREATE INDEX auth_challenge_expires_idx ON auth_challenge (expires_at);
 
--- 6-digit e-mail OTP. Stored as sha256 — 6 digits is only ~20 bits, so the real
--- defense is the 3-attempt cap + 5-minute TTL, NOT the hash.
+-- 6-digit e-mail OTP. Initially stored as SHA-256; migration 000023 invalidates
+-- those rows and runtime now stores a keyed, user/challenge-bound HMAC digest.
 CREATE TABLE email_otp (
     id           BIGSERIAL PRIMARY KEY,
     user_id      BIGINT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
@@ -234,10 +234,9 @@ CREATE TABLE totp_secret (
     CONSTRAINT totp_alg_check    CHECK (algorithm IN ('SHA1', 'SHA256', 'SHA512'))
 );
 
--- Single-use recovery codes. sha256 (NOT bcrypt): verification must look the
--- code up by hash in O(1). bcrypt would force a sequential compare against all
--- 10 rows (~1s at DefaultCost) and still need a full scan. The codes carry ~50
--- bits of entropy, which is what makes the fast hash safe.
+-- Single-use recovery codes. Initially 50-bit values under plain SHA-256;
+-- migration 000023 invalidates those rows. Runtime now issues 80-bit values and
+-- stores a purpose-separated, user-bound HMAC for indexed verification.
 CREATE TABLE recovery_code (
     id         BIGSERIAL PRIMARY KEY,
     user_id    BIGINT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,

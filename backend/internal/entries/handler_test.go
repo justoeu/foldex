@@ -19,12 +19,14 @@ import (
 )
 
 type fakeList struct {
-	out []Entry
-	err error
-	q   ListQuery
+	out   []Entry
+	err   error
+	q     ListQuery
+	calls int
 }
 
 func (f *fakeList) List(_ context.Context, _ authctx.UserID, q ListQuery) ([]Entry, error) {
+	f.calls++
 	f.q = q
 	return f.out, f.err
 }
@@ -79,6 +81,18 @@ func TestList_FolderLookupErr(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mount(h).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?folder_id=1", nil))
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestList_FolderLookupMissingFailsClosed(t *testing.T) {
+	fl := &fakeList{out: []Entry{{Kind: "note", ID: 1, Title: "secret"}}}
+	h := NewHandler(fl, nil, nil)
+	rec := httptest.NewRecorder()
+
+	mount(h).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?folder_id=1", nil))
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "secret")
+	assert.Zero(t, fl.calls, "the repository must not run without the folder gate")
 }
 
 func TestList_RepoErr(t *testing.T) {

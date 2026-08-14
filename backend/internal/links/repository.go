@@ -5,14 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/entityrefs"
 	"foldex/internal/folders"
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/domainerr"
+	"foldex/internal/pkg/listquery"
 	"foldex/internal/pkg/pgerr"
+	sharedslug "foldex/internal/pkg/slug"
 	"foldex/internal/tags"
 )
 
@@ -77,25 +81,6 @@ func scanLink(s rowScanner, l *Link) error {
 }
 
 func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateInput) (Link, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return Link{}, err
-	}
-	// The closure is load-bearing: the slug-collision loop below REASSIGNS tx,
-	// and `defer tx.Rollback(ctx)` would capture the receiver at defer time —
-	// i.e. the FIRST transaction — leaving every replacement tx neither
-	// committed nor rolled back. Its connection then stays checked out of the
-	// pool forever holding an aborted transaction, so the pool bleeds one
-	// connection per retry until Acquire blocks and the backend stops serving.
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	// Slug strategy:
-	//   - User-supplied: use as-is, surface UNIQUE violations as ErrConflict.
-	//   - Auto-derived from title: try the bare slug first, fall back to
-	//     "-2", "-3", … on collision (capped at 999 to avoid pathological
-	//     loops). Empty Slugify output → "link-<placeholder>" pre-INSERT;
-	//     since we don't have the id yet we use a UUID-ish marker, but the
-	//     simpler path is "link-untitled" + suffix-on-collision.
 	userSupplied := in.Slug != nil
 	var slug string
 	if userSupplied {
@@ -107,51 +92,30 @@ func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateIn
 		}
 	}
 
-	var id int64
-	// A personal bookmark manager will never see more than a handful of
-	// slug collisions (two links with the same title). Cap at 100 so a
-	// bug that spins the loop is caught fast by an operator reading logs.
-	for attempt := 0; attempt < 100; attempt++ {
-		candidate := slug
-		if attempt > 0 {
-			candidate = fmt.Sprintf("%s-%d", slug, attempt+1)
-		}
-		err = tx.QueryRow(ctx, `
+	id, err := sharedslug.CreateWithRetry(ctx, r.pool, slug, userSupplied, isSlugUniqueViolation,
+		func(ctx context.Context, tx pgx.Tx, candidate string) (int64, error) {
+			var id int64
+			err := tx.QueryRow(ctx, `
             INSERT INTO link (user_id, url, title, slug, description, pinned, folder_id, check_interval)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING id
         `, int64(uid), in.URL, in.Title, candidate, in.Description, in.Pinned, in.FolderID, in.CheckInterval).Scan(&id)
-		if err == nil {
-			break
-		}
-		if isURLUniqueViolation(err) {
-			return Link{}, httperr.New(409, "url_taken", "url already in use")
-		}
-		if isSlugUniqueViolation(err) {
-			if userSupplied {
-				return Link{}, httperr.New(409, "slug_taken", "slug already in use")
+			if err != nil && !isURLUniqueViolation(err) && !isSlugUniqueViolation(err) {
+				return 0, fmt.Errorf("insert link: %w", err)
 			}
-			// Roll back the failed INSERT — Postgres aborts the tx on a
-			// constraint violation, so reopening is required for the next
-			// attempt.
-			_ = tx.Rollback(ctx)
-			tx, err = r.pool.Begin(ctx)
-			if err != nil {
-				return Link{}, fmt.Errorf("retry begin tx: %w", err)
-			}
-			continue
-		}
-		return Link{}, fmt.Errorf("insert link: %w", err)
+			return id, err
+		},
+		func(ctx context.Context, tx pgx.Tx, id int64) error {
+			return setLinkTags(ctx, tx, uid, id, in.TagIDs, in.PendingTags)
+		},
+	)
+	if isURLUniqueViolation(err) {
+		return Link{}, ErrURLTaken
 	}
-	if id == 0 {
-		return Link{}, fmt.Errorf("could not allocate a unique slug after 100 attempts")
+	if userSupplied && isSlugUniqueViolation(err) {
+		return Link{}, ErrSlugTaken
 	}
-
-	if err := setLinkTags(ctx, tx, uid, id, in.TagIDs); err != nil {
-		return Link{}, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
+	if err != nil {
 		return Link{}, err
 	}
 	return r.Get(ctx, uid, id)
@@ -168,7 +132,7 @@ func isURLUniqueViolation(err error) bool {
 	return pgerr.UniqueConstraint(err) == "link_user_url_unique"
 }
 
-// AssertOwned reports httperr.ErrNotFound unless uid owns link id. It is the
+// AssertOwned reports domainerr.ErrNotFound unless uid owns link id. It is the
 // ownership check for callers that need the ANSWER but not the ROW.
 //
 // Get is the wrong tool for that: it runs a LEFT JOIN LATERAL over click_log
@@ -184,19 +148,19 @@ func (r *Repository) AssertOwned(ctx context.Context, uid authctx.UserID, id int
 		return fmt.Errorf("assert link owned: %w", err)
 	}
 	if !ok {
-		return httperr.ErrNotFound
+		return domainerr.ErrNotFound
 	}
 	return nil
 }
 
 // Get returns the link owned by uid. A link belonging to another user reports
-// httperr.ErrNotFound, never 403 — a 403 would confirm the id exists and turn
-// this into a cross-tenant enumeration oracle.
+// domainerr.ErrNotFound, never a permission error, so the id does not become a
+// cross-tenant enumeration oracle.
 func (r *Repository) Get(ctx context.Context, uid authctx.UserID, id int64) (Link, error) {
 	var l Link
 	err := scanLink(r.pool.QueryRow(ctx, `SELECT `+linkColumns+linkFrom+` WHERE l.user_id = $1 AND l.id = $2`, int64(uid), id), &l)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Link{}, httperr.ErrNotFound
+		return Link{}, domainerr.ErrNotFound
 	}
 	if err != nil {
 		return Link{}, fmt.Errorf("get link: %w", err)
@@ -219,7 +183,7 @@ func (r *Repository) GetBySlug(ctx context.Context, uid authctx.UserID, slug str
 	var l Link
 	err := scanLink(r.pool.QueryRow(ctx, `SELECT `+linkColumns+linkFrom+` WHERE l.user_id = $1 AND l.slug = $2`, int64(uid), slug), &l)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Link{}, httperr.ErrNotFound
+		return Link{}, domainerr.ErrNotFound
 	}
 	if err != nil {
 		return Link{}, fmt.Errorf("get link by slug: %w", err)
@@ -236,73 +200,13 @@ func (r *Repository) GetBySlug(ctx context.Context, uid authctx.UserID, slug str
 }
 
 func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) ([]Link, error) {
-	args := []any{}
-	where := []string{}
+	planner := listquery.NewPlanner(q)
+	scope := planner.AddScope(uid, listquery.LinkEntity(folders.SQLNotInLockedFolder("l")))
+	page := planner.AddPage(listquery.LinkOrder())
+	sql := `SELECT ` + linkColumns + linkFrom + " WHERE " + strings.Join(scope.Where, " AND ")
+	sql += fmt.Sprintf(" ORDER BY %s LIMIT $%d OFFSET $%d", page.OrderBy, page.LimitArg, page.OffsetArg)
 
-	// The tenant predicate leads every WHERE so the (user_id, …) composite
-	// indexes from migration 000017 can be used.
-	args = append(args, int64(uid))
-	where = append(where, fmt.Sprintf("l.user_id = $%d", len(args)))
-
-	if q.Q != "" {
-		args = append(args, "%"+q.Q+"%")
-		idx := len(args)
-		where = append(where, fmt.Sprintf("(l.title ILIKE $%d OR l.url ILIKE $%d OR COALESCE(l.description,'') ILIKE $%d)", idx, idx, idx))
-	}
-	if len(q.TagIDs) > 0 {
-		args = append(args, q.TagIDs)
-		idx := len(args)
-		where = append(where, fmt.Sprintf(`l.id IN (
-            SELECT entity_id FROM link_tag
-            WHERE entity_kind = 'link' AND tag_id = ANY($%d)
-            GROUP BY entity_id
-            HAVING count(DISTINCT tag_id) = %d
-        )`, idx, len(q.TagIDs)))
-	}
-	// Folder filter: explicit FolderID wins over Ungrouped if both are set.
-	// Unscoped lists omit password-protected folders (handler gates scoped
-	// folder_id via CheckUnlock when wired).
-	if q.FolderID != nil {
-		args = append(args, *q.FolderID)
-		where = append(where, fmt.Sprintf("l.folder_id = $%d", len(args)))
-	} else if q.Ungrouped {
-		where = append(where, "l.folder_id IS NULL")
-	} else {
-		where = append(where, folders.SQLNotInLockedFolder("l"))
-	}
-
-	// Pinned links always come first regardless of the requested sort.
-	// Click-related ordering references the derived columns (cl.cnt /
-	// cl.last_at) since they don't live on `link` anymore.
-	order := "l.pinned DESC, l.created_at DESC"
-	switch q.Sort {
-	case "clicks":
-		order = "l.pinned DESC, COALESCE(cl.cnt, 0) DESC, l.created_at DESC"
-	case "recent":
-		order = "l.pinned DESC, COALESCE(cl.last_at, l.created_at) DESC"
-	case "alpha":
-		order = "l.pinned DESC, lower(l.title) ASC, l.created_at DESC"
-	case "alpha_desc":
-		order = "l.pinned DESC, lower(l.title) DESC, l.created_at DESC"
-	}
-
-	limit := q.Limit
-	if limit <= 0 || limit > 500 {
-		limit = 100
-	}
-	offset := q.Offset
-	if offset < 0 {
-		offset = 0
-	}
-	args = append(args, limit, offset)
-
-	sql := `SELECT ` + linkColumns + linkFrom
-	if len(where) > 0 {
-		sql += " WHERE " + strings.Join(where, " AND ")
-	}
-	sql += fmt.Sprintf(" ORDER BY %s LIMIT $%d OFFSET $%d", order, len(args)-1, len(args))
-
-	rows, err := r.pool.Query(ctx, sql, args...)
+	rows, err := r.pool.Query(ctx, sql, planner.Args()...)
 	if err != nil {
 		return nil, fmt.Errorf("list links: %w", err)
 	}
@@ -380,7 +284,7 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	// the live title for that, so resolve it inside the same tx so we read
 	// the about-to-be-updated value if `in.Title` was also set.
 	if in.SlugSet {
-		newSlug, err := resolveUpdateSlug(ctx, tx, "link", id, in.Slug, in.Title)
+		newSlug, err := resolveUpdateSlug(ctx, tx, uid, "link", id, in.Slug, in.Title)
 		if err != nil {
 			return Link{}, err
 		}
@@ -421,10 +325,10 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 		ct, err := tx.Exec(ctx, q, args...)
 		if err != nil {
 			if isURLUniqueViolation(err) {
-				return Link{}, httperr.New(409, "url_taken", "url already in use")
+				return Link{}, ErrURLTaken
 			}
 			if isSlugUniqueViolation(err) {
-				return Link{}, httperr.New(409, "slug_taken", "slug already in use")
+				return Link{}, ErrSlugTaken
 			}
 			return Link{}, fmt.Errorf("update link: %w", err)
 		}
@@ -435,19 +339,23 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 					return Link{}, fmt.Errorf("check link exists: %w", err)
 				}
 				if exists {
-					return Link{}, httperr.New(409, "conflict", "link was modified; refetch and retry")
+					return Link{}, ErrStaleWrite
 				}
 			}
-			return Link{}, httperr.ErrNotFound
+			return Link{}, domainerr.ErrNotFound
 		}
 	}
-	if in.TagIDs != nil {
+	if in.TagIDs != nil || len(in.PendingTags) > 0 {
 		// A tag-only PATCH still must not touch a link the caller does not own:
 		// nothing above ran a WHERE user_id when `sets` was empty.
 		if err := assertLinkOwned(ctx, tx, uid, id); err != nil {
 			return Link{}, err
 		}
-		if err := setLinkTags(ctx, tx, uid, id, *in.TagIDs); err != nil {
+		tagIDs := []int64(nil)
+		if in.TagIDs != nil {
+			tagIDs = *in.TagIDs
+		}
+		if err := setLinkTags(ctx, tx, uid, id, tagIDs, in.PendingTags); err != nil {
 			return Link{}, err
 		}
 	}
@@ -466,7 +374,7 @@ func assertLinkOwned(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int6
 		return fmt.Errorf("check link owner: %w", err)
 	}
 	if !exists {
-		return httperr.ErrNotFound
+		return domainerr.ErrNotFound
 	}
 	return nil
 }
@@ -488,18 +396,15 @@ func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64) e
 	if err := assertLinkOwned(ctx, tx, uid, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM link_tag WHERE entity_kind = 'link' AND entity_id = $1`, id); err != nil {
-		return fmt.Errorf("delete link_tag: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM click_log WHERE entity_kind = 'link' AND entity_id = $1`, id); err != nil {
-		return fmt.Errorf("delete click_log: %w", err)
+	if err := entityrefs.PurgeOne(ctx, tx, "link", id); err != nil {
+		return err
 	}
 	ct, err := tx.Exec(ctx, `DELETE FROM link WHERE user_id = $1 AND id = $2`, int64(uid), id)
 	if err != nil {
 		return fmt.Errorf("delete link: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return httperr.ErrNotFound
+		return domainerr.ErrNotFound
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit delete tx: %w", err)
@@ -525,9 +430,64 @@ func (r *Repository) UpdateOGImage(ctx context.Context, uid authctx.UserID, id i
 		return fmt.Errorf("update og_image_url: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return httperr.ErrNotFound
+		return domainerr.ErrNotFound
 	}
 	return nil
+}
+
+// ReplaceOGImage publishes a manual image and returns the exact local URL it
+// superseded so the caller can safely clean up after the row lock is released.
+func (r *Repository) ReplaceOGImage(ctx context.Context, uid authctx.UserID, id int64, imageURL string) (*string, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin replace og_image_url: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var previous *string
+	err = tx.QueryRow(ctx, `
+		SELECT og_image_url
+		FROM link
+		WHERE user_id = $1 AND id = $2
+		FOR UPDATE
+	`, int64(uid), id).Scan(&previous)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domainerr.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock link image: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE link
+		SET og_image_url   = $1,
+		    preview_status = 'ok',
+		    preview_error  = NULL,
+		    updated_at     = now()
+		WHERE user_id = $2 AND id = $3
+	`, imageURL, int64(uid), id); err != nil {
+		return nil, fmt.Errorf("replace og_image_url: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit replace og_image_url: %w", err)
+	}
+	return previous, nil
+}
+
+// UpdateOGImageIfUnchanged publishes a captured image only while the exact row
+// observed before the expensive capture still exists unchanged.
+func (r *Repository) UpdateOGImageIfUnchanged(ctx context.Context, uid authctx.UserID, id int64, imageURL string, expectedUpdatedAt time.Time) (bool, error) {
+	ct, err := r.pool.Exec(ctx, `
+		UPDATE link
+		SET og_image_url   = $1,
+		    preview_status = 'ok',
+		    preview_error  = NULL,
+		    updated_at     = now()
+		WHERE user_id = $2 AND id = $3 AND updated_at = $4
+	`, imageURL, int64(uid), id, expectedUpdatedAt)
+	if err != nil {
+		return false, fmt.Errorf("conditionally update og_image_url: %w", err)
+	}
+	return ct.RowsAffected() == 1, nil
 }
 
 // ClearOGImage sets og_image_url to NULL for the given link.
@@ -542,7 +502,7 @@ func (r *Repository) ClearOGImage(ctx context.Context, uid authctx.UserID, id in
 		return fmt.Errorf("clear og_image_url: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return httperr.ErrNotFound
+		return domainerr.ErrNotFound
 	}
 	return nil
 }
@@ -561,7 +521,7 @@ func (r *Repository) MarkChangeSeen(ctx context.Context, uid authctx.UserID, id 
 		return fmt.Errorf("mark change seen: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return httperr.ErrNotFound
+		return domainerr.ErrNotFound
 	}
 	return nil
 }
@@ -623,6 +583,6 @@ func (r *Repository) tagsFor(ctx context.Context, uid authctx.UserID, linkIDs []
 	return tags.TagsForEntities(ctx, r.pool, uid, "link", linkIDs)
 }
 
-func setLinkTags(ctx context.Context, tx pgx.Tx, uid authctx.UserID, linkID int64, tagIDs []int64) error {
-	return tags.SetEntityTags(ctx, tx, uid, "link", linkID, tagIDs)
+func setLinkTags(ctx context.Context, tx pgx.Tx, uid authctx.UserID, linkID int64, tagIDs []int64, pending []tags.CreateInput) error {
+	return tags.SetEntityTagsWithPending(ctx, tx, uid, "link", linkID, tagIDs, pending)
 }

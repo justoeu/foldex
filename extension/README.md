@@ -10,6 +10,8 @@ Vanilla Manifest V3 extension — no bundler needed. Load directly as "unpacked"
 4. Click the puzzle icon and pin **Foldex Capture**.
 5. Right-click the icon → **Options** → set the backend URL (default `http://localhost:9089`)
    and paste an **API token**.
+6. Press **Save** or **Test connection**, then choose **Allow** when the browser asks for
+   access to that Foldex server.
 
 ## Getting an API token
 
@@ -27,6 +29,18 @@ download a backup. Those endpoints refuse bearer tokens outright, so a token pas
 a config file is not your account. Revoke one from the same screen and it stops working
 immediately.
 
+## Server access permission
+
+Foldex Capture does not request permanent access to every website at installation. **Save**
+and **Test connection** request optional access only to the origin in **Backend base URL**,
+for example `https://foldex.example/*`. The URL is normalized before it is saved; an optional
+reverse-proxy path such as `https://example.com/foldex/` is retained, while query strings,
+fragments, and trailing slashes are removed. URLs with embedded credentials are rejected.
+
+If you deny the prompt, settings are not saved and no connection test or popup save is sent.
+Click the same button again and choose **Allow**. The popup checks the currently configured
+origin before loading tags and asks again only when you explicitly press **Save**.
+
 ## Usage
 
 Click the icon on any tab → URL and title are pre-filled → pick tags → **Save** (or ⌘/Ctrl+Enter).
@@ -41,6 +55,7 @@ The popup closes automatically on success and the SPA picks up the new link with
   upgraded in either order. Leave it empty unless your server still sets the variable.
 - Getting `not signed in`? The token is missing, revoked, expired, or belongs to a
   disabled account. Mint a new one.
-- No build step — edit `popup.js` / `options.js` directly, then click the **reload** icon
+- No build step — edit `popup.js` / `options.js` / `config.js` directly, then click the **reload** icon
   on the extension card.
+- Automated tests use Bun with a mocked `chrome` API: run `cd extension && bun test`.
 - Icons under `icons/` are placeholders; drop your own 16/48/128 PNGs to replace them.

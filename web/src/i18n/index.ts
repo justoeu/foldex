@@ -19,6 +19,18 @@ export type LocaleCode = (typeof SUPPORTED_LOCALES)[number]['code']
 
 const STORAGE_KEY = 'foldex.locale'
 
+export function sanitizePersistedLocale() {
+  if (typeof localStorage === 'undefined') return
+  try {
+    const locale = localStorage.getItem(STORAGE_KEY)
+    if (locale !== null && !SUPPORTED_LOCALES.some(({ code }) => code === locale)) {
+      localStorage.removeItem(STORAGE_KEY)
+    }
+  } catch { /* storage unavailable */ }
+}
+
+sanitizePersistedLocale()
+
 void i18n
   .use(LanguageDetector)
   .use(initReactI18next)

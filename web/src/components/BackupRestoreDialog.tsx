@@ -5,7 +5,7 @@ import { Icon, I } from './icons'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import {
-  restoreBackup,
+  useRestoreBackup,
   validateBackup,
   type BackupValidation,
   type RestoreReport,
@@ -27,6 +27,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
   const [mode, setMode] = useState<Mode>('skip')
   const [restoring, setRestoring] = useState(false)
   const [report, setReport] = useState<RestoreReport | null>(null)
+  const restoreBackup = useRestoreBackup()
 
   useEscape(onClose, true)
 
@@ -49,7 +50,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
     setRestoring(true)
     setErrMsg(null)
     try {
-      const r = await restoreBackup(file, mode)
+      const r = await restoreBackup.mutateAsync({ file, mode })
       setReport(r)
     } catch (e: unknown) {
       setErrMsg(extractErr(e, t('common.unknown_error')))

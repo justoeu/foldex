@@ -5,15 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/entityrefs"
+	"foldex/internal/notemedia"
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/domainerr"
 )
 
 // maxSerializationRetries bounds SERIALIZABLE update retries on SQLSTATE 40001
@@ -69,7 +70,7 @@ func (r *Repository) PasswordHashFor(ctx context.Context, uid authctx.UserID, id
 	var hash *string
 	err := r.pool.QueryRow(ctx, `SELECT password_hash FROM folder WHERE user_id = $1 AND id = $2`, int64(uid), id).Scan(&hash)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, httperr.ErrNotFound
+		return nil, domainerr.ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get folder password hash: %w", err)
@@ -234,7 +235,7 @@ func (r *Repository) Get(ctx context.Context, uid authctx.UserID, id int64) (Fol
         FROM folder WHERE user_id = $1 AND id = $2
     `, int64(uid), id).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &passwordHash, &f.PasswordHint)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Folder{}, httperr.ErrNotFound
+		return Folder{}, domainerr.ErrNotFound
 	}
 	if err != nil {
 		return Folder{}, fmt.Errorf("get folder: %w", err)
@@ -379,7 +380,7 @@ func (r *Repository) updateOnce(
 	var scannedHash *string
 	err = tx.QueryRow(ctx, q, args...).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &scannedHash, &f.PasswordHint)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Folder{}, httperr.ErrNotFound
+		return Folder{}, domainerr.ErrNotFound
 	}
 	if err != nil {
 		return Folder{}, fmt.Errorf("update folder: %w", err)
@@ -412,13 +413,13 @@ func checkPasswordChangeAuthorized(ctx context.Context, tx pgx.Tx, uid authctx.U
 	var currentHash *string
 	if err := tx.QueryRow(ctx, `SELECT password_hash FROM folder WHERE user_id = $1 AND id = $2`, int64(uid), id).Scan(&currentHash); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return httperr.ErrNotFound
+			return domainerr.ErrNotFound
 		}
 		return fmt.Errorf("read current password hash: %w", err)
 	}
 	if currentHash != nil {
 		if currentPassword == nil || !VerifyPassword(*currentHash, *currentPassword) {
-			return httperr.New(http.StatusUnauthorized, "wrong_password", "current password is required to change or remove an existing password")
+			return ErrWrongPassword
 		}
 	}
 	return nil
@@ -434,16 +435,16 @@ func checkHintNotPassword(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id
 	if !passwordSet {
 		if err := tx.QueryRow(ctx, `SELECT password_hash FROM folder WHERE user_id = $1 AND id = $2`, int64(uid), id).Scan(&effHash); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return httperr.ErrNotFound
+				return domainerr.ErrNotFound
 			}
 			return fmt.Errorf("read password hash for hint check: %w", err)
 		}
 	}
 	if effHash == nil {
-		return httperr.New(http.StatusBadRequest, "invalid_input", "cannot set a password hint on a folder without a password")
+		return ErrHintWithoutPassword
 	}
 	if VerifyPassword(*effHash, hint) {
-		return httperr.New(http.StatusBadRequest, "invalid_input", "password hint must not be the same as the password")
+		return ErrHintMatchesPassword
 	}
 	return nil
 }
@@ -459,7 +460,7 @@ func (r *Repository) ResetPasswordByMaster(ctx context.Context, uid authctx.User
 		return fmt.Errorf("reset folder password: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return httperr.ErrNotFound
+		return domainerr.ErrNotFound
 	}
 	return nil
 }
@@ -486,26 +487,64 @@ func checkParentCycle(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id, ne
 		return fmt.Errorf("cycle check: %w", err)
 	}
 	if cycles {
-		// Typed 409 so the API client sees a clean conflict (extension /
-		// frontend handle "user picked a descendant as parent"). Without
-		// this, httperr.Write fell through to 500 and the UI couldn't tell
-		// the user-fixable case apart from a real server error.
-		return httperr.New(409, "parent_cycle", "parent_id would create a folder cycle")
+		return ErrParentCycle
 	}
 	return nil
 }
 
 // Delete removes the folder. ON DELETE SET NULL in the FK makes every contained
-// link survive — `link.folder_id` flips back to NULL.
-func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64) error {
-	ct, err := r.pool.Exec(ctx, `DELETE FROM folder WHERE user_id = $1 AND id = $2`, int64(uid), id)
+// link survive — `link.folder_id` flips back to NULL. The password hash is
+// locked and checked in the same transaction as the delete, so a concurrent
+// password change cannot make a stale unlock token authorize the mutation.
+func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, unlockKey []byte, unlockToken string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin delete folder tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := authorizeFolderDelete(ctx, tx, uid, id, unlockKey, unlockToken); err != nil {
+		return err
+	}
+	ct, err := tx.Exec(ctx, `DELETE FROM folder WHERE user_id = $1 AND id = $2`, int64(uid), id)
 	if err != nil {
 		return fmt.Errorf("delete folder: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return httperr.ErrNotFound
+		return domainerr.ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete folder: %w", err)
 	}
 	return nil
+}
+
+func authorizeFolderDelete(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int64, unlockKey []byte, unlockToken string) error {
+	var passwordHash *string
+	err := tx.QueryRow(ctx, `
+		SELECT password_hash FROM folder
+		WHERE user_id = $1 AND id = $2
+		FOR UPDATE
+	`, int64(uid), id).Scan(&passwordHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domainerr.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock folder for delete: %w", err)
+	}
+	return CheckUnlock(unlockKey, id, passwordHash, unlockToken)
+}
+
+type descendantProtectedError struct {
+	Count int64
+}
+
+func (e *descendantProtectedError) Error() string {
+	return "folder subtree contains password-protected descendants"
+}
+
+func (e *descendantProtectedError) Unwrap() error {
+	return ErrDescendantProtected
 }
 
 // DeleteCascade removes the folder AND every link AND note inside it —
@@ -517,12 +556,15 @@ func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64) e
 //
 // Subtree ids are materialized once into a temp table (N1-NEX-008) so the
 // recursive walk is not recomputed for every DML statement.
-func (r *Repository) DeleteCascade(ctx context.Context, uid authctx.UserID, id int64) error {
+func (r *Repository) DeleteCascade(ctx context.Context, uid authctx.UserID, id int64, unlockKey []byte, unlockToken string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin cascade delete tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := authorizeFolderDelete(ctx, tx, uid, id, unlockKey, unlockToken); err != nil {
+		return err
+	}
 
 	if _, err := tx.Exec(ctx, `
         CREATE TEMP TABLE _cascade_subtree ON COMMIT DROP AS
@@ -537,43 +579,54 @@ func (r *Repository) DeleteCascade(ctx context.Context, uid authctx.UserID, id i
     `, id, int64(uid)); err != nil {
 		return fmt.Errorf("materialize cascade subtree: %w", err)
 	}
+	rows, err := tx.Query(ctx, `
+		SELECT f.id, f.password_hash
+		FROM folder f
+		WHERE f.user_id = $1
+		  AND f.id IN (SELECT id FROM _cascade_subtree)
+		ORDER BY f.id
+		FOR UPDATE
+	`, int64(uid))
+	if err != nil {
+		return fmt.Errorf("lock cascade subtree: %w", err)
+	}
+	var protectedDescendants int64
+	for rows.Next() {
+		var folderID int64
+		var passwordHash *string
+		if err := rows.Scan(&folderID, &passwordHash); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan cascade subtree: %w", err)
+		}
+		if folderID != id && passwordHash != nil {
+			protectedDescendants++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read cascade subtree: %w", err)
+	}
+	rows.Close()
+	if protectedDescendants > 0 {
+		return &descendantProtectedError{Count: protectedDescendants}
+	}
 
-	if _, err := tx.Exec(ctx, `
-        DELETE FROM link_tag WHERE entity_kind = 'link' AND entity_id IN (
-          SELECT l.id FROM link l WHERE l.folder_id IN (SELECT id FROM _cascade_subtree)
-        )
-    `); err != nil {
-		return fmt.Errorf("delete link_tag for links in subtree: %w", err)
+	if err := notemedia.ReleaseFolderSubtreeRefs(ctx, tx, uid); err != nil {
+		return err
+	}
+	if err := entityrefs.PurgeFolderSubtree(ctx, tx, uid); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, `
-        DELETE FROM click_log WHERE entity_kind = 'link' AND entity_id IN (
-          SELECT l.id FROM link l WHERE l.folder_id IN (SELECT id FROM _cascade_subtree)
-        )
-    `); err != nil {
-		return fmt.Errorf("delete click_log for links in subtree: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-        DELETE FROM link_tag WHERE entity_kind = 'note' AND entity_id IN (
-          SELECT n.id FROM note n WHERE n.folder_id IN (SELECT id FROM _cascade_subtree)
-        )
-    `); err != nil {
-		return fmt.Errorf("delete link_tag for notes in subtree: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-        DELETE FROM click_log WHERE entity_kind = 'note' AND entity_id IN (
-          SELECT n.id FROM note n WHERE n.folder_id IN (SELECT id FROM _cascade_subtree)
-        )
-    `); err != nil {
-		return fmt.Errorf("delete click_log for notes in subtree: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-        DELETE FROM link WHERE folder_id IN (SELECT id FROM _cascade_subtree)
-    `); err != nil {
+        DELETE FROM link
+        WHERE user_id = $1 AND folder_id IN (SELECT id FROM _cascade_subtree)
+    `, int64(uid)); err != nil {
 		return fmt.Errorf("delete links in subtree: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-        DELETE FROM note WHERE folder_id IN (SELECT id FROM _cascade_subtree)
-    `); err != nil {
+        DELETE FROM note
+        WHERE user_id = $1 AND folder_id IN (SELECT id FROM _cascade_subtree)
+    `, int64(uid)); err != nil {
 		return fmt.Errorf("delete notes in subtree: %w", err)
 	}
 	ct, err := tx.Exec(ctx, `
@@ -583,7 +636,7 @@ func (r *Repository) DeleteCascade(ctx context.Context, uid authctx.UserID, id i
 		return fmt.Errorf("delete folder subtree: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return httperr.ErrNotFound
+		return domainerr.ErrNotFound
 	}
 	return tx.Commit(ctx)
 }

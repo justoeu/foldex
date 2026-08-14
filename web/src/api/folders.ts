@@ -121,10 +121,17 @@ export function useResetFolderPassword() {
 export function useDeleteFolder() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (args: number | { id: number; cascade?: boolean }) => {
+    mutationFn: async (args: number | { id: number; cascade?: boolean; unlockToken?: string }) => {
       const id = typeof args === 'number' ? args : args.id
       const cascade = typeof args === 'object' && args.cascade ? '?cascade=1' : ''
-      await http.delete(`/api/folders/${id}${cascade}`)
+      const unlockToken = typeof args === 'object' ? args.unlockToken : undefined
+      if (unlockToken) {
+        await http.delete(`/api/folders/${id}${cascade}`, {
+          headers: { [FOLDER_UNLOCK_HEADER]: unlockToken },
+        })
+      } else {
+        await http.delete(`/api/folders/${id}${cascade}`)
+      }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['folders'] })

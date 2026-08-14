@@ -12,6 +12,21 @@ type CreateInput struct {
 	Icon  *string `json:"icon"`
 }
 
+func NormalizeCreateInputs(inputs []CreateInput) {
+	for i := range inputs {
+		inputs[i].Normalize()
+	}
+}
+
+func ValidateCreateInputs(inputs []CreateInput) error {
+	for i := range inputs {
+		if err := inputs[i].Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *CreateInput) Normalize() {
 	c.Name = strings.TrimSpace(c.Name)
 	c.Color = strings.TrimSpace(c.Color)

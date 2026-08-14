@@ -1,9 +1,11 @@
 package backup
 
 import (
+	"errors"
 	"time"
 
 	"foldex/internal/pkg/cssvalid"
+	"foldex/internal/pkg/pwhash"
 )
 
 // Magic discriminator written into every manifest. Reject zips that don't have
@@ -20,7 +22,9 @@ const ManifestVersion = "1.0"
 // v10 = migration 000015 adds folder.password_hash.
 // v11 = migration 000016 adds app_setting + folder.password_hint.
 // v12 = migration 000017 multi-user (user_id on every content table).
-const CurrentSchemaVersion = 12
+// v13 = migration 000022 adds owner-scoped note media leases + references.
+// v14 = migration 000027 adds the owner-scoped durable restore ledger.
+const CurrentSchemaVersion = 14
 
 // DatabaseSnapshotVersion is the schema of database.json itself. v3 = adds
 // link_tags + click_logs to v2 (which had tags/folders/links only). v4 = adds
@@ -29,8 +33,7 @@ const CurrentSchemaVersion = 12
 // unchanged). An older backup (no "notes" key) decodes fine — missing array
 // fields default to nil/empty. Stays at v4 for the 000015 folder.password_hash
 // addition: FolderRow just gained one more nullable field, no new top-level
-// snapshot key or decoder options (no DisallowUnknownFields anywhere in this
-// package) — an old backup without "password_hash" restores every folder as
+// snapshot key or decoder options — an old backup without "password_hash" restores every folder as
 // unprotected, exactly like any other missing-field default. v5 = adds
 // app_settings (the master recovery password hash, ADR-29) + folder rows gain
 // a password_hint field; an older backup lacking either restores with the
@@ -38,8 +41,12 @@ const CurrentSchemaVersion = 12
 // adds owner_email, and app_settings became read-but-IGNORED — the master
 // password is a per-user secret now and no auth material ships in the ZIP at
 // all. A v5 backup still restores; its app_settings array is dropped with a
-// warning.
-const DatabaseSnapshotVersion = 6
+// warning. v7 changes note-file restore semantics: every notes/<uuid> key is
+// re-keyed and associated with caller-owned note_media rows; user_id remains
+// absent and is rejected as an unknown field.
+const DatabaseSnapshotVersion = 7
+
+var errInvalidPasswordHash = errors.New("invalid password hash in backup")
 
 type Counts struct {
 	Links     int64 `json:"links"`
@@ -124,6 +131,15 @@ func (s *Snapshot) Sanitize() int {
 		}
 	}
 	return coerced
+}
+
+func (s *Snapshot) validatePasswordHashes() error {
+	for _, folder := range s.Folders {
+		if folder.PasswordHash != nil && !pwhash.IsSupported(*folder.PasswordHash) {
+			return errInvalidPasswordHash
+		}
+	}
+	return nil
 }
 
 type TagRow struct {

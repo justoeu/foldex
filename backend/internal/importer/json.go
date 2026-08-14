@@ -11,10 +11,13 @@ import (
 	"foldex/internal/pkg/cssvalid"
 )
 
-// maxImportClickCount bounds the per-link click_count an import may request.
-// insertLinkInTx materializes one click_log row per count via generate_series,
-// so an unbounded value is a single-field OOM/disk-fill amplifier.
-const maxImportClickCount = 10_000
+const (
+	// maxImportClickCount bounds one link's synthetic history.
+	maxImportClickCount = 10_000
+	// maxImportTotalClicks bounds the whole request, preventing a valid
+	// 50,000-link file from multiplying the per-link cap into 500M rows.
+	maxImportTotalClicks = 1_000_000
+)
 
 type JSONFile struct {
 	Version    int          `json:"version"`
@@ -87,6 +90,7 @@ func (f JSONFile) Validate() error {
 			return fmt.Errorf("tags[%d]: color must be a hex (#abc, #aabbcc) or linear-gradient(135deg, #hex, #hex)", i)
 		}
 	}
+	var totalClicks int64
 	for i, l := range f.Links {
 		rawURL := strings.TrimSpace(l.URL)
 		if rawURL == "" {
@@ -105,6 +109,10 @@ func (f JSONFile) Validate() error {
 		if l.ClickCount < 0 || l.ClickCount > maxImportClickCount {
 			return fmt.Errorf("links[%d]: click_count out of range (0..%d)", i, maxImportClickCount)
 		}
+		if l.ClickCount > maxImportTotalClicks-totalClicks {
+			return fmt.Errorf("links[%d]: cumulative click_count exceeds %d", i, maxImportTotalClicks)
+		}
+		totalClicks += l.ClickCount
 		for j, tagName := range l.Tags {
 			tname := strings.TrimSpace(tagName)
 			if tname == "" {

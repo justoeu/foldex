@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"foldex/internal/links"
+	"foldex/internal/pkg/listquery"
 )
 
 // Entry is a flat union of link + note fields with a Kind discriminator.
@@ -54,12 +55,4 @@ type Entry struct {
 	BodyTextSnippet *string `json:"body_text_snippet,omitempty"`
 }
 
-type ListQuery struct {
-	Q         string
-	TagIDs    []int64
-	Sort      string
-	Limit     int
-	Offset    int
-	FolderID  *int64
-	Ungrouped bool
-}
+type ListQuery = listquery.Params

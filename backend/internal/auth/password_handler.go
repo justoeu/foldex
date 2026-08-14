@@ -51,6 +51,17 @@ func (h *Handler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
+	admission, qerr := h.dispatcher.Reserve()
+	if qerr != nil {
+		h.logger.Warn("password reset mail not queued", "err", qerr)
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	defer func() {
+		if admission != nil {
+			admission.Release()
+		}
+	}()
 
 	ip := clientIP(r)
 	ipKey := "pwreset:ip:" + ip
@@ -83,15 +94,22 @@ func (h *Handler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		// link, since a link here would let control of the mailbox alone
 		// resurrect a password credential, which is precisely what requiring
 		// the current password during conversion refused to allow.
-		h.sendAsync(mailer.PasswordResetUnavailableMessage(user.Email), "password reset unavailable")
+		if err := admission.Publish(
+			mailer.PasswordResetUnavailableMessage(user.Email), "password reset unavailable"); err != nil {
+			h.logger.Error("publish password reset unavailable mail", "err", err)
+		}
+		admission = nil
 	case eligible:
 		token, terr := h.repo.CreatePasswordReset(r.Context(), user.ID, passwordResetTTL, ip)
 		if terr != nil {
 			h.logger.Error("create password reset", "err", terr)
 			break
 		}
-		h.sendAsync(mailer.PasswordResetMessage(user.Email,
-			h.baseURL+"/?reset="+token, int(passwordResetTTL.Minutes())), "password reset")
+		if err := admission.Publish(mailer.PasswordResetMessage(user.Email,
+			h.baseURL+"/#reset="+token, int(passwordResetTTL.Minutes())), "password reset"); err != nil {
+			h.logger.Error("publish password reset mail", "err", err)
+		}
+		admission = nil
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -199,22 +217,36 @@ func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request) {
 			"this account already has a password; change it instead"))
 		return
 	}
-	// Step up with the second factor when there is one. A session cookie alone
-	// is a weaker proof than the credential being created, and this endpoint
-	// mints a way to sign in that survives the session's death.
-	if user.TOTPEnabled && !h.checkStepUpCode(w, r, p.UserID, in.Code) {
+	var proof *TOTPProof
+	var stepUpKey string
+	if user.TOTPEnabled {
+		var ok bool
+		proof, stepUpKey, ok = h.stepUpTOTPProof(w, r, p.UserID, in.Code)
+		if !ok {
+			return
+		}
+	}
+	err = h.repo.SetPassword(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, proof)
+	if proof != nil {
+		h.settleStepUp(stepUpKey, err)
+	}
+	if errors.Is(err, ErrPasswordExists) {
+		httperr.Write(w, httperr.New(http.StatusConflict, "password_exists",
+			"this account already has a password; change it instead"))
 		return
 	}
-	if err := h.repo.SetPassword(r.Context(), p.UserID, in.Password); err != nil {
+	if errors.Is(err, ErrTOTPReplay) {
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
+		return
+	}
+	if errors.Is(err, ErrSessionInvalid) {
+		h.writeSessionInvalid(w)
+		return
+	}
+	if err != nil {
 		h.logger.Error("set password", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
-	}
-	// Other sessions die, this one lives — the same treatment a password change
-	// gets, and for the same reason: the credential set changed, but signing the
-	// user out of the browser they are using right now would be hostile.
-	if err := h.repo.RevokeAllExcept(r.Context(), p.UserID, p.SessionID, ReasonPasswordChanged); err != nil {
-		h.logger.Error("set password revoke others", "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -256,20 +288,32 @@ func (h *Handler) SendEmailVerification(w http.ResponseWriter, r *http.Request) 
 	// back to the app and retype it for no gain. The token is 256 bits from
 	// crypto/rand, which is what lets the endpoint that consumes it work with
 	// no session at all.
-	token, hash, err := secrets.NewToken()
+	admission, err := h.dispatcher.Reserve()
 	if err != nil {
-		h.logger.Error("verify email token", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
+		writeMailQueueUnavailable(w)
 		return
 	}
-	if err := h.repo.CreateEmailOTP(r.Context(), user.ID, nil, OTPPurposeVerifyEmail,
-		hash, emailVerifyTTL); err != nil {
+	token, err := h.repo.CreateEmailVerification(r.Context(), user.ID, emailVerifyTTL)
+	if errors.Is(err, ErrTooSoon) {
+		admission.Release()
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	if errors.Is(err, ErrEmailAlreadyVerified) {
+		admission.Release()
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		admission.Release()
 		h.logger.Error("verify email store", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	h.sendAsync(mailer.VerifyEmailMessage(user.Email,
-		h.baseURL+"/?verify="+token, int(emailVerifyTTL.Minutes())), "verify email")
+	if err := admission.Publish(mailer.VerifyEmailMessage(user.Email,
+		h.baseURL+"/#verify="+token, int(emailVerifyTTL.Minutes())), "verify email"); err != nil {
+		h.logger.Error("publish verification mail", "err", err)
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 

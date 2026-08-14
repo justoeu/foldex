@@ -92,7 +92,7 @@ describe('EnrollTotpScreen', () => {
    * The single most important behaviour here.
    *
    * Adopting the session swaps the gate over to <App/>, and the recovery codes
-   * are shown exactly once — the server keeps only their hashes. Adopting
+   * are shown exactly once — the server keeps only their keyed digests. Adopting
    * before the user acknowledges them would destroy the only copy that ever
    * exists.
    */

@@ -42,18 +42,21 @@ export type LinkCreate = {
   slug?: string
   description?: string | null
   tag_ids?: number[]
+  pending_tags?: TagCreate[]
   pinned?: boolean
   folder_id?: number | null
   check_interval?: 'hourly' | 'daily' | 'weekly' | null
 }
 
 export type LinkUpdate = Partial<{
+  if_match_updated_at: string
   url: string
   title: string
   // null = regenerate from current title; explicit string = set verbatim.
   slug: string | null
   description: string | null
   tag_ids: number[]
+  pending_tags: TagCreate[]
   pinned: boolean
   folder_id: number | null
   // null on PATCH = opt out (backend wipes fingerprint + timestamps).
@@ -144,16 +147,19 @@ export type NoteCreate = {
   slug?: string
   body_html: string
   tag_ids?: number[]
+  pending_tags?: TagCreate[]
   pinned?: boolean
   folder_id?: number | null
 }
 
 export type NoteUpdate = Partial<{
+  if_match_updated_at: string
   title: string
   // null = regenerate from current title; explicit string = set verbatim.
   slug: string | null
   body_html: string
   tag_ids: number[]
+  pending_tags: TagCreate[]
   pinned: boolean
   folder_id: number | null
 }>

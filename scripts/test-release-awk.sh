@@ -66,6 +66,7 @@ JSON
 (
   # shellcheck disable=SC1090
   source "$HARNESS"
+  # shellcheck disable=SC2034
   NEW="9.9.9"
   update_version "$FIXTURE"
 )
@@ -109,6 +110,7 @@ BEFORE=$(cat "$FIXTURE")
 (
   # shellcheck disable=SC1090
   source "$HARNESS"
+  # shellcheck disable=SC2034
   NEW="9.9.9"
   update_version "$FIXTURE"
 )
@@ -120,6 +122,25 @@ if [ "$BEFORE" != "$AFTER" ]; then
   exit 1
 fi
 echo "✓ case 3: re-running with the same target version is a no-op"
+
+# The explicit version accepted by release.sh must match the workflow's strict
+# semver core: no prerelease/build suffix and no leading zero.
+release_case=$(awk '
+  /^# Compute next version\./ { capturing = 1 }
+  capturing { print }
+  capturing && /^esac$/ { exit }
+' "$RELEASE")
+grep -Fq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' <<<"$release_case" || {
+  echo "✗ explicit release version is not strict semver" >&2
+  exit 1
+}
+for invalid in 01.2.3 1.02.3 1.2.03 1.2.3-rc.1 1x2x3; do
+  if [[ "$invalid" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    echo "✗ invalid explicit release version accepted: $invalid" >&2
+    exit 1
+  fi
+done
+echo "✓ case 4: explicit versions use strict semver"
 
 echo
 echo "release.sh awk update_version() — all assertions passed."

@@ -13,7 +13,7 @@ services:
       - "no-new-privileges:true"
     environment:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ROOT_ACCESS_KEY:-rustfsadmin}
-      RUSTFS_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:?run make env to generate RustFS credentials}
       RUSTFS_ADDRESS: 0.0.0.0:9000
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
       RUSTFS_CONSOLE_ENABLE: "true"
@@ -52,11 +52,12 @@ services:
       RUSTFS_ENDPOINT: rustfs:9000
       RUSTFS_USE_SSL: "false"
       RUSTFS_ROOT_ACCESS_KEY: ${RUSTFS_ROOT_ACCESS_KEY:-rustfsadmin}
-      RUSTFS_ROOT_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:-rustfsadmin}
+      RUSTFS_ROOT_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:?run make env to generate RustFS credentials}
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-foldex}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-foldex-change-me}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?run make env to generate RustFS credentials}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-foldex-screenshots}
       RUSTFS_APP_POLICY: ${RUSTFS_APP_POLICY:-foldex-app}
+      RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS: ${RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS:-0}
     networks:
       - foldex
 
@@ -96,7 +97,14 @@ services:
       # bootstrap administrator and with it every existing link, note, folder
       # and tag. See .env.example.
       AUTH_ENABLED: ${AUTH_ENABLED:-1}
-      AUTH_PUBLIC_URL: ${AUTH_PUBLIC_URL:-https://localhost}
+      # The PORT is part of the default, and leaving it out was a real bug:
+      # this stack serves the SPA on WEB_HTTPS_PORT (9444), so a portless
+      # https://localhost points at 443 where nothing listens — and this value
+      # is what invitation, password-reset and e-mail-verification links are
+      # built from, plus the Google OAuth redirect URI. Every one of them
+      # arrived unusable. Derived from WEB_HTTPS_PORT so changing the port in
+      # .env cannot silently desync the two again.
+      AUTH_PUBLIC_URL: ${AUTH_PUBLIC_URL:-https://localhost:${WEB_HTTPS_PORT:-9444}}
       AUTH_COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:-}
       AUTH_ACCESS_TTL_MIN: ${AUTH_ACCESS_TTL_MIN:-15}
       AUTH_REFRESH_TTL_DAYS: ${AUTH_REFRESH_TTL_DAYS:-30}
@@ -156,9 +164,10 @@ services:
       # Root lives only on rustfs + rustfs-init (RUSTFS_ROOT_*).
       RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-rustfs:9000}
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-foldex}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-foldex-change-me}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?run make env to generate RustFS credentials}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-foldex-screenshots}
       RUSTFS_USE_SSL: ${RUSTFS_USE_SSL:-false}
+      RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS: ${RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS:-0}
       # Change-detection worker. Opt-in per link via link.check_interval;
       # the kill-switch below stops the worker entirely (the scanner won't
       # even spin up its ticker). Defaults are safe for a single-user box
@@ -224,8 +233,12 @@ services:
         VITE_API_BASE: ${VITE_API_BASE:-http://localhost:9089}
     restart: unless-stopped
     environment:
-      # Hostname used in the HTTP→HTTPS redirect (never the request Host header).
-      WEB_PUBLIC_HOST: ${WEB_PUBLIC_HOST:-localhost}
+      # Host:port used in the HTTP→HTTPS redirect (never the request Host
+      # header). The port matters: nginx redirects to https://<this value>, so
+      # a bare `localhost` sends the browser to 443 — nothing listens there and
+      # the redirect dead-ends. Operators serving on 443 with a real domain set
+      # this to the bare hostname and get the standard port back.
+      WEB_PUBLIC_HOST: ${WEB_PUBLIC_HOST:-localhost:${WEB_HTTPS_PORT:-9444}}
     ports:
       # `WEB_BIND_HOST` is loopback-only by default. Set it to `0.0.0.0` in
       # .env when you want to reach the SPA from a phone on the same wifi.

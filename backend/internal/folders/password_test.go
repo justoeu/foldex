@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,8 +12,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"foldex/internal/pkg/httperr"
 )
 
 func TestHashPassword_VerifyPassword_RoundTrip(t *testing.T) {
@@ -95,10 +92,7 @@ func TestCheckUnlock(t *testing.T) {
 
 func assertFolderLocked(t *testing.T, err error) {
 	t.Helper()
-	var he *httperr.Error
-	require.True(t, errors.As(err, &he))
-	assert.Equal(t, http.StatusForbidden, he.Status)
-	assert.Equal(t, "folder_locked", he.Code)
+	require.True(t, errors.Is(err, ErrLocked))
 }
 
 func TestLoadOrGenerateFolderUnlockKey_EnvOverride(t *testing.T) {

@@ -46,26 +46,28 @@ func main() {
 }
 
 type cfg struct {
-	Endpoint     string
-	UseSSL       bool
-	RootAccess   string
-	RootSecret   string
-	AppAccessKey string
-	AppSecretKey string
-	Bucket       string
-	PolicyName   string
+	Endpoint                    string
+	UseSSL                      bool
+	RootAccess                  string
+	RootSecret                  string
+	AppAccessKey                string
+	AppSecretKey                string
+	Bucket                      string
+	PolicyName                  string
+	AllowInsecureDevCredentials bool
 }
 
 func loadCfg() (cfg, error) {
 	c := cfg{
-		Endpoint:     envOr("RUSTFS_ENDPOINT", "localhost:9000"),
-		UseSSL:       envBool("RUSTFS_USE_SSL", false),
-		RootAccess:   envFirst("RUSTFS_ROOT_ACCESS_KEY", "RUSTFS_ROOT_USER", ""),
-		RootSecret:   envFirst("RUSTFS_ROOT_SECRET_KEY", "RUSTFS_ROOT_PASSWORD", ""),
-		AppAccessKey: envOr("RUSTFS_ACCESS_KEY", "foldex"),
-		AppSecretKey: envOr("RUSTFS_SECRET_KEY", ""),
-		Bucket:       envOr("RUSTFS_BUCKET", "foldex-screenshots"),
-		PolicyName:   envOr("RUSTFS_APP_POLICY", "foldex-app"),
+		Endpoint:                    envOr("RUSTFS_ENDPOINT", "localhost:9000"),
+		UseSSL:                      envBool("RUSTFS_USE_SSL", false),
+		RootAccess:                  envFirst("RUSTFS_ROOT_ACCESS_KEY", "RUSTFS_ROOT_USER", ""),
+		RootSecret:                  envFirst("RUSTFS_ROOT_SECRET_KEY", "RUSTFS_ROOT_PASSWORD", ""),
+		AppAccessKey:                envOr("RUSTFS_ACCESS_KEY", "foldex"),
+		AppSecretKey:                envOr("RUSTFS_SECRET_KEY", ""),
+		Bucket:                      envOr("RUSTFS_BUCKET", "foldex-screenshots"),
+		PolicyName:                  envOr("RUSTFS_APP_POLICY", "foldex-app"),
+		AllowInsecureDevCredentials: envBool("RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS", false),
 	}
 	// Strip scheme if an operator pasted a URL.
 	c.Endpoint = strings.TrimPrefix(strings.TrimPrefix(c.Endpoint, "https://"), "http://")
@@ -76,6 +78,9 @@ func loadCfg() (cfg, error) {
 	}
 	if c.AppAccessKey == "" || c.AppSecretKey == "" {
 		return c, fmt.Errorf("RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY (app user) are required")
+	}
+	if !c.AllowInsecureDevCredentials && (knownPlaceholder(c.RootSecret) || knownPlaceholder(c.AppSecretKey)) {
+		return c, fmt.Errorf("RustFS credential placeholder refused; run make env to generate credentials or explicitly set RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS=1 for isolated local development")
 	}
 	if c.AppAccessKey == c.RootAccess {
 		return c, fmt.Errorf("app access key must differ from root access key")
@@ -197,15 +202,31 @@ func bucketPolicy(bucket string) ([]byte, error) {
 		"Statement": []map[string]any{
 			{
 				"Effect": "Allow",
-				"Action": []string{"s3:*"},
-				"Resource": []string{
-					"arn:aws:s3:::" + bucket,
-					"arn:aws:s3:::" + bucket + "/*",
+				"Action": []string{
+					"s3:GetBucketLocation",
+					"s3:ListBucket",
+					"s3:ListBucketMultipartUploads",
 				},
+				"Resource": []string{"arn:aws:s3:::" + bucket},
+			},
+			{
+				"Effect": "Allow",
+				"Action": []string{
+					"s3:AbortMultipartUpload",
+					"s3:DeleteObject",
+					"s3:GetObject",
+					"s3:ListMultipartUploadParts",
+					"s3:PutObject",
+				},
+				"Resource": []string{"arn:aws:s3:::" + bucket + "/*"},
 			},
 		},
 	}
 	return json.Marshal(doc)
+}
+
+func knownPlaceholder(secret string) bool {
+	return secret == "rustfsadmin" || secret == "foldex-change-me"
 }
 
 func isAlreadyExists(err error) bool {

@@ -10,6 +10,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/listquery"
 	"foldex/internal/tags"
 )
 
@@ -28,41 +29,10 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 // og_image_url, preview_status, cover_url, body_snippet — link-only columns
 // are NULL on the note arm and vice versa.
 func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) ([]Entry, error) {
-	args := []any{}
-	linkWhere := []string{}
-	noteWhere := []string{}
-	// Each arm appends its OWN uid placeholder into the shared args slice, so
-	// the click_log aggregates below must reference that arm's index — not a
-	// fixed $1. appendScopeFilters returns it for exactly that reason.
-	linkUIDIdx := appendScopeFilters(&linkWhere, &args, uid, "l", "link", q, true)
-	noteUIDIdx := appendScopeFilters(&noteWhere, &args, uid, "n", "note", q, false)
-
-	// References the UNIONed result's output column names (established by
-	// the link arm's aliases — Postgres requires both arms agree, which they
-	// do here since both arms select/alias every column identically).
-	order := "pinned DESC, created_at DESC"
-	switch q.Sort {
-	case "clicks":
-		order = "pinned DESC, click_count DESC, created_at DESC"
-	case "recent":
-		order = "pinned DESC, COALESCE(last_clicked_at, created_at) DESC"
-	case "alpha":
-		order = "pinned DESC, lower(title) ASC, created_at DESC"
-	case "alpha_desc":
-		order = "pinned DESC, lower(title) DESC, created_at DESC"
-	}
-
-	limit := q.Limit
-	if limit <= 0 || limit > 500 {
-		limit = 100
-	}
-	offset := q.Offset
-	if offset < 0 {
-		offset = 0
-	}
-	args = append(args, limit, offset)
-	limitIdx := len(args) - 1
-	offsetIdx := len(args)
+	planner := listquery.NewPlanner(q)
+	linkScope := planner.AddScope(uid, listquery.LinkEntity(folders.SQLNotInLockedFolder("l")))
+	noteScope := planner.AddScope(uid, listquery.NoteEntity(folders.SQLNotInLockedFolder("n")))
+	page := planner.AddPage(listquery.UnionOrder())
 
 	// Pre-aggregate click_log once per entity_kind instead of LATERAL count(*)
 	// per row (which forces full candidate evaluation before LIMIT on
@@ -76,12 +46,10 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
         FROM link l
         LEFT JOIN (
             SELECT entity_id, count(*)::bigint AS cnt, max(clicked_at) AS last_at
-            FROM click_log WHERE entity_kind = 'link' AND user_id = $%d
+			FROM click_log WHERE entity_kind = 'link' AND user_id = $%d
             GROUP BY entity_id
-        ) clk ON clk.entity_id = l.id`, linkUIDIdx)
-	if len(linkWhere) > 0 {
-		linkSQL += " WHERE " + strings.Join(linkWhere, " AND ")
-	}
+		) clk ON clk.entity_id = l.id`, linkScope.OwnerArg)
+	linkSQL += " WHERE " + strings.Join(linkScope.Where, " AND ")
 
 	noteSQL := fmt.Sprintf(`SELECT 'note' AS kind, n.id, n.title, n.slug, n.pinned, n.folder_id, n.created_at, n.updated_at,
             COALESCE(clk.cnt, 0) AS click_count, clk.last_at AS last_clicked_at,
@@ -94,21 +62,19 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
         FROM note n
         LEFT JOIN (
             SELECT entity_id, count(*)::bigint AS cnt, max(clicked_at) AS last_at
-            FROM click_log WHERE entity_kind = 'note' AND user_id = $%d
+			FROM click_log WHERE entity_kind = 'note' AND user_id = $%d
             GROUP BY entity_id
-        ) clk ON clk.entity_id = n.id`, noteUIDIdx)
-	if len(noteWhere) > 0 {
-		noteSQL += " WHERE " + strings.Join(noteWhere, " AND ")
-	}
+		) clk ON clk.entity_id = n.id`, noteScope.OwnerArg)
+	noteSQL += " WHERE " + strings.Join(noteScope.Where, " AND ")
 
 	// Postgres forbids expressions (e.g. lower(title)) directly in an ORDER BY
 	// that sits right under UNION ALL — only plain output-column references
 	// are allowed there. Wrapping the union in a derived table sidesteps that
 	// restriction entirely since the ORDER BY then applies to a normal
 	// single-FROM query.
-	sql := fmt.Sprintf("SELECT * FROM (\n%s\nUNION ALL\n%s\n) u ORDER BY %s LIMIT $%d OFFSET $%d", linkSQL, noteSQL, order, limitIdx, offsetIdx)
+	sql := fmt.Sprintf("SELECT * FROM (\n%s\nUNION ALL\n%s\n) u ORDER BY %s LIMIT $%d OFFSET $%d", linkSQL, noteSQL, page.OrderBy, page.LimitArg, page.OffsetArg)
 
-	rows, err := r.pool.Query(ctx, sql, args...)
+	rows, err := r.pool.Query(ctx, sql, planner.Args()...)
 	if err != nil {
 		return nil, fmt.Errorf("list entries: %w", err)
 	}
@@ -154,50 +120,4 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
 		}
 	}
 	return out, nil
-}
-
-// appendScopeFilters adds Q/TagIDs/FolderID/Ungrouped predicates for one UNION
-// arm. linkSearch=true uses title|url|description; notes use title|body_text.
-// appendScopeFilters builds one arm's WHERE. uid is appended FIRST so the
-// tenant predicate leads and the (user_id, …) composite indexes from migration
-// 000017 can be used.
-//
-// Note the two arms each get their OWN $n for user_id: placeholder indices come
-// from len(*args) and the arms are built by separate calls into ONE shared args
-// slice, so they must never assume a fixed offset.
-func appendScopeFilters(where *[]string, args *[]any, uid authctx.UserID, alias, kind string, q ListQuery, linkSearch bool) int {
-	*args = append(*args, int64(uid))
-	uidIdx := len(*args)
-	*where = append(*where, fmt.Sprintf("%s.user_id = $%d", alias, uidIdx))
-
-	if q.Q != "" {
-		pattern := "%" + q.Q + "%"
-		*args = append(*args, pattern)
-		idx := len(*args)
-		if linkSearch {
-			*where = append(*where, fmt.Sprintf("(%s.title ILIKE $%d OR %s.url ILIKE $%d OR COALESCE(%s.description,'') ILIKE $%d)", alias, idx, alias, idx, alias, idx))
-		} else {
-			*where = append(*where, fmt.Sprintf("(%s.title ILIKE $%d OR %s.body_text ILIKE $%d)", alias, idx, alias, idx))
-		}
-	}
-	if len(q.TagIDs) > 0 {
-		*args = append(*args, q.TagIDs)
-		idx := len(*args)
-		*where = append(*where, fmt.Sprintf(`%s.id IN (
-            SELECT entity_id FROM link_tag
-            WHERE entity_kind = '%s' AND tag_id = ANY($%d)
-            GROUP BY entity_id
-            HAVING count(DISTINCT tag_id) = %d
-        )`, alias, kind, idx, len(q.TagIDs)))
-	}
-	if q.FolderID != nil {
-		*args = append(*args, *q.FolderID)
-		*where = append(*where, fmt.Sprintf("%s.folder_id = $%d", alias, len(*args)))
-	} else if q.Ungrouped {
-		*where = append(*where, alias+".folder_id IS NULL")
-	} else {
-		// Unscoped grid: never surface content from password-protected folders.
-		*where = append(*where, folders.SQLNotInLockedFolder(alias))
-	}
-	return uidIdx
 }

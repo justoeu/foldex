@@ -24,6 +24,24 @@ type Item struct {
 	CreatedAt   *time.Time // optional; set by JSON import
 }
 
+type netscapeState uint8
+
+const (
+	stateScanning netscapeState = iota
+	stateFolderName
+	stateLinkTitle
+)
+
+type netscapeParser struct {
+	tokenizer   *html.Tokenizer
+	state       netscapeState
+	resumeState netscapeState
+	items       []Item
+	pendingLink Item
+	folderStack []string
+	folderName  strings.Builder
+}
+
 // ParseNetscape walks a Netscape Bookmark HTML file and returns one Item per
 // <A> link. Each <H3> defines a folder scope. The innermost (deepest) H3
 // becomes the link's folder; the outer H3s above it become tags applied to
@@ -31,109 +49,150 @@ type Item struct {
 // folder=Issues with tags=[Bookmarks Bar, Work]). Foldex folders are flat
 // (1-level), so nesting collapses to "deepest wins".
 func ParseNetscape(r io.Reader) ([]Item, error) {
-	z := html.NewTokenizer(r)
-	var (
-		items []Item
-		// stack of tag names from H3 headers; pushed at H3, popped at </DL>.
-		// Empty H3s push "" so stack depth stays in sync with nesting (a bare
-		// </DL> must not pop a parent folder that was never closed).
-		tagStack []string
-		// pendingTag captures the latest H3 text until we hit a closing tag
-		captureTag bool
-		pendingTag string
-	)
+	p := netscapeParser{tokenizer: html.NewTokenizer(r)}
+	return p.parse()
+}
+
+func (p *netscapeParser) parse() ([]Item, error) {
 	for {
-		tt := z.Next()
-		switch tt {
-		case html.ErrorToken:
-			err := z.Err()
-			if errors.Is(err, io.EOF) {
-				return items, nil
-			}
-			return items, err
-		case html.StartTagToken, html.SelfClosingTagToken:
-			t := z.Token()
-			switch strings.ToLower(t.Data) {
-			case "dl":
-				// New folder scope; we don't push here because the H3 that named
-				// it has already been pushed to tagStack at start tag.
-			case "h3":
-				captureTag = true
-				pendingTag = ""
-			case "a":
-				href := attr(t, "href")
-				if href == "" {
-					continue
-				}
-				// Netscape exports are user-supplied and can carry javascript:,
-				// data:, file:, vbscript:, etc. The JSON importer (json.go) and
-				// API DTO both reject non-http(s); the Netscape path used to
-				// trust href blindly, letting hostile URLs reach link.url and
-				// then render as <a href={url}> in LinkDialog or feed the
-				// screenshot endpoint (read-anywhere via file://).
-				if !isHTTPScheme(href) {
-					continue
-				}
-				title := readText(z)
-				it := Item{URL: href, Title: strings.TrimSpace(title)}
-				if it.Title == "" {
-					it.Title = href
-				}
-				if len(tagStack) > 0 {
-					// Deepest non-empty H3 = folder. Outer non-empty H3s = tags.
-					// Empty placeholders (blank H3) keep stack depth but are ignored.
-					folderIdx := -1
-					for i := len(tagStack) - 1; i >= 0; i-- {
-						if tagStack[i] != "" {
-							folderIdx = i
-							break
-						}
-					}
-					if folderIdx >= 0 {
-						f := tagStack[folderIdx]
-						it.Folder = &f
-						for _, name := range tagStack[:folderIdx] {
-							if name != "" {
-								it.Tags = append(it.Tags, name)
-							}
-						}
-					}
-				}
-				items = append(items, it)
-				if len(items) > maxImportItems {
-					return nil, fmt.Errorf("%w: max %d", ErrTooManyItems, maxImportItems)
-				}
-			}
-		case html.TextToken:
-			if captureTag {
-				pendingTag += z.Token().Data
-			}
-		case html.EndTagToken:
-			t := z.Token()
-			switch strings.ToLower(t.Data) {
-			case "h3":
-				if captureTag {
-					// Always push (empty string for blank H3) so </DL> pops
-					// match 1:1 with H3 opens — empty names never become folders.
-					tagStack = append(tagStack, strings.TrimSpace(pendingTag))
-					captureTag = false
-					pendingTag = ""
-				}
-			case "dl":
-				if len(tagStack) > 0 {
-					tagStack = tagStack[:len(tagStack)-1]
-				}
-			}
+		tokenType := p.tokenizer.Next()
+		if tokenType == html.ErrorToken {
+			return p.handleTokenizerError(p.tokenizer.Err())
+		}
+		if err := p.handleToken(tokenType); err != nil {
+			return nil, err
 		}
 	}
 }
 
-// readText consumes the next text token (the body of a tag like <A>title</A>).
-func readText(z *html.Tokenizer) string {
-	if z.Next() == html.TextToken {
-		return z.Token().Data
+func (p *netscapeParser) handleTokenizerError(err error) ([]Item, error) {
+	if p.state == stateLinkTitle {
+		if appendErr := p.finishLink(""); appendErr != nil {
+			return nil, appendErr
+		}
 	}
-	return ""
+	return p.result(err)
+}
+
+func (p *netscapeParser) result(err error) ([]Item, error) {
+	if errors.Is(err, io.EOF) {
+		return p.items, nil
+	}
+	return p.items, err
+}
+
+func (p *netscapeParser) handleToken(tokenType html.TokenType) error {
+	if p.state == stateLinkTitle {
+		return p.handleLinkTitle(tokenType)
+	}
+	switch tokenType {
+	case html.StartTagToken, html.SelfClosingTagToken:
+		p.handleStartToken(p.tokenizer.Token())
+	case html.TextToken:
+		p.handleTextToken(p.tokenizer.Token())
+	case html.EndTagToken:
+		p.handleEndToken(p.tokenizer.Token())
+	}
+	return nil
+}
+
+func (p *netscapeParser) handleStartToken(token html.Token) {
+	switch strings.ToLower(token.Data) {
+	case "h3":
+		p.state = stateFolderName
+		p.folderName.Reset()
+	case "a":
+		p.beginLink(token)
+	}
+}
+
+func (p *netscapeParser) handleTextToken(token html.Token) {
+	if p.state == stateFolderName {
+		p.folderName.WriteString(token.Data)
+	}
+}
+
+func (p *netscapeParser) handleEndToken(token html.Token) {
+	switch strings.ToLower(token.Data) {
+	case "h3":
+		p.closeFolderName()
+	case "dl":
+		p.popFolder()
+	}
+}
+
+func (p *netscapeParser) closeFolderName() {
+	if p.state != stateFolderName {
+		return
+	}
+	// Blank placeholders keep malformed and browser-generated DL closes aligned.
+	p.folderStack = append(p.folderStack, strings.TrimSpace(p.folderName.String()))
+	p.state = stateScanning
+	p.folderName.Reset()
+}
+
+func (p *netscapeParser) popFolder() {
+	if len(p.folderStack) == 0 {
+		return
+	}
+	p.folderStack = p.folderStack[:len(p.folderStack)-1]
+}
+
+func (p *netscapeParser) beginLink(token html.Token) {
+	href := attr(token, "href")
+	if href == "" || !isHTTPScheme(href) {
+		return
+	}
+	p.pendingLink = Item{URL: href}
+	p.resumeState = p.state
+	p.state = stateLinkTitle
+}
+
+func (p *netscapeParser) handleLinkTitle(tokenType html.TokenType) error {
+	if tokenType == html.TextToken {
+		return p.finishLink(p.tokenizer.Token().Data)
+	}
+	return p.finishLink("")
+}
+
+func (p *netscapeParser) finishLink(title string) error {
+	item := p.pendingLink
+	item.Title = strings.TrimSpace(title)
+	if item.Title == "" {
+		item.Title = item.URL
+	}
+	p.pendingLink = Item{}
+	p.state = p.resumeState
+	p.applyFolderScope(&item)
+	p.items = append(p.items, item)
+	if len(p.items) > maxImportItems {
+		return fmt.Errorf("%w: max %d", ErrTooManyItems, maxImportItems)
+	}
+	return nil
+}
+
+func (p *netscapeParser) applyFolderScope(item *Item) {
+	folderIndex := deepestNonBlank(p.folderStack)
+	if folderIndex < 0 {
+		return
+	}
+
+	folder := p.folderStack[folderIndex]
+	item.Folder = &folder
+	for _, name := range p.folderStack[:folderIndex] {
+		if name != "" {
+			item.Tags = append(item.Tags, name)
+		}
+	}
+}
+
+func deepestNonBlank(names []string) int {
+	for i := len(names) - 1; i >= 0; i-- {
+		if names[i] != "" {
+			return i
+		}
+	}
+	return -1
 }
 
 // isHTTPScheme reports whether href parses to an http or https URL. Treats

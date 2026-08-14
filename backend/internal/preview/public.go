@@ -2,8 +2,8 @@ package preview
 
 import (
 	"context"
-	"net"
-	"net/url"
+
+	"foldex/internal/pkg/netpolicy"
 )
 
 // IsPublicURL reports whether the URL's hostname resolves to ONLY public IP
@@ -15,22 +15,5 @@ import (
 // env opt-out. The default preview HTML fetch keeps the permissive behavior
 // because intranet links are foldex's primary use case.
 func IsPublicURL(ctx context.Context, pageURL string) bool {
-	u, err := url.Parse(pageURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return false
-	}
-	host := u.Hostname()
-	if host == "" {
-		return false
-	}
-	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
-	if err != nil || len(ips) == 0 {
-		return false
-	}
-	for _, ip := range ips {
-		if isIMDS(ip) || isPrivateIP(ip) {
-			return false
-		}
-	}
-	return true
+	return netpolicy.IsPublicURL(ctx, pageURL)
 }

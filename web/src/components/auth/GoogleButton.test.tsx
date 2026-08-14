@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { GoogleButton } from './GoogleButton'
 import { renderWithProviders } from '../../test/renderWithProviders'
 import * as auth from '../../api/auth'
+import { http } from '../../api/client'
 
 /**
  * Starting the OAuth flow is a full-page navigation, not a fetch: the flow
@@ -23,22 +24,20 @@ describe('googleStartUrl', () => {
     expect(auth.googleStartUrl('login')).toBe('/api/auth/oauth/google/start?purpose=login')
   })
 
-  // An invitation token is a credential and may contain characters that would
-  // otherwise terminate the query string.
-  it('encodes an invitation token', () => {
+  it('never puts an invitation token in the start URL', () => {
     expect(auth.googleStartUrl('accept_invite', 'tok en/+')).toBe(
-      '/api/auth/oauth/google/start?purpose=accept_invite&invite=tok+en%2F%2B',
+      '/api/auth/oauth/google/invite/start',
     )
   })
 
   it('omits the invite parameter when there is none', () => {
-    expect(auth.googleStartUrl('link')).not.toContain('invite')
+    expect(auth.googleStartUrl('login')).not.toContain('invite')
   })
 })
 
 describe('GoogleButton', () => {
   it('starts the flow for its purpose', async () => {
-    const start = vi.spyOn(auth, 'startGoogleOAuth').mockImplementation(() => {})
+    const start = vi.spyOn(auth, 'startGoogleOAuth').mockResolvedValue()
     renderWithProviders(<GoogleButton purpose="login" />)
 
     await userEvent.setup().click(screen.getByRole('button', { name: /continue with google/i }))
@@ -46,16 +45,49 @@ describe('GoogleButton', () => {
   })
 
   it('passes the invitation token through', async () => {
-    const start = vi.spyOn(auth, 'startGoogleOAuth').mockImplementation(() => {})
+    const start = vi.spyOn(auth, 'startGoogleOAuth').mockResolvedValue()
     renderWithProviders(<GoogleButton purpose="accept_invite" invite="tok" />)
 
     await userEvent.setup().click(screen.getByRole('button'))
     expect(start).toHaveBeenCalledWith('accept_invite', 'tok')
   })
 
+  it('starts invitation OAuth with a body POST', async () => {
+    const post = vi.spyOn(http, 'post').mockResolvedValue({
+      data: { redirect_url: 'https://accounts.google.test/auth' },
+    } as never)
+
+    await auth.startGoogleOAuth('accept_invite', 'tok en/+')
+
+    expect(post).toHaveBeenCalledWith('/api/auth/oauth/google/invite/start', {
+      invite: 'tok en/+',
+    })
+  })
+
+  it('reports a failed invitation start and allows retrying', async () => {
+    vi.spyOn(auth, 'startGoogleOAuth').mockRejectedValue(new Error('network down'))
+    renderWithProviders(<GoogleButton purpose="accept_invite" invite="tok" />)
+
+    const button = screen.getByRole('button', { name: /continue with google/i })
+    await userEvent.setup().click(button)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/google sign-in did not complete/i)
+    expect(button).toBeEnabled()
+  })
+
   it('accepts a caller-supplied label', () => {
-    renderWithProviders(<GoogleButton purpose="link" label="Connect Google" />)
+    renderWithProviders(<GoogleButton purpose="link" label="Connect Google" onClick={() => {}} />)
     expect(screen.getByRole('button', { name: 'Connect Google' })).toBeInTheDocument()
+  })
+
+  it('never sends linking through the proofless GET navigation', async () => {
+    const start = vi.spyOn(auth, 'startGoogleOAuth').mockResolvedValue()
+    const stepUp = vi.fn()
+    renderWithProviders(<GoogleButton purpose="link" onClick={stepUp} />)
+
+    await userEvent.setup().click(screen.getByRole('button'))
+    expect(stepUp).toHaveBeenCalledOnce()
+    expect(start).not.toHaveBeenCalled()
   })
 
   // A strict CSP blocks external hosts outright, so a mark fetched from Google's

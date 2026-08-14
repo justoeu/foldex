@@ -5,13 +5,15 @@ package folders_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/folders"
 	"foldex/internal/links"
-	"foldex/internal/pkg/httperr"
+	"foldex/internal/notes"
+	"foldex/internal/pkg/domainerr"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
 
@@ -102,7 +104,7 @@ func TestRepository_DeleteSetsChildrenAndLinksToNull(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, frepo.Delete(ctx, uid, parent.ID))
+	require.NoError(t, frepo.Delete(ctx, uid, parent.ID, testUnlockKey, ""))
 
 	// Child folder must survive with parent_id = NULL.
 	gotChild, err := frepo.Get(ctx, uid, child.ID)
@@ -132,15 +134,15 @@ func TestRepository_DeleteCascadeRemovesSubtree(t *testing.T) {
 	lb, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b", Title: "B", FolderID: &b.ID})
 	lc, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://c", Title: "C", FolderID: &c.ID})
 
-	require.NoError(t, frepo.DeleteCascade(ctx, uid, a.ID))
+	require.NoError(t, frepo.DeleteCascade(ctx, uid, a.ID, testUnlockKey, ""))
 
 	for _, fid := range []int64{a.ID, b.ID, c.ID} {
 		_, err := frepo.Get(ctx, uid, fid)
-		assert.ErrorIs(t, err, httperr.ErrNotFound, "folder %d must be gone after cascade", fid)
+		assert.ErrorIs(t, err, domainerr.ErrNotFound, "folder %d must be gone after cascade", fid)
 	}
 	for _, lid := range []int64{la.ID, lb.ID, lc.ID} {
 		_, err := lrepo.Get(ctx, uid, lid)
-		assert.ErrorIs(t, err, httperr.ErrNotFound, "link %d must be gone after cascade", lid)
+		assert.ErrorIs(t, err, domainerr.ErrNotFound, "link %d must be gone after cascade", lid)
 	}
 }
 
@@ -170,7 +172,7 @@ func TestRepository_DeleteCascadeDoesNotOrphanTagsOrClicks(t *testing.T) {
 	_, err = lrepo.ClickAndResolve(ctx, link.ID)
 	require.NoError(t, err)
 
-	require.NoError(t, frepo.DeleteCascade(ctx, uid, folder.ID))
+	require.NoError(t, frepo.DeleteCascade(ctx, uid, folder.ID, testUnlockKey, ""))
 
 	var tagRows, clickRows int64
 	require.NoError(t, pool.QueryRow(ctx,
@@ -181,6 +183,37 @@ func TestRepository_DeleteCascadeDoesNotOrphanTagsOrClicks(t *testing.T) {
 	assert.EqualValues(t, 0, clickRows, "DeleteCascade must not leave an orphaned click_log row")
 }
 
+func TestRepository_DeleteCascadeReleasesOwnedNoteMediaRefs(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	frepo := folders.NewRepository(pool)
+	nrepo := notes.NewRepository(pool)
+	folder, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Media", Color: "#abc"})
+	require.NoError(t, err)
+	const key = "notes/c178ac85-f31d-454e-8d64-d20471fb48c9.jpg"
+	require.NoError(t, nrepo.RegisterMediaLease(ctx, uid, key))
+	_, err = nrepo.Create(ctx, uid, notes.CreateInput{
+		Title: "Doomed", FolderID: &folder.ID,
+		BodyHTML: `<img src="/api/files/` + key + `">`,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, frepo.DeleteCascade(ctx, uid, folder.ID, testUnlockKey, ""))
+	var refs int64
+	var lease *time.Time
+	var expired bool
+	require.NoError(t, pool.QueryRow(ctx, `
+        SELECT (SELECT count(*) FROM note_media_ref WHERE user_id = $1 AND object_key = $2),
+               lease_expires_at,
+               lease_expires_at IS NOT NULL AND lease_expires_at <= now()
+        FROM note_media WHERE user_id = $1 AND object_key = $2
+    `, int64(uid), key).Scan(&refs, &lease, &expired))
+	assert.Zero(t, refs)
+	require.NotNil(t, lease)
+	assert.True(t, expired, "cascade must release media for bounded lease GC")
+}
+
 // TestRepository_DeleteCascadeOnEmptyFolder confirms the cascade path also
 // handles the trivial "empty leaf" case — no links, no children.
 func TestRepository_DeleteCascadeOnEmptyFolder(t *testing.T) {
@@ -188,15 +221,65 @@ func TestRepository_DeleteCascadeOnEmptyFolder(t *testing.T) {
 
 	f, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "empty", Color: "#000"})
 	require.NoError(t, err)
-	require.NoError(t, frepo.DeleteCascade(ctx, uid, f.ID))
+	require.NoError(t, frepo.DeleteCascade(ctx, uid, f.ID, testUnlockKey, ""))
 	_, err = frepo.Get(ctx, uid, f.ID)
-	assert.ErrorIs(t, err, httperr.ErrNotFound)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
+}
+
+func TestRepository_DeleteCascadeLocksSubtreeBeforeProtectionCheck(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	frepo := folders.NewRepository(pool)
+	root, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Root", Color: "#abc"})
+	require.NoError(t, err)
+	child, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Child", Color: "#def", ParentID: &root.ID})
+	require.NoError(t, err)
+	hash, err := folders.HashPassword("became-protected")
+	require.NoError(t, err)
+
+	changeTx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer changeTx.Rollback(ctx)
+	_, err = changeTx.Exec(ctx,
+		`UPDATE folder SET password_hash = $3 WHERE user_id = $1 AND id = $2`,
+		int64(uid), child.ID, hash)
+	require.NoError(t, err)
+
+	result := make(chan error, 1)
+	go func() {
+		result <- frepo.DeleteCascade(context.Background(), uid, root.ID, testUnlockKey, "")
+	}()
+	require.Eventually(t, func() bool {
+		var waiting bool
+		err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE datname = current_database()
+				  AND pid <> pg_backend_pid()
+				  AND wait_event_type = 'Lock'
+				  AND query ILIKE '%folder%'
+			)`).Scan(&waiting)
+		return err == nil && waiting
+	}, 2*time.Second, 10*time.Millisecond, "cascade should wait for a descendant password update")
+	require.NoError(t, changeTx.Commit(ctx))
+
+	select {
+	case err := <-result:
+		require.Error(t, err, "the newly protected descendant must reject the cascade")
+		assert.ErrorIs(t, err, folders.ErrDescendantProtected)
+	case <-time.After(2 * time.Second):
+		t.Fatal("cascade did not finish after the password update committed")
+	}
+	_, err = frepo.Get(ctx, uid, root.ID)
+	require.NoError(t, err)
+	_, err = frepo.Get(ctx, uid, child.ID)
+	require.NoError(t, err)
 }
 
 // TestRepository_UpdateRejectsCycle locks the serializable cycle guard.
-// Trying to set parent_id = a descendant must return a 409 (or any non-nil
-// error wrapped in httperr.Error) — without it, A→B→A would orphan the
-// subtree from the root.
+// Trying to set parent_id = a descendant must return ErrParentCycle; without
+// it, A→B→A would orphan the subtree from the root.
 func TestRepository_UpdateRejectsCycle(t *testing.T) {
 	ctx, uid, frepo, _ := setup(t)
 
@@ -206,15 +289,10 @@ func TestRepository_UpdateRejectsCycle(t *testing.T) {
 	require.NoError(t, err)
 
 	// A → B (A becomes child of its own child) must be refused with the
-	// typed 409 parent_cycle. Asserting just "error" would pass even when a
-	// future regression surfaces a 500 — the API client wouldn't be able to
-	// tell the user-fixable case apart from a real server error.
+	// semantic error. The handler mapping matrix separately locks 409
+	// parent_cycle at the HTTP boundary.
 	_, err = frepo.Update(ctx, uid, a.ID, folders.UpdateInput{ParentIDSet: true, ParentID: &b.ID})
-	require.Error(t, err, "self-cycle must be rejected")
-	var he *httperr.Error
-	require.ErrorAs(t, err, &he, "cycle must be typed httperr.Error, not raw")
-	assert.Equal(t, 409, he.Status)
-	assert.Equal(t, "parent_cycle", he.Code)
+	require.ErrorIs(t, err, folders.ErrParentCycle, "self-cycle must be rejected")
 }
 
 // TestRepository_CreateWithPassword locks the basic write path: a password
@@ -391,8 +469,5 @@ func TestRepository_Update_RemovePassword_OnUnprotectedFolder_IsIdempotent(t *te
 
 func assertWrongPassword(t *testing.T, err error) {
 	t.Helper()
-	var he *httperr.Error
-	require.ErrorAs(t, err, &he, "must be a typed httperr.Error, not raw")
-	assert.Equal(t, 401, he.Status)
-	assert.Equal(t, "wrong_password", he.Code)
+	require.ErrorIs(t, err, folders.ErrWrongPassword)
 }

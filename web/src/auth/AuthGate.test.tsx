@@ -250,7 +250,7 @@ describe('AuthGate password recovery', () => {
 })
 
 describe('AuthGate e-mail confirmation', () => {
-  it('consumes a ?verify= token from the URL', async () => {
+  it('consumes a #verify= token from the URL', async () => {
     mockedTokens.verify = 'VERIFYTOKEN'
     const post = vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
     mockMe({ status: 'anonymous', features })
@@ -312,10 +312,11 @@ describe('AuthGate invite handling', () => {
     mockedTokens.invite = 'TESTTOKEN'
     vi.spyOn(http, 'get').mockImplementation(async (url: string) => {
       if (url === '/api/auth/me') return { data: { status: 'anonymous', features } } as never
-      if (url.startsWith('/api/auth/invites/'))
-        return { data: { email: 'new@example.com', role: 'user', expires_at: '' } } as never
       return { data: {} } as never
     })
+    vi.spyOn(http, 'post').mockResolvedValue({
+      data: { email: 'new@example.com', role: 'user', expires_at: '' },
+    } as never)
 
     renderWithProviders(
       <AuthGate>
@@ -339,7 +340,10 @@ describe('AuthGate invite handling', () => {
     mockedTokens.invite = 'DEAD'
     vi.spyOn(http, 'get').mockImplementation(async (url: string) => {
       if (url === '/api/auth/me') return { data: { status: 'anonymous', features } } as never
-      throw { response: { status: 404, data: { error: { code: 'not_found' } } } }
+      return { data: {} } as never
+    })
+    vi.spyOn(http, 'post').mockRejectedValue({
+      response: { status: 404, data: { error: { code: 'not_found' } } },
     })
 
     renderWithProviders(

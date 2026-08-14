@@ -27,8 +27,9 @@ type fakeUploader struct {
 		key, ct string
 		data    []byte
 	}
-	deleted []string
-	err     error
+	deleted             []string
+	deleteContextErrors []error
+	err                 error
 }
 
 func (f *fakeUploader) Upload(_ context.Context, key string, data []byte, ct string) error {
@@ -37,8 +38,9 @@ func (f *fakeUploader) Upload(_ context.Context, key string, data []byte, ct str
 	return f.err
 }
 
-func (f *fakeUploader) DeleteObject(_ context.Context, key string) error {
+func (f *fakeUploader) DeleteObject(ctx context.Context, key string) error {
 	f.deleted = append(f.deleted, key)
+	f.deleteContextErrors = append(f.deleteContextErrors, ctx.Err())
 	return nil
 }
 
@@ -74,7 +76,21 @@ func TestMaybeScreenshot_DoesNothingWhenFallbackDisabled(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := NewWorker(nil, 1, time.Second, logger)
 	// repo is nil; if we entered the screenshot path it would panic on Get.
-	w.maybeScreenshot(context.Background(), 1, "http://example.com")
+	assert.Nil(t, w.maybeScreenshot(context.Background(), 1, "http://example.com"))
+}
+
+func TestWorker_RemoveFallbackObjectSurvivesCallerCancellation(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	uploader := &fakeUploader{}
+	w := NewWorker(nil, 1, time.Second, logger)
+	w.uploader = uploader
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	w.removeFallbackObject(ctx, 42, "screenshots/42.version.jpg")
+
+	assert.Equal(t, []string{"screenshots/42.version.jpg"}, uploader.deleted)
+	assert.Equal(t, []error{nil}, uploader.deleteContextErrors)
 }
 
 func TestWorker_EnqueueDropsWhenChannelFull(t *testing.T) {
@@ -99,6 +115,43 @@ func TestWorker_EnqueueDropsWhenChannelFull(t *testing.T) {
 	}
 }
 
+func TestWorker_EnqueueDeduplicatesScheduledID(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	w := NewWorker(nil, 1, time.Second, logger)
+
+	assert.NoError(t, w.Enqueue(42))
+	assert.NoError(t, w.Enqueue(42))
+	assert.Equal(t, 1, len(w.jobs))
+	w.Stop()
+}
+
+func TestWorker_EnqueueDuringRunningJobSchedulesOneRerun(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	w := NewWorker(nil, 1, time.Second, logger)
+	assert.NoError(t, w.Enqueue(42))
+	<-w.jobs
+	w.startJob(42)
+
+	assert.NoError(t, w.Enqueue(42))
+	assert.NoError(t, w.Enqueue(42))
+	w.finishJob(42)
+	assert.Equal(t, 1, len(w.jobs))
+	w.Stop()
+}
+
+func TestWorker_RecoveryDoesNotRerunScheduledJob(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	w := NewWorker(nil, 1, time.Second, logger)
+	assert.NoError(t, w.Enqueue(42))
+	<-w.jobs
+	w.startJob(42)
+
+	assert.NoError(t, w.enqueueRecovered(42))
+	w.finishJob(42)
+	assert.Empty(t, w.jobs)
+	w.Stop()
+}
+
 // TestWorker_EnqueueAfterStopReturnsErrStopped locks the Stop drain semantics:
 // post-Stop sends must not silently fill the buffer (would let new HTTP
 // requests succeed but never get processed). Tests Stop+Enqueue without Start
@@ -112,7 +165,7 @@ func TestWorker_EnqueueAfterStopReturnsErrStopped(t *testing.T) {
 	assert.ErrorIs(t, err, ErrStopped)
 }
 
-// TestWorker_StopDrainsBufferedJobs locks RACE-HER-010: jobs accepted into the
+// TestWorker_StopDrainsBufferedJobs proves that jobs accepted into the
 // channel before/during Stop must not sit forever with no consumer.
 func TestWorker_StopDrainsBufferedJobs(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

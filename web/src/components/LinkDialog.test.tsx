@@ -6,6 +6,8 @@ import { renderWithProviders } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import type { Link } from '../api/types'
 import { _clearUrlMetadataCacheForTests } from '../api/links'
+import { http } from '../api/client'
+import { INLINE_PALETTE } from '../lib/inlinePalette'
 
 let state: MockState
 
@@ -60,6 +62,30 @@ describe('LinkDialog', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('sends the loaded version and keeps the edit open with translated guidance on conflict', async () => {
+    const updatedAt = '2026-08-13T11:00:00Z'
+    const link: Link = {
+      id: 7, url: 'https://x', title: 'old', slug: 'old', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: updatedAt, tags: [],
+    } as Link
+    state.links.push(link)
+    const conflict = Object.assign(new Error('conflict'), {
+      response: { status: 409, data: { error: { message: 'link was modified; refetch and retry' } } },
+    })
+    vi.mocked(http.patch).mockRejectedValue(conflict)
+    const onClose = vi.fn()
+    renderWithProviders(<LinkDialog open link={link} onClose={onClose} />)
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /Save changes/i }))
+
+    expect(await screen.findByText(/changed elsewhere.*reload/i)).toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(vi.mocked(http.patch).mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ if_match_updated_at: updatedAt }),
+    )
+  })
+
   it('Cancel closes without saving', async () => {
     const onClose = vi.fn()
     renderWithProviders(<LinkDialog open link={null} onClose={onClose} />)
@@ -79,17 +105,74 @@ describe('LinkDialog', () => {
     expect(screen.getByRole('button', { name: /Save link/i })).toBeDisabled()
   })
 
-  it('creates a new tag inline via tag filter input', async () => {
+  it('sends existing tag IDs and cycled pending definitions in the link request', async () => {
     const onClose = vi.fn()
     renderWithProviders(<LinkDialog open link={null} onClose={onClose} />)
     const user = userEvent.setup()
 
     await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://x')
     const tagsInput = screen.getByLabelText('tag filter')
-    await user.type(tagsInput, 'brand-new{Enter}')
+    await user.type(tagsInput, 'j')
+    await user.click(await screen.findByText('jira'))
+    await user.type(tagsInput, 'brand-new')
+    await user.keyboard('{Enter}')
+    await user.click(screen.getByText('brand-new'))
     await user.click(screen.getByRole('button', { name: /Save link/i }))
     await waitFor(() => expect(state.tags.some((t) => t.name === 'brand-new')).toBe(true))
     expect(state.links).toHaveLength(1)
+
+    const parentCall = vi.mocked(http.post).mock.calls.find(([url]) => url === '/api/links')
+    expect(parentCall?.[1]).toEqual(expect.objectContaining({
+      tag_ids: [1],
+      pending_tags: [{ name: 'brand-new', color: INLINE_PALETTE[1], icon: null }],
+    }))
+    expect(vi.mocked(http.post).mock.calls.some(([url]) => url === '/api/tags')).toBe(false)
+  })
+
+  it('does not create a standalone tag when the link request fails', async () => {
+    const originalPost = vi.mocked(http.post).getMockImplementation()!
+    const failure = Object.assign(new Error('save failed'), {
+      response: { status: 500, data: { error: { code: 'server_error', message: 'save failed' } } },
+    })
+    vi.mocked(http.post).mockImplementation(((url: string, ...args: unknown[]) => {
+      if (url === '/api/links') return Promise.reject(failure)
+      return originalPost(url, ...args)
+    }) as typeof http.post)
+    const onClose = vi.fn()
+    renderWithProviders(<LinkDialog open link={null} onClose={onClose} />)
+    const user = userEvent.setup()
+
+    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://fail.example')
+    await user.type(screen.getByLabelText('tag filter'), 'must-not-orphan')
+    await user.keyboard('{Enter}')
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
+
+    expect(await screen.findByText('save failed')).toBeInTheDocument()
+    expect(state.tags.some((tag) => tag.name === 'must-not-orphan')).toBe(false)
+    expect(vi.mocked(http.post).mock.calls.some(([url]) => url === '/api/tags')).toBe(false)
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('updates a link with pending tags in the same version-matched request', async () => {
+    const link: Link = {
+      id: 8, url: 'https://atomic.example', title: 'Atomic', slug: 'atomic', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: 'version-8', tags: [],
+    } as Link
+    state.links.push(link)
+    renderWithProviders(<LinkDialog open link={link} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+
+    await user.type(screen.getByLabelText('tag filter'), 'pending-update')
+    await user.keyboard('{Enter}')
+    await user.click(screen.getByRole('button', { name: /Save changes/i }))
+
+    await waitFor(() => expect(vi.mocked(http.patch)).toHaveBeenCalled())
+    expect(vi.mocked(http.patch).mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      if_match_updated_at: 'version-8',
+      tag_ids: [],
+      pending_tags: [{ name: 'pending-update', color: INLINE_PALETTE[0], icon: null }],
+    }))
+    expect(vi.mocked(http.post).mock.calls.some(([url]) => url === '/api/tags')).toBe(false)
   })
 
   it('picks an existing tag from the suggestions', async () => {

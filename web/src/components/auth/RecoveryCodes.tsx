@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 /**
  * The one and only display of a freshly minted recovery sheet.
  *
- * The server stores only sha256 of each code, so this really is the sole
+ * The server stores only a server-keyed digest of each code, so this really is the sole
  * opportunity — which is why the continue button is gated behind an explicit
  * acknowledgement rather than being a plain "OK". A user who clicks through
  * without copying them has no second chance, and the checkbox is what turns

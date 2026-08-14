@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/tags"
 )
 
 // FolderID is encoded with a custom UnmarshalJSON that distinguishes
@@ -41,10 +43,24 @@ func TestUpdateInput_FolderID_InvalidShapeErrors(t *testing.T) {
 }
 
 func TestCreateInput_NormalizeFillsTitleFromURL(t *testing.T) {
-	in := CreateInput{URL: "  https://x  ", Title: "  "}
+	in := CreateInput{
+		URL: "  https://x  ", Title: "  ",
+		PendingTags: []tags.CreateInput{{Name: "  queued  ", Color: "  "}},
+	}
 	in.Normalize()
 	assert.Equal(t, "https://x", in.URL)
 	assert.Equal(t, "https://x", in.Title, "empty title must fall back to URL")
+	require.Len(t, in.PendingTags, 1)
+	assert.Equal(t, "queued", in.PendingTags[0].Name)
+	assert.Equal(t, "#6366F1", in.PendingTags[0].Color)
+}
+
+func TestCreateInput_ValidateRejectsInvalidPendingTag(t *testing.T) {
+	in := CreateInput{
+		URL: "https://x.example", Title: "x",
+		PendingTags: []tags.CreateInput{{Name: "queued", Color: "red url(https://evil)"}},
+	}
+	require.ErrorContains(t, in.Validate(), "color")
 }
 
 func TestCreateInput_Normalize_EmptySlugAndIntervalBecomeNil(t *testing.T) {
