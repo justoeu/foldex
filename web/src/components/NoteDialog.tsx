@@ -1,254 +1,84 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Trans, useTranslation } from 'react-i18next'
-import { useEditor, EditorContent } from '@tiptap/react'
-import StarterKit from '@tiptap/starter-kit'
-import Image from '@tiptap/extension-image'
-import Placeholder from '@tiptap/extension-placeholder'
-import { TextStyle, Color, FontFamily } from '@tiptap/extension-text-style'
-import TextAlign from '@tiptap/extension-text-align'
-import type { EditorView } from '@tiptap/pm/view'
-import { Icon, I } from './icons'
-import { NoteToolbar } from './NoteToolbar'
-import { FolderPicker } from './FolderPicker'
-import { TagChip } from './TagChip'
+import { useRef } from 'react'
+import { useTranslation } from 'react-i18next'
+import { useNote } from '../api/notes'
+import type { Note } from '../api/types'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
-import { useCreateNote, useUpdateNote, useNote, uploadNoteImage } from '../api/notes'
-import { useCreateTag, useTags } from '../api/tags'
-import { INLINE_PALETTE } from '../lib/inlinePalette'
-import { slugifyClient } from '../lib/slugify'
-import type { Tag } from '../api/types'
+import { Icon, I } from './icons'
+import { NoteDialogEditor } from './NoteDialogEditor'
+
+export { buildImageUploadHandler, buildNoteEditorProps } from './useNoteDialogController'
 
 type Props = {
   open: boolean
-  // Edit mode is keyed by id, not a full Note object — the interleaved grid
-  // only carries a body_text_snippet (Entry), not the full body_html, so the
-  // dialog fetches the complete row itself via useNote when opened for edit.
   noteId: number | null
-  // Default folder for a new note — preselects the picker when the user is
-  // creating a note while inside a folder view. Ignored in edit mode.
   defaultFolderId?: number | null
   onClose: () => void
 }
 
-// Same pending-tag pattern as LinkDialog: real tags have id > 0, tags typed
-// inline live with id === 0 until save, when they're created and attached.
-type SelectedTag = Tag & { _pending?: boolean }
+type LoadBoundaryProps = {
+  failed: boolean
+  retrying: boolean
+  onRetry: () => void
+  onClose: () => void
+}
 
-// Inserts an uploaded image at the current selection. Exported so tests can
-// exercise the upload-and-insert logic without mounting the full ProseMirror
-// DOM (jsdom doesn't implement enough of the contenteditable/selection APIs
-// for Tiptap to run in a test environment).
-export function buildImageUploadHandler(
-  uploadFn: (file: File) => Promise<{ url: string }>,
-  onError: (message: string) => void,
-) {
-  return (view: EditorView, file: File) => {
-    uploadFn(file)
-      .then(({ url }) => {
-        const { schema } = view.state
-        const node = schema.nodes.image.create({ src: url })
-        view.dispatch(view.state.tr.replaceSelectionWith(node))
-      })
-      .catch(() => onError('upload_failed'))
+function NoteLoadBoundary({ failed, retrying, onRetry, onClose }: LoadBoundaryProps) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <div className="fx-modal-body" style={{ gridTemplateColumns: '1fr' }}>
+        {failed ? (
+          <div role="alert" style={{ minHeight: 180, display: 'grid', placeItems: 'center', textAlign: 'center', color: 'var(--fx-danger)', padding: 24 }}>
+            <div><Icon d={I.alert} size={18} /> <div style={{ marginTop: 8 }}>{t('note_dialog.load_error')}</div></div>
+          </div>
+        ) : (
+          <div role="status" aria-live="polite" style={{ minHeight: 180, display: 'grid', placeItems: 'center', color: 'var(--fx-ink-3)' }}>
+            <span><span className="fx-spinner" /> {t('note_dialog.loading')}</span>
+          </div>
+        )}
+      </div>
+      <footer className="fx-modal-foot">
+        <button type="button" className="fx-confirm-btn" onClick={onClose}>{t('common.cancel')}</button>
+        {failed && (
+          <button type="button" className="fx-confirm-btn fx-confirm-btn-primary" onClick={onRetry} disabled={retrying}>
+            <Icon d={I.refresh} size={13} /> {t('note_dialog.load_retry')}
+          </button>
+        )}
+      </footer>
+    </>
+  )
+}
+
+type DialogContentProps = {
+  noteId: number | null
+  note: Note | null
+  failed: boolean
+  retrying: boolean
+  retry: () => void
+  defaultFolderId?: number | null
+  onClose: () => void
+}
+
+function NoteDialogContent({ noteId, note, failed, retrying, retry, defaultFolderId, onClose }: DialogContentProps) {
+  if (noteId != null && !note) {
+    return <NoteLoadBoundary failed={failed} retrying={retrying} onRetry={retry} onClose={onClose} />
   }
+  return <NoteDialogEditor key={noteId == null ? 'create' : `edit-${noteId}`} note={note} defaultFolderId={defaultFolderId} onClose={onClose} />
 }
 
 export function NoteDialog({ open, noteId, defaultFolderId, onClose }: Props) {
   const { t } = useTranslation()
-  const { data: tags = [] } = useTags()
-  const createTag = useCreateTag()
-  const createNote = useCreateNote()
-  const updateNote = useUpdateNote()
-  const { data: note } = useNote(open ? noteId : null)
-
-  const [title, setTitle] = useState('')
-  const [slug, setSlug] = useState('')
-  const [slugDirty, setSlugDirty] = useState(false)
-  const [pinned, setPinned] = useState(false)
-  const [folderId, setFolderId] = useState<number | null>(null)
-  const [selected, setSelected] = useState<SelectedTag[]>([])
-  const [tagFilter, setTagFilter] = useState('')
-  const [tagPage, setTagPage] = useState(0)
-  const [imgUploadError, setImgUploadError] = useState<string | null>(null)
-
-  const handleUpload = useMemo(
-    () => buildImageUploadHandler(uploadNoteImage, () => setImgUploadError(t('note_dialog.image_error_generic'))),
-    [t],
-  )
-
-  const editor = useEditor(
-    {
-      extensions: [
-        StarterKit.configure({ link: { openOnClick: false } }),
-        Image,
-        Placeholder.configure({ placeholder: t('note_dialog.body_placeholder') }),
-        // Rich-text toolbar support: TextStyle carries the Color/FontFamily
-        // marks (rendered as <span style>), TextAlign styles block elements.
-        // The server sanitizer allowlists exactly these (see htmlsanitize).
-        TextStyle,
-        Color,
-        FontFamily,
-        TextAlign.configure({ types: ['heading', 'paragraph'] }),
-      ],
-      editorProps: {
-        handlePaste: (view, event) => {
-          const file = Array.from(event.clipboardData?.items ?? [])
-            .find((item) => item.type.startsWith('image/'))
-            ?.getAsFile()
-          if (!file) return false
-          event.preventDefault()
-          handleUpload(view, file)
-          return true
-        },
-        handleDrop: (view, event) => {
-          const file = Array.from(event.dataTransfer?.files ?? []).find((f) => f.type.startsWith('image/'))
-          if (!file) return false
-          event.preventDefault()
-          handleUpload(view, file)
-          return true
-        },
-      },
-    },
-    [open],
-  )
-
-  useEffect(() => {
-    if (!open) return
-    setTitle(note?.title ?? '')
-    setSlug(note?.slug ?? '')
-    setSlugDirty(!!note?.slug)
-    setPinned(note?.pinned ?? false)
-    setFolderId(note?.folder_id ?? defaultFolderId ?? null)
-    setSelected(note?.tags ?? [])
-    setTagFilter('')
-    setTagPage(0)
-    setImgUploadError(null)
-  }, [open, note, defaultFolderId])
-
-  // Separate from the form-fields effect above: `note` (edit mode's useNote
-  // resolving async) and the editor's own readiness (Tiptap wires its internal
-  // commandManager on mount, not synchronously with useEditor()) arrive
-  // independently, and whichever settles last must be the one that applies
-  // the content. Depending on `editor?.isInitialized` — not just `editor` —
-  // means this effect re-runs on the render where isInitialized flips true,
-  // even if `note` hasn't changed since. Without it, a `note` that resolves
-  // before the editor initializes would never get its content applied: the
-  // guard would skip once and nothing would ever retry.
-  useEffect(() => {
-    if (!open || !editor?.isInitialized) return
-    editor.commands.setContent(note?.body_html ?? '')
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- editor is recreated per `open` (see useEditor deps above); including the whole object would re-run on every transaction.
-  }, [open, note, editor?.isInitialized])
-
-  useEffect(() => {
-    if (slugDirty) return
-    setSlug(slugifyClient(title))
-  }, [title, slugDirty])
-
-  useEscape(onClose, open)
+  const noteQuery = useNote(open ? noteId : null)
+  const loadedNote = noteId != null && noteQuery.data?.id === noteId ? noteQuery.data : null
   const dialogRef = useRef<HTMLDivElement>(null)
-  const imgInputRef = useRef<HTMLInputElement>(null)
+  const isEdit = noteId != null
+  useEscape(onClose, open)
   useFocusTrap(dialogRef, open)
 
-  const available = useMemo(
-    () => tags.filter((tag) => !selected.some((s) => s.id === tag.id)),
-    [tags, selected],
-  )
-  const filteredAvailable = useMemo(
-    () => (tagFilter ? available.filter((tag) => tag.name.toLowerCase().includes(tagFilter.toLowerCase())) : available),
-    [available, tagFilter],
-  )
-  useEffect(() => {
-    const lastPage = Math.max(0, Math.ceil(filteredAvailable.length / 7) - 1)
-    if (tagPage > lastPage) setTagPage(lastPage)
-  }, [filteredAvailable.length, tagPage])
-  const canCreateFromFilter =
-    tagFilter.trim().length > 0 &&
-    !tags.some((tag) => tag.name.toLowerCase() === tagFilter.trim().toLowerCase()) &&
-    !selected.some((s) => s.name.toLowerCase() === tagFilter.trim().toLowerCase())
-
   if (!open) return null
-
-  const queueInlineTag = () => {
-    const name = tagFilter.trim()
-    if (!name) return
-    setSelected([...selected, { id: 0, name, color: INLINE_PALETTE[0], icon: null, _pending: true }])
-    setTagFilter('')
-  }
-
-  const cycleColor = (idx: number) => {
-    setSelected(
-      selected.map((tag, i) => {
-        if (i !== idx || !tag._pending) return tag
-        const cur = INLINE_PALETTE.indexOf(tag.color)
-        return { ...tag, color: INLINE_PALETTE[(cur + 1) % INLINE_PALETTE.length] }
-      }),
-    )
-  }
-
-  const submit = async () => {
-    const trimmedTitle = title.trim()
-    if (!trimmedTitle) return
-
-    const tagIds: number[] = []
-    for (const tag of selected) {
-      if (tag.id) {
-        tagIds.push(tag.id)
-      } else {
-        const created = await createTag.mutateAsync({ name: tag.name, color: tag.color })
-        tagIds.push(created.id)
-      }
-    }
-
-    const bodyHtml = editor?.getHTML() ?? ''
-
-    if (note) {
-      const slugTrimmed = slug.trim()
-      const slugPayload: { slug?: string | null } = {}
-      if (slugDirty) {
-        slugPayload.slug = slugTrimmed === '' ? null : slugTrimmed
-      }
-      await updateNote.mutateAsync({
-        id: note.id,
-        body: {
-          title: trimmedTitle,
-          body_html: bodyHtml,
-          tag_ids: tagIds,
-          pinned,
-          folder_id: folderId,
-          ...slugPayload,
-        },
-      })
-    } else {
-      const slugTrimmed = slug.trim()
-      const createSlug: { slug?: string } = {}
-      if (slugDirty && slugTrimmed !== '') {
-        createSlug.slug = slugTrimmed
-      }
-      await createNote.mutateAsync({
-        title: trimmedTitle,
-        body_html: bodyHtml,
-        tag_ids: tagIds,
-        pinned,
-        folder_id: folderId,
-        ...createSlug,
-      })
-    }
-    onClose()
-  }
-
-  const busy = createNote.isPending || updateNote.isPending || createTag.isPending
-  const isEdit = noteId != null
-
   return (
-    <div
-      ref={dialogRef}
-      className="fx-overlay fx-overlay-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-label={isEdit ? t('note_dialog.edit_title') : t('note_dialog.create_title')}
-    >
+    <div ref={dialogRef} className="fx-overlay fx-overlay-modal" role="dialog" aria-modal="true" aria-label={isEdit ? t('note_dialog.edit_title') : t('note_dialog.create_title')}>
       <div className="fx-modal" style={{ maxWidth: 720 }}>
         <header className="fx-modal-head">
           <div>
@@ -261,210 +91,15 @@ export function NoteDialog({ open, noteId, defaultFolderId, onClose }: Props) {
             <Icon d={I.x} size={14} />
           </button>
         </header>
-
-        <div className="fx-modal-body" style={{ gridTemplateColumns: '1fr' }}>
-          <div className="fx-modal-col">
-            <label className="fx-field">
-              <span className="fx-field-label">{t('note_dialog.title_label')}</span>
-              <div className="fx-input">
-                <input
-                  autoFocus
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder={t('note_dialog.title_placeholder')}
-                  aria-label={t('common.title_aria')}
-                />
-              </div>
-            </label>
-
-            <label className="fx-field">
-              <span className="fx-field-label">{t('note_dialog.slug_label')}</span>
-              <div className="fx-input">
-                <span style={{ color: 'var(--fx-ink-4)', fontFamily: 'var(--fx-mono)', fontSize: 12, paddingRight: 4 }}>
-                  /n/
-                </span>
-                <input
-                  value={slug}
-                  onChange={(e) => {
-                    setSlug(e.target.value)
-                    setSlugDirty(true)
-                  }}
-                  placeholder={slugifyClient(title) || 'my-note'}
-                  aria-label={t('note_dialog.slug_aria')}
-                  pattern="[a-z0-9]+(-[a-z0-9]+)*"
-                  style={{ fontFamily: 'var(--fx-mono)' }}
-                />
-                {slugDirty && (
-                  <button
-                    type="button"
-                    className="fx-iconbtn"
-                    onClick={() => {
-                      setSlug(slugifyClient(title))
-                      setSlugDirty(false)
-                    }}
-                    data-tooltip={t('note_dialog.slug_reset_tooltip')}
-                    aria-label={t('note_dialog.slug_reset_tooltip')}
-                  >
-                    <Icon d={I.refresh} size={13} />
-                  </button>
-                )}
-              </div>
-              <span className="fx-field-hint">{t('note_dialog.slug_hint')}</span>
-            </label>
-
-            <div className="fx-field">
-              <span className="fx-field-label">{t('note_dialog.body_label')}</span>
-              <div className="fx-tiptap-wrap">
-                <NoteToolbar editor={editor} onInsertImage={() => imgInputRef.current?.click()} />
-                <EditorContent editor={editor} className="fx-tiptap" />
-                <input
-                  ref={imgInputRef}
-                  type="file"
-                  accept="image/*"
-                  hidden
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    if (file && editor) handleUpload(editor.view, file)
-                    e.target.value = ''
-                  }}
-                />
-              </div>
-              {imgUploadError && (
-                <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 }}>
-                  <Icon d={I.alert} size={12} /> {imgUploadError}
-                </div>
-              )}
-            </div>
-
-            <label className="fx-field">
-              <span className="fx-field-label">{t('note_dialog.tags_label')}</span>
-              <div className="fx-tagpicker">
-                {selected.map((tag, i) => (
-                  <TagChip
-                    key={tag.id || `pending-${i}`}
-                    tag={tag}
-                    active
-                    closable
-                    onClick={tag._pending ? () => cycleColor(i) : undefined}
-                    onClose={() => setSelected(selected.filter((_, j) => j !== i))}
-                  />
-                ))}
-                <input
-                  className="fx-tagpicker-input"
-                  value={tagFilter}
-                  onChange={(e) => { setTagFilter(e.target.value); setTagPage(0) }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && canCreateFromFilter) {
-                      e.preventDefault()
-                      queueInlineTag()
-                    }
-                  }}
-                  placeholder={t('note_dialog.tags_search_placeholder')}
-                  aria-label={t('common.tag_filter_aria')}
-                />
-              </div>
-              {selected.some((tag) => tag._pending) && (
-                <div className="fx-tag-hint">
-                  <Trans i18nKey="note_dialog.pending_tag_color_hint_html" components={{ strong: <strong /> }} />
-                </div>
-              )}
-              {(filteredAvailable.length > 0 || canCreateFromFilter) && (() => {
-                const PAGE = 7
-                const totalPages = Math.ceil(filteredAvailable.length / PAGE)
-                const pageTags = filteredAvailable.slice(tagPage * PAGE, (tagPage + 1) * PAGE)
-                return (
-                  <div style={{ marginTop: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <span style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)' }}>
-                        {t('link_dialog.tags_registered_label')}
-                      </span>
-                      {totalPages > 1 && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                          <button
-                            type="button"
-                            className="fx-iconbtn"
-                            disabled={tagPage === 0}
-                            onClick={() => setTagPage((p) => p - 1)}
-                            aria-label={t('link_dialog.tags_page_prev_aria')}
-                            style={{ width: 22, height: 22 }}
-                          >
-                            <Icon d={I.chevronLeft} size={12} />
-                          </button>
-                          <span style={{ fontFamily: 'var(--fx-mono)', fontSize: 10, color: 'var(--fx-ink-4)', minWidth: 32, textAlign: 'center' }}>
-                            {tagPage + 1}/{totalPages}
-                          </span>
-                          <button
-                            type="button"
-                            className="fx-iconbtn"
-                            disabled={tagPage >= totalPages - 1}
-                            onClick={() => setTagPage((p) => p + 1)}
-                            aria-label={t('link_dialog.tags_page_next_aria')}
-                            style={{ width: 22, height: 22 }}
-                          >
-                            <Icon d={I.chevronRight} size={12} />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {pageTags.map((tag) => (
-                        <TagChip
-                          key={tag.id}
-                          tag={tag}
-                          onClick={() => {
-                            setSelected([...selected, tag])
-                            setTagFilter('')
-                          }}
-                        />
-                      ))}
-                      {canCreateFromFilter && (
-                        <button type="button" className="fx-pillbtn" onClick={queueInlineTag} style={{ fontSize: 11 }}>
-                          <Icon d={I.plus} size={11} /> {t('link_dialog.tags_create_inline', { name: tagFilter.trim() })}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )
-              })()}
-            </label>
-
-            <label className="fx-field">
-              <span className="fx-field-label">{t('note_dialog.folder_label')}</span>
-              <FolderPicker selected={folderId} onChange={setFolderId} parentId={defaultFolderId ?? null} />
-            </label>
-
-            <label className="fx-toggle-row">
-              <input
-                type="checkbox"
-                checked={pinned}
-                onChange={(e) => setPinned(e.target.checked)}
-                aria-label={t('note_dialog.pinned_aria')}
-              />
-              <span className="fx-toggle-track">
-                <span className="fx-toggle-knob" />
-              </span>
-              <span className="fx-toggle-label">
-                <Icon d={I.pin} size={12} /> {t('note_dialog.pinned_label')}
-                <span className="fx-toggle-hint">{t('note_dialog.pinned_hint')}</span>
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <footer className="fx-modal-foot">
-          <button type="button" className="fx-confirm-btn" onClick={onClose}>
-            {t('common.cancel')}
-          </button>
-          <button
-            type="button"
-            className="fx-confirm-btn fx-confirm-btn-primary"
-            onClick={submit}
-            disabled={!title.trim() || busy}
-          >
-            <Icon d={isEdit ? I.check : I.plus} size={13} stroke={2.2} />{' '}
-            {isEdit ? t('note_dialog.submit_save') : t('note_dialog.submit_create')}
-          </button>
-        </footer>
+        <NoteDialogContent
+          noteId={noteId}
+          note={loadedNote}
+          failed={noteQuery.isError}
+          retrying={noteQuery.isFetching}
+          retry={() => { void noteQuery.refetch() }}
+          defaultFolderId={defaultFolderId}
+          onClose={onClose}
+        />
       </div>
     </div>
   )
