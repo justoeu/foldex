@@ -341,6 +341,9 @@ curl -X POST -F file=@foldex-backup-*.zip \
 Via UI: abre a página **Importar / Exportar** → coluna direita tem o
 card **💾 Backup completo**. Arrasta um `.zip` em cima pra revisar o
 sumário de validação e escolher o modo no `BackupRestoreDialog`.
+Fechar a janela ou trocar o arquivo cancela a validação; depois que uma
+importação ou restauração começa, a janela permanece aberta e não pode ser
+fechada até o servidor responder.
 Histórico (últimos 10 backups: data, duração, tamanho, counts) persiste
 em `localStorage`.
 

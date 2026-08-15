@@ -476,6 +476,7 @@
     "submit_apply_other": "Importar {{count}} links",
     "submit_wipe": "⚠ Importar (substitui duplicados)",
     "submit_importing": "Importando…",
+    "operation_locked": "A importação está em andamento e não pode ser cancelada. Esta janela ficará aberta até terminar.",
     "submit_done": "Concluído",
     "result_mode": "Modo",
     "result_imported": "Importados",
@@ -526,6 +527,7 @@
     "submit_restore": "Restaurar",
     "submit_restore_wipe": "⚠ Restaurar (zerar tudo)",
     "submit_restoring": "Restaurando…",
+    "operation_locked": "A restauração está em andamento e não pode ser cancelada. Esta janela ficará aberta até terminar.",
     "dialog_kicker_short": "💾 RESTAURAR",
     "dialog_title_short": "Revisar backup",
     "manifest_invalid": "Manifest inválido ou ausente.",
@@ -732,7 +734,8 @@
     "submit": "Ativar e entrar",
     "invalid_title": "Este convite não é mais válido",
     "invalid_body": "O link pode ter expirado, sido revogado ou já ter sido usado. Peça um novo a um administrador.",
-    "back_to_login": "Ir para o login"
+    "back_to_login": "Ir para o login",
+    "retry": "Tentar de novo"
   },
   "auth_marketing": {
     "kicker": "self-hosted",

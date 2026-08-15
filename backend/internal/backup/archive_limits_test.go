@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -59,7 +61,7 @@ func TestInspectArchive_AcceptsBoundedArchive(t *testing.T) {
 		}{"files/images/1.jpg", []byte("image")},
 	)
 
-	got, err := inspectArchive(zr)
+	got, err := inspectArchive(context.Background(), zr)
 	require.NoError(t, err)
 	assert.Len(t, got.entries, 3)
 	assert.Contains(t, got.hashes, "database.json")
@@ -108,10 +110,14 @@ func TestValidateAndRestore_EnforceSharedArchiveLimits(t *testing.T) {
 		}
 		db, err := json.Marshal(snap)
 		require.NoError(t, err)
+		digest := sha256.Sum256(db)
 		manifest, err := json.Marshal(Manifest{
 			Kind:          ManifestKind,
 			Version:       ManifestVersion,
 			SchemaVersion: CurrentSchemaVersion,
+			Checksums: map[string]string{
+				"database.json": "sha256:" + hex.EncodeToString(digest[:]),
+			},
 		})
 		require.NoError(t, err)
 		return zipReaderWithEntries(t,
@@ -177,10 +183,34 @@ func TestHashAtMost_UsesMaxPlusOne(t *testing.T) {
 		body []byte
 	}{"files/images/1.jpg", []byte("1234")})
 
-	_, n, err := hashAtMost(zr.File[0], 3)
+	_, n, err := hashAtMost(context.Background(), zr.File[0], 3)
 	require.Error(t, err)
 	assert.EqualValues(t, 4, n)
 	assert.Contains(t, err.Error(), "3-byte limit")
+}
+
+func TestInspectArchiveHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	zr := zipReaderWithEntries(t, struct {
+		name string
+		body []byte
+	}{"database.json", []byte(`{"version":7}`)})
+
+	_, err := inspectArchive(ctx, zr)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestRestorePreflightLoopsHonorCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	snapshot := &Snapshot{Notes: []NoteRow{{BodyHTML: "<p>note</p>"}}}
+
+	require.ErrorIs(t, sanitizeSnapshotNotes(ctx, snapshot), context.Canceled)
+	_, _, err := validateSnapshotFileReferences(ctx, snapshot, &inspectedArchive{
+		entries: map[string]*zip.File{},
+	})
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestSnapshotCollections_ListsEveryRestoredCollection(t *testing.T) {

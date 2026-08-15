@@ -566,35 +566,40 @@ func TestRestore_DirectPreflightRejectsBeforeDatabaseMutation(t *testing.T) {
 	missingCover := "/api/files/" + missingKey
 
 	for _, tc := range []struct {
-		name     string
-		version  string
-		checksum string
-		bodyHTML string
-		coverURL *string
-		contains string
+		name       string
+		version    string
+		checksum   string
+		bodyHTML   string
+		coverURL   *string
+		contains   string
+		wantStatus int
 	}{
 		{
-			name:     "manifest_major_version",
-			version:  "2.0",
-			contains: "major version mismatch",
+			name:       "manifest_major_version",
+			version:    "2.0",
+			contains:   "major version mismatch",
+			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:     "database_checksum",
-			version:  backup.ManifestVersion,
-			checksum: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-			contains: "checksum mismatch",
+			name:       "database_checksum",
+			version:    backup.ManifestVersion,
+			checksum:   "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			contains:   "checksum mismatch",
+			wantStatus: http.StatusUnprocessableEntity,
 		},
 		{
-			name:     "missing_local_note_media",
-			version:  backup.ManifestVersion,
-			bodyHTML: `<p><img src="/api/files/` + missingKey + `"></p>`,
-			contains: "missing note media",
+			name:       "missing_local_note_media",
+			version:    backup.ManifestVersion,
+			bodyHTML:   `<p><img src="/api/files/` + missingKey + `"></p>`,
+			contains:   "missing note media",
+			wantStatus: http.StatusUnprocessableEntity,
 		},
 		{
-			name:     "missing_local_note_cover",
-			version:  backup.ManifestVersion,
-			coverURL: &missingCover,
-			contains: "missing note media",
+			name:       "missing_local_note_cover",
+			version:    backup.ManifestVersion,
+			coverURL:   &missingCover,
+			contains:   "missing note media",
+			wantStatus: http.StatusUnprocessableEntity,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -629,7 +634,7 @@ func TestRestore_DirectPreflightRejectsBeforeDatabaseMutation(t *testing.T) {
 			require.Error(t, err)
 			var httpErr *httperr.Error
 			require.ErrorAs(t, err, &httpErr)
-			assert.Equal(t, http.StatusBadRequest, httpErr.Status)
+			assert.Equal(t, tc.wantStatus, httpErr.Status)
 			assert.Equal(t, "invalid_backup", httpErr.Code)
 			assert.Contains(t, err.Error(), tc.contains)
 
@@ -637,6 +642,97 @@ func TestRestore_DirectPreflightRejectsBeforeDatabaseMutation(t *testing.T) {
 			require.NoError(t, err, "restore preflight failure must not wipe existing content")
 			assert.Zero(t, scalar(t, pool,
 				`SELECT count(*) FROM note WHERE user_id = $1 AND title = 'must not restore'`, int64(uid)))
+		})
+	}
+}
+
+func TestRestoreRejectsChecksumMismatchBeforeMutation(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	uid := testdb.SeedUser(t, pool, "checksum-preflight@test.local", "user")
+	bucket := newStubBucket()
+	repo := links.NewRepository(pool)
+	keeper, err := repo.Create(ctx, uid, links.CreateInput{
+		URL: "https://keeper.example", Title: "must survive",
+	})
+	require.NoError(t, err)
+	keeperKey := fmt.Sprintf("images/%d.keeper.jpg", keeper.ID)
+	bucket.objs[keeperKey] = []byte("existing object")
+	require.NoError(t, repo.UpdateOGImage(ctx, uid, keeper.ID, "/api/files/"+keeperKey))
+
+	now := time.Now().UTC()
+	archiveKey := "files/images/77.jpg"
+	fileBytes := []byte("changed image bytes")
+	snap := backup.Snapshot{
+		Version: backup.DatabaseSnapshotVersion,
+		Links: []backup.LinkRow{{
+			ID: 77, URL: "https://must-not-restore.example", Title: "must not restore",
+			Slug: "must-not-restore", CreatedAt: now, UpdatedAt: now,
+		}},
+	}
+	db := mustJSON(t, snap)
+	zr := zipFromEntries(t, map[string][]byte{
+		"manifest.json": mustJSON(t, backup.Manifest{
+			Kind: backup.ManifestKind, Version: backup.ManifestVersion,
+			SchemaVersion: backup.CurrentSchemaVersion,
+			Checksums: map[string]string{
+				"database.json": sha256hex(db),
+				archiveKey:      sha256hex([]byte("original image bytes")),
+			},
+		}),
+		"database.json": db,
+		archiveKey:      fileBytes,
+	})
+
+	_, err = backup.NewService(pool, bucket, discardLogger()).Restore(ctx, uid, zr, backup.ModeWipe)
+	require.Error(t, err)
+	var httpErr *httperr.Error
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusUnprocessableEntity, httpErr.Status)
+	assert.Equal(t, "invalid_backup", httpErr.Code)
+	assert.Contains(t, err.Error(), "checksum mismatch: "+archiveKey)
+
+	_, err = repo.Get(ctx, uid, keeper.ID)
+	require.NoError(t, err, "checksum preflight must finish before wipe")
+	assert.Equal(t, map[string][]byte{keeperKey: []byte("existing object")}, bucket.objs)
+	assert.Zero(t, scalar(t, pool,
+		`SELECT count(*) FROM link WHERE user_id = $1 AND url = 'https://must-not-restore.example'`, int64(uid)))
+
+	for _, tc := range []struct {
+		name      string
+		checksums map[string]string
+		missing   string
+	}{
+		{
+			name:      "file_checksum",
+			checksums: map[string]string{"database.json": sha256hex(db)},
+			missing:   archiveKey,
+		},
+		{
+			name:      "database_checksum",
+			checksums: map[string]string{archiveKey: sha256hex(fileBytes)},
+			missing:   "database.json",
+		},
+	} {
+		t.Run("missing_"+tc.name, func(t *testing.T) {
+			zr := zipFromEntries(t, map[string][]byte{
+				"manifest.json": mustJSON(t, backup.Manifest{
+					Kind: backup.ManifestKind, Version: backup.ManifestVersion,
+					SchemaVersion: backup.CurrentSchemaVersion, Checksums: tc.checksums,
+				}),
+				"database.json": db,
+				archiveKey:      fileBytes,
+			})
+
+			_, err := backup.NewService(pool, bucket, discardLogger()).Restore(ctx, uid, zr, backup.ModeWipe)
+			require.Error(t, err)
+			var httpErr *httperr.Error
+			require.ErrorAs(t, err, &httpErr)
+			assert.Equal(t, http.StatusUnprocessableEntity, httpErr.Status)
+			assert.Contains(t, err.Error(), "missing checksum: "+tc.missing)
+			_, err = repo.Get(ctx, uid, keeper.ID)
+			require.NoError(t, err)
+			assert.Equal(t, map[string][]byte{keeperKey: []byte("existing object")}, bucket.objs)
 		})
 	}
 }

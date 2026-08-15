@@ -166,17 +166,21 @@ export async function generateBackup(): Promise<BackupHistoryEntry> {
   return entry
 }
 
-export async function validateBackup(file: File): Promise<BackupValidation> {
+export async function validateBackup(file: File, signal?: AbortSignal): Promise<BackupValidation> {
   const fd = new FormData()
   fd.append('file', file)
   const { data } = await http.post<BackupValidation>('/api/backup/validate', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: BACKUP_REQUEST_TIMEOUT_MS,
+    signal,
   })
   return data
 }
 
-export async function restoreBackup(file: File, mode: 'wipe' | 'skip' | 'duplicate'): Promise<RestoreReport> {
+export async function restoreBackup(
+  file: File,
+  mode: 'wipe' | 'skip' | 'duplicate',
+): Promise<RestoreReport> {
   const fd = new FormData()
   fd.append('file', file)
   const { data } = await http.post<RestoreReport>(`/api/backup/restore?mode=${mode}`, fd, {
@@ -193,13 +197,11 @@ export function useRestoreBackup() {
   return useMutation({
     mutationFn: (args: { file: File; mode: 'wipe' | 'skip' | 'duplicate' }) =>
       restoreBackup(args.file, args.mode),
-    onSuccess: () => Promise.all([
-      qc.invalidateQueries({ queryKey: ['links'] }),
-      qc.invalidateQueries({ queryKey: ['entries'] }),
-      qc.invalidateQueries({ queryKey: ['folders'] }),
-      qc.invalidateQueries({ queryKey: ['tags'] }),
-      qc.invalidateQueries({ queryKey: ['stats'] }),
-    ]),
+    onSettled: () => {
+      for (const queryKey of ['links', 'entries', 'folders', 'tags', 'stats']) {
+        void Promise.resolve(qc.invalidateQueries({ queryKey: [queryKey] })).catch(() => undefined)
+      }
+    },
   })
 }
 

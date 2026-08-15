@@ -6,7 +6,7 @@ import { useState, useEffect, useCallback, useRef, type SetStateAction } from 'r
 export function usePersistedState<T>(
   key: string,
   fallback: T,
-  validate: (value: unknown) => value is T = (value): value is T => matchesShape(value, fallback),
+  validate: (value: unknown) => value is T,
 ): [T, (v: T | ((prev: T) => T)) => void] {
   const persistPending = useRef(false)
   const [value, setValue] = useState<T>(() => {
@@ -47,7 +47,7 @@ export function usePersistedState<T>(
 export function usePersistedMap<T>(
   storageKey: string,
   fallback: T,
-  validate: (value: unknown) => value is T = (value): value is T => matchesShape(value, fallback),
+  validate: (value: unknown) => value is T,
 ): {
   map: Record<string, T>
   get: (ctx: string) => T
@@ -78,14 +78,6 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function matchesShape(value: unknown, fallback: unknown): boolean {
-  if (fallback === null) return value === null
-  if (Array.isArray(fallback)) return Array.isArray(value)
-  if (isPlainRecord(fallback)) {
-    if (!isPlainRecord(value)) return false
-    return Object.entries(fallback).every(([key, sample]) =>
-      key in value && matchesShape(value[key], sample),
-    )
-  }
-  return typeof value === typeof fallback
+export function isBoolean(value: unknown): value is boolean {
+  return typeof value === 'boolean'
 }

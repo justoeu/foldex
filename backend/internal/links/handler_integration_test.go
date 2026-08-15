@@ -273,8 +273,9 @@ func TestHandler_SeenChange(t *testing.T) {
 	di := "daily"
 	_, err = repo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
 	require.NoError(t, err)
-	require.NoError(t, repo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "a"}))
-	require.NoError(t, repo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "b", Changed: true}))
+	claim := claimChecks(t, ctx, repo, l.ID)[l.ID]
+	recordCheckResult(t, ctx, repo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "a"})
+	recordCheckResult(t, ctx, repo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "b", Changed: true})
 
 	rr := doLinkJSON(t, h, http.MethodPost, "/links/"+linkID(l.ID)+"/seen-change", nil)
 	require.Equal(t, http.StatusNoContent, rr.Code)
@@ -294,8 +295,9 @@ func TestHandler_ListRecentChanges(t *testing.T) {
 	di := "daily"
 	_, err = repo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
 	require.NoError(t, err)
-	require.NoError(t, repo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "a"}))
-	require.NoError(t, repo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "b", Changed: true}))
+	claim := claimChecks(t, ctx, repo, l.ID)[l.ID]
+	recordCheckResult(t, ctx, repo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "a"})
+	recordCheckResult(t, ctx, repo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "b", Changed: true})
 
 	rr := doLinkJSON(t, h, http.MethodGet, "/links/recent-changes?days=7&limit=10", nil)
 	require.Equal(t, http.StatusOK, rr.Code)

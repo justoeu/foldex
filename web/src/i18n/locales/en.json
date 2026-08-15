@@ -476,6 +476,7 @@
     "submit_apply_other": "Import {{count}} links",
     "submit_wipe": "⚠ Import (replaces duplicates)",
     "submit_importing": "Importing…",
+    "operation_locked": "Import is running and cannot be canceled. This dialog will stay open until it finishes.",
     "submit_done": "Done",
     "result_mode": "Mode",
     "result_imported": "Imported",
@@ -526,6 +527,7 @@
     "submit_restore": "Restore",
     "submit_restore_wipe": "⚠ Restore (wipe everything)",
     "submit_restoring": "Restoring…",
+    "operation_locked": "Restore is running and cannot be canceled. This dialog will stay open until it finishes.",
     "dialog_kicker_short": "💾 RESTORE",
     "dialog_title_short": "Review backup",
     "manifest_invalid": "Manifest invalid or missing.",
@@ -732,7 +734,8 @@
     "submit": "Activate and sign in",
     "invalid_title": "This invitation is no longer valid",
     "invalid_body": "The link may have expired, been revoked, or already been used. Ask an administrator to send a new one.",
-    "back_to_login": "Go to sign in"
+    "back_to_login": "Go to sign in",
+    "retry": "Try again"
   },
   "auth_marketing": {
     "kicker": "self-hosted",

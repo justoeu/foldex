@@ -28,7 +28,7 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 	if !mode.Valid() {
 		return empty, fmt.Errorf("backup: invalid mode %q", mode)
 	}
-	preflight, err := preflightRestore(zr)
+	preflight, err := preflightRestore(ctx, zr)
 	if err != nil {
 		return empty, err
 	}
@@ -36,7 +36,7 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 		return report, err
 	}
 
-	prepared, err := prepareNoteMediaRestore(preflight.snapshot, zr)
+	prepared, err := prepareNoteMediaRestore(ctx, preflight.snapshot, zr)
 	if err != nil {
 		return empty, err
 	}
@@ -52,8 +52,11 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 	return s.finishRestoreFiles(ctx, uid, zr, mode, preflight.archive.digest, result, prepared, start)
 }
 
-func preflightRestore(zr *zip.Reader) (backupArchiveInspection, error) {
-	preflight := inspectBackupArchive(zr)
+func preflightRestore(ctx context.Context, zr *zip.Reader) (backupArchiveInspection, error) {
+	preflight := inspectBackupArchive(ctx, zr)
+	if err := ctx.Err(); err != nil {
+		return preflight, err
+	}
 	if len(preflight.errors) == 0 {
 		return preflight, nil
 	}
@@ -61,7 +64,11 @@ func preflightRestore(zr *zip.Reader) (backupArchiveInspection, error) {
 	if preflight.manifest != nil && preflight.manifest.Kind != ManifestKind {
 		message = "backup is not a foldex backup"
 	}
-	return preflight, httperr.New(http.StatusBadRequest, "invalid_backup", message)
+	status := http.StatusBadRequest
+	if preflight.unprocessable {
+		status = http.StatusUnprocessableEntity
+	}
+	return preflight, httperr.New(status, "invalid_backup", message)
 }
 
 func (s *Service) restoreFromLedger(ctx context.Context, uid authctx.UserID, zr *zip.Reader, mode ConflictMode, digest [sha256.Size]byte, start time.Time) (RestoreReport, bool, error) {

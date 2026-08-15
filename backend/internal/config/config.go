@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"foldex/internal/pkg/resourcebudget"
 )
 
 // MailConfig holds transactional-mail wiring (internal/mailer).
@@ -230,6 +232,15 @@ func Load() (Config, error) {
 	}
 	if cfg.PreviewConcurrency < 1 {
 		cfg.PreviewConcurrency = 1
+	}
+	if cfg.PreviewConcurrency > resourcebudget.BackgroundWorkerConcurrency {
+		cfg.PreviewConcurrency = resourcebudget.BackgroundWorkerConcurrency
+	}
+	if cfg.ChangeCheckConcurrency < 1 {
+		cfg.ChangeCheckConcurrency = 2
+	}
+	if cfg.ChangeCheckConcurrency > resourcebudget.BackgroundWorkerConcurrency {
+		cfg.ChangeCheckConcurrency = resourcebudget.BackgroundWorkerConcurrency
 	}
 	cfg.normalizeAuth()
 	if err := cfg.validateSecureDefaults(); err != nil {

@@ -4,6 +4,7 @@ package testdb
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 
 	"foldex/internal/auth"
 	"foldex/internal/pkg/secrets"
+	"foldex/internal/pkg/slug"
 )
 
 var composePostgresImage = regexp.MustCompile(`(?m)^\s*image:\s*(postgres:\S+)`)
@@ -328,4 +330,84 @@ func TestMigration000028IsReversibleAndLegacyPasswordResetsFailClosed(t *testing
 			  AND column_name = 'token_version'
 		)`).Scan(&columnExists))
 	assert.False(t, columnExists)
+}
+
+func TestMigration000029RepairsOverlongSlugsAndEnforcesLimit(t *testing.T) {
+	ctx := context.Background()
+	pool := New(t)
+	dir := migrationsDir()
+	down, err := os.ReadFile(filepath.Join(dir, "000029_slug_length.down.sql"))
+	require.NoError(t, err)
+	up, err := os.ReadFile(filepath.Join(dir, "000029_slug_length.up.sql"))
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, string(down))
+	require.NoError(t, err, "000029 down migration must apply cleanly")
+	uid := SeedUser(t, pool, "legacy-slug@test.local", "user")
+	base := strings.Repeat("a", slug.MaxLen)
+	values := []string{base}
+	for suffix := 2; suffix <= 100; suffix++ {
+		values = append(values, fmt.Sprintf("%s-%d", base, suffix))
+	}
+	values = append(values,
+		strings.Repeat("1", 78)+"-a-2",
+		strings.Repeat("2", slug.MaxLen)+"-a",
+	)
+	linkIDs := make([]int64, 0, len(values))
+	noteIDs := make([]int64, 0, len(values))
+	for index, value := range values {
+		var linkID int64
+		err = pool.QueryRow(ctx, `
+			INSERT INTO link (user_id, url, title, slug)
+			VALUES ($1, $2, $3, $4) RETURNING id`,
+			int64(uid), fmt.Sprintf("https://legacy-%d.test", index), fmt.Sprintf("legacy-%d", index), value).Scan(&linkID)
+		require.NoError(t, err)
+		linkIDs = append(linkIDs, linkID)
+		var noteID int64
+		err = pool.QueryRow(ctx, `
+			INSERT INTO note (user_id, title, slug)
+			VALUES ($1, $2, $3) RETURNING id`, int64(uid), fmt.Sprintf("legacy-%d", index), value).Scan(&noteID)
+		require.NoError(t, err)
+		noteIDs = append(noteIDs, noteID)
+	}
+
+	_, err = pool.Exec(ctx, string(up))
+	require.NoError(t, err, "000029 up migration must repair legacy overlong slugs")
+	for table, wantIDs := range map[string][]int64{"link": linkIDs, "note": noteIDs} {
+		rows, queryErr := pool.Query(ctx, `SELECT id, title, slug FROM `+table+` ORDER BY id`)
+		require.NoError(t, queryErr)
+		seen := make(map[string]struct{})
+		var gotIDs []int64
+		for rows.Next() {
+			var id int64
+			var title, candidate string
+			require.NoError(t, rows.Scan(&id, &title, &candidate))
+			gotIDs = append(gotIDs, id)
+			assert.Contains(t, title, "legacy-")
+			assert.LessOrEqual(t, len(candidate), slug.MaxLen)
+			assert.True(t, slug.IsValid(candidate), candidate)
+			_, duplicate := seen[candidate]
+			assert.False(t, duplicate, "duplicate repaired slug %q", candidate)
+			seen[candidate] = struct{}{}
+		}
+		require.NoError(t, rows.Err())
+		rows.Close()
+		assert.Contains(t, seen, strings.Repeat("a", 78)+"-9")
+		assert.Contains(t, seen, strings.Repeat("a", 77)+"-10")
+		assert.Contains(t, seen, strings.Repeat("a", 77)+"-99")
+		assert.Contains(t, seen, strings.Repeat("a", 76)+"-100")
+		assert.Equal(t, wantIDs, gotIDs, "%s rows or identities changed during repair", table)
+	}
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO link (user_id, url, title, slug)
+		VALUES ($1, 'https://too-long.test', 'too long', $2)`, int64(uid), base+"-999")
+	require.Error(t, err, "link must reject slugs longer than MaxLen")
+	_, err = pool.Exec(ctx, `
+		INSERT INTO note (user_id, title, slug)
+		VALUES ($1, 'too long', $2)`, int64(uid), base+"-999")
+	require.Error(t, err, "note must reject slugs longer than MaxLen")
+
+	_, err = pool.Exec(ctx, string(down))
+	require.NoError(t, err, "000029 must roll back after reapplying")
 }

@@ -27,32 +27,51 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
   const [mode, setMode] = useState<Mode>('skip')
   const [restoring, setRestoring] = useState(false)
   const [report, setReport] = useState<RestoreReport | null>(null)
+  const validationAbortRef = useRef<AbortController | null>(null)
+  const restoreLockedRef = useRef(false)
   const restoreBackup = useRestoreBackup()
 
-  useEscape(onClose, true)
+  const requestClose = () => {
+    if (restoreLockedRef.current || report) return
+    validationAbortRef.current?.abort()
+    onClose()
+  }
+
+  useEscape(requestClose, true)
 
   useEffect(() => {
-    let alive = true
+    const controller = new AbortController()
+    validationAbortRef.current = controller
     setLoading(true)
+    setValidation(null)
     setErrMsg(null)
-    validateBackup(file)
+    validateBackup(file, controller.signal)
       .then((v) => {
-        if (alive) setValidation(v)
+        if (!controller.signal.aborted) setValidation(v)
       })
       .catch((e) => {
-        if (alive) setErrMsg(extractErr(e, t('common.unknown_error')))
+        if (!controller.signal.aborted) setErrMsg(extractErr(e, t('common.unknown_error')))
       })
-      .finally(() => alive && setLoading(false))
-    return () => { alive = false }
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+        if (validationAbortRef.current === controller) validationAbortRef.current = null
+      })
+    return () => {
+      controller.abort()
+      if (validationAbortRef.current === controller) validationAbortRef.current = null
+    }
   }, [file, t])
 
   const handleRestore = async () => {
+    if (restoreLockedRef.current) return
+    restoreLockedRef.current = true
     setRestoring(true)
     setErrMsg(null)
     try {
       const r = await restoreBackup.mutateAsync({ file, mode })
       setReport(r)
     } catch (e: unknown) {
+      restoreLockedRef.current = false
       setErrMsg(extractErr(e, t('common.unknown_error')))
     } finally {
       setRestoring(false)
@@ -82,7 +101,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
               {file.name}
             </div>
           </div>
-          <button className="fx-confirm-x" onClick={onClose} aria-label={t('common.close')}>
+          <button className="fx-confirm-x" onClick={requestClose} disabled={restoring || !!report} aria-label={t('common.close')}>
             <Icon d={I.x} size={14} />
           </button>
         </header>
@@ -90,6 +109,12 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
         <div className="fx-modal-body" style={{ gridTemplateColumns: '1fr' }}>
           <div className="fx-modal-col">
             {loading && <div style={{ color: 'var(--fx-ink-4)' }}>{t('common.validating')}</div>}
+
+            {restoring && (
+              <div role="status" className="fx-confirm-msg" style={{ color: 'var(--fx-ink-3)' }}>
+                <Icon d={I.alert} size={14} /> {t('backup.operation_locked')}
+              </div>
+            )}
 
             {!loading && errMsg && (
               <div className="fx-confirm-msg" style={{ color: 'var(--fx-danger)' }}>
@@ -118,7 +143,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
                     <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)', marginTop: 8 }}>
                       {t('backup.mode_section_short')}
                     </div>
-                    <ModePicker value={mode} onChange={setMode} conflicts={validation.conflicts} t={t} />
+                    <ModePicker value={mode} onChange={setMode} conflicts={validation.conflicts} disabled={restoring} t={t} />
                   </>
                 )}
 
@@ -136,7 +161,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
             </button>
           ) : (
             <>
-              <button className="fx-confirm-btn" onClick={onClose}>
+              <button className="fx-confirm-btn" onClick={requestClose} disabled={restoring}>
                 {t('common.cancel')}
               </button>
               <button
@@ -188,29 +213,33 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function ModePicker({
-  value, onChange, conflicts, t,
+  value, onChange, conflicts, disabled, t,
 }: {
   value: Mode
   onChange: (m: Mode) => void
   conflicts: { links: number; tags: number; folders: number }
+  disabled: boolean
   t: TFunction
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <ModeOption
         active={value === 'skip'}
+        disabled={disabled}
         onClick={() => onChange('skip')}
         title={t('backup.mode_skip_title')}
         desc={t('backup.mode_skip_desc', { links: conflicts.links, tags: conflicts.tags })}
       />
       <ModeOption
         active={value === 'duplicate'}
+        disabled={disabled}
         onClick={() => onChange('duplicate')}
         title={t('backup.mode_duplicate_title')}
         desc={t('backup.mode_duplicate_desc')}
       />
       <ModeOption
         active={value === 'wipe'}
+        disabled={disabled}
         onClick={() => onChange('wipe')}
         title={t('backup.mode_wipe_title')}
         desc={t('backup.mode_wipe_desc')}
@@ -221,18 +250,20 @@ function ModePicker({
 }
 
 function ModeOption({
-  active, onClick, title, desc, danger,
+  active, onClick, title, desc, danger, disabled,
 }: {
   active: boolean
   onClick: () => void
   title: string
   desc: string
   danger?: boolean
+  disabled: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       style={{
         textAlign: 'left',
         padding: '10px 12px',
@@ -243,7 +274,7 @@ function ModeOption({
         background: active
           ? danger ? 'rgba(244,63,94,0.06)' : 'rgba(99,102,241,0.06)'
           : 'transparent',
-        cursor: 'pointer',
+        cursor: disabled ? 'not-allowed' : 'pointer',
         display: 'flex',
         flexDirection: 'column',
         gap: 3,

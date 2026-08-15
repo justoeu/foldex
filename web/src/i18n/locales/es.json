@@ -476,6 +476,7 @@
     "submit_apply_other": "Importar {{count}} enlaces",
     "submit_wipe": "⚠ Importar (reemplaza duplicados)",
     "submit_importing": "Importando…",
+    "operation_locked": "La importación está en curso y no se puede cancelar. Esta ventana permanecerá abierta hasta que termine.",
     "submit_done": "Listo",
     "result_mode": "Modo",
     "result_imported": "Importados",
@@ -526,6 +527,7 @@
     "submit_restore": "Restaurar",
     "submit_restore_wipe": "⚠ Restaurar (borrar todo)",
     "submit_restoring": "Restaurando…",
+    "operation_locked": "La restauración está en curso y no se puede cancelar. Esta ventana permanecerá abierta hasta que termine.",
     "dialog_kicker_short": "💾 RESTAURAR",
     "dialog_title_short": "Revisar backup",
     "manifest_invalid": "Manifest inválido o ausente.",
@@ -732,7 +734,8 @@
     "submit": "Activar y entrar",
     "invalid_title": "Esta invitación ya no es válida",
     "invalid_body": "El enlace puede haber caducado, haber sido revocado o ya haberse usado. Pide uno nuevo a un administrador.",
-    "back_to_login": "Ir al inicio de sesión"
+    "back_to_login": "Ir al inicio de sesión",
+    "retry": "Intentar de nuevo"
   },
   "auth_marketing": {
     "kicker": "self-hosted",

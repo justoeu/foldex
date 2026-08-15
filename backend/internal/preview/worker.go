@@ -13,6 +13,7 @@ import (
 	"foldex/internal/imageopt"
 	"foldex/internal/linkimage"
 	"foldex/internal/links"
+	"foldex/internal/pkg/resourcebudget"
 )
 
 // ErrQueueFull is returned by Enqueue when the bounded jobs channel has no
@@ -85,6 +86,9 @@ const (
 func NewWorker(pool *pgxpool.Pool, concurrency int, timeout time.Duration, logger *slog.Logger) *Worker {
 	if concurrency < 1 {
 		concurrency = 1
+	}
+	if concurrency > resourcebudget.BackgroundWorkerConcurrency {
+		concurrency = resourcebudget.BackgroundWorkerConcurrency
 	}
 	return &Worker{
 		repo:                links.NewRepository(pool),

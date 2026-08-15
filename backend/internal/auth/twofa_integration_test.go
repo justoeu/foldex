@@ -1745,15 +1745,22 @@ func TestConfirmTOTP_RollsBackFactorWhenRecoveryCodeWriteFails(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &start))
 
 	_, err := h.pool.Exec(context.Background(), `
+		CREATE SEQUENCE fail_recovery_code_insert_count;
 		CREATE FUNCTION fail_recovery_code_insert() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN RAISE EXCEPTION 'forced recovery-code failure'; END $$;
+		BEGIN
+			IF nextval('fail_recovery_code_insert_count') = 3 THEN
+				RAISE EXCEPTION 'forced recovery-code failure';
+			END IF;
+			RETURN NEW;
+		END $$;
 		CREATE TRIGGER fail_recovery_code_insert
 		BEFORE INSERT ON recovery_code FOR EACH ROW EXECUTE FUNCTION fail_recovery_code_insert()`)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = h.pool.Exec(context.Background(), `
 			DROP TRIGGER IF EXISTS fail_recovery_code_insert ON recovery_code;
-			DROP FUNCTION IF EXISTS fail_recovery_code_insert()`)
+			DROP FUNCTION IF EXISTS fail_recovery_code_insert();
+			DROP SEQUENCE IF EXISTS fail_recovery_code_insert_count`)
 	})
 
 	rec = c.do(http.MethodPost, "/api/auth/2fa/totp/confirm",
@@ -1764,6 +1771,30 @@ func TestConfirmTOTP_RollsBackFactorWhenRecoveryCodeWriteFails(t *testing.T) {
 	require.NoError(t, h.pool.QueryRow(context.Background(), `
 		SELECT confirmed_at IS NOT NULL FROM totp_secret WHERE user_id = 1`).Scan(&confirmed))
 	assert.False(t, confirmed, "the factor was activated without its recovery codes")
+	var persistedCodes int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM recovery_code WHERE user_id = 1`).Scan(&persistedCodes))
+	assert.Zero(t, persistedCodes, "the failed multi-row insert left a partial recovery set")
+
+	_, err = h.pool.Exec(context.Background(), `
+		DROP TRIGGER fail_recovery_code_insert ON recovery_code;
+		DROP FUNCTION fail_recovery_code_insert();
+		DROP SEQUENCE fail_recovery_code_insert_count`)
+	require.NoError(t, err)
+	rec = c.do(http.MethodPost, "/api/auth/2fa/totp/confirm",
+		map[string]string{"code": codeNow(t, start.Secret)})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var completed struct {
+		RecoveryCodes []string `json:"recovery_codes"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &completed))
+	assert.Len(t, completed.RecoveryCodes, 10)
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT confirmed_at IS NOT NULL FROM totp_secret WHERE user_id = 1`).Scan(&confirmed))
+	assert.True(t, confirmed)
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM recovery_code WHERE user_id = 1`).Scan(&persistedCodes))
+	assert.Equal(t, len(completed.RecoveryCodes), persistedCodes)
 }
 
 func TestConfirmTOTP_SettingsEnrollmentRefusesARevokedSession(t *testing.T) {

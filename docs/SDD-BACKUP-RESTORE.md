@@ -259,7 +259,7 @@ Nenhum modo preserva ids. Chaves de link são remapeadas para o `link.id` novo. 
 }
 ```
 
-**Response 422** (validação falhou — não-fatal pro usuário, mas restore não pode prosseguir):
+**Response 200 com `ok: false`** (validação falhou — não-fatal pro usuário, mas restore não pode prosseguir):
 ```json
 { "ok": false, "manifest": { /* parsed */ }, "errors": [
   "checksum mismatch: files/images/7.jpg",
@@ -267,7 +267,7 @@ Nenhum modo preserva ids. Chaves de link são remapeadas para o `link.id` novo. 
 ] }
 ```
 
-**Response 400**: zip malformado, manifest ausente, `kind` errado, schema_version do futuro ou limite de preflight/cardinalidade excedido.
+**Response 400**: o upload não pode ser aberto como ZIP. Depois que o ZIP é aberto, erros de manifest, versão, integridade e limites usam o mesmo envelope 200 com `ok: false`, para que o frontend consiga exibir a lista completa.
 
 **Response 429**: `backup_busy` quando outro export/validate/restore já mantém o slot. A rejeição ocorre antes de ler o body, criar temp file ou chamar o service; `Retry-After: 1` permite retry curto.
 
@@ -289,7 +289,7 @@ Nenhum modo preserva ids. Chaves de link são remapeadas para o `link.id` novo. 
 }
 ```
 
-**Erros**: `400` (manifest inválido), `422` (checksum mismatch), `500` (DB ou RustFS falhou no meio).
+**Erros**: `400` (manifest inválido), `422` (checksum ausente ou divergente e referência local ausente), `500` (DB ou RustFS falhou no meio).
 
 ---
 
@@ -340,7 +340,7 @@ Dentro da DB transaction, **a ordem é estrita**:
 1. **Magic check**: `manifest.kind == "foldex.backup"` (não-fatal: também aceita versões futuras do `version` se major bate).
 2. **Version check**: `manifest.version` parsa como semver; major **bate** com o servidor atual.
 3. **Schema check**: `manifest.schema_version <= servidor.schema_version`. Se for menor, emite warning (campos novos default); se for maior, erro fatal (servidor não conhece o formato).
-4. **Checksum check**: pra cada entry em `checksums`, reabre o zip entry, recalcula SHA-256, compara. Mismatch = erro fatal.
+4. **Checksum check**: `database.json` e toda entry em `files/` precisam aparecer em `checksums`; omissão é erro fatal. O preflight recalcula o SHA-256 de cada entry declarada e compara; mismatch também é fatal. Em `validate`, ambos retornam o envelope 200 com `ok: false`; em `restore`, retornam 422 antes do ledger, DB ou object store.
 5. **Reference integrity**: links internos sem entry geram warning. Toda URL local `/api/files/notes/<key>` preservada no HTML sanitizado ou em `cover_url` exige a entry `files/notes/<key>`; ausência é erro fatal antes do ledger/DB/files. URLs externas não entram nessa regra. Referências válidas só ganham ownership depois de serem re-keyed para o caller; a chave pública antiga nunca é persistida pelo restore.
 6. **Conflict detection**: SELECTs de uniqueness:
    - `SELECT count(*) FROM link WHERE url = ANY($1::text[])` com array de URLs do backup

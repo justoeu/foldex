@@ -2,26 +2,19 @@ package changecheck
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"foldex/internal/links"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/resourcebudget"
 )
 
-// ErrQueueFull is returned by Enqueue when the bounded jobs channel has no
-// available slot. Same semantics as preview.ErrQueueFull — handlers/tick
-// caller decides whether to retry or just drop (the next tick will pick the
-// link up again).
-var ErrQueueFull = errors.New("changecheck: queue full")
-
-// ErrStopped is returned by Enqueue after Stop has been called. The jobs
-// channel is intentionally not closed (send-on-closed panics under racing
-// requeue + shutdown) so this flag is the explicit "no more work" signal.
-var ErrStopped = errors.New("changecheck: worker stopped")
+const (
+	pushQueueSize = 32
+	pushTimeout   = 15 * time.Second
+)
 
 // Sender is the push notification dependency. Implemented by internal/push
 // in Phase 3. Kept as a tiny interface here so the worker stays
@@ -46,9 +39,8 @@ type Notification struct {
 // Repo is the storage contract used by the worker. Narrowed from
 // *links.Repository so tests can mock it without standing up Postgres.
 type Repo interface {
-	SystemGet(ctx context.Context, id int64) (links.Link, error)
 	SystemFindDueForCheck(ctx context.Context, limit int) ([]links.DueLink, error)
-	SystemRecordCheckResult(ctx context.Context, id int64, res links.CheckResult) error
+	SystemRecordCheckResult(ctx context.Context, id int64, expectedClaimedAt time.Time, res links.CheckResult) (bool, error)
 }
 
 // Fetcher is the HTTP dependency. preview.Fetcher.GetRaw satisfies it via
@@ -68,15 +60,11 @@ type Worker struct {
 	scanInterval time.Duration
 	fetchTimeout time.Duration
 
-	// pushSem bounds concurrent Notify goroutines; pushWg lets Stop wait for
-	// in-flight pushes so we don't leak after cancel.
-	pushSem chan struct{}
-	pushWg  sync.WaitGroup
+	pushJobs chan Notification
 
 	wg       sync.WaitGroup
 	cancel   context.CancelFunc
 	stopOnce sync.Once
-	stopped  atomic.Bool
 }
 
 // Options groups all knobs so callers can pass defaults without a long
@@ -91,6 +79,9 @@ func defaultOptions(o Options) Options {
 	if o.Concurrency < 1 {
 		o.Concurrency = 2
 	}
+	if o.Concurrency > resourcebudget.BackgroundWorkerConcurrency {
+		o.Concurrency = resourcebudget.BackgroundWorkerConcurrency
+	}
 	if o.ScanInterval <= 0 {
 		o.ScanInterval = 60 * time.Second
 	}
@@ -102,14 +93,6 @@ func defaultOptions(o Options) Options {
 
 func New(repo Repo, fetcher Fetcher, sender Sender, opts Options, logger *slog.Logger) *Worker {
 	opts = defaultOptions(opts)
-	// Cap concurrent push deliveries to worker concurrency (not unbounded).
-	pushN := opts.Concurrency
-	if pushN < 1 {
-		pushN = 1
-	}
-	if pushN > 8 {
-		pushN = 8
-	}
 	return &Worker{
 		repo:         repo,
 		fetcher:      fetcher,
@@ -117,17 +100,14 @@ func New(repo Repo, fetcher Fetcher, sender Sender, opts Options, logger *slog.L
 		sender:       sender,
 		logger:       logger.With("component", "changecheck"),
 		jobs:         make(chan links.DueLink, 256),
+		pushJobs:     make(chan Notification, pushQueueSize),
 		concurrent:   opts.Concurrency,
 		scanInterval: opts.ScanInterval,
 		fetchTimeout: opts.FetchTimeout,
-		pushSem:      make(chan struct{}, pushN),
 	}
 }
 
-// Start spins the goroutine pool + a single tick() goroutine. The tick is
-// the only thing that calls Enqueue from inside the worker — handlers can
-// also Enqueue when the user opts a link in via PATCH (so the first check
-// happens immediately instead of waiting up to scanInterval).
+// Start spins up the fetch, notification, and scan goroutines.
 func (w *Worker) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
@@ -135,50 +115,41 @@ func (w *Worker) Start(ctx context.Context) {
 		w.wg.Add(1)
 		go w.loop(ctx)
 	}
+	if w.sender != nil {
+		for i := 0; i < w.concurrent; i++ {
+			w.wg.Add(1)
+			go w.pushLoop(ctx)
+		}
+	}
 	w.wg.Add(1)
 	go w.tick(ctx)
 }
 
-// Stop is idempotent — repeated calls block on the first wg.Wait. Setting
-// stopped before cancel is important: an in-flight Enqueue racing with Stop
-// reads stopped=true and refuses without sending into a channel whose
-// consumers are about to exit.
+// Stop is idempotent — repeated calls block on the first wg.Wait.
 func (w *Worker) Stop() {
 	w.stopOnce.Do(func() {
-		w.stopped.Store(true)
 		if w.cancel != nil {
 			w.cancel()
 		}
 	})
 	w.wg.Wait()
-	w.pushWg.Wait()
-	// Drain leftover buffered jobs so Enqueue-vs-Stop TOCTOU cannot park work
-	// with no consumer (RACE-HER-010).
+	// Drain leftover buffered work so racing producers do not retain payloads
+	// after all consumers have exited.
+drainJobs:
 	for {
 		select {
 		case <-w.jobs:
 		default:
-			return
+			break drainJobs
 		}
 	}
-}
-
-// Enqueue schedules an immediate check for job.ID. Non-blocking — returns
-// ErrQueueFull / ErrStopped without sending so callers can decide whether to
-// retry, log, or just drop.
-func (w *Worker) Enqueue(job links.DueLink) error {
-	if w.stopped.Load() {
-		return ErrStopped
-	}
-	select {
-	case w.jobs <- job:
-		if w.stopped.Load() {
-			return ErrStopped
+drainPush:
+	for {
+		select {
+		case <-w.pushJobs:
+		default:
+			break drainPush
 		}
-		return nil
-	default:
-		w.logger.Warn("changecheck queue full, dropping job", "link_id", job.ID)
-		return ErrQueueFull
 	}
 }
 
@@ -188,8 +159,28 @@ func (w *Worker) loop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case id := <-w.jobs:
-			w.process(ctx, id)
+		case job := <-w.jobs:
+			w.process(ctx, job)
+		}
+	}
+}
+
+func (w *Worker) pushLoop(ctx context.Context) {
+	defer w.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case notification := <-w.pushJobs:
+			if ctx.Err() != nil {
+				return
+			}
+			pushCtx, cancel := context.WithTimeout(ctx, pushTimeout)
+			err := w.sender.Notify(pushCtx, notification)
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				w.logger.Warn("push notify failed", "link_id", notification.LinkID, "err", err)
+			}
 		}
 	}
 }
@@ -212,47 +203,43 @@ func (w *Worker) tick(ctx context.Context) {
 }
 
 func (w *Worker) scan(ctx context.Context) {
-	due, err := w.repo.SystemFindDueForCheck(ctx, 256)
+	available := cap(w.jobs) - len(w.jobs)
+	if available == 0 {
+		return
+	}
+	due, err := w.repo.SystemFindDueForCheck(ctx, available)
 	if err != nil {
 		w.logger.Warn("scan: find due failed", "err", err)
 		return
 	}
+	enqueued := 0
 	for _, job := range due {
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return
+		case w.jobs <- job:
+			enqueued++
 		}
-		_ = w.Enqueue(job) // ErrQueueFull is fine — next tick re-picks
 	}
-	if len(due) > 0 {
-		w.logger.Info("scan: enqueued due links", "count", len(due))
+	if enqueued > 0 {
+		w.logger.Info("scan: enqueued due links", "count", enqueued)
 	}
 }
 
-// process fetches the link's HTML, computes a fingerprint, diffs against the
-// previous one, and either records a no-op check (only last_checked_at moves)
-// or fires the push notification before recording the change. The whole
-// path tolerates fetch failures — the worker still records the attempt
-// (so the link isn't re-tried every tick) and stores the error message in
-// preview_error for surfacing in the UI later.
+// process records the claimed configuration only if its last_checked_at token is
+// still current, then queues a notification for an applied change.
 func (w *Worker) process(ctx context.Context, job links.DueLink) {
 	id := job.ID
-	link, err := w.repo.SystemGet(ctx, id)
-	if err != nil {
-		w.logger.Warn("process: link not found", "link_id", id, "err", err)
-		return
-	}
-	// Defensive: opt-out happened between scan and process. Recording a
-	// result with empty fingerprint would be a no-op but burns work.
-	if link.CheckInterval == nil {
+	if job.CheckInterval == "" {
 		return
 	}
 
 	fetchCtx, cancel := context.WithTimeout(ctx, w.fetchTimeout)
 	defer cancel()
-	body, _, err := w.fetcher.GetRaw(fetchCtx, link.URL)
+	body, _, err := w.fetcher.GetRaw(fetchCtx, job.URL)
 	if err != nil {
 		w.logger.Info("process: fetch failed", "link_id", id, "err", err)
-		if recErr := w.repo.SystemRecordCheckResult(ctx, id, links.CheckResult{
+		if _, recErr := w.repo.SystemRecordCheckResult(ctx, id, job.ClaimedAt, links.CheckResult{
 			Fingerprint: "",
 			Changed:     false,
 			FetchErr:    err.Error(),
@@ -262,10 +249,10 @@ func (w *Worker) process(ctx context.Context, job links.DueLink) {
 		return
 	}
 
-	kind, hash, err := w.fingerprint.Compute(fetchCtx, link.URL, body)
+	kind, hash, err := w.fingerprint.Compute(fetchCtx, job.URL, body)
 	if err != nil {
 		w.logger.Info("process: fingerprint failed", "link_id", id, "err", err)
-		if recErr := w.repo.SystemRecordCheckResult(ctx, id, links.CheckResult{
+		if _, recErr := w.repo.SystemRecordCheckResult(ctx, id, job.ClaimedAt, links.CheckResult{
 			Fingerprint: "",
 			Changed:     false,
 			FetchErr:    "fingerprint: " + err.Error(),
@@ -277,8 +264,8 @@ func (w *Worker) process(ctx context.Context, job links.DueLink) {
 	newFp := FormatFingerprint(kind, hash)
 
 	prevKind, prevHash := "", ""
-	if link.LastFingerprint != nil {
-		prevKind, prevHash = SplitFingerprint(*link.LastFingerprint)
+	if job.LastFingerprint != nil {
+		prevKind, prevHash = SplitFingerprint(*job.LastFingerprint)
 	}
 	// "Changed" only when we have a previous fingerprint AND the kind matches
 	// AND the hash differs. The kind-must-match rule prevents a false-positive
@@ -286,41 +273,32 @@ func (w *Worker) process(ctx context.Context, job links.DueLink) {
 	// the new baseline gets stored, but no push fires.
 	changed := prevHash != "" && prevKind == kind && prevHash != hash
 
-	if err := w.repo.SystemRecordCheckResult(ctx, id, links.CheckResult{
+	applied, err := w.repo.SystemRecordCheckResult(ctx, id, job.ClaimedAt, links.CheckResult{
 		Fingerprint: newFp,
 		Changed:     changed,
 		FetchErr:    "",
-	}); err != nil {
+	})
+	if err != nil {
 		w.logger.Error("process: record result failed", "link_id", id, "err", err)
+		return
+	}
+	if !applied {
 		return
 	}
 
 	if changed && w.sender != nil {
-		// Fire push outside the record path — failures must not block the
-		// fingerprint update. Bounded by pushSem so a flood of changes can't
-		// spawn unbounded goroutines; Stop waits on pushWg.
-		w.pushWg.Add(1)
-		go func(linkID int64, owner authctx.UserID, title, url string) {
-			defer w.pushWg.Done()
-			select {
-			case w.pushSem <- struct{}{}:
-				defer func() { <-w.pushSem }()
-			case <-time.After(30 * time.Second):
-				w.logger.Warn("push notify dropped: semaphore timeout", "link_id", linkID)
-				return
-			}
-			pushCtx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer pcancel()
-			if err := w.sender.Notify(pushCtx, Notification{
-				LinkID: linkID,
-				Title:  title,
-				URL:    url,
-				Kind:   "change_detected",
-				UserID: owner,
-			}); err != nil {
-				w.logger.Warn("push notify failed", "link_id", linkID, "err", err)
-			}
-		}(link.ID, job.UserID, link.Title, link.URL)
+		notification := Notification{
+			LinkID: id,
+			Title:  job.Title,
+			URL:    job.URL,
+			Kind:   "change_detected",
+			UserID: job.UserID,
+		}
+		select {
+		case w.pushJobs <- notification:
+		default:
+			w.logger.Warn("push notification queue full, dropping notification", "link_id", id)
+		}
 		w.logger.Info("change detected", "link_id", id, "kind", kind)
 	}
 }

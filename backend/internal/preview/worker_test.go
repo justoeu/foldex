@@ -53,6 +53,12 @@ func TestNewWorker_ClampsZeroConcurrency(t *testing.T) {
 	assert.Equal(t, 1, w.concurrent, "concurrency below 1 must be clamped")
 }
 
+func TestNewWorker_ClampsHighConcurrency(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	w := NewWorker(nil, 100_000, time.Second, logger)
+	assert.Equal(t, 8, w.concurrent)
+}
+
 func TestWithScreenshotFallback_NilArgsIsNoop(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := NewWorker(nil, 1, time.Second, logger)

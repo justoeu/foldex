@@ -251,8 +251,10 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	sets := []string{}
 	args := []any{}
 	i := 1
+	resetCheckConditions := []string{}
 	if in.URL != nil {
 		sets = append(sets, fmt.Sprintf("url = $%d", i))
+		resetCheckConditions = append(resetCheckConditions, fmt.Sprintf("url IS DISTINCT FROM $%d", i))
 		args = append(args, strings.TrimSpace(*in.URL))
 		i++
 	}
@@ -295,21 +297,23 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	// check_interval: tri-state. CheckIntervalSet=true + CheckInterval=nil means
 	// "opt-out" — clearing the full change-check column group (fingerprint,
 	// detection timestamps, seen marker) so re-enabling later doesn't replay
-	// a stale "you have updates" badge from before. CheckInterval set to a
-	// value just flips the opt-in flag; we let the worker establish a fresh
-	// fingerprint on its first pass.
+	// a stale "you have updates" badge from before. Reconfiguring the interval
+	// or URL also resets the baseline and makes the link immediately due.
 	if in.CheckIntervalSet {
 		sets = append(sets, fmt.Sprintf("check_interval = $%d", i))
+		resetCheckConditions = append(resetCheckConditions, fmt.Sprintf("check_interval IS DISTINCT FROM $%d", i))
 		args = append(args, in.CheckInterval)
 		i++
-		if in.CheckInterval == nil {
-			sets = append(sets,
-				"last_checked_at = NULL",
-				"last_fingerprint = NULL",
-				"last_change_detected_at = NULL",
-				"change_seen_at = NULL",
-			)
-		}
+	}
+	if len(resetCheckConditions) > 0 {
+		resetCondition := strings.Join(resetCheckConditions, " OR ")
+		sets = append(sets,
+			fmt.Sprintf("last_checked_at = CASE WHEN %s THEN NULL ELSE last_checked_at END", resetCondition),
+			fmt.Sprintf("last_fingerprint = CASE WHEN %s THEN NULL ELSE last_fingerprint END", resetCondition),
+			fmt.Sprintf("last_change_detected_at = CASE WHEN %s THEN NULL ELSE last_change_detected_at END", resetCondition),
+			fmt.Sprintf("change_seen_at = CASE WHEN %s THEN NULL ELSE change_seen_at END", resetCondition),
+			fmt.Sprintf("last_check_error = CASE WHEN %s THEN NULL ELSE last_check_error END", resetCondition),
+		)
 	}
 	if len(sets) > 0 {
 		sets = append(sets, "updated_at = now()")

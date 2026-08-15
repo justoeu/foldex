@@ -114,6 +114,83 @@ func TestUniqueAvailable(t *testing.T) {
 	}
 }
 
+func TestUniqueAvailableReservesSpaceForSuffix(t *testing.T) {
+	base := strings.Repeat("word-", 15) + "abcde"
+	seen := make(map[string]struct{})
+
+	got, err := UniqueAvailable(t.Context(), base, func(_ context.Context, candidate string) (bool, error) {
+		if len(candidate) > MaxLen {
+			t.Fatalf("candidate %q has len %d, must be <= %d", candidate, len(candidate), MaxLen)
+		}
+		if !IsValid(candidate) {
+			t.Fatalf("candidate %q is invalid", candidate)
+		}
+		if _, duplicate := seen[candidate]; duplicate {
+			t.Fatalf("candidate %q was tried more than once", candidate)
+		}
+		seen[candidate] = struct{}{}
+		return len(seen) < 102, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(got, "-102") {
+		t.Fatalf("got %q, want suffix -102", got)
+	}
+}
+
+func TestUniqueAvailablePreservesCompleteBoundarySegment(t *testing.T) {
+	base := strings.Repeat("1", 78) + "-a-2"
+	got, err := UniqueAvailable(t.Context(), base, func(_ context.Context, candidate string) (bool, error) {
+		return false, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != strings.Repeat("1", 78)+"-a" {
+		t.Fatalf("got %q; complete boundary segment was discarded", got)
+	}
+	if !IsValid(got) {
+		t.Fatalf("candidate %q is invalid", got)
+	}
+}
+
+func TestUniqueAvailableKeepsTruncatedCandidateNonNumeric(t *testing.T) {
+	base := strings.Repeat("1", MaxLen) + "-a"
+	got, err := UniqueAvailable(t.Context(), base, func(_ context.Context, candidate string) (bool, error) {
+		return false, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) > MaxLen || !IsValid(got) {
+		t.Fatalf("candidate %q must remain valid within %d bytes", got, MaxLen)
+	}
+}
+
+func TestAllocatorReservesSpaceForSuffix(t *testing.T) {
+	base := strings.Repeat("word-", 15) + "abcde"
+	allocator := NewAllocator(nil)
+	seen := make(map[string]struct{})
+
+	for attempt := 1; attempt <= 102; attempt++ {
+		candidate, err := allocator.Allocate(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(candidate) > MaxLen {
+			t.Fatalf("candidate %q has len %d, must be <= %d", candidate, len(candidate), MaxLen)
+		}
+		if !IsValid(candidate) {
+			t.Fatalf("candidate %q is invalid", candidate)
+		}
+		if _, duplicate := seen[candidate]; duplicate {
+			t.Fatalf("candidate %q was allocated more than once", candidate)
+		}
+		seen[candidate] = struct{}{}
+	}
+}
+
 func TestAllocatorReservesAndReleasesInMemory(t *testing.T) {
 	a := NewAllocator([]string{"docs", "docs-2"})
 

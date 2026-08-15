@@ -87,13 +87,22 @@ export async function resendEmailVerification(): Promise<void> {
 
 export type InvitePreview = { email: string; role: Role; expires_at: string }
 
-export async function lookupInvite(token: string): Promise<InvitePreview> {
-  const { data } = await http.post<InvitePreview>('/api/auth/invites/lookup', { token })
+export async function lookupInvite(token: string, signal?: AbortSignal): Promise<InvitePreview> {
+  const { data } = await http.post<InvitePreview>('/api/auth/invites/lookup', { token }, { signal })
   return data
 }
 
-export async function acceptInvite(token: string, name: string, password: string): Promise<MeResponse> {
-  const { data } = await http.post<MeResponse>('/api/auth/invites/accept', { token, name, password })
+export async function acceptInvite(
+  token: string,
+  name: string,
+  password: string,
+  signal?: AbortSignal,
+): Promise<MeResponse> {
+  const { data } = await http.post<MeResponse>(
+    '/api/auth/invites/accept',
+    { token, name, password },
+    { signal },
+  )
   return data
 }
 

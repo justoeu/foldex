@@ -721,7 +721,7 @@ Reforço barato no CI:
   | grep -v repository_system.go | grep -v _test.go | grep -v user_id
 ```
 
-Habitantes: `ClickAndResolve*` e `ViewAndResolve` (rotas públicas), `FindDueForCheck` e `SystemGet` (change-check), `requeuePending` e `UpdatePreview` (preview worker).
+Habitantes: `ClickAndResolve*` e `ViewAndResolve` (rotas públicas), `SystemFindDueForCheck` e `SystemRecordCheckResult` (change-check), `SystemPendingPreviewIDs` e os writers `SystemUpdatePreview*` (preview worker).
 
 ### 8.3 O padrão mecânico
 
@@ -749,7 +749,7 @@ O sub-select de tags (`link_tag WHERE entity_kind=… AND tag_id = ANY($n)`) **n
 
 ### 8.4 Workers e rotas públicas
 
-O preview worker e o change-check worker são cross-tenant por natureza. `FindDueForCheck` passa a devolver `[]DueLink{ID, UserID}` para que o push resultante vá **só** para o dono do link — `push.Notification` ganha `UserID`, propagado pelo `pushSenderAdapter` que já existe em `main.go`.
+O preview worker e o change-check worker são cross-tenant por natureza. `SystemFindDueForCheck` devolve a projeção estreita `DueLink` com ID, owner, URL, título, intervalo, fingerprint e token do claim; assim não existe lookup/aggregate por item e o push resultante vai **só** para o dono do link. `push.Notification.UserID` continua propagado pelo `pushSenderAdapter` de `main.go`.
 
 `/go/{id-or-slug}` e `/n/{id-or-slug}` continuam públicos e tenant-blind, mantendo o predicado `folders.SQLNotInLockedFolder` que já impede vazamento de pasta trancada.
 

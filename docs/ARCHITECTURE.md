@@ -76,7 +76,7 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 | Extension    | Vanilla MV3 (sem bundler)                                            | Popup tem ~80 LoC. Sem build = "load unpacked" direto. |
 | Node runtime | **bun 1.3** (oven/bun:1.3-alpine)                                    | Bate com Vite 8 / Vitest 4 e resolve melhor packages platform-specific que npm em mirror privado. |
 
-## Data model (estado atual, após 27 migrations)
+## Data model (estado atual, após 29 migrations)
 
 ```sql
 -- 000001_init.up.sql        (+ pg_trgm)
@@ -114,6 +114,7 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 -- 000026_pending_preview_index → índice parcial do recovery sweep de previews pendentes
 -- 000027_backup_restore_ledger → checkpoint/mappings owner-scoped para skip restore convergente
 -- 000028_password_reset_credential_epoch → reset preso ao token_version vivo; NULL legado falha fechado
+-- 000029_slug_length → repara slugs legados >80 bytes e fixa o limite no DB para link/note
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -155,7 +156,7 @@ CREATE TABLE app_setting (
 CREATE TABLE link (
   id             BIGSERIAL PRIMARY KEY,
   url            TEXT NOT NULL UNIQUE,
-  slug           TEXT NOT NULL UNIQUE,                   -- 000009 (CHECK [a-z0-9]+(-[a-z0-9]+)* AND NOT all-numeric)
+  slug           TEXT NOT NULL UNIQUE,                   -- CHECK formato + octet_length <= 80 (000009/000029)
   title          TEXT NOT NULL,
   description    TEXT,
   favicon_url    TEXT,
@@ -204,7 +205,7 @@ CREATE TABLE push_subscription (
 CREATE TABLE note (
   id         BIGSERIAL PRIMARY KEY,
   title      TEXT NOT NULL,
-  slug       TEXT NOT NULL UNIQUE,             -- CHECK same as link.slug
+  slug       TEXT NOT NULL UNIQUE,             -- CHECK same as link.slug, including <=80 bytes
   body_html  TEXT NOT NULL DEFAULT '',         -- sanitized server-side (internal/pkg/htmlsanitize) before every write
   body_text  TEXT NOT NULL DEFAULT '',         -- denormalized plain text, ILIKE/trigram search only
   pinned     BOOLEAN NOT NULL DEFAULT FALSE,
@@ -400,7 +401,7 @@ percorre a AST e falha se qualquer `repository*.go` de produção importar
 ## Preview worker
 
 - Implementação em `internal/preview/`:
-  - `worker.go`: pool de N goroutines (`PREVIEW_WORKER_CONCURRENCY`, default 4), consome de `chan PreviewJob`.
+  - `worker.go`: pool de N goroutines (`PREVIEW_WORKER_CONCURRENCY`, default 4, teto 8), consome de `chan PreviewJob`.
   - `fetcher.go`: `http.Client{Timeout: 5s}`, parse HTML head com `golang.org/x/net/html` — extrai `<title>`, `meta[og:title|og:image|og:description]`, `link[rel~=icon]`.
   - `public.go`: `IsPublicURL(ctx, url)` — gate do fallback de screenshot (resolve o host e rejeita metadata/RFC6598 e todos os ranges special-purpose da IANA).
   - `enqueue.go`: `Enqueue(linkID int64)` chamado por `links.Create` e por `POST /links/:id/refresh-preview`.
@@ -423,14 +424,14 @@ percorre a AST e falha se qualquer `repository*.go` de produção importar
 
 Detecção periódica per-link de mudança de conteúdo. Opt-in via `link.check_interval ∈ {hourly, daily, weekly}` (default NULL = desativado). Disparo de Web Push quando o fingerprint muda.
 
-- **Worker** (`worker.go`): pool de N goroutines (`CHANGECHECK_WORKER_CONCURRENCY`, default 2) + scanner que roda a cada `CHANGECHECK_SCAN_INTERVAL_SEC` (default 60s). Skeleton idêntico ao `preview.Worker`: `atomic.Bool stopped`, `sync.Once Stop`, channel buffered (256). `Enqueue` retorna `ErrQueueFull`/`ErrStopped`.
-- **Scanner** (`scan`): SELECT com `CASE WHEN check_interval='hourly' THEN '1 hour' ...` resolve "due" sem hardcode no Go. O índice `link_check_due_idx` é parcial — varre só os opt-in, O(opt-in) não O(total).
+- **Worker** (`worker.go`): pool de N goroutines (`CHANGECHECK_WORKER_CONCURRENCY`, default 2, teto 8) + scanner que roda a cada `CHANGECHECK_SCAN_INTERVAL_SEC` (default 60s). `atomic.Bool stopped`, `sync.Once Stop`, channel buffered (256). `Enqueue` retorna `ErrQueueFull`/`ErrStopped`.
+- **Scanner** (`scan`): o mesmo `UPDATE ... FOR UPDATE SKIP LOCKED` que reserva até 256 links devolve a projeção estreita usada pelo fetch (`id`, owner, URL, título, intervalo, fingerprint e o `last_checked_at` do claim). Não existe `SystemGet` por item nem aggregate de `click_log`. O `CASE WHEN check_interval='hourly' THEN '1 hour' ...` resolve "due" sem hardcode no Go. O índice `link_check_due_idx` é parcial — varre só os opt-in, O(opt-in) não O(total).
 - **Janela rolante, NÃO horário fixo.** O agendamento NÃO é cron-style — não roda "à meia-noite" nem "às 3am". Um link `daily` rodado pela primeira vez às 14:37 do dia 1 fica due novamente em ~14:37 do dia 2 (com drift de até `CHANGECHECK_SCAN_INTERVAL_SEC` + tempo do fetch HTTP). A predicação é `last_checked_at < now() - interval` e o tie-break é `ORDER BY COALESCE(last_checked_at,'epoch') ASC, id ASC` — links opt-in pela primeira vez (`last_checked_at IS NULL`) entram no scan imediatamente. Sem timezone awareness: usa `now()` do Postgres (UTC no container). Sem jitter — 100 links marcados juntos rodam juntos em batches de até 256 por tick. Catch-up automático no boot do backend: tudo que ficou vencido durante o downtime é processado em ordem pelo `last_checked_at` mais antigo.
 - **Fingerprinter** (`fingerprint.go`): híbrido. Primeiro extrai `<link rel="alternate" type="application/(rss|atom)+xml">` e hashea os IDs/GUIDs ordenados. Se não tem feed, fallback content hash em `<main>`/`<article>` (whitespace-normalized; remove `<script>`/`<style>`/`<nav>`/`<header>`/`<footer>`).
 - **Prefixo `feed:`/`content:` no hash armazenado é discriminador** — quando uma página content-only ganha um feed novo, a troca `content:` → `feed:` é tratada como "novo baseline", **não** como mudança. Sem o prefixo o primeiro scan pós-feed dispararia push falso.
 - **First observation nunca conta como change.** `last_fingerprint IS NULL` → grava o novo hash sem bumpar `last_change_detected_at`. Sem isso, todo opt-in viraria push no primeiro scan.
 - **Reusa o `preview.Fetcher`** via interface `HTTPGetter` (`GetRaw`) — o mesmo `safeDialer` com pre-dial LookupIP + post-dial RemoteAddr. Forkar um HTTP client aqui dividiria a postura SSRF.
-- **Push é fire-and-forget.** `worker.process` lança `sender.Notify` em goroutine com `context.Background()` + 15s timeout, isolado do `RecordCheckResult` durável. Falha de push nunca rolla back a detecção.
+- **Resultado e push respeitam a configuração reclamada.** `SystemRecordCheckResult` faz CAS pelo `last_checked_at` exato do claim e devolve `applied=false` se URL/intervalo mudou, houve opt-out ou outro claim venceu; só um resultado aplicado entra na fila de push. Alterar de fato URL/intervalo limpa o baseline e torna o link due imediatamente; campos iguais presentes no payload não limpam estado. Push roda em workers fixos, numa fila de 32 itens que descarta a notificação mais nova quando cheia; cada envio herda o contexto do worker + timeout de 15s, então `Stop` cancela e junta somente um número fixo de goroutines. Falha de push nunca rolla back a detecção durável.
 - **Erros isolados em `last_check_error`** — não polui `preview_error` (worker diferente, surface diferente no LinkCard).
 
 ## Web Push (`internal/push`)
@@ -595,11 +596,11 @@ Manifest V3 service worker faz HTTP plain pro `/api/links`. Sem npm workspace no
 ### ADR-7 — `/go/{id-or-slug}` aceita ambos (Done — migration 000009)
 A versão original (numeric-only) foi implementada primeiro porque IDs são triviais e slugs adicionam constraint UNIQUE + UX de "escolher o slug". Quando a base passou de "alguns links pessoais" pra "links que você quer compartilhar com a equipe", a leitura de `localhost:9089/go/42` virou ruído — daí a evolução pra slugs amigáveis.
 
-**Como funciona:** `link.slug TEXT NOT NULL UNIQUE` (migration 000009) com CHECK `^[a-z0-9]+(-[a-z0-9]+)*$ AND NOT ^[0-9]+$`. Slug é auto-derivado do título no create via `Slugify` (lowercase ASCII, accent-fold, hyphen-collapse, max 80 chars na hyphen-boundary); usuário pode override no `LinkDialog`. Backfill SQL no up.sql cobre os links existentes.
+**Como funciona:** `link.slug TEXT NOT NULL UNIQUE` (migration 000009) com CHECK `^[a-z0-9]+(-[a-z0-9]+)*$ AND NOT ^[0-9]+$`. Slug é auto-derivado do título no create via `Slugify` (lowercase ASCII, accent-fold, hyphen-collapse, max 80 bytes na hyphen-boundary); usuário pode override no `LinkDialog`. A migration 000029 repara colisões legadas acima desse limite e adiciona `octet_length(slug) <= 80` a `link` e `note`.
 
 **Resolução `/go/{valor}`:** ID-first (preserva backward-compat de todo `/go/42` antigo), depois slug-fallback. A constraint que rejeita slug puramente numérico garante que nunca há ambiguidade — `/go/42` SEMPRE significa link 42.
 
-**Backup/import/export:** snapshot inclui slug; restore com `mode=skip|wipe|duplicate` resolve colisões com sufixo `-2`, `-3`, … via `uniqueLinkSlug`. Importer (Netscape/JSON) gera slug auto pra cada link novo.
+**Backup/import/export:** snapshot inclui slug; restore com `mode=skip|wipe|duplicate` e importer resolvem colisões com sufixo `-2`, `-3`, … reservando o espaço do sufixo dentro dos 80 bytes. O preload inclui as bases truncadas de cada largura de sufixo, sem consulta por candidato.
 
 ### ADR-8 — SSRF guard no preview fetcher
 Fetcher visita URLs arbitrárias fornecidas pelo usuário. **Ranges de metadata/credenciais cloud e RFC6598 são sempre bloqueados**, sem opt-out. Os demais ranges special-purpose da IANA só são bloqueados quando `PREVIEW_STRICT_SSRF=1`. O default permissivo para RFC1918 é uma compatibilidade explícita com links de intranet (Jira/Grid/Confluence/dashboards internos), não uma suposição de usuário único; em modo multi-tenant o operador deve habilitar strict quando usuários não devem alcançar serviços internos do host.
@@ -767,13 +768,13 @@ Per-link opt-in via `link.check_interval ∈ {hourly, daily, weekly}`. Worker em
 ### ADR-24 — Web Push: VAPID auto-gen on boot + hand-rolled SW
 **Status:** Done (migration 000011, PR #5).
 
-Notificações background quando o changecheck detecta change. RFC 8030 com VAPID via `webpush-go`. Single-user: `push_subscription` sem `user_id` (revisitar quando multi-user landar).
+Notificações background quando o changecheck detecta change. RFC 8030 com VAPID via `webpush-go`. `push_subscription.user_id` restringe o fan-out ao dono; `endpoint` segue globalmente único porque representa um canal físico do browser.
 
 **Por quê VAPID auto-gen on first boot.** Plug-and-play: `make up` em um host limpo gera a key, persiste em `/data/vapid.json` (0o600), e o front busca via `GET /api/push/vapid-key`. Pinar `VAPID_*` em `.env` quando quiser manter subscriptions estáveis entre recreations. O volume nomeado `foldex-data` cobre o caso "esqueci de pinar".
 
 **Por quê 404/410 → DELETE.** Convenção RFC 8030 §7.3 — endpoint morto. Sem cleanup, `push_subscription` acumula rows zumbis pra cada Chrome reinstalado / Safari resetado / device descartado. Transport errors (DNS, timeout) NUNCA disparam DELETE — um blip de rede apagaria subscriptions vivas.
 
-**Por quê o sender é fire-and-forget no worker.** `worker.process` lança `sender.Notify` em goroutine com `context.Background()` + 15s timeout. Push lento não pode rollback o `RecordCheckResult` que é a fonte da verdade pra "este link mudou?". Falha de push = log, segue.
+**Por quê o sender é desacoplado mas pertence ao lifecycle do worker.** Depois do CAS durável, `worker.process` tenta publicar numa fila fixa de 32 notificações; workers fixos chamam `sender.Notify` com o contexto cancelável do change-check + timeout de 15s. Push lento não faz rollback do resultado, a fila cheia descarta a notificação mais nova sem criar goroutines, e `Stop` cancela/junta todo envio ativo. Falha de push = log, segue.
 
 **Por quê SW hand-rolled em vez de `workbox-*` runtime.** `bun.lock` é fonte da verdade (CLAUDE.md §1) e adicionar workbox-* runtime exigiria regenerar lock + revalidar 200+ deps transitivas. Um par de `cache.put` + `push`/`notificationclick` listeners cabe em ~80 linhas (`web/src/sw.ts`). `vite-plugin-pwa` com `strategies: 'injectManifest'` injeta só o `__WB_MANIFEST` no build — zero runtime workbox.
 

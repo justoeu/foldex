@@ -36,6 +36,27 @@ func setup(t *testing.T) (context.Context, authctx.UserID, *links.Repository, *t
 	return context.Background(), uid, links.NewRepository(pool), tags.NewRepository(pool)
 }
 
+func recordCheckResult(t *testing.T, ctx context.Context, repo *links.Repository, id int64, claimedAt time.Time, result links.CheckResult) {
+	t.Helper()
+	applied, err := repo.SystemRecordCheckResult(ctx, id, claimedAt, result)
+	require.NoError(t, err)
+	require.True(t, applied)
+}
+
+func claimChecks(t *testing.T, ctx context.Context, repo *links.Repository, ids ...int64) map[int64]links.DueLink {
+	t.Helper()
+	due, err := repo.SystemFindDueForCheck(ctx, 1000)
+	require.NoError(t, err)
+	claims := make(map[int64]links.DueLink, len(ids))
+	for _, claim := range due {
+		claims[claim.ID] = claim
+	}
+	for _, id := range ids {
+		require.Contains(t, claims, id)
+	}
+	return claims
+}
+
 func TestRepository_CreateAndGetWithTags(t *testing.T) {
 	ctx, uid, lrepo, trepo := setup(t)
 
@@ -631,10 +652,12 @@ func TestRepository_CheckInterval_TriStateOnUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, updated.CheckInterval)
 	assert.Equal(t, "daily", *updated.CheckInterval)
+	claim := claimChecks(t, ctx, lrepo, l.ID)[l.ID]
 
 	// Simulate worker stamping a fingerprint + detection.
-	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "content:abc"}))
-	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "content:def", Changed: true}))
+	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "content:abc"})
+	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "content:def", Changed: true})
+	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{FetchErr: "timeout"})
 
 	withState, err := lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
@@ -651,6 +674,7 @@ func TestRepository_CheckInterval_TriStateOnUpdate(t *testing.T) {
 	assert.Nil(t, cleared.LastFingerprint, "opt-out must wipe last_fingerprint")
 	assert.Nil(t, cleared.LastChangeDetectedAt, "opt-out must wipe last_change_detected_at")
 	assert.Nil(t, cleared.ChangeSeenAt, "opt-out must wipe change_seen_at")
+	assert.Nil(t, cleared.LastCheckError, "opt-out must wipe last_check_error")
 }
 
 // dueIDs projects the DueLink rows to bare ids.
@@ -686,6 +710,79 @@ func TestRepository_FindDueForCheck_OnlyOptedIn(t *testing.T) {
 	// The sweep is deliberately unscoped (it serves every tenant), so the owner
 	// has to travel WITH the row or the push would go to whoever ran the worker.
 	assert.Equal(t, uid, due[0].UserID, "the due row must carry its owner")
+	assert.Equal(t, a.URL, due[0].URL)
+	assert.Equal(t, a.Title, due[0].Title)
+	assert.Equal(t, di, due[0].CheckInterval)
+	assert.NotZero(t, due[0].ClaimedAt)
+}
+
+func TestRepository_RecordCheckResultRejectsStaleConfiguration(t *testing.T) {
+	ctx, uid, repo, _ := setup(t)
+	link, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/old", Title: "x"})
+	require.NoError(t, err)
+	daily := "daily"
+	_, err = repo.Update(ctx, uid, link.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true})
+	require.NoError(t, err)
+	due, err := repo.SystemFindDueForCheck(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+
+	recordCheckResult(t, ctx, repo, link.ID, due[0].ClaimedAt, links.CheckResult{Fingerprint: "content:old"})
+	recordCheckResult(t, ctx, repo, link.ID, due[0].ClaimedAt, links.CheckResult{Fingerprint: "content:changed", Changed: true})
+	recordCheckResult(t, ctx, repo, link.ID, due[0].ClaimedAt, links.CheckResult{FetchErr: "timeout"})
+	require.NoError(t, repo.MarkChangeSeen(ctx, uid, link.ID))
+
+	newURL := "https://x.test/new"
+	reconfigured, err := repo.Update(ctx, uid, link.ID, links.UpdateInput{URL: &newURL})
+	require.NoError(t, err)
+	assert.Nil(t, reconfigured.LastCheckedAt)
+	assert.Nil(t, reconfigured.LastFingerprint)
+	assert.Nil(t, reconfigured.LastChangeDetectedAt)
+	assert.Nil(t, reconfigured.ChangeSeenAt)
+	assert.Nil(t, reconfigured.LastCheckError)
+
+	applied, err := repo.SystemRecordCheckResult(ctx, link.ID, due[0].ClaimedAt, links.CheckResult{
+		Fingerprint: "content:stale",
+		Changed:     true,
+	})
+	require.NoError(t, err)
+	assert.False(t, applied)
+
+	got, err := repo.Get(ctx, uid, link.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.LastFingerprint)
+	assert.Nil(t, got.LastChangeDetectedAt)
+}
+
+func TestRepository_UnchangedMonitoringFieldsPreserveState(t *testing.T) {
+	ctx, uid, repo, _ := setup(t)
+	link, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/same", Title: "old title"})
+	require.NoError(t, err)
+	daily := "daily"
+	_, err = repo.Update(ctx, uid, link.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true})
+	require.NoError(t, err)
+	claim := claimChecks(t, ctx, repo, link.ID)[link.ID]
+	recordCheckResult(t, ctx, repo, link.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "content:baseline"})
+	recordCheckResult(t, ctx, repo, link.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "content:changed", Changed: true})
+	recordCheckResult(t, ctx, repo, link.ID, claim.ClaimedAt, links.CheckResult{FetchErr: "timeout"})
+	require.NoError(t, repo.MarkChangeSeen(ctx, uid, link.ID))
+
+	title := "new title"
+	unchangedURL := link.URL
+	updated, err := repo.Update(ctx, uid, link.ID, links.UpdateInput{
+		URL:              &unchangedURL,
+		Title:            &title,
+		CheckInterval:    &daily,
+		CheckIntervalSet: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, claim.ClaimedAt, *updated.LastCheckedAt)
+	require.NotNil(t, updated.LastFingerprint)
+	assert.Equal(t, "content:changed", *updated.LastFingerprint)
+	assert.NotNil(t, updated.LastChangeDetectedAt)
+	assert.NotNil(t, updated.ChangeSeenAt)
+	require.NotNil(t, updated.LastCheckError)
+	assert.Equal(t, "timeout", *updated.LastCheckError)
 }
 
 func TestRepository_FindDueForCheck_RespectsInterval(t *testing.T) {
@@ -722,13 +819,15 @@ func TestRepository_RecordCheckResult_FirstObservationDoesNotMarkChange(t *testi
 	ctx, uid, lrepo, _ := setup(t)
 	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/f", Title: "f"})
 	di := "daily"
-	_, _ = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	require.NoError(t, err)
+	claim := claimChecks(t, ctx, lrepo, l.ID)[l.ID]
 
 	// Worker passes Changed=false on the first observation (no previous fp).
-	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{
+	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{
 		Fingerprint: "content:abc",
 		Changed:     false,
-	}))
+	})
 
 	got, err := lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
@@ -742,16 +841,18 @@ func TestRepository_RecordCheckResult_BumpsDetectionAndNullsSeen(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
 	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/c", Title: "c"})
 	di := "daily"
-	_, _ = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	require.NoError(t, err)
+	claim := claimChecks(t, ctx, lrepo, l.ID)[l.ID]
 
 	// Seed a first observation and pretend the user already saw an OLD change.
-	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{
+	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{
 		Fingerprint: "content:abc",
-	}))
-	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{
+	})
+	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{
 		Fingerprint: "content:def",
 		Changed:     true,
-	}))
+	})
 	require.NoError(t, lrepo.MarkChangeSeen(ctx, uid, l.ID))
 
 	got, err := lrepo.Get(ctx, uid, l.ID)
@@ -759,10 +860,10 @@ func TestRepository_RecordCheckResult_BumpsDetectionAndNullsSeen(t *testing.T) {
 	require.NotNil(t, got.ChangeSeenAt, "MarkChangeSeen must stamp change_seen_at")
 
 	// NEW change → must null out change_seen_at again so the badge re-shows.
-	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{
+	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{
 		Fingerprint: "content:ghi",
 		Changed:     true,
-	}))
+	})
 	got2, err := lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
 	assert.Nil(t, got2.ChangeSeenAt, "new detection must reset change_seen_at to NULL")
@@ -777,7 +878,9 @@ func TestRepository_RecordCheckResult_StoresErrorInLastCheckErrorNotPreviewError
 	ctx, uid, lrepo, _ := setup(t)
 	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/e", Title: "e"})
 	di := "daily"
-	_, _ = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	require.NoError(t, err)
+	claim := claimChecks(t, ctx, lrepo, l.ID)[l.ID]
 
 	beforePreviewErr := ""
 	{
@@ -787,9 +890,9 @@ func TestRepository_RecordCheckResult_StoresErrorInLastCheckErrorNotPreviewError
 		}
 	}
 
-	require.NoError(t, lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{
+	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{
 		FetchErr: "timeout",
-	}))
+	})
 
 	got, err := lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
@@ -821,14 +924,17 @@ func TestRepository_ListRecentChanges_FiltersAndSorts(t *testing.T) {
 	skipped, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/skip", Title: "no change"})
 
 	di := "daily"
-	_, _ = lrepo.Update(ctx, uid, older.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
-	_, _ = lrepo.Update(ctx, uid, newer.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, older.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	require.NoError(t, err)
+	_, err = lrepo.Update(ctx, uid, newer.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	require.NoError(t, err)
+	claims := claimChecks(t, ctx, lrepo, older.ID, newer.ID)
 
 	// Seed older detection, then newer.
-	_ = lrepo.SystemRecordCheckResult(ctx, older.ID, links.CheckResult{Fingerprint: "content:1"})
-	_ = lrepo.SystemRecordCheckResult(ctx, older.ID, links.CheckResult{Fingerprint: "content:2", Changed: true})
-	_ = lrepo.SystemRecordCheckResult(ctx, newer.ID, links.CheckResult{Fingerprint: "content:1"})
-	_ = lrepo.SystemRecordCheckResult(ctx, newer.ID, links.CheckResult{Fingerprint: "content:9", Changed: true})
+	recordCheckResult(t, ctx, lrepo, older.ID, claims[older.ID].ClaimedAt, links.CheckResult{Fingerprint: "content:1"})
+	recordCheckResult(t, ctx, lrepo, older.ID, claims[older.ID].ClaimedAt, links.CheckResult{Fingerprint: "content:2", Changed: true})
+	recordCheckResult(t, ctx, lrepo, newer.ID, claims[newer.ID].ClaimedAt, links.CheckResult{Fingerprint: "content:1"})
+	recordCheckResult(t, ctx, lrepo, newer.ID, claims[newer.ID].ClaimedAt, links.CheckResult{Fingerprint: "content:9", Changed: true})
 
 	out, err := lrepo.ListRecentChanges(ctx, uid, 7*24*60*60, 50)
 	require.NoError(t, err)
@@ -848,11 +954,13 @@ func TestRepository_ListRecentChanges_WindowFiltersOut(t *testing.T) {
 
 	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/w", Title: "w"})
 	di := "daily"
-	_, _ = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
-	_ = lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "content:1"})
-	_ = lrepo.SystemRecordCheckResult(ctx, l.ID, links.CheckResult{Fingerprint: "content:2", Changed: true})
+	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	require.NoError(t, err)
+	claim := claimChecks(t, ctx, lrepo, l.ID)[l.ID]
+	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "content:1"})
+	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "content:2", Changed: true})
 
-	_, err := pool.Exec(ctx, `UPDATE link SET last_change_detected_at = now() - interval '8 days' WHERE id = $1`, l.ID)
+	_, err = pool.Exec(ctx, `UPDATE link SET last_change_detected_at = now() - interval '8 days' WHERE id = $1`, l.ID)
 	require.NoError(t, err)
 
 	out, err := lrepo.ListRecentChanges(ctx, uid, 7*24*60*60, 50)

@@ -21,10 +21,7 @@ func (a *Allocator) Allocate(base string) (string, error) {
 		return "", fmt.Errorf("unique slug: empty base")
 	}
 	for attempt := 1; attempt < MaxUniqueAttempts; attempt++ {
-		candidate := base
-		if attempt > 1 {
-			candidate = fmt.Sprintf("%s-%d", base, attempt)
-		}
+		candidate := candidateForAttempt(base, attempt)
 		if _, taken := a.used[candidate]; taken {
 			continue
 		}

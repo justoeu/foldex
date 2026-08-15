@@ -354,6 +354,10 @@ func TestRestore_RejectsNoteMediaDecodeBombBeforeWipe(t *testing.T) {
 		"manifest.json": mustJSON(t, backup.Manifest{
 			Kind: backup.ManifestKind, Version: backup.ManifestVersion,
 			SchemaVersion: backup.CurrentSchemaVersion,
+			Checksums: map[string]string{
+				"database.json": sha256hex(db),
+				"files/" + key:  sha256hex(pngHeaderWithDimensions(8_000, 8_000)),
+			},
 		}),
 		"database.json": db,
 		"files/" + key:  pngHeaderWithDimensions(8_000, 8_000),

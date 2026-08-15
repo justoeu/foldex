@@ -129,10 +129,8 @@ func (r *Repository) SystemUpdatePreviewIfUnchanged(ctx context.Context, id int6
 	return ct.RowsAffected() == 1, nil
 }
 
-// FindDueForCheck returns link IDs whose check_interval has elapsed since
-// the last check (or which have never been checked). Used by the changecheck
-// worker's tick. Cap at limit so a single tick can't enqueue an unbounded
-// backlog — anything left waits one more interval, which is fine.
+// SystemFindDueForCheck claims links whose check interval elapsed and returns
+// the narrow projection needed by the change-check worker.
 func (r *Repository) SystemFindDueForCheck(ctx context.Context, limit int) ([]DueLink, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 256
@@ -161,7 +159,7 @@ func (r *Repository) SystemFindDueForCheck(ctx context.Context, limit int) ([]Du
             LIMIT $1
             FOR UPDATE SKIP LOCKED
         )
-        RETURNING id, user_id
+		RETURNING id, user_id, url, title, check_interval, last_fingerprint, last_checked_at
     `, limit)
 	if err != nil {
 		return nil, fmt.Errorf("find due for check: %w", err)
@@ -171,7 +169,15 @@ func (r *Repository) SystemFindDueForCheck(ctx context.Context, limit int) ([]Du
 	for rows.Next() {
 		var d DueLink
 		var owner int64
-		if err := rows.Scan(&d.ID, &owner); err != nil {
+		if err := rows.Scan(
+			&d.ID,
+			&owner,
+			&d.URL,
+			&d.Title,
+			&d.CheckInterval,
+			&d.LastFingerprint,
+			&d.ClaimedAt,
+		); err != nil {
 			return nil, err
 		}
 		d.UserID = authctx.UserID(owner)
@@ -180,27 +186,15 @@ func (r *Repository) SystemFindDueForCheck(ctx context.Context, limit int) ([]Du
 	return out, rows.Err()
 }
 
-// DueLink is one link claimed by the change-check sweep, paired with its owner
-// so the resulting notification is delivered to that user's subscriptions only.
+// DueLink is the immutable configuration snapshot reserved by one sweep claim.
 type DueLink struct {
-	ID     int64
-	UserID authctx.UserID
-}
-
-// SystemGet loads a link without an ownership predicate. Only the change-check
-// worker may call it, and only for an id it just claimed via
-// SystemFindDueForCheck — which is what establishes the owner.
-func (r *Repository) SystemGet(ctx context.Context, id int64) (Link, error) {
-	var l Link
-	err := scanLink(r.pool.QueryRow(ctx, `SELECT `+linkColumns+linkFrom+` WHERE l.id = $1`, id), &l)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Link{}, domainerr.ErrNotFound
-	}
-	if err != nil {
-		return Link{}, fmt.Errorf("system get link: %w", err)
-	}
-	l.Tags = []Tag{}
-	return l, nil
+	ID              int64
+	UserID          authctx.UserID
+	URL             string
+	Title           string
+	CheckInterval   string
+	LastFingerprint *string
+	ClaimedAt       time.Time
 }
 
 // PreviewWork is the narrow projection required by the preview worker. Keeping
@@ -303,8 +297,8 @@ type CheckResult struct {
 	FetchErr    string // free-form; nil-safe, "" means success
 }
 
-// RecordCheckResult bumps last_checked_at always, last_fingerprint when we got
-// one, and last_change_detected_at only when Changed is true. The "first
+// SystemRecordCheckResult writes last_fingerprint when available and
+// last_change_detected_at only when Changed is true. The "first
 // observation never counts as a change" rule lives here — the caller passes
 // `Changed=false` when the previous fingerprint was empty, so opt-in alone
 // doesn't trigger a spurious push on the very first scan.
@@ -314,7 +308,8 @@ type CheckResult struct {
 // to the preview worker (CLAUDE.md §4 invariant: "Worker is the only writer
 // of preview_status"). Cross-writing would confuse LinkCard's preview
 // failure surface the next time someone renders preview_error.
-func (r *Repository) SystemRecordCheckResult(ctx context.Context, id int64, res CheckResult) error {
+// A false, nil result means a newer claim or monitoring reconfiguration won.
+func (r *Repository) SystemRecordCheckResult(ctx context.Context, id int64, expectedClaimedAt time.Time, res CheckResult) (bool, error) {
 	var fp any = nil
 	if res.Fingerprint != "" {
 		fp = res.Fingerprint
@@ -327,24 +322,18 @@ func (r *Repository) SystemRecordCheckResult(ctx context.Context, id int64, res 
 	}
 	sql := `
         UPDATE link
-        SET last_checked_at = now(),
-            last_fingerprint = COALESCE($1, last_fingerprint),
+		SET last_fingerprint = COALESCE($1, last_fingerprint),
             last_check_error = $2`
 	if res.Changed {
 		sql += `,
             last_change_detected_at = now(),
             change_seen_at = NULL`
 	}
-	// Only write when still opted-in — concurrent opt-out must not restore a
-	// fingerprint after the user cleared check_interval.
-	sql += ` WHERE id = $3 AND check_interval IS NOT NULL`
-	ct, err := r.pool.Exec(ctx, sql, fp, checkErr, id)
+	// A newer claim or URL/interval update changes/nulls this exact token.
+	sql += ` WHERE id = $3 AND last_checked_at = $4 AND check_interval IS NOT NULL`
+	ct, err := r.pool.Exec(ctx, sql, fp, checkErr, id, expectedClaimedAt)
 	if err != nil {
-		return fmt.Errorf("record check result: %w", err)
+		return false, fmt.Errorf("record check result: %w", err)
 	}
-	if ct.RowsAffected() == 0 {
-		// Not found OR opted out mid-flight — treat as success (no work left).
-		return nil
-	}
-	return nil
+	return ct.RowsAffected() == 1, nil
 }

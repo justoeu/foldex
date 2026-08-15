@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { act, renderHook } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import {
   appendBackupHistory,
   countsFromHeaders,
@@ -6,6 +9,7 @@ import {
   generateBackup,
   readBackupHistory,
   restoreBackup,
+  useRestoreBackup,
   validateBackup,
 } from './backup'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
@@ -179,6 +183,7 @@ describe('backup history (localStorage)', () => {
         counts: { links: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
       }),
     ).not.toThrow()
+    expect(spy).toHaveBeenCalledOnce()
     spy.mockRestore()
   })
 })
@@ -198,6 +203,7 @@ describe('generateBackup with broken localStorage', () => {
 
     const entry = await generateBackup()
     expect(entry.size_bytes).toBeGreaterThan(0)
+    expect(setSpy).toHaveBeenCalledOnce()
     expect(clickSpy).toHaveBeenCalledOnce()
     setSpy.mockRestore()
   })
@@ -385,6 +391,20 @@ describe('validateBackup', () => {
     expect(v.ok).toBe(false)
     expect(v.errors).toContain('checksum mismatch: files/images/7.jpg')
   })
+
+  it('passes an AbortSignal to the validation upload', async () => {
+    const controller = new AbortController()
+    const post = vi.spyOn(http, 'post')
+    const file = new File([new Uint8Array([0])], 'foo.zip', { type: 'application/zip' })
+
+    await validateBackup(file, controller.signal)
+
+    expect(post).toHaveBeenCalledWith(
+      '/api/backup/validate',
+      expect.any(FormData),
+      expect.objectContaining({ signal: controller.signal }),
+    )
+  })
 })
 
 describe('restoreBackup', () => {
@@ -411,5 +431,46 @@ describe('restoreBackup', () => {
       expect.any(FormData),
       expect.objectContaining({ timeout: 30 * 60_000 }),
     )
+  })
+
+})
+
+describe('useRestoreBackup', () => {
+  it('invalidates every affected cache after failure', async () => {
+    const invalidate = vi.fn()
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+    client.invalidateQueries = invalidate
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    vi.mocked(http.post).mockRejectedValueOnce(new Error('restore failed'))
+    const { result } = renderHook(() => useRestoreBackup(), { wrapper })
+
+    await act(async () => {
+      await expect(result.current.mutateAsync({
+        file: new File([new Uint8Array([0])], 'backup.zip'),
+        mode: 'skip',
+      })).rejects.toThrow('restore failed')
+    })
+
+    expect(invalidate.mock.calls.map((call) => call[0]?.queryKey?.[0])).toEqual([
+      'links', 'entries', 'folders', 'tags', 'stats',
+    ])
+  })
+
+  it('does not turn successful restore into failure when cache invalidation rejects', async () => {
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+    client.invalidateQueries = vi.fn().mockRejectedValue(new Error('cache failure'))
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const { result } = renderHook(() => useRestoreBackup(), { wrapper })
+
+    await act(async () => {
+      await expect(result.current.mutateAsync({
+        file: new File([new Uint8Array([0])], 'backup.zip'),
+        mode: 'skip',
+      })).resolves.toMatchObject({ mode: 'skip' })
+    })
   })
 })

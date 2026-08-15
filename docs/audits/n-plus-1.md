@@ -1,5 +1,11 @@
 # N+1 Audit
 
+## 2026-08-14 - N1-NEX-004 Change-check Claim Projection
+
+- **Resolved:** `SystemFindDueForCheck` now returns URL, title, interval, prior fingerprint and the claimed `last_checked_at` with each atomically reserved row. `changecheck.Worker` processes that projection directly; the full `SystemGet` query and its per-link `click_log` LATERAL aggregate were removed.
+- **Regression lock:** `TestScan_DueBatchDoesNotCallSystemGetPerJob` processes a claimed batch while asserting zero follow-up reads, and the repository integration suite verifies the claimed projection.
+- **No new HIGH findings:** the due loop only admits in-memory jobs. One external fetch and one result write are the bounded work for each monitored link, not list enrichment; notification delivery is likewise the admitted payload operation and now runs through a fixed 32-slot queue with at most 8 workers.
+
 ## 2026-08-14 - Full Delta Final Audit (effd2ad..174d6ec + Worktree)
 
 - **Scope:** all changed production files from `effd2ad` through `HEAD` (`174d6ec`), all dirty/untracked production files, and direct callers. This covered the shared list planner; entries/links/notes/folders/tags; importer staging; backup snapshot/validation/staged restore/ledger/object listing; storage; note media; preview/screenshots; mail dispatch; authentication; server wiring; and the extracted frontend App, dialog, card, hook, auth, API, and admin components.

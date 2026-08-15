@@ -7,7 +7,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
-    setupFiles: ['./src/test/setup.ts'],
+    setupFiles: ['./src/test/storage.ts', './src/test/setup.ts'],
     css: false,
     // Vitest defaults to 5s. That is comfortable for the plain run (~30ms per
     // test) but not under v8 coverage instrumentation, which multiplies the
