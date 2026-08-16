@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS email_otp_one_live_login_challenge_idx;

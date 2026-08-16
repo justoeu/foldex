@@ -1,18 +1,17 @@
 import { useRef } from 'react'
-import { Trans, useTranslation } from 'react-i18next'
+import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { FolderPicker } from './FolderPicker'
-import { TagChip } from './TagChip'
+import { SlugField, useSlugFieldState } from './SlugField'
+import { TagPicker, useTagPicker } from './TagPicker'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useDialogInitialFocus } from '../hooks/useDialogInitialFocus'
 import { useLinkDialogForm } from '../hooks/useLinkDialogForm'
-import { useLinkTagSelection } from '../hooks/useLinkTagSelection'
 import { useLinkDialogImage } from '../hooks/useLinkDialogImage'
 import { useLinkDialogSubmit } from '../hooks/useLinkDialogSubmit'
 import { safeImageUrl, safeLinkHref, hostOf } from '../lib/url'
 import { nextCheckPreview } from '../lib/time'
-import { slugifyClient } from '../lib/slugify'
 import type { Link } from '../api/types'
 
 type Props = {
@@ -23,14 +22,16 @@ type Props = {
   onClose: () => void
 }
 
-type Form = ReturnType<typeof useLinkDialogForm>
-type Tags = ReturnType<typeof useLinkTagSelection>
+type Form = ReturnType<typeof useLinkDialogForm> & ReturnType<typeof useSlugFieldState>
+type Tags = ReturnType<typeof useTagPicker>
 type Image = ReturnType<typeof useLinkDialogImage>
 
 export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }: Props) {
   const { t } = useTranslation()
-  const form = useLinkDialogForm(open, link, initialUrl, defaultFolderId)
-  const tags = useLinkTagSelection(open, link)
+  const formState = useLinkDialogForm(open, link, initialUrl, defaultFolderId)
+  const slugState = useSlugFieldState(open, formState.title, link?.slug, link?.id ?? null)
+  const form = { ...formState, ...slugState }
+  const tags = useTagPicker(open, link?.tags)
   const image = useLinkDialogImage(open, link)
   const save = useLinkDialogSubmit({
     link,
@@ -83,7 +84,7 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
 function LinkDialogError({ message }: { message: string | null }) {
   if (!message) return null
   return (
-    <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 20px 8px' }}>
+    <div role="alert" style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 20px 8px' }}>
       <Icon d={I.alert} size={12} /> {message}
     </div>
   )
@@ -163,7 +164,16 @@ function LinkBasicsFields({ form }: { form: Form }) {
           <span className="fx-field-hint fx-field-hint-warn">{t('link_dialog.autofill_failed')}</span>
         )}
       </label>
-      <LinkSlugField form={form} />
+      <SlugField
+        title={form.title}
+        slug={form.slug}
+        slugDirty={form.slugDirty}
+        setSlug={form.setSlug}
+        setSlugDirty={form.setSlugDirty}
+        routePrefix="/go/"
+        i18nPrefix="link_dialog"
+        fallback="jira-board"
+      />
       <label className="fx-field">
         <span className="fx-field-label">{t('link_dialog.description_label')}</span>
         <div className="fx-textarea-wrap">
@@ -182,116 +192,8 @@ function LinkBasicsFields({ form }: { form: Form }) {
   )
 }
 
-function LinkSlugField({ form }: { form: Form }) {
-  const { t } = useTranslation()
-  const reset = () => {
-    form.setSlug(slugifyClient(form.title))
-    form.setSlugDirty(false)
-  }
-  return (
-    <label className="fx-field">
-      <span className="fx-field-label">{t('link_dialog.slug_label')}</span>
-      <div className="fx-input">
-        <span style={{ color: 'var(--fx-ink-4)', fontFamily: 'var(--fx-mono)', fontSize: 12, paddingRight: 4 }}>/go/</span>
-        <input
-          value={form.slug}
-          onChange={(event) => {
-            form.setSlug(event.target.value)
-            form.setSlugDirty(true)
-          }}
-          placeholder={slugifyClient(form.title) || 'jira-board'}
-          aria-label={t('link_dialog.slug_aria')}
-          pattern="[a-z0-9]+(-[a-z0-9]+)*"
-          style={{ fontFamily: 'var(--fx-mono)' }}
-        />
-        {form.slugDirty && (
-          <button type="button" className="fx-iconbtn" onClick={reset} data-tooltip={t('link_dialog.slug_reset_tooltip')} aria-label={t('link_dialog.slug_reset_tooltip')}>
-            <Icon d={I.refresh} size={13} />
-          </button>
-        )}
-      </div>
-      <span className="fx-field-hint">{t('link_dialog.slug_hint')}</span>
-    </label>
-  )
-}
-
 function LinkTagsField({ tags }: { tags: Tags }) {
-  const { t } = useTranslation()
-  return (
-    <label className="fx-field">
-      <span className="fx-field-label">{t('link_dialog.tags_label')}</span>
-      <div className="fx-tagpicker">
-        {tags.selected.map((tag, index) => (
-          <TagChip
-            key={tag.id || `pending-${index}`}
-            tag={tag}
-            active
-            closable
-            onClick={tag._pending ? () => tags.cycleColor(index) : undefined}
-            onClose={() => tags.remove(index)}
-          />
-        ))}
-        <input
-          className="fx-tagpicker-input"
-          value={tags.filter}
-          onChange={(event) => tags.setSearch(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && tags.canCreate) {
-              event.preventDefault()
-              tags.queue()
-            }
-          }}
-          placeholder={t('link_dialog.tags_search_placeholder')}
-          aria-label={t('common.tag_filter_aria')}
-        />
-      </div>
-      {tags.selected.some((tag) => tag._pending) && (
-        <div className="fx-tag-hint">
-          <Trans i18nKey="link_dialog.pending_tag_color_hint_html" components={{ strong: <strong /> }} />
-        </div>
-      )}
-      {(tags.filtered.length > 0 || tags.canCreate) && <LinkTagSuggestions tags={tags} />}
-    </label>
-  )
-}
-
-function LinkTagSuggestions({ tags }: { tags: Tags }) {
-  const { t } = useTranslation()
-  return (
-    <div style={{ marginTop: 10 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <span style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)' }}>
-          {t('link_dialog.tags_registered_label')}
-        </span>
-        {tags.totalPages > 1 && <TagPagination tags={tags} />}
-      </div>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        {tags.pageTags.map((tag) => <TagChip key={tag.id} tag={tag} onClick={() => tags.add(tag)} />)}
-        {tags.canCreate && (
-          <button type="button" className="fx-pillbtn" onClick={tags.queue} style={{ fontSize: 11 }}>
-            <Icon d={I.plus} size={11} /> {t('link_dialog.tags_create_inline', { name: tags.filter.trim() })}
-          </button>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function TagPagination({ tags }: { tags: Tags }) {
-  const { t } = useTranslation()
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-      <button type="button" className="fx-iconbtn" disabled={tags.page === 0} onClick={() => tags.setPage((page) => page - 1)} aria-label={t('link_dialog.tags_page_prev_aria')} style={{ width: 22, height: 22 }}>
-        <Icon d={I.chevronLeft} size={12} />
-      </button>
-      <span style={{ fontFamily: 'var(--fx-mono)', fontSize: 10, color: 'var(--fx-ink-4)', minWidth: 32, textAlign: 'center' }}>
-        {tags.page + 1}/{tags.totalPages}
-      </span>
-      <button type="button" className="fx-iconbtn" disabled={tags.page >= tags.totalPages - 1} onClick={() => tags.setPage((page) => page + 1)} aria-label={t('link_dialog.tags_page_next_aria')} style={{ width: 22, height: 22 }}>
-        <Icon d={I.chevronRight} size={12} />
-      </button>
-    </div>
-  )
+  return <TagPicker picker={tags} i18nPrefix="link_dialog" />
 }
 
 function LinkOrganizationFields({ form, link, defaultFolderId }: { form: Form; link: Link | null; defaultFolderId?: number | null }) {

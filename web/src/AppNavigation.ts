@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePersistedMap } from './hooks/usePersistedState'
+import { isBoolean, usePersistedMap } from './hooks/usePersistedState'
 import { usePasswordPrompt, type FolderUnlock } from './components/PasswordPromptDialog'
 import type { Folder } from './api/types'
 import type { ViewMode } from './components/HomeView'
@@ -73,7 +73,7 @@ export function useAppNavigationController(allFolders: Folder[] | undefined) {
   const unlockedFoldersRef = useRef(unlockedFolders)
   const passwordPrompt = usePasswordPrompt()
   const viewModes = usePersistedMap<ViewMode>('foldex.viewMode.map', 'cards', isViewMode)
-  const compactFolders = usePersistedMap<boolean>('foldex.foldersCompact.map', false)
+  const compactFolders = usePersistedMap<boolean>('foldex.foldersCompact.map', false, isBoolean)
   const openFolder = folderPath.at(-1) ?? null
   const viewModeKey = openFolder === null ? 'home' : `folder.${openFolder}`
 

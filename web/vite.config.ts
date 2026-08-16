@@ -65,9 +65,8 @@ export default defineConfig(({ mode }) => {
       host: env.VITE_DEV_LAN === '1' ? '0.0.0.0' : '127.0.0.1',
       port: 9088,
       proxy: {
-        '/api': { target, changeOrigin: true },
-        '/go':  { target, changeOrigin: true },
-        '/n':   { target, changeOrigin: true },
+        // A plain `/n` prefix also captures Vite's `/node_modules` imports.
+        '^/(?:api|go|n)(?:/|$)': { target, changeOrigin: true },
       },
     },
     build: {

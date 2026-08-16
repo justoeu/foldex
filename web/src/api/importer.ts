@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
+import { invalidateEntryCounts } from './entries'
 
 export type ImportFormat = 'netscape' | 'json'
 export type ImportMode = 'skip' | 'wipe' | 'duplicate'
@@ -14,14 +15,12 @@ export type ImportFolder = {
   path: string
   name: string
   count: number
+  conflicts: number
 }
 
-export type ImportLink = {
-  url: string
-  title: string
-  folder?: string
-  tags?: string[]
-  conflict: boolean
+export type ImportAggregate = {
+  links: number
+  conflicts: number
 }
 
 export type ImportValidation = {
@@ -29,7 +28,7 @@ export type ImportValidation = {
   counts: ImportCounts
   conflicts: ImportCounts
   folders: ImportFolder[]
-  links: ImportLink[]
+  ungrouped: ImportAggregate
   warnings: string[]
 }
 
@@ -42,12 +41,17 @@ export type ImportResult = {
   warnings?: string[]
 }
 
-export async function validateImport(file: File, format: ImportFormat): Promise<ImportValidation> {
+export async function validateImport(
+  file: File,
+  format: ImportFormat,
+  signal?: AbortSignal,
+): Promise<ImportValidation> {
   const fd = new FormData()
   fd.append('file', file)
   fd.append('format', format)
   const { data } = await http.post<ImportValidation>('/api/import/validate', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    signal,
   })
   return data
 }
@@ -57,6 +61,7 @@ export async function applyImport(
   format: ImportFormat,
   mode: ImportMode,
   excludeFolders: string[],
+  signal?: AbortSignal,
 ): Promise<ImportResult> {
   const fd = new FormData()
   fd.append('file', file)
@@ -65,6 +70,7 @@ export async function applyImport(
   if (excludeFolders.length > 0) fd.append('exclude_folders', excludeFolders.join(','))
   const { data } = await http.post<ImportResult>('/api/import/apply', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    signal,
   })
   return data
 }
@@ -80,13 +86,13 @@ export function useApplyImport() {
       format: ImportFormat
       mode: ImportMode
       excludeFolders: string[]
-    }) => applyImport(args.file, args.format, args.mode, args.excludeFolders),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      qc.invalidateQueries({ queryKey: ['tags'] })
-      qc.invalidateQueries({ queryKey: ['stats'] })
+      signal?: AbortSignal
+    }) => applyImport(args.file, args.format, args.mode, args.excludeFolders, args.signal),
+    onSettled: () => {
+      for (const queryKey of ['links', 'entries', 'folders', 'tags', 'stats']) {
+        void Promise.resolve(qc.invalidateQueries({ queryKey: [queryKey] })).catch(() => undefined)
+      }
+      invalidateEntryCounts(qc)
     },
   })
 }

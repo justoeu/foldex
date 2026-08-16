@@ -4,6 +4,7 @@ package testdb
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,11 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/auth"
 	"foldex/internal/pkg/secrets"
+	"foldex/internal/pkg/slug"
 )
 
 var composePostgresImage = regexp.MustCompile(`(?m)^\s*image:\s*(postgres:\S+)`)
@@ -328,4 +331,183 @@ func TestMigration000028IsReversibleAndLegacyPasswordResetsFailClosed(t *testing
 			  AND column_name = 'token_version'
 		)`).Scan(&columnExists))
 	assert.False(t, columnExists)
+}
+
+func TestMigration000029RepairsOverlongSlugsAndEnforcesLimit(t *testing.T) {
+	ctx := context.Background()
+	pool := New(t)
+	dir := migrationsDir()
+	down, err := os.ReadFile(filepath.Join(dir, "000029_slug_length.down.sql"))
+	require.NoError(t, err)
+	up, err := os.ReadFile(filepath.Join(dir, "000029_slug_length.up.sql"))
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, string(down))
+	require.NoError(t, err, "000029 down migration must apply cleanly")
+	uid := SeedUser(t, pool, "legacy-slug@test.local", "user")
+	base := strings.Repeat("a", slug.MaxLen)
+	values := []string{base}
+	for suffix := 2; suffix <= 100; suffix++ {
+		values = append(values, fmt.Sprintf("%s-%d", base, suffix))
+	}
+	values = append(values,
+		strings.Repeat("1", 78)+"-a-2",
+		strings.Repeat("2", slug.MaxLen)+"-a",
+	)
+	linkIDs := make([]int64, 0, len(values))
+	noteIDs := make([]int64, 0, len(values))
+	for index, value := range values {
+		var linkID int64
+		err = pool.QueryRow(ctx, `
+			INSERT INTO link (user_id, url, title, slug)
+			VALUES ($1, $2, $3, $4) RETURNING id`,
+			int64(uid), fmt.Sprintf("https://legacy-%d.test", index), fmt.Sprintf("legacy-%d", index), value).Scan(&linkID)
+		require.NoError(t, err)
+		linkIDs = append(linkIDs, linkID)
+		var noteID int64
+		err = pool.QueryRow(ctx, `
+			INSERT INTO note (user_id, title, slug)
+			VALUES ($1, $2, $3) RETURNING id`, int64(uid), fmt.Sprintf("legacy-%d", index), value).Scan(&noteID)
+		require.NoError(t, err)
+		noteIDs = append(noteIDs, noteID)
+	}
+
+	_, err = pool.Exec(ctx, string(up))
+	require.NoError(t, err, "000029 up migration must repair legacy overlong slugs")
+	for table, wantIDs := range map[string][]int64{"link": linkIDs, "note": noteIDs} {
+		rows, queryErr := pool.Query(ctx, `SELECT id, title, slug FROM `+table+` ORDER BY id`)
+		require.NoError(t, queryErr)
+		seen := make(map[string]struct{})
+		var gotIDs []int64
+		for rows.Next() {
+			var id int64
+			var title, candidate string
+			require.NoError(t, rows.Scan(&id, &title, &candidate))
+			gotIDs = append(gotIDs, id)
+			assert.Contains(t, title, "legacy-")
+			assert.LessOrEqual(t, len(candidate), slug.MaxLen)
+			assert.True(t, slug.IsValid(candidate), candidate)
+			_, duplicate := seen[candidate]
+			assert.False(t, duplicate, "duplicate repaired slug %q", candidate)
+			seen[candidate] = struct{}{}
+		}
+		require.NoError(t, rows.Err())
+		rows.Close()
+		assert.Contains(t, seen, strings.Repeat("a", 78)+"-9")
+		assert.Contains(t, seen, strings.Repeat("a", 77)+"-10")
+		assert.Contains(t, seen, strings.Repeat("a", 77)+"-99")
+		assert.Contains(t, seen, strings.Repeat("a", 76)+"-100")
+		assert.Equal(t, wantIDs, gotIDs, "%s rows or identities changed during repair", table)
+	}
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO link (user_id, url, title, slug)
+		VALUES ($1, 'https://too-long.test', 'too long', $2)`, int64(uid), base+"-999")
+	require.Error(t, err, "link must reject slugs longer than MaxLen")
+	_, err = pool.Exec(ctx, `
+		INSERT INTO note (user_id, title, slug)
+		VALUES ($1, 'too long', $2)`, int64(uid), base+"-999")
+	require.Error(t, err, "note must reject slugs longer than MaxLen")
+
+	_, err = pool.Exec(ctx, string(down))
+	require.NoError(t, err, "000029 must roll back after reapplying")
+}
+
+func TestMigration000030BackfillsPositivePreviewGenerationAndIsReversible(t *testing.T) {
+	ctx := context.Background()
+	pool := New(t)
+	dir := migrationsDir()
+	down, err := os.ReadFile(filepath.Join(dir, "000030_preview_generation.down.sql"))
+	require.NoError(t, err)
+	up, err := os.ReadFile(filepath.Join(dir, "000030_preview_generation.up.sql"))
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, string(down))
+	require.NoError(t, err, "000030 down migration must apply cleanly")
+	uid := SeedUser(t, pool, "legacy-preview@test.local", "user")
+	var linkID int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO link (user_id, url, title, slug)
+		VALUES ($1, 'https://legacy-preview.test', 'legacy preview', 'legacy-preview')
+		RETURNING id`, int64(uid)).Scan(&linkID)
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, string(up))
+	require.NoError(t, err, "000030 up migration must backfill existing links")
+	var generation int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT preview_generation FROM link WHERE id = $1`, linkID).Scan(&generation))
+	assert.EqualValues(t, 1, generation)
+	_, err = pool.Exec(ctx, `UPDATE link SET preview_generation = 0 WHERE id = $1`, linkID)
+	require.Error(t, err, "preview generation must remain positive")
+
+	_, err = pool.Exec(ctx, string(down))
+	require.NoError(t, err, "000030 must be reversible")
+	var columnExists bool
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'link'
+			  AND column_name = 'preview_generation'
+		)`).Scan(&columnExists))
+	assert.False(t, columnExists)
+}
+
+func TestMigration000031RepairsDuplicatesAndEnforcesOneLiveChallengeOTP(t *testing.T) {
+	ctx := context.Background()
+	pool := New(t)
+	dir := migrationsDir()
+	down, err := os.ReadFile(filepath.Join(dir, "000031_unique_live_challenge_email_otp.down.sql"))
+	require.NoError(t, err)
+	up, err := os.ReadFile(filepath.Join(dir, "000031_unique_live_challenge_email_otp.up.sql"))
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, string(down))
+	require.NoError(t, err, "000031 down migration must apply cleanly")
+	uid := SeedUser(t, pool, "legacy-otp@test.local", "user")
+	var challengeID int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO auth_challenge (user_id, token_hash, purpose, token_version, expires_at)
+		VALUES ($1, $2, 'totp', 0, now() + interval '10 minutes')
+		RETURNING id`, int64(uid), []byte("legacy-otp-challenge")).Scan(&challengeID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO email_otp (user_id, challenge_id, purpose, code_hash, created_at, expires_at)
+		VALUES
+			($1, $2, 'login_2fa', $3, now() - interval '1 minute', now() + interval '5 minutes'),
+			($1, $2, 'login_2fa', $4, now(), now() + interval '5 minutes')`,
+		int64(uid), challengeID, []byte("older"), []byte("newer"))
+	require.NoError(t, err, "fixture requires the pre-migration duplicate state")
+
+	_, err = pool.Exec(ctx, string(up))
+	require.NoError(t, err, "000031 must repair duplicate rows before adding the index")
+	var live int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT count(*) FROM email_otp
+		WHERE challenge_id = $1 AND purpose = 'login_2fa' AND consumed_at IS NULL`, challengeID).Scan(&live))
+	assert.Equal(t, 1, live)
+	var survivingHash []byte
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT code_hash FROM email_otp
+		WHERE challenge_id = $1 AND purpose = 'login_2fa' AND consumed_at IS NULL`, challengeID).
+		Scan(&survivingHash))
+	assert.Equal(t, []byte("newer"), survivingHash, "migration did not preserve the newest code")
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO email_otp (user_id, challenge_id, purpose, code_hash, expires_at)
+		VALUES ($1, $2, 'login_2fa', $3, now() + interval '5 minutes')`,
+		int64(uid), challengeID, []byte("second-live"))
+	require.Error(t, err, "database accepted a second live login OTP for one challenge")
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr)
+	assert.Equal(t, "23505", pgErr.Code)
+	assert.Equal(t, "email_otp_one_live_login_challenge_idx", pgErr.ConstraintName)
+
+	_, err = pool.Exec(ctx, string(down))
+	require.NoError(t, err, "000031 must be reversible")
+	_, err = pool.Exec(ctx, `
+		INSERT INTO email_otp (user_id, challenge_id, purpose, code_hash, expires_at)
+		VALUES ($1, $2, 'login_2fa', $3, now() + interval '5 minutes')`,
+		int64(uid), challengeID, []byte("allowed-after-down"))
+	require.NoError(t, err, "down migration left the uniqueness index active")
 }

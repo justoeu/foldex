@@ -51,6 +51,74 @@ func TestRepositoriesDoNotImportHTTPDelivery(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDeliveryDoesNotImportStorageAdapters(t *testing.T) {
+	// cmd/server is intentionally outside this root: concrete adapters are
+	// allowed only at the application composition boundary.
+	root := filepath.Join("..", "links")
+	forbiddenPrefixes := []string{
+		"foldex/internal/storage",
+		"foldex/internal/adapters",
+	}
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || strings.HasSuffix(path, "_test.go") || filepath.Ext(path) != ".go" {
+			return nil
+		}
+
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, imp := range f.Imports {
+			importPath, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				return err
+			}
+			for _, prefix := range forbiddenPrefixes {
+				if importPath == prefix || strings.HasPrefix(importPath, prefix+"/") {
+					rel, relErr := filepath.Rel(root, path)
+					if relErr != nil {
+						return relErr
+					}
+					t.Errorf("production links delivery file %s imports storage adapter %q", filepath.ToSlash(rel), importPath)
+				}
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestNotesDoesNotImportLinks(t *testing.T) {
+	root := filepath.Join("..", "notes")
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || strings.HasSuffix(path, "_test.go") || filepath.Ext(path) != ".go" {
+			return nil
+		}
+
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, imp := range f.Imports {
+			importPath, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				return err
+			}
+			if importPath == "foldex/internal/links" {
+				t.Errorf("production notes file %s imports links", filepath.Base(path))
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
 func TestPasswordResetRepositoryBindsEveryTokenToACredentialEpoch(t *testing.T) {
 	path := filepath.Join("..", "auth", "repository_2fa.go")
 	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)

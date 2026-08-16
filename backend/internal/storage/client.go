@@ -3,7 +3,6 @@ package storage
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +11,8 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
+	"foldex/internal/ports"
 )
 
 // Client wraps an S3-compatible client (RustFS via minio-go) and exposes a minimal interface for foldex.
@@ -88,7 +89,7 @@ const MaxServeObjectBytes int64 = 16 << 20
 
 // ErrObjectTooLarge is returned when Stat reports a size above MaxServeObjectBytes
 // or when a stream exceeds that ceiling mid-read.
-var ErrObjectTooLarge = errors.New("storage: object exceeds max serve size")
+var ErrObjectTooLarge = ports.ErrObjectTooLarge
 
 // checkServeSize rejects objects that would blow the buffered-serve budget.
 func checkServeSize(size int64) error {

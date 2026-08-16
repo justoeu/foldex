@@ -25,10 +25,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"foldex/internal/storage"
-
 	"foldex/internal/linkimage"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/ports"
 
 	"foldex/internal/pkg/authctx/authctxtest"
 	"foldex/internal/pkg/domainerr"
@@ -65,6 +64,7 @@ func realPNG(t *testing.T, w, h int) []byte {
 // --- fakes ---
 
 type fakeScreenshotter struct {
+	mu           sync.Mutex
 	png          []byte
 	err          error
 	urls         []string
@@ -72,11 +72,20 @@ type fakeScreenshotter struct {
 }
 
 func (f *fakeScreenshotter) Capture(_ context.Context, pageURL string) ([]byte, error) {
+	f.mu.Lock()
 	f.urls = append(f.urls, pageURL)
-	if f.beforeReturn != nil {
-		f.beforeReturn()
+	png, err, beforeReturn := f.png, f.err, f.beforeReturn
+	f.mu.Unlock()
+	if beforeReturn != nil {
+		beforeReturn()
 	}
-	return f.png, f.err
+	return png, err
+}
+
+func (f *fakeScreenshotter) capturedURLs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.urls...)
 }
 
 type uploadOp struct {
@@ -86,6 +95,7 @@ type uploadOp struct {
 }
 
 type fakeUploader struct {
+	mu        sync.Mutex
 	uploaded  map[string][]byte
 	ops       []uploadOp // ordered call log
 	deleted   []string   // ordered DeleteObject call log
@@ -99,6 +109,8 @@ func newFakeUploader() *fakeUploader {
 }
 
 func (f *fakeUploader) Upload(_ context.Context, key string, data []byte, ct string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
@@ -108,6 +120,8 @@ func (f *fakeUploader) Upload(_ context.Context, key string, data []byte, ct str
 }
 
 func (f *fakeUploader) GetObject(_ context.Context, key string) ([]byte, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.getErr != nil {
 		return nil, "", f.getErr
 	}
@@ -119,6 +133,8 @@ func (f *fakeUploader) GetObject(_ context.Context, key string) ([]byte, string,
 }
 
 func (f *fakeUploader) DeleteObject(_ context.Context, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.deleted = append(f.deleted, key)
 	if f.deleteErr != nil {
 		return f.deleteErr
@@ -136,6 +152,7 @@ func (f *fakeUploader) DeleteObject(_ context.Context, key string) error {
 // go green. gotUID records what was actually passed, so a test can assert the
 // handler forwarded the authenticated principal instead of a zero value.
 type fakeRepo struct {
+	mu         sync.Mutex
 	links      map[int64]Link
 	owners     map[int64]authctx.UserID // absent ⇒ owned by authctxtest.DefaultUser
 	gotUID     []authctx.UserID
@@ -158,11 +175,13 @@ func newFakeRepo() *fakeRepo {
 
 // ownedBy registers a link belonging to someone other than the default user.
 func (f *fakeRepo) ownedBy(id int64, uid authctx.UserID, l Link) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.links[id] = l
 	f.owners[id] = uid
 }
 
-func (f *fakeRepo) ownerOf(id int64) authctx.UserID {
+func (f *fakeRepo) ownerOfLocked(id int64) authctx.UserID {
 	if uid, ok := f.owners[id]; ok {
 		return uid
 	}
@@ -177,35 +196,41 @@ func (f *fakeRepo) ownerOf(id int64) authctx.UserID {
 var errNotFound = domainerr.ErrNotFound
 
 func (f *fakeRepo) Get(_ context.Context, uid authctx.UserID, id int64) (Link, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.gotUID = append(f.gotUID, uid)
 	if f.getErr != nil {
 		return Link{}, f.getErr
 	}
 	l, ok := f.links[id]
-	if !ok || f.ownerOf(id) != uid {
+	if !ok || f.ownerOfLocked(id) != uid {
 		return Link{}, errNotFound
 	}
 	return l, nil
 }
 
 func (f *fakeRepo) AssertOwned(_ context.Context, uid authctx.UserID, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.gotUID = append(f.gotUID, uid)
 	if f.getErr != nil {
 		return f.getErr
 	}
-	if _, ok := f.links[id]; !ok || f.ownerOf(id) != uid {
+	if _, ok := f.links[id]; !ok || f.ownerOfLocked(id) != uid {
 		return errNotFound
 	}
 	return nil
 }
 
 func (f *fakeRepo) ReplaceOGImage(_ context.Context, uid authctx.UserID, id int64, imageURL string) (*string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.gotUID = append(f.gotUID, uid)
 	if f.updateErr != nil {
 		return nil, f.updateErr
 	}
 	link, ok := f.links[id]
-	if !ok || f.ownerOf(id) != uid {
+	if !ok || f.ownerOfLocked(id) != uid {
 		return nil, errNotFound
 	}
 	previous := link.OGImageURL
@@ -216,11 +241,13 @@ func (f *fakeRepo) ReplaceOGImage(_ context.Context, uid authctx.UserID, id int6
 }
 
 func (f *fakeRepo) UpdateOGImageIfUnchanged(_ context.Context, uid authctx.UserID, id int64, imageURL string, _ time.Time) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.gotUID = append(f.gotUID, uid)
 	if f.updateErr != nil {
 		return false, f.updateErr
 	}
-	if _, ok := f.links[id]; !ok || f.ownerOf(id) != uid {
+	if _, ok := f.links[id]; !ok || f.ownerOfLocked(id) != uid {
 		return false, nil
 	}
 	if !f.casApplied {
@@ -231,17 +258,25 @@ func (f *fakeRepo) UpdateOGImageIfUnchanged(_ context.Context, uid authctx.UserI
 }
 
 func (f *fakeRepo) ClearOGImage(_ context.Context, uid authctx.UserID, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.gotUID = append(f.gotUID, uid)
 	if f.clearErr != nil {
 		return f.clearErr
 	}
 	// Seeded-link tests aside, a fake that cleared regardless of owner would let
 	// DeleteImage drop its scoping unnoticed.
-	if _, ok := f.links[id]; ok && f.ownerOf(id) != uid {
+	if _, ok := f.links[id]; ok && f.ownerOfLocked(id) != uid {
 		return errNotFound
 	}
 	f.clearedIDs = append(f.clearedIDs, id)
 	return nil
+}
+
+func (f *fakeRepo) delete(id int64) {
+	f.mu.Lock()
+	delete(f.links, id)
+	f.mu.Unlock()
 }
 
 // --- helpers ---
@@ -416,7 +451,7 @@ func TestCaptureAndStore_ConcurrentDeleteRemovesOperationObject(t *testing.T) {
 	repo := newFakeRepo()
 	repo.links[1] = Link{ID: 1, URL: "https://example.com", UpdatedAt: time.Now()}
 	sc := &fakeScreenshotter{png: realPNG(t, 300, 200), beforeReturn: func() {
-		delete(repo.links, 1)
+		repo.delete(1)
 	}}
 	r, fakeUp, _ := buildRouter(t, sc, up, repo)
 
@@ -545,7 +580,7 @@ func TestCaptureAndStore_RejectsRFC6598WithProductionPolicy(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "private_target")
 	assert.Empty(t, up.uploaded)
-	assert.Empty(t, sc.urls, "RFC6598 must be rejected before Chromium")
+	assert.Empty(t, sc.capturedURLs(), "RFC6598 must be rejected before Chromium")
 }
 
 func TestCaptureAndStore_PolicyUsesBoundedContextOnce(t *testing.T) {
@@ -578,7 +613,7 @@ func TestCaptureAndStore_PolicyUsesBoundedContextOnce(t *testing.T) {
 	assert.Equal(t, 1, calls)
 	assert.Greater(t, remaining, capturePolicyTimeout-time.Second)
 	assert.LessOrEqual(t, remaining, capturePolicyTimeout)
-	assert.Len(t, sc.urls, 1)
+	assert.Len(t, sc.capturedURLs(), 1)
 }
 
 // TestCaptureAndStore_NilPolicyFailsClosed locks the H1 invariant: a missing
@@ -689,7 +724,7 @@ func TestProxyFile_NotFound(t *testing.T) {
 func TestProxyFile_RejectsOversizedObject(t *testing.T) {
 	sc := &fakeScreenshotter{}
 	up := newFakeUploader()
-	up.getErr = fmt.Errorf("storage: get object: %w", storage.ErrObjectTooLarge)
+	up.getErr = fmt.Errorf("storage: get object: %w", ports.ErrObjectTooLarge)
 	repo := newFakeRepo()
 	repo.links[1] = Link{ID: 1}
 	r, _, _ := buildRouter(t, sc, up, repo)
@@ -712,8 +747,8 @@ func TestCaptureAndStore_Returns429WhenSaturated(t *testing.T) {
 	var inFlight atomic.Int32
 	pngBytes := realPNG(t, 40, 30)
 	sc := &blockingScreenshotter{entered: entered, release: release, inFlight: &inFlight, png: pngBytes}
-	up := &concurrentUploader{fakeUploader: newFakeUploader()}
-	repo := &concurrentRepo{fakeRepo: newFakeRepo()}
+	up := newFakeUploader()
+	repo := newFakeRepo()
 	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
 	const secondUser = authctx.UserID(authctxtest.DefaultUser + 1)
 	repo.ownedBy(2, secondUser, Link{ID: 2, URL: "https://example.org"})
@@ -767,46 +802,6 @@ func TestCaptureAndStore_Returns429WhenSaturated(t *testing.T) {
 		assert.Equal(t, http.StatusOK, code)
 	}
 	assert.LessOrEqual(t, int(inFlight.Load()), maxCaptureInFlight)
-}
-
-type concurrentUploader struct {
-	*fakeUploader
-	mu sync.Mutex
-}
-
-func (f *concurrentUploader) Upload(ctx context.Context, key string, data []byte, ct string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.fakeUploader.Upload(ctx, key, data, ct)
-}
-
-func (f *concurrentUploader) DeleteObject(ctx context.Context, key string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.fakeUploader.DeleteObject(ctx, key)
-}
-
-type concurrentRepo struct {
-	*fakeRepo
-	mu sync.Mutex
-}
-
-func (f *concurrentRepo) Get(ctx context.Context, uid authctx.UserID, id int64) (Link, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.fakeRepo.Get(ctx, uid, id)
-}
-
-func (f *concurrentRepo) ReplaceOGImage(ctx context.Context, uid authctx.UserID, id int64, imageURL string) (*string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.fakeRepo.ReplaceOGImage(ctx, uid, id, imageURL)
-}
-
-func (f *concurrentRepo) UpdateOGImageIfUnchanged(ctx context.Context, uid authctx.UserID, id int64, imageURL string, expectedUpdatedAt time.Time) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.fakeRepo.UpdateOGImageIfUnchanged(ctx, uid, id, imageURL, expectedUpdatedAt)
 }
 
 type blockingScreenshotter struct {

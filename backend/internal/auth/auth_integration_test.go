@@ -154,6 +154,13 @@ type harness struct {
 
 const testBaseURL = "https://foldex.test"
 
+func testSessionTTL() auth.SessionTTL {
+	return auth.SessionTTL{
+		Access: 15 * time.Minute, Refresh: 30 * 24 * time.Hour,
+		Absolute: 90 * 24 * time.Hour, Grace: 10 * time.Second,
+	}
+}
+
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	pool := testdb.Shared(t)
@@ -226,8 +233,14 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 	if opts.SMTP {
 		mail.driver = "smtp"
 	}
+	workers := opts.MailWorkers
+	if workers == 0 {
+		// One worker gives tests a deterministic FIFO drain barrier. Dispatcher
+		// concurrency itself is covered in internal/mailer.
+		workers = 1
+	}
 	dispatch := mailer.NewDispatcher(context.Background(), mail, mailer.DispatcherOptions{
-		Workers: opts.MailWorkers, QueueSize: opts.MailQueue,
+		Workers: workers, QueueSize: opts.MailQueue,
 	}, logger)
 	t.Cleanup(dispatch.Stop)
 	cookies := auth.CookieOptions{Secure: true}
@@ -235,7 +248,7 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 
 	cfg := auth.HandlerConfig{
 		Repo: repo, MW: mw, Mailer: mail, MailDispatcher: dispatch, Cookies: cookies,
-		TTL: auth.DefaultTTL(), Logger: logger, BaseURL: testBaseURL,
+		TTL: testSessionTTL(), Logger: logger, BaseURL: testBaseURL,
 		Require2FAForAdmins: opts.Require2FAForAdmins,
 		Google:              opts.Google,
 	}
@@ -279,6 +292,27 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 		pool: pool, router: r, mail: mail, dispatch: dispatch, repo: repo,
 		cipher: cfg.Cipher, codeMAC: cfg.CodeMAC,
 	}
+}
+
+const mailDrainAddress = "auth-mail-drain@foldex.test"
+
+// drainMail waits until the single test worker has completed every message
+// queued before the marker, then returns those messages without the marker.
+func (h *harness) drainMail(t *testing.T) []mailer.Message {
+	t.Helper()
+	require.NoError(t, h.dispatch.Enqueue(mailer.Message{To: mailDrainAddress}, "test drain"))
+	h.mail.waitFor(t, mailDrainAddress)
+
+	h.mail.mu.Lock()
+	defer h.mail.mu.Unlock()
+	var sent []mailer.Message
+	for _, msg := range h.mail.sent {
+		if msg.To != mailDrainAddress {
+			sent = append(sent, msg)
+		}
+	}
+	h.mail.sent = nil
+	return sent
 }
 
 func saturateMailDispatcher(t *testing.T, h *harness) {
@@ -406,17 +440,20 @@ func errCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 }
 
 func waitForBlockedSQL(t *testing.T, pool *pgxpool.Pool, fragment string) {
+	waitForBlockedSQLCount(t, pool, fragment, 1)
+}
+
+func waitForBlockedSQLCount(t *testing.T, pool *pgxpool.Pool, fragment string, want int) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		var blocked bool
+		var blocked int
 		err := pool.QueryRow(context.Background(), `
-			SELECT EXISTS (
-				SELECT 1 FROM pg_stat_activity
-				WHERE datname = current_database() AND wait_event_type = 'Lock'
-				  AND query LIKE '%' || $1 || '%'
-			)`, fragment).Scan(&blocked)
-		return err == nil && blocked
-	}, 3*time.Second, 10*time.Millisecond, "query did not block on the expected row lock: %s", fragment)
+			SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'
+			  AND query LIKE '%' || $1 || '%'`, fragment).Scan(&blocked)
+		return err == nil && blocked >= want
+	}, 3*time.Second, 10*time.Millisecond,
+		"%d queries did not block on the expected row lock: %s", want, fragment)
 }
 
 // bootstrapAdmin claims the placeholder admin and returns a signed-in client.
@@ -920,8 +957,8 @@ func TestRefresh_RotatesEveryToken(t *testing.T) {
 	assert.Equal(t, secrets.Hash(c.cookies[auth.CookieAccess]), accessHash)
 	assert.Equal(t, secrets.Hash(c.cookies[auth.CookieRefresh]), refreshHash)
 	assert.Equal(t, secrets.Hash(c.cookies[auth.CookieCSRF]), csrfHash)
-	assert.WithinDuration(t, time.Now().Add(auth.DefaultTTL().Access), accessExpires, time.Second)
-	assert.WithinDuration(t, time.Now().Add(auth.DefaultTTL().Refresh), refreshExpires, time.Second)
+	assert.WithinDuration(t, time.Now().Add(testSessionTTL().Access), accessExpires, time.Second)
+	assert.WithinDuration(t, time.Now().Add(testSessionTTL().Refresh), refreshExpires, time.Second)
 
 	// The old access token must be dead immediately, not merely superseded.
 	stale := h.client(t)
@@ -956,6 +993,47 @@ func TestRefresh_GraceWindowToleratesARacingTab(t *testing.T) {
 	// response landed last while the server held the other — a coin-flip logout.
 	assert.Equal(t, http.StatusOK, c.do(http.MethodGet, "/api/links", nil).Code,
 		"the grace path must not invalidate the tokens the winning request installed")
+}
+
+func TestRefresh_ExactlyConcurrentRequestsBothReachGraceSemantics(t *testing.T) {
+	h := newHarness(t)
+	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	refresh := c.cookies[auth.CookieRefresh]
+	ctx := context.Background()
+
+	// Hold the session row so both serializable transactions establish their
+	// pre-rotation snapshot before either can claim the token.
+	blocker, err := h.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback(ctx) }()
+	var sessionID int64
+	require.NoError(t, blocker.QueryRow(ctx,
+		`SELECT id FROM session WHERE refresh_token_hash = $1 FOR UPDATE`, secrets.Hash(refresh)).Scan(&sessionID))
+
+	tabs := []*client{h.client(t), h.client(t)}
+	results := make(chan *httptest.ResponseRecorder, len(tabs))
+	for _, tab := range tabs {
+		tab.cookies[auth.CookieRefresh] = refresh
+		go func(tab *client) {
+			results <- tab.do(http.MethodPost, "/api/auth/refresh", nil)
+		}(tab)
+	}
+	waitForBlockedSQLCount(t, h.pool, "FOR UPDATE OF s", len(tabs))
+	require.NoError(t, blocker.Commit(ctx))
+
+	for range tabs {
+		rec := <-results
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	}
+	for _, tab := range tabs {
+		assert.Equal(t, http.StatusOK, tab.do(http.MethodGet, "/api/links", nil).Code)
+	}
+	var sessions, families int
+	require.NoError(t, h.pool.QueryRow(ctx,
+		`SELECT count(*), count(DISTINCT family_id) FROM session WHERE revoked_at IS NULL`).Scan(
+		&sessions, &families))
+	assert.Equal(t, 2, sessions)
+	assert.Equal(t, 1, families)
 }
 
 // The grace path issues a SIBLING session, which must stay inside the same

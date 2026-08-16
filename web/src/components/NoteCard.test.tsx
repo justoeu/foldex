@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { NoteCard, type NoteEntry } from './NoteCard'
 import { renderWithProviders } from '../test/renderWithProviders'
@@ -28,9 +28,15 @@ const baseNote: NoteEntry = {
   body_text_snippet: 'milk, eggs, bread',
 }
 
+const noopCardProps = {
+  onDelete: () => undefined,
+  onPin: () => undefined,
+  onOpen: () => undefined,
+}
+
 describe('NoteCard', () => {
   it('renders title, snippet, tag chips, and click counter', () => {
-    renderWithProviders(<NoteCard note={baseNote} onEdit={vi.fn()} />)
+    renderWithProviders(<NoteCard note={baseNote} onEdit={vi.fn()} {...noopCardProps} />)
     expect(screen.getByText('Shopping list')).toBeInTheDocument()
     expect(screen.getByText('milk, eggs, bread')).toBeInTheDocument()
     expect(screen.getByText('home')).toBeInTheDocument()
@@ -38,13 +44,13 @@ describe('NoteCard', () => {
   })
 
   it('always shows the note badge, regardless of content', () => {
-    renderWithProviders(<NoteCard note={{ ...baseNote, body_text_snippet: null }} onEdit={vi.fn()} />)
+    renderWithProviders(<NoteCard note={{ ...baseNote, body_text_snippet: null }} onEdit={vi.fn()} {...noopCardProps} />)
     expect(document.querySelector('.fx-card-note-badge')).not.toBeNull()
   })
 
   it('calls onEdit when the title is clicked', async () => {
     const onEdit = vi.fn()
-    renderWithProviders(<NoteCard note={baseNote} onEdit={onEdit} />)
+    renderWithProviders(<NoteCard note={baseNote} onEdit={onEdit} {...noopCardProps} />)
     const user = userEvent.setup()
     await user.click(screen.getByText('Shopping list'))
     expect(onEdit).toHaveBeenCalledWith(1)
@@ -52,40 +58,31 @@ describe('NoteCard', () => {
 
   it('calls onEdit when the edit icon button is clicked', async () => {
     const onEdit = vi.fn()
-    renderWithProviders(<NoteCard note={baseNote} onEdit={onEdit} />)
+    renderWithProviders(<NoteCard note={baseNote} onEdit={onEdit} {...noopCardProps} />)
     const user = userEvent.setup()
     await user.click(screen.getByLabelText('Edit'))
     expect(onEdit).toHaveBeenCalledWith(1)
   })
 
   it('toggles pinned on badge click, optimistically', async () => {
-    state.notes.push({
-      id: 1, title: 'Shopping list', slug: 'shopping-list', body_html: '', pinned: false,
-      folder_id: null, cover_url: null, click_count: 3, last_clicked_at: null,
-      created_at: '', updated_at: '', tags: [],
-    })
-    renderWithProviders(<NoteCard note={baseNote} onEdit={vi.fn()} />)
+    const onPin = vi.fn()
+    renderWithProviders(<NoteCard note={baseNote} onEdit={vi.fn()} {...noopCardProps} onPin={onPin} />)
     const pinBtn = screen.getByLabelText('Pin')
     fireEvent.click(pinBtn)
-    await waitFor(() => expect(state.notes[0].pinned).toBe(true))
+    expect(onPin).toHaveBeenCalledWith(baseNote, true)
   })
 
-  it('confirms then deletes when delete button is clicked', async () => {
-    state.notes.push({
-      id: 1, title: 'Shopping list', slug: 'shopping-list', body_html: '', pinned: false,
-      folder_id: null, cover_url: null, click_count: 3, last_clicked_at: null,
-      created_at: '', updated_at: '', tags: [],
-    })
-    renderWithProviders(<NoteCard note={baseNote} onEdit={vi.fn()} />)
+  it('delegates deletion to the grid mutation boundary', async () => {
+    const onDelete = vi.fn()
+    renderWithProviders(<NoteCard note={baseNote} onEdit={vi.fn()} {...noopCardProps} onDelete={onDelete} />)
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /delete/i }))
-    const confirmBtn = await screen.findByRole('button', { name: /Delete note/i })
-    await user.click(confirmBtn)
-    await waitFor(() => expect(state.notes).toHaveLength(0))
+    expect(onDelete).toHaveBeenCalledWith(baseNote)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('sets the drag payload MIME type on dragstart', () => {
-    const { container } = renderWithProviders(<NoteCard note={baseNote} onEdit={vi.fn()} />)
+    const { container } = renderWithProviders(<NoteCard note={baseNote} onEdit={vi.fn()} {...noopCardProps} />)
     const card = container.querySelector('.fx-card') as HTMLElement
     const setData = vi.fn()
     fireEvent.dragStart(card, { dataTransfer: { setData, effectAllowed: '' } })
@@ -94,7 +91,7 @@ describe('NoteCard', () => {
 
   it('drag-and-drop: dropping a link onto this card fires onMergeWith({kind:"link",...}, target)', () => {
     const onMerge = vi.fn()
-    const { container } = renderWithProviders(<NoteCard note={{ ...baseNote, id: 9 }} onEdit={vi.fn()} onMergeWith={onMerge} />)
+    const { container } = renderWithProviders(<NoteCard note={{ ...baseNote, id: 9 }} onEdit={vi.fn()} onMergeWith={onMerge} {...noopCardProps} />)
     const card = container.querySelector('.fx-card') as HTMLElement
     fireEvent.drop(card, {
       dataTransfer: {
@@ -107,7 +104,7 @@ describe('NoteCard', () => {
 
   it('drag-and-drop: dropping this note onto itself is a no-op', () => {
     const onMerge = vi.fn()
-    const { container } = renderWithProviders(<NoteCard note={{ ...baseNote, id: 4 }} onEdit={vi.fn()} onMergeWith={onMerge} />)
+    const { container } = renderWithProviders(<NoteCard note={{ ...baseNote, id: 4 }} onEdit={vi.fn()} onMergeWith={onMerge} {...noopCardProps} />)
     const card = container.querySelector('.fx-card') as HTMLElement
     fireEvent.drop(card, {
       dataTransfer: {
@@ -119,7 +116,7 @@ describe('NoteCard', () => {
   })
 
   it('links to the public /n/ route with the slug', () => {
-    renderWithProviders(<NoteCard note={baseNote} onEdit={vi.fn()} />)
+    renderWithProviders(<NoteCard note={baseNote} onEdit={vi.fn()} {...noopCardProps} />)
     const openLink = screen.getByText('Open').closest('a')
     expect(openLink?.getAttribute('href')).toBe('/n/shopping-list')
   })

@@ -27,6 +27,7 @@ type StorageStats struct {
 
 // StatsReader is satisfied by *Repository.
 type StatsReader interface {
+	Dashboard(ctx context.Context, uid authctx.UserID, days, limit int) (Dashboard, error)
 	Summary(ctx context.Context, uid authctx.UserID) (Summary, error)
 	Daily(ctx context.Context, uid authctx.UserID, days int) ([]DailyPoint, error)
 	TopLinks(ctx context.Context, uid authctx.UserID, limit int) ([]TopLink, error)
@@ -48,6 +49,7 @@ func (h *Handler) WithStorage(s StorageStatter) *Handler {
 }
 
 func (h *Handler) Mount(r chi.Router) {
+	r.Get("/dashboard", h.dashboard)
 	r.Get("/summary", h.summary)
 	r.Get("/daily", h.daily)
 	r.Get("/top", h.top)
@@ -55,6 +57,17 @@ func (h *Handler) Mount(r chi.Router) {
 	if h.storage != nil {
 		r.Get("/storage", h.storageStats)
 	}
+}
+
+func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
+	days := clampint.Int(r.URL.Query().Get("days"), 60, 1, 365)
+	limit := clampint.Int(r.URL.Query().Get("limit"), 5, 1, 100)
+	out, err := h.repo.Dashboard(r.Context(), authctx.MustUser(r.Context()), days, limit)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	httperr.JSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) storageStats(w http.ResponseWriter, r *http.Request) {

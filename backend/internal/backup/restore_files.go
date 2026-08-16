@@ -157,8 +157,11 @@ func (s *Service) applyRestoreNoteObject(ctx context.Context, item restoreFileWo
 		}
 		return restoreObjectResult{uploaded: 1}, nil
 	}
-	optimized, err := optimizeRestoredNoteMedia(item.entry)
+	optimized, err := optimizeRestoredNoteMedia(ctx, item.entry)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return restoreObjectResult{}, ctxErr
+		}
 		return restoreObjectResult{}, httperr.New(http.StatusBadRequest, "invalid_backup", "backup contains invalid note media")
 	}
 	if err := s.storage.PutObjectStream(ctx, item.key, bytes.NewReader(optimized.Data), int64(len(optimized.Data)), optimized.ContentType); err != nil {

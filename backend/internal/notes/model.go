@@ -3,7 +3,7 @@ package notes
 import (
 	"time"
 
-	"foldex/internal/links"
+	"foldex/internal/tags"
 )
 
 // Note mirrors links.Link's shape minus the URL-specific fields (no preview
@@ -14,7 +14,7 @@ type Note struct {
 	ID    int64  `json:"id"`
 	Title string `json:"title"`
 	Slug  string `json:"slug"`
-	// BodyHTML is the full rich body on Get/GetBySlug/Create/Update. List
+	// BodyHTML is the full rich body on Get/Create/Update and public resolution. List
 	// leaves it empty so list responses omit the field (omitempty) — clients
 	// that need the editor payload must GET by id.
 	BodyHTML string `json:"body_html,omitempty"`
@@ -30,5 +30,5 @@ type Note struct {
 	LastClickedAt *time.Time  `json:"last_clicked_at,omitempty"`
 	CreatedAt     time.Time   `json:"created_at"`
 	UpdatedAt     time.Time   `json:"updated_at"`
-	Tags          []links.Tag `json:"tags"`
+	Tags          []tags.Chip `json:"tags"`
 }

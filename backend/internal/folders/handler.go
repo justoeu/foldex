@@ -189,7 +189,7 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 	// parallel wrong passwords cannot all race past maxUnlockAttempts
 	// (RACE-HER-004). Everything between Begin and the commit below is pure
 	// CPU, so there is no path that leaks the slot.
-	if until, ok := h.limiter.Begin(key); !ok {
+	if until, ok := beginUnlockAttempt(h.limiter, key); !ok {
 		h.writeLocked(w, until)
 		return
 	}
@@ -338,7 +338,8 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		cascade = true
 	}
 	if cascade {
-		if err := h.repo.DeleteCascade(r.Context(), authctx.MustUser(r.Context()), id, h.unlockKey, r.Header.Get(UnlockHeader)); err != nil {
+		deletedIDs, err := h.repo.deleteCascade(r.Context(), authctx.MustUser(r.Context()), id, h.unlockKey, r.Header.Get(UnlockHeader))
+		if err != nil {
 			var protected *descendantProtectedError
 			if errors.As(err, &protected) {
 				httperr.JSON(w, http.StatusConflict, descendantProtectedOutput{
@@ -350,11 +351,19 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 			httperr.Write(w, HTTPError(err))
 			return
 		}
+		h.forgetDeletedUnlockAttempts(deletedIDs)
 	} else {
 		if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id, h.unlockKey, r.Header.Get(UnlockHeader)); err != nil {
 			httperr.Write(w, HTTPError(err))
 			return
 		}
+		h.forgetDeletedUnlockAttempts([]int64{id})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) forgetDeletedUnlockAttempts(ids []int64) {
+	for _, id := range ids {
+		h.limiter.Reset(unlockKeyFor(id))
+	}
 }

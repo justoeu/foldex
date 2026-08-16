@@ -263,6 +263,56 @@ func TestForgotPassword_ASecondRequestSupersedesTheFirst(t *testing.T) {
 		map[string]string{"token": second, "password": "a brand new password"}).Code)
 }
 
+func TestConcurrentPasswordResetCreationLeavesExactlyOneLiveToken(t *testing.T) {
+	h := newHarness(t)
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	ctx := context.Background()
+
+	blocker, err := h.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback(ctx) }()
+	var uid int64
+	require.NoError(t, blocker.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE email = 'admin@example.com' FOR UPDATE`).Scan(&uid))
+
+	type result struct {
+		token string
+		err   error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			token, err := h.repo.CreatePasswordReset(ctx, authctx.UserID(uid), time.Minute, "")
+			results <- result{token: token, err: err}
+		}()
+	}
+	waitForBlockedSQLCount(t, h.pool, "FROM app_user WHERE id = $1 FOR NO KEY UPDATE", 2)
+	require.NoError(t, blocker.Commit(ctx))
+
+	tokens := make([]string, 0, 2)
+	for range 2 {
+		result := <-results
+		require.NoError(t, result.err)
+		tokens = append(tokens, result.token)
+	}
+	var live int
+	require.NoError(t, h.pool.QueryRow(ctx, `
+		SELECT count(*) FROM password_reset
+		WHERE user_id = $1 AND consumed_at IS NULL AND expires_at > now()`, uid).Scan(&live))
+	assert.Equal(t, 1, live)
+	var liveHash []byte
+	require.NoError(t, h.pool.QueryRow(ctx, `
+		SELECT token_hash FROM password_reset
+		WHERE user_id = $1 AND consumed_at IS NULL AND expires_at > now()`, uid).Scan(&liveHash))
+	matches := 0
+	for _, token := range tokens {
+		if secrets.Equal(secrets.Hash(token), liveHash) {
+			matches++
+		}
+	}
+	assert.Equal(t, 1, matches, "more than one concurrently minted reset remained live")
+}
+
 func TestForgotPassword_QueueFullPreservesTheExistingReset(t *testing.T) {
 	gate := make(chan struct{})
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{
@@ -326,9 +376,7 @@ func TestForgotPassword_IsIndistinguishableForUnknownAddresses(t *testing.T) {
 			if tc.wantMail {
 				h.mail.waitFor(t, tc.email)
 			} else {
-				// Give any (incorrect) send a chance to land before asserting.
-				time.Sleep(150 * time.Millisecond)
-				assert.Empty(t, h.mail.all(), "mail was sent for %s", tc.name)
+				assert.Empty(t, h.drainMail(t), "mail was sent for %s", tc.name)
 			}
 		})
 	}
@@ -348,8 +396,7 @@ func TestForgotPassword_DisabledAccountGetsNoLink(t *testing.T) {
 		map[string]string{"email": "other@example.com"})
 	assert.Equal(t, http.StatusAccepted, rec.Code)
 
-	time.Sleep(150 * time.Millisecond)
-	assert.Empty(t, h.mail.all(), "a disabled account received a reset link")
+	assert.Empty(t, h.drainMail(t), "a disabled account received a reset link")
 }
 
 // An account with no password credential (Google-only, ADR-31) receives a
@@ -464,12 +511,10 @@ func TestForgotPassword_MailbombingIsCapped(t *testing.T) {
 		require.Equal(t, http.StatusAccepted, h.client(t).do(http.MethodPost,
 			"/api/auth/password/forgot", map[string]string{"email": "admin@example.com"}).Code)
 	}
-	require.Eventually(t, func() bool { return len(h.mail.all()) > 0 },
-		2*time.Second, 10*time.Millisecond)
-	time.Sleep(200 * time.Millisecond)
-
-	assert.LessOrEqual(t, len(h.mail.all()), 3,
-		"the per-address cap did not hold: %d mails sent", len(h.mail.all()))
+	sent := h.drainMail(t)
+	assert.NotEmpty(t, sent)
+	assert.LessOrEqual(t, len(sent), 3,
+		"the per-address cap did not hold: %d mails sent", len(sent))
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -677,8 +722,7 @@ func TestVerifyEmail_RapidResendCoalescesWithoutReplacingTheFirstLink(t *testing
 	require.Equal(t, http.StatusAccepted, c.do(http.MethodPost, "/api/auth/email/resend", nil).Code)
 	first := verifyTokenFrom(t, h.mail.waitFor(t, "admin@example.com").Text)
 	require.Equal(t, http.StatusAccepted, c.do(http.MethodPost, "/api/auth/email/resend", nil).Code)
-	time.Sleep(100 * time.Millisecond)
-	assert.Len(t, h.mail.all(), 1, "rapid resend queued a second verification message")
+	assert.Len(t, h.drainMail(t), 1, "rapid resend queued a second verification message")
 	assert.Equal(t, http.StatusNoContent, h.client(t).do(http.MethodPost,
 		"/api/auth/email/verify", map[string]string{"token": first}).Code,
 		"rapid resend invalidated the first link")
@@ -765,8 +809,7 @@ func TestVerifyEmail_ResendIsANoOpOnceVerified(t *testing.T) {
 	h.mail.reset()
 	// Bootstrap leaves the address verified, so this is already satisfied.
 	assert.Equal(t, http.StatusNoContent, c.do(http.MethodPost, "/api/auth/email/resend", nil).Code)
-	time.Sleep(150 * time.Millisecond)
-	assert.Empty(t, h.mail.all(), "a code was mailed for an already-verified address")
+	assert.Empty(t, h.drainMail(t), "a code was mailed for an already-verified address")
 }
 
 // Every repository method in the 2FA layer wraps its database errors, and none
@@ -803,7 +846,7 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 		assert.Error(t, err)
 		_, _, err = h.repo.CompleteTOTPEnrollment(ctx, uid, 0,
 			auth.TOTPProof{Counter: 1, Ciphertext: []byte("x"), Nonce: []byte("y")},
-			[][]byte{[]byte("h")}, 0, nil, auth.DefaultTTL(), "", "")
+			[][]byte{[]byte("h")}, 0, nil, testSessionTTL(), "", "")
 		assert.Error(t, err)
 		assert.Error(t, h.repo.ConsumeTOTPProof(ctx, uid, auth.TOTPProof{Counter: 1}))
 		assert.Error(t, h.repo.DisableTOTP(ctx, uid, 1, 0, "password", auth.TOTPProof{}))
@@ -828,7 +871,8 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 		assert.Error(t, err)
 		_, err = h.repo.ConsumePasswordReset(ctx, "tok", "a brand new password")
 		assert.Error(t, err)
-		assert.Error(t, h.repo.MarkEmailVerified(ctx, uid))
+		_, err = h.repo.ConsumeEmailVerification(ctx, []byte("hash"))
+		assert.Error(t, err)
 		_, err = h.repo.SweepTwoFactor(ctx, time.Hour)
 		assert.Error(t, err)
 	})
@@ -852,7 +896,7 @@ func TestTwoFactorRepository_NotFoundIsTyped(t *testing.T) {
 
 	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, uid, 0,
 		auth.TOTPProof{Counter: 1, Ciphertext: []byte("x"), Nonce: []byte("y")},
-		[][]byte{[]byte("h")}, sid, nil, auth.DefaultTTL(), "", "")
+		[][]byte{[]byte("h")}, sid, nil, testSessionTTL(), "", "")
 	assert.ErrorIs(t, err, auth.ErrNoTOTP)
 	assert.ErrorIs(t, h.repo.ConsumeTOTPProof(ctx, uid, auth.TOTPProof{Counter: 1}), auth.ErrTOTPReplay)
 	assert.ErrorIs(t, h.repo.ConsumeRecoveryCode(ctx, uid, []byte("nope")), auth.ErrBadCredentials)
@@ -886,7 +930,7 @@ func TestLegacyPendingTOTPEnrollmentWithoutEpochFailsClosed(t *testing.T) {
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	uid := testdb.SeedUserWithPassword(t, h.pool, "legacy-enrollment@example.com", "a good password", "user")
 	ctx := context.Background()
-	_, sid, err := h.repo.IssueSession(ctx, uid, 0, auth.DefaultTTL(), "", "")
+	_, sid, err := h.repo.IssueSession(ctx, uid, 0, testSessionTTL(), "", "")
 	require.NoError(t, err)
 
 	_, err = h.pool.Exec(ctx, `ALTER TABLE totp_secret DROP CONSTRAINT totp_secret_pending_epoch_present`)
@@ -898,7 +942,7 @@ func TestLegacyPendingTOTPEnrollmentWithoutEpochFailsClosed(t *testing.T) {
 
 	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, uid, 0,
 		auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")},
-		[][]byte{[]byte("h")}, sid, nil, auth.DefaultTTL(), "", "")
+		[][]byte{[]byte("h")}, sid, nil, testSessionTTL(), "", "")
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	var confirmed bool
 	require.NoError(t, h.pool.QueryRow(ctx,

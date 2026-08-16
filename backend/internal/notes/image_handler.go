@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	"foldex/internal/imageopt"
-	"foldex/internal/links"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 )
@@ -31,9 +30,13 @@ const (
 // has a different dependency (object storage) that's only wired when the object store
 // is configured.
 type ImageHandler struct {
-	storage links.Uploader
+	storage imageUploader
 	leases  MediaLeaseStore
 	logger  *slog.Logger
+}
+
+type imageUploader interface {
+	Upload(ctx context.Context, key string, data []byte, contentType string) error
 }
 
 type MediaLeaseStore interface {
@@ -41,7 +44,7 @@ type MediaLeaseStore interface {
 	ForgetMediaLease(ctx context.Context, uid authctx.UserID, key string) error
 }
 
-func NewImageHandler(storage links.Uploader, leases MediaLeaseStore, logger *slog.Logger) *ImageHandler {
+func NewImageHandler(storage imageUploader, leases MediaLeaseStore, logger *slog.Logger) *ImageHandler {
 	return &ImageHandler{storage: storage, leases: leases, logger: logger}
 }
 

@@ -1,32 +1,57 @@
 import { http } from './client'
 import type { AuthFeatures, AuthUser, Role } from '../auth/types'
 
-export type MeResponse = {
-  status:
-    | 'anonymous'
-    | 'setup_required'
-    | 'authenticated'
-    | 'two_factor_required'
-    | 'convert_password_account'
-  user?: AuthUser
-  csrf_token?: string
+export type AnonymousMeResponse = {
+  status: 'anonymous'
   features: AuthFeatures
-  // Present on `two_factor_required` and `convert_password_account`. The e-mail
-  // is masked by the server.
-  purpose?: 'totp' | 'enroll_2fa' | 'convert_google'
-  email?: string
-  methods?: string[]
-  max_attempts?: number
 }
+
+export type SetupRequiredMeResponse = {
+  status: 'setup_required'
+  features: AuthFeatures
+}
+
+export type AuthenticatedMeResponse = {
+  status: 'authenticated'
+  user: AuthUser
+  csrf_token: string
+  features: AuthFeatures
+}
+
+type TwoFactorRequiredMeResponseBase = {
+  status: 'two_factor_required'
+  /** Server-masked address; the full account address is never exposed here. */
+  email: string
+  methods: string[]
+  expires_in: number
+  max_attempts: number
+  features: AuthFeatures
+}
+
+export type TwoFactorRequiredMeResponse =
+  | (TwoFactorRequiredMeResponseBase & { purpose: 'totp' })
+  | (TwoFactorRequiredMeResponseBase & { purpose: 'enroll_2fa'; reason: string })
+
+export type ConvertPasswordAccountMeResponse = {
+  status: 'convert_password_account'
+  purpose: 'convert_google'
+  email: string
+  methods: string[]
+  expires_in: number
+  max_attempts: number
+  features: AuthFeatures
+}
+
+export type MeResponse =
+  | AnonymousMeResponse
+  | SetupRequiredMeResponse
+  | AuthenticatedMeResponse
+  | TwoFactorRequiredMeResponse
+  | ConvertPasswordAccountMeResponse
 
 export async function fetchMe(): Promise<MeResponse> {
   const { data } = await http.get<MeResponse>('/api/auth/me')
   return data
-}
-
-export async function fetchBootstrapStatus(): Promise<boolean> {
-  const { data } = await http.get<{ needs_bootstrap: boolean }>('/api/auth/bootstrap-status')
-  return data.needs_bootstrap
 }
 
 export async function login(email: string, password: string): Promise<MeResponse> {
@@ -41,17 +66,6 @@ export async function bootstrap(email: string, name: string, password: string): 
 
 export async function logout(): Promise<void> {
   await http.post('/api/auth/logout')
-}
-
-export async function logoutAll(): Promise<void> {
-  await http.post('/api/auth/logout-all')
-}
-
-export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
-  await http.post('/api/auth/password/change', {
-    current_password: currentPassword,
-    new_password: newPassword,
-  })
 }
 
 /**
@@ -80,20 +94,24 @@ export async function verifyEmail(token: string): Promise<void> {
   await http.post('/api/auth/email/verify', { token })
 }
 
-/** Mails a fresh confirmation link to the signed-in user's own address. */
-export async function resendEmailVerification(): Promise<void> {
-  await http.post('/api/auth/email/resend')
-}
-
 export type InvitePreview = { email: string; role: Role; expires_at: string }
 
-export async function lookupInvite(token: string): Promise<InvitePreview> {
-  const { data } = await http.post<InvitePreview>('/api/auth/invites/lookup', { token })
+export async function lookupInvite(token: string, signal?: AbortSignal): Promise<InvitePreview> {
+  const { data } = await http.post<InvitePreview>('/api/auth/invites/lookup', { token }, { signal })
   return data
 }
 
-export async function acceptInvite(token: string, name: string, password: string): Promise<MeResponse> {
-  const { data } = await http.post<MeResponse>('/api/auth/invites/accept', { token, name, password })
+export async function acceptInvite(
+  token: string,
+  name: string,
+  password: string,
+  signal?: AbortSignal,
+): Promise<MeResponse> {
+  const { data } = await http.post<MeResponse>(
+    '/api/auth/invites/accept',
+    { token, name, password },
+    { signal },
+  )
   return data
 }
 
@@ -177,24 +195,6 @@ export async function listIdentities(): Promise<Identity[]> {
 /** Detaches Google. Refused when it would leave the account with no way in. */
 export async function unlinkGoogle(password: string): Promise<void> {
   await http.delete('/api/auth/oauth/google', { data: { password } })
-}
-
-export type SessionRow = {
-  id: number
-  created_at: string
-  last_seen_at: string
-  user_agent?: string
-  ip?: string
-  current: boolean
-}
-
-export async function listSessions(): Promise<SessionRow[]> {
-  const { data } = await http.get<{ sessions: SessionRow[] }>('/api/auth/sessions')
-  return data.sessions
-}
-
-export async function revokeSession(id: number): Promise<void> {
-  await http.delete(`/api/auth/sessions/${id}`)
 }
 
 /**

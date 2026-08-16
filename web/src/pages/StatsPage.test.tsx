@@ -1,14 +1,33 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { screen, waitFor, fireEvent } from '@testing-library/react'
 import { renderWithProviders } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import { StatsPage, formatChartDate } from './StatsPage'
+import { http } from '../api/client'
 
 let state: MockState
 
 beforeEach(() => {
   state = freshState()
   installAxiosMock(state)
+  const fallback = vi.mocked(http.get).getMockImplementation()!
+  vi.mocked(http.get).mockImplementation((async (url: string, ...rest: any[]) => {
+    if (url.startsWith('/api/stats/dashboard')) {
+      return {
+        data: {
+          summary: state.statsSummary ?? {
+            total_links: 0, total_tags: 0, total_clicks: 0,
+            clicks_last_30d: 0, clicks_prev_30d: 0, new_links_last_30d: 0,
+            top_host: '', top_host_clicks: 0,
+          },
+          daily: state.statsDaily ?? [],
+          top: state.statsTop ?? [],
+          tags: state.statsTags ?? [],
+        },
+      }
+    }
+    return fallback(url, ...rest)
+  }) as never)
 })
 
 function seedStats(opts: {
@@ -107,6 +126,12 @@ describe('StatsPage', () => {
     expect(document.querySelector('.fx-chart')).toBeTruthy()
     expect(document.querySelector('.fx-mom')).toBeTruthy()
     expect(screen.getAllByText(/\+20%/).length).toBeGreaterThan(0)
+    const paths = vi.mocked(http.get).mock.calls.map(([url]) => String(url).split('?')[0])
+    expect(paths.filter((path) => path === '/api/stats/dashboard')).toHaveLength(1)
+    expect(paths).not.toContain('/api/stats/summary')
+    expect(paths).not.toContain('/api/stats/daily')
+    expect(paths).not.toContain('/api/stats/top')
+    expect(paths).not.toContain('/api/stats/tags')
   })
 
   it('passes numeric count into i18n for section subtitle (not toLocaleString)', async () => {

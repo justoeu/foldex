@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -23,6 +24,11 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
+
+type appProbeClient interface {
+	PutObject(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions) (minio.UploadInfo, error)
+	RemoveObject(context.Context, string, string, minio.RemoveObjectOptions) error
+}
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -156,13 +162,18 @@ func run(ctx context.Context, c cfg, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("app s3 client: %w", err)
 	}
-	probeKey := ".foldex-bootstrap-probe"
-	_, err = app.PutObject(ctx, c.Bucket, probeKey, strings.NewReader("ok"), 2,
-		minio.PutObjectOptions{ContentType: "text/plain"})
-	if err != nil {
-		return fmt.Errorf("app user cannot write to %q: %w", c.Bucket, err)
+	return probeAppCapabilities(ctx, app, c.Bucket)
+}
+
+func probeAppCapabilities(ctx context.Context, app appProbeClient, bucket string) error {
+	const probeKey = ".foldex-bootstrap-probe"
+	if _, err := app.PutObject(ctx, bucket, probeKey, strings.NewReader("ok"), 2,
+		minio.PutObjectOptions{ContentType: "text/plain"}); err != nil {
+		return fmt.Errorf("app user cannot write to %q: %w", bucket, err)
 	}
-	_ = app.RemoveObject(ctx, c.Bucket, probeKey, minio.RemoveObjectOptions{})
+	if err := app.RemoveObject(ctx, bucket, probeKey, minio.RemoveObjectOptions{}); err != nil {
+		return fmt.Errorf("app user cannot delete from %q: %w", bucket, err)
+	}
 	return nil
 }
 

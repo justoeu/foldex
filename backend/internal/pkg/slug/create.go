@@ -35,10 +35,7 @@ func CreateWithRetry(
 		attempts = 1
 	}
 	for attempt := 0; attempt < attempts; attempt++ {
-		candidate := base
-		if attempt > 0 {
-			candidate = fmt.Sprintf("%s-%d", base, attempt+1)
-		}
+		candidate := candidateForAttempt(base, attempt+1)
 		var id int64
 		err := pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
 			var err error

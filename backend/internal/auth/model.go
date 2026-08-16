@@ -24,16 +24,93 @@ const (
 	ReasonUserDisabled    = "user_disabled"
 )
 
-// The `status` field every session-shaped response carries. Named constants
-// because the SPA switches on them and a typo on either side of the wire is a
-// screen that never renders.
+// authStatus is the closed status domain emitted by authentication responses.
+type authStatus string
+
 const (
-	statusAnonymous              = "anonymous"
-	statusSetupRequired          = "setup_required"
-	statusAuthenticated          = "authenticated"
-	statusTwoFactorRequired      = "two_factor_required"
-	statusConvertPasswordAccount = "convert_password_account"
+	statusAnonymous              authStatus = "anonymous"
+	statusSetupRequired          authStatus = "setup_required"
+	statusAuthenticated          authStatus = "authenticated"
+	statusTwoFactorRequired      authStatus = "two_factor_required"
+	statusConvertPasswordAccount authStatus = "convert_password_account"
 )
+
+// AuthFeatures describes optional authentication capabilities exposed to the
+// client. Keeping this typed prevents a misspelled feature key from silently
+// disappearing from every auth-state response.
+type AuthFeatures struct {
+	GoogleOAuth   bool `json:"google_oauth"`
+	TwoFactor     bool `json:"two_factor"`
+	EmailDelivery bool `json:"email_delivery"`
+}
+
+// authWireResponse is the closed set of state-bearing auth responses. Each
+// variant has the fields required by its status instead of one map that admits
+// impossible combinations.
+type authWireResponse interface {
+	authWireResponse()
+}
+
+type anonymousAuthResponse struct {
+	Status   authStatus   `json:"status"`
+	Features AuthFeatures `json:"features"`
+}
+
+func (anonymousAuthResponse) authWireResponse() {}
+
+type setupRequiredAuthResponse struct {
+	Status   authStatus   `json:"status"`
+	Features AuthFeatures `json:"features"`
+}
+
+func (setupRequiredAuthResponse) authWireResponse() {}
+
+type authenticatedAuthResponse struct {
+	Status        authStatus   `json:"status"`
+	User          User         `json:"user"`
+	CSRFToken     string       `json:"csrf_token"`
+	Features      AuthFeatures `json:"features"`
+	RecoveryCodes []string     `json:"recovery_codes,omitempty"`
+}
+
+func (authenticatedAuthResponse) authWireResponse() {}
+
+type twoFactorAuthResponse struct {
+	Status      authStatus       `json:"status"`
+	Purpose     ChallengePurpose `json:"purpose"`
+	Email       string           `json:"email"`
+	Methods     []string         `json:"methods"`
+	ExpiresIn   int              `json:"expires_in"`
+	MaxAttempts int              `json:"max_attempts"`
+	Features    AuthFeatures     `json:"features"`
+}
+
+func (twoFactorAuthResponse) authWireResponse() {}
+
+type enrollmentAuthResponse struct {
+	Status      authStatus       `json:"status"`
+	Purpose     ChallengePurpose `json:"purpose"`
+	Email       string           `json:"email"`
+	Methods     []string         `json:"methods"`
+	ExpiresIn   int              `json:"expires_in"`
+	MaxAttempts int              `json:"max_attempts"`
+	Features    AuthFeatures     `json:"features"`
+	Reason      string           `json:"reason"`
+}
+
+func (enrollmentAuthResponse) authWireResponse() {}
+
+type conversionAuthResponse struct {
+	Status      authStatus       `json:"status"`
+	Purpose     ChallengePurpose `json:"purpose"`
+	Email       string           `json:"email"`
+	Methods     []string         `json:"methods"`
+	ExpiresIn   int              `json:"expires_in"`
+	MaxAttempts int              `json:"max_attempts"`
+	Features    AuthFeatures     `json:"features"`
+}
+
+func (conversionAuthResponse) authWireResponse() {}
 
 // User is one row of app_user, minus the secrets.
 //

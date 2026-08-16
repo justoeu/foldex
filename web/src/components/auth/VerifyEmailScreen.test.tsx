@@ -34,7 +34,6 @@ describe('VerifyEmailScreen', () => {
     render()
 
     await screen.findByRole('heading', { name: /e-mail confirmed/i })
-    await new Promise((r) => setTimeout(r, 30))
     expect(post).toHaveBeenCalledTimes(1)
   })
 

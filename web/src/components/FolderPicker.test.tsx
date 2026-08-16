@@ -143,6 +143,8 @@ describe('FolderPicker', () => {
   })
 
   it('stays usable and retries after inline folder creation is rejected', async () => {
+    const onUnhandled = vi.fn()
+    window.addEventListener('unhandledrejection', onUnhandled)
     vi.mocked(http.post).mockRejectedValueOnce(new Error('create failed'))
     const onChange = vi.fn()
     renderWithProviders(<FolderPicker selected={null} onChange={onChange} />)
@@ -153,12 +155,17 @@ describe('FolderPicker', () => {
 
     fireEvent.mouseDown(await screen.findByText(/Create folder "BrandNew"/i))
     await waitFor(() => expect(inputEl()).toBeEnabled())
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Could not create this folder. Check your connection and try again.')
     expect(inputEl()).toHaveValue('BrandNew')
+    expect(inputEl()).toHaveAttribute('aria-describedby', alert.id)
     expect(screen.getByRole('listbox')).toBeInTheDocument()
     expect(onChange).not.toHaveBeenCalled()
 
     fireEvent.mouseDown(screen.getByText(/Create folder "BrandNew"/i))
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(4))
+    window.removeEventListener('unhandledrejection', onUnhandled)
+    expect(onUnhandled).not.toHaveBeenCalled()
   })
 
   it('closes on Escape and Tab', async () => {

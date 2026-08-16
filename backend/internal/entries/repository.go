@@ -20,24 +20,27 @@ type Repository struct {
 
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
-// List runs one UNION ALL query across link + note so pinned-first ordering,
-// sort, search, and pagination are computed by a single ORDER BY/LIMIT — see
-// the package doc for why this beats a client-side merge of two independently
-// paginated queries. The two arms select the SAME column list/order so the
-// UNION lines up: kind, id, title, slug, pinned, folder_id, created_at,
-// updated_at, click_count, last_clicked_at, url, description, favicon_url,
-// og_image_url, preview_status, cover_url, body_snippet — link-only columns
-// are NULL on the note arm and vice versa.
-func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) ([]Entry, error) {
+func (r *Repository) Counts(ctx context.Context, uid authctx.UserID) (EntryCounts, error) {
+	var counts EntryCounts
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM link WHERE user_id = $1),
+			(SELECT count(*) FROM note WHERE user_id = $1)
+	`, int64(uid)).Scan(&counts.Links, &counts.Notes)
+	if err != nil {
+		return EntryCounts{}, fmt.Errorf("count entries: %w", err)
+	}
+	return counts, nil
+}
+
+func buildListQuery(uid authctx.UserID, q ListQuery) (string, []any) {
 	planner := listquery.NewPlanner(q)
 	linkScope := planner.AddScope(uid, listquery.LinkEntity(folders.SQLNotInLockedFolder("l")))
 	noteScope := planner.AddScope(uid, listquery.NoteEntity(folders.SQLNotInLockedFolder("n")))
 	page := planner.AddPage(listquery.UnionOrder())
 
-	// Pre-aggregate click_log once per entity_kind instead of LATERAL count(*)
-	// per row (which forces full candidate evaluation before LIMIT on
-	// sort=clicks|recent).
-	linkSQL := fmt.Sprintf(`SELECT 'link' AS kind, l.id, l.title, l.slug, l.pinned, l.folder_id, l.created_at, l.updated_at,
+	if page.ClickRanking {
+		linkSQL := fmt.Sprintf(`SELECT 'link' AS kind, l.id, l.title, l.slug, l.pinned, l.folder_id, l.created_at, l.updated_at,
             COALESCE(clk.cnt, 0) AS click_count, clk.last_at AS last_clicked_at,
             l.url, l.description, l.favicon_url, l.og_image_url, l.preview_status, l.preview_error,
             l.check_interval, l.last_checked_at, l.last_fingerprint, l.last_change_detected_at,
@@ -46,12 +49,12 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
         FROM link l
         LEFT JOIN (
             SELECT entity_id, count(*)::bigint AS cnt, max(clicked_at) AS last_at
-			FROM click_log WHERE entity_kind = 'link' AND user_id = $%d
+			FROM click_log WHERE user_id = $%d AND entity_kind = 'link'
             GROUP BY entity_id
 		) clk ON clk.entity_id = l.id`, linkScope.OwnerArg)
-	linkSQL += " WHERE " + strings.Join(linkScope.Where, " AND ")
+		linkSQL += " WHERE " + strings.Join(linkScope.Where, " AND ")
 
-	noteSQL := fmt.Sprintf(`SELECT 'note' AS kind, n.id, n.title, n.slug, n.pinned, n.folder_id, n.created_at, n.updated_at,
+		noteSQL := fmt.Sprintf(`SELECT 'note' AS kind, n.id, n.title, n.slug, n.pinned, n.folder_id, n.created_at, n.updated_at,
             COALESCE(clk.cnt, 0) AS click_count, clk.last_at AS last_clicked_at,
             NULL::text AS url, NULL::text AS description, NULL::text AS favicon_url,
             NULL::text AS og_image_url, NULL::text AS preview_status, NULL::text AS preview_error,
@@ -62,9 +65,31 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
         FROM note n
         LEFT JOIN (
             SELECT entity_id, count(*)::bigint AS cnt, max(clicked_at) AS last_at
-			FROM click_log WHERE entity_kind = 'note' AND user_id = $%d
+			FROM click_log WHERE user_id = $%d AND entity_kind = 'note'
             GROUP BY entity_id
 		) clk ON clk.entity_id = n.id`, noteScope.OwnerArg)
+		noteSQL += " WHERE " + strings.Join(noteScope.Where, " AND ")
+
+		sql := fmt.Sprintf("SELECT * FROM (\n%s\nUNION ALL\n%s\n) u ORDER BY %s LIMIT $%d OFFSET $%d", linkSQL, noteSQL, page.OrderBy, page.LimitArg, page.OffsetArg)
+		return sql, planner.Args()
+	}
+
+	linkSQL := `SELECT 'link' AS kind, l.id, l.title, l.slug, l.pinned, l.folder_id, l.created_at, l.updated_at,
+            l.url, l.description, l.favicon_url, l.og_image_url, l.preview_status, l.preview_error,
+            l.check_interval, l.last_checked_at, l.last_fingerprint, l.last_change_detected_at,
+            l.change_seen_at, l.last_check_error,
+            NULL::text AS cover_url, NULL::text AS body_snippet
+        FROM link l`
+	linkSQL += " WHERE " + strings.Join(linkScope.Where, " AND ")
+
+	noteSQL := `SELECT 'note' AS kind, n.id, n.title, n.slug, n.pinned, n.folder_id, n.created_at, n.updated_at,
+            NULL::text AS url, NULL::text AS description, NULL::text AS favicon_url,
+            NULL::text AS og_image_url, NULL::text AS preview_status, NULL::text AS preview_error,
+            NULL::text AS check_interval, NULL::timestamptz AS last_checked_at, NULL::text AS last_fingerprint,
+            NULL::timestamptz AS last_change_detected_at, NULL::timestamptz AS change_seen_at,
+            NULL::text AS last_check_error,
+            n.cover_url, left(n.body_text, 240) AS body_snippet
+        FROM note n`
 	noteSQL += " WHERE " + strings.Join(noteScope.Where, " AND ")
 
 	// Postgres forbids expressions (e.g. lower(title)) directly in an ORDER BY
@@ -72,9 +97,56 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
 	// are allowed there. Wrapping the union in a derived table sidesteps that
 	// restriction entirely since the ORDER BY then applies to a normal
 	// single-FROM query.
-	sql := fmt.Sprintf("SELECT * FROM (\n%s\nUNION ALL\n%s\n) u ORDER BY %s LIMIT $%d OFFSET $%d", linkSQL, noteSQL, page.OrderBy, page.LimitArg, page.OffsetArg)
+	sql := fmt.Sprintf(`WITH candidates AS MATERIALIZED (
+        SELECT * FROM (
+%s
+        UNION ALL
+%s
+        ) mixed
+        ORDER BY %s
+        LIMIT $%d OFFSET $%d
+    ), page_clicks AS (
+        SELECT 'link'::text AS entity_kind, cl.entity_id,
+               count(*)::bigint AS cnt, max(cl.clicked_at) AS last_at
+        FROM click_log cl
+        WHERE cl.user_id = $%d
+          AND cl.entity_kind = 'link'
+          AND cl.entity_id = ANY (
+              ARRAY(SELECT c.id FROM candidates c WHERE c.kind = 'link')
+          )
+        GROUP BY cl.entity_id
+        UNION ALL
+        SELECT 'note'::text AS entity_kind, cl.entity_id,
+               count(*)::bigint AS cnt, max(cl.clicked_at) AS last_at
+        FROM click_log cl
+        WHERE cl.user_id = $%d
+          AND cl.entity_kind = 'note'
+          AND cl.entity_id = ANY (
+              ARRAY(SELECT c.id FROM candidates c WHERE c.kind = 'note')
+          )
+        GROUP BY cl.entity_id
+    )
+    SELECT c.kind, c.id, c.title, c.slug, c.pinned, c.folder_id, c.created_at, c.updated_at,
+           COALESCE(pc.cnt, 0) AS click_count, pc.last_at AS last_clicked_at,
+           c.url, c.description, c.favicon_url, c.og_image_url, c.preview_status, c.preview_error,
+           c.check_interval, c.last_checked_at, c.last_fingerprint, c.last_change_detected_at,
+           c.change_seen_at, c.last_check_error, c.cover_url, c.body_snippet
+    FROM candidates c
+    LEFT JOIN page_clicks pc ON pc.entity_kind = c.kind AND pc.entity_id = c.id
+    ORDER BY %s`,
+		linkSQL, noteSQL, page.OrderBy, page.LimitArg, page.OffsetArg,
+		linkScope.OwnerArg, noteScope.OwnerArg, page.OrderBy,
+	)
+	return sql, planner.Args()
+}
 
-	rows, err := r.pool.Query(ctx, sql, planner.Args()...)
+// List uses one mixed link+note page and one batched tag query. Click-ranked
+// sorts aggregate before pagination because the aggregate determines rank;
+// other sorts aggregate only the selected candidate IDs.
+func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) ([]Entry, error) {
+	sql, args := buildListQuery(uid, q)
+
+	rows, err := r.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list entries: %w", err)
 	}
@@ -120,4 +192,56 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
 		}
 	}
 	return out, nil
+}
+
+// PreviewStatuses resolves a bounded caller-supplied batch in one query. The
+// LEFT JOIN deliberately emits one row per requested ID while exposing link
+// fields only when the row is both owned and visible in the requested scope.
+func (r *Repository) PreviewStatuses(ctx context.Context, uid authctx.UserID, ids []int64, folderID *int64) ([]PreviewStatus, error) {
+	scope := folders.SQLNotInLockedFolder("l")
+	args := []any{int64(uid), ids}
+	if folderID != nil {
+		scope = "l.folder_id = $3"
+		args = append(args, *folderID)
+	}
+	query := fmt.Sprintf(`
+        SELECT requested.id,
+               l.id IS NOT NULL,
+               l.preview_status,
+               l.description,
+               l.favicon_url,
+               l.og_image_url,
+               l.preview_error,
+               l.updated_at
+        FROM unnest($2::bigint[]) WITH ORDINALITY AS requested(id, ord)
+        LEFT JOIN link l
+          ON l.user_id = $1
+         AND l.id = requested.id
+         AND %s
+        ORDER BY requested.ord
+    `, scope)
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("preview statuses: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]PreviewStatus, 0, len(ids))
+	for rows.Next() {
+		var status PreviewStatus
+		if err := rows.Scan(
+			&status.ID,
+			&status.Found,
+			&status.Status,
+			&status.Description,
+			&status.FaviconURL,
+			&status.OGImageURL,
+			&status.PreviewError,
+			&status.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, status)
+	}
+	return out, rows.Err()
 }

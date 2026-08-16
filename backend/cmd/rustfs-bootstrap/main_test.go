@@ -1,12 +1,32 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"testing"
 
+	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type probeClientStub struct {
+	putCalled    bool
+	removeCalled bool
+	removeErr    error
+}
+
+func (s *probeClientStub) PutObject(_ context.Context, _, _ string, _ io.Reader, _ int64, _ minio.PutObjectOptions) (minio.UploadInfo, error) {
+	s.putCalled = true
+	return minio.UploadInfo{}, nil
+}
+
+func (s *probeClientStub) RemoveObject(_ context.Context, _, _ string, _ minio.RemoveObjectOptions) error {
+	s.removeCalled = true
+	return s.removeErr
+}
 
 func setBootstrapEnv(t *testing.T, rootSecret, appSecret string) {
 	t.Helper()
@@ -74,4 +94,15 @@ func TestBucketPolicyContainsOnlyRuntimeActions(t *testing.T) {
 	for _, statement := range doc.Statement {
 		assert.NotContains(t, statement.Action, "s3:*")
 	}
+}
+
+func TestCapabilityProbeFailsWhenProbeDeletionFails(t *testing.T) {
+	client := &probeClientStub{removeErr: errors.New("delete denied")}
+
+	err := probeAppCapabilities(context.Background(), client, "foldex-test")
+
+	require.ErrorContains(t, err, "cannot delete")
+	assert.ErrorContains(t, err, "delete denied")
+	assert.True(t, client.putCalled, "the probe must establish write capability first")
+	assert.True(t, client.removeCalled)
 }

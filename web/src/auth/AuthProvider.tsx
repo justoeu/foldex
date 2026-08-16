@@ -11,7 +11,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query'
 import { fetchMe, logout as apiLogout, type MeResponse } from '../api/auth'
 import { advanceAuthEpoch, setSessionLostHandler } from '../api/client'
-import { defaultFeatures, type SessionState } from './types'
+import { defaultFeatures, type SessionState, type TwoFactorPending } from './types'
 
 type AuthContextValue = {
   session: SessionState
@@ -37,44 +37,53 @@ export function useCurrentUser() {
 }
 
 function toState(me: MeResponse): SessionState {
-  if (me.status === 'authenticated' && me.user) {
-    return {
-      status: 'authenticated',
-      user: me.user,
-      csrfToken: me.csrf_token ?? '',
-      features: me.features ?? defaultFeatures,
+  switch (me.status) {
+    case 'anonymous':
+      return { status: 'anonymous', features: me.features }
+    case 'setup_required':
+      return { status: 'setup_required', features: me.features }
+    case 'authenticated':
+      return {
+        status: 'authenticated',
+        user: me.user,
+        csrfToken: me.csrf_token,
+        features: me.features,
+      }
+    case 'two_factor_required':
+      // A half-finished login. It is a SESSION state rather than local state in
+      // the login screen because three different screens can produce it — login,
+      // invite acceptance and password reset — and all three funnel through
+      // `adopt`. Keeping it here means none of them needs to know the flow exists.
+      const pending: TwoFactorPending =
+        me.purpose === 'totp'
+          ? {
+              purpose: 'totp',
+              email: me.email,
+              methods: me.methods,
+              maxAttempts: me.max_attempts,
+            }
+          : {
+              purpose: 'enroll_2fa',
+              email: me.email,
+              methods: me.methods,
+              maxAttempts: me.max_attempts,
+            }
+      return {
+        status: 'two_factor_required',
+        pending,
+        features: me.features,
+      }
+    case 'convert_password_account':
+      return {
+        status: 'convert_password_account',
+        email: me.email,
+        features: me.features,
+      }
+    default: {
+      const exhaustive: never = me
+      throw new Error(`Unsupported auth response: ${JSON.stringify(exhaustive)}`)
     }
   }
-  if (me.status === 'setup_required') {
-    return { status: 'setup_required', features: me.features ?? defaultFeatures }
-  }
-  if (me.status === 'two_factor_required') {
-    // A half-finished login. It is a SESSION state rather than local state in
-    // the login screen because three different screens can produce it — login,
-    // invite acceptance and password reset — and all three funnel through
-    // `adopt`. Keeping it here means none of them needs to know the flow exists.
-    return {
-      status: 'two_factor_required',
-      pending: {
-        // Narrowed rather than cast: the server only ever sends the two code
-        // purposes with this status, and defaulting anything else to 'totp'
-        // keeps a future third purpose from rendering a blank screen.
-        purpose: me.purpose === 'enroll_2fa' ? 'enroll_2fa' : 'totp',
-        email: me.email ?? '',
-        methods: me.methods ?? [],
-        maxAttempts: me.max_attempts ?? 5,
-      },
-      features: me.features ?? defaultFeatures,
-    }
-  }
-  if (me.status === 'convert_password_account') {
-    return {
-      status: 'convert_password_account',
-      email: me.email ?? '',
-      features: me.features ?? defaultFeatures,
-    }
-  }
-  return { status: 'anonymous', features: me.features ?? defaultFeatures }
 }
 
 /**
@@ -99,9 +108,58 @@ const TENANT_SCOPED_KEYS = [
   'foldex.backup',
 ]
 
-function clearTenantScopedState(): void {
-  if (typeof localStorage === 'undefined') return
-  TENANT_SCOPED_KEYS.forEach((k) => localStorage.removeItem(k))
+const LAST_OWNER_KEY = 'foldex.auth.lastOwnerId'
+
+function getLocalStorage(): Storage | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage
+  } catch {
+    return null
+  }
+}
+
+function clearTenantScopedState(storage = getLocalStorage()): void {
+  if (!storage) return
+  let removalFailed = false
+  TENANT_SCOPED_KEYS.forEach((key) => {
+    try {
+      storage.removeItem(key)
+    } catch {
+      removalFailed = true
+    }
+  })
+  if (!removalFailed) return
+  try {
+    // A partial cleanup could expose the previous tenant after storage recovers.
+    storage.clear()
+  } catch {
+    // Fully unavailable storage cannot be read by the next session either.
+  }
+}
+
+function readLastOwnerId(storage: Storage | null): number | null {
+  if (!storage) return null
+  try {
+    return parseOwnerId(storage.getItem(LAST_OWNER_KEY))
+  } catch {
+    return null
+  }
+}
+
+function parseOwnerId(raw: string | null): number | null {
+  if (raw === null) return null
+  const id = Number(raw)
+  return Number.isSafeInteger(id) && id > 0 ? id : null
+}
+
+function persistLastOwnerId(storage: Storage | null, id: number | null): void {
+  if (!storage) return
+  try {
+    if (id === null) storage.removeItem(LAST_OWNER_KEY)
+    else storage.setItem(LAST_OWNER_KEY, String(id))
+  } catch {
+    // Authentication must still resolve when browser storage is unavailable.
+  }
 }
 
 export function AuthProvider({
@@ -126,10 +184,12 @@ export function AuthProvider({
   const lastUserId = useRef<number | null>(
     initialState?.status === 'authenticated' ? initialState.user.id : null,
   )
+  const reloadRequest = useRef(0)
 
   const applySession = useCallback(
-    (next: SessionState) => {
+    (next: SessionState, writeOwnerMarker = true) => {
       const nextId = next.status === 'authenticated' ? next.user.id : null
+      const previousId = lastUserId.current
       if (lastUserId.current !== nextId) {
         // Wipe the whole cache rather than segmenting every query key by user.
         //
@@ -140,35 +200,81 @@ export function AuthProvider({
         // applied. AuthGate unmounts <App/> across the transition, so no
         // observer survives to refetch into the old cache.
         queryClient.clear()
-        if (lastUserId.current !== null) clearTenantScopedState()
-        lastUserId.current = nextId
       }
+      const storage = getLocalStorage()
+      if (nextId === null) {
+        // A cold anonymous result may represent an expired or revoked session,
+        // so no in-memory previous owner exists to trigger the normal switch.
+        clearTenantScopedState(storage)
+        persistLastOwnerId(storage, null)
+      } else {
+        const priorOwner = previousId ?? readLastOwnerId(storage)
+        if (priorOwner !== nextId) clearTenantScopedState(storage)
+        if (writeOwnerMarker) persistLastOwnerId(storage, nextId)
+      }
+      lastUserId.current = nextId
       setSession(next)
     },
     [queryClient],
   )
 
-  const reload = useCallback(async () => {
+  const probeSession = useCallback(async (writeOwnerMarker: boolean) => {
+    const request = ++reloadRequest.current
     try {
-      applySession(toState(await fetchMe()))
+      const next = toState(await fetchMe())
+      if (request === reloadRequest.current) applySession(next, writeOwnerMarker)
     } catch {
       // /api/auth/me is contractually always 200, so a throw means the backend
-      // is unreachable rather than the caller being signed out. Report
-      // anonymous — the login screen is a far better failure mode than an
-      // infinite spinner, and it retries on submit.
-      applySession({ status: 'anonymous', features: defaultFeatures })
+      // is unreachable rather than the caller being signed out. A cold load
+      // may show the login screen, but only an authoritative response may
+      // discard tenant data or replace a session that was already usable.
+      if (request === reloadRequest.current) {
+        setSession((current) =>
+          current.status === 'authenticated'
+            ? current
+            : { status: 'anonymous', features: defaultFeatures },
+        )
+      }
     }
   }, [applySession])
+
+  const reload = useCallback(() => probeSession(true), [probeSession])
 
   useEffect(() => {
     if (initialState) return
     void reload()
   }, [initialState, reload])
 
+  useEffect(() => {
+    const storage = getLocalStorage()
+    if (!storage || typeof window === 'undefined') return
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== LAST_OWNER_KEY) return
+      const nextOwner = parseOwnerId(event.newValue)
+      if (event.newValue !== null && nextOwner === null) return
+      if (nextOwner === lastUserId.current) return
+
+      if (nextOwner === null) {
+        reloadRequest.current++
+        advanceAuthEpoch()
+        applySession({ status: 'anonymous', features: defaultFeatures })
+        return
+      }
+      advanceAuthEpoch()
+      queryClient.clear()
+      // The originating tab already wrote the new owner marker. Do not write
+      // it again after probing or the tabs can bounce storage events.
+      void probeSession(false)
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [applySession, probeSession, queryClient])
+
   // When a refresh definitively fails, drop to anonymous so the gate swaps in
   // the login screen instead of leaving a dead session rendering 401s.
   useEffect(() => {
     setSessionLostHandler(() => {
+      reloadRequest.current++
       advanceAuthEpoch()
       applySession({ status: 'anonymous', features: defaultFeatures })
     })
@@ -177,6 +283,7 @@ export function AuthProvider({
 
   const adopt = useCallback(
     (me: MeResponse) => {
+      reloadRequest.current++
       advanceAuthEpoch()
       applySession(toState(me))
     },
@@ -184,6 +291,7 @@ export function AuthProvider({
   )
 
   const signOut = useCallback(async () => {
+    reloadRequest.current++
     advanceAuthEpoch()
     applySession({ status: 'anonymous', features: defaultFeatures })
     try {

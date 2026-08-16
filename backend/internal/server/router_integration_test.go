@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/auth"
+	"foldex/internal/backup"
 	"foldex/internal/config"
 	"foldex/internal/folders"
 	"foldex/internal/links"
@@ -252,7 +253,9 @@ func TestAdminGateRechecksLiveTOTPState(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	repo := auth.NewRepository(pool)
-	tokens, _, err := repo.IssueSession(ctx, uid, 0, auth.DefaultTTL(), "", "")
+	tokens, _, err := repo.IssueSession(ctx, uid, 0, auth.SessionTTL{
+		Access: time.Minute, Refresh: time.Hour, Absolute: 24 * time.Hour, Grace: time.Second,
+	}, "", "")
 	require.NoError(t, err)
 	router := server.New(server.Deps{
 		Pool: pool, Logger: logger,
@@ -710,6 +713,89 @@ func TestSharedSecretGuard(t *testing.T) {
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+type emptyBackupBucket struct{}
+
+func (emptyBackupBucket) WalkObjects(context.Context, string, func(backup.ObjectInfo) error) error {
+	return nil
+}
+
+func (emptyBackupBucket) OpenObject(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(nil)), nil
+}
+
+func (emptyBackupBucket) PutObjectStream(context.Context, string, io.Reader, int64, string) error {
+	return nil
+}
+
+func (emptyBackupBucket) ExistingObjects(context.Context, []string) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
+func (emptyBackupBucket) DeleteObjects(context.Context, []string) error { return nil }
+
+func TestBackupDownloadNavigationUsesSharedSecretTicketAndExactSession(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "backup-ticket@test.local", "user")
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	repo := auth.NewRepository(pool)
+	ttl := auth.SessionTTL{
+		Access: time.Minute, Refresh: time.Hour, Absolute: 24 * time.Hour, Grace: time.Second,
+	}
+	owner, _, err := repo.IssueSession(ctx, uid, 0, ttl, "", "")
+	require.NoError(t, err)
+	foreignSession, _, err := repo.IssueSession(ctx, uid, 0, ttl, "", "")
+	require.NoError(t, err)
+	router := server.New(server.Deps{
+		Pool: pool, Worker: nopWorker{}, Logger: logger,
+		Config: config.Config{
+			AuthEnabled: true, SharedSecret: "topsecret",
+			CORSOrigins: []string{"http://localhost:9088"},
+		},
+		AuthMiddleware: auth.NewMiddleware(repo, auth.CookieOptions{}, logger, false),
+		StorageBucket:  emptyBackupBucket{},
+	})
+
+	issueReq := httptest.NewRequest(http.MethodPost, "/api/backup/download", nil)
+	issueReq.Header.Set("X-Foldex-Secret", "topsecret")
+	issueReq.Header.Set(auth.CSRFHeader, owner.CSRF)
+	issueReq.AddCookie(&http.Cookie{Name: auth.CookieAccess, Value: owner.Access})
+	issueReq.AddCookie(&http.Cookie{Name: auth.CookieCSRF, Value: owner.CSRF})
+	issueRec := httptest.NewRecorder()
+	router.ServeHTTP(issueRec, issueReq)
+	require.Equal(t, http.StatusCreated, issueRec.Code, issueRec.Body.String())
+	var issued struct {
+		DownloadURL string `json:"download_url"`
+	}
+	require.NoError(t, json.NewDecoder(issueRec.Body).Decode(&issued))
+	require.NotEmpty(t, issued.DownloadURL)
+
+	foreignReq := httptest.NewRequest(http.MethodGet, issued.DownloadURL, nil)
+	foreignReq.AddCookie(&http.Cookie{Name: auth.CookieAccess, Value: foreignSession.Access})
+	foreignReq.AddCookie(&http.Cookie{Name: auth.CookieCSRF, Value: foreignSession.CSRF})
+	foreignRec := httptest.NewRecorder()
+	router.ServeHTTP(foreignRec, foreignReq)
+	assert.Equal(t, http.StatusNotFound, foreignRec.Code, foreignRec.Body.String())
+	assert.Contains(t, foreignRec.Body.String(), "download_invalid")
+
+	ownerReq := httptest.NewRequest(http.MethodGet, issued.DownloadURL, nil)
+	ownerReq.AddCookie(&http.Cookie{Name: auth.CookieAccess, Value: owner.Access})
+	ownerReq.AddCookie(&http.Cookie{Name: auth.CookieCSRF, Value: owner.CSRF})
+	ownerRec := httptest.NewRecorder()
+	router.ServeHTTP(ownerRec, ownerReq)
+	assert.Equal(t, http.StatusOK, ownerRec.Code, ownerRec.Body.String())
+	assert.Equal(t, "application/zip", ownerRec.Header().Get("Content-Type"))
+	assert.NotEmpty(t, ownerRec.Body.Bytes())
+
+	replayReq := httptest.NewRequest(http.MethodGet, issued.DownloadURL, nil)
+	replayReq.AddCookie(&http.Cookie{Name: auth.CookieAccess, Value: owner.Access})
+	replayReq.AddCookie(&http.Cookie{Name: auth.CookieCSRF, Value: owner.CSRF})
+	replayRec := httptest.NewRecorder()
+	router.ServeHTTP(replayRec, replayReq)
+	assert.Equal(t, http.StatusUnauthorized, replayRec.Code, replayRec.Body.String())
+	assert.Contains(t, replayRec.Body.String(), "unauthorized")
 }
 
 func intToStr(n int64) string {

@@ -47,7 +47,7 @@ const (
 // out the moment the flag flips; letting them in "just this once" is a rule
 // that never applies. Diverting into a mandatory enrollment is the only option
 // that both admits them and enforces the policy.
-func (h *Handler) secondFactorPurpose(u User) string {
+func (h *Handler) secondFactorPurpose(u User) ChallengePurpose {
 	// A nil cipher means the 2FA stack is not wired at all; there is nothing to
 	// verify a code against, so a challenge here would be a dead end. The guard
 	// lives INSIDE this function rather than beside each call so a future third
@@ -77,7 +77,7 @@ func (h *Handler) secondFactorPurpose(u User) string {
 //     an instance with no SMTP), but a second factor written to the container
 //     log is readable by anyone with the docker group or a log shipper — the
 //     factor stops being a factor.
-func (h *Handler) emailFactorAvailable(purpose string, mailboxAlreadyProven bool) bool {
+func (h *Handler) emailFactorAvailable(purpose ChallengePurpose, mailboxAlreadyProven bool) bool {
 	return purpose == PurposeTOTP && !mailboxAlreadyProven && h.mailer.Driver() == "smtp"
 }
 
@@ -100,7 +100,7 @@ func (h *Handler) completeLogin(w http.ResponseWriter, r *http.Request, user Use
 // Separate from startChallenge because the OAuth callback needs the cookie
 // without a JSON body: it answers a top-level browser navigation and must end
 // in a redirect, not in a payload the browser would render as text.
-func (h *Handler) beginChallenge(w http.ResponseWriter, r *http.Request, u User, purpose string, mailboxAlreadyProven bool) bool {
+func (h *Handler) beginChallenge(w http.ResponseWriter, r *http.Request, u User, purpose ChallengePurpose, mailboxAlreadyProven bool) bool {
 	return h.beginChallengeFor(w, r, NewChallenge{
 		UserID:               u.ID,
 		Purpose:              purpose,
@@ -125,54 +125,62 @@ func (h *Handler) beginChallengeFor(w http.ResponseWriter, r *http.Request, in N
 	return true
 }
 
+var errInvalidChallengePurpose = errors.New("auth: invalid challenge purpose")
+
 // pendingPayload describes a half-finished login.
 //
 // Built in one place because two endpoints emit it: the credential path that
 // creates the challenge, and /me — which reports it on a cold boot so a reload
 // during the code step, or the fresh page load an OAuth redirect produces,
 // lands back on the code screen instead of on the login form.
-func (h *Handler) pendingPayload(u User, purpose string, mailboxAlreadyProven bool) map[string]any {
-	methods := []string{methodTOTP, methodRecovery}
-	if h.emailFactorAvailable(purpose, mailboxAlreadyProven) {
-		methods = append(methods, methodEmailOTP)
-	}
-	body := map[string]any{
-		"status":  statusTwoFactorRequired,
-		"purpose": purpose,
-		// The address is MASKED. The caller has proven the password, but this
-		// response is also what an attacker sees after a successful credential
-		// stuffing hit — echoing the full address hands them the confirmed
-		// pairing for free.
-		"email":   MaskEmail(u.Email),
-		"methods": methods,
-		// The raw token is NOT echoed here. It travels only in the httpOnly,
-		// Strict, /api/auth-scoped cookie SetPreAuth writes — putting it in the
-		// body would hand it to any script on the page and to whatever
-		// client-side error reporter happens to capture a response.
-		"expires_in":   int(challengeTTL.Seconds()),
-		"max_attempts": maxChallengeAttempts,
-		"features":     h.features,
-	}
+func (h *Handler) pendingPayload(u User, purpose ChallengePurpose, mailboxAlreadyProven bool) (authWireResponse, error) {
+	// The address is masked because a successful credential-stuffing attempt
+	// must not receive the confirmed full address. The raw pre-auth token stays
+	// exclusively in its httpOnly cookie.
 	switch purpose {
+	case PurposeTOTP:
+		methods := []string{methodTOTP, methodRecovery}
+		if h.emailFactorAvailable(purpose, mailboxAlreadyProven) {
+			methods = append(methods, methodEmailOTP)
+		}
+		return twoFactorAuthResponse{
+			Status: statusTwoFactorRequired, Purpose: purpose, Email: MaskEmail(u.Email),
+			Methods: methods, ExpiresIn: int(challengeTTL.Seconds()),
+			MaxAttempts: maxChallengeAttempts, Features: h.features,
+		}, nil
 	case PurposeEnroll2FA:
-		body["methods"] = []string{}
-		body["reason"] = "admin_enrollment_required"
+		return enrollmentAuthResponse{
+			Status: statusTwoFactorRequired, Purpose: purpose, Email: MaskEmail(u.Email),
+			Methods: []string{}, ExpiresIn: int(challengeTTL.Seconds()),
+			MaxAttempts: maxChallengeAttempts, Features: h.features,
+			Reason: "admin_enrollment_required",
+		}, nil
 	case PurposeConvertGoogle:
 		// Not a second factor at all: the account owes its CURRENT PASSWORD
 		// before the Google identity is attached. Reusing the two_factor status
 		// would put the SPA on the six-digit code screen.
-		body["status"] = statusConvertPasswordAccount
-		body["methods"] = []string{}
+		return conversionAuthResponse{
+			Status: statusConvertPasswordAccount, Purpose: purpose, Email: MaskEmail(u.Email),
+			Methods: []string{}, ExpiresIn: int(challengeTTL.Seconds()),
+			MaxAttempts: maxChallengeAttempts, Features: h.features,
+		}, nil
+	default:
+		return nil, errInvalidChallengePurpose
 	}
-	return body
 }
 
 // startChallenge mints the pre-auth cookie and writes the pending payload.
-func (h *Handler) startChallenge(w http.ResponseWriter, r *http.Request, u User, purpose string, mailboxAlreadyProven bool) {
+func (h *Handler) startChallenge(w http.ResponseWriter, r *http.Request, u User, purpose ChallengePurpose, mailboxAlreadyProven bool) {
+	payload, err := h.pendingPayload(u, purpose, mailboxAlreadyProven)
+	if err != nil {
+		h.logger.Error("build challenge response", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
 	if !h.beginChallenge(w, r, u, purpose, mailboxAlreadyProven) {
 		return
 	}
-	httperr.JSON(w, http.StatusOK, h.pendingPayload(u, purpose, mailboxAlreadyProven))
+	httperr.JSON(w, http.StatusOK, payload)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -598,7 +606,7 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		h.cookies.ClearPreAuth(w)
 		h.cookies.SetSession(w, tok)
 		payload := h.authenticatedPayload(user, tok.CSRF)
-		payload["recovery_codes"] = codes
+		payload.RecoveryCodes = codes
 		httperr.JSON(w, http.StatusOK, payload)
 		return
 	}
@@ -776,7 +784,7 @@ func (h *Handler) settleStepUp(key string, err error) {
 }
 
 // requireChallenge resolves the pre-auth cookie or writes the refusal.
-func (h *Handler) requireChallenge(w http.ResponseWriter, r *http.Request, purposes ...string) (Challenge, bool) {
+func (h *Handler) requireChallenge(w http.ResponseWriter, r *http.Request, purposes ...ChallengePurpose) (Challenge, bool) {
 	ch, err := h.repo.ResolveChallenge(r.Context(), cookieValue(r, CookiePreAuth), purposes...)
 	if err != nil {
 		h.writeChallengeError(w, err)

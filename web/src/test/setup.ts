@@ -40,22 +40,6 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
   })
 }
 
-// jsdom's localStorage can be unreliable in some Vitest versions.
-if (typeof window !== 'undefined') {
-  const store: Record<string, string> = {}
-  Object.defineProperty(window, 'localStorage', {
-    value: {
-      getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => { store[k] = String(v) },
-      removeItem: (k: string) => { delete store[k] },
-      clear: () => { Object.keys(store).forEach((k) => delete store[k]) },
-      get length() { return Object.keys(store).length },
-      key: (i: number) => Object.keys(store)[i] ?? null,
-    },
-    writable: true,
-  })
-}
-
 // jsdom missing URL.createObjectURL / revokeObjectURL — backup download path
 // calls both when the user clicks "Gerar backup completo".
 if (typeof URL !== 'undefined' && !URL.createObjectURL) {

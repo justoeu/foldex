@@ -4,8 +4,12 @@ package push_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -38,7 +42,7 @@ func TestSubscriptionRepo_SaveListDelete(t *testing.T) {
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(list), 2)
 
-	require.NoError(t, repo.DeleteByEndpoint(ctx, "https://push.example/ep1"))
+	require.NoError(t, repo.DeleteGone(ctx, uid, []int64{s1.ID}))
 	list, err = repo.List(ctx, uid)
 	require.NoError(t, err)
 	for _, s := range list {
@@ -52,5 +56,155 @@ func TestSubscriptionRepo_SaveListDelete(t *testing.T) {
 		}
 	}
 	require.Positive(t, id2)
-	require.NoError(t, repo.MarkUsed(ctx, id2))
+	require.NoError(t, repo.MarkUsed(ctx, uid, []int64{id2}))
+	list, err = repo.List(ctx, uid)
+	require.NoError(t, err)
+	for _, s := range list {
+		if s.ID == id2 {
+			assert.NotNil(t, s.LastUsedAt)
+		}
+	}
+}
+
+func TestSubscriptionRepo_CapAllowsOwnedEndpointUpsert(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "cap-owner@test.local", "user")
+	repo := push.NewRepository(pool)
+	ctx := context.Background()
+
+	var first push.Subscription
+	for i := range push.MaxSubscriptionsPerUser {
+		sub, err := repo.Save(ctx, uid, fmt.Sprintf("https://push.example/cap/%d", i), "key", "auth")
+		require.NoError(t, err)
+		if i == 0 {
+			first = sub
+		}
+	}
+
+	updated, err := repo.Save(ctx, uid, first.Endpoint, "updated-key", "updated-auth")
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, updated.ID)
+	assert.Equal(t, "updated-key", updated.P256dh)
+
+	_, err = repo.Save(ctx, uid, "https://push.example/cap/overflow", "key", "auth")
+	require.ErrorIs(t, err, push.ErrSubscriptionLimit)
+
+	subs, err := repo.List(ctx, uid)
+	require.NoError(t, err)
+	assert.Len(t, subs, push.MaxSubscriptionsPerUser)
+}
+
+func TestSubscriptionRepo_ConcurrentSavesNeverExceedCap(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "concurrent-cap@test.local", "user")
+	repo := push.NewRepository(pool)
+	ctx := context.Background()
+
+	for i := range push.MaxSubscriptionsPerUser - 1 {
+		_, err := repo.Save(ctx, uid, fmt.Sprintf("https://push.example/existing/%d", i), "key", "auth")
+		require.NoError(t, err)
+	}
+
+	blocker, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback(ctx) }()
+	var lockedUser int64
+	require.NoError(t, blocker.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE id = $1 FOR UPDATE`, int64(uid)).Scan(&lockedUser))
+
+	results := make(chan error, 2)
+	for i := range 2 {
+		go func() {
+			_, saveErr := repo.Save(ctx, uid, fmt.Sprintf("https://push.example/concurrent/%d", i), "key", "auth")
+			results <- saveErr
+		}()
+	}
+	waitForBlockedSubscriptionSaves(t, pool, 2)
+	require.NoError(t, blocker.Commit(ctx))
+
+	var saved, refused int
+	for range 2 {
+		switch err := <-results; {
+		case err == nil:
+			saved++
+		case errors.Is(err, push.ErrSubscriptionLimit):
+			refused++
+		default:
+			require.NoError(t, err)
+		}
+	}
+	assert.Equal(t, 1, saved)
+	assert.Equal(t, 1, refused)
+
+	subs, err := repo.List(ctx, uid)
+	require.NoError(t, err)
+	assert.Len(t, subs, push.MaxSubscriptionsPerUser)
+}
+
+func TestSubscriptionRepo_ListIsOwnerScopedAndBounded(t *testing.T) {
+	pool := testdb.Shared(t)
+	owner := testdb.SeedUser(t, pool, "bounded-owner@test.local", "user")
+	other := testdb.SeedUser(t, pool, "bounded-other@test.local", "user")
+	ctx := context.Background()
+
+	for i := range push.MaxSubscriptionsPerUser + 3 {
+		_, err := pool.Exec(ctx, `
+			INSERT INTO push_subscription (user_id, endpoint, p256dh, auth)
+			VALUES ($1, $2, 'key', 'auth')
+		`, int64(owner), fmt.Sprintf("https://push.example/legacy/%d", i))
+		require.NoError(t, err)
+	}
+	_, err := pool.Exec(ctx, `
+		INSERT INTO push_subscription (user_id, endpoint, p256dh, auth)
+		VALUES ($1, 'https://push.example/other', 'key', 'auth')
+	`, int64(other))
+	require.NoError(t, err)
+
+	subs, err := push.NewRepository(pool).List(ctx, owner)
+	require.NoError(t, err)
+	require.Len(t, subs, push.MaxSubscriptionsPerUser)
+	for _, sub := range subs {
+		assert.NotEqual(t, "https://push.example/other", sub.Endpoint)
+	}
+}
+
+func TestSubscriptionRepo_StaleOwnerResultsCannotMutateReassignedEndpoint(t *testing.T) {
+	pool := testdb.Shared(t)
+	userA := testdb.SeedUser(t, pool, "stale-a@test.local", "user")
+	userB := testdb.SeedUser(t, pool, "stale-b@test.local", "user")
+	repo := push.NewRepository(pool)
+	ctx := context.Background()
+	const endpoint = "https://push.example/reassigned"
+
+	stale, err := repo.Save(ctx, userA, endpoint, "a-key", "a-auth")
+	require.NoError(t, err)
+	reassigned, err := repo.Save(ctx, userB, endpoint, "b-key", "b-auth")
+	require.NoError(t, err)
+	require.Equal(t, stale.ID, reassigned.ID)
+
+	require.NoError(t, repo.MarkUsed(ctx, userA, []int64{stale.ID}))
+	require.NoError(t, repo.DeleteGone(ctx, userA, []int64{stale.ID}))
+
+	subsA, err := repo.List(ctx, userA)
+	require.NoError(t, err)
+	assert.Empty(t, subsA)
+	subsB, err := repo.List(ctx, userB)
+	require.NoError(t, err)
+	require.Len(t, subsB, 1)
+	assert.Equal(t, stale.ID, subsB[0].ID)
+	assert.Equal(t, "b-key", subsB[0].P256dh)
+	assert.Nil(t, subsB[0].LastUsedAt)
+}
+
+func waitForBlockedSubscriptionSaves(t *testing.T, pool *pgxpool.Pool, want int) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var blocked int
+		err := pool.QueryRow(context.Background(), `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'
+			  AND query LIKE '%SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE%'
+		`).Scan(&blocked)
+		return err == nil && blocked >= want
+	}, 3*time.Second, 10*time.Millisecond)
 }

@@ -11,11 +11,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/cssvalid"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/ports"
-
-	"foldex/internal/pkg/authctx"
+	"foldex/internal/preview"
 )
 
 // defaultImportColor mirrors the indigo the DTO layer defaults to when a
@@ -87,9 +87,6 @@ func parseMode(s string) (importMode, bool) {
 	return "", false
 }
 
-// handle is the legacy single-shot import endpoint. It now shares the
-// transactional importItemsWithMode(modeSkip) path with /apply (no more
-// non-transactional importItems / importJSON forks).
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	up, err := h.parseUpload(w, r)
 	if err != nil {
@@ -110,12 +107,9 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// validate parses the upload and computes conflict counts WITHOUT writing.
-// Used by the frontend preview dialog to drive the mode picker + selection.
 func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 	up, err := h.parseUpload(w, r)
 	if err != nil {
-		// parseUpload already wrote the error response.
 		return
 	}
 	rep, err := Validate(r.Context(), h.pool, authctx.MustUser(r.Context()), up.items)
@@ -160,22 +154,18 @@ func (h *Handler) apply(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// parseUpload is the parse-and-validate prefix shared by handle, validate,
-// and apply. Writes the HTTP error response itself on failure so callers can
-// uploadParse is the shared result of multipart parse for validate/apply/handle.
 type uploadParse struct {
 	items  []Item
 	format string
 	seed   *jsonSeed // non-nil for Foldex JSON (tag/folder colors)
 }
 
-// jsonSeed carries catalog rows from a JSON export so import can restore colors.
 type jsonSeed struct {
 	tags    []JSONTag
 	folders []JSONFolder
 }
 
-// just `if err != nil { return }`.
+// parseUpload writes client-facing errors so callers can return immediately.
 func (h *Handler) parseUpload(w http.ResponseWriter, r *http.Request) (uploadParse, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	if err := r.ParseMultipartForm(maxMultipartMemory); err != nil {
@@ -298,16 +288,7 @@ func filterByFolder(items []Item, excluded map[string]struct{}) []Item {
 	return out
 }
 
-// importItemsWithMode applies the parsed items to the DB using one of the
-// three conflict modes. The whole loop runs in a SINGLE transaction so a
-// failure mid-import rolls EVERYTHING back instead of leaving the DB
-// half-updated. Wipe DELETEs colliding rows in the same tx as the INSERT.
-// Duplicate falls back to skip-with-warning when URL collides (URL is
-// UNIQUE; same trade-off as backup SDD).
-//
-// Enqueueing preview-worker jobs happens AFTER commit — emitting them before
-// would race with the tx visibility (worker reads a link that doesn't exist
-// yet from another connection).
+// Preview jobs are enqueued after commit so workers can observe the inserted rows.
 func (h *Handler) importItemsWithMode(ctx context.Context, uid authctx.UserID, items []Item, mode importMode, seed *jsonSeed) (int, int, int, []string, error) {
 	if err := validateImportClickBudget(items); err != nil {
 		return 0, 0, 0, nil, err
@@ -328,8 +309,14 @@ func (h *Handler) importItemsWithMode(ctx context.Context, uid authctx.UserID, i
 		return imported, skipped, wiped, warnings, fmt.Errorf("commit import: %w", err)
 	}
 	if h.worker != nil {
-		for _, id := range freshIDs {
-			_ = h.worker.Enqueue(id)
+		for i, id := range freshIDs {
+			if err := h.worker.Enqueue(id); errors.Is(err, preview.ErrQueueFull) {
+				warnings = append(warnings, fmt.Sprintf(
+					"Fila de previews cheia; %d previews pendentes serão recuperados em segundo plano.",
+					len(freshIDs)-i,
+				))
+				break
+			}
 		}
 	}
 	return imported, skipped, wiped, warnings, nil

@@ -203,6 +203,45 @@ func TestHandler_List_FolderGate(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 }
 
+func TestHandler_PreviewStatuses_UsesTheProtectedFolderGate(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	otherUID := testdb.SeedUser(t, pool, "other@test.local", "user")
+	ctx := context.Background()
+	foldersRepo := folders.NewRepository(pool)
+	password := "folder-password"
+	folder, err := foldersRepo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &password})
+	require.NoError(t, err)
+	link, err := links.NewRepository(pool).Create(ctx, uid, links.CreateInput{URL: "https://secret-status.example", Title: "Secret", FolderID: &folder.ID})
+	require.NoError(t, err)
+	other, err := links.NewRepository(pool).Create(ctx, otherUID, links.CreateInput{URL: "https://other-status.example", Title: "Other"})
+	require.NoError(t, err)
+
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
+	r.Route("/entries", entries.NewHandler(entries.NewRepository(pool), foldersRepo, testUnlockKey).Mount)
+	path := "/entries/preview-status?folder_id=" + strconv.FormatInt(folder.ID, 10) + "&id=" + strconv.FormatInt(link.ID, 10) + "&id=" + strconv.FormatInt(other.ID, 10)
+
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.NotContains(t, rr.Body.String(), "pending")
+
+	hash, err := foldersRepo.PasswordHashFor(ctx, uid, folder.ID)
+	require.NoError(t, err)
+	require.NotNil(t, hash)
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set(folders.UnlockHeader, folders.IssueUnlockToken(testUnlockKey, folder.ID, *hash))
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var out []entries.PreviewStatus
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &out))
+	require.Len(t, out, 2)
+	assert.True(t, out[0].Found)
+	assert.False(t, out[1].Found)
+}
+
 type changingFolderLookup struct {
 	hashes []*string
 	calls  int

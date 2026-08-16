@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
+import { invalidateEntryCounts } from './entries'
 import type { Note, NoteCreate, NoteUpdate } from './types'
 
 export function useNote(id: number | null) {
@@ -27,6 +28,7 @@ export function useCreateNote() {
       qc.invalidateQueries({ queryKey: ['entries'] })
       qc.invalidateQueries({ queryKey: ['tags'] })
       qc.invalidateQueries({ queryKey: ['folders'] })
+      invalidateEntryCounts(qc)
     },
   })
 }
@@ -60,6 +62,7 @@ export function useDeleteNote() {
       qc.invalidateQueries({ queryKey: ['entries'] })
       qc.invalidateQueries({ queryKey: ['tags'] })
       qc.invalidateQueries({ queryKey: ['folders'] })
+      invalidateEntryCounts(qc)
     },
   })
 }

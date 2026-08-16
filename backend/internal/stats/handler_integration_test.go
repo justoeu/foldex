@@ -102,4 +102,18 @@ func TestHandler_RoutesAndShapes(t *testing.T) {
 		// No tags yet → empty array.
 		assert.Empty(t, out)
 	})
+
+	t.Run("dashboard", func(t *testing.T) {
+		resp, err := http.Get(srv.URL + "/dashboard?days=7&limit=5")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		var out stats.Dashboard
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+		assert.EqualValues(t, 1, out.Summary.TotalLinks)
+		assert.EqualValues(t, 2, out.Summary.TotalClicks)
+		assert.Len(t, out.Daily, 7)
+		assert.Len(t, out.Top, 1)
+		assert.Empty(t, out.Tags)
+	})
 }

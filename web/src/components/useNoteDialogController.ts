@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Image from '@tiptap/extension-image'
@@ -10,12 +10,13 @@ import { useTranslation } from 'react-i18next'
 import { useCreateNote, useUpdateNote, uploadNoteImage } from '../api/notes'
 import type { Note } from '../api/types'
 import { apiErrorCode } from '../lib/apiError'
-import { slugifyClient } from '../lib/slugify'
+import { tagNameTakenErrorKey } from '../lib/dialogTags'
+import { useSlugFieldState } from './SlugField'
+import { useTagPicker } from './TagPicker'
 import {
   buildCreateNotePayload,
   buildUpdateNotePayload,
   type NoteDialogValues,
-  type SelectedNoteTag,
 } from './NoteDialogPayload'
 
 export function buildImageUploadHandler(
@@ -73,11 +74,10 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
   const { t } = useTranslation()
   const [baselineNote] = useState(note)
   const [title, setTitle] = useState(baselineNote?.title ?? '')
-  const [slug, setSlug] = useState(baselineNote?.slug ?? '')
-  const [slugDirty, setSlugDirty] = useState(Boolean(baselineNote?.slug))
+  const slugField = useSlugFieldState(true, title, baselineNote?.slug, baselineNote?.id ?? null)
   const [pinned, setPinned] = useState(baselineNote?.pinned ?? false)
   const [folderId, setFolderId] = useState<number | null>(baselineNote?.folder_id ?? defaultFolderId ?? null)
-  const [selectedTags, setSelectedTags] = useState<SelectedNoteTag[]>(baselineNote?.tags ?? [])
+  const tagPicker = useTagPicker(true, baselineNote?.tags)
   const [imgUploadError, setImgUploadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const createNote = useCreateNote()
@@ -104,11 +104,14 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
     [],
   )
 
-  useEffect(() => {
-    if (!slugDirty) setSlug(slugifyClient(title))
-  }, [title, slugDirty])
-
-  const values = (): NoteDialogValues => ({ title, slug, slugDirty, pinned, folderId, selectedTags })
+  const values = (): NoteDialogValues => ({
+    title,
+    slug: slugField.slug,
+    slugDirty: slugField.slugDirty,
+    pinned,
+    folderId,
+    selectedTags: tagPicker.selected,
+  })
 
   const submit = async () => {
     if (!title.trim()) return
@@ -126,7 +129,8 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
       onClose()
     } catch (error: unknown) {
       const code = apiErrorCode(error)
-      if (code === 'tag_name_taken') return setSaveError(t('note_dialog.error_tag_taken'))
+      const tagErrorKey = tagNameTakenErrorKey(error, 'note')
+      if (tagErrorKey) return setSaveError(t(tagErrorKey))
       if (code === 'conflict' || responseStatus(error) === 409) return setSaveError(t('note_dialog.error_conflict'))
       setSaveError(responseMessage(error) || t('note_dialog.error_generic'))
     }
@@ -137,16 +141,14 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
     handleUpload,
     title,
     setTitle,
-    slug,
-    setSlug,
-    slugDirty,
-    setSlugDirty,
+    ...slugField,
     pinned,
     setPinned,
     folderId,
     setFolderId,
-    selectedTags,
-    setSelectedTags,
+    selectedTags: tagPicker.selected,
+    setSelectedTags: tagPicker.setSelected,
+    tagPicker,
     imgUploadError,
     saveError,
     busy: createNote.isPending || updateNote.isPending,

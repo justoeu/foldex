@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import { useHotkeys } from 'react-hotkeys-hook'
 import { useDarkMode } from './hooks/useDarkMode'
-import { usePersistedState } from './hooks/usePersistedState'
+import { isBoolean, usePersistedState } from './hooks/usePersistedState'
 import type { Sort } from './components/HomeView'
 
 export type AppView = 'home' | 'import' | 'stats' | 'settings' | 'admin'
@@ -21,7 +21,7 @@ export function useAppWorkspaceController() {
   const [q, setQ] = useState('')
   const [sort, setSort] = usePersistedState<Sort>('foldex.sort', 'created', isSort)
   const [dark, setDark] = useDarkMode()
-  const [sidebarCollapsed, setSidebarCollapsed] = usePersistedState('foldex.sidebar.collapsed', false)
+  const [sidebarCollapsed, setSidebarCollapsed] = usePersistedState('foldex.sidebar.collapsed', false, isBoolean)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [gridCols, setGridCols] = usePersistedState<3 | 5 | 8>('foldex.grid.cols', 5, isGridDensity)
   const [paletteOpen, setPaletteOpen] = useState(false)

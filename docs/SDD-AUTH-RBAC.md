@@ -605,7 +605,7 @@ Seis dígitos gerados por `crypto/rand` com **rejection sampling** — nunca `%`
 
 TTL de 5 min, máximo 3 attempts no próprio registro, máximo 3 envios por challenge com intervalo mínimo de 60 s. Responde `202` mesmo quando recusado por rate limit, para não virar sonda.
 
-Todo envio assíncrono de auth passa por um dispatcher único do processo (2 workers, fila 32), cancelado e aguardado no shutdown depois do drain HTTP. Reset, OTP de login e verificação reservam uma vaga antes de publicar/superseder a credencial; fila cheia não consome budget nem troca o token anterior, inclusive no limiter por endereço do forgot-password. O incremento de `auth_challenge.sends` e o INSERT do OTP são uma transação. `/email/resend`, autenticado, coalesce por 60 s; fila cheia retorna `503 mail_queue_full` nele e em `/2fa/email`, enquanto `/password/forgot` preserva o `202` indistinguível. O force-reset administrativo não usa a fila: SMTP continua síncrono dentro da transação, portanto erro de envio faz rollback.
+Todo envio assíncrono de auth passa por um dispatcher único do processo (2 workers, fila 32), cancelado e aguardado no shutdown depois do drain HTTP. Reset, OTP de login e verificação reservam uma vaga antes de publicar/superseder a credencial; fila cheia não consome budget nem troca o token anterior, inclusive no limiter por endereço do forgot-password. O incremento de `auth_challenge.sends`, a supersessão do código anterior e o INSERT do OTP são uma transação sob lock do challenge. A migration `000031` reforça o protocolo com índice parcial UNIQUE: cada challenge pode ter no máximo um `email_otp` de `login_2fa` ainda não consumido. `/email/resend`, autenticado, coalesce por 60 s; fila cheia retorna `503 mail_queue_full` nele e em `/2fa/email`, enquanto `/password/forgot` preserva o `202` indistinguível. O force-reset administrativo não usa a fila: SMTP continua síncrono dentro da transação, portanto erro de envio faz rollback.
 
 ### 6.3 O contador de tentativas mora no banco
 
@@ -721,7 +721,7 @@ Reforço barato no CI:
   | grep -v repository_system.go | grep -v _test.go | grep -v user_id
 ```
 
-Habitantes: `ClickAndResolve*` e `ViewAndResolve` (rotas públicas), `FindDueForCheck` e `SystemGet` (change-check), `requeuePending` e `UpdatePreview` (preview worker).
+Habitantes: `ClickAndResolve*` e `ViewAndResolve` (rotas públicas), `SystemFindDueForCheck` e `SystemRecordCheckResult` (change-check), `SystemPendingPreviewIDs` e os writers `SystemUpdatePreview*` (preview worker).
 
 ### 8.3 O padrão mecânico
 
@@ -749,7 +749,7 @@ O sub-select de tags (`link_tag WHERE entity_kind=… AND tag_id = ANY($n)`) **n
 
 ### 8.4 Workers e rotas públicas
 
-O preview worker e o change-check worker são cross-tenant por natureza. `FindDueForCheck` passa a devolver `[]DueLink{ID, UserID}` para que o push resultante vá **só** para o dono do link — `push.Notification` ganha `UserID`, propagado pelo `pushSenderAdapter` que já existe em `main.go`.
+O preview worker e o change-check worker são cross-tenant por natureza. `SystemFindDueForCheck` devolve a projeção estreita `DueLink` com ID, owner, URL, título, intervalo, fingerprint e token do claim; assim não existe lookup/aggregate por item e o push resultante vai **só** para o dono do link. `push.Notification.UserID` continua propagado pelo `pushSenderAdapter` de `main.go`.
 
 `/go/{id-or-slug}` e `/n/{id-or-slug}` continuam públicos e tenant-blind, mantendo o predicado `folders.SQLNotInLockedFolder` que já impede vazamento de pasta trancada.
 
@@ -903,7 +903,7 @@ O PR1 é ~70% do diff (a segmentação inteira) e ~5% do risco. Separá-lo de qu
 ## 13. Segurança
 
 - **Threat model muda.** A §0 do `CLAUDE.md` (“single-user, local network, no public exposure”) deixa de valer: com auth, expor na LAN passa a ser um caso suportado. `validateSecureDefaults` acompanha — passa a aceitar bind não-loopback quando `AUTH_ENABLED=1`, e a **recusar** o boot com `CORS_ORIGINS=*` combinado com `AllowCredentials: true` (incompatíveis por spec), e `AUTH_COOKIE_SECURE=0` com bind não-loopback.
-- **`SHARED_SECRET` coexiste e é rebaixado.** No PR4 vira header de perímetro, documentado como “não autentica ninguém e não identifica ninguém”; quando os dois estão configurados, a request precisa do header **e** da sessão, exceto a leitura pública UUID-keyed de mídia de notas exigida por `/n/{slug}`. Removido no release seguinte.
+- **`SHARED_SECRET` coexiste e é rebaixado.** No PR4 vira header de perímetro, documentado como “não autentica ninguém e não identifica ninguém”; quando os dois estão configurados, a request precisa do header **e** da sessão, exceto a leitura pública UUID-keyed de mídia de notas exigida por `/n/{slug}` e o GET nativo de backup autorizado por uma capability one-time que um POST anterior cunhou sob header + sessão + CSRF. Esse GET continua sob `Authenticate`, owner/session binding e recusa de API token. Removido no release seguinte.
 - **Tokens de API têm escopo.** `scope='content'` é aceito em `/api/{links,notes,folders,tags,entries,push,stats}` e rejeitado com `403 token_scope` em `/api/auth/*`, `/api/admin/*`, `/api/tokens`, `/api/backup/*` e `/api/settings/*`. Um token de extensão roubado não pode cunhar sessão, desligar 2FA nem exfiltrar um backup completo.
 - **CORS.** `AllowCredentials: true`, `AllowedHeaders` ganha `Authorization` e `X-Foldex-CSRF`. Aproveita-se para corrigir um **bug pré-existente**: `router.go:90` não lista `PUT`, embora `settings/handler.go:20` monte `r.Put("/master-password", …)` — invisível hoje porque prod é same-origin via nginx.
 - **Nada de secretos em log.** Ver §9.2.

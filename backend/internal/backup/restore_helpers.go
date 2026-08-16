@@ -44,7 +44,7 @@ func (p *preparedNoteMediaRestore) cleanup() {
 	_ = os.Remove(name)
 }
 
-func prepareNoteMediaRestore(snap *Snapshot, zr *zip.Reader) (_ *preparedNoteMediaRestore, err error) {
+func prepareNoteMediaRestore(ctx context.Context, snap *Snapshot, zr *zip.Reader) (_ *preparedNoteMediaRestore, err error) {
 	prepared := &preparedNoteMediaRestore{
 		mapping: make(map[string]string),
 		files:   make(map[string]preparedNoteMediaFile),
@@ -56,6 +56,9 @@ func prepareNoteMediaRestore(snap *Snapshot, zr *zip.Reader) (_ *preparedNoteMed
 	}()
 	fileEntries := zipFileEntries(zr, "files/")
 	for i := range snap.Notes {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		bodyHTML, _ := notes.SanitizeBody(snap.Notes[i].BodyHTML)
 		snap.Notes[i].BodyHTML = bodyHTML
 		values := []string{bodyHTML}
@@ -63,6 +66,9 @@ func prepareNoteMediaRestore(snap *Snapshot, zr *zip.Reader) (_ *preparedNoteMed
 			values = append(values, *snap.Notes[i].CoverURL)
 		}
 		for _, oldKey := range notemedia.Keys(values...) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if _, exists := prepared.mapping[oldKey]; exists {
 				continue
 			}
@@ -70,8 +76,11 @@ func prepareNoteMediaRestore(snap *Snapshot, zr *zip.Reader) (_ *preparedNoteMed
 			if !exists {
 				continue
 			}
-			opt, err := optimizeRestoredNoteMedia(entry)
+			opt, err := optimizeRestoredNoteMedia(ctx, entry)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, ctxErr
+				}
 				return nil, httperr.New(400, "invalid_backup", "backup contains invalid note media")
 			}
 			if len(opt.Data) > maxRestoredNoteMediaBytes || int64(len(opt.Data)) > maxArchiveExpandedBytes-prepared.size {
@@ -106,7 +115,7 @@ func prepareNoteMediaRestore(snap *Snapshot, zr *zip.Reader) (_ *preparedNoteMed
 	return prepared, nil
 }
 
-func optimizeRestoredNoteMedia(entry *zip.File) (imageopt.Result, error) {
+func optimizeRestoredNoteMedia(ctx context.Context, entry *zip.File) (imageopt.Result, error) {
 	if entry.UncompressedSize64 > maxRestoredNoteMediaBytes {
 		return imageopt.Result{}, fmt.Errorf("note media exceeds restore limit")
 	}
@@ -114,7 +123,7 @@ func optimizeRestoredNoteMedia(entry *zip.File) (imageopt.Result, error) {
 	if err != nil {
 		return imageopt.Result{}, err
 	}
-	data, readErr := io.ReadAll(io.LimitReader(r, maxRestoredNoteMediaBytes+1))
+	data, readErr := io.ReadAll(io.LimitReader(contextReader{ctx: ctx, reader: r}, maxRestoredNoteMediaBytes+1))
 	closeErr := r.Close()
 	if readErr != nil {
 		return imageopt.Result{}, readErr
@@ -125,7 +134,14 @@ func optimizeRestoredNoteMedia(entry *zip.File) (imageopt.Result, error) {
 	if len(data) > maxRestoredNoteMediaBytes {
 		return imageopt.Result{}, fmt.Errorf("note media exceeds restore limit")
 	}
-	return imageopt.Optimize(data, imageopt.Options{MaxDim: 1024, Quality: 82})
+	optimized, err := imageopt.Optimize(data, imageopt.Options{MaxDim: 1024, Quality: 82})
+	if err != nil {
+		return imageopt.Result{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return imageopt.Result{}, err
+	}
+	return optimized, nil
 }
 
 func zipFileEntries(zr *zip.Reader, prefix string) map[string]*zip.File {

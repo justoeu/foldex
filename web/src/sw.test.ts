@@ -5,23 +5,31 @@ type Handler = (event: any) => void
 const handlers: Record<string, Handler[]> = {}
 const cacheStore = new Map<string, Map<string, Response>>()
 
+function cacheKey(req: Request | string, ignoreSearch = false) {
+  const url = new URL(typeof req === 'string' ? req : req.url, 'https://x.test')
+  if (ignoreSearch) url.search = ''
+  return url.href
+}
+
 function makeCache(name: string) {
   if (!cacheStore.has(name)) cacheStore.set(name, new Map())
   const store = cacheStore.get(name)!
   return {
     add: vi.fn(async (req: Request | string) => {
-      const key = typeof req === 'string' ? req : req.url
+      const key = cacheKey(req)
       store.set(key, new Response('ok', { status: 200 }))
     }),
     put: vi.fn(async (req: Request | string, res: Response) => {
-      const key = typeof req === 'string' ? req : req.url
+      const key = cacheKey(req)
       store.set(key, res)
     }),
-    match: vi.fn(async (req: Request | string) => {
-      const key = typeof req === 'string' ? req : req.url
+    match: vi.fn(async (req: Request | string, options?: CacheQueryOptions) => {
+      const key = cacheKey(req, options?.ignoreSearch)
       if (store.has(key)) return store.get(key)!.clone()
-      for (const [k, v] of store) {
-        if (k.split('?')[0] === key.split('?')[0]) return v.clone()
+      if (options?.ignoreSearch) {
+        for (const [k, v] of store) {
+          if (cacheKey(k, true) === key) return v.clone()
+        }
       }
       return undefined
     }),
@@ -93,10 +101,111 @@ describe('service worker (sw.ts)', () => {
     handlers.install![0](ev)
     await ev.flush()
     expect((globalThis as any).skipWaiting).toHaveBeenCalled()
-    expect((globalThis as any).caches.open).toHaveBeenCalledWith('foldex-precache-v3')
+    expect((globalThis as any).caches.open).toHaveBeenCalledWith(
+      expect.stringMatching(/^foldex-precache-(?!state)/),
+    )
+  })
+
+  it('offlineNavigationMatchesRevisionedShell', async () => {
+    const install = makeExtendableEvent()
+    handlers.install![0](install)
+    await install.flush()
+
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('offline')
+    }))
+    let responded: Promise<Response> | undefined
+    handlers.fetch![0]({
+      request: { url: 'https://x.test/folder', method: 'GET', mode: 'navigate' },
+      respondWith(p: Promise<Response>) {
+        responded = p
+      },
+    })
+
+    expect(await (await responded!).text()).toBe('ok')
+  })
+
+  it('retains and serves the prior asset generation after activation', async () => {
+    const previous = makeCache('foldex-precache-v3')
+    await previous.put('/assets/old-lazy.js', new Response('old lazy chunk'))
+
+    const install = makeExtendableEvent()
+    handlers.install![0](install)
+    await install.flush()
+    const activate = makeExtendableEvent()
+    handlers.activate![0](activate)
+    await activate.flush()
+
+    let responded: Promise<Response> | undefined
+    handlers.fetch![0]({
+      request: new Request('https://x.test/assets/old-lazy.js'),
+      respondWith(p: Promise<Response>) {
+        responded = p
+      },
+    })
+
+    expect((globalThis as any).caches.delete).not.toHaveBeenCalledWith('foldex-precache-v3')
+    expect(await (await responded!).text()).toBe('old lazy chunk')
+  })
+
+  it('rotates three hashed generations and evicts only the oldest', async () => {
+    const stateKey = new URL('/__foldex_precache_state__', self.location.origin).href
+    const stateCache = makeCache('foldex-precache-state-v1')
+    await stateCache.put(stateKey, new Response(JSON.stringify({
+      current: 'foldex-precache-generation-before-this-build',
+      previous: 'foldex-precache-two-generations-old',
+    })))
+    await makeCache('foldex-precache-generation-before-this-build').put('/assets/prior-lazy.js', new Response('prior'))
+    await makeCache('foldex-precache-two-generations-old').put('/assets/oldest-lazy.js', new Response('oldest'))
+    ;(globalThis as any).caches.keys = vi.fn(async () => [
+      ...cacheStore.keys(),
+      'foldex-files-v1',
+    ])
+
+    const install = makeExtendableEvent()
+    handlers.install![0](install)
+    await install.flush()
+    const activate = makeExtendableEvent()
+    handlers.activate![0](activate)
+    await activate.flush()
+
+    const stored = await stateCache.match(stateKey)
+    const state = await stored!.json() as { current: string; previous: string }
+    expect(state.current).toMatch(/^foldex-precache-(?!state)/)
+    expect(state.previous).toBe('foldex-precache-generation-before-this-build')
+    expect((globalThis as any).caches.delete).toHaveBeenCalledWith('foldex-precache-two-generations-old')
+    expect((globalThis as any).caches.delete).not.toHaveBeenCalledWith('foldex-precache-generation-before-this-build')
+
+    let responded: Promise<Response> | undefined
+    handlers.fetch![0]({
+      request: new Request('https://x.test/assets/prior-lazy.js'),
+      respondWith(p: Promise<Response>) {
+        responded = p
+      },
+    })
+    expect(await (await responded!).text()).toBe('prior')
+  })
+
+  it('fails installation when any precache asset cannot be cached', async () => {
+    const cache = makeCache('failed-precache')
+    cache.add.mockImplementation(async (req: Request | string) => {
+      if (new URL(typeof req === 'string' ? req : req.url).pathname === '/assets/app.js') {
+        throw new Error('asset unavailable')
+      }
+    })
+    ;(globalThis as any).caches.open = vi.fn(async () => cache)
+
+    const ev = makeExtendableEvent()
+    handlers.install![0](ev)
+
+    await expect(ev.flush()).rejects.toThrow('asset unavailable')
+    expect((globalThis as any).skipWaiting).not.toHaveBeenCalled()
   })
 
   it('activate evicts unknown caches and claims clients', async () => {
+    const install = makeExtendableEvent()
+    handlers.install![0](install)
+    await install.flush()
     const ev = makeExtendableEvent()
     handlers.activate![0](ev)
     await ev.flush()
@@ -296,6 +405,29 @@ describe('service worker (sw.ts)', () => {
       },
     })
     handlers.push![0](ev)
+    await ev.flush()
+    expect((globalThis as any).registration.showNotification).toHaveBeenCalledWith(
+      'Foldex',
+      expect.objectContaining({ body: expect.stringMatching(/updated/i) }),
+    )
+  })
+
+  it.each([
+    ['null', null],
+    ['array', []],
+    ['string', 'payload'],
+    ['number', 42],
+    ['boolean', true],
+    ['incomplete object', { title: 'Missing fields' }],
+    ['invalid id', { kind: 'change_detected', link_id: '7', title: 'Title', url: '/go/title' }],
+    ['invalid title', { kind: 'change_detected', link_id: 7, title: 7, url: '/go/title' }],
+    ['invalid url', { kind: 'change_detected', link_id: 7, title: 'Title', url: null }],
+  ])('push with valid JSON %s shows generic notification', async (_name, payload) => {
+    const ev = makeExtendableEvent({
+      data: { json: () => payload },
+    })
+
+    expect(() => handlers.push![0](ev)).not.toThrow()
     await ev.flush()
     expect((globalThis as any).registration.showNotification).toHaveBeenCalledWith(
       'Foldex',

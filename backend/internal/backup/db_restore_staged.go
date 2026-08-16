@@ -77,29 +77,11 @@ func restoreSkipStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap 
 		return inserted, skipped, mapping, fmt.Errorf("map staged restore folders: %w", err)
 	}
 
-	ct, err = tx.Exec(ctx, `
-		INSERT INTO link
-		    (id, user_id, url, title, slug, description, favicon_url, og_image_url,
-		     pinned, preview_status, preview_error, folder_id, created_at, updated_at)
-		SELECT staged.new_id, $1, staged.url, staged.title, staged.slug,
-		       staged.description, staged.favicon_url, staged.og_image_url,
-		       staged.pinned, staged.preview_status, staged.preview_error,
-		       folder.new_id, staged.created_at, staged.updated_at
-		FROM _backup_restore_link staged
-		LEFT JOIN _backup_restore_folder folder ON folder.old_id = staged.folder_old_id
-		ORDER BY staged.ordinal
-		ON CONFLICT (user_id, url) DO NOTHING`, int64(uid))
+	links, err := restoreConflictLinks(ctx, tx, uid, snap.Links, existingLinks, mapping, ModeSkip)
 	if err != nil {
-		return inserted, skipped, mapping, fmt.Errorf("insert staged restore links: %w", err)
+		return inserted, skipped, mapping, err
 	}
-	inserted.Links = ct.RowsAffected()
-	skipped.Links = int64(len(snap.Links)) - inserted.Links
-	if err := loadStagedIDMapping(ctx, tx, `
-		SELECT staged.old_id, live.id
-		FROM _backup_restore_link staged
-		JOIN link live ON live.user_id = $1 AND live.url = staged.url`, mapping.linkMap, int64(uid)); err != nil {
-		return inserted, skipped, mapping, fmt.Errorf("map staged restore links: %w", err)
-	}
+	inserted.Links, skipped.Links = links.inserted, links.skipped
 
 	ct, err = tx.Exec(ctx, `
 		INSERT INTO note
@@ -193,33 +175,12 @@ func restoreDuplicateStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 		return inserted, warnings, mapping, fmt.Errorf("map staged duplicate folders: %w", err)
 	}
 
-	ct, err = tx.Exec(ctx, `
-		INSERT INTO link
-		    (id, user_id, url, title, slug, description, favicon_url, og_image_url,
-		     pinned, preview_status, preview_error, folder_id, created_at, updated_at)
-		SELECT staged.new_id, $1, staged.url, staged.title, staged.slug,
-		       staged.description, staged.favicon_url, staged.og_image_url,
-		       staged.pinned, staged.preview_status, staged.preview_error,
-		       folder.new_id, staged.created_at, staged.updated_at
-		FROM _backup_restore_link staged
-		LEFT JOIN _backup_restore_folder folder ON folder.old_id = staged.folder_old_id
-		ORDER BY staged.ordinal
-		ON CONFLICT (user_id, url) DO NOTHING`, int64(uid))
+	links, err := restoreConflictLinks(ctx, tx, uid, snap.Links, existingLinks, mapping, ModeDuplicate)
 	if err != nil {
-		return inserted, warnings, mapping, fmt.Errorf("insert staged duplicate links: %w", err)
+		return inserted, warnings, mapping, err
 	}
-	inserted.Links = ct.RowsAffected()
-	if err := loadStagedIDMapping(ctx, tx, `
-		SELECT staged.old_id, live.id
-		FROM _backup_restore_link staged
-		JOIN link live ON live.user_id = $1 AND live.url = staged.url`, mapping.linkMap, int64(uid)); err != nil {
-		return inserted, warnings, mapping, fmt.Errorf("map staged duplicate links: %w", err)
-	}
-	for _, link := range snap.Links {
-		if _, found := existingLinks[link.URL]; found {
-			warnings = append(warnings, fmt.Sprintf("link %q já existia — não duplicado (URL é UNIQUE)", link.URL))
-		}
-	}
+	inserted.Links = links.inserted
+	warnings = append(warnings, links.warnings...)
 
 	ct, err = tx.Exec(ctx, `
 		INSERT INTO note
@@ -247,6 +208,52 @@ func restoreDuplicateStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 		return inserted, warnings, mapping, err
 	}
 	return inserted, warnings, mapping, nil
+}
+
+type conflictLinkRestore struct {
+	inserted int64
+	skipped  int64
+	warnings []string
+}
+
+func restoreConflictLinks(ctx context.Context, tx pgx.Tx, uid authctx.UserID, links []LinkRow, existing map[string]existingRestoreLink, mapping idMapping, mode ConflictMode) (conflictLinkRestore, error) {
+	var restored conflictLinkRestore
+	label := "restore"
+	if mode == ModeDuplicate {
+		label = "duplicate"
+	}
+	ct, err := tx.Exec(ctx, `
+		INSERT INTO link
+		    (id, user_id, url, title, slug, description, favicon_url, og_image_url,
+		     pinned, preview_status, preview_error, folder_id, created_at, updated_at)
+		SELECT staged.new_id, $1, staged.url, staged.title, staged.slug,
+		       staged.description, staged.favicon_url, staged.og_image_url,
+		       staged.pinned, staged.preview_status, staged.preview_error,
+		       folder.new_id, staged.created_at, staged.updated_at
+		FROM _backup_restore_link staged
+		LEFT JOIN _backup_restore_folder folder ON folder.old_id = staged.folder_old_id
+		ORDER BY staged.ordinal
+		ON CONFLICT (user_id, url) DO NOTHING`, int64(uid))
+	if err != nil {
+		return restored, fmt.Errorf("insert staged %s links: %w", label, err)
+	}
+	restored.inserted = ct.RowsAffected()
+	if err := loadStagedIDMapping(ctx, tx, `
+		SELECT staged.old_id, live.id
+		FROM _backup_restore_link staged
+		JOIN link live ON live.user_id = $1 AND live.url = staged.url`, mapping.linkMap, int64(uid)); err != nil {
+		return restored, fmt.Errorf("map staged %s links: %w", label, err)
+	}
+	if mode == ModeSkip {
+		restored.skipped = int64(len(links)) - restored.inserted
+		return restored, nil
+	}
+	for _, link := range links {
+		if _, found := existing[link.URL]; found {
+			restored.warnings = append(restored.warnings, fmt.Sprintf("link %q já existia — não duplicado (URL é UNIQUE)", link.URL))
+		}
+	}
+	return restored, nil
 }
 
 func allocateDuplicateTagNames(ctx context.Context, tx pgx.Tx, uid authctx.UserID, tags []TagRow) ([]string, error) {

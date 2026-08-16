@@ -54,3 +54,46 @@ func TestUnlockKeyForIsPerFolder(t *testing.T) {
 		t.Fatal("folder 11 must be unaffected")
 	}
 }
+
+func TestSweepLimitersPrunesStaleKeysAndPreservesActiveLockouts(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	h := &Handler{limiter: newUnlockLimiter().WithClock(func() time.Time { return now })}
+	h.limiter.Fail(unlockKeyFor(10))
+
+	now = now.Add(unlockAttemptRetention + time.Nanosecond)
+	for range maxUnlockAttempts {
+		h.limiter.Fail(unlockKeyFor(11))
+	}
+
+	if removed := h.SweepLimiters(unlockAttemptRetention); removed != 1 {
+		t.Fatalf("removed keys = %d, want 1", removed)
+	}
+	if got := h.limiter.Len(); got != 1 {
+		t.Fatalf("tracked keys = %d, want only the active lockout", got)
+	}
+	if h.limiter.LockedUntil(unlockKeyFor(11)).IsZero() {
+		t.Fatal("production sweep lifted an active folder lockout")
+	}
+}
+
+func TestForgetDeletedUnlockAttemptsRemovesOnlyDeletedFolders(t *testing.T) {
+	t.Parallel()
+	h := &Handler{limiter: newUnlockLimiter()}
+	h.limiter.Fail(unlockKeyFor(10))
+	for range maxUnlockAttempts {
+		h.limiter.Fail(unlockKeyFor(11))
+	}
+
+	h.forgetDeletedUnlockAttempts([]int64{10})
+
+	if got := h.limiter.Len(); got != 1 {
+		t.Fatalf("tracked keys = %d, want 1", got)
+	}
+	if !h.limiter.LockedUntil(unlockKeyFor(10)).IsZero() {
+		t.Fatal("deleted folder key must be forgotten")
+	}
+	if h.limiter.LockedUntil(unlockKeyFor(11)).IsZero() {
+		t.Fatal("an unrelated folder key must remain locked")
+	}
+}

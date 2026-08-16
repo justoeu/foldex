@@ -313,6 +313,105 @@ func TestList_QueryCountIsConstant(t *testing.T) {
 	}
 }
 
+func TestList_ClickRankedSortsKeepCrossKindOrdering(t *testing.T) {
+	ctx, uid, f := setup(t)
+	link, err := f.lrepo.Create(ctx, uid, links.CreateInput{URL: "https://click-order.example", Title: "Link"})
+	require.NoError(t, err)
+	note, err := f.nrepo.Create(ctx, uid, notes.CreateInput{Title: "Note"})
+	require.NoError(t, err)
+	_, err = f.pool.Exec(ctx, `UPDATE link SET created_at = now() - interval '10 days' WHERE user_id = $1 AND id = $2`, int64(uid), link.ID)
+	require.NoError(t, err)
+	_, err = f.pool.Exec(ctx, `UPDATE note SET created_at = now() - interval '10 days' WHERE user_id = $1 AND id = $2`, int64(uid), note.ID)
+	require.NoError(t, err)
+	_, err = f.pool.Exec(ctx, `
+		INSERT INTO click_log (entity_kind, entity_id, user_id, clicked_at)
+		SELECT 'link', $1, $2, now() - interval '2 hours'
+		FROM generate_series(1, 3)
+	`, link.ID, int64(uid))
+	require.NoError(t, err)
+	_, err = f.pool.Exec(ctx, `
+		INSERT INTO click_log (entity_kind, entity_id, user_id, clicked_at)
+		VALUES ('note', $1, $2, now() - interval '1 hour')
+	`, note.ID, int64(uid))
+	require.NoError(t, err)
+
+	byClicks, err := f.erepo.List(ctx, uid, entries.ListQuery{Sort: "clicks"})
+	require.NoError(t, err)
+	require.Len(t, byClicks, 2)
+	assert.Equal(t, "link", byClicks[0].Kind)
+	assert.EqualValues(t, 3, byClicks[0].ClickCount)
+	assert.Equal(t, "note", byClicks[1].Kind)
+	assert.EqualValues(t, 1, byClicks[1].ClickCount)
+
+	byRecent, err := f.erepo.List(ctx, uid, entries.ListQuery{Sort: "recent"})
+	require.NoError(t, err)
+	require.Len(t, byRecent, 2)
+	assert.Equal(t, "note", byRecent[0].Kind)
+	assert.Equal(t, "link", byRecent[1].Kind)
+}
+
+func TestCounts_AreGlobalAndOwnerScopedInOneRoundTrip(t *testing.T) {
+	ctx, uid, f := setup(t)
+	otherUID := testdb.SeedUser(t, f.pool, "counts-other@test.local", "user")
+	folder, err := f.frepo.Create(ctx, uid, folders.CreateInput{Name: "Counted folder", Color: "#abc"})
+	require.NoError(t, err)
+	_, err = f.lrepo.Create(ctx, uid, links.CreateInput{URL: "https://counts-root.example", Title: "Root"})
+	require.NoError(t, err)
+	_, err = f.lrepo.Create(ctx, uid, links.CreateInput{URL: "https://counts-folder.example", Title: "Folder", FolderID: &folder.ID})
+	require.NoError(t, err)
+	_, err = f.nrepo.Create(ctx, uid, notes.CreateInput{Title: "Owner note", FolderID: &folder.ID})
+	require.NoError(t, err)
+	_, err = f.lrepo.Create(ctx, otherUID, links.CreateInput{URL: "https://counts-other.example", Title: "Other"})
+	require.NoError(t, err)
+	_, err = f.nrepo.Create(ctx, otherUID, notes.CreateInput{Title: "Other note"})
+	require.NoError(t, err)
+
+	before := f.pool.Stat().AcquireCount()
+	counts, err := f.erepo.Counts(ctx, uid)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, f.pool.Stat().AcquireCount()-before)
+	assert.Equal(t, entries.EntryCounts{Links: 2, Notes: 1}, counts)
+}
+
+func TestPreviewStatuses_OwnerAndFolderScopedInOneRoundTrip(t *testing.T) {
+	ctx, uid, f := setup(t)
+	otherUID := testdb.SeedUser(t, f.pool, "other@test.local", "user")
+	open, err := f.lrepo.Create(ctx, uid, links.CreateInput{URL: "https://status-open.example", Title: "Open"})
+	require.NoError(t, err)
+	password := "folder-password"
+	protectedFolder, err := f.frepo.Create(ctx, uid, folders.CreateInput{Name: "Protected", Color: "#abc", Password: &password})
+	require.NoError(t, err)
+	protected, err := f.lrepo.Create(ctx, uid, links.CreateInput{
+		URL: "https://status-protected.example", Title: "Protected", FolderID: &protectedFolder.ID,
+	})
+	require.NoError(t, err)
+	other, err := f.lrepo.Create(ctx, otherUID, links.CreateInput{URL: "https://status-other.example", Title: "Other"})
+	require.NoError(t, err)
+	_, err = f.pool.Exec(ctx, `UPDATE link SET preview_status = 'ok', og_image_url = '/ready.jpg' WHERE user_id = $1 AND id = $2`, int64(uid), open.ID)
+	require.NoError(t, err)
+
+	ids := []int64{open.ID, protected.ID, other.ID, 999999999}
+	before := f.pool.Stat().AcquireCount()
+	got, err := f.erepo.PreviewStatuses(ctx, uid, ids, nil)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, f.pool.Stat().AcquireCount()-before)
+	require.Len(t, got, len(ids))
+	assert.True(t, got[0].Found)
+	require.NotNil(t, got[0].Status)
+	assert.Equal(t, "ok", *got[0].Status)
+	assert.Equal(t, "/ready.jpg", *got[0].OGImageURL)
+	assert.False(t, got[1].Found, "an ungated status request must not reveal protected-folder content")
+	assert.False(t, got[2].Found, "another owner's id must be indistinguishable from a missing id")
+	assert.False(t, got[3].Found)
+
+	got, err = f.erepo.PreviewStatuses(ctx, uid, []int64{protected.ID, open.ID, other.ID}, &protectedFolder.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.True(t, got[0].Found)
+	assert.False(t, got[1].Found, "folder-scoped requests must not read links outside that folder")
+	assert.False(t, got[2].Found)
+}
+
 func stringPtr(v string) *string { return &v }
 
 func linkIDs(rows []links.Link) []int64 {

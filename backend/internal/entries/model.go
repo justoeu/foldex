@@ -1,9 +1,6 @@
 // Package entries is a read-only projection over link + note, the data
-// source for the interleaved home/folder grid and its search box. It never
-// writes — mutations stay on /api/links and /api/notes; this package exists
-// solely so the frontend can query one paginated, sorted, searched endpoint
-// instead of merging two independently-paginated streams client-side. See
-// ADR-27.
+// source for the interleaved home/folder grid and its search box. Mutations
+// stay on /api/links and /api/notes. See ADR-27.
 package entries
 
 import (
@@ -53,6 +50,25 @@ type Entry struct {
 	// note-only — nil/empty for kind="link".
 	CoverURL        *string `json:"cover_url,omitempty"`
 	BodyTextSnippet *string `json:"body_text_snippet,omitempty"`
+}
+
+// PreviewStatus is the small projection used while cached link previews are
+// pending. Found is false for missing, inaccessible, and other-owner IDs so
+// those cases remain indistinguishable.
+type PreviewStatus struct {
+	ID           int64      `json:"id"`
+	Found        bool       `json:"found"`
+	Status       *string    `json:"preview_status"`
+	Description  *string    `json:"description"`
+	FaviconURL   *string    `json:"favicon_url"`
+	OGImageURL   *string    `json:"og_image_url"`
+	PreviewError *string    `json:"preview_error"`
+	UpdatedAt    *time.Time `json:"updated_at"`
+}
+
+type EntryCounts struct {
+	Links int64 `json:"links"`
+	Notes int64 `json:"notes"`
 }
 
 type ListQuery = listquery.Params

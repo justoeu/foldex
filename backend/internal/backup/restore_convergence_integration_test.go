@@ -303,10 +303,14 @@ func TestRestore_ObjectUploadsUseBoundedConcurrency(t *testing.T) {
 	}
 	db := mustJSON(t, snap)
 	entries["database.json"] = db
+	checksums := make(map[string]string, len(entries))
+	for name, data := range entries {
+		checksums[name] = sha256hex(data)
+	}
 	entries["manifest.json"] = mustJSON(t, backup.Manifest{
 		Kind: backup.ManifestKind, Version: backup.ManifestVersion,
 		SchemaVersion: backup.CurrentSchemaVersion,
-		Checksums:     map[string]string{"database.json": sha256hex(db)},
+		Checksums:     checksums,
 	})
 	bucket := &failOnceBucket{base: newStubBucket(), delay: 20 * time.Millisecond}
 	_, err := backup.NewService(pool, bucket, discardLogger()).Restore(

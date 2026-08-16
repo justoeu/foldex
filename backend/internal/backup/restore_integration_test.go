@@ -250,28 +250,22 @@ func TestRestore_DuplicateRenamesTagsAndFallsBackOnURLCollision(t *testing.T) {
 // single crafted files/ entry — the vehicle for the path-rejection tests.
 func minimalZipWithFile(t *testing.T, fileEntry string) *zip.Reader {
 	t.Helper()
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	writeJSON := func(name string, v any) {
-		w, err := zw.Create(name)
-		require.NoError(t, err)
-		require.NoError(t, json.NewEncoder(w).Encode(v))
-	}
-	writeJSON("manifest.json", backup.Manifest{
+	db := mustJSON(t, backup.Snapshot{Version: backup.DatabaseSnapshotVersion})
+	payload := []byte("payload")
+	manifest := mustJSON(t, backup.Manifest{
 		Kind:          backup.ManifestKind,
 		Version:       backup.ManifestVersion,
 		SchemaVersion: backup.CurrentSchemaVersion,
+		Checksums: map[string]string{
+			"database.json": sha256hex(db),
+			fileEntry:       sha256hex(payload),
+		},
 	})
-	writeJSON("database.json", backup.Snapshot{Version: backup.DatabaseSnapshotVersion})
-	fw, err := zw.Create(fileEntry)
-	require.NoError(t, err)
-	_, err = fw.Write([]byte("payload"))
-	require.NoError(t, err)
-	require.NoError(t, zw.Close())
-
-	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	require.NoError(t, err)
-	return zr
+	return zipFromEntries(t, map[string][]byte{
+		"manifest.json": manifest,
+		"database.json": db,
+		fileEntry:       payload,
+	})
 }
 
 // TestRestore_DuplicateAppendsSlugSuffixOnCollision exercises uniqueLinkSlug's
@@ -503,20 +497,7 @@ func TestRestore_SanitizesNoteBodyHTMLFromHostileZip(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	writeJSON := func(name string, raw string) {
-		w, err := zw.Create(name)
-		require.NoError(t, err)
-		_, err = w.Write([]byte(raw))
-		require.NoError(t, err)
-	}
-	manifestJSON, err := json.Marshal(backup.Manifest{
-		Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
-	})
-	require.NoError(t, err)
-	writeJSON("manifest.json", string(manifestJSON))
-	writeJSON("database.json", `{
+	db := []byte(`{
 		"version": 4,
 		"tags": [], "folders": [], "links": [], "link_tags": [], "click_logs": [],
 		"notes": [{
@@ -528,9 +509,15 @@ func TestRestore_SanitizesNoteBodyHTMLFromHostileZip(t *testing.T) {
 		}],
 		"note_tags": [], "note_clicks": []
 	}`)
-	require.NoError(t, zw.Close())
-	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	manifestJSON, err := json.Marshal(backup.Manifest{
+		Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
+		Checksums: map[string]string{"database.json": sha256hex(db)},
+	})
 	require.NoError(t, err)
+	zr := zipFromEntries(t, map[string][]byte{
+		"manifest.json": manifestJSON,
+		"database.json": db,
+	})
 
 	rep, err := svc.Restore(context.Background(), uid, zr, backup.ModeWipe)
 	require.NoError(t, err)
@@ -554,21 +541,7 @@ func TestRestore_OldFormatBackupWithoutNotesKeyStillRestores(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	writeJSON := func(name string, raw string) {
-		w, err := zw.Create(name)
-		require.NoError(t, err)
-		_, err = w.Write([]byte(raw))
-		require.NoError(t, err)
-	}
-	manifestJSON, err := json.Marshal(backup.Manifest{
-		Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: 8,
-	})
-	require.NoError(t, err)
-	writeJSON("manifest.json", string(manifestJSON))
-	// Pre-000014 shape: version 3, no notes/note_tags/note_clicks keys at all.
-	writeJSON("database.json", `{
+	db := []byte(`{
 		"version": 3,
 		"tags": [{"id": 1, "name": "old-tag", "color": "#abc", "created_at": "2024-01-01T00:00:00Z"}],
 		"folders": [],
@@ -576,9 +549,16 @@ func TestRestore_OldFormatBackupWithoutNotesKeyStillRestores(t *testing.T) {
 		"link_tags": [],
 		"click_logs": []
 	}`)
-	require.NoError(t, zw.Close())
-	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	manifestJSON, err := json.Marshal(backup.Manifest{
+		Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: 8,
+		Checksums: map[string]string{"database.json": sha256hex(db)},
+	})
 	require.NoError(t, err)
+	// Pre-000014 shape: version 3, no notes/note_tags/note_clicks keys at all.
+	zr := zipFromEntries(t, map[string][]byte{
+		"manifest.json": manifestJSON,
+		"database.json": db,
+	})
 
 	rep, err := svc.Restore(context.Background(), uid, zr, backup.ModeWipe)
 	require.NoError(t, err, "an old-format backup with no notes key must still restore")
@@ -613,29 +593,24 @@ func TestRestore_CoercesTrackingPixelColors(t *testing.T) {
 
 	// Craft a minimal zip whose snapshot has one tag and one folder, both
 	// with the tracking-pixel color. Restore must NOT write that value.
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	writeJSON := func(name string, v any) {
-		w, err := zw.Create(name)
-		require.NoError(t, err)
-		require.NoError(t, json.NewEncoder(w).Encode(v))
-	}
-	writeJSON("manifest.json", backup.Manifest{
-		Kind:          backup.ManifestKind,
-		Version:       backup.ManifestVersion,
-		SchemaVersion: backup.CurrentSchemaVersion,
-	})
 	malicious := `red url("https://evil/exfil")`
-	writeJSON("database.json", backup.Snapshot{
+	db := mustJSON(t, backup.Snapshot{
 		Version: backup.DatabaseSnapshotVersion,
 		Tags:    []backup.TagRow{{ID: 1, Name: "evil-tag", Color: malicious}},
 		Folders: []backup.FolderRow{{ID: 1, Name: "evil-folder", Color: malicious}},
 	})
-	require.NoError(t, zw.Close())
-	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	require.NoError(t, err)
+	manifest := mustJSON(t, backup.Manifest{
+		Kind:          backup.ManifestKind,
+		Version:       backup.ManifestVersion,
+		SchemaVersion: backup.CurrentSchemaVersion,
+		Checksums:     map[string]string{"database.json": sha256hex(db)},
+	})
+	zr := zipFromEntries(t, map[string][]byte{
+		"manifest.json": manifest,
+		"database.json": db,
+	})
 
-	_, err = svc.Restore(ctx, uid, zr, backup.ModeWipe)
+	_, err := svc.Restore(ctx, uid, zr, backup.ModeWipe)
 	require.NoError(t, err)
 
 	var tagColor, folderColor string

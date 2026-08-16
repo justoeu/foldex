@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -19,16 +20,40 @@ import (
 )
 
 type fakeList struct {
-	out   []Entry
-	err   error
-	q     ListQuery
-	calls int
+	out             []Entry
+	err             error
+	q               ListQuery
+	calls           int
+	counts          EntryCounts
+	countsErr       error
+	countsUID       authctx.UserID
+	countsCalls     int
+	previewOut      []PreviewStatus
+	previewErr      error
+	previewIDs      []int64
+	previewFolderID *int64
+	previewUID      authctx.UserID
+	previewCalls    int
+}
+
+func (f *fakeList) Counts(_ context.Context, uid authctx.UserID) (EntryCounts, error) {
+	f.countsCalls++
+	f.countsUID = uid
+	return f.counts, f.countsErr
 }
 
 func (f *fakeList) List(_ context.Context, _ authctx.UserID, q ListQuery) ([]Entry, error) {
 	f.calls++
 	f.q = q
 	return f.out, f.err
+}
+
+func (f *fakeList) PreviewStatuses(_ context.Context, uid authctx.UserID, ids []int64, folderID *int64) ([]PreviewStatus, error) {
+	f.previewCalls++
+	f.previewUID = uid
+	f.previewIDs = ids
+	f.previewFolderID = folderID
+	return f.previewOut, f.previewErr
 }
 
 type fakeFolder struct {
@@ -111,6 +136,62 @@ func TestList_Ungrouped(t *testing.T) {
 	assert.True(t, fl.q.Ungrouped)
 }
 
+func TestCounts_OK(t *testing.T) {
+	fl := &fakeList{counts: EntryCounts{Links: 17, Notes: 4}}
+	rec := httptest.NewRecorder()
+	mount(NewHandler(fl, &fakeFolder{}, nil)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/counts", nil))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"links":17,"notes":4}`, rec.Body.String())
+	assert.Equal(t, authctxtest.DefaultUser, fl.countsUID)
+	assert.Equal(t, 1, fl.countsCalls)
+}
+
+func TestCounts_RepoErr(t *testing.T) {
+	rec := httptest.NewRecorder()
+	mount(NewHandler(&fakeList{countsErr: errors.New("db")}, &fakeFolder{}, nil)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/counts", nil))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestPreviewStatuses_OK(t *testing.T) {
+	status := "ok"
+	fl := &fakeList{previewOut: []PreviewStatus{{ID: 7, Found: true, Status: &status}, {ID: 99}}}
+	rec := httptest.NewRecorder()
+	mount(NewHandler(fl, &fakeFolder{}, nil)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/preview-status?id=7&id=99&folder_id=12", nil))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, authctxtest.DefaultUser, fl.previewUID)
+	assert.Equal(t, []int64{7, 99}, fl.previewIDs)
+	if assert.NotNil(t, fl.previewFolderID) {
+		assert.EqualValues(t, 12, *fl.previewFolderID)
+	}
+	assert.Contains(t, rec.Body.String(), `"preview_status":"ok"`)
+	assert.Contains(t, rec.Body.String(), `"found":false`)
+}
+
+func TestPreviewStatuses_RejectsInvalidOrOversizedBatches(t *testing.T) {
+	for _, path := range []string{
+		"/preview-status",
+		"/preview-status?id=0",
+		"/preview-status?id=abc",
+		"/preview-status?" + repeatedPreviewIDs(PreviewStatusMaxIDs+1),
+	} {
+		t.Run(path, func(t *testing.T) {
+			fl := &fakeList{}
+			rec := httptest.NewRecorder()
+			mount(NewHandler(fl, &fakeFolder{}, nil)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.Zero(t, fl.previewCalls)
+		})
+	}
+}
+
+func TestPreviewStatuses_RepoErr(t *testing.T) {
+	rec := httptest.NewRecorder()
+	mount(NewHandler(&fakeList{previewErr: errors.New("db")}, &fakeFolder{}, nil)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/preview-status?id=1", nil))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
 // TestList_RejectsWhenPasswordChangesMidRequest locks RACE-HER-005: token is
 // valid against the hash at gate-in, but password changes before return → 403.
 func TestList_RejectsWhenPasswordChangesMidRequest(t *testing.T) {
@@ -133,3 +214,14 @@ func TestList_RejectsWhenPasswordChangesMidRequest(t *testing.T) {
 
 // silence unused import if CheckUnlock path needs folders package
 var _ = folders.UnlockHeader
+
+func repeatedPreviewIDs(n int) string {
+	q := ""
+	for i := 1; i <= n; i++ {
+		if q != "" {
+			q += "&"
+		}
+		q += "id=" + strconv.Itoa(i)
+	}
+	return q
+}

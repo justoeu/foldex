@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -24,6 +25,32 @@ type fakeBackupSvc struct {
 	exportErr   error
 	validateErr error
 	restoreErr  error
+}
+
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	readDeadline  time.Time
+	writeDeadline time.Time
+}
+
+func (r *deadlineRecorder) SetReadDeadline(deadline time.Time) error {
+	r.readDeadline = deadline
+	return nil
+}
+
+func (r *deadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	r.writeDeadline = deadline
+	return nil
+}
+
+func TestArchiveDeadlinesExtendOnlyTheCurrentResponse(t *testing.T) {
+	recorder := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	before := time.Now().Add(archiveRequestTimeout - time.Second)
+
+	extendArchiveDeadlines(recorder)
+
+	assert.True(t, recorder.readDeadline.After(before))
+	assert.True(t, recorder.writeDeadline.After(before))
 }
 
 func (f *fakeBackupSvc) Export(_ context.Context, _ authctx.UserID, w io.Writer, onCountsReady func(Counts) error) (ExportReport, error) {

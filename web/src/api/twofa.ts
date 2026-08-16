@@ -1,5 +1,5 @@
 import { http } from './client'
-import type { MeResponse } from './auth'
+import type { AuthenticatedMeResponse } from './auth'
 
 /**
  * The second-factor surface.
@@ -24,8 +24,8 @@ export type TwoFactorStatus = {
  * not think of them as different systems. On success the response is a normal
  * authenticated payload, so the caller adopts it exactly like a login.
  */
-export async function verifyTwoFactor(code: string): Promise<MeResponse> {
-  const { data } = await http.post<MeResponse>('/api/auth/2fa/verify', { code })
+export async function verifyTwoFactor(code: string): Promise<AuthenticatedMeResponse> {
+  const { data } = await http.post<AuthenticatedMeResponse>('/api/auth/2fa/verify', { code })
   return data
 }
 
@@ -62,8 +62,10 @@ export async function startTotp(password?: string): Promise<TotpEnrollment> {
  * genuinely cannot reproduce them. In the mandatory-enrollment flow the same
  * response also carries the session, since both factors are now proven.
  */
-export async function confirmTotp(code: string): Promise<MeResponse & { recovery_codes: string[] }> {
-  const { data } = await http.post<MeResponse & { recovery_codes: string[] }>(
+export async function confirmTotp(
+  code: string,
+): Promise<AuthenticatedMeResponse & { recovery_codes: string[] }> {
+  const { data } = await http.post<AuthenticatedMeResponse & { recovery_codes: string[] }>(
     '/api/auth/2fa/totp/confirm', { code })
   return data
 }

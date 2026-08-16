@@ -41,6 +41,10 @@ If you deny the prompt, settings are not saved and no connection test or popup s
 Click the same button again and choose **Allow**. The popup checks the currently configured
 origin before loading tags and asks again only when you explicitly press **Save**.
 
+If browser storage is unavailable, Settings reports **Not saved** and keeps the previous
+configuration; the popup stays disabled and shows the storage read error. Reload the extension
+and retry instead of assuming a failed save changed the backend or token.
+
 ## Usage
 
 Click the icon on any tab → URL and title are pre-filled → pick tags → **Save** (or ⌘/Ctrl+Enter).

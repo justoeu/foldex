@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import App from './App'
 import { renderWithProviders } from './test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from './test/server'
+import { http } from './api/client'
 
 let state: MockState
 
@@ -11,6 +12,13 @@ beforeEach(() => {
   state = freshState()
   state.tags.push({ id: 1, name: 'jira', color: '#1f6feb', icon: null })
   installAxiosMock(state)
+  const fallbackGet = vi.mocked(http.get).getMockImplementation()!
+  vi.mocked(http.get).mockImplementation((async (url: string, ...rest: any[]) => {
+    if (url === '/api/entries/counts') {
+      return { data: { links: state.links.length, notes: state.notes.length } }
+    }
+    return fallbackGet(url, ...rest)
+  }) as never)
   // Reset persisted UI preferences so localStorage state doesn't leak across
   // tests (viewMode/gridCols/sidebarCollapsed all read from localStorage in
   // App.tsx's initializers).
@@ -219,6 +227,79 @@ describe('App', () => {
     expect(document.querySelector('.fx-card-note-badge')).not.toBeNull()
   })
 
+  it('pins a note through the grid-level mutation boundary', async () => {
+    state.notes.push({
+      id: 1, title: 'Pin this note', slug: 'pin-this-note', body_html: '', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    renderWithProviders(<App />)
+    await screen.findByText('Pin this note')
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /^Pin$/i }))
+
+    await waitFor(() => expect(state.notes[0].pinned).toBe(true))
+  })
+
+  it('confirms and deletes a note through the grid-level mutation boundary', async () => {
+    state.notes.push({
+      id: 1, title: 'Delete this note', slug: 'delete-this-note', body_html: '', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    renderWithProviders(<App />)
+    await screen.findByText('Delete this note')
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: /^Delete$/i }))
+    await user.click(await screen.findByRole('button', { name: /^Delete note$/i }))
+
+    await waitFor(() => expect(state.notes).toHaveLength(0))
+  })
+
+  it('uses the global count when every link is inside a folder', async () => {
+    state.folders.push({
+      id: 9, name: 'Archive', color: '#111111', parent_id: null, link_count: 2, folder_count: 0,
+      preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.links.push(
+      {
+        id: 1, url: 'https://one.example', title: 'Folder link one', slug: 'folder-link-one', click_count: 0,
+        preview_status: 'ok', pinned: false, folder_id: 9, created_at: '', updated_at: '', tags: [],
+      },
+      {
+        id: 2, url: 'https://two.example', title: 'Folder link two', slug: 'folder-link-two', click_count: 0,
+        preview_status: 'ok', pinned: false, folder_id: 9, created_at: '', updated_at: '', tags: [],
+      },
+    )
+
+    renderWithProviders(<App />)
+
+    await screen.findByRole('button', { name: /Open folder Archive/i })
+    expect(screen.queryByText('Folder link one')).not.toBeInTheDocument()
+    expect(screen.queryByText('Folder link two')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /All links/i })).toHaveTextContent(/All links\s*2/i)
+    expect(document.querySelector('.fx-pagehead-stats .fx-stat')).toHaveTextContent(/^2links$/i)
+  })
+
+  it('does not derive the global count from loaded pagination', async () => {
+    state.links.push({
+      id: 1, url: 'https://loaded.example', title: 'Loaded link', slug: 'loaded-link', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    })
+    const fallbackGet = vi.mocked(http.get).getMockImplementation()!
+    vi.mocked(http.get).mockImplementation((async (url: string, ...rest: any[]) => {
+      if (url === '/api/entries/counts') return { data: { links: 501, notes: 0 } }
+      return fallbackGet(url, ...rest)
+    }) as never)
+
+    renderWithProviders(<App />)
+
+    await screen.findByText('Loaded link')
+    await waitFor(() => expect(screen.getByRole('button', { name: /All links/i })).toHaveTextContent(/All links\s*501/i))
+    expect(document.querySelector('.fx-pagehead-stats .fx-stat')).toHaveTextContent(/^501links$/i)
+  })
+
   it('A→Z sort interleaves folders, links, and notes by name', async () => {
     state.folders.push({
       id: 1, name: 'Zebra folder', color: '#000', link_count: 0, preview_links: [], preview_folders: [],
@@ -390,6 +471,40 @@ describe('App', () => {
     expect(state.folders[0].parent_id).toBeNull()
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
     expect(screen.queryByLabelText(/delete folder/i)).not.toBeInTheDocument()
+  })
+
+  it('surfaces a partial merge failure, reconciles the view, and skips the success dialog', async () => {
+    state.links.push({
+      id: 1, url: 'https://a', title: 'Alpha', slug: 'alpha', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    })
+    state.notes.push({
+      id: 2, title: 'Beta note', slug: 'beta-note', body_html: '', click_count: 0,
+      pinned: false, folder_id: null, cover_url: null, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    const originalPatch = vi.mocked(http.patch).getMockImplementation()!
+    vi.mocked(http.patch).mockImplementation(((url: string, ...args: unknown[]) => {
+      if (url === '/api/notes/2') return Promise.reject(new Error('offline'))
+      return originalPatch(url, ...args)
+    }) as typeof http.patch)
+    renderWithProviders(<App />)
+    await screen.findByText('Beta note')
+
+    fireEvent.drop(screen.getByText('Alpha').closest('.fx-card') as HTMLElement, {
+      dataTransfer: {
+        types: ['application/x-foldex-note'],
+        getData: (type: string) => type === 'application/x-foldex-note' ? '2' : '',
+      },
+    })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/not every item.*refreshed.*move the remaining item/i)
+    await waitFor(() => expect(state.links[0].folder_id).toBe(state.folders[0]?.id))
+    expect(state.notes[0].folder_id).toBeNull()
+    expect(await screen.findByRole('button', { name: /Open folder New folder/i })).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('Alpha')).not.toBeInTheDocument())
+    expect(screen.getByText('Beta note')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('clicking a locked folder shows the password prompt instead of navigating', async () => {

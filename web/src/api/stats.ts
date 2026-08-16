@@ -36,31 +36,17 @@ export type TagBucket = {
   links: number
 }
 
-export function useStatsSummary() {
-  return useQuery({
-    queryKey: ['stats', 'summary'],
-    queryFn: async () => (await http.get<StatsSummary>('/api/stats/summary')).data,
-  })
+export type StatsDashboard = {
+  summary: StatsSummary
+  daily: DailyPoint[]
+  top: TopLink[]
+  tags: TagBucket[]
 }
 
-export function useStatsDaily(days = 60) {
+export function useStatsDashboard(days = 60, limit = 5) {
   return useQuery({
-    queryKey: ['stats', 'daily', days],
-    queryFn: async () => (await http.get<DailyPoint[]>(`/api/stats/daily?days=${days}`)).data,
-  })
-}
-
-export function useStatsTop(limit = 5) {
-  return useQuery({
-    queryKey: ['stats', 'top', limit],
-    queryFn: async () => (await http.get<TopLink[]>(`/api/stats/top?limit=${limit}`)).data,
-  })
-}
-
-export function useStatsTags() {
-  return useQuery({
-    queryKey: ['stats', 'tags'],
-    queryFn: async () => (await http.get<TagBucket[]>('/api/stats/tags')).data,
+    queryKey: ['stats', 'dashboard', days, limit],
+    queryFn: async () => (await http.get<StatsDashboard>(`/api/stats/dashboard?days=${days}&limit=${limit}`)).data,
   })
 }
 

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
+import { invalidateEntryCounts } from './entries'
 import type { Folder, FolderCreate, FolderUpdate } from './types'
 
 // Header carrying a folder unlock token — matches folders.UnlockHeader /
@@ -133,10 +134,11 @@ export function useDeleteFolder() {
         await http.delete(`/api/folders/${id}${cascade}`)
       }
     },
-    onSuccess: () => {
+    onSuccess: (_data, args) => {
       qc.invalidateQueries({ queryKey: ['folders'] })
       qc.invalidateQueries({ queryKey: ['links'] })
       qc.invalidateQueries({ queryKey: ['entries'] })
+      if (typeof args === 'object' && args.cascade) invalidateEntryCounts(qc)
     },
   })
 }

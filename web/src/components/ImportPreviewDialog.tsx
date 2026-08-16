@@ -5,8 +5,8 @@ import { Icon, I } from './icons'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import {
-  applyImport,
   validateImport,
+  useApplyImport,
   type ImportFormat,
   type ImportMode,
   type ImportResult,
@@ -29,44 +29,82 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
   const [excluded, setExcluded] = useState<Set<string>>(new Set())
   const [applying, setApplying] = useState(false)
   const [report, setReport] = useState<ImportResult | null>(null)
+  const validationAbortRef = useRef<AbortController | null>(null)
+  const applyAbortRef = useRef<AbortController | null>(null)
+  const applyLockedRef = useRef(false)
+  const applyImport = useApplyImport()
 
-  useEscape(onClose, true)
+  const requestClose = () => {
+    if (applyLockedRef.current || report) return
+    validationAbortRef.current?.abort()
+    onClose()
+  }
+
+  useEscape(requestClose, true)
 
   useEffect(() => {
-    let alive = true
+    const controller = new AbortController()
+    validationAbortRef.current = controller
     setLoading(true)
+    setValidation(null)
+    setExcluded(new Set())
     setErrMsg(null)
-    validateImport(file, format)
-      .then((v) => { if (alive) setValidation(v) })
-      .catch((e) => { if (alive) setErrMsg(extractErr(e, t('common.unknown_error'))) })
-      .finally(() => alive && setLoading(false))
-    return () => { alive = false }
+    validateImport(file, format, controller.signal)
+      .then((v) => { if (!controller.signal.aborted) setValidation(v) })
+      .catch((e) => {
+        if (!controller.signal.aborted) setErrMsg(extractErr(e, t('common.unknown_error')))
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+        if (validationAbortRef.current === controller) validationAbortRef.current = null
+      })
+    return () => {
+      controller.abort()
+      if (validationAbortRef.current === controller) validationAbortRef.current = null
+    }
   }, [file, format, t])
+
+  useEffect(() => () => applyAbortRef.current?.abort(), [file, format])
 
   // Effective counts after the user's folder exclusions.
   const effectiveCounts = useMemo(() => {
     if (!validation) return { links: 0, folders: 0, conflicts: 0 }
-    let links = 0
-    let conflicts = 0
-    for (const l of validation.links) {
-      if (l.folder && excluded.has(l.folder)) continue
-      links++
-      if (l.conflict) conflicts++
+    let links = validation.ungrouped.links
+    let conflicts = validation.ungrouped.conflicts
+    let folders = 0
+    for (const folder of validation.folders) {
+      if (excluded.has(folder.path)) continue
+      links += folder.count
+      conflicts += folder.conflicts
+      folders++
     }
-    const folders = validation.folders.filter((f) => !excluded.has(f.path)).length
     return { links, folders, conflicts }
   }, [validation, excluded])
 
   const handleApply = async () => {
+    if (applyLockedRef.current) return
+    applyLockedRef.current = true
+    const controller = new AbortController()
+    applyAbortRef.current = controller
     setApplying(true)
     setErrMsg(null)
     try {
-      const r = await applyImport(file, format, mode, Array.from(excluded))
-      setReport(r)
+      const r = await applyImport.mutateAsync({
+        file,
+        format,
+        mode,
+        excludeFolders: Array.from(excluded),
+        signal: controller.signal,
+      })
+      if (!controller.signal.aborted) setReport(r)
     } catch (e: unknown) {
-      setErrMsg(extractErr(e, t('common.unknown_error')))
+      if (!controller.signal.aborted) {
+        applyLockedRef.current = false
+        setErrMsg(extractErr(e, t('common.unknown_error')))
+      }
     } finally {
-      setApplying(false)
+      if (applyAbortRef.current === controller) applyAbortRef.current = null
+      if (!controller.signal.aborted) setApplying(false)
     }
   }
 
@@ -95,7 +133,7 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
               {file.name} · {format === 'netscape' ? 'Bookmarks HTML' : 'Foldex JSON'}
             </div>
           </div>
-          <button className="fx-confirm-x" onClick={onClose} aria-label={t('common.close')}>
+          <button className="fx-confirm-x" onClick={requestClose} disabled={applying || !!report} aria-label={t('common.close')}>
             <Icon d={I.x} size={14} />
           </button>
         </header>
@@ -103,6 +141,12 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
         <div className="fx-modal-body" style={{ gridTemplateColumns: '1fr' }}>
           <div className="fx-modal-col">
             {loading && <div style={{ color: 'var(--fx-ink-4)' }}>{t('common.validating')}</div>}
+
+            {applying && (
+              <div role="status" className="fx-confirm-msg" style={{ color: 'var(--fx-ink-3)' }}>
+                <Icon d={I.alert} size={14} /> {t('import.operation_locked')}
+              </div>
+            )}
 
             {errMsg && (
               <div className="fx-confirm-msg" style={{ color: 'var(--fx-danger)' }}>
@@ -117,7 +161,7 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
                 <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)', marginTop: 6 }}>
                   {t('import.mode_section')}
                 </div>
-                <ModePicker value={mode} onChange={setMode} conflicts={validation.conflicts.links} t={t} />
+                <ModePicker value={mode} onChange={setMode} conflicts={validation.conflicts.links} disabled={applying} t={t} />
 
                 {validation.folders.length > 0 && (
                   <>
@@ -126,11 +170,11 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
                         {t('import.folders_section_title')}
                       </div>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <button type="button" className="fx-pillbtn" onClick={selectAll} style={{ fontSize: 11 }}>{t('import.select_all')}</button>
-                        <button type="button" className="fx-pillbtn" onClick={selectNone} style={{ fontSize: 11 }}>{t('import.select_none')}</button>
+                        <button type="button" className="fx-pillbtn" onClick={selectAll} disabled={applying} style={{ fontSize: 11 }}>{t('import.select_all')}</button>
+                        <button type="button" className="fx-pillbtn" onClick={selectNone} disabled={applying} style={{ fontSize: 11 }}>{t('import.select_none')}</button>
                       </div>
                     </div>
-                    <FolderList folders={validation.folders} excluded={excluded} onToggle={toggle} />
+                    <FolderList folders={validation.folders} excluded={excluded} onToggle={toggle} disabled={applying} />
                   </>
                 )}
               </>
@@ -148,7 +192,7 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
             </button>
           ) : (
             <>
-              <button className="fx-confirm-btn" onClick={onClose}>{t('common.cancel')}</button>
+              <button className="fx-confirm-btn" onClick={requestClose} disabled={applying}>{t('common.cancel')}</button>
               <button
                 className={'fx-confirm-btn ' + (mode === 'wipe' ? 'fx-confirm-btn-danger' : 'fx-confirm-btn-primary')}
                 onClick={handleApply}
@@ -210,29 +254,33 @@ function Row({ label, value, accent }: { label: string; value: string; accent?: 
 }
 
 function ModePicker({
-  value, onChange, conflicts, t,
+  value, onChange, conflicts, disabled, t,
 }: {
   value: ImportMode
   onChange: (m: ImportMode) => void
   conflicts: number
+  disabled: boolean
   t: TFunction
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <ModeOption
         active={value === 'skip'}
+        disabled={disabled}
         onClick={() => onChange('skip')}
         title={t('import.mode_skip_title')}
         desc={t('import.mode_skip_desc', { count: conflicts })}
       />
       <ModeOption
         active={value === 'duplicate'}
+        disabled={disabled}
         onClick={() => onChange('duplicate')}
         title={t('import.mode_duplicate_title')}
         desc={t('import.mode_duplicate_desc')}
       />
       <ModeOption
         active={value === 'wipe'}
+        disabled={disabled}
         onClick={() => onChange('wipe')}
         title={t('import.mode_wipe_title')}
         desc={t('import.mode_wipe_desc', { count: conflicts })}
@@ -243,25 +291,27 @@ function ModePicker({
 }
 
 function ModeOption({
-  active, onClick, title, desc, danger,
+  active, onClick, title, desc, danger, disabled,
 }: {
   active: boolean
   onClick: () => void
   title: string
   desc: string
   danger?: boolean
+  disabled: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       style={{
         textAlign: 'left',
         padding: '10px 12px',
         borderRadius: 10,
         border: active ? `1.5px solid ${danger ? 'var(--fx-danger)' : 'var(--fx-accent)'}` : '1px solid var(--fx-border)',
         background: active ? (danger ? 'rgba(244,63,94,0.06)' : 'rgba(99,102,241,0.06)') : 'transparent',
-        cursor: 'pointer',
+        cursor: disabled ? 'not-allowed' : 'pointer',
         display: 'flex',
         flexDirection: 'column',
         gap: 3,
@@ -274,11 +324,12 @@ function ModeOption({
 }
 
 function FolderList({
-  folders, excluded, onToggle,
+  folders, excluded, onToggle, disabled,
 }: {
   folders: { path: string; name: string; count: number }[]
   excluded: Set<string>
   onToggle: (path: string) => void
+  disabled: boolean
 }) {
   return (
     <ul style={{ listStyle: 'none', margin: 0, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 280, overflowY: 'auto', border: '1px solid var(--fx-border)', borderRadius: 10, padding: 6 }}>
@@ -291,6 +342,7 @@ function FolderList({
                 type="checkbox"
                 checked={checked}
                 onChange={() => onToggle(f.path)}
+                disabled={disabled}
                 style={{ accentColor: 'var(--fx-accent)' }}
               />
               <span style={{ fontSize: 13, color: 'var(--fx-ink)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

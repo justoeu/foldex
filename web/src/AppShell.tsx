@@ -12,7 +12,7 @@ import type { Entry, Folder } from './api/types'
 import type { AppWorkspaceController, AppView } from './AppWorkspace'
 import type { AppNavigationController } from './AppNavigation'
 import type { AppDialogController } from './AppDialogs'
-import type { AppDndController } from './AppDnd'
+import type { AppDndController } from './hooks/useAppDndController'
 
 const ImportPage = lazy(() => import('./pages/ImportPage').then((module) => ({ default: module.ImportPage })))
 const StatsPage = lazy(() => import('./pages/StatsPage').then((module) => ({ default: module.StatsPage })))
@@ -162,7 +162,7 @@ function ActivePage(props: Props) {
   }
 }
 
-function HomePage({ workspace, navigation, dialogs, dnd, content }: Props) {
+function HomePage({ workspace, navigation, dialogs, dnd, content, totalLinks }: Props) {
   const reload = () => {
     void content.refetchEntries()
     void content.refetchFolders()
@@ -171,6 +171,7 @@ function HomePage({ workspace, navigation, dialogs, dnd, content }: Props) {
   return (
     <Home
       entries={content.entries}
+      totalLinks={totalLinks}
       folders={content.folders}
       allFolders={content.allFolders}
       openFolder={navigation.openFolder}

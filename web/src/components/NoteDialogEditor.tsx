@@ -2,12 +2,11 @@ import { useRef } from 'react'
 import { EditorContent } from '@tiptap/react'
 import { useTranslation } from 'react-i18next'
 import type { Note } from '../api/types'
-import { useTags } from '../api/tags'
-import { slugifyClient } from '../lib/slugify'
 import { FolderPicker } from './FolderPicker'
 import { Icon, I } from './icons'
 import { NoteToolbar } from './NoteToolbar'
-import { NoteDialogTagPicker } from './NoteDialogTagPicker'
+import { SlugField } from './SlugField'
+import { TagPicker } from './TagPicker'
 import { useNoteDialogController } from './useNoteDialogController'
 
 type Props = {
@@ -18,7 +17,6 @@ type Props = {
 
 export function NoteDialogEditor({ note, defaultFolderId, onClose }: Props) {
   const { t } = useTranslation()
-  const { data: tags = [] } = useTags()
   const controller = useNoteDialogController({ note, defaultFolderId, onClose })
   const imageInputRef = useRef<HTMLInputElement>(null)
 
@@ -33,32 +31,16 @@ export function NoteDialogEditor({ note, defaultFolderId, onClose }: Props) {
             </div>
           </label>
 
-          <label className="fx-field">
-            <span className="fx-field-label">{t('note_dialog.slug_label')}</span>
-            <div className="fx-input">
-              <span style={{ color: 'var(--fx-ink-4)', fontFamily: 'var(--fx-mono)', fontSize: 12, paddingRight: 4 }}>/n/</span>
-              <input
-                value={controller.slug}
-                onChange={(event) => { controller.setSlug(event.target.value); controller.setSlugDirty(true) }}
-                placeholder={slugifyClient(controller.title) || 'my-note'}
-                aria-label={t('note_dialog.slug_aria')}
-                pattern="[a-z0-9]+(-[a-z0-9]+)*"
-                style={{ fontFamily: 'var(--fx-mono)' }}
-              />
-              {controller.slugDirty && (
-                <button
-                  type="button"
-                  className="fx-iconbtn"
-                  onClick={() => { controller.setSlug(slugifyClient(controller.title)); controller.setSlugDirty(false) }}
-                  data-tooltip={t('note_dialog.slug_reset_tooltip')}
-                  aria-label={t('note_dialog.slug_reset_tooltip')}
-                >
-                  <Icon d={I.refresh} size={13} />
-                </button>
-              )}
-            </div>
-            <span className="fx-field-hint">{t('note_dialog.slug_hint')}</span>
-          </label>
+          <SlugField
+            title={controller.title}
+            slug={controller.slug}
+            slugDirty={controller.slugDirty}
+            setSlug={controller.setSlug}
+            setSlugDirty={controller.setSlugDirty}
+            routePrefix="/n/"
+            i18nPrefix="note_dialog"
+            fallback="my-note"
+          />
 
           <div className="fx-field">
             <span className="fx-field-label">{t('note_dialog.body_label')}</span>
@@ -84,7 +66,7 @@ export function NoteDialogEditor({ note, defaultFolderId, onClose }: Props) {
             )}
           </div>
 
-          <NoteDialogTagPicker tags={tags} selected={controller.selectedTags} setSelected={controller.setSelectedTags} />
+          <TagPicker picker={controller.tagPicker} i18nPrefix="note_dialog" />
 
           <label className="fx-field">
             <span className="fx-field-label">{t('note_dialog.folder_label')}</span>

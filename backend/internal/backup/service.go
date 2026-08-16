@@ -352,7 +352,10 @@ func (w *boundedWriter) Write(p []byte) (int, error) {
 
 func (s *Service) Validate(ctx context.Context, uid authctx.UserID, zr *zip.Reader) (Validation, error) {
 	v := Validation{Conflicts: Conflicts{}, Warnings: []string{}, Errors: []string{}}
-	preflight := inspectBackupArchive(zr)
+	preflight := inspectBackupArchive(ctx, zr)
+	if err := ctx.Err(); err != nil {
+		return v, err
+	}
 	v.Manifest = preflight.manifest
 	v.Warnings = append(v.Warnings, preflight.warnings...)
 	v.Errors = append(v.Errors, preflight.errors...)
@@ -374,7 +377,7 @@ func (s *Service) Validate(ctx context.Context, uid authctx.UserID, zr *zip.Read
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers shared between Export and Validate.
 
-func readManifest(archive *inspectedArchive) (*Manifest, error) {
+func readManifest(ctx context.Context, archive *inspectedArchive) (*Manifest, error) {
 	entry, exists := archive.entries["manifest.json"]
 	if !exists {
 		return nil, fmt.Errorf("manifest.json missing")
@@ -384,7 +387,7 @@ func readManifest(archive *inspectedArchive) (*Manifest, error) {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
 	defer f.Close()
-	raw, err := readAtMost(f, maxManifestJSONBytes)
+	raw, err := readAtMost(contextReader{ctx: ctx, reader: f}, maxManifestJSONBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
@@ -395,7 +398,7 @@ func readManifest(archive *inspectedArchive) (*Manifest, error) {
 	return &m, nil
 }
 
-func readSnapshotFromZip(archive *inspectedArchive) (*Snapshot, error) {
+func readSnapshotFromZip(ctx context.Context, archive *inspectedArchive) (*Snapshot, error) {
 	entry, exists := archive.entries["database.json"]
 	if !exists {
 		return nil, errors.New("database.json missing")
@@ -405,7 +408,7 @@ func readSnapshotFromZip(archive *inspectedArchive) (*Snapshot, error) {
 		return nil, fmt.Errorf("open database.json: %w", err)
 	}
 	defer f.Close()
-	limited := &io.LimitedReader{R: f, N: maxDatabaseJSONBytes + 1}
+	limited := &io.LimitedReader{R: contextReader{ctx: ctx, reader: f}, N: maxDatabaseJSONBytes + 1}
 	var snap Snapshot
 	decoder := json.NewDecoder(limited)
 	decoder.DisallowUnknownFields()

@@ -10,6 +10,8 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/ports"
 )
 
 // Client holds a concrete *minio.Client, so we can't swap in a fake. The unit
@@ -36,6 +38,7 @@ func TestReadAll(t *testing.T) {
 }
 
 func TestCheckServeSize(t *testing.T) {
+	assert.ErrorIs(t, ErrObjectTooLarge, ports.ErrObjectTooLarge)
 	require.NoError(t, checkServeSize(0))
 	require.NoError(t, checkServeSize(1024))
 	require.NoError(t, checkServeSize(MaxServeObjectBytes))

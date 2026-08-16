@@ -4,12 +4,12 @@ import {
   normalizeBaseUrl,
   requestOriginAccess,
   setStoredConfig,
-} from './config.js';
+} from "./config.js";
 
 function authHeaders(token, secret) {
   const headers = {};
-  if (token) headers.Authorization = 'Bearer ' + token;
-  if (secret) headers['X-Foldex-Secret'] = secret;
+  if (token) headers.Authorization = "Bearer " + token;
+  if (secret) headers["X-Foldex-Secret"] = secret;
   return headers;
 }
 
@@ -35,63 +35,72 @@ export async function testConnection(
   const config = normalizeOptions(values);
   await requestOriginAccess(config.baseUrl, chromeApi);
 
-  const resp = await fetchImpl(apiUrl(config.baseUrl, '/api/tags'), {
+  const resp = await fetchImpl(apiUrl(config.baseUrl, "/api/tags"), {
     headers: authHeaders(config.apiToken, config.sharedSecret),
-    redirect: 'error',
+    redirect: "error",
   });
   if (resp.status === 401 || resp.status === 403) {
-    throw new Error('the server rejected the token (HTTP ' + resp.status + ')');
+    throw new Error("the server rejected the token (HTTP " + resp.status + ")");
   }
-  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
   const tags = await resp.json();
   return tags.length;
 }
 
-function initOptionsPage() {
-  const $ = (id) => document.getElementById(id);
-  const statusEl = $('status');
+export function initOptionsPage({
+  documentApi = document,
+  chromeApi = chrome,
+} = {}) {
+  const $ = (id) => documentApi.getElementById(id);
+  const statusEl = $("status");
 
   function setStatus(msg, level) {
-    statusEl.textContent = msg || '';
-    statusEl.className = 'status' + (level ? ' ' + level : '');
+    statusEl.textContent = msg || "";
+    statusEl.className = "status" + (level ? " " + level : "");
   }
 
   function readOptions() {
     return {
-      baseUrl: $('baseUrl').value,
-      apiToken: $('apiToken').value,
-      sharedSecret: $('sharedSecret').value,
+      baseUrl: $("baseUrl").value,
+      apiToken: $("apiToken").value,
+      sharedSecret: $("sharedSecret").value,
     };
   }
 
-  getStoredConfig(chrome)
+  const ready = getStoredConfig(chromeApi)
     .then((config) => {
-      $('baseUrl').value = config.baseUrl;
-      $('apiToken').value = config.apiToken;
-      $('sharedSecret').value = config.sharedSecret;
+      $("baseUrl").value = config.baseUrl;
+      $("apiToken").value = config.apiToken;
+      $("sharedSecret").value = config.sharedSecret;
     })
-    .catch((error) => setStatus('Could not load settings: ' + error.message, 'error'));
+    .catch((error) =>
+      setStatus("Could not load settings: " + error.message, "error"),
+    );
 
-  $('save').addEventListener('click', async () => {
-    setStatus('Requesting access…');
+  async function save() {
+    setStatus("Requesting access…");
     try {
-      const config = await saveOptions(readOptions());
-      $('baseUrl').value = config.baseUrl;
-      setStatus('Saved.', 'ok');
+      const config = await saveOptions(readOptions(), { chromeApi });
+      $("baseUrl").value = config.baseUrl;
+      setStatus("Saved.", "ok");
     } catch (error) {
-      setStatus('Not saved: ' + error.message, 'error');
+      setStatus("Not saved: " + error.message, "error");
     }
-  });
+  }
 
-  $('test').addEventListener('click', async () => {
-    setStatus('Testing…');
+  async function testCurrentConnection() {
+    setStatus("Testing…");
     try {
-      const tagCount = await testConnection(readOptions());
-      setStatus('Connected. ' + tagCount + ' tag(s) visible.', 'ok');
+      const tagCount = await testConnection(readOptions(), { chromeApi });
+      setStatus("Connected. " + tagCount + " tag(s) visible.", "ok");
     } catch (error) {
-      setStatus('Failed: ' + error.message, 'error');
+      setStatus("Failed: " + error.message, "error");
     }
-  });
+  }
+
+  $("save").addEventListener("click", save);
+  $("test").addEventListener("click", testCurrentConnection);
+  return { ready, save, testCurrentConnection };
 }
 
-if (typeof document !== 'undefined') initOptionsPage();
+if (typeof document !== "undefined") initOptionsPage();

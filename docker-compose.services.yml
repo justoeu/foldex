@@ -25,13 +25,15 @@ services:
         aliases: [db]
 
   # S3-compatible object store (screenshots, note images, backup files).
-  # Pin matches CLAUDE.md §1 — bump intentionally, not via :latest.
+  # Pin matches CLAUDE.md §1 — bump intentionally, not via a moving channel.
   #
   # Root credentials (RUSTFS_ROOT_*) are ONLY for the server process + the
   # one-shot rustfs-init bootstrap. The Foldex backend never sees them —
   # it authenticates as the app user provisioned by rustfs-init.
   rustfs:
-    image: rustfs/rustfs:1.0.0-beta.12
+    # RustFS has no GA release yet. Pin its newest non-preview release candidate
+    # by digest instead of following the mutable latest/rc/main channels.
+    image: rustfs/rustfs:1.0.0-rc.2@sha256:7d6d361c49c08d427250fb59aae5d78df83d644c3405d9ccf4b21cda0b0692d0
     container_name: foldex-rustfs
     restart: unless-stopped
     security_opt:
@@ -70,11 +72,12 @@ services:
   # One-shot: create app IAM user + bucket-scoped policy. Backend depends on
   # this completing successfully (see docker-compose.yml).
   rustfs-init:
+    # Build the one-shot locally: this container receives both root and app
+    # secrets, so it must never resolve through a mutable remote Foldex tag.
     build:
       context: ./backend
       dockerfile: Dockerfile
       target: rustfs-bootstrap
-    image: justoeu/foldex-rustfs-bootstrap:${FOLDEX_VERSION:-latest}
     container_name: foldex-rustfs-init
     restart: "no"
     depends_on:

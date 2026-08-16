@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -100,6 +101,38 @@ func TestHandler_SubscribeUnsubscribe_OK(t *testing.T) {
 	assert.Empty(t, list)
 }
 
+func TestHandler_Subscribe_MapsSubscriptionLimit(t *testing.T) {
+	h, _, _ := newPushRouter(t, false)
+	for i := range push.MaxSubscriptionsPerUser {
+		rr := doPush(t, h, http.MethodPost, "/push/subscriptions", map[string]any{
+			"endpoint": fmt.Sprintf("https://push.example/handler/%d", i),
+			"p256dh":   "key",
+			"auth":     "auth",
+		})
+		require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+	}
+
+	rr := doPush(t, h, http.MethodPost, "/push/subscriptions", map[string]any{
+		"endpoint": "https://push.example/handler/overflow",
+		"p256dh":   "key",
+		"auth":     "auth",
+	})
+	assert.Equal(t, http.StatusConflict, rr.Code)
+	assert.Contains(t, rr.Body.String(), `"code":"subscription_limit_reached"`)
+}
+
+func TestHandler_Subscribe_MapsInvalidSubscription(t *testing.T) {
+	h, _, _ := newPushRouter(t, false)
+	rr := doPush(t, h, http.MethodPost, "/push/subscriptions", map[string]any{
+		"endpoint": "https://push.example/missing-key",
+		"p256dh":   "",
+		"auth":     "auth",
+	})
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), `"code":"invalid_subscription"`)
+}
+
 func TestHandler_Unsubscribe_CannotDeleteAnotherUsersEndpoint(t *testing.T) {
 	pool := testdb.Shared(t)
 	ctx := context.Background()
@@ -192,5 +225,5 @@ type failListStore struct{}
 func (f *failListStore) List(context.Context, authctx.UserID) ([]push.Subscription, error) {
 	return nil, assert.AnError
 }
-func (f *failListStore) DeleteByEndpoint(context.Context, string) error { return nil }
-func (f *failListStore) MarkUsed(context.Context, int64) error          { return nil }
+func (f *failListStore) DeleteGone(context.Context, authctx.UserID, []int64) error { return nil }
+func (f *failListStore) MarkUsed(context.Context, authctx.UserID, []int64) error   { return nil }

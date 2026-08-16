@@ -17,6 +17,7 @@ export function useFolderPickerController({ selected, onChange, parentId, exclud
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState('')
   const [highlight, setHighlight] = useState(0)
+  const [createError, setCreateError] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -44,15 +45,18 @@ export function useFolderPickerController({ selected, onChange, parentId, exclud
   const close = (clearFilter = false) => {
     setOpen(false)
     if (clearFilter) setFilter('')
+    setCreateError(null)
   }
 
-  useCloseFolderPickerOnOutside(open, rootRef, setOpen, setFilter)
+  useCloseFolderPickerOnOutside(open, rootRef, setOpen, setFilter, setCreateError)
   const { busy, commit } = useFolderPickerCommit({
     filter,
     parentId,
     onChange,
     inputRef,
     createFolder: createFolder.mutateAsync,
+    createErrorMessage: t('folder_picker.create_error'),
+    setCreateError,
     close,
   })
 
@@ -62,12 +66,16 @@ export function useFolderPickerController({ selected, onChange, parentId, exclud
 
   const onInputChange = (value: string) => {
     setFilter(value)
+    setCreateError(null)
     setOpen(true)
     setHighlight(0)
   }
 
   const toggle = () => {
-    setOpen((value) => !value)
+    setOpen((value) => {
+      if (value) setCreateError(null)
+      return !value
+    })
     inputRef.current?.focus()
   }
 
@@ -78,6 +86,7 @@ export function useFolderPickerController({ selected, onChange, parentId, exclud
     filter,
     highlight,
     busy,
+    createError,
     rows,
     selected,
     selectedFolder,
@@ -96,6 +105,7 @@ function useCloseFolderPickerOnOutside(
   rootRef: RefObject<HTMLDivElement | null>,
   setOpen: Dispatch<SetStateAction<boolean>>,
   setFilter: Dispatch<SetStateAction<string>>,
+  setCreateError: Dispatch<SetStateAction<string | null>>,
 ): void {
   useEffect(() => {
     if (!open) return
@@ -103,10 +113,11 @@ function useCloseFolderPickerOnOutside(
       if (rootRef.current?.contains(event.target as Node)) return
       setOpen(false)
       setFilter('')
+      setCreateError(null)
     }
     window.addEventListener('mousedown', onMouseDown)
     return () => window.removeEventListener('mousedown', onMouseDown)
-  }, [open, rootRef, setFilter, setOpen])
+  }, [open, rootRef, setCreateError, setFilter, setOpen])
 }
 
 function useFolderPickerCommit({
@@ -115,6 +126,8 @@ function useFolderPickerCommit({
   onChange,
   inputRef,
   createFolder,
+  createErrorMessage,
+  setCreateError,
   close,
 }: {
   filter: string
@@ -122,11 +135,14 @@ function useFolderPickerCommit({
   onChange: (id: number | null) => void
   inputRef: RefObject<HTMLInputElement | null>
   createFolder: (body: { name: string; parent_id: number | null }) => Promise<{ id: number }>
+  createErrorMessage: string
+  setCreateError: Dispatch<SetStateAction<string | null>>
   close: (clearFilter?: boolean) => void
 }) {
   const [busy, setBusy] = useState(false)
   const commit = async (row: FolderPickerRow) => {
     if (row.kind !== 'create') {
+      setCreateError(null)
       onChange(row.kind === 'none' ? null : row.id)
       close(true)
       return
@@ -136,12 +152,14 @@ function useFolderPickerCommit({
       inputRef.current?.focus()
       return
     }
+    setCreateError(null)
     setBusy(true)
     try {
       const folder = await createFolder({ name, parent_id: parentId ?? null })
       onChange(folder.id)
       close(true)
     } catch {
+      setCreateError(createErrorMessage)
       inputRef.current?.focus()
     } finally {
       setBusy(false)

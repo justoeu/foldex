@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -108,6 +109,63 @@ func TestDummyHashIsARealBcryptHashThatMatchesNothingUseful(t *testing.T) {
 	assert.False(t, pwhash.Verify(dummyHash, "password"), "the dummy must not accept a common password")
 }
 
+func TestAuthWireResponseVariantsMarshalOnlyTheirContractFields(t *testing.T) {
+	m, err := mailer.New(mailer.Config{Driver: "log"}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	h := &Handler{features: AuthFeatures{GoogleOAuth: true}, mailer: m}
+	u := User{Email: "admin@example.com", Name: "Admin"}
+
+	totp, err := h.pendingPayload(u, PurposeTOTP, false)
+	require.NoError(t, err)
+	enrollment, err := h.pendingPayload(u, PurposeEnroll2FA, false)
+	require.NoError(t, err)
+	conversion, err := h.pendingPayload(u, PurposeConvertGoogle, false)
+	require.NoError(t, err)
+
+	cases := []struct {
+		name   string
+		value  authWireResponse
+		fields []string
+	}{
+		{"anonymous", anonymousAuthResponse{Status: statusAnonymous, Features: h.features},
+			[]string{"status", "features"}},
+		{"setup required", setupRequiredAuthResponse{Status: statusSetupRequired, Features: h.features},
+			[]string{"status", "features"}},
+		{"authenticated", h.authenticatedPayload(u, "csrf"),
+			[]string{"status", "user", "csrf_token", "features"}},
+		{"TOTP", totp,
+			[]string{"status", "purpose", "email", "methods", "expires_in", "max_attempts", "features"}},
+		{"enrollment", enrollment,
+			[]string{"status", "purpose", "email", "methods", "expires_in", "max_attempts", "features", "reason"}},
+		{"conversion", conversion,
+			[]string{"status", "purpose", "email", "methods", "expires_in", "max_attempts", "features"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, marshalErr := json.Marshal(tc.value)
+			require.NoError(t, marshalErr)
+			var fields map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(body, &fields))
+			assert.ElementsMatch(t, tc.fields, mapKeys(fields))
+		})
+	}
+}
+
+func TestPendingPayloadRejectsAnInvalidPurpose(t *testing.T) {
+	h := &Handler{}
+	payload, err := h.pendingPayload(User{Email: "admin@example.com"}, ChallengePurpose("impossible"), false)
+	assert.ErrorIs(t, err, errInvalidChallengePurpose)
+	assert.Nil(t, payload)
+}
+
+func mapKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
 // newLimiterOnlyHandler builds a Handler for tests that only touch its
 // in-memory rate-limit buckets. The repository is nil on purpose: nothing on
 // this path reaches the database, and wiring one would need a container for a
@@ -122,9 +180,11 @@ func newLimiterOnlyHandler(t *testing.T) *Handler {
 	return NewHandler(HandlerConfig{
 		Mailer:         m,
 		MailDispatcher: d,
-		TTL:            DefaultTTL(),
-		Logger:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		BaseURL:        "https://foldex.test",
+		TTL: SessionTTL{
+			Access: time.Minute, Refresh: time.Hour, Absolute: 24 * time.Hour, Grace: time.Second,
+		},
+		Logger:  slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		BaseURL: "https://foldex.test",
 	})
 }
 

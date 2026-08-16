@@ -112,17 +112,18 @@ const buildRoutes = (): Record<Method, Route[]> => ({
       }
       return s.statsStorage ?? { objects: 0, total_bytes: 0 }
     } },
+    { url: /^\/api\/backup\/download\/status$/, handle: backupDownloadStatus },
   ],
   post: [
     { url: /^\/api\/tags$/, handle: createTag },
     { url: /^\/api\/folders$/, handle: createFolder },
     { url: /^\/api\/links\/(\d+)\/refresh-preview$/, handle: () => null },
-    { url: /^\/api\/links\/(\d+)\/screenshot$/, handle: captureScreenshot },
     { url: /^\/api\/links\/(\d+)\/seen-change$/, handle: seenChange },
     { url: /^\/api\/links\/(\d+)\/image$/, handle: uploadLinkImage },
     { url: /^\/api\/links$/, handle: createLink },
     { url: /^\/api\/notes\/images$/, handle: uploadNoteImage },
     { url: /^\/api\/notes$/, handle: createNote },
+    { url: /^\/api\/backup\/download$/, handle: backupDownloadTicket },
     { url: /^\/api\/backup$/, handle: backupExport },
     { url: /^\/api\/backup\/validate$/, handle: backupValidate },
     { url: /^\/api\/backup\/restore$/, handle: backupRestore },
@@ -656,13 +657,6 @@ function deleteLink(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockSt
   return null
 }
 
-function captureScreenshot(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): { url: string } {
-  const id = Number(m[1])
-  const link = s.links.find((x) => x.id === id)
-  if (!link) throw notFound()
-  return { url: `/api/files/screenshots/${id}.png` }
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // Notes + entries mock handlers.
 
@@ -827,6 +821,28 @@ function backupExport(_m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: Moc
   return new Blob([bytes.buffer as ArrayBuffer], { type: 'application/zip' })
 }
 
+function backupDownloadTicket() {
+  return {
+    id: 'mock-backup-download',
+    download_url: '/api/backup/download?id=mock-backup-download&token=mock-one-time-token',
+    status_url: '/api/backup/download/status?id=mock-backup-download',
+    filename: 'foldex-backup-20260514T030000Z.zip',
+    created_at: '2026-05-14T03:00:00Z',
+    expires_at: '2026-05-14T03:01:00Z',
+  }
+}
+
+function backupDownloadStatus() {
+  return {
+    id: 'mock-backup-download',
+    state: 'complete',
+    created_at: '2026-05-14T03:00:00Z',
+    duration_ms: 42,
+    size_bytes: 1024,
+    counts: defaultManifest().counts,
+  }
+}
+
 function backupValidate(_m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
   return (
     s.backupValidation ?? {
@@ -844,9 +860,9 @@ function backupRestore(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s
   return (
     s.backupRestore ?? {
       mode: s.lastRestoreMode,
-      inserted: { links: 5, tags: 2, folders: 1, link_tags: 3, click_logs: 8, files: 0, file_bytes: 0 },
-      skipped:  { links: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
-      wiped:    { links: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+      inserted: { links: 5, notes: 4, tags: 2, folders: 1, link_tags: 3, click_logs: 8, files: 0, file_bytes: 0 },
+      skipped:  { links: 0, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+      wiped:    { links: 0, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
       files:    { uploaded: 0, skipped: 0, wiped: 0 },
       warnings: [],
       duration_ms: 42,
@@ -860,7 +876,7 @@ function defaultManifest() {
     version: '1.0',
     schema_version: 8,
     created_at: '2026-05-14T03:00:00Z',
-    counts: { links: 5, tags: 2, folders: 1, link_tags: 3, click_logs: 8, files: 0, file_bytes: 0 },
+    counts: { links: 5, notes: 4, tags: 2, folders: 1, link_tags: 3, click_logs: 8, files: 0, file_bytes: 0 },
     checksums: {},
   }
 }
@@ -938,15 +954,10 @@ function importValidate(_m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: M
       counts: { links: 4, folders: 2, tags: 1 },
       conflicts: { links: 1, folders: 0, tags: 0 },
       folders: [
-        { path: 'Bookmarks Bar', name: 'Bookmarks Bar', count: 2 },
-        { path: 'Work', name: 'Work', count: 2 },
+        { path: 'Bookmarks Bar', name: 'Bookmarks Bar', count: 2, conflicts: 1 },
+        { path: 'Work', name: 'Work', count: 2, conflicts: 0 },
       ],
-      links: [
-        { url: 'https://a.test', title: 'A', folder: 'Bookmarks Bar', tags: [], conflict: false },
-        { url: 'https://b.test', title: 'B', folder: 'Bookmarks Bar', tags: [], conflict: true },
-        { url: 'https://c.test', title: 'C', folder: 'Work', tags: [], conflict: false },
-        { url: 'https://d.test', title: 'D', folder: 'Work', tags: [], conflict: false },
-      ],
+      ungrouped: { links: 0, conflicts: 0 },
       warnings: [],
     }
   )

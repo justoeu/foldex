@@ -27,6 +27,7 @@ type OrderColumns struct {
 	clickCount    string
 	lastClickedAt string
 	title         string
+	stable        string
 }
 
 func LinkEntity(unlockedFolder string) Entity {
@@ -60,14 +61,14 @@ func tableOrder(entityAlias string) OrderColumns {
 	return OrderColumns{
 		pinned: entityAlias + ".pinned", createdAt: entityAlias + ".created_at",
 		clickCount: "COALESCE(" + clickAlias + ".cnt, 0)", lastClickedAt: clickAlias + ".last_at",
-		title: entityAlias + ".title",
+		title: entityAlias + ".title", stable: entityAlias + ".id ASC",
 	}
 }
 
 func UnionOrder() OrderColumns {
 	return OrderColumns{
 		pinned: "pinned", createdAt: "created_at", clickCount: "click_count",
-		lastClickedAt: "last_clicked_at", title: "title",
+		lastClickedAt: "last_clicked_at", title: "title", stable: "kind ASC, id ASC",
 	}
 }
 
@@ -77,9 +78,10 @@ type Scope struct {
 }
 
 type Page struct {
-	OrderBy   string
-	LimitArg  int
-	OffsetArg int
+	OrderBy      string
+	LimitArg     int
+	OffsetArg    int
+	ClickRanking bool
 }
 
 // Planner owns the common list contract while allowing entries to append two
@@ -131,16 +133,20 @@ func (p *Planner) AddScope(uid authctx.UserID, entity Entity) Scope {
 
 func (p *Planner) AddPage(columns OrderColumns) Page {
 	order := columns.pinned + " DESC, " + columns.createdAt + " DESC"
+	clickRanking := false
 	switch p.params.Sort {
 	case "clicks":
 		order = columns.pinned + " DESC, " + columns.clickCount + " DESC, " + columns.createdAt + " DESC"
+		clickRanking = true
 	case "recent":
 		order = columns.pinned + " DESC, COALESCE(" + columns.lastClickedAt + ", " + columns.createdAt + ") DESC"
+		clickRanking = true
 	case "alpha":
 		order = columns.pinned + " DESC, lower(" + columns.title + ") ASC, " + columns.createdAt + " DESC"
 	case "alpha_desc":
 		order = columns.pinned + " DESC, lower(" + columns.title + ") DESC, " + columns.createdAt + " DESC"
 	}
+	order += ", " + columns.stable
 
 	limit := p.params.Limit
 	if limit <= 0 || limit > 500 {
@@ -151,7 +157,10 @@ func (p *Planner) AddPage(columns OrderColumns) Page {
 		offset = 0
 	}
 	p.args = append(p.args, limit, offset)
-	return Page{OrderBy: order, LimitArg: len(p.args) - 1, OffsetArg: len(p.args)}
+	return Page{
+		OrderBy: order, LimitArg: len(p.args) - 1, OffsetArg: len(p.args),
+		ClickRanking: clickRanking,
+	}
 }
 
 func (p *Planner) Args() []any {

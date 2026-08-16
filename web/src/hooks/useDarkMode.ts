@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { usePersistedState } from './usePersistedState'
+import { isBoolean, usePersistedState } from './usePersistedState'
 
 /**
  * Dark-mode state plus the document-level class it drives.
@@ -11,7 +11,7 @@ import { usePersistedState } from './usePersistedState'
  * paint should honour it.
  */
 export function useDarkMode(): [boolean, (v: boolean | ((p: boolean) => boolean)) => void] {
-  const [dark, setDark] = usePersistedState('foldex.dark', false)
+  const [dark, setDark] = usePersistedState('foldex.dark', false, isBoolean)
 
   useEffect(() => {
     document.documentElement.classList.toggle('fx-dark', dark)
