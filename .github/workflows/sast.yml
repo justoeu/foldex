@@ -55,7 +55,7 @@ jobs:
         # dies before writing SARIF (image pull failure, etc.), uploading a
         # missing file would flip this informational job red.
         if: ${{ hashFiles('semgrep.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -87,7 +87,7 @@ jobs:
 
       - name: Upload gosec SARIF
         if: ${{ hashFiles('backend/gosec.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
           sarif_file: backend/gosec.sarif
           category: gosec
