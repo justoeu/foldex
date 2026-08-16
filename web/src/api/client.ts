@@ -127,6 +127,32 @@ function refreshOnce(epoch: number): Promise<void> {
   return refreshFlight.promise
 }
 
+export async function authenticatedFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const requestEpoch = authEpoch
+  const request = () => {
+    const headers = new Headers(init.headers)
+    const secret = getStoredSecret()
+    if (secret && !headers.has('X-Foldex-Secret')) headers.set('X-Foldex-Secret', secret)
+    if (UNSAFE_METHODS.has((init.method ?? 'get').toLowerCase())) {
+      const csrf = readCsrfToken()
+      if (csrf && !headers.has(CSRF_HEADER)) headers.set(CSRF_HEADER, csrf)
+    }
+    return fetch(input, { ...init, credentials: init.credentials ?? 'include', headers })
+  }
+
+  const response = await request()
+  if (response.status !== 401 || input.includes('/api/auth/') || requestEpoch !== authEpoch) return response
+  await response.body?.cancel().catch(() => undefined)
+  try {
+    await refreshOnce(requestEpoch)
+  } catch (error) {
+    if (requestEpoch === authEpoch) onSessionLost?.()
+    throw error
+  }
+  if (requestEpoch !== authEpoch) throw new Error('authentication changed during request')
+  return request()
+}
+
 type RetryConfig = InternalAxiosRequestConfig & {
   _retried?: boolean
   _skipAuthRetry?: boolean

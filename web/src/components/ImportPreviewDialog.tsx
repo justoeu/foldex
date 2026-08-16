@@ -69,14 +69,15 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
   // Effective counts after the user's folder exclusions.
   const effectiveCounts = useMemo(() => {
     if (!validation) return { links: 0, folders: 0, conflicts: 0 }
-    let links = 0
-    let conflicts = 0
-    for (const l of validation.links) {
-      if (l.folder && excluded.has(l.folder)) continue
-      links++
-      if (l.conflict) conflicts++
+    let links = validation.ungrouped.links
+    let conflicts = validation.ungrouped.conflicts
+    let folders = 0
+    for (const folder of validation.folders) {
+      if (excluded.has(folder.path)) continue
+      links += folder.count
+      conflicts += folder.conflicts
+      folders++
     }
-    const folders = validation.folders.filter((f) => !excluded.has(f.path)).length
     return { links, folders, conflicts }
   }, [validation, excluded])
 

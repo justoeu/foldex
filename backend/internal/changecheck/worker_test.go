@@ -1,6 +1,7 @@
 package changecheck
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -341,6 +342,21 @@ func TestProcess_FetchFailure_RecordsWithoutPush(t *testing.T) {
 	assert.Empty(t, rs[0].Fingerprint)
 	assert.Contains(t, rs[0].FetchErr, "network down")
 	assert.Empty(t, sender.seen())
+}
+
+func TestProcess_FetchFailureDoesNotLogCapabilityURL(t *testing.T) {
+	const capabilityURL = "https://example.test/private?token=secret-capability"
+	repo := &fakeRepo{links: map[int64]links.Link{
+		1: {ID: 1, URL: capabilityURL, Title: "x", CheckInterval: ptrStr("daily")},
+	}}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	w := New(repo, fakeFetcher{err: errors.New("GET " + capabilityURL + ": connection reset")}, nil, Options{}, logger)
+
+	w.process(context.Background(), workerJob(1, repo.links[1]))
+
+	assert.NotContains(t, logs.String(), capabilityURL)
+	assert.Contains(t, logs.String(), "reason=fetch_failed")
 }
 
 // RecordCheckResult failures on the fetch-error path must not panic and must

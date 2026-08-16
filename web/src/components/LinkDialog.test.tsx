@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, waitFor, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { act, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { LinkDialog } from './LinkDialog'
 import { renderWithProviders } from '../test/renderWithProviders'
@@ -21,10 +21,19 @@ beforeEach(() => {
   _clearUrlMetadataCacheForTests()
 })
 
-/** Assert no metadata fetch after debounce without wall-clock flakiness. */
-async function expectNoMetadataFetch(ms = 550) {
+const METADATA_DEBOUNCE_MS = 500
+
+afterEach(() => vi.useRealTimers())
+
+async function advanceMetadataDebounce(ms = METADATA_DEBOUNCE_MS) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms)
+  })
+}
+
+async function expectNoMetadataFetch() {
   const before = state.urlMetadataCalls.length
-  await new Promise((r) => setTimeout(r, ms))
+  await advanceMetadataDebounce()
   expect(state.urlMetadataCalls.length).toBe(before)
 }
 
@@ -98,6 +107,49 @@ describe('LinkDialog', () => {
   it('uses initialUrl when no link is passed', () => {
     renderWithProviders(<LinkDialog open link={null} initialUrl="https://pre" onClose={vi.fn()} />)
     expect((screen.getByRole('textbox', { name: /^URL$/i }) as HTMLInputElement).value).toBe('https://pre')
+  })
+
+  it('resets dirty slug and pending tags when switching link identity', async () => {
+    const secondTag = { id: 2, name: 'second-tag', color: '#16a34a', icon: null }
+    state.tags.push(secondTag)
+    const first = {
+      id: 7, url: 'https://first.example', title: 'First', slug: 'first', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [state.tags[0]],
+    } as Link
+    const second = {
+      id: 8, url: 'https://second.example', title: 'Second', slug: 'second', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [secondTag],
+    } as Link
+    const rendered = renderWithProviders(<LinkDialog open link={first} onClose={vi.fn()} />)
+    const slug = screen.getByRole('textbox', { name: /short url slug/i })
+    fireEvent.change(slug, { target: { value: 'dirty-first' } })
+    const tagsInput = screen.getByLabelText('tag filter')
+    await userEvent.type(tagsInput, 'pending-first')
+    await userEvent.keyboard('{Enter}')
+    expect(screen.getByText('pending-first')).toBeInTheDocument()
+
+    rendered.rerender(<LinkDialog open link={second} onClose={vi.fn()} />)
+
+    await waitFor(() => expect(slug).toHaveValue('second'))
+    expect(screen.queryByText('pending-first')).not.toBeInTheDocument()
+    expect(document.querySelector('.fx-tagpicker')).toHaveTextContent('second-tag')
+    expect(document.querySelector('.fx-tagpicker')).not.toHaveTextContent('jira')
+  })
+
+  it('updates the create destination when its default folder changes', async () => {
+    state.folders.push(
+      { id: 10, name: 'Alpha', color: '#111111', parent_id: null } as MockState['folders'][number],
+      { id: 20, name: 'Beta', color: '#222222', parent_id: null } as MockState['folders'][number],
+    )
+    const rendered = renderWithProviders(
+      <LinkDialog open link={null} defaultFolderId={10} onClose={vi.fn()} />,
+    )
+    const folderInput = screen.getByRole('textbox', { name: /^folder$/i })
+    await waitFor(() => expect(folderInput).toHaveAttribute('placeholder', 'Alpha'))
+
+    rendered.rerender(<LinkDialog open link={null} defaultFolderId={20} onClose={vi.fn()} />)
+
+    await waitFor(() => expect(folderInput).toHaveAttribute('placeholder', 'Beta'))
   })
 
   it('disables save when URL is empty', () => {
@@ -281,16 +333,20 @@ describe('LinkDialog', () => {
   // entirely (the existing link already has its own copy).
 
   it('AUTO-FILL: fetches metadata after debounce and prefills empty title', async () => {
+    vi.useFakeTimers()
     state.urlMetadata = { title: 'Hacker News', description: 'Tech news' }
     renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
-    const user = userEvent.setup()
-    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://news.ycombinator.com')
+    fireEvent.change(screen.getByRole('textbox', { name: /^URL$/i }), {
+      target: { value: 'https://news.ycombinator.com' },
+    })
 
-    // Debounce fires after 500ms of idle — give the fetch a generous window.
-    await waitFor(() => expect(state.urlMetadataCalls).toContain('https://news.ycombinator.com'), { timeout: 2000 })
+    await advanceMetadataDebounce(METADATA_DEBOUNCE_MS - 1)
+    expect(state.urlMetadataCalls).toEqual([])
+    await advanceMetadataDebounce(1)
+    expect(state.urlMetadataCalls).toEqual(['https://news.ycombinator.com'])
 
     const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
-    await waitFor(() => expect(titleInput.value).toBe('Hacker News'), { timeout: 2000 })
+    expect(titleInput.value).toBe('Hacker News')
 
     // Description should also have been pre-filled since the user left it empty.
     const desc = screen.getByRole('textbox', { name: /description/i }) as HTMLTextAreaElement
@@ -298,24 +354,26 @@ describe('LinkDialog', () => {
   })
 
   it('AUTO-FILL: never overwrites user-typed title', async () => {
+    vi.useFakeTimers()
     state.urlMetadata = { title: 'Auto Title', description: 'Auto Desc' }
     renderWithProviders(<LinkDialog open link={null} initialUrl="https://example.com" onClose={vi.fn()} />)
     const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
     fireEvent.change(titleInput, { target: { value: 'my custom title' } })
-    await waitFor(() => expect(state.urlMetadataCalls).toContain('https://example.com'))
-    // One more microtask tick so onSuccess setters settle if they race.
-    await waitFor(() => expect(titleInput.value).toBe('my custom title'))
+    await advanceMetadataDebounce()
+    expect(state.urlMetadataCalls).toEqual(['https://example.com'])
+    expect(titleInput.value).toBe('my custom title')
   })
 
   it('AUTO-FILL: does not fire for invalid-looking URLs', async () => {
+    vi.useFakeTimers()
     state.urlMetadata = { title: 'should not see this' }
     renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
-    const user = userEvent.setup()
-    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'hello world')
+    fireEvent.change(screen.getByRole('textbox', { name: /^URL$/i }), { target: { value: 'hello world' } })
     await expectNoMetadataFetch()
   })
 
   it('AUTO-FILL: skipped entirely in edit mode', async () => {
+    vi.useFakeTimers()
     state.urlMetadata = { title: 'should not see this' }
     const link: Link = {
       id: 99,
@@ -344,6 +402,7 @@ describe('LinkDialog', () => {
   })
 
   it('AUTO-FILL: rapid typing coalesces into a single request with the final URL', async () => {
+    vi.useFakeTimers()
     // Locks the load-bearing behavior of the debounce: a fast typist hitting
     // multiple keys within the 500ms window must NOT trigger a request per
     // keystroke — only the LAST URL value should hit the network. A regression
@@ -359,44 +418,50 @@ describe('LinkDialog', () => {
     fireEvent.change(urlInput, { target: { value: 'https://c.example' } })
     fireEvent.change(urlInput, { target: { value: 'https://d.example' } })
 
-    await waitFor(() => expect(state.urlMetadataCalls).toContain('https://d.example'), { timeout: 2000 })
+    await advanceMetadataDebounce()
     // Critical assertion: exactly ONE fetch happened, and it used the FINAL
     // URL — never the intermediates.
     expect(state.urlMetadataCalls).toEqual(['https://d.example'])
   })
 
   it('AUTO-FILL: aborts in-flight fetch when dialog closes mid-debounce', async () => {
+    vi.useFakeTimers()
     state.urlMetadata = { title: 'Should never apply' }
     const { unmount } = renderWithProviders(<LinkDialog open link={null} initialUrl="https://abort.example" onClose={vi.fn()} />)
     unmount()
-    await expectNoMetadataFetch(600)
+    await expectNoMetadataFetch()
   })
 
   it('AUTO-FILL: never overwrites user-typed description either', async () => {
+    vi.useFakeTimers()
     state.urlMetadata = { title: 'Auto Title', description: 'Auto Desc' }
     renderWithProviders(<LinkDialog open link={null} initialUrl="https://example.com" onClose={vi.fn()} />)
     const desc = screen.getByRole('textbox', { name: /description/i }) as HTMLTextAreaElement
     fireEvent.change(desc, { target: { value: 'my custom desc' } })
-    await waitFor(() => expect(state.urlMetadataCalls).toContain('https://example.com'))
-    await waitFor(() => expect(desc.value).toBe('my custom desc'))
+    await advanceMetadataDebounce()
+    expect(state.urlMetadataCalls).toEqual(['https://example.com'])
+    expect(desc.value).toBe('my custom desc')
   })
 
   it('AUTO-FILL: in-memory cache dedups the same URL across dialog mounts', async () => {
+    vi.useFakeTimers()
     state.urlMetadata = { title: 'Cached Title' }
     const { unmount } = renderWithProviders(
       <LinkDialog open link={null} initialUrl="https://cache-me.example" onClose={vi.fn()} />,
     )
-    await waitFor(() => expect(state.urlMetadataCalls).toHaveLength(1))
+    await advanceMetadataDebounce()
+    expect(state.urlMetadataCalls).toHaveLength(1)
     unmount()
 
     renderWithProviders(<LinkDialog open link={null} initialUrl="https://cache-me.example" onClose={vi.fn()} />)
-    await expectNoMetadataFetch(600)
+    await advanceMetadataDebounce()
     expect(state.urlMetadataCalls).toHaveLength(1)
     const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
-    await waitFor(() => expect(titleInput.value).toBe('Cached Title'))
+    expect(titleInput.value).toBe('Cached Title')
   })
 
   it('AUTO-FILL: cache key is the URL — distinct URLs each fetch once', async () => {
+    vi.useFakeTimers()
     // Defensive: locks that the cache lookup uses the URL as key. A bug that
     // ignored the key (e.g. memoizing on something stable like a constant)
     // would return the FIRST URL's metadata for the second URL — silently
@@ -405,28 +470,30 @@ describe('LinkDialog', () => {
     const { unmount } = renderWithProviders(
       <LinkDialog open link={null} initialUrl="https://a.example" onClose={vi.fn()} />,
     )
-    await waitFor(() => expect(state.urlMetadataCalls).toEqual(['https://a.example']), { timeout: 2000 })
+    await advanceMetadataDebounce()
+    expect(state.urlMetadataCalls).toEqual(['https://a.example'])
     unmount()
 
     state.urlMetadata = { title: 'Title B' }
     renderWithProviders(<LinkDialog open link={null} initialUrl="https://b.example" onClose={vi.fn()} />)
-    await waitFor(
-      () => expect(state.urlMetadataCalls).toEqual(['https://a.example', 'https://b.example']),
-      { timeout: 2000 },
-    )
+    await advanceMetadataDebounce()
+    expect(state.urlMetadataCalls).toEqual(['https://a.example', 'https://b.example'])
     const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
-    await waitFor(() => expect(titleInput.value).toBe('Title B'), { timeout: 2000 })
+    expect(titleInput.value).toBe('Title B')
   })
 
   it('AUTO-FILL: tolerates a 502 from the backend silently', async () => {
+    vi.useFakeTimers()
     state.urlMetadataError = Object.assign(new Error('fetch_failed'), {
       response: { status: 502, data: { error: { code: 'fetch_failed', message: 'could not fetch URL metadata' } } },
     })
     renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
-    const user = userEvent.setup()
-    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://broken.example')
+    fireEvent.change(screen.getByRole('textbox', { name: /^URL$/i }), {
+      target: { value: 'https://broken.example' },
+    })
 
-    await waitFor(() => expect(state.urlMetadataCalls).toContain('https://broken.example'), { timeout: 2000 })
+    await advanceMetadataDebounce()
+    expect(state.urlMetadataCalls).toEqual(['https://broken.example'])
 
     // Failure is silent — title stays empty, no error chip rendered, save
     // button stays enabled (URL is present).
@@ -436,13 +503,15 @@ describe('LinkDialog', () => {
   })
 
   it('AUTO-FILL: shows failed hint under empty title after a real error', async () => {
+    vi.useFakeTimers()
     state.urlMetadataError = Object.assign(new Error('fetch_failed'), {
       code: 'ERR_BAD_RESPONSE',
       response: { status: 502, data: { error: { code: 'fetch_failed', message: 'could not fetch' } } },
     })
     renderWithProviders(<LinkDialog open link={null} initialUrl="https://blocked.example" onClose={vi.fn()} />)
-    await waitFor(() => expect(state.urlMetadataCalls).toContain('https://blocked.example'), { timeout: 2000 })
-    await waitFor(() => expect(screen.getByText(/could not auto-fill/i)).toBeInTheDocument())
+    await advanceMetadataDebounce()
+    expect(state.urlMetadataCalls).toEqual(['https://blocked.example'])
+    expect(screen.getByText(/could not auto-fill/i)).toBeInTheDocument()
   })
 
   it('stages an image file via the hidden input and uploads on create', async () => {

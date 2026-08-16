@@ -32,13 +32,13 @@ describe('BackupCard', () => {
         created_at: '2026-05-14T03:00:00Z',
         duration_ms: 1200,
         size_bytes: 12 * 1024 * 1024,
-        counts: { links: 25, tags: 7, folders: 3, link_tags: 0, click_logs: 0, files: 24, file_bytes: 12 * 1024 * 1024 },
+        counts: { links: 25, notes: 4, tags: 7, folders: 3, link_tags: 0, click_logs: 0, files: 24, file_bytes: 12 * 1024 * 1024 },
       },
     ]))
     renderWithProviders(<BackupCard onRestored={vi.fn()} />)
     expect(screen.getByText('History')).toBeInTheDocument()
     expect(screen.getByText(/24 files/)).toBeInTheDocument()
-    expect(screen.getByText(/25 links \/ 7 tags/)).toBeInTheDocument()
+    expect(screen.getByText(/25 links \/ 4 notes \/ 7 tags/)).toBeInTheDocument()
   })
 
   it('clicking "Generate full backup" appends a history entry', async () => {
@@ -105,7 +105,7 @@ describe('BackupCard', () => {
         created_at: '2026-05-14T03:00:00Z',
         duration_ms: 800,
         size_bytes: 1024,
-        counts: { links: 1, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 1, file_bytes: 1024 },
+        counts: { links: 1, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 1, file_bytes: 1024 },
       },
     ]))
     window.dispatchEvent(new StorageEvent('storage', { key: 'foldex.backups' }))

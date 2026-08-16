@@ -33,20 +33,20 @@ export type AuthFeatures = {
  *
  * `email` is MASKED by the server. The client never receives the full address
  * here, because this payload is also what a successful credential-stuffing hit
- * would see.
+ * would see. `purpose` discriminates presenting a code from mandatory setup;
+ * `convert_google` has its own password-entry session status.
  */
-export type TwoFactorPending = {
-  /**
-   * 'totp' = present a code; 'enroll_2fa' = an admin must set one up first.
-   *
-   * 'convert_google' never appears here — it produces its own session status,
-   * because the screen it needs is a password field, not a code field.
-   */
-  purpose: 'totp' | 'enroll_2fa'
+type TwoFactorPendingBase = {
   email: string
   methods: string[]
   maxAttempts: number
 }
+
+export type TwoFactorPending =
+  | (TwoFactorPendingBase & { purpose: 'totp' })
+  | (TwoFactorPendingBase & { purpose: 'enroll_2fa' })
+
+export type TwoFactorPurpose = TwoFactorPending['purpose']
 
 /**
  * The states GET /api/auth/me and the credential endpoints can report.

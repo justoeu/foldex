@@ -6,6 +6,7 @@ import { ResetScreen } from './ResetScreen'
 import { renderWithProviders } from '../../test/renderWithProviders'
 import { useAuth } from '../../auth/AuthProvider'
 import { http } from '../../api/client'
+import type { MeResponse } from '../../api/auth'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -120,8 +121,10 @@ describe('ResetScreen', () => {
         purpose: 'totp',
         email: 'a•••@b.test',
         methods: ['totp', 'recovery_code'],
-        features: {},
-      },
+        expires_in: 300,
+        max_attempts: 5,
+        features: { google_oauth: false, two_factor: true, email_delivery: false },
+      } satisfies MeResponse,
     } as never)
 
     renderWithProviders(

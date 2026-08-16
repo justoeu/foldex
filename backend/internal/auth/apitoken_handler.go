@@ -18,14 +18,6 @@ import (
 // can store.
 const maxTokenNameLen = 100
 
-// maxTokensPerUser bounds how many live tokens one account may hold.
-//
-// Not a rate limit — the endpoint is session-authenticated, so there is no
-// anonymous abuse to stop. It is there because the token list is a security
-// surface a person has to READ: an account with two hundred entries is one
-// where a rogue token goes unnoticed.
-const maxTokensPerUser = 20
-
 type createTokenInput struct {
 	Name string `json:"name"`
 	// ExpiresInDays is optional. Zero means "no expiry", which is the honest
@@ -73,20 +65,13 @@ func (h *Handler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := h.repo.ListAPITokens(r.Context(), p.UserID)
-	if err != nil {
-		h.logger.Error("count api tokens", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-	if len(existing) >= maxTokensPerUser {
+	tok, err := h.repo.CreateAPIToken(r.Context(), p.UserID, name,
+		time.Duration(in.ExpiresInDays)*24*time.Hour)
+	if errors.Is(err, ErrTooManyAPITokens) {
 		httperr.Write(w, httperr.New(http.StatusConflict, "too_many_tokens",
 			"revoke an existing token before creating another"))
 		return
 	}
-
-	tok, err := h.repo.CreateAPIToken(r.Context(), p.UserID, name,
-		time.Duration(in.ExpiresInDays)*24*time.Hour)
 	if err != nil {
 		h.logger.Error("create api token", "err", err)
 		httperr.Write(w, httperr.ErrInternal)

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -199,6 +200,7 @@ type refreshDuringCaptureScreenshotter struct {
 	t             *testing.T
 	worker        *Worker
 	repo          *links.Repository
+	pool          *pgxpool.Pool
 	id            int64
 	payload       []byte
 	calls         atomic.Int64
@@ -208,7 +210,13 @@ type refreshDuringCaptureScreenshotter struct {
 
 func (s *refreshDuringCaptureScreenshotter) Capture(context.Context, string) ([]byte, error) {
 	if s.calls.Add(1) == 1 {
+		claimed, err := s.repo.SystemGetPreview(context.Background(), s.id)
+		require.NoError(s.t, err)
 		require.NoError(s.t, s.repo.SystemUpdatePreview(context.Background(), s.id, links.StatusPending, nil, nil, nil, nil))
+		// Reproduce equal timestamp tokens deterministically. A refresh is a new
+		// generation even when the row clock cannot distinguish both claims.
+		_, err = s.pool.Exec(context.Background(), `UPDATE link SET updated_at = $1 WHERE id = $2`, claimed.UpdatedAt, s.id)
+		require.NoError(s.t, err)
 		require.NoError(s.t, s.worker.Enqueue(s.id))
 		return s.payload, nil
 	}
@@ -236,7 +244,7 @@ func TestWorker_ScreenshotFallback_NewerRefreshWinsAndReruns(t *testing.T) {
 	worker.screenshotURLPolicy = func(context.Context, string) bool { return true }
 	uploader := &memUploader{}
 	shot := &refreshDuringCaptureScreenshotter{
-		t: t, worker: worker, repo: repo, id: link.ID, payload: testPNG(t),
+		t: t, worker: worker, repo: repo, pool: pool, id: link.ID, payload: testPNG(t),
 		secondStarted: make(chan struct{}), releaseSecond: make(chan struct{}),
 	}
 	worker.WithScreenshotFallback(shot, uploader)

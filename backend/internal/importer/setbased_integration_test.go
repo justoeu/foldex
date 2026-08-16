@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/preview"
 	"foldex/internal/testdb"
 )
 
@@ -137,4 +138,39 @@ func TestStagedImport_EnqueuesOnlyAfterCommit(t *testing.T) {
 	}}, modeSkip, nil)
 	require.NoError(t, err)
 	assert.Len(t, enqueuer.visible, 1, "skipped URLs must not enqueue preview work")
+}
+
+type queueFullEnqueuer struct {
+	calls  int
+	fullAt int
+}
+
+func (e *queueFullEnqueuer) Enqueue(int64) error {
+	e.calls++
+	if e.calls == e.fullAt {
+		return fmt.Errorf("preview admission: %w", preview.ErrQueueFull)
+	}
+	return nil
+}
+
+func TestStagedImport_StopsPreviewEnqueuesAtFirstQueueFull(t *testing.T) {
+	const (
+		itemCount = 32
+		fullAt    = 3
+	)
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "enqueue-queue-full@test.local", "admin")
+	enqueuer := &queueFullEnqueuer{fullAt: fullAt}
+	h := NewHandler(pool, enqueuer)
+
+	imported, skipped, wiped, warnings, err := h.importItemsWithMode(
+		context.Background(), uid, importRoundTripFixture("enqueue-queue-full", itemCount), modeSkip, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, itemCount, imported)
+	assert.Zero(t, skipped)
+	assert.Zero(t, wiped)
+	assert.Equal(t, fullAt, enqueuer.calls, "remaining pending rows must rely on set-wise recovery")
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], fmt.Sprintf("%d previews", itemCount-fullAt+1))
 }

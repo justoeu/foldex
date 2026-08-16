@@ -52,6 +52,22 @@ func TestParseJSON_Malformed(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestParseJSONRejectsTrailingDocument(t *testing.T) {
+	for _, trailing := range []string{
+		`{"version":1,"tags":[],"links":[]}`,
+		`not-json`,
+	} {
+		_, err := ParseJSON(strings.NewReader(`{"version":1,"tags":[],"links":[]}` + trailing))
+		require.Error(t, err)
+	}
+}
+
+func TestParseJSONAllowsTrailingWhitespace(t *testing.T) {
+	f, err := ParseJSON(strings.NewReader("{\"version\":1,\"tags\":[],\"links\":[]} \n\t"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, f.Version)
+}
+
 func TestValidate_HappyPath(t *testing.T) {
 	f, err := ParseJSON(strings.NewReader(sampleJSON))
 	require.NoError(t, err)

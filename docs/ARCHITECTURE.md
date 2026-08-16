@@ -59,15 +59,15 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 
 | Camada       | Escolha                                                              | Por quê |
 |--------------|----------------------------------------------------------------------|---------|
-| Runtime API  | **Go 1.26** + Chi v5.2 + pgx/v5.9 + `slog`                          | Minimal router, pgxpool com tipos, log estruturado nativo. |
+| Runtime API  | **Go 1.26** + Chi v5.3 + pgx/v5.10 + `slog`                         | Minimal router, pgxpool com tipos, log estruturado nativo. |
 | DB           | **PostgreSQL 18** + `pg_trgm`                                        | Busca por substring com índice GIN, suficiente single-user. |
-| Object store | **RustFS** (S3 SDK)                                                   | Backup/screenshots/uploads vivem fora do Postgres; bucket único, prefixos `screenshots/`/`images/`. |
+| Object store | **RustFS 1.0.0-rc.2** (S3 SDK, imagem presa por digest)                | Upstream ainda não publicou GA; usamos o RC não-preview mais recente sem seguir tags móveis. Backup/screenshots/uploads vivem fora do Postgres; bucket único, prefixos `screenshots/`/`images/`. |
 | Migrations   | `golang-migrate` (`000NNN_*.up/down.sql`)                            | Reversível por padrão; mesma convenção compartilhada. |
 | Workers      | Goroutine pools in-process (preview, changecheck) + buffered channels | Zero dependência operacional (sem Redis/queue). |
 | Web Push     | `github.com/SherClockHolmes/webpush-go v1.4.0` + VAPID auto-gen      | RFC 8030. VAPID key persistida em `/data/vapid.json` (volume `foldex-data`), 0o600. |
 | Imagem       | `golang.org/x/image` + stdlib decoders (pure Go, sem CGO)            | Re-encode JPEG q82 + downscale Catmull-Rom + decode-bomb guard 50 MP (`internal/imageopt`). |
 | Headless     | `github.com/go-rod/rod v0.116` (Chromium)                            | Screenshot fallback quando o site não tem `og:image`. BrowserContext isolado + proxy de egress estrito por captura. |
-| Testes Go    | `testify` (unit) + `testcontainers-go v0.42` (integration, build tag)| Suite real contra Postgres efêmero; gate ≥85% (ver `CLAUDE.md`). |
+| Testes Go    | `testify` (unit) + `testcontainers-go v0.44` (integration, build tag)| Suite real contra Postgres efêmero; gate ≥85% (ver `CLAUDE.md`). |
 | SPA          | **Vite 8 + React 19.2 + TypeScript 6 + MUI 9**                        | MUI só pra `createTheme`/`ThemeProvider`; visual vive em `web/src/styles/foldex.css` (CSS handoff). Bundle ~80 kB. |
 | Server state | **TanStack Query 5**                                                  | Cache + invalidação por mutation + optimistic updates. |
 | i18n         | **react-i18next 17** + i18next 26 (en/pt/es)                          | Locale picker no topbar persiste em `localStorage["foldex.locale"]`. Plurais via `_one`/`_other`. |
@@ -76,7 +76,7 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 | Extension    | Vanilla MV3 (sem bundler)                                            | Popup tem ~80 LoC. Sem build = "load unpacked" direto. |
 | Node runtime | **bun 1.3** (oven/bun:1.3-alpine)                                    | Bate com Vite 8 / Vitest 4 e resolve melhor packages platform-specific que npm em mirror privado. |
 
-## Data model (estado atual, após 29 migrations)
+## Data model (estado atual, após 31 migrations)
 
 ```sql
 -- 000001_init.up.sql        (+ pg_trgm)
@@ -115,6 +115,8 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 -- 000027_backup_restore_ledger → checkpoint/mappings owner-scoped para skip restore convergente
 -- 000028_password_reset_credential_epoch → reset preso ao token_version vivo; NULL legado falha fechado
 -- 000029_slug_length → repara slugs legados >80 bytes e fixa o limite no DB para link/note
+-- 000030_preview_generation → geração monotônica impede write de preview anterior após refresh
+-- 000031_unique_live_challenge_email_otp → um único OTP de login não consumido por challenge
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -164,6 +166,7 @@ CREATE TABLE link (
   preview_status TEXT NOT NULL DEFAULT 'pending'
                  CHECK (preview_status IN ('pending', 'ok', 'failed')),
   preview_error  TEXT,
+  preview_generation BIGINT NOT NULL DEFAULT 1 CHECK (preview_generation > 0),
   pinned         BOOLEAN NOT NULL DEFAULT FALSE,
   -- 000010: change-detection per-link (todos nullable, opt-in)
   check_interval          TEXT,                          -- CHECK NULL OR IN ('hourly','daily','weekly')
@@ -329,12 +332,15 @@ ORDER BY l.created_at DESC
 LIMIT $3 OFFSET $4;
 ```
 
-`internal/entries` runs the link/note equivalents of the query above as the two arms of a `UNION ALL` (wrapped in a derived table so `ORDER BY lower(title)` is legal post-union — Postgres forbids expressions directly under a set operation's `ORDER BY`), giving the frontend one paginated, sorted, searched endpoint instead of merging two independently-paginated queries client-side. See ADR-27.
+`internal/entries` runs the link/note equivalents of the query above as the two arms of a `UNION ALL` (wrapped in a derived table so `ORDER BY lower(title)` is legal post-union — Postgres forbids expressions directly under a set operation's `ORDER BY`), giving the frontend one paginated, sorted, searched endpoint instead of merging two independently-paginated queries client-side. `GET /api/entries/counts` is the owner-scoped authoritative cardinality and counts link and note rows independently, without summing overlapping tag/folder collections. See ADR-27.
 
 ## API surface
 
 | Grupo  | Método | Path                                  | Propósito                                          |
 |--------|--------|---------------------------------------|----------------------------------------------------|
+| Entries| GET    | `/api/entries`                        | Projeção read-only e owner-scoped de links+notes via `UNION ALL`; mesmos filtros, sort e paginação do grid. |
+|        | GET    | `/api/entries/counts`                 | Totais owner-scoped `{links, notes}`; cardinalidade distinta por tipo. |
+|        | GET    | `/api/entries/preview-status?id=…`    | Status compacto de até 100 links; aceita `id` repetível e `folder_id`, com o mesmo content gate de pasta. |
 | Links  | GET    | `/api/links`                          | List; query: `q`, `tag` (repeatable), `limit`, `offset`, `sort=created\|clicks\|recent\|alpha\|alpha_desc`, **`folder_id=N`** (links na pasta), **`ungrouped=1`** (links sem pasta). Pinados sempre vêm primeiro. `alpha`/`alpha_desc` ordenam por `lower(title)`. |
 |        | GET    | `/api/links/recent-changes`           | Últimos links com `last_change_detected_at IS NOT NULL`. Query: `?days` (1..365, default 7), `?limit` (1..100, default 10), via `clampInt`. Powering a seção "Atualizações recentes" da sidebar (refetch 60 s). |
 |        | GET    | `/api/links/url-metadata?url=…`       | Pré-fetch síncrono usado pelo `LinkDialog` para auto-preencher Título/Descrição assim que o usuário cola/digita uma URL. Reusa `preview.NewFetcher` (mesmo SSRF gate, mesma posture); rejeita scheme não-http(s) → 400 `invalid_scheme`, URL > 2 KiB → 400 `invalid_url`. Falhas de fetch (DNS, SSRF, 4xx, timeout) colapsam em 502 `fetch_failed` sem vazar a mensagem interna. Debounce 500 ms + cache módulo-level com TTL 5 min no front; backend é fire-on-demand sem cache próprio. **YouTube/Vimeo bypassam HTML via oEmbed** (`preview.Fetcher.Fetch` curto-circuita pro endpoint oEmbed quando host bate `knownOEmbedProviders`, porque YouTube serve HTML degraded a fingerprints de container — UA/headers/cookies não ajudam). Discovery genérico via `<link rel="alternate" type="application/json+oembed">` enriquece outros sites quando o HTML carrega mas falta título/imagem. |
@@ -363,18 +369,24 @@ LIMIT $3 OFFSET $4;
 | Settings| GET   | `/api/settings/master-password`       | `{configured: bool}` — nunca retorna o hash (ADR-29). |
 |        | PUT    | `/api/settings/master-password`       | Body: `{password (min 8), current_password?}`. Primeiro-set não exige atual; trocar exige `current_password` (`401 wrong_password`). |
 |        | DELETE | `/api/settings/master-password`       | Body: `{current_password}`. Remove a master (`401 wrong_password` se errada; idempotente se não configurada). |
-| Stats  | GET    | `/api/stats/summary`                  | Totals: links, tags, clicks 30d/prev30d, novos 30d, top host |
-|        | GET    | `/api/stats/daily?days=N`             | Array `[{date, clicks}]` zero-filled via `generate_series` |
-|        | GET    | `/api/stats/top?limit=N`              | Top links por cliques (lifetime + janelas 30d / prev) |
-|        | GET    | `/api/stats/tags`                     | Distribuição: por tag, soma de cliques + nº de links |
+| Stats  | GET    | `/api/stats/dashboard?days=N&limit=N` | Uma query owner-scoped retorna `{summary, daily, top, tags}` sobre o mesmo snapshot materializado de links/cliques. `days`: default 60, clamp 1..365; `limit`: default 5, clamp 1..100. Storage permanece separado. |
+|        | GET    | `/api/stats/summary`                  | Rota legada retida: totals de links, tags, cliques 30d/prev30d, novos 30d e top host. |
+|        | GET    | `/api/stats/daily?days=N`             | Rota legada retida; `days` default 60/clamp 1..365; array zero-filled via `generate_series`. |
+|        | GET    | `/api/stats/top?limit=N`              | Rota legada retida; `limit` default 10/clamp 1..100; top links lifetime + janelas 30d/prev. |
+|        | GET    | `/api/stats/tags`                     | Rota legada retida; por tag, soma de cliques + nº de links. |
 | I/O    | POST   | `/api/import`                         | Multipart `file` + `format=netscape\|json` (JSON restaura cliques via click_log) |
+|        | POST   | `/api/import/validate`                | Preflight multipart agregado, sem itens: `{format, counts, conflicts, folders:[{path,name,count,conflicts}], ungrouped:{links,conflicts}, warnings}`. Conflitos de URL/tag são owner-scoped. |
+|        | POST   | `/api/import/apply`                   | Aplica multipart com `mode=skip\|wipe\|duplicate` e `exclude_folders` opcional. |
 |        | GET    | `/api/export?format=netscape\|json`   | Download (click_count derivado em subquery)        |
 | Backup | POST   | `/api/backup`                         | Stream ZIP completo (DB + RustFS). `Content-Type: application/zip`. Disponível só quando RustFS está acessível. Ver [SDD-BACKUP-RESTORE.md](./SDD-BACKUP-RESTORE.md). |
+|        | POST   | `/api/backup/download`                | Emite ticket opaco one-time (TTL 60 s), owner/session-bound, para download nativo sem Blob; exige sessão, CSRF, `SHARED_SECRET` quando configurado e recusa API token. |
+|        | GET    | `/api/backup/download?id=…&token=…`   | Consome ticket uma vez e streama o mesmo export com `Content-Disposition`; continua session-authenticated e usa o slot compartilhado. |
+|        | GET    | `/api/backup/download/status?id=…`    | Estado owner-bound (`pending|running|complete|failed`) para histórico com counts, bytes e duração, sem ler o ZIP no JS; sobrevive ao refresh da sessão. |
 |        | POST   | `/api/backup/validate`                | Multipart `file=<zip>` → `{ok, manifest, conflicts, warnings, errors}` sem aplicar |
 |        | POST   | `/api/backup/restore?mode=…`          | Multipart `file=<zip>` + `mode=wipe\|skip\|duplicate` (default `skip`) → `{inserted, skipped, wiped, files, duration_ms}` |
 | Stats  | GET    | `/api/stats/storage`                  | `{objects, total_bytes}` do bucket RustFS; registrado só quando o storage está disponível |
 | Push   | GET    | `/api/push/vapid-key`                 | Retorna a chave pública VAPID (base64url) — front usa em `PushManager.subscribe({applicationServerKey})`. Atrás do `SHARED_SECRET` quando set. |
-|        | POST   | `/api/push/subscriptions`             | Upsert por `endpoint` (UNIQUE) com p256dh/auth atualizados. Renovação do navegador é silenciosa. |
+|        | POST   | `/api/push/subscriptions`             | Upsert por `endpoint` (UNIQUE) com p256dh/auth atualizados. Cap transacional de 16 por usuário; renovar endpoint próprio continua permitido no teto, novo row retorna `409 subscription_limit_reached`. |
 |        | DELETE | `/api/push/subscriptions`             | Remove a subscription pelo endpoint (chamado no unsubscribe do usuário). |
 |        | POST   | `/api/push/test`                      | Dispara notificação de teste pra todas as subscriptions ativas. Útil pra validar VAPID/SW. |
 | Redir  | GET    | `/go/{id-or-slug}`                    | 302 + INSERT no click_log (fora de `/api`). ID-first; fallback pra slug (mig 000009). |
@@ -398,6 +410,12 @@ invite/session. `internal/security.TestRepositoriesDoNotImportHTTPDelivery`
 percorre a AST e falha se qualquer `repository*.go` de produção importar
 `net/http` ou `internal/pkg/httperr`.
 
+Delivery também depende de capabilities, não de adapters concretos:
+`links.ScreenshotHandler` consome `ports.Uploader` e o sentinel
+`ports.ErrObjectTooLarge`; `storage.Client` é construído e ligado somente em
+`cmd/server`. `internal/security.TestDeliveryDoesNotImportStorageAdapters`
+varre imports de produção em `internal/links`, sem proibir a composition root.
+
 ## Preview worker
 
 - Implementação em `internal/preview/`:
@@ -406,6 +424,7 @@ percorre a AST e falha se qualquer `repository*.go` de produção importar
   - `public.go`: `IsPublicURL(ctx, url)` — gate do fallback de screenshot (resolve o host e rejeita metadata/RFC6598 e todos os ranges special-purpose da IANA).
   - `enqueue.go`: `Enqueue(linkID int64)` chamado por `links.Create` e por `POST /links/:id/refresh-preview`.
 - Side effects: `UPDATE link SET preview_status, favicon_url, og_image_url, description, preview_error, updated_at` após o fetch.
+- **Geração monotônica (migration 000030).** `link.preview_generation` nasce em 1 e todo restart para `pending` (inclusive `refresh-preview`) incrementa a geração antes do enqueue. O worker lê `updated_at` + geração na projeção estreita; metadata, falha, screenshot e convergência final só escrevem sob CAS de ambos, `preview_status='pending'` e, quando aplicável, imagem vazia. Uma geração antiga perde mesmo se os timestamps coincidirem; perda de CAS interrompe o restante e remove o objeto recém-criado.
 - SSRF guard: ranges de metadata/credenciais cloud (EC2 IMDS, ECS, EKS Pod Identity, Alibaba e Tencent, inclusive IPv6 quando aplicável) e RFC6598 (`100.64.0.0/10`) são sempre bloqueados (sem opt-out) pela policy compartilhada em `internal/pkg/netpolicy`. O fetch HTML só bloqueia os demais ranges special-purpose da IANA, como loopback, RFC1918, benchmarking/documentação/reservado, link-local e IPv6 ULA, quando `PREVIEW_STRICT_SSRF=1`. Default = permissivo para intranets reais (Jira/Grid/Confluence), sem tratar CGNAT como internet pública.
 - Screenshot Chromium tem postura deliberadamente mais estrita que o fetch HTML: o processo é pooled, mas cada `Capture` cria um BrowserContext incognito e um proxy HTTP local exclusivos. Cada proxy limita a 32 os túneis CONNECT ativos. Um segundo proxy estrito fica no launcher da geração, pois o Chromium decide o bypass implícito de localhost no proxy global; qualquer escape do proxy do contexto cai nessa camada. Ambos usam `ProxyBypassList="<-loopback>"`, bloqueiam os registries special-purpose IPv4/IPv6 da IANA antes do dial e validam o peer TCP depois, independentemente de `PREVIEW_STRICT_SSRF`. Capturas são serializadas porque o sinal de bloqueio desse proxy global pertence à geração inteira e não pode ser atribuído com segurança entre contextos concorrentes. Chromium roda como usuário não-root com sandbox habilitado; `disable-quic`, `disable-webrtc-multiple-routes` e `force-webrtc-ip-handling-policy=disable_non_proxied_udp` fecham egress UDP direto. Qualquer request bloqueado invalida a captura inteira. Worker e endpoint compartilham uma instância explícita de `screenshot.Pool`, sem estado global de lifecycle. Fila (5 s), startup/connect e execução da captura têm budgets limitados independentes sob envelope caller de 70 s; startup ocorre fora do mutex do pool. Retirement destaca teardown rastreado da latência da captura. Shutdown recusa trabalho novo, cancela launch e capturas em andamento, aguarda 7 s e força kill/cleanup de gerações ainda abertas antes de devolver controle ao deadline global de 12 s. O pool retém launcher/PID; toda falha de launch remove o profile, e falha em connect, create/dispose de contexto ou close limitado força `Kill` + cleanup context-aware. A remoção do profile usa raiz confinada, não segue symlinks e percorre entradas em lotes limitados, checando cancelamento entre lotes.
 - Resource budgets complementam a policy: no máximo 32 conexões/CONNECT e 32 MiB agregados por proxy; CDP limita cada captura a 256 requests reais, inclusive streams HTTPS multiplexados dentro de CONNECT. Qualquer excesso invalida a captura. DNS recebe 5 s e storage pós-captura recebe 10 s próprios. A admissão manual aceita duas capturas globais e uma por usuário. A fila deduplica IDs, coalesce refresh explícito durante execução em um rerun e ignora IDs já agendados no sweep de recovery. O sweep usa uma projeção estreita sem aggregate de cliques e migration 000026 adiciona índice parcial dos pendentes. Shutdown HTTP/worker/Chromium ocorre em paralelo sob deadline global de 12 s; o pool usa 7 s de grace e força kill/cleanup antes de retornar. Erros persistidos/logados usam classificações estáveis, sem URL ou texto bruto de fetch/Chromium.
@@ -439,9 +458,9 @@ Detecção periódica per-link de mudança de conteúdo. Opt-in via `link.check_
 Notificação background quando o changecheck detecta change. RFC 8030 + VAPID via `github.com/SherClockHolmes/webpush-go`.
 
 - **VAPID** (`vapid.go`): `LoadOrGenerate` prioriza env (`VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT`) → state file (`VAPID_STATE_PATH`, default `/data/vapid.json`) → autogen + persiste com `os.WriteFile(..., 0o600)` (umask não confiável). Volume `foldex-data:/data` no compose preserva entre recreations; pinar em `.env` mantém subscriptions estáveis.
-- **Subscription repo** (`subscription.go`): `INSERT … ON CONFLICT (endpoint) DO UPDATE SET p256dh, auth` — renovação do browser converge no mesmo row.
-- **Sender** (`sender.go`): fan-out paralelo. 404/410 → `DeleteByEndpoint` (RFC 8030 §7.3 — endpoint morto). 2xx → `MarkUsed`. Transport errors → log + segue (blip de rede não apaga subscription).
-- **Handler** (`handler.go`): rotas montadas só quando `PushHandler != nil`. Tudo herda o `SHARED_SECRET` middleware (inclusive `vapid-key` — não vaza superfície).
+- **Subscription repo** (`subscription.go`): `INSERT … ON CONFLICT (endpoint) DO UPDATE SET p256dh, auth, user_id` — renovação do browser converge no mesmo row. Um lock `FOR NO KEY UPDATE` no owner serializa o cap de 16 subscriptions; upsert de endpoint já pertencente ao caller não consome slot. `List` é owner-scoped e usa o mesmo teto como `LIMIT` defensivo.
+- **Sender** (`sender.go`): fan-out limitado a 16 alvos e 4 envios concorrentes por notificação. Resultados 2xx e 404/410 são coletados por id e persistidos em no máximo um `MarkUsed` e um `DeleteGone`, ambos owner-scoped com `ANY(bigint[])`; transport/other-status errors ficam isolados por subscription id e não apagam subscription. Endpoint é capability secreta e nunca entra no log. O client usa transporte sempre public-only, sem depender de `PREVIEW_STRICT_SSRF`: valida IP antes/depois do dial contra ranges privados/special-use e recusa redirects, impedindo endpoint ou redirect controlado de alcançar serviços internos.
+- **Handler** (`handler.go`): rotas montadas só quando `PushHandler != nil`. Tudo herda o `SHARED_SECRET` middleware (inclusive `vapid-key` — não vaza superfície). `/push/test` tem admissão global fail-fast de duas fan-outs simultâneas; excesso recebe `429 push_busy` em vez de criar mais workers/requests.
 - **Service Worker hand-rolled** (`web/src/sw.ts`): Cache API + `push` listener + `notificationclick` listener. `vite-plugin-pwa` com `strategies: 'injectManifest'` injeta `__WB_MANIFEST` no build sem trazer runtime workbox-* (que exigiria regenerar `bun.lock`).
 
 ## Pipeline de imagens (`internal/imageopt`)
@@ -686,7 +705,7 @@ Detalhe completo em [SDD-BACKUP-RESTORE.md](./SDD-BACKUP-RESTORE.md). Resumo das
 
 - **Um ZIP é a unidade de backup.** Contém `manifest.json` + `database.json` (todas as 5 tabelas) + `files/screenshots/` + `files/images/`. `og_image_url` continua como proxy URL `/api/files/<key>` — não embarca bytes inline em base64.
 - **Streaming end-to-end.** Export não materializa `Snapshot`: sob `REPEATABLE READ`, cursor rows alimentam um spool `database.json` 0600/256 MiB com hash+counts inline; RustFS LIST visita metadados por callback e retém só matches owner-scoped; após commit, `zip.NewWriter(http.ResponseWriter)` copia o spool e faz `io.Copy` direto do GetObject. Restore usa `MultipartReader` (não `ParseMultipartForm`) e publica note media do spool em que foi validado/otimizado uma vez. Skip resolve keys existentes por LIST paginado, wipe usa multi-delete somente de keys owner-scoped, e PUTs usam pool 8.
-- **3 endpoints**: `/api/backup` (gera), `/api/backup/validate` (sem efeito colateral — confere checksums + manifest + conflitos com DB atual), `/api/backup/restore?mode=…`.
+- **3 operações canônicas**: `/api/backup` (gera), `/api/backup/validate` (sem efeito colateral — confere checksums + manifest + conflitos com DB atual), `/api/backup/restore?mode=…`. O handoff `/api/backup/download` (POST ticket + GET one-time + GET status) é só um transporte browser-managed alternativo para a mesma geração, não uma quarta operação nem um segundo ZIP.
 - **Admissão é compartilhada por export/validate/restore; preflight por validate/restore.** Um slot fail-fast é adquirido antes de query/spool/body read; concorrência responde `429 backup_busy` sem chamar o service. Export retém O(owner-file-count) sob caps de 99.998 files, key 1.024 bytes e manifest 32 MiB. Antes de DB/RustFS, uploads passam por nome único, CRC e leitura real `max+1`, sob caps de 100k entries, 32 MiB de manifest, 256 MiB de database JSON, 64 MiB por arquivo e 4 GiB expandidos no total. Arrays de conteúdo têm cap de 250k; relações/eventos, 2M; `app_settings` legado, 1k.
 - **3 modos de conflito**:
   - `wipe`: DELETE somente das rows/keys do caller + restore com IDs frescos. UI exige confirm destrutivo.
@@ -772,7 +791,7 @@ Notificações background quando o changecheck detecta change. RFC 8030 com VAPI
 
 **Por quê VAPID auto-gen on first boot.** Plug-and-play: `make up` em um host limpo gera a key, persiste em `/data/vapid.json` (0o600), e o front busca via `GET /api/push/vapid-key`. Pinar `VAPID_*` em `.env` quando quiser manter subscriptions estáveis entre recreations. O volume nomeado `foldex-data` cobre o caso "esqueci de pinar".
 
-**Por quê 404/410 → DELETE.** Convenção RFC 8030 §7.3 — endpoint morto. Sem cleanup, `push_subscription` acumula rows zumbis pra cada Chrome reinstalado / Safari resetado / device descartado. Transport errors (DNS, timeout) NUNCA disparam DELETE — um blip de rede apagaria subscriptions vivas.
+**Por quê 404/410 → DELETE.** Convenção RFC 8030 §7.3 — endpoint morto. Sem cleanup, `push_subscription` acumula rows zumbis pra cada Chrome reinstalado / Safari resetado / device descartado. Transport errors (DNS, timeout) NUNCA disparam DELETE — um blip de rede apagaria subscriptions vivas. O sender limita cada fan-out a 16 alvos/4 envios concorrentes e consolida os ids 2xx/404/410 em um UPDATE e um DELETE owner-scoped, em vez de serializar rede e fazer uma write por endpoint. Esses writes incluem `user_id` porque um endpoint listado por A pode ser reassinado a B antes da persistência do resultado; o resultado stale de A não pode marcar nem apagar o row de B.
 
 **Por quê o sender é desacoplado mas pertence ao lifecycle do worker.** Depois do CAS durável, `worker.process` tenta publicar numa fila fixa de 32 notificações; workers fixos chamam `sender.Notify` com o contexto cancelável do change-check + timeout de 15s. Push lento não faz rollback do resultado, a fila cheia descarta a notificação mais nova sem criar goroutines, e `Stop` cancela/junta todo envio ativo. Falha de push = log, segue.
 
@@ -811,7 +830,7 @@ Notes são entradas pastebin-style — título + corpo HTML rico (Tiptap, markdo
 
 **Por quê polimorfizar `link_tag`/`click_log` em vez de duplicá-las.** A alternativa óbvia — `note_tag`/`note_click_log` — duplicaria a lógica de M:N e de agregação de cliques (já não-trivial: `tagsFor`, `setLinkTags`, o LATERAL join de click_count, os índices de busca por tag). Em vez disso, `link_id` virou `entity_id` + um novo `entity_kind TEXT CHECK (IN ('link','note'))`. Custo: a FK pra `link(id)` precisou ser dropada (uma coluna polimórfica não pode referenciar duas tabelas), então o cascade de delete que antes vinha de `ON DELETE CASCADE` virou app-level — `links.Repository.Delete` e `notes.Repository.Delete` agora apagam suas próprias rows de `link_tag`/`click_log` na mesma tx do delete da entidade. **Toda query contra essas duas tabelas DEVE filtrar `entity_kind`** — sem isso, um id de note pode colidir com um id de link (mesmo espaço numérico) e vazar tag/clique pro lado errado. `TestCrossContamination_LinkAndNoteRowsDoNotLeak` (`internal/notes`) é o regression guard.
 
-**Por quê `internal/entries` (UNION ALL) em vez de merge client-side.** O grid interleaved precisa de busca + sort + paginação unificados entre link e note. Hoje folders "interleiam" com links só porque folders carregam tudo de uma vez (não paginado) enquanto links são paginados — não existe precedente de merge entre dois streams independentemente paginados, e notes precisam de paginação real. Um merge client-side de duas `useInfiniteQuery` mantendo ordem global consistente através de pinned + 5 modos de sort seria um subsistema novo e frágil. Uma única query SQL `UNION ALL` (cada braço com o mesmo filtro/ordenação que `links.List`/`notes.List` já fazem) mantém sort/paginação numa única fonte, no padrão "busca é 100% server-driven" que o resto do projeto já segue. `internal/entries` é **somente leitura** — `GET /api/entries` é a única rota; mutações continuam em `/api/links` e `/api/notes`. Detalhe de implementação: o `ORDER BY` precisa estar fora do `UNION ALL` (numa subquery/derived table) porque Postgres proíbe expressões como `lower(title)` direto sob um set operation.
+**Por quê `internal/entries` (UNION ALL) em vez de merge client-side.** O grid interleaved precisa de busca + sort + paginação unificados entre link e note. Hoje folders "interleiam" com links só porque folders carregam tudo de uma vez (não paginado) enquanto links são paginados — não existe precedente de merge entre dois streams independentemente paginados, e notes precisam de paginação real. Um merge client-side de duas `useInfiniteQuery` mantendo ordem global consistente através de pinned + 5 modos de sort seria um subsistema novo e frágil. Uma única query SQL `UNION ALL` (cada braço com o mesmo filtro/ordenação que `links.List`/`notes.List` já fazem) mantém sort/paginação numa única fonte, no padrão "busca é 100% server-driven" que o resto do projeto já segue. `internal/entries` é **somente leitura**; list, counts e preview-status são projeções, enquanto mutações continuam em `/api/links` e `/api/notes`. Detalhe de implementação: o `ORDER BY` precisa estar fora do `UNION ALL` (numa subquery/derived table) porque Postgres proíbe expressões como `lower(title)` direto sob um set operation.
 
 **Por quê `/n/{id-or-slug}` renderiza em vez de redirecionar.** `/go/{id-or-slug}` resolve pra uma URL externa e redireciona; uma note não tem URL externa — `/n/` precisa renderizar o conteúdo. Fica fora de `/api` (junto com `/go/`) pra ficar compartilhável sem o guard de `SHARED_SECRET`, mesma postura de link. Loga em `click_log` (`entity_kind='note'`) na mesma tx da resolução — é o que justifica ter polimorfizado `click_log` em primeiro lugar, e dá a notes um `click_count` de graça via o mesmo padrão de LATERAL join.
 
@@ -906,7 +925,7 @@ O foldex era single-user em três camadas que se sustentavam mutuamente: sem ide
 
 **A migration 000022 corrige a exceção de mídia inline sem tornar a leitura pública privada.** `note_media` persiste owner + lease e `note_media_ref` exige, por FK composta, que note e objeto tenham o mesmo `user_id`. `body_html` só fornece candidatos; `INSERT ... SELECT` owner-scoped decide quais refs existem, e os caminhos destrutivos consultam ownership/refs. Não há backfill por HTML, portanto chaves UUID legadas continuam legíveis e não podem ser apagadas. `GET /api/files/notes/{uuid}.{ext}` fica fora de `SHARED_SECRET` e `Authenticate` para a página pública `/n/{slug}` carregar imagens, mas a rota fixa o prefixo `notes/` e exige UUID canônico + extensão raster conhecida; traversal e chaves id-derived de `screenshots/`/`images/` não alcançam o bucket por ela. Mídia de link continua exigindo o segredo, principal e ownership. Restore gera UUID novo para toda chave `notes/` referenciada, reescreve `body_html`/`cover_url` e só então mapeia os bytes do ZIP; `user_id` é campo desconhecido e invalida o snapshot.
 
-**`SHARED_SECRET` coexiste e é rebaixado** a header de perímetro ("não autentica ninguém e não identifica ninguém"); com os dois configurados, a request precisa do header **e** da sessão, exceto a leitura pública UUID-keyed de mídia exigida por `/n/{slug}`. Removido no release seguinte. A extensão MV3 migra para `Authorization: Bearer` com escopo `content`, rejeitado em `/api/auth/*`, `/api/admin/*` e `/api/backup/*` — um token de extensão roubado não pode cunhar sessão, desligar 2FA nem exfiltrar um backup.
+**`SHARED_SECRET` coexiste e é rebaixado** a header de perímetro ("não autentica ninguém e não identifica ninguém"); com os dois configurados, a request precisa do header **e** da sessão, exceto a leitura pública UUID-keyed de mídia exigida por `/n/{slug}` e o GET nativo de backup. Este último não fica público: o POST anterior exigiu header + sessão + CSRF e emitiu uma capability one-time ligada à sessão; o guard só delega enquanto ela está pendente, e `Authenticate` + ownership ainda rodam antes do stream. Removido no release seguinte. A extensão MV3 migra para `Authorization: Bearer` com escopo `content`, rejeitado em `/api/auth/*`, `/api/admin/*` e `/api/backup/*` — um token de extensão roubado não pode cunhar sessão, desligar 2FA nem exfiltrar um backup.
 
 **Escopo explicitamente fora do v1 (documentado, não esquecido).** Compartilhamento entre usuários (é colaboração, com modelo de ACL próprio). Papéis além de `admin`/`user` (a coluna é TEXT com CHECK — adicionar é uma migration de uma linha; RBAC especulativo envelhece mal). SSO genérico SAML/OIDC. Rotação de `AUTH_ENCRYPTION_KEY`. `user_id` em `click_log` — sem FK para `link`, seria segunda fonte de verdade sujeita a divergir; as queries alcançam o dono por semi-join, com a `000018` como plano B se `stats.Daily` regredir.
 

@@ -6,7 +6,9 @@ services:
   # S3-compatible object store. Root credentials stay on this service +
   # rustfs-init; the backend never receives them.
   rustfs:
-    image: rustfs/rustfs:1.0.0-beta.12
+    # RustFS has no GA release yet. Pin its newest non-preview release candidate
+    # by digest instead of following the mutable latest/rc/main channels.
+    image: rustfs/rustfs:1.0.0-rc.2@sha256:7d6d361c49c08d427250fb59aae5d78df83d644c3405d9ccf4b21cda0b0692d0
     container_name: foldex-rustfs
     restart: unless-stopped
     security_opt:
@@ -38,11 +40,12 @@ services:
 
   # One-shot: create app IAM user + bucket-scoped policy.
   rustfs-init:
+    # Build the one-shot locally: this container receives both root and app
+    # secrets, so it must never resolve through a mutable remote Foldex tag.
     build:
       context: ./backend
       dockerfile: Dockerfile
       target: rustfs-bootstrap
-    image: justoeu/foldex-rustfs-bootstrap:${FOLDEX_VERSION:-latest}
     container_name: foldex-rustfs-init
     restart: "no"
     depends_on:
@@ -62,11 +65,10 @@ services:
       - foldex
 
   backend:
-    # Pulled from Docker Hub by default. ALWAYS pin FOLDEX_VERSION in .env for
-    # non-dev (e.g. `1.9.2` — Docker tags drop the git `v` prefix). `latest` is
-    # only the compose fallback for local pull-or-build. `build:` is kept so
+    # Pulled from Docker Hub by default. FOLDEX_VERSION overrides the current
+    # release fallback (Docker tags drop the git `v` prefix). `build:` is kept so
     # `docker compose build` / `make up-build` still produce a local image.
-    image: justoeu/foldex-backend:${FOLDEX_VERSION:-latest}
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-2.0.1}
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -224,8 +226,8 @@ services:
       - foldex
 
   web:
-    # Pin FOLDEX_VERSION in .env for non-dev (same tag as backend). latest = local fallback only.
-    image: justoeu/foldex-web:${FOLDEX_VERSION:-latest}
+    # FOLDEX_VERSION overrides the current release fallback (same tag as backend).
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-2.0.1}
     build:
       context: ./web
       dockerfile: Dockerfile

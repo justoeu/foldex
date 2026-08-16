@@ -1,8 +1,11 @@
 package push
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -10,6 +13,8 @@ import (
 
 	"foldex/internal/pkg/authctx"
 )
+
+const testNotificationTimeout = 15 * time.Second
 
 // Handler exposes the HTTP surface needed by the frontend subscribe flow:
 //
@@ -21,13 +26,14 @@ import (
 //	                                   live subscription (useful when wiring
 //	                                   client-side: confirms VAPID + SW work).
 type Handler struct {
-	keys   VAPIDKeys
-	repo   *Repository
-	sender *Sender
+	keys      VAPIDKeys
+	repo      *Repository
+	sender    *Sender
+	testSlots chan struct{}
 }
 
 func NewHandler(keys VAPIDKeys, repo *Repository, sender *Sender) *Handler {
-	return &Handler{keys: keys, repo: repo, sender: sender}
+	return &Handler{keys: keys, repo: repo, sender: sender, testSlots: make(chan struct{}, 2)}
 }
 
 func (h *Handler) Mount(r chi.Router) {
@@ -61,7 +67,14 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sub, err := h.repo.Save(r.Context(), authctx.MustUser(r.Context()), in.Endpoint, in.P256dh, in.Auth)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrInvalidSubscription):
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_subscription", "endpoint, p256dh and auth are required"))
+		return
+	case errors.Is(err, ErrSubscriptionLimit):
+		httperr.Write(w, httperr.New(http.StatusConflict, "subscription_limit_reached", "unsubscribe another browser before adding this one"))
+		return
+	case err != nil:
 		httperr.Write(w, err)
 		return
 	}
@@ -100,7 +113,17 @@ func (h *Handler) test(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusServiceUnavailable, "push_disabled", "push sender not configured"))
 		return
 	}
-	err := h.sender.Notify(r.Context(), Notification{
+	select {
+	case h.testSlots <- struct{}{}:
+		defer func() { <-h.testSlots }()
+	default:
+		w.Header().Set("Retry-After", "1")
+		httperr.Write(w, httperr.New(http.StatusTooManyRequests, "push_busy", "too many push tests are already running"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), testNotificationTimeout)
+	defer cancel()
+	err := h.sender.Notify(ctx, Notification{
 		LinkID: 0,
 		Title:  "Foldex test notification",
 		URL:    "/",

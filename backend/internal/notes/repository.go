@@ -12,7 +12,6 @@ import (
 
 	"foldex/internal/entityrefs"
 	"foldex/internal/folders"
-	"foldex/internal/links"
 	"foldex/internal/notemedia"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/domainerr"
@@ -20,17 +19,18 @@ import (
 	"foldex/internal/pkg/listquery"
 	"foldex/internal/pkg/pgerr"
 	"foldex/internal/pkg/slug"
+	"foldex/internal/ports"
 	"foldex/internal/tags"
 )
 
 type Repository struct {
 	pool    *pgxpool.Pool
-	storage links.Uploader
+	storage ports.Uploader
 }
 
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
-func (r *Repository) WithStorage(storage links.Uploader) *Repository {
+func (r *Repository) WithStorage(storage ports.Uploader) *Repository {
 	r.storage = storage
 	return r
 }
@@ -45,7 +45,7 @@ func (r *Repository) ForgetMediaLease(ctx context.Context, uid authctx.UserID, k
 
 // click_count/last_clicked_at are derived from click_log via the LATERAL
 // join, mirroring links — there is no denormalized counter on `note` either.
-// noteDetailColumns is for Get/GetBySlug (full body). noteListColumns omits
+// noteDetailColumns is for Get and public resolution (full body). noteListColumns omits
 // body_html/body_text so List never ships up to 512 KiB of HTML per row.
 const noteDetailColumns = `
     n.id, n.title, n.slug, n.body_html, n.body_text,
@@ -148,35 +148,13 @@ func (r *Repository) Get(ctx context.Context, uid authctx.UserID, id int64) (Not
 	if err != nil {
 		return Note{}, fmt.Errorf("get note: %w", err)
 	}
-	tags, err := r.tagsFor(ctx, uid, []int64{id})
+	tagsByNote, err := r.tagsFor(ctx, uid, []int64{id})
 	if err != nil {
 		return Note{}, err
 	}
-	n.Tags = tags[id]
+	n.Tags = tagsByNote[id]
 	if n.Tags == nil {
-		n.Tags = []links.Tag{}
-	}
-	return n, nil
-}
-
-// GetBySlug is the slug-keyed sibling of Get. The PUBLIC /n/{slug} route does
-// NOT use this — it goes through SystemViewAndResolve in repository_system.go.
-func (r *Repository) GetBySlug(ctx context.Context, uid authctx.UserID, s string) (Note, error) {
-	var n Note
-	err := scanNote(r.pool.QueryRow(ctx, `SELECT `+noteDetailColumns+noteFrom+` WHERE n.user_id = $1 AND n.slug = $2`, int64(uid), s), &n)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Note{}, domainerr.ErrNotFound
-	}
-	if err != nil {
-		return Note{}, fmt.Errorf("get note by slug: %w", err)
-	}
-	tags, err := r.tagsFor(ctx, uid, []int64{n.ID})
-	if err != nil {
-		return Note{}, err
-	}
-	n.Tags = tags[n.ID]
-	if n.Tags == nil {
-		n.Tags = []links.Tag{}
+		n.Tags = []tags.Chip{}
 	}
 	return n, nil
 }
@@ -201,7 +179,7 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
 		if err := scanNote(rows, &n); err != nil {
 			return nil, err
 		}
-		n.Tags = []links.Tag{}
+		n.Tags = []tags.Chip{}
 		out = append(out, n)
 		ids = append(ids, n.ID)
 	}
@@ -346,7 +324,7 @@ func assertNoteOwned(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int6
 // to exist for links was dropped when these tables were polymorphized). Media
 // cleanup is authorized only by owner-scoped note_media_ref rows; body_html is
 // attacker-authored and never grants delete authority.
-func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, storage links.Uploader) error {
+func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, storage ports.Uploader) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin delete tx: %w", err)
@@ -382,7 +360,7 @@ func extractImageKeys(bodyHTML string) []string {
 	return notemedia.Keys(bodyHTML)
 }
 
-func (r *Repository) cleanupMedia(ctx context.Context, uid authctx.UserID, keys []string, storage links.Uploader) {
+func (r *Repository) cleanupMedia(ctx context.Context, uid authctx.UserID, keys []string, storage ports.Uploader) {
 	if storage == nil || len(keys) == 0 {
 		return
 	}
@@ -391,7 +369,7 @@ func (r *Repository) cleanupMedia(ctx context.Context, uid authctx.UserID, keys 
 	_, _ = notemedia.DeleteOwnedUnreferenced(cleanupCtx, r.pool, uid, keys, storage)
 }
 
-func (r *Repository) tagsFor(ctx context.Context, uid authctx.UserID, noteIDs []int64) (map[int64][]links.Tag, error) {
+func (r *Repository) tagsFor(ctx context.Context, uid authctx.UserID, noteIDs []int64) (map[int64][]tags.Chip, error) {
 	return tags.TagsForEntities(ctx, r.pool, uid, "note", noteIDs)
 }
 

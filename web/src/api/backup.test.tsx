@@ -1,11 +1,10 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import {
   appendBackupHistory,
   countsFromHeaders,
-  extractManifestFromZip,
   generateBackup,
   readBackupHistory,
   restoreBackup,
@@ -17,92 +16,60 @@ import { http } from './client'
 
 let state: MockState
 
-type ZipFixtureOptions = {
-  body?: string
-  centralFlags?: number
-  localFlags?: number
-  centralCompression?: number
-  localCompression?: number
-  centralSignature?: number
-  localSignature?: number
-  compressedSize?: number
-  localCompressedSize?: number
-  localUncompressedSize?: number
-  centralOffset?: number
-  centralSize?: number
-  localExtraLength?: number
-  localName?: string
-  centralCopies?: number
-  entryCount?: number
-  comment?: Uint8Array
+const downloadCounts = {
+  links: 5, notes: 4, tags: 2, folders: 1, link_tags: 3,
+  click_logs: 8, files: 1, file_bytes: 1024,
 }
 
-function manifestZip(options: ZipFixtureOptions = {}): Uint8Array {
-  const encoder = new TextEncoder()
-  const name = encoder.encode('manifest.json')
-  const localName = encoder.encode(options.localName ?? 'manifest.json')
-  const data = encoder.encode(options.body ?? JSON.stringify({
-    kind: 'foldex.backup',
-    version: '1.0',
-    schema_version: 8,
-    created_at: '2026-05-14T03:00:00Z',
-    counts: { links: 9, tags: 1, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
-    checksums: {},
-  }))
-  const local = new Uint8Array(30 + localName.length + data.length)
-  const ldv = new DataView(local.buffer)
-  ldv.setUint32(0, options.localSignature ?? 0x04034b50, true)
-  ldv.setUint16(6, options.localFlags ?? 0, true)
-  ldv.setUint16(8, options.localCompression ?? 0, true)
-  ldv.setUint32(18, options.localCompressedSize ?? data.length, true)
-  ldv.setUint32(22, options.localUncompressedSize ?? data.length, true)
-  ldv.setUint16(26, localName.length, true)
-  ldv.setUint16(28, options.localExtraLength ?? 0, true)
-  local.set(localName, 30)
-  local.set(data, 30 + localName.length)
-
-  const centralEntry = new Uint8Array(46 + name.length)
-  const cdv = new DataView(centralEntry.buffer)
-  cdv.setUint32(0, options.centralSignature ?? 0x02014b50, true)
-  cdv.setUint16(8, options.centralFlags ?? 0, true)
-  cdv.setUint16(10, options.centralCompression ?? 0, true)
-  cdv.setUint32(20, options.compressedSize ?? data.length, true)
-  cdv.setUint32(24, data.length, true)
-  cdv.setUint16(28, name.length, true)
-  cdv.setUint32(42, 0, true)
-  centralEntry.set(name, 46)
-  const centralCopies = options.centralCopies ?? 1
-  const cd = new Uint8Array(centralEntry.length * centralCopies)
-  for (let index = 0; index < centralCopies; index++) cd.set(centralEntry, index * centralEntry.length)
-
-  const comment = options.comment ?? new Uint8Array()
-  const eocd = new Uint8Array(22 + comment.length)
-  const edv = new DataView(eocd.buffer)
-  edv.setUint32(0, 0x06054b50, true)
-  const entryCount = options.entryCount ?? centralCopies
-  edv.setUint16(8, entryCount, true)
-  edv.setUint16(10, entryCount, true)
-  edv.setUint32(12, options.centralSize ?? cd.length, true)
-  edv.setUint32(16, options.centralOffset ?? local.length, true)
-  edv.setUint16(20, comment.length, true)
-  eocd.set(comment, 22)
-
-  const out = new Uint8Array(local.length + cd.length + eocd.length)
-  out.set(local, 0)
-  out.set(cd, local.length)
-  out.set(eocd, local.length + cd.length)
-  return out
+function mockNavigationTicket() {
+  vi.mocked(http.post).mockResolvedValueOnce({
+    data: {
+      id: 'download-id',
+      download_url: '/api/backup/download?id=download-id&token=one-time-token',
+      status_url: '/api/backup/download/status?id=download-id',
+      filename: 'foldex-backup-20260514T030000Z.zip',
+      created_at: '2026-05-14T03:00:00Z',
+      expires_at: '2026-05-14T03:01:00Z',
+    },
+  } as never)
 }
 
-function blobFromBytes(bytes: Uint8Array): Blob {
-  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
-  return new Blob([buffer])
+function downloadStatus(
+  state: 'pending' | 'running' | 'complete' | 'failed',
+  error?: { code: string; message: string },
+) {
+  return {
+    data: {
+      id: 'download-id',
+      state,
+      created_at: '2026-05-14T03:00:00Z',
+      duration_ms: state === 'complete' ? 42 : 0,
+      size_bytes: state === 'complete' ? 4096 : 0,
+      counts: state === 'complete' ? downloadCounts : {
+        links: 0, notes: 0, tags: 0, folders: 0, link_tags: 0,
+        click_logs: 0, files: 0, file_bytes: 0,
+      },
+      ...(error ? { error } : {}),
+    },
+  }
+}
+
+function mockCompletedNavigationDownload() {
+  mockNavigationTicket()
+  vi.mocked(http.get).mockResolvedValueOnce({
+    ...downloadStatus('complete'),
+  } as never)
 }
 
 beforeEach(() => {
   state = freshState()
   installAxiosMock(state)
   localStorage.clear()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+  delete (window as Window & { showSaveFilePicker?: unknown }).showSaveFilePicker
 })
 
 describe('backup history (localStorage)', () => {
@@ -117,7 +84,7 @@ describe('backup history (localStorage)', () => {
         created_at: `2026-05-${10 + i}T00:00:00Z`,
         duration_ms: 100,
         size_bytes: 1024,
-        counts: { links: i, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+        counts: { links: i, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
       })
     }
     const out = readBackupHistory()
@@ -139,7 +106,7 @@ describe('backup history (localStorage)', () => {
       created_at: '2026-05-14T03:00:00Z',
       duration_ms: 100,
       size_bytes: 1024,
-      counts: { links: 1, tags: 2, folders: 3, link_tags: 4, click_logs: 5, files: 6, file_bytes: 7 },
+      counts: { links: 1, notes: 8, tags: 2, folders: 3, link_tags: 4, click_logs: 5, files: 6, file_bytes: 7 },
     }
     localStorage.setItem('foldex.backups', JSON.stringify([
       valid,
@@ -156,13 +123,27 @@ describe('backup history (localStorage)', () => {
     expect(JSON.parse(localStorage.getItem('foldex.backups') ?? '[]')).toEqual([valid])
   })
 
+  it('upgrades persisted history written before note counts existed', () => {
+    const legacy = {
+      id: 'legacy',
+      created_at: '2026-05-14T03:00:00Z',
+      duration_ms: 100,
+      size_bytes: 1024,
+      counts: { links: 1, tags: 2, folders: 3, link_tags: 4, click_logs: 5, files: 6, file_bytes: 7 },
+    }
+    localStorage.setItem('foldex.backups', JSON.stringify([legacy]))
+
+    expect(readBackupHistory()[0]?.counts.notes).toBe(0)
+    expect(JSON.parse(localStorage.getItem('foldex.backups') ?? '[]')[0].counts.notes).toBe(0)
+  })
+
   it('removes persisted history entries beyond the maximum', () => {
     const entries = Array.from({ length: 12 }, (_, index) => ({
       id: `id-${index}`,
       created_at: '2026-05-14T03:00:00Z',
       duration_ms: index,
       size_bytes: index,
-      counts: { links: index, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+      counts: { links: index, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
     }))
     localStorage.setItem('foldex.backups', JSON.stringify(entries))
 
@@ -180,7 +161,7 @@ describe('backup history (localStorage)', () => {
         created_at: '2026-05-01T00:00:00Z',
         duration_ms: 1,
         size_bytes: 1,
-        counts: { links: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+        counts: { links: 0, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
       }),
     ).not.toThrow()
     expect(spy).toHaveBeenCalledOnce()
@@ -190,6 +171,7 @@ describe('backup history (localStorage)', () => {
 
 describe('generateBackup with broken localStorage', () => {
   it('still triggers download when appendBackupHistory cannot persist', async () => {
+    mockCompletedNavigationDownload()
     const setSpy = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
       throw new Error('QuotaExceededError')
     })
@@ -210,9 +192,93 @@ describe('generateBackup with broken localStorage', () => {
 })
 
 describe('generateBackup', () => {
-  it('downloads the zip and appends to history', async () => {
+  it('streams the response into a browser-selected file and records history', async () => {
+    const writes: Uint8Array[] = []
+    const writer = {
+      write: vi.fn(async (chunk: Uint8Array) => { writes.push(chunk) }),
+      close: vi.fn(async () => undefined),
+      abort: vi.fn(async () => undefined),
+    }
+    Object.defineProperty(window, 'showSaveFilePicker', {
+      configurable: true,
+      value: vi.fn(async () => ({ createWritable: async () => ({ getWriter: () => writer }) })),
+    })
+    const reader = {
+      read: vi.fn()
+        .mockResolvedValueOnce({ done: false, value: new Uint8Array([1, 2]) })
+        .mockResolvedValueOnce({ done: false, value: new Uint8Array([3, 4, 5]) })
+        .mockResolvedValueOnce({ done: true, value: undefined }),
+      cancel: vi.fn(async () => undefined),
+    }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({
+        'X-Foldex-Backup-Filename': 'foldex-backup-20260514T030000Z.zip',
+        'X-Foldex-Backup-Counts-Links': '5',
+        'X-Foldex-Backup-Counts-Notes': '4',
+        'X-Foldex-Backup-Counts-Tags': '2',
+        'X-Foldex-Backup-Counts-Folders': '1',
+      }),
+      body: { getReader: () => reader },
+    } as unknown as Response)
+    const objectURL = vi.spyOn(URL, 'createObjectURL')
+
+    const entry = await generateBackup()
+
+    expect(fetchSpy).toHaveBeenCalledWith('/api/backup', expect.objectContaining({
+      method: 'POST',
+      credentials: 'include',
+    }))
+    expect(writes.map((chunk) => [...chunk])).toEqual([[1, 2], [3, 4, 5]])
+    expect(writer.close).toHaveBeenCalledOnce()
+    expect(objectURL).not.toHaveBeenCalled()
+    expect(entry).toMatchObject({
+      created_at: '2026-05-14T03:00:00Z',
+      size_bytes: 5,
+      counts: { links: 5, notes: 4, tags: 2, folders: 1 },
+    })
+    expect(readBackupHistory()).toEqual([entry])
+  })
+
+  it('cancels the response and file writer when a streamed write fails', async () => {
+    const failure = new Error('disk full')
+    const writer = {
+      write: vi.fn().mockRejectedValue(failure),
+      close: vi.fn(async () => undefined),
+      abort: vi.fn(async () => undefined),
+    }
+    Object.defineProperty(window, 'showSaveFilePicker', {
+      configurable: true,
+      value: vi.fn(async () => ({ createWritable: async () => ({ getWriter: () => writer }) })),
+    })
+    const reader = {
+      read: vi.fn().mockResolvedValue({ done: false, value: new Uint8Array([1]) }),
+      cancel: vi.fn(async () => undefined),
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'X-Foldex-Backup-Counts-Links': '1' }),
+      body: { getReader: () => reader },
+    } as unknown as Response)
+
+    await expect(generateBackup()).rejects.toThrow('disk full')
+
+    expect(reader.cancel).toHaveBeenCalledWith(failure)
+    expect(writer.abort).toHaveBeenCalledWith(failure)
+    expect(writer.close).not.toHaveBeenCalled()
+    expect(readBackupHistory()).toEqual([])
+  })
+
+  it('uses a one-time native navigation without constructing a Blob', async () => {
+    mockCompletedNavigationDownload()
     const clickSpy = vi.fn()
     const appendSpy = vi.spyOn(document.body, 'appendChild')
+    const objectURL = vi.spyOn(URL, 'createObjectURL')
+    const realBlob = globalThis.Blob
+    const blobConstructor = vi.fn()
+    Object.defineProperty(globalThis, 'Blob', { configurable: true, writable: true, value: blobConstructor })
     // Stub anchor click since jsdom invokes navigation.
     const origCreate = document.createElement.bind(document)
     vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
@@ -221,12 +287,114 @@ describe('generateBackup', () => {
       return el
     })
 
-    const entry = await generateBackup()
+    const entry = await generateBackup().finally(() => {
+      Object.defineProperty(globalThis, 'Blob', { configurable: true, writable: true, value: realBlob })
+    })
     expect(entry.counts.links).toBe(5)
-    expect(entry.size_bytes).toBeGreaterThan(0)
+    expect(entry.size_bytes).toBe(4096)
+    expect(http.post).toHaveBeenCalledWith('/api/backup/download')
+    expect(http.get).toHaveBeenCalledWith('/api/backup/download/status?id=download-id')
     expect(clickSpy).toHaveBeenCalledOnce()
     expect(appendSpy).toHaveBeenCalled()
+    const anchor = vi.mocked(document.createElement).mock.results.find((result) =>
+      result.value instanceof HTMLAnchorElement)?.value as HTMLAnchorElement
+    expect(anchor.href).toContain('/api/backup/download?id=download-id&token=one-time-token')
+    expect(anchor.referrerPolicy).toBe('no-referrer')
+    expect(blobConstructor).not.toHaveBeenCalled()
+    expect(objectURL).not.toHaveBeenCalled()
     expect(readBackupHistory()).toHaveLength(1)
+  })
+
+  it('polls pending to running to complete and records history only after completion', async () => {
+    vi.useFakeTimers()
+    mockNavigationTicket()
+    vi.mocked(http.get)
+      .mockResolvedValueOnce(downloadStatus('pending') as never)
+      .mockResolvedValueOnce(downloadStatus('running') as never)
+      .mockResolvedValueOnce(downloadStatus('complete') as never)
+    const origCreate = document.createElement.bind(document)
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = origCreate(tag)
+      if (tag === 'a') (el as HTMLAnchorElement).click = vi.fn()
+      return el
+    })
+
+    const result = generateBackup()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(http.get).toHaveBeenCalledTimes(1)
+    expect(readBackupHistory()).toEqual([])
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(http.get).toHaveBeenCalledTimes(2)
+    expect(readBackupHistory()).toEqual([])
+
+    await vi.advanceTimersByTimeAsync(1_999)
+    expect(http.get).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(result).resolves.toMatchObject({ id: 'download-id', size_bytes: 4096 })
+    expect(readBackupHistory()).toHaveLength(1)
+  })
+
+  it('surfaces a failed native download after polling and does not write history', async () => {
+    vi.useFakeTimers()
+    mockNavigationTicket()
+    vi.mocked(http.get)
+      .mockResolvedValueOnce(downloadStatus('pending') as never)
+      .mockResolvedValueOnce(downloadStatus('failed', {
+        code: 'backup_busy', message: 'another backup archive operation is in progress',
+      }) as never)
+    const origCreate = document.createElement.bind(document)
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = origCreate(tag)
+      if (tag === 'a') (el as HTMLAnchorElement).click = vi.fn()
+      return el
+    })
+
+    const result = generateBackup()
+    const rejection = expect(result).rejects.toThrow('another backup archive operation is in progress')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(readBackupHistory()).toEqual([])
+    await vi.advanceTimersByTimeAsync(1_000)
+    await rejection
+    expect(http.get).toHaveBeenCalledTimes(2)
+    expect(readBackupHistory()).toEqual([])
+  })
+
+  it('times out with bounded progressive polling and does not write history', async () => {
+    vi.useFakeTimers()
+    mockNavigationTicket()
+    vi.mocked(http.get).mockResolvedValue(downloadStatus('pending') as never)
+    const origCreate = document.createElement.bind(document)
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = origCreate(tag)
+      if (tag === 'a') (el as HTMLAnchorElement).click = vi.fn()
+      return el
+    })
+
+    const result = generateBackup()
+    const rejection = expect(result).rejects.toThrow('backup download timed out')
+    await vi.advanceTimersByTimeAsync(30 * 60_000)
+    await rejection
+    expect(vi.mocked(http.get).mock.calls.length).toBeLessThan(200)
+    expect(readBackupHistory()).toEqual([])
+  })
+
+  it('refuses a cross-origin download URL before creating a navigation', async () => {
+    vi.mocked(http.post).mockResolvedValueOnce({
+      data: {
+        id: 'download-id',
+        download_url: 'https://attacker.test/backup.zip',
+        status_url: '/api/backup/download/status?id=download-id',
+        filename: 'backup.zip',
+        created_at: '2026-05-14T03:00:00Z',
+        expires_at: '2026-05-14T03:01:00Z',
+      },
+    } as never)
+    const createElement = vi.spyOn(document, 'createElement')
+
+    await expect(generateBackup()).rejects.toThrow('backup download URL must be same-origin')
+    expect(createElement).not.toHaveBeenCalled()
+    expect(http.get).not.toHaveBeenCalled()
   })
 })
 
@@ -238,6 +406,7 @@ describe('countsFromHeaders', () => {
   it('parses full count set from X-Foldex-Backup-Counts-*', () => {
     const c = countsFromHeaders({
       'X-Foldex-Backup-Counts-Links': '5',
+      'X-Foldex-Backup-Counts-Notes': '4',
       'x-foldex-backup-counts-tags': '2',
       'X-Foldex-Backup-Counts-Folders': '1',
       'X-Foldex-Backup-Counts-Link-Tags': '3',
@@ -246,127 +415,9 @@ describe('countsFromHeaders', () => {
       'X-Foldex-Backup-Counts-File-Bytes': '0',
     })
     expect(c).toEqual({
-      links: 5, tags: 2, folders: 1, link_tags: 3,
+      links: 5, notes: 4, tags: 2, folders: 1, link_tags: 3,
       click_logs: 8, files: 0, file_bytes: 0,
     })
-  })
-})
-
-describe('extractManifestFromZip (slice/EOCD)', () => {
-  it('reads manifest without requiring a full-arrayBuffer copy of the blob', async () => {
-    // Reuse the mock's minimal zip builder via generateBackup's zip shape.
-    // Build a tiny store-method zip with manifest.json inline.
-    const manifest = {
-      kind: 'foldex.backup',
-      version: '1.0',
-      schema_version: 8,
-      created_at: '2026-05-14T03:00:00Z',
-      counts: { links: 9, tags: 1, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
-      checksums: {},
-    }
-    const name = new TextEncoder().encode('manifest.json')
-    const data = new TextEncoder().encode(JSON.stringify(manifest))
-    const local = new Uint8Array(30 + name.length + data.length)
-    const ldv = new DataView(local.buffer)
-    ldv.setUint32(0, 0x04034b50, true)
-    ldv.setUint16(8, 0, true) // store
-    ldv.setUint32(18, data.length, true)
-    ldv.setUint32(22, data.length, true)
-    ldv.setUint16(26, name.length, true)
-    local.set(name, 30)
-    local.set(data, 30 + name.length)
-
-    const cd = new Uint8Array(46 + name.length)
-    const cdv = new DataView(cd.buffer)
-    cdv.setUint32(0, 0x02014b50, true)
-    cdv.setUint16(10, 0, true)
-    cdv.setUint32(20, data.length, true)
-    cdv.setUint32(24, data.length, true)
-    cdv.setUint16(28, name.length, true)
-    cdv.setUint32(42, 0, true) // local hdr offset
-    cd.set(name, 46)
-
-    const eocd = new Uint8Array(22)
-    const edv = new DataView(eocd.buffer)
-    edv.setUint32(0, 0x06054b50, true)
-    edv.setUint16(8, 1, true)
-    edv.setUint16(10, 1, true)
-    edv.setUint32(12, cd.length, true)
-    edv.setUint32(16, local.length, true)
-
-    const zip = new Uint8Array(local.length + cd.length + eocd.length)
-    zip.set(local, 0)
-    zip.set(cd, local.length)
-    zip.set(eocd, local.length + cd.length)
-
-    const blob = new Blob([zip.buffer as ArrayBuffer])
-    // Spy: full arrayBuffer on the whole blob must NOT be required.
-    const fullAB = vi.spyOn(blob, 'arrayBuffer')
-    const got = await extractManifestFromZip(blob)
-    expect(got?.counts.links).toBe(9)
-    expect(got?.created_at).toBe('2026-05-14T03:00:00Z')
-    // Only slice().arrayBuffer paths — never blob.arrayBuffer() on the whole zip.
-    expect(fullAB).not.toHaveBeenCalled()
-  })
-
-  it('handles a legal ZIP comment containing a false EOCD signature', async () => {
-    const comment = new Uint8Array(32)
-    comment.set([0x50, 0x4b, 0x05, 0x06], 2)
-    const got = await extractManifestFromZip(blobFromBytes(manifestZip({ comment })))
-    expect(got?.counts.links).toBe(9)
-  })
-
-  it('reads a valid streamed ZIP that uses a data descriptor', async () => {
-    const got = await extractManifestFromZip(blobFromBytes(manifestZip({
-      centralFlags: 1 << 3,
-      localFlags: 1 << 3,
-      localCompressedSize: 0,
-      localUncompressedSize: 0,
-    })))
-    expect(got?.counts.links).toBe(9)
-  })
-
-  it('rejects a Zip64 entry count sentinel', async () => {
-    expect(await extractManifestFromZip(blobFromBytes(manifestZip({ entryCount: 0xffff })))).toBeNull()
-  })
-
-  it('rejects duplicate manifest entries', async () => {
-    expect(await extractManifestFromZip(blobFromBytes(manifestZip({ centralCopies: 2 })))).toBeNull()
-  })
-
-  it.each([
-    ['central header', { centralFlags: 1 }],
-    ['local header', { localFlags: 1 }],
-  ])('rejects an encrypted manifest in the %s', async (_name, options) => {
-    expect(await extractManifestFromZip(blobFromBytes(manifestZip(options)))).toBeNull()
-  })
-
-  it.each([
-    ['filename', { localName: 'different.json' }],
-    ['stored size', { localCompressedSize: 1 }],
-  ])('rejects a central/local %s mismatch', async (_name, options) => {
-    expect(await extractManifestFromZip(blobFromBytes(manifestZip(options)))).toBeNull()
-  })
-
-  it.each([
-    ['truncated EOCD', () => manifestZip().slice(0, -5)],
-    ['truncated central directory', () => manifestZip({ centralSize: 40 })],
-    ['truncated local extra/data', () => manifestZip({ localExtraLength: 0xffff })],
-    ['bad central signature', () => manifestZip({ centralSignature: 0x11111111 })],
-    ['bad local signature', () => manifestZip({ localSignature: 0x11111111 })],
-    ['unsupported central compression', () => manifestZip({ centralCompression: 8 })],
-    ['unsupported local compression', () => manifestZip({ localCompression: 8 })],
-    ['overflowing central offset', () => manifestZip({ centralOffset: 0xffffffff })],
-    ['overflowing manifest size', () => manifestZip({ compressedSize: 0xffffffff })],
-  ])('rejects %s', async (_name, fixture) => {
-    expect(await extractManifestFromZip(blobFromBytes(fixture()))).toBeNull()
-  })
-
-  it.each([
-    ['malformed JSON', '{not-json'],
-    ['malformed manifest shape', '{"kind":1}'],
-  ])('rejects %s', async (_name, body) => {
-    expect(await extractManifestFromZip(blobFromBytes(manifestZip({ body })))).toBeNull()
   })
 })
 
@@ -454,7 +505,7 @@ describe('useRestoreBackup', () => {
     })
 
     expect(invalidate.mock.calls.map((call) => call[0]?.queryKey?.[0])).toEqual([
-      'links', 'entries', 'folders', 'tags', 'stats',
+      'links', 'entries', 'folders', 'tags', 'stats', 'entry-counts',
     ])
   })
 

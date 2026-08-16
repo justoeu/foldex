@@ -7,11 +7,18 @@
     "placeholder": "Buscar ou criar pasta…",
     "create_empty": "Nova pasta…",
     "create_inline": "Criar pasta \"{{name}}\"",
+    "create_error": "Não foi possível criar esta pasta. Verifique sua conexão e tente novamente.",
     "no_match": "Nenhuma pasta correspondente",
     "toggle_aria": "Abrir lista de pastas",
     "input_aria": "pasta",
     "list_aria": "pastas",
     "none": "Nenhuma pasta"
+  },
+  "tag_picker": {
+    "registered_label": "Tags cadastradas",
+    "page_prev_aria": "página anterior",
+    "page_next_aria": "próxima página",
+    "create_inline": "criar \"{{name}}\""
   },
   "common": {
     "cancel": "Cancelar",
@@ -141,7 +148,9 @@
     "breadcrumb_reload_tooltip": "Recarregar links e subpastas",
     "breadcrumb_edit_tooltip": "Editar pasta",
     "breadcrumb_edit_label": "Editar pasta",
-    "merge_new_folder_name": "Nova pasta"
+    "merge_new_folder_name": "Nova pasta",
+    "merge_error": "Não foi possível agrupar estes itens. A visualização foi atualizada. Tente agrupá-los novamente.",
+    "merge_partial_error": "Uma pasta foi criada, mas nem todos os itens foram movidos. A visualização foi atualizada. Mova o item restante manualmente ou tente de novo."
   },
   "links": {
     "load_more": "Carregar mais",
@@ -350,7 +359,9 @@
     "gradient_drag_tooltip": "Arraste para inverter",
     "gradient_hue_aria": "seletor de matiz para gradiente",
     "submit_create": "Criar tag",
-    "submit_save": "Salvar"
+    "submit_save": "Salvar",
+    "error_name_taken": "Já existe uma tag com este nome. Escolha outro nome e tente novamente.",
+    "error_generic": "Não foi possível salvar esta tag. Verifique sua conexão e tente novamente."
   },
   "tag_manager": {
     "title": "Gerenciar tags",
@@ -487,7 +498,7 @@
   },
   "backup": {
     "card_title": "💾 Backup completo",
-    "card_body": "Gera um ZIP com todas as tabelas (tags, pastas, links, M:N, click_log) e todos os arquivos do bucket (screenshots + imagens).",
+    "card_body": "Gera um ZIP com todas as tabelas (tags, pastas, links, notas, M:N, click_log) e todos os arquivos do bucket (screenshots + imagens).",
     "card_kicker": "DB + RustFS",
     "generate_button": "Gerar backup completo",
     "generating": "Gerando…",
@@ -496,7 +507,7 @@
     "restore_file_invalid": "Arquivo precisa ser um .zip de backup do foldex.",
     "generate_failed": "falha ao gerar backup",
     "history_section_title": "Histórico",
-    "history_format_files": "{{files}} files · {{size}} · {{duration}} · {{links}} links / {{tags}} tags",
+    "history_format_files": "{{files}} arquivos · {{size}} · {{duration}} · {{links}} links / {{notes}} notas / {{tags}} tags",
     "duration_ms": "{{value}}ms",
     "duration_s": "{{value}}s",
     "restore_button": "Restaurar",
@@ -523,7 +534,7 @@
     "mode_duplicate_title": "Duplicar",
     "mode_duplicate_desc": "Renomeia tags conflitantes pra \"nome (2)\"; folders sempre são criados novos. Links com URL idêntica caem pra skip (URL é UNIQUE).",
     "mode_wipe_title": "⚠ Limpar tudo e importar",
-    "mode_wipe_desc": "DESTRUTIVO. Apaga TODOS os links, tags, pastas, cliques e arquivos atuais; restaura com IDs originais preservados.",
+    "mode_wipe_desc": "DESTRUTIVO. Apaga TODOS os links, notas, tags, pastas, cliques e arquivos atuais; restaura com IDs originais preservados.",
     "submit_restore": "Restaurar",
     "submit_restore_wipe": "⚠ Restaurar (zerar tudo)",
     "submit_restoring": "Restaurando…",
@@ -535,7 +546,7 @@
     "summary_manifest": "Manifest",
     "summary_manifest_value": "{{status}} {{version}} · schema {{schema}}",
     "summary_content": "Conteúdo",
-    "summary_content_value": "{{links}} links · {{tags}} tags · {{folders}} pastas",
+    "summary_content_value": "{{links}} links · {{notes}} notas · {{tags}} tags · {{folders}} pastas",
     "summary_clicks": "Cliques",
     "summary_clicks_value": "{{count}} cliques",
     "summary_files": "Arquivos",
@@ -548,8 +559,8 @@
     "result_skipped": "Pulados",
     "result_files": "Arquivos",
     "result_duration": "Duração",
-    "result_inserted_format": "{{links}} links · {{tags}} tags · {{folders}} pastas · {{clicks}} cliques",
-    "result_skipped_format": "{{links}} links · {{tags}} tags",
+    "result_inserted_format": "{{links}} links · {{notes}} notas · {{tags}} tags · {{folders}} pastas · {{clicks}} cliques",
+    "result_skipped_format": "{{links}} links · {{notes}} notas · {{tags}} tags",
     "result_files_format": "{{uploaded}} uploads · {{skipped}} já existentes"
   },
   "stats": {

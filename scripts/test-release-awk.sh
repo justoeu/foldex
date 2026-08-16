@@ -24,22 +24,26 @@ if [ ! -f "$RELEASE" ]; then
   exit 1
 fi
 
-# Extract update_version() out of release.sh and into a tiny harness.
+# Extract the rewrite functions out of release.sh and into a tiny harness.
 # Sourcing release.sh directly would trigger its dirty-tree check, so we
-# slice the function only. Anchored on `update_version() {` / closing `}`.
+# slice the functions only. Each closing brace is anchored at column zero.
 HARNESS=$(mktemp)
 trap 'rm -f "$HARNESS"' EXIT
 
-awk '
-  /^update_version\(\) \{/ { capturing = 1 }
-  capturing { print }
-  capturing && /^\}$/ { capturing = 0 }
-' "$RELEASE" >"$HARNESS"
+for function_name in update_version update_compose_version; do
+  awk -v function_name="$function_name" '
+    $0 == function_name "() {" { capturing = 1 }
+    capturing { print }
+    capturing && /^\}$/ { exit }
+  ' "$RELEASE" >>"$HARNESS"
+done
 
-if ! grep -q "^update_version()" "$HARNESS"; then
-  echo "✗ could not extract update_version() from release.sh" >&2
-  exit 1
-fi
+for function_name in update_version update_compose_version; do
+  grep -q "^$function_name()" "$HARNESS" || {
+    echo "✗ could not extract $function_name() from release.sh" >&2
+    exit 1
+  }
+done
 
 # ─── case 1: first-match-only on a fixture with TWO "version" strings ──
 
@@ -142,5 +146,137 @@ for invalid in 01.2.3 1.02.3 1.2.03 1.2.3-rc.1 1x2x3; do
 done
 echo "✓ case 4: explicit versions use strict semver"
 
+# ─── case 5: both Compose image defaults move in lockstep ──────────────
+
+COMPOSE_FIXTURE=$(mktemp)
+trap 'rm -f "$HARNESS" "$FIXTURE" "$COMPOSE_FIXTURE"' EXIT
+cat >"$COMPOSE_FIXTURE" <<'YAML'
+services:
+  backend:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+  unrelated:
+    image: example/tool:1.1.1
+YAML
+
+(
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  CUR="1.1.1"
+  NEW="9.9.9"
+  update_compose_version "$COMPOSE_FIXTURE"
+)
+
+grep -Fq 'justoeu/foldex-backend:${FOLDEX_VERSION:-9.9.9}' "$COMPOSE_FIXTURE" || {
+  echo "✗ backend Compose default was not bumped" >&2
+  exit 1
+}
+grep -Fq 'justoeu/foldex-web:${FOLDEX_VERSION:-9.9.9}' "$COMPOSE_FIXTURE" || {
+  echo "✗ web Compose default was not bumped" >&2
+  exit 1
+}
+grep -Fq 'example/tool:1.1.1' "$COMPOSE_FIXTURE" || {
+  echo "✗ unrelated Compose image was rewritten" >&2
+  exit 1
+}
+if grep -Eq 'justoeu/foldex-(backend|web):.*latest' "$COMPOSE_FIXTURE"; then
+  echo "✗ Foldex Compose defaults must never use latest" >&2
+  exit 1
+fi
+
+ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+CURRENT=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/web/package.json" |
+            sed -n '1s/.*"\([^"]*\)"$/\1/p')
+for image in backend web; do
+  grep -Fq "justoeu/foldex-$image:\${FOLDEX_VERSION:-$CURRENT}" "$ROOT/docker-compose.yml" || {
+    echo "✗ current $image Compose default is not locked to release $CURRENT" >&2
+    exit 1
+  }
+done
+if grep -Eq 'justoeu/foldex-(backend|web):.*latest' "$ROOT/docker-compose.yml"; then
+  echo "✗ current Foldex Compose defaults must never use latest" >&2
+  exit 1
+fi
+echo "✓ case 5: backend/web Compose defaults move together without :latest"
+
+# ─── case 6: dirty/off-main gates and failed-commit rollback ───────────
+
+GATE_ROOT=$(mktemp -d)
+trap 'rm -f "$HARNESS" "$FIXTURE" "$COMPOSE_FIXTURE"; rm -rf "$GATE_ROOT"' EXIT
+mkdir -p "$GATE_ROOT/repo/scripts" "$GATE_ROOT/repo/web" "$GATE_ROOT/repo/extension"
+cp "$RELEASE" "$GATE_ROOT/repo/scripts/release.sh"
+cat >"$GATE_ROOT/repo/web/package.json" <<'JSON'
+{"version":"1.2.3"}
+JSON
+cat >"$GATE_ROOT/repo/extension/manifest.json" <<'JSON'
+{"version":"1.2.3"}
+JSON
+cat >"$GATE_ROOT/repo/docker-compose.yml" <<'YAML'
+services:
+  backend:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.2.3}
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.2.3}
+YAML
+printf 'clean\n' >"$GATE_ROOT/repo/state"
+git init --bare -q "$GATE_ROOT/origin.git"
+git -C "$GATE_ROOT/repo" init -q
+git -C "$GATE_ROOT/repo" config user.name test
+git -C "$GATE_ROOT/repo" config user.email test@foldex.invalid
+git -C "$GATE_ROOT/repo" add .
+git -C "$GATE_ROOT/repo" commit -qm initial
+git -C "$GATE_ROOT/repo" branch -M main
+git -C "$GATE_ROOT/repo" remote add origin "$GATE_ROOT/origin.git"
+git -C "$GATE_ROOT/repo" push -qu origin main
+INITIAL_SHA=$(git -C "$GATE_ROOT/repo" rev-parse HEAD)
+
+printf 'dirty\n' >"$GATE_ROOT/repo/state"
+if (cd "$GATE_ROOT/repo" && bash scripts/release.sh patch) >"$GATE_ROOT/dirty.out" 2>&1; then
+  echo "✗ release accepted a dirty worktree" >&2
+  exit 1
+fi
+grep -q 'working tree is dirty' "$GATE_ROOT/dirty.out" || {
+  echo "✗ dirty-worktree refusal changed unexpectedly" >&2
+  exit 1
+}
+git -C "$GATE_ROOT/repo" restore state
+
+git -C "$GATE_ROOT/repo" switch -qc topic
+if (cd "$GATE_ROOT/repo" && bash scripts/release.sh patch) >"$GATE_ROOT/branch.out" 2>&1; then
+  echo "✗ release accepted an off-main branch" >&2
+  exit 1
+fi
+grep -q "refusing to release from 'topic'" "$GATE_ROOT/branch.out" || {
+  echo "✗ off-main refusal changed unexpectedly" >&2
+  exit 1
+}
+git -C "$GATE_ROOT/repo" switch -q main
+
+mkdir -p "$GATE_ROOT/bin"
+REAL_GIT=$(command -v git)
+cat >"$GATE_ROOT/bin/git" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = commit ]; then
+  exit 97
+fi
+exec "$REAL_GIT" "$@"
+SH
+chmod +x "$GATE_ROOT/bin/git"
+if (cd "$GATE_ROOT/repo" && REAL_GIT="$REAL_GIT" PATH="$GATE_ROOT/bin:$PATH" bash scripts/release.sh patch) >"$GATE_ROOT/rollback.out" 2>&1; then
+  echo "✗ release unexpectedly survived a failed commit" >&2
+  exit 1
+fi
+if [ "$(git -C "$GATE_ROOT/repo" rev-parse HEAD)" != "$INITIAL_SHA" ] ||
+   [ -n "$(git -C "$GATE_ROOT/repo" status --porcelain)" ]; then
+  echo "✗ failed release did not atomically roll back all version files" >&2
+  exit 1
+fi
+grep -Fq '"version":"1.2.3"' "$GATE_ROOT/repo/web/package.json" || exit 1
+grep -Fq '"version":"1.2.3"' "$GATE_ROOT/repo/extension/manifest.json" || exit 1
+grep -Fq 'foldex-backend:${FOLDEX_VERSION:-1.2.3}' "$GATE_ROOT/repo/docker-compose.yml" || exit 1
+grep -Fq 'foldex-web:${FOLDEX_VERSION:-1.2.3}' "$GATE_ROOT/repo/docker-compose.yml" || exit 1
+echo "✓ case 6: dirty/off-main gates remain closed and failed commits roll back"
+
 echo
-echo "release.sh awk update_version() — all assertions passed."
+echo "release.sh version transaction — all assertions passed."

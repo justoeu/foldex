@@ -29,6 +29,7 @@ import (
 	"foldex/internal/push"
 	"foldex/internal/screenshot"
 	"foldex/internal/server"
+	"foldex/internal/settings"
 	"foldex/internal/stats"
 	"foldex/internal/storage"
 )
@@ -255,15 +256,18 @@ func main() {
 		Google:              google,
 	})
 	adminHandler := auth.NewAdminHandler(authRepo, mail, mailDispatcher, logger, cfg.AuthPublicURL)
+	folderHandler := folders.NewHandler(
+		folders.NewRepository(pool), folderUnlockKey, settings.NewRepository(pool),
+	)
 
-	// The sweeper prunes the DB rows AND the two process-local caches that grow
+	// The sweeper prunes the DB rows and every process-local cache that grows
 	// with traffic: the rate-limit buckets (keyed by attacker-supplied e-mail on
-	// an unauthenticated endpoint) and the last_seen_at throttle map. Neither is
-	// trimmed anywhere else, so leaving them off this ticker is a memory leak.
+	// an unauthenticated endpoint), folder unlock attempts, and the last_seen_at
+	// throttle map.
 	sweeper := auth.NewSweeper(authRepo, logger,
 		time.Duration(cfg.AuthSweepIntervalMin)*time.Minute,
 		time.Duration(cfg.AuthSweepRetainDays)*24*time.Hour).
-		WithInMemory(authHandler.SweepLimiters, authMW.SweepTouch)
+		WithInMemory(authHandler.SweepLimiters, folderHandler.SweepLimiters, authMW.SweepTouch)
 	sweeper.Start(rootCtx)
 
 	deps := server.Deps{
@@ -278,6 +282,7 @@ func main() {
 		AuthHandler:         authHandler,
 		AdminHandler:        adminHandler,
 		AuthMiddleware:      authMW,
+		FolderHandler:       folderHandler,
 	}
 	if storageClient != nil {
 		deps.Screenshotter = screenshotPool
@@ -297,22 +302,7 @@ func main() {
 	// ceilings live in server.defaultBodyLimit (path-aware MaxBytesReader:
 	// 1 MiB default, 6 MiB images, 100 MiB import, 2 GiB backup) plus the
 	// per-handler caps already on JSON/multipart routes.
-	srv := &http.Server{
-		// BindAddr defaults to 127.0.0.1 (single-user threat model). Override
-		// via BACKEND_BIND only when fronting with a reverse proxy AND
-		// SHARED_SECRET is set — config.validateSecureDefaults refuses the
-		// "wide open" combo at boot.
-		Addr:              cfg.BindAddr + ":" + cfg.Port,
-		Handler:           router,
-		ReadHeaderTimeout: 5 * time.Second,
-		// Generous body timeouts so backup restore (up to a few hundred MB)
-		// doesn't get killed mid-upload on slower networks. Headers still
-		// have the short 5s lid — slow-loris doesn't apply to bodies because
-		// we either stream or LimitReader at the handler level.
-		ReadTimeout:  10 * time.Minute,
-		WriteTimeout: 10 * time.Minute,
-		IdleTimeout:  60 * time.Second,
-	}
+	srv := newHTTPServer(cfg.BindAddr+":"+cfg.Port, router)
 
 	go func() {
 		logger.Info("server starting", "addr", srv.Addr)
@@ -328,41 +318,88 @@ func main() {
 
 	shutCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	var shutdownWG sync.WaitGroup
-	shutdownWG.Add(3)
-	go func() {
-		defer shutdownWG.Done()
-		if err := srv.Shutdown(shutCtx); err != nil {
-			logger.Error("graceful shutdown failed", "err", err)
-		}
-		// Drain HTTP first so no handler can hold an unpublished queue
-		// reservation when dispatcher cancellation joins its workers.
-		mailDispatcher.Stop()
-	}()
-	go func() {
-		defer shutdownWG.Done()
-		worker.Stop()
-		if ccWorker != nil {
-			ccWorker.Stop()
-		}
-	}()
-	// Cancel Chromium concurrently with HTTP/worker drain so all subsystems
-	// share one container shutdown budget instead of paying serial deadlines.
-	go func() {
-		defer shutdownWG.Done()
-		screenshotPool.Close()
-	}()
-	shutdownDone := make(chan struct{})
-	go func() {
-		shutdownWG.Wait()
-		close(shutdownDone)
-	}()
-	select {
-	case <-shutdownDone:
-	case <-shutCtx.Done():
+	completed := waitForShutdown(shutCtx, shutdownHooks{
+		shutdownHTTP: srv.Shutdown,
+		stopMail:     mailDispatcher.Stop,
+		stopWorkers: func() {
+			worker.Stop()
+			if ccWorker != nil {
+				ccWorker.Stop()
+			}
+		},
+		closeScreenshots: screenshotPool.Close,
+		waitSweeper:      sweeper.Wait,
+		logger:           logger,
+	})
+	if !completed {
 		logger.Error("shutdown deadline exceeded", "err", shutCtx.Err())
 	}
 	logger.Info("bye")
+}
+
+type shutdownHooks struct {
+	shutdownHTTP     func(context.Context) error
+	stopMail         func()
+	stopWorkers      func()
+	closeScreenshots func()
+	waitSweeper      func()
+	logger           *slog.Logger
+}
+
+func waitForShutdown(ctx context.Context, hooks shutdownHooks) bool {
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		if err := hooks.shutdownHTTP(ctx); err != nil && hooks.logger != nil {
+			hooks.logger.Error("graceful shutdown failed", "err", err)
+		}
+		// Drain HTTP first so no handler can hold an unpublished queue
+		// reservation when dispatcher cancellation joins its workers.
+		hooks.stopMail()
+	}()
+	go func() {
+		defer wg.Done()
+		hooks.stopWorkers()
+	}()
+	// Cancel Chromium concurrently with HTTP/worker drain so all subsystems
+	// share one process-wide shutdown budget.
+	go func() {
+		defer wg.Done()
+		hooks.closeScreenshots()
+	}()
+	go func() {
+		defer wg.Done()
+		hooks.waitSweeper()
+	}()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+const requestTimeout = 2 * time.Minute
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		// BindAddr defaults to 127.0.0.1 (single-user threat model). Override
+		// via BACKEND_BIND only when fronting with a reverse proxy AND
+		// SHARED_SECRET is set — config.validateSecureDefaults refuses the
+		// "wide open" combo at boot.
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       requestTimeout,
+		WriteTimeout:      requestTimeout,
+		IdleTimeout:       60 * time.Second,
+	}
 }
 
 // linkMetadataAdapter bridges *preview.Fetcher (returning preview.Result) to

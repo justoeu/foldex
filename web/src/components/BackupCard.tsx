@@ -140,6 +140,7 @@ export function BackupCard({ onRestored }: Props) {
                         size: formatBytes(h.size_bytes),
                         duration: formatDuration(h.duration_ms, t),
                         links: h.counts.links,
+                        notes: h.counts.notes,
                         tags: h.counts.tags,
                       })}
                     </div>

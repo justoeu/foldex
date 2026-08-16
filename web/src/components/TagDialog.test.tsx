@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { TagDialog } from './TagDialog'
 import { renderWithProviders } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
+import { http } from '../api/client'
 
 let state: MockState
 
@@ -26,6 +27,42 @@ describe('TagDialog', () => {
     await user.click(screen.getByRole('button', { name: /Create tag/i }))
     expect(state.tags[0]?.name).toBe('mynew')
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('keeps a create open and renders an actionable duplicate-name error', async () => {
+    const failure = Object.assign(new Error('duplicate'), {
+      response: { status: 409, data: { error: { code: 'tag_name_taken' } } },
+    })
+    vi.mocked(http.post).mockRejectedValue(failure)
+    const onClose = vi.fn()
+    renderWithProviders(<TagDialog open onClose={onClose} />)
+
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('tag name'), 'duplicate')
+    await user.click(screen.getByRole('button', { name: /Create tag/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/already exists.*different name/i)
+    expect(screen.getByLabelText('tag name')).toHaveValue('duplicate')
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('keeps an edit open and renders a localized retry message on failure', async () => {
+    const tag = {
+      id: 7,
+      name: 'existing',
+      color: '#6366F1',
+      icon: null,
+      created_at: new Date().toISOString(),
+      link_count: 0,
+    }
+    vi.mocked(http.patch).mockRejectedValue(new Error('offline'))
+    const onClose = vi.fn()
+    renderWithProviders(<TagDialog open onClose={onClose} tag={tag} />)
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /Save/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not save.*try again/i)
+    expect(onClose).not.toHaveBeenCalled()
   })
 
   it('disables submit when name is empty', () => {

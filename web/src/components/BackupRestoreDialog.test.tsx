@@ -31,9 +31,9 @@ function deferred<T>() {
 function restoreReport() {
   return {
     mode: 'skip' as const,
-    inserted: { links: 5, tags: 2, folders: 1, link_tags: 3, click_logs: 8, files: 0, file_bytes: 0 },
-    skipped: { links: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
-    wiped: { links: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+    inserted: { links: 5, notes: 4, tags: 2, folders: 1, link_tags: 3, click_logs: 8, files: 0, file_bytes: 0 },
+    skipped: { links: 0, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+    wiped: { links: 0, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
     files: { uploaded: 0, skipped: 0, wiped: 0 },
     warnings: [],
     duration_ms: 42,
@@ -69,7 +69,7 @@ function MountedQuery({ queryKey, queryFn }: { queryKey: string; queryFn: () => 
 describe('BackupRestoreDialog', () => {
   it('shows validation summary and counts after validate resolves', async () => {
     renderDialog()
-    await waitFor(() => expect(screen.getByText(/5 links · 2 tags · 1 folders/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/5 links · 4 notes · 2 tags · 1 folders/)).toBeInTheDocument())
     expect(screen.getByText(/8 clicks/)).toBeInTheDocument()
   })
 
@@ -252,7 +252,7 @@ describe('BackupRestoreDialog', () => {
       manifest: {
         kind: 'foldex.backup', version: '1.0', schema_version: 8,
         created_at: '2026-05-14T03:00:00Z',
-        counts: { links: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+        counts: { links: 0, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
         checksums: {},
       },
       conflicts: { links: 0, tags: 0, folders: 0 },
@@ -273,6 +273,7 @@ describe('BackupRestoreDialog', () => {
     // Report rows
     expect(screen.getByText(/Mode/)).toBeInTheDocument()
     expect(screen.getByText(/Inserted/)).toBeInTheDocument()
+    expect(screen.getByText('5 links · 4 notes · 2 tags · 1 folders · 8 clicks')).toBeInTheDocument()
     expect(screen.getByText(/Duration/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Done/i }))
     expect(onRestored).toHaveBeenCalledOnce()
@@ -281,9 +282,9 @@ describe('BackupRestoreDialog', () => {
   it('renders restore warnings when the backend reports them', async () => {
     state.backupRestore = {
       mode: 'duplicate',
-      inserted: { links: 0, tags: 1, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
-      skipped:  { links: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
-      wiped:    { links: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+      inserted: { links: 0, notes: 0, tags: 1, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+      skipped:  { links: 0, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+      wiped:    { links: 0, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
       files:    { uploaded: 0, skipped: 0, wiped: 0 },
       warnings: ['link "https://example.com" já existia — não duplicado'],
       duration_ms: 80,
@@ -319,7 +320,7 @@ describe('BackupRestoreDialog', () => {
         return { data: { ok: true, manifest: {
           kind: 'foldex.backup', version: '1.0', schema_version: 8,
           created_at: '2026-05-14T03:00:00Z',
-          counts: { links: 1, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
+          counts: { links: 1, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0 },
           checksums: {},
         }, conflicts: { links: 0, tags: 0, folders: 0 }, warnings: [], errors: [] } } as any
       }
@@ -351,7 +352,7 @@ describe('BackupRestoreDialog', () => {
       manifest: {
         kind: 'foldex.backup', version: '1.0', schema_version: 8,
         created_at: '2026-05-14T03:00:00Z',
-        counts: { links: 2, tags: 1, folders: 0, link_tags: 0, click_logs: 0, files: 24, file_bytes: 12 * 1024 * 1024 },
+        counts: { links: 2, notes: 1, tags: 1, folders: 0, link_tags: 0, click_logs: 0, files: 24, file_bytes: 12 * 1024 * 1024 },
         checksums: {},
       },
       conflicts: { links: 0, tags: 0, folders: 0 },

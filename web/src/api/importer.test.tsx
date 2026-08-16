@@ -2,14 +2,24 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import { useApplyImport, applyImport, validateImport } from './importer'
+import { useApplyImport, applyImport, validateImport, type ImportValidation } from './importer'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import { http } from './client'
 
 let state: MockState
 
+const validationFixture = {
+  format: 'netscape',
+  counts: { links: 3, folders: 1, tags: 2 },
+  conflicts: { links: 2, folders: 0, tags: 1 },
+  folders: [{ path: 'Work', name: 'Work', count: 2, conflicts: 1 }],
+  ungrouped: { links: 1, conflicts: 1 },
+  warnings: [],
+} satisfies ImportValidation
+
 beforeEach(() => {
   state = freshState()
+  state.importValidation = validationFixture
   installAxiosMock(state)
 })
 
@@ -17,7 +27,8 @@ describe('importer api', () => {
   it('validateImport posts the file', async () => {
     const file = new File(['<DL></DL>'], 'b.html', { type: 'text/html' })
     const data = await validateImport(file, 'netscape')
-    expect(data.counts.links).toBeGreaterThanOrEqual(0)
+    expect(data).toEqual(validationFixture)
+    expect(data).not.toHaveProperty('links')
   })
 
   it('passes an AbortSignal to the validation upload', async () => {
@@ -75,7 +86,7 @@ describe('importer api', () => {
     })
     await waitFor(() => expect(invalidate).toHaveBeenCalled())
     expect(invalidate.mock.calls.map((call) => call[0]?.queryKey?.[0])).toEqual([
-      'links', 'entries', 'folders', 'tags', 'stats',
+      'links', 'entries', 'folders', 'tags', 'stats', 'entry-counts',
     ])
   })
 
@@ -102,7 +113,7 @@ describe('importer api', () => {
     })
 
     expect(invalidate.mock.calls.map((call) => call[0]?.queryKey?.[0])).toEqual([
-      'links', 'entries', 'folders', 'tags', 'stats',
+      'links', 'entries', 'folders', 'tags', 'stats', 'entry-counts',
     ])
   })
 })

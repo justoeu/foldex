@@ -6,6 +6,7 @@ import { useCreateTag, useUpdateTag } from '../api/tags'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { isGradient, makeGradient, parseGradient } from '../lib/tagColor'
+import { apiErrorCode } from '../lib/apiError'
 import type { Tag } from '../api/types'
 
 type Props = {
@@ -25,11 +26,13 @@ export function TagDialog({ open, onClose, tag }: Props) {
   const [gradFrom, setGradFrom] = useState('#6366F1')
   const [gradTo, setGradTo] = useState('#EC4899')
   const [icon, setIcon] = useState('')
+  const [saveError, setSaveError] = useState<string | null>(null)
   const create = useCreateTag()
   const update = useUpdateTag()
 
   useEffect(() => {
     if (!open) return
+    setSaveError(null)
     if (tag) {
       setName(tag.name)
       setIcon(tag.icon ?? '')
@@ -65,15 +68,22 @@ export function TagDialog({ open, onClose, tag }: Props) {
   const submit = async () => {
     const trimmed = name.trim()
     if (!trimmed) return
-    if (isEdit && tag) {
-      await update.mutateAsync({
-        id: tag.id,
-        body: { name: trimmed, color: finalColor, icon: icon || null },
-      })
-    } else {
-      await create.mutateAsync({ name: trimmed, color: finalColor, icon: icon || null })
+    setSaveError(null)
+    try {
+      if (isEdit && tag) {
+        await update.mutateAsync({
+          id: tag.id,
+          body: { name: trimmed, color: finalColor, icon: icon || null },
+        })
+      } else {
+        await create.mutateAsync({ name: trimmed, color: finalColor, icon: icon || null })
+      }
+      onClose()
+    } catch (error) {
+      setSaveError(apiErrorCode(error) === 'tag_name_taken'
+        ? t('tag_dialog.error_name_taken')
+        : t('tag_dialog.error_generic'))
     }
-    onClose()
   }
 
   const busy = create.isPending || update.isPending
@@ -141,13 +151,19 @@ export function TagDialog({ open, onClose, tag }: Props) {
           </div>
         </div>
 
+        {saveError && (
+          <div role="alert" style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 20px 8px' }}>
+            <Icon d={I.alert} size={12} /> {saveError}
+          </div>
+        )}
+
         <footer className="fx-modal-foot">
           <button className="fx-confirm-btn" onClick={onClose}>
             {t('common.cancel')}
           </button>
           <button
             className="fx-confirm-btn fx-confirm-btn-primary"
-            onClick={submit}
+            onClick={() => void submit()}
             disabled={!name.trim() || busy}
           >
             <Icon d={isEdit ? I.check : I.plus} size={13} stroke={2.2} />{' '}

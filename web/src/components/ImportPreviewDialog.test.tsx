@@ -6,11 +6,25 @@ import { ImportPreviewDialog } from './ImportPreviewDialog'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import { makeQueryClient } from '../test/renderWithProviders'
 import { http } from '../api/client'
+import type { ImportValidation } from '../api/importer'
 
 let state: MockState
 
+const validationFixture = {
+  format: 'netscape',
+  counts: { links: 5, folders: 2, tags: 1 },
+  conflicts: { links: 3, folders: 0, tags: 0 },
+  folders: [
+    { path: 'Bookmarks Bar', name: 'Bookmarks Bar', count: 2, conflicts: 1 },
+    { path: 'Work', name: 'Work', count: 2, conflicts: 1 },
+  ],
+  ungrouped: { links: 1, conflicts: 1 },
+  warnings: [],
+} satisfies ImportValidation
+
 beforeEach(() => {
   state = freshState()
+  state.importValidation = validationFixture
   installAxiosMock(state)
 })
 
@@ -60,8 +74,8 @@ function renderDialog(props: Partial<React.ComponentProps<typeof ImportPreviewDi
 describe('ImportPreviewDialog', () => {
   it('shows counts + duplicates after validate resolves', async () => {
     renderDialog()
-    await waitFor(() => expect(screen.getByText(/4 links · 2 folders/)).toBeInTheDocument())
-    expect(screen.getByText(/1 links · 0 tags/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/5 links · 2 folders/)).toBeInTheDocument())
+    expect(screen.getByText(/3 links · 0 tags/)).toBeInTheDocument()
   })
 
   it('lists folders with checkboxes; toggling reflects in the effective count', async () => {
@@ -72,7 +86,7 @@ describe('ImportPreviewDialog', () => {
     expect(checkboxes).toHaveLength(2)
     await user.click(checkboxes[1])  // uncheck "Work"
     await waitFor(() =>
-      expect(screen.getByText(/2 links · 1 folders · 1 duplicates/)).toBeInTheDocument(),
+      expect(screen.getByText(/3 links · 1 folders · 2 duplicates/)).toBeInTheDocument(),
     )
   })
 
@@ -105,6 +119,8 @@ describe('ImportPreviewDialog', () => {
     await user.click(screen.getByRole('button', { name: /^none$/i }))
     const checkboxes = screen.getAllByRole('checkbox')
     expect(checkboxes.every((c) => !(c as HTMLInputElement).checked)).toBe(true)
+    expect(screen.getByText(/1 links · 0 folders · 1 duplicates/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Import 1 link/i })).toBeEnabled()
 
     await user.click(screen.getByRole('button', { name: /^all$/i }))
     const checkboxes2 = screen.getAllByRole('checkbox')

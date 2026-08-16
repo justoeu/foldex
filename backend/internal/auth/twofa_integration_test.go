@@ -404,7 +404,7 @@ func TestIssueSessionCannotCommitAfterCredentialEpochChange(t *testing.T) {
 
 	sessionResult := make(chan error, 1)
 	go func() {
-		_, _, err := h.repo.IssueSession(ctx, user.ID, user.TokenVersion, auth.DefaultTTL(), "", "")
+		_, _, err := h.repo.IssueSession(ctx, user.ID, user.TokenVersion, testSessionTTL(), "", "")
 		sessionResult <- err
 	}()
 	waitForBlockedSQL(t, h.pool, "SELECT id FROM app_user")
@@ -743,6 +743,59 @@ func TestCreateChallenge_PreservesLivePurposeState(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid, "an expired challenge reserved an attempt")
 }
 
+func TestConcurrentEmailOTPRequestsReserveAndCreateOnlyOneCode(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	ctx := context.Background()
+	user, err := h.repo.UserByEmail(ctx, "admin@example.com")
+	require.NoError(t, err)
+	_, challengeID, err := h.repo.CreateChallenge(ctx, auth.NewChallenge{
+		UserID: user.ID, Purpose: auth.PurposeTOTP,
+		TokenVersion: user.TokenVersion, TTL: time.Minute,
+	})
+	require.NoError(t, err)
+
+	blocker, err := h.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback(ctx) }()
+	var locked int64
+	require.NoError(t, blocker.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE id = $1 FOR UPDATE`, int64(user.ID)).Scan(&locked))
+
+	results := make(chan error, 2)
+	for i := range 2 {
+		go func() {
+			_, err := h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte{byte(i + 1)}, time.Minute)
+			results <- err
+		}()
+	}
+	waitForBlockedSQLCount(t, h.pool, "SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE", 2)
+	require.NoError(t, blocker.Commit(ctx))
+
+	var created, throttled int
+	for range 2 {
+		switch err := <-results; {
+		case err == nil:
+			created++
+		case errors.Is(err, auth.ErrTooSoon):
+			throttled++
+		default:
+			require.NoError(t, err)
+		}
+	}
+	assert.Equal(t, 1, created)
+	assert.Equal(t, 1, throttled)
+	var sends, liveCodes int
+	require.NoError(t, h.pool.QueryRow(ctx,
+		`SELECT sends FROM auth_challenge WHERE id = $1`, challengeID).Scan(&sends))
+	require.NoError(t, h.pool.QueryRow(ctx, `
+		SELECT count(*) FROM email_otp
+		WHERE challenge_id = $1 AND consumed_at IS NULL AND expires_at > now()`, challengeID).Scan(&liveCodes))
+	assert.Equal(t, 1, sends)
+	assert.Equal(t, 1, liveCodes)
+}
+
 func TestChallengeCredentialEpochInvalidatesOnPasswordChangeAndLogoutAll(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -783,7 +836,7 @@ func TestChallengeCredentialEpochInvalidatesOnPasswordChangeAndLogoutAll(t *test
 			assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 			assert.ErrorIs(t, h.repo.ConsumeChallenge(context.Background(), 1), auth.ErrChallengeInvalid)
 			_, _, err = h.repo.IssueSession(context.Background(), user.ID, user.TokenVersion,
-				auth.DefaultTTL(), "", "")
+				testSessionTTL(), "", "")
 			assert.ErrorIs(t, err, auth.ErrSessionInvalid)
 		})
 	}
@@ -806,9 +859,9 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 		auth.ErrChallengeInvalid)
 	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, user.ID, stale,
 		auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")},
-		[][]byte{[]byte("h")}, 0, nil, auth.DefaultTTL(), "", "")
+		[][]byte{[]byte("h")}, 0, nil, testSessionTTL(), "", "")
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
-	_, _, err = h.repo.IssueSession(ctx, user.ID, stale, auth.DefaultTTL(), "", "")
+	_, _, err = h.repo.IssueSession(ctx, user.ID, stale, testSessionTTL(), "", "")
 	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
 
 	raw, challengeID, err := h.repo.CreateChallenge(ctx, auth.NewChallenge{
@@ -834,9 +887,9 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 		[]byte("replacement"), []byte("replacement")), auth.ErrChallengeInvalid)
 	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, user.ID, user.TokenVersion,
 		auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")},
-		[][]byte{[]byte("h")}, 0, nil, auth.DefaultTTL(), "", "")
+		[][]byte{[]byte("h")}, 0, nil, testSessionTTL(), "", "")
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
-	_, _, err = h.repo.IssueSession(ctx, user.ID, user.TokenVersion, auth.DefaultTTL(), "", "")
+	_, _, err = h.repo.IssueSession(ctx, user.ID, user.TokenVersion, testSessionTTL(), "", "")
 	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
 	testdb.SetUserStatus(t, h.pool, user.ID, "active")
 
@@ -865,7 +918,7 @@ func TestCredentialEpochRepositorySurfacesDatabaseErrors(t *testing.T) {
 	assert.ErrorContains(t,
 		h.repo.ChangePassword(ctx, user.ID, 1, "a good password", "a new password"),
 		"change password begin")
-	_, _, err = h.repo.IssueSession(ctx, user.ID, user.TokenVersion, auth.DefaultTTL(), "", "")
+	_, _, err = h.repo.IssueSession(ctx, user.ID, user.TokenVersion, testSessionTTL(), "", "")
 	assert.ErrorContains(t, err, "issue session begin")
 	assert.ErrorContains(t,
 		h.repo.RevokeAllForUser(ctx, user.ID, auth.ReasonLogoutAll),
@@ -1699,7 +1752,7 @@ func TestConfirmTOTP_SeedReplacementBetweenVerifyAndConfirmCannotActivateTheRepl
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
-	_, sid, err := h.repo.IssueSession(context.Background(), uid, 0, auth.DefaultTTL(), "", "")
+	_, sid, err := h.repo.IssueSession(context.Background(), uid, 0, testSessionTTL(), "", "")
 	require.NoError(t, err)
 
 	firstCiphertext, firstNonce, err := h.cipher.Encrypt([]byte("JBSWY3DPEHPK3PXP"))
@@ -1719,7 +1772,7 @@ func TestConfirmTOTP_SeedReplacementBetweenVerifyAndConfirmCannotActivateTheRepl
 	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), uid, user.TokenVersion,
 		auth.TOTPProof{Counter: time.Now().Unix() / 30,
 			Ciphertext: verified.Ciphertext, Nonce: verified.Nonce},
-		[][]byte{[]byte("h")}, sid, nil, auth.DefaultTTL(), "", "")
+		[][]byte{[]byte("h")}, sid, nil, testSessionTTL(), "", "")
 	require.ErrorIs(t, err, auth.ErrTOTPEnrollmentChanged,
 		"confirmation activated a seed that was not the one verified")
 
@@ -1824,7 +1877,7 @@ func TestConfirmTOTP_SettingsEnrollmentRefusesARevokedSession(t *testing.T) {
 	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), user.ID, user.TokenVersion,
 		auth.TOTPProof{Counter: time.Now().Unix() / 30,
 			Ciphertext: row.Ciphertext, Nonce: row.Nonce},
-		[][]byte{[]byte("recovery")}, sid, nil, auth.DefaultTTL(), "", "")
+		[][]byte{[]byte("recovery")}, sid, nil, testSessionTTL(), "", "")
 	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
 
 	var confirmed bool
@@ -1863,7 +1916,7 @@ func TestConfirmTOTP_SettingsEnrollmentIsBoundToTheStartingSession(t *testing.T)
 	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), user.ID, user.TokenVersion,
 		auth.TOTPProof{Counter: time.Now().Unix() / 30,
 			Ciphertext: row.Ciphertext, Nonce: row.Nonce},
-		[][]byte{[]byte("recovery")}, secondSession, nil, auth.DefaultTTL(), "", "")
+		[][]byte{[]byte("recovery")}, secondSession, nil, testSessionTTL(), "", "")
 	assert.ErrorIs(t, err, auth.ErrTOTPEnrollmentChanged)
 
 	current, err := h.repo.LoadTOTPSecret(context.Background(), user.ID)
@@ -2139,8 +2192,7 @@ func TestReset_MailboxAloneCannotSatisfyBothFactors(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, send.Code)
 	assert.Equal(t, "email_factor_unavailable", errCode(t, send))
 
-	time.Sleep(150 * time.Millisecond)
-	assert.Empty(t, h.mail.all(), "a sign-in code was mailed for a reset-issued challenge")
+	assert.Empty(t, h.drainMail(t), "a sign-in code was mailed for a reset-issued challenge")
 	assert.Empty(t, attacker.cookies[auth.CookieAccess])
 
 	// The authenticator still finishes it — the fix closes a channel, not the
@@ -2194,8 +2246,7 @@ func TestEmailOTP_IsNotOfferedWhenMailOnlyGoesToTheLog(t *testing.T) {
 
 	h.mail.reset()
 	assert.Equal(t, http.StatusForbidden, c.do(http.MethodPost, "/api/auth/2fa/email", nil).Code)
-	time.Sleep(150 * time.Millisecond)
-	assert.Empty(t, h.mail.all(), "a sign-in code was written to the log")
+	assert.Empty(t, h.drainMail(t), "a sign-in code was written to the log")
 }
 
 // A challenge is minted before the second factor; an administrator who disables
@@ -2596,8 +2647,7 @@ func TestTOTP_SuccessfulSignInSendsNoMail(t *testing.T) {
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/2fa/verify",
 		map[string]string{"code": codeNextStep(t, e.secret)}).Code)
 
-	time.Sleep(200 * time.Millisecond)
-	assert.Empty(t, h.mail.all(), "an ordinary TOTP sign-in sent a recovery-code warning")
+	assert.Empty(t, h.drainMail(t), "an ordinary TOTP sign-in sent a recovery-code warning")
 }
 
 // The send budget has TWO limits — a 60-second interval and a hard cap of three
@@ -2634,8 +2684,7 @@ func TestEmailOTP_TotalSendCapIsEnforced(t *testing.T) {
 	// The fourth is refused — and still answers 202, so the endpoint cannot be
 	// used to read the counter.
 	assert.Equal(t, http.StatusAccepted, c.do(http.MethodPost, "/api/auth/2fa/email", nil).Code)
-	time.Sleep(200 * time.Millisecond)
-	assert.Empty(t, h.mail.all(), "a fourth code was mailed past the cap")
+	assert.Empty(t, h.drainMail(t), "a fourth code was mailed past the cap")
 }
 
 // A botched enrollment — wrong app, closed tab, scanned into the wrong account
@@ -2852,8 +2901,7 @@ func TestTwoFactorHandlers_DegradeCleanlyOnAPartialSchemaFailure(t *testing.T) {
 
 		// Nothing may have been mailed: a code the server could not store is a
 		// code that can never be redeemed.
-		time.Sleep(150 * time.Millisecond)
-		assert.Empty(t, h.mail.all(), "a code was mailed that the server failed to store")
+		assert.Empty(t, h.drainMail(t), "a code was mailed that the server failed to store")
 		var sends int
 		require.NoError(t, h.pool.QueryRow(context.Background(),
 			`SELECT sends FROM auth_challenge WHERE consumed_at IS NULL`).Scan(&sends))

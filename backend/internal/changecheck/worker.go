@@ -2,6 +2,7 @@ package changecheck
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -238,7 +239,7 @@ func (w *Worker) process(ctx context.Context, job links.DueLink) {
 	defer cancel()
 	body, _, err := w.fetcher.GetRaw(fetchCtx, job.URL)
 	if err != nil {
-		w.logger.Info("process: fetch failed", "link_id", id, "err", err)
+		w.logger.Info("process: fetch failed", "link_id", id, "reason", fetchFailureReason(err))
 		if _, recErr := w.repo.SystemRecordCheckResult(ctx, id, job.ClaimedAt, links.CheckResult{
 			Fingerprint: "",
 			Changed:     false,
@@ -251,7 +252,7 @@ func (w *Worker) process(ctx context.Context, job links.DueLink) {
 
 	kind, hash, err := w.fingerprint.Compute(fetchCtx, job.URL, body)
 	if err != nil {
-		w.logger.Info("process: fingerprint failed", "link_id", id, "err", err)
+		w.logger.Info("process: fingerprint failed", "link_id", id, "reason", fetchFailureReason(err))
 		if _, recErr := w.repo.SystemRecordCheckResult(ctx, id, job.ClaimedAt, links.CheckResult{
 			Fingerprint: "",
 			Changed:     false,
@@ -300,5 +301,16 @@ func (w *Worker) process(ctx context.Context, job links.DueLink) {
 			w.logger.Warn("push notification queue full, dropping notification", "link_id", id)
 		}
 		w.logger.Info("change detected", "link_id", id, "kind", kind)
+	}
+}
+
+func fetchFailureReason(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		return "fetch_failed"
 	}
 }

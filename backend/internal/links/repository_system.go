@@ -76,7 +76,8 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg
 	return u, nil
 }
 
-// UpdatePreview is called by the preview worker once metadata is fetched (or fails).
+// SystemUpdatePreview starts a new generation when status is pending. Terminal
+// writes use the conditional methods below and never advance the generation.
 // Manual OG upload wins: never overwrite a non-empty og_image_url (CAS vs
 // concurrent UpdateOGImage).
 //
@@ -96,6 +97,7 @@ func (r *Repository) SystemUpdatePreview(ctx context.Context, id int64, status P
             og_image_url   = COALESCE(NULLIF(og_image_url, ''), $3),
             description    = COALESCE($4, description),
             preview_error  = $5,
+            preview_generation = CASE WHEN $1 = 'pending' THEN preview_generation + 1 ELSE preview_generation END,
             updated_at     = now()
         WHERE id = $6`
 	if status != StatusPending {
@@ -107,7 +109,7 @@ func (r *Repository) SystemUpdatePreview(ctx context.Context, id int64, status P
 
 // SystemUpdatePreviewIfUnchanged prevents an older fetch from overwriting a
 // refresh or edit that landed while network work was in progress.
-func (r *Repository) SystemUpdatePreviewIfUnchanged(ctx context.Context, id int64, expectedUpdatedAt time.Time, status PreviewStatus, favicon, ogImage, description, errMsg *string) (bool, error) {
+func (r *Repository) SystemUpdatePreviewIfUnchanged(ctx context.Context, id int64, expectedUpdatedAt time.Time, expectedGeneration int64, status PreviewStatus, favicon, ogImage, description, errMsg *string) (bool, error) {
 	if !status.Valid() {
 		return false, fmt.Errorf("invalid conditional preview status %q", status)
 	}
@@ -121,8 +123,9 @@ func (r *Repository) SystemUpdatePreviewIfUnchanged(ctx context.Context, id int6
 		    updated_at     = now()
 		WHERE id = $6
 		  AND updated_at = $7
+		  AND preview_generation = $8
 		  AND preview_status = 'pending'
-	`, status, favicon, ogImage, description, errMsg, id, expectedUpdatedAt)
+	`, status, favicon, ogImage, description, errMsg, id, expectedUpdatedAt, expectedGeneration)
 	if err != nil {
 		return false, fmt.Errorf("conditionally update preview: %w", err)
 	}
@@ -141,26 +144,27 @@ func (r *Repository) SystemFindDueForCheck(ctx context.Context, limit int) ([]Du
 	// user_id rides along so the resulting Web Push reaches only the link's
 	// owner. link_check_due_idx is deliberately NOT user-scoped (see migration
 	// 000017 §10) because this sweep spans every tenant by design.
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
         UPDATE link
         SET last_checked_at = now()
         WHERE id IN (
-            SELECT id FROM link
-            WHERE check_interval IS NOT NULL
+            SELECT l.id FROM link l
+            WHERE l.check_interval IS NOT NULL
+              AND %s
               AND (
-                  last_checked_at IS NULL
-                  OR last_checked_at < now() - CASE check_interval
+                  l.last_checked_at IS NULL
+                  OR l.last_checked_at < now() - CASE l.check_interval
                       WHEN 'hourly' THEN interval '1 hour'
                       WHEN 'daily'  THEN interval '1 day'
                       WHEN 'weekly' THEN interval '7 days'
                   END
               )
-            ORDER BY COALESCE(last_checked_at, 'epoch'::timestamptz) ASC, id ASC
+            ORDER BY COALESCE(l.last_checked_at, 'epoch'::timestamptz) ASC, l.id ASC
             LIMIT $1
             FOR UPDATE SKIP LOCKED
         )
 		RETURNING id, user_id, url, title, check_interval, last_fingerprint, last_checked_at
-    `, limit)
+    `, folders.SQLNotInLockedFolder("l")), limit)
 	if err != nil {
 		return nil, fmt.Errorf("find due for check: %w", err)
 	}
@@ -200,19 +204,21 @@ type DueLink struct {
 // PreviewWork is the narrow projection required by the preview worker. Keeping
 // it separate avoids the click-log aggregate in the full Link projection.
 type PreviewWork struct {
+	ID            int64
 	URL           string
 	OGImageURL    *string
 	PreviewStatus PreviewStatus
 	UpdatedAt     time.Time
+	Generation    int64
 }
 
 func (r *Repository) SystemGetPreview(ctx context.Context, id int64) (PreviewWork, error) {
 	var work PreviewWork
 	err := r.pool.QueryRow(ctx, `
-		SELECT url, og_image_url, preview_status, updated_at
+		SELECT id, url, og_image_url, preview_status, updated_at, preview_generation
 		FROM link
 		WHERE id = $1
-	`, id).Scan(&work.URL, &work.OGImageURL, &work.PreviewStatus, &work.UpdatedAt)
+	`, id).Scan(&work.ID, &work.URL, &work.OGImageURL, &work.PreviewStatus, &work.UpdatedAt, &work.Generation)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PreviewWork{}, domainerr.ErrNotFound
 	}
@@ -222,11 +228,11 @@ func (r *Repository) SystemGetPreview(ctx context.Context, id int64) (PreviewWor
 	return work, nil
 }
 
-// SystemPendingPreviewIDs is the process-wide recovery projection for the
-// preview worker. It is intentionally unscoped and returns no user data.
-func (r *Repository) SystemPendingPreviewIDs(ctx context.Context, limit int) ([]int64, error) {
+// SystemPendingPreviews returns the slim recovery projection in one query so
+// requeueing pending work does not hydrate each link separately.
+func (r *Repository) SystemPendingPreviews(ctx context.Context, limit int) ([]PreviewWork, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id
+		SELECT id, url, og_image_url, preview_status, updated_at, preview_generation
 		FROM link
 		WHERE preview_status = 'pending'
 		ORDER BY id ASC
@@ -236,24 +242,24 @@ func (r *Repository) SystemPendingPreviewIDs(ctx context.Context, limit int) ([]
 		return nil, fmt.Errorf("system list pending previews: %w", err)
 	}
 	defer rows.Close()
-	ids := make([]int64, 0)
+	previews := make([]PreviewWork, 0)
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var work PreviewWork
+		if err := rows.Scan(&work.ID, &work.URL, &work.OGImageURL, &work.PreviewStatus, &work.UpdatedAt, &work.Generation); err != nil {
 			return nil, fmt.Errorf("system scan pending preview: %w", err)
 		}
-		ids = append(ids, id)
+		previews = append(previews, work)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("system list pending previews: %w", err)
 	}
-	return ids, nil
+	return previews, nil
 }
 
 // SystemUpdateOGImage is the preview worker's screenshot-fallback writer. It
 // applies only if the row is unchanged since the worker's final pre-capture
 // read and still has no image, so a manual upload or newer preview job wins.
-func (r *Repository) SystemUpdateOGImage(ctx context.Context, id int64, imageURL string, expectedUpdatedAt time.Time) (bool, error) {
+func (r *Repository) SystemUpdateOGImage(ctx context.Context, id int64, imageURL string, expectedUpdatedAt time.Time, expectedGeneration int64) (bool, error) {
 	ct, err := r.pool.Exec(ctx, `
         UPDATE link
         SET og_image_url   = $1,
@@ -262,9 +268,10 @@ func (r *Repository) SystemUpdateOGImage(ctx context.Context, id int64, imageURL
             updated_at     = now()
         WHERE id = $2
 	      AND updated_at = $3
+	      AND preview_generation = $4
 	      AND preview_status = 'pending'
 	      AND COALESCE(og_image_url, '') = ''
-    `, imageURL, id, expectedUpdatedAt)
+    `, imageURL, id, expectedUpdatedAt, expectedGeneration)
 	if err != nil {
 		return false, fmt.Errorf("system update og_image_url: %w", err)
 	}
@@ -273,7 +280,7 @@ func (r *Repository) SystemUpdateOGImage(ctx context.Context, id int64, imageURL
 
 // SystemFinishScreenshotFallback releases pending UI state only if no newer
 // write occurred after the fallback's final pre-capture read.
-func (r *Repository) SystemFinishScreenshotFallback(ctx context.Context, id int64, expectedUpdatedAt time.Time) (bool, error) {
+func (r *Repository) SystemFinishScreenshotFallback(ctx context.Context, id int64, expectedUpdatedAt time.Time, expectedGeneration int64) (bool, error) {
 	ct, err := r.pool.Exec(ctx, `
         UPDATE link
         SET preview_status = 'ok',
@@ -281,9 +288,10 @@ func (r *Repository) SystemFinishScreenshotFallback(ctx context.Context, id int6
             updated_at     = now()
         WHERE id = $1
           AND updated_at = $2
+		  AND preview_generation = $3
           AND preview_status = 'pending'
           AND COALESCE(og_image_url, '') = ''
-	`, id, expectedUpdatedAt)
+	`, id, expectedUpdatedAt, expectedGeneration)
 	if err != nil {
 		return false, fmt.Errorf("finish screenshot fallback: %w", err)
 	}
@@ -321,7 +329,7 @@ func (r *Repository) SystemRecordCheckResult(ctx context.Context, id int64, expe
 		checkErr = res.FetchErr
 	}
 	sql := `
-        UPDATE link
+        UPDATE link AS l
 		SET last_fingerprint = COALESCE($1, last_fingerprint),
             last_check_error = $2`
 	if res.Changed {
@@ -330,7 +338,8 @@ func (r *Repository) SystemRecordCheckResult(ctx context.Context, id int64, expe
             change_seen_at = NULL`
 	}
 	// A newer claim or URL/interval update changes/nulls this exact token.
-	sql += ` WHERE id = $3 AND last_checked_at = $4 AND check_interval IS NOT NULL`
+	sql += ` WHERE l.id = $3 AND l.last_checked_at = $4 AND l.check_interval IS NOT NULL AND ` +
+		folders.SQLNotInLockedFolder("l")
 	ct, err := r.pool.Exec(ctx, sql, fp, checkErr, id, expectedClaimedAt)
 	if err != nil {
 		return false, fmt.Errorf("record check result: %w", err)

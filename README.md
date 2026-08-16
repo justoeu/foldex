@@ -322,7 +322,7 @@ to come as the project gets more populated content:
 
 ## Backup & Restore
 
-Full snapshot of the DB **and** the RustFS bucket into a single ZIP. Three endpoints:
+Full snapshot of the DB **and** the RustFS bucket into a single ZIP. Core endpoints:
 
 ```bash
 # Generate — streams a ZIP. Headers expose counts + duration.
@@ -347,7 +347,7 @@ curl -X POST -F file=@foldex-backup-*.zip \
 #                     links with URL collision fall back to skip + warning
 ```
 
-Via UI: open the **Import / Export** page → the right column hosts the **💾 Full backup** card. Drag a `.zip` onto it to review the validation summary and pick a mode in `BackupRestoreDialog`. Closing or replacing the file cancels validation; once an import or restore starts, the dialog stays open and cannot be dismissed until the server responds. History (last 10 backups: date, duration, size, counts) persists in `localStorage`.
+Via UI: open the **Import / Export** page → the right column hosts the **💾 Full backup** card. Chrome streams directly into the selected file; Firefox and Safari use a short-lived, one-time, account/session-bound native download, so no browser builds the full ZIP in JavaScript memory. The server reports completion metadata separately, preserving history (last 10 backups: date, duration, size, counts) in `localStorage` without parsing the archive. Drag a `.zip` onto the card to review the validation summary and pick a mode in `BackupRestoreDialog`. Closing or replacing the file cancels validation; once an import or restore starts, the dialog stays open and cannot be dismissed until the server responds.
 
 Uploads are capped at 2 GiB compressed. Before validation or restore touches the database, Foldex rejects duplicate ZIP names, more than 100,000 entries, manifest/database JSON above 32/256 MiB, files above 64 MiB each, or more than 4 GiB expanded in total. Export applies the same envelopes, with at most 99,998 files (two entries are reserved for manifest/database) and 1,024-byte object keys. Only one export, validation, or restore runs at a time; a concurrent request receives `429 backup_busy` before DB, object-store, body-read, or temp-file work and can retry.
 

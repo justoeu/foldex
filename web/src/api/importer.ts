@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
+import { invalidateEntryCounts } from './entries'
 
 export type ImportFormat = 'netscape' | 'json'
 export type ImportMode = 'skip' | 'wipe' | 'duplicate'
@@ -14,14 +15,12 @@ export type ImportFolder = {
   path: string
   name: string
   count: number
+  conflicts: number
 }
 
-export type ImportLink = {
-  url: string
-  title: string
-  folder?: string
-  tags?: string[]
-  conflict: boolean
+export type ImportAggregate = {
+  links: number
+  conflicts: number
 }
 
 export type ImportValidation = {
@@ -29,7 +28,7 @@ export type ImportValidation = {
   counts: ImportCounts
   conflicts: ImportCounts
   folders: ImportFolder[]
-  links: ImportLink[]
+  ungrouped: ImportAggregate
   warnings: string[]
 }
 
@@ -93,6 +92,7 @@ export function useApplyImport() {
       for (const queryKey of ['links', 'entries', 'folders', 'tags', 'stats']) {
         void Promise.resolve(qc.invalidateQueries({ queryKey: [queryKey] })).catch(() => undefined)
       }
+      invalidateEntryCounts(qc)
     },
   })
 }

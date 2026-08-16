@@ -11,7 +11,7 @@ ARG TARGETARCH
 ENV CGO_ENABLED=0 GOOS=linux
 
 COPY go.mod go.sum* ./
-RUN go mod download || true
+RUN go mod download
 
 COPY . .
 RUN GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/foldex ./cmd/server

@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -84,19 +86,85 @@ func TestValidate_ReportsConflictsAndFolders(t *testing.T) {
 	assert.Equal(t, 1, rep.Conflicts.Links)
 	assert.Equal(t, 1, rep.Conflicts.Tags)
 	require.NotEmpty(t, rep.Folders)
+	assert.Equal(t, 2, rep.Folders[0].Count)
+	assert.Equal(t, 1, rep.Folders[0].Conflicts)
+}
 
-	var conflicted, fresh bool
-	for _, l := range rep.Links {
-		if l.URL == "https://exists.example" {
-			assert.True(t, l.Conflict)
-			conflicted = true
-		}
-		if l.URL == "https://fresh.example" {
-			assert.False(t, l.Conflict)
-			fresh = true
-		}
+func TestValidateImport_ResponseIsAggregateSized(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "aggregate-validation@test.local", "admin")
+	lrepo := links.NewRepository(pool)
+	ctx := context.Background()
+	for _, rawURL := range []string{
+		"https://aggregate-root-existing.example",
+		"https://aggregate-work.example/0",
+		"https://aggregate-personal.example/0",
+	} {
+		_, err := lrepo.Create(ctx, uid, links.CreateInput{URL: rawURL, Title: "Existing"})
+		require.NoError(t, err)
 	}
-	assert.True(t, conflicted && fresh)
+
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
+	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	var html strings.Builder
+	html.WriteString(`<DL><DT><A HREF="https://aggregate-root-existing.example">Root existing</A><DT><A HREF="https://aggregate-root-fresh.example">Root fresh</A>`)
+	for _, folder := range []string{"Work", "Personal"} {
+		html.WriteString("<DT><H3>" + folder + "</H3><DL>")
+		for i := range 200 {
+			fmt.Fprintf(&html, `<DT><A HREF="https://aggregate-%s.example/%d">%s %d</A>`, strings.ToLower(folder), i, folder, i)
+		}
+		html.WriteString(`</DL>`)
+	}
+	html.WriteString(`</DL>`)
+
+	body, ct := multipartFields(t, map[string]string{"format": "netscape"}, html.String())
+	resp, err := http.Post(srv.URL+"/validate", ct, body)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Less(t, len(raw), 4096, "response size must scale with folders, not bookmarks")
+	assert.NotContains(t, string(raw), "aggregate-root-existing.example")
+
+	var rep struct {
+		Counts    importer.ValidationCounts
+		Conflicts importer.ValidationCounts
+		Folders   []struct {
+			Path      string `json:"path"`
+			Count     int    `json:"count"`
+			Conflicts int    `json:"conflicts"`
+		} `json:"folders"`
+		Ungrouped struct {
+			Links     int `json:"links"`
+			Conflicts int `json:"conflicts"`
+		} `json:"ungrouped"`
+		Links json.RawMessage `json:"links"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &rep))
+	assert.Nil(t, rep.Links, "item-level bookmarks must be omitted")
+	assert.Equal(t, 402, rep.Counts.Links)
+	assert.Equal(t, 3, rep.Conflicts.Links)
+	assert.Equal(t, 2, rep.Ungrouped.Links)
+	assert.Equal(t, 1, rep.Ungrouped.Conflicts)
+
+	effectiveLinks := rep.Ungrouped.Links
+	effectiveConflicts := rep.Ungrouped.Conflicts
+	for _, folder := range rep.Folders {
+		if folder.Path == "Work" {
+			assert.Equal(t, 200, folder.Count)
+			assert.Equal(t, 1, folder.Conflicts)
+			continue
+		}
+		effectiveLinks += folder.Count
+		effectiveConflicts += folder.Conflicts
+	}
+	assert.Equal(t, 202, effectiveLinks)
+	assert.Equal(t, 2, effectiveConflicts)
 }
 
 func TestValidate_EmptyFile(t *testing.T) {

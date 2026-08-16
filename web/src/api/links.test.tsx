@@ -1,16 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { ReactNode } from 'react'
-import { QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
-  useLinks,
-  flattenLinks,
   useCreateLink,
   useUpdateLink,
   useDeleteLink,
   useRefreshPreview,
-  useCaptureScreenshot,
-  captureScreenshot,
   goHref,
   mapCachedLinks,
   usePinLink,
@@ -41,55 +37,6 @@ beforeEach(() => {
 describe('goHref', () => {
   it('returns redirect path', () => {
     expect(goHref(42)).toBe('/go/42')
-  })
-})
-
-describe('useLinks', () => {
-  it('lists empty by default', async () => {
-    const { result } = renderHook(() => useLinks({}), { wrapper })
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    // useInfiniteQuery returns InfiniteData<Link[]> — flatten to compare.
-    expect(flattenLinks(result.current.data)).toEqual([])
-  })
-
-  it('applies q, tag and sort params', async () => {
-    state.links.push(
-      {
-        id: 1, url: 'https://a', title: 'Alpha', click_count: 1,
-        preview_status: 'ok', created_at: '', updated_at: '', tags: [state.tags[0]],
-      } as any,
-      {
-        id: 2, url: 'https://b', title: 'Beta', click_count: 5,
-        preview_status: 'ok', created_at: '', updated_at: '', tags: [],
-      } as any,
-    )
-    const { result } = renderHook(
-      () => useLinks({ q: 'Beta', sort: 'clicks' }),
-      { wrapper },
-    )
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    const flat = flattenLinks(result.current.data)
-    expect(flat[0]?.title).toBe('Beta')
-  })
-
-  it('paginates via fetchNextPage when more results exist', async () => {
-    // Seed 3 links and force a page size of 2 by pushing past the default
-    // 100-link threshold is overkill; instead exercise the slice path by
-    // crafting a state where the mock returns multiple pages. We rely on
-    // the mock's limit/offset slicing.
-    for (let i = 1; i <= 3; i++) {
-      state.links.push({
-        id: i, url: `https://${i}`, title: `L${i}`, click_count: 0,
-        preview_status: 'ok', created_at: '', updated_at: '', tags: [],
-      } as any)
-    }
-    // Default LINK_PAGE_SIZE=100 means all 3 fit on page 1 → no "Load more".
-    // Verify hasNextPage is false in that case (the contract the Home
-    // component relies on to hide the button).
-    const { result } = renderHook(() => useLinks({}), { wrapper })
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.hasNextPage).toBe(false)
-    expect(flattenLinks(result.current.data)).toHaveLength(3)
   })
 })
 
@@ -133,36 +80,6 @@ describe('useCreateLink + useUpdateLink + useDeleteLink + useRefreshPreview', ()
   })
 })
 
-describe('useCaptureScreenshot', () => {
-  it('returns the screenshot url for an existing link', async () => {
-    state.links.push({
-      id: 5, url: 'https://example.com', title: 'Example', click_count: 0,
-      preview_status: 'ok', created_at: '', updated_at: '', tags: [],
-    } as any)
-    const { result } = renderHook(() => useCaptureScreenshot(), { wrapper })
-    const out = await result.current.mutateAsync(5)
-    expect(out.url).toBe('/api/files/screenshots/5.png')
-  })
-
-  it('throws when link does not exist', async () => {
-    const { result } = renderHook(() => useCaptureScreenshot(), { wrapper })
-    await expect(result.current.mutateAsync(999)).rejects.toMatchObject({
-      response: { status: 404 },
-    })
-  })
-})
-
-describe('captureScreenshot', () => {
-  it('calls POST /api/links/:id/screenshot and returns url', async () => {
-    state.links.push({
-      id: 11, url: 'https://foo.example', title: 'Foo', click_count: 0,
-      preview_status: 'ok', created_at: '', updated_at: '', tags: [],
-    } as any)
-    const out = await captureScreenshot(11)
-    expect(out.url).toBe('/api/files/screenshots/11.png')
-  })
-})
-
 describe('mapCachedLinks', () => {
   // Regression: setQueriesData({ queryKey: ['links'] }) is a PREFIX match in
   // TanStack v5, so it also hits useRecentChanges' entry whose key is
@@ -173,7 +90,7 @@ describe('mapCachedLinks', () => {
   // active.
   it('skips non-InfiniteData entries under the [links] prefix without throwing', async () => {
     const client = makeQueryClient()
-    // Seed an InfiniteData entry (real useLinks shape) AND a flat Link[]
+    // Seed an InfiniteData entry and a flat Link[]
     // (useRecentChanges shape) under the shared ['links'] prefix.
     client.setQueryData(['links', '', '', 'created', 'all'], {
       pages: [[
@@ -250,20 +167,6 @@ describe('goHref slug preference', () => {
   it('prefers slug over id when given a Link-like object', () => {
     expect(goHref({ id: 9, slug: 'hello' })).toBe('/go/hello')
     expect(goHref({ id: 9, slug: '' })).toBe('/go/9')
-  })
-})
-
-describe('flattenLinks', () => {
-  it('returns empty for undefined or missing pages', () => {
-    expect(flattenLinks(undefined)).toEqual([])
-    expect(flattenLinks({ pages: undefined } as any)).toEqual([])
-  })
-
-  it('flattens multiple pages', () => {
-    expect(flattenLinks({
-      pages: [[{ id: 1 } as any], [{ id: 2 } as any]],
-      pageParams: [0, 1],
-    })).toHaveLength(2)
   })
 })
 
@@ -351,19 +254,44 @@ describe('useUpdateLink invalidation branches', () => {
     })
     expect(state.links[0].title).toBe('U2')
   })
-})
 
-describe('useLinks filters', () => {
-  it('applies folderId and ungrouped params', async () => {
-    state.links.push(
-      { id: 1, url: 'https://a', title: 'A', click_count: 0, preview_status: 'ok', created_at: '', updated_at: '', tags: [], folder_id: 5 } as any,
-      { id: 2, url: 'https://b', title: 'B', click_count: 0, preview_status: 'ok', created_at: '', updated_at: '', tags: [], folder_id: null } as any,
+  it('does not let an older response overwrite a newer cached link', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const wrap = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
     )
-    const { result: r1 } = renderHook(() => useLinks({ folderId: 5 }), { wrapper })
-    await waitFor(() => expect(r1.current.isSuccess).toBe(true))
-    const { result: r2 } = renderHook(() => useLinks({ ungrouped: true }), { wrapper })
-    await waitFor(() => expect(r2.current.isSuccess).toBe(true))
-    const { result: r3 } = renderHook(() => useLinks({ tagIds: [1, 2] }), { wrapper })
-    await waitFor(() => expect(r3.current.isSuccess).toBe(true))
+    const original = {
+      id: 20, url: 'https://u', title: 'Original', slug: 'u', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: 'v1', tags: [], folder_id: null,
+    } as any
+    client.setQueryData(['links', '', '', 'created', 'all'], {
+      pages: [[original]],
+      pageParams: [0],
+    })
+    client.setQueryData(['entries', '', '', 'created', 'all', 'locked', 100], {
+      pages: [[{ ...original, kind: 'link' }]],
+      pageParams: [0],
+    })
+    let resolveFirst!: (value: { data: typeof original }) => void
+    let resolveSecond!: (value: { data: typeof original }) => void
+    vi.mocked(http.patch)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }) as ReturnType<typeof http.patch>)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve }) as ReturnType<typeof http.patch>)
+    const { result } = renderHook(() => useUpdateLink(), { wrapper: wrap })
+
+    const first = result.current.mutateAsync({ id: 20, body: { title: 'Older' } })
+    const second = result.current.mutateAsync({ id: 20, body: { title: 'Newer' } })
+    await waitFor(() => expect(http.patch).toHaveBeenCalledTimes(2))
+    resolveSecond({ data: { ...original, title: 'Newer', updated_at: 'v3' } })
+    await second
+    resolveFirst({ data: { ...original, title: 'Older', updated_at: 'v2' } })
+    await first
+
+    const links = client.getQueryData<{ pages: any[][] }>(['links', '', '', 'created', 'all'])
+    const entries = client.getQueryData<{ pages: any[][] }>(['entries', '', '', 'created', 'all', 'locked', 100])
+    expect(links?.pages[0][0].title).toBe('Newer')
+    expect(entries?.pages[0][0].title).toBe('Newer')
   })
 })

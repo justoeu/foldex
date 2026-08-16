@@ -238,12 +238,13 @@ func TestSystemUpdateOGImage_ManualUploadWinsCAS(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
 	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://image-cas.example", Title: "cas"})
 	require.NoError(t, err)
-	expected := created.UpdatedAt
+	work, err := lrepo.SystemGetPreview(ctx, created.ID)
+	require.NoError(t, err)
 	previous, err := lrepo.ReplaceOGImage(ctx, uid, created.ID, "/api/files/images/manual.jpg")
 	require.NoError(t, err)
 	assert.Nil(t, previous)
 
-	applied, err := lrepo.SystemUpdateOGImage(ctx, created.ID, "/api/files/screenshots/fallback.jpg", expected)
+	applied, err := lrepo.SystemUpdateOGImage(ctx, created.ID, "/api/files/screenshots/fallback.jpg", work.UpdatedAt, work.Generation)
 	require.NoError(t, err)
 	assert.False(t, applied)
 	got, err := lrepo.Get(ctx, uid, created.ID)
@@ -322,11 +323,12 @@ func TestSystemFinishScreenshotFallback_DoesNotFinishNewerRefresh(t *testing.T) 
 	ctx, uid, lrepo, _ := setup(t)
 	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://finish-cas.example", Title: "cas"})
 	require.NoError(t, err)
-	expected := created.UpdatedAt
+	work, err := lrepo.SystemGetPreview(ctx, created.ID)
+	require.NoError(t, err)
 	time.Sleep(time.Millisecond)
 	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, nil, nil, nil, nil))
 
-	applied, err := lrepo.SystemFinishScreenshotFallback(ctx, created.ID, expected)
+	applied, err := lrepo.SystemFinishScreenshotFallback(ctx, created.ID, work.UpdatedAt, work.Generation)
 	require.NoError(t, err)
 	assert.False(t, applied)
 	got, err := lrepo.Get(ctx, uid, created.ID)
@@ -338,11 +340,12 @@ func TestSystemUpdatePreviewIfUnchanged_DoesNotOverwriteNewerRefresh(t *testing.
 	ctx, uid, lrepo, _ := setup(t)
 	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://preview-cas.example", Title: "cas"})
 	require.NoError(t, err)
-	expected := created.UpdatedAt
+	work, err := lrepo.SystemGetPreview(ctx, created.ID)
+	require.NoError(t, err)
 	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, nil, nil, nil, nil))
 
 	staleDescription := "stale"
-	applied, err := lrepo.SystemUpdatePreviewIfUnchanged(ctx, created.ID, expected, links.StatusOK, nil, nil, &staleDescription, nil)
+	applied, err := lrepo.SystemUpdatePreviewIfUnchanged(ctx, created.ID, work.UpdatedAt, work.Generation, links.StatusOK, nil, nil, &staleDescription, nil)
 	require.NoError(t, err)
 	assert.False(t, applied)
 	got, err := lrepo.Get(ctx, uid, created.ID)
@@ -351,7 +354,32 @@ func TestSystemUpdatePreviewIfUnchanged_DoesNotOverwriteNewerRefresh(t *testing.
 	assert.Nil(t, got.Description)
 }
 
-func TestSystemPendingPreviewIDs_ReturnsOnlyPendingWithinLimit(t *testing.T) {
+func TestSystemUpdatePreview_GenerationRejectsStaleClaimWithEqualTimestamp(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "preview-generation@test.local", "admin")
+	lrepo := links.NewRepository(pool)
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://preview-generation.example", Title: "generation"})
+	require.NoError(t, err)
+	stale, err := lrepo.SystemGetPreview(ctx, created.ID)
+	require.NoError(t, err)
+
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, nil, nil, nil, nil))
+	_, err = pool.Exec(ctx, `UPDATE link SET updated_at = $1 WHERE id = $2`, stale.UpdatedAt, created.ID)
+	require.NoError(t, err)
+
+	staleDescription := "stale"
+	applied, err := lrepo.SystemUpdatePreviewIfUnchanged(ctx, created.ID, stale.UpdatedAt, stale.Generation, links.StatusOK, nil, nil, &staleDescription, nil)
+	require.NoError(t, err)
+	assert.False(t, applied)
+
+	current, err := lrepo.SystemGetPreview(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, stale.Generation+1, current.Generation)
+	assert.Equal(t, links.StatusPending, current.PreviewStatus)
+}
+
+func TestSystemPendingPreviews_ReturnsSlimPendingProjectionWithinLimit(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
 	first, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://pending-one.example", Title: "one"})
 	require.NoError(t, err)
@@ -361,11 +389,14 @@ func TestSystemPendingPreviewIDs_ReturnsOnlyPendingWithinLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, lrepo.SystemUpdatePreview(ctx, done.ID, links.StatusOK, nil, nil, nil, nil))
 
-	ids, err := lrepo.SystemPendingPreviewIDs(ctx, 1)
+	previews, err := lrepo.SystemPendingPreviews(ctx, 1)
 	require.NoError(t, err)
-	assert.Equal(t, []int64{first.ID}, ids)
-	assert.NotContains(t, ids, second.ID)
-	assert.NotContains(t, ids, done.ID)
+	require.Len(t, previews, 1)
+	assert.Equal(t, first.ID, previews[0].ID)
+	assert.Equal(t, first.URL, previews[0].URL)
+	assert.Equal(t, links.StatusPending, previews[0].PreviewStatus)
+	assert.NotEqual(t, second.ID, previews[0].ID)
+	assert.NotEqual(t, done.ID, previews[0].ID)
 }
 
 func TestRepository_DeleteCascadesLinkTag(t *testing.T) {
@@ -714,6 +745,48 @@ func TestRepository_FindDueForCheck_OnlyOptedIn(t *testing.T) {
 	assert.Equal(t, a.Title, due[0].Title)
 	assert.Equal(t, di, due[0].CheckInterval)
 	assert.NotZero(t, due[0].ClaimedAt)
+}
+
+func TestRepository_ChangeCheckExcludesLockedLinksAndRejectsFolderMoveRace(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "locked-check@test.local", "user")
+	repo := links.NewRepository(pool)
+	password := "folder-password"
+	protected, err := folders.NewRepository(pool).Create(ctx, uid, folders.CreateInput{
+		Name: "Protected", Color: "#abc", Password: &password,
+	})
+	require.NoError(t, err)
+	daily := "daily"
+	locked, err := repo.Create(ctx, uid, links.CreateInput{
+		URL: "https://locked-check.test", Title: "locked", FolderID: &protected.ID, CheckInterval: &daily,
+	})
+	require.NoError(t, err)
+	open, err := repo.Create(ctx, uid, links.CreateInput{
+		URL: "https://open-check.test", Title: "open", CheckInterval: &daily,
+	})
+	require.NoError(t, err)
+
+	due, err := repo.SystemFindDueForCheck(ctx, 100)
+	require.NoError(t, err)
+	assert.NotContains(t, dueIDs(due), locked.ID)
+	require.Contains(t, dueIDs(due), open.ID)
+	var openClaim links.DueLink
+	for _, candidate := range due {
+		if candidate.ID == open.ID {
+			openClaim = candidate
+			break
+		}
+	}
+	require.NotZero(t, openClaim.ClaimedAt)
+	_, err = repo.Update(ctx, uid, open.ID, links.UpdateInput{FolderID: &protected.ID, FolderIDSet: true})
+	require.NoError(t, err)
+
+	applied, err := repo.SystemRecordCheckResult(ctx, open.ID, openClaim.ClaimedAt, links.CheckResult{
+		Fingerprint: "content:changed", Changed: true,
+	})
+	require.NoError(t, err)
+	assert.False(t, applied, "moving a claimed link into a locked folder must suppress publication and push")
 }
 
 func TestRepository_RecordCheckResultRejectsStaleConfiguration(t *testing.T) {

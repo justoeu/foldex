@@ -7,11 +7,18 @@
     "placeholder": "Search or create folder…",
     "create_empty": "New folder…",
     "create_inline": "Create folder \"{{name}}\"",
+    "create_error": "Could not create this folder. Check your connection and try again.",
     "no_match": "No matching folder",
     "toggle_aria": "Toggle folder list",
     "input_aria": "folder",
     "list_aria": "folders",
     "none": "No folder"
+  },
+  "tag_picker": {
+    "registered_label": "Registered tags",
+    "page_prev_aria": "previous page",
+    "page_next_aria": "next page",
+    "create_inline": "create \"{{name}}\""
   },
   "common": {
     "cancel": "Cancel",
@@ -141,7 +148,9 @@
     "breadcrumb_reload_tooltip": "Reload links and subfolders",
     "breadcrumb_edit_tooltip": "Edit folder",
     "breadcrumb_edit_label": "Edit folder",
-    "merge_new_folder_name": "New folder"
+    "merge_new_folder_name": "New folder",
+    "merge_error": "Could not group these items. The current view was refreshed. Try the merge again.",
+    "merge_partial_error": "A folder was created, but not every item could be moved. The current view was refreshed. Move the remaining item manually or try again."
   },
   "links": {
     "load_more": "Load more",
@@ -350,7 +359,9 @@
     "gradient_drag_tooltip": "Drag to swap",
     "gradient_hue_aria": "hue selector for gradient",
     "submit_create": "Create tag",
-    "submit_save": "Save"
+    "submit_save": "Save",
+    "error_name_taken": "A tag with this name already exists. Choose a different name and try again.",
+    "error_generic": "Could not save this tag. Check your connection and try again."
   },
   "tag_manager": {
     "title": "Manage tags",
@@ -487,7 +498,7 @@
   },
   "backup": {
     "card_title": "💾 Full backup",
-    "card_body": "Generates a ZIP with every table (tags, folders, links, M:N, click_log) and every file from the bucket (screenshots + images).",
+    "card_body": "Generates a ZIP with every table (tags, folders, links, notes, M:N, click_log) and every file from the bucket (screenshots + images).",
     "card_kicker": "DB + RustFS",
     "generate_button": "Generate full backup",
     "generating": "Generating…",
@@ -496,7 +507,7 @@
     "restore_file_invalid": "File must be a foldex backup .zip.",
     "generate_failed": "failed to generate backup",
     "history_section_title": "History",
-    "history_format_files": "{{files}} files · {{size}} · {{duration}} · {{links}} links / {{tags}} tags",
+    "history_format_files": "{{files}} files · {{size}} · {{duration}} · {{links}} links / {{notes}} notes / {{tags}} tags",
     "duration_ms": "{{value}}ms",
     "duration_s": "{{value}}s",
     "restore_button": "Restore",
@@ -523,7 +534,7 @@
     "mode_duplicate_title": "Duplicate",
     "mode_duplicate_desc": "Renames conflicting tags to \"name (2)\"; folders always new. Links with the same URL fall back to skip (URL is UNIQUE).",
     "mode_wipe_title": "⚠ Wipe everything and import",
-    "mode_wipe_desc": "DESTRUCTIVE. Erases ALL current links, tags, folders, clicks and files; restores with original IDs preserved.",
+    "mode_wipe_desc": "DESTRUCTIVE. Erases ALL current links, notes, tags, folders, clicks and files; restores with original IDs preserved.",
     "submit_restore": "Restore",
     "submit_restore_wipe": "⚠ Restore (wipe everything)",
     "submit_restoring": "Restoring…",
@@ -535,7 +546,7 @@
     "summary_manifest": "Manifest",
     "summary_manifest_value": "{{status}} {{version}} · schema {{schema}}",
     "summary_content": "Content",
-    "summary_content_value": "{{links}} links · {{tags}} tags · {{folders}} folders",
+    "summary_content_value": "{{links}} links · {{notes}} notes · {{tags}} tags · {{folders}} folders",
     "summary_clicks": "Clicks",
     "summary_clicks_value": "{{count}} clicks",
     "summary_files": "Files",
@@ -548,8 +559,8 @@
     "result_skipped": "Skipped",
     "result_files": "Files",
     "result_duration": "Duration",
-    "result_inserted_format": "{{links}} links · {{tags}} tags · {{folders}} folders · {{clicks}} clicks",
-    "result_skipped_format": "{{links}} links · {{tags}} tags",
+    "result_inserted_format": "{{links}} links · {{notes}} notes · {{tags}} tags · {{folders}} folders · {{clicks}} clicks",
+    "result_skipped_format": "{{links}} links · {{notes}} notes · {{tags}} tags",
     "result_files_format": "{{uploaded}} uploaded · {{skipped}} already existed"
   },
   "stats": {

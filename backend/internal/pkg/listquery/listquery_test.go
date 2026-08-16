@@ -43,7 +43,8 @@ func TestPlannerBuildsOwnerFirstComposedScopeAndClampedPage(t *testing.T) {
 	require.Contains(t, scope.Where[2], "tag_id = ANY($3)")
 	require.Equal(t, "l.folder_id = $4", scope.Where[3], "folder scope must win over ungrouped")
 	require.NotContains(t, strings.Join(scope.Where, " "), "unlocked(l)")
-	require.Equal(t, "l.pinned DESC, lower(l.title) ASC, l.created_at DESC", page.OrderBy)
+	require.Equal(t, "l.pinned DESC, lower(l.title) ASC, l.created_at DESC, l.id ASC", page.OrderBy)
+	require.False(t, page.ClickRanking)
 	require.Equal(t, 5, page.LimitArg)
 	require.Equal(t, 6, page.OffsetArg)
 	require.Equal(t, []any{int64(42), "%needle%", []int64{7, 9}, int64(17), 100, 0}, planner.Args())
@@ -80,21 +81,23 @@ func TestPlannerPreservesPinnedFirstSortSemantics(t *testing.T) {
 	t.Parallel()
 	columns := listquery.UnionOrder()
 	tests := []struct {
-		sort string
-		want string
+		sort         string
+		want         string
+		clickRanking bool
 	}{
-		{sort: "", want: "pinned DESC, created_at DESC"},
-		{sort: "created", want: "pinned DESC, created_at DESC"},
-		{sort: "clicks", want: "pinned DESC, click_count DESC, created_at DESC"},
-		{sort: "recent", want: "pinned DESC, COALESCE(last_clicked_at, created_at) DESC"},
-		{sort: "alpha", want: "pinned DESC, lower(title) ASC, created_at DESC"},
-		{sort: "alpha_desc", want: "pinned DESC, lower(title) DESC, created_at DESC"},
+		{sort: "", want: "pinned DESC, created_at DESC, kind ASC, id ASC"},
+		{sort: "created", want: "pinned DESC, created_at DESC, kind ASC, id ASC"},
+		{sort: "clicks", want: "pinned DESC, click_count DESC, created_at DESC, kind ASC, id ASC", clickRanking: true},
+		{sort: "recent", want: "pinned DESC, COALESCE(last_clicked_at, created_at) DESC, kind ASC, id ASC", clickRanking: true},
+		{sort: "alpha", want: "pinned DESC, lower(title) ASC, created_at DESC, kind ASC, id ASC"},
+		{sort: "alpha_desc", want: "pinned DESC, lower(title) DESC, created_at DESC, kind ASC, id ASC"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.sort, func(t *testing.T) {
 			planner := listquery.NewPlanner(listquery.Params{Sort: tc.sort})
 			page := planner.AddPage(columns)
 			require.Equal(t, tc.want, page.OrderBy)
+			require.Equal(t, tc.clickRanking, page.ClickRanking)
 			require.Equal(t, []any{100, 0}, planner.Args())
 		})
 	}

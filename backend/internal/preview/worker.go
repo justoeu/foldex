@@ -34,6 +34,8 @@ const (
 	screenshotCaptureTimeout = 70 * time.Second
 	screenshotPolicyTimeout  = 5 * time.Second
 	screenshotStorageTimeout = 10 * time.Second
+	previewQueueWaves        = 1
+	previewRecoveryBatch     = 1000
 )
 
 // Screenshotter captures a URL and returns PNG bytes. Optional fallback.
@@ -49,10 +51,24 @@ type Uploader interface {
 	DeleteObject(ctx context.Context, key string) error
 }
 
+type previewRepository interface {
+	SystemGetPreview(context.Context, int64) (links.PreviewWork, error)
+	SystemUpdatePreviewIfUnchanged(context.Context, int64, time.Time, int64, links.PreviewStatus, *string, *string, *string, *string) (bool, error)
+	SystemUpdateOGImage(context.Context, int64, string, time.Time, int64) (bool, error)
+	SystemFinishScreenshotFallback(context.Context, int64, time.Time, int64) (bool, error)
+	SystemPendingPreviews(context.Context, int) ([]links.PreviewWork, error)
+}
+
+type previewJob struct {
+	id      int64
+	work    links.PreviewWork
+	claimed bool
+}
+
 type Worker struct {
-	repo       *links.Repository
+	repo       previewRepository
 	fetcher    *Fetcher
-	jobs       chan int64
+	jobs       chan previewJob
 	concurrent int
 	logger     *slog.Logger
 
@@ -63,17 +79,20 @@ type Worker struct {
 	uploader            Uploader
 	screenshotURLPolicy func(context.Context, string) bool
 
-	wg        sync.WaitGroup
-	cancel    context.CancelFunc
-	stopOnce  sync.Once
-	stopped   atomic.Bool
-	jobsMu    sync.Mutex
-	scheduled map[int64]scheduledJob
+	wg             sync.WaitGroup
+	cancel         context.CancelFunc
+	stopOnce       sync.Once
+	stopped        atomic.Bool
+	recoveryNeeded atomic.Bool
+	recoveryWake   chan struct{}
+	jobsMu         sync.Mutex
+	scheduled      map[int64]scheduledJob
 }
 
 type scheduledJob struct {
-	running bool
-	rerun   bool
+	running  bool
+	rerun    bool
+	recovery bool
 }
 
 type enqueueMode bool
@@ -91,20 +110,22 @@ func NewWorker(pool *pgxpool.Pool, concurrency int, timeout time.Duration, logge
 		concurrency = resourcebudget.BackgroundWorkerConcurrency
 	}
 	return &Worker{
-		repo:                links.NewRepository(pool),
-		fetcher:             NewFetcher(timeout),
-		jobs:                make(chan int64, 256),
+		repo:    links.NewRepository(pool),
+		fetcher: NewFetcher(timeout),
+		// At most one successor wave waits behind the active workers. Recovery
+		// refills each drained wave, so a deeper queue adds age without throughput.
+		jobs:                make(chan previewJob, concurrency*previewQueueWaves),
 		concurrent:          concurrency,
 		logger:              logger.With("component", "preview"),
 		screenshotURLPolicy: IsPublicURL,
+		recoveryWake:        make(chan struct{}, 1),
 		scheduled:           make(map[int64]scheduledJob),
 	}
 }
 
 // Start spins up the goroutine pool. It also re-enqueues any link still in
-// preview_status='pending' (crash recovery) and periodically re-runs that
-// sweep so jobs dropped on a full queue are not stuck forever (FE polls
-// pending until status flips).
+// preview_status='pending' (crash recovery), refilling whenever the queued
+// wave drains. A periodic sweep recovers lost wakeups.
 func (w *Worker) Start(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
@@ -125,6 +146,8 @@ func (w *Worker) requeueLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-w.recoveryWake:
+			w.requeuePending(ctx)
 		case <-t.C:
 			w.requeuePending(ctx)
 		}
@@ -147,8 +170,8 @@ func (w *Worker) Stop() {
 	w.wg.Wait()
 	for {
 		select {
-		case id := <-w.jobs:
-			w.finishJob(id)
+		case job := <-w.jobs:
+			w.finishJob(job.id)
 		default:
 			return
 		}
@@ -168,16 +191,15 @@ func (w *Worker) WithScreenshotFallback(sc Screenshotter, up Uploader) {
 
 // Enqueue tries to schedule a preview job for linkID. Non-blocking — returns
 // ErrQueueFull when the bounded jobs channel has no slot and ErrStopped after
-// Stop has been called. The caller decides what to do with the error; today
-// the API handlers and importer treat it as fire-and-forget (the link row
-// already exists; requeuePending will pick stragglers up on next start). The
-// internal Warn on ErrQueueFull keeps the operational signal even when
-// callers discard the return.
+// Stop has been called. The link row is already pending, so queue-full work is
+// recovered as capacity returns. The internal Warn keeps the operational
+// signal even when a caller discards the error.
 func (w *Worker) Enqueue(linkID int64) error {
-	return w.enqueue(linkID, explicitEnqueue)
+	return w.enqueue(previewJob{id: linkID}, explicitEnqueue)
 }
 
-func (w *Worker) enqueue(linkID int64, mode enqueueMode) error {
+func (w *Worker) enqueue(job previewJob, mode enqueueMode) error {
+	linkID := job.id
 	if w.stopped.Load() {
 		return ErrStopped
 	}
@@ -187,15 +209,15 @@ func (w *Worker) enqueue(linkID int64, mode enqueueMode) error {
 		return ErrStopped
 	}
 	if job, exists := w.scheduled[linkID]; exists {
-		if mode == explicitEnqueue && job.running {
+		if mode == explicitEnqueue && (job.running || job.recovery) {
 			job.rerun = true
 			w.scheduled[linkID] = job
 		}
 		return nil
 	}
-	w.scheduled[linkID] = scheduledJob{}
+	w.scheduled[linkID] = scheduledJob{recovery: job.claimed}
 	select {
-	case w.jobs <- linkID:
+	case w.jobs <- job:
 		// Re-check after send: Stop may have begun between Load and send. Job
 		// sits in the buffer until Stop drains, so surface ErrStopped.
 		if w.stopped.Load() {
@@ -204,6 +226,7 @@ func (w *Worker) enqueue(linkID int64, mode enqueueMode) error {
 		return nil
 	default:
 		delete(w.scheduled, linkID)
+		w.requireRecovery()
 		w.logger.Warn("preview queue full, dropping job", "link_id", linkID)
 		return ErrQueueFull
 	}
@@ -211,8 +234,8 @@ func (w *Worker) enqueue(linkID int64, mode enqueueMode) error {
 
 // enqueueRecovered differs from an explicit refresh: a recovery sweep must not
 // request a rerun for work that is already queued or running.
-func (w *Worker) enqueueRecovered(linkID int64) error {
-	return w.enqueue(linkID, recoveryEnqueue)
+func (w *Worker) enqueueRecovered(work links.PreviewWork) error {
+	return w.enqueue(previewJob{id: work.ID, work: work, claimed: true}, recoveryEnqueue)
 }
 
 func (w *Worker) loop(ctx context.Context) {
@@ -221,11 +244,34 @@ func (w *Worker) loop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case id := <-w.jobs:
-			w.startJob(id)
-			w.process(ctx, id)
-			w.finishJob(id)
+		case job := <-w.jobs:
+			if len(w.jobs) == 0 {
+				w.wakeRecoveryIfNeeded()
+			}
+			w.startJob(job.id)
+			w.process(ctx, job)
+			w.finishJob(job.id)
 		}
+	}
+}
+
+func (w *Worker) requireRecovery() {
+	w.recoveryNeeded.Store(true)
+	if len(w.jobs) == 0 {
+		w.wakeRecoveryIfNeeded()
+	}
+}
+
+func (w *Worker) wakeRecoveryIfNeeded() {
+	if w.recoveryNeeded.CompareAndSwap(true, false) {
+		w.wakeRecovery()
+	}
+}
+
+func (w *Worker) wakeRecovery() {
+	select {
+	case w.recoveryWake <- struct{}{}:
+	default:
 	}
 }
 
@@ -247,20 +293,27 @@ func (w *Worker) finishJob(id int64) {
 	}
 	job.running = false
 	job.rerun = false
+	job.recovery = false
 	w.scheduled[id] = job
 	select {
-	case w.jobs <- id:
+	case w.jobs <- previewJob{id: id}:
 	default:
 		delete(w.scheduled, id)
+		w.requireRecovery()
 		w.logger.Warn("preview queue full, dropping rerun", "link_id", id)
 	}
 }
 
-func (w *Worker) process(ctx context.Context, id int64) {
-	link, err := w.repo.SystemGetPreview(ctx, id)
-	if err != nil {
-		w.logger.Warn("preview job: link not found", "link_id", id, "err", err)
-		return
+func (w *Worker) process(ctx context.Context, job previewJob) {
+	id := job.id
+	link := job.work
+	if !job.claimed {
+		var err error
+		link, err = w.repo.SystemGetPreview(ctx, id)
+		if err != nil {
+			w.logger.Warn("preview job: link not found", "link_id", id, "err", err)
+			return
+		}
 	}
 	if link.PreviewStatus != links.StatusPending {
 		return
@@ -269,7 +322,7 @@ func (w *Worker) process(ctx context.Context, id int64) {
 	// Create and the worker picking up the job). No HTML fetch, no screenshot
 	// — and lift the "capturando…" label by flipping preview_status to ok.
 	if link.OGImageURL != nil && *link.OGImageURL != "" {
-		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, links.StatusOK, nil, nil, nil, nil); uErr != nil {
+		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, links.StatusOK, nil, nil, nil, nil); uErr != nil {
 			w.logger.Error("preview short-circuit update failed", "link_id", id, "err", uErr)
 		}
 		w.logger.Info("preview skipped: image already present", "link_id", id)
@@ -280,7 +333,7 @@ func (w *Worker) process(ctx context.Context, id int64) {
 	res, err := w.fetcher.Fetch(fetchCtx, link.URL)
 	if err != nil {
 		msg := "fetch_failed"
-		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, links.StatusFailed, nil, nil, nil, &msg); uErr != nil {
+		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, links.StatusFailed, nil, nil, nil, &msg); uErr != nil {
 			w.logger.Error("update preview failure row", "err", uErr)
 		}
 		w.logger.Info("preview failed", "link_id", id, "reason", operationErrorReason(err))
@@ -306,7 +359,7 @@ func (w *Worker) process(ctx context.Context, id int64) {
 	if willTryScreenshot {
 		firstStatus = links.StatusPending
 	}
-	applied, err := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, firstStatus, favicon, ogImage, description, nil)
+	applied, err := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, firstStatus, favicon, ogImage, description, nil)
 	if err != nil {
 		w.logger.Error("update preview row", "err", err)
 		return
@@ -317,11 +370,11 @@ func (w *Worker) process(ctx context.Context, id int64) {
 	w.logger.Info("preview ok", "link_id", id)
 
 	if willTryScreenshot {
-		finishAt := w.maybeScreenshot(ctx, id, link.URL)
+		finishAt := w.maybeScreenshot(ctx, id, link.URL, link.Generation)
 		// A skipped or failed fallback releases the frontend poll only if no
 		// manual upload or newer refresh changed the row while capture ran.
 		if finishAt != nil {
-			if _, uErr := w.repo.SystemFinishScreenshotFallback(ctx, id, *finishAt); uErr != nil {
+			if _, uErr := w.repo.SystemFinishScreenshotFallback(ctx, id, *finishAt, link.Generation); uErr != nil {
 				w.logger.Error("status flip after screenshot fallback", "err", uErr)
 			}
 		}
@@ -331,12 +384,15 @@ func (w *Worker) process(ctx context.Context, id int64) {
 // maybeScreenshot is the post-preview fallback. It runs only when the link has
 // no og:image after the HTML fetch AND the URL is public AND the user has not
 // uploaded a custom image in the meantime. Each guard short-circuits silently.
-func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string) *time.Time {
+func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string, generation int64) *time.Time {
 	if w.screenshotter == nil || w.uploader == nil {
 		return nil
 	}
 	cur, err := w.repo.SystemGetPreview(ctx, id)
 	if err != nil {
+		return nil
+	}
+	if cur.Generation != generation || cur.PreviewStatus != links.StatusPending {
 		return nil
 	}
 	if cur.OGImageURL != nil && *cur.OGImageURL != "" {
@@ -384,7 +440,7 @@ func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string) 
 		w.logger.Warn("screenshot fallback upload failed", "link_id", id, "err", err)
 		return &cur.UpdatedAt
 	}
-	applied, err := w.repo.SystemUpdateOGImage(storageCtx, id, stored.URL, cur.UpdatedAt)
+	applied, err := w.repo.SystemUpdateOGImage(storageCtx, id, stored.URL, cur.UpdatedAt, generation)
 	if err != nil {
 		w.logger.Warn("screenshot fallback db update failed", "link_id", id, "err", err)
 		w.removeFallbackObject(ctx, id, stored.Key)
@@ -426,21 +482,44 @@ func operationErrorReason(err error) string {
 }
 
 func (w *Worker) requeuePending(ctx context.Context) {
-	ids, err := w.repo.SystemPendingPreviewIDs(ctx, 1000)
+	limit := w.recoveryQueryLimit()
+	if limit == 0 {
+		w.requireRecovery()
+		return
+	}
+	previews, err := w.repo.SystemPendingPreviews(ctx, limit)
 	if err != nil {
 		w.logger.Warn("requeue pending: query failed", "err", err)
 		return
 	}
-	for _, id := range ids {
+	enqueued := 0
+	for _, work := range previews {
 		if ctx.Err() != nil {
 			return
 		}
-		// Discard the Enqueue result inside requeuePending — if the queue is
-		// full we already logged at the Warn level, and the next requeuePending
-		// run will re-pick the still-pending IDs.
-		_ = w.enqueueRecovered(id)
+		err := w.enqueueRecovered(work)
+		if errors.Is(err, ErrQueueFull) {
+			break
+		}
+		if err == nil {
+			enqueued++
+		}
 	}
-	if len(ids) > 0 {
-		w.logger.Info("requeued pending previews", "count", len(ids))
+	if enqueued > 0 {
+		w.logger.Info("requeued pending previews", "count", enqueued)
 	}
+	if len(previews) == limit {
+		w.requireRecovery()
+	}
+}
+
+func (w *Worker) recoveryQueryLimit() int {
+	w.jobsMu.Lock()
+	scheduled := len(w.scheduled)
+	w.jobsMu.Unlock()
+	available := cap(w.jobs) - len(w.jobs)
+	if available <= 0 {
+		return 0
+	}
+	return min(previewRecoveryBatch, scheduled+available)
 }

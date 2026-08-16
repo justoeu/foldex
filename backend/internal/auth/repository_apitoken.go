@@ -32,7 +32,14 @@ var (
 	// ErrTokenNotFound means the caller owns no token with that id. Distinct
 	// from ErrTokenInvalid, which is about a PRESENTED credential.
 	ErrTokenNotFound = errors.New("auth: api token not found")
+	// ErrTooManyAPITokens means the per-user live credential cap is full.
+	ErrTooManyAPITokens = errors.New("auth: too many api tokens")
 )
+
+// maxTokensPerUser bounds how many live tokens one account may hold. This is
+// enforced under the owner row lock in CreateAPIToken, not by a handler-side
+// count that parallel requests can all pass.
+const maxTokensPerUser = 20
 
 // APIToken is one long-lived credential, as its owner sees it.
 type APIToken struct {
@@ -54,6 +61,29 @@ type APIToken struct {
 // because the secret half is compared in constant time afterwards — an index
 // probe on a value an attacker supplies is a timing surface the id sidesteps.
 func (r *Repository) CreateAPIToken(ctx context.Context, uid authctx.UserID, name string, ttl time.Duration) (APIToken, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return APIToken{}, fmt.Errorf("create api token begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var lockedUser int64
+	if err := tx.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).Scan(&lockedUser); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return APIToken{}, ErrNoUser
+		}
+		return APIToken{}, fmt.Errorf("create api token lock user: %w", err)
+	}
+	var existing int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM api_token WHERE user_id = $1 AND revoked_at IS NULL`, int64(uid)).Scan(&existing); err != nil {
+		return APIToken{}, fmt.Errorf("create api token count: %w", err)
+	}
+	if existing >= maxTokensPerUser {
+		return APIToken{}, ErrTooManyAPITokens
+	}
+
 	raw, hash, err := secrets.NewToken()
 	if err != nil {
 		return APIToken{}, fmt.Errorf("api token secret: %w", err)
@@ -65,7 +95,7 @@ func (r *Repository) CreateAPIToken(ctx context.Context, uid authctx.UserID, nam
 	}
 
 	var out APIToken
-	err = r.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO api_token (user_id, name, token_hash, scope, expires_at)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, name, scope, created_at, last_used_at, expires_at`,
@@ -73,6 +103,9 @@ func (r *Repository) CreateAPIToken(ctx context.Context, uid authctx.UserID, nam
 	).Scan(&out.ID, &out.Name, &out.Scope, &out.CreatedAt, &out.LastUsedAt, &out.ExpiresAt)
 	if err != nil {
 		return APIToken{}, fmt.Errorf("create api token: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return APIToken{}, fmt.Errorf("create api token commit: %w", err)
 	}
 	out.Token = APITokenPrefix + strconv.FormatInt(out.ID, 10) + "_" + raw
 	return out, nil

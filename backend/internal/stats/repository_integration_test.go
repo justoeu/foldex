@@ -5,12 +5,14 @@ package stats_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/stats"
 	"foldex/internal/tags"
@@ -158,4 +160,136 @@ func TestTagBuckets_AggregatesClicks(t *testing.T) {
 	assert.EqualValues(t, 2, byName["beta"])
 	assert.EqualValues(t, 2, links["alpha"])
 	assert.EqualValues(t, 1, links["beta"])
+}
+
+func TestDashboard_IsOwnerScopedAndUsesOneDatabaseRoundTrip(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	otherUID := testdb.SeedUser(t, pool, "other@test.local", "user")
+	lrepo := links.NewRepository(pool)
+	trepo := tags.NewRepository(pool)
+	tag, err := trepo.Create(ctx, uid, tags.CreateInput{Name: "owner-tag", Color: "#abc"})
+	require.NoError(t, err)
+	ownerLink, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://owner.example", Title: "Owner", TagIDs: []int64{tag.ID}})
+	require.NoError(t, err)
+	password := "folder-password"
+	protectedFolder, err := folders.NewRepository(pool).Create(ctx, uid, folders.CreateInput{Name: "Protected", Color: "#def", Password: &password})
+	require.NoError(t, err)
+	protectedLink, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://protected.example", Title: "Protected", FolderID: &protectedFolder.ID, TagIDs: []int64{tag.ID}})
+	require.NoError(t, err)
+	otherLink, err := lrepo.Create(ctx, otherUID, links.CreateInput{URL: "https://other.example", Title: "Other"})
+	require.NoError(t, err)
+	for range 2 {
+		_, err = lrepo.ClickAndResolve(ctx, ownerLink.ID)
+		require.NoError(t, err)
+	}
+	for range 3 {
+		_, err = lrepo.ClickAndResolve(ctx, otherLink.ID)
+		require.NoError(t, err)
+	}
+	// The entity join succeeds, but the denormalized owner must still exclude
+	// these rows from the requested tenant's click snapshot.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO click_log (entity_kind, entity_id, user_id)
+		SELECT 'link', $1, $2 FROM generate_series(1, 5)
+	`, ownerLink.ID, int64(otherUID))
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO click_log (entity_kind, entity_id, user_id)
+		SELECT 'link', $1, $2 FROM generate_series(1, 4)
+	`, protectedLink.ID, int64(uid))
+	require.NoError(t, err)
+	// The owner predicate succeeds, but the owned-link join must discard an
+	// orphan whose polymorphic target no longer exists.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO click_log (entity_kind, entity_id, user_id)
+		VALUES ('link', 9223372036854775807, $1)
+	`, int64(uid))
+	require.NoError(t, err)
+
+	repo := stats.NewRepository(pool)
+	before := pool.Stat().AcquireCount()
+	dashboard, err := repo.Dashboard(ctx, uid, 7, 5)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, pool.Stat().AcquireCount()-before, "dashboard must execute as one database round trip")
+	assert.EqualValues(t, 1, dashboard.Summary.TotalLinks)
+	assert.EqualValues(t, 2, dashboard.Summary.TotalClicks)
+	assert.Equal(t, "owner.example", dashboard.Summary.TopHost)
+	require.Len(t, dashboard.Daily, 7)
+	var dailyClicks int64
+	for _, point := range dashboard.Daily {
+		dailyClicks += point.Clicks
+	}
+	assert.EqualValues(t, 2, dailyClicks)
+	require.Len(t, dashboard.Top, 1)
+	assert.Equal(t, ownerLink.ID, dashboard.Top[0].ID)
+	require.Len(t, dashboard.Tags, 1)
+	assert.EqualValues(t, 2, dashboard.Tags[0].Clicks)
+
+	summary, err := repo.Summary(ctx, uid)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, summary.TotalLinks)
+	assert.EqualValues(t, 2, summary.TotalClicks)
+	assert.Equal(t, "owner.example", summary.TopHost)
+	daily, err := repo.Daily(ctx, uid, 7)
+	require.NoError(t, err)
+	var legacyDailyClicks int64
+	for _, point := range daily {
+		legacyDailyClicks += point.Clicks
+	}
+	assert.EqualValues(t, 2, legacyDailyClicks)
+	top, err := repo.TopLinks(ctx, uid, 5)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, ownerLink.ID, top[0].ID)
+	buckets, err := repo.TagBuckets(ctx, uid)
+	require.NoError(t, err)
+	require.Len(t, buckets, 1)
+	assert.EqualValues(t, 2, buckets[0].Clicks)
+	assert.EqualValues(t, 1, buckets[0].Links)
+}
+
+func TestDashboard_BaseClicksCanUseOwnerEntityIndex(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	lrepo := links.NewRepository(pool)
+	link, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://owner.example", Title: "Owner"})
+	require.NoError(t, err)
+	_, err = lrepo.ClickAndResolve(ctx, link.ID)
+	require.NoError(t, err)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	_, err = tx.Exec(ctx, `SET LOCAL enable_seqscan = off`)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `SET LOCAL enable_nestloop = off`)
+	require.NoError(t, err)
+	rows, err := tx.Query(ctx, `
+		EXPLAIN (COSTS OFF)
+		WITH owned_links AS MATERIALIZED (
+			SELECT l.id
+			FROM link l
+			WHERE l.user_id = $1
+		)
+		SELECT c.entity_id, c.clicked_at
+		FROM click_log c
+		JOIN owned_links l ON l.id = c.entity_id
+		WHERE c.user_id = $1
+		  AND c.entity_kind = 'link'
+	`, int64(uid))
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var plan strings.Builder
+	for rows.Next() {
+		var line string
+		require.NoError(t, rows.Scan(&line))
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	require.NoError(t, rows.Err())
+	assert.Contains(t, plan.String(), "click_log_user_entity_idx")
 }

@@ -190,7 +190,7 @@ function ValidationSummary({ v, t }: { v: BackupValidation; t: TFunction }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <Row label={t('backup.summary_manifest')} value={t('backup.summary_manifest_value', { status: v.ok ? '✓' : '✗', version: m.version, schema: m.schema_version })} />
-      <Row label={t('backup.summary_content')} value={t('backup.summary_content_value', { links: m.counts.links, tags: m.counts.tags, folders: m.counts.folders })} />
+      <Row label={t('backup.summary_content')} value={t('backup.summary_content_value', { links: m.counts.links, notes: m.counts.notes, tags: m.counts.tags, folders: m.counts.folders })} />
       <Row label={t('backup.summary_clicks')} value={t('backup.summary_clicks_value', { count: m.counts.click_logs })} />
       <Row label={t('backup.summary_files')} value={t('backup.summary_files_value', { count: m.counts.files, size: formatBytes(m.counts.file_bytes) })} />
       <Row label={t('backup.summary_conflicts')} value={t('backup.summary_conflicts_value', { links: v.conflicts.links, tags: v.conflicts.tags })} />
@@ -290,8 +290,8 @@ function RestoreReportBlock({ r, t }: { r: RestoreReport; t: TFunction }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <Row label={t('backup.result_mode')} value={r.mode} />
-      <Row label={t('backup.result_inserted')} value={t('backup.result_inserted_format', { links: r.inserted.links, tags: r.inserted.tags, folders: r.inserted.folders, clicks: r.inserted.click_logs })} />
-      <Row label={t('backup.result_skipped')} value={t('backup.result_skipped_format', { links: r.skipped.links, tags: r.skipped.tags })} />
+      <Row label={t('backup.result_inserted')} value={t('backup.result_inserted_format', { links: r.inserted.links, notes: r.inserted.notes, tags: r.inserted.tags, folders: r.inserted.folders, clicks: r.inserted.click_logs })} />
+      <Row label={t('backup.result_skipped')} value={t('backup.result_skipped_format', { links: r.skipped.links, notes: r.skipped.notes, tags: r.skipped.tags })} />
       <Row label={t('backup.result_files')} value={t('backup.result_files_format', { uploaded: r.files.uploaded, skipped: r.files.skipped })} />
       <Row label={t('backup.result_duration')} value={t('backup.report_duration_value', { value: (r.duration_ms / 1000).toFixed(2) })} />
       {r.warnings.length > 0 && (

@@ -51,7 +51,6 @@ describe('EnrollTotpScreen', () => {
     render()
 
     await screen.findByAltText(/qr code/i)
-    await new Promise((r) => setTimeout(r, 30))
     expect(post).toHaveBeenCalledTimes(1)
   })
 

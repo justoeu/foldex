@@ -312,8 +312,8 @@ Mais capturas vêm conforme o projeto ganha conteúdo:
 
 ## Backup & Restore
 
-Snapshot completo do DB **e** do bucket RustFS num único ZIP. Três
-endpoints:
+Snapshot completo do DB **e** do bucket RustFS num único ZIP. Endpoints
+principais:
 
 ```bash
 # Gera — streama um ZIP. Headers expõem counts + duração.
@@ -339,13 +339,16 @@ curl -X POST -F file=@foldex-backup-*.zip \
 ```
 
 Via UI: abre a página **Importar / Exportar** → coluna direita tem o
-card **💾 Backup completo**. Arrasta um `.zip` em cima pra revisar o
-sumário de validação e escolher o modo no `BackupRestoreDialog`.
+card **💾 Backup completo**. Chrome streama direto pro arquivo escolhido;
+Firefox e Safari usam um download nativo de uso único, curta duração e ligado à
+conta/sessão, então nenhum browser monta o ZIP inteiro na memória do JavaScript.
+O servidor reporta os metadados de conclusão à parte, preservando o histórico
+(últimos 10 backups: data, duração, tamanho, counts) no `localStorage` sem parsear
+o arquivo. Arrasta um `.zip` em cima pra revisar o sumário de validação e escolher
+o modo no `BackupRestoreDialog`.
 Fechar a janela ou trocar o arquivo cancela a validação; depois que uma
 importação ou restauração começa, a janela permanece aberta e não pode ser
 fechada até o servidor responder.
-Histórico (últimos 10 backups: data, duração, tamanho, counts) persiste
-em `localStorage`.
 
 Uploads têm limite comprimido de 2 GiB. Antes de validação ou restore tocar o banco, o Foldex rejeita nomes duplicados no ZIP, mais de 100.000 entries, JSON de manifest/database acima de 32/256 MiB, arquivos acima de 64 MiB cada ou mais de 4 GiB expandidos no total. Export aplica os mesmos envelopes, com no máximo 99.998 arquivos (duas entries ficam reservadas para manifest/database) e keys de objeto de 1.024 bytes. Só um export, validação ou restore roda por vez; uma request concorrente recebe `429 backup_busy` antes de trabalho no DB, object store, leitura do body ou temp file e pode tentar de novo.
 

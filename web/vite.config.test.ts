@@ -26,3 +26,18 @@ describe('Vite development bind', () => {
     expect(config.server?.host).toBe('0.0.0.0')
   })
 })
+
+describe('Vite backend proxy', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('matches backend routes without capturing dependency imports', async () => {
+    const config = await resolveViteConfig('')
+    const patterns = Object.keys(config.server?.proxy ?? {}).map((pattern) => new RegExp(pattern))
+
+    expect(patterns).toHaveLength(1)
+    expect(patterns[0].test('/api/auth/me')).toBe(true)
+    expect(patterns[0].test('/go/example')).toBe(true)
+    expect(patterns[0].test('/n/example')).toBe(true)
+    expect(patterns[0].test('/node_modules/.vite/deps/react.js')).toBe(false)
+  })
+})

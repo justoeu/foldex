@@ -21,7 +21,6 @@ import (
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/ports"
-	"foldex/internal/storage"
 )
 
 // allowedFilePrefixes is the closed set of object-key prefixes ProxyFile is
@@ -289,7 +288,7 @@ func (h *ScreenshotHandler) proxyFile(w http.ResponseWriter, r *http.Request, ke
 
 	data, _, err := h.storage.GetObject(r.Context(), key)
 	if err != nil {
-		if errors.Is(err, storage.ErrObjectTooLarge) {
+		if ports.IsObjectTooLarge(err) {
 			h.logger.Warn("proxy file: object exceeds serve ceiling")
 			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "too_large", "file exceeds maximum serve size"))
 			return
