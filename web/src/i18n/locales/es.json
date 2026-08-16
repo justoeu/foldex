@@ -7,11 +7,18 @@
     "placeholder": "Buscar o crear carpeta…",
     "create_empty": "Nueva carpeta…",
     "create_inline": "Crear carpeta \"{{name}}\"",
+    "create_error": "No se pudo crear esta carpeta. Comprueba tu conexión e inténtalo de nuevo.",
     "no_match": "Sin coincidencias",
     "toggle_aria": "Alternar lista de carpetas",
     "input_aria": "carpeta",
     "list_aria": "carpetas",
     "none": "Sin carpeta"
+  },
+  "tag_picker": {
+    "registered_label": "Etiquetas registradas",
+    "page_prev_aria": "página anterior",
+    "page_next_aria": "página siguiente",
+    "create_inline": "crear \"{{name}}\""
   },
   "common": {
     "cancel": "Cancelar",
@@ -141,7 +148,9 @@
     "breadcrumb_reload_tooltip": "Recargar enlaces y subcarpetas",
     "breadcrumb_edit_tooltip": "Editar carpeta",
     "breadcrumb_edit_label": "Editar carpeta",
-    "merge_new_folder_name": "Nueva carpeta"
+    "merge_new_folder_name": "Nueva carpeta",
+    "merge_error": "No se pudieron agrupar estos elementos. La vista se actualizó. Intenta agruparlos de nuevo.",
+    "merge_partial_error": "Se creó una carpeta, pero no se pudieron mover todos los elementos. La vista se actualizó. Mueve el elemento restante manualmente o inténtalo de nuevo."
   },
   "links": {
     "load_more": "Cargar más",
@@ -350,7 +359,9 @@
     "gradient_drag_tooltip": "Arrastra para invertir",
     "gradient_hue_aria": "selector de matiz para gradiente",
     "submit_create": "Crear etiqueta",
-    "submit_save": "Guardar"
+    "submit_save": "Guardar",
+    "error_name_taken": "Ya existe una etiqueta con este nombre. Elige otro nombre e inténtalo de nuevo.",
+    "error_generic": "No se pudo guardar esta etiqueta. Comprueba tu conexión e inténtalo de nuevo."
   },
   "tag_manager": {
     "title": "Gestionar etiquetas",
@@ -476,6 +487,7 @@
     "submit_apply_other": "Importar {{count}} enlaces",
     "submit_wipe": "⚠ Importar (reemplaza duplicados)",
     "submit_importing": "Importando…",
+    "operation_locked": "La importación está en curso y no se puede cancelar. Esta ventana permanecerá abierta hasta que termine.",
     "submit_done": "Listo",
     "result_mode": "Modo",
     "result_imported": "Importados",
@@ -486,7 +498,7 @@
   },
   "backup": {
     "card_title": "💾 Backup completo",
-    "card_body": "Genera un ZIP con todas las tablas (etiquetas, carpetas, enlaces, M:N, click_log) y todos los archivos del bucket (screenshots + imágenes).",
+    "card_body": "Genera un ZIP con todas las tablas (etiquetas, carpetas, enlaces, notas, M:N, click_log) y todos los archivos del bucket (screenshots + imágenes).",
     "card_kicker": "BD + RustFS",
     "generate_button": "Generar backup completo",
     "generating": "Generando…",
@@ -495,7 +507,7 @@
     "restore_file_invalid": "El archivo debe ser un .zip de backup de foldex.",
     "generate_failed": "fallo al generar backup",
     "history_section_title": "Historial",
-    "history_format_files": "{{files}} archivos · {{size}} · {{duration}} · {{links}} enlaces / {{tags}} etiquetas",
+    "history_format_files": "{{files}} archivos · {{size}} · {{duration}} · {{links}} enlaces / {{notes}} notas / {{tags}} etiquetas",
     "duration_ms": "{{value}}ms",
     "duration_s": "{{value}}s",
     "restore_button": "Restaurar",
@@ -522,10 +534,11 @@
     "mode_duplicate_title": "Duplicar",
     "mode_duplicate_desc": "Renombra etiquetas en conflicto a \"nombre (2)\"; carpetas siempre nuevas. Enlaces con la misma URL caen a skip (URL es UNIQUE).",
     "mode_wipe_title": "⚠ Limpiar todo e importar",
-    "mode_wipe_desc": "DESTRUCTIVO. Elimina TODOS los enlaces, etiquetas, carpetas, clics y archivos actuales; restaura con IDs originales preservados.",
+    "mode_wipe_desc": "DESTRUCTIVO. Elimina TODOS los enlaces, notas, etiquetas, carpetas, clics y archivos actuales; restaura con IDs originales preservados.",
     "submit_restore": "Restaurar",
     "submit_restore_wipe": "⚠ Restaurar (borrar todo)",
     "submit_restoring": "Restaurando…",
+    "operation_locked": "La restauración está en curso y no se puede cancelar. Esta ventana permanecerá abierta hasta que termine.",
     "dialog_kicker_short": "💾 RESTAURAR",
     "dialog_title_short": "Revisar backup",
     "manifest_invalid": "Manifest inválido o ausente.",
@@ -533,7 +546,7 @@
     "summary_manifest": "Manifest",
     "summary_manifest_value": "{{status}} {{version}} · schema {{schema}}",
     "summary_content": "Contenido",
-    "summary_content_value": "{{links}} enlaces · {{tags}} etiquetas · {{folders}} carpetas",
+    "summary_content_value": "{{links}} enlaces · {{notes}} notas · {{tags}} etiquetas · {{folders}} carpetas",
     "summary_clicks": "Clics",
     "summary_clicks_value": "{{count}} clics",
     "summary_files": "Archivos",
@@ -546,8 +559,8 @@
     "result_skipped": "Saltados",
     "result_files": "Archivos",
     "result_duration": "Duración",
-    "result_inserted_format": "{{links}} enlaces · {{tags}} etiquetas · {{folders}} carpetas · {{clicks}} clics",
-    "result_skipped_format": "{{links}} enlaces · {{tags}} etiquetas",
+    "result_inserted_format": "{{links}} enlaces · {{notes}} notas · {{tags}} etiquetas · {{folders}} carpetas · {{clicks}} clics",
+    "result_skipped_format": "{{links}} enlaces · {{notes}} notas · {{tags}} etiquetas",
     "result_files_format": "{{uploaded}} subidas · {{skipped}} ya existían"
   },
   "stats": {
@@ -732,7 +745,8 @@
     "submit": "Activar y entrar",
     "invalid_title": "Esta invitación ya no es válida",
     "invalid_body": "El enlace puede haber caducado, haber sido revocado o ya haberse usado. Pide uno nuevo a un administrador.",
-    "back_to_login": "Ir al inicio de sesión"
+    "back_to_login": "Ir al inicio de sesión",
+    "retry": "Intentar de nuevo"
   },
   "auth_marketing": {
     "kicker": "self-hosted",

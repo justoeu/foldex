@@ -557,13 +557,18 @@ func (e *descendantProtectedError) Unwrap() error {
 // Subtree ids are materialized once into a temp table (N1-NEX-008) so the
 // recursive walk is not recomputed for every DML statement.
 func (r *Repository) DeleteCascade(ctx context.Context, uid authctx.UserID, id int64, unlockKey []byte, unlockToken string) error {
+	_, err := r.deleteCascade(ctx, uid, id, unlockKey, unlockToken)
+	return err
+}
+
+func (r *Repository) deleteCascade(ctx context.Context, uid authctx.UserID, id int64, unlockKey []byte, unlockToken string) ([]int64, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin cascade delete tx: %w", err)
+		return nil, fmt.Errorf("begin cascade delete tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	if err := authorizeFolderDelete(ctx, tx, uid, id, unlockKey, unlockToken); err != nil {
-		return err
+		return nil, err
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -577,7 +582,7 @@ func (r *Repository) DeleteCascade(ctx context.Context, uid authctx.UserID, id i
         )
         SELECT id FROM subtree
     `, id, int64(uid)); err != nil {
-		return fmt.Errorf("materialize cascade subtree: %w", err)
+		return nil, fmt.Errorf("materialize cascade subtree: %w", err)
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT f.id, f.password_hash
@@ -588,55 +593,60 @@ func (r *Repository) DeleteCascade(ctx context.Context, uid authctx.UserID, id i
 		FOR UPDATE
 	`, int64(uid))
 	if err != nil {
-		return fmt.Errorf("lock cascade subtree: %w", err)
+		return nil, fmt.Errorf("lock cascade subtree: %w", err)
 	}
 	var protectedDescendants int64
+	deletedFolderIDs := make([]int64, 0)
 	for rows.Next() {
 		var folderID int64
 		var passwordHash *string
 		if err := rows.Scan(&folderID, &passwordHash); err != nil {
 			rows.Close()
-			return fmt.Errorf("scan cascade subtree: %w", err)
+			return nil, fmt.Errorf("scan cascade subtree: %w", err)
 		}
+		deletedFolderIDs = append(deletedFolderIDs, folderID)
 		if folderID != id && passwordHash != nil {
 			protectedDescendants++
 		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return fmt.Errorf("read cascade subtree: %w", err)
+		return nil, fmt.Errorf("read cascade subtree: %w", err)
 	}
 	rows.Close()
 	if protectedDescendants > 0 {
-		return &descendantProtectedError{Count: protectedDescendants}
+		return nil, &descendantProtectedError{Count: protectedDescendants}
 	}
 
 	if err := notemedia.ReleaseFolderSubtreeRefs(ctx, tx, uid); err != nil {
-		return err
+		return nil, err
 	}
 	if err := entityrefs.PurgeFolderSubtree(ctx, tx, uid); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `
         DELETE FROM link
         WHERE user_id = $1 AND folder_id IN (SELECT id FROM _cascade_subtree)
     `, int64(uid)); err != nil {
-		return fmt.Errorf("delete links in subtree: %w", err)
+		return nil, fmt.Errorf("delete links in subtree: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
         DELETE FROM note
         WHERE user_id = $1 AND folder_id IN (SELECT id FROM _cascade_subtree)
     `, int64(uid)); err != nil {
-		return fmt.Errorf("delete notes in subtree: %w", err)
+		return nil, fmt.Errorf("delete notes in subtree: %w", err)
 	}
 	ct, err := tx.Exec(ctx, `
         DELETE FROM folder WHERE user_id = $1 AND id IN (SELECT id FROM _cascade_subtree)
-    `, int64(uid))
+	`, int64(uid))
 	if err != nil {
-		return fmt.Errorf("delete folder subtree: %w", err)
+		return nil, fmt.Errorf("delete folder subtree: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return domainerr.ErrNotFound
+		return nil, domainerr.ErrNotFound
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return deletedFolderIDs, nil
 }

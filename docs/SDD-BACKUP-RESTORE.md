@@ -1,6 +1,6 @@
 # SDD — Backup & Restore (DB + RustFS)
 
-> Software Design Document. Status: **Approved · v1.7 · 2026-08-14**
+> Software Design Document. Status: **Approved · v1.9 · 2026-08-16**
 >
 > **v1.1 (ADR-30, migration 000017 — multi-user).** Backup became per-user and
 > stopped carrying auth material. Three contracts in this document changed and
@@ -54,6 +54,15 @@
 > A local note-media URL in body HTML or `cover_url` without its `files/notes/`
 > entry is fatal; external URLs remain unchanged. Restore orchestration is split
 > into bounded preflight, ledger, transaction, file-plan and single-object stages.
+>
+> **v1.8 (LEAK-HYD-008).** Browsers without the File System Access API no longer
+> fall back to an Axios Blob. A CSRF-protected POST mints a 60-second opaque
+> one-time ticket bound to the current user and session; a same-origin native GET
+> consumes it before entering the existing export slot and streams the ZIP once.
+> Authenticated status polling preserves accurate local history without reading
+> archive bytes in JavaScript and backs off from 1 to 10 seconds within the same
+> 30-minute client deadline. The HTTP server keeps a one-minute safety margin on
+> its read/write deadlines while retaining 5-second headers and 60-second idle.
 > Owner: foldex
 > Related ADR: **ADR-20** (`docs/ARCHITECTURE.md`)
 
@@ -130,7 +139,7 @@ Adicionar um terceiro endpoint `POST /api/backup/validate` pra inspecionar o ZIP
                                                        └──────────────────┘
 ```
 
-Transação `REPEATABLE READ` garante que as SELECTs vejam um snapshot consistente. Cada row é codificado diretamente num temp spool `database.json` 0600 limitado a 256 MiB; contagens e SHA-256 são calculados inline. LISTs de RustFS entregam metadados por callback e descartam imediatamente qualquer key fora do conjunto owner-scoped. A transação termina antes do download e o spool é então copiado para o ZIP, sem reter as coleções nem metadados globais do bucket no heap e sem segurar WAL durante um cliente lento.
+Transação `REPEATABLE READ` garante que as SELECTs vejam um snapshot consistente. Cada row é codificado diretamente num temp spool `database.json` 0600 limitado a 256 MiB; contagens e SHA-256 são calculados inline. LISTs de RustFS entregam metadados por callback e descartam imediatamente qualquer key fora do conjunto owner-scoped. A transação termina antes do download e o spool é então copiado para o ZIP, sem reter as coleções nem metadados globais do bucket no heap e sem segurar WAL durante um cliente lento. O servidor mantém deadline global de 2 minutos para APIs comuns; somente export/download/validate/restore estendem read/write da conexão corrente para 31 minutos via `http.ResponseController`, alinhado ao timeout de 30 minutos do cliente sem ampliar a janela de sockets das demais rotas.
 
 ### 2.2 Fluxo de restore
 
@@ -167,6 +176,7 @@ Se o servidor crashar entre as duas fases, re-rodar o mesmo ZIP em `skip` **conv
   "foldex_version": "git-sha-or-tag",
   "counts": {
     "links":       25,
+    "notes":        4,
     "tags":         7,
     "folders":     12,
     "link_tags":   34,
@@ -238,6 +248,38 @@ Nenhum modo preserva ids. Chaves de link são remapeadas para o `link.id` novo. 
 - `503 Service Unavailable` se RustFS está fora (sem o bucket, backup é incompleto e enganoso — preferimos falhar).
 - `429 Too Many Requests` com `backup_busy`/`Retry-After: 1` se export, validate ou restore já ocupa o slot; a rejeição precede queries, spool e bytes de resposta.
 
+#### Fallback de download nativo (Firefox/Safari)
+
+`POST /api/backup/download` passa pelos mesmos gates de sessão, recusa de API
+token e `SHARED_SECRET`, além de CSRF, e retorna URLs same-origin para download e
+status. O token tem 256 bits, só o SHA-256 fica em memória, expira em 60 segundos
+e é ligado a `(user_id, session_id)`. `GET /api/backup/download?id=…&token=…`
+consome-o atomicamente antes de adquirir o mesmo slot de export e chama `Export`
+uma única vez; cross-user, cross-session, expirado e replay recebem a mesma falha
+fechada. O GET mantém `Content-Disposition` e não exige header CSRF por ser safe.
+
+Como navegação nativa não consegue enviar `X-Foldex-Secret`, o guard aceita como
+prova delegada somente um ticket ainda pendente que ele próprio protegeu no POST;
+sessão e ownership ainda são revalidados depois. Query strings não entram nos
+logs shipped (`$uri` no nginx e path-only no `slog`), e o anchor usa
+`Referrer-Policy: no-referrer`.
+
+`GET /api/backup/download/status?id=…` exige uma sessão ativa do mesmo owner e
+retorna `pending|running|complete|failed`, counts, bytes e duração para o
+histórico. O binding do GET que entrega o ZIP continua sendo da sessão exata; o
+status é só owner-bound para um refresh do access token aos 15 minutos não perder
+os metadados de um export maior. O estado em memória é limitado a 128 tickets,
+limpo durante requests e retido por 10 minutos após terminar. Um novo ticket
+substitui qualquer pendente da mesma sessão exata, e cada usuário pode manter no
+máximo quatro tickets `pending|running`; assim uma conta não esgota o limite
+global, enquanto resultados concluídos continuam disponíveis até a retenção ou
+evicção por pressão do limite global. O polling começa em 1 segundo e dobra até
+o teto de 10 segundos, reduzindo o pior caso de 1.800 requests para menos de 200
+sem estender o timeout cliente de 30 minutos; os deadlines de leitura/escrita do
+servidor são 31 minutos para não truncar esse contrato. Reiniciar o processo
+invalida tickets; em deployment com múltiplas instâncias,
+issue/download/status precisam de sticky routing.
+
 ### 4.2 `POST /api/backup/validate` — inspeção sem efeito colateral
 
 **Request**: `multipart/form-data` com `file=<zip>`. Limit comprimido: 2 GiB (via `MultipartReader` streaming). Export, validate e restore compartilham um único slot de operação; o slot cobre query/spool/stream do export ou spool/preflight/consumo do upload, e só é liberado depois de fechar/remover os temp files.
@@ -259,7 +301,7 @@ Nenhum modo preserva ids. Chaves de link são remapeadas para o `link.id` novo. 
 }
 ```
 
-**Response 422** (validação falhou — não-fatal pro usuário, mas restore não pode prosseguir):
+**Response 200 com `ok: false`** (validação falhou — não-fatal pro usuário, mas restore não pode prosseguir):
 ```json
 { "ok": false, "manifest": { /* parsed */ }, "errors": [
   "checksum mismatch: files/images/7.jpg",
@@ -267,7 +309,7 @@ Nenhum modo preserva ids. Chaves de link são remapeadas para o `link.id` novo. 
 ] }
 ```
 
-**Response 400**: zip malformado, manifest ausente, `kind` errado, schema_version do futuro ou limite de preflight/cardinalidade excedido.
+**Response 400**: o upload não pode ser aberto como ZIP. Depois que o ZIP é aberto, erros de manifest, versão, integridade e limites usam o mesmo envelope 200 com `ok: false`, para que o frontend consiga exibir a lista completa.
 
 **Response 429**: `backup_busy` quando outro export/validate/restore já mantém o slot. A rejeição ocorre antes de ler o body, criar temp file ou chamar o service; `Retry-After: 1` permite retry curto.
 
@@ -289,7 +331,7 @@ Nenhum modo preserva ids. Chaves de link são remapeadas para o `link.id` novo. 
 }
 ```
 
-**Erros**: `400` (manifest inválido), `422` (checksum mismatch), `500` (DB ou RustFS falhou no meio).
+**Erros**: `400` (manifest inválido), `422` (checksum ausente ou divergente e referência local ausente), `500` (DB ou RustFS falhou no meio).
 
 ---
 
@@ -340,7 +382,7 @@ Dentro da DB transaction, **a ordem é estrita**:
 1. **Magic check**: `manifest.kind == "foldex.backup"` (não-fatal: também aceita versões futuras do `version` se major bate).
 2. **Version check**: `manifest.version` parsa como semver; major **bate** com o servidor atual.
 3. **Schema check**: `manifest.schema_version <= servidor.schema_version`. Se for menor, emite warning (campos novos default); se for maior, erro fatal (servidor não conhece o formato).
-4. **Checksum check**: pra cada entry em `checksums`, reabre o zip entry, recalcula SHA-256, compara. Mismatch = erro fatal.
+4. **Checksum check**: `database.json` e toda entry em `files/` precisam aparecer em `checksums`; omissão é erro fatal. O preflight recalcula o SHA-256 de cada entry declarada e compara; mismatch também é fatal. Em `validate`, ambos retornam o envelope 200 com `ok: false`; em `restore`, retornam 422 antes do ledger, DB ou object store.
 5. **Reference integrity**: links internos sem entry geram warning. Toda URL local `/api/files/notes/<key>` preservada no HTML sanitizado ou em `cover_url` exige a entry `files/notes/<key>`; ausência é erro fatal antes do ledger/DB/files. URLs externas não entram nessa regra. Referências válidas só ganham ownership depois de serem re-keyed para o caller; a chave pública antiga nunca é persistida pelo restore.
 6. **Conflict detection**: SELECTs de uniqueness:
    - `SELECT count(*) FROM link WHERE url = ANY($1::text[])` com array de URLs do backup

@@ -7,10 +7,10 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/folders"
-	"foldex/internal/links"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/listquery"
+	"foldex/internal/ports"
 )
 
 // notesJSONBodyCap is larger than httperr.JSONBodyCap (64 KiB) — note bodies
@@ -21,11 +21,11 @@ const notesJSONBodyCap = 1 << 20
 
 type Handler struct {
 	repo       *Repository
-	storage    links.Uploader // optional — nil disables Delete's image cleanup
+	storage    ports.Uploader // optional — nil disables Delete's image cleanup
 	folderGate folders.ContentGate
 }
 
-func NewHandler(repo *Repository, storage links.Uploader) *Handler {
+func NewHandler(repo *Repository, storage ports.Uploader) *Handler {
 	return &Handler{repo: repo, storage: storage}
 }
 

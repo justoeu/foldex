@@ -1,6 +1,8 @@
-import type { NoteCreate, NoteUpdate, Tag } from '../api/types'
+import type { NoteCreate, NoteUpdate } from '../api/types'
+import { dialogTagPayload, type SelectedTag } from '../lib/dialogTags'
+import { createSlugValue, updateSlugValue } from '../lib/slugValue'
 
-export type SelectedNoteTag = Tag & { _pending?: boolean }
+export type SelectedNoteTag = SelectedTag
 
 export type NoteDialogValues = {
   title: string
@@ -11,25 +13,16 @@ export type NoteDialogValues = {
   selectedTags: SelectedNoteTag[]
 }
 
-function tagPayload(selectedTags: SelectedNoteTag[]) {
-  return {
-    tag_ids: selectedTags.filter((tag) => tag.id > 0).map((tag) => tag.id),
-    pending_tags: selectedTags
-      .filter((tag) => tag.id === 0)
-      .map(({ name, color, icon }) => ({ name, color, icon })),
-  }
-}
-
 export function buildCreateNotePayload(values: NoteDialogValues, bodyHtml: string): NoteCreate {
   const payload: NoteCreate = {
     title: values.title.trim(),
     body_html: bodyHtml,
-    ...tagPayload(values.selectedTags),
+    ...dialogTagPayload(values.selectedTags),
     pinned: values.pinned,
     folder_id: values.folderId,
   }
-  const slug = values.slug.trim()
-  if (values.slugDirty && slug) payload.slug = slug
+  const slug = createSlugValue(values)
+  if (slug !== undefined) payload.slug = slug
   return payload
 }
 
@@ -42,10 +35,11 @@ export function buildUpdateNotePayload(
     if_match_updated_at: updatedAt,
     title: values.title.trim(),
     body_html: bodyHtml,
-    ...tagPayload(values.selectedTags),
+    ...dialogTagPayload(values.selectedTags),
     pinned: values.pinned,
     folder_id: values.folderId,
   }
-  if (values.slugDirty) payload.slug = values.slug.trim() || null
+  const slug = updateSlugValue(values)
+  if (slug !== undefined) payload.slug = slug
   return payload
 }

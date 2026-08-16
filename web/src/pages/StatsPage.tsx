@@ -3,31 +3,28 @@ import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { Icon, I } from '../components/icons'
 import {
-  useStatsDaily,
+  useStatsDashboard,
   useStatsStorage,
-  useStatsSummary,
-  useStatsTags,
-  useStatsTop,
   type DailyPoint,
   type TopLink,
 } from '../api/stats'
 
 export function StatsPage() {
   const { t } = useTranslation()
-  const summary = useStatsSummary()
-  const daily = useStatsDaily(60)
-  const top = useStatsTop(5)
-  const tagBuckets = useStatsTags()
+  const dashboard = useStatsDashboard(60, 5)
   const storage = useStatsStorage()
 
-  const s = summary.data
+  const s = dashboard.data?.summary
+  const daily = dashboard.data?.daily
+  const top = dashboard.data?.top
+  const tagBuckets = dashboard.data?.tags
   const mom = useMemo(() => {
     if (!s) return 0
     if (s.clicks_prev_30d === 0) return s.clicks_last_30d > 0 ? 100 : 0
     return Math.round(((s.clicks_last_30d - s.clicks_prev_30d) / s.clicks_prev_30d) * 100)
   }, [s])
 
-  const totalDaily = daily.data?.reduce((acc, p) => acc + p.clicks, 0) ?? 0
+  const totalDaily = daily?.reduce((acc, p) => acc + p.clicks, 0) ?? 0
   const clicksPerLink = s && s.total_links > 0 ? (s.clicks_last_30d / s.total_links).toFixed(1) : '—'
 
   return (
@@ -48,7 +45,7 @@ export function StatsPage() {
           value={s ? s.clicks_last_30d.toLocaleString() : '—'}
           delta={s ? (mom >= 0 ? '+' : '') + mom + '%' : ''}
           deltaKind={mom >= 0 ? 'up' : 'down'}
-          spark={daily.data?.slice(-14).map((p) => p.clicks)}
+          spark={daily?.slice(-14).map((p) => p.clicks)}
         />
         <KpiCard
           label={t('stats.kpi_total_links')}
@@ -97,8 +94,8 @@ export function StatsPage() {
               </span>
             </div>
           </header>
-          {daily.data && daily.data.length > 0 ? (
-            <AreaChart data={daily.data} width={760} height={220} t={t} />
+          {daily && daily.length > 0 ? (
+            <AreaChart data={daily} width={760} height={220} t={t} />
           ) : (
             <EmptyChart hint={t('stats.section_clicks_empty')} />
           )}
@@ -125,8 +122,8 @@ export function StatsPage() {
               <div className="fx-statcard-sub">{t('stats.section_top_links_sub')}</div>
             </div>
           </header>
-          {top.data && top.data.length > 0 ? (
-            <TopLinksList links={top.data} />
+          {top && top.length > 0 ? (
+            <TopLinksList links={top} />
           ) : (
             <EmptyChart hint={t('stats.section_top_links_empty')} />
           )}
@@ -139,8 +136,8 @@ export function StatsPage() {
               <div className="fx-statcard-sub">{t('stats.section_tag_distribution_sub')}</div>
             </div>
           </header>
-          {tagBuckets.data && tagBuckets.data.length > 0 ? (
-            <TagDistribution buckets={tagBuckets.data} />
+          {tagBuckets && tagBuckets.length > 0 ? (
+            <TagDistribution buckets={tagBuckets} />
           ) : (
             <EmptyChart hint={t('stats.section_tag_distribution_empty')} />
           )}

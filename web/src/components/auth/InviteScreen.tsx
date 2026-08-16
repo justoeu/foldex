@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { acceptInvite, lookupInvite, errorCode, errorStatus, type InvitePreview } from '../../api/auth'
 import { useAuth } from '../../auth/AuthProvider'
@@ -7,6 +7,7 @@ import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 import { AuthDivider, GoogleButton } from './GoogleButton'
 
 const MIN_PASSWORD = 8
+type LookupState = 'loading' | 'ready' | 'invalid' | 'failed'
 
 /**
  * Accepts an invitation.
@@ -20,31 +21,63 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
   const { t } = useTranslation()
   const { adopt, session } = useAuth()
   const [preview, setPreview] = useState<InvitePreview | null>(null)
-  const [invalid, setInvalid] = useState(false)
+  const [lookupState, setLookupState] = useState<LookupState>('loading')
+  const [lookupError, setLookupError] = useState<'network' | 'generic'>('network')
+  const [lookupAttempt, setLookupAttempt] = useState(0)
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [oauthBusy, setOAuthBusy] = useState(false)
+  const submitting = useRef(false)
+  const oauthBusyRef = useRef(false)
+  const tokenRef = useRef(token)
+  const acceptAbortRef = useRef<AbortController | null>(null)
+  tokenRef.current = token
   const googleEnabled = session.status !== 'loading' && session.features.google_oauth
 
   useEffect(() => {
-    let cancelled = false
-    lookupInvite(token)
-      .then((p) => {
-        if (!cancelled) setPreview(p)
-      })
-      .catch(() => {
-        // Expired, revoked, already used and never-existed are one
-        // indistinguishable 404 by design — so there is exactly one message.
-        if (!cancelled) setInvalid(true)
-      })
-    return () => {
-      cancelled = true
-    }
+    acceptAbortRef.current?.abort()
+    acceptAbortRef.current = null
+    submitting.current = false
+    oauthBusyRef.current = false
+    setBusy(false)
+    setOAuthBusy(false)
+    setName('')
+    setPassword('')
+    setConfirm('')
+    setError('')
   }, [token])
 
-  if (invalid) {
+  useEffect(() => () => acceptAbortRef.current?.abort(), [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setPreview(null)
+    setLookupState('loading')
+    lookupInvite(token, controller.signal)
+      .then((p) => {
+        if (controller.signal.aborted) return
+        setPreview(p)
+        setLookupState('ready')
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return
+        // Expired, revoked, already used and never-existed are one
+        // indistinguishable 404 by design — so there is exactly one message.
+        const code = errorCode(err)
+        if (code === 'invite_invalid' || code === 'not_found' || errorStatus(err) === 404) {
+          setLookupState('invalid')
+          return
+        }
+        setLookupError(errorStatus(err) === 0 ? 'network' : 'generic')
+        setLookupState('failed')
+      })
+    return () => controller.abort()
+  }, [token, lookupAttempt])
+
+  if (lookupState === 'invalid') {
     return (
       <AuthShell title={t('auth_invite.invalid_title')} subtitle={t('auth_invite.invalid_body')}>
         <button type="button" className="fx-auth-submit" onClick={onGiveUp}>
@@ -54,7 +87,24 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
     )
   }
 
-  if (!preview) {
+  if (lookupState === 'failed') {
+    return (
+      <AuthShell title={t('auth_invite.title')}>
+        <div className="fx-auth-form">
+          <AuthError message={t(`auth_errors.${lookupError}`)} />
+          <button
+            type="button"
+            className="fx-auth-submit"
+            onClick={() => setLookupAttempt((attempt) => attempt + 1)}
+          >
+            {t('auth_invite.retry')}
+          </button>
+        </div>
+      </AuthShell>
+    )
+  }
+
+  if (lookupState === 'loading' || !preview) {
     return (
       <AuthShell title={t('auth_invite.title')}>
         <div className="fx-auth-loading" role="status" aria-live="polite">
@@ -69,19 +119,30 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
-    if (busy) return
+    if (submitting.current || oauthBusyRef.current) return
     if (password !== confirm) {
       setError(t('auth_errors.password_mismatch'))
       return
     }
+    submitting.current = true
+    const submittedToken = token
+    const controller = new AbortController()
+    acceptAbortRef.current = controller
     setBusy(true)
     setError('')
     try {
-      adopt(await acceptInvite(token, name, password))
+      const response = await acceptInvite(token, name, password, controller.signal)
+      if (!controller.signal.aborted && tokenRef.current === submittedToken) adopt(response)
     } catch (err) {
-      setError(messageFor(err, t))
+      if (!controller.signal.aborted && tokenRef.current === submittedToken) {
+        setError(messageFor(err, t))
+      }
     } finally {
-      setBusy(false)
+      if (acceptAbortRef.current === controller) acceptAbortRef.current = null
+      if (tokenRef.current === submittedToken) {
+        submitting.current = false
+        setBusy(false)
+      }
     }
   }
 
@@ -96,7 +157,21 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
 
         {googleEnabled && (
           <>
-            <GoogleButton purpose="accept_invite" invite={token} />
+            <GoogleButton
+              purpose="accept_invite"
+              invite={token}
+              disabled={busy}
+              onBeforeStart={() => {
+                if (submitting.current || oauthBusyRef.current) return false
+                oauthBusyRef.current = true
+                setOAuthBusy(true)
+                return true
+              }}
+              onBusyChange={(pending) => {
+                oauthBusyRef.current = pending
+                setOAuthBusy(pending)
+              }}
+            />
             <AuthDivider />
           </>
         )}
@@ -154,7 +229,7 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
           />
         </AuthField>
 
-        <AuthSubmit busy={busy}>{t('auth_invite.submit')}</AuthSubmit>
+        <AuthSubmit busy={busy} disabled={oauthBusy}>{t('auth_invite.submit')}</AuthSubmit>
       </form>
     </AuthShell>
   )

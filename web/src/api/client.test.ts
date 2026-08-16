@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   getStoredSecret,
   setStoredSecret,
+  authenticatedFetch,
   advanceAuthEpoch,
   http,
   readCsrfToken,
@@ -111,6 +112,43 @@ describe('session cookies', () => {
   })
 })
 
+describe('authenticatedFetch', () => {
+  beforeEach(() => {
+    resetRefreshState()
+    localStorage.clear()
+    document.cookie = 'fx_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/'
+  })
+
+  it('adds session, secret, and CSRF credentials to streamed POSTs', async () => {
+    setStoredSecret('shared')
+    document.cookie = 'fx_csrf=csrf-token; path=/'
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ status: 200 } as Response)
+
+    await authenticatedFetch('/api/backup', { method: 'POST' })
+
+    const init = fetchSpy.mock.calls[0][1]!
+    const headers = init.headers as Headers
+    expect(init.credentials).toBe('include')
+    expect(headers.get('X-Foldex-Secret')).toBe('shared')
+    expect(headers.get(CSRF_HEADER)).toBe('csrf-token')
+  })
+
+  it('uses the shared refresh flight before retrying a 401', async () => {
+    const cancel = vi.fn(async () => undefined)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({ status: 401, body: { cancel } } as unknown as Response)
+      .mockResolvedValueOnce({ status: 200 } as Response)
+    vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+
+    const response = await authenticatedFetch('/api/backup', { method: 'POST' })
+
+    expect(response.status).toBe(200)
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(http.post).toHaveBeenCalledWith('/api/auth/refresh', null, expect.anything())
+  })
+})
+
 describe('401 single-flight refresh', () => {
   /** Drives the response interceptor's error arm directly. */
   async function runErrorInterceptor(error: unknown) {
@@ -157,14 +195,18 @@ describe('401 single-flight refresh', () => {
    */
   it('coalesces concurrent 401s into ONE refresh', async () => {
     let refreshes = 0
+    let releaseRefresh!: () => void
+    const refreshPending = new Promise<void>((resolve) => {
+      releaseRefresh = resolve
+    })
     vi.spyOn(http, 'post').mockImplementation(async () => {
       refreshes++
-      await new Promise((r) => setTimeout(r, 20))
+      await refreshPending
       return { data: {} } as never
     })
     vi.spyOn(http, 'request').mockResolvedValue({ status: 200 } as never)
 
-    await Promise.all(
+    const requests = Promise.all(
       ['/api/entries', '/api/folders', '/api/tags', '/api/stats'].map((url) =>
         runErrorInterceptor({
           response: { status: 401 },
@@ -172,6 +214,9 @@ describe('401 single-flight refresh', () => {
         }),
       ),
     )
+    await vi.waitFor(() => expect(refreshes).toBe(1))
+    releaseRefresh()
+    await requests
 
     expect(refreshes).toBe(1)
   })

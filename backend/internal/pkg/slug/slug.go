@@ -25,8 +25,8 @@ func UniqueAvailable(ctx context.Context, base string, exists ExistsFn) (string,
 	if base == "" {
 		return "", fmt.Errorf("unique slug: empty base")
 	}
-	candidate := base
 	for attempt := 1; attempt < MaxUniqueAttempts; attempt++ {
+		candidate := candidateForAttempt(base, attempt)
 		taken, err := exists(ctx, candidate)
 		if err != nil {
 			return "", fmt.Errorf("check slug availability: %w", err)
@@ -34,7 +34,6 @@ func UniqueAvailable(ctx context.Context, base string, exists ExistsFn) (string,
 		if !taken {
 			return candidate, nil
 		}
-		candidate = fmt.Sprintf("%s-%d", base, attempt+1)
 	}
 	return "", fmt.Errorf("unique slug: exhausted attempts for %q", base)
 }
@@ -80,12 +79,35 @@ func Slugify(title string) string {
 	folded = strings.ToLower(folded)
 	folded = nonSlugCharRE.ReplaceAllString(folded, "-")
 	folded = strings.Trim(folded, "-")
-	if len(folded) <= MaxLen {
-		return folded
+	return truncate(folded, MaxLen)
+}
+
+func candidateForAttempt(base string, attempt int) string {
+	stem, suffix := candidateParts(base, attempt)
+	candidate := stem + suffix
+	if suffix == "" && onlyDigitsRE.MatchString(candidate) {
+		candidate = truncate(stem, MaxLen-len("-x")) + "-x"
 	}
-	cut := folded[:MaxLen]
-	if i := strings.LastIndex(cut, "-"); i > 0 {
-		cut = cut[:i]
+	return candidate
+}
+
+func candidateParts(base string, attempt int) (string, string) {
+	suffix := ""
+	if attempt > 1 {
+		suffix = fmt.Sprintf("-%d", attempt)
+	}
+	return truncate(base, MaxLen-len(suffix)), suffix
+}
+
+func truncate(value string, maxLen int) string {
+	if len(value) <= maxLen {
+		return value
+	}
+	cut := value[:maxLen]
+	if value[maxLen] != '-' {
+		if i := strings.LastIndex(cut, "-"); i > 0 {
+			cut = cut[:i]
+		}
 	}
 	return strings.Trim(cut, "-")
 }

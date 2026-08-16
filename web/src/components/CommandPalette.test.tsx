@@ -34,8 +34,9 @@ describe('CommandPalette', () => {
   })
 
   it('does not query the links API when closed', async () => {
+    vi.useFakeTimers()
     renderWithProviders(<CommandPalette open={false} onClose={vi.fn()} />)
-    await new Promise((r) => setTimeout(r, 50))
+    await vi.advanceTimersByTimeAsync(200)
     const linkCalls = (http.get as ReturnType<typeof vi.spyOn>).mock.calls
       .filter(([u]: [string]) => u.startsWith('/api/links'))
     expect(linkCalls).toHaveLength(0)
@@ -79,7 +80,7 @@ describe('CommandPalette', () => {
       .filter(([u]: [string]) => u.includes('q=hack')).length
     expect(callsDuring).toBe(0)
 
-    await vi.advanceTimersByTimeAsync(250)
+    await vi.advanceTimersByTimeAsync(200)
 
     await waitFor(() => {
       const callsAfter = (http.get as ReturnType<typeof vi.spyOn>).mock.calls

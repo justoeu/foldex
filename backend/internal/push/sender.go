@@ -8,14 +8,16 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 
-	"foldex/internal/preview"
-
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/outboundhttp"
 )
+
+const fanoutConcurrency = 4
 
 // Notification is the payload encrypted and shipped to every live
 // subscription. The kind discriminator lets the SW pick a UI variant in the
@@ -35,8 +37,8 @@ type Notification struct {
 // tiny so the test sender can mock it without standing up Postgres.
 type SubscriptionStore interface {
 	List(ctx context.Context, uid authctx.UserID) ([]Subscription, error)
-	DeleteByEndpoint(ctx context.Context, endpoint string) error
-	MarkUsed(ctx context.Context, id int64) error
+	DeleteGone(ctx context.Context, uid authctx.UserID, ids []int64) error
+	MarkUsed(ctx context.Context, uid authctx.UserID, ids []int64) error
 }
 
 // HTTPDoer is the minimal http.Client surface used by the sender — swap in
@@ -49,11 +51,12 @@ type HTTPDoer interface {
 // — a single endpoint failure logs and continues; 404/410 prunes the row;
 // other 4xx/5xx are surfaced as warnings.
 type Sender struct {
-	keys   VAPIDKeys
-	repo   SubscriptionStore
-	client HTTPDoer
-	logger *slog.Logger
-	ttl    int
+	keys          VAPIDKeys
+	repo          SubscriptionStore
+	client        HTTPDoer
+	logger        *slog.Logger
+	ttl           int
+	deliverySlots chan struct{}
 	// notify is the actual webpush dispatcher. Defaulted to
 	// webpush.SendNotificationWithContext + the package's http client; tests
 	// override this so they don't have to provide real ECDH-valid p256dh
@@ -65,18 +68,14 @@ func NewSender(keys VAPIDKeys, repo SubscriptionStore, logger *slog.Logger) *Sen
 	s := &Sender{
 		keys: keys,
 		repo: repo,
-		// SSRF-guarded transport reused from internal/preview so a
-		// pwned-SHARED_SECRET attacker can't register
-		// `endpoint=https://169.254.169.254/...` and force the backend
-		// to POST to IMDS or any RFC1918 host. CLAUDE.md §4 invariant:
-		// every outbound user-controlled URL goes through the same
-		// pre-dial LookupIP + post-dial RemoteAddr checks.
 		client: &http.Client{
-			Timeout:   10 * time.Second,
-			Transport: preview.NewSafeTransport(10 * time.Second),
+			Timeout:       10 * time.Second,
+			Transport:     outboundhttp.NewPublicTransport(10 * time.Second),
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		logger: logger.With("component", "push"),
-		ttl:    60 * 60 * 24, // 24h — the push service holds the message for at most a day
+		logger:        logger.With("component", "push"),
+		ttl:           60 * 60 * 24, // 24h — the push service holds the message for at most a day
+		deliverySlots: make(chan struct{}, fanoutConcurrency),
 	}
 	s.notify = webpush.SendNotificationWithContext
 	return s
@@ -104,20 +103,105 @@ func (s *Sender) Notify(ctx context.Context, n Notification) error {
 	if len(subs) == 0 {
 		return nil
 	}
+	if len(subs) > MaxSubscriptionsPerUser {
+		subs = subs[:MaxSubscriptionsPerUser]
+	}
 	payload, err := json.Marshal(n)
 	if err != nil {
 		return fmt.Errorf("marshal notification: %w", err)
 	}
-	for _, sub := range subs {
-		s.sendOne(ctx, sub, payload)
-	}
+	results := s.fanOut(ctx, subs, payload)
+	s.persistResults(ctx, n.UserID, results)
 	return nil
 }
 
-// sendOne wraps webpush.SendNotificationWithContext + status routing. Kept
-// separate from Notify so the inner loop body is a single call site that's
-// easy to reason about.
-func (s *Sender) sendOne(ctx context.Context, sub Subscription, payload []byte) {
+func (s *Sender) fanOut(ctx context.Context, subs []Subscription, payload []byte) []deliveryResult {
+	jobs := make(chan Subscription, len(subs))
+	results := make(chan deliveryResult, len(subs))
+	for _, sub := range subs {
+		jobs <- sub
+	}
+	close(jobs)
+
+	workers := min(fanoutConcurrency, len(subs))
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go s.runFanoutWorker(ctx, jobs, results, payload, &wg)
+	}
+	wg.Wait()
+	close(results)
+
+	out := make([]deliveryResult, 0, len(results))
+	for result := range results {
+		out = append(out, result)
+	}
+	return out
+}
+
+func (s *Sender) runFanoutWorker(
+	ctx context.Context,
+	jobs <-chan Subscription,
+	results chan<- deliveryResult,
+	payload []byte,
+	wg *sync.WaitGroup,
+) {
+	defer wg.Done()
+	for sub := range jobs {
+		if ctx.Err() != nil {
+			return
+		}
+		select {
+		case s.deliverySlots <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+		result := s.sendOne(ctx, sub, payload)
+		<-s.deliverySlots
+		if result.state != deliveryUnchanged {
+			results <- result
+		}
+	}
+}
+
+func (s *Sender) persistResults(ctx context.Context, uid authctx.UserID, results []deliveryResult) {
+	var usedIDs, goneIDs []int64
+	for _, result := range results {
+		switch result.state {
+		case deliveryUsed:
+			usedIDs = append(usedIDs, result.id)
+		case deliveryGone:
+			goneIDs = append(goneIDs, result.id)
+		}
+	}
+	if len(usedIDs) > 0 {
+		if err := s.repo.MarkUsed(ctx, uid, usedIDs); err != nil {
+			s.logger.Warn("push mark-used batch failed", "count", len(usedIDs), "err", err)
+		}
+	}
+	if len(goneIDs) > 0 {
+		if err := s.repo.DeleteGone(ctx, uid, goneIDs); err != nil {
+			s.logger.Warn("push delete-gone batch failed", "count", len(goneIDs), "err", err)
+		} else {
+			s.logger.Info("push subscriptions removed (gone)", "count", len(goneIDs))
+		}
+	}
+}
+
+type deliveryState uint8
+
+const (
+	deliveryUnchanged deliveryState = iota
+	deliveryUsed
+	deliveryGone
+)
+
+type deliveryResult struct {
+	id    int64
+	state deliveryState
+}
+
+func (s *Sender) sendOne(ctx context.Context, sub Subscription, payload []byte) deliveryResult {
 	wpSub := &webpush.Subscription{
 		Endpoint: sub.Endpoint,
 		Keys: webpush.Keys{
@@ -134,8 +218,8 @@ func (s *Sender) sendOne(ctx context.Context, sub Subscription, payload []byte) 
 	}
 	resp, err := s.notify(ctx, payload, wpSub, opts)
 	if err != nil {
-		s.logger.Warn("push send failed", "endpoint", sub.Endpoint, "err", err)
-		return
+		s.logger.Warn("push send failed", "subscription_id", sub.ID, "reason", pushErrorReason(err))
+		return deliveryResult{}
 	}
 	defer resp.Body.Close()
 	// Drain to allow connection reuse. Cap to 4 KiB — push services return
@@ -144,19 +228,23 @@ func (s *Sender) sendOne(ctx context.Context, sub Subscription, payload []byte) 
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	switch {
 	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
-		// The subscription is permanently gone — RFC 8030 §7.3. Delete the
-		// row so the next Notify doesn't re-attempt.
-		if err := s.repo.DeleteByEndpoint(ctx, sub.Endpoint); err != nil {
-			s.logger.Warn("push delete-gone failed", "endpoint", sub.Endpoint, "err", err)
-		} else {
-			s.logger.Info("push subscription removed (gone)", "endpoint", sub.Endpoint)
-		}
+		return deliveryResult{id: sub.ID, state: deliveryGone}
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		if err := s.repo.MarkUsed(ctx, sub.ID); err != nil {
-			s.logger.Warn("push mark-used failed", "endpoint", sub.Endpoint, "err", err)
-		}
+		return deliveryResult{id: sub.ID, state: deliveryUsed}
 	default:
-		s.logger.Warn("push send non-2xx", "endpoint", sub.Endpoint, "status", resp.StatusCode)
+		s.logger.Warn("push send non-2xx", "subscription_id", sub.ID, "status", resp.StatusCode)
+		return deliveryResult{}
+	}
+}
+
+func pushErrorReason(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "delivery_failed"
 	}
 }
 

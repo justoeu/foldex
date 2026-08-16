@@ -623,52 +623,176 @@ func TestCloseJoinsRetirementAlreadyInProgress(t *testing.T) {
 	awaitSignal(t, pb.stopped, "retired generation did not signal teardown")
 }
 
-func TestConcurrentCaptureDuringRetirementClosesEachGenerationOnce(t *testing.T) {
+func TestConcurrentCaptureDuringResetClosesEachGenerationExactlyOnce(t *testing.T) {
+	const (
+		generationCount       = 4
+		capturesPerGeneration = 8
+	)
+	type generationState struct {
+		generation        *pooledBrowser
+		resetObserved     chan struct{}
+		active            int
+		closes            int
+		closedWhileActive bool
+	}
+	type acquisition struct {
+		hold *pooledBrowser
+		err  error
+	}
+
 	pool := NewPool()
-	closed := make(map[*rod.Browser]int)
-	var closedMu sync.Mutex
+	states := make(map[*rod.Browser]*generationState, generationCount)
+	orderedStates := make([]*generationState, 0, generationCount)
+	var stateMu sync.Mutex
+	var unknownCloses int
 	pool.closeBrowser = func(_ context.Context, browser *rod.Browser) error {
-		closedMu.Lock()
-		closed[browser]++
-		closedMu.Unlock()
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		state := states[browser]
+		if state == nil {
+			unknownCloses++
+			return nil
+		}
+		state.closes++
+		state.closedWhileActive = state.closedWhileActive || state.active != 0
 		return nil
 	}
 
-	const n = 50
-	var wg sync.WaitGroup
-	wg.Add(n)
-	for i := 0; i < n; i++ {
-		go func(i int) {
-			defer wg.Done()
-			pool.mu.Lock()
-			if pool.current == nil {
-				pool.current = &pooledBrowser{browser: &rod.Browser{}, stopped: make(chan struct{})}
-				pool.generations[pool.current] = struct{}{}
-			}
-			pool.current.refs++
-			pb := pool.current
-			pool.mu.Unlock()
-			if i%3 == 0 {
-				pool.retireBrowserGeneration(pb, false)
-			}
-			pool.releaseBrowser(pb)
-		}(i)
-	}
-	wg.Wait()
-	pool.mu.Lock()
-	last := pool.current
-	pool.mu.Unlock()
-	if last != nil {
-		pool.retireBrowserGeneration(last, false)
-	}
-	pool.Close()
+	finalRelease := make(chan struct{})
+	var captures sync.WaitGroup
+	for generationIndex := 0; generationIndex < generationCount; generationIndex++ {
+		resetObserved := make(chan struct{})
+		var resetOnce sync.Once
+		generation := &pooledBrowser{
+			browser: &rod.Browser{},
+			cancel: func() {
+				resetOnce.Do(func() { close(resetObserved) })
+			},
+			stopped: make(chan struct{}),
+		}
+		state := &generationState{generation: generation, resetObserved: resetObserved}
+		stateMu.Lock()
+		states[generation.browser] = state
+		orderedStates = append(orderedStates, state)
+		stateMu.Unlock()
 
-	closedMu.Lock()
-	require.NotEmpty(t, closed)
-	for browser, count := range closed {
-		assert.Equal(t, 1, count, "generation %p must close exactly once", browser)
+		pool.mu.Lock()
+		if pool.current != nil {
+			pool.mu.Unlock()
+			t.Fatalf("generation %d installed before the previous reset", generationIndex)
+		}
+		pool.current = generation
+		pool.generations[generation] = struct{}{}
+		pool.mu.Unlock()
+
+		ready := make(chan struct{}, capturesPerGeneration)
+		acquire := make(chan struct{})
+		acquired := make(chan acquisition, capturesPerGeneration)
+		captures.Add(capturesPerGeneration)
+		for range capturesPerGeneration {
+			go func() {
+				defer captures.Done()
+				ready <- struct{}{}
+				<-acquire
+
+				stateMu.Lock()
+				_, hold, err := pool.acquireBrowser(context.Background())
+				if err == nil {
+					states[hold.browser].active++
+				}
+				stateMu.Unlock()
+				acquired <- acquisition{hold: hold, err: err}
+				if err != nil {
+					return
+				}
+
+				<-finalRelease
+				stateMu.Lock()
+				states[hold.browser].active--
+				pool.releaseBrowser(hold)
+				stateMu.Unlock()
+			}()
+		}
+		for range capturesPerGeneration {
+			<-ready
+		}
+		close(acquire)
+		for range capturesPerGeneration {
+			result := <-acquired
+			require.NoError(t, result.err)
+			require.Same(t, generation, result.hold)
+		}
+
+		stateMu.Lock()
+		assert.Equal(t, capturesPerGeneration, state.active)
+		assert.Zero(t, state.closes, "generation %d closed before reset", generationIndex)
+		stateMu.Unlock()
+		if generationIndex == generationCount-1 {
+			continue
+		}
+
+		retired := make(chan struct{})
+		go func() {
+			pool.retireBrowserGeneration(generation, false)
+			close(retired)
+		}()
+		awaitSignal(t, retired, "generation reset did not finish")
+		pool.mu.Lock()
+		assert.Nil(t, pool.current)
+		assert.True(t, generation.retired)
+		assert.False(t, generation.stopping)
+		assert.Equal(t, capturesPerGeneration, generation.refs)
+		pool.mu.Unlock()
+		stateMu.Lock()
+		assert.Equal(t, capturesPerGeneration, state.active)
+		assert.Zero(t, state.closes, "generation %d closed with captures still active", generationIndex)
+		stateMu.Unlock()
 	}
-	closedMu.Unlock()
+
+	finalState := orderedStates[len(orderedStates)-1]
+	pool.mu.Lock()
+	assert.Same(t, finalState.generation, pool.current)
+	assert.False(t, finalState.generation.retired)
+	pool.mu.Unlock()
+
+	closeDone := make(chan struct{})
+	go func() {
+		pool.Close()
+		close(closeDone)
+	}()
+	for _, state := range orderedStates {
+		awaitSignal(t, state.resetObserved, "Close did not reset every generation")
+	}
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned before active captures released their generations")
+	default:
+	}
+	pool.mu.Lock()
+	assert.Nil(t, pool.current)
+	assert.True(t, finalState.generation.retired)
+	assert.False(t, finalState.generation.stopping)
+	assert.Equal(t, capturesPerGeneration, finalState.generation.refs)
+	pool.mu.Unlock()
+	stateMu.Lock()
+	for generationIndex, state := range orderedStates {
+		assert.Equal(t, capturesPerGeneration, state.active)
+		assert.Zero(t, state.closes, "generation %d closed before final release", generationIndex)
+	}
+	stateMu.Unlock()
+
+	close(finalRelease)
+	captures.Wait()
+	awaitSignal(t, closeDone, "Close did not join generation teardown")
+
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	assert.Zero(t, unknownCloses)
+	for generationIndex, state := range orderedStates {
+		assert.Zero(t, state.active, "generation %d retained active references", generationIndex)
+		assert.False(t, state.closedWhileActive, "generation %d closed while references were active", generationIndex)
+		assert.Equal(t, 1, state.closes, "generation %d must close exactly once", generationIndex)
+	}
 }
 
 func TestCapture_LiveChrome(t *testing.T) {

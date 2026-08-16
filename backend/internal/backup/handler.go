@@ -31,9 +31,12 @@ type Handler struct {
 	logger       *slog.Logger
 	archiveSlots chan struct{}
 	createTemp   func() (*os.File, error)
+	downloads    *downloadTickets
 }
 
 const maxConcurrentArchiveOperations = 1
+
+const archiveRequestTimeout = 31 * time.Minute
 
 func NewHandler(svc BackupService, logger *slog.Logger) *Handler {
 	if logger == nil {
@@ -43,6 +46,7 @@ func NewHandler(svc BackupService, logger *slog.Logger) *Handler {
 		svc:          svc,
 		logger:       logger,
 		archiveSlots: make(chan struct{}, maxConcurrentArchiveOperations),
+		downloads:    newDownloadTickets(),
 		createTemp: func() (*os.File, error) {
 			return os.CreateTemp("", "foldex-backup-*.zip")
 		},
@@ -51,6 +55,9 @@ func NewHandler(svc BackupService, logger *slog.Logger) *Handler {
 
 func (h *Handler) Mount(r chi.Router) {
 	r.Post("/", h.export)
+	r.Post("/download", h.issueDownload)
+	r.Get("/download", h.download)
+	r.Get("/download/status", h.downloadStatus)
 	r.Post("/validate", h.validate)
 	r.Post("/restore", h.restore)
 }
@@ -65,9 +72,30 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	stamp := time.Now().UTC().Format("20060102T150405Z")
-	filename := fmt.Sprintf("foldex-backup-%s.zip", stamp)
+	createdAt := time.Now().UTC()
+	filename := filenameForBackup(createdAt)
+	rep, _, headersWritten, err := h.writeExport(w, r, createdAt)
+	if err != nil {
+		h.writeExportError(w, err, headersWritten)
+		return
+	}
+	h.logExportOK(filename, rep)
+}
 
+type countingWriter struct {
+	w       io.Writer
+	written int64
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	w.written += int64(n)
+	return n, err
+}
+
+func (h *Handler) writeExport(w http.ResponseWriter, r *http.Request, createdAt time.Time) (ExportReport, int64, bool, error) {
+	extendArchiveDeadlines(w)
+	filename := filenameForBackup(createdAt)
 	// Streaming export. The Service computes counts up front (snapshot read
 	// + bucket listings under REPEATABLE READ) and calls onCountsReady
 	// BEFORE the first zip byte; the hook flushes response headers, then
@@ -75,9 +103,11 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 	// land in the headers but the duration is only known after the zip is
 	// closed — clients that need it can derive from request start.
 	headersWritten := false
-	rep, err := h.svc.Export(r.Context(), authctx.MustUser(r.Context()), w, func(c Counts) error {
+	counter := &countingWriter{w: w}
+	rep, err := h.svc.Export(r.Context(), authctx.MustUser(r.Context()), counter, func(c Counts) error {
 		w.Header().Set("Content-Type", "application/zip")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Foldex-Backup-Filename", filename)
 		// Full count set so the SPA can record history without buffering the
 		// entire zip twice (blob + arrayBuffer) just to walk the EOCD.
@@ -93,16 +123,19 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 		headersWritten = true
 		return nil
 	})
-	if err != nil {
-		// If headers already shipped, the response is in progress; the best
-		// we can do is log and let the chunked stream truncate (the client
-		// zip parser will surface a corrupt-archive error).
-		h.logger.Error("backup export failed", "err", err, "headers_written", headersWritten)
-		if !headersWritten {
-			httperr.Write(w, httperr.New(http.StatusInternalServerError, "export_failed", "failed to produce backup"))
-		}
-		return
+	return rep, counter.written, headersWritten, err
+}
+
+func (h *Handler) writeExportError(w http.ResponseWriter, err error, headersWritten bool) {
+	// Once headers ship, truncating the stream is the only honest response;
+	// the browser will reject the incomplete ZIP.
+	h.logger.Error("backup export failed", "err", err, "headers_written", headersWritten)
+	if !headersWritten {
+		httperr.Write(w, httperr.New(http.StatusInternalServerError, "export_failed", "failed to produce backup"))
 	}
+}
+
+func (h *Handler) logExportOK(filename string, rep ExportReport) {
 	h.logger.Info("backup export ok",
 		"filename", filename,
 		"links", rep.Counts.Links, "notes", rep.Counts.Notes, "files", rep.Counts.Files,
@@ -119,6 +152,7 @@ func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	extendArchiveDeadlines(w)
 	zr, cleanup, err := readZipFromRequest(w, r, h.createTemp)
 	if err != nil {
 		if errors.Is(err, ErrPayloadTooLarge) {
@@ -156,6 +190,7 @@ func (h *Handler) restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	extendArchiveDeadlines(w)
 	zr, cleanup, err := readZipFromRequest(w, r, h.createTemp)
 	if err != nil {
 		if errors.Is(err, ErrPayloadTooLarge) {
@@ -172,6 +207,13 @@ func (h *Handler) restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httperr.JSON(w, http.StatusOK, rep)
+}
+
+func extendArchiveDeadlines(w http.ResponseWriter) {
+	deadline := time.Now().Add(archiveRequestTimeout)
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(deadline)
+	_ = controller.SetWriteDeadline(deadline)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

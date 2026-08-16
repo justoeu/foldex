@@ -18,7 +18,7 @@ import (
 )
 
 // Pin must stay in lockstep with docker-compose.services.yml (CLAUDE.md §1).
-const rustfsImage = "rustfs/rustfs:1.0.0-beta.12"
+const rustfsImage = "rustfs/rustfs:1.0.0-rc.2@sha256:7d6d361c49c08d427250fb59aae5d78df83d644c3405d9ccf4b21cda0b0692d0"
 
 const (
 	rustfsUser = "rustfsadmin"
@@ -42,7 +42,9 @@ func startRustFS(t *testing.T) (endpoint, user, pass string) {
 			"RUSTFS_VOLUMES":                  "/data",
 			"RUSTFS_UNSAFE_BYPASS_DISK_CHECK": "true",
 		},
-		WaitingFor: wait.ForListeningPort("9000/tcp").WithStartupTimeout(2 * time.Minute),
+		WaitingFor: wait.ForHTTP("/health").
+			WithPort("9000/tcp").
+			WithStartupTimeout(2 * time.Minute),
 	}
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
@@ -58,8 +60,8 @@ func startRustFS(t *testing.T) (endpoint, user, pass string) {
 	return fmt.Sprintf("%s:%s", host, port.Port()), rustfsUser, rustfsPass
 }
 
-// newClientRetry absorbs "Server not initialized yet" races right after the
-// container reports the port as listening.
+// newClientRetry absorbs the short interval between the health endpoint and
+// S3 bucket/IAM readiness.
 func newClientRetry(t *testing.T, ctx context.Context, cfg storage.Config, logger *slog.Logger) *storage.Client {
 	t.Helper()
 	var last error

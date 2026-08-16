@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { usePersistedMap, usePersistedState } from './usePersistedState'
+import { isBoolean, usePersistedMap, usePersistedState } from './usePersistedState'
 
 function PersistedValue<T>({
   storageKey,
@@ -9,7 +9,7 @@ function PersistedValue<T>({
 }: {
   storageKey: string
   fallback: T
-  validate?: (value: unknown) => value is T
+  validate: (value: unknown) => value is T
 }) {
   const [value] = usePersistedState(storageKey, fallback, validate)
   return <div data-testid="value">{JSON.stringify(value)}</div>
@@ -22,7 +22,7 @@ function PersistedMapValue<T>({
 }: {
   storageKey: string
   fallback: T
-  validate?: (value: unknown) => value is T
+  validate: (value: unknown) => value is T
 }) {
   const persisted = usePersistedMap(storageKey, fallback, validate)
   return <div data-testid="value">{JSON.stringify(persisted.get('home'))}</div>
@@ -34,7 +34,7 @@ describe('usePersistedState', () => {
   it('falls back when decoded state has the wrong shape', () => {
     localStorage.setItem('preference', JSON.stringify({ unexpected: true }))
 
-    render(<PersistedValue storageKey="preference" fallback={false} />)
+    render(<PersistedValue storageKey="preference" fallback={false} validate={isBoolean} />)
 
     expect(screen.getByTestId('value')).toHaveTextContent('false')
     expect(localStorage.getItem('preference')).toBeNull()
@@ -70,7 +70,13 @@ describe('usePersistedState', () => {
     unmount()
 
     localStorage.setItem('map-null', 'null')
-    render(<PersistedMapValue storageKey="map-null" fallback="cards" />)
+    render(
+      <PersistedMapValue
+        storageKey="map-null"
+        fallback="cards"
+        validate={(value): value is string => value === 'cards'}
+      />,
+    )
     expect(screen.getByTestId('value')).toHaveTextContent('"cards"')
     expect(localStorage.getItem('map-null')).toBeNull()
   })
@@ -78,7 +84,7 @@ describe('usePersistedState', () => {
   it('accepts boolean map entries only when every value is boolean', () => {
     localStorage.setItem('boolean-map', JSON.stringify({ home: 'false' }))
 
-    render(<PersistedMapValue storageKey="boolean-map" fallback={false} />)
+    render(<PersistedMapValue storageKey="boolean-map" fallback={false} validate={isBoolean} />)
 
     expect(screen.getByTestId('value')).toHaveTextContent('false')
     expect(localStorage.getItem('boolean-map')).toBeNull()

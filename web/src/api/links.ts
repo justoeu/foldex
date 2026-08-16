@@ -1,61 +1,13 @@
-import { useMutation, useInfiniteQuery, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query'
 import { http } from './client'
-import { mapCachedLinkEntries } from './entries'
+import { invalidateEntryCounts, mapCachedLinkEntries } from './entries'
 import type { Link, LinkCreate, LinkUpdate } from './types'
 
-export type LinkListParams = {
-  q?: string
-  tagIds?: number[]
-  sort?: 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
-  folderId?: number | null  // null = ungrouped, number = inside folder, undefined = all
-  ungrouped?: boolean
-}
-
-// PAGE_SIZE is the per-request cap sent to GET /api/links. The backend caps
-// at 500; we send 100 so a "Load more" UX surfaces naturally once the user
-// has more than this many bookmarks in a single view. Lower = snappier first
-// paint, higher = fewer "Load more" clicks for power users.
-export const LINK_PAGE_SIZE = 100
-
-const linksKey = (p: LinkListParams) =>
-  [
-    'links',
-    p.q ?? '',
-    // Sort the tag IDs before joining so toggling A→B vs B→A produces the
-    // same cache key for the same logical filter. Without the sort, the same
-    // result set would be fetched twice on different orderings.
-    [...(p.tagIds ?? [])].sort((a, b) => a - b).join(','),
-    p.sort ?? 'created',
-    p.folderId ?? (p.ungrouped ? 'ungrouped' : 'all'),
-  ] as const
-
-// Cached shape for ['links'] queries: TanStack InfiniteData<Link[]>. Each
-// page is a single GET /api/links?offset=N response. Optimistic updates
-// (pin, mark-seen, etc.) need to walk every page, hence the helpers below.
 type LinksCache = InfiniteData<Link[]>
 
-// flattenLinks extracts a single flat array out of an InfiniteData cache
-// entry. Returns [] when the cache is empty/undefined so consumers can
-// safely treat the result as Link[].
-export function flattenLinks(data: LinksCache | undefined): Link[] {
-  if (!data?.pages) return []
-  const out: Link[] = []
-  for (const page of data.pages) out.push(...page)
-  return out
-}
-
-// mapCachedLinks applies fn to every Link in every page of every ['links']
-// query in the cache. Used by optimistic updates that patch a single link
-// across all loaded pages without invalidating — keeps the badge flip
-// instant and avoids a refetch roundtrip. Exported so LinkCard's onGo can
-// reuse the same pattern (optimistic click bump).
 export function mapCachedLinks(qc: QueryClient, fn: (l: Link) => Link) {
   qc.setQueriesData<LinksCache>({ queryKey: ['links'] }, (old) => {
-    // setQueriesData({ queryKey: ['links'] }) is a PREFIX match, so it also
-    // hits useRecentChanges (key ['links','recent-changes',...]) whose value
-    // is a flat Link[] — not InfiniteData<Link[]>. Guard on the pages array
-    // so non-InfiniteData entries are passed through untouched instead of
-    // crashing on old.pages.map when old.pages is undefined.
+    // Prefix matching also reaches the flat recent-changes cache.
     if (!old || !Array.isArray(old.pages)) return old
     return {
       ...old,
@@ -64,41 +16,21 @@ export function mapCachedLinks(qc: QueryClient, fn: (l: Link) => Link) {
   })
 }
 
-export function useLinks(params: LinkListParams, options?: { enabled?: boolean }) {
-  return useInfiniteQuery({
-    queryKey: linksKey(params),
-    queryFn: async ({ pageParam }) => {
-      const search = new URLSearchParams()
-      if (params.q) search.set('q', params.q)
-      for (const id of params.tagIds ?? []) search.append('tag', String(id))
-      if (params.sort) search.set('sort', params.sort)
-      if (typeof params.folderId === 'number') {
-        search.set('folder_id', String(params.folderId))
-      } else if (params.ungrouped) {
-        search.set('ungrouped', '1')
-      }
-      search.set('limit', String(LINK_PAGE_SIZE))
-      search.set('offset', String(pageParam))
-      const { data } = await http.get<Link[]>(`/api/links?${search.toString()}`)
-      return data
-    },
-    initialPageParam: 0,
-    // If we got a full page, there might be more — offer "Load more".
-    // If we got less than a full page, we've reached the tail.
-    getNextPageParam: (lastPage, _allPages, lastPageParam) =>
-      lastPage.length < LINK_PAGE_SIZE ? undefined : (lastPageParam as number) + lastPage.length,
-    enabled: options?.enabled ?? true,
-    // Auto-poll while ANY link in any loaded page is still pending so the
-    // user doesn't have to refresh to see "capturando…" flip to a real
-    // preview. Backend worker takes a few seconds per link; we re-poll every
-    // 3s and stop the moment nothing is pending. Stale links are unaffected.
-    refetchInterval: (query) => {
-      const data = query.state.data as LinksCache | undefined
-      const all = flattenLinks(data)
-      if (all.some((l) => l.preview_status === 'pending')) return 3000
-      return false
-    },
-  })
+const updateSequences = new WeakMap<QueryClient, Map<number, number>>()
+
+function nextUpdateSequence(qc: QueryClient, id: number): number {
+  let sequences = updateSequences.get(qc)
+  if (!sequences) {
+    sequences = new Map()
+    updateSequences.set(qc, sequences)
+  }
+  const next = (sequences.get(id) ?? 0) + 1
+  sequences.set(id, next)
+  return next
+}
+
+function currentUpdateSequence(qc: QueryClient, id: number): number | undefined {
+  return updateSequences.get(qc)?.get(id)
 }
 
 export function useCreateLink() {
@@ -110,15 +42,10 @@ export function useCreateLink() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['links'] })
-      // The Home/folder grid renders from ['entries'], not ['links']
-      // (ADR-27). A new link introduces a row the grid has never seen —
-      // only a full refetch can place it at the right sort position.
       qc.invalidateQueries({ queryKey: ['entries'] })
       qc.invalidateQueries({ queryKey: ['tags'] })
-      // Folder cards on the home grid carry `link_count` and `preview_links`
-      // (the 2x2 mini-thumbs). Any link mutation can shift those — invalidate
-      // so the UI re-fetches and the card updates in real time.
       qc.invalidateQueries({ queryKey: ['folders'] })
+      invalidateEntryCounts(qc)
     },
   })
 }
@@ -130,21 +57,22 @@ export function useUpdateLink() {
       const { data } = await http.patch<Link>(`/api/links/${id}`, body)
       return data
     },
-    // Narrow invalidation: patch the changed link in every cached page via
-    // mapCachedLinks; only invalidate folders/tags when the mutation actually
-    // touched those associations. The previous "invalidate everything"
-    // recipe triggered 3 full refetches per drag-and-drop or edit.
-    onSuccess: (data, vars) => {
-      mapCachedLinks(qc, (l) => (l.id === data.id ? data : l))
-      mapCachedLinkEntries(qc, (l) => (l.id === data.id ? data : l))
+    onMutate: ({ id }) => ({ sequence: nextUpdateSequence(qc, id) }),
+    onSuccess: (data, vars, context) => {
+      // Association caches are refreshed only when their inputs changed.
       if (vars.body.tag_ids !== undefined || vars.body.pending_tags !== undefined) {
         qc.invalidateQueries({ queryKey: ['tags'] })
       }
-      // folder_id touched OR cross-folder move → folder cards' link_count
-      // and preview_links may have shifted; invalidate so they reconcile.
       if ('folder_id' in vars.body) {
         qc.invalidateQueries({ queryKey: ['folders'] })
       }
+      if (context.sequence !== currentUpdateSequence(qc, vars.id)) {
+        qc.invalidateQueries({ queryKey: ['links'] })
+        qc.invalidateQueries({ queryKey: ['entries'] })
+        return
+      }
+      mapCachedLinks(qc, (l) => (l.id === data.id ? data : l))
+      mapCachedLinkEntries(qc, (l) => (l.id === data.id ? data : l))
     },
   })
 }
@@ -159,22 +87,12 @@ export function useDeleteLink() {
       qc.invalidateQueries({ queryKey: ['links'] })
       qc.invalidateQueries({ queryKey: ['entries'] })
       qc.invalidateQueries({ queryKey: ['tags'] })
-      // Folder cards on the home grid carry `link_count` and `preview_links`
-      // (the 2x2 mini-thumbs). Any link mutation can shift those — invalidate
-      // so the UI re-fetches and the card updates in real time.
       qc.invalidateQueries({ queryKey: ['folders'] })
+      invalidateEntryCounts(qc)
     },
   })
 }
 
-// usePinLink optimistically flips link.pinned in every cached list so the
-// badge animates instantly instead of waiting for the PATCH + refetch. Pin
-// is the most-clicked stateful action in the UI; a 300-500 ms round-trip
-// before the badge moves felt sluggish.
-//
-// onMutate: snapshot every ['links', ...] query and patch the target link in
-// place. onError: rollback to the snapshot. onSettled: invalidate to reconcile
-// (server is the source of truth — the sort order may need to shift).
 export function usePinLink() {
   const qc = useQueryClient()
   return useMutation({
@@ -185,10 +103,7 @@ export function usePinLink() {
     onMutate: async ({ id, pinned }) => {
       await qc.cancelQueries({ queryKey: ['links'] })
       await qc.cancelQueries({ queryKey: ['entries'] })
-      // Snapshot every ['links'] AND ['entries'] query so we can roll back
-      // on error. Both caches hold the pinned link (the grid renders from
-      // ['entries'] per ADR-27; ['links'] still feeds recent-changes and
-      // tests).
+      // The grid and sidebar keep separate caches for the same link.
       const linkSnapshots = qc.getQueriesData<LinksCache>({ queryKey: ['links'] })
       const entrySnapshots = qc.getQueriesData<LinksCache>({ queryKey: ['entries'] })
       mapCachedLinks(qc, (l) => (l.id === id ? { ...l, pinned } : l))
@@ -223,18 +138,6 @@ export function useRefreshPreview() {
   })
 }
 
-export function useCaptureScreenshot() {
-  return useMutation({
-    mutationFn: async (id: number) => {
-      const { data } = await http.post<{ url: string }>(`/api/links/${id}/screenshot`)
-      return data
-    },
-  })
-}
-
-// URL-metadata shape returned by GET /api/links/url-metadata. Mirrors what the
-// preview worker eventually stamps on the link asynchronously — exposing it
-// synchronously lets the LinkDialog pre-fill Title / Description before save.
 export type UrlMetadata = {
   title: string
   description: string
@@ -242,25 +145,13 @@ export type UrlMetadata = {
   og_image_url: string
 }
 
-// Module-level memo for url-metadata responses, keyed by the exact URL. Saves
-// a backend round-trip for the "paste → close → re-paste same URL" loop
-// (Cmd+V duplicates, dialog close-then-reopen). 5-min TTL is short enough
-// that a stale og:title from a freshly-edited source page only lingers for
-// a few minutes; OG tags rarely change minute-to-minute in practice.
 const URL_METADATA_CACHE_TTL_MS = 5 * 60 * 1000
 const urlMetadataCache = new Map<string, { data: UrlMetadata; expiresAt: number }>()
 
-// Exposed for tests so each case starts with an empty cache. Production code
-// never needs to call this — entries expire by TTL.
 export function _clearUrlMetadataCacheForTests() {
   urlMetadataCache.clear()
 }
 
-// useFetchUrlMetadata wraps the metadata endpoint as a mutation because we
-// trigger fetches imperatively from a debounce effect AND any failure is
-// silent UX (the user can still type manually). The module-level Map gives
-// us the cross-dialog-mount dedup that useQuery would give us, without
-// paying the queryKey ceremony for fire-and-forget calls.
 export function useFetchUrlMetadata() {
   return useMutation({
     mutationFn: async ({ url, signal }: { url: string; signal?: AbortSignal }): Promise<UrlMetadata> => {
@@ -279,11 +170,6 @@ export function useFetchUrlMetadata() {
   })
 }
 
-export async function captureScreenshot(id: number): Promise<{ url: string }> {
-  const { data } = await http.post<{ url: string }>(`/api/links/${id}/screenshot`)
-  return data
-}
-
 export async function uploadLinkImage(id: number, file: File): Promise<{ url: string }> {
   const fd = new FormData()
   fd.append('image', file)
@@ -297,11 +183,6 @@ export async function removeLinkImage(id: number): Promise<void> {
   await http.delete(`/api/links/${id}/image`)
 }
 
-// useRecentChanges feeds the sidebar's "Recent updates" section. Server
-// caps days ∈ [1,30] and limit ∈ [1,100] via clampInt so passing bigger
-// values is harmless. Keyed on `[ 'links', 'recent-changes', days, limit ]`
-// so the badge update path (useMarkChangeSeen below) can target this query
-// for invalidation without touching the main `['links']` cache.
 export function useRecentChanges(days = 7, limit = 20, enabled = true) {
   return useQuery<Link[]>({
     queryKey: ['links', 'recent-changes', days, limit],
@@ -309,16 +190,11 @@ export function useRecentChanges(days = 7, limit = 20, enabled = true) {
       const { data } = await http.get<Link[]>(`/api/links/recent-changes?days=${days}&limit=${limit}`)
       return data
     },
-    // Background refetch every minute so the sidebar reflects fresh
-    // changes without requiring a full page reload.
     refetchInterval: 60_000,
     enabled,
   })
 }
 
-// useMarkChangeSeen flips change_seen_at on the link, which hides the
-// "unseen update" badge in the card. Optimistic update mirrors the
-// usePinLink pattern so the UI responds before the network roundtrip.
 export function useMarkChangeSeen() {
   const qc = useQueryClient()
   return useMutation({
@@ -326,9 +202,6 @@ export function useMarkChangeSeen() {
       await http.post(`/api/links/${id}/seen-change`)
     },
     onMutate: async (id) => {
-      // Optimistic: bump change_seen_at to now() across every cached page
-      // that holds this link. The server will overwrite with its own
-      // timestamp on success.
       await qc.cancelQueries({ queryKey: ['links'] })
       await qc.cancelQueries({ queryKey: ['entries'] })
       const now = new Date().toISOString()
@@ -340,19 +213,12 @@ export function useMarkChangeSeen() {
       qc.invalidateQueries({ queryKey: ['entries'] })
     },
     onError: () => {
-      // The optimistic write may now be wrong — full refetch is cheaper
-      // than reconciling the touched ids manually.
       qc.invalidateQueries({ queryKey: ['links'] })
       qc.invalidateQueries({ queryKey: ['entries'] })
     },
   })
 }
 
-// Builds the public short link. Prefers the slug when given a Link object —
-// `/go/jira-board` is the share-friendly path. Falls back to `/go/{id}` for
-// callers that only have the numeric id (legacy, optimistic UI updates that
-// don't yet have the slug, etc.). Backend resolution is ID-first then slug-
-// fallback so both forms always work.
 export function goHref(linkOrId: { id: number; slug: string } | number): string {
   if (typeof linkOrId === 'number') return `/go/${linkOrId}`
   return `/go/${linkOrId.slug || linkOrId.id}`

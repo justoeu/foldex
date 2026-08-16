@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TwoFactorScreen } from './TwoFactorScreen'
 import { renderWithProviders } from '../../test/renderWithProviders'
@@ -144,17 +144,43 @@ describe('TwoFactorScreen', () => {
     )
   })
 
-  // The e-mail fallback answers 202 whether it sent or throttled. Surfacing a
-  // difference would turn the button into a probe for the send counter.
-  it('shows the same confirmation whether the e-mail was sent or throttled', async () => {
+  it('shows the non-enumerating confirmation after the e-mail request succeeds', async () => {
     const user = userEvent.setup()
-    vi.spyOn(http, 'post').mockImplementation(() => rejectWith(429, 'too_many_attempts') as never)
+    vi.spyOn(http, 'post').mockResolvedValue({ status: 202 } as never)
 
     renderScreen()
     await user.click(screen.getByRole('button', { name: /e-mail me a code/i }))
 
     expect(await screen.findByRole('status')).toHaveTextContent(/ad•••••@foldex\.test/)
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('reports a transport failure without claiming that the e-mail was sent', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(http, 'post').mockImplementation(() => Promise.reject({ request: {} }) as never)
+
+    renderScreen()
+    await user.click(screen.getByRole('button', { name: /e-mail me a code/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/check your connection and try again/i)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('coalesces rapid e-mail requests until the first one settles', async () => {
+    let resolve!: () => void
+    const post = vi.spyOn(http, 'post').mockImplementation(() =>
+      new Promise((done) => { resolve = () => done({ status: 202 }) }) as never)
+    renderScreen()
+    const button = screen.getByRole('button', { name: /e-mail me a code/i })
+
+    fireEvent.click(button)
+    fireEvent.click(button)
+
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(button).toBeDisabled()
+    resolve()
+    expect(await screen.findByRole('status')).toHaveTextContent(/if a code could be sent/i)
+    expect(button).toBeEnabled()
   })
 
   // The e-mail option only exists when the server said it does — an instance

@@ -13,11 +13,14 @@ import (
 	"foldex/internal/pkg/secrets"
 )
 
+// ChallengePurpose is the closed purpose domain persisted in auth_challenge.
+type ChallengePurpose string
+
 // Challenge purposes, mirroring auth_challenge_purpose_check.
 const (
-	PurposeTOTP          = "totp"
-	PurposeEnroll2FA     = "enroll_2fa"
-	PurposeConvertGoogle = "convert_google"
+	PurposeTOTP          ChallengePurpose = "totp"
+	PurposeEnroll2FA     ChallengePurpose = "enroll_2fa"
+	PurposeConvertGoogle ChallengePurpose = "convert_google"
 )
 
 // E-mail OTP purposes, mirroring email_otp_purpose_check.
@@ -74,7 +77,7 @@ var (
 type Challenge struct {
 	ID           int64
 	UserID       authctx.UserID
-	Purpose      string
+	Purpose      ChallengePurpose
 	TokenVersion int
 	Attempts     int
 	Sends        int
@@ -103,7 +106,7 @@ type Challenge struct {
 // silently. Named fields make that a visible mistake.
 type NewChallenge struct {
 	UserID       authctx.UserID
-	Purpose      string
+	Purpose      ChallengePurpose
 	TokenVersion int
 	TTL          time.Duration
 	IP           string
@@ -226,7 +229,7 @@ func (r *Repository) CreateChallenge(ctx context.Context, in NewChallenge) (stri
 // It refuses a challenge whose attempts are already spent, so an exhausted
 // pre-auth token cannot be used to keep probing: the caller gets the same
 // answer whether the budget ran out a second ago or the token never existed.
-func (r *Repository) ResolveChallenge(ctx context.Context, rawToken string, purposes ...string) (Challenge, error) {
+func (r *Repository) ResolveChallenge(ctx context.Context, rawToken string, purposes ...ChallengePurpose) (Challenge, error) {
 	if rawToken == "" {
 		return Challenge{}, ErrChallengeInvalid
 	}
@@ -1362,16 +1365,6 @@ func (r *Repository) ConsumeEmailVerification(ctx context.Context, tokenHash []b
 		return 0, fmt.Errorf("consume email verification: %w", err)
 	}
 	return authctx.UserID(uid), nil
-}
-
-// MarkEmailVerified records that the address has been proven.
-func (r *Repository) MarkEmailVerified(ctx context.Context, uid authctx.UserID) error {
-	if _, err := r.pool.Exec(ctx, `
-		UPDATE app_user SET email_verified_at = COALESCE(email_verified_at, now()), updated_at = now()
-		WHERE id = $1`, int64(uid)); err != nil {
-		return fmt.Errorf("mark email verified: %w", err)
-	}
-	return nil
 }
 
 // SweepTwoFactor deletes expired challenges and OTPs.

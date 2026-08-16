@@ -157,11 +157,11 @@ func TestRepository_Create_UserSuppliedSlugConflict(t *testing.T) {
 	require.ErrorIs(t, err, notes.ErrSlugTaken)
 }
 
-func TestRepository_GetBySlug(t *testing.T) {
+func TestRepository_SystemViewAndResolveBySlug(t *testing.T) {
 	ctx, uid, nrepo, _, _ := setup(t)
 	created, err := nrepo.Create(ctx, uid, notes.CreateInput{Title: "Findable"})
 	require.NoError(t, err)
-	got, err := nrepo.GetBySlug(ctx, uid, created.Slug)
+	got, err := nrepo.SystemViewAndResolveBySlug(ctx, created.Slug)
 	require.NoError(t, err)
 	assert.Equal(t, created.ID, got.ID)
 }

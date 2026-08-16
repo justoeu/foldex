@@ -2,12 +2,17 @@ package push
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"foldex/internal/pkg/authctx"
 )
 
 func newTestHandler() *Handler {
@@ -90,6 +95,42 @@ func TestHandler_Test_ReturnsServiceUnavailableWhenSenderNil(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	assert.Contains(t, rec.Body.String(), "push_disabled")
+}
+
+func TestHandler_TestRejectsWhenGlobalAdmissionIsFull(t *testing.T) {
+	sender := NewSender(VAPIDKeys{}, &fakeSubStore{}, testLogger())
+	h := NewHandler(VAPIDKeys{}, nil, sender)
+	for range cap(h.testSlots) {
+		h.testSlots <- struct{}{}
+	}
+	r := chi.NewRouter()
+	r.Route("/push", h.Mount)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/push/test", nil))
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	assert.Contains(t, rec.Body.String(), "push_busy")
+}
+
+func TestHandler_TestBoundsFanoutWithRequestDeadline(t *testing.T) {
+	repo := &fakeSubStore{subs: []Subscription{fakeSub("https://push.example/test")}}
+	var hasDeadline bool
+	sender := NewSender(VAPIDKeys{}, repo, testLogger()).WithNotifyFunc(
+		func(ctx context.Context, _ []byte, _ *webpush.Subscription, _ *webpush.Options) (*http.Response, error) {
+			_, hasDeadline = ctx.Deadline()
+			return &http.Response{StatusCode: http.StatusCreated, Body: newNopBody(), Header: make(http.Header)}, nil
+		},
+	)
+	h := NewHandler(VAPIDKeys{}, nil, sender)
+	r := chi.NewRouter()
+	r.Route("/push", h.Mount)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/push/test", nil)
+	req = req.WithContext(authctx.WithPrincipal(req.Context(), authctx.Principal{UserID: 1}))
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	assert.True(t, hasDeadline)
 }
 
 func TestIsValidPushEndpoint(t *testing.T) {

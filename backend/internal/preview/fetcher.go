@@ -5,16 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
 	"golang.org/x/net/html"
 
-	"foldex/internal/pkg/netpolicy"
+	"foldex/internal/pkg/outboundhttp"
 )
 
 // Result holds the metadata extracted from a page (any field may be empty).
@@ -38,7 +36,7 @@ func NewFetcher(timeout time.Duration) *Fetcher {
 	return &Fetcher{
 		client: &http.Client{
 			Timeout:   timeout,
-			Transport: NewSafeTransport(timeout),
+			Transport: outboundhttp.NewSafeTransport(timeout),
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
 					return errors.New("too many redirects")
@@ -46,24 +44,6 @@ func NewFetcher(timeout time.Duration) *Fetcher {
 				return nil
 			},
 		},
-	}
-}
-
-// NewSafeTransport returns the same SSRF-guarded *http.Transport the preview
-// Fetcher uses internally. Exposed so adjacent packages (notably
-// internal/push, which fans Web Push notifications out to user-supplied
-// endpoint URLs) can route through the SAME dialer instead of re-rolling
-// their own — CLAUDE.md §4 invariant "the SSRF dialer is checked twice"
-// applies to every outbound user-controlled URL, not just preview fetches.
-//
-// `timeout` bounds dial + TLS handshake + response header read; the caller
-// still owns the *http.Client's overall Timeout.
-func NewSafeTransport(timeout time.Duration) *http.Transport {
-	return &http.Transport{
-		DialContext:           (&safeDialer{base: &net.Dialer{Timeout: timeout}, strict: strictSSRF()}).DialContext,
-		TLSHandshakeTimeout:   timeout,
-		ResponseHeaderTimeout: timeout,
-		IdleConnTimeout:       30 * time.Second,
 	}
 }
 
@@ -293,83 +273,4 @@ func resolveOne(href string, base *url.URL) string {
 		return u.String()
 	}
 	return base.ResolveReference(u).String()
-}
-
-// ----- SSRF guard at the dial layer -----
-
-type safeDialer struct {
-	base   *net.Dialer
-	strict bool // snapshot of PREVIEW_STRICT_SSRF at fetcher construction
-}
-
-func (d *safeDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-	// Pre-dial guard. The pre-dial check fails fast for cleanly-resolved bad
-	// hosts (cheap LookupIP, no TCP RTT, no socket leak). But by itself it is
-	// vulnerable to DNS rebinding — the resolver can return a public IP for
-	// this lookup and a private IP for the resolver call that net.Dialer
-	// performs internally. The post-dial RemoteAddr check below closes that
-	// gap, since RemoteAddr reflects the IP we actually connected to.
-	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
-	if err != nil {
-		return nil, err
-	}
-	for _, ip := range ips {
-		// Cloud metadata and credential endpoints are always refused, even
-		// when ordinary intranet previews are enabled.
-		if netpolicy.IsMetadataIP(ip) {
-			return nil, fmt.Errorf("ssrf: refusing IMDS endpoint %s", ip)
-		}
-		if netpolicy.IsAlwaysDeniedIP(ip) {
-			return nil, fmt.Errorf("ssrf: refusing special-use endpoint %s", ip)
-		}
-		if d.strict && netpolicy.IsPrivateIP(ip) {
-			return nil, fmt.Errorf("ssrf: refusing to dial %s (%s)", host, ip)
-		}
-	}
-	conn, err := d.base.DialContext(ctx, network, addr)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkRemoteAddrSSRF(d.strict, conn.RemoteAddr(), host); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	return conn, nil
-}
-
-// checkRemoteAddrSSRF validates the post-dial peer address against the SSRF
-// policy. Extracted so the rebinding defense can be unit-tested without a
-// real Dial — feed it a faked net.Addr.
-//
-// HTTP transport always dials TCP (tcp4/tcp6), so the type assertion is
-// expected to succeed. Fail closed if it ever doesn't: a non-TCP conn path
-// would silently re-open the rebinding hole.
-func checkRemoteAddrSSRF(strict bool, addr net.Addr, host string) error {
-	tcp, ok := addr.(*net.TCPAddr)
-	if !ok {
-		return fmt.Errorf("ssrf: non-TCP remote addr %T — refusing", addr)
-	}
-	if netpolicy.IsMetadataIP(tcp.IP) {
-		return fmt.Errorf("ssrf: refusing IMDS endpoint %s (post-dial)", tcp.IP)
-	}
-	if netpolicy.IsAlwaysDeniedIP(tcp.IP) {
-		return fmt.Errorf("ssrf: refusing special-use endpoint %s (post-dial)", tcp.IP)
-	}
-	if strict && netpolicy.IsPrivateIP(tcp.IP) {
-		return fmt.Errorf("ssrf: refusing peer %s for host %s (post-dial)", tcp.IP, host)
-	}
-	return nil
-}
-
-// strictSSRF reports whether PREVIEW_STRICT_SSRF is enabled. When true the
-// dialer additionally refuses the IANA special-purpose address registries.
-// Default is permissive for ordinary intranet targets (Jira, Grid,
-// Confluence, internal dashboards).
-func strictSSRF() bool {
-	v := os.Getenv("PREVIEW_STRICT_SSRF")
-	return v == "1" || v == "true" || v == "TRUE" || v == "yes"
 }

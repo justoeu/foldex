@@ -2,6 +2,7 @@ package backup
 
 import (
 	"archive/zip"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -31,7 +32,7 @@ type inspectedArchive struct {
 	digest  [sha256.Size]byte
 }
 
-func inspectArchive(zr *zip.Reader) (*inspectedArchive, error) {
+func inspectArchive(ctx context.Context, zr *zip.Reader) (*inspectedArchive, error) {
 	if len(zr.File) > maxArchiveEntries {
 		return nil, fmt.Errorf("archive has %d entries (max %d)", len(zr.File), maxArchiveEntries)
 	}
@@ -63,13 +64,16 @@ func inspectArchive(zr *zip.Reader) (*inspectedArchive, error) {
 
 	var actualBytes int64
 	for _, entry := range zr.File {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		entryLimit := archiveEntryLimit(entry.Name)
 		remaining := maxArchiveExpandedBytes - actualBytes
 		readLimit := entryLimit
 		if remaining < readLimit {
 			readLimit = remaining
 		}
-		hash, n, err := hashAtMost(entry, readLimit)
+		hash, n, err := hashAtMost(ctx, entry, readLimit)
 		if err != nil {
 			if remaining < entryLimit {
 				return nil, fmt.Errorf("archive expanded bytes exceed %d-byte limit", maxArchiveExpandedBytes)
@@ -113,13 +117,13 @@ func archiveEntryLimit(name string) int64 {
 	}
 }
 
-func hashAtMost(entry *zip.File, max int64) (string, int64, error) {
+func hashAtMost(ctx context.Context, entry *zip.File, max int64) (string, int64, error) {
 	r, err := entry.Open()
 	if err != nil {
 		return "", 0, err
 	}
 	h := sha256.New()
-	n, readErr := io.Copy(h, io.LimitReader(r, max+1))
+	n, readErr := io.Copy(h, io.LimitReader(contextReader{ctx: ctx, reader: r}, max+1))
 	closeErr := r.Close()
 	if n > max {
 		return "", n, fmt.Errorf("expanded data exceeds %d-byte limit", max)
@@ -131,6 +135,18 @@ func hashAtMost(entry *zip.File, max int64) (string, int64, error) {
 		return "", n, closeErr
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
 
 func readAtMost(r io.Reader, max int64) ([]byte, error) {

@@ -2,7 +2,8 @@ import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { removeLinkImage, uploadLinkImage, useCreateLink, useUpdateLink } from '../api/links'
 import { apiErrorCode } from '../lib/apiError'
-import { buildLinkCreatePayload, buildLinkUpdatePayload, type LinkDialogValues, type SelectedTag } from '../lib/linkDialogPayload'
+import { tagNameTakenErrorKey, type SelectedTag } from '../lib/dialogTags'
+import { buildLinkCreatePayload, buildLinkUpdatePayload, type LinkDialogValues } from '../lib/linkDialogPayload'
 import type { Link } from '../api/types'
 
 type ImageState = {
@@ -87,9 +88,10 @@ function saveErrorMessage(
   t: (key: string, options?: Record<string, unknown>) => string,
 ): string {
   const code = apiErrorCode(error)
+  const tagErrorKey = tagNameTakenErrorKey(error, 'link')
+  if (tagErrorKey) return t(tagErrorKey)
   if (code === 'url_taken') return t('link_dialog.error_url_taken')
   if (code === 'slug_taken') return t('link_dialog.error_slug_taken')
-  if (code === 'tag_name_taken') return t('link_dialog.error_tag_taken')
   const status = (error as { response?: { status?: number } })?.response?.status
   if (code === 'conflict' || status === 409) return t('link_dialog.error_conflict')
   const message = (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message

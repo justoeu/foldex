@@ -11,26 +11,54 @@ import * as auth from '../../api/auth'
  * the screen where trust matters most.
  */
 type GoogleButtonProps =
-  | { purpose: auth.OAuthPurpose; invite?: string; label?: string; onClick?: never }
-  | { purpose: 'link'; invite?: never; label?: string; onClick: () => void }
+  | {
+      purpose: auth.OAuthPurpose
+      invite?: string
+      label?: string
+      disabled?: boolean
+      onBeforeStart?: () => boolean
+      onBusyChange?: (busy: boolean) => void
+      onClick?: never
+    }
+  | {
+      purpose: 'link'
+      invite?: never
+      label?: string
+      disabled?: boolean
+      onBeforeStart?: never
+      onBusyChange?: never
+      onClick: () => void
+    }
 
-export function GoogleButton({ purpose, invite, label, onClick }: GoogleButtonProps) {
+export function GoogleButton({
+  purpose,
+  invite,
+  label,
+  disabled = false,
+  onBeforeStart,
+  onBusyChange,
+  onClick,
+}: GoogleButtonProps) {
   const { t } = useTranslation()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   async function start() {
+    if (disabled) return
     if (purpose === 'link') {
       onClick?.()
       return
     }
+    if (onBeforeStart && !onBeforeStart()) return
     setBusy(true)
+    onBusyChange?.(true)
     setError('')
     try {
       await auth.startGoogleOAuth(purpose, invite)
     } catch {
       setError(t('auth_errors.oauth_failed'))
       setBusy(false)
+      onBusyChange?.(false)
     }
   }
 
@@ -39,7 +67,7 @@ export function GoogleButton({ purpose, invite, label, onClick }: GoogleButtonPr
       <button
         type="button"
         className="fx-auth-oauth"
-        disabled={busy}
+        disabled={busy || disabled}
         aria-busy={busy || undefined}
         onClick={() => void start()}
       >

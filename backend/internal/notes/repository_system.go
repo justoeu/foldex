@@ -15,9 +15,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"foldex/internal/folders"
-	"foldex/internal/links"
 	"foldex/internal/pkg/domainerr"
 	"foldex/internal/pkg/publictarget"
+	"foldex/internal/tags"
 )
 
 // SystemViewAndResolve resolves id-or-slug and logs a click_log row in the same
@@ -83,6 +83,6 @@ func (r *Repository) systemGet(ctx context.Context, id int64) (Note, error) {
 	if err != nil {
 		return Note{}, fmt.Errorf("system get note: %w", err)
 	}
-	n.Tags = []links.Tag{}
+	n.Tags = []tags.Chip{}
 	return n, nil
 }

@@ -1,73 +1,13 @@
 package preview
 
 import (
-	"net"
 	"net/url"
 	"strings"
 	"testing"
 
-	"foldex/internal/pkg/netpolicy"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestIsPrivateIP(t *testing.T) {
-	cases := []struct {
-		ip      string
-		private bool
-	}{
-		{"127.0.0.1", true},             // loopback
-		{"0.0.0.0", true},               // unspecified
-		{"169.254.169.254", true},       // IMDS (also link-local)
-		{"169.254.1.2", true},           // link-local
-		{"10.1.2.3", true},              // RFC1918
-		{"172.16.0.1", true},            // RFC1918
-		{"172.31.255.255", true},        // RFC1918 upper
-		{"172.32.0.1", false},           // outside RFC1918
-		{"192.168.1.1", true},           // RFC1918
-		{"100.64.0.1", true},            // RFC6598 shared address space
-		{"100.127.255.254", true},       // RFC6598 upper bound
-		{"100.128.0.1", false},          // outside RFC6598
-		{"::1", true},                   // IPv6 loopback
-		{"fc00::1", true},               // IPv6 ULA
-		{"fd00::1", true},               // IPv6 ULA
-		{"8.8.8.8", false},              // public
-		{"1.1.1.1", false},              // public
-		{"2001:4860:4860::8888", false}, // public IPv6
-	}
-	for _, tc := range cases {
-		t.Run(tc.ip, func(t *testing.T) {
-			ip := net.ParseIP(tc.ip)
-			assert.Equal(t, tc.private, netpolicy.IsPrivateIP(ip), "IP %s", tc.ip)
-		})
-	}
-}
-
-func TestIsPrivateIP_NilIsPrivate(t *testing.T) {
-	assert.True(t, netpolicy.IsPrivateIP(nil), "nil IP must be refused")
-}
-
-func TestIsIMDS(t *testing.T) {
-	assert.True(t, netpolicy.IsMetadataIP(net.ParseIP("169.254.169.254")))
-	assert.True(t, netpolicy.IsMetadataIP(net.ParseIP("100.100.100.200")), "Alibaba metadata must always be blocked")
-	assert.True(t, netpolicy.IsMetadataIP(net.ParseIP("fd00:ec2::254")), "AWS IPv6 IMDS must always be blocked")
-	assert.False(t, netpolicy.IsMetadataIP(net.ParseIP("169.254.1.1")), "other link-local IPs are not IMDS")
-	assert.False(t, netpolicy.IsMetadataIP(net.ParseIP("10.0.0.1")))
-	assert.False(t, netpolicy.IsMetadataIP(nil))
-}
-
-func TestStrictSSRF_DefaultsToOff(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
-	assert.False(t, strictSSRF(), "default must permit ordinary intranet previews")
-}
-
-func TestStrictSSRF_Truthy(t *testing.T) {
-	for _, v := range []string{"1", "true", "TRUE", "yes"} {
-		t.Setenv("PREVIEW_STRICT_SSRF", v)
-		assert.True(t, strictSSRF(), "value %q must enable strict mode", v)
-	}
-}
 
 func TestParseHead_TitleAndOG(t *testing.T) {
 	html := `<!DOCTYPE html>
@@ -128,42 +68,4 @@ func TestAttrAndIsVoid(t *testing.T) {
 	require.True(t, isVoid("br"))
 	require.True(t, isVoid("img"))
 	require.False(t, isVoid("div"))
-}
-
-// TestCheckRemoteAddrSSRF_BlocksRebinding locks the P2.8 post-dial guard.
-// The pre-dial LookupIP can be fooled by a DNS server that returns a public
-// IP for the first query and a private IP for the resolver's internal call;
-// the post-dial peer check is the line of defense that catches that.
-func TestCheckRemoteAddrSSRF_BlocksRebinding(t *testing.T) {
-	cases := []struct {
-		name   string
-		strict bool
-		peer   net.Addr
-		want   string // substring expected in the error; "" = nil error
-	}{
-		{"public IP passes permissive", false, &net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 443}, ""},
-		{"public IP passes strict", true, &net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 443}, ""},
-		{"IMDS refused even permissive", false, &net.TCPAddr{IP: net.ParseIP("169.254.169.254"), Port: 80}, "IMDS"},
-		{"IMDS refused strict", true, &net.TCPAddr{IP: net.ParseIP("169.254.169.254"), Port: 80}, "IMDS"},
-		{"Tencent metadata refused permissive", false, &net.TCPAddr{IP: net.ParseIP("169.254.0.23"), Port: 80}, "IMDS"},
-		{"mapped ECS credentials refused permissive", false, &net.TCPAddr{IP: net.ParseIP("::ffff:169.254.170.2"), Port: 80}, "IMDS"},
-		{"RFC6598 refused even permissive", false, &net.TCPAddr{IP: net.ParseIP("100.64.0.1"), Port: 80}, "refusing"},
-		{"RFC6598 refused strict", true, &net.TCPAddr{IP: net.ParseIP("100.127.255.254"), Port: 80}, "refusing"},
-		{"RFC1918 refused only when strict", true, &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 80}, "refusing peer"},
-		{"RFC1918 passes permissive", false, &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 80}, ""},
-		{"loopback refused strict", true, &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 80}, "refusing peer"},
-		{"IPv6 ULA refused strict", true, &net.TCPAddr{IP: net.ParseIP("fc00::1"), Port: 80}, "refusing peer"},
-		{"non-TCP addr refused", false, &net.UDPAddr{IP: net.ParseIP("8.8.8.8"), Port: 53}, "non-TCP"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := checkRemoteAddrSSRF(tc.strict, tc.peer, "example.com")
-			if tc.want == "" {
-				assert.NoError(t, err)
-				return
-			}
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.want)
-		})
-	}
 }

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { errorCode, errorStatus } from '../../api/auth'
 import { sendEmailOtp, verifyTwoFactor } from '../../api/twofa'
@@ -26,6 +26,8 @@ export function TwoFactorScreen({ pending }: { pending: TwoFactorPending }) {
   const [notice, setNotice] = useState('')
   const [remaining, setRemaining] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
+  const [emailSubmitting, setEmailSubmitting] = useState(false)
+  const emailSubmittingRef = useRef(false)
 
   const submit = useCallback(
     async (raw: string) => {
@@ -73,15 +75,22 @@ export function TwoFactorScreen({ pending }: { pending: TwoFactorPending }) {
   )
 
   async function requestEmail() {
+    if (emailSubmittingRef.current) return
+    emailSubmittingRef.current = true
+    setEmailSubmitting(true)
     setError('')
+    setNotice('')
+    let sent = false
     try {
       await sendEmailOtp()
-    } catch {
-      // Deliberately ignored. The endpoint answers 202 whether it sent or
-      // throttled, and surfacing a distinct outcome here would turn the button
-      // into a probe for how many codes have already gone out.
+      sent = true
+    } catch (err) {
+      setError(t(errorStatus(err) === 0 ? 'auth_errors.network' : 'auth_errors.generic'))
+    } finally {
+      emailSubmittingRef.current = false
+      setEmailSubmitting(false)
     }
-    setNotice(t('auth_otp.email_sent', { email: pending.email }))
+    if (sent) setNotice(t('auth_otp.email_sent', { email: pending.email }))
   }
 
   const canEmail = pending.methods.includes('email_otp')
@@ -153,7 +162,7 @@ export function TwoFactorScreen({ pending }: { pending: TwoFactorPending }) {
             {useRecovery ? t('auth_otp.use_app') : t('auth_otp.use_recovery')}
           </button>
           {canEmail && !useRecovery && (
-            <button type="button" className="fx-auth-link" onClick={() => void requestEmail()}>
+            <button type="button" className="fx-auth-link" disabled={emailSubmitting} onClick={() => void requestEmail()}>
               {t('auth_otp.send_email')}
             </button>
           )}

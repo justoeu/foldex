@@ -5,6 +5,7 @@ package auth_test
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -209,6 +210,53 @@ func TestAPIToken_CapsHowManyOneAccountMayHold(t *testing.T) {
 	rec := admin.do(http.MethodPost, "/api/auth/tokens", map[string]any{"name": "one too many"})
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.Equal(t, "too_many_tokens", errCode(t, rec))
+}
+
+func TestConcurrentAPITokenCreationNeverExceedsCap(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	for i := range 19 {
+		h.mintToken(t, admin, "existing "+itoa(int64(i)))
+	}
+
+	ctx := context.Background()
+	blocker, err := h.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback(ctx) }()
+	var uid int64
+	require.NoError(t, blocker.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE email = 'admin@example.com' FOR UPDATE`).Scan(&uid))
+
+	clients := []*client{clientOnHarness(t, h, admin), clientOnHarness(t, h, admin)}
+	results := make(chan *httptest.ResponseRecorder, len(clients))
+	for i, c := range clients {
+		go func() {
+			results <- c.do(http.MethodPost, "/api/auth/tokens",
+				map[string]any{"name": "concurrent " + itoa(int64(i))})
+		}()
+	}
+	waitForBlockedSQLCount(t, h.pool, "SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE", len(clients))
+	require.NoError(t, blocker.Commit(ctx))
+
+	var created, refused int
+	for range clients {
+		rec := <-results
+		switch rec.Code {
+		case http.StatusCreated:
+			created++
+		case http.StatusConflict:
+			refused++
+			assert.Equal(t, "too_many_tokens", errCode(t, rec))
+		default:
+			require.Failf(t, "unexpected create response", "status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	assert.Equal(t, 1, created)
+	assert.Equal(t, 1, refused)
+	var live int
+	require.NoError(t, h.pool.QueryRow(ctx,
+		`SELECT count(*) FROM api_token WHERE user_id = $1 AND revoked_at IS NULL`, uid).Scan(&live))
+	assert.Equal(t, 20, live)
 }
 
 // The sweeper is what bounds api_token and oauth_state over time. Neither is a

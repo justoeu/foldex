@@ -122,7 +122,7 @@ type Handler struct {
 
 	// features is echoed on /me so the SPA can render the right affordances
 	// (e.g. "check the server log" instead of "check your inbox").
-	features map[string]any
+	features AuthFeatures
 }
 
 // HandlerConfig is the wiring internal/server hands in.
@@ -192,10 +192,10 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		stepUpPasswordUser: attemptlimit.New(5, 15*time.Minute),
 		oauthIP:            attemptlimit.New(30, time.Hour),
 
-		features: map[string]any{
-			"google_oauth":   cfg.Google != nil && cfg.Google.Enabled(),
-			"two_factor":     cfg.Cipher != nil && cfg.CodeMAC != nil,
-			"email_delivery": cfg.Mailer.Driver() == "smtp",
+		features: AuthFeatures{
+			GoogleOAuth:   cfg.Google != nil && cfg.Google.Enabled(),
+			TwoFactor:     cfg.Cipher != nil && cfg.CodeMAC != nil,
+			EmailDelivery: cfg.Mailer.Driver() == "smtp",
 		},
 	}
 }
@@ -551,9 +551,13 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		// with no response body of its own.
 		if ch, err := h.repo.ResolveChallenge(r.Context(), cookieValue(r, CookiePreAuth)); err == nil {
 			if u, err := h.repo.GetUser(r.Context(), ch.UserID); err == nil {
-				httperr.JSON(w, http.StatusOK,
-					h.pendingPayload(u, ch.Purpose, ch.MailboxAlreadyProven))
-				return
+				payload, payloadErr := h.pendingPayload(u, ch.Purpose, ch.MailboxAlreadyProven)
+				if payloadErr == nil {
+					httperr.JSON(w, http.StatusOK, payload)
+					return
+				}
+				h.logger.Error("build pending auth response", "err", payloadErr)
+				h.cookies.ClearPreAuth(w)
 			}
 		}
 		needs, err := h.repo.NeedsBootstrap(r.Context())
@@ -562,13 +566,14 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 			httperr.Write(w, httperr.ErrInternal)
 			return
 		}
-		status := statusAnonymous
 		if needs {
-			status = statusSetupRequired
+			httperr.JSON(w, http.StatusOK, setupRequiredAuthResponse{
+				Status: statusSetupRequired, Features: h.features,
+			})
+			return
 		}
-		httperr.JSON(w, http.StatusOK, map[string]any{
-			"status":   status,
-			"features": h.features,
+		httperr.JSON(w, http.StatusOK, anonymousAuthResponse{
+			Status: statusAnonymous, Features: h.features,
 		})
 		return
 	}
@@ -585,12 +590,12 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, cookieValue(r, CookieCSRF)))
 }
 
-func (h *Handler) authenticatedPayload(u User, csrf string) map[string]any {
-	return map[string]any{
-		"status":     statusAuthenticated,
-		"user":       u,
-		"csrf_token": csrf,
-		"features":   h.features,
+func (h *Handler) authenticatedPayload(u User, csrf string) authenticatedAuthResponse {
+	return authenticatedAuthResponse{
+		Status:    statusAuthenticated,
+		User:      u,
+		CSRFToken: csrf,
+		Features:  h.features,
 	}
 }
 

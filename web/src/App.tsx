@@ -3,13 +3,14 @@ import './styles/overrides.css'
 
 import { useEntries, flattenEntries, type EntryListParams } from './api/entries'
 import { useFolders, type FolderListParams } from './api/folders'
-import { useTags } from './api/tags'
-import type { Folder, Tag } from './api/types'
+import type { Folder } from './api/types'
 import { useAppWorkspaceController } from './AppWorkspace'
 import { useAppDialogController } from './AppDialogs'
-import { useAppDndController } from './AppDnd'
+import { useAppDndController } from './hooks/useAppDndController'
 import { useAppNavigationController, useFolderLockRecovery } from './AppNavigation'
 import { AppShell, type AppContentState } from './AppShell'
+import { MutationAlert } from './components/MutationAlert'
+import { useEntryCounts } from './hooks/useEntryCounts'
 
 function entryParams(
   q: string,
@@ -30,10 +31,6 @@ function foldersOrEmpty(folders: Folder[] | undefined): Folder[] {
   return folders ?? []
 }
 
-function countTaggedLinks(tags: Tag[] | undefined): number {
-  return (tags ?? []).reduce((total, tag) => total + (tag.link_count ?? 0), 0)
-}
-
 export default function App() {
   const workspace = useAppWorkspaceController()
   const allFoldersQuery = useFolders({ scope: null, fields: 'minimal' })
@@ -46,8 +43,8 @@ export default function App() {
     navigation.openFolder,
     navigation.currentUnlockToken,
   ))
+  const entryCountsQuery = useEntryCounts()
   const foldersQuery = useFolders(folderParams(navigation.openFolder, navigation.currentUnlockToken))
-  const tagsQuery = useTags()
 
   useFolderLockRecovery({
     entriesError: entriesQuery.error,
@@ -78,13 +75,16 @@ export default function App() {
   }
 
   return (
-    <AppShell
-      workspace={workspace}
-      navigation={navigation}
-      dialogs={dialogs}
-      dnd={dnd}
-      content={content}
-      totalLinks={Math.max(countTaggedLinks(tagsQuery.data), entries.length)}
-    />
+    <>
+      <AppShell
+        workspace={workspace}
+        navigation={navigation}
+        dialogs={dialogs}
+        dnd={dnd}
+        content={content}
+        totalLinks={entryCountsQuery.data?.links ?? 0}
+      />
+      {dnd.mergeError && <MutationAlert message={dnd.mergeError} onClose={dnd.dismissMergeError} />}
+    </>
   )
 }

@@ -72,9 +72,14 @@ func TestChangeCheckPushGoesOnlyToTheLinkOwner(t *testing.T) {
 	fetcher := staticChangeFetcher{body: newBody}
 	kind, hash, err := changecheck.NewFingerprinter(fetcher).Compute(ctx, linkA.URL, oldBody)
 	require.NoError(t, err)
-	require.NoError(t, linkRepo.SystemRecordCheckResult(ctx, linkA.ID, links.CheckResult{
+	due, err := linkRepo.SystemFindDueForCheck(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+	applied, err := linkRepo.SystemRecordCheckResult(ctx, linkA.ID, due[0].ClaimedAt, links.CheckResult{
 		Fingerprint: changecheck.FormatFingerprint(kind, hash),
-	}))
+	})
+	require.NoError(t, err)
+	require.True(t, applied)
 	_, err = pool.Exec(ctx,
 		`UPDATE link SET last_checked_at = now() - interval '2 days' WHERE user_id = $1 AND id = $2`,
 		int64(ownerA), linkA.ID)
@@ -101,6 +106,10 @@ func TestChangeCheckPushGoesOnlyToTheLinkOwner(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return len(notifier.snapshot()) == 1
+	}, 3*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		subs, listErr := pushRepo.List(ctx, ownerA)
+		return listErr == nil && len(subs) == 1 && subs[0].LastUsedAt != nil
 	}, 3*time.Second, 10*time.Millisecond)
 	worker.Stop()
 

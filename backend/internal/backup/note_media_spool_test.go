@@ -50,7 +50,7 @@ func TestPreparedNoteMediaSpoolAvoidsSecondArchiveReadAndOptimize(t *testing.T) 
 	}{name: "files/" + oldKey, body: source.Bytes()})
 	snapshot := &Snapshot{Notes: []NoteRow{{BodyHTML: `<img src="/api/files/` + oldKey + `">`}}}
 
-	prepared, err := prepareNoteMediaRestore(snapshot, valid)
+	prepared, err := prepareNoteMediaRestore(context.Background(), snapshot, valid)
 	require.NoError(t, err)
 	require.NotNil(t, prepared.spool)
 	spoolName := prepared.spool.Name()
@@ -77,6 +77,18 @@ func TestPreparedNoteMediaSpoolAvoidsSecondArchiveReadAndOptimize(t *testing.T) 
 	prepared.cleanup()
 	_, err = os.Stat(spoolName)
 	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestPrepareNoteMediaRestoreHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	prepared, err := prepareNoteMediaRestore(ctx, &Snapshot{Notes: []NoteRow{{
+		BodyHTML: `<img src="/api/files/notes/22c3a1e2-304d-441f-a525-713dc364bff1.png">`,
+	}}}, zipReaderWithEntries(t))
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, prepared)
 }
 
 func TestApplyRestoreNoteObjectOptimizesOnLedgerResume(t *testing.T) {
@@ -117,6 +129,23 @@ func TestApplyRestoreNoteObjectRejectsInvalidMediaOnLedgerResume(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid note media")
 	assert.Empty(t, bucket.key)
+}
+
+func TestApplyRestoreNoteObjectPropagatesCancellationOnLedgerResume(t *testing.T) {
+	var source bytes.Buffer
+	require.NoError(t, png.Encode(&source, image.NewRGBA(image.Rect(0, 0, 2, 2))))
+	zr := zipReaderWithEntries(t, struct {
+		name string
+		body []byte
+	}{name: "files/notes/old.png", body: source.Bytes()})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := (&Service{storage: &noteMediaPutBucket{}}).applyRestoreNoteObject(ctx, restoreFileWork{
+		entry: zr.File[0], key: "notes/new.jpg", isNote: true,
+	}, nil)
+
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestRestoreSingleObjectStagesPropagateUploadFailure(t *testing.T) {

@@ -1,8 +1,15 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { ReactNode } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { useEntries, flattenEntries, mapCachedLinkEntries } from './entries'
+import {
+  applyPreviewStatusResults,
+  useEntries,
+  flattenEntries,
+  mapCachedLinkEntries,
+  pendingPreviewIDs,
+} from './entries'
+import { http } from './client'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import { makeQueryClient } from '../test/renderWithProviders'
 
@@ -75,6 +82,81 @@ describe('useEntries', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0].kind).toBe('link')
   })
+
+  it('polls only pending ids, patches the cache, and never refetches entry pages', async () => {
+    state.links.push({
+      id: 1, url: 'https://pending.example', title: 'Pending', slug: 'pending', click_count: 0,
+      preview_status: 'pending', pinned: false, created_at: '', updated_at: 'before', tags: [],
+    } as any)
+    state.links.push({
+      id: 2, url: 'https://ready.example', title: 'Ready', slug: 'ready', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    } as any)
+    const fallback = vi.mocked(http.get).getMockImplementation()!
+    vi.mocked(http.get).mockImplementation((async (url: string, ...rest: any[]) => {
+      if (url.startsWith('/api/entries/preview-status')) {
+        const ids = new URL(url, 'https://foldex.test').searchParams.getAll('id')
+        expect(ids).toEqual(['1'])
+        return { data: [{
+          id: 1, found: true, preview_status: 'ok', description: 'Fetched', favicon_url: '/favicon.ico',
+          og_image_url: '/preview.jpg', preview_error: null, updated_at: 'after',
+        }] }
+      }
+      return fallback(url, ...rest)
+    }) as never)
+
+    const { result } = renderHook(() => useEntries({}), { wrapper })
+    await waitFor(() => {
+      const entries = flattenEntries(result.current.data)
+      const entry = entries.find((candidate) => candidate.kind === 'link' && candidate.id === 1)
+      expect(entry?.kind === 'link' ? entry.preview_status : undefined).toBe('ok')
+    })
+
+    const paths = vi.mocked(http.get).mock.calls.map(([url]) => String(url).split('?')[0])
+    expect(paths.filter((path) => path === '/api/entries')).toHaveLength(1)
+    expect(paths.filter((path) => path === '/api/entries/preview-status')).toHaveLength(1)
+    expect(pendingPreviewIDs(result.current.data)).toEqual([])
+  })
+
+  it('does not notify the component for internal polling fetch-state changes', async () => {
+    state.links.push({
+      id: 1, url: 'https://pending.example', title: 'Pending', slug: 'pending', click_count: 0,
+      preview_status: 'pending', preview_error: null, description: null, favicon_url: null,
+      og_image_url: null, pinned: false, created_at: '', updated_at: 'same', tags: [],
+    } as any)
+    const fallback = vi.mocked(http.get).getMockImplementation()!
+    let statusCalls = 0
+    vi.mocked(http.get).mockImplementation((async (url: string, ...rest: any[]) => {
+      if (url.startsWith('/api/entries/preview-status')) {
+        statusCalls++
+        return { data: [{
+          id: 1, found: true, preview_status: 'pending', preview_error: null,
+          description: null, favicon_url: null, og_image_url: null, updated_at: 'same',
+        }] }
+      }
+      return fallback(url, ...rest)
+    }) as never)
+    const client = makeQueryClient()
+    const localWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    let renders = 0
+    renderHook(() => {
+      renders++
+      return useEntries({})
+    }, { wrapper: localWrapper })
+    await waitFor(() => expect(statusCalls).toBe(1))
+    await waitFor(() => expect(client.isFetching({ queryKey: ['entries-preview-status'] })).toBe(0))
+    const rendersBeforeRefetch = renders
+
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ['entries-preview-status'] })
+    })
+
+    expect(statusCalls).toBe(2)
+    expect(renders).toBe(rendersBeforeRefetch)
+  })
+
 })
 
 describe('mapCachedLinkEntries', () => {
@@ -103,5 +185,31 @@ describe('mapCachedLinkEntries', () => {
     expect(linkEntry.kind).toBe('link')
     expect(noteEntry.pinned).toBe(false)
     expect(noteEntry.kind).toBe('note')
+  })
+})
+
+describe('applyPreviewStatusResults', () => {
+  it('patches and removes ids only in the originating entries scope', () => {
+    const client = makeQueryClient()
+    const pending = (id: number) => ({
+      kind: 'link', id, url: `https://${id}.example`, title: String(id), slug: String(id), click_count: 0,
+      preview_status: 'pending', pinned: false, created_at: '', updated_at: 'before', tags: [],
+    }) as any
+    const firstKey = ['entries', 'first'] as const
+    const secondKey = ['entries', 'second'] as const
+    client.setQueryData(firstKey, { pages: [[pending(1)], [pending(2)]], pageParams: [0, 1] })
+    client.setQueryData(secondKey, { pages: [[pending(1), pending(2)]], pageParams: [0] })
+
+    applyPreviewStatusResults(client, firstKey, [
+      { id: 1, found: true, preview_status: 'ok', og_image_url: '/ready.jpg', updated_at: 'after' },
+      { id: 2, found: false },
+    ])
+
+    const first = client.getQueryData<{ pages: any[][] }>(firstKey)!.pages.flat()
+    expect(first.find((entry) => entry.id === 1)).toMatchObject({ preview_status: 'ok', og_image_url: '/ready.jpg', updated_at: 'after' })
+    expect(first.some((entry) => entry.id === 2)).toBe(false)
+    const second = client.getQueryData<{ pages: any[][] }>(secondKey)!.pages.flat()
+    expect(second.find((entry) => entry.id === 1)).toMatchObject({ preview_status: 'pending', updated_at: 'before' })
+    expect(second.some((entry) => entry.id === 2)).toBe(true)
   })
 })

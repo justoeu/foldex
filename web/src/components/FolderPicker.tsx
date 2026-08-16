@@ -31,6 +31,7 @@ export function FolderPicker(props: Props) {
         aria-autocomplete="list"
         aria-expanded={picker.open}
         aria-controls="fx-folderpicker-list"
+        aria-describedby={picker.createError ? 'fx-folderpicker-create-error' : undefined}
         autoComplete="off"
         disabled={picker.busy}
       />
@@ -54,6 +55,11 @@ function FolderPickerOptions({ picker }: { picker: Controller }) {
   const { t } = useTranslation()
   return (
     <ul id="fx-folderpicker-list" role="listbox" className="fx-folderpicker-list" aria-label={t('folder_picker.list_aria')}>
+      {picker.createError && (
+        <li id="fx-folderpicker-create-error" className="fx-folderpicker-empty" role="alert">
+          {picker.createError}
+        </li>
+      )}
       {picker.rows.length === 0 && (
         <li className="fx-folderpicker-empty" role="presentation">{t('folder_picker.no_match')}</li>
       )}

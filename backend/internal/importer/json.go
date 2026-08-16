@@ -50,8 +50,16 @@ type JSONLink struct {
 
 func ParseJSON(r io.Reader) (JSONFile, error) {
 	var f JSONFile
-	if err := json.NewDecoder(r).Decode(&f); err != nil {
+	decoder := json.NewDecoder(r)
+	if err := decoder.Decode(&f); err != nil {
 		return f, err
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return f, fmt.Errorf("multiple JSON documents are not allowed")
+		}
+		return f, fmt.Errorf("invalid trailing JSON: %w", err)
 	}
 	return f, nil
 }

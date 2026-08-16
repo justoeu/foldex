@@ -22,12 +22,22 @@ import (
 // clearing the counters (and lifting a lockout early) is acceptable — bcrypt's
 // cost per attempt is the real floor.
 const (
-	maxUnlockAttempts = 5
-	unlockLockout     = time.Hour
+	maxUnlockAttempts      = 5
+	unlockLockout          = time.Hour
+	unlockAttemptRetention = unlockLockout
 )
 
 func newUnlockLimiter() *attemptlimit.Limiter {
 	return attemptlimit.New(maxUnlockAttempts, unlockLockout)
+}
+
+func beginUnlockAttempt(limiter *attemptlimit.Limiter, key string) (time.Time, bool) {
+	return limiter.Begin(key)
+}
+
+// SweepLimiters is the lifecycle hook registered with the process sweeper.
+func (h *Handler) SweepLimiters(olderThan time.Duration) int {
+	return h.limiter.Sweep(olderThan)
 }
 
 // unlockKeyFor is the limiter key for a folder.

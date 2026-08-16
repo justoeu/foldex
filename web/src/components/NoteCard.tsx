@@ -1,11 +1,8 @@
-import { memo, useCallback } from 'react'
+import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useQueryClient } from '@tanstack/react-query'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
-import { useConfirm } from './ConfirmDialog'
-import { goNoteHref, useDeleteNote, usePinNote } from '../api/notes'
-import { mapCachedEntries } from '../api/entries'
+import { goNoteHref } from '../api/notes'
 import { safeImageUrl } from '../lib/url'
 import type { Entry, MergeSource } from '../api/types'
 
@@ -15,6 +12,9 @@ type Props = {
   note: NoteEntry
   onEdit: (id: number) => void
   onMergeWith?: (source: MergeSource, targetId: number) => void
+  onDelete: (note: NoteEntry) => void
+  onPin: (note: NoteEntry, pinned: boolean) => void
+  onOpen: (note: NoteEntry) => void
 }
 
 // Density mirrors LinkCard's densityFor: tall when a cover image is present,
@@ -28,34 +28,10 @@ function densityFor(note: NoteEntry): 'tall' | 'medium' | 'short' {
 export const NoteCard = memo(NoteCardImpl)
 NoteCard.displayName = 'NoteCard'
 
-function NoteCardImpl({ note, onEdit, onMergeWith }: Props) {
+function NoteCardImpl({ note, onEdit, onMergeWith, onDelete, onPin, onOpen }: Props) {
   const { t } = useTranslation()
-  const del = useDeleteNote()
-  const pin = usePinNote()
-  const confirm = useConfirm()
-  const qc = useQueryClient()
   const previewSrc = safeImageUrl(note.cover_url)
   const density = densityFor(note)
-  const togglePin = () => pin.mutate({ id: note.id, pinned: !note.pinned })
-
-  const onGo = useCallback(() => {
-    const nowISO = new Date().toISOString()
-    mapCachedEntries(qc, (e) =>
-      e.kind === 'note' && e.id === note.id
-        ? { ...e, click_count: (e.click_count ?? 0) + 1, last_clicked_at: nowISO }
-        : e,
-    )
-  }, [qc, note.id])
-
-  const onDelete = async () => {
-    const ok = await confirm({
-      title: t('note_card.delete_confirm_title', { title: note.title }),
-      message: t('note_card.delete_confirm_body'),
-      confirmLabel: t('note_card.delete_confirm_action'),
-      destructive: true,
-    })
-    if (ok) del.mutate(note.id)
-  }
 
   return (
     <article
@@ -89,7 +65,7 @@ function NoteCardImpl({ note, onEdit, onMergeWith }: Props) {
         className={'fx-card-pin-badge' + (note.pinned ? '' : ' fx-card-pin-off')}
         onClick={(e) => {
           e.stopPropagation()
-          togglePin()
+          onPin(note, !note.pinned)
         }}
         aria-label={note.pinned ? t('note_card.unpin') : t('note_card.pin')}
         data-tooltip={note.pinned ? t('note_card.unpin_tooltip') : t('note_card.pin_top_tooltip')}
@@ -111,7 +87,7 @@ function NoteCardImpl({ note, onEdit, onMergeWith }: Props) {
       </span>
 
       {previewSrc && (
-        <a className="fx-preview fx-preview-img" href={goNoteHref(note)} target="_blank" rel="noopener noreferrer" onClick={onGo}>
+        <a className="fx-preview fx-preview-img" href={goNoteHref(note)} target="_blank" rel="noopener noreferrer" onClick={() => onOpen(note)}>
           <img
             src={previewSrc}
             alt=""
@@ -168,7 +144,7 @@ function NoteCardImpl({ note, onEdit, onMergeWith }: Props) {
               data-tooltip={t('note_card.delete_note')}
               data-tooltip-side="top"
               aria-label={t('common.delete')}
-              onClick={onDelete}
+              onClick={() => onDelete(note)}
             >
               <Icon d={I.trash} size={14} />
             </button>
@@ -180,7 +156,7 @@ function NoteCardImpl({ note, onEdit, onMergeWith }: Props) {
               data-tooltip={t('note_card.open_action')}
               data-tooltip-side="top"
               aria-label={t('common.open_link_aria', { title: note.title })}
-              onClick={onGo}
+              onClick={() => onOpen(note)}
             >
               <span className="fx-openbtn-go">{t('note_card.open_action')}</span>
               <Icon d={I.arrowR} size={14} />

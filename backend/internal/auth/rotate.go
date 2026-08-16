@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/secrets"
@@ -36,15 +37,10 @@ type SessionTTL struct {
 // stops one consumed refresh token from minting rows for the whole 10 seconds.
 const maxLiveSessionsPerFamily = 5
 
-// DefaultTTL matches the cookie matrix in SDD §5.1.
-func DefaultTTL() SessionTTL {
-	return SessionTTL{
-		Access:   15 * time.Minute,
-		Refresh:  30 * 24 * time.Hour,
-		Absolute: 90 * 24 * time.Hour,
-		Grace:    10 * time.Second,
-	}
-}
+// maxRotateAttempts bounds retries of the complete serializable transaction.
+// A retry gets a fresh snapshot and can observe the consumed-token row written
+// by the winning refresh, which routes a genuinely racing request into grace.
+const maxRotateAttempts = 3
 
 // RotateResult reports what a refresh attempt did.
 type RotateResult struct {
@@ -59,12 +55,12 @@ type RotateResult struct {
 
 // Rotate exchanges a refresh token for a fresh triple, detecting replay.
 //
-// The whole decision runs in ONE SERIALIZABLE transaction. That isolation level
-// is not decoration: the sequence is read-then-write on rows another concurrent
+// Each attempt runs in ONE SERIALIZABLE transaction. That isolation level is
+// not decoration: the sequence is read-then-write on rows another concurrent
 // refresh is reading, and under READ COMMITTED two racing requests can both
-// pass the "not yet consumed" check and both rotate, leaving two live tokens
-// where the design guarantees one. Serialization failures surface to the caller
-// as a retryable error rather than being silently swallowed.
+// pass the "not yet consumed" check and both rotate. A serialization loser
+// retries the complete transaction with a fresh snapshot, then observes the
+// winner's consumed-token row and reaches the grace path.
 //
 // The three outcomes:
 //
@@ -82,7 +78,21 @@ type RotateResult struct {
 //   - token live → consume it, rotate, slide the expiry.
 func (r *Repository) Rotate(ctx context.Context, rawRefresh string, ttl SessionTTL, ip, ua string) (RotateResult, error) {
 	hash := secrets.Hash(rawRefresh)
+	var lastErr error
+	for range maxRotateAttempts {
+		result, err := r.rotateOnce(ctx, hash, ttl, ip, ua)
+		if !isSerializationFailure(err) {
+			return result, err
+		}
+		lastErr = err
+		if err := ctx.Err(); err != nil {
+			return RotateResult{}, fmt.Errorf("rotate context: %w", err)
+		}
+	}
+	return RotateResult{}, fmt.Errorf("rotate serialization retries exhausted: %w", lastErr)
+}
 
+func (r *Repository) rotateOnce(ctx context.Context, hash []byte, ttl SessionTTL, ip, ua string) (RotateResult, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return RotateResult{}, fmt.Errorf("rotate begin: %w", err)
@@ -160,6 +170,11 @@ func (r *Repository) Rotate(ctx context.Context, rawRefresh string, ttl SessionT
 		return RotateResult{}, fmt.Errorf("rotate commit: %w", err)
 	}
 	return RotateResult{Tokens: tok, UserID: authctx.UserID(uid), Session: sid}, nil
+}
+
+func isSerializationFailure(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "40001"
 }
 
 // handleConsumed decides between "racing tab" and "replay attack".

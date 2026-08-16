@@ -45,6 +45,10 @@ func (f *fakeUploader) DeleteObject(_ context.Context, key string) error {
 	return nil
 }
 
+type uploadOnly struct{}
+
+func (uploadOnly) Upload(context.Context, string, []byte, string) error { return nil }
+
 type fakeMediaLeases struct {
 	owned   map[string]authctx.UserID
 	failAdd bool
@@ -167,8 +171,7 @@ func TestImageHandler_Upload_LeaseFailureStoresNothing(t *testing.T) {
 	assert.Empty(t, up.uploaded)
 }
 
-func TestNewImageHandler(t *testing.T) {
-	up := newFakeUploader()
-	h := NewImageHandler(up, newFakeMediaLeases(), discardLogger())
+func TestNewImageHandlerAcceptsUploadOnlyStorage(t *testing.T) {
+	h := NewImageHandler(uploadOnly{}, newFakeMediaLeases(), discardLogger())
 	assert.NotNil(t, h)
 }

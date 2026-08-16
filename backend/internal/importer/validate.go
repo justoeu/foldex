@@ -11,16 +11,13 @@ import (
 	"foldex/internal/pkg/authctx"
 )
 
-// ValidationReport is what /api/import/validate returns. It mirrors what the
-// frontend needs to render the preview dialog (mode picker + folder selection
-// tree) without any DB mutation having happened yet.
 type ValidationReport struct {
-	Format    string             `json:"format"`
-	Counts    ValidationCounts   `json:"counts"`
-	Conflicts ValidationCounts   `json:"conflicts"`
-	Folders   []ValidationFolder `json:"folders"`
-	Links     []ValidationLink   `json:"links"`
-	Warnings  []string           `json:"warnings"`
+	Format    string              `json:"format"`
+	Counts    ValidationCounts    `json:"counts"`
+	Conflicts ValidationCounts    `json:"conflicts"`
+	Folders   []ValidationFolder  `json:"folders"`
+	Ungrouped ValidationAggregate `json:"ungrouped"`
+	Warnings  []string            `json:"warnings"`
 }
 
 type ValidationCounts struct {
@@ -30,77 +27,56 @@ type ValidationCounts struct {
 }
 
 type ValidationFolder struct {
-	Path  string `json:"path"`  // full path "Bookmarks Bar > Work > Issues"
-	Name  string `json:"name"`  // last segment, used as the foldex folder name
-	Count int    `json:"count"` // links inside this folder (not recursive)
+	Path      string `json:"path"`
+	Name      string `json:"name"`
+	Count     int    `json:"count"`
+	Conflicts int    `json:"conflicts"`
 }
 
-type ValidationLink struct {
-	URL      string   `json:"url"`
-	Title    string   `json:"title"`
-	Folder   string   `json:"folder,omitempty"` // matches a Folders[].Path
-	Tags     []string `json:"tags,omitempty"`
-	Conflict bool     `json:"conflict"` // URL already exists in the DB
+type ValidationAggregate struct {
+	Links     int `json:"links"`
+	Conflicts int `json:"conflicts"`
 }
 
-// Validate parses the upload and computes conflict counts against the live
-// DB without writing anything. The frontend uses the resulting report to
-// drive the preview dialog (mode picker + folder selection).
 func Validate(ctx context.Context, pool *pgxpool.Pool, uid authctx.UserID, items []Item) (ValidationReport, error) {
 	rep := ValidationReport{
 		Counts:   ValidationCounts{},
 		Warnings: []string{},
 	}
 
-	// Group links by folder so the frontend can render a tree-like preview.
-	folderCounts := map[string]int{} // folder path → link count
+	folderAggregates := make(map[string]ValidationFolder)
 	tagSet := map[string]struct{}{}
-	links := make([]ValidationLink, 0, len(items))
+	urls := make([]string, 0, len(items))
+	urlFolders := make(map[string]string, len(items))
 
 	for _, it := range items {
 		var folderPath string
 		if it.Folder != nil {
 			folderPath = strings.TrimSpace(*it.Folder)
 		}
-		links = append(links, ValidationLink{
-			URL:    it.URL,
-			Title:  it.Title,
-			Folder: folderPath,
-			Tags:   it.Tags,
-		})
-		if folderPath != "" {
-			folderCounts[folderPath]++
+		if folderPath == "" {
+			rep.Ungrouped.Links++
+		} else {
+			aggregate := folderAggregates[folderPath]
+			aggregate.Path = folderPath
+			aggregate.Name = folderPath
+			aggregate.Count++
+			folderAggregates[folderPath] = aggregate
 		}
+		if _, seen := urlFolders[it.URL]; !seen {
+			urls = append(urls, it.URL)
+		}
+		urlFolders[it.URL] = folderPath
 		for _, t := range it.Tags {
 			tagSet[t] = struct{}{}
 		}
 	}
 
 	rep.Counts.Links = len(items)
-	rep.Counts.Folders = len(folderCounts)
+	rep.Counts.Folders = len(folderAggregates)
 	rep.Counts.Tags = len(tagSet)
 
-	folders := make([]ValidationFolder, 0, len(folderCounts))
-	for path, count := range folderCounts {
-		folders = append(folders, ValidationFolder{
-			Path:  path,
-			Name:  path, // current parser already gives the deepest name
-			Count: count,
-		})
-	}
-	sort.Slice(folders, func(i, j int) bool { return folders[i].Path < folders[j].Path })
-	rep.Folders = folders
-
-	// Conflict detection against the live DB. URL is the unique key for
-	// links; tag.name for tags; folder has no unique constraint so we don't
-	// report conflicts for folders (they merge on name in skip mode anyway).
-	if len(links) > 0 {
-		urls := make([]string, 0, len(links))
-		urlIdx := make(map[string]int, len(links))
-		for i, l := range links {
-			urls = append(urls, l.URL)
-			urlIdx[l.URL] = i
-		}
+	if len(urls) > 0 {
 		rows, err := pool.Query(ctx,
 			`SELECT url FROM link WHERE user_id = $2 AND url = ANY($1::text[])`, urls, int64(uid))
 		if err != nil {
@@ -112,9 +88,17 @@ func Validate(ctx context.Context, pool *pgxpool.Pool, uid authctx.UserID, items
 			if err := rows.Scan(&u); err != nil {
 				return rep, err
 			}
-			if i, ok := urlIdx[u]; ok {
-				links[i].Conflict = true
-				rep.Conflicts.Links++
+			folderPath, ok := urlFolders[u]
+			if !ok {
+				continue
+			}
+			rep.Conflicts.Links++
+			if folderPath == "" {
+				rep.Ungrouped.Conflicts++
+			} else {
+				aggregate := folderAggregates[folderPath]
+				aggregate.Conflicts++
+				folderAggregates[folderPath] = aggregate
 			}
 		}
 		if err := rows.Err(); err != nil {
@@ -132,6 +116,10 @@ func Validate(ctx context.Context, pool *pgxpool.Pool, uid authctx.UserID, items
 		}
 	}
 
-	rep.Links = links
+	rep.Folders = make([]ValidationFolder, 0, len(folderAggregates))
+	for _, aggregate := range folderAggregates {
+		rep.Folders = append(rep.Folders, aggregate)
+	}
+	sort.Slice(rep.Folders, func(i, j int) bool { return rep.Folders[i].Path < rep.Folders[j].Path })
 	return rep, nil
 }

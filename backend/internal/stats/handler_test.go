@@ -16,11 +16,15 @@ import (
 )
 
 type fakeRepo struct {
-	summary Summary
-	daily   []DailyPoint
-	top     []TopLink
-	tags    []TagBucket
-	err     error
+	summary   Summary
+	daily     []DailyPoint
+	top       []TopLink
+	tags      []TagBucket
+	dashboard Dashboard
+	days      int
+	limit     int
+	uid       authctx.UserID
+	err       error
 }
 
 func (f *fakeRepo) Summary(context.Context, authctx.UserID) (Summary, error) { return f.summary, f.err }
@@ -32,6 +36,10 @@ func (f *fakeRepo) TopLinks(context.Context, authctx.UserID, int) ([]TopLink, er
 }
 func (f *fakeRepo) TagBuckets(context.Context, authctx.UserID) ([]TagBucket, error) {
 	return f.tags, f.err
+}
+func (f *fakeRepo) Dashboard(_ context.Context, uid authctx.UserID, days, limit int) (Dashboard, error) {
+	f.uid, f.days, f.limit = uid, days, limit
+	return f.dashboard, f.err
 }
 
 type fakeStorage struct {
@@ -107,4 +115,23 @@ func TestHandler_Daily_Err(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/daily", nil))
 	assert.NotEqual(t, http.StatusOK, rec.Code)
+}
+
+func TestHandler_Dashboard_OKAndClamps(t *testing.T) {
+	f := &fakeRepo{dashboard: Dashboard{Summary: Summary{TotalLinks: 3}, Daily: []DailyPoint{}, Top: []TopLink{}, Tags: []TagBucket{}}}
+	r := mount(NewHandler(f))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/dashboard?days=999999&limit=0", nil))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 365, f.days)
+	assert.Equal(t, 1, f.limit)
+	assert.Equal(t, authctxtest.DefaultUser, f.uid)
+	assert.Contains(t, rec.Body.String(), `"summary":{"total_links":3`)
+}
+
+func TestHandler_Dashboard_Err(t *testing.T) {
+	r := mount(NewHandler(&fakeRepo{err: errors.New("db")}))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }

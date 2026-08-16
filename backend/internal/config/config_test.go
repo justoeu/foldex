@@ -94,6 +94,26 @@ func TestLoad_ClampsConcurrency(t *testing.T) {
 	assert.Equal(t, 1, cfg.PreviewConcurrency, "negative concurrency should be clamped to 1")
 }
 
+func TestLoad_ClampsWorkerConcurrencyAtResourceCeiling(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x@y/z")
+	t.Setenv("PREVIEW_WORKER_CONCURRENCY", "100000")
+	t.Setenv("CHANGECHECK_WORKER_CONCURRENCY", "100000")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, 8, cfg.PreviewConcurrency)
+	assert.Equal(t, 8, cfg.ChangeCheckConcurrency)
+}
+
+func TestLoad_UsesDefaultForNegativeChangeCheckConcurrency(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x@y/z")
+	t.Setenv("CHANGECHECK_WORKER_CONCURRENCY", "-3")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, 2, cfg.ChangeCheckConcurrency)
+}
+
 func TestLoad_IgnoresBadInts(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x@y/z")
 	t.Setenv("PREVIEW_WORKER_CONCURRENCY", "not-a-number")

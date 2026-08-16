@@ -2,14 +2,22 @@ package push
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"foldex/internal/pkg/httperr"
-
 	"foldex/internal/pkg/authctx"
+)
+
+// MaxSubscriptionsPerUser bounds persisted channels and each notification fanout.
+const MaxSubscriptionsPerUser = 16
+
+var (
+	ErrInvalidSubscription = errors.New("push: invalid subscription")
+	ErrSubscriptionLimit   = errors.New("push: subscription limit reached")
 )
 
 // Subscription mirrors a row of push_subscription (migration 000011).
@@ -22,8 +30,7 @@ type Subscription struct {
 	LastUsedAt *time.Time
 }
 
-// Repository persists Web Push subscriptions. Single-user model — no user
-// id; revisit when multi-user lands.
+// Repository persists Web Push subscriptions.
 type Repository struct {
 	pool *pgxpool.Pool
 }
@@ -35,10 +42,20 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 // row and just refreshing the keys avoids subscription bloat.
 func (r *Repository) Save(ctx context.Context, uid authctx.UserID, endpoint, p256dh, auth string) (Subscription, error) {
 	if endpoint == "" || p256dh == "" || auth == "" {
-		return Subscription{}, httperr.New(400, "invalid_subscription", "endpoint, p256dh and auth are required")
+		return Subscription{}, ErrInvalidSubscription
 	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return Subscription{}, fmt.Errorf("save push subscription begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := reserveSubscriptionSlot(ctx, tx, uid, endpoint); err != nil {
+		return Subscription{}, err
+	}
+
 	var s Subscription
-	err := r.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
         INSERT INTO push_subscription (user_id, endpoint, p256dh, auth, last_used_at)
         VALUES ($1, $2, $3, $4, NULL)
         ON CONFLICT (endpoint) DO UPDATE
@@ -52,7 +69,34 @@ func (r *Repository) Save(ctx context.Context, uid authctx.UserID, endpoint, p25
 	if err != nil {
 		return Subscription{}, fmt.Errorf("save push subscription: %w", err)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return Subscription{}, fmt.Errorf("save push subscription commit: %w", err)
+	}
 	return s, nil
+}
+
+func reserveSubscriptionSlot(ctx context.Context, tx pgx.Tx, uid authctx.UserID, endpoint string) error {
+	var lockedUser int64
+	if err := tx.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).Scan(&lockedUser); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvalidSubscription
+		}
+		return fmt.Errorf("save push subscription lock owner: %w", err)
+	}
+
+	var existing, matching int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*), count(*) FILTER (WHERE endpoint = $2)
+		FROM push_subscription
+		WHERE user_id = $1
+	`, int64(uid), endpoint).Scan(&existing, &matching); err != nil {
+		return fmt.Errorf("save push subscription count: %w", err)
+	}
+	if matching == 0 && existing >= MaxSubscriptionsPerUser {
+		return ErrSubscriptionLimit
+	}
+	return nil
 }
 
 // List returns uid's live subscriptions — the fan-out target for a
@@ -69,7 +113,8 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID) ([]Subscripti
         FROM push_subscription
         WHERE user_id = $1
         ORDER BY id ASC
-    `, int64(uid))
+		LIMIT $2
+    `, int64(uid), MaxSubscriptionsPerUser)
 	if err != nil {
 		return nil, fmt.Errorf("list push subscriptions: %w", err)
 	}
@@ -85,30 +130,23 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID) ([]Subscripti
 	return out, rows.Err()
 }
 
-// DeleteByEndpoint is invoked by the sender when the push service returns
-// 404/410 — the convention for "this endpoint is gone, stop sending". No-op
-// when the row doesn't exist (idempotent).
-// DeleteByEndpoint is deliberately NOT owner-scoped: it is called ONLY from the
-// sender's 404/410 handling (RFC 8030 §7.3), where the push service itself has
-// told us the channel is dead. The endpoint is globally unique, so removing it
-// by endpoint alone is correct regardless of who currently owns the row.
-//
-// The user-facing DELETE /api/push/subscriptions must NOT use this — it takes
-// the endpoint from the request body, so an unscoped delete would let anyone who
-// learns another user's endpoint silence their notifications. Use
-// DeleteByEndpointForUser there.
-func (r *Repository) DeleteByEndpoint(ctx context.Context, endpoint string) error {
-	//nolint:tenantscope // sender-only; see doc comment above
-	_, err := r.pool.Exec(ctx, `DELETE FROM push_subscription WHERE endpoint = $1`, endpoint)
+// DeleteGone removes subscriptions that returned RFC 8030's permanent 404/410
+// response. Ownership prevents a concurrent re-subscribe from deleting a row
+// that moved to another account after the sender listed it.
+func (r *Repository) DeleteGone(ctx context.Context, uid authctx.UserID, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.pool.Exec(ctx, `
+        DELETE FROM push_subscription
+        WHERE user_id = $1 AND id = ANY($2::bigint[])
+    `, int64(uid), ids)
 	if err != nil {
-		return fmt.Errorf("delete push subscription: %w", err)
+		return fmt.Errorf("delete gone push subscriptions: %w", err)
 	}
 	return nil
 }
 
-// MarkUsed bumps last_used_at after a successful Notify. Used for
-// observability — old `last_used_at` values are candidates for pruning when
-// the user dropped the foldex tab/extension years ago.
 // DeleteByEndpointForUser is the user-facing unsubscribe. Silent no-op when the
 // endpoint belongs to someone else — the caller returns 204 either way, so this
 // cannot be used to probe whether an endpoint exists on another account.
@@ -121,10 +159,18 @@ func (r *Repository) DeleteByEndpointForUser(ctx context.Context, uid authctx.Us
 	return nil
 }
 
-func (r *Repository) MarkUsed(ctx context.Context, id int64) error {
-	_, err := r.pool.Exec(ctx, `UPDATE push_subscription SET last_used_at = now() WHERE id = $1`, id)
+// MarkUsed bumps last_used_at for successful deliveries in one write.
+func (r *Repository) MarkUsed(ctx context.Context, uid authctx.UserID, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.pool.Exec(ctx, `
+        UPDATE push_subscription
+        SET last_used_at = now()
+        WHERE user_id = $1 AND id = ANY($2::bigint[])
+    `, int64(uid), ids)
 	if err != nil {
-		return fmt.Errorf("mark used: %w", err)
+		return fmt.Errorf("mark push subscriptions used: %w", err)
 	}
 	return nil
 }

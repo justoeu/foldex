@@ -1,9 +1,10 @@
 import { useCallback, useMemo, type CSSProperties } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Trans, useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import { LinkCard } from './LinkCard'
-import { NoteCard } from './NoteCard'
+import { NoteCard, type NoteEntry } from './NoteCard'
 import { FolderCard } from './FolderCard'
 import { ListView } from './ListView'
 import { CompactGrid } from './CompactGrid'
@@ -16,6 +17,8 @@ import {
   usePinLink,
   useRefreshPreview,
 } from '../api/links'
+import { useDeleteNote, usePinNote } from '../api/notes'
+import { mapCachedEntries } from '../api/entries'
 import { useEscape } from '../hooks/useEscape'
 import { mergeAlphaCells } from '../lib/mergeAlphaCells'
 import type { Link as LinkT, Folder as FolderT, Entry, MergeSource } from '../api/types'
@@ -25,6 +28,7 @@ export type ViewMode = 'cards' | 'compact' | 'list'
 
 export type HomeProps = {
   entries: Entry[]
+  totalLinks: number
   folders: FolderT[]
   // Flat list of every folder (any depth). Used to resolve the current
   // folder's name/parent for the breadcrumb; `folders` itself is scoped
@@ -65,6 +69,7 @@ export type HomeProps = {
 
 export function Home({
   entries,
+  totalLinks,
   folders,
   allFolders,
   openFolder,
@@ -135,7 +140,7 @@ export function Home({
           </div>
           <div className="fx-pagehead-stats">
             <div className="fx-stat">
-              <div className="fx-stat-num">{entries.length + folders.reduce((a, f) => a + f.link_count, 0)}</div>
+              <div className="fx-stat-num">{totalLinks}</div>
               <div className="fx-stat-cap">{t('home.stat_links')}</div>
             </div>
             <div className="fx-stat">
@@ -251,13 +256,16 @@ export function CardsView({
     [onMergeEntries],
   )
 
-  // Lift link mutations once for the whole grid (N1-NEX-010) — LinkCard is
-  // presentational and receives stable callbacks (ListView askDelete pattern).
-  const del = useDeleteLink()
-  const pin = usePinLink()
-  const refresh = useRefreshPreview()
-  const markSeen = useMarkChangeSeen()
+  // Card mutation observers live once at grid level so memoized siblings keep
+  // stable callback props while one card changes.
+  const { mutate: deleteLink } = useDeleteLink()
+  const { mutate: pinLink } = usePinLink()
+  const { mutate: refreshPreview } = useRefreshPreview()
+  const { mutate: markChangeSeen } = useMarkChangeSeen()
+  const { mutate: deleteNote } = useDeleteNote()
+  const { mutate: pinNote } = usePinNote()
   const confirm = useConfirm()
+  const queryClient = useQueryClient()
   const onDeleteLink = useCallback(
     async (l: LinkT) => {
       const ok = await confirm({
@@ -266,16 +274,38 @@ export function CardsView({
         confirmLabel: t('link_card.delete_confirm_action'),
         destructive: true,
       })
-      if (ok) del.mutate(l.id)
+      if (ok) deleteLink(l.id)
     },
-    [confirm, del, t],
+    [confirm, deleteLink, t],
   )
   const onPinLink = useCallback(
-    (l: LinkT, pinned: boolean) => pin.mutate({ id: l.id, pinned }),
-    [pin],
+    (l: LinkT, pinned: boolean) => pinLink({ id: l.id, pinned }),
+    [pinLink],
   )
-  const onRefreshPreview = useCallback((id: number) => refresh.mutate(id), [refresh])
-  const onMarkSeen = useCallback((id: number) => markSeen.mutate(id), [markSeen])
+  const onRefreshPreview = useCallback((id: number) => refreshPreview(id), [refreshPreview])
+  const onMarkSeen = useCallback((id: number) => markChangeSeen(id), [markChangeSeen])
+  const onDeleteNote = useCallback(
+    async (note: NoteEntry) => {
+      const ok = await confirm({
+        title: t('note_card.delete_confirm_title', { title: note.title }),
+        message: t('note_card.delete_confirm_body'),
+        confirmLabel: t('note_card.delete_confirm_action'),
+        destructive: true,
+      })
+      if (ok) deleteNote(note.id)
+    },
+    [confirm, deleteNote, t],
+  )
+  const onPinNote = useCallback(
+    (note: NoteEntry, pinned: boolean) => pinNote({ id: note.id, pinned }),
+    [pinNote],
+  )
+  const onOpenNote = useCallback((note: NoteEntry) => {
+    const nowISO = new Date().toISOString()
+    mapCachedEntries(queryClient, (entry) => entry.kind === 'note' && entry.id === note.id
+      ? { ...entry, click_count: entry.click_count + 1, last_clicked_at: nowISO }
+      : entry)
+  }, [queryClient])
 
   // Default order: folders first (rule from CLAUDE.md), then entries in the
   // order the backend already returned them (pinned-first + active sort,
@@ -337,7 +367,17 @@ export function CardsView({
               />
             )
           }
-          return <NoteCard key={`note-${c.entry.id}`} note={c.entry} onEdit={onEditNote} onMergeWith={onMergeIntoNote} />
+          return (
+            <NoteCard
+              key={`note-${c.entry.id}`}
+              note={c.entry}
+              onEdit={onEditNote}
+              onMergeWith={onMergeIntoNote}
+              onDelete={onDeleteNote}
+              onPin={onPinNote}
+              onOpen={onOpenNote}
+            />
+          )
         })}
       </div>
     )
@@ -369,7 +409,15 @@ export function CardsView({
             onMarkSeen={onMarkSeen}
           />
         ) : (
-          <NoteCard key={`note-${e.id}`} note={e} onEdit={onEditNote} onMergeWith={onMergeIntoNote} />
+          <NoteCard
+            key={`note-${e.id}`}
+            note={e}
+            onEdit={onEditNote}
+            onMergeWith={onMergeIntoNote}
+            onDelete={onDeleteNote}
+            onPin={onPinNote}
+            onOpen={onOpenNote}
+          />
         ),
       )}
     </div>
@@ -424,5 +472,3 @@ export function FolderBreadcrumb({
     </div>
   )
 }
-
-

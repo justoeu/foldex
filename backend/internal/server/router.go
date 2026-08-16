@@ -81,6 +81,7 @@ type Deps struct {
 	AuthHandler    *auth.Handler
 	AdminHandler   *auth.AdminHandler
 	AuthMiddleware *auth.Middleware
+	FolderHandler  *folders.Handler
 
 	// FolderUnlockKey is the HMAC secret for folder-password unlock tokens
 	// (see folders.LoadOrGenerateFolderUnlockKey) — shared between the
@@ -95,6 +96,10 @@ func New(d Deps) http.Handler {
 		panic("server: AUTH_ENABLED requires AuthMiddleware")
 	}
 	r := chi.NewRouter()
+	var backupHandler *backup.Handler
+	if d.StorageBucket != nil {
+		backupHandler = backup.NewHandler(backup.NewService(d.Pool, d.StorageBucket, d.Logger), d.Logger)
+	}
 	// NOT chi's middleware.RealIP: that one rewrites RemoteAddr from
 	// X-Forwarded-For unconditionally, which is correct behind nginx and
 	// forgeable on a direct bind. See realip.go.
@@ -180,7 +185,9 @@ func New(d Deps) http.Handler {
 
 	r.Route("/api", func(api chi.Router) {
 		if d.Config.SharedSecret != "" {
-			api.Use(sharedSecretGuard(d.Config.SharedSecret))
+			api.Use(sharedSecretGuard(d.Config.SharedSecret, func(r *http.Request) bool {
+				return backupHandler != nil && backupHandler.AllowsDownloadNavigation(r)
+			}))
 		}
 		api.Use(auth.VaryCookie)
 		// The auth surface mounts OUTSIDE the principal middleware — most of it
@@ -245,7 +252,11 @@ func New(d Deps) http.Handler {
 				settings.NewHandler(settingsRepo).Mount(sr)
 			})
 			foldersRepo := folders.NewRepository(d.Pool)
-			pr.Route("/folders", folders.NewHandler(foldersRepo, d.FolderUnlockKey, settingsRepo).Mount)
+			folderHandler := d.FolderHandler
+			if folderHandler == nil {
+				folderHandler = folders.NewHandler(foldersRepo, d.FolderUnlockKey, settingsRepo)
+			}
+			pr.Route("/folders", folderHandler.Mount)
 
 			pr.Route("/links", links.NewHandler(linksRepo, d.Worker).
 				WithMetadataFetcher(d.LinkMetadataFetcher).
@@ -284,14 +295,14 @@ func New(d Deps) http.Handler {
 				statsHandler = statsHandler.WithStorage(d.StorageStatter)
 			}
 			pr.Route("/stats", statsHandler.Mount)
-			if d.StorageBucket != nil {
+			if backupHandler != nil {
 				// Backup export is every row and every file the caller owns, in
 				// one download. A bearer token pasted into an extension's
 				// configuration must not be able to produce that, and restore
 				// must not be able to overwrite it.
 				pr.Route("/backup", func(br chi.Router) {
 					br.Use(authgate.RejectAPIToken)
-					backup.NewHandler(backup.NewService(d.Pool, d.StorageBucket, d.Logger), d.Logger).Mount(br)
+					backupHandler.Mount(br)
 				})
 			}
 			if d.PushHandler != nil {
@@ -403,7 +414,7 @@ func healthz(pool *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-func sharedSecretGuard(expected string) func(http.Handler) http.Handler {
+func sharedSecretGuard(expected string, allowDelegatedRequest func(*http.Request) bool) func(http.Handler) http.Handler {
 	// HMAC both sides to a fixed-length digest before comparing. The raw
 	// subtle.ConstantTimeCompare returns 0 immediately when the lengths
 	// differ, leaking the secret length to a remote timing attacker.
@@ -416,7 +427,7 @@ func sharedSecretGuard(expected string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			got := r.Header.Get("X-Foldex-Secret")
 			gotSum := hmac256(compareKey, got)
-			if !hmac.Equal(gotSum, expectedSum) {
+			if !hmac.Equal(gotSum, expectedSum) && (allowDelegatedRequest == nil || !allowDelegatedRequest(r)) {
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte(`{"error":{"code":"unauthorized","message":"invalid or missing secret"}}`))
 				return

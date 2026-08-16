@@ -36,3 +36,10 @@ type TagBucket struct {
 	Clicks int64  `json:"clicks"`
 	Links  int64  `json:"links"`
 }
+
+type Dashboard struct {
+	Summary Summary      `json:"summary"`
+	Daily   []DailyPoint `json:"daily"`
+	Top     []TopLink    `json:"top"`
+	Tags    []TagBucket  `json:"tags"`
+}

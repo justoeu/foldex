@@ -1,8 +1,18 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { afterEach, describe, it, expect, vi } from 'vitest'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { FolderCard } from './FolderCard'
 import type { Folder, PreviewTile } from '../api/types'
+
+const RAPID_VIEW_DELAY_MS = 220
+
+afterEach(() => vi.useRealTimers())
+
+async function advanceRapidViewDelay() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(RAPID_VIEW_DELAY_MS)
+  })
+}
 
 function makeTile(i: number, og?: string): PreviewTile {
   return { id: i, title: `link-${i}`, og_image_url: og ?? null, favicon_url: null }
@@ -257,6 +267,7 @@ describe('FolderCard', () => {
     })
 
     it('shows the RapidView popover on hover when compact and the folder has content', async () => {
+      vi.useFakeTimers()
       render(
         <FolderCard
           folder={makeFolder({
@@ -280,11 +291,8 @@ describe('FolderCard', () => {
       const titleBtn = screen.getByRole('button', { name: 'Pesquisa' })
       const trigger = titleBtn.closest('.fx-rapidview-trigger') as HTMLElement
       fireEvent.mouseEnter(trigger)
-      // 220ms show delay + a small render buffer.
-      await waitFor(
-        () => expect(document.querySelector('.fx-rapidview')).not.toBeNull(),
-        { timeout: 1000 },
-      )
+      await advanceRapidViewDelay()
+      expect(document.querySelector('.fx-rapidview')).not.toBeNull()
       const popover = document.querySelector('.fx-rapidview')!
       // Subfolder listed first, then both links.
       expect(popover.textContent).toMatch(/Subpasta zeta/)
@@ -293,6 +301,7 @@ describe('FolderCard', () => {
     })
 
     it('shows "+N more" in the popover when the folder has more items than fit', async () => {
+      vi.useFakeTimers()
       const previewLinks = Array.from({ length: 4 }, (_, i) => ({
         id: i + 1,
         title: `link-${i + 1}`,
@@ -313,16 +322,15 @@ describe('FolderCard', () => {
       const titleBtn = screen.getByRole('button', { name: 'Trabalho' })
       const trigger = titleBtn.closest('.fx-rapidview-trigger') as HTMLElement
       fireEvent.mouseEnter(trigger)
-      await waitFor(
-        () => expect(document.querySelector('.fx-rapidview-more')).not.toBeNull(),
-        { timeout: 1000 },
-      )
+      await advanceRapidViewDelay()
+      expect(document.querySelector('.fx-rapidview-more')).not.toBeNull()
       // Backend's preview window already caps at 4; the +N more footer fills
       // the gap to the folder's actual total count.
       expect(document.querySelector('.fx-rapidview-more')?.textContent).toMatch(/\+46 more/)
     })
 
     it('does not render the RapidView popover for an empty folder', async () => {
+      vi.useFakeTimers()
       render(
         <FolderCard
           folder={makeFolder({
@@ -338,12 +346,12 @@ describe('FolderCard', () => {
       const titleBtn = screen.getByRole('button', { name: 'Trabalho' })
       const trigger = titleBtn.closest('.fx-rapidview-trigger') as HTMLElement
       fireEvent.mouseEnter(trigger)
-      // Wait past the show delay, then assert the popover never appeared.
-      await new Promise((r) => setTimeout(r, 400))
+      await advanceRapidViewDelay()
       expect(document.querySelector('.fx-rapidview')).toBeNull()
     })
 
     it('closes the RapidView popover when Escape is pressed', async () => {
+      vi.useFakeTimers()
       render(
         <FolderCard
           folder={makeFolder({
@@ -358,20 +366,14 @@ describe('FolderCard', () => {
         .getByRole('button', { name: 'Trabalho' })
         .closest('.fx-rapidview-trigger') as HTMLElement
       fireEvent.mouseEnter(trigger)
-      await waitFor(
-        () => expect(document.querySelector('.fx-rapidview')).not.toBeNull(),
-        { timeout: 1000 },
-      )
+      await advanceRapidViewDelay()
+      expect(document.querySelector('.fx-rapidview')).not.toBeNull()
       fireEvent.keyDown(window, { key: 'Escape' })
-      // Esc handler calls setOpen(false) synchronously; the popover should be
-      // gone on the next tick.
-      await waitFor(
-        () => expect(document.querySelector('.fx-rapidview')).toBeNull(),
-        { timeout: 200 },
-      )
+      expect(document.querySelector('.fx-rapidview')).toBeNull()
     })
 
     it('closes the RapidView popover on mouseLeave', async () => {
+      vi.useFakeTimers()
       render(
         <FolderCard
           folder={makeFolder({
@@ -386,18 +388,14 @@ describe('FolderCard', () => {
         .getByRole('button', { name: 'Trabalho' })
         .closest('.fx-rapidview-trigger') as HTMLElement
       fireEvent.mouseEnter(trigger)
-      await waitFor(
-        () => expect(document.querySelector('.fx-rapidview')).not.toBeNull(),
-        { timeout: 1000 },
-      )
+      await advanceRapidViewDelay()
+      expect(document.querySelector('.fx-rapidview')).not.toBeNull()
       fireEvent.mouseLeave(trigger)
-      await waitFor(
-        () => expect(document.querySelector('.fx-rapidview')).toBeNull(),
-        { timeout: 200 },
-      )
+      expect(document.querySelector('.fx-rapidview')).toBeNull()
     })
 
     it('compact=false (default) never opens the RapidView popover on hover', async () => {
+      vi.useFakeTimers()
       render(
         <FolderCard
           folder={makeFolder({
@@ -411,12 +409,12 @@ describe('FolderCard', () => {
         .getByRole('button', { name: 'Trabalho' })
         .closest('.fx-rapidview-trigger') as HTMLElement
       fireEvent.mouseEnter(trigger)
-      // Wait past the show delay, then assert nothing mounted.
-      await new Promise((r) => setTimeout(r, 400))
+      await advanceRapidViewDelay()
       expect(document.querySelector('.fx-rapidview')).toBeNull()
     })
 
     it('cancels the pending show-timer when mouseLeave fires before the delay elapsed', async () => {
+      vi.useFakeTimers()
       // Distinct from the other mouseLeave test: there we wait for the popover
       // to appear before leaving. Here we leave SYNCHRONOUSLY while the
       // setTimeout is still pending — covers the `clearTimeout` branch of
@@ -437,12 +435,12 @@ describe('FolderCard', () => {
       fireEvent.mouseEnter(trigger)
       // Leave well before the 220 ms show-delay would fire.
       fireEvent.mouseLeave(trigger)
-      // Wait past what the timer WOULD have been; nothing should appear.
-      await new Promise((r) => setTimeout(r, 400))
+      await advanceRapidViewDelay()
       expect(document.querySelector('.fx-rapidview')).toBeNull()
     })
 
     it('refuses to render an unsafe favicon URL in the RapidView popover', async () => {
+      vi.useFakeTimers()
       // Belt-and-suspenders for the safeImageUrl audit. If a future commit
       // forgets to wrap a call site, this test catches the regression at the
       // integration layer — not just at the unit level.
@@ -462,10 +460,8 @@ describe('FolderCard', () => {
         .getByRole('button', { name: 'Trabalho' })
         .closest('.fx-rapidview-trigger') as HTMLElement
       fireEvent.mouseEnter(trigger)
-      await waitFor(
-        () => expect(document.querySelector('.fx-rapidview')).not.toBeNull(),
-        { timeout: 1000 },
-      )
+      await advanceRapidViewDelay()
+      expect(document.querySelector('.fx-rapidview')).not.toBeNull()
       // Title is rendered (textContent escape is React's default), but no <img>
       // anywhere in the popover — the helper collapsed the unsafe URL to
       // undefined, so the fallback link icon ran instead.
