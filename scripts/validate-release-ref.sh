@@ -61,6 +61,30 @@ if [[ "$is_semver" == true ]]; then
       exit 1
     fi
   done
+  if ! git show "$target_sha:docker-compose.yml" | awk -v expected="$version" '
+    BEGIN {
+      backend_prefix = "image: justoeu/foldex-backend:"
+      web_prefix = "image: justoeu/foldex-web:"
+      backend_expected = backend_prefix "${FOLDEX_VERSION:-" expected "}"
+      web_expected = web_prefix "${FOLDEX_VERSION:-" expected "}"
+    }
+    {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      if (index(line, backend_prefix) == 1) {
+        backend++
+        if (line != backend_expected) bad = 1
+      }
+      if (index(line, web_prefix) == 1) {
+        web++
+        if (line != web_expected) bad = 1
+      }
+    }
+    END { exit !(backend == 1 && web == 1 && !bad) }
+  '; then
+    printf 'release tag %s does not match both Compose image defaults\n' "$release_tag" >&2
+    exit 1
+  fi
 fi
 
 short_sha=$(git rev-parse --short=7 "$target_sha")

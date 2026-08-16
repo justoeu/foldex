@@ -99,6 +99,13 @@ grep -Fq 'ref: ${{ needs.validate-release-ref.outputs.target_sha }}' <<<"$publis
   fail "publishers must build the validated target SHA, not the workflow SHA"
 grep -Fq "type=raw,value=latest,enable=" "$WORKFLOW" || fail "historical targets must not move latest"
 
+write_compose() {
+  local backend_version=$1 web_version=$2
+  # shellcheck disable=SC2016
+  printf 'services:\n  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-%s}\n  web:\n    image: justoeu/foldex-web:${FOLDEX_VERSION:-%s}\n' \
+    "$backend_version" "$web_version" >"$TMP/repo/docker-compose.yml"
+}
+
 git init --bare -q "$TMP/origin.git"
 git init -q "$TMP/repo"
 git -C "$TMP/repo" config user.name test
@@ -107,7 +114,8 @@ printf 'main\n' >"$TMP/repo/state"
 mkdir -p "$TMP/repo/web" "$TMP/repo/extension"
 printf '{"version":"1.2.3"}\n' >"$TMP/repo/web/package.json"
 printf '{"version":"1.2.3"}\n' >"$TMP/repo/extension/manifest.json"
-git -C "$TMP/repo" add state web/package.json extension/manifest.json
+write_compose 1.2.3 1.2.3
+git -C "$TMP/repo" add state web/package.json extension/manifest.json docker-compose.yml
 git -C "$TMP/repo" commit -qm main
 git -C "$TMP/repo" branch -M main
 git -C "$TMP/repo" remote add origin "$TMP/origin.git"
@@ -132,6 +140,24 @@ run_validator v1.2.3 refs/heads/main "$main_sha" "$tag_output"
 grep -q "^target_sha=$main_sha$" "$tag_output" || fail "new semver tag must target the dispatched main SHA"
 grep -q '^create_tag=true$' "$tag_output" || fail "missing semver tag was not scheduled for creation"
 grep -q '^publish_latest=true$' "$tag_output" || fail "main-tip semver must publish latest"
+
+for image in backend web; do
+  if [[ "$image" == backend ]]; then
+    write_compose 9.9.9 1.2.3
+  else
+    write_compose 1.2.3 9.9.9
+  fi
+  git -C "$TMP/repo" commit -qam "$image Compose mismatch"
+  git -C "$TMP/repo" push -qu origin main
+  mismatch_sha=$(git -C "$TMP/repo" rev-parse HEAD)
+  if run_validator v1.2.3 refs/heads/main "$mismatch_sha" "$TMP/$image-compose-mismatch-output" >/dev/null 2>&1; then
+    fail "release tag was accepted when the $image Compose default did not match"
+  fi
+  write_compose 1.2.3 1.2.3
+  git -C "$TMP/repo" commit -qam "restore $image Compose version"
+  git -C "$TMP/repo" push -qu origin main
+done
+
 if run_validator v9.9.9 refs/heads/main "$main_sha" "$TMP/mismatch-output" >/dev/null 2>&1; then
   fail "release tag was accepted when commit versions did not match"
 fi
@@ -171,6 +197,7 @@ fi
 git -C "$TMP/repo" switch -q main
 printf '{"version":"1.2.4"}\n' >"$TMP/repo/web/package.json"
 printf '{"version":"1.2.4"}\n' >"$TMP/repo/extension/manifest.json"
+write_compose 1.2.4 1.2.4
 git -C "$TMP/repo" commit -qam 'version 1.2.4'
 git -C "$TMP/repo" push -qu origin main
 release_sha=$(git -C "$TMP/repo" rev-parse HEAD)
