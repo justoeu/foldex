@@ -470,6 +470,13 @@ func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *st
 	// rename-happy account contend with real administration. A plain UPDATE
 	// is also the correct isolation: nothing below reads-then-writes.
 	if role == nil && status == nil {
+		// name is also optional in the DTO, so `PATCH {}` reaches here with all
+		// three nil. Dereferencing it would panic — recovered as a 500, but a
+		// crash path is not an input-validation answer. An edit that changes
+		// nothing returns the row unchanged.
+		if name == nil {
+			return r.GetUser(ctx, id)
+		}
 		u, err := scanUser(r.pool.QueryRow(ctx, `
 			UPDATE app_user SET name = $2, updated_at = now()
 			WHERE id = $1

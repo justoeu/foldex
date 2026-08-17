@@ -385,8 +385,12 @@ export function AdminUsersPage() {
                 value={inviteRole}
                 onChange={(e) => setInviteRole(e.target.value as Role)}
               >
-                <option value="user">{t('admin.role_user')}</option>
-                <option value="admin">{t('admin.role_admin')}</option>
+                {/* Same source as the row editor above: an invitation can mint
+                    an administrator but never an owner, which is exactly what
+                    ASSIGNABLE_ROLES encodes. */}
+                {ASSIGNABLE_ROLES.map((r) => (
+                  <option value={r} key={r}>{t(`admin.role_${r}`)}</option>
+                ))}
               </select>
             </label>
             <button

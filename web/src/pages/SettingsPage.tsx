@@ -13,6 +13,7 @@ import {
   useRemoveMasterPassword,
 } from '../api/settings'
 import { useCurrentUser } from '../auth/AuthProvider'
+import { isAdminRole } from '../auth/types'
 import { apiErrorCode as errCode } from '../lib/apiError'
 import type { AppView } from '../AppWorkspace'
 
@@ -122,7 +123,11 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
   // Read from the session rather than a prop, mirroring the server: the whole
   // /api/admin surface answers 404 for a non-admin, so the scope must not even
   // exist for them — hidden, not disabled.
-  const isAdmin = useCurrentUser()?.role === 'admin'
+  // isAdminRole, never `=== 'admin'`: the OWNER administers too, and an
+  // equality test here hid the whole administration scope from the one role
+  // that can reach the owner-only surfaces inside it.
+  const role = useCurrentUser()?.role
+  const isAdmin = role !== undefined && isAdminRole(role)
   const [scope, setScope] = useState<HubScope>('personal')
   const [section, setSection] = useState<HubSection>(
     isHubSection(initialSection) ? initialSection : 'overview',

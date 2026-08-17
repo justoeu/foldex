@@ -82,10 +82,20 @@ func (r *Repository) Audit(ctx context.Context, rec AuditRecord) error {
 	return nil
 }
 
-// truncateDetail keeps a long value from tripping the CHECK constraint and
-// failing the insert. Losing the tail of a detail beats losing the entry.
-func truncateDetail(s string) string {
-	const max = 512
+// truncateDetail keeps a long value from tripping audit_log's CHECK on `detail`
+// and failing the insert. Losing the tail of a detail beats losing the entry.
+func truncateDetail(s string) string { return truncateTo(s, maxAuditDetail) }
+
+// maxAuditDetail and maxAuditEmail mirror the CHECK constraints in migration
+// 000033. Named here so the pair moves together: exceeding either would abort
+// the INSERT, and an audit failure is logged rather than propagated — so the
+// entry would simply vanish.
+const (
+	maxAuditDetail = 512
+	maxAuditEmail  = MaxEmailLen
+)
+
+func truncateTo(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
@@ -101,21 +111,49 @@ func truncateDetail(s string) string {
 
 // ListAudit returns the newest entries, optionally narrowed to one action.
 //
-// Keyset pagination on (created_at, id) rather than OFFSET: the trail grows at
-// its head, so an offset-paged second page would re-show rows that the first
-// page already displayed as soon as anything was written between the two
-// requests.
+// Keyset pagination rather than OFFSET: the trail grows at its head, so an
+// offset-paged second page would re-show rows the first page already displayed
+// as soon as anything was written between the two requests.
+//
+// The predicates are BRANCHED in Go rather than expressed as an OR against an
+// empty-string parameter. pgx caches statements, so after a few executions Postgres
+// builds a GENERIC plan — and an OR against the same parameter is not sargable
+// there, so it cannot become an index condition. The filter would degrade to a
+// heap filter over a backward scan of the whole table, which on a trail
+// dominated by login.failed means reading hundreds of thousands of rows to fill
+// one 50-row page of a rare action. Four static strings keep every path on an
+// index; none of them interpolates user input.
+//
+// ORDER BY is id alone, matching the cursor. id is monotonic with created_at
+// (both come from the same INSERT) and was already the tiebreaker, so ordering
+// by it costs nothing in correctness and lets `id < $n` actually start the scan
+// instead of filtering after it.
 func (r *Repository) ListAudit(ctx context.Context, action string, beforeID int64, limit int) ([]AuditEntry, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := r.pool.Query(ctx, `
-		SELECT id, action, actor_email, target_email, detail, created_at
-		FROM audit_log
-		WHERE ($1 = '' OR action = $1)
-		  AND ($2 = 0 OR id < $2)
-		ORDER BY created_at DESC, id DESC
-		LIMIT $3`, action, beforeID, limit)
+	const projection = `SELECT id, action, actor_email, target_email, detail, created_at FROM audit_log `
+
+	var (
+		query string
+		args  []any
+	)
+	switch {
+	case action == "" && beforeID == 0:
+		query = projection + `ORDER BY id DESC LIMIT $1`
+		args = []any{limit}
+	case action == "":
+		query = projection + `WHERE id < $1 ORDER BY id DESC LIMIT $2`
+		args = []any{beforeID, limit}
+	case beforeID == 0:
+		query = projection + `WHERE action = $1 ORDER BY id DESC LIMIT $2`
+		args = []any{action, limit}
+	default:
+		query = projection + `WHERE action = $1 AND id < $2 ORDER BY id DESC LIMIT $3`
+		args = []any{action, beforeID, limit}
+	}
+
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list audit: %w", err)
 	}
@@ -129,4 +167,36 @@ func (r *Repository) ListAudit(ctx context.Context, action string, beforeID int6
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// AuditRetention is how long the trail is kept.
+//
+// Ninety days rather than the sweeper's ordinary retention: sessions and
+// challenges are operational state that stops mattering the moment it expires,
+// while an audit entry is evidence, and an investigation routinely reaches back
+// past a quarter. It is still finite, because the failed-login writer accepts a
+// row from any unauthenticated caller who can reach the port.
+const AuditRetention = 90 * 24 * time.Hour
+
+// SweepAuditLog deletes entries older than retain, in bounded batches.
+//
+// Batched because the first sweep after this ships may face a table nothing has
+// ever pruned: one unbounded DELETE would hold locks and write WAL for as long
+// as it takes, on a path that runs while the instance is serving. Each pass
+// removes at most one batch and the next tick continues — the table shrinks
+// over several sweeps instead of one long stall.
+func (r *Repository) SweepAuditLog(ctx context.Context, retain time.Duration) (int64, error) {
+	const batch = 5000
+	tag, err := r.pool.Exec(ctx, `
+		DELETE FROM audit_log
+		WHERE id IN (
+			SELECT id FROM audit_log
+			WHERE created_at < now() - $1::interval
+			ORDER BY id
+			LIMIT $2
+		)`, intervalArg(retain), batch)
+	if err != nil {
+		return 0, fmt.Errorf("sweep audit log: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

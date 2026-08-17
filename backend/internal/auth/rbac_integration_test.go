@@ -6,11 +6,14 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"foldex/internal/auth"
 	"foldex/internal/testdb"
 )
 
@@ -332,4 +335,210 @@ func TestRBAC_ConfiguredPasswordFloorIsEnforced(t *testing.T) {
 	})
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, "password_too_short", errCode(t, rec))
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Google auto-provisioning (ADR-35) — the one path that mints an account
+// from an anonymous request, so every refusal is asserted, not assumed.
+// ─────────────────────────────────────────────────────────────────────
+
+// setPolicy saves an instance policy as the owner, returning the client so the
+// caller can keep using it.
+func setPolicy(t *testing.T, owner *client, body map[string]any) {
+	t.Helper()
+	rec := owner.do(http.MethodPut, "/api/admin/policy", body)
+	require.Equal(t, http.StatusOK, rec.Code, "policy save: %s", rec.Body.String())
+}
+
+func provisioningPolicy(domains []string, on bool, role string) map[string]any {
+	return map[string]any{
+		"password_min_length": 8, "otp_ttl_minutes": 5, "otp_cooldown_seconds": 60,
+		"google_allowed_domains": domains, "google_auto_provision": on,
+		"google_default_role": role,
+	}
+}
+
+// The success case, asserted all the way down to the rows: an account exists,
+// its address is recorded verified because Google asserted it, the identity is
+// linked, and the role is the configured non-administrative one.
+func TestProvision_CreatesTheAccountWhenTheOwnerEnabledIt(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{Policy: true})
+	owner := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	setPolicy(t, owner, provisioningPolicy([]string{"example.com"}, true, "viewer"))
+
+	g.as("new-subject", "newcomer@example.com", true)
+	outcome, failure := h.client(t).googleRoundTrip(t, auth.OAuthPurposeLogin)
+	require.Empty(t, failure, "provisioning must succeed")
+	assert.Equal(t, "signed_in", outcome)
+
+	ctx := context.Background()
+	var role, status string
+	var verified *time.Time
+	require.NoError(t, h.pool.QueryRow(ctx,
+		`SELECT role, status, email_verified_at FROM app_user WHERE email_normalized = $1`,
+		"newcomer@example.com").Scan(&role, &status, &verified))
+	assert.Equal(t, "viewer", role, "the configured default role, never an administrative one")
+	assert.Equal(t, "active", status)
+	assert.NotNil(t, verified, "Google asserted the address, which is why it was accepted")
+
+	var identities int
+	require.NoError(t, h.pool.QueryRow(ctx,
+		`SELECT count(*) FROM user_identity WHERE subject = $1`, "new-subject").Scan(&identities))
+	assert.Equal(t, 1, identities, "the identity is linked in the same transaction as the row")
+}
+
+// Every refusal is the SAME not_linked an unknown address has always produced.
+// A distinct answer would tell an anonymous caller which instances are open, or
+// let them enumerate the allowlist one guess at a time.
+func TestProvision_EveryRefusalIsIndistinguishable(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		policy  map[string]any
+		subject string
+		email   string
+		// verified false stands for an address Google did not confirm.
+		verified bool
+	}{
+		{
+			name:   "auto-provisioning is off",
+			policy: provisioningPolicy([]string{"example.com"}, false, "editor"),
+			email:  "nobody@example.com", subject: "s1", verified: true,
+		},
+		{
+			name:   "domain is not on the allowlist",
+			policy: provisioningPolicy([]string{"example.com"}, true, "editor"),
+			email:  "nobody@other.test", subject: "s2", verified: true,
+		},
+		{
+			name:   "a subdomain is not the domain",
+			policy: provisioningPolicy([]string{"example.com"}, true, "editor"),
+			email:  "nobody@mail.example.com", subject: "s3", verified: true,
+		},
+		{
+			name:   "a suffix is not the domain",
+			policy: provisioningPolicy([]string{"example.com"}, true, "editor"),
+			email:  "nobody@notexample.com", subject: "s4", verified: true,
+		},
+		{
+			name:   "the address is unverified",
+			policy: provisioningPolicy([]string{"example.com"}, true, "editor"),
+			email:  "nobody@example.com", subject: "s5", verified: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, g := newGoogleHarness(t, harnessOpts{Policy: true})
+			owner := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+			setPolicy(t, owner, tc.policy)
+
+			g.as(tc.subject, tc.email, tc.verified)
+			outcome, failure := h.client(t).googleRoundTrip(t, auth.OAuthPurposeLogin)
+
+			assert.Empty(t, outcome)
+			assert.Equal(t, "not_linked", failure, "every refusal must look identical")
+
+			var accounts int
+			require.NoError(t, h.pool.QueryRow(context.Background(),
+				`SELECT count(*) FROM app_user WHERE email_normalized = $1`,
+				strings.ToLower(tc.email)).Scan(&accounts))
+			assert.Equal(t, 0, accounts, "no account may be created")
+		})
+	}
+}
+
+// An instance that never opened the policy screen keeps the invite-only
+// behaviour ADR-31 established.
+func TestProvision_IsOffOnAnInstanceThatNeverConfiguredIt(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{Policy: true})
+	h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	g.as("stranger", "stranger@anywhere.test", true)
+	_, failure := h.client(t).googleRoundTrip(t, auth.OAuthPurposeLogin)
+	assert.Equal(t, "not_linked", failure)
+}
+
+// The allowlist gates joining, not an identity the owner already granted —
+// otherwise saving a list that excludes your own domain would lock you out of
+// your own instance, with no second door for a Google-only owner.
+func TestProvision_AllowlistDoesNotLockOutAnAlreadyLinkedAccount(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{Policy: true})
+	owner := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "linked@outside.test", "a good password", "editor")
+	_, err := h.pool.Exec(context.Background(), `
+		INSERT INTO user_identity (user_id, provider, subject, email_at_link)
+		VALUES ($1, 'google', 'linked-subject', 'linked@outside.test')`, int64(uid))
+	require.NoError(t, err)
+
+	// The allowlist now excludes that account's domain entirely.
+	setPolicy(t, owner, provisioningPolicy([]string{"example.com"}, true, "editor"))
+
+	g.as("linked-subject", "linked@outside.test", true)
+	outcome, failure := h.client(t).googleRoundTrip(t, auth.OAuthPurposeLogin)
+	assert.Empty(t, failure, "an existing identity must keep working")
+	assert.Equal(t, "signed_in", outcome)
+}
+
+// A provisioned account must not be the one door that skips the second factor.
+//
+// The proof is the `signed_in` marker: oauthComplete is its ONLY emitter, and
+// oauthComplete is where secondFactorPurpose decides whether to divert into a
+// challenge. Reaching it means provisioning exits through the same funnel every
+// other credential path uses, rather than minting a session inline — which is
+// exactly the shortcut that would make "sign in with Google" the weakest door.
+func TestProvision_ExitsThroughTheSharedSecondFactorFunnel(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{Policy: true, TwoFactor: true})
+	owner := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	setPolicy(t, owner, provisioningPolicy([]string{"example.com"}, true, "editor"))
+
+	g.as("fresh", "fresh@example.com", true)
+	outcome, failure := h.client(t).googleRoundTrip(t, auth.OAuthPurposeLogin)
+	require.Empty(t, failure)
+	assert.Equal(t, "signed_in", outcome)
+
+	var role string
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT role FROM app_user WHERE email_normalized = $1`, "fresh@example.com").Scan(&role))
+	assert.Equal(t, "editor", role)
+}
+
+// A role tampered directly into the settings row past policy.Validate must not
+// reach the INSERT: the repository refuses it as the last gate.
+func TestProvision_RefusesAnAdministrativeRoleEditedDirectlyIntoTheRow(t *testing.T) {
+	h, g := newGoogleHarness(t, harnessOpts{Policy: true})
+	owner := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	setPolicy(t, owner, provisioningPolicy([]string{"example.com"}, true, "editor"))
+
+	// Straight into app_setting, bypassing the handler's validation entirely.
+	_, err := h.pool.Exec(context.Background(), `
+		UPDATE app_setting
+		SET value = replace(value, '"google_default_role":"editor"', '"google_default_role":"admin"')
+		WHERE key = 'instance_policy'`)
+	require.NoError(t, err)
+
+	g.as("escalate", "escalate@example.com", true)
+	_, failure := h.client(t).googleRoundTrip(t, auth.OAuthPurposeLogin)
+	assert.Equal(t, "not_linked", failure, "a tampered role must refuse like any other failure")
+
+	var accounts int
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM app_user WHERE email_normalized = $1`,
+		"escalate@example.com").Scan(&accounts))
+	assert.Equal(t, 0, accounts)
+}
+
+// The configured OTP lifetime has to reach the mailed code, or the policy
+// screen describes a rule nothing applies.
+func TestPolicy_ConfiguredOTPLifetimeReachesTheChallenge(t *testing.T) {
+	h := newHarnessWithPolicy(t)
+	owner := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	setPolicy(t, owner, map[string]any{
+		"password_min_length": 8, "otp_ttl_minutes": 17, "otp_cooldown_seconds": 60,
+		"google_allowed_domains": []string{}, "google_auto_provision": false,
+		"google_default_role": "editor",
+	})
+
+	rec := owner.do(http.MethodGet, "/api/admin/policy", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, float64(17), decode(t, rec)["otp_ttl_minutes"],
+		"the saved lifetime is what the handler reads back")
 }

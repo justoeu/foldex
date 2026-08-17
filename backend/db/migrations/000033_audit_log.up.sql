@@ -28,7 +28,15 @@ CREATE TABLE audit_log (
     detail       TEXT,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT audit_log_action_len_chk CHECK (length(action) BETWEEN 1 AND 64),
-    CONSTRAINT audit_log_detail_len_chk CHECK (detail IS NULL OR length(detail) <= 512)
+    CONSTRAINT audit_log_detail_len_chk CHECK (detail IS NULL OR length(detail) <= 512),
+    -- The failed-login writer records the ATTEMPTED address, and that path
+    -- deliberately never validates it: the response must be identical for
+    -- garbage and for a real account. Without these caps an unauthenticated
+    -- caller writes a 64 KiB "address" into a permanent row on every attempt,
+    -- and the per-address rate bucket cannot help — it is keyed by that same
+    -- unique string, so every attempt gets a fresh budget.
+    CONSTRAINT audit_log_actor_email_len_chk  CHECK (actor_email IS NULL OR length(actor_email) <= 320),
+    CONSTRAINT audit_log_target_email_len_chk CHECK (target_email IS NULL OR length(target_email) <= 320)
 );
 
 -- The screen reads newest-first, unfiltered or narrowed to one action. id is

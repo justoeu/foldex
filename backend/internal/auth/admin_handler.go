@@ -45,11 +45,23 @@ func NewAdminHandler(repo *Repository, m mailer.Mailer, dispatcher *mailer.Dispa
 
 func (h *AdminHandler) Mount(r chi.Router) {
 	r.Use(NoStore)
-	r.Get("/users", h.ListUsers)
-	r.Patch("/users/{id}", h.UpdateUser)
-	r.Delete("/users/{id}", h.DeleteUser)
-	r.Post("/users/{id}/sessions/revoke", h.RevokeUserSessions)
-	r.Post("/users/{id}/force-password-reset", h.ForcePasswordReset)
+	// Every route names the permission it needs, even where owner and admin
+	// currently hold identical sets. The administration screen renders the
+	// matrix to administrators as the enforced contract, so an entry nothing
+	// gates would make that screen describe a rule the server does not apply —
+	// and the day a role is added or narrowed, these mounts are what make the
+	// difference real instead of theoretical.
+	readUsers := authgate.RequirePermission(authctx.PermUsersRead)
+	writeUsers := authgate.RequirePermission(authctx.PermUsersWrite)
+	assignRoles := authgate.RequirePermission(authctx.PermRolesAssign)
+
+	r.With(readUsers).Get("/users", h.ListUsers)
+	// Role and status travel in the same PATCH, so the stricter of the two
+	// permissions gates it.
+	r.With(assignRoles).Patch("/users/{id}", h.UpdateUser)
+	r.With(writeUsers).Delete("/users/{id}", h.DeleteUser)
+	r.With(writeUsers).Post("/users/{id}/sessions/revoke", h.RevokeUserSessions)
+	r.With(writeUsers).Post("/users/{id}/force-password-reset", h.ForcePasswordReset)
 	// The only route in this file that is not open to every administrator. The
 	// group gate already established that the caller administers; this one asks
 	// the further question of whether they own the instance.

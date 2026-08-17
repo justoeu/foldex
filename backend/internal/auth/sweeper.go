@@ -121,6 +121,17 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 	}
 	n += at
 
+	// The audit trail. Kept far longer than the rest — an investigation reaches
+	// back further than a session does — but bounded all the same: the
+	// failed-login writer takes a row from any unauthenticated caller who can
+	// reach the port, which makes this the fastest-growing table on a probed
+	// instance and the only thing that stops it growing forever.
+	al, err := s.repo.SweepAuditLog(ctx, AuditRetention)
+	if err != nil {
+		s.logger.Error("audit log sweep", "err", err)
+	}
+	n += al
+
 	evicted := 0
 	for _, prune := range s.inMemory {
 		evicted += prune(s.memoryRetain())

@@ -263,6 +263,12 @@ func New(d Deps) http.Handler {
 			// every locked folder and read it.
 			pr.Route("/settings", func(sr chi.Router) {
 				sr.Use(authgate.RejectAPIToken)
+				// A viewer holds its library read-only, and the master password
+				// is what RESETS a locked folder's password — setting or
+				// clearing it is a mutation of the caller's own recovery
+				// credential, not a read. Reading the status stays open, which
+				// is why the gate is method-aware rather than blanket.
+				sr.Use(writeGate)
 				settings.NewHandler(settingsRepo).Mount(sr)
 			})
 			foldersRepo := folders.NewRepository(d.Pool)

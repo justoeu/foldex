@@ -83,7 +83,7 @@ func (r *Repository) Roles(ctx context.Context) ([]RoleSummary, error) {
 // screen that presents them as a single snapshot.
 func (r *Repository) Metrics(ctx context.Context) (InstanceMetrics, error) {
 	var m InstanceMetrics
-	var twoFactor, activeForRate int
+	var twoFactor int
 	err := r.pool.QueryRow(ctx, `
 		SELECT
 			(SELECT count(*) FROM app_user WHERE status = 'active'),
@@ -95,15 +95,16 @@ func (r *Repository) Metrics(ctx context.Context) (InstanceMetrics, error) {
 			(SELECT count(*) FROM app_user u
 			  WHERE u.status = 'active'
 			    AND EXISTS (SELECT 1 FROM totp_secret ts
-			                 WHERE ts.user_id = u.id AND ts.confirmed_at IS NOT NULL)),
-			(SELECT count(*) FROM app_user WHERE status = 'active')
+			                 WHERE ts.user_id = u.id AND ts.confirmed_at IS NOT NULL))
 	`).Scan(&m.ActiveUsers, &m.ActiveUsersAdded30, &m.PendingInvites,
-		&m.RolesInUse, &twoFactor, &activeForRate)
+		&m.RolesInUse, &twoFactor)
 	if err != nil {
 		return InstanceMetrics{}, fmt.Errorf("metrics: %w", err)
 	}
-	if activeForRate > 0 {
-		m.TwoFactorPercent = twoFactor * 100 / activeForRate
+	// Divided by ActiveUsers, which the same statement already counted: a second
+	// identical subquery would be one more scan for a number we hold.
+	if m.ActiveUsers > 0 {
+		m.TwoFactorPercent = twoFactor * 100 / m.ActiveUsers
 	}
 	m.PermissionCount = len(authctx.AllPermissions)
 

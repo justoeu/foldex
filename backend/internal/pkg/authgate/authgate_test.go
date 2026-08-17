@@ -122,3 +122,42 @@ func TestRequirePermission_RefusesWithForbiddenNotNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Contains(t, rec.Body.String(), "forbidden_role")
 }
+
+// RequireWrite gates unsafe verbs and lets safe ones through, which is what
+// keeps a read-only role able to READ. A blanket gate would have locked a
+// viewer out of its own library.
+func TestRequireWrite_SafeMethodsPassAndUnsafeOnesAreGated(t *testing.T) {
+	t.Parallel()
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	h := RequireWrite(authctx.PermContentWrite)(next)
+	viewer := authctx.Principal{UserID: 2, Role: authctx.RoleViewer, Via: authctx.ViaSession}
+
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		req := httptest.NewRequest(method, "/api/links", nil).WithContext(
+			authctx.WithPrincipal(context.Background(), viewer))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusNoContent, rec.Code, "%s must pass for a viewer", method)
+	}
+
+	for _, method := range []string{http.MethodPost, http.MethodPatch, http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/api/links", nil).WithContext(
+			authctx.WithPrincipal(context.Background(), viewer))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusForbidden, rec.Code, "%s must be refused for a viewer", method)
+	}
+
+	// And an editor is unaffected on every verb.
+	editor := authctx.Principal{UserID: 3, Role: authctx.RoleEditor, Via: authctx.ViaSession}
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/api/links", nil).WithContext(
+			authctx.WithPrincipal(context.Background(), editor))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusNoContent, rec.Code, "%s must pass for an editor", method)
+	}
+}

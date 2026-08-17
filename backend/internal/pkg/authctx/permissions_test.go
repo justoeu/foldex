@@ -76,20 +76,30 @@ func TestMatrix_UnknownRoleFailsClosed(t *testing.T) {
 	}
 }
 
-// AllPermissions drives the administration screen's matrix rows. A permission
-// missing from it would silently vanish from that screen while still being
-// enforced by the server — a matrix that lies about what the server does.
-func TestAllPermissions_CoversEveryPermissionTheMatrixGrants(t *testing.T) {
-	listed := make(map[authctx.Permission]bool, len(authctx.AllPermissions))
+// AllPermissions drives the administration screen's matrix COLUMNS, and
+// Role.Permissions() iterates it — so a permission missing from the slice would
+// silently vanish from both the screen and every role's reported set while the
+// middleware kept enforcing it.
+//
+// The expected contents are spelled out literally rather than derived from
+// AllPermissions itself. A test that ranged over the slice to check the slice
+// cannot fail: Permissions() is a subset of it by construction, so the obvious
+// "granted but unlisted" assertion is unreachable. Only a hardcoded list
+// catches a permission that was added to the matrix and forgotten here.
+func TestAllPermissions_IsExactlyTheDeclaredVocabulary(t *testing.T) {
+	assert.Equal(t, []authctx.Permission{
+		"content.read", "content.write",
+		"backup.export", "backup.restore", "import.run",
+		"users.read", "users.write", "roles.assign",
+		"invites.read", "invites.write",
+		"audit.read", "policy.read", "policy.write",
+		"instance.transfer",
+	}, authctx.AllPermissions)
+
+	seen := map[authctx.Permission]bool{}
 	for _, p := range authctx.AllPermissions {
-		require.False(t, listed[p], "duplicate entry %q", p)
-		listed[p] = true
+		require.False(t, seen[p], "duplicate entry %q", p)
+		seen[p] = true
 	}
-	for _, role := range authctx.AllRoles {
-		require.True(t, role.Valid(), "role %q", role)
-		for _, p := range role.Permissions() {
-			assert.True(t, listed[p], "%q is granted but missing from AllPermissions", p)
-		}
-	}
-	assert.Len(t, authctx.AllRoles, 4)
+	assert.Equal(t, []authctx.Role{"owner", "admin", "editor", "viewer"}, authctx.AllRoles)
 }

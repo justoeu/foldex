@@ -454,8 +454,14 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		// trail. The attempted address is recorded because a burst against one
 		// mailbox is precisely what this screen has to make visible.
 		if err := h.repo.Audit(r.Context(), AuditRecord{
-			Action:      AuditLoginFailed,
-			TargetEmail: NormalizeEmail(in.Email),
+			Action: AuditLoginFailed,
+			// Truncated because Login deliberately does NOT validate the
+			// address — it must answer identically for garbage and for a real
+			// account. Without a cap, an unauthenticated caller can write a
+			// 64 KiB "address" into a permanent row on every attempt, and the
+			// per-address rate bucket cannot help: it is keyed by that same
+			// unique string, so every attempt gets a fresh budget.
+			TargetEmail: truncateTo(NormalizeEmail(in.Email), maxAuditEmail),
 		}); err != nil {
 			h.logger.Error("audit login failure", "err", err)
 		}
