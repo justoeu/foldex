@@ -93,6 +93,9 @@ func truncateDetail(s string) string { return truncateTo(s, maxAuditDetail) }
 const (
 	maxAuditDetail = 512
 	maxAuditEmail  = MaxEmailLen
+	// maxAuditPageSize bounds one page of the trail. Shared with the handler so
+	// the range it validates and the range this clamps cannot drift apart.
+	maxAuditPageSize = 200
 )
 
 func truncateTo(s string, max int) string {
@@ -129,7 +132,7 @@ func truncateTo(s string, max int) string {
 // by it costs nothing in correctness and lets `id < $n` actually start the scan
 // instead of filtering after it.
 func (r *Repository) ListAudit(ctx context.Context, action string, beforeID int64, limit int) ([]AuditEntry, error) {
-	if limit <= 0 || limit > 200 {
+	if limit <= 0 || limit > maxAuditPageSize {
 		limit = 50
 	}
 	const projection = `SELECT id, action, actor_email, target_email, detail, created_at FROM audit_log `

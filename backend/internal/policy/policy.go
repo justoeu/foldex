@@ -113,17 +113,29 @@ func (p Policy) Validate() error {
 // excluded example.com itself, and guessing which the owner meant is how an
 // allowlist ends up wider than it looks.
 func validDomain(d string) bool {
-	if d == "" || len(d) > maxDomainLen || strings.ContainsAny(d, "/@ *:") {
+	if d == "" || len(d) > maxDomainLen {
 		return false
+	}
+	// An ALLOWLIST of characters, not a blocklist of the ones that looked
+	// dangerous. The blocklist this replaced ("/@ *:") let a newline through, so
+	// "a.b\nFAKE ENTRY" validated — and that string reaches an error message,
+	// which reaches a log line, where an embedded newline forges a whole log
+	// record. Enumerating what a hostname may contain closes that and every
+	// variant of it at once.
+	for i := 0; i < len(d); i++ {
+		c := d[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '.':
+		default:
+			return false
+		}
 	}
 	if strings.HasPrefix(d, ".") || strings.HasSuffix(d, ".") || !strings.Contains(d, ".") {
 		return false
 	}
-	if d != strings.ToLower(d) {
-		return false
-	}
 	for _, label := range strings.Split(d, ".") {
-		if label == "" {
+		// A label may not be empty, nor start or end with a hyphen (RFC 1035).
+		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
 			return false
 		}
 	}

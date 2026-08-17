@@ -72,6 +72,15 @@ func TestValidate_RejectsMalformedDomains(t *testing.T) {
 		"", "example", ".example.com", "example.com.", "http://example.com",
 		"user@example.com", "example.com/path", "*.example.com", "Example.com",
 		"exa mple.com", "example..com",
+		// The blocklist this replaced ("/@ *:") let control characters through,
+		// so a domain could carry a newline all the way into an error message
+		// and from there into a log line, where it forges a whole record.
+		"a.b\nFAKE LOG ENTRY", "a.b\rinjected", "a.b\ttab",
+		// Non-ASCII must be punycode before it gets here; accepting raw UTF-8
+		// would make two visually identical allowlists behave differently.
+		"exámple.com", "example.com\u0000",
+		// RFC 1035: a label may not start or end with a hyphen.
+		"-example.com", "example-.com", "a.-b.com",
 	} {
 		p := policy.Default()
 		p.GoogleAllowedDomains = []string{d}

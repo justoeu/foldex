@@ -542,3 +542,35 @@ func TestPolicy_ConfiguredOTPLifetimeReachesTheChallenge(t *testing.T) {
 	assert.Equal(t, float64(17), decode(t, rec)["otp_ttl_minutes"],
 		"the saved lifetime is what the handler reads back")
 }
+
+// The page size is range-checked BEFORE it narrows to int. Clamping after the
+// conversion is unsound: on a 32-bit build a value like 2^32+50 truncates to
+// 50, arriving as a plausible number no clamp can recognise as garbage.
+func TestAudit_PageSizeIsValidatedBeforeItNarrows(t *testing.T) {
+	h := newHarness(t)
+	owner := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	for _, limit := range []string{"4294967346", "9223372036854775807", "-1", "201", "abc"} {
+		rec := owner.do(http.MethodGet, "/api/admin/audit?limit="+limit, nil)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, "limit=%s must be refused", limit)
+		assert.Equal(t, "invalid_limit", errCode(t, rec))
+	}
+
+	// And a value inside the range still works.
+	assert.Equal(t, http.StatusOK, owner.do(http.MethodGet, "/api/admin/audit?limit=10", nil).Code)
+}
+
+// A domain carrying a newline reached an error message and from there a log
+// line, where it forges a whole record. The allowlist refuses it at the door.
+func TestPolicy_RefusesADomainThatCouldForgeALogRecord(t *testing.T) {
+	h := newHarnessWithPolicy(t)
+	owner := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	rec := owner.do(http.MethodPut, "/api/admin/policy", map[string]any{
+		"password_min_length": 8, "otp_ttl_minutes": 5, "otp_cooldown_seconds": 60,
+		"google_allowed_domains": []string{"evil.test\nlevel=ERROR msg=\"forged\""},
+		"google_auto_provision":  false, "google_default_role": "editor",
+	})
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "invalid_policy", errCode(t, rec))
+}

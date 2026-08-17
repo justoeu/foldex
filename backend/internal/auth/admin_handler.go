@@ -414,8 +414,13 @@ func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, err := optionalInt64(r.URL.Query().Get("limit"))
-	if err != nil {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_limit", "limit must be a number"))
+	// Range-checked BEFORE the conversion, not after. ListAudit clamps its own
+	// argument, but by then the int64 has already been narrowed to int — and on
+	// a 32-bit build a value like 2^32+50 truncates to 50, arriving as a
+	// perfectly plausible number that no clamp can recognise as garbage.
+	if err != nil || limit < 0 || limit > maxAuditPageSize {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_limit",
+			fmt.Sprintf("limit must be a number between 0 and %d", maxAuditPageSize)))
 		return
 	}
 	entries, err := h.repo.ListAudit(r.Context(), r.URL.Query().Get("action"), before, int(limit))
