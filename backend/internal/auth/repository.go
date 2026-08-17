@@ -34,14 +34,22 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 // Sentinel errors. Handlers map these onto responses; the mapping is
 // deliberately many-to-one on the login path (see handler.go).
 var (
-	ErrNoUser          = errors.New("auth: user not found")
-	ErrBadCredentials  = errors.New("auth: invalid credentials")
-	ErrSessionInvalid  = errors.New("auth: session invalid")
-	ErrSessionReuse    = errors.New("auth: refresh token reuse detected")
-	ErrInviteInvalid   = errors.New("auth: invite invalid")
-	ErrAlreadySetUp    = errors.New("auth: instance already has an active account")
-	ErrEmailTaken      = errors.New("auth: e-mail already registered")
-	ErrLastAdmin       = errors.New("auth: cannot remove the last active administrator")
+	ErrNoUser         = errors.New("auth: user not found")
+	ErrBadCredentials = errors.New("auth: invalid credentials")
+	ErrSessionInvalid = errors.New("auth: session invalid")
+	ErrSessionReuse   = errors.New("auth: refresh token reuse detected")
+	ErrInviteInvalid  = errors.New("auth: invite invalid")
+	ErrAlreadySetUp   = errors.New("auth: instance already has an active account")
+	ErrEmailTaken     = errors.New("auth: e-mail already registered")
+	ErrLastAdmin      = errors.New("auth: cannot remove the last active administrator")
+	// ErrOwnerImmutable guards the one account that must always be able to
+	// administer the instance. The owner's role and status move only through
+	// TransferOwnership, which hands the seat to someone else in the same
+	// statement — so there is no instant with zero owners, and no sequence of
+	// ordinary edits that reaches one.
+	ErrOwnerImmutable = errors.New("auth: the owner's role and status change only by transfer")
+	// ErrNotTransferable marks a transfer target that cannot hold the seat.
+	ErrNotTransferable = errors.New("auth: ownership can only pass to another active account")
 	ErrSelfTarget      = errors.New("auth: cannot perform this action on your own account")
 	ErrUserNotActive   = errors.New("auth: account is not active")
 	ErrPasswordMissing = errors.New("auth: account has no password credential")
@@ -491,6 +499,13 @@ func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *st
 		}
 		return User{}, fmt.Errorf("update user role: %w", err)
 	}
+	// The owner is out of reach of ordinary edits. Checked here, inside the
+	// advisory lock, rather than in the handler: the handler would have to read
+	// the row first, and between that read and this write a transfer could move
+	// the seat — leaving the edit applied to whoever now holds it.
+	if previousRole == authctx.RoleOwner && (role != nil || status != nil) {
+		return User{}, ErrOwnerImmutable
+	}
 	demoting := role != nil && !role.IsAdmin()
 	disabling := status != nil && *status == StatusDisabled
 	if demoting || disabling {
@@ -543,6 +558,18 @@ func (r *Repository) DeleteUser(ctx context.Context, id authctx.UserID) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(adminGuardLockKey)); err != nil {
 		return fmt.Errorf("delete user lock: %w", err)
 	}
+	var targetRole authctx.Role
+	switch err := tx.QueryRow(ctx,
+		`SELECT role FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(id)).Scan(&targetRole); {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrNoUser
+	case err != nil:
+		return fmt.Errorf("delete user role: %w", err)
+	case targetRole == authctx.RoleOwner:
+		// Deleting the owner would take every row it owns with it by cascade AND
+		// leave the seat empty, which no API call could then fill.
+		return ErrOwnerImmutable
+	}
 	if err := guardLastAdminTx(ctx, tx, id); err != nil {
 		return err
 	}
@@ -554,6 +581,103 @@ func (r *Repository) DeleteUser(ctx context.Context, id authctx.UserID) error {
 		return ErrNoUser
 	}
 	return tx.Commit(ctx)
+}
+
+// TransferOwnership hands the instance to another active account, demoting the
+// outgoing owner to admin.
+//
+// Both rows move in ONE statement. The partial unique index allows a single
+// owner, and it is checked per statement, so promoting first and demoting
+// second would fail on the promotion while demoting first would leave the
+// instance ownerless for the width of the transaction — the exact state the
+// index exists to forbid. A CASE expression over both ids sidesteps the
+// ordering question entirely.
+//
+// The target must be ACTIVE: handing the seat to a disabled or still-pending
+// account is a lockout that no remaining role could undo, since only the owner
+// may transfer.
+func (r *Repository) TransferOwnership(ctx context.Context, from, to authctx.UserID) (User, error) {
+	if from == to {
+		return User{}, ErrSelfTarget
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return User{}, fmt.Errorf("transfer begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(adminGuardLockKey)); err != nil {
+		return User{}, fmt.Errorf("transfer lock: %w", err)
+	}
+
+	// Lock both rows in id order. Two concurrent transfers taking them in
+	// opposite orders would otherwise deadlock, and the advisory lock above
+	// already serializes admin edits — this keeps the guarantee if that lock is
+	// ever narrowed.
+	first, second := from, to
+	if second < first {
+		first, second = second, first
+	}
+	roles := map[authctx.UserID]struct {
+		role   authctx.Role
+		status string
+	}{}
+	for _, id := range []authctx.UserID{first, second} {
+		var role authctx.Role
+		var status string
+		err := tx.QueryRow(ctx,
+			`SELECT role, status FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(id)).Scan(&role, &status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return User{}, ErrNoUser
+		}
+		if err != nil {
+			return User{}, fmt.Errorf("transfer read: %w", err)
+		}
+		roles[id] = struct {
+			role   authctx.Role
+			status string
+		}{role, status}
+	}
+	if roles[from].role != authctx.RoleOwner {
+		return User{}, ErrOwnerImmutable
+	}
+	if roles[to].status != StatusActive {
+		return User{}, ErrNotTransferable
+	}
+
+	// Not RETURNING: this statement touches two rows, so a QueryRow over it
+	// would read whichever one Postgres happened to emit first. The new owner is
+	// re-read explicitly below.
+	if _, err := tx.Exec(ctx, `
+		UPDATE app_user SET
+			role = CASE WHEN id = $1 THEN 'admin' ELSE 'owner' END,
+			-- Both principals' cached authorization is now wrong, so both epochs
+			-- move and every resolved principal is re-derived.
+			token_version = token_version + 1,
+			updated_at = now()
+		WHERE id IN ($1, $2)`, int64(from), int64(to)); err != nil {
+		return User{}, fmt.Errorf("transfer: %w", err)
+	}
+	u, err := scanUser(tx.QueryRow(ctx,
+		`SELECT `+userColumns+` FROM app_user WHERE app_user.id = $1`, int64(to)))
+	if err != nil {
+		return User{}, fmt.Errorf("transfer read new owner: %w", err)
+	}
+
+	// Neither account keeps a session: the outgoing owner's tokens carry a role
+	// they no longer hold, and the incoming owner's carry one they have just
+	// outgrown. Both re-authenticate, and the admin-2FA policy is re-evaluated
+	// against the new roles on the way back in.
+	if _, err := tx.Exec(ctx, `
+		UPDATE session SET revoked_at = now(), revoked_reason = $2
+		WHERE user_id IN ($1, $3) AND revoked_at IS NULL`,
+		int64(from), ReasonAdminRevoked, int64(to)); err != nil {
+		return User{}, fmt.Errorf("transfer revoke sessions: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, fmt.Errorf("transfer commit: %w", err)
+	}
+	return u, nil
 }
 
 // CreateInvite issues (or replaces) the open invitation for an e-mail and

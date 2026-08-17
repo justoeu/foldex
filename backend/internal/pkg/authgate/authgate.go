@@ -21,6 +21,30 @@ func RequireAdmin(next http.Handler) http.Handler {
 	})
 }
 
+// RequireWrite gates the unsafe verbs of a whole route group on a permission
+// and lets safe methods through untouched.
+//
+// Mounted on a group rather than on each mutating route so that a route added
+// later is covered by construction. That is only sound where every unsafe verb
+// in the group really is a write: /api/folders and /api/backup both answer POST
+// to operations that only READ — unlocking a folder proves a password in order
+// to see its contents, and exporting a backup serializes rows the caller
+// already owns — so those two gate per route instead, with RequirePermission.
+func RequireWrite(p authctx.Permission) func(http.Handler) http.Handler {
+	gate := RequirePermission(p)
+	return func(next http.Handler) http.Handler {
+		gated := gate(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet, http.MethodHead, http.MethodOptions:
+				next.ServeHTTP(w, r)
+			default:
+				gated.ServeHTTP(w, r)
+			}
+		})
+	}
+}
+
 // RequirePermission gates a route on one entry of the ADR-33 matrix.
 //
 // The answer is 403, not the 404 RequireAdmin gives. The two hide different

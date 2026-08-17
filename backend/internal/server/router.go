@@ -232,7 +232,21 @@ func New(d Deps) http.Handler {
 				})
 			}
 
-			pr.Route("/tags", tags.NewHandler(tags.NewRepository(d.Pool)).Mount)
+			// The viewer role is read-only over its OWN library, and this is
+			// where that means something. The gate is method-aware and mounted
+			// on the group, so a mutating route added to any of these packages
+			// later is refused without anyone having to remember — the same
+			// reason credential redaction lives at the root log handler rather
+			// than at each call site.
+			//
+			// /folders and /backup are deliberately absent: both answer POST to
+			// operations that only read, so they gate per route below.
+			writeGate := authgate.RequireWrite(authctx.PermContentWrite)
+
+			pr.Route("/tags", func(tr chi.Router) {
+				tr.Use(writeGate)
+				tags.NewHandler(tags.NewRepository(d.Pool)).Mount(tr)
+			})
 			settingsRepo := settings.NewRepository(d.Pool)
 			// /settings is ENTIRELY the master recovery password, which can
 			// clear any folder's password. That is a credential operation,
@@ -251,26 +265,36 @@ func New(d Deps) http.Handler {
 			}
 			pr.Route("/folders", folderHandler.Mount)
 
-			pr.Route("/links", links.NewHandler(linksRepo, d.Worker).
-				WithMetadataFetcher(d.LinkMetadataFetcher).
-				WithFolderGate(foldersRepo, d.FolderUnlockKey).
-				Mount)
+			pr.Route("/links", func(lr chi.Router) {
+				lr.Use(writeGate)
+				links.NewHandler(linksRepo, d.Worker).
+					WithMetadataFetcher(d.LinkMetadataFetcher).
+					WithFolderGate(foldersRepo, d.FolderUnlockKey).
+					Mount(lr)
+			})
 
 			// d.Storage is optional — when nil, Handler.Delete's image cleanup is
 			// a no-op (CRUD itself doesn't need storage). The actual upload route
 			// (POST /api/notes/images) is mounted further below, gated the same
 			// way links' image upload is.
-			pr.Route("/notes", notes.NewHandler(notesRepo, d.Storage).
-				WithFolderGate(foldersRepo, d.FolderUnlockKey).
-				Mount)
+			pr.Route("/notes", func(nr chi.Router) {
+				nr.Use(writeGate)
+				notes.NewHandler(notesRepo, d.Storage).
+					WithFolderGate(foldersRepo, d.FolderUnlockKey).
+					Mount(nr)
+			})
 			pr.Route("/entries", entries.NewHandler(entries.NewRepository(d.Pool), foldersRepo, d.FolderUnlockKey).Mount)
 
 			// Screenshot and file-proxy endpoints are only registered when both
 			// a Screenshotter and Storage implementation are provided.
 			if fileHandler != nil {
-				pr.Post("/links/{id}/screenshot", fileHandler.CaptureAndStore)
-				pr.Post("/links/{id}/image", fileHandler.UploadImage)
-				pr.Delete("/links/{id}/image", fileHandler.DeleteImage)
+				// These hang off /api directly rather than inside the /links
+				// group, so they do not inherit its write gate and each needs it
+				// named. ProxyFile stays open: it is the read path, and note
+				// media is deliberately reachable without a session at all.
+				pr.With(writeGate).Post("/links/{id}/screenshot", fileHandler.CaptureAndStore)
+				pr.With(writeGate).Post("/links/{id}/image", fileHandler.UploadImage)
+				pr.With(writeGate).Delete("/links/{id}/image", fileHandler.DeleteImage)
 				pr.Get("/files/*", fileHandler.ProxyFile)
 
 				// Note inline-image upload lives in this same gate (rather than its
@@ -278,10 +302,13 @@ func New(d Deps) http.Handler {
 				// ProxyFile also being mounted — an uploaded note image would
 				// otherwise have nowhere to be served back from.
 				nih := notes.NewImageHandler(d.Storage, notesRepo, d.Logger)
-				pr.Post("/notes/images", nih.Upload)
+				pr.With(writeGate).Post("/notes/images", nih.Upload)
 			}
 
-			pr.Route("/import", importer.NewHandler(d.Pool, d.Worker).Mount)
+			pr.Route("/import", func(ir chi.Router) {
+				ir.Use(authgate.RequireWrite(authctx.PermImportRun))
+				importer.NewHandler(d.Pool, d.Worker).Mount(ir)
+			})
 			pr.Route("/export", exporter.NewHandler(d.Pool).Mount)
 			statsHandler := stats.NewHandler(stats.NewRepository(d.Pool))
 			if d.StorageStatter != nil {

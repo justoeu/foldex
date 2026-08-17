@@ -12,8 +12,16 @@ import (
 
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
 )
+
+// errOwnerImmutable is the one refusal every people-management route shares:
+// the owner's role and status move only through transfer.
+func errOwnerImmutable() error {
+	return httperr.New(http.StatusConflict, "owner_immutable",
+		"the owner's role and status change only by transferring the instance")
+}
 
 // AdminHandler serves /api/admin/users. Every route here sits behind
 // Authenticate + RequireAdmin; nothing in this file re-checks the role.
@@ -40,6 +48,11 @@ func (h *AdminHandler) Mount(r chi.Router) {
 	r.Delete("/users/{id}", h.DeleteUser)
 	r.Post("/users/{id}/sessions/revoke", h.RevokeUserSessions)
 	r.Post("/users/{id}/force-password-reset", h.ForcePasswordReset)
+	// The only route in this file that is not open to every administrator. The
+	// group gate already established that the caller administers; this one asks
+	// the further question of whether they own the instance.
+	r.With(authgate.RequirePermission(authctx.PermInstanceTransfer)).
+		Post("/users/{id}/transfer-ownership", h.TransferOwnership)
 	r.Get("/invites", h.ListInvites)
 	r.Post("/invites", h.CreateInvite)
 	r.Delete("/invites/{id}", h.RevokeInvite)
@@ -120,6 +133,9 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrLastAdmin):
 		httperr.Write(w, errLastAdmin())
 		return
+	case errors.Is(err, ErrOwnerImmutable):
+		httperr.Write(w, errOwnerImmutable())
+		return
 	}
 	if err != nil {
 		h.logger.Error("admin update user", "err", err)
@@ -157,6 +173,8 @@ func (h *AdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 			httperr.Write(w, httperr.ErrNotFound)
 		case errors.Is(err, ErrLastAdmin):
 			httperr.Write(w, errLastAdmin())
+		case errors.Is(err, ErrOwnerImmutable):
+			httperr.Write(w, errOwnerImmutable())
 		default:
 			h.logger.Error("admin delete user", "err", err)
 			httperr.Write(w, httperr.ErrInternal)
@@ -236,6 +254,49 @@ func (h *AdminHandler) ForcePasswordReset(w http.ResponseWriter, r *http.Request
 func errLastAdmin() error {
 	return httperr.New(http.StatusConflict, "last_admin",
 		"this is the last active administrator")
+}
+
+// TransferOwnership hands the instance to another active account and demotes
+// the caller to admin.
+//
+// The outgoing owner is always the CALLER, never a path parameter: an endpoint
+// that took both ends would let one owner be replaced by a request that names
+// them, and the only principal entitled to give the seat away is the one
+// sitting in it. Both accounts lose their sessions, so the change cannot be
+// half-applied to a browser still holding the old role.
+func (h *AdminHandler) TransferOwnership(w http.ResponseWriter, r *http.Request) {
+	caller, _ := authctx.FromContext(r.Context())
+	id, err := httperr.ParseID(chi.URLParam(r, "id"))
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	user, err := h.repo.TransferOwnership(r.Context(), caller.UserID, authctx.UserID(id))
+	switch {
+	case errors.Is(err, ErrNoUser):
+		httperr.Write(w, httperr.ErrNotFound)
+		return
+	case errors.Is(err, ErrSelfTarget):
+		httperr.Write(w, httperr.New(http.StatusConflict, "self_target",
+			"you already own this instance"))
+		return
+	case errors.Is(err, ErrOwnerImmutable):
+		// The caller passed the permission gate but no longer holds the seat —
+		// a concurrent transfer moved it between the two.
+		httperr.Write(w, httperr.New(http.StatusConflict, "not_owner",
+			"only the current owner can transfer the instance"))
+		return
+	case errors.Is(err, ErrNotTransferable):
+		httperr.Write(w, httperr.New(http.StatusConflict, "target_not_active",
+			"ownership can only pass to an active account"))
+		return
+	}
+	if err != nil {
+		h.logger.Error("transfer ownership", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	httperr.JSON(w, http.StatusOK, user)
 }
 
 // ─────────────────────────────────────────────────────────────────────
