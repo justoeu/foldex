@@ -20,10 +20,9 @@ type PublicNoteResolver interface {
 }
 
 // PublicHandler serves the read-only rendered note page at GET /n/{id-or-slug},
-// mounted outside /api (same place /go/{id-or-slug} lives) so it's reachable
-// without the SHARED_SECRET guard — a note is meant to be shareable the same
-// way a link is. Unlike /go/, this renders content rather than redirecting:
-// a note has no external URL to forward to.
+// mounted outside /api (same place /go/{id-or-slug} lives) so it stays a
+// session-less share surface. Unlike /go/, this renders content rather than
+// redirecting: a note has no external URL to forward to.
 type PublicHandler struct {
 	repo PublicNoteResolver
 	// allowNumericIDs re-enables /n/42 — off by default since ADR-32, and for

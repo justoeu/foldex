@@ -8,36 +8,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestValidateSecureDefaults: non-loopback bind requires SHARED_SECRET.
+// TestValidateSecureDefaults: non-loopback bind requires AUTH_ENABLED.
 // CORS is irrelevant to the auth decision.
 func TestValidateSecureDefaults(t *testing.T) {
 	cases := []struct {
 		name    string
 		bind    string
-		secret  string
+		auth    bool
 		cors    []string
 		wantErr bool
 	}{
-		{"localhost loopback default", "127.0.0.1", "", []string{"*"}, false},
-		{"loopback alias", "localhost", "", []string{"*"}, false},
-		{"ipv6 loopback", "::1", "", []string{"*"}, false},
-		{"empty bind is loopback", "", "", []string{"*"}, false},
-		{"public bind + no secret + wildcard CORS", "0.0.0.0", "", []string{"*"}, true},
-		{"public bind + LAN IP + no secret", "192.168.1.10", "", []string{"*"}, true},
-		// Restricted CORS must NOT exempt missing secret on public bind:
-		{"public bind + restricted CORS still needs secret", "0.0.0.0", "", []string{"https://example"}, true},
-		{"public bind + multi-origin without secret", "0.0.0.0", "", []string{"https://a", "https://b"}, true},
-		{"public bind + secret set", "0.0.0.0", "topsecret", []string{"*"}, false},
-		{"public bind + secret + restricted CORS", "0.0.0.0", "topsecret", []string{"https://example"}, false},
+		{"localhost loopback default", "127.0.0.1", false, []string{"*"}, false},
+		{"loopback alias", "localhost", false, []string{"*"}, false},
+		{"ipv6 loopback", "::1", false, []string{"*"}, false},
+		{"empty bind is loopback", "", false, []string{"*"}, false},
+		{"public bind + auth off + wildcard CORS", "0.0.0.0", false, []string{"*"}, true},
+		{"public bind + LAN IP + auth off", "192.168.1.10", false, []string{"*"}, true},
+		// Restricted CORS must NOT exempt missing auth on public bind:
+		{"public bind + restricted CORS still needs auth", "0.0.0.0", false, []string{"https://example"}, true},
+		{"public bind + multi-origin without auth", "0.0.0.0", false, []string{"https://a", "https://b"}, true},
+		{"public bind + auth on", "0.0.0.0", true, []string{"*"}, false},
+		{"public bind + auth on + restricted CORS", "0.0.0.0", true, []string{"https://example"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := Config{BindAddr: tc.bind, SharedSecret: tc.secret, CORSOrigins: tc.cors}
+			c := Config{BindAddr: tc.bind, AuthEnabled: tc.auth, CORSOrigins: tc.cors}
 			err := c.validateSecureDefaults()
 			if tc.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "insecure config")
-				assert.Contains(t, err.Error(), "SHARED_SECRET")
+				assert.Contains(t, err.Error(), "AUTH_ENABLED")
 			} else {
 				require.NoError(t, err)
 			}
@@ -58,7 +58,6 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("PREVIEW_WORKER_CONCURRENCY", "")
 	t.Setenv("PREVIEW_FETCH_TIMEOUT_SEC", "")
 	t.Setenv("CORS_ORIGINS", "")
-	t.Setenv("SHARED_SECRET", "")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -66,7 +65,6 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, 4, cfg.PreviewConcurrency)
 	assert.Equal(t, 5, cfg.PreviewTimeoutSec)
 	assert.Equal(t, []string{"*"}, cfg.CORSOrigins)
-	assert.Empty(t, cfg.SharedSecret)
 }
 
 func TestLoad_Overrides(t *testing.T) {
@@ -75,7 +73,6 @@ func TestLoad_Overrides(t *testing.T) {
 	t.Setenv("PREVIEW_WORKER_CONCURRENCY", "8")
 	t.Setenv("PREVIEW_FETCH_TIMEOUT_SEC", "10")
 	t.Setenv("CORS_ORIGINS", "http://localhost:9088, https://foldex.example")
-	t.Setenv("SHARED_SECRET", "abc123")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -83,7 +80,6 @@ func TestLoad_Overrides(t *testing.T) {
 	assert.Equal(t, 8, cfg.PreviewConcurrency)
 	assert.Equal(t, 10, cfg.PreviewTimeoutSec)
 	assert.Equal(t, []string{"http://localhost:9088", "https://foldex.example"}, cfg.CORSOrigins)
-	assert.Equal(t, "abc123", cfg.SharedSecret)
 }
 
 func TestLoad_ClampsConcurrency(t *testing.T) {
@@ -426,13 +422,11 @@ func TestLoad_PublicNumericIDsOptIn(t *testing.T) {
 	}
 }
 
-// The shipped compose stack binds 0.0.0.0 so nginx can reach the backend, and
-// .env.example ships no SHARED_SECRET. Before authentication existed that
-// combination was genuinely unsafe and the guard was right to refuse it; now
-// AUTH_ENABLED answers the same question properly, and demanding a deprecated
-// header on top would mean the quickstart cannot boot.
+// The shipped compose stack binds 0.0.0.0 so nginx can reach the backend.
+// AUTH_ENABLED answers the "can anyone who reaches the port read the data"
+// question properly: it identifies the caller and scopes every row to them.
 func TestValidateSecureDefaults_AuthSatisfiesTheNonLoopbackGuard(t *testing.T) {
-	shipped := Config{BindAddr: "0.0.0.0", SharedSecret: "", AuthEnabled: true}
+	shipped := Config{BindAddr: "0.0.0.0", AuthEnabled: true}
 	if err := shipped.validateSecureDefaults(); err != nil {
 		t.Fatalf("the shipped compose configuration must boot: %v", err)
 	}
@@ -440,15 +434,9 @@ func TestValidateSecureDefaults_AuthSatisfiesTheNonLoopbackGuard(t *testing.T) {
 	// Turning auth OFF on that same bind is the case worth refusing: every
 	// request would be attributed to the bootstrap administrator, so anyone who
 	// reaches the port owns the library.
-	unguarded := Config{BindAddr: "0.0.0.0", SharedSecret: "", AuthEnabled: false}
+	unguarded := Config{BindAddr: "0.0.0.0", AuthEnabled: false}
 	if err := unguarded.validateSecureDefaults(); err == nil {
-		t.Error("AUTH_ENABLED=0 with no SHARED_SECRET on a network bind must be refused")
-	}
-
-	// And the old escape hatch still works for someone who wants auth off.
-	legacy := Config{BindAddr: "0.0.0.0", SharedSecret: "s3cret", AuthEnabled: false}
-	if err := legacy.validateSecureDefaults(); err != nil {
-		t.Errorf("SHARED_SECRET must still satisfy the guard: %v", err)
+		t.Error("AUTH_ENABLED=0 on a network bind must be refused")
 	}
 }
 
@@ -510,7 +498,6 @@ func TestLoad_CookieSecureFollowsThePublicURLScheme(t *testing.T) {
 			t.Setenv("DB_URL", "postgres://x@y/z")
 			t.Setenv("AUTH_PUBLIC_URL", tc.publicURL)
 			t.Setenv("BACKEND_BIND", tc.bind)
-			t.Setenv("SHARED_SECRET", "")
 
 			cfg, err := Load()
 			require.NoError(t, err)

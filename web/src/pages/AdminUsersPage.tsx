@@ -125,14 +125,7 @@ export function AdminUsersPage() {
   }
 
   return (
-    <div style={{ padding: 6, maxWidth: 860 }}>
-      <div className="fx-pagehead" style={{ marginBottom: 18 }}>
-        <div>
-          <div className="fx-pagehead-kicker">{t('admin.page_kicker')}</div>
-          <h1 className="fx-pagehead-h">{t('admin.page_title')}</h1>
-        </div>
-      </div>
-
+    <div>
       {error && (
         <div className="fx-inline-error" role="alert" style={{ fontSize: 12, marginBottom: 12 }}>
           {error}

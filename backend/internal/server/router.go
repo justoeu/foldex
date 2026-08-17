@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/json"
 	"log/slog"
 	"net"
@@ -72,8 +70,8 @@ type Deps struct {
 	LinkMetadataFetcher links.MetadataFetcher
 
 	// Web Push wiring. Setting PushHandler also mounts /api/push/vapid-key
-	// (kept inside /api so it inherits the SHARED_SECRET guard — see CLAUDE.md
-	// §4 invariant). Leaving it nil keeps the routes off entirely.
+	// (inside /api, behind the auth stack). Leaving it nil keeps the routes
+	// off entirely.
 	PushHandler *push.Handler
 
 	// Auth stack (ADR-30). The handlers are optional and control whether their
@@ -148,7 +146,7 @@ func New(d Deps) http.Handler {
 		AllowedOrigins: corsOrigins,
 		AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders: []string{
-			"Content-Type", "Authorization", "X-Foldex-Secret",
+			"Content-Type", "Authorization",
 			auth.CSRFHeader, folders.UnlockHeader,
 		},
 		AllowCredentials: true,
@@ -158,9 +156,9 @@ func New(d Deps) http.Handler {
 	r.Get("/healthz", healthz(d.Pool))
 
 	// Redirect/view routes outside /api keep the URL short, avoid CORS
-	// preflight, and stay reachable without the SHARED_SECRET guard — both
-	// /go/{id-or-slug} (link redirect) and /n/{id-or-slug} (note render) are
-	// meant to be shareable the same way.
+	// preflight, and stay session-less — both /go/{id-or-slug} (link
+	// redirect) and /n/{id-or-slug} (note render) are public share
+	// surfaces resolved by slug.
 	linksRepo := links.NewRepository(d.Pool)
 	notesRepo := notes.NewRepository(d.Pool).WithStorage(d.Storage)
 	var fileHandler *links.ScreenshotHandler
@@ -177,18 +175,13 @@ func New(d Deps) http.Handler {
 	redirect.NewHandler(linksRepo, d.Config.PublicNumericIDs).Mount(r)
 	notes.NewPublicHandler(notesRepo, d.Config.PublicNumericIDs).Mount(r)
 	if fileHandler != nil {
-		// Public note HTML references these exact URLs. Mount this one narrow
-		// UUID-keyed read before SHARED_SECRET; all other object keys remain in
-		// the guarded, principal-scoped /api group below.
+		// Public note HTML references these exact URLs. This one narrow
+		// UUID-keyed read is deliberately session-less; all other object
+		// keys remain in the principal-scoped /api group below.
 		r.Get("/api/files/notes/*", fileHandler.ProxyNoteFile)
 	}
 
 	r.Route("/api", func(api chi.Router) {
-		if d.Config.SharedSecret != "" {
-			api.Use(sharedSecretGuard(d.Config.SharedSecret, func(r *http.Request) bool {
-				return backupHandler != nil && backupHandler.AllowsDownloadNavigation(r)
-			}))
-		}
 		api.Use(auth.VaryCookie)
 		// The auth surface mounts OUTSIDE the principal middleware — most of it
 		// exists precisely to establish a principal, so requiring one would be
@@ -397,8 +390,8 @@ func healthz(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		// Healthz is intentionally public (no SHARED_SECRET gate) so external
-		// probes can check liveness. Surface only the boolean state — the raw
+		// Healthz is intentionally public so external probes can check
+		// liveness. Surface only the boolean state — the raw
 		// `pool.Ping` error can carry internal host/DSN text that doesn't
 		// belong in a response an unauthenticated caller can read.
 		body := map[string]any{"status": "ok", "db": "ok"}
@@ -412,35 +405,6 @@ func healthz(pool *pgxpool.Pool) http.HandlerFunc {
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(body)
 	}
-}
-
-func sharedSecretGuard(expected string, allowDelegatedRequest func(*http.Request) bool) func(http.Handler) http.Handler {
-	// HMAC both sides to a fixed-length digest before comparing. The raw
-	// subtle.ConstantTimeCompare returns 0 immediately when the lengths
-	// differ, leaking the secret length to a remote timing attacker.
-	// HMAC-SHA256 always yields 32 bytes, so the compare is now length-
-	// uniform. The HMAC key is fixed — we're not authenticating a payload,
-	// just normalizing the inputs to a constant size before comparison.
-	const compareKey = "foldex/shared-secret/compare"
-	expectedSum := hmac256(compareKey, expected)
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			got := r.Header.Get("X-Foldex-Secret")
-			gotSum := hmac256(compareKey, got)
-			if !hmac.Equal(gotSum, expectedSum) && (allowDelegatedRequest == nil || !allowDelegatedRequest(r)) {
-				w.WriteHeader(http.StatusUnauthorized)
-				_, _ = w.Write([]byte(`{"error":{"code":"unauthorized","message":"invalid or missing secret"}}`))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-func hmac256(key, msg string) []byte {
-	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write([]byte(msg))
-	return mac.Sum(nil)
 }
 
 func slogRequest(logger *slog.Logger) func(http.Handler) http.Handler {

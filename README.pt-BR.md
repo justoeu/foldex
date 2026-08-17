@@ -189,8 +189,8 @@ Os achados de SAST aparecem na aba **Security ▸ Code scanning** do repositóri
 
 Contas estão ligadas, então as rotas autenticadas de `/api/*` precisam de
 credencial. A única leitura da API sem sessão é `/api/files/notes/{uuid}.{ext}`, usada
-pelas páginas públicas `/n/{slug}` e ainda pública com `SHARED_SECRET` definido. Só
-chaves UUID canônicas de notas são aceitas; mídia de link continua protegida pelo segredo
+pelas páginas públicas `/n/{slug}`. Só
+chaves UUID canônicas de notas são aceitas; mídia de link continua protegida por sessão
 e owner-scoped. Abra
 <https://localhost:9444>, conclua a tela de setup, crie um **token de API** em
 Configurações → Tokens de API e exporte:
@@ -247,7 +247,8 @@ curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/auth/sessions -o /dev/null -w '
 curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/admin/users  -o /dev/null -w '%{http_code}\n'  # 403 (admin) / 404 (user)
 curl -s -H "$AUTH" -H "$JSON" -X POST localhost:9089/api/backup -o /dev/null -w '%{http_code}\n'  # 403
 
-# 9. Abre a SPA e testa ⌥K (paleta) / ⌥N (novo link) / ⌥M (nova nota); engrenagem na topbar.
+# 9. Abre a SPA e testa ⌥K (paleta) / ⌥N (novo link) / ⌥M (nova nota); engrenagem + menu do
+#    avatar (perfil e sair) na topbar.
 open https://localhost:9444
 ```
 
@@ -378,7 +379,8 @@ máquina de um usuário só numa rede privada — mas nessa configuração qualq
 alcance a porta é dono da biblioteca inteira, então mantenha o bind em loopback.
 
 **Adicionando pessoas.** Não existe cadastro aberto: um administrador envia um convite
-pela tela **Usuários** na topbar, e só o endereço daquele convite consegue aceitá-lo —
+pela tela **Usuários & convites** dentro do hub de configurações (escopo Administração),
+e só o endereço daquele convite consegue aceitá-lo —
 com senha ou com a conta Google correspondente. O link aparece uma vez, no momento em
 que o convite é criado, e também é enviado por e-mail. Credenciais de convite,
 redefinição e verificação ficam depois de `#` nesses links, portanto a requisição HTTP
@@ -505,12 +507,12 @@ o acesso ao Google**: não existe outro admin para redefinir a senha dele. Volta
 `AUTH_ENABLED=0` e reiniciar devolve o comportamento single-user com todo o conteúdo
 intacto, e é o caminho mais rápido de volta.
 
-> **`SHARED_SECRET` está depreciado.** Ele é anterior às contas: guarda `/api`, exceto a
-> leitura exata de mídia UUID exigida pelas páginas públicas `/n/{slug}`, não identifica
-> ninguém e não consegue escopar uma linha sequer. A autenticação
-> de verdade o substituiu. Mantenha só enquanto extensões antigas ainda estiverem
-> configuradas com ele — o backend avisa no boot enquanto estiver definido, e ele será
-> removido num release futuro.
+> **`SHARED_SECRET` foi removido.** Ele é anterior às contas: guardava `/api`,
+> não identificava ninguém e não conseguia escopar uma linha sequer — a
+> autenticação de verdade (ADR-30) o substituiu. A variável de ambiente, o
+> header `X-Foldex-Secret` e a fiação dele na SPA e na extensão acabaram;
+> apague-os do seu setup. A proteção de `/api/*` é exclusivamente trabalho da
+> pilha de autenticação.
 
 > **Links `/go/42` antigos pararam de funcionar?** Ids numéricos em `/go/{id}` e
 > `/n/{id}` agora vêm desligados. Essas rotas resolvem sem sessão — são links públicos

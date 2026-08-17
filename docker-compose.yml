@@ -93,7 +93,6 @@ services:
       PREVIEW_WORKER_CONCURRENCY: ${PREVIEW_WORKER_CONCURRENCY:-4}
       PREVIEW_FETCH_TIMEOUT_SEC: ${PREVIEW_FETCH_TIMEOUT_SEC:-5}
       PREVIEW_STRICT_SSRF: ${PREVIEW_STRICT_SSRF:-}
-      SHARED_SECRET: ${SHARED_SECRET:-}
       # Multi-user auth (ADR-30). ON by default since 1.13.0 — the first visit
       # to an upgraded install lands on the setup screen, which claims the
       # bootstrap administrator and with it every existing link, note, folder

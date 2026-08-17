@@ -10,7 +10,6 @@ function authHeaders(config, includeContentType = false) {
   const headers = {};
   if (includeContentType) headers["Content-Type"] = "application/json";
   if (config.apiToken) headers.Authorization = "Bearer " + config.apiToken;
-  if (config.sharedSecret) headers["X-Foldex-Secret"] = config.sharedSecret;
   return headers;
 }
 

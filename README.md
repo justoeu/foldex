@@ -208,8 +208,8 @@ SAST findings land in the repo **Security ▸ Code scanning** tab (SARIF upload)
 
 Accounts are on, so authenticated `/api/*` routes need a credential. The only
 session-less API read is `/api/files/notes/{uuid}.{ext}`, used by public `/n/{slug}`
-pages and still public when `SHARED_SECRET` is set. Only canonical note UUID keys
-are accepted; link media remains secret-gated and owner-scoped. Open <https://localhost:9444>, complete
+pages. Only canonical note UUID keys
+are accepted; link media remains session-gated and owner-scoped. Open <https://localhost:9444>, complete
 the setup screen, then create an **API token** under Settings → API tokens and export it:
 
 ```bash
@@ -264,7 +264,8 @@ curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/auth/sessions -o /dev/null -w '
 curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/admin/users  -o /dev/null -w '%{http_code}\n'  # 403 (admin) / 404 (user)
 curl -s -H "$AUTH" -H "$JSON" -X POST localhost:9089/api/backup -o /dev/null -w '%{http_code}\n'  # 403
 
-# 9. Open the SPA and try ⌥K (palette) / ⌥N (new link) / ⌥M (new note); Settings gear in the topbar.
+# 9. Open the SPA and try ⌥K (palette) / ⌥N (new link) / ⌥M (new note); Settings gear + avatar
+#    menu (profile & sign out) in the topbar.
 open https://localhost:9444
 ```
 
@@ -472,7 +473,8 @@ Google"* does not work — reset first, convert afterwards.
 
 Ways back into a Google-only account that loses its Google:
 
-1. An administrator uses **Send recovery** on the Users screen. Foldex sends a
+1. An administrator uses **Send recovery** on the Users & invitations screen inside the
+   settings hub (Administration scope). Foldex sends a
    single-use link only to your verified mailbox through SMTP; the administrator never
    sees a password or token, and your credential and sessions do not change until you
    use the link and choose your own password. If SMTP fails, nothing is changed.
@@ -505,11 +507,11 @@ whose Google access is gone**: no other admin exists to reset their password. Se
 `AUTH_ENABLED=0` and restarting reverts the instance to single-user behaviour with all
 content intact, which is the fastest way back in.
 
-> **`SHARED_SECRET` is deprecated.** It predates accounts: it gates `/api` except the
-> exact UUID-keyed note-media read required by public `/n/{slug}` pages,
-> identifies nobody, and cannot scope a single row. Real authentication replaced it.
-> Keep it only while older browser extensions are still configured with it — the backend
-> warns at boot while it is set, and it will be removed in a future release.
+> **`SHARED_SECRET` was removed.** It predates accounts: it gated `/api`,
+> identified nobody, and could not scope a single row — real authentication
+> (ADR-30) replaced it. The env var, the `X-Foldex-Secret` header and its
+> plumbing in the SPA and the extension are gone; delete them from your
+> setup. `/api/*` protection is exclusively the auth stack's job.
 
 > **Old `/go/42` links stopped working?** Numeric ids in `/go/{id}` and `/n/{id}` are off
 > by default now. Those routes resolve with no session — they are public share links —

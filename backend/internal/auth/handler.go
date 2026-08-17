@@ -270,6 +270,7 @@ func (h *Handler) Mount(r chi.Router) {
 		pr.Post("/logout-all", h.LogoutAll)
 		pr.Get("/sessions", h.Sessions)
 		pr.Delete("/sessions/{id}", h.RevokeSession)
+		pr.Patch("/profile", h.UpdateProfile)
 		pr.Post("/password/change", h.ChangePassword)
 		pr.Post("/password/set", h.SetPassword)
 		pr.Get("/identities", h.ListIdentities)
@@ -597,6 +598,48 @@ func (h *Handler) authenticatedPayload(u User, csrf string) authenticatedAuthRes
 		CSRFToken: csrf,
 		Features:  h.features,
 	}
+}
+
+type updateProfileInput struct {
+	Name string `json:"name"`
+}
+
+// maxProfileNameRunes bounds the display name. The column is TEXT, so the DB
+// imposes nothing — without a handler-side cap a hostile client could store a
+// multi-megabyte "name" that every user list then ships to the admin. Counted
+// in runes (not bytes) so the cap matches what the SPA's maxLength enforces
+// and a CJK-heavy name is judged by the same "characters" the error message
+// promises.
+const maxProfileNameRunes = 120
+
+// UpdateProfile edits the CALLER's own display name. The only self-service
+// profile field: e-mail is identity (changing it needs its own verification
+// flow), and role/status are administration, reachable exclusively through the
+// admin surface with its own guards. Answers with the same payload shape /me
+// uses, so the SPA can adopt the refreshed user without a second round-trip.
+func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+	p, _ := authctx.FromContext(r.Context())
+	in, err := httperr.DecodeJSON[updateProfileInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if utf8.RuneCountInString(name) > maxProfileNameRunes {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_name",
+			"name must be at most 120 characters"))
+		return
+	}
+	// UpdateUser with nil role/status is a plain rename: no last-admin guard
+	// can trigger, and the advisory lock it takes is the same one every other
+	// app_user write serializes on.
+	user, err := h.repo.UpdateUser(r.Context(), p.UserID, &name, nil, nil)
+	if err != nil {
+		h.logger.Error("update profile", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, cookieValue(r, CookieCSRF)))
 }
 
 func (h *Handler) Sessions(w http.ResponseWriter, r *http.Request) {

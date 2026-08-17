@@ -15,21 +15,10 @@ export const http = axios.create({
   timeout: 30_000,
 })
 
-// SHARED_SECRET wiring. Deprecated by the auth stack but still honoured: an
-// operator can run with both, and PR4 retires it. When the backend is started
-// with SHARED_SECRET set, every /api/* request needs X-Foldex-Secret.
-const SECRET_KEY = 'foldex.secret'
-
-export function getStoredSecret(): string {
-  if (typeof localStorage === 'undefined') return ''
-  return localStorage.getItem(SECRET_KEY) ?? ''
-}
-
-export function setStoredSecret(value: string): void {
-  if (typeof localStorage === 'undefined') return
-  if (value) localStorage.setItem(SECRET_KEY, value)
-  else localStorage.removeItem(SECRET_KEY)
-}
+// Releases before the SHARED_SECRET perimeter was removed stored its value
+// here; nothing reads it anymore, so clear the orphaned secret material once
+// per boot instead of letting it linger in localStorage forever.
+if (typeof localStorage !== 'undefined') localStorage.removeItem('foldex.secret')
 
 export const CSRF_COOKIE = 'fx_csrf'
 export const CSRF_HEADER = 'X-Foldex-CSRF'
@@ -53,9 +42,7 @@ const UNSAFE_METHODS = new Set(['post', 'put', 'patch', 'delete'])
 http.interceptors.request.use((config) => {
   const authConfig = config as RetryConfig
   authConfig._authEpoch ??= authEpoch
-  const secret = getStoredSecret()
   const headers = (config.headers ?? {}) as Record<string, string>
-  if (secret) headers['X-Foldex-Secret'] = secret
 
   if (UNSAFE_METHODS.has((config.method ?? 'get').toLowerCase())) {
     const csrf = readCsrfToken()
@@ -131,8 +118,6 @@ export async function authenticatedFetch(input: string, init: RequestInit = {}):
   const requestEpoch = authEpoch
   const request = () => {
     const headers = new Headers(init.headers)
-    const secret = getStoredSecret()
-    if (secret && !headers.has('X-Foldex-Secret')) headers.set('X-Foldex-Secret', secret)
     if (UNSAFE_METHODS.has((init.method ?? 'get').toLowerCase())) {
       const csrf = readCsrfToken()
       if (csrf && !headers.has(CSRF_HEADER)) headers.set(CSRF_HEADER, csrf)

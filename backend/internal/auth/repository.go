@@ -448,6 +448,25 @@ func guardLastAdminTx(ctx context.Context, tx pgx.Tx, target authctx.UserID) err
 // against themselves. A promotion revokes every existing session before this
 // transaction commits, so the new role is never inherited by an old login.
 func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *string, role *authctx.Role, status *string) (User, error) {
+	// Pure rename fast path: with no role/status to change, the last-admin
+	// guard can never fire, so the instance-wide admin-guard advisory lock —
+	// which serializes every admin user-edit — buys nothing while letting a
+	// rename-happy account contend with real administration. A plain UPDATE
+	// is also the correct isolation: nothing below reads-then-writes.
+	if role == nil && status == nil {
+		u, err := scanUser(r.pool.QueryRow(ctx, `
+			UPDATE app_user SET name = $2, updated_at = now()
+			WHERE id = $1
+			RETURNING `+userColumns, int64(id), *name))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return User{}, ErrNoUser
+		}
+		if err != nil {
+			return User{}, fmt.Errorf("update user rename: %w", err)
+		}
+		return u, nil
+	}
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return User{}, fmt.Errorf("update user begin: %w", err)

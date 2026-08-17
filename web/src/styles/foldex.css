@@ -783,16 +783,98 @@
 
 /* ─── view-mode segment ────────────────────────────────────────────── */
 
+/* Container is shared with the settings-hub scope segment (.fx-hub-seg);
+   the -active rule lives there so both segments stay in lockstep. */
 .fx-viewseg { display: flex; gap: 2px; padding: 3px; background: var(--fx-bg-tint); border-radius: 10px; }
 .fx-vs { width: 30px; height: 32px; display: grid; place-items: center; border-radius: 7px; color: var(--fx-ink-3); transition: background .15s, color .15s; }
 .fx-vs:hover { color: var(--fx-ink); }
-.fx-vs-active { background: var(--fx-surface-3); color: var(--fx-accent); box-shadow: var(--fx-shadow-1); }
 .fx-vs-density { width: 28px; }
 .fx-viewseg-sep {
   display: inline-block; width: 1px; align-self: stretch;
   background: var(--fx-border-2);
   margin: 4px 4px;
 }
+
+/* ─── settings hub ─────────────────────────────────────────────────── */
+
+/* Scope segment (Personal × Administration) — same visual language as the
+   topbar's fx-viewseg (shared container + active rules below), but with text
+   labels because the two scopes need names, not glyphs. Hidden entirely for
+   non-admins (RBAC): the whole administration surface 404s for them
+   server-side. */
+.fx-viewseg, .fx-hub-seg { display: flex; gap: 2px; padding: 3px; background: var(--fx-bg-tint); border-radius: 10px; }
+.fx-hub-seg { display: inline-flex; }
+.fx-hub-seg-btn {
+  display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 14px;
+  border-radius: 7px; font-size: 12px; font-weight: 550; color: var(--fx-ink-3);
+  transition: background .15s, color .15s;
+}
+.fx-hub-seg-btn:hover { color: var(--fx-ink); }
+.fx-vs-active, .fx-hub-seg-btn-active { background: var(--fx-surface-3); color: var(--fx-accent); box-shadow: var(--fx-shadow-1); }
+
+.fx-hub-section-label {
+  font-family: var(--fx-mono); font-size: 11px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--fx-ink-4); margin: 2px 0 0;
+}
+
+.fx-hub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(216px, 1fr)); gap: 12px; }
+.fx-hub-tile {
+  display: flex; gap: 12px; align-items: flex-start; padding: 14px;
+  background: var(--fx-surface-2);
+  border: 1px solid var(--fx-border); border-radius: 13px; text-align: left;
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+.fx-hub-tile:hover { border-color: var(--fx-accent-2); box-shadow: var(--fx-shadow-1); transform: translateY(-1px); }
+.fx-hub-tile:active { transform: translateY(0); }
+.fx-hub-tile:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
+.fx-hub-tile-icon {
+  width: 34px; height: 34px; flex: none; display: grid; place-items: center;
+  border-radius: 9px; background: var(--fx-bg-tint); color: var(--fx-accent);
+}
+.fx-hub-tile-title { font-size: 13px; font-weight: 600; color: var(--fx-ink); letter-spacing: -0.01em; }
+.fx-hub-tile-desc { display: block; font-size: 11px; color: var(--fx-ink-3); line-height: 1.45; margin-top: 3px; }
+
+/* Avatar: initials square reused by the profile section and the topbar user
+   menu button. Gradient uses the accent tokens (not literals) so dark mode —
+   where --fx-accent-2 shifts — stays consistent with pin badges/side dots. */
+.fx-avatar {
+  width: 42px; height: 42px; flex: none; display: grid; place-items: center;
+  border-radius: 12px; font-size: 14px; font-weight: 700; letter-spacing: 0.02em;
+  color: #fff; background: linear-gradient(135deg, var(--fx-accent), var(--fx-accent-2));
+}
+.fx-avatar-sm { width: 28px; height: 28px; border-radius: 8px; font-size: 11px; }
+
+/* Topbar user menu (avatar button + portaled dropdown, same pattern as the
+   LocalePicker — the topbar clips absolutely-positioned children). */
+.fx-userbtn {
+  height: 32px; display: inline-flex; align-items: center; border-radius: 9px;
+  color: var(--fx-ink-3); transition: color .15s, box-shadow .15s;
+}
+.fx-userbtn:hover { color: var(--fx-ink); }
+.fx-userbtn-active { color: var(--fx-accent); box-shadow: 0 0 0 1.5px var(--fx-accent-2); }
+.fx-usermenu {
+  position: fixed; z-index: 80; min-width: 232px; padding: 6px;
+  background: var(--fx-surface-2); border: 1px solid var(--fx-border); border-radius: 13px;
+  box-shadow: var(--fx-shadow-2, var(--fx-shadow-1));
+  backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+.fx-usermenu-head { display: flex; gap: 10px; align-items: center; padding: 8px 10px 10px; border-bottom: 1px solid var(--fx-border); margin-bottom: 6px; }
+.fx-usermenu-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-usermenu-mail { font-size: 11px; color: var(--fx-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-usermenu-item {
+  display: flex; width: 100%; gap: 8px; align-items: center; padding: 8px 10px;
+  border-radius: 8px; font-size: 12.5px; font-weight: 550; color: var(--fx-ink-2);
+  transition: background .15s, color .15s;
+}
+.fx-usermenu-item:hover { background: var(--fx-surface-3); color: var(--fx-ink); }
+.fx-usermenu-item-danger:hover { color: var(--fx-danger); }
+
+.fx-hub-back {
+  display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px 0 8px;
+  border-radius: 8px; font-size: 12px; font-weight: 550; color: var(--fx-ink-3);
+  background: var(--fx-bg-tint); transition: color .15s, background .15s;
+}
+.fx-hub-back:hover { color: var(--fx-ink); background: var(--fx-surface-3); }
 
 /* ─── list view ────────────────────────────────────────────────────── */
 

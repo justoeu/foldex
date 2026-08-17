@@ -27,6 +27,7 @@ const base = {
   onNewNote: vi.fn(),
   dark: false,
   setDark: vi.fn(),
+  onOpenProfile: vi.fn(),
 }
 
 beforeEach(() => {
@@ -44,7 +45,7 @@ beforeEach(() => {
 })
 
 describe('Topbar', () => {
-  it('navigates home/stats/import/settings', async () => {
+  it('navigates home/stats/settings', async () => {
     const setView = vi.fn()
     const onHome = vi.fn()
     renderWithProviders(<Topbar {...base} setView={setView} onHome={onHome} />)
@@ -53,10 +54,27 @@ describe('Topbar', () => {
     expect(onHome).toHaveBeenCalled()
     await user.click(screen.getByLabelText(/^stats$/i))
     expect(setView).toHaveBeenCalledWith('stats')
-    await user.click(screen.getByLabelText(/import/i))
-    expect(setView).toHaveBeenCalledWith('import')
     await user.click(screen.getByLabelText(/settings/i))
     expect(setView).toHaveBeenCalledWith('settings')
+  })
+
+  // The settings hub consolidated those surfaces: import/export is a hub tile
+  // and administration is the RBAC segment inside it — neither has a topbar
+  // button anymore, for admins included.
+  it('has no import or admin quicknav buttons', () => {
+    renderWithProviders(<Topbar {...base} />)
+    expect(screen.queryByLabelText(/import/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/^users$/i)).not.toBeInTheDocument()
+  })
+
+  it('exposes the user menu with the profile entry point', async () => {
+    const onOpenProfile = vi.fn()
+    renderWithProviders(<Topbar {...base} onOpenProfile={onOpenProfile} />)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: /account menu/i }))
+    await user.click(screen.getByRole('menuitem', { name: /profile/i }))
+    expect(onOpenProfile).toHaveBeenCalledTimes(1)
   })
 
   it('opens palette and updates search query', async () => {

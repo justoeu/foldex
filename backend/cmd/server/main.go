@@ -50,21 +50,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	// SHARED_SECRET predates accounts. It is a perimeter header: except for the
-	// UUID-keyed note-media read required by public notes, it gates /api/* and
-	// identifies nobody, so it can neither tell two users apart nor scope a
-	// single row. Real authentication replaced it in ADR-30; what is left is a
-	// second lock on the front door, and it is on its way out.
-	switch {
-	case cfg.SharedSecret != "":
-		logger.Warn("SHARED_SECRET is DEPRECATED and will be removed in a future release. " +
-			"It authenticates nobody and identifies nobody — AUTH_ENABLED does both. " +
-			"Keep it only while older browser extensions are still configured with it.")
-	case !cfg.AuthEnabled:
-		// The one genuinely dangerous combination: no accounts AND no perimeter.
-		// Every request is attributed to the bootstrap admin, so anyone who can
-		// reach the port owns the whole library.
-		logger.Warn("AUTH_ENABLED=0 and SHARED_SECRET is empty — /api/* is reachable with no " +
+	// SHARED_SECRET was removed outright. Operators with the variable still
+	// exported would otherwise get a silently ignored setting; one release of
+	// explicit warnings beats quiet confusion.
+	if os.Getenv("SHARED_SECRET") != "" {
+		logger.Warn("SHARED_SECRET is set but has been removed — the variable is ignored; delete it from the environment.")
+	}
+
+	if !cfg.AuthEnabled {
+		// The one genuinely dangerous combination: no accounts. Every request
+		// is attributed to the bootstrap admin, so anyone who can reach the
+		// port owns the whole library. validateSecureDefaults already refuses
+		// this on a non-loopback bind; warn here for the loopback case.
+		logger.Warn("AUTH_ENABLED=0 — /api/* is reachable with no " +
 			"credential at all, and every request is attributed to the bootstrap administrator. " +
 			"Safe only on a loopback bind; turn AUTH_ENABLED back on before exposing this server.")
 	}
@@ -390,9 +388,9 @@ const requestTimeout = 2 * time.Minute
 func newHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		// BindAddr defaults to 127.0.0.1 (single-user threat model). Override
-		// via BACKEND_BIND only when fronting with a reverse proxy AND
-		// SHARED_SECRET is set — config.validateSecureDefaults refuses the
-		// "wide open" combo at boot.
+		// via BACKEND_BIND only when fronting with a reverse proxy —
+		// config.validateSecureDefaults refuses the "wide open" combo at
+		// boot (non-loopback bind with AUTH_ENABLED=0).
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,

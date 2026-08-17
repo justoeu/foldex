@@ -6,10 +6,9 @@ import {
   setStoredConfig,
 } from "./config.js";
 
-function authHeaders(token, secret) {
+function authHeaders(token) {
   const headers = {};
   if (token) headers.Authorization = "Bearer " + token;
-  if (secret) headers["X-Foldex-Secret"] = secret;
   return headers;
 }
 
@@ -17,7 +16,6 @@ function normalizeOptions(values) {
   return {
     baseUrl: normalizeBaseUrl(values.baseUrl),
     apiToken: values.apiToken.trim(),
-    sharedSecret: values.sharedSecret.trim(),
   };
 }
 
@@ -36,7 +34,7 @@ export async function testConnection(
   await requestOriginAccess(config.baseUrl, chromeApi);
 
   const resp = await fetchImpl(apiUrl(config.baseUrl, "/api/tags"), {
-    headers: authHeaders(config.apiToken, config.sharedSecret),
+    headers: authHeaders(config.apiToken),
     redirect: "error",
   });
   if (resp.status === 401 || resp.status === 403) {
@@ -63,7 +61,6 @@ export function initOptionsPage({
     return {
       baseUrl: $("baseUrl").value,
       apiToken: $("apiToken").value,
-      sharedSecret: $("sharedSecret").value,
     };
   }
 
@@ -71,7 +68,6 @@ export function initOptionsPage({
     .then((config) => {
       $("baseUrl").value = config.baseUrl;
       $("apiToken").value = config.apiToken;
-      $("sharedSecret").value = config.sharedSecret;
     })
     .catch((error) =>
       setStatus("Could not load settings: " + error.message, "error"),

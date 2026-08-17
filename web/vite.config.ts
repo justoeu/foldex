@@ -86,8 +86,22 @@ export default defineConfig(({ mode }) => {
             // Returning undefined lets rolldown keep it colocated with its
             // sole importer's async chunk.
             if (id.includes('@tiptap') || id.includes('prosemirror')) return
+            // React's CJS-interop satellites must share vendor-react's chunk.
+            // When rolldown resolves their CommonJS `require('react')` against
+            // a different chunk, it duplicates a whole React copy into the
+            // importer's chunk instead of importing it — two React instances
+            // and top-level evaluation order that crashes at boot.
+            if (id.includes('use-sync-external-store') || id.includes('/scheduler/')) {
+              return 'vendor-react'
+            }
             if (id.includes('@mui') || id.includes('@emotion')) return 'vendor-mui'
-            if (id.includes('@tanstack') || id.includes('/axios/')) return 'vendor-query'
+            // axios stays colocated with src/api/client.ts (its only importer).
+            // Grouping it here made vendor-query and the client chunk import
+            // each other (client needs axios, vendor-query needed rolldown's
+            // interop helpers emitted into the client chunk) — a cross-chunk
+            // cycle whose top-level evaluation order left the helper binding
+            // undefined at boot ("e is not a function", white screen).
+            if (id.includes('@tanstack')) return 'vendor-query'
             if (id.includes('/react')) return 'vendor-react'
           },
         },

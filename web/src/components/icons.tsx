@@ -266,6 +266,22 @@ export const I = {
       <path d="M4 21a8 8 0 0 1 16 0" />
     </>
   ),
+  // Shield — the settings-hub tile for the second-factor surface.
+  shield: (
+    <>
+      <path d="M12 3l8 3v6c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6l8-3z" />
+      <path d="m9 12 2 2 4-4" />
+    </>
+  ),
+  // Bar chart — the settings-hub shortcut tile for the stats page.
+  chart: (
+    <>
+      <path d="M4 20V10" />
+      <path d="M10 20V4" />
+      <path d="M16 20v-7" />
+      <path d="M2 20h20" />
+    </>
+  ),
   users: (
     <>
       <circle cx="9" cy="8" r="3.5" />

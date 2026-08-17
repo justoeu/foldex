@@ -1,31 +1,131 @@
-import { useState } from 'react'
+import { useState, lazy, Suspense, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from '../components/icons'
 import { PasswordStrength } from '../components/PasswordStrength'
 import { TwoFactorSection } from '../components/TwoFactorSection'
 import { AccountSection } from '../components/AccountSection'
 import { ApiTokensSection } from '../components/ApiTokensSection'
+import { ProfileSection } from '../components/ProfileSection'
 import { useFolders, useResetFolderPassword } from '../api/folders'
 import {
   useMasterPasswordStatus,
   useSetMasterPassword,
   useRemoveMasterPassword,
 } from '../api/settings'
+import { useCurrentUser } from '../auth/AuthProvider'
 import { apiErrorCode as errCode } from '../lib/apiError'
+import type { AppView } from '../AppWorkspace'
+
+// Lazy: non-admins never download the administration code at all — the
+// settings chunk they fetch carries no /api/admin surface or its strings.
+const AdminUsersPage = lazy(() =>
+  import('./AdminUsersPage').then((module) => ({ default: module.AdminUsersPage })),
+)
 
 type Props = {
   // Opens the folder edit dialog (to set a fresh password after a reset).
   onEditFolder?: (folderId: number) => void
+  // Leaves the hub for the app views it links to (import/export, stats).
+  onNavigate?: (view: AppView) => void
+  // Deep-links the hub straight into a section (user menu → Profile). Valid
+  // values are HubSection names; anything unknown falls back to 'overview'.
+  initialSection?: string
 }
 
 // A locked folder's master-verified action: `reset` clears the password and
 // nudges you to set a new one; `remove` clears it and leaves the folder open.
 type FolderPwMode = 'reset' | 'remove'
 
-export function SettingsPage({ onEditFolder }: Props) {
+// The hub is one screen with two scopes (RBAC): everything a signed-in user
+// manages about themselves, and — only for admins — the instance-wide
+// administration surface. `overview` is the tile grid; every other value is a
+// detail page reached from a tile, with a back affordance to the grid.
+type HubSection = 'overview' | 'profile' | 'account' | 'security' | 'tokens' | 'master' | 'locked' | 'admin'
+type HubScope = 'personal' | 'admin'
+
+const HUB_SECTIONS: readonly HubSection[] = [
+  'overview', 'profile', 'account', 'security', 'tokens', 'master', 'locked', 'admin',
+]
+
+function isHubSection(value: string | undefined): value is HubSection {
+  return value !== undefined && (HUB_SECTIONS as readonly string[]).includes(value)
+}
+
+// Literal keys per section: dynamic `t(\`settings.sec_${section}…\`)` template
+// keys are invisible to static key checking, so a typo would ship the raw key
+// string to the UI instead of failing anywhere.
+const SECTION_HEAD: Record<HubSection, { kicker: string; title: string }> = {
+  overview: { kicker: 'settings.page_kicker', title: 'settings.page_title' },
+  profile: { kicker: 'settings.sec_profile_kicker', title: 'settings.sec_profile_title' },
+  account: { kicker: 'settings.sec_account_kicker', title: 'settings.sec_account_title' },
+  security: { kicker: 'settings.sec_security_kicker', title: 'settings.sec_security_title' },
+  tokens: { kicker: 'settings.sec_tokens_kicker', title: 'settings.sec_tokens_title' },
+  master: { kicker: 'settings.sec_master_kicker', title: 'settings.sec_master_title' },
+  locked: { kicker: 'settings.sec_locked_kicker', title: 'settings.sec_locked_title' },
+  admin: { kicker: 'settings.sec_admin_kicker', title: 'settings.sec_admin_title' },
+}
+
+/**
+ * Resolves what the hub actually shows for the live session. The role is only
+ * refreshed on mount/login/session-change, so a demotion by ANOTHER admin
+ * self-heals here on the next session refresh — until then the SERVER holds
+ * the line (every /api/admin call re-reads the role and 404s). This resolves
+ * the UI to surfaces the session can still see; it is not the guard.
+ */
+export function resolveHubView(
+  isAdmin: boolean,
+  scope: HubScope,
+  section: HubSection,
+): { scope: HubScope; section: HubSection } {
+  if (isAdmin) return { scope, section }
+  return { scope: 'personal', section: section === 'admin' ? 'overview' : section }
+}
+
+export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props) {
   const { t } = useTranslation()
+  // Read from the session rather than a prop, mirroring the server: the whole
+  // /api/admin surface answers 404 for a non-admin, so the scope must not even
+  // exist for them — hidden, not disabled.
+  const isAdmin = useCurrentUser()?.role === 'admin'
+  const [scope, setScope] = useState<HubScope>('personal')
+  const [section, setSection] = useState<HubSection>(
+    isHubSection(initialSection) ? initialSection : 'overview',
+  )
+  const effective = resolveHubView(isAdmin, scope, section)
+  const effectiveScope = effective.scope
+  const effectiveSection = effective.section
+
+  if (effectiveSection !== 'overview') {
+    return (
+      <div style={{ padding: 6, maxWidth: effectiveSection === 'admin' ? 860 : 720 }}>
+        <button className="fx-hub-back" onClick={() => setSection('overview')}>
+          <Icon d={I.chevronLeft} size={13} /> {t('settings.hub_back')}
+        </button>
+        <div className="fx-pagehead" style={{ margin: '14px 0 18px' }}>
+          <div>
+            <div className="fx-pagehead-kicker">{t(SECTION_HEAD[effectiveSection].kicker)}</div>
+            <h1 className="fx-pagehead-h">{t(SECTION_HEAD[effectiveSection].title)}</h1>
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {effectiveSection === 'profile' && <ProfileSection onAfterSignOut={() => setSection('overview')} />}
+          {effectiveSection === 'account' && <AccountSection />}
+          {effectiveSection === 'security' && <TwoFactorSection />}
+          {effectiveSection === 'tokens' && <ApiTokensSection />}
+          {effectiveSection === 'master' && <MasterPasswordSection />}
+          {effectiveSection === 'locked' && <LockedFoldersSection onEditFolder={onEditFolder} />}
+          {effectiveSection === 'admin' && isAdmin && (
+            <Suspense fallback={<div className="fx-empty">...</div>}>
+              <AdminUsersPage />
+            </Suspense>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div style={{ padding: 6, maxWidth: 720 }}>
+    <div style={{ padding: 6, maxWidth: 860 }}>
       <div className="fx-pagehead" style={{ marginBottom: 18 }}>
         <div>
           <div className="fx-pagehead-kicker">{t('settings.page_kicker')}</div>
@@ -33,14 +133,81 @@ export function SettingsPage({ onEditFolder }: Props) {
         </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <AccountSection />
-        <TwoFactorSection />
-        <ApiTokensSection />
-        <MasterPasswordSection />
-        <LockedFoldersSection onEditFolder={onEditFolder} />
-      </div>
+      {isAdmin && (
+        <div
+          className="fx-hub-seg"
+          role="group"
+          aria-label={t('settings.hub_scope_aria')}
+          style={{ marginBottom: 16 }}
+        >
+          <button
+            className={'fx-hub-seg-btn' + (effectiveScope === 'personal' ? ' fx-hub-seg-btn-active' : '')}
+            aria-pressed={effectiveScope === 'personal'}
+            onClick={() => setScope('personal')}
+          >
+            <Icon d={I.user} size={13} /> {t('settings.hub_scope_personal')}
+          </button>
+          <button
+            className={'fx-hub-seg-btn' + (effectiveScope === 'admin' ? ' fx-hub-seg-btn-active' : '')}
+            aria-pressed={effectiveScope === 'admin'}
+            onClick={() => setScope('admin')}
+          >
+            <Icon d={I.shield} size={13} /> {t('settings.hub_scope_admin')}
+          </button>
+        </div>
+      )}
+
+      {effectiveScope === 'personal' ? (
+        <>
+          <p className="fx-hub-section-label">{t('settings.hub_group_account')}</p>
+          <div className="fx-hub-grid" style={{ marginTop: 10, marginBottom: 20 }}>
+            <HubTile icon={I.user} title={t('settings.tile_profile_title')} desc={t('settings.tile_profile_desc')} onClick={() => setSection('profile')} />
+            <HubTile icon={I.key} title={t('settings.tile_account_title')} desc={t('settings.tile_account_desc')} onClick={() => setSection('account')} />
+            <HubTile icon={I.shield} title={t('settings.tile_security_title')} desc={t('settings.tile_security_desc')} onClick={() => setSection('security')} />
+            <HubTile icon={I.link} title={t('settings.tile_tokens_title')} desc={t('settings.tile_tokens_desc')} onClick={() => setSection('tokens')} />
+            <HubTile icon={I.lock} title={t('settings.tile_master_title')} desc={t('settings.tile_master_desc')} onClick={() => setSection('master')} />
+            <HubTile icon={I.folder} title={t('settings.tile_locked_title')} desc={t('settings.tile_locked_desc')} onClick={() => setSection('locked')} />
+          </div>
+
+          <p className="fx-hub-section-label">{t('settings.hub_group_shortcuts')}</p>
+          <div className="fx-hub-grid" style={{ marginTop: 10 }}>
+            <HubTile icon={I.upload} title={t('settings.tile_import_title')} desc={t('settings.tile_import_desc')} onClick={() => onNavigate?.('import')} />
+            <HubTile icon={I.chart} title={t('settings.tile_stats_title')} desc={t('settings.tile_stats_desc')} onClick={() => onNavigate?.('stats')} />
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="fx-hub-section-label">{t('settings.hub_group_admin')}</p>
+          <div className="fx-hub-grid" style={{ marginTop: 10 }}>
+            <HubTile icon={I.users} title={t('settings.tile_admin_users_title')} desc={t('settings.tile_admin_users_desc')} onClick={() => setSection('admin')} />
+          </div>
+        </>
+      )}
     </div>
+  )
+}
+
+function HubTile({
+  icon,
+  title,
+  desc,
+  onClick,
+}: {
+  icon: ReactNode
+  title: string
+  desc: string
+  onClick: () => void
+}) {
+  return (
+    <button type="button" className="fx-hub-tile" onClick={onClick}>
+      <span className="fx-hub-tile-icon">
+        <Icon d={icon} size={16} />
+      </span>
+      <span>
+        <span className="fx-hub-tile-title">{title}</span>
+        <span className="fx-hub-tile-desc">{desc}</span>
+      </span>
+    </button>
   )
 }
 

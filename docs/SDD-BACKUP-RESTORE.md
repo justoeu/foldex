@@ -251,7 +251,7 @@ Nenhum modo preserva ids. Chaves de link são remapeadas para o `link.id` novo. 
 #### Fallback de download nativo (Firefox/Safari)
 
 `POST /api/backup/download` passa pelos mesmos gates de sessão, recusa de API
-token e `SHARED_SECRET`, além de CSRF, e retorna URLs same-origin para download e
+token, além de CSRF, e retorna URLs same-origin para download e
 status. O token tem 256 bits, só o SHA-256 fica em memória, expira em 60 segundos
 e é ligado a `(user_id, session_id)`. `GET /api/backup/download?id=…&token=…`
 consome-o atomicamente antes de adquirir o mesmo slot de export e chama `Export`
@@ -462,10 +462,10 @@ Custos restantes, deliberadamente explícitos:
 
 ## 9. Segurança
 
-- Endpoints gated por `SHARED_SECRET` quando configurado (segue CLAUDE.md §4).
+- Endpoints exigem sessão + CSRF (a pilha de autenticação do ADR-30).
 - Backup contém **TODOS** os dados — incluindo URLs privadas, screenshots, etc. Usuário deve guardar em local seguro.
 - Importer roda dentro de transação — ataque de SQL injection via campos do JSON é mitigado por uso exclusivo de pgx parameterized queries (não há string concatenation).
-- Validação de `kind` previne uso acidental de zips arbitrários como backup (não previne ataques deliberados — o sistema confia no `SHARED_SECRET`).
+- Validação de `kind` previne uso acidental de zips arbitrários como backup (não previne ataques deliberados — o sistema confia na sessão autenticada).
 - Filenames dentro do zip são validados contra path traversal: rejeita entries com `..`, com `/` no começo, ou com paths fora de `files/`.
 - ZIP bombs são limitadas por contagem de entries, limites expandido por entry/total e leituras reais `max+1`; nomes duplicados são rejeitados antes de qualquer lookup ambíguo de manifest/database/files.
 - Concorrência de export/validate/restore não multiplica queries, spools ou downloads: a admissão única e fail-fast responde 429 antes de chamar o service, ler body ou criar temp file.

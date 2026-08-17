@@ -88,7 +88,6 @@
     "new_note": "Nueva nota",
     "home": "Inicio",
     "stats": "Estadísticas",
-    "import_export": "Importar / Exportar",
     "toggle_theme": "Cambiar tema",
     "language": "Idioma",
     "folders_compact_on": "Minimizar carpetas (RapidView al pasar el ratón)",
@@ -97,8 +96,7 @@
     "push_unsubscribe": "Desactivar notificaciones",
     "push_unsupported": "Tu navegador no soporta notificaciones push",
     "push_denied": "Permiso de notificación denegado. Habilita en la configuración del navegador.",
-    "settings": "Configuración",
-    "admin": "Usuarios"
+    "settings": "Configuración"
   },
   "sort": {
     "new": "Nuevos",
@@ -674,7 +672,46 @@
     "remove_confirm": "Quitar",
     "remove_done": "Contraseña quitada — carpeta desprotegida",
     "remove_explain": "La carpeta quedará sin contraseña (desprotegida). Introduce la contraseña maestra para confirmar.",
-    "reset_explain": "Introduce la contraseña maestra para borrar la contraseña y luego definir una nueva."
+    "reset_explain": "Introduce la contraseña maestra para borrar la contraseña y luego definir una nueva.",
+    "hub_scope_aria": "Ámbito de configuración",
+    "hub_scope_personal": "Personal",
+    "hub_scope_admin": "Administración",
+    "hub_group_account": "Tu cuenta",
+    "hub_group_shortcuts": "Atajos",
+    "hub_group_admin": "Administración",
+    "hub_back": "Configuración",
+    "tile_account_title": "Cuenta",
+    "tile_account_desc": "Nombre, correo, contraseña y el vínculo con Google.",
+    "tile_security_title": "Seguridad & 2FA",
+    "tile_security_desc": "App autenticadora, códigos de recuperación y el segundo factor.",
+    "tile_tokens_title": "Tokens de API",
+    "tile_tokens_desc": "Tokens para la extensión del navegador y otros clientes.",
+    "tile_master_title": "Contraseña maestra",
+    "tile_master_desc": "La contraseña de recuperación que restablece carpetas bloqueadas.",
+    "tile_locked_title": "Carpetas bloqueadas",
+    "tile_locked_desc": "Restablece contraseñas de carpetas con la maestra.",
+    "tile_import_title": "Importar / Exportar",
+    "tile_import_desc": "Marcadores dentro, fuera y copias de seguridad completas.",
+    "tile_stats_title": "Estadísticas",
+    "tile_stats_desc": "Clics, hosts y enlaces principales.",
+    "tile_admin_users_title": "Usuarios e invitaciones",
+    "tile_admin_users_desc": "Cuentas, roles, invitaciones y recuperación de contraseña.",
+    "sec_account_kicker": "👤 CUENTA",
+    "sec_account_title": "Inicio de sesión y perfil",
+    "sec_security_kicker": "🛡 SEGURIDAD",
+    "sec_security_title": "Autenticación de dos factores",
+    "sec_tokens_kicker": "🔑 TOKENS DE API",
+    "sec_tokens_title": "Tokens de API",
+    "sec_master_kicker": "🔒 RECUPERACIÓN",
+    "sec_master_title": "Contraseña maestra",
+    "sec_locked_kicker": "📁 CARPETAS",
+    "sec_locked_title": "Carpetas bloqueadas",
+    "sec_admin_kicker": "🛡 ADMINISTRACIÓN",
+    "sec_admin_title": "Usuarios e invitaciones",
+    "sec_profile_kicker": "👤 PERFIL",
+    "sec_profile_title": "Tu perfil",
+    "tile_profile_title": "Perfil",
+    "tile_profile_desc": "Tu nombre, correo, rol y cerrar sesión."
   },
   "note_toolbar": {
     "aria": "Formato de texto",
@@ -927,8 +964,6 @@
     "invalid_name": "Dale al token un nombre corto para reconocerlo después."
   },
   "admin": {
-    "page_kicker": "administración",
-    "page_title": "Usuarios",
     "users_title": "Cuentas",
     "invites_title": "Invitaciones",
     "invites_desc": "Foldex es solo por invitación. Quien invites tendrá su propia biblioteca privada: no verás sus enlaces ni sus notas, y esa persona tampoco verá los tuyos.",
@@ -962,5 +997,21 @@
     "err_smtp_required": "Configura SMTP antes de enviar enlaces administrativos de recuperación.",
     "err_mail_unavailable": "El servidor de correo no aceptó el mensaje de recuperación. No se cambió ninguna credencial.",
     "err_recovery_unavailable": "La cuenta de destino debe estar activa y tener una dirección de correo verificada."
+  },
+  "profile": {
+    "title": "Perfil",
+    "name_label": "Nombre visible",
+    "name_placeholder": "Cómo aparece tu nombre en Foldex",
+    "name_hint": "Se muestra en el menú del avatar y a los administradores. El correo no cambia — es la identidad de la cuenta.",
+    "save_action": "Guardar nombre",
+    "saved": "Nombre guardado.",
+    "err_name_too_long": "El nombre debe tener como máximo 120 caracteres.",
+    "logout_all_action": "Cerrar sesión en todos los dispositivos",
+    "logout_all_title": "¿Cerrar sesión en todos los dispositivos?",
+    "logout_all_message": "Todas las sesiones de esta cuenta — incluida esta — se cerrarán. Los tokens se conservan."
+  },
+  "usermenu": {
+    "aria": "Menú de cuenta",
+    "profile": "Perfil"
   }
 }

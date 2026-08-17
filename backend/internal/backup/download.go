@@ -163,19 +163,6 @@ func (s *downloadTickets) evictFinishedLocked() {
 	}
 }
 
-func (s *downloadTickets) allows(id, rawToken string) bool {
-	if id == "" || rawToken == "" {
-		return false
-	}
-	now := s.now().UTC()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.cleanupLocked(now)
-	ticket, ok := s.tickets[id]
-	return ok && ticket.state == downloadPending && now.Before(ticket.expiresAt) &&
-		secrets.Equal(ticket.tokenHash, secrets.Hash(rawToken))
-}
-
 func (s *downloadTickets) consume(id, rawToken string, p authctx.Principal) (*downloadTicket, bool) {
 	if id == "" || rawToken == "" {
 		return nil, false
@@ -316,14 +303,6 @@ func (h *Handler) downloadStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	httperr.JSON(w, http.StatusOK, status)
-}
-
-// AllowsDownloadNavigation lets the shared-secret perimeter accept only a
-// still-pending capability minted by the already-gated POST. Ownership and
-// session binding are checked later by the normal authentication middleware.
-func (h *Handler) AllowsDownloadNavigation(r *http.Request) bool {
-	return r.Method == http.MethodGet && r.URL.Path == "/api/backup/download" &&
-		h.downloads.allows(r.URL.Query().Get("id"), r.URL.Query().Get("token"))
 }
 
 func mustPrincipal(r *http.Request) authctx.Principal {

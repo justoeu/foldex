@@ -88,7 +88,6 @@
     "new_note": "New note",
     "home": "Home",
     "stats": "Stats",
-    "import_export": "Import / Export",
     "toggle_theme": "Toggle theme",
     "language": "Language",
     "folders_compact_on": "Minimize folders (RapidView on hover)",
@@ -97,8 +96,7 @@
     "push_unsubscribe": "Disable notifications",
     "push_unsupported": "Your browser doesn't support push notifications",
     "push_denied": "Notification permission was denied. Re-enable in browser settings.",
-    "settings": "Settings",
-    "admin": "Users"
+    "settings": "Settings"
   },
   "sort": {
     "new": "Newest",
@@ -674,7 +672,46 @@
     "remove_confirm": "Remove",
     "remove_done": "Password removed — folder unlocked",
     "remove_explain": "The folder will be left with no password (unprotected). Enter the master password to confirm.",
-    "reset_explain": "Enter the master password to clear the password, then set a new one."
+    "reset_explain": "Enter the master password to clear the password, then set a new one.",
+    "hub_scope_aria": "Settings scope",
+    "hub_scope_personal": "Personal",
+    "hub_scope_admin": "Administration",
+    "hub_group_account": "Your account",
+    "hub_group_shortcuts": "Shortcuts",
+    "hub_group_admin": "Administration",
+    "hub_back": "Settings",
+    "tile_account_title": "Account",
+    "tile_account_desc": "Name, e-mail, password and the Google sign-in link.",
+    "tile_security_title": "Security & 2FA",
+    "tile_security_desc": "Authenticator app, recovery codes and the login second factor.",
+    "tile_tokens_title": "API tokens",
+    "tile_tokens_desc": "Tokens for the browser extension and other clients.",
+    "tile_master_title": "Master password",
+    "tile_master_desc": "The recovery password that resets locked folders.",
+    "tile_locked_title": "Locked folders",
+    "tile_locked_desc": "Reset folder passwords with the master password.",
+    "tile_import_title": "Import / Export",
+    "tile_import_desc": "Bookmarks in, bookmarks out, full backups.",
+    "tile_stats_title": "Statistics",
+    "tile_stats_desc": "Clicks, top hosts and top links.",
+    "tile_admin_users_title": "Users & invitations",
+    "tile_admin_users_desc": "Accounts, roles, invites and password recovery.",
+    "sec_account_kicker": "👤 ACCOUNT",
+    "sec_account_title": "Sign-in & profile",
+    "sec_security_kicker": "🛡 SECURITY",
+    "sec_security_title": "Two-factor authentication",
+    "sec_tokens_kicker": "🔑 API TOKENS",
+    "sec_tokens_title": "API tokens",
+    "sec_master_kicker": "🔒 RECOVERY",
+    "sec_master_title": "Master password",
+    "sec_locked_kicker": "📁 FOLDERS",
+    "sec_locked_title": "Locked folders",
+    "sec_admin_kicker": "🛡 ADMINISTRATION",
+    "sec_admin_title": "Users & invitations",
+    "sec_profile_kicker": "👤 PROFILE",
+    "sec_profile_title": "Your profile",
+    "tile_profile_title": "Profile",
+    "tile_profile_desc": "Your name, e-mail, role and sign-out."
   },
   "note_toolbar": {
     "aria": "Text formatting",
@@ -927,8 +964,6 @@
     "invalid_name": "Give the token a short name so you can recognise it later."
   },
   "admin": {
-    "page_kicker": "administration",
-    "page_title": "Users",
     "users_title": "Accounts",
     "invites_title": "Invitations",
     "invites_desc": "Foldex is invite-only. Anyone you invite gets their own private library — you cannot see their links or notes, and they cannot see yours.",
@@ -962,5 +997,21 @@
     "err_smtp_required": "Configure SMTP before sending administrator recovery links.",
     "err_mail_unavailable": "The mail server did not accept the recovery message. No credential was changed.",
     "err_recovery_unavailable": "The target account must be active and have a verified e-mail address."
+  },
+  "profile": {
+    "title": "Profile",
+    "name_label": "Display name",
+    "name_placeholder": "How your name appears across Foldex",
+    "name_hint": "Shown on your avatar menu and to administrators. Your e-mail cannot change — it is the account identity.",
+    "save_action": "Save name",
+    "saved": "Name saved.",
+    "err_name_too_long": "The name must be at most 120 characters.",
+    "logout_all_action": "Sign out everywhere",
+    "logout_all_title": "Sign out on every device?",
+    "logout_all_message": "Every session of this account — including this one — will be signed out. Tokens are kept."
+  },
+  "usermenu": {
+    "aria": "Account menu",
+    "profile": "Profile"
   }
 }
