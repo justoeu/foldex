@@ -1717,8 +1717,14 @@ func TestAdmin_CannotRemoveTheLastAdmin(t *testing.T) {
 	require.Equal(t, http.StatusOK, other.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "admin3@example.com", "password": "a good password",
 	}).Code)
-	require.Equal(t, http.StatusOK, other.do(http.MethodPatch, "/api/admin/users/1",
-		map[string]string{"role": "editor"}).Code)
+	// The bootstrap account is the OWNER, and no API call can demote it — that
+	// is a separate invariant with its own test. Clearing it in SQL is what
+	// leaves admin3 as the genuinely last administrator, which is the state
+	// THIS test exists to exercise; going through the API would only re-assert
+	// owner immutability.
+	_, err := h.pool.Exec(context.Background(),
+		`UPDATE app_user SET role = 'editor' WHERE role = 'owner'`)
+	require.NoError(t, err)
 
 	// admin3 is now the only active admin: it cannot demote itself, and no one
 	// else can either.
@@ -1759,6 +1765,14 @@ func TestAdmin_ConcurrentDemotionsAlwaysLeaveAnAdmin(t *testing.T) {
 		email2 := fmt.Sprintf("admin2-%d@example.com", round)
 		secondID := testdb.SeedUserWithPassword(t, h.pool, email2, "a good password", "admin")
 
+		// Both principals must be ordinary admins for the COUNTING guard to be
+		// what decides. Left as owner, `first` would be refused by owner
+		// immutability instead — a different invariant, tested separately — and
+		// the race this test exists to exercise would never run.
+		_, err := h.pool.Exec(context.Background(),
+			`UPDATE app_user SET role = 'admin' WHERE role = 'owner'`)
+		require.NoError(t, err)
+
 		second := h.client(t)
 		require.Equal(t, http.StatusOK, second.do(http.MethodPost, "/api/auth/login", map[string]string{
 			"email": email2, "password": "a good password",
@@ -1787,7 +1801,7 @@ func TestAdmin_ConcurrentDemotionsAlwaysLeaveAnAdmin(t *testing.T) {
 
 		var admins int
 		require.NoError(t, h.pool.QueryRow(context.Background(),
-			`SELECT count(*) FROM app_user WHERE role = 'admin' AND status = 'active'`).Scan(&admins))
+			`SELECT count(*) FROM app_user WHERE role IN ('owner', 'admin') AND status = 'active'`).Scan(&admins))
 		require.GreaterOrEqual(t, admins, 1,
 			"round %d: both demotions landed (%d/%d) — no administrator left",
 			round, recs[0].Code, recs[1].Code)
@@ -2318,6 +2332,13 @@ func TestAdmin_MutualConcurrentDemotionCannotStrandTheInstanceWithNoAdmin(t *tes
 	h.bootstrapAdmin(t, "alice@example.com", "a good password")
 	bob := testdb.SeedUserWithPassword(t, h.pool, "bob@example.com", "a good password", "admin")
 
+	// Alice bootstraps as OWNER, and the owner is immutable through the API.
+	// Levelling her to admin is what makes this a race between two peers, which
+	// is the only shape where the counting guard is what decides.
+	_, err := h.pool.Exec(context.Background(),
+		`UPDATE app_user SET role = 'admin' WHERE role = 'owner'`)
+	require.NoError(t, err)
+
 	// Exactly two active admins now: alice (id 1) and bob.
 	var before int
 	require.NoError(t, h.pool.QueryRow(context.Background(),
@@ -2384,9 +2405,13 @@ func TestAdmin_DemotingTheLastAdminIsRefused(t *testing.T) {
 	}).Code)
 	_ = other
 
-	// Demote the bootstrap admin — allowed, two admins exist.
-	require.Equal(t, http.StatusOK,
-		c.do(http.MethodPatch, "/api/admin/users/1", map[string]string{"role": "editor"}).Code)
+	// Clear the OWNER out of the way in SQL: the seat is immutable through the
+	// API by design, and what this test needs is an instance whose only
+	// administrator is an ordinary admin — the state where the counting guard,
+	// rather than owner immutability, is what refuses.
+	_, err := h.pool.Exec(context.Background(),
+		`UPDATE app_user SET role = 'editor' WHERE role = 'owner'`)
+	require.NoError(t, err)
 
 	// Now admin2 is the only one, and cannot be demoted even by itself.
 	rec := c.do(http.MethodPatch, fmt.Sprintf("/api/admin/users/%d", int64(other)),

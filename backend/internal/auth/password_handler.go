@@ -293,7 +293,8 @@ func (h *Handler) SendEmailVerification(w http.ResponseWriter, r *http.Request) 
 		writeMailQueueUnavailable(w)
 		return
 	}
-	token, err := h.repo.CreateEmailVerification(r.Context(), user.ID, emailVerifyTTL)
+	token, err := h.repo.CreateEmailVerification(r.Context(), user.ID,
+		h.otpTTL(r.Context()), h.otpCooldown(r.Context()))
 	if errors.Is(err, ErrTooSoon) {
 		admission.Release()
 		w.WriteHeader(http.StatusAccepted)

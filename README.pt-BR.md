@@ -386,11 +386,42 @@ que o convite é criado, e também é enviado por e-mail. Credenciais de convite
 redefinição e verificação ficam depois de `#` nesses links, portanto a requisição HTTP
 inicial e o access log do nginx nunca as recebem; a SPA remove o fragmento imediatamente.
 
-**Administrando pessoas.** A tela **Usuários** (só para administradores) lista todas as
-contas e permite promover, desativar, excluir, encerrar sessões e enviar recuperação da conta.
-Duas travas são do servidor, não apenas escondidas na interface: você não pode rebaixar,
-desativar ou excluir **a si mesmo**, e o **último administrador ativo** não pode ser
-removido por ninguém. Zero administradores não se recupera por nenhuma chamada de API.
+**Papéis.** São quatro, e o que cada um pode fazer é uma matriz de permissões que o
+servidor aplica — dá para lê-la em **Configurações → Administração → Papéis e permissões**.
+
+| papel | para que serve |
+|---|---|
+| **Proprietário** | Comanda a instância. Exatamente uma conta o detém, e ele só muda por transferência. Só o proprietário edita a política de senha e de acesso. |
+| **Administrador** | Gerencia pessoas, convites e a auditoria — mas não define as regras sob as quais administra. |
+| **Editor** | Conta comum: leitura e escrita completas na própria biblioteca. É o que todo `user` de antes dos 4 papéis virou. |
+| **Leitor** | Mesma biblioteca, somente leitura. Ainda exporta backup; não cria, edita, importa nem restaura. |
+
+**O conteúdo continua privado por conta, em qualquer papel.** O papel decide se uma
+escrita é aceita e se as telas de administração existem — nunca de quem são os links que
+você enxerga. Um administrador gerencia contas e continua sem conseguir ler as linhas de
+outra conta.
+
+**Administrando pessoas.** **Configurações → Administração** lista todas as contas com
+papel, último acesso e status, e permite trocar papéis, desativar, excluir, encerrar
+sessões, enviar recuperação da conta e (sendo proprietário) transferir a instância.
+Travas do servidor, não apenas escondidas na interface: você não pode rebaixar, desativar
+ou excluir **a si mesmo**; o **último administrador ativo** não pode ser removido por
+ninguém; e o papel e o status do **proprietário** não mudam de forma alguma a não ser
+transferindo. Transferir encerra as sessões das duas contas.
+
+**Auditoria.** **Configurações → Administração → Log de auditoria** registra logins e
+falhas, mudanças de papel e status, convites, recuperações forçadas e edições de política.
+Ela sobrevive às contas que descreve: excluir um usuário não apaga o que ele fez.
+
+**Política da instância (só o proprietário).** **Configurações → Administração → Política
+de senha e acesso** define o tamanho mínimo da senha, a validade dos códigos enviados por
+e-mail e o intervalo de reenvio, além de quais domínios de e-mail podem entrar pelo
+Google. Todo valor tem um piso que a configuração não cruza, então dá para deixar a
+instância mais rígida, nunca mais fraca que o mínimo embutido. A mesma tela tem a
+**criação automática de contas** pelo Google — desligada por padrão, e recusada enquanto
+não houver ao menos um domínio permitido, porque ligá-la significa que a instância deixa
+de ser apenas por convite. Contas criadas assim chegam sempre como Editor ou Leitor,
+nunca como administrador.
 
 **E-mail.** `MAIL_DRIVER` é `log` por padrão, o que imprime o convite — link incluído —
 no log do backend em vez de enviá-lo. Isso é proposital: uma instância self-hosted sem

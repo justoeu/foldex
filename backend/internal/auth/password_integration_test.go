@@ -836,7 +836,7 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 		_, err = h.repo.BumpChallengeAttempt(ctx, 1)
 		assert.Error(t, err)
 		assert.Error(t, h.repo.ConsumeChallenge(ctx, 1))
-		_, err = h.repo.CreateChallengeEmailOTP(ctx, 1, []byte("hash"), time.Minute)
+		_, err = h.repo.CreateChallengeEmailOTP(ctx, 1, []byte("hash"), time.Minute, time.Minute)
 		assert.Error(t, err)
 	})
 
@@ -862,7 +862,7 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 
 	t.Run("otp and reset", func(t *testing.T) {
 		assert.Error(t, h.repo.CreateEmailOTP(ctx, uid, nil, auth.OTPPurposeLogin2FA, []byte("h"), time.Minute))
-		_, err := h.repo.CreateEmailVerification(ctx, uid, time.Minute)
+		_, err := h.repo.CreateEmailVerification(ctx, uid, time.Minute, time.Minute)
 		assert.Error(t, err)
 		assert.Error(t, h.repo.ConsumeEmailOTP(ctx, uid, auth.OTPPurposeLogin2FA, []byte("h"), nil))
 		_, _, err = h.repo.UserForPasswordReset(ctx, "admin@example.com")
@@ -910,7 +910,7 @@ func TestTwoFactorRepository_NotFoundIsTyped(t *testing.T) {
 	_, err = h.repo.BumpChallengeAttempt(ctx, 999_999)
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	assert.ErrorIs(t, h.repo.ConsumeChallenge(ctx, 999_999), auth.ErrChallengeInvalid)
-	_, err = h.repo.CreateChallengeEmailOTP(ctx, 999_999, []byte("hash"), time.Minute)
+	_, err = h.repo.CreateChallengeEmailOTP(ctx, 999_999, []byte("hash"), time.Minute, time.Minute)
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 
 	_, err = h.repo.ConsumePasswordReset(ctx, "no such token", "a brand new password")

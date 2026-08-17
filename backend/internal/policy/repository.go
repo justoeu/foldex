@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -116,4 +117,23 @@ func (r *Repository) GoogleProvisioning(ctx context.Context) (bool, authctx.Role
 		return false, authctx.RoleViewer
 	}
 	return p.GoogleAutoProvision, p.GoogleDefaultRole
+}
+
+// OTPTTL implements auth.PolicyReader. A read failure yields the default, and
+// the caller clamps to the compiled-in floor either way.
+func (r *Repository) OTPTTL(ctx context.Context) time.Duration {
+	p, err := r.Get(ctx)
+	if err != nil {
+		return time.Duration(Default().OTPTTLMinutes) * time.Minute
+	}
+	return time.Duration(p.OTPTTLMinutes) * time.Minute
+}
+
+// OTPResendCooldown implements auth.PolicyReader.
+func (r *Repository) OTPResendCooldown(ctx context.Context) time.Duration {
+	p, err := r.Get(ctx)
+	if err != nil {
+		return time.Duration(Default().OTPCooldownSeconds) * time.Second
+	}
+	return time.Duration(p.OTPCooldownSeconds) * time.Second
 }

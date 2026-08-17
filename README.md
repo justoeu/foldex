@@ -384,11 +384,39 @@ create it, and is also e-mailed. Invite, reset and verification credentials live
 `#` in those links, so the initial HTTP request and nginx access log never receive them;
 the SPA removes the fragment immediately.
 
-**Managing people.** The **Users** screen (administrators only) lists every account and
-lets you promote, disable, delete, sign out everywhere, and send account recovery. Two
-guards are enforced by the server, not just hidden in the UI: you cannot demote, disable
-or delete **yourself**, and the **last active administrator** cannot be removed by
-anyone. Zero administrators is not recoverable through any API call.
+**Roles.** There are four, and what each one may do is a permission matrix the server
+enforces — you can read it in **Settings → Administration → Roles and permissions**.
+
+| role | what it is for |
+|---|---|
+| **Owner** | Runs the instance. Exactly one account holds it, and it moves only by transfer. Only the owner edits the password and sign-in policy. |
+| **Admin** | Manages people, invitations and the audit trail — but does not set the rules they manage people under. |
+| **Editor** | An ordinary account: full read/write over its own library. This is what every pre-4-role `user` became. |
+| **Viewer** | Same library, read-only. Can still export a backup; cannot create, edit, import or restore. |
+
+**Content stays private per account, in every role.** A role decides whether a write is
+accepted and whether the administration screens exist — never whose links you can see. An
+administrator manages accounts and still cannot read another account's rows.
+
+**Managing people.** **Settings → Administration** lists every account with its role, last
+sign-in and status, and lets you change roles, disable, delete, sign out everywhere, send
+account recovery, and (as the owner) transfer the instance. Guards enforced by the server,
+not just hidden in the UI: you cannot demote, disable or delete **yourself**; the **last
+active administrator** cannot be removed by anyone; and the **owner's** role and status
+cannot be changed at all except by transferring. Transferring signs out both accounts.
+
+**Audit trail.** **Settings → Administration → Audit log** records sign-ins and their
+failures, role and status changes, invitations, forced recoveries and policy edits. It
+survives the accounts it describes: deleting a user does not erase what that user did.
+
+**Instance policy (owner only).** **Settings → Administration → Password and sign-in
+policy** sets the minimum password length, the mailed-code lifetime and resend cooldown,
+and which e-mail domains may sign in with Google. Every value has a floor the
+configuration cannot cross, so an instance can be made stricter but never weaker than the
+built-in minimum. The same screen holds **automatic account creation** for Google — off by
+default, and refused unless you have listed at least one allowed domain, because turning
+it on means this instance stops being invite-only. New accounts created that way always
+arrive as Editor or Viewer, never as an administrator.
 
 **E-mail.** `MAIL_DRIVER` defaults to `log`, which prints the invitation — link included
 — to the backend log instead of sending it. That is deliberate: a self-hosted instance

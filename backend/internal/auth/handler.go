@@ -882,6 +882,10 @@ func floorDuration(start time.Time, d time.Duration) {
 // nothing" is the failure mode hardest to notice in a test suite.
 type PolicyReader interface {
 	PasswordMinLength(ctx context.Context) int
+	// OTPTTL is how long a mailed code stays usable.
+	OTPTTL(ctx context.Context) time.Duration
+	// OTPResendCooldown is the minimum gap between two sends.
+	OTPResendCooldown(ctx context.Context) time.Duration
 	// GoogleAllows reports whether the address may join through Google.
 	GoogleAllows(ctx context.Context, email string) bool
 	// GoogleProvisioning reports whether an unknown Google address may create an
@@ -900,6 +904,26 @@ func (h *Handler) passwordFloor(ctx context.Context) int {
 		return MinPasswordLen
 	}
 	return max(h.policy.PasswordMinLength(ctx), MinPasswordLen)
+}
+
+// otpTTL and otpCooldown resolve the configured values, never below the
+// compiled-in floors.
+//
+// Clamped rather than trusted for the same reason passwordFloor clamps: a row
+// edited directly in SQL, past policy.Validate, must not be able to make a
+// mailed code live for a day or let an attacker resend one every second.
+func (h *Handler) otpTTL(ctx context.Context) time.Duration {
+	if h.policy == nil {
+		return emailOTPTTL
+	}
+	return max(h.policy.OTPTTL(ctx), time.Minute)
+}
+
+func (h *Handler) otpCooldown(ctx context.Context) time.Duration {
+	if h.policy == nil {
+		return otpResendInterval
+	}
+	return max(h.policy.OTPResendCooldown(ctx), otpResendInterval)
 }
 
 // validatePassword is a METHOD so every call site is forced through the

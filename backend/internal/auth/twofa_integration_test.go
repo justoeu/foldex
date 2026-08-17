@@ -339,7 +339,7 @@ func TestChallengeMutationsCannotCommitAfterCredentialEpochChange(t *testing.T) 
 			return err
 		}},
 		{"send", func(repo *auth.Repository, id int64) error {
-			_, err := repo.CreateChallengeEmailOTP(context.Background(), id, []byte("hash"), time.Minute)
+			_, err := repo.CreateChallengeEmailOTP(context.Background(), id, []byte("hash"), time.Minute, time.Minute)
 			return err
 		}},
 		{"consume", func(repo *auth.Repository, id int64) error {
@@ -707,7 +707,7 @@ func TestCreateChallenge_PreservesLivePurposeState(t *testing.T) {
 		_, err = h.repo.BumpChallengeAttempt(ctx, firstID)
 		require.NoError(t, err)
 	}
-	_, err = h.repo.CreateChallengeEmailOTP(ctx, firstID, []byte("hash"), time.Minute)
+	_, err = h.repo.CreateChallengeEmailOTP(ctx, firstID, []byte("hash"), time.Minute, time.Minute)
 	require.NoError(t, err)
 	var firstExpiry time.Time
 	require.NoError(t, h.pool.QueryRow(ctx,
@@ -766,7 +766,7 @@ func TestConcurrentEmailOTPRequestsReserveAndCreateOnlyOneCode(t *testing.T) {
 	results := make(chan error, 2)
 	for i := range 2 {
 		go func() {
-			_, err := h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte{byte(i + 1)}, time.Minute)
+			_, err := h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte{byte(i + 1)}, time.Minute, time.Minute)
 			results <- err
 		}()
 	}
@@ -877,7 +877,7 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 	_, err = h.repo.BumpChallengeAttempt(ctx, challengeID)
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	assert.ErrorIs(t, h.repo.ConsumeChallenge(ctx, challengeID), auth.ErrChallengeInvalid)
-	_, err = h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte("hash"), time.Minute)
+	_, err = h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte("hash"), time.Minute, time.Minute)
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	_, _, err = h.repo.CreateChallenge(ctx, auth.NewChallenge{
 		UserID: user.ID, Purpose: auth.PurposeTOTP, TokenVersion: user.TokenVersion, TTL: time.Minute,

@@ -39,7 +39,9 @@ const (
 const (
 	maxChallengeAttempts = 5
 	maxChallengeSends    = 3
-	otpResendInterval    = 60 * time.Second
+	// Floor for the configurable resend cooldown (ADR-35). Policy may raise it,
+	// never lower it: this is the value every release shipped with.
+	otpResendInterval = 60 * time.Second
 )
 
 var (
@@ -360,7 +362,7 @@ func (r *Repository) ConsumeChallenge(ctx context.Context, id int64) error {
 // cooldown hold when a user double-clicks "resend": both requests would
 // otherwise read the same last-send timestamp and both would send.
 func (r *Repository) CreateChallengeEmailOTP(ctx context.Context, id int64, codeHash []byte,
-	ttl time.Duration) (int, error) {
+	ttl, cooldown time.Duration) (int, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("reserve challenge send begin: %w", err)
@@ -385,7 +387,7 @@ func (r *Repository) CreateChallengeEmailOTP(ctx context.Context, id int64, code
 		  AND c.expires_at > now()
 		  AND c.sends < $2
 		  AND (last.at IS NULL OR last.at < now() - $3::interval)
-		RETURNING c.sends`, id, maxChallengeSends, intervalArg(otpResendInterval)).Scan(&sends)
+		RETURNING c.sends`, id, maxChallengeSends, intervalArg(cooldown)).Scan(&sends)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The UPDATE matched nothing. Separate the two refusals so the handler
 		// can tell the user whether to wait or to use another factor.
@@ -399,7 +401,7 @@ func (r *Repository) CreateChallengeEmailOTP(ctx context.Context, id int64, code
 			       AND c.token_version = u.token_version AND u.status = 'active'
 			FROM auth_challenge c JOIN app_user u ON u.id = c.user_id
 			WHERE c.id = $1`,
-			id, intervalArg(otpResendInterval)).Scan(&total, &recent, &live); diagErr != nil {
+			id, intervalArg(cooldown)).Scan(&total, &recent, &live); diagErr != nil {
 			if !errors.Is(diagErr, pgx.ErrNoRows) {
 				return 0, fmt.Errorf("diagnose challenge send: %w", diagErr)
 			}
@@ -1025,7 +1027,7 @@ func (r *Repository) CreateEmailOTP(ctx context.Context, uid authctx.UserID, cha
 // CreateEmailVerification coalesces rapid authenticated resends while keeping
 // token superseding and publication in one transaction.
 func (r *Repository) CreateEmailVerification(ctx context.Context, uid authctx.UserID,
-	ttl time.Duration) (string, error) {
+	ttl, cooldown time.Duration) (string, error) {
 	raw, hash, err := secrets.NewToken()
 	if err != nil {
 		return "", fmt.Errorf("verification token: %w", err)
@@ -1054,7 +1056,7 @@ func (r *Repository) CreateEmailVerification(ctx context.Context, uid authctx.Us
 			SELECT 1 FROM email_otp
 			WHERE user_id = $1 AND purpose = $2
 			  AND created_at >= now() - $3::interval
-		)`, int64(uid), OTPPurposeVerifyEmail, intervalArg(otpResendInterval)).Scan(&recent); err != nil {
+		)`, int64(uid), OTPPurposeVerifyEmail, intervalArg(cooldown)).Scan(&recent); err != nil {
 		return "", fmt.Errorf("verification cooldown: %w", err)
 	}
 	if recent {

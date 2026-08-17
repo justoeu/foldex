@@ -376,8 +376,10 @@ func (h *Handler) SendEmailOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := ch.ID
+	ttl := h.otpTTL(r.Context())
 	if _, err := h.repo.CreateChallengeEmailOTP(r.Context(), ch.ID,
-		h.codeMAC.EmailOTPDigest(ch.UserID, OTPPurposeLogin2FA, &id, code), emailOTPTTL); err != nil {
+		h.codeMAC.EmailOTPDigest(ch.UserID, OTPPurposeLogin2FA, &id, code),
+		ttl, h.otpCooldown(r.Context())); err != nil {
 		admission.Release()
 		switch {
 		case errors.Is(err, ErrTooSoon), errors.Is(err, ErrSendsExhausted):
@@ -388,7 +390,10 @@ func (h *Handler) SendEmailOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := admission.Publish(
-		mailer.LoginCodeMessage(email, code, int(emailOTPTTL.Minutes())), "login otp"); err != nil {
+		// The MAILED lifetime is the one just persisted, not the constant: a
+		// message promising five minutes for a code that expires in two is a
+		// support ticket wearing a feature.
+		mailer.LoginCodeMessage(email, code, int(ttl.Minutes())), "login otp"); err != nil {
 		h.logger.Error("publish login otp mail", "err", err)
 	}
 	w.WriteHeader(http.StatusAccepted)

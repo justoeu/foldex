@@ -964,6 +964,74 @@ Decisão: o ramo numérico passa por `PUBLIC_NUMERIC_IDS`, default **`false`**, 
 
 Isso é **mudança de comportamento numa URL pública**, por isso um ADR próprio em vez de uma nota no ADR-30. Chega no PR4, não no PR1, para que a migração de dados e a de comportamento não caiam juntas.
 
+### ADR-33 — RBAC de quatro papéis: owner/admin/editor/viewer, com matriz de permissões
+**Status:** Accepted — implementado em v2.1.0.
+
+O modelo de dois papéis (`admin`/`user`) confundia duas perguntas diferentes: *quem administra a instância* e *quem pode escrever conteúdo*. Não havia como expressar "esta pessoa lê, mas não altera", nem como distinguir quem detém a instância de quem apenas gerencia pessoas.
+
+Decisão: quatro papéis, com a capacidade de cada um vivendo numa **matriz de 14 permissões** em `internal/pkg/authctx/permissions.go` em vez de num booleano.
+
+| | owner | admin | editor | viewer |
+|---|---|---|---|---|
+| conteúdo (ler / escrever) | ✔ ✔ | ✔ ✔ | ✔ ✔ | ✔ ✘ |
+| backup (exportar / restaurar) | ✔ ✔ | ✔ ✔ | ✔ ✔ | ✔ ✘ |
+| pessoas, convites, auditoria | ✔ | ✔ | ✘ | ✘ |
+| política da instância (ler / escrever) | ✔ ✔ | ✔ ✘ | ✘ ✘ | ✘ ✘ |
+| transferir a instância | ✔ | ✘ | ✘ | ✘ |
+
+**O conteúdo continua privado por conta.** As permissões de conteúdo decidem se uma escrita é aceita — nunca de quem são as linhas visíveis. O escopo por dono permanece exatamente onde o ADR-30 o colocou: parâmetro `uid` explícito em todo método de repositório, com `user_id` como primeiro predicado. Um viewer e um editor enxergam precisamente as mesmas linhas (as suas); diferem só em o servidor aceitar ou não a mutação. Foi essa a escolha deliberada frente à alternativa de compartilhar pastas entre contas, que reescreveria o núcleo de tenancy descrito no `CLAUDE.md` §0.
+
+Três decisões de construção sustentam o resto:
+
+1. **Lookup em mapa, falha FECHADA.** Papel ausente da matriz — ou string que escapou do CHECK — resolve para conjunto vazio: fica impotente, não irrestrito.
+2. **Owner é único por índice parcial**, não por disciplina de handler. Dois owners não é estado que código algum deva alcançar, e uma transferência que escrevesse dois momentaneamente corromperia "a conta que não pode ser rebaixada". Por isso a troca é um ÚNICO `UPDATE` com `CASE` sobre os dois ids: o índice é verificado por statement, então promover-depois-rebaixar falharia na promoção e a ordem inversa deixaria a instância sem owner durante a transação.
+3. **Remover `RoleUser` transformou cada suposição de 2 papéis em erro de compilação**, em vez de mudança silenciosa de comportamento — a mesma razão pela qual `authctx.UserID` é tipo distinto.
+
+O gate de escrita é montado **por grupo** e é ciente de método em `/links`, `/notes`, `/tags` e `/import`, para que rota mutante adicionada depois nasça coberta. `/folders` e `/backup` ficam de fora de propósito: ambos respondem POST a operações que só LEEM — destrancar pasta prova uma senha para VER o conteúdo, exportar backup serializa linhas que o chamador já possui — e um gate cego por método trancaria o viewer para fora das próprias pastas protegidas.
+
+`RequirePermission` responde **403**, e não o 404 do `RequireAdmin`. Os dois escondem coisas diferentes: `RequireAdmin` oculta que a superfície administrativa existe; passado aquele portão o chamador já sabe que existe, então "seu papel não permite" não vaza nada e é a única resposta que deixa um admin entender por que o botão exclusivo do owner falhou.
+
+Migração 000032 mapeia `user → editor` (capacidade idêntica) e promove o administrador ativo mais antigo a owner. O rollback é **lossy** e está documentado no `.down.sql`: um viewer recupera acesso de escrita, porque o modelo antigo não tem como expressar somente-leitura.
+
+### ADR-34 — Trilha de auditoria administrativa
+**Status:** Accepted — implementado em v2.1.0.
+
+Não havia registro de quem alterou papéis, revogou sessões ou emitiu convites — nem de rajadas de login falho. Um incidente terminava em `grep` no log do container, que rotaciona.
+
+Decisão: tabela `audit_log` cobrindo a superfície de identidade (logins e falhas, mudanças de papel/status, convites, recuperações forçadas, edições de política). Conteúdo fica fora de escopo de propósito: já existe uma linha por clique em `click_log`, e misturar as duas soterraria os eventos de segurança que a tabela existe para expor.
+
+Três decisões que valem o registro:
+
+- **`ON DELETE SET NULL`, nunca CASCADE**, e o e-mail é desnormalizado ao lado do id. Apagar uma conta não pode apagar o registro do que ela fez — "uma conta já removida promoveu este usuário" é exatamente a entrada que uma investigação precisa — e depois que a linha some o id sozinho não identifica ninguém.
+- **Sem coluna de IP.** `X-Forwarded-For` só é confiável atrás de proxy configurado (ver `trustedProxyRealIP`), então uma coluna de IP seria ao mesmo tempo autoritativa na aparência e controlada pelo atacante num bind direto — a pior combinação para uma tabela que se consulta durante um incidente.
+- **A escrita nunca falha a operação.** `Audit` devolve erro para o chamador LOGAR: a ação já commitou, e responder 500 por causa do trail convidaria a um retry que a executaria duas vezes. Perder uma linha é a falha menor, e é visível.
+
+O sucesso de login é gravado em `issueAndRespond` — o ponto único por onde toda via de credencial passa — e não em `Login`: uma senha aceita que desvia para o desafio de 2FA não é um login, e registrá-la como um faria o trail afirmar um acesso que não houve. A falha grava **uma** entrada no ramo que as três causas (endereço desconhecido, senha errada, conta inativa) compartilham; entradas distintas reconstruiriam o oráculo de enumeração que aquele ramo existe para fechar.
+
+### ADR-35 — Política da instância configurável, e a revogação explícita do invite-only
+**Status:** Accepted — implementado em v2.1.0.
+
+Piso de senha, validade de OTP e quem pode entrar pelo Google eram constantes no código. Operadores pediam ajuste sem recompilar.
+
+Decisão: `internal/policy`, persistido num único documento JSON em `app_setting`. Pacote folha: `auth` importa `policy` para enforcement e `policy` não importa nada de `auth` — o contrário fecharia o ciclo, e por isso o gancho de auditoria entra como função.
+
+Um documento em vez de uma chave por campo: os valores são lidos juntos em todo login e escritos juntos por um formulário, e linha-por-campo deixaria uma escrita parcial rodando metade da política velha e metade da nova. `app_setting` está fora da superfície de backup nos DOIS sentidos (export não emite, restore ignora desde o snapshot v6), e é isso que impede um zip forjado de reescrever o piso de senha da instância.
+
+**Todo valor tem um PISO que a configuração não cruza**, e o piso é o valor que o código já usava. Instância que nunca abre a tela se comporta exatamente como antes; a que abre não fica mais fraca que essa linha de base. `validatePassword` virou **método** justamente para o compilador arrastar os cinco call sites — como função de pacote continuaria aplicando a constante em silêncio, e política que nada aplica é pior que política nenhuma.
+
+Escrita é do owner, leitura de qualquer admin: um admin precisa ver as regras sob as quais administra, mas um admin que pudesse baixar o piso de senha ou alargar a allowlist do Google baixaria a segurança da instância e entraria pela brecha.
+
+**Este ADR revoga explicitamente a regra invite-only do ADR-31.** `google_auto_provision` cria conta para um endereço Google desconhecido. As salvaguardas são a razão de a revogação ser aceitável:
+
+- **OFF por padrão.** Instância existente não muda de comportamento.
+- **Exige allowlist não-vazia.** Lista aberta mais provisionamento é qualquer conta Google virando tenant.
+- **O papel padrão é recusado em três camadas** (`Validate`, handler, repositório) e nunca pode ser administrativo: signup self-service não pode chegar com administração.
+- **Toda recusa é o MESMO `not_linked`** que endereço desconhecido sempre deu. Uma resposta distinta diria a um chamador anônimo quais instâncias são abertas, ou permitiria enumerar a allowlist um palpite por vez.
+- **A allowlist gateia os caminhos que CRIAM acesso** (conversão e provisionamento) e deliberadamente não o login já vinculado — aplicá-la a identidade existente deixaria o owner se trancar para fora salvando uma lista que exclui o próprio domínio, e um owner só-Google não teria segunda porta.
+- **O domínio é comparado exato**, nunca por sufixo: `example.com` não pode aceitar `notexample.com`, e subdomínio não é o domínio.
+
+A conta provisionada e sua identidade nascem na MESMA transação, porque o trigger deferido da migração 000021 exige que conta ativa tenha ao menos uma credencial e essa conta nunca terá senha: linha e identidade só são legais juntas. O provisionamento desemboca em `oauthComplete` como qualquer login vinculado, o que mantém a política de segundo fator valendo em vez de abrir a única porta que a pula.
+
 ## Future considerations
 
 - ~~**Auth + multi-user.**~~ → em execução: ADR-30/31/32 + [`docs/SDD-AUTH-RBAC.md`](SDD-AUTH-RBAC.md).
