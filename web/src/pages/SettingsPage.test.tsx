@@ -34,7 +34,7 @@ const userSession = {
   ...testAdminSession,
   user: {
     ...(testAdminSession as { user: object }).user,
-    role: 'user',
+    role: 'editor',
   },
 } as typeof testAdminSession
 
@@ -75,23 +75,34 @@ describe('SettingsPage — hub', () => {
     renderWithProviders(<SettingsPage />)
     expect(await screen.findByRole('button', { name: /^administration$/i })).toBeInTheDocument()
     await userEvent.setup().click(screen.getByRole('button', { name: /^administration$/i }))
-    expect(await screen.findByRole('button', { name: /users & invitations/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /manage accounts/i })).toBeInTheDocument()
     // Personal tiles are replaced, not stacked, in the admin scope.
     expect(screen.queryByRole('button', { name: /api tokens/i })).not.toBeInTheDocument()
   })
 
-  it('opens the admin section from the tile and the back button returns to the hub', async () => {
+  it('opens the admin section from the card and the back button returns to the hub', async () => {
     const get = vi.spyOn(http, 'get').mockImplementation(async (url: string) => {
       if (url === '/api/admin/users') return { data: { users: [adminRow] } } as never
+      if (url === '/api/admin/roles') return { data: { roles: [], permissions: [] } } as never
+      if (url === '/api/admin/audit') return { data: { entries: [] } } as never
+      if (url === '/api/admin/metrics') {
+        return {
+          data: {
+            active_users: 1, active_users_added_30d: 0, pending_invites: 0,
+            next_invite_expiry_hours: null, roles_in_use: 1, permission_count: 14,
+            two_factor_percent: 0,
+          },
+        } as never
+      }
       return { data: { invites: [] } } as never
     })
     renderWithProviders(<SettingsPage />)
     await userEvent.setup().click(screen.getByRole('button', { name: /^administration$/i }))
-    await userEvent.setup().click(screen.getByRole('button', { name: /users & invitations/i }))
+    await userEvent.setup().click(await screen.findByRole('button', { name: /manage accounts/i }))
     expect(await screen.findByText(adminRow.email)).toBeInTheDocument()
 
     await userEvent.setup().click(screen.getByRole('button', { name: /^settings$/i }))
-    expect(await screen.findByRole('button', { name: /users & invitations/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /manage accounts/i })).toBeInTheDocument()
     get.mockRestore()
   })
 
@@ -141,7 +152,7 @@ describe('SettingsPage — hub', () => {
     renderWithProviders(<SettingsPage />)
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /^administration$/i }))
-    expect(await screen.findByRole('button', { name: /users & invitations/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /manage accounts/i })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /^personal$/i }))
     expect(await screen.findByRole('button', { name: /api tokens/i })).toBeInTheDocument()
   })

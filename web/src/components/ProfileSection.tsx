@@ -138,7 +138,7 @@ export function ProfileSection({ onAfterSignOut }: { onAfterSignOut?: () => void
           </div>
         )}
         {ok && (
-          <div style={{ fontSize: 11, color: 'var(--fx-ok, #10B981)', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <div style={{ fontSize: 11, color: 'var(--fx-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
             <Icon d={I.check} size={12} /> {t('profile.saved')}
           </div>
         )}

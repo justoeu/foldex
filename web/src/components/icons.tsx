@@ -149,6 +149,20 @@ export const I = {
       <path d="m3 13 9 5 9-5" />
     </>
   ),
+  mail: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2.5" />
+      <path d="M3.6 7.2 12 13l8.4-5.8" />
+    </>
+  ),
+  sliders: (
+    <>
+      <path d="M5 7h14M5 12h14M5 17h14" />
+      <circle cx="9" cy="7" r="2" />
+      <circle cx="15" cy="12" r="2" />
+      <circle cx="10" cy="17" r="2" />
+    </>
+  ),
   alert: (
     <>
       <path d="M12 9v4" />

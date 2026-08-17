@@ -21,6 +21,28 @@ import type { AppView } from '../AppWorkspace'
 const AdminUsersPage = lazy(() =>
   import('./AdminUsersPage').then((module) => ({ default: module.AdminUsersPage })),
 )
+const AdminOverview = lazy(() =>
+  import('../components/admin/AdminOverview').then((m) => ({ default: m.AdminOverview })),
+)
+const AuditSection = lazy(() =>
+  import('../components/admin/AuditSection').then((m) => ({ default: m.AuditSection })),
+)
+const PolicySection = lazy(() =>
+  import('../components/admin/PolicySection').then((m) => ({ default: m.PolicySection })),
+)
+const RolesMatrixSection = lazy(() =>
+  import('../components/admin/RolesMatrix').then((m) => ({
+    // Wrapped in the card the detail pages use, so the matrix looks the same
+    // standing alone as it does inside the administration overview.
+    default: () => (
+      <div className="fx-card">
+        <div className="fx-card-body">
+          <m.RolesMatrix />
+        </div>
+      </div>
+    ),
+  })),
+)
 
 type Props = {
   // Opens the folder edit dialog (to set a fresh password after a reset).
@@ -40,12 +62,20 @@ type FolderPwMode = 'reset' | 'remove'
 // manages about themselves, and — only for admins — the instance-wide
 // administration surface. `overview` is the tile grid; every other value is a
 // detail page reached from a tile, with a back affordance to the grid.
-type HubSection = 'overview' | 'profile' | 'account' | 'security' | 'tokens' | 'master' | 'locked' | 'admin'
+type HubSection =
+  | 'overview' | 'profile' | 'account' | 'security' | 'tokens' | 'master' | 'locked'
+  | 'admin' | 'roles' | 'audit' | 'policy'
 type HubScope = 'personal' | 'admin'
 
 const HUB_SECTIONS: readonly HubSection[] = [
-  'overview', 'profile', 'account', 'security', 'tokens', 'master', 'locked', 'admin',
+  'overview', 'profile', 'account', 'security', 'tokens', 'master', 'locked',
+  'admin', 'roles', 'audit', 'policy',
 ]
+
+// Every section that lives under the administration scope. A non-admin who
+// deep-links into one is bounced to the overview by resolveHubView, mirroring
+// the server's 404 on the whole /api/admin surface.
+const ADMIN_SECTIONS: readonly HubSection[] = ['admin', 'roles', 'audit', 'policy']
 
 function isHubSection(value: string | undefined): value is HubSection {
   return value !== undefined && (HUB_SECTIONS as readonly string[]).includes(value)
@@ -63,6 +93,9 @@ const SECTION_HEAD: Record<HubSection, { kicker: string; title: string }> = {
   master: { kicker: 'settings.sec_master_kicker', title: 'settings.sec_master_title' },
   locked: { kicker: 'settings.sec_locked_kicker', title: 'settings.sec_locked_title' },
   admin: { kicker: 'settings.sec_admin_kicker', title: 'settings.sec_admin_title' },
+  roles: { kicker: 'settings.sec_roles_kicker', title: 'settings.sec_roles_title' },
+  audit: { kicker: 'settings.sec_audit_kicker', title: 'settings.sec_audit_title' },
+  policy: { kicker: 'settings.sec_policy_kicker', title: 'settings.sec_policy_title' },
 }
 
 /**
@@ -78,7 +111,10 @@ export function resolveHubView(
   section: HubSection,
 ): { scope: HubScope; section: HubSection } {
   if (isAdmin) return { scope, section }
-  return { scope: 'personal', section: section === 'admin' ? 'overview' : section }
+  return {
+    scope: 'personal',
+    section: ADMIN_SECTIONS.includes(section) ? 'overview' : section,
+  }
 }
 
 export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props) {
@@ -114,9 +150,12 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
           {effectiveSection === 'tokens' && <ApiTokensSection />}
           {effectiveSection === 'master' && <MasterPasswordSection />}
           {effectiveSection === 'locked' && <LockedFoldersSection onEditFolder={onEditFolder} />}
-          {effectiveSection === 'admin' && isAdmin && (
+          {isAdmin && ADMIN_SECTIONS.includes(effectiveSection) && (
             <Suspense fallback={<div className="fx-empty">...</div>}>
-              <AdminUsersPage />
+              {effectiveSection === 'admin' && <AdminUsersPage />}
+              {effectiveSection === 'roles' && <RolesMatrixSection />}
+              {effectiveSection === 'audit' && <AuditSection />}
+              {effectiveSection === 'policy' && <PolicySection />}
             </Suspense>
           )}
         </div>
@@ -176,12 +215,11 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
           </div>
         </>
       ) : (
-        <>
-          <p className="fx-hub-section-label">{t('settings.hub_group_admin')}</p>
-          <div className="fx-hub-grid" style={{ marginTop: 10 }}>
-            <HubTile icon={I.users} title={t('settings.tile_admin_users_title')} desc={t('settings.tile_admin_users_desc')} onClick={() => setSection('admin')} />
-          </div>
-        </>
+        <Suspense fallback={<div className="fx-empty">...</div>}>
+          <AdminOverview
+            onOpen={(s) => setSection(s === 'users' ? 'admin' : s)}
+          />
+        </Suspense>
       )}
     </div>
   )
@@ -384,7 +422,7 @@ function MasterPasswordSection() {
           </div>
         )}
         {ok && (
-          <div style={{ fontSize: 11, color: 'var(--fx-ok, #10B981)', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <div style={{ fontSize: 11, color: 'var(--fx-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
             <Icon d={I.check} size={12} /> {ok}
           </div>
         )}
@@ -475,7 +513,7 @@ function DoneFolderRow({
     >
       <span style={{ width: 12, height: 12, borderRadius: 4, background: color, flex: '0 0 auto' }} />
       <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{name}</span>
-      <span style={{ fontSize: 12, color: 'var(--fx-ok, #10B981)', display: 'flex', alignItems: 'center', gap: 4 }}>
+      <span style={{ fontSize: 12, color: 'var(--fx-success)', display: 'flex', alignItems: 'center', gap: 4 }}>
         <Icon d={I.check} size={13} /> {mode === 'remove' ? t('settings.remove_done') : t('settings.reset_done')}
       </span>
       {/* Only the recovery ("redefinir") flow nudges you to set a new password;

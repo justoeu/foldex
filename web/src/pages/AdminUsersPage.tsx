@@ -11,12 +11,21 @@ import {
   revokeInvite,
   revokeUserSessions,
   sendPasswordRecovery,
+  transferOwnership,
   updateUser,
   type Invite,
 } from '../api/admin'
 import { apiErrorCode as errCode } from '../lib/apiError'
 import { useAuth } from '../auth/AuthProvider'
-import type { AuthUser, Role } from '../auth/types'
+import { ASSIGNABLE_ROLES, isAdminRole, type AuthUser, type Role } from '../auth/types'
+import { ROLE_INITIALS, ROLE_TONE } from '../components/admin/RolesMatrix'
+import { relativeTime } from '../components/admin/AdminOverview'
+
+function statusTone(status: AuthUser['status']): string {
+  if (status === 'active') return 'fx-chip-ok'
+  if (status === 'disabled') return 'fx-chip-danger'
+  return 'fx-chip-warn'
+}
 
 /**
  * The administrator's view of every account on the instance.
@@ -44,7 +53,7 @@ export function AdminUsersPage() {
   const [error, setError] = useState('')
   const [recoverySent, setRecoverySent] = useState('')
   const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole] = useState<Role>('user')
+  const [inviteRole, setInviteRole] = useState<Role>('editor')
   const [lastInvite, setLastInvite] = useState<Invite | null>(null)
 
   function refresh() {
@@ -102,8 +111,21 @@ export function AdminUsersPage() {
     onError,
   })
 
+  // Transferring revokes EVERY session of both accounts, including the caller's
+  // own — so there is nothing to refresh afterwards. The next request lands as
+  // anonymous and the app's refresh interceptor routes to the login screen,
+  // which is the honest outcome: the caller is no longer the owner.
+  const transfer = useMutation({
+    mutationFn: transferOwnership,
+    onSuccess: () => refresh(),
+    onError,
+  })
+
+  // Counts every role that can administer, mirroring guardLastAdminTx: with
+  // four roles, counting only 'admin' would call an instance whose sole
+  // administrator is the owner "down to zero" and disable buttons that work.
   const activeAdmins = (users.data ?? []).filter(
-    (u) => u.role === 'admin' && u.status === 'active',
+    (u) => isAdminRole(u.role) && u.status === 'active',
   ).length
 
   async function askDelete(u: AuthUser) {
@@ -113,6 +135,15 @@ export function AdminUsersPage() {
       destructive: true,
     })
     if (ok) remove.mutate(u.id)
+  }
+
+  async function askTransfer(u: AuthUser) {
+    const ok = await confirmAction({
+      title: t('admin.transfer_title'),
+      message: t('admin.transfer_message', { email: u.email }),
+      destructive: true,
+    })
+    if (ok) transfer.mutate(u.id)
   }
 
   async function askReset(u: AuthUser) {
@@ -152,83 +183,139 @@ export function AdminUsersPage() {
             <Icon d={I.users} size={15} /> {t('admin.users_title')}
           </h3>
 
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 10 }}>
-            {(users.data ?? []).map((u) => {
-              const isSelf = me?.id === u.id
-              const isLastAdmin = u.role === 'admin' && u.status === 'active' && activeAdmins <= 1
-              // One rule, three buttons: demote, disable and delete all end in
-              // "this account stops being an active admin", and each is blocked
-              // for the same two reasons.
-              const locked = isSelf || isLastAdmin
-              return (
-                <li
-                  key={u.id}
-                  style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}
-                >
-                  <span style={{ flex: 1, minWidth: 200 }}>
-                    <strong>{u.email}</strong>
-                    {u.name ? <span style={{ color: 'var(--fx-ink-4)' }}> · {u.name}</span> : null}
-                    <span style={{ color: 'var(--fx-ink-4)' }}>
-                      {' '}
-                      · {t(`admin.role_${u.role}`)} · {t(`admin.status_${u.status}`)}
-                      {u.totp_enabled ? ` · ${t('admin.has_2fa')}` : ''}
-                      {u.has_password ? '' : ` · ${t('admin.google_only')}`}
-                    </span>
-                  </span>
+          <div className="fx-utable-wrap">
+            <table className="fx-utable">
+              <thead>
+                <tr>
+                  <th>{t('admin.col_user')}</th>
+                  <th>{t('admin.col_role')}</th>
+                  <th>{t('admin.col_last_seen')}</th>
+                  <th>{t('admin.col_status')}</th>
+                  <th aria-label={t('admin.col_actions')} />
+                </tr>
+              </thead>
+              <tbody>
+                {(users.data ?? []).map((u) => {
+                  const isSelf = me?.id === u.id
+                  const isLastAdmin = isAdminRole(u.role) && u.status === 'active' && activeAdmins <= 1
+                  // The owner is out of reach of every ordinary edit — the server
+                  // refuses role and status changes on that row outright, and the
+                  // seat moves only through transfer.
+                  const isOwner = u.role === 'owner'
+                  // One rule, three buttons: demote, disable and delete all end in
+                  // "this account stops being an active admin", and each is blocked
+                  // for the same reasons.
+                  const locked = isSelf || isLastAdmin || isOwner
+                  return (
+                    <tr key={u.id}>
+                      <td>
+                        <div className="fx-utable-user">
+                          <span className={'fx-rolebadge ' + ROLE_TONE[u.role]}>
+                            {ROLE_INITIALS[u.role]}
+                          </span>
+                          <div style={{ minWidth: 0 }}>
+                            <div className="fx-utable-name">{u.name || u.email}</div>
+                            <div className="fx-utable-mail">{u.email}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <select
+                          className="fx-input"
+                          style={{ width: 'auto' }}
+                          aria-label={t('admin.role_label', { email: u.email })}
+                          value={u.role}
+                          disabled={locked || patch.isPending}
+                          onChange={(e) => patch.mutate({ id: u.id, role: e.target.value as Role })}
+                        >
+                          {/* Owner appears only when the row already holds it,
+                              and never as something to pick: the server refuses
+                              an assignment to owner, so offering it would produce
+                              a request that always fails. */}
+                          {isOwner && <option value="owner">{t('admin.role_owner')}</option>}
+                          {ASSIGNABLE_ROLES.map((r) => (
+                            <option value={r} key={r}>{t(`admin.role_${r}`)}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="fx-utable-meta">
+                        {u.last_login_at ? relativeTime(u.last_login_at) : t('admin.never_signed_in')}
+                      </td>
+                      <td>
+                        <span className={'fx-chip ' + statusTone(u.status)}>
+                          {t(`admin.status_${u.status}`)}
+                        </span>
+                        {u.totp_enabled && (
+                          <span className="fx-chip fx-chip-ok" style={{ marginLeft: 4 }}>
+                            {t('admin.has_2fa')}
+                          </span>
+                        )}
+                        {!u.has_password && (
+                          <span className="fx-chip" style={{ marginLeft: 4 }}>
+                            {t('admin.google_only')}
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        <div className="fx-utable-actions">
+                          <button
+                            className="fx-btn"
+                            disabled={locked || patch.isPending}
+                            onClick={() =>
+                              patch.mutate({
+                                id: u.id,
+                                status: u.status === 'active' ? 'disabled' : 'active',
+                              })
+                            }
+                          >
+                            {u.status === 'active' ? t('admin.disable') : t('admin.enable')}
+                          </button>
 
-                  <select
-                    className="fx-input"
-                    style={{ width: 'auto' }}
-                    aria-label={t('admin.role_label', { email: u.email })}
-                    value={u.role}
-                    disabled={locked || patch.isPending}
-                    onChange={(e) => patch.mutate({ id: u.id, role: e.target.value as Role })}
-                  >
-                    <option value="user">{t('admin.role_user')}</option>
-                    <option value="admin">{t('admin.role_admin')}</option>
-                  </select>
+                          <button
+                            className="fx-btn"
+                            disabled={revokeSessions.isPending}
+                            onClick={() => revokeSessions.mutate(u.id)}
+                          >
+                            {t('admin.revoke_sessions')}
+                          </button>
 
-                  <button
-                    className="fx-btn"
-                    disabled={locked || patch.isPending}
-                    onClick={() =>
-                      patch.mutate({
-                        id: u.id,
-                        status: u.status === 'active' ? 'disabled' : 'active',
-                      })
-                    }
-                  >
-                    {u.status === 'active' ? t('admin.disable') : t('admin.enable')}
-                  </button>
+                          <button
+                            className="fx-btn"
+                            disabled={isSelf || resetPassword.isPending}
+                            onClick={() => void askReset(u)}
+                          >
+                            {t('admin.force_reset')}
+                          </button>
 
-                  <button
-                    className="fx-btn"
-                    disabled={revokeSessions.isPending}
-                    onClick={() => revokeSessions.mutate(u.id)}
-                  >
-                    {t('admin.revoke_sessions')}
-                  </button>
+                          {/* Transferring is offered only by the owner, and only
+                              onto an active account — the two conditions the
+                              server checks before it moves the seat. */}
+                          {me?.role === 'owner' && !isSelf && u.status === 'active' && (
+                            <button
+                              className="fx-btn"
+                              disabled={transfer.isPending}
+                              onClick={() => void askTransfer(u)}
+                            >
+                              {t('admin.transfer')}
+                            </button>
+                          )}
 
-                  <button
-                    className="fx-btn"
-                    disabled={isSelf || resetPassword.isPending}
-                    onClick={() => void askReset(u)}
-                  >
-                    {t('admin.force_reset')}
-                  </button>
-
-                  <button
-                    className="fx-btn"
-                    aria-label={t('admin.delete_label', { email: u.email })}
-                    disabled={locked || remove.isPending}
-                    onClick={() => void askDelete(u)}
-                  >
-                    <Icon d={I.trash} size={13} />
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
+                          <button
+                            className="fx-btn"
+                            aria-label={t('admin.delete_label', { email: u.email })}
+                            disabled={locked || remove.isPending}
+                            onClick={() => void askDelete(u)}
+                          >
+                            <Icon d={I.trash} size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 

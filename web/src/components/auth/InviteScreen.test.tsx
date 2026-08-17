@@ -16,7 +16,7 @@ const anonymous: SessionState = {
 
 const preview: InvitePreview = {
   email: 'new@example.com',
-  role: 'user',
+  role: 'editor',
   expires_at: '2026-08-15T12:00:00Z',
 }
 
@@ -26,7 +26,7 @@ const authenticated: MeResponse = {
     id: 7,
     email: preview.email,
     name: 'New User',
-    role: 'user',
+    role: 'editor',
     status: 'active',
     has_password: true,
     totp_enabled: false,

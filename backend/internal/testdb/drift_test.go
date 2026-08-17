@@ -118,7 +118,7 @@ func TestResetActuallyEmptiesTheTables(t *testing.T) {
 	ctx := context.Background()
 	pool := New(t)
 
-	uid := SeedUser(t, pool, "drift@test.local", "user")
+	uid := SeedUser(t, pool, "drift@test.local", "editor")
 	_, err := pool.Exec(ctx,
 		`INSERT INTO link (user_id, url, title, slug) VALUES ($1, 'https://x.test', 'x', 'x')`,
 		int64(uid))
@@ -133,7 +133,7 @@ func TestResetActuallyEmptiesTheTables(t *testing.T) {
 	}
 
 	// RESTART IDENTITY is load-bearing too: tests assert on uid = 1.
-	next := SeedUser(t, pool, "again@test.local", "user")
+	next := SeedUser(t, pool, "again@test.local", "editor")
 	assert.EqualValues(t, 1, next, "Reset must restart the identity sequences")
 }
 

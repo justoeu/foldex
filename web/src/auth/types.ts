@@ -7,7 +7,43 @@
  */
 export const MIN_PASSWORD_LEN = 8
 
-export type Role = 'admin' | 'user'
+/**
+ * The four roles of ADR-33, ordered from most to least privileged.
+ *
+ * `owner` is not in ASSIGNABLE_ROLES: ownership moves only through the transfer
+ * endpoint, which demotes the outgoing owner in the same statement. Offering it
+ * in a role dropdown would produce a request the server always refuses.
+ */
+export type Role = 'owner' | 'admin' | 'editor' | 'viewer'
+
+export const ALL_ROLES: readonly Role[] = ['owner', 'admin', 'editor', 'viewer']
+export const ASSIGNABLE_ROLES: readonly Role[] = ['admin', 'editor', 'viewer']
+
+/**
+ * Every permission the server's matrix can grant, in the server's display
+ * order. Mirrored rather than fetched-only so the matrix renders its columns
+ * before the request resolves; the server's list is still what fills the cells.
+ */
+export type Permission =
+  | 'content.read'
+  | 'content.write'
+  | 'backup.export'
+  | 'backup.restore'
+  | 'import.run'
+  | 'users.read'
+  | 'users.write'
+  | 'roles.assign'
+  | 'invites.read'
+  | 'invites.write'
+  | 'audit.read'
+  | 'policy.read'
+  | 'policy.write'
+  | 'instance.transfer'
+
+/** Mirrors authctx.Role.IsAdmin — who may reach /api/admin at all. */
+export function isAdminRole(role: Role): boolean {
+  return role === 'owner' || role === 'admin'
+}
 
 export type AuthUser = {
   id: number

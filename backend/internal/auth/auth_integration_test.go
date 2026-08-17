@@ -1534,7 +1534,7 @@ func TestInvite_FullRoundTrip(t *testing.T) {
 	assert.Equal(t, "authenticated", body["status"], "accepting an invite signs you straight in")
 	user := body["user"].(map[string]any)
 	assert.Equal(t, "newcomer@example.com", user["email"])
-	assert.Equal(t, "user", user["role"])
+	assert.Equal(t, "editor", user["role"])
 
 	assert.Equal(t, http.StatusOK, newcomer.do(http.MethodGet, "/api/links", nil).Code)
 }
@@ -1648,7 +1648,7 @@ func TestInvite_AcceptCannotEscalateItsOwnRole(t *testing.T) {
 	var role string
 	require.NoError(t, h.pool.QueryRow(context.Background(),
 		`SELECT role FROM app_user WHERE email_normalized = 'sneaky@example.com'`).Scan(&role))
-	assert.Equal(t, "user", role)
+	assert.Equal(t, "editor", role)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2050,7 +2050,7 @@ func TestAdmin_InviteDefaultsToTheLeastPrivilege(t *testing.T) {
 	rec := admin.do(http.MethodPost, "/api/admin/invites",
 		map[string]string{"email": "default@example.com"})
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
-	assert.Equal(t, "user", decode(t, rec)["role"])
+	assert.Equal(t, "editor", decode(t, rec)["role"])
 }
 
 // The grace window must not be an unbounded session factory.
@@ -2439,7 +2439,7 @@ func TestAdmin_FullUserLifecycle(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	body := decode(t, rec)
 	assert.Equal(t, "Renamed Member", body["name"])
-	assert.Equal(t, "user", body["role"])
+	assert.Equal(t, "editor", body["role"])
 	assert.Equal(t, "active", body["status"])
 	assert.Equal(t, http.StatusOK, member.do(http.MethodGet, "/api/links", nil).Code,
 		"a rename must not sign the user out")
@@ -2485,7 +2485,7 @@ func TestBootstrap_ConflictsWhenTheEmailBelongsToAnotherRow(t *testing.T) {
 	// A non-active row already holding the address.
 	_, err := h.pool.Exec(ctx, `
 		INSERT INTO app_user (email, email_normalized, name, role, status)
-		VALUES ('taken@example.com', 'taken@example.com', 'Squatter', 'user', 'disabled')`)
+		VALUES ('taken@example.com', 'taken@example.com', 'Squatter', 'editor', 'disabled')`)
 	require.NoError(t, err)
 	// Plus the placeholder bootstrap would otherwise claim.
 	_, err = h.pool.Exec(ctx, `
