@@ -101,6 +101,12 @@ type Handler struct {
 	// checks oauthEnabled(), which covers both nil and "configured with nothing".
 	google GoogleProvider
 
+	// policy supplies the owner-configurable instance rules (ADR-35). Nil means
+	// "run the compiled-in floors", which is also what the policy package
+	// returns when nothing was ever saved — so an unwired handler and a
+	// never-configured instance behave identically.
+	policy PolicyReader
+
 	loginByIP    *attemptlimit.Limiter
 	loginByEmail *attemptlimit.Limiter
 	bootstrapIP  *attemptlimit.Limiter
@@ -160,6 +166,10 @@ type HandlerConfig struct {
 	// pointer stored in it would still be caught: oauthEnabled() checks the
 	// interface for nil AND calls Enabled().
 	Google GoogleProvider
+
+	// Policy supplies the owner-configurable rules. Optional: nil runs the
+	// compiled-in floors.
+	Policy PolicyReader
 }
 
 func NewHandler(cfg HandlerConfig) *Handler {
@@ -178,6 +188,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		totpIssuer:          cfg.TOTPIssuer,
 		require2FAForAdmins: cfg.Require2FAForAdmins,
 		google:              cfg.Google,
+		policy:              cfg.Policy,
 
 		loginByIP:    attemptlimit.New(20, 15*time.Minute),
 		loginByEmail: attemptlimit.New(5, 15*time.Minute),
@@ -347,7 +358,7 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if err := validatePassword(in.Password); err != nil {
+	if err := h.validatePassword(r.Context(), in.Password); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -703,7 +714,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if err := validatePassword(in.NewPassword); err != nil {
+	if err := h.validatePassword(r.Context(), in.NewPassword); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -775,7 +786,7 @@ func (h *Handler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if err := validatePassword(in.Password); err != nil {
+	if err := h.validatePassword(r.Context(), in.Password); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -861,10 +872,44 @@ func floorDuration(start time.Time, d time.Duration) {
 	}
 }
 
-func validatePassword(p string) error {
-	if utf8.RuneCountInString(p) < MinPasswordLen {
+// PolicyReader supplies the instance rules this handler enforces. It is an
+// interface so internal/auth does not import internal/policy, which would make
+// the dependency circular the moment policy needs to name a role.
+//
+// All three methods are required rather than discovered by type assertion: an
+// optional-capability dance would let a fake that forgot GoogleProvisioning
+// compile and silently disable auto-provisioning, and "the feature quietly does
+// nothing" is the failure mode hardest to notice in a test suite.
+type PolicyReader interface {
+	PasswordMinLength(ctx context.Context) int
+	// GoogleAllows reports whether the address may join through Google.
+	GoogleAllows(ctx context.Context, email string) bool
+	// GoogleProvisioning reports whether an unknown Google address may create an
+	// account, and with which role.
+	GoogleProvisioning(ctx context.Context) (bool, authctx.Role)
+}
+
+// passwordFloor is the configured minimum, never below the compiled-in one.
+//
+// The max() is not belt-and-braces: it is what makes the policy screen unable
+// to weaken the instance below the baseline every release has shipped with,
+// even if a row is edited directly in SQL past the validation in
+// policy.Validate.
+func (h *Handler) passwordFloor(ctx context.Context) int {
+	if h.policy == nil {
+		return MinPasswordLen
+	}
+	return max(h.policy.PasswordMinLength(ctx), MinPasswordLen)
+}
+
+// validatePassword is a METHOD so every call site is forced through the
+// configured floor. As a package function it would have kept silently applying
+// the constant, and a policy nothing enforces is worse than no policy.
+func (h *Handler) validatePassword(ctx context.Context, p string) error {
+	minLen := h.passwordFloor(ctx)
+	if utf8.RuneCountInString(p) < minLen {
 		return httperr.New(http.StatusBadRequest, "password_too_short",
-			fmt.Sprintf("password must be at least %d characters", MinPasswordLen))
+			fmt.Sprintf("password must be at least %d characters", minLen))
 	}
 	// Measured in BYTES, because that is the unit bcrypt truncates in.
 	if len(p) > MaxPasswordLen {

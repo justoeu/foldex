@@ -371,6 +371,15 @@ func (h *AdminHandler) audit(r *http.Request, action string, target *User, detai
 	}
 }
 
+// AuditPolicyChange records an instance-policy edit.
+//
+// Exported so internal/policy can record into the trail without importing this
+// package — auth already imports policy to enforce its rules, and the reverse
+// import would close the cycle.
+func (h *AdminHandler) AuditPolicyChange(r *http.Request, detail string) {
+	h.audit(r, AuditPolicyChanged, nil, detail)
+}
+
 // ListAudit serves the administrative trail.
 func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 	before, err := optionalInt64(r.URL.Query().Get("before"))

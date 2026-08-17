@@ -25,6 +25,7 @@ import (
 	"foldex/internal/pkg/keyfile"
 	"foldex/internal/pkg/logsafe"
 	"foldex/internal/pkg/secrets"
+	"foldex/internal/policy"
 	"foldex/internal/preview"
 	"foldex/internal/push"
 	"foldex/internal/screenshot"
@@ -246,14 +247,20 @@ func main() {
 		logger.Info("google oauth enabled", "redirect_uri", cfg.GoogleRedirectURL())
 	}
 
+	policyRepo := policy.NewRepository(pool)
 	authHandler := auth.NewHandler(auth.HandlerConfig{
 		Repo: authRepo, MW: authMW, Mailer: mail, MailDispatcher: mailDispatcher, Cookies: cookieOpts,
 		TTL: authTTL, Logger: logger, BaseURL: cfg.AuthPublicURL,
 		Cipher: authCipher, CodeMAC: authCodeMAC, TOTPIssuer: cfg.AuthTOTPIssuer,
 		Require2FAForAdmins: cfg.AuthRequire2FAForAdmins,
 		Google:              google,
+		Policy:              policyRepo,
 	})
 	adminHandler := auth.NewAdminHandler(authRepo, mail, mailDispatcher, logger, cfg.AuthPublicURL)
+	// The audit hook is passed as a function so internal/policy never imports
+	// internal/auth — auth already imports policy for enforcement, and the other
+	// direction would close the cycle.
+	policyHandler := policy.NewHandler(policyRepo, logger, adminHandler.AuditPolicyChange)
 	folderHandler := folders.NewHandler(
 		folders.NewRepository(pool), folderUnlockKey, settings.NewRepository(pool),
 	)
@@ -279,6 +286,7 @@ func main() {
 		FolderUnlockKey:     folderUnlockKey,
 		AuthHandler:         authHandler,
 		AdminHandler:        adminHandler,
+		PolicyHandler:       policyHandler,
 		AuthMiddleware:      authMW,
 		FolderHandler:       folderHandler,
 	}

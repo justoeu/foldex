@@ -28,6 +28,7 @@ import (
 	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/logsafe"
+	"foldex/internal/policy"
 	"foldex/internal/push"
 	"foldex/internal/redirect"
 	"foldex/internal/settings"
@@ -76,8 +77,11 @@ type Deps struct {
 
 	// Auth stack (ADR-30). The handlers are optional and control whether their
 	// route groups mount. AuthMiddleware is required whenever AuthEnabled is true.
-	AuthHandler    *auth.Handler
-	AdminHandler   *auth.AdminHandler
+	AuthHandler  *auth.Handler
+	AdminHandler *auth.AdminHandler
+	// PolicyHandler serves the owner-configurable instance rules. Nil leaves the
+	// routes unmounted and every rule at its compiled-in floor.
+	PolicyHandler  *policy.Handler
 	AuthMiddleware *auth.Middleware
 	FolderHandler  *folders.Handler
 
@@ -229,6 +233,9 @@ func New(d Deps) http.Handler {
 					}
 					ar.Use(authgate.RejectAPIToken)
 					d.AdminHandler.Mount(ar)
+					if d.PolicyHandler != nil {
+						ar.Route("/policy", d.PolicyHandler.Mount)
+					}
 				})
 			}
 

@@ -148,7 +148,7 @@ func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if err := validatePassword(in.Password); err != nil {
+	if err := h.validatePassword(r.Context(), in.Password); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -202,7 +202,7 @@ func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if err := validatePassword(in.Password); err != nil {
+	if err := h.validatePassword(r.Context(), in.Password); err != nil {
 		httperr.Write(w, err)
 		return
 	}
