@@ -34,7 +34,9 @@ import (
 	"foldex/internal/auth"
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/secrets"
+	"foldex/internal/policy"
 	"foldex/internal/testdb"
 )
 
@@ -195,6 +197,10 @@ type harnessOpts struct {
 	MailQueue             int
 	MailGate              <-chan struct{}
 	AfterTOTPVerification func(context.Context, authctx.UserID, auth.TOTPProof)
+	// Policy mounts /api/admin/policy and wires the owner-configurable rules
+	// into the handler. Off by default so the tests written before ADR-35 keep
+	// exercising the compiled-in floors.
+	Policy bool
 }
 
 // testCipher is a FIXED key, so a test can assert that a seed encrypted in one
@@ -252,6 +258,11 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 		Require2FAForAdmins: opts.Require2FAForAdmins,
 		Google:              opts.Google,
 	}
+	var policyRepo *policy.Repository
+	if opts.Policy {
+		policyRepo = policy.NewRepository(pool)
+		cfg.Policy = policyRepo
+	}
 	if opts.TwoFactor || opts.Require2FAForAdmins {
 		key := testAuthKey(opts.CipherSeed)
 		cfg.Cipher = testCipherSeeded(t, opts.CipherSeed)
@@ -277,15 +288,23 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 				ar.Use(mw.RequireAdmin)
 				ar.Use(mw.RejectAPIToken)
 				admin.Mount(ar)
+				if policyRepo != nil {
+					ar.Route("/policy", policy.NewHandler(
+						policyRepo, logger, admin.AuditPolicyChange).Mount)
+				}
 			})
 			// A stand-in for the content surface, so tests can assert that a
 			// pre-session credential does not reach data endpoints.
 			pr.Get("/links", func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(w, `{"uid":%d}`, int64(authctx.MustUser(r.Context())))
 			})
-			pr.Post("/links", func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusCreated)
-			})
+			// Carries the same write gate internal/server mounts on the real
+			// content groups, so a viewer's refusal is exercised here rather
+			// than only asserted about the middleware in isolation.
+			pr.With(authgate.RequireWrite(authctx.PermContentWrite)).
+				Post("/links", func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusCreated)
+				})
 		})
 	})
 	return &harness{

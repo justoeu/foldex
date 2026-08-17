@@ -178,11 +178,16 @@ func (h *AdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Read the target BEFORE deleting it: the trail denormalizes the e-mail, and
-	// after the row is gone the id alone identifies nobody. A failed read is not
-	// fatal — the entry is still worth writing with just the id.
+	// after the row is gone the id alone identifies nobody.
+	//
+	// The id is then dropped on purpose. audit_log.target_id is a foreign key to
+	// app_user, and by the time the entry is written that row no longer exists —
+	// keeping it would violate the constraint, and since an audit failure is
+	// logged rather than propagated, the deletion would go unrecorded. The
+	// denormalized e-mail is exactly what makes dropping it harmless.
 	var deleted *User
 	if u, err := h.repo.GetUser(r.Context(), target); err == nil {
-		deleted = &u
+		deleted = &User{Email: u.Email, Name: u.Name}
 	}
 	// Same as UpdateUser: the guard is inside DeleteUser's transaction.
 	if err := h.repo.DeleteUser(r.Context(), target); err != nil {
@@ -362,9 +367,18 @@ func (h *AdminHandler) audit(r *http.Request, action string, target *User, detai
 		}
 	}
 	if target != nil {
-		id := target.ID
-		rec.TargetID = &id
 		rec.TargetEmail = target.Email
+		// The id is attached ONLY when it still references a live row. Two call
+		// sites legitimately have an e-mail and no account: a deletion, whose
+		// row is already gone by the time this runs, and an invitation, whose
+		// addressee has no account yet. audit_log.target_id is a foreign key, so
+		// attaching an id in either case violates it — and because an audit
+		// failure is logged rather than propagated, the entry would simply
+		// vanish, which is the one outcome a trail must not have.
+		if target.ID != 0 {
+			id := target.ID
+			rec.TargetID = &id
+		}
 	}
 	if err := h.repo.Audit(r.Context(), rec); err != nil {
 		h.logger.Error("audit write", "err", err, "action", action)
