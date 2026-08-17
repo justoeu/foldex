@@ -1497,7 +1497,7 @@ html.fx-dark { background: #0E1014; }
   font-size: 11px;
   color: var(--fx-ink-4);
 }
-.fx-pwstrength-rules li.fx-pwrule-ok { color: var(--fx-ok, #10B981); }
+.fx-pwstrength-rules li.fx-pwrule-ok { color: var(--fx-success); }
 .fx-btn-note {
   height: 38px;
   padding: 0 14px;

@@ -39,7 +39,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func newServer(t *testing.T, secret string) (*httptest.Server, func()) {
+func newServer(t *testing.T) (*httptest.Server, func()) {
 	t.Helper()
 	pool := testdb.Shared(t)
 
@@ -56,7 +56,6 @@ func newServer(t *testing.T, secret string) (*httptest.Server, func()) {
 			CORSOrigins:        []string{"*"},
 			PreviewConcurrency: 1,
 			PreviewTimeoutSec:  1,
-			SharedSecret:       secret,
 		},
 	})
 	srv := httptest.NewServer(router)
@@ -199,7 +198,7 @@ func TestFolderScopedContentResponseMatrixAcrossAuthModes(t *testing.T) {
 func TestAdminGateResponseMatrixAcrossAuthModes(t *testing.T) {
 	pool := testdb.Shared(t)
 	adminID := testdb.SeedUser(t, pool, "admin@test.local", "admin")
-	userID := testdb.SeedUser(t, pool, "user@test.local", "user")
+	userID := testdb.SeedUser(t, pool, "user@test.local", "editor")
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	repo := auth.NewRepository(pool)
@@ -293,9 +292,8 @@ func TestNoteMediaRoute_AllowsAnonymousReadWithoutExposingLinkMedia(t *testing.T
 		Worker: nopWorker{},
 		Logger: logger,
 		Config: config.Config{
-			AuthEnabled:  true,
-			CORSOrigins:  []string{"http://localhost:9088"},
-			SharedSecret: "topsecret",
+			AuthEnabled: true,
+			CORSOrigins: []string{"http://localhost:9088"},
 		},
 		AuthMiddleware: auth.NewMiddleware(auth.NewRepository(pool), auth.CookieOptions{}, logger, false),
 		Screenshotter:  stubScreenshotter{},
@@ -343,7 +341,7 @@ func (stubStorage) GetObject(_ context.Context, _ string) ([]byte, string, error
 func (stubStorage) DeleteObject(_ context.Context, _ string) error { return nil }
 
 func TestHealthzOK(t *testing.T) {
-	srv, done := newServer(t, "")
+	srv, done := newServer(t)
 	defer done()
 	resp, err := http.Get(srv.URL + "/healthz")
 	require.NoError(t, err)
@@ -355,10 +353,10 @@ func TestHealthzOK(t *testing.T) {
 	assert.Equal(t, "ok", body["db"])
 }
 
-// TestHealthzDegradedDoesNotLeakErr locks the §4-ish leak fix: healthz is the
-// only endpoint mounted BEFORE the SHARED_SECRET gate, so a degraded response
-// must surface the boolean state only — the raw pool.Ping error can carry
-// internal DSN/host text that an unauthenticated caller can read. Closing the
+// TestHealthzDegradedDoesNotLeakErr locks the §4-ish leak fix: healthz is
+// public and session-less, so a degraded response must surface the boolean
+// state only — the raw pool.Ping error can carry internal DSN/host text that
+// an unauthenticated caller can read. Closing the
 // pool before the request simulates "db unreachable" without a separate
 // container misconfiguration.
 func TestHealthzDegradedDoesNotLeakErr(t *testing.T) {
@@ -398,7 +396,7 @@ func TestHealthzDegradedDoesNotLeakErr(t *testing.T) {
 }
 
 func TestFullCRUDFlow(t *testing.T) {
-	srv, done := newServer(t, "")
+	srv, done := newServer(t)
 	defer done()
 	c := srv.Client()
 
@@ -499,7 +497,7 @@ func TestFullCRUDFlow(t *testing.T) {
 }
 
 func TestBadRequestPaths(t *testing.T) {
-	srv, done := newServer(t, "")
+	srv, done := newServer(t)
 	defer done()
 	c := srv.Client()
 
@@ -587,7 +585,7 @@ func TestBadRequestPaths(t *testing.T) {
 }
 
 func TestImportExportThroughRouter(t *testing.T) {
-	srv, done := newServer(t, "")
+	srv, done := newServer(t)
 	defer done()
 
 	// Export when empty
@@ -615,7 +613,7 @@ func TestImportExportThroughRouter(t *testing.T) {
 }
 
 func TestStatsEndpointsThroughRouter(t *testing.T) {
-	srv, done := newServer(t, "")
+	srv, done := newServer(t)
 	defer done()
 	c := srv.Client()
 
@@ -629,7 +627,7 @@ func TestStatsEndpointsThroughRouter(t *testing.T) {
 }
 
 func TestDuplicateAndConflict(t *testing.T) {
-	srv, done := newServer(t, "")
+	srv, done := newServer(t)
 	defer done()
 	c := srv.Client()
 
@@ -668,42 +666,46 @@ func TestDuplicateAndConflict(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, resp.StatusCode)
 }
 
-func TestSharedSecretGuard(t *testing.T) {
-	srv, done := newServer(t, "topsecret")
-	defer done()
+// TestAPIRequiresAuthenticationAfterPerimeterRemoval locks the post-SHARED_SECRET
+// contract: with auth on, /api is guarded by the session stack alone — an
+// anonymous caller gets 401 with no perimeter header involved — while the
+// public share surfaces (/healthz, /go, /n) stay session-less.
+func TestAPIRequiresAuthenticationAfterPerimeterRemoval(t *testing.T) {
+	pool := testdb.Shared(t)
+	_ = testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	router := server.New(server.Deps{
+		Pool:           pool,
+		Worker:         nopWorker{},
+		Logger:         logger,
+		AuthMiddleware: auth.NewMiddleware(auth.NewRepository(pool), auth.CookieOptions{}, logger, false),
+		Config: config.Config{
+			Port:               "0",
+			CORSOrigins:        []string{"*"},
+			PreviewConcurrency: 1,
+			PreviewTimeoutSec:  1,
+			AuthEnabled:        true,
+		},
+	})
+	srv := httptest.NewServer(router)
+	defer srv.Close()
 	c := srv.Client()
 
-	// /healthz is outside /api and ignores the secret
+	// /healthz is outside /api and public
 	resp, err := c.Get(srv.URL + "/healthz")
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	// /api requires the header
+	// /api requires a session — no header can substitute for one
 	resp, err = c.Get(srv.URL + "/api/tags")
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-
-	// Wrong secret is also 401 (not only missing header)
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/tags", nil)
-	req.Header.Set("X-Foldex-Secret", "wrong-secret")
-	resp, err = c.Do(req)
 	require.NoError(t, err)
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	assert.Contains(t, string(body), "unauthorized")
 
-	// Correct secret allows /api
-	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/api/tags", nil)
-	req.Header.Set("X-Foldex-Secret", "topsecret")
-	resp, err = c.Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	// Public share surfaces stay reachable without the secret header
+	// Public share surfaces stay reachable without a session
 	resp, err = c.Get(srv.URL + "/go/does-not-exist")
 	require.NoError(t, err)
 	resp.Body.Close()
@@ -735,9 +737,9 @@ func (emptyBackupBucket) ExistingObjects(context.Context, []string) (map[string]
 
 func (emptyBackupBucket) DeleteObjects(context.Context, []string) error { return nil }
 
-func TestBackupDownloadNavigationUsesSharedSecretTicketAndExactSession(t *testing.T) {
+func TestBackupDownloadNavigationUsesTicketAndExactSession(t *testing.T) {
 	pool := testdb.Shared(t)
-	uid := testdb.SeedUser(t, pool, "backup-ticket@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "backup-ticket@test.local", "editor")
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	repo := auth.NewRepository(pool)
@@ -751,7 +753,7 @@ func TestBackupDownloadNavigationUsesSharedSecretTicketAndExactSession(t *testin
 	router := server.New(server.Deps{
 		Pool: pool, Worker: nopWorker{}, Logger: logger,
 		Config: config.Config{
-			AuthEnabled: true, SharedSecret: "topsecret",
+			AuthEnabled: true,
 			CORSOrigins: []string{"http://localhost:9088"},
 		},
 		AuthMiddleware: auth.NewMiddleware(repo, auth.CookieOptions{}, logger, false),
@@ -759,7 +761,6 @@ func TestBackupDownloadNavigationUsesSharedSecretTicketAndExactSession(t *testin
 	})
 
 	issueReq := httptest.NewRequest(http.MethodPost, "/api/backup/download", nil)
-	issueReq.Header.Set("X-Foldex-Secret", "topsecret")
 	issueReq.Header.Set(auth.CSRFHeader, owner.CSRF)
 	issueReq.AddCookie(&http.Cookie{Name: auth.CookieAccess, Value: owner.Access})
 	issueReq.AddCookie(&http.Cookie{Name: auth.CookieCSRF, Value: owner.CSRF})
@@ -794,8 +795,8 @@ func TestBackupDownloadNavigationUsesSharedSecretTicketAndExactSession(t *testin
 	replayReq.AddCookie(&http.Cookie{Name: auth.CookieCSRF, Value: owner.CSRF})
 	replayRec := httptest.NewRecorder()
 	router.ServeHTTP(replayRec, replayReq)
-	assert.Equal(t, http.StatusUnauthorized, replayRec.Code, replayRec.Body.String())
-	assert.Contains(t, replayRec.Body.String(), "unauthorized")
+	assert.Equal(t, http.StatusNotFound, replayRec.Code)
+	assert.Contains(t, replayRec.Body.String(), "download_invalid")
 }
 
 func intToStr(n int64) string {

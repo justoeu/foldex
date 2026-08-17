@@ -136,8 +136,8 @@ func TestHandler_Subscribe_MapsInvalidSubscription(t *testing.T) {
 func TestHandler_Unsubscribe_CannotDeleteAnotherUsersEndpoint(t *testing.T) {
 	pool := testdb.Shared(t)
 	ctx := context.Background()
-	userA := testdb.SeedUser(t, pool, "user-a@test.local", "user")
-	userB := testdb.SeedUser(t, pool, "user-b@test.local", "user")
+	userA := testdb.SeedUser(t, pool, "user-a@test.local", "editor")
+	userB := testdb.SeedUser(t, pool, "user-b@test.local", "editor")
 	repo := push.NewRepository(pool)
 	keys := push.VAPIDKeys{PublicKey: "PUB", PrivateKey: "PRIV", Subject: "mailto:t@h"}
 

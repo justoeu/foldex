@@ -49,7 +49,7 @@ func newRefFixture(t *testing.T) refFixture {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
 	owner := testdb.SeedUser(t, pool, "entityrefs-owner@test.local", "admin")
-	bystander := testdb.SeedUser(t, pool, "entityrefs-bystander@test.local", "user")
+	bystander := testdb.SeedUser(t, pool, "entityrefs-bystander@test.local", "editor")
 
 	trepo := tags.NewRepository(pool)
 	ownerTag, err := trepo.Create(ctx, owner, tags.CreateInput{Name: "owner", Color: "#fff"})

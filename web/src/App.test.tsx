@@ -51,10 +51,13 @@ describe('App', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 
-  it('navigates to the Import page', async () => {
+  it('navigates to the Import page via the settings hub', async () => {
     renderWithProviders(<App />)
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /Import \/ Export/i }))
+    // Import/export lives in the settings hub now (shortcut tile); the hub is
+    // lazy-loaded, so the tile query has to wait for the chunk.
+    await user.click(screen.getByRole('button', { name: /^settings$/i }))
+    await user.click(await screen.findByRole('button', { name: /Import \/ Export/i }))
     expect(await screen.findByRole('heading', { name: 'Import' })).toBeInTheDocument()
   })
 

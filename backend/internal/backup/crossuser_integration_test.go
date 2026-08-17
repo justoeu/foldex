@@ -65,7 +65,7 @@ type tenant struct {
 func seedTenant(t *testing.T, pool *pgxpool.Pool, bucket *stubBucket, email, host string) tenant {
 	t.Helper()
 	ctx := context.Background()
-	uid := testdb.SeedUser(t, pool, email, "user")
+	uid := testdb.SeedUser(t, pool, email, "editor")
 
 	lrepo := links.NewRepository(pool)
 	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://" + host, Title: "Link of " + email})
@@ -190,7 +190,7 @@ func TestRestore_CraftedZipCannotOverwriteAnotherTenantsObject(t *testing.T) {
 	svc := backup.NewService(pool, bucket, discardLogger())
 
 	victim := seedTenant(t, pool, bucket, "victim@test.local", "victim.example")
-	attacker := testdb.SeedUser(t, pool, "attacker@test.local", "user")
+	attacker := testdb.SeedUser(t, pool, "attacker@test.local", "editor")
 
 	// A ZIP whose file entry names the VICTIM's object key. Nothing else in the
 	// snapshot refers to it — that is the point: the attacker is not restoring
@@ -252,7 +252,7 @@ func TestRestore_CraftedZipCannotOverwriteANoteImage(t *testing.T) {
 
 	const victimKey = "notes/3f2504e0-4f89-11d3-9a0c-0305e82c3301.png"
 	bucket.objs[victimKey] = []byte("victims-note-image")
-	attacker := testdb.SeedUser(t, pool, "attacker@test.local", "user")
+	attacker := testdb.SeedUser(t, pool, "attacker@test.local", "editor")
 
 	for _, mode := range []backup.ConflictMode{backup.ModeWipe, backup.ModeDuplicate, backup.ModeSkip} {
 		zr := minimalZipWithFile(t, "files/"+victimKey)
@@ -271,14 +271,14 @@ func TestRestore_WipeCraftedNoteReferenceCannotDeleteOrReplaceVictimMedia(t *tes
 
 	const victimKey = "notes/8bcb9d80-8212-4ef3-a6a8-24f9471cf90e.jpg"
 	bucket.objs[victimKey] = []byte("victim-bytes")
-	victim := testdb.SeedUser(t, pool, "victim@test.local", "user")
+	victim := testdb.SeedUser(t, pool, "victim@test.local", "editor")
 	repo := notes.NewRepository(pool)
 	require.NoError(t, repo.RegisterMediaLease(ctx, victim, victimKey))
 	_, err := repo.Create(ctx, victim, notes.CreateInput{
 		Title: "public victim", BodyHTML: `<img src="/api/files/` + victimKey + `">`,
 	})
 	require.NoError(t, err)
-	attacker := testdb.SeedUser(t, pool, "attacker@test.local", "user")
+	attacker := testdb.SeedUser(t, pool, "attacker@test.local", "editor")
 	_, err = repo.Create(ctx, attacker, notes.CreateInput{
 		Title:    "crafted reference",
 		BodyHTML: `<img src="/api/files/` + victimKey + `">`,
@@ -296,7 +296,7 @@ func TestRestore_RekeysOwnedNoteMediaAndRewritesReferences(t *testing.T) {
 	ctx := context.Background()
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
-	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
 	repo := notes.NewRepository(pool)
 	const oldKey = "notes/22c3a1e2-304d-441f-a525-713dc364bff1.png"
 	bucket.objs[oldKey] = validNotePNG(t)
@@ -334,7 +334,7 @@ func TestRestore_RekeysOwnedNoteMediaAndRewritesReferences(t *testing.T) {
 func TestRestore_RejectsNoteMediaDecodeBombBeforeWipe(t *testing.T) {
 	pool := testdb.Shared(t)
 	ctx := context.Background()
-	uid := testdb.SeedUser(t, pool, "decode-bomb@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "decode-bomb@test.local", "editor")
 	repo := notes.NewRepository(pool)
 	keep, err := repo.Create(ctx, uid, notes.CreateInput{Title: "must survive", BodyHTML: "<p>safe</p>"})
 	require.NoError(t, err)
@@ -412,7 +412,7 @@ func TestRestore_RealignsImagesPrefixToo(t *testing.T) {
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
 
-	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
 	lrepo := links.NewRepository(pool)
 	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://uploaded.example", Title: "Uploaded"})
 	require.NoError(t, err)
@@ -441,7 +441,7 @@ func TestRestore_PreservesVersionedScreenshotSuffix(t *testing.T) {
 	bucket := newStubBucket()
 	svc := backup.NewService(pool, bucket, discardLogger())
 
-	uid := testdb.SeedUser(t, pool, "versioned-shot@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "versioned-shot@test.local", "editor")
 	lrepo := links.NewRepository(pool)
 	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://capture.example", Title: "Captured"})
 	require.NoError(t, err)
@@ -477,7 +477,7 @@ func TestExport_ReferencingAKeyIsNotOwningIt(t *testing.T) {
 	svc := backup.NewService(pool, bucket, discardLogger())
 
 	victim := seedTenant(t, pool, bucket, "victim@test.local", "victim.example")
-	attacker := testdb.SeedUser(t, pool, "attacker@test.local", "user")
+	attacker := testdb.SeedUser(t, pool, "attacker@test.local", "editor")
 
 	// Vector 1: a note whose body points at the victim's object.
 	_, err := notes.NewRepository(pool).Create(ctx, attacker, notes.CreateInput{

@@ -352,7 +352,7 @@ func TestList_ClickRankedSortsKeepCrossKindOrdering(t *testing.T) {
 
 func TestCounts_AreGlobalAndOwnerScopedInOneRoundTrip(t *testing.T) {
 	ctx, uid, f := setup(t)
-	otherUID := testdb.SeedUser(t, f.pool, "counts-other@test.local", "user")
+	otherUID := testdb.SeedUser(t, f.pool, "counts-other@test.local", "editor")
 	folder, err := f.frepo.Create(ctx, uid, folders.CreateInput{Name: "Counted folder", Color: "#abc"})
 	require.NoError(t, err)
 	_, err = f.lrepo.Create(ctx, uid, links.CreateInput{URL: "https://counts-root.example", Title: "Root"})
@@ -375,7 +375,7 @@ func TestCounts_AreGlobalAndOwnerScopedInOneRoundTrip(t *testing.T) {
 
 func TestPreviewStatuses_OwnerAndFolderScopedInOneRoundTrip(t *testing.T) {
 	ctx, uid, f := setup(t)
-	otherUID := testdb.SeedUser(t, f.pool, "other@test.local", "user")
+	otherUID := testdb.SeedUser(t, f.pool, "other@test.local", "editor")
 	open, err := f.lrepo.Create(ctx, uid, links.CreateInput{URL: "https://status-open.example", Title: "Open"})
 	require.NoError(t, err)
 	password := "folder-password"

@@ -17,7 +17,6 @@ import type { AppDndController } from './hooks/useAppDndController'
 const ImportPage = lazy(() => import('./pages/ImportPage').then((module) => ({ default: module.ImportPage })))
 const StatsPage = lazy(() => import('./pages/StatsPage').then((module) => ({ default: module.StatsPage })))
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })))
-const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage').then((module) => ({ default: module.AdminUsersPage })))
 const NoteDialog = lazy(() => import('./components/NoteDialog').then((module) => ({ default: module.NoteDialog })))
 
 export type AppContentState = {
@@ -119,6 +118,7 @@ function MainWorkspace(props: Props) {
         q={workspace.q}
         setQ={workspace.setQ}
         onOpenPalette={workspace.openPalette}
+        onOpenProfile={() => workspace.openSettingsAt('profile')}
         sort={workspace.sort}
         setSort={workspace.setSort}
         viewMode={navigation.viewMode}
@@ -156,9 +156,19 @@ function ActivePage(props: Props) {
     case 'stats':
       return <LazyPage view="stats" workspace={props.workspace} />
     case 'settings':
-      return <LazyPage view="settings" workspace={props.workspace} dialogs={props.dialogs} />
-    case 'admin':
-      return <LazyPage view="admin" workspace={props.workspace} />
+      return <LazyPage
+        view="settings"
+        workspace={props.workspace}
+        dialogs={props.dialogs}
+        // key remounts the hub when a deep link (user menu → Profile) targets
+        // a section: SettingsPage owns its section state, so a fresh jump —
+        // even to the SAME section — needs a fresh mount. `n` disambiguates
+        // repeats; the gear clears the jump entirely (falls back to overview).
+        key={props.workspace.settingsJump
+          ? `${props.workspace.settingsJump.section}:${props.workspace.settingsJump.n}`
+          : 'overview'}
+        initialSection={props.workspace.settingsJump?.section}
+      />
   }
 }
 
@@ -204,18 +214,25 @@ function LazyPage({
   view,
   workspace,
   dialogs,
+  initialSection,
 }: {
   view: Exclude<AppView, 'home'>
   workspace: AppWorkspaceController
   dialogs?: AppDialogController
+  initialSection?: string
 }) {
   return (
     <div className="fx-mainarea">
       <Suspense fallback={<div className="fx-empty">...</div>}>
         {view === 'import' && <ImportPage onDone={() => workspace.setView('home')} />}
         {view === 'stats' && <StatsPage />}
-        {view === 'settings' && <SettingsPage onEditFolder={dialogs?.openEditFolderById} />}
-        {view === 'admin' && <AdminUsersPage />}
+        {view === 'settings' && (
+          <SettingsPage
+            onEditFolder={dialogs?.openEditFolderById}
+            onNavigate={(v) => workspace.setView(v)}
+            initialSection={initialSection}
+          />
+        )}
       </Suspense>
     </div>
   )

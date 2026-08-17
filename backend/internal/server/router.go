@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/json"
 	"log/slog"
 	"net"
@@ -30,6 +28,7 @@ import (
 	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/logsafe"
+	"foldex/internal/policy"
 	"foldex/internal/push"
 	"foldex/internal/redirect"
 	"foldex/internal/settings"
@@ -72,14 +71,17 @@ type Deps struct {
 	LinkMetadataFetcher links.MetadataFetcher
 
 	// Web Push wiring. Setting PushHandler also mounts /api/push/vapid-key
-	// (kept inside /api so it inherits the SHARED_SECRET guard — see CLAUDE.md
-	// §4 invariant). Leaving it nil keeps the routes off entirely.
+	// (inside /api, behind the auth stack). Leaving it nil keeps the routes
+	// off entirely.
 	PushHandler *push.Handler
 
 	// Auth stack (ADR-30). The handlers are optional and control whether their
 	// route groups mount. AuthMiddleware is required whenever AuthEnabled is true.
-	AuthHandler    *auth.Handler
-	AdminHandler   *auth.AdminHandler
+	AuthHandler  *auth.Handler
+	AdminHandler *auth.AdminHandler
+	// PolicyHandler serves the owner-configurable instance rules. Nil leaves the
+	// routes unmounted and every rule at its compiled-in floor.
+	PolicyHandler  *policy.Handler
 	AuthMiddleware *auth.Middleware
 	FolderHandler  *folders.Handler
 
@@ -148,7 +150,7 @@ func New(d Deps) http.Handler {
 		AllowedOrigins: corsOrigins,
 		AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders: []string{
-			"Content-Type", "Authorization", "X-Foldex-Secret",
+			"Content-Type", "Authorization",
 			auth.CSRFHeader, folders.UnlockHeader,
 		},
 		AllowCredentials: true,
@@ -158,9 +160,9 @@ func New(d Deps) http.Handler {
 	r.Get("/healthz", healthz(d.Pool))
 
 	// Redirect/view routes outside /api keep the URL short, avoid CORS
-	// preflight, and stay reachable without the SHARED_SECRET guard — both
-	// /go/{id-or-slug} (link redirect) and /n/{id-or-slug} (note render) are
-	// meant to be shareable the same way.
+	// preflight, and stay session-less — both /go/{id-or-slug} (link
+	// redirect) and /n/{id-or-slug} (note render) are public share
+	// surfaces resolved by slug.
 	linksRepo := links.NewRepository(d.Pool)
 	notesRepo := notes.NewRepository(d.Pool).WithStorage(d.Storage)
 	var fileHandler *links.ScreenshotHandler
@@ -177,18 +179,13 @@ func New(d Deps) http.Handler {
 	redirect.NewHandler(linksRepo, d.Config.PublicNumericIDs).Mount(r)
 	notes.NewPublicHandler(notesRepo, d.Config.PublicNumericIDs).Mount(r)
 	if fileHandler != nil {
-		// Public note HTML references these exact URLs. Mount this one narrow
-		// UUID-keyed read before SHARED_SECRET; all other object keys remain in
-		// the guarded, principal-scoped /api group below.
+		// Public note HTML references these exact URLs. This one narrow
+		// UUID-keyed read is deliberately session-less; all other object
+		// keys remain in the principal-scoped /api group below.
 		r.Get("/api/files/notes/*", fileHandler.ProxyNoteFile)
 	}
 
 	r.Route("/api", func(api chi.Router) {
-		if d.Config.SharedSecret != "" {
-			api.Use(sharedSecretGuard(d.Config.SharedSecret, func(r *http.Request) bool {
-				return backupHandler != nil && backupHandler.AllowsDownloadNavigation(r)
-			}))
-		}
 		api.Use(auth.VaryCookie)
 		// The auth surface mounts OUTSIDE the principal middleware — most of it
 		// exists precisely to establish a principal, so requiring one would be
@@ -236,10 +233,27 @@ func New(d Deps) http.Handler {
 					}
 					ar.Use(authgate.RejectAPIToken)
 					d.AdminHandler.Mount(ar)
+					if d.PolicyHandler != nil {
+						ar.Route("/policy", d.PolicyHandler.Mount)
+					}
 				})
 			}
 
-			pr.Route("/tags", tags.NewHandler(tags.NewRepository(d.Pool)).Mount)
+			// The viewer role is read-only over its OWN library, and this is
+			// where that means something. The gate is method-aware and mounted
+			// on the group, so a mutating route added to any of these packages
+			// later is refused without anyone having to remember — the same
+			// reason credential redaction lives at the root log handler rather
+			// than at each call site.
+			//
+			// /folders and /backup are deliberately absent: both answer POST to
+			// operations that only read, so they gate per route below.
+			writeGate := authgate.RequireWrite(authctx.PermContentWrite)
+
+			pr.Route("/tags", func(tr chi.Router) {
+				tr.Use(writeGate)
+				tags.NewHandler(tags.NewRepository(d.Pool)).Mount(tr)
+			})
 			settingsRepo := settings.NewRepository(d.Pool)
 			// /settings is ENTIRELY the master recovery password, which can
 			// clear any folder's password. That is a credential operation,
@@ -249,6 +263,12 @@ func New(d Deps) http.Handler {
 			// every locked folder and read it.
 			pr.Route("/settings", func(sr chi.Router) {
 				sr.Use(authgate.RejectAPIToken)
+				// A viewer holds its library read-only, and the master password
+				// is what RESETS a locked folder's password — setting or
+				// clearing it is a mutation of the caller's own recovery
+				// credential, not a read. Reading the status stays open, which
+				// is why the gate is method-aware rather than blanket.
+				sr.Use(writeGate)
 				settings.NewHandler(settingsRepo).Mount(sr)
 			})
 			foldersRepo := folders.NewRepository(d.Pool)
@@ -258,26 +278,36 @@ func New(d Deps) http.Handler {
 			}
 			pr.Route("/folders", folderHandler.Mount)
 
-			pr.Route("/links", links.NewHandler(linksRepo, d.Worker).
-				WithMetadataFetcher(d.LinkMetadataFetcher).
-				WithFolderGate(foldersRepo, d.FolderUnlockKey).
-				Mount)
+			pr.Route("/links", func(lr chi.Router) {
+				lr.Use(writeGate)
+				links.NewHandler(linksRepo, d.Worker).
+					WithMetadataFetcher(d.LinkMetadataFetcher).
+					WithFolderGate(foldersRepo, d.FolderUnlockKey).
+					Mount(lr)
+			})
 
 			// d.Storage is optional — when nil, Handler.Delete's image cleanup is
 			// a no-op (CRUD itself doesn't need storage). The actual upload route
 			// (POST /api/notes/images) is mounted further below, gated the same
 			// way links' image upload is.
-			pr.Route("/notes", notes.NewHandler(notesRepo, d.Storage).
-				WithFolderGate(foldersRepo, d.FolderUnlockKey).
-				Mount)
+			pr.Route("/notes", func(nr chi.Router) {
+				nr.Use(writeGate)
+				notes.NewHandler(notesRepo, d.Storage).
+					WithFolderGate(foldersRepo, d.FolderUnlockKey).
+					Mount(nr)
+			})
 			pr.Route("/entries", entries.NewHandler(entries.NewRepository(d.Pool), foldersRepo, d.FolderUnlockKey).Mount)
 
 			// Screenshot and file-proxy endpoints are only registered when both
 			// a Screenshotter and Storage implementation are provided.
 			if fileHandler != nil {
-				pr.Post("/links/{id}/screenshot", fileHandler.CaptureAndStore)
-				pr.Post("/links/{id}/image", fileHandler.UploadImage)
-				pr.Delete("/links/{id}/image", fileHandler.DeleteImage)
+				// These hang off /api directly rather than inside the /links
+				// group, so they do not inherit its write gate and each needs it
+				// named. ProxyFile stays open: it is the read path, and note
+				// media is deliberately reachable without a session at all.
+				pr.With(writeGate).Post("/links/{id}/screenshot", fileHandler.CaptureAndStore)
+				pr.With(writeGate).Post("/links/{id}/image", fileHandler.UploadImage)
+				pr.With(writeGate).Delete("/links/{id}/image", fileHandler.DeleteImage)
 				pr.Get("/files/*", fileHandler.ProxyFile)
 
 				// Note inline-image upload lives in this same gate (rather than its
@@ -285,10 +315,13 @@ func New(d Deps) http.Handler {
 				// ProxyFile also being mounted — an uploaded note image would
 				// otherwise have nowhere to be served back from.
 				nih := notes.NewImageHandler(d.Storage, notesRepo, d.Logger)
-				pr.Post("/notes/images", nih.Upload)
+				pr.With(writeGate).Post("/notes/images", nih.Upload)
 			}
 
-			pr.Route("/import", importer.NewHandler(d.Pool, d.Worker).Mount)
+			pr.Route("/import", func(ir chi.Router) {
+				ir.Use(authgate.RequireWrite(authctx.PermImportRun))
+				importer.NewHandler(d.Pool, d.Worker).Mount(ir)
+			})
 			pr.Route("/export", exporter.NewHandler(d.Pool).Mount)
 			statsHandler := stats.NewHandler(stats.NewRepository(d.Pool))
 			if d.StorageStatter != nil {
@@ -344,8 +377,12 @@ func bootstrapPrincipal(pool *pgxpool.Pool, logger *slog.Logger) func(http.Handl
 			// and every request would then be attributed to an account that is
 			// not supposed to be able to sign in at all. This is the documented
 			// escape hatch out of a lockout, so it has to land somewhere real.
-			`SELECT id FROM app_user WHERE role = 'admin' AND status = 'active'
-			 ORDER BY id LIMIT 1`).Scan(&id); err != nil {
+			// Owner sorts first so a single-administrator instance — the common
+			// shape for this escape hatch — resolves to the account that holds
+			// every permission, rather than to an admin that cannot reach the
+			// owner-only policy routes.
+			`SELECT id FROM app_user WHERE role IN ('owner', 'admin') AND status = 'active'
+			 ORDER BY (role = 'owner') DESC, id LIMIT 1`).Scan(&id); err != nil {
 			return 0, err
 		}
 		cached = authctx.UserID(id)
@@ -362,8 +399,12 @@ func bootstrapPrincipal(pool *pgxpool.Pool, logger *slog.Logger) func(http.Handl
 			}
 			next.ServeHTTP(w, r.WithContext(authctx.WithPrincipal(r.Context(), authctx.Principal{
 				UserID: uid,
-				Role:   authctx.RoleAdmin,
-				Via:    authctx.ViaSession,
+				// Owner, not admin: with AUTH_ENABLED=0 anyone who can reach the
+				// port owns the library anyway, and attributing requests to a role
+				// that cannot change policy would make the escape hatch unable to
+				// fix the very lockout it exists for.
+				Role: authctx.RoleOwner,
+				Via:  authctx.ViaSession,
 			})))
 		})
 	}
@@ -397,8 +438,8 @@ func healthz(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		// Healthz is intentionally public (no SHARED_SECRET gate) so external
-		// probes can check liveness. Surface only the boolean state — the raw
+		// Healthz is intentionally public so external probes can check
+		// liveness. Surface only the boolean state — the raw
 		// `pool.Ping` error can carry internal host/DSN text that doesn't
 		// belong in a response an unauthenticated caller can read.
 		body := map[string]any{"status": "ok", "db": "ok"}
@@ -412,35 +453,6 @@ func healthz(pool *pgxpool.Pool) http.HandlerFunc {
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(body)
 	}
-}
-
-func sharedSecretGuard(expected string, allowDelegatedRequest func(*http.Request) bool) func(http.Handler) http.Handler {
-	// HMAC both sides to a fixed-length digest before comparing. The raw
-	// subtle.ConstantTimeCompare returns 0 immediately when the lengths
-	// differ, leaking the secret length to a remote timing attacker.
-	// HMAC-SHA256 always yields 32 bytes, so the compare is now length-
-	// uniform. The HMAC key is fixed — we're not authenticating a payload,
-	// just normalizing the inputs to a constant size before comparison.
-	const compareKey = "foldex/shared-secret/compare"
-	expectedSum := hmac256(compareKey, expected)
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			got := r.Header.Get("X-Foldex-Secret")
-			gotSum := hmac256(compareKey, got)
-			if !hmac.Equal(gotSum, expectedSum) && (allowDelegatedRequest == nil || !allowDelegatedRequest(r)) {
-				w.WriteHeader(http.StatusUnauthorized)
-				_, _ = w.Write([]byte(`{"error":{"code":"unauthorized","message":"invalid or missing secret"}}`))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-func hmac256(key, msg string) []byte {
-	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write([]byte(msg))
-	return mac.Sum(nil)
 }
 
 func slogRequest(logger *slog.Logger) func(http.Handler) http.Handler {

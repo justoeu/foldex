@@ -750,7 +750,7 @@ func TestRepository_FindDueForCheck_OnlyOptedIn(t *testing.T) {
 func TestRepository_ChangeCheckExcludesLockedLinksAndRejectsFolderMoveRace(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
-	uid := testdb.SeedUser(t, pool, "locked-check@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "locked-check@test.local", "editor")
 	repo := links.NewRepository(pool)
 	password := "folder-password"
 	protected, err := folders.NewRepository(pool).Create(ctx, uid, folders.CreateInput{
@@ -1056,8 +1056,8 @@ func TestRepository_AssertOwned(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
 
-	alice := testdb.SeedUser(t, pool, "alice@test.local", "user")
-	bob := testdb.SeedUser(t, pool, "bob@test.local", "user")
+	alice := testdb.SeedUser(t, pool, "alice@test.local", "editor")
+	bob := testdb.SeedUser(t, pool, "bob@test.local", "editor")
 	repo := links.NewRepository(pool)
 
 	mine, err := repo.Create(ctx, alice, links.CreateInput{URL: "https://a.test/own", Title: "own"})

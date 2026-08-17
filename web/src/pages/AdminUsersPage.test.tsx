@@ -14,7 +14,7 @@ function user(over: Partial<AuthUser> & { id: number }): AuthUser {
   return {
     email: `user${over.id}@foldex.test`,
     name: 'Someone',
-    role: 'user',
+    role: 'editor',
     status: 'active',
     has_password: true,
     totp_enabled: false,
@@ -39,7 +39,7 @@ function render(users: AuthUser[], invites: unknown[] = []) {
 async function rowFor(email: string) {
   const cell = await screen.findByText(email)
   // eslint-disable-next-line testing-library/no-node-access
-  return within(cell.closest('li') as HTMLElement)
+  return within(cell.closest('tr') as HTMLElement)
 }
 
 describe('AdminUsersPage', () => {
@@ -150,7 +150,7 @@ describe('AdminUsersPage', () => {
   it('shows the invite link once, because the log driver has no inbox', async () => {
     const u = userEvent.setup()
     vi.spyOn(http, 'post').mockResolvedValue({
-      data: { id: 1, email: 'new@foldex.test', role: 'user', accept_url: 'https://x/#invite=tok' },
+      data: { id: 1, email: 'new@foldex.test', role: 'editor', accept_url: 'https://x/#invite=tok' },
     } as never)
     render([me])
 

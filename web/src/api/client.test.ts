@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
-  getStoredSecret,
-  setStoredSecret,
   authenticatedFetch,
   advanceAuthEpoch,
   http,
@@ -19,46 +17,6 @@ async function runRequestInterceptor(config: Record<string, unknown>) {
   const fulfilled = handlers.find((h) => h?.fulfilled)?.fulfilled
   return fulfilled!({ headers: {}, ...config })
 }
-
-describe('SHARED_SECRET client helpers', () => {
-  beforeEach(() => {
-    localStorage.clear()
-  })
-
-  afterEach(() => {
-    localStorage.clear()
-    vi.restoreAllMocks()
-  })
-
-  it('getStoredSecret returns empty when unset', () => {
-    expect(getStoredSecret()).toBe('')
-  })
-
-  it('setStoredSecret round-trips and clears', () => {
-    setStoredSecret('s3cret')
-    expect(getStoredSecret()).toBe('s3cret')
-    setStoredSecret('')
-    expect(getStoredSecret()).toBe('')
-    expect(localStorage.getItem('foldex.secret')).toBeNull()
-  })
-
-  it('request interceptor attaches X-Foldex-Secret when stored', async () => {
-    setStoredSecret('my-secret')
-    const handlers = (http.interceptors.request as unknown as { handlers: Array<{ fulfilled?: (c: any) => any }> }).handlers
-    const fulfilled = handlers.find((h) => h?.fulfilled)?.fulfilled
-    expect(fulfilled).toBeTypeOf('function')
-    const cfg = await fulfilled!({ headers: {} as Record<string, string> })
-    expect((cfg.headers as Record<string, string>)['X-Foldex-Secret']).toBe('my-secret')
-  })
-
-  it('request interceptor omits header when secret empty', async () => {
-    setStoredSecret('')
-    const handlers = (http.interceptors.request as unknown as { handlers: Array<{ fulfilled?: (c: any) => any }> }).handlers
-    const fulfilled = handlers.find((h) => h?.fulfilled)?.fulfilled
-    const cfg = await fulfilled!({ headers: {} as Record<string, string> })
-    expect((cfg.headers as Record<string, string>)['X-Foldex-Secret']).toBeUndefined()
-  })
-})
 
 describe('CSRF double-submit', () => {
   beforeEach(() => {
@@ -119,8 +77,7 @@ describe('authenticatedFetch', () => {
     document.cookie = 'fx_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/'
   })
 
-  it('adds session, secret, and CSRF credentials to streamed POSTs', async () => {
-    setStoredSecret('shared')
+  it('adds session and CSRF credentials to streamed POSTs', async () => {
     document.cookie = 'fx_csrf=csrf-token; path=/'
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ status: 200 } as Response)
 
@@ -129,7 +86,6 @@ describe('authenticatedFetch', () => {
     const init = fetchSpy.mock.calls[0][1]!
     const headers = init.headers as Headers
     expect(init.credentials).toBe('include')
-    expect(headers.get('X-Foldex-Secret')).toBe('shared')
     expect(headers.get(CSRF_HEADER)).toBe('csrf-token')
   })
 

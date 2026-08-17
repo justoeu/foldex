@@ -603,7 +603,7 @@ func TestRestore_DirectPreflightRejectsBeforeDatabaseMutation(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			uid := testdb.SeedUser(t, pool, tc.name+"@test.local", "user")
+			uid := testdb.SeedUser(t, pool, tc.name+"@test.local", "editor")
 			keeper, err := notes.NewRepository(pool).Create(ctx, uid, notes.CreateInput{
 				Title: "must survive", BodyHTML: "<p>safe</p>",
 			})
@@ -649,7 +649,7 @@ func TestRestore_DirectPreflightRejectsBeforeDatabaseMutation(t *testing.T) {
 func TestRestoreRejectsChecksumMismatchBeforeMutation(t *testing.T) {
 	pool := testdb.Shared(t)
 	ctx := context.Background()
-	uid := testdb.SeedUser(t, pool, "checksum-preflight@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "checksum-preflight@test.local", "editor")
 	bucket := newStubBucket()
 	repo := links.NewRepository(pool)
 	keeper, err := repo.Create(ctx, uid, links.CreateInput{
@@ -746,7 +746,7 @@ func TestRestore_DirectPreflightPreservesExternalNoteMediaInAllModes(t *testing.
 
 	for _, mode := range []backup.ConflictMode{backup.ModeWipe, backup.ModeSkip, backup.ModeDuplicate} {
 		t.Run(string(mode), func(t *testing.T) {
-			uid := testdb.SeedUser(t, pool, string(mode)+"-external@test.local", "user")
+			uid := testdb.SeedUser(t, pool, string(mode)+"-external@test.local", "editor")
 			snap := backup.Snapshot{
 				Version: backup.DatabaseSnapshotVersion,
 				Notes: []backup.NoteRow{{
@@ -788,7 +788,7 @@ func TestRestore_DirectPreflightRekeysLocalNoteMediaInAllModes(t *testing.T) {
 
 	for _, mode := range []backup.ConflictMode{backup.ModeWipe, backup.ModeSkip, backup.ModeDuplicate} {
 		t.Run(string(mode), func(t *testing.T) {
-			uid := testdb.SeedUser(t, pool, string(mode)+"-local@test.local", "user")
+			uid := testdb.SeedUser(t, pool, string(mode)+"-local@test.local", "editor")
 			bucket := newStubBucket()
 			snap := backup.Snapshot{
 				Version: backup.DatabaseSnapshotVersion,
@@ -926,7 +926,7 @@ func TestValidate_RejectsInvalidFolderPasswordHashes(t *testing.T) {
 
 func TestValidate_RejectsUserIDAnywhereInSnapshot(t *testing.T) {
 	pool := testdb.Shared(t)
-	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
 	db := []byte(`{"version":7,"tags":[{"id":1,"user_id":999,"name":"x","color":"#abc"}]}`)
 	zr := zipFromEntries(t, map[string][]byte{
 		"manifest.json": mustJSON(t, backup.Manifest{

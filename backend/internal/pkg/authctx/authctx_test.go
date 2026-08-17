@@ -54,8 +54,10 @@ func TestMustUserPanicsWithoutPrincipal(t *testing.T) {
 }
 
 func TestRoleIsAdmin(t *testing.T) {
+	assert.True(t, authctx.RoleOwner.IsAdmin())
 	assert.True(t, authctx.RoleAdmin.IsAdmin())
-	assert.False(t, authctx.RoleUser.IsAdmin())
+	assert.False(t, authctx.RoleEditor.IsAdmin())
+	assert.False(t, authctx.RoleViewer.IsAdmin())
 	assert.False(t, authctx.Role("").IsAdmin())
 }
 

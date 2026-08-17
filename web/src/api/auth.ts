@@ -69,6 +69,16 @@ export async function logout(): Promise<void> {
 }
 
 /**
+ * Renames the signed-in account. The only self-service profile field — e-mail
+ * is identity and role/status are administration. Answers with the same
+ * payload shape /me uses, so callers can adopt the refreshed user directly.
+ */
+export async function updateProfile(name: string): Promise<MeResponse> {
+  const { data } = await http.patch<MeResponse>('/api/auth/profile', { name })
+  return data
+}
+
+/**
  * Requests a password-reset link.
  *
  * Resolves for every input, including an unknown address — the backend answers

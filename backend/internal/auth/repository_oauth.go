@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -542,4 +543,57 @@ func nullString(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// ProvisionOAuthUser creates an account for a verified Google address that has
+// none, and links the identity in the same transaction — ADR-35.
+//
+// One transaction is mandatory, not tidy. Migration 000021's deferred
+// constraint trigger requires an ACTIVE account to hold at least one
+// credential, and this account will never hold a password: the row and its
+// identity are only jointly legal, and splitting them would either fail at
+// COMMIT or leave a credential-less active account behind.
+//
+// The e-mail is recorded as verified because Google asserted it — the caller
+// has already refused an unverified address, which is what makes that claim
+// worth anything.
+func (r *Repository) ProvisionOAuthUser(ctx context.Context, email, name, provider, subject string,
+	role authctx.Role) (User, error) {
+
+	// Refused here as well as in the handler and in policy.Validate. This is the
+	// last gate before the INSERT, and the one that holds even if a future caller
+	// forgets: an auto-provisioned account must never arrive administrative.
+	if role != authctx.RoleEditor && role != authctx.RoleViewer {
+		return User{}, fmt.Errorf("auth: refusing to auto-provision role %q", role)
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return User{}, fmt.Errorf("provision begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	u, err := scanUser(tx.QueryRow(ctx, `
+		INSERT INTO app_user (email, email_normalized, name, role, status, email_verified_at)
+		VALUES ($1, $2, $3, $4, 'active', now())
+		RETURNING `+userColumns,
+		strings.TrimSpace(email), NormalizeEmail(email), strings.TrimSpace(name), string(role)))
+	if err != nil {
+		// A concurrent callback for the same address loses the unique index here.
+		if pgerr.UniqueConstraint(err) == "app_user_email_norm_uniq" {
+			return User{}, ErrEmailTaken
+		}
+		return User{}, fmt.Errorf("provision user: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_identity (user_id, provider, subject, email_at_link, last_login_at)
+		VALUES ($1, $2, $3, $4, now())`,
+		int64(u.ID), provider, subject, nullString(email)); err != nil {
+		return User{}, mapIdentityConflict(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, fmt.Errorf("provision commit: %w", err)
+	}
+	return u, nil
 }

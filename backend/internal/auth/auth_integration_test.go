@@ -34,7 +34,9 @@ import (
 	"foldex/internal/auth"
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/secrets"
+	"foldex/internal/policy"
 	"foldex/internal/testdb"
 )
 
@@ -195,6 +197,10 @@ type harnessOpts struct {
 	MailQueue             int
 	MailGate              <-chan struct{}
 	AfterTOTPVerification func(context.Context, authctx.UserID, auth.TOTPProof)
+	// Policy mounts /api/admin/policy and wires the owner-configurable rules
+	// into the handler. Off by default so the tests written before ADR-35 keep
+	// exercising the compiled-in floors.
+	Policy bool
 }
 
 // testCipher is a FIXED key, so a test can assert that a seed encrypted in one
@@ -252,6 +258,11 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 		Require2FAForAdmins: opts.Require2FAForAdmins,
 		Google:              opts.Google,
 	}
+	var policyRepo *policy.Repository
+	if opts.Policy {
+		policyRepo = policy.NewRepository(pool)
+		cfg.Policy = policyRepo
+	}
 	if opts.TwoFactor || opts.Require2FAForAdmins {
 		key := testAuthKey(opts.CipherSeed)
 		cfg.Cipher = testCipherSeeded(t, opts.CipherSeed)
@@ -277,15 +288,23 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 				ar.Use(mw.RequireAdmin)
 				ar.Use(mw.RejectAPIToken)
 				admin.Mount(ar)
+				if policyRepo != nil {
+					ar.Route("/policy", policy.NewHandler(
+						policyRepo, logger, admin.AuditPolicyChange).Mount)
+				}
 			})
 			// A stand-in for the content surface, so tests can assert that a
 			// pre-session credential does not reach data endpoints.
 			pr.Get("/links", func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(w, `{"uid":%d}`, int64(authctx.MustUser(r.Context())))
 			})
-			pr.Post("/links", func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusCreated)
-			})
+			// Carries the same write gate internal/server mounts on the real
+			// content groups, so a viewer's refusal is exercised here rather
+			// than only asserted about the middleware in isolation.
+			pr.With(authgate.RequireWrite(authctx.PermContentWrite)).
+				Post("/links", func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusCreated)
+				})
 		})
 	})
 	return &harness{
@@ -497,7 +516,8 @@ func TestBootstrap_ClaimsThePlaceholderAndSignsIn(t *testing.T) {
 	assert.Equal(t, "authenticated", body["status"])
 	user := body["user"].(map[string]any)
 	assert.Equal(t, "admin@example.com", user["email"])
-	assert.Equal(t, "admin", user["role"])
+	// Owner, not admin: whoever completes setup holds the instance (ADR-33).
+	assert.Equal(t, "owner", user["role"])
 	assert.Equal(t, "active", user["status"])
 
 	var n int
@@ -564,7 +584,8 @@ func TestBootstrap_WorksWithNoPlaceholderRow(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	user := decode(t, rec)["user"].(map[string]any)
-	assert.Equal(t, "admin", user["role"])
+	// Owner, not admin: whoever completes setup holds the instance (ADR-33).
+	assert.Equal(t, "owner", user["role"])
 	assert.Equal(t, "active", user["status"])
 }
 
@@ -614,7 +635,7 @@ func TestBootstrap_RejectsPasswordBeyondBcryptLimit(t *testing.T) {
 
 func TestLogin_SucceedsAndSetsTheCookieTriple(t *testing.T) {
 	h := newHarness(t)
-	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 
 	c := h.client(t)
 	rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -650,8 +671,8 @@ func TestLogin_SucceedsAndSetsTheCookieTriple(t *testing.T) {
 // confirm the address is registered.
 func TestLogin_FailuresAreByteIdentical(t *testing.T) {
 	h := newHarness(t)
-	testdb.SeedUserWithPassword(t, h.pool, "real@example.com", "a good password", "user")
-	disabled := testdb.SeedUserWithPassword(t, h.pool, "disabled@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "real@example.com", "a good password", "editor")
+	disabled := testdb.SeedUserWithPassword(t, h.pool, "disabled@example.com", "a good password", "editor")
 	testdb.SetUserStatus(t, h.pool, disabled, "disabled")
 
 	cases := []struct {
@@ -687,7 +708,7 @@ func TestLogin_FailuresAreByteIdentical(t *testing.T) {
 // account-enumeration oracle.
 func TestLogin_UnknownEmailCostsTheSameAsAWrongPassword(t *testing.T) {
 	h := newHarness(t)
-	testdb.SeedUserWithPassword(t, h.pool, "real@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "real@example.com", "a good password", "editor")
 
 	measure := func(email string) time.Duration {
 		hh := newHarnessOn(t, h.pool)
@@ -711,7 +732,7 @@ func TestLogin_UnknownEmailCostsTheSameAsAWrongPassword(t *testing.T) {
 
 func TestLogin_PendingAccountCannotSignIn(t *testing.T) {
 	h := newHarness(t)
-	uid := testdb.SeedUserWithPassword(t, h.pool, "pending@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "pending@example.com", "a good password", "editor")
 	testdb.SetUserStatus(t, h.pool, uid, "pending")
 
 	rec := h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -725,7 +746,7 @@ func TestLogin_PendingAccountCannotSignIn(t *testing.T) {
 // with an empty string. bcrypt against a NULL hash has to fail closed.
 func TestLogin_AccountWithoutPasswordIsNotLoggableInto(t *testing.T) {
 	h := newHarness(t)
-	testdb.SeedUser(t, h.pool, "nopass@example.com", "user")
+	testdb.SeedUser(t, h.pool, "nopass@example.com", "editor")
 
 	for _, pw := range []string{"", "anything at all"} {
 		rec := h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -737,7 +758,7 @@ func TestLogin_AccountWithoutPasswordIsNotLoggableInto(t *testing.T) {
 
 func TestLogin_EmailIsCaseAndWhitespaceInsensitive(t *testing.T) {
 	h := newHarness(t)
-	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 
 	rec := h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "  User@Example.COM  ", "password": "a good password",
@@ -747,7 +768,7 @@ func TestLogin_EmailIsCaseAndWhitespaceInsensitive(t *testing.T) {
 
 func TestLogin_RateLimitedPerEmail(t *testing.T) {
 	h := newHarness(t)
-	testdb.SeedUserWithPassword(t, h.pool, "target@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "target@example.com", "a good password", "editor")
 	c := h.client(t)
 
 	// The e-mail bucket caps at 5 consecutive failures.
@@ -912,7 +933,7 @@ func TestCSRF_MatchingHeaderAndCookieIsNotEnough(t *testing.T) {
 func TestRequireAdmin_HidesTheSurfaceFromNonAdmins(t *testing.T) {
 	h := newHarness(t)
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 
 	c := h.client(t)
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -1180,7 +1201,7 @@ func TestRefresh_WithoutACookieIs401(t *testing.T) {
 func TestRefresh_RefusedForADisabledAccount(t *testing.T) {
 	h := newHarness(t)
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 
 	c := h.client(t)
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -1201,7 +1222,7 @@ func TestRefresh_RefusedForADisabledAccount(t *testing.T) {
 func TestAuthenticate_DisabledMidSessionIsRejectedAtOnce(t *testing.T) {
 	h := newHarness(t)
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 
 	c := h.client(t)
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -1345,7 +1366,7 @@ func TestSessions_ListAndRevoke(t *testing.T) {
 func TestSessions_CannotRevokeAnotherUsersSession(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "victim@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "victim@example.com", "a good password", "editor")
 
 	victim := h.client(t)
 	require.Equal(t, http.StatusOK, victim.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -1509,7 +1530,7 @@ func TestInvite_FullRoundTrip(t *testing.T) {
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
 	rec := admin.do(http.MethodPost, "/api/admin/invites", map[string]string{
-		"email": "newcomer@example.com", "role": "user",
+		"email": "newcomer@example.com", "role": "editor",
 	})
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	tok := inviteToken(t, rec)
@@ -1532,7 +1553,7 @@ func TestInvite_FullRoundTrip(t *testing.T) {
 	assert.Equal(t, "authenticated", body["status"], "accepting an invite signs you straight in")
 	user := body["user"].(map[string]any)
 	assert.Equal(t, "newcomer@example.com", user["email"])
-	assert.Equal(t, "user", user["role"])
+	assert.Equal(t, "editor", user["role"])
 
 	assert.Equal(t, http.StatusOK, newcomer.do(http.MethodGet, "/api/links", nil).Code)
 }
@@ -1543,7 +1564,7 @@ func TestInvite_TokenIsSingleUse(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	rec := admin.do(http.MethodPost, "/api/admin/invites", map[string]string{
-		"email": "once@example.com", "role": "user",
+		"email": "once@example.com", "role": "editor",
 	})
 	tok := inviteToken(t, rec)
 
@@ -1566,14 +1587,14 @@ func TestInvite_ExpiredAndRevokedTokensAreIndistinguishableFromUnknown(t *testin
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
 	rec := admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": "expired@example.com", "role": "user"})
+		map[string]string{"email": "expired@example.com", "role": "editor"})
 	expiredTok := inviteToken(t, rec)
 	_, err := h.pool.Exec(context.Background(),
 		`UPDATE invite SET expires_at = now() - interval '1 day'`)
 	require.NoError(t, err)
 
 	rec = admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": "revoked@example.com", "role": "user"})
+		map[string]string{"email": "revoked@example.com", "role": "editor"})
 	revokedTok := inviteToken(t, rec)
 	var revokedID int64
 	require.NoError(t, h.pool.QueryRow(context.Background(),
@@ -1600,9 +1621,9 @@ func TestInvite_ReinvitingSupersedesTheOpenOne(t *testing.T) {
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
 	first := inviteToken(t, admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": "twice@example.com", "role": "user"}))
+		map[string]string{"email": "twice@example.com", "role": "editor"}))
 	rec := admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": "twice@example.com", "role": "user"})
+		map[string]string{"email": "twice@example.com", "role": "editor"})
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	second := inviteToken(t, rec)
 
@@ -1617,10 +1638,10 @@ func TestInvite_ReinvitingSupersedesTheOpenOne(t *testing.T) {
 func TestInvite_RefusedForAnExistingAccount(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "taken@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "taken@example.com", "a good password", "editor")
 
 	rec := admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": "taken@example.com", "role": "user"})
+		map[string]string{"email": "taken@example.com", "role": "editor"})
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.Equal(t, "email_taken", errCode(t, rec))
 }
@@ -1631,7 +1652,7 @@ func TestInvite_AcceptCannotEscalateItsOwnRole(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	tok := inviteToken(t, admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": "sneaky@example.com", "role": "user"}))
+		map[string]string{"email": "sneaky@example.com", "role": "editor"}))
 
 	rec := h.client(t).doRaw(http.MethodPost, "/api/auth/invites/accept", map[string]any{
 		"token": tok, "name": "S", "password": "a fresh new password", "role": "admin",
@@ -1646,7 +1667,7 @@ func TestInvite_AcceptCannotEscalateItsOwnRole(t *testing.T) {
 	var role string
 	require.NoError(t, h.pool.QueryRow(context.Background(),
 		`SELECT role FROM app_user WHERE email_normalized = 'sneaky@example.com'`).Scan(&role))
-	assert.Equal(t, "user", role)
+	assert.Equal(t, "editor", role)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1656,7 +1677,7 @@ func TestInvite_AcceptCannotEscalateItsOwnRole(t *testing.T) {
 func TestAdmin_ListUsersNeverIncludesHashes(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 
 	rec := admin.do(http.MethodGet, "/api/admin/users", nil)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -1668,7 +1689,7 @@ func TestAdmin_ListUsersNeverIncludesHashes(t *testing.T) {
 func TestAdmin_DisableRevokesTheUsersSessionsImmediately(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 
 	victim := h.client(t)
 	require.Equal(t, http.StatusOK, victim.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -1687,7 +1708,7 @@ func TestAdmin_CannotDemoteOrDisableSelf(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
-	for _, patch := range []map[string]string{{"role": "user"}, {"status": "disabled"}} {
+	for _, patch := range []map[string]string{{"role": "editor"}, {"status": "disabled"}} {
 		rec := admin.do(http.MethodPatch, "/api/admin/users/1", patch)
 		assert.Equal(t, http.StatusConflict, rec.Code, "patch %v", patch)
 		assert.Equal(t, "self_target", errCode(t, rec))
@@ -1705,7 +1726,7 @@ func TestAdmin_CannotRemoveTheLastAdmin(t *testing.T) {
 
 	// With two admins, demoting the other one is allowed.
 	rec := admin.do(http.MethodPatch, fmt.Sprintf("/api/admin/users/%d", int64(second)),
-		map[string]string{"role": "user"})
+		map[string]string{"role": "editor"})
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	// Now the caller is the last admin, and cannot be removed by anyone —
@@ -1715,13 +1736,19 @@ func TestAdmin_CannotRemoveTheLastAdmin(t *testing.T) {
 	require.Equal(t, http.StatusOK, other.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "admin3@example.com", "password": "a good password",
 	}).Code)
-	require.Equal(t, http.StatusOK, other.do(http.MethodPatch, "/api/admin/users/1",
-		map[string]string{"role": "user"}).Code)
+	// The bootstrap account is the OWNER, and no API call can demote it — that
+	// is a separate invariant with its own test. Clearing it in SQL is what
+	// leaves admin3 as the genuinely last administrator, which is the state
+	// THIS test exists to exercise; going through the API would only re-assert
+	// owner immutability.
+	_, err := h.pool.Exec(context.Background(),
+		`UPDATE app_user SET role = 'editor' WHERE role = 'owner'`)
+	require.NoError(t, err)
 
 	// admin3 is now the only active admin: it cannot demote itself, and no one
 	// else can either.
 	rec = other.do(http.MethodPatch, fmt.Sprintf("/api/admin/users/%d", int64(promoted)),
-		map[string]string{"role": "user"})
+		map[string]string{"role": "editor"})
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.Equal(t, "self_target", errCode(t, rec))
 }
@@ -1757,6 +1784,14 @@ func TestAdmin_ConcurrentDemotionsAlwaysLeaveAnAdmin(t *testing.T) {
 		email2 := fmt.Sprintf("admin2-%d@example.com", round)
 		secondID := testdb.SeedUserWithPassword(t, h.pool, email2, "a good password", "admin")
 
+		// Both principals must be ordinary admins for the COUNTING guard to be
+		// what decides. Left as owner, `first` would be refused by owner
+		// immutability instead — a different invariant, tested separately — and
+		// the race this test exists to exercise would never run.
+		_, err := h.pool.Exec(context.Background(),
+			`UPDATE app_user SET role = 'admin' WHERE role = 'owner'`)
+		require.NoError(t, err)
+
 		second := h.client(t)
 		require.Equal(t, http.StatusOK, second.do(http.MethodPost, "/api/auth/login", map[string]string{
 			"email": email2, "password": "a good password",
@@ -1772,20 +1807,20 @@ func TestAdmin_ConcurrentDemotionsAlwaysLeaveAnAdmin(t *testing.T) {
 			defer wg.Done()
 			<-start
 			recs[0] = first.do(http.MethodPatch, fmt.Sprintf("/api/admin/users/%d", int64(secondID)),
-				map[string]string{"role": "user"})
+				map[string]string{"role": "editor"})
 		}()
 		go func() {
 			defer wg.Done()
 			<-start
 			recs[1] = second.do(http.MethodPatch, fmt.Sprintf("/api/admin/users/%d", int64(firstID)),
-				map[string]string{"role": "user"})
+				map[string]string{"role": "editor"})
 		}()
 		close(start)
 		wg.Wait()
 
 		var admins int
 		require.NoError(t, h.pool.QueryRow(context.Background(),
-			`SELECT count(*) FROM app_user WHERE role = 'admin' AND status = 'active'`).Scan(&admins))
+			`SELECT count(*) FROM app_user WHERE role IN ('owner', 'admin') AND status = 'active'`).Scan(&admins))
 		require.GreaterOrEqual(t, admins, 1,
 			"round %d: both demotions landed (%d/%d) — no administrator left",
 			round, recs[0].Code, recs[1].Code)
@@ -1810,7 +1845,7 @@ func TestAdmin_ConcurrentDemotionsAlwaysLeaveAnAdmin(t *testing.T) {
 func TestAdmin_DeleteCascadesTheUsersContent(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	uid := testdb.SeedUserWithPassword(t, h.pool, "doomed@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "doomed@example.com", "a good password", "editor")
 
 	ctx := context.Background()
 	_, err := h.pool.Exec(ctx,
@@ -1832,7 +1867,7 @@ func TestAdmin_DeleteCascadesTheUsersContent(t *testing.T) {
 func TestAdmin_RevokeUserSessions(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 
 	victim := h.client(t)
 	require.Equal(t, http.StatusOK, victim.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -1848,7 +1883,7 @@ func TestAdmin_RevokeUserSessions(t *testing.T) {
 func TestAdmin_RejectsInvalidRoleAndStatus(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 	path := fmt.Sprintf("/api/admin/users/%d", int64(uid))
 
 	rec := admin.do(http.MethodPatch, path, map[string]string{"role": "superuser"})
@@ -1987,9 +2022,9 @@ func TestAdmin_ListInvitesShowsOpenOnesAndNeverTheToken(t *testing.T) {
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
 	openTok := inviteToken(t, admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": "open@example.com", "role": "user"}))
+		map[string]string{"email": "open@example.com", "role": "editor"}))
 	admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": "expired@example.com", "role": "user"})
+		map[string]string{"email": "expired@example.com", "role": "editor"})
 	_, err := h.pool.Exec(context.Background(),
 		`UPDATE invite SET expires_at = now() - interval '1 day' WHERE email_normalized = 'expired@example.com'`)
 	require.NoError(t, err)
@@ -2010,7 +2045,7 @@ func TestAdmin_RevokeInviteIsIdempotentlyNotFound(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": "gone@example.com", "role": "user"})
+		map[string]string{"email": "gone@example.com", "role": "editor"})
 
 	var id int64
 	require.NoError(t, h.pool.QueryRow(context.Background(),
@@ -2035,7 +2070,7 @@ func TestAdmin_InviteRejectsABadRoleOrEmail(t *testing.T) {
 	assert.Equal(t, "invalid_role", errCode(t, rec))
 
 	rec = admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": "not-an-email", "role": "user"})
+		map[string]string{"email": "not-an-email", "role": "editor"})
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, "invalid_email", errCode(t, rec))
 }
@@ -2048,7 +2083,7 @@ func TestAdmin_InviteDefaultsToTheLeastPrivilege(t *testing.T) {
 	rec := admin.do(http.MethodPost, "/api/admin/invites",
 		map[string]string{"email": "default@example.com"})
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
-	assert.Equal(t, "user", decode(t, rec)["role"])
+	assert.Equal(t, "editor", decode(t, rec)["role"])
 }
 
 // The grace window must not be an unbounded session factory.
@@ -2214,7 +2249,7 @@ func TestHandlers_DegradeCleanlyWhenTheDatabaseIsUnreachable(t *testing.T) {
 		{"admin list users", http.MethodGet, "/api/admin/users", nil},
 		{"admin list invites", http.MethodGet, "/api/admin/invites", nil},
 		{"admin create invite", http.MethodPost, "/api/admin/invites", map[string]string{
-			"email": "someone@example.com", "role": "user"}},
+			"email": "someone@example.com", "role": "editor"}},
 		{"admin update user", http.MethodPatch, "/api/admin/users/2", map[string]string{"name": "x"}},
 		{"admin delete user", http.MethodDelete, "/api/admin/users/2", nil},
 		{"admin revoke sessions", http.MethodPost, "/api/admin/users/2/sessions/revoke", nil},
@@ -2316,6 +2351,13 @@ func TestAdmin_MutualConcurrentDemotionCannotStrandTheInstanceWithNoAdmin(t *tes
 	h.bootstrapAdmin(t, "alice@example.com", "a good password")
 	bob := testdb.SeedUserWithPassword(t, h.pool, "bob@example.com", "a good password", "admin")
 
+	// Alice bootstraps as OWNER, and the owner is immutable through the API.
+	// Levelling her to admin is what makes this a race between two peers, which
+	// is the only shape where the counting guard is what decides.
+	_, err := h.pool.Exec(context.Background(),
+		`UPDATE app_user SET role = 'admin' WHERE role = 'owner'`)
+	require.NoError(t, err)
+
 	// Exactly two active admins now: alice (id 1) and bob.
 	var before int
 	require.NoError(t, h.pool.QueryRow(context.Background(),
@@ -2339,13 +2381,13 @@ func TestAdmin_MutualConcurrentDemotionCannotStrandTheInstanceWithNoAdmin(t *tes
 		defer wg.Done()
 		<-start
 		codes[0] = alice.do(http.MethodPatch, fmt.Sprintf("/api/admin/users/%d", int64(bob)),
-			map[string]string{"role": "user"}).Code
+			map[string]string{"role": "editor"}).Code
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
 		codes[1] = bobCl.do(http.MethodPatch, "/api/admin/users/1",
-			map[string]string{"role": "user"}).Code
+			map[string]string{"role": "editor"}).Code
 	}()
 	close(start) // release both as close to simultaneously as Go allows
 	wg.Wait()
@@ -2382,13 +2424,17 @@ func TestAdmin_DemotingTheLastAdminIsRefused(t *testing.T) {
 	}).Code)
 	_ = other
 
-	// Demote the bootstrap admin — allowed, two admins exist.
-	require.Equal(t, http.StatusOK,
-		c.do(http.MethodPatch, "/api/admin/users/1", map[string]string{"role": "user"}).Code)
+	// Clear the OWNER out of the way in SQL: the seat is immutable through the
+	// API by design, and what this test needs is an instance whose only
+	// administrator is an ordinary admin — the state where the counting guard,
+	// rather than owner immutability, is what refuses.
+	_, err := h.pool.Exec(context.Background(),
+		`UPDATE app_user SET role = 'editor' WHERE role = 'owner'`)
+	require.NoError(t, err)
 
 	// Now admin2 is the only one, and cannot be demoted even by itself.
 	rec := c.do(http.MethodPatch, fmt.Sprintf("/api/admin/users/%d", int64(other)),
-		map[string]string{"role": "user"})
+		map[string]string{"role": "editor"})
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	// The self-target guard fires first here, which is also correct — both
 	// refuse, and neither leaves the instance without an administrator.
@@ -2407,7 +2453,7 @@ func TestAdmin_FullUserLifecycle(t *testing.T) {
 
 	// 1. Invite, and confirm it shows up as open.
 	tok := inviteToken(t, admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": "member@example.com", "role": "user"}))
+		map[string]string{"email": "member@example.com", "role": "editor"}))
 	rec := admin.do(http.MethodGet, "/api/admin/invites", nil)
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "member@example.com")
@@ -2437,7 +2483,7 @@ func TestAdmin_FullUserLifecycle(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	body := decode(t, rec)
 	assert.Equal(t, "Renamed Member", body["name"])
-	assert.Equal(t, "user", body["role"])
+	assert.Equal(t, "editor", body["role"])
 	assert.Equal(t, "active", body["status"])
 	assert.Equal(t, http.StatusOK, member.do(http.MethodGet, "/api/links", nil).Code,
 		"a rename must not sign the user out")
@@ -2483,7 +2529,7 @@ func TestBootstrap_ConflictsWhenTheEmailBelongsToAnotherRow(t *testing.T) {
 	// A non-active row already holding the address.
 	_, err := h.pool.Exec(ctx, `
 		INSERT INTO app_user (email, email_normalized, name, role, status)
-		VALUES ('taken@example.com', 'taken@example.com', 'Squatter', 'user', 'disabled')`)
+		VALUES ('taken@example.com', 'taken@example.com', 'Squatter', 'editor', 'disabled')`)
 	require.NoError(t, err)
 	// Plus the placeholder bootstrap would otherwise claim.
 	_, err = h.pool.Exec(ctx, `
@@ -2512,10 +2558,10 @@ func TestAcceptInvite_ConflictsWhenTheAddressWasClaimedMeanwhile(t *testing.T) {
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
 	tok := inviteToken(t, admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": "racer@example.com", "role": "user"}))
+		map[string]string{"email": "racer@example.com", "role": "editor"}))
 
 	// The address is taken after the invite was issued.
-	testdb.SeedUserWithPassword(t, h.pool, "racer@example.com", "some other password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "racer@example.com", "some other password", "editor")
 
 	rec := h.client(t).do(http.MethodPost, "/api/auth/invites/accept", map[string]string{
 		"token": tok, "name": "Racer", "password": "a fresh new password",
@@ -2550,14 +2596,19 @@ func TestAcceptInvite_ConflictsWhenTheAddressWasClaimedMeanwhile(t *testing.T) {
 func TestAdmin_ConcurrentMutualDemotionCannotEmptyTheAdminSet(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	userRole := authctx.RoleUser
+	userRole := authctx.RoleEditor
 
 	const rounds = 20
 	for round := range rounds {
 		// The guard counts every active admin, so the round is only meaningful
 		// when these two are the only ones. Survivors of earlier rounds are
 		// demoted rather than deleted (cheaper, and it keeps their ids taken).
-		_, err := h.pool.Exec(ctx, `UPDATE app_user SET role = 'user' WHERE role = 'admin'`)
+		// Clears OWNER as well as admin: the guard counts every role that can
+		// administer, so an owner left standing would keep the count above one
+		// and neither demotion would ever be refused — the test would pass
+		// while proving nothing.
+		_, err := h.pool.Exec(ctx,
+			`UPDATE app_user SET role = 'editor' WHERE role IN ('owner', 'admin')`)
 		require.NoError(t, err)
 		a := testdb.SeedUser(t, h.pool, fmt.Sprintf("race-a%d@example.com", round), "admin")
 		b := testdb.SeedUser(t, h.pool, fmt.Sprintf("race-b%d@example.com", round), "admin")
@@ -2581,7 +2632,7 @@ func TestAdmin_ConcurrentMutualDemotionCannotEmptyTheAdminSet(t *testing.T) {
 
 		var admins int
 		require.NoError(t, h.pool.QueryRow(ctx,
-			`SELECT count(*) FROM app_user WHERE role = 'admin' AND status = 'active'`).Scan(&admins))
+			`SELECT count(*) FROM app_user WHERE role IN ('owner', 'admin') AND status = 'active'`).Scan(&admins))
 		require.GreaterOrEqual(t, admins, 1,
 			"round %d: both demotions landed (errs=%v) — no administrator left", round, errs)
 
@@ -2608,7 +2659,7 @@ func TestAdmin_ConcurrentMutualDemotionCannotEmptyTheAdminSet(t *testing.T) {
 func TestLogin_ClearsAStalePreAuthCookie(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
-	testdb.SeedUserWithPassword(t, h.pool, "2fa@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "2fa@example.com", "a good password", "editor")
 	enrolUser(t, h, "2fa@example.com", "a good password")
 
 	// A FRESH client, so the enrollment's own session does not mask the
@@ -2622,7 +2673,7 @@ func TestLogin_ClearsAStalePreAuthCookie(t *testing.T) {
 	require.NotEmpty(t, c.cookies[auth.CookiePreAuth], "the challenge must have set fx_pa")
 
 	// Abandon it and sign in as an account that needs no second factor.
-	testdb.SeedUserWithPassword(t, h.pool, "plain@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "plain@example.com", "a good password", "editor")
 	rec = c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "plain@example.com", "password": "a good password",
 	})

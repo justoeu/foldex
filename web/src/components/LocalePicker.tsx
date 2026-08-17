@@ -1,10 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { SUPPORTED_LOCALES, type LocaleCode } from '../i18n'
-
-type MenuPos = { top: number; right: number }
+import { usePortalMenu } from '../hooks/usePortalMenu'
 
 // Globe button in the topbar that pops a menu of supported languages and
 // persists the choice via i18next's detector (localStorage["foldex.locale"]).
@@ -13,57 +11,14 @@ type MenuPos = { top: number; right: number }
 // button rect: the topbar sets `overflow: hidden` (so its CTAs can't spill out
 // of the rounded card), which clipped an absolutely-positioned dropdown — the
 // menu rendered behind / cut off by the topbar and its options were unclickable.
+// The portal plumbing is shared with the user menu via usePortalMenu.
 export function LocalePicker() {
   const { i18n, t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  const [pos, setPos] = useState<MenuPos | null>(null)
-  const btnRef = useRef<HTMLButtonElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
+  const { open, pos, btnRef, menuRef, toggle, setOpen } = usePortalMenu()
 
   const current =
     SUPPORTED_LOCALES.find((l) => l.code === (i18n.resolvedLanguage ?? i18n.language)) ??
     SUPPORTED_LOCALES[0]
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      // Whitelist BOTH the button and the (portaled) menu: a mousedown on an
-      // option must not close on mousedown, or the menu unmounts before the
-      // option's click fires — the bug that made every option unclickable.
-      const target = e.target as Node
-      if (btnRef.current?.contains(target) || menuRef.current?.contains(target)) return
-      setOpen(false)
-    }
-    const close = () => setOpen(false)
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    window.addEventListener('mousedown', onDown)
-    // The fixed-positioned portal goes stale on scroll/resize — close rather
-    // than track the anchor (a click away reopens it in the right place).
-    window.addEventListener('scroll', close, true)
-    window.addEventListener('resize', close)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('mousedown', onDown)
-      window.removeEventListener('scroll', close, true)
-      window.removeEventListener('resize', close)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open])
-
-  const toggle = () => {
-    setOpen((v) => {
-      const next = !v
-      if (next && btnRef.current) {
-        // Capture geometry once at open time (same instant as `open` flips, so
-        // they commit together). Right-align the menu to the button's edge.
-        const r = btnRef.current.getBoundingClientRect()
-        setPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) })
-      }
-      return next
-    })
-  }
 
   const pick = (code: LocaleCode) => {
     void i18n.changeLanguage(code)

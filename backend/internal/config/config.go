@@ -45,7 +45,6 @@ type Config struct {
 	DBURL              string
 	PreviewConcurrency int
 	PreviewTimeoutSec  int
-	SharedSecret       string
 	CORSOrigins        []string
 
 	// AuthEnabled turns on the multi-user authentication stack (ADR-30).
@@ -169,7 +168,6 @@ func Load() (Config, error) {
 		DBURL:              os.Getenv("DB_URL"),
 		PreviewConcurrency: envInt("PREVIEW_WORKER_CONCURRENCY", 4),
 		PreviewTimeoutSec:  envInt("PREVIEW_FETCH_TIMEOUT_SEC", 5),
-		SharedSecret:       os.Getenv("SHARED_SECRET"),
 		CORSOrigins:        splitCSV(envOr("CORS_ORIGINS", "*")),
 		AuthEnabled:        envBool("AUTH_ENABLED", true),
 		AuthPublicURL:      envOr("AUTH_PUBLIC_URL", "http://localhost:9088"),
@@ -350,12 +348,12 @@ func issuerFromURL(raw string) string {
 }
 
 // validateSecureDefaults refuses to boot when the API would be network-
-// reachable without SHARED_SECRET. CORS is NOT authentication — a restricted
+// reachable without authentication. CORS is NOT authentication — a restricted
 // origin list does not stop curl/scripts from hitting the API.
 //
-// Loopback binds (127.0.0.1 / ::1 / localhost) may omit SHARED_SECRET for the
-// single-user local threat model. Any non-loopback bind requires a non-empty
-// SHARED_SECRET.
+// Loopback binds (127.0.0.1 / ::1 / localhost) may disable auth for the
+// single-user local threat model. Any non-loopback bind requires
+// AUTH_ENABLED=1.
 func (c Config) validateSecureDefaults() error {
 	if !c.ObjectStore.AllowInsecureDevCredentials &&
 		(c.ObjectStore.SecretKey == "rustfsadmin" || c.ObjectStore.SecretKey == "foldex-change-me") {
@@ -365,17 +363,14 @@ func (c Config) validateSecureDefaults() error {
 		)
 	}
 	// The question this asks is "can anyone who reaches the port read the
-	// data", and until ADR-30 the only possible answer was SHARED_SECRET. Now
-	// AUTH_ENABLED answers it properly: it does not merely gate the surface,
-	// it identifies the caller and scopes every row to them. Continuing to
-	// demand a header that authenticates nobody would mean the documentation
-	// (which deprecates it) and the boot check disagree — and the shipped
-	// compose stack, which binds 0.0.0.0 for nginx and ships no secret, would
-	// refuse to start.
-	if !isLocalBind(c.BindAddr) && !c.AuthEnabled && c.SharedSecret == "" {
+	// data". AUTH_ENABLED answers it properly: it does not merely gate the
+	// surface, it identifies the caller and scopes every row to them. The
+	// historical SHARED_SECRET perimeter answered nothing (it identified
+	// nobody) and was removed.
+	if !isLocalBind(c.BindAddr) && !c.AuthEnabled {
 		return errors.New(
 			"insecure config: BACKEND_BIND=" + c.BindAddr +
-				" (non-loopback) with AUTH_ENABLED=0 AND SHARED_SECRET empty — " +
+				" (non-loopback) with AUTH_ENABLED=0 — " +
 				"every request would be attributed to the bootstrap administrator " +
 				"with no credential at all. Turn AUTH_ENABLED on, or bind to 127.0.0.1",
 		)

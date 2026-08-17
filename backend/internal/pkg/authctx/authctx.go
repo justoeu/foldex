@@ -22,16 +22,32 @@ import "context"
 type UserID int64
 
 // Role is the RBAC level of a principal. The set is closed by a CHECK
-// constraint on app_user.role.
+// constraint on app_user.role, and what each role may do lives in the matrix in
+// permissions.go — see ADR-33.
 type Role string
 
 const (
+	// RoleOwner runs the instance. Exactly one row holds it, enforced by a
+	// partial unique index rather than by handler discipline, and it moves only
+	// by transfer.
+	RoleOwner Role = "owner"
+	// RoleAdmin manages people and reads the audit trail, but does not set the
+	// policies it manages them under.
 	RoleAdmin Role = "admin"
-	RoleUser  Role = "user"
+	// RoleEditor is an ordinary account: full CRUD over its own library. This is
+	// what migration 000032 turned every pre-existing 'user' into.
+	RoleEditor Role = "editor"
+	// RoleViewer holds its own library read-only.
+	RoleViewer Role = "viewer"
 )
 
-// IsAdmin reports whether the role grants access to /api/admin/*.
-func (r Role) IsAdmin() bool { return r == RoleAdmin }
+// IsAdmin reports whether the role may reach /api/admin/* at all.
+//
+// It stays a role test rather than a permission test because it gates the whole
+// route group before any handler-specific permission does: the group answers 404
+// to everyone else, so the finer check inside would never run. The per-endpoint
+// authority is still Can — this only decides whether the surface exists.
+func (r Role) IsAdmin() bool { return r == RoleOwner || r == RoleAdmin }
 
 // Via records which credential authenticated the request. API tokens skip CSRF
 // (they carry no ambient credential) and are rejected on the auth, admin and

@@ -53,8 +53,8 @@ func (f staticChangeFetcher) GetRaw(context.Context, string) ([]byte, string, er
 func TestChangeCheckPushGoesOnlyToTheLinkOwner(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
-	ownerA := testdb.SeedUser(t, pool, "owner-a@test.local", "user")
-	ownerB := testdb.SeedUser(t, pool, "owner-b@test.local", "user")
+	ownerA := testdb.SeedUser(t, pool, "owner-a@test.local", "editor")
+	ownerB := testdb.SeedUser(t, pool, "owner-b@test.local", "editor")
 
 	linkRepo := links.NewRepository(pool)
 	linkA, err := linkRepo.Create(ctx, ownerA, links.CreateInput{

@@ -162,7 +162,6 @@ describe("optional Foldex origin access", () => {
       {
         baseUrl: "https://Foldex.Example:443/app/",
         apiToken: " fx_token ",
-        sharedSecret: " old-secret ",
       },
       { chromeApi },
     );
@@ -172,7 +171,6 @@ describe("optional Foldex origin access", () => {
       {
         baseUrl: "https://foldex.example/app",
         apiToken: "fx_token",
-        sharedSecret: "old-secret",
       },
     ]);
     expect(calls.events).toEqual(["request", "set"]);
@@ -184,7 +182,7 @@ describe("optional Foldex origin access", () => {
 
     await expect(
       saveOptions(
-        { baseUrl: "https://foldex.example", apiToken: "", sharedSecret: "" },
+        { baseUrl: "https://foldex.example", apiToken: "" },
         { chromeApi },
       ),
     ).rejects.toThrow(
@@ -203,7 +201,6 @@ describe("optional Foldex origin access", () => {
         {
           baseUrl: "https://foldex.example",
           apiToken: "fx_token",
-          sharedSecret: "",
         },
         { chromeApi },
       ),
@@ -230,7 +227,6 @@ describe("optional Foldex origin access", () => {
       "status",
       "baseUrl",
       "apiToken",
-      "sharedSecret",
       "save",
       "test",
     ]);
@@ -323,7 +319,6 @@ describe("optional Foldex origin access", () => {
       "status",
       "baseUrl",
       "apiToken",
-      "sharedSecret",
       "save",
       "test",
     ]);
@@ -344,7 +339,6 @@ describe("optional Foldex origin access", () => {
       {
         baseUrl: "https://foldex.example/app/",
         apiToken: "fx_token",
-        sharedSecret: "",
       },
       { chromeApi, fetchImpl },
     );
@@ -368,7 +362,7 @@ describe("optional Foldex origin access", () => {
 
     await expect(
       testConnection(
-        { baseUrl: "http://localhost:9089", apiToken: "", sharedSecret: "" },
+        { baseUrl: "http://localhost:9089", apiToken: "" },
         { chromeApi, fetchImpl },
       ),
     ).rejects.toThrow("Choose Allow when prompted, then try again.");
@@ -384,7 +378,6 @@ describe("optional Foldex origin access", () => {
         {
           baseUrl: "https://foldex.example/app",
           apiToken: "",
-          sharedSecret: "",
         },
         { chromeApi, fetchImpl },
       ),
@@ -403,7 +396,6 @@ describe("optional Foldex origin access", () => {
       {
         baseUrl: "https://foldex.example/app/",
         apiToken: "fx_token",
-        sharedSecret: "",
       },
       {
         url: "https://example.com",

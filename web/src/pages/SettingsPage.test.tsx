@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { SettingsPage } from './SettingsPage'
-import { renderWithProviders } from '../test/renderWithProviders'
+import { SettingsPage, resolveHubView } from './SettingsPage'
+import { renderWithProviders, testAdminSession } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
+import { http } from '../api/client'
+import type { AuthUser } from '../auth/types'
 
 let state: MockState
 
@@ -28,9 +30,148 @@ function lockedFolder(id: number, name: string) {
   state.folderPasswords[id] = 'folder-pass'
 }
 
+const userSession = {
+  ...testAdminSession,
+  user: {
+    ...(testAdminSession as { user: object }).user,
+    role: 'editor',
+  },
+} as typeof testAdminSession
+
+const adminRow: AuthUser = {
+  email: 'admin@foldex.test',
+  name: 'Test Admin',
+  id: 1,
+  role: 'admin',
+  status: 'active',
+  has_password: true,
+  totp_enabled: false,
+  created_at: '2026-01-01T00:00:00Z',
+}
+
+/** Renders the hub and clicks into a tile, so section tests start where the
+ *  user now does: one click deep inside the consolidated settings hub. */
+async function renderAtSection(section: 'master' | 'locked', onEditFolder?: (folderId: number) => void) {
+  renderWithProviders(<SettingsPage onEditFolder={onEditFolder} />)
+  const tile = section === 'master' ? /^master password/i : /^locked folders/i
+  await userEvent.setup().click(await screen.findByRole('button', { name: tile }))
+}
+
+describe('SettingsPage — hub', () => {
+  it('shows the personal tiles for a normal user and hides the administration scope (RBAC)', async () => {
+    renderWithProviders(<SettingsPage />, { session: userSession })
+    expect(await screen.findByRole('button', { name: /^account/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /security & 2fa/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /api tokens/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^master password/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^locked folders/i })).toBeInTheDocument()
+    // No scope segment and no admin tile: /api/admin 404s for this session,
+    // so the hub must not promise a surface the server denies.
+    expect(screen.queryByRole('button', { name: /^administration$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /users & invitations/i })).not.toBeInTheDocument()
+  })
+
+  it('shows the RBAC segment for an admin and switches to the administration scope', async () => {
+    renderWithProviders(<SettingsPage />)
+    expect(await screen.findByRole('button', { name: /^administration$/i })).toBeInTheDocument()
+    await userEvent.setup().click(screen.getByRole('button', { name: /^administration$/i }))
+    expect(await screen.findByRole('button', { name: /manage accounts/i })).toBeInTheDocument()
+    // Personal tiles are replaced, not stacked, in the admin scope.
+    expect(screen.queryByRole('button', { name: /api tokens/i })).not.toBeInTheDocument()
+  })
+
+  it('opens the admin section from the card and the back button returns to the hub', async () => {
+    const get = vi.spyOn(http, 'get').mockImplementation(async (url: string) => {
+      if (url === '/api/admin/users') return { data: { users: [adminRow] } } as never
+      if (url === '/api/admin/roles') return { data: { roles: [], permissions: [] } } as never
+      if (url === '/api/admin/audit') return { data: { entries: [] } } as never
+      if (url === '/api/admin/metrics') {
+        return {
+          data: {
+            active_users: 1, active_users_added_30d: 0, pending_invites: 0,
+            next_invite_expiry_hours: null, roles_in_use: 1, permission_count: 14,
+            two_factor_percent: 0,
+          },
+        } as never
+      }
+      return { data: { invites: [] } } as never
+    })
+    renderWithProviders(<SettingsPage />)
+    await userEvent.setup().click(screen.getByRole('button', { name: /^administration$/i }))
+    await userEvent.setup().click(await screen.findByRole('button', { name: /manage accounts/i }))
+    expect(await screen.findByText(adminRow.email)).toBeInTheDocument()
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /^settings$/i }))
+    expect(await screen.findByRole('button', { name: /manage accounts/i })).toBeInTheDocument()
+    get.mockRestore()
+  })
+
+  it('shortcut tiles leave the hub for import/export and stats', async () => {
+    const onNavigate = vi.fn()
+    renderWithProviders(<SettingsPage onNavigate={onNavigate} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /import \/ export/i }))
+    expect(onNavigate).toHaveBeenCalledWith('import')
+    await user.click(screen.getByRole('button', { name: /statistics/i }))
+    expect(onNavigate).toHaveBeenCalledWith('stats')
+  })
+
+  it('opens the account, security and tokens tiles into their sections', async () => {
+    renderWithProviders(<SettingsPage />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /^profile/i }))
+    expect(await screen.findByRole('heading', { name: /your profile/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /settings/i }))
+
+    await user.click(screen.getByRole('button', { name: /^account/i }))
+    expect(await screen.findByRole('heading', { name: /sign-in & profile/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /settings/i }))
+
+    await user.click(screen.getByRole('button', { name: /security & 2fa/i }))
+    expect(await screen.findByRole('heading', { name: /two-factor authentication/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /settings/i }))
+
+    await user.click(screen.getByRole('button', { name: /api tokens/i }))
+    expect(await screen.findByRole('heading', { name: /^api tokens$/i, level: 1 })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /settings/i }))
+    // Every back landed on the hub again.
+    expect(screen.getByRole('button', { name: /^profile/i })).toBeInTheDocument()
+  })
+
+  // The topbar user menu deep-links here via initialSection (key-remounted by
+  // AppShell); an unknown value must fall back to the overview, never crash.
+  it('deep-links into the profile section and ignores unknown sections', async () => {
+    renderWithProviders(<SettingsPage initialSection="profile" />)
+    expect(await screen.findByRole('heading', { name: /your profile/i })).toBeInTheDocument()
+
+    renderWithProviders(<SettingsPage initialSection="bogus" />)
+    expect(await screen.findByRole('button', { name: /^profile/i })).toBeInTheDocument()
+  })
+
+  it('returns from the administration scope to personal via the segment', async () => {
+    renderWithProviders(<SettingsPage />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /^administration$/i }))
+    expect(await screen.findByRole('button', { name: /manage accounts/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^personal$/i }))
+    expect(await screen.findByRole('button', { name: /api tokens/i })).toBeInTheDocument()
+  })
+
+  // Pure-function lock on the demotion fallback: the branch is unreachable
+  // through the UI (a non-admin has no admin tile to click), so the resolver
+  // is exported and tested directly.
+  it('resolveHubView collapses admin surfaces for a demoted session', () => {
+    expect(resolveHubView(true, 'admin', 'admin')).toEqual({ scope: 'admin', section: 'admin' })
+    expect(resolveHubView(false, 'admin', 'admin')).toEqual({ scope: 'personal', section: 'overview' })
+    expect(resolveHubView(false, 'personal', 'admin')).toEqual({ scope: 'personal', section: 'overview' })
+    expect(resolveHubView(false, 'personal', 'master')).toEqual({ scope: 'personal', section: 'master' })
+    expect(resolveHubView(true, 'personal', 'locked')).toEqual({ scope: 'personal', section: 'locked' })
+  })
+})
+
 describe('SettingsPage — master password', () => {
   it('shows the unconfigured state and sets a first master password + hint', async () => {
-    renderWithProviders(<SettingsPage />)
+    await renderAtSection('master')
     await waitFor(() => expect(screen.getByText(/no master password configured/i)).toBeInTheDocument())
 
     const user = userEvent.setup()
@@ -50,7 +191,7 @@ describe('SettingsPage — master password', () => {
   it('keeps the existing hint when changing the password with an empty reminder', async () => {
     state.masterPassword = 'original-master'
     state.masterHint = 'keep me'
-    renderWithProviders(<SettingsPage />)
+    await renderAtSection('master')
     await waitFor(() => expect(screen.getByText(/a master password is configured/i)).toBeInTheDocument())
 
     const user = userEvent.setup()
@@ -65,14 +206,14 @@ describe('SettingsPage — master password', () => {
   })
 
   it('shows a strength meter as the password is typed', async () => {
-    renderWithProviders(<SettingsPage />)
+    await renderAtSection('master')
     await waitFor(() => expect(screen.getByText(/no master password configured/i)).toBeInTheDocument())
     await userEvent.setup().type(screen.getByLabelText(/^master password$/i), 'S0me-Very-Long-Pass!')
     expect(screen.getByText(/^strong$/i)).toBeInTheDocument()
   })
 
   it('blocks save when confirmation does not match', async () => {
-    renderWithProviders(<SettingsPage />)
+    await renderAtSection('master')
     await waitFor(() => expect(screen.getByText(/no master password configured/i)).toBeInTheDocument())
     const user = userEvent.setup()
     await user.type(screen.getByLabelText(/^master password$/i), 'super-secret-master')
@@ -83,7 +224,7 @@ describe('SettingsPage — master password', () => {
 
   it('changes an existing master password with the correct current one', async () => {
     state.masterPassword = 'original-master'
-    renderWithProviders(<SettingsPage />)
+    await renderAtSection('master')
     await waitFor(() => expect(screen.getByText(/a master password is configured/i)).toBeInTheDocument())
 
     const user = userEvent.setup()
@@ -97,7 +238,7 @@ describe('SettingsPage — master password', () => {
 
   it('removes an existing master password', async () => {
     state.masterPassword = 'original-master'
-    renderWithProviders(<SettingsPage />)
+    await renderAtSection('master')
     await waitFor(() => expect(screen.getByText(/a master password is configured/i)).toBeInTheDocument())
 
     const user = userEvent.setup()
@@ -109,7 +250,7 @@ describe('SettingsPage — master password', () => {
   })
 
   it('rejects a too-short master password client-side', async () => {
-    renderWithProviders(<SettingsPage />)
+    await renderAtSection('master')
     await waitFor(() => expect(screen.getByText(/no master password configured/i)).toBeInTheDocument())
 
     const user = userEvent.setup()
@@ -126,7 +267,7 @@ describe('SettingsPage — locked folders reset', () => {
   it('lists locked folders and resets one with the master password', async () => {
     state.masterPassword = 'master-pass'
     lockedFolder(7, 'Vault')
-    renderWithProviders(<SettingsPage />)
+    await renderAtSection('locked')
 
     await waitFor(() => expect(screen.getByText('Vault')).toBeInTheDocument())
     const user = userEvent.setup()
@@ -141,7 +282,7 @@ describe('SettingsPage — locked folders reset', () => {
   it('toggles between the reset and remove prompts on the same row', async () => {
     state.masterPassword = 'master-pass'
     lockedFolder(13, 'VaultToggle')
-    renderWithProviders(<SettingsPage />)
+    await renderAtSection('locked')
     await waitFor(() => expect(screen.getByText('VaultToggle')).toBeInTheDocument())
     const user = userEvent.setup()
     const row = within(screen.getByText('VaultToggle').closest('li') as HTMLElement)
@@ -163,7 +304,7 @@ describe('SettingsPage — locked folders reset', () => {
     state.masterPassword = 'master-pass'
     lockedFolder(12, 'VaultRemove')
     const onEditFolder = vi.fn()
-    renderWithProviders(<SettingsPage onEditFolder={onEditFolder} />)
+    await renderAtSection('locked', onEditFolder)
 
     await waitFor(() => expect(screen.getByText('VaultRemove')).toBeInTheDocument())
     const user = userEvent.setup()
@@ -184,7 +325,7 @@ describe('SettingsPage — locked folders reset', () => {
     state.masterPassword = 'master-pass'
     state.masterHint = 'starts with master'
     lockedFolder(11, 'VaultHint')
-    renderWithProviders(<SettingsPage />)
+    await renderAtSection('locked')
     await waitFor(() => expect(screen.getByText('VaultHint')).toBeInTheDocument())
     await userEvent.setup().click(screen.getByRole('button', { name: /reset password/i }))
     // Exact string avoids colliding with the master section's "Current
@@ -195,7 +336,7 @@ describe('SettingsPage — locked folders reset', () => {
   it('shows an error when the master password is wrong', async () => {
     state.masterPassword = 'master-pass'
     lockedFolder(8, 'Vault8')
-    renderWithProviders(<SettingsPage />)
+    await renderAtSection('locked')
 
     await waitFor(() => expect(screen.getByText('Vault8')).toBeInTheDocument())
     const user = userEvent.setup()
@@ -208,7 +349,7 @@ describe('SettingsPage — locked folders reset', () => {
   })
 
   it('shows empty state when no folders are locked', async () => {
-    renderWithProviders(<SettingsPage />)
+    await renderAtSection('locked')
     await waitFor(() => expect(screen.getByText(/no password-protected folders/i)).toBeInTheDocument())
   })
 
@@ -216,7 +357,7 @@ describe('SettingsPage — locked folders reset', () => {
     state.masterPassword = 'master-pass'
     lockedFolder(9, 'Vault9')
     const onEditFolder = vi.fn()
-    renderWithProviders(<SettingsPage onEditFolder={onEditFolder} />)
+    await renderAtSection('locked', onEditFolder)
 
     await waitFor(() => expect(screen.getByText('Vault9')).toBeInTheDocument())
     const user = userEvent.setup()
@@ -229,3 +370,4 @@ describe('SettingsPage — locked folders reset', () => {
     expect(onEditFolder).toHaveBeenCalledWith(9)
   })
 })
+

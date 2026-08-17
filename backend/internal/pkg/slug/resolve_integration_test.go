@@ -19,8 +19,8 @@ import (
 func TestResolveUpdate_FallbackTitleIsOwnerScoped(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
-	owner := testdb.SeedUser(t, pool, "slug-owner@test.local", "user")
-	other := testdb.SeedUser(t, pool, "slug-other@test.local", "user")
+	owner := testdb.SeedUser(t, pool, "slug-owner@test.local", "editor")
+	other := testdb.SeedUser(t, pool, "slug-other@test.local", "editor")
 	repo := links.NewRepository(pool)
 	foreign, err := repo.Create(ctx, other, links.CreateInput{
 		URL: "https://foreign-slug-title.example", Title: "Foreign private title",
@@ -41,7 +41,7 @@ func TestResolveUpdate_FallbackTitleIsOwnerScoped(t *testing.T) {
 func TestLoadTakenFindsLengthReservedSuffixes(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
-	owner := testdb.SeedUser(t, pool, "slug-collisions@test.local", "user")
+	owner := testdb.SeedUser(t, pool, "slug-collisions@test.local", "editor")
 	base := strings.Repeat("a", slug.MaxLen)
 	candidates := []string{
 		base,

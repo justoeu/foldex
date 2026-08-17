@@ -17,6 +17,7 @@ import (
 	"foldex/internal/pkg/httperr"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/authgate"
 )
 
 // BackupService is the application port used by HTTP handlers (testable fake).
@@ -59,7 +60,10 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/download", h.download)
 	r.Get("/download/status", h.downloadStatus)
 	r.Post("/validate", h.validate)
-	r.Post("/restore", h.restore)
+	// Export and validate only read: they serialize rows the caller already
+	// owns and inspect an archive without applying it, which is why a viewer
+	// keeps both. Restore is the one route here that writes.
+	r.With(authgate.RequirePermission(authctx.PermBackupRestore)).Post("/restore", h.restore)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

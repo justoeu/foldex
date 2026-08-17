@@ -208,8 +208,8 @@ SAST findings land in the repo **Security ▸ Code scanning** tab (SARIF upload)
 
 Accounts are on, so authenticated `/api/*` routes need a credential. The only
 session-less API read is `/api/files/notes/{uuid}.{ext}`, used by public `/n/{slug}`
-pages and still public when `SHARED_SECRET` is set. Only canonical note UUID keys
-are accepted; link media remains secret-gated and owner-scoped. Open <https://localhost:9444>, complete
+pages. Only canonical note UUID keys
+are accepted; link media remains session-gated and owner-scoped. Open <https://localhost:9444>, complete
 the setup screen, then create an **API token** under Settings → API tokens and export it:
 
 ```bash
@@ -264,7 +264,8 @@ curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/auth/sessions -o /dev/null -w '
 curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/admin/users  -o /dev/null -w '%{http_code}\n'  # 403 (admin) / 404 (user)
 curl -s -H "$AUTH" -H "$JSON" -X POST localhost:9089/api/backup -o /dev/null -w '%{http_code}\n'  # 403
 
-# 9. Open the SPA and try ⌥K (palette) / ⌥N (new link) / ⌥M (new note); Settings gear in the topbar.
+# 9. Open the SPA and try ⌥K (palette) / ⌥N (new link) / ⌥M (new note); Settings gear + avatar
+#    menu (profile & sign out) in the topbar.
 open https://localhost:9444
 ```
 
@@ -383,11 +384,39 @@ create it, and is also e-mailed. Invite, reset and verification credentials live
 `#` in those links, so the initial HTTP request and nginx access log never receive them;
 the SPA removes the fragment immediately.
 
-**Managing people.** The **Users** screen (administrators only) lists every account and
-lets you promote, disable, delete, sign out everywhere, and send account recovery. Two
-guards are enforced by the server, not just hidden in the UI: you cannot demote, disable
-or delete **yourself**, and the **last active administrator** cannot be removed by
-anyone. Zero administrators is not recoverable through any API call.
+**Roles.** There are four, and what each one may do is a permission matrix the server
+enforces — you can read it in **Settings → Administration → Roles and permissions**.
+
+| role | what it is for |
+|---|---|
+| **Owner** | Runs the instance. Exactly one account holds it, and it moves only by transfer. Only the owner edits the password and sign-in policy. |
+| **Admin** | Manages people, invitations and the audit trail — but does not set the rules they manage people under. |
+| **Editor** | An ordinary account: full read/write over its own library. This is what every pre-4-role `user` became. |
+| **Viewer** | Same library, read-only. Can still export a backup; cannot create, edit, import or restore. |
+
+**Content stays private per account, in every role.** A role decides whether a write is
+accepted and whether the administration screens exist — never whose links you can see. An
+administrator manages accounts and still cannot read another account's rows.
+
+**Managing people.** **Settings → Administration** lists every account with its role, last
+sign-in and status, and lets you change roles, disable, delete, sign out everywhere, send
+account recovery, and (as the owner) transfer the instance. Guards enforced by the server,
+not just hidden in the UI: you cannot demote, disable or delete **yourself**; the **last
+active administrator** cannot be removed by anyone; and the **owner's** role and status
+cannot be changed at all except by transferring. Transferring signs out both accounts.
+
+**Audit trail.** **Settings → Administration → Audit log** records sign-ins and their
+failures, role and status changes, invitations, forced recoveries and policy edits. It
+survives the accounts it describes: deleting a user does not erase what that user did.
+
+**Instance policy (owner only).** **Settings → Administration → Password and sign-in
+policy** sets the minimum password length, the mailed-code lifetime and resend cooldown,
+and which e-mail domains may sign in with Google. Every value has a floor the
+configuration cannot cross, so an instance can be made stricter but never weaker than the
+built-in minimum. The same screen holds **automatic account creation** for Google — off by
+default, and refused unless you have listed at least one allowed domain, because turning
+it on means this instance stops being invite-only. New accounts created that way always
+arrive as Editor or Viewer, never as an administrator.
 
 **E-mail.** `MAIL_DRIVER` defaults to `log`, which prints the invitation — link included
 — to the backend log instead of sending it. That is deliberate: a self-hosted instance
@@ -472,7 +501,8 @@ Google"* does not work — reset first, convert afterwards.
 
 Ways back into a Google-only account that loses its Google:
 
-1. An administrator uses **Send recovery** on the Users screen. Foldex sends a
+1. An administrator uses **Send recovery** on the Users & invitations screen inside the
+   settings hub (Administration scope). Foldex sends a
    single-use link only to your verified mailbox through SMTP; the administrator never
    sees a password or token, and your credential and sessions do not change until you
    use the link and choose your own password. If SMTP fails, nothing is changed.
@@ -505,11 +535,11 @@ whose Google access is gone**: no other admin exists to reset their password. Se
 `AUTH_ENABLED=0` and restarting reverts the instance to single-user behaviour with all
 content intact, which is the fastest way back in.
 
-> **`SHARED_SECRET` is deprecated.** It predates accounts: it gates `/api` except the
-> exact UUID-keyed note-media read required by public `/n/{slug}` pages,
-> identifies nobody, and cannot scope a single row. Real authentication replaced it.
-> Keep it only while older browser extensions are still configured with it — the backend
-> warns at boot while it is set, and it will be removed in a future release.
+> **`SHARED_SECRET` was removed.** It predates accounts: it gated `/api`,
+> identified nobody, and could not scope a single row — real authentication
+> (ADR-30) replaced it. The env var, the `X-Foldex-Secret` header and its
+> plumbing in the SPA and the extension are gone; delete them from your
+> setup. `/api/*` protection is exclusively the auth stack's job.
 
 > **Old `/go/42` links stopped working?** Numeric ids in `/go/{id}` and `/n/{id}` are off
 > by default now. Those routes resolve with no session — they are public share links —

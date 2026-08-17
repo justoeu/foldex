@@ -79,8 +79,8 @@ func setup(t *testing.T) (context.Context, fixture) {
 		erepo: entries.NewRepository(pool),
 		srepo: stats.NewRepository(pool),
 	}
-	f.a.uid = testdb.SeedUser(t, pool, "alice@test.local", "user")
-	f.b.uid = testdb.SeedUser(t, pool, "bob@test.local", "user")
+	f.a.uid = testdb.SeedUser(t, pool, "alice@test.local", "editor")
+	f.b.uid = testdb.SeedUser(t, pool, "bob@test.local", "editor")
 	require.NotEqual(t, f.a.uid, f.b.uid)
 
 	mk := func(tn *tenant, label string) {

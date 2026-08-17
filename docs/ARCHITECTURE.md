@@ -353,7 +353,7 @@ LIMIT $3 OFFSET $4;
 |        | POST   | `/api/links/{id}/screenshot`          | Captura sob demanda via Chromium headless. SSRF gate obrigatório (`links.URLPolicy`, default `preview.IsPublicURL`); rejeita scheme não-http(s) com 400 `invalid_scheme` e privado/IMDS com 400 `private_target`. Policy nil = 500 `policy_unconfigured`. |
 |        | POST   | `/api/links/{id}/image`               | Upload manual de imagem (multipart `file`). Cap de body 5 MiB; aceita `{png, jpeg, gif, webp}` (SVG cai fora). Pipeline `imageopt` re-encoda em JPEG q82, downscale ≤1024 px, decode-bomb guard 50 MP. Curto-circuita o worker. |
 |        | DELETE | `/api/links/{id}/image`               | Remove `og_image_url` + DELETE no objeto RustFS + zera `preview_status`. |
-| Files  | GET    | `/api/files/notes/{uuid}.{ext}`       | Leitura pública exigida por `/n/{slug}`, montada antes de `SHARED_SECRET`/sessão. Aceita só UUID canônico + extensão raster suportada; traversal, chave malformada e prefixo de link retornam 404. |
+| Files  | GET    | `/api/files/notes/{uuid}.{ext}`       | Leitura pública exigida por `/n/{slug}`, montada fora da sessão. Aceita só UUID canônico + extensão raster suportada; traversal, chave malformada e prefixo de link retornam 404. |
 |        | GET    | `/api/files/*`                        | Proxy autenticado pro RustFS. Key precisa cair em `screenshots/`/`images/` e provar ownership do link (rejeita `..` e prefixo arbitrário). `DetectContentType` no objeto servido + `X-Content-Type-Options: nosniff`. |
 | Tags   | GET    | `/api/tags`                           | List with `link_count`                             |
 |        | POST   | `/api/tags`                           | Body: `{name, color?, icon?}`                      |
@@ -379,13 +379,13 @@ LIMIT $3 OFFSET $4;
 |        | POST   | `/api/import/apply`                   | Aplica multipart com `mode=skip\|wipe\|duplicate` e `exclude_folders` opcional. |
 |        | GET    | `/api/export?format=netscape\|json`   | Download (click_count derivado em subquery)        |
 | Backup | POST   | `/api/backup`                         | Stream ZIP completo (DB + RustFS). `Content-Type: application/zip`. Disponível só quando RustFS está acessível. Ver [SDD-BACKUP-RESTORE.md](./SDD-BACKUP-RESTORE.md). |
-|        | POST   | `/api/backup/download`                | Emite ticket opaco one-time (TTL 60 s), owner/session-bound, para download nativo sem Blob; exige sessão, CSRF, `SHARED_SECRET` quando configurado e recusa API token. |
+|        | POST   | `/api/backup/download`                | Emite ticket opaco one-time (TTL 60 s), owner/session-bound, para download nativo sem Blob; exige sessão + CSRF e recusa API token. |
 |        | GET    | `/api/backup/download?id=…&token=…`   | Consome ticket uma vez e streama o mesmo export com `Content-Disposition`; continua session-authenticated e usa o slot compartilhado. |
 |        | GET    | `/api/backup/download/status?id=…`    | Estado owner-bound (`pending|running|complete|failed`) para histórico com counts, bytes e duração, sem ler o ZIP no JS; sobrevive ao refresh da sessão. |
 |        | POST   | `/api/backup/validate`                | Multipart `file=<zip>` → `{ok, manifest, conflicts, warnings, errors}` sem aplicar |
 |        | POST   | `/api/backup/restore?mode=…`          | Multipart `file=<zip>` + `mode=wipe\|skip\|duplicate` (default `skip`) → `{inserted, skipped, wiped, files, duration_ms}` |
 | Stats  | GET    | `/api/stats/storage`                  | `{objects, total_bytes}` do bucket RustFS; registrado só quando o storage está disponível |
-| Push   | GET    | `/api/push/vapid-key`                 | Retorna a chave pública VAPID (base64url) — front usa em `PushManager.subscribe({applicationServerKey})`. Atrás do `SHARED_SECRET` quando set. |
+| Push   | GET    | `/api/push/vapid-key`                 | Retorna a chave pública VAPID (base64url) — front usa em `PushManager.subscribe({applicationServerKey})`. Exige sessão. |
 |        | POST   | `/api/push/subscriptions`             | Upsert por `endpoint` (UNIQUE) com p256dh/auth atualizados. Cap transacional de 16 por usuário; renovar endpoint próprio continua permitido no teto, novo row retorna `409 subscription_limit_reached`. |
 |        | DELETE | `/api/push/subscriptions`             | Remove a subscription pelo endpoint (chamado no unsubscribe do usuário). |
 |        | POST   | `/api/push/test`                      | Dispara notificação de teste pra todas as subscriptions ativas. Útil pra validar VAPID/SW. |
@@ -460,7 +460,7 @@ Notificação background quando o changecheck detecta change. RFC 8030 + VAPID v
 - **VAPID** (`vapid.go`): `LoadOrGenerate` prioriza env (`VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT`) → state file (`VAPID_STATE_PATH`, default `/data/vapid.json`) → autogen + persiste com `os.WriteFile(..., 0o600)` (umask não confiável). Volume `foldex-data:/data` no compose preserva entre recreations; pinar em `.env` mantém subscriptions estáveis.
 - **Subscription repo** (`subscription.go`): `INSERT … ON CONFLICT (endpoint) DO UPDATE SET p256dh, auth, user_id` — renovação do browser converge no mesmo row. Um lock `FOR NO KEY UPDATE` no owner serializa o cap de 16 subscriptions; upsert de endpoint já pertencente ao caller não consome slot. `List` é owner-scoped e usa o mesmo teto como `LIMIT` defensivo.
 - **Sender** (`sender.go`): fan-out limitado a 16 alvos e 4 envios concorrentes por notificação. Resultados 2xx e 404/410 são coletados por id e persistidos em no máximo um `MarkUsed` e um `DeleteGone`, ambos owner-scoped com `ANY(bigint[])`; transport/other-status errors ficam isolados por subscription id e não apagam subscription. Endpoint é capability secreta e nunca entra no log. O client usa transporte sempre public-only, sem depender de `PREVIEW_STRICT_SSRF`: valida IP antes/depois do dial contra ranges privados/special-use e recusa redirects, impedindo endpoint ou redirect controlado de alcançar serviços internos.
-- **Handler** (`handler.go`): rotas montadas só quando `PushHandler != nil`. Tudo herda o `SHARED_SECRET` middleware (inclusive `vapid-key` — não vaza superfície). `/push/test` tem admissão global fail-fast de duas fan-outs simultâneas; excesso recebe `429 push_busy` em vez de criar mais workers/requests.
+- **Handler** (`handler.go`): rotas montadas só quando `PushHandler != nil`. Tudo fica atrás da pilha de sessão (inclusive `vapid-key` — não vaza superfície). `/push/test` tem admissão global fail-fast de duas fan-outs simultâneas; excesso recebe `429 push_busy` em vez de criar mais workers/requests.
 - **Service Worker hand-rolled** (`web/src/sw.ts`): Cache API + `push` listener + `notificationclick` listener. `vite-plugin-pwa` com `strategies: 'injectManifest'` injeta `__WB_MANIFEST` no build sem trazer runtime workbox-* (que exigiria regenerar `bun.lock`).
 
 ## Pipeline de imagens (`internal/imageopt`)
@@ -512,9 +512,8 @@ VITE_API_BASE=http://localhost:9089
 PREVIEW_WORKER_CONCURRENCY=4
 PREVIEW_FETCH_TIMEOUT_SEC=5
 PREVIEW_STRICT_SSRF=        # vazio = permissivo; "1" = strict
-SHARED_SECRET=              # vazio = sem gate; setado = exige header nos /api/*, exceto note-media UUID público
 CORS_ORIGINS=*
-BACKEND_BIND=127.0.0.1      # bind do backend; non-loopback + SHARED_SECRET vazio + CORS=* recusa boot
+BACKEND_BIND=127.0.0.1      # bind do backend; non-loopback + AUTH_ENABLED=0 recusa boot
 
 # Change-check worker (mig 000010)
 CHANGECHECK_ENABLED=1
@@ -797,7 +796,7 @@ Notificações background quando o changecheck detecta change. RFC 8030 com VAPI
 
 **Por quê SW hand-rolled em vez de `workbox-*` runtime.** `bun.lock` é fonte da verdade (CLAUDE.md §1) e adicionar workbox-* runtime exigiria regenerar lock + revalidar 200+ deps transitivas. Um par de `cache.put` + `push`/`notificationclick` listeners cabe em ~80 linhas (`web/src/sw.ts`). `vite-plugin-pwa` com `strategies: 'injectManifest'` injeta só o `__WB_MANIFEST` no build — zero runtime workbox.
 
-**Por quê `/api/push/vapid-key` atrás do `SHARED_SECRET` middleware.** "É só a chave pública" não justifica vazar superfície — um attacker remoto enumerando endpoints saberia que foldex tem push wired. Tudo `/api/push/*` herda o guard.
+**Por quê `/api/push/vapid-key` fica atrás de autenticação** (à época do guard `SHARED_SECRET`; hoje a pilha de sessão). "É só a chave pública" não justifica vazar superfície — um attacker remoto enumerando endpoints saberia que foldex tem push wired. Tudo `/api/push/*` exige sessão.
 
 ### ADR-25 — oEmbed enrichment via o mesmo `preview.Fetcher`
 **Status:** Done (v1.4.0).
@@ -923,7 +922,7 @@ O foldex era single-user em três camadas que se sustentavam mutuamente: sem ide
 
 **Backup muda de contrato.** Nenhuma tabela de auth entra no ZIP (hashes, seeds TOTP e refresh tokens vivos num arquivo que se joga no Drive converteriam uma conveniência em primitiva de roubo de credencial), e o restore **sempre** escreve para quem chamou — `user_id` nunca vem do ZIP, o que torna impossível forjar um backup que planta linhas na conta alheia. Consequência: `wipeAll` vira `wipeUser`, e **o modo wipe deixa de preservar ids** (`restoreIdentity` é removido; outro tenant pode ter aqueles ids, e dar `setval` numa sequência global a partir do restore de um usuário é errado). Como as chaves de objeto são planas, o wipe passa a apagar uma **lista explícita de chaves** derivada das linhas do próprio usuário, em vez de `DeleteObjectsPrefix`.
 
-**A migration 000022 corrige a exceção de mídia inline sem tornar a leitura pública privada.** `note_media` persiste owner + lease e `note_media_ref` exige, por FK composta, que note e objeto tenham o mesmo `user_id`. `body_html` só fornece candidatos; `INSERT ... SELECT` owner-scoped decide quais refs existem, e os caminhos destrutivos consultam ownership/refs. Não há backfill por HTML, portanto chaves UUID legadas continuam legíveis e não podem ser apagadas. `GET /api/files/notes/{uuid}.{ext}` fica fora de `SHARED_SECRET` e `Authenticate` para a página pública `/n/{slug}` carregar imagens, mas a rota fixa o prefixo `notes/` e exige UUID canônico + extensão raster conhecida; traversal e chaves id-derived de `screenshots/`/`images/` não alcançam o bucket por ela. Mídia de link continua exigindo o segredo, principal e ownership. Restore gera UUID novo para toda chave `notes/` referenciada, reescreve `body_html`/`cover_url` e só então mapeia os bytes do ZIP; `user_id` é campo desconhecido e invalida o snapshot.
+**A migration 000022 corrige a exceção de mídia inline sem tornar a leitura pública privada.** `note_media` persiste owner + lease e `note_media_ref` exige, por FK composta, que note e objeto tenham o mesmo `user_id`. `body_html` só fornece candidatos; `INSERT ... SELECT` owner-scoped decide quais refs existem, e os caminhos destrutivos consultam ownership/refs. Não há backfill por HTML, portanto chaves UUID legadas continuam legíveis e não podem ser apagadas. `GET /api/files/notes/{uuid}.{ext}` fica fora de `SHARED_SECRET` e `Authenticate` para a página pública `/n/{slug}` carregar imagens, mas a rota fixa o prefixo `notes/` e exige UUID canônico + extensão raster conhecida; traversal e chaves id-derived de `screenshots/`/`images/` não alcançam o bucket por ela. Mídia de link continua exigindo sessão, principal e ownership. Restore gera UUID novo para toda chave `notes/` referenciada, reescreve `body_html`/`cover_url` e só então mapeia os bytes do ZIP; `user_id` é campo desconhecido e invalida o snapshot.
 
 **`SHARED_SECRET` coexiste e é rebaixado** a header de perímetro ("não autentica ninguém e não identifica ninguém"); com os dois configurados, a request precisa do header **e** da sessão, exceto a leitura pública UUID-keyed de mídia exigida por `/n/{slug}` e o GET nativo de backup. Este último não fica público: o POST anterior exigiu header + sessão + CSRF e emitiu uma capability one-time ligada à sessão; o guard só delega enquanto ela está pendente, e `Authenticate` + ownership ainda rodam antes do stream. Removido no release seguinte. A extensão MV3 migra para `Authorization: Bearer` com escopo `content`, rejeitado em `/api/auth/*`, `/api/admin/*` e `/api/backup/*` — um token de extensão roubado não pode cunhar sessão, desligar 2FA nem exfiltrar um backup.
 
@@ -964,6 +963,74 @@ Decisão: o ramo numérico passa por `PUBLIC_NUMERIC_IDS`, default **`false`**, 
 (O nome do knob mudou de `PUBLIC_ID_REDIRECT_ENABLED` no plano para `PUBLIC_NUMERIC_IDS` na entrega: "redirect" não descrevia `/n/`, que renderiza.) O slug é a superfície de compartilhamento documentada (`CLAUDE.md` §4: "The slug IS exposed in LinkDialog") e tem entropia suficiente na prática. O ADR-7 continua válido para quem religar a flag.
 
 Isso é **mudança de comportamento numa URL pública**, por isso um ADR próprio em vez de uma nota no ADR-30. Chega no PR4, não no PR1, para que a migração de dados e a de comportamento não caiam juntas.
+
+### ADR-33 — RBAC de quatro papéis: owner/admin/editor/viewer, com matriz de permissões
+**Status:** Accepted — implementado em v2.1.0.
+
+O modelo de dois papéis (`admin`/`user`) confundia duas perguntas diferentes: *quem administra a instância* e *quem pode escrever conteúdo*. Não havia como expressar "esta pessoa lê, mas não altera", nem como distinguir quem detém a instância de quem apenas gerencia pessoas.
+
+Decisão: quatro papéis, com a capacidade de cada um vivendo numa **matriz de 14 permissões** em `internal/pkg/authctx/permissions.go` em vez de num booleano.
+
+| | owner | admin | editor | viewer |
+|---|---|---|---|---|
+| conteúdo (ler / escrever) | ✔ ✔ | ✔ ✔ | ✔ ✔ | ✔ ✘ |
+| backup (exportar / restaurar) | ✔ ✔ | ✔ ✔ | ✔ ✔ | ✔ ✘ |
+| pessoas, convites, auditoria | ✔ | ✔ | ✘ | ✘ |
+| política da instância (ler / escrever) | ✔ ✔ | ✔ ✘ | ✘ ✘ | ✘ ✘ |
+| transferir a instância | ✔ | ✘ | ✘ | ✘ |
+
+**O conteúdo continua privado por conta.** As permissões de conteúdo decidem se uma escrita é aceita — nunca de quem são as linhas visíveis. O escopo por dono permanece exatamente onde o ADR-30 o colocou: parâmetro `uid` explícito em todo método de repositório, com `user_id` como primeiro predicado. Um viewer e um editor enxergam precisamente as mesmas linhas (as suas); diferem só em o servidor aceitar ou não a mutação. Foi essa a escolha deliberada frente à alternativa de compartilhar pastas entre contas, que reescreveria o núcleo de tenancy descrito no `CLAUDE.md` §0.
+
+Três decisões de construção sustentam o resto:
+
+1. **Lookup em mapa, falha FECHADA.** Papel ausente da matriz — ou string que escapou do CHECK — resolve para conjunto vazio: fica impotente, não irrestrito.
+2. **Owner é único por índice parcial**, não por disciplina de handler. Dois owners não é estado que código algum deva alcançar, e uma transferência que escrevesse dois momentaneamente corromperia "a conta que não pode ser rebaixada". Por isso a troca é um ÚNICO `UPDATE` com `CASE` sobre os dois ids: o índice é verificado por statement, então promover-depois-rebaixar falharia na promoção e a ordem inversa deixaria a instância sem owner durante a transação.
+3. **Remover `RoleUser` transformou cada suposição de 2 papéis em erro de compilação**, em vez de mudança silenciosa de comportamento — a mesma razão pela qual `authctx.UserID` é tipo distinto.
+
+O gate de escrita é montado **por grupo** e é ciente de método em `/links`, `/notes`, `/tags` e `/import`, para que rota mutante adicionada depois nasça coberta. `/folders` e `/backup` ficam de fora de propósito: ambos respondem POST a operações que só LEEM — destrancar pasta prova uma senha para VER o conteúdo, exportar backup serializa linhas que o chamador já possui — e um gate cego por método trancaria o viewer para fora das próprias pastas protegidas.
+
+`RequirePermission` responde **403**, e não o 404 do `RequireAdmin`. Os dois escondem coisas diferentes: `RequireAdmin` oculta que a superfície administrativa existe; passado aquele portão o chamador já sabe que existe, então "seu papel não permite" não vaza nada e é a única resposta que deixa um admin entender por que o botão exclusivo do owner falhou.
+
+Migração 000032 mapeia `user → editor` (capacidade idêntica) e promove o administrador ativo mais antigo a owner. O rollback é **lossy** e está documentado no `.down.sql`: um viewer recupera acesso de escrita, porque o modelo antigo não tem como expressar somente-leitura.
+
+### ADR-34 — Trilha de auditoria administrativa
+**Status:** Accepted — implementado em v2.1.0.
+
+Não havia registro de quem alterou papéis, revogou sessões ou emitiu convites — nem de rajadas de login falho. Um incidente terminava em `grep` no log do container, que rotaciona.
+
+Decisão: tabela `audit_log` cobrindo a superfície de identidade (logins e falhas, mudanças de papel/status, convites, recuperações forçadas, edições de política). Conteúdo fica fora de escopo de propósito: já existe uma linha por clique em `click_log`, e misturar as duas soterraria os eventos de segurança que a tabela existe para expor.
+
+Três decisões que valem o registro:
+
+- **`ON DELETE SET NULL`, nunca CASCADE**, e o e-mail é desnormalizado ao lado do id. Apagar uma conta não pode apagar o registro do que ela fez — "uma conta já removida promoveu este usuário" é exatamente a entrada que uma investigação precisa — e depois que a linha some o id sozinho não identifica ninguém.
+- **Sem coluna de IP.** `X-Forwarded-For` só é confiável atrás de proxy configurado (ver `trustedProxyRealIP`), então uma coluna de IP seria ao mesmo tempo autoritativa na aparência e controlada pelo atacante num bind direto — a pior combinação para uma tabela que se consulta durante um incidente.
+- **A escrita nunca falha a operação.** `Audit` devolve erro para o chamador LOGAR: a ação já commitou, e responder 500 por causa do trail convidaria a um retry que a executaria duas vezes. Perder uma linha é a falha menor, e é visível.
+
+O sucesso de login é gravado em `issueAndRespond` — o ponto único por onde toda via de credencial passa — e não em `Login`: uma senha aceita que desvia para o desafio de 2FA não é um login, e registrá-la como um faria o trail afirmar um acesso que não houve. A falha grava **uma** entrada no ramo que as três causas (endereço desconhecido, senha errada, conta inativa) compartilham; entradas distintas reconstruiriam o oráculo de enumeração que aquele ramo existe para fechar.
+
+### ADR-35 — Política da instância configurável, e a revogação explícita do invite-only
+**Status:** Accepted — implementado em v2.1.0.
+
+Piso de senha, validade de OTP e quem pode entrar pelo Google eram constantes no código. Operadores pediam ajuste sem recompilar.
+
+Decisão: `internal/policy`, persistido num único documento JSON em `app_setting`. Pacote folha: `auth` importa `policy` para enforcement e `policy` não importa nada de `auth` — o contrário fecharia o ciclo, e por isso o gancho de auditoria entra como função.
+
+Um documento em vez de uma chave por campo: os valores são lidos juntos em todo login e escritos juntos por um formulário, e linha-por-campo deixaria uma escrita parcial rodando metade da política velha e metade da nova. `app_setting` está fora da superfície de backup nos DOIS sentidos (export não emite, restore ignora desde o snapshot v6), e é isso que impede um zip forjado de reescrever o piso de senha da instância.
+
+**Todo valor tem um PISO que a configuração não cruza**, e o piso é o valor que o código já usava. Instância que nunca abre a tela se comporta exatamente como antes; a que abre não fica mais fraca que essa linha de base. `validatePassword` virou **método** justamente para o compilador arrastar os cinco call sites — como função de pacote continuaria aplicando a constante em silêncio, e política que nada aplica é pior que política nenhuma.
+
+Escrita é do owner, leitura de qualquer admin: um admin precisa ver as regras sob as quais administra, mas um admin que pudesse baixar o piso de senha ou alargar a allowlist do Google baixaria a segurança da instância e entraria pela brecha.
+
+**Este ADR revoga explicitamente a regra invite-only do ADR-31.** `google_auto_provision` cria conta para um endereço Google desconhecido. As salvaguardas são a razão de a revogação ser aceitável:
+
+- **OFF por padrão.** Instância existente não muda de comportamento.
+- **Exige allowlist não-vazia.** Lista aberta mais provisionamento é qualquer conta Google virando tenant.
+- **O papel padrão é recusado em três camadas** (`Validate`, handler, repositório) e nunca pode ser administrativo: signup self-service não pode chegar com administração.
+- **Toda recusa é o MESMO `not_linked`** que endereço desconhecido sempre deu. Uma resposta distinta diria a um chamador anônimo quais instâncias são abertas, ou permitiria enumerar a allowlist um palpite por vez.
+- **A allowlist gateia os caminhos que CRIAM acesso** (conversão e provisionamento) e deliberadamente não o login já vinculado — aplicá-la a identidade existente deixaria o owner se trancar para fora salvando uma lista que exclui o próprio domínio, e um owner só-Google não teria segunda porta.
+- **O domínio é comparado exato**, nunca por sufixo: `example.com` não pode aceitar `notexample.com`, e subdomínio não é o domínio.
+
+A conta provisionada e sua identidade nascem na MESMA transação, porque o trigger deferido da migração 000021 exige que conta ativa tenha ao menos uma credencial e essa conta nunca terá senha: linha e identidade só são legais juntas. O provisionamento desemboca em `oauthComplete` como qualquer login vinculado, o que mantém a política de segundo fator valendo em vez de abrir a única porta que a pula.
 
 ## Future considerations
 

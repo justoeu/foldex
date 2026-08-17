@@ -121,7 +121,6 @@ func (r *headerWriteRecorder) WriteHeader(status int) {
 
 func assertFailedDownloadIsConsumed(t *testing.T, h *Handler, svc *downloadBackupService, issued issuedDownload, owner authctx.Principal) {
 	t.Helper()
-	assert.False(t, h.AllowsDownloadNavigation(httptest.NewRequest(http.MethodGet, issued.DownloadURL, nil)))
 
 	replay := httptest.NewRecorder()
 	h.download(replay, requestAs(http.MethodGet, issued.DownloadURL, owner))
@@ -146,7 +145,6 @@ func TestDownloadTicketIsSessionBoundOneTimeAndExportsOnce(t *testing.T) {
 
 	parsed, err := url.Parse(issued.DownloadURL)
 	require.NoError(t, err)
-	assert.True(t, h.AllowsDownloadNavigation(httptest.NewRequest(http.MethodGet, issued.DownloadURL, nil)))
 
 	for _, other := range []authctx.Principal{
 		{UserID: 8, SessionID: 41, Via: authctx.ViaSession},
@@ -172,7 +170,6 @@ func TestDownloadTicketIsSessionBoundOneTimeAndExportsOnce(t *testing.T) {
 	assert.Equal(t, "PK\x03\x04", rec.Body.String())
 	assert.Contains(t, rec.Header().Get("Content-Disposition"), issued.Filename)
 	assert.Equal(t, []authctx.UserID{owner.UserID}, svc.uids())
-	assert.False(t, h.AllowsDownloadNavigation(httptest.NewRequest(http.MethodGet, issued.DownloadURL, nil)))
 
 	replay := httptest.NewRecorder()
 	h.download(replay, requestAs(http.MethodGet, issued.DownloadURL, owner))
@@ -235,7 +232,6 @@ func TestDownloadTicketExpiresClosed(t *testing.T) {
 	issued := issueDownloadFor(t, h, owner)
 	now = now.Add(downloadTicketTTL + time.Second)
 
-	assert.False(t, h.AllowsDownloadNavigation(httptest.NewRequest(http.MethodGet, issued.DownloadURL, nil)))
 	rec := httptest.NewRecorder()
 	h.download(rec, requestAs(http.MethodGet, issued.DownloadURL, owner))
 	assert.Equal(t, http.StatusNotFound, rec.Code)
@@ -314,8 +310,10 @@ func TestDownloadTicketIssuanceReplacesPendingForExactSession(t *testing.T) {
 	require.NoError(t, err)
 	secondURL, err := url.Parse(second.DownloadURL)
 	require.NoError(t, err)
-	assert.False(t, store.allows(first.ID, firstURL.Query().Get("token")))
-	assert.True(t, store.allows(second.ID, secondURL.Query().Get("token")))
+	_, firstUsable := store.consume(first.ID, firstURL.Query().Get("token"), owner)
+	assert.False(t, firstUsable, "reissuing must retire the previous pending ticket")
+	_, secondUsable := store.consume(second.ID, secondURL.Query().Get("token"), owner)
+	assert.True(t, secondUsable)
 	assert.Len(t, store.tickets, 1)
 }
 

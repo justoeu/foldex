@@ -160,7 +160,7 @@ func TestResetPassword_LinkDiesOnCredentialEpochMutations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
 			admin := h.bootstrapAdmin(t, "admin@example.com", "an admin password")
-			uid := testdb.SeedUserWithPassword(t, h.pool, "target@example.com", "a target password", "user")
+			uid := testdb.SeedUserWithPassword(t, h.pool, "target@example.com", "a target password", "editor")
 			target := h.client(t)
 			require.Equal(t, http.StatusOK, target.do(http.MethodPost, "/api/auth/login", map[string]string{
 				"email": "target@example.com", "password": "a target password",
@@ -221,7 +221,7 @@ func TestPasswordResetCannotCommitAfterConcurrentCredentialEpochBump(t *testing.
 func TestLegacyPasswordResetWithoutCredentialEpochFailsClosed(t *testing.T) {
 	h := newHarnessWith(t, testdb.New(t), harnessOpts{})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
-	uid := testdb.SeedUserWithPassword(t, h.pool, "legacy-reset@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "legacy-reset@example.com", "a good password", "editor")
 	raw := "legacy-reset-token"
 
 	_, err := h.pool.Exec(context.Background(),
@@ -387,7 +387,7 @@ func TestForgotPassword_IsIndistinguishableForUnknownAddresses(t *testing.T) {
 func TestForgotPassword_DisabledAccountGetsNoLink(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	other := testdb.SeedUserWithPassword(t, h.pool, "other@example.com", "a good password", "user")
+	other := testdb.SeedUserWithPassword(t, h.pool, "other@example.com", "a good password", "editor")
 	require.Equal(t, http.StatusOK, admin.do(http.MethodPatch,
 		fmt.Sprintf("/api/admin/users/%d", int64(other)), map[string]string{"status": "disabled"}).Code)
 
@@ -410,7 +410,7 @@ func TestForgotPassword_DisabledAccountGetsNoLink(t *testing.T) {
 func TestForgotPassword_PasswordlessAccountGetsAnExplanationNotALink(t *testing.T) {
 	h := newHarness(t)
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	uid := testdb.SeedUserWithPassword(t, h.pool, "google@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "google@example.com", "a good password", "editor")
 	// Exactly what an ADR-31 conversion leaves behind: a linked Google identity
 	// and no password. Stripping the password ALONE is not a state the database
 	// permits — an active account must hold a credential — so a fixture that
@@ -836,7 +836,7 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 		_, err = h.repo.BumpChallengeAttempt(ctx, 1)
 		assert.Error(t, err)
 		assert.Error(t, h.repo.ConsumeChallenge(ctx, 1))
-		_, err = h.repo.CreateChallengeEmailOTP(ctx, 1, []byte("hash"), time.Minute)
+		_, err = h.repo.CreateChallengeEmailOTP(ctx, 1, []byte("hash"), time.Minute, time.Minute)
 		assert.Error(t, err)
 	})
 
@@ -862,7 +862,7 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 
 	t.Run("otp and reset", func(t *testing.T) {
 		assert.Error(t, h.repo.CreateEmailOTP(ctx, uid, nil, auth.OTPPurposeLogin2FA, []byte("h"), time.Minute))
-		_, err := h.repo.CreateEmailVerification(ctx, uid, time.Minute)
+		_, err := h.repo.CreateEmailVerification(ctx, uid, time.Minute, time.Minute)
 		assert.Error(t, err)
 		assert.Error(t, h.repo.ConsumeEmailOTP(ctx, uid, auth.OTPPurposeLogin2FA, []byte("h"), nil))
 		_, _, err = h.repo.UserForPasswordReset(ctx, "admin@example.com")
@@ -910,7 +910,7 @@ func TestTwoFactorRepository_NotFoundIsTyped(t *testing.T) {
 	_, err = h.repo.BumpChallengeAttempt(ctx, 999_999)
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	assert.ErrorIs(t, h.repo.ConsumeChallenge(ctx, 999_999), auth.ErrChallengeInvalid)
-	_, err = h.repo.CreateChallengeEmailOTP(ctx, 999_999, []byte("hash"), time.Minute)
+	_, err = h.repo.CreateChallengeEmailOTP(ctx, 999_999, []byte("hash"), time.Minute, time.Minute)
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 
 	_, err = h.repo.ConsumePasswordReset(ctx, "no such token", "a brand new password")
@@ -928,7 +928,7 @@ func TestTwoFactorRepository_NotFoundIsTyped(t *testing.T) {
 func TestLegacyPendingTOTPEnrollmentWithoutEpochFailsClosed(t *testing.T) {
 	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
-	uid := testdb.SeedUserWithPassword(t, h.pool, "legacy-enrollment@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "legacy-enrollment@example.com", "a good password", "editor")
 	ctx := context.Background()
 	_, sid, err := h.repo.IssueSession(ctx, uid, 0, testSessionTTL(), "", "")
 	require.NoError(t, err)

@@ -59,15 +59,14 @@ describe('MobileOverflowMenu', () => {
     expect(onNewNote).toHaveBeenCalled()
   })
 
-  it('navigates to import and settings views', async () => {
+  // Import/export is a settings-hub tile now; the kebab keeps only the gear
+  // entry that reaches it.
+  it('navigates to the settings view', async () => {
     const setView = vi.fn()
     renderWithProviders(<MobileOverflowMenu {...base} setView={setView} />)
     await openMenu()
-    fireEvent.click(screen.getByText(/import/i))
-    expect(setView).toHaveBeenCalledWith('import')
-
-    fireEvent.click(screen.getByLabelText(/more/i))
-    fireEvent.click(await screen.findByText(/settings/i))
+    expect(screen.queryByText(/import/i)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText(/settings/i))
     expect(setView).toHaveBeenCalledWith('settings')
   })
 

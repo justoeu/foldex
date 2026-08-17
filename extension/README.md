@@ -54,9 +54,6 @@ The popup closes automatically on success and the SPA picks up the new link with
 
 - The popup loads tags via `GET /api/tags` and POSTs to `/api/links`, sending
   `Authorization: Bearer <token>`.
-- **`SHARED_SECRET` is deprecated.** The field is still there and still sends
-  `X-Foldex-Secret` alongside the token, so the backend and the extension can be
-  upgraded in either order. Leave it empty unless your server still sets the variable.
 - Getting `not signed in`? The token is missing, revoked, expired, or belongs to a
   disabled account. Mint a new one.
 - No build step — edit `popup.js` / `options.js` / `config.js` directly, then click the **reload** icon

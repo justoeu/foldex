@@ -232,8 +232,8 @@ code and CI workflows; both are in scope.>
 
 Inspection helpers:
 - `git show <SHA> --stat` and the changed files
-- The repo's threat model is documented in CLAUDE.md §0: self-hosted single-user, no PII, no
-  public exposure. §4 lists the security invariants (IMDS blocked, SHARED_SECRET gating,
+- The repo's threat model is documented in CLAUDE.md §0: self-hosted multi-user, no PII, no
+  public exposure. §4 lists the security invariants (IMDS blocked, owner-scoped queries,
   certs never baked, etc.).
 
 What you do NOT review (parallel agents cover):
@@ -252,7 +252,7 @@ What YOU review:
 3. **localStorage / cookie misuse** — parsing untrusted JSON without try/catch? Storing secrets?
 4. **SSRF** — fetcher accepting user URLs without the IMDS / private-IP guards already in
    `internal/preview`?
-5. **Auth bypass** — handler skipping the `SHARED_SECRET` gate or leaking pgx errors?
+5. **Auth bypass** — handler skipping the auth/ownership gates or leaking pgx errors?
 
 ### CI / workflow
 6. **Secret leak** — `secrets.*` written to logs, env files, or artifacts? Triggers running on

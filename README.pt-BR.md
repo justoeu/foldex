@@ -189,8 +189,8 @@ Os achados de SAST aparecem na aba **Security ▸ Code scanning** do repositóri
 
 Contas estão ligadas, então as rotas autenticadas de `/api/*` precisam de
 credencial. A única leitura da API sem sessão é `/api/files/notes/{uuid}.{ext}`, usada
-pelas páginas públicas `/n/{slug}` e ainda pública com `SHARED_SECRET` definido. Só
-chaves UUID canônicas de notas são aceitas; mídia de link continua protegida pelo segredo
+pelas páginas públicas `/n/{slug}`. Só
+chaves UUID canônicas de notas são aceitas; mídia de link continua protegida por sessão
 e owner-scoped. Abra
 <https://localhost:9444>, conclua a tela de setup, crie um **token de API** em
 Configurações → Tokens de API e exporte:
@@ -247,7 +247,8 @@ curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/auth/sessions -o /dev/null -w '
 curl -s -H "$AUTH" -H "$JSON" localhost:9089/api/admin/users  -o /dev/null -w '%{http_code}\n'  # 403 (admin) / 404 (user)
 curl -s -H "$AUTH" -H "$JSON" -X POST localhost:9089/api/backup -o /dev/null -w '%{http_code}\n'  # 403
 
-# 9. Abre a SPA e testa ⌥K (paleta) / ⌥N (novo link) / ⌥M (nova nota); engrenagem na topbar.
+# 9. Abre a SPA e testa ⌥K (paleta) / ⌥N (novo link) / ⌥M (nova nota); engrenagem + menu do
+#    avatar (perfil e sair) na topbar.
 open https://localhost:9444
 ```
 
@@ -378,17 +379,49 @@ máquina de um usuário só numa rede privada — mas nessa configuração qualq
 alcance a porta é dono da biblioteca inteira, então mantenha o bind em loopback.
 
 **Adicionando pessoas.** Não existe cadastro aberto: um administrador envia um convite
-pela tela **Usuários** na topbar, e só o endereço daquele convite consegue aceitá-lo —
+pela tela **Usuários & convites** dentro do hub de configurações (escopo Administração),
+e só o endereço daquele convite consegue aceitá-lo —
 com senha ou com a conta Google correspondente. O link aparece uma vez, no momento em
 que o convite é criado, e também é enviado por e-mail. Credenciais de convite,
 redefinição e verificação ficam depois de `#` nesses links, portanto a requisição HTTP
 inicial e o access log do nginx nunca as recebem; a SPA remove o fragmento imediatamente.
 
-**Administrando pessoas.** A tela **Usuários** (só para administradores) lista todas as
-contas e permite promover, desativar, excluir, encerrar sessões e enviar recuperação da conta.
-Duas travas são do servidor, não apenas escondidas na interface: você não pode rebaixar,
-desativar ou excluir **a si mesmo**, e o **último administrador ativo** não pode ser
-removido por ninguém. Zero administradores não se recupera por nenhuma chamada de API.
+**Papéis.** São quatro, e o que cada um pode fazer é uma matriz de permissões que o
+servidor aplica — dá para lê-la em **Configurações → Administração → Papéis e permissões**.
+
+| papel | para que serve |
+|---|---|
+| **Proprietário** | Comanda a instância. Exatamente uma conta o detém, e ele só muda por transferência. Só o proprietário edita a política de senha e de acesso. |
+| **Administrador** | Gerencia pessoas, convites e a auditoria — mas não define as regras sob as quais administra. |
+| **Editor** | Conta comum: leitura e escrita completas na própria biblioteca. É o que todo `user` de antes dos 4 papéis virou. |
+| **Leitor** | Mesma biblioteca, somente leitura. Ainda exporta backup; não cria, edita, importa nem restaura. |
+
+**O conteúdo continua privado por conta, em qualquer papel.** O papel decide se uma
+escrita é aceita e se as telas de administração existem — nunca de quem são os links que
+você enxerga. Um administrador gerencia contas e continua sem conseguir ler as linhas de
+outra conta.
+
+**Administrando pessoas.** **Configurações → Administração** lista todas as contas com
+papel, último acesso e status, e permite trocar papéis, desativar, excluir, encerrar
+sessões, enviar recuperação da conta e (sendo proprietário) transferir a instância.
+Travas do servidor, não apenas escondidas na interface: você não pode rebaixar, desativar
+ou excluir **a si mesmo**; o **último administrador ativo** não pode ser removido por
+ninguém; e o papel e o status do **proprietário** não mudam de forma alguma a não ser
+transferindo. Transferir encerra as sessões das duas contas.
+
+**Auditoria.** **Configurações → Administração → Log de auditoria** registra logins e
+falhas, mudanças de papel e status, convites, recuperações forçadas e edições de política.
+Ela sobrevive às contas que descreve: excluir um usuário não apaga o que ele fez.
+
+**Política da instância (só o proprietário).** **Configurações → Administração → Política
+de senha e acesso** define o tamanho mínimo da senha, a validade dos códigos enviados por
+e-mail e o intervalo de reenvio, além de quais domínios de e-mail podem entrar pelo
+Google. Todo valor tem um piso que a configuração não cruza, então dá para deixar a
+instância mais rígida, nunca mais fraca que o mínimo embutido. A mesma tela tem a
+**criação automática de contas** pelo Google — desligada por padrão, e recusada enquanto
+não houver ao menos um domínio permitido, porque ligá-la significa que a instância deixa
+de ser apenas por convite. Contas criadas assim chegam sempre como Editor ou Leitor,
+nunca como administrador.
 
 **E-mail.** `MAIL_DRIVER` é `log` por padrão, o que imprime o convite — link incluído —
 no log do backend em vez de enviá-lo. Isso é proposital: uma instância self-hosted sem
@@ -505,12 +538,12 @@ o acesso ao Google**: não existe outro admin para redefinir a senha dele. Volta
 `AUTH_ENABLED=0` e reiniciar devolve o comportamento single-user com todo o conteúdo
 intacto, e é o caminho mais rápido de volta.
 
-> **`SHARED_SECRET` está depreciado.** Ele é anterior às contas: guarda `/api`, exceto a
-> leitura exata de mídia UUID exigida pelas páginas públicas `/n/{slug}`, não identifica
-> ninguém e não consegue escopar uma linha sequer. A autenticação
-> de verdade o substituiu. Mantenha só enquanto extensões antigas ainda estiverem
-> configuradas com ele — o backend avisa no boot enquanto estiver definido, e ele será
-> removido num release futuro.
+> **`SHARED_SECRET` foi removido.** Ele é anterior às contas: guardava `/api`,
+> não identificava ninguém e não conseguia escopar uma linha sequer — a
+> autenticação de verdade (ADR-30) o substituiu. A variável de ambiente, o
+> header `X-Foldex-Secret` e a fiação dele na SPA e na extensão acabaram;
+> apague-os do seu setup. A proteção de `/api/*` é exclusivamente trabalho da
+> pilha de autenticação.
 
 > **Links `/go/42` antigos pararam de funcionar?** Ids numéricos em `/go/{id}` e
 > `/n/{id}` agora vêm desligados. Essas rotas resolvem sem sessão — são links públicos

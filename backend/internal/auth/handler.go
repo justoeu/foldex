@@ -101,6 +101,12 @@ type Handler struct {
 	// checks oauthEnabled(), which covers both nil and "configured with nothing".
 	google GoogleProvider
 
+	// policy supplies the owner-configurable instance rules (ADR-35). Nil means
+	// "run the compiled-in floors", which is also what the policy package
+	// returns when nothing was ever saved — so an unwired handler and a
+	// never-configured instance behave identically.
+	policy PolicyReader
+
 	loginByIP    *attemptlimit.Limiter
 	loginByEmail *attemptlimit.Limiter
 	bootstrapIP  *attemptlimit.Limiter
@@ -160,6 +166,10 @@ type HandlerConfig struct {
 	// pointer stored in it would still be caught: oauthEnabled() checks the
 	// interface for nil AND calls Enabled().
 	Google GoogleProvider
+
+	// Policy supplies the owner-configurable rules. Optional: nil runs the
+	// compiled-in floors.
+	Policy PolicyReader
 }
 
 func NewHandler(cfg HandlerConfig) *Handler {
@@ -178,6 +188,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		totpIssuer:          cfg.TOTPIssuer,
 		require2FAForAdmins: cfg.Require2FAForAdmins,
 		google:              cfg.Google,
+		policy:              cfg.Policy,
 
 		loginByIP:    attemptlimit.New(20, 15*time.Minute),
 		loginByEmail: attemptlimit.New(5, 15*time.Minute),
@@ -270,6 +281,7 @@ func (h *Handler) Mount(r chi.Router) {
 		pr.Post("/logout-all", h.LogoutAll)
 		pr.Get("/sessions", h.Sessions)
 		pr.Delete("/sessions/{id}", h.RevokeSession)
+		pr.Patch("/profile", h.UpdateProfile)
 		pr.Post("/password/change", h.ChangePassword)
 		pr.Post("/password/set", h.SetPassword)
 		pr.Get("/identities", h.ListIdentities)
@@ -346,7 +358,7 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if err := validatePassword(in.Password); err != nil {
+	if err := h.validatePassword(r.Context(), in.Password); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -435,6 +447,24 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if !found || verr != nil || user.Status != StatusActive {
 		h.loginByIP.CommitFail(ipKey)
 		h.loginByEmail.CommitFail(emailKey)
+		// One audit write for all three causes, on the one branch they share.
+		// Writing different entries — or writing only for a known address —
+		// would rebuild the enumeration oracle this branch exists to close, both
+		// in timing and in what an administrator could read back out of the
+		// trail. The attempted address is recorded because a burst against one
+		// mailbox is precisely what this screen has to make visible.
+		if err := h.repo.Audit(r.Context(), AuditRecord{
+			Action: AuditLoginFailed,
+			// Truncated because Login deliberately does NOT validate the
+			// address — it must answer identically for garbage and for a real
+			// account. Without a cap, an unauthenticated caller can write a
+			// 64 KiB "address" into a permanent row on every attempt, and the
+			// per-address rate bucket cannot help: it is keyed by that same
+			// unique string, so every attempt gets a fresh budget.
+			TargetEmail: truncateTo(NormalizeEmail(in.Email), maxAuditEmail),
+		}); err != nil {
+			h.logger.Error("audit login failure", "err", err)
+		}
 		httperr.Write(w, errInvalidCredentials())
 		return
 	}
@@ -599,6 +629,48 @@ func (h *Handler) authenticatedPayload(u User, csrf string) authenticatedAuthRes
 	}
 }
 
+type updateProfileInput struct {
+	Name string `json:"name"`
+}
+
+// maxProfileNameRunes bounds the display name. The column is TEXT, so the DB
+// imposes nothing — without a handler-side cap a hostile client could store a
+// multi-megabyte "name" that every user list then ships to the admin. Counted
+// in runes (not bytes) so the cap matches what the SPA's maxLength enforces
+// and a CJK-heavy name is judged by the same "characters" the error message
+// promises.
+const maxProfileNameRunes = 120
+
+// UpdateProfile edits the CALLER's own display name. The only self-service
+// profile field: e-mail is identity (changing it needs its own verification
+// flow), and role/status are administration, reachable exclusively through the
+// admin surface with its own guards. Answers with the same payload shape /me
+// uses, so the SPA can adopt the refreshed user without a second round-trip.
+func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+	p, _ := authctx.FromContext(r.Context())
+	in, err := httperr.DecodeJSON[updateProfileInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if utf8.RuneCountInString(name) > maxProfileNameRunes {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_name",
+			"name must be at most 120 characters"))
+		return
+	}
+	// UpdateUser with nil role/status is a plain rename: no last-admin guard
+	// can trigger, and the advisory lock it takes is the same one every other
+	// app_user write serializes on.
+	user, err := h.repo.UpdateUser(r.Context(), p.UserID, &name, nil, nil)
+	if err != nil {
+		h.logger.Error("update profile", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, cookieValue(r, CookieCSRF)))
+}
+
 func (h *Handler) Sessions(w http.ResponseWriter, r *http.Request) {
 	p, _ := authctx.FromContext(r.Context())
 	list, err := h.repo.ListSessions(r.Context(), p.UserID, p.SessionID)
@@ -648,7 +720,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if err := validatePassword(in.NewPassword); err != nil {
+	if err := h.validatePassword(r.Context(), in.NewPassword); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -720,7 +792,7 @@ func (h *Handler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if err := validatePassword(in.Password); err != nil {
+	if err := h.validatePassword(r.Context(), in.Password); err != nil {
 		httperr.Write(w, err)
 		return
 	}
@@ -765,6 +837,21 @@ func (h *Handler) issueAndRespond(w http.ResponseWriter, r *http.Request, user U
 		return
 	}
 	h.cookies.SetSession(w, tok)
+	// Recorded HERE rather than in Login: every credential path — password,
+	// second factor, recovery code, OAuth, invite acceptance — funnels through
+	// this function, and only reaching it means a session actually exists. A
+	// password accepted at Login that then diverts into a 2FA challenge is not a
+	// sign-in, and recording it as one would make the trail claim access that
+	// never happened.
+	if err := h.repo.Audit(r.Context(), AuditRecord{
+		Action:      AuditLoginSucceeded,
+		ActorID:     &user.ID,
+		ActorEmail:  user.Email,
+		TargetID:    &user.ID,
+		TargetEmail: user.Email,
+	}); err != nil {
+		h.logger.Error("audit login", "err", err)
+	}
 	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, tok.CSRF))
 }
 
@@ -791,10 +878,68 @@ func floorDuration(start time.Time, d time.Duration) {
 	}
 }
 
-func validatePassword(p string) error {
-	if utf8.RuneCountInString(p) < MinPasswordLen {
+// PolicyReader supplies the instance rules this handler enforces. It is an
+// interface so internal/auth does not import internal/policy, which would make
+// the dependency circular the moment policy needs to name a role.
+//
+// All three methods are required rather than discovered by type assertion: an
+// optional-capability dance would let a fake that forgot GoogleProvisioning
+// compile and silently disable auto-provisioning, and "the feature quietly does
+// nothing" is the failure mode hardest to notice in a test suite.
+type PolicyReader interface {
+	PasswordMinLength(ctx context.Context) int
+	// OTPTTL is how long a mailed code stays usable.
+	OTPTTL(ctx context.Context) time.Duration
+	// OTPResendCooldown is the minimum gap between two sends.
+	OTPResendCooldown(ctx context.Context) time.Duration
+	// GoogleAllows reports whether the address may join through Google.
+	GoogleAllows(ctx context.Context, email string) bool
+	// GoogleProvisioning reports whether an unknown Google address may create an
+	// account, and with which role.
+	GoogleProvisioning(ctx context.Context) (bool, authctx.Role)
+}
+
+// passwordFloor is the configured minimum, never below the compiled-in one.
+//
+// The max() is not belt-and-braces: it is what makes the policy screen unable
+// to weaken the instance below the baseline every release has shipped with,
+// even if a row is edited directly in SQL past the validation in
+// policy.Validate.
+func (h *Handler) passwordFloor(ctx context.Context) int {
+	if h.policy == nil {
+		return MinPasswordLen
+	}
+	return max(h.policy.PasswordMinLength(ctx), MinPasswordLen)
+}
+
+// otpTTL and otpCooldown resolve the configured values, never below the
+// compiled-in floors.
+//
+// Clamped rather than trusted for the same reason passwordFloor clamps: a row
+// edited directly in SQL, past policy.Validate, must not be able to make a
+// mailed code live for a day or let an attacker resend one every second.
+func (h *Handler) otpTTL(ctx context.Context) time.Duration {
+	if h.policy == nil {
+		return emailOTPTTL
+	}
+	return max(h.policy.OTPTTL(ctx), time.Minute)
+}
+
+func (h *Handler) otpCooldown(ctx context.Context) time.Duration {
+	if h.policy == nil {
+		return otpResendInterval
+	}
+	return max(h.policy.OTPResendCooldown(ctx), otpResendInterval)
+}
+
+// validatePassword is a METHOD so every call site is forced through the
+// configured floor. As a package function it would have kept silently applying
+// the constant, and a policy nothing enforces is worse than no policy.
+func (h *Handler) validatePassword(ctx context.Context, p string) error {
+	minLen := h.passwordFloor(ctx)
+	if utf8.RuneCountInString(p) < minLen {
 		return httperr.New(http.StatusBadRequest, "password_too_short",
-			fmt.Sprintf("password must be at least %d characters", MinPasswordLen))
+			fmt.Sprintf("password must be at least %d characters", minLen))
 	}
 	// Measured in BYTES, because that is the unit bcrypt truncates in.
 	if len(p) > MaxPasswordLen {

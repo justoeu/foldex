@@ -21,6 +21,56 @@ func RequireAdmin(next http.Handler) http.Handler {
 	})
 }
 
+// RequireWrite gates the unsafe verbs of a whole route group on a permission
+// and lets safe methods through untouched.
+//
+// Mounted on a group rather than on each mutating route so that a route added
+// later is covered by construction. That is only sound where every unsafe verb
+// in the group really is a write: /api/folders and /api/backup both answer POST
+// to operations that only READ — unlocking a folder proves a password in order
+// to see its contents, and exporting a backup serializes rows the caller
+// already owns — so those two gate per route instead, with RequirePermission.
+func RequireWrite(p authctx.Permission) func(http.Handler) http.Handler {
+	gate := RequirePermission(p)
+	return func(next http.Handler) http.Handler {
+		gated := gate(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet, http.MethodHead, http.MethodOptions:
+				next.ServeHTTP(w, r)
+			default:
+				gated.ServeHTTP(w, r)
+			}
+		})
+	}
+}
+
+// RequirePermission gates a route on one entry of the ADR-33 matrix.
+//
+// The answer is 403, not the 404 RequireAdmin gives. The two hide different
+// things and the distinction is deliberate: RequireAdmin conceals that an
+// administrative surface exists at all, because a 403 there would confirm the
+// route to anyone who asked. Past that gate the caller already knows the
+// surface exists — they are an administrator — so an honest "your role cannot
+// do this" leaks nothing and is the only answer that lets an admin understand
+// why the owner-only button failed.
+//
+// Content routes use it for the opposite reason: a viewer knows their own
+// library exists, so 404 on their own row would be a lie.
+func RequirePermission(p authctx.Permission) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			principal, ok := authctx.FromContext(r.Context())
+			if !ok || !principal.Role.Can(p) {
+				httperr.Write(w, httperr.New(http.StatusForbidden, "forbidden_role",
+					"your role does not allow this action"))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // RejectAPIToken keeps content-scoped bearer credentials off sensitive routes.
 func RejectAPIToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

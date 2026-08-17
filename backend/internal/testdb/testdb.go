@@ -233,7 +233,7 @@ var resetStatement = `TRUNCATE
 	    backup_restore_file, backup_restore_entity, backup_restore,
 	    note_media_ref, note_media,
 	    click_log, link_tag, note, link, folder, tag,
-	    push_subscription, app_setting,
+	    push_subscription, app_setting, audit_log,
 	    session_used_token, session, oauth_state, api_token,
 	    recovery_code, totp_secret, email_otp, auth_challenge,
 	    password_reset, invite, user_identity, app_user
@@ -266,7 +266,7 @@ func Reset(ctx context.Context, pool *pgxpool.Pool) error {
 func SeedUser(t *testing.T, pool *pgxpool.Pool, email string, role string) authctx.UserID {
 	t.Helper()
 	if role == "" {
-		role = string(authctx.RoleUser)
+		role = string(authctx.RoleEditor)
 	}
 	return seedUserWithHash(t, pool, email, role, unusablePasswordHash)
 }

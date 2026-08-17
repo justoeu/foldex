@@ -44,11 +44,17 @@ func NewHandler(repo *Repository, unlockKey []byte, master MasterPasswordVerifie
 }
 
 func (h *Handler) Mount(r chi.Router) {
+	// Gated per route rather than by a group middleware because POST here is not
+	// synonymous with "write": unlock proves a password in order to SEE a
+	// folder's contents, so a viewer — read-only over its own library — has to
+	// be able to call it. A blanket method gate would lock viewers out of their
+	// own protected folders.
+	write := authgate.RequirePermission(authctx.PermContentWrite)
 	r.Get("/", h.list)
-	r.Post("/", h.create)
+	r.With(write).Post("/", h.create)
 	r.Get("/{id}", h.get)
-	r.Patch("/{id}", h.update)
-	r.With(authgate.RejectAPIToken).Delete("/{id}", h.delete)
+	r.With(write).Patch("/{id}", h.update)
+	r.With(authgate.RejectAPIToken, write).Delete("/{id}", h.delete)
 	// Folder CRUD is content and stays token-reachable except DELETE, which can
 	// destroy a protected subtree. These password-sensitive routes are not:
 	// unlock verifies a password (and is the brute-force surface the rate
@@ -56,7 +62,7 @@ func (h *Handler) Mount(r chi.Router) {
 	// master. A credential presented by a script, with no human present and no
 	// step-up available, must not drive either.
 	r.With(authgate.RejectAPIToken).Post("/{id}/unlock", h.unlock)
-	r.With(authgate.RejectAPIToken).Post("/{id}/reset-password", h.resetPassword)
+	r.With(authgate.RejectAPIToken, write).Post("/{id}/reset-password", h.resetPassword)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {

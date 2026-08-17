@@ -206,7 +206,7 @@ func TestHandler_List_FolderGate(t *testing.T) {
 func TestHandler_PreviewStatuses_UsesTheProtectedFolderGate(t *testing.T) {
 	pool := testdb.Shared(t)
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
-	otherUID := testdb.SeedUser(t, pool, "other@test.local", "user")
+	otherUID := testdb.SeedUser(t, pool, "other@test.local", "editor")
 	ctx := context.Background()
 	foldersRepo := folders.NewRepository(pool)
 	password := "folder-password"
@@ -257,7 +257,7 @@ func TestHandler_List_FolderGateProtocolAcrossEndpoints(t *testing.T) {
 	pool := testdb.Shared(t)
 	ctx := context.Background()
 	owner := testdb.SeedUser(t, pool, "owner@test.local", "admin")
-	otherOwner := testdb.SeedUser(t, pool, "other@test.local", "user")
+	otherOwner := testdb.SeedUser(t, pool, "other@test.local", "editor")
 	foldersRepo := folders.NewRepository(pool)
 
 	password := "folder-password"

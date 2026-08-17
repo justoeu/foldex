@@ -394,6 +394,54 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 // oauthFinishLogin resolves the Google subject onto an account, or offers the
 // conversion.
+// oauthDomainAllowed reports whether the policy lets this address join.
+//
+// A nil policy allows everything, matching the compiled-in behaviour of an
+// instance that never opened the settings screen.
+func (h *Handler) oauthDomainAllowed(ctx context.Context, email string) bool {
+	if h.policy == nil {
+		return true
+	}
+	return h.policy.GoogleAllows(ctx, email)
+}
+
+// oauthAutoProvision creates an account for a Google user who has none, when
+// the owner has explicitly enabled it.
+//
+// Every refusal is the SAME `not_linked` an unknown address has always
+// produced. A distinct "auto-provisioning is disabled" would tell an anonymous
+// caller which instances are open, and a distinct "your domain is not allowed"
+// would let them enumerate the allowlist one guess at a time.
+func (h *Handler) oauthAutoProvision(w http.ResponseWriter, r *http.Request, info oauthgoogle.UserInfo) {
+	if h.policy == nil {
+		h.oauthRedirectError(w, r, "not_linked")
+		return
+	}
+	enabled, role := h.policy.GoogleProvisioning(r.Context())
+	// Re-checked here rather than trusted from the policy: this is the one
+	// branch that mints an account, and the role it writes must never be
+	// administrative even if a row was edited past policy.Validate.
+	if !enabled || (role != authctx.RoleEditor && role != authctx.RoleViewer) {
+		h.oauthRedirectError(w, r, "not_linked")
+		return
+	}
+
+	user, err := h.repo.ProvisionOAuthUser(r.Context(), info.Email, info.Name,
+		ProviderGoogle, info.Subject, role)
+	if err != nil {
+		// A concurrent request for the same address loses the unique index and
+		// lands here. Answering not_linked is correct rather than merely safe:
+		// the winner's account exists now, and a retry resolves by subject.
+		h.logger.Error("oauth auto-provision", "err", err)
+		h.oauthRedirectError(w, r, "not_linked")
+		return
+	}
+	// Straight into oauthComplete, exactly like a linked login — which is what
+	// keeps the second-factor policy applying to a freshly provisioned account
+	// instead of it being the one door that skips the check.
+	h.oauthComplete(w, r, user)
+}
+
 func (h *Handler) oauthFinishLogin(w http.ResponseWriter, r *http.Request, info oauthgoogle.UserInfo) {
 	user, err := h.repo.UserByIdentity(r.Context(), ProviderGoogle, info.Subject)
 	switch {
@@ -428,15 +476,32 @@ func (h *Handler) oauthFinishLogin(w http.ResponseWriter, r *http.Request, info 
 		h.oauthRedirectError(w, r, "not_linked")
 		return
 	}
+	// The domain allowlist gates the two paths that CREATE access — conversion
+	// below and auto-provisioning — and deliberately not the linked login above.
+	//
+	// Applying it to an existing identity would let an owner lock themselves out
+	// of their own instance by saving a list that excludes their own domain, and
+	// a Google-only owner would have no second way in. An already-linked
+	// identity is access the owner granted on purpose; this setting decides who
+	// may JOIN, which is also how the administration screen presents it.
+	if !h.oauthDomainAllowed(r.Context(), info.Email) {
+		h.oauthRedirectError(w, r, "not_linked")
+		return
+	}
+
 	candidate, err := h.repo.UserByEmail(r.Context(), info.Email)
 	if err != nil {
-		// Unknown address, and no auto-provisioning: an instance is invite-only,
-		// so anyone with a Google account being able to create one would be a
-		// silent bypass of that policy.
 		if !errors.Is(err, ErrNoUser) {
 			h.logger.Error("oauth email lookup", "err", err)
+			h.oauthRedirectError(w, r, "not_linked")
+			return
 		}
-		h.oauthRedirectError(w, r, "not_linked")
+		// Unknown address. Historically the end of the road — an instance is
+		// invite-only, so anyone with a Google account being able to create one
+		// would be a silent bypass of that policy. ADR-35 lets an owner revoke
+		// that rule explicitly, for a named set of domains, with a default role
+		// that can never be administrative.
+		h.oauthAutoProvision(w, r, info)
 		return
 	}
 	if candidate.Status != StatusActive {

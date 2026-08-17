@@ -5,7 +5,7 @@ import { SUPPORTED_LOCALES, type LocaleCode } from '../i18n'
 
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
 type ViewMode = 'cards' | 'compact' | 'list'
-type View = 'home' | 'import' | 'stats' | 'settings' | 'admin'
+type View = 'home' | 'import' | 'stats' | 'settings'
 
 type Props = {
   sort: Sort
@@ -126,12 +126,8 @@ export function MobileOverflowMenu({
               label={t('topbar.new_note')}
               onClick={() => { onNewNote(); closeAll() }}
             />
-            <Row
-              icon={I.upload}
-              label={t('topbar.import_export')}
-              active={view === 'import'}
-              onClick={() => { setView('import'); closeAll() }}
-            />
+            {/* Import/export lives in the settings hub now (shortcut tile),
+                so the kebab keeps a single entry point for it: the gear. */}
             <Row
               icon={I.gear}
               label={t('topbar.settings')}

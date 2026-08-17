@@ -339,7 +339,7 @@ func TestChallengeMutationsCannotCommitAfterCredentialEpochChange(t *testing.T) 
 			return err
 		}},
 		{"send", func(repo *auth.Repository, id int64) error {
-			_, err := repo.CreateChallengeEmailOTP(context.Background(), id, []byte("hash"), time.Minute)
+			_, err := repo.CreateChallengeEmailOTP(context.Background(), id, []byte("hash"), time.Minute, time.Minute)
 			return err
 		}},
 		{"consume", func(repo *auth.Repository, id int64) error {
@@ -707,7 +707,7 @@ func TestCreateChallenge_PreservesLivePurposeState(t *testing.T) {
 		_, err = h.repo.BumpChallengeAttempt(ctx, firstID)
 		require.NoError(t, err)
 	}
-	_, err = h.repo.CreateChallengeEmailOTP(ctx, firstID, []byte("hash"), time.Minute)
+	_, err = h.repo.CreateChallengeEmailOTP(ctx, firstID, []byte("hash"), time.Minute, time.Minute)
 	require.NoError(t, err)
 	var firstExpiry time.Time
 	require.NoError(t, h.pool.QueryRow(ctx,
@@ -766,7 +766,7 @@ func TestConcurrentEmailOTPRequestsReserveAndCreateOnlyOneCode(t *testing.T) {
 	results := make(chan error, 2)
 	for i := range 2 {
 		go func() {
-			_, err := h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte{byte(i + 1)}, time.Minute)
+			_, err := h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte{byte(i + 1)}, time.Minute, time.Minute)
 			results <- err
 		}()
 	}
@@ -877,7 +877,7 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 	_, err = h.repo.BumpChallengeAttempt(ctx, challengeID)
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	assert.ErrorIs(t, h.repo.ConsumeChallenge(ctx, challengeID), auth.ErrChallengeInvalid)
-	_, err = h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte("hash"), time.Minute)
+	_, err = h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte("hash"), time.Minute, time.Minute)
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	_, _, err = h.repo.CreateChallenge(ctx, auth.NewChallenge{
 		UserID: user.ID, Purpose: auth.PurposeTOTP, TokenVersion: user.TokenVersion, TTL: time.Minute,
@@ -1344,7 +1344,7 @@ func TestRecoveryCode_IsScopedToItsOwner(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "alice@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "bob@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "bob@example.com", "a good password", "editor")
 
 	alice := enrolUser(t, h, "alice@example.com", "a good password")
 	bob := enrolUser(t, h, "bob@example.com", "a good password")
@@ -1610,7 +1610,7 @@ func TestAdminPolicy_PromotionRevokesTheLiveSessionAndRequiresEnrollment(t *test
 
 	strict := newHarnessWith(t, pool, harnessOpts{Require2FAForAdmins: true})
 	admin := clientOnHarness(t, strict, owner.client)
-	uid := testdb.SeedUserWithPassword(t, pool, "member@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, pool, "member@example.com", "a good password", "editor")
 	member := strict.client(t)
 	require.Equal(t, http.StatusOK, member.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "member@example.com", "password": "a good password",
@@ -1660,7 +1660,7 @@ func TestAdminPolicy_EnablingPolicyBlocksLegacyAndRefreshedSessionsButKeepsEnrol
 	assert.Equal(t, http.StatusForbidden, rec.Code, "refresh restored admin authority without confirmed TOTP")
 	assert.Equal(t, "admin_2fa_required", errCode(t, rec))
 
-	testdb.SeedUserWithPassword(t, pool, "user@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, pool, "user@example.com", "a good password", "editor")
 	plain := strict.client(t)
 	require.Equal(t, http.StatusOK, plain.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "user@example.com", "password": "a good password",
@@ -1713,7 +1713,7 @@ func TestAdminPolicy_PlainUserIsNotForcedToEnrol(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{Require2FAForAdmins: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 
 	c := h.client(t)
 	rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -1751,7 +1751,7 @@ func TestAdminPolicy_AdminCannotDisableTOTP(t *testing.T) {
 func TestConfirmTOTP_SeedReplacementBetweenVerifyAndConfirmCannotActivateTheReplacement(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
-	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 	_, sid, err := h.repo.IssueSession(context.Background(), uid, 0, testSessionTTL(), "", "")
 	require.NoError(t, err)
 
@@ -1976,7 +1976,7 @@ func TestTOTP_DisableRequiresPasswordAndCode(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 	e := enrolUser(t, h, "user@example.com", "a good password")
 
 	// Right password, wrong code.
@@ -2008,7 +2008,7 @@ func TestTOTP_DisableRollsBackWhenRecoveryCodeDeletionFails(t *testing.T) {
 	h := newHarnessWith(t, testdb.New(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 	e := enrolUser(t, h, "user@example.com", "a good password")
 
 	_, err := h.pool.Exec(context.Background(), `
@@ -2057,7 +2057,7 @@ func TestTOTPMutationsRefuseProofFromAStaleCredentialEpoch(t *testing.T) {
 			h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 			require.NoError(t, testdb.Reset(context.Background(), h.pool))
 			h.bootstrapAdmin(t, "admin@example.com", "a good password")
-			uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+			uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 			e := enrolUser(t, h, "user@example.com", "a good password")
 			user, err := h.repo.GetUser(context.Background(), uid)
 			require.NoError(t, err)
@@ -2255,7 +2255,7 @@ func TestVerify2FA_RefusesAnAccountDisabledMidChallenge(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 	e := enrolUser(t, h, "user@example.com", "a good password")
 
 	victim := h.client(t)
@@ -2322,7 +2322,7 @@ func TestStepUp_TOTPGuessingIsCapped(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 	e := enrolUser(t, h, "user@example.com", "a good password")
 
 	for i := range 5 {
@@ -2342,7 +2342,7 @@ func TestStepUp_ReplayedValidTOTPDoesNotResetTheAttemptBudget(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 	e := enrolUser(t, h, "user@example.com", "a good password")
 
 	// Enrollment spent the current time-step. It still verifies
@@ -2370,7 +2370,7 @@ func TestTwoFactorStatus_ReportsThePolicyPerRole(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{Require2FAForAdmins: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 
 	read := func(t *testing.T, c *client) (enabled, required bool, remaining int) {
 		t.Helper()
@@ -2732,7 +2732,7 @@ func TestTOTP_DisableThenReEnrol(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "user")
+	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 	e := enrolUser(t, h, "user@example.com", "a good password")
 
 	require.Equal(t, http.StatusNoContent,
