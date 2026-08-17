@@ -124,6 +124,24 @@ func TestAuthCodeURL_CarriesEverythingGoogleNeeds(t *testing.T) {
 	assert.Contains(t, q.Get("scope"), "email")
 }
 
+// The base of the redirect is the package constant, never configuration or
+// request input — the property auth.OAuthStart's open-redirect suppression
+// relies on.
+func TestAuthCodeURL_BaseIsAlwaysGooglesAuthEndpoint(t *testing.T) {
+	// New, not configured(t, …): the helper overrides the endpoints to reach
+	// its httptest server, and the wiring under test is exactly the one the
+	// helper bypasses.
+	p := New(Config{ClientID: "cid", ClientSecret: "cs", RedirectURL: "https://foldex.test/cb"})
+	raw, err := p.AuthCodeURL("the-state", "the-challenge")
+	require.NoError(t, err)
+
+	u, err := url.Parse(raw)
+	require.NoError(t, err)
+	assert.Equal(t, "https", u.Scheme)
+	assert.Equal(t, "accounts.google.com", u.Host)
+	assert.Equal(t, "/o/oauth2/v2/auth", u.Path)
+}
+
 // `plain` puts the verifier itself in a URL another app on the device can
 // observe, which defeats the whole point of PKCE.
 func TestAuthCodeURL_OnlyEverAsksForS256(t *testing.T) {

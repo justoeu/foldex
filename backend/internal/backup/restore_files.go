@@ -175,6 +175,7 @@ func (s *Service) applyRestoreArchiveObject(ctx context.Context, item restoreFil
 	if err != nil {
 		return restoreObjectResult{}, fmt.Errorf("backup: open zip entry %q: %w", item.entry.Name, err)
 	}
+	// #nosec G115 -- UncompressedSize64 was capped per entry by the archive preflight (inspectArchive).
 	putErr := s.storage.PutObjectStream(ctx, item.key, file, int64(item.entry.UncompressedSize64), contentTypeFor(item.key))
 	closeErr := file.Close()
 	if putErr != nil {

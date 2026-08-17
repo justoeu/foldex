@@ -329,7 +329,7 @@ func createSnapshotSpool(ctx context.Context, tx pgx.Tx, uid authctx.UserID) (*s
 
 func (s *snapshotSpool) cleanup() {
 	_ = s.file.Close()
-	_ = os.Remove(s.file.Name())
+	_ = os.Remove(s.file.Name()) // #nosec G703 -- path comes from os.CreateTemp, never from user input
 }
 
 type boundedWriter struct {
