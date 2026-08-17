@@ -337,8 +337,12 @@ func bootstrapPrincipal(pool *pgxpool.Pool, logger *slog.Logger) func(http.Handl
 			// and every request would then be attributed to an account that is
 			// not supposed to be able to sign in at all. This is the documented
 			// escape hatch out of a lockout, so it has to land somewhere real.
-			`SELECT id FROM app_user WHERE role = 'admin' AND status = 'active'
-			 ORDER BY id LIMIT 1`).Scan(&id); err != nil {
+			// Owner sorts first so a single-administrator instance — the common
+			// shape for this escape hatch — resolves to the account that holds
+			// every permission, rather than to an admin that cannot reach the
+			// owner-only policy routes.
+			`SELECT id FROM app_user WHERE role IN ('owner', 'admin') AND status = 'active'
+			 ORDER BY (role = 'owner') DESC, id LIMIT 1`).Scan(&id); err != nil {
 			return 0, err
 		}
 		cached = authctx.UserID(id)
@@ -355,8 +359,12 @@ func bootstrapPrincipal(pool *pgxpool.Pool, logger *slog.Logger) func(http.Handl
 			}
 			next.ServeHTTP(w, r.WithContext(authctx.WithPrincipal(r.Context(), authctx.Principal{
 				UserID: uid,
-				Role:   authctx.RoleAdmin,
-				Via:    authctx.ViaSession,
+				// Owner, not admin: with AUTH_ENABLED=0 anyone who can reach the
+				// port owns the library anyway, and attributing requests to a role
+				// that cannot change policy would make the escape hatch unable to
+				// fix the very lockout it exists for.
+				Role: authctx.RoleOwner,
+				Via:  authctx.ViaSession,
 			})))
 		})
 	}

@@ -209,9 +209,15 @@ func (r *Repository) Bootstrap(ctx context.Context, email, name, password string
 	trimmed := strings.TrimSpace(email)
 
 	var placeholderID int64
+	// Matches 'owner' as well as 'admin': migration 000032 promotes the oldest
+	// administrator, and on an instance that never completed setup that IS the
+	// pending placeholder. Looking only for 'admin' would miss it and fall
+	// through to the INSERT below, which the single-owner index then rejects —
+	// a setup screen that fails permanently on exactly the installs this
+	// placeholder exists to serve.
 	err = tx.QueryRow(ctx, `
 		SELECT id FROM app_user
-		WHERE role = 'admin' AND status = 'pending'
+		WHERE role IN ('owner', 'admin') AND status = 'pending'
 		ORDER BY id ASC LIMIT 1`).Scan(&placeholderID)
 	switch {
 	case err == nil:
@@ -227,13 +233,13 @@ func (r *Repository) Bootstrap(ctx context.Context, email, name, password string
 		u, err = scanUser(tx.QueryRow(ctx, `
 			UPDATE app_user
 			SET email = $2, email_normalized = $3, name = $4, password_hash = $5,
-			    status = 'active', role = 'admin', email_verified_at = now(), updated_at = now()
+			    status = 'active', role = 'owner', email_verified_at = now(), updated_at = now()
 			WHERE id = $1
 			RETURNING `+userColumns, placeholderID, trimmed, norm, name, hash))
 	} else {
 		u, err = scanUser(tx.QueryRow(ctx, `
 			INSERT INTO app_user (email, email_normalized, name, password_hash, role, status, email_verified_at)
-			VALUES ($1, $2, $3, $4, 'admin', 'active', now())
+			VALUES ($1, $2, $3, $4, 'owner', 'active', now())
 			RETURNING `+userColumns, trimmed, norm, name, hash))
 	}
 	if err != nil {
@@ -423,13 +429,15 @@ func guardLastAdminTx(ctx context.Context, tx pgx.Tx, target authctx.UserID) err
 	if err != nil {
 		return fmt.Errorf("guard last admin: %w", err)
 	}
-	// Only removing an ACTIVE ADMIN can reduce the count.
-	if authctx.Role(role) != authctx.RoleAdmin || status != StatusActive {
+	// Only removing an ACTIVE administrator can reduce the count. IsAdmin, not
+	// an equality test, because owner administers too — and it is the row most
+	// likely to be the last one standing.
+	if !authctx.Role(role).IsAdmin() || status != StatusActive {
 		return nil
 	}
 	var n int
 	if err := tx.QueryRow(ctx,
-		`SELECT count(*) FROM app_user WHERE role = 'admin' AND status = 'active'`).Scan(&n); err != nil {
+		`SELECT count(*) FROM app_user WHERE role IN ('owner', 'admin') AND status = 'active'`).Scan(&n); err != nil {
 		return fmt.Errorf("guard count admins: %w", err)
 	}
 	if n <= 1 {
@@ -483,7 +491,7 @@ func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *st
 		}
 		return User{}, fmt.Errorf("update user role: %w", err)
 	}
-	demoting := role != nil && *role != authctx.RoleAdmin
+	demoting := role != nil && !role.IsAdmin()
 	disabling := status != nil && *status == StatusDisabled
 	if demoting || disabling {
 		if err := guardLastAdminTx(ctx, tx, id); err != nil {
@@ -508,7 +516,7 @@ func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *st
 	if err != nil {
 		return User{}, fmt.Errorf("update user: %w", err)
 	}
-	if role != nil && previousRole != authctx.RoleAdmin && *role == authctx.RoleAdmin {
+	if role != nil && !previousRole.IsAdmin() && role.IsAdmin() {
 		if _, err := tx.Exec(ctx, `
 			UPDATE session SET revoked_at = now(), revoked_reason = $2
 			WHERE user_id = $1 AND revoked_at IS NULL`, int64(id), ReasonAdminRevoked); err != nil {

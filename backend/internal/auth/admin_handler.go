@@ -80,8 +80,13 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if in.Role != nil && *in.Role != authctx.RoleAdmin && *in.Role != authctx.RoleUser {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role", "role must be admin or user"))
+	// Owner is absent from the assignable set on purpose: ownership moves only
+	// through the transfer endpoint, which demotes the outgoing owner in the
+	// same statement. Allowing it here would let a promotion race the partial
+	// unique index and surface as a 500 instead of a refusal.
+	if in.Role != nil && (!in.Role.Valid() || *in.Role == authctx.RoleOwner) {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role",
+			"role must be admin, editor or viewer"))
 		return
 	}
 	if in.Status != nil && *in.Status != StatusActive && *in.Status != StatusDisabled {
@@ -91,7 +96,11 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target := authctx.UserID(id)
-	demoting := in.Role != nil && *in.Role != authctx.RoleAdmin
+	// What matters to the last-administrator guard is the loss of administrative
+	// reach, not the exact role: admin -> editor and admin -> viewer are both
+	// demotions, and with four roles a plain `!= RoleAdmin` would also count
+	// admin -> owner, which adds one.
+	demoting := in.Role != nil && !in.Role.IsAdmin()
 	disabling := in.Status != nil && *in.Status == StatusDisabled
 
 	if target == caller.UserID && (demoting || disabling) {
@@ -269,10 +278,14 @@ func (h *AdminHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	role := in.Role
 	if role == "" {
-		role = authctx.RoleUser
+		role = authctx.RoleEditor
 	}
-	if role != authctx.RoleAdmin && role != authctx.RoleUser {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role", "role must be admin or user"))
+	// Mirrors the invite_role_check constraint: an invitation can mint an
+	// administrator but never an owner, so a leaked invite cannot hand someone
+	// the one role that cannot be demoted.
+	if !role.Valid() || role == authctx.RoleOwner {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role",
+			"role must be admin, editor or viewer"))
 		return
 	}
 

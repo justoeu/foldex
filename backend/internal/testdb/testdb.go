@@ -266,7 +266,7 @@ func Reset(ctx context.Context, pool *pgxpool.Pool) error {
 func SeedUser(t *testing.T, pool *pgxpool.Pool, email string, role string) authctx.UserID {
 	t.Helper()
 	if role == "" {
-		role = string(authctx.RoleUser)
+		role = string(authctx.RoleEditor)
 	}
 	return seedUserWithHash(t, pool, email, role, unusablePasswordHash)
 }
