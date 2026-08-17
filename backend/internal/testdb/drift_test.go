@@ -170,7 +170,7 @@ func TestMigration000025IsReversibleAndLegacyChallengesFailClosed(t *testing.T) 
 
 	_, err = pool.Exec(ctx, string(down))
 	require.NoError(t, err, "000025 down migration must apply cleanly")
-	uid := SeedUser(t, pool, "legacy-challenge@test.local", "user")
+	uid := SeedUser(t, pool, "legacy-challenge@test.local", "editor")
 	legacyRaw := "legacy-challenge-token"
 	_, err = pool.Exec(ctx, `
 		INSERT INTO auth_challenge (user_id, token_hash, purpose, expires_at)
@@ -278,7 +278,7 @@ func TestMigration000028IsReversibleAndLegacyPasswordResetsFailClosed(t *testing
 
 	_, err = pool.Exec(ctx, string(down))
 	require.NoError(t, err, "000028 down migration must apply cleanly")
-	uid := SeedUserWithPassword(t, pool, "legacy-reset@test.local", "a good password", "user")
+	uid := SeedUserWithPassword(t, pool, "legacy-reset@test.local", "a good password", "editor")
 	legacyRaw := "legacy-password-reset-token"
 	_, err = pool.Exec(ctx, `
 		INSERT INTO password_reset (user_id, token_hash, expires_at)
@@ -344,7 +344,7 @@ func TestMigration000029RepairsOverlongSlugsAndEnforcesLimit(t *testing.T) {
 
 	_, err = pool.Exec(ctx, string(down))
 	require.NoError(t, err, "000029 down migration must apply cleanly")
-	uid := SeedUser(t, pool, "legacy-slug@test.local", "user")
+	uid := SeedUser(t, pool, "legacy-slug@test.local", "editor")
 	base := strings.Repeat("a", slug.MaxLen)
 	values := []string{base}
 	for suffix := 2; suffix <= 100; suffix++ {
@@ -424,7 +424,7 @@ func TestMigration000030BackfillsPositivePreviewGenerationAndIsReversible(t *tes
 
 	_, err = pool.Exec(ctx, string(down))
 	require.NoError(t, err, "000030 down migration must apply cleanly")
-	uid := SeedUser(t, pool, "legacy-preview@test.local", "user")
+	uid := SeedUser(t, pool, "legacy-preview@test.local", "editor")
 	var linkID int64
 	err = pool.QueryRow(ctx, `
 		INSERT INTO link (user_id, url, title, slug)
@@ -464,7 +464,7 @@ func TestMigration000031RepairsDuplicatesAndEnforcesOneLiveChallengeOTP(t *testi
 
 	_, err = pool.Exec(ctx, string(down))
 	require.NoError(t, err, "000031 down migration must apply cleanly")
-	uid := SeedUser(t, pool, "legacy-otp@test.local", "user")
+	uid := SeedUser(t, pool, "legacy-otp@test.local", "editor")
 	var challengeID int64
 	err = pool.QueryRow(ctx, `
 		INSERT INTO auth_challenge (user_id, token_hash, purpose, token_version, expires_at)
