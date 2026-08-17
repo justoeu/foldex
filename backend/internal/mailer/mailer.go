@@ -201,7 +201,7 @@ func (m *smtpMailer) tlsConfig() *tls.Config {
 		ServerName: m.cfg.Host,
 		MinVersion: tls.VersionTLS12,
 		//nolint:gosec // G402: opt-in, refused alongside a non-loopback host by config.validateSecureDefaults.
-		InsecureSkipVerify: m.cfg.InsecureSkipVerify,
+		InsecureSkipVerify: m.cfg.InsecureSkipVerify, // #nosec G402
 	}
 }
 

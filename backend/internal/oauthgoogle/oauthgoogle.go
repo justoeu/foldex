@@ -27,7 +27,7 @@ import (
 // credential-exfiltration channel wearing a config knob.
 const (
 	authEndpoint     = "https://accounts.google.com/o/oauth2/v2/auth"
-	tokenEndpoint    = "https://oauth2.googleapis.com/token"
+	tokenEndpoint    = "https://oauth2.googleapis.com/token" // #nosec G101 -- Google's token endpoint URL, not a credential
 	userInfoEndpoint = "https://openidconnect.googleapis.com/v1/userinfo"
 )
 

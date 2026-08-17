@@ -52,10 +52,10 @@ func inspectArchive(ctx context.Context, zr *zip.Reader) (*inspectedArchive, err
 		result.entries[entry.Name] = entry
 
 		limit := archiveEntryLimit(entry.Name)
-		if entry.UncompressedSize64 > uint64(limit) {
+		if entry.UncompressedSize64 > uint64(limit) { // #nosec G115 -- limit is a positive constant
 			return nil, fmt.Errorf("archive entry %q expands to %d bytes (max %d)", entry.Name, entry.UncompressedSize64, limit)
 		}
-		entryBytes := int64(entry.UncompressedSize64)
+		entryBytes := int64(entry.UncompressedSize64) // #nosec G115 -- bounded by the per-entry limit check above
 		if entryBytes > maxArchiveExpandedBytes-declaredBytes {
 			return nil, fmt.Errorf("archive expanded bytes exceed %d-byte limit", maxArchiveExpandedBytes)
 		}
