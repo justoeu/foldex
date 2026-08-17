@@ -186,7 +186,7 @@ func TestRepository_DeleteCascadeDoesNotOrphanTagsOrClicks(t *testing.T) {
 func TestRepository_DeleteCascadeReleasesOwnedNoteMediaRefs(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
-	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
 	frepo := folders.NewRepository(pool)
 	nrepo := notes.NewRepository(pool)
 	folder, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Media", Color: "#abc"})

@@ -3,8 +3,10 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,6 +55,9 @@ func (h *AdminHandler) Mount(r chi.Router) {
 	// the further question of whether they own the instance.
 	r.With(authgate.RequirePermission(authctx.PermInstanceTransfer)).
 		Post("/users/{id}/transfer-ownership", h.TransferOwnership)
+	r.Get("/metrics", h.Metrics)
+	r.Get("/roles", h.Roles)
+	r.With(authgate.RequirePermission(authctx.PermAuditRead)).Get("/audit", h.ListAudit)
 	r.Get("/invites", h.ListInvites)
 	r.Post("/invites", h.CreateInvite)
 	r.Delete("/invites/{id}", h.RevokeInvite)
@@ -142,6 +147,12 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
+	if in.Role != nil {
+		h.audit(r, AuditRoleChanged, &user, string(*in.Role))
+	}
+	if in.Status != nil {
+		h.audit(r, AuditStatusChanged, &user, *in.Status)
+	}
 	// A disabled account keeps no live sessions: leaving them alive would mean
 	// the ban only takes effect when the current access token expires.
 	if disabling {
@@ -166,6 +177,13 @@ func (h *AdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 			"you cannot delete your own account"))
 		return
 	}
+	// Read the target BEFORE deleting it: the trail denormalizes the e-mail, and
+	// after the row is gone the id alone identifies nobody. A failed read is not
+	// fatal — the entry is still worth writing with just the id.
+	var deleted *User
+	if u, err := h.repo.GetUser(r.Context(), target); err == nil {
+		deleted = &u
+	}
 	// Same as UpdateUser: the guard is inside DeleteUser's transaction.
 	if err := h.repo.DeleteUser(r.Context(), target); err != nil {
 		switch {
@@ -181,6 +199,7 @@ func (h *AdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	h.audit(r, AuditUserDeleted, deleted, "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -190,7 +209,8 @@ func (h *AdminHandler) RevokeUserSessions(w http.ResponseWriter, r *http.Request
 		httperr.Write(w, err)
 		return
 	}
-	if _, err := h.repo.GetUser(r.Context(), authctx.UserID(id)); err != nil {
+	target, err := h.repo.GetUser(r.Context(), authctx.UserID(id))
+	if err != nil {
 		httperr.Write(w, httperr.ErrNotFound)
 		return
 	}
@@ -199,6 +219,7 @@ func (h *AdminHandler) RevokeUserSessions(w http.ResponseWriter, r *http.Request
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
+	h.audit(r, AuditSessionsRevoked, &target, "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -245,6 +266,13 @@ func (h *AdminHandler) ForcePasswordReset(w http.ResponseWriter, r *http.Request
 		h.logger.Error("admin recovery", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 	default:
+		// The target is read for the trail only; the recovery itself already
+		// resolved it. A failed read still leaves an entry worth having.
+		var recovered *User
+		if u, err := h.repo.GetUser(r.Context(), target); err == nil {
+			recovered = &u
+		}
+		h.audit(r, AuditPasswordRecovery, recovered, "")
 		w.WriteHeader(http.StatusAccepted)
 	}
 }
@@ -296,6 +324,7 @@ func (h *AdminHandler) TransferOwnership(w http.ResponseWriter, r *http.Request)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
+	h.audit(r, AuditOwnershipMoved, &user, "")
 	httperr.JSON(w, http.StatusOK, user)
 }
 
@@ -311,6 +340,92 @@ func (h *AdminHandler) ListInvites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httperr.JSON(w, http.StatusOK, map[string]any{"invites": invites})
+}
+
+// audit appends one trail entry for an action this handler just performed.
+//
+// Failures are logged, never propagated: the action has already committed, and
+// answering 500 because the trail write failed would invite a retry that
+// performs it a second time.
+//
+// The actor's e-mail costs one extra read per administrative action. That is
+// affordable — these are rare, human-driven requests — and it is what lets the
+// trail stay readable after the actor's own account is deleted, which a join at
+// render time could not do.
+func (h *AdminHandler) audit(r *http.Request, action string, target *User, detail string) {
+	rec := AuditRecord{Action: action, Detail: detail}
+	if caller, ok := authctx.FromContext(r.Context()); ok && caller.UserID != 0 {
+		id := caller.UserID
+		rec.ActorID = &id
+		if u, err := h.repo.GetUser(r.Context(), id); err == nil {
+			rec.ActorEmail = u.Email
+		}
+	}
+	if target != nil {
+		id := target.ID
+		rec.TargetID = &id
+		rec.TargetEmail = target.Email
+	}
+	if err := h.repo.Audit(r.Context(), rec); err != nil {
+		h.logger.Error("audit write", "err", err, "action", action)
+	}
+}
+
+// ListAudit serves the administrative trail.
+func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
+	before, err := optionalInt64(r.URL.Query().Get("before"))
+	if err != nil {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_cursor", "before must be an id"))
+		return
+	}
+	limit, err := optionalInt64(r.URL.Query().Get("limit"))
+	if err != nil {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_limit", "limit must be a number"))
+		return
+	}
+	entries, err := h.repo.ListAudit(r.Context(), r.URL.Query().Get("action"), before, int(limit))
+	if err != nil {
+		h.logger.Error("admin list audit", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	httperr.JSON(w, http.StatusOK, map[string]any{"entries": entries})
+}
+
+// optionalInt64 parses a query parameter that may be absent, treating "" as 0
+// so the caller can express "no cursor" and "no explicit limit" the same way.
+func optionalInt64(raw string) (int64, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	return strconv.ParseInt(raw, 10, 64)
+}
+
+// Metrics serves the administration header.
+func (h *AdminHandler) Metrics(w http.ResponseWriter, r *http.Request) {
+	m, err := h.repo.Metrics(r.Context())
+	if err != nil {
+		h.logger.Error("admin metrics", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	httperr.JSON(w, http.StatusOK, m)
+}
+
+// Roles serves the RBAC matrix plus how many accounts hold each role.
+func (h *AdminHandler) Roles(w http.ResponseWriter, r *http.Request) {
+	roles, err := h.repo.Roles(r.Context())
+	if err != nil {
+		h.logger.Error("admin roles", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	httperr.JSON(w, http.StatusOK, map[string]any{
+		"roles": roles,
+		// The full ordered vocabulary, so the client renders the matrix columns
+		// without hardcoding a list that could drift from the server's.
+		"permissions": authctx.AllPermissions,
+	})
 }
 
 type createInviteInput struct {
@@ -367,6 +482,9 @@ func (h *AdminHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	if err := h.dispatcher.Enqueue(msg, "invite"); err != nil {
 		h.logger.Warn("invite mail not queued", "err", err, "invite_id", inv.ID)
 	}
+	// The invited ADDRESS and role, never inv.AcceptURL — that string carries
+	// the raw invitation token, and the trail is a screen administrators read.
+	h.audit(r, AuditInviteCreated, &User{Email: inv.Email}, string(role))
 	httperr.JSON(w, http.StatusCreated, inv)
 }
 
@@ -380,5 +498,6 @@ func (h *AdminHandler) RevokeInvite(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
+	h.audit(r, AuditInviteRevoked, nil, fmt.Sprintf("invite %d", id))
 	w.WriteHeader(http.StatusNoContent)
 }

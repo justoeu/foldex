@@ -166,7 +166,7 @@ func TestDashboard_IsOwnerScopedAndUsesOneDatabaseRoundTrip(t *testing.T) {
 	pool := testdb.Shared(t)
 	ctx := context.Background()
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
-	otherUID := testdb.SeedUser(t, pool, "other@test.local", "user")
+	otherUID := testdb.SeedUser(t, pool, "other@test.local", "editor")
 	lrepo := links.NewRepository(pool)
 	trepo := tags.NewRepository(pool)
 	tag, err := trepo.Create(ctx, uid, tags.CreateInput{Name: "owner-tag", Color: "#abc"})

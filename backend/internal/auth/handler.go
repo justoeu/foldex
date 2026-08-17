@@ -436,6 +436,18 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if !found || verr != nil || user.Status != StatusActive {
 		h.loginByIP.CommitFail(ipKey)
 		h.loginByEmail.CommitFail(emailKey)
+		// One audit write for all three causes, on the one branch they share.
+		// Writing different entries — or writing only for a known address —
+		// would rebuild the enumeration oracle this branch exists to close, both
+		// in timing and in what an administrator could read back out of the
+		// trail. The attempted address is recorded because a burst against one
+		// mailbox is precisely what this screen has to make visible.
+		if err := h.repo.Audit(r.Context(), AuditRecord{
+			Action:      AuditLoginFailed,
+			TargetEmail: NormalizeEmail(in.Email),
+		}); err != nil {
+			h.logger.Error("audit login failure", "err", err)
+		}
 		httperr.Write(w, errInvalidCredentials())
 		return
 	}
@@ -808,6 +820,21 @@ func (h *Handler) issueAndRespond(w http.ResponseWriter, r *http.Request, user U
 		return
 	}
 	h.cookies.SetSession(w, tok)
+	// Recorded HERE rather than in Login: every credential path — password,
+	// second factor, recovery code, OAuth, invite acceptance — funnels through
+	// this function, and only reaching it means a session actually exists. A
+	// password accepted at Login that then diverts into a 2FA challenge is not a
+	// sign-in, and recording it as one would make the trail claim access that
+	// never happened.
+	if err := h.repo.Audit(r.Context(), AuditRecord{
+		Action:      AuditLoginSucceeded,
+		ActorID:     &user.ID,
+		ActorEmail:  user.Email,
+		TargetID:    &user.ID,
+		TargetEmail: user.Email,
+	}); err != nil {
+		h.logger.Error("audit login", "err", err)
+	}
 	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, tok.CSRF))
 }
 

@@ -68,7 +68,7 @@ func TestSubscriptionRepo_SaveListDelete(t *testing.T) {
 
 func TestSubscriptionRepo_CapAllowsOwnedEndpointUpsert(t *testing.T) {
 	pool := testdb.Shared(t)
-	uid := testdb.SeedUser(t, pool, "cap-owner@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "cap-owner@test.local", "editor")
 	repo := push.NewRepository(pool)
 	ctx := context.Background()
 
@@ -96,7 +96,7 @@ func TestSubscriptionRepo_CapAllowsOwnedEndpointUpsert(t *testing.T) {
 
 func TestSubscriptionRepo_ConcurrentSavesNeverExceedCap(t *testing.T) {
 	pool := testdb.Shared(t)
-	uid := testdb.SeedUser(t, pool, "concurrent-cap@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "concurrent-cap@test.local", "editor")
 	repo := push.NewRepository(pool)
 	ctx := context.Background()
 
@@ -143,8 +143,8 @@ func TestSubscriptionRepo_ConcurrentSavesNeverExceedCap(t *testing.T) {
 
 func TestSubscriptionRepo_ListIsOwnerScopedAndBounded(t *testing.T) {
 	pool := testdb.Shared(t)
-	owner := testdb.SeedUser(t, pool, "bounded-owner@test.local", "user")
-	other := testdb.SeedUser(t, pool, "bounded-other@test.local", "user")
+	owner := testdb.SeedUser(t, pool, "bounded-owner@test.local", "editor")
+	other := testdb.SeedUser(t, pool, "bounded-other@test.local", "editor")
 	ctx := context.Background()
 
 	for i := range push.MaxSubscriptionsPerUser + 3 {
@@ -170,8 +170,8 @@ func TestSubscriptionRepo_ListIsOwnerScopedAndBounded(t *testing.T) {
 
 func TestSubscriptionRepo_StaleOwnerResultsCannotMutateReassignedEndpoint(t *testing.T) {
 	pool := testdb.Shared(t)
-	userA := testdb.SeedUser(t, pool, "stale-a@test.local", "user")
-	userB := testdb.SeedUser(t, pool, "stale-b@test.local", "user")
+	userA := testdb.SeedUser(t, pool, "stale-a@test.local", "editor")
+	userB := testdb.SeedUser(t, pool, "stale-b@test.local", "editor")
 	repo := push.NewRepository(pool)
 	ctx := context.Background()
 	const endpoint = "https://push.example/reassigned"

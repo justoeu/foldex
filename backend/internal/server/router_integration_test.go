@@ -198,7 +198,7 @@ func TestFolderScopedContentResponseMatrixAcrossAuthModes(t *testing.T) {
 func TestAdminGateResponseMatrixAcrossAuthModes(t *testing.T) {
 	pool := testdb.Shared(t)
 	adminID := testdb.SeedUser(t, pool, "admin@test.local", "admin")
-	userID := testdb.SeedUser(t, pool, "user@test.local", "user")
+	userID := testdb.SeedUser(t, pool, "user@test.local", "editor")
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	repo := auth.NewRepository(pool)
@@ -739,7 +739,7 @@ func (emptyBackupBucket) DeleteObjects(context.Context, []string) error { return
 
 func TestBackupDownloadNavigationUsesTicketAndExactSession(t *testing.T) {
 	pool := testdb.Shared(t)
-	uid := testdb.SeedUser(t, pool, "backup-ticket@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "backup-ticket@test.local", "editor")
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	repo := auth.NewRepository(pool)

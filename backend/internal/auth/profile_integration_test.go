@@ -55,7 +55,7 @@ func TestUpdateProfile_OnlyTouchesTheName(t *testing.T) {
 	// dies as invalid_json before reaching the repository — a self-demotion
 	// attempt cannot even discover what the guard checks. Same contract as
 	// every other strict DTO in the auth surface.
-	rec := c.do(http.MethodPatch, "/api/auth/profile", map[string]any{"name": "Someone", "role": "user", "status": "disabled"})
+	rec := c.do(http.MethodPatch, "/api/auth/profile", map[string]any{"name": "Someone", "role": "editor", "status": "disabled"})
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, "invalid_json", errCode(t, rec))
 
@@ -64,7 +64,7 @@ func TestUpdateProfile_OnlyTouchesTheName(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	user := decode(t, rec)["user"].(map[string]any)
 	assert.Equal(t, "Someone", user["name"])
-	assert.Equal(t, "admin", user["role"])
+	assert.Equal(t, "owner", user["role"])
 	assert.Equal(t, "active", user["status"])
 }
 

@@ -377,8 +377,8 @@ func TestRepository_Delete_NotFound(t *testing.T) {
 func TestRepository_DeleteCannotDeletePublicMediaReferencedByAnotherTenant(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
-	victim := testdb.SeedUser(t, pool, "victim@test.local", "user")
-	attacker := testdb.SeedUser(t, pool, "attacker@test.local", "user")
+	victim := testdb.SeedUser(t, pool, "victim@test.local", "editor")
+	attacker := testdb.SeedUser(t, pool, "attacker@test.local", "editor")
 	repo := notes.NewRepository(pool)
 	bucket := newMediaBucket()
 
@@ -399,7 +399,7 @@ func TestRepository_DeleteCannotDeletePublicMediaReferencedByAnotherTenant(t *te
 func TestRepository_OwnedMediaIsCleanedWhenLastReferenceIsDeleted(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
-	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
 	repo := notes.NewRepository(pool)
 	bucket := newMediaBucket()
 	const key = "notes/d8b98ef0-f7e6-43ae-bad7-743ece7d5dd3.jpg"
@@ -419,7 +419,7 @@ func TestRepository_OwnedMediaIsCleanedWhenLastReferenceIsDeleted(t *testing.T) 
 func TestRepository_UpdateCleansMediaAfterRemovingLastReference(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
-	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
 	bucket := newMediaBucket()
 	repo := notes.NewRepository(pool).WithStorage(bucket)
 	const key = "notes/0f35cd7e-80f5-4a49-9994-ec75374ea1fb.jpg"

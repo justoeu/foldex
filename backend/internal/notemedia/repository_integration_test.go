@@ -41,7 +41,7 @@ func TestMain(m *testing.M) {
 func TestSystemSweepExpired_ReclaimsAbandonedOwnedUpload(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
-	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
 	const key = "notes/e7a3797c-08de-4ec4-a591-33f7282f9d61.jpg"
 	storage := &memoryStorage{objects: map[string][]byte{key: []byte("orphan")}}
 	require.NoError(t, notemedia.RegisterLease(ctx, pool, uid, key))
@@ -64,7 +64,7 @@ func TestSystemSweepExpired_ReclaimsAbandonedOwnedUpload(t *testing.T) {
 func TestSystemSweepExpired_KeepsReferencedMedia(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
-	uid := testdb.SeedUser(t, pool, "owner@test.local", "user")
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
 	const key = "notes/2d7248ea-5771-4c78-90f9-63b4c921e8dc.jpg"
 	storage := &memoryStorage{objects: map[string][]byte{key: []byte("live")}}
 	require.NoError(t, notemedia.RegisterLease(ctx, pool, uid, key))
@@ -92,8 +92,8 @@ func TestSystemSweepExpired_KeepsReferencedMedia(t *testing.T) {
 func TestRestoreRefs_ObjectKeyCollisionFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
-	ownerUID := testdb.SeedUser(t, pool, "owner@test.local", "user")
-	restoreUID := testdb.SeedUser(t, pool, "restore@test.local", "user")
+	ownerUID := testdb.SeedUser(t, pool, "owner@test.local", "editor")
+	restoreUID := testdb.SeedUser(t, pool, "restore@test.local", "editor")
 	const key = "notes/b654f6e4-494d-4a4d-84c3-17dfde630c41.jpg"
 	require.NoError(t, notemedia.RegisterLease(ctx, pool, ownerUID, key))
 

@@ -389,8 +389,8 @@ func TestHandler_Unlock_SuccessResetsAttemptCounter(t *testing.T) {
 // proven makes B's requests cost A nothing.
 func TestHandler_Unlock_ForeignAttemptsCannotLockTheOwnerOut(t *testing.T) {
 	pool := testdb.Shared(t)
-	alice := testdb.SeedUser(t, pool, "alice@test.local", "user")
-	bob := testdb.SeedUser(t, pool, "bob@test.local", "user")
+	alice := testdb.SeedUser(t, pool, "alice@test.local", "editor")
+	bob := testdb.SeedUser(t, pool, "bob@test.local", "editor")
 
 	repo := folders.NewRepository(pool)
 	// ONE handler — the limiter lives on it, so both routers share the state
@@ -545,8 +545,8 @@ func TestHandler_DeleteRejectsAPIToken(t *testing.T) {
 
 func TestHandler_DeleteCrossUserIsNotFoundAndOpenFolderStillDeletes(t *testing.T) {
 	pool := testdb.Shared(t)
-	alice := testdb.SeedUser(t, pool, "alice@test.local", "user")
-	bob := testdb.SeedUser(t, pool, "bob@test.local", "user")
+	alice := testdb.SeedUser(t, pool, "alice@test.local", "editor")
+	bob := testdb.SeedUser(t, pool, "bob@test.local", "editor")
 	repo := folders.NewRepository(pool)
 	folder, err := repo.Create(context.Background(), alice, folders.CreateInput{Name: "Open", Color: "#abc"})
 	require.NoError(t, err)

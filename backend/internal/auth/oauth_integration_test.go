@@ -975,7 +975,7 @@ func TestConvertToProviderRejectsAbsentOrMalformedChallengeWithoutMutation(t *te
 func TestOAuth_ConversionChallengeCannotSurviveStatusChange(t *testing.T) {
 	h, g := newGoogleHarness(t, harnessOpts{})
 	h.bootstrapAdmin(t, "owner@example.com", "the owner password")
-	uid := testdb.SeedUserWithPassword(t, h.pool, "victim@example.com", "the victim password", "user")
+	uid := testdb.SeedUserWithPassword(t, h.pool, "victim@example.com", "the victim password", "editor")
 	g.as("victim-sub", "victim@example.com", true)
 
 	c := h.client(t)
@@ -1781,7 +1781,7 @@ func itoa(v int64) string { return strconv.FormatInt(v, 10) }
 func (h *harness) createInvite(t *testing.T, admin *client, email string) string {
 	t.Helper()
 	rec := admin.do(http.MethodPost, "/api/admin/invites",
-		map[string]string{"email": email, "role": "user"})
+		map[string]string{"email": email, "role": "editor"})
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 
 	acceptURL, _ := decode(t, rec)["accept_url"].(string)
@@ -2474,7 +2474,7 @@ func TestInvariant_NoActiveUserEndsUpWithoutAnyCredential(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("dropping the password of an account with no identity is refused", func(t *testing.T) {
-		uid := testdb.SeedUserWithPassword(t, h.pool, "pw-only@example.com", "a good password", "user")
+		uid := testdb.SeedUserWithPassword(t, h.pool, "pw-only@example.com", "a good password", "editor")
 		_, err := h.pool.Exec(ctx,
 			`UPDATE app_user SET password_hash = NULL WHERE id = $1`, int64(uid))
 		require.Error(t, err, "the last credential was removed and the database allowed it")
@@ -2482,7 +2482,7 @@ func TestInvariant_NoActiveUserEndsUpWithoutAnyCredential(t *testing.T) {
 	})
 
 	t.Run("deleting the last identity of a Google-only account is refused", func(t *testing.T) {
-		uid := testdb.SeedUserWithPassword(t, h.pool, "google-only@example.com", "a good password", "user")
+		uid := testdb.SeedUserWithPassword(t, h.pool, "google-only@example.com", "a good password", "editor")
 		testdb.ConvertToGoogleOnly(t, h.pool, uid, "google-only@example.com", "sub-lockout")
 
 		_, err := h.pool.Exec(ctx, `DELETE FROM user_identity WHERE user_id = $1`, int64(uid))
@@ -2495,7 +2495,7 @@ func TestInvariant_NoActiveUserEndsUpWithoutAnyCredential(t *testing.T) {
 	// statements, and one of them has to go first. What must hold is the state
 	// at COMMIT. An immediate trigger would make the supported flow impossible.
 	t.Run("swapping one credential for another inside a transaction commits", func(t *testing.T) {
-		uid := testdb.SeedUserWithPassword(t, h.pool, "swap@example.com", "a good password", "user")
+		uid := testdb.SeedUserWithPassword(t, h.pool, "swap@example.com", "a good password", "editor")
 
 		tx, err := h.pool.Begin(ctx)
 		require.NoError(t, err)
@@ -2515,7 +2515,7 @@ func TestInvariant_NoActiveUserEndsUpWithoutAnyCredential(t *testing.T) {
 	// the setup screen claims. Including them would make a fresh install
 	// unbootable.
 	t.Run("a non-active account may hold no credential", func(t *testing.T) {
-		uid := testdb.SeedUserWithPassword(t, h.pool, "pending@example.com", "a good password", "user")
+		uid := testdb.SeedUserWithPassword(t, h.pool, "pending@example.com", "a good password", "editor")
 		_, err := h.pool.Exec(ctx,
 			`UPDATE app_user SET status = 'disabled', password_hash = NULL WHERE id = $1`, int64(uid))
 		require.NoError(t, err, "a disabled account with no credential is a legitimate state")
