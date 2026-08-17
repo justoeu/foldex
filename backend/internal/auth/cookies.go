@@ -40,6 +40,7 @@ type CookieOptions struct {
 }
 
 func (o CookieOptions) base(name, value, path string, sameSite http.SameSite, maxAge int) *http.Cookie {
+	// #nosec G124 -- Secure comes from CookieOptions, derived from AUTH_PUBLIC_URL's scheme with a bind-address fallback (see config.Load); HttpOnly is true for every cookie except fx_csrf, which opts out at its call sites by design. nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
 	return &http.Cookie{
 		Name:     name,
 		Value:    value,
@@ -79,6 +80,7 @@ func (o CookieOptions) SetSession(w http.ResponseWriter, tok issuedTokens) {
 	// a weakness — its whole security value is that a cross-origin attacker
 	// cannot READ it (same-origin policy), not that a script on our own page
 	// cannot.
+	// #nosec G124 -- see above: non-HttpOnly is the design, not an omission.
 	csrf := o.base(CookieCSRF, tok.CSRF, "/", http.SameSiteLaxMode,
 		int(time.Until(tok.RefreshExpiry).Seconds()))
 	csrf.HttpOnly = false
@@ -101,6 +103,7 @@ func (o CookieOptions) SetPreAuth(w http.ResponseWriter, token string, ttl time.
 // factor clears the pre-auth cookie and SETS the session cookies, so calling
 // ClearSession there would wipe the credentials just issued.
 func (o CookieOptions) ClearPreAuth(w http.ResponseWriter) {
+	// #nosec G124 -- expiring an empty-value cookie; attributes mirror the set path.
 	ck := o.base(CookiePreAuth, "", refreshPath, http.SameSiteStrictMode, -1)
 	ck.Expires = time.Unix(0, 0)
 	http.SetCookie(w, ck)
@@ -122,6 +125,7 @@ func (o CookieOptions) ClearSession(w http.ResponseWriter) {
 		{CookieRefresh, refreshPath},
 		{CookiePreAuth, refreshPath},
 	} {
+		// #nosec G124 -- logout clear: every value is empty; only fx_csrf drops HttpOnly, matching how it was set.
 		ck := o.base(c.name, "", c.path, http.SameSiteLaxMode, -1)
 		ck.Expires = time.Unix(0, 0)
 		if c.name == CookieCSRF {

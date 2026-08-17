@@ -58,7 +58,7 @@ func (m *CodeMAC) emailOTPDigest(version byte, uid authctx.UserID, purpose strin
 		_, _ = mac.Write([]byte{0})
 	} else {
 		_, _ = mac.Write([]byte{1})
-		writeMACUint64(mac, uint64(*challengeID))
+		writeMACUint64(mac, uint64(*challengeID)) // #nosec G115 -- fixed-width MAC serialization; the int64→uint64 mapping is bijective, not arithmetic
 	}
 	writeMACString(mac, code)
 	return mac.Sum(nil)
@@ -80,12 +80,12 @@ func (m *CodeMAC) recoveryCodeDigest(version byte, uid authctx.UserID, code stri
 func writeMACHeader(mac hash.Hash, version byte, purpose string, uid authctx.UserID) {
 	_, _ = mac.Write([]byte{version})
 	writeMACString(mac, purpose)
-	writeMACUint64(mac, uint64(uid))
+	writeMACUint64(mac, uint64(uid)) // #nosec G115 -- fixed-width MAC serialization; the int64→uint64 mapping is bijective, not arithmetic
 }
 
 func writeMACString(mac hash.Hash, value string) {
 	var size [4]byte
-	binary.BigEndian.PutUint32(size[:], uint32(len(value)))
+	binary.BigEndian.PutUint32(size[:], uint32(len(value))) // #nosec G115 -- length prefix for short purposes/codes, nowhere near 4 GiB
 	_, _ = mac.Write(size[:])
 	_, _ = mac.Write([]byte(value))
 }

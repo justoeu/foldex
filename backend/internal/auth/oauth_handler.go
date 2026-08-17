@@ -60,6 +60,7 @@ func (o CookieOptions) SetOAuthState(w http.ResponseWriter, token string, ttl ti
 
 // ClearOAuthState expires the redirect-state cookie.
 func (o CookieOptions) ClearOAuthState(w http.ResponseWriter) {
+	// #nosec G124 -- expiring an empty-value cookie; attributes mirror the set path.
 	ck := o.base(CookieOAuth, "", oauthCookiePath, http.SameSiteLaxMode, -1)
 	ck.Expires = time.Unix(0, 0)
 	http.SetCookie(w, ck)
@@ -121,7 +122,7 @@ func (h *Handler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.cookies.SetOAuthState(w, state, oauthStateTTL)
-	http.Redirect(w, r, target, http.StatusFound) // nosemgrep: go.lang.security.injection.open-redirect.open-redirect
+	http.Redirect(w, r, target, http.StatusFound) // #nosec G710 -- target is Google's constant auth endpoint plus our own params, never request input. nosemgrep: go.lang.security.injection.open-redirect.open-redirect
 }
 
 type oauthInviteStartInput struct {
