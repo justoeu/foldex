@@ -2,9 +2,10 @@ package mailoutbox
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
-	"math/rand/v2"
+	"math/big"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -111,15 +112,28 @@ func (c *ConfirmingChannel) Publish(ctx context.Context, exchange, key string,
 	return nil
 }
 
-// reconnectWait spreads redials out.
+// ReconnectWait spreads redials out.
 //
 // A fixed delay is fine for one process and wrong for several: a broker restart
 // drops every replica's connection at the same instant, so every one of them
 // would redial in lockstep, every 5 seconds, for as long as the outage lasts.
 // Up to 20% of jitter is enough to break the convoy without making the recovery
 // noticeably slower.
+//
+// crypto/rand rather than math/rand, even though nothing here is a secret and
+// scheduling jitter genuinely does not need unpredictability. The reason is
+// cost, not threat: this runs once per reconnect attempt on a path that is
+// about to sleep for seconds and open a socket, so the difference is
+// unmeasurable — and using the audited source means no standing lint exception
+// that a future reader has to re-derive as safe. A failure falls back to the
+// base delay: losing jitter is a worse convoy, never a wrong wait.
 func ReconnectWait(base time.Duration) time.Duration {
-	return base + time.Duration(rand.Int64N(int64(base/5)+1))
+	spread := int64(base/5) + 1
+	n, err := rand.Int(rand.Reader, big.NewInt(spread))
+	if err != nil {
+		return base
+	}
+	return base + time.Duration(n.Int64())
 }
 
 func (c *ConfirmingChannel) drain() {
