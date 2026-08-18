@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { fetchAudit, type AuditEntry } from '../../api/admin'
+import { fetchAudit, auditQueryKey, type AuditEntry } from '../../api/admin'
 
 /** The actions the filter offers, in the order the screen lists them. */
 const FILTERS = [
@@ -28,7 +28,7 @@ export function AuditSection() {
 
   const before = pages.length > 0 ? pages[pages.length - 1] : undefined
   const query = useQuery({
-    queryKey: ['admin', 'audit', action, before ?? 0],
+    queryKey: auditQueryKey(action, before),
     queryFn: () => fetchAudit({ action: action || undefined, before }),
   })
 

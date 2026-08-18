@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/mailer"
+	"foldex/internal/mailoutbox"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/pgerr"
 	"foldex/internal/pkg/pwhash"
@@ -26,10 +28,81 @@ import (
 // the CONTENT tables — an auth query without a user_id predicate is normal,
 // while a link query without one is a leak.
 type Repository struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	outbox *mailoutbox.Outbox
 }
 
-func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
+// RepositoryOption wires an optional dependency.
+//
+// Optional rather than a constructor parameter because the outbox is only
+// needed by the handful of methods that mint a credential someone has to be
+// told about; every other caller — and every test that exercises one — would
+// otherwise have to build a cipher to look up a session.
+type RepositoryOption func(*Repository)
+
+// WithOutbox makes credential-minting methods queue their e-mail in the SAME
+// transaction as the credential. Without it those methods still work and simply
+// send nothing, which is what keeps a repository built for a session lookup from
+// needing an encryption key.
+func WithOutbox(o *mailoutbox.Outbox) RepositoryOption {
+	return func(r *Repository) { r.outbox = o }
+}
+
+func NewRepository(pool *pgxpool.Pool, opts ...RepositoryOption) *Repository {
+	r := &Repository{pool: pool}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
+}
+
+// MailDraft is the message a credential-minting method queues alongside the
+// credential itself.
+//
+// Build receives the raw token the method just minted — the value that exists
+// nowhere else, since the table stores only its hash — which is why the message
+// cannot be built by the caller beforehand. A zero MailDraft queues nothing.
+type MailDraft struct {
+	Locale string
+	Build  func(rawToken string) mailer.Envelope
+}
+
+// enqueueDraft queues the draft inside the caller's transaction.
+//
+// The transaction is the whole mechanism: a message written here commits with
+// the credential it describes, so neither a crash nor a deploy can leave a live
+// reset token whose e-mail was never sent.
+func (r *Repository) enqueueDraft(ctx context.Context, tx pgx.Tx, d MailDraft, rawToken string) error {
+	if d.Build == nil {
+		return nil
+	}
+	if r.outbox == nil {
+		return errors.New("auth: mail draft supplied to a repository built without an outbox")
+	}
+	return r.outbox.EnqueueTx(ctx, tx, d.Build(rawToken), d.Locale)
+}
+
+// EnqueueMail queues a message that stands on its own — a warning about a
+// replayed session, a notice that a recovery code was spent.
+//
+// These are not tied to a credential, so they open their own short transaction.
+// They still go through the outbox rather than a fire-and-forget goroutine
+// because "your sessions were signed out" is exactly the message a restart must
+// not eat.
+func (r *Repository) EnqueueMail(ctx context.Context, env mailer.Envelope, locale string) error {
+	if r.outbox == nil {
+		return errors.New("auth: repository built without an outbox")
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("enqueue mail begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := r.outbox.EnqueueTx(ctx, tx, env, locale); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
 
 // Sentinel errors. Handlers map these onto responses; the mapping is
 // deliberately many-to-one on the login path (see handler.go).
@@ -693,7 +766,8 @@ func (r *Repository) TransferOwnership(ctx context.Context, from, to authctx.Use
 // Re-inviting revokes the previous open invite rather than erroring: the
 // partial unique index allows one live invite per address, and an admin who
 // clicks "invite" twice means "send it again", not "fail".
-func (r *Repository) CreateInvite(ctx context.Context, email string, role authctx.Role, invitedBy authctx.UserID, ttl time.Duration) (Invite, string, error) {
+func (r *Repository) CreateInvite(ctx context.Context, email string, role authctx.Role,
+	invitedBy authctx.UserID, ttl time.Duration, draft MailDraft) (Invite, string, error) {
 	raw, hash, err := secrets.NewToken()
 	if err != nil {
 		return Invite{}, "", err
@@ -728,6 +802,9 @@ func (r *Repository) CreateInvite(ctx context.Context, email string, role authct
 		strings.TrimSpace(email), norm, role, hash, int64(invitedBy), ttl.String(),
 	).Scan(&inv.ID, &inv.Email, &inv.Role, &inv.CreatedAt, &inv.ExpiresAt, &inv.AcceptedAt); err != nil {
 		return Invite{}, "", fmt.Errorf("insert invite: %w", err)
+	}
+	if err := r.enqueueDraft(ctx, tx, draft, raw); err != nil {
+		return Invite{}, "", fmt.Errorf("queue invite mail: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Invite{}, "", fmt.Errorf("invite commit: %w", err)

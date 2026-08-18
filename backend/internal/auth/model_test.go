@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -174,12 +173,8 @@ func newLimiterOnlyHandler(t *testing.T) *Handler {
 	t.Helper()
 	m, err := mailer.New(mailer.Config{Driver: "log"}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	require.NoError(t, err)
-	d := mailer.NewDispatcher(context.Background(), m, mailer.DispatcherOptions{},
-		slog.New(slog.NewJSONHandler(io.Discard, nil)))
-	t.Cleanup(d.Stop)
 	return NewHandler(HandlerConfig{
-		Mailer:         m,
-		MailDispatcher: d,
+		Mailer: m,
 		TTL: SessionTTL{
 			Access: time.Minute, Refresh: time.Hour, Absolute: 24 * time.Hour, Grace: time.Second,
 		},

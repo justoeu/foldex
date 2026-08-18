@@ -33,6 +33,7 @@ import (
 
 	"foldex/internal/auth"
 	"foldex/internal/mailer"
+	"foldex/internal/mailoutbox"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/secrets"
@@ -66,11 +67,9 @@ type captureMailer struct {
 	// only offered when real SMTP is configured, because the `log` driver prints
 	// the message body to stdout and a second factor in the container log is not
 	// a second factor. Tests that exercise the OTP path set this to "smtp".
-	driver  string
-	sent    []mailer.Message
-	err     error
-	gate    <-chan struct{}
-	started chan struct{}
+	driver string
+	sent   []mailer.Message
+	err    error
 }
 
 func (c *captureMailer) Driver() string {
@@ -79,29 +78,12 @@ func (c *captureMailer) Driver() string {
 	}
 	return c.driver
 }
-func (c *captureMailer) Send(ctx context.Context, m mailer.Message) error {
-	c.mu.Lock()
-	err := c.err
-	gate := c.gate
-	c.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if c.started != nil {
-		select {
-		case c.started <- struct{}{}:
-		default:
-		}
-	}
-	if gate != nil {
-		select {
-		case <-gate:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
+func (c *captureMailer) Send(_ context.Context, m mailer.Message) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.err != nil {
+		return c.err
+	}
 	c.sent = append(c.sent, m)
 	return nil
 }
@@ -127,15 +109,27 @@ func (c *captureMailer) fail(err error) {
 	c.err = err
 }
 
-// waitFor blocks until a message addressed to `to` arrives, and returns the
-// most recent one.
+// waitFor blocks until SOME message addressed to `to` has been delivered, and
+// returns the most recent one.
+//
+// It is NOT a barrier for a second message to the same address. It is satisfied
+// the moment any match exists, so a test that sends twice and calls it twice
+// gets the first message back both times and proceeds while the second is still
+// in flight. Use drainMail when the count matters — it queues a marker behind
+// the work and waits for the marker, which is what "everything before this has
+// been delivered" actually requires.
+//
+// Scanning backwards is what makes the "most recent" in the first line true;
+// the previous version returned the first match while claiming otherwise, and
+// that gap is what hid the trap above.
 func (c *captureMailer) waitFor(t *testing.T, to string) mailer.Message {
 	t.Helper()
 	var found mailer.Message
 	require.Eventually(t, func() bool {
-		for _, m := range c.all() {
-			if m.To == to {
-				found = m
+		all := c.all()
+		for i := len(all) - 1; i >= 0; i-- {
+			if all[i].To == to {
+				found = all[i]
 				return true
 			}
 		}
@@ -145,13 +139,13 @@ func (c *captureMailer) waitFor(t *testing.T, to string) mailer.Message {
 }
 
 type harness struct {
-	pool     *pgxpool.Pool
-	router   http.Handler
-	mail     *captureMailer
-	dispatch *mailer.Dispatcher
-	repo     *auth.Repository
-	cipher   *secrets.Cipher
-	codeMAC  *auth.CodeMAC
+	pool    *pgxpool.Pool
+	router  http.Handler
+	mail    *captureMailer
+	relay   *mailoutbox.Relay
+	repo    *auth.Repository
+	cipher  *secrets.Cipher
+	codeMAC *auth.CodeMAC
 }
 
 const testBaseURL = "https://foldex.test"
@@ -193,9 +187,6 @@ type harnessOpts struct {
 	// but reporting "not configured", which is what an instance without client
 	// credentials does.
 	Google                auth.GoogleProvider
-	MailWorkers           int
-	MailQueue             int
-	MailGate              <-chan struct{}
 	AfterTOTPVerification func(context.Context, authctx.UserID, auth.TOTPProof)
 	// Policy mounts /api/admin/policy and wires the owner-configurable rules
 	// into the handler. Off by default so the tests written before ADR-35 keep
@@ -230,30 +221,32 @@ func testAuthKey(seed byte) []byte {
 func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness {
 	t.Helper()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	repo := auth.NewRepository(pool)
 	mail := &captureMailer{}
-	if opts.MailGate != nil {
-		mail.gate = opts.MailGate
-		mail.started = make(chan struct{}, 1)
-	}
 	if opts.SMTP {
 		mail.driver = "smtp"
 	}
-	workers := opts.MailWorkers
-	if workers == 0 {
-		// One worker gives tests a deterministic FIFO drain barrier. Dispatcher
-		// concurrency itself is covered in internal/mailer.
-		workers = 1
-	}
-	dispatch := mailer.NewDispatcher(context.Background(), mail, mailer.DispatcherOptions{
-		Workers: workers, QueueSize: opts.MailQueue,
-	}, logger)
-	t.Cleanup(dispatch.Stop)
+	// One relay worker gives tests a deterministic FIFO drain barrier, which is
+	// what drainMail's marker relies on. Relay concurrency itself is covered in
+	// internal/mailoutbox.
+	const workers = 1
+	// The outbox cipher is built unconditionally, unlike cfg.Cipher: every
+	// credential-minting path writes a queued row now, not just the 2FA ones.
+	outboxCipher := testCipherSeeded(t, opts.CipherSeed)
+	outbox, err := mailoutbox.New(outboxCipher)
+	require.NoError(t, err)
+	repo := auth.NewRepository(pool, auth.WithOutbox(outbox))
+	relay := mailoutbox.NewRelay(mailoutbox.NewRepository(pool),
+		mailoutbox.NewInprocSink(outbox, mail),
+		// Polled far faster than production: the assertions wait on delivery,
+		// and a one-second tick would put every mail test near its deadline.
+		mailoutbox.Options{PollInterval: 5 * time.Millisecond, Workers: workers}, logger)
+	relay.Start(context.Background())
+	t.Cleanup(relay.Stop)
 	cookies := auth.CookieOptions{Secure: true}
 	mw := auth.NewMiddleware(repo, cookies, logger, opts.Require2FAForAdmins)
 
 	cfg := auth.HandlerConfig{
-		Repo: repo, MW: mw, Mailer: mail, MailDispatcher: dispatch, Cookies: cookies,
+		Repo: repo, MW: mw, Mailer: mail, Cookies: cookies,
 		TTL: testSessionTTL(), Logger: logger, BaseURL: testBaseURL,
 		Require2FAForAdmins: opts.Require2FAForAdmins,
 		Google:              opts.Google,
@@ -273,7 +266,7 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 	}
 	h := auth.NewHandler(cfg)
 	auth.SetTOTPVerificationHookForTest(h, opts.AfterTOTPVerification)
-	admin := auth.NewAdminHandler(repo, mail, dispatch, logger, testBaseURL)
+	admin := auth.NewAdminHandler(repo, mail, logger, testBaseURL)
 
 	r := chi.NewRouter()
 	r.Route("/api", func(api chi.Router) {
@@ -308,18 +301,23 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 		})
 	})
 	return &harness{
-		pool: pool, router: r, mail: mail, dispatch: dispatch, repo: repo,
+		pool: pool, router: r, mail: mail, relay: relay, repo: repo,
 		cipher: cfg.Cipher, codeMAC: cfg.CodeMAC,
 	}
 }
 
 const mailDrainAddress = "auth-mail-drain@foldex.test"
 
-// drainMail waits until the single test worker has completed every message
-// queued before the marker, then returns those messages without the marker.
+// drainMail waits until every message queued before the marker has been
+// delivered, then returns those messages without the marker.
+//
+// The marker rides the same queue as everything else, and the relay's single
+// test worker keeps the order: once the marker has been sent, nothing enqueued
+// before it is still pending.
 func (h *harness) drainMail(t *testing.T) []mailer.Message {
 	t.Helper()
-	require.NoError(t, h.dispatch.Enqueue(mailer.Message{To: mailDrainAddress}, "test drain"))
+	require.NoError(t, h.repo.EnqueueMail(context.Background(),
+		mailer.SessionRevokedMessage(mailDrainAddress), "en"))
 	h.mail.waitFor(t, mailDrainAddress)
 
 	h.mail.mu.Lock()
@@ -332,20 +330,6 @@ func (h *harness) drainMail(t *testing.T) []mailer.Message {
 	}
 	h.mail.sent = nil
 	return sent
-}
-
-func saturateMailDispatcher(t *testing.T, h *harness) {
-	t.Helper()
-	require.NoError(t, h.dispatch.Enqueue(mailer.Message{To: "active@example.com"}, "test active"))
-	select {
-	case <-h.mail.started:
-	case <-time.After(time.Second):
-		require.FailNow(t, "mail worker did not start")
-	}
-	require.NoError(t, h.dispatch.Enqueue(mailer.Message{To: "queued@example.com"}, "test queued"))
-	assert.ErrorIs(t,
-		h.dispatch.Enqueue(mailer.Message{To: "rejected@example.com"}, "test rejected"),
-		mailer.ErrQueueFull)
 }
 
 // client is a tiny cookie-jar HTTP client over the in-process router.

@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/auth"
+	"foldex/internal/mailer"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/secrets"
 	"foldex/internal/testdb"
@@ -276,7 +277,7 @@ func TestAdminEnrollmentChallengeCannotSurvivePasswordReset(t *testing.T) {
 
 	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
 	require.NoError(t, err)
-	reset, err := h.repo.CreatePasswordReset(context.Background(), user.ID, time.Minute, "")
+	reset, err := h.repo.CreatePasswordReset(context.Background(), user.ID, time.Minute, "", auth.MailDraft{})
 	require.NoError(t, err)
 	_, err = h.repo.ConsumePasswordReset(context.Background(), reset, "a reset password")
 	require.NoError(t, err)
@@ -339,7 +340,7 @@ func TestChallengeMutationsCannotCommitAfterCredentialEpochChange(t *testing.T) 
 			return err
 		}},
 		{"send", func(repo *auth.Repository, id int64) error {
-			_, err := repo.CreateChallengeEmailOTP(context.Background(), id, []byte("hash"), time.Minute, time.Minute)
+			_, err := repo.CreateChallengeEmailOTP(context.Background(), id, []byte("hash"), time.Minute, time.Minute, auth.MailDraft{})
 			return err
 		}},
 		{"consume", func(repo *auth.Repository, id int64) error {
@@ -500,7 +501,7 @@ func TestTwoFactorChallengeCannotIssueSessionAfterPasswordReset(t *testing.T) {
 
 	user, err := h.repo.UserByEmail(context.Background(), "admin@example.com")
 	require.NoError(t, err)
-	reset, err := h.repo.CreatePasswordReset(context.Background(), user.ID, time.Minute, "")
+	reset, err := h.repo.CreatePasswordReset(context.Background(), user.ID, time.Minute, "", auth.MailDraft{})
 	require.NoError(t, err)
 	_, err = h.repo.ConsumePasswordReset(context.Background(), reset, "a reset password")
 	require.NoError(t, err)
@@ -707,7 +708,7 @@ func TestCreateChallenge_PreservesLivePurposeState(t *testing.T) {
 		_, err = h.repo.BumpChallengeAttempt(ctx, firstID)
 		require.NoError(t, err)
 	}
-	_, err = h.repo.CreateChallengeEmailOTP(ctx, firstID, []byte("hash"), time.Minute, time.Minute)
+	_, err = h.repo.CreateChallengeEmailOTP(ctx, firstID, []byte("hash"), time.Minute, time.Minute, auth.MailDraft{})
 	require.NoError(t, err)
 	var firstExpiry time.Time
 	require.NoError(t, h.pool.QueryRow(ctx,
@@ -766,7 +767,7 @@ func TestConcurrentEmailOTPRequestsReserveAndCreateOnlyOneCode(t *testing.T) {
 	results := make(chan error, 2)
 	for i := range 2 {
 		go func() {
-			_, err := h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte{byte(i + 1)}, time.Minute, time.Minute)
+			_, err := h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte{byte(i + 1)}, time.Minute, time.Minute, auth.MailDraft{})
 			results <- err
 		}()
 	}
@@ -877,7 +878,7 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 	_, err = h.repo.BumpChallengeAttempt(ctx, challengeID)
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	assert.ErrorIs(t, h.repo.ConsumeChallenge(ctx, challengeID), auth.ErrChallengeInvalid)
-	_, err = h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte("hash"), time.Minute, time.Minute)
+	_, err = h.repo.CreateChallengeEmailOTP(ctx, challengeID, []byte("hash"), time.Minute, time.Minute, auth.MailDraft{})
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	_, _, err = h.repo.CreateChallenge(ctx, auth.NewChallenge{
 		UserID: user.ID, Purpose: auth.PurposeTOTP, TokenVersion: user.TokenVersion, TTL: time.Minute,
@@ -902,7 +903,7 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 	testdb.ConvertToGoogleOnly(t, h.pool, user.ID, "admin@example.com", "google-sub")
 	assert.ErrorIs(t, h.repo.ChangePassword(ctx, user.ID, 1, "a good password", "a new password"),
 		auth.ErrPasswordMissing)
-	_, err = h.repo.CreatePasswordReset(ctx, user.ID, time.Minute, "")
+	_, err = h.repo.CreatePasswordReset(ctx, user.ID, time.Minute, "", auth.MailDraft{})
 	assert.ErrorIs(t, err, auth.ErrResetInvalid)
 }
 
@@ -1423,12 +1424,15 @@ func TestEmailOTP_DeliversACodeThatSignsIn(t *testing.T) {
 	assert.NotEmpty(t, c.cookies[auth.CookieAccess])
 }
 
-func TestEmailOTP_QueueFullDoesNotChargeOrPublishACode(t *testing.T) {
-	gate := make(chan struct{})
-	t.Cleanup(func() { close(gate) })
-	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{
-		TwoFactor: true, SMTP: true, MailWorkers: 1, MailQueue: 1, MailGate: gate,
-	})
+// The send budget, the code and the e-mail all commit together.
+//
+// This replaces a queue-admission test. The budget of three sends per challenge
+// is the scarce resource: charging one and then failing to produce a message
+// would spend a user's chance on nothing. With the outbox the three are one
+// transaction, so the property to prove is that a transport failure leaves the
+// message queued rather than burning the send.
+func TestEmailOTP_SendBudgetAndCodeCommitWithTheMail(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	enrolUser(t, h, "admin@example.com", "a good password")
@@ -1436,19 +1440,43 @@ func TestEmailOTP_QueueFullDoesNotChargeOrPublishACode(t *testing.T) {
 	c := h.client(t)
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "admin@example.com", "password": "a good password"}).Code)
-	saturateMailDispatcher(t, h)
 
-	rec := c.do(http.MethodPost, "/api/auth/2fa/email", nil)
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Equal(t, "mail_queue_full", errCode(t, rec))
+	h.mail.fail(errors.New("smtp is down"))
+	require.Equal(t, http.StatusAccepted, c.do(http.MethodPost, "/api/auth/2fa/email", nil).Code)
 
-	var sends, codes int
+	var sends, codes, queued int
 	require.NoError(t, h.pool.QueryRow(context.Background(), `
 		SELECT sends FROM auth_challenge WHERE consumed_at IS NULL`).Scan(&sends))
 	require.NoError(t, h.pool.QueryRow(context.Background(), `
 		SELECT count(*) FROM email_otp WHERE purpose = 'login_2fa' AND consumed_at IS NULL`).Scan(&codes))
-	assert.Zero(t, sends, "queue refusal consumed one of the persistent send budget")
-	assert.Zero(t, codes, "queue refusal published a code that cannot be mailed")
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM mail_outbox WHERE template = $1`, mailer.TemplateLoginCode).Scan(&queued))
+	assert.Equal(t, 1, sends)
+	assert.Equal(t, 1, codes)
+	assert.Equal(t, 1, queued, "the charged send produced no message")
+
+	// Wait for the failing attempt to SETTLE before touching the row. The relay
+	// may still hold it in 'publishing', and an UPDATE that filters on 'pending'
+	// would then match nothing — after which the relay's own failure handler
+	// pushes next_attempt_at a minute out and the test waits for a delivery that
+	// was rescheduled past its own deadline.
+	require.Eventually(t, func() bool {
+		var n int
+		if err := h.pool.QueryRow(context.Background(), `
+			SELECT count(*) FROM mail_outbox
+			WHERE status = 'pending' AND attempts > 0`).Scan(&n); err != nil {
+			return false
+		}
+		return n == 1
+	}, 5*time.Second, 10*time.Millisecond, "the failed send never returned to the queue")
+
+	// The code is still deliverable once the transport recovers.
+	h.mail.reset()
+	_, err := h.pool.Exec(context.Background(),
+		`UPDATE mail_outbox SET next_attempt_at = now() WHERE status = 'pending'`)
+	require.NoError(t, err)
+	msg := h.mail.waitFor(t, "admin@example.com")
+	assert.Contains(t, msg.Subject, "sign-in code")
 }
 
 func TestEmailOTP_DigestRequiresTheServerKey(t *testing.T) {
@@ -2665,10 +2693,16 @@ func TestEmailOTP_TotalSendCapIsEnforced(t *testing.T) {
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "admin@example.com", "password": "a good password"}).Code)
 
-	h.mail.reset()
 	for i := 1; i <= 3; i++ {
 		require.Equal(t, http.StatusAccepted, c.do(http.MethodPost, "/api/auth/2fa/email", nil).Code)
-		h.mail.waitFor(t, "admin@example.com")
+		// drainMail, not waitFor: waitFor returns on the FIRST message matching
+		// the address, so from the second iteration on it would match the code
+		// mailed by the first and return without waiting for anything. The loop
+		// would then finish with codes still in flight, and one of them would
+		// land after the reset below and be counted as the fourth. drainMail
+		// queues a marker behind this iteration's message and waits for the
+		// marker, which is a real barrier.
+		require.NotEmpty(t, h.drainMail(t), "the code for send %d was never mailed", i)
 		// Step past the cooldown rather than sleeping a real minute.
 		_, err := h.pool.Exec(ctx,
 			`UPDATE email_otp SET created_at = created_at - interval '2 minutes'`)

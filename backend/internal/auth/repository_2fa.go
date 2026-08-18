@@ -361,8 +361,12 @@ func (r *Repository) ConsumeChallenge(ctx context.Context, id int64) error {
 // Doing the check in SQL rather than reading-then-writing is what makes the
 // cooldown hold when a user double-clicks "resend": both requests would
 // otherwise read the same last-send timestamp and both would send.
+//
+// The mail joins the same transaction, so a send that was charged against the
+// challenge's budget of three always produces a message: charging the budget
+// and losing the code would spend a scarce resource on nothing.
 func (r *Repository) CreateChallengeEmailOTP(ctx context.Context, id int64, codeHash []byte,
-	ttl, cooldown time.Duration) (int, error) {
+	ttl, cooldown time.Duration, draft MailDraft) (int, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("reserve challenge send begin: %w", err)
@@ -432,6 +436,9 @@ func (r *Repository) CreateChallengeEmailOTP(ctx context.Context, id int64, code
 		SELECT user_id, id, $2, $3, now() + $4::interval
 		FROM auth_challenge WHERE id = $1`, id, OTPPurposeLogin2FA, codeHash, intervalArg(ttl)); err != nil {
 		return 0, fmt.Errorf("insert challenge otp: %w", err)
+	}
+	if err := r.enqueueDraft(ctx, tx, draft, ""); err != nil {
+		return 0, fmt.Errorf("queue login otp mail: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("reserve challenge send commit: %w", err)
@@ -1027,7 +1034,7 @@ func (r *Repository) CreateEmailOTP(ctx context.Context, uid authctx.UserID, cha
 // CreateEmailVerification coalesces rapid authenticated resends while keeping
 // token superseding and publication in one transaction.
 func (r *Repository) CreateEmailVerification(ctx context.Context, uid authctx.UserID,
-	ttl, cooldown time.Duration) (string, error) {
+	ttl, cooldown time.Duration, draft MailDraft) (string, error) {
 	raw, hash, err := secrets.NewToken()
 	if err != nil {
 		return "", fmt.Errorf("verification token: %w", err)
@@ -1073,6 +1080,9 @@ func (r *Repository) CreateEmailVerification(ctx context.Context, uid authctx.Us
 		VALUES ($1, $2, $3, now() + $4::interval)`,
 		int64(uid), OTPPurposeVerifyEmail, hash, intervalArg(ttl)); err != nil {
 		return "", fmt.Errorf("insert verification token: %w", err)
+	}
+	if err := r.enqueueDraft(ctx, tx, draft, raw); err != nil {
+		return "", fmt.Errorf("queue verification mail: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("create verification commit: %w", err)
@@ -1131,8 +1141,14 @@ func (r *Repository) UserForPasswordReset(ctx context.Context, email string) (Us
 	return u, true, nil
 }
 
-// CreatePasswordReset mints a reset token, superseding any outstanding one.
-func (r *Repository) CreatePasswordReset(ctx context.Context, uid authctx.UserID, ttl time.Duration, ip string) (string, error) {
+// CreatePasswordReset mints a reset token, superseding any outstanding one, and
+// queues its e-mail in the same transaction.
+//
+// Same transaction, not "right after": the link exists nowhere but in that
+// message, and the 60-second cooldown this method enforces means a user whose
+// mail was lost between the commit and the send cannot simply ask again.
+func (r *Repository) CreatePasswordReset(ctx context.Context, uid authctx.UserID, ttl time.Duration,
+	ip string, draft MailDraft) (string, error) {
 	raw, hash, err := secrets.NewToken()
 	if err != nil {
 		return "", fmt.Errorf("reset token: %w", err)
@@ -1166,6 +1182,9 @@ func (r *Repository) CreatePasswordReset(ctx context.Context, uid authctx.UserID
 		VALUES ($1, $2, $3, now() + $4::interval, $5)`,
 		int64(uid), hash, tokenVersion, intervalArg(ttl), nullIP(ip)); err != nil {
 		return "", fmt.Errorf("insert reset: %w", err)
+	}
+	if err := r.enqueueDraft(ctx, tx, draft, raw); err != nil {
+		return "", fmt.Errorf("queue reset mail: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("create reset commit: %w", err)

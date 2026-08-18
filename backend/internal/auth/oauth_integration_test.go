@@ -539,7 +539,7 @@ func TestOAuthLinkCallback_RejectsADeadOrChangedProof(t *testing.T) {
 		{
 			name: "password reset",
 			mutate: func(t *testing.T, h *harness, c *client) {
-				token, err := h.repo.CreatePasswordReset(context.Background(), authctx.UserID(1), time.Minute, "192.0.2.10")
+				token, err := h.repo.CreatePasswordReset(context.Background(), authctx.UserID(1), time.Minute, "192.0.2.10", auth.MailDraft{})
 				require.NoError(t, err)
 				rec := c.do(http.MethodPost, "/api/auth/password/reset", map[string]string{
 					"token": token, "password": "new correct horse battery",
@@ -852,7 +852,7 @@ func TestOAuth_ConversionChallengeCannotSurvivePasswordReset(t *testing.T) {
 	requireRoundTrip(t, c, "login", "convert")
 	user, err := h.repo.UserByEmail(context.Background(), "victim@example.com")
 	require.NoError(t, err)
-	reset, err := h.repo.CreatePasswordReset(context.Background(), user.ID, time.Minute, "")
+	reset, err := h.repo.CreatePasswordReset(context.Background(), user.ID, time.Minute, "", auth.MailDraft{})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -1625,7 +1625,7 @@ func TestAdminRecoverySupersedingAConcurrentResetCannotApplyTheOldToken(t *testi
 	h, _ := newGoogleHarness(t, harnessOpts{SMTP: true})
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 	uid := h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
-	oldToken, err := h.repo.CreatePasswordReset(context.Background(), uid, time.Minute, "")
+	oldToken, err := h.repo.CreatePasswordReset(context.Background(), uid, time.Minute, "", auth.MailDraft{})
 	require.NoError(t, err)
 
 	deliveryStarted := make(chan struct{})

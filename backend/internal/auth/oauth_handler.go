@@ -272,7 +272,7 @@ func (h *Handler) checkOAuthLinkSecondFactor(w http.ResponseWriter, r *http.Requ
 	}
 	h.stepUpUser.CommitSuccess(key)
 	if method == methodRecovery {
-		h.notifyRecoveryCodeUsed(r.Context(), user)
+		h.notifyRecoveryCodeUsed(r.Context(), user, localeFrom(r))
 	}
 	return true
 }
@@ -707,7 +707,8 @@ func (h *Handler) OAuthConvert(w http.ResponseWriter, r *http.Request) {
 	// Set-Cookie is the one the browser keeps. Clearing afterwards would delete
 	// the credential the code screen is about to need.
 	h.cookies.ClearPreAuth(w)
-	h.enqueueMail(mailer.AccountConvertedMessage(user.Email, googleEmail), "account converted")
+	h.enqueueMail(r.Context(), mailer.AccountConvertedMessage(user.Email, googleEmail),
+		localeFrom(r), "account converted")
 
 	// The password is gone, but the second factor is not: an account with an
 	// authenticator still owes a code. completeLogin is what decides that, and

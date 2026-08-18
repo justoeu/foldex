@@ -378,7 +378,7 @@ for a single-user machine on a private network — but on that setting anyone wh
 reach the port owns the whole library, so keep the loopback bind.
 
 **Adding people.** There is no public sign-up: an administrator sends an invitation from
-**Users** in the topbar, and only the address on that invitation can accept it — with a
+**Settings → Administration → Users**, and only the address on that invitation can accept it — with a
 password or with the matching Google account. The invite link is shown once when you
 create it, and is also e-mailed. Invite, reset and verification credentials live after
 `#` in those links, so the initial HTTP request and nginx access log never receive them;
@@ -397,6 +397,13 @@ enforces — you can read it in **Settings → Administration → Roles and perm
 **Content stays private per account, in every role.** A role decides whether a write is
 accepted and whether the administration screens exist — never whose links you can see. An
 administrator manages accounts and still cannot read another account's rows.
+
+**One settings screen.** The gear in the topbar opens the whole thing: a page head with
+its own actions (export a backup, invite someone), a card showing who you are signed in as
+— with a nudge to switch two-step verification on while you have none — and a grid of
+cards, one per panel. Administrators get a **Personal × Administration** switch above it;
+everyone else sees only the personal scope, because `/api/admin` answers 404 for them and a
+disabled tab would promise a surface the server denies.
 
 **Managing people.** **Settings → Administration** lists every account with its role, last
 sign-in and status, and lets you change roles, disable, delete, sign out everywhere, send
@@ -425,6 +432,16 @@ with no SMTP server must still be able to invite someone. Read it with
 delivery set `MAIL_DRIVER=smtp` and the `MAIL_*` values; `make up-mail` starts
 [Mailpit](https://mailpit.axllent.org/) with a local inbox at <http://localhost:8025>
 for development.
+
+Mail is **durable**: every message is written to a `mail_outbox` row in the same
+database transaction as the credential it carries, so a restart, a deploy or a
+provider outage cannot lose an invitation, a reset link or a sign-in code. A send
+that fails is retried with a growing backoff (1 min → 5 → 15 → 30 → 60) and gives
+up after six attempts, leaving the row as `failed` for you to inspect. The stored
+payload is encrypted with a subkey derived from `AUTH_ENCRYPTION_KEY` — a queued row holds a live reset
+link, and a database dump must not be an account-takeover kit. Messages are
+rendered when they are sent, in English, Portuguese or Spanish, following the
+`Accept-Language` of the request that triggered them.
 
 **What each account can see.** Everything is private per account — administrators
 included. An admin can create, disable and delete users, but never sees another
@@ -566,6 +583,7 @@ Design rationale, threat model and the full API surface:
 - [SDD: Backup & Restore](docs/SDD-BACKUP-RESTORE.md) — DB + RustFS snapshot ZIP, conflict modes, validation flow
 - [SDD: Folder master password](docs/SDD-FOLDER-MASTER-PASSWORD.md) — per-folder password recovery and hint
 - [SDD: Auth, RBAC & multi-user](docs/SDD-AUTH-RBAC.md) — sessions, 2FA, Google OAuth, per-user data segmentation
+- [SDD: Async e-mail & e-mail 2FA](docs/SDD-EMAIL-ASYNC.md) — transactional outbox and localized HTML templates (**shipped**); pluggable RabbitMQ transport and e-mail as a standing second factor (**proposed**)
 
 ## License
 

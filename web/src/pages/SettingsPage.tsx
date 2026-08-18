@@ -1,11 +1,12 @@
-import { useState, lazy, Suspense, type ReactNode } from 'react'
+import { useState, lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from '../components/icons'
+import { HubCard, HubShortcut, HubRule } from '../components/HubCard'
 import { PasswordStrength } from '../components/PasswordStrength'
 import { TwoFactorSection } from '../components/TwoFactorSection'
 import { AccountSection } from '../components/AccountSection'
 import { ApiTokensSection } from '../components/ApiTokensSection'
-import { ProfileSection } from '../components/ProfileSection'
+import { ProfileSection, initialsOf } from '../components/ProfileSection'
 import { useFolders, useResetFolderPassword } from '../api/folders'
 import {
   useMasterPasswordStatus,
@@ -126,8 +127,10 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
   // isAdminRole, never `=== 'admin'`: the OWNER administers too, and an
   // equality test here hid the whole administration scope from the one role
   // that can reach the owner-only surfaces inside it.
-  const role = useCurrentUser()?.role
+  const me = useCurrentUser()
+  const role = me?.role
   const isAdmin = role !== undefined && isAdminRole(role)
+  const totpEnabled = me?.totp_enabled === true
   const [scope, setScope] = useState<HubScope>('personal')
   const [section, setSection] = useState<HubSection>(
     isHubSection(initialSection) ? initialSection : 'overview',
@@ -137,8 +140,11 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
   const effectiveSection = effective.section
 
   if (effectiveSection !== 'overview') {
+    // The administration sections carry tables and matrices and get the full
+    // container; everything else is a form, and stays in a readable column.
+    const wide = ADMIN_SECTIONS.includes(effectiveSection)
     return (
-      <div style={{ padding: 6, maxWidth: effectiveSection === 'admin' ? 860 : 720 }}>
+      <div className={'fx-hub-page' + (wide ? '' : ' fx-hub-page-narrow')}>
         <button className="fx-hub-back" onClick={() => setSection('overview')}>
           <Icon d={I.chevronLeft} size={13} /> {t('settings.hub_back')}
         </button>
@@ -169,11 +175,28 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
   }
 
   return (
-    <div style={{ padding: 6, maxWidth: 860 }}>
-      <div className="fx-pagehead" style={{ marginBottom: 18 }}>
+    <div className="fx-hub-page">
+      <div className="fx-hub-head" style={{ marginBottom: 22 }}>
         <div>
           <div className="fx-pagehead-kicker">{t('settings.page_kicker')}</div>
           <h1 className="fx-pagehead-h">{t('settings.page_title')}</h1>
+          <p className="fx-hub-head-lede">{t('settings.page_lede')}</p>
+        </div>
+        <div className="fx-hub-head-actions">
+          <button className="fx-pillbtn" onClick={() => onNavigate?.('import')}>
+            <Icon d={I.upload} size={13} /> {t('settings.head_backup')}
+          </button>
+          {isAdmin && (
+            <button
+              className="fx-cta fx-cta-fill"
+              onClick={() => {
+                setScope('admin')
+                setSection('admin')
+              }}
+            >
+              <Icon d={I.plus} size={13} /> {t('settings.head_invite')}
+            </button>
+          )}
         </div>
       </div>
 
@@ -202,23 +225,64 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
       )}
 
       {effectiveScope === 'personal' ? (
-        <>
-          <p className="fx-hub-section-label">{t('settings.hub_group_account')}</p>
-          <div className="fx-hub-grid" style={{ marginTop: 10, marginBottom: 20 }}>
-            <HubTile icon={I.user} title={t('settings.tile_profile_title')} desc={t('settings.tile_profile_desc')} onClick={() => setSection('profile')} />
-            <HubTile icon={I.key} title={t('settings.tile_account_title')} desc={t('settings.tile_account_desc')} onClick={() => setSection('account')} />
-            <HubTile icon={I.shield} title={t('settings.tile_security_title')} desc={t('settings.tile_security_desc')} onClick={() => setSection('security')} />
-            <HubTile icon={I.link} title={t('settings.tile_tokens_title')} desc={t('settings.tile_tokens_desc')} onClick={() => setSection('tokens')} />
-            <HubTile icon={I.lock} title={t('settings.tile_master_title')} desc={t('settings.tile_master_desc')} onClick={() => setSection('master')} />
-            <HubTile icon={I.folder} title={t('settings.tile_locked_title')} desc={t('settings.tile_locked_desc')} onClick={() => setSection('locked')} />
-          </div>
+        <div className="fx-hub-stack">
+          <IdentityHero onOpenSecurity={() => setSection('security')} />
 
-          <p className="fx-hub-section-label">{t('settings.hub_group_shortcuts')}</p>
-          <div className="fx-hub-grid" style={{ marginTop: 10 }}>
-            <HubTile icon={I.upload} title={t('settings.tile_import_title')} desc={t('settings.tile_import_desc')} onClick={() => onNavigate?.('import')} />
-            <HubTile icon={I.chart} title={t('settings.tile_stats_title')} desc={t('settings.tile_stats_desc')} onClick={() => onNavigate?.('stats')} />
-          </div>
-        </>
+          <section>
+            <HubRule label={t('settings.hub_group_account')} />
+            <div className="fx-acards">
+              <HubCard
+                icon={I.user} tone="fx-tone-accent"
+                title={t('settings.tile_profile_title')} desc={t('settings.tile_profile_desc')}
+                action={t('settings.tile_profile_action')} onClick={() => setSection('profile')}
+              />
+              <HubCard
+                icon={I.key} tone="fx-tone-pink"
+                title={t('settings.tile_account_title')} desc={t('settings.tile_account_desc')}
+                action={t('settings.tile_account_action')} onClick={() => setSection('account')}
+              />
+              <HubCard
+                icon={I.shield} tone="fx-tone-green"
+                title={t('settings.tile_security_title')} desc={t('settings.tile_security_desc')}
+                action={t('settings.tile_security_action')}
+                status={totpEnabled ? t('settings.chip_2fa_on') : t('settings.chip_2fa_off')}
+                statusTone={totpEnabled ? 'fx-chip-ok' : 'fx-chip-warn'}
+                onClick={() => setSection('security')}
+              />
+              <HubCard
+                icon={I.link} tone="fx-tone-blue"
+                title={t('settings.tile_tokens_title')} desc={t('settings.tile_tokens_desc')}
+                action={t('settings.tile_tokens_action')} onClick={() => setSection('tokens')}
+              />
+              <HubCard
+                icon={I.lock} tone="fx-tone-amber"
+                title={t('settings.tile_master_title')} desc={t('settings.tile_master_desc')}
+                action={t('settings.tile_master_action')} onClick={() => setSection('master')}
+              />
+              <HubCard
+                icon={I.folder} tone="fx-tone-accent"
+                title={t('settings.tile_locked_title')} desc={t('settings.tile_locked_desc')}
+                action={t('settings.tile_locked_action')} onClick={() => setSection('locked')}
+              />
+            </div>
+          </section>
+
+          <section>
+            <HubRule label={t('settings.hub_group_shortcuts')} />
+            <div className="fx-scuts">
+              <HubShortcut
+                icon={I.upload} tone="fx-tone-accent"
+                title={t('settings.tile_import_title')} desc={t('settings.tile_import_desc')}
+                onClick={() => onNavigate?.('import')}
+              />
+              <HubShortcut
+                icon={I.chart} tone="fx-tone-pink"
+                title={t('settings.tile_stats_title')} desc={t('settings.tile_stats_desc')}
+                onClick={() => onNavigate?.('stats')}
+              />
+            </div>
+          </section>
+        </div>
       ) : (
         <Suspense fallback={<div className="fx-empty">...</div>}>
           <AdminOverview
@@ -230,29 +294,55 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
   )
 }
 
-function HubTile({
-  icon,
-  title,
-  desc,
-  onClick,
-}: {
-  icon: ReactNode
-  title: string
-  desc: string
-  onClick: () => void
-}) {
+/**
+ * Who you are signed in as, beside the one thing the instance most wants you
+ * to fix. The nudge is rendered only while a second factor is missing: a
+ * permanent panel that always says "you are fine" trains the eye to skip the
+ * slot, so the slot has to stay empty when there is nothing to say.
+ */
+function IdentityHero({ onOpenSecurity }: { onOpenSecurity: () => void }) {
+  const { t } = useTranslation()
+  const me = useCurrentUser()
+  if (!me) return null
+
+  const verified = me.email_verified_at != null
+  const needs2fa = !me.totp_enabled
+
   return (
-    <button type="button" className="fx-hub-tile" onClick={onClick}>
-      <span className="fx-hub-tile-icon">
-        <Icon d={icon} size={16} />
-      </span>
-      <span>
-        <span className="fx-hub-tile-title">{title}</span>
-        <span className="fx-hub-tile-desc">{desc}</span>
-      </span>
-    </button>
+    <div className={needs2fa ? 'fx-hub-hero' : undefined}>
+      <div className={'fx-idcard' + (needs2fa ? '' : ' fx-idcard-solo')}>
+        <span className="fx-avatar fx-avatar-lg">{initialsOf(me.name ?? '', me.email)}</span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+            <span className="fx-idcard-name">{me.name?.trim() || me.email}</span>
+            <span className="fx-chip">{t(`admin.role_${me.role}`, me.role)}</span>
+          </div>
+          <div className="fx-idcard-mail">{me.email}</div>
+          <div className="fx-idcard-chips">
+            <span className={'fx-chip ' + (verified ? 'fx-chip-ok' : 'fx-chip-warn')}>
+              {verified ? t('settings.chip_mail_verified') : t('settings.chip_mail_unverified')}
+            </span>
+            <span className={'fx-chip ' + (needs2fa ? 'fx-chip-warn' : 'fx-chip-ok')}>
+              {needs2fa ? t('settings.chip_2fa_off') : t('settings.chip_2fa_on')}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {needs2fa && (
+        <div className="fx-promo">
+          <div>
+            <div className="fx-promo-kicker">{t('settings.promo_kicker')}</div>
+            <div className="fx-promo-title">{t('settings.promo_title')}</div>
+            <div className="fx-promo-desc">{t('settings.promo_desc')}</div>
+          </div>
+          <button className="fx-promo-btn" onClick={onOpenSecurity}>{t('settings.promo_action')}</button>
+        </div>
+      )}
+    </div>
   )
 }
+
 
 function MasterPasswordSection() {
   const { t } = useTranslation()

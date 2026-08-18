@@ -75,14 +75,13 @@ func burnDummyHash(password string) {
 
 // Handler serves /api/auth.
 type Handler struct {
-	repo       *Repository
-	mw         *Middleware
-	mailer     mailer.Mailer
-	dispatcher *mailer.Dispatcher
-	cookies    CookieOptions
-	ttl        SessionTTL
-	logger     *slog.Logger
-	baseURL    string
+	repo    *Repository
+	mw      *Middleware
+	mailer  mailer.Mailer
+	cookies CookieOptions
+	ttl     SessionTTL
+	logger  *slog.Logger
+	baseURL string
 
 	// cipher encrypts TOTP seeds at rest. Nil only when the auth stack is not
 	// wired at all; every 2FA route checks it before use.
@@ -133,13 +132,12 @@ type Handler struct {
 
 // HandlerConfig is the wiring internal/server hands in.
 type HandlerConfig struct {
-	Repo           *Repository
-	MW             *Middleware
-	Mailer         mailer.Mailer
-	MailDispatcher *mailer.Dispatcher
-	Cookies        CookieOptions
-	TTL            SessionTTL
-	Logger         *slog.Logger
+	Repo    *Repository
+	MW      *Middleware
+	Mailer  mailer.Mailer
+	Cookies CookieOptions
+	TTL     SessionTTL
+	Logger  *slog.Logger
 	// BaseURL is the public origin used to build invite links. It cannot be
 	// derived from the request: Host and X-Forwarded-Host are attacker-supplied,
 	// and a link built from them is a password-reset-poisoning primitive — the
@@ -174,14 +172,13 @@ type HandlerConfig struct {
 
 func NewHandler(cfg HandlerConfig) *Handler {
 	return &Handler{
-		repo:       cfg.Repo,
-		mw:         cfg.MW,
-		mailer:     cfg.Mailer,
-		dispatcher: cfg.MailDispatcher,
-		cookies:    cfg.Cookies,
-		ttl:        cfg.TTL,
-		logger:     cfg.Logger,
-		baseURL:    strings.TrimRight(cfg.BaseURL, "/"),
+		repo:    cfg.Repo,
+		mw:      cfg.MW,
+		mailer:  cfg.Mailer,
+		cookies: cfg.Cookies,
+		ttl:     cfg.TTL,
+		logger:  cfg.Logger,
+		baseURL: strings.TrimRight(cfg.BaseURL, "/"),
 
 		cipher:              cfg.Cipher,
 		codeMAC:             cfg.CodeMAC,
@@ -519,7 +516,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		// The family is already dead by the time this returns. Warn the owner
 		// out-of-band: if the token really was stolen, this is the only signal
 		// they will get.
-		h.notifyReuse(r.Context(), res.UserID)
+		h.notifyReuse(r.Context(), res.UserID, localeFrom(r))
 		h.cookies.ClearSession(w)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "session_revoked",
 			"session was revoked; sign in again"))
@@ -552,7 +549,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 // notifyReuse tells the owner their sessions were killed.
-func (h *Handler) notifyReuse(ctx context.Context, uid authctx.UserID) {
+func (h *Handler) notifyReuse(ctx context.Context, uid authctx.UserID, locale string) {
 	h.logger.Warn("refresh token reuse detected — session family revoked", "user_id", int64(uid))
 	if uid == 0 {
 		return
@@ -561,7 +558,7 @@ func (h *Handler) notifyReuse(ctx context.Context, uid authctx.UserID) {
 	if err != nil {
 		return
 	}
-	h.enqueueMail(mailer.SessionRevokedMessage(email), "reuse notification")
+	h.enqueueMail(ctx, mailer.SessionRevokedMessage(email), locale, "reuse notification")
 }
 
 // ─────────────────────────────────────────────────────────────────────

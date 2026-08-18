@@ -116,3 +116,64 @@ func flip(b []byte, i int) []byte {
 	out[i] ^= 0x01
 	return out
 }
+
+// Domain separation is the whole point: a ciphertext written by one purpose's
+// cipher must not open under another's, or deriving would be decoration.
+func TestDerivedCiphersAreDomainSeparated(t *testing.T) {
+	t.Parallel()
+	master := testKey(7)
+
+	a, err := NewDerivedCipher(master, "foldex/purpose-a/v1")
+	if err != nil {
+		t.Fatalf("NewDerivedCipher: %v", err)
+	}
+	b, err := NewDerivedCipher(master, "foldex/purpose-b/v1")
+	if err != nil {
+		t.Fatalf("NewDerivedCipher: %v", err)
+	}
+	ct, nonce, err := a.Encrypt([]byte("https://foldex.test/#reset=TOKEN"))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if _, err := b.Decrypt(ct, nonce); !errors.Is(err, ErrDecrypt) {
+		t.Fatalf("a sibling purpose opened the ciphertext: %v", err)
+	}
+
+	// The master key itself must not open it either — that is the property the
+	// derivation exists to create, since the TOTP seed still uses the master.
+	direct, err := NewCipher(master)
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	if _, err := direct.Decrypt(ct, nonce); !errors.Is(err, ErrDecrypt) {
+		t.Fatalf("the master key opened a derived ciphertext: %v", err)
+	}
+}
+
+// Derivation must be deterministic, or a restart would strand every row the
+// previous process wrote.
+func TestDerivedCipherIsStableAcrossCalls(t *testing.T) {
+	t.Parallel()
+	master := testKey(8)
+	a, _ := NewDerivedCipher(master, "foldex/stable/v1")
+	b, _ := NewDerivedCipher(master, "foldex/stable/v1")
+
+	ct, nonce, err := a.Encrypt([]byte("code 123456"))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	got, err := b.Decrypt(ct, nonce)
+	if err != nil {
+		t.Fatalf("a second derivation of the same purpose could not decrypt: %v", err)
+	}
+	if string(got) != "code 123456" {
+		t.Fatalf("round trip = %q", got)
+	}
+}
+
+func TestNewDerivedCipherRejectsAShortMasterKey(t *testing.T) {
+	t.Parallel()
+	if _, err := NewDerivedCipher(make([]byte, 31), "p"); err == nil {
+		t.Fatal("a 31-byte master key was accepted")
+	}
+}

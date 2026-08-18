@@ -24,8 +24,13 @@ services:
       RUSTFS_UNSAFE_BYPASS_DISK_CHECK: ${RUSTFS_UNSAFE_BYPASS_DISK_CHECK:-true}
       RUSTFS_OBS_LOGGER_LEVEL: info
     ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
+      # Host ports are configurable because 9000/9001 are the S3 defaults that
+      # every MinIO-shaped service on a developer machine also claims. The
+      # CONTAINER side stays fixed: the backend reaches the store as
+      # `rustfs:9000` over the compose network, so remapping the host side is
+      # purely about who gets to browse it from the host.
+      - "127.0.0.1:${RUSTFS_HOST_PORT:-9000}:9000"
+      - "127.0.0.1:${RUSTFS_CONSOLE_HOST_PORT:-9001}:9001"
     volumes:
       - rustfs_data:/data
     healthcheck:

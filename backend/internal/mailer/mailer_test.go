@@ -146,9 +146,21 @@ func TestRenderPlainWhenNoHTML(t *testing.T) {
 	assert.NotContains(t, body, "multipart")
 }
 
+// mustRender resolves an envelope the way the relay does. The constructors no
+// longer produce a body — they name a template — so every assertion about copy
+// has to go through the same path a real send takes.
+func mustRender(t *testing.T, env Envelope, locale string) Message {
+	t.Helper()
+	m, err := Render(env, locale)
+	if err != nil {
+		t.Fatalf("render %s/%s: %v", env.Template, locale, err)
+	}
+	return m
+}
+
 func TestInviteMessageCarriesTheLink(t *testing.T) {
 	t.Parallel()
-	msg := InviteMessage("new@example.com", "Ana", "https://foldex.local/#invite=TOK", 168)
+	msg := mustRender(t, InviteMessage("new@example.com", "Ana", "https://foldex.local/#invite=TOK", 168), "en")
 
 	assert.Equal(t, "new@example.com", msg.To)
 	assert.Contains(t, msg.Text, "https://foldex.local/#invite=TOK")
@@ -159,13 +171,13 @@ func TestInviteMessageCarriesTheLink(t *testing.T) {
 
 func TestInviteMessageEscapesHTML(t *testing.T) {
 	t.Parallel()
-	msg := InviteMessage("a@b.com", `Ana"><script>alert(1)</script>`, "https://x/#invite=T", 1)
+	msg := mustRender(t, InviteMessage("a@b.com", `Ana"><script>alert(1)</script>`, "https://x/#invite=T", 1), "en")
 	assert.NotContains(t, msg.HTML, "<script>", "an inviter name must not break out of its element")
 }
 
 func TestAdminPasswordRecoveryMessageCarriesOnlyTheTargetsChoiceLink(t *testing.T) {
 	t.Parallel()
-	msg := AdminPasswordRecoveryMessage("target@example.com", "https://foldex.local/#reset=TOK", 30)
+	msg := mustRender(t, AdminPasswordRecoveryMessage("target@example.com", "https://foldex.local/#reset=TOK", 30), "en")
 
 	assert.Equal(t, "target@example.com", msg.To)
 	assert.Contains(t, msg.Text, "https://foldex.local/#reset=TOK")
@@ -177,10 +189,25 @@ func TestAdminPasswordRecoveryMessageCarriesOnlyTheTargetsChoiceLink(t *testing.
 // The reuse warning must carry no link: an unexpected "your session was
 // terminated, click here" is exactly the shape of a phishing mail, and training
 // users to click it is worse than the warning is worth.
+//
+// Asserting on the ABSENCE of an anchor rather than on an empty HTML arm: every
+// message renders through the shared layout now, so "no HTML" stopped being how
+// a linkless message looks.
 func TestSessionRevokedMessageHasNoLink(t *testing.T) {
 	t.Parallel()
-	msg := SessionRevokedMessage("a@b.com")
-	assert.Equal(t, "a@b.com", msg.To)
-	assert.NotContains(t, msg.Text, "http")
-	assert.Empty(t, msg.HTML)
+	for _, locale := range SupportedLocales() {
+		msg := mustRender(t, SessionRevokedMessage("a@b.com"), locale)
+		assert.Equal(t, "a@b.com", msg.To)
+		assert.NotContains(t, msg.Text, "http", locale)
+		assert.NotContains(t, msg.HTML, "<a ", locale)
+	}
+}
+
+func TestPasswordResetUnavailableCarriesNoLink(t *testing.T) {
+	t.Parallel()
+	for _, locale := range SupportedLocales() {
+		msg := mustRender(t, PasswordResetUnavailableMessage("a@b.com"), locale)
+		assert.NotContains(t, msg.Text, "http", locale)
+		assert.NotContains(t, msg.HTML, "<a ", locale)
+	}
 }

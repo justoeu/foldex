@@ -5,6 +5,7 @@ package auth_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/auth"
+	"foldex/internal/mailer"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/secrets"
 	"foldex/internal/testdb"
@@ -101,7 +103,7 @@ func TestResetPassword_TokenCannotBeReplayed(t *testing.T) {
 func TestResetPassword_LinkDiesWhenThePasswordChanges(t *testing.T) {
 	h := newHarness(t)
 	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	token, err := h.repo.CreatePasswordReset(context.Background(), authctx.UserID(1), time.Minute, "")
+	token, err := h.repo.CreatePasswordReset(context.Background(), authctx.UserID(1), time.Minute, "", auth.MailDraft{})
 	require.NoError(t, err)
 
 	rec := c.do(http.MethodPost, "/api/auth/password/change", map[string]string{
@@ -165,7 +167,7 @@ func TestResetPassword_LinkDiesOnCredentialEpochMutations(t *testing.T) {
 			require.Equal(t, http.StatusOK, target.do(http.MethodPost, "/api/auth/login", map[string]string{
 				"email": "target@example.com", "password": "a target password",
 			}).Code)
-			token, err := h.repo.CreatePasswordReset(context.Background(), uid, time.Minute, "")
+			token, err := h.repo.CreatePasswordReset(context.Background(), uid, time.Minute, "", auth.MailDraft{})
 			require.NoError(t, err)
 
 			if tc.mutate == nil {
@@ -188,7 +190,7 @@ func TestPasswordResetCannotCommitAfterConcurrentCredentialEpochBump(t *testing.
 	h := newHarness(t)
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 	uid := authctx.UserID(1)
-	token, err := h.repo.CreatePasswordReset(context.Background(), uid, time.Minute, "")
+	token, err := h.repo.CreatePasswordReset(context.Background(), uid, time.Minute, "", auth.MailDraft{})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -282,7 +284,7 @@ func TestConcurrentPasswordResetCreationLeavesExactlyOneLiveToken(t *testing.T) 
 	results := make(chan result, 2)
 	for range 2 {
 		go func() {
-			token, err := h.repo.CreatePasswordReset(ctx, authctx.UserID(uid), time.Minute, "")
+			token, err := h.repo.CreatePasswordReset(ctx, authctx.UserID(uid), time.Minute, "", auth.MailDraft{})
 			results <- result{token: token, err: err}
 		}()
 	}
@@ -313,41 +315,58 @@ func TestConcurrentPasswordResetCreationLeavesExactlyOneLiveToken(t *testing.T) 
 	assert.Equal(t, 1, matches, "more than one concurrently minted reset remained live")
 }
 
-func TestForgotPassword_QueueFullPreservesTheExistingReset(t *testing.T) {
-	gate := make(chan struct{})
-	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{
-		MailWorkers: 1, MailQueue: 1, MailGate: gate,
-	})
+// The reset token and the e-mail that carries it commit together, and a
+// transport that is refusing does not cost the user their link.
+//
+// This replaces a test for queue admission — the dispatcher used to reserve a
+// slot BEFORE minting the token, so a full queue meant no token at all. The
+// outbox makes the ordering unnecessary: the row cannot fail for capacity, so
+// what has to hold now is that a failing SEND leaves the message queued for a
+// retry rather than dropping it.
+func TestForgotPassword_MailSurvivesATransportFailure(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
 
-	oldToken, err := h.repo.CreatePasswordReset(context.Background(), authctx.UserID(1), time.Minute, "")
-	require.NoError(t, err)
-	saturateMailDispatcher(t, h)
+	h.mail.fail(errors.New("smtp is down"))
+	rec := h.client(t).do(http.MethodPost, "/api/auth/password/forgot",
+		map[string]string{"email": "admin@example.com"})
+	require.Equal(t, http.StatusAccepted, rec.Code)
 
-	for range 3 {
-		rec := h.client(t).do(http.MethodPost, "/api/auth/password/forgot",
-			map[string]string{"email": "admin@example.com"})
-		assert.Equal(t, http.StatusAccepted, rec.Code)
-	}
-
+	// The token exists, and so does its message — the whole point of writing
+	// both in one transaction.
 	var live int
 	require.NoError(t, h.pool.QueryRow(context.Background(), `
 		SELECT count(*) FROM password_reset
 		WHERE consumed_at IS NULL AND expires_at > now()`).Scan(&live))
-	assert.Equal(t, 1, live, "queue refusal superseded the usable reset")
+	assert.Equal(t, 1, live)
 
-	close(gate)
-	h.mail.waitFor(t, "queued@example.com")
+	require.Eventually(t, func() bool {
+		var attempts int
+		if err := h.pool.QueryRow(context.Background(), `
+			SELECT attempts FROM mail_outbox WHERE template = $1`,
+			mailer.TemplatePasswordReset).Scan(&attempts); err != nil {
+			return false
+		}
+		return attempts > 0
+	}, 3*time.Second, 10*time.Millisecond, "the relay never attempted the queued message")
+
+	var status string
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT status FROM mail_outbox WHERE template = $1`,
+		mailer.TemplatePasswordReset).Scan(&status))
+	assert.Equal(t, "pending", status, "a failed send must stay queued for a retry, not vanish")
+
+	// Once the transport recovers, the same queued row is delivered — the user
+	// never has to ask again, which matters because the endpoint's own cooldown
+	// would refuse them.
 	h.mail.reset()
-	rec := h.client(t).do(http.MethodPost, "/api/auth/password/forgot",
-		map[string]string{"email": "admin@example.com"})
-	require.Equal(t, http.StatusAccepted, rec.Code)
-	newToken := resetTokenFrom(t, h.mail.waitFor(t, "admin@example.com").Text)
-	assert.NotEqual(t, oldToken, newToken)
+	_, err := h.pool.Exec(context.Background(),
+		`UPDATE mail_outbox SET next_attempt_at = now() WHERE status = 'pending'`)
+	require.NoError(t, err)
+	token := resetTokenFrom(t, h.mail.waitFor(t, "admin@example.com").Text)
 	assert.Equal(t, http.StatusOK, h.client(t).do(http.MethodPost, "/api/auth/password/reset",
-		map[string]string{"token": newToken, "password": "a brand new password"}).Code,
-		"queue-full requests consumed the per-address reset budget")
+		map[string]string{"token": token, "password": "a brand new password"}).Code)
 }
 
 // The endpoint must not become an account-existence oracle. Three channels have
@@ -686,31 +705,6 @@ func TestVerifyEmail_RoundTrip(t *testing.T) {
 		"/api/auth/email/verify", map[string]string{"token": token}).Code)
 }
 
-func TestVerifyEmail_QueueFullPreservesTheExistingLink(t *testing.T) {
-	gate := make(chan struct{})
-	t.Cleanup(func() { close(gate) })
-	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{
-		SMTP: true, MailWorkers: 1, MailQueue: 1, MailGate: gate,
-	})
-	require.NoError(t, testdb.Reset(context.Background(), h.pool))
-	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	_, err := h.pool.Exec(context.Background(), `UPDATE app_user SET email_verified_at = NULL`)
-	require.NoError(t, err)
-
-	oldToken, oldHash, err := secrets.NewToken()
-	require.NoError(t, err)
-	require.NoError(t, h.repo.CreateEmailOTP(context.Background(), authctx.UserID(1), nil,
-		auth.OTPPurposeVerifyEmail, oldHash, time.Minute))
-	saturateMailDispatcher(t, h)
-
-	rec := c.do(http.MethodPost, "/api/auth/email/resend", nil)
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Equal(t, "mail_queue_full", errCode(t, rec))
-	assert.Equal(t, http.StatusNoContent, h.client(t).do(http.MethodPost,
-		"/api/auth/email/verify", map[string]string{"token": oldToken}).Code,
-		"queue refusal invalidated the previously issued verification link")
-}
-
 func TestVerifyEmail_RapidResendCoalescesWithoutReplacingTheFirstLink(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
@@ -836,7 +830,7 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 		_, err = h.repo.BumpChallengeAttempt(ctx, 1)
 		assert.Error(t, err)
 		assert.Error(t, h.repo.ConsumeChallenge(ctx, 1))
-		_, err = h.repo.CreateChallengeEmailOTP(ctx, 1, []byte("hash"), time.Minute, time.Minute)
+		_, err = h.repo.CreateChallengeEmailOTP(ctx, 1, []byte("hash"), time.Minute, time.Minute, auth.MailDraft{})
 		assert.Error(t, err)
 	})
 
@@ -862,12 +856,12 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 
 	t.Run("otp and reset", func(t *testing.T) {
 		assert.Error(t, h.repo.CreateEmailOTP(ctx, uid, nil, auth.OTPPurposeLogin2FA, []byte("h"), time.Minute))
-		_, err := h.repo.CreateEmailVerification(ctx, uid, time.Minute, time.Minute)
+		_, err := h.repo.CreateEmailVerification(ctx, uid, time.Minute, time.Minute, auth.MailDraft{})
 		assert.Error(t, err)
 		assert.Error(t, h.repo.ConsumeEmailOTP(ctx, uid, auth.OTPPurposeLogin2FA, []byte("h"), nil))
 		_, _, err = h.repo.UserForPasswordReset(ctx, "admin@example.com")
 		assert.Error(t, err)
-		_, err = h.repo.CreatePasswordReset(ctx, uid, time.Minute, "")
+		_, err = h.repo.CreatePasswordReset(ctx, uid, time.Minute, "", auth.MailDraft{})
 		assert.Error(t, err)
 		_, err = h.repo.ConsumePasswordReset(ctx, "tok", "a brand new password")
 		assert.Error(t, err)
@@ -910,7 +904,7 @@ func TestTwoFactorRepository_NotFoundIsTyped(t *testing.T) {
 	_, err = h.repo.BumpChallengeAttempt(ctx, 999_999)
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	assert.ErrorIs(t, h.repo.ConsumeChallenge(ctx, 999_999), auth.ErrChallengeInvalid)
-	_, err = h.repo.CreateChallengeEmailOTP(ctx, 999_999, []byte("hash"), time.Minute, time.Minute)
+	_, err = h.repo.CreateChallengeEmailOTP(ctx, 999_999, []byte("hash"), time.Minute, time.Minute, auth.MailDraft{})
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 
 	_, err = h.repo.ConsumePasswordReset(ctx, "no such token", "a brand new password")

@@ -1,0 +1,77 @@
+{
+  "invite": {
+    "subject": "Você foi convidado para o Foldex",
+    "heading": "Você foi convidado{{if .By}} por {{.By}}{{end}} para o Foldex.",
+    "body": [
+      "Abra o link abaixo para escolher uma senha e ativar sua conta."
+    ],
+    "action": "Escolher uma senha e ativar minha conta",
+    "footnote": "O link expira em {{.ExpiresHours}} horas e só pode ser usado uma vez. Se você não esperava este convite, pode ignorar esta mensagem."
+  },
+  "password_reset": {
+    "subject": "Redefina sua senha do Foldex",
+    "heading": "Alguém pediu para redefinir a senha da sua conta do Foldex.",
+    "body": [
+      "Abra o link abaixo para escolher uma nova senha."
+    ],
+    "action": "Escolher uma nova senha",
+    "footnote": "O link expira em {{.ExpiresMinutes}} minutos e só pode ser usado uma vez. Se não foi você que pediu, pode ignorar esta mensagem — sua senha não será alterada."
+  },
+  "reset_unavailable": {
+    "subject": "Redefina sua senha do Foldex",
+    "heading": "Alguém pediu para redefinir a senha da sua conta do Foldex.",
+    "body": [
+      "Esta conta entra com o Google, então não há senha para redefinir.",
+      "Use “Continuar com o Google” na tela de entrada."
+    ],
+    "footnote": "Se não foi você que pediu, pode ignorar esta mensagem."
+  },
+  "login_code": {
+    "subject": "Código de entrada do Foldex: {{.Code}}",
+    "heading": "Seu código de entrada do Foldex",
+    "footnote": "Ele expira em {{.ExpiresMinutes}} minutos e só pode ser usado uma vez. Se não é você entrando agora, alguém pode saber sua senha — troque-a."
+  },
+  "verify_email": {
+    "subject": "Confirme seu e-mail do Foldex",
+    "heading": "Confirme este endereço para a sua conta do Foldex.",
+    "body": [
+      "Abra o link abaixo para concluir a confirmação do seu endereço de e-mail."
+    ],
+    "action": "Confirmar meu endereço de e-mail",
+    "footnote": "O link expira em {{.ExpiresMinutes}} minutos e só pode ser usado uma vez. Se não foi você que pediu, pode ignorar esta mensagem."
+  },
+  "admin_recovery": {
+    "subject": "Foi solicitada a recuperação da sua conta do Foldex",
+    "heading": "Um administrador iniciou a recuperação da sua conta do Foldex.",
+    "body": [
+      "Abra o link abaixo para escolher você mesmo uma nova senha. Ninguém mais chega a vê-la."
+    ],
+    "action": "Escolher minha nova senha",
+    "footnote": "O link expira em {{.ExpiresMinutes}} minutos e só pode ser usado uma vez. Sua senha e suas sessões não mudam até você usá-lo. Se você não esperava por isso, avise seu administrador e ignore esta mensagem."
+  },
+  "session_revoked": {
+    "subject": "Suas sessões do Foldex foram encerradas",
+    "heading": "Suas sessões do Foldex foram encerradas.",
+    "body": [
+      "Um token de sessão da sua conta do Foldex foi reapresentado, o que normalmente significa que ele foi copiado do seu dispositivo.",
+      "Por precaução, todas as sessões ativas foram encerradas. Entre novamente para continuar."
+    ],
+    "footnote": "Se não foi você, troque sua senha depois de entrar. Esta mensagem não traz nenhum link de propósito — o Foldex nunca pede que você clique em um para proteger sua conta."
+  },
+  "recovery_code_used": {
+    "subject": "Um código de recuperação do Foldex foi usado",
+    "heading": "Um código de recuperação acabou de ser usado para entrar na sua conta do Foldex.",
+    "body": [
+      "Restam {{.Remaining}} códigos de recuperação."
+    ],
+    "footnote": "Se não foi você, troque sua senha e gere novos códigos de recuperação agora."
+  },
+  "account_converted": {
+    "subject": "Sua conta do Foldex agora usa entrada com o Google",
+    "heading": "Sua conta do Foldex agora entra com o Google ({{.GoogleEmail}}).",
+    "body": [
+      "A senha dela foi removida e todas as outras sessões foram encerradas."
+    ],
+    "footnote": "Se não foi você, procure o administrador do seu Foldex imediatamente: quem fez isso sabia sua senha, e a redefinição de senha não se aplica mais a esta conta."
+  }
+}

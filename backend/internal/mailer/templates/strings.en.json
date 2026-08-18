@@ -1,0 +1,77 @@
+{
+  "invite": {
+    "subject": "You have been invited to Foldex",
+    "heading": "You have been invited{{if .By}} by {{.By}}{{end}} to Foldex.",
+    "body": [
+      "Open the link below to choose a password and activate your account."
+    ],
+    "action": "Choose a password and activate my account",
+    "footnote": "The link expires in {{.ExpiresHours}} hours and can be used once. If you were not expecting this invitation, you can ignore this message."
+  },
+  "password_reset": {
+    "subject": "Reset your Foldex password",
+    "heading": "Someone asked to reset the password for your Foldex account.",
+    "body": [
+      "Open the link below to choose a new password."
+    ],
+    "action": "Choose a new password",
+    "footnote": "The link expires in {{.ExpiresMinutes}} minutes and can be used once. If you did not ask for this, you can ignore this message — your password will not change."
+  },
+  "reset_unavailable": {
+    "subject": "Reset your Foldex password",
+    "heading": "Someone asked to reset the password for your Foldex account.",
+    "body": [
+      "This account signs in with Google, so it has no password to reset.",
+      "Use “Continue with Google” on the sign-in screen."
+    ],
+    "footnote": "If you did not ask for this, you can ignore this message."
+  },
+  "login_code": {
+    "subject": "Foldex sign-in code: {{.Code}}",
+    "heading": "Your Foldex sign-in code",
+    "footnote": "It expires in {{.ExpiresMinutes}} minutes and can be used once. If you are not signing in right now, someone may know your password — change it."
+  },
+  "verify_email": {
+    "subject": "Confirm your Foldex e-mail",
+    "heading": "Confirm this address for your Foldex account.",
+    "body": [
+      "Open the link below to finish confirming your e-mail address."
+    ],
+    "action": "Confirm my e-mail address",
+    "footnote": "The link expires in {{.ExpiresMinutes}} minutes and can be used once. If you did not ask for this, you can ignore this message."
+  },
+  "admin_recovery": {
+    "subject": "Account recovery was requested for your Foldex account",
+    "heading": "An administrator started account recovery for your Foldex account.",
+    "body": [
+      "Open the link below to choose your own new password. Nobody else gets to see it."
+    ],
+    "action": "Choose my new password",
+    "footnote": "The link expires in {{.ExpiresMinutes}} minutes and can be used once. Your password and sessions do not change until you use it. If you did not expect this, tell your administrator and ignore this message."
+  },
+  "session_revoked": {
+    "subject": "Your Foldex sessions were signed out",
+    "heading": "Your Foldex sessions were signed out.",
+    "body": [
+      "A session token for your Foldex account was replayed, which usually means it was copied from your device.",
+      "As a precaution every active session was signed out. Sign in again to continue."
+    ],
+    "footnote": "If this was not you, change your password after signing in. This message carries no link on purpose — Foldex never asks you to click one to secure your account."
+  },
+  "recovery_code_used": {
+    "subject": "A Foldex recovery code was used",
+    "heading": "A recovery code was just used to sign in to your Foldex account.",
+    "body": [
+      "You have {{.Remaining}} recovery codes left."
+    ],
+    "footnote": "If this was not you, change your password and regenerate your recovery codes now."
+  },
+  "account_converted": {
+    "subject": "Your Foldex account now uses Google sign-in",
+    "heading": "Your Foldex account now signs in with Google ({{.GoogleEmail}}).",
+    "body": [
+      "Its password has been removed, and every other session was signed out."
+    ],
+    "footnote": "If this was not you, contact your Foldex administrator immediately: whoever did this knew your password, and password reset no longer applies to this account."
+  }
+}

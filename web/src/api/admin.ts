@@ -114,6 +114,17 @@ export async function fetchRoles(): Promise<{ roles: RoleSummary[]; permissions:
 }
 
 /** Keyset pagination: `before` is the last id already shown, not an offset. */
+/**
+ * Query key for one page of the audit trail. Shared so the administration
+ * overview's attention feed and the audit section's unfiltered first page
+ * resolve to the SAME cache entry — the feed ends in a button that opens
+ * exactly that view, and two spellings of the same page would refetch it one
+ * click later. `before` is the keyset cursor; 0 stands for "the head".
+ */
+export function auditQueryKey(action = '', before = 0) {
+  return ['admin', 'audit', action, before] as const
+}
+
 export async function fetchAudit(params: { action?: string; before?: number } = {}): Promise<AuditEntry[]> {
   const { data } = await http.get<{ entries: AuditEntry[] }>('/api/admin/audit', { params })
   return data.entries

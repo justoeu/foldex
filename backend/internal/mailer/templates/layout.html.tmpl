@@ -1,0 +1,51 @@
+{{- /*
+The HTML arm of every message. There is exactly one layout, and every message is
+the same small document — heading, paragraphs, an optional code, an optional
+action link, an optional footnote. A per-message HTML file would multiply by the
+three locales and turn a copy change into thirty edits.
+
+Styles are INLINE. A <style> block is stripped by Gmail's web client and several
+others, so a stylesheet here would look correct in exactly the client it was
+written in. The palette is a muted neutral on purpose: a transactional mail that
+tries to look like the product is a transactional mail that looks like the
+phishing copy of the product.
+
+Every value below is escaped by html/template in its own context. The copy is
+executed against the params BEFORE it arrives here, so an address containing
+`<` cannot break out of its element, and `.ActionURL` sits in a URL context —
+which is also what neutralises a `javascript:` scheme if one ever reached it.
+*/ -}}
+<!doctype html>
+<html lang="{{ .Locale }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;padding:24px 12px;background:#f4f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2330">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+<tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:520px;background:#ffffff;border:1px solid #e4e4ea;border-radius:14px">
+<tr><td style="padding:28px 30px">
+
+<p style="margin:0 0 20px;font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#6f6bd8">Foldex</p>
+
+<h1 style="margin:0 0 16px;font-size:19px;line-height:1.4;font-weight:600;color:#1f2330">{{ .Heading }}</h1>
+
+{{ range .Body }}<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#3a3f52">{{ . }}</p>
+{{ end }}
+{{- with .Code }}
+<p style="margin:22px 0;padding:14px 0;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:30px;letter-spacing:8px;font-weight:700;color:#1f2330;background:#f4f4f6;border-radius:10px">{{ . }}</p>
+{{- end }}
+{{- with .ActionURL }}
+<p style="margin:24px 0">
+  <a href="{{ . }}" style="display:inline-block;padding:12px 22px;background:#6f6bd8;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;border-radius:10px">{{ $.Action }}</a>
+</p>
+<p style="margin:0 0 14px;font-size:12px;line-height:1.5;color:#8a8fa3;word-break:break-all">{{ . }}</p>
+{{- end }}
+{{- with .Footnote }}
+<p style="margin:22px 0 0;padding-top:16px;border-top:1px solid #ededf2;font-size:13px;line-height:1.6;color:#8a8fa3">{{ . }}</p>
+{{- end }}
+
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>

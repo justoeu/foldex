@@ -312,7 +312,7 @@ func TestMigration000028IsReversibleAndLegacyPasswordResetsFailClosed(t *testing
 		VALUES ($1, $2, now() + interval '10 minutes')`, int64(uid), []byte("new-without-epoch"))
 	require.Error(t, err, "new password resets without a credential epoch must be refused")
 
-	raw, err := auth.NewRepository(pool).CreatePasswordReset(ctx, uid, time.Minute, "")
+	raw, err := auth.NewRepository(pool).CreatePasswordReset(ctx, uid, time.Minute, "", auth.MailDraft{})
 	require.NoError(t, err)
 	var resetVersion, liveVersion int
 	require.NoError(t, pool.QueryRow(ctx, `

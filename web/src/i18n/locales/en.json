@@ -717,7 +717,24 @@
     "sec_audit_kicker": "administration",
     "sec_audit_title": "Audit log",
     "sec_policy_kicker": "administration",
-    "sec_policy_title": "Password and sign-in policy"
+    "sec_policy_title": "Password and sign-in policy",
+    "page_lede": "Everything that governs your base: account, security, people and permissions. Each card opens a dedicated panel.",
+    "head_backup": "Export backup",
+    "head_invite": "Invite user",
+    "chip_2fa_on": "2FA on",
+    "chip_2fa_off": "2FA off",
+    "chip_mail_verified": "E-mail verified",
+    "chip_mail_unverified": "E-mail unverified",
+    "promo_kicker": "Recommended",
+    "promo_title": "Turn on two-step verification",
+    "promo_desc": "Takes two minutes and protects every way into your base.",
+    "promo_action": "Set up 2FA",
+    "tile_profile_action": "Edit profile",
+    "tile_account_action": "Open account",
+    "tile_security_action": "Open security",
+    "tile_tokens_action": "Manage tokens",
+    "tile_master_action": "Change password",
+    "tile_locked_action": "View folders"
   },
   "note_toolbar": {
     "aria": "Text formatting",
@@ -1092,7 +1109,10 @@
     "err_owner_immutable": "The owner's role and status change only by transferring the instance.",
     "err_forbidden_role": "Your role does not allow this action.",
     "err_target_not_active": "Ownership can only pass to an active account.",
-    "err_not_owner": "Only the current owner can transfer the instance."
+    "err_not_owner": "Only the current owner can transfer the instance.",
+    "roles_count_one": "One role in use on this instance.",
+    "roles_count_other": "{{count}} roles in use on this instance.",
+    "attention_desc": "Open access items."
   },
   "profile": {
     "title": "Profile",

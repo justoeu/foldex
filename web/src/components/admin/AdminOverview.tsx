@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { Icon, I } from '../icons'
-import { fetchMetrics, fetchAudit, type InstanceMetrics } from '../../api/admin'
+import { I } from '../icons'
+import { HubCard, HubRule } from '../HubCard'
+import { fetchMetrics, fetchAudit, auditQueryKey, type InstanceMetrics } from '../../api/admin'
 import { RolesMatrix } from './RolesMatrix'
-import type { ReactNode } from 'react'
 
 /** The sections the administration scope can open. */
 export type AdminSection = 'users' | 'roles' | 'audit' | 'policy'
@@ -22,29 +22,32 @@ export function AdminOverview({ onOpen }: Props) {
   const metrics = useQuery({ queryKey: ['admin', 'metrics'], queryFn: fetchMetrics })
   // The attention feed is the audit trail's head. Same data, no second
   // endpoint: "what needs attention" is just "what happened recently" filtered
-  // by how alarming it is.
-  const recent = useQuery({ queryKey: ['admin', 'audit', 'recent'], queryFn: () => fetchAudit({}) })
+  // by how alarming it is — and the shared key means AuditSection reads it
+  // from cache rather than refetching.
+  const recent = useQuery({ queryKey: auditQueryKey(), queryFn: () => fetchAudit({}) })
+
+  const attention = Array.isArray(recent.data) ? recent.data : []
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+    <div className="fx-hub-stack">
       <MetricRow metrics={metrics.data} loading={metrics.isPending} />
 
       <section>
-        <p className="fx-hub-section-label">{t('admin.group_access')}</p>
-        <div className="fx-acards" style={{ marginTop: 10 }}>
-          <ActionCard
+        <HubRule label={t('admin.group_access')} />
+        <div className="fx-acards">
+          <HubCard
             icon={I.users} tone="fx-tone-accent"
             title={t('admin.card_users_title')} desc={t('admin.card_users_desc')}
             action={t('admin.card_users_action')} onClick={() => onOpen('users')}
           />
-          <ActionCard
+          <HubCard
             icon={I.layers} tone="fx-tone-pink"
             title={t('admin.card_roles_title')} desc={t('admin.card_roles_desc')}
             action={t('admin.card_roles_action')}
             status={t('admin.card_roles_status', { count: metrics.data?.roles_in_use ?? 0 })}
             onClick={() => onOpen('roles')}
           />
-          <ActionCard
+          <HubCard
             icon={I.mail} tone="fx-tone-blue"
             title={t('admin.card_invites_title')} desc={t('admin.card_invites_desc')}
             action={t('admin.card_invites_action')}
@@ -56,12 +59,12 @@ export function AdminOverview({ onOpen }: Props) {
             statusTone={metrics.data && metrics.data.pending_invites > 0 ? 'fx-chip-warn' : undefined}
             onClick={() => onOpen('users')}
           />
-          <ActionCard
+          <HubCard
             icon={I.sliders} tone="fx-tone-amber"
             title={t('admin.card_policy_title')} desc={t('admin.card_policy_desc')}
             action={t('admin.card_policy_action')} onClick={() => onOpen('policy')}
           />
-          <ActionCard
+          <HubCard
             icon={I.clock} tone="fx-tone-green"
             title={t('admin.card_audit_title')} desc={t('admin.card_audit_desc')}
             action={t('admin.card_audit_action')} onClick={() => onOpen('audit')}
@@ -69,42 +72,46 @@ export function AdminOverview({ onOpen }: Props) {
         </div>
       </section>
 
-      <section>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
-          <p className="fx-hub-section-label">{t('admin.group_roles')}</p>
-          <button className="fx-pillbtn" onClick={() => onOpen('roles')}>{t('admin.roles_manage')}</button>
-        </div>
-        <div className="fx-card" style={{ marginTop: 10 }}>
-          <div className="fx-card-body">
-            <RolesMatrix />
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <p className="fx-hub-section-label">{t('admin.group_attention')}</p>
-        <div className="fx-attn" style={{ marginTop: 10 }}>
-          {recent.isPending && <div className="fx-empty">{t('common.loading')}</div>}
-          {!recent.isPending && (Array.isArray(recent.data) ? recent.data.length : 0) === 0 && (
-            <div className="fx-empty">{t('admin.attention_empty')}</div>
-          )}
-          {(Array.isArray(recent.data) ? recent.data : []).slice(0, 5).map((e) => (
-            <div className={'fx-attn-item ' + attentionTone(e.action)} key={e.id}>
-              <div style={{ minWidth: 0 }}>
-                <div className="fx-attn-title">{t(`admin.action_${e.action.replace(/\./g, '_')}`, e.action)}</div>
-                <div className="fx-attn-desc">
-                  {[e.target_email, e.actor_email && t('admin.by_actor', { email: e.actor_email })]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </div>
+      <section className="fx-adm-split">
+        <div className="fx-panel">
+          <div className="fx-panel-head">
+            <div>
+              <div className="fx-panel-title">{t('admin.group_roles')}</div>
+              <div className="fx-panel-desc">
+                {t('admin.roles_count', { count: metrics.data?.roles_in_use ?? 0 })}
               </div>
-              <span className="fx-attn-time">{relativeTime(e.created_at)}</span>
             </div>
-          ))}
+            <button className="fx-pillbtn" onClick={() => onOpen('roles')}>{t('admin.roles_manage')}</button>
+          </div>
+          <RolesMatrix />
         </div>
-        <button className="fx-pillbtn" style={{ marginTop: 10 }} onClick={() => onOpen('audit')}>
-          {t('admin.audit_open')}
-        </button>
+
+        <div className="fx-panel fx-panel-col">
+          <div className="fx-panel-title">{t('admin.group_attention')}</div>
+          <div className="fx-panel-desc">{t('admin.attention_desc')}</div>
+          <div className="fx-attn" style={{ marginTop: 16 }}>
+            {recent.isPending && <div className="fx-empty">{t('common.loading')}</div>}
+            {!recent.isPending && attention.length === 0 && (
+              <div className="fx-empty">{t('admin.attention_empty')}</div>
+            )}
+            {attention.slice(0, 5).map((e) => (
+              <div className={'fx-attn-item ' + attentionTone(e.action)} key={e.id}>
+                <div style={{ minWidth: 0 }}>
+                  <div className="fx-attn-title">{t(`admin.action_${e.action.replace(/\./g, '_')}`, e.action)}</div>
+                  <div className="fx-attn-desc">
+                    {[e.target_email, e.actor_email && t('admin.by_actor', { email: e.actor_email })]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </div>
+                </div>
+                <span className="fx-attn-time">{relativeTime(e.created_at)}</span>
+              </div>
+            ))}
+          </div>
+          <button className="fx-pillbtn" style={{ marginTop: 'auto' }} onClick={() => onOpen('audit')}>
+            {t('admin.audit_open')}
+          </button>
+        </div>
       </section>
     </div>
   )
@@ -184,31 +191,3 @@ function Metric({ tone, label, value, hint }: { tone: string; label: string; val
   )
 }
 
-function ActionCard({
-  icon, tone, title, desc, action, status, statusTone, onClick,
-}: {
-  icon: ReactNode
-  tone: string
-  title: string
-  desc: string
-  action: string
-  status?: string
-  statusTone?: string
-  onClick: () => void
-}) {
-  return (
-    <button type="button" className="fx-acard" onClick={onClick}>
-      <div className="fx-acard-head">
-        <span className={'fx-acard-icon ' + tone}><Icon d={icon} size={17} /></span>
-        {status && <span className={'fx-chip ' + (statusTone ?? '')}>{status}</span>}
-      </div>
-      <div>
-        <div className="fx-acard-title">{title}</div>
-        <div className="fx-acard-desc">{desc}</div>
-      </div>
-      <span className="fx-acard-action">
-        {action} <Icon d={I.chevronRight} size={12} />
-      </span>
-    </button>
-  )
-}
