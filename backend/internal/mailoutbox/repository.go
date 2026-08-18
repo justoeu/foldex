@@ -128,6 +128,39 @@ func (r *Repository) MarkFailed(ctx context.Context, id int64, claimToken, reaso
 	return nil
 }
 
+// MarkDead settles a row the broker gave up on.
+//
+// It exists because handing delivery to a queue moves the truth about it out of
+// the database: with MAIL_TRANSPORT=amqp, 'published' only means the broker
+// accepted the message, and a reset link that then failed every step of the
+// retry ladder would leave a row reading 'published' forever while the user got
+// nothing. The dead-letter watcher closes that gap by reporting the outcome
+// back — see DeadLetterWatcher for why the reporting process is the backend and
+// not the worker.
+//
+// No claim-token CAS here, unlike the other settle paths: the row is long past
+// its claim, and the authority for this transition is the broker's dead-letter
+// queue rather than a relay's in-flight lease. It is restricted to 'published'
+// so a message the queue re-delivers late cannot overwrite a fresher attempt
+// that was requeued and is pending again.
+// It reports whether a row actually changed. The caller MUST NOT treat a
+// zero-row update as success: it means the report arrived with nothing left to
+// report against — the row was already purged (published rows are dropped after
+// PublishedTTL), or a concurrent requeue moved it out of 'published'. Either
+// way the database no longer records that this message failed, and the only
+// remaining trace is whatever the caller logs. Collapsing that into "settled"
+// is how a lost reset link becomes invisible.
+func (r *Repository) MarkDead(ctx context.Context, id int64, reason string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE mail_outbox
+		SET status = 'failed', last_error = $2
+		WHERE id = $1 AND status = 'published'`, id, reason)
+	if err != nil {
+		return false, fmt.Errorf("mailoutbox: mark dead: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // RequeueStuck returns rows abandoned in flight to the pending state.
 //
 // A relay killed between the claim and the result leaves its row in

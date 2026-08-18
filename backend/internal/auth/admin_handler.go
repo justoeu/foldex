@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -261,23 +260,29 @@ func (h *AdminHandler) ForcePasswordReset(w http.ResponseWriter, r *http.Request
 			"administrator recovery requires SMTP delivery"))
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-	locale := localeFrom(r)
-	err = h.repo.CreateAdminPasswordRecovery(ctx, target, passwordResetTTL,
-		func(email, token string) error {
-			// Deliberately NOT the outbox. This is the one path that stays
-			// synchronous inside its transaction: SMTP refusing the message rolls
-			// the token back, so an administrator can never leave a live recovery
-			// credential behind for a mailbox that never received it. Moving it to
-			// the outbox would trade that for eventual delivery — a defensible
-			// trade, but a change to a security invariant, not a refactor.
-			msg, rerr := mailer.Render(mailer.AdminPasswordRecoveryMessage(email,
-				h.baseURL+"/#reset="+token, int(passwordResetTTL.Minutes())), locale)
-			if rerr != nil {
-				return rerr
+	// The recovery link now rides the outbox like every other credential mail.
+	//
+	// It used to send synchronously inside the transaction so that an SMTP
+	// refusal rolled the token back — an administrator must never leave a live
+	// recovery credential for a mailbox that never received it. The outbox keeps
+	// that property by DURABILITY instead of by coupling: token and message
+	// commit together, so "committed" already implies "will be delivered or
+	// recorded as failed". What is traded away is the immediate confirmation,
+	// and what is bought back is that a transient blip no longer denies the
+	// administrator an operation they are entitled to perform, discarding the
+	// token in the process.
+	//
+	// The SMTP-driver requirement above stays: the `log` driver prints the body
+	// to stdout, and this credential must never go there.
+	err = h.repo.CreateAdminPasswordRecovery(r.Context(), target, passwordResetTTL,
+		func(email, storedLocale string) MailDraft {
+			return MailDraft{
+				Locale: localeFor(storedLocale, r),
+				Build: func(token string) mailer.Envelope {
+					return mailer.AdminPasswordRecoveryMessage(email,
+						h.baseURL+"/#reset="+token, int(passwordResetTTL.Minutes()))
+				},
 			}
-			return h.mailer.Send(ctx, msg)
 		})
 	switch {
 	case errors.Is(err, ErrNoUser):
@@ -285,10 +290,6 @@ func (h *AdminHandler) ForcePasswordReset(w http.ResponseWriter, r *http.Request
 	case errors.Is(err, ErrRecoveryUnavailable):
 		httperr.Write(w, httperr.New(http.StatusConflict, "recovery_unavailable",
 			"the target must be active and have a verified e-mail address"))
-	case errors.Is(err, ErrRecoveryDelivery):
-		h.logger.Error("admin recovery mail", "err", err)
-		httperr.Write(w, httperr.New(http.StatusServiceUnavailable, "mail_unavailable",
-			"the recovery e-mail could not be delivered"))
 	case err != nil:
 		h.logger.Error("admin recovery", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -515,6 +516,10 @@ func (h *AdminHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The invitee has no account yet, so there is no stored preference to read
+	// and the inviter's Accept-Language is genuinely the only signal available.
+	// That is inherent to inviting a stranger, not a gap in the lookup.
+	//
 	// Trimmed HERE so the address that receives the invitation is byte-identical
 	// to the one stored on the row: CreateInvite persists strings.TrimSpace(email),
 	// and building the message from the raw field would mail a pasted address with

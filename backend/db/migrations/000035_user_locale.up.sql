@@ -1,0 +1,22 @@
+-- Idioma preferido da conta, editável pelo próprio usuário no perfil.
+--
+-- Antes disso, o idioma de todo e-mail vinha do Accept-Language da requisição
+-- que o disparou. Isso funciona para quem pede o próprio reset de senha, e falha
+-- exatamente onde o remetente não é o destinatário: um convite mandado por um
+-- administrador anglófono chegava em inglês para um convidado lusófono, porque o
+-- header lido era o do admin.
+--
+-- NULL significa "sem preferência", não "inglês". A distinção importa: uma conta
+-- que nunca escolheu continua caindo no Accept-Language de quem disparou, que é
+-- o comportamento atual e costuma acertar; forçar um default aqui trocaria um
+-- palpite razoável por um fixo. A resolução final fica sendo
+-- preferência → header → 'en'.
+--
+-- Sem CHECK contra uma lista de idiomas. Os catálogos vivem em
+-- internal/mailer/templates e mudam com o binário, enquanto um CHECK só muda com
+-- migration — as duas listas divergiriam na primeira vez que um idioma fosse
+-- adicionado, e a direção da divergência (banco recusando um idioma que o
+-- binário sabe renderizar) é a pior das duas. A validação é do handler, contra
+-- os catálogos realmente carregados, e um valor desconhecido degrada para o
+-- fallback em vez de quebrar o envio.
+ALTER TABLE app_user ADD COLUMN locale TEXT;

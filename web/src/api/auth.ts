@@ -73,8 +73,16 @@ export async function logout(): Promise<void> {
  * is identity and role/status are administration. Answers with the same
  * payload shape /me uses, so callers can adopt the refreshed user directly.
  */
-export async function updateProfile(name: string): Promise<MeResponse> {
-  const { data } = await http.patch<MeResponse>('/api/auth/profile', { name })
+/** Updates the two fields an account controls about itself.
+ *
+ *  `locale` is tri-state, matching the server: omitted keeps the stored
+ *  preference, `''` clears it back to following the browser, and a code sets
+ *  it. Without the empty case a user who once picked a language could never
+ *  go back. */
+export async function updateProfile(name: string, locale?: string): Promise<MeResponse> {
+  const body: { name: string; locale?: string } = { name }
+  if (locale !== undefined) body.locale = locale
+  const { data } = await http.patch<MeResponse>('/api/auth/profile', body)
   return data
 }
 

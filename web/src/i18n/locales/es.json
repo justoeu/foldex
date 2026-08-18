@@ -1124,7 +1124,11 @@
     "err_name_too_long": "El nombre debe tener como máximo 120 caracteres.",
     "logout_all_action": "Cerrar sesión en todos los dispositivos",
     "logout_all_title": "¿Cerrar sesión en todos los dispositivos?",
-    "logout_all_message": "Todas las sesiones de esta cuenta — incluida esta — se cerrarán. Los tokens se conservan."
+    "logout_all_message": "Todas las sesiones de esta cuenta — incluida esta — se cerrarán. Los tokens se conservan.",
+    "locale_label": "Idioma",
+    "locale_auto": "Seguir mi navegador",
+    "locale_hint": "Se usa en los correos que esta instancia te envía: códigos de acceso, enlaces de restablecimiento y avisos.",
+    "err_locale_unsupported": "Ese idioma no es uno de los que ofrece esta instancia."
   },
   "usermenu": {
     "aria": "Menú de cuenta",

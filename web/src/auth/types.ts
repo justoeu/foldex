@@ -53,6 +53,10 @@ export type AuthUser = {
   status: 'pending' | 'active' | 'disabled'
   has_password: boolean
   totp_enabled: boolean
+  /** Preferred language for e-mail. Empty/absent means "follow the browser":
+   *  the server then falls back to the Accept-Language of whoever triggered
+   *  the message, and only then to English. */
+  locale?: string
   email_verified_at?: string
   last_login_at?: string
   created_at: string

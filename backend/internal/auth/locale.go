@@ -7,19 +7,28 @@ import (
 	"foldex/internal/mailer"
 )
 
-// localeFrom picks the language for an e-mail from the request that triggered
-// it.
+// localeFor picks the language of one message.
 //
-// The header, not a stored preference: there is no `app_user.locale` column
-// yet, and the request is the only signal available for the flows that matter
-// most — forgot-password and invite acceptance both run for someone who is not
-// signed in, so there is no account to read a preference from anyway.
+// The RECIPIENT's own preference wins, then the Accept-Language of whoever
+// triggered the send, then English. That order is the whole point of the profile
+// field: an invitation sent by an English-speaking administrator used to reach a
+// Portuguese-speaking user in English, because the only signal available was the
+// admin's header.
 //
-// The known cost, and it is real: a message triggered by a DIFFERENT actor
-// takes that actor's language. An invitation sent by an English-speaking
-// administrator reaches a Portuguese-speaking invitee in English. Fixing that
-// needs a column on app_user, which is a deliberate follow-up rather than
-// something to guess at here.
+// An invitation is the one case the order cannot help — the invitee has no
+// account yet, so there is no preference to read and the header is genuinely all
+// there is. That is inherent to inviting someone, not a gap in the lookup.
+func localeFor(preference string, r *http.Request) string {
+	if preference != "" {
+		return mailer.NormalizeLocale(preference)
+	}
+	return localeFrom(r)
+}
+
+// localeFrom reads the language out of the triggering request.
+//
+// It is the fallback, and the only source for an invitation, whose recipient
+// has no account to hold a preference.
 //
 // Parsing is intentionally shallow. Accept-Language's q-values order
 // alternatives, and honouring them properly means a parser plus a matcher for

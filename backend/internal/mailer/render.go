@@ -262,14 +262,28 @@ func SupportedLocales() []string {
 // language and a `pt-PT` that fell through to English would be worse than a
 // `pt-BR` rendering.
 func NormalizeLocale(locale string) string {
+	l, _ := LookupLocale(locale)
+	return l
+}
+
+// LookupLocale is NormalizeLocale plus the answer to "was that recognised?".
+//
+// The distinction only matters where a tag is STORED rather than rendered.
+// NormalizeLocale collapses both `pt-BR` and `klingon` to a shipped catalogue,
+// which is right for picking a language to render in — never fail a message
+// over a locale — but useless for validating a profile field, where the two
+// cases must be told apart. A validator built on the normalized value alone can
+// only compare it against its input, which then rejects every tag a browser
+// actually sends (`pt-BR`, `PT`, `en-US`) as if it were unsupported.
+func LookupLocale(locale string) (string, bool) {
 	l := strings.ToLower(strings.TrimSpace(locale))
 	if i := strings.IndexAny(l, "-_"); i > 0 {
 		l = l[:i]
 	}
 	if _, ok := std.catalogs[l]; ok {
-		return l
+		return l, true
 	}
-	return DefaultLocale
+	return DefaultLocale, false
 }
 
 func (a *assets) render(env Envelope, locale string) (Message, error) {

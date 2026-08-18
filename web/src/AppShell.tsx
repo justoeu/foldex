@@ -8,6 +8,7 @@ import { FolderDialog } from './components/FolderDialog'
 import { CommandPalette } from './components/CommandPalette'
 import { TooltipPortal } from './components/TooltipPortal'
 import { Icon, I } from './components/icons'
+import { useAccountLocale } from './i18n/useAccountLocale'
 import type { Entry, Folder } from './api/types'
 import type { AppWorkspaceController, AppView } from './AppWorkspace'
 import type { AppNavigationController } from './AppNavigation'
@@ -46,6 +47,7 @@ type Props = {
 
 export function AppShell(props: Props) {
   const { workspace } = props
+  useAccountLocale()
   return (
     <div className={workspace.dark ? 'fx-shell fx-dark-shell' : 'fx-shell'}>
       <Aurora />

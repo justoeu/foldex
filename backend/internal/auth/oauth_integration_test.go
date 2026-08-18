@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/auth"
+	"foldex/internal/mailer"
 	"foldex/internal/oauthgoogle"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/secrets"
@@ -1636,10 +1637,15 @@ func TestAdminRecoverySupersedingAConcurrentResetCannotApplyTheOldToken(t *testi
 	recoveryErr := make(chan error, 1)
 	go func() {
 		recoveryErr <- h.repo.CreateAdminPasswordRecovery(context.Background(), uid, time.Minute,
-			func(string, string) error {
+			// draftFor runs INSIDE the transaction, right before the enqueue and
+			// commit, which makes it the pause point this test needs now that the
+			// send is no longer synchronous. What is being proven is unchanged:
+			// the app_user row stays locked for the whole recovery, so a
+			// concurrent ConsumePasswordReset cannot apply the superseded token.
+			func(string, string) auth.MailDraft {
 				close(deliveryStarted)
 				<-releaseDelivery
-				return nil
+				return auth.MailDraft{}
 			})
 	}()
 	<-deliveryStarted
@@ -1690,7 +1696,18 @@ func TestAdminRecoveryTokenCannotMutateAfterTargetIsDisabled(t *testing.T) {
 	assert.True(t, originalWorks, "the refused reset removed the existing password")
 }
 
-func TestAdmin_ForcePasswordResetSMTPFailureDoesNotMutateAnything(t *testing.T) {
+// A transport outage no longer costs the administrator the operation.
+//
+// This used to assert 503 mail_unavailable and that NOTHING was written: the
+// send was synchronous inside the transaction, so SMTP refusing rolled the
+// token back. ADR-36 §12.1 changed that deliberately — token and message commit
+// together and the message is retried, so a blip stops discarding a recovery
+// the administrator is entitled to start.
+//
+// What must STILL hold, and is what this now proves: the target's password,
+// sessions and credential epoch are untouched until they consume the link
+// themselves. An administrator starts a recovery; they never install one.
+func TestAdmin_ForcePasswordResetSurvivesATransportOutage(t *testing.T) {
 	h, _ := newGoogleHarness(t, harnessOpts{SMTP: true})
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 	uid := h.inviteAndAccept(t, admin, "user@example.com", "the user's password")
@@ -1698,30 +1715,37 @@ func TestAdmin_ForcePasswordResetSMTPFailureDoesNotMutateAnything(t *testing.T) 
 	h.mail.fail(errors.New("smtp unavailable"))
 
 	var hashBefore string
-	var epochBefore, resetsBefore, sessionsBefore int
+	var epochBefore, sessionsBefore int
 	require.NoError(t, h.pool.QueryRow(context.Background(), `
 		SELECT password_hash, token_version FROM app_user WHERE id = $1`, int64(uid)).
 		Scan(&hashBefore, &epochBefore))
-	require.NoError(t, h.pool.QueryRow(context.Background(), `SELECT count(*) FROM password_reset`).Scan(&resetsBefore))
 	require.NoError(t, h.pool.QueryRow(context.Background(), `
 		SELECT count(*) FROM session WHERE user_id = $1 AND revoked_at IS NULL`, int64(uid)).Scan(&sessionsBefore))
 
 	rec := admin.do(http.MethodPost, "/api/admin/users/"+itoa(int64(uid))+"/force-password-reset", nil)
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Equal(t, "mail_unavailable", errCode(t, rec))
+	assert.Equal(t, http.StatusAccepted, rec.Code, "a transport outage must no longer deny the operation")
+
+	// The credential exists and so does its message — the whole point of one
+	// transaction — and the message is still queued for a retry.
+	var resets, queued int
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM password_reset WHERE user_id = $1 AND consumed_at IS NULL`,
+		int64(uid)).Scan(&resets))
+	require.NoError(t, h.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM mail_outbox WHERE template = $1`, mailer.TemplateAdminRecovery).Scan(&queued))
+	assert.Equal(t, 1, resets)
+	assert.Equal(t, 1, queued, "the token was created without a message to carry it")
 
 	var hashAfter string
-	var epochAfter, resetsAfter, sessionsAfter int
+	var epochAfter, sessionsAfter int
 	require.NoError(t, h.pool.QueryRow(context.Background(), `
 		SELECT password_hash, token_version FROM app_user WHERE id = $1`, int64(uid)).
 		Scan(&hashAfter, &epochAfter))
-	require.NoError(t, h.pool.QueryRow(context.Background(), `SELECT count(*) FROM password_reset`).Scan(&resetsAfter))
 	require.NoError(t, h.pool.QueryRow(context.Background(), `
 		SELECT count(*) FROM session WHERE user_id = $1 AND revoked_at IS NULL`, int64(uid)).Scan(&sessionsAfter))
-	assert.Equal(t, hashBefore, hashAfter)
-	assert.Equal(t, epochBefore, epochAfter)
-	assert.Equal(t, resetsBefore, resetsAfter)
-	assert.Equal(t, sessionsBefore, sessionsAfter)
+	assert.Equal(t, hashBefore, hashAfter, "the admin changed the target's password")
+	assert.Equal(t, epochBefore, epochAfter, "the admin moved the target's credential epoch")
+	assert.Equal(t, sessionsBefore, sessionsAfter, "the admin revoked the target's sessions")
 }
 
 func TestAdmin_ForcePasswordResetRequiresSMTPAndAVerifiedTarget(t *testing.T) {
