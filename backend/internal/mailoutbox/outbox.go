@@ -83,17 +83,9 @@ func (o *Outbox) EnqueueTx(ctx context.Context, tx pgx.Tx, env mailer.Envelope, 
 	if env.Template == "" || env.To == "" {
 		return fmt.Errorf("mailoutbox: envelope needs a template and a recipient")
 	}
-	params := env.Params
-	if params == nil {
-		params = map[string]string{}
-	}
-	plain, err := json.Marshal(params)
+	ciphertext, nonce, err := o.Seal(env.Params)
 	if err != nil {
-		return fmt.Errorf("mailoutbox: marshal params: %w", err)
-	}
-	ciphertext, nonce, err := o.cipher.Encrypt(plain)
-	if err != nil {
-		return fmt.Errorf("mailoutbox: encrypt params: %w", err)
+		return err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO mail_outbox (template, recipient, payload_ciphertext, payload_nonce, locale)
@@ -102,6 +94,28 @@ func (o *Outbox) EnqueueTx(ctx context.Context, tx pgx.Tx, env mailer.Envelope, 
 		return fmt.Errorf("mailoutbox: enqueue: %w", err)
 	}
 	return nil
+}
+
+// Seal encrypts a param set, producing exactly what a queued row stores.
+//
+// Exported as the counterpart to Open so the pair is symmetric and a caller
+// that holds a message outside the database — the AMQP wire format, a test
+// building a delivery — is not tempted to reimplement the encoding. Getting a
+// second implementation of this wrong would not fail loudly; it would produce
+// ciphertext the worker rejects as `undecryptable_payload`.
+func (o *Outbox) Seal(params map[string]string) (ciphertext, nonce []byte, err error) {
+	if params == nil {
+		params = map[string]string{}
+	}
+	plain, err := json.Marshal(params)
+	if err != nil {
+		return nil, nil, fmt.Errorf("mailoutbox: marshal params: %w", err)
+	}
+	ciphertext, nonce, err = o.cipher.Encrypt(plain)
+	if err != nil {
+		return nil, nil, fmt.Errorf("mailoutbox: encrypt params: %w", err)
+	}
+	return ciphertext, nonce, nil
 }
 
 // Open reverses EnqueueTx's encryption for one claimed row.

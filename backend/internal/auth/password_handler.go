@@ -84,12 +84,12 @@ func (h *Handler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		// the current password during conversion refused to allow.
 		// No credential is minted here, so there is no transaction to join.
 		h.enqueueMail(r.Context(), mailer.PasswordResetUnavailableMessage(user.Email),
-			localeFrom(r), "password reset unavailable")
+			localeFor(user.Locale, r), "password reset unavailable")
 	case eligible:
 		// The token and its e-mail commit together. The link exists nowhere but
 		// in that message — the table keeps only a sha256 — and this endpoint's
 		// own cooldown means a user whose mail was lost cannot simply ask again.
-		draft := MailDraft{Locale: localeFrom(r), Build: func(token string) mailer.Envelope {
+		draft := MailDraft{Locale: localeFor(user.Locale, r), Build: func(token string) mailer.Envelope {
 			return mailer.PasswordResetMessage(user.Email,
 				h.baseURL+"/#reset="+token, int(passwordResetTTL.Minutes()))
 		}}
@@ -275,7 +275,7 @@ func (h *Handler) SendEmailVerification(w http.ResponseWriter, r *http.Request) 
 	// instance policy, and a link that promises thirty minutes while expiring in
 	// five is a support ticket wearing a feature.
 	ttl := h.otpTTL(r.Context())
-	draft := MailDraft{Locale: localeFrom(r), Build: func(token string) mailer.Envelope {
+	draft := MailDraft{Locale: localeFor(user.Locale, r), Build: func(token string) mailer.Envelope {
 		return mailer.VerifyEmailMessage(user.Email,
 			h.baseURL+"/#verify="+token, int(ttl.Minutes()))
 	}}

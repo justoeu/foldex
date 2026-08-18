@@ -134,6 +134,11 @@ type User struct {
 	// enrollment that was started and abandoned does not count — it would make
 	// the UI claim protection the user cannot actually satisfy.
 	TOTPEnabled bool `json:"totp_enabled"`
+	// Locale is the account's preferred language for e-mail, chosen in the
+	// profile. Empty means "no preference", which is NOT the same as English:
+	// without one, a message falls back to the Accept-Language of whoever
+	// triggered it, and only then to the default.
+	Locale string `json:"locale,omitempty"`
 	// TokenVersion is the credential epoch used only at repository boundaries.
 	// Keeping it off the wire prevents clients from treating it as a claim.
 	TokenVersion int `json:"-"`

@@ -1,15 +1,16 @@
 # SDD — E-mail assíncrono (outbox + RabbitMQ) e segundo fator por e-mail
 
-> Software Design Document. Status: **Fase 1 entregue · fases 2 e 3 propostas · v0.2 · 2026-08-17**
+> Software Design Document. Status: **Fases 1, A e B entregues · fase C proposta · v0.3 · 2026-08-18**
 >
-> A fase 1 (outbox transacional, relay `inproc`, templates i18n) está implementada;
-> os desvios entre o que este documento propôs e o que subiu estão em §10.1, cada
-> um com o motivo. As fases 2 (RabbitMQ) e 3 (e-mail como segundo fator) seguem
-> como proposta e dependem das questões em §12.
+> Implementado: fase 1 (outbox transacional, relay `inproc`, templates i18n),
+> fase A (`locale` no perfil + force-reset assíncrono) e fase B (transporte
+> AMQP, `cmd/mailer`, escada de retry, dead-letter). Os desvios entre o que este
+> documento propôs e o que subiu estão em §10.1, cada um com o motivo. A fase C
+> (e-mail como segundo fator, §7) segue como proposta.
 >
 > Cobre ADR-36 (entrega de e-mail durável, com transporte plugável) e ADR-37
 > (e-mail como segundo fator permanente, e não apenas como escape de um desafio
-> TOTP). Migrations `000034_mail_outbox` e `000035_email_second_factor`.
+> TOTP). Migrações `000034_mail_outbox`, `000035_user_locale` e `000036_email_second_factor`.
 >
 > Este documento **altera quatro invariantes** já registrados em `CLAUDE.md` §4.
 > Cada alteração é nomeada explicitamente em §11, com o motivo e o que passa a
@@ -267,7 +268,7 @@ CREATE INDEX mail_outbox_stuck_idx
 `published` some depois de 7 dias; `failed` fica 90 dias (é evidência operacional,
 e a mesma janela da trilha de auditoria).
 
-### 3.2 Migration `000035_email_second_factor`
+### 3.2 Migration `000036_email_second_factor`
 
 ```sql
 CREATE TABLE email_factor (
@@ -666,16 +667,120 @@ recusando o fator e-mail em desafio nascido de reset.
 
 ---
 
-## 12. Open questions
+## 12. Decisões (resolvidas em 2026-08-18)
 
-1. **Force-reset assíncrono.** Item 2 do §11. Acho a mudança melhor — hoje um blip
-   de SMTP nega ao admin uma operação que ele tem direito de fazer, e o token é
-   descartado — mas é mudança de invariante de segurança e precisa de aval.
-2. **`admin_second_factor`**: piso `any` (e-mail conta para admin) ou `totp_only`?
-3. **Origem do `locale`**: coluna em `app_user` (persistente; funciona quando o
-   envio é disparado por outro ator, como um convite) ou `Accept-Language` da
-   requisição (zero migration, mas o convite sai no idioma do admin)? Recomendo a
-   coluna.
-4. **Vhost do broker**: dedicado (`/foldex`) com usuário próprio, ou compartilhar o
-   vhost existente? Dedicado isola permissão e facilita quota; compartilhado é menos
-   coisa para provisionar.
+As quatro questões foram respondidas pelo dono da instância. Ficam aqui com a
+resposta e o que cada uma implica, porque duas delas mexem em invariante.
+
+### 12.1 Force-reset administrativo passa a ser assíncrono — **aprovado**
+
+O `503 mail_unavailable` deixa de existir. Token e mensagem commitam juntos e a
+entrega é garantida-eventual, como todo o resto.
+
+O que se preserva é a propriedade que motivava a regra — *um administrador nunca
+instala uma credencial que o alvo não recebe* — agora por **durabilidade** em vez
+de por acoplamento síncrono: a mensagem não pode ser perdida, então "commitou"
+passa a implicar "vai chegar". O que se perde é a confirmação imediata: antes o
+admin sabia na hora que o SMTP aceitou; agora ele sabe que a mensagem existe e
+será entregue ou marcada `failed`. O ganho é que um blip transitório deixa de
+negar ao administrador uma operação a que ele tem direito, descartando o token.
+
+A exigência de `MAIL_DRIVER=smtp` continua: o driver `log` imprime o corpo no
+stdout, e essa credencial não pode ir para lá.
+
+### 12.2 `admin_second_factor` — piso **`any`**
+
+E-mail conta como segundo fator para administrador. O dono pode apertar para
+`totp_only` pela política da instância.
+
+**A objeção que motivou a decisão está correta e vale registrar**, porque a
+formulação anterior deste documento a tratava com menos rigor do que devia: com
+senha + e-mail o atacante precisa **das duas** coisas. O fator e-mail não é
+decorativo e isso não é "um fator disfarçado de dois".
+
+O ponto que sobra é mais estreito: os dois fatores **não são independentes**,
+porque a caixa postal é também o canal que reseta a senha — quem a controla ganha
+um fator de graça e tem um caminho para tentar o outro no mesmo lugar. O que
+impede esse fechamento é `mailbox_already_proven` (§7.2), que **permanece
+intacto**. A diferença remanescente em relação ao TOTP não é aritmética de
+fatores, é de superfície: comprometer caixa postal é muito mais comum que
+comprometer um autenticador, e a caixa costuma ser protegida por senha — mesma
+classe de credencial, com risco de reuso. Daí o knob existir, com piso no
+comportamento mais permissivo.
+
+### 12.3 `locale` vira preferência de perfil — **coluna, editável pelo usuário**
+
+Mais forte que a opção que este documento recomendava. Não é só uma coluna em
+`app_user`: é um campo **do perfil**, que o próprio usuário edita em
+Configurações, ao lado do nome.
+
+Consequências:
+
+- Migration `000035_user_locale` adiciona `app_user.locale` (nullable — NULL
+  significa "sem preferência" e mantém o comportamento atual).
+- `PATCH /api/auth/profile` passa a aceitar `locale`, validado contra os
+  catálogos que existem, com a mesma DTO estrita que já recusa campo desconhecido.
+- A resolução passa a ser: **preferência do destinatário → `Accept-Language` de
+  quem disparou → `en`**. Isso resolve o caso que o §10.1 registrou como custo
+  conhecido: um convite disparado por administrador anglófono agora chega no
+  idioma do convidado, se ele tiver escolhido um. Para um convite, o convidado
+  ainda não tem conta — então ali o header continua sendo a única fonte, e isso
+  é inerente, não uma lacuna de implementação.
+- O seletor da topbar (hoje só `localStorage`) passa a refletir a preferência
+  salva quando existe, para não haver duas verdades sobre o idioma.
+
+### 12.4 Broker — **vhost dedicado**
+
+`/foldex` com usuário próprio. Isola permissão, permite quota separada e mantém a
+fila fora do alcance dos outros projetos que compartilham o servidor. O custo é
+uma etapa de provisionamento a mais, documentada no README.
+
+---
+
+## 13. Ordem de execução do que resta
+
+| Fase | Escopo | Depende de | Estado |
+|---|---|---|---|
+| **A** | `locale` no perfil (12.3) + force-reset assíncrono (12.1) | — | **entregue** |
+| **B** | `MAIL_TRANSPORT=amqp`, sink AMQP, `cmd/mailer`, vhost dedicado (12.4) | — | **entregue** |
+| **C** | `email_factor`, cadastro, `has_second_factor`, step-up, `admin_second_factor` (12.2) | A (locale) | proposta |
+
+A e B eram independentes entre si. C usa o `locale` de A para o código de
+cadastro, e é a maior das três.
+
+### 13.1 Onde a fase B divergiu deste documento
+
+**A escada de retry virou uma fila por degrau.** §5 descrevia uma fila `.retry`
+única com `x-message-ttl` escalonado (`60000 | 300000 | 1800000`), o que não é
+implementável como escrito: uma fila tem UM TTL, e a alternativa — TTL por
+mensagem — esbarra no fato de o RabbitMQ expirar mensagens apenas a partir da
+CABEÇA. Uma mensagem de 30 minutos na frente seguraria todas as de 1 minuto
+atrás dela, e o backoff passaria a ser "o maior degrau que alguém já pediu".
+Ficaram três filas (`.retry.1m`, `.retry.5m`, `.retry.30m`), cada uma com o seu
+próprio TTL, e cada degrau espera exatamente o que promete.
+
+**O contador de tentativas não é `x-death`.** §5 propunha contar as passagens
+pelo header `x-death`. Ele existe, mas sua semântica difere entre tipos de fila e
+entre versões do broker, e o número que decide se um link de reset é abandonado
+não deveria depender disso. O worker mantém `x-foldex-attempt` e o lê tolerando
+qualquer largura de inteiro que um cliente AMQP tenha usado para codificá-lo.
+
+**O worker republica em vez de dar nack.** §6 dizia `Nack(requeue=false)` para o
+DLX cuidar do backoff. Isso só funciona com um destino fixo: o nack roteia pela
+`x-dead-letter-routing-key` da fila, que não sabe escolher um degrau. O worker
+publica explicitamente no DLX com a chave do degrau e só então dá `Ack`. O custo
+é reentrega numa janela de crash, sobre uma mensagem que já havia FALHADO.
+
+**Ganhou um `DeadLetterWatcher`, que o documento não previa.** §5 dizia que "ao
+esgotar o escalonamento o worker roteia para `.dead` e o relay marca
+`status='failed'`" — mas o relay não consome nada e §6 proíbe o worker de falar
+com o Postgres, então ninguém marcaria. Sem alguém fechando esse laço,
+`published` passaria a significar apenas "o broker aceitou", e uma mensagem morta
+no último degrau deixaria a linha lendo `published` para sempre. O watcher roda
+no **backend** (que já tem o banco), consome `foldex.mail.dead` e lê apenas id e
+razão — ambos fora do blob cifrado —, então a proibição de §6 fica intacta.
+
+**`config.LoadMailer` existe porque `config.Load` exige `DB_URL`.** O documento
+não tratou disso, e sem um carregador separado o worker precisaria receber uma
+DSN que nunca abre — desfazendo exatamente o isolamento que motivou o binário
+separado.

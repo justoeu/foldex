@@ -516,7 +516,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		// The family is already dead by the time this returns. Warn the owner
 		// out-of-band: if the token really was stolen, this is the only signal
 		// they will get.
-		h.notifyReuse(r.Context(), res.UserID, localeFrom(r))
+		h.notifyReuse(r.Context(), res.UserID, r)
 		h.cookies.ClearSession(w)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "session_revoked",
 			"session was revoked; sign in again"))
@@ -549,16 +549,17 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 // notifyReuse tells the owner their sessions were killed.
-func (h *Handler) notifyReuse(ctx context.Context, uid authctx.UserID, locale string) {
+func (h *Handler) notifyReuse(ctx context.Context, uid authctx.UserID, r *http.Request) {
 	h.logger.Warn("refresh token reuse detected — session family revoked", "user_id", int64(uid))
 	if uid == 0 {
 		return
 	}
-	email, err := h.repo.EmailForUser(ctx, uid)
+	email, recipientLocale, err := h.repo.RecipientForUser(ctx, uid)
 	if err != nil {
 		return
 	}
-	h.enqueueMail(ctx, mailer.SessionRevokedMessage(email), locale, "reuse notification")
+	h.enqueueMail(ctx, mailer.SessionRevokedMessage(email),
+		localeFor(recipientLocale, r), "reuse notification")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -628,6 +629,11 @@ func (h *Handler) authenticatedPayload(u User, csrf string) authenticatedAuthRes
 
 type updateProfileInput struct {
 	Name string `json:"name"`
+	// Locale is tri-state on the wire: absent keeps the stored preference, ""
+	// clears it back to following the browser, and a value sets it. A plain
+	// string could not express "clear", and a user who chose a language once
+	// would be stuck with it.
+	Locale *string `json:"locale"`
 }
 
 // maxProfileNameRunes bounds the display name. The column is TEXT, so the DB
@@ -656,10 +662,23 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 			"name must be at most 120 characters"))
 		return
 	}
-	// UpdateUser with nil role/status is a plain rename: no last-admin guard
-	// can trigger, and the advisory lock it takes is the same one every other
-	// app_user write serializes on.
-	user, err := h.repo.UpdateUser(r.Context(), p.UserID, &name, nil, nil)
+	// An unknown locale is refused rather than stored and silently ignored at
+	// render time: the account would keep showing a language it never gets, and
+	// the only clue would be the e-mail arriving in English.
+	//
+	// Recognised-and-normalized, not byte-identical: `pt-BR` and `PT` are
+	// languages this instance ships, and rejecting them would refuse the exact
+	// tags a browser hands over while the send path resolves them happily.
+	if in.Locale != nil && *in.Locale != "" {
+		normalized, ok := mailer.LookupLocale(*in.Locale)
+		if !ok {
+			httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_locale",
+				"locale must be one of the languages this instance ships"))
+			return
+		}
+		in.Locale = &normalized
+	}
+	user, err := h.repo.UpdateOwnProfile(r.Context(), p.UserID, name, in.Locale)
 	if err != nil {
 		h.logger.Error("update profile", "err", err)
 		httperr.Write(w, httperr.ErrInternal)

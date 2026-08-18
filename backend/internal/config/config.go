@@ -27,7 +27,34 @@ type MailConfig struct {
 	STARTTLS           bool
 	TLS                bool
 	InsecureSkipVerify bool
+
+	// Transport decides who SENDS. "inproc" (default) renders and sends inside
+	// the backend; "amqp" forwards the still-sealed message to a broker for
+	// cmd/mailer to pick up. An unknown value refuses to boot rather than
+	// falling back, because a silent downgrade is invisible until an operator
+	// scales the workers and wonders where half the mail went.
+	Transport      string
+	AMQPURL        string
+	AMQPExchange   string
+	AMQPQueue      string
+	AMQPRoutingKey string
+	AMQPPrefetch   int
+
+	// OutboxBatch and OutboxPollSec tune the relay's drain loop. Both are
+	// clamped rather than validated: they are throughput knobs, and an operator
+	// who typos one should get the default, not a backend that will not start.
+	OutboxBatch   int
+	OutboxPollSec int
 }
+
+// MailTransport values.
+const (
+	MailTransportInproc = "inproc"
+	MailTransportAMQP   = "amqp"
+)
+
+// UsesBroker reports whether the relay should publish to AMQP.
+func (m MailConfig) UsesBroker() bool { return m.Transport == MailTransportAMQP }
 
 // ObjectStoreConfig holds S3-compatible object-storage parameters (RustFS).
 type ObjectStoreConfig struct {
@@ -190,18 +217,7 @@ func Load() (Config, error) {
 		GoogleClientID:          os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret:      os.Getenv("GOOGLE_CLIENT_SECRET"),
 		PublicNumericIDs:        envBool("PUBLIC_NUMERIC_IDS", false),
-		Mail: MailConfig{
-			Driver:             envOr("MAIL_DRIVER", "log"),
-			Host:               os.Getenv("MAIL_HOST"),
-			Port:               envInt("MAIL_PORT", 587),
-			Username:           os.Getenv("MAIL_USERNAME"),
-			Password:           os.Getenv("MAIL_PASSWORD"),
-			From:               envOr("MAIL_FROM", "foldex@localhost"),
-			FromName:           envOr("MAIL_FROM_NAME", "Foldex"),
-			STARTTLS:           envBool("MAIL_STARTTLS", true),
-			TLS:                envBool("MAIL_TLS", false),
-			InsecureSkipVerify: envBool("MAIL_INSECURE_SKIP_VERIFY", false),
-		},
+		Mail:                    mailFromEnv(),
 		ObjectStore: ObjectStoreConfig{
 			// RUSTFS_* is canonical. MINIO_* is accepted as a one-release
 			// migration fallback so existing .env files keep working.
@@ -241,6 +257,7 @@ func Load() (Config, error) {
 		cfg.ChangeCheckConcurrency = resourcebudget.BackgroundWorkerConcurrency
 	}
 	cfg.normalizeAuth()
+	cfg.normalizeMail()
 	if err := cfg.validateSecureDefaults(); err != nil {
 		return cfg, err
 	}
@@ -347,6 +364,85 @@ func issuerFromURL(raw string) string {
 	return "Foldex (" + strings.ReplaceAll(host, ":", "-") + ")"
 }
 
+func mailFromEnv() MailConfig {
+	return MailConfig{
+		Driver:             envOr("MAIL_DRIVER", "log"),
+		Host:               os.Getenv("MAIL_HOST"),
+		Port:               envInt("MAIL_PORT", 587),
+		Username:           os.Getenv("MAIL_USERNAME"),
+		Password:           os.Getenv("MAIL_PASSWORD"),
+		From:               envOr("MAIL_FROM", "foldex@localhost"),
+		FromName:           envOr("MAIL_FROM_NAME", "Foldex"),
+		STARTTLS:           envBool("MAIL_STARTTLS", true),
+		TLS:                envBool("MAIL_TLS", false),
+		InsecureSkipVerify: envBool("MAIL_INSECURE_SKIP_VERIFY", false),
+		Transport:          envOr("MAIL_TRANSPORT", MailTransportInproc),
+		AMQPURL:            os.Getenv("AMQP_URL"),
+		AMQPExchange:       envOr("AMQP_EXCHANGE", "foldex.mail"),
+		AMQPQueue:          envOr("AMQP_QUEUE", "foldex.mail.send"),
+		AMQPRoutingKey:     envOr("AMQP_ROUTING_KEY", "send"),
+		AMQPPrefetch:       envInt("AMQP_PREFETCH", 4),
+		OutboxBatch:        envInt("MAIL_OUTBOX_BATCH", 32),
+		OutboxPollSec:      envInt("MAIL_OUTBOX_POLL_SEC", 5),
+	}
+}
+
+// LoadMailer reads what cmd/mailer needs, and nothing else.
+//
+// A separate entry point rather than Load with a relaxed check, because the
+// difference is the point: the worker must boot WITHOUT a DB_URL. Requiring one
+// it never opens would push operators into handing the process that decrypts
+// reset links a database credential too — undoing the isolation the separate
+// binary exists to create.
+//
+// The bind-related refusals in validateSecureDefaults are skipped for the same
+// reason: this process listens on nothing.
+func LoadMailer() (Config, error) {
+	cfg := Config{
+		Mail:                  mailFromEnv(),
+		AuthEncryptionKey:     os.Getenv("AUTH_ENCRYPTION_KEY"),
+		AuthEncryptionKeyPath: envOr("AUTH_ENCRYPTION_KEY_PATH", "/data/auth_encryption.key"),
+	}
+	cfg.normalizeMail()
+	if err := cfg.validateMailTransport(); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// normalizeMail clamps the relay and broker throughput knobs.
+//
+// Clamped rather than rejected, for the same reason as the session knobs: these
+// are tuning values with no security floor. The one mail setting that DOES
+// refuse — an unknown MAIL_TRANSPORT — is in validateSecureDefaults, because
+// there the wrong answer is a silent downgrade rather than a slow one.
+func (c *Config) normalizeMail() {
+	if c.Mail.Transport == "" {
+		c.Mail.Transport = MailTransportInproc
+	}
+	// Unset or nonsensical gets the DEFAULT, not the floor: 0 and -5 are both
+	// "the operator did not mean this", and answering with 1 would quietly
+	// serialize every send on an instance that asked for nothing of the sort.
+	if c.Mail.AMQPPrefetch < 1 {
+		c.Mail.AMQPPrefetch = 4
+	}
+	if c.Mail.AMQPPrefetch > 64 {
+		c.Mail.AMQPPrefetch = 64
+	}
+	if c.Mail.OutboxBatch < 1 {
+		c.Mail.OutboxBatch = 32
+	}
+	if c.Mail.OutboxBatch > 512 {
+		c.Mail.OutboxBatch = 512
+	}
+	if c.Mail.OutboxPollSec < 1 {
+		c.Mail.OutboxPollSec = 5
+	}
+	if c.Mail.OutboxPollSec > 300 {
+		c.Mail.OutboxPollSec = 300
+	}
+}
+
 // validateSecureDefaults refuses to boot when the API would be network-
 // reachable without authentication. CORS is NOT authentication — a restricted
 // origin list does not stop curl/scripts from hitting the API.
@@ -386,7 +482,58 @@ func (c Config) validateSecureDefaults() error {
 				" (non-loopback) — certificate verification may only be disabled for a local test server",
 		)
 	}
+	if err := c.validateMailTransport(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateMailTransport refuses the three ways the broker wiring fails quietly.
+func (c Config) validateMailTransport() error {
+	// Empty is UNSET, not unknown. normalizeMail fills it in on the Load path,
+	// but this function must not depend on having run after it: the guard is
+	// about an operator typing a transport that does not exist, and reading a
+	// zero-valued Config as a typo would refuse a configuration nobody wrote.
+	switch c.Mail.Transport {
+	case "", MailTransportInproc:
+		return nil
+	case MailTransportAMQP:
+	default:
+		return errors.New(
+			"insecure config: unknown MAIL_TRANSPORT=" + c.Mail.Transport +
+				` (want "inproc" or "amqp")`,
+		)
+	}
+	// Falling back to inproc here would be the worst outcome: mail would keep
+	// working, so nothing looks broken, while every message an operator expects
+	// to see on the broker is instead sent by the backend they scaled workers
+	// away from.
+	if strings.TrimSpace(c.Mail.AMQPURL) == "" {
+		return errors.New("insecure config: MAIL_TRANSPORT=amqp requires AMQP_URL")
+	}
+	// The message on the wire is sealed, but the URL's own credential is not,
+	// and neither is the routing metadata. Plaintext AMQP to a remote broker
+	// puts the broker password on the network in clear, exactly as
+	// MAIL_INSECURE_SKIP_VERIFY does for SMTP.
+	if host, ok := amqpHost(c.Mail.AMQPURL); ok && !isLocalBind(host) {
+		return errors.New(
+			"insecure config: AMQP_URL uses amqp:// against a non-loopback host (" + host +
+				") — use amqps:// so the broker credential is not sent in clear",
+		)
+	}
+	return nil
+}
+
+// amqpHost reports the hostname of a PLAINTEXT amqp:// URL. The second return
+// is false for amqps:// and for anything unparseable — an unparseable URL is
+// the dialer's problem to report, and reporting it here would mean echoing a
+// string that carries the broker password.
+func amqpHost(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "amqp" {
+		return "", false
+	}
+	return u.Hostname(), true
 }
 
 // urlScheme reports the scheme of a configured absolute URL.

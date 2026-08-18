@@ -1124,7 +1124,11 @@
     "err_name_too_long": "The name must be at most 120 characters.",
     "logout_all_action": "Sign out everywhere",
     "logout_all_title": "Sign out on every device?",
-    "logout_all_message": "Every session of this account — including this one — will be signed out. Tokens are kept."
+    "logout_all_message": "Every session of this account — including this one — will be signed out. Tokens are kept.",
+    "locale_label": "Language",
+    "locale_auto": "Follow my browser",
+    "locale_hint": "Used for the e-mails this instance sends you — sign-in codes, reset links and notifications.",
+    "err_locale_unsupported": "That language is not one this instance ships."
   },
   "usermenu": {
     "aria": "Account menu",

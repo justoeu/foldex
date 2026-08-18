@@ -16,6 +16,7 @@ RUN go mod download
 COPY . .
 RUN GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/foldex ./cmd/server
 RUN GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/rustfs-bootstrap ./cmd/rustfs-bootstrap
+RUN GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/foldex-mailer ./cmd/mailer
 
 # One-shot init image: create app IAM user + bucket-scoped policy on RustFS.
 # Used by docker-compose.services.yml `rustfs-init` (target: rustfs-bootstrap).
@@ -41,6 +42,15 @@ COPY --from=build /out/foldex /foldex
 # Ship bootstrap alongside the server so operators can re-run it from the
 # backend image without a separate pull (`docker compose run …`).
 COPY --from=build /out/rustfs-bootstrap /rustfs-bootstrap
+# The AMQP mail worker (MAIL_TRANSPORT=amqp) rides in this image too, started by
+# overriding the entrypoint — docker-compose.yml's `mailer` service does exactly
+# that. A separate, slimmer image would suit it better (it needs neither
+# Chromium nor the migrations), but publishing a third image means a third
+# Docker Hub repository and a third arm on the release matrix, and a compose
+# service pointing at a tag the release workflow never pushes is worse than a
+# fat image. The isolation that actually matters is preserved regardless: the
+# mailer container gets no DB_URL, and cmd/mailer cannot ask for one.
+COPY --from=build /out/foldex-mailer /foldex-mailer
 COPY db/migrations /migrations
 EXPOSE 9089
 # Run as non-root so Chromium can keep its process sandbox enabled.

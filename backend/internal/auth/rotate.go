@@ -332,13 +332,27 @@ func revokeFamily(ctx context.Context, tx pgx.Tx, familyID, reason string) error
 
 // EmailForUser fetches an address for the reuse-detection warning mail.
 func (r *Repository) EmailForUser(ctx context.Context, uid authctx.UserID) (string, error) {
-	var email string
-	err := r.pool.QueryRow(ctx, `SELECT email FROM app_user WHERE id = $1`, int64(uid)).Scan(&email)
+	email, _, err := r.RecipientForUser(ctx, uid)
+	return email, err
+}
+
+// RecipientForUser fetches the address AND the account's language preference.
+//
+// Both in one query because they are always wanted together: every caller that
+// needs the address needs it in order to send something, and sending in the
+// wrong language is the defect this column exists to fix. A second round trip
+// per message would be the alternative.
+//
+// The locale is empty when the account never chose one, which the caller
+// resolves against the request instead — see localeFor.
+func (r *Repository) RecipientForUser(ctx context.Context, uid authctx.UserID) (email, locale string, err error) {
+	err = r.pool.QueryRow(ctx,
+		`SELECT email, coalesce(locale, '') FROM app_user WHERE id = $1`, int64(uid)).Scan(&email, &locale)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrNoUser
+		return "", "", ErrNoUser
 	}
 	if err != nil {
-		return "", fmt.Errorf("email for user: %w", err)
+		return "", "", fmt.Errorf("recipient for user: %w", err)
 	}
-	return email, nil
+	return email, locale, nil
 }

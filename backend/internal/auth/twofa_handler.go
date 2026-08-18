@@ -272,7 +272,7 @@ func (h *Handler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 		// Spending a recovery code is either a user with a new phone or an
 		// attacker holding the printed sheet. The owner is the only one who can
 		// tell, and only if told.
-		h.notifyRecoveryCodeUsed(r.Context(), user, localeFrom(r))
+		h.notifyRecoveryCodeUsed(r.Context(), user, localeFor(user.Locale, r))
 	}
 	h.cookies.ClearPreAuth(w)
 	h.cookies.SetSession(w, tok)
@@ -362,7 +362,7 @@ func (h *Handler) SendEmailOTP(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	email, err := h.repo.EmailForUser(r.Context(), ch.UserID)
+	email, recipientLocale, err := h.repo.RecipientForUser(r.Context(), ch.UserID)
 	if err != nil {
 		h.logger.Error("otp recipient", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -374,7 +374,7 @@ func (h *Handler) SendEmailOTP(w http.ResponseWriter, r *http.Request) {
 	// challenge's budget of three is the scarce resource here: charging it and
 	// then losing the message would burn one of the user's three chances on a
 	// mail that never existed.
-	draft := MailDraft{Locale: localeFrom(r), Build: func(string) mailer.Envelope {
+	draft := MailDraft{Locale: localeFor(recipientLocale, r), Build: func(string) mailer.Envelope {
 		// The MAILED lifetime is the one just persisted, not the constant: a
 		// message promising five minutes for a code that expires in two is a
 		// support ticket wearing a feature.

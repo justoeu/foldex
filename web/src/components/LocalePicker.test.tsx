@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { screen, within, fireEvent } from '@testing-library/react'
+import { screen, within, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { LocalePicker } from './LocalePicker'
-import { renderWithProviders } from '../test/renderWithProviders'
+import { renderWithProviders, testAdminSession } from '../test/renderWithProviders'
+import { http } from '../api/client'
 import i18n from '../i18n'
 
 const langName = /language|idioma/i
@@ -115,5 +116,69 @@ describe('LocalePicker', () => {
 
     expect(screen.queryByRole('menu')).toBeNull()
     expect(spy).not.toHaveBeenCalled()
+  })
+
+  // The picker and the profile field are ONE setting. Without the write-through
+  // the account keeps its old preference, and useAccountLocale re-applies it on
+  // the next load — silently undoing a choice the user watched take effect.
+  it('carries the pick to the account so the next load does not undo it', async () => {
+    const user = userEvent.setup()
+    const patch = vi.spyOn(http, 'patch').mockResolvedValue({ data: {
+      status: 'authenticated',
+      user: { ...(testAdminSession as { user: object }).user, locale: 'pt' },
+      csrf_token: 'test-csrf-token',
+      features: (testAdminSession as { features: object }).features,
+    } } as never)
+
+    renderWithProviders(<LocalePicker />)
+    await user.click(screen.getByRole('button', { name: langName }))
+    await user.click(screen.getByRole('menuitem', { name: /Português/ }))
+
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith('/api/auth/profile', { name: 'Test Admin', locale: 'pt' }))
+  })
+
+  it('does not write when the account already holds that language', async () => {
+    const user = userEvent.setup()
+    const patch = vi.spyOn(http, 'patch')
+    const session = testAdminSession as { user: Record<string, unknown> }
+    renderWithProviders(<LocalePicker />, {
+      session: { ...testAdminSession, user: { ...session.user, locale: 'pt' } } as never,
+    })
+
+    await user.click(screen.getByRole('button', { name: langName }))
+    await user.click(screen.getByRole('menuitem', { name: /Português/ }))
+
+    expect(patch).not.toHaveBeenCalled()
+  })
+
+  // A failed write must revert NOW. Leaving it would show the new language
+  // until some later mount reverted it from the server value — a change the
+  // user could not connect to anything they did.
+  it('reverts the language when the account write fails', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(http, 'patch').mockRejectedValue(new Error('offline') as never)
+    renderWithProviders(<LocalePicker />)
+
+    await user.click(screen.getByRole('button', { name: langName }))
+    await user.click(screen.getByRole('menuitem', { name: /Português/ }))
+
+    await waitFor(() => expect(i18n.resolvedLanguage).toBe('en'))
+    expect(screen.getByRole('button', { name: langName })).toHaveTextContent('en')
+  })
+
+  // Auth screens render the picker too, and there is no account to write to.
+  it('changes the language with no session and writes nothing', async () => {
+    const user = userEvent.setup()
+    const patch = vi.spyOn(http, 'patch')
+    renderWithProviders(<LocalePicker />, {
+      session: { status: 'anonymous', features: (testAdminSession as { features: object }).features } as never,
+    })
+
+    await user.click(screen.getByRole('button', { name: langName }))
+    await user.click(screen.getByRole('menuitem', { name: /Español/ }))
+
+    await waitFor(() => expect(i18n.resolvedLanguage).toBe('es'))
+    expect(patch).not.toHaveBeenCalled()
   })
 })

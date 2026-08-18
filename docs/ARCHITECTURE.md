@@ -120,6 +120,7 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 -- 000032_rbac_four_roles  → owner/admin/editor/viewer + índice parcial de dono único
 -- 000033_audit_log        → trilha administrativa (ADR-34)
 -- 000034_mail_outbox      → outbox transacional de e-mail, payload cifrado (ADR-36)
+-- 000035_user_locale      → idioma preferido da conta; NULL = sem preferência (ADR-36 §12.3)
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -1036,7 +1037,7 @@ Escrita é do owner, leitura de qualquer admin: um admin precisa ver as regras s
 A conta provisionada e sua identidade nascem na MESMA transação, porque o trigger deferido da migração 000021 exige que conta ativa tenha ao menos uma credencial e essa conta nunca terá senha: linha e identidade só são legais juntas. O provisionamento desemboca em `oauthComplete` como qualquer login vinculado, o que mantém a política de segundo fator valendo em vez de abrir a única porta que a pula.
 
 ### ADR-36 — E-mail durável: outbox transacional e transporte plugável
-**Status:** Accepted — fase 1 implementada (outbox + relay `inproc` + templates i18n); fase 2 (RabbitMQ, `cmd/mailer`) permanece proposta. Detalhado em [`docs/SDD-EMAIL-ASYNC.md`](SDD-EMAIL-ASYNC.md). Migração `000034_mail_outbox`.
+**Status:** Accepted — fases 1 e 2 implementadas (outbox + relay `inproc` + templates i18n; transporte AMQP + `cmd/mailer` + escada de retry + dead-letter). Detalhado em [`docs/SDD-EMAIL-ASYNC.md`](SDD-EMAIL-ASYNC.md). Migrações `000034_mail_outbox` e `000035_user_locale`.
 
 A entrega era in-process, efêmera e sem retry: fila de 32 slots em memória, 2 workers, e um `Send` que falha é logado e descartado. `Stop()` cancela o que está em voo em vez de drenar. Restart, deploy ou blip de rede no provedor perdem convite, link de reset e código de login em silêncio — e o usuário vê `202` e espera para sempre.
 
@@ -1052,10 +1053,14 @@ Decisão: a mensagem é gravada em `mail_outbox` na **mesma transação** que a 
 
 Duas garantias operacionais vêm de colunas, não de disciplina. O `claim_token` (CAS na liquidação) impede que um relay que dormiu além do TTL de claim sobrescreva o resultado de outro que já refez o trabalho; e o backoff é uma coluna porque um `sleep` no worker seguraria o slot e transformaria um destinatário lento em fila parada para todo mundo. Falha permanente — `unknown_template`, `undecryptable_payload` — liquida na hora em vez de gastar seis tentativas no que não pode passar a funcionar.
 
-**Consequência NÃO adotada nesta fase:** o force-reset administrativo **continua síncrono**. Uma falha de SMTP ainda dá rollback no token e responde `503`. A mudança descrita acima permanece defensável — hoje um blip transitório nega ao administrador uma operação a que ele tem direito — mas é alteração de invariante de segurança, e fica pendente de decisão explícita (§12.1 do SDD) em vez de entrar como efeito colateral de um refactor de entrega.
+**O force-reset administrativo passou a ser assíncrono (§12.1, aprovado).** O `503 mail_unavailable` deixou de existir: token e mensagem commitam juntos e a entrega é garantida-eventual como todo o resto. A propriedade que motivava o envio síncrono — *um administrador nunca instala uma credencial que o alvo não recebe* — é preservada por **durabilidade** em vez de acoplamento. Junto saiu a re-verificação de elegibilidade pós-envio, e a ausência dela é o ponto: ela defendia uma janela que só existia porque o envio bloqueava dentro da transação, e a linha de `app_user` agora fica travada `FOR NO KEY UPDATE` da leitura até o commit. A exigência de `MAIL_DRIVER=smtp` permanece, porque o driver `log` imprimiria essa credencial no stdout.
+
+**Fase 2 — o que a topologia AMQP resolve, e o que ela custa.** O sink `amqp` publica o **mesmo blob selado** que a linha guarda, com publisher confirms obrigatórios: sem confirm, publicar é fire-and-forget fantasiado de durabilidade, e o relay marcaria `published` com base numa escrita em socket. A escada de retry é **uma fila por degrau** (`.retry.1m`/`.5m`/`.30m`) e não um TTL por mensagem numa fila só, porque o RabbitMQ expira apenas a partir da CABEÇA: uma mensagem de 30 minutos na frente seguraria todas as mais curtas atrás dela. E o worker **republica explicitamente** em vez de dar nack, porque o nack roteia pela `dead-letter-routing-key` fixa da fila, que não sabe dizer "espere um minuto desta vez, meia hora na próxima"; o custo é que um crash entre o publish e o ack reentrega uma mensagem que já havia FALHADO, que é a direção inofensiva.
+
+O custo real da fase 2 é **semântico**: entregar ao broker move a verdade sobre a entrega para fora do banco, e `published` passaria a significar apenas "o broker aceitou". Sem nada a mais, um link de reset que morresse no último degrau deixaria a linha lendo `published` para sempre. Quem fecha isso é o `DeadLetterWatcher`, e ele roda no **backend**, não no worker: consome `foldex.mail.dead`, lê um id e uma razão normalizada — ambos viajam FORA do blob cifrado — e chama `MarkDead`. Assim o relatório nunca precisa da chave, e o worker continua sendo o único processo que decifra, sem nenhuma credencial de Postgres (`config.LoadMailer` existe exatamente para ele subir sem `DB_URL`).
 
 ### ADR-37 — E-mail como segundo fator permanente, e não escape de um desafio TOTP
-**Status:** Proposed — detalhado em [`docs/SDD-EMAIL-ASYNC.md`](SDD-EMAIL-ASYNC.md). Migração `000035_email_second_factor`.
+**Status:** Proposed — detalhado em [`docs/SDD-EMAIL-ASYNC.md`](SDD-EMAIL-ASYNC.md). Migração `000036_email_second_factor`.
 
 OTP por e-mail existia só como escape dentro de um desafio que já era TOTP: `emailFactorAvailable` exige `purpose == PurposeTOTP`, e o desafio só nasce `totp` quando a conta já tem autenticador confirmado. Conta sem TOTP nunca recebe desafio, então `/2fa/email` era inalcançável para ela. Quem não quer instalar um autenticador não tinha segundo fator algum.
 

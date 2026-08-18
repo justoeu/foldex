@@ -33,10 +33,12 @@ type Message struct {
 
 // Mailer sends transactional mail.
 //
-// Most callers dispatch and log send failures. Credential-critical callers may
-// instead keep their transaction open until Send succeeds; administrator-forced
-// password recovery deliberately does this so a failed SMTP send publishes no
-// reset token.
+// Nothing calls this from inside a transaction any more. Credential-critical
+// senders used to hold their transaction open until Send returned — that is how
+// administrator-forced password recovery avoided publishing a token it could not
+// deliver — and the outbox replaced the technique with a stronger one: the
+// message commits WITH the credential, and delivery happens afterwards from a
+// row that cannot be lost. Callers here are the relay and cmd/mailer.
 type Mailer interface {
 	Send(ctx context.Context, m Message) error
 	// Driver names the active transport, surfaced through /api/auth/me's

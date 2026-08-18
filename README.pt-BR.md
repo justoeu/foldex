@@ -447,7 +447,52 @@ entrada. Um envio que falha é retentado com backoff crescente (1 min → 5 → 
 inspecionar. O payload guardado é cifrado com uma subchave derivada de `AUTH_ENCRYPTION_KEY` — uma linha na
 fila contém um link de redefinição vivo, e um dump do banco não pode ser um kit de
 sequestro de conta. As mensagens são renderizadas na hora do envio, em inglês,
-português ou espanhol, seguindo o `Accept-Language` da requisição que as disparou.
+português ou espanhol, seguindo o **idioma escolhido no perfil do destinatário**,
+depois o `Accept-Language` de quem disparou o envio, depois inglês. O convite é a
+única mensagem que não consegue honrar uma preferência, porque o convidado ainda
+não tem conta.
+
+**Idioma.** Cada conta escolhe o seu em *Configurações → Perfil*, ao lado do nome
+de exibição. Deixar em *Seguir meu navegador* é uma escolha de verdade, não a
+ausência de uma: mantém o comportamento atual, em que o idioma é adivinhado por
+requisição. O seletor da topbar e o campo do perfil são a mesma configuração —
+mudar qualquer um dos dois com a sessão aberta atualiza a conta, para que o idioma
+da tela seja o idioma da sua caixa de entrada.
+
+**Envio pelo RabbitMQ (opcional).** `MAIL_TRANSPORT` é `inproc` por padrão, em que
+o próprio backend renderiza e envia as mensagens da fila. Isso não exige broker
+nenhum e não perde nada: durabilidade, retry e backoff vêm todos da tabela
+`mail_outbox`. Use `MAIL_TRANSPORT=amqp` com um `AMQP_URL` para entregar a mensagem
+ainda cifrada a um broker e rodar o envio em container próprio:
+
+```bash
+docker compose --profile amqp up -d          # sobe o worker `mailer`
+```
+
+| Var | Padrão | Significado |
+|---|---|---|
+| `MAIL_TRANSPORT` | `inproc` | `inproc` \| `amqp`. Valor desconhecido recusa o boot |
+| `AMQP_URL` | — | Obrigatório para `amqp`. `amqp://` para host **remoto** é recusado; use `amqps://` |
+| `AMQP_EXCHANGE` | `foldex.mail` | Renomeie só para compartilhar um broker entre instâncias |
+| `AMQP_QUEUE` | `foldex.mail.send` | |
+| `AMQP_PREFETCH` | `4` | Clampado em 1..64 |
+| `MAIL_OUTBOX_BATCH` | `32` | Linhas que o relay reivindica por passada |
+| `MAIL_OUTBOX_POLL_SEC` | `5` | De quanto em quanto tempo ele olha |
+
+O worker recebe `AUTH_ENCRYPTION_KEY` (é o único processo que abre o payload) e
+**nenhuma credencial de banco** — essa separação é justamente o motivo de ele
+rodar à parte. Envios que falham sobem uma escada de retry em filas dedicadas
+(1 min → 5 min → 30 min) e depois caem em `foldex.mail.dead`, que o backend
+observa para que a linha do outbox ainda termine marcada como `failed`.
+
+Num broker compartilhado, dê ao foldex vhost e usuário próprios em vez do padrão:
+
+```bash
+rabbitmqctl add_vhost /foldex
+rabbitmqctl add_user foldex '<senha>'
+rabbitmqctl set_permissions -p /foldex foldex '^foldex\.' '^foldex\.' '^foldex\.'
+# AMQP_URL=amqps://foldex:<senha>@broker.example:5671/%2Ffoldex
+```
 
 **O que cada conta enxerga.** Tudo é privado por conta — administradores inclusive. Um
 admin cria, desabilita e apaga usuários, mas nunca vê os links ou notas de outra conta.

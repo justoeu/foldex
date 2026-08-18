@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import i18n from 'i18next'
 import { useMutation } from '@tanstack/react-query'
 import { Icon, I } from './icons'
 import { useConfirm } from './ConfirmDialog'
@@ -7,6 +8,7 @@ import * as auth from '../api/auth'
 import { http } from '../api/client'
 import { useAuth } from '../auth/AuthProvider'
 import { apiErrorCode as errCode } from '../lib/apiError'
+import { SUPPORTED_LOCALES } from '../i18n'
 
 /** Mirrors the backend's maxProfileNameRunes — both caps count CHARACTERS, so
  *  a CJK-heavy name is judged identically on client and server. */
@@ -38,19 +40,36 @@ export function ProfileSection({ onAfterSignOut }: { onAfterSignOut?: () => void
   const user = session.status === 'authenticated' ? session.user : null
 
   const [name, setName] = useState(user?.name ?? '')
+  // '' is a real, selectable value: "follow my browser". It is what lets
+  // someone undo a choice, which a plain list of languages cannot express.
+  const [locale, setLocale] = useState(user?.locale ?? '')
   const [error, setError] = useState('')
   const [ok, setOk] = useState(false)
 
   const rename = useMutation({
-    mutationFn: () => auth.updateProfile(name),
+    // locale travels ONLY when it changed. Sending the field on every save
+    // would make a plain rename overwrite whatever preference is stored — and
+    // if it had been changed from another tab or device since this screen
+    // loaded, the rename would silently undo it. Omitting it is what the
+    // tri-state on both sides exists for.
+    mutationFn: () =>
+      auth.updateProfile(name, locale === (user?.locale ?? '') ? undefined : locale),
     onSuccess: (me) => {
       setError('')
       setOk(true)
       adopt(me)
+      // The interface follows the choice immediately. Leaving the two out of
+      // step would mean the account claims one language while the screen shows
+      // another, and the user has no way to tell which one the e-mail will use.
+      const saved = me.status === 'authenticated' ? me.user.locale : undefined
+      if (saved) void i18n.changeLanguage(saved)
     },
     onError: (e) => {
       setOk(false)
-      setError(errCode(e) === 'invalid_name' ? t('profile.err_name_too_long') : t('auth_errors.generic'))
+      const code = errCode(e)
+      if (code === 'invalid_name') setError(t('profile.err_name_too_long'))
+      else if (code === 'invalid_locale') setError(t('profile.err_locale_unsupported'))
+      else setError(t('auth_errors.generic'))
     },
   })
 
@@ -86,7 +105,7 @@ export function ProfileSection({ onAfterSignOut }: { onAfterSignOut?: () => void
   }
 
   if (!user) return null
-  const dirty = name.trim() !== (user.name ?? '')
+  const dirty = name.trim() !== (user.name ?? '') || locale !== (user.locale ?? '')
 
   return (
     <section className="fx-card">
@@ -130,6 +149,28 @@ export function ProfileSection({ onAfterSignOut }: { onAfterSignOut?: () => void
             />
           </div>
           <span className="fx-field-hint">{t('profile.name_hint')}</span>
+        </label>
+
+        <label className="fx-field" style={{ margin: 0 }}>
+          <span className="fx-field-label">{t('profile.locale_label')}</span>
+          <div className="fx-input">
+            <select
+              value={locale}
+              onChange={(e) => {
+                setLocale(e.target.value)
+                setError('')
+                setOk(false)
+              }}
+              aria-label={t('profile.locale_label')}
+              style={{ width: '100%', border: 0, background: 'transparent', font: 'inherit', color: 'inherit' }}
+            >
+              <option value="">{t('profile.locale_auto')}</option>
+              {SUPPORTED_LOCALES.map(({ code, label, flag }) => (
+                <option key={code} value={code}>{flag} {label}</option>
+              ))}
+            </select>
+          </div>
+          <span className="fx-field-hint">{t('profile.locale_hint')}</span>
         </label>
 
         {error && (

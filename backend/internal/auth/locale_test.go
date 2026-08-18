@@ -73,3 +73,28 @@ func TestRepositoryWithoutAnOutboxRefusesMail(t *testing.T) {
 		Build: func(string) mailer.Envelope { return mailer.SessionRevokedMessage("a@b.c") },
 	}, "tok"))
 }
+
+// The recipient's own preference outranks the header of whoever triggered the
+// message. That order is the entire reason app_user.locale exists: an invitation
+// sent by an English-speaking administrator used to reach a Portuguese-speaking
+// user in English, because the admin's header was the only signal available.
+func TestLocaleForPrefersTheRecipientOverTheSender(t *testing.T) {
+	t.Parallel()
+	senderIsEnglish := httptest.NewRequest(http.MethodGet, "/", nil)
+	senderIsEnglish.Header.Set("Accept-Language", "en-GB")
+
+	assert.Equal(t, "pt", localeFor("pt", senderIsEnglish),
+		"the recipient's stored preference must win over the sender's header")
+	assert.Equal(t, "en", localeFor("", senderIsEnglish),
+		"with no preference the sender's header is the best signal available")
+
+	senderIsSpanish := httptest.NewRequest(http.MethodGet, "/", nil)
+	senderIsSpanish.Header.Set("Accept-Language", "es")
+	assert.Equal(t, "es", localeFor("", senderIsSpanish))
+
+	// A stored value is normalized like any other: a preference saved as pt-BR
+	// by an older client still resolves to the catalogue that exists.
+	assert.Equal(t, "pt", localeFor("pt-BR", senderIsSpanish))
+	// And an unknown stored value degrades instead of breaking the send.
+	assert.Equal(t, "en", localeFor("kl", senderIsSpanish))
+}

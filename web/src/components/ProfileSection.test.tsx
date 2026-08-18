@@ -49,6 +49,60 @@ describe('ProfileSection', () => {
     patch.mockRestore()
   })
 
+  it('sends the language only when it changed, so a rename cannot undo it', async () => {
+    const session = testAdminSession as { user: object; features: object }
+    const patch = vi.spyOn(http, 'patch').mockResolvedValue({ data: {
+      status: 'authenticated',
+      user: { ...session.user, name: 'Valmir Justo' },
+      csrfToken: 'test-csrf-token',
+      features: session.features,
+    } } as never)
+
+    renderWithProviders(<ProfileSection />)
+    const user = userEvent.setup()
+
+    const field = screen.getByLabelText(/display name/i)
+    await user.clear(field)
+    await user.type(field, 'Valmir Justo')
+    await user.click(screen.getByRole('button', { name: /save name/i }))
+
+    // The language field was never touched, so it must not travel. Sending it
+    // would overwrite whatever is stored — including a value changed from
+    // another tab since this screen loaded.
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('/api/auth/profile', { name: 'Valmir Justo' }))
+    patch.mockRestore()
+  })
+
+  it('saves a chosen language alongside the name', async () => {
+    const session = testAdminSession as { user: object; features: object }
+    const patch = vi.spyOn(http, 'patch').mockResolvedValue({ data: {
+      status: 'authenticated',
+      user: { ...session.user, locale: 'pt' },
+      csrfToken: 'test-csrf-token',
+      features: session.features,
+    } } as never)
+
+    renderWithProviders(<ProfileSection />)
+    const user = userEvent.setup()
+
+    await user.selectOptions(screen.getByLabelText(/language/i), 'pt')
+    await user.click(screen.getByRole('button', { name: /save name/i }))
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith('/api/auth/profile', { name: 'Test Admin', locale: 'pt' }))
+    patch.mockRestore()
+  })
+
+  it('offers following the browser as a real choice, not only the languages', () => {
+    renderWithProviders(<ProfileSection />)
+    const select = screen.getByLabelText(/language/i)
+
+    // Without an explicit "follow my browser" entry, a user who picked a
+    // language once would have no way back to the default.
+    const options = Array.from(select.querySelectorAll('option')).map((o) => o.value)
+    expect(options).toContain('')
+    expect(options).toEqual(expect.arrayContaining(['en', 'pt', 'es']))
+  })
+
   it('keeps save disabled until the name changes (no spurious API calls)', async () => {
     const patch = vi.spyOn(http, 'patch')
     renderWithProviders(<ProfileSection />)

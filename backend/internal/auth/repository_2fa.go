@@ -70,9 +70,6 @@ var (
 	// ErrRecoveryUnavailable means an administrator targeted an account that is
 	// not active or whose mailbox has not been verified.
 	ErrRecoveryUnavailable = errors.New("auth: recovery requires an active account with verified e-mail")
-	// ErrRecoveryDelivery makes SMTP failure distinguishable from database
-	// failure while preserving the transport error for server-side logging.
-	ErrRecoveryDelivery = errors.New("auth: recovery mail delivery failed")
 )
 
 // Challenge is the pre-auth state between "password OK" and "second factor OK".
@@ -1192,14 +1189,22 @@ func (r *Repository) CreatePasswordReset(ctx context.Context, uid authctx.UserID
 	return raw, nil
 }
 
-// CreateAdminPasswordRecovery publishes a reset token only after SMTP accepts
-// it for the target's verified mailbox. The transaction remains uncommitted
-// during delivery, so a transport failure rolls back both the new token and the
-// superseding of any previous token. It does not touch the password, sessions,
-// token epoch or second factor; those change only when the target consumes the
-// token through ConsumePasswordReset.
+// CreateAdminPasswordRecovery mints a reset token for the target's verified
+// mailbox and queues the message carrying it in the SAME transaction, so the
+// token and the mail that delivers it cannot exist without each other.
+//
+// This used to block on SMTP inside the transaction, and rolled the token back
+// when the transport refused. The property that arrangement protected — an
+// administrator never installs a credential the target does not receive — now
+// comes from DURABILITY instead: the message is in the outbox, so "committed"
+// implies "will be delivered or recorded as failed". What changed is that a
+// transient provider blip no longer denies the administrator an operation they
+// are entitled to perform.
+//
+// It does not touch the password, sessions, token epoch or second factor; those
+// change only when the target consumes the token through ConsumePasswordReset.
 func (r *Repository) CreateAdminPasswordRecovery(ctx context.Context, uid authctx.UserID,
-	ttl time.Duration, deliver func(email, rawToken string) error) error {
+	ttl time.Duration, draftFor func(email, storedLocale string) MailDraft) error {
 
 	raw, hash, err := secrets.NewToken()
 	if err != nil {
@@ -1211,13 +1216,13 @@ func (r *Repository) CreateAdminPasswordRecovery(ctx context.Context, uid authct
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var email, status string
+	var email, status, storedLocale string
 	var verifiedAt *time.Time
 	var tokenVersion int
 	err = tx.QueryRow(ctx, `
-		SELECT email, status, email_verified_at, token_version
+		SELECT email, status, email_verified_at, token_version, coalesce(locale, '')
 		FROM app_user WHERE id = $1
-		FOR NO KEY UPDATE`, int64(uid)).Scan(&email, &status, &verifiedAt, &tokenVersion)
+		FOR NO KEY UPDATE`, int64(uid)).Scan(&email, &status, &verifiedAt, &tokenVersion, &storedLocale)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNoUser
 	}
@@ -1238,22 +1243,15 @@ func (r *Repository) CreateAdminPasswordRecovery(ctx context.Context, uid authct
 		VALUES ($1, $2, $3, now() + $4::interval)`, int64(uid), hash, tokenVersion, intervalArg(ttl)); err != nil {
 		return fmt.Errorf("admin recovery insert: %w", err)
 	}
-	if err := deliver(email, raw); err != nil {
-		return fmt.Errorf("%w: %w", ErrRecoveryDelivery, err)
+	if err := r.enqueueDraft(ctx, tx, draftFor(email, storedLocale), raw); err != nil {
+		return fmt.Errorf("queue admin recovery mail: %w", err)
 	}
-	// Delivery can block on the SMTP timeout. Re-check the authorization state
-	// under the same row lock before publishing the token so a concurrently
-	// disabled account or changed mailbox cannot receive a stale recovery grant.
-	var stillEligible bool
-	if err := tx.QueryRow(ctx, `
-		SELECT status = 'active' AND email_verified_at IS NOT NULL
-		       AND email = $2 AND token_version = $3
-		FROM app_user WHERE id = $1`, int64(uid), email, tokenVersion).Scan(&stillEligible); err != nil {
-		return fmt.Errorf("admin recovery recheck: %w", err)
-	}
-	if !stillEligible {
-		return ErrRecoveryUnavailable
-	}
+	// The post-delivery re-check that used to sit here is GONE, and its absence
+	// is the point rather than an oversight. It existed because the send blocked
+	// on the SMTP timeout INSIDE this transaction, opening a window in which the
+	// account could be disabled or its address changed while we waited. Queuing
+	// is instant and the row stays locked FOR NO KEY UPDATE from the read above
+	// to the commit below, so there is no longer a window to re-check.
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("admin recovery commit: %w", err)
 	}

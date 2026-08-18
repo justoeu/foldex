@@ -441,7 +441,52 @@ up after six attempts, leaving the row as `failed` for you to inspect. The store
 payload is encrypted with a subkey derived from `AUTH_ENCRYPTION_KEY` — a queued row holds a live reset
 link, and a database dump must not be an account-takeover kit. Messages are
 rendered when they are sent, in English, Portuguese or Spanish, following the
-`Accept-Language` of the request that triggered them.
+**language chosen in the recipient's profile**, then the `Accept-Language` of
+whoever triggered the send, then English. An invitation is the one message that
+cannot follow a preference, because the invitee has no account yet.
+
+**Language.** Each account picks its own in *Settings → Profile*, next to the
+display name. Leaving it on *Follow my browser* is a real choice, not an absent
+one: it keeps the current behaviour, where the language is guessed per request.
+The topbar picker and the profile field are the same setting — changing either
+while signed in updates the account, so the language on screen is the language
+in your inbox.
+
+**Sending through RabbitMQ (optional).** `MAIL_TRANSPORT` defaults to `inproc`,
+where the backend renders and sends the queued messages itself. That needs no
+broker and loses nothing: durability, retry and backoff all come from the
+`mail_outbox` table. Set `MAIL_TRANSPORT=amqp` with an `AMQP_URL` to hand the
+still-encrypted message to a broker instead and run the sending in its own
+container:
+
+```bash
+docker compose --profile amqp up -d          # starts the `mailer` worker
+```
+
+| Var | Default | Meaning |
+|---|---|---|
+| `MAIL_TRANSPORT` | `inproc` | `inproc` \| `amqp`. An unknown value refuses to boot |
+| `AMQP_URL` | — | Required for `amqp`. `amqp://` to a **remote** host is refused; use `amqps://` |
+| `AMQP_EXCHANGE` | `foldex.mail` | Rename only to share one broker between instances |
+| `AMQP_QUEUE` | `foldex.mail.send` | |
+| `AMQP_PREFETCH` | `4` | Clamped to 1..64 |
+| `MAIL_OUTBOX_BATCH` | `32` | Rows the relay claims per pass |
+| `MAIL_OUTBOX_POLL_SEC` | `5` | How often it looks |
+
+The worker gets `AUTH_ENCRYPTION_KEY` (it is the only process that opens the
+payload) and **no database credential at all** — that separation is the point of
+running it apart. Failed sends walk a retry ladder of dedicated queues (1 min →
+5 min → 30 min) and then land in `foldex.mail.dead`, which the backend watches
+so the outbox row still ends up marked `failed`.
+
+On a shared broker, give foldex its own vhost and user rather than the default:
+
+```bash
+rabbitmqctl add_vhost /foldex
+rabbitmqctl add_user foldex '<password>'
+rabbitmqctl set_permissions -p /foldex foldex '^foldex\.' '^foldex\.' '^foldex\.'
+# AMQP_URL=amqps://foldex:<password>@broker.example:5671/%2Ffoldex
+```
 
 **What each account can see.** Everything is private per account — administrators
 included. An admin can create, disable and delete users, but never sees another

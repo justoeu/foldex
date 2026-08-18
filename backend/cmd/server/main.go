@@ -231,11 +231,43 @@ func main() {
 		logger.Error("mail outbox", "err", err)
 		os.Exit(1)
 	}
-	mailRelay := mailoutbox.NewRelay(
-		mailoutbox.NewRepository(pool),
-		mailoutbox.NewInprocSink(outbox, mail),
-		mailoutbox.Options{}, logger)
+	// The transport decides who SENDS, and nothing above this line knows which
+	// one is configured: the handlers write rows, the relay drains them, and
+	// only the sink differs. That is the whole point of the split — an instance
+	// with no broker loses horizontal scale and nothing else.
+	outboxRepo := mailoutbox.NewRepository(pool)
+	var mailSink mailoutbox.Sink = mailoutbox.NewInprocSink(outbox, mail)
+	var closeMailSink func()
+	var deadLetters *mailoutbox.DeadLetterWatcher
+	if cfg.Mail.UsesBroker() {
+		amqpCfg := mailoutbox.AMQPConfig{
+			URL: cfg.Mail.AMQPURL,
+			Topology: mailoutbox.Topology{
+				Exchange:   cfg.Mail.AMQPExchange,
+				Queue:      cfg.Mail.AMQPQueue,
+				RoutingKey: cfg.Mail.AMQPRoutingKey,
+			},
+		}
+		sink, err := mailoutbox.NewAMQPSink(amqpCfg)
+		if err != nil {
+			logger.Error("mail transport", "err", err)
+			os.Exit(1)
+		}
+		mailSink = sink
+		closeMailSink = func() { _ = sink.Close() }
+		// Handing delivery to a broker moves the truth about it out of the
+		// database. The watcher brings the final outcome back, so a reset link
+		// that died on the last rung of the retry ladder still shows as failed
+		// instead of reading 'published' forever.
+		deadLetters = mailoutbox.NewDeadLetterWatcher(outboxRepo, amqpCfg, logger)
+		deadLetters.Start(context.Background())
+	}
+	mailRelay := mailoutbox.NewRelay(outboxRepo, mailSink, mailoutbox.Options{
+		Batch:        cfg.Mail.OutboxBatch,
+		PollInterval: time.Duration(cfg.Mail.OutboxPollSec) * time.Second,
+	}, logger)
 	mailRelay.Start(context.Background())
+	logger.Info("mail transport ready", "transport", mailSink.Name(), "driver", mail.Driver())
 	authRepo := auth.NewRepository(pool, auth.WithOutbox(outbox))
 	cookieOpts := auth.CookieOptions{Secure: cfg.AuthCookieSecure, Domain: cfg.AuthCookieDomain}
 	authMW := auth.NewMiddleware(authRepo, cookieOpts, logger,
@@ -339,7 +371,17 @@ func main() {
 	defer cancel()
 	completed := waitForShutdown(shutCtx, shutdownHooks{
 		shutdownHTTP: srv.Shutdown,
-		stopMail:     mailRelay.Stop,
+		stopMail: func() {
+			mailRelay.Stop()
+			if deadLetters != nil {
+				deadLetters.Stop()
+			}
+			// After both loops have joined, so no publish is in flight against
+			// a connection being torn out from under it.
+			if closeMailSink != nil {
+				closeMailSink()
+			}
+		},
 		stopWorkers: func() {
 			worker.Stop()
 			if ccWorker != nil {

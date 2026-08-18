@@ -159,6 +159,18 @@ services:
       MAIL_STARTTLS: ${MAIL_STARTTLS:-1}
       MAIL_TLS: ${MAIL_TLS:-0}
       MAIL_INSECURE_SKIP_VERIFY: ${MAIL_INSECURE_SKIP_VERIFY:-0}
+      # Who SENDS. `inproc` (default) renders and sends inside this container,
+      # which is the whole self-hosted story: no broker, no extra service, and
+      # durability still comes from the mail_outbox table. `amqp` hands the
+      # sealed message to RabbitMQ and the `mailer` service below does the
+      # sending — see .env.example for the vhost provisioning.
+      MAIL_TRANSPORT: ${MAIL_TRANSPORT:-inproc}
+      AMQP_URL: ${AMQP_URL:-}
+      AMQP_EXCHANGE: ${AMQP_EXCHANGE:-foldex.mail}
+      AMQP_QUEUE: ${AMQP_QUEUE:-foldex.mail.send}
+      AMQP_ROUTING_KEY: ${AMQP_ROUTING_KEY:-send}
+      MAIL_OUTBOX_BATCH: ${MAIL_OUTBOX_BATCH:-32}
+      MAIL_OUTBOX_POLL_SEC: ${MAIL_OUTBOX_POLL_SEC:-5}
       # CORS scope: inside compose, the SPA is served from nginx (same origin)
       # and its /api/ calls are same-origin too — CORS only matters for
       # browser cross-origin calls. Default to https://localhost so the
@@ -226,6 +238,55 @@ services:
     depends_on:
       rustfs-init:
         condition: service_completed_successfully
+    networks:
+      - foldex
+
+  mailer:
+    # Only runs under MAIL_TRANSPORT=amqp — start it with
+    # `docker compose --profile amqp up -d`. Off by default because the
+    # default transport is inproc, and a worker consuming a queue nobody
+    # publishes to would look healthy while doing nothing.
+    profiles: ["amqp"]
+    # The SAME image as the backend, started on a different entrypoint. One
+    # image means one tag to pin and one thing for the release workflow to
+    # publish; what makes this a separate process is the entrypoint and the
+    # environment below, not the bytes.
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-2.2.0}
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    entrypoint: ["/foldex-mailer"]
+    restart: unless-stopped
+    environment:
+      # NO DB_URL, deliberately. This is the process that decrypts live reset
+      # links and sign-in codes; handing it a database credential as well would
+      # make a compromise of it a compromise of everything. The outbox row's
+      # final state is reported by the backend, from the dead-letter queue.
+      MAIL_TRANSPORT: amqp
+      AMQP_URL: ${AMQP_URL:?MAIL_TRANSPORT=amqp requires AMQP_URL}
+      AMQP_EXCHANGE: ${AMQP_EXCHANGE:-foldex.mail}
+      AMQP_QUEUE: ${AMQP_QUEUE:-foldex.mail.send}
+      AMQP_ROUTING_KEY: ${AMQP_ROUTING_KEY:-send}
+      AMQP_PREFETCH: ${AMQP_PREFETCH:-4}
+      MAIL_DRIVER: ${MAIL_DRIVER:-log}
+      MAIL_HOST: ${MAIL_HOST:-}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-foldex@localhost}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-Foldex}
+      MAIL_STARTTLS: ${MAIL_STARTTLS:-1}
+      MAIL_TLS: ${MAIL_TLS:-0}
+      MAIL_INSECURE_SKIP_VERIFY: ${MAIL_INSECURE_SKIP_VERIFY:-0}
+      # Must be the SAME key the backend sealed the payloads with. There is no
+      # autogen path here: a fresh key would not open a single queued message,
+      # and the worker would drain the queue marking everything undecryptable.
+      AUTH_ENCRYPTION_KEY: ${AUTH_ENCRYPTION_KEY:-}
+      AUTH_ENCRYPTION_KEY_PATH: ${AUTH_ENCRYPTION_KEY_PATH:-/data/auth_encryption.key}
+    volumes:
+      # Read-only: the worker reads the auth key the backend generated and must
+      # never be the process that rotates or regenerates it.
+      - foldex-data:/data:ro
     networks:
       - foldex
 

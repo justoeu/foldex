@@ -154,14 +154,29 @@ const userColumns = `app_user.id, app_user.email, app_user.name, app_user.role, 
 	(app_user.password_hash IS NOT NULL) AS has_password,
 	EXISTS (SELECT 1 FROM totp_secret ts
 	         WHERE ts.user_id = app_user.id AND ts.confirmed_at IS NOT NULL) AS totp_enabled,
+	coalesce(app_user.locale, ''),
 	app_user.token_version`
+
+// userDest is the ONE destination list for userColumns, and the only reason it
+// is a function rather than inlined into scanUser.
+//
+// verifyPassword selects `userColumns, password_hash` and therefore cannot call
+// scanUser. It used to carry its own hand-written destination list, which meant
+// every column added to userColumns had to be mirrored there by memory —
+// exactly the mirror that was missed when `locale` landed, turning every single
+// login into a 500 that said only "13 and 12". A trailing variadic keeps the
+// shared prefix in one place, so a new column is one edit and the compiler's
+// silence is no longer load-bearing.
+func userDest(u *User, id *int64, extra ...any) []any {
+	return append([]any{id, &u.Email, &u.Name, &u.Role, &u.Status,
+		&u.EmailVerifiedAt, &u.LastLoginAt, &u.CreatedAt, &u.HasPassword, &u.TOTPEnabled,
+		&u.Locale, &u.TokenVersion}, extra...)
+}
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
 	var id int64
-	err := row.Scan(&id, &u.Email, &u.Name, &u.Role, &u.Status,
-		&u.EmailVerifiedAt, &u.LastLoginAt, &u.CreatedAt, &u.HasPassword, &u.TOTPEnabled,
-		&u.TokenVersion)
+	err := row.Scan(userDest(&u, &id)...)
 	u.ID = authctx.UserID(id)
 	return u, err
 }
@@ -214,8 +229,7 @@ func (r *Repository) verifyPassword(ctx context.Context, email, password string)
 	row := r.pool.QueryRow(ctx, `
 		SELECT `+userColumns+`, password_hash
 		FROM app_user WHERE email_normalized = $1`, NormalizeEmail(email))
-	err = row.Scan(&id, &u.Email, &u.Name, &u.Role, &u.Status, &u.EmailVerifiedAt,
-		&u.LastLoginAt, &u.CreatedAt, &u.HasPassword, &u.TOTPEnabled, &u.TokenVersion, &hash)
+	err = row.Scan(userDest(&u, &id, &hash)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, false, nil
 	}
@@ -536,6 +550,42 @@ func guardLastAdminTx(ctx context.Context, tx pgx.Tx, target authctx.UserID) err
 // it needs the CALLER's identity and cannot race, since it compares the caller
 // against themselves. A promotion revokes every existing session before this
 // transaction commits, so the new role is never inherited by an old login.
+// UpdateOwnProfile writes the two fields an account controls about itself.
+//
+// Separate from UpdateUser, which is the ADMINISTRATIVE path: it carries the
+// instance-wide advisory lock, the last-administrator guard and the owner
+// immutability rule, none of which a self-service edit can trigger. Threading
+// locale through there would also put it on a surface admins reach, and an
+// administrator has no business choosing someone else's reading language.
+//
+// locale is TRI-STATE, the same shape the master-password hint uses: nil keeps
+// the stored value, "" clears it back to "no preference", and a value sets it.
+// Clearing has to be expressible — without it, a user who picked a language once
+// could never go back to following their browser.
+func (r *Repository) UpdateOwnProfile(ctx context.Context, id authctx.UserID, name string, locale *string) (User, error) {
+	u, err := scanUser(r.pool.QueryRow(ctx, `
+		UPDATE app_user SET
+			name       = $2,
+			locale     = CASE WHEN $3::bool THEN nullif($4, '') ELSE locale END,
+			updated_at = now()
+		WHERE id = $1
+		RETURNING `+userColumns, int64(id), name, locale != nil, derefOr(locale, "")))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrNoUser
+	}
+	if err != nil {
+		return User{}, fmt.Errorf("update own profile: %w", err)
+	}
+	return u, nil
+}
+
+func derefOr(s *string, fallback string) string {
+	if s == nil {
+		return fallback
+	}
+	return *s
+}
+
 func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *string, role *authctx.Role, status *string) (User, error) {
 	// Pure rename fast path: with no role/status to change, the last-admin
 	// guard can never fire, so the instance-wide admin-guard advisory lock —
