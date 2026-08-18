@@ -58,6 +58,43 @@ type Policy struct {
 	// owner and never admin: a self-service signup must not be able to arrive
 	// holding administration.
 	GoogleDefaultRole authctx.Role `json:"google_default_role"`
+
+	// AdminSecondFactor decides which factors satisfy AUTH_REQUIRE_2FA_FOR_ADMINS
+	// (ADR-37 §7.5).
+	//
+	// A knob rather than a constant, with the floor at the PERMISSIVE end,
+	// because the two answers are defensible for different instances and the
+	// difference is not arithmetic. With password + e-mail an attacker does need
+	// both — that is genuinely two factors, and dismissing it as one in disguise
+	// would be wrong. What is narrower is that the two are not INDEPENDENT: the
+	// mailbox is also the password-reset channel, so whoever controls it gets one
+	// factor free and has a route at the other. `mailbox_already_proven` is what
+	// stops that circle from closing, and it stays intact either way.
+	//
+	// The remaining difference is surface, not counting: compromising a mailbox
+	// is far more common than compromising an authenticator, and mailboxes are
+	// usually protected by a password — the same credential class, with the same
+	// reuse risk. So an owner who wants authenticators may demand them, and an
+	// instance that never opens the screen keeps the more permissive behaviour.
+	AdminSecondFactor AdminFactorMode `json:"admin_second_factor"`
+}
+
+// AdminFactorMode is which second factors count for an administrator.
+type AdminFactorMode string
+
+const (
+	// AdminFactorAny is the FLOOR: any confirmed factor satisfies the policy.
+	AdminFactorAny AdminFactorMode = "any"
+	// AdminFactorTOTPOnly demands an authenticator specifically.
+	AdminFactorTOTPOnly AdminFactorMode = "totp_only"
+)
+
+// RequiresTOTPForAdmins reports whether an administrator's e-mail factor is
+// insufficient. Unknown values resolve to the floor rather than the strict end:
+// a policy document written by an older or newer binary must not lock every
+// administrator out of the surface that would let them fix it.
+func (p Policy) RequiresTOTPForAdmins() bool {
+	return p.AdminSecondFactor == AdminFactorTOTPOnly
 }
 
 // Default is what an instance that never opened the screen runs under.
@@ -69,7 +106,30 @@ func Default() Policy {
 		GoogleAllowedDomains: []string{},
 		GoogleAutoProvision:  false,
 		GoogleDefaultRole:    authctx.RoleEditor,
+		AdminSecondFactor:    AdminFactorAny,
 	}
+}
+
+// WithDefaults fills fields the caller left unset, and it is what keeps a NEW
+// setting from breaking every EXISTING one.
+//
+// A policy document written before a field existed decodes with that field at
+// its zero value, and so does a request from a client that has not been updated
+// — including the SPA on a cached bundle, and any script an operator wrote. If
+// Validate saw the zero value it would answer 400, and the owner would find
+// themselves unable to save policy at all, over a field they never touched.
+//
+// Absent therefore means "the floor", not "invalid". A value that is PRESENT
+// and unrecognised is still refused, because that is a real mistake rather than
+// an omission.
+func (p Policy) WithDefaults() Policy {
+	if p.AdminSecondFactor == "" {
+		p.AdminSecondFactor = AdminFactorAny
+	}
+	if p.GoogleDefaultRole == "" {
+		p.GoogleDefaultRole = Default().GoogleDefaultRole
+	}
+	return p
 }
 
 // Validate clamps nothing and rejects everything out of range.
@@ -103,6 +163,13 @@ func (p Policy) Validate() error {
 	}
 	if p.GoogleDefaultRole != authctx.RoleEditor && p.GoogleDefaultRole != authctx.RoleViewer {
 		return fmt.Errorf("google_default_role must be editor or viewer")
+	}
+	// Rejected on WRITE, resolved leniently on READ. A value this binary does
+	// not know must never be stored, but one already in the document — written
+	// by a newer binary, or by hand — must not be read as "totp_only" and lock
+	// every administrator out of the screen that would fix it.
+	if p.AdminSecondFactor != AdminFactorAny && p.AdminSecondFactor != AdminFactorTOTPOnly {
+		return fmt.Errorf("admin_second_factor must be %q or %q", AdminFactorAny, AdminFactorTOTPOnly)
 	}
 	return nil
 }

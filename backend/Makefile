@@ -37,6 +37,20 @@ COVER_PKGS = $(shell go list ./internal/... | grep -v -E 'testdb$$|/db$$|authctx
 # Detect Colima Docker socket automatically so testcontainers works.
 DOCKER_HOST ?= $(shell docker context inspect colima -f '{{.Endpoints.docker.Host}}' 2>/dev/null)
 TESTCONTAINERS_ENV = TESTCONTAINERS_RYUK_DISABLED=true TESTCONTAINERS_HOST_OVERRIDE=localhost
+
+# Package parallelism for the integration suite.
+#
+# Go defaults `-p` to GOMAXPROCS, and every package that touches the database
+# starts its own Postgres, so on a 10-core laptop the default asks Docker for
+# ~19 containers at once. That is not a throughput win: past a handful, the
+# daemon slows down, container startup stretches from seconds to over a minute,
+# and packages begin blowing Go's 10-minute timeout — reported as a hung test,
+# which is the least useful description of "your Docker was busy" imaginable.
+#
+# Four is enough to keep the cores fed (most of the wall clock is I/O against
+# Postgres) while leaving the daemon responsive. Override for a machine with
+# room: `make test-integration TEST_PARALLEL=8`.
+TEST_PARALLEL ?= 4
 ifdef DOCKER_HOST
   TESTCONTAINERS_ENV := DOCKER_HOST=$(DOCKER_HOST) $(TESTCONTAINERS_ENV)
 endif
@@ -64,7 +78,7 @@ test: ## Run UNIT tests only (no Docker)
 	go test ./...
 
 test-integration: ## Run unit + integration tests (Docker required)
-	$(TESTCONTAINERS_ENV) go test -tags=integration -timeout=25m ./...
+	$(TESTCONTAINERS_ENV) go test -tags=integration -p $(TEST_PARALLEL) -timeout=25m ./...
 
 coverage-run: ## Run all tests with coverage instrumentation (no threshold gate)
 	# `-covermode=atomic` is required when running multi-package coverage with
@@ -75,7 +89,7 @@ coverage-run: ## Run all tests with coverage instrumentation (no threshold gate)
 	# from a previous run reuse the OLD coverage profile, so changing what is
 	# instrumented (or which tests exercise which lines) silently shows the
 	# wrong total. Worth the rerun cost for honest numbers.
-	$(TESTCONTAINERS_ENV) go test -tags=integration -covermode=atomic -coverpkg=$(COVER_PKGS) -coverprofile=coverage.out -count=1 -timeout=25m ./...
+	$(TESTCONTAINERS_ENV) go test -tags=integration -p $(TEST_PARALLEL) -covermode=atomic -coverpkg=$(COVER_PKGS) -coverprofile=coverage.out -count=1 -timeout=25m ./...
 
 coverage-check: ## Read coverage.out and fail if below COVERAGE_MIN (default 85)
 	@test -f coverage.out || (echo "coverage.out missing — run 'make coverage-run' first" && exit 1)

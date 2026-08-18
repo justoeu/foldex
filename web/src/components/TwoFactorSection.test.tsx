@@ -7,11 +7,36 @@ import { http } from '../api/client'
 
 afterEach(() => vi.restoreAllMocks())
 
-type Status = { enabled: boolean; recovery_codes_remaining: number; required: boolean }
+type Status = {
+  enabled: boolean
+  recovery_codes_remaining: number
+  required: boolean
+  totp_enabled?: boolean
+  email_enabled?: boolean
+  can_disable_totp?: boolean
+  can_disable_email?: boolean
+  email_available?: boolean
+}
 
+/**
+ * Seeds the status endpoint, defaulting the per-method fields to the shape the
+ * server sends for a TOTP-only account on an SMTP instance.
+ *
+ * The defaults are DERIVED from `enabled` rather than hardcoded, so a test that
+ * only cares about "2FA is on" does not silently assert a method mix it never
+ * chose — and a test that does care states it.
+ */
 function mockStatus(s: Status) {
+  const full = {
+    totp_enabled: s.enabled,
+    email_enabled: false,
+    can_disable_totp: s.enabled && !s.required,
+    can_disable_email: false,
+    email_available: true,
+    ...s,
+  }
   return vi.spyOn(http, 'get').mockImplementation(async (url: string) => {
-    if (url === '/api/auth/2fa') return { data: s } as never
+    if (url === '/api/auth/2fa') return { data: full } as never
     return { data: {} } as never
   })
 }
@@ -22,7 +47,7 @@ describe('TwoFactorSection', () => {
     renderWithProviders(<TwoFactorSection />)
 
     expect(await screen.findByText(/two-step verification is off/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /turn on two-step/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /set up an authenticator app/i })).toBeInTheDocument()
   })
 
   // Adding a second factor with nothing but a live session would let an
@@ -31,7 +56,7 @@ describe('TwoFactorSection', () => {
     mockStatus({ enabled: false, recovery_codes_remaining: 0, required: false })
     renderWithProviders(<TwoFactorSection />)
 
-    const button = await screen.findByRole('button', { name: /turn on two-step/i })
+    const button = await screen.findByRole('button', { name: /set up an authenticator app/i })
     expect(button).toBeDisabled()
 
     await userEvent.setup().type(screen.getByLabelText(/current password/i), 'hunter2hunter2')
@@ -53,7 +78,7 @@ describe('TwoFactorSection', () => {
 
     renderWithProviders(<TwoFactorSection />)
     await user.type(await screen.findByLabelText(/current password/i), 'hunter2hunter2')
-    await user.click(screen.getByRole('button', { name: /turn on two-step/i }))
+    await user.click(screen.getByRole('button', { name: /set up an authenticator app/i }))
 
     const img = await screen.findByAltText(/qr code/i)
     expect(img).toHaveAttribute('src', '/api/auth/2fa/totp/qr.png')
@@ -76,7 +101,7 @@ describe('TwoFactorSection', () => {
     })
     renderWithProviders(<TwoFactorSection />)
     await user.type(await screen.findByLabelText(/current password/i), 'hunter2hunter2')
-    await user.click(screen.getByRole('button', { name: /turn on two-step/i }))
+    await user.click(screen.getByRole('button', { name: /set up an authenticator app/i }))
     await screen.findByAltText(/qr code/i)
     const cells = screen.getAllByRole('textbox') as HTMLInputElement[]
     cells[0].focus()
@@ -102,7 +127,7 @@ describe('TwoFactorSection', () => {
     })
     renderWithProviders(<TwoFactorSection />)
     await user.type(await screen.findByLabelText(/current password/i), 'hunter2hunter2')
-    await user.click(screen.getByRole('button', { name: /turn on two-step/i }))
+    await user.click(screen.getByRole('button', { name: /set up an authenticator app/i }))
     await screen.findByAltText(/qr code/i)
     const cells = screen.getAllByRole('textbox') as HTMLInputElement[]
     cells[0].focus()
@@ -126,7 +151,7 @@ describe('TwoFactorSection', () => {
     renderWithProviders(<TwoFactorSection />)
     const password = await screen.findByLabelText(/current password/i)
     await user.type(password, 'hunter2hunter2')
-    await user.click(screen.getByRole('button', { name: /turn on two-step/i }))
+    await user.click(screen.getByRole('button', { name: /set up an authenticator app/i }))
     await screen.findByAltText(/qr code/i)
     const cells = screen.getAllByRole('textbox') as HTMLInputElement[]
     cells[0].focus()
@@ -135,7 +160,7 @@ describe('TwoFactorSection', () => {
 
     expect(screen.queryByAltText(/qr code/i)).not.toBeInTheDocument()
     expect(password).toHaveValue('')
-    expect(screen.getByRole('button', { name: /turn on two-step/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /set up an authenticator app/i })).toBeDisabled()
   })
 
   it('reports how many recovery codes remain', async () => {
@@ -208,7 +233,16 @@ describe('TwoFactorSection', () => {
     let enabled = true
     vi.spyOn(http, 'get').mockImplementation(async (url: string) => {
       if (url === '/api/auth/2fa') {
-        return { data: { enabled, recovery_codes_remaining: enabled ? 10 : 0, required: false } } as never
+        return { data: {
+          enabled,
+          totp_enabled: enabled,
+          email_enabled: false,
+          recovery_codes_remaining: enabled ? 10 : 0,
+          required: false,
+          can_disable_totp: enabled,
+          can_disable_email: false,
+          email_available: true,
+        } } as never
       }
       return { data: {} } as never
     })
@@ -289,8 +323,141 @@ describe('TwoFactorSection', () => {
 
     renderWithProviders(<TwoFactorSection />)
     await user.type(await screen.findByLabelText(/current password/i), 'wrong-password')
-    await user.click(screen.getByRole('button', { name: /turn on two-step/i }))
+    await user.click(screen.getByRole('button', { name: /set up an authenticator app/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/password is incorrect/i)
+  })
+
+  // ADR-37: e-mail is a factor the account ENROLLS, so the section has to name
+  // both methods and act on each independently.
+  describe('the e-mail method', () => {
+    it('offers e-mail enrollment only where a mailed code could arrive', async () => {
+      mockStatus({
+        enabled: false, recovery_codes_remaining: 0, required: false, email_available: false,
+      })
+      renderWithProviders(<TwoFactorSection />)
+
+      await screen.findByRole('button', { name: /set up an authenticator app/i })
+      // The server refuses the enrollment on an instance with no SMTP, so a
+      // button here would be a promise the backend always breaks.
+      expect(screen.queryByRole('button', { name: /set up e-mail codes/i })).not.toBeInTheDocument()
+    })
+
+    it('enrolls e-mail and shows the recovery codes it issues', async () => {
+      const user = userEvent.setup()
+      mockStatus({ enabled: false, recovery_codes_remaining: 0, required: false })
+      const post = vi.spyOn(http, 'post').mockImplementation(async (url: string) => {
+        if (url.endsWith('/email/start')) {
+          return { data: { account: 'a•••@b.test', expires_in: 300, digits: 6 } } as never
+        }
+        return { data: { recovery_codes: ['AAAA-BBBB'] } } as never
+      })
+
+      renderWithProviders(<TwoFactorSection />)
+      await user.type(await screen.findByLabelText(/current password/i), 'hunter2hunter2')
+      await user.click(screen.getByRole('button', { name: /set up e-mail codes/i }))
+
+      // No QR: the whole point is that this method needs no authenticator.
+      expect(await screen.findByText(/a•••@b\.test/)).toBeInTheDocument()
+      expect(screen.queryByAltText(/qr code/i)).not.toBeInTheDocument()
+      expect(post).toHaveBeenCalledWith('/api/auth/2fa/email/start', { password: 'hunter2hunter2' })
+
+      const cells = screen.getAllByRole('textbox') as HTMLInputElement[]
+      cells[0].focus()
+      await user.paste('123456')
+      await user.click(screen.getByRole('button', { name: /turn on two-step/i }))
+
+      // Mandatory here, not a nicety: an e-mail-only account arriving through a
+      // password-reset link is refused the e-mail method on purpose, and these
+      // are its only way back in.
+      expect(await screen.findByTestId('recovery-codes')).toBeInTheDocument()
+      expect(post).toHaveBeenCalledWith('/api/auth/2fa/email/confirm', { code: '123456' })
+    })
+
+    it('names both methods once each is on', async () => {
+      mockStatus({
+        enabled: true, recovery_codes_remaining: 8, required: false,
+        totp_enabled: true, email_enabled: true,
+        can_disable_totp: true, can_disable_email: true,
+      })
+      renderWithProviders(<TwoFactorSection />)
+
+      // Scoped to the status list: "authenticator app" also appears on the
+      // setup button, so a bare text query would pass without the list existing.
+      const methods = await screen.findAllByRole('listitem')
+      expect(methods.map((li) => li.textContent)).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/authenticator app/i),
+          expect.stringMatching(/e-mail code/i),
+        ]),
+      )
+      expect(screen.getByRole('button', { name: /turn off two-step/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /turn off e-mail codes/i })).toBeInTheDocument()
+    })
+
+    // The server owns the rule. Re-deriving it here would put a second copy in
+    // the browser, free to disagree with the one actually enforced.
+    it('hides a disable button the server says is not allowed', async () => {
+      mockStatus({
+        enabled: true, recovery_codes_remaining: 8, required: true,
+        totp_enabled: true, email_enabled: true,
+        can_disable_totp: false, can_disable_email: true,
+      })
+      renderWithProviders(<TwoFactorSection />)
+
+      await screen.findByText(/two-step verification is on/i)
+      expect(screen.queryByRole('button', { name: /turn off two-step/i })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /turn off e-mail codes/i })).toBeInTheDocument()
+    })
+
+    // Without this, the code field is a box an e-mail-only account cannot fill:
+    // it has no authenticator to read six digits from.
+    it('offers to mail a step-up code when e-mail is enrolled', async () => {
+      const user = userEvent.setup()
+      mockStatus({
+        enabled: true, recovery_codes_remaining: 8, required: false,
+        totp_enabled: false, email_enabled: true,
+        can_disable_totp: false, can_disable_email: true,
+      })
+      const post = vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+
+      renderWithProviders(<TwoFactorSection />)
+      await user.click(await screen.findByRole('button', { name: /e-mail me a code/i }))
+
+      expect(post).toHaveBeenCalledWith('/api/auth/2fa/email/send')
+      expect(await screen.findByText(/code sent to your address/i)).toBeInTheDocument()
+    })
+
+    it('does not offer a mailed code to an account without the factor', async () => {
+      mockStatus({ enabled: true, recovery_codes_remaining: 8, required: false })
+      renderWithProviders(<TwoFactorSection />)
+
+      await screen.findByText(/two-step verification is on/i)
+      expect(screen.queryByRole('button', { name: /e-mail me a code/i })).not.toBeInTheDocument()
+    })
+
+    // Removing one of two factors keeps the recovery codes, so warning that
+    // they will be deleted would be a lie that talks the user out of a safe
+    // change.
+    it('warns about recovery codes only when the last factor is going', async () => {
+      const user = userEvent.setup()
+      mockStatus({
+        enabled: true, recovery_codes_remaining: 8, required: false,
+        totp_enabled: true, email_enabled: true,
+        can_disable_totp: true, can_disable_email: true,
+      })
+      vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+
+      renderWithProviders(<TwoFactorSection />)
+      await user.type(await screen.findByLabelText(/current password/i), 'hunter2hunter2')
+      const cells = screen.getAllByRole('textbox') as HTMLInputElement[]
+      cells[0].focus()
+      await user.paste('123456')
+      await user.click(screen.getByRole('button', { name: /turn off e-mail codes/i }))
+
+      const dialog = await screen.findByRole('dialog', { name: /turn off e-mail codes/i })
+      expect(dialog).toHaveTextContent(/other method stays on/i)
+      expect(dialog).not.toHaveTextContent(/recovery codes will be deleted/i)
+    })
   })
 })

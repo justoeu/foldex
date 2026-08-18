@@ -913,7 +913,23 @@
     "section_desc": "Require a code from your authenticator app in addition to your password.",
     "disable_warning": "Your recovery codes will be deleted too. Anyone with your password alone will be able to sign in.",
     "wrong_password": "That password is incorrect.",
-    "already_enabled": "Two-step verification is already enabled."
+    "already_enabled": "Two-step verification is already enabled.",
+    "method_app": "Authenticator app",
+    "method_email": "E-mail code",
+    "enable_app": "Set up an authenticator app",
+    "enable_email": "Set up e-mail codes",
+    "disable_email": "Turn off e-mail codes",
+    "disable_one_warning": "Your other method stays on, so your recovery codes are kept.",
+    "email_unavailable": "This instance cannot send e-mail, so e-mail codes are unavailable.",
+    "email_not_enrolled": "E-mail is not set up as a second factor on this account.",
+    "enroll_choose_subtitle": "Choose how you want to confirm it is you.",
+    "enroll_choose_hint": "An authenticator app works without a network connection. E-mail codes need no extra app.",
+    "enroll_email_subtitle": "We sent a 6-digit code to {{account}}.",
+    "enroll_email_sent": "Code sent to {{account}}.",
+    "enter_mailed_hint": "Enter the 6-digit code we e-mailed you.",
+    "code_accepts_mailed": "You can use a code from your app, a mailed code, or a recovery code.",
+    "code_sent": "Code sent to your address.",
+    "mail_a_code": "E-mail me a code"
   },
   "auth_verify": {
     "kicker": "confirm your address",
@@ -1112,7 +1128,11 @@
     "err_not_owner": "Only the current owner can transfer the instance.",
     "roles_count_one": "One role in use on this instance.",
     "roles_count_other": "{{count}} roles in use on this instance.",
-    "attention_desc": "Open access items."
+    "attention_desc": "Open access items.",
+    "policy_admin_factor": "Second factor accepted for administrators",
+    "policy_admin_factor_any": "Authenticator app or e-mail code",
+    "policy_admin_factor_totp": "Authenticator app only",
+    "policy_admin_factor_hint": "An admin whose only factor is e-mail is weaker: the mailbox is already the recovery channel, so both steps depend on it."
   },
   "profile": {
     "title": "Profile",

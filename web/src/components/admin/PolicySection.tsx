@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { fetchPolicy, savePolicy, type InstancePolicy } from '../../api/admin'
+import { fetchPolicy, savePolicy, type AdminFactorMode, type InstancePolicy } from '../../api/admin'
 import { apiErrorCode as errCode } from '../../lib/apiError'
 import { useCurrentUser } from '../../auth/AuthProvider'
 
@@ -98,6 +98,18 @@ export function PolicySection() {
                 />
               </label>
             </div>
+            <label className="fx-field" style={{ marginTop: 12, maxWidth: 320 }}>
+              <span className="fx-field-label">{t('admin.policy_admin_factor')}</span>
+              <select
+                className="fx-input"
+                value={draft.admin_second_factor}
+                onChange={(e) => patch({ admin_second_factor: e.target.value as AdminFactorMode })}
+              >
+                <option value="any">{t('admin.policy_admin_factor_any')}</option>
+                <option value="totp_only">{t('admin.policy_admin_factor_totp')}</option>
+              </select>
+              <span className="fx-field-hint">{t('admin.policy_admin_factor_hint')}</span>
+            </label>
             <p className="fx-hint" style={{ marginTop: 8 }}>{t('admin.policy_floor_hint')}</p>
           </div>
 

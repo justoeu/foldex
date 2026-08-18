@@ -53,6 +53,10 @@ export type AuthUser = {
   status: 'pending' | 'active' | 'disabled'
   has_password: boolean
   totp_enabled: boolean
+  /** True when e-mail is enrolled as a second factor (ADR-37). Since that
+   *  release a mailed code is a factor the account HOLDS, not one the server
+   *  offers whenever SMTP happens to be configured. */
+  email_2fa_enabled?: boolean
   /** Preferred language for e-mail. Empty/absent means "follow the browser":
    *  the server then falls back to the Accept-Language of whoever triggered
    *  the message, and only then to English. */

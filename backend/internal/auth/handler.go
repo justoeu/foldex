@@ -240,6 +240,11 @@ func (h *Handler) Mount(r chi.Router) {
 	r.With(h.mw.Optional).Post("/2fa/totp/start", h.StartTOTP)
 	r.With(h.mw.Optional).Get("/2fa/totp/qr.png", h.TOTPQR)
 	r.With(h.mw.Optional).Post("/2fa/totp/confirm", h.ConfirmTOTP)
+	// The e-mail factor reaches the same two entry points, for the same reason:
+	// an administrator diverted into mandatory enrollment must be able to pick
+	// it, or the policy would silently mean "authenticator" (ADR-37 §7.3).
+	r.With(h.mw.Optional).Post("/2fa/email/start", h.StartEmailFactor)
+	r.With(h.mw.Optional).Post("/2fa/email/confirm", h.ConfirmEmailFactor)
 
 	// Google OAuth. Mounted unconditionally: with no client credentials the
 	// provider reports Enabled() == false and the routes answer a readable
@@ -285,6 +290,8 @@ func (h *Handler) Mount(r chi.Router) {
 		pr.Post("/email/resend", h.SendEmailVerification)
 		pr.Get("/2fa", h.TwoFactorStatus)
 		pr.Post("/2fa/totp/disable", h.DisableTOTP)
+		pr.Post("/2fa/email/send", h.SendStepUpEmailOTP)
+		pr.Post("/2fa/email/disable", h.DisableEmailFactor)
 		pr.Post("/2fa/recovery-codes/regenerate", h.RegenerateRecoveryCodes)
 		pr.Get("/tokens", h.ListAPITokens)
 		pr.Post("/tokens", h.CreateAPIToken)

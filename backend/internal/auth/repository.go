@@ -154,6 +154,8 @@ const userColumns = `app_user.id, app_user.email, app_user.name, app_user.role, 
 	(app_user.password_hash IS NOT NULL) AS has_password,
 	EXISTS (SELECT 1 FROM totp_secret ts
 	         WHERE ts.user_id = app_user.id AND ts.confirmed_at IS NOT NULL) AS totp_enabled,
+	EXISTS (SELECT 1 FROM email_factor ef
+	         WHERE ef.user_id = app_user.id AND ef.confirmed_at IS NOT NULL) AS email_2fa_enabled,
 	coalesce(app_user.locale, ''),
 	app_user.token_version`
 
@@ -170,7 +172,7 @@ const userColumns = `app_user.id, app_user.email, app_user.name, app_user.role, 
 func userDest(u *User, id *int64, extra ...any) []any {
 	return append([]any{id, &u.Email, &u.Name, &u.Role, &u.Status,
 		&u.EmailVerifiedAt, &u.LastLoginAt, &u.CreatedAt, &u.HasPassword, &u.TOTPEnabled,
-		&u.Locale, &u.TokenVersion}, extra...)
+		&u.Email2FAEnabled, &u.Locale, &u.TokenVersion}, extra...)
 }
 
 func scanUser(row pgx.Row) (User, error) {
@@ -353,7 +355,7 @@ func (r *Repository) Bootstrap(ctx context.Context, email, name, password string
 // and optional TOTP proof are still current. The credential write and required
 // revocation of every other session commit together.
 func (r *Repository) SetPassword(ctx context.Context, id authctx.UserID, keepSession int64,
-	tokenVersion int, password string, proof *TOTPProof) error {
+	tokenVersion int, password string, proof SecondFactorProof) error {
 
 	hash, err := pwhash.Hash(password)
 	if err != nil {
@@ -387,17 +389,25 @@ func (r *Repository) SetPassword(ctx context.Context, id authctx.UserID, keepSes
 		return err
 	}
 
-	var totpEnabled bool
+	// ANY second factor, not just an authenticator. Read inside the transaction
+	// under the user lock so it cannot disagree with the handler's own check —
+	// and reading only totp_secret here would let an account whose sole factor is
+	// e-mail set a password with no proof at all, because the handler would
+	// demand one and this re-check would then waive it.
+	var hasFactor bool
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (SELECT 1 FROM totp_secret
-		               WHERE user_id = $1 AND confirmed_at IS NOT NULL)`, int64(id)).Scan(&totpEnabled); err != nil {
-		return fmt.Errorf("set password check totp: %w", err)
+		               WHERE user_id = $1 AND confirmed_at IS NOT NULL)
+		    OR EXISTS (SELECT 1 FROM email_factor
+		               WHERE user_id = $1 AND confirmed_at IS NOT NULL)`,
+		int64(id)).Scan(&hasFactor); err != nil {
+		return fmt.Errorf("set password check second factor: %w", err)
 	}
-	if totpEnabled {
-		if proof == nil {
+	if hasFactor {
+		if proof.Method == "" {
 			return ErrTOTPReplay
 		}
-		if err := consumeTOTPProofTx(ctx, tx, id, *proof); err != nil {
+		if err := consumeSecondFactorTx(ctx, tx, id, proof); err != nil {
 			return err
 		}
 	}

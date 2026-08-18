@@ -500,20 +500,39 @@ owner is e-mailed. Signing out is available everywhere; "sign out everywhere" re
 every device. Credential changes such as changing/setting a password, disconnecting
 Google, or turning off two-step verification keep the device you are on and drop the rest.
 
-**Two-step verification.** Turn it on from **Settings → Two-step verification**: scan
-the QR with any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden),
-confirm one code, and save the ten single-use **recovery codes** — they are shown once
-in `XXXX-XXXX-XXXX-XXXX` format. The server keeps only user-bound, server-keyed
-digests, so it genuinely cannot show them again or test them from a database dump. At
-sign-in the same six-digit field accepts a code from your app, a recovery code, or a
-code e-mailed to you. Administrators are required to have it: with
-`AUTH_REQUIRE_2FA_FOR_ADMINS=1` (the default) an admin without an authenticator is
-walked through setting one up before their first session, rather than being locked out.
-This also covers the first bootstrap account and administrator invitations. Promoting a
-signed-in user to administrator signs out their existing sessions so the next login can
-enforce verification. Turning the policy on for an existing instance immediately blocks
-administrator features on old or refreshed sessions until TOTP is confirmed, while the
-enrollment routes remain available.
+**Two-step verification.** Turn it on from **Settings → Two-step verification**, with
+**two methods you can use separately or together**:
+
+- **Authenticator app** — scan the QR with Google Authenticator, Authy, 1Password or
+  Bitwarden and confirm one code. Works with no network connection.
+- **E-mail codes** — confirm a code sent to your address. Needs no extra app, and is
+  offered only when the instance has SMTP configured (`MAIL_DRIVER=smtp`); a code
+  printed to the container log would not be a factor at all.
+
+Either way you save the ten single-use **recovery codes** shown once in
+`XXXX-XXXX-XXXX-XXXX` format. The server keeps only user-bound, server-keyed digests,
+so it genuinely cannot show them again or test them from a database dump. Keep them:
+an account arriving through a password-reset link is deliberately refused the e-mail
+method — one mailbox must never satisfy both steps — so on an e-mail-only account they
+are the way back in.
+
+At sign-in the same six-digit field accepts a code from your app, a recovery code, or a
+mailed code. In Settings, the field additionally offers **"E-mail me a code"** once
+e-mail is set up, so changing a security setting on an e-mail-only account does not
+cost you a recovery code. Removing one of two methods keeps your recovery codes;
+removing the last one deletes them, since they would then guard nothing.
+
+Administrators are required to have a second factor: with
+`AUTH_REQUIRE_2FA_FOR_ADMINS=1` (the default) an admin without one is walked through
+setting it up before their first session — choosing a method — rather than being locked
+out. This also covers the first bootstrap account and administrator invitations.
+Promoting a signed-in user to administrator signs out their existing sessions so the
+next login can enforce verification. Turning the policy on for an existing instance
+immediately blocks administrator features on old or refreshed sessions until a factor is
+confirmed, while the enrollment routes remain available. An owner who wants the stricter
+rule can set **instance policy → `admin_second_factor: totp_only`**, which stops an
+e-mail factor from counting for administrators; the default `any` accepts either. An
+administrator can always drop one method while the other stands, but never their last.
 
 > Upgrading through migration `000023` invalidates older recovery sheets and pending
 > e-mail codes because unkeyed digests cannot be converted without plaintext. Existing
@@ -628,7 +647,7 @@ Design rationale, threat model and the full API surface:
 - [SDD: Backup & Restore](docs/SDD-BACKUP-RESTORE.md) — DB + RustFS snapshot ZIP, conflict modes, validation flow
 - [SDD: Folder master password](docs/SDD-FOLDER-MASTER-PASSWORD.md) — per-folder password recovery and hint
 - [SDD: Auth, RBAC & multi-user](docs/SDD-AUTH-RBAC.md) — sessions, 2FA, Google OAuth, per-user data segmentation
-- [SDD: Async e-mail & e-mail 2FA](docs/SDD-EMAIL-ASYNC.md) — transactional outbox and localized HTML templates (**shipped**); pluggable RabbitMQ transport and e-mail as a standing second factor (**proposed**)
+- [SDD: Async e-mail & e-mail 2FA](docs/SDD-EMAIL-ASYNC.md) — transactional outbox, localized HTML templates, pluggable RabbitMQ transport and e-mail as a standing second factor (**shipped**)
 
 ## License
 

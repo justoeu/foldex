@@ -27,9 +27,28 @@ type Middleware struct {
 	cookies             CookieOptions
 	logger              *slog.Logger
 	require2FAForAdmins bool
+	adminFactorMode     AdminFactorPolicy
 
 	mu        sync.Mutex
 	lastTouch map[touchKey]time.Time
+}
+
+// AdminFactorPolicy reports whether administrators must hold an authenticator
+// specifically, rather than any confirmed second factor (ADR-37 §7.5).
+//
+// A function rather than a policy import, so this package keeps not depending
+// on internal/policy — the dependency runs the other way, and inverting it here
+// for one boolean would be the first crack in that.
+type AdminFactorPolicy func(context.Context) bool
+
+// MiddlewareOption configures optional collaborators.
+type MiddlewareOption func(*Middleware)
+
+// WithAdminFactorPolicy supplies the instance policy's answer. Omitting it
+// leaves the FLOOR — any confirmed factor — which is the direction that cannot
+// lock an owner out of the screen where they would change it.
+func WithAdminFactorPolicy(p AdminFactorPolicy) MiddlewareOption {
+	return func(m *Middleware) { m.adminFactorMode = p }
 }
 
 // touchKey namespaces the throttle map by credential kind.
@@ -43,14 +62,28 @@ type touchKey struct {
 	id  int64
 }
 
-func NewMiddleware(repo *Repository, cookies CookieOptions, logger *slog.Logger, require2FAForAdmins bool) *Middleware {
-	return &Middleware{
+func NewMiddleware(repo *Repository, cookies CookieOptions, logger *slog.Logger,
+	require2FAForAdmins bool, opts ...MiddlewareOption) *Middleware {
+
+	m := &Middleware{
 		repo:                repo,
 		cookies:             cookies,
 		logger:              logger,
 		require2FAForAdmins: require2FAForAdmins,
 		lastTouch:           make(map[touchKey]time.Time),
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// requireTOTPForAdmins resolves the policy, defaulting to the permissive floor.
+func (m *Middleware) requireTOTPForAdmins(ctx context.Context) bool {
+	if m.adminFactorMode == nil {
+		return false
+	}
+	return m.adminFactorMode(ctx)
 }
 
 var errNoCredential = errors.New("auth: no credential presented")
@@ -141,15 +174,22 @@ func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
 	return authgate.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, _ := authctx.FromContext(r.Context())
 		if m.require2FAForAdmins {
-			confirmed, err := m.repo.HasConfirmedTOTP(r.Context(), p.UserID)
+			totpOnly := m.requireTOTPForAdmins(r.Context())
+			confirmed, err := m.repo.HasConfirmedSecondFactor(r.Context(), p.UserID, totpOnly)
 			if err != nil {
-				m.logger.Error("admin TOTP gate", "err", err)
+				m.logger.Error("admin second-factor gate", "err", err)
 				httperr.Write(w, httperr.ErrInternal)
 				return
 			}
 			if !confirmed {
-				httperr.Write(w, httperr.New(http.StatusForbidden, "admin_2fa_required",
-					"confirm an authenticator before using administrator features"))
+				msg := "confirm a second factor before using administrator features"
+				if totpOnly {
+					// The distinction is worth spelling out: an admin who HAS an
+					// e-mail factor and is refused anyway would otherwise read
+					// the generic message as a bug in the gate.
+					msg = "this instance requires an authenticator app for administrators"
+				}
+				httperr.Write(w, httperr.New(http.StatusForbidden, "admin_2fa_required", msg))
 				return
 			}
 		}

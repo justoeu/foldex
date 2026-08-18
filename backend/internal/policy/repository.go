@@ -55,6 +55,7 @@ func (r *Repository) Get(ctx context.Context) (Policy, error) {
 
 // Set stores a validated policy.
 func (r *Repository) Set(ctx context.Context, p Policy) error {
+	p = p.WithDefaults()
 	if err := p.Validate(); err != nil {
 		return err
 	}
@@ -127,6 +128,21 @@ func (r *Repository) OTPTTL(ctx context.Context) time.Duration {
 		return time.Duration(Default().OTPTTLMinutes) * time.Minute
 	}
 	return time.Duration(p.OTPTTLMinutes) * time.Minute
+}
+
+// RequiresTOTPForAdmins implements auth.AdminFactorPolicy.
+//
+// A read failure yields FALSE — the permissive floor — and that direction is
+// deliberate. Every other reader here fails toward the strict answer, because
+// there the strict answer refuses an action. Here it would refuse the
+// administration surface itself, so a transient database hiccup would lock the
+// owner out of the very screen that configures this, with no way back in.
+func (r *Repository) RequiresTOTPForAdmins(ctx context.Context) bool {
+	p, err := r.Get(ctx)
+	if err != nil {
+		return false
+	}
+	return p.RequiresTOTPForAdmins()
 }
 
 // OTPResendCooldown implements auth.PolicyReader.

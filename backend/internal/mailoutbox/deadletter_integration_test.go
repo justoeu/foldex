@@ -30,7 +30,7 @@ func deadLetterFixture(t *testing.T) (*Repository, *Outbox, Topology, string, in
 
 	o := testOutbox(t)
 	repo := NewRepository(pool)
-	tp := Topology{}.WithDefaults()
+	tp := topologyFor(t)
 
 	tx, err := pool.Begin(ctx)
 	require.NoError(t, err)

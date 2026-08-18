@@ -24,10 +24,12 @@ const emailOTPTTL = 5 * time.Minute
 
 // twoFactorMethod names, echoed to the SPA so the code screen can offer the
 // right alternatives.
+// Exported because SecondFactorProof crosses the package boundary: the value
+// that selects which statement spends a proof cannot be a private string.
 const (
-	methodTOTP     = "totp"
-	methodRecovery = "recovery_code"
-	methodEmailOTP = "email_otp"
+	MethodTOTP     = "totp"
+	MethodRecovery = "recovery_code"
+	MethodEmailOTP = "email_otp"
 )
 
 // ─────────────────────────────────────────────────────────────────────
@@ -55,7 +57,13 @@ func (h *Handler) secondFactorPurpose(u User) ChallengePurpose {
 	if h.cipher == nil || h.codeMAC == nil {
 		return ""
 	}
-	if u.TOTPEnabled {
+	// HasSecondFactor, not TOTPEnabled: the purpose is still spelled 'totp'
+	// because auth_challenge_purpose_check is a closed CHECK and renaming it
+	// would cost a migration for cosmetics — but it now means "owes a second
+	// factor", and WHICH method satisfies it is decided by the methods list the
+	// payload carries. Reading TOTPEnabled here would send an account whose only
+	// factor is e-mail down the enroll path it already completed.
+	if u.HasSecondFactor() {
 		return PurposeTOTP
 	}
 	if h.require2FAForAdmins && u.Role.IsAdmin() {
@@ -64,11 +72,55 @@ func (h *Handler) secondFactorPurpose(u User) ChallengePurpose {
 	return ""
 }
 
+// factorKind names a second factor for the removal guard below.
+type factorKind string
+
+const (
+	factorTOTP  factorKind = "totp"
+	factorEmail factorKind = "email"
+)
+
+// mayRemoveFactor reports whether the account still satisfies
+// AUTH_REQUIRE_2FA_FOR_ADMINS once `removing` is gone.
+//
+// One function rather than a guard inside each disable handler, because the
+// settings screen has to ask the SAME question to decide whether to render the
+// button at all. Two copies of this rule drift in the direction nobody notices:
+// a screen that hides a button the server would have allowed looks like a
+// missing feature, and one that shows a button the server refuses looks like a
+// bug in the account.
+//
+// Non-admins and instances with the policy off are unconstrained — the rule
+// exists to keep an ADMINISTRATOR from stripping the protection that gates
+// /api/admin, not to stop anyone from managing their own factors.
+// totpOnly is passed in rather than resolved here because the policy lives in
+// app_setting and reading it is a query: TwoFactorStatus asks this question
+// twice per request, and resolving inside would make that two round-trips for
+// one answer that cannot change between them.
+func (h *Handler) mayRemoveFactor(totpOnly bool, u User, removing factorKind) bool {
+	if !h.require2FAForAdmins || !u.Role.IsAdmin() {
+		return true
+	}
+	if totpOnly {
+		// Only an authenticator satisfies the policy, so it is never the factor
+		// that may go — and the e-mail factor never counted, so removing it
+		// changes nothing the gate cares about.
+		return removing != factorTOTP
+	}
+	// Either may go, provided the other one stays. Reading the CURRENT state is
+	// what makes this correct for an admin holding both: refusing them outright
+	// would treat "has two factors" as stricter than "has one".
+	if removing == factorTOTP {
+		return u.Email2FAEnabled
+	}
+	return u.TOTPEnabled
+}
+
 // emailFactorAvailable reports whether a mailed code may serve as the second
 // factor for this challenge.
 //
-// Two things disqualify it, and both are the same mistake in different clothes
-// — letting one channel satisfy both steps:
+// Three things disqualify it, and they are the same mistake in different
+// clothes — letting one channel satisfy both steps:
 //
 //  1. The FIRST factor was a password-reset link, so the attacker who read that
 //     link would read the code too.
@@ -77,8 +129,14 @@ func (h *Handler) secondFactorPurpose(u User) ChallengePurpose {
 //     an instance with no SMTP), but a second factor written to the container
 //     log is readable by anyone with the docker group or a log shipper — the
 //     factor stops being a factor.
-func (h *Handler) emailFactorAvailable(purpose ChallengePurpose, mailboxAlreadyProven bool) bool {
-	return purpose == PurposeTOTP && !mailboxAlreadyProven && h.mailer.Driver() == "smtp"
+//  3. The account has not ENROLLED e-mail as a factor. Before ADR-37 this
+//     function answered a question about availability — "could we mail a code
+//     right now" — which made a mailed code a universal escape from any TOTP
+//     challenge. It now answers a question about the account: a factor the user
+//     chose, confirmed, and can be shown in their settings.
+func (h *Handler) emailFactorAvailable(purpose ChallengePurpose, mailboxAlreadyProven bool, u User) bool {
+	return purpose == PurposeTOTP && !mailboxAlreadyProven &&
+		h.mailer.Driver() == "smtp" && u.Email2FAEnabled
 }
 
 // completeLogin issues a session, or diverts into the second factor.
@@ -139,9 +197,9 @@ func (h *Handler) pendingPayload(u User, purpose ChallengePurpose, mailboxAlread
 	// exclusively in its httpOnly cookie.
 	switch purpose {
 	case PurposeTOTP:
-		methods := []string{methodTOTP, methodRecovery}
-		if h.emailFactorAvailable(purpose, mailboxAlreadyProven) {
-			methods = append(methods, methodEmailOTP)
+		methods := []string{MethodTOTP, MethodRecovery}
+		if h.emailFactorAvailable(purpose, mailboxAlreadyProven, u) {
+			methods = append(methods, MethodEmailOTP)
 		}
 		return twoFactorAuthResponse{
 			Status: statusTwoFactorRequired, Purpose: purpose, Email: MaskEmail(u.Email),
@@ -240,7 +298,7 @@ func (h *Handler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proof := h.secondFactorProof(r.Context(), user, in.Code, &ch.ID)
+	proof := h.challengeProof(r.Context(), user, in.Code, &ch.ID)
 	tok, method, err := h.repo.Complete2FA(r.Context(), ch, proof, h.ttl, clientIP(r), r.UserAgent())
 	if errors.Is(err, ErrBadCredentials) {
 		remaining := maxChallengeAttempts - attempts
@@ -268,7 +326,7 @@ func (h *Handler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 		h.writeChallengeError(w, err)
 		return
 	}
-	if method == methodRecovery {
+	if method == MethodRecovery {
 		// Spending a recovery code is either a user with a new phone or an
 		// attacker holding the printed sheet. The owner is the only one who can
 		// tell, and only if told.
@@ -279,11 +337,11 @@ func (h *Handler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, tok.CSRF))
 }
 
-// secondFactorProof prepares every proof the submitted shape can represent.
+// challengeProof prepares every proof the submitted shape can represent.
 // The repository decides which one is live while consuming it with the
 // challenge and session write in one transaction.
-func (h *Handler) secondFactorProof(ctx context.Context, u User, code string,
-	challengeID *int64) secondFactorProof {
+func (h *Handler) challengeProof(ctx context.Context, u User, code string,
+	challengeID *int64) challengeProof {
 
 	// The two kinds are told apart by the SEPARATOR-STRIPPED length, not by how
 	// many digits survive a digit-only filter.
@@ -295,16 +353,16 @@ func (h *Handler) secondFactorProof(ctx context.Context, u User, code string,
 	// length separates them cleanly while still accepting "123 456" and
 	// "123-456" as a numeric code.
 	if digits, ok := numericOTP(code); ok {
-		return secondFactorProof{
+		return challengeProof{
 			totp:        h.verifyTOTPProof(ctx, u.ID, digits),
 			emailDigest: h.codeMAC.EmailOTPDigest(u.ID, OTPPurposeLogin2FA, challengeID, digits),
 		}
 	}
 	normalized := normalizeRecoveryCode(code)
 	if normalized == "" {
-		return secondFactorProof{}
+		return challengeProof{}
 	}
-	return secondFactorProof{
+	return challengeProof{
 		recoveryDigest: h.codeMAC.RecoveryCodeDigest(u.ID, normalized),
 	}
 }
@@ -348,10 +406,18 @@ func (h *Handler) SendEmailOTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Loaded before the guard because the guard now asks about the ACCOUNT — has
+	// it enrolled e-mail as a factor — and not merely about the challenge.
+	user, err := h.repo.GetUser(r.Context(), ch.UserID)
+	if err != nil {
+		h.logger.Error("otp load user", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
 	// Refuse rather than silently 202: this is the door the reset flow closes,
 	// and answering "accepted" while sending nothing would leave the user
 	// waiting for a code that is never coming.
-	if !h.emailFactorAvailable(ch.Purpose, ch.MailboxAlreadyProven) {
+	if !h.emailFactorAvailable(ch.Purpose, ch.MailboxAlreadyProven, user) {
 		httperr.Write(w, httperr.New(http.StatusForbidden, "email_factor_unavailable",
 			"a mailed code cannot be used for this sign-in"))
 		return
@@ -362,12 +428,7 @@ func (h *Handler) SendEmailOTP(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	email, recipientLocale, err := h.repo.RecipientForUser(r.Context(), ch.UserID)
-	if err != nil {
-		h.logger.Error("otp recipient", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
+	email, recipientLocale := user.Email, user.Locale
 	id := ch.ID
 	ttl := h.otpTTL(r.Context())
 	// The code and its e-mail commit together. The send this charges against the
@@ -634,20 +695,23 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	// Policy check first: an admin who could disable their own second factor
+	// Policy check first: an admin who could disable their LAST second factor
 	// would make AUTH_REQUIRE_2FA_FOR_ADMINS a suggestion. The next login would
 	// divert them straight back into mandatory enrollment anyway.
-	if h.require2FAForAdmins && user.Role.IsAdmin() {
+	if !h.mayRemoveFactor(h.mw.requireTOTPForAdmins(r.Context()), user, factorTOTP) {
 		httperr.Write(w, httperr.New(http.StatusForbidden, "totp_required_for_admins",
 			"administrators must keep two-factor authentication enabled"))
 		return
 	}
-	proof, stepUpKey, ok := h.stepUpTOTPProof(w, r, p.UserID, in.Code)
+	proof, stepUpKey, ok := h.stepUpSecondFactor(w, r, p.UserID, user, in.Code)
 	if !ok {
 		return
 	}
-	err = h.repo.DisableTOTP(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, *proof)
+	err = h.repo.DisableTOTP(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, proof)
 	h.settleStepUp(stepUpKey, err)
+	if err == nil {
+		h.notifyIfRecovery(r, user, proof)
+	}
 	if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
 			"password is incorrect"))
@@ -687,7 +751,7 @@ func (h *Handler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	proof, stepUpKey, ok := h.stepUpTOTPProof(w, r, p.UserID, in.Code)
+	proof, stepUpKey, ok := h.stepUpSecondFactor(w, r, p.UserID, user, in.Code)
 	if !ok {
 		return
 	}
@@ -699,8 +763,14 @@ func (h *Handler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request
 		return
 	}
 	err = h.repo.RegenerateRecoveryCodes(r.Context(), p.UserID, p.SessionID, user.TokenVersion,
-		in.Password, *proof, hashes)
+		in.Password, proof, hashes)
 	h.settleStepUp(stepUpKey, err)
+	if err == nil {
+		// Someone holding ONE printed code can replace the whole sheet, which
+		// locks the real owner out of every other code they were keeping. That
+		// is precisely the event only the owner can judge, and only if told.
+		h.notifyIfRecovery(r, user, proof)
+	}
 	if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
 			"password is incorrect"))
@@ -723,6 +793,15 @@ func (h *Handler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request
 }
 
 // TwoFactorStatus reports the caller's own 2FA state for the settings screen.
+//
+// `enabled` is the AGGREGATE — the account has a second factor — while the two
+// per-method flags say which ones. It used to mean `totp_enabled` and could
+// have stayed that way, but the screen's headline question is "is my account
+// protected?", and answering it with one method's state would call an
+// e-mail-only account unprotected.
+//
+// The `can_disable_*` pair is not a convenience: it is the server answering the
+// question the screen would otherwise guess at. See mayRemoveFactor.
 func (h *Handler) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 	p, _ := authctx.FromContext(r.Context())
 	user, err := h.repo.GetUser(r.Context(), p.UserID)
@@ -735,10 +814,18 @@ func (h *Handler) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
+	totpOnly := h.mw.requireTOTPForAdmins(r.Context())
 	httperr.JSON(w, http.StatusOK, map[string]any{
-		"enabled":                  user.TOTPEnabled,
+		"enabled":                  user.HasSecondFactor(),
+		"totp_enabled":             user.TOTPEnabled,
+		"email_enabled":            user.Email2FAEnabled,
 		"recovery_codes_remaining": remaining,
 		"required":                 h.require2FAForAdmins && user.Role.IsAdmin(),
+		"can_disable_totp":         user.TOTPEnabled && h.mayRemoveFactor(totpOnly, user, factorTOTP),
+		"can_disable_email":        user.Email2FAEnabled && h.mayRemoveFactor(totpOnly, user, factorEmail),
+		// The e-mail method is only offerable where a mailed code can actually
+		// arrive; the `log` driver would print the "factor" to stdout.
+		"email_available": h.mailer.Driver() == "smtp",
 	})
 }
 
@@ -746,30 +833,109 @@ func (h *Handler) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 // Shared helpers
 // ─────────────────────────────────────────────────────────────────────
 
-// stepUpTOTPProof verifies a current TOTP code under an attempt budget and
-// returns the exact row/counter proof for transactional consumption.
+// stepUpSecondFactor proves a second factor on a SESSION-authenticated path,
+// returning the rate-limit key the caller must settle.
 //
-// The budget is what separates these endpoints from Verify2FA, which is capped
-// by auth_challenge.attempts. There is no challenge on a session-authenticated
-// step-up, so without a limiter an attacker holding a hijacked session could
-// grind the ~3 codes valid at any instant out of a space of a million.
-func (h *Handler) stepUpTOTPProof(w http.ResponseWriter, r *http.Request,
-	uid authctx.UserID, code string) (*TOTPProof, string, bool) {
+// The four step-up call sites — disable a factor, regenerate recovery codes,
+// set a password, link an OAuth identity — have no auth_challenge to carry an
+// attempt budget in the database, which is why the in-memory per-user limiter
+// is the ceiling here rather than a column. Charging the attempt BEFORE the
+// code is checked is deliberate: a cancelled request costs the attacker nothing
+// only if it also gains them nothing.
+//
+// TOTP and recovery codes are told apart by SEPARATOR-STRIPPED LENGTH, never by
+// digit count. Roughly 18% of recovery codes contain exactly six digits, and a
+// discriminator that filtered to digits and asked "is it six long?" would route
+// those to the TOTP path where they can never match — leaving the holder unable
+// to redeem a code that is perfectly valid.
+//
+// A six-digit code may be an authenticator code OR a mailed step-up code, and
+// the two are tried in that order with a FALL-THROUGH rather than an else-if.
+// They are indistinguishable by shape, so a chain that committed to the TOTP
+// branch on "six digits" would make the e-mail factor unusable for exactly the
+// accounts that have no authenticator to fall back on. Both attempts cost the
+// single budget slot this request already reserved — it is one guess.
+//
+// The e-mail branch requires user.Email2FAEnabled, and that is the load-bearing
+// condition. Accepting a mailed code from an account that never enrolled the
+// factor would let mailbox control alone authorize removing an authenticator —
+// the same one-channel failure `mailbox_already_proven` exists to prevent.
+// It VERIFIES without spending. The returned proof is consumed by the
+// repository, inside the transaction that performs the protected write, so a
+// later failure restores it instead of burning a valid credential for an
+// operation that never happened. That property is stated in CLAUDE.md §4 for
+// TOTP and matters at least as much for a recovery code, which is a lockout
+// credential rather than a 30-second counter.
+func (h *Handler) stepUpSecondFactor(w http.ResponseWriter, r *http.Request,
+	uid authctx.UserID, user User, code string) (SecondFactorProof, string, bool) {
 
 	key := "stepup:" + strconv.FormatInt(int64(uid), 10)
 	until, ok := h.stepUpUser.Begin(key)
 	if !ok {
 		writeRateLimited(w, until)
-		return nil, "", false
+		return SecondFactorProof{}, "", false
 	}
-	proof := h.verifyTOTPProof(r.Context(), uid, normalizeOTPCode(code))
-	if proof == nil {
+
+	var proof SecondFactorProof
+	if digits, numeric := numericOTP(code); numeric {
+		if h.cipher != nil {
+			if p := h.verifyTOTPProof(r.Context(), uid, digits); p != nil {
+				proof = SecondFactorProof{Method: MethodTOTP, TOTP: p}
+			}
+		}
+		if proof.Method == "" && user.Email2FAEnabled && h.codeMAC != nil {
+			// Verified by presence rather than by spending: an unexpired,
+			// unconsumed row for this exact digest is the proof, and the
+			// conditional UPDATE that spends it runs in the caller's transaction.
+			digest := h.codeMAC.EmailOTPDigest(uid, OTPPurposeStepUp2FA, nil, digits)
+			live, err := h.repo.StepUpEmailOTPIsLive(r.Context(), uid, digest)
+			if err != nil {
+				// The CLIENT still gets the uniform refusal below — telling a
+				// database blip apart from a wrong code would be an oracle. But
+				// the SERVER must not stay silent: without this, a Postgres
+				// hiccup turns a valid code into "invalid" with nothing in the
+				// log to explain the support ticket that follows.
+				h.logger.Error("step-up mailed code lookup", "err", err)
+			}
+			if err == nil && live {
+				proof = SecondFactorProof{Method: MethodEmailOTP, Digest: digest}
+			}
+		}
+	} else if normalized := normalizeRecoveryCode(code); len(normalized) == recoveryCodeChars && h.codeMAC != nil {
+		digest := h.codeMAC.RecoveryCodeDigest(uid, normalized)
+		live, err := h.repo.RecoveryCodeIsLive(r.Context(), uid, digest)
+		if err != nil {
+			// Same reasoning, and it matters more here: a recovery code is a
+			// lockout credential, so a silent failure looks to the user like the
+			// sheet they carefully saved has stopped working.
+			h.logger.Error("step-up recovery code lookup", "err", err)
+		}
+		if err == nil && live {
+			proof = SecondFactorProof{Method: MethodRecovery, Digest: digest}
+		}
+	}
+	if proof.Method == "" {
 		h.stepUpUser.CommitFail(key)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
-		return nil, "", false
+		return SecondFactorProof{}, "", false
 	}
 	return proof, key, true
 }
+
+// notifyIfRecovery tells the owner a recovery code was spent — either them, or
+// someone who should not have had one. Called only AFTER the operation
+// committed, because the code is not actually spent until then.
+func (h *Handler) notifyIfRecovery(r *http.Request, user User, proof SecondFactorProof) {
+	if proof.Method == MethodRecovery {
+		h.notifyRecoveryCodeUsed(r.Context(), user, localeFor(user.Locale, r))
+	}
+}
+
+// errProofNotAttempted marks a reservation that must be RELEASED rather than
+// charged: the request failed before the caller's proof was ever examined, so
+// it neither succeeded nor spent a guess. Deliberately matches no branch of
+// settleStepUp, whose default is Release.
+var errProofNotAttempted = errors.New("auth: proof not attempted")
 
 func (h *Handler) settleStepUp(key string, err error) {
 	switch {

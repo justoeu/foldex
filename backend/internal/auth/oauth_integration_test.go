@@ -1323,10 +1323,10 @@ func TestSetPassword_RepositoryRefusalsAreTyped(t *testing.T) {
 		secrets.Hash(c.cookies[auth.CookieAccess])).Scan(&sid))
 
 	err = h.repo.SetPassword(context.Background(), user.ID, sid, user.TokenVersion,
-		"a different password", nil)
+		"a different password", auth.SecondFactorProof{})
 	assert.ErrorIs(t, err, auth.ErrPasswordExists)
 	err = h.repo.SetPassword(context.Background(), authctx.UserID(999_999), sid, 0,
-		"a different password", nil)
+		"a different password", auth.SecondFactorProof{})
 	assert.ErrorIs(t, err, auth.ErrNoUser)
 
 	enrolUser(t, h, "admin@example.com", "correct horse battery")
@@ -1334,7 +1334,7 @@ func TestSetPassword_RepositoryRefusalsAreTyped(t *testing.T) {
 	current, err := h.repo.GetUser(context.Background(), user.ID)
 	require.NoError(t, err)
 	err = h.repo.SetPassword(context.Background(), user.ID, sid, current.TokenVersion,
-		"a different password", nil)
+		"a different password", auth.SecondFactorProof{})
 	assert.ErrorIs(t, err, auth.ErrTOTPReplay)
 }
 
@@ -2181,8 +2181,11 @@ func TestSetPassword_RefusesTOTPProofFromAStaleCredentialEpoch(t *testing.T) {
 
 	require.NoError(t, h.repo.RevokeAllForUser(context.Background(), user.ID, auth.ReasonLogoutAll))
 	err = h.repo.SetPassword(context.Background(), user.ID, sid, user.TokenVersion,
-		"a brand new password", &auth.TOTPProof{
-			Counter: *row.LastUsedCounter + 1, Ciphertext: row.Ciphertext, Nonce: row.Nonce,
+		"a brand new password", auth.SecondFactorProof{
+			Method: auth.MethodTOTP,
+			TOTP: &auth.TOTPProof{
+				Counter: *row.LastUsedCounter + 1, Ciphertext: row.Ciphertext, Nonce: row.Nonce,
+			},
 		})
 	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
 

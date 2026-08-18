@@ -489,7 +489,14 @@ type TOTPProof struct {
 	Nonce      []byte
 }
 
-type secondFactorProof struct {
+// challengeProof is the LOGIN-path proof: what Verify2FA resolved from a code
+// submitted against an auth_challenge, which carries its own attempt budget.
+//
+// Distinct from the exported SecondFactorProof, which serves the
+// session-authenticated step-up paths that have no challenge. The two were
+// briefly named the same word in different cases, which is a distinction no
+// reader should have to make.
+type challengeProof struct {
 	totp           *TOTPProof
 	emailDigest    []byte
 	recoveryDigest []byte
@@ -583,18 +590,28 @@ func (r *Repository) LoadTOTPSecret(ctx context.Context, uid authctx.UserID) (TO
 	return row, nil
 }
 
-// HasConfirmedTOTP is the authorization-time source of truth for mandatory
-// administrator 2FA. It intentionally reads the current row rather than any
-// session-cached claim, so deleting or replacing the factor fails closed on the
-// next admin request.
-func (r *Repository) HasConfirmedTOTP(ctx context.Context, uid authctx.UserID) (bool, error) {
+// HasConfirmedSecondFactor is the authorization-time source of truth for
+// mandatory administrator 2FA. It intentionally reads the current rows rather
+// than any session-cached claim, so deleting or replacing a factor fails closed
+// on the next admin request.
+//
+// totpOnly comes from instance policy (ADR-37 §7.5). When it is false an
+// enrolled e-mail factor satisfies the gate; when true only an authenticator
+// does. It is a PARAMETER rather than something this method reads for itself
+// because the repository has no business knowing about policy — and because a
+// caller that forgets to pass it gets the permissive floor, which is the
+// direction that cannot lock an owner out of their own instance.
+func (r *Repository) HasConfirmedSecondFactor(ctx context.Context, uid authctx.UserID, totpOnly bool) (bool, error) {
 	var confirmed bool
 	if err := r.pool.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM totp_secret
 			WHERE user_id = $1 AND confirmed_at IS NOT NULL
-		)`, int64(uid)).Scan(&confirmed); err != nil {
-		return false, fmt.Errorf("check confirmed totp: %w", err)
+		) OR (NOT $2 AND EXISTS (
+			SELECT 1 FROM email_factor
+			WHERE user_id = $1 AND confirmed_at IS NOT NULL
+		))`, int64(uid), totpOnly).Scan(&confirmed); err != nil {
+		return false, fmt.Errorf("check confirmed second factor: %w", err)
 	}
 	return confirmed, nil
 }
@@ -724,7 +741,7 @@ func (r *Repository) ConsumeTOTPProof(ctx context.Context, uid authctx.UserID, p
 
 // Complete2FA spends exactly one accepted proof and its challenge, then creates
 // the session. A failure in any later write restores both bearer credentials.
-func (r *Repository) Complete2FA(ctx context.Context, ch Challenge, proof secondFactorProof,
+func (r *Repository) Complete2FA(ctx context.Context, ch Challenge, proof challengeProof,
 	ttl SessionTTL, ip, ua string) (issuedTokens, string, error) {
 
 	issue, err := newSessionIssue(ttl)
@@ -762,7 +779,7 @@ func (r *Repository) Complete2FA(ctx context.Context, ch Challenge, proof second
 		return issuedTokens{}, "", fmt.Errorf("complete 2fa lock challenge: %w", err)
 	}
 
-	method, err := consumeSecondFactorProofTx(ctx, tx, ch, proof)
+	method, err := consumeChallengeProofTx(ctx, tx, ch, proof)
 	if err != nil {
 		return issuedTokens{}, "", err
 	}
@@ -781,8 +798,8 @@ func (r *Repository) Complete2FA(ctx context.Context, ch Challenge, proof second
 	return issue.tokens, method, nil
 }
 
-func consumeSecondFactorProofTx(ctx context.Context, tx pgx.Tx, ch Challenge,
-	proof secondFactorProof) (string, error) {
+func consumeChallengeProofTx(ctx context.Context, tx pgx.Tx, ch Challenge,
+	proof challengeProof) (string, error) {
 
 	if proof.totp != nil {
 		ok, err := consumeTOTPProofIfCurrentTx(ctx, tx, ch.UserID, *proof.totp)
@@ -790,7 +807,7 @@ func consumeSecondFactorProofTx(ctx context.Context, tx pgx.Tx, ch Challenge,
 			return "", err
 		}
 		if ok {
-			return methodTOTP, nil
+			return MethodTOTP, nil
 		}
 	}
 	if len(proof.emailDigest) != 0 {
@@ -803,7 +820,7 @@ func consumeSecondFactorProofTx(ctx context.Context, tx pgx.Tx, ch Challenge,
 		// optional e-mail path indistinguishable from a miss so authenticator
 		// login still works while that table is unavailable.
 		if err == nil && ct.RowsAffected() != 0 {
-			return methodEmailOTP, nil
+			return MethodEmailOTP, nil
 		}
 	}
 	if len(proof.recoveryDigest) != 0 {
@@ -815,7 +832,7 @@ func consumeSecondFactorProofTx(ctx context.Context, tx pgx.Tx, ch Challenge,
 			return "", fmt.Errorf("consume recovery proof: %w", err)
 		}
 		if ct.RowsAffected() != 0 {
-			return methodRecovery, nil
+			return MethodRecovery, nil
 		}
 	}
 	return "", ErrBadCredentials
@@ -847,13 +864,95 @@ func consumeTOTPProofIfCurrentTx(ctx context.Context, tx pgx.Tx, uid authctx.Use
 	return ct.RowsAffected() != 0, nil
 }
 
+// SecondFactorProof is a proof that has been VERIFIED but not yet spent.
+//
+// Verification and consumption are separated so that spending happens in the
+// SAME transaction as the operation the proof authorizes. CLAUDE.md §4 states
+// the property for TOTP, and it matters at least as much for the other two: a
+// recovery code is a LOCKOUT credential, so burning one for a password change
+// that then failed on a constraint costs the user a way back into their account
+// for an operation that never happened.
+//
+// Exactly one field is populated. The method is what selects the statement, and
+// an unknown one consumes nothing and fails closed.
+type SecondFactorProof struct {
+	Method string
+	// TOTP carries the matched time-step counter and the exact seed ciphertext
+	// that produced it, so the conditional UPDATE can reject a replay.
+	TOTP *TOTPProof
+	// Digest is the keyed MAC of a recovery code or a mailed step-up code.
+	Digest []byte
+}
+
+// consumeSecondFactorTx spends the proof, inside the caller's transaction.
+func consumeSecondFactorTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID,
+	p SecondFactorProof) error {
+
+	switch p.Method {
+	case MethodTOTP:
+		if p.TOTP == nil {
+			return ErrBadCredentials
+		}
+		return consumeTOTPProofTx(ctx, tx, uid, *p.TOTP)
+	case MethodRecovery:
+		return consumeSingleUseTx(ctx, tx, `
+			UPDATE recovery_code SET used_at = now()
+			WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL`,
+			int64(uid), p.Digest)
+	case MethodEmailOTP:
+		return consumeSingleUseTx(ctx, tx, `
+			UPDATE email_otp SET consumed_at = now()
+			WHERE user_id = $1 AND code_hash = $2 AND purpose = $3
+			  AND consumed_at IS NULL AND expires_at > now()`,
+			int64(uid), p.Digest, OTPPurposeStepUp2FA)
+	default:
+		// An empty or unrecognised method reaching here means a caller obtained
+		// a proof it never verified. Spending nothing and refusing is the only
+		// safe reading.
+		return ErrBadCredentials
+	}
+}
+
+func consumeSingleUseTx(ctx context.Context, tx pgx.Tx, sql string, args ...any) error {
+	ct, err := tx.Exec(ctx, sql, args...)
+	if err != nil {
+		return fmt.Errorf("consume second factor: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrBadCredentials
+	}
+	return nil
+}
+
+// ConsumeSecondFactor spends a proof outside any caller transaction.
+//
+// The OAuth link path is the one caller: what the proof authorizes is the
+// oauth_state row it mints, and that row is itself the capability, so the code
+// must not stay live long enough to mint a second one.
+func (r *Repository) ConsumeSecondFactor(ctx context.Context, uid authctx.UserID,
+	proof SecondFactorProof) error {
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("consume second factor begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := consumeSecondFactorTx(ctx, tx, uid, proof); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("consume second factor commit: %w", err)
+	}
+	return nil
+}
+
 // DisableTOTP removes the enrollment and every recovery code with it.
 //
 // The two must go together: recovery codes exist only to get past a second
 // factor, so leaving them behind after the factor is gone would keep a set of
 // long-lived bearer credentials alive for an account that no longer has 2FA.
 func (r *Repository) DisableTOTP(ctx context.Context, uid authctx.UserID, sessionID int64,
-	tokenVersion int, password string, proof TOTPProof) error {
+	tokenVersion int, password string, proof SecondFactorProof) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("disable totp begin: %w", err)
@@ -881,14 +980,30 @@ func (r *Repository) DisableTOTP(ctx context.Context, uid authctx.UserID, sessio
 	if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
 		return err
 	}
-	if err := consumeTOTPProofTx(ctx, tx, uid, proof); err != nil {
+	if err := consumeSecondFactorTx(ctx, tx, uid, proof); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM totp_secret WHERE user_id = $1`, int64(uid)); err != nil {
 		return fmt.Errorf("delete totp secret: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM recovery_code WHERE user_id = $1`, int64(uid)); err != nil {
-		return fmt.Errorf("delete recovery codes: %w", err)
+	// Recovery codes guard the FACTORS, not the authenticator specifically. This
+	// used to delete them unconditionally, which was correct while TOTP was the
+	// only factor there could be — and became a lockout the moment e-mail could
+	// be enrolled too (ADR-37): disabling TOTP would leave an account holding an
+	// e-mail factor with no way past the reset-link guard that deliberately
+	// refuses it. Read under the user lock already held, so a concurrent e-mail
+	// disable cannot have both paths conclude the other factor survives.
+	var emailLeft bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM email_factor WHERE user_id = $1 AND confirmed_at IS NOT NULL
+		)`, int64(uid)).Scan(&emailLeft); err != nil {
+		return fmt.Errorf("disable totp check email factor: %w", err)
+	}
+	if !emailLeft {
+		if _, err := tx.Exec(ctx, `DELETE FROM recovery_code WHERE user_id = $1`, int64(uid)); err != nil {
+			return fmt.Errorf("delete recovery codes: %w", err)
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE app_user SET token_version = token_version + 1, updated_at = now()
@@ -912,7 +1027,7 @@ func (r *Repository) DisableTOTP(ctx context.Context, uid authctx.UserID, sessio
 // ─────────────────────────────────────────────────────────────────────
 
 func (r *Repository) RegenerateRecoveryCodes(ctx context.Context, uid authctx.UserID, sessionID int64,
-	tokenVersion int, password string, proof TOTPProof, hashes [][]byte) error {
+	tokenVersion int, password string, proof SecondFactorProof, hashes [][]byte) error {
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -940,7 +1055,7 @@ func (r *Repository) RegenerateRecoveryCodes(ctx context.Context, uid authctx.Us
 	if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
 		return err
 	}
-	if err := consumeTOTPProofTx(ctx, tx, uid, proof); err != nil {
+	if err := consumeSecondFactorTx(ctx, tx, uid, proof); err != nil {
 		return err
 	}
 	if err := replaceRecoveryCodesTx(ctx, tx, uid, hashes); err != nil {

@@ -593,7 +593,7 @@ func TestExpiry_MailedCodeStopsWorking(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	enrolUser(t, h, "admin@example.com", "a good password")
+	enrolUserWithEmailFactor(t, h, "admin@example.com", "a good password")
 
 	c := h.client(t)
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -843,12 +843,32 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 			[][]byte{[]byte("h")}, 0, nil, testSessionTTL(), "", "")
 		assert.Error(t, err)
 		assert.Error(t, h.repo.ConsumeTOTPProof(ctx, uid, auth.TOTPProof{Counter: 1}))
-		assert.Error(t, h.repo.DisableTOTP(ctx, uid, 1, 0, "password", auth.TOTPProof{}))
+		assert.Error(t, h.repo.DisableTOTP(ctx, uid, 1, 0, "password", auth.SecondFactorProof{}))
+	})
+
+	// ADR-37's e-mail factor. Same purpose as its neighbours: every one of these
+	// methods wraps its database errors, and a wrapped error nobody ever
+	// provokes is a branch that first runs in production.
+	t.Run("email factor", func(t *testing.T) {
+		assert.Error(t, h.repo.StartEmailFactorEnrollment(ctx, uid, 0, 0,
+			[]byte("hash"), time.Minute, time.Minute, auth.MailDraft{}))
+		_, _, err := h.repo.CompleteEmailFactorEnrollment(ctx, uid, 0, []byte("hash"),
+			[][]byte{[]byte("h")}, 0, nil, testSessionTTL(), "", "")
+		assert.Error(t, err)
+		assert.Error(t, h.repo.DisableEmailFactor(ctx, uid, 1, 0, auth.SecondFactorProof{}))
+		assert.Error(t, h.repo.CreateStepUpEmailOTP(ctx, uid, 1, 0,
+			[]byte("hash"), time.Minute, time.Minute, auth.MailDraft{}))
+		_, err = h.repo.StepUpEmailOTPIsLive(ctx, uid, []byte("hash"))
+		assert.Error(t, err)
+		_, err = h.repo.RecoveryCodeIsLive(ctx, uid, []byte("hash"))
+		assert.Error(t, err)
+		assert.Error(t, h.repo.ConsumeSecondFactor(ctx, uid,
+			auth.SecondFactorProof{Method: auth.MethodRecovery, Digest: []byte("h")}))
 	})
 
 	t.Run("recovery codes", func(t *testing.T) {
 		assert.Error(t, h.repo.RegenerateRecoveryCodes(ctx, uid, 1, 0, "password",
-			auth.TOTPProof{}, [][]byte{[]byte("h")}))
+			auth.SecondFactorProof{}, [][]byte{[]byte("h")}))
 		assert.Error(t, h.repo.ConsumeRecoveryCode(ctx, uid, []byte("h")))
 		_, err := h.repo.CountRecoveryCodes(ctx, uid)
 		assert.Error(t, err)

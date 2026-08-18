@@ -6,6 +6,7 @@ import { OtpInput, OTP_LENGTH } from './auth/OtpInput'
 import { GoogleButton } from './auth/GoogleButton'
 import { PasswordStrength } from './PasswordStrength'
 import * as auth from '../api/auth'
+import { sendStepUpCode } from '../api/twofa'
 import { apiErrorCode as errCode } from '../lib/apiError'
 import { useAuth } from '../auth/AuthProvider'
 import { MIN_PASSWORD_LEN } from '../auth/types'
@@ -41,7 +42,16 @@ export function AccountSection() {
   const googleEnabled = session.status !== 'loading' && session.features.google_oauth
   const google = identities.data?.find((i) => i.provider === 'google')
   const hasPassword = user?.has_password ?? true
-  const totpEnabled = user?.totp_enabled ?? false
+  // The AGGREGATE, not the authenticator alone. The server demands a step-up
+  // proof from any account holding a second factor (`HasSecondFactor()`), so
+  // reading totp_enabled here hid the code field from an account whose only
+  // factor is e-mail — leaving the button enabled, the request sent without a
+  // code, and a refusal the screen gave the user no way to answer.
+  const hasSecondFactor = (user?.totp_enabled ?? false) || (user?.email_2fa_enabled ?? false)
+  // Whether a MAILED code is obtainable here. An e-mail-only account has no
+  // authenticator to read six digits from, so without this its only proof is a
+  // recovery code — a lockout credential spent on an ordinary settings change.
+  const canMailCode = user?.email_2fa_enabled ?? false
 
   async function addPassword() {
     if (password !== confirm) {
@@ -140,15 +150,16 @@ export function AccountSection() {
                 onChange={(e) => setConfirm(e.target.value)}
               />
             </label>
-            {/* With no current password to prove, the authenticator is the only
+            {/* With no current password to prove, a second factor is the only
                 step-up available — and this credential outlives the session
                 presenting the request, so a cookie alone is too weak a proof. */}
-            {totpEnabled && (
+            {hasSecondFactor && (
               <label className="fx-field" style={{ margin: 0 }}>
                 <span className="fx-field-label">{t('account.current_code')}</span>
                 <div className="fx-auth" style={{ position: 'static', padding: 0, background: 'none' }}>
                   <OtpInput value={code} onChange={setCode} disabled={busy} />
                 </div>
+                {canMailCode && <MailCodeButton disabled={busy} />}
               </label>
             )}
             <div>
@@ -158,7 +169,7 @@ export function AccountSection() {
                   busy ||
                   password.length < MIN_PASSWORD_LEN ||
                   !confirm ||
-                  (totpEnabled && code.length < OTP_LENGTH)
+                  (hasSecondFactor && code.length < OTP_LENGTH)
                 }
                 onClick={() => void addPassword()}
               >
@@ -221,13 +232,60 @@ export function AccountSection() {
         )}
       </div>
       {linkOpen && (
-        <GoogleLinkDialog totpEnabled={totpEnabled} onClose={() => setLinkOpen(false)} />
+        <GoogleLinkDialog
+          hasSecondFactor={hasSecondFactor}
+          canMailCode={canMailCode}
+          onClose={() => setLinkOpen(false)}
+        />
       )}
     </section>
   )
 }
 
-function GoogleLinkDialog({ totpEnabled, onClose }: { totpEnabled: boolean; onClose: () => void }) {
+/**
+ * Asks the server to mail a step-up code.
+ *
+ * The only proof an e-mail-only account can produce here: it has no
+ * authenticator to read six digits from, and the alternative — a recovery code —
+ * is a lockout credential, too expensive to spend on setting a password.
+ *
+ * Element-qualified class: `.fx-shell button` is (0,1,1) and out-specifies a
+ * bare component class, which would strip this back to plain prose.
+ */
+function MailCodeButton({ disabled }: { disabled: boolean }) {
+  const { t } = useTranslation()
+  const [sent, setSent] = useState(false)
+  const [busy, setBusy] = useState(false)
+  return (
+    <span className="fx-field-hint" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {sent ? t('twofa.code_sent') : t('twofa.code_accepts_mailed')}
+      <button
+        type="button"
+        className="fx-field-action"
+        disabled={disabled || busy}
+        onClick={() => {
+          setBusy(true)
+          sendStepUpCode()
+            .then(() => setSent(true))
+            .catch(() => setSent(false))
+            .finally(() => setBusy(false))
+        }}
+      >
+        {t('twofa.mail_a_code')}
+      </button>
+    </span>
+  )
+}
+
+function GoogleLinkDialog({
+  hasSecondFactor,
+  canMailCode,
+  onClose,
+}: {
+  hasSecondFactor: boolean
+  canMailCode: boolean
+  onClose: () => void
+}) {
   const { t } = useTranslation()
   const dialogRef = useRef<HTMLDivElement>(null)
   const [password, setPassword] = useState('')
@@ -244,7 +302,7 @@ function GoogleLinkDialog({ totpEnabled, onClose }: { totpEnabled: boolean; onCl
     setBusy(true)
     setError('')
     try {
-      const redirectURL = await auth.beginGoogleLink(password, totpEnabled ? code : '')
+      const redirectURL = await auth.beginGoogleLink(password, hasSecondFactor ? code : '')
       auth.navigateToOAuth(redirectURL)
     } catch (err) {
       setError(messageFor(err, t))
@@ -254,7 +312,8 @@ function GoogleLinkDialog({ totpEnabled, onClose }: { totpEnabled: boolean; onCl
     }
   }
 
-  const codeReady = !totpEnabled || (method === 'totp' ? code.length === OTP_LENGTH : code.trim() !== '')
+  const codeReady =
+    !hasSecondFactor || (method === 'totp' ? code.length === OTP_LENGTH : code.trim() !== '')
   return (
     <div
       ref={dialogRef}
@@ -293,7 +352,7 @@ function GoogleLinkDialog({ totpEnabled, onClose }: { totpEnabled: boolean; onCl
             />
           </label>
 
-          {totpEnabled && method === 'totp' && (
+          {hasSecondFactor && method === 'totp' && (
             <label className="fx-field" style={{ margin: 0 }}>
               <span className="fx-field-label">{t('account.current_code')}</span>
               <div className="fx-auth" style={{ position: 'static', padding: 0, background: 'none' }}>
@@ -301,7 +360,7 @@ function GoogleLinkDialog({ totpEnabled, onClose }: { totpEnabled: boolean; onCl
               </div>
             </label>
           )}
-          {totpEnabled && method === 'recovery' && (
+          {hasSecondFactor && method === 'recovery' && (
             <label className="fx-field" style={{ margin: 0 }}>
               <span className="fx-field-label">{t('account.recovery_code')}</span>
               <input
@@ -314,7 +373,8 @@ function GoogleLinkDialog({ totpEnabled, onClose }: { totpEnabled: boolean; onCl
               />
             </label>
           )}
-          {totpEnabled && (
+          {hasSecondFactor && canMailCode && method === 'totp' && <MailCodeButton disabled={busy} />}
+          {hasSecondFactor && (
             <button
               type="button"
               className="fx-btn"

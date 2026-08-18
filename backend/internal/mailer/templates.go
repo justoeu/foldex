@@ -67,6 +67,37 @@ func LoginCodeMessage(to, code string, expiresInMinutes int) Envelope {
 	}}
 }
 
+// EnrollEmail2FAMessage builds the envelope that confirms an address AS A
+// SECOND FACTOR.
+//
+// A template of its own rather than a reuse of login_code, whose copy would be
+// actively wrong here: it announces a sign-in and warns "if this is not you,
+// someone may know your password — change it". Sent to a user who has just
+// asked to add e-mail as a factor, that is both untrue and alarming, and would
+// push them toward a password change they do not need.
+func EnrollEmail2FAMessage(to, code string, expiresInMinutes int) Envelope {
+	return Envelope{Template: TemplateEnrollEmail2FA, To: to, Params: map[string]string{
+		ParamCode:           code,
+		ParamExpiresMinutes: strconv.Itoa(expiresInMinutes),
+	}}
+}
+
+// StepUpCodeMessage builds the envelope that authorizes a credential change
+// from a live session, using the account's enrolled e-mail factor.
+//
+// Distinct from both neighbours because the reader's situation is distinct. A
+// login code means "someone is signing in"; an enrollment code means "someone
+// is adding this address". This one means "someone already signed in is about
+// to change a security setting" — and that is the message where an unexpected
+// arrival matters most, because the change it authorizes may be REMOVING a
+// factor.
+func StepUpCodeMessage(to, code string, expiresInMinutes int) Envelope {
+	return Envelope{Template: TemplateStepUpCode, To: to, Params: map[string]string{
+		ParamCode:           code,
+		ParamExpiresMinutes: strconv.Itoa(expiresInMinutes),
+	}}
+}
+
 // VerifyEmailMessage builds the address-confirmation envelope. verifyURL
 // carries a raw token and is therefore a credential, like the invite and reset
 // links.

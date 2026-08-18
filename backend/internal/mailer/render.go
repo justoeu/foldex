@@ -27,6 +27,8 @@ const (
 	TemplatePasswordReset    = "password_reset"
 	TemplateResetUnavailable = "reset_unavailable"
 	TemplateLoginCode        = "login_code"
+	TemplateEnrollEmail2FA   = "enroll_email_2fa"
+	TemplateStepUpCode       = "step_up_code"
 	TemplateVerifyEmail      = "verify_email"
 	TemplateAdminRecovery    = "admin_recovery"
 	TemplateSessionRevoked   = "session_revoked"
