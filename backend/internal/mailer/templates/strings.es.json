@@ -1,0 +1,77 @@
+{
+  "invite": {
+    "subject": "Te han invitado a Foldex",
+    "heading": "Te han invitado{{if .By}} por {{.By}}{{end}} a Foldex.",
+    "body": [
+      "Abre el enlace de abajo para elegir una contraseña y activar tu cuenta."
+    ],
+    "action": "Elegir una contraseña y activar mi cuenta",
+    "footnote": "El enlace caduca en {{.ExpiresHours}} horas y solo puede usarse una vez. Si no esperabas esta invitación, puedes ignorar este mensaje."
+  },
+  "password_reset": {
+    "subject": "Restablece tu contraseña de Foldex",
+    "heading": "Alguien pidió restablecer la contraseña de tu cuenta de Foldex.",
+    "body": [
+      "Abre el enlace de abajo para elegir una nueva contraseña."
+    ],
+    "action": "Elegir una nueva contraseña",
+    "footnote": "El enlace caduca en {{.ExpiresMinutes}} minutos y solo puede usarse una vez. Si no lo pediste, puedes ignorar este mensaje — tu contraseña no cambiará."
+  },
+  "reset_unavailable": {
+    "subject": "Restablece tu contraseña de Foldex",
+    "heading": "Alguien pidió restablecer la contraseña de tu cuenta de Foldex.",
+    "body": [
+      "Esta cuenta inicia sesión con Google, así que no hay contraseña que restablecer.",
+      "Usa “Continuar con Google” en la pantalla de inicio de sesión."
+    ],
+    "footnote": "Si no lo pediste, puedes ignorar este mensaje."
+  },
+  "login_code": {
+    "subject": "Código de acceso de Foldex: {{.Code}}",
+    "heading": "Tu código de acceso de Foldex",
+    "footnote": "Caduca en {{.ExpiresMinutes}} minutos y solo puede usarse una vez. Si no eres tú quien está entrando ahora, alguien podría saber tu contraseña — cámbiala."
+  },
+  "verify_email": {
+    "subject": "Confirma tu correo de Foldex",
+    "heading": "Confirma esta dirección para tu cuenta de Foldex.",
+    "body": [
+      "Abre el enlace de abajo para terminar de confirmar tu dirección de correo."
+    ],
+    "action": "Confirmar mi dirección de correo",
+    "footnote": "El enlace caduca en {{.ExpiresMinutes}} minutos y solo puede usarse una vez. Si no lo pediste, puedes ignorar este mensaje."
+  },
+  "admin_recovery": {
+    "subject": "Se solicitó la recuperación de tu cuenta de Foldex",
+    "heading": "Un administrador inició la recuperación de tu cuenta de Foldex.",
+    "body": [
+      "Abre el enlace de abajo para elegir tú mismo una nueva contraseña. Nadie más llega a verla."
+    ],
+    "action": "Elegir mi nueva contraseña",
+    "footnote": "El enlace caduca en {{.ExpiresMinutes}} minutos y solo puede usarse una vez. Tu contraseña y tus sesiones no cambian hasta que lo uses. Si no lo esperabas, avisa a tu administrador e ignora este mensaje."
+  },
+  "session_revoked": {
+    "subject": "Se cerraron tus sesiones de Foldex",
+    "heading": "Se cerraron tus sesiones de Foldex.",
+    "body": [
+      "Un token de sesión de tu cuenta de Foldex fue reutilizado, lo que suele significar que fue copiado de tu dispositivo.",
+      "Por precaución se cerró cada sesión activa. Vuelve a iniciar sesión para continuar."
+    ],
+    "footnote": "Si no fuiste tú, cambia tu contraseña después de iniciar sesión. Este mensaje no lleva ningún enlace a propósito — Foldex nunca te pide hacer clic en uno para proteger tu cuenta."
+  },
+  "recovery_code_used": {
+    "subject": "Se usó un código de recuperación de Foldex",
+    "heading": "Acaba de usarse un código de recuperación para entrar en tu cuenta de Foldex.",
+    "body": [
+      "Te quedan {{.Remaining}} códigos de recuperación."
+    ],
+    "footnote": "Si no fuiste tú, cambia tu contraseña y regenera tus códigos de recuperación ahora."
+  },
+  "account_converted": {
+    "subject": "Tu cuenta de Foldex ahora usa el inicio de sesión con Google",
+    "heading": "Tu cuenta de Foldex ahora inicia sesión con Google ({{.GoogleEmail}}).",
+    "body": [
+      "Se le quitó la contraseña y se cerró cada una de las demás sesiones."
+    ],
+    "footnote": "Si no fuiste tú, contacta de inmediato con el administrador de tu Foldex: quien hizo esto sabía tu contraseña, y el restablecimiento de contraseña ya no se aplica a esta cuenta."
+  }
+}

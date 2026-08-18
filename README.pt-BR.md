@@ -401,6 +401,14 @@ escrita é aceita e se as telas de administração existem — nunca de quem sã
 você enxerga. Um administrador gerencia contas e continua sem conseguir ler as linhas de
 outra conta.
 
+**Uma tela só de configurações.** A engrenagem do topbar abre tudo: um cabeçalho de página
+com ações próprias (exportar backup, convidar alguém), um card mostrando com qual conta
+você está logado — com um empurrão para ativar a verificação em duas etapas enquanto não
+houver nenhuma — e uma grade de cards, um por painel. Administradores ganham um seletor
+**Pessoal × Administração** acima disso; os demais veem só o escopo pessoal, porque
+`/api/admin` responde 404 para eles e uma aba desabilitada prometeria uma superfície que o
+servidor nega.
+
 **Administrando pessoas.** **Configurações → Administração** lista todas as contas com
 papel, último acesso e status, e permite trocar papéis, desativar, excluir, encerrar
 sessões, enviar recuperação da conta e (sendo proprietário) transferir a instância.
@@ -430,6 +438,16 @@ servidor SMTP precisa conseguir convidar alguém mesmo assim. Leia com
 real, use `MAIL_DRIVER=smtp` e as variáveis `MAIL_*`; `make up-mail` sobe o
 [Mailpit](https://mailpit.axllent.org/) com uma caixa de entrada local em
 <http://localhost:8025> para desenvolvimento.
+
+O envio é **durável**: cada mensagem é gravada numa linha de `mail_outbox` na mesma
+transação de banco que a credencial que ela carrega, então um restart, um deploy ou
+uma queda do provedor não perdem um convite, um link de redefinição ou um código de
+entrada. Um envio que falha é retentado com backoff crescente (1 min → 5 → 15 → 30 →
+60) e desiste depois de seis tentativas, deixando a linha como `failed` para você
+inspecionar. O payload guardado é cifrado com uma subchave derivada de `AUTH_ENCRYPTION_KEY` — uma linha na
+fila contém um link de redefinição vivo, e um dump do banco não pode ser um kit de
+sequestro de conta. As mensagens são renderizadas na hora do envio, em inglês,
+português ou espanhol, seguindo o `Accept-Language` da requisição que as disparou.
 
 **O que cada conta enxerga.** Tudo é privado por conta — administradores inclusive. Um
 admin cria, desabilita e apaga usuários, mas nunca vê os links ou notas de outra conta.
@@ -571,6 +589,7 @@ Racional de design, threat model e a superfície de API completa:
 - [SDD: Backup & Restore](docs/SDD-BACKUP-RESTORE.md) — ZIP de snapshot DB + RustFS, modos de conflito, fluxo de validação
 - [SDD: Senha master de pastas](docs/SDD-FOLDER-MASTER-PASSWORD.md) — recuperação de senha por pasta e palavra-dica
 - [SDD: Auth, RBAC e multi-usuário](docs/SDD-AUTH-RBAC.md) — sessões, 2FA, OAuth Google, segmentação de dados por usuário
+- [SDD: E-mail assíncrono e 2FA por e-mail](docs/SDD-EMAIL-ASYNC.md) — outbox transacional e templates HTML localizados (**entregue**); transporte plugável via RabbitMQ e e-mail como segundo fator permanente (**proposto**)
 
 ## Licença
 

@@ -1,45 +1,26 @@
 package mailer
 
-import (
-	"fmt"
-	"html"
-	"strings"
-)
+import "strconv"
 
-// The templates are plain string building rather than html/template because
-// every dynamic value here is either a URL this server just minted or an
-// e-mail address it just validated — there is no rich user content to render.
-// What DOES need care is the HTML arm, where an address containing `<` would
-// otherwise break out of its element, so those values go through html.Escape.
+// The constructors below name a template and supply its params. They do NOT
+// render: rendering happens when the message leaves the outbox, in the
+// recipient's locale, which is what lets a copy fix reach a message that was
+// queued before it landed.
+//
+// Every param a catalogue references must be set here, empty string included.
+// interpolate runs with `missingkey=error`, so a forgotten key fails the render
+// instead of printing `<no value>` into a password-reset e-mail.
 
-// InviteMessage builds the "you were invited" e-mail. acceptURL already carries
-// the raw invite token, which makes the whole URL a credential: it is never
-// logged by the smtp driver, and the log driver's decision to print it is the
+// InviteMessage builds the "you were invited" envelope. acceptURL carries the
+// raw invite token, which makes the whole URL a credential: it is never logged
+// by the smtp driver, and the log driver's decision to print it is the
 // documented trade in mailer.go.
-func InviteMessage(to, inviterName, acceptURL string, expiresInHours int) Message {
-	by := ""
-	if inviterName != "" {
-		by = fmt.Sprintf(" by %s", inviterName)
-	}
-	text := strings.Join([]string{
-		"You have been invited" + by + " to Foldex.",
-		"",
-		"Open the link below to choose a password and activate your account:",
-		acceptURL,
-		"",
-		fmt.Sprintf("The link expires in %d hours and can be used once.", expiresInHours),
-		"If you were not expecting this invitation, you can ignore this message.",
-	}, "\n")
-
-	htmlBody := fmt.Sprintf(
-		`<p>You have been invited%s to <strong>Foldex</strong>.</p>`+
-			`<p><a href="%s">Choose a password and activate your account</a></p>`+
-			`<p style="color:#666;font-size:13px">The link expires in %d hours and can be used once. `+
-			`If you were not expecting this invitation, you can ignore this message.</p>`,
-		html.EscapeString(by), html.EscapeString(acceptURL), expiresInHours,
-	)
-
-	return Message{To: to, Subject: "You have been invited to Foldex", Text: text, HTML: htmlBody}
+func InviteMessage(to, inviterName, acceptURL string, expiresInHours int) Envelope {
+	return Envelope{Template: TemplateInvite, To: to, Params: map[string]string{
+		ParamBy:           inviterName,
+		ParamActionURL:    acceptURL,
+		ParamExpiresHours: strconv.Itoa(expiresInHours),
+	}}
 }
 
 // SessionRevokedMessage warns that a refresh token was replayed and the whole
@@ -47,43 +28,17 @@ func InviteMessage(to, inviterName, acceptURL string, expiresInHours int) Messag
 // sessions are already revoked, so there is no action link — and deliberately
 // no link at all, since an unexpected "your session was terminated, click
 // here" is the exact shape of a phishing mail.
-func SessionRevokedMessage(to string) Message {
-	text := strings.Join([]string{
-		"A session token for your Foldex account was replayed, which usually means",
-		"it was copied from your device.",
-		"",
-		"As a precaution every active session was signed out. Sign in again to continue.",
-		"If this was not you, change your password after signing in.",
-	}, "\n")
-	return Message{
-		To:      to,
-		Subject: "Your Foldex sessions were signed out",
-		Text:    text,
-	}
+func SessionRevokedMessage(to string) Envelope {
+	return Envelope{Template: TemplateSessionRevoked, To: to}
 }
 
-// PasswordResetMessage builds the "reset your password" e-mail. Like the invite
-// link, resetURL carries a raw token and is therefore a credential.
-func PasswordResetMessage(to, resetURL string, expiresInMinutes int) Message {
-	text := strings.Join([]string{
-		"Someone asked to reset the password for your Foldex account.",
-		"",
-		"Open the link below to choose a new password:",
-		resetURL,
-		"",
-		fmt.Sprintf("The link expires in %d minutes and can be used once.", expiresInMinutes),
-		"If you did not ask for this, you can ignore this message — your password will not change.",
-	}, "\n")
-
-	htmlBody := fmt.Sprintf(
-		`<p>Someone asked to reset the password for your <strong>Foldex</strong> account.</p>`+
-			`<p><a href="%s">Choose a new password</a></p>`+
-			`<p style="color:#666;font-size:13px">The link expires in %d minutes and can be used once. `+
-			`If you did not ask for this, you can ignore this message — your password will not change.</p>`,
-		html.EscapeString(resetURL), expiresInMinutes,
-	)
-
-	return Message{To: to, Subject: "Reset your Foldex password", Text: text, HTML: htmlBody}
+// PasswordResetMessage builds the "reset your password" envelope. Like the
+// invite link, resetURL carries a raw token and is therefore a credential.
+func PasswordResetMessage(to, resetURL string, expiresInMinutes int) Envelope {
+	return Envelope{Template: TemplatePasswordReset, To: to, Params: map[string]string{
+		ParamActionURL:      resetURL,
+		ParamExpiresMinutes: strconv.Itoa(expiresInMinutes),
+	}}
 }
 
 // PasswordResetUnavailableMessage answers a reset request for an account that
@@ -96,96 +51,40 @@ func PasswordResetMessage(to, resetURL string, expiresInMinutes int) Message {
 // no link — a reset link here would let the mailbox alone resurrect a password
 // credential, which is exactly what requiring the current password during
 // conversion refused to allow.
-func PasswordResetUnavailableMessage(to string) Message {
-	text := strings.Join([]string{
-		"Someone asked to reset the password for your Foldex account.",
-		"",
-		"This account signs in with Google, so it has no password to reset.",
-		"Use \"Continue with Google\" on the sign-in screen.",
-		"",
-		"If you did not ask for this, you can ignore this message.",
-	}, "\n")
-
-	htmlBody := `<p>Someone asked to reset the password for your <strong>Foldex</strong> account.</p>` +
-		`<p>This account signs in with Google, so it has no password to reset. ` +
-		`Use &ldquo;Continue with Google&rdquo; on the sign-in screen.</p>` +
-		`<p style="color:#666;font-size:13px">If you did not ask for this, you can ignore this message.</p>`
-
-	return Message{To: to, Subject: "Reset your Foldex password", Text: text, HTML: htmlBody}
+func PasswordResetUnavailableMessage(to string) Envelope {
+	return Envelope{Template: TemplateResetUnavailable, To: to}
 }
 
-// LoginCodeMessage builds the e-mail carrying a one-time sign-in code.
+// LoginCodeMessage builds the envelope carrying a one-time sign-in code.
 //
 // The code is in the SUBJECT as well as the body: it is what makes the message
 // usable from a notification preview without opening the mail, which is how
 // most people actually read it.
-func LoginCodeMessage(to, code string, expiresInMinutes int) Message {
-	text := strings.Join([]string{
-		"Your Foldex sign-in code is: " + code,
-		"",
-		fmt.Sprintf("It expires in %d minutes and can be used once.", expiresInMinutes),
-		"If you are not signing in right now, someone may know your password — change it.",
-	}, "\n")
-
-	htmlBody := fmt.Sprintf(
-		`<p>Your <strong>Foldex</strong> sign-in code is:</p>`+
-			`<p style="font-size:28px;letter-spacing:6px;font-weight:700">%s</p>`+
-			`<p style="color:#666;font-size:13px">It expires in %d minutes and can be used once. `+
-			`If you are not signing in right now, someone may know your password — change it.</p>`,
-		html.EscapeString(code), expiresInMinutes,
-	)
-
-	return Message{To: to, Subject: "Foldex sign-in code: " + code, Text: text, HTML: htmlBody}
+func LoginCodeMessage(to, code string, expiresInMinutes int) Envelope {
+	return Envelope{Template: TemplateLoginCode, To: to, Params: map[string]string{
+		ParamCode:           code,
+		ParamExpiresMinutes: strconv.Itoa(expiresInMinutes),
+	}}
 }
 
-// VerifyEmailMessage builds the address-confirmation e-mail. verifyURL carries
-// a raw token and is therefore a credential, like the invite and reset links.
-func VerifyEmailMessage(to, verifyURL string, expiresInMinutes int) Message {
-	text := strings.Join([]string{
-		"Confirm this address for your Foldex account by opening the link below:",
-		verifyURL,
-		"",
-		fmt.Sprintf("The link expires in %d minutes and can be used once.", expiresInMinutes),
-		"If you did not ask for this, you can ignore this message.",
-	}, "\n")
-
-	htmlBody := fmt.Sprintf(
-		`<p>Confirm this address for your <strong>Foldex</strong> account:</p>`+
-			`<p><a href="%s">Confirm my e-mail address</a></p>`+
-			`<p style="color:#666;font-size:13px">The link expires in %d minutes and can be `+
-			`used once. If you did not ask for this, you can ignore this message.</p>`,
-		html.EscapeString(verifyURL), expiresInMinutes,
-	)
-
-	return Message{To: to, Subject: "Confirm your Foldex e-mail", Text: text, HTML: htmlBody}
+// VerifyEmailMessage builds the address-confirmation envelope. verifyURL
+// carries a raw token and is therefore a credential, like the invite and reset
+// links.
+func VerifyEmailMessage(to, verifyURL string, expiresInMinutes int) Envelope {
+	return Envelope{Template: TemplateVerifyEmail, To: to, Params: map[string]string{
+		ParamActionURL:      verifyURL,
+		ParamExpiresMinutes: strconv.Itoa(expiresInMinutes),
+	}}
 }
 
 // AdminPasswordRecoveryMessage carries a user-bound recovery link requested by
 // an administrator. It is sent only through SMTP; the log driver must never be
 // used for this credential.
-func AdminPasswordRecoveryMessage(to, resetURL string, expiresInMinutes int) Message {
-	text := strings.Join([]string{
-		"An administrator started account recovery for your Foldex account.",
-		"",
-		"Open the link below to choose your own new password:",
-		resetURL,
-		"",
-		fmt.Sprintf("The link expires in %d minutes and can be used once.", expiresInMinutes),
-		"Your password and sessions do not change until you use the link.",
-		"If you did not expect this, tell your administrator and ignore the message.",
-	}, "\n")
-
-	htmlBody := fmt.Sprintf(
-		`<p>An administrator started account recovery for your <strong>Foldex</strong> account.</p>`+
-			`<p><a href="%s">Choose my new password</a></p>`+
-			`<p style="color:#666;font-size:13px">The link expires in %d minutes and can be used once. `+
-			`Your password and sessions do not change until you use it. If you did not expect this, `+
-			`tell your administrator and ignore the message.</p>`,
-		html.EscapeString(resetURL), expiresInMinutes,
-	)
-
-	return Message{To: to, Subject: "Account recovery was requested for your Foldex account",
-		Text: text, HTML: htmlBody}
+func AdminPasswordRecoveryMessage(to, resetURL string, expiresInMinutes int) Envelope {
+	return Envelope{Template: TemplateAdminRecovery, To: to, Params: map[string]string{
+		ParamActionURL:      resetURL,
+		ParamExpiresMinutes: strconv.Itoa(expiresInMinutes),
+	}}
 }
 
 // AccountConvertedMessage warns that the account now signs in with Google and
@@ -196,28 +95,10 @@ func AdminPasswordRecoveryMessage(to, resetURL string, expiresInMinutes int) Mes
 // it — and the only remedy left is an administrator, because the password reset
 // flow no longer applies to an account without a password. Saying that plainly
 // is more useful than a generic "your account was updated".
-func AccountConvertedMessage(to, googleEmail string) Message {
-	text := strings.Join([]string{
-		"Your Foldex account now signs in with Google (" + googleEmail + ").",
-		"",
-		"Its password has been removed, and every other session was signed out.",
-		"",
-		"If this was not you, contact your Foldex administrator immediately:",
-		"whoever did this knew your password, and password reset no longer",
-		"applies to this account.",
-	}, "\n")
-
-	htmlBody := fmt.Sprintf(
-		`<p>Your <strong>Foldex</strong> account now signs in with Google (%s).</p>`+
-			`<p>Its password has been removed, and every other session was signed out.</p>`+
-			`<p style="color:#666;font-size:13px">If this was not you, contact your Foldex `+
-			`administrator immediately: whoever did this knew your password, and password `+
-			`reset no longer applies to this account.</p>`,
-		html.EscapeString(googleEmail),
-	)
-
-	return Message{To: to, Subject: "Your Foldex account now uses Google sign-in",
-		Text: text, HTML: htmlBody}
+func AccountConvertedMessage(to, googleEmail string) Envelope {
+	return Envelope{Template: TemplateAccountConverted, To: to, Params: map[string]string{
+		ParamGoogleEmail: googleEmail,
+	}}
 }
 
 // RecoveryCodeUsedMessage warns that a single-use recovery code was spent.
@@ -225,21 +106,8 @@ func AccountConvertedMessage(to, googleEmail string) Message {
 // Recovery codes bypass the authenticator, so spending one is either the user
 // replacing a lost phone or an attacker who obtained the sheet. Only the owner
 // can tell which, and only if they are told it happened.
-func RecoveryCodeUsedMessage(to string, remaining int) Message {
-	text := strings.Join([]string{
-		"A recovery code was just used to sign in to your Foldex account.",
-		"",
-		fmt.Sprintf("You have %d recovery codes left.", remaining),
-		"If this was not you, change your password and regenerate your recovery codes now.",
-	}, "\n")
-
-	htmlBody := fmt.Sprintf(
-		`<p>A recovery code was just used to sign in to your <strong>Foldex</strong> account.</p>`+
-			`<p>You have <strong>%d</strong> recovery codes left.</p>`+
-			`<p style="color:#666;font-size:13px">If this was not you, change your password and `+
-			`regenerate your recovery codes now.</p>`,
-		remaining,
-	)
-
-	return Message{To: to, Subject: "A Foldex recovery code was used", Text: text, HTML: htmlBody}
+func RecoveryCodeUsedMessage(to string, remaining int) Envelope {
+	return Envelope{Template: TemplateRecoveryCodeUsed, To: to, Params: map[string]string{
+		ParamRemaining: strconv.Itoa(remaining),
+	}}
 }

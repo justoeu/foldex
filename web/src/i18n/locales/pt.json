@@ -717,7 +717,24 @@
     "sec_audit_kicker": "administração",
     "sec_audit_title": "Log de auditoria",
     "sec_policy_kicker": "administração",
-    "sec_policy_title": "Política de senha e acesso"
+    "sec_policy_title": "Política de senha e acesso",
+    "page_lede": "Tudo que governa sua base: conta, segurança, pessoas e permissões. Cada card abre um painel dedicado.",
+    "head_backup": "Exportar backup",
+    "head_invite": "Convidar usuário",
+    "chip_2fa_on": "2FA ativo",
+    "chip_2fa_off": "2FA desativado",
+    "chip_mail_verified": "E-mail verificado",
+    "chip_mail_unverified": "E-mail não verificado",
+    "promo_kicker": "Recomendado",
+    "promo_title": "Ative a verificação em duas etapas",
+    "promo_desc": "Leva 2 minutos e protege todo o acesso à sua base.",
+    "promo_action": "Configurar 2FA",
+    "tile_profile_action": "Editar perfil",
+    "tile_account_action": "Abrir conta",
+    "tile_security_action": "Abrir segurança",
+    "tile_tokens_action": "Gerenciar tokens",
+    "tile_master_action": "Alterar senha",
+    "tile_locked_action": "Ver pastas"
   },
   "note_toolbar": {
     "aria": "Formatação de texto",
@@ -1092,7 +1109,10 @@
     "err_owner_immutable": "O papel e o status do proprietário só mudam transferindo a instância.",
     "err_forbidden_role": "Seu papel não permite esta ação.",
     "err_target_not_active": "A instância só pode passar para uma conta ativa.",
-    "err_not_owner": "Só o proprietário atual pode transferir a instância."
+    "err_not_owner": "Só o proprietário atual pode transferir a instância.",
+    "roles_count_one": "Um papel ativo nesta instância.",
+    "roles_count_other": "{{count}} papéis ativos nesta instância.",
+    "attention_desc": "Itens abertos de acesso."
   },
   "profile": {
     "title": "Perfil",

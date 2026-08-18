@@ -1,0 +1,26 @@
+{{- /*
+The text arm. It is not a fallback — it is REQUIRED on every message, and
+mailer.render only emits multipart/alternative when both arms exist. A
+transactional mail that only renders as HTML is unreadable in a client
+configured to refuse it, and those clients are common exactly among the people
+most likely to be running a self-hosted instance.
+
+The action URL is written out in full rather than hidden behind link text: there
+is nowhere to hide it here, and a bare URL is also what lets someone verify the
+host before clicking.
+*/ -}}
+{{ .Heading }}
+{{ range .Body }}
+{{ . }}
+{{ end }}
+{{- with .Code }}
+    {{ . }}
+{{ end }}
+{{- with .ActionURL }}
+{{ $.Action }}:
+{{ . }}
+{{ end }}
+{{- with .Footnote }}
+--
+{{ . }}
+{{ end -}}

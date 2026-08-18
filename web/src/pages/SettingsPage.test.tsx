@@ -30,13 +30,14 @@ function lockedFolder(id: number, name: string) {
   state.folderPasswords[id] = 'folder-pass'
 }
 
-const userSession = {
-  ...testAdminSession,
-  user: {
-    ...(testAdminSession as { user: object }).user,
-    role: 'editor',
-  },
-} as typeof testAdminSession
+/** The seeded admin session with a few fields of its user overridden. Typed
+ *  against AuthUser so a renamed field fails the build instead of the assert. */
+function sessionWith(overrides: Partial<AuthUser>): typeof testAdminSession {
+  const base = testAdminSession as { user: AuthUser }
+  return { ...testAdminSession, user: { ...base.user, ...overrides } } as typeof testAdminSession
+}
+
+const userSession = sessionWith({ role: 'editor' })
 
 const adminRow: AuthUser = {
   email: 'admin@foldex.test',
@@ -157,9 +158,59 @@ describe('SettingsPage — hub', () => {
     expect(await screen.findByRole('button', { name: /api tokens/i })).toBeInTheDocument()
   })
 
-  // Pure-function lock on the demotion fallback: the branch is unreachable
-  // through the UI (a non-admin has no admin tile to click), so the resolver
-  // is exported and tested directly.
+  it('identifies the signed-in account in the hero, with its credential state', async () => {
+    renderWithProviders(<SettingsPage />, { session: sessionWith({ email_verified_at: undefined }) })
+    expect(await screen.findByText('Test Admin')).toBeInTheDocument()
+    expect(screen.getByText('admin@foldex.test')).toBeInTheDocument()
+    // Initials come from the shared helper, so the hero and the topbar avatar
+    // can never disagree about the same account.
+    expect(screen.getByText('TA')).toBeInTheDocument()
+    expect(screen.getByText(/e-mail unverified/i)).toBeInTheDocument()
+  })
+
+  it('flips both credential chips once the account is verified and has 2FA', async () => {
+    renderWithProviders(<SettingsPage />, {
+      session: sessionWith({ totp_enabled: true, email_verified_at: '2026-02-01T00:00:00Z' }),
+    })
+    expect(await screen.findByText(/e-mail verified/i)).toBeInTheDocument()
+    // Twice: the hero chip and the security card's status badge.
+    expect(screen.getAllByText(/^2fa on$/i)).toHaveLength(2)
+    expect(screen.queryByText(/2fa off/i)).not.toBeInTheDocument()
+  })
+
+  /**
+   * The nudge is the one panel that earns its space by being conditional. A
+   * version that always rendered — "2FA is on, nice work" — would be skipped
+   * by the eye, and then skipped on the day it says something that matters.
+   */
+  it('nudges towards 2FA only while the account has none', async () => {
+    const { unmount } = renderWithProviders(<SettingsPage />)
+    expect(await screen.findByText(/turn on two-step verification/i)).toBeInTheDocument()
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /set up 2fa/i }))
+    expect(await screen.findByRole('heading', { name: /two-factor authentication/i })).toBeInTheDocument()
+    unmount()
+
+    renderWithProviders(<SettingsPage />, { session: sessionWith({ totp_enabled: true }) })
+    expect(await screen.findByText('admin@foldex.test')).toBeInTheDocument()
+    expect(screen.queryByText(/turn on two-step verification/i)).not.toBeInTheDocument()
+  })
+
+  it('exports a backup from the page head, and offers the invite only to admins', async () => {
+    const onNavigate = vi.fn()
+    const { unmount } = renderWithProviders(<SettingsPage onNavigate={onNavigate} />)
+    await userEvent.setup().click(await screen.findByRole('button', { name: /export backup/i }))
+    expect(onNavigate).toHaveBeenCalledWith('import')
+    expect(screen.getByRole('button', { name: /invite user/i })).toBeInTheDocument()
+    unmount()
+
+    // Same head, non-admin session: inviting is an /api/admin capability, so
+    // the affordance is absent rather than present-and-refused.
+    renderWithProviders(<SettingsPage />, { session: userSession })
+    expect(await screen.findByRole('button', { name: /export backup/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /invite user/i })).not.toBeInTheDocument()
+  })
+
   it('resolveHubView collapses admin surfaces for a demoted session', () => {
     expect(resolveHubView(true, 'admin', 'admin')).toEqual({ scope: 'admin', section: 'admin' })
     expect(resolveHubView(false, 'admin', 'admin')).toEqual({ scope: 'personal', section: 'overview' })

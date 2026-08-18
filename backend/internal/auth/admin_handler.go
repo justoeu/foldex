@@ -28,17 +28,16 @@ func errOwnerImmutable() error {
 // AdminHandler serves /api/admin/users. Every route here sits behind
 // Authenticate + RequireAdmin; nothing in this file re-checks the role.
 type AdminHandler struct {
-	repo       *Repository
-	mailer     mailer.Mailer
-	dispatcher *mailer.Dispatcher
-	logger     *slog.Logger
-	baseURL    string
+	repo    *Repository
+	mailer  mailer.Mailer
+	logger  *slog.Logger
+	baseURL string
 }
 
-func NewAdminHandler(repo *Repository, m mailer.Mailer, dispatcher *mailer.Dispatcher,
+func NewAdminHandler(repo *Repository, m mailer.Mailer,
 	logger *slog.Logger, baseURL string) *AdminHandler {
 	return &AdminHandler{
-		repo: repo, mailer: m, dispatcher: dispatcher, logger: logger,
+		repo: repo, mailer: m, logger: logger,
 		baseURL: strings.TrimRight(baseURL, "/"),
 	}
 }
@@ -264,10 +263,21 @@ func (h *AdminHandler) ForcePasswordReset(w http.ResponseWriter, r *http.Request
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	locale := localeFrom(r)
 	err = h.repo.CreateAdminPasswordRecovery(ctx, target, passwordResetTTL,
 		func(email, token string) error {
-			return h.mailer.Send(ctx, mailer.AdminPasswordRecoveryMessage(email,
-				h.baseURL+"/#reset="+token, int(passwordResetTTL.Minutes())))
+			// Deliberately NOT the outbox. This is the one path that stays
+			// synchronous inside its transaction: SMTP refusing the message rolls
+			// the token back, so an administrator can never leave a live recovery
+			// credential behind for a mailbox that never received it. Moving it to
+			// the outbox would trade that for eventual delivery — a defensible
+			// trade, but a change to a security invariant, not a refactor.
+			msg, rerr := mailer.Render(mailer.AdminPasswordRecoveryMessage(email,
+				h.baseURL+"/#reset="+token, int(passwordResetTTL.Minutes())), locale)
+			if rerr != nil {
+				return rerr
+			}
+			return h.mailer.Send(ctx, msg)
 		})
 	switch {
 	case errors.Is(err, ErrNoUser):
@@ -505,7 +515,19 @@ func (h *AdminHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inv, raw, err := h.repo.CreateInvite(r.Context(), in.Email, role, caller.UserID, inviteTTL)
+	// Trimmed HERE so the address that receives the invitation is byte-identical
+	// to the one stored on the row: CreateInvite persists strings.TrimSpace(email),
+	// and building the message from the raw field would mail a pasted address with
+	// a trailing space to a recipient the invite table does not name.
+	email := strings.TrimSpace(in.Email)
+	// Loaded BEFORE the invitation, because the message commits inside the same
+	// transaction and the inviter's name is part of it.
+	inviter, _ := h.repo.GetUser(r.Context(), caller.UserID)
+	draft := MailDraft{Locale: localeFrom(r), Build: func(token string) mailer.Envelope {
+		return mailer.InviteMessage(email, inviter.Name,
+			h.baseURL+"/#invite="+token, int(inviteTTL/time.Hour))
+	}}
+	inv, raw, err := h.repo.CreateInvite(r.Context(), email, role, caller.UserID, inviteTTL, draft)
 	if errors.Is(err, ErrEmailTaken) {
 		httperr.Write(w, httperr.New(http.StatusConflict, "email_taken", "e-mail already registered"))
 		return
@@ -517,11 +539,6 @@ func (h *AdminHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	inv.AcceptURL = h.baseURL + "/#invite=" + raw
 
-	inviter, _ := h.repo.GetUser(r.Context(), caller.UserID)
-	msg := mailer.InviteMessage(inv.Email, inviter.Name, inv.AcceptURL, int(inviteTTL/time.Hour))
-	if err := h.dispatcher.Enqueue(msg, "invite"); err != nil {
-		h.logger.Warn("invite mail not queued", "err", err, "invite_id", inv.ID)
-	}
 	// The invited ADDRESS and role, never inv.AcceptURL — that string carries
 	// the raw invitation token, and the trail is a screen administrators read.
 	h.audit(r, AuditInviteCreated, &User{Email: inv.Email}, string(role))

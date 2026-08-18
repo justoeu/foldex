@@ -76,7 +76,7 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 | Extension    | Vanilla MV3 (sem bundler)                                            | Popup tem ~80 LoC. Sem build = "load unpacked" direto. |
 | Node runtime | **bun 1.3** (oven/bun:1.3-alpine)                                    | Bate com Vite 8 / Vitest 4 e resolve melhor packages platform-specific que npm em mirror privado. |
 
-## Data model (estado atual, após 31 migrations)
+## Data model (estado atual, após 34 migrations)
 
 ```sql
 -- 000001_init.up.sql        (+ pg_trgm)
@@ -117,6 +117,9 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 -- 000029_slug_length → repara slugs legados >80 bytes e fixa o limite no DB para link/note
 -- 000030_preview_generation → geração monotônica impede write de preview anterior após refresh
 -- 000031_unique_live_challenge_email_otp → um único OTP de login não consumido por challenge
+-- 000032_rbac_four_roles  → owner/admin/editor/viewer + índice parcial de dono único
+-- 000033_audit_log        → trilha administrativa (ADR-34)
+-- 000034_mail_outbox      → outbox transacional de e-mail, payload cifrado (ADR-36)
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -1031,6 +1034,40 @@ Escrita é do owner, leitura de qualquer admin: um admin precisa ver as regras s
 - **O domínio é comparado exato**, nunca por sufixo: `example.com` não pode aceitar `notexample.com`, e subdomínio não é o domínio.
 
 A conta provisionada e sua identidade nascem na MESMA transação, porque o trigger deferido da migração 000021 exige que conta ativa tenha ao menos uma credencial e essa conta nunca terá senha: linha e identidade só são legais juntas. O provisionamento desemboca em `oauthComplete` como qualquer login vinculado, o que mantém a política de segundo fator valendo em vez de abrir a única porta que a pula.
+
+### ADR-36 — E-mail durável: outbox transacional e transporte plugável
+**Status:** Accepted — fase 1 implementada (outbox + relay `inproc` + templates i18n); fase 2 (RabbitMQ, `cmd/mailer`) permanece proposta. Detalhado em [`docs/SDD-EMAIL-ASYNC.md`](SDD-EMAIL-ASYNC.md). Migração `000034_mail_outbox`.
+
+A entrega era in-process, efêmera e sem retry: fila de 32 slots em memória, 2 workers, e um `Send` que falha é logado e descartado. `Stop()` cancela o que está em voo em vez de drenar. Restart, deploy ou blip de rede no provedor perdem convite, link de reset e código de login em silêncio — e o usuário vê `202` e espera para sempre.
+
+Decisão: a mensagem é gravada em `mail_outbox` na **mesma transação** que a credencial que ela carrega, e um relay drena a tabela para o transporte configurado.
+
+**Outbox e não publish-após-commit.** O `Reserve()/Publish()/Release()` de hoje existe para reservar a vaga na fila ANTES de persistir a credencial: fila cheia significa reset não criado, em vez de token que nunca será enviado. Publicar no broker depois do `COMMIT` reabre exatamente esse buraco, e pior — o cooldown de 60 s já foi cobrado, então o usuário não consegue nem pedir outro. O `INSERT` no outbox participa da transação já aberta: não falha por capacidade, não se perde, e ou os dois existem ou nenhum existe. É **mais forte** que o invariante que substitui, não apenas compatível: hoje fila cheia derruba a operação; com outbox ela sempre acontece e a entrega vira garantida-eventual. Como efeito, a coreografia de `defer Release()` sai dos três handlers que a carregam.
+
+**O payload é cifrado, e isso não é opcional.** O token cru de reset existe hoje apenas dentro do corpo do e-mail — o banco guarda só `sha256`, pela mesma razão que sessões são `sha256`: um `pg_dump` não pode ser um kit de sequestro. Gravar o link em texto destruiria essa propriedade, e o broker é pior ainda, porque persiste mensagem durável em disco num vhost possivelmente compartilhado. `payload_{ciphertext,nonce}` guardam AES-256-GCM de `secrets.Cipher`, sob uma SUBCHAVE derivada de `AUTH_ENCRYPTION_KEY` (`secrets.NewDerivedCipher`, propósito `foldex/mail-outbox/payload/v1`) e não sob a chave mestra — o seed TOTP já cifra com ela, e este é o único domínio cujo volume não é limitado por nada, então compartilhar a chave transformaria duas distâncias independentes até o limite de aniversário do GCM num orçamento só. É o mesmo padrão que os MACs de código já usam; o MESMO blob é o corpo AMQP, então o broker nunca vê credencial em claro. GCM e não CTR pela tag de autenticação: sem ela, escrita no banco ou no broker vira ataque de substituição do link de destino, e a vítima veria apenas um e-mail legítimo apontando para o lugar errado.
+
+**Rabbit é transporte, não fila de origem.** O outbox faz o que o broker não consegue (atomicidade com a transação); o broker faz o que o outbox não faz bem (retry com backoff, dead-letter, consumidores escaláveis independentes do processo que serve HTTP). `MAIL_TRANSPORT=inproc` mantém o dispatcher atual como sink e é o default, então o self-hosted de binário único continua subindo sem broker nenhum; `amqp` liga a topologia e o worker `cmd/mailer`. Backoff por TTL de fila e não por `sleep` no consumidor — `sleep` seguraria o prefetch e trocaria latência por perda de vazão. O worker não recebe credencial de Postgres: ele é o processo que decifra credenciais, e não precisa de banco para isso.
+
+**O que a fase 1 mudou em relação ao desenho original.** O SDD propunha o `mailer.Dispatcher` como sink do transporte `inproc`. Isso não foi implementado, e a razão é a promessa da própria fase: o dispatcher **descarta** um `Send` que falha, então um PR1 apoiado nele entregaria durabilidade apenas até a primeira recusa de SMTP. O relay passou a ser o próprio worker do transporte `inproc` — ele envia, marca `published` só no sucesso, e no fracasso reagenda por `next_attempt_at` com backoff escalonado (1 min → 5 → 15 → 30 → 60) até esgotar `max_attempts`. O resultado é que **retry, backoff e dead-letter existem sem broker nenhum**, que é exatamente o que a fase prometia entregar. O `Dispatcher` foi removido: mantê-lo ao lado do relay seria código morto com aparência de camada. `MAIL_TRANSPORT` continua sendo assunto da fase 2.
+
+Duas garantias operacionais vêm de colunas, não de disciplina. O `claim_token` (CAS na liquidação) impede que um relay que dormiu além do TTL de claim sobrescreva o resultado de outro que já refez o trabalho; e o backoff é uma coluna porque um `sleep` no worker seguraria o slot e transformaria um destinatário lento em fila parada para todo mundo. Falha permanente — `unknown_template`, `undecryptable_payload` — liquida na hora em vez de gastar seis tentativas no que não pode passar a funcionar.
+
+**Consequência NÃO adotada nesta fase:** o force-reset administrativo **continua síncrono**. Uma falha de SMTP ainda dá rollback no token e responde `503`. A mudança descrita acima permanece defensável — hoje um blip transitório nega ao administrador uma operação a que ele tem direito — mas é alteração de invariante de segurança, e fica pendente de decisão explícita (§12.1 do SDD) em vez de entrar como efeito colateral de um refactor de entrega.
+
+### ADR-37 — E-mail como segundo fator permanente, e não escape de um desafio TOTP
+**Status:** Proposed — detalhado em [`docs/SDD-EMAIL-ASYNC.md`](SDD-EMAIL-ASYNC.md). Migração `000035_email_second_factor`.
+
+OTP por e-mail existia só como escape dentro de um desafio que já era TOTP: `emailFactorAvailable` exige `purpose == PurposeTOTP`, e o desafio só nasce `totp` quando a conta já tem autenticador confirmado. Conta sem TOTP nunca recebe desafio, então `/2fa/email` era inalcançável para ela. Quem não quer instalar um autenticador não tinha segundo fator algum.
+
+Decisão: `email_factor` com o mesmo formato de `totp_secret`, e `has_second_factor = totp_enabled OR email_2fa_enabled` substituindo `totp_enabled` como a noção de "esta conta tem segundo fator".
+
+A forma espelha `totp_secret` deliberadamente: o binding de época (`enrollment_token_version`, `enrollment_session_id`) e o `CHECK ... NOT VALID` são os mesmos que a migração 000025 aplicou ao TOTP, então os padrões de confirmação sob lock transferem sem invenção — um fator novo com esquema próprio de binding seria um fator novo com bugs novos. Não há segredo a guardar: o "seed" do fator e-mail é o endereço, que já está em `app_user.email`; a tabela é marcador de cadastro, não cofre. As três noções permanecem derivadas por `EXISTS` pelo motivo de sempre — booleano armazenado precisaria de atualização em quatro lugares, e a direção da discordância decide se o login exige um código que o usuário não consegue produzir.
+
+O purpose continua se chamando `totp` (o CHECK é fechado e renomear custaria migração por cosmética) mas passa a significar "deve um segundo fator"; qual método satisfaz é decidido pela lista `methods`, que o frontend já consome.
+
+**O invariante que NÃO muda é o que mais importa: um canal nunca satisfaz os dois fatores.** `mailbox_already_proven` continua sticky e continua recusando o fator e-mail em desafio nascido de reset de senha, senão controlar a caixa postal viraria takeover completo. A consequência nova é de disponibilidade, não de segurança: uma conta cujo único fator é e-mail, entrando por link de reset, fica sem método de e-mail. Por isso o cadastro do fator e-mail **obriga a emissão de códigos de recuperação**, igual ao TOTP — sem eles o guard de segurança viraria um bug que tranca o usuário fora da própria conta.
+
+Para administrador, `RequireAdmin` passa a checar fator confirmado de qualquer tipo. Um admin cujo único fator é e-mail é mensuravelmente mais fraco, porque a caixa postal já é o canal de recuperação e concentrar os dois reduz a superfície que o atacante precisa comprometer — então isso não vira constante, vira `instance_policy.admin_second_factor ∈ {any, totp_only}` com piso no comportamento permissivo e o owner podendo apertar, no mesmo formato dos demais pisos do ADR-35.
 
 ## Future considerations
 

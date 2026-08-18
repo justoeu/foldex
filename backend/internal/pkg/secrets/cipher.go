@@ -3,7 +3,9 @@ package secrets
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 )
@@ -47,6 +49,30 @@ func NewCipher(key []byte) (*Cipher, error) {
 	return &Cipher{aead: aead}, nil
 }
 
+// NewDerivedCipher builds a Cipher for ONE purpose from a master key, so two
+// unrelated domains never share the same AES key.
+//
+// The TOTP seed came first and uses AUTH_ENCRYPTION_KEY directly; anything
+// added afterwards derives instead, for the same reason the code MACs already
+// derive per-purpose subkeys rather than reusing the AES key. Two domains under
+// one key share a (key, nonce) space, so their safety margins add up instead of
+// being independent — and rotating one becomes impossible without destroying
+// the other. That matters most where the volumes differ by orders of magnitude:
+// TOTP encrypts once per user, while the mail outbox encrypts once per reset
+// link, sign-in code and invitation.
+//
+// The purpose string is a domain separator, so it must be a compile-time
+// constant that never changes: a new value is a new key, and every ciphertext
+// written under the old one becomes undecryptable.
+func NewDerivedCipher(masterKey []byte, purpose string) (*Cipher, error) {
+	if len(masterKey) < 32 {
+		return nil, fmt.Errorf("secrets: master key must be at least 32 bytes, got %d", len(masterKey))
+	}
+	m := hmac.New(sha256.New, masterKey)
+	_, _ = m.Write([]byte(purpose))
+	return NewCipher(m.Sum(nil))
+}
+
 // Encrypt returns the ciphertext and the nonce that produced it, stored in
 // separate columns.
 //
@@ -58,9 +84,11 @@ func (c *Cipher) Encrypt(plaintext []byte) (ciphertext, nonce []byte, err error)
 	nonce = make([]byte, c.aead.NonceSize())
 	// A repeated nonce under the same key is catastrophic for GCM — it leaks
 	// the XOR of the two plaintexts and, worse, the authentication subkey. A
-	// random 96-bit nonce is safe here because the number of seeds encrypted
-	// per key is bounded by the number of users, nowhere near the birthday
-	// bound of 2^48 messages.
+	// random 96-bit nonce is safe here because every domain gets its OWN key:
+	// TOTP seeds are bounded by the number of users, and the mail outbox — the
+	// one domain whose volume is not bounded by anything — encrypts under a
+	// key of its own via NewDerivedCipher. Each therefore sits on its own
+	// distance from the 2^48-message birthday bound instead of sharing one.
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, nil, fmt.Errorf("secrets: nonce: %w", err)
 	}

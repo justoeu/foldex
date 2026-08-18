@@ -717,7 +717,24 @@
     "sec_audit_kicker": "administración",
     "sec_audit_title": "Registro de auditoría",
     "sec_policy_kicker": "administración",
-    "sec_policy_title": "Política de contraseña y acceso"
+    "sec_policy_title": "Política de contraseña y acceso",
+    "page_lede": "Todo lo que gobierna tu base: cuenta, seguridad, personas y permisos. Cada tarjeta abre un panel dedicado.",
+    "head_backup": "Exportar copia",
+    "head_invite": "Invitar usuario",
+    "chip_2fa_on": "2FA activo",
+    "chip_2fa_off": "2FA desactivado",
+    "chip_mail_verified": "Correo verificado",
+    "chip_mail_unverified": "Correo sin verificar",
+    "promo_kicker": "Recomendado",
+    "promo_title": "Activa la verificación en dos pasos",
+    "promo_desc": "Toma 2 minutos y protege todo el acceso a tu base.",
+    "promo_action": "Configurar 2FA",
+    "tile_profile_action": "Editar perfil",
+    "tile_account_action": "Abrir cuenta",
+    "tile_security_action": "Abrir seguridad",
+    "tile_tokens_action": "Gestionar tokens",
+    "tile_master_action": "Cambiar contraseña",
+    "tile_locked_action": "Ver carpetas"
   },
   "note_toolbar": {
     "aria": "Formato de texto",
@@ -1092,7 +1109,10 @@
     "err_owner_immutable": "El rol y el estado del propietario solo cambian transfiriendo la instancia.",
     "err_forbidden_role": "Tu rol no permite esta acción.",
     "err_target_not_active": "La instancia solo puede pasar a una cuenta activa.",
-    "err_not_owner": "Solo el propietario actual puede transferir la instancia."
+    "err_not_owner": "Solo el propietario actual puede transferir la instancia.",
+    "roles_count_one": "Un rol activo en esta instancia.",
+    "roles_count_other": "{{count}} roles activos en esta instancia.",
+    "attention_desc": "Elementos de acceso abiertos."
   },
   "profile": {
     "title": "Perfil",

@@ -272,7 +272,7 @@ func (h *Handler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 		// Spending a recovery code is either a user with a new phone or an
 		// attacker holding the printed sheet. The owner is the only one who can
 		// tell, and only if told.
-		h.notifyRecoveryCodeUsed(r.Context(), user)
+		h.notifyRecoveryCodeUsed(r.Context(), user, localeFrom(r))
 	}
 	h.cookies.ClearPreAuth(w)
 	h.cookies.SetSession(w, tok)
@@ -356,31 +356,33 @@ func (h *Handler) SendEmailOTP(w http.ResponseWriter, r *http.Request) {
 			"a mailed code cannot be used for this sign-in"))
 		return
 	}
-	admission, err := h.dispatcher.Reserve()
-	if err != nil {
-		writeMailQueueUnavailable(w)
-		return
-	}
 	code, err := secrets.NewNumericCode(totpDigits)
 	if err != nil {
-		admission.Release()
 		h.logger.Error("otp generate", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
 	email, err := h.repo.EmailForUser(r.Context(), ch.UserID)
 	if err != nil {
-		admission.Release()
 		h.logger.Error("otp recipient", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
 	id := ch.ID
 	ttl := h.otpTTL(r.Context())
+	// The code and its e-mail commit together. The send this charges against the
+	// challenge's budget of three is the scarce resource here: charging it and
+	// then losing the message would burn one of the user's three chances on a
+	// mail that never existed.
+	draft := MailDraft{Locale: localeFrom(r), Build: func(string) mailer.Envelope {
+		// The MAILED lifetime is the one just persisted, not the constant: a
+		// message promising five minutes for a code that expires in two is a
+		// support ticket wearing a feature.
+		return mailer.LoginCodeMessage(email, code, int(ttl.Minutes()))
+	}}
 	if _, err := h.repo.CreateChallengeEmailOTP(r.Context(), ch.ID,
 		h.codeMAC.EmailOTPDigest(ch.UserID, OTPPurposeLogin2FA, &id, code),
-		ttl, h.otpCooldown(r.Context())); err != nil {
-		admission.Release()
+		ttl, h.otpCooldown(r.Context()), draft); err != nil {
 		switch {
 		case errors.Is(err, ErrTooSoon), errors.Is(err, ErrSendsExhausted):
 			w.WriteHeader(http.StatusAccepted)
@@ -388,13 +390,6 @@ func (h *Handler) SendEmailOTP(w http.ResponseWriter, r *http.Request) {
 			h.writeChallengeError(w, err)
 		}
 		return
-	}
-	if err := admission.Publish(
-		// The MAILED lifetime is the one just persisted, not the constant: a
-		// message promising five minutes for a code that expires in two is a
-		// support ticket wearing a feature.
-		mailer.LoginCodeMessage(email, code, int(ttl.Minutes())), "login otp"); err != nil {
-		h.logger.Error("publish login otp mail", "err", err)
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -900,21 +895,22 @@ func (h *Handler) newRecoveryCodeSet(uid authctx.UserID) ([]string, [][]byte, er
 	return codes, hashes, nil
 }
 
-func (h *Handler) notifyRecoveryCodeUsed(ctx context.Context, u User) {
+func (h *Handler) notifyRecoveryCodeUsed(ctx context.Context, u User, locale string) {
 	remaining, err := h.repo.CountRecoveryCodes(ctx, u.ID)
 	if err != nil {
 		return
 	}
-	h.enqueueMail(mailer.RecoveryCodeUsedMessage(u.Email, remaining), "recovery code notification")
+	h.enqueueMail(ctx, mailer.RecoveryCodeUsedMessage(u.Email, remaining), locale, "recovery code notification")
 }
 
-func (h *Handler) enqueueMail(msg mailer.Message, what string) {
-	if err := h.dispatcher.Enqueue(msg, what); err != nil {
+// enqueueMail queues a standalone notification.
+//
+// The error is logged and swallowed, like an audit write: the action it
+// describes has already committed, and failing the request would invite a retry
+// that performs it twice. What changed with the outbox is that "queued" now
+// means "durable" — this can no longer be lost to a restart.
+func (h *Handler) enqueueMail(ctx context.Context, env mailer.Envelope, locale, what string) {
+	if err := h.repo.EnqueueMail(ctx, env, locale); err != nil {
 		h.logger.Warn("mail not queued", "what", what, "err", err)
 	}
-}
-
-func writeMailQueueUnavailable(w http.ResponseWriter) {
-	httperr.Write(w, httperr.New(http.StatusServiceUnavailable, "mail_queue_full",
-		"mail delivery is busy; try again shortly"))
 }

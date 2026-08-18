@@ -402,7 +402,10 @@
 .fx-filterhead-h { font-family: var(--fx-display); font-size: 22px; font-weight: 600; color: var(--fx-ink); letter-spacing: -0.02em; }
 .fx-filterhead-sub { font-size: 12px; color: var(--fx-ink-4); }
 .fx-filterhead-r { display: flex; gap: 8px; }
-.fx-pillbtn {
+/* Chained to lift specificity to (0,2,0) — see the note on the shell reset at
+   the top of this file. Bare, the reset would strip height's companions
+   (padding, background, border) and leave a ghost. */
+:is(.fx-shell, .fx-overlay) .fx-pillbtn {
   height: 32px; padding: 0 12px;
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--fx-surface-3);
@@ -851,22 +854,6 @@
   text-transform: uppercase; color: var(--fx-ink-4); margin: 2px 0 0;
 }
 
-.fx-hub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(216px, 1fr)); gap: 12px; }
-.fx-hub-tile {
-  display: flex; gap: 12px; align-items: flex-start; padding: 14px;
-  background: var(--fx-surface-2);
-  border: 1px solid var(--fx-border); border-radius: 13px; text-align: left;
-  transition: border-color .15s, box-shadow .15s, transform .15s;
-}
-.fx-hub-tile:hover { border-color: var(--fx-accent-2); box-shadow: var(--fx-shadow-1); transform: translateY(-1px); }
-.fx-hub-tile:active { transform: translateY(0); }
-.fx-hub-tile:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
-.fx-hub-tile-icon {
-  width: 34px; height: 34px; flex: none; display: grid; place-items: center;
-  border-radius: 9px; background: var(--fx-bg-tint); color: var(--fx-accent);
-}
-.fx-hub-tile-title { font-size: 13px; font-weight: 600; color: var(--fx-ink); letter-spacing: -0.01em; }
-.fx-hub-tile-desc { display: block; font-size: 11px; color: var(--fx-ink-3); line-height: 1.45; margin-top: 3px; }
 
 /* Avatar: initials square reused by the profile section and the topbar user
    menu button. Gradient uses the accent tokens (not literals) so dark mode —
@@ -877,6 +864,7 @@
   color: #fff; background: linear-gradient(135deg, var(--fx-accent), var(--fx-accent-2));
 }
 .fx-avatar-sm { width: 28px; height: 28px; border-radius: 8px; font-size: 11px; }
+.fx-avatar-lg { width: 60px; height: 60px; border-radius: 17px; font-size: 19px; }
 
 /* Topbar user menu (avatar button + portaled dropdown, same pattern as the
    LocalePicker — the topbar clips absolutely-positioned children). */
@@ -903,7 +891,7 @@
 .fx-usermenu-item:hover { background: var(--fx-surface-3); color: var(--fx-ink); }
 .fx-usermenu-item-danger:hover { color: var(--fx-danger); }
 
-.fx-hub-back {
+:is(.fx-shell, .fx-overlay) .fx-hub-back {
   display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px 0 8px;
   border-radius: 8px; font-size: 12px; font-weight: 550; color: var(--fx-ink-3);
   background: var(--fx-bg-tint); transition: color .15s, background .15s;
@@ -2203,41 +2191,54 @@
 
 /* Metric header. auto-fit rather than a fixed 4 columns: the tiles are the
    first thing on the screen and must not overflow a narrow viewport. */
-.fx-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 12px; }
+.fx-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
 .fx-metric {
-  padding: 14px 15px; border-radius: 13px; background: var(--fx-surface-2);
-  border: 1px solid var(--fx-border);
+  min-height: 108px; padding: 18px 20px; border-radius: 18px; background: var(--fx-surface-3);
+  border: 1px solid var(--fx-border); box-shadow: var(--fx-shadow-1);
 }
 .fx-metric-label {
-  display: flex; align-items: center; gap: 6px; font-family: var(--fx-mono);
-  font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fx-ink-4);
+  display: flex; align-items: center; gap: 7px; font-family: var(--fx-mono);
+  font-size: 10px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--fx-ink-4);
 }
-.fx-metric-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.fx-metric-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 .fx-metric-value {
-  font-family: var(--fx-display); font-size: 26px; font-weight: 700;
-  color: var(--fx-ink); letter-spacing: -0.02em; margin-top: 8px; line-height: 1;
+  font-family: var(--fx-display); font-size: 30px; font-weight: 700;
+  color: var(--fx-ink); letter-spacing: -0.03em; margin-top: 10px; line-height: 1;
 }
-.fx-metric-hint { font-size: 11px; color: var(--fx-ink-3); margin-top: 5px; }
+.fx-metric-hint { font-size: 12px; color: var(--fx-ink-3); margin-top: 7px; }
 
 /* Action card: icon + title + description + status chip + action label. */
-.fx-acards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 12px; }
-.fx-acard {
-  display: flex; flex-direction: column; gap: 10px; padding: 15px; text-align: left;
-  background: var(--fx-surface-2); border: 1px solid var(--fx-border); border-radius: 14px;
+/* Three columns, explicitly. auto-fill would give four at container width and
+   the descriptions — two full lines at the mockup's size — stop fitting. */
+.fx-acards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+@media (max-width: 1080px) { .fx-acards { grid-template-columns: repeat(2, 1fr); } }
+/* Chained to (0,2,0), like `.fx-confirm-btn` in overrides.css. The card is a
+   <button>, and the shell reset `.fx-shell button { border: 0; background:
+   transparent; padding: 0; color: inherit; font-weight: inherit }` near the
+   top of this file is (0,1,1) — it OUT-SPECIFIES a bare `.fx-acard` (0,1,0)
+   and silently strips the whole card away, leaving unpadded text floating on
+   the page background. Chaining beats it outright; an element-qualified
+   `button.fx-acard` would only TIE and win on document order, which a later
+   rule in overrides.css could quietly take back. Hover/focus rules are already
+   (0,2,0) and need nothing. */
+:is(.fx-shell, .fx-overlay) .fx-acard {
+  display: flex; flex-direction: column; gap: 12px; padding: 20px; text-align: left; height: 100%;
+  background: var(--fx-surface-3); border: 1px solid var(--fx-border); border-radius: 18px;
+  box-shadow: var(--fx-shadow-1);
   transition: border-color .15s, box-shadow .15s, transform .15s;
 }
-.fx-acard:hover { border-color: var(--fx-accent-2); box-shadow: var(--fx-shadow-1); transform: translateY(-1px); }
+.fx-acard:hover { border-color: var(--fx-accent-2); box-shadow: var(--fx-shadow-2); transform: translateY(-3px); }
 .fx-acard:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
 .fx-acard-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .fx-acard-icon {
-  width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 10px;
+  width: 42px; height: 42px; flex: none; display: grid; place-items: center; border-radius: 13px;
   background: var(--fx-tone-accent-soft); color: var(--fx-tone-accent);
 }
-.fx-acard-title { font-size: 13.5px; font-weight: 650; color: var(--fx-ink); letter-spacing: -0.01em; }
-.fx-acard-desc { font-size: 11.5px; color: var(--fx-ink-3); line-height: 1.5; }
+.fx-acard-title { font-size: 15px; font-weight: 700; color: var(--fx-ink); letter-spacing: -0.02em; }
+.fx-acard-desc { font-size: 12.5px; color: var(--fx-ink-3); line-height: 1.5; margin-top: 5px; }
 .fx-acard-action {
-  margin-top: auto; font-size: 11.5px; font-weight: 600; color: var(--fx-accent);
-  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: auto; font-size: 12.5px; font-weight: 700; color: var(--fx-accent);
+  display: inline-flex; align-items: center; gap: 6px;
 }
 
 /* Tone modifiers. Applied to the icon square and reused by role avatars, so a
@@ -2299,6 +2300,100 @@
 .fx-attn-desc { font-size: 11px; color: var(--fx-ink-3); margin-top: 2px; }
 .fx-attn-time { margin-left: auto; font-family: var(--fx-mono); font-size: 10.5px; color: var(--fx-ink-4); white-space: nowrap; }
 
+/* ─── settings hub · page frame ────────────────────────────────────────
+   The hub is a full-width surface, not a column: at 860px it hugged the left
+   edge of a wide viewport and left two thirds of the screen empty. 1240px is
+   the mockup's container; `margin: 0 auto` centres it once the viewport is
+   wider than that, and the content grids reflow below it. */
+.fx-hub-page { width: 100%; max-width: 1240px; margin: 0 auto; padding: 4px 2px 40px; }
+/* The detail sections are forms, and a form line 1240px wide is unreadable. */
+.fx-hub-page-narrow { max-width: 760px; }
+/* Vertical rhythm between the hub's sections, shared by both scopes. */
+.fx-hub-stack { display: flex; flex-direction: column; gap: 34px; }
+
+/* Page head: kicker + title + lede on the left, page-level actions right. */
+.fx-hub-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; flex-wrap: wrap; }
+.fx-hub-head-lede { max-width: 620px; margin-top: 10px; font-size: 14px; line-height: 1.6; color: var(--fx-ink-3); }
+/* The secondary action is matched to `.fx-cta-fill`'s 44px so the pair sits on
+   one baseline. Two classes, not one: `.fx-shell button` (0,1,1) out-specifies
+   a bare `.fx-pillbtn` (0,1,0) — the reason the base rule is chained too. */
+.fx-hub-head-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.fx-hub-head-actions .fx-pillbtn {
+  height: 44px; padding: 0 18px; border-radius: 14px; font-size: 14px; font-weight: 600;
+}
+
+/* Section label with a rule that runs to the edge of the container — the
+   divider is what gives a full-width page its horizontal structure. */
+.fx-hub-rule { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
+.fx-hub-rule::after { content: ''; flex: 1; height: 1px; background: var(--fx-border); }
+
+/* Identity hero + its companion nudge. 1.35fr/1fr is the mockup's ratio; both
+   collapse to one column on the narrow breakpoint at the end of this block. */
+.fx-hub-hero { display: grid; grid-template-columns: 1.35fr 1fr; gap: 16px; }
+/* Standing alone (nothing to nudge about), the identity card keeps roughly the
+   width it has beside the nudge — stretched across 1240px it becomes a band of
+   empty surface with a name in the corner. */
+.fx-idcard-solo { max-width: 660px; }
+.fx-idcard {
+  display: flex; align-items: center; gap: 18px; padding: 22px; border-radius: 20px;
+  background: var(--fx-surface-3); border: 1px solid var(--fx-border); box-shadow: var(--fx-shadow-1);
+}
+.fx-idcard-name { font-size: 18px; font-weight: 700; letter-spacing: -0.03em; color: var(--fx-ink); }
+.fx-idcard-mail { margin-top: 4px; font-size: 12.5px; color: var(--fx-ink-3); overflow-wrap: anywhere; }
+.fx-idcard-chips { margin-top: 11px; display: flex; gap: 7px; flex-wrap: wrap; }
+/* Inverted panel. The one deliberately non-token surface pair on the screen:
+   the nudge has to out-rank six equally weighted cards, and only a reversed
+   ground does that without inventing a seventh accent colour. */
+.fx-promo {
+  display: flex; flex-direction: column; justify-content: space-between; gap: 16px;
+  padding: 22px; border-radius: 20px; background: var(--fx-ink); color: var(--fx-bg);
+  box-shadow: var(--fx-shadow-2);
+}
+.fx-promo-kicker {
+  font-family: var(--fx-mono); font-size: 10px; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--fx-accent-2);
+}
+.fx-promo-title { margin-top: 9px; font-size: 16px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.35; }
+.fx-promo-desc { margin-top: 6px; font-size: 12.5px; line-height: 1.5; opacity: .72; }
+:is(.fx-shell, .fx-overlay) .fx-promo-btn {
+  align-self: flex-start; height: 38px; padding: 0 16px; border-radius: 11px;
+  background: var(--fx-bg); color: var(--fx-ink); font-size: 13px; font-weight: 700;
+  transition: transform .15s;
+}
+.fx-promo-btn:hover { transform: translateY(-1px); }
+
+/* Shortcut strip — denser than an action card because it only navigates. */
+.fx-scuts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+@media (max-width: 1080px) { .fx-scuts { grid-template-columns: repeat(2, 1fr); } }
+/* Chained for the same reason as `.fx-acard` further down. */
+:is(.fx-shell, .fx-overlay) .fx-scut {
+  display: flex; align-items: center; gap: 14px; padding: 16px 18px; text-align: left;
+  background: var(--fx-surface-3); border: 1px solid var(--fx-border); border-radius: 16px;
+  transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+.fx-scut:hover { border-color: var(--fx-accent-2); box-shadow: var(--fx-shadow-1); transform: translateY(-2px); }
+.fx-scut:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
+.fx-scut-title { display: block; font-size: 13.5px; font-weight: 700; letter-spacing: -0.02em; color: var(--fx-ink); }
+.fx-scut-desc { display: block; margin-top: 3px; font-size: 11.5px; color: var(--fx-ink-3); line-height: 1.4; }
+
+/* Panel: the framed container the roles matrix and the attention feed sit in
+   on the administration overview. */
+.fx-panel {
+  padding: 22px; border-radius: 20px; background: var(--fx-surface-3);
+  border: 1px solid var(--fx-border); box-shadow: var(--fx-shadow-1);
+}
+.fx-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
+.fx-panel-title { font-size: 16px; font-weight: 700; letter-spacing: -0.025em; color: var(--fx-ink); }
+.fx-panel-desc { margin-top: 4px; font-size: 12.5px; color: var(--fx-ink-3); }
+.fx-panel-col { display: flex; flex-direction: column; }
+/* 1.5fr/1fr: the matrix carries permission chips and needs the width; the
+   attention feed is a fixed-width list of short lines. */
+.fx-adm-split { display: grid; grid-template-columns: 1.5fr 1fr; gap: 16px; align-items: stretch; }
+
+@media (max-width: 900px) {
+  .fx-hub-hero, .fx-adm-split { grid-template-columns: 1fr; }
+}
+
 /* User table. A real table for semantics; the horizontal scroll container is
    what keeps a narrow viewport from scrolling the whole page sideways. */
 .fx-utable-wrap { overflow-x: auto; }
@@ -2329,7 +2424,9 @@
 
 @media (max-width: 640px) {
   .fx-metrics { grid-template-columns: repeat(2, 1fr); }
-  .fx-acards { grid-template-columns: 1fr; }
+  .fx-acards, .fx-scuts { grid-template-columns: 1fr; }
   .fx-rolerow { flex-wrap: wrap; }
   .fx-rolerow-count { margin-left: 0; width: 100%; }
+  .fx-idcard { flex-direction: column; align-items: flex-start; }
+  .fx-hub-head-actions { width: 100%; }
 }

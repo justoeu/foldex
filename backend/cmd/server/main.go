@@ -20,6 +20,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/mailer"
+	"foldex/internal/mailoutbox"
 	"foldex/internal/notemedia"
 	"foldex/internal/oauthgoogle"
 	"foldex/internal/pkg/keyfile"
@@ -192,19 +193,6 @@ func main() {
 		logger.Error("mailer setup failed", "err", err)
 		os.Exit(1)
 	}
-	mailDispatcher := mailer.NewDispatcher(context.Background(), mail, mailer.DispatcherOptions{
-		Workers: mailer.DefaultDispatcherWorkers, QueueSize: mailer.DefaultDispatcherQueueSize,
-	}, logger)
-	authRepo := auth.NewRepository(pool)
-	cookieOpts := auth.CookieOptions{Secure: cfg.AuthCookieSecure, Domain: cfg.AuthCookieDomain}
-	authMW := auth.NewMiddleware(authRepo, cookieOpts, logger,
-		cfg.AuthEnabled && cfg.AuthRequire2FAForAdmins)
-	authTTL := auth.SessionTTL{
-		Access:   time.Duration(cfg.AuthAccessTTLMin) * time.Minute,
-		Refresh:  time.Duration(cfg.AuthRefreshTTLDays) * 24 * time.Hour,
-		Absolute: time.Duration(cfg.AuthAbsoluteTTLDays) * 24 * time.Hour,
-		Grace:    time.Duration(cfg.AuthRefreshGraceSec) * time.Second,
-	}
 	// The TOTP seed-encryption key. AllowEphemeral is FALSE: unlike the folder
 	// unlock key, a regenerated one makes every stored seed undecryptable and
 	// locks every 2FA user out of their own account permanently. Better to
@@ -233,6 +221,31 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The outbox is what makes mail survive a restart: a message is written in
+	// the same transaction as the credential it carries, and the relay drains
+	// the table afterwards. A queued row holds a live reset link, so the params
+	// are encrypted — under a subkey DERIVED from the auth key rather than the
+	// key itself, so the outbox and the TOTP seeds do not share a key.
+	outbox, err := mailoutbox.NewFromMasterKey(authKey)
+	if err != nil {
+		logger.Error("mail outbox", "err", err)
+		os.Exit(1)
+	}
+	mailRelay := mailoutbox.NewRelay(
+		mailoutbox.NewRepository(pool),
+		mailoutbox.NewInprocSink(outbox, mail),
+		mailoutbox.Options{}, logger)
+	mailRelay.Start(context.Background())
+	authRepo := auth.NewRepository(pool, auth.WithOutbox(outbox))
+	cookieOpts := auth.CookieOptions{Secure: cfg.AuthCookieSecure, Domain: cfg.AuthCookieDomain}
+	authMW := auth.NewMiddleware(authRepo, cookieOpts, logger,
+		cfg.AuthEnabled && cfg.AuthRequire2FAForAdmins)
+	authTTL := auth.SessionTTL{
+		Access:   time.Duration(cfg.AuthAccessTTLMin) * time.Minute,
+		Refresh:  time.Duration(cfg.AuthRefreshTTLDays) * 24 * time.Hour,
+		Absolute: time.Duration(cfg.AuthAbsoluteTTLDays) * 24 * time.Hour,
+		Grace:    time.Duration(cfg.AuthRefreshGraceSec) * time.Second,
+	}
 	// Built unconditionally. With no client credentials it reports itself
 	// disabled, /api/auth/me advertises google_oauth:false so the SPA hides
 	// the button, and the routes answer a readable "not configured" rather
@@ -249,14 +262,14 @@ func main() {
 
 	policyRepo := policy.NewRepository(pool)
 	authHandler := auth.NewHandler(auth.HandlerConfig{
-		Repo: authRepo, MW: authMW, Mailer: mail, MailDispatcher: mailDispatcher, Cookies: cookieOpts,
+		Repo: authRepo, MW: authMW, Mailer: mail, Cookies: cookieOpts,
 		TTL: authTTL, Logger: logger, BaseURL: cfg.AuthPublicURL,
 		Cipher: authCipher, CodeMAC: authCodeMAC, TOTPIssuer: cfg.AuthTOTPIssuer,
 		Require2FAForAdmins: cfg.AuthRequire2FAForAdmins,
 		Google:              google,
 		Policy:              policyRepo,
 	})
-	adminHandler := auth.NewAdminHandler(authRepo, mail, mailDispatcher, logger, cfg.AuthPublicURL)
+	adminHandler := auth.NewAdminHandler(authRepo, mail, logger, cfg.AuthPublicURL)
 	// The audit hook is passed as a function so internal/policy never imports
 	// internal/auth — auth already imports policy for enforcement, and the other
 	// direction would close the cycle.
@@ -326,7 +339,7 @@ func main() {
 	defer cancel()
 	completed := waitForShutdown(shutCtx, shutdownHooks{
 		shutdownHTTP: srv.Shutdown,
-		stopMail:     mailDispatcher.Stop,
+		stopMail:     mailRelay.Stop,
 		stopWorkers: func() {
 			worker.Stop()
 			if ccWorker != nil {

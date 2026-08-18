@@ -51,18 +51,6 @@ func (h *Handler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	admission, qerr := h.dispatcher.Reserve()
-	if qerr != nil {
-		h.logger.Warn("password reset mail not queued", "err", qerr)
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
-	defer func() {
-		if admission != nil {
-			admission.Release()
-		}
-	}()
-
 	ip := clientIP(r)
 	ipKey := "pwreset:ip:" + ip
 	emailKey := "pwreset:em:" + NormalizeEmail(in.Email)
@@ -94,22 +82,20 @@ func (h *Handler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		// link, since a link here would let control of the mailbox alone
 		// resurrect a password credential, which is precisely what requiring
 		// the current password during conversion refused to allow.
-		if err := admission.Publish(
-			mailer.PasswordResetUnavailableMessage(user.Email), "password reset unavailable"); err != nil {
-			h.logger.Error("publish password reset unavailable mail", "err", err)
-		}
-		admission = nil
+		// No credential is minted here, so there is no transaction to join.
+		h.enqueueMail(r.Context(), mailer.PasswordResetUnavailableMessage(user.Email),
+			localeFrom(r), "password reset unavailable")
 	case eligible:
-		token, terr := h.repo.CreatePasswordReset(r.Context(), user.ID, passwordResetTTL, ip)
-		if terr != nil {
+		// The token and its e-mail commit together. The link exists nowhere but
+		// in that message — the table keeps only a sha256 — and this endpoint's
+		// own cooldown means a user whose mail was lost cannot simply ask again.
+		draft := MailDraft{Locale: localeFrom(r), Build: func(token string) mailer.Envelope {
+			return mailer.PasswordResetMessage(user.Email,
+				h.baseURL+"/#reset="+token, int(passwordResetTTL.Minutes()))
+		}}
+		if _, terr := h.repo.CreatePasswordReset(r.Context(), user.ID, passwordResetTTL, ip, draft); terr != nil {
 			h.logger.Error("create password reset", "err", terr)
-			break
 		}
-		if err := admission.Publish(mailer.PasswordResetMessage(user.Email,
-			h.baseURL+"/#reset="+token, int(passwordResetTTL.Minutes())), "password reset"); err != nil {
-			h.logger.Error("publish password reset mail", "err", err)
-		}
-		admission = nil
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -255,10 +241,6 @@ func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request) {
 // E-mail verification
 // ─────────────────────────────────────────────────────────────────────
 
-// emailVerifyTTL matches the login OTP: long enough to switch to a mail client,
-// short enough that a code left in an inbox stops working.
-const emailVerifyTTL = emailOTPTTL
-
 type verifyEmailInput struct {
 	Token string `json:"token"`
 }
@@ -288,32 +270,29 @@ func (h *Handler) SendEmailVerification(w http.ResponseWriter, r *http.Request) 
 	// back to the app and retype it for no gain. The token is 256 bits from
 	// crypto/rand, which is what lets the endpoint that consumes it work with
 	// no session at all.
-	admission, err := h.dispatcher.Reserve()
-	if err != nil {
-		writeMailQueueUnavailable(w)
-		return
-	}
-	token, err := h.repo.CreateEmailVerification(r.Context(), user.ID,
-		h.otpTTL(r.Context()), h.otpCooldown(r.Context()))
+	// The MAILED lifetime is the one about to be persisted, not the compiled-in
+	// constant. The two diverge the moment an owner edits the OTP validity in
+	// instance policy, and a link that promises thirty minutes while expiring in
+	// five is a support ticket wearing a feature.
+	ttl := h.otpTTL(r.Context())
+	draft := MailDraft{Locale: localeFrom(r), Build: func(token string) mailer.Envelope {
+		return mailer.VerifyEmailMessage(user.Email,
+			h.baseURL+"/#verify="+token, int(ttl.Minutes()))
+	}}
+	_, err = h.repo.CreateEmailVerification(r.Context(), user.ID,
+		ttl, h.otpCooldown(r.Context()), draft)
 	if errors.Is(err, ErrTooSoon) {
-		admission.Release()
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 	if errors.Is(err, ErrEmailAlreadyVerified) {
-		admission.Release()
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if err != nil {
-		admission.Release()
 		h.logger.Error("verify email store", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
-	}
-	if err := admission.Publish(mailer.VerifyEmailMessage(user.Email,
-		h.baseURL+"/#verify="+token, int(emailVerifyTTL.Minutes())), "verify email"); err != nil {
-		h.logger.Error("publish verification mail", "err", err)
 	}
 	w.WriteHeader(http.StatusAccepted)
 }

@@ -233,7 +233,7 @@ var resetStatement = `TRUNCATE
 	    backup_restore_file, backup_restore_entity, backup_restore,
 	    note_media_ref, note_media,
 	    click_log, link_tag, note, link, folder, tag,
-	    push_subscription, app_setting, audit_log,
+	    push_subscription, app_setting, audit_log, mail_outbox,
 	    session_used_token, session, oauth_state, api_token,
 	    recovery_code, totp_secret, email_otp, auth_challenge,
 	    password_reset, invite, user_identity, app_user
