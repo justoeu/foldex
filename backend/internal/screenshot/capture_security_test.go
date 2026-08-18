@@ -404,7 +404,21 @@ func TestCaptureProxy_RejectsCONNECTAboveTunnelLimit(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, status)
 	assert.Equal(t, int64(maxProxyTunnels), dialed.Load(), "over-limit CONNECT must be rejected before dial")
 	assert.True(t, proxy.Blocked(), "exceeding any capture budget must invalidate the screenshot")
-	require.Eventually(t, func() bool { return len(proxy.tunnelSem) == 0 }, time.Second, time.Millisecond)
+	// The budget is generous ON PURPOSE. What this asserts is that the slots are
+	// released EVENTUALLY, not how fast: exceedBudget closes the tracked
+	// connections, each tunnel's two proxyCopy goroutines then have to observe
+	// EOF, and only after BOTH report does the handler return and its deferred
+	// receive free the slot. That is maxProxyTunnels handlers and twice as many
+	// goroutines waking in a burst, with no synchronization point the test can
+	// wait on instead.
+	//
+	// It was one second, and it passed everywhere except a loaded two-core CI
+	// runner — the worst kind of failure, because it looks like a real
+	// regression in whatever change happens to be open at the time. A liveness
+	// assertion costs nothing extra in the happy path, where this returns in
+	// microseconds; the ceiling only exists so a genuine leak still fails.
+	require.Eventually(t, func() bool { return len(proxy.tunnelSem) == 0 },
+		5*time.Second, time.Millisecond)
 }
 
 func TestCaptureProxy_RequestBudgetInvalidatesCapture(t *testing.T) {
