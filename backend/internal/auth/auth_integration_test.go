@@ -138,6 +138,39 @@ func (c *captureMailer) waitFor(t *testing.T, to string) mailer.Message {
 	return found
 }
 
+// waitForMatching is waitFor with a predicate on the body.
+//
+// Returning "the last message to this address" is not good enough once a test
+// performs several operations: the outbox relay delivers asynchronously, so a
+// notification triggered by the PREVIOUS step (a recovery code was spent, a
+// session was revoked) can land after the reset and win the backwards scan. The
+// caller then parses a body that was never meant to carry what it is looking
+// for, and the failure names the wrong message entirely.
+func (c *captureMailer) waitForMatching(t *testing.T, to string, want func(string) bool) mailer.Message {
+	t.Helper()
+	var found mailer.Message
+	require.Eventually(t, func() bool {
+		all := c.all()
+		for i := len(all) - 1; i >= 0; i-- {
+			if all[i].To == to && want(all[i].Text) {
+				found = all[i]
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 10*time.Millisecond, "no matching mail delivered to %s", to)
+	return found
+}
+
+// waitForCode waits for a message that actually carries a six-digit code.
+func (c *captureMailer) waitForCode(t *testing.T, to string) string {
+	t.Helper()
+	msg := c.waitForMatching(t, to, func(body string) bool {
+		return sixDigits.MatchString(body)
+	})
+	return extractSixDigits(t, msg.Text)
+}
+
 type harness struct {
 	pool    *pgxpool.Pool
 	router  http.Handler

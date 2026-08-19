@@ -171,4 +171,70 @@ describe('EnrollTotpScreen', () => {
     expect(screen.queryByRole('button', { name: /skip|later|remind/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /sign in as someone else/i })).toBeInTheDocument()
   })
+
+  // ADR-37: an administrator picks a method. The chooser appears only when
+  // there IS a choice — see the single-method case below.
+  describe('choosing a method', () => {
+    const smtpSession = {
+      status: 'two_factor_required' as const,
+      pending: { email: 'a•••@b.test', methods: ['totp'], maxAttempts: 5, purpose: 'enroll_2fa' as const },
+      features: { google_oauth: false, two_factor: true, email_delivery: true },
+    }
+
+    it('asks which method before starting anything', async () => {
+      const post = mockPost(async () => ({ data: enrollment }))
+      renderWithProviders(<EnrollTotpScreen />, { session: smtpSession })
+
+      expect(await screen.findByRole('button', { name: /set up an authenticator app/i }))
+        .toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /set up e-mail codes/i })).toBeInTheDocument()
+      // Nothing is minted until the admin picks: starting a TOTP enrollment
+      // they then abandon for e-mail would leave a pending secret behind.
+      expect(post).not.toHaveBeenCalled()
+    })
+
+    it('starts the e-mail enrollment and confirms with the mailed code', async () => {
+      const user = userEvent.setup()
+      const post = mockPost(async (url: string) => {
+        if (url.endsWith('/email/start')) {
+          return { data: { account: 'a•••@b.test', expires_in: 300, digits: 6 } }
+        }
+        return { data: { recovery_codes: codes, status: 'authenticated' } }
+      })
+      renderWithProviders(<EnrollTotpScreen />, { session: smtpSession })
+
+      await user.click(await screen.findByRole('button', { name: /set up e-mail codes/i }))
+      expect(await screen.findByText(/code sent to a•••@b\.test/i)).toBeInTheDocument()
+      expect(post).toHaveBeenCalledWith('/api/auth/2fa/email/start', {})
+      expect(screen.queryByAltText(/qr code/i)).not.toBeInTheDocument()
+
+      const cells = screen.getAllByRole('textbox') as HTMLInputElement[]
+      cells[0].focus()
+      await user.paste('123456')
+
+      expect(await screen.findByTestId('recovery-codes')).toBeInTheDocument()
+      expect(post).toHaveBeenCalledWith('/api/auth/2fa/email/confirm', { code: '123456' })
+    })
+
+    // A question with one possible answer is pure friction on a mandatory
+    // screen the admin cannot leave.
+    it('skips the chooser and starts the authenticator when e-mail cannot be sent', async () => {
+      const post = mockPost(async () => ({ data: enrollment }))
+      renderWithProviders(<EnrollTotpScreen />, {
+        session: { ...smtpSession, features: { ...smtpSession.features, email_delivery: false } },
+      })
+
+      await screen.findByAltText(/qr code/i)
+      expect(post).toHaveBeenCalledWith('/api/auth/2fa/totp/start', {})
+      expect(screen.queryByRole('button', { name: /set up e-mail codes/i })).not.toBeInTheDocument()
+    })
+
+    it('still offers no way to bypass the enrollment', async () => {
+      mockPost(async () => ({ data: enrollment }))
+      renderWithProviders(<EnrollTotpScreen />, { session: smtpSession })
+
+      await screen.findByRole('button', { name: /set up an authenticator app/i })
+      expect(screen.queryByRole('button', { name: /skip|later|not now/i })).not.toBeInTheDocument()
+    })
+  })
 })

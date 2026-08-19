@@ -31,6 +31,16 @@
     "heading": "Seu código de entrada do Foldex",
     "footnote": "Ele expira em {{.ExpiresMinutes}} minutos e só pode ser usado uma vez. Se não é você entrando agora, alguém pode saber sua senha — troque-a."
   },
+  "enroll_email_2fa": {
+    "subject": "Código de dois fatores do Foldex: {{.Code}}",
+    "heading": "Confirme este endereço como seu segundo fator.",
+    "footnote": "Ele expira em {{.ExpiresMinutes}} minutos e vale uma vez só. Se você não pediu para adicionar o e-mail como segundo fator, ignore esta mensagem — nada muda enquanto o código não for digitado."
+  },
+  "step_up_code": {
+    "subject": "Código de segurança do Foldex: {{.Code}}",
+    "heading": "Confirme uma alteração nas suas configurações de segurança.",
+    "footnote": "Ele expira em {{.ExpiresMinutes}} minutos e vale uma vez só. Se não foi você que iniciou esta alteração, não digite o código — alguém pode estar conectado à sua conta. Troque sua senha e encerre todas as sessões."
+  },
   "verify_email": {
     "subject": "Confirme seu e-mail do Foldex",
     "heading": "Confirme este endereço para a sua conta do Foldex.",

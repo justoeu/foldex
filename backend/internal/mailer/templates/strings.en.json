@@ -31,6 +31,16 @@
     "heading": "Your Foldex sign-in code",
     "footnote": "It expires in {{.ExpiresMinutes}} minutes and can be used once. If you are not signing in right now, someone may know your password — change it."
   },
+  "enroll_email_2fa": {
+    "subject": "Foldex two-factor code: {{.Code}}",
+    "heading": "Confirm this address as your second factor.",
+    "footnote": "It expires in {{.ExpiresMinutes}} minutes and can be used once. If you did not ask to add e-mail as a second factor, ignore this message — nothing changes until the code is entered."
+  },
+  "step_up_code": {
+    "subject": "Foldex security code: {{.Code}}",
+    "heading": "Confirm a change to your security settings.",
+    "footnote": "It expires in {{.ExpiresMinutes}} minutes and can be used once. If you did not start this change, do not enter the code — someone may be signed in to your account. Change your password and sign out everywhere."
+  },
   "verify_email": {
     "subject": "Confirm your Foldex e-mail",
     "heading": "Confirm this address for your Foldex account.",

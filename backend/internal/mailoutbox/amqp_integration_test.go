@@ -5,6 +5,9 @@ package mailoutbox
 import (
 	"context"
 	"crypto/rand"
+	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +17,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"foldex/internal/mailer"
+	"foldex/internal/testdb"
 )
 
 // rabbitImage is pinned for the same reason every other test image is: a
@@ -21,28 +25,101 @@ import (
 // a PRECONDITION_FAILED that looks like our bug.
 const rabbitImage = "rabbitmq:4.3.2-alpine"
 
+// The broker is started ONCE for the whole package, like testdb.Shared does for
+// Postgres.
+//
+// A container per test was the obvious first shape and the wrong one: RabbitMQ
+// takes tens of seconds to report "Server startup complete" on a loaded Docker
+// host, six of them share Go's single ten-minute package timeout, and the run
+// that blows it reports a hung test rather than "your machine was busy" — a
+// failure that says nothing about the code and costs an afternoon to read.
+//
+// Isolation moves to the TOPOLOGY instead: topologyFor gives each test its own
+// exchange and queues on the shared broker, which is stronger than a fresh
+// container anyway, since two tests sharing a queue name would interfere even
+// with a container each if one leaked a consumer.
+var (
+	rabbitOnce sync.Once
+	rabbitC    testcontainers.Container
+	rabbitURL  string
+	rabbitErr  error
+)
+
+// TestMain terminates BOTH shared containers when the package finishes.
+//
+// Not optional and not belt-and-braces: the Makefile runs with
+// TESTCONTAINERS_RYUK_DISABLED=true, so the reaper that would otherwise clean
+// up after the run does not exist. Without this hook every `go test` on this
+// package leaves a Postgres and a RabbitMQ running until the machine is
+// rebooted — which is exactly what happened, and what
+// TestEveryPackageUsingTestdbStopsIt now prevents from recurring.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	stopRabbit()
+	testdb.StopShared()
+	os.Exit(code)
+}
+
+func stopRabbit() {
+	if rabbitC != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = rabbitC.Terminate(ctx)
+		rabbitC = nil
+	}
+}
+
 func startRabbit(t *testing.T) string {
 	t.Helper()
-	ctx := context.Background()
-	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        rabbitImage,
-			ExposedPorts: []string{"5672/tcp"},
-			WaitingFor: wait.ForLog("Server startup complete").
-				WithStartupTimeout(3 * time.Minute),
-		},
-		Started: true,
+	rabbitOnce.Do(func() {
+		ctx := context.Background()
+		c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: testcontainers.ContainerRequest{
+				Image:        rabbitImage,
+				ExposedPorts: []string{"5672/tcp"},
+				WaitingFor: wait.ForLog("Server startup complete").
+					WithStartupTimeout(3 * time.Minute),
+			},
+			Started: true,
+		})
+		if err != nil {
+			rabbitErr = err
+			return
+		}
+		// Held for TestMain rather than terminated by t.Cleanup: the container
+		// outlives the test that happened to start it, and the reaper is
+		// disabled, so the ONLY thing that stops it is stopRabbit below.
+		rabbitC = c
+		host, herr := c.Host(ctx)
+		if herr != nil {
+			rabbitErr = herr
+			return
+		}
+		port, perr := c.MappedPort(ctx, "5672/tcp")
+		if perr != nil {
+			rabbitErr = perr
+			return
+		}
+		rabbitURL = "amqp://guest:guest@" + host + ":" + port.Port() + "/"
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = testcontainers.TerminateContainer(c)
-	})
+	if rabbitErr != nil {
+		t.Fatalf("mailoutbox: shared broker: %v", rabbitErr)
+	}
+	return rabbitURL
+}
 
-	host, err := c.Host(ctx)
-	require.NoError(t, err)
-	port, err := c.MappedPort(ctx, "5672/tcp")
-	require.NoError(t, err)
-	return "amqp://guest:guest@" + host + ":" + port.Port() + "/"
+// topologyFor names an exchange and queues unique to one test, so tests can
+// share a broker without sharing state.
+//
+// Not called TestTopology: `go vet` reads any Test-prefixed function taking
+// *testing.T as a test case and rejects one that returns a value.
+func topologyFor(t *testing.T) Topology {
+	t.Helper()
+	// The test name is unique within a run by construction, and RabbitMQ accepts
+	// it verbatim — but a subtest name carries a slash, which reads as a
+	// namespace separator in the management UI and confuses nothing else.
+	name := "foldex.test." + strings.ReplaceAll(t.Name(), "/", ".")
+	return Topology{Exchange: name, Queue: name + ".send", RoutingKey: "send"}.WithDefaults()
 }
 
 func testOutbox(t *testing.T) *Outbox {
@@ -61,7 +138,7 @@ func testOutbox(t *testing.T) *Outbox {
 // and present as "the broker is down".
 func TestAMQP_DeclareIsIdempotentAcrossConnections(t *testing.T) {
 	url := startRabbit(t)
-	tp := Topology{}.WithDefaults()
+	tp := topologyFor(t)
 
 	for i := range 3 {
 		conn, err := amqp.Dial(url)
@@ -79,7 +156,7 @@ func TestAMQP_DeclareIsIdempotentAcrossConnections(t *testing.T) {
 func TestAMQP_PublishedMessageArrivesSealedAndOpensToTheSameParams(t *testing.T) {
 	url := startRabbit(t)
 	o := testOutbox(t)
-	tp := Topology{}.WithDefaults()
+	tp := topologyFor(t)
 
 	sink, err := NewAMQPSink(AMQPConfig{URL: url, Topology: tp})
 	require.NoError(t, err)
@@ -128,7 +205,7 @@ func TestAMQP_PublishedMessageArrivesSealedAndOpensToTheSameParams(t *testing.T)
 // nothing errors.
 func TestAMQP_RepublishRidesTheLadderBackOntoTheSendQueue(t *testing.T) {
 	url := startRabbit(t)
-	tp := Topology{Exchange: "foldex.test.mail"}.WithDefaults()
+	tp := topologyFor(t)
 
 	conn, err := amqp.Dial(url)
 	require.NoError(t, err)

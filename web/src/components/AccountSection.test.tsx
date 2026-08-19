@@ -60,6 +60,43 @@ describe('AccountSection', () => {
     await waitFor(() => expect(submit).toBeEnabled())
   })
 
+  // ADR-37 made e-mail a factor an account can hold on its own, and the server
+  // demands a step-up proof from ANY account that has one. Gating this field on
+  // totp_enabled left an e-mail-only account with the field hidden, the button
+  // enabled, and a refusal it had no way to answer — a dead end on the happy
+  // path of the feature that created the state.
+  it('demands a code from an account whose only factor is e-mail', async () => {
+    const user = userEvent.setup()
+    render(sessionWith({ has_password: false, totp_enabled: false, email_2fa_enabled: true }))
+
+    const submit = screen.getByRole('button', { name: /set a password/i })
+    await user.type(screen.getByLabelText(/new password/i), 'a good new password')
+    await user.type(screen.getByLabelText(/confirm the password/i), 'a good new password')
+    expect(submit).toBeDisabled()
+
+    const cells = screen.getAllByRole('textbox') as HTMLInputElement[]
+    cells[0].focus()
+    await user.paste('123456')
+    await waitFor(() => expect(submit).toBeEnabled())
+  })
+
+  // The only proof such an account can produce here without spending a recovery
+  // code, which is a lockout credential rather than an everyday one.
+  it('offers to mail a code to an e-mail-only account', async () => {
+    const user = userEvent.setup()
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+    render(sessionWith({ has_password: false, totp_enabled: false, email_2fa_enabled: true }))
+
+    await user.click(screen.getByRole('button', { name: /e-mail me a code/i }))
+    expect(post).toHaveBeenCalledWith('/api/auth/2fa/email/send')
+  })
+
+  it('leaves the code field out when the account has no second factor', () => {
+    render(sessionWith({ has_password: false, totp_enabled: false }))
+    expect(screen.queryByLabelText(/current 6-digit code/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /e-mail me a code/i })).not.toBeInTheDocument()
+  })
+
   it('refuses to submit two passwords that disagree', async () => {
     const user = userEvent.setup()
     const post = vi.spyOn(http, 'post')

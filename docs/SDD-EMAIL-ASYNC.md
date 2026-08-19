@@ -1,12 +1,12 @@
 # SDD — E-mail assíncrono (outbox + RabbitMQ) e segundo fator por e-mail
 
-> Software Design Document. Status: **Fases 1, A e B entregues · fase C proposta · v0.3 · 2026-08-18**
+> Software Design Document. Status: **Todas as fases entregues · v1.0 · 2026-08-18**
 >
 > Implementado: fase 1 (outbox transacional, relay `inproc`, templates i18n),
-> fase A (`locale` no perfil + force-reset assíncrono) e fase B (transporte
-> AMQP, `cmd/mailer`, escada de retry, dead-letter). Os desvios entre o que este
-> documento propôs e o que subiu estão em §10.1, cada um com o motivo. A fase C
-> (e-mail como segundo fator, §7) segue como proposta.
+> fase A (`locale` no perfil + force-reset assíncrono), fase B (transporte AMQP,
+> `cmd/mailer`, escada de retry, dead-letter) e fase C (e-mail como segundo fator
+> permanente). Os desvios entre o que este documento propôs e o que subiu estão
+> em §13.1 e §13.2, cada um com o motivo.
 >
 > Cobre ADR-36 (entrega de e-mail durável, com transporte plugável) e ADR-37
 > (e-mail como segundo fator permanente, e não apenas como escape de um desafio
@@ -743,10 +743,10 @@ uma etapa de provisionamento a mais, documentada no README.
 |---|---|---|---|
 | **A** | `locale` no perfil (12.3) + force-reset assíncrono (12.1) | — | **entregue** |
 | **B** | `MAIL_TRANSPORT=amqp`, sink AMQP, `cmd/mailer`, vhost dedicado (12.4) | — | **entregue** |
-| **C** | `email_factor`, cadastro, `has_second_factor`, step-up, `admin_second_factor` (12.2) | A (locale) | proposta |
+| **C** | `email_factor`, cadastro, `has_second_factor`, step-up, `admin_second_factor` (12.2) | A (locale) | **entregue** |
 
 A e B eram independentes entre si. C usa o `locale` de A para o código de
-cadastro, e é a maior das três.
+cadastro, e foi a maior das três.
 
 ### 13.1 Onde a fase B divergiu deste documento
 
@@ -784,3 +784,51 @@ razão — ambos fora do blob cifrado —, então a proibição de §6 fica inta
 não tratou disso, e sem um carregador separado o worker precisaria receber uma
 DSN que nunca abre — desfazendo exatamente o isolamento que motivou o binário
 separado.
+
+### 13.2 Onde a fase C divergiu deste documento
+
+**O step-up ganhou um endpoint de envio que o documento não previu.** §6 dizia
+que os quatro call sites passariam a aceitar "TOTP, OTP por e-mail ou código de
+recuperação", mas não disse de onde viria o OTP: esses caminhos são autenticados
+por sessão e não têm `auth_challenge` para pendurar um código. Sem
+`POST /2fa/email/send`, uma conta cujo único fator é e-mail teria de gastar um
+código de recuperação — uma credencial de saída de lockout — para desligar o
+próprio fator, e não conseguiria definir senha de jeito nenhum. O código sai sob
+purpose próprio (`step_up_2fa`), separado de `enroll_email_2fa` porque um prova
+uma caixa que ninguém aceitou ainda e o outro é um fator já aceito se
+apresentando.
+
+**O proof passou a ser VERIFICADO sem ser gasto.** O documento tratava o step-up
+como uma checagem booleana. Os três métodos agora produzem um `SecondFactorProof`
+consumido dentro da transação da operação que autoriza, porque a propriedade que
+o CLAUDE.md §4 já exigia do TOTP vale ainda mais para código de recuperação: um
+código queimado por uma escrita que falhou custa ao usuário uma volta para dentro
+da própria conta, por uma operação que não aconteceu. `SetPassword` também
+passou a checar `email_factor` na re-verificação dentro da transação — lendo só
+`totp_secret`, ela dispensava o proof justamente para a conta que só tem e-mail.
+
+**`admin_second_factor` precisou de um piso aplicado na leitura.** §6 propôs o
+knob com piso `any`, mas validação estrita sobre um documento salvo antes desta
+release recusaria **toda** escrita de política numa instância existente, por uma
+chave que o owner nunca tocou. `WithDefaults()` roda no `Put` e no repositório.
+
+**"Este fator pode ser removido?" virou uma função só.** O documento não tratou
+do assunto, e a primeira implementação teve a regra duplicada e divergente entre
+os dois endpoints de disable. `mayRemoveFactor` responde a pergunta uma vez e
+alimenta também o `GET /2fa`, que passa a devolver `can_disable_totp` /
+`can_disable_email` para a tela renderizar a resposta do servidor em vez de
+recalcular a política no navegador.
+
+**A escolha de método na tela de cadastro obrigatório é condicional.** §7 pedia
+"a mesma escolha" na `EnrollTotpScreen`. Numa instância sem SMTP não há escolha
+alguma, então a tela pula o seletor e começa o autenticador direto: uma pergunta
+com uma resposta possível é fricção pura numa tela obrigatória da qual o admin
+não pode sair.
+
+**O broker dos testes virou compartilhado no pacote.** Não é da fase C, mas foi
+encontrado ao rodar a suíte completa: `internal/mailoutbox` subia um contêiner
+RabbitMQ por teste, seis deles dividindo o timeout único de dez minutos do Go.
+Numa máquina carregada o pacote estourava e reportava um teste travado — falha
+que não diz nada sobre o código. O contêiner agora é único por pacote
+(`sync.Once`, como o `testdb.Shared`) e o isolamento passou para a topologia,
+com exchange e filas por teste. O pacote caiu de >600 s para ~104 s.

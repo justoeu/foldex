@@ -913,7 +913,23 @@
     "section_desc": "Exigir un código de tu aplicación de autenticación además de la contraseña.",
     "disable_warning": "Tus códigos de recuperación también se borrarán. Quien tenga solo tu contraseña podrá entrar.",
     "wrong_password": "Esa contraseña es incorrecta.",
-    "already_enabled": "La verificación en dos pasos ya está activada."
+    "already_enabled": "La verificación en dos pasos ya está activada.",
+    "method_app": "Aplicación de autenticación",
+    "method_email": "Código por correo",
+    "enable_app": "Configurar aplicación de autenticación",
+    "enable_email": "Configurar códigos por correo",
+    "disable_email": "Desactivar códigos por correo",
+    "disable_one_warning": "Tu otro método sigue activo, así que tus códigos de recuperación se conservan.",
+    "email_unavailable": "Esta instancia no envía correo, así que los códigos por correo no están disponibles.",
+    "email_not_enrolled": "El correo no está configurado como segundo factor en esta cuenta.",
+    "enroll_choose_subtitle": "Elige cómo quieres confirmar que eres tú.",
+    "enroll_choose_hint": "La aplicación de autenticación funciona sin conexión. Los códigos por correo no requieren instalar nada.",
+    "enroll_email_subtitle": "Enviamos un código de 6 dígitos a {{account}}.",
+    "enroll_email_sent": "Código enviado a {{account}}.",
+    "enter_mailed_hint": "Introduce el código de 6 dígitos que te enviamos por correo.",
+    "code_accepts_mailed": "Puedes usar un código de tu aplicación, un código enviado por correo o un código de recuperación.",
+    "code_sent": "Código enviado a tu dirección.",
+    "mail_a_code": "Enviarme un código por correo"
   },
   "auth_verify": {
     "kicker": "confirma tu dirección",
@@ -1112,7 +1128,11 @@
     "err_not_owner": "Solo el propietario actual puede transferir la instancia.",
     "roles_count_one": "Un rol activo en esta instancia.",
     "roles_count_other": "{{count}} roles activos en esta instancia.",
-    "attention_desc": "Elementos de acceso abiertos."
+    "attention_desc": "Elementos de acceso abiertos.",
+    "policy_admin_factor": "Segundo factor aceptado para administradores",
+    "policy_admin_factor_any": "Aplicación de autenticación o código por correo",
+    "policy_admin_factor_totp": "Solo aplicación de autenticación",
+    "policy_admin_factor_hint": "Un admin cuyo único factor es el correo es más débil: el buzón ya es el canal de recuperación, así que ambos pasos dependen de él."
   },
   "profile": {
     "title": "Perfil",

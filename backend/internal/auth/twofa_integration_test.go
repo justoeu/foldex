@@ -101,6 +101,18 @@ func enrolUser(t *testing.T, h *harness, email, password string) enrolled {
 	return enrolled{client: c, secret: start.Secret, codes: confirm.RecoveryCodes}
 }
 
+// enrolUserWithEmailFactor enrols TOTP and then the e-mail factor.
+//
+// Since ADR-37 a mailed code is a factor the account HOLDS rather than one the
+// server can always offer, so every test that exercises the e-mail LOGIN method
+// has to enrol it first — exactly as a user would.
+func enrolUserWithEmailFactor(t *testing.T, h *harness, email, password string) enrolled {
+	t.Helper()
+	e := enrolUser(t, h, email, password)
+	enrolEmailFactor(t, h, e.client, email, password)
+	return e
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Enrollment
 // ─────────────────────────────────────────────────────────────────────
@@ -1407,7 +1419,7 @@ func TestEmailOTP_DeliversACodeThatSignsIn(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	enrolUser(t, h, "admin@example.com", "a good password")
+	enrolUserWithEmailFactor(t, h, "admin@example.com", "a good password")
 
 	c := h.client(t)
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -1435,7 +1447,7 @@ func TestEmailOTP_SendBudgetAndCodeCommitWithTheMail(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	enrolUser(t, h, "admin@example.com", "a good password")
+	enrolUserWithEmailFactor(t, h, "admin@example.com", "a good password")
 
 	c := h.client(t)
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -1483,7 +1495,7 @@ func TestEmailOTP_DigestRequiresTheServerKey(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	enrolUser(t, h, "admin@example.com", "a good password")
+	enrolUserWithEmailFactor(t, h, "admin@example.com", "a good password")
 
 	c := h.client(t)
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -1515,7 +1527,7 @@ func TestEmailOTP_CannotBeUsedTwice(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	enrolUser(t, h, "admin@example.com", "a good password")
+	enrolUserWithEmailFactor(t, h, "admin@example.com", "a good password")
 
 	c := h.client(t)
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -1540,7 +1552,7 @@ func TestEmailOTP_ResendIsThrottledButAlwaysAnswers202(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	enrolUser(t, h, "admin@example.com", "a good password")
+	enrolUserWithEmailFactor(t, h, "admin@example.com", "a good password")
 
 	c := h.client(t)
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -2074,11 +2086,13 @@ func TestTOTPMutationsRefuseProofFromAStaleCredentialEpoch(t *testing.T) {
 		mutate func(*auth.Repository, authctx.UserID, int64, int, auth.TOTPProof) error
 	}{
 		{"disable", func(repo *auth.Repository, uid authctx.UserID, sid int64, version int, proof auth.TOTPProof) error {
-			return repo.DisableTOTP(context.Background(), uid, sid, version, "a good password", proof)
+			return repo.DisableTOTP(context.Background(), uid, sid, version, "a good password",
+				auth.SecondFactorProof{Method: auth.MethodTOTP, TOTP: &proof})
 		}},
 		{"regenerate", func(repo *auth.Repository, uid authctx.UserID, sid int64, version int, proof auth.TOTPProof) error {
 			return repo.RegenerateRecoveryCodes(context.Background(), uid, sid, version,
-				"a good password", proof, [][]byte{[]byte("replacement")})
+				"a good password", auth.SecondFactorProof{Method: auth.MethodTOTP, TOTP: &proof},
+				[][]byte{[]byte("replacement")})
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2232,11 +2246,17 @@ func TestReset_MailboxAloneCannotSatisfyBothFactors(t *testing.T) {
 
 // An ordinary password login DOES get the e-mail factor: there the first factor
 // was the password, so the mailbox is still an independent channel.
+//
+// Since ADR-37 the account must have ENROLLED e-mail for it to be offered at
+// all, so this test now does that first. What it locks is unchanged: the
+// difference between the two logins is WHICH channel proved the first factor,
+// not whether the server happens to have SMTP.
 func TestLogin_OffersTheEmailFactorWhenTheFirstFactorWasThePassword(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	enrolUser(t, h, "admin@example.com", "a good password")
+	e := enrolUser(t, h, "admin@example.com", "a good password")
+	enrolEmailFactor(t, h, e.client, "admin@example.com", "a good password")
 
 	c := h.client(t)
 	rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
@@ -2686,7 +2706,7 @@ func TestEmailOTP_TotalSendCapIsEnforced(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
 	h.bootstrapAdmin(t, "admin@example.com", "a good password")
-	enrolUser(t, h, "admin@example.com", "a good password")
+	enrolUserWithEmailFactor(t, h, "admin@example.com", "a good password")
 	ctx := context.Background()
 
 	c := h.client(t)

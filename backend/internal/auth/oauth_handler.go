@@ -218,7 +218,7 @@ func (h *Handler) OAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	if user.TOTPEnabled && !h.checkOAuthLinkSecondFactor(w, r, user, in.Code) {
+	if user.HasSecondFactor() && !h.checkOAuthLinkSecondFactor(w, r, user, in.Code) {
 		return
 	}
 
@@ -246,34 +246,21 @@ func (h *Handler) OAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) checkOAuthLinkSecondFactor(w http.ResponseWriter, r *http.Request, user User, code string) bool {
-	key := "stepup:" + strconv.FormatInt(int64(user.ID), 10)
-	until, ok := h.stepUpUser.Begin(key)
+	proof, key, ok := h.stepUpSecondFactor(w, r, user.ID, user, code)
 	if !ok {
-		writeRateLimited(w, until)
 		return false
 	}
-
-	method := ""
-	if digits, numeric := numericOTP(code); numeric && h.cipher != nil {
-		proof := h.verifyTOTPProof(r.Context(), user.ID, digits)
-		if proof != nil && h.repo.ConsumeTOTPProof(r.Context(), user.ID, *proof) == nil {
-			method = methodTOTP
-		}
-	} else if normalized := normalizeRecoveryCode(code); len(normalized) == recoveryCodeChars && h.codeMAC != nil {
-		digest := h.codeMAC.RecoveryCodeDigest(user.ID, normalized)
-		if h.repo.ConsumeRecoveryCode(r.Context(), user.ID, digest) == nil {
-			method = methodRecovery
-		}
-	}
-	if method == "" {
+	// Spent here rather than in a later transaction, because what this proof
+	// authorizes IS the oauth_state row minted a few lines down, and that row is
+	// itself the capability: leaving the code live until the callback returns
+	// would let the same proof mint a second state after the first was used.
+	if err := h.repo.ConsumeSecondFactor(r.Context(), user.ID, proof); err != nil {
 		h.stepUpUser.CommitFail(key)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
 		return false
 	}
 	h.stepUpUser.CommitSuccess(key)
-	if method == methodRecovery {
-		h.notifyRecoveryCodeUsed(r.Context(), user, localeFor(user.Locale, r))
-	}
+	h.notifyIfRecovery(r, user, proof)
 	return true
 }
 

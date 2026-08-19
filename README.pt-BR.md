@@ -505,21 +505,41 @@ e-mail. Sair está disponível em qualquer lugar; "sair de todos os dispositivos
 tudo. Mudanças de credencial — trocar/definir senha, desvincular Google ou desligar a
 verificação em duas etapas — mantêm o dispositivo atual e derrubam os demais.
 
-**Verificação em duas etapas.** Ative em **Configurações → Verificação em duas etapas**:
-escaneie o QR com qualquer app autenticador (Google Authenticator, Authy, 1Password,
-Bitwarden), confirme um código e guarde os dez **códigos de recuperação** de uso único —
-eles aparecem uma vez só no formato `XXXX-XXXX-XXXX-XXXX`. O servidor guarda apenas
-digests vinculados ao usuário e protegidos por chave, então não consegue mostrá-los de
-novo nem testá-los a partir de um dump do banco. No login, o mesmo campo de seis dígitos aceita um código do
-app, um código de recuperação ou um código enviado por e-mail. Administradores são
-obrigados a ter: com `AUTH_REQUIRE_2FA_FOR_ADMINS=1` (o padrão), um admin sem
-autenticador é conduzido pela configuração antes da primeira sessão, em vez de ficar
-trancado para fora.
-Isso também cobre a primeira conta do bootstrap e convites de administrador. Promover um
-usuário logado a administrador encerra as sessões existentes para que o próximo login
-aplique a verificação. Ativar a política numa instância existente bloqueia imediatamente
-os recursos administrativos em sessões antigas ou renovadas até o TOTP ser confirmado,
-mantendo as rotas de cadastro do autenticador disponíveis.
+**Verificação em duas etapas.** Ative em **Configurações → Verificação em duas etapas**,
+com **dois métodos que você pode usar separados ou juntos**:
+
+- **App autenticador** — escaneie o QR com Google Authenticator, Authy, 1Password ou
+  Bitwarden e confirme um código. Funciona sem conexão.
+- **Códigos por e-mail** — confirme um código enviado para o seu endereço. Não exige
+  instalar nada, e só aparece quando a instância tem SMTP configurado
+  (`MAIL_DRIVER=smtp`); um código impresso no log do contêiner não seria fator nenhum.
+
+Nos dois casos você guarda os dez **códigos de recuperação** de uso único, mostrados uma
+vez só no formato `XXXX-XXXX-XXXX-XXXX`. O servidor guarda apenas digests vinculados ao
+usuário e protegidos por chave, então não consegue mostrá-los de novo nem testá-los a
+partir de um dump do banco. Guarde-os: uma conta que entra por link de redefinição de
+senha tem o método de e-mail recusado de propósito — uma caixa postal nunca pode
+satisfazer os dois passos — então numa conta só com e-mail eles são a volta.
+
+No login, o mesmo campo de seis dígitos aceita um código do app, um código de
+recuperação ou um código enviado por e-mail. Em Configurações, o campo também oferece
+**"Enviar um código por e-mail"** quando o e-mail está configurado, para que mudar uma
+configuração de segurança numa conta só com e-mail não custe um código de recuperação.
+Remover um dos dois métodos mantém seus códigos de recuperação; remover o último os
+apaga, já que não guardariam mais nada.
+
+Administradores são obrigados a ter um segundo fator: com
+`AUTH_REQUIRE_2FA_FOR_ADMINS=1` (o padrão), um admin sem fator é conduzido pela
+configuração — escolhendo o método — antes da primeira sessão, em vez de ficar trancado
+para fora. Isso também cobre a primeira conta do bootstrap e convites de administrador.
+Promover um usuário logado a administrador encerra as sessões existentes para que o
+próximo login aplique a verificação. Ativar a política numa instância existente bloqueia
+imediatamente os recursos administrativos em sessões antigas ou renovadas até um fator
+ser confirmado, mantendo as rotas de cadastro disponíveis. Um owner que quiser a regra
+mais rígida pode definir **política da instância → `admin_second_factor: totp_only`**,
+que impede o fator e-mail de contar para administradores; o padrão `any` aceita
+qualquer um. Um administrador sempre pode largar um método enquanto o outro fica, mas
+nunca o último.
 
 > A atualização que aplica a migration `000023` invalida folhas de recuperação antigas
 > e códigos de e-mail pendentes, pois digests sem chave não podem ser convertidos sem o
@@ -634,7 +654,7 @@ Racional de design, threat model e a superfície de API completa:
 - [SDD: Backup & Restore](docs/SDD-BACKUP-RESTORE.md) — ZIP de snapshot DB + RustFS, modos de conflito, fluxo de validação
 - [SDD: Senha master de pastas](docs/SDD-FOLDER-MASTER-PASSWORD.md) — recuperação de senha por pasta e palavra-dica
 - [SDD: Auth, RBAC e multi-usuário](docs/SDD-AUTH-RBAC.md) — sessões, 2FA, OAuth Google, segmentação de dados por usuário
-- [SDD: E-mail assíncrono e 2FA por e-mail](docs/SDD-EMAIL-ASYNC.md) — outbox transacional e templates HTML localizados (**entregue**); transporte plugável via RabbitMQ e e-mail como segundo fator permanente (**proposto**)
+- [SDD: E-mail assíncrono e 2FA por e-mail](docs/SDD-EMAIL-ASYNC.md) — outbox transacional, templates HTML localizados, transporte plugável via RabbitMQ e e-mail como segundo fator permanente (**entregue**)
 
 ## Licença
 

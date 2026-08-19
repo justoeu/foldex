@@ -51,6 +51,9 @@ func (h *Handler) Put(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
+	// Absent fields take the floor before validation, so a client that predates
+	// a setting can still save the ones it does know about.
+	in = in.WithDefaults()
 	if err := in.Validate(); err != nil {
 		// The validation message names the offending field and its bounds. That
 		// is safe to return: these are documented limits, not secrets, and an

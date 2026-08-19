@@ -270,8 +270,12 @@ func main() {
 	logger.Info("mail transport ready", "transport", mailSink.Name(), "driver", mail.Driver())
 	authRepo := auth.NewRepository(pool, auth.WithOutbox(outbox))
 	cookieOpts := auth.CookieOptions{Secure: cfg.AuthCookieSecure, Domain: cfg.AuthCookieDomain}
+	// Built before the middleware because the admin second-factor gate reads it
+	// on every /api/admin request (ADR-37 §7.5).
+	policyRepo := policy.NewRepository(pool)
 	authMW := auth.NewMiddleware(authRepo, cookieOpts, logger,
-		cfg.AuthEnabled && cfg.AuthRequire2FAForAdmins)
+		cfg.AuthEnabled && cfg.AuthRequire2FAForAdmins,
+		auth.WithAdminFactorPolicy(policyRepo.RequiresTOTPForAdmins))
 	authTTL := auth.SessionTTL{
 		Access:   time.Duration(cfg.AuthAccessTTLMin) * time.Minute,
 		Refresh:  time.Duration(cfg.AuthRefreshTTLDays) * 24 * time.Hour,
@@ -292,7 +296,6 @@ func main() {
 		logger.Info("google oauth enabled", "redirect_uri", cfg.GoogleRedirectURL())
 	}
 
-	policyRepo := policy.NewRepository(pool)
 	authHandler := auth.NewHandler(auth.HandlerConfig{
 		Repo: authRepo, MW: authMW, Mailer: mail, Cookies: cookieOpts,
 		TTL: authTTL, Logger: logger, BaseURL: cfg.AuthPublicURL,

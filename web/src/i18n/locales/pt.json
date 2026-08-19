@@ -913,7 +913,23 @@
     "section_desc": "Exigir um código do seu app autenticador além da senha.",
     "disable_warning": "Seus códigos de recuperação também serão apagados. Quem tiver só a sua senha conseguirá entrar.",
     "wrong_password": "Essa senha está incorreta.",
-    "already_enabled": "A verificação em duas etapas já está ativa."
+    "already_enabled": "A verificação em duas etapas já está ativa.",
+    "method_app": "Aplicativo autenticador",
+    "method_email": "Código por e-mail",
+    "enable_app": "Configurar aplicativo autenticador",
+    "enable_email": "Configurar códigos por e-mail",
+    "disable_email": "Desativar códigos por e-mail",
+    "disable_one_warning": "O outro método continua ativo, então seus códigos de recuperação são mantidos.",
+    "email_unavailable": "Esta instância não envia e-mail, então códigos por e-mail não estão disponíveis.",
+    "email_not_enrolled": "O e-mail não está configurado como segundo fator nesta conta.",
+    "enroll_choose_subtitle": "Escolha como você quer confirmar que é você.",
+    "enroll_choose_hint": "O aplicativo autenticador funciona sem conexão. Códigos por e-mail não exigem instalar nada.",
+    "enroll_email_subtitle": "Enviamos um código de 6 dígitos para {{account}}.",
+    "enroll_email_sent": "Código enviado para {{account}}.",
+    "enter_mailed_hint": "Digite o código de 6 dígitos que enviamos por e-mail.",
+    "code_accepts_mailed": "Você pode usar um código do aplicativo, um código enviado por e-mail ou um código de recuperação.",
+    "code_sent": "Código enviado para o seu endereço.",
+    "mail_a_code": "Enviar um código por e-mail"
   },
   "auth_verify": {
     "kicker": "confirme seu endereço",
@@ -1112,7 +1128,11 @@
     "err_not_owner": "Só o proprietário atual pode transferir a instância.",
     "roles_count_one": "Um papel ativo nesta instância.",
     "roles_count_other": "{{count}} papéis ativos nesta instância.",
-    "attention_desc": "Itens abertos de acesso."
+    "attention_desc": "Itens abertos de acesso.",
+    "policy_admin_factor": "Segundo fator aceito para administradores",
+    "policy_admin_factor_any": "Aplicativo autenticador ou código por e-mail",
+    "policy_admin_factor_totp": "Somente aplicativo autenticador",
+    "policy_admin_factor_hint": "Um admin cujo único fator é e-mail é mais fraco: a caixa postal já é o canal de recuperação, então os dois passos dependem dela."
   },
   "profile": {
     "title": "Perfil",

@@ -134,6 +134,11 @@ type User struct {
 	// enrollment that was started and abandoned does not count — it would make
 	// the UI claim protection the user cannot actually satisfy.
 	TOTPEnabled bool `json:"totp_enabled"`
+	// Email2FAEnabled is the same statement for a CONFIRMED e-mail factor
+	// (ADR-37). Derived with EXISTS on every read for the same reason
+	// TOTPEnabled is: a cached boolean needs updating in four places, and the
+	// first one missed decides whether login demands a code nobody can produce.
+	Email2FAEnabled bool `json:"email_2fa_enabled"`
 	// Locale is the account's preferred language for e-mail, chosen in the
 	// profile. Empty means "no preference", which is NOT the same as English:
 	// without one, a message falls back to the Accept-Language of whoever
@@ -143,6 +148,17 @@ type User struct {
 	// Keeping it off the wire prevents clients from treating it as a claim.
 	TokenVersion int `json:"-"`
 }
+
+// HasSecondFactor reports whether this account can satisfy a second factor at
+// all, by any method.
+//
+// A METHOD, not a boolean column, and not a third derived field: every place
+// that used to ask "does this account have TOTP" was really asking this, and
+// leaving those call sites reading TOTPEnabled is how e-mail-only accounts
+// would silently be treated as having no factor — diverted into mandatory
+// enrollment they already completed, or refused an administrative surface they
+// are entitled to.
+func (u User) HasSecondFactor() bool { return u.TOTPEnabled || u.Email2FAEnabled }
 
 // SessionInfo is one live session as shown on the "your devices" list.
 type SessionInfo struct {

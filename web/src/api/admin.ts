@@ -88,7 +88,11 @@ export type AuditEntry = {
   created_at: string
 }
 
+/** Which factors satisfy AUTH_REQUIRE_2FA_FOR_ADMINS (ADR-37). */
+export type AdminFactorMode = 'any' | 'totp_only'
+
 export type InstancePolicy = {
+  admin_second_factor: AdminFactorMode
   password_min_length: number
   otp_ttl_minutes: number
   otp_cooldown_seconds: number

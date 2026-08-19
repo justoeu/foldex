@@ -32,6 +32,7 @@ const ROLES = {
 }
 
 const POLICY = {
+  admin_second_factor: 'any',
   password_min_length: 8,
   otp_ttl_minutes: 5,
   otp_cooldown_seconds: 60,
@@ -244,6 +245,29 @@ describe('PolicySection', () => {
         // Lowercased and split at submit — a half-typed line must not be
         // dropped while the user is still typing it.
         expect.objectContaining({ google_allowed_domains: ['a.test', 'b.test'] }),
+      ),
+    )
+  })
+
+  // ADR-37: an admin whose only factor is e-mail is measurably weaker, because
+  // the mailbox is already the recovery channel. The floor stays permissive and
+  // the owner may tighten it — but only if the control exists, and it did not
+  // when the READMEs already told owners to set it.
+  it('lets the owner require an authenticator for administrators', async () => {
+    mockAdminApi()
+    const put = vi.spyOn(http, 'put').mockResolvedValue({ data: POLICY } as never)
+    renderWithProviders(<PolicySection />, { session: ownerSession })
+
+    const select = await screen.findByLabelText(/second factor accepted for administrators/i)
+    expect(select).toHaveValue('any')
+
+    await userEvent.setup().selectOptions(select, 'totp_only')
+    await userEvent.setup().click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(
+        '/api/admin/policy',
+        expect.objectContaining({ admin_second_factor: 'totp_only' }),
       ),
     )
   })
