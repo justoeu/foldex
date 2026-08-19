@@ -30,6 +30,15 @@ fi
 HARNESS=$(mktemp)
 trap 'rm -f "$HARNESS"' EXIT
 
+# The sliced functions delegate to the shared awk program, so the harness has
+# to carry the path release.sh computes from its own location.
+PIN_AWK="$SCRIPT_DIR/lib/compose-image-pin.awk"
+if [ ! -f "$PIN_AWK" ]; then
+  echo "✗ shared Compose pin program not found at $PIN_AWK" >&2
+  exit 1
+fi
+printf 'PIN_AWK=%q\n' "$PIN_AWK" >"$HARNESS"
+
 for function_name in update_version update_compose_version compose_version_is; do
   awk -v function_name="$function_name" '
     $0 == function_name "() {" { capturing = 1 }
@@ -228,6 +237,10 @@ GATE_ROOT=$(mktemp -d)
 trap 'rm -f "$HARNESS" "$FIXTURE" "$COMPOSE_FIXTURE"; rm -rf "$GATE_ROOT"' EXIT
 mkdir -p "$GATE_ROOT/repo/scripts" "$GATE_ROOT/repo/web" "$GATE_ROOT/repo/extension"
 cp "$RELEASE" "$GATE_ROOT/repo/scripts/release.sh"
+# release.sh resolves the shared awk relative to its own location, so the
+# fixture needs it beside the copy or every run here dies on the missing file.
+mkdir -p "$GATE_ROOT/repo/scripts/lib"
+cp "$SCRIPT_DIR/lib/compose-image-pin.awk" "$GATE_ROOT/repo/scripts/lib/"
 cat >"$GATE_ROOT/repo/web/package.json" <<'JSON'
 {"version":"1.2.3"}
 JSON
@@ -374,7 +387,7 @@ if (
   # shellcheck disable=SC1090
   source "$HARNESS"
   compose_version_is "$DRIFT_FIXTURE" "1.1.1"
-); then
+) 2>/dev/null; then
   echo "✗ read gate accepted a stale second backend default" >&2
   exit 1
 fi
@@ -385,7 +398,7 @@ if (
   CUR="1.1.1"
   NEW="9.9.9"
   update_compose_version "$DRIFT_FIXTURE"
-); then
+) 2>/dev/null; then
   echo "✗ rewrite accepted a stale second backend default" >&2
   exit 1
 fi
@@ -416,7 +429,7 @@ if (
   # shellcheck disable=SC1090
   source "$HARNESS"
   compose_version_is "$NOBACKEND_FIXTURE" "1.1.1"
-); then
+) 2>/dev/null; then
   echo "✗ read gate accepted a Compose file with no backend image at all" >&2
   exit 1
 fi
@@ -426,7 +439,7 @@ if (
   CUR="1.1.1"
   NEW="9.9.9"
   update_compose_version "$NOBACKEND_FIXTURE"
-); then
+) 2>/dev/null; then
   echo "✗ rewrite accepted a Compose file with no backend image at all" >&2
   exit 1
 fi
@@ -441,7 +454,7 @@ if (
   # shellcheck disable=SC1090
   source "$HARNESS"
   compose_version_is "$NOWEB_FIXTURE" "1.1.1"
-); then
+) 2>/dev/null; then
   echo "✗ read gate accepted a Compose file with no web image at all" >&2
   exit 1
 fi
@@ -451,7 +464,7 @@ if (
   CUR="1.1.1"
   NEW="9.9.9"
   update_compose_version "$NOWEB_FIXTURE"
-); then
+) 2>/dev/null; then
   echo "✗ rewrite accepted a Compose file with no web image at all" >&2
   exit 1
 fi
@@ -507,7 +520,7 @@ if (
   # shellcheck disable=SC1090
   source "$HARNESS"
   compose_version_is "$WEBDRIFT_FIXTURE" "1.1.1"
-); then
+) 2>/dev/null; then
   echo "✗ read gate accepted a stale second web default" >&2
   exit 1
 fi
@@ -517,7 +530,7 @@ if (
   CUR="1.1.1"
   NEW="9.9.9"
   update_compose_version "$WEBDRIFT_FIXTURE"
-); then
+) 2>/dev/null; then
   echo "✗ rewrite accepted a stale second web default" >&2
   exit 1
 fi
@@ -611,6 +624,147 @@ for invalid in 01.2.3 1.02.3 1.2.03 1.2.3-rc.1 1.2.3+build 1x2x3 1.2 v1.2.3; do
   fi
 done
 echo "✓ case 10: release.sh itself refuses every invalid explicit target"
+
+# ─── case 11: shapes the old prefix matcher could not see ───────────────
+#
+# The matcher used to compare the whole left-trimmed line against
+# `image: justoeu/foldex-<kind>:${FOLDEX_VERSION:-X}`. Three consequences, all
+# of them silence rather than refusal:
+#
+#   - a quoted value never matched, so it was never verified;
+#   - a registry-prefixed value never matched, same;
+#   - counting lines says nothing about WHICH service runs them, so a decoy
+#     service could carry the pinned line while `backend:` ran anything.
+#
+# Silence is the wrong failure direction for a gate. Each shape is now either
+# understood or refused.
+
+# The expected REASON is part of the assertion, not just accept/refuse. Both
+# of the shapes below are refused either way — a registry-prefixed value fails
+# the tag comparison by accident, a service running a foreign image fails the
+# service lookup — so a verdict-only test cannot tell a gate that understands
+# the shape from one that stumbles into the right answer, and the operator gets
+# a reason pointing at the wrong thing.
+pin_case() {
+  local name="$1" want="$2" reason="$3" body="$4"
+  printf '%s' "$body" >"$SHAPE_FIXTURE"
+  local got=0
+  (
+    # shellcheck disable=SC1090
+    source "$HARNESS"
+    compose_version_is "$SHAPE_FIXTURE" "1.1.1"
+  ) 2>"$SHAPE_REASONS" || got=1
+  if [ "$got" != "$want" ]; then
+    echo "✗ $name: expected $([ "$want" = 0 ] && echo accept || echo refuse)" >&2
+    cat "$SHAPE_REASONS" >&2
+    exit 1
+  fi
+  if [ -n "$reason" ] && ! grep -Fq "$reason" "$SHAPE_REASONS"; then
+    echo "✗ $name: refused, but not because of \"$reason\"" >&2
+    cat "$SHAPE_REASONS" >&2
+    exit 1
+  fi
+}
+
+SHAPE_FIXTURE=$(mktemp)
+SHAPE_REASONS=$(mktemp)
+trap 'rm -f "$HARNESS" "$FIXTURE" "$COMPOSE_FIXTURE" "$MULTI_FIXTURE" "$DRIFT_FIXTURE" \
+  "$WEBDRIFT_FIXTURE" "$WEBREUSE_FIXTURE" "$NOBACKEND_FIXTURE" "$NOWEB_FIXTURE" \
+  "$SHAPE_FIXTURE" "$SHAPE_REASONS" "$DRIFT_FIXTURE.tmp" "$WEBDRIFT_FIXTURE.tmp" "$NOBACKEND_FIXTURE.tmp" \
+  "$NOWEB_FIXTURE.tmp" "$SHAPE_FIXTURE.tmp"; rm -rf "$GATE_ROOT"' EXIT
+
+pin_case "a quoted value is verified, not ignored" 1 "image is not pinned to 1.1.1" 'services:
+  backend:
+    image: "justoeu/foldex-backend:${FOLDEX_VERSION:-1.0.9}"
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+'
+pin_case "a quoted value at the right version is accepted" 0 "" 'services:
+  backend:
+    image: "justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}"
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+'
+pin_case "an explicit registry is refused, not skipped" 1 "unrecognised Foldex image reference" 'services:
+  backend:
+    image: docker.io/justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+'
+pin_case "a tagless reference is refused" 1 "unrecognised Foldex image reference" 'services:
+  backend:
+    image: justoeu/foldex-backend
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+'
+pin_case "a decoy service cannot stand in for backend" 1 "service backend does not run a Foldex image" 'services:
+  backend:
+    image: attacker/evil:latest
+  decoy:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+'
+pin_case "the web service must run the web image" 1 "service web runs justoeu/foldex-backend" 'services:
+  backend:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  web:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  frontend:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+'
+# Discriminating on purpose: the `web` key outside `services:` names an image
+# of the WRONG kind. Read as a service it would trip the binding check, so this
+# accepting fixture is what proves the block boundary is honoured — a fixture
+# whose non-service block carries no `image:` line proves nothing, since there
+# is then nothing to misattribute.
+pin_case "a key outside services: is not a service" 0 "" 'services:
+  backend:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+x-templates:
+  web:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+volumes:
+  backend:
+  web:
+'
+echo "✓ case 11: quoted, registry-prefixed and decoy shapes are all decided"
+
+# ─── case 12: every Compose file is versioned, not just the primary ─────
+#
+# The gate read docker-compose.yml alone. A Foldex image living in any other
+# compose file — the mailer moving to docker-compose.mail.yml, say — would
+# simply not be versioned, with nothing to say so.
+
+# shellcheck disable=SC2016
+printf 'services:\n  worker:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.2.3}\n' \
+  >"$GATE_ROOT/repo/docker-compose.extra.yml"
+git -C "$GATE_ROOT/repo" add docker-compose.extra.yml
+git -C "$GATE_ROOT/repo" commit -qm "a second compose file"
+git -C "$GATE_ROOT/repo" push -qu origin main
+
+if ! (cd "$GATE_ROOT/repo" && bash scripts/release.sh patch) >"$GATE_ROOT/extra.out" 2>&1; then
+  echo "✗ release refused a second Compose file that was correctly pinned" >&2
+  cat "$GATE_ROOT/extra.out" >&2
+  exit 1
+fi
+grep -Fq 'justoeu/foldex-backend:${FOLDEX_VERSION:-1.2.4}' "$GATE_ROOT/repo/docker-compose.extra.yml" || {
+  echo "✗ the secondary Compose file was not bumped" >&2
+  exit 1
+}
+
+# shellcheck disable=SC2016
+printf 'services:\n  worker:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.0.9}\n' \
+  >"$GATE_ROOT/repo/docker-compose.extra.yml"
+git -C "$GATE_ROOT/repo" commit -qam "second compose file left behind"
+git -C "$GATE_ROOT/repo" push -qu origin main
+if (cd "$GATE_ROOT/repo" && bash scripts/release.sh patch) >"$GATE_ROOT/extra-drift.out" 2>&1; then
+  echo "✗ release accepted a secondary Compose file stuck on an older version" >&2
+  exit 1
+fi
+echo "✓ case 12: secondary Compose files are bumped and their drift is refused"
 
 echo
 echo "release.sh version transaction — all assertions passed."

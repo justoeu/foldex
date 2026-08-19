@@ -227,6 +227,60 @@ if run_validator v1.2.3 refs/heads/main "$noweb_sha" "$TMP/noweb-output" >/dev/n
   fail "release tag was accepted when no web image was pinned at all"
 fi
 
+# Shapes the old prefix matcher could not see, asserted against the publish
+# gate rather than only against release.sh. Each one used to pass in silence.
+raw_compose() { printf '%s' "$1" >"$TMP/repo/docker-compose.yml"; }
+
+decoy_sha=$(raw_compose 'services:
+  backend:
+    image: attacker/evil:latest
+  decoy:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.2.3}
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.2.3}
+'; commit_compose "decoy service carries the pinned line")
+if run_validator v1.2.3 refs/heads/main "$decoy_sha" "$TMP/decoy-output" >/dev/null 2>&1; then
+  fail "release tag was accepted when the backend service ran a foreign image"
+fi
+
+quoted_sha=$(raw_compose 'services:
+  backend:
+    image: "justoeu/foldex-backend:${FOLDEX_VERSION:-1.0.9}"
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.2.3}
+'; commit_compose "quoted value left on an older version")
+if run_validator v1.2.3 refs/heads/main "$quoted_sha" "$TMP/quoted-output" >/dev/null 2>&1; then
+  fail "release tag was accepted when a quoted image line was stale"
+fi
+
+registry_sha=$(raw_compose 'services:
+  backend:
+    image: docker.io/justoeu/foldex-backend:${FOLDEX_VERSION:-1.2.3}
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.2.3}
+'; commit_compose "registry-prefixed reference")
+if run_validator v1.2.3 refs/heads/main "$registry_sha" "$TMP/registry-output" >/dev/null 2>&1; then
+  fail "release tag was accepted with an image reference the gate cannot verify"
+fi
+
+# A second Compose file is gated too, and does not have to define the services.
+extra_sha=$({ write_compose 1.2.3 1.2.3
+  # shellcheck disable=SC2016
+  printf 'services:\n  worker:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.0.9}\n' \
+    >"$TMP/repo/docker-compose.extra.yml"
+  git -C "$TMP/repo" add docker-compose.extra.yml
+  commit_compose "a second compose file left behind"; })
+if run_validator v1.2.3 refs/heads/main "$extra_sha" "$TMP/extra-output" >/dev/null 2>&1; then
+  fail "release tag was accepted when a secondary Compose file was stale"
+fi
+# shellcheck disable=SC2016
+printf 'services:\n  worker:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.2.3}\n' \
+  >"$TMP/repo/docker-compose.extra.yml"
+extra_ok_sha=$(commit_compose "second compose file pinned")
+run_validator v1.2.3 refs/heads/main "$extra_ok_sha" "$TMP/extra-ok-output" ||
+  fail "release tag was refused when every Compose file was correctly pinned"
+git -C "$TMP/repo" rm -q docker-compose.extra.yml
+
 write_compose 1.2.3 1.2.3
 git -C "$TMP/repo" commit -qam "restore single-service Compose"
 git -C "$TMP/repo" push -qu origin main
