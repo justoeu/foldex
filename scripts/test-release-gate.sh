@@ -103,19 +103,31 @@ grep -Fq "type=raw,value=latest,enable=" "$WORKFLOW" || fail "historical targets
 # service running the backend image, which is what the real file looks like:
 # the mailer is the backend binary with a different entrypoint. Callers that
 # omit it get the single-service shape the older cases assert against.
+#
+# `-` in a version slot omits that service entirely. That is how the "at least
+# one of each" half of the predicate gets exercised against THIS gate — the one
+# that decides publication — rather than only against release.sh's private copy
+# of the same awk. The unrelated `db` line keeps the services map non-empty in
+# that case and doubles as a check that a foreign image is never counted.
 write_compose() {
   local backend_version=$1 web_version=$2 mailer_version=${3:-}
   {
-    # shellcheck disable=SC2016
-    printf 'services:\n  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-%s}\n' \
-      "$backend_version"
-    if [[ -n "$mailer_version" ]]; then
+    printf 'services:\n'
+    if [[ "$backend_version" != - ]]; then
+      # shellcheck disable=SC2016
+      printf '  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-%s}\n' \
+        "$backend_version"
+    fi
+    if [[ -n "$mailer_version" && "$mailer_version" != - ]]; then
       # shellcheck disable=SC2016
       printf '  mailer:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-%s}\n' \
         "$mailer_version"
     fi
-    # shellcheck disable=SC2016
-    printf '  web:\n    image: justoeu/foldex-web:${FOLDEX_VERSION:-%s}\n' "$web_version"
+    if [[ "$web_version" != - ]]; then
+      # shellcheck disable=SC2016
+      printf '  web:\n    image: justoeu/foldex-web:${FOLDEX_VERSION:-%s}\n' "$web_version"
+    fi
+    printf '  db:\n    image: postgres:18.4-alpine\n'
   } >"$TMP/repo/docker-compose.yml"
 }
 
@@ -197,6 +209,22 @@ grep -q "^target_sha=$reused_sha$" "$TMP/reused-output" ||
 stale_sha=$(write_compose 1.2.3 1.2.3 1.2.2; commit_compose "mailer left on an older version")
 if run_validator v1.2.3 refs/heads/main "$stale_sha" "$TMP/stale-output" >/dev/null 2>&1; then
   fail "release tag was accepted when a reused backend line stayed on an older version"
+fi
+
+# The other half of the relaxed predicate: "at least one of each". Nothing was
+# asserting it HERE, and that is the half whose failure is worst — a validator
+# simplified to `exit !(!bad)` would publish a tag whose docker-compose.yml
+# pins no foldex image at all, so the stack the operator pulls does not come up.
+# Both mutants (`exit !(!bad)`, and dropping either count) survive every other
+# case in both suites, so these two are the only thing standing behind them.
+nobackend_sha=$(write_compose - 1.2.3; commit_compose "compose without the backend image")
+if run_validator v1.2.3 refs/heads/main "$nobackend_sha" "$TMP/nobackend-output" >/dev/null 2>&1; then
+  fail "release tag was accepted when no backend image was pinned at all"
+fi
+
+noweb_sha=$(write_compose 1.2.3 -; commit_compose "compose without the web image")
+if run_validator v1.2.3 refs/heads/main "$noweb_sha" "$TMP/noweb-output" >/dev/null 2>&1; then
+  fail "release tag was accepted when no web image was pinned at all"
 fi
 
 write_compose 1.2.3 1.2.3

@@ -158,6 +158,7 @@ services:
     image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
   unrelated:
     image: example/tool:1.1.1
+  # image: justoeu/foldex-backend:${FOLDEX_VERSION:-0.0.1}
 YAML
 
 (
@@ -186,6 +187,14 @@ grep -Fq 'example/tool:1.1.1' "$COMPOSE_FIXTURE" || {
   echo "✗ unrelated Compose image was rewritten" >&2
   exit 1
 }
+# The prefix match is anchored at the start of the left-trimmed line, so a
+# commented-out example is neither counted nor rewritten. Unanchored it would
+# count, then fail to equal the expected string, and refuse every release over
+# a line that is not even active.
+grep -Fq '# image: justoeu/foldex-backend:${FOLDEX_VERSION:-0.0.1}' "$COMPOSE_FIXTURE" || {
+  echo "✗ a commented-out Foldex image line was rewritten" >&2
+  exit 1
+}
 if grep -Eq 'justoeu/foldex-(backend|web):.*latest' "$COMPOSE_FIXTURE"; then
   echo "✗ Foldex Compose defaults must never use latest" >&2
   exit 1
@@ -194,12 +203,19 @@ fi
 ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 CURRENT=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/web/package.json" |
             sed -n '1s/.*"\([^"]*\)"$/\1/p')
-for image in backend web; do
-  grep -Fq "justoeu/foldex-$image:\${FOLDEX_VERSION:-$CURRENT}" "$ROOT/docker-compose.yml" || {
-    echo "✗ current $image Compose default is not locked to release $CURRENT" >&2
-    exit 1
-  }
-done
+# The repository's own file goes through the REAL predicate, not a `grep -Fq`
+# per image. A grep is satisfied by the first matching line, so the file could
+# carry a second `foldex-backend:` line left behind at an older version and
+# every case here would still pass — which is exactly the drift this gate
+# exists to catch, on the one file where it actually matters.
+(
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  compose_version_is "$ROOT/docker-compose.yml" "$CURRENT"
+) || {
+  echo "✗ the repository's docker-compose.yml is not locked to release $CURRENT on every line" >&2
+  exit 1
+}
 if grep -Eq 'justoeu/foldex-(backend|web):.*latest' "$ROOT/docker-compose.yml"; then
   echo "✗ current Foldex Compose defaults must never use latest" >&2
   exit 1
@@ -296,13 +312,16 @@ echo "✓ case 6: dirty/off-main gates remain closed and failed commits roll bac
 MULTI_FIXTURE=$(mktemp)
 DRIFT_FIXTURE=$(mktemp)
 WEBDRIFT_FIXTURE=$(mktemp)
+WEBREUSE_FIXTURE=$(mktemp)
 NOBACKEND_FIXTURE=$(mktemp)
+NOWEB_FIXTURE=$(mktemp)
 # The `.tmp` siblings are listed because a REFUSED rewrite leaves one behind:
-# update_compose_version only `mv`s when awk exits 0, and the refusal path is
-# exercised twice below.
+# update_compose_version only `mv`s when awk exits 0, and every fixture below
+# whose name says drift or "no" takes that path.
 trap 'rm -f "$HARNESS" "$FIXTURE" "$COMPOSE_FIXTURE" "$MULTI_FIXTURE" "$DRIFT_FIXTURE" \
-  "$WEBDRIFT_FIXTURE" "$NOBACKEND_FIXTURE" "$DRIFT_FIXTURE.tmp" "$WEBDRIFT_FIXTURE.tmp" \
-  "$NOBACKEND_FIXTURE.tmp"; rm -rf "$GATE_ROOT"' EXIT
+  "$WEBDRIFT_FIXTURE" "$WEBREUSE_FIXTURE" "$NOBACKEND_FIXTURE" "$NOWEB_FIXTURE" \
+  "$DRIFT_FIXTURE.tmp" "$WEBDRIFT_FIXTURE.tmp" "$NOBACKEND_FIXTURE.tmp" \
+  "$NOWEB_FIXTURE.tmp"; rm -rf "$GATE_ROOT"' EXIT
 
 cat >"$MULTI_FIXTURE" <<'YAML'
 services:
@@ -412,6 +431,67 @@ if (
   exit 1
 fi
 
+cat >"$NOWEB_FIXTURE" <<'YAML'
+services:
+  backend:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+YAML
+
+if (
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  compose_version_is "$NOWEB_FIXTURE" "1.1.1"
+); then
+  echo "✗ read gate accepted a Compose file with no web image at all" >&2
+  exit 1
+fi
+if (
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  CUR="1.1.1"
+  NEW="9.9.9"
+  update_compose_version "$NOWEB_FIXTURE"
+); then
+  echo "✗ rewrite accepted a Compose file with no web image at all" >&2
+  exit 1
+fi
+
+# Reuse on the WEB side, accepted. Without this the `web >= 1` half is dead
+# code: every other web fixture only exercises refusal, which `web == 1`
+# produces just as well, so reverting that half leaves the suite green.
+cat >"$WEBREUSE_FIXTURE" <<'YAML'
+services:
+  backend:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+  web-canary:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+YAML
+
+(
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  compose_version_is "$WEBREUSE_FIXTURE" "1.1.1"
+) || {
+  echo "✗ read gate refused a Compose file whose web image is reused" >&2
+  exit 1
+}
+(
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  CUR="1.1.1"
+  NEW="9.9.9"
+  update_compose_version "$WEBREUSE_FIXTURE"
+) || {
+  echo "✗ rewrite refused a Compose file whose web image is reused" >&2
+  exit 1
+}
+if [ "$(grep -Fc 'justoeu/foldex-web:${FOLDEX_VERSION:-9.9.9}' "$WEBREUSE_FIXTURE")" != 2 ]; then
+  echo "✗ every web Compose default must be bumped, not just the first" >&2
+  exit 1
+fi
+
 cat >"$WEBDRIFT_FIXTURE" <<'YAML'
 services:
   backend:
@@ -445,7 +525,7 @@ if [ "$(cat "$WEBDRIFT_FIXTURE")" != "$WEBDRIFT_BEFORE" ]; then
   echo "✗ refused rewrite still modified the Compose file" >&2
   exit 1
 fi
-echo "✓ case 8: a missing image and a stale reused web line are still refused"
+echo "✓ case 8: a missing image is refused and a reused web image is accepted"
 
 # ─── case 9: a version read from disk is not trusted as a number ────────
 #
@@ -457,7 +537,7 @@ echo "✓ case 8: a missing image and a stale reused web line are still refused"
 # release workflow. The strict semver regex already guarded what the operator
 # TYPES; this asserts it also guards what the script READS.
 
-# Three things the fixture must get right, each of which would otherwise turn
+# Four things the fixture must get right, each of which would otherwise turn
 # this into a green that proves nothing:
 #   - the payload is COMMITTED, or release.sh stops at its dirty-tree check;
 #   - the SAME string goes into all three version files, or the sync check
@@ -469,30 +549,68 @@ echo "✓ case 8: a missing image and a stale reused web line are still refused"
 #     by the shell rather than by the guard and prove nothing. With a defined
 #     base the substitution runs first and the unbound/syntax error arrives
 #     only afterwards — the payload has already executed by then.
-# shellcheck disable=SC2016
-printf '{"version":"1.0.PATH[$(touch canary)]"}\n' >"$GATE_ROOT/repo/web/package.json"
-# shellcheck disable=SC2016
-printf '{"version":"1.0.PATH[$(touch canary)]"}\n' >"$GATE_ROOT/repo/extension/manifest.json"
-# shellcheck disable=SC2016
-printf 'services:\n  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.0.PATH[$(touch canary)]}\n  web:\n    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.0.PATH[$(touch canary)]}\n' \
-  >"$GATE_ROOT/repo/docker-compose.yml"
-git -C "$GATE_ROOT/repo" commit -qam "poisoned version"
-git -C "$GATE_ROOT/repo" push -qu origin main
+#
+# Two payloads, because the regex has two ends. The first fails at the PREFIX,
+# so it cannot tell an anchored guard from one missing its trailing `$`. The
+# second is valid semver followed by junk: `+` is an arithmetic operator, so it
+# passes an unanchored regex and still executes.
+for payload in '1.0.PATH[$(touch canary)]' '1.0.0+PATH[$(touch canary)]'; do
+  printf '{"version":"%s"}\n' "$payload" >"$GATE_ROOT/repo/web/package.json"
+  printf '{"version":"%s"}\n' "$payload" >"$GATE_ROOT/repo/extension/manifest.json"
+  # shellcheck disable=SC2016
+  printf 'services:\n  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-%s}\n  web:\n    image: justoeu/foldex-web:${FOLDEX_VERSION:-%s}\n' \
+    "$payload" "$payload" >"$GATE_ROOT/repo/docker-compose.yml"
+  git -C "$GATE_ROOT/repo" commit -qam "poisoned version"
+  git -C "$GATE_ROOT/repo" push -qu origin main
 
-if (cd "$GATE_ROOT/repo" && bash scripts/release.sh patch) >"$GATE_ROOT/inject.out" 2>&1; then
-  echo "✗ release accepted a non-semver version read from disk" >&2
-  exit 1
-fi
-if [ -e "$GATE_ROOT/repo/canary" ]; then
-  echo "✗ a version string read from disk reached arithmetic evaluation" >&2
-  exit 1
-fi
-grep -q 'not strict semver' "$GATE_ROOT/inject.out" || {
-  echo "✗ release refused the poisoned version for the wrong reason" >&2
-  cat "$GATE_ROOT/inject.out" >&2
-  exit 1
-}
+  if (cd "$GATE_ROOT/repo" && bash scripts/release.sh patch) >"$GATE_ROOT/inject.out" 2>&1; then
+    echo "✗ release accepted a non-semver version read from disk: $payload" >&2
+    exit 1
+  fi
+  if [ -e "$GATE_ROOT/repo/canary" ]; then
+    echo "✗ a version string read from disk reached arithmetic evaluation: $payload" >&2
+    exit 1
+  fi
+  grep -q 'not strict semver' "$GATE_ROOT/inject.out" || {
+    echo "✗ release refused the poisoned version for the wrong reason: $payload" >&2
+    cat "$GATE_ROOT/inject.out" >&2
+    exit 1
+  }
+done
 echo "✓ case 9: versions read from disk are validated before they are evaluated"
+
+# ─── case 10: an explicit target is refused by release.sh, not by this file ──
+#
+# Case 4 only greps release.sh for the semver regex and then evaluates that
+# regex in the test's own shell — an assertion that cannot fail, because it
+# never touches the script. Swapping the `else` branch for `NEW="$PART"` leaves
+# case 4 green while `./scripts/release.sh 1.2.3-rc.1` commits that string as a
+# release version. This runs the script instead.
+
+printf '{"version":"1.2.3"}\n' >"$GATE_ROOT/repo/web/package.json"
+printf '{"version":"1.2.3"}\n' >"$GATE_ROOT/repo/extension/manifest.json"
+# shellcheck disable=SC2016
+printf 'services:\n  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.2.3}\n  web:\n    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.2.3}\n' \
+  >"$GATE_ROOT/repo/docker-compose.yml"
+git -C "$GATE_ROOT/repo" commit -qam "restore a releasable state"
+git -C "$GATE_ROOT/repo" push -qu origin main
+CLEAN_SHA=$(git -C "$GATE_ROOT/repo" rev-parse HEAD)
+
+# An EMPTY argument is deliberately absent from this list: `PART="${1:-patch}"`
+# treats it as unset and performs an ordinary patch bump, which is the intended
+# behaviour rather than an accepted invalid target.
+for invalid in 01.2.3 1.02.3 1.2.03 1.2.3-rc.1 1.2.3+build 1x2x3 1.2 v1.2.3; do
+  if (cd "$GATE_ROOT/repo" && bash scripts/release.sh "$invalid") >"$GATE_ROOT/target.out" 2>&1; then
+    echo "✗ release accepted an invalid explicit target: '$invalid'" >&2
+    exit 1
+  fi
+  if [ "$(git -C "$GATE_ROOT/repo" rev-parse HEAD)" != "$CLEAN_SHA" ] ||
+     [ -n "$(git -C "$GATE_ROOT/repo" status --porcelain)" ]; then
+    echo "✗ a refused target still moved the repository: '$invalid'" >&2
+    exit 1
+  fi
+done
+echo "✓ case 10: release.sh itself refuses every invalid explicit target"
 
 echo
 echo "release.sh version transaction — all assertions passed."

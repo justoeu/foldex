@@ -128,6 +128,15 @@ compose_version_is() {
 
 EXT_CUR=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$EXT" \
             | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+# Validated on its own rather than left safe by the equality check below. It is
+# safe today only BECAUSE it must equal CUR to get past that check — a property
+# of the comparison, not of the value — and the next edit that reads the
+# manifest earlier, or uses this in arithmetic, silently reopens the hole the
+# guard above closes.
+if ! [[ "$EXT_CUR" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  echo "✗ current version in $EXT is not strict semver: $EXT_CUR" >&2
+  exit 1
+fi
 if [ "$EXT_CUR" != "$CUR" ] || ! compose_version_is "$COMPOSE" "$CUR"; then
   echo "✗ release versions are out of sync; expected $CUR in $EXT and every Compose image default" >&2
   exit 1
@@ -206,6 +215,8 @@ update_compose_version() {
       }
       print
     }
+    # Same rule as compose_version_is: at least one of each, every matching
+    # line rewritten. Not `!= 1` — the mailer reuses the backend image.
     END { if (backend < 1 || web < 1 || bad) exit 1 }
   ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
 }
