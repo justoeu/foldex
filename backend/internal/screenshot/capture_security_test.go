@@ -421,6 +421,59 @@ func TestCaptureProxy_RejectsCONNECTAboveTunnelLimit(t *testing.T) {
 		5*time.Second, time.Millisecond)
 }
 
+// Registration and teardown must not be able to pass each other.
+//
+// A tunnel holds its semaphore slot from the moment CONNECT is admitted, but
+// only enters the tracked map after the 200 has been flushed. The client sees
+// that 200 and can open the next tunnel while the handler is still between the
+// two, so a budget enforced in that gap walks a map the tunnel is not in yet:
+// it survives teardown, its copy goroutines block on a peer nobody closed, and
+// the slot is never returned. In production that is a tunnel still relaying
+// bytes after the capture was invalidated.
+//
+// Asserted directly on trackTunnel rather than through a live proxy, because
+// the window is a scheduling accident: it reproduces only on a loaded runner,
+// which is exactly how it first appeared — as a five-second liveness timeout on
+// a pull request that had nothing to do with screenshots.
+func TestTrackTunnel_RefusesAndClosesAfterABudgetWasEnforced(t *testing.T) {
+	proxy, err := newCaptureProxyWithDial(func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("this test never dials")
+	})
+	require.NoError(t, err)
+	t.Cleanup(proxy.Close)
+
+	newTunnel := func() (*proxyTunnel, net.Conn, net.Conn) {
+		client, clientPeer := net.Pipe()
+		upstream, upstreamPeer := net.Pipe()
+		t.Cleanup(func() { _ = clientPeer.Close(); _ = upstreamPeer.Close() })
+		return &proxyTunnel{client: client, upstream: upstream}, client, upstream
+	}
+
+	// Baseline: with no budget spent the tunnel is tracked, so the refusal below
+	// is the blocked flag talking and not a tunnel that could never register.
+	accepted, _, _ := newTunnel()
+	require.True(t, proxy.trackTunnel(accepted))
+	proxy.untrackTunnel(accepted)
+
+	proxy.markBlocked()
+
+	refused, client, upstream := newTunnel()
+	require.False(t, proxy.trackTunnel(refused),
+		"a tunnel arriving after the budget was enforced must not register")
+
+	// Refusing is only half of it: the connections have to be closed here, or
+	// the handler returns while both ends stay open and keep relaying.
+	_, err = client.Write([]byte("x"))
+	require.Error(t, err, "the client side must be closed, not merely untracked")
+	_, err = upstream.Write([]byte("x"))
+	require.Error(t, err, "the upstream side must be closed, not merely untracked")
+
+	proxy.tunnelMu.Lock()
+	tracked := len(proxy.tunnels)
+	proxy.tunnelMu.Unlock()
+	require.Zero(t, tracked)
+}
+
 func TestCaptureProxy_RequestBudgetInvalidatesCapture(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok")
