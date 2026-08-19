@@ -114,6 +114,13 @@ func reserveSubscriptionSlot(ctx context.Context, tx pgx.Tx, uid authctx.UserID,
 // about the present. A push subscription is a browser channel that outlives the
 // session revocation and the API-token kill that disabling performs, so it is
 // the one credential-shaped thing left that has to be re-read at use.
+//
+// The JOIN costs this literal its mechanical backstop, which is worth knowing:
+// internal/security's TestNoUnscopedTenantQueries decides by looking for
+// `user_id` in the predicate text, and `ON u.id = s.user_id` now supplies that
+// token by itself — so deleting `WHERE s.user_id = $1` would pass the guard.
+// What holds the scope here is behavioural:
+// TestSubscriptionRepo_ListIsOwnerScopedAndBounded.
 func (r *Repository) List(ctx context.Context, uid authctx.UserID) ([]Subscription, error) {
 	rows, err := r.pool.Query(ctx, `
         SELECT s.id, s.endpoint, s.p256dh, s.auth, s.created_at, s.last_used_at

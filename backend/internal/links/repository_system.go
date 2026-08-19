@@ -145,6 +145,18 @@ func (r *Repository) SystemFindDueForCheck(ctx context.Context, limit int) ([]Du
 	// owner. link_check_due_idx is deliberately NOT user-scoped (see migration
 	// 000017 §10) because this sweep spans every tenant by design.
 	//
+	// `FOR UPDATE OF l` — qualified, and that qualification is load-bearing now
+	// that app_user is in the FROM. Unqualified, FOR UPDATE marks EVERY table
+	// joined, which does two unintended things: SKIP LOCKED starts skipping a
+	// due link because its OWNER row is locked (any login, 2FA step, token mint
+	// or push subscribe holds `app_user FOR NO KEY UPDATE`), and the sweep takes
+	// FOR UPDATE on app_user, which conflicts with the FOR KEY SHARE every
+	// foreign key to it acquires — so INSERTs into link, note, session,
+	// audit_log, mail_outbox and click_log block while the statement runs.
+	// click_log is the public /go/ redirect: background work would be stalling
+	// the authentication and redirect paths, a direction that did not exist
+	// before this JOIN.
+	//
 	// Spanning every tenant is not the same as spanning every ACCOUNT STATE.
 	// Disabling an account revokes its sessions and kills its API tokens, but
 	// a Web Push subscription is a browser channel that outlives both — so
@@ -170,7 +182,7 @@ func (r *Repository) SystemFindDueForCheck(ctx context.Context, limit int) ([]Du
               )
             ORDER BY COALESCE(l.last_checked_at, 'epoch'::timestamptz) ASC, l.id ASC
             LIMIT $1
-            FOR UPDATE SKIP LOCKED
+            FOR UPDATE OF l SKIP LOCKED
         )
 		RETURNING id, user_id, url, title, check_interval, last_fingerprint, last_checked_at
     `, folders.SQLNotInLockedFolder("l")), limit)
@@ -237,6 +249,15 @@ func (r *Repository) SystemGetPreview(ctx context.Context, id int64) (PreviewWor
 	return work, nil
 }
 
+// Deliberately NOT joined to app_user, unlike SystemFindDueForCheck.
+//
+// The asymmetry is the consequence, not the sweep: this one ends in a fetch and
+// a status write, never in a notification, and each row leaves `pending` after
+// one attempt. A disabled account's leftovers cost one fetch apiece at the next
+// boot and then stop — nothing recurring to filter, no channel to close. Every
+// other enqueue path needs a session or an API token, both of which disabling
+// kills.
+//
 // SystemPendingPreviews returns the slim recovery projection in one query so
 // requeueing pending work does not hydrate each link separately.
 func (r *Repository) SystemPendingPreviews(ctx context.Context, limit int) ([]PreviewWork, error) {
