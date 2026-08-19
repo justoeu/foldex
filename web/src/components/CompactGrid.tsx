@@ -25,8 +25,9 @@ type Props = {
 // Compact view: dense grid of one-line rows. Honours the same --fx-cols
 // CSS variable the cards grid uses, so the topbar's 3/5/8 density picker
 // changes column count here too. Folders and entries live side-by-side —
-// folders first by default, interleaved by name in alpha sort (mirrors
-// CardsView's contract from §4 invariants).
+// folders first by default, interleaved by name in alpha sort behind the block
+// of pinned entries, which come first in every sort mode (mirrors CardsView's
+// contract from §5 invariants).
 export function CompactGrid({ folders, entries, sort, onEdit, onEditNote, onOpenFolder, onEditFolder }: Props) {
   const isAlpha = sort === 'alpha' || sort === 'alpha_desc'
   const dir = sort === 'alpha' ? 1 : -1

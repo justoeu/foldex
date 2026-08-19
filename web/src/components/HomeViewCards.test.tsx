@@ -27,6 +27,12 @@ vi.mock('./NoteCard', () => ({
   }),
 }))
 
+vi.mock('./FolderCard', () => ({
+  FolderCard: memo(({ folder }: { folder: { id: number; name: string } }) => (
+    <button>folder-{folder.name}</button>
+  )),
+}))
+
 vi.mock('../api/links', async () => {
   const stableMutation = () => {
     const [, setVersion] = useState(0)
@@ -61,14 +67,53 @@ vi.mock('../api/notes', () => {
 
 import { CardsView } from './HomeView'
 
-const link = (id: number): Extract<Entry, { kind: 'link' }> => ({
-  kind: 'link', id, url: `https://${id}.example`, title: `Link ${id}`, slug: `link-${id}`,
-  click_count: 0, preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+const link = (id: number, title = `Link ${id}`, pinned = false): Extract<Entry, { kind: 'link' }> => ({
+  kind: 'link', id, url: `https://${id}.example`, title, slug: `link-${id}`,
+  click_count: 0, preview_status: 'ok', pinned, created_at: '', updated_at: '', tags: [],
 })
 
-const note = (id: number): Extract<Entry, { kind: 'note' }> => ({
-  kind: 'note', id, title: `Note ${id}`, slug: `note-${id}`, click_count: 0,
-  pinned: false, created_at: '', updated_at: '', tags: [],
+const note = (id: number, title = `Note ${id}`, pinned = false): Extract<Entry, { kind: 'note' }> => ({
+  kind: 'note', id, title, slug: `note-${id}`, click_count: 0,
+  pinned, created_at: '', updated_at: '', tags: [],
+})
+
+// The helper's unit test proves mergeAlphaCells returns the right ORDER; this
+// proves the view renders that order. Those are different claims, and the gap
+// between them is exactly where the bug lived for seven weeks: the backend
+// integration test was green, the frontend suite was green, and the guarantee
+// died in the merge between the two. A view that mapped `entries` directly in
+// the alpha branch, or re-sorted the helper's output, reproduces the same
+// user-visible bug with everything else still passing.
+describe('CardsView alpha ordering', () => {
+  it('renders pinned entries first even when their titles sort last', () => {
+    const noop = () => undefined
+    const view = renderWithProviders(
+      <CardsView
+        folders={[{
+          id: 1, name: 'Aaa folder', color: '#000', link_count: 0, folder_count: 0,
+          preview_links: [], preview_folders: [], has_password: false,
+        }]}
+        entries={[link(2, 'Apple'), link(3, 'Zebra', true), note(4, 'Beta')]}
+        sort="alpha"
+        isLoading={false}
+        foldersCompact={false}
+        onEdit={noop}
+        onEditNote={noop}
+        onOpenFolder={noop}
+        onEditFolder={noop}
+        onMoveLinkToFolder={noop}
+        onMoveNoteToFolder={noop}
+        onMergeEntries={noop}
+        onMoveFolder={noop}
+        t={((key: string) => key) as TFunction}
+      />,
+    )
+
+    const rendered = [...view.container.querySelectorAll('button')].map((b) => b.textContent)
+    // Zebra is pinned, so it leads despite sorting last; the folder and the
+    // unpinned entries then interleave by name below it.
+    expect(rendered).toEqual(['pin-link-3', 'folder-Aaa folder', 'pin-link-2', 'pin-note-4'])
+  })
 })
 
 describe('CardsView mutation wiring', () => {

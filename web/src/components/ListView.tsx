@@ -27,7 +27,9 @@ type Props = {
 // Density picker doesn't apply here — the list is one column by design.
 // Sorting rules mirror CardsView/CompactGrid: default order is folders-first
 // then entries in the backend's already-sorted order; alpha modes interleave
-// folders + entries by name/title via the shared mergeAlphaCells helper.
+// folders + entries by name/title via the shared mergeAlphaCells helper, which
+// keeps pinned entries in a block ahead of the interleave — "pinned first"
+// holds in every sort mode, including this one.
 export function ListView({ folders, entries, sort, onEdit, onEditNote, onOpenFolder, onEditFolder }: Props) {
   const { t } = useTranslation()
   const del = useDeleteLink()

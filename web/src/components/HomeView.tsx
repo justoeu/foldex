@@ -312,7 +312,9 @@ export function CardsView({
   // links and notes interleaved server-side — see internal/entries). Alpha
   // sort breaks the "folders first" rule on purpose — when the user picks
   // A→Z / Z→A, folders and entries interleave by name/title via
-  // mergeAlphaCells so the alphabetical order is honest.
+  // mergeAlphaCells so the alphabetical order is honest. It does NOT break
+  // "pinned first": that rule holds in every sort mode, so mergeAlphaCells
+  // interleaves within two blocks, pinned entries and then everything else.
   const isAlpha = sort === 'alpha' || sort === 'alpha_desc'
   const dir = sort === 'alpha' ? 1 : -1
   // Hooks must run unconditionally every render (isLoading/empty-state below
