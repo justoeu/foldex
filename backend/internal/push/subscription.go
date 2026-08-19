@@ -107,12 +107,27 @@ func reserveSubscriptionSlot(ctx context.Context, tx pgx.Tx, uid authctx.UserID,
 // browser profile produce the same endpoint, and Save re-points user_id to
 // whoever subscribed last, which is correct — the previous owner is no longer
 // logged in there.
+// The owner's status is re-checked HERE, at delivery, and not only where the
+// change-check sweep claims work. The claim filters disabled owners so their
+// links stop costing a fetch, but an account disabled BETWEEN the claim and the
+// send would still get its notification — the claim's snapshot says nothing
+// about the present. A push subscription is a browser channel that outlives the
+// session revocation and the API-token kill that disabling performs, so it is
+// the one credential-shaped thing left that has to be re-read at use.
+//
+// The JOIN costs this literal its mechanical backstop, which is worth knowing:
+// internal/security's TestNoUnscopedTenantQueries decides by looking for
+// `user_id` in the predicate text, and `ON u.id = s.user_id` now supplies that
+// token by itself — so deleting `WHERE s.user_id = $1` would pass the guard.
+// What holds the scope here is behavioural:
+// TestSubscriptionRepo_ListIsOwnerScopedAndBounded.
 func (r *Repository) List(ctx context.Context, uid authctx.UserID) ([]Subscription, error) {
 	rows, err := r.pool.Query(ctx, `
-        SELECT id, endpoint, p256dh, auth, created_at, last_used_at
-        FROM push_subscription
-        WHERE user_id = $1
-        ORDER BY id ASC
+        SELECT s.id, s.endpoint, s.p256dh, s.auth, s.created_at, s.last_used_at
+        FROM push_subscription s
+        JOIN app_user u ON u.id = s.user_id AND u.status = 'active'
+        WHERE s.user_id = $1
+        ORDER BY s.id ASC
 		LIMIT $2
     `, int64(uid), MaxSubscriptionsPerUser)
 	if err != nil {

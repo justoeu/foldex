@@ -208,3 +208,73 @@ func waitForBlockedSubscriptionSaves(t *testing.T, pool *pgxpool.Pool, want int)
 		return err == nil && blocked >= want
 	}, 3*time.Second, 10*time.Millisecond)
 }
+
+// Disabling an account revokes its sessions and kills its API tokens, but a
+// Web Push subscription is a browser channel that survives both — it was
+// installed by the service worker and nothing in the disable path touches it.
+// Without an owner-status check the disabled account keeps receiving "this page
+// changed" notifications on a device that can no longer sign in.
+//
+// Checked at LIST, which is the single door Notify goes through, so the answer
+// reflects the account's state at delivery rather than whenever the sweep
+// happened to claim the link.
+func TestSubscriptionRepo_ListSkipsADisabledOwner(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "disabled-owner@test.local", "editor")
+	// A second, still-active account is not decoration. With only one user on
+	// the instance, disabling them leaves ZERO active rows, so a join that
+	// kept the status check but LOST the id correlation
+	// (`ON u.status = 'active'`) produces no rows either way and the emptiness
+	// assertion below passes on a broken query. With a peer present that same
+	// join returns the disabled owner's subscriptions — duplicated once per
+	// active account, which would also break the fan-out cap. Multi-user is the
+	// configuration this bug bites in; the fixture has to be one.
+	peer := testdb.SeedUser(t, pool, "still-active@test.local", "editor")
+	repo := push.NewRepository(pool)
+	ctx := context.Background()
+
+	_, err := repo.Save(ctx, uid, "https://push.example/disabled-ep", "k", "a")
+	require.NoError(t, err)
+	_, err = repo.Save(ctx, peer, "https://push.example/peer-ep", "k", "a")
+	require.NoError(t, err)
+
+	live, err := repo.List(ctx, uid)
+	require.NoError(t, err)
+	require.Len(t, live, 1, "an active owner must still get their subscriptions")
+
+	_, err = pool.Exec(ctx, `UPDATE app_user SET status = 'disabled' WHERE id = $1`, int64(uid))
+	require.NoError(t, err)
+
+	after, err := repo.List(ctx, uid)
+	require.NoError(t, err)
+	assert.Empty(t, after, "a disabled owner must not be delivered to")
+
+	peerSubs, err := repo.List(ctx, peer)
+	require.NoError(t, err)
+	assert.Len(t, peerSubs, 1, "an active account is unaffected by someone else's disable")
+
+	// The row itself survives: disabling is reversible, and deleting the
+	// channel here would silently unsubscribe a browser that could be
+	// re-enabled a minute later with no way to notice it had happened.
+	var stored int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM push_subscription WHERE user_id = $1`, int64(uid)).Scan(&stored))
+	assert.Equal(t, 1, stored)
+
+	_, err = pool.Exec(ctx, `UPDATE app_user SET status = 'active' WHERE id = $1`, int64(uid))
+	require.NoError(t, err)
+	back, err := repo.List(ctx, uid)
+	require.NoError(t, err)
+	assert.Len(t, back, 1, "re-enabling the account restores delivery")
+
+	// `pending` is excluded too, and the predicate says so by being `= active`
+	// rather than `<> disabled`. Today the two are indistinguishable — a
+	// pending account cannot sign in, so it never accumulates a subscription —
+	// but they stop being the moment a "suspend to pending" transition exists,
+	// and the answer should be written down rather than inherited by accident.
+	_, err = pool.Exec(ctx, `UPDATE app_user SET status = 'pending' WHERE id = $1`, int64(uid))
+	require.NoError(t, err)
+	pending, err := repo.List(ctx, uid)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "a pending owner is not delivered to either")
+}

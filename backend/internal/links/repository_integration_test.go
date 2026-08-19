@@ -1072,3 +1072,125 @@ func TestRepository_AssertOwned(t *testing.T) {
 	assert.Equal(t, absent, foreign,
 		"a foreign id and an absent id must be indistinguishable, or the file proxy leaks which ids exist")
 }
+
+// The sweep spans every tenant by design; it must not span every account
+// STATE. Disabling an account revokes its sessions and kills its API tokens,
+// but nothing in that path touches the change-check opt-in — so a disabled
+// owner's links kept being fetched on schedule and kept producing Web Push
+// notifications to a browser that could no longer sign in.
+//
+// Filtered at the CLAIM rather than only at delivery because this is where the
+// cost lives: a disabled account's links stop consuming fetch budget too, not
+// merely stop notifying. Delivery re-checks separately (push.Repository.List),
+// for the account disabled between the claim and the send.
+func TestRepository_FindDueForCheck_SkipsDisabledOwners(t *testing.T) {
+	// Deliberately NOT setup(t): this test needs the pool for raw SQL, and
+	// testdb.Shared RESETS the database on every call — a second one here
+	// would silently wipe whatever setup(t) had just seeded.
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	other := testdb.SeedUser(t, pool, "still-active@test.local", "editor")
+	lrepo := links.NewRepository(pool)
+	di := "daily"
+
+	mine, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/mine", Title: "mine"})
+	require.NoError(t, err)
+	_, err = lrepo.Update(ctx, uid, mine.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	require.NoError(t, err)
+	theirs, err := lrepo.Create(ctx, other, links.CreateInput{URL: "https://x.test/theirs", Title: "theirs"})
+	require.NoError(t, err)
+	_, err = lrepo.Update(ctx, other, theirs.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	require.NoError(t, err)
+
+	due, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	require.NoError(t, err)
+	require.Contains(t, dueIDs(due), mine.ID)
+	require.Contains(t, dueIDs(due), theirs.ID)
+
+	_, err = pool.Exec(ctx, `UPDATE app_user SET status = 'disabled' WHERE id = $1`, int64(uid))
+	require.NoError(t, err)
+	// Backdated rather than nulled: the interval arm is the one production
+	// spends its life in, and NULL would only exercise the freshly-opted-in
+	// branch. Needed at all because the first sweep bumped last_checked_at.
+	_, err = pool.Exec(ctx,
+		`UPDATE link SET last_checked_at = now() - interval '2 days' WHERE id = ANY($1::bigint[])`,
+		[]int64{mine.ID, theirs.ID})
+	require.NoError(t, err)
+
+	after, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	require.NoError(t, err)
+	assert.NotContains(t, dueIDs(after), mine.ID, "a disabled owner's links must not be claimed")
+	assert.Contains(t, dueIDs(after), theirs.ID, "an active owner in the same sweep is unaffected")
+
+	// Not merely absent from the RESULT — left unclaimed. Filtering after the
+	// UPDATE, in Go, would satisfy every assertion above while the row kept
+	// churning last_checked_at and kept eating the LIMIT-256 sweep budget every
+	// tick, which is the whole reason this half filters at the claim instead of
+	// only at delivery. The claim is what writes the column, so the column is
+	// what proves it did not happen.
+	var claimed *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT last_checked_at FROM link WHERE id = $1`, mine.ID).Scan(&claimed))
+	require.NotNil(t, claimed)
+	assert.True(t, claimed.Before(time.Now().Add(-time.Hour)),
+		"a skipped link must not have been claimed, so its last_checked_at stays backdated")
+
+	// Reversible: the opt-in survives, so re-enabling resumes monitoring
+	// without the user having to set the interval again.
+	_, err = pool.Exec(ctx, `UPDATE app_user SET status = 'active' WHERE id = $1`, int64(uid))
+	require.NoError(t, err)
+	back, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	require.NoError(t, err)
+	assert.Contains(t, dueIDs(back), mine.ID, "re-enabling the account resumes the sweep")
+
+	// `pending` is excluded too, and the predicate says so by being `= active`
+	// rather than `<> disabled`. Indistinguishable today — a pending account
+	// cannot sign in, so it never accumulates links — but they part ways the
+	// moment a "suspend to pending" transition exists, and the answer belongs
+	// in a test rather than in whichever operator happens to read the SQL.
+	_, err = pool.Exec(ctx, `UPDATE app_user SET status = 'pending' WHERE id = $1`, int64(uid))
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx,
+		`UPDATE link SET last_checked_at = now() - interval '2 days' WHERE id = $1`, mine.ID)
+	require.NoError(t, err)
+	pending, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	require.NoError(t, err)
+	assert.NotContains(t, dueIDs(pending), mine.ID, "a pending owner is not swept either")
+}
+
+// The JOIN put app_user in the FROM, and `FOR UPDATE` without `OF` marks every
+// table it finds there. Two unintended consequences follow, and this pins the
+// first: SKIP LOCKED starts skipping a due link because its OWNER row is
+// locked. Every auth path holds `app_user FOR NO KEY UPDATE` for the length of
+// a transaction — login, a 2FA step, minting an API token, subscribing to push
+// — so an owner merely signing in would suspend their own monitoring for that
+// tick. The second consequence is the mirror of it: the sweep would hold
+// FOR UPDATE on app_user, which conflicts with the FOR KEY SHARE every foreign
+// key to it takes, blocking INSERTs into link, note, session, audit_log,
+// mail_outbox and click_log — click_log being the public /go/ redirect.
+func TestRepository_FindDueForCheck_DoesNotLockTheOwnerRow(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	uid := testdb.SeedUser(t, pool, "busy-owner@test.local", "editor")
+	lrepo := links.NewRepository(pool)
+	di := "daily"
+
+	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/busy", Title: "busy"})
+	require.NoError(t, err)
+	_, err = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	require.NoError(t, err)
+
+	// Exactly what an in-flight login holds while it works.
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	var locked int64
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).Scan(&locked))
+
+	due, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	require.NoError(t, err)
+	assert.Contains(t, dueIDs(due), l.ID,
+		"a due link must be claimed even while its owner row is locked by another transaction")
+}

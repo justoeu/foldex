@@ -123,3 +123,51 @@ func TestChangeCheckPushGoesOnlyToTheLinkOwner(t *testing.T) {
 	require.Len(t, subsB, 1)
 	assert.Nil(t, subsB[0].LastUsedAt)
 }
+
+// The second half of the disabled-owner rule, asserted where it actually
+// matters: no bytes leave for a disabled account.
+//
+// The repository test proves push.Repository.List filters. That is a claim
+// about a query; this is a claim about DELIVERY, and they are only the same
+// thing while Sender.Notify keeps consulting List at send time. Nothing failed
+// if that stopped being true — any future batching (subscriptions gathered at
+// claim time, a cached store, a multi-user fan-out) would re-open the window
+// with every repository test still green.
+//
+// It is also the window the two-sided filter exists for: the claim's snapshot
+// says nothing about the present, so an account disabled AFTER its link was
+// claimed still had a notification in flight. Here that disable happens
+// between the sanity delivery and the second one.
+func TestNotify_StopsAtTheDoorForADisabledOwner(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	owner := testdb.SeedUser(t, pool, "soon-disabled@test.local", "editor")
+	peer := testdb.SeedUser(t, pool, "stays-active@test.local", "editor")
+
+	pushRepo := push.NewRepository(pool)
+	_, err := pushRepo.Save(ctx, owner, "https://push.example/soon-disabled", "k", "a")
+	require.NoError(t, err)
+	_, err = pushRepo.Save(ctx, peer, "https://push.example/stays-active", "k", "a")
+	require.NoError(t, err)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	notifier := &recordingPushNotifier{}
+	sender := push.NewSender(push.VAPIDKeys{
+		PublicKey: "test-public", PrivateKey: "test-private", Subject: "mailto:test@example.com",
+	}, pushRepo, logger).WithNotifyFunc(notifier.notify)
+
+	require.NoError(t, sender.Notify(ctx, push.Notification{UserID: owner, Title: "before"}))
+	require.Len(t, notifier.snapshot(), 1, "an active owner is delivered to")
+
+	_, err = pool.Exec(ctx, `UPDATE app_user SET status = 'disabled' WHERE id = $1`, int64(owner))
+	require.NoError(t, err)
+
+	require.NoError(t, sender.Notify(ctx, push.Notification{UserID: owner, Title: "after"}),
+		"a disabled owner is a no-op, not an error — the caller did nothing wrong")
+	assert.Len(t, notifier.snapshot(), 1, "nothing may be sent after the account was disabled")
+
+	// The peer proves the send path is still working, so the assertion above is
+	// not passing because the sender broke.
+	require.NoError(t, sender.Notify(ctx, push.Notification{UserID: peer, Title: "peer"}))
+	assert.Len(t, notifier.snapshot(), 2, "an unrelated active account still receives")
+}
