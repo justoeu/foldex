@@ -475,6 +475,7 @@ docker compose --profile amqp up -d          # sobe o worker `mailer`
 | `AMQP_URL` | — | Obrigatório para `amqp`. `amqp://` para host **remoto** é recusado; use `amqps://` |
 | `AMQP_EXCHANGE` | `foldex.mail` | Renomeie só para compartilhar um broker entre instâncias |
 | `AMQP_QUEUE` | `foldex.mail.send` | |
+| `AMQP_ROUTING_KEY` | `send` | Liga a fila ao exchange |
 | `AMQP_PREFETCH` | `4` | Clampado em 1..64 |
 | `MAIL_OUTBOX_BATCH` | `32` | Linhas que o relay reivindica por passada |
 | `MAIL_OUTBOX_POLL_SEC` | `5` | De quanto em quanto tempo ele olha |
