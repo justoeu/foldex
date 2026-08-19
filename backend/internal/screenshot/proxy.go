@@ -372,6 +372,27 @@ func (p *captureProxy) trackTunnel(tunnel *proxyTunnel) bool {
 		return false
 	}
 	p.tunnelMu.Lock()
+	// Refused once any budget has been enforced, for the same reason the
+	// closed check above exists — and this half was missing.
+	//
+	// A tunnel holds its semaphore slot from the moment CONNECT is admitted,
+	// but only enters this map AFTER the 200 has been flushed. The client can
+	// see that 200 and open the next tunnel while this handler is still between
+	// the two, so `closeTunnels` walks a map the tunnel is not in yet: it
+	// survives the teardown, its `io.Copy` blocks on a peer nobody closed, and
+	// the slot is never returned. In production that is a tunnel still relaying
+	// bytes after the capture was invalidated, which is precisely what the
+	// budget exists to stop.
+	//
+	// markBlocked runs BEFORE closeTunnels, and closeTunnels holds this mutex
+	// while it walks, so the two orderings are both covered: register first and
+	// closeTunnels closes it, register after and it closes itself here.
+	if p.blocked.Load() {
+		p.tunnelMu.Unlock()
+		_ = tunnel.client.Close()
+		_ = tunnel.upstream.Close()
+		return false
+	}
 	p.tunnels[tunnel] = struct{}{}
 	p.tunnelMu.Unlock()
 	return true
