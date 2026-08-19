@@ -208,3 +208,47 @@ func waitForBlockedSubscriptionSaves(t *testing.T, pool *pgxpool.Pool, want int)
 		return err == nil && blocked >= want
 	}, 3*time.Second, 10*time.Millisecond)
 }
+
+// Disabling an account revokes its sessions and kills its API tokens, but a
+// Web Push subscription is a browser channel that survives both — it was
+// installed by the service worker and nothing in the disable path touches it.
+// Without an owner-status check the disabled account keeps receiving "this page
+// changed" notifications on a device that can no longer sign in.
+//
+// Checked at LIST, which is the single door Notify goes through, so the answer
+// reflects the account's state at delivery rather than whenever the sweep
+// happened to claim the link.
+func TestSubscriptionRepo_ListSkipsADisabledOwner(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "disabled-owner@test.local", "editor")
+	repo := push.NewRepository(pool)
+	ctx := context.Background()
+
+	_, err := repo.Save(ctx, uid, "https://push.example/disabled-ep", "k", "a")
+	require.NoError(t, err)
+
+	live, err := repo.List(ctx, uid)
+	require.NoError(t, err)
+	require.Len(t, live, 1, "an active owner must still get their subscriptions")
+
+	_, err = pool.Exec(ctx, `UPDATE app_user SET status = 'disabled' WHERE id = $1`, int64(uid))
+	require.NoError(t, err)
+
+	after, err := repo.List(ctx, uid)
+	require.NoError(t, err)
+	assert.Empty(t, after, "a disabled owner must not be delivered to")
+
+	// The row itself survives: disabling is reversible, and deleting the
+	// channel here would silently unsubscribe a browser that could be
+	// re-enabled a minute later with no way to notice it had happened.
+	var stored int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM push_subscription WHERE user_id = $1`, int64(uid)).Scan(&stored))
+	assert.Equal(t, 1, stored)
+
+	_, err = pool.Exec(ctx, `UPDATE app_user SET status = 'active' WHERE id = $1`, int64(uid))
+	require.NoError(t, err)
+	back, err := repo.List(ctx, uid)
+	require.NoError(t, err)
+	assert.Len(t, back, 1, "re-enabling the account restores delivery")
+}

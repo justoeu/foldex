@@ -144,11 +144,20 @@ func (r *Repository) SystemFindDueForCheck(ctx context.Context, limit int) ([]Du
 	// user_id rides along so the resulting Web Push reaches only the link's
 	// owner. link_check_due_idx is deliberately NOT user-scoped (see migration
 	// 000017 §10) because this sweep spans every tenant by design.
+	//
+	// Spanning every tenant is not the same as spanning every ACCOUNT STATE.
+	// Disabling an account revokes its sessions and kills its API tokens, but
+	// a Web Push subscription is a browser channel that outlives both — so
+	// without this predicate a disabled owner keeps being scanned and keeps
+	// getting "this page changed" notifications on a device that can no longer
+	// sign in. The claim is also where the cost is: filtering here means their
+	// links stop consuming fetch budget too, not merely stop notifying.
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
         UPDATE link
         SET last_checked_at = now()
         WHERE id IN (
             SELECT l.id FROM link l
+            JOIN app_user u ON u.id = l.user_id AND u.status = 'active'
             WHERE l.check_interval IS NOT NULL
               AND %s
               AND (
