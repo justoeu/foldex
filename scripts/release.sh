@@ -56,15 +56,38 @@ fi
 PKG=web/package.json
 EXT=extension/manifest.json
 COMPOSE=docker-compose.yml
-VERSION_FILES=("$PKG" "$EXT" "$COMPOSE")
+PIN_AWK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/compose-image-pin.awk"
+if [ ! -f "$PIN_AWK" ]; then
+  echo "✗ missing $PIN_AWK" >&2
+  exit 1
+fi
+
+# Every Compose file, not just the primary one. The gate used to read
+# docker-compose.yml alone, so a Foldex image moved into one of the others —
+# the mailer into docker-compose.mail.yml, say — would leave the release
+# unversioned with nothing to say so. The others carry no Foldex image today;
+# the point is that the day one does, it is already covered.
+COMPOSE_FILES=()
+while IFS= read -r compose_file; do
+  COMPOSE_FILES+=("$compose_file")
+done < <(git ls-files 'docker-compose*.yml' | sort)
+if [ "${#COMPOSE_FILES[@]}" -eq 0 ]; then
+  echo "✗ no tracked docker-compose*.yml to version" >&2
+  exit 1
+fi
+VERSION_FILES=("$PKG" "$EXT" "${COMPOSE_FILES[@]}")
 
 # Once rewriting starts, any failure must put every version file back at HEAD.
 # The release begins from a clean tree, so this cannot discard unrelated work.
 BUMP_STARTED=0
 rollback_bump() {
   local status=$?
+  local leftover
   trap - EXIT
-  rm -f "$PKG.tmp" "$EXT.tmp" "$COMPOSE.tmp"
+  rm -f "$PKG.tmp" "$EXT.tmp"
+  for leftover in "${COMPOSE_FILES[@]}"; do
+    rm -f "$leftover.tmp"
+  done
   if [ "$status" -ne 0 ] && [ "$BUMP_STARTED" -eq 1 ]; then
     if ! git restore --staged --worktree -- "${VERSION_FILES[@]}"; then
       echo "✗ release failed and automatic version rollback also failed" >&2
@@ -84,38 +107,44 @@ if [ -z "$CUR" ]; then
   exit 1
 fi
 
+# The version is read with `[^"]+`, which admits `$`, `(` and `[`, and it ends
+# up in `$((PAT+1))` below. Bash resolves command substitution inside an array
+# subscript in arithmetic context, so an unvalidated string from a committed
+# file would execute here — on the machine that holds push rights on main and
+# dispatch rights on the release workflow. The explicit-target branch already
+# demands strict semver from what the operator TYPES; a version read off disk
+# deserves no more trust than one typed at the prompt.
+if ! [[ "$CUR" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  echo "✗ current version in $PKG is not strict semver: $CUR" >&2
+  exit 1
+fi
+
 compose_version_is() {
-  local file="$1"
-  local expected="$2"
-  awk -v expected="$expected" '
-    BEGIN {
-      backend_prefix = "image: justoeu/foldex-backend:"
-      web_prefix = "image: justoeu/foldex-web:"
-      backend_expected = backend_prefix "${FOLDEX_VERSION:-" expected "}"
-      web_expected = web_prefix "${FOLDEX_VERSION:-" expected "}"
-    }
-    {
-      line = $0
-      sub(/^[[:space:]]*/, "", line)
-      if (index(line, backend_prefix) == 1) {
-        backend++
-        if (line != backend_expected) bad = 1
-      }
-      if (index(line, web_prefix) == 1) {
-        web++
-        if (line != web_expected) bad = 1
-      }
-    }
-    END { exit !(backend == 1 && web == 1 && !bad) }
-  ' "$file"
+  awk -f "$PIN_AWK" -v expected="$2" -v require_services="${3:-1}" "$1"
 }
 
 EXT_CUR=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$EXT" \
             | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
-if [ "$EXT_CUR" != "$CUR" ] || ! compose_version_is "$COMPOSE" "$CUR"; then
-  echo "✗ release versions are out of sync; expected $CUR in $EXT and both Compose image defaults" >&2
+# Validated on its own rather than left safe by the equality check below. It is
+# safe today only BECAUSE it must equal CUR to get past that check — a property
+# of the comparison, not of the value — and the next edit that reads the
+# manifest earlier, or uses this in arithmetic, silently reopens the hole the
+# guard above closes.
+if ! [[ "$EXT_CUR" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  echo "✗ current version in $EXT is not strict semver: $EXT_CUR" >&2
   exit 1
 fi
+if [ "$EXT_CUR" != "$CUR" ]; then
+  echo "✗ release versions are out of sync; expected $CUR in $EXT" >&2
+  exit 1
+fi
+for compose_file in "${COMPOSE_FILES[@]}"; do
+  if [ "$compose_file" = "$COMPOSE" ]; then require=1; else require=0; fi
+  if ! compose_version_is "$compose_file" "$CUR" "$require"; then
+    echo "✗ $compose_file does not pin every Foldex image to $CUR" >&2
+    exit 1
+  fi
+done
 
 # Compute next version.
 case "$PART" in
@@ -161,43 +190,21 @@ update_version() {
   ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
 }
 
+# Same program, same rules, `new` set: awk prints the rewritten file and still
+# exits non-zero if anything was off, so the `&&` leaves the original in place.
 update_compose_version() {
   local file="$1"
-  awk -v current="$CUR" -v new="$NEW" '
-    BEGIN {
-      backend_prefix = "image: justoeu/foldex-backend:"
-      web_prefix = "image: justoeu/foldex-web:"
-      backend_current = backend_prefix "${FOLDEX_VERSION:-" current "}"
-      web_current = web_prefix "${FOLDEX_VERSION:-" current "}"
-      backend_new = backend_prefix "${FOLDEX_VERSION:-" new "}"
-      web_new = web_prefix "${FOLDEX_VERSION:-" new "}"
-    }
-    {
-      line = $0
-      sub(/^[[:space:]]*/, "", line)
-      indent = substr($0, 1, length($0) - length(line))
-      if (index(line, backend_prefix) == 1) {
-        backend++
-        if (line != backend_current) bad = 1
-        line = backend_new
-        $0 = indent line
-      }
-      if (index(line, web_prefix) == 1) {
-        web++
-        if (line != web_current) bad = 1
-        line = web_new
-        $0 = indent line
-      }
-      print
-    }
-    END { if (backend != 1 || web != 1 || bad) exit 1 }
-  ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+  awk -f "$PIN_AWK" -v expected="$CUR" -v new="$NEW" -v require_services="${2:-1}" \
+    "$file" > "$file.tmp" && mv "$file.tmp" "$file"
 }
 
 BUMP_STARTED=1
 update_version "$PKG"
 update_version "$EXT"
-update_compose_version "$COMPOSE"
+for compose_file in "${COMPOSE_FILES[@]}"; do
+  if [ "$compose_file" = "$COMPOSE" ]; then require=1; else require=0; fi
+  update_compose_version "$compose_file" "$require"
+done
 
 # Sanity check — all release-owned versions should now report NEW.
 for f in "$PKG" "$EXT"; do
@@ -207,10 +214,13 @@ for f in "$PKG" "$EXT"; do
     exit 1
   fi
 done
-if ! compose_version_is "$COMPOSE" "$NEW"; then
-  echo "✗ bump failed for $COMPOSE" >&2
-  exit 1
-fi
+for compose_file in "${COMPOSE_FILES[@]}"; do
+  if [ "$compose_file" = "$COMPOSE" ]; then require=1; else require=0; fi
+  if ! compose_version_is "$compose_file" "$NEW" "$require"; then
+    echo "✗ bump failed for $compose_file" >&2
+    exit 1
+  fi
+done
 
 git add "${VERSION_FILES[@]}"
 git commit -m "chore(release): v$NEW"

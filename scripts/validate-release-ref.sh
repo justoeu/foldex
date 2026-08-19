@@ -61,30 +61,33 @@ if [[ "$is_semver" == true ]]; then
       exit 1
     fi
   done
-  if ! git show "$target_sha:docker-compose.yml" | awk -v expected="$version" '
-    BEGIN {
-      backend_prefix = "image: justoeu/foldex-backend:"
-      web_prefix = "image: justoeu/foldex-web:"
-      backend_expected = backend_prefix "${FOLDEX_VERSION:-" expected "}"
-      web_expected = web_prefix "${FOLDEX_VERSION:-" expected "}"
-    }
-    {
-      line = $0
-      sub(/^[[:space:]]*/, "", line)
-      if (index(line, backend_prefix) == 1) {
-        backend++
-        if (line != backend_expected) bad = 1
-      }
-      if (index(line, web_prefix) == 1) {
-        web++
-        if (line != web_expected) bad = 1
-      }
-    }
-    END { exit !(backend == 1 && web == 1 && !bad) }
-  '; then
-    printf 'release tag %s does not match both Compose image defaults\n' "$release_tag" >&2
+  # Same awk program release.sh uses. It was a hand-copied duplicate, and that
+  # is how one wrong assumption ended up in both — including in this file,
+  # where the consequence is refusing to publish rather than refusing to bump.
+  pin_awk="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/compose-image-pin.awk"
+  if [[ ! -f "$pin_awk" ]]; then
+    printf 'missing %s\n' "$pin_awk" >&2
+    exit 2
+  fi
+  # Filtered with grep rather than a pathspec: `git ls-tree` takes paths, not
+  # globs, and silently returns nothing for `docker-compose*.yml` — which would
+  # read as "no Compose file to check" and skip the gate entirely.
+  compose_files=$(git ls-tree -r --name-only "$target_sha" |
+                    grep -E '^docker-compose[^/]*\.yml$' || true)
+  if [[ -z "$compose_files" ]]; then
+    printf 'release target has no Compose file to verify\n' >&2
     exit 1
   fi
+  # Every Compose file at the target, not only the primary one: an image that
+  # moves into another file must not fall out of the gate unnoticed.
+  while IFS= read -r compose_file; do
+    if [[ "$compose_file" == docker-compose.yml ]]; then require=1; else require=0; fi
+    if ! git show "$target_sha:$compose_file" |
+         awk -f "$pin_awk" -v expected="$version" -v require_services="$require"; then
+      printf 'release tag %s does not match %s\n' "$release_tag" "$compose_file" >&2
+      exit 1
+    fi
+  done <<<"$compose_files"
 fi
 
 short_sha=$(git rev-parse --short=7 "$target_sha")
