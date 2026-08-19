@@ -84,6 +84,18 @@ if [ -z "$CUR" ]; then
   exit 1
 fi
 
+# The version is read with `[^"]+`, which admits `$`, `(` and `[`, and it ends
+# up in `$((PAT+1))` below. Bash resolves command substitution inside an array
+# subscript in arithmetic context, so an unvalidated string from a committed
+# file would execute here — on the machine that holds push rights on main and
+# dispatch rights on the release workflow. The explicit-target branch already
+# demands strict semver from what the operator TYPES; a version read off disk
+# deserves no more trust than one typed at the prompt.
+if ! [[ "$CUR" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  echo "✗ current version in $PKG is not strict semver: $CUR" >&2
+  exit 1
+fi
+
 compose_version_is() {
   local file="$1"
   local expected="$2"

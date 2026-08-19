@@ -99,11 +99,32 @@ grep -Fq 'ref: ${{ needs.validate-release-ref.outputs.target_sha }}' <<<"$publis
   fail "publishers must build the validated target SHA, not the workflow SHA"
 grep -Fq "type=raw,value=latest,enable=" "$WORKFLOW" || fail "historical targets must not move latest"
 
+# write_compose builds the fixture. The optional third argument adds a second
+# service running the backend image, which is what the real file looks like:
+# the mailer is the backend binary with a different entrypoint. Callers that
+# omit it get the single-service shape the older cases assert against.
 write_compose() {
-  local backend_version=$1 web_version=$2
-  # shellcheck disable=SC2016
-  printf 'services:\n  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-%s}\n  web:\n    image: justoeu/foldex-web:${FOLDEX_VERSION:-%s}\n' \
-    "$backend_version" "$web_version" >"$TMP/repo/docker-compose.yml"
+  local backend_version=$1 web_version=$2 mailer_version=${3:-}
+  {
+    # shellcheck disable=SC2016
+    printf 'services:\n  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-%s}\n' \
+      "$backend_version"
+    if [[ -n "$mailer_version" ]]; then
+      # shellcheck disable=SC2016
+      printf '  mailer:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-%s}\n' \
+        "$mailer_version"
+    fi
+    # shellcheck disable=SC2016
+    printf '  web:\n    image: justoeu/foldex-web:${FOLDEX_VERSION:-%s}\n' "$web_version"
+  } >"$TMP/repo/docker-compose.yml"
+}
+
+# commit_compose publishes the current fixture and echoes its SHA, so a case
+# can hand the validator a commit that origin/main actually contains.
+commit_compose() {
+  git -C "$TMP/repo" commit -qam "$1"
+  git -C "$TMP/repo" push -qu origin main
+  git -C "$TMP/repo" rev-parse HEAD
 }
 
 git init --bare -q "$TMP/origin.git"
@@ -157,6 +178,30 @@ for image in backend web; do
   git -C "$TMP/repo" commit -qam "restore $image Compose version"
   git -C "$TMP/repo" push -qu origin main
 done
+
+# A service reusing the backend image must not read as drift. The gate used to
+# require EXACTLY one line per image, so the mailer landing in docker-compose.yml
+# made the validator refuse every tag — a publish gate blocking on a file with
+# nothing wrong in it. What must hold is that EVERY matching line carries the
+# release version, whatever their count.
+#
+# This case lives here rather than beside the release.sh cases because this is
+# the harness that RUNS the validator. Asserting the rule against the script's
+# source text would stay green while the gate itself was broken.
+reused_sha=$(write_compose 1.2.3 1.2.3 1.2.3; commit_compose "mailer reuses the backend image")
+run_validator v1.2.3 refs/heads/main "$reused_sha" "$TMP/reused-output" ||
+  fail "release tag was refused when a second service reused the backend image"
+grep -q "^target_sha=$reused_sha$" "$TMP/reused-output" ||
+  fail "reused-image commit was not resolved as the release target"
+
+stale_sha=$(write_compose 1.2.3 1.2.3 1.2.2; commit_compose "mailer left on an older version")
+if run_validator v1.2.3 refs/heads/main "$stale_sha" "$TMP/stale-output" >/dev/null 2>&1; then
+  fail "release tag was accepted when a reused backend line stayed on an older version"
+fi
+
+write_compose 1.2.3 1.2.3
+git -C "$TMP/repo" commit -qam "restore single-service Compose"
+git -C "$TMP/repo" push -qu origin main
 
 if run_validator v9.9.9 refs/heads/main "$main_sha" "$TMP/mismatch-output" >/dev/null 2>&1; then
   fail "release tag was accepted when commit versions did not match"

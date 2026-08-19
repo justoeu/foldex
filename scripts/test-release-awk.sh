@@ -146,7 +146,7 @@ for invalid in 01.2.3 1.02.3 1.2.03 1.2.3-rc.1 1x2x3; do
 done
 echo "✓ case 4: explicit versions use strict semver"
 
-# ─── case 5: both Compose image defaults move in lockstep ──────────────
+# ─── case 5: every Compose image default moves in lockstep ─────────────
 
 COMPOSE_FIXTURE=$(mktemp)
 trap 'rm -f "$HARNESS" "$FIXTURE" "$COMPOSE_FIXTURE"' EXIT
@@ -166,7 +166,13 @@ YAML
   CUR="1.1.1"
   NEW="9.9.9"
   update_compose_version "$COMPOSE_FIXTURE"
-)
+) || {
+  # Without this guard `set -e` aborts the whole suite here with no output at
+  # all, and the last thing printed is the PREVIOUS case's ✓ — sending whoever
+  # reads the CI log to investigate a case that is fine.
+  echo "✗ rewrite refused a well-formed Compose file" >&2
+  exit 1
+}
 
 grep -Fq 'justoeu/foldex-backend:${FOLDEX_VERSION:-9.9.9}' "$COMPOSE_FIXTURE" || {
   echo "✗ backend Compose default was not bumped" >&2
@@ -289,7 +295,14 @@ echo "✓ case 6: dirty/off-main gates remain closed and failed commits roll bac
 
 MULTI_FIXTURE=$(mktemp)
 DRIFT_FIXTURE=$(mktemp)
-trap 'rm -f "$HARNESS" "$FIXTURE" "$COMPOSE_FIXTURE" "$MULTI_FIXTURE" "$DRIFT_FIXTURE"; rm -rf "$GATE_ROOT"' EXIT
+WEBDRIFT_FIXTURE=$(mktemp)
+NOBACKEND_FIXTURE=$(mktemp)
+# The `.tmp` siblings are listed because a REFUSED rewrite leaves one behind:
+# update_compose_version only `mv`s when awk exits 0, and the refusal path is
+# exercised twice below.
+trap 'rm -f "$HARNESS" "$FIXTURE" "$COMPOSE_FIXTURE" "$MULTI_FIXTURE" "$DRIFT_FIXTURE" \
+  "$WEBDRIFT_FIXTURE" "$NOBACKEND_FIXTURE" "$DRIFT_FIXTURE.tmp" "$WEBDRIFT_FIXTURE.tmp" \
+  "$NOBACKEND_FIXTURE.tmp"; rm -rf "$GATE_ROOT"' EXIT
 
 cat >"$MULTI_FIXTURE" <<'YAML'
 services:
@@ -316,7 +329,10 @@ YAML
   CUR="1.1.1"
   NEW="9.9.9"
   update_compose_version "$MULTI_FIXTURE"
-)
+) || {
+  echo "✗ rewrite refused a Compose file whose backend image is reused" >&2
+  exit 1
+}
 
 if [ "$(grep -Fc 'justoeu/foldex-backend:${FOLDEX_VERSION:-9.9.9}' "$MULTI_FIXTURE")" != 2 ]; then
   echo "✗ every backend Compose default must be bumped, not just the first" >&2
@@ -360,15 +376,123 @@ if [ "$(cat "$DRIFT_FIXTURE")" != "$DRIFT_BEFORE" ]; then
 fi
 echo "✓ case 7: reused images are bumped together and drift is still refused"
 
-# The same arity assumption lives in the release workflow's ref gate, where
-# getting it wrong blocks publishing rather than bumping. Check the shipped
-# file so the two cannot drift apart silently.
-VALIDATE="$SCRIPT_DIR/validate-release-ref.sh"
-grep -Fq 'exit !(backend >= 1 && web >= 1 && !bad)' "$VALIDATE" || {
-  echo "✗ validate-release-ref.sh no longer accepts a reused backend image" >&2
+# ─── case 8: the OTHER half of the relaxed predicate ────────────────────
+#
+# `>= 1` says two things, and the case above only exercises one of them. The
+# other is "at least one", and nothing was testing it: `END { exit !(!bad) }`
+# looks like a harmless simplification and would make the gate accept a
+# docker-compose.yml carrying NO foldex image at all — a release published
+# with nothing pinned, which is the exact opposite of what this gate is for.
+#
+# The web side is relaxed identically, and today's file has one web line only
+# by accident rather than by design, so the reuse case is asserted there too.
+
+cat >"$NOBACKEND_FIXTURE" <<'YAML'
+services:
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+YAML
+
+if (
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  compose_version_is "$NOBACKEND_FIXTURE" "1.1.1"
+); then
+  echo "✗ read gate accepted a Compose file with no backend image at all" >&2
+  exit 1
+fi
+if (
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  CUR="1.1.1"
+  NEW="9.9.9"
+  update_compose_version "$NOBACKEND_FIXTURE"
+); then
+  echo "✗ rewrite accepted a Compose file with no backend image at all" >&2
+  exit 1
+fi
+
+cat >"$WEBDRIFT_FIXTURE" <<'YAML'
+services:
+  backend:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+  web-canary:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.0.9}
+YAML
+WEBDRIFT_BEFORE=$(cat "$WEBDRIFT_FIXTURE")
+
+if (
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  compose_version_is "$WEBDRIFT_FIXTURE" "1.1.1"
+); then
+  echo "✗ read gate accepted a stale second web default" >&2
+  exit 1
+fi
+if (
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  CUR="1.1.1"
+  NEW="9.9.9"
+  update_compose_version "$WEBDRIFT_FIXTURE"
+); then
+  echo "✗ rewrite accepted a stale second web default" >&2
+  exit 1
+fi
+if [ "$(cat "$WEBDRIFT_FIXTURE")" != "$WEBDRIFT_BEFORE" ]; then
+  echo "✗ refused rewrite still modified the Compose file" >&2
+  exit 1
+fi
+echo "✓ case 8: a missing image and a stale reused web line are still refused"
+
+# ─── case 9: a version read from disk is not trusted as a number ────────
+#
+# CUR comes out of web/package.json via `[^"]+`, which admits `$`, `(` and `[`,
+# and lands in `$((PAT+1))`. Bash resolves command substitution inside an array
+# subscript in arithmetic context, so a crafted "version" string in a commit
+# executes on the maintainer's machine the moment they run `make release-patch`
+# — the one machine holding push rights on main and dispatch rights on the
+# release workflow. The strict semver regex already guarded what the operator
+# TYPES; this asserts it also guards what the script READS.
+
+# Three things the fixture must get right, each of which would otherwise turn
+# this into a green that proves nothing:
+#   - the payload is COMMITTED, or release.sh stops at its dirty-tree check;
+#   - the SAME string goes into all three version files, or the sync check
+#     refuses first and the arithmetic is never reached — which is exactly how
+#     an earlier draft of this case passed while asserting nothing;
+#   - the path is relative and dot-free, since `IFS=. read` splits on `.`;
+#   - the array base is PATH, not an arbitrary name. `set -u` aborts on an
+#     UNDEFINED base before the subscript runs, so `x[$(…)]` would be refused
+#     by the shell rather than by the guard and prove nothing. With a defined
+#     base the substitution runs first and the unbound/syntax error arrives
+#     only afterwards — the payload has already executed by then.
+# shellcheck disable=SC2016
+printf '{"version":"1.0.PATH[$(touch canary)]"}\n' >"$GATE_ROOT/repo/web/package.json"
+# shellcheck disable=SC2016
+printf '{"version":"1.0.PATH[$(touch canary)]"}\n' >"$GATE_ROOT/repo/extension/manifest.json"
+# shellcheck disable=SC2016
+printf 'services:\n  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.0.PATH[$(touch canary)]}\n  web:\n    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.0.PATH[$(touch canary)]}\n' \
+  >"$GATE_ROOT/repo/docker-compose.yml"
+git -C "$GATE_ROOT/repo" commit -qam "poisoned version"
+git -C "$GATE_ROOT/repo" push -qu origin main
+
+if (cd "$GATE_ROOT/repo" && bash scripts/release.sh patch) >"$GATE_ROOT/inject.out" 2>&1; then
+  echo "✗ release accepted a non-semver version read from disk" >&2
+  exit 1
+fi
+if [ -e "$GATE_ROOT/repo/canary" ]; then
+  echo "✗ a version string read from disk reached arithmetic evaluation" >&2
+  exit 1
+fi
+grep -q 'not strict semver' "$GATE_ROOT/inject.out" || {
+  echo "✗ release refused the poisoned version for the wrong reason" >&2
+  cat "$GATE_ROOT/inject.out" >&2
   exit 1
 }
-echo "✓ case 8: the release ref gate carries the same arity rule"
+echo "✓ case 9: versions read from disk are validated before they are evaluated"
 
 echo
 echo "release.sh version transaction — all assertions passed."
