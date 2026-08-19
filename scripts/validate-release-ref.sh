@@ -80,9 +80,12 @@ if [[ "$is_semver" == true ]]; then
         if (line != web_expected) bad = 1
       }
     }
-    END { exit !(backend == 1 && web == 1 && !bad) }
+    # At least one of each, and EVERY matching line pinned to the tag. Not
+    # `== 1`: the mailer service reuses the backend image, and counting
+    # exactly one would refuse to publish any tag at all.
+    END { exit !(backend >= 1 && web >= 1 && !bad) }
   '; then
-    printf 'release tag %s does not match both Compose image defaults\n' "$release_tag" >&2
+    printf 'release tag %s does not match every Compose image default\n' "$release_tag" >&2
     exit 1
   fi
 fi

@@ -106,14 +106,18 @@ compose_version_is() {
         if (line != web_expected) bad = 1
       }
     }
-    END { exit !(backend == 1 && web == 1 && !bad) }
+    # At least one of each, and EVERY matching line pinned to `expected`.
+    # Not `== 1`: the mailer service reuses the backend image, so the file
+    # legitimately carries more than one backend line. Counting exactly one
+    # refused the whole release over a second line that was already correct.
+    END { exit !(backend >= 1 && web >= 1 && !bad) }
   ' "$file"
 }
 
 EXT_CUR=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$EXT" \
             | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
 if [ "$EXT_CUR" != "$CUR" ] || ! compose_version_is "$COMPOSE" "$CUR"; then
-  echo "✗ release versions are out of sync; expected $CUR in $EXT and both Compose image defaults" >&2
+  echo "✗ release versions are out of sync; expected $CUR in $EXT and every Compose image default" >&2
   exit 1
 fi
 
@@ -190,7 +194,7 @@ update_compose_version() {
       }
       print
     }
-    END { if (backend != 1 || web != 1 || bad) exit 1 }
+    END { if (backend < 1 || web < 1 || bad) exit 1 }
   ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
 }
 

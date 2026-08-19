@@ -30,7 +30,7 @@ fi
 HARNESS=$(mktemp)
 trap 'rm -f "$HARNESS"' EXIT
 
-for function_name in update_version update_compose_version; do
+for function_name in update_version update_compose_version compose_version_is; do
   awk -v function_name="$function_name" '
     $0 == function_name "() {" { capturing = 1 }
     capturing { print }
@@ -38,7 +38,7 @@ for function_name in update_version update_compose_version; do
   ' "$RELEASE" >>"$HARNESS"
 done
 
-for function_name in update_version update_compose_version; do
+for function_name in update_version update_compose_version compose_version_is; do
   grep -q "^$function_name()" "$HARNESS" || {
     echo "✗ could not extract $function_name() from release.sh" >&2
     exit 1
@@ -277,6 +277,98 @@ grep -Fq '"version":"1.2.3"' "$GATE_ROOT/repo/extension/manifest.json" || exit 1
 grep -Fq 'foldex-backend:${FOLDEX_VERSION:-1.2.3}' "$GATE_ROOT/repo/docker-compose.yml" || exit 1
 grep -Fq 'foldex-web:${FOLDEX_VERSION:-1.2.3}' "$GATE_ROOT/repo/docker-compose.yml" || exit 1
 echo "✓ case 6: dirty/off-main gates remain closed and failed commits roll back"
+
+# ─── case 7: a service reusing the backend image is in scope, not extra ──
+#
+# The mailer runs the backend image, so docker-compose.yml carries more than
+# one `foldex-backend:` line. The gate used to require EXACTLY one of each and
+# refused every release the moment that service landed — a version-drift guard
+# failing on a file with no drift. What must hold is that EVERY matching line
+# is pinned, whatever their count; a second line left behind at the old version
+# is the actual failure this guard exists to catch.
+
+MULTI_FIXTURE=$(mktemp)
+DRIFT_FIXTURE=$(mktemp)
+trap 'rm -f "$HARNESS" "$FIXTURE" "$COMPOSE_FIXTURE" "$MULTI_FIXTURE" "$DRIFT_FIXTURE"; rm -rf "$GATE_ROOT"' EXIT
+
+cat >"$MULTI_FIXTURE" <<'YAML'
+services:
+  backend:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  mailer:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+YAML
+
+(
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  compose_version_is "$MULTI_FIXTURE" "1.1.1"
+) || {
+  echo "✗ read gate refused a Compose file whose backend image is reused" >&2
+  exit 1
+}
+
+(
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  CUR="1.1.1"
+  NEW="9.9.9"
+  update_compose_version "$MULTI_FIXTURE"
+)
+
+if [ "$(grep -Fc 'justoeu/foldex-backend:${FOLDEX_VERSION:-9.9.9}' "$MULTI_FIXTURE")" != 2 ]; then
+  echo "✗ every backend Compose default must be bumped, not just the first" >&2
+  exit 1
+fi
+
+# One line left behind must still be refused — both on read and on rewrite.
+cat >"$DRIFT_FIXTURE" <<'YAML'
+services:
+  backend:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  mailer:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.0.9}
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+YAML
+DRIFT_BEFORE=$(cat "$DRIFT_FIXTURE")
+
+if (
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  compose_version_is "$DRIFT_FIXTURE" "1.1.1"
+); then
+  echo "✗ read gate accepted a stale second backend default" >&2
+  exit 1
+fi
+
+if (
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  CUR="1.1.1"
+  NEW="9.9.9"
+  update_compose_version "$DRIFT_FIXTURE"
+); then
+  echo "✗ rewrite accepted a stale second backend default" >&2
+  exit 1
+fi
+if [ "$(cat "$DRIFT_FIXTURE")" != "$DRIFT_BEFORE" ]; then
+  echo "✗ refused rewrite still modified the Compose file" >&2
+  exit 1
+fi
+echo "✓ case 7: reused images are bumped together and drift is still refused"
+
+# The same arity assumption lives in the release workflow's ref gate, where
+# getting it wrong blocks publishing rather than bumping. Check the shipped
+# file so the two cannot drift apart silently.
+VALIDATE="$SCRIPT_DIR/validate-release-ref.sh"
+grep -Fq 'exit !(backend >= 1 && web >= 1 && !bad)' "$VALIDATE" || {
+  echo "✗ validate-release-ref.sh no longer accepts a reused backend image" >&2
+  exit 1
+}
+echo "✓ case 8: the release ref gate carries the same arity rule"
 
 echo
 echo "release.sh version transaction — all assertions passed."
