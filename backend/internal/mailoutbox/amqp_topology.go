@@ -161,12 +161,17 @@ func (t Topology) Republish(ctx context.Context, ch *ConfirmingChannel,
 	body []byte, attempt int, reason string, dead bool) error {
 
 	t = t.WithDefaults()
+	// Clamped again at the boundary, not only where the counter is read. The
+	// header is int32 on the wire and the caller's `attempt` is an int, so the
+	// conversion is where a hostile or simply wrong value stops being detectable
+	// — it truncates silently, and a truncated counter restarts the ladder.
+	bounded := clampAttempt(int64(attempt))
 	key := t.deadQueue()
 	if !dead {
-		key = t.retryKey(attempt - 1)
+		key = t.retryKey(int(bounded) - 1)
 	}
 	if err := ch.Publish(ctx, t.dlx(), key, amqp.Table{
-		AttemptHeader: int32(attempt),
+		AttemptHeader: bounded,
 		ReasonHeader:  reason,
 	}, body); err != nil {
 		return fmt.Errorf("mailoutbox: republish: %w", err)
@@ -174,23 +179,59 @@ func (t Topology) Republish(ctx context.Context, ch *ConfirmingChannel,
 	return nil
 }
 
+// attemptCeiling bounds the retry counter, in both directions.
+//
+// The counter is ours and stays in single digits, but it travels as a header on
+// a broker this application's threat model deliberately excludes: it persists to
+// disk and is routinely shared between projects, so anyone with publish rights
+// writes whatever integer they like there. The worker then computes
+// `Attempt(headers) + 1`, and math.MaxInt64 wraps that to a NEGATIVE number —
+// which reads as "attempt 1" to the give-up test, clamps onto the slowest ladder
+// step, and is written back truncated to zero. The message then retries forever
+// instead of reaching the dead queue: no crash, no log, just a sign-in code
+// circling every thirty minutes in a worker whose whole job is to deliver it.
+//
+// The exact ceiling does not matter as long as it is far above MaxAttempts and
+// inside int32 — every value at or over the give-up threshold already behaves
+// identically, so clamping discards nothing real.
+const attemptCeiling = 1 << 20
+
 // Attempt reads the retry counter off a delivery, tolerating every integer
-// width an AMQP client may have encoded it as.
+// width an AMQP client may have encoded it as, and refusing to report a value
+// arithmetic downstream cannot survive.
 func Attempt(headers amqp.Table) int {
+	var n int64
 	switch v := headers[AttemptHeader].(type) {
 	case int32:
-		return int(v)
+		n = int64(v)
 	case int64:
-		return int(v)
+		n = v
 	case int:
-		return v
+		n = int64(v)
 	case int16:
-		return int(v)
+		n = int64(v)
 	case int8:
-		return int(v)
+		n = int64(v)
 	default:
 		return 0
 	}
+	return int(clampAttempt(n))
+}
+
+// clampAttempt is the one place the counter is bounded, and it returns the
+// header's own width. Returning int and converting at the call site left the
+// bound one function call away from the conversion — true at runtime, but not
+// visible to a reader (or to gosec) looking at `int32(attempt)` in isolation.
+// The comparison against the ceiling sits directly above the conversion so the
+// two cannot drift apart.
+func clampAttempt(n int64) int32 {
+	if n < 0 {
+		return 0
+	}
+	if n > attemptCeiling {
+		return attemptCeiling
+	}
+	return int32(n)
 }
 
 // AttemptHeader carries the retry count the worker maintains itself.

@@ -3,6 +3,7 @@ package mailoutbox
 import (
 	"crypto/rand"
 	"encoding/json"
+	"math"
 	"testing"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -57,6 +58,38 @@ func TestAttempt_ReadsEveryIntegerWidthAndDefaultsToZero(t *testing.T) {
 	// panicking: the message still gets its full ladder, which is the safe
 	// direction for something a user is waiting on.
 	require.Equal(t, 0, Attempt(amqp.Table{AttemptHeader: "three"}))
+}
+
+// The counter is ours, but it arrives on a header anyone with publish rights on
+// a shared broker can write. The worker adds one to whatever it reports, and
+// without a ceiling math.MaxInt64 wraps that to a negative number: the give-up
+// test reads it as an early attempt, the ladder clamps to its slowest rung, and
+// the value written back truncates to zero through the int32 header. Nothing
+// crashes and nothing is logged — the message simply circles forever instead of
+// reaching the dead queue, which for this worker means a sign-in code that is
+// never delivered and never given up on.
+func TestAttempt_IsBoundedSoTheGiveUpTestCannotBeWrappedPastIt(t *testing.T) {
+	require.Equal(t, attemptCeiling, Attempt(amqp.Table{AttemptHeader: int64(math.MaxInt64)}))
+	require.Equal(t, attemptCeiling, Attempt(amqp.Table{AttemptHeader: int32(math.MaxInt32)}))
+	require.Equal(t, attemptCeiling, Attempt(amqp.Table{AttemptHeader: attemptCeiling + 1}))
+
+	// Negatives clamp up rather than through: a message must not buy itself
+	// extra attempts by arriving with a counter below zero.
+	require.Equal(t, 0, Attempt(amqp.Table{AttemptHeader: int64(math.MinInt64)}))
+	require.Equal(t, 0, Attempt(amqp.Table{AttemptHeader: int32(-7)}))
+	require.Equal(t, 0, Attempt(amqp.Table{AttemptHeader: int8(-1)}))
+
+	// The bound is far above any real ladder, so ordinary counters pass through
+	// untouched — a ceiling that clipped real attempts would be its own bug.
+	require.Equal(t, 4, Attempt(amqp.Table{AttemptHeader: int64(4)}))
+	require.Equal(t, int32(attemptCeiling), clampAttempt(attemptCeiling))
+
+	// What the clamp is actually protecting: the +1 the worker performs, and the
+	// int32 the header is written as. Both survive the ceiling; neither survives
+	// an unclamped MaxInt64.
+	require.Positive(t, Attempt(amqp.Table{AttemptHeader: int64(math.MaxInt64)})+1)
+	require.Equal(t, attemptCeiling,
+		int(int32(Attempt(amqp.Table{AttemptHeader: int64(math.MaxInt64)}))))
 }
 
 func TestWire_RoundTripsAndRefusesAnIncompleteMessage(t *testing.T) {
