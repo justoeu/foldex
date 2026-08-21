@@ -133,7 +133,7 @@ func (w *Worker) consume() error {
 		return err
 	}
 	defer func() { _ = ch.Close() }()
-	if err := w.cfg.Topology.Declare(ch); err != nil {
+	if _, err := w.cfg.Topology.Declare(ch); err != nil {
 		return err
 	}
 	if err := ch.Qos(w.opts.Prefetch, 0, false); err != nil {
@@ -187,6 +187,18 @@ func (w *Worker) handle(pub *mailoutbox.ConfirmingChannel, d amqp.Delivery) {
 
 	reason, fatal, err := w.send(msg)
 	if err == nil {
+		// INFO, and deliberately not silent. A queue worker whose only output
+		// is its own startup line cannot answer the one question an operator
+		// has when a user reports a missing e-mail — did this process send
+		// anything at all? — and "mailer ready" reads identically after
+		// draining a hundred messages and after sitting idle for a day.
+		//
+		// The recipient is NOT an attribute. logsafe redacts the key `email`,
+		// not `recipient`, so naming the address here either leaks it into
+		// every log line or renders it blank; the outbox id identifies the
+		// message for anyone holding the database anyway.
+		w.logger.Info("mail sent",
+			"outbox_id", msg.OutboxID, "template", msg.Template, "attempt", attempt)
 		_ = d.Ack(false)
 		return
 	}

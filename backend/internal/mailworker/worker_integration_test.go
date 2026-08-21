@@ -3,11 +3,15 @@
 package mailworker
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -123,6 +127,41 @@ func TestWorker_ARetryableFailureLandsOnTheFirstLadderRung(t *testing.T) {
 	require.Equal(t, 0, queueDepth(t, url, tp.Exchange+".dead"))
 }
 
+// The affirmative record must be exactly that. Two mutations lived here: moving
+// the Info above the `if err == nil` check, and naming the recipient on the
+// FAILURE line. Both survived every unit test, because the only assertions on
+// this log drove a successful send — and the failure line is the one an
+// operator extends first when mail is breaking, in the one process that also
+// holds a live reset link.
+func TestWorker_AFailedSendIsNeverReportedAsSentAndNeverNamesTheAddress(t *testing.T) {
+	url, o, tp, sink := brokerFixture(t)
+	m := &fakeMailer{err: errors.New("smtp is down")}
+
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	logs := slog.New(slog.NewJSONHandler(&lockedWriter{w: &buf, mu: &mu},
+		&slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	w := New(o, m, mailoutbox.AMQPConfig{URL: url, Topology: tp}, Options{}, logs)
+	w.Start(context.Background())
+	defer w.Stop()
+
+	publish(t, sink, o, mailer.TemplateLoginCode, loginCodeParams())
+
+	read := func() string { mu.Lock(); defer mu.Unlock(); return buf.String() }
+	require.Eventually(t, func() bool { return strings.Contains(read(), "mail send failed") },
+		30*time.Second, 100*time.Millisecond, "a failed send must be reported")
+
+	out := read()
+	require.NotContains(t, out, "mail sent",
+		"a message that never left must not be recorded as delivered")
+	// The capture handler is deliberately NOT wrapped in logsafe: this asserts
+	// the CALL SITE does not name the address, independently of the root
+	// handler that would also blank it.
+	require.NotContains(t, out, "grace@x.test")
+	require.NotContains(t, out, "recipient")
+}
+
 // A permanent failure skips the whole ladder. Spending 36 minutes retrying a
 // payload that will never decrypt only delays the operator finding out.
 func TestWorker_APermanentFailureGoesStraightToTheDeadQueue(t *testing.T) {
@@ -221,7 +260,8 @@ func publishRaw(t *testing.T, url string, tp mailoutbox.Topology, body []byte, h
 	// declarations are idempotent and identical, so this races harmlessly with
 	// the worker's own — without it the publish lands on an exchange that does
 	// not exist yet and is dropped, which reads as "the worker never routed it".
-	require.NoError(t, tp.Declare(ch))
+	_, err = tp.Declare(ch)
+	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	require.NoError(t, ch.PublishWithContext(ctx, tp.Exchange, tp.RoutingKey, false, false,
@@ -231,4 +271,17 @@ func publishRaw(t *testing.T, url string, tp mailoutbox.Topology, body []byte, h
 			Headers:      headers,
 			Body:         body,
 		}))
+}
+
+// lockedWriter serializes writes from the worker's consume goroutine so the
+// test goroutine can read the buffer without racing the detector.
+type lockedWriter struct {
+	w  *bytes.Buffer
+	mu *sync.Mutex
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }

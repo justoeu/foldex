@@ -7,8 +7,12 @@ import { renderWithProviders } from '../../test/renderWithProviders'
 import { useAuth } from '../../auth/AuthProvider'
 import { http } from '../../api/client'
 import type { MeResponse } from '../../api/auth'
+import i18n from '../../i18n'
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(async () => {
+  vi.restoreAllMocks()
+  if (i18n.language !== 'en') await i18n.changeLanguage('en')
+})
 
 // See TwoFactorScreen.test.tsx: without this, deleting `adopt(...)` from the
 // component leaves the request-shape assertions green while the user is never
@@ -34,8 +38,29 @@ describe('ForgotScreen', () => {
     await user.type(screen.getByLabelText(/e-mail/i), 'someone@example.com')
     await user.click(screen.getByRole('button', { name: /send reset link/i }))
 
-    expect(post).toHaveBeenCalledWith('/api/auth/password/forgot', { email: 'someone@example.com' })
+    expect(post).toHaveBeenCalledWith('/api/auth/password/forgot',
+      { email: 'someone@example.com', locale: 'en' })
     expect(await screen.findByRole('heading', { name: /check your e-mail/i })).toBeInTheDocument()
+  })
+
+  // The reason the request carries a locale at all: this screen is anonymous,
+  // so the server has no account preference to read and falls back to
+  // Accept-Language — a browser setting separate from the one that decided what
+  // language this screen is in. A Portuguese login screen mailed an English
+  // reset link, and the field is what closes that gap. The server ranks it
+  // below any stored preference, so it can only ever pick the wording of a
+  // message the caller already caused.
+  it('tells the server which language the screen is speaking', async () => {
+    const user = userEvent.setup()
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+    await i18n.changeLanguage('pt')
+
+    renderWithProviders(<ForgotScreen onBack={() => {}} />, { session: null })
+    await user.type(screen.getByLabelText(/e-mail/i), 'alguem@example.com')
+    await user.click(screen.getByRole('button', { name: /link/i }))
+
+    expect(post).toHaveBeenCalledWith('/api/auth/password/forgot',
+      { email: 'alguem@example.com', locale: 'pt' })
   })
 
   /**

@@ -55,7 +55,15 @@ var sensitiveKeys = map[string]struct{}{
 	"set-cookie":         {},
 	"sub":                {},
 	"email":              {},
-	"api_key":            {},
+	// `recipient` is what the mail path calls an address, and the mail path is
+	// the one process that also holds a live reset link. It was added after a
+	// mutation showed a `recipient` attribute passing through the delivery
+	// worker's failure log untouched — the log line an operator extends FIRST
+	// when mail is breaking, which is exactly the "next log line, added in a
+	// hurry during an incident" this list exists for. Guarding it per call site
+	// worked only for the call sites someone remembered.
+	"recipient": {},
+	"api_key":   {},
 }
 
 // IsSensitive reports whether an attribute key names a credential.

@@ -540,6 +540,7 @@ instance_policy.admin_second_factor ∈ { "any", "totp_only" }   piso: "any"
 | `AMQP_EXCHANGE` | `foldex.mail` | `config.go` | |
 | `AMQP_QUEUE` | `foldex.mail.send` | `config.go` | |
 | `AMQP_ROUTING_KEY` | `send` | `config.go` | liga a fila ao exchange |
+| `COMPOSE_PROFILES` | — | `.env` (lido pelo compose) | `amqp` sobe o serviço `mailer`; sem isso o backend publica e ninguém consome |
 | `AMQP_ALLOW_PLAINTEXT` | `0` | `config.go` | permite `amqp://` sem TLS a endereço privado verificado |
 | `AMQP_PREFETCH` | `4` | `config.go` | clampado em 1..64 |
 | `MAIL_OUTBOX_BATCH` | `32` | `config.go` | linhas por claim do relay |

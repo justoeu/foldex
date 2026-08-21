@@ -24,10 +24,11 @@ jobs:
 
       - name: Prepare environment
         # NOT `cp .env.example .env`: the template ships the RustFS secrets
-        # EMPTY on purpose, and docker-compose.yml requires them with the
-        # ${VAR:?...} form, which fails for empty as well as unset — so a bare
-        # copy cannot interpolate and no container ever starts. init-env.sh is
-        # what `make env` runs; its defaults are already .env/.env.example.
+        # EMPTY on purpose, and docker-compose.services.yml requires them with
+        # the ${VAR:?...} form, which fails for empty as well as unset — so a
+        # bare copy cannot interpolate and the object store never starts.
+        # init-env.sh is what `make env` runs; its defaults are already
+        # .env/.env.example.
         run: bash scripts/init-env.sh
 
       - name: Generate self-signed TLS pair for nginx
@@ -53,6 +54,13 @@ jobs:
         run: |
           docker network inspect foldex >/dev/null 2>&1 || docker network create foldex
           docker compose -f docker-compose.db.yml up -d
+          # The object store moved out of docker-compose.yml. Without it the
+          # backend boots with a nil storage client and router.go never mounts
+          # /api/backup/*, so the scan would silently stop covering the routes
+          # that take third-party ZIPs and serve public object keys — the last
+          # place a shrinking scan surface should go unnoticed.
+          docker compose -f docker-compose.services.yml up -d --wait rustfs
+          docker compose -f docker-compose.services.yml up -d --wait --wait-timeout 120 rustfs-init
           docker compose up -d --build
 
       - name: Wait for the app to be healthy
@@ -118,4 +126,5 @@ jobs:
         if: always()
         run: |
           docker compose down -v || true
+          docker compose -f docker-compose.services.yml down -v || true
           docker compose -f docker-compose.db.yml down -v || true

@@ -86,6 +86,18 @@ export async function updateProfile(name: string, locale?: string): Promise<MeRe
   return data
 }
 
+/** Sets ONLY the account language, sending no name.
+ *
+ *  Both fields are tri-state on the server, and this exists so a language
+ *  change stops replaying a name the caller merely had in cache. Sending it
+ *  reverted a rename made in another tab — a hazard that stopped being
+ *  theoretical once the SPA began adopting a locale on mount rather than on a
+ *  deliberate click. */
+export async function updateLocale(locale: string): Promise<MeResponse> {
+  const { data } = await http.patch<MeResponse>('/api/auth/profile', { locale })
+  return data
+}
+
 /**
  * Requests a password-reset link.
  *
@@ -93,8 +105,13 @@ export async function updateProfile(name: string, locale?: string): Promise<MeRe
  * 202 unconditionally so the endpoint cannot be used to enumerate accounts, and
  * the UI must not undo that by branching on anything it gets back.
  */
-export async function forgotPassword(email: string): Promise<void> {
-  await http.post('/api/auth/password/forgot', { email })
+export async function forgotPassword(email: string, locale?: string): Promise<void> {
+  // `locale` is the language this screen is SHOWING, not a preference to store.
+  // The server ranks it below the recipient's own stored preference and above
+  // Accept-Language — which is a separate browser setting almost nobody
+  // configures, and which is why a Portuguese screen used to mail an English
+  // reset link.
+  await http.post('/api/auth/password/forgot', locale ? { email, locale } : { email })
 }
 
 export async function resetPassword(token: string, password: string): Promise<MeResponse> {

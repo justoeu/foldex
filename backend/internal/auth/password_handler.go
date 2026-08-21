@@ -18,6 +18,11 @@ const passwordResetTTL = 30 * time.Minute
 
 type forgotPasswordInput struct {
 	Email string `json:"email"`
+	// Locale is the language the SPA is DISPLAYING, not a preference to store.
+	// The caller is anonymous here, so this is a hint and is ranked below the
+	// recipient's own stored preference — see localeForHinted. Absent or
+	// unrecognised falls back to Accept-Language exactly as before.
+	Locale *string `json:"locale"`
 }
 
 // ForgotPassword ALWAYS answers 202.
@@ -84,12 +89,12 @@ func (h *Handler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		// the current password during conversion refused to allow.
 		// No credential is minted here, so there is no transaction to join.
 		h.enqueueMail(r.Context(), mailer.PasswordResetUnavailableMessage(user.Email),
-			localeFor(user.Locale, r), "password reset unavailable")
+			localeForHinted(user.Locale, in.Locale, r), "password reset unavailable")
 	case eligible:
 		// The token and its e-mail commit together. The link exists nowhere but
 		// in that message — the table keeps only a sha256 — and this endpoint's
 		// own cooldown means a user whose mail was lost cannot simply ask again.
-		draft := MailDraft{Locale: localeFor(user.Locale, r), Build: func(token string) mailer.Envelope {
+		draft := MailDraft{Locale: localeForHinted(user.Locale, in.Locale, r), Build: func(token string) mailer.Envelope {
 			return mailer.PasswordResetMessage(user.Email,
 				h.baseURL+"/#reset="+token, int(passwordResetTTL.Minutes()))
 		}}

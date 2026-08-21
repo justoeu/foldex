@@ -27,8 +27,12 @@ describe('useAccountLocale', () => {
   })
 
   // NULL means "no preference", not English. An account that never chose keeps
-  // following the browser — forcing a default here would replace a reasonable
-  // guess with a fixed one, and would fight the device-level picker forever.
+  // following the browser, and `''` is a DELIBERATE choice to keep doing so —
+  // ProfileSection offers it precisely so a preference can be undone. Writing
+  // here would make that option inoperative: the user clears it, and the next
+  // mount puts it straight back. The navigator.language / Accept-Language
+  // divergence is fixed where it is born instead — the SPA sends the language
+  // it is showing along with the requests that trigger mail.
   it('leaves the language alone when there is no preference', () => {
     const spy = vi.spyOn(i18n, 'changeLanguage')
 

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"sync"
@@ -28,6 +29,10 @@ type AMQPConfig struct {
 	URL       string
 	Topology  Topology
 	TLSConfig *tls.Config
+	// Logger carries the no-consumer warning below. Optional: a nil logger
+	// falls back to the default, so a test constructing a bare config is not
+	// forced to care.
+	Logger *slog.Logger
 }
 
 // AMQPSink publishes claimed rows to a broker, still sealed.
@@ -60,6 +65,36 @@ func NewAMQPSink(cfg AMQPConfig) (*AMQPSink, error) {
 }
 
 func (s *AMQPSink) Name() string { return "amqp" }
+
+// warnIfNobodyIsListening reports a send queue with no consumer attached.
+//
+// Publishing to a bound queue nobody reads succeeds, gets its publisher
+// confirm, and settles the outbox row as `published` — an outcome identical to
+// a delivered message in every record the system keeps. The failure it hides is
+// total: with MAIL_TRANSPORT=amqp and the worker not running, every reset link
+// and sign-in code lands in a queue and stays there, and the first sign of it is
+// a user saying the e-mail never arrived.
+//
+// What this does NOT cover: the count is read from the declare, so it is a
+// snapshot taken when the connection is opened. A worker that dies while the
+// sink holds a healthy connection is not reported until the next reconnect.
+// That is a deliberate stop — a continuous probe means a round-trip per publish
+// to watch for something the operator also sees in the queue depth — and the
+// case it does cover is the one that actually happens: a stack brought up
+// without the worker at all.
+func (s *AMQPSink) warnIfNobodyIsListening(state SendQueueState) {
+	if state.Consumers > 0 {
+		return
+	}
+	logger := s.cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Warn("mail queue has no consumer: messages will be accepted and never sent",
+		"queue", s.cfg.Topology.QueueName(),
+		"waiting", state.Messages,
+		"hint", "start the mailer worker (COMPOSE_PROFILES=amqp) or set MAIL_TRANSPORT=inproc")
+}
 
 // Close releases the connection. Safe to call more than once.
 func (s *AMQPSink) Close() error {
@@ -96,11 +131,13 @@ func (s *AMQPSink) channelLocked() (*ConfirmingChannel, error) {
 		_ = conn.Close()
 		return nil, err
 	}
-	if err := s.cfg.Topology.Declare(ch.Raw()); err != nil {
+	state, err := s.cfg.Topology.Declare(ch.Raw())
+	if err != nil {
 		_ = ch.Close()
 		_ = conn.Close()
 		return nil, err
 	}
+	s.warnIfNobodyIsListening(state)
 	s.conn, s.ch = conn, ch
 	return ch, nil
 }

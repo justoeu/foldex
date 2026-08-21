@@ -34,7 +34,7 @@ export function LocalePicker() {
     // the pick on the next reload.
     if (!user || user.locale === code) return
     void auth
-      .updateProfile(user.name ?? '', code)
+      .updateLocale(code)
       .then(adopt)
       .catch(() => {
         // Put the language back NOW rather than letting it stand. The account

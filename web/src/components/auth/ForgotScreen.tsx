@@ -17,7 +17,7 @@ import { AuthShell, AuthField, AuthSubmit } from './AuthShell'
  * honestly make about an address it will not confirm.
  */
 export function ForgotScreen({ onBack }: { onBack: () => void }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [email, setEmail] = useState('')
   const [sent, setSent] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -27,7 +27,11 @@ export function ForgotScreen({ onBack }: { onBack: () => void }) {
     if (busy) return
     setBusy(true)
     try {
-      await forgotPassword(email)
+      // The language this screen is speaking travels with the request, so the
+      // reset e-mail speaks it too. Without it the server falls back to
+      // Accept-Language — a different browser setting, and the reason a
+      // Portuguese login screen produced an English reset link.
+      await forgotPassword(email, i18n.resolvedLanguage ?? i18n.language)
     } catch {
       // Swallowed on purpose. The endpoint is contractually 202 for every
       // input, so the only errors reaching here are transport failures — and

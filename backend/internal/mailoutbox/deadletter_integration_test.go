@@ -65,7 +65,8 @@ func TestDeadLetterWatcher_TurnsABrokerGiveUpBackIntoAFailedRow(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	pub, err := NewConfirmingChannel(conn)
 	require.NoError(t, err)
-	require.NoError(t, tp.Declare(pub.Raw()))
+	_, declErr := tp.Declare(pub.Raw())
+	require.NoError(t, declErr)
 
 	w := NewDeadLetterWatcher(repo, AMQPConfig{URL: url, Topology: tp}, silent())
 	w.Start(context.Background())
@@ -98,7 +99,8 @@ func TestDeadLetterWatcher_SettlesWithoutOpeningThePayload(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	pub, err := NewConfirmingChannel(conn)
 	require.NoError(t, err)
-	require.NoError(t, tp.Declare(pub.Raw()))
+	_, declErr := tp.Declare(pub.Raw())
+	require.NoError(t, declErr)
 
 	// A watcher built with a repository and NO outbox cipher at all. If settling
 	// ever needed to decrypt, this could not compile, let alone pass.
@@ -132,7 +134,8 @@ func TestDeadLetterWatcher_AcksGarbageInsteadOfSpinningOnIt(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	pub, err := NewConfirmingChannel(conn)
 	require.NoError(t, err)
-	require.NoError(t, tp.Declare(pub.Raw()))
+	_, declErr := tp.Declare(pub.Raw())
+	require.NoError(t, declErr)
 
 	w := NewDeadLetterWatcher(repo, AMQPConfig{URL: url, Topology: tp}, silent())
 	w.Start(context.Background())

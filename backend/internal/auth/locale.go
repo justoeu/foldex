@@ -19,8 +19,36 @@ import (
 // account yet, so there is no preference to read and the header is genuinely all
 // there is. That is inherent to inviting someone, not a gap in the lookup.
 func localeFor(preference string, r *http.Request) string {
+	return localeForHinted(preference, nil, r)
+}
+
+// localeForHinted is localeFor plus the language the CALLER says it is
+// displaying — used by the anonymous flows, where the request that triggers the
+// message comes from a screen the user is looking at.
+//
+// It exists because the browser speaks with two voices that routinely disagree.
+// The interface picks its language from `navigator.language` (and from the
+// user's own choice in the topbar, stored per device); the header below is
+// `Accept-Language`, a separate setting almost nobody configures. A Chrome
+// showing a Portuguese foldex while sending `Accept-Language: en` is an
+// ordinary configuration, and it mailed an English password-reset link to a
+// user whose every screen was Portuguese.
+//
+// The hint ranks exactly where the header does — BELOW the recipient's stored
+// preference, never above it. That ordering is what keeps it safe on an
+// unauthenticated endpoint: the worst an attacker can do by naming a language
+// is choose the wording of a message they already caused to be sent, to an
+// address they do not control, and only for an account that never stated a
+// preference. An unrecognised value falls through to the header rather than
+// being stored or echoed.
+func localeForHinted(preference string, hint *string, r *http.Request) string {
 	if preference != "" {
 		return mailer.NormalizeLocale(preference)
+	}
+	if hint != nil {
+		if l, ok := mailer.LookupLocale(*hint); ok {
+			return l
+		}
 	}
 	return localeFrom(r)
 }
