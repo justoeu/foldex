@@ -114,6 +114,9 @@ func run(logger *slog.Logger) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	worker.Start(ctx)
+	if w := cfg.PlaintextBrokerWarning(); w != "" {
+		logger.Warn(w)
+	}
 	logger.Info("mailer ready", "queue", cfg.Mail.AMQPQueue, "prefetch", cfg.Mail.AMQPPrefetch)
 
 	<-ctx.Done()

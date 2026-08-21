@@ -175,6 +175,7 @@ services:
       AMQP_EXCHANGE: ${AMQP_EXCHANGE:-foldex.mail}
       AMQP_QUEUE: ${AMQP_QUEUE:-foldex.mail.send}
       AMQP_ROUTING_KEY: ${AMQP_ROUTING_KEY:-send}
+      AMQP_ALLOW_PLAINTEXT: ${AMQP_ALLOW_PLAINTEXT:-0}
       MAIL_OUTBOX_BATCH: ${MAIL_OUTBOX_BATCH:-32}
       MAIL_OUTBOX_POLL_SEC: ${MAIL_OUTBOX_POLL_SEC:-5}
       # CORS scope: inside compose, the SPA is served from nginx (same origin)
@@ -283,6 +284,7 @@ services:
       AMQP_EXCHANGE: ${AMQP_EXCHANGE:-foldex.mail}
       AMQP_QUEUE: ${AMQP_QUEUE:-foldex.mail.send}
       AMQP_ROUTING_KEY: ${AMQP_ROUTING_KEY:-send}
+      AMQP_ALLOW_PLAINTEXT: ${AMQP_ALLOW_PLAINTEXT:-0}
       AMQP_PREFETCH: ${AMQP_PREFETCH:-4}
       MAIL_DRIVER: ${MAIL_DRIVER:-log}
       MAIL_HOST: ${MAIL_HOST:-}

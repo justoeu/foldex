@@ -539,6 +539,8 @@ instance_policy.admin_second_factor ∈ { "any", "totp_only" }   piso: "any"
 | `AMQP_URL` | `""` | `config.go` | obrigatório quando `MAIL_TRANSPORT=amqp` |
 | `AMQP_EXCHANGE` | `foldex.mail` | `config.go` | |
 | `AMQP_QUEUE` | `foldex.mail.send` | `config.go` | |
+| `AMQP_ROUTING_KEY` | `send` | `config.go` | liga a fila ao exchange |
+| `AMQP_ALLOW_PLAINTEXT` | `0` | `config.go` | permite `amqp://` sem TLS a endereço privado verificado |
 | `AMQP_PREFETCH` | `4` | `config.go` | clampado em 1..64 |
 | `MAIL_OUTBOX_BATCH` | `32` | `config.go` | linhas por claim do relay |
 | `MAIL_OUTBOX_POLL` | `5s` | `config.go` | intervalo de varredura |
@@ -550,7 +552,10 @@ consumidor**, não em `config.Load` — exatamente como `mailer.New` já recusa
 o e-mail indo silenciosamente para o log é uma falha muito pior que recusar subir".
 
 `validateSecureDefaults` ganha uma recusa: `AMQP_URL` com esquema `amqp://` (sem
-TLS) apontando para host não-loopback.
+TLS) apontando para host não-loopback — **relaxável por `AMQP_ALLOW_PLAINTEXT=1`**,
+que vale apenas para endereço verificadamente privado (RFC1918/CGNAT/loopback/
+link-local), conferido no boot para literal de IP **e no dial contra o peer
+efetivamente alcançado**, o que é o que cobre hostname. Ver ADR-36.
 
 ---
 

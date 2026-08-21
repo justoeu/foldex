@@ -2,11 +2,13 @@ package config
 
 import (
 	"errors"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 
+	"foldex/internal/pkg/privatenet"
 	"foldex/internal/pkg/resourcebudget"
 )
 
@@ -38,7 +40,15 @@ type MailConfig struct {
 	AMQPExchange   string
 	AMQPQueue      string
 	AMQPRoutingKey string
-	AMQPPrefetch   int
+
+	// AllowPlaintextAMQP lets amqp:// reach a broker that is NOT loopback. Off by
+	// default: the URL carries the broker credential in clear, and the routing
+	// metadata with it. It is honoured only for an address that is verifiably
+	// private -- an operator saying "internal network" cannot make a public
+	// address one, and a typo in an octet should not put the password on the
+	// internet.
+	AllowPlaintextAMQP bool
+	AMQPPrefetch       int
 
 	// OutboxBatch and OutboxPollSec tune the relay's drain loop. Both are
 	// clamped rather than validated: they are throughput knobs, and an operator
@@ -381,6 +391,7 @@ func mailFromEnv() MailConfig {
 		AMQPExchange:       envOr("AMQP_EXCHANGE", "foldex.mail"),
 		AMQPQueue:          envOr("AMQP_QUEUE", "foldex.mail.send"),
 		AMQPRoutingKey:     envOr("AMQP_ROUTING_KEY", "send"),
+		AllowPlaintextAMQP: envBool("AMQP_ALLOW_PLAINTEXT", false),
 		AMQPPrefetch:       envInt("AMQP_PREFETCH", 4),
 		OutboxBatch:        envInt("MAIL_OUTBOX_BATCH", 32),
 		OutboxPollSec:      envInt("MAIL_OUTBOX_POLL_SEC", 5),
@@ -516,10 +527,29 @@ func (c Config) validateMailTransport() error {
 	// puts the broker password on the network in clear, exactly as
 	// MAIL_INSECURE_SKIP_VERIFY does for SMTP.
 	if host, ok := amqpHost(c.Mail.AMQPURL); ok && !isLocalBind(host) {
-		return errors.New(
-			"insecure config: AMQP_URL uses amqp:// against a non-loopback host (" + host +
-				") — use amqps:// so the broker credential is not sent in clear",
-		)
+		if !c.Mail.AllowPlaintextAMQP {
+			return errors.New(
+				"insecure config: AMQP_URL uses amqp:// against a non-loopback host (" + host +
+					") — use amqps:// so the broker credential is not sent in clear, or set" +
+					" AMQP_ALLOW_PLAINTEXT=1 if the broker sits on a private network you control",
+			)
+		}
+		// The opt-in is a statement about the NETWORK, so it is checked against
+		// the network rather than taken on faith. A literal public address is
+		// refused even with the flag set: nothing an operator declares can make
+		// 203.0.113.4 internal, and the realistic way to arrive at one is a typo
+		// in an octet — which without this branch would ship the broker password
+		// to a stranger, silently, on every publish.
+		//
+		// A HOSTNAME is accepted on the operator's word. Resolving it here would
+		// put DNS on the boot path, and the answer could change afterwards
+		// anyway, so the check would buy less than it costs.
+		if ip := net.ParseIP(host); ip != nil && !privatenet.IsOperatorNetwork(ip) {
+			return errors.New(
+				"insecure config: AMQP_ALLOW_PLAINTEXT=1 does not cover the PUBLIC address " + host +
+					" — plaintext amqp:// is permitted only to a private network",
+			)
+		}
 	}
 	return nil
 }
@@ -560,6 +590,30 @@ func isLocalBind(addr string) bool {
 		return true
 	}
 	return false
+}
+
+// PlaintextBrokerWarning describes the degraded posture when AMQP_ALLOW_PLAINTEXT
+// is actually in force, or "" when it is not. Empty means nothing to say: the
+// flag off, a TLS broker, or a loopback one.
+//
+// It exists because a posture relaxed by configuration has to leave a trace.
+// The same reasoning already applies to an empty TRUSTED_PROXY_IPS on a
+// non-loopback bind (internal/server/router.go), and for the same reason: the
+// operator who set the flag knows, but the person reading the logs six months
+// later during an incident does not, and nothing else in the system would tell
+// them the broker credential is crossing the network in clear.
+func (c Config) PlaintextBrokerWarning() string {
+	if !c.Mail.UsesBroker() || !c.Mail.AllowPlaintextAMQP {
+		return ""
+	}
+	host, ok := amqpHost(c.Mail.AMQPURL)
+	if !ok || isLocalBind(host) {
+		return ""
+	}
+	return "AMQP_ALLOW_PLAINTEXT=1 is in force: the broker credential in AMQP_URL " +
+		"crosses the network to " + host + " in clear, and so does the routing " +
+		"metadata. The sealed message payload is unaffected. Use amqps:// once the " +
+		"broker offers TLS."
 }
 
 // envFirst returns the first non-empty env among keys, else def.
