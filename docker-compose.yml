@@ -165,6 +165,12 @@ services:
       # sealed message to RabbitMQ and the `mailer` service below does the
       # sending — see .env.example for the vhost provisioning.
       MAIL_TRANSPORT: ${MAIL_TRANSPORT:-inproc}
+      # NOT ${AMQP_URL:?...}. The colon form fails for empty AND unset, and
+      # compose interpolates services outside the active profile — so requiring
+      # it here took down `make up` on the default (inproc) stack, where this
+      # service never even runs. The requirement already lives where it can
+      # explain itself: config.validateMailTransport refuses to boot under amqp
+      # with no URL (TestLoad_AMQPTransportRequiresAURL).
       AMQP_URL: ${AMQP_URL:-}
       AMQP_EXCHANGE: ${AMQP_EXCHANGE:-foldex.mail}
       AMQP_QUEUE: ${AMQP_QUEUE:-foldex.mail.send}
@@ -263,7 +269,7 @@ services:
       # make a compromise of it a compromise of everything. The outbox row's
       # final state is reported by the backend, from the dead-letter queue.
       MAIL_TRANSPORT: amqp
-      AMQP_URL: ${AMQP_URL:?MAIL_TRANSPORT=amqp requires AMQP_URL}
+      AMQP_URL: ${AMQP_URL:-}
       AMQP_EXCHANGE: ${AMQP_EXCHANGE:-foldex.mail}
       AMQP_QUEUE: ${AMQP_QUEUE:-foldex.mail.send}
       AMQP_ROUTING_KEY: ${AMQP_ROUTING_KEY:-send}

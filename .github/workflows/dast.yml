@@ -23,7 +23,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Prepare environment
-        run: cp .env.example .env
+        # NOT `cp .env.example .env`: the template ships the RustFS secrets
+        # EMPTY on purpose, and docker-compose.yml requires them with the
+        # ${VAR:?...} form, which fails for empty as well as unset — so a bare
+        # copy cannot interpolate and no container ever starts. init-env.sh is
+        # what `make env` runs; its defaults are already .env/.env.example.
+        run: bash scripts/init-env.sh
 
       - name: Generate self-signed TLS pair for nginx
         # docker-compose.yml bind-mounts ./web/certs read-only; without a real
