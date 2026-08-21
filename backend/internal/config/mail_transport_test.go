@@ -6,15 +6,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// withDB satisfies the one hard requirement of Load so each case below can be
-// about the mail transport and nothing else.
-func withDB(t *testing.T) {
+// withCleanEnv satisfies the one hard requirement of Load and CLEARS everything
+// else Load validates, so each case below is about the variable it sets and
+// nothing else.
+//
+// Clearing is not defensive tidiness. backend/Makefile does "include ../.env"
+// plus "export", so "make coverage-run" hands the whole local .env to the test
+// binary, while CI has no .env and skips the include entirely. A case that only
+// sets DB_URL therefore asserts against a DIFFERENT configuration on a laptop
+// than on CI, and the divergence surfaces as a red suite for whoever is
+// mid-change, pointing nowhere near the cause. An operator running an AMQP
+// broker is exactly who these cases are for, and exactly whose .env breaks them.
+//
+// The list is what Load's validators read: validateMailTransport
+// (MAIL_TRANSPORT, AMQP_URL), validateSecureDefaults (BACKEND_BIND,
+// AUTH_ENABLED, MAIL_INSECURE_SKIP_VERIFY, MAIL_HOST) and normalizeAuth
+// (AUTH_PUBLIC_URL). Empty reads as unset to every one of them.
+func withCleanEnv(t *testing.T) {
 	t.Helper()
+	for _, k := range []string{
+		"MAIL_TRANSPORT", "AMQP_URL",
+		"BACKEND_BIND", "AUTH_ENABLED", "AUTH_PUBLIC_URL",
+		"MAIL_INSECURE_SKIP_VERIFY", "MAIL_HOST",
+	} {
+		t.Setenv(k, "")
+	}
 	t.Setenv("DB_URL", "postgres://x@y/z")
 }
 
 func TestLoad_MailTransportDefaultsToInproc(t *testing.T) {
-	withDB(t)
+	withCleanEnv(t)
 	t.Setenv("MAIL_TRANSPORT", "")
 
 	cfg, err := Load()
@@ -27,7 +48,7 @@ func TestLoad_MailTransportDefaultsToInproc(t *testing.T) {
 // outcome available: mail keeps working, so nothing looks broken, while every
 // message the operator expects on the broker is quietly sent by the backend.
 func TestLoad_UnknownMailTransportRefusesToBoot(t *testing.T) {
-	withDB(t)
+	withCleanEnv(t)
 	t.Setenv("MAIL_TRANSPORT", "rabbit")
 
 	_, err := Load()
@@ -36,7 +57,7 @@ func TestLoad_UnknownMailTransportRefusesToBoot(t *testing.T) {
 }
 
 func TestLoad_AMQPTransportRequiresAURL(t *testing.T) {
-	withDB(t)
+	withCleanEnv(t)
 	t.Setenv("MAIL_TRANSPORT", "amqp")
 	t.Setenv("AMQP_URL", "")
 
@@ -54,7 +75,7 @@ func TestLoad_AMQPTransportRequiresAURL(t *testing.T) {
 // Plaintext AMQP to a remote broker puts the broker password on the network in
 // clear, which is the same failure MAIL_INSECURE_SKIP_VERIFY is refused for.
 func TestLoad_PlaintextAMQPToARemoteBrokerIsRefused(t *testing.T) {
-	withDB(t)
+	withCleanEnv(t)
 	t.Setenv("MAIL_TRANSPORT", "amqp")
 	t.Setenv("AMQP_URL", "amqp://foldex:secret@broker.example:5672/foldex")
 
@@ -66,7 +87,7 @@ func TestLoad_PlaintextAMQPToARemoteBrokerIsRefused(t *testing.T) {
 }
 
 func TestLoad_AMQPIsAcceptedOverTLSOrAgainstLoopback(t *testing.T) {
-	withDB(t)
+	withCleanEnv(t)
 	t.Setenv("MAIL_TRANSPORT", "amqp")
 
 	// TLS to anywhere is fine: the credential is protected in transit.
@@ -83,7 +104,7 @@ func TestLoad_AMQPIsAcceptedOverTLSOrAgainstLoopback(t *testing.T) {
 }
 
 func TestLoad_MailThroughputKnobsAreClampedNotRejected(t *testing.T) {
-	withDB(t)
+	withCleanEnv(t)
 
 	t.Setenv("AMQP_PREFETCH", "-5")
 	t.Setenv("MAIL_OUTBOX_BATCH", "0")

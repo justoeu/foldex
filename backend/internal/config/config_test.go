@@ -264,6 +264,17 @@ func TestNormalizeAuthCapsTheGraceWindow(t *testing.T) {
 // fails silently, because a browser drops a Secure cookie over plain HTTP
 // without a word — login "succeeds" and the next request is anonymous.
 func TestAuthCookieSecureIsDerivedFromTheBind(t *testing.T) {
+	// normalizeAuth reads AUTH_PUBLIC_URL from the ENVIRONMENT rather than from
+	// the struct — deliberately, since what decides Secure is the origin the
+	// browser talks to. That makes this case about the FALLBACK, and the
+	// fallback only runs when the variable is absent. Without clearing it the
+	// test inherits whatever the developer exported: `backend/Makefile` does
+	// `include ../.env` + `export`, so a complete .env turns this red on a
+	// laptop while CI — which has no .env — stays green. A failure that only
+	// reproduces on the machine of whoever is mid-change reads as "my patch
+	// broke it" and costs an afternoon.
+	t.Setenv("AUTH_PUBLIC_URL", "")
+
 	for _, bind := range []string{"127.0.0.1", "localhost", "::1", ""} {
 		c := Config{BindAddr: bind}
 		c.normalizeAuth()
