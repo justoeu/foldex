@@ -175,6 +175,7 @@ services:
       AMQP_EXCHANGE: ${AMQP_EXCHANGE:-foldex.mail}
       AMQP_QUEUE: ${AMQP_QUEUE:-foldex.mail.send}
       AMQP_ROUTING_KEY: ${AMQP_ROUTING_KEY:-send}
+      AMQP_ALLOW_PLAINTEXT: ${AMQP_ALLOW_PLAINTEXT:-0}
       MAIL_OUTBOX_BATCH: ${MAIL_OUTBOX_BATCH:-32}
       MAIL_OUTBOX_POLL_SEC: ${MAIL_OUTBOX_POLL_SEC:-5}
       # CORS scope: inside compose, the SPA is served from nginx (same origin)
@@ -222,6 +223,16 @@ services:
       # container restarts. Skip mounting if you pin every *_KEY env var —
       # the volume only matters for the autogen paths.
       - foldex-data:/data
+
+      # Broker TLS material for AMQP_URL's ?cacertfile= / ?certfile= /
+
+      # ?keyfile=. Those paths resolve INSIDE the container, so the PEM has
+
+      # to be here. Read-only, and optional: an absent ./certs mounts as an
+
+      # empty directory, which only matters if the URL points into it.
+
+      - ./certs:/etc/foldex/certs:ro
     ports:
       # BACKEND_PORT is both the in-container listen port (read from env) and
       # the host-side bind port. Keep them aligned so nginx and curl agree.
@@ -273,6 +284,7 @@ services:
       AMQP_EXCHANGE: ${AMQP_EXCHANGE:-foldex.mail}
       AMQP_QUEUE: ${AMQP_QUEUE:-foldex.mail.send}
       AMQP_ROUTING_KEY: ${AMQP_ROUTING_KEY:-send}
+      AMQP_ALLOW_PLAINTEXT: ${AMQP_ALLOW_PLAINTEXT:-0}
       AMQP_PREFETCH: ${AMQP_PREFETCH:-4}
       MAIL_DRIVER: ${MAIL_DRIVER:-log}
       MAIL_HOST: ${MAIL_HOST:-}
@@ -293,6 +305,16 @@ services:
       # Read-only: the worker reads the auth key the backend generated and must
       # never be the process that rotates or regenerates it.
       - foldex-data:/data:ro
+
+      # Broker TLS material for AMQP_URL's ?cacertfile= / ?certfile= /
+
+      # ?keyfile=. Those paths resolve INSIDE the container, so the PEM has
+
+      # to be here. Read-only, and optional: an absent ./certs mounts as an
+
+      # empty directory, which only matters if the URL points into it.
+
+      - ./certs:/etc/foldex/certs:ro
     networks:
       - foldex
 

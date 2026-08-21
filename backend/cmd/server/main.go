@@ -267,6 +267,9 @@ func main() {
 		PollInterval: time.Duration(cfg.Mail.OutboxPollSec) * time.Second,
 	}, logger)
 	mailRelay.Start(context.Background())
+	if w := cfg.PlaintextBrokerWarning(); w != "" {
+		logger.Warn(w)
+	}
 	logger.Info("mail transport ready", "transport", mailSink.Name(), "driver", mail.Driver())
 	authRepo := auth.NewRepository(pool, auth.WithOutbox(outbox))
 	cookieOpts := auth.CookieOptions{Secure: cfg.AuthCookieSecure, Domain: cfg.AuthCookieDomain}

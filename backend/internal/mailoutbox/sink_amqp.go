@@ -5,9 +5,12 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"sync"
+	"time"
 
+	"foldex/internal/pkg/privatenet"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -143,8 +146,55 @@ func Dial(cfg AMQPConfig) (*amqp.Connection, error) {
 	return dialAMQP(cfg.URL, cfg.TLSConfig)
 }
 
+// ErrBrokerNotPrivate is returned when a plaintext dial lands on an address
+// outside the operator's own network. It is a refusal, never a downgrade: the
+// connection is closed before a byte of the AMQP handshake — and therefore
+// before the SASL PLAIN credential — is written.
+var ErrBrokerNotPrivate = errors.New("mailoutbox: plaintext amqp:// reached a non-private address")
+
+// dialPrivateOnly connects and then verifies where it landed, refusing anything
+// outside RFC1918/CGNAT/loopback/link-local.
+//
+// The type assertion is fail-closed on purpose. A connection whose address is
+// not a *net.TCPAddr is one we cannot judge, and "cannot judge" must not read as
+// "fine" on the path that carries a credential in clear.
+func dialPrivateOnly(network, addr string) (net.Conn, error) {
+	conn, err := net.DialTimeout(network, addr, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePrivatePeer(conn, addr); err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
+// requirePrivatePeer closes conn and returns ErrBrokerNotPrivate unless the peer
+// sits on the operator's own network. Split out from the dial so the decision
+// can be tested against a constructed peer instead of a routable address: the
+// obvious test — dial 203.0.113.4 and expect refusal — spends the whole timeout
+// discovering the address is unreachable and then proves nothing.
+func requirePrivatePeer(conn net.Conn, addr string) error {
+	tcp, ok := conn.RemoteAddr().(*net.TCPAddr)
+	if !ok || !privatenet.IsOperatorNetwork(tcp.IP) {
+		_ = conn.Close()
+		// The address is named; the URL that produced it is not, because it
+		// carries the broker password.
+		return fmt.Errorf("%w: %s", ErrBrokerNotPrivate, addr)
+	}
+	return nil
+}
+
 // dialAMQP opens a connection, applying TLS when the URL asks for it.
 func dialAMQP(rawURL string, tlsCfg *tls.Config) (*amqp.Connection, error) {
+	return dialAMQPWith(rawURL, tlsCfg, dialPrivateOnly)
+}
+
+// dialAMQPWith takes the plaintext dialer as a parameter so a test can observe
+// WHICH path a URL takes. Without the seam, replacing the checking dialer with a
+// bare amqp.Dial turns requirePrivatePeer into dead code and every test still
+// passes — the guarantee disappears with nothing to report it.
+func dialAMQPWith(rawURL string, tlsCfg *tls.Config, plaintextDial func(network, addr string) (net.Conn, error)) (*amqp.Connection, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		// The URL carries the broker password, so the parse error never does.
@@ -154,7 +204,20 @@ func dialAMQP(rawURL string, tlsCfg *tls.Config) (*amqp.Connection, error) {
 	if u.Scheme == "amqps" {
 		conn, err = amqp.DialTLS(rawURL, tlsCfg)
 	} else {
-		conn, err = amqp.Dial(rawURL)
+		// Plaintext only ever reaches here because AMQP_ALLOW_PLAINTEXT is on
+		// (config.validateMailTransport refuses it otherwise), and that flag is a
+		// claim about the NETWORK. Boot can only check the claim when the URL
+		// carries an IP literal; a hostname — the majority form, including a
+		// compose service name — is resolved later, by infrastructure the
+		// operator may not control, and the answer can change between boot and
+		// any reconnect.
+		//
+		// So the claim is re-checked HERE, against the peer we actually reached.
+		// Same two-legged shape preview.safeDialer uses for SSRF, and for the
+		// same reason: a name is not an address. This also closes the literal
+		// that ParseIP rejects but the resolver accepts — 3221225985 dials
+		// 192.0.2.1 all the same, and the peer check sees it.
+		conn, err = amqp.DialConfig(rawURL, amqp.Config{Dial: plaintextDial})
 	}
 	if err != nil {
 		return nil, fmt.Errorf("mailoutbox: dial broker: %w", err)
