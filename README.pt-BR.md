@@ -473,6 +473,7 @@ docker compose --profile amqp up -d          # sobe o worker `mailer`
 |---|---|---|
 | `MAIL_TRANSPORT` | `inproc` | `inproc` \| `amqp`. Valor desconhecido recusa o boot |
 | `AMQP_URL` | — | Obrigatório para `amqp`. `amqp://` para host **remoto** é recusado; use `amqps://` |
+| _(TLS privado)_ | — | Configurado NA URL, não por variável: `?cacertfile=`, `?certfile=`/`?keyfile=` (mTLS) e `?server_name_indication=`. Sob Docker, coloque o PEM em `./certs` (montado em `/etc/foldex/certs`) e use o caminho do container. |
 | `AMQP_EXCHANGE` | `foldex.mail` | Renomeie só para compartilhar um broker entre instâncias |
 | `AMQP_QUEUE` | `foldex.mail.send` | |
 | `AMQP_ROUTING_KEY` | `send` | Liga a fila ao exchange |

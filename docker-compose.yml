@@ -222,6 +222,16 @@ services:
       # container restarts. Skip mounting if you pin every *_KEY env var —
       # the volume only matters for the autogen paths.
       - foldex-data:/data
+
+      # Broker TLS material for AMQP_URL's ?cacertfile= / ?certfile= /
+
+      # ?keyfile=. Those paths resolve INSIDE the container, so the PEM has
+
+      # to be here. Read-only, and optional: an absent ./certs mounts as an
+
+      # empty directory, which only matters if the URL points into it.
+
+      - ./certs:/etc/foldex/certs:ro
     ports:
       # BACKEND_PORT is both the in-container listen port (read from env) and
       # the host-side bind port. Keep them aligned so nginx and curl agree.
@@ -293,6 +303,16 @@ services:
       # Read-only: the worker reads the auth key the backend generated and must
       # never be the process that rotates or regenerates it.
       - foldex-data:/data:ro
+
+      # Broker TLS material for AMQP_URL's ?cacertfile= / ?certfile= /
+
+      # ?keyfile=. Those paths resolve INSIDE the container, so the PEM has
+
+      # to be here. Read-only, and optional: an absent ./certs mounts as an
+
+      # empty directory, which only matters if the URL points into it.
+
+      - ./certs:/etc/foldex/certs:ro
     networks:
       - foldex
 

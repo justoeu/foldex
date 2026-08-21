@@ -49,3 +49,8 @@ graphify-out/
 
 # Local audit packs (ultra-deep etc.) — never commit
 docs/audit/
+
+# Operator-supplied CA bundles (broker, etc). The directory is mounted into
+# the backend and mailer; its contents are local material, never committed.
+certs/*
+!certs/.gitkeep
