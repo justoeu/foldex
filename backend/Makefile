@@ -24,7 +24,15 @@ POSTGRES_HOST     ?= db
 # depend on a published host port. The migrate CLI joins it temporarily.
 COMPOSE_NETWORK ?= foldex
 DB_URL          ?= postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)?sslmode=$(POSTGRES_SSLMODE)
-MIGRATE := docker run --rm --network $(COMPOSE_NETWORK) -v $(PWD)/db/migrations:/migrations migrate/migrate:v4.17.0
+# $(CURDIR), never $(PWD). The root Makefile delegates with `$(MAKE) -C
+# backend`, and `make -C` chdirs without updating the PWD environment variable —
+# only CURDIR follows. With $(PWD) the mount resolved to <root>/db/migrations,
+# which does not exist; Docker creates a missing bind-mount source as an empty
+# directory, so golang-migrate found zero files and exited 0 with "no change".
+# Silent, and self-cancelling: the backend refuses to boot against an
+# un-migrated database and tells the operator to run `make migrate-up` — the
+# command that had just done nothing. It is README.md's quickstart line.
+MIGRATE := docker run --rm --network $(COMPOSE_NETWORK) -v $(CURDIR)/db/migrations:/migrations migrate/migrate:v4.17.0
 
 COVERAGE_MIN ?= 85
 # Packages measured for coverage. Excludes cmd (server boot and the RustFS

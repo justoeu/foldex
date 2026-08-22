@@ -42,6 +42,16 @@ jobs:
             -keyout web/certs/key.pem -out web/certs/cert.pem \
             -days 365 -subj "/CN=web" \
             -addext "subjectAltName=DNS:web,DNS:localhost,IP:127.0.0.1"
+          # OpenSSL 3 writes the key 0600 owned by the runner user (uid 1001),
+          # and the web container runs as `nginx` (uid 101) against a bind mount
+          # that preserves host ownership — so nginx got "Permission denied"
+          # opening it and crash-looped for the entire health wait. Loosening
+          # the mode is safe HERE and nowhere else: the pair is minted fresh for
+          # this job, covers only the in-network hostname, and is destroyed with
+          # the runner. The shipped image never sees it (web/entrypoint-certs.sh
+          # generates its own), which is the invariant that keeps a private key
+          # out of the published image.
+          chmod 0644 web/certs/key.pem
 
       - name: Boot the stack
         # Pin CORS to a concrete origin so the backend's secure-defaults guard
@@ -53,7 +63,9 @@ jobs:
           CORS_ORIGINS: https://localhost
         run: |
           docker network inspect foldex >/dev/null 2>&1 || docker network create foldex
-          docker compose -f docker-compose.db.yml up -d
+          # --wait, or `make migrate-up` below can reach the container
+          # before Postgres is accepting connections.
+          docker compose -f docker-compose.db.yml up -d --wait
           # The object store moved out of docker-compose.yml. Without it the
           # backend boots with a nil storage client and router.go never mounts
           # /api/backup/*, so the scan would silently stop covering the routes
@@ -61,6 +73,14 @@ jobs:
           # place a shrinking scan surface should go unnoticed.
           docker compose -f docker-compose.services.yml up -d --wait rustfs
           docker compose -f docker-compose.services.yml up -d --wait --wait-timeout 120 rustfs-init
+          # Migrations are applied deliberately in this project — nothing in
+          # compose runs them, and db.CheckSchemaVersion makes the backend exit
+          # 1 rather than serve queries against a schema it does not recognise.
+          # Without this step the scan spent its whole budget waiting on a
+          # container that had already decided not to start. Deliberately the
+          # SAME command the README gives an operator, so a break in the
+          # documented path fails here instead of on someone's first install.
+          make migrate-up
           docker compose up -d --build
 
       - name: Wait for the app to be healthy

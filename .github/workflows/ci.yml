@@ -131,6 +131,11 @@ jobs:
         run: bash scripts/test-claude-bash-permissions.sh
       - name: nginx access-log credential redaction
         run: bash scripts/test-nginx-access-log.sh
+      - name: make migrate-up mounts the migrations directory
+        # `make -C` does not update PWD, so the recipe's $(PWD) resolved to a
+        # directory that does not exist and Docker created it empty — the
+        # documented quickstart command applied nothing and said "no change".
+        run: bash scripts/test-make-migrate-path.sh
       - name: nginx security headers survive on every response
         # Boots the real config and makes the requests. Reading the file is not
         # enough: nginx drops every inherited add_header the moment a location
