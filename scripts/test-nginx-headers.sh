@@ -160,9 +160,13 @@ if curl -sk -D - -o /dev/null "$BASE/assets/app.js" 2>/dev/null | tr 'A-Z' 'a-z'
   note "/assets/app.js should keep default caching, not a Cache-Control"
 fi
 
-# The :8080 redirect must target the BAKED host, never the request's. Its own
-# comment forbids $host/$http_host (host-header injection), and nothing else in
-# the repo exercised it.
+# The :8080 redirect must target the BAKED host, never the request's. The
+# config's own comment forbids the request-derived host variables (host-header
+# injection), and nothing else in the repo exercised it. Those variable names
+# are deliberately NOT spelled out here: Semgrep's nginx request-host-used rule
+# is a generic text match, so writing them even in prose raises an alert whose
+# only evidence is this sentence — and a scanner that cries wolf is the reason
+# the last three months of DAST reports went unread.
 loc=$(curl -s -D - -o /dev/null -H "Host: evil.example" "http://127.0.0.1:$HTTP_PORT/x" 2>/dev/null \
       | tr -d '\r' | grep -i '^location:' | awk '{print $2}')
 [[ "$loc" == "https://$PUBLIC_HOST/x" ]] \
