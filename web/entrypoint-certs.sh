@@ -23,8 +23,9 @@ CERT_DIR=/etc/nginx/certs
 CERT_FILE="$CERT_DIR/cert.pem"
 KEY_FILE="$CERT_DIR/key.pem"
 
-# Bake the public host into the HTTP→HTTPS redirect. Never use $host /
-# $http_host (attacker-controlled Host header). Operators set WEB_PUBLIC_HOST
+# Bake the public host into BOTH redirects — the :8080 HTTP→HTTPS server and
+# the :8443 `error_page 497` (plain HTTP spoken to the TLS port). Never use
+# $host / $http_host (attacker-controlled Host header). Operators set WEB_PUBLIC_HOST
 # when serving under a LAN name, a custom domain, or a non-443 port — the
 # compose default carries :${WEB_HTTPS_PORT} for exactly that reason, since a
 # portless redirect sends the browser to 443 where this stack serves nothing.

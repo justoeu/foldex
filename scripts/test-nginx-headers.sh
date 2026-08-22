@@ -167,19 +167,25 @@ fi
 # is a generic text match, so writing them even in prose raises an alert whose
 # only evidence is this sentence — and a scanner that cries wolf is the reason
 # the last three months of DAST reports went unread.
-loc=$(curl -s -D - -o /dev/null -H "Host: evil.example" "http://127.0.0.1:$HTTP_PORT/x" 2>/dev/null \
-      | tr -d '\r' | grep -i '^location:' | awk '{print $2}')
-[[ "$loc" == "https://$PUBLIC_HOST/x" ]] \
-  || note "the HTTP redirect went to '$loc' — it must ignore the request Host header"
+# `|| true`: with no Location header, grep's exit 1 under pipefail would kill
+# the script BEFORE the note below — a bare non-zero with an empty log, the
+# silent-failure shape this script exists to prevent. The [[ ]] is the judge.
+loc=$(curl -s -D - -o /dev/null -H "Host: evil.example" "http://127.0.0.1:$HTTP_PORT/x?q=1" 2>/dev/null \
+      | tr -d '\r' | grep -i '^location:' | awk '{print $2}' || true)
+[[ "$loc" == "https://$PUBLIC_HOST/x?q=1" ]] \
+  || note "the HTTP redirect went to '$loc' — it must ignore the request Host header and keep the query"
 
 # Plain HTTP on the TLS port must redirect (497 → 301), not dead-end on
 # nginx's default 400 — a browser given a bare `host:9444` assumes http://
 # and this is the page it lands on. Same rules as the :8080 redirect: baked
 # host (the request's is attacker-controlled) and the path preserved.
+# `|| true` on both: the old-config 400 carries no Location, and grep's exit 1
+# under pipefail would abort the script before either note fired — verified:
+# that was a bare exit 1 with an empty log. The [[ ]] below is the judge.
 plain_on_tls=$(curl -s -D - -o /dev/null -H "Host: evil.example" \
-      "http://127.0.0.1:$TLS_PORT/some/path?q=1" 2>/dev/null | tr -d '\r')
-code=$(head -1 <<<"$plain_on_tls" | awk '{print $2}')
-loc=$(grep -i '^location:' <<<"$plain_on_tls" | awk '{print $2}')
+      "http://127.0.0.1:$TLS_PORT/some/path?q=1" 2>/dev/null | tr -d '\r' || true)
+code=$(head -1 <<<"$plain_on_tls" | awk '{print $2}' || true)
+loc=$(grep -i '^location:' <<<"$plain_on_tls" | awk '{print $2}' || true)
 [[ "$code" == "301" ]] \
   || note "plain HTTP on the TLS port answered $code — expected the 497→301 redirect, not nginx's dead-end 400"
 [[ "$loc" == "https://$PUBLIC_HOST/some/path?q=1" ]] \
