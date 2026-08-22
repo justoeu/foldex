@@ -24,7 +24,11 @@ POSTGRES_HOST     ?= db
 # depend on a published host port. The migrate CLI joins it temporarily.
 COMPOSE_NETWORK ?= foldex
 DB_URL          ?= postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)?sslmode=$(POSTGRES_SSLMODE)
-MIGRATE := docker run --rm --network $(COMPOSE_NETWORK) -v $(PWD)/db/migrations:/migrations migrate/migrate:v4.17.0
+# $(CURDIR), never $(PWD) — see scripts/test-make-migrate-path.sh for what
+# broke. Digest-pinned like every other CI image (CLAUDE.md §4): the DAST now
+# pulls this one, and a version tag is mutable.
+MIGRATE := docker run --rm --network $(COMPOSE_NETWORK) -v $(CURDIR)/db/migrations:/migrations \
+	migrate/migrate:v4.17.0@sha256:4d017c6fb5997127093648cab09e63d377997125c3d3dcca18e5d1c847da49fa
 
 COVERAGE_MIN ?= 85
 # Packages measured for coverage. Excludes cmd (server boot and the RustFS
@@ -103,11 +107,17 @@ coverage: coverage-run coverage-check ## Run tests + enforce coverage gate (kept
 coverage-html: coverage ## Open coverage report in the browser
 	go tool cover -html=coverage.out
 
+# @, because make echoes the expanded recipe before running it — and the
+# expansion carries POSTGRES_PASSWORD inside DB_URL. The DAST runs this in a
+# retained Actions log, and an operator runs it in their terminal. migrate's own
+# output is unaffected; only the command line is suppressed. The DSN is still
+# visible in `ps` on the machine that runs it, which is a smaller blast radius
+# than a stored log and is not fixable without overriding the image entrypoint.
 migrate-up: ## Apply all pending migrations
-	$(MIGRATE) -path /migrations -database "$(DB_URL)" up
+	@$(MIGRATE) -path /migrations -database "$(DB_URL)" up
 
 migrate-down: ## Revert the most recent migration
-	$(MIGRATE) -path /migrations -database "$(DB_URL)" down 1
+	@$(MIGRATE) -path /migrations -database "$(DB_URL)" down 1
 
 migrate-create: ## Create a new migration: make migrate-create NAME=add_x
 	$(MIGRATE) create -ext sql -dir /migrations -seq $(NAME)
