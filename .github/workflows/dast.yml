@@ -63,9 +63,26 @@ jobs:
           CORS_ORIGINS: https://localhost
         run: |
           docker network inspect foldex >/dev/null 2>&1 || docker network create foldex
-          # --wait, or `make migrate-up` below can reach the container
-          # before Postgres is accepting connections.
-          docker compose -f docker-compose.db.yml up -d --wait
+          docker compose -f docker-compose.db.yml up -d
+          # Explicit poll rather than `up -d --wait`. That flag called the
+          # container unhealthy half a second after starting it — before any
+          # plausible check had run — and the same compose file reaches healthy
+          # in ~6s locally, so its verdict was not about Postgres. pg_isready is
+          # the condition `make migrate-up` actually needs, and asking for it
+          # directly says so, with an error naming what it was waiting for.
+          for i in $(seq 1 60); do
+            if docker compose -f docker-compose.db.yml exec -T db \
+                 pg_isready -U "${POSTGRES_USER:-foldex}" -d "${POSTGRES_DB:-foldex}" >/dev/null 2>&1; then
+              echo "postgres accepting connections after ${i} tries"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "::error::postgres never accepted connections"
+              docker compose -f docker-compose.db.yml logs --no-color --tail 100 db || true
+              exit 1
+            fi
+            sleep 2
+          done
           # The object store moved out of docker-compose.yml. Without it the
           # backend boots with a nil storage client and router.go never mounts
           # /api/backup/*, so the scan would silently stop covering the routes
