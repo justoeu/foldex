@@ -35,6 +35,10 @@ services:
       # disabled (503). The SAME value goes into the scrape job of the central
       # observability stack (app-deployments/observability).
       METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # OTLP gRPC endpoint for distributed traces (e.g. http://obs-host:4317).
+      # Empty = tracing fully off (no provider, no exporter, no spans). Spans
+      # are named by chi route pattern — raw paths/ids never leave the process.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       # Inside a container, listening on the loopback (127.0.0.1) means nginx
       # in the sibling container cannot reach the backend over the `foldex`
       # network. The backend's own config default IS 127.0.0.1 for the

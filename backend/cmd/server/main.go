@@ -35,6 +35,7 @@ import (
 	"foldex/internal/settings"
 	"foldex/internal/stats"
 	"foldex/internal/storage"
+	"foldex/internal/tracing"
 )
 
 func main() {
@@ -72,6 +73,28 @@ func main() {
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Tracing installs the GLOBAL provider, so it must precede db.New — the
+	// pool's otelpgx tracer resolves the provider per query and would pin the
+	// no-op otherwise. Setup failure is a warning, never fatal: a telemetry
+	// endpoint typo must not take the backend down.
+	traceShutdown, err := tracing.Setup(rootCtx, tracing.Config{
+		Endpoint:       cfg.OTelEndpoint,
+		ServiceName:    "foldex-backend",
+		ServiceVersion: os.Getenv("FOLDEX_VERSION"),
+	})
+	if err != nil {
+		logger.Warn("tracing disabled — OTLP setup failed", "err", err)
+	} else if traceShutdown != nil {
+		logger.Info("tracing enabled", "endpoint", cfg.OTelEndpoint)
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := traceShutdown(ctx); err != nil {
+				logger.Warn("tracing shutdown", "err", err)
+			}
+		}()
+	}
 
 	pool, err := db.New(rootCtx, cfg.DBURL)
 	if err != nil {
@@ -334,6 +357,7 @@ func main() {
 		Logger:              logger,
 		Config:              cfg,
 		Metrics:             metrics.New(pool),
+		Trace:               traceMiddleware(traceShutdown),
 		Storage:             storageClient,
 		PushHandler:         pushHandler,
 		LinkMetadataFetcher: linkMetadataAdapter{f: metadataFetcher},
@@ -547,4 +571,14 @@ func (a backupStorageAdapter) ExistingObjects(ctx context.Context, keys []string
 
 func (a backupStorageAdapter) DeleteObjects(ctx context.Context, keys []string) error {
 	return a.c.DeleteObjects(ctx, keys)
+}
+
+// traceMiddleware maps tracing.Setup's result onto Deps.Trace: only a
+// successful Setup (non-nil shutdown) mounts the middleware; otherwise the
+// router keeps tracing off and requests pay nothing.
+func traceMiddleware(shutdown func(context.Context) error) func(http.Handler) http.Handler {
+	if shutdown == nil {
+		return nil
+	}
+	return tracing.Middleware
 }
