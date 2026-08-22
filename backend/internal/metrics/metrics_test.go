@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -237,6 +238,30 @@ func TestHandlerLimitsConcurrentScrapes(t *testing.T) {
 	close(collector.release)
 	if first := <-firstDone; first.Code != http.StatusOK {
 		t.Fatalf("first scrape status = %d", first.Code)
+	}
+}
+
+// backup's extendArchiveDeadlines stretches multi-GB stream deadlines through
+// http.NewResponseController, which traverses writer wrappers via Unwrap().
+// The instrumentation wrapper must stay traversable or those calls silently
+// fail and streams get cut at the server's default WriteTimeout. Needs a real
+// http.Server: httptest.ResponseRecorder has no deadline support to unwrap to.
+func TestInstrumentPreservesResponseControllerDeadlines(t *testing.T) {
+	t.Parallel()
+	m := New(nil)
+	deadlineErr := make(chan error, 1)
+	srv := httptest.NewServer(m.Instrument(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		deadlineErr <- http.NewResponseController(w).SetWriteDeadline(time.Now().Add(time.Minute))
+	})))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if err := <-deadlineErr; err != nil {
+		t.Fatalf("SetWriteDeadline through Instrument = %v — the wrapper broke the Unwrap chain", err)
 	}
 }
 

@@ -262,6 +262,29 @@ curl -s -H "$AUTH" -H "$JSON" -X POST localhost:9089/api/backup -o /dev/null -w 
 open https://localhost:9444
 ```
 
+## Métricas (Prometheus)
+
+O backend expõe `GET /metrics` no formato Prometheus: contadores/histogramas
+de requisições HTTP rotulados pelo **padrão de rota** do chi (nunca a URL
+crua — slugs/ids não vazam para as séries), gauge de requisições em voo,
+estatísticas do pool pgx e coletores de runtime/processo do Go.
+
+O endpoint é **desabilitado por padrão**. Defina `METRICS_TOKEN` (ex.:
+`openssl rand -hex 32`) e faça o scrape com `Authorization: Bearer <token>` —
+token vazio responde 503, token errado 401. Métricas revelam formato de
+rotas, volume de tráfego e dimensionamento do pool — material de
+reconhecimento numa instância multiusuário — então não existe modo sem
+autenticação. O nginx não faz proxy de `/metrics`; raspe a porta do backend
+diretamente.
+
+```yaml
+# prometheus.yml
+- job_name: "foldex-backend"
+  metrics_path: /metrics
+  authorization: { type: Bearer, credentials: "<METRICS_TOKEN>" }
+  static_configs: [{ targets: ["<host-do-backend>:9089"] }]
+```
+
 ## Atalhos de teclado (SPA)
 
 | Atalho           | Ação                            |

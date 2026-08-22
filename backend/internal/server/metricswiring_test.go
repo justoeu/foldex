@@ -51,12 +51,10 @@ func TestMetricsRouteIsTokenProtectedAndInstrumented(t *testing.T) {
 	}
 
 	// Traffic through the real middleware stack lands in the counters with
-	// chi's pattern as the route label.
+	// chi's pattern as the route label. (The proof that it was counted is the
+	// series assert below — an untouched CounterVec is omitted from scrapes.)
 	probe := httptest.NewRecorder()
 	router.ServeHTTP(probe, httptest.NewRequest(http.MethodGet, "/api/does-not-exist", nil))
-	if probe.Code == 0 {
-		t.Fatal("request did not reach the router")
-	}
 
 	authorized := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
@@ -67,6 +65,32 @@ func TestMetricsRouteIsTokenProtectedAndInstrumented(t *testing.T) {
 	}
 	if body := authorized.Body.String(); !strings.Contains(body, "foldex_http_requests_total") {
 		t.Fatalf("instrumentation middleware is not mounted — no request series: %s", body)
+	}
+}
+
+// The one load-bearing ordering guarantee in the wiring: Instrument mounts
+// BEFORE Recoverer, so a panic that Recoverer converts into a 500 is still
+// counted as the 500 it answered. A future reorder of the r.Use lines would
+// break this with everything else staying green — this test is the tripwire.
+// The panic is a real one: with a nil Pool, the bootstrap-principal middleware
+// (AUTH_ENABLED=0 path) dereferences the pool on the first /api request.
+func TestRecoveredPanicIsCountedAsInternalServerError(t *testing.T) {
+	t.Parallel()
+	m := metrics.New(nil)
+	router := metricsRouter(t, m, "scrape-secret")
+
+	panicked := httptest.NewRecorder()
+	router.ServeHTTP(panicked, httptest.NewRequest(http.MethodGet, "/api/links", nil))
+	if panicked.Code != http.StatusInternalServerError {
+		t.Fatalf("nil-pool /api request = %d, want 500 via Recoverer", panicked.Code)
+	}
+
+	scrape := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("Authorization", "Bearer scrape-secret")
+	router.ServeHTTP(scrape, req)
+	if body := scrape.Body.String(); !strings.Contains(body, `status="500"`) {
+		t.Fatalf("recovered panic was not counted as a 500: %s", body)
 	}
 }
 

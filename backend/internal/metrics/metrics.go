@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -61,20 +62,16 @@ func New(pool *pgxpool.Pool) *Metrics {
 // collectors to the same /metrics endpoint.
 func (m *Metrics) Registerer() prometheus.Registerer { return m.registry }
 
-// statusRecorder captures the status code for the request metrics.
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
-}
-
 // Instrument measures every request. The route label is chi's registered
 // pattern (e.g. /api/links/{id}), never the raw URL — raw paths carry slugs
 // and ids, which would be both a cardinality leak and a data leak.
+//
+// The status is captured via chi's WrapResponseWriter (the same wrapper
+// slogRequest uses), NOT a bare embedding: WrapResponseWriter implements
+// Unwrap(), which http.NewResponseController traverses — backup's
+// extendArchiveDeadlines depends on that chain to stretch multi-GB stream
+// deadlines, and a wrapper without Unwrap would silently cut them at the
+// server's default WriteTimeout.
 func (m *Metrics) Instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/metrics" || isProbePath(r.URL.Path) {
@@ -85,9 +82,15 @@ func (m *Metrics) Instrument(next http.Handler) http.Handler {
 		defer m.inFlight.Dec()
 
 		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		rec := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 		next.ServeHTTP(rec, r)
 
+		// A handler that never writes leaves Status() at 0; net/http answers
+		// that as an implicit 200.
+		status := rec.Status()
+		if status == 0 {
+			status = http.StatusOK
+		}
 		route := "unmatched"
 		if rctx := chi.RouteContext(r.Context()); rctx != nil {
 			if pattern := rctx.RoutePattern(); pattern != "" {
@@ -95,7 +98,7 @@ func (m *Metrics) Instrument(next http.Handler) http.Handler {
 			}
 		}
 		method := metricMethod(r.Method)
-		m.reqTotal.WithLabelValues(method, route, strconv.Itoa(rec.status)).Inc()
+		m.reqTotal.WithLabelValues(method, route, strconv.Itoa(status)).Inc()
 		m.reqDuration.WithLabelValues(method, route).Observe(time.Since(start).Seconds())
 	})
 }
@@ -122,7 +125,13 @@ func metricMethod(method string) string {
 // at 1: a scrape walks every collector, and an unauthenticated attacker who
 // guessed the token could otherwise stack Gather calls.
 func (m *Metrics) Handler(token string) http.Handler {
-	promHandler := promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{MaxRequestsInFlight: 1})
+	// Timeout keeps a slow-reading scraper from parking on the single
+	// in-flight slot for the server's full WriteTimeout — without it, one bad
+	// connection means minutes of 503s for every other scrape.
+	promHandler := promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{
+		MaxRequestsInFlight: 1,
+		Timeout:             10 * time.Second,
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if token == "" {
 			http.Error(w, "metrics disabled", http.StatusServiceUnavailable)
