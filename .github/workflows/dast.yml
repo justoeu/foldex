@@ -64,21 +64,37 @@ jobs:
         run: |
           docker network inspect foldex >/dev/null 2>&1 || docker network create foldex
           docker compose -f docker-compose.db.yml up -d
-          # Explicit poll rather than `up -d --wait`. That flag called the
-          # container unhealthy half a second after starting it — before any
-          # plausible check had run — and the same compose file reaches healthy
-          # in ~6s locally, so its verdict was not about Postgres. pg_isready is
-          # the condition `make migrate-up` actually needs, and asking for it
-          # directly says so, with an error naming what it was waiting for.
+          # Wait for the condition `make migrate-up` actually needs, and say so.
+          #
+          # An earlier attempt used `up -d --wait` and I blamed the flag when it
+          # called the container unhealthy: it was right, and Postgres really was
+          # dying. What the flag could not say is WHY — the message is one line
+          # with no logs, so the run reported a health verdict for a container
+          # that had already exited over a volume-layout error. The 60 × 2s
+          # budget is therefore the least important part of this loop; the
+          # early exit on a dead container is the part that makes a failure
+          # explain itself.
+          #
+          # USER/DB come from .env — the same file compose interpolates — so the
+          # probe cannot drift from the DSN this step is about to use. Neither
+          # value is a secret; the password is never read here.
+          pg_user=$(grep -E '^POSTGRES_USER=' .env | cut -d= -f2- || true)
+          pg_db=$(grep -E '^POSTGRES_DB=' .env | cut -d= -f2- || true)
           for i in $(seq 1 60); do
             if docker compose -f docker-compose.db.yml exec -T db \
-                 pg_isready -U "${POSTGRES_USER:-foldex}" -d "${POSTGRES_DB:-foldex}" >/dev/null 2>&1; then
+                 pg_isready -U "${pg_user:-foldex}" -d "${pg_db:-foldex}" >/dev/null 2>&1; then
               echo "postgres accepting connections after ${i} tries"
               break
             fi
+            state=$(docker inspect foldex-db --format '{{.State.Status}}' 2>/dev/null || echo missing)
+            if [ "$state" = "exited" ] || [ "$state" = "dead" ] || [ "$state" = "missing" ]; then
+              echo "::error::the database container is $state — it never started"
+              docker compose -f docker-compose.db.yml logs --no-color --tail 60 db || true
+              exit 1
+            fi
             if [ "$i" -eq 60 ]; then
-              echo "::error::postgres never accepted connections"
-              docker compose -f docker-compose.db.yml logs --no-color --tail 100 db || true
+              echo "::error::postgres never accepted connections (120s)"
+              docker compose -f docker-compose.db.yml logs --no-color --tail 60 db || true
               exit 1
             fi
             sleep 2

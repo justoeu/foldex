@@ -21,17 +21,40 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail=0
 note() { echo "FAIL $*" >&2; fail=1; }
 
-mount_path_from() {
-  # -v <host>:<container> — take the host side of the /migrations mount.
-  (cd "$1" && make -n migrate-up 2>/dev/null) \
-    | grep -o -- '-v [^ ]*:/migrations' | head -1 | sed 's|^-v ||; s|:/migrations$||'
-}
+# `|| true` on the capture, not decoration: under `set -e` a pipeline whose grep
+# matches nothing kills the assignment, so the script exited 1 printing NOTHING
+# — a silent failure inside the script whose whole job is to make one loud.
+expand_from() { (cd "$1" && make -n migrate-up 2>/dev/null) || true; }
 
-from_root=$(mount_path_from "$ROOT")
-from_backend=$(mount_path_from "$ROOT/backend")
+# -v <host>:<container>
+mount_host()      { grep -o -- '-v [^ ]*:[^ ]*' <<<"$1" | head -1 | sed 's|^-v ||; s|:[^:]*$||' || true; }
+mount_target()    { grep -o -- '-v [^ ]*:[^ ]*' <<<"$1" | head -1 | sed 's|.*:||'              || true; }
+path_flag()       { grep -o -- '-path [^ ]*'    <<<"$1" | head -1 | sed 's|^-path ||'          || true; }
 
-if [[ -z "$from_root" ]]; then
-  note "could not expand the migrate mount from the repo root — the recipe changed shape"
+root_cmd=$(expand_from "$ROOT")
+backend_cmd=$(expand_from "$ROOT/backend")
+
+from_root=$(mount_host "$root_cmd")
+from_backend=$(mount_host "$backend_cmd")
+
+if [[ -z "$root_cmd" ]]; then
+  note "make -n migrate-up produced nothing from the repo root — the target is gone or does not delegate"
+elif [[ -z "$from_root" ]]; then
+  note "could not find a -v mount in the expanded command — the recipe changed shape: $root_cmd"
+fi
+
+# The mount target and -path must name the SAME directory. They are two
+# independent strings that only happen to agree, so a rename of either alone
+# leaves migrate pointed at an empty path inside a container that mounted the
+# files somewhere else — the same "exit 0, no change" as the original bug, from
+# the other end. Mutation testing found this gap: changing -path alone survived
+# every earlier assertion.
+target=$(mount_target "$root_cmd")
+pflag=$(path_flag "$root_cmd")
+if [[ -z "$pflag" ]]; then
+  note "the expanded command carries no -path flag"
+elif [[ "$target" != "$pflag" ]]; then
+  note "the mount lands at '$target' but migrate reads '$pflag' — it would find no migrations there"
 fi
 if [[ "$from_root" != "$from_backend" ]]; then
   note "entry point decides the migrations directory: root gives '$from_root', backend gives '$from_backend'"

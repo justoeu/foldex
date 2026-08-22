@@ -14,7 +14,20 @@ services:
     # ports:
     #   - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # Mounted at /var/lib/postgresql, NOT at .../data. The postgres 18 image
+      # keeps its cluster in a major-version subdirectory (/var/lib/postgresql/18/…)
+      # and REFUSES TO START when it finds the legacy .../data used as a mount —
+      # it cannot tell "fresh volume in the old layout" from "17 data nobody
+      # pg_upgraded", and starting would silently serve an empty database.
+      #
+      # This file pinned postgres:18 from the initial commit, so `make db-up`
+      # exited 1 on every clean install since day one and no volume in the wild
+      # can hold data in the old layout. Nothing to migrate, which is the only
+      # reason changing the mount point here is safe.
+      #
+      # scripts/test-db-compose-boots.sh boots this file and waits for a
+      # connection, because three months proved that nothing else does.
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-foldex} -d ${POSTGRES_DB:-foldex}"]
       interval: 5s

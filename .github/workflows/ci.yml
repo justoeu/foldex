@@ -131,6 +131,12 @@ jobs:
         run: bash scripts/test-claude-bash-permissions.sh
       - name: nginx access-log credential redaction
         run: bash scripts/test-nginx-access-log.sh
+      - name: the bundled Postgres actually starts
+        # docker-compose.db.yml pinned postgres:18 from the initial commit while
+        # mounting the volume at the pre-18 path, so `make db-up` exited 1 on
+        # every clean install for three months. Only the image can answer this,
+        # and only at runtime — so the guard boots the real file.
+        run: bash scripts/test-db-compose-boots.sh
       - name: make migrate-up mounts the migrations directory
         # `make -C` does not update PWD, so the recipe's $(PWD) resolved to a
         # directory that does not exist and Docker created it empty — the
