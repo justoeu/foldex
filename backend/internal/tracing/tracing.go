@@ -11,6 +11,13 @@
 // slugs (the same reason logsafe.HTTPPath exists for logs), and unbounded
 // span names would also blow up the Tempo metrics-generator cardinality
 // budget that feeds the APM dashboards.
+//
+// Incoming trace context is DISCARDED, not joined: this service is the edge
+// (nothing upstream traces), so a client-supplied traceparent could only
+// choose our trace ids and sampling flags — letting an attacker exclude their
+// own requests from telemetry (sampled=0) or graft spans into a victim's
+// trace. Every request re-originates its trace here. Revisit if a trusted
+// tracing gateway ever fronts this service.
 package tracing
 
 import (
@@ -24,7 +31,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
@@ -35,12 +41,30 @@ const tracerName = "foldex/internal/tracing"
 
 // Config carries what Setup needs. Endpoint accepts the OTLP gRPC endpoint in
 // the standard OTEL_EXPORTER_OTLP_ENDPOINT shapes: "host:4317",
-// "http://host:4317" (plaintext) or "https://host:4317" (TLS).
+// "http://host:4317" (plaintext) or "https://host:4317" (TLS). A trailing
+// slash or path (an OTLP/HTTP habit) is stripped — gRPC targets take none.
 type Config struct {
 	Endpoint       string
 	ServiceName    string
 	ServiceVersion string
 }
+
+// rootServerSampler samples root spans only when they are SERVER spans, and
+// lets children inherit their parent's decision (via ParentBased). Without
+// it, every pool query OUTSIDE a request — the healthz pool.Ping probed by
+// compose every few seconds, the preview/mail/sweeper workers — becomes a
+// one-span orphan trace, forever. Probe noise is skipped at the HTTP layer;
+// this is the same rule at the trace layer.
+type rootServerSampler struct{}
+
+func (rootServerSampler) ShouldSample(p sdktrace.SamplingParameters) sdktrace.SamplingResult {
+	if p.Kind == trace.SpanKindServer {
+		return sdktrace.AlwaysSample().ShouldSample(p)
+	}
+	return sdktrace.NeverSample().ShouldSample(p)
+}
+
+func (rootServerSampler) Description() string { return "RootServerOnly" }
 
 // Setup installs the global OTel tracer provider exporting OTLP/gRPC and
 // returns its shutdown function. An empty endpoint returns (nil, nil): tracing
@@ -62,6 +86,11 @@ func Setup(ctx context.Context, cfg Config) (func(context.Context) error, error)
 		insecure = false
 	case strings.HasPrefix(endpoint, "http://"):
 		endpoint = strings.TrimPrefix(endpoint, "http://")
+	}
+	// "host:4317/" or "host:4317/v1/traces" (an OTLP/HTTP habit) would make
+	// the lazy gRPC dial fail forever with no warning anywhere — strip it.
+	if i := strings.IndexByte(endpoint, '/'); i >= 0 {
+		endpoint = endpoint[:i]
 	}
 
 	opts := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(endpoint)}
@@ -85,18 +114,30 @@ func Setup(ctx context.Context, cfg Config) (func(context.Context) error, error)
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(res),
+		sdktrace.WithSampler(sdktrace.ParentBased(rootServerSampler{})),
 	)
 	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{}, propagation.Baggage{},
-	))
 	return tp.Shutdown, nil
+}
+
+// normMethod collapses any method outside the standard set into "_OTHER"
+// (semconv's normalization) — r.Method is a client-controlled token and the
+// unmatched-route fallback span name would otherwise mint one span name per
+// invented method. Same rule, same reason as metrics.metricMethod.
+func normMethod(m string) string {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+		http.MethodPatch, http.MethodDelete, http.MethodOptions,
+		http.MethodTrace, http.MethodConnect:
+		return m
+	}
+	return "_OTHER"
 }
 
 // Middleware creates one SERVER span per request, named by the chi route
 // pattern resolved AFTER the handler ran (the pattern is only known once
-// routing happened). Incoming W3C traceparent/baggage headers are honoured so
-// spans join the caller's trace.
+// routing happened). Client-supplied trace context is deliberately ignored —
+// see the package comment.
 //
 // /healthz and /metrics are skipped for the same reason metrics.Instrument
 // skips them: probe noise with no diagnostic value.
@@ -107,11 +148,11 @@ func Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		method := normMethod(r.Method)
 		ctx, span := otel.GetTracerProvider().Tracer(tracerName).Start(
-			ctx, "HTTP "+r.Method,
+			r.Context(), "HTTP "+method,
 			trace.WithSpanKind(trace.SpanKindServer),
-			trace.WithAttributes(semconv.HTTPRequestMethodKey.String(r.Method)),
+			trace.WithAttributes(semconv.HTTPRequestMethodKey.String(method)),
 		)
 		defer span.End()
 
@@ -120,7 +161,7 @@ func Middleware(next http.Handler) http.Handler {
 
 		if rctx := chi.RouteContext(ctx); rctx != nil {
 			if pattern := rctx.RoutePattern(); pattern != "" {
-				span.SetName(r.Method + " " + pattern)
+				span.SetName(method + " " + pattern)
 				span.SetAttributes(semconv.HTTPRoute(pattern))
 			}
 		}

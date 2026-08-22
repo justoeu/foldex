@@ -16,8 +16,16 @@ func New(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	}
 	// CLIENT spans per query against the GLOBAL tracer provider: a no-op
 	// unless tracing.Setup installed a real one (OTEL_EXPORTER_OTLP_ENDPOINT
-	// set). Span names are the statement's first keyword, never parameters.
-	cfg.ConnConfig.Tracer = otelpgx.NewTracer(otelpgx.WithTrimSQLInSpanName())
+	// set). Span names are the statement's first keyword, and the full SQL
+	// text attribute is disabled outright — schema, WHERE shapes and any
+	// future string-built statement must not cross the wire to the collector
+	// (which may be plaintext on the LAN). Parameters are never included.
+	// Queries outside a request (healthz Ping, workers) produce no trace at
+	// all: the root sampler only samples SERVER spans (see internal/tracing).
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer(
+		otelpgx.WithTrimSQLInSpanName(),
+		otelpgx.WithDisableSQLStatementInAttributes(),
+	)
 	cfg.MaxConns = 16
 	cfg.MinConns = 1
 	cfg.MaxConnLifetime = 30 * time.Minute
