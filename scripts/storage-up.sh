@@ -30,7 +30,13 @@ compose=(docker compose -f "${STORAGE_FILE:-$ROOT/docker-compose.services.yml}")
 "${compose[@]}" up -d --wait rustfs
 
 "${compose[@]}" up -d rustfs-init
-cid=$("${compose[@]}" ps -q rustfs-init)
+# `ps -q` alone lists only RUNNING containers, and the whole point of this
+# script is a container that finishes. On a fast machine the bootstrap is
+# already gone by the time we ask, and the id came back empty — which read as
+# "did not start", for a bootstrap that had succeeded. It passed locally and
+# failed in CI, which is the honest ordering for a race; scripts/test-storage-up.sh
+# cannot force that timing, so this line is the guard.
+cid=$("${compose[@]}" ps -aq rustfs-init)
 if [[ -z "$cid" ]]; then
   echo "rustfs-init did not start" >&2
   exit 1

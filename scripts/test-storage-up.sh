@@ -68,5 +68,25 @@ else
   [[ "$out" == *"bootstrapping"* ]] || { echo "FAIL failure path did not surface the container log" >&2; fail=1; }
 fi
 
+docker compose -f "$FIXTURE" -p "$PROJECT" down -v --remove-orphans >/dev/null 2>&1 || true
+
+# Running it twice must still succeed — re-running `make up` is ordinary.
+#
+# This case does NOT reproduce the `ps -q` race that CI caught, and an earlier
+# comment here claimed it did: the second `up -d` restarts the exited one-shot,
+# so the id is findable again either way. That race is a genuine race, only
+# visible on a machine fast enough to finish the bootstrap before the script
+# looks, and no assertion here forces that ordering. What guards it is `ps -aq`
+# in storage-up.sh plus the CI run that failed on it; saying otherwise would be
+# a test whose comment is stronger than the test.
+write_fixture 0
+run_it >/dev/null || { echo "FAIL first run failed" >&2; fail=1; }
+if out=$(run_it); then
+  [[ "$out" == *"object store ready"* ]] || { echo "FAIL second run said: $out" >&2; fail=1; }
+else
+  echo "FAIL an already-finished bootstrap was reported as not started: $out" >&2
+  fail=1
+fi
+
 [[ $fail -eq 0 ]] || exit 1
-echo "storage-up reports a finished bootstrap as success and a failed one as failure"
+echo "storage-up judges a finished bootstrap by its exit code, before and after it exits"
