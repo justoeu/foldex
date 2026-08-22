@@ -205,6 +205,16 @@ Layered, defense-in-depth tooling — all **informational** today (they surface 
 | **SCA** | govulncheck + `bun audit` | `.github/workflows/ci.yml` | PR |
 | **Deps** | Dependabot (gomod · docker ×2 · actions) | `.github/dependabot.yml` | weekly PRs |
 
+Two contracts are hard gates rather than informational, because a linter cannot see either
+one. `scripts/test-nginx-headers.sh` boots the real nginx config and makes the
+requests, asserting that HSTS, X-Frame-Options, X-Content-Type-Options,
+Referrer-Policy, Permissions-Policy and the CSP reach **every** response — nginx
+discards every inherited `add_header` the moment a `location` declares one of
+its own, and that had already shipped: the SPA's own document went out with none
+of the six while its JavaScript carried all of them, which is precisely
+backwards. `scripts/test-nginx-access-log.sh` asserts the access log never
+records a query string.
+
 SAST findings land in the repo **Security ▸ Code scanning** tab (SARIF upload). The DAST job builds the stack from source via `docker compose --build`, waits for `/healthz`, runs the ZAP baseline against nginx over the shared `foldex` network, and uploads the HTML/MD/JSON report as a 30-day artifact. Run it on demand from the **Actions** tab → *dast* → *Run workflow*.
 
 ## Smoke test (sanity check after `make up`)

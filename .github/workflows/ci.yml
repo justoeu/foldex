@@ -131,6 +131,13 @@ jobs:
         run: bash scripts/test-claude-bash-permissions.sh
       - name: nginx access-log credential redaction
         run: bash scripts/test-nginx-access-log.sh
+      - name: nginx security headers survive on every response
+        # Boots the real config and makes the requests. Reading the file is not
+        # enough: nginx drops every inherited add_header the moment a location
+        # declares one of its own, and that had already shipped — the SPA's own
+        # document went out with none of the six while /assets/*.js carried all
+        # of them.
+        run: bash scripts/test-nginx-headers.sh
       - name: bun audit (informational)
         working-directory: web
         # CVE scan for npm packages. Same informational-only contract as

@@ -183,6 +183,16 @@ Ferramentas em camadas (defense-in-depth) — todas **informativas** hoje (mostr
 | **SCA** | govulncheck + `bun audit` | `.github/workflows/ci.yml` | PR |
 | **Deps** | Dependabot (gomod · docker ×2 · actions) | `.github/dependabot.yml` | PRs semanais |
 
+Dois contratos são gate duro, e não informativos, porque nenhum linter enxerga
+os dois. O `scripts/test-nginx-headers.sh` sobe a config real do nginx e faz as
+requisições, exigindo que HSTS, X-Frame-Options, X-Content-Type-Options,
+Referrer-Policy, Permissions-Policy e o CSP cheguem a **toda** resposta — o nginx
+descarta todo `add_header` herdado no instante em que um `location` declara um
+próprio, e isso já estava em produção: o documento da própria SPA saía sem
+nenhum dos seis enquanto o JavaScript dela carregava todos, exatamente ao
+contrário. O `scripts/test-nginx-access-log.sh` exige que o log de acesso nunca
+registre query string.
+
 Os achados de SAST aparecem na aba **Security ▸ Code scanning** do repositório (upload SARIF). O job de DAST builda a stack do código via `docker compose --build`, espera o `/healthz`, roda o ZAP baseline contra o nginx pela rede compartilhada `foldex` e sobe o relatório HTML/MD/JSON como artefato de 30 dias. Rode sob demanda em **Actions** → *dast* → *Run workflow*.
 
 ## Smoke test (sanity check depois de `make up`)
