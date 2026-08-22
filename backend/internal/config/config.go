@@ -84,6 +84,13 @@ type Config struct {
 	PreviewTimeoutSec  int
 	CORSOrigins        []string
 
+	// MetricsToken protects GET /metrics (Prometheus scrape). Empty disables
+	// the endpoint (503) — metrics expose route shapes, traffic volume and
+	// pool sizing, which is reconnaissance material on a multi-tenant
+	// instance, so there is no unauthenticated mode. The scraper sends the
+	// same value as `Authorization: Bearer <token>`.
+	MetricsToken string
+
 	// AuthEnabled turns on the multi-user authentication stack (ADR-30).
 	//
 	// Defaults to TRUE since PR4. On an upgraded install the first visit lands
@@ -206,6 +213,7 @@ func Load() (Config, error) {
 		PreviewConcurrency: envInt("PREVIEW_WORKER_CONCURRENCY", 4),
 		PreviewTimeoutSec:  envInt("PREVIEW_FETCH_TIMEOUT_SEC", 5),
 		CORSOrigins:        splitCSV(envOr("CORS_ORIGINS", "*")),
+		MetricsToken:       os.Getenv("METRICS_TOKEN"),
 		AuthEnabled:        envBool("AUTH_ENABLED", true),
 		AuthPublicURL:      envOr("AUTH_PUBLIC_URL", "http://localhost:9088"),
 		AuthCookieDomain:   os.Getenv("AUTH_COOKIE_DOMAIN"),
