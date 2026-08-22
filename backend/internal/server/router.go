@@ -35,6 +35,7 @@ import (
 	"foldex/internal/settings"
 	"foldex/internal/stats"
 	"foldex/internal/tags"
+	"foldex/internal/tracing"
 )
 
 // Body size ceilings for defaultBodyLimit middleware. net/http.Server has no
@@ -92,6 +93,13 @@ type Deps struct {
 	// keeps both off — the zero-value Deps used across router tests.
 	Metrics *metrics.Metrics
 
+	// Trace is the distributed-tracing middleware (tracing.Middleware) —
+	// mounted before Metrics so the span covers the whole request and the
+	// request logger can stamp trace_id. Nil (the default, and every test's
+	// zero-value Deps) keeps tracing off; main only sets it when
+	// OTEL_EXPORTER_OTLP_ENDPOINT is configured.
+	Trace func(http.Handler) http.Handler
+
 	// FolderUnlockKey is the HMAC secret for folder-password unlock tokens
 	// (see folders.LoadOrGenerateFolderUnlockKey) — shared between the
 	// folders handler (mints tokens, gates list(parent_id=X)) and the links,
@@ -130,6 +138,9 @@ func New(d Deps) http.Handler {
 	}
 	r.Use(trustedProxyRealIP(trustedNets))
 	r.Use(middleware.RequestID)
+	if d.Trace != nil {
+		r.Use(d.Trace)
+	}
 	if d.Metrics != nil {
 		// Before Recoverer so a recovered panic is still counted as the 500 it
 		// answered; skips /metrics and /healthz internally.
@@ -476,13 +487,19 @@ func slogRequest(logger *slog.Logger) func(http.Handler) http.Handler {
 			start := time.Now()
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			next.ServeHTTP(ww, r)
-			logger.Info("http",
+			attrs := []any{
 				"method", r.Method,
 				"path_class", logsafe.HTTPPath(r.URL.Path),
 				"status", ww.Status(),
 				"bytes", ww.BytesWritten(),
 				"dur_ms", time.Since(start).Milliseconds(),
-			)
+			}
+			// trace_id is the Loki→Tempo link in Grafana (derived field).
+			// Present only when tracing is on and the span is valid.
+			if tid := tracing.TraceID(r.Context()); tid != "" {
+				attrs = append(attrs, "trace_id", tid)
+			}
+			logger.Info("http", attrs...)
 		})
 	}
 }

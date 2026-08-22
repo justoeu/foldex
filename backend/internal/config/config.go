@@ -91,6 +91,12 @@ type Config struct {
 	// same value as `Authorization: Bearer <token>`.
 	MetricsToken string
 
+	// OTelEndpoint is the OTLP gRPC endpoint distributed traces are exported
+	// to (standard OTEL_EXPORTER_OTLP_ENDPOINT: "host:4317" or with an
+	// http/https scheme). Empty keeps tracing fully disabled — no provider,
+	// no exporter, no per-request spans. See internal/tracing.
+	OTelEndpoint string
+
 	// AuthEnabled turns on the multi-user authentication stack (ADR-30).
 	//
 	// Defaults to TRUE since PR4. On an upgraded install the first visit lands
@@ -214,6 +220,7 @@ func Load() (Config, error) {
 		PreviewTimeoutSec:  envInt("PREVIEW_FETCH_TIMEOUT_SEC", 5),
 		CORSOrigins:        splitCSV(envOr("CORS_ORIGINS", "*")),
 		MetricsToken:       os.Getenv("METRICS_TOKEN"),
+		OTelEndpoint:       os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		AuthEnabled:        envBool("AUTH_ENABLED", true),
 		AuthPublicURL:      envOr("AUTH_PUBLIC_URL", "http://localhost:9088"),
 		AuthCookieDomain:   os.Getenv("AUTH_COOKIE_DOMAIN"),

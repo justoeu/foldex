@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -13,6 +14,10 @@ func New(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
 	}
+	// CLIENT spans per query against the GLOBAL tracer provider: a no-op
+	// unless tracing.Setup installed a real one (OTEL_EXPORTER_OTLP_ENDPOINT
+	// set). Span names are the statement's first keyword, never parameters.
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer(otelpgx.WithTrimSQLInSpanName())
 	cfg.MaxConns = 16
 	cfg.MinConns = 1
 	cfg.MaxConnLifetime = 30 * time.Minute

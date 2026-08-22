@@ -1114,6 +1114,20 @@ O backend passa a expor `GET /metrics` (pacote `internal/metrics`): contadores e
 
 `/metrics` responde `http.Error` em texto plano, não o envelope JSON do §7 — desvio deliberado: o consumidor é o Prometheus, e `healthz` já é igualmente ad-hoc.
 
+### ADR-39 — Tracing distribuído OpenTelemetry opt-in por env, com nomes de span imunes a cardinalidade
+
+**Contexto.** A stack de observabilidade central (app-deployments/observability) ganhou visão APM alimentada pelo metrics-generator do Tempo — mas só apps que EMITEM traces OTLP aparecem lá. O backend expunha métricas (ADR-38) e logs, porém nenhum trace: sem spans não há service graph, nem correlação log↔trace, nem RED por endpoint derivado de traces.
+
+**Decisão.** Pacote `internal/tracing` com três peças, todas opt-in por `OTEL_EXPORTER_OTLP_ENDPOINT` (vazio = provider global fica o no-op do OTel; nenhum exporter, buffer ou goroutine):
+
+1. **`Setup`** instala o tracer provider global exportando OTLP/gRPC (esquema `http://` = plaintext, `https://` = TLS). A conexão gRPC é lazy e falha de setup vira `Warn`, nunca fatal — telemetria fora do ar não derruba a aplicação. `Setup` roda ANTES de `db.New`, porque o tracer do pgx resolve o provider por query.
+2. **`Middleware`** cria um span SERVER por request, nomeado pelo PADRÃO de rota do chi resolvido DEPOIS do handler (`GET /api/links/{id}`) — mesma regra anti-cardinalidade/anti-vazamento do ADR-38: URL crua com ids/slugs nunca vira nome ou atributo de span (testado por asserção negativa). 5xx marca status Error; 4xx não (problema do cliente). `/healthz` e `/metrics` não geram span. `traceparent`/`baggage` W3C de entrada são honrados.
+3. **Correlação**: `slogRequest` acrescenta `trace_id` à linha de acesso quando há span válido (elo do derived field Loki→Tempo no Grafana), e `db.New` instala `otelpgx` — spans CLIENT por query (nome = primeira palavra-chave do SQL, sem parâmetros) que desenham a aresta backend→Postgres no service graph.
+
+O middleware monta via `Deps.Trace` (nil = off, o zero-value de todos os testes de router) — espelho exato do padrão `Deps.Metrics`.
+
+**Consequências.** Com a env apontada para o Tempo da stack central, o backend aparece no APM Overview (RED por rota), no service graph (incluindo a aresta para o Postgres) e cada linha de log de acesso vira porta de entrada para o trace correspondente. Sem a env, o custo por request são dois lookups de contexto no no-op. O mailer segue sem traces — consumidor AMQP sem request HTTP; instrumentá-lo é trabalho futuro se a fila de mail precisar de spans.
+
 ## Future considerations
 
 - ~~**Auth + multi-user.**~~ → em execução: ADR-30/31/32 + [`docs/SDD-AUTH-RBAC.md`](SDD-AUTH-RBAC.md).
