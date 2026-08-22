@@ -1,6 +1,7 @@
 {
   "invite": {
     "subject": "You have been invited to Foldex",
+    "eyebrow": "Invitation",
     "heading": "You have been invited{{if .By}} by {{.By}}{{end}} to Foldex.",
     "body": [
       "Open the link below to choose a password and activate your account."
@@ -10,6 +11,7 @@
   },
   "password_reset": {
     "subject": "Reset your Foldex password",
+    "eyebrow": "Password",
     "heading": "Someone asked to reset the password for your Foldex account.",
     "body": [
       "Open the link below to choose a new password."
@@ -19,6 +21,7 @@
   },
   "reset_unavailable": {
     "subject": "Reset your Foldex password",
+    "eyebrow": "Password",
     "heading": "Someone asked to reset the password for your Foldex account.",
     "body": [
       "This account signs in with Google, so it has no password to reset.",
@@ -28,21 +31,25 @@
   },
   "login_code": {
     "subject": "Foldex sign-in code: {{.Code}}",
+    "eyebrow": "Sign-in code",
     "heading": "Your Foldex sign-in code",
     "footnote": "It expires in {{.ExpiresMinutes}} minutes and can be used once. If you are not signing in right now, someone may know your password — change it."
   },
   "enroll_email_2fa": {
     "subject": "Foldex two-factor code: {{.Code}}",
+    "eyebrow": "Two-factor",
     "heading": "Confirm this address as your second factor.",
     "footnote": "It expires in {{.ExpiresMinutes}} minutes and can be used once. If you did not ask to add e-mail as a second factor, ignore this message — nothing changes until the code is entered."
   },
   "step_up_code": {
     "subject": "Foldex security code: {{.Code}}",
+    "eyebrow": "Security code",
     "heading": "Confirm a change to your security settings.",
     "footnote": "It expires in {{.ExpiresMinutes}} minutes and can be used once. If you did not start this change, do not enter the code — someone may be signed in to your account. Change your password and sign out everywhere."
   },
   "verify_email": {
     "subject": "Confirm your Foldex e-mail",
+    "eyebrow": "Confirmation",
     "heading": "Confirm this address for your Foldex account.",
     "body": [
       "Open the link below to finish confirming your e-mail address."
@@ -52,6 +59,7 @@
   },
   "admin_recovery": {
     "subject": "Account recovery was requested for your Foldex account",
+    "eyebrow": "Recovery",
     "heading": "An administrator started account recovery for your Foldex account.",
     "body": [
       "Open the link below to choose your own new password. Nobody else gets to see it."
@@ -61,6 +69,7 @@
   },
   "session_revoked": {
     "subject": "Your Foldex sessions were signed out",
+    "eyebrow": "Security alert",
     "heading": "Your Foldex sessions were signed out.",
     "body": [
       "A session token for your Foldex account was replayed, which usually means it was copied from your device.",
@@ -70,6 +79,7 @@
   },
   "recovery_code_used": {
     "subject": "A Foldex recovery code was used",
+    "eyebrow": "Security",
     "heading": "A recovery code was just used to sign in to your Foldex account.",
     "body": [
       "You have {{.Remaining}} recovery codes left."
@@ -78,10 +88,16 @@
   },
   "account_converted": {
     "subject": "Your Foldex account now uses Google sign-in",
+    "eyebrow": "Account",
     "heading": "Your Foldex account now signs in with Google ({{.GoogleEmail}}).",
     "body": [
       "Its password has been removed, and every other session was signed out."
     ],
     "footnote": "If this was not you, contact your Foldex administrator immediately: whoever did this knew your password, and password reset no longer applies to this account."
+  },
+  "_footer": {
+    "body": [
+      "Automated message from your Foldex. Please do not reply to this address."
+    ]
   }
 }

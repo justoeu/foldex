@@ -448,6 +448,20 @@ rendered when they are sent, in English, Portuguese or Spanish, following the
 whoever triggered the send, then English. An invitation is the one message that
 cannot follow a preference, because the invitee has no account yet.
 
+Each kind of message has its **own layout**, not one template with optional
+fields. Three shapes, and they came from the content rather than from a taste
+for symmetry: messages that send you somewhere lead with a button and then spell
+the URL out, so you can read the host before clicking and the mail still works
+in a client that refuses to render buttons; messages that carry a one-time code
+put the **digits first**, above the prose, because a sign-in code is read and
+retyped in about ten seconds; and messages that only inform you carry no button
+slot at all. That last one is a safety property, not a style: the two messages
+that must never contain a link — "your sessions were signed out" and "this
+account signs in with Google" — now cannot be given one, because neither the HTML
+nor the plain-text version has anywhere to put it. Getting that right on only
+one of the two would have been worse than not trying: the message would still
+have said "this mail contains no link" directly above one.
+
 **Language.** Each account picks its own in *Settings → Profile*, next to the
 display name. Leaving it on *Follow my browser* is a real choice, not an absent
 one: it keeps the current behaviour, where the language is guessed per request.

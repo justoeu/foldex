@@ -7,10 +7,18 @@ import (
 	"fmt"
 	htmltemplate "html/template"
 	"io/fs"
+	"path"
+	"slices"
 	"strings"
 	texttemplate "text/template"
 )
 
+// The glob form, and no file here may start with `_`. The directory form
+// (`//go:embed templates`) silently EXCLUDES names beginning with `_` or `.`,
+// so a chrome file called `_chrome.html.tmpl` would vanish the day someone
+// simplified this line — taking every message with it, since they all compose
+// its blocks. Naming it `chrome` costs nothing and removes the trap.
+//
 //go:embed templates/*.tmpl templates/*.json
 var templatesFS embed.FS
 
@@ -79,7 +87,11 @@ const (
 // is how a count or an address reaches the middle of a sentence in any
 // language's word order.
 type messageStrings struct {
-	Subject  string   `json:"subject"`
+	Subject string `json:"subject"`
+	// Eyebrow is the small tinted label naming the KIND of message. It is copy,
+	// so it lives here: a label hardcoded in a template would ship one
+	// language's word to every reader.
+	Eyebrow  string   `json:"eyebrow"`
 	Heading  string   `json:"heading"`
 	Body     []string `json:"body"`
 	Action   string   `json:"action"`
@@ -136,6 +148,7 @@ func (c copyText) render(params map[string]string) (string, error) {
 // actually consumes.
 type compiledMessage struct {
 	subject  copyText
+	eyebrow  copyText
 	heading  copyText
 	body     []copyText
 	action   copyText
@@ -146,6 +159,9 @@ func compileMessage(ms messageStrings) (compiledMessage, error) {
 	var out compiledMessage
 	var err error
 	if out.subject, err = compileCopy(ms.Subject); err != nil {
+		return out, err
+	}
+	if out.eyebrow, err = compileCopy(ms.Eyebrow); err != nil {
 		return out, err
 	}
 	if out.heading, err = compileCopy(ms.Heading); err != nil {
@@ -172,13 +188,32 @@ func compileMessage(ms messageStrings) (compiledMessage, error) {
 // the HTML one.
 type mailDoc struct {
 	Locale    string
+	Eyebrow   string
 	Heading   string
 	Body      []string
 	Code      string
 	Action    string
 	ActionURL string
 	Footnote  string
+	// Footer is the shared sign-off, resolved from the reserved catalogue key
+	// footerKey. It is not per message — duplicating it across eleven entries
+	// in three locales would be thirty-three places to fix one typo.
+	Footer string
 }
+
+// footerKey is a reserved catalogue entry rather than a template name.
+const footerKey = "_footer"
+
+// isReservedKey answers "is this catalogue entry copy rather than a message?".
+//
+// It exists because the same question was being answered two different ways —
+// the parity check compared against footerKey exactly while TemplateNames
+// matched the `_` prefix — and the two only agree while `_footer` is the sole
+// reserved key. Adding a second one (`_header`, `_signature`: exactly the kind
+// of shared copy the footer precedent invites) made the parity check demand
+// `_header.html.tmpl`, and since the assets load into a package-level var that
+// is a panic at init. A copy addition must not refuse the binary.
+func isReservedKey(name string) bool { return strings.HasPrefix(name, "_") }
 
 type assets struct {
 	catalogs map[string]map[string]compiledMessage
@@ -199,11 +234,15 @@ func mustLoadAssets(fsys fs.FS) *assets {
 }
 
 func loadAssets(fsys fs.FS) (*assets, error) {
-	html, err := htmltemplate.ParseFS(fsys, "templates/layout.html.tmpl")
+	// Every *.html.tmpl at once: _chrome defines the shared blocks and each
+	// message defines itself, so the set resolves as one namespace and
+	// ExecuteTemplate can select by template name.
+	html, err := htmltemplate.New("mail").Funcs(htmltemplate.FuncMap{"dict": dict}).
+		ParseFS(fsys, "templates/*.html.tmpl")
 	if err != nil {
-		return nil, fmt.Errorf("parse html layout: %w", err)
+		return nil, fmt.Errorf("parse html layouts: %w", err)
 	}
-	text, err := texttemplate.ParseFS(fsys, "templates/layout.txt.tmpl")
+	text, err := texttemplate.ParseFS(fsys, "templates/*.txt.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("parse text layout: %w", err)
 	}
@@ -235,12 +274,119 @@ func loadAssets(fsys fs.FS) (*assets, error) {
 	if _, ok := catalogs[DefaultLocale]; !ok {
 		return nil, fmt.Errorf("catalogue for the default locale %q is missing", DefaultLocale)
 	}
+	// A layout must not redefine a shared block, and that is checked here
+	// because nothing else can catch it.
+	//
+	// text/template's Parse silently REPLACES an existing definition, and
+	// ParseFS walks the glob in sorted order — so a `{{define "chrome.button"}}`
+	// pasted into any file sorting after chrome.html.tmpl rewrites that block
+	// for all eleven messages. Observed blast radius when tried: the password
+	// reset rendered with no anchor at all, and the whole suite stayed green.
+	// The credential exists in that mail and nowhere else, so the reader is
+	// locked out until a cooldown expires. Copy-pasting a sibling is the single
+	// most likely way a twelfth message gets added, which is exactly when this
+	// fires.
+	//
+	// The parity check below cannot see it: Lookup still resolves the name.
+	if err := refuseDuplicateDefinitions(fsys); err != nil {
+		return nil, err
+	}
+	// Copy and layout must agree, and this is checked at LOAD rather than at
+	// send. The assets are embedded, so a mismatch is never a runtime
+	// condition — it is a binary that shipped wrong, and the failure belongs
+	// where a developer sees it instead of in a queued password reset that
+	// fails to render at three in the morning.
+	for name := range catalogs[DefaultLocale] {
+		if isReservedKey(name) {
+			continue
+		}
+		if html.Lookup(name) == nil {
+			return nil, fmt.Errorf("message %q has copy but no HTML layout "+
+				"(add templates/%s.html.tmpl)", name, name)
+		}
+		// BOTH arms, for the same reason the check exists at all: a message
+		// with no text layout used to render an empty text part, and `render`
+		// only emits multipart/alternative when both arms exist — so the
+		// message would silently go out HTML-only, to an audience that
+		// self-hosts and disproportionately refuses HTML.
+		if text.Lookup("text."+name) == nil {
+			return nil, fmt.Errorf("message %q has copy but no text layout "+
+				"(add a text.%s definition to templates/layout.txt.tmpl)", name, name)
+		}
+	}
 	return &assets{catalogs: catalogs, html: html, text: text}, nil
+}
+
+// refuseDuplicateDefinitions fails when two files define the same template name.
+//
+// Each file is parsed ALONE into a throwaway template so its definitions can be
+// attributed to it; parsing them together is what hides the collision in the
+// first place.
+func refuseDuplicateDefinitions(fsys fs.FS) error {
+	files, err := fs.Glob(fsys, "templates/*.html.tmpl")
+	if err != nil {
+		return fmt.Errorf("glob layouts: %w", err)
+	}
+	slices.Sort(files)
+	owner := make(map[string]string, len(files)*2)
+	for _, f := range files {
+		base := path.Base(f)
+		t, perr := htmltemplate.New(base).Funcs(htmltemplate.FuncMap{"dict": dict}).ParseFS(fsys, f)
+		if perr != nil {
+			return fmt.Errorf("parse %s: %w", f, perr)
+		}
+		for _, sub := range t.Templates() {
+			name := sub.Name()
+			// The implicit template named after the file is not a definition.
+			if name == base {
+				continue
+			}
+			if prev, dup := owner[name]; dup {
+				return fmt.Errorf("template %q is defined in both %s and %s; "+
+					"a redefinition silently replaces the original for every message", name, prev, f)
+			}
+			owner[name] = f
+		}
+	}
+	return nil
+}
+
+// dict builds a map inside a template, which is how the chrome blocks receive
+// more than one value — Go templates pass a single argument, and the button
+// needs a URL, a label and the accent colour of the message calling it.
+func dict(kv ...any) (map[string]any, error) {
+	if len(kv)%2 != 0 {
+		return nil, errors.New("mailer: dict needs an even number of arguments")
+	}
+	m := make(map[string]any, len(kv)/2)
+	for i := 0; i < len(kv); i += 2 {
+		k, ok := kv[i].(string)
+		if !ok {
+			return nil, fmt.Errorf("mailer: dict key %v is not a string", kv[i])
+		}
+		m[k] = kv[i+1]
+	}
+	return m, nil
 }
 
 // Render turns an Envelope into a Message in the recipient's locale.
 func Render(env Envelope, locale string) (Message, error) {
 	return std.render(env, locale)
+}
+
+// TemplateNames lists every message the default catalogue defines, skipping the
+// reserved non-message keys. It exists so a test can walk the real set rather
+// than a hand-maintained list that drifts the first time a message is added.
+func TemplateNames() []string {
+	out := make([]string, 0, len(std.catalogs[DefaultLocale]))
+	for name := range std.catalogs[DefaultLocale] {
+		if isReservedKey(name) {
+			continue
+		}
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // SupportedLocales lists the catalogues that shipped, sorted for stable output.
@@ -249,12 +395,7 @@ func SupportedLocales() []string {
 	for l := range std.catalogs {
 		out = append(out, l)
 	}
-	// Small, fixed-size list; an insertion sort keeps this dependency-free.
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j] < out[j-1]; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	slices.Sort(out)
 	return out
 }
 
@@ -298,6 +439,18 @@ func (a *assets) render(env Envelope, locale string) (Message, error) {
 		Code:      env.Params[ParamCode],
 		ActionURL: env.Params[ParamActionURL],
 	}
+	// The footer resolves through the same per-message locale fallback, and an
+	// absent entry simply renders no footer — a locale that has not been given
+	// the sign-off yet degrades to a message without one, never to a broken
+	// render.
+	if f, ferr := a.strings(footerKey, locale); ferr == nil && len(f.body) > 0 {
+		if doc.Footer, err = f.body[0].render(env.Params); err != nil {
+			return Message{}, err
+		}
+	}
+	if doc.Eyebrow, err = ms.eyebrow.render(env.Params); err != nil {
+		return Message{}, err
+	}
 	subject, err := ms.subject.render(env.Params)
 	if err != nil {
 		return Message{}, err
@@ -322,10 +475,11 @@ func (a *assets) render(env Envelope, locale string) (Message, error) {
 	}
 
 	var htmlOut, textOut strings.Builder
-	if err := a.html.Execute(&htmlOut, doc); err != nil {
+	// ExecuteTemplate, not Execute: each message owns its layout now.
+	if err := a.html.ExecuteTemplate(&htmlOut, env.Template, doc); err != nil {
 		return Message{}, fmt.Errorf("mailer: render html %q: %w", env.Template, err)
 	}
-	if err := a.text.Execute(&textOut, doc); err != nil {
+	if err := a.text.ExecuteTemplate(&textOut, "text."+env.Template, doc); err != nil {
 		return Message{}, fmt.Errorf("mailer: render text %q: %w", env.Template, err)
 	}
 	return Message{

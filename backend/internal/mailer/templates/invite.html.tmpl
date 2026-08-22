@@ -1,0 +1,9 @@
+{{- /*
+Emerald: the only message whose reader has no account yet, so it opens a door
+rather than reporting on one. Action shape — the invitation IS the link, and the
+URL is spelled out below the button because there is no session to fall back on
+if the button does not render.
+*/ -}}
+{{- define "invite" -}}
+{{- template "chrome.shape_action" (dict "Doc" . "Accent" "#0f9d76" "Tint" "#e9f7f2") -}}
+{{- end -}}

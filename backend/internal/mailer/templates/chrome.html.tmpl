@@ -1,0 +1,197 @@
+{{- /*
+Shared chrome for every message.
+
+The filename carries no leading underscore on purpose: the directory form of
+//go:embed drops `_`-prefixed files, and every one of the eleven layouts
+composes the blocks defined here.
+
+The layouts are now PER MESSAGE — a reset, a sign-in code and a revoked-session
+alert are different documents, not one document with three optional slots — but
+the parts that carry no meaning of their own live here. A rendering quirk in
+Outlook, or a change to the footer, is one edit rather than eleven. The font
+stack is NOT: e-mail forbids a stylesheet, so it is inlined eight times inside
+this file and there is no honest way around that.
+
+Every block here is namespaced `chrome.`, and that is load-bearing rather than
+tidy. The parity check resolves a message by Lookup(name) in this same
+namespace, so an unprefixed block called `body` or `heading` would let a future
+message of that name pass the check and then render a bare <tr> fragment as the
+entire e-mail.
+
+Styles are INLINE, and that is not a preference. A <style> block is stripped by
+several web clients, so a stylesheet would look correct in exactly the client it
+was written in. `color-scheme: light only` is the one head-level declaration
+kept, because it stops a dark-mode client from auto-inverting the palette into
+something nobody chose.
+
+The palette stays a muted neutral, deliberately: a transactional mail dressed as
+the product is a transactional mail that resembles the phishing copy of the
+product. Accents differentiate the MESSAGE (indigo for routine, amber for
+administrative, red for alert) rather than advertising the brand.
+
+Every value is escaped by html/template in its own context; the copy is executed
+against the params before arriving here, so an address containing `<` cannot
+break out of its element, and `.ActionURL` sits in a URL context — which is also
+what neutralises a `javascript:` scheme if one ever reached it.
+*/ -}}
+
+{{- define "chrome.open" -}}
+<!doctype html>
+<html lang="{{ .Locale }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light only">
+</head>
+<body style="margin:0;padding:0;background:#eef0f4;-webkit-font-smoothing:antialiased">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">{{ .Heading }}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#eef0f4">
+<tr><td align="center" style="padding:32px 12px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:544px;background:#ffffff;border-radius:16px;box-shadow:0 1px 2px rgba(16,20,40,.06),0 8px 28px rgba(16,20,40,.06)">
+{{- end -}}
+
+{{- /* accentbar paints the 3px strip that tells the messages apart at a glance. */ -}}
+{{- define "chrome.accentbar" -}}
+<tr><td style="height:3px;line-height:3px;font-size:0;background:{{ . }};border-radius:16px 16px 0 0">&nbsp;</td></tr>
+{{- end -}}
+
+{{- define "chrome.brand" -}}
+<tr><td style="padding:26px 34px 0">
+<span style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;color:#8b90a3">Foldex</span>
+</td></tr>
+{{- end -}}
+
+{{- /* eyebrow is a small tinted label naming the KIND of message. */ -}}
+{{- define "chrome.eyebrow" -}}
+<tr><td style="padding:18px 34px 0">
+<span style="display:inline-block;padding:5px 10px;border-radius:999px;background:{{ .Tint }};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:{{ .Color }}">{{ .Label }}</span>
+</td></tr>
+{{- end -}}
+
+{{- define "chrome.heading" -}}
+<tr><td style="padding:14px 34px 0">
+<h1 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:22px;line-height:1.35;font-weight:650;letter-spacing:-.2px;color:#171a24">{{ .Heading }}</h1>
+</td></tr>
+{{- end -}}
+
+{{- define "chrome.body" -}}
+{{- range .Body }}
+<tr><td style="padding:14px 34px 0">
+<p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.65;color:#454b5e">{{ . }}</p>
+</td></tr>
+{{- end }}
+{{- end -}}
+
+{{- /* button takes the accent colour so each message can carry its own. */ -}}
+{{- define "chrome.button" -}}
+<tr><td style="padding:26px 34px 0">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+<td style="border-radius:10px;background:{{ .Color }}">
+<a href="{{ .URL }}" style="display:inline-block;padding:13px 26px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:650;line-height:1;color:#ffffff;text-decoration:none">{{ .Label }}</a>
+</td></tr></table>
+</td></tr>
+{{- end -}}
+
+{{- /* urlbox renders the destination as selectable text in its own container.
+       It is not decoration: it is what lets someone read the host before
+       clicking, and a client that refuses to render the button still leaves a
+       usable message. */ -}}
+{{- define "chrome.urlbox" -}}
+<tr><td style="padding:16px 34px 0">
+<div style="padding:12px 14px;border:1px solid #e6e8ef;border-radius:10px;background:#fafbfc;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.6;color:#6b7186;word-break:break-all">{{ . }}</div>
+</td></tr>
+{{- end -}}
+
+{{- /* codeblock is the hero of the one-time-code messages: the digits are what
+       the reader came for, so they lead rather than following a paragraph. */ -}}
+{{- define "chrome.codeblock" -}}
+<tr><td style="padding:24px 34px 0">
+<div style="padding:22px 12px;border:1px solid #e6e8ef;border-radius:12px;background:#fafbfc;text-align:center">
+<div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:34px;line-height:1;font-weight:700;letter-spacing:10px;text-indent:10px;color:#171a24">{{ . }}</div>
+</div>
+</td></tr>
+{{- end -}}
+
+{{- define "chrome.footnote" -}}
+<tr><td style="padding:26px 34px 0">
+<div style="padding-top:18px;border-top:1px solid #eceef3">
+<p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.65;color:#858ba0">{{ . }}</p>
+</div>
+</td></tr>
+{{- end -}}
+
+{{- define "chrome.close" -}}
+<tr><td style="height:30px;line-height:30px;font-size:0">&nbsp;</td></tr>
+</table>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:544px">
+{{- with .Footer }}
+<tr><td align="center" style="padding:18px 24px 0">
+<p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:1.6;color:#9aa0b2">{{ . }}</p>
+</td></tr>
+{{- end }}
+</table>
+</td></tr>
+</table>
+</body>
+</html>
+{{- end -}}
+
+{{- /*
+The three shapes, expressed once.
+
+Each message still owns a file — that is what lets any of them diverge without
+touching a sibling — but a file that delegates here carries no duplicate of a
+structure it shares. Three of them were byte-identical before this existed,
+which is where "a layout per message" has stopped meaning anything.
+
+Accent and tint are DATA, not structure: indigo spans all three shapes, and the
+five accents divide the eleven messages along a different axis than the shapes
+do. They arrive in a dict; the document itself is .Doc.
+
+To diverge, a message stops calling its shape and composes the blocks above
+directly. Nothing here has to be extended first.
+*/ -}}
+
+{{- define "chrome.shape_action" -}}
+{{- template "chrome.open" .Doc }}
+{{- template "chrome.accentbar" .Accent }}
+{{- template "chrome.brand" .Doc }}
+{{- with .Doc.Eyebrow }}{{ template "chrome.eyebrow" (dict "Label" . "Color" $.Accent "Tint" $.Tint) }}{{ end }}
+{{- template "chrome.heading" .Doc }}
+{{- template "chrome.body" .Doc }}
+{{- with .Doc.ActionURL }}
+{{ template "chrome.button" (dict "URL" . "Label" $.Doc.Action "Color" $.Accent) }}
+{{ template "chrome.urlbox" . }}
+{{- end }}
+{{- with .Doc.Footnote }}{{ template "chrome.footnote" . }}{{ end }}
+{{- template "chrome.close" .Doc }}
+{{- end -}}
+
+{{- define "chrome.shape_code" -}}
+{{- template "chrome.open" .Doc }}
+{{- template "chrome.accentbar" .Accent }}
+{{- template "chrome.brand" .Doc }}
+{{- with .Doc.Eyebrow }}{{ template "chrome.eyebrow" (dict "Label" . "Color" $.Accent "Tint" $.Tint) }}{{ end }}
+{{- template "chrome.heading" .Doc }}
+{{- with .Doc.Code }}{{ template "chrome.codeblock" . }}{{ end }}
+{{- template "chrome.body" .Doc }}
+{{- with .Doc.Footnote }}{{ template "chrome.footnote" . }}{{ end }}
+{{- template "chrome.close" .Doc }}
+{{- end -}}
+
+{{- /* No button and no URL box, and that is a GUARANTEE rather than a styling
+       choice: session_revoked and reset_unavailable must never carry a link,
+       and a shape with nowhere to put one cannot be talked into it by a param.
+       Do NOT add an ActionURL branch here — the text arm enforces the same rule
+       by gating on .Action, which these two messages do not define. */ -}}
+{{- define "chrome.shape_notice" -}}
+{{- template "chrome.open" .Doc }}
+{{- template "chrome.accentbar" .Accent }}
+{{- template "chrome.brand" .Doc }}
+{{- with .Doc.Eyebrow }}{{ template "chrome.eyebrow" (dict "Label" . "Color" $.Accent "Tint" $.Tint) }}{{ end }}
+{{- template "chrome.heading" .Doc }}
+{{- template "chrome.body" .Doc }}
+{{- with .Doc.Footnote }}{{ template "chrome.footnote" . }}{{ end }}
+{{- template "chrome.close" .Doc }}
+{{- end -}}

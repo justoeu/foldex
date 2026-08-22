@@ -1,0 +1,10 @@
+{{- /*
+Notice shape, and that is a GUARANTEE rather than a style: ADR-31 forbids a link
+here, because one would let control of the mailbox alone resurrect a password
+credential — exactly what conversion refuses. The shape has no button slot, and
+the text arm gates on .Action, which this message does not define. Slate:
+nothing happened and nothing is wrong.
+*/ -}}
+{{- define "reset_unavailable" -}}
+{{- template "chrome.shape_notice" (dict "Doc" . "Accent" "#5b6478" "Tint" "#f1f3f7") -}}
+{{- end -}}

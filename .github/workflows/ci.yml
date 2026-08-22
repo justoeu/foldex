@@ -53,6 +53,14 @@ jobs:
       - name: vet
         working-directory: backend
         run: go vet ./...
+      - name: build the tagged-out generator
+        working-directory: backend
+        # `previewgen` is a build tag nothing else in CI compiles, so the mail
+        # preview generator would rot silently on the next constructor signature
+        # change and only be noticed by whoever next tried to look at a template.
+        # A build costs seconds and never executes it (it also hard-skips
+        # without PREVIEW_OUT).
+        run: go vet -tags previewgen ./internal/mailer/
       - name: unit + integration tests (with coverage)
         working-directory: backend
         # Tests are the hard gate — broken tests block CI. The coverage

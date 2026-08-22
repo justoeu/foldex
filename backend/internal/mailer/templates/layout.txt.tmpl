@@ -9,18 +9,93 @@ The action URL is written out in full rather than hidden behind link text: there
 is nowhere to hide it here, and a bare URL is also what lets someone verify the
 host before clicking.
 */ -}}
+
+{{- /*
+The text arm mirrors the HTML arm's three shapes, and that is a correction
+rather than symmetry for its own sake.
+
+It used to be ONE layout with optional slots — `{{ with .ActionURL }}`,
+`{{ with .Code }}` — while the HTML side had already been split so that a notice
+message has nowhere to put a link. The result was a guarantee that held on half
+the wire format: rendering session_revoked with an injected ActionURL printed
+the raw URL, under a stray empty-label colon, two lines above the footnote
+promising the message carries no link. Every text client auto-linkifies a bare
+https://, and a reader who refuses HTML sees only this arm. The Code slot leaked
+the same way.
+
+Gating each slot on its own field was tried and rejected: it fixes whichever
+field you thought of, and the first attempt gated the URL and left the Code
+leaking. THE SHAPE IS THE GUARANTEE — a form with no slot cannot leak one it
+does not have. The `with .Action` on the action shape below is not part of that
+guarantee (by then the shape has already decided); it only keeps a message whose
+copy defines no label from printing a bare colon above its URL.
+
+There is no styling to differentiate here, so all eleven live in this file
+rather than in eleven near-identical ones. The shape is therefore declared
+twice — once here, once in the message's .html.tmpl — and what makes that safe
+is TestLinklessMessagesCannotBeGivenALink, which injects both an ActionURL and a
+Code into every notice message, in every locale, and checks BOTH arms.
+*/ -}}
+
+{{- define "text.shape_action" -}}
 {{ .Heading }}
 {{ range .Body }}
 {{ . }}
 {{ end }}
-{{- with .Code }}
-    {{ . }}
+{{- with .Action }}
+{{ . }}:
+{{ $.ActionURL }}
 {{ end }}
-{{- with .ActionURL }}
-{{ $.Action }}:
+{{- template "text.close" . }}
+{{- end -}}
+
+{{- define "text.shape_code" -}}
+{{ .Heading }}
+
+    {{ .Code }}
+{{ range .Body }}
 {{ . }}
 {{ end }}
+{{- template "text.close" . }}
+{{- end -}}
+
+{{- /* No URL slot and no code slot. Do NOT add either. */ -}}
+{{- define "text.shape_notice" -}}
+{{ .Heading }}
+{{ range .Body }}
+{{ . }}
+{{ end }}
+{{- template "text.close" . }}
+{{- end -}}
+
+{{- define "text.close" -}}
 {{- with .Footnote }}
 --
 {{ . }}
 {{ end -}}
+{{- with .Footer }}
+{{ . }}
+{{ end -}}
+{{- end -}}
+
+{{- define "text.invite" -}}{{ template "text.shape_action" . }}{{- end -}}
+
+{{- define "text.password_reset" -}}{{ template "text.shape_action" . }}{{- end -}}
+
+{{- define "text.verify_email" -}}{{ template "text.shape_action" . }}{{- end -}}
+
+{{- define "text.admin_recovery" -}}{{ template "text.shape_action" . }}{{- end -}}
+
+{{- define "text.login_code" -}}{{ template "text.shape_code" . }}{{- end -}}
+
+{{- define "text.enroll_email_2fa" -}}{{ template "text.shape_code" . }}{{- end -}}
+
+{{- define "text.step_up_code" -}}{{ template "text.shape_code" . }}{{- end -}}
+
+{{- define "text.reset_unavailable" -}}{{ template "text.shape_notice" . }}{{- end -}}
+
+{{- define "text.session_revoked" -}}{{ template "text.shape_notice" . }}{{- end -}}
+
+{{- define "text.recovery_code_used" -}}{{ template "text.shape_notice" . }}{{- end -}}
+
+{{- define "text.account_converted" -}}{{ template "text.shape_notice" . }}{{- end -}}

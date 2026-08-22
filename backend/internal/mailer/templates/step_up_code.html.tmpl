@@ -1,0 +1,8 @@
+{{- /*
+Code shape. Proves a factor already enrolled, for an operation that removes or
+replaces a credential; the sternness belongs in the copy, not in a different
+arrangement of the same three elements.
+*/ -}}
+{{- define "step_up_code" -}}
+{{- template "chrome.shape_code" (dict "Doc" . "Accent" "#6f6bd8" "Tint" "#f0efff") -}}
+{{- end -}}

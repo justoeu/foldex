@@ -452,6 +452,20 @@ depois o `Accept-Language` de quem disparou o envio, depois inglês. O convite �
 única mensagem que não consegue honrar uma preferência, porque o convidado ainda
 não tem conta.
 
+Cada tipo de mensagem tem o **seu próprio layout**, e não um template único com
+campos opcionais. São três formas, e elas vieram do conteúdo e não de gosto por
+simetria: as mensagens que te levam a algum lugar abrem com um botão e depois
+escrevem a URL por extenso, para você conferir o host antes de clicar e para o
+e-mail continuar servindo num cliente que não renderiza botões; as que carregam
+um código de uso único põem os **dígitos primeiro**, acima do texto, porque um
+código de entrada é lido e redigitado em uns dez segundos; e as que só informam
+não têm slot de botão nenhum. Essa última é propriedade de segurança, não
+estilo: as duas mensagens que jamais podem conter link — "suas sessões foram
+encerradas" e "esta conta entra com o Google" — agora não têm como ganhar um,
+porque nem a versão HTML nem a de texto puro têm onde colocá-lo. Acertar só uma
+das duas teria sido pior que não tentar: a mensagem continuaria afirmando "este
+e-mail não contém link" logo acima de um.
+
 **Idioma.** Cada conta escolhe o seu em *Configurações → Perfil*, ao lado do nome
 de exibição. Deixar em *Seguir meu navegador* é uma escolha de verdade, não a
 ausência de uma: mantém o comportamento atual, em que o idioma é adivinhado por

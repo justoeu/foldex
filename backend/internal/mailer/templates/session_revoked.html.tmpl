@@ -1,0 +1,9 @@
+{{- /*
+Red, and notice shape for the same reason it is red. This reports that sessions
+were killed, which is the precise pretext a phishing mail uses; a button here
+would train the reader to click the one in the forgery. Neither arm can render a
+link for it — the shape has no slot and the text arm gates on .Action.
+*/ -}}
+{{- define "session_revoked" -}}
+{{- template "chrome.shape_notice" (dict "Doc" . "Accent" "#c0392f" "Tint" "#fdeeec") -}}
+{{- end -}}
