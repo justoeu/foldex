@@ -131,6 +131,11 @@ jobs:
         run: bash scripts/test-claude-bash-permissions.sh
       - name: nginx access-log credential redaction
         run: bash scripts/test-nginx-access-log.sh
+      - name: the object store bootstrap is judged by its exit code
+        # `up -d --wait` waits for running|healthy, so it reports failure for a
+        # one-shot that finished its job. Driven against a fixture: the real
+        # compose file names its volumes globally, so no run of it is isolated.
+        run: bash scripts/test-storage-up.sh
       - name: the bundled Postgres actually starts
         # docker-compose.db.yml pinned postgres:18 from the initial commit while
         # mounting the volume at the pre-18 path, so `make db-up` exited 1 on

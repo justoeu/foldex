@@ -52,16 +52,9 @@ db-logs: ## Tail Postgres logs
 	$(COMPOSE_DB) logs -f
 
 storage-up: env network ## Start the bundled RustFS object store (skip if RUSTFS_ENDPOINT is external)
-	# --wait is load-bearing, and replaces a guarantee that was lost when the
-	# store moved out of docker-compose.yml: the backend used to declare
-	# `depends_on: rustfs-init: service_completed_successfully`, and depends_on
-	# cannot cross compose projects. Without the wait, `up` returns once
-	# rustfs-init has STARTED and the backend races the bucket/IAM bootstrap —
-	# storage.New does a single BucketExists at boot with no retry, so losing
-	# that race disables screenshots and unmounts /api/backup/* for the whole
-	# process lifetime, on a stack that otherwise looks healthy.
-	$(COMPOSE_SVC) up -d --wait rustfs
-	$(COMPOSE_SVC) up -d --wait --wait-timeout 120 rustfs-init
+	# The wait is load-bearing and the two lines that used to be here were
+	# wrong — see scripts/storage-up.sh, which the DAST runs too.
+	bash scripts/storage-up.sh
 
 storage-down: ## Stop RustFS (keep volume)
 	# `stop`, not `down`: docker-compose.services.yml also declares `db`, and a
