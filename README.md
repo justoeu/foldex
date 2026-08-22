@@ -282,6 +282,28 @@ curl -s -H "$AUTH" -H "$JSON" -X POST localhost:9089/api/backup -o /dev/null -w 
 open https://localhost:9444
 ```
 
+## Metrics (Prometheus)
+
+The backend exposes `GET /metrics` in Prometheus format: HTTP request
+counters/latency histograms labeled by chi **route pattern** (never the raw
+URL — no slugs/ids leak into series), in-flight gauge, pgx pool statistics,
+and Go runtime/process collectors.
+
+The endpoint is **disabled by default**. Set `METRICS_TOKEN` (e.g.
+`openssl rand -hex 32`) and scrape with `Authorization: Bearer <token>` —
+empty token answers 503, wrong token 401. Metrics reveal route shapes,
+traffic volume and pool sizing, which is reconnaissance material on a
+multi-tenant instance, so there is no unauthenticated mode. nginx does not
+proxy `/metrics`; scrape the backend port directly.
+
+```yaml
+# prometheus.yml
+- job_name: "foldex-backend"
+  metrics_path: /metrics
+  authorization: { type: Bearer, credentials: "<METRICS_TOKEN>" }
+  static_configs: [{ targets: ["<backend-host>:9089"] }]
+```
+
 ## Keyboard shortcuts (SPA)
 
 | Shortcut         | Action                          |

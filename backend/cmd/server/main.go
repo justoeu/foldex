@@ -21,6 +21,7 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/mailer"
 	"foldex/internal/mailoutbox"
+	"foldex/internal/metrics"
 	"foldex/internal/notemedia"
 	"foldex/internal/oauthgoogle"
 	"foldex/internal/pkg/keyfile"
@@ -332,6 +333,7 @@ func main() {
 		Worker:              worker,
 		Logger:              logger,
 		Config:              cfg,
+		Metrics:             metrics.New(pool),
 		Storage:             storageClient,
 		PushHandler:         pushHandler,
 		LinkMetadataFetcher: linkMetadataAdapter{f: metadataFetcher},

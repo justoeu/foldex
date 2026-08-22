@@ -23,6 +23,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/importer"
 	"foldex/internal/links"
+	"foldex/internal/metrics"
 	"foldex/internal/notes"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/authgate"
@@ -85,6 +86,12 @@ type Deps struct {
 	AuthMiddleware *auth.Middleware
 	FolderHandler  *folders.Handler
 
+	// Metrics wires the Prometheus collectors (internal/metrics). When set,
+	// the instrumentation middleware mounts before everything that can answer
+	// a request, and GET /metrics is served behind Config.MetricsToken. Nil
+	// keeps both off — the zero-value Deps used across router tests.
+	Metrics *metrics.Metrics
+
 	// FolderUnlockKey is the HMAC secret for folder-password unlock tokens
 	// (see folders.LoadOrGenerateFolderUnlockKey) — shared between the
 	// folders handler (mints tokens, gates list(parent_id=X)) and the links,
@@ -123,6 +130,11 @@ func New(d Deps) http.Handler {
 	}
 	r.Use(trustedProxyRealIP(trustedNets))
 	r.Use(middleware.RequestID)
+	if d.Metrics != nil {
+		// Before Recoverer so a recovered panic is still counted as the 500 it
+		// answered; skips /metrics and /healthz internally.
+		r.Use(d.Metrics.Instrument)
+	}
 	r.Use(middleware.Recoverer)
 	r.Use(defaultBodyLimit)
 	r.Use(slogRequest(d.Logger))
@@ -158,6 +170,9 @@ func New(d Deps) http.Handler {
 	}))
 
 	r.Get("/healthz", healthz(d.Pool))
+	if d.Metrics != nil {
+		r.Method(http.MethodGet, "/metrics", d.Metrics.Handler(d.Config.MetricsToken))
+	}
 
 	// Redirect/view routes outside /api keep the URL short, avoid CORS
 	// preflight, and stay session-less — both /go/{id-or-slug} (link
