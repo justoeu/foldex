@@ -159,11 +159,46 @@ jobs:
         # fails with AccessDeniedException — hence the dedicated chmod 0777 dir.
         run: |
           mkdir -p zap-out && chmod 0777 zap-out
+          # Port 8443, not 443. nginx runs as the non-root `nginx` user and
+          # cannot bind a privileged port (web/nginx.conf: `listen 8443 ssl`);
+          # the 9444 in the health check above is the HOST side of the mapping,
+          # which ZAP does not use because it reaches the container by service
+          # name over the shared network. Targeting `https://web` meant every
+          # scan since this workflow was written connected to a closed port.
+          #
+          # Reachability is proved BEFORE the scan, from the same network, so a
+          # target that answers nothing fails here with a diagnosis instead of
+          # inside ZAP as a green run that examined zero URLs.
+          docker run --rm --network foldex curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 \
+            -fsSk -o /dev/null https://web:8443/healthz \
+            || { echo "::error::https://web:8443 is not reachable from the foldex network — the scan would examine nothing"; exit 1; }
           docker run --rm --network foldex \
             -v "$PWD/zap-out:/zap/wrk:rw" -t \
             ghcr.io/zaproxy/zaproxy@sha256:7c2f8afc893e4e4000be8ad3fd22013fc36e5cce59359349f5a2d45626e2ccb9 \
-            zap-baseline.py -t https://web -I \
+            zap-baseline.py -t https://web:8443 -I \
               -r zap-report.html -w zap-report.md -J zap-report.json || true
+
+      - name: The scan must have produced a report
+        # `|| true` above keeps FINDINGS informational (CLAUDE.md §2), but it
+        # also swallowed total failure: the run that made this step necessary
+        # was marked success after ZAP logged "Job spider failed to access URL"
+        # and wrote no report at all. "Nothing was scanned" and "nothing was
+        # found" are not the same answer, and only one of them is good news.
+        run: |
+          python3 - <<'PY'
+          import json, sys, pathlib
+          p = pathlib.Path("zap-out/zap-report.json")
+          if not p.exists():
+              sys.exit("::error::ZAP wrote no JSON report — the scan did not run")
+          sites = json.loads(p.read_text()).get("site", [])
+          if not sites:
+              sys.exit("::error::the ZAP report contains no site — the spider reached nothing")
+          for s in sites:
+              alerts = s.get("alerts", [])
+              print(f"{s.get('@name')} — {len(alerts)} alert rule(s)")
+              for a in alerts:
+                  print(f"  [{a.get('riskdesc')}] {a.get('alert')} x{len(a.get('instances', []))}")
+          PY
 
       - name: Upload ZAP reports
         if: always()
@@ -174,7 +209,9 @@ jobs:
             zap-out/zap-report.html
             zap-out/zap-report.md
             zap-out/zap-report.json
-          if-no-files-found: warn
+          # error, not warn: a missing report is the shape this workflow's
+          # only silent failure took.
+          if-no-files-found: error
           retention-days: 30
 
       - name: Tear down
