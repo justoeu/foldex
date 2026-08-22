@@ -1,6 +1,7 @@
 {
   "invite": {
     "subject": "Você foi convidado para o Foldex",
+    "eyebrow": "Convite",
     "heading": "Você foi convidado{{if .By}} por {{.By}}{{end}} para o Foldex.",
     "body": [
       "Abra o link abaixo para escolher uma senha e ativar sua conta."
@@ -10,6 +11,7 @@
   },
   "password_reset": {
     "subject": "Redefina sua senha do Foldex",
+    "eyebrow": "Senha",
     "heading": "Alguém pediu para redefinir a senha da sua conta do Foldex.",
     "body": [
       "Abra o link abaixo para escolher uma nova senha."
@@ -19,6 +21,7 @@
   },
   "reset_unavailable": {
     "subject": "Redefina sua senha do Foldex",
+    "eyebrow": "Senha",
     "heading": "Alguém pediu para redefinir a senha da sua conta do Foldex.",
     "body": [
       "Esta conta entra com o Google, então não há senha para redefinir.",
@@ -28,21 +31,25 @@
   },
   "login_code": {
     "subject": "Código de entrada do Foldex: {{.Code}}",
+    "eyebrow": "Código de entrada",
     "heading": "Seu código de entrada do Foldex",
     "footnote": "Ele expira em {{.ExpiresMinutes}} minutos e só pode ser usado uma vez. Se não é você entrando agora, alguém pode saber sua senha — troque-a."
   },
   "enroll_email_2fa": {
     "subject": "Código de dois fatores do Foldex: {{.Code}}",
+    "eyebrow": "Dois fatores",
     "heading": "Confirme este endereço como seu segundo fator.",
     "footnote": "Ele expira em {{.ExpiresMinutes}} minutos e vale uma vez só. Se você não pediu para adicionar o e-mail como segundo fator, ignore esta mensagem — nada muda enquanto o código não for digitado."
   },
   "step_up_code": {
     "subject": "Código de segurança do Foldex: {{.Code}}",
+    "eyebrow": "Código de segurança",
     "heading": "Confirme uma alteração nas suas configurações de segurança.",
     "footnote": "Ele expira em {{.ExpiresMinutes}} minutos e vale uma vez só. Se não foi você que iniciou esta alteração, não digite o código — alguém pode estar conectado à sua conta. Troque sua senha e encerre todas as sessões."
   },
   "verify_email": {
     "subject": "Confirme seu e-mail do Foldex",
+    "eyebrow": "Confirmação",
     "heading": "Confirme este endereço para a sua conta do Foldex.",
     "body": [
       "Abra o link abaixo para concluir a confirmação do seu endereço de e-mail."
@@ -52,6 +59,7 @@
   },
   "admin_recovery": {
     "subject": "Foi solicitada a recuperação da sua conta do Foldex",
+    "eyebrow": "Recuperação",
     "heading": "Um administrador iniciou a recuperação da sua conta do Foldex.",
     "body": [
       "Abra o link abaixo para escolher você mesmo uma nova senha. Ninguém mais chega a vê-la."
@@ -61,6 +69,7 @@
   },
   "session_revoked": {
     "subject": "Suas sessões do Foldex foram encerradas",
+    "eyebrow": "Alerta de segurança",
     "heading": "Suas sessões do Foldex foram encerradas.",
     "body": [
       "Um token de sessão da sua conta do Foldex foi reapresentado, o que normalmente significa que ele foi copiado do seu dispositivo.",
@@ -70,6 +79,7 @@
   },
   "recovery_code_used": {
     "subject": "Um código de recuperação do Foldex foi usado",
+    "eyebrow": "Segurança",
     "heading": "Um código de recuperação acabou de ser usado para entrar na sua conta do Foldex.",
     "body": [
       "Restam {{.Remaining}} códigos de recuperação."
@@ -78,10 +88,16 @@
   },
   "account_converted": {
     "subject": "Sua conta do Foldex agora usa entrada com o Google",
+    "eyebrow": "Conta",
     "heading": "Sua conta do Foldex agora entra com o Google ({{.GoogleEmail}}).",
     "body": [
       "A senha dela foi removida e todas as outras sessões foram encerradas."
     ],
     "footnote": "Se não foi você, procure o administrador do seu Foldex imediatamente: quem fez isso sabia sua senha, e a redefinição de senha não se aplica mais a esta conta."
+  },
+  "_footer": {
+    "body": [
+      "Mensagem automática do seu Foldex. Não responda a este endereço."
+    ]
   }
 }

@@ -1,0 +1,9 @@
+{{- /*
+Blue rather than indigo: this confirms an address, it does not touch a
+credential, and reading as routine is correct. Action shape, because the link is
+followed from a mail client — often on a device that never signed in — so the
+button has to work standing alone.
+*/ -}}
+{{- define "verify_email" -}}
+{{- template "chrome.shape_action" (dict "Doc" . "Accent" "#2f6fd0" "Tint" "#eaf1fc") -}}
+{{- end -}}

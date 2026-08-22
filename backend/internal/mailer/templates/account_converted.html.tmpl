@@ -1,0 +1,8 @@
+{{- /*
+Indigo and notice shape: the aftermath of a conversion the owner performed
+themselves, with the password already removed and the sessions already ended.
+There is nothing to act on, so there is no action.
+*/ -}}
+{{- define "account_converted" -}}
+{{- template "chrome.shape_notice" (dict "Doc" . "Accent" "#6f6bd8" "Tint" "#f0efff") -}}
+{{- end -}}

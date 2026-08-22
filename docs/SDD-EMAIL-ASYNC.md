@@ -315,18 +315,54 @@ parte HTML e `text/template` para a parte texto:
 
 ```
 templates/
-  layout.html.tmpl          layout.txt.tmpl
-  password_reset.{html,txt}.tmpl
-  reset_unavailable.{html,txt}.tmpl
-  login_code.{html,txt}.tmpl
-  invite.{html,txt}.tmpl
-  verify_email.{html,txt}.tmpl
-  admin_recovery.{html,txt}.tmpl
-  session_revoked.{html,txt}.tmpl
-  recovery_code_used.{html,txt}.tmpl
-  account_converted.{html,txt}.tmpl
-  enroll_email_code.{html,txt}.tmpl      ← novo (ADR-37)
+  chrome.html.tmpl        blocos compartilhados: casca, marca, botão,
+                          caixa de URL, bloco de código, nota de rodapé
+  layout.txt.tmpl         arm de texto — ÚNICO, ver abaixo
+  invite.html.tmpl            ┐
+  password_reset.html.tmpl    │ forma AÇÃO
+  verify_email.html.tmpl      │ botão + URL por extenso
+  admin_recovery.html.tmpl    ┘
+  login_code.html.tmpl        ┐ forma CÓDIGO
+  enroll_email_2fa.html.tmpl  │ os dígitos vêm ANTES do texto
+  step_up_code.html.tmpl      ┘
+  reset_unavailable.html.tmpl ┐
+  session_revoked.html.tmpl   │ forma AVISO
+  recovery_code_used.html.tmpl│ sem slot de botão
+  account_converted.html.tmpl ┘
   strings.{en,pt,es}.json
+```
+
+**O HTML é por mensagem; o texto e o copy são compartilhados.** A primeira
+implementação colapsou tudo num `layout.html.tmpl` com campos opcionais, o que
+funcionava e não diferenciava nada: um código de entrada e um alerta de sessão
+encerrada chegavam com a mesma cara. As três formas acima saíram do conteúdo, não
+de um número bonito.
+
+O arm de **texto continua único**, e isso não é preguiça: texto puro não tem
+layout para diferenciar, e onze arquivos quase idênticos seriam duplicação sem
+retorno. A obrigatoriedade dele não mudou — `render` só emite
+`multipart/alternative` quando os dois braços existem.
+
+`render` seleciona com `ExecuteTemplate(env.Template, doc)`, e `loadAssets`
+**recusa o boot** quando uma entrada do catálogo não tem layout: os assets são
+embutidos, então divergência não é condição de runtime — é binário publicado
+errado, e a falha pertence onde um desenvolvedor a vê.
+
+**Nenhum arquivo desse diretório pode começar com `_`.** A forma de diretório do
+`//go:embed` descarta silenciosamente esses nomes, e o `chrome` é composto pelos
+onze layouts: no dia em que alguém simplificasse a diretiva, todas as mensagens
+quebrariam juntas.
+
+Duas peças novas são COPY e vivem nos catálogos: o rótulo (`eyebrow`) que nomeia
+o tipo da mensagem, e a assinatura compartilhada sob a chave reservada
+`_footer` — repeti-la em onze entradas × três idiomas seriam trinta e três
+lugares para corrigir um typo.
+
+Para olhar o resultado sem mandar e-mail de verdade:
+
+```bash
+PREVIEW_OUT=/tmp/mail PREVIEW_LOCALE=pt \
+  go test -tags previewgen ./internal/mailer/ -run TestGeneratePreview
 ```
 
 ### 4.2 O que não muda

@@ -1,0 +1,8 @@
+{{- /*
+Code shape: the digits lead, above the prose. A sign-in code is read, retyped
+and discarded in about ten seconds, and a reader made to scan a paragraph first
+has been taxed for the one thing they opened the message to get.
+*/ -}}
+{{- define "login_code" -}}
+{{- template "chrome.shape_code" (dict "Doc" . "Accent" "#6f6bd8" "Tint" "#f0efff") -}}
+{{- end -}}

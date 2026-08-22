@@ -1,0 +1,9 @@
+{{- /*
+Amber, and the accent is the point: an administrator triggered this and the
+reader did not. It has to read as something that HAPPENED to the account rather
+than as routine housekeeping. Action shape, since the target still chooses their
+own password.
+*/ -}}
+{{- define "admin_recovery" -}}
+{{- template "chrome.shape_action" (dict "Doc" . "Accent" "#b4762a" "Tint" "#fcf3e6") -}}
+{{- end -}}
