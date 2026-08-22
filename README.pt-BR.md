@@ -141,16 +141,16 @@ CA local (`mkcert -install`) numa máquina nova.
 
 ## Arquitetura do stack
 
-Postgres vive em `docker-compose.db.yml` (projeto compose próprio).
-Backend + web vivem em `docker-compose.yml` e se conectam à rede
-Docker compartilhada `foldex` para alcançar o Postgres pelo nome `db`.
-Targets úteis (`make help`):
+Três projetos compose na rede Docker compartilhada `foldex`. O Postgres vive em `docker-compose.db.yml`; o object store RustFS vive em `docker-compose.services.yml`; o `docker-compose.yml` é só a APP — backend, web e o worker `mailer` sob `COMPOSE_PROFILES=amqp` — alcançando os outros pelos nomes `db` e `rustfs`.
+
+O arquivo da app não carrega nenhum serviço que você talvez já rode em outro lugar, e isso é estrutural, não arrumação: o compose interpola **todos** os serviços antes de subir qualquer um, e profiles não isentam o que excluem — então um `${VAR:?...}` de um store que você hospeda fora recusa subir também o backend e o web. O `make up` leva Postgres e RustFS junto só quando `POSTGRES_HOST` / `RUSTFS_ENDPOINT` apontam para os embutidos. Targets úteis (`make help`):
 
 | Target | O que faz |
 |---|---|
 | `make db-up` / `db-down` / `db-nuke` | gerenciar só o Postgres |
-| `make apps-up` / `down` | gerenciar só backend + web |
-| `make up` / `stop-all` | stack completo (Postgres + apps) |
+| `make storage-up` / `storage-down` / `storage-logs` | gerenciar só o object store RustFS |
+| `make apps-up` / `down` | gerenciar só backend + web (+ `mailer` sob `COMPOSE_PROFILES=amqp`) |
+| `make up` / `stop-all` | stack completo — leva Postgres e RustFS junto só quando `POSTGRES_HOST`/`RUSTFS_ENDPOINT` apontam para os embutidos |
 | `make migrate-up` / `migrate-down` | aplicar / reverter migrations SQL |
 | `make psql` | shell no Postgres |
 | `make logs` / `db-logs` | seguir logs |
@@ -272,7 +272,7 @@ open https://localhost:9444
 
 Toda a UI passa por `react-i18next`. **Inglês é a fonte da verdade**; **Português** e **Español** são mantidos em paridade total (toda chave espelhada nos três).
 
-- **Trocar idioma**: seletor no topbar. A escolha persiste em `localStorage["foldex.locale"]`; no primeiro acesso autodetecta de `navigator.language`, com fallback pra inglês.
+- **Trocar idioma**: seletor no topbar. A escolha é gravada na CONTA (`app_user.locale`), então ela também decide o idioma de todo e-mail que o foldex te manda; o Perfil também oferece *seguir meu navegador*, que limpa a preferência de novo. No primeiro acesso autodetecta de `navigator.language`. Telas que disparam e-mail com você DESLOGADO — "esqueci minha senha" — mandam junto o idioma que estão exibindo, porque a interface segue `navigator.language` enquanto o fallback do servidor lê o header `Accept-Language`, e são configurações separadas: uma tela em português mandando um link de redefinição em inglês é o que acontece quando as duas discordam. A dica nunca passa por cima de uma preferência gravada.
 - **Arquivos de locale**: `web/src/i18n/locales/{en,pt,es}.json`.
 - **Adicionar locale**: solte um novo `<lang>.json`, liste em `SUPPORTED_LOCALES` e popule toda chave a partir de `en.json`. Plurais usam o sufixo `_one` / `_other`.
 
@@ -466,12 +466,24 @@ nenhum e não perde nada: durabilidade, retry e backoff vêm todos da tabela
 ainda cifrada a um broker e rodar o envio em container próprio:
 
 ```bash
-docker compose --profile amqp up -d          # sobe o worker `mailer`
+# No .env, um ao lado do outro — precisam concordar:
+#   MAIL_TRANSPORT=amqp
+#   COMPOSE_PROFILES=amqp
+docker compose up -d
 ```
+
+`COMPOSE_PROFILES` não é conveniência. O serviço `mailer` tem
+`profiles: ["amqp"]`, então subir a stack sem ele deixa um backend publicando e
+nenhum worker consumindo — e essa falha é silenciosa dos dois lados: o publish é
+confirmado, a linha do outbox fecha como `published`, e o primeiro sinal é um
+usuário dizendo que o e-mail nunca chegou. O backend agora avisa sempre que
+publica numa fila sem consumidor, e o worker registra uma linha por mensagem
+enviada.
 
 | Var | Padrão | Significado |
 |---|---|---|
 | `MAIL_TRANSPORT` | `inproc` | `inproc` \| `amqp`. Valor desconhecido recusa o boot |
+| `COMPOSE_PROFILES` | — | Use `amqp` junto com `MAIL_TRANSPORT=amqp` para que `docker compose up -d` suba o worker |
 | `AMQP_URL` | — | Obrigatório para `amqp`. `amqp://` para host **remoto** é recusado; use `amqps://` |
 | _(TLS privado)_ | — | Configurado NA URL, não por variável: `?cacertfile=`, `?certfile=`/`?keyfile=` (mTLS) e `?server_name_indication=`. Sob Docker, coloque o PEM em `./certs` (montado em `/etc/foldex/certs`) e use o caminho do container. |
 | `AMQP_ALLOW_PLAINTEXT` | `0` | Permite `amqp://` sem TLS a um broker não-loopback. Verificado contra a rede no boot **e no dial**, então um hostname que resolva fora de RFC1918/CGNAT/loopback/link-local é recusado antes de a credencial ir para o fio. Endereço do destinatário e nome do template viajam em claro; o corpo da mensagem segue selado. |

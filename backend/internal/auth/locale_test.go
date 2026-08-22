@@ -98,3 +98,57 @@ func TestLocaleForPrefersTheRecipientOverTheSender(t *testing.T) {
 	// And an unknown stored value degrades instead of breaking the send.
 	assert.Equal(t, "en", localeFor("kl", senderIsSpanish))
 }
+
+// ptr is a local helper for the tri-state hint below.
+func ptr(s string) *string { return &s }
+
+// The hint's whole reason for existing: the interface language and
+// Accept-Language are separate browser settings, and a screen speaking
+// Portuguese while the header says English mailed an English reset link.
+func TestLocaleForHinted_UsesTheDisplayedLanguageWhenTheAccountHasNoPreference(t *testing.T) {
+	t.Parallel()
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+	assert.Equal(t, "pt", localeForHinted("", ptr("pt"), r))
+	// Browser tags, not just catalogue keys — the SPA hands over whatever
+	// i18next resolved, and refusing `pt-BR` would refuse the common case.
+	assert.Equal(t, "pt", localeForHinted("", ptr("pt-BR"), r))
+}
+
+// The hint is ranked BELOW the recipient's own stored preference, and that
+// ordering is what makes it safe on an unauthenticated endpoint: naming a
+// language must never change the language of someone who chose one.
+func TestLocaleForHinted_NeverOutranksTheRecipientsOwnPreference(t *testing.T) {
+	t.Parallel()
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+	assert.Equal(t, "es", localeForHinted("es", ptr("pt"), r))
+}
+
+// Absent or unrecognised falls through to the header exactly as before, rather
+// than being stored, echoed, or collapsing the answer to English.
+func TestLocaleForHinted_FallsThroughToTheHeader(t *testing.T) {
+	t.Parallel()
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.Header.Set("Accept-Language", "es-ES,es;q=0.9")
+
+	assert.Equal(t, "es", localeForHinted("", nil, r), "no hint")
+	assert.Equal(t, "es", localeForHinted("", ptr("kl-KL"), r), "unrecognised hint")
+	// An empty hint is the SPA sending a field it could not fill, not a request
+	// for English.
+	assert.Equal(t, "es", localeForHinted("", ptr(""), r), "empty hint")
+}
+
+// localeFor is the unhinted path every other call site still uses, and it must
+// keep behaving identically.
+func TestLocaleFor_IsUnchangedByTheHintParameter(t *testing.T) {
+	t.Parallel()
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.Header.Set("Accept-Language", "pt-BR")
+
+	assert.Equal(t, "pt", localeFor("", r))
+	assert.Equal(t, "es", localeFor("es", r))
+	assert.Equal(t, mailer.DefaultLocale, localeFor("", httptest.NewRequest(http.MethodPost, "/", nil)))
+}

@@ -568,18 +568,26 @@ func guardLastAdminTx(ctx context.Context, tx pgx.Tx, target authctx.UserID) err
 // locale through there would also put it on a surface admins reach, and an
 // administrator has no business choosing someone else's reading language.
 //
-// locale is TRI-STATE, the same shape the master-password hint uses: nil keeps
-// the stored value, "" clears it back to "no preference", and a value sets it.
-// Clearing has to be expressible — without it, a user who picked a language once
-// could never go back to following their browser.
-func (r *Repository) UpdateOwnProfile(ctx context.Context, id authctx.UserID, name string, locale *string) (User, error) {
+// BOTH fields are TRI-STATE, the same shape the master-password hint uses: nil
+// keeps the stored value, "" clears it, and a value sets it. Clearing a locale
+// has to be expressible — without it, a user who picked a language once could
+// never go back to following their browser.
+//
+// name became tri-state after it was written unconditionally: a caller that
+// meant to set only a language also replayed the name IT had cached, so a
+// rename performed in one tab was silently reverted by another. That is the
+// mirror of the hazard the locale field was already careful about, and it
+// stopped being theoretical when the SPA started adopting a locale on mount
+// instead of on a click.
+func (r *Repository) UpdateOwnProfile(ctx context.Context, id authctx.UserID, name *string, locale *string) (User, error) {
 	u, err := scanUser(r.pool.QueryRow(ctx, `
 		UPDATE app_user SET
-			name       = $2,
+			name       = CASE WHEN $5::bool THEN $2 ELSE name END,
 			locale     = CASE WHEN $3::bool THEN nullif($4, '') ELSE locale END,
 			updated_at = now()
 		WHERE id = $1
-		RETURNING `+userColumns, int64(id), name, locale != nil, derefOr(locale, "")))
+		RETURNING `+userColumns, int64(id), derefOr(name, ""), locale != nil,
+		derefOr(locale, ""), name != nil))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNoUser
 	}

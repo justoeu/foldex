@@ -635,7 +635,13 @@ func (h *Handler) authenticatedPayload(u User, csrf string) authenticatedAuthRes
 }
 
 type updateProfileInput struct {
-	Name string `json:"name"`
+	// Name is tri-state for the same reason Locale is, and the omission was a
+	// real hazard rather than a symmetry argument: `name` was written
+	// unconditionally, so a request that only meant to set a language also
+	// replayed whatever name that client had cached. With the SPA adopting a
+	// locale unprompted on mount, a rename made in another tab was reverted by
+	// a screen the user never touched.
+	Name *string `json:"name"`
 	// Locale is tri-state on the wire: absent keeps the stored preference, ""
 	// clears it back to following the browser, and a value sets it. A plain
 	// string could not express "clear", and a user who chose a language once
@@ -651,7 +657,8 @@ type updateProfileInput struct {
 // promises.
 const maxProfileNameRunes = 120
 
-// UpdateProfile edits the CALLER's own display name. The only self-service
+// UpdateProfile edits the CALLER's own display name and account language,
+// each independently omittable. The only self-service
 // profile field: e-mail is identity (changing it needs its own verification
 // flow), and role/status are administration, reachable exclusively through the
 // admin surface with its own guards. Answers with the same payload shape /me
@@ -663,11 +670,15 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	name := strings.TrimSpace(in.Name)
-	if utf8.RuneCountInString(name) > maxProfileNameRunes {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_name",
-			"name must be at most 120 characters"))
-		return
+	var name *string
+	if in.Name != nil {
+		trimmed := strings.TrimSpace(*in.Name)
+		if utf8.RuneCountInString(trimmed) > maxProfileNameRunes {
+			httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_name",
+				"name must be at most 120 characters"))
+			return
+		}
+		name = &trimmed
 	}
 	// An unknown locale is refused rather than stored and silently ignored at
 	// render time: the account would keep showing a language it never gets, and

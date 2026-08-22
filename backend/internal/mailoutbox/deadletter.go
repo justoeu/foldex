@@ -100,7 +100,7 @@ func (w *DeadLetterWatcher) consume() error {
 		return err
 	}
 	defer func() { _ = ch.Close() }()
-	if err := w.cfg.Topology.Declare(ch); err != nil {
+	if _, err := w.cfg.Topology.Declare(ch); err != nil {
 		return err
 	}
 	// One at a time. This queue is a trickle by construction — it only receives

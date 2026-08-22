@@ -4,6 +4,7 @@ SHELL := /bin/bash
 ENV_FILE     ?= .env
 COMPOSE_APP  := docker compose -f docker-compose.yml
 COMPOSE_DB   := docker compose -f docker-compose.db.yml
+COMPOSE_SVC  := docker compose -f docker-compose.services.yml
 
 # Load .env so we can use vars in recipes (e.g. POSTGRES_USER).
 ifneq (,$(wildcard $(ENV_FILE)))
@@ -17,6 +18,16 @@ endif
 #   POSTGRES_HOST=localhost / host.docker.internal /
 #     external host                                 → no, user has their own DB
 NEED_FOLDEX_DB := $(if $(POSTGRES_HOST),$(if $(filter db,$(POSTGRES_HOST)),yes,no),yes)
+
+# Same decision for the object store. It used to be answered by the app compose
+# file carrying its own copy of the rustfs service, which meant `make up`
+# started a store even for the operators pointing at an external one — and, far
+# worse, made the store's root password a hard requirement for starting the
+# backend and the web. The store now lives in docker-compose.services.yml only,
+# and this decides whether to bring it along:
+#   RUSTFS_ENDPOINT=rustfs:9000 (or empty)  → yes, foldex owns the store
+#   anything else                           → no, the operator has their own
+NEED_FOLDEX_STORAGE := $(if $(RUSTFS_ENDPOINT),$(if $(filter rustfs:9000,$(RUSTFS_ENDPOINT)),yes,no),yes)
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"; printf "\nTargets:\n\n"} /^[a-zA-Z_-]+:.*?##/{printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -40,11 +51,36 @@ db-nuke: ## Stop Postgres AND drop its volume (destructive)
 db-logs: ## Tail Postgres logs
 	$(COMPOSE_DB) logs -f
 
+storage-up: env network ## Start the bundled RustFS object store (skip if RUSTFS_ENDPOINT is external)
+	# --wait is load-bearing, and replaces a guarantee that was lost when the
+	# store moved out of docker-compose.yml: the backend used to declare
+	# `depends_on: rustfs-init: service_completed_successfully`, and depends_on
+	# cannot cross compose projects. Without the wait, `up` returns once
+	# rustfs-init has STARTED and the backend races the bucket/IAM bootstrap —
+	# storage.New does a single BucketExists at boot with no retry, so losing
+	# that race disables screenshots and unmounts /api/backup/* for the whole
+	# process lifetime, on a stack that otherwise looks healthy.
+	$(COMPOSE_SVC) up -d --wait rustfs
+	$(COMPOSE_SVC) up -d --wait --wait-timeout 120 rustfs-init
+
+storage-down: ## Stop RustFS (keep volume)
+	# `stop`, not `down`: docker-compose.services.yml also declares `db`, and a
+	# `down` on that file would take Postgres with it — which db-down owns.
+	$(COMPOSE_SVC) stop rustfs rustfs-init
+
+storage-logs: ## Tail RustFS logs
+	$(COMPOSE_SVC) logs -f rustfs
+
 up: env network ## Start the full stack from Docker Hub (Postgres only when POSTGRES_HOST=db)
 ifeq ($(NEED_FOLDEX_DB),yes)
 	@$(MAKE) db-up
 else
 	@echo "POSTGRES_HOST=$(POSTGRES_HOST) → skipping foldex-db (using your existing Postgres)"
+endif
+ifeq ($(NEED_FOLDEX_STORAGE),yes)
+	@$(MAKE) storage-up
+else
+	@echo "RUSTFS_ENDPOINT=$(RUSTFS_ENDPOINT) → skipping foldex-rustfs (using your existing object store)"
 endif
 	$(COMPOSE_APP) up -d
 
@@ -56,6 +92,11 @@ ifeq ($(NEED_FOLDEX_DB),yes)
 	@$(MAKE) db-up
 else
 	@echo "POSTGRES_HOST=$(POSTGRES_HOST) → skipping foldex-db (using your existing Postgres)"
+endif
+ifeq ($(NEED_FOLDEX_STORAGE),yes)
+	@$(MAKE) storage-up
+else
+	@echo "RUSTFS_ENDPOINT=$(RUSTFS_ENDPOINT) → skipping foldex-rustfs (using your existing object store)"
 endif
 	$(COMPOSE_APP) up -d --build
 
@@ -76,19 +117,25 @@ up-mail: network ## Start Mailpit (local SMTP sink + inbox at :8025) for e-mail 
 down-mail: ## Stop Mailpit
 	docker compose -f docker-compose.mail.yml down
 
-stop-all: down down-mail db-down ## Stop everything (apps + Mailpit + Postgres)
+stop-all: down down-mail db-down storage-down ## Stop everything (apps + Mailpit + Postgres + RustFS)
 
 nuke: ## Stop everything and drop the Postgres volume (destructive)
 	$(COMPOSE_APP) down
 	$(COMPOSE_DB) down -v
+	# The object store is STOPPED, not wiped. `down -v` here would also drop
+	# foldex_rustfs_data — every screenshot, note image and backup object — and
+	# this target only advertises the Postgres volume.
+	@$(MAKE) storage-down
 
 logs: ## Tail logs from backend + web
 	$(COMPOSE_APP) logs -f
 
-ps: ## Show all foldex container status (apps + Postgres)
+ps: ## Show all foldex container status (apps + Postgres + RustFS)
 	@$(COMPOSE_APP) ps
 	@echo
 	@$(COMPOSE_DB) ps
+	@echo
+	@$(COMPOSE_SVC) ps rustfs rustfs-init
 
 restart-backend: ## Rebuild + restart the backend container (dev mode, builds locally)
 	$(COMPOSE_APP) up -d --build backend
@@ -142,7 +189,7 @@ release-major: ## Bump major (1.0.8 → 2.0.0) and commit locally
 	@./scripts/release.sh major
 
 .PHONY: help env up apps-up down stop-all nuke logs ps up-mail down-mail \
-        db-up db-down db-nuke db-logs \
+        db-up db-down db-nuke db-logs storage-up storage-down storage-logs \
         restart-backend restart-web migrate-up migrate-down seed psql healthz \
         test-backend test-integration coverage-backend test-web coverage-web test-all coverage-all \
         release-patch release-minor release-major

@@ -82,15 +82,24 @@ func (t Topology) retryKey(attempt int) string {
 	return t.Exchange + retryLadder[i].suffix
 }
 
+// SendQueueState is what declaring the topology happens to learn about the send
+// queue. It is returned rather than discarded because the broker reports it for
+// free on every declare, and the one question an operator asks when mail goes
+// missing — "is anything consuming this?" — has no other cheap answer.
+type SendQueueState struct {
+	Consumers int
+	Messages  int
+}
+
 // Declare builds the whole topology. It is idempotent and both the relay and
 // the worker call it on every connect, so neither depends on the other having
 // started first — a worker booting against an undeclared exchange would
 // otherwise fail in a way that looks like a broker outage.
-func (t Topology) Declare(ch *amqp.Channel) error {
+func (t Topology) Declare(ch *amqp.Channel) (SendQueueState, error) {
 	t = t.WithDefaults()
 	for _, name := range []string{t.Exchange, t.dlx()} {
 		if err := ch.ExchangeDeclare(name, amqp.ExchangeDirect, true, false, false, false, nil); err != nil {
-			return fmt.Errorf("mailoutbox: declare exchange %s: %w", name, err)
+			return SendQueueState{}, fmt.Errorf("mailoutbox: declare exchange %s: %w", name, err)
 		}
 	}
 
@@ -106,13 +115,15 @@ func (t Topology) Declare(ch *amqp.Channel) error {
 		return args
 	}
 
-	if _, err := ch.QueueDeclare(t.Queue, true, false, false, false, quorum(amqp.Table{
+	q, err := ch.QueueDeclare(t.Queue, true, false, false, false, quorum(amqp.Table{
 		"x-dead-letter-exchange": t.dlx(),
-	})); err != nil {
-		return fmt.Errorf("mailoutbox: declare queue %s: %w", t.Queue, err)
+	}))
+	if err != nil {
+		return SendQueueState{}, fmt.Errorf("mailoutbox: declare queue %s: %w", t.Queue, err)
 	}
+	state := SendQueueState{Consumers: q.Consumers, Messages: q.Messages}
 	if err := ch.QueueBind(t.Queue, t.RoutingKey, t.Exchange, false, nil); err != nil {
-		return fmt.Errorf("mailoutbox: bind queue %s: %w", t.Queue, err)
+		return SendQueueState{}, fmt.Errorf("mailoutbox: bind queue %s: %w", t.Queue, err)
 	}
 
 	for _, step := range retryLadder {
@@ -125,10 +136,10 @@ func (t Topology) Declare(ch *amqp.Channel) error {
 			"x-dead-letter-exchange":    t.Exchange,
 			"x-dead-letter-routing-key": t.RoutingKey,
 		})); err != nil {
-			return fmt.Errorf("mailoutbox: declare retry queue %s: %w", name, err)
+			return SendQueueState{}, fmt.Errorf("mailoutbox: declare retry queue %s: %w", name, err)
 		}
 		if err := ch.QueueBind(name, name, t.dlx(), false, nil); err != nil {
-			return fmt.Errorf("mailoutbox: bind retry queue %s: %w", name, err)
+			return SendQueueState{}, fmt.Errorf("mailoutbox: bind retry queue %s: %w", name, err)
 		}
 	}
 
@@ -136,12 +147,12 @@ func (t Topology) Declare(ch *amqp.Channel) error {
 	// exhausted the ladder, and a queue that quietly drops them would remove
 	// the only place the failure is still visible.
 	if _, err := ch.QueueDeclare(t.deadQueue(), true, false, false, false, quorum(nil)); err != nil {
-		return fmt.Errorf("mailoutbox: declare dead queue: %w", err)
+		return SendQueueState{}, fmt.Errorf("mailoutbox: declare dead queue: %w", err)
 	}
 	if err := ch.QueueBind(t.deadQueue(), t.deadQueue(), t.dlx(), false, nil); err != nil {
-		return fmt.Errorf("mailoutbox: bind dead queue: %w", err)
+		return SendQueueState{}, fmt.Errorf("mailoutbox: bind dead queue: %w", err)
 	}
-	return nil
+	return state, nil
 }
 
 // Republish sends a body back into the DLX, either onto a ladder step or into

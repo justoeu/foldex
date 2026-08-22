@@ -8,8 +8,20 @@ trap 'rm -rf "$TMP"' EXIT
 
 grep -qx 'RUSTFS_ROOT_SECRET_KEY=' "$ROOT/.env.example"
 grep -qx 'RUSTFS_SECRET_KEY=' "$ROOT/.env.example"
-grep -Fq "RUSTFS_ROOT_SECRET_KEY: \${RUSTFS_ROOT_SECRET_KEY:?" "$ROOT/docker-compose.yml"
-grep -Fq "RUSTFS_SECRET_KEY: \${RUSTFS_SECRET_KEY:?" "$ROOT/docker-compose.yml"
+# The object store lives in docker-compose.services.yml, not in the app file.
+# These two assertions are the ONLY thing in the tree stopping someone from
+# giving RUSTFS_ROOT_SECRET_KEY the treatment RUSTFS_ROOT_ACCESS_KEY already
+# has (${RUSTFS_ROOT_ACCESS_KEY:-rustfsadmin}) — validateSecureDefaults refuses
+# the placeholder on the BACKEND's credential and has no visibility at all into
+# the credential the RustFS server itself boots with. If this file moves again,
+# repoint these; deleting them is how a predictable root password ships.
+grep -Fq "RUSTFS_ROOT_SECRET_KEY: \${RUSTFS_ROOT_SECRET_KEY:?" "$ROOT/docker-compose.services.yml"
+grep -Fq "RUSTFS_SECRET_KEY: \${RUSTFS_SECRET_KEY:?" "$ROOT/docker-compose.services.yml"
+# The APP's copy is deliberately relaxed: the backend treats the object store as
+# optional and degrades, so a `:?` there refused the whole compose file — mailer
+# and web included — over a credential neither reads. Asserted so the relaxation
+# stays legible as a decision instead of reading like an omission.
+grep -Fq 'RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}' "$ROOT/docker-compose.yml"
 grep -Fq 'bash scripts/init-env.sh' "$ROOT/Makefile"
 
 cat >"$TMP/template" <<'EOF'

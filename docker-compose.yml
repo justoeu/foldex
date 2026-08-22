@@ -1,74 +1,18 @@
-# Application stack: backend + web + RustFS (object store).
-# Postgres lives in docker-compose.db.yml on the shared `foldex` network.
-# Bring it up with `make db-up` before this one when POSTGRES_HOST=db.
+# Application stack: backend + web + mailer. Nothing else.
+#
+# The services this depends on — Postgres and RustFS — live in
+# docker-compose.db.yml and docker-compose.services.yml, and MOST operators run
+# at least one of them somewhere else entirely. This file used to carry its own
+# copy of rustfs/rustfs-init, which cost more than duplication: compose
+# interpolates EVERY service in a file before starting any of them, so a
+# `${VAR:?...}` on the object store's root password refused to start the mailer,
+# the backend and the web — services that never read it. The copies had also
+# already drifted apart.
+#
+# Bring the services up first (`make db-up` / `make storage-up`) when you host
+# them here; point the env at them when you do not.
 
 services:
-  # S3-compatible object store. Root credentials stay on this service +
-  # rustfs-init; the backend never receives them.
-  rustfs:
-    # RustFS has no GA release yet. Pin its newest non-preview release candidate
-    # by digest instead of following the mutable latest/rc/main channels.
-    image: rustfs/rustfs:1.0.0-rc.2@sha256:7d6d361c49c08d427250fb59aae5d78df83d644c3405d9ccf4b21cda0b0692d0
-    container_name: foldex-rustfs
-    restart: unless-stopped
-    security_opt:
-      - "no-new-privileges:true"
-    environment:
-      RUSTFS_ACCESS_KEY: ${RUSTFS_ROOT_ACCESS_KEY:-rustfsadmin}
-      RUSTFS_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:?run make env to generate RustFS credentials}
-      RUSTFS_ADDRESS: 0.0.0.0:9000
-      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
-      RUSTFS_CONSOLE_ENABLE: "true"
-      RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS: "*"
-      RUSTFS_VOLUMES: /data
-      RUSTFS_UNSAFE_BYPASS_DISK_CHECK: ${RUSTFS_UNSAFE_BYPASS_DISK_CHECK:-true}
-      RUSTFS_OBS_LOGGER_LEVEL: info
-    ports:
-      # Host ports are configurable because 9000/9001 are the S3 defaults that
-      # every MinIO-shaped service on a developer machine also claims. The
-      # CONTAINER side stays fixed: the backend reaches the store as
-      # `rustfs:9000` over the compose network, so remapping the host side is
-      # purely about who gets to browse it from the host.
-      - "127.0.0.1:${RUSTFS_HOST_PORT:-9000}:9000"
-      - "127.0.0.1:${RUSTFS_CONSOLE_HOST_PORT:-9001}:9001"
-    volumes:
-      - rustfs_data:/data
-    healthcheck:
-      test: ["CMD", "sh", "-ec", "curl -fsS http://127.0.0.1:9000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 8
-      start_period: 20s
-    networks:
-      foldex:
-        aliases: [rustfs]
-
-  # One-shot: create app IAM user + bucket-scoped policy.
-  rustfs-init:
-    # Build the one-shot locally: this container receives both root and app
-    # secrets, so it must never resolve through a mutable remote Foldex tag.
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      target: rustfs-bootstrap
-    container_name: foldex-rustfs-init
-    restart: "no"
-    depends_on:
-      rustfs:
-        condition: service_healthy
-    environment:
-      RUSTFS_ENDPOINT: rustfs:9000
-      RUSTFS_USE_SSL: "false"
-      RUSTFS_ROOT_ACCESS_KEY: ${RUSTFS_ROOT_ACCESS_KEY:-rustfsadmin}
-      RUSTFS_ROOT_SECRET_KEY: ${RUSTFS_ROOT_SECRET_KEY:?run make env to generate RustFS credentials}
-      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-foldex}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?run make env to generate RustFS credentials}
-      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-foldex-screenshots}
-      RUSTFS_APP_POLICY: ${RUSTFS_APP_POLICY:-foldex-app}
-      RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS: ${RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS:-0}
-    networks:
-      - foldex
-
   backend:
     # Pulled from Docker Hub by default. FOLDEX_VERSION overrides the current
     # release fallback (Docker tags drop the git `v` prefix). `build:` is kept so
@@ -189,7 +133,12 @@ services:
       # Root lives only on rustfs + rustfs-init (RUSTFS_ROOT_*).
       RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-rustfs:9000}
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-foldex}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?run make env to generate RustFS credentials}
+      # NOT ${RUSTFS_SECRET_KEY:?...}. The object store is OPTIONAL to the
+      # backend — main.go boots without it and only withholds the backup routes
+      # and the screenshot fallback — so the colon form converts a documented,
+      # deliberate degradation into a hard refusal of the entire compose file,
+      # mailer and web included. The backend reports the missing store itself.
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-foldex-screenshots}
       RUSTFS_USE_SSL: ${RUSTFS_USE_SSL:-false}
       RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS: ${RUSTFS_ALLOW_INSECURE_DEV_CREDENTIALS:-0}
@@ -252,9 +201,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "localhost:host-gateway"
-    depends_on:
-      rustfs-init:
-        condition: service_completed_successfully
     networks:
       - foldex
 
@@ -362,5 +308,3 @@ networks:
 volumes:
   foldex-data:
     name: foldex-data
-  rustfs_data:
-    name: foldex_rustfs_data

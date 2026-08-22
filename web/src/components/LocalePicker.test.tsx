@@ -135,7 +135,7 @@ describe('LocalePicker', () => {
     await user.click(screen.getByRole('menuitem', { name: /Português/ }))
 
     await waitFor(() =>
-      expect(patch).toHaveBeenCalledWith('/api/auth/profile', { name: 'Test Admin', locale: 'pt' }))
+      expect(patch).toHaveBeenCalledWith('/api/auth/profile', { locale: 'pt' }))
   })
 
   it('does not write when the account already holds that language', async () => {

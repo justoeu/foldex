@@ -247,6 +247,7 @@ func main() {
 				Queue:      cfg.Mail.AMQPQueue,
 				RoutingKey: cfg.Mail.AMQPRoutingKey,
 			},
+			Logger: logger,
 		}
 		sink, err := mailoutbox.NewAMQPSink(amqpCfg)
 		if err != nil {
