@@ -172,6 +172,19 @@ loc=$(curl -s -D - -o /dev/null -H "Host: evil.example" "http://127.0.0.1:$HTTP_
 [[ "$loc" == "https://$PUBLIC_HOST/x" ]] \
   || note "the HTTP redirect went to '$loc' — it must ignore the request Host header"
 
+# Plain HTTP on the TLS port must redirect (497 → 301), not dead-end on
+# nginx's default 400 — a browser given a bare `host:9444` assumes http://
+# and this is the page it lands on. Same rules as the :8080 redirect: baked
+# host (the request's is attacker-controlled) and the path preserved.
+plain_on_tls=$(curl -s -D - -o /dev/null -H "Host: evil.example" \
+      "http://127.0.0.1:$TLS_PORT/some/path?q=1" 2>/dev/null | tr -d '\r')
+code=$(head -1 <<<"$plain_on_tls" | awk '{print $2}')
+loc=$(grep -i '^location:' <<<"$plain_on_tls" | awk '{print $2}')
+[[ "$code" == "301" ]] \
+  || note "plain HTTP on the TLS port answered $code — expected the 497→301 redirect, not nginx's dead-end 400"
+[[ "$loc" == "https://$PUBLIC_HOST/some/path?q=1" ]] \
+  || note "the 497 redirect went to '$loc' — it must use the baked host and keep the path"
+
 # Structural, not typographic: brace depth, so a two-space or column-0
 # add_header inside a location is caught the same as a four-space one. The
 # previous guard checked indentation and missed all three of those shapes.
