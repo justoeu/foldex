@@ -56,10 +56,13 @@ export function LocalePicker() {
               top: pos.top,
               right: pos.right,
               minWidth: 160,
-              // --fx-surface-3 is the near-opaque token; --fx-surface (0.6 alpha)
-              // only reads solid behind the topbar's backdrop-filter, which the
-              // portaled menu no longer sits on — so it carries its own blur.
-              background: 'var(--fx-surface-3)',
+              // "Near-opaque" is still not opaque: --fx-surface-3 carries 0.92
+              // alpha, which reads solid only where something opaque sits
+              // behind it. A portaled menu floats over arbitrary content, so
+              // the layer underneath showed through — same defect the user
+              // menu had. Composited over --fx-bg it keeps the tint and stays
+              // readable whatever is beneath.
+              background: 'linear-gradient(var(--fx-surface-3), var(--fx-surface-3)), var(--fx-bg)',
               backdropFilter: 'blur(20px) saturate(140%)',
               WebkitBackdropFilter: 'blur(20px) saturate(140%)',
               border: '1px solid var(--fx-border)',

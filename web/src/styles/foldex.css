@@ -940,7 +940,15 @@
 .fx-userbtn-active { color: var(--fx-accent); box-shadow: 0 0 0 1.5px var(--fx-accent-2); }
 .fx-usermenu {
   position: fixed; z-index: 80; min-width: 232px; padding: 6px;
-  background: var(--fx-surface-2); border: 1px solid var(--fx-border); border-radius: 13px;
+  /* Composited over an OPAQUE base, not just tinted.
+     Every --fx-surface-* token carries alpha (0.62 → 0.94), which reads solid
+     only where something opaque sits behind it. A portaled menu floats over
+     arbitrary content with no page background beneath, so at 0.78 the cards
+     underneath showed through and their titles were legible inside the menu.
+     Two layers — the translucent surface, then --fx-bg — keep the tint and the
+     backdrop blur at the edges while the panel itself stays readable. */
+  background: linear-gradient(var(--fx-surface-3), var(--fx-surface-3)), var(--fx-bg);
+  border: 1px solid var(--fx-border); border-radius: 13px;
   box-shadow: var(--fx-shadow-2, var(--fx-shadow-1));
   backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%);
 }
