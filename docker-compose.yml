@@ -17,7 +17,7 @@ services:
     # Pulled from Docker Hub by default. FOLDEX_VERSION overrides the current
     # release fallback (Docker tags drop the git `v` prefix). `build:` is kept so
     # `docker compose build` / `make up-build` still produce a local image.
-    image: justoeu/foldex-backend:${FOLDEX_VERSION:-2.10.0}
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-2.10.1}
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -222,7 +222,7 @@ services:
     # image means one tag to pin and one thing for the release workflow to
     # publish; what makes this a separate process is the entrypoint and the
     # environment below, not the bytes.
-    image: justoeu/foldex-backend:${FOLDEX_VERSION:-2.10.0}
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-2.10.1}
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -274,7 +274,7 @@ services:
 
   web:
     # FOLDEX_VERSION overrides the current release fallback (same tag as backend).
-    image: justoeu/foldex-web:${FOLDEX_VERSION:-2.10.0}
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-2.10.1}
     build:
       context: ./web
       dockerfile: Dockerfile
