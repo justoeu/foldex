@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useMutation } from '@tanstack/react-query'
 import { I } from '../icons'
 import { Notice, SectionRow } from './SectionCard'
+import { AvailabilityHint } from '../AvailabilityHint'
+import { useAvailability } from '../../hooks/useAvailability'
 import * as auth from '../../api/auth'
 import { useAuth } from '../../auth/AuthProvider'
 import { apiErrorCode as errCode } from '../../lib/apiError'
@@ -54,6 +56,14 @@ export function UsernameRow({ user }: { user: AuthUser }) {
   })
 
   const next = value.trim()
+  // Asked while typing, and a REFUSAL gates the save. Only a refusal: blocking
+  // while the probe is in flight leaves the button dead for the debounce, so
+  // someone who types fast and clicks immediately finds it greyed out for no
+  // reason they can see. A click during the check reaches the server, which
+  // refuses it — the same answer, from the authority that was always going to
+  // give it.
+  const avail = useAvailability(auth.usernameAvailable, value, current)
+  const blocked = avail.state === 'refused'
   return (
     <SectionRow
       icon={I.user}
@@ -102,7 +112,7 @@ export function UsernameRow({ user }: { user: AuthUser }) {
                   setError('')
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && next !== current && !save.isPending) {
+                  if (e.key === 'Enter' && next !== current && !save.isPending && !blocked) {
                     e.preventDefault()
                     save.mutate(next)
                   }
@@ -111,6 +121,7 @@ export function UsernameRow({ user }: { user: AuthUser }) {
                 aria-label={t('profile.username_label')}
               />
             </div>
+            <AvailabilityHint result={avail} shapeText={t('profile.err_username_shape')} />
           </label>
 
           <div className="fx-sec-actions">
@@ -127,7 +138,7 @@ export function UsernameRow({ user }: { user: AuthUser }) {
             )}
             <button
               className="fx-btn fx-btn-primary"
-              disabled={next === current || save.isPending}
+              disabled={next === current || save.isPending || blocked}
               onClick={() => save.mutate(next)}
             >
               {t('common.save')}

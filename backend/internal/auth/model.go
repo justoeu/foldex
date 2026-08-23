@@ -233,6 +233,15 @@ var reservedUsernames = map[string]bool{
 	"me": true, "null": true, "undefined": true,
 }
 
+// ReservedUsername reports whether a NORMALIZED username is on the list above.
+//
+// Exported because NormalizeUsername deliberately collapses "wrong shape" and
+// "reserved" into one error — the write path needs only "invalid" — while a
+// form has to tell them apart, since they have different fixes. Without this,
+// the only way to classify is to re-read the map from outside, which goes stale
+// silently the day the rule stops being an exact-match lookup.
+func ReservedUsername(norm string) bool { return reservedUsernames[norm] }
+
 // ErrUsernameShape is the one refusal every bad username produces, so the
 // handler does not have to enumerate them and the message stays honest about
 // the actual rule.
@@ -257,7 +266,7 @@ func NormalizeUsername(username string) (string, error) {
 	if strings.Contains(norm, "@") || !usernameShape.MatchString(norm) {
 		return "", ErrUsernameShape
 	}
-	if reservedUsernames[norm] {
+	if ReservedUsername(norm) {
 		return "", ErrUsernameShape
 	}
 	return norm, nil

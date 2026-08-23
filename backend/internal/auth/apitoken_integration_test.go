@@ -97,6 +97,13 @@ func TestAPIToken_IsRefusedOnTheIdentityAndAdminSurfaces(t *testing.T) {
 		{http.MethodGet, "/api/auth/sessions", nil},
 		{http.MethodPost, "/api/auth/logout-all", nil},
 		{http.MethodPost, "/api/auth/2fa/totp/disable", map[string]string{}},
+		// The availability probe's ENTIRE safety argument is "session-only":
+		// it answers a boolean about another account's identifier without a
+		// password. A content-scoped extension token reaching it would turn
+		// a bookmark credential into a username enumeration API, and nothing
+		// else in the tree would notice — the route sits in a group that
+		// already rejects tokens, so this locks the mount, not the handler.
+		{http.MethodGet, "/api/auth/username-available?u=valmir", nil},
 	} {
 		rec := h.client(t).doRaw(tc.method, tc.path, tc.body, hdr)
 		assert.Equal(t, http.StatusForbidden, rec.Code, "%s %s", tc.method, tc.path)

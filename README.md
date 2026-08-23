@@ -593,7 +593,14 @@ in with it instead of your e-mail — the sign-in field takes either. It is 3 to
 letters, digits, dot, dash or underscore, and it can never contain `@`: the server resolves
 one identifier against both columns, so an address-shaped username would sit in everyone's
 mailbox namespace and could collect another account's password attempts. Clearing the field
-removes it, and an account without one signs in exactly as before.
+removes it, and an account without one signs in exactly as before. The field checks
+availability while you type and says why a value will not do — taken, reserved, or the
+wrong shape — so you learn it before pressing Save. There is **no equivalent check for
+e-mail** outside administration, on purpose: a free "does this address have an account
+here?" is a user-enumeration API, and the e-mail-change flow keeps its answer at submit
+time where your password is the cost of each guess. Creating an account from
+**Administration** does check the address live, because an administrator can already list
+every account anyway.
 
 **Changing your e-mail.** **Sign-in → E-mail → Change e-mail** asks for your current
 password and sends a confirmation link to the NEW address. Nothing moves until that link is

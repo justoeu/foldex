@@ -39,6 +39,8 @@ export type MockState = {
   masterPassword?: string
   // Non-secret reminder hint for the master password.
   masterHint?: string
+  /** Identifiers the availability probes report as taken (lowercased). */
+  takenIdentifiers?: string[]
   // Per-folder unlock attempt tracking (mirrors the backend rate limiter).
   unlockAttempts?: Record<number, { fails: number; lockedUntil: number }>
   // Stats endpoints. Tests populate these to drive StatsPage charts/KPIs.
@@ -81,9 +83,24 @@ type Route = {
   handle: (m: RegExpMatchArray, data: any, params: URLSearchParams, state: MockState, headers: Record<string, string>) => any
 }
 
+
+/** Mirrors the server's answer shape: a boolean plus a closed `reason` set. */
+function availability(value: string | null, s: MockState) {
+  const v = (value ?? '').trim().toLowerCase()
+  if (!v) return { available: false, reason: 'empty' }
+  if ((s.takenIdentifiers ?? []).includes(v)) return { available: false, reason: 'taken' }
+  return { available: true }
+}
+
 const buildRoutes = (): Record<Method, Route[]> => ({
   get: [
     { url: /^\/api\/tags$/, handle: (_m, _d, _p, s) => s.tags },
+    // The availability probes. Present so component tests exercise the REAL
+    // route and query-param name — a suite that only blanket-mocks `http.get`
+    // stays green through a rename on either side. `takenIdentifiers` is empty
+    // by default, so an untouched test sees "available" and nothing blocks.
+    { url: /^\/api\/auth\/username-available$/, handle: (_m, _d, p, s) => availability(p.get('u'), s) },
+    { url: /^\/api\/admin\/users\/email-available$/, handle: (_m, _d, p, s) => availability(p.get('email'), s) },
     { url: /^\/api\/folders$/, handle: listFolders },
     // /recent-changes is static — keep it before /api/links so the static
     // path matches first; the catch-all /api/links handler is fine after.

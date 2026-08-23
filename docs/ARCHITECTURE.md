@@ -1259,11 +1259,60 @@ propósito: quem o recebe tem um token que prova controle da caixa de destino e 
 escolhendo outro endereço; "link inválido" o mandaria para o suporte.
 
 **Alternativas descartadas.** Username obrigatório com backfill (expõe o e-mail e força um
-valor herdado). Endpoint de disponibilidade em tempo real (mais um oráculo, sem ganho: o
-save já responde 409). Trocar o e-mail sem senha atual (uma sessão roubada moveria o canal
-de recuperação).
+valor herdado). Trocar o e-mail sem senha atual (uma sessão roubada moveria o canal de
+recuperação).
 
-**Travas.** Treze testes de integração `TestUsername_*` / `TestEmailChange_*`, entre eles: o
+**Revisão de 23/08/2026 — a disponibilidade em tempo real, que esta ADR havia descartado.**
+O descarte original dizia "mais um oráculo, sem ganho: o save já responde 409", e a segunda
+metade estava errada: o ganho é o usuário descobrir antes de apertar o botão, e o dono da
+instância pediu justamente isso. A primeira metade continua certa, e é ela que decide o
+alcance. Um endpoint de disponibilidade responde sobre o identificador de OUTRA conta sem
+pedir senha — é uma API de enumeração por construção, e o que muda em relação ao 409 do save
+não é a existência do oráculo, é o **preço de cada pergunta**: hoje custa uma senha válida ou
+ser admin. Então ele foi ligado onde esse preço não importa e desligado onde importa.
+
+- `GET /api/auth/username-available` — **só sessão**, então o anônimo não ganha nada e o
+  401 único, o bcrypt-sempre-roda e o piso de 250 ms do login seguem intactos. **Só
+  username**, nunca e-mail: um endereço é também uma caixa e existe fora daqui, então
+  confirmar que está ocupado diz *esta pessoa tem conta aqui*; um username só existe aqui e
+  diz apenas *alguém aqui usa esse apelido*. **Teto de 60 por 5 min por usuário**,
+  dimensionado para quem DIGITA num campo com debounce — custa a um script quatrocentas
+  consultas por hora em vez de milhares por segundo. O orçamento é cobrado antes da consulta
+  e também para formas recusadas, senão basta acrescentar um caractere inválido para sondar
+  de graça (mesma razão pela qual o balde do login incrementa para endereços inexistentes).
+  Probe vazia é gratuita: não consulta nada e não revela nada.
+- `GET /api/admin/users/email-available` — a contrapartida de e-mail existe **só sob
+  `/api/admin`**, e a colocação é o argumento inteiro: depois do `RequireAdmin` o chamador já
+  lista todas as contas com endereço, então não revela nada que ele não leia direto, e por
+  isso não tem teto. Uma troca **pendente** conta como ocupado, porque o índice único guarda
+  só a coluna viva e um endereço que alguém já está migrando passaria no teste para depois
+  perder a corrida na confirmação — tendo sido anunciado como livre.
+- **A troca de e-mail continua sem verificação ao vivo.** Ali a resposta fica no envio, onde
+  a senha atual é o custo de cada tentativa. Foi a escolha explícita do dono quando o custo
+  foi posto: incluí-la daria a qualquer pessoa convidada um enumerador rápido e sem senha das
+  caixas com conta na instância.
+
+**`reason: "pending"` anda junto de uma resposta DISPONÍVEL, e essa separação é
+carregada.** O `AdminCreateUser` conflita só em `app_user`, então reportar uma
+troca pendente como *ocupado* apagaria um Create que o servidor aceitaria — o
+caso que o §5 nomeia ao pé da letra ("uma tela escondendo um botão que o
+servidor permitiria lê como funcionalidade faltando") — e sem saída, porque a
+lista de usuários não mostra conta nenhuma naquele endereço. A linha pendente
+ainda pode expirar ou ter a época de credencial morta por uma troca de senha,
+liberando o endereço. Então ela AVISA e o administrador decide.
+
+A sondagem **bloqueia o envio só na recusa, nunca durante a consulta e nunca
+quando a checagem falha** (a mensagem diz "você ainda pode salvar", e o código
+tem que cumprir isso): travar no debounce
+deixa o botão morto por 450 ms sem causa visível, e um clique que corre com a checagem chega
+ao servidor, que recusa do mesmo jeito — a mesma resposta, vinda de quem sempre foi a
+autoridade.
+
+**Travas.** Vinte e um testes de integração `TestUsername_*` / `TestEmailChange_*` /
+`TestUsernameAvailable_*` / `TestEmailAvailable_*`, entre eles: o
 aviso ao endereço antigo sem link em nenhum dos dois braços, o orçamento compartilhado entre
 os dois identificadores, a época de credencial matando a troca pendente, o link substituído
-por um pedido mais novo, e a recusa a tokens de API.
+por um pedido mais novo, e a recusa a tokens de API. Da revisão de 23/08: a rotação de
+refresh NÃO mata uma troca pendente (direção positiva, que faltava), o irmão da janela de
+graça também não, a sondagem de username é fechada ao anônimo, o e-mail é 404 para não-admin,
+uma forma recusada consome orçamento e uma troca pendente conta como endereço ocupado.

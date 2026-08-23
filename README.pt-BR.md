@@ -597,7 +597,13 @@ caracteres entre letras, números, ponto, traço e sublinhado, e ele nunca pode 
 servidor resolve um identificador contra as duas colunas, então um nome com forma de
 endereço ficaria no mesmo espaço das caixas de todo mundo e poderia recolher as tentativas
 de senha de outra conta. Esvaziar o campo remove o nome, e quem não tiver um entra
-exatamente como antes.
+exatamente como antes. O campo verifica a disponibilidade enquanto você digita e diz por
+que um valor não serve — em uso, reservado ou fora da forma — para você descobrir antes de
+apertar Salvar. **Não existe verificação equivalente para e-mail** fora da administração, de
+propósito: um "esse endereço tem conta aqui?" gratuito é uma API de enumeração de usuários, e
+a troca de e-mail mantém a resposta no envio, onde a sua senha é o custo de cada tentativa.
+Criar conta pela **Administração** verifica o endereço ao vivo, porque um administrador já
+consegue listar todas as contas de qualquer forma.
 
 **Trocar seu e-mail.** **Acesso → E-mail → Trocar e-mail** pede a sua senha atual e envia um
 link de confirmação para o NOVO endereço. Nada muda até esse link ser aberto: o endereço

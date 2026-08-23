@@ -14,6 +14,12 @@ import (
 // Bump it whenever a migration adds something the Go code READS or WRITES —
 // not merely when a migration lands. It is the number that turns "your database
 // is older than your binary" into a boot failure instead of a 500 hours later.
+//
+// Migration 000038 deliberately does NOT bump it: it adds an INDEX, and no
+// query depends on an index existing — the same SQL returns the same rows
+// without it, only slower. Bumping here would refuse the boot of every
+// instance that has not run the migration yet, trading a real outage for a
+// planner improvement.
 const RequiredSchemaVersion = 37
 
 // ErrSchemaOutdated is returned when the database has not been migrated.

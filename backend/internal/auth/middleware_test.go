@@ -1,14 +1,17 @@
 package auth
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"foldex/internal/pkg/attemptlimit"
 	"foldex/internal/pkg/authctx"
 )
 
@@ -82,18 +85,43 @@ func TestSweepLimitersEvictsEveryBucket(t *testing.T) {
 	t.Parallel()
 	h := newLimiterOnlyHandler(t)
 
-	// Burn a failure in each bucket so all four maps hold a key.
-	h.loginByIP.Fail("login:ip:198.51.100.1")
-	h.loginByEmail.Fail("login:em:ghost@example.com")
-	h.bootstrapIP.Fail("bootstrap:198.51.100.1")
-	h.inviteIP.Fail("invite:198.51.100.1")
+	// Iterate the SAME slice SweepLimiters iterates. The previous version seeded
+	// four buckets by hand and asserted the literal 4 — so it stayed green while
+	// six more buckets were added, including `availabilityUser`, the one bucket
+	// whose omission is not a memory question but a lockout every account would
+	// eventually meet without earning it. A test that names itself "every
+	// bucket" has to derive "every", or it is a count somebody typed once.
+	all := h.limiters()
+
+	// Deriving the count from limiters() alone is NOT enough, and the first
+	// attempt at this fix proved it: removing a bucket from that slice keeps
+	// such a test green, because it sweeps whatever the slice happens to hold.
+	// What has to be locked is that the slice holds EVERY limiter field on the
+	// Handler — which only reflection over the struct can say.
+	declared := 0
+	v := reflect.ValueOf(*h)
+	for i := 0; i < v.NumField(); i++ {
+		if v.Field(i).Type() == reflect.TypeOf((*attemptlimit.Limiter)(nil)) {
+			declared++
+		}
+	}
+	require.Equal(t, declared, len(all),
+		"every *attemptlimit.Limiter field on Handler must be in limiters(); "+
+			"a bucket outside the sweep never drops an idle entry, and since this "+
+			"package's limiters count CONSECUTIVE failures, its budget then only "+
+			"ever shrinks")
+	require.Greater(t, len(all), 4, "the whole point is that this list grows")
+	for i, l := range all {
+		l.Fail(fmt.Sprintf("bucket-%d", i))
+	}
 
 	// Nothing is stale yet.
 	assert.Zero(t, h.SweepLimiters(time.Hour))
 
-	// Everything is stale now — and none of these is locked out (one failure
-	// each, against caps of 5/20), so all four are eligible.
-	assert.Equal(t, 4, h.SweepLimiters(0))
+	// Everything is stale now — and none is locked out (one failure each,
+	// against caps of 5 and up), so every bucket is eligible.
+	assert.Equal(t, len(all), h.SweepLimiters(0),
+		"every bucket in limiters() must be swept")
 	assert.Zero(t, h.SweepLimiters(0), "a second sweep has nothing left to drop")
 }
 

@@ -9,6 +9,8 @@ import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { apiErrorCode as errCode, apiErrorMessage } from '../../lib/apiError'
 import { MIN_PASSWORD_LEN, type Role } from '../../auth/types'
 import * as admin from '../../api/admin'
+import { AvailabilityHint } from '../AvailabilityHint'
+import { useAvailability } from '../../hooks/useAvailability'
 
 const ASSIGNABLE: readonly Role[] = ['admin', 'editor', 'viewer']
 
@@ -59,7 +61,17 @@ export function CreateUserDialog({ onClose }: { onClose: () => void }) {
     },
   })
 
-  const blocked = !email.trim() || password.length < MIN_PASSWORD_LEN || create.isPending
+  // Safe to ask freely HERE and nowhere else: past RequireAdmin the caller can
+  // already list every account with its address, so the probe discloses nothing
+  // they could not read directly. The e-mail-CHANGE flow deliberately has no
+  // such endpoint — there a password is the cost of each guess.
+  const avail = useAvailability(admin.emailAvailable, email)
+  const blocked =
+    !email.trim() ||
+    password.length < MIN_PASSWORD_LEN ||
+    create.isPending ||
+    // Only a refusal blocks; see UsernameRow for why "checking" must not.
+    avail.state === 'refused'
 
   function submit(e: FormEvent) {
     e.preventDefault()
@@ -114,6 +126,7 @@ export function CreateUserDialog({ onClose }: { onClose: () => void }) {
                        onChange={(e) => setEmail(e.target.value)}
                        aria-label={t('auth.email')} />
               </div>
+              <AvailabilityHint result={avail} />
             </label>
 
             <label className="fx-field">

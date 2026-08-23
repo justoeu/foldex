@@ -120,6 +120,19 @@ type Handler struct {
 	// stepUpPasswordUser independently caps password guesses before a session
 	// can mint a fresh credential proof.
 	stepUpPasswordUser *attemptlimit.Limiter
+	// availabilityUser bounds the username-availability probe. Why the endpoint
+	// may exist at all is argued once, on UsernameAvailable.
+	//
+	// The ceiling is set for a person TYPING against a debounced field. Note what
+	// `attemptlimit` actually counts: CONSECUTIVE failures, cleared only by a
+	// CommitSuccess this call site never has, or by a lockout expiring. So the
+	// budget is not a rolling window — it is 60 probes, then a five-minute
+	// lockout, then 60 more. What keeps that from stranding an ordinary user who
+	// edits their username a few times a year is the SWEEP: an entry idle past
+	// the retention window is evicted, which is why this limiter MUST stay in
+	// SweepLimiters. Left out, `fails` only ever climbs and every account
+	// eventually meets a lockout it did nothing to earn.
+	availabilityUser *attemptlimit.Limiter
 	// oauthIP bounds how many redirect states one address can mint. Each one is
 	// a row an unauthenticated caller creates, so without a cap the table is a
 	// pre-auth disk-fill primitive.
@@ -198,6 +211,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		pwResetEmail:       attemptlimit.New(3, time.Hour),
 		stepUpUser:         attemptlimit.New(5, 15*time.Minute),
 		stepUpPasswordUser: attemptlimit.New(5, 15*time.Minute),
+		availabilityUser:   attemptlimit.New(60, 5*time.Minute),
 		oauthIP:            attemptlimit.New(30, time.Hour),
 
 		features: AuthFeatures{
@@ -288,6 +302,8 @@ func (h *Handler) Mount(r chi.Router) {
 		pr.Get("/sessions", h.Sessions)
 		pr.Delete("/sessions/{id}", h.RevokeSession)
 		pr.Patch("/profile", h.UpdateProfile)
+		// No e-mail counterpart here, deliberately — see UsernameAvailable.
+		pr.Get("/username-available", h.UsernameAvailable)
 		pr.Post("/password/change", h.ChangePassword)
 		pr.Post("/password/set", h.SetPassword)
 		pr.Get("/identities", h.ListIdentities)
@@ -317,13 +333,26 @@ func (h *Handler) Mount(r chi.Router) {
 // documentation true.
 func (h *Handler) SweepLimiters(olderThan time.Duration) int {
 	n := 0
-	for _, l := range []*attemptlimit.Limiter{
-		h.loginByIP, h.loginByEmail, h.bootstrapIP, h.inviteIP,
-		h.pwResetIP, h.pwResetEmail, h.stepUpUser, h.stepUpPasswordUser, h.oauthIP,
-	} {
+	for _, l := range h.limiters() {
 		n += l.Sweep(olderThan)
 	}
 	return n
+}
+
+// limiters is the single list of in-memory buckets, extracted so the test can
+// iterate the SAME slice instead of hand-maintaining a count.
+//
+// It was four of ten, asserted as a literal `Equal(t, 4, ...)` under the name
+// "EvictsEveryBucket" — so the test stayed green through the addition of six
+// buckets, and would have stayed green through this one. A test whose name
+// promises completeness has to derive completeness, not restate a number
+// somebody typed once.
+func (h *Handler) limiters() []*attemptlimit.Limiter {
+	return []*attemptlimit.Limiter{
+		h.loginByIP, h.loginByEmail, h.bootstrapIP, h.inviteIP,
+		h.pwResetIP, h.pwResetEmail, h.stepUpUser, h.stepUpPasswordUser, h.oauthIP,
+		h.availabilityUser,
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────

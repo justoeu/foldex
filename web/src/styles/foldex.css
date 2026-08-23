@@ -873,6 +873,17 @@
 .fx-avatar-sm { width: 28px; height: 28px; border-radius: 8px; font-size: 11px; }
 .fx-avatar-lg { width: 60px; height: 60px; border-radius: 17px; font-size: 19px; }
 
+/* The live answer under an identifier field. `wait` covers both "checking" and
+   "could not ask": neither is a verdict on the value, and painting a failed
+   probe red would tell the user their input is wrong when the network is. */
+.fx-avail {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 600; line-height: 1.3;
+}
+.fx-avail-ok   { color: var(--fx-success); }
+.fx-avail-bad  { color: var(--fx-danger); }
+.fx-avail-wait { color: var(--fx-ink-4); }
+
 /* Anything portaled to <body> — the topbar's menus — lands OUTSIDE `.fx-shell`,
    and therefore outside everything the shell establishes: `box-sizing:
    border-box` on all descendants, the UI font, the 14px/600 type scale, and the

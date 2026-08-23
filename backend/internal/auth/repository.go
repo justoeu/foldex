@@ -1502,3 +1502,50 @@ func (r *Repository) AdminCreateUser(
 	}
 	return u, nil
 }
+
+// UsernameAvailable answers whether `norm` (already normalized) can be claimed
+// by uid.
+//
+// The caller's OWN current username is available to them — a form that reported
+// "taken" while the user looked at their own name would be answering a question
+// nobody asked, and would block a save that only changed the casing.
+//
+// Deliberately NOT a `SELECT ... WHERE username_normalized = $1` returning the
+// row: this answers a boolean and must never become a way to read another
+// account's projection.
+func (r *Repository) UsernameAvailable(ctx context.Context, uid authctx.UserID, norm string) (bool, error) {
+	var taken bool
+	if err := r.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM app_user WHERE username_normalized = $1 AND id <> $2)`,
+		norm, int64(uid)).Scan(&taken); err != nil {
+		return false, fmt.Errorf("username available: %w", err)
+	}
+	return !taken, nil
+}
+
+// EmailAvailable answers whether `norm` is free, and — separately — whether
+// somebody is already MOVING to it.
+//
+// The two are different answers and must not be collapsed. `AdminCreateUser`
+// conflicts only on `app_user_email_norm_uniq`; a pending `email_change` is
+// invisible to it, so reporting one as "taken" would grey out a Create the
+// server would have accepted — CLAUDE.md §5's "a screen hiding a button the
+// server would allow reads as a missing feature", with no route forward,
+// because `GET /api/admin/users` shows no such account either. A pending row
+// may also never be confirmed: it expires, and its credential epoch can be
+// killed by a password change in the meantime, both of which free the address
+// again. So it is a WARNING the administrator weighs, not a refusal.
+//
+// Reachable ONLY from the administration surface — see EmailAvailable on
+// AdminHandler for why that placement is the whole safety argument.
+func (r *Repository) EmailAvailable(ctx context.Context, norm string) (taken, pending bool, err error) {
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM app_user WHERE email_normalized = $1),
+		       EXISTS(SELECT 1 FROM email_change
+		               WHERE new_email_normalized = $1
+		                 AND consumed_at IS NULL
+		                 AND expires_at > now())`, norm).Scan(&taken, &pending); err != nil {
+		return false, false, fmt.Errorf("email available: %w", err)
+	}
+	return taken, pending, nil
+}

@@ -1,4 +1,5 @@
 import { http } from './client'
+import type { AvailabilityResponse } from '../hooks/useAvailability'
 import type { AuthUser, Permission, Role } from '../auth/types'
 
 /**
@@ -172,5 +173,24 @@ export async function savePolicy(p: InstancePolicy): Promise<InstancePolicy> {
  */
 export async function transferOwnership(id: number): Promise<AuthUser> {
   const { data } = await http.post<AuthUser>(`/api/admin/users/${id}/transfer-ownership`)
+  return data
+}
+
+/** Asks whether an address is free, for the administrator creating an account.
+ *
+ *  This lives under /api/admin and must never be mirrored anywhere an ordinary
+ *  session can reach: past the admin gate the caller can already list every
+ *  account with its address, which is the whole reason the probe is allowed to
+ *  answer about e-mail at all. `reason: "pending"` rides an AVAILABLE answer —
+ *  somebody is moving to this address but has not confirmed, and the create
+ *  would still succeed. */
+export async function emailAvailable(
+  email: string,
+  signal: AbortSignal,
+): Promise<AvailabilityResponse> {
+  const { data } = await http.get<AvailabilityResponse>('/api/admin/users/email-available', {
+    params: { email },
+    signal,
+  })
   return data
 }

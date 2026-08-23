@@ -99,6 +99,57 @@ describe('the account username', () => {
       expect(patch).toHaveBeenCalledWith('/api/auth/profile', { username: '' }))
   })
 
+  // Answered through the mock server's REAL route, not a blanket `http.get`
+  // spy: with a spy, renaming the endpoint or the `u` query param keeps this
+  // green and nothing else ties the component to what the backend mounts.
+  it('blocks the save on a name the server says is taken', async () => {
+    state.takenIdentifiers = ['taken']
+    render()
+    const user = userEvent.setup()
+
+    await user.click(row().getByRole('button', { name: /set a username/i }))
+    await user.type(row().getByLabelText(/username/i), 'taken')
+
+    expect(await row().findByText(/already in use/i)).toBeInTheDocument()
+    expect(row().getByRole('button', { name: /^save$/i })).toBeDisabled()
+  })
+
+  // Enter and the button must agree. They did not: the keydown gated only on
+  // "changed and not saving", so a refused name was un-clickable and still
+  // submittable — one field with two affordances disagreeing about whether
+  // submission is possible.
+  it('refuses Enter on the same name the button refuses', async () => {
+    state.takenIdentifiers = ['taken']
+    const patch = mockPatch({ username: 'taken' })
+    render()
+    const user = userEvent.setup()
+
+    await user.click(row().getByRole('button', { name: /set a username/i }))
+    await user.type(row().getByLabelText(/username/i), 'taken')
+    expect(await row().findByText(/already in use/i)).toBeInTheDocument()
+
+    await user.type(row().getByLabelText(/username/i), '{Enter}')
+    expect(patch).not.toHaveBeenCalled()
+  })
+
+  // The copy says "you can still save" when the probe fails, and the code has
+  // to mean it: a user whose network hiccups must not be locked out of naming
+  // themselves. Same for a probe still in flight — blocking there greys the
+  // button out for the debounce with no visible cause.
+  it('leaves the save enabled when the probe cannot answer', async () => {
+    vi.spyOn(http, 'get').mockRejectedValue(new Error('offline'))
+    const patch = mockPatch({ username: 'valmir' })
+    render()
+    const user = userEvent.setup()
+
+    await user.click(row().getByRole('button', { name: /set a username/i }))
+    await user.type(row().getByLabelText(/username/i), 'valmir')
+    await user.click(row().getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith('/api/auth/profile', { username: 'valmir' }))
+  })
+
   it('says the shape rule when the server refuses the value', async () => {
     vi.spyOn(http, 'patch').mockRejectedValue({
       response: { status: 400, data: { error: { code: 'invalid_username' } } },

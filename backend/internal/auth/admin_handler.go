@@ -93,6 +93,9 @@ func (h *AdminHandler) Mount(r chi.Router) {
 	// STRICTER of the two write permissions because it assigns a role in the
 	// same request, exactly like the PATCH below.
 	r.With(assignRoles).Post("/users", h.CreateUser)
+	// Behind the same gate as the create it serves: a caller who may not
+	// create accounts has no business probing which addresses exist.
+	r.With(assignRoles).Get("/users/email-available", h.EmailAvailable)
 	// Role and status travel in the same PATCH, so the stricter of the two
 	// permissions gates it.
 	r.With(assignRoles).Patch("/users/{id}", h.UpdateUser)

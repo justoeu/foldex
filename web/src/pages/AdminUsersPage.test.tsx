@@ -23,9 +23,17 @@ function user(over: Partial<AuthUser> & { id: number }): AuthUser {
   }
 }
 
-function mockApi(users: AuthUser[], invites: unknown[] = []) {
-  return vi.spyOn(http, 'get').mockImplementation(async (url: string) => {
+function mockApi(users: AuthUser[], invites: unknown[] = [], taken: string[] = []) {
+  return vi.spyOn(http, 'get').mockImplementation(async (url: string, cfg?: any) => {
     if (url === '/api/admin/users') return { data: { users } } as never
+    // The create dialog probes this while the administrator types. Without it
+    // the catch-all answered `{invites}`, `available` came back undefined, and
+    // the dialog treated every address as taken — which is also why the Add
+    // button's gating needs a test of its own rather than a lucky default.
+    if (url === '/api/admin/users/email-available') {
+      const email = String(cfg?.params?.email ?? '').trim().toLowerCase()
+      return { data: taken.includes(email) ? { available: false, reason: 'taken' } : { available: true } } as never
+    }
     return { data: { invites } } as never
   })
 }
@@ -346,5 +354,45 @@ describe('AdminUsersPage', () => {
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith('/api/admin/users/2/sessions/revoke'),
     )
+  })
+})
+
+describe('creating a user', () => {
+  // The whole admin half of the availability feature had no test: replacing the
+  // gate with `false` left the suite green, so the hint and the block could
+  // both regress to nothing and the administrator would learn the address was
+  // taken only from the 409 the probe exists to pre-empt.
+  it('warns and blocks Add user on an address that already has an account', async () => {
+    mockApi([me], [], ['taken@foldex.test'])
+    renderWithProviders(<AdminUsersPage />, { session: testAdminSession })
+    const u = userEvent.setup()
+
+    await u.click(await screen.findByRole('button', { name: /add a user|add user/i }))
+    const dialog = within(await screen.findByRole('dialog'))
+    await u.type(dialog.getByLabelText(/e-mail/i), 'taken@foldex.test')
+    // A valid password too, so the availability refusal is the ONLY thing left
+    // that could disable the button. Without this the assertion passes on an
+    // empty password field and the gate itself goes unmeasured — which is
+    // exactly how the first version of this test survived deleting the gate.
+    await u.type(dialog.getByLabelText(/^temporary password$/i), 'a long enough password')
+
+    expect(await dialog.findByText(/already in use/i)).toBeInTheDocument()
+    expect(dialog.getByRole('button', { name: /add user/i })).toBeDisabled()
+  })
+
+  // A free address must leave the button reachable — the mirror case, without
+  // which the test above passes on a dialog that blocks everything.
+  it('leaves Add user reachable on a free address', async () => {
+    mockApi([me])
+    renderWithProviders(<AdminUsersPage />, { session: testAdminSession })
+    const u = userEvent.setup()
+
+    await u.click(await screen.findByRole('button', { name: /add a user|add user/i }))
+    const dialog = within(await screen.findByRole('dialog'))
+    await u.type(dialog.getByLabelText(/e-mail/i), 'new@foldex.test')
+    await u.type(dialog.getByLabelText(/^temporary password$/i), 'a long enough password')
+
+    await waitFor(() => expect(dialog.getByText(/available/i)).toBeInTheDocument())
+    expect(dialog.getByRole('button', { name: /add user/i })).toBeEnabled()
   })
 })

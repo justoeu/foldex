@@ -1,4 +1,5 @@
 import { http } from './client'
+import type { AvailabilityResponse } from '../hooks/useAvailability'
 import type { AuthFeatures, AuthUser, Role } from '../auth/types'
 
 export type AnonymousMeResponse = {
@@ -152,6 +153,22 @@ export async function updateLocale(locale: string): Promise<MeResponse> {
  *  optional in BOTH directions, not just at sign-up. */
 export async function updateUsername(username: string): Promise<MeResponse> {
   const { data } = await http.patch<MeResponse>('/api/auth/profile', { username })
+  return data
+}
+
+/** Asks whether the signed-in account could claim a username.
+ *
+ *  Session-only and rate-limited on the server by design — see the handler for
+ *  why an availability probe is an enumeration oracle and what keeps this one
+ *  acceptable. There is deliberately no e-mail counterpart on this surface. */
+export async function usernameAvailable(
+  username: string,
+  signal: AbortSignal,
+): Promise<AvailabilityResponse> {
+  const { data } = await http.get<AvailabilityResponse>('/api/auth/username-available', {
+    params: { u: username },
+    signal,
+  })
   return data
 }
 
