@@ -898,10 +898,36 @@
 .fx-portalmenu,
 .fx-portalmenu *,
 .fx-portalmenu *::before,
-.fx-portalmenu *::after { box-sizing: border-box; }
-.fx-portalmenu {
+.fx-portalmenu *::after,
+.fx-overlay,
+.fx-overlay *,
+.fx-overlay *::before,
+.fx-overlay *::after { box-sizing: border-box; }
+.fx-portalmenu,
+.fx-overlay {
   font-family: var(--fx-ui); font-weight: 600; font-size: 14px; line-height: 1.45;
   color: var(--fx-ink); -webkit-font-smoothing: antialiased;
+}
+/* `.fx-overlay` is here for the same reason, by a different door: it is a
+   SIBLING of `.fx-shell` under #root, not a descendant, so no portal is
+   involved and the portal guard cannot see it. Measured on the folder-unlock
+   prompt: `inShell: false`, the bare input kept its native `2px inset` border
+   and white background — a second pill inside `.fx-input` — and `content-box`
+   made it 482px wide inside a 460px container, which is what pushed the reveal
+   eye outside the field.
+
+   The ELEMENT resets belong here too, not only the type scale. Mirrors
+   `.fx-shell input` / `.fx-shell button` exactly; the element-qualified
+   component rules later in this file still out-specify these. */
+.fx-portalmenu input, .fx-portalmenu textarea,
+.fx-overlay input, .fx-overlay textarea {
+  font-family: inherit; font-weight: 600; color: inherit;
+  background: transparent; border: 0; outline: none;
+}
+.fx-portalmenu button,
+.fx-overlay button {
+  font-family: inherit; font-weight: inherit; color: inherit;
+  cursor: pointer; border: 0; background: transparent; padding: 0;
 }
 
 /* Topbar user menu (avatar button + portaled dropdown, same pattern as the

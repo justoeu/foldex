@@ -33,6 +33,13 @@ const ROOT = new URL('..', import.meta.url).pathname
 const SRC = join(ROOT, 'web/src')
 const CSS = join(ROOT, 'web/src/styles/foldex.css')
 const CLASS = 'fx-portalmenu'
+// Every root that renders OUTSIDE `.fx-shell` and therefore has to re-establish
+// its context. `.fx-overlay` is a SIBLING of the shell under #root — no portal
+// is involved, so the createPortal check below cannot see it, and it shipped
+// with the folder-unlock input wearing its native 2px inset border inside
+// `.fx-input` and overflowing the field because `content-box` made it wider
+// than its own container.
+const OUTSIDE_SHELL = ['fx-portalmenu', 'fx-overlay']
 
 /** Every `createPortal(` call's argument text, one entry per call. */
 export function portalCalls(source) {
@@ -91,15 +98,40 @@ const failures = []
 // The class must actually do the job it is named for, or every call site is
 // wearing a label with nothing behind it.
 const css = readFileSync(CSS, 'utf8')
-const root = css.match(new RegExp(`\\.${CLASS}\\s*\\{([^}]*)\\}`))
-if (!root) failures.push(`.${CLASS} has no rule in foldex.css`)
-else {
-  for (const prop of ['font-family', 'font-weight', 'font-size', 'color']) {
-    if (!root[1].includes(prop)) failures.push(`.${CLASS} does not set ${prop}`)
+// The declaration block is shared by every outside-shell root, so find the one
+// that names this class and read the properties out of it.
+// Selector lists are shared (`.fx-portalmenu,\n.fx-overlay { … }`), so a
+// regex demanding `{` right after the class name finds nothing — the first
+// version of this guard did exactly that and reported the rule as missing.
+// Walk every rule and pick the one whose SELECTOR names the class and whose
+// body carries the type scale.
+const blockFor = (cls) => {
+  const named = new RegExp(`\\.${cls}(?![\\w-])`)
+  for (const [, selector, body] of css.matchAll(/([^{}]*)\{([^}]*)\}/g)) {
+    if (named.test(selector) && body.includes('font-family')) return body
   }
+  return null
 }
-if (!new RegExp(`\\.${CLASS}\\s*\\*`).test(css)) {
-  failures.push(`.${CLASS} does not re-establish box-sizing on its descendants`)
+for (const cls of OUTSIDE_SHELL) {
+  const decl = blockFor(cls)
+  if (!decl) {
+    failures.push(`.${cls} has no rule in foldex.css`)
+    continue
+  }
+  for (const prop of ['font-family', 'font-weight', 'font-size', 'color']) {
+    if (!decl.includes(prop)) failures.push(`.${cls} does not set ${prop}`)
+  }
+  if (!new RegExp(`\\.${cls}\\s*\\*`).test(css)) {
+    failures.push(`.${cls} does not re-establish box-sizing on its descendants`)
+  }
+  // The element resets, not only the type scale: outside the shell a bare
+  // <input> keeps a native border and white background, and a bare <button>
+  // keeps its native chrome. Both have shipped.
+  for (const el of ['input', 'button']) {
+    if (!new RegExp(`\\.${cls}\\s+${el}\\b`).test(css)) {
+      failures.push(`.${cls} does not reset <${el}>, so it keeps its native chrome outside .fx-shell`)
+    }
+  }
 }
 
 for (const file of walk(SRC)) {
