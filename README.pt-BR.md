@@ -28,7 +28,7 @@ Bookmark nativo é ótimo para "salvar uma página rápida e esquecer". Quando v
 | **Backup = arquivo Netscape opaco.** Imagens? Cliques? Hierarquia? Tudo perdido.        | ZIP de backup único com `manifest.json` + `database.json` (5 tabelas) + **todas as imagens do RustFS**. Round-trip lossless, verificação por checksum SHA-256, 3 modos de conflito (wipe/skip/duplicate). |
 | **Atalhos engessados.** Cmd+D abre o diálogo nativo do navegador.                       | Extensão MV3 + Alt-K (palette), Alt-N (novo link), Alt-F (nova pasta). Drag-and-drop iPhone-style entre cards/pastas. |
 | **Lock-in do fornecedor.** Sair do Chrome = exportar HTML + perder metadados.           | Export para **Netscape HTML** (compat universal) **OU** JSON v2 (com pastas + click_count) **OU** ZIP de backup completo. Importer aceita os três (idempotente por URL; `click_count` é limitado na importação pra um arquivo hostil não inflar o log de cliques). |
-| **Só em inglês / sem localização.**                                                      | UI totalmente localizada em **English / Português / Español** via `react-i18next`. Seletor de idioma no topbar; autodetecção pelo idioma do navegador no primeiro acesso; escolha persiste no `localStorage`. |
+| **Só em inglês / sem localização.**                                                      | UI totalmente localizada em **English / Português / Español** via `react-i18next`. Seletor de idioma no topbar, fileira de bandeiras em toda tela deslogada; autodetecção pelo idioma do navegador no primeiro acesso; escolha persiste no `localStorage` e na conta. |
 | **Pinned/favoritos = uma pastinha à parte.** Só visual.                                 | `pinned` é coluna real na tabela. `ORDER BY pinned DESC, …` aplica em todo modo de ordenação. Badge gradient sempre visível. |
 | **Dados embutidos no navegador.** Trocou de máquina? Reinstalou Chrome? Reza.           | Postgres + RustFS em containers. `make up` numa máquina nova e seu ZIP de backup restaura tudo (DB + imagens) em ~minutos. |
 | **Pastebin/app de notas é outra ferramenta.** Snippets e links vivem em lugares diferentes. | **Notas** (`⌥M`) são uma entidade de primeira classe junto com os links: editor rich-text (Tiptap) com **barra de formatação** — negrito/itálico/sublinhado/tachado, títulos, listas com marcadores e numeradas, alinhamento, cor do texto, fonte, citações/código, links e imagens inline —, mesmas tags/pastas/pin/busca dos links, intercaladas no mesmo grid com badge esmeralda, compartilháveis via página pública `/n/{slug}`. |
@@ -305,7 +305,7 @@ diretamente.
 
 Toda a UI passa por `react-i18next`. **Inglês é a fonte da verdade**; **Português** e **Español** são mantidos em paridade total (toda chave espelhada nos três).
 
-- **Trocar idioma**: seletor no topbar. A escolha é gravada na CONTA (`app_user.locale`), então ela também decide o idioma de todo e-mail que o foldex te manda; o Perfil também oferece *seguir meu navegador*, que limpa a preferência de novo. No primeiro acesso autodetecta de `navigator.language`. Telas que disparam e-mail com você DESLOGADO — "esqueci minha senha" — mandam junto o idioma que estão exibindo, porque a interface segue `navigator.language` enquanto o fallback do servidor lê o header `Accept-Language`, e são configurações separadas: uma tela em português mandando um link de redefinição em inglês é o que acontece quando as duas discordam. A dica nunca passa por cima de uma preferência gravada.
+- **Trocar idioma**: seletor no topbar depois de logado; uma fileira de bandeiras em toda tela DESLOGADA. É uma fileira e não um menu porque quem cai nessas telas pode estar olhando para um idioma que não lê, e um menu escrito *Idioma* nesse idioma é um controle que a pessoa precisa adivinhar antes de abrir — as bandeiras são reconhecíveis sem ler nada. A bandeira é decorativa: o nome do idioma é o rótulo acessível do botão e o código fica visível ao lado do glifo, então o controle continua utilizável onde o emoji não desenha. A escolha é gravada na CONTA (`app_user.locale`), então ela também decide o idioma de todo e-mail que o foldex te manda; o Perfil também oferece *seguir meu navegador*, que limpa a preferência de novo. No primeiro acesso autodetecta de `navigator.language`. Telas que disparam e-mail com você DESLOGADO — "esqueci minha senha" — mandam junto o idioma que estão exibindo, porque a interface segue `navigator.language` enquanto o fallback do servidor lê o header `Accept-Language`, e são configurações separadas: uma tela em português mandando um link de redefinição em inglês é o que acontece quando as duas discordam. A dica nunca passa por cima de uma preferência gravada.
 - **Arquivos de locale**: `web/src/i18n/locales/{en,pt,es}.json`.
 - **Adicionar locale**: solte um novo `<lang>.json`, liste em `SUPPORTED_LOCALES` e popule toda chave a partir de `en.json`. Plurais usam o sufixo `_one` / `_other`.
 
@@ -396,6 +396,28 @@ Design completo: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 
 Contas vêm **ligadas por padrão** desde a 1.13.0.
 
+**Adicionar usuário.** *Configurações → Administração → Usuários* tem **Adicionar
+usuário**: você digita o endereço, o papel e uma primeira senha, e a conta já funciona.
+É uma exceção deliberada à regra que o resto do foldex segue — um administrador nunca
+escolhe a credencial de outra pessoa — então até ela trocar, duas pessoas conhecem essa
+senha e a trilha de auditoria não distingue os acessos de vocês. O **convite** logo abaixo
+evita isso: a pessoa escolhe a própria senha por um link. O endereço nasce NÃO VERIFICADO
+nos dois casos, e o papel nunca pode ser `owner`.
+
+**Tabela de administração.** As ações de cada conta — desativar/ativar, encerrar todas as
+sessões, enviar recuperação, transferir a propriedade, excluir — mostram ícone e rótulo, para que nada
+na linha pareça decoração. Cada um tem um rótulo de leitor de tela nomeando a ação E a
+conta, e os destrutivos mantêm o diálogo de confirmação.
+
+**No formulário de acesso.** Todo campo de senha do foldex — entrar, convite, redefinição,
+troca de senha da conta, desbloqueio de pasta, senha mestra — tem um botão para revelar o
+que foi digitado; ele começa sempre oculto, volta a ocultar sempre que a tela remonta, e
+desliga o corretor ortográfico enquanto revelado (um campo de texto comum é alvo de
+corretores que mandam o conteúdo para um serviço remoto). A tela de acesso também
+oferece **Lembrar meu e-mail**, que guarda o endereço (nunca a senha) neste navegador,
+grava só depois que as credenciais forem aceitas, e apaga no instante em que você
+desmarca a caixa. Não tem efeito nenhum sobre quanto tempo você fica logado.
+
 **Primeira execução — inclusive numa atualização.** A SPA mostra uma tela de setup. A
 conta criada ali vira administradora e **adota todos os links, notas, pastas e tags que
 já existiam**: nada se perde e nada precisa ser reimportado. Defina `AUTH_PUBLIC_URL`
@@ -441,6 +463,15 @@ houver nenhuma — e uma grade de cards, um por painel. Administradores ganham u
 **Pessoal × Administração** acima disso; os demais veem só o escopo pessoal, porque
 `/api/admin` responde 404 para eles e uma aba desabilitada prometeria uma superfície que o
 servidor nega.
+
+**Minha conta.** Um tile dentro das configurações abre tudo o que você gerencia sobre si
+mesmo, com uma trilha lateral — Perfil, Acesso, Dois fatores, Tokens de API, Sessões — e
+uma seção por vez: nome e idioma, sua senha (alterar, ou criar uma se a conta entra
+pelo Google), a identidade Google vinculada, dois fatores, tokens de API e sair. Alterar a
+senha pede a senha atual e encerra sua sessão em todos os OUTROS navegadores — este
+continua. Uma conta que só entra pelo Google não consegue desvinculá-lo enquanto não
+tiver senha, e a página mostra os dois juntos para que a ordem seja óbvia em vez de
+descoberta através de uma recusa.
 
 **Administrando pessoas.** **Configurações → Administração** lista todas as contas com
 papel, último acesso e status, e permite trocar papéis, desativar, excluir, encerrar
@@ -560,6 +591,22 @@ rabbitmqctl set_permissions -p /foldex foldex '^foldex\.' '^foldex\.' '^foldex\.
 admin cria, desabilita e apaga usuários, mas nunca vê os links ou notas de outra conta.
 A separação está no próprio banco, não em um filtro que a interface aplica.
 
+**Entrar com nome de usuário.** Defina um nome de usuário opcional em **Perfil** e você pode
+entrar com ele no lugar do e-mail — o campo de entrada aceita os dois. São de 3 a 32
+caracteres entre letras, números, ponto, traço e sublinhado, e ele nunca pode conter `@`: o
+servidor resolve um identificador contra as duas colunas, então um nome com forma de
+endereço ficaria no mesmo espaço das caixas de todo mundo e poderia recolher as tentativas
+de senha de outra conta. Esvaziar o campo remove o nome, e quem não tiver um entra
+exatamente como antes.
+
+**Trocar seu e-mail.** **Acesso → E-mail → Trocar e-mail** pede a sua senha atual e envia um
+link de confirmação para o NOVO endereço. Nada muda até esse link ser aberto: o endereço
+atual continua valendo, então um erro de digitação custa uma mensagem, não a sua conta. O
+endereço ATUAL recebe um aviso ao mesmo tempo — de propósito sem link nenhum, porque quem o
+lê pode ser alguém cuja conta está sendo tomada. Confirmar encerra a sessão em todos os
+dispositivos, já que o identificador contra o qual elas foram emitidas acabou de mudar.
+Precisa de SMTP (`MAIL_DRIVER=smtp`); o driver de log imprimiria o link no stdout.
+
 **Sessões.** O login grava cookies httpOnly: um token de acesso curto e um de refresh de
 30 dias que rotaciona a cada uso. Se um token de refresh for reapresentado — a assinatura
 de um token roubado — todas as sessões daquela conta são encerradas e o dono recebe um
@@ -601,7 +648,9 @@ ser confirmado, mantendo as rotas de cadastro disponíveis. Um owner que quiser 
 mais rígida pode definir **política da instância → `admin_second_factor: totp_only`**,
 que impede o fator e-mail de contar para administradores; o padrão `any` aceita
 qualquer um. Um administrador sempre pode largar um método enquanto o outro fica, mas
-nunca o último.
+nunca o último. O card de configurações lista cada método na sua própria linha, com o
+estado e a ação, e onde a política impede a remoção a linha diz o motivo em vez de
+apenas omitir o botão.
 
 > A atualização que aplica a migration `000023` invalida folhas de recuperação antigas
 > e códigos de e-mail pendentes, pois digests sem chave não podem ser convertidos sem o

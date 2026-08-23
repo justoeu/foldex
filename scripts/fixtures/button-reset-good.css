@@ -1,0 +1,3 @@
+/* Fixture: the same rule, chained past the reset. */
+.fx-shell button { font-family: inherit; color: inherit; border: 0; background: transparent; padding: 0; }
+:is(.fx-shell, .fx-overlay) .fx-vs-active { background: white; color: blue; }

@@ -61,9 +61,7 @@ async function renderAtSection(section: 'master' | 'locked', onEditFolder?: (fol
 describe('SettingsPage — hub', () => {
   it('shows the personal tiles for a normal user and hides the administration scope (RBAC)', async () => {
     renderWithProviders(<SettingsPage />, { session: userSession })
-    expect(await screen.findByRole('button', { name: /^account/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /security & 2fa/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /api tokens/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /open account/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^master password/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^locked folders/i })).toBeInTheDocument()
     // No scope segment and no admin tile: /api/admin 404s for this session,
@@ -117,36 +115,69 @@ describe('SettingsPage — hub', () => {
     expect(onNavigate).toHaveBeenCalledWith('stats')
   })
 
-  it('opens the account, security and tokens tiles into their sections', async () => {
+  // Profile, sign-in methods, two-factor and API tokens are ONE tile now: each
+  // was a card or two of content, and the sign-in one commonly rendered a
+  // single line of status with no action at all.
+  it('opens the single account tile onto a rail of every section', async () => {
     renderWithProviders(<SettingsPage />)
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /^profile/i }))
-    expect(await screen.findByRole('heading', { name: /your profile/i })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /settings/i }))
 
-    await user.click(screen.getByRole('button', { name: /^account/i }))
-    expect(await screen.findByRole('heading', { name: /sign-in & profile/i })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /settings/i }))
+    await user.click(screen.getByRole('button', { name: /open account/i }))
+    expect(await screen.findByRole('heading', { name: /my account/i, level: 1 })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /security & 2fa/i }))
-    expect(await screen.findByRole('heading', { name: /two-factor authentication/i })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /settings/i }))
+    const rail = within(screen.getByRole('navigation', { name: /account sections/i }))
+    for (const item of [/^profile$/i, /^sign-in$/i, /^two-factor$/i, /^api tokens$/i, /^sessions$/i]) {
+      expect(rail.getByRole('button', { name: item })).toBeInTheDocument()
+    }
 
-    await user.click(screen.getByRole('button', { name: /api tokens/i }))
-    expect(await screen.findByRole('heading', { name: /^api tokens$/i, level: 1 })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /settings/i }))
-    // Every back landed on the hub again.
-    expect(screen.getByRole('button', { name: /^profile/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open account/i })).toBeInTheDocument()
   })
 
-  // The topbar user menu deep-links here via initialSection (key-remounted by
-  // AppShell); an unknown value must fall back to the overview, never crash.
-  it('deep-links into the profile section and ignores unknown sections', async () => {
-    renderWithProviders(<SettingsPage initialSection="profile" />)
-    expect(await screen.findByRole('heading', { name: /your profile/i })).toBeInTheDocument()
+  // One panel at a time, and the rail says which. Stacking all five ran to
+  // three screens of scrolling and made nothing findable.
+  it('shows one section at a time and marks the current rail item', async () => {
+    renderWithProviders(<SettingsPage />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /open account/i }))
 
+    const rail = within(await screen.findByRole('navigation', { name: /account sections/i }))
+    expect(rail.getByRole('button', { name: /^profile$/i })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByLabelText(/display name/i)).toBeInTheDocument()
+
+    await user.click(rail.getByRole('button', { name: /^api tokens$/i }))
+
+    expect(rail.getByRole('button', { name: /^api tokens$/i })).toHaveAttribute('aria-current', 'page')
+    expect(rail.getByRole('button', { name: /^profile$/i })).not.toHaveAttribute('aria-current')
+    expect(screen.queryByLabelText(/display name/i)).not.toBeInTheDocument()
+  })
+
+  // The merged names knew where they wanted to go; resolving all three to
+  // "the account page" threw that away and landed every one on Profile.
+  it.each([
+    ['profile', /^profile$/i],
+    ['security', /^two-factor$/i],
+    ['tokens', /^api tokens$/i],
+    ['account', /^profile$/i],
+  ])('deep-links %s straight to its panel', async (section, expected) => {
+    const { unmount } = renderWithProviders(<SettingsPage initialSection={section} />)
+
+    const rail = within(await screen.findByRole('navigation', { name: /account sections/i }))
+    expect(rail.getByRole('button', { name: expected })).toHaveAttribute('aria-current', 'page')
+    unmount()
+  })
+
+  it('deep-links the merged section names into the account page', async () => {
+    for (const name of ['profile', 'security', 'tokens', 'account']) {
+      const { unmount } = renderWithProviders(<SettingsPage initialSection={name} />)
+      expect(await screen.findByRole('heading', { name: /my account/i })).toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('ignores an unknown section and shows the overview', async () => {
     renderWithProviders(<SettingsPage initialSection="bogus" />)
-    expect(await screen.findByRole('button', { name: /^profile/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /open account/i })).toBeInTheDocument()
   })
 
   it('returns from the administration scope to personal via the segment', async () => {
@@ -188,7 +219,9 @@ describe('SettingsPage — hub', () => {
     expect(await screen.findByText(/turn on two-step verification/i)).toBeInTheDocument()
 
     await userEvent.setup().click(screen.getByRole('button', { name: /set up 2fa/i }))
-    expect(await screen.findByRole('heading', { name: /two-factor authentication/i })).toBeInTheDocument()
+    // The nudge lands on the account page's two-factor band, which is where
+    // that setting lives now.
+    expect(await screen.findByRole('heading', { name: /^two-factor$/i })).toBeInTheDocument()
     unmount()
 
     renderWithProviders(<SettingsPage />, { session: sessionWith({ totp_enabled: true }) })

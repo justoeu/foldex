@@ -34,6 +34,25 @@ export async function updateUser(
   return data
 }
 
+/**
+ * Creates an account with a password the ADMINISTRATOR chose.
+ *
+ * A deliberate exception to the rule the rest of the auth surface enforces —
+ * CLAUDE.md §4, "an administrator never chooses, installs or receives another
+ * user's credential" — taken by the instance owner with the trade stated. The
+ * invitation flow and `sendPasswordRecovery` both avoid the window where two
+ * people know one password, and remain the recommended path.
+ */
+export async function createUser(input: {
+  email: string
+  name: string
+  password: string
+  role: Role
+}): Promise<AuthUser> {
+  const { data } = await http.post('/api/admin/users', input)
+  return data as AuthUser
+}
+
 export async function deleteUser(id: number): Promise<void> {
   await http.delete(`/api/admin/users/${id}`)
 }

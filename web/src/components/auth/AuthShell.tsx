@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { AuthLocaleSwitcher } from './AuthLocaleSwitcher'
 
 /**
  * The two-pane frame every auth screen renders inside: the form on the left,
@@ -9,6 +10,12 @@ import { useTranslation } from 'react-i18next'
  * carries no information the user needs to authenticate, so exposing it to a
  * screen reader would just put three paragraphs between the heading and the
  * e-mail field.
+ *
+ * The language switcher lives HERE rather than on each screen: every auth
+ * surface renders through this frame, so a user who lands on the reset or
+ * invite screen in a language they do not read gets the same way out as one on
+ * login. One mount instead of one per screen — and the next screen added gets
+ * it without anyone remembering to.
  */
 export function AuthShell({
   kicker,
@@ -34,6 +41,7 @@ export function AuthShell({
                 fx
               </span>
               <span className="fx-auth-brandname">Foldex</span>
+              <AuthLocaleSwitcher />
             </div>
 
             {kicker ? <p className="fx-auth-kicker">{kicker}</p> : null}

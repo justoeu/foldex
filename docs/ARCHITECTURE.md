@@ -1135,3 +1135,135 @@ O middleware monta via `Deps.Trace` (nil = off, o zero-value de todos os testes 
 - **AI suggestions.** Sugerir tags ao criar (LLM lê título + descrição), agrupar duplicatas.
 - **Favicon cache local.** Worker baixa e armazena em volume; resolve broken icons offline/VPN.
 - **Public sharing.** Sub-set de links visível sem auth (read-only link de partilha).
+
+### ADR-40 — Conta criada por administrador, com senha escolhida por ele
+
+**Contexto.** O dono da instância pediu "adicionar usuário" na tela de administração e,
+apresentada a alternativa, escolheu explicitamente a criação direta **com senha
+temporária** em vez do convite. Isso contraria o invariante que o resto de `internal/auth`
+sustenta e que o CLAUDE.md §4 declara: *um administrador nunca escolhe, instala ou recebe
+a credencial de outro usuário*.
+
+**Decisão.** `POST /api/admin/users` cria a conta ATIVA com `password_hash` derivado da
+senha digitada pelo administrador. A rota é montada sob `PermRolesAssign` — a mais estrita
+das duas permissões de escrita — porque atribui papel na mesma requisição, igual ao PATCH.
+
+**O que a exceção custa, dito por extenso.** Entre a criação e a primeira troca de senha
+pelo dono da conta, duas pessoas conhecem uma credencial, e **nenhuma entrada de auditoria
+consegue distinguir** um acesso feito pelo dono da conta de um feito pelo administrador que
+digitou a senha dela. O convite, o link de redefinição e o `force-password-reset` existem
+justamente para não abrir essa janela e continuam sendo o caminho recomendado — com uma
+ressalva que o próprio sweep pegou nesta ADR: **`force-password-reset` NÃO alcança as contas
+criadas por aqui**, porque ele exige `email_verified_at` não-nulo (`repository_2fa.go`), e
+esta rota deixa o endereço não verificado de propósito. O caminho de recuperação que
+funciona nelas é o `/password/forgot` que a própria pessoa dispara. O diálogo avisa o
+administrador sobre a senha compartilhada: o dono aceitou a troca sabendo dela, o próximo
+administrador que abrir a tela não.
+
+**Duas consequências que ficam em aberto, declaradas em vez de escondidas.** (1) **Nada
+fecha a janela.** Não há `must_change_password`, expiração de senha nem aviso no primeiro
+login, então "até a primeira troca" é indefinido na prática — uma rotação forçada no
+primeiro acesso é ortogonal a "entregar a credencial em mãos" e continua sendo a melhoria
+óbvia. (2) **Um erro de digitação no endereço cria uma conta ativa cujo dono legítimo nunca
+fica sabendo**, porque nenhuma mensagem é enviada; quem controla a caixa digitada por engano
+pode tomá-la pelo `/password/forgot` sem jamais conhecer a senha que o administrador
+escolheu. O `email_verified_at` nulo impede que o endereço seja tratado como confirmado, mas
+não bloqueia o e-mail de redefinição.
+
+**O que NÃO foi abandonado.**
+
+- O **piso de senha configurado** (ADR-35) se aplica. `AdminHandler.validatePassword` é um
+  MÉTODO pelo motivo de sempre — como função de pacote, continuaria aplicando a constante
+  em silêncio enquanto o dono acreditasse que seu piso valia. `WithPolicy` injeta o leitor;
+  política nula roda o piso compilado, que é a direção segura.
+- O endereço nasce **NÃO VERIFICADO** (`email_verified_at` NULL). Marcá-lo como verificado
+  faria um erro de digitação virar uma caixa confirmada que ninguém controla.
+- O papel é recusado no handler **e** no repositório e nunca pode ser `owner` — o único
+  papel que não pode ser rebaixado segue alcançável só por transferência explícita.
+- A senha nunca chega à trilha de auditoria: `user.created` grava endereço e papel. O
+  `logsafe` redige por CHAVE de atributo, então um valor passado como detalhe de auditoria
+  seria escrito em claro.
+
+**Alternativas descartadas.** Criar a conta `pending` e disparar o e-mail de definição de
+senha respeitaria o §4 na íntegra — foi oferecido e recusado, porque exige SMTP funcionando
+e não serve ao caso de entregar a credencial em mãos. Renomear o convite para "adicionar
+usuário" também foi oferecido e recusado pelo mesmo motivo.
+
+**Travas.** Nove testes de integração `TestAdminCreateUser_*`: login imediato, endereço não
+verificado, recusa de `owner`, default de menor privilégio, piso de senha, endereço
+duplicado, e-mail inválido, auditoria sem a senha, e 404 para não-administrador.
+
+### ADR-41 — Username opcional como segundo identificador, e troca de e-mail em duas etapas
+
+**Contexto.** Duas coisas que a conta não podia fazer: entrar com qualquer coisa que não
+fosse o e-mail, e trocar o e-mail. A segunda era um invariante declarado — o CLAUDE.md §5
+dizia *"e-mail é identidade e nunca é editável inline"* — mas a razão daquela frase é que
+trocar o identificador exige um fluxo de verificação próprio, não que a troca seja proibida.
+O dono da instância pediu as duas.
+
+**Decisão 1 — username OPCIONAL (mig 000037).** `app_user.username` +
+`username_normalized`, nuláveis, com índice único parcial sobre a coluna normalizada. Não há
+backfill: gerar `valmir.justo` a partir de `valmir.justo@…` publicaria metade da caixa
+postal sob um nome que o dono nunca escolheu. Uma conta sem username entra exatamente como
+antes.
+
+**O `@` proibido é a metade que sustenta a decisão.** O login resolve UM identificador
+contra as duas colunas na mesma instrução (`email_normalized = $1 OR username_normalized =
+$1`), então um username com forma de endereço viveria no mesmo espaço de nomes das caixas de
+todo mundo: bastaria reivindicar `vitima@example.com` como username para que as tentativas
+de senha daquela conta chegassem na sua. O `CHECK app_user_username_shape` recusa no banco e
+`NormalizeUsername` recusa no handler — as duas pontas, porque um handler é um caminho de
+código e o próximo a escrever nessa coluna teria de lembrar.
+
+**Uma instrução, não um ramo.** Decidir "parece um e-mail?" antes de consultar produziria
+dois tempos de resposta diferentes, que é exatamente o oráculo de enumeração que o resto do
+caminho de login existe para fechar (bcrypt sempre roda, um único 401, piso de 250 ms, e o
+contador incrementa também para endereços desconhecidos).
+
+**O orçamento de tentativas passou a ser resolvido antes de ser cobrado.** Chaveado pela
+string digitada, um atacante alternaria endereço e username da mesma conta e teria o dobro
+das tentativas enquanto o teto por conta continuaria marcando cinco.
+`Repository.loginBucketKey` resolve o identificador primeiro e cobra a chave canônica; um
+identificador que não resolve mantém a própria chave, que é o que preserva o incremento para
+nomes inexistentes.
+
+**Decisão 2 — troca de e-mail em DUAS ETAPAS (mig 000037, tabela `email_change`).** O
+endereço só muda quando o link enviado ao NOVO endereço é aberto. Escrever direto faria de
+um erro de digitação o login E o canal de recuperação da conta, com o aviso indo para o
+endereço digitado errado — a mesma propriedade que a ADR-40 preserva ao criar contas não
+verificadas. A troca imediata foi oferecida ao dono e recusada por ele.
+
+**Duas mensagens, para duas caixas, e as duas são obrigatórias.** O endereço NOVO recebe o
+link. O endereço ATUAL recebe um aviso **sem link nenhum** (`chrome.shape_notice` +
+`text.shape_notice`, os dois braços sem slot de URL): quem o lê pode ser alguém cuja conta
+está sendo tomada por uma pessoa que já tem a sessão, e "clique aqui para impedir" é
+literalmente a frase que a falsificação usaria. Mesma regra do `session_revoked`.
+
+**O que é verificado no COMMIT, não no pedido.** Sob o lock da linha da conta:
+a época de credencial ainda bate (`token_version`, igual a desafios e resets — uma troca de
+senha, um reset ou um logout-all entre o pedido e o clique mata a troca pendente), o
+endereço ainda está livre (o índice único é a única defesa contra alguém reivindicá-lo no
+intervalo), e a linha ainda não foi gasta. Gastar o token e mover o endereço são UMA
+instrução: separados, uma falha entre os dois queima o token deixando o endereço parado.
+
+**O que consumir custa.** `token_version` é incrementado e **toda** sessão é revogada, com
+a razão própria `email_changed` (reusar `password_changed` poria uma frase falsa na trilha
+que a ADR-34 faz sobreviver às contas). O identificador mudou; uma sessão emitida contra o
+antigo é credencial para uma conta que não atende mais por aquele nome — e quem clica no
+link muitas vezes está num aparelho que nunca entrou.
+
+**Endpoint de consumo sem sessão** (`POST /api/auth/email-change/confirm`), como o
+`/email/verify`, e por um motivo mais forte: aqui o link chega na caixa para a qual a conta
+está indo. Todo fracasso responde o mesmo 404 — exceto `email_taken`, que é distinguido de
+propósito: quem o recebe tem um token que prova controle da caixa de destino e pode resolver
+escolhendo outro endereço; "link inválido" o mandaria para o suporte.
+
+**Alternativas descartadas.** Username obrigatório com backfill (expõe o e-mail e força um
+valor herdado). Endpoint de disponibilidade em tempo real (mais um oráculo, sem ganho: o
+save já responde 409). Trocar o e-mail sem senha atual (uma sessão roubada moveria o canal
+de recuperação).
+
+**Travas.** Treze testes de integração `TestUsername_*` / `TestEmailChange_*`, entre eles: o
+aviso ao endereço antigo sem link em nenhum dos dois braços, o orçamento compartilhado entre
+os dois identificadores, a época de credencial matando a troca pendente, o link substituído
+por um pedido mais novo, e a recusa a tokens de API.

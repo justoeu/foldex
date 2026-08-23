@@ -5,6 +5,7 @@ import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useUnlockFolder } from '../api/folders'
 import type { Folder } from '../api/types'
+import { PasswordInput } from './PasswordInput'
 
 // The reminder hint stays hidden until this many wrong attempts (ADR-28) —
 // nudges the user to try from memory first before the app coughs up the clue.
@@ -190,9 +191,8 @@ function PasswordPromptModal({
             <>
               <p style={{ margin: 0 }}>{t('folder_lock.body')}</p>
               <div className="fx-input" style={{ marginTop: 12 }}>
-                <input
+                <PasswordInput
                   autoFocus
-                  type="password"
                   autoComplete="off"
                   value={password}
                   onChange={(e) => {

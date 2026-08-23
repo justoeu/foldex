@@ -5,6 +5,7 @@ import { useAuth } from '../../auth/AuthProvider'
 import { PasswordStrength } from '../PasswordStrength'
 import { MIN_PASSWORD_LEN } from '../../auth/types'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
+import { PasswordInput } from '../PasswordInput'
 
 /** Mirrors auth.MinPasswordLen; the backend is the authority. */
 
@@ -79,10 +80,9 @@ export function SetupScreen() {
           label={t('auth.password')}
           hint={t('auth.password_min', { count: MIN_PASSWORD_LEN })}
         >
-          <input
+          <PasswordInput
             id="fx-setup-password"
             className="fx-auth-input"
-            type="password"
             autoComplete="new-password"
             required
             aria-invalid={tooShort || undefined}
@@ -93,10 +93,9 @@ export function SetupScreen() {
         <PasswordStrength value={password} />
 
         <AuthField id="fx-setup-confirm" label={t('auth.confirm_password')}>
-          <input
+          <PasswordInput
             id="fx-setup-confirm"
             className="fx-auth-input"
-            type="password"
             autoComplete="new-password"
             required
             aria-invalid={mismatch || undefined}

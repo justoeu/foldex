@@ -28,7 +28,7 @@ Native bookmarks are fine for "save a page quickly and forget it". Once you pass
 | **Backup = opaque Netscape file.** Images? Clicks? Hierarchy? All lost.         | Single backup ZIP with `manifest.json` + `database.json` (5 tables) + **every RustFS image**. Lossless round-trip, SHA-256 checksum verification, 3 conflict modes (wipe/skip/duplicate). |
 | **Fixed shortcuts.** Cmd+D opens the browser's native dialog.                   | MV3 extension + Alt-K (palette), Alt-N (new link), Alt-F (new folder). iPhone-style drag-and-drop between cards/folders. |
 | **Vendor lock-in.** Leaving Chrome = export HTML + lose metadata.               | Export to **Netscape HTML** (universal compat) **OR** JSON v2 (with folders + click_count) **OR** full backup ZIP. Importer accepts all three (idempotent by URL; `click_count` is bounded on import to keep a hostile file from ballooning the click log). |
-| **English-only / no localization.**                                             | UI fully localized in **English / Português / Español** via `react-i18next`. Locale picker in the topbar; browser-language autodetect on first load; choice persists in `localStorage`. |
+| **English-only / no localization.**                                             | UI fully localized in **English / Português / Español** via `react-i18next`. Locale picker in the topbar, flag row on every signed-out screen; browser-language autodetect on first load; choice persists in `localStorage` and on the account. |
 | **Pinned/favorites = a tiny separate folder.** Visual only.                     | `pinned` is a real column on the table. `ORDER BY pinned DESC, …` applies in every sort mode. Gradient badge always visible. |
 | **Data embedded in the browser.** Switched machines? Reinstalled Chrome? Pray. | Postgres + RustFS in containers. `make up` on a new machine and your backup ZIP restores everything (DB + images) in ~minutes. |
 | **No way to know when a page you bookmarked changes.** A board, a release notes page, a status page — you find out by opening it. | Per-link opt-in (hourly/daily/weekly). Backend runs a fingerprint worker (RSS/Atom feed if present, content-hash fallback) and fires a **Web Push notification** when content changes. Bell in the Topbar manages the subscription; amber badge on the card flags unseen changes; "Recent updates" section in the sidebar lists the last N. Works with the tab closed (Service Worker). |
@@ -322,7 +322,7 @@ proxy `/metrics`; scrape the backend port directly.
 
 The whole UI runs through `react-i18next`. **English is the source of truth**; **Português** and **Español** are kept in full parity (every key mirrored across all three).
 
-- **Switch language**: locale picker in the topbar. The choice is written to the ACCOUNT (`app_user.locale`), so it also decides the language of every e-mail foldex sends you; Profile also offers *follow my browser*, which clears it again. First load autodetects from `navigator.language`. Screens that trigger mail while you are signed OUT — "forgot password" — send the language they are displaying along with the request, because the interface follows `navigator.language` while the server's own fallback reads the `Accept-Language` header, and those are separate settings: a Portuguese screen mailing an English reset link is what happens when they disagree. The hint never outranks a stored preference.
+- **Switch language**: locale picker in the topbar once signed in; a row of flags on every signed-OUT screen. The flag row is a row rather than a menu because someone who lands on those screens may be looking at a language they do not read, and a menu labelled *Language* in that language is a control they have to guess at first — the flags are recognisable without reading anything. The flag is decorative: the language name is the button's accessible name and its code stays visible beside the glyph, so the control still works where the emoji does not draw. The choice is written to the ACCOUNT (`app_user.locale`), so it also decides the language of every e-mail foldex sends you; Profile also offers *follow my browser*, which clears it again. First load autodetects from `navigator.language`. Screens that trigger mail while you are signed OUT — "forgot password" — send the language they are displaying along with the request, because the interface follows `navigator.language` while the server's own fallback reads the `Accept-Language` header, and those are separate settings: a Portuguese screen mailing an English reset link is what happens when they disagree. The hint never outranks a stored preference.
 - **Locale files**: `web/src/i18n/locales/{en,pt,es}.json`.
 - **Add a locale**: drop a new `<lang>.json`, list it in `SUPPORTED_LOCALES`, and populate every key from `en.json`. Plurals use the `_one` / `_other` suffix convention.
 
@@ -397,6 +397,28 @@ Full design rationale: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 
 Accounts are **on by default** since 1.13.0.
 
+**Adding a user.** *Settings → Administration → Users* has **Add user**: you type the
+address, the role and a first password, and the account is usable immediately. This is a
+deliberate exception to the rule the rest of foldex follows — an administrator never
+chooses another person's credential — so until they change it, two people know that
+password and the audit trail cannot tell your sign-ins apart. The **invitation** below it
+avoids that: the person chooses their own password from a link. The address is created
+UNVERIFIED either way, and the role can never be `owner`.
+
+**Administration table.** Each account row's actions — disable/enable, sign out
+everywhere, send recovery, transfer ownership, delete — each show an icon and their label, so
+nothing on the row reads as decoration. Each carries a screen-reader label naming both the
+action and the account, and the destructive ones keep their confirmation dialog.
+
+**On the sign-in form.** Every password field in foldex — sign-in, invitation, reset,
+account change, folder unlock, master recovery — carries a reveal toggle; it always
+starts hidden, resets to hidden whenever the screen remounts, and suppresses spell-check
+while revealed (a plain text field is fair game for browser spell-checkers that send its
+contents to a remote service). Sign-in also offers **Remember my
+e-mail**, which stores the address (never the password) in this browser, writes it only
+after the credentials are accepted, and erases it the moment you untick the box. It has
+no effect on how long you stay signed in.
+
 **First run — including an upgrade.** The SPA shows a setup screen. The account you
 create there becomes the administrator and **adopts every link, note, folder and tag
 that already existed**: nothing is lost and nothing has to be re-imported. Set
@@ -439,6 +461,15 @@ its own actions (export a backup, invite someone), a card showing who you are si
 cards, one per panel. Administrators get a **Personal × Administration** switch above it;
 everyone else sees only the personal scope, because `/api/admin` answers 404 for them and a
 disabled tab would promise a surface the server denies.
+
+**My account.** One tile inside settings opens everything you manage about yourself, with a
+rail down the side — Profile, Sign-in, Two-factor, API tokens, Sessions — and one section
+showing at a time: your name and language, your password (change it, or create one if the account
+signs in with Google), the linked Google identity, two-factor, API tokens, and signing
+out. Changing your password asks for your current one and signs you out of every OTHER
+browser — this one stays. An account that signs in with Google only cannot disconnect it
+until a password exists, and the page shows both together so the order is obvious rather
+than discovered through a refusal.
 
 **Managing people.** **Settings → Administration** lists every account with its role, last
 sign-in and status, and lets you change roles, disable, delete, sign out everywhere, send
@@ -557,6 +588,21 @@ included. An admin can create, disable and delete users, but never sees another
 account's links or notes. Content is separated in the database itself, not by a
 filter the UI applies.
 
+**Signing in with a username.** Set an optional username in **Profile** and you can sign in
+with it instead of your e-mail — the sign-in field takes either. It is 3 to 32 characters of
+letters, digits, dot, dash or underscore, and it can never contain `@`: the server resolves
+one identifier against both columns, so an address-shaped username would sit in everyone's
+mailbox namespace and could collect another account's password attempts. Clearing the field
+removes it, and an account without one signs in exactly as before.
+
+**Changing your e-mail.** **Sign-in → E-mail → Change e-mail** asks for your current
+password and sends a confirmation link to the NEW address. Nothing moves until that link is
+opened: your current address keeps working, so a typo costs you a message rather than your
+account. Your CURRENT address gets a warning at the same time — deliberately with no link in
+it, because whoever reads it may be someone whose account is being taken over. Confirming
+signs you out everywhere, since the identifier your sessions were issued against just
+changed. Needs SMTP (`MAIL_DRIVER=smtp`); the log driver would print the link to stdout.
+
 **Sessions.** Sign-in sets httpOnly cookies: a short-lived access token plus a
 30-day refresh token that rotates on every use. If a refresh token is ever replayed —
 the signature of a stolen one — every session for that account is signed out and the
@@ -597,6 +643,8 @@ confirmed, while the enrollment routes remain available. An owner who wants the 
 rule can set **instance policy → `admin_second_factor: totp_only`**, which stops an
 e-mail factor from counting for administrators; the default `any` accepts either. An
 administrator can always drop one method while the other stands, but never their last.
+The settings card lists each method on its own row with its state and its action, and
+where a policy prevents removal the row says so instead of simply omitting the button.
 
 > Upgrading through migration `000023` invalidates older recovery sheets and pending
 > e-mail codes because unkeyed digests cannot be converted without plaintext. Existing

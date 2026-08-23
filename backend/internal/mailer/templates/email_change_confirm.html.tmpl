@@ -1,0 +1,9 @@
+{{- /*
+Blue like verify_email, and the same shape for the same reason: it confirms an
+address rather than touching a credential, and the link is followed from a mail
+client on a device that may never have signed in, so the button has to stand
+alone with the URL spelled out beside it.
+*/ -}}
+{{- define "email_change_confirm" -}}
+{{- template "chrome.shape_action" (dict "Doc" . "Accent" "#2f6fd0" "Tint" "#eaf1fc") -}}
+{{- end -}}

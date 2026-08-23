@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Icon, I } from '../components/icons'
+import { CreateUserDialog } from '../components/admin/CreateUserDialog'
 import { useConfirm } from '../components/ConfirmDialog'
 import {
   createInvite,
@@ -41,6 +42,7 @@ function statusTone(status: AuthUser['status']): string {
  * reaches a dead end the UI implied was open — not as the guard itself.
  */
 export function AdminUsersPage() {
+  const [createOpen, setCreateOpen] = useState(false)
   const { t } = useTranslation()
   const qc = useQueryClient()
   const confirmAction = useConfirm()
@@ -176,12 +178,17 @@ export function AdminUsersPage() {
 
       <section className="fx-card" style={{ marginBottom: 16 }}>
         <div className="fx-card-body" style={{ gap: 12, padding: 18 }}>
-          <h3
-            className="fx-card-title"
-            style={{ fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}
-          >
-            <Icon d={I.users} size={15} /> {t('admin.users_title')}
-          </h3>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <h3
+              className="fx-card-title"
+              style={{ fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}
+            >
+              <Icon d={I.users} size={15} /> {t('admin.users_title')}
+            </h3>
+            <button className="fx-btn fx-btn-primary" onClick={() => setCreateOpen(true)}>
+              <Icon d={I.plus} size={13} stroke={2.2} /> {t('admin.create_submit')}
+            </button>
+          </div>
 
           <div className="fx-utable-wrap">
             <table className="fx-utable">
@@ -257,9 +264,25 @@ export function AdminUsersPage() {
                         )}
                       </td>
                       <td>
+                        {/* Icon-only, and therefore LABELLED TWICE: `aria-label`
+                            names the action for a screen reader and `data-tooltip`
+                            shows the same words on hover/focus for everyone else.
+                            A row of five unlabelled glyphs — two of which disable
+                            an account and delete it — would be a guessing game,
+                            and the two destructive ones keep their confirmation
+                            dialog regardless. Every label already carries the
+                            e-mail, so two rows never read the same. */}
                         <div className="fx-utable-actions">
                           <button
-                            className="fx-btn"
+                            className="fx-rowact"
+                            aria-label={
+                              u.status === 'active'
+                                ? t('admin.disable_label', { email: u.email })
+                                : t('admin.enable_label', { email: u.email })
+                            }
+                            data-tooltip={
+                              u.status === 'active' ? t('admin.disable') : t('admin.enable')
+                            }
                             disabled={locked || patch.isPending}
                             onClick={() =>
                               patch.mutate({
@@ -268,22 +291,29 @@ export function AdminUsersPage() {
                               })
                             }
                           >
+                            <Icon d={u.status === 'active' ? I.userOff : I.userCheck} size={14} />
                             {u.status === 'active' ? t('admin.disable') : t('admin.enable')}
                           </button>
 
                           <button
-                            className="fx-btn"
+                            className="fx-rowact"
+                            aria-label={t('admin.revoke_sessions_label', { email: u.email })}
+                            data-tooltip={t('admin.revoke_sessions')}
                             disabled={revokeSessions.isPending}
                             onClick={() => revokeSessions.mutate(u.id)}
                           >
+                            <Icon d={I.logout} size={14} />
                             {t('admin.revoke_sessions')}
                           </button>
 
                           <button
-                            className="fx-btn"
+                            className="fx-rowact"
+                            aria-label={t('admin.force_reset_label', { email: u.email })}
+                            data-tooltip={t('admin.force_reset')}
                             disabled={isSelf || resetPassword.isPending}
                             onClick={() => void askReset(u)}
                           >
+                            <Icon d={I.key} size={14} />
                             {t('admin.force_reset')}
                           </button>
 
@@ -292,21 +322,26 @@ export function AdminUsersPage() {
                               server checks before it moves the seat. */}
                           {me?.role === 'owner' && !isSelf && u.status === 'active' && (
                             <button
-                              className="fx-btn"
+                              className="fx-rowact"
+                              aria-label={t('admin.transfer_label', { email: u.email })}
+                              data-tooltip={t('admin.transfer')}
                               disabled={transfer.isPending}
                               onClick={() => void askTransfer(u)}
                             >
+                              <Icon d={I.crown} size={14} />
                               {t('admin.transfer')}
                             </button>
                           )}
 
                           <button
-                            className="fx-btn"
+                            className="fx-rowact fx-rowact-danger"
                             aria-label={t('admin.delete_label', { email: u.email })}
+                            data-tooltip={t('admin.delete')}
                             disabled={locked || remove.isPending}
                             onClick={() => void askDelete(u)}
                           >
-                            <Icon d={I.trash} size={13} />
+                            <Icon d={I.trash} size={14} />
+                            {t('admin.delete')}
                           </button>
                         </div>
                       </td>
@@ -378,7 +413,7 @@ export function AdminUsersPage() {
                 onChange={(e) => setInviteEmail(e.target.value)}
               />
             </label>
-            <label className="fx-field" style={{ margin: 0 }}>
+            <label className="fx-field">
               <span className="fx-field-label">{t('admin.invite_role')}</span>
               <select
                 className="fx-input"
@@ -403,6 +438,8 @@ export function AdminUsersPage() {
           </div>
         </div>
       </section>
+
+      {createOpen && <CreateUserDialog onClose={() => setCreateOpen(false)} />}
     </div>
   )
 }

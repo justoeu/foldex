@@ -1,19 +1,48 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { errorCode, errorStatus, verifyEmail } from '../../api/auth'
+import { confirmEmailChange, errorCode, errorStatus, verifyEmail } from '../../api/auth'
 import { AuthShell, AuthError } from './AuthShell'
 
-type State = 'working' | 'done' | 'invalid' | 'failed'
+type State = 'working' | 'done' | 'invalid' | 'failed' | 'taken'
 
 /**
- * Consumes the `#verify=` token from a confirmation e-mail.
+ * What the link in the reader's inbox is for.
+ *
+ * `verify` proves an address the account already has; `email-change` MOVES the
+ * account to the address the message was sent to. One screen for both because
+ * the mechanics are identical — a single-use token consumed on mount with no
+ * session — and the ref-guard below is a trap nobody should have to get right
+ * twice.
+ */
+export type ConfirmKind = 'verify' | 'email-change'
+
+const CONSUME: Record<ConfirmKind, (token: string) => Promise<unknown>> = {
+  verify: verifyEmail,
+  'email-change': confirmEmailChange,
+}
+
+const COPY: Record<ConfirmKind, string> = {
+  verify: 'auth_verify',
+  'email-change': 'auth_email_change',
+}
+
+/**
+ * Consumes a `#verify=` or `#email-change=` token from a confirmation e-mail.
  *
  * It runs UNAUTHENTICATED and immediately on mount, because the link is
  * followed from a mail client — often on a device that has never signed in.
  * Asking for a password first would meet the common case with a login form and
  * a token quietly expiring behind it.
  */
-export function VerifyEmailScreen({ token, onDone }: { token: string; onDone: () => void }) {
+export function VerifyEmailScreen({
+  token,
+  onDone,
+  kind = 'verify',
+}: {
+  token: string
+  onDone: () => void
+  kind?: ConfirmKind
+}) {
   const { t } = useTranslation()
   const [state, setState] = useState<State>('working')
 
@@ -35,19 +64,28 @@ export function VerifyEmailScreen({ token, onDone }: { token: string; onDone: ()
   useEffect(() => {
     if (sent.current) return
     sent.current = true
-    verifyEmail(token)
+    CONSUME[kind](token)
       .then(() => setState('done'))
       .catch((err) => {
         // A dead link and an unreachable server are different problems: the
         // first needs a new e-mail, the second needs a retry.
-        if (errorCode(err) === 'verify_invalid' || errorStatus(err) === 404) setState('invalid')
-        else setState('failed')
+        const code = errorCode(err)
+        if (code === 'verify_invalid' || code === 'email_change_invalid' || errorStatus(err) === 404) {
+          setState('invalid')
+        } else if (code === 'email_taken') {
+          // The one failure worth telling apart: somebody claimed the address
+          // between the request and the click, and the user can fix it by
+          // choosing another. "Invalid link" would send them to support.
+          setState('taken')
+        } else {
+          setState('failed')
+        }
       })
-  }, [token])
+  }, [token, kind])
 
   if (state === 'working') {
     return (
-      <AuthShell kicker={t('auth_verify.kicker')} title={t('auth_verify.working_title')}>
+      <AuthShell kicker={t(`${COPY[kind]}.kicker`)} title={t(`${COPY[kind]}.working_title`)}>
         <p className="fx-auth-notice" role="status">
           <span className="fx-auth-spinner" aria-hidden="true" /> {t('auth.loading')}
         </p>
@@ -55,14 +93,16 @@ export function VerifyEmailScreen({ token, onDone }: { token: string; onDone: ()
     )
   }
 
+  const ns = COPY[kind]
   const copy = {
-    done: { title: 'auth_verify.done_title', body: 'auth_verify.done_body' },
-    invalid: { title: 'auth_verify.invalid_title', body: 'auth_verify.invalid_body' },
-    failed: { title: 'auth_verify.failed_title', body: 'auth_verify.failed_body' },
+    done: { title: `${ns}.done_title`, body: `${ns}.done_body` },
+    invalid: { title: `${ns}.invalid_title`, body: `${ns}.invalid_body` },
+    failed: { title: `${ns}.failed_title`, body: `${ns}.failed_body` },
+    taken: { title: `${ns}.invalid_title`, body: 'account.err_email_taken' },
   }[state]
 
   return (
-    <AuthShell kicker={t('auth_verify.kicker')} title={t(copy.title)}>
+    <AuthShell kicker={t(ns + '.kicker')} title={t(copy.title)}>
       <div className="fx-auth-form">
         {state === 'done' ? (
           <p className="fx-auth-notice" role="status">
@@ -72,7 +112,7 @@ export function VerifyEmailScreen({ token, onDone }: { token: string; onDone: ()
           <AuthError message={t(copy.body)} />
         )}
         <button type="button" className="fx-auth-submit" onClick={onDone}>
-          {t('auth_verify.continue')}
+          {t(`${ns}.continue`)}
         </button>
       </div>
     </AuthShell>

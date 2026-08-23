@@ -54,8 +54,16 @@ export async function fetchMe(): Promise<MeResponse> {
   return data
 }
 
-export async function login(email: string, password: string): Promise<MeResponse> {
-  const { data } = await http.post<MeResponse>('/api/auth/login', { email, password })
+/**
+ * Signs in with an e-mail OR a username.
+ *
+ * The field is `identifier` because the server resolves one string against both
+ * columns in a single statement — branching on whether it "looks like an
+ * e-mail" would take two different amounts of time, which is the enumeration
+ * oracle the whole login path is built to close.
+ */
+export async function login(identifier: string, password: string): Promise<MeResponse> {
+  const { data } = await http.post<MeResponse>('/api/auth/login', { identifier, password })
   return data
 }
 
@@ -79,11 +87,49 @@ export async function logout(): Promise<void> {
  *  preference, `''` clears it back to following the browser, and a code sets
  *  it. Without the empty case a user who once picked a language could never
  *  go back. */
-export async function updateProfile(name: string, locale?: string): Promise<MeResponse> {
-  const body: { name: string; locale?: string } = { name }
+export async function updateProfile(
+  name: string,
+  locale?: string,
+  username?: string,
+): Promise<MeResponse> {
+  // Every field is tri-state server-side: absent keeps, "" clears, a value
+  // sets. Sending one that did not change would replay a cached value over
+  // whatever another tab wrote since this screen loaded.
+  const body: { name: string; locale?: string; username?: string } = { name }
   if (locale !== undefined) body.locale = locale
+  if (username !== undefined) body.username = username
   const { data } = await http.patch<MeResponse>('/api/auth/profile', body)
   return data
+}
+
+export type PendingEmailChange = { new_email: string; expires_at: string }
+
+/** Starts a move to a new address. Nothing changes until the link mailed to it
+ *  is opened — see the backend's RequestEmailChange for why. */
+export async function requestEmailChange(
+  newEmail: string,
+  password: string,
+): Promise<PendingEmailChange> {
+  const { data } = await http.post<PendingEmailChange>('/api/auth/email/change', {
+    new_email: newEmail,
+    password,
+  })
+  return data
+}
+
+export async function fetchEmailChange(): Promise<PendingEmailChange | null> {
+  const { data } = await http.get<{ pending: PendingEmailChange | null }>('/api/auth/email/change')
+  return data.pending
+}
+
+export async function cancelEmailChange(): Promise<void> {
+  await http.delete('/api/auth/email/change')
+}
+
+/** Consumes the confirmation token. Unauthenticated: the link is opened from
+ *  the mailbox being moved to, often on a device that never signed in. */
+export async function confirmEmailChange(token: string): Promise<void> {
+  await http.post('/api/auth/email-change/confirm', { token })
 }
 
 /** Sets ONLY the account language, sending no name.
@@ -158,6 +204,27 @@ export async function acceptInvite(
  */
 export async function setPassword(password: string, code?: string): Promise<void> {
   await http.post('/api/auth/password/set', { password, code: code ?? '' })
+}
+
+/**
+ * Changes the password of an account that already has one.
+ *
+ * Distinct from `setPassword`, and the difference is the proof: here the
+ * CURRENT password is the step-up, so no second factor is asked for. The server
+ * revokes every other session on success — this session survives, which is why
+ * the screen does not have to sign anyone out.
+ *
+ * The endpoint has existed since ADR-30 and nothing called it: changing a
+ * password meant signing out and using the reset-by-e-mail flow.
+ */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  await http.post('/api/auth/password/change', {
+    current_password: currentPassword,
+    new_password: newPassword,
+  })
 }
 
 // ─────────────────────────────────────────────────────────────────────

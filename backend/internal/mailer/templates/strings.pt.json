@@ -95,6 +95,27 @@
     ],
     "footnote": "Se não foi você, procure o administrador do seu Foldex imediatamente: quem fez isso sabia sua senha, e a redefinição de senha não se aplica mais a esta conta."
   },
+  "email_change_confirm": {
+    "subject": "Confirme seu novo e-mail do Foldex",
+    "eyebrow": "Confirmação",
+    "heading": "Confirme este endereço para a sua conta do Foldex.",
+    "body": [
+      "Alguém pediu para mover a sua conta do Foldex para este endereço. Abra o link abaixo para concluir a troca.",
+      "Até lá, a sua conta continua entrando com o endereço que você já usava."
+    ],
+    "action": "Confirmar meu novo endereço",
+    "footnote": "O link expira em {{.ExpiresMinutes}} minutos e vale uma vez só. Se não foi você que pediu, pode ignorar esta mensagem — nada muda."
+  },
+  "email_change_notice": {
+    "subject": "Pediram um novo e-mail para a sua conta do Foldex",
+    "eyebrow": "Alerta de segurança",
+    "heading": "Alguém pediu para trocar o e-mail desta conta.",
+    "body": [
+      "Foi pedida a troca para {{.NewEmail}} na conta do Foldex que usa este endereço.",
+      "Nada mudou ainda. A troca só acontece se o link enviado para aquele endereço for aberto, e até lá você continua entrando exatamente como entra hoje."
+    ],
+    "footnote": "Se não foi você, troque a sua senha agora — quem pediu estava logado como você. Esta mensagem não traz link de propósito: o Foldex nunca pede que você clique em algo para proteger a sua conta."
+  },
   "_footer": {
     "body": [
       "Mensagem automática do seu Foldex. Não responda a este endereço."

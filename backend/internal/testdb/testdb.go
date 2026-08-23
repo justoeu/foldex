@@ -236,7 +236,7 @@ var resetStatement = `TRUNCATE
 	    push_subscription, app_setting, audit_log, mail_outbox,
 	    session_used_token, session, oauth_state, api_token,
 	    recovery_code, totp_secret, email_factor, email_otp, auth_challenge,
-	    password_reset, invite, user_identity, app_user
+	    password_reset, email_change, invite, user_identity, app_user
 	    RESTART IDENTITY CASCADE`
 
 // Reset truncates all data tables but keeps the schema. CASCADE handles FK

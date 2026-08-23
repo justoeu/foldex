@@ -5,6 +5,7 @@ import { useAuth } from '../../auth/AuthProvider'
 import { PasswordStrength } from '../PasswordStrength'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 import { AuthDivider, GoogleButton } from './GoogleButton'
+import { PasswordInput } from '../PasswordInput'
 
 const MIN_PASSWORD = 8
 type LookupState = 'loading' | 'ready' | 'invalid' | 'failed'
@@ -204,10 +205,9 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
           label={t('auth.password')}
           hint={t('auth.password_min', { count: MIN_PASSWORD })}
         >
-          <input
+          <PasswordInput
             id="fx-invite-password"
             className="fx-auth-input"
-            type="password"
             autoComplete="new-password"
             required
             value={password}
@@ -217,10 +217,9 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
         <PasswordStrength value={password} />
 
         <AuthField id="fx-invite-confirm" label={t('auth.confirm_password')}>
-          <input
+          <PasswordInput
             id="fx-invite-confirm"
             className="fx-auth-input"
-            type="password"
             autoComplete="new-password"
             required
             aria-invalid={mismatch || undefined}

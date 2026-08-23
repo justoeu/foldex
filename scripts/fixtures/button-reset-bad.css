@@ -1,0 +1,5 @@
+/* Fixture: the shape of the bug that shipped. `.fx-vs-active` is (0,1,0) and
+   loses `background` to `.fx-shell button` (0,1,1), so the active option of a
+   segmented control renders identically to the inactive one. */
+.fx-shell button { font-family: inherit; color: inherit; border: 0; background: transparent; padding: 0; }
+.fx-vs-active { background: white; color: blue; }

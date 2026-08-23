@@ -10,7 +10,12 @@ import { http } from '../api/client'
 // it — re-importing under vi.resetModules() would instead build a second copy
 // of the whole module graph, giving AuthGate a different React context object
 // than the provider the harness renders, and useAuth would not find it.
-const mockedTokens: { invite?: string; reset?: string; verify?: string } = {}
+const mockedTokens: {
+  invite?: string
+  reset?: string
+  verify?: string
+  emailChange?: string
+} = {}
 vi.mock('./authUrl', () => ({
   get urlTokens() {
     return mockedTokens
@@ -361,5 +366,64 @@ describe('AuthGate invite handling', () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /sign in to foldex/i })).toBeInTheDocument(),
     )
+  })
+})
+
+// The link that MOVES the account. It revokes every session, so whoever
+// follows it is about to become anonymous either way — being dropped into a
+// bare login form with no explanation is the outcome this screen exists to
+// avoid, which is why it renders ABOVE the authenticated short-circuit.
+describe('the e-mail change confirmation', () => {
+  it('consumes an #email-change= token from the URL', async () => {
+    mockedTokens.emailChange = 'CHANGETOKEN'
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+    mockMe({ status: 'anonymous', features })
+
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: null },
+    )
+
+    expect(await screen.findByRole('heading', { name: /your e-mail was changed/i })).toBeInTheDocument()
+    expect(post).toHaveBeenCalledWith('/api/auth/email-change/confirm', { token: 'CHANGETOKEN' })
+    expect(screen.getByText(/sign in again/i)).toBeInTheDocument()
+  })
+
+  it('explains a dead link instead of leaving a spinner', async () => {
+    mockedTokens.emailChange = 'SPENT'
+    vi.spyOn(http, 'post').mockRejectedValue({
+      response: { status: 404, data: { error: { code: 'email_change_invalid' } } },
+    })
+    mockMe({ status: 'anonymous', features })
+
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: null },
+    )
+
+    expect(await screen.findByText(/no longer valid/i)).toBeInTheDocument()
+  })
+
+  // Claimed between the request and the click. The user can fix this by
+  // choosing another address, so it must not read as "your link is broken".
+  it('tells the taken-address case apart from a dead link', async () => {
+    mockedTokens.emailChange = 'RACED'
+    vi.spyOn(http, 'post').mockRejectedValue({
+      response: { status: 409, data: { error: { code: 'email_taken' } } },
+    })
+    mockMe({ status: 'anonymous', features })
+
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: null },
+    )
+
+    expect(await screen.findByText(/another account already uses that address/i)).toBeInTheDocument()
   })
 })

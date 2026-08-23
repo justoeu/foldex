@@ -42,6 +42,25 @@ function mockStatus(s: Status) {
 }
 
 describe('TwoFactorSection', () => {
+  // `.fx-auth` is the signed-out screen: `position: fixed; inset: 0` with an
+  // opaque background. Worn inside a card it paints over the whole card — every
+  // label and row background gone, the layout intact underneath — and the
+  // repaint storm blocks the main thread, so the screen flickers and never
+  // settles. That is what shipped, on this exact component.
+  //
+  // The CSS is invisible to jsdom (`css: false`), but the CLASS NAME is not:
+  // this assertion needed no stylesheet and would have caught it. The
+  // stylesheet half is scripts/test-css-auth-overlay.mjs.
+  it('never wears the full-screen auth overlay class', async () => {
+    mockStatus({ enabled: true, recovery_codes_remaining: 10, required: false })
+    const { container } = renderWithProviders(<TwoFactorSection />)
+    await screen.findByText(/two-step verification is on/i)
+
+    expect(container.querySelectorAll('.fx-auth')).toHaveLength(0)
+    // ...and the replacement is actually there, or the OTP cells are unstyled.
+    expect(container.querySelectorAll('.fx-authfield').length).toBeGreaterThan(0)
+  })
+
   it('offers to turn it on when it is off', async () => {
     mockStatus({ enabled: false, recovery_codes_remaining: 0, required: false })
     renderWithProviders(<TwoFactorSection />)
@@ -159,7 +178,11 @@ describe('TwoFactorSection', () => {
     await user.click(screen.getByRole('button', { name: /cancel/i }))
 
     expect(screen.queryByAltText(/qr code/i)).not.toBeInTheDocument()
-    expect(password).toHaveValue('')
+    // Re-queried, not reused: leaving the enrollment swaps the whole panel, so
+    // the reference above is a detached node that still carries the old value
+    // no matter what the live field shows.
+    expect(screen.getByLabelText(/current password/i)).toHaveValue('')
+    expect(password).not.toBe(screen.getByLabelText(/current password/i))
     expect(screen.getByRole('button', { name: /set up an authenticator app/i })).toBeDisabled()
   })
 
@@ -167,6 +190,10 @@ describe('TwoFactorSection', () => {
     mockStatus({ enabled: true, recovery_codes_remaining: 3, required: false })
     renderWithProviders(<TwoFactorSection />)
     expect(await screen.findByText(/3 recovery codes left/i)).toBeInTheDocument()
+    // Three is the boundary and it is NOT low. Asserted on the exact value
+    // because `<` and `<=` differ only here, and a warning that cries at a full
+    // third of the sheet is one people learn to ignore.
+    expect(screen.queryByText(/running low/i)).not.toBeInTheDocument()
   })
 
   it('uses the singular for one remaining code', async () => {
@@ -328,6 +355,146 @@ describe('TwoFactorSection', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/password is incorrect/i)
   })
 
+  // The card renders per method, and a method's state, its action and the
+  // reason an action is missing all have to sit in the same row. The previous
+  // layout put the policy note at the FOOT of the card, four lines below two
+  // methods, so it could not say which of them it was about — which is how it
+  // was reported: "the buttons are blocked".
+  describe('per-method state', () => {
+    const rowFor = (name: RegExp) => {
+      const row = screen.getAllByRole('group').find((li) => name.test(li.textContent ?? ''))
+      if (!row) throw new Error(`no method row matching ${name}`)
+      return row
+    }
+
+    it('puts the policy note on the method it blocks, not on the card', async () => {
+      mockStatus({
+        enabled: true, recovery_codes_remaining: 8, required: true,
+        totp_enabled: true, email_enabled: true,
+        can_disable_totp: false, can_disable_email: true,
+      })
+      renderWithProviders(<TwoFactorSection />)
+      await screen.findByText(/two-step verification is on/i)
+
+      const app = rowFor(/authenticator app/i)
+      expect(within(app).getByText(/administrators cannot turn this off/i)).toBeInTheDocument()
+      expect(within(app).queryByRole('button', { name: /turn off/i })).not.toBeInTheDocument()
+
+      // ...and the method that CAN be removed keeps its button and says nothing
+      // about a policy that does not apply to it.
+      const mail = rowFor(/e-mail code/i)
+      expect(within(mail).getByRole('button', { name: /turn off e-mail codes/i })).toBeInTheDocument()
+      expect(within(mail).queryByText(/administrators cannot turn this off/i)).not.toBeInTheDocument()
+    })
+
+    // `can_disable_*` is false for a method that is simply not enrolled, so a
+    // lock keyed on that alone would claim every unused method is protected.
+    it('never locks a method that is not enrolled', async () => {
+      mockStatus({ enabled: false, recovery_codes_remaining: 0, required: true })
+      renderWithProviders(<TwoFactorSection />)
+
+      await screen.findByRole('button', { name: /set up an authenticator app/i })
+      expect(screen.queryByText(/administrators cannot turn this off/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/only method protecting your account/i)).not.toBeInTheDocument()
+    })
+
+    it('says why the e-mail method is unavailable instead of hiding the row', async () => {
+      mockStatus({
+        enabled: false, recovery_codes_remaining: 0, required: false, email_available: false,
+      })
+      renderWithProviders(<TwoFactorSection />)
+      await screen.findByRole('button', { name: /set up an authenticator app/i })
+
+      const mail = rowFor(/e-mail code/i)
+      expect(within(mail).getByText(/cannot send e-mail/i)).toBeInTheDocument()
+      expect(within(mail).queryByRole('button')).not.toBeInTheDocument()
+    })
+
+    // A row that offers "set up" and "turn off" at the same time describes a
+    // state that cannot exist. The SERVER never sends this shape —
+    // `can_disable_email` is `Email2FAEnabled && mayRemoveFactor(…)` — so this
+    // status is deliberately impossible, and the test says what the row does
+    // if the two ever disagree. It became worth asserting only when the layout
+    // put both buttons in the SAME row: in the old flat strip at the foot of
+    // the card, neither was attached to a method and the pair read as two
+    // unrelated actions.
+    it('never offers to turn off a method that is not enrolled', async () => {
+      mockStatus({
+        enabled: true, recovery_codes_remaining: 8, required: false,
+        totp_enabled: true, email_enabled: false,
+        can_disable_totp: true, can_disable_email: true,
+      })
+      renderWithProviders(<TwoFactorSection />)
+      await screen.findByText(/two-step verification is on/i)
+
+      const mail = rowFor(/e-mail code/i)
+      expect(within(mail).getByRole('button', { name: /set up e-mail codes/i })).toBeInTheDocument()
+      expect(within(mail).queryByRole('button', { name: /turn off/i })).not.toBeInTheDocument()
+    })
+
+    // Running out of recovery codes is only ever discovered when they are
+    // already needed, so the count alone is not enough of a warning.
+    it('warns when the recovery codes are running low', async () => {
+      mockStatus({ enabled: true, recovery_codes_remaining: 2, required: false })
+      renderWithProviders(<TwoFactorSection />)
+
+      expect(await screen.findByText(/running low/i)).toBeInTheDocument()
+    })
+
+    // The disable buttons had this test and regenerating did not, so dropping
+    // `proofMissing` from the recovery band alone left every other gate intact
+    // and the suite green — while the one action that MINTS a credential
+    // became the only one reachable without proving anything.
+    it('disables regenerate until both proofs are given', async () => {
+      const user = userEvent.setup()
+      mockStatus({ enabled: true, recovery_codes_remaining: 10, required: false })
+      renderWithProviders(<TwoFactorSection />)
+
+      const regen = await screen.findByRole('button', { name: /generate new recovery codes/i })
+      expect(regen).toBeDisabled()
+
+      await user.type(screen.getByLabelText(/current password/i), 'hunter2hunter2')
+      expect(regen).toBeDisabled()
+
+      const cells = screen.getAllByRole('textbox') as HTMLInputElement[]
+      cells[0].focus()
+      await user.paste('123456')
+      await waitFor(() => expect(regen).toBeEnabled())
+    })
+
+    it('does not warn while a full set remains', async () => {
+      mockStatus({ enabled: true, recovery_codes_remaining: 10, required: false })
+      renderWithProviders(<TwoFactorSection />)
+
+      await screen.findByText(/10 recovery codes left/i)
+      expect(screen.queryByText(/running low/i)).not.toBeInTheDocument()
+    })
+
+    // One task per screen: an enrollment in flight must not leave the method
+    // list beside it offering ways out of a step that is not finished.
+    it('shows only the enrollment while one is in flight', async () => {
+      const user = userEvent.setup()
+      mockStatus({ enabled: false, recovery_codes_remaining: 0, required: false })
+      vi.spyOn(http, 'post').mockResolvedValue({
+        data: {
+          secret: 'JBSWY3DPEHPK3PXP', otpauth: 'otpauth://totp/x', issuer: 'Foldex',
+          account: 'a@b.test', qr_url: '/api/auth/2fa/totp/qr.png',
+        },
+      } as never)
+      renderWithProviders(<TwoFactorSection />)
+      await user.type(await screen.findByLabelText(/current password/i), 'hunter2hunter2')
+      await user.click(screen.getByRole('button', { name: /set up an authenticator app/i }))
+
+      await screen.findByAltText(/qr code/i)
+      // Named rows, not every group: the OTP field is itself a `group`, and it
+      // is SUPPOSED to be on this screen — asserting zero would pass only by
+      // deleting the field the enrollment cannot be completed without.
+      expect(screen.queryByRole('group', { name: /authenticator app/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('group', { name: /e-mail code/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /set up e-mail codes/i })).not.toBeInTheDocument()
+    })
+  })
+
   // ADR-37: e-mail is a factor the account ENROLLS, so the section has to name
   // both methods and act on each independently.
   describe('the e-mail method', () => {
@@ -382,15 +549,24 @@ describe('TwoFactorSection', () => {
       })
       renderWithProviders(<TwoFactorSection />)
 
-      // Scoped to the status list: "authenticator app" also appears on the
-      // setup button, so a bare text query would pass without the list existing.
-      const methods = await screen.findAllByRole('listitem')
+      // The method rows are rendered before the status query resolves — both
+      // exist, reading "not set up". Waiting on the STATUS is what makes the
+      // assertions below see the loaded state; `findAllByRole` on the rows
+      // resolves on the first tick and silently asserts against the defaults.
+      await screen.findByText(/two-step verification is on/i)
+      const methods = screen.getAllByRole('group')
       expect(methods.map((li) => li.textContent)).toEqual(
         expect.arrayContaining([
           expect.stringMatching(/authenticator app/i),
           expect.stringMatching(/e-mail code/i),
         ]),
       )
+      // Scoped to the two METHOD rows: the recovery-codes row shares the list
+      // and carries no state chip, so `every` over the whole list asserts
+      // something the UI never promised.
+      const named = methods.filter((li) => /authenticator app|e-mail code/i.test(li.textContent ?? ''))
+      expect(named).toHaveLength(2)
+      expect(named.every((li) => /active/i.test(li.textContent ?? ''))).toBe(true)
       expect(screen.getByRole('button', { name: /turn off two-step/i })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /turn off e-mail codes/i })).toBeInTheDocument()
     })

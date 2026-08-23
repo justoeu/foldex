@@ -95,6 +95,27 @@
     ],
     "footnote": "If this was not you, contact your Foldex administrator immediately: whoever did this knew your password, and password reset no longer applies to this account."
   },
+  "email_change_confirm": {
+    "subject": "Confirm your new Foldex e-mail",
+    "eyebrow": "Confirmation",
+    "heading": "Confirm this address for your Foldex account.",
+    "body": [
+      "Someone asked to move your Foldex account to this address. Open the link below to finish the change.",
+      "Until you do, your account keeps signing in with the address you used before."
+    ],
+    "action": "Confirm my new address",
+    "footnote": "The link expires in {{.ExpiresMinutes}} minutes and can be used once. If you did not ask for this, you can ignore this message — nothing changes."
+  },
+  "email_change_notice": {
+    "subject": "A new e-mail was requested for your Foldex account",
+    "eyebrow": "Security alert",
+    "heading": "Someone asked to change the e-mail on this account.",
+    "body": [
+      "A change to {{.NewEmail}} was requested for the Foldex account that uses this address.",
+      "Nothing has changed yet. The move only happens if the link sent to that address is opened, and until then you keep signing in exactly as you do now."
+    ],
+    "footnote": "If this was not you, change your password now — whoever asked was signed in as you. This message carries no link on purpose: Foldex never asks you to click one to secure your account."
+  },
   "_footer": {
     "body": [
       "Automated message from your Foldex. Please do not reply to this address."

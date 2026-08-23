@@ -99,3 +99,10 @@ Code into every notice message, in every locale, and checks BOTH arms.
 {{- define "text.recovery_code_used" -}}{{ template "text.shape_notice" . }}{{- end -}}
 
 {{- define "text.account_converted" -}}{{ template "text.shape_notice" . }}{{- end -}}
+
+{{- define "text.email_change_confirm" -}}{{ template "text.shape_action" . }}{{- end -}}
+
+{{- /* Notice shape, matching the HTML arm. The form has no URL line at all, so
+a caller that passed an ActionURL could not leak it here either — which is the
+whole reason the shape is the guarantee rather than a per-field gate. */ -}}
+{{- define "text.email_change_notice" -}}{{ template "text.shape_notice" . }}{{- end -}}

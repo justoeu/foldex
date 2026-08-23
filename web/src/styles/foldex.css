@@ -823,7 +823,7 @@
 /* Container is shared with the settings-hub scope segment (.fx-hub-seg);
    the -active rule lives there so both segments stay in lockstep. */
 .fx-viewseg { display: flex; gap: 2px; padding: 3px; background: var(--fx-bg-tint); border-radius: 10px; }
-.fx-vs { width: 30px; height: 32px; display: grid; place-items: center; border-radius: 7px; color: var(--fx-ink-3); transition: background .15s, color .15s; }
+:is(.fx-shell, .fx-overlay) .fx-vs { width: 30px; height: 32px; display: grid; place-items: center; border-radius: 7px; color: var(--fx-ink-3); transition: background .15s, color .15s; }
 .fx-vs:hover { color: var(--fx-ink); }
 .fx-vs-density { width: 28px; }
 .fx-viewseg-sep {
@@ -841,13 +841,20 @@
    server-side. */
 .fx-viewseg, .fx-hub-seg { display: flex; gap: 2px; padding: 3px; background: var(--fx-bg-tint); border-radius: 10px; }
 .fx-hub-seg { display: inline-flex; }
-.fx-hub-seg-btn {
+
+/* Both rules are CHAINED, and that is the whole reason the segments read as
+   segments: bare, they lost `background`/`color`/`padding` to `.fx-shell button`
+   and the active option rendered identical to the inactive one. See §5 and
+   scripts/test-css-button-reset.mjs, which locks it. */
+:is(.fx-shell, .fx-overlay) .fx-hub-seg-btn {
   display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 14px;
   border-radius: 7px; font-size: 12px; font-weight: 550; color: var(--fx-ink-3);
   transition: background .15s, color .15s;
 }
 .fx-hub-seg-btn:hover { color: var(--fx-ink); }
-.fx-vs-active, .fx-hub-seg-btn-active { background: var(--fx-surface-3); color: var(--fx-accent); box-shadow: var(--fx-shadow-1); }
+:is(.fx-shell, .fx-overlay) :is(.fx-vs-active, .fx-hub-seg-btn-active) {
+  background: var(--fx-surface-3); color: var(--fx-accent); box-shadow: var(--fx-shadow-1);
+}
 
 .fx-hub-section-label {
   font-family: var(--fx-mono); font-size: 11px; letter-spacing: 0.12em;
@@ -1449,6 +1456,68 @@ button.fx-field-action {
 button.fx-field-action:hover:not(:disabled) { color: var(--fx-accent-2, var(--fx-accent)); }
 button.fx-field-action:disabled { color: var(--fx-ink-4); cursor: default; text-decoration: none; }
 .fx-field-hint-warn { color: var(--fx-amber, #b45309); }
+/* ─── row actions (administration tables) ─────────────────────────── */
+
+/*
+ * Icon PLUS label, and the label is the point. These shipped icon-only for one
+ * session and the owner reported disable/sessions/recovery/delete as MISSING
+ * FEATURES — four working actions read as decoration at the edge of the row.
+ * A tooltip is not discovery: you have to already suspect something is there.
+ * Element-qualified against the `.fx-shell button` reset — see §5.
+ */
+button.fx-rowact {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 11px;
+  border: 1px solid var(--fx-border);
+  border-radius: 9px;
+  background: var(--fx-surface-3);
+  color: var(--fx-ink-3);
+  font-size: 12px; font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+button.fx-rowact:hover:not(:disabled) {
+  color: var(--fx-accent); border-color: var(--fx-accent); background: var(--fx-accent-soft);
+}
+button.fx-rowact:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
+button.fx-rowact:disabled { color: var(--fx-ink-4); cursor: not-allowed; opacity: 0.55; }
+button.fx-rowact-danger:hover:not(:disabled) {
+  color: var(--fx-danger); border-color: var(--fx-danger); background: rgba(244, 63, 94, 0.10);
+}
+
+/* ─── password field with reveal toggle ───────────────────────────── */
+
+/* Wraps ANY password input — `.fx-input` in the app, `.fx-auth-input` on the
+   auth screens — so the eye is one component instead of twenty. The input keeps
+   its own class and only gains room on the right; overriding the shorthand
+   would flatten the vertical padding the two shapes set differently. */
+.fx-pwfield { position: relative; display: block; }
+/* Where `.fx-input` is the WRAPPER, the flex child is now this element rather
+   than the input, so `.fx-input input { flex: 1 }` no longer reaches anything
+   and the field would collapse to its intrinsic width. */
+.fx-input > .fx-pwfield { flex: 1; }
+.fx-pwfield > input { width: 100%; padding-right: 42px; }
+
+/* Element-qualified: `.fx-shell button` is (0,1,1) and would otherwise take
+   back the padding and the muted colour. See §5. */
+button.fx-pweye {
+  /* Auth screens are outside `.fx-shell`, so neither its border-box default nor
+     its button reset reaches here — both have to be stated. */
+  box-sizing: border-box;
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  display: grid; place-items: center;
+  width: 30px; height: 30px;
+  border: 0; border-radius: 8px;
+  background: transparent;
+  color: var(--fx-ink-4);
+  cursor: pointer;
+  transition: color .15s, background .15s;
+}
+button.fx-pweye:hover { color: var(--fx-ink-2, var(--fx-ink)); background: var(--fx-bg-tint); }
+button.fx-pweye:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
+button.fx-pweye[aria-pressed='true'] { color: var(--fx-accent); }
+
 .fx-input {
   display: flex; align-items: center; gap: 9px;
   height: 42px; padding: 0 12px;
@@ -1458,6 +1527,23 @@ button.fx-field-action:disabled { color: var(--fx-ink-4); cursor: default; text-
   transition: border-color .15s, box-shadow .15s;
 }
 .fx-input:focus-within { border-color: var(--fx-accent); box-shadow: 0 0 0 3px var(--fx-accent-soft); }
+
+/* `.fx-input` is used two ways: on a WRAPPER div (which the reset never
+   touches) and directly on the `<input>` itself. In the second shape
+   `.fx-shell input` (0,1,1) out-specified the bare class and took back the
+   border and the background, so those fields rendered as an unboxed line of
+   text — visible on the two-factor step-up the moment the account page put it
+   beside the boxed ones. Element-qualified it ties and wins on document order.
+   Same trap as §5's `button.fx-acard`. */
+input.fx-input, select.fx-input, textarea.fx-input {
+  background: var(--fx-surface-3);
+  border: 1px solid var(--fx-border);
+}
+input.fx-input:focus-visible, select.fx-input:focus-visible, textarea.fx-input:focus-visible {
+  outline: none;
+  border-color: var(--fx-accent);
+  box-shadow: 0 0 0 3px var(--fx-accent-soft);
+}
 .fx-input input { flex: 1; font-size: 14px; }
 .fx-input svg { color: var(--fx-ink-4); }
 .fx-input-url input { font-family: var(--fx-mono); font-size: 13px; }
@@ -1519,6 +1605,53 @@ button.fx-field-action:disabled { color: var(--fx-ink-4); cursor: default; text-
   border-top: 1px solid var(--fx-border-2);
   background: color-mix(in srgb, var(--fx-bg-tint) 35%, transparent);
 }
+/*
+ * `.fx-btn` / `.fx-btn-primary` had NO rule anywhere in the tree, in either
+ * stylesheet. Fourteen buttons carry them — every action in the two-factor and
+ * API-token sections — and with `.fx-shell button` stripping border, background
+ * and padding, all of them rendered as bare text. It stayed unnoticed while
+ * those sections lived alone behind their own tiles; putting them on the
+ * account page next to styled controls made it obvious. Element-qualified, as
+ * §5 requires.
+ */
+button.fx-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  height: 38px; padding: 0 15px;
+  border: 1px solid var(--fx-border);
+  border-radius: 10px;
+  background: var(--fx-surface-3);
+  color: var(--fx-ink-2);
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+button.fx-btn:hover:not(:disabled) { border-color: var(--fx-accent); color: var(--fx-accent); }
+button.fx-btn:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
+button.fx-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+button.fx-btn-primary {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--fx-accent), var(--fx-accent-2));
+  color: #fff;
+}
+button.fx-btn-primary:hover:not(:disabled) { filter: brightness(1.05); color: #fff; border-color: transparent; }
+/*
+ * `.fx-btn-danger` was the fourth class in this family with no rule anywhere —
+ * found the same way as the three above, by putting the controls next to each
+ * other. Its two call sites are the buttons that REMOVE a second factor, so the
+ * cost of the omission was that the destructive action looked exactly like the
+ * neutral one beside it.
+ */
+button.fx-btn-danger {
+  border-color: color-mix(in srgb, var(--fx-danger) 32%, var(--fx-border));
+  background: color-mix(in srgb, var(--fx-danger) 9%, transparent);
+  color: var(--fx-danger);
+}
+button.fx-btn-danger:hover:not(:disabled) {
+  border-color: var(--fx-danger);
+  background: color-mix(in srgb, var(--fx-danger) 16%, transparent);
+  color: var(--fx-danger);
+}
+
 .fx-btn-ghost { height: 38px; padding: 0 14px; border-radius: 10px; font-size: 13px; color: var(--fx-ink-2); }
 .fx-btn-ghost:hover { background: var(--fx-bg-tint); color: var(--fx-ink); }
 
@@ -2448,4 +2581,451 @@ button.fx-field-action:disabled { color: var(--fx-ink-4); cursor: default; text-
   .fx-rolerow-count { margin-left: 0; width: 100%; }
   .fx-idcard { flex-direction: column; align-items: flex-start; }
   .fx-hub-head-actions { width: 100%; }
+}
+
+/*
+ * `.fx-inline-error` had NO rule in any stylesheet either, across four call
+ * sites — the same shape as `.fx-btn`, and missed by the same sweep that found
+ * it. Every one of those four reports a REFUSED credential operation (a wrong
+ * password, a rejected step-up), which is the worst kind of message to render
+ * as unstyled body text: it reads as prose the user scrolls past rather than as
+ * the reason the thing they just tried did not happen.
+ */
+.fx-inline-error {
+  display: flex; align-items: center; gap: 6px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: rgba(244, 63, 94, 0.10);
+  color: var(--fx-danger);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* ─── account page ─────────────────────────────────────────────────── */
+
+/*
+ * One page for everything the signed-in user manages about themselves.
+ *
+ * Bands, not cards. The four tiles this replaced were four cards deep and each
+ * rendered a line or two, so the chrome outweighed the content — and the
+ * password and the Google link constrain each other, which a boundary between
+ * two cards actively hides. Every button rule below is element-qualified: see
+ * §5 and scripts/test-css-button-reset.mjs.
+ */
+.fx-acct { display: flex; flex-direction: column; gap: 26px; }
+
+/* Rail beside panel. The first shape stacked all five sections in a 760px
+   column and ran to three screens: the width was wasted and nothing was
+   findable at the same time. */
+.fx-acct-split { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 26px; align-items: start; }
+
+.fx-acct-rail { display: flex; flex-direction: column; gap: 3px; position: sticky; top: 12px; }
+
+/* Element-qualified against the `.fx-shell button` reset — see §5. */
+button.fx-acct-railbtn {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--fx-ink-3);
+  font-size: 13.5px; font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+button.fx-acct-railbtn:hover { background: var(--fx-bg-tint); color: var(--fx-ink); }
+button.fx-acct-railbtn:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
+button.fx-acct-railbtn-active {
+  background: var(--fx-surface-3);
+  border-color: var(--fx-border);
+  color: var(--fx-accent);
+  box-shadow: var(--fx-shadow-1);
+}
+
+.fx-acct-panel { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.fx-acct-panel-title {
+  margin: 0 0 2px;
+  font-family: var(--fx-display); font-size: 18px; font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.fx-acct-hero {
+  display: flex; align-items: center; gap: 18px;
+  padding: 20px 22px;
+  background: var(--fx-surface-3);
+  border: 1px solid var(--fx-border);
+  border-radius: 16px;
+}
+.fx-acct-hero-id { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.fx-acct-hero-name {
+  margin: 0; font-family: var(--fx-display); font-size: 19px; font-weight: 700;
+  letter-spacing: -0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fx-acct-hero-mail { margin: 0; font-size: 13px; color: var(--fx-ink-3); }
+
+/* The chips answer "is there a password / a second factor" without scrolling
+   to the sections that change them — the state of the account was the one
+   thing the account screen did not show. */
+.fx-acct-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.fx-acct-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 9px; border-radius: 999px;
+  font-size: 11px; font-weight: 600;
+  background: var(--fx-bg-tint); color: var(--fx-ink-3);
+}
+.fx-acct-chip-role { text-transform: capitalize; }
+.fx-acct-chip-ok { background: rgba(16, 185, 129, 0.12); color: var(--fx-success); }
+.fx-acct-chip-warn { background: rgba(245, 158, 11, 0.14); color: var(--fx-amber, #b45309); }
+
+.fx-acct-group { display: flex; flex-direction: column; gap: 10px; }
+.fx-acct-group-head { display: flex; align-items: center; gap: 9px; }
+.fx-acct-group-icon {
+  display: grid; place-items: center;
+  width: 26px; height: 26px; border-radius: 8px;
+  background: var(--fx-accent-soft); color: var(--fx-accent);
+}
+.fx-acct-group-label {
+  margin: 0; font-family: var(--fx-mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--fx-ink-3);
+}
+.fx-acct-group-body { display: flex; flex-direction: column; gap: 12px; }
+
+/*
+ * `.fx-acct-row`, `-row-head`, `-row-title`, `-row-value`, `-form`, `-actions`
+ * and the three `-msg` rules were deleted with the panels that used them: every
+ * account row is a `.fx-sec-row` now and every message a `.fx-sec-note`. The
+ * provider-button rule below is the one that had to MOVE rather than go — left
+ * scoped to the old class it would have kept matching nothing, which is the
+ * sixth time in this repo a class in the markup had no rule behind it.
+ */
+
+/* The provider button is sized for a full-width auth form; in a row it has the
+   whole remaining width to grow into, and its logo scales with it. */
+.fx-sec-row .fx-auth-oauth { width: auto; min-width: 220px; }
+.fx-sec-row .fx-auth-oauth svg,
+.fx-sec-row .fx-auth-oauth img { width: 18px; height: 18px; flex: 0 0 auto; }
+.fx-acct-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fx-ink-3); }
+
+/* Below the split's natural width the rail becomes a scrollable strip of tabs
+   above the panel rather than a squeezed column. */
+@media (max-width: 900px) {
+  .fx-acct-split { grid-template-columns: 1fr; gap: 16px; }
+  .fx-acct-rail {
+    position: static;
+    flex-direction: row;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+  .fx-acct-rail::-webkit-scrollbar { display: none; }
+  button.fx-acct-railbtn { width: auto; flex: 0 0 auto; padding: 8px 13px; }
+}
+
+@media (max-width: 640px) {
+  .fx-acct-hero { flex-direction: column; align-items: flex-start; gap: 14px; }
+}
+
+/* ─── right-side drawer ────────────────────────────────────────────── */
+
+/*
+ * A panel that slides in from the right, for a form that is a side task rather
+ * than an interruption: the list stays visible behind it, dimmed.
+ *
+ * Written as its own component instead of reusing `.fx-confirm`, which turned
+ * out to have NO base rule anywhere in either stylesheet — the same class of
+ * bug as `.fx-btn` and `.fx-inline-error` — so a form built on it rendered as
+ * unstyled controls spilling across the whole viewport.
+ */
+.fx-drawer-scrim {
+  position: fixed; inset: 0; z-index: 1200;
+  display: flex; justify-content: flex-end;
+  background: rgba(17, 15, 40, 0.38);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: fx-drawer-fade 0.18s ease;
+}
+
+.fx-drawer {
+  display: flex; flex-direction: column;
+  width: min(460px, 100%);
+  height: 100%;
+  /* Opaque, not a translucent surface token: the scrim behind it is dimmed
+     content, and a form for typing a credential must not have text showing
+     through it. */
+  background: var(--fx-bg);
+  border-left: 1px solid var(--fx-border);
+  box-shadow: -18px 0 48px rgba(17, 15, 40, 0.18);
+  animation: fx-drawer-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.fx-drawer-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 20px 22px 14px;
+  border-bottom: 1px solid var(--fx-border);
+}
+.fx-drawer-title {
+  margin: 4px 0 0;
+  font-family: var(--fx-display); font-size: 18px; font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.fx-drawer-kicker {
+  font-family: var(--fx-mono); font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--fx-accent);
+}
+
+/* Scrolls independently so the actions below stay reachable on a short
+   viewport — the whole reason the footer is outside this element. */
+.fx-drawer-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 13px;
+  padding: 18px 22px;
+}
+
+.fx-drawer-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 14px 22px calc(14px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--fx-border);
+  background: var(--fx-surface-3);
+}
+
+@keyframes fx-drawer-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@keyframes fx-drawer-fade { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-drawer, .fx-drawer-scrim { animation: none; }
+}
+
+@media (max-width: 560px) {
+  .fx-drawer { width: 100%; border-left: 0; }
+}
+/* ─── account section card ─────────────────────────────────────────── */
+
+/*
+ * One card shape for every panel of the account page.
+ *
+ * It started as the two-factor card and stayed there for one session, which is
+ * exactly long enough for the other three panels to look broken beside it:
+ * profile was a bare form, sign-in was two unframed rows, and sessions was a
+ * sentence with two buttons. They were not styled differently on purpose —
+ * they were styled by nobody.
+ *
+ * The generic parts are `fx-sec-*`; only what is genuinely two-factor-specific
+ * (the proof panel, the OTP row, the enrollment key) keeps a `fx-2fa-` name.
+ * Every button rule is element-qualified: see §5 and
+ * scripts/test-css-button-reset.mjs.
+ */
+/*
+ * `.fx-card:hover` lifts and shadows — an affordance written for the draggable
+ * link/note cards in the grid. A settings panel is neither draggable nor
+ * clickable, so the lift promises something that is not there. Same shape as
+ * `.fx-modal-card-wrap .fx-card`, which neutralises the same rule for the same
+ * reason one screen over.
+ */
+.fx-acct-panel .fx-card:hover {
+  transform: none;
+  box-shadow: var(--fx-shadow-1);
+  border-color: var(--fx-border);
+}
+
+.fx-sec-body { gap: 16px; padding: 18px; }
+
+.fx-sec-head { display: flex; align-items: flex-start; gap: 12px; }
+.fx-sec-head-icon {
+  flex: 0 0 auto;
+  display: grid; place-items: center;
+  width: 34px; height: 34px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--fx-accent) 12%, transparent);
+  color: var(--fx-accent);
+}
+.fx-sec-head-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.fx-sec-title { margin: 0; font-size: 15px; font-weight: 700; line-height: 1.3; }
+.fx-sec-sub { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--fx-ink-3); }
+
+.fx-sec-badge {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; letter-spacing: .02em;
+}
+.fx-sec-badge-on {
+  background: color-mix(in srgb, var(--fx-success) 15%, transparent);
+  color: var(--fx-success);
+}
+.fx-sec-badge-off { background: var(--fx-bg-tint); color: var(--fx-ink-3); }
+.fx-sec-badge-warn {
+  background: rgba(245, 158, 11, 0.14);
+  color: var(--fx-amber, #b45309);
+}
+
+.fx-sec-block { display: flex; flex-direction: column; gap: 8px; }
+.fx-sec-block-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--fx-ink-4);
+}
+
+/*
+ * A row: icon, what it is, what state it is in, what you can do about it.
+ *
+ * The same three questions on every panel — is there a password, is Google
+ * connected, is the authenticator on, how many recovery codes are left — so
+ * they get one answer shape instead of four.
+ */
+.fx-sec-rows { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.fx-sec-row {
+  display: flex; align-items: center; gap: 11px; flex-wrap: wrap;
+  padding: 13px 14px;
+  border: 1px solid var(--fx-border);
+  border-radius: 12px;
+  background: var(--fx-surface-3);
+}
+.fx-sec-row-on { border-color: color-mix(in srgb, var(--fx-success) 34%, var(--fx-border)); }
+.fx-sec-row-warn {
+  border-color: color-mix(in srgb, var(--fx-amber, #b45309) 40%, var(--fx-border));
+  background: rgba(245, 158, 11, 0.08);
+}
+/* Not a state the account is in — an action that ends every session. It reads
+   as danger before it is clicked, not in the confirmation that follows. */
+.fx-sec-row-danger {
+  border-color: color-mix(in srgb, var(--fx-danger) 30%, var(--fx-border));
+  background: color-mix(in srgb, var(--fx-danger) 5%, transparent);
+}
+.fx-sec-row-icon {
+  flex: 0 0 auto;
+  display: grid; place-items: center;
+  width: 30px; height: 30px;
+  border-radius: 9px;
+  background: var(--fx-bg-tint);
+  color: var(--fx-ink-3);
+}
+.fx-sec-row-on .fx-sec-row-icon {
+  background: color-mix(in srgb, var(--fx-success) 13%, transparent);
+  color: var(--fx-success);
+}
+.fx-sec-row-warn .fx-sec-row-icon { color: var(--fx-amber, #b45309); }
+.fx-sec-row-danger .fx-sec-row-icon {
+  background: color-mix(in srgb, var(--fx-danger) 10%, transparent);
+  color: var(--fx-danger);
+}
+.fx-sec-row-text { flex: 1 1 190px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fx-sec-row-name { font-size: 13.5px; font-weight: 650; }
+.fx-sec-row-hint { font-size: 12px; line-height: 1.45; color: var(--fx-ink-3); }
+.fx-sec-row-warn .fx-sec-row-hint { color: var(--fx-amber, #b45309); }
+.fx-sec-row-note,
+.fx-sec-lock {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-top: 4px;
+  font-size: 11.5px; line-height: 1.4;
+}
+.fx-sec-row-note { color: var(--fx-ink-4); }
+/* The reason an action is absent, rendered against the row it applies to.
+   Amber rather than grey: it is a policy the user cannot change, not a
+   footnote. */
+.fx-sec-lock {
+  padding: 3px 8px;
+  align-self: flex-start;
+  border-radius: 7px;
+  background: rgba(245, 158, 11, 0.13);
+  color: var(--fx-amber, #b45309);
+  font-weight: 600;
+}
+.fx-sec-state {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px; font-weight: 700; letter-spacing: .02em;
+}
+.fx-sec-state-on {
+  background: color-mix(in srgb, var(--fx-success) 14%, transparent);
+  color: var(--fx-success);
+}
+.fx-sec-state-off { background: var(--fx-bg-tint); color: var(--fx-ink-4); }
+.fx-sec-row-action { flex: 0 0 auto; display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* A form that belongs to one row, revealed under it. Indented and rule-marked
+   so it reads as part of that row rather than as a new section. */
+/* A row whose form is closed renders the wrapper with no children, and its
+   top rule plus accent bar then read as a stray mark under every row. React
+   cannot tell: `children` is a Fragment and always truthy. */
+.fx-sec-row-form:empty { display: none; }
+.fx-sec-row-form {
+  flex: 1 1 100%;
+  display: flex; flex-direction: column; gap: 11px;
+  margin-top: 4px;
+  padding: 13px 0 2px 13px;
+  border-top: 1px solid var(--fx-border);
+  border-left: 2px solid color-mix(in srgb, var(--fx-accent) 35%, transparent);
+}
+/* The cap goes on the CONTENT, never on the wrapper: `flex-basis: 100%` is what
+   breaks the form onto its own line, and a `max-width` on the wrapper lets it
+   fit beside the row again — which parks the whole form off at the right edge. */
+.fx-sec-row-form > * { max-width: 480px; }
+.fx-sec-form { display: flex; flex-direction: column; gap: 12px; max-width: 460px; }
+.fx-sec-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/*
+ * Every message the panel says back to the user, in one shape.
+ *
+ * They were 12px one-liners in three different colours, which is how "Changes
+ * saved." and "That password is not correct." ended up rendering at the same
+ * weight as a field hint — a refusal you scroll past. A band with its own
+ * background is the point: it has to survive being glanced at.
+ */
+.fx-sec-note {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 12.5px; line-height: 1.45;
+}
+.fx-sec-note svg { flex: 0 0 auto; margin-top: 1px; }
+.fx-sec-note-ok {
+  background: color-mix(in srgb, var(--fx-success) 12%, transparent);
+  color: var(--fx-success);
+}
+.fx-sec-note-bad { background: rgba(244, 63, 94, 0.10); color: var(--fx-danger); }
+.fx-sec-note-info { background: var(--fx-bg-tint); color: var(--fx-ink-3); }
+
+/* ── two-factor specifics ───────────────────────────────────────────── */
+
+/* Proof sits above the actions it unlocks, inside its own frame so it reads as
+   a precondition rather than as one more field on a long form. */
+.fx-2fa-proof {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--fx-border);
+  border-radius: 12px;
+  background: var(--fx-bg-tint);
+}
+.fx-2fa-proof-head { display: flex; align-items: center; gap: 6px; color: var(--fx-ink-4); }
+.fx-2fa-proof-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fx-ink-3); }
+/* `.fx-authfield` brings the OTP cell styling with no overlay attached; this
+   only stops six cells from spreading across a settings-width row. */
+.fx-2fa-otp .fx-auth-otp { justify-content: flex-start; }
+
+.fx-2fa-enroll { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+.fx-2fa-key {
+  width: 100%;
+  display: flex; flex-direction: column; gap: 5px; align-items: center;
+  padding: 11px 13px;
+  border: 1px dashed var(--fx-border);
+  border-radius: 11px;
+  background: var(--fx-bg-tint);
+}
+.fx-2fa-key-value {
+  font-family: var(--fx-mono);
+  font-size: 13px; letter-spacing: .07em; word-break: break-all; text-align: center;
+  color: var(--fx-ink);
+}
+
+@media (max-width: 560px) {
+  .fx-sec-head { flex-wrap: wrap; }
+  /* The action wraps to its own line at this width, so a button sized to its
+     label would sit alone against a 100%-wide empty row. */
+  .fx-sec-row-action { width: 100%; }
+  .fx-sec-row-action button.fx-btn { width: 100%; }
+  .fx-sec-form { max-width: none; }
 }

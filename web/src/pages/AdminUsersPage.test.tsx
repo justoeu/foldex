@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AdminUsersPage } from './AdminUsersPage'
-import { renderWithProviders, testAdminUser } from '../test/renderWithProviders'
+import { renderWithProviders, testAdminUser, testAdminSession } from '../test/renderWithProviders'
 import { http } from '../api/client'
 import type { AuthUser } from '../auth/types'
 
@@ -49,6 +49,153 @@ describe('AdminUsersPage', () => {
     expect(await screen.findByText(me.email)).toBeInTheDocument()
     expect(screen.getByText('user2@foldex.test')).toBeInTheDocument()
     expect(screen.getByText(/disabled/i)).toBeInTheDocument()
+  })
+
+  // ── Adding a user ───────────────────────────────────────────────────
+  //
+  // A deliberate exception to §4 ("an administrator never chooses another
+  // user's credential"), taken by the instance owner with the trade stated.
+  // The warning and the role floor are what is left of the rule.
+
+  it('offers to add a user and sends the typed credential', async () => {
+    const u = userEvent.setup()
+    render([me])
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { ...me, id: 9 } } as never)
+
+    await u.click(await screen.findByRole('button', { name: /add user/i }))
+    const dlg = within(screen.getByRole('dialog', { name: /add a user/i }))
+
+    await u.type(dlg.getByLabelText(/e-?mail/i), 'new@foldex.test')
+    await u.type(dlg.getByLabelText(/display name/i), 'New Person')
+    await u.type(dlg.getByLabelText(/temporary password/i), 'a fine temporary password')
+    await u.click(dlg.getByRole('button', { name: /add user/i }))
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/api/admin/users', {
+        email: 'new@foldex.test',
+        name: 'New Person',
+        password: 'a fine temporary password',
+        role: 'editor',
+      }),
+    )
+  })
+
+  // The dialog must SAY what it costs. The owner accepted the trade knowing it;
+  // the next administrator to open this dialog did not.
+  it('states that two people will know the password', async () => {
+    const u = userEvent.setup()
+    render([me])
+
+    await u.click(await screen.findByRole('button', { name: /add user/i }))
+    expect(
+      within(screen.getByRole('dialog')).getByText(/two people will know it/i),
+    ).toBeInTheDocument()
+  })
+
+  // owner is refused by the server; offering it would be a promise the API breaks.
+  it('does not offer the owner role', async () => {
+    const u = userEvent.setup()
+    render([me])
+
+    await u.click(await screen.findByRole('button', { name: /add user/i }))
+    const roles = within(screen.getByRole('dialog')).getByLabelText(/role/i)
+    expect(within(roles).queryByRole('option', { name: /owner/i })).not.toBeInTheDocument()
+    expect(within(roles).getByRole('option', { name: /editor/i })).toBeInTheDocument()
+  })
+
+  it('keeps submit disabled until the password clears the floor', async () => {
+    const u = userEvent.setup()
+    render([me])
+
+    await u.click(await screen.findByRole('button', { name: /add user/i }))
+    const dlg = within(screen.getByRole('dialog'))
+    await u.type(dlg.getByLabelText(/e-?mail/i), 'new@foldex.test')
+    await u.type(dlg.getByLabelText(/temporary password/i), 'short')
+
+    expect(dlg.getByRole('button', { name: /add user/i })).toBeDisabled()
+  })
+
+  // The floor is owner-configurable (ADR-35), so a client constant cannot state
+  // it. An instance demanding twenty characters was being told "at least 8".
+  it('reports the SERVER floor, not the client constant', async () => {
+    const u = userEvent.setup()
+    render([me])
+    vi.spyOn(http, 'post').mockRejectedValue({
+      response: {
+        status: 400,
+        data: { error: { code: 'password_too_short', message: 'password must be at least 20 characters' } },
+      },
+    })
+
+    await u.click(await screen.findByRole('button', { name: /add user/i }))
+    const dlg = within(screen.getByRole('dialog'))
+    await u.type(dlg.getByLabelText(/e-?mail/i), 'new@foldex.test')
+    await u.type(dlg.getByLabelText(/temporary password/i), 'twelve chars')
+    await u.click(dlg.getByRole('button', { name: /add user/i }))
+
+    expect(await dlg.findByRole('alert')).toHaveTextContent(/at least 20 characters/i)
+  })
+
+  // Without this, deleting onClose()/invalidateQueries survives: every other
+  // case stops at the POST.
+  it('closes and refreshes the list on success', async () => {
+    const u = userEvent.setup()
+    const get = mockApi([me])
+    renderWithProviders(<AdminUsersPage />)
+    vi.spyOn(http, 'post').mockResolvedValue({ data: { ...me, id: 9 } } as never)
+
+    await u.click(await screen.findByRole('button', { name: /add user/i }))
+    const dlg = within(screen.getByRole('dialog'))
+    await u.type(dlg.getByLabelText(/e-?mail/i), 'new@foldex.test')
+    await u.type(dlg.getByLabelText(/temporary password/i), 'a fine temporary password')
+    const before = get.mock.calls.filter(([url]) => url === '/api/admin/users').length
+    await u.click(dlg.getByRole('button', { name: /add user/i }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    // The list is re-read, or the new account would not appear until a reload.
+    await waitFor(() =>
+      expect(get.mock.calls.filter(([url]) => url === '/api/admin/users').length)
+        .toBeGreaterThan(before),
+    )
+  })
+
+  it('surfaces a duplicate address without closing the dialog', async () => {
+    const u = userEvent.setup()
+    render([me])
+    vi.spyOn(http, 'post').mockRejectedValue({
+      response: { status: 409, data: { error: { code: 'email_taken' } } },
+    })
+
+    await u.click(await screen.findByRole('button', { name: /add user/i }))
+    const dlg = within(screen.getByRole('dialog'))
+    await u.type(dlg.getByLabelText(/e-?mail/i), 'admin@foldex.test')
+    await u.type(dlg.getByLabelText(/temporary password/i), 'a fine temporary password')
+    await u.click(dlg.getByRole('button', { name: /add user/i }))
+
+    expect(await dlg.findByRole('alert')).toHaveTextContent(/already registered/i)
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  // Every row action is icon-only now, so the accessible name is the ONLY thing
+  // naming it. Transfer was the one with no test at all: deleting its aria-label
+  // left an unnamed glyph that moves ownership, and nothing went red. The other
+  // four are named by the queries already used throughout this file.
+  it('names every icon-only row action for a screen reader', async () => {
+    mockApi([{ ...me, role: 'owner' }, user({ id: 2 })])
+    renderWithProviders(<AdminUsersPage />, {
+      session: { ...testAdminSession, user: { ...testAdminUser, role: 'owner' } } as never,
+    })
+
+    const row = await rowFor('user2@foldex.test')
+    for (const name of [
+      /disable \(user2@foldex\.test\)/i,
+      /sign out everywhere \(user2@foldex\.test\)/i,
+      /send recovery \(user2@foldex\.test\)/i,
+      /transfer ownership \(user2@foldex\.test\)/i,
+      /delete user2@foldex\.test/i,
+    ]) {
+      expect(row.getByRole('button', { name })).toBeInTheDocument()
+    }
   })
 
   it('marks accounts that sign in with Google only', async () => {

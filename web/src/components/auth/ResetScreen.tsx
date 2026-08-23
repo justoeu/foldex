@@ -5,6 +5,7 @@ import { useAuth } from '../../auth/AuthProvider'
 import { MIN_PASSWORD_LEN } from '../../auth/types'
 import { PasswordStrength } from '../PasswordStrength'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
+import { PasswordInput } from '../PasswordInput'
 
 /**
  * Chooses a new password from a reset link.
@@ -59,10 +60,9 @@ export function ResetScreen({ token, onGiveUp }: { token: string; onGiveUp: () =
         <AuthError message={error} />
 
         <AuthField id="fx-reset-password" label={t('auth_reset.new_password')}>
-          <input
+          <PasswordInput
             id="fx-reset-password"
             className="fx-auth-input"
-            type="password"
             name="new-password"
             autoComplete="new-password"
             autoFocus
@@ -74,10 +74,9 @@ export function ResetScreen({ token, onGiveUp }: { token: string; onGiveUp: () =
         <PasswordStrength value={password} />
 
         <AuthField id="fx-reset-confirm" label={t('auth_reset.confirm_password')}>
-          <input
+          <PasswordInput
             id="fx-reset-confirm"
             className={'fx-auth-input' + (mismatch ? ' fx-auth-input-invalid' : '')}
-            type="password"
             name="confirm-password"
             autoComplete="new-password"
             required

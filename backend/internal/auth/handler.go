@@ -227,6 +227,10 @@ func (h *Handler) Mount(r chi.Router) {
 	// Unauthenticated: the confirmation link is followed from a mail client,
 	// often on a device with no session. The 256-bit token is the credential.
 	r.Post("/email/verify", h.VerifyEmail)
+	// Same reasoning, one step further: this link is opened from the mailbox
+	// the account is moving TO, so a device that has never signed in is the
+	// expected case rather than the awkward one.
+	r.Post("/email-change/confirm", h.ConfirmEmailChange)
 
 	// The second-factor routes authenticate with the PRE-AUTH cookie, not a
 	// session — a session is exactly what they exist to produce.
@@ -288,6 +292,9 @@ func (h *Handler) Mount(r chi.Router) {
 		pr.Post("/password/set", h.SetPassword)
 		pr.Get("/identities", h.ListIdentities)
 		pr.Post("/email/resend", h.SendEmailVerification)
+		pr.Post("/email/change", h.RequestEmailChange)
+		pr.Delete("/email/change", h.CancelEmailChange)
+		pr.Get("/email/change", h.GetEmailChange)
 		pr.Get("/2fa", h.TwoFactorStatus)
 		pr.Post("/2fa/totp/disable", h.DisableTOTP)
 		pr.Post("/2fa/email/send", h.SendStepUpEmailOTP)
@@ -396,8 +403,20 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 // ─────────────────────────────────────────────────────────────────────
 
 type loginInput struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	// Identifier is the e-mail OR the username. `Email` stays accepted so an
+	// extension build older than this change keeps signing in; exactly one of
+	// the two is used, Identifier first.
+	Identifier string `json:"identifier"`
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+}
+
+// who returns the submitted identifier, whichever field carried it.
+func (in loginInput) who() string {
+	if in.Identifier != "" {
+		return in.Identifier
+	}
+	return in.Email
 }
 
 // Login authenticates a password and issues a session.
@@ -417,10 +436,17 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	ip := clientIP(r)
 	ipKey := "login:ip:" + ip
-	// The e-mail bucket is keyed by the NORMALIZED address rather than the raw
-	// input, so `A@x.com` and `a@x.com ` share one budget instead of giving an
-	// attacker a fresh 5 attempts per capitalization.
-	emailKey := "login:em:" + NormalizeEmail(in.Email)
+	// Keyed by the NORMALIZED value rather than the raw input, so `A@x.com` and
+	// `a@x.com ` share one budget instead of giving an attacker a fresh 5
+	// attempts per capitalization — and RESOLVED first, so an account's address
+	// and its username charge the same bucket instead of two.
+	bucket, err := h.repo.loginBucketKey(r.Context(), in.who())
+	if err != nil {
+		h.logger.Error("login bucket key", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	emailKey := "login:em:" + bucket
 
 	if until, ok := h.loginByIP.Begin(ipKey); !ok {
 		writeRateLimited(w, until)
@@ -432,7 +458,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, found, verr := h.repo.verifyPassword(r.Context(), in.Email, in.Password)
+	user, found, verr := h.repo.verifyPassword(r.Context(), in.who(), in.Password)
 	if !found {
 		burnDummyHash(in.Password)
 	}
@@ -465,7 +491,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 			// 64 KiB "address" into a permanent row on every attempt, and the
 			// per-address rate bucket cannot help: it is keyed by that same
 			// unique string, so every attempt gets a fresh budget.
-			TargetEmail: truncateTo(NormalizeEmail(in.Email), maxAuditEmail),
+			TargetEmail: truncateTo(NormalizeEmail(in.who()), maxAuditEmail),
 		}); err != nil {
 			h.logger.Error("audit login failure", "err", err)
 		}
@@ -647,6 +673,10 @@ type updateProfileInput struct {
 	// string could not express "clear", and a user who chose a language once
 	// would be stuck with it.
 	Locale *string `json:"locale"`
+	// Username is tri-state for the same reason, and clearing it is a real
+	// operation: an account that set one and wants it gone would otherwise have
+	// to be handed to an administrator.
+	Username *string `json:"username"`
 }
 
 // maxProfileNameRunes bounds the display name. The column is TEXT, so the DB
@@ -696,7 +726,29 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		}
 		in.Locale = &normalized
 	}
-	user, err := h.repo.UpdateOwnProfile(r.Context(), p.UserID, name, in.Locale)
+	// Tri-state like locale: absent keeps, "" clears, a value sets. Normalized
+	// and shape-checked here so the refusal can say what is wrong; the database
+	// refuses the same row anyway, which is what makes the next code path that
+	// writes this column safe without remembering to ask.
+	var username, displayUsername *string
+	if in.Username != nil {
+		typed := strings.TrimSpace(*in.Username)
+		normalized, err := NormalizeUsername(*in.Username)
+		if err != nil {
+			httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_username",
+				"a username is 3 to 32 characters of letters, digits, dot, dash or underscore"))
+			return
+		}
+		username = &normalized
+		displayUsername = &typed
+	}
+	user, err := h.repo.UpdateOwnProfile(r.Context(), p.UserID, name, in.Locale,
+		username, displayUsername)
+	if errors.Is(err, ErrUsernameTaken) {
+		httperr.Write(w, httperr.New(http.StatusConflict, "username_taken",
+			"that username is already in use"))
+		return
+	}
 	if err != nil {
 		h.logger.Error("update profile", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -992,10 +1044,57 @@ func validateEmail(email string) error {
 	if at <= 0 || at == len(e)-1 || strings.ContainsAny(e, " \t\r\n") {
 		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
 	}
-	if !strings.Contains(e[at+1:], ".") {
+	// The LOCAL part is an RFC 5321 dot-string, and checking it is not pedantry.
+	// Unchecked, it accepted anything without a space, so
+	// `https://evil.tld/x?r=@ok.com` was a valid "address" — and that string is
+	// then echoed into the e-mail-change notice sent to the CURRENT address, the
+	// one message whose whole promise is that it carries no link. Mail clients
+	// auto-linkify a bare `https://`, so the anti-phishing warning became the
+	// phishing vehicle, delivered by us, to the person being attacked.
+	if !validLocalPart(e[:at]) {
+		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
+	}
+	// A dot INSIDE the domain, not merely present in it: `a@b.` satisfies
+	// Contains and is not deliverable anywhere. It reached here from the e-mail
+	// change, whose own check was stricter — and this is the validator that also
+	// gates registration and invitations, so the looser one was the shared one.
+	domain := e[at+1:]
+	if dot := strings.LastIndex(domain, "."); dot <= 0 || dot == len(domain)-1 {
 		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
 	}
 	return nil
+}
+
+// validLocalPart implements RFC 5321's dot-string: atoms of `atext` joined by
+// single dots, with no leading, trailing or doubled dot.
+//
+// `:` and every other character a URL needs are simply not in `atext`, which is
+// what makes the check kill the URL-shaped address rather than blacklisting the
+// shapes someone thought of. A unicode local part (SMTPUTF8) is refused as a
+// consequence — consistent with a stack that normalizes addresses with ToLower
+// and compares them as bytes.
+func validLocalPart(local string) bool {
+	if local == "" {
+		return false
+	}
+	for _, atom := range strings.Split(local, ".") {
+		if atom == "" {
+			return false
+		}
+		for _, c := range atom {
+			switch {
+			case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			// `/` is atext by the RFC and is dropped anyway: no mail provider in
+			// use issues an address containing one, and keeping it leaves
+			// `//host.tld@ok.com` — a shape that reads as a URL to a human
+			// skimming the notice, which is the audience this check protects.
+			case strings.ContainsRune("!#$%&'*+-=?^_`{|}~", c):
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // clientIP returns the peer address for rate-limit keys.

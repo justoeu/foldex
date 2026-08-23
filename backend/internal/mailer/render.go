@@ -42,6 +42,12 @@ const (
 	TemplateSessionRevoked   = "session_revoked"
 	TemplateRecoveryCodeUsed = "recovery_code_used"
 	TemplateAccountConverted = "account_converted"
+	// The two halves of an e-mail change: the link goes to the NEW address, the
+	// warning to the OLD one. Two templates rather than one with a flag,
+	// because they have opposite shapes — one must carry a link and the other
+	// must be incapable of carrying one.
+	TemplateEmailChangeConfirm = "email_change_confirm"
+	TemplateEmailChangeNotice  = "email_change_notice"
 )
 
 // ErrUnknownTemplate is returned for a template name no catalogue defines.
@@ -80,6 +86,10 @@ const (
 	ParamBy             = "By"
 	ParamRemaining      = "Remaining"
 	ParamGoogleEmail    = "GoogleEmail"
+	// ParamNewEmail names the address an account is moving TO. It appears in
+	// the warning sent to the OLD address, which is the message whose whole job
+	// is to let its reader recognise a change they did not ask for.
+	ParamNewEmail = "NewEmail"
 )
 
 // messageStrings is the localized copy of one message as it appears on disk.

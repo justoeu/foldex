@@ -95,6 +95,27 @@
     ],
     "footnote": "Si no fuiste tú, contacta de inmediato con el administrador de tu Foldex: quien hizo esto sabía tu contraseña, y el restablecimiento de contraseña ya no se aplica a esta cuenta."
   },
+  "email_change_confirm": {
+    "subject": "Confirma tu nuevo correo de Foldex",
+    "eyebrow": "Confirmación",
+    "heading": "Confirma esta dirección para tu cuenta de Foldex.",
+    "body": [
+      "Alguien pidió mover tu cuenta de Foldex a esta dirección. Abre el enlace de abajo para completar el cambio.",
+      "Hasta entonces, tu cuenta sigue entrando con la dirección que ya usabas."
+    ],
+    "action": "Confirmar mi nueva dirección",
+    "footnote": "El enlace caduca en {{.ExpiresMinutes}} minutos y sirve una sola vez. Si no lo pediste, puedes ignorar este mensaje: no cambia nada."
+  },
+  "email_change_notice": {
+    "subject": "Pidieron un nuevo correo para tu cuenta de Foldex",
+    "eyebrow": "Alerta de seguridad",
+    "heading": "Alguien pidió cambiar el correo de esta cuenta.",
+    "body": [
+      "Se pidió el cambio a {{.NewEmail}} en la cuenta de Foldex que usa esta dirección.",
+      "Todavía no ha cambiado nada. El cambio solo ocurre si se abre el enlace enviado a esa dirección, y hasta entonces entras exactamente igual que hoy."
+    ],
+    "footnote": "Si no fuiste tú, cambia tu contraseña ahora: quien lo pidió tenía tu sesión. Este mensaje no lleva enlace a propósito: Foldex nunca te pide hacer clic para proteger tu cuenta."
+  },
   "_footer": {
     "body": [
       "Mensaje automático de tu Foldex. Por favor, no respondas a esta dirección."

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Icon, I } from './icons'
+import { Notice, SectionBlock, SectionCard, SectionRow } from './account/SectionCard'
 import { useConfirm } from './ConfirmDialog'
 import { listTokens, createToken, revokeToken, type ApiToken } from '../api/tokens'
 import { apiErrorCode as errCode } from '../lib/apiError'
@@ -65,85 +66,60 @@ export function ApiTokensSection() {
   }
 
   return (
-    <section className="fx-card">
-      <div className="fx-card-body" style={{ gap: 12, padding: 18 }}>
-        <h3
-          className="fx-card-title"
-          style={{ fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}
-        >
-          <Icon d={I.key} size={15} /> {t('tokens.section_title')}
-        </h3>
-        <p style={{ fontSize: 12, color: 'var(--fx-ink-3)', margin: 0 }}>{t('tokens.section_desc')}</p>
+    <SectionCard icon={I.link} title={t('tokens.card_title')} subtitle={t('tokens.section_desc')}>
+      {error && <Notice tone="bad">{error}</Notice>}
 
-        {error && (
-          <div className="fx-inline-error" role="alert" style={{ fontSize: 12 }}>
-            {error}
+      {/* The one and only display of the plaintext. The server keeps sha256,
+          so this is not a convenience that was skipped — showing it again is
+          genuinely impossible. That is why it gets a band of its own rather
+          than a line in the list: it has to be copied before it is dismissed. */}
+      {created?.token && (
+        <div className="fx-2fa-key" style={{ alignItems: 'stretch' }}>
+          <span className="fx-sec-block-label">{t('tokens.created_title')}</span>
+          <code data-testid="new-token" className="fx-2fa-key-value">
+            {created.token}
+          </code>
+          <Notice tone="info">{t('tokens.created_warning')}</Notice>
+          <div className="fx-sec-actions">
+            <button className="fx-btn" onClick={() => void copy(created.token ?? '')}>
+              {copied ? t('tokens.copied') : t('tokens.copy')}
+            </button>
+            <button className="fx-btn fx-btn-primary" onClick={() => setCreated(null)}>
+              {t('tokens.done')}
+            </button>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* The one and only display of the plaintext. The server keeps sha256,
-            so this is not a convenience that was skipped — showing it again is
-            genuinely impossible. */}
-        {created?.token && (
-          <div
-            style={{
-              display: 'grid',
-              gap: 8,
-              padding: 12,
-              borderRadius: 10,
-              background: 'var(--fx-surface-2)',
-            }}
-          >
-            <strong style={{ fontSize: 12 }}>{t('tokens.created_title')}</strong>
-            <code
-              data-testid="new-token"
-              style={{ fontSize: 12, wordBreak: 'break-all', fontFamily: 'var(--fx-mono)' }}
-            >
-              {created.token}
-            </code>
-            <p style={{ fontSize: 11, color: 'var(--fx-ink-3)', margin: 0 }}>
-              {t('tokens.created_warning')}
-            </p>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="fx-btn" onClick={() => void copy(created.token ?? '')}>
-                {copied ? t('tokens.copied') : t('tokens.copy')}
-              </button>
-              <button className="fx-btn" onClick={() => setCreated(null)}>
-                {t('tokens.done')}
-              </button>
-            </div>
-          </div>
-        )}
-
-        <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
+      <SectionBlock label={t('tokens.list_label')}>
+        <div className="fx-sec-rows">
           {(tokens.data ?? []).map((tok) => (
-            <li
+            <SectionRow
               key={tok.id}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}
-            >
-              <span style={{ flex: 1, minWidth: 0 }}>
-                <strong>{tok.name}</strong>
-                <span style={{ color: 'var(--fx-ink-4)', marginLeft: 8 }}>
-                  {tok.last_used_at
-                    ? t('tokens.last_used', { when: new Date(tok.last_used_at).toLocaleDateString() })
-                    : t('tokens.never_used')}
-                </span>
-              </span>
-              <button
-                className="fx-btn"
-                aria-label={t('tokens.revoke_label', { name: tok.name })}
-                onClick={() => void askRevoke(tok)}
-              >
-                <Icon d={I.trash} size={13} />
-              </button>
-            </li>
+              icon={I.link}
+              name={tok.name}
+              hint={
+                tok.last_used_at
+                  ? t('tokens.last_used', { when: new Date(tok.last_used_at).toLocaleDateString() })
+                  : t('tokens.never_used')
+              }
+              action={
+                <button
+                  className="fx-btn fx-btn-danger"
+                  aria-label={t('tokens.revoke_label', { name: tok.name })}
+                  onClick={() => void askRevoke(tok)}
+                >
+                  <Icon d={I.trash} size={13} /> {t('tokens.revoke')}
+                </button>
+              }
+            />
           ))}
-          {tokens.data?.length === 0 && (
-            <li style={{ fontSize: 12, color: 'var(--fx-ink-4)' }}>{t('tokens.empty')}</li>
-          )}
-        </ul>
+          {tokens.data?.length === 0 && <Notice tone="info">{t('tokens.empty')}</Notice>}
+        </div>
+      </SectionBlock>
 
-        <label className="fx-field" style={{ margin: 0 }}>
+      <div className="fx-sec-form">
+        <label className="fx-field">
           <span className="fx-field-label">{t('tokens.name_label')}</span>
           <input
             className="fx-input"
@@ -152,7 +128,7 @@ export function ApiTokensSection() {
             onChange={(e) => setName(e.target.value)}
           />
         </label>
-        <div>
+        <div className="fx-sec-actions">
           <button
             className="fx-btn fx-btn-primary"
             disabled={create.isPending || !name.trim()}
@@ -162,7 +138,7 @@ export function ApiTokensSection() {
           </button>
         </div>
       </div>
-    </section>
+    </SectionCard>
   )
 }
 

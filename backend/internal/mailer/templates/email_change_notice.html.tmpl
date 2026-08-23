@@ -1,0 +1,10 @@
+{{- /*
+Red, and NOTICE shape — a form with no button slot and no URL box, so it cannot
+be given a link even by a caller that passes one. This message goes to the
+address being moved AWAY from, and its reader may be someone whose account is
+being taken: "click here to stop it" is exactly the sentence an attacker would
+forge, so the real message never contains one. Same rule as session_revoked.
+*/ -}}
+{{- define "email_change_notice" -}}
+{{- template "chrome.shape_notice" (dict "Doc" . "Accent" "#c0392f" "Tint" "#fdeeec") -}}
+{{- end -}}

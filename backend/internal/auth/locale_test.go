@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"foldex/internal/mailer"
+	"foldex/internal/pkg/authctx"
 )
 
 // localeFrom decides the language of every credential e-mail the instance
@@ -151,4 +152,24 @@ func TestLocaleFor_IsUnchangedByTheHintParameter(t *testing.T) {
 	assert.Equal(t, "pt", localeFor("", r))
 	assert.Equal(t, "es", localeFor("es", r))
 	assert.Equal(t, mailer.DefaultLocale, localeFor("", httptest.NewRequest(http.MethodPost, "/", nil)))
+}
+
+// The owner guard exists in the handler AND here, and each survives the other
+// being deleted — so neither had a witness of its own. With both gone the
+// single-owner index still refuses, but as a 500 rather than a 400, which is
+// the difference between an honest refusal and an opaque failure.
+//
+// A nil pool is enough: the guard runs before any query, and reaching the
+// database would mean the guard did not.
+func TestAdminCreateUserRefusesTheOwnerRoleBeforeTouchingTheDatabase(t *testing.T) {
+	t.Parallel()
+	r := NewRepository(nil)
+
+	_, err := r.AdminCreateUser(context.Background(),
+		"usurper@example.com", "X", "a fine temporary password", authctx.RoleOwner)
+	assert.ErrorIs(t, err, ErrInvalidRole)
+
+	_, err = r.AdminCreateUser(context.Background(),
+		"bogus@example.com", "X", "a fine temporary password", authctx.Role("superuser"))
+	assert.ErrorIs(t, err, ErrInvalidRole)
 }

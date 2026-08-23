@@ -11,6 +11,7 @@ import { folderDescendants } from '../lib/folderDialogPayload'
 import { useFolderDialogForm } from '../hooks/useFolderDialogForm'
 import { useFolderDeleteController, useFolderSaveController } from '../hooks/useFolderDialogActions'
 import type { Folder } from '../api/types'
+import { PasswordInput } from './PasswordInput'
 
 type Props = {
   open: boolean
@@ -229,8 +230,7 @@ function NewFolderPasswordFields({ form }: { form: Form }) {
       <label className="fx-field">
         <span className="fx-field-label">{t('folder_dialog.password_label')}</span>
         <div className="fx-input">
-          <input
-            type="password"
+          <PasswordInput
             autoComplete="new-password"
             value={form.password}
             onChange={(event) => form.setPassword(event.target.value)}
@@ -276,8 +276,7 @@ function PasswordEditor({ form }: { form: Form }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div className="fx-input">
-        <input
-          type="password"
+        <PasswordInput
           autoFocus
           autoComplete="off"
           value={form.currentPassword}
@@ -291,8 +290,7 @@ function PasswordEditor({ form }: { form: Form }) {
       </div>
       {!form.removePassword && (
         <div className="fx-input">
-          <input
-            type="password"
+          <PasswordInput
             autoComplete="new-password"
             value={form.newPassword}
             onChange={(event) => form.setNewPassword(event.target.value)}

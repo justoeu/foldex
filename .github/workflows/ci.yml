@@ -114,6 +114,28 @@ jobs:
         # Vitest runs the suite once under v8 and enforces the statement,
         # line, function, and branch thresholds from vitest.config.ts.
         run: bun run coverage
+      - name: CSS button-reset cascade guard
+        # Vitest cannot catch this one: jsdom loads no stylesheet and
+        # `css: false` makes a `?raw` CSS import the empty string. Why it
+        # exists is in the script's own header and CLAUDE.md §5.
+        run: |
+          # The guard's own failure path, exercised first: its predecessor was a
+          # Vitest test that went green against the broken file.
+          node scripts/test-css-button-reset.mjs --self-test --good
+          if node scripts/test-css-button-reset.mjs --self-test; then
+            echo "guard did not fail on the bad fixture" >&2; exit 1
+          fi
+          node scripts/test-css-button-reset.mjs
+      - name: Orphan CSS class guard
+        # A class in the markup with no rule behind it renders unstyled, and
+        # `.fx-shell button`/`input` make "unstyled" mean invisible. It has
+        # shipped six times; nothing else in the tree can see it.
+        run: node scripts/test-css-orphan-classes.mjs
+      - name: Auth overlay containment guard
+        # `.fx-auth` is `position: fixed; inset: 0` and opaque. Worn inside a
+        # card it paints over it and the page flickers without settling — which
+        # shipped once. Why it exists is in the script's header and CLAUDE.md §5.
+        run: node scripts/test-css-auth-overlay.mjs
       - name: release.sh awk regression
         # Locks the "first-match-only" invariant of update_version() in
         # scripts/release.sh. Without it, a future sed/awk swap could

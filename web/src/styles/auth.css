@@ -14,7 +14,25 @@
  * spinner used by the entire app.
  */
 
-.fx-auth {
+/*
+ * `.fx-auth` is an OVERLAY: `position: fixed; inset: 0` with an opaque
+ * background. It is the signed-out screen and nothing else may wear it.
+ *
+ * The pieces it styles — the OTP field, the QR, the recovery-code grid — are
+ * also needed INSIDE the signed-in shell, and every one of those selectors is
+ * scoped `:is(.fx-auth, .fx-authfield) .thing`, so reaching them used to mean putting the overlay
+ * class on a div and cancelling `position`/`padding`/`background` by hand.
+ * That worked only while the cancellation was an INLINE style; written as a
+ * class in foldex.css it lost to this rule on document order (auth.css loads
+ * last, both are `(0,1,0)`) and the wrapper became a full-size opaque sheet
+ * painted over the card — text gone, layout intact, and a repaint storm that
+ * blocked the main thread. `.fx-authfield` carries the tokens and matches the
+ * same descendant selectors, with no layout of its own; use it everywhere
+ * inside the shell. `scripts/test-css-auth-overlay.mjs` fails the build if the
+ * overlay class comes back.
+ */
+.fx-auth,
+.fx-authfield {
   --fxa-bg: var(--fx-bg);
   --fxa-surface: var(--fx-surface-3);
   --fxa-border: var(--fx-border);
@@ -24,7 +42,9 @@
   --fxa-accent-2: var(--fx-accent-2);
   --fxa-danger: var(--fx-danger);
   --fxa-radius: 18px;
+}
 
+.fx-auth {
   position: fixed;
   inset: 0;
   display: flex;
@@ -72,6 +92,10 @@
   align-items: center;
   gap: 10px;
   margin-bottom: 32px;
+  /* Wraps so the flag row drops under the wordmark on a very narrow phone
+     instead of squeezing the brand or overflowing the pane. */
+  flex-wrap: wrap;
+  row-gap: 12px;
 }
 
 .fx-auth-logo {
@@ -93,6 +117,78 @@
   font-weight: 700;
   font-size: 17px;
   letter-spacing: -0.01em;
+}
+
+/* Language flags ---------------------------------------------------- */
+
+/*
+ * Pushed to the far edge of the brand row so the row reads brand-left /
+ * language-right, the same arrangement the topbar uses once signed in.
+ */
+.fx-auth-locales {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+/*
+ * Element-qualified on purpose. `.fx-shell button` (foldex.css) is (0,1,1) and
+ * out-specifies a bare component class, stripping background/border/padding —
+ * the same trap CLAUDE.md §5 records for `.fx-acard`. Auth screens sit outside
+ * `.fx-shell` today, but `.fx-auth` is already reused INSIDE it by the account
+ * and two-factor settings sections, so one more reuse of AuthShell would make
+ * these buttons render as bare text.
+ */
+button.fx-auth-locale {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fxa-ink-soft);
+  cursor: pointer;
+  line-height: 1;
+  /* 32px tall at this padding — under the 44px touch target the mobile rules
+     give inputs, which is deliberate: three of these sit side by side in a row
+     that must not out-weigh the brand it shares. Spacing between them is what
+     keeps them separately tappable. */
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+button.fx-auth-locale:hover {
+  background: var(--fx-surface-2);
+  border-color: var(--fxa-border);
+}
+
+button.fx-auth-locale:focus-visible {
+  outline: 2px solid var(--fxa-accent);
+  outline-offset: 2px;
+}
+
+button.fx-auth-locale[aria-pressed='true'] {
+  background: var(--fx-accent-soft);
+  border-color: var(--fxa-accent);
+  color: var(--fxa-ink);
+}
+
+.fx-auth-locale-flag {
+  font-size: 15px;
+  /* Emoji fonts only. The UI stack's own glyphs win over the system emoji face
+     for regional-indicator pairs on some Linux setups, which draws the flag as
+     two boxed letters beside the code that already says the same thing. */
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
+}
+
+.fx-auth-locale-code {
+  font-family: var(--fx-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 /* Headings --------------------------------------------------------- */
@@ -145,6 +241,13 @@
 
 .fx-auth-input {
   width: 100%;
+  /* `width: 100%` plus padding on a CONTENT-BOX input is 28px wider than the
+     column it sits in. Nothing under `.fx-auth` sets the border-box default the
+     app shell gets from `.fx-shell *`, so every field here has been overflowing
+     its own form — invisible only because the pane had slack to absorb it. It
+     stopped being invisible when the password field grew room for a reveal
+     toggle and ran past the card's edge. */
+  box-sizing: border-box;
   min-height: 44px;
   padding: 10px 14px;
   border: 1px solid var(--fxa-border);
@@ -360,7 +463,7 @@
 /* ── PR3: second factor, recovery and reset ─────────────────────────────── */
 
 /* Secondary actions under a form: "use a recovery code", "back to sign in". */
-.fx-auth .fx-auth-alt {
+:is(.fx-auth, .fx-authfield) .fx-auth-alt {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 18px;
@@ -368,7 +471,7 @@
   margin-top: 14px;
 }
 
-.fx-auth .fx-auth-link {
+:is(.fx-auth, .fx-authfield) .fx-auth-link {
   background: none;
   border: 0;
   padding: 4px 2px;
@@ -378,13 +481,13 @@
   cursor: pointer;
   border-radius: 6px;
 }
-.fx-auth .fx-auth-link:hover { text-decoration: underline; }
-.fx-auth .fx-auth-link:focus-visible {
+:is(.fx-auth, .fx-authfield) .fx-auth-link:hover { text-decoration: underline; }
+:is(.fx-auth, .fx-authfield) .fx-auth-link:focus-visible {
   outline: 2px solid var(--fxa-accent);
   outline-offset: 2px;
 }
 
-.fx-auth .fx-auth-notice {
+:is(.fx-auth, .fx-authfield) .fx-auth-notice {
   margin: 0 0 4px;
   padding: 10px 12px;
   border-radius: 11px;
@@ -400,7 +503,7 @@
    primary action of the form, and a provider button that borrowed it would
    make two things look primary — on the one screen where a mis-click sends the
    user out to a third party. */
-.fx-auth .fx-auth-oauth {
+:is(.fx-auth, .fx-authfield) .fx-auth-oauth {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -419,8 +522,8 @@
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.fx-auth .fx-auth-oauth:hover { background: var(--fx-accent-soft); }
-.fx-auth .fx-auth-oauth:focus-visible {
+:is(.fx-auth, .fx-authfield) .fx-auth-oauth:hover { background: var(--fx-accent-soft); }
+:is(.fx-auth, .fx-authfield) .fx-auth-oauth:focus-visible {
   outline: 2px solid var(--fxa-accent);
   outline-offset: 2px;
 }
@@ -428,7 +531,7 @@
 /* The mark keeps Google's own colours in both themes — it is a trademark, and
    recolouring it to match the surface is exactly what the brand guidelines
    forbid. The white plate is what keeps it legible on the dark surface. */
-.fx-auth .fx-auth-oauth-mark {
+:is(.fx-auth, .fx-authfield) .fx-auth-oauth-mark {
   width: 18px;
   height: 18px;
   flex: none;
@@ -436,7 +539,7 @@
   background: #fff;
 }
 
-.fx-auth .fx-auth-divider {
+:is(.fx-auth, .fx-authfield) .fx-auth-divider {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -445,8 +548,8 @@
   font-size: 12px;
 }
 
-.fx-auth .fx-auth-divider::before,
-.fx-auth .fx-auth-divider::after {
+:is(.fx-auth, .fx-authfield) .fx-auth-divider::before,
+:is(.fx-auth, .fx-authfield) .fx-auth-divider::after {
   content: '';
   flex: 1;
   height: 1px;
@@ -454,19 +557,19 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fx-auth .fx-auth-oauth { transition: none; }
+  :is(.fx-auth, .fx-authfield) .fx-auth-oauth { transition: none; }
 }
 
 /* ── OTP field ──────────────────────────────────────────────────────────── */
 
-.fx-auth .fx-auth-otp {
+:is(.fx-auth, .fx-authfield) .fx-auth-otp {
   display: flex;
   gap: 8px;
   justify-content: space-between;
   margin: 4px 0 2px;
 }
 
-.fx-auth .fx-auth-otp-cell {
+:is(.fx-auth, .fx-authfield) .fx-auth-otp-cell {
   width: 100%;
   /* A hard min-height rather than padding: the cells must stay square-ish and
      tappable at 44px on a phone even when the container squeezes them. */
@@ -483,25 +586,25 @@
   border-radius: 11px;
   transition: border-color .15s ease, box-shadow .15s ease;
 }
-.fx-auth .fx-auth-otp-cell:focus {
+:is(.fx-auth, .fx-authfield) .fx-auth-otp-cell:focus {
   outline: none;
   border-color: var(--fxa-accent);
   box-shadow: 0 0 0 3px var(--fx-accent-soft-2);
 }
-.fx-auth .fx-auth-otp-invalid .fx-auth-otp-cell {
+:is(.fx-auth, .fx-authfield) .fx-auth-otp-invalid .fx-auth-otp-cell {
   border-color: var(--fxa-danger);
 }
 
-.fx-auth .fx-auth-input-mono {
+:is(.fx-auth, .fx-authfield) .fx-auth-input-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: .06em;
   text-transform: uppercase;
 }
-.fx-auth .fx-auth-input-invalid { border-color: var(--fxa-danger); }
+:is(.fx-auth, .fx-authfield) .fx-auth-input-invalid { border-color: var(--fxa-danger); }
 
 /* ── Enrollment ─────────────────────────────────────────────────────────── */
 
-.fx-auth .fx-auth-qr {
+:is(.fx-auth, .fx-authfield) .fx-auth-qr {
   display: flex;
   justify-content: center;
   padding: 12px;
@@ -509,9 +612,9 @@
   border: 1px solid var(--fxa-border);
   border-radius: 11px;
 }
-.fx-auth .fx-auth-qr img { display: block; width: 240px; height: 240px; }
+:is(.fx-auth, .fx-authfield) .fx-auth-qr img { display: block; width: 240px; height: 240px; }
 
-.fx-auth .fx-auth-secret {
+:is(.fx-auth, .fx-authfield) .fx-auth-secret {
   margin: 0;
   padding: 10px 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -526,7 +629,7 @@
 
 /* ── Recovery codes ─────────────────────────────────────────────────────── */
 
-.fx-auth .fx-auth-codes {
+:is(.fx-auth, .fx-authfield) .fx-auth-codes {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 8px;
@@ -538,10 +641,10 @@
   border-radius: 11px;
 }
 @media (max-width: 420px) {
-  .fx-auth .fx-auth-codes { grid-template-columns: 1fr; }
+  :is(.fx-auth, .fx-authfield) .fx-auth-codes { grid-template-columns: 1fr; }
 }
 
-.fx-auth .fx-auth-code {
+:is(.fx-auth, .fx-authfield) .fx-auth-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 14px;
   letter-spacing: .06em;
@@ -549,7 +652,7 @@
   user-select: all; /* one click selects a whole code for copying */
 }
 
-.fx-auth .fx-auth-check {
+:is(.fx-auth, .fx-authfield) .fx-auth-check {
   display: flex;
   align-items: flex-start;
   gap: 9px;
@@ -558,4 +661,4 @@
   color: var(--fxa-ink-soft);
   cursor: pointer;
 }
-.fx-auth .fx-auth-check input { margin-top: 2px; accent-color: var(--fxa-accent); }
+:is(.fx-auth, .fx-authfield) .fx-auth-check input { margin-top: 2px; accent-color: var(--fxa-accent); }

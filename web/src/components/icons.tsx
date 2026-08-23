@@ -1,6 +1,6 @@
 // Inline SVG icons matching the redesign handoff. Single component pulls from
 // a registry of path fragments so every icon shares the same stroke math.
-import type { ReactNode } from 'react'
+import { memo, type ReactNode } from 'react'
 
 type Props = {
   d: ReactNode
@@ -9,7 +9,10 @@ type Props = {
   className?: string
 }
 
-export function Icon({ d, size = 18, stroke = 1.6, className }: Props) {
+// Memoized: the administration table renders five per row, so a 200-account
+// page mounts 800+ of these and one row's mutation re-renders the whole list.
+// `d` is a module-level element, so the comparison is a reference check.
+export const Icon = memo(function Icon({ d, size = 18, stroke = 1.6, className }: Props) {
   return (
     <svg
       width={size}
@@ -26,7 +29,7 @@ export function Icon({ d, size = 18, stroke = 1.6, className }: Props) {
       {d}
     </svg>
   )
-}
+})
 
 export const I = {
   home: (
@@ -309,6 +312,49 @@ export const I = {
       <circle cx="7.5" cy="15.5" r="4.5" />
       <path d="M10.8 12.2 21 2" />
       <path d="M17 6l3 3" />
+    </>
+  ),
+  // ── password reveal ──
+  eye: (
+    <>
+      <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  eyeOff: (
+    <>
+      <path d="M10.6 6.1A9.9 9.9 0 0 1 12 6c6.4 0 10 6 10 6a17.7 17.7 0 0 1-3.2 3.9" />
+      <path d="M6.6 6.7A17.4 17.4 0 0 0 2 12s3.6 6 10 6a9.7 9.7 0 0 0 4.2-.9" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+      <path d="M3 3l18 18" />
+    </>
+  ),
+  // ── administration row actions ──
+  userCheck: (
+    <>
+      <path d="M15 20v-1.5a4.5 4.5 0 0 0-4.5-4.5h-3A4.5 4.5 0 0 0 3 18.5V20" />
+      <circle cx="9" cy="7.5" r="3.5" />
+      <path d="m16 12 2 2 4-4" />
+    </>
+  ),
+  userOff: (
+    <>
+      <path d="M15 20v-1.5a4.5 4.5 0 0 0-4.5-4.5h-3A4.5 4.5 0 0 0 3 18.5V20" />
+      <circle cx="9" cy="7.5" r="3.5" />
+      <path d="M16 10h6" />
+    </>
+  ),
+  logout: (
+    <>
+      <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" />
+      <path d="M10 17l-5-5 5-5" />
+      <path d="M5 12h11" />
+    </>
+  ),
+  crown: (
+    <>
+      <path d="M3 7l4 4 5-6 5 6 4-4v10H3z" />
+      <path d="M3 20h18" />
     </>
   ),
 }

@@ -5,11 +5,40 @@ import { useAuth } from '../../auth/AuthProvider'
 import { urlTokens } from '../../auth/authUrl'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 import { GoogleButton, AuthDivider } from './GoogleButton'
+import { PasswordInput } from '../PasswordInput'
+
+// Remembering the address is a CONVENIENCE and nothing more: the password is
+// never stored, and neither is anything that could stand in for one. It lives
+// in localStorage rather than on the account for the obvious reason — the whole
+// point is to have it before anyone is signed in.
+//
+// Unchecking must ERASE, not merely stop writing. A box the user unticks while
+// looking at their own address, that then hands the same address back on the
+// next visit, has done the opposite of what it says.
+const REMEMBER_KEY = 'foldex.auth.email'
+
+function readRemembered(): string {
+  try {
+    return localStorage.getItem(REMEMBER_KEY) ?? ''
+  } catch {
+    return '' // storage unavailable (private window, blocked site data)
+  }
+}
+
+export function forgetRememberedEmail() {
+  try {
+    localStorage.removeItem(REMEMBER_KEY)
+  } catch {
+    /* storage unavailable */
+  }
+}
 
 export function LoginScreen({ onForgotPassword }: { onForgotPassword?: () => void }) {
   const { t } = useTranslation()
   const { adopt, session } = useAuth()
-  const [email, setEmail] = useState('')
+  const [remembered] = useState(readRemembered)
+  const [email, setEmail] = useState(remembered)
+  const [remember, setRemember] = useState(remembered !== '')
   const [password, setPassword] = useState('')
   // Seeded from the URL because a FAILED Google round-trip comes back here as a
   // plain navigation with no response body to inspect: ?oauth_error= is the
@@ -26,7 +55,15 @@ export function LoginScreen({ onForgotPassword }: { onForgotPassword?: () => voi
     setBusy(true)
     setError('')
     try {
-      adopt(await login(email, password))
+      const me = await login(email, password)
+      // Written only after the credentials were ACCEPTED. Remembering a typo the
+      // user is still correcting would hand the typo back next time.
+      try {
+        if (remember) localStorage.setItem(REMEMBER_KEY, email)
+      } catch {
+        /* storage unavailable — the sign-in itself is unaffected */
+      }
+      adopt(me)
     } catch (err) {
       setError(messageFor(err, t))
     } finally {
@@ -46,13 +83,22 @@ export function LoginScreen({ onForgotPassword }: { onForgotPassword?: () => voi
           </>
         )}
 
-        <AuthField id="fx-login-email" label={t('auth.email')}>
+        <AuthField id="fx-login-email" label={t('auth.identifier')}>
+          {/*
+            `type="text"`, not `type="email"`. The field now accepts a username
+            too, and an e-mail input refuses to submit anything without an `@` —
+            the browser would block a perfectly valid sign-in with a validation
+            bubble the server never gets to answer.
+          */}
           <input
             id="fx-login-email"
             className="fx-auth-input"
-            type="email"
-            name="email"
+            type="text"
+            name="username"
             autoComplete="username"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             autoFocus
             required
             value={email}
@@ -61,10 +107,9 @@ export function LoginScreen({ onForgotPassword }: { onForgotPassword?: () => voi
         </AuthField>
 
         <AuthField id="fx-login-password" label={t('auth.password')}>
-          <input
+          <PasswordInput
             id="fx-login-password"
             className="fx-auth-input"
-            type="password"
             name="password"
             autoComplete="current-password"
             required
@@ -72,6 +117,22 @@ export function LoginScreen({ onForgotPassword }: { onForgotPassword?: () => voi
             onChange={(e) => setPassword(e.target.value)}
           />
         </AuthField>
+
+        <label className="fx-auth-check">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => {
+              setRemember(e.target.checked)
+              // Erase on the UNTICK, not on a later successful sign-in. Someone
+              // who unticks and walks away — or unticks and then fails to sign
+              // in — would otherwise leave the address exactly where they just
+              // asked for it not to be.
+              if (!e.target.checked) forgetRememberedEmail()
+            }}
+          />
+          <span>{t('auth.remember_email')}</span>
+        </label>
 
         <AuthSubmit busy={busy}>{t('auth_login.submit')}</AuthSubmit>
 

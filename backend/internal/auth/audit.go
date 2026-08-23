@@ -17,6 +17,7 @@ const (
 	AuditLoginFailed      = "login.failed"
 	AuditRoleChanged      = "user.role_changed"
 	AuditStatusChanged    = "user.status_changed"
+	AuditUserCreated      = "user.created"
 	AuditUserDeleted      = "user.deleted"
 	AuditOwnershipMoved   = "instance.ownership_transferred"
 	AuditInviteCreated    = "invite.created"
@@ -24,6 +25,11 @@ const (
 	AuditSessionsRevoked  = "user.sessions_revoked"
 	AuditPasswordRecovery = "user.password_recovery_sent"
 	AuditPolicyChanged    = "policy.changed"
+	// AuditEmailChanged records the address MOVING, at the moment the
+	// confirmation link is consumed — never when it is requested. A request
+	// that nobody confirms changed nothing, and an entry for it would make the
+	// trail claim an account moved when it did not.
+	AuditEmailChanged = "user.email_changed"
 )
 
 // AuditEntry is one row of the trail as the API returns it.

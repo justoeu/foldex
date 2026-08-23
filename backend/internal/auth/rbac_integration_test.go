@@ -574,3 +574,35 @@ func TestPolicy_RefusesADomainThatCouldForgeALogRecord(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, "invalid_policy", errCode(t, rec))
 }
+
+// The configured floor must reach POST /api/admin/users, or this route is a
+// back door around a minimum the owner deliberately raised (ADR-35).
+//
+// It needs a harness with a real policy repository. Every harness built the
+// admin handler with a nil policy, so the floor test in the other file was
+// asserting the compiled-in constant and deleting the wiring in main.go broke
+// nothing — which is exactly the failure PolicyReader's own doc warns about.
+func TestAdminCreateUser_HonoursTheConfiguredPasswordFloor(t *testing.T) {
+	h := newHarnessWithPolicy(t)
+	owner := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	raise := map[string]any{
+		"password_min_length": 20, "otp_ttl_minutes": 5, "otp_cooldown_seconds": 60,
+		"google_allowed_domains": []string{}, "google_auto_provision": false,
+		"google_default_role": "editor",
+	}
+	require.Equal(t, http.StatusOK, owner.do(http.MethodPut, "/api/admin/policy", raise).Code)
+
+	// Comfortably over the compiled-in 8, under the configured 20.
+	rec := owner.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "floored@example.com", "name": "X", "password": "twelve chars",
+	})
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.Equal(t, "password_too_short", errCode(t, rec))
+
+	ok := owner.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "floored@example.com", "name": "X",
+		"password": "a password of at least twenty characters",
+	})
+	assert.Equal(t, http.StatusCreated, ok.Code, ok.Body.String())
+}

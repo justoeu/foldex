@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { convertToGoogle, errorCode, errorStatus } from '../../api/auth'
 import { useAuth } from '../../auth/AuthProvider'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
+import { PasswordInput } from '../PasswordInput'
 
 /**
  * The account-portability step: someone signed in with Google using an address
@@ -70,10 +71,9 @@ export function ConvertScreen({ email }: { email: string }) {
         </p>
 
         <AuthField id="fx-convert-password" label={t('auth_convert.current_password')}>
-          <input
+          <PasswordInput
             id="fx-convert-password"
             className="fx-auth-input"
-            type="password"
             name="password"
             autoComplete="current-password"
             autoFocus

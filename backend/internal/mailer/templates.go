@@ -108,6 +108,30 @@ func VerifyEmailMessage(to, verifyURL string, expiresInMinutes int) Envelope {
 	}}
 }
 
+// EmailChangeConfirmMessage carries the link that MOVES the account to `to`.
+//
+// It is the only thing that can complete the change: without it the request in
+// email_change expires untouched, which is what keeps a mistyped address from
+// becoming the account's login and its recovery channel at once.
+func EmailChangeConfirmMessage(to, confirmURL string, expiresInMinutes int) Envelope {
+	return Envelope{Template: TemplateEmailChangeConfirm, To: to, Params: map[string]string{
+		ParamActionURL:      confirmURL,
+		ParamExpiresMinutes: strconv.Itoa(expiresInMinutes),
+	}}
+}
+
+// EmailChangeNoticeMessage warns the CURRENT address that a move was requested.
+//
+// It carries no link and its template has no slot for one. The reader may be
+// someone whose account is being taken over, and the address they still control
+// is the only channel left to reach them — so this message must not be the one
+// that teaches them to click.
+func EmailChangeNoticeMessage(to, newEmail string) Envelope {
+	return Envelope{Template: TemplateEmailChangeNotice, To: to, Params: map[string]string{
+		ParamNewEmail: newEmail,
+	}}
+}
+
 // AdminPasswordRecoveryMessage carries a user-bound recovery link requested by
 // an administrator. It is sent only through SMTP; the log driver must never be
 // used for this credential.

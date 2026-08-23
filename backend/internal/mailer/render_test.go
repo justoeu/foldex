@@ -25,6 +25,8 @@ func allEnvelopes() []Envelope {
 		SessionRevokedMessage("a@b.c"),
 		RecoveryCodeUsedMessage("a@b.c", 7),
 		AccountConvertedMessage("a@b.c", "person@gmail.com"),
+		EmailChangeConfirmMessage("a@b.c", "https://foldex.test/#email-change=T", 30),
+		EmailChangeNoticeMessage("a@b.c", "new@b.c"),
 	}
 }
 
@@ -237,13 +239,21 @@ func TestLoadAssetsRefusesBrokenInput(t *testing.T) {
 // with the param DELIBERATELY injected, which is the case that used to work.
 func TestLinklessMessagesCannotBeGivenALink(t *testing.T) {
 	t.Parallel()
-	for _, template := range []string{TemplateSessionRevoked, TemplateResetUnavailable} {
+	for _, template := range []string{
+		TemplateSessionRevoked, TemplateResetUnavailable, TemplateEmailChangeNotice,
+	} {
 		for _, locale := range SupportedLocales() {
 			m, err := Render(Envelope{
 				Template: template, To: "a@b.c",
 				Params: map[string]string{
 					ParamActionURL: "https://attacker.test/harvest",
 					ParamCode:      "000000",
+					// The legitimate params of every linkless message go in too.
+					// Without them `missingkey=error` fails the RENDER, and a
+					// render error is not the thing this test is asking about —
+					// it would pass for the wrong reason the day a message
+					// stopped interpolating anything.
+					ParamNewEmail: "new@b.c",
 				},
 			}, locale)
 			require.NoError(t, err, "%s/%s", template, locale)
@@ -275,6 +285,7 @@ func TestEveryCatalogueMessageHasALayoutThatExecutes(t *testing.T) {
 		ParamActionURL: "https://foldex.test/#t=abc", ParamCode: "492817",
 		ParamExpiresMinutes: "30", ParamExpiresHours: "48",
 		ParamBy: "Ana", ParamRemaining: "7", ParamGoogleEmail: "a@gmail.com",
+		ParamNewEmail: "new@b.c",
 	}
 	names := TemplateNames()
 	require.NotEmpty(t, names)
@@ -336,6 +347,7 @@ func TestEveryLinkCarryingMessageRendersItsLinkInBothArms(t *testing.T) {
 		ParamActionURL: sentinel, ParamCode: "492817",
 		ParamExpiresMinutes: "30", ParamExpiresHours: "48",
 		ParamBy: "Ana", ParamRemaining: "7", ParamGoogleEmail: "a@gmail.com",
+		ParamNewEmail: "new@b.c",
 	}
 	carriers := 0
 	for _, template := range TemplateNames() {

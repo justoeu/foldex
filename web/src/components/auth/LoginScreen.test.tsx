@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { LoginScreen } from './LoginScreen'
 import { SetupScreen } from './SetupScreen'
-import { renderWithProviders } from '../../test/renderWithProviders'
+import { renderWithProviders, testAdminUser } from '../../test/renderWithProviders'
 import { http } from '../../api/client'
 
 const features = { google_oauth: false, two_factor: false, email_delivery: false }
@@ -24,13 +24,13 @@ describe('LoginScreen', () => {
     renderWithProviders(<LoginScreen />, { session: null })
     const user = userEvent.setup()
 
-    await user.type(screen.getByLabelText(/e-mail/i), 'a@b.c')
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'a good password')
     await user.click(screen.getByRole('button', { name: /sign in/i }))
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith('/api/auth/login', {
-        email: 'a@b.c',
+        identifier: 'a@b.c',
         password: 'a good password',
       }),
     )
@@ -49,7 +49,7 @@ describe('LoginScreen', () => {
     renderWithProviders(<LoginScreen />, { session: null })
     const user = userEvent.setup()
 
-    await user.type(screen.getByLabelText(/e-mail/i), 'ghost@example.com')
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'ghost@example.com')
     await user.type(screen.getByLabelText(/^password$/i), 'wrong')
     await user.click(screen.getByRole('button', { name: /sign in/i }))
 
@@ -63,7 +63,7 @@ describe('LoginScreen', () => {
     renderWithProviders(<LoginScreen />, { session: null })
     const user = userEvent.setup()
 
-    await user.type(screen.getByLabelText(/e-mail/i), 'a@b.c')
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'x')
     await user.click(screen.getByRole('button', { name: /sign in/i }))
 
@@ -78,7 +78,7 @@ describe('LoginScreen', () => {
     renderWithProviders(<LoginScreen />, { session: null })
     const user = userEvent.setup()
 
-    await user.type(screen.getByLabelText(/e-mail/i), 'a@b.c')
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'x')
     await user.click(screen.getByRole('button', { name: /sign in/i }))
 
@@ -93,7 +93,7 @@ describe('LoginScreen', () => {
     renderWithProviders(<LoginScreen />, { session: null })
     const user = userEvent.setup()
 
-    await user.type(screen.getByLabelText(/e-mail/i), 'a@b.c')
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'pw')
     const button = screen.getByRole('button', { name: /sign in/i })
     await user.click(button)
@@ -106,7 +106,7 @@ describe('LoginScreen', () => {
 
   it('uses the right autocomplete hints so password managers work', () => {
     renderWithProviders(<LoginScreen />, { session: null })
-    expect(screen.getByLabelText(/e-mail/i)).toHaveAttribute('autocomplete', 'username')
+    expect(screen.getByRole('textbox', { name: /e-mail/i })).toHaveAttribute('autocomplete', 'username')
     expect(screen.getByLabelText(/^password$/i)).toHaveAttribute('autocomplete', 'current-password')
   })
 })
@@ -120,7 +120,7 @@ describe('SetupScreen', () => {
     const user = userEvent.setup()
 
     await user.type(screen.getByLabelText(/name/i), 'Ana')
-    await user.type(screen.getByLabelText(/e-mail/i), 'a@b.c')
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'a good password')
     await user.type(screen.getByLabelText(/confirm password/i), 'a good password')
     await user.click(screen.getByRole('button', { name: /create account/i }))
@@ -139,7 +139,7 @@ describe('SetupScreen', () => {
     renderWithProviders(<SetupScreen />, { session: null })
     const user = userEvent.setup()
 
-    await user.type(screen.getByLabelText(/e-mail/i), 'a@b.c')
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'a good password')
     await user.type(screen.getByLabelText(/confirm password/i), 'a different one')
     await user.click(screen.getByRole('button', { name: /create account/i }))
@@ -153,7 +153,7 @@ describe('SetupScreen', () => {
     renderWithProviders(<SetupScreen />, { session: null })
     const user = userEvent.setup()
 
-    await user.type(screen.getByLabelText(/e-mail/i), 'a@b.c')
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'a good password')
     await user.type(screen.getByLabelText(/confirm password/i), 'a good password')
     await user.click(screen.getByRole('button', { name: /create account/i }))
@@ -166,11 +166,85 @@ describe('SetupScreen', () => {
     renderWithProviders(<SetupScreen />, { session: null })
     const user = userEvent.setup()
 
-    await user.type(screen.getByLabelText(/e-mail/i), 'a@b.c')
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'shortpw')
     await user.type(screen.getByLabelText(/confirm password/i), 'shortpw')
     await user.click(screen.getByRole('button', { name: /create account/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/at least 8 characters/i)
+  })
+
+  // Remembering the address is a convenience; the password must never be part
+  // of it, and unticking must ERASE rather than merely stop writing.
+  describe('remember my e-mail', () => {
+    // test/storage.ts re-creates the store per FILE, not per test, so a key one
+    // case writes is still there for the next — which is exactly what this
+    // group asserts about.
+    beforeEach(() => localStorage.removeItem('foldex.auth.email'))
+
+    it('pre-fills the address and keeps the box ticked on a later visit', () => {
+      localStorage.setItem('foldex.auth.email', 'saved@foldex.test')
+      renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
+
+      expect(screen.getByRole('textbox', { name: /e-mail/i })).toHaveValue('saved@foldex.test')
+      expect(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i })).toBeChecked()
+    })
+
+    it('stores the address only after the credentials are accepted', async () => {
+      const user = userEvent.setup()
+      const post = vi.spyOn(http, 'post').mockRejectedValue({
+        response: { status: 401, data: { error: { code: 'invalid_credentials', message: 'no' } } },
+      })
+      renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
+
+      await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'typo@foldex.test')
+      await user.type(screen.getByLabelText(/^password$/i), 'wrong')
+      // Ticked on purpose: with the box unticked the address is absent whether
+      // the write happens before or after the await, so the test could not fail
+      // for the reason it names.
+      await user.click(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i }))
+      await user.click(screen.getByRole('button', { name: /sign in|entrar|iniciar/i }))
+
+      await waitFor(() => expect(post).toHaveBeenCalled())
+      expect(localStorage.getItem('foldex.auth.email')).toBeNull()
+    })
+
+    it('erases the stored address the moment the box is unticked', async () => {
+      const user = userEvent.setup()
+      localStorage.setItem('foldex.auth.email', 'saved@foldex.test')
+      renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
+
+      await user.click(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i }))
+
+      // Erased at the untick, with no sign-in at all: someone who unticks and
+      // walks away must not leave the address exactly where they just asked for
+      // it not to be.
+      expect(localStorage.getItem('foldex.auth.email')).toBeNull()
+    })
+
+    it('never stores the password', async () => {
+      const user = userEvent.setup()
+      vi.spyOn(http, 'post').mockResolvedValue({
+        data: { status: 'authenticated', user: testAdminUser, csrf_token: 'c', features },
+      } as never)
+      renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
+
+      await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
+      await user.type(screen.getByLabelText(/^password$/i), 'hunter2')
+      await user.click(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i }))
+      await user.click(screen.getByRole('button', { name: /sign in|entrar|iniciar/i }))
+
+      await waitFor(() => expect(localStorage.getItem('foldex.auth.email')).toBe('a@b.c'))
+
+      const dump = Array.from({ length: localStorage.length }, (_, i) => {
+        const k = localStorage.key(i) as string
+        return `${k}=${localStorage.getItem(k)}`
+      }).join('\n')
+      // `JSON.stringify(localStorage)` was tried and is VACUOUS against
+      // test/storage.ts — the entries live in a closure, so it returns
+      // `{"length":N}` and passes even when the password was written.
+      expect(dump).toContain('foldex.auth.email=a@b.c') // proves the dump is real
+      expect(dump).not.toContain('hunter2')
+    })
   })
 })

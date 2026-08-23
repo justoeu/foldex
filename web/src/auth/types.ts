@@ -41,6 +41,32 @@ export type Permission =
   | 'instance.transfer'
 
 /** Mirrors authctx.Role.IsAdmin — who may reach /api/admin at all. */
+/**
+ * The client mirror of the server's `HasSecondFactor()` — TOTP **or** e-mail.
+ *
+ * One function because CLAUDE.md §4 makes this a single-answer question and the
+ * UI had already drifted: the settings tile read `totp_enabled` alone while the
+ * account hero read the OR, so an account whose only factor is e-mail saw
+ * "two-factor off" on the tile and "two-factor on" one click later. Reading the
+ * authenticator alone is the same mistake that once hid the step-up code field
+ * from exactly those accounts.
+ */
+export function hasSecondFactor(user: Pick<AuthUser, 'totp_enabled' | 'email_2fa_enabled'>): boolean {
+  return user.totp_enabled === true || user.email_2fa_enabled === true
+}
+
+/**
+ * Whether a mailed step-up code is obtainable.
+ *
+ * Separate from `hasSecondFactor`: an account whose only factor is an
+ * authenticator has no mailbox path, and one with only e-mail has no six digits
+ * to read from an app. The alternative for the latter is a recovery code, which
+ * is a lockout credential — too expensive for a settings change.
+ */
+export function canMailStepUpCode(user: Pick<AuthUser, 'email_2fa_enabled'>): boolean {
+  return user.email_2fa_enabled === true
+}
+
 export function isAdminRole(role: Role): boolean {
   return role === 'owner' || role === 'admin'
 }
@@ -48,6 +74,9 @@ export function isAdminRole(role: Role): boolean {
 export type AuthUser = {
   id: number
   email: string
+  /** The optional second way in. Empty means the account has none and signs in
+   *  by address only. Never shown to anyone but its owner. */
+  username?: string
   name: string
   role: Role
   status: 'pending' | 'active' | 'disabled'

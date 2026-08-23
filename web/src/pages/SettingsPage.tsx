@@ -3,10 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { Icon, I } from '../components/icons'
 import { HubCard, HubShortcut, HubRule } from '../components/HubCard'
 import { PasswordStrength } from '../components/PasswordStrength'
-import { TwoFactorSection } from '../components/TwoFactorSection'
-import { AccountSection } from '../components/AccountSection'
-import { ApiTokensSection } from '../components/ApiTokensSection'
-import { ProfileSection, initialsOf } from '../components/ProfileSection'
+import { initialsOf } from '../lib/initials'
+import { AccountPage, type AccountTab } from './AccountPage'
 import { useFolders, useResetFolderPassword } from '../api/folders'
 import {
   useMasterPasswordStatus,
@@ -14,9 +12,10 @@ import {
   useRemoveMasterPassword,
 } from '../api/settings'
 import { useCurrentUser } from '../auth/AuthProvider'
-import { isAdminRole } from '../auth/types'
+import { hasSecondFactor, isAdminRole } from '../auth/types'
 import { apiErrorCode as errCode } from '../lib/apiError'
 import type { AppView } from '../AppWorkspace'
+import { PasswordInput } from '../components/PasswordInput'
 
 // Lazy: non-admins never download the administration code at all — the
 // settings chunk they fetch carries no /api/admin surface or its strings.
@@ -83,15 +82,46 @@ function isHubSection(value: string | undefined): value is HubSection {
   return value !== undefined && (HUB_SECTIONS as readonly string[]).includes(value)
 }
 
+/**
+ * Sections that were folded into the single account page.
+ *
+ * They remain accepted rather than deleted: the topbar user menu deep-links
+ * `profile`, and a link someone kept would otherwise land on the overview with
+ * no explanation. Resolving them is also what keeps `resolveHubView`'s admin
+ * bounce and the back affordance working unchanged.
+ */
+const MERGED_INTO_ACCOUNT: readonly HubSection[] = ['profile', 'security', 'tokens']
+
+/**
+ * Which panel of the account page a merged name lands on.
+ *
+ * Resolving all three to "the account page" was the first shape and it threw
+ * information away: a deep-link that said `security` knew exactly where it
+ * wanted to go, and arrived on Profile. The names survive the merge as
+ * DESTINATIONS, not just as aliases kept alive for old links.
+ */
+const SECTION_TAB: Partial<Record<HubSection, AccountTab>> = {
+  profile: 'profile',
+  security: 'security',
+  tokens: 'tokens',
+  account: 'profile',
+}
+
+/** What the hub can actually RENDER, once the merged names are resolved. */
+export type CanonicalSection = Exclude<HubSection, 'profile' | 'security' | 'tokens'>
+
+function canonicalSection(section: HubSection): CanonicalSection {
+  return MERGED_INTO_ACCOUNT.includes(section) ? 'account' : (section as CanonicalSection)
+}
+
 // Literal keys per section: dynamic `t(\`settings.sec_${section}…\`)` template
 // keys are invisible to static key checking, so a typo would ship the raw key
 // string to the UI instead of failing anywhere.
-const SECTION_HEAD: Record<HubSection, { kicker: string; title: string }> = {
+// Keyed by the CANONICAL section: profile/security/tokens resolve to 'account'
+// before this is read, so they carry no head of their own.
+const SECTION_HEAD: Record<CanonicalSection, { kicker: string; title: string }> = {
   overview: { kicker: 'settings.page_kicker', title: 'settings.page_title' },
-  profile: { kicker: 'settings.sec_profile_kicker', title: 'settings.sec_profile_title' },
   account: { kicker: 'settings.sec_account_kicker', title: 'settings.sec_account_title' },
-  security: { kicker: 'settings.sec_security_kicker', title: 'settings.sec_security_title' },
-  tokens: { kicker: 'settings.sec_tokens_kicker', title: 'settings.sec_tokens_title' },
   master: { kicker: 'settings.sec_master_kicker', title: 'settings.sec_master_title' },
   locked: { kicker: 'settings.sec_locked_kicker', title: 'settings.sec_locked_title' },
   admin: { kicker: 'settings.sec_admin_kicker', title: 'settings.sec_admin_title' },
@@ -110,8 +140,8 @@ const SECTION_HEAD: Record<HubSection, { kicker: string; title: string }> = {
 export function resolveHubView(
   isAdmin: boolean,
   scope: HubScope,
-  section: HubSection,
-): { scope: HubScope; section: HubSection } {
+  section: CanonicalSection,
+): { scope: HubScope; section: CanonicalSection } {
   if (isAdmin) return { scope, section }
   return {
     scope: 'personal',
@@ -130,19 +160,25 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
   const me = useCurrentUser()
   const role = me?.role
   const isAdmin = role !== undefined && isAdminRole(role)
-  const totpEnabled = me?.totp_enabled === true
+  // The OR, not the authenticator alone: the tile and the account hero must
+  // not disagree about whether the account has a second factor.
+  const twoFactorOn = me !== null && hasSecondFactor(me)
   const [scope, setScope] = useState<HubScope>('personal')
   const [section, setSection] = useState<HubSection>(
     isHubSection(initialSection) ? initialSection : 'overview',
   )
-  const effective = resolveHubView(isAdmin, scope, section)
+  const effective = resolveHubView(isAdmin, scope, canonicalSection(section))
+  // Read from the ORIGINAL name, before it is canonicalized away.
+  const accountTab = SECTION_TAB[section] ?? 'profile'
   const effectiveScope = effective.scope
   const effectiveSection = effective.section
 
   if (effectiveSection !== 'overview') {
     // The administration sections carry tables and matrices and get the full
     // container; everything else is a form, and stays in a readable column.
-    const wide = ADMIN_SECTIONS.includes(effectiveSection)
+    // The account page carries a rail beside its panel and wants the room;
+    // everything else here is a form and stays in a readable column.
+    const wide = ADMIN_SECTIONS.includes(effectiveSection) || effectiveSection === 'account'
     return (
       <div className={'fx-hub-page' + (wide ? '' : ' fx-hub-page-narrow')}>
         <button className="fx-hub-back" onClick={() => setSection('overview')}>
@@ -155,10 +191,7 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {effectiveSection === 'profile' && <ProfileSection onAfterSignOut={() => setSection('overview')} />}
-          {effectiveSection === 'account' && <AccountSection />}
-          {effectiveSection === 'security' && <TwoFactorSection />}
-          {effectiveSection === 'tokens' && <ApiTokensSection />}
+          {effectiveSection === 'account' && <AccountPage initialTab={accountTab} />}
           {effectiveSection === 'master' && <MasterPasswordSection />}
           {effectiveSection === 'locked' && <LockedFoldersSection onEditFolder={onEditFolder} />}
           {isAdmin && ADMIN_SECTIONS.includes(effectiveSection) && (
@@ -231,28 +264,17 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
           <section>
             <HubRule label={t('settings.hub_group_account')} />
             <div className="fx-acards">
+              {/* One tile, not four. Profile, sign-in methods, two-factor and
+                  API tokens are all "my account" and each rendered a card or two
+                  of content; the sign-in one commonly rendered a single line of
+                  status with no action at all. */}
               <HubCard
                 icon={I.user} tone="fx-tone-accent"
-                title={t('settings.tile_profile_title')} desc={t('settings.tile_profile_desc')}
-                action={t('settings.tile_profile_action')} onClick={() => setSection('profile')}
-              />
-              <HubCard
-                icon={I.key} tone="fx-tone-pink"
                 title={t('settings.tile_account_title')} desc={t('settings.tile_account_desc')}
-                action={t('settings.tile_account_action')} onClick={() => setSection('account')}
-              />
-              <HubCard
-                icon={I.shield} tone="fx-tone-green"
-                title={t('settings.tile_security_title')} desc={t('settings.tile_security_desc')}
-                action={t('settings.tile_security_action')}
-                status={totpEnabled ? t('settings.chip_2fa_on') : t('settings.chip_2fa_off')}
-                statusTone={totpEnabled ? 'fx-chip-ok' : 'fx-chip-warn'}
-                onClick={() => setSection('security')}
-              />
-              <HubCard
-                icon={I.link} tone="fx-tone-blue"
-                title={t('settings.tile_tokens_title')} desc={t('settings.tile_tokens_desc')}
-                action={t('settings.tile_tokens_action')} onClick={() => setSection('tokens')}
+                action={t('settings.tile_account_action')}
+                status={twoFactorOn ? t('settings.chip_2fa_on') : t('settings.chip_2fa_off')}
+                statusTone={twoFactorOn ? 'fx-chip-ok' : 'fx-chip-warn'}
+                onClick={() => setSection('account')}
               />
               <HubCard
                 icon={I.lock} tone="fx-tone-amber"
@@ -432,11 +454,10 @@ function MasterPasswordSection() {
         )}
 
         {configured && (
-          <label className="fx-field" style={{ margin: 0 }}>
+          <label className="fx-field">
             <span className="fx-field-label">{t('settings.master_current_label')}</span>
             <div className="fx-input">
-              <input
-                type="password"
+              <PasswordInput
                 autoComplete="off"
                 value={current}
                 onChange={(e) => {
@@ -450,13 +471,12 @@ function MasterPasswordSection() {
           </label>
         )}
 
-        <label className="fx-field" style={{ margin: 0 }}>
+        <label className="fx-field">
           <span className="fx-field-label">
             {configured ? t('settings.master_new_label') : t('settings.master_new_label_first')}
           </span>
           <div className="fx-input">
-            <input
-              type="password"
+            <PasswordInput
               autoComplete="new-password"
               value={next}
               onChange={(e) => {
@@ -471,11 +491,10 @@ function MasterPasswordSection() {
           <PasswordStrength value={next} />
         </label>
 
-        <label className="fx-field" style={{ margin: 0 }}>
+        <label className="fx-field">
           <span className="fx-field-label">{t('settings.master_confirm_label')}</span>
           <div className="fx-input">
-            <input
-              type="password"
+            <PasswordInput
               autoComplete="new-password"
               value={confirm}
               onChange={(e) => {
@@ -493,7 +512,7 @@ function MasterPasswordSection() {
           )}
         </label>
 
-        <label className="fx-field" style={{ margin: 0 }}>
+        <label className="fx-field">
           <span className="fx-field-label">{t('settings.master_hint_label')}</span>
           <div className="fx-input">
             <input
@@ -700,9 +719,8 @@ function LockedFolderRow({
             </div>
           )}
           <div className="fx-input">
-            <input
+            <PasswordInput
               autoFocus
-              type="password"
               autoComplete="off"
               value={master}
               onChange={(e) => {

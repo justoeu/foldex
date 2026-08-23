@@ -114,7 +114,11 @@ var (
 	ErrInviteInvalid  = errors.New("auth: invite invalid")
 	ErrAlreadySetUp   = errors.New("auth: instance already has an active account")
 	ErrEmailTaken     = errors.New("auth: e-mail already registered")
-	ErrLastAdmin      = errors.New("auth: cannot remove the last active administrator")
+	// ErrInvalidRole is returned for a role the caller may not assign here.
+	// Distinct from a validation failure on shape: 'owner' is a perfectly valid
+	// role that this path must never mint.
+	ErrInvalidRole = errors.New("auth: role cannot be assigned")
+	ErrLastAdmin   = errors.New("auth: cannot remove the last active administrator")
 	// ErrOwnerImmutable guards the one account that must always be able to
 	// administer the instance. The owner's role and status move only through
 	// TransferOwnership, which hands the seat to someone else in the same
@@ -149,7 +153,8 @@ var (
 // `last_login_at`. Unqualified, those two are ambiguous and Postgres refuses
 // the whole query — which surfaced as an opaque "server error" on the Google
 // login path, in a branch no single-table test could reach.
-const userColumns = `app_user.id, app_user.email, app_user.name, app_user.role, app_user.status,
+const userColumns = `app_user.id, app_user.email, coalesce(app_user.username, ''),
+	app_user.name, app_user.role, app_user.status,
 	app_user.email_verified_at, app_user.last_login_at, app_user.created_at,
 	(app_user.password_hash IS NOT NULL) AS has_password,
 	EXISTS (SELECT 1 FROM totp_secret ts
@@ -170,7 +175,7 @@ const userColumns = `app_user.id, app_user.email, app_user.name, app_user.role, 
 // shared prefix in one place, so a new column is one edit and the compiler's
 // silence is no longer load-bearing.
 func userDest(u *User, id *int64, extra ...any) []any {
-	return append([]any{id, &u.Email, &u.Name, &u.Role, &u.Status,
+	return append([]any{id, &u.Email, &u.Username, &u.Name, &u.Role, &u.Status,
 		&u.EmailVerifiedAt, &u.LastLoginAt, &u.CreatedAt, &u.HasPassword, &u.TOTPEnabled,
 		&u.Email2FAEnabled, &u.Locale, &u.TokenVersion}, extra...)
 }
@@ -225,12 +230,23 @@ func (r *Repository) ListUsers(ctx context.Context) ([]User, error) {
 // function. The `found` return exists so the caller can run bcrypt against a
 // dummy hash when the e-mail does not exist: skipping the hash for an unknown
 // address is the classic ~80 ms enumeration oracle (SDD §9.2).
-func (r *Repository) verifyPassword(ctx context.Context, email, password string) (u User, found bool, err error) {
+func (r *Repository) verifyPassword(ctx context.Context, identifier, password string) (u User, found bool, err error) {
 	var hash *string
 	var id int64
+	// ONE statement against both columns, not a branch on whether the input
+	// looks like an address. Two lookups would take two different amounts of
+	// time and the difference is exactly the oracle the rest of this path is
+	// built to close; a branch would also have to decide what `a@b` with no dot
+	// is, and decide it the same way forever.
+	//
+	// The two are unambiguous by construction: `app_user_username_shape`
+	// forbids `@` in a username, so no input can match both a username and a
+	// different account's address.
+	norm := NormalizeEmail(identifier)
 	row := r.pool.QueryRow(ctx, `
 		SELECT `+userColumns+`, password_hash
-		FROM app_user WHERE email_normalized = $1`, NormalizeEmail(email))
+		FROM app_user
+		WHERE email_normalized = $1 OR username_normalized = $1`, norm)
 	err = row.Scan(userDest(&u, &id, &hash)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, false, nil
@@ -243,6 +259,42 @@ func (r *Repository) verifyPassword(ctx context.Context, email, password string)
 		return User{}, true, ErrBadCredentials
 	}
 	return u, true, nil
+}
+
+// loginBucketKey resolves a submitted identifier to the key its rate-limit
+// budget must be charged against.
+//
+// It exists because an account now has TWO ways to be named. Keyed by the
+// string the caller typed, an attacker targeting one account simply alternates
+// its address and its username and gets double the budget — the per-account cap
+// would still read as five failures while ten had been spent. Resolving first
+// makes both names charge one bucket.
+//
+// An identifier that resolves to nothing keeps its own key, exactly as before:
+// that is what makes the counter increment for unknown addresses too, which is
+// itself an anti-enumeration measure (not incrementing would teach an attacker
+// which names are lockable, hence which exist).
+//
+// Nothing observable depends on the answer: both branches are one indexed
+// probe, and the response path that follows always runs bcrypt and always takes
+// the same floor.
+func (r *Repository) loginBucketKey(ctx context.Context, identifier string) (string, error) {
+	norm := NormalizeEmail(identifier)
+	var canonical string
+	err := r.pool.QueryRow(ctx, `
+		SELECT email_normalized FROM app_user
+		WHERE email_normalized = $1 OR username_normalized = $1`, norm).Scan(&canonical)
+	// No rows is the ORDINARY case and keeps the submitted key. Anything else is
+	// the database failing, and swallowing it here would silently hand back the
+	// double budget this function exists to close — during exactly the window an
+	// attacker would notice and nobody else would.
+	if errors.Is(err, pgx.ErrNoRows) || canonical == "" {
+		return norm, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("login bucket key: %w", err)
+	}
+	return canonical, nil
 }
 
 // NeedsBootstrap reports whether the instance still has no active account, in
@@ -579,17 +631,37 @@ func guardLastAdminTx(ctx context.Context, tx pgx.Tx, target authctx.UserID) err
 // mirror of the hazard the locale field was already careful about, and it
 // stopped being theoretical when the SPA started adopting a locale on mount
 // instead of on a click.
-func (r *Repository) UpdateOwnProfile(ctx context.Context, id authctx.UserID, name *string, locale *string) (User, error) {
+func (r *Repository) UpdateOwnProfile(ctx context.Context, id authctx.UserID,
+	name *string, locale *string, username *string, displayUsername *string) (User, error) {
+	// `username` is tri-state like `locale`: nil keeps, "" clears, a value sets.
+	// The pair of columns moves together or the unique index starts guarding a
+	// value nobody can log in with — `app_user_username_pair` refuses the row
+	// either way, and writing both from one CASE is what keeps that unreachable.
 	u, err := scanUser(r.pool.QueryRow(ctx, `
 		UPDATE app_user SET
 			name       = CASE WHEN $5::bool THEN $2 ELSE name END,
 			locale     = CASE WHEN $3::bool THEN nullif($4, '') ELSE locale END,
+			-- The typed casing is kept, the LOOKUP column is folded — exactly the
+			-- shape email/email_normalized has. Writing the normalized value into
+			-- both would make the pair, and the constraint guarding it, describe
+			-- nothing: a user who types JohnDoe would watch it turn into johndoe
+			-- for no reason anyone could explain.
+			username   = CASE WHEN $6::bool THEN nullif($8, '') ELSE username END,
+			username_normalized =
+				CASE WHEN $6::bool THEN nullif($7, '') ELSE username_normalized END,
 			updated_at = now()
 		WHERE id = $1
 		RETURNING `+userColumns, int64(id), derefOr(name, ""), locale != nil,
-		derefOr(locale, ""), name != nil))
+		derefOr(locale, ""), name != nil, username != nil,
+		derefOr(username, ""), derefOr(displayUsername, "")))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNoUser
+	}
+	// Matched by CONSTRAINT NAME, never by message text: a wrapped error that
+	// loses Unwrap would turn a 409 into a 500, and the message is Postgres's to
+	// change.
+	if pgerr.UniqueConstraint(err) == "app_user_username_norm_uniq" {
+		return User{}, ErrUsernameTaken
 	}
 	if err != nil {
 		return User{}, fmt.Errorf("update own profile: %w", err)
@@ -1375,4 +1447,58 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// AdminCreateUser creates an account whose FIRST password was chosen by an
+// administrator rather than by its owner.
+//
+// This deliberately departs from the rule the rest of this package enforces —
+// CLAUDE.md §4, "an administrator never chooses, installs or receives another
+// user's credential" — and it was the instance owner's explicit decision, taken
+// after the trade was put to them. What the departure costs is real and is not
+// hidden here: for the window between creation and the target's first password
+// change, a second person knows the credential, and no audit entry can tell
+// apart a sign-in by the owner of the account from one by the administrator who
+// typed its password. Everything else in the credential surface — reset links,
+// invitations, the administrator recovery flow — exists precisely to avoid that
+// window, and remains the recommended path.
+//
+// The narrowing that IS applied: the account is created ACTIVE with a password
+// and no verified address, so `email_verified_at` stays NULL and the ordinary
+// verification flow still runs. Migration 000021's deferred trigger is
+// satisfied by the password, which is why this can be one statement.
+//
+// Never mints an owner: the single-owner partial index would reject a second
+// one anyway, and refusing here gives the caller an honest 400 instead of a
+// constraint error surfacing as a 500.
+func (r *Repository) AdminCreateUser(
+	ctx context.Context,
+	email, name, password string,
+	role authctx.Role,
+) (User, error) {
+	if role == authctx.RoleOwner || !role.Valid() {
+		return User{}, ErrInvalidRole
+	}
+	hash, err := pwhash.Hash(password)
+	if err != nil {
+		return User{}, err
+	}
+
+	// Trimmed so the stored address is byte-identical to the one the caller
+	// sees echoed back, matching CreateInvite.
+	trimmed := strings.TrimSpace(email)
+	u, err := scanUser(r.pool.QueryRow(ctx, `
+		INSERT INTO app_user (email, email_normalized, name, password_hash, role, status)
+		VALUES ($1, $2, $3, $4, $5, 'active')
+		RETURNING `+userColumns, trimmed, NormalizeEmail(email), strings.TrimSpace(name), hash, role))
+	if err != nil {
+		// Matched by CONSTRAINT NAME, like the two other insert paths in this
+		// file: a bare 23505 would also swallow the single-owner index, and the
+		// caller would read "e-mail already registered" for a role problem.
+		if pgerr.UniqueConstraint(err) == "app_user_email_norm_uniq" {
+			return User{}, ErrEmailTaken
+		}
+		return User{}, fmt.Errorf("admin create user: %w", err)
+	}
+	return u, nil
 }

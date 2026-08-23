@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,6 +24,10 @@ const (
 	ReasonPasswordChanged = "password_changed"
 	ReasonAdminRevoked    = "admin_revoked"
 	ReasonUserDisabled    = "user_disabled"
+	// ReasonEmailChanged is its own reason and not `password_changed`: the
+	// login identifier moved, which is a different sentence for the person
+	// reading the audit trail a month later.
+	ReasonEmailChanged = "email_changed"
 )
 
 // authStatus is the closed status domain emitted by authentication responses.
@@ -119,14 +125,18 @@ func (conversionAuthResponse) authWireResponse() {}
 // accidentally serialize it — the type system does the work that a `json:"-"`
 // tag only asks politely for.
 type User struct {
-	ID              authctx.UserID `json:"id"`
-	Email           string         `json:"email"`
-	Name            string         `json:"name"`
-	Role            authctx.Role   `json:"role"`
-	Status          string         `json:"status"`
-	EmailVerifiedAt *time.Time     `json:"email_verified_at,omitempty"`
-	LastLoginAt     *time.Time     `json:"last_login_at,omitempty"`
-	CreatedAt       time.Time      `json:"created_at"`
+	ID    authctx.UserID `json:"id"`
+	Email string         `json:"email"`
+	// Username is the optional second way in. Empty means the account has none
+	// and signs in by address only — it is NOT a display field and never
+	// appears on anything a stranger can read.
+	Username        string       `json:"username"`
+	Name            string       `json:"name"`
+	Role            authctx.Role `json:"role"`
+	Status          string       `json:"status"`
+	EmailVerifiedAt *time.Time   `json:"email_verified_at,omitempty"`
+	LastLoginAt     *time.Time   `json:"last_login_at,omitempty"`
+	CreatedAt       time.Time    `json:"created_at"`
 	// HasPassword is false for an account that has not been claimed yet, and
 	// for one converted to Google-only.
 	HasPassword bool `json:"has_password"`
@@ -206,6 +216,51 @@ type issuedTokens struct {
 // that matches the wrong row.
 func NormalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// usernameShape mirrors app_user_username_shape in migration 000037. Both sides
+// exist on purpose: the handler can explain what is wrong, and the database
+// refuses a row no matter which code path wrote it.
+var usernameShape = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$`)
+
+// reservedUsernames are refused because a login screen that greets "admin" or
+// "support" hands a social-engineering prop to whoever claimed it first. None
+// of them collide with a route — `/go/` and `/n/` are path namespaces, not user
+// ones — so this is about people, not about routing.
+var reservedUsernames = map[string]bool{
+	"admin": true, "administrator": true, "root": true, "system": true,
+	"support": true, "security": true, "foldex": true, "api": true,
+	"me": true, "null": true, "undefined": true,
+}
+
+// ErrUsernameShape is the one refusal every bad username produces, so the
+// handler does not have to enumerate them and the message stays honest about
+// the actual rule.
+var ErrUsernameShape = errors.New("username does not meet the required shape")
+
+// NormalizeUsername lowercases and trims, the same shape NormalizeEmail has —
+// and then REFUSES anything the login lookup could not tell apart from an
+// address.
+//
+// The `@` rejection is the load-bearing half. Login resolves a single
+// identifier against `email_normalized` OR `username_normalized`, so a username
+// shaped like an address would sit in the same namespace as everybody's
+// mailbox: claim `someone@example.com` as a username and every password attempt
+// meant for that account arrives at yours instead. The regexp already excludes
+// `@`; this is stated separately because deleting it from the character class
+// would look like a widening, not a takeover.
+func NormalizeUsername(username string) (string, error) {
+	norm := strings.ToLower(strings.TrimSpace(username))
+	if norm == "" {
+		return "", nil
+	}
+	if strings.Contains(norm, "@") || !usernameShape.MatchString(norm) {
+		return "", ErrUsernameShape
+	}
+	if reservedUsernames[norm] {
+		return "", ErrUsernameShape
+	}
+	return norm, nil
 }
 
 // MaskEmail renders an address for a response that must not confirm the full

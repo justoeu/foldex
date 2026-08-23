@@ -14,7 +14,7 @@ import (
 // Bump it whenever a migration adds something the Go code READS or WRITES —
 // not merely when a migration lands. It is the number that turns "your database
 // is older than your binary" into a boot failure instead of a 500 hours later.
-const RequiredSchemaVersion = 21
+const RequiredSchemaVersion = 37
 
 // ErrSchemaOutdated is returned when the database has not been migrated.
 var ErrSchemaOutdated = errors.New("db: schema is older than this binary requires")

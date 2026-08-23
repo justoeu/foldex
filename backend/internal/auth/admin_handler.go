@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -31,13 +33,46 @@ type AdminHandler struct {
 	mailer  mailer.Mailer
 	logger  *slog.Logger
 	baseURL string
+	// policy supplies the owner-configurable password floor (ADR-35), for the
+	// one route here that accepts a password. Nil runs the compiled-in floor,
+	// matching Handler.
+	policy PolicyReader
 }
 
+// validatePassword mirrors Handler's, and is a METHOD for the same reason
+// (§4): as a package function it would silently keep applying the constant
+// while the owner believed their configured floor was in force.
+func (h *AdminHandler) validatePassword(ctx context.Context, p string) error {
+	minLen := MinPasswordLen
+	if h.policy != nil {
+		minLen = max(h.policy.PasswordMinLength(ctx), MinPasswordLen)
+	}
+	if utf8.RuneCountInString(p) < minLen {
+		return httperr.New(http.StatusBadRequest, "password_too_short",
+			fmt.Sprintf("password must be at least %d characters", minLen))
+	}
+	// Measured in BYTES, because that is the unit bcrypt truncates in.
+	if len(p) > MaxPasswordLen {
+		return httperr.New(http.StatusBadRequest, "password_too_long",
+			fmt.Sprintf("password must be at most %d bytes", MaxPasswordLen))
+	}
+	return nil
+}
+
+// NewAdminHandler builds the administration surface.
+//
+// `policy` is a positional argument rather than an optional setter, and that is
+// deliberate: as a setter every one of the three call sites that build this
+// handler left it nil, so the password floor this handler is supposed to
+// enforce silently fell back to the compiled-in constant and deleting the
+// wiring in main.go broke no test. Nil is still accepted — it means "run the
+// compiled-in floor" — but now a caller has to say so.
 func NewAdminHandler(repo *Repository, m mailer.Mailer,
-	logger *slog.Logger, baseURL string) *AdminHandler {
+	logger *slog.Logger, baseURL string, policy PolicyReader) *AdminHandler {
 	return &AdminHandler{
 		repo: repo, mailer: m, logger: logger,
 		baseURL: strings.TrimRight(baseURL, "/"),
+		policy:  policy,
 	}
 }
 
@@ -54,6 +89,10 @@ func (h *AdminHandler) Mount(r chi.Router) {
 	assignRoles := authgate.RequirePermission(authctx.PermRolesAssign)
 
 	r.With(readUsers).Get("/users", h.ListUsers)
+	// Creating an account with an administrator-chosen password. Gated on the
+	// STRICTER of the two write permissions because it assigns a role in the
+	// same request, exactly like the PATCH below.
+	r.With(assignRoles).Post("/users", h.CreateUser)
 	// Role and status travel in the same PATCH, so the stricter of the two
 	// permissions gates it.
 	r.With(assignRoles).Patch("/users/{id}", h.UpdateUser)
@@ -492,6 +531,82 @@ type createInviteInput struct {
 // cannot copy the link has no way to invite anybody. A failed send is logged
 // and the invite still returned, because the row is valid regardless of
 // whether SMTP happened to be reachable.
+type createUserInput struct {
+	Email    string       `json:"email"`
+	Name     string       `json:"name"`
+	Password string       `json:"password"`
+	Role     authctx.Role `json:"role"`
+}
+
+// CreateUser adds an account whose first password the administrator types.
+//
+// It is a deliberate exception to CLAUDE.md §4 — "an administrator never
+// chooses, installs or receives another user's credential" — made by the
+// instance owner with the trade stated. The cost is a window in which two
+// people know one password, and an audit trail that cannot tell their sign-ins
+// apart. `POST /users/{id}/force-password-reset` and the invitation flow both
+// exist to avoid that window and remain the recommended path; this route is for
+// instances that would rather hand someone a credential in person.
+//
+// The password is validated against the SAME configured floor every other
+// password crosses (ADR-35), so an instance that raised its minimum does not
+// get a back door around it here.
+func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
+	in, err := httperr.DecodeJSON[createUserInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	if err := validateEmail(in.Email); err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	if err := h.validatePassword(r.Context(), in.Password); err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	// Same bound the profile path applies to a name the user picks themselves.
+	// The column is TEXT, so without this the only limit is the 64 KiB body cap
+	// — and this name renders in the administration table.
+	if utf8.RuneCountInString(strings.TrimSpace(in.Name)) > maxProfileNameRunes {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_name",
+			fmt.Sprintf("name must be at most %d characters", maxProfileNameRunes)))
+		return
+	}
+	role := in.Role
+	if role == "" {
+		role = authctx.RoleEditor
+	}
+	// Same rule the invitation carries: this may mint an administrator but
+	// never an owner, so the one role that cannot be demoted is reachable only
+	// through an explicit transfer.
+	if !role.Valid() || role == authctx.RoleOwner {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role",
+			"role must be admin, editor or viewer"))
+		return
+	}
+
+	u, err := h.repo.AdminCreateUser(r.Context(), in.Email, in.Name, in.Password, role)
+	switch {
+	case errors.Is(err, ErrEmailTaken):
+		httperr.Write(w, httperr.New(http.StatusConflict, "email_taken", "e-mail already registered"))
+		return
+	case errors.Is(err, ErrInvalidRole):
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role",
+			"role must be admin, editor or viewer"))
+		return
+	case err != nil:
+		h.logger.Error("admin create user", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+
+	// The ADDRESS and role, never the password — the trail is a screen
+	// administrators read, and logsafe only redacts by attribute key.
+	h.audit(r, AuditUserCreated, &u, string(role))
+	httperr.JSON(w, http.StatusCreated, u)
+}
+
 func (h *AdminHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	caller, _ := authctx.FromContext(r.Context())
 	in, err := httperr.DecodeJSON[createInviteInput](w, r)

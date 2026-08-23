@@ -1,7 +1,7 @@
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
-import { initialsOf } from './ProfileSection'
+import { initialsOf } from '../lib/initials'
 import { usePortalMenu } from '../hooks/usePortalMenu'
 import { useAuth } from '../auth/AuthProvider'
 

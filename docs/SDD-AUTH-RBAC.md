@@ -96,12 +96,17 @@ O ponto importante é que existem **três** barreiras independentes: o middlewar
 ### 2.2 Fluxo de login
 
 ```
-POST /api/auth/login {email, password}
+POST /api/auth/login {identifier, password}     (`email` segue aceito como alias)
         │
-        ├─ rate limit: login:ip:<RealIP>  e  login:em:<sha256(email)>
-        │                                    (o de e-mail incrementa mesmo se o e-mail não existir)
+        ├─ rate limit: login:ip:<RealIP>  e  login:em:<chave canônica da conta>
+        │              A chave é RESOLVIDA antes de ser cobrada (ADR-41): endereço e
+        │              username da mesma conta cobram UM orçamento, senão o atacante
+        │              alterna os dois e ganha o dobro das tentativas. Um identificador
+        │              que não resolve mantém a própria chave — é o que preserva o
+        │              incremento para nomes inexistentes, que também é anti-enumeração.
         ▼
-  ByEmail(email_normalized)
+  email_normalized = $1 OR username_normalized = $1        (UMA instrução, nunca um ramo:
+                                                            dois lookups teriam dois tempos)
         │
         ├── miss ──▶ bcrypt contra hash DUMMY  ──┐   (nunca pular: é o oráculo de ~80 ms)
         └── hit  ──▶ bcrypt contra password_hash ┤
@@ -198,6 +203,53 @@ CREATE TABLE app_user (
 );
 CREATE UNIQUE INDEX app_user_email_norm_uniq ON app_user (email_normalized);
 ```
+
+**Username opcional (mig 000037, ADR-41).** Duas colunas nuláveis a mais e um índice único
+PARCIAL, porque a maioria das contas não tem uma:
+
+```sql
+ALTER TABLE app_user ADD COLUMN username            TEXT;
+ALTER TABLE app_user ADD COLUMN username_normalized TEXT;
+CREATE UNIQUE INDEX app_user_username_norm_uniq
+    ON app_user (username_normalized) WHERE username_normalized IS NOT NULL;
+ALTER TABLE app_user ADD CONSTRAINT app_user_username_shape CHECK (
+    username_normalized IS NULL
+    OR username_normalized ~ '^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$'   -- sem '@', jamais
+);
+ALTER TABLE app_user ADD CONSTRAINT app_user_username_pair CHECK (
+    (username IS NULL) = (username_normalized IS NULL)
+);
+```
+
+Sem backfill: derivar o username do endereço publicaria metade da caixa postal sob um nome
+que o dono nunca escolheu. **A ausência do `@` é o que separa os dois espaços de nomes** —
+o login consulta as duas colunas na MESMA instrução, então um username com forma de endereço
+poderia sombrear a caixa de outra pessoa e recolher as tentativas de senha dela. Recusado no
+banco e no handler (`NormalizeUsername`), nas duas pontas.
+
+**Troca de e-mail pendente (mig 000037, ADR-41).** O endereço não é editado no lugar; a
+troca vira uma linha, e só o clique no link enviado ao NOVO endereço a efetiva:
+
+```sql
+CREATE TABLE email_change (
+    id                   BIGSERIAL PRIMARY KEY,
+    user_id              BIGINT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+    new_email            TEXT NOT NULL,
+    new_email_normalized TEXT NOT NULL,
+    token_hash           BYTEA NOT NULL,     -- sha256 de 256 bits; nunca o token
+    token_version        INTEGER NOT NULL,   -- época de credencial, igual a reset/desafio
+    session_id           BIGINT REFERENCES session(id) ON DELETE SET NULL,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at           TIMESTAMPTZ NOT NULL,
+    consumed_at          TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX email_change_token_hash_uniq ON email_change (token_hash);
+CREATE UNIQUE INDEX email_change_one_pending
+    ON email_change (user_id) WHERE consumed_at IS NULL;   -- um link vivo por conta
+```
+
+`session_revoked_reason_check` ganhou `'email_changed'` na mesma migração: consumir o link
+revoga TODAS as sessões, e reusar `password_changed` poria uma frase falsa na trilha.
 
 `email_normalized` é **coluna armazenada**, não índice de expressão, porque três caminhos diferentes precisam concordar sobre a normalização: o lookup do login, o match do convite e a regra de vínculo do OAuth. Uma divergência entre eles é uma falha de segurança, não um bug de busca.
 
@@ -458,7 +510,7 @@ Reversibilidade honesta: **schema volta, dados de identidade não.** Todo `app_u
 
 // 200 — autenticado
 { "status": "authenticated",
-  "user": { "id": 1, "email": "a@b.c", "name": "Ana", "role": "admin",
+  "user": { "id": 1, "email": "a@b.c", "username": "ana", "name": "Ana", "role": "admin",
             "totp_enabled": true, "email_verified": true, "google_only": false },
   "csrf_token": "…", "features": { … } }
 
@@ -481,6 +533,10 @@ Reversibilidade honesta: **schema volta, dados de identidade não.** Todo `app_u
 | `POST` | `/api/auth/invites/accept` | token | Define nome + senha, ativa a conta, emite sessão. |
 | `POST` | `/api/auth/email/verify` | token | Marca `email_verified_at`. |
 | `POST` | `/api/auth/email/resend` | sessão ou `fx_pa` | Cooldown de 60 s. |
+| `POST` | `/api/auth/email/change` | sessão + CSRF + senha atual | **202** com `{new_email, expires_at}`. Não move nada: enfileira o link para o NOVO endereço e um aviso SEM link para o atual. Exige `MAIL_DRIVER=smtp`. |
+| `GET` | `/api/auth/email/change` | sessão | `{pending: {…}\|null}`. Sempre 200 — 404 para o caso ordinário faria todo chamador tratar um status para não aprender nada. |
+| `DELETE` | `/api/auth/email/change` | sessão + CSRF | Cancela o pedido vivo. |
+| `POST` | `/api/auth/email-change/confirm` | token | **Sem sessão**: o link chega na caixa para a qual a conta está indo. Move o endereço, marca verificado, incrementa `token_version` e revoga TODAS as sessões. Um 404 para tudo, exceto `email_taken` (409) — quem o recebe pode resolver escolhendo outro endereço. |
 
 ### 4.3 Segundo fator
 

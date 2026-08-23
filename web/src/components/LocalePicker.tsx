@@ -2,9 +2,8 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { SUPPORTED_LOCALES, type LocaleCode } from '../i18n'
+import { useLocaleChoice } from '../i18n/useLocaleChoice'
 import { usePortalMenu } from '../hooks/usePortalMenu'
-import { useAuth, useCurrentUser } from '../auth/AuthProvider'
-import * as auth from '../api/auth'
 
 // Globe button in the topbar that pops a menu of supported languages and
 // persists the choice via i18next's detector (localStorage["foldex.locale"]).
@@ -15,37 +14,13 @@ import * as auth from '../api/auth'
 // menu rendered behind / cut off by the topbar and its options were unclickable.
 // The portal plumbing is shared with the user menu via usePortalMenu.
 export function LocalePicker() {
-  const { i18n, t } = useTranslation()
+  const { t } = useTranslation()
   const { open, pos, btnRef, menuRef, toggle, setOpen } = usePortalMenu()
-  const user = useCurrentUser()
-  const { adopt } = useAuth()
-
-  const current =
-    SUPPORTED_LOCALES.find((l) => l.code === (i18n.resolvedLanguage ?? i18n.language)) ??
-    SUPPORTED_LOCALES[0]
+  const { current, choose } = useLocaleChoice()
 
   const pick = (code: LocaleCode) => {
-    const previous = (i18n.resolvedLanguage ?? i18n.language) as LocaleCode
-    void i18n.changeLanguage(code)
+    choose(code)
     setOpen(false)
-    // Carry the choice to the account, so the language the screen speaks is
-    // also the one the e-mails speak. Without this the account preference —
-    // which useAccountLocale re-applies on every load — would silently undo
-    // the pick on the next reload.
-    if (!user || user.locale === code) return
-    void auth
-      .updateLocale(code)
-      .then(adopt)
-      .catch(() => {
-        // Put the language back NOW rather than letting it stand. The account
-        // is the source of truth and useAccountLocale re-asserts it on the next
-        // load, so leaving the failed pick in place would show the new language
-        // until some later mount silently reverted it — a change the user
-        // believed had stuck, undone with no event they could connect it to.
-        // Reverting immediately at least makes the failure visible where the
-        // action was taken.
-        void i18n.changeLanguage(previous)
-      })
   }
 
   return (

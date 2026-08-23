@@ -16,6 +16,10 @@ export type UrlTokens = {
   invite?: string
   reset?: string
   verify?: string
+  /** The confirmation that MOVES the account to a new address. It arrives in
+   *  the mailbox being moved to, so the device following it very often has no
+   *  session at all. */
+  emailChange?: string
   /**
    * The OAuth callback's outcome. It is a marker, not state: the actual result
    * — a session, or a pending challenge — lives in cookies, and the SPA
@@ -36,11 +40,12 @@ function readAndStrip(): UrlTokens {
     invite: fragment.get('invite') ?? undefined,
     reset: fragment.get('reset') ?? undefined,
     verify: fragment.get('verify') ?? undefined,
+    emailChange: fragment.get('email-change') ?? undefined,
     oauth: query.get('oauth') ?? undefined,
     oauthError: query.get('oauth_error') ?? undefined,
   }
 
-  const credentialKeys = ['invite', 'reset', 'verify']
+  const credentialKeys = ['invite', 'reset', 'verify', 'email-change']
   const markerKeys = ['oauth', 'oauth_error']
   const hadFragmentCredential = credentialKeys.some((k) => fragment.has(k))
   const hadAny =

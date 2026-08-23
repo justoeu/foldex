@@ -45,6 +45,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [inviteToken, setInviteToken] = useState(urlTokens.invite ?? '')
   const [resetToken, setResetToken] = useState(urlTokens.reset ?? '')
   const [verifyToken, setVerifyToken] = useState(urlTokens.verify ?? '')
+  const [changeToken, setChangeToken] = useState(urlTokens.emailChange ?? '')
   const [forgot, setForgot] = useState(false)
 
   const boot = (
@@ -63,6 +64,22 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return (
       <Suspense fallback={boot}>
         <VerifyEmailScreen token={verifyToken} onDone={() => setVerifyToken('')} />
+      </Suspense>
+    )
+  }
+
+  // Also above the authenticated short-circuit, and for a stronger reason: this
+  // one REVOKES every session, so whoever followed the link is about to become
+  // anonymous whether they are told or not. Dropping them into the app — or
+  // into a bare login form — with no explanation is the one outcome to avoid.
+  if (changeToken) {
+    return (
+      <Suspense fallback={boot}>
+        <VerifyEmailScreen
+          kind="email-change"
+          token={changeToken}
+          onDone={() => setChangeToken('')}
+        />
       </Suspense>
     )
   }

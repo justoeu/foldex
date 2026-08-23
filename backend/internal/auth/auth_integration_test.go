@@ -299,7 +299,7 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 	}
 	h := auth.NewHandler(cfg)
 	auth.SetTOTPVerificationHookForTest(h, opts.AfterTOTPVerification)
-	admin := auth.NewAdminHandler(repo, mail, logger, testBaseURL)
+	admin := auth.NewAdminHandler(repo, mail, logger, testBaseURL, cfg.Policy)
 
 	r := chi.NewRouter()
 	r.Route("/api", func(api chi.Router) {
@@ -2705,4 +2705,179 @@ func TestLogin_ClearsAStalePreAuthCookie(t *testing.T) {
 	// /api/auth untouched.
 	assert.Equal(t, "/api/auth", pa.Path)
 	assert.Empty(t, c.cookies[auth.CookiePreAuth], "the client must no longer hold one")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Administrator-created accounts (POST /api/admin/users)
+//
+// This route is a DELIBERATE exception to the rule the rest of this package
+// enforces — an administrator never chooses another user's credential — taken
+// by the instance owner with the trade stated. The tests below pin the
+// narrowings that were kept, because they are all that is left of the rule.
+// ─────────────────────────────────────────────────────────────────────
+
+func TestAdminCreateUser_CreatesAnAccountThatCanSignIn(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	rec := admin.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "new@example.com", "name": "New Person",
+		"password": "a fine temporary password", "role": "editor",
+	})
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	body := decode(t, rec)
+	assert.Equal(t, "new@example.com", body["email"])
+	assert.Equal(t, "editor", body["role"])
+	assert.Equal(t, "active", body["status"])
+	assert.Equal(t, true, body["has_password"])
+
+	// The whole point of the exception: the credential works immediately.
+	login := h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "new@example.com", "password": "a fine temporary password",
+	})
+	assert.Equal(t, http.StatusOK, login.Code, login.Body.String())
+}
+
+// The address is NOT verified by an administrator typing it. Marking it so
+// would let a typo become a confirmed mailbox nobody controls.
+func TestAdminCreateUser_LeavesTheAddressUnverified(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	rec := admin.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "unverified@example.com", "name": "X", "password": "a fine temporary password",
+	})
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Nil(t, decode(t, rec)["email_verified_at"])
+}
+
+// Same rule the invitation carries: this may mint an administrator but never
+// an owner, so the one role that cannot be demoted stays reachable only
+// through an explicit transfer.
+func TestAdminCreateUser_NeverMintsAnOwner(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	rec := admin.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "usurper@example.com", "name": "X",
+		"password": "a fine temporary password", "role": "owner",
+	})
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "invalid_role", errCode(t, rec))
+}
+
+func TestAdminCreateUser_DefaultsToTheLeastPrivilege(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	rec := admin.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "default@example.com", "name": "X", "password": "a fine temporary password",
+	})
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Equal(t, "editor", decode(t, rec)["role"])
+}
+
+// The configured floor applies here too. Without it this route would be a back
+// door around a minimum the owner deliberately raised (ADR-35).
+func TestAdminCreateUser_EnforcesThePasswordFloor(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	rec := admin.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "short@example.com", "name": "X", "password": "short",
+	})
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "password_too_short", errCode(t, rec))
+}
+
+func TestAdminCreateUser_RejectsADuplicateAddress(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	rec := admin.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "ADMIN@example.com", "name": "X", "password": "a fine temporary password",
+	})
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Equal(t, "email_taken", errCode(t, rec))
+}
+
+func TestAdminCreateUser_RejectsABadEmail(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	rec := admin.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "not-an-email", "name": "X", "password": "a fine temporary password",
+	})
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "invalid_email", errCode(t, rec))
+}
+
+// The trail records that the account was created and by whom, and never the
+// password: logsafe redacts by attribute KEY, so a value passed as audit detail
+// would be written in clear.
+func TestAdminCreateUser_AuditsWithoutThePassword(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	rec := admin.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "audited@example.com", "name": "X",
+		"password": "a fine temporary password", "role": "viewer",
+	})
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+
+	trail := admin.do(http.MethodGet, "/api/admin/audit", nil)
+	require.Equal(t, http.StatusOK, trail.Code)
+	body := trail.Body.String()
+	assert.Contains(t, body, "user.created")
+	assert.Contains(t, body, "audited@example.com")
+	assert.NotContains(t, body, "a fine temporary password")
+}
+
+// A non-administrator gets the same 404 the whole surface gives them.
+func TestAdminCreateUser_IsNotReachableByANonAdmin(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	rec := admin.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "editor@example.com", "name": "E",
+		"password": "a fine temporary password", "role": "editor",
+	})
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+
+	editor := h.client(t)
+	require.Equal(t, http.StatusOK, editor.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "editor@example.com", "password": "a fine temporary password",
+	}).Code)
+	denied := editor.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "another@example.com", "name": "X", "password": "a fine temporary password",
+	})
+	assert.Equal(t, http.StatusNotFound, denied.Code)
+}
+
+// The name renders in the administration table and the column is TEXT, so
+// without a bound the only limit is the 64 KiB body cap. Same 120 the profile
+// path applies to a name the user picks themselves.
+func TestAdminCreateUser_BoundsTheName(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	rec := admin.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "long@example.com", "name": strings.Repeat("é", 121),
+		"password": "a fine temporary password",
+	})
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "invalid_name", errCode(t, rec))
+}
+
+// bcrypt truncates at 72 BYTES, so the cap is measured in bytes and a
+// multi-byte password must be judged the same way.
+func TestAdminCreateUser_BoundsThePasswordInBytes(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	rec := admin.do(http.MethodPost, "/api/admin/users", map[string]string{
+		"email": "toolong@example.com", "name": "X",
+		"password": strings.Repeat("é", auth.MaxPasswordLen), // 2 bytes each
+	})
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "password_too_long", errCode(t, rec))
 }

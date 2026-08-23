@@ -202,7 +202,7 @@ func TestAdminGateResponseMatrixAcrossAuthModes(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	repo := auth.NewRepository(pool)
-	adminHandler := auth.NewAdminHandler(repo, nil, logger, "http://localhost:9088")
+	adminHandler := auth.NewAdminHandler(repo, nil, logger, "http://localhost:9088", nil)
 	adminToken, err := repo.CreateAPIToken(ctx, adminID, "admin", time.Hour)
 	require.NoError(t, err)
 	userToken, err := repo.CreateAPIToken(ctx, userID, "user", time.Hour)
@@ -259,7 +259,7 @@ func TestAdminGateRechecksLiveTOTPState(t *testing.T) {
 	router := server.New(server.Deps{
 		Pool: pool, Logger: logger,
 		Config:         config.Config{AuthEnabled: true, CORSOrigins: []string{"http://localhost:9088"}},
-		AdminHandler:   auth.NewAdminHandler(repo, nil, logger, "http://localhost:9088"),
+		AdminHandler:   auth.NewAdminHandler(repo, nil, logger, "http://localhost:9088", nil),
 		AuthMiddleware: auth.NewMiddleware(repo, auth.CookieOptions{}, logger, true),
 	})
 	request := func() *httptest.ResponseRecorder {
