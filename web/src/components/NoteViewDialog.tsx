@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { useEscape } from '../hooks/useEscape'
@@ -43,6 +43,9 @@ export function NoteViewDialog({
 
   const noteQuery = useNote(noteId)
   const note = noteQuery.data
+  // Same rule as the card: a cover whose object is gone is hidden, not left as
+  // a broken-image icon on top of the text.
+  const [coverErrored, setCoverErrored] = useState(false)
 
   return (
     <div
@@ -83,8 +86,13 @@ export function NoteViewDialog({
             <div className="fx-noteview-empty">{t('note_view.loading')}</div>
           ) : (
             <>
-              {note.cover_url && (
-                <img className="fx-noteview-cover" src={note.cover_url} alt="" />
+              {note.cover_url && !coverErrored && (
+                <img
+                  className="fx-noteview-cover"
+                  src={note.cover_url}
+                  alt=""
+                  onError={() => setCoverErrored(true)}
+                />
               )}
 
               {/* Everything ABOUT the note, before the note itself: tags decide

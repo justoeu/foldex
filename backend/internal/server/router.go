@@ -197,7 +197,10 @@ func New(d Deps) http.Handler {
 			d.Logger.Error("server: Screenshotter is set but ScreenshotURL is nil — refusing to mount /api/links/{id}/screenshot without an SSRF gate")
 			panic("server: Screenshotter is set but ScreenshotURL is nil — refusing to mount /api/links/{id}/screenshot without an SSRF gate")
 		}
-		fileHandler = links.NewScreenshotHandler(linksRepo, d.Screenshotter, d.Storage, d.ScreenshotURL, d.Logger)
+		// The worker is wired here so a stored image that turns out to be gone
+		// re-arms its own preview — see healMissingObject.
+		fileHandler = links.NewScreenshotHandler(linksRepo, d.Screenshotter, d.Storage, d.ScreenshotURL, d.Logger).
+			WithEnqueuer(d.Worker)
 	}
 	// Both public share routes resolve with NO session, so a numeric id there
 	// is an enumeration oracle across every tenant — see ADR-32. Off unless the

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -1193,4 +1194,76 @@ func TestRepository_FindDueForCheck_DoesNotLockTheOwnerRow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, dueIDs(due), l.ID,
 		"a due link must be claimed even while its owner row is locked by another transaction")
+}
+
+// The conditional predicate is what makes a screenful of broken cards produce
+// one regeneration instead of thirty-three, and what stops a newer image from
+// being discarded. Both halves are asserted against a real Postgres.
+func TestInvalidateMissingPreview_OnlyFiresForTheURLThat404d(t *testing.T) {
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(context.Background(), pool))
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "owner")
+	repo := links.NewRepository(pool)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, uid, links.CreateInput{
+		URL: "https://example.com/a", Title: "A",
+	})
+	require.NoError(t, err)
+
+	gone := "/api/files/screenshots/" + strconv.FormatInt(created.ID, 10) + ".jpg"
+	_, err = pool.Exec(ctx,
+		`UPDATE link SET og_image_url = $2, preview_status = 'ok' WHERE id = $1`, created.ID, gone)
+	require.NoError(t, err)
+
+	changed, err := repo.InvalidateMissingPreview(ctx, uid, created.ID, gone)
+	require.NoError(t, err)
+	assert.True(t, changed, "the first request re-arms the preview")
+
+	var status string
+	var url *string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT preview_status, og_image_url FROM link WHERE id = $1`, created.ID).Scan(&status, &url))
+	assert.Equal(t, "pending", status, "nothing failed — the bytes are gone, and pending is what the worker picks up")
+	assert.Nil(t, url)
+
+	// The second concurrent request for the same broken card. It must change
+	// nothing, which is what keeps the enqueue to one.
+	changed, err = repo.InvalidateMissingPreview(ctx, uid, created.ID, gone)
+	require.NoError(t, err)
+	assert.False(t, changed)
+
+	// A manual upload that landed between the browser's request and this write
+	// no longer matches the key that 404'd, so it survives.
+	fresh := "/api/files/images/" + strconv.FormatInt(created.ID, 10) + ".abc.jpg"
+	_, err = pool.Exec(ctx, `UPDATE link SET og_image_url = $2 WHERE id = $1`, created.ID, fresh)
+	require.NoError(t, err)
+	changed, err = repo.InvalidateMissingPreview(ctx, uid, created.ID, gone)
+	require.NoError(t, err)
+	assert.False(t, changed, "a newer image must not be discarded by a stale 404")
+
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT og_image_url FROM link WHERE id = $1`, created.ID).Scan(&url))
+	require.NotNil(t, url)
+	assert.Equal(t, fresh, *url)
+}
+
+// §4: every repository method is owner-scoped, and this one writes.
+func TestInvalidateMissingPreview_IsOwnerScoped(t *testing.T) {
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(context.Background(), pool))
+	owner := testdb.SeedUser(t, pool, "owner@test.local", "owner")
+	other := testdb.SeedUser(t, pool, "other@test.local", "editor")
+	repo := links.NewRepository(pool)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, owner, links.CreateInput{URL: "https://example.com/a", Title: "A"})
+	require.NoError(t, err)
+	gone := "/api/files/screenshots/" + strconv.FormatInt(created.ID, 10) + ".jpg"
+	_, err = pool.Exec(ctx, `UPDATE link SET og_image_url = $2 WHERE id = $1`, created.ID, gone)
+	require.NoError(t, err)
+
+	changed, err := repo.InvalidateMissingPreview(ctx, other, created.ID, gone)
+	require.NoError(t, err)
+	assert.False(t, changed, "another account must not be able to reset this link's preview")
 }

@@ -16,6 +16,22 @@ func IsObjectTooLarge(err error) bool {
 	return errors.Is(err, ErrObjectTooLarge)
 }
 
+// ErrObjectNotFound is the adapter-independent "this key holds nothing".
+//
+// It exists so callers can tell a MISSING object from an unreachable store,
+// and that distinction is load-bearing: the file proxy uses it to decide
+// whether a link's preview should be regenerated. A transport failure — the
+// store down, DNS gone, a timeout — must NEVER take that branch, or one
+// network blip clears every og_image_url on the instance and the worker
+// re-screenshots the whole library. Same rule as the push subscriptions in
+// CLAUDE.md §4: 404/410 removes the row, a transport error never does.
+var ErrObjectNotFound = errors.New("storage: object not found")
+
+// IsObjectNotFound recognizes the canonical sentinel through wrapping layers.
+func IsObjectNotFound(err error) bool {
+	return errors.Is(err, ErrObjectNotFound)
+}
+
 // Uploader stores and fetches object bytes (S3-compatible storage adapters).
 type Uploader interface {
 	Upload(ctx context.Context, key string, data []byte, contentType string) error

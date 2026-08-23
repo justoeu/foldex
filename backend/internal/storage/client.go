@@ -110,6 +110,16 @@ func (c *Client) GetObject(ctx context.Context, key string) ([]byte, string, err
 	info, err := obj.Stat()
 	if err != nil {
 		// A "not found" comes back as an error on Stat, not on GetObject.
+		//
+		// Translated to the port's own sentinel rather than left as an S3
+		// error: callers decide real things on "this key holds nothing" — the
+		// file proxy regenerates a preview from it — and they must not be able
+		// to reach that branch on a store that is merely unreachable. The
+		// check is on the CODE, not the message, because minio returns the
+		// same shape for a timeout with different text.
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return nil, "", fmt.Errorf("storage: stat object %q: %w", key, ports.ErrObjectNotFound)
+		}
 		return nil, "", fmt.Errorf("storage: stat object %q: %w", key, err)
 	}
 	if err := checkServeSize(info.Size); err != nil {

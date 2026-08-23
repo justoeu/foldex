@@ -511,6 +511,36 @@ func (r *Repository) ClearOGImage(ctx context.Context, uid authctx.UserID, id in
 	return nil
 }
 
+// InvalidateMissingPreview re-arms the preview worker for a link whose stored
+// image no longer exists in the object store.
+//
+// Reports whether it actually changed anything, so the caller enqueues once.
+//
+// The `og_image_url = $3` predicate is the whole design. Thirty-three broken
+// cards on screen produce thirty-three concurrent 404s, and without it that is
+// thirty-three UPDATEs and thirty-three enqueues for the same handful of links;
+// with it, the first request wins and every later one is a no-op that reports
+// false. It also protects a NEWER image: a manual upload that landed between
+// the browser's request and this write no longer matches the key that 404'd,
+// so the reset does not silently discard it.
+//
+// `preview_status` goes back to 'pending' rather than 'failed': nothing failed
+// — the bytes are simply gone, and pending is the state the worker picks up.
+func (r *Repository) InvalidateMissingPreview(ctx context.Context, uid authctx.UserID, id int64, missingURL string) (bool, error) {
+	ct, err := r.pool.Exec(ctx, `
+        UPDATE link
+        SET og_image_url   = NULL,
+            preview_status = 'pending',
+            preview_error  = NULL,
+            updated_at     = now()
+        WHERE user_id = $1 AND id = $2 AND og_image_url = $3
+    `, int64(uid), id, missingURL)
+	if err != nil {
+		return false, fmt.Errorf("invalidate missing preview: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
+}
+
 // MarkChangeSeen flips `change_seen_at` to now() so the unseen-badge in the
 // UI clears. No-op (404) if the link has no detected change yet — without
 // that guard a stale `change_seen_at > last_change_detected_at` row could

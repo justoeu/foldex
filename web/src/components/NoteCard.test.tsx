@@ -132,4 +132,17 @@ describe('NoteCard', () => {
     await userEvent.click(open as HTMLElement)
     expect(onOpen).toHaveBeenCalledWith(baseNote)
   })
+
+  // A cover whose object is gone must fall back to the note glyph. Without the
+  // onError the browser paints its broken-image icon in a 150px slot, which
+  // reads as a corrupt note rather than a missing file.
+  it('falls back to the glyph when the cover image fails to load', () => {
+    const withCover = { ...baseNote, cover_url: '/api/files/notes/gone.png' }
+    renderWithProviders(<NoteCard note={withCover} onEdit={vi.fn()} {...noopCardProps} />)
+
+    const img = document.querySelector('img[src="/api/files/notes/gone.png"]')
+    expect(img).not.toBeNull()
+    fireEvent.error(img as Element)
+    expect(document.querySelector('img[src="/api/files/notes/gone.png"]')).toBeNull()
+  })
 })

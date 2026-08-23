@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
@@ -30,6 +30,12 @@ NoteCard.displayName = 'NoteCard'
 function NoteCardImpl({ note, onEdit, onMergeWith, onDelete, onPin, onOpen }: Props) {
   const { t } = useTranslation()
   const previewSrc = safeImageUrl(note.cover_url)
+  // A cover whose object is gone must fall back to the note glyph, not leave a
+  // hole. The reset on `cover_url` is what lets a replaced image try again —
+  // without it, one broken cover would suppress every later one on this card.
+  const [coverErrored, setCoverErrored] = useState(false)
+  useEffect(() => setCoverErrored(false), [note.cover_url])
+  const showCover = !!previewSrc && !coverErrored
   const density = densityFor(note)
 
   return (
@@ -85,7 +91,7 @@ function NoteCardImpl({ note, onEdit, onMergeWith, onDelete, onPin, onOpen }: Pr
         <Icon d={I.note} size={12} stroke={2} />
       </span>
 
-      {previewSrc && (
+      {showCover && (
         <button type="button" className="fx-preview fx-preview-img" onClick={() => onOpen(note)} aria-label={t('note_card.read_aria', { title: note.title })}>
           <img
             src={previewSrc}
@@ -93,6 +99,7 @@ function NoteCardImpl({ note, onEdit, onMergeWith, onDelete, onPin, onOpen }: Pr
             referrerPolicy="no-referrer"
             loading="lazy"
             decoding="async"
+            onError={() => setCoverErrored(true)}
             style={{ width: '100%', height: '100%', objectFit: 'scale-down', display: 'block' }}
           />
         </button>
@@ -100,7 +107,7 @@ function NoteCardImpl({ note, onEdit, onMergeWith, onDelete, onPin, onOpen }: Pr
       <div className="fx-card-body">
         <header className="fx-card-head">
           <span className="fx-card-note-icon" aria-hidden="true">
-            <Icon d={I.note} size={previewSrc ? 22 : 28} />
+            <Icon d={I.note} size={showCover ? 22 : 28} />
           </span>
           <div className="fx-card-head-text">
             <h3 className="fx-card-title">

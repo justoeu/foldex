@@ -127,7 +127,7 @@ func (f *fakeUploader) GetObject(_ context.Context, key string) ([]byte, string,
 	}
 	d, ok := f.uploaded[key]
 	if !ok {
-		return nil, "", errors.New("not found")
+		return nil, "", fmt.Errorf("fake: %q: %w", key, ports.ErrObjectNotFound)
 	}
 	return d, "image/png", nil
 }
@@ -162,6 +162,18 @@ type fakeRepo struct {
 	updateErr  error
 	clearErr   error
 	casApplied bool
+
+	// Self-healing after a missing object. `invalidated` records the exact
+	// (id, url) pairs so a test can prove the CONDITIONAL predicate reached
+	// the repository, not merely that something was called.
+	invalidated   []invalidateCall
+	invalidateOK  bool
+	invalidateErr error
+}
+
+type invalidateCall struct {
+	id  int64
+	url string
 }
 
 func newFakeRepo() *fakeRepo {
@@ -255,6 +267,17 @@ func (f *fakeRepo) UpdateOGImageIfUnchanged(_ context.Context, uid authctx.UserI
 	}
 	f.updatedURL[id] = imageURL
 	return true, nil
+}
+
+func (f *fakeRepo) InvalidateMissingPreview(_ context.Context, uid authctx.UserID, id int64, missingURL string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gotUID = append(f.gotUID, uid)
+	f.invalidated = append(f.invalidated, invalidateCall{id: id, url: missingURL})
+	if f.invalidateErr != nil {
+		return false, f.invalidateErr
+	}
+	return f.invalidateOK, nil
 }
 
 func (f *fakeRepo) ClearOGImage(_ context.Context, uid authctx.UserID, id int64) error {
@@ -1336,4 +1359,130 @@ func TestScreenshotHandler_ForwardsTheAuthenticatedPrincipal(t *testing.T) {
 		assert.Equal(t, authctxtest.DefaultUser, got,
 			"handlers must forward the request principal, not a zero or hardcoded id")
 	}
+}
+
+// --- self-healing when the stored object is gone ---
+
+// buildHealRouter is buildRouter plus an enqueuer, so a test can see whether
+// the preview worker was actually re-armed.
+func buildHealRouter(t *testing.T, up *fakeUploader, repo *fakeRepo) (http.Handler, *fakeEnqueuer) {
+	t.Helper()
+	enq := &fakeEnqueuer{}
+	sh := (&ScreenshotHandler{
+		repo:         repo,
+		storage:      up,
+		urlPolicy:    allowAllPolicy,
+		logger:       newTestLogger(),
+		captureSem:   make(chan struct{}, maxCaptureInFlight),
+		captureUsers: make(map[authctx.UserID]int),
+	}).WithEnqueuer(enq)
+
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
+	r.Route("/api", func(api chi.Router) { api.Get("/files/*", sh.ProxyFile) })
+	return r, enq
+}
+
+type fakeEnqueuer struct {
+	mu  sync.Mutex
+	ids []int64
+}
+
+func (f *fakeEnqueuer) Enqueue(id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ids = append(f.ids, id)
+	return nil
+}
+
+// `maybeScreenshot` only ever fires for a link whose og_image_url is EMPTY, so
+// a row pointing at bytes that no longer exist is stuck: the card stays blank
+// forever while preview_status still reads 'ok'. This is the branch that
+// unsticks it.
+func TestProxyFile_MissingObjectReArmsThePreview(t *testing.T) {
+	up := newFakeUploader() // nothing uploaded ⇒ the key is genuinely absent
+	repo := newFakeRepo()
+	repo.links[42] = Link{ID: 42}
+	repo.invalidateOK = true
+	r, enq := buildHealRouter(t, up, repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/files/screenshots/42.png", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code, "the caller still gets a 404")
+	require.Len(t, repo.invalidated, 1)
+	// The exact URL matters: it is the predicate that makes the write
+	// conditional, and passing the bare key would match no row at all.
+	assert.Equal(t, invalidateCall{id: 42, url: "/api/files/screenshots/42.png"}, repo.invalidated[0])
+	assert.Equal(t, []int64{42}, enq.ids)
+}
+
+// THE safety property. A store that is merely unreachable must not look like a
+// store with nothing in it: taking the healing branch on any error would let a
+// single network blip clear every og_image_url on the instance and re-screenshot
+// the whole library. Same rule as push subscriptions in CLAUDE.md §4.
+func TestProxyFile_TransportFailureNeverClearsAnImage(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"connection refused", errors.New("dial tcp 10.0.0.1:9000: connect: connection refused")},
+		{"timeout", context.DeadlineExceeded},
+		{"an error that merely says not found", errors.New("not found")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			up := newFakeUploader()
+			up.getErr = tc.err
+			repo := newFakeRepo()
+			repo.links[42] = Link{ID: 42}
+			repo.invalidateOK = true
+			r, enq := buildHealRouter(t, up, repo)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/files/screenshots/42.png", nil)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusNotFound, w.Code)
+			assert.Empty(t, repo.invalidated, "an unreachable store is not an empty one")
+			assert.Empty(t, enq.ids)
+		})
+	}
+}
+
+// A screenful of broken cards is a screenful of concurrent 404s. The repository
+// reports whether it actually changed the row, and only a real change enqueues
+// — otherwise thirty-three cards become thirty-three captures of a handful of
+// links.
+func TestProxyFile_SecondRequestForTheSameGoneObjectDoesNotEnqueueAgain(t *testing.T) {
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	repo.links[42] = Link{ID: 42}
+	repo.invalidateOK = false // the row already moved on
+	r, enq := buildHealRouter(t, up, repo)
+
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/files/screenshots/42.png", nil)
+		r.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	assert.Len(t, repo.invalidated, 5, "each request still asks")
+	assert.Empty(t, enq.ids, "but only a row that actually changed re-arms the worker")
+}
+
+// Note media is user-uploaded and nothing can regenerate it, so clearing a
+// reference to it would destroy the only record that the image was ever there.
+func TestProxyFile_MissingNoteMediaIsNotHealed(t *testing.T) {
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	r, enq := buildHealRouter(t, up, repo)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/files/notes/0d5d3a2e-1b3c-4f5a-8e9d-2c1b0a9f8e7d.png", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Empty(t, repo.invalidated)
+	assert.Empty(t, enq.ids)
 }

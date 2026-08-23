@@ -68,6 +68,7 @@ type screenshotRepo interface {
 	ReplaceOGImage(ctx context.Context, uid authctx.UserID, id int64, imageURL string) (*string, error)
 	UpdateOGImageIfUnchanged(ctx context.Context, uid authctx.UserID, id int64, imageURL string, expectedUpdatedAt time.Time) (bool, error)
 	ClearOGImage(ctx context.Context, uid authctx.UserID, id int64) error
+	InvalidateMissingPreview(ctx context.Context, uid authctx.UserID, id int64, missingURL string) (bool, error)
 }
 
 // maxCaptureInFlight bounds concurrent CaptureAndStore requests so a flood
@@ -95,6 +96,16 @@ type ScreenshotHandler struct {
 	captureSem    chan struct{}
 	captureMu     sync.Mutex
 	captureUsers  map[authctx.UserID]int
+	// enqueuer re-arms the preview worker when a stored image turns out to be
+	// gone. Nil is a supported wiring (the proxy still serves and still
+	// invalidates; nothing regenerates until the next boot's requeuePending).
+	enqueuer ports.Enqueuer
+}
+
+// WithEnqueuer wires the preview worker so a missing object can heal itself.
+func (h *ScreenshotHandler) WithEnqueuer(e ports.Enqueuer) *ScreenshotHandler {
+	h.enqueuer = e
+	return h
 }
 
 // NewScreenshotHandler creates a ScreenshotHandler. urlPolicy gates
@@ -293,7 +304,22 @@ func (h *ScreenshotHandler) proxyFile(w http.ResponseWriter, r *http.Request, ke
 			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "too_large", "file exceeds maximum serve size"))
 			return
 		}
-		h.logger.Error("proxy file: get object failed")
+		// A MISSING object is recoverable; an unreachable store is not, and the
+		// two must not share a branch. `maybeScreenshot` only ever fires for a
+		// link whose og_image_url is EMPTY (ADR-16), so a row pointing at bytes
+		// that no longer exist is stuck: the card stays blank forever while
+		// preview_status still reads 'ok'. Clearing the reference is what puts
+		// it back in the worker's path.
+		//
+		// Gated on ErrObjectNotFound precisely so a network blip cannot do it.
+		// Taking this branch on any error would let one unreachable moment wipe
+		// every og_image_url on the instance and re-screenshot the whole
+		// library — the same rule as push subscriptions in CLAUDE.md §4.
+		if ports.IsObjectNotFound(err) {
+			h.healMissingObject(r.Context(), key)
+		} else {
+			h.logger.Error("proxy file: get object failed")
+		}
 		httperr.Write(w, httperr.New(http.StatusNotFound, "not_found", "file not found"))
 		return
 	}
@@ -604,4 +630,41 @@ func optimizeOrFallback(data []byte, sourceMIME, sourceExt string, logger *slog.
 		}
 	}
 	return res
+}
+
+// healMissingObject re-arms the preview worker for a link-derived key whose
+// object is gone.
+//
+// Only `screenshots/` and `images/` reach the worker: a `notes/` key names
+// user-uploaded media that nothing can regenerate, so clearing a reference to
+// it would delete the only record that the image was ever there.
+//
+// Every failure is logged and swallowed. This runs on a READ that has already
+// decided its answer — the client gets the same 404 either way — and turning a
+// self-healing attempt into a 500 would make a broken thumbnail break the page.
+func (h *ScreenshotHandler) healMissingObject(ctx context.Context, key string) {
+	if !strings.HasPrefix(key, "screenshots/") && !strings.HasPrefix(key, "images/") {
+		return
+	}
+	id, ok := linkKeyID(key)
+	if !ok {
+		return
+	}
+	// Ownership was already asserted by authorizeKey before the read.
+	uid := authctx.MustUser(ctx)
+	changed, err := h.repo.InvalidateMissingPreview(ctx, uid, id, "/api/files/"+key)
+	if err != nil {
+		h.logger.Error("proxy file: could not re-arm preview", "link_id", id)
+		return
+	}
+	if !changed {
+		// Another request for the same broken card already did it, or the row
+		// has since moved on to a different image. Enqueuing here is what would
+		// turn a screenful of broken cards into a screenful of captures.
+		return
+	}
+	h.logger.Info("proxy file: stored image is gone, preview re-armed", "link_id", id)
+	if h.enqueuer != nil {
+		_ = h.enqueuer.Enqueue(id)
+	}
 }
