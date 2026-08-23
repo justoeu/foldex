@@ -134,10 +134,13 @@ CA local (`mkcert -install`) numa máquina nova.
 > depois `make up` para rebuildar a imagem nginx com os certs novos.
 
 > **Reusar um Postgres que já roda no host.** Setar `POSTGRES_HOST=host.docker.internal`
-> no `.env` (e `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`
-> correspondentes), pular `make db-up` e rodar `make apps-up`
-> diretamente. Migrations precisam ser aplicadas contra esse DB na mão
-> (ou `make migrate-up` se o usuário/db existirem).
+> — ou `localhost`, que também funciona — no `.env` (e `POSTGRES_USER` /
+> `POSTGRES_PASSWORD` / `POSTGRES_DB` correspondentes), pular `make db-up` e
+> rodar `make apps-up` diretamente. O `make migrate-up` alcança um Postgres no
+> host nos dois casos: o CLI do migrate roda em container próprio, onde
+> `localhost` seria o próprio container, então o alvo reescreve o host para
+> `host.docker.internal` só para ele. Qualquer outro hostname passa intocado,
+> então um Postgres remoto é discado como escrito.
 
 ## Arquitetura do stack
 

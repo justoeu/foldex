@@ -27,7 +27,24 @@ DB_URL          ?= postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_H
 # $(CURDIR), never $(PWD) — see scripts/test-make-migrate-path.sh for what
 # broke. Digest-pinned like every other CI image (CLAUDE.md §4): the DAST now
 # pulls this one, and a version tag is mutable.
-MIGRATE := docker run --rm --network $(COMPOSE_NETWORK) -v $(CURDIR)/db/migrations:/migrations \
+# The DSN as the MIGRATE CONTAINER must see it.
+#
+# `POSTGRES_HOST=localhost` is a supported setting (CLAUDE.md §8: the backend's
+# compose service aliases `localhost` to the host gateway via extra_hosts, so a
+# Postgres on the developer's machine works). The migrate CLI runs in a
+# container of its own with no such alias, where `localhost` is the container
+# itself — so `make migrate-up` dialled nothing and failed with "connection
+# refused" on an instance whose backend was connected and healthy.
+#
+# `--add-host=localhost:host-gateway` does NOT fix it: Docker appends to
+# /etc/hosts and the pre-existing `127.0.0.1 localhost` line still wins the
+# lookup (verified — the name resolves to ::1 with the alias present). The host
+# has to be rewritten in the URL, which also covers an explicitly overridden
+# DB_URL rather than only the one derived from POSTGRES_HOST.
+MIGRATE_DB_URL := $(subst @localhost:,@host.docker.internal:,$(subst @127.0.0.1:,@host.docker.internal:,$(DB_URL)))
+MIGRATE := docker run --rm --network $(COMPOSE_NETWORK) \
+	--add-host=host.docker.internal:host-gateway \
+	-v $(CURDIR)/db/migrations:/migrations \
 	migrate/migrate:v4.17.0@sha256:4d017c6fb5997127093648cab09e63d377997125c3d3dcca18e5d1c847da49fa
 
 COVERAGE_MIN ?= 85
@@ -114,10 +131,10 @@ coverage-html: coverage ## Open coverage report in the browser
 # visible in `ps` on the machine that runs it, which is a smaller blast radius
 # than a stored log and is not fixable without overriding the image entrypoint.
 migrate-up: ## Apply all pending migrations
-	@$(MIGRATE) -path /migrations -database "$(DB_URL)" up
+	@$(MIGRATE) -path /migrations -database "$(MIGRATE_DB_URL)" up
 
 migrate-down: ## Revert the most recent migration
-	@$(MIGRATE) -path /migrations -database "$(DB_URL)" down 1
+	@$(MIGRATE) -path /migrations -database "$(MIGRATE_DB_URL)" down 1
 
 migrate-create: ## Create a new migration: make migrate-create NAME=add_x
 	$(MIGRATE) create -ext sql -dir /migrations -seq $(NAME)

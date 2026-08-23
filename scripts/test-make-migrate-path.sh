@@ -68,5 +68,49 @@ if [[ -d "$from_root" ]] && ! compgen -G "$from_root/*.up.sql" >/dev/null; then
   note "'$from_root' holds no .up.sql files — it is not the migrations directory"
 fi
 
+# ── The HOST the migrate container dials ────────────────────────────────────
+#
+# `POSTGRES_HOST=localhost` is supported: compose aliases `localhost` to the
+# host gateway for the backend, so a Postgres on the developer's own machine
+# works. The migrate CLI runs in its own container with no such alias, where
+# `localhost` is the container itself — so `make migrate-up` failed with
+# "connection refused" on an instance whose backend was connected and healthy,
+# and the operator's next move (per README) was the command that had just
+# failed.
+#
+# `--add-host=localhost:host-gateway` does not fix it — Docker appends to
+# /etc/hosts and the pre-existing `127.0.0.1 localhost` line wins the lookup —
+# so the URL is rewritten instead. Both halves are asserted: the rewrite HAPPENS
+# for a local host, and it does NOT happen for any other, or a genuinely remote
+# Postgres would be redirected at the developer's own machine.
+db_flag() { sed -n 's/.*-database "\([^"]*\)".*/\1/p' <<<"$1"; }
+# NEVER echo a DSN. The first version of this guard printed the expansion on
+# failure and put the instance's real Postgres password on the terminal — the
+# same defect logsafe exists to prevent, in the one file whose job is to read
+# the expansion. Both probes therefore use a SYNTHETIC DB_URL passed on the
+# command line (which outranks .env), so no real credential is ever expanded,
+# and the messages name the host only.
+host_of() { sed -E 's#^[^@]*@([^/:]+).*#\1#' <<<"$1"; }
+expand_db() { (cd "$ROOT/backend" && make -n migrate-up DB_URL="$1" 2>/dev/null | { read -r l; db_flag "$l"; }); }
+
+FAKE_LOCAL='postgres://u:p@localhost:5432/x?sslmode=disable'
+FAKE_REMOTE='postgres://u:p@db.example.internal:5432/x?sslmode=disable'
+
+got=$(host_of "$(expand_db "$FAKE_LOCAL")")
+if [[ "$got" == "localhost" || "$got" == "127.0.0.1" ]]; then
+  note "a local POSTGRES_HOST reaches the migrate container unrewritten; inside it that is the container itself, and migrate dials nothing"
+elif [[ "$got" != "host.docker.internal" ]]; then
+  note "a local host did not become host.docker.internal (got host '$got')"
+fi
+
+got=$(host_of "$(expand_db "$FAKE_REMOTE")")
+if [[ "$got" != "db.example.internal" ]]; then
+  note "a non-local host must pass through untouched, or a remote Postgres is silently redirected at the developer's machine (got host '$got')"
+fi
+
+if [[ "$root_cmd" != *"--add-host=host.docker.internal:host-gateway"* ]]; then
+  note "the migrate container has no host.docker.internal alias, so the rewritten name resolves to nothing"
+fi
+
 [[ $fail -eq 0 ]] || exit 1
-echo "make migrate-up mounts $from_root from either entry point"
+echo "make migrate-up mounts $from_root and dials the right host from either entry point"
