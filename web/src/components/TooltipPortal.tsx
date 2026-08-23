@@ -24,6 +24,11 @@ export function TooltipPortal() {
   const [anchor, setAnchor] = useState<Anchor>(null)
   const showTimer = useRef<number | null>(null)
   const currentEl = useRef<Element | null>(null)
+  // The anchor that was just pressed. Closing alone is not enough: `close()`
+  // clears currentEl, the pointer is still sitting on the control, and the very
+  // next mouse event re-opens the chip 180 ms later — so it reappears over the
+  // menu the click just opened. Suppression lasts until the pointer LEAVES.
+  const pressedEl = useRef<Element | null>(null)
 
   useEffect(() => {
     const clearTimer = () => {
@@ -33,7 +38,7 @@ export function TooltipPortal() {
       }
     }
     const open = (el: Element) => {
-      if (currentEl.current === el) return
+      if (currentEl.current === el || pressedEl.current === el) return
       const text = el.getAttribute('data-tooltip')
       if (!text) return
       currentEl.current = el
@@ -60,6 +65,7 @@ export function TooltipPortal() {
       if (!t) return
       const next = e.relatedTarget as Node | null
       if (!next || !t.contains(next)) {
+        if (pressedEl.current === t) pressedEl.current = null
         if (currentEl.current === t) close()
       }
     }
@@ -72,11 +78,24 @@ export function TooltipPortal() {
       if (!t) return
       if (currentEl.current === t) close()
     }
+    // A press closes the chip and keeps it closed while the pointer stays put.
+    //
+    // Clicking a tooltipped control almost always opens or changes something,
+    // and the chip is then painted over the result — which is what the topbar
+    // avatar did to its own dropdown, covering the first menu row. Removing the
+    // `data-tooltip` attribute on open was tried and is WORSE: `onOut` finds the
+    // anchor with `closest('[data-tooltip]')`, so once the attribute is gone
+    // nothing matches and the chip is stranded until Escape or a scroll.
+    const onDown = (e: MouseEvent) => {
+      pressedEl.current = (e.target as HTMLElement | null)?.closest('[data-tooltip]') ?? null
+      close()
+    }
     const onScroll = () => close()
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') close()
     }
 
+    document.addEventListener('mousedown', onDown, true)
     document.addEventListener('mouseover', onOver)
     document.addEventListener('mouseout', onOut)
     document.addEventListener('focusin', onFocusIn)
@@ -86,6 +105,7 @@ export function TooltipPortal() {
     window.addEventListener('keydown', onKey)
     return () => {
       clearTimer()
+      document.removeEventListener('mousedown', onDown, true)
       document.removeEventListener('mouseover', onOver)
       document.removeEventListener('mouseout', onOut)
       document.removeEventListener('focusin', onFocusIn)

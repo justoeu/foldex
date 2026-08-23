@@ -48,6 +48,7 @@ export function LocalePicker() {
         createPortal(
           <div
             ref={menuRef}
+            className="fx-portalmenu"
             role="menu"
             aria-label={t('topbar.language')}
             style={{
@@ -88,6 +89,7 @@ export function LocalePicker() {
                     color: 'var(--fx-ink)',
                     textAlign: 'left',
                     cursor: 'pointer',
+                    fontFamily: 'inherit',
                     borderRadius: 6,
                     fontSize: 13,
                   }}

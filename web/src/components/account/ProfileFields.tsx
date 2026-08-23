@@ -16,12 +16,13 @@ export const MAX_DISPLAY_NAME = 120
 
 /**
  * The two fields the account owner edits about themselves: display name and
- * language.
+ * language. Both are PREFERENCES — how the account presents itself and reads
+ * back — which is the line that decides what belongs here.
  *
- * E-mail is deliberately absent: it is the account's identity — login,
- * recovery and invites all key off it — so changing it is a verification flow
- * of its own, not an inline edit. Role is shown in the hero and changes only
- * through administration.
+ * E-mail and username are deliberately absent: they are IDENTIFIERS, typed
+ * into the login screen, and they live in Access beside the password. The
+ * username was here for one session and read as a nickname because of it.
+ * Role is shown in the hero and changes only through administration.
  */
 export function ProfileFields({ user }: { user: AuthUser }) {
   const { t } = useTranslation()
@@ -31,7 +32,6 @@ export function ProfileFields({ user }: { user: AuthUser }) {
   // '' is a real, selectable value: "follow my browser". It is what lets
   // someone undo a choice, which a plain list of languages cannot express.
   const [locale, setLocale] = useState(user.locale ?? '')
-  const [username, setUsername] = useState(user.username ?? '')
   const [error, setError] = useState('')
   const [ok, setOk] = useState(false)
 
@@ -42,11 +42,7 @@ export function ProfileFields({ user }: { user: AuthUser }) {
     // loaded, the rename would silently undo it. Omitting it is what the
     // tri-state on both sides exists for.
     mutationFn: () =>
-      auth.updateProfile(
-        name,
-        locale === (user.locale ?? '') ? undefined : locale,
-        username.trim() === (user.username ?? '') ? undefined : username.trim(),
-      ),
+      auth.updateProfile(name, locale === (user.locale ?? '') ? undefined : locale),
     onSuccess: (me) => {
       setError('')
       setOk(true)
@@ -62,16 +58,11 @@ export function ProfileFields({ user }: { user: AuthUser }) {
       const code = errCode(e)
       if (code === 'invalid_name') setError(t('profile.err_name_too_long'))
       else if (code === 'invalid_locale') setError(t('profile.err_locale_unsupported'))
-      else if (code === 'invalid_username') setError(t('profile.err_username_shape'))
-      else if (code === 'username_taken') setError(t('profile.err_username_taken'))
       else setError(t('auth_errors.generic'))
     },
   })
 
-  const dirty =
-    name.trim() !== (user.name ?? '') ||
-    locale !== (user.locale ?? '') ||
-    username.trim() !== (user.username ?? '')
+  const dirty = name.trim() !== (user.name ?? '') || locale !== (user.locale ?? '')
 
   const save = () => {
     setOk(false)
@@ -121,28 +112,6 @@ export function ProfileFields({ user }: { user: AuthUser }) {
               aria-label={t('profile.name_label')}
             />
           </div>
-        </label>
-
-        <label className="fx-field">
-          <span className="fx-field-label">{t('profile.username_label')}</span>
-          <div className="fx-input">
-            <input
-              type="text"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              maxLength={32}
-              value={username}
-              onChange={(e) => {
-                setUsername(e.target.value)
-                setError('')
-                setOk(false)
-              }}
-              placeholder={t('profile.username_placeholder')}
-              aria-label={t('profile.username_label')}
-            />
-          </div>
-          <span className="fx-field-hint">{t('profile.username_hint')}</span>
         </label>
 
         <label className="fx-field">

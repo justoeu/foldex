@@ -588,8 +588,8 @@ included. An admin can create, disable and delete users, but never sees another
 account's links or notes. Content is separated in the database itself, not by a
 filter the UI applies.
 
-**Signing in with a username.** Set an optional username in **Profile** and you can sign in
-with it instead of your e-mail — the sign-in field takes either. It is 3 to 32 characters of
+**Signing in with a username.** Set an optional username under **Sign-in → Username** and you can sign
+in with it instead of your e-mail — the sign-in field takes either. It is 3 to 32 characters of
 letters, digits, dot, dash or underscore, and it can never contain `@`: the server resolves
 one identifier against both columns, so an address-shaped username would sit in everyone's
 mailbox namespace and could collect another account's password attempts. Clearing the field

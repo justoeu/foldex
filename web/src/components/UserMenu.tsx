@@ -43,7 +43,7 @@ export function UserMenu({ onOpenProfile }: { onOpenProfile: () => void }) {
         </span>
       </button>
       {open && pos && createPortal(
-        <div ref={menuRef} className="fx-usermenu" role="menu" style={{ top: pos.top, right: pos.right }}>
+        <div ref={menuRef} className="fx-portalmenu fx-usermenu" role="menu" style={{ top: pos.top, right: pos.right }}>
           <div className="fx-usermenu-head">
             <span className="fx-avatar fx-avatar-sm" aria-hidden="true">
               {initialsOf(user.name, user.email)}

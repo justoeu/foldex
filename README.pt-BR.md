@@ -591,8 +591,8 @@ rabbitmqctl set_permissions -p /foldex foldex '^foldex\.' '^foldex\.' '^foldex\.
 admin cria, desabilita e apaga usuários, mas nunca vê os links ou notas de outra conta.
 A separação está no próprio banco, não em um filtro que a interface aplica.
 
-**Entrar com nome de usuário.** Defina um nome de usuário opcional em **Perfil** e você pode
-entrar com ele no lugar do e-mail — o campo de entrada aceita os dois. São de 3 a 32
+**Entrar com nome de usuário.** Defina um nome de usuário opcional em **Acesso → Username** e você
+pode entrar com ele no lugar do e-mail — o campo de entrada aceita os dois. São de 3 a 32
 caracteres entre letras, números, ponto, traço e sublinhado, e ele nunca pode conter `@`: o
 servidor resolve um identificador contra as duas colunas, então um nome com forma de
 endereço ficaria no mesmo espaço das caixas de todo mundo e poderia recolher as tentativas

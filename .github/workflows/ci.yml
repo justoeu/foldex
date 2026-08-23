@@ -136,6 +136,13 @@ jobs:
         # card it paints over it and the page flickers without settling — which
         # shipped once. Why it exists is in the script's header and CLAUDE.md §5.
         run: node scripts/test-css-auth-overlay.mjs
+      - name: Portaled menu context guard
+        # A `createPortal` to <body> lands OUTSIDE `.fx-shell`, so the reset,
+        # the UI font and border-box never reach it. The topbar user menu
+        # shipped as native bordered buttons in the wrong font because of it.
+        run: |
+          node scripts/test-css-portal-menu.mjs --self-test
+          node scripts/test-css-portal-menu.mjs
       - name: release.sh awk regression
         # Locks the "first-match-only" invariant of update_version() in
         # scripts/release.sh. Without it, a future sed/awk swap could

@@ -144,6 +144,17 @@ export async function updateLocale(locale: string): Promise<MeResponse> {
   return data
 }
 
+/** Sets ONLY the username, sending no name and no locale.
+ *
+ *  Same rule as updateLocale, and for the same reason: every field on this
+ *  endpoint is tri-state, so replaying a cached `name` would revert a rename
+ *  made in another tab. `''` clears the username — which is what makes it
+ *  optional in BOTH directions, not just at sign-up. */
+export async function updateUsername(username: string): Promise<MeResponse> {
+  const { data } = await http.patch<MeResponse>('/api/auth/profile', { username })
+  return data
+}
+
 /**
  * Requests a password-reset link.
  *

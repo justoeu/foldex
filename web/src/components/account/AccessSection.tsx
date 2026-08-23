@@ -2,12 +2,14 @@ import { useTranslation } from 'react-i18next'
 import { I } from '../icons'
 import { SectionBadge, SectionCard } from './SectionCard'
 import { EmailRow } from './EmailRow'
+import { UsernameRow } from './UsernameRow'
 import { PasswordRow } from './PasswordCard'
 import { GoogleRow } from './GoogleRow'
 import type { AuthUser } from '../../auth/types'
 
 /**
- * How this account proves it is itself: the password, and the Google identity.
+ * How this account proves it is itself: the identifiers it is known by, the
+ * password, and the Google identity.
  *
  * One card holding both rows, rather than two stacked panels, because the two
  * constrain each other — an account converted to Google-only cannot unlink
@@ -37,6 +39,10 @@ export function AccessSection({
         {/* The address leads: it is the login identifier the other two rows
             qualify, and the one row here that is also the recovery channel. */}
         <EmailRow user={user} />
+        {/* The username is an IDENTIFIER, not a preference: it is typed into
+            the login screen where the e-mail goes. It sat on the profile form
+            for one session and read as a nickname there. */}
+        <UsernameRow user={user} />
         <PasswordRow user={user} />
         {googleEnabled && <GoogleRow user={user} />}
       </div>

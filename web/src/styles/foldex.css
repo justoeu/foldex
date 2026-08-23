@@ -873,6 +873,26 @@
 .fx-avatar-sm { width: 28px; height: 28px; border-radius: 8px; font-size: 11px; }
 .fx-avatar-lg { width: 60px; height: 60px; border-radius: 17px; font-size: 19px; }
 
+/* Anything portaled to <body> — the topbar's menus — lands OUTSIDE `.fx-shell`,
+   and therefore outside everything the shell establishes: `box-sizing:
+   border-box` on all descendants, the UI font, the 14px/600 type scale, and the
+   `.fx-shell button` reset that strips native button chrome. A menu written as
+   if it were inside the shell renders with the UA's button border, background
+   and typeface, and with content-box items whose `width: 100%` plus padding
+   overflow the very container they sit in. That is what shipped in the user
+   menu, and it is why the dropdown looked like nothing else in the product.
+
+   `.fx-portalmenu` re-establishes that context. Every portaled menu root wears
+   it; `scripts/test-css-portal-menu.mjs` refuses one that does not. */
+.fx-portalmenu,
+.fx-portalmenu *,
+.fx-portalmenu *::before,
+.fx-portalmenu *::after { box-sizing: border-box; }
+.fx-portalmenu {
+  font-family: var(--fx-ui); font-weight: 600; font-size: 14px; line-height: 1.45;
+  color: var(--fx-ink); -webkit-font-smoothing: antialiased;
+}
+
 /* Topbar user menu (avatar button + portaled dropdown, same pattern as the
    LocalePicker — the topbar clips absolutely-positioned children). */
 .fx-userbtn {
@@ -890,9 +910,14 @@
 .fx-usermenu-head { display: flex; gap: 10px; align-items: center; padding: 8px 10px 10px; border-bottom: 1px solid var(--fx-border); margin-bottom: 6px; }
 .fx-usermenu-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fx-usermenu-mail { font-size: 11px; color: var(--fx-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fx-usermenu-item {
+/* Element-qualified and self-sufficient: outside the shell there is no reset to
+   inherit from, so the item declares its own border/background/font. The two
+   :hover rules below are (0,2,0) and still win over this (0,1,1). */
+button.fx-usermenu-item {
   display: flex; width: 100%; gap: 8px; align-items: center; padding: 8px 10px;
-  border-radius: 8px; font-size: 12.5px; font-weight: 550; color: var(--fx-ink-2);
+  border: 0; background: transparent; cursor: pointer; text-align: left;
+  border-radius: 8px; font-family: inherit; font-size: 12.5px; font-weight: 550;
+  color: var(--fx-ink-2);
   transition: background .15s, color .15s;
 }
 .fx-usermenu-item:hover { background: var(--fx-surface-3); color: var(--fx-ink); }
