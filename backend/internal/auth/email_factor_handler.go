@@ -3,7 +3,6 @@ package auth
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/authctx"
@@ -172,7 +171,7 @@ func (h *Handler) ConfirmEmailFactor(w http.ResponseWriter, r *http.Request) {
 		// in-memory per-user limiter — the same reason the step-up paths do.
 		// A separate key from "stepup:": a wrong enrollment code should not
 		// spend the budget that guards disabling a factor.
-		key := "enroll:" + strconv.FormatInt(int64(uid), 10)
+		key := userBucketKey("enroll", uid)
 		until, ok := h.stepUpUser.Begin(key)
 		if !ok {
 			writeRateLimited(w, until)

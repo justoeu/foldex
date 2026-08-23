@@ -1,11 +1,18 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { useAvailability, type AvailabilityResponse } from './useAvailability'
 
-/** The hook debounces at 450 ms; every case has to outlast it. */
+// Fake timers, like every other debounce test in the tree. Sleeping through the
+// real 450 ms nine times cost 3.6 s of wall clock for a hook that has no I/O of
+// its own — and a suite that pays real time to test a timeout is one slow CI
+// runner away from being flaky for a reason unrelated to the code.
+beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }))
+afterEach(() => vi.useRealTimers())
+
+/** Runs out the debounce and lets the resulting promise settle. */
 async function settle() {
   await act(async () => {
-    await new Promise((r) => setTimeout(r, 600))
+    await vi.advanceTimersByTimeAsync(500)
   })
 }
 

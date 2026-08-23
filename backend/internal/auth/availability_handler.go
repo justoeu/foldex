@@ -76,7 +76,16 @@ func (h *Handler) UsernameAvailable(w http.ResponseWriter, r *http.Request) {
 	// outcome, so every answer costs one. Retry-After is carried because this
 	// lockout is reachable in ordinary use, and "wait five minutes" is the only
 	// thing that distinguishes it from a broken instance.
-	until, admitted := h.availabilityUser.Begin(availabilityKey(p.UserID))
+	//
+	// A request the client ABORTS mid-flight has already been charged, and that
+	// is deliberate rather than an oversight. Charging after the lookup would
+	// mean a caller who hangs up before the answer pays nothing — which is the
+	// whole enumeration budget, since nothing forces an attacker to read the
+	// response body to learn from the timing of the connection. The cost is
+	// borne only when the server is slower than the client's 450 ms debounce,
+	// which is rare and self-correcting; the alternative is a cap that anyone
+	// can opt out of.
+	until, admitted := h.availabilityUser.Begin(userBucketKey("avail", p.UserID))
 	if !admitted {
 		if wait := time.Until(until); wait > 0 {
 			w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
@@ -85,7 +94,7 @@ func (h *Handler) UsernameAvailable(w http.ResponseWriter, r *http.Request) {
 			"too many checks — wait a moment"))
 		return
 	}
-	h.availabilityUser.CommitFail(availabilityKey(p.UserID))
+	h.availabilityUser.CommitFail(userBucketKey("avail", p.UserID))
 
 	norm, err := NormalizeUsername(raw)
 	if err != nil {
@@ -154,9 +163,12 @@ func (h *AdminHandler) EmailAvailable(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Prefixed like every other per-user bucket in this package, even though the
-// limiter is dedicated — an unprefixed key is what makes two budgets share a
-// namespace the first time someone reuses the limiter.
-func availabilityKey(uid authctx.UserID) string {
-	return "avail:" + strconv.FormatInt(int64(uid), 10)
+// userBucketKey names a per-user rate-limit bucket.
+//
+// Five call sites built this string inline, two of them repeating the same
+// `"stepup-password:"` prefix verbatim. The prefix matters even though each
+// limiter is a separate map: it is what stops two budgets from sharing a
+// namespace the first time someone reuses a limiter for a second purpose.
+func userBucketKey(prefix string, uid authctx.UserID) string {
+	return prefix + ":" + strconv.FormatInt(int64(uid), 10)
 }

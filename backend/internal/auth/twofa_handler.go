@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/pquerna/otp"
@@ -869,7 +868,7 @@ func (h *Handler) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) stepUpSecondFactor(w http.ResponseWriter, r *http.Request,
 	uid authctx.UserID, user User, code string) (SecondFactorProof, string, bool) {
 
-	key := "stepup:" + strconv.FormatInt(int64(uid), 10)
+	key := userBucketKey("stepup", uid)
 	until, ok := h.stepUpUser.Begin(key)
 	if !ok {
 		writeRateLimited(w, until)

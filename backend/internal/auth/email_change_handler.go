@@ -3,7 +3,6 @@ package auth
 import (
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"foldex/internal/mailer"
@@ -60,7 +59,7 @@ func (h *Handler) RequestEmailChange(w http.ResponseWriter, r *http.Request) {
 	// The same per-user password budget the OAuth link step-up uses. Without
 	// it, a stolen session is an unlimited password oracle on a form that
 	// happens to be about e-mail.
-	passwordKey := "stepup-password:" + strconv.FormatInt(int64(p.UserID), 10)
+	passwordKey := userBucketKey("stepup-password", p.UserID)
 	if until, ok := h.stepUpPasswordUser.Begin(passwordKey); !ok {
 		writeRateLimited(w, until)
 		return

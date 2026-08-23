@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -191,7 +190,7 @@ func (h *Handler) OAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, _ := authctx.FromContext(r.Context())
-	passwordKey := "stepup-password:" + strconv.FormatInt(int64(p.UserID), 10)
+	passwordKey := userBucketKey("stepup-password", p.UserID)
 	if until, ok := h.stepUpPasswordUser.Begin(passwordKey); !ok {
 		writeRateLimited(w, until)
 		return

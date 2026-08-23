@@ -1287,6 +1287,19 @@ ser admin. Então ele foi ligado onde esse preço não importa e desligado onde 
   isso não tem teto. Uma troca **pendente** conta como ocupado, porque o índice único guarda
   só a coluna viva e um endereço que alguém já está migrando passaria no teste para depois
   perder a corrida na confirmação — tendo sido anunciado como livre.
+- **O custo que o argumento de alcance NÃO precifica, e que ficou registrado
+  por insistência da revisão de segurança:** usernames são opcionais e não há
+  nenhuma outra superfície onde uma conta aprenda o handle de outra — conteúdo é
+  privado por conta e não existe menção nem perfil público. Então este endpoint
+  é uma revelação genuinamente nova para qualquer sessão, inclusive um `viewer`,
+  o papel menos privilegiado. Com um handle na mão, cinco senhas erradas
+  deixam aquela conta 15 minutos sem login por senha, renovável — a trava é
+  antiga (`loginByEmail`, chaveada pelo identificador RESOLVIDO) e antes exigia
+  saber endereços. O que muda é que a lista de alvos passou a ser obtenível.
+  Duas coisas limitam: a sondagem CONFIRMA um palpite, não enumera (é preciso
+  adivinhar o handle para saber que existe), e `loginByIP` limita a ~4 vítimas
+  por IP por janela, o que só um pool de proxies contorna. Não quebra o alcance
+  escolhido — mas é o preço dele, e estava faltando escrito.
 - **A troca de e-mail continua sem verificação ao vivo.** Ali a resposta fica no envio, onde
   a senha atual é o custo de cada tentativa. Foi a escolha explícita do dono quando o custo
   foi posto: incluí-la daria a qualquer pessoa convidada um enumerador rápido e sem senha das
@@ -1300,6 +1313,11 @@ servidor permitiria lê como funcionalidade faltando") — e sem saída, porque 
 lista de usuários não mostra conta nenhuma naquele endereço. A linha pendente
 ainda pode expirar ou ter a época de credencial morta por uma troca de senha,
 liberando o endereço. Então ela AVISA e o administrador decide.
+
+A cobrança do orçamento acontece mesmo quando o cliente ABORTA a requisição, e
+isso é deliberado: cobrar depois da consulta faria quem desliga antes da
+resposta não pagar nada — que é o orçamento inteiro, já que nada obriga um
+atacante a ler o corpo para aprender pelo tempo da conexão.
 
 A sondagem **bloqueia o envio só na recusa, nunca durante a consulta e nunca
 quando a checagem falha** (a mensagem diz "você ainda pode salvar", e o código

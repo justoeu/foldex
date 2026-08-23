@@ -5,9 +5,12 @@ package auth_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"foldex/internal/testdb"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -247,6 +250,101 @@ func TestEmailAvailable_DeadPendingChangesDoNotHoldAnAddress(t *testing.T) {
 			available, reason := probe(t, c, "/api/admin/users/email-available?email=moving-to@example.com")
 			assert.True(t, available, "reason was %q", reason)
 			assert.Empty(t, reason)
+		})
+	}
+}
+
+// The placement of the e-mail probe is the whole safety argument, and until
+// this test it existed only in comments.
+//
+// The two probes answer the same shape of question and their arguments are NOT
+// the same. A username exists only on this instance, so confirming one is taken
+// says "somebody here uses that handle". An address is also a mailbox and
+// exists outside foldex, so a free "does this have an account here?" is exactly
+// the oracle login spends an always-run bcrypt, one 401 body and a 250 ms floor
+// to deny — which is why the e-mail counterpart is allowed only past
+// RequireAdmin, where the caller can already list every account with its
+// address and therefore learns nothing new.
+//
+// Mirroring it onto /api/auth "for symmetry with the username row" is the most
+// likely regression this feature has. Before this walked the tree, nothing
+// would have failed.
+func TestAvailability_EmailProbeIsMountedOnlyUnderAdmin(t *testing.T) {
+	h := newHarness(t)
+
+	routes, ok := h.router.(chi.Routes)
+	require.True(t, ok, "the harness router must be walkable, or this guard sees nothing")
+
+	var email, username []string
+	require.NoError(t, chi.Walk(routes,
+		func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+			switch {
+			case strings.Contains(route, "email-available"):
+				email = append(email, method+" "+route)
+			case strings.Contains(route, "username-available"):
+				username = append(username, method+" "+route)
+			}
+			return nil
+		}))
+
+	// Without these the guard passes on a tree where the routes were renamed
+	// and no longer match — green, and measuring nothing.
+	require.NotEmpty(t, email, "the e-mail probe is gone or renamed; re-scope this guard")
+	require.NotEmpty(t, username, "the username probe is gone or renamed; re-scope this guard")
+
+	for _, r := range email {
+		_, path, _ := strings.Cut(r, " ")
+		assert.True(t, strings.HasPrefix(path, "/api/admin/"),
+			"%s puts an e-mail existence oracle outside the administration surface", r)
+	}
+	for _, r := range username {
+		_, path, _ := strings.Cut(r, " ")
+		assert.True(t, strings.HasPrefix(path, "/api/auth/"),
+			"%s is not where the session-authenticated probe belongs", r)
+	}
+}
+
+// Both probes must answer 500 — never a cheerful `available: true` — when the
+// lookup itself fails.
+//
+// This is the branch a form is most likely to misread: the client treats an
+// error as "could not check, you may still save", which is right, while an
+// `available: true` produced by a broken query would be a green check the
+// database never agreed to. The failure is forced by renaming the column each
+// query reads, which is the only honest way to make pgx fail here.
+func TestAvailability_ReportsAServerErrorRatherThanAnAnswer(t *testing.T) {
+	h := newHarness(t)
+	c := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name, breaks, restores, path string
+	}{
+		{
+			"username",
+			`ALTER TABLE app_user RENAME COLUMN username_normalized TO username_normalized_x`,
+			`ALTER TABLE app_user RENAME COLUMN username_normalized_x TO username_normalized`,
+			"/api/auth/username-available?u=valmir",
+		},
+		{
+			"e-mail",
+			`ALTER TABLE email_change RENAME COLUMN new_email_normalized TO new_email_normalized_x`,
+			`ALTER TABLE email_change RENAME COLUMN new_email_normalized_x TO new_email_normalized`,
+			"/api/admin/users/email-available?email=new@example.com",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := h.pool.Exec(ctx, tc.breaks)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, err := h.pool.Exec(ctx, tc.restores)
+				require.NoError(t, err, "the shared container must be left usable")
+			})
+
+			rec := c.do(http.MethodGet, tc.path, nil)
+			assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+			// The raw pgx text must not reach the caller.
+			assert.NotContains(t, rec.Body.String(), "_x")
 		})
 	}
 }
