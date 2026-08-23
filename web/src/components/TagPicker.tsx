@@ -4,6 +4,7 @@ import { useTags } from '../api/tags'
 import type { Tag } from '../api/types'
 import type { SelectedTag } from '../lib/dialogTags'
 import { INLINE_PALETTE } from '../lib/inlinePalette'
+import { suggestColor } from '../lib/suggestColor'
 import { Icon, I } from './icons'
 import { TagChip } from './TagChip'
 
@@ -52,7 +53,15 @@ export function useTagPicker(open: boolean, initialSelected?: SelectedTag[]) {
     setSelected((current) => [...current, {
       id: 0,
       name,
-      color: INLINE_PALETTE[0],
+      // Every pending chip used to open on the same indigo, so adding three
+      // tags in a row produced three identical chips and the colour stopped
+      // carrying information. The colours already spoken for include the ones
+      // chosen in THIS dialog, not just the saved tags — otherwise two chips
+      // added back to back could still collide.
+      color: suggestColor([
+        ...tags.map((x) => x.color),
+        ...current.map((x) => x.color),
+      ].filter(Boolean)),
       icon: null,
       _pending: true,
     }])

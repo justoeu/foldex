@@ -2,10 +2,11 @@ import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { ColorModeFields, type ColorMode } from './ColorModeFields'
-import { useCreateTag, useUpdateTag } from '../api/tags'
+import { useCreateTag, useUpdateTag, useTags } from '../api/tags'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { isGradient, makeGradient, parseGradient } from '../lib/tagColor'
+import { suggestColor } from '../lib/suggestColor'
 import { apiErrorCode } from '../lib/apiError'
 import type { Tag } from '../api/types'
 
@@ -27,6 +28,7 @@ export function TagDialog({ open, onClose, tag }: Props) {
   const [gradTo, setGradTo] = useState('#EC4899')
   const [icon, setIcon] = useState('')
   const [saveError, setSaveError] = useState<string | null>(null)
+  const { data: tags = [] } = useTags()
   const create = useCreateTag()
   const update = useUpdateTag()
 
@@ -49,13 +51,21 @@ export function TagDialog({ open, onClose, tag }: Props) {
         setGradTo('#EC4899')
       }
     } else {
+      // A NEW tag opens on a colour nothing else is using. On EDIT the stored
+      // colour is restored above, untouched — suggesting one there would
+      // repaint a tag the user opened to rename.
+      const suggested = suggestColor(tags.map((x) => x.color).filter(Boolean))
       setName('')
       setMode('solid')
-      setSolid('#6366F1')
-      setGradFrom('#6366F1')
+      setSolid(suggested)
+      setGradFrom(suggested)
       setGradTo('#EC4899')
       setIcon('')
     }
+    // `tags` is deliberately not a dependency: it is a snapshot taken when the
+    // dialog opens, and as a dep any refetch would overwrite a colour the user
+    // had just picked, with no visible cause.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, tag])
 
   useEscape(onClose, open)

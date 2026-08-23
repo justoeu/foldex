@@ -8,7 +8,7 @@
 
 > Gerenciador de bookmarks self-hosted com tagging avançado, pastas aninháveis, contagem de cliques, previews visuais de URL, **notas em rich-text estilo pastebin**, **detecção de mudança por link + Web Push**, backup completo, UI em en/pt/es e extensão de navegador.
 
-Foldex é uma "smart bookmarks bar" pessoal — guarda links organizados por **pastas aninháveis + tags M:N**, mostra **o que você de fato clica** (telemetria via `/go/{slug}`), captura visualmente cada URL (OG image / favicon / fallback de screenshot, e um preview cujo arquivo some no store se regenera sozinho), deixa você anotar **notas em rich-text** (editor Tiptap com imagens inline) que vivem no mesmo grid/busca/tags/pastas dos links, e roda **inteiramente na sua máquina** (Postgres + RustFS + Go + React em containers).
+Foldex é uma "smart bookmarks bar" pessoal — guarda links organizados por **pastas aninháveis + tags M:N** (pasta ou tag nova já abre numa cor sugerida que ninguém mais está usando), mostra **o que você de fato clica** (telemetria via `/go/{slug}`), captura visualmente cada URL (OG image / favicon / fallback de screenshot, e um preview cujo arquivo some no store se regenera sozinho), deixa você anotar **notas em rich-text** (editor Tiptap com imagens inline) que vivem no mesmo grid/busca/tags/pastas dos links, e roda **inteiramente na sua máquina** (Postgres + RustFS + Go + React em containers).
 
 > Stack: **Go 1.26 (Chi · pgx) · PostgreSQL 18 · RustFS · Vite 8 + React 19 + TypeScript + bun · TanStack Query · Tiptap 3 · react-i18next (en/pt/es) · Vitest 4**. Política de versionamento + invariantes em [`CLAUDE.md`](CLAUDE.md).
 

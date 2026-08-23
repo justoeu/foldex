@@ -8,6 +8,12 @@ import { http } from '../api/client'
 import { INLINE_PALETTE } from '../lib/inlinePalette'
 import { buildCreateNotePayload, buildUpdateNotePayload, type NoteDialogValues } from './NoteDialogPayload'
 
+// A pending chip's colour is SUGGESTED now (a palette entry nothing else is
+// using), so pinning an index would assert the old fixed default rather than
+// the payload shape these tests are about.
+const paletteRe = new RegExp(`^(${INLINE_PALETTE.join('|')})$`)
+
+
 let state: MockState
 
 beforeEach(() => {
@@ -323,7 +329,7 @@ describe('NoteDialog', () => {
     const parentCall = vi.mocked(http.post).mock.calls.find(([url]) => url === '/api/notes')
     expect(parentCall?.[1]).toEqual(expect.objectContaining({
       tag_ids: [1],
-      pending_tags: [{ name: 'brand-new', color: INLINE_PALETTE[1], icon: null }],
+      pending_tags: [{ name: 'brand-new', color: expect.stringMatching(paletteRe), icon: null }],
     }))
     expect(vi.mocked(http.post).mock.calls.some(([url]) => url === '/api/tags')).toBe(false)
   })

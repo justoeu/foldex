@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { FolderPicker } from './FolderPicker'
@@ -29,7 +29,15 @@ export function FolderDialog(props: Props) {
   const { t } = useTranslation()
   const isEdit = !!props.folder
   const isNaming = isEdit && !!props.justCreated
-  const form = useFolderDialogForm(props.open, props.folder)
+  // The colours already on screen, so a new folder does not open on one of
+  // them. Read here rather than inside the hook to keep the hook pure of data
+  // fetching — the list is already in the cache for the parent picker.
+  const { data: allFolders = [] } = useFolders()
+  const takenColors = useMemo(
+    () => allFolders.map((f) => f.color).filter((c): c is string => !!c),
+    [allFolders],
+  )
+  const form = useFolderDialogForm(props.open, props.folder, takenColors)
   const save = useFolderSaveController({
     folder: props.folder,
     parentId: props.parentId,

@@ -8,6 +8,12 @@ import { renderWithProviders } from '../test/renderWithProviders'
 import { LinkDialog } from './LinkDialog'
 import { NoteDialog } from './NoteDialog'
 
+// A pending chip's colour is SUGGESTED now (a palette entry nothing else is
+// using), so pinning an index would assert the old fixed default rather than
+// the payload shape these tests are about.
+const paletteRe = new RegExp(`^(${INLINE_PALETTE.join('|')})$`)
+
+
 let state: MockState
 
 beforeEach(() => {
@@ -56,11 +62,11 @@ describe('dialog deferred-tag parity', () => {
       expect(parentCalls).toHaveLength(2)
       expect(parentCalls[0]?.[1]).toEqual(expect.objectContaining({
         tag_ids: [],
-        pending_tags: [{ name: 'duplicate', color: INLINE_PALETTE[0], icon: null }],
+        pending_tags: [{ name: 'duplicate', color: expect.stringMatching(paletteRe), icon: null }],
       }))
       expect(parentCalls[1]?.[1]).toEqual(expect.objectContaining({
         tag_ids: [],
-        pending_tags: [{ name: 'duplicate', color: INLINE_PALETTE[0], icon: null }],
+        pending_tags: [{ name: 'duplicate', color: expect.stringMatching(paletteRe), icon: null }],
       }))
     },
   )
