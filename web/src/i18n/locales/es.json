@@ -383,6 +383,15 @@
     "delete_confirm_no_links": "Esta etiqueta no tiene enlaces asociados.",
     "delete_confirm_action": "Eliminar etiqueta"
   },
+  "note_view": {
+    "kicker": "Nota",
+    "loading": "Cargando…",
+    "load_failed": "No se pudo cargar esta nota.",
+    "updated": "Actualizada {{when}}",
+    "views_one": "{{count}} visualización",
+    "views_other": "{{count}} visualizaciones",
+    "open_public": "Abrir página pública"
+  },
   "note_dialog": {
     "kicker_create": "Nota",
     "kicker_edit": "Nota",
@@ -414,6 +423,7 @@
     "pending_tag_color_hint_html": "Haz clic en el <strong>círculo de color</strong> de una etiqueta nueva para cambiar el color. Las etiquetas solo se crean al guardar la nota."
   },
   "note_card": {
+    "read_aria": "Leer {{title}}",
     "delete_confirm_title": "¿Eliminar \"{{title}}\"?",
     "delete_confirm_body": "Esta nota y sus etiquetas se eliminarán permanentemente.",
     "delete_confirm_action": "Eliminar nota",

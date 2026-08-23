@@ -3091,3 +3091,74 @@ button.fx-acct-railbtn-active {
   .fx-sec-row-action button.fx-btn { width: 100%; }
   .fx-sec-form { max-width: none; }
 }
+
+/* ── Note reader ─────────────────────────────────────────────────────────────
+   Reading a note in place. The body is the note's own sanitized HTML, so the
+   rules below style ARBITRARY authored markup — headings, lists, quotes, code,
+   images — rather than a fixed shape. Everything is scoped under
+   `.fx-noteview-content` so it cannot reach the editor or the rest of the app.
+
+   `overflow-wrap: anywhere` on the content is load-bearing: a note pasted from
+   a terminal or a URL carries unbroken strings far wider than the modal, and
+   without it the whole dialog grows a horizontal scrollbar. */
+.fx-noteview-body {
+  padding: 4px 20px 18px;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 12px;
+  max-height: min(62vh, 620px);
+}
+.fx-noteview-cover {
+  width: 100%; max-height: 220px; object-fit: cover;
+  border-radius: 12px; display: block;
+}
+.fx-noteview-meta { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+.fx-noteview-meta-item {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 600; color: var(--fx-ink-4);
+}
+.fx-noteview-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.fx-noteview-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 32px 0; color: var(--fx-ink-3); font-size: 13px;
+}
+
+.fx-noteview-content {
+  font-size: 14px; font-weight: 500; line-height: 1.62; color: var(--fx-ink);
+  overflow-wrap: anywhere;
+}
+.fx-noteview-content > :first-child { margin-top: 0; }
+.fx-noteview-content > :last-child { margin-bottom: 0; }
+.fx-noteview-content p { margin: 0 0 10px; }
+.fx-noteview-content h1, .fx-noteview-content h2, .fx-noteview-content h3 {
+  font-family: var(--fx-display); font-weight: 600; letter-spacing: -0.02em;
+  margin: 18px 0 8px; line-height: 1.25;
+}
+.fx-noteview-content h1 { font-size: 20px; }
+.fx-noteview-content h2 { font-size: 17px; }
+.fx-noteview-content h3 { font-size: 15px; }
+.fx-noteview-content ul, .fx-noteview-content ol { margin: 0 0 10px; padding-left: 22px; }
+.fx-noteview-content li { margin: 3px 0; }
+.fx-noteview-content a { color: var(--fx-accent); text-decoration: underline; text-underline-offset: 2px; }
+.fx-noteview-content img { max-width: 100%; height: auto; border-radius: 10px; display: block; margin: 10px 0; }
+.fx-noteview-content blockquote {
+  margin: 10px 0; padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--fx-accent-2, var(--fx-accent)); color: var(--fx-ink-2);
+}
+.fx-noteview-content code {
+  font-family: var(--fx-mono); font-size: 0.86em; padding: 1px 5px; border-radius: 4px;
+  background: var(--fx-accent-soft); color: var(--fx-accent-3);
+}
+/* A code BLOCK scrolls inside itself. Wrapping code changes what it says. */
+.fx-noteview-content pre {
+  margin: 10px 0; padding: 10px 12px; border-radius: 10px;
+  background: var(--fx-surface-3); border: 1px solid var(--fx-border);
+  overflow-x: auto;
+}
+.fx-noteview-content pre code { background: none; padding: 0; color: inherit; }
+.fx-noteview-content hr { border: 0; border-top: 1px solid var(--fx-border); margin: 16px 0; }
+
+/* The card's read affordance is a <button> now, and `.fx-shell button` would
+   strip the padding and background `.fx-openbtn` gives it — element-qualified
+   for the reason in CLAUDE.md §5. Same for the preview, which is a button too. */
+button.fx-openbtn { font: inherit; }
+button.fx-preview-img { display: block; width: 100%; padding: 0; border: 0; background: none; cursor: pointer; }

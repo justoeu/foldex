@@ -1,10 +1,11 @@
-import { useCallback, useMemo, type CSSProperties } from 'react'
+import { useCallback, useMemo, useState, type CSSProperties } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Trans, useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import { LinkCard } from './LinkCard'
 import { NoteCard, type NoteEntry } from './NoteCard'
+import { NoteViewDialog } from './NoteViewDialog'
 import { FolderCard } from './FolderCard'
 import { ListView } from './ListView'
 import { CompactGrid } from './CompactGrid'
@@ -18,7 +19,6 @@ import {
   useRefreshPreview,
 } from '../api/links'
 import { useDeleteNote, usePinNote } from '../api/notes'
-import { mapCachedEntries } from '../api/entries'
 import { useEscape } from '../hooks/useEscape'
 import { mergeAlphaCells } from '../lib/mergeAlphaCells'
 import type { Link as LinkT, Folder as FolderT, Entry, MergeSource } from '../api/types'
@@ -300,12 +300,15 @@ export function CardsView({
     (note: NoteEntry, pinned: boolean) => pinNote({ id: note.id, pinned }),
     [pinNote],
   )
-  const onOpenNote = useCallback((note: NoteEntry) => {
-    const nowISO = new Date().toISOString()
-    mapCachedEntries(queryClient, (entry) => entry.kind === 'note' && entry.id === note.id
-      ? { ...entry, click_count: entry.click_count + 1, last_clicked_at: nowISO }
-      : entry)
-  }, [queryClient])
+  // Reading a note now opens a modal instead of navigating to the public page.
+  //
+  // The optimistic click bump went with it, deliberately: `click_log` is the
+  // single source of truth for views and the public `/n/` route is the only
+  // path that inserts into it, so an in-app read records nothing. Leaving the
+  // bump would show a count the server never took, which the next refetch
+  // silently corrects — a number that goes up and then back down on its own.
+  const [viewingNoteId, setViewingNoteId] = useState<number | null>(null)
+  const onOpenNote = useCallback((note: NoteEntry) => setViewingNoteId(note.id), [])
 
   // Default order: folders first (rule from CLAUDE.md), then entries in the
   // order the backend already returned them (pinned-first + active sort,
@@ -421,6 +424,16 @@ export function CardsView({
             onOpen={onOpenNote}
           />
         ),
+      )}
+      {viewingNoteId !== null && (
+        <NoteViewDialog
+          noteId={viewingNoteId}
+          onClose={() => setViewingNoteId(null)}
+          onEdit={(note) => {
+            setViewingNoteId(null)
+            onEditNote(note.id)
+          }}
+        />
       )}
     </div>
   )

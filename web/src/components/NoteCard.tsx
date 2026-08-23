@@ -2,7 +2,6 @@ import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
-import { goNoteHref } from '../api/notes'
 import { safeImageUrl } from '../lib/url'
 import type { Entry, MergeSource } from '../api/types'
 
@@ -87,7 +86,7 @@ function NoteCardImpl({ note, onEdit, onMergeWith, onDelete, onPin, onOpen }: Pr
       </span>
 
       {previewSrc && (
-        <a className="fx-preview fx-preview-img" href={goNoteHref(note)} target="_blank" rel="noopener noreferrer" onClick={() => onOpen(note)}>
+        <button type="button" className="fx-preview fx-preview-img" onClick={() => onOpen(note)} aria-label={t('note_card.read_aria', { title: note.title })}>
           <img
             src={previewSrc}
             alt=""
@@ -96,7 +95,7 @@ function NoteCardImpl({ note, onEdit, onMergeWith, onDelete, onPin, onOpen }: Pr
             decoding="async"
             style={{ width: '100%', height: '100%', objectFit: 'scale-down', display: 'block' }}
           />
-        </a>
+        </button>
       )}
       <div className="fx-card-body">
         <header className="fx-card-head">
@@ -148,19 +147,22 @@ function NoteCardImpl({ note, onEdit, onMergeWith, onDelete, onPin, onOpen }: Pr
             >
               <Icon d={I.trash} size={14} />
             </button>
-            <a
+            {/* A BUTTON, not a link: this opens the note in place. It used to
+                be an <a target="_blank"> to the PUBLIC /n/ page, so reading
+                your own note meant leaving the app and landing on the same
+                anonymous view a share link gives a stranger. The public page
+                is still one click away, from inside the modal. */}
+            <button
+              type="button"
               className="fx-openbtn"
-              href={goNoteHref(note)}
-              target="_blank"
-              rel="noopener noreferrer"
               data-tooltip={t('note_card.open_action')}
               data-tooltip-side="top"
-              aria-label={t('common.open_link_aria', { title: note.title })}
+              aria-label={t('note_card.read_aria', { title: note.title })}
               onClick={() => onOpen(note)}
             >
               <span className="fx-openbtn-go">{t('note_card.open_action')}</span>
               <Icon d={I.arrowR} size={14} />
-            </a>
+            </button>
           </div>
         </footer>
       </div>

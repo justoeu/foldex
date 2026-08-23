@@ -383,6 +383,15 @@
     "delete_confirm_no_links": "This tag has no associated links.",
     "delete_confirm_action": "Delete tag"
   },
+  "note_view": {
+    "kicker": "Note",
+    "loading": "Loading…",
+    "load_failed": "Could not load this note.",
+    "updated": "Updated {{when}}",
+    "views_one": "{{count}} view",
+    "views_other": "{{count}} views",
+    "open_public": "Open public page"
+  },
   "note_dialog": {
     "kicker_create": "Note",
     "kicker_edit": "Note",
@@ -414,6 +423,7 @@
     "pending_tag_color_hint_html": "Click the <strong>colored circle</strong> on a new tag to change its color. Tags are only created when you save the note."
   },
   "note_card": {
+    "read_aria": "Read {{title}}",
     "delete_confirm_title": "Delete \"{{title}}\"?",
     "delete_confirm_body": "This note and its tags will be permanently removed.",
     "delete_confirm_action": "Delete note",

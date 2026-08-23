@@ -115,9 +115,21 @@ describe('NoteCard', () => {
     expect(onMerge).not.toHaveBeenCalled()
   })
 
-  it('links to the public /n/ route with the slug', () => {
-    renderWithProviders(<NoteCard note={baseNote} onEdit={vi.fn()} {...noopCardProps} />)
-    const openLink = screen.getByText('Open').closest('a')
-    expect(openLink?.getAttribute('href')).toBe('/n/shopping-list')
+  // Reading a note happens IN the app now. It used to be an <a target="_blank">
+  // to the public /n/ page, so reading your own note meant leaving the app and
+  // landing on the same anonymous view a share link gives a stranger. The
+  // public page is still reachable, from inside the reader.
+  it('opens the note in place rather than navigating to the public page', async () => {
+    const onOpen = vi.fn()
+    renderWithProviders(<NoteCard note={baseNote} onEdit={vi.fn()} {...noopCardProps} onOpen={onOpen} />)
+
+    const open = screen.getByText('Open').closest('button')
+    expect(open).not.toBeNull()
+    // The assertion that would fail if this became a link again: no anchor, so
+    // nothing navigates and no browser tab is spent.
+    expect(screen.getByText('Open').closest('a')).toBeNull()
+
+    await userEvent.click(open as HTMLElement)
+    expect(onOpen).toHaveBeenCalledWith(baseNote)
   })
 })
