@@ -304,6 +304,51 @@ proxy `/metrics`; scrape the backend port directly.
   static_configs: [{ targets: ["<backend-host>:9089"] }]
 ```
 
+## Traces (OpenTelemetry → Tempo)
+
+The backend emits OTLP/gRPC spans when `OTEL_EXPORTER_OTLP_ENDPOINT` is set
+(e.g. `http://obs-host:4317`; `https://` switches to TLS). Empty is the
+default and turns tracing **fully off** — no provider, no exporter, no
+per-request goroutine.
+
+With it set you get one SERVER span per request named by chi **route
+pattern** (`GET /api/links/{id}` — raw paths, ids and slugs never leave the
+process), CLIENT spans per Postgres query via `otelpgx` (SQL text disabled
+entirely), and a `trace_id` on every access-log line so Grafana's Loki→Tempo
+derived field jumps straight from a log to its trace.
+
+Each request span carries who made it:
+
+| Attribute | TraceQL | Value |
+|---|---|---|
+| `user.id` | `span.user.id` | Opaque account id — `{ span.user.id = "42" }` |
+| `user.roles` | `span.user.roles` | `owner` / `admin` / `editor` / `viewer` |
+| `foldex.auth.via` | `span.foldex.auth.via` | `session` or `api_token` |
+
+No e-mail and no display name: a trace store is a different retention domain
+from the database, with its own access control. The annotation hangs off the
+three places a principal is established, not off a route group, so every
+authenticated request carries it — including the credential-management half of
+`/api/auth` (sessions, password change, 2FA, API tokens). Pre-login requests
+have no principal and carry no user.
+
+With `AUTH_ENABLED=0` every request is attributed to the bootstrap
+administrator, so spans there say `owner` for traffic nobody signed in for.
+
+> **Keep `user.id` out of Tempo's span-metrics dimensions.** It is one time
+> series per account; derive RED from `http.route` instead.
+
+> **`http://` is unencrypted AND unauthenticated gRPC.** Identity travels on
+> every request, so a passive observer on that network path sees per-request
+> account id, role and credential kind. Use `https://` for anything crossing a
+> network you do not control. Whoever can read the trace store can enumerate
+> which accounts are administrators and profile any account's activity, with
+> no Foldex permission at all — treat that read access as administrative.
+
+Incoming `traceparent` headers are **discarded**, not joined: this service is
+the edge, so a client-supplied trace context could only let a caller pick our
+trace ids or exclude themselves from telemetry with `sampled=0`.
+
 ## Keyboard shortcuts (SPA)
 
 | Shortcut         | Action                          |

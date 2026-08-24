@@ -1128,6 +1128,20 @@ O middleware monta via `Deps.Trace` (nil = off, o zero-value de todos os testes 
 
 **Consequências.** Com a env apontada para o Tempo da stack central, o backend aparece no APM Overview (RED por rota), no service graph (incluindo a aresta para o Postgres) e cada linha de log de acesso vira porta de entrada para o trace correspondente. Sem a env, o custo por request são dois lookups de contexto no no-op. Sem propagação de entrada, chamadas de um futuro cliente instrumentado não se juntam ao trace dele — trade-off deliberado registrado acima. O mailer segue sem traces — consumidor AMQP sem request HTTP; instrumentá-lo é trabalho futuro se a fila de mail precisar de spans.
 
+**Emenda — identidade no span (`span.user.id`).** Traces por rota respondem "o que está lento"; não respondem "para quem". `tracing.AnnotatePrincipal` carimba no MESMO span SERVER o `user.id` (id numérico opaco — `span.user.id` no TraceQL), `user.roles` e `foldex.auth.via` (`session` vs `api_token`).
+
+**É uma FUNÇÃO chamada nos três seams onde um principal nasce** — `auth.Middleware.Authenticate`, `auth.Middleware.Optional` e o bootstrap de `AUTH_ENABLED=0` — e o primeiro rascunho é a razão de ser assim. Ele era um MIDDLEWARE montado no grupo `/api`, e perdeu em silêncio toda a metade autenticada de `/api/auth` (sessões, troca de senha, 2FA, tokens de API): exatamente a superfície de gestão de credencial que um operador mais quer atribuída. Nada falhou — sem erro de build, sem panic, resposta idêntica. Um mount anota o grupo em que foi montado; um seam anota toda identidade que existe. O span abre vários middlewares acima e seu `End` é deferido lá, então ele continua mutável em todos os três pontos de chamada.
+
+Isso põe `auth` → `tracing` → `authctx` no grafo, acíclico. A alternativa estrutural — anotar dentro do próprio `authctx.WithPrincipal`, impossível de esquecer — foi recusada: `authctx` é uma folha que importa só `context`, e puxar OTel para lá o colocaria em todo pacote de repositório.
+
+O conjunto de atributos de identidade é FECHADO e testado por asserção negativa: nada de e-mail, nada de nome de exibição, nada de `session_id`. Um store de traces é outro domínio de retenção que o banco — controle de acesso próprio, cópia em todo backend que o consome — e um id opaco não vale nada para quem já não consegue ler `app_user`. É o mesmo raciocínio que mantém path cru fora de nome de span. Request sem autenticação não carrega `user.id` nenhum, nunca `"0"`.
+
+Os guards são de integração através de sessão real (`TestAuthenticate_StampsUserIDOnSpansOfTheAuthSurfaceItself`, `TestOptional_...`) e do `server.New` real (`TestUserIDIsStampedOnRequestSpansThroughTheRealRouter`), porque teste unitário compondo a cadeia à mão sobrevive tanto a desmontar quanto a mover o ponto de anotação. Três mutantes foram mortos por eles.
+
+Cardinalidade alta é CORRETA num atributo de span e errada como dimensão de métrica: `user.id` no processor de span-metrics do Tempo cunharia uma série temporal por conta. O RED dos dashboards continua derivando de `http.route`.
+
+**Consequência de segurança registrada em INV-170:** o exporter fala gRPC em texto claro e sem autenticação salvo endpoint `https://`, e o sampler grava todo span SERVER — então identidade atravessa o fio a cada request. Acesso de LEITURA ao store de traces passa a ser privilégio administrativo da instância: enumera quem é `owner`/`admin` e perfila atividade por conta, sem nenhuma permissão do Foldex.
+
 ## Future considerations
 
 - ~~**Auth + multi-user.**~~ → em execução: ADR-30/31/32 + [`docs/SDD-AUTH-RBAC.md`](SDD-AUTH-RBAC.md).

@@ -288,6 +288,53 @@ diretamente.
   static_configs: [{ targets: ["<host-do-backend>:9089"] }]
 ```
 
+## Traces (OpenTelemetry → Tempo)
+
+O backend emite spans OTLP/gRPC quando `OTEL_EXPORTER_OTLP_ENDPOINT` está
+definido (ex.: `http://obs-host:4317`; `https://` liga TLS). Vazio é o padrão
+e desliga o tracing **por completo** — sem provider, sem exporter, sem
+goroutine por request.
+
+Com ele ligado você tem um span SERVER por request nomeado pelo **padrão de
+rota** do chi (`GET /api/links/{id}` — path cru, ids e slugs nunca saem do
+processo), spans CLIENT por query no Postgres via `otelpgx` (texto SQL
+desabilitado por inteiro) e um `trace_id` em cada linha de log de acesso, o
+elo do derived field Loki→Tempo no Grafana.
+
+Cada span de request carrega quem fez a chamada:
+
+| Atributo | TraceQL | Valor |
+|---|---|---|
+| `user.id` | `span.user.id` | Id opaco da conta — `{ span.user.id = "42" }` |
+| `user.roles` | `span.user.roles` | `owner` / `admin` / `editor` / `viewer` |
+| `foldex.auth.via` | `span.foldex.auth.via` | `session` ou `api_token` |
+
+Sem e-mail e sem nome de exibição: um store de traces é outro domínio de
+retenção que o banco, com controle de acesso próprio. A anotação pendura nos
+três pontos onde um principal nasce, não num grupo de rotas, então todo request
+autenticado carrega — inclusive a metade de gestão de credencial do `/api/auth`
+(sessões, troca de senha, 2FA, tokens). Requests pré-login não têm principal e
+não carregam usuário.
+
+Com `AUTH_ENABLED=0` todo request é atribuído ao administrador de bootstrap, e
+os spans dizem `owner` para tráfego que ninguém autenticou.
+
+> **Mantenha `user.id` FORA das dimensões do span-metrics do Tempo.** É uma
+> série temporal por conta; derive RED de `http.route`.
+
+> **`http://` é gRPC sem criptografia E sem autenticação.** Identidade viaja a
+> cada request, então um observador passivo naquele caminho de rede vê id de
+> conta, papel e tipo de credencial por request. Use `https://` para qualquer
+> coisa que atravesse rede que você não controla. Quem lê o store de traces
+> consegue enumerar quais contas são administradoras e perfilar a atividade de
+> qualquer conta, sem nenhuma permissão do Foldex — trate esse acesso de
+> leitura como privilégio administrativo.
+
+Header `traceparent` de entrada é **descartado**, não honrado: este serviço é
+a borda, então contexto de trace vindo do cliente só serviria para escolher
+nossos trace ids ou excluir o próprio tráfego da telemetria com `sampled=0`.
+
+
 ## Atalhos de teclado (SPA)
 
 | Atalho           | Ação                            |

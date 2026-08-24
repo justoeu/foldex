@@ -1075,3 +1075,60 @@ every password and nothing anywhere says why.
 The client gate mirrors this: `CreateUserDialog` gates on `min(floor, 72)` so the server's
 refusal — the only answer that names the real number — stays reachable. See
 [INV-166](#inv-166).
+
+<a id="inv-170"></a>
+### INV-170 — A request span identifies its caller by OPAQUE ID ONLY, and the annotation hangs off principal CREATION, not a route group.
+
+`tracing.AnnotatePrincipal` stamps exactly three attributes on the SERVER span: `user.id`
+(the numeric account id — `span.user.id` in TraceQL), `user.roles`, and `foldex.auth.via`
+(`session` or `api_token`). No e-mail, no display name, no `session_id`.
+
+**A trace store is a different retention domain from the database.** It has its own access
+control, its own retention window, and a copy in every backend that scrapes it — an address
+written into a span outlives the account it belonged to and lands somewhere the tenancy rules
+of §4.1 do not reach. An opaque id is worthless to anyone who cannot already read `app_user`,
+which is exactly the property that makes it safe to export. Same reasoning as the raw URL path
+that never becomes a span name.
+
+`TestAnnotatePrincipalRecordsNoIdentifyingAttributeBeyondTheOpaqueID` asserts this NEGATIVELY —
+any `user.*` / `enduser.*` key outside the allowed three fails, so widening the set is a
+deliberate decision rather than a one-line drive-by.
+
+**It is a function called from the three principal seams, and the first draft proves why.**
+`Authenticate`, `Optional` and the `AUTH_ENABLED=0` bootstrap are the only places a principal is
+established; the annotation is called at each. The first version was a MIDDLEWARE mounted on the
+`/api` group instead — and it silently missed the whole authenticated half of `/api/auth`
+(sessions, password change, 2FA, API tokens), which is precisely the credential-management
+surface an operator most wants attributed. Nothing failed: no build error, no panic, an identical
+response. A group mount annotates the group it was mounted on; a seam annotates every identity
+that exists. `TestAuthenticate_StampsUserIDOnSpansOfTheAuthSurfaceItself` and
+`TestOptional_StampsUserIDWhenASessionIsPresentAndNothingWhenItIsNot` are that defect's tombstone,
+and both are integration tests through a real session — a unit test composing the chain by hand
+stays green through the mutation.
+
+**A FOURTH seam is refused by an AST guard.** Moving the call onto the three seams fixed the
+instance, not the class: a seam added later — an OAuth callback, a public-token gate — would
+reintroduce the identical hole, and the per-seam integration tests can only prove the seams that
+exist today. `TestEveryPrincipalSeamAnnotatesTheSpan` walks production `internal/**` for every
+`authctx.WithPrincipal` call and requires `tracing.AnnotatePrincipal` in the same enclosing
+function (`authctxtest` allowlisted — it never runs inside a request). It matches on the AST call,
+never on file text, for the reason `TestEveryPackageUsingTestdbStopsIt` documents: a text-matching
+guard flags its own comment, and a guard that fails for the wrong reason teaches people to route
+around it.
+
+An unauthenticated request carries NO `user.id`, never `"0"`, which would collapse every
+anonymous trace onto one fictional account. With `AUTH_ENABLED=0` every request is attributed to
+the bootstrap administrator and its spans read `owner` — the escape hatch working as documented.
+
+**`user.id` must never become a Tempo span-metrics dimension.** High cardinality is correct on
+a span attribute and is one time series per account on a metric; the dashboards keep deriving
+RED from `http.route`. See [INV-070](#inv-070).
+
+**Exporting identity transfers privilege.** The OTLP exporter speaks PLAINTEXT, UNAUTHENTICATED
+gRPC unless the endpoint carries an `https://` scheme, and the sampler records every SERVER span —
+so on a cleartext link a passive observer reads per-request account id, role and credential kind.
+Whoever can read the trace store can enumerate which accounts hold `owner`/`admin`, which use API
+tokens, and profile any single account's activity, holding no Foldex permission at all. **Trace-store
+read access must be treated as an administrative privilege of this instance**, and a collector off
+this host must use `https://`. There is deliberately no identity-only kill switch today: an operator
+who cannot accept the egress turns tracing off.

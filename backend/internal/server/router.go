@@ -437,7 +437,7 @@ func bootstrapPrincipal(pool *pgxpool.Pool, logger *slog.Logger) func(http.Handl
 					"principal_unavailable", "no bootstrap administrator is available"))
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(authctx.WithPrincipal(r.Context(), authctx.Principal{
+			ctx := authctx.WithPrincipal(r.Context(), authctx.Principal{
 				UserID: uid,
 				// Owner, not admin: with AUTH_ENABLED=0 anyone who can reach the
 				// port owns the library anyway, and attributing requests to a role
@@ -445,7 +445,12 @@ func bootstrapPrincipal(pool *pgxpool.Pool, logger *slog.Logger) func(http.Handl
 				// fix the very lockout it exists for.
 				Role: authctx.RoleOwner,
 				Via:  authctx.ViaSession,
-			})))
+			})
+			// Every request under AUTH_ENABLED=0 is attributed to this account,
+			// so its spans say "owner" for traffic nobody signed in for. That is
+			// the escape hatch working as documented, not identity being wrong.
+			tracing.AnnotatePrincipal(ctx)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }

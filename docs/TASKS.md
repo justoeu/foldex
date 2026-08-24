@@ -350,3 +350,49 @@ Lista faseada de tasks `T1..T30`. Cada fase desbloqueia a próxima — segue em 
 - ~~**Bug pré-existente (pré-Notes, achado 2026-06-30 durante teste manual da feature Notes):** `mergeAlphaCells` ignora `pinned` no sort Alfabético.~~ **Corrigido em 2026-08-19** — ver entrada no log acima.
 
 > Templates de entrada: `YYYY-MM-DD | Tn | <git short hash> | <observação curta>`.
+
+### `span.user.id` — identidade no trace (emenda ao ADR-39)
+
+O ADR-39 já entregava SDK OTel, exporter OTLP/gRPC por `OTEL_EXPORTER_OTLP_ENDPOINT`,
+`otelpgx` e correlação `trace_id`→Loki. O que faltava para o APM por usuário era o
+atributo: `user.id`, `user.roles` e `foldex.auth.via` no span SERVER.
+
+**Lição — um mount anota o grupo em que foi montado; um seam anota toda identidade que
+existe.** O primeiro rascunho era um middleware montado no grupo `/api`, com teste de
+integração através do `server.New` real matando dois mutantes (desmontar; montar antes do
+auth). Passou nos dois — e ainda assim estava errado: `/api/auth` monta o PRÓPRIO
+`Authenticate` dentro do handler, fora daquele grupo, então ~20 rotas autenticadas
+(sessões, troca de senha, 2FA, tokens) não recebiam nada. Sem erro de build, sem panic,
+resposta idêntica. Achado pelo agente de Code Review do sweep, não pelos testes.
+
+O que o teste provava era "o mount funciona onde eu montei", não "toda identidade é
+anotada" — a mesma classe de falso-verde do sweep anterior, um nível acima. A correção
+move a anotação para os três pontos onde um principal nasce (`Authenticate`, `Optional`,
+bootstrap de `AUTH_ENABLED=0`), e os guards novos vão através de sessão real.
+
+**Recusado:** anotar dentro de `authctx.WithPrincipal` seria impossível de esquecer, mas
+`authctx` importa só `context` e puxar OTel para lá o colocaria em todo repositório.
+
+**E os seams corrigiam a INSTÂNCIA, não a CLASSE** — achado do agente de Test Quality, a mesma
+lição um nível abaixo outra vez: teste por seam só prova os seams que existem hoje, e um quarto
+(callback OAuth, gate de token público) reabriria o buraco em silêncio.
+`TestEveryPrincipalSeamAnnotatesTheSpan` varre o AST de `internal/**` e exige a anotação na mesma
+função de todo `authctx.WithPrincipal`; um quarto seam plausível morre nele. O mesmo agente
+mostrou que os guards `IsRecording` e `Role/Via != ""` podiam ser deletados sem quebrar teste
+nenhum — o primeiro é guarda de ALOCAÇÃO, então só `testing.AllocsPerRun` o distingue da própria
+ausência. Ambos têm mutante morto agora.
+
+**Conjunto de atributos FECHADO, testado por asserção negativa.** Nada de e-mail, nome ou
+`session_id` — INV-170.
+
+**Achados do sweep, todos fechados:** o exporter fala texto claro por padrão e as docs não
+diziam (Security MEDIUM); leitura do store de traces é privilégio administrativo e isso não
+estava escrito (Security MEDIUM); helpers de span duplicados em 4 arquivos viraram
+`internal/pkg/spantest` (Code Quality MEDIUM); slice de atributos pré-alocado (Performance
+LOW). Em aberto por decisão: não existe kill-switch de identidade separado — quem não aceita
+a egress desliga o tracing.
+
+**Achado colateral:** o ADR-39 shipou sem seção no README (§3 pede). Fechado nesta mudança
+nos dois idiomas, e `OTEL_EXPORTER_OTLP_ENDPOINT` — que o `docker-compose.yml` já lia — não
+estava documentado no `.env.example`, então quem copiava o exemplo ficava com tracing
+silenciosamente desligado.

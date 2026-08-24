@@ -13,6 +13,7 @@ import (
 	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/secrets"
+	"foldex/internal/tracing"
 )
 
 // touchInterval throttles last_seen_at writes. One UPDATE per request on the
@@ -113,7 +114,9 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 			return
 		}
 		m.touch(r.Context(), p)
-		next.ServeHTTP(w, r.WithContext(authctx.WithPrincipal(r.Context(), p)))
+		ctx := authctx.WithPrincipal(r.Context(), p)
+		tracing.AnnotatePrincipal(ctx)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -160,7 +163,9 @@ func (m *Middleware) Optional(next http.Handler) http.Handler {
 			httperr.Write(w, cerr)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(authctx.WithPrincipal(r.Context(), p)))
+		ctx := authctx.WithPrincipal(r.Context(), p)
+		tracing.AnnotatePrincipal(ctx)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
