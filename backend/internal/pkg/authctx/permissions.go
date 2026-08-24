@@ -135,3 +135,52 @@ func (r Role) Permissions() []Permission {
 // Valid reports whether the role is one the matrix knows, mirroring the
 // database CHECK constraint so a bad value is refused before it reaches SQL.
 func (r Role) Valid() bool { _, ok := rolePermissions[r]; return ok }
+
+// DefaultGrants is the compiled matrix, as a value a caller can copy.
+//
+// It exists because the stored grants (ADR-42) are seeded from it and fall back
+// to it, and neither is possible while the only access is the unexported map.
+func DefaultGrants() map[Role]map[Permission]bool {
+	out := make(map[Role]map[Permission]bool, len(rolePermissions))
+	for role, held := range rolePermissions {
+		copied := make(map[Permission]bool, len(held))
+		for p, ok := range held {
+			copied[p] = ok
+		}
+		out[role] = copied
+	}
+	return out
+}
+
+// lockedPermissions are the entries no configuration may ever add or remove.
+//
+// Each is here because making it configurable would make the configurability
+// itself unsound, not because it happens to be sensitive:
+//
+//   - PermRolesAssign is the META-permission. A role that can be GRANTED the
+//     power to grant would, in one further step, grant itself everything else,
+//     which makes locking the rest decorative.
+//   - PermPolicyWrite and PermInstanceTransfer are the two owner-level entries.
+//     An admin who could take policy.write would lower the password floor and
+//     then walk in through it; instance.transfer changes who holds every other
+//     permission there is.
+//   - PermContentRead is locked in the other direction — it can never be
+//     REMOVED. An account that cannot read its own library is not a restricted
+//     account, it is a broken one, and its owner has no way to tell which.
+var lockedPermissions = map[Permission]bool{
+	PermRolesAssign:      true,
+	PermPolicyWrite:      true,
+	PermInstanceTransfer: true,
+	PermContentRead:      true,
+}
+
+// IsPermissionLocked reports whether a permission is outside configuration.
+func IsPermissionLocked(p Permission) bool { return lockedPermissions[p] }
+
+// IsRoleEditable reports whether a role's grants may be configured at all.
+//
+// The owner is not. It is the role that exists to be able to fix everything
+// else, so a configuration that could strip it is a configuration that can
+// leave the instance unrecoverable except by direct SQL — the same reasoning
+// that keeps at least one active administrator alive.
+func IsRoleEditable(r Role) bool { return r != RoleOwner && r.Valid() }

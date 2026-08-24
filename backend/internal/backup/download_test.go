@@ -139,7 +139,7 @@ func assertFailedDownloadIsConsumed(t *testing.T, h *Handler, svc *downloadBacku
 
 func TestDownloadTicketIsSessionBoundOneTimeAndExportsOnce(t *testing.T) {
 	svc := &downloadBackupService{}
-	h := NewHandler(svc, slog.Default())
+	h := NewHandler(svc, slog.Default(), nil)
 	owner := authctx.Principal{UserID: 7, SessionID: 41, Via: authctx.ViaSession}
 	issued := issueDownloadFor(t, h, owner)
 
@@ -191,7 +191,7 @@ func TestDownloadTicketIsSessionBoundOneTimeAndExportsOnce(t *testing.T) {
 
 func TestDownloadTicketExportFailureBeforeHeadersIsFinal(t *testing.T) {
 	svc := &downloadBackupService{exportErr: errors.New("snapshot failed")}
-	h := NewHandler(svc, slog.Default())
+	h := NewHandler(svc, slog.Default(), nil)
 	owner := authctx.Principal{UserID: 7, SessionID: 41, Via: authctx.ViaSession}
 	issued := issueDownloadFor(t, h, owner)
 	rec := &headerWriteRecorder{ResponseRecorder: httptest.NewRecorder()}
@@ -209,7 +209,7 @@ func TestDownloadTicketExportFailureAfterHeadersTruncatesWithoutJSONRewrite(t *t
 		exportErr:        errors.New("archive write failed"),
 		failAfterHeaders: true,
 	}
-	h := NewHandler(svc, slog.Default())
+	h := NewHandler(svc, slog.Default(), nil)
 	owner := authctx.Principal{UserID: 7, SessionID: 41, Via: authctx.ViaSession}
 	issued := issueDownloadFor(t, h, owner)
 	rec := &headerWriteRecorder{ResponseRecorder: httptest.NewRecorder()}
@@ -225,7 +225,7 @@ func TestDownloadTicketExportFailureAfterHeadersTruncatesWithoutJSONRewrite(t *t
 
 func TestDownloadTicketExpiresClosed(t *testing.T) {
 	svc := &downloadBackupService{}
-	h := NewHandler(svc, slog.Default())
+	h := NewHandler(svc, slog.Default(), nil)
 	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	h.downloads.now = func() time.Time { return now }
 	owner := authctx.Principal{UserID: 7, SessionID: 41, Via: authctx.ViaSession}
@@ -246,7 +246,7 @@ func TestDownloadTicketExpiresClosed(t *testing.T) {
 
 func TestDownloadTicketConsumesOnAdmissionRejection(t *testing.T) {
 	svc := &downloadBackupService{}
-	h := NewHandler(svc, slog.Default())
+	h := NewHandler(svc, slog.Default(), nil)
 	owner := authctx.Principal{UserID: 7, SessionID: 41, Via: authctx.ViaSession}
 	issued := issueDownloadFor(t, h, owner)
 	h.archiveSlots <- struct{}{}
@@ -274,7 +274,7 @@ func TestDownloadTicketConcurrentConsumptionExportsExactlyOnce(t *testing.T) {
 		exportEntered: make(chan struct{}),
 		exportRelease: make(chan struct{}),
 	}
-	h := NewHandler(svc, slog.Default())
+	h := NewHandler(svc, slog.Default(), nil)
 	owner := authctx.Principal{UserID: 7, SessionID: 41, Via: authctx.ViaSession}
 	issued := issueDownloadFor(t, h, owner)
 	start := make(chan struct{})
@@ -338,7 +338,7 @@ func TestDownloadTicketPerUserActiveLimitLeavesCapacityForOthers(t *testing.T) {
 }
 
 func TestDownloadTicketPerUserLimitMapsTo429(t *testing.T) {
-	h := NewHandler(&downloadBackupService{}, slog.Default())
+	h := NewHandler(&downloadBackupService{}, slog.Default(), nil)
 	for sessionID := int64(1); sessionID <= maxActiveDownloadTicketsPerUser; sessionID++ {
 		issueDownloadFor(t, h, authctx.Principal{UserID: 7, SessionID: sessionID, Via: authctx.ViaSession})
 	}

@@ -292,7 +292,7 @@ function EnrollmentPanel({ controller }: { controller: Controller }) {
           </div>
           <div className="fx-2fa-key">
             <span className="fx-sec-block-label">{t('twofa.setup_key')}</span>
-            <code className="fx-2fa-key-value">{enrollment.totp.secret}</code>
+            <code className="fx-2fa-key-value" translate="no">{enrollment.totp.secret}</code>
           </div>
         </div>
       )}

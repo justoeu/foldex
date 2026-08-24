@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -56,7 +57,7 @@ func (r *Repository) Get(ctx context.Context) (Policy, error) {
 // Set stores a validated policy.
 func (r *Repository) Set(ctx context.Context, p Policy) error {
 	p = p.WithDefaults()
-	if err := p.Validate(); err != nil {
+	if err := p.ValidateForWrite(); err != nil {
 		return err
 	}
 	if p.GoogleAllowedDomains == nil {
@@ -152,4 +153,24 @@ func (r *Repository) OTPResendCooldown(ctx context.Context) time.Duration {
 		return time.Duration(Default().OTPCooldownSeconds) * time.Second
 	}
 	return time.Duration(p.OTPCooldownSeconds) * time.Second
+}
+
+// WarnUnenforceableFloor logs once at boot when the stored password floor is
+// one no password can satisfy.
+//
+// Get honours the stored value rather than clamping it (see
+// maxStoredPasswordFloor), so such an instance refuses every password with
+// password_too_short and nothing anywhere says why. The condition can only
+// exist on an instance configured before the write bound tightened; the fix is
+// to save a floor at or below the bound, and this is the only line that tells
+// the operator to.
+func (r *Repository) WarnUnenforceableFloor(ctx context.Context, log *slog.Logger) {
+	p, err := r.Get(ctx)
+	if err != nil || p.PasswordMinLength <= MaxPasswordFloor {
+		return
+	}
+	log.Warn("instance password floor cannot be satisfied by any password",
+		"configured", p.PasswordMinLength,
+		"max_enforceable", MaxPasswordFloor,
+		"remedy", "lower it in Settings > Administration > Policy")
 }

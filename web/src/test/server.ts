@@ -41,6 +41,13 @@ export type MockState = {
   masterHint?: string
   /** Identifiers the availability probes report as taken (lowercased). */
   takenIdentifiers?: string[]
+  // The instance password floor (ADR-35). Undefined = the compiled-in 8, which
+  // is what an untouched test sees; a test raising it exercises the generator
+  // against a hardened instance.
+  passwordMinLength?: number
+  // Every payload POSTed to /api/admin/users, so a test can assert WHICH
+  // password reached the server rather than only that a request happened.
+  adminCreatedUsers?: Array<Record<string, unknown>>
   // Per-folder unlock attempt tracking (mirrors the backend rate limiter).
   unlockAttempts?: Record<number, { fails: number; lockedUntil: number }>
   // Stats endpoints. Tests populate these to drive StatsPage charts/KPIs.
@@ -101,6 +108,17 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     // by default, so an untouched test sees "available" and nothing blocks.
     { url: /^\/api\/auth\/username-available$/, handle: (_m, _d, p, s) => availability(p.get('u'), s) },
     { url: /^\/api\/admin\/users\/email-available$/, handle: (_m, _d, p, s) => availability(p.get('email'), s) },
+    // Read-only here: an admin may READ the policy, and CreateUserDialog needs
+    // the floor to generate a password the server will accept.
+    { url: /^\/api\/admin\/policy$/, handle: (_m, _d, _p, s) => ({
+      admin_second_factor: 'any',
+      password_min_length: s.passwordMinLength ?? 8,
+      otp_ttl_minutes: 5,
+      otp_cooldown_seconds: 60,
+      google_allowed_domains: [],
+      google_auto_provision: false,
+      google_default_role: 'editor',
+    }) },
     { url: /^\/api\/folders$/, handle: listFolders },
     // /recent-changes is static — keep it before /api/links so the static
     // path matches first; the catch-all /api/links handler is fine after.
@@ -132,6 +150,10 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/backup\/download\/status$/, handle: backupDownloadStatus },
   ],
   post: [
+    { url: /^\/api\/admin\/users$/, handle: (_m, d, _p, s) => {
+      ;(s.adminCreatedUsers ??= []).push(d)
+      return { id: 99, email: d.email, name: d.name, role: d.role, status: 'active' }
+    } },
     { url: /^\/api\/tags$/, handle: createTag },
     { url: /^\/api\/folders$/, handle: createFolder },
     { url: /^\/api\/links\/(\d+)\/refresh-preview$/, handle: () => null },

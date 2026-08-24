@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useCopy } from '../../hooks/useCopy'
 
 /**
  * The one and only display of a freshly minted recovery sheet.
@@ -13,18 +14,8 @@ import { useTranslation } from 'react-i18next'
 export function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void }) {
   const { t } = useTranslation()
   const [acknowledged, setAcknowledged] = useState(false)
-  const [copied, setCopied] = useState(false)
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(codes.join('\n'))
-      setCopied(true)
-    } catch {
-      // Clipboard access can be denied or absent (insecure context, older
-      // browser). The codes are on screen either way, so failing quietly beats
-      // an error the user can do nothing about.
-    }
-  }
+  const { copied, copy } = useCopy()
+  const sheet = codes.join('\n')
 
   function download() {
     const blob = new Blob([codes.join('\n') + '\n'], { type: 'text/plain' })
@@ -38,7 +29,9 @@ export function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () =
 
   return (
     <div className="fx-auth-form">
-      <ul className="fx-auth-codes" data-testid="recovery-codes">
+      {/* Page translation uploads visible text to a third party; every item
+          below is a credential. See CreateUserDialog for the full note. */}
+      <ul className="fx-auth-codes" data-testid="recovery-codes" translate="no">
         {codes.map((c) => (
           <li key={c} className="fx-auth-code">
             {c}
@@ -47,8 +40,8 @@ export function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () =
       </ul>
 
       <div className="fx-auth-alt">
-        <button type="button" className="fx-auth-link" onClick={() => void copy()}>
-          {copied ? t('twofa.copied') : t('twofa.copy')}
+        <button type="button" className="fx-auth-link" onClick={() => void copy(sheet)}>
+          {copied(sheet) ? t('twofa.copied') : t('twofa.copy')}
         </button>
         <button type="button" className="fx-auth-link" onClick={download}>
           {t('twofa.download')}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/roleperm"
 )
 
 // InstanceMetrics is the administration screen's header: four numbers that
@@ -38,10 +39,21 @@ type RoleSummary struct {
 	Role        authctx.Role         `json:"role"`
 	Permissions []authctx.Permission `json:"permissions"`
 	UserCount   int                  `json:"user_count"`
+	// Editable says whether this role's grants may be configured at all. The
+	// screen renders from this rather than re-deriving "is it the owner?",
+	// for §5's usual reason: two copies of one policy drift, and the direction
+	// nobody notices is the one that offers a save the server refuses.
+	Editable bool `json:"editable"`
 }
 
-// Roles returns every role with its permissions and how many accounts hold it.
-func (r *Repository) Roles(ctx context.Context) ([]RoleSummary, error) {
+// Roles returns every role with its EFFECTIVE permissions and how many
+// accounts hold it.
+//
+// `grants` is the resolved matrix, not the compiled one. Rendering the compiled
+// matrix on a screen whose whole purpose is to show what the server enforces
+// would make the screen a description of a rule the server stopped applying
+// the moment anyone edited it.
+func (r *Repository) Roles(ctx context.Context, grants roleperm.Grants) ([]RoleSummary, error) {
 	counts := map[authctx.Role]int{}
 	rows, err := r.pool.Query(ctx,
 		`SELECT role, count(*) FROM app_user GROUP BY role`)
@@ -68,8 +80,9 @@ func (r *Repository) Roles(ctx context.Context) ([]RoleSummary, error) {
 	for _, role := range authctx.AllRoles {
 		out = append(out, RoleSummary{
 			Role:        role,
-			Permissions: role.Permissions(),
+			Permissions: grants.Permissions(role),
 			UserCount:   counts[role],
+			Editable:    authctx.IsRoleEditable(role),
 		})
 	}
 	return out, nil

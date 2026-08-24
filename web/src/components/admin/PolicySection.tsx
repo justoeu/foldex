@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { fetchPolicy, savePolicy, type AdminFactorMode, type InstancePolicy } from '../../api/admin'
+import { savePolicy, type AdminFactorMode, type InstancePolicy } from '../../api/admin'
+import { INSTANCE_POLICY_KEY, useInstancePolicy } from '../../hooks/useInstancePolicy'
 import { apiErrorCode as errCode } from '../../lib/apiError'
 import { useCurrentUser } from '../../auth/AuthProvider'
 
@@ -19,7 +20,7 @@ export function PolicySection() {
   const qc = useQueryClient()
   const canWrite = useCurrentUser()?.role === 'owner'
 
-  const query = useQuery({ queryKey: ['admin', 'policy'], queryFn: fetchPolicy })
+  const query = useInstancePolicy()
   const [draft, setDraft] = useState<InstancePolicy | null>(null)
   const [domainsText, setDomainsText] = useState('')
   const [error, setError] = useState('')
@@ -28,16 +29,16 @@ export function PolicySection() {
   // while nothing is being edited. Keyed on the query data rather than done in
   // the queryFn so the form stays the single owner of in-progress edits.
   useEffect(() => {
-    if (query.data && draft === null) {
-      setDraft(query.data)
-      setDomainsText(query.data.google_allowed_domains.join('\n'))
+    if (query.policy && draft === null) {
+      setDraft(query.policy)
+      setDomainsText(query.policy.google_allowed_domains.join('\n'))
     }
-  }, [query.data, draft])
+  }, [query.policy, draft])
 
   const save = useMutation({
     mutationFn: savePolicy,
     onSuccess: (saved) => {
-      qc.setQueryData(['admin', 'policy'], saved)
+      qc.setQueryData(INSTANCE_POLICY_KEY, saved)
       setDraft(saved)
       setDomainsText(saved.google_allowed_domains.join('\n'))
       setError('')
@@ -76,7 +77,7 @@ export function PolicySection() {
               <label className="fx-field">
                 <span className="fx-field-label">{t('admin.policy_password_min')}</span>
                 <input
-                  className="fx-input" type="number" min={8} max={128}
+                  className="fx-input" type="number" min={8} max={72}
                   value={draft.password_min_length}
                   onChange={(e) => patch({ password_min_length: Number(e.target.value) })}
                 />

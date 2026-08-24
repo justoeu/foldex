@@ -236,8 +236,53 @@ var resetStatement = `TRUNCATE
 	    push_subscription, app_setting, audit_log, mail_outbox,
 	    session_used_token, session, oauth_state, api_token,
 	    recovery_code, totp_secret, email_factor, email_otp, auth_challenge,
-	    password_reset, email_change, invite, user_identity, app_user
+	    password_reset, email_change, invite, user_identity, app_user,
+	    role_permission
 	    RESTART IDENTITY CASCADE`
+
+// reseedRolePermissions restores the rows a MIGRATION put there, which
+// TRUNCATE removes along with the test's own.
+//
+// role_permission is the only such table: it ships seeded with the compiled
+// matrix (migration 000039), and a Reset that left it empty would not be a
+// clean database — it would be an instance where every editable role has been
+// stripped to its locked floor. A later test building a real roleperm
+// repository would then watch ordinary content writes answer 403 with nothing
+// pointing at the cause. Reset means "the state right after migrating", and
+// for a seeded table that includes the seed.
+//
+// DERIVED from authctx rather than a second SQL literal. A verbatim copy of the
+// migration's INSERT was written first, and it drifts the moment a permission
+// is added: the migration and this list must then be edited together, nothing
+// checks that they were, and the divergence surfaces as a 403 in an unrelated
+// test. Locked entries are skipped for the same reason the repository never
+// stores them — resolution puts them back from the compiled matrix, so a row
+// here would be a second source for the one part of the matrix that must not
+// have one.
+func reseedRolePermissions(ctx context.Context, pool *pgxpool.Pool) error {
+	compiled := authctx.DefaultGrants()
+	for _, role := range authctx.AllRoles {
+		if !authctx.IsRoleEditable(role) {
+			continue
+		}
+		var perms []string
+		for _, p := range authctx.AllPermissions {
+			if compiled[role][p] && !authctx.IsPermissionLocked(p) {
+				perms = append(perms, string(p))
+			}
+		}
+		if len(perms) == 0 {
+			continue
+		}
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO role_permission (role, permission)
+			 SELECT $1, p FROM unnest($2::text[]) AS p
+			 ON CONFLICT DO NOTHING`, string(role), perms); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // Reset truncates all data tables but keeps the schema. CASCADE handles FK
 // dependencies inside the TRUNCATE, so order is not load-bearing — but every
@@ -251,8 +296,12 @@ func Reset(ctx context.Context, pool *pgxpool.Pool) error {
 	// note, then app_setting, each time producing cross-test leakage.
 	// TestResetCoversEveryTable in drift_test.go fails if a new table is added
 	// without being listed here.
-	_, err := pool.Exec(ctx, resetStatement)
-	return err
+	if _, err := pool.Exec(ctx, resetStatement); err != nil {
+		return err
+	}
+	// See reseedRolePermissions: a truncated role_permission is not a clean
+	// database.
+	return reseedRolePermissions(ctx, pool)
 }
 
 // SeedUser inserts an active app_user and returns its id.

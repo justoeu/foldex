@@ -97,6 +97,28 @@ export type RoleSummary = {
   role: Role
   permissions: Permission[]
   user_count: number
+  /**
+   * Whether this role's grants may be configured at all. Read from the server
+   * rather than re-derived as `role !== 'owner'`, for §5's usual reason: two
+   * copies of one policy drift, and the direction nobody notices is a screen
+   * offering a save the server refuses.
+   */
+  editable: boolean
+}
+
+/** What GET /api/admin/roles answers. */
+export type RolesResponse = {
+  roles: RoleSummary[]
+  /** The full ordered vocabulary — the matrix's rows. */
+  permissions: Permission[]
+  /** Entries no configuration may add or remove, in either direction. */
+  locked: Permission[]
+  /** The caller's own role, which bounds what they may grant. */
+  caller_role: Role
+  /** Whether the caller may write the matrix at all. */
+  can_edit: boolean
+  /** True on an instance serving the compiled matrix with no store behind it. */
+  editable_disabled: boolean
 }
 
 export type AuditEntry = {
@@ -132,8 +154,26 @@ export async function fetchMetrics(): Promise<InstanceMetrics> {
  * from it rather than from a local list is what stops the screen from
  * describing a grid the server does not implement.
  */
-export async function fetchRoles(): Promise<{ roles: RoleSummary[]; permissions: Permission[] }> {
-  const { data } = await http.get<{ roles: RoleSummary[]; permissions: Permission[] }>('/api/admin/roles')
+export async function fetchRoles(): Promise<RolesResponse> {
+  const { data } = await http.get<RolesResponse>('/api/admin/roles')
+  return data
+}
+
+/**
+ * Replaces one role's configurable grants (ADR-42).
+ *
+ * The full set is sent, not a delta: absent means revoked, which is the only
+ * encoding where two administrators editing at once cannot silently merge
+ * their intents into a role neither of them chose.
+ */
+export async function setRolePermissions(
+  role: Role,
+  permissions: Permission[],
+): Promise<{ roles: RoleSummary[] }> {
+  const { data } = await http.put<{ roles: RoleSummary[] }>(
+    `/api/admin/roles/${encodeURIComponent(role)}/permissions`,
+    { permissions },
+  )
   return data
 }
 

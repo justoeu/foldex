@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/auth"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/testdb"
 )
 
@@ -605,4 +606,394 @@ func TestAdminCreateUser_HonoursTheConfiguredPasswordFloor(t *testing.T) {
 		"password": "a password of at least twenty characters",
 	})
 	assert.Equal(t, http.StatusCreated, ok.Code, ok.Body.String())
+}
+
+// newHarnessWithGrants stands up the stack with the CONFIGURABLE matrix wired
+// (ADR-42), so a test can revoke through the same store the router gates on.
+func newHarnessWithGrants(t *testing.T) *harness {
+	t.Helper()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(context.Background(), pool))
+	return newHarnessWith(t, pool, harnessOpts{RolePermissions: true})
+}
+
+// A revocation must reach the gates of the routes ALREADY MOUNTED.
+//
+// Mount runs once at boot. An earlier version captured the matrix as a value
+// there, so every /api/admin gate froze on the snapshot taken at startup: the
+// Load that follows each write reached the repository and never reached the
+// gates, and an owner's revocation appeared to save while the administration
+// routes kept enforcing the old matrix until the process restarted.
+//
+// The direction of that failure is the dangerous one — too much permission,
+// not too little — and it is the same defect the gate's parameter exists to
+// prevent, reintroduced one level up. Nothing else in the suite could see it:
+// every other test builds its router AFTER the matrix it wants.
+func TestRolePermissions_ARevocationReachesAlreadyMountedGates(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	ctx := context.Background()
+	require.NotNil(t, h.grants)
+
+	h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	testdb.SeedUserWithPassword(t, h.pool, "admin@example.com", "a good password", "admin")
+	c := signIn(t, h, "admin@example.com", "a good password")
+
+	// Precondition: the gate on /api/admin/audit (PermAuditRead) lets it through.
+	require.Equal(t, http.StatusOK, c.do(http.MethodGet, "/api/admin/audit", nil).Code)
+
+	// Revoke it through the store the RUNNING router was built with.
+	var remaining []authctx.Permission
+	for _, p := range h.grants.Grants().Permissions(authctx.RoleAdmin) {
+		if p != authctx.PermAuditRead && !authctx.IsPermissionLocked(p) {
+			remaining = append(remaining, p)
+		}
+	}
+	require.NoError(t, h.grants.Set(ctx, authctx.RoleOwner, authctx.RoleAdmin, remaining))
+
+	assert.Equal(t, http.StatusForbidden, c.do(http.MethodGet, "/api/admin/audit", nil).Code,
+		"an already-mounted gate must consult the LIVE matrix, not the snapshot it "+
+			"was built with, or a revocation takes effect only on restart")
+}
+
+// The mirror case. Without it, the test above passes on a router where every
+// admin route is forbidden for some unrelated reason.
+func TestRolePermissions_AnUnrevokedRouteKeepsWorking(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	testdb.SeedUserWithPassword(t, h.pool, "admin@example.com", "a good password", "admin")
+	c := signIn(t, h, "admin@example.com", "a good password")
+
+	var remaining []authctx.Permission
+	for _, p := range h.grants.Grants().Permissions(authctx.RoleAdmin) {
+		if p != authctx.PermAuditRead && !authctx.IsPermissionLocked(p) {
+			remaining = append(remaining, p)
+		}
+	}
+	require.NoError(t, h.grants.Set(context.Background(), authctx.RoleOwner, authctx.RoleAdmin, remaining))
+
+	assert.Equal(t, http.StatusOK, c.do(http.MethodGet, "/api/admin/users", nil).Code,
+		"revoking audit.read must not take users.read with it")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// PUT /api/admin/roles/{role}/permissions — the endpoint itself
+// ─────────────────────────────────────────────────────────────────────
+
+func TestRolePermissionsAPI_OwnerEditsAnOrdinaryRole(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	c := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	res := c.do(http.MethodPut, "/api/admin/roles/viewer/permissions",
+		map[string]any{"permissions": []string{"backup.export", "content.write"}})
+	require.Equal(t, http.StatusOK, res.Code, res.Body.String())
+
+	assert.True(t, h.grants.Can(authctx.RoleViewer, authctx.PermContentWrite))
+	// The locked floor is restored by resolution even though it was not sent.
+	assert.True(t, h.grants.Can(authctx.RoleViewer, authctx.PermContentRead))
+}
+
+// Absent means revoked. Anything else and two administrators editing at once
+// merge their intents into a role neither of them chose.
+func TestRolePermissionsAPI_AnAbsentPermissionIsRevoked(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	c := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	require.True(t, h.grants.Can(authctx.RoleEditor, authctx.PermImportRun))
+
+	res := c.do(http.MethodPut, "/api/admin/roles/editor/permissions",
+		map[string]any{"permissions": []string{"content.write"}})
+	require.Equal(t, http.StatusOK, res.Code)
+
+	assert.False(t, h.grants.Can(authctx.RoleEditor, authctx.PermImportRun))
+}
+
+// The four refusals are distinct codes because they are different sentences to
+// the person reading them: the instance, the entry, and the caller.
+func TestRolePermissionsAPI_EachRefusalIsItsOwnCode(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	c := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	for _, tc := range []struct {
+		name   string
+		role   string
+		perms  []string
+		status int
+		code   string
+	}{
+		{"the owner row", "owner", []string{"content.write"}, http.StatusForbidden, "role_not_editable"},
+		{"a role that does not exist", "superuser", []string{"content.write"}, http.StatusForbidden, "role_not_editable"},
+		{"a locked permission", "editor", []string{"roles.assign"}, http.StatusForbidden, "permission_locked"},
+		{"a typo", "editor", []string{"content.writ"}, http.StatusBadRequest, "unknown_permission"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := c.do(http.MethodPut, "/api/admin/roles/"+tc.role+"/permissions",
+				map[string]any{"permissions": tc.perms})
+			require.Equal(t, tc.status, res.Code, res.Body.String())
+			assert.Equal(t, tc.code, errCode(t, res))
+		})
+	}
+}
+
+// The rule the feature was asked for, at the HTTP boundary rather than only in
+// the repository: an administrator cannot give itself owner-level powers.
+func TestRolePermissionsAPI_AdminCannotGrantWhatItDoesNotHold(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	testdb.SeedUserWithPassword(t, h.pool, "admin@example.com", "a good password", "admin")
+	c := signIn(t, h, "admin@example.com", "a good password")
+
+	// policy.write is locked AND owner-only, so it is refused as locked first.
+	res := c.do(http.MethodPut, "/api/admin/roles/editor/permissions",
+		map[string]any{"permissions": []string{"policy.write"}})
+	require.Equal(t, http.StatusForbidden, res.Code)
+	assert.False(t, h.grants.Can(authctx.RoleEditor, authctx.PermPolicyWrite))
+
+	// An UNLOCKED permission the admin happens to lack takes the escalation
+	// branch — the general rule, which is what covers a permission unlocked
+	// later without anyone having to remember to extend a list.
+	require.NoError(t, h.grants.Set(context.Background(), authctx.RoleOwner, authctx.RoleAdmin,
+		[]authctx.Permission{authctx.PermUsersRead, authctx.PermUsersWrite}))
+	res = c.do(http.MethodPut, "/api/admin/roles/editor/permissions",
+		map[string]any{"permissions": []string{"import.run"}})
+	require.Equal(t, http.StatusForbidden, res.Code, res.Body.String())
+	assert.Equal(t, "permission_escalation", errCode(t, res))
+}
+
+// A viewer must not even learn the route exists — RequireAdmin answers 404
+// before the permission gate can answer 403.
+func TestRolePermissionsAPI_ANonAdminGets404(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	testdb.SeedUserWithPassword(t, h.pool, "viewer@example.com", "a good password", "viewer")
+	c := signIn(t, h, "viewer@example.com", "a good password")
+
+	res := c.do(http.MethodPut, "/api/admin/roles/editor/permissions",
+		map[string]any{"permissions": []string{"content.write"}})
+	assert.Equal(t, http.StatusNotFound, res.Code)
+}
+
+// Strict DTO: a client sending `permission` for `permissions` learns it,
+// instead of watching a save clear the role.
+func TestRolePermissionsAPI_RefusesAnUnknownField(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	c := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	res := c.do(http.MethodPut, "/api/admin/roles/editor/permissions",
+		map[string]any{"permission": []string{"content.write"}})
+	assert.Equal(t, http.StatusBadRequest, res.Code)
+	assert.True(t, h.grants.Can(authctx.RoleEditor, authctx.PermContentWrite),
+		"a refused request must not have cleared the role")
+}
+
+// An instance with no store must not pretend the save worked.
+func TestRolePermissionsAPI_SaysSoWhenTheMatrixIsCompiled(t *testing.T) {
+	h := newHarness(t) // no RolePermissions: grants is nil
+	c := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	res := c.do(http.MethodPut, "/api/admin/roles/editor/permissions",
+		map[string]any{"permissions": []string{"content.write"}})
+	assert.Equal(t, http.StatusServiceUnavailable, res.Code)
+	assert.Equal(t, "roles_not_configurable", errCode(t, res))
+}
+
+// ADR-34: the trail outlives the accounts it describes, and a grant change is
+// exactly the kind of thing it exists to record.
+func TestRolePermissionsAPI_IsRecordedInTheAuditTrail(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	c := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	require.Equal(t, http.StatusOK, c.do(http.MethodPut, "/api/admin/roles/viewer/permissions",
+		map[string]any{"permissions": []string{"backup.export"}}).Code)
+
+	entries := decode(t, c.do(http.MethodGet, "/api/admin/audit", nil))["entries"].([]any)
+	var found string
+	for _, e := range entries {
+		row := e.(map[string]any)
+		if row["action"] == "role.permissions_changed" {
+			found, _ = row["detail"].(string)
+		}
+	}
+	require.NotEmpty(t, found, "the change must be recorded")
+	assert.Contains(t, found, "viewer")
+	assert.Contains(t, found, "backup.export")
+}
+
+// The three permissions the matrix advertised and no route enforced.
+//
+// While the matrix was compiled these were inert constants. ADR-42 turns each
+// into a control an owner will actually use, and ungated they saved, audited,
+// rendered OFF — and changed nothing. permissions.go says it outright: a matrix
+// with entries nothing enforces is worse than no matrix at all.
+func TestRolePermissions_TheOnceUngatedPermissionsAreEnforced(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	ctx := context.Background()
+	h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	testdb.SeedUserWithPassword(t, h.pool, "admin@example.com", "a good password", "admin")
+	c := signIn(t, h, "admin@example.com", "a good password")
+
+	// Precondition: an admin holds invites.read/write by default.
+	require.Equal(t, http.StatusOK, c.do(http.MethodGet, "/api/admin/invites", nil).Code)
+
+	var remaining []authctx.Permission
+	for _, p := range h.grants.Grants().Permissions(authctx.RoleAdmin) {
+		if p != authctx.PermInvitesRead && p != authctx.PermInvitesWrite &&
+			!authctx.IsPermissionLocked(p) {
+			remaining = append(remaining, p)
+		}
+	}
+	require.NoError(t, h.grants.Set(ctx, authctx.RoleOwner, authctx.RoleAdmin, remaining))
+
+	assert.Equal(t, http.StatusForbidden,
+		c.do(http.MethodGet, "/api/admin/invites", nil).Code,
+		"unticking invites.read must stop the listing, not merely render as off")
+	assert.Equal(t, http.StatusForbidden,
+		c.do(http.MethodPost, "/api/admin/invites",
+			map[string]any{"email": "someone@example.com", "role": "editor"}).Code,
+		"unticking invites.write must stop an admin from minting accounts")
+}
+
+// The mirror: revoking those two must not take the rest of the surface down.
+func TestRolePermissions_RevokingInvitesLeavesTheRestOfAdminAlone(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	testdb.SeedUserWithPassword(t, h.pool, "admin@example.com", "a good password", "admin")
+	c := signIn(t, h, "admin@example.com", "a good password")
+
+	var remaining []authctx.Permission
+	for _, p := range h.grants.Grants().Permissions(authctx.RoleAdmin) {
+		if p != authctx.PermInvitesRead && p != authctx.PermInvitesWrite &&
+			!authctx.IsPermissionLocked(p) {
+			remaining = append(remaining, p)
+		}
+	}
+	require.NoError(t, h.grants.Set(context.Background(), authctx.RoleOwner, authctx.RoleAdmin, remaining))
+
+	assert.Equal(t, http.StatusOK, c.do(http.MethodGet, "/api/admin/users", nil).Code)
+	assert.Equal(t, http.StatusOK, c.do(http.MethodGet, "/api/admin/audit", nil).Code)
+}
+
+// GET /api/admin/roles reports the EFFECTIVE matrix, not the compiled one.
+//
+// This is the READ half of ADR-42 and nothing pinned it: swapping
+// `grants.Permissions(role)` for `role.Permissions()` in metrics.go left the
+// whole suite green while the grid rendered a permission as ON that every gate
+// refuses — the screen describing a rule the server stopped applying, which is
+// the exact failure the endpoint exists to prevent.
+func TestRolePermissionsAPI_RolesReflectsTheEffectiveMatrix(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	c := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	require.Contains(t, permsFor(t, c, "editor"), "import.run", "precondition")
+
+	require.Equal(t, http.StatusOK, c.do(http.MethodPut, "/api/admin/roles/editor/permissions",
+		map[string]any{"permissions": []string{"content.write"}}).Code)
+
+	after := permsFor(t, c, "editor")
+	assert.NotContains(t, after, "import.run",
+		"the revoked permission must be gone from the read endpoint too")
+	assert.Contains(t, after, "content.write")
+	assert.Contains(t, after, "content.read", "the locked floor still resolves")
+}
+
+// The PUT's own body is what the SPA writes straight into its cache, so an
+// empty or compiled one empties the grid after a save. Every other test here
+// asserted the status and the repository, never the response.
+func TestRolePermissionsAPI_AnswersWithTheMatrixItJustWrote(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	c := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	res := c.do(http.MethodPut, "/api/admin/roles/viewer/permissions",
+		map[string]any{"permissions": []string{"backup.export", "content.write"}})
+	require.Equal(t, http.StatusOK, res.Code)
+
+	roles, ok := decode(t, res)["roles"].([]any)
+	require.True(t, ok, "the response must carry the roles array")
+	require.Len(t, roles, 4, "every role, not only the edited one")
+
+	var viewer map[string]any
+	for _, r := range roles {
+		row := r.(map[string]any)
+		if row["role"] == "viewer" {
+			viewer = row
+		}
+	}
+	require.NotNil(t, viewer)
+	perms := viewer["permissions"].([]any)
+	assert.Contains(t, perms, "content.write", "the body must reflect THIS write")
+	assert.Equal(t, false, viewer["editable"] == nil, "editable must travel")
+}
+
+// The payload fields the whole matrix UI renders from. Unasserted, the screen's
+// "everything about what may be edited comes from the SERVER" is a claim about
+// a contract nothing pins.
+func TestRolePermissionsAPI_CarriesTheFieldsTheMatrixRendersFrom(t *testing.T) {
+	h := newHarnessWithGrants(t)
+	c := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	body := decode(t, c.do(http.MethodGet, "/api/admin/roles", nil))
+
+	locked := body["locked"].([]any)
+	assert.ElementsMatch(t,
+		[]any{"content.read", "roles.assign", "policy.write", "instance.transfer"}, locked,
+		"the locked set is what greys out a cell and says why")
+
+	assert.Equal(t, "owner", body["caller_role"])
+	assert.Equal(t, true, body["can_edit"])
+	assert.Equal(t, false, body["editable_disabled"])
+
+	for _, r := range body["roles"].([]any) {
+		row := r.(map[string]any)
+		assert.Equal(t, row["role"] != "owner", row["editable"],
+			"role %v: only the owner is uneditable", row["role"])
+	}
+}
+
+// An instance with no store must SAY so, or the grid offers a save that the
+// server always refuses.
+func TestRolePermissionsAPI_ReportsACompiledMatrixAsUneditable(t *testing.T) {
+	h := newHarness(t) // grants is nil
+	c := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+	body := decode(t, c.do(http.MethodGet, "/api/admin/roles", nil))
+
+	assert.Equal(t, true, body["editable_disabled"])
+	assert.Equal(t, false, body["can_edit"])
+}
+
+// permsFor reads one role's effective permissions from the API.
+func permsFor(t *testing.T, c *client, role string) []any {
+	t.Helper()
+	for _, r := range decode(t, c.do(http.MethodGet, "/api/admin/roles", nil))["roles"].([]any) {
+		row := r.(map[string]any)
+		if row["role"] == role {
+			return row["permissions"].([]any)
+		}
+	}
+	t.Fatalf("role %q missing from /api/admin/roles", role)
+	return nil
+}
+
+// The password floor's write bound has to be enforced by the HANDLER.
+//
+// Reverting policy.Put to `Validate()` survived the whole suite: the refusal
+// then falls through to repo.Set, lands on the handler's default arm, and the
+// owner gets a logged 500 and a bare `server_error` — while INV-169 promises
+// they are told the real ceiling at the moment they are looking at the field.
+// The unit tests exercise ValidateForWrite in isolation; nothing bound the
+// handler to it.
+func TestPolicyAPI_RefusesAFloorNoPasswordCanSatisfy(t *testing.T) {
+	h := newHarnessWithPolicy(t)
+	c := h.bootstrapAdmin(t, "owner@example.com", "a good password")
+
+	current := decode(t, c.do(http.MethodGet, "/api/admin/policy", nil))
+	current["password_min_length"] = 100
+
+	res := c.do(http.MethodPut, "/api/admin/policy", current)
+	require.Equal(t, http.StatusBadRequest, res.Code,
+		"a 500 here tells the owner nothing; the bound exists to teach the limit")
+	assert.Equal(t, "invalid_policy", errCode(t, res))
+	assert.Contains(t, strings.ToLower(res.Body.String()), "72",
+		"the message must name the real ceiling")
+
+	// And the bound itself is settable, or the guard above would pass on a
+	// handler that refuses every floor.
+	current["password_min_length"] = 72
+	assert.Equal(t, http.StatusOK, c.do(http.MethodPut, "/api/admin/policy", current).Code)
 }

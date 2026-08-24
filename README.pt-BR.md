@@ -407,6 +407,20 @@ senha e a trilha de auditoria não distingue os acessos de vocês. O **convite**
 evita isso: a pessoa escolhe a própria senha por um link. O endereço nasce NÃO VERIFICADO
 nos dois casos, e o papel nunca pode ser `owner`.
 
+**Digitar ou gerar.** Uma senha digitada é confirmada num segundo campo, para que um erro
+de digitação não crie uma credencial que ninguém consegue recuperar. **Gerar uma senha**
+dispensa esse passo: 20 caracteres de aleatoriedade criptográfica — ou mais, se o piso de
+senha desta instância for maior — de um alfabeto sem `0`/`O` e sem `1`/`l`/`I`, para
+sobreviver a ser lido em voz alta. Ele aparece em claro com um botão **Copiar** e sem campo
+de confirmação, porque não há erro de digitação a pegar; editá-lo à mão pede a confirmação
+de volta.
+
+O foldex não o armazena — a gaveta é o único lugar onde ele aparece. **Seu navegador pode.**
+No envio isto é um campo de senha comum, então um gerenciador de senhas pode se oferecer
+para salvá-lo no seu próprio cofre, e uma cópia fica na área de transferência até algo a
+substituir. É a mesma troca que o resto desta gaveta já faz: na janela antes de a pessoa
+trocar, a primeira senha dela existe em mais de um lugar. O convite evita tudo isso.
+
 **Tabela de administração.** As ações de cada conta — desativar/ativar, encerrar todas as
 sessões, enviar recuperação, transferir a propriedade, excluir — mostram ícone e rótulo, para que nada
 na linha pareça decoração. Cada um tem um rótulo de leitor de tela nomeando a ação E a
@@ -453,6 +467,28 @@ servidor aplica — dá para lê-la em **Configurações → Administração →
 | **Administrador** | Gerencia pessoas, convites e a auditoria — mas não define as regras sob as quais administra. |
 | **Editor** | Conta comum: leitura e escrita completas na própria biblioteca. É o que todo `user` de antes dos 4 papéis virou. |
 | **Leitor** | Mesma biblioteca, somente leitura. Ainda exporta backup; não cria, edita, importa nem restaura. |
+
+**A matriz é editável, dentro de um piso que ela não alcança.** *Configurações →
+Administração → Papéis e permissões* é uma grade — permissões nas linhas, papéis nas
+colunas — para que "quem pode restaurar um backup?" seja uma linha, e não quatro parágrafos
+de chips para varrer. O proprietário e qualquer administrador marcam e desmarcam células;
+quatro entradas são travadas para todo mundo e sempre serão. `roles.assign` é travada
+porque um papel que pudesse RECEBER o poder de conceder concederia a si mesmo todo o resto
+num segundo passo; `policy.write` e `instance.transfer` porque são do proprietário; e
+`content.read` é travada na direção oposta — não pode ser removida, já que uma conta que
+não lê a própria biblioteca está quebrada, não restrita. A coluna Proprietário não é
+editável: é o papel que existe para conseguir consertar todo o resto.
+
+**Um administrador não pode conceder o que o próprio papel não tem**, e é isso que impede
+um admin de se marcar até permissões de nível Proprietário. Revogar não é limitado assim,
+senão um admin nunca poderia desfazer uma concessão do proprietário. Uma caixa que você não
+pode usar diz por quê ao passar o mouse, e os quatro motivos são quatro frases diferentes.
+
+**Toda marcação faz alguma coisa de fato.** Três permissões antes apareciam na lista e não
+eram aplicadas por rota nenhuma — exportar backup e ler ou enviar convites — então
+desmarcá-las salvava, entrava na auditoria, aparecia desligada e não mudava nada. Agora têm
+gate. Uma alteração alcança toda conta com o papel em cerca de trinta segundos, e
+imediatamente no backend que a processou.
 
 **O conteúdo continua privado por conta, em qualquer papel.** O papel decide se uma
 escrita é aceita e se as telas de administração existem — nunca de quem são os links que

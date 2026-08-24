@@ -6,6 +6,7 @@ import { Notice, SectionBlock, SectionCard, SectionRow } from './account/Section
 import { useConfirm } from './ConfirmDialog'
 import { listTokens, createToken, revokeToken, type ApiToken } from '../api/tokens'
 import { apiErrorCode as errCode } from '../lib/apiError'
+import { SecretBand } from './SecretBand'
 
 /**
  * Long-lived bearer credentials for the browser extension and for scripts.
@@ -24,7 +25,6 @@ export function ApiTokensSection() {
   const tokens = useQuery({ queryKey: ['api-tokens'], queryFn: listTokens })
   const [name, setName] = useState('')
   const [created, setCreated] = useState<ApiToken | null>(null)
-  const [copied, setCopied] = useState(false)
   const [error, setError] = useState('')
 
   const create = useMutation({
@@ -33,7 +33,6 @@ export function ApiTokensSection() {
       setCreated(tok)
       setName('')
       setError('')
-      setCopied(false)
       await qc.invalidateQueries({ queryKey: ['api-tokens'] })
     },
     onError: (err) => setError(messageFor(err, t)),
@@ -44,17 +43,6 @@ export function ApiTokensSection() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['api-tokens'] }),
     onError: (err) => setError(messageFor(err, t)),
   })
-
-  async function copy(value: string) {
-    try {
-      await navigator.clipboard.writeText(value)
-      setCopied(true)
-    } catch {
-      // Clipboard access can be denied or absent (insecure context). The value
-      // is on screen either way, so failing quietly beats an error the user can
-      // do nothing about — the same treatment the recovery-code sheet gets.
-    }
-  }
 
   async function askRevoke(tok: ApiToken) {
     const ok = await confirmAction({
@@ -74,21 +62,16 @@ export function ApiTokensSection() {
           genuinely impossible. That is why it gets a band of its own rather
           than a line in the list: it has to be copied before it is dismissed. */}
       {created?.token && (
-        <div className="fx-2fa-key" style={{ alignItems: 'stretch' }}>
-          <span className="fx-sec-block-label">{t('tokens.created_title')}</span>
-          <code data-testid="new-token" className="fx-2fa-key-value">
-            {created.token}
-          </code>
-          <Notice tone="info">{t('tokens.created_warning')}</Notice>
-          <div className="fx-sec-actions">
-            <button className="fx-btn" onClick={() => void copy(created.token ?? '')}>
-              {copied ? t('tokens.copied') : t('tokens.copy')}
-            </button>
-            <button className="fx-btn fx-btn-primary" onClick={() => setCreated(null)}>
-              {t('tokens.done')}
-            </button>
-          </div>
-        </div>
+        <SecretBand
+          label={t('tokens.created_title')}
+          value={created.token}
+          testId="new-token"
+          hint={<Notice tone="info">{t('tokens.created_warning')}</Notice>}
+        >
+          <button className="fx-btn fx-btn-primary" onClick={() => setCreated(null)}>
+            {t('tokens.done')}
+          </button>
+        </SecretBand>
       )}
 
       <SectionBlock label={t('tokens.list_label')}>

@@ -405,6 +405,20 @@ password and the audit trail cannot tell your sign-ins apart. The **invitation**
 avoids that: the person chooses their own password from a link. The address is created
 UNVERIFIED either way, and the role can never be `owner`.
 
+**Typing it or generating it.** A typed password is confirmed in a second field, so a
+credential nobody can recover is not created from a typo. **Generate a password** skips
+that step: 20 characters of cryptographic randomness — or more, if this instance's password
+floor is higher — drawn from an alphabet with no `0`/`O` and no `1`/`l`/`I`, so it survives
+being read out loud. It is shown in clear with a **Copy** button and no confirmation field,
+because there is no typo to catch; editing it by hand asks for the confirmation again.
+
+foldex itself never stores it — the drawer is the only place it appears. **Your browser
+might.** This is an ordinary password field on submit, so a password manager may offer to
+save it under your own vault, and a copy sits in the clipboard until something replaces it.
+That is the same trade the rest of this dialog already makes: for the window before the
+person changes it, their first password exists in more than one place. The invitation flow
+avoids all of it.
+
 **Administration table.** Each account row's actions — disable/enable, sign out
 everywhere, send recovery, transfer ownership, delete — each show an icon and their label, so
 nothing on the row reads as decoration. Each carries a screen-reader label naming both the
@@ -450,6 +464,28 @@ enforces — you can read it in **Settings → Administration → Roles and perm
 | **Admin** | Manages people, invitations and the audit trail — but does not set the rules they manage people under. |
 | **Editor** | An ordinary account: full read/write over its own library. This is what every pre-4-role `user` became. |
 | **Viewer** | Same library, read-only. Can still export a backup; cannot create, edit, import or restore. |
+
+**The matrix is editable, within a floor it cannot reach.** *Settings → Administration →
+Roles and permissions* is a grid — permissions down the side, roles across the top — so
+"who can restore a backup?" is one row rather than four paragraphs of chips to scan. The
+owner and any admin can tick and untick cells; four entries are locked for everyone and
+always will be. `roles.assign` is locked because a role that could be GIVEN the power to
+grant would grant itself everything else in one further step; `policy.write` and
+`instance.transfer` because they are the owner's own; and `content.read` is locked in the
+other direction — it cannot be removed, since an account that cannot read its own library
+is broken rather than restricted. The Owner column is not editable at all: it is the role
+that exists to be able to fix everything else.
+
+**An administrator cannot grant what their own role does not hold**, which is what keeps
+an admin from ticking themselves into owner-level powers. Revoking is not limited that way,
+or an admin could never undo a grant the owner made. A checkbox you cannot use says why on
+hover, and the four reasons are four different sentences.
+
+**Every tick actually does something.** Three permissions used to be listed and enforced by
+no route at all — exporting a backup and reading or sending invitations — so unticking them
+saved, was recorded in the audit trail, rendered as off, and changed nothing. They are
+gated now. A change reaches every account holding the role within about thirty seconds, and
+immediately on the backend that handled it.
 
 **Content stays private per account, in every role.** A role decides whether a write is
 accepted and whether the administration screens exist — never whose links you can see. An

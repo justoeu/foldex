@@ -13,6 +13,7 @@ import (
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/roleperm"
 )
 
 // MasterPasswordVerifier is the narrow slice of the settings repository the
@@ -30,16 +31,21 @@ type Handler struct {
 	unlockKey   []byte
 	master      MasterPasswordVerifier
 	limiter     *attemptlimit.Limiter
+	// grants is the effective RBAC matrix (ADR-42). Nil at construction means
+	// the compiled one — what every test that does not care about configured
+	// permissions wants; main always passes the loaded repository.
+	grants authgate.Grants
 }
 
 // NewHandler takes the folder-unlock-token HMAC secret (see
 // LoadOrGenerateFolderUnlockKey) so it can gate list(parent_id=X) and mint/
 // verify tokens for the /unlock endpoint, plus a MasterPasswordVerifier used
 // only by the master-password recovery route.
-func NewHandler(repo *Repository, unlockKey []byte, master MasterPasswordVerifier) *Handler {
+func NewHandler(repo *Repository, unlockKey []byte, master MasterPasswordVerifier, grants authgate.Grants) *Handler {
+	grants = roleperm.OrDefault(grants)
 	return &Handler{
 		repo: repo, contentGate: NewContentGate(repo, unlockKey), unlockKey: unlockKey,
-		master: master, limiter: newUnlockLimiter(),
+		master: master, limiter: newUnlockLimiter(), grants: grants,
 	}
 }
 
@@ -49,7 +55,7 @@ func (h *Handler) Mount(r chi.Router) {
 	// folder's contents, so a viewer — read-only over its own library — has to
 	// be able to call it. A blanket method gate would lock viewers out of their
 	// own protected folders.
-	write := authgate.RequirePermission(authctx.PermContentWrite)
+	write := authgate.RequirePermission(h.grants, authctx.PermContentWrite)
 	r.Get("/", h.list)
 	r.With(write).Post("/", h.create)
 	r.Get("/{id}", h.get)
