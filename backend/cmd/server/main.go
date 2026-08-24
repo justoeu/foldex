@@ -30,6 +30,7 @@ import (
 	"foldex/internal/policy"
 	"foldex/internal/preview"
 	"foldex/internal/push"
+	"foldex/internal/roleperm"
 	"foldex/internal/screenshot"
 	"foldex/internal/server"
 	"foldex/internal/settings"
@@ -301,6 +302,21 @@ func main() {
 	// Built before the middleware because the admin second-factor gate reads it
 	// on every /api/admin request (ADR-37 §7.5).
 	policyRepo := policy.NewRepository(pool)
+	policyRepo.WarnUnenforceableFloor(rootCtx, logger)
+
+	// The configurable half of the RBAC matrix (ADR-42). A failed load leaves
+	// the compiled matrix in place and is logged rather than fatal: the stored
+	// grants can only ever be a DELTA over locked entries the code guarantees,
+	// so booting on the compiled matrix is the historical behaviour, while
+	// refusing to boot would make one unreadable table an outage.
+	grantsRepo := roleperm.NewRepository(pool)
+	if err := grantsRepo.Load(rootCtx); err != nil {
+		logger.Error("role permissions load; serving the compiled matrix", "err", err)
+	}
+	// Bounds how long a revocation takes to reach a replica that did not
+	// perform it — and how long THIS process serves a stale matrix if the
+	// refresh after its own write fails, which would otherwise be forever.
+	_ = grantsRepo.StartReloading(rootCtx, roleperm.DefaultReloadInterval, logger)
 	authMW := auth.NewMiddleware(authRepo, cookieOpts, logger,
 		cfg.AuthEnabled && cfg.AuthRequire2FAForAdmins,
 		auth.WithAdminFactorPolicy(policyRepo.RequiresTOTPForAdmins))
@@ -332,13 +348,13 @@ func main() {
 		Google:              google,
 		Policy:              policyRepo,
 	})
-	adminHandler := auth.NewAdminHandler(authRepo, mail, logger, cfg.AuthPublicURL, policyRepo)
+	adminHandler := auth.NewAdminHandler(authRepo, mail, logger, cfg.AuthPublicURL, policyRepo, grantsRepo)
 	// The audit hook is passed as a function so internal/policy never imports
 	// internal/auth — auth already imports policy for enforcement, and the other
 	// direction would close the cycle.
-	policyHandler := policy.NewHandler(policyRepo, logger, adminHandler.AuditPolicyChange)
+	policyHandler := policy.NewHandler(policyRepo, logger, adminHandler.AuditPolicyChange, grantsRepo)
 	folderHandler := folders.NewHandler(
-		folders.NewRepository(pool), folderUnlockKey, settings.NewRepository(pool),
+		folders.NewRepository(pool), folderUnlockKey, settings.NewRepository(pool), grantsRepo,
 	)
 
 	// The sweeper prunes the DB rows and every process-local cache that grows
@@ -364,9 +380,16 @@ func main() {
 		FolderUnlockKey:     folderUnlockKey,
 		AuthHandler:         authHandler,
 		AdminHandler:        adminHandler,
-		PolicyHandler:       policyHandler,
-		AuthMiddleware:      authMW,
-		FolderHandler:       folderHandler,
+		// Without this the router falls back to the COMPILED matrix and the
+		// content, import and backup-restore gates keep enforcing it: a
+		// revocation would commit, audit, render as unticked, and change
+		// nothing on those routes. The nil-means-compiled default exists for
+		// tests; leaving it in force here is what turns a deliberate default
+		// into unintended production state.
+		Grants:         grantsRepo,
+		PolicyHandler:  policyHandler,
+		AuthMiddleware: authMW,
+		FolderHandler:  folderHandler,
 	}
 	if storageClient != nil {
 		deps.Screenshotter = screenshotPool

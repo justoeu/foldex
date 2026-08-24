@@ -53,7 +53,7 @@ COVERAGE_MIN ?= 85
 # authctxtest is test scaffolding (it supplies the principal handler tests
 # need), so it is excluded for the same reason testdb is: instrumenting a
 # helper that exists only for tests deflates the number that gates real code.
-COVER_PKGS = $(shell go list ./internal/... | grep -v -E 'testdb$$|/db$$|authctxtest$$' | paste -sd, -)
+COVER_PKGS = $(shell go list ./internal/... | grep -v -E 'testdb$$|/db$$|authctxtest$$|spantest$$' | paste -sd, -)
 
 # Detect Colima Docker socket automatically so testcontainers works.
 DOCKER_HOST ?= $(shell docker context inspect colima -f '{{.Endpoints.docker.Host}}' 2>/dev/null)

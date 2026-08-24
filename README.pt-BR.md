@@ -288,6 +288,53 @@ diretamente.
   static_configs: [{ targets: ["<host-do-backend>:9089"] }]
 ```
 
+## Traces (OpenTelemetry → Tempo)
+
+O backend emite spans OTLP/gRPC quando `OTEL_EXPORTER_OTLP_ENDPOINT` está
+definido (ex.: `http://obs-host:4317`; `https://` liga TLS). Vazio é o padrão
+e desliga o tracing **por completo** — sem provider, sem exporter, sem
+goroutine por request.
+
+Com ele ligado você tem um span SERVER por request nomeado pelo **padrão de
+rota** do chi (`GET /api/links/{id}` — path cru, ids e slugs nunca saem do
+processo), spans CLIENT por query no Postgres via `otelpgx` (texto SQL
+desabilitado por inteiro) e um `trace_id` em cada linha de log de acesso, o
+elo do derived field Loki→Tempo no Grafana.
+
+Cada span de request carrega quem fez a chamada:
+
+| Atributo | TraceQL | Valor |
+|---|---|---|
+| `user.id` | `span.user.id` | Id opaco da conta — `{ span.user.id = "42" }` |
+| `user.roles` | `span.user.roles` | `owner` / `admin` / `editor` / `viewer` |
+| `foldex.auth.via` | `span.foldex.auth.via` | `session` ou `api_token` |
+
+Sem e-mail e sem nome de exibição: um store de traces é outro domínio de
+retenção que o banco, com controle de acesso próprio. A anotação pendura nos
+três pontos onde um principal nasce, não num grupo de rotas, então todo request
+autenticado carrega — inclusive a metade de gestão de credencial do `/api/auth`
+(sessões, troca de senha, 2FA, tokens). Requests pré-login não têm principal e
+não carregam usuário.
+
+Com `AUTH_ENABLED=0` todo request é atribuído ao administrador de bootstrap, e
+os spans dizem `owner` para tráfego que ninguém autenticou.
+
+> **Mantenha `user.id` FORA das dimensões do span-metrics do Tempo.** É uma
+> série temporal por conta; derive RED de `http.route`.
+
+> **`http://` é gRPC sem criptografia E sem autenticação.** Identidade viaja a
+> cada request, então um observador passivo naquele caminho de rede vê id de
+> conta, papel e tipo de credencial por request. Use `https://` para qualquer
+> coisa que atravesse rede que você não controla. Quem lê o store de traces
+> consegue enumerar quais contas são administradoras e perfilar a atividade de
+> qualquer conta, sem nenhuma permissão do Foldex — trate esse acesso de
+> leitura como privilégio administrativo.
+
+Header `traceparent` de entrada é **descartado**, não honrado: este serviço é
+a borda, então contexto de trace vindo do cliente só serviria para escolher
+nossos trace ids ou excluir o próprio tráfego da telemetria com `sampled=0`.
+
+
 ## Atalhos de teclado (SPA)
 
 | Atalho           | Ação                            |
@@ -407,6 +454,20 @@ senha e a trilha de auditoria não distingue os acessos de vocês. O **convite**
 evita isso: a pessoa escolhe a própria senha por um link. O endereço nasce NÃO VERIFICADO
 nos dois casos, e o papel nunca pode ser `owner`.
 
+**Digitar ou gerar.** Uma senha digitada é confirmada num segundo campo, para que um erro
+de digitação não crie uma credencial que ninguém consegue recuperar. **Gerar uma senha**
+dispensa esse passo: 20 caracteres de aleatoriedade criptográfica — ou mais, se o piso de
+senha desta instância for maior — de um alfabeto sem `0`/`O` e sem `1`/`l`/`I`, para
+sobreviver a ser lido em voz alta. Ele aparece em claro com um botão **Copiar** e sem campo
+de confirmação, porque não há erro de digitação a pegar; editá-lo à mão pede a confirmação
+de volta.
+
+O foldex não o armazena — a gaveta é o único lugar onde ele aparece. **Seu navegador pode.**
+No envio isto é um campo de senha comum, então um gerenciador de senhas pode se oferecer
+para salvá-lo no seu próprio cofre, e uma cópia fica na área de transferência até algo a
+substituir. É a mesma troca que o resto desta gaveta já faz: na janela antes de a pessoa
+trocar, a primeira senha dela existe em mais de um lugar. O convite evita tudo isso.
+
 **Tabela de administração.** As ações de cada conta — desativar/ativar, encerrar todas as
 sessões, enviar recuperação, transferir a propriedade, excluir — mostram ícone e rótulo, para que nada
 na linha pareça decoração. Cada um tem um rótulo de leitor de tela nomeando a ação E a
@@ -453,6 +514,28 @@ servidor aplica — dá para lê-la em **Configurações → Administração →
 | **Administrador** | Gerencia pessoas, convites e a auditoria — mas não define as regras sob as quais administra. |
 | **Editor** | Conta comum: leitura e escrita completas na própria biblioteca. É o que todo `user` de antes dos 4 papéis virou. |
 | **Leitor** | Mesma biblioteca, somente leitura. Ainda exporta backup; não cria, edita, importa nem restaura. |
+
+**A matriz é editável, dentro de um piso que ela não alcança.** *Configurações →
+Administração → Papéis e permissões* é uma grade — permissões nas linhas, papéis nas
+colunas — para que "quem pode restaurar um backup?" seja uma linha, e não quatro parágrafos
+de chips para varrer. O proprietário e qualquer administrador marcam e desmarcam células;
+quatro entradas são travadas para todo mundo e sempre serão. `roles.assign` é travada
+porque um papel que pudesse RECEBER o poder de conceder concederia a si mesmo todo o resto
+num segundo passo; `policy.write` e `instance.transfer` porque são do proprietário; e
+`content.read` é travada na direção oposta — não pode ser removida, já que uma conta que
+não lê a própria biblioteca está quebrada, não restrita. A coluna Proprietário não é
+editável: é o papel que existe para conseguir consertar todo o resto.
+
+**Um administrador não pode conceder o que o próprio papel não tem**, e é isso que impede
+um admin de se marcar até permissões de nível Proprietário. Revogar não é limitado assim,
+senão um admin nunca poderia desfazer uma concessão do proprietário. Uma caixa que você não
+pode usar diz por quê ao passar o mouse, e os quatro motivos são quatro frases diferentes.
+
+**Toda marcação faz alguma coisa de fato.** Três permissões antes apareciam na lista e não
+eram aplicadas por rota nenhuma — exportar backup e ler ou enviar convites — então
+desmarcá-las salvava, entrava na auditoria, aparecia desligada e não mudava nada. Agora têm
+gate. Uma alteração alcança toda conta com o papel em cerca de trinta segundos, e
+imediatamente no backend que a processou.
 
 **O conteúdo continua privado por conta, em qualquer papel.** O papel decide se uma
 escrita é aceita e se as telas de administração existem — nunca de quem são os links que

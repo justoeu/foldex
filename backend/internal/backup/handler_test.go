@@ -82,7 +82,7 @@ func (f *fakeBackupSvc) Restore(_ context.Context, _ authctx.UserID, _ *zip.Read
 
 func mount(t *testing.T, f *fakeBackupSvc) http.Handler {
 	t.Helper()
-	h := NewHandler(f, slog.Default())
+	h := NewHandler(f, slog.Default(), nil)
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Route("/backup", h.Mount)

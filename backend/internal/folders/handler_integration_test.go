@@ -72,7 +72,7 @@ func newHandlerRouterMaster(t *testing.T, master folders.MasterPasswordVerifier)
 	repo := folders.NewRepository(pool)
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, master).Mount)
+	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, master, nil).Mount)
 	return r, repo, uid
 }
 
@@ -395,7 +395,7 @@ func TestHandler_Unlock_ForeignAttemptsCannotLockTheOwnerOut(t *testing.T) {
 	repo := folders.NewRepository(pool)
 	// ONE handler — the limiter lives on it, so both routers share the state
 	// an attacker would be trying to poison.
-	h := folders.NewHandler(repo, testUnlockKey, fakeMaster{})
+	h := folders.NewHandler(repo, testUnlockKey, fakeMaster{}, nil)
 	routerFor := func(uid authctx.UserID) http.Handler {
 		r := chi.NewRouter()
 		r.Use(authctxtest.Middleware(uid))
@@ -528,7 +528,7 @@ func TestHandler_DeleteRejectsAPIToken(t *testing.T) {
 			next.ServeHTTP(w, req.WithContext(authctx.WithPrincipal(req.Context(), principal)))
 		})
 	})
-	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, fakeMaster{}).Mount)
+	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, fakeMaster{}, nil).Mount)
 
 	for _, query := range []string{"", "?cascade=1"} {
 		req := httptest.NewRequest(http.MethodDelete,
@@ -550,7 +550,7 @@ func TestHandler_DeleteCrossUserIsNotFoundAndOpenFolderStillDeletes(t *testing.T
 	repo := folders.NewRepository(pool)
 	folder, err := repo.Create(context.Background(), alice, folders.CreateInput{Name: "Open", Color: "#abc"})
 	require.NoError(t, err)
-	h := folders.NewHandler(repo, testUnlockKey, fakeMaster{})
+	h := folders.NewHandler(repo, testUnlockKey, fakeMaster{}, nil)
 	routerFor := func(uid authctx.UserID) http.Handler {
 		r := chi.NewRouter()
 		r.Use(authctxtest.Middleware(uid))
@@ -598,7 +598,7 @@ func TestHandler_DeletePasswordCheckAndMutationAreAtomic(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, fakeMaster{}).Mount)
+	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, fakeMaster{}, nil).Mount)
 	result := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		req := httptest.NewRequest(http.MethodDelete, "/folders/"+strconv.FormatInt(folder.ID, 10), nil)

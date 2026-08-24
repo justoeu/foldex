@@ -21,6 +21,19 @@ func RequireAdmin(next http.Handler) http.Handler {
 	})
 }
 
+// Grants answers the one question the gate asks. The concrete implementation
+// lives in internal/roleperm; an interface here keeps authgate a leaf and lets
+// a test gate on a fixed matrix without a database.
+//
+// It is a positional argument on both gates below rather than a package-level
+// default, and that is the whole safety of ADR-42: as a default, a mount site
+// that forgot to pass the configured matrix would silently keep enforcing the
+// compiled one, and an owner's revocation would appear to save while changing
+// nothing. A parameter makes forgetting a compile error.
+type Grants interface {
+	Can(authctx.Role, authctx.Permission) bool
+}
+
 // RequireWrite gates the unsafe verbs of a whole route group on a permission
 // and lets safe methods through untouched.
 //
@@ -30,8 +43,8 @@ func RequireAdmin(next http.Handler) http.Handler {
 // to operations that only READ — unlocking a folder proves a password in order
 // to see its contents, and exporting a backup serializes rows the caller
 // already owns — so those two gate per route instead, with RequirePermission.
-func RequireWrite(p authctx.Permission) func(http.Handler) http.Handler {
-	gate := RequirePermission(p)
+func RequireWrite(g Grants, p authctx.Permission) func(http.Handler) http.Handler {
+	gate := RequirePermission(g, p)
 	return func(next http.Handler) http.Handler {
 		gated := gate(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -57,11 +70,14 @@ func RequireWrite(p authctx.Permission) func(http.Handler) http.Handler {
 //
 // Content routes use it for the opposite reason: a viewer knows their own
 // library exists, so 404 on their own row would be a lie.
-func RequirePermission(p authctx.Permission) func(http.Handler) http.Handler {
+func RequirePermission(g Grants, p authctx.Permission) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			principal, ok := authctx.FromContext(r.Context())
-			if !ok || !principal.Role.Can(p) {
+			// A nil matrix denies. It can only mean a mount site was built with
+			// no grants at all, and the safe reading of "authorization is not
+			// wired" is that nothing is authorized.
+			if !ok || g == nil || !g.Can(principal.Role, p) {
 				httperr.Write(w, httperr.New(http.StatusForbidden, "forbidden_role",
 					"your role does not allow this action"))
 				return

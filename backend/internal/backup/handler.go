@@ -18,6 +18,7 @@ import (
 
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/authgate"
+	"foldex/internal/roleperm"
 )
 
 // BackupService is the application port used by HTTP handlers (testable fake).
@@ -33,19 +34,25 @@ type Handler struct {
 	archiveSlots chan struct{}
 	createTemp   func() (*os.File, error)
 	downloads    *downloadTickets
+	// grants is the effective RBAC matrix (ADR-42). Nil at construction means
+	// the compiled one — what every test that does not care about configured
+	// permissions wants; main always passes the loaded repository.
+	grants authgate.Grants
 }
 
 const maxConcurrentArchiveOperations = 1
 
 const archiveRequestTimeout = 31 * time.Minute
 
-func NewHandler(svc BackupService, logger *slog.Logger) *Handler {
+func NewHandler(svc BackupService, logger *slog.Logger, grants authgate.Grants) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	grants = roleperm.OrDefault(grants)
 	return &Handler{
 		svc:          svc,
 		logger:       logger,
+		grants:       grants,
 		archiveSlots: make(chan struct{}, maxConcurrentArchiveOperations),
 		downloads:    newDownloadTickets(),
 		createTemp: func() (*os.File, error) {
@@ -55,15 +62,20 @@ func NewHandler(svc BackupService, logger *slog.Logger) *Handler {
 }
 
 func (h *Handler) Mount(r chi.Router) {
-	r.Post("/", h.export)
-	r.Post("/download", h.issueDownload)
-	r.Get("/download", h.download)
-	r.Get("/download/status", h.downloadStatus)
-	r.Post("/validate", h.validate)
-	// Export and validate only read: they serialize rows the caller already
-	// owns and inspect an archive without applying it, which is why a viewer
-	// keeps both. Restore is the one route here that writes.
-	r.With(authgate.RequirePermission(authctx.PermBackupRestore)).Post("/restore", h.restore)
+	// Export and validate only READ — they serialize rows the caller already
+	// owns and inspect an archive without applying it — which is why a viewer
+	// holds backup.export by default. But reading is not the same as reading
+	// OUT: the archive leaves the instance, and an owner who unticks
+	// backup.export is saying exactly that. Ungated, that tick saved, audited
+	// and did nothing (ADR-42).
+	export := authgate.RequirePermission(h.grants, authctx.PermBackupExport)
+	r.With(export).Post("/", h.export)
+	r.With(export).Post("/download", h.issueDownload)
+	r.With(export).Get("/download", h.download)
+	r.With(export).Get("/download/status", h.downloadStatus)
+	r.With(export).Post("/validate", h.validate)
+	// Restore is the one route here that writes.
+	r.With(authgate.RequirePermission(h.grants, authctx.PermBackupRestore)).Post("/restore", h.restore)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

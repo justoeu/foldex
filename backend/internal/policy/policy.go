@@ -25,14 +25,31 @@ import (
 // configurable, so an instance that never opens the screen behaves exactly as
 // it did — and one that does open it cannot end up weaker than that baseline.
 const (
-	MinPasswordFloor   = 8
-	MaxPasswordFloor   = 128
-	MinOTPTTLMinutes   = 1
-	MaxOTPTTLMinutes   = 30
-	MinOTPCooldownSecs = 30
-	MaxOTPCooldownSecs = 600
-	MaxAllowedDomains  = 32
-	maxDomainLen       = 253
+	MinPasswordFloor = 8
+	// MaxPasswordFloor is the largest floor that can be SET, and it is bcrypt's
+	// truncation point rather than a round number. A password is hashed as at
+	// most 72 BYTES (auth.MaxPasswordLen), so a floor above that is a rule no
+	// password can satisfy: every creation and every reset answers
+	// password_too_short forever, and the most hardened instance is the one
+	// that cannot install a credential at all.
+	MaxPasswordFloor = 72
+	// maxStoredPasswordFloor is what a document already in the database may
+	// carry and still be honoured, and it is the OLD bound on purpose.
+	//
+	// Get falls back to Default() on a failed Validate, so tightening the read
+	// bound would make an instance configured at 100 silently resolve to the
+	// baseline — floor 8, AND an empty Google allowlist, AND the default OTP
+	// lifetime. Tightening a rule must never be the thing that switches the
+	// other rules off. The stored value is therefore kept and enforced as
+	// written; the owner is refused only when they next SAVE, which is the
+	// moment they are looking at the field.
+	maxStoredPasswordFloor = 128
+	MinOTPTTLMinutes       = 1
+	MaxOTPTTLMinutes       = 30
+	MinOTPCooldownSecs     = 30
+	MaxOTPCooldownSecs     = 600
+	MaxAllowedDomains      = 32
+	maxDomainLen           = 253
 )
 
 // Policy is the whole editable surface, and the shape the API returns.
@@ -138,9 +155,9 @@ func (p Policy) WithDefaults() Policy {
 // has learned the floor, while one whose 4 is quietly stored as 8 believes the
 // instance is configured a way it is not.
 func (p Policy) Validate() error {
-	if p.PasswordMinLength < MinPasswordFloor || p.PasswordMinLength > MaxPasswordFloor {
+	if p.PasswordMinLength < MinPasswordFloor || p.PasswordMinLength > maxStoredPasswordFloor {
 		return fmt.Errorf("password_min_length must be between %d and %d",
-			MinPasswordFloor, MaxPasswordFloor)
+			MinPasswordFloor, maxStoredPasswordFloor)
 	}
 	if p.OTPTTLMinutes < MinOTPTTLMinutes || p.OTPTTLMinutes > MaxOTPTTLMinutes {
 		return fmt.Errorf("otp_ttl_minutes must be between %d and %d",
@@ -232,4 +249,24 @@ func (p Policy) AllowsEmail(email string) bool {
 		}
 	}
 	return false
+}
+
+// ValidateForWrite adds the bounds that apply only to a document being SAVED.
+//
+// Separate from Validate because the two answer different questions. Validate
+// asks "can this document be honoured?" and is on the read path, where a
+// refusal costs the instance every other rule in the document. This asks "may
+// an owner choose this?", where a refusal costs one form submission and teaches
+// the real limit.
+func (p Policy) ValidateForWrite() error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	if p.PasswordMinLength > MaxPasswordFloor {
+		return fmt.Errorf(
+			"password_min_length must be at most %d: bcrypt hashes at most %d bytes, "+
+				"so a higher floor is a rule no password can satisfy",
+			MaxPasswordFloor, MaxPasswordFloor)
+	}
+	return nil
 }

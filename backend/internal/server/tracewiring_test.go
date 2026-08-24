@@ -9,48 +9,23 @@ import (
 	"testing"
 
 	"foldex/internal/config"
+	"foldex/internal/pkg/spantest"
 	"foldex/internal/tracing"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	oteltrace "go.opentelemetry.io/otel/trace"
 )
-
-// tracingSpans filters the recorder down to spans produced by OUR middleware
-// (scope + SERVER kind): the pool's otelpgx tracer shares the same global
-// provider, so an exact count over everything would be structurally flaky.
-func tracingSpans(rec *tracetest.SpanRecorder) []sdktrace.ReadOnlySpan {
-	var out []sdktrace.ReadOnlySpan
-	for _, s := range rec.Ended() {
-		if s.InstrumentationScope().Name == "foldex/internal/tracing" && s.SpanKind() == oteltrace.SpanKindServer {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func withGlobalRecorder(t *testing.T) *tracetest.SpanRecorder {
-	t.Helper()
-	rec := tracetest.NewSpanRecorder()
-	prev := otel.GetTracerProvider()
-	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
-	t.Cleanup(func() { otel.SetTracerProvider(prev) })
-	return rec
-}
 
 // The middleware only mounts when Deps.Trace is set — the zero-value Deps of
 // every other router test keeps tracing off, so no test needs a provider.
 func TestTraceMiddlewareMountedOnlyWhenSet(t *testing.T) {
-	rec := withGlobalRecorder(t)
+	rec := spantest.Recorder(t)
 
 	logger := slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil))
 
 	// Without Deps.Trace: no spans, whatever the global provider is.
 	off := New(Deps{Logger: logger, Config: config.Config{BindAddr: "127.0.0.1"}})
 	off.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
-	if n := len(tracingSpans(rec)); n != 0 {
+	if n := len(spantest.ServerSpans(rec)); n != 0 {
 		t.Fatalf("router without Deps.Trace produced %d spans, want 0", n)
 	}
 
@@ -61,7 +36,7 @@ func TestTraceMiddlewareMountedOnlyWhenSet(t *testing.T) {
 	on := New(Deps{Logger: jl, Trace: tracing.Middleware, Config: config.Config{BindAddr: "127.0.0.1"}})
 	on.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/does-not-exist", nil))
 
-	spans := tracingSpans(rec)
+	spans := spantest.ServerSpans(rec)
 	if len(spans) != 1 {
 		t.Fatalf("router with Deps.Trace produced %d spans, want 1", len(spans))
 	}
@@ -78,7 +53,7 @@ func TestTraceMiddlewareMountedOnlyWhenSet(t *testing.T) {
 // non-deferred End it never finishes at all. Both mutants survived the first
 // sweep; this is their tombstone.
 func TestPanicIsRecordedAsErrorSpanWithRoute(t *testing.T) {
-	rec := withGlobalRecorder(t)
+	rec := spantest.Recorder(t)
 
 	var logBuf bytes.Buffer
 	jl := slog.New(slog.NewJSONHandler(&logBuf, nil))
@@ -94,7 +69,7 @@ func TestPanicIsRecordedAsErrorSpanWithRoute(t *testing.T) {
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("nil-pool panic must surface as 500 through the Recoverer, got %d", rr.Code)
 	}
-	spans := tracingSpans(rec)
+	spans := spantest.ServerSpans(rec)
 	if len(spans) != 1 {
 		t.Fatalf("panic must still END exactly one span (deferred End), got %d", len(spans))
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/roleperm"
 )
 
 func TestAdminAndAPITokenGateResponseMatrix(t *testing.T) {
@@ -79,7 +80,7 @@ func TestRequirePermission(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	h := RequirePermission(authctx.PermContentWrite)(next)
+	h := RequirePermission(roleperm.Default(), authctx.PermContentWrite)(next)
 
 	for _, tc := range []struct {
 		name      string
@@ -112,7 +113,7 @@ func TestRequirePermission(t *testing.T) {
 func TestRequirePermission_RefusesWithForbiddenNotNotFound(t *testing.T) {
 	t.Parallel()
 
-	h := RequirePermission(authctx.PermContentWrite)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	h := RequirePermission(roleperm.Default(), authctx.PermContentWrite)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	req := httptest.NewRequest(http.MethodPost, "/api/links", nil).WithContext(
 		authctx.WithPrincipal(context.Background(), authctx.Principal{UserID: 2, Role: authctx.RoleViewer}))
 	rec := httptest.NewRecorder()
@@ -132,7 +133,7 @@ func TestRequireWrite_SafeMethodsPassAndUnsafeOnesAreGated(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	h := RequireWrite(authctx.PermContentWrite)(next)
+	h := RequireWrite(roleperm.Default(), authctx.PermContentWrite)(next)
 	viewer := authctx.Principal{UserID: 2, Role: authctx.RoleViewer, Via: authctx.ViaSession}
 
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {

@@ -23,12 +23,36 @@ const METRICS = {
 
 const ROLES = {
   roles: [
-    { role: 'owner', permissions: ['content.read', 'policy.write'], user_count: 1 },
-    { role: 'admin', permissions: ['content.read', 'users.write'], user_count: 2 },
-    { role: 'editor', permissions: ['content.read', 'content.write'], user_count: 11 },
-    { role: 'viewer', permissions: ['content.read'], user_count: 4 },
+    // The owner holds EVERY permission — the server resolves that role from
+    // the compiled matrix and never from the store, so a fixture where it
+    // holds two would test a state the server cannot produce.
+    {
+      role: 'owner',
+      permissions: [
+        'content.read', 'content.write',
+        'backup.export', 'backup.restore', 'import.run',
+        'users.read', 'users.write', 'roles.assign', 'invites.read', 'invites.write',
+        'audit.read', 'policy.read', 'policy.write', 'instance.transfer',
+      ],
+      user_count: 1,
+      editable: false,
+    },
+    { role: 'admin', permissions: ['content.read', 'users.write'], user_count: 2, editable: true },
+    { role: 'editor', permissions: ['content.read', 'content.write'], user_count: 11, editable: true },
+    { role: 'viewer', permissions: ['content.read'], user_count: 4, editable: true },
   ],
-  permissions: ['content.read', 'content.write', 'users.write', 'policy.write'],
+  locked: ['content.read', 'roles.assign', 'policy.write', 'instance.transfer'],
+  caller_role: 'owner',
+  can_edit: true,
+  editable_disabled: false,
+  // The full ordered vocabulary the server sends — the matrix's rows. A short
+  // fixture would hide every case about a permission it happened to omit.
+  permissions: [
+    'content.read', 'content.write',
+    'backup.export', 'backup.restore', 'import.run',
+    'users.read', 'users.write', 'roles.assign', 'invites.read', 'invites.write',
+    'audit.read', 'policy.read', 'policy.write', 'instance.transfer',
+  ],
 }
 
 const POLICY = {
@@ -148,11 +172,24 @@ describe('relativeTime', () => {
 })
 
 describe('RolesMatrix', () => {
+  /** The checkbox for one cell of the grid. */
+  const cell = (permission: string, role: string) =>
+    // Matched as a FUNCTION, not a regex. Building one from `permission` meant
+    // escaping its metacharacters by hand, and escaping only the dot is the
+    // kind of half-sanitization that reads as done: `content.read` needed the
+    // dot escaped so it would not also match a future `contentXread`, but a
+    // permission carrying a backslash or a bracket would still have slipped
+    // through. A predicate has no metacharacters to get wrong.
+    screen.getByRole('checkbox', {
+      name: (accessibleName) =>
+        accessibleName.toLowerCase() === `${permission} for ${role}`.toLowerCase(),
+    })
+
   it('renders every role from the server, including one nobody holds', async () => {
     mockAdminApi({
       '/api/admin/roles': {
         ...ROLES,
-        roles: [...ROLES.roles.slice(0, 3), { role: 'viewer', permissions: [], user_count: 0 }],
+        roles: [...ROLES.roles.slice(0, 3), { role: 'viewer', permissions: [], user_count: 0, editable: true }],
       },
     })
     renderWithProviders(<RolesMatrix />)
@@ -168,6 +205,223 @@ describe('RolesMatrix', () => {
     mockAdminApi()
     renderWithProviders(<RolesMatrix />)
     expect(await screen.findByText('policy.write')).toBeInTheDocument()
+  })
+
+  // The whole reason the chip list became a grid: a chip list can only show
+  // what a role HAS, so "denied" and "does not exist" looked identical.
+  it('shows an absence, not just what each role holds', async () => {
+    mockAdminApi()
+    renderWithProviders(<RolesMatrix />)
+
+    expect(await screen.findByText('Owner')).toBeInTheDocument()
+    expect(cell('content.write', 'Editor')).toBeChecked()
+    expect(cell('content.write', 'Viewer')).not.toBeChecked()
+  })
+
+  it('never offers to edit the owner column', async () => {
+    mockAdminApi()
+    renderWithProviders(<RolesMatrix />)
+    await screen.findByText('Owner')
+
+    expect(cell('users.write', 'Owner')).toBeDisabled()
+    expect(cell('users.write', 'Editor')).toBeEnabled()
+  })
+
+  it('never offers a locked permission on any role', async () => {
+    mockAdminApi()
+    renderWithProviders(<RolesMatrix />)
+    await screen.findByText('Owner')
+
+    // roles.assign is the meta-permission; content.read is locked in the other
+    // direction, so it cannot be REMOVED either.
+    for (const role of ['Admin', 'Editor', 'Viewer']) {
+      expect(cell('roles.assign', role)).toBeDisabled()
+      expect(cell('content.read', role)).toBeDisabled()
+    }
+  })
+
+  // An admin must not be able to give itself owner-level powers. The gate is
+  // stated against what the CALLER holds, so it also covers a permission the
+  // admin simply lost.
+  it('refuses to GRANT what the caller does not hold, and still allows revoking', async () => {
+    mockAdminApi({
+      '/api/admin/roles': {
+        ...ROLES,
+        caller_role: 'admin',
+        // The admin has no import.run; the editor does.
+        roles: [
+          { role: 'owner', permissions: ['content.read'], user_count: 1, editable: false },
+          { role: 'admin', permissions: ['content.read', 'users.write'], user_count: 2, editable: true },
+          { role: 'editor', permissions: ['content.read', 'import.run'], user_count: 3, editable: true },
+          { role: 'viewer', permissions: ['content.read'], user_count: 4, editable: true },
+        ],
+      },
+    })
+    renderWithProviders(<RolesMatrix />)
+    await screen.findByText('Owner')
+
+    // Granting it to a role that lacks it: refused.
+    expect(cell('import.run', 'Viewer')).toBeDisabled()
+    // Taking it away from a role that HAS it: allowed, or an admin could never
+    // undo a grant the owner made.
+    expect(cell('import.run', 'Editor')).toBeEnabled()
+  })
+
+  it('renders read-only, with a reason, for a caller who cannot write', async () => {
+    mockAdminApi({ '/api/admin/roles': { ...ROLES, can_edit: false } })
+    renderWithProviders(<RolesMatrix />)
+
+    expect(await screen.findByText(/can read this matrix but not change it/i)).toBeInTheDocument()
+    expect(cell('content.write', 'Editor')).toBeDisabled()
+    expect(screen.queryByRole('button', { name: /save permissions/i })).toBeNull()
+  })
+
+  it('says so when the instance serves the compiled matrix', async () => {
+    mockAdminApi({ '/api/admin/roles': { ...ROLES, can_edit: false, editable_disabled: true } })
+    renderWithProviders(<RolesMatrix />)
+    expect(await screen.findByText(/built-in matrix, which cannot be configured/i)).toBeInTheDocument()
+  })
+
+  it('sends the FULL set for each changed role, and only for changed roles', async () => {
+    mockAdminApi()
+    const put = vi.spyOn(http, 'put').mockResolvedValue({ data: { roles: ROLES.roles } } as never)
+    renderWithProviders(<RolesMatrix />)
+    await screen.findByText('Owner')
+
+    const user = userEvent.setup()
+    await user.click(cell('backup.export', 'Viewer'))
+    await user.click(screen.getByRole('button', { name: /save permissions/i }))
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+    // Absent means revoked, so the whole resulting set travels — and the locked
+    // entries are stripped, because Resolve puts them back from the compiled
+    // matrix and storing them would create a second source of truth.
+    expect(put).toHaveBeenCalledWith('/api/admin/roles/viewer/permissions', {
+      permissions: ['backup.export'],
+    })
+  })
+
+  it('keeps Save unreachable until something actually changed', async () => {
+    mockAdminApi()
+    renderWithProviders(<RolesMatrix />)
+    await screen.findByText('Owner')
+
+    const save = screen.getByRole('button', { name: /save permissions/i })
+    expect(save).toBeDisabled()
+
+    const user = userEvent.setup()
+    await user.click(cell('backup.export', 'Viewer'))
+    expect(save).toBeEnabled()
+
+    // Toggling back is not "dirty": the set matches the server again.
+    await user.click(cell('backup.export', 'Viewer'))
+    expect(save).toBeDisabled()
+  })
+
+  it('surfaces the server refusal instead of a generic failure', async () => {
+    mockAdminApi()
+    vi.spyOn(http, 'put').mockRejectedValue({
+      response: { status: 403, data: { error: { code: 'permission_escalation' } } },
+    })
+    renderWithProviders(<RolesMatrix />)
+    await screen.findByText('Owner')
+
+    const user = userEvent.setup()
+    await user.click(cell('backup.export', 'Viewer'))
+    await user.click(screen.getByRole('button', { name: /save permissions/i }))
+
+    expect(await screen.findByRole('alert'))
+      .toHaveTextContent(/cannot grant a permission your own role does not hold/i)
+  })
+
+  // The PUT already answers with the whole matrix, resolved after its own
+  // write. Refetching would be a fourth request for an answer in hand.
+  //
+  // The server's answer deliberately DIFFERS from the draft: with the two
+  // identical, the checkbox stays checked whether or not the component writes
+  // the response into the cache, and dropping setQueryData altogether left
+  // this green. What is under test is that the grid follows the SERVER.
+  it('takes the fresh matrix from the write, without a further GET', async () => {
+    const get = mockAdminApi()
+    // The owner ticked backup.export for the viewer; the server answers with
+    // content.write instead — a state only the response can explain.
+    const fresh = ROLES.roles.map((r) =>
+      r.role === 'viewer' ? { ...r, permissions: ['content.read', 'content.write'] } : r,
+    )
+    vi.spyOn(http, 'put').mockResolvedValue({ data: { roles: fresh } } as never)
+    renderWithProviders(<RolesMatrix />)
+    await screen.findByText('Owner')
+    const before = get.mock.calls.filter(([url]) => url === '/api/admin/roles').length
+
+    const user = userEvent.setup()
+    await user.click(cell('backup.export', 'Viewer'))
+    await user.click(screen.getByRole('button', { name: /save permissions/i }))
+
+    // The grid follows the server, not the draft.
+    await waitFor(() => expect(cell('content.write', 'Viewer')).toBeChecked())
+    expect(cell('backup.export', 'Viewer')).not.toBeChecked()
+    // And the draft is gone, so Save is unreachable again.
+    expect(screen.getByRole('button', { name: /save permissions/i })).toBeDisabled()
+    // Without a further GET.
+    expect(get.mock.calls.filter(([url]) => url === '/api/admin/roles').length).toBe(before)
+  })
+
+  // Each refusal is a different sentence to the person reading it; the backend
+  // emits four distinct codes precisely so the screen can say which.
+  it.each([
+    ['role_not_editable', /owner always holds every permission/i],
+    ['permission_locked', /not configurable on any role/i],
+    ['permission_escalation', /cannot grant a permission your own role does not hold/i],
+    ['roles_not_configurable', /built-in matrix, which cannot be configured/i],
+    ['something_unmapped', /something went wrong|try again/i],
+  ])('maps the server code %s to its own message', async (code, expected) => {
+    mockAdminApi()
+    vi.spyOn(http, 'put').mockRejectedValue({
+      response: { status: 403, data: { error: { code } } },
+    })
+    renderWithProviders(<RolesMatrix />)
+    await screen.findByText('Owner')
+
+    const user = userEvent.setup()
+    await user.click(cell('backup.export', 'Viewer'))
+    await user.click(screen.getByRole('button', { name: /save permissions/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(expected)
+  })
+
+  // The only way to discard a draft without un-toggling every box by hand.
+  it('discards the draft on Cancel, and clears a standing error with it', async () => {
+    mockAdminApi()
+    vi.spyOn(http, 'put').mockRejectedValue({
+      response: { status: 403, data: { error: { code: 'permission_escalation' } } },
+    })
+    renderWithProviders(<RolesMatrix />)
+    await screen.findByText('Owner')
+
+    const user = userEvent.setup()
+    await user.click(cell('backup.export', 'Viewer'))
+    await user.click(screen.getByRole('button', { name: /save permissions/i }))
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+
+    await user.click(cell('backup.export', 'Viewer'))
+    await user.click(screen.getByRole('button', { name: /cancel/i }))
+
+    expect(screen.queryByRole('alert')).toBeNull()
+    await waitFor(() => expect(cell('backup.export', 'Viewer')).not.toBeChecked())
+    expect(screen.getByRole('button', { name: /save permissions/i })).toBeDisabled()
+  })
+
+  // A vocabulary the server grew and this file did not must not VANISH from
+  // the one screen whose job is to show what the server enforces.
+  it('still renders a permission it does not know how to group', async () => {
+    mockAdminApi({
+      '/api/admin/roles': {
+        ...ROLES,
+        permissions: [...ROLES.permissions, 'webhooks.write'],
+      },
+    })
+    renderWithProviders(<RolesMatrix />)
+    expect(await screen.findByText('webhooks.write')).toBeInTheDocument()
   })
 })
 

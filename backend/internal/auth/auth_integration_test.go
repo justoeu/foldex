@@ -38,6 +38,7 @@ import (
 	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/secrets"
 	"foldex/internal/policy"
+	"foldex/internal/roleperm"
 	"foldex/internal/testdb"
 )
 
@@ -179,6 +180,9 @@ type harness struct {
 	repo    *auth.Repository
 	cipher  *secrets.Cipher
 	codeMAC *auth.CodeMAC
+	// grants is the live RBAC store when the harness was built with
+	// RolePermissions; nil otherwise, which leaves the compiled matrix.
+	grants *roleperm.Repository
 }
 
 const testBaseURL = "https://foldex.test"
@@ -225,6 +229,10 @@ type harnessOpts struct {
 	// into the handler. Off by default so the tests written before ADR-35 keep
 	// exercising the compiled-in floors.
 	Policy bool
+	// RolePermissions wires the configurable RBAC matrix (ADR-42). Off by
+	// default so every test written before it keeps exercising the compiled
+	// matrix, which is exactly what a nil store means in production too.
+	RolePermissions bool
 }
 
 // testCipher is a FIXED key, so a test can assert that a seed encrypted in one
@@ -299,7 +307,12 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 	}
 	h := auth.NewHandler(cfg)
 	auth.SetTOTPVerificationHookForTest(h, opts.AfterTOTPVerification)
-	admin := auth.NewAdminHandler(repo, mail, logger, testBaseURL, cfg.Policy)
+	var grantsRepo *roleperm.Repository
+	if opts.RolePermissions {
+		grantsRepo = roleperm.NewRepository(pool)
+		require.NoError(t, grantsRepo.Load(context.Background()))
+	}
+	admin := auth.NewAdminHandler(repo, mail, logger, testBaseURL, cfg.Policy, grantsRepo)
 
 	r := chi.NewRouter()
 	r.Route("/api", func(api chi.Router) {
@@ -316,7 +329,7 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 				admin.Mount(ar)
 				if policyRepo != nil {
 					ar.Route("/policy", policy.NewHandler(
-						policyRepo, logger, admin.AuditPolicyChange).Mount)
+						policyRepo, logger, admin.AuditPolicyChange, nil).Mount)
 				}
 			})
 			// A stand-in for the content surface, so tests can assert that a
@@ -327,7 +340,7 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 			// Carries the same write gate internal/server mounts on the real
 			// content groups, so a viewer's refusal is exercised here rather
 			// than only asserted about the middleware in isolation.
-			pr.With(authgate.RequireWrite(authctx.PermContentWrite)).
+			pr.With(authgate.RequireWrite(roleperm.Default(), authctx.PermContentWrite)).
 				Post("/links", func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusCreated)
 				})
@@ -335,7 +348,7 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 	})
 	return &harness{
 		pool: pool, router: r, mail: mail, relay: relay, repo: repo,
-		cipher: cfg.Cipher, codeMAC: cfg.CodeMAC,
+		cipher: cfg.Cipher, codeMAC: cfg.CodeMAC, grants: grantsRepo,
 	}
 }
 

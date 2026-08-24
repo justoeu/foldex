@@ -25,6 +25,7 @@ const (
 	AuditSessionsRevoked  = "user.sessions_revoked"
 	AuditPasswordRecovery = "user.password_recovery_sent"
 	AuditPolicyChanged    = "policy.changed"
+	AuditRolePermissions  = "role.permissions_changed"
 	// AuditEmailChanged records the address MOVING, at the moment the
 	// confirmation link is consumed — never when it is requested. A request
 	// that nobody confirms changed nothing, and an entry for it would make the

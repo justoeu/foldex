@@ -24,7 +24,7 @@ import (
 )
 
 func TestNewHandler_NilLogger(t *testing.T) {
-	h := NewHandler(&fakeBackupSvc{}, nil)
+	h := NewHandler(&fakeBackupSvc{}, nil, nil)
 	require.NotNil(t, h)
 	require.NotNil(t, h.logger)
 }
@@ -182,7 +182,7 @@ func TestReadZipFromRequest_MultipartRestore(t *testing.T) {
 
 // Ensure Mount registers all three routes (smoke).
 func TestHandler_Mount_RoutesExist(t *testing.T) {
-	h := NewHandler(&fakeBackupSvc{}, nil)
+	h := NewHandler(&fakeBackupSvc{}, nil, nil)
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Route("/backup", h.Mount)
@@ -320,7 +320,7 @@ func TestHandler_ArchiveAdmissionIsSharedByExportValidateAndRestore(t *testing.T
 				release:   make(chan struct{}),
 				calls:     make(map[string]int),
 			}
-			h := NewHandler(svc, slog.Default())
+			h := NewHandler(svc, slog.Default(), nil)
 			createCalls := 0
 			h.createTemp = func() (*os.File, error) {
 				createCalls++
@@ -369,7 +369,7 @@ func TestHandler_ArchiveAdmissionIsSharedByExportValidateAndRestore(t *testing.T
 func TestHandler_ArchiveAdmissionRejectsBeforeTempSpool(t *testing.T) {
 	tempDir := t.TempDir()
 	svc := &blockingValidateService{entered: make(chan struct{}), release: make(chan struct{})}
-	h := NewHandler(svc, slog.Default())
+	h := NewHandler(svc, slog.Default(), nil)
 	createCalls := 0
 	h.createTemp = func() (*os.File, error) {
 		createCalls++

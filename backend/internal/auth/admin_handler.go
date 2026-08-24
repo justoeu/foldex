@@ -17,6 +17,7 @@ import (
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/roleperm"
 )
 
 // errOwnerImmutable is the one refusal every people-management route shares:
@@ -37,6 +38,11 @@ type AdminHandler struct {
 	// one route here that accepts a password. Nil runs the compiled-in floor,
 	// matching Handler.
 	policy PolicyReader
+	// grants is the effective RBAC matrix (ADR-42) and the roleperm store the
+	// matrix screen writes through. Nil at construction means the compiled
+	// matrix, read-only — the screen then reports every role as locked rather
+	// than offering a save that has nowhere to go.
+	grants *roleperm.Repository
 }
 
 // validatePassword mirrors Handler's, and is a METHOD for the same reason
@@ -68,12 +74,38 @@ func (h *AdminHandler) validatePassword(ctx context.Context, p string) error {
 // wiring in main.go broke no test. Nil is still accepted — it means "run the
 // compiled-in floor" — but now a caller has to say so.
 func NewAdminHandler(repo *Repository, m mailer.Mailer,
-	logger *slog.Logger, baseURL string, policy PolicyReader) *AdminHandler {
+	logger *slog.Logger, baseURL string, policy PolicyReader,
+	grants *roleperm.Repository) *AdminHandler {
 	return &AdminHandler{
 		repo: repo, mailer: m, logger: logger,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		policy:  policy,
+		grants:  grants,
 	}
+}
+
+// liveGrants is what the route gates consult, and it must be the LIVE
+// store rather than a snapshot.
+//
+// Mount runs once at boot, so returning `h.grants.Grants()` here froze every
+// /api/admin gate on the matrix as it stood at startup: the Load that follows
+// each write reached the repository and never reached these gates, and an
+// owner's revocation appeared to save while the administration routes kept
+// enforcing the old matrix until the process restarted. The direction of that
+// failure is the dangerous one — too much permission, not too little — and it
+// is the same defect the gate's parameter exists to prevent, reintroduced one
+// level up. The repository itself implements Can against the current snapshot,
+// so handing it over keeps the gate live.
+func (h *AdminHandler) liveGrants() authgate.Grants { return roleperm.OrDefault(h.grants) }
+
+// grantsSnapshot is a SNAPSHOT, for callers that read the whole matrix rather
+// than ask one question of it. Safe only per request — never captured at Mount;
+// see liveGrants.
+func (h *AdminHandler) grantsSnapshot() roleperm.Grants {
+	if h.grants == nil {
+		return roleperm.Default()
+	}
+	return h.grants.Grants()
 }
 
 func (h *AdminHandler) Mount(r chi.Router) {
@@ -84,9 +116,9 @@ func (h *AdminHandler) Mount(r chi.Router) {
 	// gates would make that screen describe a rule the server does not apply —
 	// and the day a role is added or narrowed, these mounts are what make the
 	// difference real instead of theoretical.
-	readUsers := authgate.RequirePermission(authctx.PermUsersRead)
-	writeUsers := authgate.RequirePermission(authctx.PermUsersWrite)
-	assignRoles := authgate.RequirePermission(authctx.PermRolesAssign)
+	readUsers := authgate.RequirePermission(h.liveGrants(), authctx.PermUsersRead)
+	writeUsers := authgate.RequirePermission(h.liveGrants(), authctx.PermUsersWrite)
+	assignRoles := authgate.RequirePermission(h.liveGrants(), authctx.PermRolesAssign)
 
 	r.With(readUsers).Get("/users", h.ListUsers)
 	// Creating an account with an administrator-chosen password. Gated on the
@@ -99,20 +131,29 @@ func (h *AdminHandler) Mount(r chi.Router) {
 	// Role and status travel in the same PATCH, so the stricter of the two
 	// permissions gates it.
 	r.With(assignRoles).Patch("/users/{id}", h.UpdateUser)
+	r.With(assignRoles).Put("/roles/{role}/permissions", h.SetRolePermissions)
 	r.With(writeUsers).Delete("/users/{id}", h.DeleteUser)
 	r.With(writeUsers).Post("/users/{id}/sessions/revoke", h.RevokeUserSessions)
 	r.With(writeUsers).Post("/users/{id}/force-password-reset", h.ForcePasswordReset)
 	// The only route in this file that is not open to every administrator. The
 	// group gate already established that the caller administers; this one asks
 	// the further question of whether they own the instance.
-	r.With(authgate.RequirePermission(authctx.PermInstanceTransfer)).
+	r.With(authgate.RequirePermission(h.liveGrants(), authctx.PermInstanceTransfer)).
 		Post("/users/{id}/transfer-ownership", h.TransferOwnership)
 	r.Get("/metrics", h.Metrics)
 	r.Get("/roles", h.Roles)
-	r.With(authgate.RequirePermission(authctx.PermAuditRead)).Get("/audit", h.ListAudit)
-	r.Get("/invites", h.ListInvites)
-	r.Post("/invites", h.CreateInvite)
-	r.Delete("/invites/{id}", h.RevokeInvite)
+	r.With(authgate.RequirePermission(h.liveGrants(), authctx.PermAuditRead)).Get("/audit", h.ListAudit)
+	// Gated, not merely listed. While the matrix was compiled these three
+	// permissions were inert constants and the omission was a documentation
+	// gap; with the matrix editable (ADR-42) an owner unticking invites.write
+	// would watch the save commit, the audit record it and the screen render
+	// it OFF while that role kept minting accounts. permissions.go says it
+	// outright: a matrix with entries nothing enforces is worse than none.
+	readInvites := authgate.RequirePermission(h.liveGrants(), authctx.PermInvitesRead)
+	writeInvites := authgate.RequirePermission(h.liveGrants(), authctx.PermInvitesWrite)
+	r.With(readInvites).Get("/invites", h.ListInvites)
+	r.With(writeInvites).Post("/invites", h.CreateInvite)
+	r.With(writeInvites).Delete("/invites/{id}", h.RevokeInvite)
 }
 
 func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
@@ -507,17 +548,33 @@ func (h *AdminHandler) Metrics(w http.ResponseWriter, r *http.Request) {
 
 // Roles serves the RBAC matrix plus how many accounts hold each role.
 func (h *AdminHandler) Roles(w http.ResponseWriter, r *http.Request) {
-	roles, err := h.repo.Roles(r.Context())
+	roles, err := h.repo.Roles(r.Context(), h.grantsSnapshot())
 	if err != nil {
 		h.logger.Error("admin roles", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
+	locked := make([]authctx.Permission, 0, len(authctx.AllPermissions))
+	for _, p := range authctx.AllPermissions {
+		if authctx.IsPermissionLocked(p) {
+			locked = append(locked, p)
+		}
+	}
+	principal, _ := authctx.FromContext(r.Context())
 	httperr.JSON(w, http.StatusOK, map[string]any{
 		"roles": roles,
 		// The full ordered vocabulary, so the client renders the matrix columns
 		// without hardcoding a list that could drift from the server's.
 		"permissions": authctx.AllPermissions,
+		// Which entries no configuration may touch, and what the CALLER holds.
+		// The screen needs both to explain a checkbox it cannot offer: locked
+		// is "nobody may change this", while a permission the caller lacks is
+		// "you may not grant this" — two different sentences, and a screen with
+		// only one of them tells the wrong one to somebody.
+		"locked":            locked,
+		"caller_role":       principal.Role,
+		"can_edit":          h.grantsSnapshot().Can(principal.Role, authctx.PermRolesAssign) && h.grants != nil,
+		"editable_disabled": h.grants == nil,
 	})
 }
 
@@ -680,4 +737,86 @@ func (h *AdminHandler) RevokeInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, AuditInviteRevoked, nil, fmt.Sprintf("invite %d", id))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// setRolePermissionsInput is strict: an unknown field is a refused request
+// rather than a silently ignored one, so a client sending `permission` for
+// `permissions` learns it instead of watching a save clear the role.
+type setRolePermissionsInput struct {
+	Permissions []authctx.Permission `json:"permissions"`
+}
+
+// SetRolePermissions replaces one role's configurable grants (ADR-42).
+//
+// Everything that makes this safe is in roleperm.ValidateWrite, and it is
+// there rather than here on purpose: the repository re-runs it against the
+// snapshot it is about to write from, so a second entry point added later
+// cannot skip the rules by not calling this handler.
+//
+// The refusals are told apart because they are different sentences to the
+// person reading them. "That role cannot be configured" is about the instance;
+// "that permission is not configurable" is about the entry; "you cannot grant
+// what you do not hold" is about the caller — and an administrator who saw one
+// generic 403 for all three would have no way to tell which.
+func (h *AdminHandler) SetRolePermissions(w http.ResponseWriter, r *http.Request) {
+	if h.grants == nil {
+		httperr.Write(w, httperr.New(http.StatusServiceUnavailable, "roles_not_configurable",
+			"this instance serves the compiled permission matrix"))
+		return
+	}
+	target := authctx.Role(chi.URLParam(r, "role"))
+
+	in, err := httperr.DecodeJSON[setRolePermissionsInput](w, r)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
+	caller, ok := authctx.FromContext(r.Context())
+	if !ok {
+		httperr.Write(w, httperr.ErrUnauthorized)
+		return
+	}
+
+	switch err := h.grants.Set(r.Context(), caller.Role, target, in.Permissions); {
+	case err == nil:
+	case errors.Is(err, roleperm.ErrRoleNotEditable):
+		httperr.Write(w, httperr.New(http.StatusForbidden, "role_not_editable",
+			"this role's permissions cannot be configured"))
+		return
+	case errors.Is(err, roleperm.ErrPermissionLocked):
+		httperr.Write(w, httperr.New(http.StatusForbidden, "permission_locked",
+			"this permission is not configurable"))
+		return
+	case errors.Is(err, roleperm.ErrEscalation):
+		httperr.Write(w, httperr.New(http.StatusForbidden, "permission_escalation",
+			"you cannot grant a permission your own role does not hold"))
+		return
+	case errors.Is(err, roleperm.ErrUnknownPermission):
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "unknown_permission",
+			"unknown permission"))
+		return
+	default:
+		h.logger.Error("set role permissions", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+
+	// The detail names the ROLE and the resulting set, never the caller's own
+	// role: ADR-34 keeps this record after the account is gone, and "who did
+	// it" is already the actor columns' job.
+	granted := h.grantsSnapshot().Permissions(target)
+	strs := make([]string, 0, len(granted))
+	for _, p := range granted {
+		strs = append(strs, string(p))
+	}
+	h.audit(r, AuditRolePermissions, nil,
+		fmt.Sprintf("%s: %s", target, strings.Join(strs, " ")))
+
+	roles, listErr := h.repo.Roles(r.Context(), h.grantsSnapshot())
+	if listErr != nil {
+		h.logger.Error("admin roles after write", "err", listErr)
+		httperr.Write(w, httperr.ErrInternal)
+		return
+	}
+	httperr.JSON(w, http.StatusOK, map[string]any{"roles": roles})
 }

@@ -304,6 +304,51 @@ proxy `/metrics`; scrape the backend port directly.
   static_configs: [{ targets: ["<backend-host>:9089"] }]
 ```
 
+## Traces (OpenTelemetry → Tempo)
+
+The backend emits OTLP/gRPC spans when `OTEL_EXPORTER_OTLP_ENDPOINT` is set
+(e.g. `http://obs-host:4317`; `https://` switches to TLS). Empty is the
+default and turns tracing **fully off** — no provider, no exporter, no
+per-request goroutine.
+
+With it set you get one SERVER span per request named by chi **route
+pattern** (`GET /api/links/{id}` — raw paths, ids and slugs never leave the
+process), CLIENT spans per Postgres query via `otelpgx` (SQL text disabled
+entirely), and a `trace_id` on every access-log line so Grafana's Loki→Tempo
+derived field jumps straight from a log to its trace.
+
+Each request span carries who made it:
+
+| Attribute | TraceQL | Value |
+|---|---|---|
+| `user.id` | `span.user.id` | Opaque account id — `{ span.user.id = "42" }` |
+| `user.roles` | `span.user.roles` | `owner` / `admin` / `editor` / `viewer` |
+| `foldex.auth.via` | `span.foldex.auth.via` | `session` or `api_token` |
+
+No e-mail and no display name: a trace store is a different retention domain
+from the database, with its own access control. The annotation hangs off the
+three places a principal is established, not off a route group, so every
+authenticated request carries it — including the credential-management half of
+`/api/auth` (sessions, password change, 2FA, API tokens). Pre-login requests
+have no principal and carry no user.
+
+With `AUTH_ENABLED=0` every request is attributed to the bootstrap
+administrator, so spans there say `owner` for traffic nobody signed in for.
+
+> **Keep `user.id` out of Tempo's span-metrics dimensions.** It is one time
+> series per account; derive RED from `http.route` instead.
+
+> **`http://` is unencrypted AND unauthenticated gRPC.** Identity travels on
+> every request, so a passive observer on that network path sees per-request
+> account id, role and credential kind. Use `https://` for anything crossing a
+> network you do not control. Whoever can read the trace store can enumerate
+> which accounts are administrators and profile any account's activity, with
+> no Foldex permission at all — treat that read access as administrative.
+
+Incoming `traceparent` headers are **discarded**, not joined: this service is
+the edge, so a client-supplied trace context could only let a caller pick our
+trace ids or exclude themselves from telemetry with `sampled=0`.
+
 ## Keyboard shortcuts (SPA)
 
 | Shortcut         | Action                          |
@@ -405,6 +450,20 @@ password and the audit trail cannot tell your sign-ins apart. The **invitation**
 avoids that: the person chooses their own password from a link. The address is created
 UNVERIFIED either way, and the role can never be `owner`.
 
+**Typing it or generating it.** A typed password is confirmed in a second field, so a
+credential nobody can recover is not created from a typo. **Generate a password** skips
+that step: 20 characters of cryptographic randomness — or more, if this instance's password
+floor is higher — drawn from an alphabet with no `0`/`O` and no `1`/`l`/`I`, so it survives
+being read out loud. It is shown in clear with a **Copy** button and no confirmation field,
+because there is no typo to catch; editing it by hand asks for the confirmation again.
+
+foldex itself never stores it — the drawer is the only place it appears. **Your browser
+might.** This is an ordinary password field on submit, so a password manager may offer to
+save it under your own vault, and a copy sits in the clipboard until something replaces it.
+That is the same trade the rest of this dialog already makes: for the window before the
+person changes it, their first password exists in more than one place. The invitation flow
+avoids all of it.
+
 **Administration table.** Each account row's actions — disable/enable, sign out
 everywhere, send recovery, transfer ownership, delete — each show an icon and their label, so
 nothing on the row reads as decoration. Each carries a screen-reader label naming both the
@@ -450,6 +509,28 @@ enforces — you can read it in **Settings → Administration → Roles and perm
 | **Admin** | Manages people, invitations and the audit trail — but does not set the rules they manage people under. |
 | **Editor** | An ordinary account: full read/write over its own library. This is what every pre-4-role `user` became. |
 | **Viewer** | Same library, read-only. Can still export a backup; cannot create, edit, import or restore. |
+
+**The matrix is editable, within a floor it cannot reach.** *Settings → Administration →
+Roles and permissions* is a grid — permissions down the side, roles across the top — so
+"who can restore a backup?" is one row rather than four paragraphs of chips to scan. The
+owner and any admin can tick and untick cells; four entries are locked for everyone and
+always will be. `roles.assign` is locked because a role that could be GIVEN the power to
+grant would grant itself everything else in one further step; `policy.write` and
+`instance.transfer` because they are the owner's own; and `content.read` is locked in the
+other direction — it cannot be removed, since an account that cannot read its own library
+is broken rather than restricted. The Owner column is not editable at all: it is the role
+that exists to be able to fix everything else.
+
+**An administrator cannot grant what their own role does not hold**, which is what keeps
+an admin from ticking themselves into owner-level powers. Revoking is not limited that way,
+or an admin could never undo a grant the owner made. A checkbox you cannot use says why on
+hover, and the four reasons are four different sentences.
+
+**Every tick actually does something.** Three permissions used to be listed and enforced by
+no route at all — exporting a backup and reading or sending invitations — so unticking them
+saved, was recorded in the audit trail, rendered as off, and changed nothing. They are
+gated now. A change reaches every account holding the role within about thirty seconds, and
+immediately on the backend that handled it.
 
 **Content stays private per account, in every role.** A role decides whether a write is
 accepted and whether the administration screens exist — never whose links you can see. An

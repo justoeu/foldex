@@ -1128,6 +1128,20 @@ O middleware monta via `Deps.Trace` (nil = off, o zero-value de todos os testes 
 
 **Consequências.** Com a env apontada para o Tempo da stack central, o backend aparece no APM Overview (RED por rota), no service graph (incluindo a aresta para o Postgres) e cada linha de log de acesso vira porta de entrada para o trace correspondente. Sem a env, o custo por request são dois lookups de contexto no no-op. Sem propagação de entrada, chamadas de um futuro cliente instrumentado não se juntam ao trace dele — trade-off deliberado registrado acima. O mailer segue sem traces — consumidor AMQP sem request HTTP; instrumentá-lo é trabalho futuro se a fila de mail precisar de spans.
 
+**Emenda — identidade no span (`span.user.id`).** Traces por rota respondem "o que está lento"; não respondem "para quem". `tracing.AnnotatePrincipal` carimba no MESMO span SERVER o `user.id` (id numérico opaco — `span.user.id` no TraceQL), `user.roles` e `foldex.auth.via` (`session` vs `api_token`).
+
+**É uma FUNÇÃO chamada nos três seams onde um principal nasce** — `auth.Middleware.Authenticate`, `auth.Middleware.Optional` e o bootstrap de `AUTH_ENABLED=0` — e o primeiro rascunho é a razão de ser assim. Ele era um MIDDLEWARE montado no grupo `/api`, e perdeu em silêncio toda a metade autenticada de `/api/auth` (sessões, troca de senha, 2FA, tokens de API): exatamente a superfície de gestão de credencial que um operador mais quer atribuída. Nada falhou — sem erro de build, sem panic, resposta idêntica. Um mount anota o grupo em que foi montado; um seam anota toda identidade que existe. O span abre vários middlewares acima e seu `End` é deferido lá, então ele continua mutável em todos os três pontos de chamada.
+
+Isso põe `auth` → `tracing` → `authctx` no grafo, acíclico. A alternativa estrutural — anotar dentro do próprio `authctx.WithPrincipal`, impossível de esquecer — foi recusada: `authctx` é uma folha que importa só `context`, e puxar OTel para lá o colocaria em todo pacote de repositório.
+
+O conjunto de atributos de identidade é FECHADO e testado por asserção negativa: nada de e-mail, nada de nome de exibição, nada de `session_id`. Um store de traces é outro domínio de retenção que o banco — controle de acesso próprio, cópia em todo backend que o consome — e um id opaco não vale nada para quem já não consegue ler `app_user`. É o mesmo raciocínio que mantém path cru fora de nome de span. Request sem autenticação não carrega `user.id` nenhum, nunca `"0"`.
+
+Os guards são de integração através de sessão real (`TestAuthenticate_StampsUserIDOnSpansOfTheAuthSurfaceItself`, `TestOptional_...`) e do `server.New` real (`TestUserIDIsStampedOnRequestSpansThroughTheRealRouter`), porque teste unitário compondo a cadeia à mão sobrevive tanto a desmontar quanto a mover o ponto de anotação. Três mutantes foram mortos por eles.
+
+Cardinalidade alta é CORRETA num atributo de span e errada como dimensão de métrica: `user.id` no processor de span-metrics do Tempo cunharia uma série temporal por conta. O RED dos dashboards continua derivando de `http.route`.
+
+**Consequência de segurança registrada em INV-170:** o exporter fala gRPC em texto claro e sem autenticação salvo endpoint `https://`, e o sampler grava todo span SERVER — então identidade atravessa o fio a cada request. Acesso de LEITURA ao store de traces passa a ser privilégio administrativo da instância: enumera quem é `owner`/`admin` e perfila atividade por conta, sem nenhuma permissão do Foldex.
+
 ## Future considerations
 
 - ~~**Auth + multi-user.**~~ → em execução: ADR-30/31/32 + [`docs/SDD-AUTH-RBAC.md`](SDD-AUTH-RBAC.md).
@@ -1334,3 +1348,125 @@ por um pedido mais novo, e a recusa a tokens de API. Da revisão de 23/08: a rot
 refresh NÃO mata uma troca pendente (direção positiva, que faltava), o irmão da janela de
 graça também não, a sondagem de username é fechada ao anônimo, o e-mail é 404 para não-admin,
 uma forma recusada consome orçamento e uma troca pendente conta como endereço ocupado.
+
+### ADR-42 — A matriz RBAC vira configurável, com um piso que a configuração não alcança
+
+**Contexto.** A matriz do ADR-33 era um `map` compilado em `internal/pkg/authctx`. Isso a
+tornava auditável e à prova de deriva, mas também intocável: um dono que quisesse um Editor
+sem `import.run`, ou um Leitor que pudesse restaurar backup, precisava de um fork. A tela
+`Papéis e permissões` mostrava quatro linhas de chips — e uma lista de chips só consegue
+mostrar o que um papel TEM, então "negado" e "não existe" eram indistinguíveis nela.
+
+**Decisão.** Uma tabela `role_permission` (mig 000039) guarda a metade configurável, semeada
+com exatamente o que a matriz compilada tinha no dia. A resolução (`internal/roleperm`) é a
+UNIÃO do que a tabela diz com um piso que ela não alcança, e cada regra desse piso existe
+porque sem ela a própria configurabilidade seria insegura:
+
+- **O `owner` nunca lê a tabela.** Suas permissões vêm do mapa compilado em toda resolução.
+  É isso — e não disciplina de handler — que garante que nenhum estado da tabela, truncamento
+  incluído, produza uma instância sem ninguém capaz de consertá-la. A CHECK constraint recusa
+  uma linha `owner` no banco, então nem o caminho SQL direto chega lá.
+- **`roles.assign` é intravável.** É a meta-permissão: um papel que pudesse RECEBER o poder de
+  conceder concederia a si mesmo todo o resto num segundo passo, o que tornaria o travamento
+  das outras decorativo.
+- **`policy.write` e `instance.transfer` são intraváveis** pelo motivo do ADR-35: um admin que
+  tomasse `policy.write` baixaria o piso de senha e entraria por ele.
+- **`content.read` é travada na direção oposta** — não pode ser REMOVIDA. Uma conta que não lê
+  a própria biblioteca não é restrita, é quebrada, e o dono dela não tem como saber qual das
+  duas é.
+
+Uma permissão travada é lida do mapa compilado **qualquer que seja a linha**, o que faz do
+travamento uma garantia e não "a tela atual não oferece": um `INSERT` escrito à mão é ignorado
+na resolução (`TestLoad_ARowThatGrantsALockedPermissionIsIgnored`).
+
+**A escrita é limitada pelo CHAMADOR, não por uma lista.** `ValidateWrite` recusa conceder o
+que o próprio papel de quem escreve não tem. Isso é o que responde "um administrador não pode
+se auto-adicionar itens de nível Proprietário", e está enunciado em termos do chamador de
+propósito: uma permissão destravada no futuro fica coberta por construção, enquanto uma lista
+de permissões-de-owner teria de ser lembrada. **Revogar não é limitado assim** — senão um
+admin nunca poderia desfazer uma concessão feita pelo dono.
+
+**O gate recebe a matriz como PARÂMETRO.** `authgate.RequirePermission(grants, p)` deixou de
+ser `RequirePermission(p)`, e isso é a segurança inteira do ADR: como valor padrão de pacote,
+um mount site que esquecesse de passar a matriz configurada continuaria aplicando a compilada
+em silêncio, e a revogação do dono pareceria salvar sem mudar nada. Como parâmetro, esquecer é
+erro de compilação — foi o compilador que listou os sete pontos a atualizar. Uma matriz `nil`
+no gate NEGA; `nil` num construtor significa "a matriz compilada", e a substituição fica
+visível no construtor em vez de escondida no fundo do gate.
+
+**O snapshot.** `Can` roda no caminho de autorização de TODA requisição, então uma query por
+verificação poria um round trip na frente de cada chamada de API. `roleperm.Repository` guarda
+uma resolução imutável sob `RWMutex`, trocada inteira na escrita. Uma leitura que falha
+mantém o snapshot anterior e é logada: substituí-lo pela matriz compilada em cada falha
+restauraria em silêncio permissões que o dono revogou deliberadamente. Uma segunda réplica só
+vê a mudança no próximo `Load`.
+
+**Consequências.** `GET /api/admin/roles` passa a devolver a matriz EFETIVA (não a compilada —
+uma tela cujo trabalho é mostrar o que o servidor aplica não pode descrever a regra que o
+servidor parou de aplicar), mais `locked`, `caller_role`, `can_edit` e `editable_disabled`,
+para que a tela renderize da resposta do servidor em vez de re-derivar a política. `PUT
+/api/admin/roles/{role}/permissions` envia o CONJUNTO INTEIRO — ausente significa revogado,
+a única codificação em que dois administradores editando ao mesmo tempo não fundem
+silenciosamente suas intenções num papel que nenhum dos dois escolheu. As quatro recusas são
+códigos distintos porque são frases diferentes para quem lê: `role_not_editable` fala da
+instância, `permission_locked` da entrada, `permission_escalation` do chamador.
+
+`testdb.Reset` **ressemeia** a tabela: truncá-la e parar seria deixar não um banco limpo, mas
+uma instância com todo papel editável reduzido ao piso travado — e o próximo teste a construir
+um repositório real veria escritas de conteúdo comuns responderem 403 sem nada apontando a
+causa.
+
+**Alternativa rejeitada:** guardar o delta como documento JSON em `app_setting`, no padrão do
+ADR-35. Seria mais simples e degradaria melhor, mas a tabela normalizada é auditável por SQL —
+e o risco que ela introduz ("tabela vazia = ninguém pode nada") foi fechado estruturalmente
+pelo piso acima, não por cuidado.
+
+#### ADR-42, emendas do sweep
+
+A rodada de revisão encontrou quatro defeitos, e os dois piores são a MESMA falha em
+níveis diferentes — vale registrar o padrão, não só as correções.
+
+**`Deps.Grants` nunca era preenchido.** Os mount sites tinham o parâmetro (o compilador
+exigiu), mas `cmd/server/main.go` construía `server.Deps` sem o campo, então o router caía
+em `roleperm.Default()` e os gates de `/links`, `/notes`, `/tags`, `/import` e
+`/backup/restore` seguiam aplicando a matriz compilada. Uma revogação comitava, era
+auditada, aparecia desmarcada na tela — e não valia ali. Pior: os gates que `main` conecta
+à mão (admin, folders, policy) **honravam**, então a revogação ficava PARCIALMENTE
+aplicada, o que se lê como instabilidade e não como bug. O default `nil = compilada`, que
+existe para os testes, foi exatamente o que permitiu esquecer. `TestServerDepsCarriesTheLiveGrants`
+percorre o AST de `main.go` e recusa o literal sem o campo — nenhum teste de unidade
+consegue ver isso, porque o defeito é um campo ausente num composite literal que compila.
+
+**`AdminHandler.Mount` capturava a matriz como valor**, congelando os gates de `/api/admin`
+no snapshot do boot. Mesma direção de falha (permissão a mais), mesma causa (uma indireção
+a mais entre o parâmetro e a fonte viva). `liveGrants()` devolve o repositório;
+`grantsSnapshot()` continua existindo, por requisição, e os nomes agora dizem qual é qual.
+
+**Três permissões eram oferecidas e nenhuma rota aplicava** — `backup.export`,
+`invites.read`, `invites.write`. Enquanto a matriz era compilada, lacuna de documentação;
+com ela editável, um toggle que salva, audita e não faz nada. Agora estão montadas, e
+`TestEveryPermissionIsEnforcedSomewhere` varre o AST atrás de argumentos de
+`RequirePermission`/`RequireWrite`. `content.read` é a única isenta, e a isenção é
+VERIFICADA: o teste exige que ela continue travada e presente em todo papel — se for
+destravada, vira um toggle e o guard passa a cobrá-la no mesmo commit.
+
+**`ValidateWrite` não checava o chamador quando `want` era vazio.** Todas as outras regras
+estavam dentro do laço sobre `want`, então `Set(viewer, admin, nil)` zerava os admins e
+retornava nil. Inalcançável por HTTP (a rota gateia em `roles.assign`), mas a função é
+documentada como o ponto que uma segunda porta de entrada não consegue contornar — e não
+era. A checagem subiu para o topo.
+
+**Lost update.** DELETE-then-INSERT sob READ COMMITTED perdia a intenção de quem revoga:
+a segunda transação tira snapshot antes do commit da primeira, então as linhas que a
+primeira inseriu são invisíveis ao DELETE dela e sobrevivem. Um `pg_advisory_xact_lock`
+por PAPEL serializa apenas escritas da matriz — advisory em vez de SERIALIZABLE porque não
+há o que repetir aqui: são escritas raras, de ritmo humano, e a segunda esperar é o
+comportamento desejado, enquanto uma falha de serialização chegaria ao dono como um 500
+que ele simplesmente repetiria.
+
+**Não existia o "próximo Load periódico"** que o comentário do `Set` e o INV-167 citavam.
+`StartReloading` (30 s) passa a existir: ele limita quanto tempo uma revogação leva para
+chegar a uma réplica que não a executou, e — no processo que executou — quanto tempo um
+refresh que falhou deixa a matriz velha no ar, que antes era para sempre. Devolve um canal
+fechado na saída, para que o encerramento seja OBSERVADO e não inferido de uma contagem de
+goroutines que o pool também mexe.

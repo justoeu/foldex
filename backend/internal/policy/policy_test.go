@@ -28,7 +28,11 @@ func TestValidate_RefusesEverythingBelowTheFloors(t *testing.T) {
 		mutate func(*policy.Policy)
 	}{
 		{"password below floor", func(p *policy.Policy) { p.PasswordMinLength = policy.MinPasswordFloor - 1 }},
-		{"password absurdly high", func(p *policy.Policy) { p.PasswordMinLength = policy.MaxPasswordFloor + 1 }},
+		// Not MaxPasswordFloor+1: that bound now belongs to ValidateForWrite,
+		// because Get falls back to Default() on a failed Validate and a stored
+		// document must not lose its Google allowlist to a tightened password
+		// rule. See TestPasswordFloor_WriteBoundTightensAndReadBoundDoesNot.
+		{"password absurdly high", func(p *policy.Policy) { p.PasswordMinLength = 10_000 }},
 		{"otp ttl zero", func(p *policy.Policy) { p.OTPTTLMinutes = 0 }},
 		{"otp ttl too long", func(p *policy.Policy) { p.OTPTTLMinutes = policy.MaxOTPTTLMinutes + 1 }},
 		{"cooldown too short", func(p *policy.Policy) { p.OTPCooldownSeconds = policy.MinOTPCooldownSecs - 1 }},
@@ -107,4 +111,39 @@ func TestAllowsEmail_MatchesTheExactDomainOnly(t *testing.T) {
 func TestAllowsEmail_EmptyListAllowsEverything(t *testing.T) {
 	p := policy.Default()
 	assert.True(t, p.AllowsEmail("anyone@anywhere.test"))
+}
+
+// The write bound is bcrypt's truncation point, and the read bound is NOT.
+//
+// Tightening both would make an instance configured at 100 fall back to
+// Default() on every read — floor 8, empty Google allowlist, default OTP
+// lifetime — so a rule getting stricter would be the thing that switched the
+// other rules off.
+func TestPasswordFloor_WriteBoundTightensAndReadBoundDoesNot(t *testing.T) {
+	beyondBcrypt := policy.Default()
+	beyondBcrypt.PasswordMinLength = policy.MaxPasswordFloor + 1
+
+	require.Error(t, beyondBcrypt.ValidateForWrite(),
+		"an owner must not be able to SAVE a floor no password can satisfy")
+	require.NoError(t, beyondBcrypt.Validate(),
+		"a document already stored at that floor must still be honoured, "+
+			"or tightening this rule silently reverts every other one")
+
+	atBound := policy.Default()
+	atBound.PasswordMinLength = policy.MaxPasswordFloor
+	require.NoError(t, atBound.ValidateForWrite(), "the bound itself is settable")
+}
+
+func TestPasswordFloor_WriteBoundStillRefusesBelowTheFloor(t *testing.T) {
+	tooLow := policy.Default()
+	tooLow.PasswordMinLength = policy.MinPasswordFloor - 1
+	assert.Error(t, tooLow.ValidateForWrite())
+}
+
+// The historical ceiling is what a stored document may carry, and it is still
+// finite: a value past it is a corrupt row, not a configuration.
+func TestPasswordFloor_ReadBoundIsNotUnbounded(t *testing.T) {
+	absurd := policy.Default()
+	absurd.PasswordMinLength = 10_000
+	assert.Error(t, absurd.Validate())
 }

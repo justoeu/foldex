@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"foldex/internal/pkg/authctx"
+
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -452,5 +454,207 @@ func TestMiddlewareRecordsImplicit200WhenHandlerWritesNothing(t *testing.T) {
 	}
 	if v, ok := attrValue(spans[0], "http.response.status_code"); !ok || v != "200" {
 		t.Fatalf("silent handler must record status 200 via the fallback, got %q (present=%v)", v, ok)
+	}
+}
+
+// withPrincipal mirrors exactly what auth.Middleware.Authenticate does at its
+// principal seam: derive the context, annotate, pass it on. Anything else here
+// would be testing a shape the production code does not have.
+func withPrincipal(p authctx.Principal) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := authctx.WithPrincipal(r.Context(), p)
+			AnnotatePrincipal(ctx)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// annotateBare calls AnnotatePrincipal on a context that never received a
+// principal — the /go/{slug} and pre-login shape.
+func annotateBare(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		AnnotatePrincipal(r.Context())
+		next.ServeHTTP(w, r)
+	})
+}
+
+// The whole point of the feature: `span.user.id` in TraceQL. The attributes
+// must land on the SERVER span Middleware opened — not on a second span —
+// because that is the one Tempo indexes and the one the access log's trace_id
+// points at.
+func TestAnnotatePrincipalStampsIdentityOnTheServerSpan(t *testing.T) {
+	rec := withRecorder(t)
+
+	r := chi.NewRouter()
+	r.Use(Middleware)
+	r.Group(func(pr chi.Router) {
+		pr.Use(withPrincipal(authctx.Principal{
+			UserID: 4242, Role: authctx.RoleEditor, Via: authctx.ViaAPIToken,
+		}))
+		pr.Get("/api/links/{id}", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+	})
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/links/7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	spans := rec.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("identity must be stamped on the EXISTING server span, got %d spans", len(spans))
+	}
+	s := spans[0]
+	if s.SpanKind() != oteltrace.SpanKindServer {
+		t.Fatalf("annotated span must be the SERVER span, got %v", s.SpanKind())
+	}
+	if v, ok := attrValue(s, "user.id"); !ok || v != "4242" {
+		t.Fatalf(`user.id must be the opaque numeric id (TraceQL span.user.id), got %q (present=%v)`, v, ok)
+	}
+	if v, ok := attrValue(s, "user.roles"); !ok || !strings.Contains(v, "editor") {
+		t.Fatalf("user.roles must carry the RBAC role, got %q (present=%v)", v, ok)
+	}
+	if v, ok := attrValue(s, "foldex.auth.via"); !ok || v != authctx.ViaAPIToken {
+		t.Fatalf("foldex.auth.via must distinguish token from session, got %q (present=%v)", v, ok)
+	}
+
+	// An empty Role or Via must be OMITTED, not sent as "". Tempo indexes an
+	// empty string as a value like any other, so a junk dimension is a junk
+	// dimension — and dropping the two guards leaves every other assertion
+	// here green.
+	rec2 := withRecorder(t)
+	r2 := chi.NewRouter()
+	r2.Use(Middleware)
+	r2.Group(func(pr chi.Router) {
+		pr.Use(withPrincipal(authctx.Principal{UserID: 5}))
+		pr.Get("/api/links", func(w http.ResponseWriter, _ *http.Request) {})
+	})
+	srv2 := httptest.NewServer(r2)
+	defer srv2.Close()
+	resp2, err := http.Get(srv2.URL + "/api/links")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	bare := rec2.Ended()[0]
+	if v, ok := attrValue(bare, "user.roles"); ok {
+		t.Fatalf("an empty Role must be omitted, not sent as %q", v)
+	}
+	if v, ok := attrValue(bare, "foldex.auth.via"); ok {
+		t.Fatalf("an empty Via must be omitted, not sent as %q", v)
+	}
+	// The route name still wins: annotating must not disturb what Middleware
+	// resolved after the handler ran.
+	if s.Name() != "GET /api/links/{id}" {
+		t.Fatalf("span name must stay the route pattern, got %q", s.Name())
+	}
+}
+
+// A trace store is a different retention domain from the database, so the
+// identity attribute set is CLOSED: only the opaque id, the role and the
+// credential kind. Adding user.name (or any address-bearing key) must be a
+// deliberate decision that breaks this test, not a one-line drive-by.
+func TestAnnotatePrincipalRecordsNoIdentifyingAttributeBeyondTheOpaqueID(t *testing.T) {
+	rec := withRecorder(t)
+
+	r := chi.NewRouter()
+	r.Use(Middleware)
+	r.Group(func(pr chi.Router) {
+		pr.Use(withPrincipal(authctx.Principal{
+			UserID: 1, Role: authctx.RoleOwner, SessionID: 99, Via: authctx.ViaSession,
+		}))
+		pr.Get("/api/links", func(w http.ResponseWriter, _ *http.Request) {})
+	})
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/links")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	allowed := map[string]bool{"user.id": true, "user.roles": true, "foldex.auth.via": true}
+	for _, kv := range rec.Ended()[0].Attributes() {
+		k := string(kv.Key)
+		if (strings.HasPrefix(k, "user.") || strings.HasPrefix(k, "enduser.")) && !allowed[k] {
+			t.Fatalf("identity attribute %q was added without a decision — see the AnnotatePrincipal comment", k)
+		}
+		// SessionID is a live credential handle; it has no business in a trace.
+		if kv.Value.Emit() == "99" {
+			t.Fatalf("session id leaked into span attribute %s", k)
+		}
+	}
+}
+
+// Called where no principal exists (the pre-login flows, the public /go and
+// /n redirects) it must add nothing and serve normally — an
+// unauthenticated request must not mint user.id="0", which would collapse
+// every anonymous trace onto one fictional account in Tempo.
+func TestAnnotatePrincipalAddsNothingWithoutAPrincipal(t *testing.T) {
+	rec := withRecorder(t)
+
+	r := chi.NewRouter()
+	r.Use(Middleware)
+	r.Use(annotateBare)
+	r.Get("/api/auth/login", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/auth/login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("request must be served normally, got %d", resp.StatusCode)
+	}
+	if v, ok := attrValue(rec.Ended()[0], "user.id"); ok {
+		t.Fatalf("unauthenticated span must carry no user.id, got %q", v)
+	}
+}
+
+// With tracing off the global provider is the OTel no-op: SpanFromContext
+// returns a non-recording span and the middleware must be a pass-through, not
+// a panic and not a cost.
+func TestAnnotatePrincipalIsHarmlessWhenTracingIsOff(t *testing.T) {
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(noop.NewTracerProvider())
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	r := chi.NewRouter()
+	r.Use(Middleware)
+	r.Use(withPrincipal(authctx.Principal{UserID: 7, Role: authctx.RoleViewer, Via: authctx.ViaSession}))
+	r.Get("/api/links", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/links")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("no-op provider must not change handling, got %d", resp.StatusCode)
+	}
+
+	// Serving correctly is not the contract — being FREE is. The IsRecording
+	// check is a pure allocation guard, so only counting allocations can tell
+	// it apart from its own absence: without it, the attribute slice and the
+	// strconv both run on every request of an instance that has tracing off.
+	ctx := authctx.WithPrincipal(context.Background(),
+		authctx.Principal{UserID: 7, Role: authctx.RoleViewer, Via: authctx.ViaSession})
+	if n := testing.AllocsPerRun(50, func() { AnnotatePrincipal(ctx) }); n != 0 {
+		t.Fatalf("AnnotatePrincipal must allocate nothing on a non-recording span, got %.0f allocs/op", n)
 	}
 }

@@ -32,6 +32,7 @@ import (
 	"foldex/internal/policy"
 	"foldex/internal/push"
 	"foldex/internal/redirect"
+	"foldex/internal/roleperm"
 	"foldex/internal/settings"
 	"foldex/internal/stats"
 	"foldex/internal/tags"
@@ -87,6 +88,12 @@ type Deps struct {
 	AuthMiddleware *auth.Middleware
 	FolderHandler  *folders.Handler
 
+	// Grants is the configured RBAC matrix (ADR-42). Nil means the compiled
+	// one — the zero-value Deps used across router tests — so a suite that does
+	// not care about configured permissions gets the historical behaviour
+	// rather than a router where nobody can do anything.
+	Grants authgate.Grants
+
 	// Metrics wires the Prometheus collectors (internal/metrics). When set,
 	// the instrumentation middleware mounts before everything that can answer
 	// a request, and GET /metrics is served behind Config.MetricsToken. Nil
@@ -112,10 +119,14 @@ func New(d Deps) http.Handler {
 	if d.Config.AuthEnabled && d.AuthMiddleware == nil {
 		panic("server: AUTH_ENABLED requires AuthMiddleware")
 	}
+	// Resolved once, before anything that gates. Nil Deps.Grants means the
+	// compiled matrix — see the field's note.
+	grants := roleperm.OrDefault(d.Grants)
+
 	r := chi.NewRouter()
 	var backupHandler *backup.Handler
 	if d.StorageBucket != nil {
-		backupHandler = backup.NewHandler(backup.NewService(d.Pool, d.StorageBucket, d.Logger), d.Logger)
+		backupHandler = backup.NewHandler(backup.NewService(d.Pool, d.StorageBucket, d.Logger), d.Logger, grants)
 	}
 	// NOT chi's middleware.RealIP: that one rewrites RemoteAddr from
 	// X-Forwarded-For unconditionally, which is correct behind nginx and
@@ -277,7 +288,7 @@ func New(d Deps) http.Handler {
 			//
 			// /folders and /backup are deliberately absent: both answer POST to
 			// operations that only read, so they gate per route below.
-			writeGate := authgate.RequireWrite(authctx.PermContentWrite)
+			writeGate := authgate.RequireWrite(grants, authctx.PermContentWrite)
 
 			pr.Route("/tags", func(tr chi.Router) {
 				tr.Use(writeGate)
@@ -303,7 +314,7 @@ func New(d Deps) http.Handler {
 			foldersRepo := folders.NewRepository(d.Pool)
 			folderHandler := d.FolderHandler
 			if folderHandler == nil {
-				folderHandler = folders.NewHandler(foldersRepo, d.FolderUnlockKey, settingsRepo)
+				folderHandler = folders.NewHandler(foldersRepo, d.FolderUnlockKey, settingsRepo, grants)
 			}
 			pr.Route("/folders", folderHandler.Mount)
 
@@ -348,7 +359,7 @@ func New(d Deps) http.Handler {
 			}
 
 			pr.Route("/import", func(ir chi.Router) {
-				ir.Use(authgate.RequireWrite(authctx.PermImportRun))
+				ir.Use(authgate.RequireWrite(grants, authctx.PermImportRun))
 				importer.NewHandler(d.Pool, d.Worker).Mount(ir)
 			})
 			pr.Route("/export", exporter.NewHandler(d.Pool).Mount)
@@ -426,7 +437,7 @@ func bootstrapPrincipal(pool *pgxpool.Pool, logger *slog.Logger) func(http.Handl
 					"principal_unavailable", "no bootstrap administrator is available"))
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(authctx.WithPrincipal(r.Context(), authctx.Principal{
+			ctx := authctx.WithPrincipal(r.Context(), authctx.Principal{
 				UserID: uid,
 				// Owner, not admin: with AUTH_ENABLED=0 anyone who can reach the
 				// port owns the library anyway, and attributing requests to a role
@@ -434,7 +445,12 @@ func bootstrapPrincipal(pool *pgxpool.Pool, logger *slog.Logger) func(http.Handl
 				// fix the very lockout it exists for.
 				Role: authctx.RoleOwner,
 				Via:  authctx.ViaSession,
-			})))
+			})
+			// Every request under AUTH_ENABLED=0 is attributed to this account,
+			// so its spans say "owner" for traffic nobody signed in for. That is
+			// the escape hatch working as documented, not identity being wrong.
+			tracing.AnnotatePrincipal(ctx)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }

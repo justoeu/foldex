@@ -75,7 +75,8 @@ describe('AdminUsersPage', () => {
 
     await u.type(dlg.getByLabelText(/e-?mail/i), 'new@foldex.test')
     await u.type(dlg.getByLabelText(/display name/i), 'New Person')
-    await u.type(dlg.getByLabelText(/temporary password/i), 'a fine temporary password')
+    await u.type(dlg.getByLabelText(/^temporary password$/i), 'a fine temporary password')
+    await u.type(dlg.getByLabelText(/^confirm the temporary password$/i), 'a fine temporary password')
     await u.click(dlg.getByRole('button', { name: /add user/i }))
 
     await waitFor(() =>
@@ -118,7 +119,7 @@ describe('AdminUsersPage', () => {
     await u.click(await screen.findByRole('button', { name: /add user/i }))
     const dlg = within(screen.getByRole('dialog'))
     await u.type(dlg.getByLabelText(/e-?mail/i), 'new@foldex.test')
-    await u.type(dlg.getByLabelText(/temporary password/i), 'short')
+    await u.type(dlg.getByLabelText(/^temporary password$/i), 'short')
 
     expect(dlg.getByRole('button', { name: /add user/i })).toBeDisabled()
   })
@@ -138,7 +139,8 @@ describe('AdminUsersPage', () => {
     await u.click(await screen.findByRole('button', { name: /add user/i }))
     const dlg = within(screen.getByRole('dialog'))
     await u.type(dlg.getByLabelText(/e-?mail/i), 'new@foldex.test')
-    await u.type(dlg.getByLabelText(/temporary password/i), 'twelve chars')
+    await u.type(dlg.getByLabelText(/^temporary password$/i), 'twelve chars')
+    await u.type(dlg.getByLabelText(/^confirm the temporary password$/i), 'twelve chars')
     await u.click(dlg.getByRole('button', { name: /add user/i }))
 
     expect(await dlg.findByRole('alert')).toHaveTextContent(/at least 20 characters/i)
@@ -155,7 +157,8 @@ describe('AdminUsersPage', () => {
     await u.click(await screen.findByRole('button', { name: /add user/i }))
     const dlg = within(screen.getByRole('dialog'))
     await u.type(dlg.getByLabelText(/e-?mail/i), 'new@foldex.test')
-    await u.type(dlg.getByLabelText(/temporary password/i), 'a fine temporary password')
+    await u.type(dlg.getByLabelText(/^temporary password$/i), 'a fine temporary password')
+    await u.type(dlg.getByLabelText(/^confirm the temporary password$/i), 'a fine temporary password')
     const before = get.mock.calls.filter(([url]) => url === '/api/admin/users').length
     await u.click(dlg.getByRole('button', { name: /add user/i }))
 
@@ -177,7 +180,8 @@ describe('AdminUsersPage', () => {
     await u.click(await screen.findByRole('button', { name: /add user/i }))
     const dlg = within(screen.getByRole('dialog'))
     await u.type(dlg.getByLabelText(/e-?mail/i), 'admin@foldex.test')
-    await u.type(dlg.getByLabelText(/temporary password/i), 'a fine temporary password')
+    await u.type(dlg.getByLabelText(/^temporary password$/i), 'a fine temporary password')
+    await u.type(dlg.getByLabelText(/^confirm the temporary password$/i), 'a fine temporary password')
     await u.click(dlg.getByRole('button', { name: /add user/i }))
 
     expect(await dlg.findByRole('alert')).toHaveTextContent(/already registered/i)
@@ -375,6 +379,7 @@ describe('creating a user', () => {
     // empty password field and the gate itself goes unmeasured — which is
     // exactly how the first version of this test survived deleting the gate.
     await u.type(dialog.getByLabelText(/^temporary password$/i), 'a long enough password')
+    await u.type(dialog.getByLabelText(/^confirm the temporary password$/i), 'a long enough password')
 
     expect(await dialog.findByText(/already in use/i)).toBeInTheDocument()
     expect(dialog.getByRole('button', { name: /add user/i })).toBeDisabled()
@@ -391,6 +396,7 @@ describe('creating a user', () => {
     const dialog = within(await screen.findByRole('dialog'))
     await u.type(dialog.getByLabelText(/e-mail/i), 'new@foldex.test')
     await u.type(dialog.getByLabelText(/^temporary password$/i), 'a long enough password')
+    await u.type(dialog.getByLabelText(/^confirm the temporary password$/i), 'a long enough password')
 
     await waitFor(() => expect(dialog.getByText(/available/i)).toBeInTheDocument())
     expect(dialog.getByRole('button', { name: /add user/i })).toBeEnabled()

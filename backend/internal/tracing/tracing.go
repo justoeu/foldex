@@ -24,11 +24,15 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+
+	"foldex/internal/pkg/authctx"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -38,6 +42,12 @@ import (
 )
 
 const tracerName = "foldex/internal/tracing"
+
+// authViaKey records which credential authenticated the request — a session
+// cookie or an API token. There is no semantic convention for it, so it is
+// namespaced under the service rather than squatting on a reserved key that a
+// future semconv release could define differently.
+const authViaKey = attribute.Key("foldex.auth.via")
 
 // Config carries what Setup needs. Endpoint accepts the OTLP gRPC endpoint in
 // the standard OTEL_EXPORTER_OTLP_ENDPOINT shapes: "host:4317",
@@ -174,6 +184,58 @@ func Middleware(next http.Handler) http.Handler {
 			span.SetStatus(codes.Error, http.StatusText(status))
 		}
 	})
+}
+
+// AnnotatePrincipal stamps the identity in ctx onto the SERVER span that
+// Middleware opened. It reads the principal from ctx rather than taking one,
+// so it cannot be called with an identity the request is not actually running
+// as.
+//
+// It is a FUNCTION called from the three places that establish a principal —
+// auth.Middleware.Authenticate, auth.Middleware.Optional and the
+// AUTH_ENABLED=0 bootstrap — and deliberately NOT a middleware of its own. A
+// mounted middleware annotates only the group it was mounted on, and the first
+// draft of this feature proved how that fails: mounted on the main /api group,
+// it missed the whole authenticated half of /api/auth (sessions, password
+// change, 2FA, API tokens) — the credential-management surface an operator
+// most wants attributed — and nothing failed. No build error, no panic, an
+// identical response. Hanging it off principal creation instead means a
+// request that HAS an identity has it on its span, and a future route group
+// cannot forget to opt in.
+//
+// The span was opened several middlewares further out and its End is deferred
+// there, so it is still mutable at every one of those call sites.
+//
+// Only the opaque numeric id travels. The address and the display name are
+// deliberately absent: a trace store is a different retention domain from the
+// database, with different access control and a copy in every backend that
+// scrapes it, and an id is worthless to anyone who cannot already read
+// app_user. It is the same reasoning that keeps raw URL paths out of span
+// names. See INV-170 for the cardinality rule this implies for Tempo's
+// metrics-generator.
+func AnnotatePrincipal(ctx context.Context) {
+	// IsRecording first: it is what makes this free when tracing is off or the
+	// span was not sampled, and everything below allocates.
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		return
+	}
+	p, ok := authctx.FromContext(ctx)
+	if !ok {
+		return
+	}
+	attrs := make([]attribute.KeyValue, 0, 3)
+	attrs = append(attrs, semconv.UserID(strconv.FormatInt(int64(p.UserID), 10)))
+	if p.Role != "" {
+		// semconv types user.roles as an array; a single-element one is still
+		// the conventional shape, and inventing a scalar key beside it would
+		// give Tempo two answers to the same question.
+		attrs = append(attrs, semconv.UserRoles(string(p.Role)))
+	}
+	if p.Via != "" {
+		attrs = append(attrs, authViaKey.String(p.Via))
+	}
+	span.SetAttributes(attrs...)
 }
 
 // TraceID returns the hex trace id of the span in ctx, or "" when no recording
