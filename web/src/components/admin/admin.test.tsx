@@ -174,10 +174,15 @@ describe('relativeTime', () => {
 describe('RolesMatrix', () => {
   /** The checkbox for one cell of the grid. */
   const cell = (permission: string, role: string) =>
-    // The dot is escaped: unescaped, `content.read` would also match a future
-    // `contentXread` and the query would stop being about one cell.
+    // Matched as a FUNCTION, not a regex. Building one from `permission` meant
+    // escaping its metacharacters by hand, and escaping only the dot is the
+    // kind of half-sanitization that reads as done: `content.read` needed the
+    // dot escaped so it would not also match a future `contentXread`, but a
+    // permission carrying a backslash or a bracket would still have slipped
+    // through. A predicate has no metacharacters to get wrong.
     screen.getByRole('checkbox', {
-      name: new RegExp(`^${permission.replace(/\./g, '\\.')} for ${role}$`, 'i'),
+      name: (accessibleName) =>
+        accessibleName.toLowerCase() === `${permission} for ${role}`.toLowerCase(),
     })
 
   it('renders every role from the server, including one nobody holds', async () => {
