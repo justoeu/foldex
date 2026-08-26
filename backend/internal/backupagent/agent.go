@@ -59,6 +59,13 @@ type Agent struct {
 	// sub-second cadences no row or env var can express.
 	timingOverrides map[string]Timing
 
+	// catchUpJitter delays a boot catch-up run so a `compose up` does not fire
+	// a dump into a half-started stack. A seam because it is minutes long and
+	// probabilistic — the one knob that made the catch-up path untestable, and
+	// worse: a test that enables a schedule right after Start can lose the
+	// race into bootCatchUp and sleep production minutes inside a 10s test.
+	catchUpJitter func() time.Duration
+
 	// skewWarning is checked from Start, not the constructor: it does I/O
 	// (SHOW server_version + exec pg_dump), and a constructor that can hang on
 	// an unreachable database hides the failure CheckSchema reports cleanly.
@@ -84,6 +91,9 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 		metrics:     NewMetrics(),
 		logger:      logger,
 		schedChange: make(chan struct{}),
+		catchUpJitter: func() time.Duration {
+			return time.Minute + rand.N(4*time.Minute)
+		},
 	}
 	dump, err := NewDumpJob(cfg, pool, store, logger)
 	if err != nil {
@@ -472,7 +482,7 @@ func (a *Agent) bootCatchUp(ctx context.Context, spec jobSpec) {
 		}
 		slot = t.PreviousSlot(time.Now())
 	}
-	jitter := time.Minute + rand.N(4*time.Minute)
+	jitter := a.catchUpJitter()
 	a.logger.Info("catch-up scheduled", "job", spec.name, "in", jitter.Round(time.Second))
 	select {
 	case <-ctx.Done():
