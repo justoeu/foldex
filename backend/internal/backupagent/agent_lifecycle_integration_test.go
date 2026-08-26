@@ -36,7 +36,7 @@ func TestAgent_LifecycleClaimsRequestedAndServesObservability(t *testing.T) {
 	require.NoError(t, testdb.Reset(ctx, pool))
 
 	store := newRecorderStore()
-	agent, err := New(lifecycleConfig(), pool, store, slog.New(slog.DiscardHandler))
+	agent, err := New(lifecycleConfig(), pool, store, nil, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	// No anchors are configured, so both registry entries (dump, drill)
 	// sleep — swap the dump's run func for an instant success so the

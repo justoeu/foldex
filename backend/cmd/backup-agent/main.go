@@ -68,7 +68,28 @@ func run(logger *slog.Logger) int {
 		return 1
 	}
 
-	agent, err := backupagent.New(cfg, pool, backupagent.NewStorageUploader(store), logger)
+	// The mirror's source is a SECOND client, pointed at the RustFS origin.
+	// Same read path the backend uses; the external target above remains the
+	// only place the BACKUP_S3_* credentials ever go.
+	var mirrorSource backupagent.SourceBucket
+	if cfg.MirrorEnabled() {
+		// NewReadOnly, never New: a typo'd RUSTFS_BUCKET must fail the boot,
+		// not be silently created empty and mirrored "successfully" forever.
+		rustfs, err := storage.NewReadOnly(ctx, storage.Config{
+			Endpoint:  cfg.RustFSEndpoint,
+			AccessKey: cfg.RustFSAccessKey,
+			SecretKey: cfg.RustFSSecretKey,
+			Bucket:    cfg.RustFSBucket,
+			UseSSL:    cfg.RustFSUseSSL,
+		}, logger)
+		if err != nil {
+			logger.Error("mirror source bucket", "err", err)
+			return 1
+		}
+		mirrorSource = backupagent.NewStorageUploader(rustfs)
+	}
+
+	agent, err := backupagent.New(cfg, pool, backupagent.NewStorageUploader(store), mirrorSource, logger)
 	if err != nil {
 		logger.Error("agent", "err", err)
 		return 2
@@ -82,6 +103,7 @@ func run(logger *slog.Logger) int {
 	logger.Info("backup agent ready",
 		"dump_at", cfg.DumpAt.String(),
 		"drill_at", cfg.DrillAt.String(),
+		"mirror_interval_min", cfg.MirrorIntervalMin,
 		"retention_mode", cfg.RetentionMode,
 		"encrypted", len(cfg.AgeRecipients) > 0,
 		"metrics_addr", cfg.MetricsAddr)

@@ -31,10 +31,13 @@ type Uploader interface {
 }
 
 // ObjectInfo mirrors storage.ObjectInfo without importing the package into
-// every test.
+// every test. ETag is carried but is NEVER a mirror diff criterion — multipart
+// etags depend on the uploader's part size, not the content (SDD §11.6).
 type ObjectInfo struct {
-	Key  string
-	Size int64
+	Key          string
+	Size         int64
+	ETag         string
+	LastModified time.Time
 }
 
 // DumpJob owns one full-database export: pg_dump -Fc → age → sha256 → spool →

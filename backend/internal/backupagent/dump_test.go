@@ -22,14 +22,15 @@ import (
 // recorderStore captures uploads and serves a canned listing — the Uploader
 // contract without RustFS or S3.
 type recorderStore struct {
-	mu       sync.Mutex
-	uploads  map[string][]byte
-	listing  []ObjectInfo
-	putErr   error
-	openErr  error
-	deleted  [][]string
-	walkErr  error
-	deleteEr error
+	mu        sync.Mutex
+	uploads   map[string][]byte
+	listing   []ObjectInfo
+	putErr    error
+	deleted   [][]string
+	walkErr   error
+	deleteEr  error
+	openErr   error
+	openCalls int
 }
 
 func newRecorderStore() *recorderStore {
@@ -53,19 +54,6 @@ func (r *recorderStore) PutObjectStream(_ context.Context, key string, reader io
 	return nil
 }
 
-func (r *recorderStore) OpenObject(_ context.Context, key string) (io.ReadCloser, error) {
-	if r.openErr != nil {
-		return nil, r.openErr
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	data, ok := r.uploads[key]
-	if !ok {
-		return nil, fmt.Errorf("recorder: no object %s", key)
-	}
-	return io.NopCloser(bytes.NewReader(data)), nil
-}
-
 func (r *recorderStore) WalkObjects(_ context.Context, prefix string, visit func(ObjectInfo) error) error {
 	if r.walkErr != nil {
 		return r.walkErr
@@ -78,6 +66,20 @@ func (r *recorderStore) WalkObjects(_ context.Context, prefix string, visit func
 		}
 	}
 	return nil
+}
+
+func (r *recorderStore) OpenObject(_ context.Context, key string) (io.ReadCloser, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.openCalls++
+	if r.openErr != nil {
+		return nil, r.openErr
+	}
+	data, ok := r.uploads[key]
+	if !ok {
+		return nil, fmt.Errorf("recorder: no object %s", key)
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 func (r *recorderStore) DeleteObjects(_ context.Context, keys []string) error {

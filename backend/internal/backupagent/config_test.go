@@ -25,10 +25,13 @@ func setBaseline(t *testing.T) {
 	t.Setenv("BACKUP_AGE_IDENTITY_FILE", "")
 	t.Setenv("BACKUP_RETENTION_MODE", "")
 	t.Setenv("POSTGRES_PASSWORD", "pw")
+	// The mirror defaults ON (360 min) and then requires the source secret.
+	t.Setenv("RUSTFS_SECRET_KEY", "rustfs-sk")
 	// A developer's stray environment must not leak into the assertions.
 	for _, k := range []string{"BACKUP_RETAIN_DAILY", "BACKUP_RETAIN_WEEKLY", "BACKUP_RETAIN_MONTHLY",
 		"BACKUP_METRICS_ADDR", "BACKUP_S3_REGION", "BACKUP_S3_USE_SSL",
-		"BACKUP_REQUESTED_POLL_SEC", "BACKUP_STALE_RUN_MIN"} {
+		"BACKUP_REQUESTED_POLL_SEC", "BACKUP_STALE_RUN_MIN", "BACKUP_MIRROR_INTERVAL_MIN",
+		"RUSTFS_ENDPOINT", "RUSTFS_ACCESS_KEY", "RUSTFS_BUCKET", "RUSTFS_USE_SSL"} {
 		t.Setenv(k, "")
 	}
 }
@@ -176,10 +179,36 @@ func TestLoad_Defaults(t *testing.T) {
 }
 
 func TestDurationHelpers_CarryTheirUnits(t *testing.T) {
-	cfg := Config{RequestedPollSec: 30, StaleRunMin: 240}
+	cfg := Config{RequestedPollSec: 30, StaleRunMin: 240, MirrorIntervalMin: 360}
 	// The unit lives in the env var NAME (repo convention); getting it wrong
 	// here is a 1000x error — a 30ms poll hammers the database, a 4-second
 	// stale TTL makes the janitor kill live runs.
 	assert.Equal(t, 30*time.Second, cfg.RequestedPoll())
 	assert.Equal(t, 240*time.Minute, cfg.StaleRunTTL())
+	assert.Equal(t, 6*time.Hour, cfg.MirrorInterval())
+}
+
+func TestLoad_MirrorDefaultsOnAndDemandsItsSource(t *testing.T) {
+	setBaseline(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, 360, cfg.MirrorIntervalMin, "SDD §4: mirror cadence defaults to 6h")
+	assert.True(t, cfg.MirrorEnabled())
+	assert.Equal(t, "rustfs:9000", cfg.RustFSEndpoint)
+	assert.Equal(t, "foldex-screenshots", cfg.RustFSBucket)
+	assert.False(t, cfg.RustFSUseSSL)
+
+	// Mirror on + no source secret = refuse to boot NAMING the var and the
+	// off switch: a mirror that silently never copies is the mailer incident.
+	t.Setenv("RUSTFS_SECRET_KEY", "")
+	_, err = Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "RUSTFS_SECRET_KEY")
+	assert.Contains(t, err.Error(), "BACKUP_MIRROR_INTERVAL_MIN=0")
+
+	// Explicitly off: the source becomes irrelevant and boot proceeds.
+	t.Setenv("BACKUP_MIRROR_INTERVAL_MIN", "0")
+	cfg, err = Load()
+	require.NoError(t, err)
+	assert.False(t, cfg.MirrorEnabled())
 }

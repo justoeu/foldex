@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -58,8 +59,25 @@ func linkObjectID(key string) (prefix string, id int64, suffix string, ok bool) 
 	if err != nil || parsed <= 0 {
 		return "", 0, "", false
 	}
-	return prefix, parsed, rest[dot:], true
+	// The suffix is written back into an object KEY. Anything beyond a plain
+	// extension — a slash, a second dot opening "..", any traversal material —
+	// would let a hand-crafted ZIP place its restored object outside the
+	// prefix, and the operational mirror would then faithfully copy that
+	// escape into the backup bucket (SEC finding, PR3).
+	suffix = rest[dot:]
+	if !extensionRE.MatchString(suffix) {
+		return "", 0, "", false
+	}
+	return prefix, parsed, suffix, true
 }
+
+// extensionRE is the whole grammar a restored key's suffix may use: one or
+// more dot-prefixed segments of alphanumerics and hyphens. Every legitimate
+// key this application writes fits — a plain extension (`.png`) and the
+// screenshot shape (`.550e8400-e29b-….jpg`, a UUID segment then the
+// extension). An empty segment (`..`) or a slash cannot match, which is the
+// point: this suffix lands verbatim in an object key.
+var extensionRE = regexp.MustCompile(`^(\.[A-Za-z0-9-]{1,64})+$`)
 
 // remapFileKey translates an id-derived key onto the row this restore actually
 // produced: `screenshots/123.png` → `screenshots/456.png` when link 123 landed

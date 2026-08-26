@@ -325,6 +325,19 @@ services:
       # off, deliberately: scheduling it requires the private age identity
       # below on this host, and that is the operator's call, not a default.
       BACKUP_DRILL_AT: ${BACKUP_DRILL_AT:-}
+      # Incremental RustFS→S3 mirror cadence in minutes; 0 turns the job off.
+      # While on, the RUSTFS_* source credentials below are required at boot —
+      # a mirror that silently never copies is the mailer incident again.
+      BACKUP_MIRROR_INTERVAL_MIN: ${BACKUP_MIRROR_INTERVAL_MIN:-360}
+      # Mirror SOURCE: the same RustFS the backend writes (read path only —
+      # the mirror never deletes at the origin and deletions never propagate
+      # to the backup copy). The external target stays the only place the
+      # BACKUP_S3_* credentials go.
+      RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-rustfs:9000}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-foldex}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
+      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-foldex-screenshots}
+      RUSTFS_USE_SSL: ${RUSTFS_USE_SSL:-false}
       BACKUP_RETAIN_DAILY: ${BACKUP_RETAIN_DAILY:-7}
       BACKUP_RETAIN_WEEKLY: ${BACKUP_RETAIN_WEEKLY:-4}
       BACKUP_RETAIN_MONTHLY: ${BACKUP_RETAIN_MONTHLY:-6}
