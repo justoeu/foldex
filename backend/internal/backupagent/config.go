@@ -81,6 +81,11 @@ type Config struct {
 	// Observability.
 	MetricsAddr  string
 	MetricsToken string
+
+	// Version is FOLDEX_VERSION as the process sees it, reported in the
+	// heartbeat so the band can say which agent build is running. Empty is a
+	// gap, not an error — same posture as the backend's span version.
+	Version string
 }
 
 // DBURL derives the pgx connection string from POSTGRES_* (INV-101).
@@ -141,6 +146,7 @@ func Load() (Config, error) {
 		SpoolDir: os.Getenv("BACKUP_SPOOL_DIR"),
 
 		MetricsAddr:  envOr("BACKUP_METRICS_ADDR", ":9099"),
+		Version:      os.Getenv("FOLDEX_VERSION"),
 		MetricsToken: os.Getenv("METRICS_TOKEN"),
 	}
 
@@ -238,6 +244,16 @@ func (c Config) MirrorInterval() time.Duration {
 
 // MirrorEnabled reports whether the mirror job has a cadence at all.
 func (c Config) MirrorEnabled() bool { return c.MirrorIntervalMin > 0 }
+
+// HasRustFSCreds reports whether the source-bucket credentials are present —
+// the CAPABILITY gate for user_zip (ADR-44): with credentials the binary
+// builds the job and the schedule (env anchor or a backup_schedule row)
+// decides when it runs; without them no row can switch it on.
+func (c Config) HasRustFSCreds() bool {
+	return strings.TrimSpace(c.RustFSEndpoint) != "" &&
+		strings.TrimSpace(c.RustFSAccessKey) != "" &&
+		strings.TrimSpace(c.RustFSSecretKey) != ""
+}
 
 func envOr(key, def string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {

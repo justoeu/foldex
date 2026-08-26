@@ -86,6 +86,17 @@ export type MockState = {
   backupJobs?: any[]
   backupStatusRuns?: any[]
   backupRunRequests?: string[]
+  // Configurable backup schedule (ADR-44). `backupScheduleRows` is the stored
+  // (editable) layer keyed by job — only jobs with a row appear, mirroring the
+  // backend. `backupAgent` is the heartbeat; unset = never seen, served as
+  // null. PUT validates the per-job shape like backupagent.ValidateJobConfig
+  // (400 invalid_schedule) and upserts the row; DELETE removes it. Requests
+  // are recorded in `backupSchedulePuts` / `backupScheduleDeletes` so tests
+  // assert WHAT was sent, not only that something was.
+  backupScheduleRows?: Record<string, any>
+  backupAgent?: any
+  backupSchedulePuts?: Array<{ job: string; config: any }>
+  backupScheduleDeletes?: string[]
 }
 
 export function freshState(): MockState {
@@ -157,6 +168,12 @@ const buildRoutes = (): Record<Method, Route[]> => ({
       return s.statsStorage ?? { objects: 0, total_bytes: 0 }
     } },
     { url: /^\/api\/backup\/download\/status$/, handle: backupDownloadStatus },
+    { url: /^\/api\/admin\/backup\/schedule$/, handle: (_m, _d, _p, s) => ({
+      jobs: ['dump', 'drill', 'mirror', 'user_zip'],
+      rows: s.backupScheduleRows ?? {},
+      bounds: { dump_times_min: 1, dump_times_max: 6, mirror_interval_min: 15, mirror_interval_max: 1440 },
+      agent: s.backupAgent ?? null,
+    }) },
     { url: /^\/api\/admin\/backup\/runs$/, handle: (_m, _d, _p, s) => ({
       jobs: s.backupJobs ?? ['dump', 'drill', 'mirror', 'user_zip'].map((job) => ({
         job, last_success: null, consecutive_failures: 0,
@@ -214,6 +231,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
   ],
   put: [
     { url: /^\/api\/settings\/master-password$/, handle: setMaster },
+    { url: /^\/api\/admin\/backup\/schedule\/([a-z_]+)$/, handle: putBackupSchedule },
   ],
   patch: [
     { url: /^\/api\/tags\/(\d+)$/, handle: patchTag },
@@ -229,8 +247,83 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/notes\/(\d+)$/, handle: deleteNote },
     { url: /^\/api\/push\/subscriptions$/, handle: () => null },
     { url: /^\/api\/settings\/master-password$/, handle: clearMaster },
+    { url: /^\/api\/admin\/backup\/schedule\/([a-z_]+)$/, handle: deleteBackupSchedule },
   ],
 })
+
+// ────────────────────────────────────────────────────────────────────────────
+// Backup schedule mock handlers (ADR-44).
+
+const SCHEDULE_JOBS = ['dump', 'drill', 'mirror', 'user_zip']
+const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+
+function invalidSchedule(message: string) {
+  const e: any = new Error(message)
+  e.response = { status: 400, data: { error: { code: 'invalid_schedule', message } } }
+  return e
+}
+
+function invalidJob() {
+  const e: any = new Error('invalid job')
+  e.response = { status: 400, data: { error: { code: 'invalid_job', message: 'job must be one of dump, drill, mirror, user_zip' } } }
+  return e
+}
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
+
+// Mirrors backupagent.ValidateJobConfig closely enough that a component test
+// exercising a bad payload sees the same 400 invalid_schedule + message shape
+// the real handler answers.
+function validateScheduleConfig(job: string, cfg: any) {
+  if (job === 'dump') {
+    const times = cfg?.times
+    if (!Array.isArray(times) || times.length < 1 || times.length > 6) {
+      throw invalidSchedule('dump needs between 1 and 6 daily times — the floor is one dump per day, never zero')
+    }
+    const seen = new Set<string>()
+    for (const t of times) {
+      if (typeof t !== 'string' || !HHMM.test(t)) throw invalidSchedule(`dump time ${JSON.stringify(t)}: expected HH:MM`)
+      if (seen.has(t)) throw invalidSchedule(`dump time "${t}" repeats`)
+      seen.add(t)
+    }
+  } else if (job === 'drill') {
+    if (typeof cfg?.time !== 'string' || !HHMM.test(cfg.time) || !WEEKDAYS.includes(cfg?.weekday)) {
+      throw invalidSchedule('drill needs "time" and "weekday" — it is weekly by design and a row cannot switch it off')
+    }
+  } else if (job === 'mirror') {
+    const n = cfg?.interval_min
+    if (typeof n !== 'number' || n < 15 || n > 1440) {
+      throw invalidSchedule('mirror interval must be between 15 and 1440 minutes — a row tunes the cadence, it cannot switch the mirror off')
+    }
+  } else {
+    if (typeof cfg?.enabled !== 'boolean') throw invalidSchedule('user_zip needs "enabled"')
+    if (cfg.enabled && (typeof cfg.time !== 'string' || !HHMM.test(cfg.time))) {
+      throw invalidSchedule('user_zip needs "time" while enabled')
+    }
+  }
+}
+
+function putBackupSchedule(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState) {
+  const job = m[1]
+  if (!SCHEDULE_JOBS.includes(job)) throw invalidJob()
+  validateScheduleConfig(job, data)
+  ;(s.backupSchedulePuts ??= []).push({ job, config: data })
+  ;(s.backupScheduleRows ??= {})[job] = {
+    job,
+    config: data,
+    updated_at: new Date().toISOString(),
+    updated_by_email: 'admin@foldex.test',
+  }
+  return { job, config: data }
+}
+
+function deleteBackupSchedule(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
+  const job = m[1]
+  if (!SCHEDULE_JOBS.includes(job)) throw invalidJob()
+  ;(s.backupScheduleDeletes ??= []).push(job)
+  if (s.backupScheduleRows) delete s.backupScheduleRows[job]
+  return null
+}
 
 function fetchUrlMetadata(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState) {
   const requested = params.get('url') ?? ''

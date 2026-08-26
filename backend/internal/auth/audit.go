@@ -30,6 +30,10 @@ const (
 	// backup surface (ADR-43). What executed — or failed — is backup_run's
 	// story; the trail only answers WHO asked.
 	AuditBackupRunRequested = "backup.run_requested"
+	// AuditBackupScheduleChanged records an edit (or reset to the env
+	// baseline) of the backup agenda (ADR-44). WHO moved the schedule is the
+	// trail's story; what the agent then does is backup_run's.
+	AuditBackupScheduleChanged = "backup.schedule_changed"
 	// AuditEmailChanged records the address MOVING, at the moment the
 	// confirmation link is consumed — never when it is requested. A request
 	// that nobody confirms changed nothing, and an entry for it would make the

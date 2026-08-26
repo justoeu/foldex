@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BackupSection } from './BackupSection'
-import { renderWithProviders } from '../../test/renderWithProviders'
+import { renderWithProviders, testAdminSession, testAdminUser } from '../../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../../test/server'
+import type { SessionState } from '../../auth/types'
 
 let state: MockState
 
@@ -53,10 +54,11 @@ describe('BackupSection', () => {
   it('renders one row per job and the honest empty state when nothing ever ran', async () => {
     renderWithProviders(<BackupSection />)
 
-    expect(await screen.findByText('Database dump')).toBeInTheDocument()
-    expect(screen.getByText('Restore drill')).toBeInTheDocument()
-    expect(screen.getByText('Object mirror')).toBeInTheDocument()
-    expect(screen.getByText('Per-user ZIPs')).toBeInTheDocument()
+    // Each job name renders twice: the status table row and the schedule row.
+    expect(await screen.findAllByText('Database dump')).not.toHaveLength(0)
+    expect(screen.getAllByText('Restore drill')).not.toHaveLength(0)
+    expect(screen.getAllByText('Object mirror')).not.toHaveLength(0)
+    expect(screen.getAllByText('Per-user ZIPs')).not.toHaveLength(0)
 
     // Never ran + no history = the service is off, and the band says so
     // instead of looking healthy (the mailer incident's lesson).
@@ -183,5 +185,218 @@ describe('BackupSection', () => {
     // SHA is copiable behind a visible label (INV-151).
     expect(screen.getAllByTitle('foldex/dump/2026-08-26.dump.age').length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
+  })
+})
+
+/** The owner — the only role the schedule editors render for. */
+const ownerSession: SessionState = {
+  ...testAdminSession,
+  user: { ...testAdminUser, role: 'owner' },
+} as SessionState
+
+/** A healthy heartbeat, fresh, every job capable, all on the env baseline. */
+function healthyAgent(over: Record<string, unknown> = {}) {
+  return {
+    seen_at: new Date(Date.now() - 30_000).toISOString(),
+    version: '2.10.1',
+    jobs: {
+      dump: { capable: true, source: 'env', schedule: '03:30' },
+      drill: { capable: true, source: 'env', schedule: '01:00 sun' },
+      mirror: { capable: true, source: 'env', schedule: 'every 360m' },
+      user_zip: { capable: true, source: 'env', schedule: '02:30' },
+    },
+    ...over,
+  }
+}
+
+describe('BackupSection schedule', () => {
+  it('renders the effective agenda from the agent report with a source badge per job', async () => {
+    state.backupAgent = healthyAgent({
+      jobs: {
+        ...healthyAgent().jobs,
+        drill: { capable: true, source: 'db', schedule: '04:00 wed' },
+      },
+    })
+    state.backupScheduleRows = {
+      drill: {
+        job: 'drill',
+        config: { time: '04:00', weekday: 'wed' },
+        updated_at: '2026-08-01T00:00:00Z',
+        updated_by_email: 'owner@foldex.test',
+      },
+    }
+
+    renderWithProviders(<BackupSection />)
+
+    expect(await screen.findByText(/Agent seen/)).toBeInTheDocument()
+    expect(screen.getByText(/version 2\.10\.1/)).toBeInTheDocument()
+    // The agenda strings the agent reported, verbatim.
+    expect(screen.getByText('03:30')).toBeInTheDocument()
+    expect(screen.getByText('04:00 wed')).toBeInTheDocument()
+    expect(screen.getByText('every 360m')).toBeInTheDocument()
+    // Origin badges: the drill row came from the database, the rest from env.
+    expect(screen.getAllByText('env default')).toHaveLength(3)
+    expect(screen.getByText('configured here')).toBeInTheDocument()
+  })
+
+  it('shows the translated reason and no editors for a job the agent cannot run', async () => {
+    state.backupAgent = healthyAgent({
+      jobs: {
+        ...healthyAgent().jobs,
+        mirror: { capable: false, reason: 'mirror_off', source: 'env', schedule: 'every 360m' },
+      },
+    })
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findByText('the mirror source is not configured')).toBeInTheDocument()
+    // Three editable jobs get a save button; the incapable mirror gets none.
+    expect(screen.getAllByRole('button', { name: 'Save schedule' })).toHaveLength(3)
+    expect(screen.queryByLabelText('Interval (minutes)')).not.toBeInTheDocument()
+  })
+
+  it('lets the owner pre-configure the agenda before any agent ever reported', async () => {
+    // No heartbeat at all is NOT the same as "cannot run": the owner sets
+    // the agenda first and enables the backup profile after. A stricter
+    // gate here would break that ordering.
+    state.backupAgent = undefined
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findAllByRole('button', { name: 'Save schedule' })).toHaveLength(4)
+  })
+
+  it('treats a job missing from a live report as not runnable — no editors', async () => {
+    // An older agent build that never heard of a job reports nothing for it.
+    // With a live heartbeat, silence means "will not run", not "go ahead":
+    // editors here would store a row no process reads (the mailer lesson).
+    const jobs: any = { ...healthyAgent().jobs }
+    delete jobs.mirror
+    state.backupAgent = healthyAgent({ jobs })
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findAllByRole('button', { name: 'Save schedule' })).toHaveLength(3)
+    expect(screen.queryByLabelText('Interval (minutes)')).not.toBeInTheDocument()
+  })
+
+  it('lets the owner add a dump time and PUTs the full times list', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('button', { name: 'Add time' }))
+    await user.click(screen.getAllByRole('button', { name: 'Save schedule' })[0])
+
+    // More dumps than today — no confirmation stands between click and PUT.
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        { job: 'dump', config: { times: ['03:30', '12:00'] } },
+      ]),
+    )
+    expect(screen.queryByText(/Reduce “Database dump” protection\?/)).not.toBeInTheDocument()
+  })
+
+  it('asks for confirmation when the change reduces protection, and only writes after it', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    state.backupScheduleRows = {
+      dump: {
+        job: 'dump',
+        config: { times: ['03:30', '15:30'] },
+        updated_at: '2026-08-01T00:00:00Z',
+        updated_by_email: 'owner@foldex.test',
+      },
+    }
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    // Two stored times seed the editor; dropping one is a reduction.
+    const removes = await screen.findAllByRole('button', { name: 'Remove' })
+    await user.click(removes[1])
+    await user.click(screen.getAllByRole('button', { name: 'Save schedule' })[0])
+
+    expect(await screen.findByText('Reduce “Database dump” protection?')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(state.backupSchedulePuts ?? []).toHaveLength(0)
+
+    await user.click(screen.getAllByRole('button', { name: 'Save schedule' })[0])
+    await user.click(await screen.findByRole('button', { name: 'Apply schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([{ job: 'dump', config: { times: ['03:30'] } }]),
+    )
+  })
+
+  it('renders the server message of a 400 invalid_schedule verbatim', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    // A second dump time equal to the first — the mock refuses it the way
+    // backupagent.ValidateJobConfig does, and the band shows THAT message.
+    await user.click(await screen.findByRole('button', { name: 'Add time' }))
+    fireEvent.change(screen.getByLabelText('Time 2'), { target: { value: '03:30' } })
+    await user.click(screen.getAllByRole('button', { name: 'Save schedule' })[0])
+
+    expect(await screen.findByText('dump time "03:30" repeats')).toBeInTheDocument()
+    expect(state.backupSchedulePuts ?? []).toHaveLength(0)
+  })
+
+  it('resets to the env baseline via DELETE, always behind a confirmation', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    state.backupScheduleRows = {
+      mirror: {
+        job: 'mirror',
+        config: { interval_min: 60 },
+        updated_at: '2026-08-01T00:00:00Z',
+        updated_by_email: 'owner@foldex.test',
+      },
+    }
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('button', { name: 'Restore env default' }))
+    expect(await screen.findByText('Reset “Object mirror” to the env default?')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(state.backupScheduleDeletes ?? []).toHaveLength(0)
+
+    await user.click(screen.getByRole('button', { name: 'Restore env default' }))
+    const dialogConfirm = await screen.findAllByRole('button', { name: 'Restore env default' })
+    // The dialog's confirm button is the last rendered.
+    await user.click(dialogConfirm[dialogConfirm.length - 1])
+    await waitFor(() => expect(state.backupScheduleDeletes).toEqual(['mirror']))
+  })
+
+  it('shows the honest empty state when the agent never reported', async () => {
+    renderWithProviders(<BackupSection />)
+
+    expect(await screen.findByText('The agent never reported')).toBeInTheDocument()
+    expect(screen.getAllByText('COMPOSE_PROFILES=backup').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('no agent report for this job')).toHaveLength(4)
+  })
+
+  it('warns when the heartbeat is older than two minutes', async () => {
+    state.backupAgent = healthyAgent({
+      seen_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    })
+
+    renderWithProviders(<BackupSection />)
+    expect(await screen.findByText('The agent stopped reporting')).toBeInTheDocument()
+  })
+
+  it('renders no editing controls for a non-owner', async () => {
+    state.backupAgent = healthyAgent()
+
+    // The default test session is an admin — may read, never write (the
+    // permission is owner-only and locked).
+    renderWithProviders(<BackupSection />)
+
+    expect(await screen.findByText('03:30')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save schedule' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Restore env default' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add time' })).not.toBeInTheDocument()
   })
 })

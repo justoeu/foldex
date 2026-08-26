@@ -296,6 +296,87 @@ export async function requestBackupRun(
   return data
 }
 
+// ── Configurable backup schedule (ADR-44) ──────────────────────────────
+
+/**
+ * One jsonb document for the four per-job shapes, discriminated by the job
+ * name — the client mirror of backupagent.JobConfig. dump: `times`; drill:
+ * `time` + `weekday`; mirror: `interval_min`; user_zip: `enabled` (+ `time`).
+ */
+export type BackupScheduleConfig = {
+  times?: string[]
+  time?: string
+  weekday?: string
+  interval_min?: number
+  enabled?: boolean
+}
+
+/** A stored row — the EDITABLE layer, not necessarily what runs (see agent). */
+export type BackupScheduleRow = {
+  job: BackupJob
+  config: BackupScheduleConfig
+  updated_at: string
+  updated_by_email: string | null
+}
+
+/**
+ * What the agent's heartbeat says about one job. `schedule` is the agenda the
+ * process is actually following, rendered server-side — the truth the band
+ * displays; the rows above are only the editable layer feeding it.
+ */
+export type BackupAgentJobReport = {
+  capable: boolean
+  /** Only when not capable: no_identity | mirror_off | no_source_credentials. */
+  reason?: string
+  source: 'db' | 'env'
+  schedule: string
+}
+
+export type BackupAgentState = {
+  seen_at: string
+  version: string
+  jobs: Record<string, BackupAgentJobReport>
+}
+
+export type BackupScheduleResponse = {
+  jobs: BackupJob[]
+  /** Only the jobs with a stored row — absent key = env baseline. */
+  rows: Record<string, BackupScheduleRow>
+  bounds: {
+    dump_times_min: number
+    dump_times_max: number
+    mirror_interval_min: number
+    mirror_interval_max: number
+  }
+  /** null = the agent never wrote a heartbeat (never ran on this instance). */
+  agent: BackupAgentState | null
+}
+
+/** Shares the ['admin','backup'] prefix so the run-now invalidation covers it. */
+export const backupScheduleQueryKey = ['admin', 'backup', 'schedule'] as const
+
+export async function fetchBackupSchedule(): Promise<BackupScheduleResponse> {
+  const { data } = await http.get<BackupScheduleResponse>('/api/admin/backup/schedule')
+  return data
+}
+
+/** Owner-only (`instance.backup_schedule`); an admin gets 403 `forbidden`. */
+export async function saveBackupSchedule(
+  job: BackupJob,
+  config: BackupScheduleConfig,
+): Promise<{ job: BackupJob; config: BackupScheduleConfig }> {
+  const { data } = await http.put<{ job: BackupJob; config: BackupScheduleConfig }>(
+    `/api/admin/backup/schedule/${job}`,
+    config,
+  )
+  return data
+}
+
+/** Deletes the row — the agent falls back to the env baseline on next sync. */
+export async function resetBackupSchedule(job: BackupJob): Promise<void> {
+  await http.delete(`/api/admin/backup/schedule/${job}`)
+}
+
 export async function emailAvailable(
   email: string,
   signal: AbortSignal,

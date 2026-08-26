@@ -1510,3 +1510,33 @@ implementado 5/5 PRs (§15 do SDD)** — PR5 entregou o endpoint admin
 (`internal/backupstatus`, keyset por `before`), a permissão `instance.backup`
 (migração 000041, bump de `RequiredSchemaVersion` 37→41), a banda no settings hub e o
 dashboard Grafana; pendência remanescente: alerta por e-mail via outbox (§9.3 do SDD).
+
+### ADR-44 — A agenda dos backups vira configurável, com pisos que a configuração não alcança
+
+Os horários dos quatro jobs eram env pura (`BACKUP_DUMP_AT` etc.): seguro, mas invisível e
+imexível pela UI — mudar o horário do drill exigia editar `.env` e reiniciar o agente. A
+demanda legítima ("uma tela de jobs: dias, horários, recorrência") colidia com a postura de
+segurança do ADR-43 (uma sessão admin comprometida não pode reduzir a proteção). A síntese
+é a mesma do ADR-42, aplicada a agendamento (INV-173):
+
+- **A env decide QUAIS jobs existem** — capacidade é credencial/identidade, e linha de
+  banco não conjura segredo em processo. **O banco decide QUANDO rodam** — tabela
+  `backup_schedule` (migração 000042, linha por job, `config jsonb`), recarregada ao vivo
+  pelo agente (~30 s, sem restart) e refletida num heartbeat (`backup_agent_state`:
+  `seen_at`, versão, por job `{capable, reason, source, schedule}`) que é a camada de
+  honestidade da UI — sem ele a tela agendaria um drill que o agente não tem identidade
+  para rodar, configurado e ignorado para sempre (a lição do mailer).
+- **Pisos compilados** em `backupagent.ValidateJobConfig`, aplicados pelo PUT do backend e
+  pelo load do agente: dump 1..6×/dia (nunca off), drill sempre semanal, mirror
+  15..1440 min (nunca off), user_zip livre (conveniência, não proteção). Linha ausente,
+  inválida ou de job incapaz ⇒ baseline da env.
+- **Escrita owner-only e TRAVADA** (`instance.backup_schedule`, argumento do
+  `policy.write` aplicado a DR); leitura junto de `instance.backup`. Auditoria própria
+  (`backup.schedule_changed`). API: `GET /api/admin/backup/schedule`,
+  `PUT/DELETE /api/admin/backup/schedule/{job}`; editor na banda do settings hub com
+  confirmação quando a mudança REDUZ proteção.
+- `RequiredSchemaVersion` 41→42 (backend lê/escreve as duas tabelas); gate próprio do
+  agente 40→42 (lê `backup_schedule`, escreve o heartbeat).
+
+Detalhe em [`docs/SDD-OPS-BACKUP.md`](./SDD-OPS-BACKUP.md) §6.1. Status: **Aceito ·
+implementado (PR6)**.

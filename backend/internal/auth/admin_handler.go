@@ -507,6 +507,12 @@ func (h *AdminHandler) AuditBackupRun(r *http.Request, detail string) {
 	h.audit(r, AuditBackupRunRequested, nil, detail)
 }
 
+// AuditBackupSchedule records a backup-agenda edit (ADR-44) — same
+// function-shaped hook as AuditBackupRun, for the same import-cycle reason.
+func (h *AdminHandler) AuditBackupSchedule(r *http.Request, detail string) {
+	h.audit(r, AuditBackupScheduleChanged, nil, detail)
+}
+
 // ListAudit serves the administrative trail.
 func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 	before, err := optionalInt64(r.URL.Query().Get("before"))

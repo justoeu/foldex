@@ -53,6 +53,7 @@ func newHarness(t *testing.T, grants authgate.Grants) *harness {
 		backupstatus.NewRepository(pool),
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		nil,
+		nil,
 		grants,
 	)
 	r := chi.NewRouter()
@@ -295,6 +296,7 @@ func TestRequestRun_FiresTheAuditHookWithTheJob(t *testing.T) {
 		backupstatus.NewRepository(pool),
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		func(_ *http.Request, job string) { audited = append(audited, job) },
+		nil,
 		roleperm.Default(),
 	)
 	r := chi.NewRouter()

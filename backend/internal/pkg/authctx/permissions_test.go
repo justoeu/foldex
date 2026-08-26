@@ -22,6 +22,7 @@ func TestMatrix_IsExactlyTheDocumentedGrid(t *testing.T) {
 			authctx.PermInvitesRead, authctx.PermInvitesWrite,
 			authctx.PermAuditRead, authctx.PermPolicyRead, authctx.PermPolicyWrite,
 			authctx.PermInstanceTransfer, authctx.PermInstanceBackupRead,
+			authctx.PermInstanceBackupSchedule,
 		},
 		authctx.RoleAdmin: {
 			authctx.PermContentRead, authctx.PermContentWrite,
@@ -94,7 +95,7 @@ func TestAllPermissions_IsExactlyTheDeclaredVocabulary(t *testing.T) {
 		"users.read", "users.write", "roles.assign",
 		"invites.read", "invites.write",
 		"audit.read", "policy.read", "policy.write",
-		"instance.transfer", "instance.backup",
+		"instance.transfer", "instance.backup", "instance.backup_schedule",
 	}, authctx.AllPermissions)
 
 	seen := map[authctx.Permission]bool{}

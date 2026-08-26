@@ -284,7 +284,7 @@ func New(d Deps) http.Handler {
 					// nil that silently unmounts a route.
 					ar.Route("/backup", backupstatus.NewHandler(
 						backupstatus.NewRepository(d.Pool), d.Logger,
-						d.AdminHandler.AuditBackupRun, grants,
+						d.AdminHandler.AuditBackupRun, d.AdminHandler.AuditBackupSchedule, grants,
 					).Mount)
 				})
 			}

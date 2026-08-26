@@ -30,13 +30,17 @@ type Handler struct {
 	// rather than the auth handler, for AuditPolicyChange's reason: auth is a
 	// consumer of this package's mount point, and the reverse import would
 	// close the cycle. Nil (router tests) skips the trail.
-	audit  func(*http.Request, string)
-	grants authgate.Grants
+	audit func(*http.Request, string)
+	// auditSchedule records agenda edits (ADR-44) under their own event so
+	// the trail can answer "who moved the backup schedule" without string
+	// matching inside a shared detail.
+	auditSchedule func(*http.Request, string)
+	grants        authgate.Grants
 }
 
 func NewHandler(repo *Repository, logger *slog.Logger,
-	audit func(*http.Request, string), grants authgate.Grants) *Handler {
-	return &Handler{repo: repo, logger: logger, audit: audit, grants: grants}
+	audit, auditSchedule func(*http.Request, string), grants authgate.Grants) *Handler {
+	return &Handler{repo: repo, logger: logger, audit: audit, auditSchedule: auditSchedule, grants: grants}
 }
 
 func (h *Handler) Mount(r chi.Router) {
@@ -47,6 +51,15 @@ func (h *Handler) Mount(r chi.Router) {
 	// schedule and execution stay the agent's. A separate write permission
 	// would promise a distinction the server cannot deliver.
 	r.With(read).Post("/run", h.RequestRun)
+
+	// The agenda (ADR-44). Reading it is part of reading the backup surface;
+	// WRITING it is owner-only through a locked permission — an administrator
+	// who could stretch the dump schedule could thin the instance's disaster
+	// recovery, the same argument that locks policy.write.
+	r.With(read).Get("/schedule", h.GetSchedule)
+	write := authgate.RequirePermission(h.grants, authctx.PermInstanceBackupSchedule)
+	r.With(write).Put("/schedule/{job}", h.PutSchedule)
+	r.With(write).Delete("/schedule/{job}", h.DeleteSchedule)
 }
 
 // ListRuns answers the whole band in one request: the per-job summary and one

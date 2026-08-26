@@ -32,6 +32,7 @@ func newValidationRouter() http.Handler {
 		backupstatus.NewRepository(nil),
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		nil,
+		nil,
 		roleperm.Default(),
 	)
 	r := chi.NewRouter()
