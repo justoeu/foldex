@@ -187,12 +187,22 @@ func TestErrors_AreDistinct(t *testing.T) {
 // RGBA in image.NewRGBA. DecodeConfig reads only the header, so we can refuse
 // BEFORE the framebuffer commits.
 func TestOptimize_RejectsDecodeBomb(t *testing.T) {
-	bomb := encodePNG(t, makeSolid(8000, 8000))
+	const dim = 8000
+	bomb := encodePNG(t, makeSolid(dim, dim))
 	// Sanity check: the payload is small (proves it's a "bomb"), but the
 	// declared dimensions exceed the 50MP cap. A naive image.Decode on this
-	// payload would allocate ~256 MB RGBA — we're showing the bytes are
-	// orders of magnitude smaller (~200 KB) than the decoded surface.
-	assert.Less(t, len(bomb), 1_000_000, "single-color PNG should compress small")
+	// payload would allocate dim*dim*4 bytes of RGBA.
+	//
+	// The bound is a RATIO against that framebuffer, not an absolute byte
+	// count. An absolute one measures the standard library's PNG encoder
+	// rather than this package: pinned at 1 MB it passed on Go 1.26 and failed
+	// on 1.27, which emits 1.35 MB for these same pixels — a green-to-red flip
+	// with no change to any file in this repo. What the test actually means is
+	// "orders of magnitude smaller than the decoded surface", and that holds
+	// across encoders.
+	framebuffer := dim * dim * 4
+	assert.Less(t, len(bomb), framebuffer/50,
+		"a single-colour PNG must stay orders of magnitude below its decoded size")
 	_, err := Optimize(bomb, Options{MaxDim: 1024, Quality: 82})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrTooLarge)
