@@ -1183,8 +1183,8 @@
     "policy_unavailable": "The policy could not be loaded.",
     "policy_read_only": "Only the owner can change these rules.",
     "policy_invalid": "Some value is outside the allowed range.",
-    "policy_group_credentials": "credentials",
-    "policy_group_google": "sign in with Google",
+    "policy_group_credentials": "Credentials",
+    "policy_group_google": "Sign in with Google",
     "policy_password_min": "Minimum password length",
     "policy_otp_ttl": "Code lifetime (minutes)",
     "policy_otp_cooldown": "Resend cooldown (seconds)",
@@ -1345,7 +1345,12 @@
     "backup_weekday_wed": "Wednesday",
     "backup_weekday_thu": "Thursday",
     "backup_weekday_fri": "Friday",
-    "backup_weekday_sat": "Saturday"
+    "backup_weekday_sat": "Saturday",
+    "policy_group_admin": "Administrator sign-in",
+    "policy_group_google_desc": "Who may enter through Google, and what a brand-new account becomes.",
+    "policy_password_min_hint": "Characters. The floor is 8; bcrypt caps at 72 bytes.",
+    "policy_otp_ttl_hint": "How long a mailed code stays valid.",
+    "policy_otp_cooldown_hint": "Wait before a code can be re-sent."
   },
   "profile": {
     "name_label": "Display name",

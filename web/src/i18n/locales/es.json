@@ -1183,8 +1183,8 @@
     "policy_unavailable": "No se pudo cargar la política.",
     "policy_read_only": "Solo el propietario puede cambiar estas reglas.",
     "policy_invalid": "Algún valor está fuera del rango permitido.",
-    "policy_group_credentials": "credenciales",
-    "policy_group_google": "entrar con Google",
+    "policy_group_credentials": "Credenciales",
+    "policy_group_google": "Iniciar sesión con Google",
     "policy_password_min": "Longitud mínima de la contraseña",
     "policy_otp_ttl": "Validez del código (minutos)",
     "policy_otp_cooldown": "Espera para reenviar (segundos)",
@@ -1345,7 +1345,12 @@
     "backup_weekday_wed": "Miércoles",
     "backup_weekday_thu": "Jueves",
     "backup_weekday_fri": "Viernes",
-    "backup_weekday_sat": "Sábado"
+    "backup_weekday_sat": "Sábado",
+    "policy_group_admin": "Acceso de administradores",
+    "policy_group_google_desc": "Quién puede entrar por Google, y en qué se convierte una cuenta recién creada.",
+    "policy_password_min_hint": "Caracteres. El piso es 8; bcrypt limita a 72 bytes.",
+    "policy_otp_ttl_hint": "Cuánto tiempo vale un código enviado por correo.",
+    "policy_otp_cooldown_hint": "Espera antes de poder reenviar un código."
   },
   "profile": {
     "name_label": "Nombre visible",

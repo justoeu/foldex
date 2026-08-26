@@ -3283,3 +3283,31 @@ button.fx-acct-railbtn-active {
    for the reason in CLAUDE.md §5. Same for the preview, which is a button too. */
 button.fx-openbtn { font: inherit; }
 button.fx-preview-img { display: block; width: 100%; padding: 0; border: 0; background: none; cursor: pointer; }
+
+/* Instance policy (admin → Política de senha e acesso). Three side-by-side
+   rows — what-this-governs on the left, controls on the right — so each
+   policy group reads as its own decision instead of one pile of fields. */
+.fx-policy-body { display: flex; flex-direction: column; gap: 0; }
+.fx-policy-body > .fx-chip { align-self: flex-start; margin-bottom: 14px; }
+.fx-policy-groups { border: 0; padding: 0; margin: 0; min-width: 0; }
+.fx-policy-row {
+  display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px;
+  padding: 20px 0;
+}
+.fx-policy-row + .fx-policy-row { border-top: 1px solid var(--fx-border-2); }
+.fx-policy-row:first-child { padding-top: 4px; }
+.fx-policy-side { min-width: 0; }
+.fx-policy-side .fx-panel-desc { line-height: 1.5; }
+.fx-policy-controls { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.fx-policy-fields {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+.fx-policy-narrow { max-width: 340px; }
+.fx-policy-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding-top: 16px; border-top: 1px solid var(--fx-border-2);
+}
+@media (max-width: 768px) {
+  .fx-policy-row { grid-template-columns: 1fr; gap: 12px; }
+}

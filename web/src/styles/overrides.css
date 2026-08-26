@@ -965,6 +965,20 @@ html.fx-dark { background: #0E1014; }
   position: relative;
 }
 .fx-toggle-row:hover { border-color: var(--fx-accent-soft-2); }
+/* The real checkbox is opacity:0 but still the focus target: without a ring on
+   the row, keyboard users land on the switch with no visual indication at all. */
+.fx-toggle-row:has(input:focus-visible) {
+  outline: 2px solid color-mix(in srgb, var(--fx-accent) 42%, transparent);
+  outline-offset: 2px;
+}
+/* Inside a disabled fieldset (the admin's read-only policy view) the native
+   checkbox goes inert but this styled shell kept its pointer cursor and hover —
+   an affordance that lies. Mirror the disabled state on the shell. */
+.fx-toggle-row:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+.fx-toggle-row:has(input:disabled):hover { border-color: var(--fx-border); }
 .fx-toggle-row input[type="checkbox"] {
   position: absolute;
   opacity: 0;

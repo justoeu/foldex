@@ -481,6 +481,10 @@ describe('PolicySection', () => {
 
     expect(await screen.findByText(/only the owner can change these rules/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^save$/i })).not.toBeInTheDocument()
+    // The fieldset is the mechanism: every control inside goes inert, the
+    // styled toggle shell included — not just a missing Save button.
+    expect(screen.getByLabelText(/minimum password length/i)).toBeDisabled()
+    expect(screen.getByLabelText(/create accounts automatically/i)).toBeDisabled()
   })
 
   it('lets the owner save, sending the domain list parsed at submit', async () => {
@@ -539,10 +543,17 @@ describe('PolicySection', () => {
   })
 
   // Owner and admin are the only roles that reach this screen at all, and the
-  // default role offered can never be an administrative one.
+  // default role offered can never be an administrative one. The picker only
+  // appears once auto-provisioning is ON — a default role for accounts that
+  // can never be created is a control that answers nothing.
   it('offers only non-administrative roles for auto-provisioned accounts', async () => {
     mockAdminApi()
     renderWithProviders(<PolicySection />, { session: ownerSession })
+
+    await screen.findByLabelText(/allowed domains/i)
+    expect(screen.queryByLabelText(/role for new accounts/i)).not.toBeInTheDocument()
+
+    await userEvent.setup().click(screen.getByLabelText(/create accounts automatically/i))
 
     const select = await screen.findByLabelText(/role for new accounts/i)
     const values = Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value'))
