@@ -97,10 +97,12 @@ func run(logger *slog.Logger) int {
 	}
 
 	// user_zip is the only job that reads the SOURCE bucket, so its Service —
-	// and the RustFS client under it — is constructed only when the job is
-	// opted in: an instance without the anchor keeps booting with no RustFS
-	// reachable at all.
-	if cfg.UserZipAt.Enabled() {
+	// and the RustFS client under it — is constructed whenever the source
+	// credentials exist (the job's CAPABILITY, ADR-44); the env anchor or a
+	// backup_schedule row then decides when — or whether — it runs. An
+	// instance without the credentials keeps booting with no RustFS reachable
+	// at all, and no database row can switch the job on.
+	if cfg.HasRustFSCreds() {
 		source, err := storage.NewReadOnly(ctx, storage.Config{
 			Endpoint:  cfg.RustFSEndpoint,
 			AccessKey: cfg.RustFSAccessKey,
@@ -118,7 +120,7 @@ func run(logger *slog.Logger) int {
 			logger.Error("user_zip job", "err", err)
 			return 2
 		}
-		agent.RegisterJob(backupagent.JobUserZip, cfg.UserZipAt, userZip.Run)
+		agent.RegisterJob(backupagent.JobUserZip, userZip.Run)
 	}
 	if err := agent.CheckSchema(ctx); err != nil {
 		logger.Error("schema gate", "err", err)

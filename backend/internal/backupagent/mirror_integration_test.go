@@ -99,7 +99,7 @@ func TestIntervalLoop_TickerFiresAndRecordsRuns(t *testing.T) {
 	require.NoError(t, err)
 	agent.skewWarning = nil
 	executed := make(chan struct{}, 8)
-	agent.jobs = []jobSpec{{name: JobMirror, interval: 80 * time.Millisecond,
+	agent.jobs = []jobSpec{{name: JobMirror,
 		run: func(context.Context, int64) (*Artifact, map[string]any, string, error) {
 			// Non-blocking: if the assertion below has already passed its
 			// count, a full buffer must not park this send inside spec.run
@@ -110,6 +110,9 @@ func TestIntervalLoop_TickerFiresAndRecordsRuns(t *testing.T) {
 			}
 			return &Artifact{Mirror: &MirrorStats{ObjectsScanned: 1}}, nil, "", nil
 		}}}
+	// forceTiming, not a config interval: the override survives the sync
+	// loop's recompute, and no env value can express a sub-second cadence.
+	agent.forceTiming(JobMirror, Timing{Interval: 80 * time.Millisecond, Source: "env"})
 	// A fresh success keeps boot catch-up (and its minutes of jitter) out of
 	// the way: what is under test is the ticker branch of the scheduler.
 	_, err = pool.Exec(ctx, `

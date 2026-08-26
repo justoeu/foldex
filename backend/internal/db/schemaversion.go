@@ -21,13 +21,14 @@ import (
 // instance that has not run the migration yet, trading a real outage for a
 // planner improvement.
 //
-// 41 because ADR-43 PR5 makes the BACKEND read backup_run (000040) and expect
-// role_permission's instance.backup seed (000041) — before PR5 only the agent
-// touched that table, which is why 000040 itself did not bump this. Distinct
-// from backupagent.RequiredSchemaVersion, which stays at 40: the agent needs
-// only the backup_run table and must keep booting against a database whose
-// backend has not yet learned to read it.
-const RequiredSchemaVersion = 41
+// 41 was ADR-43 PR5: the BACKEND started reading backup_run (000040) and
+// expecting role_permission's instance.backup seed (000041) — before PR5 only
+// the agent touched that table, which is why 000040 itself did not bump this.
+// 42 is ADR-44: the backend reads and writes backup_schedule and reads
+// backup_agent_state (the agenda surface). Distinct from
+// backupagent.RequiredSchemaVersion — also 42 now, but tracked separately
+// because the two binaries' dependencies move independently.
+const RequiredSchemaVersion = 42
 
 // ErrSchemaOutdated is returned when the database has not been migrated.
 var ErrSchemaOutdated = errors.New("db: schema is older than this binary requires")

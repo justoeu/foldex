@@ -14,38 +14,29 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// RequiredSchemaVersion is the migration the agent needs (backup_run). The
-// agent never runs migrations — the backend owns the schema — so boot fails
-// with an instruction instead of a missing-table error mid-job.
+// RequiredSchemaVersion is the migration the agent needs. The agent never
+// runs migrations — the backend owns the schema — so boot fails with an
+// instruction instead of a missing-table error mid-job.
 //
-// Deliberately NOT db.RequiredSchemaVersion (41): that number tracks what the
-// BACKEND reads, and moves whenever any backend query gains a dependency. The
-// agent only needs backup_run itself, and must keep booting against a database
-// whose backend has not migrated past 000040 yet.
-const RequiredSchemaVersion = 40
+// Deliberately NOT db.RequiredSchemaVersion: that number tracks what the
+// BACKEND reads, and moves whenever any backend query gains a dependency.
+// This one moves only for tables the agent itself touches: 40 for backup_run,
+// 42 for backup_schedule (read) and backup_agent_state (heartbeat, written).
+const RequiredSchemaVersion = 42
 
 const janitorInterval = time.Hour
 
-// jobSpec is one entry in the agent's registry. Adding a job in a later PR is
-// adding an entry here (drill, mirror, user_zip) — the scheduler, the
-// requested-claim loop, the janitor and the metrics all iterate the table and
-// need no edits (SDD-OPS-BACKUP §15).
+// jobSpec is one entry in the agent's registry. The WHEN no longer lives
+// here: schedules are Timings resolved from the env baseline plus the
+// backup_schedule table (ADR-44), swapped live by the sync loop — a spec is
+// only the job's name and its work.
 type jobSpec struct {
-	name   string
-	anchor Anchor
-	// interval schedules by cadence instead of wall-clock anchor (mirror).
-	// Exactly one of anchor/interval is set; interval > 0 wins.
-	interval time.Duration
+	name string
 	// run receives the backup_run row id it executes under: the drill needs
 	// it to stamp drill_of_run_id as soon as it picks a source, so even a run
 	// that fails mid-pipeline records WHICH dump it was validating.
 	run func(ctx context.Context, runID int64) (*Artifact, map[string]any, string, error)
 }
-
-// enabled reports whether the spec has any schedule at all. A disabled job
-// still answers 'requested' rows — the operator's button works even when the
-// cadence is off.
-func (s jobSpec) enabled() bool { return s.anchor.Enabled() || s.interval > 0 }
 
 // Agent wires the jobs to their schedule and to backup_run.
 type Agent struct {
@@ -53,9 +44,20 @@ type Agent struct {
 	pool    *pgxpool.Pool
 	store   Uploader
 	runs    *RunStore
+	sched   *ScheduleStore
 	metrics *Metrics
 	logger  *slog.Logger
 	jobs    []jobSpec
+
+	// timings is the live agenda: env baseline merged with the database rows,
+	// refreshed by the sync loop. schedChange is closed (and replaced) on
+	// every swap so the schedule loops recompute their timers mid-sleep.
+	schedMu     sync.RWMutex
+	timings     map[string]Timing
+	schedChange chan struct{}
+	// timingOverrides pins a job's Timing past the sync loop — tests need
+	// sub-second cadences no row or env var can express.
+	timingOverrides map[string]Timing
 
 	// skewWarning is checked from Start, not the constructor: it does I/O
 	// (SHOW server_version + exec pg_dump), and a constructor that can hang on
@@ -74,18 +76,20 @@ type Agent struct {
 // the mirror registers only when both the interval and the source exist.
 func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBucket, logger *slog.Logger) (*Agent, error) {
 	a := &Agent{
-		cfg:     cfg,
-		pool:    pool,
-		store:   store,
-		runs:    NewRunStore(pool),
-		metrics: NewMetrics(),
-		logger:  logger,
+		cfg:         cfg,
+		pool:        pool,
+		store:       store,
+		runs:        NewRunStore(pool),
+		sched:       NewScheduleStore(pool),
+		metrics:     NewMetrics(),
+		logger:      logger,
+		schedChange: make(chan struct{}),
 	}
 	dump, err := NewDumpJob(cfg, pool, store, logger)
 	if err != nil {
 		return nil, err
 	}
-	a.jobs = append(a.jobs, jobSpec{name: JobDump, anchor: cfg.DumpAt, run: func(ctx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
+	a.jobs = append(a.jobs, jobSpec{name: JobDump, run: func(ctx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
 		return dump.Run(ctx)
 	}})
 	a.skewWarning = dump.VersionSkewWarning
@@ -94,10 +98,10 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 	if err != nil {
 		return nil, err
 	}
-	// Registered even with no anchor: the registry is also what the
+	// Registered even with no schedule: the registry is also what the
 	// requested-claim loop iterates, so an operator can trigger a manual
 	// drill from the admin surface without scheduling one.
-	a.jobs = append(a.jobs, jobSpec{name: JobDrill, anchor: cfg.DrillAt, run: drill.Run})
+	a.jobs = append(a.jobs, jobSpec{name: JobDrill, run: drill.Run})
 
 	if cfg.MirrorEnabled() {
 		if mirrorSource == nil {
@@ -110,23 +114,161 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 		if err != nil {
 			return nil, err
 		}
-		a.jobs = append(a.jobs, jobSpec{name: JobMirror, interval: cfg.MirrorInterval(), run: func(ctx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
+		a.jobs = append(a.jobs, jobSpec{name: JobMirror, run: func(ctx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
 			return mirror.Run(ctx)
 		}})
 	}
+	a.timings = a.computeTimings(nil)
 	return a, nil
 }
 
 // RegisterJob appends a job to the registry, between New and Start. It exists
 // for jobs whose dependencies New does not carry: user_zip needs a
 // backup.Service over the SOURCE bucket, which only the binary constructs.
-func (a *Agent) RegisterJob(name string, anchor Anchor, run func(ctx context.Context) (*Artifact, map[string]any, string, error)) {
-	a.jobs = append(a.jobs, jobSpec{name: name, anchor: anchor, run: func(ctx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
+func (a *Agent) RegisterJob(name string, run func(ctx context.Context) (*Artifact, map[string]any, string, error)) {
+	a.jobs = append(a.jobs, jobSpec{name: name, run: func(ctx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
 		return run(ctx)
 	}})
+	a.setTimings(a.computeTimings(nil))
 }
 
-// CheckSchema gates the boot on migration 000040 being applied.
+// registered reports whether a job is in the registry — capability for
+// user_zip, whose Service only the binary decides to build.
+func (a *Agent) registered(name string) bool {
+	for _, s := range a.jobs {
+		if s.name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// capability answers whether THIS process can run a job at all, and why not.
+// Capabilities come from the environment alone (credentials, the identity,
+// the constructed clients) — the database can move a schedule, never conjure
+// a capability (INV-173).
+func (a *Agent) capability(name string) (bool, string) {
+	switch name {
+	case JobDrill:
+		if a.cfg.AgeIdentityFile == "" {
+			return false, "no_identity"
+		}
+	case JobMirror:
+		if !a.cfg.MirrorEnabled() {
+			return false, "mirror_off"
+		}
+	case JobUserZip:
+		if !a.registered(JobUserZip) {
+			return false, "no_source_credentials"
+		}
+	}
+	return true, ""
+}
+
+// computeTimings resolves the live agenda: per registered job, the env
+// baseline merged with its backup_schedule row, capability-gated, then test
+// overrides. A row for an incapable job is logged and ignored — honouring it
+// would schedule work the process cannot perform.
+func (a *Agent) computeTimings(rows map[string]ScheduleRow) map[string]Timing {
+	out := make(map[string]Timing, len(a.jobs))
+	for _, spec := range a.jobs {
+		var row *JobConfig
+		if r, ok := rows[spec.name]; ok {
+			cfg := r.Config
+			if err := ValidateJobConfig(spec.name, cfg); err != nil {
+				a.logger.Warn("schedule row is invalid; using the env baseline", "job", spec.name, "err", err)
+			} else {
+				row = &cfg
+			}
+		}
+		if capable, reason := a.capability(spec.name); !capable {
+			if row != nil {
+				a.logger.Warn("schedule row for a job this agent cannot run; ignoring", "job", spec.name, "reason", reason)
+			}
+			out[spec.name] = Timing{Source: "env"}
+			continue
+		}
+		out[spec.name] = EffectiveTiming(spec.name, a.cfg, row)
+	}
+	a.schedMu.RLock()
+	for job, t := range a.timingOverrides {
+		out[job] = t
+	}
+	a.schedMu.RUnlock()
+	return out
+}
+
+// timing returns the current Timing for a job.
+func (a *Agent) timing(name string) Timing {
+	a.schedMu.RLock()
+	defer a.schedMu.RUnlock()
+	return a.timings[name]
+}
+
+// changeCh returns the channel closed on the next agenda swap.
+func (a *Agent) changeCh() <-chan struct{} {
+	a.schedMu.RLock()
+	defer a.schedMu.RUnlock()
+	return a.schedChange
+}
+
+// setTimings swaps the agenda and wakes every schedule loop.
+func (a *Agent) setTimings(next map[string]Timing) {
+	a.schedMu.Lock()
+	a.timings = next
+	close(a.schedChange)
+	a.schedChange = make(chan struct{})
+	a.schedMu.Unlock()
+}
+
+// forceTiming pins one job's Timing past the sync loop (tests only).
+func (a *Agent) forceTiming(name string, t Timing) {
+	a.schedMu.Lock()
+	if a.timingOverrides == nil {
+		a.timingOverrides = map[string]Timing{}
+	}
+	a.timingOverrides[name] = t
+	a.schedMu.Unlock()
+	a.setTimings(a.computeTimings(nil))
+}
+
+func timingsEqual(x, y map[string]Timing) bool {
+	if len(x) != len(y) {
+		return false
+	}
+	for job, t := range x {
+		o, ok := y[job]
+		if !ok || o.Source != t.Source || o.String() != t.String() {
+			return false
+		}
+	}
+	return true
+}
+
+// agentState renders the heartbeat: per-job capability and the agenda this
+// process is actually following — the honesty layer the schedule UI needs
+// before it lets an owner agenda a job the agent cannot run.
+func (a *Agent) agentState() AgentState {
+	jobs := make(map[string]JobReport, len(a.jobs))
+	for _, spec := range a.jobs {
+		capable, reason := a.capability(spec.name)
+		t := a.timing(spec.name)
+		jobs[spec.name] = JobReport{Capable: capable, Reason: reason, Source: t.Source, Schedule: t.String()}
+	}
+	// Unregistered jobs are reported anyway: absent from the map they would
+	// render as "unknown" instead of "unavailable, and here is why" — and an
+	// absent mirror let the UI offer editors for a row no process would ever
+	// read.
+	if !a.registered(JobUserZip) {
+		jobs[JobUserZip] = JobReport{Capable: false, Reason: "no_source_credentials", Source: "env", Schedule: "disabled"}
+	}
+	if !a.registered(JobMirror) {
+		jobs[JobMirror] = JobReport{Capable: false, Reason: "mirror_off", Source: "env", Schedule: "disabled"}
+	}
+	return AgentState{SeenAt: time.Now(), Version: a.cfg.Version, Jobs: jobs}
+}
+
+// CheckSchema gates the boot on the agent's own migrations being applied.
 func (a *Agent) CheckSchema(ctx context.Context) error {
 	v, err := a.runs.SchemaVersion(ctx)
 	if err != nil {
@@ -138,9 +280,9 @@ func (a *Agent) CheckSchema(ctx context.Context) error {
 	return nil
 }
 
-// Start launches the schedule loops, the requested-claim poller, the janitor
-// and the metrics server. Same lifecycle contract as the other workers:
-// Start(ctx) then Stop(), idempotent.
+// Start launches the schedule loops, the schedule/heartbeat sync, the
+// requested-claim poller, the janitor and the metrics server. Same lifecycle
+// contract as the other workers: Start(ctx) then Stop(), idempotent.
 func (a *Agent) Start(ctx context.Context) {
 	ctx, a.cancel = context.WithCancel(ctx)
 
@@ -160,15 +302,17 @@ func (a *Agent) Start(ctx context.Context) {
 		}
 	}
 
+	// One synchronous sync before the loops: the very first timers must
+	// already honour the stored agenda, not fire once on the env baseline and
+	// correct themselves half a minute later.
+	a.syncSchedule(ctx)
+
 	for _, spec := range a.jobs {
-		if !spec.enabled() {
-			a.logger.Info("job disabled (no schedule configured)", "job", spec.name)
-			continue
-		}
 		a.wg.Add(1)
 		go a.scheduleLoop(ctx, spec)
 	}
-	a.wg.Add(2)
+	a.wg.Add(3)
+	go a.scheduleSyncLoop(ctx)
 	go a.requestedLoop(ctx)
 	go a.janitorLoop(ctx)
 
@@ -190,79 +334,153 @@ func (a *Agent) Stop() {
 	})
 }
 
-func (a *Agent) scheduleLoop(ctx context.Context, spec jobSpec) {
-	defer a.wg.Done()
-
-	if spec.interval > 0 {
-		a.intervalLoop(ctx, spec)
-		return
-	}
-
-	// Boot catch-up: state lives in backup_run, so the decision is correct
-	// across restarts with no local file — the container stays disposable.
-	// The jitter keeps a `compose up` from firing a dump into a half-started
-	// stack; waitReady then holds until the database answers.
-	last, err := a.runs.LastSuccess(ctx, spec.name)
+// syncSchedule refreshes the agenda from backup_schedule and writes the
+// heartbeat. A failed load keeps the current agenda — degrading to yesterday's
+// schedule beats degrading to no schedule.
+func (a *Agent) syncSchedule(ctx context.Context) {
+	rows, err := a.sched.Load(ctx)
 	if err != nil {
-		a.logger.Error("catch-up decision failed", "job", spec.name, "err", err)
-	} else if spec.anchor.Due(time.Now(), last) {
-		jitter := time.Minute + rand.N(4*time.Minute)
-		a.logger.Info("catch-up scheduled", "job", spec.name, "in", jitter.Round(time.Second))
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(jitter):
-		}
-		if a.waitReady(ctx) {
-			a.execute(ctx, spec, spec.anchor.PreviousSlot(time.Now()), 0)
+		a.logger.Warn("schedule load failed; keeping the current agenda", "err", err)
+	} else {
+		next := a.computeTimings(rows)
+		a.schedMu.RLock()
+		changed := !timingsEqual(a.timings, next)
+		a.schedMu.RUnlock()
+		if changed {
+			a.setTimings(next)
+			for job, t := range next {
+				a.logger.Info("agenda updated", "job", job, "schedule", t.String(), "source", t.Source)
+			}
 		}
 	}
-
-	for {
-		next := spec.anchor.Next(time.Now())
-		a.logger.Info("next run scheduled", "job", spec.name, "at", next)
-		timer := time.NewTimer(time.Until(next))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-			a.execute(ctx, spec, next, 0)
-		}
+	if err := a.sched.Heartbeat(ctx, a.agentState()); err != nil {
+		a.logger.Warn("heartbeat failed", "err", err)
 	}
 }
 
-// intervalLoop is the cadence-scheduled sibling of the anchor path: a plain
-// ticker, with the same jittered, readiness-gated boot catch-up. There is no
-// missed wall-clock slot to reconstruct for an interval job, so scheduled_for
-// is simply the moment it fires.
-func (a *Agent) intervalLoop(ctx context.Context, spec jobSpec) {
-	last, err := a.runs.LastSuccess(ctx, spec.name)
-	if err != nil {
-		a.logger.Error("catch-up decision failed", "job", spec.name, "err", err)
-	} else if intervalDue(time.Now(), last, spec.interval) {
-		jitter := time.Minute + rand.N(4*time.Minute)
-		a.logger.Info("catch-up scheduled", "job", spec.name, "in", jitter.Round(time.Second))
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(jitter):
-		}
-		if a.waitReady(ctx) {
-			a.execute(ctx, spec, time.Now(), 0)
-		}
-	}
-
-	a.logger.Info("interval schedule active", "job", spec.name, "every", spec.interval)
-	ticker := time.NewTicker(spec.interval)
+// scheduleSyncLoop re-syncs on the requested-poll cadence: the same ~30s that
+// bounds how stale the manual-trigger channel can be also bounds how long an
+// owner's agenda edit takes to reach the timers, and the heartbeat rides
+// along so "agent last seen" stays fresh in the band.
+func (a *Agent) scheduleSyncLoop(ctx context.Context) {
+	defer a.wg.Done()
+	ticker := time.NewTicker(a.cfg.RequestedPoll())
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case fired := <-ticker.C:
-			a.execute(ctx, spec, fired, 0)
+		case <-ticker.C:
+			a.syncSchedule(ctx)
 		}
+	}
+}
+
+// scheduleLoop drives one job from its live Timing: sleep to the next slot,
+// run, recompute — and recompute early whenever the agenda swaps under it.
+func (a *Agent) scheduleLoop(ctx context.Context, spec jobSpec) {
+	defer a.wg.Done()
+
+	a.bootCatchUp(ctx, spec)
+
+	var lastFire time.Time
+	// Anchors the first interval wait: without it, every agenda swap of ANY
+	// job re-entered this loop and reset a never-fired interval's countdown
+	// to "now + interval", postponing the first run indefinitely under
+	// frequent edits.
+	var intervalStart time.Time
+	for {
+		// changeCh BEFORE timing, and the order is load-bearing: a swap that
+		// lands between the two reads closes the channel this loop is about
+		// to select on, so it wakes and re-reads. Read the other way around,
+		// that swap closed a channel nobody held — and a loop parked on the
+		// "no schedule" branch would sleep on the NEW channel waiting for an
+		// edit that already happened, keeping a just-enabled job dormant
+		// until the next edit or restart.
+		change := a.changeCh()
+		t := a.timing(spec.name)
+		if !t.Enabled() {
+			a.logger.Info("job has no schedule; waiting for one", "job", spec.name)
+			select {
+			case <-ctx.Done():
+				return
+			case <-change:
+				continue
+			}
+		}
+		var fireAt time.Time
+		if t.Interval > 0 {
+			base := lastFire
+			if base.IsZero() {
+				if intervalStart.IsZero() {
+					intervalStart = time.Now()
+				}
+				base = intervalStart
+			}
+			fireAt = base.Add(t.Interval)
+			if !fireAt.After(time.Now()) {
+				// The interval shrank past the elapsed wait: fire promptly
+				// instead of stretching the old cadence one more period.
+				fireAt = time.Now()
+			}
+		} else {
+			fireAt, _ = t.Next(time.Now())
+		}
+		a.logger.Info("next run scheduled", "job", spec.name, "at", fireAt, "source", t.Source)
+		timer := time.NewTimer(time.Until(fireAt))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-change:
+			timer.Stop()
+			continue
+		case <-timer.C:
+			lastFire = time.Now()
+			a.execute(ctx, spec, fireAt, 0)
+		}
+	}
+}
+
+// bootCatchUp runs a job immediately after boot when its last success is more
+// than one full gap (plus grace) behind. State lives in backup_run, so the
+// decision is correct across restarts with no local file — the container
+// stays disposable. The jitter keeps a `compose up` from firing a dump into a
+// half-started stack; waitReady then holds until the database answers.
+func (a *Agent) bootCatchUp(ctx context.Context, spec jobSpec) {
+	t := a.timing(spec.name)
+	if !t.Enabled() {
+		return
+	}
+	last, err := a.runs.LastSuccess(ctx, spec.name)
+	if err != nil {
+		a.logger.Error("catch-up decision failed", "job", spec.name, "err", err)
+		return
+	}
+	var slot time.Time
+	switch {
+	case t.Interval > 0:
+		if !intervalDue(time.Now(), last, t.Interval) {
+			return
+		}
+		// There is no missed wall-clock slot to reconstruct for an interval
+		// job: scheduled_for is simply the moment it fires.
+		slot = time.Now()
+	default:
+		if !t.Due(time.Now(), last) {
+			return
+		}
+		slot = t.PreviousSlot(time.Now())
+	}
+	jitter := time.Minute + rand.N(4*time.Minute)
+	a.logger.Info("catch-up scheduled", "job", spec.name, "in", jitter.Round(time.Second))
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(jitter):
+	}
+	if a.waitReady(ctx) {
+		a.execute(ctx, spec, slot, 0)
 	}
 }
 

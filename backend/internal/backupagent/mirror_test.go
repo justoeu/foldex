@@ -198,8 +198,9 @@ func TestNew_RegistersTheMirrorOnlyWithIntervalAndSource(t *testing.T) {
 	require.Len(t, agent.jobs, 3)
 	mirror := agent.jobs[len(agent.jobs)-1]
 	assert.Equal(t, JobMirror, mirror.name)
-	assert.Equal(t, time.Hour, mirror.interval)
-	assert.True(t, mirror.enabled(), "an interval schedule alone must enable the loop — no anchor needed")
+	timing := agent.timing(JobMirror)
+	assert.Equal(t, time.Hour, timing.Interval)
+	assert.True(t, timing.Enabled(), "an interval schedule alone must enable the loop — no anchor needed")
 
 	cfg.MirrorIntervalMin = 0
 	agent, err = New(cfg, nil, newRecorderStore(), newRecorderStore(), testLogger())

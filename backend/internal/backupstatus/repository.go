@@ -130,6 +130,26 @@ func (s *Repository) consecutiveFailures(ctx context.Context, job string) (int, 
 	return backupagent.NewRunStore(s.pool).ConsecutiveFailures(ctx, job)
 }
 
+// Schedule, SetSchedule, DeleteSchedule and AgentState delegate to the
+// agent's ScheduleStore for consecutiveFailures's reason: one validation, one
+// query shape, written once in the package whose process actually honours
+// them (ADR-44).
+func (s *Repository) Schedule(ctx context.Context) (map[string]backupagent.ScheduleRow, error) {
+	return backupagent.NewScheduleStore(s.pool).Load(ctx)
+}
+
+func (s *Repository) SetSchedule(ctx context.Context, job string, cfg backupagent.JobConfig, updatedBy int64) error {
+	return backupagent.NewScheduleStore(s.pool).Upsert(ctx, job, cfg, updatedBy)
+}
+
+func (s *Repository) DeleteSchedule(ctx context.Context, job string) error {
+	return backupagent.NewScheduleStore(s.pool).Delete(ctx, job)
+}
+
+func (s *Repository) AgentState(ctx context.Context) (backupagent.AgentState, bool, error) {
+	return backupagent.NewScheduleStore(s.pool).AgentSeen(ctx)
+}
+
 // ListRuns pages the history newest-first. before is a keyset cursor (the last
 // id already shown; 0 means the head) — the table grows at its head, so an
 // offset page would repeat rows as soon as the agent wrote anything between

@@ -207,7 +207,7 @@ func TestRBAC_MetricsAndRolesDescribeTheInstance(t *testing.T) {
 	metrics := decode(t, owner.do(http.MethodGet, "/api/admin/metrics", nil))
 	assert.Equal(t, float64(2), metrics["active_users"])
 	assert.Equal(t, float64(0), metrics["pending_invites"])
-	assert.Equal(t, float64(15), metrics["permission_count"])
+	assert.Equal(t, float64(16), metrics["permission_count"])
 
 	roles := decode(t, owner.do(http.MethodGet, "/api/admin/roles", nil))
 	list := roles["roles"].([]any)
@@ -217,7 +217,7 @@ func TestRBAC_MetricsAndRolesDescribeTheInstance(t *testing.T) {
 	assert.Equal(t, float64(1), first["user_count"])
 	// The permission vocabulary comes from the server so the screen cannot
 	// describe a grid the server does not implement.
-	assert.Len(t, roles["permissions"].([]any), 15)
+	assert.Len(t, roles["permissions"].([]any), 16)
 }
 
 // The trail is what an investigation reads, so the events that matter most are
@@ -932,7 +932,8 @@ func TestRolePermissionsAPI_CarriesTheFieldsTheMatrixRendersFrom(t *testing.T) {
 
 	locked := body["locked"].([]any)
 	assert.ElementsMatch(t,
-		[]any{"content.read", "roles.assign", "policy.write", "instance.transfer"}, locked,
+		[]any{"content.read", "roles.assign", "policy.write", "instance.transfer",
+			"instance.backup_schedule"}, locked,
 		"the locked set is what greys out a cell and says why")
 
 	assert.Equal(t, "owner", body["caller_role"])

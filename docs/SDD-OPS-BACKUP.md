@@ -373,6 +373,35 @@ Ciclo de vida do processo: modelo `cmd/mailer` — `signal.NotifyContext(SIGINT,
 andamento recebe o cancelamento do ctx e registra `failed('shutdown')`; o catch-up do
 próximo boot o refaz.
 
+### 6.1 Agenda configurável (ADR-44, PR6)
+
+A env deixou de ser a única dona do QUANDO. A divisão de autoridade (INV-173):
+
+- **A env decide QUAIS jobs existem** — capacidade é credencial/identidade
+  (`BACKUP_S3_*`, `RUSTFS_*`, `BACKUP_AGE_IDENTITY_FILE`, `BACKUP_MIRROR_INTERVAL_MIN>0`),
+  e uma linha de banco não conjura um segredo dentro do processo.
+- **O banco decide QUANDO os jobs existentes rodam** — tabela `backup_schedule`
+  (migração 000042, uma linha por job, `config jsonb`), editada pela superfície admin
+  e recarregada pelo agente a cada tick do poll (~30 s), sem restart: o loop de sync
+  troca o snapshot de `Timing`s e fecha um canal que acorda cada schedule loop
+  mid-sleep.
+- **Pisos compilados** (`backupagent.ValidateJobConfig`, aplicados pelo PUT do backend
+  E pelo load do agente): dump 1..6 horários/dia (nunca zero — o piso que importa);
+  drill sempre semanal (`time`+`weekday`, sem estado "off"); mirror 15..1440 min
+  (linha ajusta cadência, nunca desliga); user_zip é o ÚNICO que uma linha pode
+  desligar (conveniência de produto, não proteção). Linha ausente, inválida ou de job
+  incapaz ⇒ baseline da env — degradação para a agenda de ontem, nunca para job morto.
+- **Heartbeat** — tabela `backup_agent_state` (uma linha, upsert no mesmo loop):
+  `seen_at`, versão e por job `{capable, reason, source, schedule}`. É a camada de
+  honestidade da UI (lição do mailer): sem ela a tela deixaria o owner agendar um
+  drill num agente sem identidade montada, e a agenda ficaria configurada e ignorada
+  para sempre.
+- **Escrita owner-only** pela permissão nova `instance.backup_schedule`, TRAVADA
+  (argumento do `policy.write` aplicado a DR): admin lê a agenda, só o owner a move,
+  e os pisos limitam até o owner. Auditoria própria (`backup.schedule_changed`).
+- O dump aceita MÚLTIPLOS horários diários; o catch-up passa a comparar contra o
+  maior gap legítimo entre âncoras consecutivas (wraparound incluído) + 25% de grace.
+
 ---
 
 ## 7. Retenção GFS
@@ -691,6 +720,7 @@ lista de exclusão de MEDIÇÃO como os demais `cmd/*`, com a lógica toda em pa
 | PR3 | Job `mirror` (extensão `ObjectInfo` com ETag/LastModified, watermark, sem delete) | `BACKUP_MIRROR_INTERVAL_MIN` |
 | PR4 | Job `user_zip` (reuso de `Service.Export`, deferência ao `RestoreAdvisoryLockKey`) | `BACKUP_USERZIP_AT` (vazio = off) |
 | PR5 | ✅ Superfície de status: endpoint admin (`internal/backupstatus`) + permissão `instance.backup` (migração 000041) + **bump `RequiredSchemaVersion` 37→41** + banda completa no settings hub + dashboard Grafana completo. O alerta e-mail via outbox (template 3 locales, §9.3) ficou FORA — pendência pós-PR5 | permissão `instance.backup` |
+| PR6 | ✅ Agenda configurável (ADR-44, §6.1): migração 000042 (`backup_schedule` + `backup_agent_state`) + pisos compilados + reload ao vivo no agente + heartbeat + permissão travada `instance.backup_schedule` + `GET/PUT/DELETE /api/admin/backup/schedule[/{job}]` + editor de agenda na banda + **bump `RequiredSchemaVersion` 41→42 e gate do agente 40→42** | permissão `instance.backup_schedule` |
 
 Ordem justificada: cada PR é shippável sozinho; o drill vem em segundo porque a
 verificação é o núcleo da proposta — expandir escopo (mirror, user_zip) antes de provar

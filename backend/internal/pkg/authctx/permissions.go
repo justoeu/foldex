@@ -45,6 +45,14 @@ const (
 	// file means the caller's OWN per-user archive (ADR-20) and this is the
 	// whole instance's disaster-recovery state.
 	PermInstanceBackupRead Permission = "instance.backup"
+
+	// Writing the backup agenda (ADR-44): which wall times the dump, drill,
+	// mirror and user_zip jobs fire at. Owner-only and LOCKED for
+	// policy.write's reason: an administrator who could stretch the dump to
+	// its floor or park the drill could thin the instance's disaster
+	// recovery and then walk in through the gap. The compiled floors in
+	// backupagent.ValidateJobConfig bound even the owner.
+	PermInstanceBackupSchedule Permission = "instance.backup_schedule"
 )
 
 // AllPermissions lists every permission in display order.
@@ -68,6 +76,7 @@ var AllPermissions = []Permission{
 	PermPolicyWrite,
 	PermInstanceTransfer,
 	PermInstanceBackupRead,
+	PermInstanceBackupSchedule,
 }
 
 // AllRoles lists every role from most to least privileged, in display order.
@@ -79,21 +88,22 @@ var AllRoles = []Role{RoleOwner, RoleAdmin, RoleEditor, RoleViewer}
 // an unknown role is powerless rather than unconstrained.
 var rolePermissions = map[Role]map[Permission]bool{
 	RoleOwner: {
-		PermContentRead:        true,
-		PermContentWrite:       true,
-		PermBackupExport:       true,
-		PermBackupRestore:      true,
-		PermImportRun:          true,
-		PermUsersRead:          true,
-		PermUsersWrite:         true,
-		PermRolesAssign:        true,
-		PermInvitesRead:        true,
-		PermInvitesWrite:       true,
-		PermAuditRead:          true,
-		PermPolicyRead:         true,
-		PermPolicyWrite:        true,
-		PermInstanceTransfer:   true,
-		PermInstanceBackupRead: true,
+		PermContentRead:            true,
+		PermContentWrite:           true,
+		PermBackupExport:           true,
+		PermBackupRestore:          true,
+		PermImportRun:              true,
+		PermUsersRead:              true,
+		PermUsersWrite:             true,
+		PermRolesAssign:            true,
+		PermInvitesRead:            true,
+		PermInvitesWrite:           true,
+		PermAuditRead:              true,
+		PermPolicyRead:             true,
+		PermPolicyWrite:            true,
+		PermInstanceTransfer:       true,
+		PermInstanceBackupRead:     true,
+		PermInstanceBackupSchedule: true,
 	},
 	RoleAdmin: {
 		PermContentRead:   true,
@@ -181,11 +191,16 @@ func DefaultGrants() map[Role]map[Permission]bool {
 //   - PermContentRead is locked in the other direction — it can never be
 //     REMOVED. An account that cannot read its own library is not a restricted
 //     account, it is a broken one, and its owner has no way to tell which.
+//   - PermInstanceBackupSchedule is policy.write's argument applied to
+//     disaster recovery: an admin who could stretch the dump agenda to its
+//     floor or park the drill on a dead slot could thin the instance's
+//     backups and then act inside the gap.
 var lockedPermissions = map[Permission]bool{
-	PermRolesAssign:      true,
-	PermPolicyWrite:      true,
-	PermInstanceTransfer: true,
-	PermContentRead:      true,
+	PermRolesAssign:            true,
+	PermPolicyWrite:            true,
+	PermInstanceTransfer:       true,
+	PermContentRead:            true,
+	PermInstanceBackupSchedule: true,
 }
 
 // IsPermissionLocked reports whether a permission is outside configuration.

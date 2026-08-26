@@ -361,6 +361,10 @@ services:
       BACKUP_METRICS_ADDR: ${BACKUP_METRICS_ADDR:-:9099}
       BACKUP_REQUESTED_POLL_SEC: ${BACKUP_REQUESTED_POLL_SEC:-30}
       BACKUP_STALE_RUN_MIN: ${BACKUP_STALE_RUN_MIN:-240}
+      # Reported in the agent's heartbeat (backup_agent_state) so the agenda
+      # screen can say which agent build is running. Same no-default rule as
+      # the backend's copy of this variable: a stale literal here would lie.
+      FOLDEX_VERSION: ${FOLDEX_VERSION:-}
       # Empty = the container's writable layer. Point at a mounted volume when
       # the dump outgrows the host's docker filesystem.
       BACKUP_SPOOL_DIR: ${BACKUP_SPOOL_DIR:-}

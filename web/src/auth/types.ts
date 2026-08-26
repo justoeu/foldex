@@ -40,6 +40,7 @@ export type Permission =
   | 'policy.write'
   | 'instance.transfer'
   | 'instance.backup'
+  | 'instance.backup_schedule'
 
 /** Mirrors authctx.Role.IsAdmin — who may reach /api/admin at all. */
 /**
