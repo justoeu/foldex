@@ -2,6 +2,12 @@
 
 > Software Design Document. Status: **Approved · v1.9 · 2026-08-16**
 >
+> **Não confundir com [`SDD-OPS-BACKUP.md`](./SDD-OPS-BACKUP.md)** (ADR-43): este
+> documento é o export/restore **por usuário** via `/api/backup/*` — um recurso de
+> produto que deliberadamente não carrega auth (INV-105) e não restaura uma
+> instância. O disaster recovery operacional (dump agendado + espelho RustFS + S3
+> externo + restore drill) vive lá.
+>
 > **v1.1 (ADR-30, migration 000017 — multi-user).** Backup became per-user and
 > stopped carrying auth material. Three contracts in this document changed and
 > the affected sections carry an inline note: (a) **`wipe` no longer preserves

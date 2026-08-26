@@ -1094,6 +1094,21 @@ that never becomes a span name.
 any `user.*` / `enduser.*` key outside the allowed three fails, so widening the set is a
 deliberate decision rather than a one-line drive-by.
 
+**`user.name` is REMOVED from the pool's query spans, because it names a different subject.**
+`otelpgx` stamps semconv's `user.name` with the POSTGRES ROLE on every CLIENT span it emits.
+semconv has one such key and this application has two things that fit it: the role the pool
+authenticates as, and the account whose request is being served. Side by side in one trace —
+`user.id` on the SERVER span, `user.name` on its children — they read as the id and the name of
+the same person, and they are not. The failure is silent and convincing rather than loud: a panel
+grouping "requests by `user.name`" answers `user_foldex` for 100% of traffic and looks like a
+working breakdown, which is worse than having no panel at all. `internal/db` therefore passes
+`otelpgx.WithDisableConnectionDetailsInAttributes()` and re-adds the same set minus that key via
+`connAttrs` — `server.address`, `server.port`, `db.namespace` stay, because those vary per
+deployment and answer "which database did this span talk to"; the role does not vary and is
+already in `DB_URL`. `TestQuerySpansNeverCarryThePostgresRole` runs a real query under a SERVER
+parent and asserts across EVERY recorded span; the fast `TestConnAttrs_*` beside it pins the set
+without Docker but cannot catch the option being dropped, which is why both exist.
+
 **It is a function called from the three principal seams, and the first draft proves why.**
 `Authenticate`, `Optional` and the `AUTH_ENABLED=0` bootstrap are the only places a principal is
 established; the annotation is called at each. The first version was a MIDDLEWARE mounted on the
