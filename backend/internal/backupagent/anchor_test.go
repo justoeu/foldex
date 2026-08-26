@@ -95,3 +95,14 @@ func TestDue_CatchUpContract(t *testing.T) {
 	var disabled Anchor
 	assert.False(t, disabled.Due(now, time.Time{}), "a disabled job is never due")
 }
+
+func TestAnchorString_RendersTheEnvSyntaxBack(t *testing.T) {
+	daily, err := ParseAnchor("03:30")
+	require.NoError(t, err)
+	assert.Equal(t, "03:30", daily.String())
+	weekly, err := ParseAnchor("04:05 SUN")
+	require.NoError(t, err)
+	assert.Equal(t, "04:05 sun", weekly.String())
+	var disabled Anchor
+	assert.Equal(t, "disabled", disabled.String())
+}

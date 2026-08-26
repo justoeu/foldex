@@ -235,3 +235,29 @@ func TestMajor_ParsesRealVersionStrings(t *testing.T) {
 	assert.Equal(t, "17", major("17.2 (Debian 17.2-1)"))
 	assert.Equal(t, "", major("garbage"))
 }
+
+func TestPgDumpCommand_PasswordTravelsInEnvNeverArgv(t *testing.T) {
+	cfg := Config{PGHost: "db", PGPort: 5432, PGUser: "user_foldex",
+		PGPassword: "sup3r-secret", PGDatabase: "foldex", PGSSLMode: "disable"}
+	cmd := pgDumpCommand(context.Background(), cfg)
+
+	for _, arg := range cmd.Args {
+		assert.NotContains(t, arg, "sup3r-secret",
+			"argv is world-readable in /proc — the password must never appear there")
+	}
+	assert.Contains(t, cmd.Args, "--format=custom")
+	assert.NotContains(t, cmd.Args, "-C", "no CREATE DATABASE in the artifact (SDD §5.1)")
+	assert.Contains(t, cmd.Args, "foldex")
+
+	var sawPassword, sawSSL bool
+	for _, kv := range cmd.Env {
+		if kv == "PGPASSWORD=sup3r-secret" {
+			sawPassword = true
+		}
+		if kv == "PGSSLMODE=disable" {
+			sawSSL = true
+		}
+	}
+	assert.True(t, sawPassword, "the password reaches pg_dump through the environment")
+	assert.True(t, sawSSL)
+}

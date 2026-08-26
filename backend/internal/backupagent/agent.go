@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -49,6 +50,7 @@ type Agent struct {
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 	http     *http.Server
+	httpAddr string // bound address, once serveHTTP has a listener
 }
 
 // New builds the agent. store carries the external bucket; the dump job is the
@@ -341,11 +343,21 @@ func (a *Agent) serveHTTP() {
 	})
 	mux.Handle("/metrics", a.metrics.Handler(a.cfg.MetricsToken))
 
-	a.http = &http.Server{Addr: a.cfg.MetricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	a.http = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	// Listen synchronously, serve in the goroutine: a bad address fails HERE,
+	// at boot, instead of as a log line racing the "ready" message — and the
+	// bound address is knowable (":0" in tests, and in any setup that lets
+	// the OS pick).
+	listener, err := net.Listen("tcp", a.cfg.MetricsAddr)
+	if err != nil {
+		a.logger.Error("metrics server", "err", err)
+		return
+	}
+	a.httpAddr = listener.Addr().String()
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
-		if err := a.http.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := a.http.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			a.logger.Error("metrics server", "err", err)
 		}
 	}()
