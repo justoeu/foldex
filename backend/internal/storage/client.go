@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -70,6 +71,30 @@ func New(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, error) 
 		}
 	}
 
+	return &Client{mc: mc, bucket: cfg.Bucket, logger: logger}, nil
+}
+
+// NewReadOnly builds a client for a bucket this process only READS — the
+// mirror's source. It never creates the bucket: with New, a typo'd
+// RUSTFS_BUCKET would be silently created empty and the mirror would succeed
+// forever copying nothing — the exact silent non-backup ADR-43 exists to
+// kill. A missing bucket here is a configuration error and fails the boot.
+func NewReadOnly(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, error) {
+	mc, err := minio.New(cfg.Endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+		Secure: cfg.UseSSL,
+		Region: cfg.Region,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("storage: create s3 client: %w", err)
+	}
+	exists, err := mc.BucketExists(ctx, cfg.Bucket)
+	if err != nil {
+		return nil, fmt.Errorf("storage: check bucket %q at %s: %w", cfg.Bucket, cfg.Endpoint, err)
+	}
+	if !exists {
+		return nil, fmt.Errorf("storage: bucket %q does not exist at %s — refusing to read from a bucket that would have to be created (check the name)", cfg.Bucket, cfg.Endpoint)
+	}
 	return &Client{mc: mc, bucket: cfg.Bucket, logger: logger}, nil
 }
 
@@ -184,10 +209,15 @@ func (c *Client) Stats(ctx context.Context) (Stats, error) {
 }
 
 // ObjectInfo is the minimal metadata the backup module needs to enumerate the
-// bucket without coupling to the SDK's full ObjectInfo type.
+// bucket without coupling to the SDK's full ObjectInfo type. ETag and
+// LastModified come free with every ListObjects page; the mirror job diffs by
+// LastModified watermark — never by ETag, whose multipart form depends on the
+// uploader's part size, not the content (SDD-OPS-BACKUP §11.6).
 type ObjectInfo struct {
-	Key  string
-	Size int64
+	Key          string
+	Size         int64
+	ETag         string
+	LastModified time.Time
 }
 
 // WalkObjects visits objects under prefix as the SDK yields its paginated
@@ -201,7 +231,7 @@ func (c *Client) WalkObjects(ctx context.Context, prefix string, visit func(Obje
 		if obj.Err != nil {
 			return fmt.Errorf("storage: list objects under %q: %w", prefix, obj.Err)
 		}
-		if err := visit(ObjectInfo{Key: obj.Key, Size: obj.Size}); err != nil {
+		if err := visit(ObjectInfo{Key: obj.Key, Size: obj.Size, ETag: obj.ETag, LastModified: obj.LastModified}); err != nil {
 			return err
 		}
 	}

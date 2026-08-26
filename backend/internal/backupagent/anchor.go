@@ -108,6 +108,21 @@ func (a Anchor) Due(now, lastSuccess time.Time) bool {
 	return now.Sub(lastSuccess) > a.Interval()+grace
 }
 
+// intervalDue is the boot catch-up decision for interval-scheduled jobs
+// (Anchor.Due's sibling): run now when the job never succeeded, or when the
+// last success is more than one interval plus 25% grace behind. The grace
+// keeps a restart minutes after a tick from double-running a job that in fact
+// succeeded on time.
+func intervalDue(now, lastSuccess time.Time, interval time.Duration) bool {
+	if interval <= 0 {
+		return false
+	}
+	if lastSuccess.IsZero() {
+		return true
+	}
+	return now.Sub(lastSuccess) > interval+interval/4
+}
+
 // String renders the anchor back in its env-var syntax, for logs.
 func (a Anchor) String() string {
 	if !a.set {

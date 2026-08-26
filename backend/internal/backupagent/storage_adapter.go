@@ -26,7 +26,8 @@ func (u storageUploader) OpenObject(ctx context.Context, key string) (io.ReadClo
 
 func (u storageUploader) WalkObjects(ctx context.Context, prefix string, visit func(ObjectInfo) error) error {
 	return u.c.WalkObjects(ctx, prefix, func(object storage.ObjectInfo) error {
-		return visit(ObjectInfo{Key: object.Key, Size: object.Size})
+		return visit(ObjectInfo{Key: object.Key, Size: object.Size,
+			ETag: object.ETag, LastModified: object.LastModified})
 	})
 }
 

@@ -307,11 +307,18 @@ Espelho incremental RustFS → S3 externo, prefixo `backups/rustfs/`.
   apaga objetos não pode apagar também a cópia de backup — propagar delete converte
   ransomware em perda do backup. Órfãos no destino são bounded (chaves UUID); a limpeza
   endurecida é bucket versionado + lifecycle sobre versões noncurrent, zero lógica no
-  agente. `BACKUP_MIRROR_DELETE=1` existe como opt-in estrito, com o risco documentado no
-  `.env.example`.
+  agente. Um `BACKUP_MIRROR_DELETE=1` como opt-in estrito é possibilidade FUTURA — o v1
+  não implementa propagação de delete de forma nenhuma, nem atrás de flag.
+- **Objetos saem cifrados por objeto** (`<chave>.age`, mesmos `BACKUP_AGE_RECIPIENTS` do dump; opt-out conjunto via `BACKUP_ALLOW_PLAINTEXT`): a mídia é o ÚNICO payload que o dump cifrado não carrega, e o espelho é o único canal que a leva para fora da máquina — em claro, comprometer o bucket externo renderia a mídia de todos os tenants. Consequências: o diff por TAMANHO só vale no modo plaintext (ciphertext ≠ origem por construção — seria o modo de falha do ETag com outra cara), e o DR do bucket vira `age -d` por objeto em vez de prefix-copy puro.
+- **Origem é `storage.NewReadOnly`** (nunca cria bucket): um typo em `RUSTFS_BUCKET` falha o boot em vez de criar um bucket vazio e espelhar "com sucesso" para sempre. A interface da origem no agente é só-leitura (`SourceBucket`: Walk+Open) — o tipo impede Put/Delete na origem.
+- Notas operacionais: objetos com `LastModified` dentro da janela de overlap re-copiam a cada passada (por design — em modo cifrado isso re-cifra essa janela; custo marginal no cadence de 6h). Ligar a cifragem depois de passes plaintext re-copia tudo como `.age` e DEIXA as cópias plaintext antigas no destino (deleções não propagam) — limpe `backups/rustfs/` manualmente ou gire o bucket ao ativar.
+- **Chaves com componente `..` são puladas com aviso** (contadas em `meta.suspicious_keys_skipped`), e a gramática do sufixo em `linkObjectID` (`internal/backup`) recusa qualquer coisa além de `^\.[A-Za-z0-9]{1,16}$` — sem isso, um ZIP artesanal restaurado plantaria uma chave com traversal que o espelho copiaria e, num destino que normalize caminhos, sobrescreveria os dumps.
 - Antes de rodar, probe `pg_try_advisory_lock(RestoreAdvisoryLockKey)` (adquire e solta):
   um restore per-user em andamento deixa o RustFS em estado intermediário — o banco é
-  transacional, o bucket não (INV-104). Ocupado ⇒ reagenda +10 min.
+  transacional, o bucket não (INV-104). Ocupado ⇒ o job espera NO PRÓPRIO run (probe a
+  cada 1 min, até 10 min, ctx-aware — o scheduler fica genérico, zero estado de
+  reagendamento); ainda ocupado no deadline ⇒ `failed('restore_in_flight')`, razão
+  operacional que NÃO conta para o alerta de falhas consecutivas — o próximo slot refaz.
 
 ### 5.4 `user_zip`
 

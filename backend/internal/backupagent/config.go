@@ -38,11 +38,20 @@ type Config struct {
 	S3SecretKey string
 	S3UseSSL    bool
 
+	// RustFS source (mirror job). Same RUSTFS_* names the backend reads —
+	// one spelling per credential across the stack (INV-101's spirit).
+	RustFSEndpoint  string
+	RustFSAccessKey string
+	RustFSSecretKey string
+	RustFSBucket    string
+	RustFSUseSSL    bool
+
 	// Scheduling.
-	DumpAt           Anchor // zero Anchor = job disabled
-	DrillAt          Anchor // restore drill; zero Anchor = job disabled
-	RequestedPollSec int
-	StaleRunMin      int
+	DumpAt            Anchor // zero Anchor = job disabled
+	DrillAt           Anchor // restore drill; zero Anchor = job disabled
+	MirrorIntervalMin int    // 0 = mirror off
+	RequestedPollSec  int
+	StaleRunMin       int
 
 	// Retention (GFS).
 	RetainDaily   int
@@ -106,8 +115,15 @@ func Load() (Config, error) {
 		S3SecretKey: os.Getenv("BACKUP_S3_SECRET_KEY"),
 		S3UseSSL:    envBool("BACKUP_S3_USE_SSL", true),
 
-		RequestedPollSec: envInt("BACKUP_REQUESTED_POLL_SEC", 30),
-		StaleRunMin:      envInt("BACKUP_STALE_RUN_MIN", 240),
+		RustFSEndpoint:  envOr("RUSTFS_ENDPOINT", "rustfs:9000"),
+		RustFSAccessKey: envOr("RUSTFS_ACCESS_KEY", "foldex"),
+		RustFSSecretKey: os.Getenv("RUSTFS_SECRET_KEY"),
+		RustFSBucket:    envOr("RUSTFS_BUCKET", "foldex-screenshots"),
+		RustFSUseSSL:    envBool("RUSTFS_USE_SSL", false),
+
+		MirrorIntervalMin: envInt("BACKUP_MIRROR_INTERVAL_MIN", 360),
+		RequestedPollSec:  envInt("BACKUP_REQUESTED_POLL_SEC", 30),
+		StaleRunMin:       envInt("BACKUP_STALE_RUN_MIN", 240),
 
 		RetainDaily:   envInt("BACKUP_RETAIN_DAILY", 7),
 		RetainWeekly:  envInt("BACKUP_RETAIN_WEEKLY", 4),
@@ -132,6 +148,23 @@ func Load() (Config, error) {
 	} {
 		if strings.TrimSpace(missing.val) == "" {
 			return Config{}, fmt.Errorf("backupagent: %s is required — the backup agent refuses to boot half-configured", missing.name)
+		}
+	}
+
+	// The mirror is on by default (SDD §4) and reads the RustFS origin, so
+	// its credentials are required exactly while it is on: a mirror that
+	// silently never copies is the mailer incident again. An instance with no
+	// object store turns the job off explicitly.
+	if c.MirrorEnabled() {
+		for _, missing := range []struct{ name, val string }{
+			{"RUSTFS_ENDPOINT", c.RustFSEndpoint},
+			{"RUSTFS_ACCESS_KEY", c.RustFSAccessKey},
+			{"RUSTFS_SECRET_KEY", c.RustFSSecretKey},
+			{"RUSTFS_BUCKET", c.RustFSBucket},
+		} {
+			if strings.TrimSpace(missing.val) == "" {
+				return Config{}, fmt.Errorf("backupagent: %s is required while the mirror job is enabled — set it, or set BACKUP_MIRROR_INTERVAL_MIN=0 to turn the mirror off", missing.name)
+			}
 		}
 	}
 
@@ -181,6 +214,12 @@ func Load() (Config, error) {
 // Duration helpers keep call sites honest about units.
 func (c Config) RequestedPoll() time.Duration { return time.Duration(c.RequestedPollSec) * time.Second }
 func (c Config) StaleRunTTL() time.Duration   { return time.Duration(c.StaleRunMin) * time.Minute }
+func (c Config) MirrorInterval() time.Duration {
+	return time.Duration(c.MirrorIntervalMin) * time.Minute
+}
+
+// MirrorEnabled reports whether the mirror job has a cadence at all.
+func (c Config) MirrorEnabled() bool { return c.MirrorIntervalMin > 0 }
 
 func envOr(key, def string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {

@@ -28,11 +28,19 @@ const janitorInterval = time.Hour
 type jobSpec struct {
 	name   string
 	anchor Anchor
+	// interval schedules by cadence instead of wall-clock anchor (mirror).
+	// Exactly one of anchor/interval is set; interval > 0 wins.
+	interval time.Duration
 	// run receives the backup_run row id it executes under: the drill needs
 	// it to stamp drill_of_run_id as soon as it picks a source, so even a run
 	// that fails mid-pipeline records WHICH dump it was validating.
 	run func(ctx context.Context, runID int64) (*Artifact, map[string]any, string, error)
 }
+
+// enabled reports whether the spec has any schedule at all. A disabled job
+// still answers 'requested' rows — the operator's button works even when the
+// cadence is off.
+func (s jobSpec) enabled() bool { return s.anchor.Enabled() || s.interval > 0 }
 
 // Agent wires the jobs to their schedule and to backup_run.
 type Agent struct {
@@ -56,9 +64,10 @@ type Agent struct {
 	httpAddr string // bound address, once serveHTTP has a listener
 }
 
-// New builds the agent. store carries the external bucket; the registry holds
-// the dump and its drill.
-func New(cfg Config, pool *pgxpool.Pool, store Uploader, logger *slog.Logger) (*Agent, error) {
+// New builds the agent. store carries the external bucket; mirrorSource is a
+// second client pointed at the RustFS origin, nil when the mirror is off —
+// the mirror registers only when both the interval and the source exist.
+func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBucket, logger *slog.Logger) (*Agent, error) {
 	a := &Agent{
 		cfg:     cfg,
 		pool:    pool,
@@ -84,6 +93,22 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, logger *slog.Logger) (*
 	// requested-claim loop iterates, so an operator can trigger a manual
 	// drill from the admin surface without scheduling one.
 	a.jobs = append(a.jobs, jobSpec{name: JobDrill, anchor: cfg.DrillAt, run: drill.Run})
+
+	if cfg.MirrorEnabled() {
+		if mirrorSource == nil {
+			// Enabled-but-sourceless must refuse, not silently drop the job:
+			// a mirror the operator turned on and never runs is the mailer
+			// incident with a new name.
+			return nil, fmt.Errorf("backupagent: BACKUP_MIRROR_INTERVAL_MIN is set but no source bucket client was provided")
+		}
+		mirror, err := NewMirrorJob(cfg, pool, a.runs, mirrorSource, store, logger)
+		if err != nil {
+			return nil, err
+		}
+		a.jobs = append(a.jobs, jobSpec{name: JobMirror, interval: cfg.MirrorInterval(), run: func(ctx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
+			return mirror.Run(ctx)
+		}})
+	}
 	return a, nil
 }
 
@@ -122,8 +147,8 @@ func (a *Agent) Start(ctx context.Context) {
 	}
 
 	for _, spec := range a.jobs {
-		if !spec.anchor.Enabled() {
-			a.logger.Info("job disabled (no anchor configured)", "job", spec.name)
+		if !spec.enabled() {
+			a.logger.Info("job disabled (no schedule configured)", "job", spec.name)
 			continue
 		}
 		a.wg.Add(1)
@@ -153,6 +178,11 @@ func (a *Agent) Stop() {
 
 func (a *Agent) scheduleLoop(ctx context.Context, spec jobSpec) {
 	defer a.wg.Done()
+
+	if spec.interval > 0 {
+		a.intervalLoop(ctx, spec)
+		return
+	}
 
 	// Boot catch-up: state lives in backup_run, so the decision is correct
 	// across restarts with no local file — the container stays disposable.
@@ -184,6 +214,40 @@ func (a *Agent) scheduleLoop(ctx context.Context, spec jobSpec) {
 			return
 		case <-timer.C:
 			a.execute(ctx, spec, next, 0)
+		}
+	}
+}
+
+// intervalLoop is the cadence-scheduled sibling of the anchor path: a plain
+// ticker, with the same jittered, readiness-gated boot catch-up. There is no
+// missed wall-clock slot to reconstruct for an interval job, so scheduled_for
+// is simply the moment it fires.
+func (a *Agent) intervalLoop(ctx context.Context, spec jobSpec) {
+	last, err := a.runs.LastSuccess(ctx, spec.name)
+	if err != nil {
+		a.logger.Error("catch-up decision failed", "job", spec.name, "err", err)
+	} else if intervalDue(time.Now(), last, spec.interval) {
+		jitter := time.Minute + rand.N(4*time.Minute)
+		a.logger.Info("catch-up scheduled", "job", spec.name, "in", jitter.Round(time.Second))
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(jitter):
+		}
+		if a.waitReady(ctx) {
+			a.execute(ctx, spec, time.Now(), 0)
+		}
+	}
+
+	a.logger.Info("interval schedule active", "job", spec.name, "every", spec.interval)
+	ticker := time.NewTicker(spec.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case fired := <-ticker.C:
+			a.execute(ctx, spec, fired, 0)
 		}
 	}
 }
@@ -300,6 +364,11 @@ func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Tim
 	var artifactBytes int64
 	if artifact != nil {
 		artifactBytes = artifact.Bytes
+		if artifact.Mirror != nil {
+			// The mirror ships no single artifact; what the gauge should say
+			// is how much data the pass actually moved.
+			artifactBytes = artifact.Mirror.BytesCopied
+		}
 	}
 	a.metrics.ObserveSuccess(spec.name, time.Now(), duration, artifactBytes)
 	a.logger.Info("run succeeded", "job", spec.name, "run_id", id,

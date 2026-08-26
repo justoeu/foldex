@@ -47,6 +47,11 @@ func TestClient_UploadGetListDelete(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, objs)
+	// ETag and LastModified ride along on every ListObjects page; the mirror
+	// job's watermark diff depends on LastModified actually being filled.
+	assert.NotEmpty(t, objs[0].ETag)
+	assert.False(t, objs[0].LastModified.IsZero(),
+		"a zero LastModified would make every watermark comparison copy the whole bucket")
 
 	st, err := cli.Stats(ctx)
 	require.NoError(t, err)
@@ -167,4 +172,34 @@ func TestClient_CancelledContextOnPrefixDelete(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 	err = cli.DeleteObjects(ctx, []string{"p/1", "p/2"})
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestNewReadOnly_RefusesAMissingBucketInsteadOfCreatingIt(t *testing.T) {
+	ep, user, pass := startRustFS(t)
+	ctx := context.Background()
+
+	_, err := storage.NewReadOnly(ctx, storage.Config{
+		Endpoint: ep, AccessKey: user, SecretKey: pass, Bucket: "typo-bucket-name",
+	}, discardLogger())
+	if err == nil {
+		t.Fatal("a bucket that does not exist must refuse — silently creating it is the empty mirror that succeeds forever")
+	}
+
+	// And an existing bucket opens normally.
+	created, err := storage.New(ctx, storage.Config{
+		Endpoint: ep, AccessKey: user, SecretKey: pass, Bucket: "real-bucket",
+	}, discardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = created
+	ro, err := storage.NewReadOnly(ctx, storage.Config{
+		Endpoint: ep, AccessKey: user, SecretKey: pass, Bucket: "real-bucket",
+	}, discardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ro.Upload(ctx, "k", []byte("v"), "text/plain"); err != nil {
+		t.Fatal(err)
+	}
 }

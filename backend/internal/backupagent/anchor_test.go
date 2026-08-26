@@ -135,3 +135,18 @@ func TestAnchorString_RendersTheEnvSyntaxBack(t *testing.T) {
 	var disabled Anchor
 	assert.Equal(t, "disabled", disabled.String())
 }
+
+func TestIntervalDue_CatchUpContract(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	interval := 6 * time.Hour
+
+	assert.True(t, intervalDue(now, time.Time{}, interval),
+		"never succeeded means due — a mirror that never ran must not look healthy")
+	assert.False(t, intervalDue(now, now.Add(-2*time.Hour), interval), "a fresh success is not due")
+	assert.False(t, intervalDue(now, now.Add(-7*time.Hour), interval),
+		"one interval plus a restart inside the 25%% grace must not double-run")
+	assert.True(t, intervalDue(now, now.Add(-8*time.Hour), interval),
+		"past interval+grace (7h30) is due")
+	assert.False(t, intervalDue(now, time.Time{}, 0),
+		"interval 0 means the job is off — never due, even having never run")
+}
