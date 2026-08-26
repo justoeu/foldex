@@ -17,6 +17,7 @@ import (
 
 	"foldex/internal/auth"
 	"foldex/internal/backup"
+	"foldex/internal/backupstatus"
 	"foldex/internal/config"
 	"foldex/internal/entries"
 	"foldex/internal/exporter"
@@ -276,6 +277,15 @@ func New(d Deps) http.Handler {
 					if d.PolicyHandler != nil {
 						ar.Route("/policy", d.PolicyHandler.Mount)
 					}
+					// The operational backup surface (ADR-43 PR5). Built here
+					// rather than injected: it needs only the pool, the live
+					// grants and the audit hook, all of which this closure
+					// already holds — an optional Deps field would be one more
+					// nil that silently unmounts a route.
+					ar.Route("/backup", backupstatus.NewHandler(
+						backupstatus.NewRepository(d.Pool), d.Logger,
+						d.AdminHandler.AuditBackupRun, grants,
+					).Mount)
 				})
 			}
 

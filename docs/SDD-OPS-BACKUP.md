@@ -179,7 +179,9 @@ Decisões deliberadas, na contramão do `mail_outbox` de onde o resto veio:
 
 **`RequiredSchemaVersion` NÃO bumpa nesta migração.** A regra do repo é bumpar quando o
 código do BACKEND lê ou escreve algo novo — e no PR1 só o agente toca a tabela. O bump
-37→40 acontece no PR5, quando o endpoint admin passa a ler `backup_run`. O agente faz seu
+aconteceu no PR5 (37→**41**, não 40: a migração 000041 semeia a permissão
+`instance.backup` que o backend também passa a esperar), quando o endpoint admin passou
+a ler `backup_run`. O agente faz seu
 próprio gate no boot (`SELECT version FROM schema_migrations` ≥ 40 → senão sai com
 "run backend migrations first"): ele **não roda migrações**; o dono único de migrações
 continua sendo o backend.
@@ -480,24 +482,38 @@ independente.
 
 ## 10. Superfície de administração
 
-### 10.1 API (backend)
+> **Status: IMPLEMENTADO (PR5).** Divergências do desenho original, todas anotadas
+> in-loco abaixo: a paginação é por keyset (`before`+`limit`, clamp 1..100, default 20)
+> em vez de `page`; a staleness do dump é calculada no CLIENTE contra o contrato fixo de
+> 26 h (o mesmo da alert rule shippada) — a open question 2 fechou por aí, sem env
+> espelhada; o resumo entrega o último drill como o `last_success` do próprio job
+> `drill` (com `drill_of_run_id` e `meta`), sem campo separado; o bump de
+> `RequiredSchemaVersion` foi 37→**41** (a migração 000041 semeia a permissão); e o
+> alerta por e-mail (§9.3) ficou FORA deste PR — segue pendente.
 
-- `GET /api/admin/backup/runs?job=&page=` — histórico paginado de `backup_run` + resumo
-  por job (último sucesso, falhas consecutivas, staleness calculada contra a cadência
-  configurada — o backend a conhece por env espelhada ou pela mediana dos slots).
-- `POST /api/admin/backup/run {job}` — INSERE `requested`; 409 se já há `requested`
-  pendente ou `running` do mesmo job; audit_log (`backup.run_requested`).
+### 10.1 API (backend) — `internal/backupstatus`
+
+- `GET /api/admin/backup/runs?job=&limit=&before=` — resumo por job (último `succeeded`
+  com artefato/sha/duração, falhas consecutivas com a MESMA exclusão de razões
+  operacionais do agente) + histórico paginado por keyset. A staleness NÃO viaja no
+  payload: o cliente a deriva de `started_at` contra o contrato de 26 h.
+- `POST /api/admin/backup/run {job}` — INSERE `requested`; 409 `backup_run_pending` se já
+  há `requested` pendente ou `running` do mesmo job; audit_log (`backup.run_requested`).
 - Permissão nova **`PermInstanceBackupRead = "instance.backup"`** — grupo `instance.*`
   (ao lado de `instance.transfer`), NÃO `backup.*`, que em `permissions.go` significa o
   backup per-user. Checklist ADR-42 completo: const + `AllPermissions` + `rolePermissions`
-  (owner+admin) + seed na migração (se editável) + i18n nos 3 locales. Não-admin recebe
-  404 (INV-043).
-- É neste PR (PR5) que `RequiredSchemaVersion` bumpa 37→40.
+  (owner+admin) + seed na migração 000041 (editável) + i18n nos 3 locales. Não-admin
+  recebe 404 (INV-043); admin sem a permissão, 403.
+- Foi neste PR (PR5) que `RequiredSchemaVersion` bumpou 37→41 —
+  `backupagent.RequiredSchemaVersion` continua 40, deliberadamente.
 
-### 10.2 UI (settings hub)
+### 10.2 UI (settings hub) — `web/src/components/admin/BackupSection.tsx`
 
 Banda **"Backup da instância"** no settings hub (INV-148 — superfície única; não é página
-avulsa), visível atrás de `instance.backup`:
+avulsa; seção `backup` do escopo administração, com card no overview), visível atrás de
+`instance.backup` — na prática o escopo admin inteiro segue o padrão existente da UI
+(`isAdminRole`; `/api/auth/me` não expõe permissões, e o servidor continua sendo o
+guarda: 404/403 na API). Pendência anotada: screenshot da banda para o README.
 
 - **Estado por job**: último sucesso relativo ("há 6 h"), destino (`bucket/chave` do
   artefato enviado), tamanho, SHA-256 (truncado, copiável), duração.
@@ -674,7 +690,7 @@ lista de exclusão de MEDIÇÃO como os demais `cmd/*`, com a lógica toda em pa
 | PR2 | Job `drill` (cluster efêmero, sanidade, `drill_of_run_id`) + teste de integração do pipeline completo | — |
 | PR3 | Job `mirror` (extensão `ObjectInfo` com ETag/LastModified, watermark, sem delete) | `BACKUP_MIRROR_INTERVAL_MIN` |
 | PR4 | Job `user_zip` (reuso de `Service.Export`, deferência ao `RestoreAdvisoryLockKey`) | `BACKUP_USERZIP_AT` (vazio = off) |
-| PR5 | Superfície de status: endpoint admin + permissão `instance.backup` + **bump `RequiredSchemaVersion` 37→40** + alerta e-mail via outbox (template 3 locales) + banda completa no settings hub + dashboard Grafana completo | permissão `instance.backup` |
+| PR5 | ✅ Superfície de status: endpoint admin (`internal/backupstatus`) + permissão `instance.backup` (migração 000041) + **bump `RequiredSchemaVersion` 37→41** + banda completa no settings hub + dashboard Grafana completo. O alerta e-mail via outbox (template 3 locales, §9.3) ficou FORA — pendência pós-PR5 | permissão `instance.backup` |
 
 Ordem justificada: cada PR é shippável sozinho; o drill vem em segundo porque a
 verificação é o núcleo da proposta — expandir escopo (mirror, user_zip) antes de provar
@@ -696,8 +712,9 @@ README nos dois idiomas, `graphify update .`, bump semver).
 
 1. **Cadência do drill**: semanal é o default proposto; instâncias paranoicas podem querer
    diário (o custo é ~segundos). Decidir se `BACKUP_DRILL_AT` aceita `daily`.
-2. **Staleness na UI**: o backend conhece a cadência por env espelhada (`BACKUP_DUMP_AT`
-   visível a ele) ou infere da mediana dos `scheduled_for`? Env espelhada é mais simples e
-   está proposto; confirmar na implementação do PR5.
+2. **Staleness na UI** — RESOLVIDA no PR5: nem env espelhada nem mediana. O cliente
+   compara `started_at` do último dump com o contrato fixo de 26 h — o MESMO número da
+   alert rule shippada — e nada mais. Uma cadência configurável na UI voltaria a ser uma
+   política re-derivada em dois lugares (a lição do INV-138).
 3. **Retenção de `backup_run`**: a tabela cresce ~4 linhas/dia; propor purge de `failed`
    > 1 ano no janitor do PR5, ou deixar crescer (é minúscula). Default atual: deixar.

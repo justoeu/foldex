@@ -470,3 +470,33 @@ simples dos últimos `BACKUP_RETAIN_USERZIP=7` por usuário (só em `RETENTION_M
   (`BACKUP_USERZIP_AT`, `BACKUP_RETAIN_USERZIP`, `RUSTFS_*` no serviço backup) estão no
   `docker-compose.yml` e documentadas no README/SDD, mas o `.env.example` precisa ganhar
   o bloco correspondente num follow-up manual.
+### ADR-43 PR5 — superfície de status do backup operacional (2026-08-26)
+
+Entregue: pacote `internal/backupstatus` (repositório sem `net/http`, handler com
+`httperr`, montado em `/api/admin/backup` atrás de `RequireAdmin` + o gate da permissão
+nova `instance.backup`), migração 000041 (seed `('admin','instance.backup')`), bump
+`RequiredSchemaVersion` 37→41 (o `backupagent.RequiredSchemaVersion` fica em 40 — o
+agente só precisa da 000040), banda "Backup da instância" no settings hub (seção
+`backup` do escopo admin + card no overview, TanStack Query, confirmação antes do
+POST, i18n en/pt/es), mock server em sincronia, dashboard Grafana completo em
+`deploy/observability/grafana-backup-dashboard.json` pinado ao registry pelo teste
+`TestDashboardOnlyReferencesSeriesTheAgentServes`.
+
+**Lições / decisões:**
+
+- **`consecutiveFailures` foi COPIADO do agente com as mesmas quatro razões excluídas,
+  citando a origem** — importar `backupagent` só pelas constantes `Reason*`/`Job*` já
+  acopla os pacotes na direção certa (status lê o vocabulário de quem escreve), e o
+  número que a banda mostra é o mesmo que o threshold de alerta compara.
+- **A staleness de 26 h é a ÚNICA política re-declarada no cliente**, espelhando a alert
+  rule shippada — resolveu a open question 2 do SDD sem env espelhada nem cadência
+  inferida (a lição do INV-138: política do servidor não se re-deriva na UI).
+- **O gatilho manual usa a MESMA permissão de leitura**: um "write permission" separado
+  prometeria uma distinção que o servidor não entrega — o POST só enfileira uma linha
+  `requested` que o agente pode ou não assumir.
+- **`/api/auth/me` não expõe permissões**; a visibilidade da banda segue o padrão do
+  escopo admin inteiro (`isAdminRole`), e o servidor continua sendo o guarda (404 para
+  não-admin, 403 para admin sem o grant — testado nas duas direções).
+- **Divergência assumida do SDD §15:** o alerta por e-mail via outbox (§9.3) ficou fora
+  do PR5 — pendência registrada no SDD e na ADR-43. Screenshot da banda para o README
+  também pendente.

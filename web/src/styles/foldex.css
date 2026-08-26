@@ -2714,6 +2714,27 @@ button.fx-btn-danger:hover:not(:disabled) {
 .fx-utable-meta { font-size: 11.5px; color: var(--fx-ink-3); white-space: nowrap; }
 .fx-utable-actions { display: flex; gap: 4px; justify-content: flex-end; }
 
+/* Amber variant of the recommendation strip — the "this service is not
+   running" warnings on the backup band. The base .fx-banner is accent-tinted
+   and reads as a suggestion; a stalled backup is not a suggestion. */
+.fx-banner-warn {
+  background: var(--fx-tone-amber-soft);
+  border-color: color-mix(in srgb, var(--fx-tone-amber) 30%, transparent);
+}
+
+/* Instance backup status band (ADR-43). Reuses .fx-utable for the layout;
+   these carry only what that table does not have. */
+.fx-bkp-table { min-width: 680px; }
+.fx-bkp-key {
+  display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; vertical-align: bottom;
+  font-family: var(--fx-mono); font-size: 10.5px; color: var(--fx-ink-3);
+}
+.fx-bkp-sha { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+/* The freshness alarm: "last dump 30h ago" must not read like a timestamp. */
+.fx-bkp-stale { color: var(--fx-danger); font-weight: 650; }
+.fx-bkp-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
 /* Audit trail. Monospace timestamps so the column aligns while the action
    labels stay in the UI face. */
 .fx-audit-row {

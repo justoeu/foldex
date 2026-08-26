@@ -500,6 +500,13 @@ func (h *AdminHandler) AuditPolicyChange(r *http.Request, detail string) {
 	h.audit(r, AuditPolicyChanged, nil, detail)
 }
 
+// AuditBackupRun records a manual backup trigger (ADR-43). Exported for
+// internal/backupstatus for the same reason as AuditPolicyChange: auth cannot
+// be imported back without closing a cycle, so the hook travels as a function.
+func (h *AdminHandler) AuditBackupRun(r *http.Request, detail string) {
+	h.audit(r, AuditBackupRunRequested, nil, detail)
+}
+
 // ListAudit serves the administrative trail.
 func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 	before, err := optionalInt64(r.URL.Query().Get("before"))

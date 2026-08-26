@@ -26,6 +26,10 @@ const (
 	AuditPasswordRecovery = "user.password_recovery_sent"
 	AuditPolicyChanged    = "policy.changed"
 	AuditRolePermissions  = "role.permissions_changed"
+	// AuditBackupRunRequested records a manual "run now" on the operational
+	// backup surface (ADR-43). What executed — or failed — is backup_run's
+	// story; the trail only answers WHO asked.
+	AuditBackupRunRequested = "backup.run_requested"
 	// AuditEmailChanged records the address MOVING, at the moment the
 	// confirmation link is consumed — never when it is requested. A request
 	// that nobody confirms changed nothing, and an entry for it would make the
