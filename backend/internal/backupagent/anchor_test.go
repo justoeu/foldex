@@ -79,6 +79,35 @@ func TestNext_RecomputesAcrossDST(t *testing.T) {
 	assert.Equal(t, 8, next.Day())
 }
 
+func TestPreviousSlot_IsTheSlotACatchUpSatisfies(t *testing.T) {
+	daily, err := ParseAnchor("03:30")
+	require.NoError(t, err)
+
+	// Restart after the anchor: the missed slot is TODAY's.
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	assert.Equal(t, time.Date(2026, 8, 25, 3, 30, 0, 0, time.UTC), daily.PreviousSlot(now))
+
+	// Restart before the anchor: the missed slot is YESTERDAY's — recording
+	// today's would claim a slot that has not happened yet.
+	early := time.Date(2026, 8, 25, 1, 0, 0, 0, time.UTC)
+	assert.Equal(t, time.Date(2026, 8, 24, 3, 30, 0, 0, time.UTC), daily.PreviousSlot(early))
+
+	// Exactly ON the anchor: that instant IS the slot. Next is strictly
+	// after, so the subtraction lands back on now itself.
+	at := time.Date(2026, 8, 25, 3, 30, 0, 0, time.UTC)
+	assert.Equal(t, at, daily.PreviousSlot(at))
+
+	weekly, err := ParseAnchor("04:30 sun")
+	require.NoError(t, err)
+	// 2026-08-25 is a Tuesday; the previous Sunday is the 23rd.
+	assert.Equal(t, time.Date(2026, 8, 23, 4, 30, 0, 0, time.UTC), weekly.PreviousSlot(now))
+	// Exactly on the weekly anchor: same identity property.
+	sundayAt := time.Date(2026, 8, 23, 4, 30, 0, 0, time.UTC)
+	assert.Equal(t, sundayAt, weekly.PreviousSlot(sundayAt))
+	// A minute later the slot just fired is still the previous one.
+	assert.Equal(t, sundayAt, weekly.PreviousSlot(sundayAt.Add(time.Minute)))
+}
+
 func TestDue_CatchUpContract(t *testing.T) {
 	a, err := ParseAnchor("03:30")
 	require.NoError(t, err)

@@ -22,6 +22,10 @@ import (
 // recorder without standing up RustFS or S3.
 type Uploader interface {
 	PutObjectStream(ctx context.Context, key string, r io.Reader, size int64, contentType string) error
+	// OpenObject streams a stored artifact back — the drill's read path. It
+	// downloads the REAL bytes from the bucket precisely because a drill of a
+	// local copy would prove less than "the backup we shipped restores".
+	OpenObject(ctx context.Context, key string) (io.ReadCloser, error)
 	WalkObjects(ctx context.Context, prefix string, visit func(ObjectInfo) error) error
 	DeleteObjects(ctx context.Context, keys []string) error
 }
@@ -45,8 +49,17 @@ type DumpJob struct {
 	// command builds the dump process. Overridable in tests so the pipeline
 	// (encrypt, hash, spool, upload, prune) is provable without a pg_dump
 	// binary on the test host; production always uses pgDumpCommand.
-	command func(ctx context.Context, cfg Config) *exec.Cmd
-	now     func() time.Time
+	command func(ctx context.Context, cfg Config, snapshotID string) *exec.Cmd
+	// snapshotCounts opens a REPEATABLE READ transaction, exports its
+	// snapshot and reads the sanity counts INSIDE it; pg_dump then attaches
+	// to the very same snapshot via --snapshot. Anything less and the counts
+	// and the archive describe two different instants — on a live instance a
+	// single click between them turns every weekly drill into a spurious
+	// drill_counts_mismatch. The returned release holds the transaction open
+	// until pg_dump has finished; nil seam (tests without a pool) means the
+	// dump ships without counts and the drill compares schema version only.
+	snapshotCounts func(ctx context.Context) (map[string]int64, int64, string, func(), error)
+	now            func() time.Time
 }
 
 func NewDumpJob(cfg Config, pool *pgxpool.Pool, store Uploader, logger *slog.Logger) (*DumpJob, error) {
@@ -54,12 +67,18 @@ func NewDumpJob(cfg Config, pool *pgxpool.Pool, store Uploader, logger *slog.Log
 	if err != nil {
 		return nil, err
 	}
-	return &DumpJob{
+	j := &DumpJob{
 		cfg: cfg, pool: pool, store: store, recipients: recipients,
 		logger:  logger.With("job", JobDump),
 		command: pgDumpCommand,
 		now:     time.Now,
-	}, nil
+	}
+	if pool != nil {
+		j.snapshotCounts = func(ctx context.Context) (map[string]int64, int64, string, func(), error) {
+			return snapshotSanityCounts(ctx, pool)
+		}
+	}
+	return j, nil
 }
 
 // pgDumpCommand builds the real dump invocation. No -C: baking CREATE DATABASE
@@ -67,15 +86,22 @@ func NewDumpJob(cfg Config, pool *pgxpool.Pool, store Uploader, logger *slog.Log
 // both the drill and a real disaster recovery create the target database
 // themselves from template0 (SDD-OPS-BACKUP §5.1). The password travels via
 // PGPASSWORD, never argv — argv is world-readable in /proc.
-func pgDumpCommand(ctx context.Context, cfg Config) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "pg_dump",
+func pgDumpCommand(ctx context.Context, cfg Config, snapshotID string) *exec.Cmd {
+	args := []string{
 		"--format=custom",
 		"--no-password",
-		"--host="+cfg.PGHost,
+		"--host=" + cfg.PGHost,
 		fmt.Sprintf("--port=%d", cfg.PGPort),
-		"--username="+cfg.PGUser,
-		cfg.PGDatabase,
-	)
+		"--username=" + cfg.PGUser,
+	}
+	if snapshotID != "" {
+		// The dump reads the exact snapshot the sanity counts were taken in
+		// (see DumpJob.snapshotCounts) — the drill's equality verdict depends
+		// on both sides describing one instant.
+		args = append(args, "--snapshot="+snapshotID)
+	}
+	args = append(args, cfg.PGDatabase)
+	cmd := exec.CommandContext(ctx, "pg_dump", args...)
 	cmd.Env = append(os.Environ(),
 		"PGPASSWORD="+cfg.PGPassword,
 		"PGSSLMODE="+cfg.PGSSLMode,
@@ -88,6 +114,30 @@ func pgDumpCommand(ctx context.Context, cfg Config) *exec.Cmd {
 // table (its stderr can carry a DSN, and the column feeds the UI and alerts).
 func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, error) {
 	started := j.now()
+
+	// Source counts are read BEFORE pg_dump, from the same pool the dump
+	// reads: they are the yardstick the drill compares the restored database
+	// against. Failing to read them must not fail the backup itself — the
+	// artifact is the product — so the dump degrades to shipping without them
+	// and the drill falls back to schema-version-only comparison.
+	var sourceTables map[string]int64
+	var sourceSchema int64
+	var snapshotID string
+	haveCounts := false
+	if j.snapshotCounts != nil {
+		tables, schema, snap, release, err := j.snapshotCounts(ctx)
+		if err != nil {
+			j.logger.Warn("source table counts unavailable — the drill will compare schema version only", "err", err)
+		} else {
+			sourceTables, sourceSchema, snapshotID = tables, schema, snap
+			haveCounts = true
+			if release != nil {
+				// The exporting transaction must outlive pg_dump: the
+				// snapshot dies with it, and pg_dump refuses a dead one.
+				defer release()
+			}
+		}
+	}
 
 	// CreateTemp is born 0600; SpoolDir="" is the OS temp dir (the container's
 	// writable layer — see Config.SpoolDir for when to point it at a volume).
@@ -106,7 +156,7 @@ func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, e
 	hasher := sha256.New()
 	buffered := bufio.NewWriterSize(io.MultiWriter(spool, hasher), 1<<20)
 
-	cmd := j.command(ctx, j.cfg)
+	cmd := j.command(ctx, j.cfg, snapshotID)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, nil, ReasonDumpFailed, fmt.Errorf("stdout pipe: %w", err)
@@ -160,6 +210,10 @@ func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, e
 	artifact := &Artifact{Key: key, Bytes: size, SHA256: hex.EncodeToString(hasher.Sum(nil))}
 	meta := map[string]any{
 		"encrypted": len(j.recipients) > 0,
+	}
+	if haveCounts {
+		meta["tables"] = sourceTables
+		meta["schema_version"] = sourceSchema
 	}
 
 	if j.cfg.RetentionMode == "agent" {

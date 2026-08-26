@@ -82,6 +82,17 @@ func (a Anchor) Next(now time.Time) time.Time {
 	return next
 }
 
+// PreviousSlot returns the anchor occurrence at or immediately before now —
+// the slot a boot catch-up run satisfies. scheduled_for's contract (migration
+// 000040, SDD §3) is "the slot this run satisfies", so catch-up must record
+// the MISSED anchor instant, not the moment the agent happened to restart.
+// Derived as Next minus one interval: around a DST transition the subtraction
+// can shift the wall time by the offset change — the same accepted behaviour
+// Next documents, now in one place instead of inlined in the scheduler.
+func (a Anchor) PreviousSlot(now time.Time) time.Time {
+	return a.Next(now).Add(-a.Interval())
+}
+
 // Due reports whether a job whose last success was lastSuccess should run now
 // as boot catch-up: never succeeded, or one full interval plus grace behind.
 // The 25% grace keeps a restart minutes after the anchor from double-running a

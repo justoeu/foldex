@@ -21,6 +21,8 @@ func setBaseline(t *testing.T) {
 	t.Setenv("BACKUP_AGE_RECIPIENTS", "age1qqnl0eg9annqfy0596hyp2pkjsjm0cvqp23exd6yzvfhq7fyf5dsegvzt5")
 	t.Setenv("BACKUP_ALLOW_PLAINTEXT", "")
 	t.Setenv("BACKUP_DUMP_AT", "")
+	t.Setenv("BACKUP_DRILL_AT", "")
+	t.Setenv("BACKUP_AGE_IDENTITY_FILE", "")
 	t.Setenv("BACKUP_RETENTION_MODE", "")
 	t.Setenv("POSTGRES_PASSWORD", "pw")
 	// A developer's stray environment must not leak into the assertions.
@@ -85,6 +87,52 @@ func TestLoad_AnchorAndRecipientsParse(t *testing.T) {
 	_, err = Load()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "BACKUP_DUMP_AT")
+}
+
+func TestLoad_DrillScheduleAndIdentity(t *testing.T) {
+	t.Run("anchor parses with its weekday", func(t *testing.T) {
+		setBaseline(t)
+		t.Setenv("BACKUP_DRILL_AT", "04:30 sun")
+		t.Setenv("BACKUP_AGE_IDENTITY_FILE", "/run/secrets/backup-age-identity")
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.True(t, cfg.DrillAt.Enabled())
+		assert.True(t, cfg.DrillAt.Weekly)
+		assert.Equal(t, "/run/secrets/backup-age-identity", cfg.AgeIdentityFile)
+	})
+
+	t.Run("a bad anchor names its var", func(t *testing.T) {
+		setBaseline(t)
+		t.Setenv("BACKUP_DRILL_AT", "sunday morning")
+		_, err := Load()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "BACKUP_DRILL_AT")
+	})
+
+	t.Run("scheduled drill over encrypted dumps demands the identity", func(t *testing.T) {
+		setBaseline(t)
+		t.Setenv("BACKUP_DRILL_AT", "04:30 sun")
+		_, err := Load()
+		require.Error(t, err, "booting fine and failing every week at 04:30 is the silent non-backup shape")
+		assert.Contains(t, err.Error(), "BACKUP_AGE_IDENTITY_FILE")
+	})
+
+	t.Run("plaintext deployments drill without an identity", func(t *testing.T) {
+		setBaseline(t)
+		t.Setenv("BACKUP_AGE_RECIPIENTS", "")
+		t.Setenv("BACKUP_ALLOW_PLAINTEXT", "1")
+		t.Setenv("BACKUP_DRILL_AT", "04:30 sun")
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.True(t, cfg.DrillAt.Enabled())
+	})
+
+	t.Run("default is off", func(t *testing.T) {
+		setBaseline(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.False(t, cfg.DrillAt.Enabled(), "no anchor means no scheduled drill — opt-in, because it demands the private identity on the host")
+	})
 }
 
 func TestDBURL_EscapesCredentials(t *testing.T) {

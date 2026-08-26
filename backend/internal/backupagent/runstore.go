@@ -39,6 +39,14 @@ const (
 	ReasonStaleClaim    = "stale_claim"
 	ReasonShutdown      = "shutdown"
 	ReasonLockBusy      = "lock_busy"
+
+	ReasonDrillSourceFailed   = "drill_source_failed"
+	ReasonDrillNoDump         = "drill_no_dump"
+	ReasonDrillDownloadFailed = "drill_download_failed"
+	ReasonDrillDigestMismatch = "drill_digest_mismatch"
+	ReasonDrillDecryptFailed  = "drill_decrypt_failed"
+	ReasonDrillRestoreFailed  = "drill_restore_failed"
+	ReasonDrillCountsMismatch = "drill_counts_mismatch"
 )
 
 // RunStore is the agent's only writer of backup_run. The backend reads the
@@ -135,6 +143,53 @@ func (s *RunStore) Fail(ctx context.Context, id int64, reason string) error {
 		WHERE id = $1 AND claim_token = $3`, id, reason, s.claim)
 	if err != nil {
 		return fmt.Errorf("backupagent: fail run: %w", err)
+	}
+	return nil
+}
+
+// DumpRunRef identifies the dump run a drill validates: the artifact in the
+// bucket, the ciphertext digest recorded for it, and the meta whose table
+// counts the restored database is compared against.
+type DumpRunRef struct {
+	ID     int64
+	Key    string
+	SHA256 string
+	Meta   map[string]any
+}
+
+// ErrNoDumpToDrill reports that no succeeded dump exists yet — there is
+// nothing whose restorability could be proven.
+var ErrNoDumpToDrill = errors.New("backupagent: no succeeded dump run with an artifact to drill")
+
+// LatestSucceededDump picks the newest succeeded dump with an artifact.
+// Always the newest, drilled before or not: re-validating is cheap and every
+// run re-proves the bucket's bytes, not just the pipeline's memory of them
+// (SDD-OPS-BACKUP §5.2).
+func (s *RunStore) LatestSucceededDump(ctx context.Context) (*DumpRunRef, error) {
+	ref := &DumpRunRef{}
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, artifact_key, COALESCE(artifact_sha256, ''), meta FROM backup_run
+		WHERE job = $1 AND status = 'succeeded' AND artifact_key IS NOT NULL
+		ORDER BY started_at DESC LIMIT 1`, JobDump).
+		Scan(&ref.ID, &ref.Key, &ref.SHA256, &ref.Meta)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNoDumpToDrill
+	}
+	if err != nil {
+		return nil, fmt.Errorf("backupagent: latest dump: %w", err)
+	}
+	return ref, nil
+}
+
+// SetDrillSource stamps drill_of_run_id on the drill's own row the moment a
+// source is picked — a drill that fails mid-pipeline must still record WHICH
+// dump it was validating.
+func (s *RunStore) SetDrillSource(ctx context.Context, runID, sourceRunID int64) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE backup_run SET drill_of_run_id = $2
+		WHERE id = $1 AND claim_token = $3`, runID, sourceRunID, s.claim)
+	if err != nil {
+		return fmt.Errorf("backupagent: link drill source: %w", err)
 	}
 	return nil
 }

@@ -202,7 +202,7 @@ continua vindo de `POSTGRES_*` (INV-101); RustFS de origem, de `RUSTFS_*`.
 | `BACKUP_S3_ACCESS_KEY` / `BACKUP_S3_SECRET_KEY` | — (obrigatórias) | em branco no `.env.example`, como todo segredo |
 | `BACKUP_S3_USE_SSL` | `true` | |
 | `BACKUP_DUMP_AT` | `03:30` | âncora de relógio `HH:MM` (ver §6) |
-| `BACKUP_DRILL_AT` | `04:30 sun` | semanal |
+| `BACKUP_DRILL_AT` | vazio = desligado | semanal (`HH:MM <weekday>`); implementado no PR2 como **opt-in** — ligá-lo por default exigiria a identidade privada em todo host, e essa é uma decisão do operador |
 | `BACKUP_USERZIP_AT` | vazio = desligado | opt-in |
 | `BACKUP_MIRROR_INTERVAL_MIN` | `360` | intervalo, não âncora — segue a convenção int do repo |
 | `BACKUP_RETAIN_DAILY` / `_WEEKLY` / `_MONTHLY` | `7` / `4` / `6` | GFS (§7) |
@@ -254,9 +254,11 @@ consistente — ou inteiro antes, ou inteiro depois.
 Restaura o artefato REAL do S3 num Postgres efêmero DENTRO do container do agente — sem
 docker-in-docker, porque a imagem-base já traz o servidor:
 
-1. Escolhe o `dump` `succeeded` mais recente ainda não drillado (ou o mais recente, se
-   `drill_of_run_id` do último drill já o cobre — rodar de novo é barato e re-valida o
-   bucket).
+1. Escolhe o `dump` `succeeded` mais recente — **como implementado (PR2): sempre o mais
+   recente, drillado antes ou não** — rodar de novo é barato e cada run re-valida os
+   BYTES do bucket, não a memória que o pipeline tem deles. O `drill_of_run_id` é
+   carimbado na própria linha do drill assim que a fonte é escolhida, para que até um
+   drill que falha no meio registre QUAL dump estava validando.
 2. Download do S3 → decrypt com `BACKUP_AGE_IDENTITY_FILE` → spool. Isso valida os BYTES
    ARMAZENADOS e o round-trip da cifragem num passo só — um drill do arquivo local
    provaria menos.
@@ -268,10 +270,18 @@ docker-in-docker, porque a imagem-base já traz o servidor:
    dados descartáveis e corta o tempo do drill. `initdb` com o MESMO usuário do cluster
    de produção elimina erros de ownership no restore.
 4. `createdb -T template0 -E UTF8` + `pg_restore -j1` via unix socket.
-5. Sanidade: contagem por tabela vs `meta` do run de origem; `schema_migrations.version`
-   igual ao registrado; validação de FKs (amostra de joins órfãos). Divergência ⇒
-   `failed('drill_counts_mismatch')`.
+5. Sanidade: contagem por tabela vs `meta["tables"]` do run de origem (o job `dump`
+   grava as contagens lidas do pool ANTES do `pg_dump`, mesmas tabelas de conteúdo que o
+   drill reconta) e `schema_migrations.version` igual ao registrado. Divergência ⇒
+   `failed('drill_counts_mismatch')`. **Como implementado (PR2): a amostra de joins
+   órfãos (validação de FKs) ficou de fora** — o `pg_restore --exit-on-error` já falha
+   em qualquer FK inválida no caminho do restore, e a amostra extra não tinha fonte real
+   de divergência que as contagens não peguem; reavaliar se um incidente provar o
+   contrário.
 6. Teardown incondicional (`pg_ctl stop -m immediate` + `rm -rf`), inclusive em pânico.
+   Razões normalizadas do drill: `drill_no_dump` (nada para validar — também um estado
+   honesto, nunca sucesso vazio), `drill_download_failed`, `drill_digest_mismatch`,
+   `drill_decrypt_failed`, `drill_restore_failed`, `drill_counts_mismatch`.
 
 As extensões do schema (`pg_trgm`, `btree_gin`, `unaccent` — migrações 000001/000009/000017)
 são contrib e existem na imagem. Uma migração futura que adicionar extensão não-contrib
