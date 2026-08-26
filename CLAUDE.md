@@ -122,8 +122,9 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **Public note-media references are read capabilities only, never write/delete authority** → [INV-106](docs/INVARIANTS.md#inv-106)
 - **The `foldex-web` image NEVER ships a private TLS key** → [INV-109](docs/INVARIANTS.md#inv-109)
 - **VAPID private key is `0o600` and never baked into the image** → [INV-117](docs/INVARIANTS.md#inv-117)
-- **A request span identifies its caller by OPAQUE ID ONLY, and the annotation hangs off principal CREATION, not a route group** → [INV-170](docs/INVARIANTS.md#inv-170) | guard: `TestEveryPrincipalSeamAnnotatesTheSpan`, `TestAnnotatePrincipalRecordsNoIdentifyingAttributeBeyondTheOpaqueID`, `TestAuthenticate_StampsUserIDOnSpansOfTheAuthSurfaceItself`
+- **A request span identifies its caller by OPAQUE ID ONLY, and the annotation hangs off principal CREATION, not a route group** → [INV-170](docs/INVARIANTS.md#inv-170) | guard: `TestEveryPrincipalSeamAnnotatesTheSpan`, `TestAnnotatePrincipalRecordsNoIdentifyingAttributeBeyondTheOpaqueID`, `TestAuthenticate_StampsUserIDOnSpansOfTheAuthSurfaceItself`, `TestQuerySpansNeverCarryThePostgresRole`
   ↳ Montado num grupo de rotas, perdeu em silêncio toda a metade autenticada de `/api/auth`.
+  ↳ `user.name` do `otelpgx` é o PAPEL do Postgres: ao lado de `user.id` vira "requests por usuário" respondendo `user_foldex` para 100% do tráfego.
 
 ### 4.2 Contratos de dados — consulte ao tocar em schema, query ou payload
 

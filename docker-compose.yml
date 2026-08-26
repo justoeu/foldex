@@ -39,6 +39,22 @@ services:
       # Empty = tracing fully off (no provider, no exporter, no spans). Spans
       # are named by chi route pattern — raw paths/ids never leave the process.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      # `service.version` on every span is os.Getenv("FOLDEX_VERSION"), and
+      # without this line the process never sees the variable that chose its
+      # own image tag — so every span reported an empty version. A trace store
+      # that cannot tell one release from the next cannot answer the question
+      # APM exists for: did the thing that regressed ship in this version?
+      #
+      # Deliberately NO default. Writing `:-2.10.1` here would be a SECOND
+      # copy of the release number, and scripts/lib/compose-image-pin.awk only
+      # rewrites lines beginning `image:` — so the copy would survive every
+      # `make release-X` untouched and start reporting a version the running
+      # image is not. An empty version is a gap; a stale one is a lie, and the
+      # dashboards cannot tell them apart. Unset reproduces today's behaviour;
+      # pinning FOLDEX_VERSION in .env — which the release flow already tells
+      # operators to do — makes image and reported version the same value by
+      # construction.
+      FOLDEX_VERSION: ${FOLDEX_VERSION:-}
       # Inside a container, listening on the loopback (127.0.0.1) means nginx
       # in the sibling container cannot reach the backend over the `foldex`
       # network. The backend's own config default IS 127.0.0.1 for the

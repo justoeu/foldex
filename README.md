@@ -23,7 +23,7 @@ Native bookmarks are fine for "save a page quickly and forget it". Once you pass
 | **Locked to one browser.** Chrome ↔ Safari ↔ Firefox = 3 silos. Sync requires a vendor account. | Your own server. Reach it from any browser, on any machine on your network. Data lives in a Postgres **you** control. |
 | **Tree-only.** A bookmark lives in ONE folder. Want "work + ai + notebookLLM"? You triplicate. | **M:N tags** (a link can carry N labels) **+ 1:N nestable folders** (iPhone-style containment). The two systems coexist. |
 | **Zero telemetry.** You "favorite" 200 links and use 8. You don't know which.   | Every navigation goes through `/go/{slug}` which inserts into `click_log`. Stats page shows clicks per day, top hosts, top links (last 30d), tag distribution. |
-| **Preview = 16×16 favicon.** A gray list with tiny icons.                       | Visual card with OG image. If the page has none, foldex **captures a screenshot** automatically (headless Chromium → RustFS). You can also upload any image manually. |
+| **Preview = 16×16 favicon.** A gray list with tiny icons.                       | Visual card with OG image. If the page has none, foldex **captures a screenshot** automatically (headless Chromium → RustFS). A card that ends up blank anyway offers **both ways out on the card itself** — 🔄 recapture (the worker tries again, screenshot included) and 🖼️ add an image (opens the link dialog on its image panel). |
 | **Weak search.** Title/URL match only.                                          | Full-text search via Postgres `pg_trgm` over title + URL + description. Composes with tag filter (AND-multi-tag) and folder scope. |
 | **Backup = opaque Netscape file.** Images? Clicks? Hierarchy? All lost.         | Single backup ZIP with `manifest.json` + `database.json` (5 tables) + **every RustFS image**. Lossless round-trip, SHA-256 checksum verification, 3 conflict modes (wipe/skip/duplicate). |
 | **Fixed shortcuts.** Cmd+D opens the browser's native dialog.                   | MV3 extension + Alt-K (palette), Alt-N (new link), Alt-F (new folder). iPhone-style drag-and-drop between cards/folders. |
@@ -326,7 +326,14 @@ Each request span carries who made it:
 | `foldex.auth.via` | `span.foldex.auth.via` | `session` or `api_token` |
 
 No e-mail and no display name: a trace store is a different retention domain
-from the database, with its own access control. The annotation hangs off the
+from the database, with its own access control. There is also **no
+`user.name`**: `otelpgx` puts the Postgres role there by default, and a trace
+carrying both would read as the id and the name of one person when they are
+two different subjects — a "requests by `user.name`" panel would answer
+`user_foldex` for all traffic and look like it worked. Query spans keep
+`server.address`, `server.port` and `db.namespace`; the role is dropped.
+
+The annotation hangs off the
 three places a principal is established, not off a route group, so every
 authenticated request carries it — including the credential-management half of
 `/api/auth` (sessions, password change, 2FA, API tokens). Pre-login requests

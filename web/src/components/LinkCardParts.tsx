@@ -12,6 +12,7 @@ type CardActions = {
   onDelete: (link: Link) => void
   onPin: (link: Link, pinned: boolean) => void
   onRefreshPreview: (id: number) => void
+  onAddImage: (link: Link) => void
   onMarkSeen: (id: number) => void
 }
 
@@ -138,7 +139,7 @@ export function LinkCardBody({
       )}
       <footer className="fx-card-foot">
         <LinkCardMeta link={link} t={t} />
-        <LinkCardActions link={link} actions={actions} onGo={onGo} t={t} />
+        <LinkCardActions link={link} showPreview={showPreview} actions={actions} onGo={onGo} t={t} />
       </footer>
     </div>
   )
@@ -189,18 +190,46 @@ function LinkCardMeta({ link, t }: { link: Link; t: TFunction }) {
 
 function LinkCardActions({
   link,
+  showPreview,
   actions,
   onGo,
   t,
 }: {
   link: Link
+  showPreview: boolean
   actions: CardActions
   onGo: () => void
   t: TFunction
 }) {
   return (
     <div className="fx-card-actions">
-      {link.preview_status !== 'ok' && (
+      {/* Gated on what the reader SEES, not on what the backend concluded.
+          `preview_status === 'ok'` with an empty og_image_url is the ordinary
+          outcome for a page that simply has no og:image — the fetch succeeded,
+          so nothing failed, so no warning and no recapture button rendered, and
+          the card offered no way out of being blank. `showPreview` is false for
+          all three blank shapes: ok-and-empty, failed, and an image that 404s
+          at render time (INV-082). */}
+      {!showPreview && (
+        <button
+          type="button"
+          className="fx-iconbtn"
+          data-tooltip={t('link_card.add_image')}
+          data-tooltip-side="top"
+          aria-label={t('link_card.add_image')}
+          onClick={() => actions.onAddImage(link)}
+        >
+          <Icon d={I.image} size={14} />
+        </button>
+      )}
+      {/* Same trigger as the button above, and for the same reason: a blank
+          card needs BOTH ways out, and `preview_status` hid this one exactly
+          where it works. A page with no og:image reports 'ok' — nothing
+          failed — yet that is precisely the condition the worker answers with
+          a SCREENSHOT (INV-083: fallback, never default). Gating on status
+          meant the one action that could fill this card was the one action not
+          offered. */}
+      {(!showPreview || link.preview_status !== 'ok') && (
         <button
           type="button"
           className="fx-iconbtn"

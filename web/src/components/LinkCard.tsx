@@ -13,6 +13,7 @@ type Props = {
   onDelete: (link: Link) => void
   onPin: (link: Link, pinned: boolean) => void
   onRefreshPreview: (id: number) => void
+  onAddImage: (link: Link) => void
   onMarkSeen: (id: number) => void
 }
 
@@ -40,7 +41,7 @@ export const LinkCard = memo(LinkCardImpl)
 LinkCard.displayName = 'LinkCard'
 
 function LinkCardImpl(props: Props) {
-  const { link, onEdit, onMergeWith, onDelete, onPin, onRefreshPreview, onMarkSeen } = props
+  const { link, onEdit, onMergeWith, onDelete, onPin, onRefreshPreview, onAddImage, onMarkSeen } = props
   const { t } = useTranslation()
   const previewSrc = safeImageUrl(link.og_image_url)
   const interaction = useLinkCardInteractions({
@@ -50,7 +51,7 @@ function LinkCardImpl(props: Props) {
   })
   const showPreview = !!previewSrc && !interaction.previewErrored
   const unseenChange = hasUnseenChange(link)
-  const actions = { onEdit, onDelete, onPin, onRefreshPreview, onMarkSeen }
+  const actions = { onEdit, onDelete, onPin, onRefreshPreview, onAddImage, onMarkSeen }
 
   return (
     <article

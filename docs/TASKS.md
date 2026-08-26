@@ -79,6 +79,7 @@ Lista faseada de tasks `T1..T30`. Cada fase desbloqueia a próxima — segue em 
 
 | Data       | Task   | Hash | Notas |
 |------------|--------|------|-------|
+| 2026-08-25 | **SDD do backup operacional agendado (ADR-43)** | — | Escrito `docs/SDD-OPS-BACKUP.md` + ADR-43: quarto binário `cmd/backup-agent` (imagem `postgres:18.4-alpine` + Go, profile `backup`), quatro jobs (dump -Fc cifrado com age → S3 externo, restore drill em Postgres efêmero in-container, mirror RustFS→S3 por watermark sem propagar delete, user_zip agendado), estado em `backup_run` (mig. 000040, molde mail_outbox, índice parcial único + advisory lock `FOLDXBKP`), retenção GFS com modo endurecido, monitoria em três canais (métricas no agente + dashboard/alertas Grafana versionados em `deploy/observability/` com regra `absent()` — a lição do incidente do mailer — + banda no settings hub atrás de `instance.backup` + e-mail via outbox), faseado em 5 PRs (PR2-4 paralelizáveis em worktrees). Achados no caminho: `scripts/backup.sh` está QUEBRADO desde a separação dos compose files (`exec db` sem `-f docker-compose.db.yml`) e será removido no PR1; ETag multipart não serve de critério de diff de espelho (depende do part size → re-cópia eterna); `EnqueueTx` exige `AUTH_ENCRYPTION_KEY` no processo que enfileira. Implementação pendente — só documentação neste change. |
 | 2026-08-24 | **Sweep do ADR-42: o mesmo defeito em três níveis** | — | O sweep achou 4 HIGH de revisão + 5 de qualidade de teste, e os piores são a MESMA falha com uma indireção a mais entre o gate e a fonte viva. (1) `RequirePermission(p)` sem parâmetro: um mount site esquecido aplica a compilada em silêncio — foi o que a assinatura nova resolveu. (2) `AdminHandler.Mount` capturando `Grants()` como VALOR: os gates de `/api/admin` congelavam no snapshot do boot, então uma revogação só valia após reiniciar. (3) `cmd/server/main.go` sem `Deps.Grants`: o router inteiro caía em `roleperm.Default()`, e `/links`, `/notes`, `/tags`, `/import` e `/backup/restore` seguiam na compilada — enquanto os gates que `main` conecta à mão (admin, folders, policy) HONRAVAM, deixando a revogação PARCIALMENTE aplicada, o que se lê como instabilidade e não como bug. O parâmetro obrigatório resolveu o nível 1 e me deu confiança falsa nos níveis 2 e 3. **Três permissões (`backup.export`, `invites.read`, `invites.write`) eram oferecidas pela matriz e nenhuma rota aplicava** — lacuna de documentação enquanto a matriz era compilada, toggle que salva/audita/não faz nada depois de editável, contradizendo o comentário do próprio `permissions.go`. **`policy.Put` chamava `Validate` e não `ValidateForWrite`**, então o piso acima de 72 virava 500 em vez do 400 que ensina o limite. **`useCopy` com booleano** deixava o botão dizendo Copiado sobre outro segredo — corrigido derivando `copied` do valor, não chamando o `reset` que ninguém chamava. Também: `ValidateWrite` não checava o chamador com conjunto vazio; lost update no DELETE-then-INSERT (advisory lock por papel); e não existia o Load periódico que o comentário citava. |
 | 2026-08-24 | **Limpar duplicação quebrou autorização** | — | Colapsar as quatro cópias de `if grants == nil` num `OrDefault` trocou quatro comparações CONCRETAS corretas por comparações de INTERFACE: um `*roleperm.Repository` nulo dentro de uma interface não é `nil`, então a função devolvia o typed nil e o gate de admin dava panic no primeiro request de qualquer handler construído sem store — todo teste que não se importa com permissões configuradas, e qualquer deploy onde o store falhe. Não apareceu em `go build`, `go vet`, nos testes de unidade do `roleperm` nem no pacote `auth`: só a integração completa, no pacote `server`, tocou o caminho. É o argumento concreto para o gate do §6.1. A correção não é voltar às quatro cópias — é a função tratar o typed nil, que é exatamente o que quatro call sites não deveriam ter de lembrar. |
 | 2026-08-24 | **Dois guards meus passavam por engano** | — | `TestServerDepsCarriesTheLiveGrants` afirmava que o campo `Grants` estava PRESENTE, não que carregava um store vivo: `Grants: nil` e `Grants: roleperm.Default()` passavam os dois — o guard reproduzia o defeito que a doc dele descreve. Agora verifica o valor E que o identificador vem de um `roleperm.NewRepository`. `TestEveryPermissionIsEnforcedSomewhere` prova que uma permissão é NOMEADA num gate, não que o gate está MONTADO: remover `r.With(export)` das cinco rotas de backup mantendo a variável sobrevivia a ele e ao pacote. As duas camadas se complementam e nenhuma substitui a outra. Padrão a lembrar: **um teste que afirma "X existe" quase nunca é o que se queria — se queria "X faz efeito"**. Mesma classe nos dois falsos-verdes que o agente achou: a recarga passava com um único tick (a escrita sempre chega antes dele) e o teste do frontend usava um fixture em que a resposta do servidor era idêntica ao draft, então a checkbox ficava marcada com ou sem `setQueryData`. |
@@ -396,3 +397,43 @@ a egress desliga o tracing.
 nos dois idiomas, e `OTEL_EXPORTER_OTLP_ENDPOINT` — que o `docker-compose.yml` já lia — não
 estava documentado no `.env.example`, então quem copiava o exemplo ficava com tracing
 silenciosamente desligado.
+
+### Card em branco ganha as duas saídas, e o `user.name` do `otelpgx` sai do trace
+
+**Duas saídas no card, não uma.** Um card sem imagem visível passa a oferecer 🖼️ (abre o
+diálogo do link já no painel de imagem) E 🔄 (recaptura). A primeira versão trazia só a de
+upload, e a correção do usuário foi o achado: eu havia tirado o botão de recapturar de
+`preview_status === 'ok'` argumentando que recapturar não ajudaria — **exatamente o caso em
+que ele funciona**. Página sem `og:image` responde `ok` (nada falhou) e é precisamente a
+condição que o worker atende com SCREENSHOT (INV-083). Gatear por status escondia a única
+ação capaz de preencher aquele card. O gate agora é o que o leitor VÊ: `!showPreview` para o
+upload, `!showPreview || preview_status !== 'ok'` para a recaptura — cobrindo ok-e-vazio,
+`failed` e imagem que dá 404 em tempo de render (INV-082).
+
+**`user.name` do `otelpgx` era ambiguidade, não ruído.** Assim que a identidade da conta
+entrou no span (INV-170), o `user.name` que o `otelpgx` carimba por padrão passou a competir
+por significado: o semconv tem UMA chave e a aplicação passou a ter dois sujeitos que cabem
+nela — o papel do Postgres e a conta servida. O modo de falha não é ruidoso, é **convincente**:
+"requests por `user.name`" responde `user_foldex` para 100% do tráfego e parece uma quebra
+funcionando. `db.New` desliga os connection details do otelpgx e reinjeta o mesmo conjunto
+menos aquela chave (`connAttrs`); `server.address`/`server.port`/`db.namespace` ficam porque
+variam por deployment, o papel não varia e já está no `DB_URL`.
+
+**Dois testes, e só um deles serve.** `TestConnAttrs_*` fixa o conjunto sem Docker mas fica
+verde se a option sumir; `TestQuerySpansNeverCarryThePostgresRole` roda query real sob pai
+SERVER e afirma sobre TODO span gravado. Os dois mutantes (remover a option; remover o
+`WithTracerAttributes`) morrem só no segundo — é a mesma lição da rodada anterior, em que um
+teste provava que um middleware estava montado onde eu o havia montado.
+
+**Correção de comentário:** `main.go` e a ADR-39 diziam que o tracer do pgx "resolve o provider
+por query". Ele o captura UMA vez, em `NewTracer`. A ordem `Setup` antes de `db.New` continua
+obrigatória — pela razão certa agora.
+
+**Achado colateral do gate — asserção que media o encoder, não o código.** O
+`TestOptimize_RejectsDecodeBomb` fixava `len(bomb) < 1_000_000` como sanity check.
+Verde no Go 1.26.6 (pin da CI), vermelho no 1.27.0 local: o `image/png` da 1.27 emite
+1,35 MB para os mesmos pixels sólidos. Nenhum arquivo do repo mudou — a asserção
+media a biblioteca padrão. Virou razão contra o framebuffer decodificado
+(`dim*dim*4 / 50`), que é o que o comentário sempre disse significar e sobrevive à
+troca de encoder. Sem isso, o §1 ("sempre no latest stable") entraria em conflito com
+o gate no dia do bump para 1.27.

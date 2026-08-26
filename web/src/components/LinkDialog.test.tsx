@@ -712,4 +712,96 @@ describe('LinkDialog', () => {
     await user.click(screen.getByRole('button', { name: /Save changes/i }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
+
+  // The card's add-image action is only useful if the dialog LANDS on the
+  // upload zone. Opening on the URL field would drop the reader into the form
+  // they did not ask for, with the panel they came for below the fold on a
+  // narrow viewport (INV-165).
+  it('lands focus on the image upload zone when opened with focus="image"', async () => {
+    const link = {
+      id: 42, url: 'https://example.test', title: 'No image', slug: 'no-image',
+      description: '', favicon_url: null, og_image_url: null, click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    } as unknown as Link
+    state.links.push(link)
+    renderWithProviders(<LinkDialog open link={link} focus="image" onClose={vi.fn()} />)
+
+    const zone = await screen.findByRole('button', { name: /drop or click to add image/i })
+    await waitFor(() => expect(zone).toHaveFocus())
+  })
+
+  it('keeps focus on the URL field when no focus is asked for', async () => {
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: /^URL$/i })).toHaveFocus()
+    })
+  })
+
+  // Making the zone the dialog's focus target exposed that it was mouse-only:
+  // a div with onClick and no role, tabIndex or key handler, unreachable by Tab.
+  it('opens the file picker from the keyboard on the upload zone', async () => {
+    const link = {
+      id: 43, url: 'https://example.test/k', title: 'Keyboard', slug: 'kb',
+      description: '', favicon_url: null, og_image_url: null, click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    } as unknown as Link
+    state.links.push(link)
+    const { container } = renderWithProviders(
+      <LinkDialog open link={link} focus="image" onClose={vi.fn()} />,
+    )
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    const clicked = vi.spyOn(input, 'click').mockImplementation(() => {})
+
+    const zone = await screen.findByRole('button', { name: /drop or click to add image/i })
+    fireEvent.keyDown(zone, { key: 'Enter' })
+    expect(clicked).toHaveBeenCalled()
+
+    // Space is half the contract, not a nicety: a div with role="button" gets
+    // no native key handling, so whatever the handler omits simply does not
+    // work — and Space is what most people press on something that looks like
+    // a button.
+    clicked.mockClear()
+    fireEvent.keyDown(zone, { key: ' ' })
+    expect(clicked).toHaveBeenCalled()
+
+    clicked.mockClear()
+    fireEvent.keyDown(zone, { key: 'a' })
+    expect(clicked).not.toHaveBeenCalled()
+  })
+
+  // The zone is a div wearing role="button" (INV-154 forbids the real thing
+  // here), so nothing announces the refusal for free: while an upload is in
+  // flight both handlers no-op, and without aria-disabled a screen reader
+  // presents a button that silently does nothing when pressed.
+  it('announces itself as disabled while an upload is in flight', async () => {
+    const link = {
+      id: 44, url: 'https://example.test/busy', title: 'Busy', slug: 'busy',
+      description: '', favicon_url: null, og_image_url: null, click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    } as unknown as Link
+    state.links.push(link)
+
+    // Never resolves: the assertion is about the window BETWEEN start and
+    // finish, which any settling promise would close before we can look.
+    const realPost = http.post
+    const post = vi.spyOn(http, 'post').mockImplementation(((url: string, ...rest: never[]) =>
+      String(url).endsWith('/image')
+        ? new Promise(() => {})
+        : realPost(url, ...rest)) as typeof http.post)
+
+    const { container } = renderWithProviders(
+      <LinkDialog open link={link} focus="image" onClose={vi.fn()} />,
+    )
+    const zone = await screen.findByRole('button', { name: /drop or click to add image/i })
+    expect(zone).not.toHaveAttribute('aria-disabled')
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, {
+      target: { files: [new File(['x'], 'a.png', { type: 'image/png' })] },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /save|salvar/i }))
+
+    await waitFor(() => expect(zone).toHaveAttribute('aria-disabled', 'true'))
+    post.mockRestore()
+  })
 })

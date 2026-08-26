@@ -593,7 +593,7 @@ Parser usa `golang.org/x/net/html` e percorre `<A>` + stack de `<H3>`. **Semânt
 
 `docker compose up` sobe três containers; web é multi-stage build com nginx servindo o bundle estático. Nginx proxa `/api → backend:9089` pra evitar CORS no produto final (a SPA chama `/api/...` relativo). Backend só responde em `127.0.0.1` no host (porta `9089` por padrão; web em `9088`).
 
-Backup recomendado: cron de `pg_dump` (template em `scripts/backup.sh`).
+Backup operacional: serviço opcional `backup-agent` (`COMPOSE_PROFILES=backup`) — dump diário cifrado + espelho do RustFS para S3 externo, com restore drill automático. Ver **ADR-43** e [`docs/SDD-OPS-BACKUP.md`](./SDD-OPS-BACKUP.md).
 
 ## ADRs
 
@@ -1120,7 +1120,7 @@ O backend passa a expor `GET /metrics` (pacote `internal/metrics`): contadores e
 
 **Decisão.** Pacote `internal/tracing` com três peças, todas opt-in por `OTEL_EXPORTER_OTLP_ENDPOINT` (vazio = provider global fica o no-op do OTel; nenhum exporter, buffer ou goroutine):
 
-1. **`Setup`** instala o tracer provider global exportando OTLP/gRPC (esquema `http://` = plaintext, `https://` = TLS; path/barra final é aparado — hábito do OTLP/HTTP que faria o dial gRPC falhar em silêncio para sempre). A conexão gRPC é lazy e falha de setup vira `Warn`, nunca fatal — telemetria fora do ar não derruba a aplicação. `Setup` roda ANTES de `db.New`, porque o tracer do pgx resolve o provider por query. O sampler é `ParentBased(RootServerOnly)`: root span só é amostrado se for SERVER — sem isso, cada `pool.Ping` do healthz (probe do compose, a cada poucos segundos, para sempre) e cada query de worker de background viraria um trace-órfão de um span.
+1. **`Setup`** instala o tracer provider global exportando OTLP/gRPC (esquema `http://` = plaintext, `https://` = TLS; path/barra final é aparado — hábito do OTLP/HTTP que faria o dial gRPC falhar em silêncio para sempre). A conexão gRPC é lazy e falha de setup vira `Warn`, nunca fatal — telemetria fora do ar não derruba a aplicação. `Setup` roda ANTES de `db.New`, porque o tracer do pgx captura o provider UMA vez, na construção — invertida a ordem, o pool segura o no-op para sempre. O sampler é `ParentBased(RootServerOnly)`: root span só é amostrado se for SERVER — sem isso, cada `pool.Ping` do healthz (probe do compose, a cada poucos segundos, para sempre) e cada query de worker de background viraria um trace-órfão de um span.
 2. **`Middleware`** cria um span SERVER por request, nomeado pelo PADRÃO de rota do chi resolvido DEPOIS do handler (`GET /api/links/{id}`) — mesma regra anti-cardinalidade/anti-vazamento do ADR-38: URL crua com ids/slugs nunca vira nome ou atributo de span (testado por asserção negativa), e método fora do conjunto padrão colapsa em `_OTHER` (r.Method é token controlado pelo cliente — mesma regra do `metricMethod`). 5xx marca status Error; 4xx não (problema do cliente). `/healthz` e `/metrics` não geram span. **Contexto de trace de entrada é DESCARTADO, não honrado**: este serviço é a borda (nada acima traceia), então um `traceparent` do cliente só serviria para escolher nossos trace ids e o flag de sampling — permitindo a um atacante excluir os próprios requests da telemetria (`sampled=0`) ou enxertar spans no trace de uma vítima, poluindo investigação forense. Todo request re-origina o trace aqui; reavaliar se um gateway confiável com tracing um dia ficar na frente.
 3. **Correlação**: `slogRequest` acrescenta `trace_id` à linha de acesso quando há span válido (elo do derived field Loki→Tempo no Grafana), e `db.New` instala `otelpgx` — spans CLIENT por query (nome = primeira palavra-chave do SQL; parâmetros nunca; **texto SQL desabilitado por inteiro** via `WithDisableSQLStatementInAttributes`, porque schema/formas de WHERE não devem cruzar o fio até um collector possivelmente plaintext na LAN) que desenham a aresta backend→Postgres no service graph.
 
@@ -1139,6 +1139,8 @@ O conjunto de atributos de identidade é FECHADO e testado por asserção negati
 Os guards são de integração através de sessão real (`TestAuthenticate_StampsUserIDOnSpansOfTheAuthSurfaceItself`, `TestOptional_...`) e do `server.New` real (`TestUserIDIsStampedOnRequestSpansThroughTheRealRouter`), porque teste unitário compondo a cadeia à mão sobrevive tanto a desmontar quanto a mover o ponto de anotação. Três mutantes foram mortos por eles.
 
 Cardinalidade alta é CORRETA num atributo de span e errada como dimensão de métrica: `user.id` no processor de span-metrics do Tempo cunharia uma série temporal por conta. O RED dos dashboards continua derivando de `http.route`.
+
+**Emenda — `user.name` sai dos spans de query.** Assim que a identidade da conta entrou no trace, o `user.name` que o `otelpgx` carimba por padrão deixou de ser ruído e virou ambiguidade: o semconv tem UMA chave `user.name` e a aplicação passou a ter dois sujeitos que cabem nela — o papel do Postgres com que o pool autentica e a conta cujo request está sendo servido. Lado a lado no mesmo trace (`user.id` no SERVER, `user.name` nos filhos CLIENT), leem-se como id e nome da mesma pessoa. O modo de falha não é ruidoso, é convincente: um painel "requests por `user.name`" responde `user_foldex` para 100% do tráfego e parece uma quebra funcionando. `db.New` passa `otelpgx.WithDisableConnectionDetailsInAttributes()` e reinjeta o mesmo conjunto menos aquela chave via `connAttrs` — `server.address`, `server.port` e `db.namespace` ficam, porque variam por deployment e respondem "com qual banco este span falou"; o papel não varia e já está no `DB_URL`. `TestQuerySpansNeverCarryThePostgresRole` roda query real sob pai SERVER e afirma sobre TODO span gravado; o `TestConnAttrs_*` ao lado fixa o conjunto sem Docker mas não pega a option sumindo — daí os dois.
 
 **Consequência de segurança registrada em INV-170:** o exporter fala gRPC em texto claro e sem autenticação salvo endpoint `https://`, e o sampler grava todo span SERVER — então identidade atravessa o fio a cada request. Acesso de LEITURA ao store de traces passa a ser privilégio administrativo da instância: enumera quem é `owner`/`admin` e perfila atividade por conta, sem nenhuma permissão do Foldex.
 
@@ -1470,3 +1472,38 @@ chegar a uma réplica que não a executou, e — no processo que executou — qu
 refresh que falhou deixa a matriz velha no ar, que antes era para sempre. Devolve um canal
 fechado na saída, para que o encerramento seja OBSERVADO e não inferido de uma contagem de
 goroutines que o pool também mexe.
+
+
+### ADR-43 — Backup operacional agendado da instância (backup-agent)
+
+O backup per-user (ADR-20) é um recurso de produto e deliberadamente não restaura uma
+instância: exclui todo material de auth (INV-105). O disaster recovery operacional é um
+quarto binário, `cmd/backup-agent`, rodando como serviço opcional do compose
+(`COMPOSE_PROFILES=backup`, modelo do `mailer`: mesma imagem-repositório, entrypoint
+próprio, off por default), com imagem derivada de `postgres:18.4-alpine` — o que dá
+`pg_dump`/`initdb`/`postgres` version-matched sem docker-in-docker.
+
+- **Quatro jobs agendados**: `dump` (pg_dump -Fc do banco inteiro → cifrado com age →
+  S3 externo, retenção GFS), `drill` (restaura o artefato REAL do S3 num Postgres efêmero
+  dentro do próprio container e compara contagens — backup não verificado é esperança),
+  `mirror` (espelho incremental RustFS→S3 por watermark, sem propagar deleções) e
+  `user_zip` (o ZIP do ADR-20, agendado, opt-in).
+- **Estado em `backup_run`** (migração 000040), no molde do `mail_outbox`: claim CAS,
+  índice parcial único por job em `running`, `last_error` normalizado, janitor de
+  `stale_claim`. O botão "Executar agora" da UI só INSERE `requested`; quem executa é
+  sempre o agente — **as credenciais do S3 externo nunca entram no processo web**.
+- **Cifragem default-obrigatória** (age/X25519, opt-out explícito): o dump carrega auth e
+  todo o conteúdo; o operador decifra sem o Foldex (`age -d`), que é a história de DR
+  correta. Sem autogenerate de chave — chave que só existe ao lado dos dados é backup
+  indecriptável quando o host morre.
+- **Monitoria em três canais**: métricas Prometheus servidas pelo agente (+ dashboard e
+  alert rules Grafana versionados em `deploy/observability/`, incluindo `absent()` — o
+  alerta que pega o serviço opcional que nunca subiu), banda "Backup da instância" no
+  settings hub (permissão nova `instance.backup`), e alerta por e-mail via o outbox
+  transacional.
+- Substitui `scripts/backup.sh` (quebrado desde a separação dos compose files, sem RustFS,
+  sem verificação). Sem PITR por decisão: dump diário completo cobre a escala do Foldex;
+  pgBackRest entraria como serviço irmão sem tocar neste desenho.
+
+Detalhe completo em [`docs/SDD-OPS-BACKUP.md`](./SDD-OPS-BACKUP.md). Status: **Aceito ·
+SDD Draft v1.0 · implementação faseada em 5 PRs (§15 do SDD)**.

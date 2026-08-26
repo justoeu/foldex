@@ -18,6 +18,8 @@ type Props = {
   open: boolean
   link: Link | null
   initialUrl?: string
+  /** Where the dialog lands. 'image' is used by the card's add-image action. */
+  focus?: 'url' | 'image'
   defaultFolderId?: number | null
   onClose: () => void
 }
@@ -26,7 +28,7 @@ type Form = ReturnType<typeof useLinkDialogForm> & ReturnType<typeof useSlugFiel
 type Tags = ReturnType<typeof useTagPicker>
 type Image = ReturnType<typeof useLinkDialogImage>
 
-export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }: Props) {
+export function LinkDialog({ open, link, initialUrl, focus = 'url', defaultFolderId, onClose }: Props) {
   const { t } = useTranslation()
   const formState = useLinkDialogForm(open, link, initialUrl, defaultFolderId)
   const slugState = useSlugFieldState(open, formState.title, link?.slug, link?.id ?? null)
@@ -44,7 +46,12 @@ export function LinkDialog({ open, link, initialUrl, defaultFolderId, onClose }:
   const dialogRef = useRef<HTMLDivElement>(null)
   useEscape(onClose, open)
   useFocusTrap(dialogRef, open)
-  useDialogInitialFocus(open, dialogRef, form.urlInputRef)
+  // The image zone owns focus only when the caller asked for it; every other
+  // entry point keeps landing on the URL, which is what a person opening the
+  // dialog to EDIT expects. Passing the button ref means the browser scrolls it
+  // into view on its own — load-bearing on mobile, where the image panel stacks
+  // below the fold (INV-165) and would otherwise be focused but invisible.
+  useDialogInitialFocus(open, dialogRef, focus === 'image' ? image.pickerRef : form.urlInputRef, focus === 'image')
   if (!open) return null
 
   return (
@@ -323,9 +330,30 @@ function LinkImageUploadZone({ image }: { image: Image }) {
           event.target.value = ''
         }}
       />
+      {/* A div rather than a <button>: it is also a drop target, and turning it
+          into a button would put `.fx-img-upload-zone` on an element the UA
+          resets — the cascade failure INV-154 exists to refuse. It gets the
+          button ROLE and keyboard handling instead, which is what it was
+          missing: until now the zone was mouse-only and unreachable by Tab. */}
       <div
+        ref={image.pickerRef}
+        role="button"
+        tabIndex={0}
+        aria-label={t('link_dialog.image_drop_hint')}
+        // Both handlers already no-op while busy; without this the refusal is
+        // invisible to a screen reader, which announces a button that does
+        // nothing when pressed. A native <button disabled> would say it for
+        // free, but this cannot be a <button> — see INV-154.
+        aria-disabled={image.busy || undefined}
         className={'fx-img-upload-zone' + (image.dragging ? ' fx-img-upload-zone-drag' : '') + (image.busy ? ' fx-img-upload-zone-busy' : '')}
         onClick={() => !image.busy && image.fileInputRef.current?.click()}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          // Space scrolls the dialog body otherwise, which moves the very
+          // panel the reader was sent here to use.
+          event.preventDefault()
+          if (!image.busy) image.fileInputRef.current?.click()
+        }}
         onDragOver={(event) => {
           event.preventDefault()
           if (!image.busy) image.setDragging(true)

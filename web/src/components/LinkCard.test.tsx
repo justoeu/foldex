@@ -35,6 +35,7 @@ const noopCardProps = {
   onDelete: vi.fn(),
   onPin: vi.fn(),
   onRefreshPreview: vi.fn(),
+  onAddImage: vi.fn(),
   onMarkSeen: vi.fn(),
 }
 
@@ -117,7 +118,7 @@ describe('LinkCard', () => {
 
   it('calls onEdit when edit button is clicked', async () => {
     const onEdit = vi.fn()
-    renderWithProviders(<LinkCard link={baseLink} onEdit={onEdit} onDelete={vi.fn()} onPin={vi.fn()} onRefreshPreview={vi.fn()} onMarkSeen={vi.fn()} />)
+    renderWithProviders(<LinkCard link={baseLink} onEdit={onEdit} onDelete={vi.fn()} onPin={vi.fn()} onRefreshPreview={vi.fn()} onAddImage={vi.fn()} onMarkSeen={vi.fn()} />)
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /edit/i }))
     expect(onEdit).toHaveBeenCalledWith(baseLink)
@@ -398,6 +399,87 @@ describe('LinkCard', () => {
     )
     await userEvent.click(screen.getByRole('button', { name: /recapture preview/i }))
     expect(onRefreshPreview).toHaveBeenCalledWith(baseLink.id)
+  })
+
+  // The defect this action exists to close: a page with no og:image produces
+  // preview_status 'ok' — the fetch SUCCEEDED, nothing failed — and an empty
+  // og_image_url. The card then showed no image, no "preview failed" warning
+  // (that needs status 'failed'), and no recapture button (that needs status
+  // != 'ok'). Blank, with no way out. Recapturing would not have helped either:
+  // the page still has no og:image. Uploading one is the only real answer.
+  it('offers the add-image action when status is ok but there is no image', async () => {
+    const onAddImage = vi.fn()
+    renderWithProviders(
+      <LinkCard
+        link={{ ...baseLink, preview_status: 'ok', og_image_url: null }}
+        {...noopCardProps}
+        onAddImage={onAddImage}
+      />,
+    )
+    // BOTH ways out are offered, and recapture is not decoration here: a page
+    // with no og:image is the exact condition the preview worker answers with
+    // a screenshot, so the automatic route can still fill this card.
+    expect(screen.getByRole('button', { name: /recapture preview/i })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /add an image/i }))
+    expect(onAddImage).toHaveBeenCalledWith(expect.objectContaining({ id: baseLink.id }))
+  })
+
+  it('recaptures from a card whose status is ok but has no image', async () => {
+    const onRefreshPreview = vi.fn()
+    renderWithProviders(
+      <LinkCard
+        link={{ ...baseLink, preview_status: 'ok', og_image_url: null }}
+        {...noopCardProps}
+        onRefreshPreview={onRefreshPreview}
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: /recapture preview/i }))
+    expect(onRefreshPreview).toHaveBeenCalledWith(baseLink.id)
+  })
+
+  it('hides the add-image action when the card already shows an image', () => {
+    renderWithProviders(
+      <LinkCard
+        link={{ ...baseLink, preview_status: 'ok', og_image_url: 'https://cdn.test/a.png' }}
+        {...noopCardProps}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: /add an image/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /recapture preview/i })).not.toBeInTheDocument()
+  })
+
+  // Two different problems wearing the same blank card: 'failed' means the
+  // fetch broke and retrying may fix it, so BOTH ways out are offered.
+  it('offers add-image alongside recapture when the preview failed', () => {
+    renderWithProviders(
+      <LinkCard
+        link={{ ...baseLink, preview_status: 'failed', og_image_url: null }}
+        {...noopCardProps}
+      />,
+    )
+    expect(screen.getByRole('button', { name: /add an image/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /recapture preview/i })).toBeInTheDocument()
+  })
+
+  // The row says 'ok' AND carries a URL, so nothing in the data hints at a
+  // problem — the image simply does not load (INV-082 falls back to the glyph).
+  // Gating on og_image_url alone would leave this card with no way out.
+  it('offers the add-image action once a stored image fails to load', async () => {
+    const { container } = renderWithProviders(
+      <LinkCard
+        link={{ ...baseLink, preview_status: 'ok', og_image_url: 'https://cdn.test/gone.png' }}
+        {...noopCardProps}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: /add an image/i })).not.toBeInTheDocument()
+
+    const img = container.querySelector('.fx-preview-img img') as HTMLImageElement
+    expect(img).toBeTruthy()
+    fireEvent.error(img)
+
+    expect(await screen.findByRole('button', { name: /add an image/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /recapture preview/i })).toBeInTheDocument()
   })
 
   it('sets dragging class on drag start and clears on drag end', () => {

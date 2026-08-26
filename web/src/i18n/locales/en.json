@@ -182,6 +182,7 @@
     "edit_link": "Edit link",
     "delete_link": "Delete link",
     "refresh_preview": "Recapture preview",
+    "add_image": "Add an image",
     "never_clicked": "never",
     "last_click_now": "just now",
     "last_click_minutes": "{{count}}m ago",

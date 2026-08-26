@@ -23,7 +23,7 @@ Bookmark nativo é ótimo para "salvar uma página rápida e esquecer". Quando v
 | **Preso a um navegador.** Chrome ↔ Safari ↔ Firefox = 3 silos. Sync exige conta no fornecedor. | Seu próprio servidor. Acessa de qualquer browser, em qualquer máquina da sua rede. Os dados ficam num Postgres que **você** controla. |
 | **Só árvore.** Um bookmark mora em UMA pasta. Quer "trabalho + ia + notebookLLM"? Triplica. | **Tags M:N** (um link pode ter N labels) **+ pastas 1:N aninháveis** (containment iPhone-style). Os dois sistemas coexistem. |
 | **Zero telemetria.** Você "favorita" 200 links e usa 8. Não sabe quais.                 | Toda navegação passa por `/go/{slug}` que insere em `click_log`. Página de stats mostra cliques por dia, top hosts, top links (últimos 30d), distribuição por tag. |
-| **Preview = favicon 16×16.** Lista cinza com mini-ícones.                               | Card visual com OG image. Se a página não tem, foldex **captura screenshot** automaticamente (Chromium headless → RustFS). Você pode também subir uma imagem manual. |
+| **Preview = favicon 16×16.** Lista cinza com mini-ícones.                               | Card visual com OG image. Se a página não tem, foldex **captura screenshot** automaticamente (Chromium headless → RustFS). Um card que ainda assim fica em branco oferece **as duas saídas no próprio card** — 🔄 recapturar (o worker tenta de novo, screenshot incluso) e 🖼️ adicionar imagem (abre o diálogo do link no painel de imagem). |
 | **Busca fraca.** Match só no título/URL.                                                | Busca full-text via Postgres `pg_trgm` em título + URL + descrição. Compõe com filtro por tag (AND-multi-tag) e escopo de pasta. |
 | **Backup = arquivo Netscape opaco.** Imagens? Cliques? Hierarquia? Tudo perdido.        | ZIP de backup único com `manifest.json` + `database.json` (5 tabelas) + **todas as imagens do RustFS**. Round-trip lossless, verificação por checksum SHA-256, 3 modos de conflito (wipe/skip/duplicate). |
 | **Atalhos engessados.** Cmd+D abre o diálogo nativo do navegador.                       | Extensão MV3 + Alt-K (palette), Alt-N (novo link), Alt-F (nova pasta). Drag-and-drop iPhone-style entre cards/pastas. |
@@ -310,7 +310,14 @@ Cada span de request carrega quem fez a chamada:
 | `foldex.auth.via` | `span.foldex.auth.via` | `session` ou `api_token` |
 
 Sem e-mail e sem nome de exibição: um store de traces é outro domínio de
-retenção que o banco, com controle de acesso próprio. A anotação pendura nos
+retenção que o banco, com controle de acesso próprio. Também **sem
+`user.name`**: o `otelpgx` põe ali o papel do Postgres por padrão, e um trace
+com os dois se lê como id e nome da mesma pessoa quando são dois sujeitos
+diferentes — um painel "requests por `user.name`" responderia `user_foldex`
+para todo o tráfego e pareceria funcionar. Os spans de query mantêm
+`server.address`, `server.port` e `db.namespace`; o papel sai.
+
+A anotação pendura nos
 três pontos onde um principal nasce, não num grupo de rotas, então todo request
 autenticado carrega — inclusive a metade de gestão de credencial do `/api/auth`
 (sessões, troca de senha, 2FA, tokens). Requests pré-login não têm principal e

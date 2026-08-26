@@ -11,6 +11,10 @@ export function useLinkDialogImage(open: boolean, link: Link | null) {
   const [removed, setRemoved] = useState(false)
   const [busy, setBusy] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // The VISIBLE drop zone. Separate from fileInputRef, which points at the
+  // hidden <input type="file"> — focusing that one does nothing and scrolls
+  // nowhere, because a display:none element has no box.
+  const pickerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) {
@@ -57,6 +61,7 @@ export function useLinkDialogImage(open: boolean, link: Link | null) {
     removed,
     busy,
     fileInputRef,
+    pickerRef,
     setUploadError,
     setDragging,
     setBusy,

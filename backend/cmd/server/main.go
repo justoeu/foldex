@@ -76,9 +76,9 @@ func main() {
 	defer stop()
 
 	// Tracing installs the GLOBAL provider, so it must precede db.New — the
-	// pool's otelpgx tracer resolves the provider per query and would pin the
-	// no-op otherwise. Setup failure is a warning, never fatal: a telemetry
-	// endpoint typo must not take the backend down.
+	// pool's otelpgx tracer captures the provider once, at construction, and
+	// would hold the no-op forever otherwise. Setup failure is a warning, never
+	// fatal: a telemetry endpoint typo must not take the backend down.
 	traceShutdown, err := tracing.Setup(rootCtx, tracing.Config{
 		Endpoint:       cfg.OTelEndpoint,
 		ServiceName:    "foldex-backend",
