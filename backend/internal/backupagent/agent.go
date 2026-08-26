@@ -28,7 +28,10 @@ const janitorInterval = time.Hour
 type jobSpec struct {
 	name   string
 	anchor Anchor
-	run    func(ctx context.Context) (*Artifact, map[string]any, string, error)
+	// run receives the backup_run row id it executes under: the drill needs
+	// it to stamp drill_of_run_id as soon as it picks a source, so even a run
+	// that fails mid-pipeline records WHICH dump it was validating.
+	run func(ctx context.Context, runID int64) (*Artifact, map[string]any, string, error)
 }
 
 // Agent wires the jobs to their schedule and to backup_run.
@@ -53,8 +56,8 @@ type Agent struct {
 	httpAddr string // bound address, once serveHTTP has a listener
 }
 
-// New builds the agent. store carries the external bucket; the dump job is the
-// only registry entry in this PR.
+// New builds the agent. store carries the external bucket; the registry holds
+// the dump and its drill.
 func New(cfg Config, pool *pgxpool.Pool, store Uploader, logger *slog.Logger) (*Agent, error) {
 	a := &Agent{
 		cfg:     cfg,
@@ -68,8 +71,19 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, logger *slog.Logger) (*
 	if err != nil {
 		return nil, err
 	}
-	a.jobs = append(a.jobs, jobSpec{name: JobDump, anchor: cfg.DumpAt, run: dump.Run})
+	a.jobs = append(a.jobs, jobSpec{name: JobDump, anchor: cfg.DumpAt, run: func(ctx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
+		return dump.Run(ctx)
+	}})
 	a.skewWarning = dump.VersionSkewWarning
+
+	drill, err := NewDrillJob(cfg, a.runs, store, logger)
+	if err != nil {
+		return nil, err
+	}
+	// Registered even with no anchor: the registry is also what the
+	// requested-claim loop iterates, so an operator can trigger a manual
+	// drill from the admin surface without scheduling one.
+	a.jobs = append(a.jobs, jobSpec{name: JobDrill, anchor: cfg.DrillAt, run: drill.Run})
 	return a, nil
 }
 
@@ -156,11 +170,7 @@ func (a *Agent) scheduleLoop(ctx context.Context, spec jobSpec) {
 		case <-time.After(jitter):
 		}
 		if a.waitReady(ctx) {
-			// The MISSED anchor slot, not now(): scheduled_for's contract
-			// (migration 000040, SDD §3) is "the slot this run satisfies",
-			// and PR5's staleness surface reads it.
-			missed := spec.anchor.Next(time.Now()).Add(-spec.anchor.Interval())
-			a.execute(ctx, spec, missed, 0)
+			a.execute(ctx, spec, spec.anchor.PreviousSlot(time.Now()), 0)
 		}
 	}
 
@@ -256,7 +266,7 @@ func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Tim
 
 	started := time.Now()
 	a.logger.Info("run started", "job", spec.name, "run_id", id)
-	artifact, meta, reason, runErr := spec.run(ctx)
+	artifact, meta, reason, runErr := spec.run(ctx, id)
 	duration := time.Since(started)
 
 	// Outcomes are recorded on a fresh context: the run's ctx is exactly what

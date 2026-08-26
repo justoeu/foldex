@@ -81,6 +81,7 @@ func run(logger *slog.Logger) int {
 	agent.Start(ctx)
 	logger.Info("backup agent ready",
 		"dump_at", cfg.DumpAt.String(),
+		"drill_at", cfg.DrillAt.String(),
 		"retention_mode", cfg.RetentionMode,
 		"encrypted", len(cfg.AgeRecipients) > 0,
 		"metrics_addr", cfg.MetricsAddr)

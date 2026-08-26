@@ -248,7 +248,7 @@ func TestExecute_RecordsOutcomeEvenWhenTheJobContextDies(t *testing.T) {
 		logger:  slog.New(slog.DiscardHandler),
 	}
 	jobCtx, cancel := context.WithCancel(ctx)
-	spec := jobSpec{name: JobDump, run: func(runCtx context.Context) (*Artifact, map[string]any, string, error) {
+	spec := jobSpec{name: JobDump, run: func(runCtx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
 		cancel() // shutdown arrives mid-job
 		<-runCtx.Done()
 		return nil, nil, ReasonDumpFailed, errors.New("interrupted")
@@ -346,7 +346,7 @@ func TestExecute_LockBusyFailsTheClaimedRequestAndSkipsTheSlot(t *testing.T) {
 		logger:  slog.New(slog.DiscardHandler),
 	}
 	ran := false
-	spec := jobSpec{name: JobDump, run: func(context.Context) (*Artifact, map[string]any, string, error) {
+	spec := jobSpec{name: JobDump, run: func(context.Context, int64) (*Artifact, map[string]any, string, error) {
 		ran = true
 		return nil, nil, "", nil
 	}}
@@ -390,7 +390,7 @@ func TestExecute_ClaimedRequestRunsOnItsOwnRowNotANewOne(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	spec := jobSpec{name: JobDump, run: func(context.Context) (*Artifact, map[string]any, string, error) {
+	spec := jobSpec{name: JobDump, run: func(context.Context, int64) (*Artifact, map[string]any, string, error) {
 		return &Artifact{Key: "k", Bytes: 1, SHA256: "aa"}, nil, "", nil
 	}}
 	a.execute(ctx, spec, time.Now(), id)

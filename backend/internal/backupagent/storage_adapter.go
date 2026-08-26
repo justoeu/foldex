@@ -20,6 +20,10 @@ func (u storageUploader) PutObjectStream(ctx context.Context, key string, r io.R
 	return u.c.PutObjectStream(ctx, key, r, size, contentType)
 }
 
+func (u storageUploader) OpenObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	return u.c.OpenObject(ctx, key)
+}
+
 func (u storageUploader) WalkObjects(ctx context.Context, prefix string, visit func(ObjectInfo) error) error {
 	return u.c.WalkObjects(ctx, prefix, func(object storage.ObjectInfo) error {
 		return visit(ObjectInfo{Key: object.Key, Size: object.Size})

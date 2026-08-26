@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log/slog"
 	"os/exec"
@@ -25,6 +26,7 @@ type recorderStore struct {
 	uploads  map[string][]byte
 	listing  []ObjectInfo
 	putErr   error
+	openErr  error
 	deleted  [][]string
 	walkErr  error
 	deleteEr error
@@ -49,6 +51,19 @@ func (r *recorderStore) PutObjectStream(_ context.Context, key string, reader io
 	defer r.mu.Unlock()
 	r.uploads[key] = data
 	return nil
+}
+
+func (r *recorderStore) OpenObject(_ context.Context, key string) (io.ReadCloser, error) {
+	if r.openErr != nil {
+		return nil, r.openErr
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	data, ok := r.uploads[key]
+	if !ok {
+		return nil, fmt.Errorf("recorder: no object %s", key)
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 func (r *recorderStore) WalkObjects(_ context.Context, prefix string, visit func(ObjectInfo) error) error {
@@ -80,8 +95,8 @@ func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 // stubDump swaps pg_dump for a shell command, so the pipeline — encrypt, hash,
 // spool, upload, prune — is provable on any machine. Production always uses
 // pgDumpCommand; the seam exists exactly for this file.
-func stubDump(script string) func(context.Context, Config) *exec.Cmd {
-	return func(ctx context.Context, _ Config) *exec.Cmd {
+func stubDump(script string) func(context.Context, Config, string) *exec.Cmd {
+	return func(ctx context.Context, _ Config, _ string) *exec.Cmd {
 		return exec.CommandContext(ctx, "sh", "-c", script)
 	}
 }
@@ -229,6 +244,49 @@ func TestDumpRun_PruneRunsOnlyInAgentModeAndNeverFailsTheRun(t *testing.T) {
 	})
 }
 
+func TestDumpRun_RecordsSourceCountsForTheDrill(t *testing.T) {
+	store := newRecorderStore()
+	job := newTestDumpJob(t, store, nil)
+	job.command = stubDump("printf 'PGDMP'")
+	released := false
+	job.snapshotCounts = func(context.Context) (map[string]int64, int64, string, func(), error) {
+		return map[string]int64{"link": 3, "note": 1}, 40, "snap-1", func() { released = true }, nil
+	}
+	var gotSnapshot string
+	inner := job.command
+	job.command = func(ctx context.Context, cfg Config, snapshotID string) *exec.Cmd {
+		gotSnapshot = snapshotID
+		return inner(ctx, cfg, snapshotID)
+	}
+
+	_, meta, reason, err := job.Run(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, reason)
+	// The counts are the yardstick the drill's compareCounts uses: a dump
+	// that ships without them can only be validated by schema version.
+	assert.Equal(t, map[string]int64{"link": 3, "note": 1}, meta["tables"])
+	assert.EqualValues(t, 40, meta["schema_version"])
+	assert.Equal(t, "snap-1", gotSnapshot,
+		"pg_dump must attach to the SAME snapshot the counts were read in — two instants make every drill on a live instance lie")
+	assert.True(t, released, "the exporting transaction must be released after the dump, or it pins WAL forever")
+}
+
+func TestDumpRun_CountFailureDegradesTheMetaNeverTheBackup(t *testing.T) {
+	store := newRecorderStore()
+	job := newTestDumpJob(t, store, nil)
+	job.command = stubDump("printf 'PGDMP'")
+	job.snapshotCounts = func(context.Context) (map[string]int64, int64, string, func(), error) {
+		return nil, 0, "", nil, io.ErrClosedPipe
+	}
+
+	artifact, meta, reason, err := job.Run(context.Background())
+	require.NoError(t, err, "the artifact is the product — a failed stats query must not fail the backup")
+	assert.Empty(t, reason)
+	require.NotNil(t, artifact)
+	_, hasTables := meta["tables"]
+	assert.False(t, hasTables, "no yardstick beats a wrong yardstick")
+}
+
 func TestMajor_ParsesRealVersionStrings(t *testing.T) {
 	assert.Equal(t, "18", major("18.4"))
 	assert.Equal(t, "18", major("pg_dump (PostgreSQL) 18.4"))
@@ -239,7 +297,7 @@ func TestMajor_ParsesRealVersionStrings(t *testing.T) {
 func TestPgDumpCommand_PasswordTravelsInEnvNeverArgv(t *testing.T) {
 	cfg := Config{PGHost: "db", PGPort: 5432, PGUser: "user_foldex",
 		PGPassword: "sup3r-secret", PGDatabase: "foldex", PGSSLMode: "disable"}
-	cmd := pgDumpCommand(context.Background(), cfg)
+	cmd := pgDumpCommand(context.Background(), cfg, "")
 
 	for _, arg := range cmd.Args {
 		assert.NotContains(t, arg, "sup3r-secret",
@@ -260,4 +318,12 @@ func TestPgDumpCommand_PasswordTravelsInEnvNeverArgv(t *testing.T) {
 	}
 	assert.True(t, sawPassword, "the password reaches pg_dump through the environment")
 	assert.True(t, sawSSL)
+
+	// With an exported snapshot the dump must attach to it — and the database
+	// name must stay LAST (pg_dump treats the first non-flag as the dbname).
+	snap := pgDumpCommand(context.Background(), cfg, "00000003-000001AB-1")
+	assert.Contains(t, snap.Args, "--snapshot=00000003-000001AB-1",
+		"counts and archive must describe one instant or the drill's equality verdict lies")
+	assert.Equal(t, "foldex", snap.Args[len(snap.Args)-1])
+	assert.NotContains(t, cmd.Args, "--snapshot=", "no snapshot id, no flag")
 }

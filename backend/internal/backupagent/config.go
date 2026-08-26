@@ -40,6 +40,7 @@ type Config struct {
 
 	// Scheduling.
 	DumpAt           Anchor // zero Anchor = job disabled
+	DrillAt          Anchor // restore drill; zero Anchor = job disabled
 	RequestedPollSec int
 	StaleRunMin      int
 
@@ -52,6 +53,12 @@ type Config struct {
 	// Encryption.
 	AgeRecipients  []string
 	AllowPlaintext bool
+	// AgeIdentityFile is the private identity the drill decrypts with — the
+	// only secret this agent holds beyond the S3 credentials. keyfile
+	// posture: no autogenerate, no ephemeral fallback — a generated key that
+	// only exists next to the data is an undecryptable backup on the day the
+	// host dies.
+	AgeIdentityFile string
 
 	// SpoolDir is where the dump ciphertext is staged before upload. Empty
 	// means the OS temp dir — which in the container is the writable LAYER,
@@ -109,6 +116,8 @@ func Load() (Config, error) {
 
 		AllowPlaintext: envBool("BACKUP_ALLOW_PLAINTEXT", false),
 
+		AgeIdentityFile: strings.TrimSpace(os.Getenv("BACKUP_AGE_IDENTITY_FILE")),
+
 		SpoolDir: os.Getenv("BACKUP_SPOOL_DIR"),
 
 		MetricsAddr:  envOr("BACKUP_METRICS_ADDR", ":9099"),
@@ -133,6 +142,13 @@ func Load() (Config, error) {
 		}
 		c.DumpAt = anchor
 	}
+	if raw := strings.TrimSpace(os.Getenv("BACKUP_DRILL_AT")); raw != "" {
+		anchor, err := ParseAnchor(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("backupagent: BACKUP_DRILL_AT: %w", err)
+		}
+		c.DrillAt = anchor
+	}
 
 	if c.RetentionMode != "agent" && c.RetentionMode != "bucket" {
 		return Config{}, fmt.Errorf("backupagent: BACKUP_RETENTION_MODE must be \"agent\" or \"bucket\", got %q — the mode is declared, never inferred from an AccessDenied", c.RetentionMode)
@@ -150,6 +166,13 @@ func Load() (Config, error) {
 	// operators who encrypt at the bucket (SSE-KMS) — never a fallback.
 	if len(c.AgeRecipients) == 0 && !c.AllowPlaintext {
 		return Config{}, fmt.Errorf("backupagent: BACKUP_AGE_RECIPIENTS is empty: refusing to upload plaintext dumps (set it, or set BACKUP_ALLOW_PLAINTEXT=1 if the bucket itself encrypts)")
+	}
+
+	// A scheduled drill over encrypted dumps without the identity would boot
+	// fine and fail every week at 04:30 — the silent non-backup shape again.
+	// Fail at boot, naming the knob.
+	if c.DrillAt.Enabled() && len(c.AgeRecipients) > 0 && c.AgeIdentityFile == "" {
+		return Config{}, fmt.Errorf("backupagent: BACKUP_DRILL_AT is set but BACKUP_AGE_IDENTITY_FILE is empty — the drill cannot decrypt the dumps it must restore (mount the private age identity read-only, mode 0600)")
 	}
 
 	return c, nil

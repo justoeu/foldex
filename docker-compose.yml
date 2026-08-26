@@ -321,14 +321,22 @@ services:
       BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
       BACKUP_S3_USE_SSL: ${BACKUP_S3_USE_SSL:-true}
       BACKUP_DUMP_AT: ${BACKUP_DUMP_AT:-03:30}
+      # Weekly restore drill ("HH:MM <weekday>", e.g. "04:30 sun"). Empty =
+      # off, deliberately: scheduling it requires the private age identity
+      # below on this host, and that is the operator's call, not a default.
+      BACKUP_DRILL_AT: ${BACKUP_DRILL_AT:-}
       BACKUP_RETAIN_DAILY: ${BACKUP_RETAIN_DAILY:-7}
       BACKUP_RETAIN_WEEKLY: ${BACKUP_RETAIN_WEEKLY:-4}
       BACKUP_RETAIN_MONTHLY: ${BACKUP_RETAIN_MONTHLY:-6}
       BACKUP_RETENTION_MODE: ${BACKUP_RETENTION_MODE:-agent}
       # age public keys — the upload path carries no secret. The private
-      # identity is needed only by the restore drill (PR2) and never ships in
-      # an image (same rule as the VAPID key).
+      # identity is needed only by the restore drill and never ships in an
+      # image (same rule as the VAPID key).
       BACKUP_AGE_RECIPIENTS: ${BACKUP_AGE_RECIPIENTS:-}
+      # Container path of the private age identity the drill decrypts with —
+      # the agent's only secret beyond the S3 credentials. Keep the file 0600
+      # on the host and mount it read-only (see the volumes example below).
+      BACKUP_AGE_IDENTITY_FILE: ${BACKUP_AGE_IDENTITY_FILE:-}
       BACKUP_ALLOW_PLAINTEXT: ${BACKUP_ALLOW_PLAINTEXT:-0}
       BACKUP_METRICS_ADDR: ${BACKUP_METRICS_ADDR:-:9099}
       BACKUP_REQUESTED_POLL_SEC: ${BACKUP_REQUESTED_POLL_SEC:-30}
@@ -338,6 +346,10 @@ services:
       BACKUP_SPOOL_DIR: ${BACKUP_SPOOL_DIR:-}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       TZ: ${TZ:-UTC}
+    # To enable the drill, mount the private age identity read-only and point
+    # BACKUP_AGE_IDENTITY_FILE at the container path, e.g.:
+    # volumes:
+    #   - ./secrets/backup-age-identity.txt:/etc/foldex/backup-age-identity.txt:ro
     networks:
       - foldex
 

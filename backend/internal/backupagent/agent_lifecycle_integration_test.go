@@ -38,11 +38,12 @@ func TestAgent_LifecycleClaimsRequestedAndServesObservability(t *testing.T) {
 	store := newRecorderStore()
 	agent, err := New(lifecycleConfig(), pool, store, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	// The dump anchor is disabled, so the only registry entry sleeps — swap
-	// its run func for an instant success so the requested-claim loop has
-	// something observable to execute.
-	require.Len(t, agent.jobs, 1)
-	agent.jobs[0].run = func(context.Context) (*Artifact, map[string]any, string, error) {
+	// No anchors are configured, so both registry entries (dump, drill)
+	// sleep — swap the dump's run func for an instant success so the
+	// requested-claim loop has something observable to execute.
+	require.Len(t, agent.jobs, 2)
+	require.Equal(t, JobDump, agent.jobs[0].name)
+	agent.jobs[0].run = func(context.Context, int64) (*Artifact, map[string]any, string, error) {
 		return &Artifact{Key: "lifecycle", Bytes: 7, SHA256: "aa"}, nil, "", nil
 	}
 	// The skew check would exec a real pg_dump; the lifecycle under test is
