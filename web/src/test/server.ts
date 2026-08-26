@@ -77,6 +77,15 @@ export type MockState = {
   statsStorageError?: boolean
   // When set, DELETE /api/links/:id/image rejects with this error object.
   linkImageRemoveError?: { status?: number; code?: string; message: string }
+  // Operational backup status (ADR-43). `backupJobs` overrides the per-job
+  // summary; unset, every job reports "never ran". `backupStatusRuns` is the
+  // history page; POST /api/admin/backup/run appends a `requested` row here
+  // (mirroring the backend) and records the job in `backupRunRequests`, or
+  // rejects with 409 `backup_run_pending` when the job already has a
+  // requested/running row — same rule the real handler enforces.
+  backupJobs?: any[]
+  backupStatusRuns?: any[]
+  backupRunRequests?: string[]
 }
 
 export function freshState(): MockState {
@@ -148,6 +157,12 @@ const buildRoutes = (): Record<Method, Route[]> => ({
       return s.statsStorage ?? { objects: 0, total_bytes: 0 }
     } },
     { url: /^\/api\/backup\/download\/status$/, handle: backupDownloadStatus },
+    { url: /^\/api\/admin\/backup\/runs$/, handle: (_m, _d, _p, s) => ({
+      jobs: s.backupJobs ?? ['dump', 'drill', 'mirror', 'user_zip'].map((job) => ({
+        job, last_success: null, consecutive_failures: 0,
+      })),
+      runs: s.backupStatusRuns ?? [],
+    }) },
   ],
   post: [
     { url: /^\/api\/admin\/users$/, handle: (_m, d, _p, s) => {
@@ -172,6 +187,30 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/push\/test$/, handle: () => null },
     { url: /^\/api\/folders\/(\d+)\/unlock$/, handle: unlockFolder },
     { url: /^\/api\/folders\/(\d+)\/reset-password$/, handle: resetFolderPassword },
+    { url: /^\/api\/admin\/backup\/run$/, handle: (_m, d, _p, s) => {
+      const job = d?.job
+      if (!['dump', 'drill', 'mirror', 'user_zip'].includes(job)) {
+        const e: any = new Error('invalid job')
+        e.response = { status: 400, data: { error: { code: 'invalid_job', message: 'job must be one of dump, drill, mirror, user_zip' } } }
+        throw e
+      }
+      const runs = (s.backupStatusRuns ??= [])
+      if (runs.some((r: any) => r.job === job && (r.status === 'requested' || r.status === 'running'))) {
+        const e: any = new Error('pending')
+        e.response = { status: 409, data: { error: { code: 'backup_run_pending', message: 'a run of this job is already requested or running' } } }
+        throw e
+      }
+      ;(s.backupRunRequests ??= []).push(job)
+      const id = runs.reduce((max: number, r: any) => Math.max(max, r.id), 0) + 1
+      runs.unshift({
+        id, job, status: 'requested',
+        scheduled_for: new Date().toISOString(), started_at: new Date().toISOString(),
+        finished_at: null, artifact_key: null, artifact_bytes: null, artifact_sha256: null,
+        objects_scanned: null, objects_copied: null, bytes_copied: null,
+        drill_of_run_id: null, last_error: null, meta: {},
+      })
+      return { id, job, status: 'requested' }
+    } },
   ],
   put: [
     { url: /^\/api\/settings\/master-password$/, handle: setMaster },

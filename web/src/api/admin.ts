@@ -224,6 +224,78 @@ export async function transferOwnership(id: number): Promise<AuthUser> {
  *  answer about e-mail at all. `reason: "pending"` rides an AVAILABLE answer —
  *  somebody is moving to this address but has not confirmed, and the create
  *  would still succeed. */
+// ── Operational backup status (ADR-43) ─────────────────────────────────
+
+export type BackupJob = 'dump' | 'drill' | 'mirror' | 'user_zip'
+
+export type BackupRunStatus = 'requested' | 'running' | 'succeeded' | 'failed'
+
+/**
+ * One backup_run row. `last_error` is a normalized reason token
+ * (`upload_failed`, `drill_counts_mismatch`, …), never raw tool output — the
+ * UI renders it as code and must not translate it: it is the exact string an
+ * operator greps the agent's logs and the runbook for.
+ */
+export type BackupRun = {
+  id: number
+  job: BackupJob
+  status: BackupRunStatus
+  scheduled_for: string
+  started_at: string
+  finished_at: string | null
+  artifact_key: string | null
+  artifact_bytes: number | null
+  artifact_sha256: string | null
+  objects_scanned: number | null
+  objects_copied: number | null
+  bytes_copied: number | null
+  drill_of_run_id: number | null
+  last_error: string | null
+  meta: Record<string, unknown>
+}
+
+export type BackupJobStatus = {
+  job: BackupJob
+  /** The drill's entry carries drill_of_run_id and the restored counts in meta
+   *  — that row IS the "last drill" highlight. */
+  last_success: BackupRun | null
+  /** Excludes operational outcomes (shutdown, lock_busy, …) — the same number
+   *  the agent's alert threshold compares against. */
+  consecutive_failures: number
+}
+
+export type BackupStatusResponse = {
+  jobs: BackupJobStatus[]
+  runs: BackupRun[]
+}
+
+/** Query key for one history page. `before` is the keyset cursor; 0 = head. */
+export function backupStatusQueryKey(before = 0) {
+  return ['admin', 'backup', before] as const
+}
+
+export async function fetchBackupStatus(
+  params: { before?: number } = {},
+): Promise<BackupStatusResponse> {
+  const { data } = await http.get<BackupStatusResponse>('/api/admin/backup/runs', { params })
+  return data
+}
+
+/**
+ * Enqueues a manual run. Only ever a 'requested' row the agent claims on its
+ * next poll — the web process never executes a backup and never holds the S3
+ * credentials. 409 `backup_run_pending` while one is already queued/running.
+ */
+export async function requestBackupRun(
+  job: BackupJob,
+): Promise<{ id: number; job: BackupJob; status: 'requested' }> {
+  const { data } = await http.post<{ id: number; job: BackupJob; status: 'requested' }>(
+    '/api/admin/backup/run',
+    { job },
+  )
+  return data
+}
+
 export async function emailAvailable(
   email: string,
   signal: AbortSignal,

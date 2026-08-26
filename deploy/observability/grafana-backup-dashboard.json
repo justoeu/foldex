@@ -1,0 +1,228 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "The Prometheus instance scraping the backup agent's :9099 (see prometheus-scrape.example.yml)",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "title": "Foldex — Operational Backups",
+  "uid": "foldex-backup",
+  "description": "Health of the backup agent (ADR-43): freshness, duration, size, failures and drill results per job. Silence never looks like health — the alert rules in prometheus-alerts.yml carry the absent() half.",
+  "tags": ["foldex", "backup"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-7d", "to": "now" },
+  "refresh": "5m",
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "hide": 0,
+        "refresh": 1,
+        "current": {}
+      }
+    ]
+  },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Age of last successful run",
+      "description": "time() minus foldex_backup_last_success_timestamp_seconds, per job. The dump alert threshold is 26h; a job that never succeeded serves no sample at all and shows No data here — which is why the absent() alert exists.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - foldex_backup_last_success_timestamp_seconds",
+          "legendFormat": "{{job}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false },
+        "orientation": "horizontal",
+        "textMode": "value_and_name",
+        "colorMode": "background"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 86400 },
+              { "color": "red", "value": 93600 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Consecutive failures",
+      "description": "foldex_backup_consecutive_failures excludes operational outcomes (shutdown, lock_busy, stale_claim, restore_in_flight) — a non-zero value means the job itself is broken. The alert fires at 2.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "foldex_backup_consecutive_failures",
+          "legendFormat": "{{job}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false },
+        "orientation": "horizontal",
+        "textMode": "value_and_name",
+        "colorMode": "background"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Run duration",
+      "description": "foldex_backup_last_run_duration_seconds per job. A dump that suddenly takes minutes instead of seconds is a database growing — or an S3 target degrading.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "foldex_backup_last_run_duration_seconds",
+          "legendFormat": "{{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "spanNulls": true, "fillOpacity": 8 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Artifact size",
+      "description": "foldex_backup_artifact_bytes per job (ciphertext size for dump/user_zip, bytes copied for mirror). Growth is normal; a sudden drop to near zero is a dump of an empty database that still 'succeeded'.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "foldex_backup_artifact_bytes",
+          "legendFormat": "{{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "spanNulls": true, "fillOpacity": 8 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Runs per day, by outcome",
+      "description": "increase(foldex_backup_runs_total[1d]) split by job and status. Every run lands here whatever its outcome — the counter pair is what makes a crash-looping agent visible as runs without successes.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(foldex_backup_runs_total[1d])",
+          "legendFormat": "{{job}} · {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "bars",
+            "stacking": { "mode": "normal", "group": "A" },
+            "fillOpacity": 60
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*failed.*" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": ".*succeeded.*" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "type": "state-timeline",
+      "title": "Job health timeline",
+      "description": "Green while foldex_backup_consecutive_failures is 0, red otherwise — the at-a-glance answer to 'when did this job stop working, and for how long'. Table-level history (which run, which artifact, which error) lives in the admin UI, which reads backup_run itself.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 14 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clamp_max(foldex_backup_consecutive_failures, 1)",
+          "legendFormat": "{{job}}"
+        }
+      ],
+      "options": {
+        "showValue": "never",
+        "rowHeight": 0.85,
+        "mergeValues": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "fillOpacity": 80 },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "healthy", "color": "green" },
+                "1": { "text": "failing", "color": "red" }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

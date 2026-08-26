@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -185,10 +186,20 @@ func TestNewReadOnly_RefusesAMissingBucketInsteadOfCreatingIt(t *testing.T) {
 		t.Fatal("a bucket that does not exist must refuse — silently creating it is the empty mirror that succeeds forever")
 	}
 
-	// And an existing bucket opens normally.
-	created, err := storage.New(ctx, storage.Config{
-		Endpoint: ep, AccessKey: user, SecretKey: pass, Bucket: "real-bucket",
-	}, discardLogger())
+	// And an existing bucket opens normally. The create retries briefly:
+	// RustFS answers its health endpoint before its storage quorum settles,
+	// and under a loaded daemon the first BucketExists can land in that gap.
+	var created *storage.Client
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		created, err = storage.New(ctx, storage.Config{
+			Endpoint: ep, AccessKey: user, SecretKey: pass, Bucket: "real-bucket",
+		}, discardLogger())
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Second)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

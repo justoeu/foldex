@@ -17,6 +17,11 @@ import (
 // RequiredSchemaVersion is the migration the agent needs (backup_run). The
 // agent never runs migrations — the backend owns the schema — so boot fails
 // with an instruction instead of a missing-table error mid-job.
+//
+// Deliberately NOT db.RequiredSchemaVersion (41): that number tracks what the
+// BACKEND reads, and moves whenever any backend query gains a dependency. The
+// agent only needs backup_run itself, and must keep booting against a database
+// whose backend has not migrated past 000040 yet.
 const RequiredSchemaVersion = 40
 
 const janitorInterval = time.Hour

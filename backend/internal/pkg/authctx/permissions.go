@@ -37,6 +37,14 @@ const (
 	// Handing the instance to someone else. Owner-only by construction: it is
 	// the one action whose whole purpose is to change who holds every other one.
 	PermInstanceTransfer Permission = "instance.transfer"
+
+	// Reading the operational backup surface (ADR-43): backup_run history,
+	// per-job status and the manual "run now" trigger — which only ENQUEUES a
+	// requested row; the agent holding the S3 credentials is what executes.
+	// Named under instance.* rather than backup.*, because backup.* in this
+	// file means the caller's OWN per-user archive (ADR-20) and this is the
+	// whole instance's disaster-recovery state.
+	PermInstanceBackupRead Permission = "instance.backup"
 )
 
 // AllPermissions lists every permission in display order.
@@ -59,6 +67,7 @@ var AllPermissions = []Permission{
 	PermPolicyRead,
 	PermPolicyWrite,
 	PermInstanceTransfer,
+	PermInstanceBackupRead,
 }
 
 // AllRoles lists every role from most to least privileged, in display order.
@@ -70,20 +79,21 @@ var AllRoles = []Role{RoleOwner, RoleAdmin, RoleEditor, RoleViewer}
 // an unknown role is powerless rather than unconstrained.
 var rolePermissions = map[Role]map[Permission]bool{
 	RoleOwner: {
-		PermContentRead:      true,
-		PermContentWrite:     true,
-		PermBackupExport:     true,
-		PermBackupRestore:    true,
-		PermImportRun:        true,
-		PermUsersRead:        true,
-		PermUsersWrite:       true,
-		PermRolesAssign:      true,
-		PermInvitesRead:      true,
-		PermInvitesWrite:     true,
-		PermAuditRead:        true,
-		PermPolicyRead:       true,
-		PermPolicyWrite:      true,
-		PermInstanceTransfer: true,
+		PermContentRead:        true,
+		PermContentWrite:       true,
+		PermBackupExport:       true,
+		PermBackupRestore:      true,
+		PermImportRun:          true,
+		PermUsersRead:          true,
+		PermUsersWrite:         true,
+		PermRolesAssign:        true,
+		PermInvitesRead:        true,
+		PermInvitesWrite:       true,
+		PermAuditRead:          true,
+		PermPolicyRead:         true,
+		PermPolicyWrite:        true,
+		PermInstanceTransfer:   true,
+		PermInstanceBackupRead: true,
 	},
 	RoleAdmin: {
 		PermContentRead:   true,
@@ -98,6 +108,10 @@ var rolePermissions = map[Role]map[Permission]bool{
 		PermInvitesWrite:  true,
 		PermAuditRead:     true,
 		PermPolicyRead:    true,
+		// An admin sees whether the instance's backups run and may trigger one:
+		// that is operating the instance, not rewriting its rules — the trigger
+		// only enqueues, and the agent's credentials never pass through here.
+		PermInstanceBackupRead: true,
 		// No PermPolicyWrite and no PermInstanceTransfer: an admin manages
 		// people, the owner sets the rules those people are managed under. An
 		// admin who could rewrite the password policy or the OAuth allowlist

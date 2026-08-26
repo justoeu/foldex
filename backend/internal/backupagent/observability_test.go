@@ -20,11 +20,23 @@ import (
 // for: it exists to catch the agent that never came up, and it can only do
 // that if the series name it watches is the one a healthy agent serves.
 func TestAlertRulesOnlyReferenceSeriesTheAgentServes(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "observability", "prometheus-alerts.yml"))
-	require.NoError(t, err, "the alert rules ship in-repo; a moved file must move this test with it")
+	assertObservabilityFileOnlyReferencesServedSeries(t, "prometheus-alerts.yml")
+}
+
+// TestDashboardOnlyReferencesSeriesTheAgentServes extends the same pin to the
+// Grafana dashboard JSON — a renamed series turns a panel into a permanent
+// "No data", which on a backup dashboard reads as the agent being down.
+func TestDashboardOnlyReferencesSeriesTheAgentServes(t *testing.T) {
+	assertObservabilityFileOnlyReferencesServedSeries(t, "grafana-backup-dashboard.json")
+}
+
+func assertObservabilityFileOnlyReferencesServedSeries(t *testing.T, file string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "observability", file))
+	require.NoError(t, err, "%s ships in-repo; a moved file must move this test with it", file)
 
 	referenced := regexp.MustCompile(`foldex_backup_[a-z_]+`).FindAllString(string(raw), -1)
-	require.NotEmpty(t, referenced, "no foldex series in the rules file means the file is not the one this test guards")
+	require.NotEmpty(t, referenced, "no foldex series in %s means the file is not the one this test guards", file)
 
 	m := NewMetrics()
 	// Touch every job label so all declared series render.
@@ -39,6 +51,6 @@ func TestAlertRulesOnlyReferenceSeriesTheAgentServes(t *testing.T) {
 
 	for _, series := range referenced {
 		assert.Contains(t, served, series,
-			"alert rule references %q but the agent registry does not serve it", series)
+			"%s references %q but the agent registry does not serve it", file, series)
 	}
 }

@@ -31,6 +31,9 @@ const AuditSection = lazy(() =>
 const PolicySection = lazy(() =>
   import('../components/admin/PolicySection').then((m) => ({ default: m.PolicySection })),
 )
+const BackupSection = lazy(() =>
+  import('../components/admin/BackupSection').then((m) => ({ default: m.BackupSection })),
+)
 const RolesMatrixSection = lazy(() =>
   import('../components/admin/RolesMatrix').then((m) => ({
     // Wrapped in the card the detail pages use, so the matrix looks the same
@@ -65,18 +68,18 @@ type FolderPwMode = 'reset' | 'remove'
 // detail page reached from a tile, with a back affordance to the grid.
 type HubSection =
   | 'overview' | 'profile' | 'account' | 'security' | 'tokens' | 'master' | 'locked'
-  | 'admin' | 'roles' | 'audit' | 'policy'
+  | 'admin' | 'roles' | 'audit' | 'policy' | 'backup'
 type HubScope = 'personal' | 'admin'
 
 const HUB_SECTIONS: readonly HubSection[] = [
   'overview', 'profile', 'account', 'security', 'tokens', 'master', 'locked',
-  'admin', 'roles', 'audit', 'policy',
+  'admin', 'roles', 'audit', 'policy', 'backup',
 ]
 
 // Every section that lives under the administration scope. A non-admin who
 // deep-links into one is bounced to the overview by resolveHubView, mirroring
 // the server's 404 on the whole /api/admin surface.
-const ADMIN_SECTIONS: readonly HubSection[] = ['admin', 'roles', 'audit', 'policy']
+const ADMIN_SECTIONS: readonly HubSection[] = ['admin', 'roles', 'audit', 'policy', 'backup']
 
 function isHubSection(value: string | undefined): value is HubSection {
   return value !== undefined && (HUB_SECTIONS as readonly string[]).includes(value)
@@ -128,6 +131,7 @@ const SECTION_HEAD: Record<CanonicalSection, { kicker: string; title: string }> 
   roles: { kicker: 'settings.sec_roles_kicker', title: 'settings.sec_roles_title' },
   audit: { kicker: 'settings.sec_audit_kicker', title: 'settings.sec_audit_title' },
   policy: { kicker: 'settings.sec_policy_kicker', title: 'settings.sec_policy_title' },
+  backup: { kicker: 'settings.sec_backup_kicker', title: 'settings.sec_backup_title' },
 }
 
 /**
@@ -200,6 +204,7 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
               {effectiveSection === 'roles' && <RolesMatrixSection />}
               {effectiveSection === 'audit' && <AuditSection />}
               {effectiveSection === 'policy' && <PolicySection />}
+              {effectiveSection === 'backup' && <BackupSection />}
             </Suspense>
           )}
         </div>

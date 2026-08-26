@@ -1506,4 +1506,7 @@ próprio, off por default), com imagem derivada de `postgres:18.4-alpine` — o 
   pgBackRest entraria como serviço irmão sem tocar neste desenho.
 
 Detalhe completo em [`docs/SDD-OPS-BACKUP.md`](./SDD-OPS-BACKUP.md). Status: **Aceito ·
-SDD Draft v1.0 · implementação faseada em 5 PRs (§15 do SDD)**.
+implementado 5/5 PRs (§15 do SDD)** — PR5 entregou o endpoint admin
+(`internal/backupstatus`, keyset por `before`), a permissão `instance.backup`
+(migração 000041, bump de `RequiredSchemaVersion` 37→41), a banda no settings hub e o
+dashboard Grafana; pendência remanescente: alerta por e-mail via outbox (§9.3 do SDD).

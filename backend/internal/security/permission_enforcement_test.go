@@ -36,20 +36,21 @@ func TestEveryPermissionIsEnforcedSomewhere(t *testing.T) {
 	// rather than string literals: every mount site spells these as
 	// authctx.PermX, and a search for "content.write" would miss all of them.
 	constName := map[authctx.Permission]string{
-		authctx.PermContentRead:      "PermContentRead",
-		authctx.PermContentWrite:     "PermContentWrite",
-		authctx.PermBackupExport:     "PermBackupExport",
-		authctx.PermBackupRestore:    "PermBackupRestore",
-		authctx.PermImportRun:        "PermImportRun",
-		authctx.PermUsersRead:        "PermUsersRead",
-		authctx.PermUsersWrite:       "PermUsersWrite",
-		authctx.PermRolesAssign:      "PermRolesAssign",
-		authctx.PermInvitesRead:      "PermInvitesRead",
-		authctx.PermInvitesWrite:     "PermInvitesWrite",
-		authctx.PermAuditRead:        "PermAuditRead",
-		authctx.PermPolicyRead:       "PermPolicyRead",
-		authctx.PermPolicyWrite:      "PermPolicyWrite",
-		authctx.PermInstanceTransfer: "PermInstanceTransfer",
+		authctx.PermContentRead:        "PermContentRead",
+		authctx.PermContentWrite:       "PermContentWrite",
+		authctx.PermBackupExport:       "PermBackupExport",
+		authctx.PermBackupRestore:      "PermBackupRestore",
+		authctx.PermImportRun:          "PermImportRun",
+		authctx.PermUsersRead:          "PermUsersRead",
+		authctx.PermUsersWrite:         "PermUsersWrite",
+		authctx.PermRolesAssign:        "PermRolesAssign",
+		authctx.PermInvitesRead:        "PermInvitesRead",
+		authctx.PermInvitesWrite:       "PermInvitesWrite",
+		authctx.PermAuditRead:          "PermAuditRead",
+		authctx.PermPolicyRead:         "PermPolicyRead",
+		authctx.PermPolicyWrite:        "PermPolicyWrite",
+		authctx.PermInstanceTransfer:   "PermInstanceTransfer",
+		authctx.PermInstanceBackupRead: "PermInstanceBackupRead",
 	}
 	// Locked from BOTH sides: a permission added to the vocabulary without an
 	// entry here fails, so the map cannot quietly stop covering the set.
