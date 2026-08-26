@@ -329,10 +329,10 @@ services:
       # While on, the RUSTFS_* source credentials below are required at boot —
       # a mirror that silently never copies is the mailer incident again.
       BACKUP_MIRROR_INTERVAL_MIN: ${BACKUP_MIRROR_INTERVAL_MIN:-360}
-      # Mirror SOURCE: the same RustFS the backend writes (read path only —
-      # the mirror never deletes at the origin and deletions never propagate
-      # to the backup copy). The external target stays the only place the
-      # BACKUP_S3_* credentials go.
+      # Source RustFS, read by the mirror and by user_zip's Export (read path
+      # only — the agent never writes or deletes at the origin, and deletions
+      # never propagate to the backup copy). The external target stays the
+      # only place the BACKUP_S3_* credentials go.
       RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-rustfs:9000}
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-foldex}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
@@ -349,13 +349,6 @@ services:
       # the same Postgres and source-RustFS I/O.
       BACKUP_USERZIP_AT: ${BACKUP_USERZIP_AT:-}
       BACKUP_RETAIN_USERZIP: ${BACKUP_RETAIN_USERZIP:-7}
-      # Source RustFS, read by user_zip's Export only (same bucket the
-      # backend writes; the agent never writes to it).
-      RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-rustfs:9000}
-      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-foldex}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
-      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-foldex-screenshots}
-      RUSTFS_USE_SSL: ${RUSTFS_USE_SSL:-false}
       # age public keys — the upload path carries no secret. The private
       # identity is needed only by the restore drill and never ships in an
       # image (same rule as the VAPID key).

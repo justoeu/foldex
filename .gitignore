@@ -54,3 +54,4 @@ docs/audit/
 # the backend and mailer; its contents are local material, never committed.
 certs/*
 !certs/.gitkeep
+docker-compose.override.yml

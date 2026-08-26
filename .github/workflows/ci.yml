@@ -176,6 +176,14 @@ jobs:
         # directory that does not exist and Docker created it empty — the
         # documented quickstart command applied nothing and said "no change".
         run: bash scripts/test-make-migrate-path.sh
+      - name: every compose file parses
+        # `docker compose config` is the only tool that proves a compose file
+        # loads, and nothing ran it: v2.16.0 shipped with a duplicated env
+        # block in the backup service and the MAIN compose file refused to
+        # parse while CI stayed green — every textual guard greps straight
+        # past a duplicate YAML key. --no-interpolate keeps it a parse check
+        # (the ${VAR:?} gates in services.yml must not fire on a bare runner).
+        run: bash scripts/test-compose-config.sh
       - name: nginx security headers survive on every response
         # Boots the real config and makes the requests. Reading the file is not
         # enough: nginx drops every inherited add_header the moment a location
