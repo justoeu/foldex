@@ -32,6 +32,7 @@ var ErrAlreadyRunning = errors.New("backupagent: a run of this job is already re
 // alerts.
 const (
 	ReasonDumpFailed    = "pg_dump_failed"
+	ReasonUserZipFailed = "user_zip_failed"
 	ReasonEncryptFailed = "encrypt_failed"
 	ReasonSpoolFailed   = "spool_failed"
 	ReasonUploadFailed  = "upload_failed"

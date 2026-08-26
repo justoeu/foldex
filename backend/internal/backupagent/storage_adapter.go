@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"foldex/internal/backup"
 	"foldex/internal/storage"
 )
 
@@ -33,4 +34,37 @@ func (u storageUploader) WalkObjects(ctx context.Context, prefix string, visit f
 
 func (u storageUploader) DeleteObjects(ctx context.Context, keys []string) error {
 	return u.c.DeleteObjects(ctx, keys)
+}
+
+// NewBackupSourceBucket adapts *storage.Client to backup.StorageBucket so the
+// agent can build a backup.Service over the SOURCE RustFS for user_zip — the
+// same shim cmd/server keeps privately (backupStorageAdapter), duplicated here
+// on purpose: exporting it from main is impossible and the storage package
+// staying dependency-free of backup is a deliberate boundary.
+func NewBackupSourceBucket(c *storage.Client) backup.StorageBucket {
+	return backupSourceBucket{c: c}
+}
+
+type backupSourceBucket struct{ c *storage.Client }
+
+func (b backupSourceBucket) WalkObjects(ctx context.Context, prefix string, visit func(backup.ObjectInfo) error) error {
+	return b.c.WalkObjects(ctx, prefix, func(object storage.ObjectInfo) error {
+		return visit(backup.ObjectInfo{Key: object.Key, Size: object.Size})
+	})
+}
+
+func (b backupSourceBucket) OpenObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	return b.c.OpenObject(ctx, key)
+}
+
+func (b backupSourceBucket) PutObjectStream(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
+	return b.c.PutObjectStream(ctx, key, r, size, contentType)
+}
+
+func (b backupSourceBucket) ExistingObjects(ctx context.Context, keys []string) (map[string]bool, error) {
+	return b.c.ExistingObjects(ctx, keys)
+}
+
+func (b backupSourceBucket) DeleteObjects(ctx context.Context, keys []string) error {
+	return b.c.DeleteObjects(ctx, keys)
 }

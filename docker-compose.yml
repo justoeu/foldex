@@ -342,6 +342,20 @@ services:
       BACKUP_RETAIN_WEEKLY: ${BACKUP_RETAIN_WEEKLY:-4}
       BACKUP_RETAIN_MONTHLY: ${BACKUP_RETAIN_MONTHLY:-6}
       BACKUP_RETENTION_MODE: ${BACKUP_RETENTION_MODE:-agent}
+      # user_zip: per-user product ZIPs (the same /api/backup/export archive,
+      # no auth material — INV-105), encrypted and shipped nightly to
+      # backups/users/<id>/. Opt-in: empty anchor keeps the job off. It runs
+      # at night on purpose — each Export competes with the live instance for
+      # the same Postgres and source-RustFS I/O.
+      BACKUP_USERZIP_AT: ${BACKUP_USERZIP_AT:-}
+      BACKUP_RETAIN_USERZIP: ${BACKUP_RETAIN_USERZIP:-7}
+      # Source RustFS, read by user_zip's Export only (same bucket the
+      # backend writes; the agent never writes to it).
+      RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-rustfs:9000}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-foldex}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
+      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-foldex-screenshots}
+      RUSTFS_USE_SSL: ${RUSTFS_USE_SSL:-false}
       # age public keys — the upload path carries no secret. The private
       # identity is needed only by the restore drill and never ships in an
       # image (same rule as the VAPID key).

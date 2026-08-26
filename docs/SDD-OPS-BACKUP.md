@@ -206,6 +206,7 @@ continua vindo de `POSTGRES_*` (INV-101); RustFS de origem, de `RUSTFS_*`.
 | `BACKUP_USERZIP_AT` | vazio = desligado | opt-in |
 | `BACKUP_MIRROR_INTERVAL_MIN` | `360` | intervalo, não âncora — segue a convenção int do repo |
 | `BACKUP_RETAIN_DAILY` / `_WEEKLY` / `_MONTHLY` | `7` / `4` / `6` | GFS (§7) |
+| `BACKUP_RETAIN_USERZIP` | `7` | últimos N ZIPs por usuário (§5.4); só em `RETENTION_MODE=agent` |
 | `BACKUP_RETENTION_MODE` | `agent` | `agent` \| `bucket` (§7) |
 | `BACKUP_AGE_RECIPIENTS` | — | chaves públicas age, separadas por vírgula (§8) |
 | `BACKUP_AGE_IDENTITY_FILE` | — | só o drill precisa; padrão `keyfile`, sem autogenerate |
@@ -329,9 +330,21 @@ cifra e sobe para `backups/users/<uid>/<ts>.zip.age`. Retenção própria simple
 do mirror (Export lê o bucket). Serializado com os demais jobs pelo
 `InstanceBackupAdvisoryLockKey` — e, por ser outro processo, nunca compete pelo slot HTTP.
 
+Nota: o `.zip.age` cifra com os recipients do OPERADOR — o fluxo de entrega ao usuário é o operador decifrar (`age -d`) e entregar o `.zip`, que aí sim restaura via `/api/backup/restore` sem mais intervenção; o usuário não decifra sozinho, por desenho (uma chave por usuário seria um segundo sistema de chaves inteiro).
+
 Opt-in (`BACKUP_USERZIP_AT` vazio desliga): o dump da instância já contém tudo; o valor do
 user_zip é oferecer o formato restaurável PELO USUÁRIO (via `/api/backup/restore`) sem
-intervenção do operador.
+intervenção do operador. Opt-in exige as `RUSTFS_*` do bucket de origem (boot fail-fast
+sem elas); um agente sem o job configurado nem constrói o client RustFS.
+
+Semântica de falha (PR4): UM `backup_run` para o job inteiro. Falha de um usuário não
+aborta os demais; a deferência ao restore (probe por usuário) pula só o ciclo daquele
+usuário. O run só falha (`user_zip_failed`) quando a listagem de usuários falha ou quando
+TODOS os exports tentados falham. `meta` registra `users`, `bytes_total` e, quando
+existirem, `failed_users` / `deferred_users` / `prune_error` — é o que a superfície admin
+(PR5) renderiza. A chave é `backups/users/<uid>/<ts>.zip[.age]`, timestamp UTC de largura
+fixa: ordem lexicográfica É ordem cronológica, e a retenção poda sem parse de data,
+nunca cruzando o prefixo de outro usuário nem tocando chave que o job não escreveu.
 
 ---
 

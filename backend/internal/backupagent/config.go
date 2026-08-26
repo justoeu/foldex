@@ -38,8 +38,9 @@ type Config struct {
 	S3SecretKey string
 	S3UseSSL    bool
 
-	// RustFS source (mirror job). Same RUSTFS_* names the backend reads —
-	// one spelling per credential across the stack (INV-101's spirit).
+	// RustFS source (mirror and user_zip jobs). Same RUSTFS_* names the
+	// backend reads — one spelling per credential across the stack, because
+	// it IS the same bucket (INV-101's spirit).
 	RustFSEndpoint  string
 	RustFSAccessKey string
 	RustFSSecretKey string
@@ -49,6 +50,7 @@ type Config struct {
 	// Scheduling.
 	DumpAt            Anchor // zero Anchor = job disabled
 	DrillAt           Anchor // restore drill; zero Anchor = job disabled
+	UserZipAt         Anchor // per-user product ZIPs; zero Anchor = job disabled
 	MirrorIntervalMin int    // 0 = mirror off
 	RequestedPollSec  int
 	StaleRunMin       int
@@ -57,6 +59,7 @@ type Config struct {
 	RetainDaily   int
 	RetainWeekly  int
 	RetainMonthly int
+	RetainUserZip int    // newest N archives kept per user (user_zip)
 	RetentionMode string // "agent" | "bucket"
 
 	// Encryption.
@@ -128,6 +131,7 @@ func Load() (Config, error) {
 		RetainDaily:   envInt("BACKUP_RETAIN_DAILY", 7),
 		RetainWeekly:  envInt("BACKUP_RETAIN_WEEKLY", 4),
 		RetainMonthly: envInt("BACKUP_RETAIN_MONTHLY", 6),
+		RetainUserZip: envInt("BACKUP_RETAIN_USERZIP", 7),
 		RetentionMode: envOr("BACKUP_RETENTION_MODE", "agent"),
 
 		AllowPlaintext: envBool("BACKUP_ALLOW_PLAINTEXT", false),
@@ -181,6 +185,20 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("backupagent: BACKUP_DRILL_AT: %w", err)
 		}
 		c.DrillAt = anchor
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("BACKUP_USERZIP_AT")); raw != "" {
+		anchor, err := ParseAnchor(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("backupagent: BACKUP_USERZIP_AT: %w", err)
+		}
+		c.UserZipAt = anchor
+	}
+	// The user_zip Export reads the caller's objects from the SOURCE bucket,
+	// so opting into the job without its credentials is the same half-
+	// configured boot the S3 checks above refuse.
+	if c.UserZipAt.Enabled() && strings.TrimSpace(c.RustFSSecretKey) == "" {
+		return Config{}, fmt.Errorf("backupagent: BACKUP_USERZIP_AT is set but RUSTFS_SECRET_KEY is empty — user_zip reads the source bucket and refuses to boot half-configured")
 	}
 
 	if c.RetentionMode != "agent" && c.RetentionMode != "bucket" {

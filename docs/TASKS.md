@@ -440,3 +440,33 @@ media a biblioteca padrão. Virou razão contra o framebuffer decodificado
 (`dim*dim*4 / 50`), que é o que o comentário sempre disse significar e sobrevive à
 troca de encoder. Sem isso, o §1 ("sempre no latest stable") entraria em conflito com
 o gate no dia do bump para 1.27.
+
+### ADR-43 PR4 — job `user_zip`: o ZIP per-user agendado (2026-08-26)
+
+O quarto job do backup-agent existe: `BACKUP_USERZIP_AT` (âncora `HH:MM`, vazio = off)
+faz o agente rodar `backup.Service.Export` para cada `app_user` ativo, cifrar com age,
+tirar sha256 do ciphertext e subir em `backups/users/<uid>/<ts>.zip.age`, com retenção
+simples dos últimos `BACKUP_RETAIN_USERZIP=7` por usuário (só em `RETENTION_MODE=agent`).
+
+- **Um run para o job inteiro, falha por usuário isolada.** `meta` = `{users,
+  bytes_total, failed_users?, deferred_users?, prune_error?}`; o run só falha
+  (`user_zip_failed`) se a listagem falhar ou TODOS os exports tentados falharem.
+- **Deferência ao restore por usuário** (`restoreInFlight`, INV-104): probe antes de
+  CADA export; ocupado ⇒ o usuário pula o ciclo e entra em `deferred_users`, nunca em
+  `failed_users`.
+- **INV-105 de graça**: o Export já exclui auth — o agente não adiciona nem remove nada.
+- **Chave com timestamp UTC de largura fixa** ⇒ ordem lexicográfica é cronológica; a
+  retenção poda sem parse de data e ignora qualquer chave que o job não escreveu
+  (`isUserZipKey`). `RetainUserZip < 1` desliga a poda — zero mal configurado não pode
+  significar "apague todos os backups de todos os usuários".
+- **Seams para unit** (`export`, `listActive`, `restoreBusy`): o pipeline
+  spool→age→sha→upload→retenção→deferência é provado sem Postgres nem bucket; a
+  integração roda o Export REAL com 2 usuários semeados + origem vazia e prova que cada
+  ZIP decifra com age padrão, abre com `archive/zip` e o manifest conta 1 link do DONO.
+- **Construção opt-in**: `RegisterJob` no Agent (registro genérico — PR3 reusa);
+  `cmd/backup-agent` só constrói o client RustFS de origem quando a âncora está setada, e
+  o `Load` recusa âncora sem `RUSTFS_SECRET_KEY` (boot fail-fast, nunca meio-configurado).
+- **Pendência registrada**: o tooling desta sessão bloqueia `.env*` — as novas vars
+  (`BACKUP_USERZIP_AT`, `BACKUP_RETAIN_USERZIP`, `RUSTFS_*` no serviço backup) estão no
+  `docker-compose.yml` e documentadas no README/SDD, mas o `.env.example` precisa ganhar
+  o bloco correspondente num follow-up manual.
