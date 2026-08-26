@@ -288,6 +288,54 @@ services:
     networks:
       - foldex
 
+  backup:
+    # Operational backup agent (ADR-43, docs/SDD-OPS-BACKUP.md). Off by
+    # default — enable with COMPOSE_PROFILES=backup in the SAME edit that
+    # fills the BACKUP_* variables. Off-by-default cuts both ways (the mailer
+    # taught this): a stack without the profile has NO scheduled backups, and
+    # the admin UI's backup band plus the Prometheus absent() alert exist
+    # precisely so that state is visible instead of looking healthy.
+    profiles: ["backup"]
+    # Its own image target (postgres-based), same repository: the drill needs
+    # a whole ephemeral Postgres server, which the backend image cannot carry.
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-2.11.0}-backup-agent
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: backup-agent
+    restart: unless-stopped
+    environment:
+      # This is the ONLY process that holds the external bucket's credentials.
+      # The backend can request a run (an INSERT into backup_run), never
+      # perform one — keep BACKUP_S3_* out of the backend service always.
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-foldex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-foldex}
+      POSTGRES_DB: ${POSTGRES_DB:-foldex}
+      POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-disable}
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-us-east-1}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+      BACKUP_S3_USE_SSL: ${BACKUP_S3_USE_SSL:-true}
+      BACKUP_DUMP_AT: ${BACKUP_DUMP_AT:-03:30}
+      BACKUP_RETAIN_DAILY: ${BACKUP_RETAIN_DAILY:-7}
+      BACKUP_RETAIN_WEEKLY: ${BACKUP_RETAIN_WEEKLY:-4}
+      BACKUP_RETAIN_MONTHLY: ${BACKUP_RETAIN_MONTHLY:-6}
+      BACKUP_RETENTION_MODE: ${BACKUP_RETENTION_MODE:-agent}
+      # age public keys — the upload path carries no secret. The private
+      # identity is needed only by the restore drill (PR2) and never ships in
+      # an image (same rule as the VAPID key).
+      BACKUP_AGE_RECIPIENTS: ${BACKUP_AGE_RECIPIENTS:-}
+      BACKUP_ALLOW_PLAINTEXT: ${BACKUP_ALLOW_PLAINTEXT:-0}
+      BACKUP_METRICS_ADDR: ${BACKUP_METRICS_ADDR:-:9099}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      TZ: ${TZ:-UTC}
+    networks:
+      - foldex
+
   web:
     # FOLDEX_VERSION overrides the current release fallback (same tag as backend).
     image: justoeu/foldex-web:${FOLDEX_VERSION:-2.11.0}

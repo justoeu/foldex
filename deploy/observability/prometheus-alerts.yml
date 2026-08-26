@@ -1,0 +1,51 @@
+# Alert rules for the Foldex operational backup agent (ADR-43).
+# Import into your Prometheus (rule_files) or Grafana-managed alerts.
+# Every series here is served by the agent's /metrics; the Go test
+# TestAlertRulesOnlyReferenceSeriesTheAgentServes fails the build if one of
+# these names drifts from the registry — an alert on a dead series is silence
+# wearing a green badge.
+groups:
+  - name: foldex-backup
+    rules:
+      # The one that catches the agent that NEVER came up (profile not
+      # enabled, crash-loop, scrape misconfigured). A push pipeline cannot
+      # express this; absent() over a pull is why Prometheus is the primary
+      # channel.
+      - alert: FoldexBackupAgentAbsent
+        expr: absent(foldex_backup_last_success_timestamp_seconds{job="dump"})
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No backup agent metrics — agent down, never started, or scrape broken"
+          description: "The dump job has no last-success series at all. Check COMPOSE_PROFILES=backup, the agent container logs, and the scrape config."
+
+      # 26h = the daily anchor plus generous slack for catch-up jitter.
+      - alert: FoldexBackupDumpStale
+        expr: time() - foldex_backup_last_success_timestamp_seconds{job="dump"} > 93600
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Last successful database dump is older than 26h"
+          description: "The daily dump has not succeeded in over a day. See the backup band in the admin settings hub, or backup_run.last_error."
+
+      - alert: FoldexBackupConsecutiveFailures
+        expr: foldex_backup_consecutive_failures >= 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backup job {{ $labels.job }} failed {{ $value }} times in a row"
+          description: "Two consecutive failures of the same job is a pattern, not a blip. backup_run.last_error carries the normalized reason."
+
+      # Enabled from PR2 on (drill job). Harmless before: the series is absent
+      # and this rule only fires on a PRESENT, stale series.
+      - alert: FoldexBackupDrillStale
+        expr: time() - foldex_backup_last_success_timestamp_seconds{job="drill"} > 691200
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Last successful restore drill is older than 8 days"
+          description: "A dump that has not been drilled is a hope, not a backup. Check the drill job's backup_run rows."

@@ -27,6 +27,15 @@ import (
 // Exported so integration tests can hold the lock and assert 409.
 const RestoreAdvisoryLockKey int64 = 0x464F4C4458525354
 
+// InstanceBackupAdvisoryLockKey serializes the operational backup agent's jobs
+// (ADR-43) against each other across processes — 'FOLDXBKP' in the same
+// mnemonic scheme. It lives here rather than in the agent package so both
+// sides of the coordination read their keys from one file: the agent also
+// PROBES RestoreAdvisoryLockKey before jobs that read the bucket, because a
+// per-user restore in flight leaves RustFS mid-write (the database is
+// transactional, the bucket is not — INV-104).
+const InstanceBackupAdvisoryLockKey int64 = 0x464F4C4458424B50
+
 // StorageBucket is the contract the backup module needs from object storage.
 // Kept narrow so tests can mock it without standing up RustFS.
 type StorageBucket interface {

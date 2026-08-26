@@ -126,6 +126,8 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
   ↳ Montado num grupo de rotas, perdeu em silêncio toda a metade autenticada de `/api/auth`.
   ↳ `user.name` do `otelpgx` é o PAPEL do Postgres: ao lado de `user.id` vira "requests por usuário" respondendo `user_foldex` para 100% do tráfego.
 
+- **As credenciais do S3 externo existem SÓ no processo do backup-agent, e o dump operacional é cifrado por DEFAULT** → [INV-171](docs/INVARIANTS.md#inv-171) | guard: `TestLoad_PlaintextIsAnExplicitOptOutNeverAFallback`, `TestDumpRun_ShipsAnEncryptedVerifiableArtifact`
+- **Um job de backup roda no máximo uma vez por vez, e a exclusão tem TRÊS camadas que se cobrem** → [INV-172](docs/INVARIANTS.md#inv-172) | guard: `TestBegin_TheRunningSlotIsExclusivePerJob`, `TestExpireStale_FreesTheSlotADeadAgentHeld`
 ### 4.2 Contratos de dados — consulte ao tocar em schema, query ou payload
 
 - **`tag.name` is unique PER USER** → [INV-052](docs/INVARIANTS.md#inv-052)

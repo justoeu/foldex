@@ -449,6 +449,14 @@ Uploads têm limite comprimido de 2 GiB. Antes de validação ou restore tocar o
 
 Design completo: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 
+## Backups agendados da instância (operacional)
+
+O ZIP acima é um recurso de produto e deliberadamente não carrega dados de login — ele não ressuscita uma instância. Para disaster recovery existe um **agente de backup** opcional (`COMPOSE_PROFILES=backup`): um container dedicado que roda um `pg_dump` completo do banco toda noite, cifra com [age](https://age-encryption.org) (obrigatório por default — a chave pública do operador cifra, e só a identidade privada guardada FORA do host decifra) e envia para qualquer bucket S3-compatível externo, com retenção GFS (7 diários / 4 semanais / 6 mensais por default, ou modo endurecido via lifecycle do bucket com credencial sem delete).
+
+Cada execução fica registrada na tabela `backup_run`, e o agente serve métricas Prometheus (`/metrics`, mesmo `METRICS_TOKEN` do backend) com alert rules prontas para Grafana/Prometheus em [`deploy/observability/`](deploy/observability/) — incluindo uma regra `absent()` que pega o agente que nunca subiu. Configuração pelo bloco `BACKUP_*` do `.env.example`. Espelho do RustFS, restore drills automáticos e a UI de status admin chegam nas próximas releases desta funcionalidade (ver faseamento no SDD).
+
+Design: [docs/SDD-OPS-BACKUP.md](docs/SDD-OPS-BACKUP.md) (ADR-43).
+
 ## Contas e login
 
 Contas vêm **ligadas por padrão** desde a 1.13.0.
@@ -862,6 +870,7 @@ Racional de design, threat model e a superfície de API completa:
 - [Architecture](docs/ARCHITECTURE.md) — stack, modelo de dados, API, ADRs
 - [Tasks](docs/TASKS.md) — log de implementação por fase
 - [SDD: Backup & Restore](docs/SDD-BACKUP-RESTORE.md) — ZIP de snapshot DB + RustFS, modos de conflito, fluxo de validação
+- [SDD: Backups operacionais](docs/SDD-OPS-BACKUP.md) — pg_dump agendado e cifrado para S3, restore drills, monitoria (ADR-43)
 - [SDD: Senha master de pastas](docs/SDD-FOLDER-MASTER-PASSWORD.md) — recuperação de senha por pasta e palavra-dica
 - [SDD: Auth, RBAC e multi-usuário](docs/SDD-AUTH-RBAC.md) — sessões, 2FA, OAuth Google, segmentação de dados por usuário
 - [SDD: E-mail assíncrono e 2FA por e-mail](docs/SDD-EMAIL-ASYNC.md) — outbox transacional, templates HTML localizados, transporte plugável via RabbitMQ e e-mail como segundo fator permanente (**entregue**)
