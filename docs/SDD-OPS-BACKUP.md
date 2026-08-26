@@ -226,7 +226,7 @@ credencial conhecido → recusa (precedente `knownPlaceholder` do rustfs-bootstr
 
 ### 5.1 `dump`
 
-1. `pg_try_advisory_lock(InstanceBackupAdvisoryLockKey)` — ocupado ⇒ reagenda +5 min.
+1. `pg_try_advisory_lock(InstanceBackupAdvisoryLockKey)` — ocupado ⇒ PULA o slot: o lock ocupado significa que OUTRO agente está executando o trabalho agora, então reagendar duplicaria o dump que já está acontecendo; o registro do outro agente é o registro do slot.
 2. `pg_dump -Fc --no-password` **sem `-C`**: não embutir `CREATE DATABASE` desacopla o
    artefato de locale/provider do cluster de origem — o drill (e um DR real) cria o banco
    alvo com `createdb -T template0 -E UTF8` no cluster de destino.

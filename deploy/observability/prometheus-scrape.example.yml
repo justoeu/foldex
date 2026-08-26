@@ -1,0 +1,18 @@
+# Example scrape config for the Foldex backup agent (ADR-43).
+# Merge into your prometheus.yml `scrape_configs`. The agent serves /metrics
+# on BACKUP_METRICS_ADDR (default :9099) inside the `foldex` docker network —
+# no host port is published by default, so either scrape from a Prometheus on
+# the same network (target `backup:9099`) or publish the port deliberately.
+#
+# The bearer token is the SAME METRICS_TOKEN the backend's /metrics uses: one
+# credential for the operator's scraper, no new mechanism. An empty token makes
+# the agent answer 503 — there is no anonymous mode.
+scrape_configs:
+  - job_name: foldex-backup-agent
+    scheme: http
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: "<METRICS_TOKEN>"
+    static_configs:
+      - targets: ["backup:9099"]

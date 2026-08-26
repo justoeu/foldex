@@ -112,13 +112,28 @@ in_services && /^  [^[:space:]#][^:]*:[[:space:]]*$/ {
 
   count[kind]++
   if (service in want) svc_kind[service] = kind
+
+  # A VARIANT tag is the pinned tag plus a name suffix — the backup agent
+  # rides the backend repository as `:X.Y.Z-backup-agent` (same image repo,
+  # different Dockerfile target; see the Dockerfile's anti-third-repo note).
+  # The suffix must look like a variant name, never like a second version:
+  # accepting `:2.11.0-2.10.0` here would let two releases share one line.
+  suffix = ""
   if (tag != expected_tag) {
-    fail("image is not pinned to " expected ": " value)
+    if (index(tag, expected_tag) == 1) {
+      suffix = substr(tag, length(expected_tag) + 1)
+      if (suffix !~ /^-[a-z][a-z0-9-]*$/) {
+        fail("image is not pinned to " expected ": " value)
+        suffix = ""
+      }
+    } else {
+      fail("image is not pinned to " expected ": " value)
+    }
   }
 
   if (rewrite) {
     indent = substr($0, 1, length($0) - length(line))
-    print indent "image: " quote "justoeu/foldex-" kind ":" new_tag quote comment
+    print indent "image: " quote "justoeu/foldex-" kind ":" new_tag suffix quote comment
   }
   next
 }

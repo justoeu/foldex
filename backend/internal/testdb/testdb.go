@@ -237,7 +237,7 @@ var resetStatement = `TRUNCATE
 	    session_used_token, session, oauth_state, api_token,
 	    recovery_code, totp_secret, email_factor, email_otp, auth_challenge,
 	    password_reset, email_change, invite, user_identity, app_user,
-	    role_permission
+	    role_permission, backup_run
 	    RESTART IDENTITY CASCADE`
 
 // reseedRolePermissions restores the rows a MIGRATION put there, which

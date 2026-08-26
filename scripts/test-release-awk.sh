@@ -163,6 +163,8 @@ cat >"$COMPOSE_FIXTURE" <<'YAML'
 services:
   backend:
     image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  backup:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}-backup-agent
   web:
     image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
   unrelated:
@@ -190,6 +192,14 @@ grep -Fq 'justoeu/foldex-backend:${FOLDEX_VERSION:-9.9.9}' "$COMPOSE_FIXTURE" ||
 }
 grep -Fq 'justoeu/foldex-web:${FOLDEX_VERSION:-9.9.9}' "$COMPOSE_FIXTURE" || {
   echo "✗ web Compose default was not bumped" >&2
+  exit 1
+}
+# A VARIANT tag (backup-agent, ADR-43) bumps its version and KEEPS its suffix:
+# dropping the suffix would silently point the backup service at the plain
+# backend image, whose stage has no pg_dump — the agent would boot and fail
+# every job.
+grep -Fq 'justoeu/foldex-backend:${FOLDEX_VERSION:-9.9.9}-backup-agent' "$COMPOSE_FIXTURE" || {
+  echo "✗ the backup-agent variant lost its suffix or was not bumped" >&2
   exit 1
 }
 grep -Fq 'example/tool:1.1.1' "$COMPOSE_FIXTURE" || {
@@ -230,6 +240,29 @@ if grep -Eq 'justoeu/foldex-(backend|web):.*latest' "$ROOT/docker-compose.yml"; 
   exit 1
 fi
 echo "✓ case 5: backend/web Compose defaults move together without :latest"
+
+# ─── case 5b: a version-shaped "suffix" is not a variant ────────────────
+
+SUFFIX_FIXTURE=$(mktemp)
+trap 'rm -f "$HARNESS" "$FIXTURE" "$COMPOSE_FIXTURE" "$SUFFIX_FIXTURE"' EXIT
+cat >"$SUFFIX_FIXTURE" <<'YAML'
+services:
+  backend:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}
+  web:
+    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.1.1}
+  sneaky:
+    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.1.1}-2.0.0
+YAML
+if (
+  # shellcheck disable=SC1090
+  source "$HARNESS"
+  compose_version_is "$SUFFIX_FIXTURE" "1.1.1" 2>/dev/null
+); then
+  echo "✗ a version-shaped suffix passed the pin check — two releases could share one line" >&2
+  exit 1
+fi
+echo "✓ case 5b: a variant suffix must be a name, never a second version"
 
 # ─── case 6: dirty/off-main gates and failed-commit rollback ───────────
 

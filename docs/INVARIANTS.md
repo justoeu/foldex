@@ -1147,3 +1147,18 @@ tokens, and profile any single account's activity, holding no Foldex permission 
 read access must be treated as an administrative privilege of this instance**, and a collector off
 this host must use `https://`. There is deliberately no identity-only kill switch today: an operator
 who cannot accept the egress turns tracing off.
+
+<a id="inv-171"></a>
+### INV-171 — As credenciais do S3 externo existem SÓ no processo do backup-agent, e o dump operacional é cifrado por DEFAULT.
+
+*Guards:* `TestLoad_PlaintextIsAnExplicitOptOutNeverAFallback`, `TestLoad_RefusesToBootHalfConfigured`, `TestDumpRun_ShipsAnEncryptedVerifiableArtifact`
+
+O dump da instância (ADR-43) carrega TUDO — hashes bcrypt, conteúdo de todos os usuários — e o destino é um bucket fora da máquina. Dois muros seguram isso: (1) `BACKUP_S3_*` entra apenas no serviço `backup` do compose; o backend, processo exposto à web, pode INSERIR uma linha `requested` em `backup_run` e nada mais — um RCE no backend não ganha escrita no bucket de backup. (2) A cifragem client-side (age/X25519) é default-obrigatória: sem `BACKUP_AGE_RECIPIENTS` o agente recusa o boot, a menos do opt-out nomeado `BACKUP_ALLOW_PLAINTEXT=1` para quem cifra no próprio bucket. O caminho de upload não carrega segredo nenhum (cifra com chave PÚBLICA); a identidade privada vive num cofre fora do host — não há autogenerate de propósito, porque uma chave que só existe ao lado dos dados é um backup indecriptável no dia em que o host morre. O `artifact_sha256` registrado é do CIPHERTEXT, verificável contra o bucket com `sha256sum` sem decifrar nada.
+
+<a id="inv-172"></a>
+### INV-172 — Um job de backup roda no máximo uma vez por vez, e a exclusão tem TRÊS camadas que se cobrem.
+
+*Guards:* `TestBegin_TheRunningSlotIsExclusivePerJob`, `TestClaimRequested_CASPromotesExactlyOnce`, `TestExpireStale_FreesTheSlotADeadAgentHeld`, `TestAdvisoryLocks_CrossProcessCoordination`
+
+O índice parcial único (`backup_run_one_running_idx`, `WHERE status='running'`) é a verdade PERSISTIDA: dois agentes por erro de deploy não registram o mesmo job nem que nunca tenham se visto. O advisory lock (`InstanceBackupAdvisoryLockKey`, "FOLDXBKP") é o mutex de EXECUÇÃO, liberado por queda de conexão. E o janitor expira `running` velho para `failed('stale_claim')` — sem ele, um agente morto no meio de um run segura o índice para sempre e o job nunca mais roda, em silêncio. Cada camada cobre a falha das outras duas; remover qualquer uma reabre ou o double-run ou o deadlock eterno. O botão "Executar agora" respeita as mesmas camadas: o backend INSERE `requested`, o agente promove por UPDATE condicional (CAS), e a promoção também colide no índice parcial.
+

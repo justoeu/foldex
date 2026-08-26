@@ -29,6 +29,9 @@ type Config struct {
 	SecretKey string
 	Bucket    string
 	UseSSL    bool
+	// Region is required by real AWS S3 outside us-east-1; RustFS and MinIO
+	// ignore it, so the zero value keeps every existing caller unchanged.
+	Region string
 }
 
 // New creates a Client, ensures the bucket exists, and returns it.
@@ -36,6 +39,7 @@ func New(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, error) 
 	mc, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
+		Region: cfg.Region,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("storage: create s3 client: %w", err)
@@ -46,7 +50,7 @@ func New(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, error) 
 		return nil, fmt.Errorf("storage: check bucket %q at %s: %w", cfg.Bucket, cfg.Endpoint, err)
 	}
 	if !exists {
-		mkErr := mc.MakeBucket(ctx, cfg.Bucket, minio.MakeBucketOptions{})
+		mkErr := mc.MakeBucket(ctx, cfg.Bucket, minio.MakeBucketOptions{Region: cfg.Region})
 		if mkErr != nil {
 			errCode := minio.ToErrorResponse(mkErr).Code
 			// Tolerate "already exists" and permission-denied codes — the bucket

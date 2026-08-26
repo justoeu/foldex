@@ -445,6 +445,14 @@ Uploads are capped at 2 GiB compressed. Before validation or restore touches the
 
 Full design rationale: [docs/SDD-BACKUP-RESTORE.md](docs/SDD-BACKUP-RESTORE.md).
 
+## Scheduled instance backups (operational)
+
+The user-facing ZIP above is a product feature and deliberately carries no login data — it cannot resurrect an instance. For disaster recovery there is a separate, opt-in **backup agent** (`COMPOSE_PROFILES=backup`): a dedicated container that runs a full `pg_dump` of the database every night, encrypts it with [age](https://age-encryption.org) (mandatory by default — the operator's public key encrypts, and only the private identity kept OFF the host decrypts), and ships it to any external S3-compatible bucket with grandfather-father-son retention (7 daily / 4 weekly / 6 monthly by default, or hardened bucket-lifecycle mode with a delete-less credential).
+
+Every run is recorded in the `backup_run` table, and the agent serves Prometheus metrics (`/metrics`, same `METRICS_TOKEN` as the backend) with ready-made Grafana/Prometheus alert rules in [`deploy/observability/`](deploy/observability/) — including an `absent()` rule that catches the agent that never started. Configure via the `BACKUP_*` block in `.env.example`. RustFS mirroring, automatic restore drills and the admin status UI land in the next releases of this feature (see the phasing in the SDD).
+
+Design: [docs/SDD-OPS-BACKUP.md](docs/SDD-OPS-BACKUP.md) (ADR-43).
+
 ## Accounts & sign-in
 
 Accounts are **on by default** since 1.13.0.
@@ -852,6 +860,7 @@ Design rationale, threat model and the full API surface:
 - [Architecture](docs/ARCHITECTURE.md) — stack, data model, API, ADRs
 - [Tasks](docs/TASKS.md) — phased implementation log
 - [SDD: Backup & Restore](docs/SDD-BACKUP-RESTORE.md) — DB + RustFS snapshot ZIP, conflict modes, validation flow
+- [SDD: Operational backups](docs/SDD-OPS-BACKUP.md) — scheduled encrypted pg_dump to S3, restore drills, monitoring (ADR-43)
 - [SDD: Folder master password](docs/SDD-FOLDER-MASTER-PASSWORD.md) — per-folder password recovery and hint
 - [SDD: Auth, RBAC & multi-user](docs/SDD-AUTH-RBAC.md) — sessions, 2FA, Google OAuth, per-user data segmentation
 - [SDD: Async e-mail & e-mail 2FA](docs/SDD-EMAIL-ASYNC.md) — transactional outbox, localized HTML templates, pluggable RabbitMQ transport and e-mail as a standing second factor (**shipped**)
