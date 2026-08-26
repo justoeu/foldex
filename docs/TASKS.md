@@ -504,3 +504,51 @@ POST, i18n en/pt/es), mock server em sincronia, dashboard Grafana completo em
 - **Divergência assumida do SDD §15:** o alerta por e-mail via outbox (§9.3) ficou fora
   do PR5 — pendência registrada no SDD e na ADR-43. Screenshot da banda para o README
   também pendente.
+
+### Tela de acesso reescrita no padrão do mockup (2026-08-26)
+
+`AuthShell` deixou de ser um card centrado de 980px e virou um layout de página
+inteira: coluna do formulário à esquerda (marca com tagline, kicker, título grande,
+campos, um único botão primário) e painel de produto à direita — badge, chamada,
+três pontos com ícone e uma maquete do app com pastas coloridas. O painel continua
+`aria-hidden` e some abaixo de 1024px. O link de recuperação saiu de baixo do botão
+e foi para a linha do rótulo de **Senha** (`AuthField` ganhou a prop `action`), e o
+rodapé passou a mostrar versão + data de build — a tela de acesso é a única
+superfície alcançável sem conta, e "qual versão é esta instância?" é a pergunta de
+suporte mais comum numa instalação self-hosted.
+
+O Google e o "criar conta" NÃO entraram: o botão do Google segue renderizando
+apenas quando a instância habilita OAuth (comportamento anterior, intocado), e não
+existe auto-registro no produto — a entrada de uma conta nova é convite ou
+`Add user`.
+
+- **"Manter conectado" do mockup NÃO foi copiado**: o que existe é *Lembrar meu
+  e-mail* (INV-152), que guarda o endereço e nada mais. Um rótulo prometendo sessão
+  persistente sobre um mecanismo que só preenche um campo seria a UI mentindo sobre
+  o que faz.
+- **O spinner de boot quebrou e nenhum guard viu**: `AuthGate` renderiza
+  `.fx-auth .fx-auth-boot` — ele É o overlay, sem painel dentro — e centralizava
+  herdando o `display:flex` de `.fx-auth`. Com a tela full-bleed o overlay virou
+  `display:block` e o spinner foi parar no canto superior esquerdo. Classe existia,
+  regra existia, testes verdes, `test-css-orphan-classes` verde: só apareceu ao
+  clicar em "Esqueceu a senha?" no browser. `.fx-auth-boot` agora centraliza a si
+  mesmo.
+- **A pill do badge estica quando o pai vira coluna flex** — `align-self:
+  flex-start` é o que a mantém do tamanho do texto. Mesma família do defeito acima:
+  invisível fora do browser.
+- Copy nova em `auth_login`/`auth_marketing` nos três locales; os testes que
+  fixavam "sign in to foldex"/"sign in" passaram a fixar a copy nova.
+- **O sweep achou o par que a UI teria mostrado divergindo**: o rodapé novo
+  imprimia `BUILD_DATE` cru enquanto a sidebar já formatava `DD/MM/YYYY` na
+  cópia local dela. `formatBuildDate` subiu para `version.ts` e as duas telas
+  passaram a chamar a mesma função — a mesma build não pode ter duas datas.
+  Os três ícones do painel viraram `<Icon d={I.…}>` do registro compartilhado,
+  em vez de SVGs à mão com atributos de stroke divergentes entre si.
+- **`AuthPromo` é `memo`**: sem props e imutável, mas filho de um shell que
+  re-renderiza a cada tecla do formulário — dezesseis `t()` e três SVGs
+  diffados por caractere digitado, num subtree que é decoração.
+- **O guard do spinner existe agora**: `scripts/test-css-auth-overlay.mjs`
+  exige que `.fx-auth-boot` declare o próprio `display`/`align-items`/
+  `justify-content` em vez de herdar o layout do overlay. Provado vermelho
+  contra o defeito real e verde de volta. Não é um motor de layout — cobre
+  exatamente a dependência que quebrou, e diz isso na mensagem.

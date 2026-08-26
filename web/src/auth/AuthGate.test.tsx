@@ -56,7 +56,7 @@ describe('AuthGate', () => {
       { session: null },
     )
 
-    expect(await screen.findByRole('heading', { name: /sign in to foldex/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /welcome back/i })).toBeInTheDocument()
     // The gate must UNMOUNT the app, not merely hide it. App calls four
     // authenticated queries unconditionally on mount; leaving it rendered would
     // fire all four and 401 each one.
@@ -89,7 +89,7 @@ describe('AuthGate', () => {
       { session: null },
     )
 
-    expect(await screen.findByRole('heading', { name: /sign in to foldex/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /welcome back/i })).toBeInTheDocument()
   })
 
   it('shows a boot spinner before /me resolves', () => {
@@ -231,7 +231,7 @@ describe('AuthGate password recovery', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /back to sign in/i }))
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /sign in to foldex/i })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: /welcome back/i })).toBeInTheDocument(),
     )
   })
 
@@ -364,7 +364,7 @@ describe('AuthGate invite handling', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /go to sign in/i }))
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /sign in to foldex/i })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: /welcome back/i })).toBeInTheDocument(),
     )
   })
 })

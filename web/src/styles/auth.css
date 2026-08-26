@@ -47,42 +47,52 @@
 .fx-auth {
   position: fixed;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
+  display: block;
+  padding: 0;
   background: var(--fxa-bg);
   background-image:
-    radial-gradient(1200px 600px at 12% -10%, var(--fx-accent-soft), transparent 60%),
-    radial-gradient(900px 500px at 105% 110%, var(--fx-accent-soft-2), transparent 55%);
+    radial-gradient(1100px 520px at 8% -12%, var(--fx-accent-soft), transparent 62%),
+    radial-gradient(760px 420px at 96% 6%, var(--fx-tone-pink-soft), transparent 58%);
   font-family: var(--fx-ui);
   color: var(--fxa-ink);
   overflow-y: auto;
 }
 
+/*
+ * Full-bleed rather than a centred card: the promo pane is a floating panel of
+ * its own, and boxing the pair inside a second card gave the screen two nested
+ * frames with no meaning between them. The form column keeps its own narrow
+ * measure, so a wide monitor stretches the gutters, never the fields.
+ */
 .fx-auth-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  width: min(980px, 100%);
-  min-height: 560px;
-  background: var(--fxa-surface);
-  border: 1px solid var(--fxa-border);
-  border-radius: var(--fxa-radius);
-  box-shadow: var(--fx-shadow-2);
-  overflow: hidden;
-  backdrop-filter: blur(12px);
+  min-height: 100%;
 }
 
 .fx-auth-form-pane {
   display: flex;
-  align-items: center;
-  padding: 48px 44px;
+  justify-content: center;
+  padding: 34px 40px 30px;
 }
 
+/*
+ * Three rows — brand, form, build stamp — so the brand pins to the top and the
+ * stamp to the bottom while the form itself sits centred in whatever is left.
+ * A plain flex column would drift the form upward on a tall screen.
+ */
 .fx-auth-form-inner {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 28px;
   width: 100%;
-  max-width: 380px;
-  margin: 0 auto;
+  max-width: 404px;
+}
+
+.fx-auth-form-main {
+  align-self: center;
+  width: 100%;
+  padding: 8px 0;
 }
 
 /* Brand ------------------------------------------------------------ */
@@ -90,33 +100,62 @@
 .fx-auth-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 32px;
+  gap: 14px;
   /* Wraps so the flag row drops under the wordmark on a very narrow phone
      instead of squeezing the brand or overflowing the pane. */
   flex-wrap: wrap;
   row-gap: 12px;
 }
 
+/*
+ * Ink on background rather than the accent gradient: at 46px the gradient read
+ * as a second primary button sitting above the real one. Both tokens flip in
+ * dark mode, so the mark inverts with the theme instead of turning into a white
+ * square with white letters.
+ */
 .fx-auth-logo {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, var(--fxa-accent), var(--fxa-accent-2));
-  color: #fff;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: var(--fx-ink);
+  color: var(--fx-bg);
   font-family: var(--fx-display);
   font-weight: 800;
-  font-size: 15px;
+  font-size: 17px;
   letter-spacing: -0.02em;
+}
+
+.fx-auth-brandblock {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-right: auto;
 }
 
 .fx-auth-brandname {
   font-family: var(--fx-display);
   font-weight: 700;
-  font-size: 17px;
-  letter-spacing: -0.01em;
+  font-size: 21px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.fx-auth-brandtag {
+  font-family: var(--fx-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fx-ink-4);
+}
+
+.fx-auth-build {
+  font-family: var(--fx-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--fx-ink-4);
 }
 
 /* Language flags ---------------------------------------------------- */
@@ -197,26 +236,26 @@ button.fx-auth-locale[aria-pressed='true'] {
   font-family: var(--fx-mono);
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--fxa-accent);
-  margin-bottom: 8px;
+  margin-bottom: 14px;
 }
 
 .fx-auth-title {
   font-family: var(--fx-display);
-  font-size: 26px;
+  font-size: clamp(30px, 3.4vw, 40px);
   font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-  margin-bottom: 8px;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  margin-bottom: 10px;
 }
 
 .fx-auth-subtitle {
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.55;
   color: var(--fxa-ink-soft);
-  margin-bottom: 26px;
+  margin-bottom: 30px;
 }
 
 /* Form ------------------------------------------------------------- */
@@ -224,7 +263,7 @@ button.fx-auth-locale[aria-pressed='true'] {
 .fx-auth-form {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
 }
 
 .fx-auth-field {
@@ -233,8 +272,18 @@ button.fx-auth-locale[aria-pressed='true'] {
   gap: 6px;
 }
 
+/* Holds the label and, optionally, an action such as "forgot password?" —
+   which belongs beside the field it acts on, not orphaned under the button. */
+.fx-auth-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 18px;
+}
+
 .fx-auth-label {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--fxa-ink);
 }
@@ -248,14 +297,15 @@ button.fx-auth-locale[aria-pressed='true'] {
      stopped being invisible when the password field grew room for a reveal
      toggle and ran past the card's edge. */
   box-sizing: border-box;
-  min-height: 44px;
-  padding: 10px 14px;
+  min-height: 50px;
+  padding: 12px 16px;
   border: 1px solid var(--fxa-border);
-  border-radius: 11px;
+  border-radius: 13px;
   background: var(--fx-surface-3);
+  box-shadow: var(--fx-shadow-1);
   color: var(--fxa-ink);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 15px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
@@ -289,15 +339,17 @@ button.fx-auth-locale[aria-pressed='true'] {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 46px;
+  width: 100%;
+  min-height: 54px;
   margin-top: 6px;
   padding: 0 18px;
   border: none;
-  border-radius: 12px;
+  border-radius: 14px;
   background: linear-gradient(135deg, var(--fxa-accent), var(--fxa-accent-2));
+  box-shadow: 0 14px 30px -14px var(--fxa-accent);
   color: #fff;
   font-family: inherit;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   cursor: pointer;
   transition: filter 0.15s ease, transform 0.1s ease;
@@ -360,8 +412,17 @@ button.fx-auth-locale[aria-pressed='true'] {
   font-size: 14px;
 }
 
+/*
+ * The boot state wears `.fx-auth` itself — it IS the overlay, with no panel
+ * inside it. The overlay stopped being a centring flex when the screens went
+ * full-bleed, which dropped the spinner into the top-left corner; it now
+ * centres itself instead of borrowing the parent's layout.
+ */
 .fx-auth-boot {
+  display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 14px;
 }
 
@@ -370,89 +431,236 @@ button.fx-auth-locale[aria-pressed='true'] {
   color: var(--fxa-ink-soft);
 }
 
-/* Marketing pane --------------------------------------------------- */
+/* Promo pane ------------------------------------------------------- */
 
+/*
+ * A floating panel inset from the viewport, not a flush half. The whole aside
+ * is `aria-hidden`: it is decoration, and a screen reader landing on the sign-in
+ * form should reach the e-mail field, not a mock window.
+ */
 .fx-auth-marketing {
   display: flex;
-  align-items: center;
-  padding: 48px 44px;
-  background: linear-gradient(150deg, var(--fxa-accent), var(--fxa-accent-2));
-  color: #fff;
+  align-items: stretch;
+  margin: 18px 18px 18px 0;
+  padding: 52px 52px 44px;
+  border-radius: 28px;
+  background:
+    radial-gradient(120% 90% at 0% 0%, var(--fx-accent-soft-2), transparent 62%),
+    radial-gradient(95% 70% at 100% 12%, var(--fx-tone-pink-soft), transparent 60%),
+    radial-gradient(90% 80% at 78% 100%, var(--fx-tone-green-soft), transparent 62%),
+    var(--fx-bg-tint);
+  color: var(--fxa-ink);
+  overflow: hidden;
 }
 
-.fx-auth-marketing-inner { max-width: 340px; }
+/* Column, not a centred block: the badge and headline pin to the top and the
+   mock window to the bottom, so a taller viewport opens the middle instead of
+   floating the whole thing. */
+.fx-auth-marketing-inner {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 470px;
+}
 
-.fx-auth-marketing-kicker {
+.fx-auth-badge {
+  display: inline-flex;
+  align-items: center;
+  /* A flex CHILD of the promo column: without this it stretches the pill to the
+     full width of the pane. */
+  align-self: flex-start;
+  gap: 8px;
+  margin-bottom: 26px;
+  padding: 7px 14px;
+  border: 1px solid var(--fxa-border);
+  border-radius: 999px;
+  background: var(--fx-surface-3);
   font-family: var(--fx-mono);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  opacity: 0.8;
-  margin-bottom: 12px;
+  color: var(--fx-ink-2);
+}
+
+.fx-auth-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fx-success);
 }
 
 .fx-auth-marketing-title {
   font-family: var(--fx-display);
-  font-size: 25px;
+  font-size: clamp(26px, 2.6vw, 34px);
   font-weight: 700;
-  line-height: 1.25;
-  letter-spacing: -0.02em;
-  margin-bottom: 22px;
+  line-height: 1.1;
+  letter-spacing: -0.035em;
+  margin-bottom: 16px;
+}
+
+.fx-auth-marketing-lead {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--fxa-ink-soft);
+  margin-bottom: 28px;
 }
 
 .fx-auth-marketing-list {
   display: flex;
   flex-direction: column;
-  gap: 13px;
+  gap: 14px;
   list-style: none;
-  font-size: 14px;
-  line-height: 1.5;
-  opacity: 0.95;
+  /* The floor under the auto margin below: on a short viewport the mock window
+     stops climbing here instead of touching the list. */
+  margin-bottom: 44px;
+  font-size: 14.5px;
+  color: var(--fx-ink-2);
 }
 
 .fx-auth-marketing-list li {
-  position: relative;
-  padding-left: 22px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-.fx-auth-marketing-list li::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 7px;
-  width: 8px;
-  height: 8px;
+.fx-auth-marketing-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--fxa-border);
+  border-radius: 10px;
+  background: var(--fx-surface-3);
+  color: var(--fxa-accent);
+}
+
+.fx-auth-marketing-icon svg { width: 16px; height: 16px; }
+
+/* Tinted per row rather than through three extra markup classes — the list is
+   fixed at three items and the order is the meaning. */
+.fx-auth-marketing-list li:nth-child(2) .fx-auth-marketing-icon { color: var(--fx-tone-pink); }
+.fx-auth-marketing-list li:nth-child(3) .fx-auth-marketing-icon { color: var(--fx-tone-green); }
+
+/* Mock app window --------------------------------------------------- */
+
+.fx-auth-preview {
+  margin-top: auto;
+  border: 1px solid var(--fxa-border);
+  border-radius: 18px;
+  background: var(--fx-surface-3);
+  box-shadow: var(--fx-shadow-2);
+  overflow: hidden;
+}
+
+.fx-auth-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--fx-border-2);
+}
+
+.fx-auth-preview-dots {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.fx-auth-preview-dots i {
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.85);
+  background: var(--fx-ink-5);
+}
+
+.fx-auth-preview-dots i:nth-child(1) { background: var(--fx-danger); }
+.fx-auth-preview-dots i:nth-child(2) { background: var(--fx-warn); }
+.fx-auth-preview-dots i:nth-child(3) { background: var(--fx-success); }
+
+.fx-auth-preview-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 12px;
+  border-radius: 9px;
+  background: var(--fx-bg-tint);
+  font-family: var(--fx-mono);
+  font-size: 11px;
+  color: var(--fx-ink-4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fx-auth-preview-cta {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  border-radius: 9px;
+  background: var(--fxa-accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* Four columns because `PROMO_FOLDERS` in AuthShell.tsx has four entries — the
+   pairing is by hand, so a fifth folder needs a column here too. */
+.fx-auth-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px 14px 18px;
+}
+
+.fx-auth-preview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fx-auth-preview-swatch {
+  height: 62px;
+  border-radius: 12px;
+}
+
+.fx-auth-preview-swatch-amber  { background: var(--fx-warn); }
+.fx-auth-preview-swatch-accent { background: var(--fxa-accent); }
+.fx-auth-preview-swatch-pink   { background: var(--fx-tone-pink); }
+.fx-auth-preview-swatch-green  { background: var(--fx-success); }
+
+.fx-auth-preview-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fx-auth-preview-count {
+  font-family: var(--fx-mono);
+  font-size: 10.5px;
+  color: var(--fx-ink-4);
 }
 
 /* Responsive ------------------------------------------------------- */
 
-@media (max-width: 900px) {
+@media (max-width: 1024px) {
   .fx-auth-panel {
     grid-template-columns: 1fr;
-    min-height: 0;
+    min-height: 100%;
   }
-  /* The marketing pane carries nothing the user needs in order to sign in, so
-     on a narrow screen it is dropped rather than stacked below the form. */
+  /* The promo pane carries nothing the user needs in order to sign in, so on a
+     narrow screen it is dropped rather than stacked below the form. */
   .fx-auth-marketing { display: none; }
+  .fx-auth-form-pane { align-items: center; }
 }
 
 @media (max-width: 600px) {
-  .fx-auth {
-    padding: 0;
-    align-items: stretch;
-  }
-  .fx-auth-panel {
-    width: 100%;
-    border: none;
-    border-radius: 0;
-    box-shadow: none;
-  }
   .fx-auth-form-pane {
-    padding: 32px 20px calc(32px + env(safe-area-inset-bottom));
+    padding: 26px 20px calc(26px + env(safe-area-inset-bottom));
   }
+  .fx-auth-form-inner { gap: 22px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -654,11 +862,17 @@ button.fx-auth-locale[aria-pressed='true'] {
 
 :is(.fx-auth, .fx-authfield) .fx-auth-check {
   display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  font-size: 13px;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
   line-height: 1.45;
   color: var(--fxa-ink-soft);
   cursor: pointer;
 }
-:is(.fx-auth, .fx-authfield) .fx-auth-check input { margin-top: 2px; accent-color: var(--fxa-accent); }
+:is(.fx-auth, .fx-authfield) .fx-auth-check input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  accent-color: var(--fxa-accent);
+  cursor: pointer;
+}

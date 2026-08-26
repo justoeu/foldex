@@ -500,6 +500,15 @@ sessões, enviar recuperação, transferir a propriedade, excluir — mostram í
 na linha pareça decoração. Cada um tem um rótulo de leitor de tela nomeando a ação E a
 conta, e os destrutivos mantêm o diálogo de confirmação.
 
+**A tela de acesso.** Dois painéis: o formulário à esquerda — marca, título, e-mail ou
+nome de usuário, senha com **Esqueceu a senha?** na própria linha do rótulo, *Lembrar meu
+e-mail* e um único botão primário — e um painel de produto à direita, com uma chamada curta
+e uma maquete do app. O painel da direita é decoração: fica fora do leitor de tela e some
+por completo abaixo de 1024px, onde o formulário se centraliza sozinho. Abaixo do
+formulário ficam a versão e a data de build da instância, já que a tela de acesso é a única
+superfície alcançável sem conta. As bandeiras de idioma seguem no canto superior esquerdo
+de toda tela deslogada.
+
 **No formulário de acesso.** Todo campo de senha do foldex — entrar, convite, redefinição,
 troca de senha da conta, desbloqueio de pasta, senha mestra — tem um botão para revelar o
 que foi digitado; ele começa sempre oculto, volta a ocultar sempre que a tela remonta, e
