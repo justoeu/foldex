@@ -108,6 +108,14 @@ jobs:
           - name: backend
             context: ./backend
             repo: justoeu/foldex-backend
+          # The backup agent (ADR-43) is a TARGET of the backend Dockerfile
+          # published as a suffixed tag of the SAME repository — a third Docker
+          # Hub repo is worse than a second tag (see the Dockerfile's mailer
+          # note, which set the precedent).
+          - name: backup-agent
+            context: ./backend
+            repo: justoeu/foldex-backend
+            target: backup-agent
           - name: web
             # web/Dockerfile no longer COPYs certs into the image — the
             # entrypoint generates an ephemeral self-signed pair at
@@ -144,6 +152,9 @@ jobs:
         with:
           context: ${{ matrix.image.context }}
           file: ${{ matrix.image.context }}/Dockerfile
+          # Empty for the default final stage; the backup-agent cell builds
+          # its named stage of the same Dockerfile.
+          target: ${{ matrix.image.target || '' }}
           platforms: ${{ matrix.platform.id }}
           # push-by-digest=true: upload the image to the registry without
           # any tag. The manifest job below stitches the per-arch digests
@@ -207,6 +218,9 @@ jobs:
         image:
           - name: backend
             repo: justoeu/foldex-backend
+          - name: backup-agent
+            repo: justoeu/foldex-backend
+            suffix: -backup-agent
           - name: web
             repo: justoeu/foldex-web
     steps:
@@ -234,6 +248,10 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ matrix.image.repo }}
+          # The backup-agent cell suffixes every tag (2.12.0-backup-agent,
+          # latest-backup-agent, ...); the plain cells pass an empty suffix.
+          flavor: |
+            suffix=${{ matrix.image.suffix || '' }},onlatest=true
           tags: |
             type=semver,pattern={{version}},value=${{ needs.validate-release-ref.outputs.release_tag }},enable=${{ needs.validate-release-ref.outputs.is_semver == 'true' }}
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.validate-release-ref.outputs.release_tag }},enable=${{ needs.validate-release-ref.outputs.is_semver == 'true' }}
