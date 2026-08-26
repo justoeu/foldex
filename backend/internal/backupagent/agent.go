@@ -112,6 +112,15 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 	return a, nil
 }
 
+// RegisterJob appends a job to the registry, between New and Start. It exists
+// for jobs whose dependencies New does not carry: user_zip needs a
+// backup.Service over the SOURCE bucket, which only the binary constructs.
+func (a *Agent) RegisterJob(name string, anchor Anchor, run func(ctx context.Context) (*Artifact, map[string]any, string, error)) {
+	a.jobs = append(a.jobs, jobSpec{name: name, anchor: anchor, run: func(ctx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
+		return run(ctx)
+	}})
+}
+
 // CheckSchema gates the boot on migration 000040 being applied.
 func (a *Agent) CheckSchema(ctx context.Context) error {
 	v, err := a.runs.SchemaVersion(ctx)

@@ -25,13 +25,17 @@ func setBaseline(t *testing.T) {
 	t.Setenv("BACKUP_AGE_IDENTITY_FILE", "")
 	t.Setenv("BACKUP_RETENTION_MODE", "")
 	t.Setenv("POSTGRES_PASSWORD", "pw")
+	// The mirror defaults ON; the baseline turns it off so each test opts in
+	// to exactly the jobs it scrutinizes.
+	t.Setenv("BACKUP_MIRROR_INTERVAL_MIN", "0")
 	// The mirror defaults ON (360 min) and then requires the source secret.
 	t.Setenv("RUSTFS_SECRET_KEY", "rustfs-sk")
 	// A developer's stray environment must not leak into the assertions.
 	for _, k := range []string{"BACKUP_RETAIN_DAILY", "BACKUP_RETAIN_WEEKLY", "BACKUP_RETAIN_MONTHLY",
 		"BACKUP_METRICS_ADDR", "BACKUP_S3_REGION", "BACKUP_S3_USE_SSL",
-		"BACKUP_REQUESTED_POLL_SEC", "BACKUP_STALE_RUN_MIN", "BACKUP_MIRROR_INTERVAL_MIN",
-		"RUSTFS_ENDPOINT", "RUSTFS_ACCESS_KEY", "RUSTFS_BUCKET", "RUSTFS_USE_SSL"} {
+		"BACKUP_REQUESTED_POLL_SEC", "BACKUP_STALE_RUN_MIN",
+		"BACKUP_USERZIP_AT", "BACKUP_RETAIN_USERZIP",
+		"RUSTFS_ENDPOINT", "RUSTFS_ACCESS_KEY", "RUSTFS_SECRET_KEY", "RUSTFS_BUCKET", "RUSTFS_USE_SSL"} {
 		t.Setenv(k, "")
 	}
 }
@@ -138,6 +142,35 @@ func TestLoad_DrillScheduleAndIdentity(t *testing.T) {
 	})
 }
 
+func TestLoad_UserZipIsOptInAndRefusesToBootWithoutItsSourceBucket(t *testing.T) {
+	setBaseline(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.False(t, cfg.UserZipAt.Enabled(), "no anchor means the job stays off — and no RustFS is required")
+	assert.Equal(t, 7, cfg.RetainUserZip)
+
+	t.Setenv("BACKUP_USERZIP_AT", "02:15")
+	_, err = Load()
+	require.Error(t, err, "opting in without the source bucket's credentials is a half-configured boot")
+	assert.Contains(t, err.Error(), "RUSTFS_SECRET_KEY")
+
+	t.Setenv("RUSTFS_SECRET_KEY", "sk")
+	t.Setenv("BACKUP_RETAIN_USERZIP", "3")
+	cfg, err = Load()
+	require.NoError(t, err)
+	assert.True(t, cfg.UserZipAt.Enabled())
+	assert.Equal(t, 2, cfg.UserZipAt.Hour)
+	assert.Equal(t, 15, cfg.UserZipAt.Minute)
+	assert.Equal(t, 3, cfg.RetainUserZip)
+	assert.Equal(t, "rustfs:9000", cfg.RustFSEndpoint)
+	assert.Equal(t, "foldex-screenshots", cfg.RustFSBucket)
+
+	t.Setenv("BACKUP_USERZIP_AT", "half past two")
+	_, err = Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "BACKUP_USERZIP_AT")
+}
+
 func TestDBURL_EscapesCredentials(t *testing.T) {
 	// The password deliberately includes the characters that TELL the two
 	// escaping schemes apart: QueryEscape turns a space into "+" (which
@@ -190,6 +223,10 @@ func TestDurationHelpers_CarryTheirUnits(t *testing.T) {
 
 func TestLoad_MirrorDefaultsOnAndDemandsItsSource(t *testing.T) {
 	setBaseline(t)
+	// The baseline turns the mirror off for every OTHER test; this one is
+	// about the real default, so it restores it.
+	t.Setenv("BACKUP_MIRROR_INTERVAL_MIN", "")
+	t.Setenv("RUSTFS_SECRET_KEY", "src-secret")
 	cfg, err := Load()
 	require.NoError(t, err)
 	assert.Equal(t, 360, cfg.MirrorIntervalMin, "SDD §4: mirror cadence defaults to 6h")
