@@ -69,6 +69,12 @@ type enrolled struct {
 	client *client
 	secret string
 	codes  []string
+	// spent is the exact code enrollment submitted. A test that wants to prove
+	// the replay guard must replay THIS string: regenerating "the current code"
+	// at assertion time lands on a fresh step whenever the 30-second boundary
+	// passes between enrollment and the assertion, and a fresh code SHOULD be
+	// accepted — the same one-in-thirty flake codeNextStep documents.
+	spent string
 }
 
 // enrolUser signs a user in and completes a full TOTP enrollment, returning the
@@ -89,8 +95,9 @@ func enrolUser(t *testing.T, h *harness, email, password string) enrolled {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &start))
 	require.NotEmpty(t, start.Secret)
 
+	spent := codeNow(t, start.Secret)
 	rec = c.do(http.MethodPost, "/api/auth/2fa/totp/confirm",
-		map[string]string{"code": codeNow(t, start.Secret)})
+		map[string]string{"code": spent})
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	var confirm struct {
 		RecoveryCodes []string `json:"recovery_codes"`
@@ -98,7 +105,7 @@ func enrolUser(t *testing.T, h *harness, email, password string) enrolled {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &confirm))
 	require.Len(t, confirm.RecoveryCodes, 10)
 
-	return enrolled{client: c, secret: start.Secret, codes: confirm.RecoveryCodes}
+	return enrolled{client: c, secret: start.Secret, codes: confirm.RecoveryCodes, spent: spent}
 }
 
 // enrolUserWithEmailFactor enrols TOTP and then the e-mail factor.
@@ -2393,9 +2400,12 @@ func TestStepUp_ReplayedValidTOTPDoesNotResetTheAttemptBudget(t *testing.T) {
 	testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
 	e := enrolUser(t, h, "user@example.com", "a good password")
 
-	// Enrollment spent the current time-step. It still verifies
-	// cryptographically, but the repository replay guard must reject it.
-	replayed := codeNow(t, e.secret)
+	// Enrollment spent this exact code. Replaying it must fail whichever side
+	// of a step boundary we land on: same step, the replay guard rejects it;
+	// boundary crossed, it is simply no longer valid. Regenerating "now" here
+	// instead would mint a FRESH code across the boundary — and a 204 for a
+	// fresh code is correct behaviour, not a replay-guard failure.
+	replayed := e.spent
 	for i := range 5 {
 		rec := e.client.do(http.MethodPost, "/api/auth/2fa/totp/disable", map[string]string{
 			"password": "a good password", "code": replayed})
