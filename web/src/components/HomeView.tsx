@@ -44,6 +44,7 @@ export type HomeProps = {
   onNavigateBack: () => void
   isLoading: boolean
   onEdit: (l: LinkT) => void
+  onAddImage: (l: LinkT) => void
   onEditNote: (id: number) => void
   onEditFolder: (f: FolderT) => void
   onNewLink: () => void
@@ -77,6 +78,7 @@ export function Home({
   onNavigateBack,
   isLoading,
   onEdit,
+  onAddImage,
   onEditNote,
   onEditFolder,
   onNewLink,
@@ -163,6 +165,7 @@ export function Home({
           isLoading={isLoading}
           foldersCompact={foldersCompact}
           onEdit={onEdit}
+          onAddImage={onAddImage}
           onEditNote={onEditNote}
           onOpenFolder={onOpenFolder}
           onEditFolder={onEditFolder}
@@ -223,6 +226,7 @@ export function CardsView({
   isLoading,
   foldersCompact,
   onEdit,
+  onAddImage,
   onEditNote,
   onOpenFolder,
   onEditFolder,
@@ -238,6 +242,7 @@ export function CardsView({
   isLoading: boolean
   foldersCompact: boolean
   onEdit: (l: LinkT) => void
+  onAddImage: (l: LinkT) => void
   onEditNote: (id: number) => void
   onOpenFolder: (id: number) => void
   onEditFolder: (f: FolderT) => void
@@ -368,6 +373,7 @@ export function CardsView({
                 onDelete={onDeleteLink}
                 onPin={onPinLink}
                 onRefreshPreview={onRefreshPreview}
+                onAddImage={onAddImage}
                 onMarkSeen={onMarkSeen}
               />
             )
@@ -411,6 +417,7 @@ export function CardsView({
             onDelete={onDeleteLink}
             onPin={onPinLink}
             onRefreshPreview={onRefreshPreview}
+            onAddImage={onAddImage}
             onMarkSeen={onMarkSeen}
           />
         ) : (

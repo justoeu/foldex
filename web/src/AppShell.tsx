@@ -191,6 +191,7 @@ function HomePage({ workspace, navigation, dialogs, dnd, content, totalLinks }: 
       onNavigateBack={navigation.navigateBack}
       isLoading={content.entriesLoading}
       onEdit={dialogs.openEditLink}
+      onAddImage={dialogs.openLinkImage}
       onEditNote={dialogs.openEditNote}
       onEditFolder={dialogs.openEditFolder}
       onNewLink={dialogs.openNewLink}
@@ -260,6 +261,7 @@ function AppOverlays({ workspace, navigation, dialogs }: Props) {
         open={dialogs.linkDialogOpen}
         link={dialogs.editLink}
         initialUrl={dialogs.pastedUrl}
+        focus={dialogs.linkFocus}
         defaultFolderId={navigation.openFolder}
         onClose={dialogs.closeLink}
       />

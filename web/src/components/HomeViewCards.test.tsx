@@ -98,6 +98,7 @@ describe('CardsView alpha ordering', () => {
         isLoading={false}
         foldersCompact={false}
         onEdit={noop}
+        onAddImage={noop}
         onEditNote={noop}
         onOpenFolder={noop}
         onEditFolder={noop}
@@ -131,6 +132,7 @@ describe('CardsView mutation wiring', () => {
       isLoading: false,
       foldersCompact: false,
       onEdit: noop,
+      onAddImage: noop,
       onEditNote: noop,
       onOpenFolder: noop,
       onEditFolder: noop,

@@ -6,6 +6,11 @@ import type { Folder, Link } from './api/types'
 export function useAppDialogController(allFolders: Folder[] | undefined) {
   const [linkDialogOpen, setLinkDialogOpen] = useState(false)
   const [editLink, setEditLink] = useState<Link | null>(null)
+  // Which field the link dialog should hand focus to. It is an INTENT set by
+  // the caller, not a property of the link: the same row opens on the URL from
+  // the pencil and on the image panel from the card's image button, and the
+  // dialog cannot tell those apart on its own.
+  const [linkFocus, setLinkFocus] = useState<'url' | 'image'>('url')
   const [pastedUrl, setPastedUrl] = useState<string | undefined>()
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [editFolder, setEditFolder] = useState<Folder | null>(null)
@@ -16,18 +21,30 @@ export function useAppDialogController(allFolders: Folder[] | undefined) {
   const openLink = useCallback((initialUrl?: string) => {
     setEditLink(null)
     setPastedUrl(initialUrl)
+    setLinkFocus('url')
     setLinkDialogOpen(true)
   }, [])
   const openNewLink = useCallback(() => openLink(), [openLink])
   const openPastedLink = useCallback((url: string) => openLink(url), [openLink])
-  const openEditLink = useCallback((link: Link) => {
+  // One opener, two landing points. The two entry points differ ONLY in where
+  // focus lands, and keeping them as separate copies meant the next piece of
+  // transient state added to one would have to be remembered in the other.
+  const openLinkFor = useCallback((link: Link, focus: 'url' | 'image') => {
     setEditLink(link)
     setPastedUrl(undefined)
+    setLinkFocus(focus)
     setLinkDialogOpen(true)
   }, [])
+  const openEditLink = useCallback((link: Link) => openLinkFor(link, 'url'), [openLinkFor])
+  // A card with no preview sends the reader straight to the panel that can
+  // give it one.
+  const openLinkImage = useCallback((link: Link) => openLinkFor(link, 'image'), [openLinkFor])
   const closeLink = useCallback(() => {
     setLinkDialogOpen(false)
     setPastedUrl(undefined)
+    // Reset, or the next Alt+N inherits the image intent from whatever card
+    // was opened last and lands on an upload zone for a link with no id yet.
+    setLinkFocus('url')
   }, [])
 
   const openNewFolder = useCallback(() => {
@@ -86,8 +103,10 @@ export function useAppDialogController(allFolders: Folder[] | undefined) {
     linkDialogOpen,
     editLink,
     pastedUrl,
+    linkFocus,
     openNewLink,
     openEditLink,
+    openLinkImage,
     closeLink,
     folderDialogOpen,
     editFolder,
