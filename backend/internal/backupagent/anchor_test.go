@@ -88,6 +88,8 @@ func TestDue_CatchUpContract(t *testing.T) {
 	assert.False(t, a.Due(now, now.Add(-2*time.Hour)), "a fresh success is not due")
 	assert.False(t, a.Due(now, now.Add(-25*time.Hour)),
 		"one interval plus a restart minutes later must not double-run: the 25%% grace absorbs it")
+	assert.False(t, a.Due(now, now.Add(-29*time.Hour)),
+		"the grace is interval/4 = 6h: 29h is still inside it — a tighter divisor would double-run restarts")
 	assert.True(t, a.Due(now, now.Add(-31*time.Hour)), "past interval+grace is due")
 
 	var disabled Anchor

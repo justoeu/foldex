@@ -37,6 +37,11 @@ ENTRYPOINT ["/rustfs-bootstrap"]
 # repository (justoeu/foldex-backend:<ver>-backup-agent) — same reasoning as
 # the mailer: a third Docker Hub repository is worse than a second tag.
 FROM postgres:18.4-alpine AS backup-agent
+# Accepted wart: the postgres base declares VOLUME for its data dir, so each
+# recreate of this container leaves an unused anonymous volume behind (the
+# agent never runs the bundled server outside the drill's /tmp cluster).
+# `docker volume prune` clears them; re-basing to strip the VOLUME is not
+# worth diverging from the version-matched official image.
 COPY --from=build /out/foldex-backup-agent /foldex-backup-agent
 # The postgres base image already ships a non-root `postgres` user (uid 70 on
 # alpine); the agent neither needs nor wants the entrypoint machinery of the

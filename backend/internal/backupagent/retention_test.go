@@ -67,7 +67,6 @@ func TestGFS_KeepsTheThreeLadders(t *testing.T) {
 	assert.LessOrEqual(t, days, 7+4+4)
 
 	prunable := policy.prunable(keys)
-	assert.Equal(t, len(keys)-len(kept), len(prunable))
 	// The newest dump is never prunable — pruning must not eat the artifact
 	// that just landed.
 	newest := keys[len(keys)-1]

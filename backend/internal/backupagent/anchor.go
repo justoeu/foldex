@@ -96,3 +96,15 @@ func (a Anchor) Due(now, lastSuccess time.Time) bool {
 	grace := a.Interval() / 4
 	return now.Sub(lastSuccess) > a.Interval()+grace
 }
+
+// String renders the anchor back in its env-var syntax, for logs.
+func (a Anchor) String() string {
+	if !a.set {
+		return "disabled"
+	}
+	s := fmt.Sprintf("%02d:%02d", a.Hour, a.Minute)
+	if a.Weekly {
+		s += " " + strings.ToLower(a.Weekday.String()[:3])
+	}
+	return s
+}

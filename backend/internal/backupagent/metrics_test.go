@@ -56,8 +56,11 @@ func TestMetrics_ObserveWritesTheSeriesTheAlertRulesWatch(t *testing.T) {
 	assert.Contains(t, body, `foldex_backup_consecutive_failures{job="dump"} 0`,
 		"a success must reset the consecutive counter or the alert never clears")
 	assert.Contains(t, body, `foldex_backup_artifact_bytes{job="dump"} 12345`)
-	assert.Contains(t, body, `foldex_backup_last_success_timestamp_seconds{job="dump"} 1.78`,
-		"the staleness alert compares time() against this gauge (prometheus renders the value in scientific notation)")
+	// The EXACT rendered value: a substring match would stay green if the
+	// gauge were fed milliseconds, and the staleness alert would be off by
+	// 1000x while every test passed.
+	assert.Contains(t, body, `foldex_backup_last_success_timestamp_seconds{job="dump"} 1.78762866e+09`,
+		"the staleness alert compares time() against this gauge")
 	assert.Contains(t, body, `foldex_backup_runs_total{job="dump",status="succeeded"} 1`)
 }
 

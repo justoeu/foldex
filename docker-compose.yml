@@ -331,6 +331,11 @@ services:
       BACKUP_AGE_RECIPIENTS: ${BACKUP_AGE_RECIPIENTS:-}
       BACKUP_ALLOW_PLAINTEXT: ${BACKUP_ALLOW_PLAINTEXT:-0}
       BACKUP_METRICS_ADDR: ${BACKUP_METRICS_ADDR:-:9099}
+      BACKUP_REQUESTED_POLL_SEC: ${BACKUP_REQUESTED_POLL_SEC:-30}
+      BACKUP_STALE_RUN_MIN: ${BACKUP_STALE_RUN_MIN:-240}
+      # Empty = the container's writable layer. Point at a mounted volume when
+      # the dump outgrows the host's docker filesystem.
+      BACKUP_SPOOL_DIR: ${BACKUP_SPOOL_DIR:-}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       TZ: ${TZ:-UTC}
     networks:

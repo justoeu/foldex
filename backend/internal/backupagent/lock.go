@@ -41,10 +41,14 @@ func acquireJobLock(ctx context.Context, pool *pgxpool.Pool) (release func(), ok
 	return release, true, nil
 }
 
-// restoreInFlight probes RestoreAdvisoryLockKey (acquire-and-release). Jobs
-// that read the bucket (mirror, user_zip — later PRs) defer to an in-flight
-// per-user restore; the dump does not need this, since a restore is a single
-// transaction and MVCC hands pg_dump a consistent snapshot either way.
+// restoreInFlight probes RestoreAdvisoryLockKey (acquire-and-release).
+//
+// No production caller in PR1, deliberately: it ships now because it is the
+// other half of the coordination contract INV-104 demands of the bucket-
+// reading jobs (mirror in PR3, user_zip in PR4), and shipping the probe with
+// its integration test in the same change as the lock constants keeps the
+// contract reviewable in one place. The dump does not need it — a restore is
+// a single transaction and MVCC hands pg_dump a consistent snapshot.
 func restoreInFlight(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	// One pinned connection for the whole probe: advisory locks are
 	// per-session, so acquire and unlock through the pool's load balancer

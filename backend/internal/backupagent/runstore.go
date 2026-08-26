@@ -157,16 +157,21 @@ func (s *RunStore) LastSuccess(ctx context.Context, job string) (time.Time, erro
 	return at, nil
 }
 
-// ConsecutiveFailures counts failed runs of job since its last success —
-// the number the e-mail alert threshold compares against.
+// ConsecutiveFailures counts failed runs of job since its last success — the
+// number the alert threshold compares against. Operational outcomes are
+// excluded: a deploy mid-run (shutdown), a sibling agent holding the lock
+// (lock_busy) or a janitor-expired corpse (stale_claim) say nothing about
+// whether backups WORK, and counting them would page the operator for a
+// restart plus one real failure.
 func (s *RunStore) ConsecutiveFailures(ctx context.Context, job string) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `
 		SELECT count(*) FROM backup_run
 		WHERE job = $1 AND status = 'failed'
+		  AND last_error NOT IN ($2, $3, $4)
 		  AND started_at > COALESCE(
 			(SELECT max(started_at) FROM backup_run WHERE job = $1 AND status = 'succeeded'),
-			'-infinity')`, job).Scan(&n)
+			'-infinity')`, job, ReasonShutdown, ReasonLockBusy, ReasonStaleClaim).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("backupagent: consecutive failures: %w", err)
 	}

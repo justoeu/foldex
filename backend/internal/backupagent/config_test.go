@@ -1,8 +1,10 @@
 package backupagent
 
 import (
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,6 +23,12 @@ func setBaseline(t *testing.T) {
 	t.Setenv("BACKUP_DUMP_AT", "")
 	t.Setenv("BACKUP_RETENTION_MODE", "")
 	t.Setenv("POSTGRES_PASSWORD", "pw")
+	// A developer's stray environment must not leak into the assertions.
+	for _, k := range []string{"BACKUP_RETAIN_DAILY", "BACKUP_RETAIN_WEEKLY", "BACKUP_RETAIN_MONTHLY",
+		"BACKUP_METRICS_ADDR", "BACKUP_S3_REGION", "BACKUP_S3_USE_SSL",
+		"BACKUP_REQUESTED_POLL_SEC", "BACKUP_STALE_RUN_MIN"} {
+		t.Setenv(k, "")
+	}
 }
 
 func TestLoad_RefusesToBootHalfConfigured(t *testing.T) {
@@ -80,15 +88,29 @@ func TestLoad_AnchorAndRecipientsParse(t *testing.T) {
 }
 
 func TestDBURL_EscapesCredentials(t *testing.T) {
+	// The password deliberately includes the characters that TELL the two
+	// escaping schemes apart: QueryEscape turns a space into "+" (which
+	// userinfo does NOT decode back) and would leave this test green while
+	// silently breaking auth — the space, "%" and "+" are the revert
+	// detectors, not decoration.
 	cfg := Config{
 		PGHost: "db", PGPort: 5432, PGDatabase: "foldex", PGSSLMode: "disable",
-		PGUser: "user@corp", PGPassword: "p@ss:w/rd",
+		PGUser: "user@corp", PGPassword: "p w+%end@x:/",
 	}
-	url := cfg.DBURL()
-	assert.Contains(t, url, "user%40corp")
-	assert.Contains(t, url, "p%40ss%3Aw%2Frd",
-		"an unescaped password with @ or : silently connects to the wrong host instead of failing")
-	assert.False(t, strings.Contains(url, "p@ss:w/rd"))
+	dsn := cfg.DBURL()
+	assert.Contains(t, dsn, "user%40corp")
+	assert.Contains(t, dsn, "p%20w+%25end%40x%3A%2F",
+		"userinfo escaping: space is %20 (never \"+\"), %% is %25, literal + stays")
+
+	// And the DSN must round-trip: what pgx parses back out is the password
+	// the operator typed.
+	parsed, err := url.Parse(dsn)
+	require.NoError(t, err)
+	pw, ok := parsed.User.Password()
+	require.True(t, ok)
+	assert.Equal(t, "p w+%end@x:/", pw)
+	assert.Equal(t, "user@corp", parsed.User.Username())
+	assert.False(t, strings.Contains(dsn, "p w+"))
 }
 
 func TestLoad_Defaults(t *testing.T) {
@@ -103,4 +125,13 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, "us-east-1", cfg.S3Region)
 	assert.True(t, cfg.S3UseSSL)
 	assert.False(t, cfg.DumpAt.Enabled(), "no anchor means the job stays off")
+}
+
+func TestDurationHelpers_CarryTheirUnits(t *testing.T) {
+	cfg := Config{RequestedPollSec: 30, StaleRunMin: 240}
+	// The unit lives in the env var NAME (repo convention); getting it wrong
+	// here is a 1000x error — a 30ms poll hammers the database, a 4-second
+	// stale TTL makes the janitor kill live runs.
+	assert.Equal(t, 30*time.Second, cfg.RequestedPoll())
+	assert.Equal(t, 240*time.Minute, cfg.StaleRunTTL())
 }

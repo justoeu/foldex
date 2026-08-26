@@ -44,3 +44,9 @@ CREATE INDEX backup_run_job_started_idx ON backup_run (job, started_at DESC);
 -- failure mode, and the janitor expires stale 'running' rows so a dead agent
 -- cannot hold this index forever.
 CREATE UNIQUE INDEX backup_run_one_running_idx ON backup_run (job) WHERE status = 'running';
+
+-- The requested-claim poll runs every ~30s per job forever, and the common
+-- case is zero requested rows; without a matching partial index that poll
+-- heap-filters the job's whole ever-growing history on every tick. This
+-- index holds only the (normally empty) requested set — an O(1) probe.
+CREATE INDEX backup_run_requested_idx ON backup_run (job, id) WHERE status = 'requested';

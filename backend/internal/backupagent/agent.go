@@ -34,10 +34,16 @@ type jobSpec struct {
 type Agent struct {
 	cfg     Config
 	pool    *pgxpool.Pool
+	store   Uploader
 	runs    *RunStore
 	metrics *Metrics
 	logger  *slog.Logger
 	jobs    []jobSpec
+
+	// skewWarning is checked from Start, not the constructor: it does I/O
+	// (SHOW server_version + exec pg_dump), and a constructor that can hang on
+	// an unreachable database hides the failure CheckSchema reports cleanly.
+	skewWarning func(context.Context) string
 
 	cancel   context.CancelFunc
 	stopOnce sync.Once
@@ -51,6 +57,7 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, logger *slog.Logger) (*
 	a := &Agent{
 		cfg:     cfg,
 		pool:    pool,
+		store:   store,
 		runs:    NewRunStore(pool),
 		metrics: NewMetrics(),
 		logger:  logger,
@@ -60,10 +67,7 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, logger *slog.Logger) (*
 		return nil, err
 	}
 	a.jobs = append(a.jobs, jobSpec{name: JobDump, anchor: cfg.DumpAt, run: dump.Run})
-
-	if warning := dump.VersionSkewWarning(context.Background()); warning != "" {
-		logger.Warn(warning)
-	}
+	a.skewWarning = dump.VersionSkewWarning
 	return a, nil
 }
 
@@ -85,6 +89,13 @@ func (a *Agent) CheckSchema(ctx context.Context) error {
 func (a *Agent) Start(ctx context.Context) {
 	ctx, a.cancel = context.WithCancel(ctx)
 
+	if a.skewWarning != nil {
+		skewCtx, done := context.WithTimeout(ctx, 10*time.Second)
+		if warning := a.skewWarning(skewCtx); warning != "" {
+			a.logger.Warn(warning)
+		}
+		done()
+	}
 	if _, err := a.runs.ExpireStale(ctx, a.cfg.StaleRunTTL()); err != nil {
 		a.logger.Warn("boot janitor failed", "err", err)
 	}
@@ -106,7 +117,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.requestedLoop(ctx)
 	go a.janitorLoop(ctx)
 
-	a.serveHTTP(ctx)
+	a.serveHTTP()
 }
 
 // Stop cancels the loops and waits for in-flight work to record its outcome.
@@ -143,7 +154,11 @@ func (a *Agent) scheduleLoop(ctx context.Context, spec jobSpec) {
 		case <-time.After(jitter):
 		}
 		if a.waitReady(ctx) {
-			a.execute(ctx, spec, time.Now(), 0)
+			// The MISSED anchor slot, not now(): scheduled_for's contract
+			// (migration 000040, SDD §3) is "the slot this run satisfies",
+			// and PR5's staleness surface reads it.
+			missed := spec.anchor.Next(time.Now()).Add(-spec.anchor.Interval())
+			a.execute(ctx, spec, missed, 0)
 		}
 	}
 
@@ -260,6 +275,12 @@ func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Tim
 		return
 	}
 
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	// One measurement feeds both the row and the gauge — two clocks would let
+	// them disagree.
+	meta["duration_ms"] = duration.Milliseconds()
 	if err := a.runs.Succeed(recordCtx, id, artifact, meta); err != nil {
 		a.logger.Error("record success", "job", spec.name, "err", err)
 		return
@@ -273,11 +294,16 @@ func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Tim
 		"duration", duration.Round(time.Millisecond), "artifact_bytes", artifactBytes)
 }
 
-// waitReady polls the database until it answers or ctx dies.
+// waitReady polls the database AND the backup target until both answer or
+// ctx dies. Gating catch-up on the store too keeps an S3 blip at `compose up`
+// from turning the catch-up into an immediate failed(upload_failed) row.
 func (a *Agent) waitReady(ctx context.Context) bool {
 	for {
-		pingCtx, done := context.WithTimeout(ctx, 3*time.Second)
+		pingCtx, done := context.WithTimeout(ctx, 5*time.Second)
 		err := a.pool.Ping(pingCtx)
+		if err == nil {
+			err = a.storeReady(pingCtx)
+		}
 		done()
 		if err == nil {
 			return true
@@ -290,7 +316,18 @@ func (a *Agent) waitReady(ctx context.Context) bool {
 	}
 }
 
-func (a *Agent) serveHTTP(ctx context.Context) {
+// errStopWalk stops a readiness listing after proving the store answers.
+var errStopWalk = errors.New("stop")
+
+func (a *Agent) storeReady(ctx context.Context) error {
+	err := a.store.WalkObjects(ctx, dumpKeyPrefix, func(ObjectInfo) error { return errStopWalk })
+	if errors.Is(err, errStopWalk) {
+		return nil
+	}
+	return err // nil on an empty listing is also ready
+}
+
+func (a *Agent) serveHTTP() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		pingCtx, done := context.WithTimeout(r.Context(), 2*time.Second)
@@ -312,5 +349,4 @@ func (a *Agent) serveHTTP(ctx context.Context) {
 			a.logger.Error("metrics server", "err", err)
 		}
 	}()
-	_ = ctx // loops carry the cancellation; the server stops via Stop()
 }

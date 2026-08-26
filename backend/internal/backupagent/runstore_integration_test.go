@@ -262,3 +262,143 @@ func TestExecute_RecordsOutcomeEvenWhenTheJobContextDies(t *testing.T) {
 	assert.Equal(t, ReasonShutdown, reason,
 		"a cancelled run must land as failed(shutdown) on a fresh context — an unrecorded outcome is a stale running row")
 }
+
+func TestCheckSchema_RefusesAnOlderDatabase(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	_, err := pool.Exec(ctx, `CREATE TABLE schema_migrations (version bigint NOT NULL, dirty boolean NOT NULL)`)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP TABLE schema_migrations`) })
+	a := &Agent{runs: NewRunStore(pool)}
+
+	_, err = pool.Exec(ctx, `INSERT INTO schema_migrations VALUES ($1, false)`, RequiredSchemaVersion-1)
+	require.NoError(t, err)
+	err = a.CheckSchema(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "migrations first",
+		"the gate must fail with an instruction, not a missing-table error mid-job")
+
+	_, err = pool.Exec(ctx, `UPDATE schema_migrations SET version = $1`, RequiredSchemaVersion)
+	require.NoError(t, err)
+	assert.NoError(t, a.CheckSchema(ctx))
+}
+
+func TestOutcomes_AnotherAgentsStoreCannotFinishMyRun(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+	mine := NewRunStore(pool)
+	id, err := mine.Begin(ctx, JobDump, time.Now())
+	require.NoError(t, err)
+
+	// The claim_token WHERE clause is what stops a janitor-expired straggler
+	// from overwriting the outcome of the run its successor now owns.
+	other := NewRunStore(pool)
+	require.NoError(t, other.Fail(ctx, id, ReasonDumpFailed))
+	var status string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM backup_run WHERE id = $1`, id).Scan(&status))
+	assert.Equal(t, "running", status, "a foreign claim token must not finish the row")
+
+	// Succeed carries the symmetric guard — the straggler cannot forge a
+	// success over the successor's run either.
+	require.NoError(t, other.Succeed(ctx, id, &Artifact{Key: "forged", Bytes: 1, SHA256: "00"}, nil))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM backup_run WHERE id = $1`, id).Scan(&status))
+	assert.Equal(t, "running", status, "a foreign claim token must not succeed the row either")
+
+	require.NoError(t, mine.Succeed(ctx, id, nil, nil))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM backup_run WHERE id = $1`, id).Scan(&status))
+	assert.Equal(t, "succeeded", status)
+}
+
+func TestConsecutiveFailures_OperationalReasonsDoNotCount(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+	s := NewRunStore(pool)
+
+	for _, reason := range []string{ReasonShutdown, ReasonLockBusy, ReasonStaleClaim, ReasonDumpFailed} {
+		id, err := s.Begin(ctx, JobDump, time.Now())
+		require.NoError(t, err)
+		require.NoError(t, s.Fail(ctx, id, reason))
+	}
+	n, err := s.ConsecutiveFailures(ctx, JobDump)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n,
+		"a deploy restart plus one real failure must read as ONE failure — paging on shutdown rows trains people to ignore the alert")
+}
+
+func TestExecute_LockBusyFailsTheClaimedRequestAndSkipsTheSlot(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+
+	// A sibling agent holds the job lock for the duration of the test.
+	release, ok, err := acquireJobLock(ctx, pool)
+	require.NoError(t, err)
+	require.True(t, ok)
+	defer release()
+
+	a := &Agent{
+		cfg:     Config{StaleRunMin: 240},
+		pool:    pool,
+		runs:    NewRunStore(pool),
+		metrics: NewMetrics(),
+		logger:  slog.New(slog.DiscardHandler),
+	}
+	ran := false
+	spec := jobSpec{name: JobDump, run: func(context.Context) (*Artifact, map[string]any, string, error) {
+		ran = true
+		return nil, nil, "", nil
+	}}
+
+	// Scheduled slot: skipped silently — the sibling IS running the job.
+	a.execute(ctx, spec, time.Now(), 0)
+	assert.False(t, ran)
+	var count int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM backup_run`).Scan(&count))
+	assert.Zero(t, count, "a skipped scheduled slot leaves no row: the sibling's record is the slot's record")
+
+	// A claimed manual request cannot vanish silently: it must land as
+	// failed(lock_busy) so the operator who clicked sees an outcome.
+	_, err = pool.Exec(ctx, `INSERT INTO backup_run (job, status, scheduled_for) VALUES ('dump','requested', now())`)
+	require.NoError(t, err)
+	id, ok, err := a.runs.ClaimRequested(ctx, JobDump)
+	require.NoError(t, err)
+	require.True(t, ok)
+	a.execute(ctx, spec, time.Now(), id)
+	assert.False(t, ran)
+	var status, reason string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT status, last_error FROM backup_run WHERE id = $1`, id).Scan(&status, &reason))
+	assert.Equal(t, "failed", status)
+	assert.Equal(t, ReasonLockBusy, reason)
+}
+
+func TestExecute_ClaimedRequestRunsOnItsOwnRowNotANewOne(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+	a := &Agent{
+		cfg:     Config{StaleRunMin: 240},
+		pool:    pool,
+		runs:    NewRunStore(pool),
+		metrics: NewMetrics(),
+		logger:  slog.New(slog.DiscardHandler),
+	}
+	_, err := pool.Exec(ctx, `INSERT INTO backup_run (job, status, scheduled_for) VALUES ('dump','requested', now())`)
+	require.NoError(t, err)
+	id, ok, err := a.runs.ClaimRequested(ctx, JobDump)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	spec := jobSpec{name: JobDump, run: func(context.Context) (*Artifact, map[string]any, string, error) {
+		return &Artifact{Key: "k", Bytes: 1, SHA256: "aa"}, nil, "", nil
+	}}
+	a.execute(ctx, spec, time.Now(), id)
+
+	var count int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM backup_run`).Scan(&count))
+	assert.Equal(t, 1, count, "the claimed row IS the run — a second row would double-book the audit trail")
+	var status string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM backup_run WHERE id = $1`, id).Scan(&status))
+	assert.Equal(t, "succeeded", status)
+}

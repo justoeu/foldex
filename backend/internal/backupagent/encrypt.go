@@ -3,6 +3,7 @@ package backupagent
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"filippo.io/age"
 )
@@ -12,10 +13,18 @@ import (
 // identity (private) side exists solely for the drill, and never here.
 func parseRecipients(raw []string) ([]age.Recipient, error) {
 	recipients := make([]age.Recipient, 0, len(raw))
-	for _, r := range raw {
+	for i, r := range raw {
 		rec, err := age.ParseX25519Recipient(r)
 		if err != nil {
-			return nil, fmt.Errorf("backupagent: %q is not an age X25519 public key: %w", r, err)
+			// NEVER echo the value, and never wrap age's error (it embeds the
+			// input): the most likely paste mistake here is the PRIVATE
+			// identity, and this message flows to slog and on to whatever
+			// aggregates container logs. Position only — plus a targeted hint
+			// for the one mistake that matters.
+			if strings.HasPrefix(strings.TrimSpace(r), "AGE-SECRET-KEY-") {
+				return nil, fmt.Errorf("backupagent: BACKUP_AGE_RECIPIENTS entry %d is an age PRIVATE identity — rotate that key now (it may be in your shell history) and configure the age1... public recipient instead", i+1)
+			}
+			return nil, fmt.Errorf("backupagent: BACKUP_AGE_RECIPIENTS entry %d is not an age X25519 public key (age1...)", i+1)
 		}
 		recipients = append(recipients, rec)
 	}

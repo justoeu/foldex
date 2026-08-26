@@ -51,11 +51,16 @@ func TestEncrypt_PlaintextPassThroughOnlyWithNoRecipients(t *testing.T) {
 func TestParseRecipients_RejectsGarbageAndIdentities(t *testing.T) {
 	_, err := parseRecipients([]string{"not-a-key"})
 	assert.Error(t, err)
+	assert.NotContains(t, err.Error(), "not-a-key",
+		"the rejected value must never be echoed — this message flows to slog and log aggregators")
 
 	identity, genErr := age.GenerateX25519Identity()
 	require.NoError(t, genErr)
-	// Pasting the PRIVATE key where the public one goes must fail loudly, not
-	// encrypt to a recipient derived from a leaked secret.
+	// Pasting the PRIVATE key where the public one goes must fail loudly AND
+	// without reflecting the secret back into the logs.
 	_, err = parseRecipients([]string{identity.String()})
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), identity.String(),
+		"echoing the pasted identity would put the private key into container logs")
+	assert.Contains(t, err.Error(), "rotate", "the one paste mistake that matters gets a targeted instruction")
 }

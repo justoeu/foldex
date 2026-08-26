@@ -89,7 +89,9 @@ func pgDumpCommand(ctx context.Context, cfg Config) *exec.Cmd {
 func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, error) {
 	started := j.now()
 
-	spool, err := os.CreateTemp("", "foldex-dump-*.spool")
+	// CreateTemp is born 0600; SpoolDir="" is the OS temp dir (the container's
+	// writable layer — see Config.SpoolDir for when to point it at a volume).
+	spool, err := os.CreateTemp(j.cfg.SpoolDir, "foldex-dump-*.spool")
 	if err != nil {
 		return nil, nil, ReasonSpoolFailed, fmt.Errorf("create spool: %w", err)
 	}
@@ -97,9 +99,6 @@ func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, e
 		spool.Close()
 		os.Remove(spool.Name())
 	}()
-	if err := spool.Chmod(0o600); err != nil {
-		return nil, nil, ReasonSpoolFailed, fmt.Errorf("chmod spool: %w", err)
-	}
 
 	// The hash is taken over the CIPHERTEXT — what actually sits in the
 	// bucket — so an operator can verify the artifact with sha256sum without
@@ -160,8 +159,7 @@ func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, e
 
 	artifact := &Artifact{Key: key, Bytes: size, SHA256: hex.EncodeToString(hasher.Sum(nil))}
 	meta := map[string]any{
-		"duration_ms": j.now().Sub(started).Milliseconds(),
-		"encrypted":   len(j.recipients) > 0,
+		"encrypted": len(j.recipients) > 0,
 	}
 
 	if j.cfg.RetentionMode == "agent" {

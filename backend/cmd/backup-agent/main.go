@@ -80,7 +80,7 @@ func run(logger *slog.Logger) int {
 
 	agent.Start(ctx)
 	logger.Info("backup agent ready",
-		"dump_at", os.Getenv("BACKUP_DUMP_AT"),
+		"dump_at", cfg.DumpAt.String(),
 		"retention_mode", cfg.RetentionMode,
 		"encrypted", len(cfg.AgeRecipients) > 0,
 		"metrics_addr", cfg.MetricsAddr)

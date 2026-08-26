@@ -89,24 +89,19 @@ func (m *Metrics) Handler(token string) http.Handler {
 		MaxRequestsInFlight: 1,
 		Timeout:             10 * time.Second,
 	})
+	// The guard mirrors internal/metrics.Handler byte for byte (same bodies,
+	// same WWW-Authenticate) — one operator, one scrape contract; two subtly
+	// different copies of a security check age badly.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if token == "" {
-			http.Error(w, "metrics token not configured", http.StatusServiceUnavailable)
+			http.Error(w, "metrics disabled", http.StatusServiceUnavailable)
 			return
 		}
-		got, found := bearerToken(r.Header.Get("Authorization"))
-		if !found || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
+			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		inner.ServeHTTP(w, r)
 	})
-}
-
-func bearerToken(header string) (string, bool) {
-	const prefix = "Bearer "
-	if len(header) <= len(prefix) || header[:len(prefix)] != prefix {
-		return "", false
-	}
-	return header[len(prefix):], true
 }

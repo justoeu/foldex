@@ -53,16 +53,31 @@ type Config struct {
 	AgeRecipients  []string
 	AllowPlaintext bool
 
+	// SpoolDir is where the dump ciphertext is staged before upload. Empty
+	// means the OS temp dir — which in the container is the writable LAYER,
+	// fine for small libraries but worth pointing at a volume when the dump
+	// outgrows the host's docker filesystem.
+	SpoolDir string
+
 	// Observability.
 	MetricsAddr  string
 	MetricsToken string
 }
 
-// DBURL derives the pgx connection string the same way the backend does.
+// DBURL derives the pgx connection string from POSTGRES_* (INV-101).
+// Built with url.URL, not QueryEscape: userinfo has its own escaping rules —
+// QueryEscape turns a space into "+", which net/url does NOT decode back in
+// userinfo, so a password with a space would fail auth with nothing pointing
+// at the cause.
 func (c Config) DBURL() string {
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		url.QueryEscape(c.PGUser), url.QueryEscape(c.PGPassword),
-		c.PGHost, c.PGPort, c.PGDatabase, c.PGSSLMode)
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(c.PGUser, c.PGPassword),
+		Host:     fmt.Sprintf("%s:%d", c.PGHost, c.PGPort),
+		Path:     "/" + c.PGDatabase,
+		RawQuery: "sslmode=" + url.QueryEscape(c.PGSSLMode),
+	}
+	return u.String()
 }
 
 // Load reads the agent configuration from the environment and validates it
@@ -94,6 +109,8 @@ func Load() (Config, error) {
 
 		AllowPlaintext: envBool("BACKUP_ALLOW_PLAINTEXT", false),
 
+		SpoolDir: os.Getenv("BACKUP_SPOOL_DIR"),
+
 		MetricsAddr:  envOr("BACKUP_METRICS_ADDR", ":9099"),
 		MetricsToken: os.Getenv("METRICS_TOKEN"),
 	}
@@ -105,20 +122,20 @@ func Load() (Config, error) {
 		{"BACKUP_S3_SECRET_KEY", c.S3SecretKey},
 	} {
 		if strings.TrimSpace(missing.val) == "" {
-			return Config{}, fmt.Errorf("%s is required — the backup agent refuses to boot half-configured", missing.name)
+			return Config{}, fmt.Errorf("backupagent: %s is required — the backup agent refuses to boot half-configured", missing.name)
 		}
 	}
 
 	if raw := strings.TrimSpace(os.Getenv("BACKUP_DUMP_AT")); raw != "" {
 		anchor, err := ParseAnchor(raw)
 		if err != nil {
-			return Config{}, fmt.Errorf("BACKUP_DUMP_AT: %w", err)
+			return Config{}, fmt.Errorf("backupagent: BACKUP_DUMP_AT: %w", err)
 		}
 		c.DumpAt = anchor
 	}
 
 	if c.RetentionMode != "agent" && c.RetentionMode != "bucket" {
-		return Config{}, fmt.Errorf("BACKUP_RETENTION_MODE must be \"agent\" or \"bucket\", got %q — the mode is declared, never inferred from an AccessDenied", c.RetentionMode)
+		return Config{}, fmt.Errorf("backupagent: BACKUP_RETENTION_MODE must be \"agent\" or \"bucket\", got %q — the mode is declared, never inferred from an AccessDenied", c.RetentionMode)
 	}
 
 	if recips := strings.TrimSpace(os.Getenv("BACKUP_AGE_RECIPIENTS")); recips != "" {
@@ -132,7 +149,7 @@ func Load() (Config, error) {
 	// is a bucket off the machine. Plaintext is an explicit, named opt-out for
 	// operators who encrypt at the bucket (SSE-KMS) — never a fallback.
 	if len(c.AgeRecipients) == 0 && !c.AllowPlaintext {
-		return Config{}, fmt.Errorf("BACKUP_AGE_RECIPIENTS is empty: refusing to upload plaintext dumps (set it, or set BACKUP_ALLOW_PLAINTEXT=1 if the bucket itself encrypts)")
+		return Config{}, fmt.Errorf("backupagent: BACKUP_AGE_RECIPIENTS is empty: refusing to upload plaintext dumps (set it, or set BACKUP_ALLOW_PLAINTEXT=1 if the bucket itself encrypts)")
 	}
 
 	return c, nil
