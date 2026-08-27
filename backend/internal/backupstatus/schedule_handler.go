@@ -53,6 +53,14 @@ func (h *Handler) GetSchedule(w http.ResponseWriter, r *http.Request) {
 			"interval_min":      backupagent.MinIntervalMin,
 			"interval_max":      backupagent.MaxIntervalMin,
 		},
+		// The document shape THIS backend writes. Paired with the heartbeat's
+		// own schema_version it lets the band say "the agent predates the
+		// current agenda format" — a skew that is otherwise silent, because
+		// backupagent.RequiredSchemaVersion is a floor: an older agent boots
+		// fine on a newer schema and simply ignores the fields it never
+		// learned. The client COMPARES the two numbers; it does not re-derive
+		// the policy (INV-138).
+		"agent_schema_version": backupagent.RequiredSchemaVersion,
 	}
 	// null, not a zero struct: "no agent ever wrote a heartbeat" is the
 	// honest empty state the band renders as "agente nunca visto" — a zero

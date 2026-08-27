@@ -216,6 +216,8 @@ func TestSchedule_GetServesTheHeartbeat(t *testing.T) {
 	require.NoError(t, backupagent.NewScheduleStore(h.pool).Heartbeat(context.Background(), backupagent.AgentState{
 		SeenAt:  time.Now().UTC(),
 		Version: "2.17.0",
+		// One BEHIND the backend: the skew the band exists to name.
+		SchemaVersion: backupagent.RequiredSchemaVersion - 1,
 		Jobs: map[string]backupagent.JobReport{
 			"drill": {Capable: false, Reason: "no_identity", Source: "env", Schedule: "disabled"},
 		},
@@ -227,6 +229,10 @@ func TestSchedule_GetServesTheHeartbeat(t *testing.T) {
 	agent, _ := body["agent"].(map[string]any)
 	require.NotNil(t, agent)
 	assert.Equal(t, "2.17.0", agent["version"])
+	// Both numbers travel, so the client compares rather than re-deriving a
+	// policy the server already knows (INV-138's reasoning).
+	assert.EqualValues(t, backupagent.RequiredSchemaVersion-1, agent["schema_version"])
+	assert.EqualValues(t, backupagent.RequiredSchemaVersion, body["agent_schema_version"])
 	jobs, _ := agent["jobs"].(map[string]any)
 	drill, _ := jobs["drill"].(map[string]any)
 	assert.Equal(t, false, drill["capable"])

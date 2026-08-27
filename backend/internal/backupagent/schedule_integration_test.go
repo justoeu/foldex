@@ -466,8 +466,13 @@ func TestScheduleStore_HeartbeatRoundTrip(t *testing.T) {
 	assert.False(t, seen, "no heartbeat ever written must read as \"never seen\", not a zero time")
 
 	state := AgentState{
-		SeenAt:  time.Now().UTC().Truncate(time.Millisecond),
-		Version: "2.17.0",
+		SeenAt: time.Now().UTC().Truncate(time.Millisecond),
+		// The version is for a human to read. SchemaVersion is what the band
+		// can REASON about: it says which document shape this build knows how
+		// to read, so a backend on a newer shape can tell that the agent
+		// predates it instead of guessing from a marketing string.
+		Version:       "2.17.0",
+		SchemaVersion: RequiredSchemaVersion,
 		Jobs: map[string]JobReport{
 			JobDump:  {Capable: true, Source: "db", Schedule: "04:15"},
 			JobDrill: {Capable: false, Reason: "no_identity", Source: "env", Schedule: "disabled"},
@@ -478,7 +483,19 @@ func TestScheduleStore_HeartbeatRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, seen)
 	assert.Equal(t, "2.17.0", got.Version)
+	assert.Equal(t, RequiredSchemaVersion, got.SchemaVersion)
 	assert.Equal(t, state.Jobs, got.Jobs)
+
+	// An agent that predates the field at all reads back as 0, which the band
+	// must be able to tell apart from "current" — a missing number is not a
+	// matching one.
+	_, err = pool.Exec(ctx,
+		`UPDATE backup_agent_state SET capabilities = capabilities - 'schema_version' WHERE id = 1`)
+	require.NoError(t, err)
+	old, seen, err := store.AgentSeen(ctx)
+	require.NoError(t, err)
+	require.True(t, seen)
+	assert.Zero(t, old.SchemaVersion)
 
 	// The row is a singleton: a second heartbeat replaces, never appends.
 	state.Version = "2.17.1"

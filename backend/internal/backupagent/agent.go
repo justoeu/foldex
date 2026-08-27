@@ -291,7 +291,14 @@ func (a *Agent) agentState() AgentState {
 	if !a.registered(JobMirror) {
 		jobs[JobMirror] = JobReport{Capable: false, Reason: "mirror_off", Source: "env", Schedule: "disabled"}
 	}
-	return AgentState{SeenAt: time.Now(), Version: a.cfg.Version, Jobs: jobs}
+	return AgentState{
+		SeenAt:  time.Now(),
+		Version: a.cfg.Version,
+		// The constant this binary was compiled with, not a value read from
+		// anywhere: it is a claim about what THIS code understands.
+		SchemaVersion: RequiredSchemaVersion,
+		Jobs:          jobs,
+	}
 }
 
 // CheckSchema gates the boot on the agent's own migrations being applied.

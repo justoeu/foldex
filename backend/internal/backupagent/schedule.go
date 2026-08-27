@@ -621,14 +621,29 @@ type JobReport struct {
 
 // AgentState is the heartbeat row.
 type AgentState struct {
-	SeenAt  time.Time            `json:"seen_at"`
-	Version string               `json:"version"`
-	Jobs    map[string]JobReport `json:"jobs"`
+	SeenAt  time.Time `json:"seen_at"`
+	Version string    `json:"version"`
+	// SchemaVersion is the agent's own RequiredSchemaVersion: the newest
+	// migration THIS build knows how to read. It is the honest signal for
+	// build skew, and Version is not — a version string says what was shipped,
+	// not what the process understands.
+	//
+	// The failure it exists to surface is silent: RequiredSchemaVersion is a
+	// FLOOR, so an agent built against 42 boots happily on schema 43 and reads
+	// the unified rows honouring `times` while ignoring `weekdays` entirely.
+	// It over-runs, which is the safe direction, and says nothing. Zero means
+	// a heartbeat written before this field existed — not a match.
+	SchemaVersion int                  `json:"schema_version,omitempty"`
+	Jobs          map[string]JobReport `json:"jobs"`
 }
 
 // Heartbeat upserts the single agent-state row.
 func (s *ScheduleStore) Heartbeat(ctx context.Context, state AgentState) error {
-	caps, err := json.Marshal(map[string]any{"version": state.Version, "jobs": state.Jobs})
+	caps, err := json.Marshal(map[string]any{
+		"version":        state.Version,
+		"schema_version": state.SchemaVersion,
+		"jobs":           state.Jobs,
+	})
 	if err != nil {
 		return err
 	}
@@ -656,11 +671,17 @@ func (s *ScheduleStore) AgentSeen(ctx context.Context) (AgentState, bool, error)
 		return AgentState{}, false, fmt.Errorf("backupagent: agent state: %w", err)
 	}
 	var doc struct {
-		Version string               `json:"version"`
-		Jobs    map[string]JobReport `json:"jobs"`
+		Version       string               `json:"version"`
+		SchemaVersion int                  `json:"schema_version"`
+		Jobs          map[string]JobReport `json:"jobs"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return AgentState{}, false, fmt.Errorf("backupagent: agent capabilities: %w", err)
 	}
-	return AgentState{SeenAt: seenAt, Version: doc.Version, Jobs: doc.Jobs}, true, nil
+	return AgentState{
+		SeenAt:        seenAt,
+		Version:       doc.Version,
+		SchemaVersion: doc.SchemaVersion,
+		Jobs:          doc.Jobs,
+	}, true, nil
 }
