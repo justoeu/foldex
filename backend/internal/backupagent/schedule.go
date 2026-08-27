@@ -22,114 +22,208 @@ import (
 // protection under the env baseline: an absent or invalid row falls back to
 // the env schedule, and only user_zip may be switched off by a row at all.
 const (
-	// MinDumpTimes..MaxDumpTimes bound how many daily dumps a row may ask
-	// for. The lower bound is the floor that matters: a dump row can trim the
-	// agenda to once a day, never to zero.
-	MinDumpTimes = 1
-	MaxDumpTimes = 6
-	// Mirror cadence bounds, minutes. The lower bound keeps a row from
-	// turning the mirror into a hot loop against the origin; the upper keeps
-	// it from stretching past daily — below the baseline the alert rules and
-	// the staleness contract assume.
-	MinMirrorIntervalMin = 15
-	MaxMirrorIntervalMin = 1440
+	// MinTimes..MaxTimes bound how many wall times one agenda may carry. The
+	// lower bound is the floor that matters: a row can trim the agenda to
+	// once a day, never to zero.
+	MinTimes = 1
+	MaxTimes = 6
+	// MinWeekdays is the general floor: an agenda that fires on no day at all
+	// is a job switched off through the back door.
+	MinWeekdays = 1
+	// MinDumpWeekdays is deliberately HIGHER than every other job's floor.
+	// The dump is the instance's disaster floor, not a product convenience:
+	// four days a week means three consecutive days with no dump at all, and
+	// no other job's agenda buys that back.
+	MinDumpWeekdays = 5
+	// Interval bounds, minutes. The lower bound keeps a row from turning a
+	// job into a hot loop against its source; the upper keeps it from
+	// stretching past daily — below the baseline the alert rules and the
+	// staleness contract assume.
+	MinIntervalMin = 15
+	MaxIntervalMin = 1440
+)
+
+// Scheduling modes. The mode is EXPLICIT, never inferred from which fields a
+// document happens to carry: a row with both times and interval_min would
+// otherwise be half-honoured in silence.
+const (
+	modeTimes    = "times"
+	modeInterval = "interval"
 )
 
 // JobConfig is the per-job document stored in backup_schedule.config. One
-// struct for the four shapes rather than four types: the column is a single
-// jsonb and the shape is discriminated by the job name, exactly like
-// backup_run.meta.
+// shape for all four jobs: what differs between them is the floors, not the
+// vocabulary.
 type JobConfig struct {
-	// Times: dump only — daily wall times ("HH:MM"), 1..6 entries.
-	Times []string `json:"times,omitempty"`
-	// Time: drill and user_zip — one daily/weekly wall time.
-	Time string `json:"time,omitempty"`
-	// Weekday: drill only — sun..sat. The drill stays weekly by design; the
-	// row chooses WHICH week slot, never a lower frequency.
-	Weekday string `json:"weekday,omitempty"`
-	// IntervalMin: mirror only.
-	IntervalMin int `json:"interval_min,omitempty"`
-	// Enabled: user_zip only — the one job a row may disable, because it is a
-	// product convenience, not the instance's protection. Pointer so an
-	// absent field can be told apart from an explicit false.
+	// Enabled: only user_zip may be false — it is a product convenience, not
+	// the instance's protection. Pointer so an absent field can be told apart
+	// from an explicit false.
 	Enabled *bool `json:"enabled,omitempty"`
+	// Mode: "times" or "interval".
+	Mode string `json:"mode"`
+	// Times: mode "times" — wall times "HH:MM", MinTimes..MaxTimes, no repeats.
+	Times []string `json:"times,omitempty"`
+	// Weekdays: mode "times" — a non-empty subset of sun..sat, no repeats.
+	Weekdays []string `json:"weekdays,omitempty"`
+	// IntervalMin: mode "interval" — MinIntervalMin..MaxIntervalMin.
+	IntervalMin int `json:"interval_min,omitempty"`
+
+	// Time and Weekday are the pre-unification vocabulary, kept only so a
+	// stored row written by an older backend can still be READ and
+	// normalized. They are relics: ValidateJobConfig refuses a document that
+	// carries them, because a PUT sending them is a client that did not
+	// upgrade, and honouring it would keep the old shape alive by accident.
+	Time    string `json:"time,omitempty"`
+	Weekday string `json:"weekday,omitempty"`
+}
+
+// jobFloor is what one job's agenda may not go under.
+type jobFloor struct {
+	mayDisable  bool
+	minWeekdays int
+}
+
+var jobFloors = map[string]jobFloor{
+	JobDump:    {mayDisable: false, minWeekdays: MinDumpWeekdays},
+	JobDrill:   {mayDisable: false, minWeekdays: MinWeekdays},
+	JobMirror:  {mayDisable: false, minWeekdays: MinWeekdays},
+	JobUserZip: {mayDisable: true, minWeekdays: MinWeekdays},
 }
 
 // ValidateJobConfig enforces the compiled floors for one job's row. Both
 // writers-side (the backend's PUT) and reader-side (the agent's load) call
 // it, so a row that skipped the API degrades to the env baseline instead of
-// being half-honoured.
+// being half-honoured. Every refusal names the real numbers: the handler
+// returns the message verbatim and the UI renders it without restating it
+// (INV-169's reasoning).
 func ValidateJobConfig(job string, cfg JobConfig) error {
-	switch job {
-	case JobDump:
-		if cfg.Time != "" || cfg.Weekday != "" || cfg.IntervalMin != 0 || cfg.Enabled != nil {
-			return fmt.Errorf("dump schedule accepts only \"times\"")
-		}
-		if len(cfg.Times) < MinDumpTimes || len(cfg.Times) > MaxDumpTimes {
-			return fmt.Errorf("dump needs between %d and %d daily times — the floor is one dump per day, never zero", MinDumpTimes, MaxDumpTimes)
-		}
-		seen := map[string]bool{}
-		for _, t := range cfg.Times {
-			a, err := ParseAnchor(t)
-			if err != nil {
-				return fmt.Errorf("dump time %q: %w", t, err)
-			}
-			if a.Weekly {
-				return fmt.Errorf("dump time %q: weekday not allowed — dump times are daily", t)
-			}
-			if seen[a.String()] {
-				return fmt.Errorf("dump time %q repeats", t)
-			}
-			seen[a.String()] = true
-		}
-	case JobDrill:
-		if cfg.Times != nil || cfg.IntervalMin != 0 || cfg.Enabled != nil {
-			return fmt.Errorf("drill schedule accepts only \"time\" and \"weekday\"")
-		}
-		if cfg.Time == "" || cfg.Weekday == "" {
-			return fmt.Errorf("drill needs \"time\" and \"weekday\" — it is weekly by design and a row cannot switch it off")
-		}
-		if _, err := ParseAnchor(cfg.Time + " " + cfg.Weekday); err != nil {
-			return fmt.Errorf("drill schedule: %w", err)
-		}
-	case JobMirror:
-		if cfg.Times != nil || cfg.Time != "" || cfg.Weekday != "" || cfg.Enabled != nil {
-			return fmt.Errorf("mirror schedule accepts only \"interval_min\"")
-		}
-		if cfg.IntervalMin < MinMirrorIntervalMin || cfg.IntervalMin > MaxMirrorIntervalMin {
-			return fmt.Errorf("mirror interval must be between %d and %d minutes — a row tunes the cadence, it cannot switch the mirror off", MinMirrorIntervalMin, MaxMirrorIntervalMin)
-		}
-	case JobUserZip:
-		if cfg.Times != nil || cfg.Weekday != "" || cfg.IntervalMin != 0 {
-			return fmt.Errorf("user_zip schedule accepts only \"enabled\" and \"time\"")
-		}
-		if cfg.Enabled == nil {
-			return fmt.Errorf("user_zip needs \"enabled\"")
-		}
-		if *cfg.Enabled {
-			if cfg.Time == "" {
-				return fmt.Errorf("user_zip needs \"time\" while enabled")
-			}
-			a, err := ParseAnchor(cfg.Time)
-			if err != nil {
-				return fmt.Errorf("user_zip time: %w", err)
-			}
-			if a.Weekly {
-				return fmt.Errorf("user_zip time %q: weekday not allowed — the archive is daily", cfg.Time)
-			}
-		}
-	default:
+	floor, known := jobFloors[job]
+	if !known {
 		return fmt.Errorf("unknown job %q", job)
+	}
+	if cfg.Time != "" || cfg.Weekday != "" {
+		return fmt.Errorf("%q and %q are the previous schedule vocabulary and are read-only — send {\"mode\":\"times\",\"times\":[…],\"weekdays\":[…]}", "time", "weekday")
+	}
+	if cfg.Mode != modeTimes && cfg.Mode != modeInterval {
+		return fmt.Errorf("%s needs \"mode\": %q or %q", job, modeTimes, modeInterval)
+	}
+	if cfg.Enabled != nil && !floor.mayDisable {
+		return fmt.Errorf("%s cannot be switched off — only user_zip carries \"enabled\", because it is the one job that is a product convenience rather than the instance's protection", job)
+	}
+	if cfg.Enabled != nil && !*cfg.Enabled {
+		// A disabled job needs no agenda, and must not carry one: a stored
+		// agenda beside enabled:false is two answers to the same question.
+		if len(cfg.Times) > 0 || len(cfg.Weekdays) > 0 || cfg.IntervalMin != 0 {
+			return fmt.Errorf("a disabled %s carries no agenda — send \"enabled\": false alone", job)
+		}
+		return nil
+	}
+
+	switch cfg.Mode {
+	case modeTimes:
+		if cfg.IntervalMin != 0 {
+			return fmt.Errorf("mode %q does not carry \"interval_min\"", modeTimes)
+		}
+		if err := validateTimes(job, cfg.Times); err != nil {
+			return err
+		}
+		return validateWeekdays(job, cfg.Weekdays, floor.minWeekdays)
+	default:
+		if cfg.Times != nil || cfg.Weekdays != nil {
+			return fmt.Errorf("mode %q does not carry \"times\" or \"weekdays\"", modeInterval)
+		}
+		if cfg.IntervalMin < MinIntervalMin || cfg.IntervalMin > MaxIntervalMin {
+			return fmt.Errorf("%s interval must be between %d and %d minutes — a row tunes the cadence, it cannot switch the job off", job, MinIntervalMin, MaxIntervalMin)
+		}
 	}
 	return nil
 }
 
+func validateTimes(job string, times []string) error {
+	if len(times) < MinTimes || len(times) > MaxTimes {
+		return fmt.Errorf("%s needs between %d and %d wall times — the floor is one run per scheduled day, never zero", job, MinTimes, MaxTimes)
+	}
+	seen := map[string]bool{}
+	for _, raw := range times {
+		a, err := ParseAnchor(raw)
+		if err != nil {
+			return fmt.Errorf("%s time %q: %w", job, raw, err)
+		}
+		if a.Weekly {
+			return fmt.Errorf("%s time %q: the weekday belongs in \"weekdays\", not in the time", job, raw)
+		}
+		if seen[a.String()] {
+			return fmt.Errorf("%s time %q repeats", job, raw)
+		}
+		seen[a.String()] = true
+	}
+	return nil
+}
+
+func validateWeekdays(job string, days []string, minDays int) error {
+	if len(days) == 0 {
+		return fmt.Errorf("%s needs at least %d weekday(s) — an agenda that fires on no day is the job switched off", job, minDays)
+	}
+	seen := map[time.Weekday]bool{}
+	for _, raw := range days {
+		wd, ok := weekdays[strings.ToLower(strings.TrimSpace(raw))]
+		if !ok {
+			return fmt.Errorf("%s weekday %q is not one of sun..sat", job, raw)
+		}
+		if seen[wd] {
+			return fmt.Errorf("%s weekday %q repeats", job, raw)
+		}
+		seen[wd] = true
+	}
+	if len(seen) < minDays {
+		return fmt.Errorf("%s needs at least %d weekdays, got %d", job, minDays, len(seen))
+	}
+	return nil
+}
+
+// normalized translates a document written before the unified shape into it,
+// so a row an older backend stored — or one hand-written in SQL — is honoured
+// instead of silently degrading the job to the env baseline. A document that
+// already carries a mode is returned untouched.
+func (c JobConfig) normalized(job string) JobConfig {
+	if c.Mode != "" {
+		return c
+	}
+	out := JobConfig{Mode: modeTimes, Enabled: c.Enabled}
+	switch {
+	case c.IntervalMin != 0:
+		out = JobConfig{Mode: modeInterval, IntervalMin: c.IntervalMin}
+	case len(c.Times) > 0:
+		out.Times, out.Weekdays = c.Times, everyWeekdayName()
+	case c.Time != "":
+		out.Times = []string{c.Time}
+		if c.Weekday != "" {
+			out.Weekdays = []string{strings.ToLower(c.Weekday)}
+		} else {
+			out.Weekdays = everyWeekdayName()
+		}
+	}
+	if job != JobUserZip {
+		// Only user_zip may carry it; a relic that did would normalize into a
+		// row the validator refuses forever.
+		out.Enabled = nil
+	}
+	return out
+}
+
+func everyWeekdayName() []string {
+	out := make([]string, 0, len(weekdayNames))
+	out = append(out, weekdayNames[:]...)
+	return out
+}
+
 // Timing is one job's effective runtime schedule after merging the env
-// baseline with the database row: either wall-clock anchors or an interval,
-// with Source recording which side won so the heartbeat — and through it the
-// UI — can say where the agenda came from.
+// baseline with the database row: wall times crossed with a weekday set, or
+// an interval, with Source recording which side won so the heartbeat — and
+// through it the UI — can say where the agenda came from.
 type Timing struct {
-	Anchors  []Anchor
+	Anchors  []Anchor       // wall times only; the days are Weekdays'
+	Weekdays []time.Weekday // empty = every day
 	Interval time.Duration
 	Source   string // "db" | "env"
 }
@@ -137,25 +231,68 @@ type Timing struct {
 // Enabled reports whether the timing schedules anything at all.
 func (t Timing) Enabled() bool { return len(t.Anchors) > 0 || t.Interval > 0 }
 
-// Next returns the earliest firing instant strictly after now across the
-// anchors, plus the anchor that owns it — the dump may carry several daily
-// times, and the scheduler sleeps until the nearest one.
-func (t Timing) Next(now time.Time) (time.Time, Anchor) {
-	var best time.Time
-	var owner Anchor
-	for _, a := range t.Anchors {
-		n := a.Next(now)
-		if best.IsZero() || n.Before(best) {
-			best, owner = n, a
+// days is the weekday set, sorted and deduplicated; empty means every day.
+func (t Timing) days() []time.Weekday {
+	if len(t.Weekdays) == 0 {
+		return []time.Weekday{time.Sunday, time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday}
+	}
+	seen := map[time.Weekday]bool{}
+	out := make([]time.Weekday, 0, len(t.Weekdays))
+	for _, d := range t.Weekdays {
+		if !seen[d] {
+			seen[d] = true
+			out = append(out, d)
 		}
 	}
-	return best, owner
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func (t Timing) daySet() map[time.Weekday]bool {
+	set := map[time.Weekday]bool{}
+	for _, d := range t.days() {
+		set[d] = true
+	}
+	return set
+}
+
+// Next returns the earliest firing instant strictly after now across the times
+// × weekdays, in now's location — the dump may carry several times a day and
+// the scheduler sleeps until the nearest one.
+//
+// It is recomputed after every firing rather than derived by adding fixed
+// intervals — that is what absorbs DST: on a transition day a time may fire
+// twice or be skipped, which is documented and accepted (catch-up covers the
+// skip, and a duplicate run is harmless — the second is fast and retention
+// prunes it).
+func (t Timing) Next(now time.Time) time.Time {
+	days := t.daySet()
+	var best time.Time
+	for _, a := range t.Anchors {
+		cand := time.Date(now.Year(), now.Month(), now.Day(), a.Hour, a.Minute, 0, 0, now.Location())
+		// At most eight steps: the day set is never empty, so a scheduled
+		// weekday is reached within a week of the first candidate.
+		for i := 0; i < 8; i++ {
+			if cand.After(now) && days[cand.Weekday()] {
+				if best.IsZero() || cand.Before(best) {
+					best = cand
+				}
+				break
+			}
+			cand = cand.AddDate(0, 0, 1)
+		}
+	}
+	return best
 }
 
 // MaxGap is the longest legitimate silence between consecutive firings — the
 // interval the catch-up decision and the staleness contract compare against.
-// With one anchor it is the anchor's own interval; with several daily times
-// it is the widest wraparound gap between them.
+// For an interval timing it is the interval; otherwise it is the widest
+// wraparound gap of the WEEK GRID (weekdays × times). The week grid subsumes
+// every case a special-cased daily/weekly split used to handle: one time on
+// one weekday yields seven days on its own, and a twice-daily agenda
+// restricted to three weekdays yields the real fri→mon silence rather than
+// the 12h a minutes-since-midnight calculation would report.
 func (t Timing) MaxGap() time.Duration {
 	if t.Interval > 0 {
 		return t.Interval
@@ -163,31 +300,15 @@ func (t Timing) MaxGap() time.Duration {
 	if len(t.Anchors) == 0 {
 		return 0
 	}
-	if len(t.Anchors) == 1 {
-		return t.Anchors[0].Interval()
-	}
-	// The wraparound arithmetic below assumes DAILY anchors — today only the
-	// dump carries several, and its validation refuses weekdays. If a weekly
-	// anchor ever lands in a multi-anchor timing, minutes-since-midnight
-	// would understate its week-long gap and every boot would catch up
-	// spuriously; the widest single interval is the honest answer there.
-	for _, a := range t.Anchors {
-		if a.Weekly {
-			widest := t.Anchors[0].Interval()
-			for _, a := range t.Anchors[1:] {
-				if a.Interval() > widest {
-					widest = a.Interval()
-				}
-			}
-			return widest
+	const week = 7 * 24 * 60
+	mins := make([]int, 0, len(t.Anchors)*7)
+	for _, d := range t.days() {
+		for _, a := range t.Anchors {
+			mins = append(mins, int(d)*24*60+a.Hour*60+a.Minute)
 		}
 	}
-	mins := make([]int, 0, len(t.Anchors))
-	for _, a := range t.Anchors {
-		mins = append(mins, a.Hour*60+a.Minute)
-	}
 	sort.Ints(mins)
-	widest := mins[0] + 24*60 - mins[len(mins)-1]
+	widest := mins[0] + week - mins[len(mins)-1]
 	for i := 1; i < len(mins); i++ {
 		if gap := mins[i] - mins[i-1]; gap > widest {
 			widest = gap
@@ -196,10 +317,13 @@ func (t Timing) MaxGap() time.Duration {
 	return time.Duration(widest) * time.Minute
 }
 
-// Due is the boot catch-up decision across the anchors, MaxGap-based so a
-// twice-daily dump restarting after a missed evening slot still catches up.
+// Due is the boot catch-up decision: run now when the job never succeeded, or
+// when the last success is more than one full gap plus 25% grace behind. The
+// grace keeps a restart minutes after a firing from double-running a job that
+// in fact succeeded on time. Interval and wall-time agendas share it — MaxGap
+// is what tells them apart.
 func (t Timing) Due(now, lastSuccess time.Time) bool {
-	if !t.Enabled() || t.Interval > 0 {
+	if !t.Enabled() {
 		return false
 	}
 	if lastSuccess.IsZero() {
@@ -209,14 +333,22 @@ func (t Timing) Due(now, lastSuccess time.Time) bool {
 	return now.Sub(lastSuccess) > gap+gap/4
 }
 
-// PreviousSlot is the most recent anchor occurrence at or before now — the
-// slot a catch-up run satisfies (scheduled_for's contract, migration 000040).
+// PreviousSlot is the most recent firing at or before now — the slot a
+// catch-up run satisfies (scheduled_for's contract, migration 000040), which
+// must be the MISSED instant, not the moment the agent happened to restart.
 func (t Timing) PreviousSlot(now time.Time) time.Time {
+	days := t.daySet()
 	var best time.Time
 	for _, a := range t.Anchors {
-		p := a.PreviousSlot(now)
-		if p.After(best) {
-			best = p
+		cand := time.Date(now.Year(), now.Month(), now.Day(), a.Hour, a.Minute, 0, 0, now.Location())
+		for i := 0; i < 8; i++ {
+			if !cand.After(now) && days[cand.Weekday()] {
+				if cand.After(best) {
+					best = cand
+				}
+				break
+			}
+			cand = cand.AddDate(0, 0, -1)
 		}
 	}
 	return best
@@ -230,61 +362,94 @@ func (t Timing) String() string {
 	if len(t.Anchors) == 0 {
 		return "disabled"
 	}
-	parts := make([]string, 0, len(t.Anchors))
+	times := make([]string, 0, len(t.Anchors))
 	for _, a := range t.Anchors {
-		parts = append(parts, a.String())
+		times = append(times, a.String())
 	}
-	return strings.Join(parts, ", ")
+	days := t.days()
+	if len(days) == len(weekdayNames) {
+		return strings.Join(times, ", ")
+	}
+	names := make([]string, 0, len(days))
+	for _, d := range days {
+		names = append(names, weekdayNames[d])
+	}
+	return strings.Join(times, ", ") + " · " + strings.Join(names, ", ")
+}
+
+// ToConfig is the structured form of this timing — what lets the admin form
+// open pre-filled with the env baseline instead of a blank agenda. A timing
+// with no weekday restriction emits all seven explicitly, so the form shows a
+// concrete set rather than an empty one the owner reads as "no days".
+func (t Timing) ToConfig() JobConfig {
+	if !t.Enabled() {
+		return JobConfig{}
+	}
+	if t.Interval > 0 {
+		return JobConfig{Mode: modeInterval, IntervalMin: int(t.Interval.Minutes())}
+	}
+	cfg := JobConfig{Mode: modeTimes}
+	for _, a := range t.Anchors {
+		cfg.Times = append(cfg.Times, a.String())
+	}
+	for _, d := range t.days() {
+		cfg.Weekdays = append(cfg.Weekdays, weekdayNames[d])
+	}
+	return cfg
 }
 
 // timingFromConfig turns a validated row into a Timing. Only reached after
 // ValidateJobConfig, so parse errors here are impossible by construction —
 // they still surface (as a disabled timing) rather than panic.
-func timingFromConfig(job string, cfg JobConfig) Timing {
+func timingFromConfig(cfg JobConfig) Timing {
 	t := Timing{Source: "db"}
-	switch job {
-	case JobDump:
+	if cfg.Enabled != nil && !*cfg.Enabled {
+		return t
+	}
+	switch cfg.Mode {
+	case modeInterval:
+		t.Interval = time.Duration(cfg.IntervalMin) * time.Minute
+	case modeTimes:
 		for _, raw := range cfg.Times {
 			if a, err := ParseAnchor(raw); err == nil {
-				t.Anchors = append(t.Anchors, a)
+				t.Anchors = append(t.Anchors, timeOnly(a))
 			}
 		}
-	case JobDrill:
-		if a, err := ParseAnchor(cfg.Time + " " + cfg.Weekday); err == nil {
-			t.Anchors = []Anchor{a}
-		}
-	case JobMirror:
-		t.Interval = time.Duration(cfg.IntervalMin) * time.Minute
-	case JobUserZip:
-		if cfg.Enabled != nil && *cfg.Enabled {
-			if a, err := ParseAnchor(cfg.Time); err == nil {
-				t.Anchors = []Anchor{a}
+		for _, raw := range cfg.Weekdays {
+			if wd, ok := weekdays[strings.ToLower(strings.TrimSpace(raw))]; ok {
+				t.Weekdays = append(t.Weekdays, wd)
 			}
 		}
 	}
 	return t
 }
 
-// envTiming is the env-baseline Timing for one job.
+// envTiming is the env-baseline Timing for one job. A weekly env anchor
+// becomes a one-day weekday set: the days live on the Timing now.
 func envTiming(job string, cfg Config) Timing {
 	t := Timing{Source: "env"}
+	var anchor Anchor
 	switch job {
 	case JobDump:
-		if cfg.DumpAt.Enabled() {
-			t.Anchors = []Anchor{cfg.DumpAt}
-		}
+		anchor = cfg.DumpAt
 	case JobDrill:
-		if cfg.DrillAt.Enabled() {
-			t.Anchors = []Anchor{cfg.DrillAt}
-		}
+		anchor = cfg.DrillAt
+	case JobUserZip:
+		anchor = cfg.UserZipAt
 	case JobMirror:
 		if cfg.MirrorEnabled() {
 			t.Interval = cfg.MirrorInterval()
 		}
-	case JobUserZip:
-		if cfg.UserZipAt.Enabled() {
-			t.Anchors = []Anchor{cfg.UserZipAt}
-		}
+		return t
+	default:
+		return t
+	}
+	if !anchor.Enabled() {
+		return t
+	}
+	t.Anchors = []Anchor{timeOnly(anchor)}
+	if anchor.Weekly {
+		t.Weekdays = []time.Weekday{anchor.Weekday}
 	}
 	return t
 }
@@ -293,8 +458,8 @@ func envTiming(job string, cfg Config) Timing {
 // nil or invalid row means the baseline; an invalid row is the caller's to
 // log — this function only refuses to honour it. The mirror keeps its
 // capability from env: with the mirror off in env there is no source client
-// in the process, so a row cannot switch it on and IntervalMin only tunes a
-// mirror that exists.
+// in the process, so a row cannot switch it on and a row only tunes a mirror
+// that exists.
 func EffectiveTiming(job string, cfg Config, row *JobConfig) Timing {
 	env := envTiming(job, cfg)
 	if row == nil || ValidateJobConfig(job, *row) != nil {
@@ -303,7 +468,7 @@ func EffectiveTiming(job string, cfg Config, row *JobConfig) Timing {
 	if job == JobMirror && !cfg.MirrorEnabled() {
 		return env
 	}
-	return timingFromConfig(job, *row)
+	return timingFromConfig(*row)
 }
 
 // ScheduleStore reads and writes backup_schedule and the agent heartbeat.
@@ -328,9 +493,11 @@ type ScheduleRow struct {
 	UpdatedByEmail *string `json:"updated_by_email"`
 }
 
-// Load returns the stored rows by job. A row whose document no longer
-// validates is returned anyway — EffectiveTiming refuses it and the caller
-// logs; hiding it here would make the fallback invisible.
+// Load returns the stored rows by job, each normalized into the unified shape
+// so a document written before it is honoured rather than degraded. A row
+// whose document still does not validate is returned anyway — EffectiveTiming
+// refuses it and the caller logs; hiding it here would make the fallback
+// invisible.
 func (s *ScheduleStore) Load(ctx context.Context) (map[string]ScheduleRow, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT bs.job, bs.config, bs.updated_at, u.email
@@ -350,6 +517,7 @@ func (s *ScheduleStore) Load(ctx context.Context) (map[string]ScheduleRow, error
 		if err := json.Unmarshal(raw, &r.Config); err != nil {
 			return nil, fmt.Errorf("backupagent: schedule config for %s: %w", r.Job, err)
 		}
+		r.Config = r.Config.normalized(r.Job)
 		out[r.Job] = r
 	}
 	return out, rows.Err()
@@ -402,6 +570,10 @@ type JobReport struct {
 	Reason   string `json:"reason,omitempty"`
 	Source   string `json:"source"`   // "db" | "env"
 	Schedule string `json:"schedule"` // Timing.String(), for display
+	// Baseline is the ENV agenda as a document, so the admin form can open
+	// pre-filled on it: env is the first option, the database row is the
+	// override. Zero for a job this process cannot run.
+	Baseline JobConfig `json:"baseline"`
 }
 
 // AgentState is the heartbeat row.

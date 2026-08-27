@@ -25,10 +25,13 @@ import (
 // expecting role_permission's instance.backup seed (000041) — before PR5 only
 // the agent touched that table, which is why 000040 itself did not bump this.
 // 42 is ADR-44: the backend reads and writes backup_schedule and reads
-// backup_agent_state (the agenda surface). Distinct from
-// backupagent.RequiredSchemaVersion — also 42 now, but tracked separately
-// because the two binaries' dependencies move independently.
-const RequiredSchemaVersion = 42
+// backup_agent_state (the agenda surface). 43 unifies the four per-job
+// scheduling vocabularies stored in backup_schedule.config into one document
+// — the backend writes the new shape, and an unmigrated database would still
+// hold rows in the old one. Distinct from backupagent.RequiredSchemaVersion —
+// also 43 now, but tracked separately because the two binaries' dependencies
+// move independently.
+const RequiredSchemaVersion = 43
 
 // ErrSchemaOutdated is returned when the database has not been migrated.
 var ErrSchemaOutdated = errors.New("db: schema is older than this binary requires")

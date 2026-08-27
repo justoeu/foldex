@@ -32,10 +32,12 @@ func (h *Handler) GetSchedule(w http.ResponseWriter, r *http.Request) {
 		"jobs": Jobs,
 		"rows": rows,
 		"bounds": map[string]int{
-			"dump_times_min":      backupagent.MinDumpTimes,
-			"dump_times_max":      backupagent.MaxDumpTimes,
-			"mirror_interval_min": backupagent.MinMirrorIntervalMin,
-			"mirror_interval_max": backupagent.MaxMirrorIntervalMin,
+			"times_min":         backupagent.MinTimes,
+			"times_max":         backupagent.MaxTimes,
+			"weekdays_min":      backupagent.MinWeekdays,
+			"dump_weekdays_min": backupagent.MinDumpWeekdays,
+			"interval_min":      backupagent.MinIntervalMin,
+			"interval_max":      backupagent.MaxIntervalMin,
 		},
 	}
 	// null, not a zero struct: "no agent ever wrote a heartbeat" is the
