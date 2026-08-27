@@ -2,7 +2,12 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 ENV_FILE     ?= .env
-COMPOSE_APP  := docker compose -f docker-compose.yml
+# An explicit -f turns OFF docker compose's automatic pickup of
+# docker-compose.override.yml, so the operator's host-local file (gitignored,
+# and where the age identity mount lives) was silently dropped by every `make
+# up*` — the backup agent then crashlooped on a file it could not see.
+COMPOSE_OVERRIDE := $(wildcard docker-compose.override.yml)
+COMPOSE_APP  := docker compose -f docker-compose.yml $(if $(COMPOSE_OVERRIDE),-f $(COMPOSE_OVERRIDE))
 COMPOSE_DB   := docker compose -f docker-compose.db.yml
 COMPOSE_SVC  := docker compose -f docker-compose.services.yml
 
