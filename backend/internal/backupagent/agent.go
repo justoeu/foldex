@@ -186,10 +186,19 @@ func (a *Agent) computeTimings(rows map[string]ScheduleRow) map[string]Timing {
 		var row *JobConfig
 		if r, ok := rows[spec.name]; ok {
 			cfg := r.Config
-			if err := ValidateJobConfig(spec.name, cfg); err != nil {
-				a.logger.Warn("schedule row is invalid; using the env baseline", "job", spec.name, "err", err)
-			} else {
-				row = &cfg
+			switch {
+			// A document json could not read at all says nothing the floors
+			// could judge, so report what actually went wrong rather than the
+			// downstream "needs mode" the empty config would produce.
+			case r.Malformed != "":
+				a.logger.Warn("schedule row could not be decoded; using the env baseline",
+					"job", spec.name, "err", r.Malformed)
+			default:
+				if err := ValidateJobConfig(spec.name, cfg); err != nil {
+					a.logger.Warn("schedule row is invalid; using the env baseline", "job", spec.name, "err", err)
+				} else {
+					row = &cfg
+				}
 			}
 		}
 		if capable, reason := a.capability(spec.name); !capable {

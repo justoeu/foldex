@@ -516,6 +516,11 @@ type ScheduleRow struct {
 	// UpdatedByEmail resolves through app_user for the band; null once the
 	// account is gone (the audit trail keeps the durable record, INV-047).
 	UpdatedByEmail *string `json:"updated_by_email"`
+	// Malformed carries why the stored document could not be decoded at all,
+	// empty when it decoded fine. It is not an error return because ONE
+	// unreadable row must not decide the agenda of the other three jobs — see
+	// Load. The row still comes back so the fallback stays visible.
+	Malformed string `json:"malformed,omitempty"`
 }
 
 // Load returns the stored rows by job, each normalized into the unified shape
@@ -523,6 +528,14 @@ type ScheduleRow struct {
 // whose document still does not validate is returned anyway — EffectiveTiming
 // refuses it and the caller logs; hiding it here would make the fallback
 // invisible.
+//
+// That tolerance is PER ROW, including for a document json cannot decode at
+// all. Failing the whole read on one bad row was the shape this had, and it
+// contradicted the paragraph above in the worst direction: a hand-written
+// {"interval_min": "nightly"} made every sync tick error, so all four jobs
+// silently kept whatever timing they already had and nothing said why. The
+// unreadable row now comes back with Malformed set and a config the floors
+// refuse, which is exactly the path an invalid-but-decodable row takes.
 func (s *ScheduleStore) Load(ctx context.Context) (map[string]ScheduleRow, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT bs.job, bs.config, bs.updated_at, u.email
@@ -540,7 +553,12 @@ func (s *ScheduleStore) Load(ctx context.Context) (map[string]ScheduleRow, error
 			return nil, fmt.Errorf("backupagent: scan schedule: %w", err)
 		}
 		if err := json.Unmarshal(raw, &r.Config); err != nil {
-			return nil, fmt.Errorf("backupagent: schedule config for %s: %w", r.Job, err)
+			// Zeroed, not left half-decoded: a partially populated config is a
+			// document nobody wrote, and the floors must judge the row on what
+			// it says, which here is nothing.
+			r.Config, r.Malformed = JobConfig{}, err.Error()
+			out[r.Job] = r
+			continue
 		}
 		r.Config = r.Config.normalized(r.Job)
 		out[r.Job] = r

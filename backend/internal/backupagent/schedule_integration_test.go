@@ -112,6 +112,42 @@ func TestScheduleStore_RoundTripAndFallback(t *testing.T) {
 // normalizes it; without that the agent would fall back to the env baseline
 // and never say why — the job would look configured and run on another
 // agenda.
+// One undecodable document must not take the OTHER three jobs down with it.
+// Load's contract is per-row tolerance — a row that does not validate is
+// returned anyway so EffectiveTiming refuses it and the caller logs the
+// fallback — and a whole-read error breaks exactly that: the sync loop keeps
+// yesterday's timings for every job and nothing says why. A hand-written
+// {"interval_min": "nightly"} is all it takes.
+func TestScheduleStore_LoadToleratesOneUndecodableRow(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+	store := NewScheduleStore(pool)
+
+	for _, r := range []struct{ job, doc string }{
+		{JobDump, `{"mode":"times","times":["06:00"],"weekdays":["sun","mon","tue","wed","thu","fri","sat"]}`},
+		{JobMirror, `{"interval_min": "nightly"}`},
+	} {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO backup_schedule (job, config) VALUES ($1, $2::jsonb)`, r.job, r.doc)
+		require.NoError(t, err)
+	}
+
+	rows, err := store.Load(ctx)
+	require.NoError(t, err, "one bad document must not fail the whole read")
+
+	// The good row survives intact.
+	require.Contains(t, rows, JobDump)
+	assert.Equal(t, []string{"06:00"}, rows[JobDump].Config.Times)
+
+	// The bad one is REPORTED, not hidden: it comes back carrying the reason,
+	// with a config the floors refuse, so the job falls to the env baseline
+	// and the caller has something to log.
+	require.Contains(t, rows, JobMirror)
+	assert.NotEmpty(t, rows[JobMirror].Malformed, "the row must carry why it could not be read")
+	assert.Error(t, ValidateJobConfig(JobMirror, rows[JobMirror].Config))
+}
+
 func TestScheduleStore_LoadNormalizesALegacyRow(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
