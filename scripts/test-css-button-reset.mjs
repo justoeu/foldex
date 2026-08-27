@@ -66,6 +66,19 @@ const GUARDED = [
   'fx-acard',
   'fx-acct-railbtn',
   'fx-acct-railbtn-active',
+  'fx-bkp-tab',
+  'fx-bkp-tab-on',
+  'fx-bkp-day',
+  'fx-bkp-day-on',
+  'fx-bkp-preset',
+  'fx-bkp-preset-on',
+  'fx-bkp-filter',
+  'fx-bkp-filter-on',
+  'fx-bkp-job-run',
+  'fx-bkp-add',
+  'fx-bkp-job-head',
+  'fx-bkp-sha-btn',
+  'fx-bkp-time-remove',
 ]
 
 const css = FILES.map((f) => readFileSync(join(STYLES, f), 'utf8')).join('\n').replace(

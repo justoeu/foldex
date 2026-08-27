@@ -552,3 +552,71 @@ existe auto-registro no produto — a entrada de uma conta nova é convite ou
   `justify-content` em vez de herdar o layout do overlay. Provado vermelho
   contra o defeito real e verde de volta. Não é um motor de layout — cobre
   exatamente a dependência que quebrou, e diz isso na mensagem.
+
+### Tela de backup reconstruída no padrão do mockup (2026-08-26)
+
+A banda virou tela: quatro KPIs no topo, quadro 2×2 de cards (um por job,
+selecionável), editor de agenda com abas espelhando a seleção, card escuro do
+drill e painel do agente na coluna da direita, e o histórico com filtro por
+desfecho. Os controles por job saíram dos `fx-input` genéricos e viraram o que
+o mockup pede: lista de horários com "adicionar", pílulas de dia da semana,
+campo de intervalo com presets (30m/1h/6h/12h) e o mesmo switch da tela de
+política para o único job que pode ser desligado.
+
+- **O que NÃO foi copiado do mockup, e por quê.** "Baixar último dump" não
+  existe: o processo web não tem credencial do S3 — por design (ADR-43) — então
+  o botão só poderia mentir. O painel "Retenção e destino" (destino primário,
+  espelho, retenção, criptografia) também não: esses valores vivem na env do
+  agente e não passam pela API. No lugar dele, a coluna da direita mostra o
+  heartbeat — versão, visto há quanto tempo, capacidade por job — que é dado
+  real e responde à mesma pergunta ("para onde isso está indo, e está indo?").
+- **Dois KPIs do mockup foram trocados por outros dois.** "Artefatos retidos"
+  não é computável (retenção é do agente) e "falhas nos últimos 7 dias" seria
+  uma janela que a query não tem — o histórico é keyset, não período. Viraram
+  "tamanho do dump" e "falhas consecutivas", que é exatamente o número que a
+  alert rule compara. A contagem do histórico diz "nesta página", não "nas
+  últimas 24 horas", pelo mesmo motivo.
+- **O filtro do histórico é local e assumido como tal**: filtra a página
+  carregada, e o subtítulo continua descrevendo a página inteira para não
+  sugerir que o servidor foi consultado de novo.
+- **Todo botão novo tem seletor qualificado por elemento** (`button.fx-bkp-…`)
+  e os seis segmentados entraram na lista do `test-css-button-reset.mjs` —
+  INV-154 já shipou quatro vezes neste arquivo.
+- **Validação visual sem sessão no browser**: a tela exige login e esta sessão
+  não pode autenticar, então o DOM renderizado foi despejado num harness
+  temporário e servido com o CSS do bundle de produção. Foi assim que apareceram
+  o quadro virando 3+1 numa tela larga (`auto-fit` trocado por duas colunas
+  fixas) e o campo de horário esticando a largura do card.
+- **O sweep pegou um Rules of Hooks**: ao memoizar os derivados, três `useMemo`
+  ficaram DEPOIS dos early returns de pending/error — a contagem de hooks muda
+  no instante em que a query resolve, e a tela quebrava inteira. Os 22 testes
+  do arquivo falharam junto, o que é o comportamento certo do gate: a regra é
+  invisível no typecheck e óbvia no render.
+- **Memo boundaries eram obrigatórios aqui, não enfeite**: a agenda revalida a
+  cada 60 s e o `seen_at` do heartbeat muda em toda tick, então sem `memo` nas
+  folhas cada poll re-renderizava a tabela de histórico inteira. `ScheduleCard`
+  recebe `data`/`isPending`/`isError` em vez do `UseQueryResult` — o objeto da
+  query troca de identidade a cada tick e anularia o próprio memo.
+- **`backupFormat.ts` saiu do componente** e ganhou teste próprio: `formatBytes`
+  tinha uma única asserção indireta, e as bordas (< 1 KiB, uma casa abaixo de
+  dez, teto em TB) e o filtro de valores não-numéricos do `tables` do drill
+  agora estão fixados sem render.
+- **Divergência aceita (MEDIUM do Code Quality):** cada bloco `job === X` do
+  `ScheduleEditor` ainda vive no mesmo componente, com os cinco pedaços de
+  estado declarados juntos. Separar em quatro componentes com estado próprio é
+  a forma certa; ficou de fora porque mexeria no draft state que os testes de
+  PUT por job acabaram de fixar.
+
+### Ajustes na tela de acesso após o primeiro olhar (2026-08-26)
+
+- **A maquete do app vai até a borda do painel.** A coluna promocional passou a
+  ocupar a largura toda e só o TEXTO mantém a medida de 470px — uma chamada com
+  40 ems de linha não se lê, por mais espaço que o painel tenha. A janela sangra
+  os 52px de padding à direita e o recorte fica por conta do raio de 28px do
+  próprio painel.
+- **O botão virou "Entrar" e só habilita com identificador E senha.** A senha é
+  medida por COMPRIMENTO, nunca trimada: espaço no começo ou no fim é caractere
+  legítimo, e trimar aqui recusaria uma senha que o servidor aceitaria. O
+  identificador, esse sim, é trimado — só espaço é vazio.
+- **O estado desabilitado perdeu o `cursor: progress`**, que prometia trabalho
+  em andamento num botão que está apenas esperando o formulário.

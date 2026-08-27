@@ -26,7 +26,7 @@ describe('LoginScreen', () => {
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'a good password')
-    await user.click(screen.getByRole('button', { name: /enter my library/i }))
+    await user.click(screen.getByRole('button', { name: /sign in/i }))
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith('/api/auth/login', {
@@ -51,7 +51,7 @@ describe('LoginScreen', () => {
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'ghost@example.com')
     await user.type(screen.getByLabelText(/^password$/i), 'wrong')
-    await user.click(screen.getByRole('button', { name: /enter my library/i }))
+    await user.click(screen.getByRole('button', { name: /sign in/i }))
 
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/invalid e-mail or password/i)
@@ -65,7 +65,7 @@ describe('LoginScreen', () => {
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'x')
-    await user.click(screen.getByRole('button', { name: /enter my library/i }))
+    await user.click(screen.getByRole('button', { name: /sign in/i }))
 
     // Distinct is correct here: the lockout is keyed on an address the caller
     // already typed, so it reveals nothing they did not supply, and "wrong
@@ -80,7 +80,7 @@ describe('LoginScreen', () => {
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'x')
-    await user.click(screen.getByRole('button', { name: /enter my library/i }))
+    await user.click(screen.getByRole('button', { name: /sign in/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not reach the server/i)
   })
@@ -95,13 +95,47 @@ describe('LoginScreen', () => {
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'pw')
-    const button = screen.getByRole('button', { name: /enter my library/i })
+    const button = screen.getByRole('button', { name: /sign in/i })
     await user.click(button)
 
     // A double-submit burns two attempts from the 5-per-e-mail budget for one
     // impatient click.
     await waitFor(() => expect(button).toBeDisabled())
     release({ data: { status: 'anonymous', features } })
+  })
+
+  /*
+   * The button is the last thing standing between a half-typed form and a
+   * request the server will refuse: it stays disabled until BOTH credentials
+   * are present, so an empty submit never becomes a failed login attempt
+   * against the rate limiter.
+   */
+  it('keeps the submit disabled until both credentials are typed', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<LoginScreen />, { session: null })
+
+    const submit = screen.getByRole('button', { name: /sign in/i })
+    expect(submit).toBeDisabled()
+
+    await user.type(screen.getByLabelText(/e-mail or username/i), 'a@b.c')
+    expect(submit).toBeDisabled()
+
+    await user.type(screen.getByLabelText(/^password$/i), 'hunter2')
+    expect(submit).toBeEnabled()
+  })
+
+  it('treats a whitespace-only identifier as empty, and never trims the password', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<LoginScreen />, { session: null })
+
+    const submit = screen.getByRole('button', { name: /sign in/i })
+    await user.type(screen.getByLabelText(/e-mail or username/i), '   ')
+    // A password that is nothing but spaces is still a password.
+    await user.type(screen.getByLabelText(/^password$/i), '   ')
+    expect(submit).toBeDisabled()
+
+    await user.type(screen.getByLabelText(/e-mail or username/i), 'a@b.c')
+    expect(submit).toBeEnabled()
   })
 
   /*
@@ -227,7 +261,7 @@ describe('remember my e-mail', () => {
     // the write happens before or after the await, so the test could not fail
     // for the reason it names.
     await user.click(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i }))
-    await user.click(screen.getByRole('button', { name: /enter my library|entrar/i }))
+    await user.click(screen.getByRole('button', { name: /sign in|entrar/i }))
 
     await waitFor(() => expect(post).toHaveBeenCalled())
     expect(localStorage.getItem('foldex.auth.email')).toBeNull()
@@ -256,7 +290,7 @@ describe('remember my e-mail', () => {
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'hunter2')
     await user.click(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i }))
-    await user.click(screen.getByRole('button', { name: /enter my library|entrar/i }))
+    await user.click(screen.getByRole('button', { name: /sign in|entrar/i }))
 
     await waitFor(() => expect(localStorage.getItem('foldex.auth.email')).toBe('a@b.c'))
 

@@ -359,8 +359,9 @@ button.fx-auth-locale[aria-pressed='true'] {
 .fx-auth-submit:active:not(:disabled) { transform: translateY(1px); }
 
 .fx-auth-submit:disabled {
-  opacity: 0.65;
-  cursor: progress;
+  opacity: 0.6;
+  box-shadow: none;
+  cursor: not-allowed;
 }
 
 .fx-auth-error {
@@ -456,12 +457,18 @@ button.fx-auth-locale[aria-pressed='true'] {
 /* Column, not a centred block: the badge and headline pin to the top and the
    mock window to the bottom, so a taller viewport opens the middle instead of
    floating the whole thing. */
+/* The column runs the full width of the pane so the mock window can too; the
+   COPY keeps its own measure below, because a 40-em line of prose is unreadable
+   no matter how much room the panel has. */
 .fx-auth-marketing-inner {
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-width: 470px;
 }
+
+.fx-auth-marketing-title,
+.fx-auth-marketing-lead,
+.fx-auth-marketing-list { max-width: 470px; }
 
 .fx-auth-badge {
   display: inline-flex;
@@ -545,8 +552,12 @@ button.fx-auth-locale[aria-pressed='true'] {
 
 /* Mock app window --------------------------------------------------- */
 
+/* Runs to the panel's right edge — the pane's own `overflow: hidden` and
+   28px radius clip the corner, so the window reads as part of the panel
+   rather than as a card floating inside it. */
 .fx-auth-preview {
   margin-top: auto;
+  margin-right: -52px;
   border: 1px solid var(--fxa-border);
   border-radius: 18px;
   background: var(--fx-surface-3);

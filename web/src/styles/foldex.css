@@ -2722,18 +2722,489 @@ button.fx-btn-danger:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--fx-tone-amber) 30%, transparent);
 }
 
-/* Instance backup status band (ADR-43). Reuses .fx-utable for the layout;
-   these carry only what that table does not have. */
+/*
+ * Instance backup surface (ADR-43/ADR-44).
+ *
+ * EVERY button class below is written element-qualified (`button.fx-bkp-…`).
+ * `.fx-shell button` resets background, border, padding, colour and font at
+ * (0,1,1); a bare `.fx-bkp-tab { … }` at (0,1,0) loses to it and the control
+ * renders as plain text with the class correctly applied — the defect that has
+ * shipped four times in this file (INV-154).
+ */
+.fx-bkp { display: flex; flex-direction: column; gap: 18px; }
+
+/* Headline numbers ------------------------------------------------- */
+
+.fx-bkp-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.fx-bkp-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  border: 1px solid var(--fx-border);
+  border-radius: 16px;
+  background: var(--fx-surface-2);
+}
+
+.fx-bkp-kpi-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+.fx-bkp-kpi-label {
+  font-family: var(--fx-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fx-ink-4);
+}
+
+.fx-bkp-kpi-value {
+  font-family: var(--fx-display);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.fx-bkp-kpi-hint { font-size: 12px; color: var(--fx-ink-4); }
+
+.fx-bkp-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.fx-bkp-dot-ok { background: var(--fx-success); }
+.fx-bkp-dot-warn { background: var(--fx-warn); }
+.fx-bkp-dot-danger { background: var(--fx-danger); }
+.fx-bkp-dot-info { background: var(--fx-accent); }
+
+/* Job cards -------------------------------------------------------- */
+
+/* Two columns, exactly: the four jobs are a fixed set and read as a 2×2 board.
+   `auto-fit` was tried and reflows them into three plus one orphan on a wide
+   monitor, which reads as a list that ran out of items. */
+.fx-bkp-jobs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.fx-bkp-job {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--fx-border);
+  border-radius: 18px;
+  background: var(--fx-surface-2);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* The selected card and the agenda tab below it are the same choice; the ring
+   is what says so. */
+.fx-bkp-job-on {
+  border-color: var(--fx-accent);
+  box-shadow: 0 0 0 3px var(--fx-accent-soft);
+}
+
+button.fx-bkp-job-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.fx-bkp-job-head:focus-visible {
+  outline: 2px solid var(--fx-accent);
+  outline-offset: 3px;
+  border-radius: 12px;
+}
+
+.fx-bkp-job-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  background: var(--fx-accent-soft);
+  color: var(--fx-accent);
+}
+
+.fx-bkp-job-icon-drill { background: var(--fx-tone-green-soft); color: var(--fx-tone-green); }
+.fx-bkp-job-icon-mirror { background: var(--fx-tone-pink-soft); color: var(--fx-tone-pink); }
+.fx-bkp-job-icon-user_zip { background: var(--fx-tone-amber-soft); color: var(--fx-tone-amber); }
+
+.fx-bkp-job-titles { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto; }
+
+.fx-bkp-job-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.fx-bkp-job-cron {
+  padding: 2px 7px;
+  border-radius: 7px;
+  background: var(--fx-bg-tint);
+  font-family: var(--fx-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fx-ink-3);
+}
+
+.fx-bkp-job-desc { font-size: 12.5px; line-height: 1.45; color: var(--fx-ink-4); }
+.fx-bkp-job-state { flex: 0 0 auto; }
+
+.fx-bkp-job-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 13px;
+  background: var(--fx-bg-tint);
+}
+
+.fx-bkp-job-metrics > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+
+.fx-bkp-metric-label {
+  font-family: var(--fx-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fx-ink-4);
+}
+
+.fx-bkp-metric-value { font-size: 13px; font-weight: 600; }
+
+.fx-bkp-job-artifact { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+button.fx-bkp-sha-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1px solid var(--fx-border);
+  border-radius: 9px;
+  background: var(--fx-surface-3);
+  color: var(--fx-ink-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+button.fx-bkp-sha-btn:hover { border-color: var(--fx-accent-soft-2); }
+
+button.fx-bkp-job-run {
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--fx-accent-soft);
+  color: var(--fx-accent);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button.fx-bkp-job-run:hover { background: var(--fx-accent-soft-2); }
+
+/* Agenda + aside --------------------------------------------------- */
+
+.fx-bkp-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.fx-bkp-aside { display: flex; flex-direction: column; gap: 14px; }
+
+.fx-bkp-agenda .fx-card-body { display: flex; flex-direction: column; gap: 16px; }
+
+.fx-bkp-agenda-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fx-bkp-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 4px;
+  border-radius: 13px;
+  background: var(--fx-bg-tint);
+}
+
+button.fx-bkp-tab {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fx-ink-3);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.fx-bkp-tab-on { background: var(--fx-surface-3); color: var(--fx-accent); }
+
+.fx-bkp-agenda-body { display: flex; flex-direction: column; gap: 16px; }
+
+.fx-bkp-effective { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.fx-bkp-control { display: flex; flex-direction: column; gap: 8px; }
+
+.fx-bkp-control-label {
+  font-family: var(--fx-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fx-ink-4);
+}
+
+.fx-bkp-control-hint { font-size: 12.5px; color: var(--fx-ink-4); }
+
+.fx-bkp-row { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-end; }
+
+.fx-bkp-input {
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--fx-border);
+  border-radius: 12px;
+  background: var(--fx-surface-3);
+  color: var(--fx-ink);
+  font-family: var(--fx-mono);
+  font-size: 14px;
+}
+
+/* Sized by content: a time field stretched to the card width reads as a text
+   box that lost its label. */
+.fx-bkp-input[type='time'] { width: 138px; }
+
+.fx-bkp-input:focus-visible {
+  outline: none;
+  border-color: var(--fx-accent);
+  box-shadow: 0 0 0 3px var(--fx-accent-soft);
+}
+
+.fx-bkp-times { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fx-bkp-time { display: inline-flex; align-items: center; gap: 4px; }
+
+button.fx-bkp-time-remove,
+button.fx-bkp-add {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px dashed var(--fx-border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--fx-ink-3);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.fx-bkp-add { color: var(--fx-accent); border-color: var(--fx-accent-soft-2); }
+button.fx-bkp-time-remove { min-height: 32px; padding: 0 10px; font-size: 11.5px; }
+button.fx-bkp-time-remove:hover { color: var(--fx-danger); border-color: var(--fx-danger); }
+
+.fx-bkp-days { display: flex; gap: 6px; flex-wrap: wrap; }
+
+button.fx-bkp-day {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--fx-border);
+  border-radius: 12px;
+  background: var(--fx-surface-3);
+  color: var(--fx-ink-3);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button.fx-bkp-day-on {
+  border-color: transparent;
+  background: var(--fx-accent);
+  color: #fff;
+}
+
+.fx-bkp-interval { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.fx-bkp-interval-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 12px;
+  border: 1px solid var(--fx-border);
+  border-radius: 12px;
+  background: var(--fx-surface-3);
+}
+
+/* The field already draws the frame — the input inside must not draw a second
+   one, or the control reads as a box inside a box. */
+.fx-bkp-interval-field .fx-bkp-input {
+  width: 92px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.fx-bkp-unit { font-size: 12.5px; font-weight: 600; color: var(--fx-ink-4); }
+
+.fx-bkp-presets { display: flex; gap: 6px; flex-wrap: wrap; }
+
+button.fx-bkp-preset {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--fx-border);
+  border-radius: 10px;
+  background: var(--fx-surface-3);
+  color: var(--fx-ink-3);
+  font-family: var(--fx-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+button.fx-bkp-preset-on {
+  border-color: transparent;
+  background: var(--fx-accent-soft-2);
+  color: var(--fx-accent);
+}
+
+.fx-bkp-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* Drill card ------------------------------------------------------- */
+
+/*
+ * Inverted on purpose: the drill is the one panel that answers "is this
+ * backup actually restorable?", and it has to read as a verdict rather than
+ * as another row of metadata. Dark in both themes.
+ */
+.fx-bkp-drill {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px;
+  border-radius: 18px;
+  background: #1c1a26;
+  color: #f4f2ff;
+}
+
+.fx-bkp-drill .fx-bkp-kpi-label { color: rgba(244, 242, 255, 0.55); }
+.fx-bkp-drill-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+.fx-bkp-drill-title {
+  font-family: var(--fx-display);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.fx-bkp-drill-sub { font-size: 12.5px; color: rgba(244, 242, 255, 0.6); }
+
+.fx-bkp-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0 2px; }
+
+.fx-bkp-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  font-family: var(--fx-mono);
+  font-size: 10.5px;
+  color: rgba(244, 242, 255, 0.75);
+}
+
+.fx-bkp-count b { color: #f4f2ff; }
+
+/* Agent panel ------------------------------------------------------ */
+
+.fx-bkp-agent { display: flex; flex-direction: column; gap: 12px; }
+.fx-bkp-agent-empty { font-size: 12.5px; color: var(--fx-ink-3); }
+
+.fx-bkp-agent-jobs { display: flex; flex-direction: column; gap: 8px; list-style: none; }
+
+.fx-bkp-agent-jobs li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: var(--fx-bg-tint);
+  font-size: 13px;
+}
+
+.fx-bkp-agent-job { font-weight: 600; }
+
+/* History ---------------------------------------------------------- */
+
+.fx-bkp-history { display: flex; flex-direction: column; gap: 14px; }
+
+.fx-bkp-history-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.fx-bkp-filters { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--fx-bg-tint); }
+
+button.fx-bkp-filter {
+  padding: 7px 13px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fx-ink-3);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.fx-bkp-filter-on { background: var(--fx-surface-3); color: var(--fx-accent); }
+
+.fx-bkp-history-job { display: inline-flex; align-items: center; gap: 8px; }
+
+.fx-bkp-jobdot { width: 7px; height: 7px; border-radius: 50%; background: var(--fx-accent); }
+.fx-bkp-jobdot-drill { background: var(--fx-tone-green); }
+.fx-bkp-jobdot-mirror { background: var(--fx-tone-pink); }
+.fx-bkp-jobdot-user_zip { background: var(--fx-tone-amber); }
+
+.fx-bkp-pager { display: flex; gap: 8px; }
+
 .fx-bkp-table { min-width: 680px; }
 .fx-bkp-key {
   display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; vertical-align: bottom;
   font-family: var(--fx-mono); font-size: 10.5px; color: var(--fx-ink-3);
 }
-.fx-bkp-sha { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 /* The freshness alarm: "last dump 30h ago" must not read like a timestamp. */
 .fx-bkp-stale { color: var(--fx-danger); font-weight: 650; }
-.fx-bkp-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+@media (max-width: 900px) {
+  .fx-bkp-split { grid-template-columns: 1fr; }
+  .fx-bkp-jobs { grid-template-columns: 1fr; }
+}
 
 /* Audit trail. Monospace timestamps so the column aligns while the action
    labels stay in the UI face. */
