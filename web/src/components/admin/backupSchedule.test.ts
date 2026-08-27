@@ -26,8 +26,10 @@ describe('firingsPerWeek', () => {
   it('claims nothing about a config it cannot read', () => {
     expect(firingsPerWeek({})).toBeNaN()
     expect(firingsPerWeek({ enabled: true })).toBeNaN()
-    // A mode whose own field is missing is exactly as unknown as no mode.
+    // A mode whose own field is missing is exactly as unknown as no mode —
+    // either half of the times mode alone says nothing about a cadence.
     expect(firingsPerWeek({ mode: 'times', times: ['03:30'] })).toBeNaN()
+    expect(firingsPerWeek({ mode: 'times', weekdays: ['mon'] })).toBeNaN()
     expect(firingsPerWeek({ mode: 'interval' })).toBeNaN()
   })
 })

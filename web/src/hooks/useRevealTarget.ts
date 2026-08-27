@@ -13,6 +13,10 @@ import { useCallback, useEffect, useRef } from 'react'
  * The deferral is not decoration either — a reveal is fired from a click
  * handler that also sets state, so the element being revealed may not have
  * rendered its new content yet when the handler returns.
+ *
+ * `keepFocus` is the second reveal of the same target: the caret is already
+ * inside it and may have been moved out deliberately since, so re-focusing
+ * would rip it away from wherever the reader went.
  */
 export function useRevealTarget<T extends HTMLElement>() {
   const ref = useRef<T | null>(null)
@@ -25,17 +29,18 @@ export function useRevealTarget<T extends HTMLElement>() {
     [],
   )
 
-  const reveal = useCallback(() => {
+  const reveal = useCallback((options?: { keepFocus?: boolean }) => {
+    const keepFocus = options?.keepFocus === true
     if (frame.current !== null) cancelAnimationFrame(frame.current)
     frame.current = requestAnimationFrame(() => {
       frame.current = null
       const el = ref.current
       if (!el) return
-      el.focus({ preventScroll: true })
+      if (!keepFocus) el.focus({ preventScroll: true })
       // Both calls are optional on purpose, not defensiveness for its own
       // sake: this runs inside a requestAnimationFrame callback, where a throw
-      // is uncaught and takes the frame with it — and focus, the part that
-      // matters, has already happened by this line. jsdom implements neither.
+      // is uncaught and takes the frame with it — and the focus above, when it
+      // was asked for, already happened. jsdom implements neither.
       const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true
       el.scrollIntoView?.({ block: 'center', behavior: reduced ? 'auto' : 'smooth' })
     })

@@ -17,6 +17,11 @@ function prefersReducedMotion(reduce: boolean) {
   })
 }
 
+/** Waits one animation frame — the unit this hook actually schedules on. */
+function nextFrame() {
+  return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+}
+
 function setup() {
   const el = document.createElement('div')
   document.body.appendChild(el)
@@ -90,7 +95,24 @@ describe('useRevealTarget', () => {
     view.unmount()
 
     expect(cancel).toHaveBeenCalled()
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    // A frame scheduled AFTER the hook's runs after it would have: waiting for
+    // ours is what proves the hook's never fired, without a wall-clock sleep
+    // that would only be flake dressed up as a wait.
+    await nextFrame()
     expect(focus).not.toHaveBeenCalled()
+  })
+
+  it('coalesces two reveals in one frame into the single one that lands', async () => {
+    const { focus, scrollIntoView, view } = setup()
+    // Two clicks inside one frame — a job card and then another before the
+    // browser painted. Two live frames would focus twice and scroll twice,
+    // and the first scroll is toward a card the second click already moved.
+    view.result.current.reveal()
+    view.result.current.reveal()
+
+    await waitFor(() => expect(focus).toHaveBeenCalled())
+    await nextFrame()
+    expect(focus).toHaveBeenCalledTimes(1)
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
   })
 })

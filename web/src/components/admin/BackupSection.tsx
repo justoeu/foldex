@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
@@ -138,6 +138,13 @@ export function BackupSection() {
      on each render and quietly undo the memo on all four. */
   const handleRun = useCallback((job: BackupJob) => void runNow(job), [runNow])
 
+  /* The pending flag is read through a ref so the select callback below keeps
+     ONE identity: taking `schedule.isPending` as a dependency would hand the
+     four job cards a new prop the moment the load finished and undo their
+     memos. */
+  const revealedWhileLoading = useRef(false)
+  const schedulePendingRef = useRef(schedule.isPending)
+
   /* The cards sit above the fold and the agenda below it, so picking a job up
      there used to change a form the reader could not see. The tabs INSIDE the
      agenda deliberately do NOT reveal: the click already happened in that
@@ -145,10 +152,24 @@ export function BackupSection() {
   const handleSelectFromCard = useCallback(
     (job: BackupJob) => {
       setSelected(job)
+      revealedWhileLoading.current = schedulePendingRef.current
       revealAgenda()
     },
     [revealAgenda],
   )
+
+  /* A reveal fired during the first load centres the PLACEHOLDER, which is a
+     few lines tall; the card then grows into the whole form and the position
+     the scroll settled on is the middle of nothing. So the reveal repeats once
+     the real card is there — and only the scroll repeats, because the caret
+     already went there on the first one and the reader may have moved it since. */
+  const schedulePending = schedule.isPending
+  useEffect(() => {
+    schedulePendingRef.current = schedulePending
+    if (schedulePending || !revealedWhileLoading.current) return
+    revealedWhileLoading.current = false
+    revealAgenda({ keepFocus: true })
+  }, [schedulePending, revealAgenda])
 
   const jobs = query.data?.jobs ?? NO_JOBS
   const runs = query.data?.runs ?? NO_RUNS
