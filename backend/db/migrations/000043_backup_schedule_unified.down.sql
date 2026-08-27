@@ -1,8 +1,10 @@
 -- Reverts backup_schedule.config to the four per-job vocabularies. This is
 -- LOSSY and cannot be otherwise: the old shapes cannot express what the new
--- one can, so a weekday SET collapses to its FIRST weekday and a multi-time
--- agenda on a job whose legacy shape held one time collapses to its FIRST
--- time. An agenda the old vocabulary cannot express at all — an interval on
+-- one can. The drill collapses to its FIRST weekday and FIRST time; user_zip
+-- collapses to its FIRST time; the dump DROPS its weekday set entirely,
+-- because the legacy dump shape had no weekdays and meant "every day" — the
+-- one lossy direction here that RAISES frequency rather than lowering it.
+-- An agenda the old vocabulary cannot express at all — an interval on
 -- the dump, drill or user_zip, or wall times on the mirror — has no legacy
 -- form to fall back to, so the ROW IS DELETED and the job returns to its env
 -- baseline, which is exactly what the old code would do with a row it refuses
