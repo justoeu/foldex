@@ -58,7 +58,7 @@ func TestSchedule_PutStoresRowAndGetServesIt(t *testing.T) {
 	uid := h.seedUser("owner@foldex.test", "owner")
 
 	rec := h.doAs(uid, authctx.RoleOwner, http.MethodPut, "/api/admin/backup/schedule/dump",
-		`{"times":["06:00","18:00"]}`)
+		`{"mode":"times","times":["06:00","18:00"],"weekdays":["mon","tue","wed","thu","fri"]}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	rec = h.doAs(uid, authctx.RoleOwner, http.MethodGet, "/api/admin/backup/schedule", "")
@@ -69,13 +69,21 @@ func TestSchedule_PutStoresRowAndGetServesIt(t *testing.T) {
 	require.Contains(t, rows, "dump")
 	dump, _ := rows["dump"].(map[string]any)
 	cfg, _ := dump["config"].(map[string]any)
+	assert.Equal(t, "times", cfg["mode"])
 	assert.Equal(t, []any{"06:00", "18:00"}, cfg["times"])
+	assert.Equal(t, []any{"mon", "tue", "wed", "thu", "fri"}, cfg["weekdays"])
 	assert.Equal(t, "owner@foldex.test", dump["updated_by_email"],
 		"the band says who moved the agenda")
 
+	// One vocabulary for every job, so one set of bounds: the form refuses
+	// locally what the server would refuse anyway.
 	bounds, _ := body["bounds"].(map[string]any)
-	assert.Equal(t, float64(backupagent.MaxDumpTimes), bounds["dump_times_max"],
-		"the form refuses locally what the server would refuse anyway")
+	assert.Equal(t, float64(backupagent.MinTimes), bounds["times_min"])
+	assert.Equal(t, float64(backupagent.MaxTimes), bounds["times_max"])
+	assert.Equal(t, float64(backupagent.MinWeekdays), bounds["weekdays_min"])
+	assert.Equal(t, float64(backupagent.MinDumpWeekdays), bounds["dump_weekdays_min"])
+	assert.Equal(t, float64(backupagent.MinIntervalMin), bounds["interval_min"])
+	assert.Equal(t, float64(backupagent.MaxIntervalMin), bounds["interval_max"])
 
 	assert.Nil(t, body["agent"],
 		"no heartbeat ever written must serve null — a zero time would render as 1970 and read as a bug")
@@ -86,16 +94,41 @@ func TestSchedule_FloorsAnswer400WithTheReason(t *testing.T) {
 	uid := h.seedUser("owner@foldex.test", "owner")
 
 	rec := h.doAs(uid, authctx.RoleOwner, http.MethodPut, "/api/admin/backup/schedule/dump",
-		`{"times":[]}`)
+		`{"mode":"times","times":[],"weekdays":["mon","tue","wed","thu","fri"]}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, "invalid_schedule", errCode(t, rec))
-	assert.Contains(t, rec.Body.String(), "one dump per day",
+	assert.Contains(t, rec.Body.String(), "never zero",
 		"the refusal names the floor — a bare invalid sends the owner guessing (INV-169's reasoning)")
 
-	rec = h.doAs(uid, authctx.RoleOwner, http.MethodPut, "/api/admin/backup/schedule/mirror",
-		`{"interval_min":5}`)
+	// The dump's weekday floor is higher than every other job's, and the
+	// refusal has to say the number: the form renders this message as it is.
+	rec = h.doAs(uid, authctx.RoleOwner, http.MethodPut, "/api/admin/backup/schedule/dump",
+		`{"mode":"times","times":["06:00"],"weekdays":["mon","wed","fri"]}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, "invalid_schedule", errCode(t, rec))
+	assert.Contains(t, rec.Body.String(), "5")
+
+	// Three weekdays are fine for every other job — the dump is the outlier
+	// because it is the instance's disaster floor.
+	rec = h.doAs(uid, authctx.RoleOwner, http.MethodPut, "/api/admin/backup/schedule/drill",
+		`{"mode":"times","times":["01:00"],"weekdays":["mon","wed","fri"]}`)
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	rec = h.doAs(uid, authctx.RoleOwner, http.MethodPut, "/api/admin/backup/schedule/mirror",
+		`{"mode":"interval","interval_min":5}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "invalid_schedule", errCode(t, rec))
+
+	// A client that did not upgrade: the legacy vocabulary is read-only.
+	rec = h.doAs(uid, authctx.RoleOwner, http.MethodPut, "/api/admin/backup/schedule/drill",
+		`{"time":"01:00","weekday":"sun"}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "invalid_schedule", errCode(t, rec))
+
+	rec = h.doAs(uid, authctx.RoleOwner, http.MethodPut, "/api/admin/backup/schedule/dump",
+		`{"times":["06:00"],"weekdays":["mon","tue","wed","thu","fri"]}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code,
+		"the mode is explicit — a document without one would be half-honoured in silence")
 
 	rec = h.doAs(uid, authctx.RoleOwner, http.MethodPut, "/api/admin/backup/schedule/vacuum",
 		`{"interval_min":60}`)
@@ -114,7 +147,7 @@ func TestSchedule_WriteIsOwnerOnlyThroughTheLockedPermission(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	rec = h.doAs(admin, authctx.RoleAdmin, http.MethodPut, "/api/admin/backup/schedule/dump",
-		`{"times":["06:00"]}`)
+		`{"mode":"times","times":["06:00"],"weekdays":["mon","tue","wed","thu","fri"]}`)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 
 	rec = h.doAs(admin, authctx.RoleAdmin, http.MethodDelete, "/api/admin/backup/schedule/dump", "")
@@ -142,7 +175,7 @@ func TestSchedule_DeleteResetsToTheEnvBaselineAndAudits(t *testing.T) {
 	uid := h.seedUser("owner@foldex.test", "owner")
 
 	rec := h.doAs(uid, authctx.RoleOwner, http.MethodPut, "/api/admin/backup/schedule/user_zip",
-		`{"enabled":false}`)
+		`{"mode":"times","enabled":false}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	rec = h.doAs(uid, authctx.RoleOwner, http.MethodDelete, "/api/admin/backup/schedule/user_zip", "")

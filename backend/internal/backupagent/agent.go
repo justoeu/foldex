@@ -21,8 +21,9 @@ import (
 // Deliberately NOT db.RequiredSchemaVersion: that number tracks what the
 // BACKEND reads, and moves whenever any backend query gains a dependency.
 // This one moves only for tables the agent itself touches: 40 for backup_run,
-// 42 for backup_schedule (read) and backup_agent_state (heartbeat, written).
-const RequiredSchemaVersion = 42
+// 42 for backup_schedule (read) and backup_agent_state (heartbeat, written),
+// 43 for the unified shape of backup_schedule.config.
+const RequiredSchemaVersion = 43
 
 const janitorInterval = time.Hour
 
@@ -263,7 +264,13 @@ func (a *Agent) agentState() AgentState {
 	for _, spec := range a.jobs {
 		capable, reason := a.capability(spec.name)
 		t := a.timing(spec.name)
-		jobs[spec.name] = JobReport{Capable: capable, Reason: reason, Source: t.Source, Schedule: t.String()}
+		jobs[spec.name] = JobReport{
+			Capable:  capable,
+			Reason:   reason,
+			Source:   t.Source,
+			Schedule: t.String(),
+			Baseline: envTiming(spec.name, a.cfg).ToConfig(),
+		}
 	}
 	// Unregistered jobs are reported anyway: absent from the map they would
 	// render as "unknown" instead of "unavailable, and here is why" — and an
@@ -434,7 +441,7 @@ func (a *Agent) scheduleLoop(ctx context.Context, spec jobSpec) {
 				fireAt = time.Now()
 			}
 		} else {
-			fireAt, _ = t.Next(time.Now())
+			fireAt = t.Next(time.Now())
 		}
 		a.logger.Info("next run scheduled", "job", spec.name, "at", fireAt, "source", t.Source)
 		timer := time.NewTimer(time.Until(fireAt))
@@ -467,19 +474,13 @@ func (a *Agent) bootCatchUp(ctx context.Context, spec jobSpec) {
 		a.logger.Error("catch-up decision failed", "job", spec.name, "err", err)
 		return
 	}
-	var slot time.Time
-	switch {
-	case t.Interval > 0:
-		if !intervalDue(time.Now(), last, t.Interval) {
-			return
-		}
-		// There is no missed wall-clock slot to reconstruct for an interval
-		// job: scheduled_for is simply the moment it fires.
-		slot = time.Now()
-	default:
-		if !t.Due(time.Now(), last) {
-			return
-		}
+	if !t.Due(time.Now(), last) {
+		return
+	}
+	// There is no missed wall-clock slot to reconstruct for an interval job:
+	// scheduled_for is simply the moment it fires.
+	slot := time.Now()
+	if t.Interval == 0 {
 		slot = t.PreviousSlot(time.Now())
 	}
 	jitter := a.catchUpJitter()
