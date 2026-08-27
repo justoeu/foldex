@@ -1,8 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BackupSection } from './BackupSection'
-import { renderWithProviders, testAdminSession, testAdminUser } from '../../test/renderWithProviders'
+import {
+  makeQueryClient,
+  renderWithProviders,
+  testAdminSession,
+  testAdminUser,
+} from '../../test/renderWithProviders'
+import { backupScheduleQueryKey } from '../../api/admin'
 import { freshState, installAxiosMock, type MockState } from '../../test/server'
 import type { SessionState } from '../../auth/types'
 
@@ -519,16 +525,16 @@ describe('BackupSection schedule', () => {
 
     // The dump opens on its env baseline, which is a times agenda…
     expect(await screen.findByLabelText('Time 1')).toBeInTheDocument()
-    await user.click(screen.getByRole('tab', { name: 'Interval' }))
+    await user.click(screen.getByRole('radio', { name: 'Interval' }))
     expect(screen.queryByLabelText('Time 1')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Interval (minutes)')).toBeInTheDocument()
 
     // …and coming back restores the times the draft was holding, rather than
     // the screen's default.
-    await user.click(screen.getByRole('tab', { name: 'Times' }))
+    await user.click(screen.getByRole('radio', { name: 'Times' }))
     expect(screen.getByLabelText('Time 1')).toHaveValue('03:30')
 
-    await user.click(screen.getByRole('tab', { name: 'Interval' }))
+    await user.click(screen.getByRole('radio', { name: 'Interval' }))
     await user.click(screen.getByRole('button', { name: '6h' }))
     await user.click(screen.getByRole('button', { name: 'Save schedule' }))
 
@@ -550,7 +556,7 @@ describe('BackupSection schedule', () => {
     await user.click(await screen.findByRole('tab', { name: 'Object mirror' }))
     // The mirror's env baseline is an interval, so it opens there.
     expect(screen.getByLabelText('Interval (minutes)')).toHaveValue(360)
-    await user.click(screen.getByRole('tab', { name: 'Times' }))
+    await user.click(screen.getByRole('radio', { name: 'Times' }))
     await user.click(screen.getByRole('button', { name: 'Weekdays' }))
     await user.click(screen.getByRole('button', { name: 'Save schedule' }))
 
@@ -791,7 +797,9 @@ describe('BackupSection schedule', () => {
     await user.click(screen.getByRole('button', { name: 'Save schedule' }))
     await user.click(await screen.findByRole('button', { name: 'Apply schedule' }))
     expect(
-      await screen.findByText('drill needs at least 1 weekdays — the dump is the instance\'s disaster floor'),
+      await screen.findByText(
+        'drill needs at least 1 weekday(s) — an agenda that fires on no day is the job switched off',
+      ),
     ).toBeInTheDocument()
   })
 
@@ -853,7 +861,226 @@ describe('BackupSection schedule', () => {
     expect(screen.queryByRole('button', { name: 'Save schedule' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Restore env default' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Add time' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('tab', { name: 'Interval' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Interval' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Every day' })).not.toBeInTheDocument()
+  })
+
+  /** A stored row, with the boilerplate every one of them carries. */
+  function storedRow(job: string, config: Record<string, unknown>) {
+    return {
+      [job]: {
+        job,
+        config,
+        updated_at: '2026-08-01T00:00:00Z',
+        updated_by_email: 'owner@foldex.test',
+      },
+    }
+  }
+
+  /*
+   * The first successful fetch can land before the agent's first heartbeat, so
+   * the editor opens on the last-resort draft. The baseline arriving later is
+   * a NEW document to seed from — an editor that ignored it would let an owner
+   * write this screen's opinion over their own env agenda by saving an
+   * untouched form (INV-173).
+   */
+  it('reseeds the draft when the env baseline arrives after the first fetch', async () => {
+    const client = makeQueryClient()
+    state.backupAgent = undefined
+
+    renderWithProviders(<BackupSection />, { session: ownerSession, client })
+    expect(await screen.findByLabelText('Time 1')).toHaveValue('03:30')
+
+    const jobs: any = { ...healthyAgent().jobs }
+    jobs.dump = {
+      capable: true, source: 'env', schedule: '04:20',
+      baseline: { mode: 'times', times: ['04:20'], weekdays: ALL_DAYS },
+    }
+    state.backupAgent = healthyAgent({ jobs })
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: backupScheduleQueryKey })
+    })
+
+    await waitFor(() => expect(screen.getByLabelText('Time 1')).toHaveValue('04:20'))
+  })
+
+  /*
+   * The other half of the rule above: once a baseline is present its MODE is
+   * what the editor keys on, and a heartbeat is written every ~30 s. Keying on
+   * anything that moves with the clock would throw the owner's half-typed
+   * agenda away once a minute.
+   */
+  it('keeps a half-typed draft across a poll that only refreshes the heartbeat', async () => {
+    const client = makeQueryClient()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession, client })
+    fireEvent.change(await screen.findByLabelText('Time 1'), { target: { value: '05:15' } })
+
+    state.backupAgent = healthyAgent({ seen_at: new Date().toISOString(), version: '9.9.9' })
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: backupScheduleQueryKey })
+    })
+    await waitFor(() => expect(screen.getByText(/version 9\.9\.9/)).toBeInTheDocument())
+
+    expect(screen.getByLabelText('Time 1')).toHaveValue('05:15')
+  })
+
+  /*
+   * A stored row states only the mode it uses. Seeding the draft from it
+   * literally left the OTHER half empty — an off ZIP toggled back on had no
+   * day and no time at all, which is a guaranteed 400. The draft is fat on
+   * purpose; `payloadOf` is what canonicalises it on the way out.
+   */
+  it('toggling the per-user ZIP back on restores an agenda instead of an empty form', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    state.backupScheduleRows = storedRow('user_zip', { mode: 'times', enabled: false })
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Per-user ZIPs' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Generate per-user ZIPs' }))
+
+    // The env baseline fills what the disabled row never stated.
+    expect(screen.getByLabelText('Time 1')).toHaveValue('02:30')
+    expect(screen.getByRole('button', { name: 'Sunday' })).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        {
+          job: 'user_zip',
+          config: { mode: 'times', times: ['02:30'], weekdays: ALL_DAYS, enabled: true },
+        },
+      ]),
+    )
+  })
+
+  it('fills the mode a stored row does not state from the env baseline', async () => {
+    const user = userEvent.setup()
+    const jobs: any = { ...healthyAgent().jobs }
+    jobs.dump = {
+      capable: true, source: 'db', schedule: 'every 60m',
+      baseline: { mode: 'times', times: ['04:20'], weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'] },
+    }
+    jobs.mirror = {
+      capable: true, source: 'db', schedule: '02:00 sun',
+      baseline: { mode: 'interval', interval_min: 720 },
+    }
+    state.backupAgent = healthyAgent({ jobs })
+    state.backupScheduleRows = {
+      ...storedRow('dump', { mode: 'interval', interval_min: 60 }),
+      ...storedRow('mirror', { mode: 'times', times: ['02:00'], weekdays: ['sun'] }),
+    }
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    // The dump's row states an interval, so the times half comes from the env.
+    expect(await screen.findByLabelText('Interval (minutes)')).toHaveValue(60)
+    await user.click(screen.getByRole('radio', { name: 'Times' }))
+    expect(screen.getByLabelText('Time 1')).toHaveValue('04:20')
+    expect(screen.getByRole('button', { name: 'Saturday' })).toHaveAttribute('aria-pressed', 'false')
+
+    // And the mirror's row states times, so the interval half comes from the env.
+    await user.click(screen.getByRole('tab', { name: 'Object mirror' }))
+    expect(screen.getByLabelText('Time 1')).toHaveValue('02:00')
+    await user.click(screen.getByRole('radio', { name: 'Interval' }))
+    expect(screen.getByLabelText('Interval (minutes)')).toHaveValue(720)
+  })
+
+  /*
+   * The env is exempt from the floors by design — it IS the baseline — so
+   * `BACKUP_DUMP_AT="03:30 sun"` is legal there and the agent publishes it.
+   * Opening the form on a document the server would refuse teaches the owner
+   * the screen is broken, so the seed widens the days it cannot keep.
+   */
+  it('widens an env baseline below the job floor, keeping its times', async () => {
+    const user = userEvent.setup()
+    const jobs: any = { ...healthyAgent().jobs }
+    jobs.dump = {
+      capable: true, source: 'env', schedule: '03:30 sun',
+      baseline: { mode: 'times', times: ['03:30'], weekdays: ['sun'] },
+    }
+    state.backupAgent = healthyAgent({ jobs })
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findByLabelText('Time 1')).toHaveValue('03:30')
+    for (const day of ['Sunday', 'Monday', 'Saturday']) {
+      expect(screen.getByRole('button', { name: day })).toHaveAttribute('aria-pressed', 'true')
+    }
+
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        { job: 'dump', config: { mode: 'times', times: ['03:30'], weekdays: ALL_DAYS } },
+      ]),
+    )
+  })
+
+  /*
+   * ScheduleStore.Load returns invalid rows on purpose, so the env fallback
+   * stays visible — which means a row written by hand in SQL reaches this
+   * form. Rendering one input per element of an unbounded array is a list the
+   * server would never accept and the browser has to lay out anyway.
+   */
+  it('renders no more times than the server accepts, even from a hand-written row', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    state.backupScheduleRows = storedRow('dump', {
+      mode: 'times',
+      times: ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00', '06:00', '07:00', '08:00'],
+      weekdays: ALL_DAYS,
+    })
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findByLabelText('Time 6')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Time 7')).not.toBeInTheDocument()
+    expect(document.querySelectorAll('.fx-bkp-time')).toHaveLength(6)
+
+    // And what the screen shows is what the wire carries: six inputs beside a
+    // 400 saying "between 1 and 6" is a refusal the owner cannot act on.
+    // Trimming thins the agenda, so it goes through the confirmation.
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await user.click(await screen.findByRole('button', { name: 'Apply schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        {
+          job: 'dump',
+          config: {
+            mode: 'times',
+            times: ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00'],
+            weekdays: ALL_DAYS,
+          },
+        },
+      ]),
+    )
+  })
+
+  /*
+   * Two mutually exclusive options that swap the form's fields are a
+   * radiogroup. They were dressed as tabs with no panel and no `aria-controls`
+   * — a shape a screen reader announces as navigation that goes nowhere. The
+   * JOB picker above stays a tablist, because those really are tabs.
+   */
+  it('offers the two schedule modes as a radiogroup, not as tabs', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    const group = await screen.findByRole('radiogroup', { name: 'Schedule mode' })
+    const times = within(group).getByRole('radio', { name: 'Times' })
+    const interval = within(group).getByRole('radio', { name: 'Interval' })
+    expect(times).toHaveAttribute('aria-checked', 'true')
+    expect(interval).toHaveAttribute('aria-checked', 'false')
+
+    await user.click(interval)
+    expect(interval).toHaveAttribute('aria-checked', 'true')
+    expect(times).toHaveAttribute('aria-checked', 'false')
+
+    expect(screen.getByRole('tab', { name: 'Database dump' })).toBeInTheDocument()
   })
 })
