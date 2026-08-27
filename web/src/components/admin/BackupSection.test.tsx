@@ -9,6 +9,7 @@ import {
   testAdminUser,
 } from '../../test/renderWithProviders'
 import { backupScheduleQueryKey } from '../../api/admin'
+import { http } from '../../api/client'
 import { freshState, installAxiosMock, type MockState } from '../../test/server'
 import type { SessionState } from '../../auth/types'
 
@@ -56,6 +57,23 @@ function jobsSummary(
   ].map((j) => ({ ...j, ...extra[j.job] }))
 }
 
+/** The card for one job, addressed through the control that selects it. */
+function jobCard(name: string): HTMLElement {
+  const head = screen.getByRole('button', { name: `Show the schedule for ${name}` })
+  return head.closest('.fx-bkp-job') as HTMLElement
+}
+
+/** One headline number, addressed by its LABEL rather than by its position. */
+function kpiValue(label: string): HTMLElement {
+  const kpi = screen.getByText(label).closest('.fx-bkp-kpi') as HTMLElement
+  return kpi.querySelector('.fx-bkp-kpi-value') as HTMLElement
+}
+
+/** The agent's own panel — the heartbeat, not the editable agenda beside it. */
+function agentPanel(): HTMLElement {
+  return document.querySelector('.fx-bkp-agent') as HTMLElement
+}
+
 describe('BackupSection', () => {
   it('renders one row per job and the honest empty state when nothing ever ran', async () => {
     renderWithProviders(<BackupSection />)
@@ -69,8 +87,8 @@ describe('BackupSection', () => {
 
     // Never ran + no history = the service is off, and the band says so
     // instead of looking healthy (the mailer incident's lesson).
-    expect(screen.getByText('The backup service is not active')).toBeInTheDocument()
-    expect(screen.getAllByText('COMPOSE_PROFILES=backup').length).toBeGreaterThan(0)
+    const inactive = screen.getByText('The backup service is not active').closest('.fx-banner')!
+    expect(within(inactive as HTMLElement).getByText('COMPOSE_PROFILES=backup')).toBeInTheDocument()
     // One "never ran" chip per job card, plus the two KPI hints that have no
     // run to describe.
     expect(screen.getAllByText('never ran').length).toBeGreaterThanOrEqual(4)
@@ -196,8 +214,9 @@ describe('BackupSection', () => {
 
     // The artifact row renders truncated but titled with the full key, and the
     // SHA is copiable behind a visible label (INV-151).
-    expect(screen.getAllByTitle('foldex/dump/2026-08-26.dump.age').length).toBeGreaterThan(0)
-    expect(screen.getByRole('button', { name: /Copy/ })).toBeInTheDocument()
+    const dumpCard = jobCard('Database dump')
+    expect(within(dumpCard).getByTitle('foldex/dump/2026-08-26.dump.age')).toBeInTheDocument()
+    expect(within(dumpCard).getByRole('button', { name: /Copy/ })).toBeInTheDocument()
   })
 })
 
@@ -222,12 +241,12 @@ describe('BackupSection layout', () => {
     renderWithProviders(<BackupSection />)
 
     expect(await screen.findByText('Last dump')).toBeInTheDocument()
-    expect(screen.getAllByText('131 KB').length).toBeGreaterThan(0)
+    expect(kpiValue('Dump size')).toHaveTextContent('131 KB')
     expect(screen.getByText('drill validated 2 tables')).toBeInTheDocument()
     // The failure KPI is the longest streak across jobs — the same number the
-    // alert rule compares against.
-    expect(screen.getByText('Consecutive failures')).toBeInTheDocument()
-    expect(document.querySelectorAll('.fx-bkp-kpi-value')[3]).toHaveTextContent('3')
+    // alert rule compares against — and it is read through its own label, so
+    // reordering the four cannot make this assertion describe another one.
+    expect(kpiValue('Consecutive failures')).toHaveTextContent('3')
   })
 
   it('moves the agenda to whichever job card is selected', async () => {
@@ -305,6 +324,150 @@ describe('BackupSection layout', () => {
   })
 })
 
+type Getter = (url: string, config?: unknown) => Promise<never>
+/**
+ * The mock `installAxiosMock` already put on `http.get`. Taken as its
+ * IMPLEMENTATION, never as a bound reference to the spy: `vi.spyOn` on an
+ * already-spied method hands back the same spy, so calling the reference back
+ * would call the replacement — one recursion per request, and a screen that
+ * reports every endpoint as down.
+ */
+function scheduleInterceptor(intercept: (fallthrough: Getter) => Getter) {
+  const spy = http.get as unknown as {
+    getMockImplementation(): Getter
+    mockImplementation(fn: Getter): void
+  }
+  spy.mockImplementation(intercept(spy.getMockImplementation()))
+}
+
+/**
+ * Replaces the agenda's OWN request; every other endpoint keeps the shared
+ * mock, so the screen around the agenda renders exactly as it always does.
+ */
+function answerSchedule(answer: () => Promise<{ data: unknown }>) {
+  scheduleInterceptor(
+    (mocked) => (url, config) =>
+      url.startsWith('/api/admin/backup/schedule')
+        ? (answer() as Promise<never>)
+        : mocked(url, config),
+  )
+}
+
+/**
+ * Holds the agenda's request open so the rest of the screen finishes loading
+ * around a still-pending agenda — the exact window a job card clicked during
+ * the first load lands in. Returns the release.
+ */
+function holdSchedule(): () => void {
+  let release!: () => void
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  scheduleInterceptor((mocked) => async (url, config) => {
+    if (url.startsWith('/api/admin/backup/schedule')) await held
+    return mocked(url, config)
+  })
+  return release
+}
+
+/** jsdom implements no scrollIntoView, so assigning it is what makes it observable. */
+function watchReveal(el: Element) {
+  const scrollIntoView = vi.fn()
+  ;(el as unknown as { scrollIntoView: () => void }).scrollIntoView = scrollIntoView
+  return { scrollIntoView, focus: vi.spyOn(el as HTMLElement, 'focus') }
+}
+
+/*
+ * The agenda slot is a focus target in ALL THREE of its states, not only the
+ * loaded one: a job card clicked during the first load reveals whatever is in
+ * the slot at that moment, and a placeholder that dropped the ref would send
+ * the reveal nowhere.
+ */
+describe('BackupSection agenda slot', () => {
+  it('keeps the agenda slot, its grid class and its focus target while the schedule loads', async () => {
+    const release = holdSchedule()
+    renderWithProviders(<BackupSection />)
+
+    // The screen is up — only the agenda is still waiting.
+    await screen.findByRole('button', { name: 'Show the schedule for Object mirror' })
+    const slot = document.querySelector('.fx-bkp-agenda')!
+    expect(slot).toHaveAttribute('tabindex', '-1')
+    expect(within(slot as HTMLElement).getByText('Loading…')).toBeInTheDocument()
+
+    release()
+    expect(await screen.findByText('Database dump schedule')).toBeInTheDocument()
+    expect(within(slot as HTMLElement).queryByText('Loading…')).not.toBeInTheDocument()
+  })
+
+  it('says the agenda is unavailable when its request fails, and stays a focus target', async () => {
+    answerSchedule(() => Promise.reject(new Error('schedule down')))
+    renderWithProviders(<BackupSection />)
+
+    const message = await screen.findByText('The job schedule is unavailable right now.')
+    const slot = message.closest('.fx-bkp-agenda')
+    expect(slot).not.toBeNull()
+    expect(slot).toHaveAttribute('tabindex', '-1')
+  })
+
+  it('treats an answer missing any of jobs/rows/bounds as unavailable, not as an empty form', async () => {
+    // A 200 whose body lost a field is not a schedule: rendering the editor
+    // from it would read `bounds.times_max` off undefined and take the screen
+    // down. Each of the three is checked, so a partial answer cannot slip in.
+    for (const partial of [
+      { rows: {}, bounds: { times_min: 1, times_max: 6, weekdays_min: 1, dump_weekdays_min: 5, interval_min: 15, interval_max: 1440 }, agent: null },
+      { jobs: ['dump'], bounds: { times_min: 1, times_max: 6, weekdays_min: 1, dump_weekdays_min: 5, interval_min: 15, interval_max: 1440 }, agent: null },
+      { jobs: ['dump'], rows: {}, agent: null },
+    ]) {
+      answerSchedule(() => Promise.resolve({ data: partial }))
+      const view = renderWithProviders(<BackupSection />)
+      expect(
+        await screen.findByText('The job schedule is unavailable right now.'),
+      ).toBeInTheDocument()
+      view.unmount()
+    }
+  })
+
+  /*
+   * A reveal fired during the first load centres the PLACEHOLDER, a few lines
+   * tall; the card then grows into a full form and the position the scroll
+   * centred is the middle of nothing. So the reveal repeats once the real card
+   * is on screen — and only the scroll repeats: the caret is already there,
+   * and re-focusing would rip it away from whoever moved on in the meantime.
+   */
+  it('re-centres the agenda when the placeholder becomes the real card, without focusing twice', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    const release = holdSchedule()
+    renderWithProviders(<BackupSection />)
+
+    await screen.findByRole('button', { name: 'Show the schedule for Object mirror' })
+    const slot = document.querySelector('.fx-bkp-agenda')!
+    const { scrollIntoView, focus } = watchReveal(slot)
+
+    await user.click(screen.getByRole('button', { name: 'Show the schedule for Object mirror' }))
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1))
+    expect(focus).toHaveBeenCalledTimes(1)
+
+    release()
+    expect(await screen.findByText('Object mirror schedule')).toBeInTheDocument()
+    // The slot is one DOM node across all three states, so the second reveal
+    // lands on the same element — now grown to its real height.
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(2))
+    expect(slot.textContent).toContain('Object mirror schedule')
+    expect(focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not re-centre a schedule that finished loading before anyone asked', async () => {
+    state.backupAgent = healthyAgent()
+    renderWithProviders(<BackupSection />)
+    await screen.findByText('Database dump schedule')
+
+    const { scrollIntoView } = watchReveal(document.querySelector('.fx-bkp-agenda')!)
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(scrollIntoView).not.toHaveBeenCalled()
+  })
+})
+
 /** The owner — the only role the schedule editors render for. */
 const ownerSession: SessionState = {
   ...testAdminSession,
@@ -377,11 +540,14 @@ describe('BackupSection schedule', () => {
     const user = userEvent.setup()
     expect(await screen.findByText(/Agent seen/)).toBeInTheDocument()
     expect(screen.getByText(/version 2\.10\.1/)).toBeInTheDocument()
-    // The agenda strings the agent reported, verbatim — on the job card and
-    // again in the agent panel.
-    expect(screen.getAllByText('03:30').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('04:00 wed').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('every 360m').length).toBeGreaterThan(0)
+    // The agenda strings the agent reported, verbatim, each on the card of the
+    // job it describes — the whole point is that the card says what the AGENT
+    // is running, so "somewhere on the page" would not be the claim.
+    expect(within(jobCard('Database dump')).getByText('03:30')).toBeInTheDocument()
+    expect(within(jobCard('Restore drill')).getByText('04:00 wed')).toBeInTheDocument()
+    expect(within(jobCard('Object mirror')).getByText('every 360m')).toBeInTheDocument()
+    // …and again in the agent panel, which is the process's own report.
+    expect(within(agentPanel()).getByText('04:00 wed')).toBeInTheDocument()
 
     // The origin badge belongs to the job on screen: dump is on the env
     // baseline, and switching to the drill shows the stored row's origin.
@@ -825,9 +991,10 @@ describe('BackupSection schedule', () => {
     expect(state.backupScheduleDeletes ?? []).toHaveLength(0)
 
     await user.click(screen.getByRole('button', { name: 'Restore env default' }))
-    const dialogConfirm = await screen.findAllByRole('button', { name: 'Restore env default' })
-    // The dialog's confirm button is the last rendered.
-    await user.click(dialogConfirm[dialogConfirm.length - 1])
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Reset “Object mirror” to the env default?',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Restore env default' }))
     await waitFor(() => expect(state.backupScheduleDeletes).toEqual(['mirror']))
   })
 
@@ -835,10 +1002,15 @@ describe('BackupSection schedule', () => {
     renderWithProviders(<BackupSection />)
 
     expect(await screen.findByText('The agent never reported')).toBeInTheDocument()
-    expect(screen.getAllByText('COMPOSE_PROFILES=backup').length).toBeGreaterThan(0)
-    // No heartbeat = no per-job report to show, and the agenda says exactly
-    // that rather than implying the env baseline is running.
-    expect(screen.getAllByText('no agent report for this job').length).toBeGreaterThan(0)
+    expect(within(agentPanel()).getByText('COMPOSE_PROFILES=backup')).toBeInTheDocument()
+    // No heartbeat = no per-job report to show, and the AGENDA says exactly
+    // that in both places it would otherwise state an origin: the chip that
+    // names the source, and the line that would carry the effective agenda.
+    const agenda = document.querySelector('.fx-bkp-agenda') as HTMLElement
+    const head = agenda.querySelector('.fx-bkp-agenda-head') as HTMLElement
+    const effective = agenda.querySelector('.fx-bkp-effective') as HTMLElement
+    expect(within(head).getByText('no agent report for this job')).toBeInTheDocument()
+    expect(within(effective).getByText('no agent report for this job')).toBeInTheDocument()
   })
 
   it('warns when the heartbeat is older than two minutes', async () => {
@@ -857,7 +1029,9 @@ describe('BackupSection schedule', () => {
     // permission is owner-only and locked).
     renderWithProviders(<BackupSection />)
 
-    expect((await screen.findAllByText('03:30')).length).toBeGreaterThan(0)
+    await screen.findByText('Database dump schedule')
+    const agenda = document.querySelector('.fx-bkp-agenda') as HTMLElement
+    expect(within(agenda).getByText('03:30')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Save schedule' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Restore env default' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Add time' })).not.toBeInTheDocument()

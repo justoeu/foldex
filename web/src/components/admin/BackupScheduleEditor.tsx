@@ -1,4 +1,4 @@
-import { memo, useState, type RefObject } from 'react'
+import { memo, useState, type ReactNode, type RefObject } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useConfirm } from '../ConfirmDialog'
@@ -30,11 +30,20 @@ const ARROW_STEP: Record<string, number | undefined> = {
 /** The server's closed weekday vocabulary, in its own order (sun-first). */
 const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
 
+/** The "work week" shortcut, derived so it cannot drift from the list above. */
+const WORKWEEK = WEEKDAYS.filter((d) => d !== 'sat' && d !== 'sun')
+
 /** Shortcuts for the mirror interval. Every one is inside the server's floor. */
 const INTERVAL_PRESETS = [30, 60, 360, 720] as const
 
 /** The cadence a draft opens on when nothing upstream states an interval. */
 const DEFAULT_INTERVAL_MIN = 360
+
+/**
+ * The wall time a row the owner just ADDED opens on — noon, so it reads as the
+ * placeholder it is next to any agenda `fallbackFor` proposes.
+ */
+const ADDED_TIME = '12:00'
 
 /** The floor this job's weekday set may not go under, in the server's numbers. */
 function weekdayFloorFor(job: BackupJob, bounds: BackupScheduleResponse['bounds']): number {
@@ -195,80 +204,98 @@ export const ScheduleCard = memo(function ScheduleCard({
 }) {
   const { t } = useTranslation()
 
-  // The two placeholders wear the grid class and the focus target too: a job
-  // card clicked during the first load must still reveal this slot, and the
-  // column must keep its shape while it fills.
+  // Both placeholders go through the same shell as the loaded card: the slot
+  // is a reveal target in every state (a job card clicked during the first
+  // load must still land on it) and the column must keep its shape while it
+  // fills. Stated once, so a fourth return cannot quietly lose either.
   if (isPending) {
     return (
-      <div className="fx-card fx-bkp-agenda" ref={cardRef} tabIndex={-1}>
-        <div className="fx-card-body"><div className="fx-empty">{t('common.loading')}</div></div>
-      </div>
+      <AgendaShell cardRef={cardRef}>
+        <div className="fx-empty">{t('common.loading')}</div>
+      </AgendaShell>
     )
   }
   if (isError || !jobs || !rows || !bounds) {
     return (
-      <div className="fx-card fx-bkp-agenda" ref={cardRef} tabIndex={-1}>
-        <div className="fx-card-body"><div className="fx-empty">{t('admin.backup_schedule_unavailable')}</div></div>
-      </div>
+      <AgendaShell cardRef={cardRef}>
+        <div className="fx-empty">{t('admin.backup_schedule_unavailable')}</div>
+      </AgendaShell>
     )
   }
 
   const row = rows[selected] ?? null
 
   return (
-    <div className="fx-card fx-bkp-agenda" ref={cardRef} tabIndex={-1}>
-      <div className="fx-card-body">
-        <div className="fx-bkp-agenda-head">
-          <div>
-            <div className="fx-panel-title">
-              {t('admin.backup_agenda_title', { job: t(`admin.backup_job_${selected}`) })}
-            </div>
-            <div className="fx-panel-desc">{t(`admin.backup_agenda_desc_${selected}`)}</div>
+    <AgendaShell cardRef={cardRef}>
+      <div className="fx-bkp-agenda-head">
+        <div>
+          <div className="fx-panel-title">
+            {t('admin.backup_agenda_title', { job: t(`admin.backup_job_${selected}`) })}
           </div>
-          {report ? (
-            <span className={'fx-chip' + (report.source === 'db' ? ' fx-chip-ok' : '')}>
-              {t(`admin.backup_schedule_source_${report.source}`)}
-            </span>
-          ) : (
-            <span className="fx-chip fx-chip-warn">{t('admin.backup_schedule_no_report')}</span>
-          )}
+          <div className="fx-panel-desc">{t(`admin.backup_agenda_desc_${selected}`)}</div>
         </div>
-
-        <div className="fx-bkp-tabs" role="tablist">
-          {jobs.map((job) => (
-            <button
-              key={job}
-              type="button"
-              role="tab"
-              aria-selected={job === selected}
-              className={'fx-bkp-tab' + (job === selected ? ' fx-bkp-tab-on' : '')}
-              onClick={() => onSelect(job)}
-            >
-              {t(`admin.backup_job_${job}`)}
-            </button>
-          ))}
-        </div>
-
-        <ScheduleEditor
-          // A saved or reset row remounts the editor so its draft reseeds from
-          // what the server now holds, instead of a stale local copy — and so
-          // does the ARRIVAL of the env baseline, because the first successful
-          // fetch can land before the agent's first heartbeat and seed the
-          // draft from this screen's fallback. Once a baseline is present its
-          // mode is stable, so the poll that only refreshes the heartbeat does
-          // not throw a half-typed agenda away.
-          key={`${selected}:${row?.updated_at ?? 'baseline'}:${report?.baseline?.mode ?? 'none'}`}
-          job={selected}
-          row={row}
-          report={report}
-          agentSeen={agentSeen}
-          bounds={bounds}
-          isOwner={isOwner}
-        />
+        {report ? (
+          <span className={'fx-chip' + (report.source === 'db' ? ' fx-chip-ok' : '')}>
+            {t(`admin.backup_schedule_source_${report.source}`)}
+          </span>
+        ) : (
+          <span className="fx-chip fx-chip-warn">{t('admin.backup_schedule_no_report')}</span>
+        )}
       </div>
-    </div>
+
+      <div className="fx-bkp-tabs" role="tablist">
+        {jobs.map((job) => (
+          <button
+            key={job}
+            type="button"
+            role="tab"
+            aria-selected={job === selected}
+            className={'fx-bkp-tab' + (job === selected ? ' fx-bkp-tab-on' : '')}
+            onClick={() => onSelect(job)}
+          >
+            {t(`admin.backup_job_${job}`)}
+          </button>
+        ))}
+      </div>
+
+      <ScheduleEditor
+        // A saved or reset row remounts the editor so its draft reseeds from
+        // what the server now holds, instead of a stale local copy — and so
+        // does the ARRIVAL of the env baseline, because the first successful
+        // fetch can land before the agent's first heartbeat and seed the
+        // draft from this screen's fallback. Once a baseline is present its
+        // mode is stable, so the poll that only refreshes the heartbeat does
+        // not throw a half-typed agenda away.
+        key={`${selected}:${row?.updated_at ?? 'baseline'}:${report?.baseline?.mode ?? 'none'}`}
+        job={selected}
+        row={row}
+        report={report}
+        agentSeen={agentSeen}
+        bounds={bounds}
+        isOwner={isOwner}
+      />
+    </AgendaShell>
   )
 })
+
+/**
+ * The agenda slot itself: the grid cell, and the element `useRevealTarget`
+ * focuses and scrolls to. `tabIndex={-1}` is what makes a div focusable at
+ * all, and `.fx-bkp-agenda` is both the equal-height rule and the focus ring.
+ */
+function AgendaShell({
+  cardRef,
+  children,
+}: {
+  cardRef: RefObject<HTMLDivElement | null>
+  children: ReactNode
+}) {
+  return (
+    <div className="fx-card fx-bkp-agenda" ref={cardRef} tabIndex={-1}>
+      <div className="fx-card-body">{children}</div>
+    </div>
+  )
+}
 
 /**
  * The shell: it owns the draft, the two mutations and the confirmations, and
@@ -558,9 +585,7 @@ function ScheduleFields({
                   <button
                     type="button"
                     className="fx-bkp-dayset"
-                    onClick={() =>
-                      onChange({ ...config, weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'] })
-                    }
+                    onClick={() => onChange({ ...config, weekdays: [...WORKWEEK] })}
                   >
                     {t('admin.backup_schedule_weekdays_workweek')}
                   </button>
@@ -611,7 +636,7 @@ function ScheduleFields({
                     <button
                       type="button"
                       className="fx-bkp-add"
-                      onClick={() => onChange({ ...config, times: [...times, '12:00'] })}
+                      onClick={() => onChange({ ...config, times: [...times, ADDED_TIME] })}
                     >
                       <span aria-hidden="true">+</span> {t('admin.backup_schedule_add_time')}
                     </button>

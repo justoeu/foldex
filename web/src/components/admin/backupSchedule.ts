@@ -14,8 +14,8 @@ const MINUTES_PER_WEEK = 7 * 24 * 60
  */
 export function firingsPerWeek(cfg: BackupScheduleConfig): number {
   if (cfg.enabled === false) return 0
-  if (cfg.mode === 'interval') return MINUTES_PER_WEEK / (cfg.interval_min as number)
-  if (cfg.mode === 'times') return (cfg.times?.length as number) * (cfg.weekdays?.length as number)
+  if (cfg.mode === 'interval') return MINUTES_PER_WEEK / (cfg.interval_min ?? NaN)
+  if (cfg.mode === 'times') return (cfg.times?.length ?? NaN) * (cfg.weekdays?.length ?? NaN)
   return NaN
 }
 

@@ -2923,8 +2923,8 @@ button.fx-bkp-job-run:hover { background: var(--fx-accent-soft-2); }
 /*
  * The two columns are one board, not two stacks that happen to be adjacent:
  * `start` let them end at different heights, which read as an unfinished
- * layout. `stretch` + the agenda's min-height + the aside's last card taking
- * the slack is what lands both bottom edges on the same line.
+ * layout. `stretch` + the agenda's zeroed margin + the aside's last card
+ * taking the slack is what lands both bottom edges on the same line.
  */
 .fx-bkp-split {
   display: grid;
@@ -2935,7 +2935,14 @@ button.fx-bkp-job-run:hover { background: var(--fx-accent-soft-2); }
 
 .fx-bkp-aside { display: flex; flex-direction: column; gap: 14px; }
 
-.fx-bkp-agenda { min-height: 100%; }
+/* `.fx-card` carries `margin-bottom: 16px` for the stacked columns it lives in
+   elsewhere, and what `stretch` fills a grid row with is the item's MARGIN
+   box — so that margin alone lands the agenda 16px above the aside, measured,
+   in all four job views. Zeroing it is what makes `stretch` do the work: a
+   `min-height: 100%` here also aligns them, but against an auto-sized row it
+   overshoots by 2px and inflates the card by the same 16px in the one-column
+   layout, where the item IS its own row. */
+.fx-bkp-agenda { margin-bottom: 0; }
 
 /* Clicking a job card moves focus here, so the card has to be able to say so. */
 .fx-bkp-agenda:focus-visible {
