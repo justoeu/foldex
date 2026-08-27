@@ -580,6 +580,82 @@ func TestAgent_HeartbeatCarriesTheEnvBaseline(t *testing.T) {
 		"the form opens on this document and saves it back — it has to pass the floors")
 }
 
+// The operator cannot verify a destination they cannot see, and the endpoint
+// is the field that most often points somewhere other than intended — here it
+// named the SAME host as the origin, which is a mirror that survives nothing.
+func TestAgent_HeartbeatNamesTheExternalDestination(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+
+	cfg := lifecycleConfig()
+	cfg.S3Endpoint = "s3.example.test:9000"
+	cfg.S3Bucket = "foldex-backups"
+	cfg.S3AccessKey = "AKIAEXAMPLEKEY"
+	cfg.S3SecretKey = "s3cr3t-do-not-publish"
+	agent, err := New(cfg, pool, newRecorderStore(), nil, testLogger())
+	require.NoError(t, err)
+	agent.skewWarning = nil
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	agent.Start(runCtx)
+	defer agent.Stop()
+
+	state, seen, err := NewScheduleStore(pool).AgentSeen(ctx)
+	require.NoError(t, err)
+	require.True(t, seen)
+
+	for job, prefix := range map[string]string{
+		JobDump:    "backups/dump/",
+		JobDrill:   "backups/dump/",
+		JobMirror:  "backups/rustfs/",
+		JobUserZip: "backups/users/",
+	} {
+		dest := state.Jobs[job].Destination
+		require.NotNil(t, dest, "job %s writes to or reads from the external bucket", job)
+		assert.Equal(t, "s3.example.test:9000", dest.Endpoint, "job %s", job)
+		assert.Equal(t, "foldex-backups", dest.Bucket, "job %s", job)
+		assert.Equal(t, prefix, dest.Prefix, "job %s", job)
+	}
+}
+
+// The heartbeat is read by the admin screen, so anything it carries is on a
+// screen. INV-171 keeps the S3 credentials inside this process; publishing the
+// destination must not become the hole that walks them out.
+func TestAgent_HeartbeatCarriesNoCredential(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+
+	cfg := lifecycleConfig()
+	cfg.S3Endpoint = "s3.example.test:9000"
+	cfg.S3Bucket = "foldex-backups"
+	cfg.S3AccessKey = "AKIAEXAMPLEKEY"
+	cfg.S3SecretKey = "s3cr3t-do-not-publish"
+	cfg.RustFSAccessKey = "rustfs-access-key"
+	cfg.RustFSSecretKey = "rustfs-secret-key"
+	agent, err := New(cfg, pool, newRecorderStore(), nil, testLogger())
+	require.NoError(t, err)
+	agent.skewWarning = nil
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	agent.Start(runCtx)
+	defer agent.Stop()
+
+	var raw string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT capabilities::text FROM backup_agent_state WHERE id = 1`).Scan(&raw))
+
+	for _, secret := range []string{
+		cfg.S3AccessKey, cfg.S3SecretKey, cfg.RustFSAccessKey, cfg.RustFSSecretKey,
+	} {
+		assert.NotContains(t, raw, secret,
+			"the heartbeat is rendered on the admin screen; a credential in it is a credential on a screen")
+	}
+}
+
 // The disabled→enabled swap is the interleaving that used to strand a loop:
 // with changeCh read after timing, a swap between the two reads closed a
 // channel nobody held and a schedule-less job slept on the new channel until

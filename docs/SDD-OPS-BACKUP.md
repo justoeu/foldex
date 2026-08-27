@@ -412,10 +412,10 @@ Os quatro jobs aceitam os dois modos.
   legada é normalizada na leitura em vez de degradar em silêncio; a migração 000043 fez a
   conversão das existentes.
 - **Heartbeat** — tabela `backup_agent_state` (uma linha, upsert no mesmo loop):
-  `seen_at`, versão e por job `{capable, reason, source, schedule, baseline}`. É a camada
+  `seen_at`, versão e por job `{capable, reason, source, schedule, baseline, destination}`. É a camada
   de honestidade da UI (lição do mailer): sem ela a tela deixaria o owner agendar um
   drill num agente sem identidade montada, e a agenda ficaria configurada e ignorada
-  para sempre. O `baseline` é a agenda da ENV **estruturada** (não só renderizada) — é o
+  para sempre. O `destination` é o endereço do bucket externo — `{endpoint, bucket, prefix}` — para que a tela possa NOMEAR para onde cada job manda: uma agenda que o operador não consegue mirar é uma agenda que ele não consegue conferir, e o endpoint é o campo que mais aponta para lugar diferente do pretendido (a mesma máquina da origem, por exemplo, que é um espelho que não sobrevive a nada). São os três campos NÃO secretos, de propósito: o INV-171 mantém `BACKUP_S3_ACCESS_KEY`/`BACKUP_S3_SECRET_KEY` dentro do processo do agente, e este payload é renderizado numa tela de administração. O `baseline` é a agenda da ENV **estruturada** (não só renderizada) — é o
   que faz "a env é a primeira opção, o banco é a sobrescrita" existir na tela: um job sem
   linha abre com o formulário já preenchido pela env, e salvar é o ato que cria a
   sobrescrita. Antes dele o editor semeava com constantes e a env não era opção nenhuma.

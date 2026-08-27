@@ -1387,6 +1387,7 @@
     "backup_agenda_desc_drill": "Proves the last dump actually restores. A dump nobody ever restored is a promise, not a backup.",
     "backup_agenda_desc_mirror": "Copies the RustFS objects to the external bucket, so the dump is not the only copy.",
     "backup_agenda_desc_user_zip": "A convenience archive per account — the only job an agenda may switch off.",
+    "backup_destination_label": "Destination",
     "backup_schedule_enabled_desc": "Builds one ZIP per active account, at the chosen time.",
     "backup_schedule_remove_time_n": "Remove time {{n}}",
     "backup_weekday_short_sun": "S",

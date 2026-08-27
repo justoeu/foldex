@@ -2959,6 +2959,37 @@ button.fx-bkp-job-run:hover { background: var(--fx-accent-soft-2); }
   gap: 12px;
 }
 
+/* The title/description/destination column. `min-width: 0` is what lets a long
+   endpoint wrap: a flex item defaults to min-width:auto and would otherwise
+   push the card wider than its grid column instead of breaking. */
+.fx-bkp-agenda-head > div {
+  min-width: 0;
+}
+
+/* The destination address, under the agenda's description. `code` already
+   carries the mono face and the accent chip from the shell (line 124), so this
+   only has to place the pair and let a long endpoint wrap instead of widening
+   the card past its column. */
+.fx-bkp-dest {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.fx-bkp-dest-label {
+  color: var(--fx-ink-4);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10.5px;
+}
+
+.fx-bkp-dest-value {
+  word-break: break-all;
+}
+
 .fx-bkp-tabs {
   display: flex;
   gap: 4px;

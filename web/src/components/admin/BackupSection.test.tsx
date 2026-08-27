@@ -492,18 +492,22 @@ function healthyAgent(over: Record<string, unknown> = {}) {
       dump: {
         capable: true, source: 'env', schedule: '03:30',
         baseline: { mode: 'times', times: ['03:30'], weekdays: ALL_DAYS },
+        destination: { endpoint: 's3.example.test:9000', bucket: 'foldex-backups', prefix: 'backups/dump/' },
       },
       drill: {
         capable: true, source: 'env', schedule: '01:00 sun',
         baseline: { mode: 'times', times: ['01:00'], weekdays: ['sun'] },
+        destination: { endpoint: 's3.example.test:9000', bucket: 'foldex-backups', prefix: 'backups/dump/' },
       },
       mirror: {
         capable: true, source: 'env', schedule: 'every 360m',
         baseline: { mode: 'interval', interval_min: 360 },
+        destination: { endpoint: 's3.example.test:9000', bucket: 'foldex-backups', prefix: 'backups/rustfs/' },
       },
       user_zip: {
         capable: true, source: 'env', schedule: '02:30',
         baseline: { mode: 'times', times: ['02:30'], weekdays: ALL_DAYS },
+        destination: { endpoint: 's3.example.test:9000', bucket: 'foldex-backups', prefix: 'backups/users/' },
       },
     },
     ...over,
@@ -1326,5 +1330,52 @@ describe('BackupSection schedule', () => {
     expect(times).toHaveAttribute('aria-checked', 'true')
     await user.keyboard('{ArrowLeft}')
     expect(interval).toHaveAttribute('aria-checked', 'true')
+  })
+})
+
+/*
+ * "Copies the objects to the external bucket" names no bucket, and the endpoint
+ * is the field most likely to point somewhere other than intended — at the same
+ * host as the origin, say, which is a mirror that survives nothing. The card
+ * says the address so the operator can check it against what they meant.
+ */
+describe('BackupSection destination', () => {
+  it('names the bucket and endpoint the selected job ships to', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Object mirror' }))
+    const line = await screen.findByTestId('fx-bkp-destination')
+    expect(line).toHaveTextContent('s3.example.test:9000')
+    expect(line).toHaveTextContent('foldex-backups')
+    expect(line).toHaveTextContent('backups/rustfs/')
+  })
+
+  // The prefix is the half that differs per job, and it is what makes the line
+  // actionable: it is where the operator looks with their own S3 client.
+  it('moves the prefix with the selected job', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Per-user ZIPs' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('fx-bkp-destination')).toHaveTextContent('backups/users/'))
+  })
+
+  // An agent that reports no destination has no bucket configured. Rendering
+  // "bucket" with nothing after it would read as a misconfiguration the
+  // operator does not have.
+  it('says nothing when the agent reports no destination', async () => {
+    const agent = healthyAgent()
+    delete (agent.jobs as Record<string, { destination?: unknown }>).mirror.destination
+    state.backupAgent = agent
+    const user = userEvent.setup()
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Object mirror' }))
+    await screen.findByLabelText('Interval (minutes)')
+    expect(screen.queryByTestId('fx-bkp-destination')).not.toBeInTheDocument()
   })
 })

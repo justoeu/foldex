@@ -126,7 +126,8 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
   ↳ Montado num grupo de rotas, perdeu em silêncio toda a metade autenticada de `/api/auth`.
   ↳ `user.name` do `otelpgx` é o PAPEL do Postgres: ao lado de `user.id` vira "requests por usuário" respondendo `user_foldex` para 100% do tráfego.
 
-- **As credenciais do S3 externo existem SÓ no processo do backup-agent, e o dump operacional é cifrado por DEFAULT** → [INV-171](docs/INVARIANTS.md#inv-171) | guard: `TestLoad_PlaintextIsAnExplicitOptOutNeverAFallback`, `TestDumpRun_ShipsAnEncryptedVerifiableArtifact`
+- **As credenciais do S3 externo existem SÓ no processo do backup-agent, e o dump operacional é cifrado por DEFAULT** → [INV-171](docs/INVARIANTS.md#inv-171) | guard: `TestLoad_PlaintextIsAnExplicitOptOutNeverAFallback`, `TestDumpRun_ShipsAnEncryptedVerifiableArtifact`, `TestAgent_HeartbeatCarriesNoCredential`
+  ↳ O heartbeat publica o ENDEREÇO do bucket (`{endpoint, bucket, prefix}`) para a tela poder mirar; o acesso a ele, nunca.
 - **Um job de backup roda no máximo uma vez por vez, e a exclusão tem TRÊS camadas que se cobrem** → [INV-172](docs/INVARIANTS.md#inv-172) | guard: `TestBegin_TheRunningSlotIsExclusivePerJob`, `TestExpireStale_FreesTheSlotADeadAgentHeld`
 - **A env decide QUAIS jobs de backup existem; o banco decide QUANDO rodam; pisos compilados seguram o mínimo** → [INV-173](docs/INVARIANTS.md#inv-173) | guard: `TestValidateJobConfig_FloorsHold`, `TestSchedule_WriteIsOwnerOnlyThroughTheLockedPermission`, `TestAgent_HeartbeatCarriesTheEnvBaseline`
   ↳ Um vocabulário por job (ADR-44) não deixava nenhum job escolher dias da semana; o ADR-45 unificou a forma e manteve os pisos, com o do `dump` maior que o dos outros.

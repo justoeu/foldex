@@ -233,6 +233,20 @@ export const ScheduleCard = memo(function ScheduleCard({
             {t('admin.backup_agenda_title', { job: t(`admin.backup_job_${selected}`) })}
           </div>
           <div className="fx-panel-desc">{t(`admin.backup_agenda_desc_${selected}`)}</div>
+          {/*
+            The description says a job copies to "the external bucket"; this
+            says WHICH. It is the address and nothing else — the credentials
+            that reach it never leave the agent process (INV-171).
+          */}
+          {report?.destination ? (
+            <p className="fx-bkp-dest" data-testid="fx-bkp-destination">
+              <span className="fx-bkp-dest-label">{t('admin.backup_destination_label')}</span>
+              <code className="fx-bkp-dest-value">
+                {report.destination.endpoint}/{report.destination.bucket}/
+                {report.destination.prefix}
+              </code>
+            </p>
+          ) : null}
         </div>
         {report ? (
           <span className={'fx-chip' + (report.source === 'db' ? ' fx-chip-ok' : '')}>

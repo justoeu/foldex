@@ -342,6 +342,18 @@ export type BackupAgentJobReport = {
    * reports `{}`: no mode, so nothing about it can be claimed.
    */
   baseline: BackupScheduleConfig
+  /**
+   * Where this job's objects live in the external bucket — the ADDRESS, never
+   * an access: the agent publishes endpoint, bucket and key prefix and stops
+   * there (INV-171). Absent when no external bucket is configured.
+   */
+  destination?: BackupDestination
+}
+
+export type BackupDestination = {
+  endpoint: string
+  bucket: string
+  prefix: string
 }
 
 export type BackupAgentState = {

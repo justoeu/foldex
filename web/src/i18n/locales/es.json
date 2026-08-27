@@ -1387,6 +1387,7 @@
     "backup_agenda_desc_drill": "Prueba que el último dump realmente restaura. Un dump que nadie restauró es una promesa, no un backup.",
     "backup_agenda_desc_mirror": "Copia los objetos de RustFS al bucket externo, para que el dump no sea la única copia.",
     "backup_agenda_desc_user_zip": "Un archivo de conveniencia por cuenta — el único job que una agenda puede apagar.",
+    "backup_destination_label": "Destino",
     "backup_schedule_enabled_desc": "Genera un ZIP por cuenta activa, en el horario elegido.",
     "backup_schedule_remove_time_n": "Quitar el horario {{n}}",
     "backup_weekday_short_sun": "D",

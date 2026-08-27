@@ -274,22 +274,33 @@ func (a *Agent) agentState() AgentState {
 		capable, reason := a.capability(spec.name)
 		t := a.timing(spec.name)
 		jobs[spec.name] = JobReport{
-			Capable:  capable,
-			Reason:   reason,
-			Source:   t.Source,
-			Schedule: t.String(),
-			Baseline: envTiming(spec.name, a.cfg).ToConfig(),
+			Capable:     capable,
+			Reason:      reason,
+			Source:      t.Source,
+			Schedule:    t.String(),
+			Baseline:    envTiming(spec.name, a.cfg).ToConfig(),
+			Destination: a.destination(spec.name),
 		}
 	}
 	// Unregistered jobs are reported anyway: absent from the map they would
 	// render as "unknown" instead of "unavailable, and here is why" — and an
 	// absent mirror let the UI offer editors for a row no process would ever
 	// read.
+	//
+	// They carry their destination anyway: WHERE a job would ship is part of
+	// the configuration the operator is checking, and a job that cannot run is
+	// exactly when they are checking it.
 	if !a.registered(JobUserZip) {
-		jobs[JobUserZip] = JobReport{Capable: false, Reason: "no_source_credentials", Source: "env", Schedule: "disabled"}
+		jobs[JobUserZip] = JobReport{
+			Capable: false, Reason: "no_source_credentials", Source: "env", Schedule: "disabled",
+			Destination: a.destination(JobUserZip),
+		}
 	}
 	if !a.registered(JobMirror) {
-		jobs[JobMirror] = JobReport{Capable: false, Reason: "mirror_off", Source: "env", Schedule: "disabled"}
+		jobs[JobMirror] = JobReport{
+			Capable: false, Reason: "mirror_off", Source: "env", Schedule: "disabled",
+			Destination: a.destination(JobMirror),
+		}
 	}
 	return AgentState{
 		SeenAt:  time.Now(),
@@ -299,6 +310,31 @@ func (a *Agent) agentState() AgentState {
 		SchemaVersion: RequiredSchemaVersion,
 		Jobs:          jobs,
 	}
+}
+
+// destination reports where a job's objects live in the external bucket, or nil
+// when the bucket is not configured at all — a half-named address ("bucket "
+// with nothing after it) would read as a misconfiguration the operator does not
+// have.
+func (a *Agent) destination(job string) *Destination {
+	if a.cfg.S3Endpoint == "" || a.cfg.S3Bucket == "" {
+		return nil
+	}
+	prefix, ok := jobKeyPrefix[job]
+	if !ok {
+		return nil
+	}
+	return &Destination{Endpoint: a.cfg.S3Endpoint, Bucket: a.cfg.S3Bucket, Prefix: prefix}
+}
+
+// jobKeyPrefix maps each job to its namespace in the external bucket. The drill
+// shares the dump's: it RESTORES what the dump wrote, and naming that is the
+// point — the two agendas are one story told from both ends.
+var jobKeyPrefix = map[string]string{
+	JobDump:    dumpKeyPrefix,
+	JobDrill:   dumpKeyPrefix,
+	JobMirror:  mirrorKeyPrefix,
+	JobUserZip: userZipKeyPrefix,
 }
 
 // CheckSchema gates the boot on the agent's own migrations being applied.

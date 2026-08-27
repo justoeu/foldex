@@ -617,6 +617,30 @@ type JobReport struct {
 	// pre-filled on it: env is the first option, the database row is the
 	// override. Zero for a job this process cannot run.
 	Baseline JobConfig `json:"baseline"`
+	// Destination names WHERE this job's objects go in the external bucket.
+	// Nil for a job that never touches it.
+	Destination *Destination `json:"destination,omitempty"`
+}
+
+// Destination is the external bucket as an ADDRESS, never as an access.
+//
+// It exists because an agenda the operator cannot aim is an agenda they cannot
+// verify: "copies the objects to the external bucket" says nothing about which
+// bucket, and the endpoint is the field most likely to point somewhere other
+// than intended — at the same host as the origin, say, which is a mirror that
+// survives no failure the mirror exists for.
+//
+// The three fields are deliberately the three that are NOT secret. INV-171
+// keeps `BACKUP_S3_ACCESS_KEY`/`BACKUP_S3_SECRET_KEY` inside this process, and
+// this struct is rendered on an administration screen — so it carries the
+// address and stops there.
+type Destination struct {
+	Endpoint string `json:"endpoint"`
+	Bucket   string `json:"bucket"`
+	// Prefix is the job's key namespace inside the bucket, which is what makes
+	// the line actionable: it is where the operator looks with their own S3
+	// client to confirm the copies are landing.
+	Prefix string `json:"prefix"`
 }
 
 // AgentState is the heartbeat row.
