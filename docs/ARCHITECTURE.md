@@ -1539,4 +1539,46 @@ segurança do ADR-43 (uma sessão admin comprometida não pode reduzir a proteç
   agente 40→42 (lê `backup_schedule`, escreve o heartbeat).
 
 Detalhe em [`docs/SDD-OPS-BACKUP.md`](./SDD-OPS-BACKUP.md) §6.1. Status: **Aceito ·
-implementado (PR6)**.
+implementado (PR6) · vocabulário revisado pelo ADR-45**.
+
+### ADR-45 — Um vocabulário de agendamento para os quatro jobs
+
+O ADR-44 acertou a divisão de autoridade e errou a forma do documento: deu a cada job um
+vocabulário próprio — `dump` só `times[]`, `drill` só `time`+`weekday`, `mirror` só
+`interval_min`, `user_zip` só `enabled`+`time` — e `ValidateJobConfig` recusava qualquer
+campo "estrangeiro". O custo apareceu na primeira demanda de uso: **nenhum job escolhia
+dias da semana de verdade** (o drill escolhia UM dia; os outros três, nenhum), não existia
+"segunda, quarta e sexta", e o formulário precisava de quatro componentes de campos que
+não compartilhavam nada além do botão de salvar. Quatro vocabulários para quatro jobs
+tornam a superfície quatro vezes maior sem tornar nada mais seguro: a segurança do ADR-44
+está nos PISOS, não na pobreza da forma.
+
+- **Uma forma só**, discriminada por `mode` EXPLÍCITO (`times` | `interval`), nunca
+  inferido: `{mode, times[], weekdays[], interval_min, enabled}`. Modo explícito porque
+  uma linha que carregasse `times` e `interval_min` juntos seria meio-honrada em silêncio,
+  que é exatamente o defeito que os pisos existem para impedir. Os quatro jobs aceitam os
+  dois modos: horários de parede (1..6 por dia) cruzados com um conjunto de dias da
+  semana, ou um intervalo em minutos.
+- **Os pisos continuam compilados e assimétricos**, aplicados nos dois lados (PUT do
+  backend e load do agente, a mesma função): 1..6 horários, intervalo 15..1440 e ≥1 dia
+  para todos; **≥5 dias para o `dump`**, porque o dump é a proteção da instância e não uma
+  conveniência de produto; e `user_zip` segue sendo o único que uma linha desliga. O
+  trade-off aceito e nomeado: o piso "dump todo dia" virou "dump em ≥5 dias" — a agenda
+  ganhou expressividade e o piso cedeu um degrau, deliberadamente, com o diálogo de
+  confirmação do INV-122 cobrindo toda mudança que REDUZ a frequência.
+- **O heartbeat passa a publicar o baseline da env estruturado** (`JobReport.baseline`),
+  não só a string de display. Sem isso a tela não conseguia cumprir a promessa do ADR-44 —
+  "a env é a primeira opção, o banco é a sobrescrita" —, porque o formulário não tinha de
+  onde carregar a agenda da env e semeava com constantes. Com ele, um job sem linha abre
+  preenchido com o que a env sempre teve, e salvar é o ato que cria a sobrescrita.
+- **A matemática de agendamento sobe de `Anchor` para `Timing`.** Um horário sozinho não
+  sabe mais em que dias dispara; `Anchor` fica sendo só o parser da sintaxe da env. O
+  `MaxGap` passa a enumerar a grade da semana (dias × horários) e devolver o maior vão com
+  wraparound, o que **substitui** os três casos especiais anteriores: um horário num único
+  dia dá 7 dias naturalmente, sem o galho "se alguma âncora é semanal, devolve a maior".
+- Migração 000043 normaliza as linhas existentes e `RequiredSchemaVersion` vai 42→43 nos
+  dois gates. A leitura ainda normaliza documentos legados em memória, para que uma linha
+  escrita à mão em SQL seja honrada em vez de degradar em silêncio para a baseline.
+
+Detalhe em [`docs/SDD-OPS-BACKUP.md`](./SDD-OPS-BACKUP.md) §6.1. Status: **Aceito ·
+implementado (PR7)**.
