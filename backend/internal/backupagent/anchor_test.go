@@ -31,6 +31,22 @@ func TestParseAnchor_RejectsWhatItCannotSchedule(t *testing.T) {
 	assert.False(t, zero.Enabled(), "the zero Anchor means job disabled, never a schedule at midnight")
 }
 
+// The weekday vocabulary is spelled ONCE. Parsing (weekdays) and rendering
+// (weekdayNames) are the two directions of the same list, and a process that
+// spelled them separately could accept a name it cannot render back — or
+// render one it cannot parse. Every value the agenda stores travels both ways:
+// the admin form PUTs names that validateWeekdays parses, and the heartbeat's
+// baseline renders the ones the env anchor produced.
+func TestWeekdayVocabulary_ParsesAndRendersTheSameSevenNames(t *testing.T) {
+	require.Len(t, weekdays, 7, "seven names, no more and no fewer")
+	for wd := time.Sunday; wd <= time.Saturday; wd++ {
+		name := weekdayNames[wd]
+		parsed, ok := weekdays[name]
+		require.True(t, ok, "%q renders but does not parse", name)
+		assert.Equal(t, wd, parsed, "%q parses back to a different day", name)
+	}
+}
+
 func TestAnchorString_RendersTheEnvSyntaxBack(t *testing.T) {
 	daily, err := ParseAnchor("03:30")
 	require.NoError(t, err)

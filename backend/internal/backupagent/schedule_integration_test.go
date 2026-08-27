@@ -339,6 +339,84 @@ func TestMigration_DownCollapsesToTheLegacyVocabulary(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT count(*) FROM backup_schedule WHERE config ? 'mode'`).Scan(&withMode))
 	assert.Zero(t, withMode)
+
+	// The two guards on the drill's and the mirror's collapse, neither of
+	// which any case above reaches. Both send the row to the DELETE instead
+	// of writing a legacy document, and that is the honest outcome — the job
+	// returns to its env baseline, which is what the old code did with a row
+	// it refused.
+	require.NoError(t, testdb.Reset(ctx, pool))
+	// A "times" drill with NO weekdays. The collapse is guarded on
+	// weekdays ->> 0 IS NOT NULL because the legacy drill shape is
+	// {"time","weekday"} and the weekday is not optional in it: without the
+	// guard this row would collapse to {"time":"01:00","weekday":null}, which
+	// the old reader parses as an anchor with no weekday — a DAILY drill
+	// where the operator had asked for none.
+	seedSchedule(ctx, t, pool, JobDrill, `{"mode":"times","times":["01:00"]}`)
+	// A hand-written NON-NUMERIC interval on the mirror — the value that
+	// actually trips the type guard. A quoted "360" would cast fine, because
+	// ->> unquotes; only something like this makes ::int abort the whole
+	// revert and take every other row's collapse with it.
+	seedSchedule(ctx, t, pool, JobMirror, `{"mode":"interval","interval_min":"nightly"}`)
+	// The bystander: it proves the two skips fail SOFT — one row the revert
+	// cannot state must not cost the rows it can.
+	seedSchedule(ctx, t, pool, JobDump,
+		`{"mode":"times","times":["03:30"],"weekdays":["mon","tue","wed","thu","fri"]}`)
+
+	_, err = pool.Exec(ctx, sql)
+	require.NoError(t, err, "one row the revert cannot state must not abort the revert of the others")
+
+	docs = scheduleDocs(ctx, t, pool)
+	assert.NotContains(t, docs, JobDrill,
+		"a times drill with no weekdays has no legacy form — the weekday is not optional in the old shape")
+	assert.NotContains(t, docs, JobMirror,
+		"a string interval_min is skipped by the type guard and falls to the DELETE")
+	assert.Equal(t, map[string]any{"times": []any{"03:30"}}, docs[JobDump],
+		"the rows around them still collapse")
+}
+
+// The up migration's type guard, the mirror image of the down one above, and
+// the one nothing exercised. A migration runs as ONE transaction: if ::int
+// aborts on a single hand-written row, every other job's rewrite goes with it
+// and `migrate up` leaves a database at version 42 against a repo that
+// expects 43.
+//
+// Both shapes below are skipped, and they are skipped for different reasons
+// worth keeping straight. "nightly" is what would actually abort. "360" would
+// NOT have — ->> unquotes, so it casts to 360 cleanly — and the guard skips
+// it anyway, because the predicate asks whether the document is the shape the
+// schema declares rather than whether the cast happens to work.
+//
+// What a skipped row then costs is pinned by the unit test
+// TestJobConfig_AHandWrittenStringIntervalDoesNotDecode: it does not decode
+// into JobConfig, so Load fails for the whole read. That is why such a row has
+// to be found and fixed by hand — not a reason to unguard the cast.
+func TestMigration_UpSkipsANonNumericInterval(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+
+	for _, raw := range []string{`{"interval_min":"nightly"}`, `{"interval_min":"360"}`} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := pool.Exec(ctx, `DELETE FROM backup_schedule`)
+			require.NoError(t, err)
+			seedSchedule(ctx, t, pool, JobMirror, raw)
+			// The bystander: the skip must fail SOFT — one row the migration
+			// cannot translate must not cost the rows it can.
+			seedSchedule(ctx, t, pool, JobDump, `{"times":["06:00","18:00"]}`)
+
+			_, err = pool.Exec(ctx, migrationSQL(t, "000043_backup_schedule_unified.up.sql"))
+			require.NoError(t, err, "one hand-written row must not abort the migration of the others")
+
+			docs := scheduleDocs(ctx, t, pool)
+			var original map[string]any
+			require.NoError(t, json.Unmarshal([]byte(raw), &original))
+			assert.Equal(t, original, docs[JobMirror],
+				"the row is left exactly as it was — untranslatable, never half-translated")
+			assert.Equal(t, "times", docs[JobDump]["mode"], "the rows around it still migrated")
+			assert.Equal(t, []any{"06:00", "18:00"}, docs[JobDump]["times"])
+		})
+	}
 }
 
 func TestScheduleStore_HeartbeatRoundTrip(t *testing.T) {

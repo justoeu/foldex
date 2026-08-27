@@ -27,13 +27,22 @@ type Anchor struct {
 // Enabled reports whether the anchor was configured at all.
 func (a Anchor) Enabled() bool { return a.set }
 
-var weekdays = map[string]time.Weekday{
-	"sun": time.Sunday, "mon": time.Monday, "tue": time.Tuesday, "wed": time.Wednesday,
-	"thu": time.Thursday, "fri": time.Friday, "sat": time.Saturday,
-}
-
-// weekdayNames is the rendering side of the map above, indexed by weekday.
+// weekdayNames is the weekday vocabulary, indexed by weekday — the ONE place
+// sun..sat is spelled out. Anything that renders a day reads it here.
 var weekdayNames = [7]string{"sun", "mon", "tue", "wed", "thu", "fri", "sat"}
+
+// weekdays is the parsing direction, DERIVED from the rendering one rather
+// than spelled a second time. Two independent literals could drift into a
+// vocabulary that accepts a name it cannot render back, and the drift would
+// show up as an agenda the admin form saved and the heartbeat then reported
+// differently — with nothing failing in between.
+var weekdays = func() map[string]time.Weekday {
+	m := make(map[string]time.Weekday, len(weekdayNames))
+	for wd := time.Sunday; wd <= time.Saturday; wd++ {
+		m[weekdayNames[wd]] = wd
+	}
+	return m
+}()
 
 // ParseAnchor accepts "HH:MM" or "HH:MM <weekday>" (sun..sat, case-insensitive).
 func ParseAnchor(raw string) (Anchor, error) {

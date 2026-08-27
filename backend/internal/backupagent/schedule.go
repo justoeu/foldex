@@ -113,7 +113,7 @@ func ValidateJobConfig(job string, cfg JobConfig) error {
 	if cfg.Enabled != nil && !*cfg.Enabled {
 		// A disabled job needs no agenda, and must not carry one: a stored
 		// agenda beside enabled:false is two answers to the same question.
-		if len(cfg.Times) > 0 || len(cfg.Weekdays) > 0 || cfg.IntervalMin != 0 {
+		if carriesAgendaDays(cfg) || cfg.IntervalMin != 0 {
 			return fmt.Errorf("a disabled %s carries no agenda — send \"enabled\": false alone", job)
 		}
 		return nil
@@ -129,7 +129,7 @@ func ValidateJobConfig(job string, cfg JobConfig) error {
 		}
 		return validateWeekdays(job, cfg.Weekdays, floor.minWeekdays)
 	default:
-		if cfg.Times != nil || cfg.Weekdays != nil {
+		if carriesAgendaDays(cfg) {
 			return fmt.Errorf("mode %q does not carry \"times\" or \"weekdays\"", modeInterval)
 		}
 		if cfg.IntervalMin < MinIntervalMin || cfg.IntervalMin > MaxIntervalMin {
@@ -137,6 +137,21 @@ func ValidateJobConfig(job string, cfg JobConfig) error {
 		}
 	}
 	return nil
+}
+
+// carriesAgendaDays answers "does this document state wall times or weekdays
+// at all?" — the one question both absence gates above ask, and the reason
+// they ask it through the same function. They spelled it differently once
+// (one counted length, the other nil-ness), so {"times":[]} passed one gate
+// and failed the other. An explicit empty array counts as ABSENT: [] states
+// no times, so there is nothing in it to honour, and whether a client omits
+// the key or serializes an empty list is a choice its JSON encoder makes
+// (Go's own omitempty drops it, JSON.stringify keeps it) rather than a
+// difference in what the operator asked for. Reading [] as ABSENT cannot
+// loosen a floor: mode "times" never reaches this function — validateTimes
+// and validateWeekdays refuse an empty agenda there by count.
+func carriesAgendaDays(cfg JobConfig) bool {
+	return len(cfg.Times) > 0 || len(cfg.Weekdays) > 0
 }
 
 func validateTimes(job string, times []string) error {
