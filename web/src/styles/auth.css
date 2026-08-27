@@ -552,12 +552,12 @@ button.fx-auth-locale[aria-pressed='true'] {
 
 /* Mock app window --------------------------------------------------- */
 
-/* Runs to the panel's right edge — the pane's own `overflow: hidden` and
-   28px radius clip the corner, so the window reads as part of the panel
-   rather than as a card floating inside it. */
+/* Full width of the pane, centred: it spans the whole column instead of the
+   copy's 470px measure, with the pane's own padding as equal margin on both
+   sides. Bleeding it to one edge was tried and reads as misaligned — the panel
+   has symmetric padding everywhere else. */
 .fx-auth-preview {
   margin-top: auto;
-  margin-right: -52px;
   border: 1px solid var(--fxa-border);
   border-radius: 18px;
   background: var(--fx-surface-3);

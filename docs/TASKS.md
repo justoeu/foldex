@@ -618,11 +618,10 @@ política para o único job que pode ser desligado.
 
 ### Ajustes na tela de acesso após o primeiro olhar (2026-08-26)
 
-- **A maquete do app vai até a borda do painel.** A coluna promocional passou a
-  ocupar a largura toda e só o TEXTO mantém a medida de 470px — uma chamada com
-  40 ems de linha não se lê, por mais espaço que o painel tenha. A janela sangra
-  os 52px de padding à direita e o recorte fica por conta do raio de 28px do
-  próprio painel.
+- **A maquete do app ocupa a largura toda do painel, centrada.** Sangrar só
+  para a borda direita foi tentado e lê como desalinhado — o painel tem padding
+  simétrico em todo o resto. Agora só o TEXTO mantém a medida de 470px: uma chamada com 40 ems de linha
+  não se lê, por mais espaço que o painel tenha.
 - **O botão virou "Entrar" e só habilita com identificador E senha.** A senha é
   medida por COMPRIMENTO, nunca trimada: espaço no começo ou no fim é caractere
   legítimo, e trimar aqui recusaria uma senha que o servidor aceitaria. O
