@@ -1578,7 +1578,23 @@ está nos PISOS, não na pobreza da forma.
   dia dá 7 dias naturalmente, sem o galho "se alguma âncora é semanal, devolve a maior".
 - Migração 000043 normaliza as linhas existentes e `RequiredSchemaVersion` vai 42→43 nos
   dois gates. A leitura ainda normaliza documentos legados em memória, para que uma linha
-  escrita à mão em SQL seja honrada em vez de degradar em silêncio para a baseline.
+  escrita à mão em SQL seja honrada em vez de degradar em silêncio para a baseline. A
+  migração e o `normalized` da leitura precisam concordar em TODA forma legada: enquanto
+  discordaram, um `user_zip` que o operador havia desligado voltava a rodar (a migração
+  mantinha a agenda ao lado do `enabled:false`, o validador recusava o documento inteiro e
+  o job caía na baseline da env, que roda).
+- **O formulário nunca abre num documento que o servidor recusaria** — o corolário que o
+  INV-173 detalha. A env é isenta dos pisos, então a baseline pode estar abaixo deles e é
+  alargada para os sete dias (mantendo os horários) ao semear; o rascunho é gordo para que
+  trocar de modo não abra campos vazios; e a chave de remontagem do editor inclui a
+  CHEGADA da baseline, sem o que o primeiro fetch com `agent: null` semeava de constantes
+  e o Salvar seguinte gravava a opinião da tela por cima da agenda do operador.
+
+**Limitação registrada:** `RequiredSchemaVersion` é um PISO, não uma igualdade — um agente
+antigo (que exige 42) sobe contra o schema 43 e lê linhas unificadas honrando `times` e
+ignorando `weekdays` em silêncio. Roda MAIS vezes do que a agenda pede, que é a direção
+segura, mas sem log de incompatibilidade. Fechar isso pede comparar a versão do heartbeat
+com a do backend e avisar na banda — follow-up, não parte do ADR-45.
 
 Detalhe em [`docs/SDD-OPS-BACKUP.md`](./SDD-OPS-BACKUP.md) §6.1. Status: **Aceito ·
 implementado (PR7)**.
