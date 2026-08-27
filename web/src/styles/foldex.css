@@ -2920,14 +2920,28 @@ button.fx-bkp-job-run:hover { background: var(--fx-accent-soft-2); }
 
 /* Agenda + aside --------------------------------------------------- */
 
+/*
+ * The two columns are one board, not two stacks that happen to be adjacent:
+ * `start` let them end at different heights, which read as an unfinished
+ * layout. `stretch` + the agenda's min-height + the aside's last card taking
+ * the slack is what lands both bottom edges on the same line.
+ */
 .fx-bkp-split {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
   gap: 14px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .fx-bkp-aside { display: flex; flex-direction: column; gap: 14px; }
+
+.fx-bkp-agenda { min-height: 100%; }
+
+/* Clicking a job card moves focus here, so the card has to be able to say so. */
+.fx-bkp-agenda:focus-visible {
+  outline: 2px solid var(--fx-accent);
+  outline-offset: 3px;
+}
 
 .fx-bkp-agenda .fx-card-body { display: flex; flex-direction: column; gap: 16px; }
 
@@ -3022,7 +3036,49 @@ button.fx-bkp-add { color: var(--fx-accent); border-color: var(--fx-accent-soft-
 button.fx-bkp-time-remove { min-height: 32px; padding: 0 10px; font-size: 11.5px; }
 button.fx-bkp-time-remove:hover { color: var(--fx-danger); border-color: var(--fx-danger); }
 
+/* Mode picker — the same pill-in-a-trough shape as .fx-bkp-tabs, one level in.
+   Element-qualified for the reason at the top of this block (INV-154). */
+.fx-bkp-modes {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--fx-bg-tint);
+  align-self: flex-start;
+}
+
+button.fx-bkp-mode {
+  padding: 7px 15px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fx-ink-3);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.fx-bkp-mode-on { background: var(--fx-surface-3); color: var(--fx-accent); }
+
 .fx-bkp-days { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.fx-bkp-daysets { display: flex; gap: 6px; flex-wrap: wrap; }
+
+button.fx-bkp-dayset {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px dashed var(--fx-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fx-ink-3);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.fx-bkp-dayset:hover { color: var(--fx-accent); border-color: var(--fx-accent-soft-2); }
 
 button.fx-bkp-day {
   width: 44px;
@@ -3137,7 +3193,9 @@ button.fx-bkp-preset-on {
 
 /* Agent panel ------------------------------------------------------ */
 
-.fx-bkp-agent { display: flex; flex-direction: column; gap: 12px; }
+/* The aside's last card takes the slack, so its bottom edge meets the
+   agenda's — see the note on .fx-bkp-split. */
+.fx-bkp-agent { display: flex; flex-direction: column; gap: 12px; flex: 1; }
 .fx-bkp-agent-empty { font-size: 12.5px; color: var(--fx-ink-3); }
 
 .fx-bkp-agent-jobs { display: flex; flex-direction: column; gap: 8px; list-style: none; }
