@@ -11,11 +11,52 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/testdb"
 )
+
+// migrationSQL reads one migration file so a test can apply it to the seeded
+// table. Every statement in 000043 is guarded on the row not already carrying
+// a mode, so re-running it over freshly seeded legacy rows is a faithful
+// exercise of what `migrate up` did.
+func migrationSQL(t *testing.T, name string) string {
+	t.Helper()
+	_, file, _, _ := runtime.Caller(0)
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "db", "migrations", name))
+	require.NoError(t, err)
+	return string(raw)
+}
+
+// scheduleDocs reads every stored row back as a decoded document, keyed by
+// job — the migrations rewrite raw jsonb, so the assertions compare documents
+// rather than bytes whose key order Postgres decides.
+func scheduleDocs(ctx context.Context, t *testing.T, pool *pgxpool.Pool) map[string]map[string]any {
+	t.Helper()
+	rows, err := pool.Query(ctx, `SELECT job, config FROM backup_schedule`)
+	require.NoError(t, err)
+	defer rows.Close()
+	out := map[string]map[string]any{}
+	for rows.Next() {
+		var job string
+		var raw []byte
+		require.NoError(t, rows.Scan(&job, &raw))
+		var doc map[string]any
+		require.NoError(t, json.Unmarshal(raw, &doc))
+		out[job] = doc
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+func seedSchedule(ctx context.Context, t *testing.T, pool *pgxpool.Pool, job, doc string) {
+	t.Helper()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO backup_schedule (job, config) VALUES ($1, $2::jsonb)`, job, doc)
+	require.NoError(t, err)
+}
 
 func TestScheduleStore_RoundTripAndFallback(t *testing.T) {
 	ctx := context.Background()
@@ -123,16 +164,10 @@ func TestMigration_UnifiesLegacyScheduleRows(t *testing.T) {
 		{JobMirror, `{"interval_min":360}`},
 		{JobUserZip, `{"enabled":false}`},
 	} {
-		_, err := pool.Exec(ctx,
-			`INSERT INTO backup_schedule (job, config) VALUES ($1, $2::jsonb)`, legacy.job, legacy.doc)
-		require.NoError(t, err)
+		seedSchedule(ctx, t, pool, legacy.job, legacy.doc)
 	}
 
-	_, file, _, _ := runtime.Caller(0)
-	sql, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..",
-		"db", "migrations", "000043_backup_schedule_unified.up.sql"))
-	require.NoError(t, err)
-	_, err = pool.Exec(ctx, string(sql))
+	_, err := pool.Exec(ctx, migrationSQL(t, "000043_backup_schedule_unified.up.sql"))
 	require.NoError(t, err)
 
 	rows := map[string]JobConfig{}
@@ -167,6 +202,143 @@ func TestMigration_UnifiesLegacyScheduleRows(t *testing.T) {
 		assert.Empty(t, cfg.Time, "job=%s: the legacy keys are gone from the row", job)
 		assert.Empty(t, cfg.Weekday, "job=%s", job)
 	}
+}
+
+// The migration's header claims it rewrites the rows as normalized does. That
+// claim is only worth something if something checks it: the two drifted apart
+// on exactly the shapes below, and each divergence was a job whose agenda
+// changed without anyone asking.
+//
+// One case per iteration because job is the primary key, and several of these
+// shapes belong to the same job.
+func TestMigration_AgreesWithNormalizedOnEveryLegacyShape(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+	sql := migrationSQL(t, "000043_backup_schedule_unified.up.sql")
+
+	for _, tc := range []struct {
+		name   string
+		job    string
+		legacy string
+	}{
+		// "enabled" left on a job that may not carry it produces a document
+		// that HAS a mode — so normalized returns it untouched — and that the
+		// floors then refuse forever, pinning the job to the env baseline
+		// behind nothing louder than a Warn.
+		{"enabled on the dump", JobDump, `{"enabled":true,"time":"02:30"}`},
+		{"enabled false on the drill", JobDrill, `{"enabled":false,"time":"02:30"}`},
+		{"enabled on the mirror", JobMirror, `{"enabled":true,"interval_min":360}`},
+
+		// A disabled user_zip that keeps its agenda is refused by the new
+		// validator, falls back to the env baseline and STARTS RUNNING AGAIN.
+		{"user_zip off with a time", JobUserZip, `{"enabled":false,"time":"02:30"}`},
+		{"user_zip off with times", JobUserZip, `{"enabled":false,"times":["02:30","14:30"]}`},
+		{"user_zip off with an interval", JobUserZip, `{"enabled":false,"interval_min":360}`},
+		{"user_zip off with nothing else", JobUserZip, `{"enabled":false}`},
+
+		// The reverse: "enabled" must survive whichever branch rewrites the
+		// row, or a user_zip the owner switched ON comes back off (and one
+		// switched off through the times shape comes back on).
+		{"user_zip on with times", JobUserZip, `{"enabled":true,"times":["02:30"]}`},
+		{"user_zip on with a time", JobUserZip, `{"enabled":true,"time":"02:30"}`},
+		{"user_zip on with an interval", JobUserZip, `{"enabled":true,"interval_min":360}`},
+		{"user_zip on with no agenda", JobUserZip, `{"enabled":true}`},
+
+		{"the dump's own shape", JobDump, `{"times":["06:00","18:00"]}`},
+		{"the drill's own shape", JobDrill, `{"time":"01:00","weekday":"SUN"}`},
+		{"the mirror's own shape", JobMirror, `{"interval_min":360}`},
+		{"a hand-written bare time", JobDump, `{"time":"04:15"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := pool.Exec(ctx, `DELETE FROM backup_schedule`)
+			require.NoError(t, err)
+			seedSchedule(ctx, t, pool, tc.job, tc.legacy)
+
+			// Twice: every statement is guarded on the row not already
+			// carrying a mode, and an operator who re-runs `migrate up` must
+			// not get a second, different rewrite.
+			_, err = pool.Exec(ctx, sql)
+			require.NoError(t, err)
+			_, err = pool.Exec(ctx, sql)
+			require.NoError(t, err)
+
+			var raw []byte
+			require.NoError(t, pool.QueryRow(ctx,
+				`SELECT config FROM backup_schedule WHERE job = $1`, tc.job).Scan(&raw))
+			var migrated JobConfig
+			require.NoError(t, json.Unmarshal(raw, &migrated))
+
+			var legacy JobConfig
+			require.NoError(t, json.Unmarshal([]byte(tc.legacy), &legacy))
+			assert.Equal(t, legacy.normalized(tc.job), migrated,
+				"the row on disk and the row Load would hand the agent must be the same document")
+		})
+	}
+}
+
+// The down migration had no test at all, and one of its comments was wrong
+// once already. It is LOSSY by construction — the legacy vocabulary cannot
+// say what the unified one can — so what is asserted here is that each loss
+// is the DOCUMENTED one.
+func TestMigration_DownCollapsesToTheLegacyVocabulary(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+	sql := migrationSQL(t, "000043_backup_schedule_unified.down.sql")
+
+	// The dump DROPS its weekday set: the legacy dump shape had none and
+	// meant "every day" — the one lossy direction that RAISES frequency.
+	seedSchedule(ctx, t, pool, JobDump,
+		`{"mode":"times","times":["06:00","18:00"],"weekdays":["mon","tue","wed","thu","fri"]}`)
+	// The drill collapses to its FIRST time and FIRST weekday.
+	seedSchedule(ctx, t, pool, JobDrill,
+		`{"mode":"times","times":["01:00","13:00"],"weekdays":["wed","sun"]}`)
+	seedSchedule(ctx, t, pool, JobMirror, `{"mode":"interval","interval_min":360}`)
+	// A disabled user_zip carries no time, and jsonb_strip_nulls is what
+	// keeps the absent one from landing as an explicit null the old reader
+	// would have parsed as an empty anchor.
+	seedSchedule(ctx, t, pool, JobUserZip, `{"mode":"times","enabled":false}`)
+
+	_, err := pool.Exec(ctx, sql)
+	require.NoError(t, err)
+
+	docs := scheduleDocs(ctx, t, pool)
+	require.Len(t, docs, 4)
+	assert.Equal(t, map[string]any{"times": []any{"06:00", "18:00"}}, docs[JobDump])
+	assert.Equal(t, map[string]any{"time": "01:00", "weekday": "wed"}, docs[JobDrill])
+	assert.Equal(t, map[string]any{"interval_min": float64(360)}, docs[JobMirror])
+	assert.Equal(t, map[string]any{"enabled": false}, docs[JobUserZip],
+		"exactly {\"enabled\":false} — a null \"time\" beside it would be a shape the old reader never wrote")
+
+	// An enabled user_zip keeps its first time, and "enabled" defaults to
+	// true for a row that never carried the key.
+	require.NoError(t, testdb.Reset(ctx, pool))
+	seedSchedule(ctx, t, pool, JobUserZip,
+		`{"mode":"times","times":["02:30","14:30"],"weekdays":["sun","mon","tue","wed","thu","fri","sat"]}`)
+	// Whatever the legacy vocabulary cannot say AT ALL: an interval on a job
+	// that never had one, or wall times on the mirror. The row is deleted and
+	// the job returns to its env baseline — which is what the old code did
+	// with a row it refused, it just never said so.
+	seedSchedule(ctx, t, pool, JobDump, `{"mode":"interval","interval_min":60}`)
+	seedSchedule(ctx, t, pool, JobDrill, `{"mode":"interval","interval_min":60}`)
+	seedSchedule(ctx, t, pool, JobMirror, `{"mode":"times","times":["03:00"],"weekdays":["mon"]}`)
+
+	_, err = pool.Exec(ctx, sql)
+	require.NoError(t, err)
+
+	docs = scheduleDocs(ctx, t, pool)
+	assert.Equal(t, map[string]any{"enabled": true, "time": "02:30"}, docs[JobUserZip])
+	assert.NotContains(t, docs, JobDump, "an interval on the dump has no legacy form to fall back to")
+	assert.NotContains(t, docs, JobDrill)
+	assert.NotContains(t, docs, JobMirror, "wall times on the mirror have no legacy form either")
+
+	// Nothing the current vocabulary wrote survives the revert: a leftover
+	// "mode" would be read by the OLD backend as a row with no schedule.
+	var withMode int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM backup_schedule WHERE config ? 'mode'`).Scan(&withMode))
+	assert.Zero(t, withMode)
 }
 
 func TestScheduleStore_HeartbeatRoundTrip(t *testing.T) {
