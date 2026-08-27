@@ -22,44 +22,105 @@ const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
 /** Shortcuts for the mirror interval. Every one is inside the server's floor. */
 const INTERVAL_PRESETS = [30, 60, 360, 720] as const
 
+/** The cadence a draft opens on when nothing upstream states an interval. */
+const DEFAULT_INTERVAL_MIN = 360
+
+/** The floor this job's weekday set may not go under, in the server's numbers. */
+function weekdayFloorFor(job: BackupJob, bounds: BackupScheduleResponse['bounds']): number {
+  return job === 'dump' ? bounds.dump_weekdays_min : bounds.weekdays_min
+}
+
 /**
  * The last-resort draft, used only when neither a stored row nor the agent's
  * env baseline states an agenda — which happens before any agent ever reported
  * (the owner pre-configuring an instance whose backup profile is still off).
  * The `.env` is the first option; this is the fourth.
+ *
+ * It states BOTH modes on purpose: it is also what fills the half a stored row
+ * or an env baseline leaves unsaid, and a draft missing that half is a form
+ * with no days and no times in it.
  */
 function fallbackFor(job: BackupJob): BackupScheduleConfig {
+  const both = { times: ['03:30'], weekdays: [...WEEKDAYS], interval_min: DEFAULT_INTERVAL_MIN }
   switch (job) {
     case 'drill':
-      return { mode: 'times', times: ['01:00'], weekdays: ['sun'] }
+      return { ...both, mode: 'times', times: ['01:00'], weekdays: ['sun'] }
     case 'mirror':
-      return { mode: 'interval', interval_min: 360 }
+      return { ...both, mode: 'interval' }
     case 'user_zip':
-      return { mode: 'times', times: ['02:30'], weekdays: [...WEEKDAYS], enabled: true }
+      return { ...both, mode: 'times', times: ['02:30'], enabled: true }
     default:
-      return { mode: 'times', times: ['03:30'], weekdays: [...WEEKDAYS] }
+      return { ...both, mode: 'times' }
   }
 }
 
 /**
- * The draft the editor opens on: the stored row, else the ENV baseline the
- * agent publishes, else the fallback above. That order IS the layering
+ * The env is exempt from the compiled floors by design — it IS the baseline —
+ * so `BACKUP_DUMP_AT="03:30 sun"` is legal there and reaches this form as one
+ * weekday against a floor of five. Opening the editor on a document the server
+ * is known to refuse teaches the owner that the screen is broken, so the seed
+ * corrects it in the only direction that is safe to take on their behalf:
+ * widening RAISES protection, which is the direction that never asks for a
+ * confirmation. The times stay exactly as the environment states them.
+ */
+function withinWeekdayFloor(
+  job: BackupJob,
+  cfg: BackupScheduleConfig,
+  bounds: BackupScheduleResponse['bounds'],
+): BackupScheduleConfig {
+  if (cfg.mode !== 'times') return cfg
+  if ((cfg.weekdays?.length ?? 0) >= weekdayFloorFor(job, bounds)) return cfg
+  return { ...cfg, weekdays: [...WEEKDAYS] }
+}
+
+/**
+ * `ScheduleStore.Load` returns invalid rows on purpose, so the env fallback
+ * stays visible — which means a row written by hand in SQL reaches this form,
+ * and an unbounded `times` array would render an unbounded list of inputs. The
+ * surplus is dropped for the same reason the weekday set is widened above: the
+ * form must not open on a document it knows the server refuses, and six inputs
+ * beside a 400 that says "between 1 and 6" is a screen the owner cannot
+ * reconcile. Trimming reduces the agenda, so the save asks first.
+ */
+function withinTimesCeiling(
+  cfg: BackupScheduleConfig,
+  bounds: BackupScheduleResponse['bounds'],
+): BackupScheduleConfig {
+  if ((cfg.times?.length ?? 0) <= bounds.times_max) return cfg
+  return { ...cfg, times: cfg.times?.slice(0, bounds.times_max) }
+}
+
+/**
+ * The draft the editor opens on: the stored row over the ENV baseline the
+ * agent publishes, over the fallback above. That order IS the layering
  * (INV-173) — the environment decides the agenda until a row overrides it, so
  * an owner who saves without touching anything writes their own environment's
  * agenda back rather than this screen's opinion of a good one.
+ *
+ * The result is deliberately FAT. A stored row states only the mode it uses,
+ * and seeding the draft from it verbatim left the other half empty: a disabled
+ * ZIP toggled back on carried no day and no time at all, which is a guaranteed
+ * 400. What the row does not state comes from the baseline, then from the
+ * fallback — `payloadOf` is what trims the document on the way out, so the
+ * extra half costs nothing on the wire.
  */
 export function seedDraft(
   job: BackupJob,
   stored: BackupScheduleConfig | null,
   baseline: BackupScheduleConfig | null | undefined,
+  bounds: BackupScheduleResponse['bounds'],
 ): BackupScheduleConfig {
-  if (stored) return stored
-  if (baseline?.mode) return baseline
+  const fallback = fallbackFor(job)
+  const env = baseline?.mode
+    ? { ...fallback, ...withinWeekdayFloor(job, baseline, bounds) }
+    : null
   // A report whose baseline carries no mode is an env agenda that is OFF, and
   // only user_zip may be: opening its switch on would propose turning a job on
   // as the effect of merely looking at it.
-  if (baseline && job === 'user_zip') return { ...fallbackFor(job), enabled: false }
-  return fallbackFor(job)
+  const seed = stored
+    ? { ...(env ?? fallback), ...stored }
+    : (env ?? (baseline && job === 'user_zip' ? { ...fallback, enabled: false } : fallback))
+  return withinTimesCeiling(seed, bounds)
 }
 
 /**
@@ -92,7 +153,11 @@ export function payloadOf(job: BackupJob, cfg: BackupScheduleConfig): BackupSche
 export const ScheduleCard = memo(function ScheduleCard({
   selected,
   onSelect,
-  data,
+  jobs,
+  rows,
+  bounds,
+  report,
+  agentSeen,
   isPending,
   isError,
   isOwner,
@@ -100,10 +165,16 @@ export const ScheduleCard = memo(function ScheduleCard({
 }: {
   selected: BackupJob
   onSelect: (job: BackupJob) => void
-  /* Narrowed to the three values this card reads, not the whole
-     UseQueryResult: that object is a new reference on every poll tick, which
-     would defeat the memo above on a card whose inputs did not change. */
-  data: BackupScheduleResponse | undefined
+  /* The pieces of the response this card reads, never the response itself:
+     `agent.seen_at` advances on every ~30 s heartbeat, so the whole document
+     is a new reference on every poll while these are not — and the memo above
+     is what keeps a live form from re-rendering under the owner's cursor once
+     a minute. The agent's timestamp is read where the banner needs it. */
+  jobs: BackupJob[] | undefined
+  rows: Record<string, BackupScheduleRow> | undefined
+  bounds: BackupScheduleResponse['bounds'] | undefined
+  report: BackupAgentJobReport | null
+  agentSeen: boolean
   isPending: boolean
   isError: boolean
   isOwner: boolean
@@ -123,7 +194,7 @@ export const ScheduleCard = memo(function ScheduleCard({
       </div>
     )
   }
-  if (isError || !data) {
+  if (isError || !jobs || !rows || !bounds) {
     return (
       <div className="fx-card fx-bkp-agenda" ref={cardRef} tabIndex={-1}>
         <div className="fx-card-body"><div className="fx-empty">{t('admin.backup_schedule_unavailable')}</div></div>
@@ -131,8 +202,7 @@ export const ScheduleCard = memo(function ScheduleCard({
     )
   }
 
-  const row = data.rows[selected] ?? null
-  const report = data.agent?.jobs[selected] ?? null
+  const row = rows[selected] ?? null
 
   return (
     <div className="fx-card fx-bkp-agenda" ref={cardRef} tabIndex={-1}>
@@ -154,7 +224,7 @@ export const ScheduleCard = memo(function ScheduleCard({
         </div>
 
         <div className="fx-bkp-tabs" role="tablist">
-          {data.jobs.map((job) => (
+          {jobs.map((job) => (
             <button
               key={job}
               type="button"
@@ -169,14 +239,19 @@ export const ScheduleCard = memo(function ScheduleCard({
         </div>
 
         <ScheduleEditor
-          // A saved or reset row remounts the editor so its draft reseeds
-          // from what the server now holds, instead of a stale local copy.
-          key={`${selected}:${row?.updated_at ?? 'baseline'}`}
+          // A saved or reset row remounts the editor so its draft reseeds from
+          // what the server now holds, instead of a stale local copy — and so
+          // does the ARRIVAL of the env baseline, because the first successful
+          // fetch can land before the agent's first heartbeat and seed the
+          // draft from this screen's fallback. Once a baseline is present its
+          // mode is stable, so the poll that only refreshes the heartbeat does
+          // not throw a half-typed agenda away.
+          key={`${selected}:${row?.updated_at ?? 'baseline'}:${report?.baseline?.mode ?? 'none'}`}
           job={selected}
           row={row}
           report={report}
-          agentSeen={data.agent !== null}
-          bounds={data.bounds}
+          agentSeen={agentSeen}
+          bounds={bounds}
           isOwner={isOwner}
         />
       </div>
@@ -210,7 +285,7 @@ function ScheduleEditor({
   const queryClient = useQueryClient()
   const stored = row?.config ?? null
   const [draft, setDraft] = useState<BackupScheduleConfig>(() =>
-    seedDraft(job, stored, report?.baseline),
+    seedDraft(job, stored, report?.baseline, bounds),
   )
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: backupScheduleQueryKey })
@@ -348,21 +423,14 @@ function ScheduleFields({
   const { t } = useTranslation()
   const enabled = config.enabled !== false
   const mode = config.mode === 'interval' ? 'interval' : 'times'
-  const weekdayFloor = job === 'dump' ? bounds.dump_weekdays_min : bounds.weekdays_min
+  const weekdayFloor = weekdayFloorFor(job, bounds)
 
   function switchMode(next: 'times' | 'interval') {
-    // The other mode's values stay on the draft; `payloadOf` is what drops
-    // them, so a tab round-trip never costs the owner their edits.
-    onChange(
-      next === 'interval'
-        ? { ...config, mode: next, interval_min: config.interval_min ?? 360 }
-        : {
-            ...config,
-            mode: next,
-            times: config.times ?? ['03:30'],
-            weekdays: config.weekdays ?? [...WEEKDAYS],
-          },
-    )
+    // Only the mode moves: the draft already carries both halves (`seedDraft`
+    // is what fills them, from the env baseline rather than from a default
+    // invented here), and `payloadOf` is what drops the unused one, so a
+    // round-trip through the other mode never costs the owner their edits.
+    onChange({ ...config, mode: next })
   }
 
   function toggleWeekday(day: string) {
@@ -374,6 +442,8 @@ function ScheduleFields({
     onChange({ ...config, weekdays: WEEKDAYS.filter((d) => picked.has(d)) })
   }
 
+  // Bounded by construction: `seedDraft` trims a hand-written row to the
+  // server's ceiling and the add button below disappears at it.
   const times = config.times ?? []
 
   return (
@@ -400,17 +470,21 @@ function ScheduleFields({
         <>
           <div className="fx-bkp-control">
             <span className="fx-bkp-control-label">{t('admin.backup_schedule_mode_label')}</span>
+            {/* A radiogroup, not a tablist: two mutually exclusive options
+                that swap this form's own fields are a choice, and tabs with
+                no panel and no `aria-controls` announce navigation that goes
+                nowhere. The JOB picker above really is a tablist. */}
             <div
               className="fx-bkp-modes"
-              role="tablist"
+              role="radiogroup"
               aria-label={t('admin.backup_schedule_mode_label')}
             >
               {(['times', 'interval'] as const).map((m) => (
                 <button
                   key={m}
                   type="button"
-                  role="tab"
-                  aria-selected={mode === m}
+                  role="radio"
+                  aria-checked={mode === m}
                   className={'fx-bkp-mode' + (mode === m ? ' fx-bkp-mode-on' : '')}
                   onClick={() => switchMode(m)}
                 >

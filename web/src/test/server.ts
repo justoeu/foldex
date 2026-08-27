@@ -173,11 +173,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/admin\/backup\/schedule$/, handle: (_m, _d, _p, s) => ({
       jobs: ['dump', 'drill', 'mirror', 'user_zip'],
       rows: s.backupScheduleRows ?? {},
-      bounds: {
-        times_min: 1, times_max: 6,
-        weekdays_min: 1, dump_weekdays_min: 5,
-        interval_min: 15, interval_max: 1440,
-      },
+      bounds: SCHEDULE_BOUNDS,
       agent: s.backupAgent ?? null,
     }) },
     { url: /^\/api\/admin\/backup\/runs$/, handle: (_m, _d, _p, s) => ({
@@ -263,6 +259,22 @@ const buildRoutes = (): Record<Method, Route[]> => ({
 const SCHEDULE_JOBS = ['dump', 'drill', 'mirror', 'user_zip']
 const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 
+/**
+ * The compiled floors, in the server's own numbers — the same ones GET
+ * /api/admin/backup/schedule answers as `bounds`.
+ */
+const SCHEDULE_BOUNDS = {
+  times_min: 1,
+  times_max: 6,
+  weekdays_min: 1,
+  dump_weekdays_min: 5,
+  interval_min: 15,
+  interval_max: 1440,
+}
+
+/** Only user_zip may be switched off — the other three are the instance's floor. */
+const MAY_DISABLE = ['user_zip']
+
 function invalidSchedule(message: string) {
   const e: any = new Error(message)
   e.response = { status: 400, data: { error: { code: 'invalid_schedule', message } } }
@@ -275,45 +287,134 @@ function invalidJob() {
   return e
 }
 
-const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
+/** Go's %q, near enough for the values a schedule document carries. */
+function q(v: unknown) {
+  return JSON.stringify(typeof v === 'string' ? v : String(v))
+}
 
-// Mirrors backupagent.ValidateJobConfig closely enough that a component test
-// exercising a bad payload sees the same 400 invalid_schedule + message shape
-// the real handler answers. ONE vocabulary for the four jobs; what differs is
-// only the floor each one has to clear (INV-173).
+/**
+ * backupagent.ParseAnchor, refusal for refusal. The mock reproduces it rather
+ * than testing "HH:MM" with a regex because the messages BELOW are asserted as
+ * the server's own words, and a message this file invents is a contract the
+ * suite cannot prove (CLAUDE.md §2: the mock tracks the backend).
+ */
+function parseAnchor(raw: string): { key: string; weekly: boolean } {
+  const fields = raw.trim().split(/\s+/).filter((f) => f !== '')
+  if (fields.length === 0 || fields.length > 2) {
+    throw new Error(`want "HH:MM" or "HH:MM sun", got ${q(raw)}`)
+  }
+  const hm = fields[0].split(':')
+  if (hm.length !== 2) throw new Error(`want "HH:MM", got ${q(fields[0])}`)
+  const hour = Number(hm[0])
+  const minute = Number(hm[1])
+  if (
+    !/^-?\d+$/.test(hm[0]) || !/^-?\d+$/.test(hm[1]) ||
+    hour < 0 || hour > 23 || minute < 0 || minute > 59
+  ) {
+    throw new Error(`${q(fields[0])} is not a valid 24h wall time`)
+  }
+  // Rendered back the way Anchor.String() does, so "3:30" and "03:30" are the
+  // same anchor and the repeat check catches them.
+  const key = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+  if (fields.length === 1) return { key, weekly: false }
+  if (!WEEKDAYS.includes(fields[1].toLowerCase())) {
+    throw new Error(`${q(fields[1])} is not a weekday (sun..sat)`)
+  }
+  return { key, weekly: true }
+}
+
+/** backupagent.validateTimes. */
+function validateTimes(job: string, times: any) {
+  const list: any[] = Array.isArray(times) ? times : []
+  if (list.length < SCHEDULE_BOUNDS.times_min || list.length > SCHEDULE_BOUNDS.times_max) {
+    throw invalidSchedule(
+      `${job} needs between ${SCHEDULE_BOUNDS.times_min} and ${SCHEDULE_BOUNDS.times_max} wall times — the floor is one run per scheduled day, never zero`,
+    )
+  }
+  const seen = new Set<string>()
+  for (const raw of list) {
+    let anchor: { key: string; weekly: boolean }
+    try {
+      anchor = parseAnchor(String(raw))
+    } catch (err) {
+      throw invalidSchedule(`${job} time ${q(raw)}: ${(err as Error).message}`)
+    }
+    if (anchor.weekly) {
+      throw invalidSchedule(`${job} time ${q(raw)}: the weekday belongs in "weekdays", not in the time`)
+    }
+    if (seen.has(anchor.key)) throw invalidSchedule(`${job} time ${q(raw)} repeats`)
+    seen.add(anchor.key)
+  }
+}
+
+/** backupagent.validateWeekdays. */
+function validateWeekdays(job: string, days: any, minDays: number) {
+  const list: any[] = Array.isArray(days) ? days : []
+  if (list.length === 0) {
+    throw invalidSchedule(
+      `${job} needs at least ${minDays} weekday(s) — an agenda that fires on no day is the job switched off`,
+    )
+  }
+  const seen = new Set<string>()
+  for (const raw of list) {
+    const wd = String(raw).trim().toLowerCase()
+    if (!WEEKDAYS.includes(wd)) throw invalidSchedule(`${job} weekday ${q(raw)} is not one of sun..sat`)
+    if (seen.has(wd)) throw invalidSchedule(`${job} weekday ${q(raw)} repeats`)
+    seen.add(wd)
+  }
+  if (seen.size < minDays) {
+    throw invalidSchedule(`${job} needs at least ${minDays} weekdays, got ${seen.size}`)
+  }
+}
+
+/**
+ * backupagent.ValidateJobConfig, refusal for refusal and message for message.
+ * The UI renders the server's 400 verbatim (INV-138 by analogy), so a test
+ * asserting that text is only proving a contract while THIS function says what
+ * the backend says — a message invented here drifts, and the assertion then
+ * proves the screen renders a string the product never sends.
+ */
 function validateScheduleConfig(job: string, cfg: any) {
+  const floorWeekdays = job === 'dump'
+    ? SCHEDULE_BOUNDS.dump_weekdays_min
+    : SCHEDULE_BOUNDS.weekdays_min
+
+  if (cfg?.time || cfg?.weekday) {
+    throw invalidSchedule('"time" and "weekday" are the previous schedule vocabulary and are read-only — send {"mode":"times","times":[…],"weekdays":[…]}')
+  }
+  if (cfg?.mode !== 'times' && cfg?.mode !== 'interval') {
+    throw invalidSchedule(`${job} needs "mode": "times" or "interval"`)
+  }
+  if (cfg?.enabled !== undefined && !MAY_DISABLE.includes(job)) {
+    throw invalidSchedule(`${job} cannot be switched off — only user_zip carries "enabled", because it is the one job that is a product convenience rather than the instance's protection`)
+  }
   if (cfg?.enabled === false) {
-    if (job !== 'user_zip') {
-      throw invalidSchedule(`${job} cannot be switched off — it is the instance's safety floor, not a product convenience`)
+    if (
+      (Array.isArray(cfg.times) && cfg.times.length > 0) ||
+      (Array.isArray(cfg.weekdays) && cfg.weekdays.length > 0) ||
+      (cfg.interval_min ?? 0) !== 0
+    ) {
+      throw invalidSchedule(`a disabled ${job} carries no agenda — send "enabled": false alone`)
     }
     return
   }
-  if (cfg?.mode === 'times') {
-    const times = cfg.times
-    if (!Array.isArray(times) || times.length < 1 || times.length > 6) {
-      throw invalidSchedule(`${job} needs between 1 and 6 daily times — the floor is one run per day, never zero`)
+
+  if (cfg.mode === 'times') {
+    if ((cfg.interval_min ?? 0) !== 0) {
+      throw invalidSchedule('mode "times" does not carry "interval_min"')
     }
-    const seen = new Set<string>()
-    for (const t of times) {
-      if (typeof t !== 'string' || !HHMM.test(t)) throw invalidSchedule(`${job} time ${JSON.stringify(t)}: expected HH:MM`)
-      if (seen.has(t)) throw invalidSchedule(`${job} time "${t}" repeats`)
-      seen.add(t)
-    }
-    const days = cfg.weekdays
-    const floor = job === 'dump' ? 5 : 1
-    if (!Array.isArray(days) || new Set(days).size !== days.length || !days.every((d: any) => WEEKDAYS.includes(d))) {
-      throw invalidSchedule(`${job} weekdays must be a set of sun..sat with no repeats`)
-    }
-    if (days.length < floor) {
-      throw invalidSchedule(`${job} needs at least ${floor} weekdays — the dump is the instance's disaster floor`)
-    }
-  } else if (cfg?.mode === 'interval') {
-    const n = cfg.interval_min
-    if (typeof n !== 'number' || n < 15 || n > 1440) {
-      throw invalidSchedule(`${job} interval must be between 15 and 1440 minutes`)
-    }
-  } else {
-    throw invalidSchedule(`${job} needs "mode": "times" or "interval"`)
+    validateTimes(job, cfg.times)
+    validateWeekdays(job, cfg.weekdays, floorWeekdays)
+    return
+  }
+  if (cfg.times != null || cfg.weekdays != null) {
+    throw invalidSchedule('mode "interval" does not carry "times" or "weekdays"')
+  }
+  const n = cfg.interval_min
+  if (typeof n !== 'number' || n < SCHEDULE_BOUNDS.interval_min || n > SCHEDULE_BOUNDS.interval_max) {
+    throw invalidSchedule(
+      `${job} interval must be between ${SCHEDULE_BOUNDS.interval_min} and ${SCHEDULE_BOUNDS.interval_max} minutes — a row tunes the cadence, it cannot switch the job off`,
+    )
   }
 }
 

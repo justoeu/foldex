@@ -119,15 +119,20 @@ export function BackupSection() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['admin', 'backup'] }),
   })
 
+  /* The two stable members, not the mutation itself: `useMutation` answers a
+     NEW object on every render, so depending on it would make the callback
+     below a fresh prop on every poll tick and undo all four card memos. */
+  const { mutate: mutateRun, reset: resetRun } = trigger
+
   const runNow = useCallback(async function runNow(job: BackupJob) {
-    trigger.reset()
+    resetRun()
     const ok = await confirm({
       title: t('admin.backup_run_confirm_title', { job: t(`admin.backup_job_${job}`) }),
       message: t('admin.backup_run_confirm_message'),
       confirmLabel: t('admin.backup_run_confirm_action'),
     })
-    if (ok) trigger.mutate(job)
-  }, [confirm, t, trigger])
+    if (ok) mutateRun(job)
+  }, [confirm, t, mutateRun, resetRun])
 
   /* Stable identities: an inline arrow here would hand every card a new prop
      on each render and quietly undo the memo on all four. */
@@ -234,10 +239,17 @@ export function BackupSection() {
       </div>
 
       <div className="fx-bkp-split">
+        {/* Narrowed on purpose: the agenda card must not depend on `agent`,
+            whose `seen_at` moves with every heartbeat. The banner below is
+            where that timestamp belongs. */}
         <ScheduleCard
           selected={selected}
           onSelect={setSelected}
-          data={schedule.data}
+          jobs={schedule.data?.jobs}
+          rows={schedule.data?.rows}
+          bounds={schedule.data?.bounds}
+          report={agent?.jobs[selected] ?? null}
+          agentSeen={agent !== null}
           isPending={schedule.isPending}
           isError={schedule.isError}
           isOwner={isOwner}
