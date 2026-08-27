@@ -601,11 +601,20 @@ política para o único job que pode ser desligado.
   tinha uma única asserção indireta, e as bordas (< 1 KiB, uma casa abaixo de
   dez, teto em TB) e o filtro de valores não-numéricos do `tables` do drill
   agora estão fixados sem render.
-- **Divergência aceita (MEDIUM do Code Quality):** cada bloco `job === X` do
-  `ScheduleEditor` ainda vive no mesmo componente, com os cinco pedaços de
-  estado declarados juntos. Separar em quatro componentes com estado próprio é
-  a forma certa; ficou de fora porque mexeria no draft state que os testes de
-  PUT por job acabaram de fixar.
+- **O MEDIUM do Code Quality foi pago em seguida** — e a decisão de adiá-lo foi
+  errada por processo, não por técnica: adiar dívida é escolha de quem toca o
+  projeto, e eu tratei como escopo meu. `ScheduleEditor` virou uma casca que
+  detém o rascunho, as duas mutações e as confirmações, com `DumpFields`,
+  `DrillFields`, `MirrorFields` e `UserZipFields` puros sobre UM `BackupScheduleConfig`
+  — melhor do que "cada um com o próprio estado", porque não há nada para
+  sincronizar. `seedDraft` substituiu os cinco `useState`, e `draftConfig`
+  deixou de existir: o rascunho JÁ é a config que vai no PUT.
+  Os 26 testes passaram sem uma linha tocada — que é exatamente para isso que
+  os testes de PUT por job tinham sido escritos na rodada anterior.
+- **A única exceção que precisou de estado local é o `UserZipFields`**: o
+  servidor tem que receber `{enabled:false}` puro (horário em job desligado é
+  agenda que ninguém lê), mas quem desliga e religa deve receber de volta o
+  horário que digitou, não o default. Fixado em teste.
 
 ### Ajustes na tela de acesso após o primeiro olhar (2026-08-26)
 

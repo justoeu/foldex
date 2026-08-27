@@ -506,6 +506,34 @@ describe('BackupSection schedule', () => {
     )
   })
 
+  /*
+   * The switch remembers the time the owner typed. The config that reaches the
+   * server must be a bare `{enabled: false}` — a time on a disabled job is an
+   * agenda nothing reads — but toggling back on should return their own time,
+   * not the default, or the switch quietly discards their edit.
+   */
+  it('keeps the typed ZIP time across an off/on toggle', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Per-user ZIPs' }))
+    fireEvent.change(screen.getByLabelText('Time'), { target: { value: '04:45' } })
+
+    const toggle = screen.getByRole('checkbox', { name: 'Generate per-user ZIPs' })
+    await user.click(toggle)
+    await user.click(toggle)
+
+    expect(screen.getByLabelText('Time')).toHaveValue('04:45')
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        { job: 'user_zip', config: { enabled: true, time: '04:45' } },
+      ]),
+    )
+  })
+
   it('renders the server message of a 400 invalid_schedule verbatim', async () => {
     const user = userEvent.setup()
     state.backupAgent = healthyAgent()
