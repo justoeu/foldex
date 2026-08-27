@@ -485,6 +485,9 @@ function healthyAgent(over: Record<string, unknown> = {}) {
   return {
     seen_at: new Date(Date.now() - 30_000).toISOString(),
     version: '2.10.1',
+    // Matches AGENT_SCHEMA_VERSION in the mock: a healthy agent is one that
+    // knows the document shape the backend writes.
+    schema_version: 43,
     jobs: {
       dump: {
         capable: true, source: 'env', schedule: '03:30',
@@ -1011,6 +1014,40 @@ describe('BackupSection schedule', () => {
     const effective = agenda.querySelector('.fx-bkp-effective') as HTMLElement
     expect(within(head).getByText('no agent report for this job')).toBeInTheDocument()
     expect(within(effective).getByText('no agent report for this job')).toBeInTheDocument()
+  })
+
+  /*
+   * RequiredSchemaVersion is a FLOOR on both sides, so an agent built before
+   * the unified agenda boots happily against the newer schema and reads the
+   * rows honouring `times` while ignoring `weekdays` entirely — it over-runs,
+   * which is the safe direction, and says nothing at all. The band is the only
+   * place that can name it, and it does so by COMPARING the two numbers the
+   * server sends, never by re-deriving the policy (INV-138).
+   */
+  it('names an agent whose build predates the current agenda format', async () => {
+    state.backupAgent = healthyAgent({ schema_version: 42 })
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findByText(/older agent build/i)).toBeInTheDocument()
+  })
+
+  it('says nothing when the agent is on the same document shape', async () => {
+    state.backupAgent = healthyAgent({ schema_version: 43 })
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await screen.findByRole('tab', { name: 'Database dump' })
+    expect(screen.queryByText(/older agent build/i)).not.toBeInTheDocument()
+  })
+
+  it('treats a heartbeat with no schema version as skewed, not as matching', async () => {
+    // Written by an agent that predates the field: a missing number is not a
+    // matching one, and guessing "probably fine" is how the mailer incident
+    // looked from the outside.
+    state.backupAgent = healthyAgent()
+    delete (state.backupAgent as Record<string, unknown>).schema_version
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findByText(/older agent build/i)).toBeInTheDocument()
   })
 
   it('warns when the heartbeat is older than two minutes', async () => {

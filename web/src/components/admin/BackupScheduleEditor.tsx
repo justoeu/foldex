@@ -447,6 +447,16 @@ function ScheduleEditor({
  * second copy of that policy — and it could not express the dump's floor of
  * five anyway.
  */
+/**
+ * The controls, one component per control group. They collapsed into a single
+ * 240-line function when the four job vocabularies became one, which read as
+ * progress and was not: the pickers share nothing but the draft they edit, and
+ * a switch, a radiogroup, a weekday set, a times list and an interval are five
+ * different widgets with five different keyboard contracts.
+ *
+ * `ScheduleFields` is now only the composition — which pickers this job and
+ * this mode call for.
+ */
 function ScheduleFields({
   job,
   config,
@@ -458,18 +468,119 @@ function ScheduleFields({
   onChange: (config: BackupScheduleConfig) => void
   bounds: BackupScheduleResponse['bounds']
 }) {
-  const { t } = useTranslation()
   const enabled = config.enabled !== false
   const mode = config.mode === 'interval' ? 'interval' : 'times'
-  const weekdayFloor = weekdayFloorFor(job, bounds)
 
-  function switchMode(next: 'times' | 'interval') {
-    // Only the mode moves: the draft already carries both halves (`seedDraft`
-    // is what fills them, from the env baseline rather than from a default
-    // invented here), and `payloadOf` is what drops the unused one, so a
-    // round-trip through the other mode never costs the owner their edits.
-    onChange({ ...config, mode: next })
-  }
+  return (
+    <>
+      {job === 'user_zip' && <EnabledSwitch enabled={enabled} config={config} onChange={onChange} />}
+      {enabled && (
+        <>
+          <ModePicker mode={mode} config={config} onChange={onChange} />
+          {mode === 'times' ? (
+            <>
+              <WeekdayPicker
+                config={config}
+                onChange={onChange}
+                floor={weekdayFloorFor(job, bounds)}
+              />
+              <TimesPicker config={config} onChange={onChange} bounds={bounds} />
+            </>
+          ) : (
+            <IntervalPicker config={config} onChange={onChange} bounds={bounds} />
+          )}
+        </>
+      )}
+    </>
+  )
+}
+
+/** What every picker receives: the draft, and the way to replace it. */
+type PickerProps = {
+  config: BackupScheduleConfig
+  onChange: (config: BackupScheduleConfig) => void
+}
+
+/** The one job a row may switch off, so the only one with a switch. */
+function EnabledSwitch({ enabled, config, onChange }: PickerProps & { enabled: boolean }) {
+  const { t } = useTranslation()
+  return (
+    /* The same switch the instance-policy screen uses — one toggle shape in
+       the administration surface, focus ring included. */
+    <label className="fx-toggle-row">
+      <input
+        type="checkbox"
+        checked={enabled}
+        aria-label={t('admin.backup_schedule_enabled_label')}
+        onChange={(e) => onChange({ ...config, enabled: e.target.checked })}
+      />
+      <span className="fx-toggle-track"><span className="fx-toggle-knob" /></span>
+      <span className="fx-toggle-label">
+        {t('admin.backup_schedule_enabled_label')}
+        <span className="fx-toggle-hint">{t('admin.backup_schedule_enabled_desc')}</span>
+      </span>
+    </label>
+  )
+}
+
+/**
+ * Wall times or an interval. A radiogroup, not a tablist: two mutually
+ * exclusive options that swap this form's own fields are a choice, and tabs
+ * with no panel and no `aria-controls` announce navigation that goes nowhere.
+ * The JOB picker above really is a tablist.
+ */
+function ModePicker({ mode, config, onChange }: PickerProps & { mode: 'times' | 'interval' }) {
+  const { t } = useTranslation()
+
+  // Only the mode moves: the draft already carries both halves (`seedDraft`
+  // is what fills them, from the env baseline rather than from a default
+  // invented here), and `payloadOf` is what drops the unused one, so a
+  // round-trip through the other mode never costs the owner their edits.
+  const switchMode = (next: 'times' | 'interval') => onChange({ ...config, mode: next })
+
+  return (
+    <div className="fx-bkp-control">
+      <span className="fx-bkp-control-label">{t('admin.backup_schedule_mode_label')}</span>
+      <div
+        className="fx-bkp-modes"
+        role="radiogroup"
+        aria-label={t('admin.backup_schedule_mode_label')}
+      >
+        {MODES.map((m, i) => (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={mode === m}
+            /* Roving tabindex: a radiogroup is ONE tab stop, and the arrow
+               keys move within it. Without this the role promises a keyboard
+               behaviour the buttons do not have. */
+            tabIndex={mode === m ? 0 : -1}
+            className={'fx-bkp-mode' + (mode === m ? ' fx-bkp-mode-on' : '')}
+            onClick={() => switchMode(m)}
+            onKeyDown={(e) => {
+              const step = ARROW_STEP[e.key]
+              if (step === undefined) return
+              e.preventDefault()
+              // Wraps in both directions, as the pattern requires.
+              const next = MODES[(i + step + MODES.length) % MODES.length]
+              switchMode(next)
+              e.currentTarget.parentElement
+                ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+                [MODES.indexOf(next)]?.focus()
+            }}
+          >
+            {t(`admin.backup_schedule_mode_${m}`)}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** The weekday set — multi-select, with the two shortcuts worth having. */
+function WeekdayPicker({ config, onChange, floor }: PickerProps & { floor: number }) {
+  const { t } = useTranslation()
 
   function toggleWeekday(day: string) {
     const picked = new Set(config.weekdays ?? [])
@@ -480,217 +591,157 @@ function ScheduleFields({
     onChange({ ...config, weekdays: WEEKDAYS.filter((d) => picked.has(d)) })
   }
 
+  return (
+    <div className="fx-bkp-control">
+      <span className="fx-bkp-control-label">{t('admin.backup_schedule_weekdays_label')}</span>
+      <div
+        className="fx-bkp-days"
+        role="group"
+        aria-label={t('admin.backup_schedule_weekdays_label')}
+      >
+        {WEEKDAYS.map((d) => {
+          const on = config.weekdays?.includes(d) === true
+          return (
+            <button
+              key={d}
+              type="button"
+              className={'fx-bkp-day' + (on ? ' fx-bkp-day-on' : '')}
+              aria-pressed={on}
+              aria-label={t(`admin.backup_weekday_${d}`)}
+              onClick={() => toggleWeekday(d)}
+            >
+              {t(`admin.backup_weekday_short_${d}`)}
+            </button>
+          )
+        })}
+      </div>
+      <div className="fx-bkp-daysets">
+        <button
+          type="button"
+          className="fx-bkp-dayset"
+          onClick={() => onChange({ ...config, weekdays: [...WEEKDAYS] })}
+        >
+          {t('admin.backup_schedule_weekdays_all')}
+        </button>
+        <button
+          type="button"
+          className="fx-bkp-dayset"
+          onClick={() => onChange({ ...config, weekdays: [...WORKWEEK] })}
+        >
+          {t('admin.backup_schedule_weekdays_workweek')}
+        </button>
+      </div>
+      {/* A floor of one is what "pick some days" already means; only a job
+          that demands more than that has something to say. */}
+      {floor > 1 && (
+        <span className="fx-bkp-control-hint">
+          {t('admin.backup_schedule_weekdays_floor_hint', { min: floor })}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** The daily wall times, between the server's floor and ceiling. */
+function TimesPicker({
+  config,
+  onChange,
+  bounds,
+}: PickerProps & { bounds: BackupScheduleResponse['bounds'] }) {
+  const { t } = useTranslation()
   // Bounded by construction: `seedDraft` trims a hand-written row to the
   // server's ceiling and the add button below disappears at it.
   const times = config.times ?? []
 
   return (
-    <>
-      {job === 'user_zip' && (
-        /* The same switch the instance-policy screen uses — one toggle shape in
-           the administration surface, focus ring included. */
-        <label className="fx-toggle-row">
-          <input
-            type="checkbox"
-            checked={enabled}
-            aria-label={t('admin.backup_schedule_enabled_label')}
-            onChange={(e) => onChange({ ...config, enabled: e.target.checked })}
-          />
-          <span className="fx-toggle-track"><span className="fx-toggle-knob" /></span>
-          <span className="fx-toggle-label">
-            {t('admin.backup_schedule_enabled_label')}
-            <span className="fx-toggle-hint">{t('admin.backup_schedule_enabled_desc')}</span>
+    <div className="fx-bkp-control">
+      <span className="fx-bkp-control-label">{t('admin.backup_schedule_times_label')}</span>
+      <div className="fx-bkp-times">
+        {times.map((v, i) => (
+          <span className="fx-bkp-time" key={i}>
+            <input
+              className="fx-bkp-input"
+              type="time"
+              value={v}
+              aria-label={t('admin.backup_schedule_time_n_label', { n: i + 1 })}
+              onChange={(e) =>
+                onChange({
+                  ...config,
+                  times: times.map((old, j) => (j === i ? e.target.value : old)),
+                })
+              }
+            />
+            {times.length > bounds.times_min && (
+              <button
+                type="button"
+                className="fx-bkp-time-remove"
+                aria-label={t('admin.backup_schedule_remove_time_n', { n: i + 1 })}
+                onClick={() => onChange({ ...config, times: times.filter((_, j) => j !== i) })}
+              >
+                {t('admin.backup_schedule_remove_time')}
+              </button>
+            )}
           </span>
-        </label>
-      )}
+        ))}
+        {times.length < bounds.times_max && (
+          <button
+            type="button"
+            className="fx-bkp-add"
+            onClick={() => onChange({ ...config, times: [...times, ADDED_TIME] })}
+          >
+            <span aria-hidden="true">+</span> {t('admin.backup_schedule_add_time')}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
 
-      {enabled && (
-        <>
-          <div className="fx-bkp-control">
-            <span className="fx-bkp-control-label">{t('admin.backup_schedule_mode_label')}</span>
-            {/* A radiogroup, not a tablist: two mutually exclusive options
-                that swap this form's own fields are a choice, and tabs with
-                no panel and no `aria-controls` announce navigation that goes
-                nowhere. The JOB picker above really is a tablist. */}
-            <div
-              className="fx-bkp-modes"
-              role="radiogroup"
-              aria-label={t('admin.backup_schedule_mode_label')}
+/** An interval in minutes, typed or picked. */
+function IntervalPicker({
+  config,
+  onChange,
+  bounds,
+}: PickerProps & { bounds: BackupScheduleResponse['bounds'] }) {
+  const { t } = useTranslation()
+  return (
+    <div className="fx-bkp-control">
+      <span className="fx-bkp-control-label">{t('admin.backup_schedule_interval_label')}</span>
+      <div className="fx-bkp-interval">
+        <span className="fx-bkp-interval-field">
+          <input
+            className="fx-bkp-input"
+            type="number"
+            min={bounds.interval_min}
+            max={bounds.interval_max}
+            value={config.interval_min ?? 0}
+            aria-label={t('admin.backup_schedule_interval_label')}
+            /* Coerced here: the server's bounds check runs on a NUMBER, and a
+               string would be refused by the JSON schema, not by the floor. */
+            onChange={(e) => onChange({ ...config, interval_min: Number(e.target.value) })}
+          />
+          <span className="fx-bkp-unit">min</span>
+        </span>
+        <span className="fx-bkp-presets">
+          {INTERVAL_PRESETS.map((p) => (
+            <button
+              key={p}
+              type="button"
+              className={'fx-bkp-preset' + (config.interval_min === p ? ' fx-bkp-preset-on' : '')}
+              aria-pressed={config.interval_min === p}
+              onClick={() => onChange({ ...config, interval_min: p })}
             >
-              {MODES.map((m, i) => (
-                <button
-                  key={m}
-                  type="button"
-                  role="radio"
-                  aria-checked={mode === m}
-                  /* Roving tabindex: a radiogroup is ONE tab stop, and the
-                     arrow keys move within it. Without this the role promises
-                     a keyboard behaviour the buttons do not have. */
-                  tabIndex={mode === m ? 0 : -1}
-                  className={'fx-bkp-mode' + (mode === m ? ' fx-bkp-mode-on' : '')}
-                  onClick={() => switchMode(m)}
-                  onKeyDown={(e) => {
-                    const step = ARROW_STEP[e.key]
-                    if (step === undefined) return
-                    e.preventDefault()
-                    // Wraps in both directions, as the pattern requires.
-                    const next = MODES[(i + step + MODES.length) % MODES.length]
-                    switchMode(next)
-                    e.currentTarget.parentElement
-                      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
-                      [MODES.indexOf(next)]?.focus()
-                  }}
-                >
-                  {t(`admin.backup_schedule_mode_${m}`)}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {mode === 'times' ? (
-            <>
-              <div className="fx-bkp-control">
-                <span className="fx-bkp-control-label">
-                  {t('admin.backup_schedule_weekdays_label')}
-                </span>
-                <div
-                  className="fx-bkp-days"
-                  role="group"
-                  aria-label={t('admin.backup_schedule_weekdays_label')}
-                >
-                  {WEEKDAYS.map((d) => {
-                    const on = config.weekdays?.includes(d) === true
-                    return (
-                      <button
-                        key={d}
-                        type="button"
-                        className={'fx-bkp-day' + (on ? ' fx-bkp-day-on' : '')}
-                        aria-pressed={on}
-                        aria-label={t(`admin.backup_weekday_${d}`)}
-                        onClick={() => toggleWeekday(d)}
-                      >
-                        {t(`admin.backup_weekday_short_${d}`)}
-                      </button>
-                    )
-                  })}
-                </div>
-                <div className="fx-bkp-daysets">
-                  <button
-                    type="button"
-                    className="fx-bkp-dayset"
-                    onClick={() => onChange({ ...config, weekdays: [...WEEKDAYS] })}
-                  >
-                    {t('admin.backup_schedule_weekdays_all')}
-                  </button>
-                  <button
-                    type="button"
-                    className="fx-bkp-dayset"
-                    onClick={() => onChange({ ...config, weekdays: [...WORKWEEK] })}
-                  >
-                    {t('admin.backup_schedule_weekdays_workweek')}
-                  </button>
-                </div>
-                {/* A floor of one is what "pick some days" already means; only
-                    a job that demands more than that has something to say. */}
-                {weekdayFloor > 1 && (
-                  <span className="fx-bkp-control-hint">
-                    {t('admin.backup_schedule_weekdays_floor_hint', { min: weekdayFloor })}
-                  </span>
-                )}
-              </div>
-
-              <div className="fx-bkp-control">
-                <span className="fx-bkp-control-label">
-                  {t('admin.backup_schedule_times_label')}
-                </span>
-                <div className="fx-bkp-times">
-                  {times.map((v, i) => (
-                    <span className="fx-bkp-time" key={i}>
-                      <input
-                        className="fx-bkp-input"
-                        type="time"
-                        value={v}
-                        aria-label={t('admin.backup_schedule_time_n_label', { n: i + 1 })}
-                        onChange={(e) =>
-                          onChange({
-                            ...config,
-                            times: times.map((old, j) => (j === i ? e.target.value : old)),
-                          })
-                        }
-                      />
-                      {times.length > bounds.times_min && (
-                        <button
-                          type="button"
-                          className="fx-bkp-time-remove"
-                          aria-label={t('admin.backup_schedule_remove_time_n', { n: i + 1 })}
-                          onClick={() =>
-                            onChange({ ...config, times: times.filter((_, j) => j !== i) })
-                          }
-                        >
-                          {t('admin.backup_schedule_remove_time')}
-                        </button>
-                      )}
-                    </span>
-                  ))}
-                  {times.length < bounds.times_max && (
-                    <button
-                      type="button"
-                      className="fx-bkp-add"
-                      onClick={() => onChange({ ...config, times: [...times, ADDED_TIME] })}
-                    >
-                      <span aria-hidden="true">+</span> {t('admin.backup_schedule_add_time')}
-                    </button>
-                  )}
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="fx-bkp-control">
-              <span className="fx-bkp-control-label">
-                {t('admin.backup_schedule_interval_label')}
-              </span>
-              <div className="fx-bkp-interval">
-                <span className="fx-bkp-interval-field">
-                  <input
-                    className="fx-bkp-input"
-                    type="number"
-                    min={bounds.interval_min}
-                    max={bounds.interval_max}
-                    value={config.interval_min ?? 0}
-                    aria-label={t('admin.backup_schedule_interval_label')}
-                    /* Coerced here: the server's bounds check runs on a NUMBER,
-                       and a string would be refused by the JSON schema, not by
-                       the floor. */
-                    onChange={(e) =>
-                      onChange({ ...config, interval_min: Number(e.target.value) })
-                    }
-                  />
-                  <span className="fx-bkp-unit">min</span>
-                </span>
-                <span className="fx-bkp-presets">
-                  {INTERVAL_PRESETS.map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      className={'fx-bkp-preset' + (config.interval_min === p ? ' fx-bkp-preset-on' : '')}
-                      aria-pressed={config.interval_min === p}
-                      onClick={() => onChange({ ...config, interval_min: p })}
-                    >
-                      {formatMinutes(p)}
-                    </button>
-                  ))}
-                </span>
-              </div>
-              <span className="fx-bkp-control-hint">
-                {t('admin.backup_schedule_interval_hint', {
-                  min: bounds.interval_min,
-                  max: bounds.interval_max,
-                })}
-              </span>
-            </div>
-          )}
-        </>
-      )}
-    </>
+              {formatMinutes(p)}
+            </button>
+          ))}
+        </span>
+      </div>
+      <span className="fx-bkp-control-hint">
+        {t('admin.backup_schedule_interval_hint', {
+          min: bounds.interval_min,
+          max: bounds.interval_max,
+        })}
+      </span>
+    </div>
   )
 }

@@ -175,6 +175,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
       rows: s.backupScheduleRows ?? {},
       bounds: SCHEDULE_BOUNDS,
       agent: s.backupAgent ?? null,
+      agent_schema_version: AGENT_SCHEMA_VERSION,
     }) },
     { url: /^\/api\/admin\/backup\/runs$/, handle: (_m, _d, _p, s) => ({
       jobs: s.backupJobs ?? ['dump', 'drill', 'mirror', 'user_zip'].map((job) => ({
@@ -263,6 +264,7 @@ const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
  * The compiled floors, in the server's own numbers — the same ones GET
  * /api/admin/backup/schedule answers as `bounds`.
  */
+
 const SCHEDULE_BOUNDS = {
   times_min: 1,
   times_max: 6,
@@ -271,6 +273,13 @@ const SCHEDULE_BOUNDS = {
   interval_min: 15,
   interval_max: 1440,
 }
+
+/**
+ * The document shape the backend writes — backupagent.RequiredSchemaVersion.
+ * The band compares the heartbeat's own number against it to tell an agent
+ * that predates the unified agenda from one that speaks it.
+ */
+const AGENT_SCHEMA_VERSION = 43
 
 /** Only user_zip may be switched off — the other three are the instance's floor. */
 const MAY_DISABLE = ['user_zip']

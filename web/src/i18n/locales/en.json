@@ -1326,6 +1326,8 @@
     "backup_agent_never_desc": "No heartbeat was ever recorded — is the backup profile active?",
     "backup_agent_stale_title": "The agent stopped reporting",
     "backup_agent_stale_desc": "Its last heartbeat is more than 2 minutes old, so the schedule below may not be running.",
+    "backup_agent_skew_title": "Older agent build.",
+    "backup_agent_skew_desc": "This agent predates the current schedule format, so it may silently ignore parts of the agenda — the weekdays in particular. Update the backup service to the backend's version.",
     "backup_schedule_source_env": "env default",
     "backup_schedule_source_db": "configured here",
     "backup_schedule_no_report": "no agent report for this job",

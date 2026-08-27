@@ -1590,11 +1590,14 @@ está nos PISOS, não na pobreza da forma.
   CHEGADA da baseline, sem o que o primeiro fetch com `agent: null` semeava de constantes
   e o Salvar seguinte gravava a opinião da tela por cima da agenda do operador.
 
-**Limitação registrada:** `RequiredSchemaVersion` é um PISO, não uma igualdade — um agente
-antigo (que exige 42) sobe contra o schema 43 e lê linhas unificadas honrando `times` e
-ignorando `weekdays` em silêncio. Roda MAIS vezes do que a agenda pede, que é a direção
-segura, mas sem log de incompatibilidade. Fechar isso pede comparar a versão do heartbeat
-com a do backend e avisar na banda — follow-up, não parte do ADR-45.
+- **O heartbeat diz qual FORMA de documento o agente sabe ler.** `RequiredSchemaVersion`
+  é um PISO, não uma igualdade: um agente compilado contra 42 sobe contra o schema 43 e lê
+  as linhas unificadas honrando `times` e ignorando `weekdays` inteiro — roda MAIS vezes do
+  que a agenda pede, que é a direção segura, e não diz nada. A string de versão não resolve
+  (ela diz o que foi shipado, não o que o processo entende), então o heartbeat carrega
+  `schema_version`, a constante do binário do agente, e o `GET /schedule` devolve
+  `agent_schema_version`, a do backend. A banda COMPARA os dois em vez de re-derivar a
+  política (INV-138); ausente lê como zero, e zero não é igual.
 
 Detalhe em [`docs/SDD-OPS-BACKUP.md`](./SDD-OPS-BACKUP.md) §6.1. Status: **Aceito ·
 implementado (PR7)**.

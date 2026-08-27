@@ -347,6 +347,13 @@ export type BackupAgentJobReport = {
 export type BackupAgentState = {
   seen_at: string
   version: string
+  /**
+   * The newest migration the agent's build knows how to read. Absent on a
+   * heartbeat written before the field existed — and absent is NOT a match:
+   * `RequiredSchemaVersion` is a floor on both sides, so an older agent boots
+   * fine on a newer schema and silently ignores the fields it never learned.
+   */
+  schema_version?: number
   jobs: Record<string, BackupAgentJobReport>
 }
 
@@ -370,6 +377,13 @@ export type BackupScheduleResponse = {
   }
   /** null = the agent never wrote a heartbeat (never ran on this instance). */
   agent: BackupAgentState | null
+  /**
+   * The document shape THIS backend writes (backupagent.RequiredSchemaVersion).
+   * Paired with the heartbeat's own `schema_version` it is how the band names
+   * build skew: the client compares the two numbers the server sent, it does
+   * not re-derive the policy (INV-138).
+   */
+  agent_schema_version: number
 }
 
 /** Shares the ['admin','backup'] prefix so the run-now invalidation covers it. */

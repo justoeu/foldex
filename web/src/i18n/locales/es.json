@@ -1326,6 +1326,8 @@
     "backup_agent_never_desc": "No se registró ningún heartbeat — ¿está activo el profile de backup?",
     "backup_agent_stale_title": "El agente dejó de reportar",
     "backup_agent_stale_desc": "Su último heartbeat tiene más de 2 minutos, así que la agenda de abajo puede no estar corriendo.",
+    "backup_agent_skew_title": "La compilación del agente es más antigua.",
+    "backup_agent_skew_desc": "Este agente es anterior al formato actual de la agenda, así que puede ignorar partes de ella en silencio — los días de la semana en particular. Actualice el servicio de copia de seguridad a la versión del backend.",
     "backup_schedule_source_env": "valor del env",
     "backup_schedule_source_db": "configurada aquí",
     "backup_schedule_no_report": "sin informe del agente para este trabajo",

@@ -206,6 +206,11 @@ export function BackupSection() {
 
   const agent = schedule.data?.agent ?? null
   const agentStale = agent !== null && Date.now() - Date.parse(agent.seen_at) > AGENT_STALE_MS
+  // Build skew, compared and not re-derived: both numbers come from the
+  // server. An agent that predates the field reports nothing, and nothing is
+  // not a match — it is precisely the old build this row exists to name.
+  const agentSchemaSkewed =
+    agent !== null && (agent.schema_version ?? 0) < (schedule.data?.agent_schema_version ?? 0)
 
   return (
     <div className="fx-bkp">
@@ -278,7 +283,12 @@ export function BackupSection() {
         />
         <div className="fx-bkp-aside">
           <DrillCard drill={drill} />
-          <AgentCard agent={agent} stale={agentStale} pending={schedule.isPending} />
+          <AgentCard
+            agent={agent}
+            stale={agentStale}
+            pending={schedule.isPending}
+            skewed={agentSchemaSkewed}
+          />
         </div>
       </div>
 
@@ -588,10 +598,12 @@ const AgentCard = memo(function AgentCard({
   agent,
   stale,
   pending,
+  skewed,
 }: {
   agent: BackupAgentState | null
   stale: boolean
   pending: boolean
+  skewed: boolean
 }) {
   const { t } = useTranslation()
   if (pending) return null
@@ -621,6 +633,11 @@ const AgentCard = memo(function AgentCard({
       {stale && (
         <div className="fx-bkp-agent-empty">
           <b>{t('admin.backup_agent_stale_title')}</b> {t('admin.backup_agent_stale_desc')}
+        </div>
+      )}
+      {skewed && (
+        <div className="fx-bkp-agent-empty">
+          <b>{t('admin.backup_agent_skew_title')}</b> {t('admin.backup_agent_skew_desc')}
         </div>
       )}
 

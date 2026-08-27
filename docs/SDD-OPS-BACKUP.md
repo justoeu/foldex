@@ -666,7 +666,7 @@ Trade-off: latência de até ~30 s do poll — irrelevante para backup.
 | Perda máxima de até 24 h (sem PITR) | Cadência configurável; non-goal declarado; pgBackRest pode entrar como serviço irmão depois |
 | Dump e mirror não são um snapshot atômico conjunto (DB ≠ bucket, mesmo problema do INV-104) | Órfão de referência vira card sem imagem, re-armado pelo próprio pipeline de preview (INV-081); dump e mirror rodam em sequência sob o mesmo lock para encurtar a janela |
 | Alerta por e-mail depende do backend vivo | Métricas + `absent()` são o canal independente (§9.1) |
-| DST pode duplicar/pular uma âncora no dia da transição | Catch-up cobre o pulo; duplicação é inócua (segundo run é rápido e a retenção poda) |
+| DST pode duplicar/pular uma âncora no dia da transição | Catch-up cobre o pulo; duplicação é inócua (segundo run é rápido e a retenção poda). Medido e pinado em teste: no **spring forward** a perturbação dura DOIS dias e o disparo extra cai no dia SEGUINTE — a âncora `02:30` inexistente resolve uma hora ANTES (`01:30 EST`), não depois, e no dia seguinte a agenda dispara `01:30 EDT` e `02:30 EDT`. No **fall back** não custa nada: a primeira passagem vence e não há duplicata. |
 | Modo retenção `agent`: host comprometido apaga histórico | `BACKUP_RETENTION_MODE=bucket` + credencial sem delete + lifecycle (§7) |
 | Drill valida a major corrente, não upgrades futuros | O guard de versão no boot detecta drift; upgrade de major do Postgres já é um evento operacional com runbook próprio |
 | `requested` sem agente vivo fica pendente | UI mostra o envelhecimento + empty-state aponta o profile |
