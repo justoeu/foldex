@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react'
+import { Suspense, lazy, startTransition, useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from './AuthProvider'
 import { urlTokens } from './authUrl'
@@ -11,20 +11,20 @@ import { InviteScreen } from '../components/auth/InviteScreen'
 // visit — including the overwhelmingly common one where the user is already
 // signed in and none of these four screens will ever render.
 //
-// The two challenge screens keep their factories reachable because they are the
-// only lazy screens the gate reaches by a TRANSITION from a screen that is
-// already painted — see the prefetch below. The other four are entered at
-// mount, from a URL token, with nothing on the glass to preserve.
+// Three of them keep their factories reachable because they are the ones the
+// gate reaches by a TRANSITION from a screen that is already painted — see the
+// prefetch below. The remaining three are entered at MOUNT, from a URL token,
+// with nothing on the glass to preserve.
 const importTwoFactor = () => import('../components/auth/TwoFactorScreen')
 const importEnrollTotp = () => import('../components/auth/EnrollTotpScreen')
+const importForgot = () => import('../components/auth/ForgotScreen')
 const TwoFactorScreen = lazy(() =>
   importTwoFactor().then((m) => ({ default: m.TwoFactorScreen })))
 const EnrollTotpScreen = lazy(() =>
   importEnrollTotp().then((m) => ({ default: m.EnrollTotpScreen })))
 const ResetScreen = lazy(() =>
   import('../components/auth/ResetScreen').then((m) => ({ default: m.ResetScreen })))
-const ForgotScreen = lazy(() =>
-  import('../components/auth/ForgotScreen').then((m) => ({ default: m.ForgotScreen })))
+const ForgotScreen = lazy(() => importForgot().then((m) => ({ default: m.ForgotScreen })))
 const VerifyEmailScreen = lazy(() =>
   import('../components/auth/VerifyEmailScreen').then((m) => ({ default: m.VerifyEmailScreen })))
 const ConvertScreen = lazy(() =>
@@ -55,19 +55,22 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [changeToken, setChangeToken] = useState(urlTokens.emailChange ?? '')
   const [forgot, setForgot] = useState(false)
 
-  // Warmed while the sign-in form is on screen, so the flip to the challenge
-  // has nothing left to fetch. A second factor is the DEFAULT here
-  // (AUTH_REQUIRE_2FA_FOR_ADMINS), so whoever is looking at the form is very
-  // likely one submit away from one of these two screens — and paying for the
-  // chunk then is what put a full-viewport spinner in the middle of a flow.
-  // Anyone already signed in never reaches this effect, which is the visit the
-  // split was made for.
-  const anonymous = session.status === 'anonymous' || session.status === 'setup_required'
+  // Warmed while the pre-auth form is on screen, so the swap has nothing left to
+  // fetch. Two of the three are one submit away — a second factor is the DEFAULT
+  // here (AUTH_REQUIRE_2FA_FOR_ADMINS) — and the third is one click away, on the
+  // form's own "forgot your password?". Paying for the chunk at that moment is
+  // what put a full-viewport spinner in the middle of a flow.
+  //
+  // The body no-ops for anyone already signed in, which is the visit the split
+  // was made for.
+  const preAuthFormVisible =
+    session.status === 'anonymous' || session.status === 'setup_required'
   useEffect(() => {
-    if (!anonymous) return
+    if (!preAuthFormVisible) return
     void importTwoFactor()
     void importEnrollTotp()
-  }, [anonymous])
+    void importForgot()
+  }, [preAuthFormVisible])
 
   const boot = (
     <div className="fx-auth fx-auth-boot" role="status" aria-live="polite">
@@ -150,6 +153,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
     if (forgot) return <ForgotScreen onBack={() => setForgot(false)} />
 
-    return <LoginScreen onForgotPassword={() => setForgot(true)} />
+    // A transition for the same reason applySession uses one: this swaps a lazy
+    // screen in over a form that is already painted, and as an urgent update
+    // React would commit the boot overlay over the whole viewport.
+    return <LoginScreen onForgotPassword={() => startTransition(() => setForgot(true))} />
   }
 }

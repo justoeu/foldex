@@ -214,15 +214,23 @@ export function AuthProvider({
         if (writeOwnerMarker) persistLastOwnerId(storage, nextId)
       }
       lastUserId.current = nextId
-      // A transition, so a screen that suspends on the way in does not blank
-      // the one already on the glass. AuthGate lazy-loads the second-factor
-      // screens, and sign-in → code is a swap between two painted states of one
-      // flow: as an urgent update React commits the Suspense fallback, which is
-      // a full-viewport spinner, and the operator sees the page flash.
+      // A transition ONLY for the challenge, so a screen that suspends on the
+      // way in does not blank the one already on the glass. AuthGate lazy-loads
+      // the second-factor screens, and sign-in → code is a swap between two
+      // painted states of one flow: as an urgent update React commits the
+      // Suspense fallback, which is a full-viewport spinner.
       //
-      // Nothing else here suspends — the login and app trees are eager — so for
-      // every other transition this is the same update it always was.
-      startTransition(() => setSession(next))
+      // Narrow on purpose, and the clear() above is the reason. Its safety
+      // argument is that the tree unmounts in the SAME commit, leaving no
+      // observer alive to refetch into the emptied cache — an argument that
+      // holds only while this update is urgent. The challenge is the one status
+      // that can never coincide with a clear: it carries no user id, and the
+      // state it replaces carries none either, so `lastUserId` does not move
+      // and the branch above never runs. Nothing else here suspends — the login
+      // and app trees are eager — so nothing else has anything to gain from
+      // being deferred.
+      if (next.status === 'two_factor_required') startTransition(() => setSession(next))
+      else setSession(next)
     },
     [queryClient],
   )
