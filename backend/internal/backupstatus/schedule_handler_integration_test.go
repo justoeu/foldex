@@ -175,6 +175,12 @@ func TestSchedule_DeleteResetsToTheEnvBaselineAndAudits(t *testing.T) {
 	uid := h.seedUser("owner@foldex.test", "owner")
 
 	rec := h.doAs(uid, authctx.RoleOwner, http.MethodPut, "/api/admin/backup/schedule/user_zip",
+		`{"mode":"times","times":["02:30"],"weekdays":["mon","tue","wed","thu","fri"]}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	// A second PUT over the same job: the trail is the only place that can
+	// still say what the agenda was before this request replaced it.
+	rec = h.doAs(uid, authctx.RoleOwner, http.MethodPut, "/api/admin/backup/schedule/user_zip",
 		`{"mode":"times","enabled":false}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
@@ -185,9 +191,22 @@ func TestSchedule_DeleteResetsToTheEnvBaselineAndAudits(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, rows)
 
-	require.Len(t, audited, 2, "both the edit and the reset land in the trail")
-	assert.Contains(t, audited[0], "user_zip")
-	assert.Contains(t, audited[1], "env baseline")
+	require.Len(t, audited, 3, "every edit and the reset land in the trail")
+	assert.Contains(t, audited[0], "user_zip schedule set")
+	assert.Contains(t, audited[0], "env baseline",
+		"the first edit says the job was on the env agenda, because it was")
+	assert.Contains(t, audited[0], `"times":["02:30"]`)
+
+	// One PUT now moves the mode, the weekday set and every time at once, so
+	// the trail carries the whole document on both sides (INV-047).
+	assert.Contains(t, audited[1], `"times":["02:30"]`,
+		"what the agenda WAS is the half a bare \"user_zip schedule set\" could never answer")
+	assert.Contains(t, audited[1], `"weekdays":["mon","tue","wed","thu","fri"]`)
+	assert.Contains(t, audited[1], `"enabled":false`)
+
+	assert.Contains(t, audited[2], "user_zip schedule reset to the env baseline")
+	assert.Contains(t, audited[2], `"enabled":false`,
+		"a delete's whole content is what was reset AWAY — the row is gone from backup_schedule")
 }
 
 func TestSchedule_GetServesTheHeartbeat(t *testing.T) {

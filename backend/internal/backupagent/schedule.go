@@ -189,10 +189,25 @@ func (c JobConfig) normalized(job string) JobConfig {
 	if c.Mode != "" {
 		return c
 	}
-	out := JobConfig{Mode: modeTimes, Enabled: c.Enabled}
+	out := JobConfig{Mode: modeTimes}
+	if job == JobUserZip {
+		// Only user_zip may carry it; a relic that did on another job would
+		// normalize into a row the validator refuses forever.
+		out.Enabled = c.Enabled
+	}
+	if out.Enabled != nil && !*out.Enabled {
+		// The previous vocabulary let a row say "switched off" and still
+		// write down the agenda it would have followed; the unified one
+		// refuses that pair. Carrying it across would make the row invalid,
+		// fall the job back to the env baseline and start it running again —
+		// the exact opposite of what the operator asked for.
+		return out
+	}
 	switch {
 	case c.IntervalMin != 0:
-		out = JobConfig{Mode: modeInterval, IntervalMin: c.IntervalMin}
+		// Fields, never a fresh struct: replacing out here silently dropped
+		// the Enabled decided above.
+		out.Mode, out.IntervalMin = modeInterval, c.IntervalMin
 	case len(c.Times) > 0:
 		out.Times, out.Weekdays = c.Times, everyWeekdayName()
 	case c.Time != "":
@@ -202,11 +217,6 @@ func (c JobConfig) normalized(job string) JobConfig {
 		} else {
 			out.Weekdays = everyWeekdayName()
 		}
-	}
-	if job != JobUserZip {
-		// Only user_zip may carry it; a relic that did would normalize into a
-		// row the validator refuses forever.
-		out.Enabled = nil
 	}
 	return out
 }

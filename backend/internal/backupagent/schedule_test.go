@@ -20,6 +20,11 @@ type validateCase struct {
 	job  string
 	cfg  JobConfig
 	ok   bool
+	// msg is the distinguishing part of the expected refusal, required on
+	// every negative case. A bare assert.Error passes when the row is refused
+	// for the WRONG reason, and these messages are a contract: the handler
+	// returns them verbatim and the UI renders them without restating.
+	msg string
 }
 
 // The floors are the security of ADR-44: a row may tune the agenda, never
@@ -27,55 +32,56 @@ type validateCase struct {
 // row could have done exactly that.
 func TestValidateJobConfig_FloorsHold(t *testing.T) {
 	cases := []validateCase{
-		{"mode is required", JobDump, JobConfig{Times: []string{"03:30"}, Weekdays: allDays()}, false},
-		{"mode must be known", JobDump, JobConfig{Mode: "cron", Times: []string{"03:30"}, Weekdays: allDays()}, false},
+		{name: "mode is required", job: JobDump, cfg: JobConfig{Times: []string{"03:30"}, Weekdays: allDays()}, msg: `needs "mode"`},
+		{name: "mode must be known", job: JobDump, cfg: JobConfig{Mode: "cron", Times: []string{"03:30"}, Weekdays: allDays()}, msg: `needs "mode"`},
 
-		{"times mode carrying an interval", JobDrill, JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"sun"}, IntervalMin: 60}, false},
-		{"interval mode carrying times", JobDrill, JobConfig{Mode: "interval", IntervalMin: 60, Times: []string{"03:30"}}, false},
-		{"interval mode carrying weekdays", JobDrill, JobConfig{Mode: "interval", IntervalMin: 60, Weekdays: []string{"sun"}}, false},
+		{name: "times mode carrying an interval", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"sun"}, IntervalMin: 60}, msg: `mode "times" does not carry "interval_min"`},
+		{name: "interval mode carrying times", job: JobDrill, cfg: JobConfig{Mode: "interval", IntervalMin: 60, Times: []string{"03:30"}}, msg: `mode "interval" does not carry "times" or "weekdays"`},
+		{name: "interval mode carrying weekdays", job: JobDrill, cfg: JobConfig{Mode: "interval", IntervalMin: 60, Weekdays: []string{"sun"}}, msg: `mode "interval" does not carry "times" or "weekdays"`},
 
-		{"enabled on dump", JobDump, JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: allDays(), Enabled: boolPtr(true)}, false},
-		{"enabled on drill", JobDrill, JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"sun"}, Enabled: boolPtr(false)}, false},
-		{"enabled on mirror", JobMirror, JobConfig{Mode: "interval", IntervalMin: 60, Enabled: boolPtr(false)}, false},
+		{name: "enabled on dump", job: JobDump, cfg: JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: allDays(), Enabled: boolPtr(true)}, msg: "dump cannot be switched off"},
+		{name: "enabled on drill", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"sun"}, Enabled: boolPtr(false)}, msg: "drill cannot be switched off"},
+		{name: "enabled on mirror", job: JobMirror, cfg: JobConfig{Mode: "interval", IntervalMin: 60, Enabled: boolPtr(false)}, msg: "mirror cannot be switched off"},
 
-		{"zero times is the floor", JobDrill, JobConfig{Mode: "times", Times: []string{}, Weekdays: []string{"sun"}}, false},
-		{"one time", JobDrill, JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"sun"}}, true},
-		{"six times", JobDrill, JobConfig{Mode: "times", Times: []string{"00:00", "04:00", "08:00", "12:00", "16:00", "20:00"}, Weekdays: []string{"sun"}}, true},
-		{"seven times", JobDrill, JobConfig{Mode: "times", Times: []string{"00:00", "01:00", "02:00", "03:00", "04:00", "05:00", "06:00"}, Weekdays: []string{"sun"}}, false},
-		{"repeated time", JobDrill, JobConfig{Mode: "times", Times: []string{"03:30", "03:30"}, Weekdays: []string{"sun"}}, false},
-		{"unparseable time", JobDrill, JobConfig{Mode: "times", Times: []string{"25:99"}, Weekdays: []string{"sun"}}, false},
-		{"a time carrying a weekday", JobDrill, JobConfig{Mode: "times", Times: []string{"03:30 sun"}, Weekdays: []string{"sun"}}, false},
+		{name: "zero times is the floor", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{}, Weekdays: []string{"sun"}}, msg: "needs between 1 and 6 wall times"},
+		{name: "one time", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"sun"}}, ok: true},
+		{name: "six times", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"00:00", "04:00", "08:00", "12:00", "16:00", "20:00"}, Weekdays: []string{"sun"}}, ok: true},
+		{name: "seven times", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"00:00", "01:00", "02:00", "03:00", "04:00", "05:00", "06:00"}, Weekdays: []string{"sun"}}, msg: "needs between 1 and 6 wall times"},
+		{name: "repeated time", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"03:30", "03:30"}, Weekdays: []string{"sun"}}, msg: `drill time "03:30" repeats`},
+		{name: "unparseable time", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"25:99"}, Weekdays: []string{"sun"}}, msg: `drill time "25:99"`},
+		{name: "a time carrying a weekday", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"03:30 sun"}, Weekdays: []string{"sun"}}, msg: `the weekday belongs in "weekdays"`},
 
-		{"zero weekdays", JobDrill, JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{}}, false},
-		{"absent weekdays", JobDrill, JobConfig{Mode: "times", Times: []string{"03:30"}}, false},
-		{"invalid weekday", JobDrill, JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"someday"}}, false},
-		{"repeated weekday", JobDrill, JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"sun", "sun"}}, false},
+		{name: "zero weekdays", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{}}, msg: "an agenda that fires on no day"},
+		{name: "absent weekdays", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"03:30"}}, msg: "an agenda that fires on no day"},
+		{name: "invalid weekday", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"someday"}}, msg: `weekday "someday" is not one of sun..sat`},
+		{name: "repeated weekday", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"sun", "sun"}}, msg: `drill weekday "sun" repeats`},
 
 		// The dump is the instance's disaster floor: four days a week means
 		// three consecutive days with no dump at all, and no other job's
 		// agenda buys that back.
-		{"dump on four weekdays", JobDump, JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"mon", "tue", "wed", "thu"}}, false},
-		{"dump on five weekdays", JobDump, JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"mon", "tue", "wed", "thu", "fri"}}, true},
-		{"drill on one weekday", JobDrill, JobConfig{Mode: "times", Times: []string{"01:00"}, Weekdays: []string{"sun"}}, true},
-		{"mirror on one weekday", JobMirror, JobConfig{Mode: "times", Times: []string{"01:00"}, Weekdays: []string{"sun"}}, true},
-		{"user_zip on one weekday", JobUserZip, JobConfig{Mode: "times", Times: []string{"01:00"}, Weekdays: []string{"sun"}}, true},
+		{name: "dump on four weekdays", job: JobDump, cfg: JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"mon", "tue", "wed", "thu"}}, msg: "dump needs at least 5 weekdays, got 4"},
+		{name: "dump on five weekdays", job: JobDump, cfg: JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"mon", "tue", "wed", "thu", "fri"}}, ok: true},
+		{name: "drill on one weekday", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"01:00"}, Weekdays: []string{"sun"}}, ok: true},
+		{name: "mirror on one weekday", job: JobMirror, cfg: JobConfig{Mode: "times", Times: []string{"01:00"}, Weekdays: []string{"sun"}}, ok: true},
+		{name: "user_zip on one weekday", job: JobUserZip, cfg: JobConfig{Mode: "times", Times: []string{"01:00"}, Weekdays: []string{"sun"}}, ok: true},
 
-		{"user_zip disabled needs no agenda", JobUserZip, JobConfig{Mode: "times", Enabled: boolPtr(false)}, true},
-		{"user_zip disabled carrying an agenda", JobUserZip, JobConfig{Mode: "times", Enabled: boolPtr(false), Times: []string{"02:30"}, Weekdays: allDays()}, false},
-		{"user_zip enabled still needs an agenda", JobUserZip, JobConfig{Mode: "times", Enabled: boolPtr(true)}, false},
+		{name: "user_zip disabled needs no agenda", job: JobUserZip, cfg: JobConfig{Mode: "times", Enabled: boolPtr(false)}, ok: true},
+		{name: "user_zip disabled carrying an agenda", job: JobUserZip, cfg: JobConfig{Mode: "times", Enabled: boolPtr(false), Times: []string{"02:30"}, Weekdays: allDays()}, msg: "a disabled user_zip carries no agenda"},
+		{name: "user_zip enabled still needs an agenda", job: JobUserZip, cfg: JobConfig{Mode: "times", Enabled: boolPtr(true)}, msg: "needs between 1 and 6 wall times"},
 
-		{"legacy time refused", JobUserZip, JobConfig{Mode: "times", Time: "02:30", Weekdays: allDays()}, false},
-		{"legacy weekday refused", JobDrill, JobConfig{Mode: "times", Times: []string{"01:00"}, Weekday: "sun"}, false},
+		{name: "legacy time refused", job: JobUserZip, cfg: JobConfig{Mode: "times", Time: "02:30", Weekdays: allDays()}, msg: "are the previous schedule vocabulary and are read-only"},
+		{name: "legacy weekday refused", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"01:00"}, Weekday: "sun"}, msg: "are the previous schedule vocabulary and are read-only"},
 
-		{"unknown job", "vacuum", JobConfig{Mode: "interval", IntervalMin: 60}, false},
+		{name: "unknown job", job: "vacuum", cfg: JobConfig{Mode: "interval", IntervalMin: 60}, msg: `unknown job "vacuum"`},
 	}
 	for _, job := range []string{JobDump, JobDrill, JobMirror, JobUserZip} {
+		bounds := job + " interval must be between 15 and 1440 minutes"
 		cases = append(cases,
-			validateCase{job + " interval under the floor", job, JobConfig{Mode: "interval", IntervalMin: MinIntervalMin - 1}, false},
-			validateCase{job + " interval at the floor", job, JobConfig{Mode: "interval", IntervalMin: MinIntervalMin}, true},
-			validateCase{job + " interval at the ceiling", job, JobConfig{Mode: "interval", IntervalMin: MaxIntervalMin}, true},
-			validateCase{job + " interval over the ceiling", job, JobConfig{Mode: "interval", IntervalMin: MaxIntervalMin + 1}, false},
-			validateCase{job + " interval zero cannot switch the job off", job, JobConfig{Mode: "interval"}, false},
+			validateCase{name: job + " interval under the floor", job: job, cfg: JobConfig{Mode: "interval", IntervalMin: MinIntervalMin - 1}, msg: bounds},
+			validateCase{name: job + " interval at the floor", job: job, cfg: JobConfig{Mode: "interval", IntervalMin: MinIntervalMin}, ok: true},
+			validateCase{name: job + " interval at the ceiling", job: job, cfg: JobConfig{Mode: "interval", IntervalMin: MaxIntervalMin}, ok: true},
+			validateCase{name: job + " interval over the ceiling", job: job, cfg: JobConfig{Mode: "interval", IntervalMin: MaxIntervalMin + 1}, msg: bounds},
+			validateCase{name: job + " interval zero cannot switch the job off", job: job, cfg: JobConfig{Mode: "interval"}, msg: bounds},
 		)
 	}
 	for _, tc := range cases {
@@ -83,9 +89,10 @@ func TestValidateJobConfig_FloorsHold(t *testing.T) {
 			err := ValidateJobConfig(tc.job, tc.cfg)
 			if tc.ok {
 				assert.NoError(t, err)
-			} else {
-				assert.Error(t, err)
+				return
 			}
+			require.NotEmpty(t, tc.msg, "a negative case without an expected message passes for any refusal")
+			assert.ErrorContains(t, err, tc.msg)
 		})
 	}
 }
@@ -203,6 +210,18 @@ func TestTiming_MaxGapIsTheWidestGapOfTheWeekGrid(t *testing.T) {
 		Weekdays: []time.Weekday{time.Monday, time.Wednesday, time.Friday},
 	}
 	assert.Equal(t, 60*time.Hour, restricted.MaxGap())
+
+	// A CLUSTERED day set is where the widest silence sits INSIDE the week
+	// rather than across its edge: sun 00:00 → fri 00:00 is 120h, while the
+	// wraparound fri → sun is only 48h. Every other case here lets the
+	// wraparound win, so without this one the interior comparison could
+	// return the wraparound gap and no test would notice — a catch-up that
+	// compares against 48h would call a job late three times a week.
+	clustered := Timing{
+		Anchors:  []Anchor{mustAnchor(t, "00:00")},
+		Weekdays: []time.Weekday{time.Sunday, time.Friday},
+	}
+	assert.Equal(t, 120*time.Hour, clustered.MaxGap())
 
 	interval := Timing{Interval: 45 * time.Minute}
 	assert.Equal(t, 45*time.Minute, interval.MaxGap())
@@ -363,6 +382,60 @@ func TestNormalize_LegacyRowBecomesTheUnifiedShape(t *testing.T) {
 	already := JobConfig{Mode: "interval", IntervalMin: 720}
 	assert.Equal(t, already, already.normalized(JobMirror),
 		"a document that already carries a mode is not guessed at again")
+}
+
+// The legacy validator accepted {"enabled":false,"time":"02:30"} — switched
+// off, with the agenda it would have followed still written down. The unified
+// one refuses the pair, so carrying the agenda across would make the row
+// invalid, fall user_zip back to the env baseline and START IT RUNNING AGAIN,
+// reversing the one thing the operator explicitly asked for. The agenda goes,
+// the "off" stays.
+func TestNormalize_ADisabledLegacyRowDropsItsAgenda(t *testing.T) {
+	off := JobConfig{Enabled: boolPtr(false), Time: "02:30"}.normalized(JobUserZip)
+	require.NotNil(t, off.Enabled)
+	assert.False(t, *off.Enabled)
+	assert.Empty(t, off.Times)
+	assert.Empty(t, off.Weekdays)
+	assert.NoError(t, ValidateJobConfig(JobUserZip, off),
+		"a row that normalizes into a document the floors refuse is a job silently switched back ON")
+
+	withTimes := JobConfig{Enabled: boolPtr(false), Times: []string{"02:30", "14:30"}}.normalized(JobUserZip)
+	assert.Empty(t, withTimes.Times)
+	assert.NoError(t, ValidateJobConfig(JobUserZip, withTimes))
+
+	withInterval := JobConfig{Enabled: boolPtr(false), IntervalMin: 360}.normalized(JobUserZip)
+	assert.Zero(t, withInterval.IntervalMin)
+	assert.NoError(t, ValidateJobConfig(JobUserZip, withInterval))
+}
+
+// "enabled" belongs to user_zip alone, and it must survive whichever legacy
+// shape carried it — the interval branch used to replace the whole struct and
+// drop it on the floor.
+func TestNormalize_EnabledSurvivesEveryBranchAndOnlyOnUserZip(t *testing.T) {
+	interval := JobConfig{Enabled: boolPtr(true), IntervalMin: 360}.normalized(JobUserZip)
+	assert.Equal(t, "interval", interval.Mode)
+	assert.Equal(t, 360, interval.IntervalMin)
+	require.NotNil(t, interval.Enabled)
+	assert.True(t, *interval.Enabled)
+
+	times := JobConfig{Enabled: boolPtr(true), Times: []string{"02:30"}}.normalized(JobUserZip)
+	require.NotNil(t, times.Enabled)
+	assert.True(t, *times.Enabled)
+
+	// On every other job it is stripped: kept, it would normalize into a
+	// document ValidateJobConfig refuses forever, pinning the job to the env
+	// baseline behind nothing louder than a warning.
+	for _, job := range []string{JobDump, JobDrill, JobMirror} {
+		for _, legacy := range []JobConfig{
+			{Enabled: boolPtr(true), Time: "02:30"},
+			{Enabled: boolPtr(false), Time: "02:30"},
+			{Enabled: boolPtr(true), IntervalMin: 360},
+		} {
+			got := legacy.normalized(job)
+			assert.Nil(t, got.Enabled, "job=%s", job)
+			assert.NoError(t, ValidateJobConfig(job, got), "job=%s", job)
+		}
+	}
 }
 
 func TestEffectiveTiming_RowWinsAndInvalidRowFallsBack(t *testing.T) {
