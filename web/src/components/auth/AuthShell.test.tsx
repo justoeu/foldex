@@ -25,7 +25,13 @@ describe('AuthShell', () => {
     expect(screen.getByText(/personal · self-hosted/i)).toBeInTheDocument()
     // The one surface reachable without an account has to answer "which
     // version is this instance running?".
-    expect(screen.getByText(new RegExp(`foldex v${VERSION.replace(/\./g, '\\.')}`))).toBeInTheDocument()
+    //
+    // Matched by a LITERAL regex plus a substring assertion, not by a pattern
+    // built from VERSION: escaping a string into a regex means escaping every
+    // metacharacter, and escaping only the dot is the shape of an incomplete
+    // sanitization — true here even though a version string can hold nothing
+    // worse than a dot.
+    expect(screen.getByText(/^foldex v/)).toHaveTextContent(`foldex v${VERSION}`)
   })
 
   /*
