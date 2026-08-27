@@ -62,11 +62,21 @@ SET config = jsonb_build_object('mode', 'times', 'enabled', false)
 WHERE NOT (config ? 'mode') AND job = 'user_zip' AND config -> 'enabled' = 'false'::jsonb;
 
 -- {"interval_min": N} — the mirror's shape. The jsonb_typeof guard is not
--- ceremony: the cast to int ABORTS THE WHOLE MIGRATION on a hand-written
--- {"interval_min": "360"}, taking every other job's rewrite down with it. A
--- row this predicate skips keeps its original document and falls back to the
--- env baseline, which is the documented behaviour for a document the floors
--- refuse — failing soft on one bad row beats failing hard on all of them.
+-- ceremony, but the value that trips it is not the obvious one: ->> UNQUOTES,
+-- so {"interval_min": "360"} yields the text 360 and casts cleanly. What
+-- ABORTS THE WHOLE MIGRATION is a non-numeric value — {"interval_min":
+-- "nightly"}, true, an array — and a migration runs as one transaction, so
+-- the abort takes every other job's rewrite with it and leaves a database at
+-- version 42 against a repo that expects 43.
+--
+-- The predicate therefore asks "is this the shape the schema declares?", not
+-- "would the cast happen to work?", and skips the quoted "360" as well. A
+-- skipped row keeps its original document and has to be fixed by hand: it
+-- does not decode into JobConfig at all, so ScheduleStore.Load fails for the
+-- WHOLE read and every job keeps the timing it already had
+-- (TestJobConfig_AHandWrittenStringIntervalDoesNotDecode). That is worse than
+-- one job on its env baseline, and still far better than an instance whose
+-- migration aborted.
 UPDATE backup_schedule
 SET config = jsonb_strip_nulls(jsonb_build_object(
         'mode', 'interval',
