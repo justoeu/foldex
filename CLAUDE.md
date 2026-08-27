@@ -251,6 +251,8 @@ Part of the product contract, not nice-to-haves. Uma linha = uma regra; o porqu�
 - **Monitored / unseen-change UI** → [INV-163](docs/INVARIANTS.md#inv-163)
 - **Push subscription UI is a bell in the Topbar** → [INV-164](docs/INVARIANTS.md#inv-164)
 - **Mobile responsiveness** → [INV-165](docs/INVARIANTS.md#inv-165)
+- **Uma troca de tela DENTRO de um fluxo nunca apaga a tela que já está no vidro** → [INV-174](docs/INVARIANTS.md#inv-174) | guard: `AuthGate.transition.test.tsx`
+  ↳ Login → pedido do OTP piscava a viewport inteira: o fallback do `Suspense` é uma sobreposição de tela cheia.
 - **A password an administrator installs is either CONFIRMED or GENERATED, never typed once** → [INV-166](docs/INVARIANTS.md#inv-166) | guard: `CreateUserDialog.test.tsx`, `generatePassword.test.ts`
 - **Papéis e permissões is a GRID, and every cell it cannot offer says why** → [INV-168](docs/INVARIANTS.md#inv-168) | guard: `admin.test.tsx`
 

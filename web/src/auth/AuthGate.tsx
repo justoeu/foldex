@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, type ReactNode } from 'react'
+import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from './AuthProvider'
 import { urlTokens } from './authUrl'
@@ -10,10 +10,17 @@ import { InviteScreen } from '../components/auth/InviteScreen'
 // gate sits ABOVE <App/>, so anything imported eagerly here ships on every
 // visit — including the overwhelmingly common one where the user is already
 // signed in and none of these four screens will ever render.
+//
+// The two challenge screens keep their factories reachable because they are the
+// only lazy screens the gate reaches by a TRANSITION from a screen that is
+// already painted — see the prefetch below. The other four are entered at
+// mount, from a URL token, with nothing on the glass to preserve.
+const importTwoFactor = () => import('../components/auth/TwoFactorScreen')
+const importEnrollTotp = () => import('../components/auth/EnrollTotpScreen')
 const TwoFactorScreen = lazy(() =>
-  import('../components/auth/TwoFactorScreen').then((m) => ({ default: m.TwoFactorScreen })))
+  importTwoFactor().then((m) => ({ default: m.TwoFactorScreen })))
 const EnrollTotpScreen = lazy(() =>
-  import('../components/auth/EnrollTotpScreen').then((m) => ({ default: m.EnrollTotpScreen })))
+  importEnrollTotp().then((m) => ({ default: m.EnrollTotpScreen })))
 const ResetScreen = lazy(() =>
   import('../components/auth/ResetScreen').then((m) => ({ default: m.ResetScreen })))
 const ForgotScreen = lazy(() =>
@@ -47,6 +54,20 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [verifyToken, setVerifyToken] = useState(urlTokens.verify ?? '')
   const [changeToken, setChangeToken] = useState(urlTokens.emailChange ?? '')
   const [forgot, setForgot] = useState(false)
+
+  // Warmed while the sign-in form is on screen, so the flip to the challenge
+  // has nothing left to fetch. A second factor is the DEFAULT here
+  // (AUTH_REQUIRE_2FA_FOR_ADMINS), so whoever is looking at the form is very
+  // likely one submit away from one of these two screens — and paying for the
+  // chunk then is what put a full-viewport spinner in the middle of a flow.
+  // Anyone already signed in never reaches this effect, which is the visit the
+  // split was made for.
+  const anonymous = session.status === 'anonymous' || session.status === 'setup_required'
+  useEffect(() => {
+    if (!anonymous) return
+    void importTwoFactor()
+    void importEnrollTotp()
+  }, [anonymous])
 
   const boot = (
     <div className="fx-auth fx-auth-boot" role="status" aria-live="polite">

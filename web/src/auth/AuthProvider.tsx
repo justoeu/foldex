@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  startTransition,
   type ReactNode,
 } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -213,7 +214,15 @@ export function AuthProvider({
         if (writeOwnerMarker) persistLastOwnerId(storage, nextId)
       }
       lastUserId.current = nextId
-      setSession(next)
+      // A transition, so a screen that suspends on the way in does not blank
+      // the one already on the glass. AuthGate lazy-loads the second-factor
+      // screens, and sign-in → code is a swap between two painted states of one
+      // flow: as an urgent update React commits the Suspense fallback, which is
+      // a full-viewport spinner, and the operator sees the page flash.
+      //
+      // Nothing else here suspends — the login and app trees are eager — so for
+      // every other transition this is the same update it always was.
+      startTransition(() => setSession(next))
     },
     [queryClient],
   )
