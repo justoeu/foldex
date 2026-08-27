@@ -16,7 +16,11 @@
 
 UPDATE backup_schedule
 SET config = jsonb_build_object('interval_min', (config ->> 'interval_min')::int)
-WHERE job = 'mirror' AND config ->> 'mode' = 'interval';
+WHERE job = 'mirror' AND config ->> 'mode' = 'interval'
+  -- Same guard as the up: a hand-written string would abort the whole revert.
+  -- Skipped here means the row falls to the DELETE below, which is the honest
+  -- answer for a document the legacy vocabulary cannot state.
+  AND jsonb_typeof(config -> 'interval_min') = 'number';
 
 UPDATE backup_schedule
 SET config = jsonb_build_object('times', config -> 'times')

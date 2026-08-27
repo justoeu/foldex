@@ -1083,4 +1083,37 @@ describe('BackupSection schedule', () => {
 
     expect(screen.getByRole('tab', { name: 'Database dump' })).toBeInTheDocument()
   })
+
+  /*
+   * A radiogroup is a SINGLE tab stop whose options move with the arrow keys —
+   * that is the half of the role that is a keyboard contract, not a label. Two
+   * plain buttons announced as radios but reachable only by Tab tell a screen
+   * reader user to press an arrow key that does nothing.
+   */
+  it('moves between the schedule modes with the arrow keys, as one tab stop', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    const group = await screen.findByRole('radiogroup', { name: 'Schedule mode' })
+    const times = within(group).getByRole('radio', { name: 'Times' })
+    const interval = within(group).getByRole('radio', { name: 'Interval' })
+
+    // Only the checked option is in the tab order (roving tabindex).
+    expect(times).toHaveAttribute('tabindex', '0')
+    expect(interval).toHaveAttribute('tabindex', '-1')
+
+    times.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(interval).toHaveAttribute('aria-checked', 'true')
+    expect(interval).toHaveFocus()
+    expect(interval).toHaveAttribute('tabindex', '0')
+
+    // And it wraps, in both directions.
+    await user.keyboard('{ArrowRight}')
+    expect(times).toHaveAttribute('aria-checked', 'true')
+    await user.keyboard('{ArrowLeft}')
+    expect(interval).toHaveAttribute('aria-checked', 'true')
+  })
 })

@@ -91,7 +91,15 @@ describe('BackupSection render boundaries', () => {
     // that depends on the whole mutation is never stable — and four memoized
     // cards downstream of it are never memoized at all.
     const before = vi.mocked(useCopy).mock.calls.length
-    await user.click(screen.getByRole('button', { name: 'Failed' }))
+    // The counter has to be counting: if `useCopy` ever leaves JobCard, both
+    // sides go to zero and this test passes having asserted nothing.
+    expect(before).toBeGreaterThan(0)
+
+    const failed = screen.getByRole('button', { name: 'Failed' })
+    await user.click(failed)
+    // And the click has to have done something — a filter that did not move
+    // re-renders nothing, which is not the same as a memo that held.
+    await waitFor(() => expect(failed).toHaveAttribute('aria-pressed', 'true'))
     expect(vi.mocked(useCopy).mock.calls.length).toBe(before)
   })
 

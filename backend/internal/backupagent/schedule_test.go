@@ -48,7 +48,7 @@ func TestValidateJobConfig_FloorsHold(t *testing.T) {
 		{name: "six times", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"00:00", "04:00", "08:00", "12:00", "16:00", "20:00"}, Weekdays: []string{"sun"}}, ok: true},
 		{name: "seven times", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"00:00", "01:00", "02:00", "03:00", "04:00", "05:00", "06:00"}, Weekdays: []string{"sun"}}, msg: "needs between 1 and 6 wall times"},
 		{name: "repeated time", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"03:30", "03:30"}, Weekdays: []string{"sun"}}, msg: `drill time "03:30" repeats`},
-		{name: "unparseable time", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"25:99"}, Weekdays: []string{"sun"}}, msg: `drill time "25:99"`},
+		{name: "unparseable time", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"25:99"}, Weekdays: []string{"sun"}}, msg: `is not a valid 24h wall time`},
 		{name: "a time carrying a weekday", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"03:30 sun"}, Weekdays: []string{"sun"}}, msg: `the weekday belongs in "weekdays"`},
 
 		{name: "zero weekdays", job: JobDrill, cfg: JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{}}, msg: "an agenda that fires on no day"},
@@ -100,18 +100,20 @@ func TestValidateJobConfig_FloorsHold(t *testing.T) {
 // The refusal is what the handler returns verbatim and what the UI renders
 // without restating: it has to carry the real numbers (INV-169's reasoning).
 func TestValidateJobConfig_RefusalsNameTheRealNumbers(t *testing.T) {
+	// The whole sentence, not the digit: "5" also appears in a message that
+	// merely mentions 15 or 1440, so a single digit proves nothing about which
+	// number the operator is being shown.
 	err := ValidateJobConfig(JobDump, JobConfig{Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"mon", "tue"}})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "5")
+	assert.EqualError(t, err, "dump needs at least 5 weekdays, got 2")
 
 	err = ValidateJobConfig(JobMirror, JobConfig{Mode: "interval", IntervalMin: 5})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "15")
-	assert.Contains(t, err.Error(), "1440")
+	assert.EqualError(t, err, "mirror interval must be between 15 and 1440 minutes — a row tunes the cadence, it cannot switch the job off")
 
 	err = ValidateJobConfig(JobDrill, JobConfig{Mode: "times", Times: []string{}, Weekdays: []string{"sun"}})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "6")
+	assert.EqualError(t, err, "drill needs between 1 and 6 wall times — the floor is one run per scheduled day, never zero")
 }
 
 func mustAnchor(t *testing.T, raw string) Anchor {

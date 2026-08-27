@@ -61,13 +61,19 @@ UPDATE backup_schedule
 SET config = jsonb_build_object('mode', 'times', 'enabled', false)
 WHERE NOT (config ? 'mode') AND job = 'user_zip' AND config -> 'enabled' = 'false'::jsonb;
 
--- {"interval_min": N} — the mirror's shape.
+-- {"interval_min": N} — the mirror's shape. The jsonb_typeof guard is not
+-- ceremony: the cast to int ABORTS THE WHOLE MIGRATION on a hand-written
+-- {"interval_min": "360"}, taking every other job's rewrite down with it. A
+-- row this predicate skips keeps its original document and falls back to the
+-- env baseline, which is the documented behaviour for a document the floors
+-- refuse — failing soft on one bad row beats failing hard on all of them.
 UPDATE backup_schedule
 SET config = jsonb_strip_nulls(jsonb_build_object(
         'mode', 'interval',
         'enabled', config -> 'enabled',
         'interval_min', (config ->> 'interval_min')::int))
-WHERE NOT (config ? 'mode') AND config ? 'interval_min';
+WHERE NOT (config ? 'mode') AND config ? 'interval_min'
+  AND jsonb_typeof(config -> 'interval_min') = 'number';
 
 -- {"times": [...]} — the dump's shape. Days were implicit: every day.
 UPDATE backup_schedule

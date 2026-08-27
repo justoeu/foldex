@@ -16,6 +16,17 @@ import { reducesProtection } from './backupSchedule'
 import { formatMinutes } from './backupFormat'
 import { apiErrorMessage } from '../../lib/apiError'
 
+/** The two schedule modes, in render order — also the arrow-key order. */
+const MODES = ['times', 'interval'] as const
+
+/** Which way each arrow moves inside a radiogroup. */
+const ARROW_STEP: Record<string, number | undefined> = {
+  ArrowRight: 1,
+  ArrowDown: 1,
+  ArrowLeft: -1,
+  ArrowUp: -1,
+}
+
 /** The server's closed weekday vocabulary, in its own order (sun-first). */
 const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
 
@@ -479,14 +490,29 @@ function ScheduleFields({
               role="radiogroup"
               aria-label={t('admin.backup_schedule_mode_label')}
             >
-              {(['times', 'interval'] as const).map((m) => (
+              {MODES.map((m, i) => (
                 <button
                   key={m}
                   type="button"
                   role="radio"
                   aria-checked={mode === m}
+                  /* Roving tabindex: a radiogroup is ONE tab stop, and the
+                     arrow keys move within it. Without this the role promises
+                     a keyboard behaviour the buttons do not have. */
+                  tabIndex={mode === m ? 0 : -1}
                   className={'fx-bkp-mode' + (mode === m ? ' fx-bkp-mode-on' : '')}
                   onClick={() => switchMode(m)}
+                  onKeyDown={(e) => {
+                    const step = ARROW_STEP[e.key]
+                    if (step === undefined) return
+                    e.preventDefault()
+                    // Wraps in both directions, as the pattern requires.
+                    const next = MODES[(i + step + MODES.length) % MODES.length]
+                    switchMode(next)
+                    e.currentTarget.parentElement
+                      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+                      [MODES.indexOf(next)]?.focus()
+                  }}
                 >
                   {t(`admin.backup_schedule_mode_${m}`)}
                 </button>
