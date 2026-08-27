@@ -299,15 +299,20 @@ export async function requestBackupRun(
 // ── Configurable backup schedule (ADR-44) ──────────────────────────────
 
 /**
- * One jsonb document for the four per-job shapes, discriminated by the job
- * name — the client mirror of backupagent.JobConfig. dump: `times`; drill:
- * `time` + `weekday`; mirror: `interval_min`; user_zip: `enabled` (+ `time`).
+ * ONE jsonb shape for all four jobs — the client mirror of
+ * backupagent.JobConfig. Every job speaks the same vocabulary; what differs
+ * between them is only the floor the server enforces (see `bounds`).
  */
 export type BackupScheduleConfig = {
+  /** "times" | "interval". Explicit, never inferred from which field is set. */
+  mode?: 'times' | 'interval'
+  /** mode "times": wall times "HH:MM", 1..6 of them, no repeats. */
   times?: string[]
-  time?: string
-  weekday?: string
+  /** mode "times": a non-empty subset of sun..sat, no repeats. */
+  weekdays?: string[]
+  /** mode "interval": 15..1440 minutes. */
   interval_min?: number
+  /** Only user_zip may carry `false` — the other three are the instance's floor. */
   enabled?: boolean
 }
 
@@ -330,6 +335,13 @@ export type BackupAgentJobReport = {
   reason?: string
   source: 'db' | 'env'
   schedule: string
+  /**
+   * The ENV agenda, structured — what this job runs when no row is stored. It
+   * is the first option the editor seeds from, and the baseline a change is
+   * compared against while there is no row. A job whose env agenda is disabled
+   * reports `{}`: no mode, so nothing about it can be claimed.
+   */
+  baseline: BackupScheduleConfig
 }
 
 export type BackupAgentState = {
@@ -342,11 +354,19 @@ export type BackupScheduleResponse = {
   jobs: BackupJob[]
   /** Only the jobs with a stored row — absent key = env baseline. */
   rows: Record<string, BackupScheduleRow>
+  /**
+   * The compiled floors the server enforces. The client renders them as hints
+   * and as add/remove affordances; the hard refusal stays the server's, and
+   * its 400 message is what the editor displays (INV-138 by analogy).
+   */
   bounds: {
-    dump_times_min: number
-    dump_times_max: number
-    mirror_interval_min: number
-    mirror_interval_max: number
+    times_min: number
+    times_max: number
+    weekdays_min: number
+    /** The dump is the instance's disaster floor, so at least five days a week. */
+    dump_weekdays_min: number
+    interval_min: number
+    interval_max: number
   }
   /** null = the agent never wrote a heartbeat (never ran on this instance). */
   agent: BackupAgentState | null

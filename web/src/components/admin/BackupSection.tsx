@@ -5,6 +5,7 @@ import type { TFunction } from 'i18next'
 import { useConfirm } from '../ConfirmDialog'
 import { useCopy } from '../../hooks/useCopy'
 import { useCurrentUser } from '../../auth/AuthProvider'
+import { useRevealTarget } from '../../hooks/useRevealTarget'
 import { relativeTime } from '../../lib/time'
 import { Icon, I } from '../icons'
 import {
@@ -100,6 +101,7 @@ export function BackupSection() {
   const [pages, setPages] = useState<number[]>([])
   const [selected, setSelected] = useState<BackupJob>('dump')
   const [filter, setFilter] = useState<HistoryFilter>('all')
+  const { ref: agendaRef, reveal: revealAgenda } = useRevealTarget<HTMLDivElement>()
 
   const before = pages.length > 0 ? pages[pages.length - 1] : 0
   const query = useQuery({
@@ -130,6 +132,18 @@ export function BackupSection() {
   /* Stable identities: an inline arrow here would hand every card a new prop
      on each render and quietly undo the memo on all four. */
   const handleRun = useCallback((job: BackupJob) => void runNow(job), [runNow])
+
+  /* The cards sit above the fold and the agenda below it, so picking a job up
+     there used to change a form the reader could not see. The tabs INSIDE the
+     agenda deliberately do NOT reveal: the click already happened in that
+     card, and moving it under the cursor is gratuitous. */
+  const handleSelectFromCard = useCallback(
+    (job: BackupJob) => {
+      setSelected(job)
+      revealAgenda()
+    },
+    [revealAgenda],
+  )
 
   const jobs = query.data?.jobs ?? NO_JOBS
   const runs = query.data?.runs ?? NO_RUNS
@@ -213,7 +227,7 @@ export function BackupSection() {
             status={byJob.get(job) ?? null}
             report={agent?.jobs[job] ?? null}
             selected={selected === job}
-            onSelect={setSelected}
+            onSelect={handleSelectFromCard}
             onRun={handleRun}
           />
         ))}
@@ -227,6 +241,7 @@ export function BackupSection() {
           isPending={schedule.isPending}
           isError={schedule.isError}
           isOwner={isOwner}
+          cardRef={agendaRef}
         />
         <div className="fx-bkp-aside">
           <DrillCard drill={drill} />

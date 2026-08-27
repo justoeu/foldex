@@ -89,8 +89,10 @@ export type MockState = {
   // Configurable backup schedule (ADR-44). `backupScheduleRows` is the stored
   // (editable) layer keyed by job — only jobs with a row appear, mirroring the
   // backend. `backupAgent` is the heartbeat; unset = never seen, served as
-  // null. PUT validates the per-job shape like backupagent.ValidateJobConfig
-  // (400 invalid_schedule) and upserts the row; DELETE removes it. Requests
+  // null — and each of its per-job reports carries the structured env
+  // `baseline` the editor seeds from. PUT validates the unified shape like
+  // backupagent.ValidateJobConfig (400 invalid_schedule) and upserts the row;
+  // DELETE removes it. Requests
   // are recorded in `backupSchedulePuts` / `backupScheduleDeletes` so tests
   // assert WHAT was sent, not only that something was.
   backupScheduleRows?: Record<string, any>
@@ -171,7 +173,11 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/admin\/backup\/schedule$/, handle: (_m, _d, _p, s) => ({
       jobs: ['dump', 'drill', 'mirror', 'user_zip'],
       rows: s.backupScheduleRows ?? {},
-      bounds: { dump_times_min: 1, dump_times_max: 6, mirror_interval_min: 15, mirror_interval_max: 1440 },
+      bounds: {
+        times_min: 1, times_max: 6,
+        weekdays_min: 1, dump_weekdays_min: 5,
+        interval_min: 15, interval_max: 1440,
+      },
       agent: s.backupAgent ?? null,
     }) },
     { url: /^\/api\/admin\/backup\/runs$/, handle: (_m, _d, _p, s) => ({
@@ -273,33 +279,41 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
 
 // Mirrors backupagent.ValidateJobConfig closely enough that a component test
 // exercising a bad payload sees the same 400 invalid_schedule + message shape
-// the real handler answers.
+// the real handler answers. ONE vocabulary for the four jobs; what differs is
+// only the floor each one has to clear (INV-173).
 function validateScheduleConfig(job: string, cfg: any) {
-  if (job === 'dump') {
-    const times = cfg?.times
+  if (cfg?.enabled === false) {
+    if (job !== 'user_zip') {
+      throw invalidSchedule(`${job} cannot be switched off — it is the instance's safety floor, not a product convenience`)
+    }
+    return
+  }
+  if (cfg?.mode === 'times') {
+    const times = cfg.times
     if (!Array.isArray(times) || times.length < 1 || times.length > 6) {
-      throw invalidSchedule('dump needs between 1 and 6 daily times — the floor is one dump per day, never zero')
+      throw invalidSchedule(`${job} needs between 1 and 6 daily times — the floor is one run per day, never zero`)
     }
     const seen = new Set<string>()
     for (const t of times) {
-      if (typeof t !== 'string' || !HHMM.test(t)) throw invalidSchedule(`dump time ${JSON.stringify(t)}: expected HH:MM`)
-      if (seen.has(t)) throw invalidSchedule(`dump time "${t}" repeats`)
+      if (typeof t !== 'string' || !HHMM.test(t)) throw invalidSchedule(`${job} time ${JSON.stringify(t)}: expected HH:MM`)
+      if (seen.has(t)) throw invalidSchedule(`${job} time "${t}" repeats`)
       seen.add(t)
     }
-  } else if (job === 'drill') {
-    if (typeof cfg?.time !== 'string' || !HHMM.test(cfg.time) || !WEEKDAYS.includes(cfg?.weekday)) {
-      throw invalidSchedule('drill needs "time" and "weekday" — it is weekly by design and a row cannot switch it off')
+    const days = cfg.weekdays
+    const floor = job === 'dump' ? 5 : 1
+    if (!Array.isArray(days) || new Set(days).size !== days.length || !days.every((d: any) => WEEKDAYS.includes(d))) {
+      throw invalidSchedule(`${job} weekdays must be a set of sun..sat with no repeats`)
     }
-  } else if (job === 'mirror') {
-    const n = cfg?.interval_min
+    if (days.length < floor) {
+      throw invalidSchedule(`${job} needs at least ${floor} weekdays — the dump is the instance's disaster floor`)
+    }
+  } else if (cfg?.mode === 'interval') {
+    const n = cfg.interval_min
     if (typeof n !== 'number' || n < 15 || n > 1440) {
-      throw invalidSchedule('mirror interval must be between 15 and 1440 minutes — a row tunes the cadence, it cannot switch the mirror off')
+      throw invalidSchedule(`${job} interval must be between 15 and 1440 minutes`)
     }
   } else {
-    if (typeof cfg?.enabled !== 'boolean') throw invalidSchedule('user_zip needs "enabled"')
-    if (cfg.enabled && (typeof cfg.time !== 'string' || !HHMM.test(cfg.time))) {
-      throw invalidSchedule('user_zip needs "time" while enabled')
-    }
+    throw invalidSchedule(`${job} needs "mode": "times" or "interval"`)
   }
 }
 

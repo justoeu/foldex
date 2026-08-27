@@ -1,4 +1,4 @@
-import { memo, useState } from 'react'
+import { memo, useState, type RefObject } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useConfirm } from '../ConfirmDialog'
@@ -23,6 +23,66 @@ const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
 const INTERVAL_PRESETS = [30, 60, 360, 720] as const
 
 /**
+ * The last-resort draft, used only when neither a stored row nor the agent's
+ * env baseline states an agenda — which happens before any agent ever reported
+ * (the owner pre-configuring an instance whose backup profile is still off).
+ * The `.env` is the first option; this is the fourth.
+ */
+function fallbackFor(job: BackupJob): BackupScheduleConfig {
+  switch (job) {
+    case 'drill':
+      return { mode: 'times', times: ['01:00'], weekdays: ['sun'] }
+    case 'mirror':
+      return { mode: 'interval', interval_min: 360 }
+    case 'user_zip':
+      return { mode: 'times', times: ['02:30'], weekdays: [...WEEKDAYS], enabled: true }
+    default:
+      return { mode: 'times', times: ['03:30'], weekdays: [...WEEKDAYS] }
+  }
+}
+
+/**
+ * The draft the editor opens on: the stored row, else the ENV baseline the
+ * agent publishes, else the fallback above. That order IS the layering
+ * (INV-173) — the environment decides the agenda until a row overrides it, so
+ * an owner who saves without touching anything writes their own environment's
+ * agenda back rather than this screen's opinion of a good one.
+ */
+export function seedDraft(
+  job: BackupJob,
+  stored: BackupScheduleConfig | null,
+  baseline: BackupScheduleConfig | null | undefined,
+): BackupScheduleConfig {
+  if (stored) return stored
+  if (baseline?.mode) return baseline
+  // A report whose baseline carries no mode is an env agenda that is OFF, and
+  // only user_zip may be: opening its switch on would propose turning a job on
+  // as the effect of merely looking at it.
+  if (baseline && job === 'user_zip') return { ...fallbackFor(job), enabled: false }
+  return fallbackFor(job)
+}
+
+/**
+ * What actually reaches the server: exactly the fields the chosen mode uses.
+ * The draft below is deliberately FAT — it keeps the times while you are on
+ * the interval tab, so switching back does not discard them — but a stored row
+ * carrying an agenda no process reads is the shape this whole change exists to
+ * kill, so the payload is canonicalised here rather than in the draft.
+ */
+export function payloadOf(job: BackupJob, cfg: BackupScheduleConfig): BackupScheduleConfig {
+  // Only user_zip may be switched off, so only user_zip ever carries the flag.
+  if (job !== 'user_zip') {
+    return cfg.mode === 'interval'
+      ? { mode: 'interval', interval_min: cfg.interval_min }
+      : { mode: 'times', times: cfg.times, weekdays: cfg.weekdays }
+  }
+  if (cfg.enabled === false) return { mode: cfg.mode, enabled: false }
+  return cfg.mode === 'interval'
+    ? { mode: 'interval', interval_min: cfg.interval_min, enabled: true }
+    : { mode: 'times', times: cfg.times, weekdays: cfg.weekdays, enabled: true }
+}
+
+/**
  * The configurable agenda (ADR-44): one card, one job at a time, chosen by
  * the tabs that mirror the cards above. The permission split follows the
  * server — reading rides `instance.backup`, writing is
@@ -36,6 +96,7 @@ export const ScheduleCard = memo(function ScheduleCard({
   isPending,
   isError,
   isOwner,
+  cardRef,
 }: {
   selected: BackupJob
   onSelect: (job: BackupJob) => void
@@ -46,21 +107,35 @@ export const ScheduleCard = memo(function ScheduleCard({
   isPending: boolean
   isError: boolean
   isOwner: boolean
+  /* A ref object, not a callback: its identity is stable, so it does not
+     defeat the memo the way an inline closure would. */
+  cardRef: RefObject<HTMLDivElement | null>
 }) {
   const { t } = useTranslation()
 
+  // The two placeholders wear the grid class and the focus target too: a job
+  // card clicked during the first load must still reveal this slot, and the
+  // column must keep its shape while it fills.
   if (isPending) {
-    return <div className="fx-card"><div className="fx-card-body"><div className="fx-empty">{t('common.loading')}</div></div></div>
+    return (
+      <div className="fx-card fx-bkp-agenda" ref={cardRef} tabIndex={-1}>
+        <div className="fx-card-body"><div className="fx-empty">{t('common.loading')}</div></div>
+      </div>
+    )
   }
   if (isError || !data) {
-    return <div className="fx-card"><div className="fx-card-body"><div className="fx-empty">{t('admin.backup_schedule_unavailable')}</div></div></div>
+    return (
+      <div className="fx-card fx-bkp-agenda" ref={cardRef} tabIndex={-1}>
+        <div className="fx-card-body"><div className="fx-empty">{t('admin.backup_schedule_unavailable')}</div></div>
+      </div>
+    )
   }
 
   const row = data.rows[selected] ?? null
   const report = data.agent?.jobs[selected] ?? null
 
   return (
-    <div className="fx-card fx-bkp-agenda">
+    <div className="fx-card fx-bkp-agenda" ref={cardRef} tabIndex={-1}>
       <div className="fx-card-body">
         <div className="fx-bkp-agenda-head">
           <div>
@@ -110,30 +185,10 @@ export const ScheduleCard = memo(function ScheduleCard({
 })
 
 /**
- * The draft the editor starts from: what the stored row holds, or the shape's
- * own default. Seeding here (instead of in five `useState`s) is what lets each
- * job's fields be a pure function of one config value.
- */
-function seedDraft(job: BackupJob, stored: BackupScheduleConfig | null): BackupScheduleConfig {
-  switch (job) {
-    case 'dump':
-      return { times: stored?.times ?? ['03:30'] }
-    case 'drill':
-      return { time: stored?.time ?? '01:00', weekday: stored?.weekday ?? 'sun' }
-    case 'mirror':
-      return { interval_min: stored?.interval_min ?? 360 }
-    default:
-      return stored?.enabled === false
-        ? { enabled: false }
-        : { enabled: true, time: stored?.time ?? '02:30' }
-  }
-}
-
-/**
  * The shell: it owns the draft, the two mutations and the confirmations, and
- * delegates the actual fields to the component for this job. The four shapes
- * share nothing but the save button, so they are four components rather than
- * four branches over one bag of state.
+ * delegates the controls to `ScheduleFields`. There is ONE fields component
+ * because there is now one vocabulary — the jobs differ only in the floors the
+ * server enforces, which arrive as `bounds`.
  */
 function ScheduleEditor({
   job,
@@ -154,7 +209,9 @@ function ScheduleEditor({
   const confirm = useConfirm()
   const queryClient = useQueryClient()
   const stored = row?.config ?? null
-  const [draft, setDraft] = useState<BackupScheduleConfig>(() => seedDraft(job, stored))
+  const [draft, setDraft] = useState<BackupScheduleConfig>(() =>
+    seedDraft(job, stored, report?.baseline),
+  )
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: backupScheduleQueryKey })
   const save = useMutation({
@@ -184,7 +241,8 @@ function ScheduleEditor({
   async function submit() {
     save.reset()
     reset.reset()
-    if (reducesProtection(job, stored, draft, report)) {
+    const payload = payloadOf(job, draft)
+    if (reducesProtection(stored, payload, report?.baseline)) {
       const ok = await confirm({
         title: t('admin.backup_schedule_reduce_confirm_title', {
           job: t(`admin.backup_job_${job}`),
@@ -194,7 +252,7 @@ function ScheduleEditor({
       })
       if (!ok) return
     }
-    save.mutate(draft)
+    save.mutate(payload)
   }
 
   async function resetToEnv() {
@@ -233,10 +291,7 @@ function ScheduleEditor({
 
   return (
     <div className="fx-bkp-agenda-body">
-      {job === 'dump' && <DumpFields config={draft} onChange={setDraft} bounds={bounds} />}
-      {job === 'drill' && <DrillFields config={draft} onChange={setDraft} />}
-      {job === 'mirror' && <MirrorFields config={draft} onChange={setDraft} bounds={bounds} />}
-      {job === 'user_zip' && <UserZipFields config={draft} onChange={setDraft} />}
+      <ScheduleFields job={job} config={draft} onChange={setDraft} bounds={bounds} />
 
       <div className="fx-bkp-actions">
         <button
@@ -268,195 +323,248 @@ function ScheduleEditor({
   )
 }
 
-/** What every field component receives: the draft, and the way to replace it. */
-type FieldProps = {
+/**
+ * One vocabulary for four jobs: an off switch (user_zip only), a mode, and
+ * then either the weekday × wall-time grid or an interval.
+ *
+ * Nothing here re-derives the server's policy. The weekday floor is a HINT
+ * carrying the server's own number, and unpicking the last day is allowed on
+ * purpose: the refusal lives in one place, and the message the owner reads is
+ * the server's (INV-138 by analogy). Pinning a day client-side would be a
+ * second copy of that policy — and it could not express the dump's floor of
+ * five anyway.
+ */
+function ScheduleFields({
+  job,
+  config,
+  onChange,
+  bounds,
+}: {
+  job: BackupJob
   config: BackupScheduleConfig
   onChange: (config: BackupScheduleConfig) => void
-}
-
-/** Daily anchors, between the server's floor and ceiling. */
-function DumpFields({
-  config,
-  onChange,
-  bounds,
-}: FieldProps & { bounds: BackupScheduleResponse['bounds'] }) {
-  const { t } = useTranslation()
-  const times = config.times ?? []
-  return (
-    <div className="fx-bkp-control">
-      <span className="fx-bkp-control-label">{t('admin.backup_schedule_times_label')}</span>
-      <div className="fx-bkp-times">
-        {times.map((v, i) => (
-          <span className="fx-bkp-time" key={i}>
-            <input
-              className="fx-bkp-input"
-              type="time"
-              value={v}
-              aria-label={t('admin.backup_schedule_time_n_label', { n: i + 1 })}
-              onChange={(e) =>
-                onChange({ times: times.map((old, j) => (j === i ? e.target.value : old)) })
-              }
-            />
-            {times.length > bounds.dump_times_min && (
-              <button
-                type="button"
-                className="fx-bkp-time-remove"
-                aria-label={t('admin.backup_schedule_remove_time_n', { n: i + 1 })}
-                onClick={() => onChange({ times: times.filter((_, j) => j !== i) })}
-              >
-                {t('admin.backup_schedule_remove_time')}
-              </button>
-            )}
-          </span>
-        ))}
-        {times.length < bounds.dump_times_max && (
-          <button
-            type="button"
-            className="fx-bkp-add"
-            onClick={() => onChange({ times: [...times, '12:00'] })}
-          >
-            <span aria-hidden="true">+</span> {t('admin.backup_schedule_add_time')}
-          </button>
-        )}
-      </div>
-    </div>
-  )
-}
-
-/** One weekday and one time — the drill is weekly by floor, never daily. */
-function DrillFields({ config, onChange }: FieldProps) {
-  const { t } = useTranslation()
-  return (
-    <div className="fx-bkp-row">
-      <div className="fx-bkp-control">
-        <span className="fx-bkp-control-label">{t('admin.backup_schedule_weekday_label')}</span>
-        <div
-          className="fx-bkp-days"
-          role="group"
-          aria-label={t('admin.backup_schedule_weekday_label')}
-        >
-          {WEEKDAYS.map((d) => (
-            <button
-              key={d}
-              type="button"
-              className={'fx-bkp-day' + (config.weekday === d ? ' fx-bkp-day-on' : '')}
-              aria-pressed={config.weekday === d}
-              aria-label={t(`admin.backup_weekday_${d}`)}
-              onClick={() => onChange({ ...config, weekday: d })}
-            >
-              {t(`admin.backup_weekday_short_${d}`)}
-            </button>
-          ))}
-        </div>
-      </div>
-      <label className="fx-bkp-control">
-        <span className="fx-bkp-control-label">{t('admin.backup_schedule_time_label')}</span>
-        <input
-          className="fx-bkp-input"
-          type="time"
-          value={config.time ?? ''}
-          onChange={(e) => onChange({ ...config, time: e.target.value })}
-        />
-      </label>
-    </div>
-  )
-}
-
-/** An interval in minutes, typed or picked. */
-function MirrorFields({
-  config,
-  onChange,
-  bounds,
-}: FieldProps & { bounds: BackupScheduleResponse['bounds'] }) {
-  const { t } = useTranslation()
-  const interval = config.interval_min ?? 0
-  return (
-    <div className="fx-bkp-control">
-      <span className="fx-bkp-control-label">{t('admin.backup_schedule_interval_label')}</span>
-      <div className="fx-bkp-interval">
-        <span className="fx-bkp-interval-field">
-          <input
-            className="fx-bkp-input"
-            type="number"
-            min={bounds.mirror_interval_min}
-            max={bounds.mirror_interval_max}
-            value={interval}
-            aria-label={t('admin.backup_schedule_interval_label')}
-            /* Coerced here: the server's bounds check runs on a NUMBER, and a
-               string would be refused by the JSON schema, not by the floor. */
-            onChange={(e) => onChange({ interval_min: Number(e.target.value) })}
-          />
-          <span className="fx-bkp-unit">min</span>
-        </span>
-        <span className="fx-bkp-presets">
-          {INTERVAL_PRESETS.map((p) => (
-            <button
-              key={p}
-              type="button"
-              className={'fx-bkp-preset' + (interval === p ? ' fx-bkp-preset-on' : '')}
-              aria-pressed={interval === p}
-              onClick={() => onChange({ interval_min: p })}
-            >
-              {formatMinutes(p)}
-            </button>
-          ))}
-        </span>
-      </div>
-      <span className="fx-bkp-control-hint">
-        {t('admin.backup_schedule_interval_hint', {
-          min: bounds.mirror_interval_min,
-          max: bounds.mirror_interval_max,
-        })}
-      </span>
-    </div>
-  )
-}
-
-/**
- * The only job a row may switch off, so the only one with a toggle.
- *
- * The time is remembered locally while the switch is off: the config that goes
- * to the server must be a bare `{enabled: false}` (a time on a disabled job is
- * an agenda nothing reads), but someone who toggles off and back on should get
- * their own time back rather than the default.
- */
-function UserZipFields({ config, onChange }: FieldProps) {
+  bounds: BackupScheduleResponse['bounds']
+}) {
   const { t } = useTranslation()
   const enabled = config.enabled !== false
-  const [rememberedTime, setRememberedTime] = useState(config.time ?? '02:30')
+  const mode = config.mode === 'interval' ? 'interval' : 'times'
+  const weekdayFloor = job === 'dump' ? bounds.dump_weekdays_min : bounds.weekdays_min
+
+  function switchMode(next: 'times' | 'interval') {
+    // The other mode's values stay on the draft; `payloadOf` is what drops
+    // them, so a tab round-trip never costs the owner their edits.
+    onChange(
+      next === 'interval'
+        ? { ...config, mode: next, interval_min: config.interval_min ?? 360 }
+        : {
+            ...config,
+            mode: next,
+            times: config.times ?? ['03:30'],
+            weekdays: config.weekdays ?? [...WEEKDAYS],
+          },
+    )
+  }
+
+  function toggleWeekday(day: string) {
+    const picked = new Set(config.weekdays ?? [])
+    if (picked.has(day)) picked.delete(day)
+    else picked.add(day)
+    // Rebuilt from the vocabulary, never from click order: the stored document
+    // reads the same whichever way the owner assembled it.
+    onChange({ ...config, weekdays: WEEKDAYS.filter((d) => picked.has(d)) })
+  }
+
+  const times = config.times ?? []
 
   return (
     <>
-      {/* The same switch the instance-policy screen uses — one toggle shape in
-          the administration surface, focus ring included. */}
-      <label className="fx-toggle-row">
-        <input
-          type="checkbox"
-          checked={enabled}
-          aria-label={t('admin.backup_schedule_enabled_label')}
-          onChange={(e) =>
-            onChange(e.target.checked ? { enabled: true, time: rememberedTime } : { enabled: false })
-          }
-        />
-        <span className="fx-toggle-track"><span className="fx-toggle-knob" /></span>
-        <span className="fx-toggle-label">
-          {t('admin.backup_schedule_enabled_label')}
-          <span className="fx-toggle-hint">{t('admin.backup_schedule_enabled_desc')}</span>
-        </span>
-      </label>
-      {enabled && (
-        <label className="fx-bkp-control">
-          <span className="fx-bkp-control-label">{t('admin.backup_schedule_time_label')}</span>
+      {job === 'user_zip' && (
+        /* The same switch the instance-policy screen uses — one toggle shape in
+           the administration surface, focus ring included. */
+        <label className="fx-toggle-row">
           <input
-            className="fx-bkp-input"
-            type="time"
-            value={config.time ?? rememberedTime}
-            onChange={(e) => {
-              setRememberedTime(e.target.value)
-              onChange({ enabled: true, time: e.target.value })
-            }}
+            type="checkbox"
+            checked={enabled}
+            aria-label={t('admin.backup_schedule_enabled_label')}
+            onChange={(e) => onChange({ ...config, enabled: e.target.checked })}
           />
+          <span className="fx-toggle-track"><span className="fx-toggle-knob" /></span>
+          <span className="fx-toggle-label">
+            {t('admin.backup_schedule_enabled_label')}
+            <span className="fx-toggle-hint">{t('admin.backup_schedule_enabled_desc')}</span>
+          </span>
         </label>
+      )}
+
+      {enabled && (
+        <>
+          <div className="fx-bkp-control">
+            <span className="fx-bkp-control-label">{t('admin.backup_schedule_mode_label')}</span>
+            <div
+              className="fx-bkp-modes"
+              role="tablist"
+              aria-label={t('admin.backup_schedule_mode_label')}
+            >
+              {(['times', 'interval'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === m}
+                  className={'fx-bkp-mode' + (mode === m ? ' fx-bkp-mode-on' : '')}
+                  onClick={() => switchMode(m)}
+                >
+                  {t(`admin.backup_schedule_mode_${m}`)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {mode === 'times' ? (
+            <>
+              <div className="fx-bkp-control">
+                <span className="fx-bkp-control-label">
+                  {t('admin.backup_schedule_weekdays_label')}
+                </span>
+                <div
+                  className="fx-bkp-days"
+                  role="group"
+                  aria-label={t('admin.backup_schedule_weekdays_label')}
+                >
+                  {WEEKDAYS.map((d) => {
+                    const on = config.weekdays?.includes(d) === true
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        className={'fx-bkp-day' + (on ? ' fx-bkp-day-on' : '')}
+                        aria-pressed={on}
+                        aria-label={t(`admin.backup_weekday_${d}`)}
+                        onClick={() => toggleWeekday(d)}
+                      >
+                        {t(`admin.backup_weekday_short_${d}`)}
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="fx-bkp-daysets">
+                  <button
+                    type="button"
+                    className="fx-bkp-dayset"
+                    onClick={() => onChange({ ...config, weekdays: [...WEEKDAYS] })}
+                  >
+                    {t('admin.backup_schedule_weekdays_all')}
+                  </button>
+                  <button
+                    type="button"
+                    className="fx-bkp-dayset"
+                    onClick={() =>
+                      onChange({ ...config, weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'] })
+                    }
+                  >
+                    {t('admin.backup_schedule_weekdays_workweek')}
+                  </button>
+                </div>
+                {/* A floor of one is what "pick some days" already means; only
+                    a job that demands more than that has something to say. */}
+                {weekdayFloor > 1 && (
+                  <span className="fx-bkp-control-hint">
+                    {t('admin.backup_schedule_weekdays_floor_hint', { min: weekdayFloor })}
+                  </span>
+                )}
+              </div>
+
+              <div className="fx-bkp-control">
+                <span className="fx-bkp-control-label">
+                  {t('admin.backup_schedule_times_label')}
+                </span>
+                <div className="fx-bkp-times">
+                  {times.map((v, i) => (
+                    <span className="fx-bkp-time" key={i}>
+                      <input
+                        className="fx-bkp-input"
+                        type="time"
+                        value={v}
+                        aria-label={t('admin.backup_schedule_time_n_label', { n: i + 1 })}
+                        onChange={(e) =>
+                          onChange({
+                            ...config,
+                            times: times.map((old, j) => (j === i ? e.target.value : old)),
+                          })
+                        }
+                      />
+                      {times.length > bounds.times_min && (
+                        <button
+                          type="button"
+                          className="fx-bkp-time-remove"
+                          aria-label={t('admin.backup_schedule_remove_time_n', { n: i + 1 })}
+                          onClick={() =>
+                            onChange({ ...config, times: times.filter((_, j) => j !== i) })
+                          }
+                        >
+                          {t('admin.backup_schedule_remove_time')}
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                  {times.length < bounds.times_max && (
+                    <button
+                      type="button"
+                      className="fx-bkp-add"
+                      onClick={() => onChange({ ...config, times: [...times, '12:00'] })}
+                    >
+                      <span aria-hidden="true">+</span> {t('admin.backup_schedule_add_time')}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="fx-bkp-control">
+              <span className="fx-bkp-control-label">
+                {t('admin.backup_schedule_interval_label')}
+              </span>
+              <div className="fx-bkp-interval">
+                <span className="fx-bkp-interval-field">
+                  <input
+                    className="fx-bkp-input"
+                    type="number"
+                    min={bounds.interval_min}
+                    max={bounds.interval_max}
+                    value={config.interval_min ?? 0}
+                    aria-label={t('admin.backup_schedule_interval_label')}
+                    /* Coerced here: the server's bounds check runs on a NUMBER,
+                       and a string would be refused by the JSON schema, not by
+                       the floor. */
+                    onChange={(e) =>
+                      onChange({ ...config, interval_min: Number(e.target.value) })
+                    }
+                  />
+                  <span className="fx-bkp-unit">min</span>
+                </span>
+                <span className="fx-bkp-presets">
+                  {INTERVAL_PRESETS.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      className={'fx-bkp-preset' + (config.interval_min === p ? ' fx-bkp-preset-on' : '')}
+                      aria-pressed={config.interval_min === p}
+                      onClick={() => onChange({ ...config, interval_min: p })}
+                    >
+                      {formatMinutes(p)}
+                    </button>
+                  ))}
+                </span>
+              </div>
+              <span className="fx-bkp-control-hint">
+                {t('admin.backup_schedule_interval_hint', {
+                  min: bounds.interval_min,
+                  max: bounds.interval_max,
+                })}
+              </span>
+            </div>
+          )}
+        </>
       )}
     </>
   )
