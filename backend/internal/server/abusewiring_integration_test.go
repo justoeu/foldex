@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"foldex/internal/config"
 	"foldex/internal/links"
 	"foldex/internal/server"
@@ -34,7 +36,7 @@ import (
 // on effects observable from OUTSIDE: a 429 on the wire, and the number of rows
 // in click_log.
 
-func abuseWiringServer(t *testing.T) (*httptest.Server, *links.Repository) {
+func abuseWiringServer(t *testing.T) (*httptest.Server, *links.Repository, *pgxpool.Pool) {
 	t.Helper()
 	pool := testdb.Shared(t)
 	require.NoError(t, testdb.Reset(context.Background(), pool))
@@ -55,13 +57,21 @@ func abuseWiringServer(t *testing.T) (*httptest.Server, *links.Repository) {
 	})
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
-	return srv, links.NewRepository(pool)
+	return srv, links.NewRepository(pool), pool
 }
 
-func countClicks(t *testing.T, kind string, id int64) int {
+// countClicks takes the pool rather than fetching one, and that is not style.
+//
+// testdb.Shared(t) RESETS the database on every call — it hands back a clean
+// shared container, not just a handle. A helper that reached for it here would
+// truncate click_log and then count the rows it had just destroyed, reporting 0
+// for a feature that works. That is exactly what the first version of this file
+// did, and the three failures read as "coalescing suppressed everything"
+// rather than "the assertion erased its own evidence".
+func countClicks(t *testing.T, pool *pgxpool.Pool, kind string, id int64) int {
 	t.Helper()
 	var n int
-	require.NoError(t, testdb.Shared(t).QueryRow(context.Background(),
+	require.NoError(t, pool.QueryRow(context.Background(),
 		`SELECT count(*) FROM click_log WHERE entity_kind = $1 AND entity_id = $2`,
 		kind, id).Scan(&n))
 	return n
@@ -72,7 +82,7 @@ func countClicks(t *testing.T, kind string, id int64) int {
 // which means every request is attributed to the bootstrap OWNER — so this also
 // proves, end to end, that the owner is not exempt.
 func TestWiring_APIQuotaRefusesAWriteLoopThroughTheRealRouter(t *testing.T) {
-	srv, _ := abuseWiringServer(t)
+	srv, _, _ := abuseWiringServer(t)
 
 	// The compiled default is 120 writes per minute. Walk past it.
 	var last *http.Response
@@ -105,7 +115,7 @@ func TestWiring_APIQuotaRefusesAWriteLoopThroughTheRealRouter(t *testing.T) {
 // never produce a 429. This is the false-positive side of the same wiring: a
 // quota that counted reads would throttle someone browsing their own library.
 func TestWiring_APIQuotaNeverRefusesAReadLoop(t *testing.T) {
-	srv, _ := abuseWiringServer(t)
+	srv, _, _ := abuseWiringServer(t)
 
 	for i := 0; i < 300; i++ {
 		res, err := http.Get(srv.URL + "/api/tags")
@@ -119,9 +129,9 @@ func TestWiring_APIQuotaNeverRefusesAReadLoop(t *testing.T) {
 // the one the REPOSITORY makes — the two halves only meet through clickctx, so
 // this is the only test that proves the pair works.
 func TestWiring_RepeatClicksFromOneVisitorWriteOneRowAndStillRedirect(t *testing.T) {
-	srv, repo := abuseWiringServer(t)
+	srv, repo, pool := abuseWiringServer(t)
 	ctx := context.Background()
-	uid := testdb.SeedUser(t, testdb.Shared(t), "vis@test.local", "editor")
+	uid := testdb.SeedUser(t, pool, "vis@test.local", "editor")
 	link, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://example.com/go", Title: "Go Target"})
 	require.NoError(t, err)
 
@@ -137,14 +147,13 @@ func TestWiring_RepeatClicksFromOneVisitorWriteOneRowAndStillRedirect(t *testing
 			"coalescing must suppress the WRITE, never the destination")
 	}
 
-	assert.Equal(t, 1, countClicks(t, "link", link.ID),
+	assert.Equal(t, 1, countClicks(t, pool, "link", link.ID),
 		"eight hits from one visitor inside the default 10s window must be one row")
 }
 
 // The note surface is the same amplifier, and it renders every time.
 func TestWiring_RepeatNoteViewsFromOneVisitorWriteOneRowAndStillRender(t *testing.T) {
-	srv, _ := abuseWiringServer(t)
-	pool := testdb.Shared(t)
+	srv, _, pool := abuseWiringServer(t)
 	uid := testdb.SeedUser(t, pool, "note@test.local", "editor")
 
 	var id int64
@@ -163,16 +172,16 @@ func TestWiring_RepeatNoteViewsFromOneVisitorWriteOneRowAndStillRender(t *testin
 		require.Contains(t, string(body), "<p>b</p>", "the body must be rendered every time")
 	}
 
-	assert.Equal(t, 1, countClicks(t, "note", id))
+	assert.Equal(t, 1, countClicks(t, pool, "note", id))
 }
 
 // A repository called outside the public HTTP path has no gate in its context,
 // and must record every click — the import path, the workers and every existing
 // test depend on that default.
 func TestWiring_AResolveWithNoGateStillRecordsEveryClick(t *testing.T) {
-	_, repo := abuseWiringServer(t)
+	_, repo, pool := abuseWiringServer(t)
 	ctx := context.Background()
-	uid := testdb.SeedUser(t, testdb.Shared(t), "direct@test.local", "editor")
+	uid := testdb.SeedUser(t, pool, "direct@test.local", "editor")
 	link, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://example.com/direct", Title: "Direct"})
 	require.NoError(t, err)
 
@@ -180,6 +189,6 @@ func TestWiring_AResolveWithNoGateStillRecordsEveryClick(t *testing.T) {
 		_, err := repo.ClickAndResolve(ctx, link.ID)
 		require.NoError(t, err)
 	}
-	assert.Equal(t, 3, countClicks(t, "link", link.ID),
+	assert.Equal(t, 3, countClicks(t, pool, "link", link.ID),
 		"an absent gate must mean record, not suppress")
 }
