@@ -792,13 +792,14 @@
     "password_hide": "Hide password",
     "remember_email": "Remember my e-mail",
     "identifier": "E-mail or username",
-    "remember_identifier": "Remember me on this device"
+    "remember_identifier": "Remember me on this device",
+    "brand_tagline": "personal · self-hosted"
   },
   "auth_login": {
-    "kicker": "welcome back",
-    "title": "Sign in to Foldex",
-    "subtitle": "Your bookmarks, notes and folders — right where you left them.",
-    "submit": "Sign in",
+    "kicker": "access your library",
+    "title": "Welcome back",
+    "subtitle": "Sign in to reach your links, notes and folders.",
+    "submit": "Enter my library",
     "forgot": "Forgot your password?"
   },
   "auth_setup": {
@@ -819,11 +820,20 @@
     "retry": "Try again"
   },
   "auth_marketing": {
-    "kicker": "self-hosted",
-    "title": "Everything you save, in one place you control.",
-    "point_organize": "Nestable folders, tags and full-text search across links and notes.",
-    "point_monitor": "Watch any page for changes and get a push notification.",
-    "point_private": "Your data stays on your server. Every account sees only its own."
+    "badge": "in orbit",
+    "title": "Your links and notes, finally in one place.",
+    "lead": "Colour-coded folders, smart tags and instant search. Foldex keeps what you find and hands it back exactly when you need it.",
+    "point_search": "Instant search by title, URL or tag",
+    "point_organize": "Colour-coded folders and notes side by side",
+    "point_private": "Self-hosted: your data on your infrastructure",
+    "preview_search": "search by title, URL, tag…",
+    "preview_new": "+ New link",
+    "preview_links_one": "{{count}} link",
+    "preview_links_other": "{{count}} links",
+    "preview_folder_design": "Design",
+    "preview_folder_reading": "Reading",
+    "preview_folder_tools": "Tools",
+    "preview_folder_ai": "AI"
   },
   "auth_errors": {
     "invalid_credentials": "Invalid e-mail or password.",
@@ -1183,8 +1193,8 @@
     "policy_unavailable": "The policy could not be loaded.",
     "policy_read_only": "Only the owner can change these rules.",
     "policy_invalid": "Some value is outside the allowed range.",
-    "policy_group_credentials": "credentials",
-    "policy_group_google": "sign in with Google",
+    "policy_group_credentials": "Credentials",
+    "policy_group_google": "Sign in with Google",
     "policy_password_min": "Minimum password length",
     "policy_otp_ttl": "Code lifetime (minutes)",
     "policy_otp_cooldown": "Resend cooldown (seconds)",
@@ -1345,7 +1355,12 @@
     "backup_weekday_wed": "Wednesday",
     "backup_weekday_thu": "Thursday",
     "backup_weekday_fri": "Friday",
-    "backup_weekday_sat": "Saturday"
+    "backup_weekday_sat": "Saturday",
+    "policy_group_admin": "Administrator sign-in",
+    "policy_group_google_desc": "Who may enter through Google, and what a brand-new account becomes.",
+    "policy_password_min_hint": "Characters. The floor is 8; bcrypt caps at 72 bytes.",
+    "policy_otp_ttl_hint": "How long a mailed code stays valid.",
+    "policy_otp_cooldown_hint": "Wait before a code can be re-sent."
   },
   "profile": {
     "name_label": "Display name",

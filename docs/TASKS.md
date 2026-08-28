@@ -79,6 +79,7 @@ Lista faseada de tasks `T1..T30`. Cada fase desbloqueia a próxima — segue em 
 
 | Data       | Task   | Hash | Notas |
 |------------|--------|------|-------|
+| 2026-08-26 | **Remodelagem da tela "Política de senha e acesso"** | — | De pilha única de campos para três seções lado-a-lado (o-que-isto-governa à esquerda, controles à direita, separadores) — Credenciais, Acesso de administradores, Entrar com Google — com hints por campo, switch `fx-toggle-row` no auto-provision e divulgação progressiva (o papel das contas novas só aparece com o provisionamento LIGADO: um default para contas que não podem nascer é um controle que não responde nada). O sweep pagou de novo em remodel "só visual": (1) o switch estilizado dentro de `fieldset disabled` ficava com cara 100% ativa na visão read-only do admin — o checkbox nativo o UA acinzenta, a casca CSS não (fix: `:has(input:disabled)` espelha o estado); (2) o checkbox real do toggle é `opacity:0` e focável, e NÃO havia anel de foco — navegação por Tab pousava no switch sem indicação nenhuma, padrão herdado do LinkDialog que o remodel ia propagar (fix na classe compartilhada: `:has(input:focus-visible)`, conserta as duas telas). Teste read-only agora asserta `toBeDisabled()` no mecanismo (fieldset), não só a ausência do botão Salvar. |
 | 2026-08-26 | **PR6 do ADR-44: agenda de backup configurável na UI, com pisos que a configuração não alcança** | — | Migração 000042 (`backup_schedule` linha-por-job + `backup_agent_state` heartbeat) + `backupagent/schedule.go` (JobConfig, `ValidateJobConfig` com os pisos, `Timing` multi-âncora com MaxGap/Due/PreviousSlot, ScheduleStore) + agent.go reescrito para agenda VIVA (snapshot de Timings sob RWMutex, canal de mudança fechado a cada swap, scheduleLoop unificado âncora+intervalo, sync ~30s que recarrega agenda e grava heartbeat) + permissão `instance.backup_schedule` TRAVADA owner-only + `GET/PUT/DELETE /api/admin/backup/schedule[/{job}]` com auditoria própria + editor na banda (badges env/banco, motivo traduzido para job incapaz, confirmação quando a mudança REDUZ proteção via `reducesProtection` puro). Princípio = INV-173: env decide QUAIS jobs existem (credencial/identidade), o banco decide QUANDO rodam, e os pisos (dump 1..6×/dia nunca off; drill sempre semanal; mirror 15..1440min nunca off; user_zip é o único deslígável) valem nos DOIS lados — o PUT e o load do agente chamam a MESMA função, então linha escrita por SQL direto degrada à baseline. Sweep+triple review acharam e o fix pagou na hora: (1) race real de ordem — `timing()` lido antes de `changeCh()` deixava um swap entre as duas leituras fechar um canal que ninguém segurava; job desabilitado→habilitado dormia até a PRÓXIMA edição (fix: inverter a ordem; teste `TestScheduleLoop_WakesAJobEnabledAfterStart`); (2) mirror-off ficava FORA do heartbeat e a UI oferecia editores para linha que nenhum processo leria — a lição do mailer dentro da feature que existe para evitá-la (fix: agentState força os 4 jobs); (3) banner de agente parado comparava `Date.now()` contra `seen_at` cacheado sem `refetchInterval` — qualquer rerender após 2min no ar acusava agente morto vivo (fix: refetch 60s); (4) `intervalStart` — edições frequentes de agenda reiniciavam a contagem de um intervalo que nunca disparou. Registrados como aceitos: âncoras do dump mais próximas que a duração do job são absorvidas pelo run em andamento (serial por job — N horários é teto, não promessa); advisory lock único entre jobs (skip-don't-wait, ADR-43); `updated_by_email` visível a quem tem `instance.backup`. |
 | 2026-08-26 | **Compose do v2.16.0 não parseava — e nenhum guard olhava** | — | O serviço `backup` shipou com o bloco `RUSTFS_*` duplicado (merge dos agentes paralelos do PR3/PR4): chave YAML duplicada é PARSE ERROR no compose v2, então o `docker-compose.yml` inteiro recusava carregar — `make up` quebrado para todo operador, com CI verde, porque todo guard que lê esse arquivo o lê com grep/awk (que atravessa chave duplicada sem ver) e `docker compose config` não rodava em lugar nenhum. Fix: dedupe (blocos byte-idênticos, nenhuma env perdida — conferido contra o que `backupagent/config.go` lê) + guard novo `scripts/test-compose-config.sh` no ci.yml: `docker compose config --no-interpolate --quiet` sobre `docker-compose*.yml` (o `--no-interpolate` preserva os gates `${VAR:?}` do services.yml para usuários reais sem disparar num runner sem .env; detecção de chave duplicada acontece ANTES da interpolação), com self-test que prova que o guard sabe falhar e red-before confirmado contra o HEAD quebrado. Lição: a stack de produção local rodava o binário antigo — um parse error no compose só aparece no PRÓXIMO `docker compose` de alguém, que foi exatamente como apareceu (ao habilitar o profile `backup`). |
 | 2026-08-26 | **ADR-43 completo: os 5 PRs do backup operacional em produção** | — | PR1 dump (#86, v2.12.0) → PR2 drill (#87, v2.13.0) → PR3 mirror (#88, v2.14.0) → PR4 user_zip (#89, v2.15.0) → PR5 status (#90, v2.16.0). Migrações 000040/000041 aplicadas e VERIFICADAS no Postgres real (genfin, db foldex; RequiredSchemaVersion 41). PR2/3/4 implementados por três agentes em worktrees paralelas e integrados em série com sweep §9 completo cada; blockers de sweep dignos de nota: contagens fora do snapshot do pg_dump (fix: pg_export_snapshot + --snapshot), mídia espelhada em CLARO (fix: age por objeto), traversal via sufixo de restore (fix: gramática no linkObjectID + skip no espelho), origem com storage.New criando bucket de typo (fix: NewReadOnly). Follow-ups abertos: alerta e-mail via outbox (SDD §9.3), helper spool→age→sha→upload (3 variantes), catch-up de intervalo sem seam de jitter, screenshot da banda nos READMEs, validação da UI em navegador real. |
@@ -503,3 +504,51 @@ POST, i18n en/pt/es), mock server em sincronia, dashboard Grafana completo em
 - **Divergência assumida do SDD §15:** o alerta por e-mail via outbox (§9.3) ficou fora
   do PR5 — pendência registrada no SDD e na ADR-43. Screenshot da banda para o README
   também pendente.
+
+### Tela de acesso reescrita no padrão do mockup (2026-08-26)
+
+`AuthShell` deixou de ser um card centrado de 980px e virou um layout de página
+inteira: coluna do formulário à esquerda (marca com tagline, kicker, título grande,
+campos, um único botão primário) e painel de produto à direita — badge, chamada,
+três pontos com ícone e uma maquete do app com pastas coloridas. O painel continua
+`aria-hidden` e some abaixo de 1024px. O link de recuperação saiu de baixo do botão
+e foi para a linha do rótulo de **Senha** (`AuthField` ganhou a prop `action`), e o
+rodapé passou a mostrar versão + data de build — a tela de acesso é a única
+superfície alcançável sem conta, e "qual versão é esta instância?" é a pergunta de
+suporte mais comum numa instalação self-hosted.
+
+O Google e o "criar conta" NÃO entraram: o botão do Google segue renderizando
+apenas quando a instância habilita OAuth (comportamento anterior, intocado), e não
+existe auto-registro no produto — a entrada de uma conta nova é convite ou
+`Add user`.
+
+- **"Manter conectado" do mockup NÃO foi copiado**: o que existe é *Lembrar meu
+  e-mail* (INV-152), que guarda o endereço e nada mais. Um rótulo prometendo sessão
+  persistente sobre um mecanismo que só preenche um campo seria a UI mentindo sobre
+  o que faz.
+- **O spinner de boot quebrou e nenhum guard viu**: `AuthGate` renderiza
+  `.fx-auth .fx-auth-boot` — ele É o overlay, sem painel dentro — e centralizava
+  herdando o `display:flex` de `.fx-auth`. Com a tela full-bleed o overlay virou
+  `display:block` e o spinner foi parar no canto superior esquerdo. Classe existia,
+  regra existia, testes verdes, `test-css-orphan-classes` verde: só apareceu ao
+  clicar em "Esqueceu a senha?" no browser. `.fx-auth-boot` agora centraliza a si
+  mesmo.
+- **A pill do badge estica quando o pai vira coluna flex** — `align-self:
+  flex-start` é o que a mantém do tamanho do texto. Mesma família do defeito acima:
+  invisível fora do browser.
+- Copy nova em `auth_login`/`auth_marketing` nos três locales; os testes que
+  fixavam "sign in to foldex"/"sign in" passaram a fixar a copy nova.
+- **O sweep achou o par que a UI teria mostrado divergindo**: o rodapé novo
+  imprimia `BUILD_DATE` cru enquanto a sidebar já formatava `DD/MM/YYYY` na
+  cópia local dela. `formatBuildDate` subiu para `version.ts` e as duas telas
+  passaram a chamar a mesma função — a mesma build não pode ter duas datas.
+  Os três ícones do painel viraram `<Icon d={I.…}>` do registro compartilhado,
+  em vez de SVGs à mão com atributos de stroke divergentes entre si.
+- **`AuthPromo` é `memo`**: sem props e imutável, mas filho de um shell que
+  re-renderiza a cada tecla do formulário — dezesseis `t()` e três SVGs
+  diffados por caractere digitado, num subtree que é decoração.
+- **O guard do spinner existe agora**: `scripts/test-css-auth-overlay.mjs`
+  exige que `.fx-auth-boot` declare o próprio `display`/`align-items`/
+  `justify-content` em vez de herdar o layout do overlay. Provado vermelho
+  contra o defeito real e verde de volta. Não é um motor de layout — cobre
+  exatamente a dependência que quebrou, e diz isso na mensagem.

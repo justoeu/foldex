@@ -83,4 +83,33 @@ if (!/:is\(\.fx-auth, \.fx-authfield\) \.fx-auth-otp-cell/.test(css)) {
   process.exit(1)
 }
 
+/*
+ * The boot state (`className="fx-auth fx-auth-boot"` in AuthGate) IS the
+ * overlay — there is no panel inside it — and it used to centre its spinner by
+ * inheriting `display: flex` from `.fx-auth`. When the signed-out screens went
+ * full-bleed, `.fx-auth` became `display: block` and the spinner silently moved
+ * to the top-left corner: class present, rule present, every unit test and the
+ * orphan-class guard green, because `vitest.config.ts` sets `css: false` and
+ * jsdom computes no layout. Only a person looking at the screen saw it.
+ *
+ * So `.fx-auth-boot` must declare its OWN layout rather than borrow the
+ * overlay's. This is a textual check of that one dependency, not a layout
+ * engine — it is worth exactly what it says and no more.
+ */
+const bootRule = /\.fx-auth-boot\s*\{([^}]*)\}/.exec(css.replace(/\/\*[\s\S]*?\*\//g, ''))
+if (!bootRule) {
+  console.error('FAIL: .fx-auth-boot has no rule at all.')
+  process.exit(1)
+}
+for (const prop of ['display', 'align-items', 'justify-content']) {
+  if (!new RegExp(`(^|;)\\s*${prop}\\s*:`).test(bootRule[1])) {
+    console.error(`FAIL: .fx-auth-boot does not declare its own \`${prop}\`.`)
+    console.error('It wears .fx-auth itself, so it must centre the spinner on its')
+    console.error('own — inheriting the overlay\'s layout is what put the boot')
+    console.error('spinner in the top-left corner the day .fx-auth stopped being')
+    console.error('a flex container.')
+    process.exit(1)
+  }
+}
+
 console.log('ok: the .fx-auth overlay stays on the signed-out screens')

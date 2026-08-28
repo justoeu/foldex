@@ -792,13 +792,14 @@
     "password_hide": "Ocultar contraseña",
     "remember_email": "Recordar mi correo",
     "identifier": "Correo o nombre de usuario",
-    "remember_identifier": "Recordarme en este dispositivo"
+    "remember_identifier": "Recordarme en este dispositivo",
+    "brand_tagline": "personal · self-hosted"
   },
   "auth_login": {
-    "kicker": "bienvenido de nuevo",
-    "title": "Entrar en Foldex",
-    "subtitle": "Tus enlaces, notas y carpetas — justo donde los dejaste.",
-    "submit": "Entrar",
+    "kicker": "acceso a tu base",
+    "title": "Bienvenido de nuevo",
+    "subtitle": "Entra para acceder a tus enlaces, notas y carpetas.",
+    "submit": "Entrar en mi base",
     "forgot": "¿Olvidaste tu contraseña?"
   },
   "auth_setup": {
@@ -819,11 +820,20 @@
     "retry": "Intentar de nuevo"
   },
   "auth_marketing": {
-    "kicker": "self-hosted",
-    "title": "Todo lo que guardas, en un lugar que controlas tú.",
-    "point_organize": "Carpetas anidadas, etiquetas y búsqueda de texto completo en enlaces y notas.",
-    "point_monitor": "Vigila cualquier página y recibe una notificación cuando cambie.",
-    "point_private": "Tus datos se quedan en tu servidor. Cada cuenta ve solo lo suyo."
+    "badge": "en órbita",
+    "title": "Tus enlaces y notas, por fin en un solo lugar.",
+    "lead": "Carpetas de colores, etiquetas inteligentes y búsqueda instantánea. Foldex guarda lo que encuentras y te lo devuelve justo cuando lo necesitas.",
+    "point_search": "Búsqueda instantánea por título, URL o etiqueta",
+    "point_organize": "Carpetas de colores y notas en el mismo lugar",
+    "point_private": "Self-hosted: tus datos en tu infraestructura",
+    "preview_search": "busca por título, URL, etiqueta…",
+    "preview_new": "+ Nuevo enlace",
+    "preview_links_one": "{{count}} enlace",
+    "preview_links_other": "{{count}} enlaces",
+    "preview_folder_design": "Diseño",
+    "preview_folder_reading": "Lecturas",
+    "preview_folder_tools": "Herramientas",
+    "preview_folder_ai": "IA"
   },
   "auth_errors": {
     "invalid_credentials": "Correo o contraseña inválidos.",
@@ -1183,8 +1193,8 @@
     "policy_unavailable": "No se pudo cargar la política.",
     "policy_read_only": "Solo el propietario puede cambiar estas reglas.",
     "policy_invalid": "Algún valor está fuera del rango permitido.",
-    "policy_group_credentials": "credenciales",
-    "policy_group_google": "entrar con Google",
+    "policy_group_credentials": "Credenciales",
+    "policy_group_google": "Iniciar sesión con Google",
     "policy_password_min": "Longitud mínima de la contraseña",
     "policy_otp_ttl": "Validez del código (minutos)",
     "policy_otp_cooldown": "Espera para reenviar (segundos)",
@@ -1345,7 +1355,12 @@
     "backup_weekday_wed": "Miércoles",
     "backup_weekday_thu": "Jueves",
     "backup_weekday_fri": "Viernes",
-    "backup_weekday_sat": "Sábado"
+    "backup_weekday_sat": "Sábado",
+    "policy_group_admin": "Acceso de administradores",
+    "policy_group_google_desc": "Quién puede entrar por Google, y en qué se convierte una cuenta recién creada.",
+    "policy_password_min_hint": "Caracteres. El piso es 8; bcrypt limita a 72 bytes.",
+    "policy_otp_ttl_hint": "Cuánto tiempo vale un código enviado por correo.",
+    "policy_otp_cooldown_hint": "Espera antes de poder reenviar un código."
   },
   "profile": {
     "name_label": "Nombre visible",

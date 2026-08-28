@@ -6,7 +6,7 @@ import { TagManagerDialog } from './TagManagerDialog'
 import { useTags } from '../api/tags'
 import { useRecentChanges } from '../api/links'
 import { relativeTime } from '../lib/time'
-import { VERSION, BUILD_DATE } from '../version'
+import { VERSION, BUILD_DATE, formatBuildDate } from '../version'
 
 type Props = {
   selected: number[]
@@ -323,14 +323,6 @@ function SectionHeader({
       <span>{label}</span>
     </button>
   )
-}
-
-function formatBuildDate(iso: string): string {
-  // ISO `YYYY-MM-DD` → pt-BR `DD/MM/YYYY`. Parsed with explicit Y/M/D rather
-  // than `new Date(iso)` to avoid the UTC-midnight-shifts-a-day-back trap.
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
-  if (!m) return iso
-  return `${m[3]}/${m[2]}/${m[1]}`
 }
 
 function TagRow({

@@ -496,6 +496,14 @@ everywhere, send recovery, transfer ownership, delete — each show an icon and 
 nothing on the row reads as decoration. Each carries a screen-reader label naming both the
 action and the account, and the destructive ones keep their confirmation dialog.
 
+**The sign-in screen.** Two panes: the form on the left — brand, heading, e-mail or
+username, password with **Forgot your password?** on its own label row, *Remember my
+e-mail*, and one primary button — and a product panel on the right with a short pitch and a
+mock of the app. The right pane is decoration: it is hidden from screen readers and dropped
+entirely below 1024px, where the form centres on its own. Under the form sits the instance's
+version and build date, since the sign-in screen is the one surface reachable without an
+account. Language flags stay in the top-left corner on every signed-out screen.
+
 **On the sign-in form.** Every password field in foldex — sign-in, invitation, reset,
 account change, folder unlock, master recovery — carries a reveal toggle; it always
 starts hidden, resets to hidden whenever the screen remounts, and suppresses spell-check

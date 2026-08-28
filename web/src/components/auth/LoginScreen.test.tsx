@@ -26,7 +26,7 @@ describe('LoginScreen', () => {
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'a good password')
-    await user.click(screen.getByRole('button', { name: /sign in/i }))
+    await user.click(screen.getByRole('button', { name: /enter my library/i }))
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith('/api/auth/login', {
@@ -51,7 +51,7 @@ describe('LoginScreen', () => {
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'ghost@example.com')
     await user.type(screen.getByLabelText(/^password$/i), 'wrong')
-    await user.click(screen.getByRole('button', { name: /sign in/i }))
+    await user.click(screen.getByRole('button', { name: /enter my library/i }))
 
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/invalid e-mail or password/i)
@@ -65,7 +65,7 @@ describe('LoginScreen', () => {
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'x')
-    await user.click(screen.getByRole('button', { name: /sign in/i }))
+    await user.click(screen.getByRole('button', { name: /enter my library/i }))
 
     // Distinct is correct here: the lockout is keyed on an address the caller
     // already typed, so it reveals nothing they did not supply, and "wrong
@@ -80,7 +80,7 @@ describe('LoginScreen', () => {
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'x')
-    await user.click(screen.getByRole('button', { name: /sign in/i }))
+    await user.click(screen.getByRole('button', { name: /enter my library/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not reach the server/i)
   })
@@ -95,13 +95,36 @@ describe('LoginScreen', () => {
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'pw')
-    const button = screen.getByRole('button', { name: /sign in/i })
+    const button = screen.getByRole('button', { name: /enter my library/i })
     await user.click(button)
 
     // A double-submit burns two attempts from the 5-per-e-mail budget for one
     // impatient click.
     await waitFor(() => expect(button).toBeDisabled())
     release({ data: { status: 'anonymous', features } })
+  })
+
+  /*
+   * The recovery link belongs beside the field it acts on. Orphaned under the
+   * submit button it read as a second action of equal weight; on the password
+   * label row it reads as what it is — the way out when that one field is the
+   * problem.
+   */
+  it('offers the password recovery link on the password label row', async () => {
+    const user = userEvent.setup()
+    const onForgot = vi.fn()
+    renderWithProviders(<LoginScreen onForgotPassword={onForgot} />, { session: null })
+
+    const link = screen.getByRole('button', { name: /forgot your password/i })
+    expect(link.closest('.fx-auth-label-row')).not.toBeNull()
+
+    await user.click(link)
+    expect(onForgot).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves the recovery link out when the screen has nowhere to send it', () => {
+    renderWithProviders(<LoginScreen />, { session: null })
+    expect(screen.queryByRole('button', { name: /forgot your password/i })).not.toBeInTheDocument()
   })
 
   it('uses the right autocomplete hints so password managers work', () => {
@@ -173,78 +196,78 @@ describe('SetupScreen', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/at least 8 characters/i)
   })
+})
 
-  // Remembering the address is a convenience; the password must never be part
-  // of it, and unticking must ERASE rather than merely stop writing.
-  describe('remember my e-mail', () => {
-    // test/storage.ts re-creates the store per FILE, not per test, so a key one
-    // case writes is still there for the next — which is exactly what this
-    // group asserts about.
-    beforeEach(() => localStorage.removeItem('foldex.auth.email'))
+// Remembering the address is a convenience; the password must never be part
+// of it, and unticking must ERASE rather than merely stop writing.
+describe('remember my e-mail', () => {
+  // test/storage.ts re-creates the store per FILE, not per test, so a key one
+  // case writes is still there for the next — which is exactly what this
+  // group asserts about.
+  beforeEach(() => localStorage.removeItem('foldex.auth.email'))
 
-    it('pre-fills the address and keeps the box ticked on a later visit', () => {
-      localStorage.setItem('foldex.auth.email', 'saved@foldex.test')
-      renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
+  it('pre-fills the address and keeps the box ticked on a later visit', () => {
+    localStorage.setItem('foldex.auth.email', 'saved@foldex.test')
+    renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
 
-      expect(screen.getByRole('textbox', { name: /e-mail/i })).toHaveValue('saved@foldex.test')
-      expect(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i })).toBeChecked()
+    expect(screen.getByRole('textbox', { name: /e-mail/i })).toHaveValue('saved@foldex.test')
+    expect(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i })).toBeChecked()
+  })
+
+  it('stores the address only after the credentials are accepted', async () => {
+    const user = userEvent.setup()
+    const post = vi.spyOn(http, 'post').mockRejectedValue({
+      response: { status: 401, data: { error: { code: 'invalid_credentials', message: 'no' } } },
     })
+    renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
 
-    it('stores the address only after the credentials are accepted', async () => {
-      const user = userEvent.setup()
-      const post = vi.spyOn(http, 'post').mockRejectedValue({
-        response: { status: 401, data: { error: { code: 'invalid_credentials', message: 'no' } } },
-      })
-      renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'typo@foldex.test')
+    await user.type(screen.getByLabelText(/^password$/i), 'wrong')
+    // Ticked on purpose: with the box unticked the address is absent whether
+    // the write happens before or after the await, so the test could not fail
+    // for the reason it names.
+    await user.click(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i }))
+    await user.click(screen.getByRole('button', { name: /enter my library|entrar/i }))
 
-      await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'typo@foldex.test')
-      await user.type(screen.getByLabelText(/^password$/i), 'wrong')
-      // Ticked on purpose: with the box unticked the address is absent whether
-      // the write happens before or after the await, so the test could not fail
-      // for the reason it names.
-      await user.click(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i }))
-      await user.click(screen.getByRole('button', { name: /sign in|entrar|iniciar/i }))
+    await waitFor(() => expect(post).toHaveBeenCalled())
+    expect(localStorage.getItem('foldex.auth.email')).toBeNull()
+  })
 
-      await waitFor(() => expect(post).toHaveBeenCalled())
-      expect(localStorage.getItem('foldex.auth.email')).toBeNull()
-    })
+  it('erases the stored address the moment the box is unticked', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('foldex.auth.email', 'saved@foldex.test')
+    renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
 
-    it('erases the stored address the moment the box is unticked', async () => {
-      const user = userEvent.setup()
-      localStorage.setItem('foldex.auth.email', 'saved@foldex.test')
-      renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
+    await user.click(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i }))
 
-      await user.click(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i }))
+    // Erased at the untick, with no sign-in at all: someone who unticks and
+    // walks away must not leave the address exactly where they just asked for
+    // it not to be.
+    expect(localStorage.getItem('foldex.auth.email')).toBeNull()
+  })
 
-      // Erased at the untick, with no sign-in at all: someone who unticks and
-      // walks away must not leave the address exactly where they just asked for
-      // it not to be.
-      expect(localStorage.getItem('foldex.auth.email')).toBeNull()
-    })
+  it('never stores the password', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(http, 'post').mockResolvedValue({
+      data: { status: 'authenticated', user: testAdminUser, csrf_token: 'c', features },
+    } as never)
+    renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
 
-    it('never stores the password', async () => {
-      const user = userEvent.setup()
-      vi.spyOn(http, 'post').mockResolvedValue({
-        data: { status: 'authenticated', user: testAdminUser, csrf_token: 'c', features },
-      } as never)
-      renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
+    await user.type(screen.getByLabelText(/^password$/i), 'hunter2')
+    await user.click(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i }))
+    await user.click(screen.getByRole('button', { name: /enter my library|entrar/i }))
 
-      await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
-      await user.type(screen.getByLabelText(/^password$/i), 'hunter2')
-      await user.click(screen.getByRole('checkbox', { name: /remember|lembrar|recordar/i }))
-      await user.click(screen.getByRole('button', { name: /sign in|entrar|iniciar/i }))
+    await waitFor(() => expect(localStorage.getItem('foldex.auth.email')).toBe('a@b.c'))
 
-      await waitFor(() => expect(localStorage.getItem('foldex.auth.email')).toBe('a@b.c'))
-
-      const dump = Array.from({ length: localStorage.length }, (_, i) => {
-        const k = localStorage.key(i) as string
-        return `${k}=${localStorage.getItem(k)}`
-      }).join('\n')
-      // `JSON.stringify(localStorage)` was tried and is VACUOUS against
-      // test/storage.ts — the entries live in a closure, so it returns
-      // `{"length":N}` and passes even when the password was written.
-      expect(dump).toContain('foldex.auth.email=a@b.c') // proves the dump is real
-      expect(dump).not.toContain('hunter2')
-    })
+    const dump = Array.from({ length: localStorage.length }, (_, i) => {
+      const k = localStorage.key(i) as string
+      return `${k}=${localStorage.getItem(k)}`
+    }).join('\n')
+    // `JSON.stringify(localStorage)` was tried and is VACUOUS against
+    // test/storage.ts — the entries live in a closure, so it returns
+    // `{"length":N}` and passes even when the password was written.
+    expect(dump).toContain('foldex.auth.email=a@b.c') // proves the dump is real
+    expect(dump).not.toContain('hunter2')
   })
 })

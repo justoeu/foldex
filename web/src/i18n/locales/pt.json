@@ -792,13 +792,14 @@
     "password_hide": "Ocultar senha",
     "remember_email": "Lembrar meu e-mail",
     "identifier": "E-mail ou nome de usuário",
-    "remember_identifier": "Lembrar de mim neste dispositivo"
+    "remember_identifier": "Lembrar de mim neste dispositivo",
+    "brand_tagline": "pessoal · self-hosted"
   },
   "auth_login": {
-    "kicker": "bem-vindo de volta",
-    "title": "Entrar no Foldex",
-    "subtitle": "Seus links, notas e pastas — exatamente onde você parou.",
-    "submit": "Entrar",
+    "kicker": "acesso à sua base",
+    "title": "Bem-vindo de volta",
+    "subtitle": "Entre para acessar seus links, notas e pastas organizadas.",
+    "submit": "Entrar na minha base",
     "forgot": "Esqueceu a senha?"
   },
   "auth_setup": {
@@ -819,11 +820,20 @@
     "retry": "Tentar de novo"
   },
   "auth_marketing": {
-    "kicker": "self-hosted",
-    "title": "Tudo o que você salva, em um lugar que é seu.",
-    "point_organize": "Pastas aninhadas, tags e busca em texto completo em links e notas.",
-    "point_monitor": "Monitore qualquer página e receba uma notificação quando ela mudar.",
-    "point_private": "Seus dados ficam no seu servidor. Cada conta vê apenas o que é dela."
+    "badge": "em órbita",
+    "title": "Seus links e notas, finalmente em um só lugar.",
+    "lead": "Pastas coloridas, tags inteligentes e busca instantânea. O Foldex guarda o que você encontra e devolve exatamente quando precisa.",
+    "point_search": "Busca instantânea por título, URL ou tag",
+    "point_organize": "Pastas coloridas e notas no mesmo lugar",
+    "point_private": "Self-hosted: seus dados na sua infraestrutura",
+    "preview_search": "busque por título, URL, tag…",
+    "preview_new": "+ Novo link",
+    "preview_links_one": "{{count}} link",
+    "preview_links_other": "{{count}} links",
+    "preview_folder_design": "Design",
+    "preview_folder_reading": "Leituras",
+    "preview_folder_tools": "Ferramentas",
+    "preview_folder_ai": "IA"
   },
   "auth_errors": {
     "invalid_credentials": "E-mail ou senha inválidos.",
@@ -1183,8 +1193,8 @@
     "policy_unavailable": "Não foi possível carregar a política.",
     "policy_read_only": "Só o proprietário pode alterar estas regras.",
     "policy_invalid": "Algum valor está fora da faixa permitida.",
-    "policy_group_credentials": "credenciais",
-    "policy_group_google": "entrar com Google",
+    "policy_group_credentials": "Credenciais",
+    "policy_group_google": "Entrar com Google",
     "policy_password_min": "Tamanho mínimo da senha",
     "policy_otp_ttl": "Validade do código (minutos)",
     "policy_otp_cooldown": "Espera para reenviar (segundos)",
@@ -1345,7 +1355,12 @@
     "backup_weekday_wed": "Quarta-feira",
     "backup_weekday_thu": "Quinta-feira",
     "backup_weekday_fri": "Sexta-feira",
-    "backup_weekday_sat": "Sábado"
+    "backup_weekday_sat": "Sábado",
+    "policy_group_admin": "Acesso de administradores",
+    "policy_group_google_desc": "Quem pode entrar pelo Google, e o que uma conta recém-criada se torna.",
+    "policy_password_min_hint": "Caracteres. O piso é 8; o bcrypt limita a 72 bytes.",
+    "policy_otp_ttl_hint": "Por quanto tempo um código enviado por e-mail vale.",
+    "policy_otp_cooldown_hint": "Espera até poder reenviar um código."
   },
   "profile": {
     "name_label": "Nome de exibição",

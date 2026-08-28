@@ -106,7 +106,17 @@ export function LoginScreen({ onForgotPassword }: { onForgotPassword?: () => voi
           />
         </AuthField>
 
-        <AuthField id="fx-login-password" label={t('auth.password')}>
+        <AuthField
+          id="fx-login-password"
+          label={t('auth.password')}
+          action={
+            onForgotPassword ? (
+              <button type="button" className="fx-auth-link" onClick={onForgotPassword}>
+                {t('auth_login.forgot')}
+              </button>
+            ) : undefined
+          }
+        >
           <PasswordInput
             id="fx-login-password"
             className="fx-auth-input"
@@ -135,14 +145,6 @@ export function LoginScreen({ onForgotPassword }: { onForgotPassword?: () => voi
         </label>
 
         <AuthSubmit busy={busy}>{t('auth_login.submit')}</AuthSubmit>
-
-        {onForgotPassword && (
-          <div className="fx-auth-alt">
-            <button type="button" className="fx-auth-link" onClick={onForgotPassword}>
-              {t('auth_login.forgot')}
-            </button>
-          </div>
-        )}
       </form>
     </AuthShell>
   )
