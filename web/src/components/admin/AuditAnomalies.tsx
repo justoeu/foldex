@@ -5,7 +5,8 @@ import {
   anomaliesQueryKey, fetchAnomalies,
   type Anomaly, type AnomalyWindow,
 } from '../../api/admin'
-import { anomalySeverityClass, blockReasonKey, sortAnomalies, spanMinutes } from './abuseFormat'
+import { blockReasonKey, sortAnomalies, spanMinutes } from './abuseFormat'
+import { severityClass } from './auditFormat'
 import { blockable } from './auditFormat'
 import { useBlockControls } from './AuditSignals'
 
@@ -142,7 +143,7 @@ function AnomalyRow({
     <li className="fx-aud-row fx-anom-row">
       <div className="fx-aud-row-main">
         <span className="fx-anom-head">
-          <span className={anomalySeverityClass(anomaly.severity)}>
+          <span className={severityClass(anomaly.severity)}>
             {t(`admin.anomaly_kind_${anomaly.kind}`)}
           </span>
           <span className="fx-aud-row-ip">{anomaly.ip}</span>

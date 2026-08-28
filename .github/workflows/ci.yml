@@ -131,6 +131,9 @@ jobs:
         # `.fx-shell button`/`input` make "unstyled" mean invisible. It has
         # shipped six times; nothing else in the tree can see it.
         run: node scripts/test-css-orphan-classes.mjs
+
+      - name: Permission vocabulary parity (Go ↔ TypeScript)
+        run: node scripts/test-permission-parity.mjs
       - name: Auth overlay containment guard
         # `.fx-auth` is `position: fixed; inset: 0` and opaque. Worn inside a
         # card it paints over it and the page flickers without settling — which

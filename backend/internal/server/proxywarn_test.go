@@ -110,3 +110,43 @@ func TestBootSanitisesTheReportedEntry(t *testing.T) {
 		t.Fatalf("expected exactly one log record, got %d: %s", lines, out)
 	}
 }
+
+// The boot line that answers "whom does this instance believe?".
+//
+// It exists because the ABSENCE of an answer cost real investigation time: a
+// trail row reading trusted=false was diagnosed as a missing default that had
+// in fact been configured for a year, and the design document carried the wrong
+// conclusion until someone read the running container's environment. The
+// warning above only fires on an EMPTY list, so the common case — a value is
+// set, is it the right one? — was unanswerable from the logs.
+func TestBoot_NamesTheTrustedProxiesItActuallyParsed(t *testing.T) {
+	out := bootLog(t, config.Config{
+		BindAddr:        "0.0.0.0:9089",
+		TrustedProxyIPs: "192.168.0.0/16, 10.1.2.3",
+		CORSOrigins:     []string{"*"},
+	})
+
+	if !strings.Contains(out, "192.168.0.0/16") {
+		t.Errorf("the boot log must name the networks it parsed; got:\n%s", out)
+	}
+	// As PARSED, not as written: a bare address becomes a /32, and an operator
+	// comparing the log to their .env has to see what the code made of it.
+	if !strings.Contains(out, "10.1.2.3/32") {
+		t.Errorf("a bare address must be reported as the /32 it became; got:\n%s", out)
+	}
+	if strings.Contains(out, "TRUSTED_PROXY_IPS is empty") {
+		t.Error("the empty-list warning must not fire when the list is not empty")
+	}
+}
+
+// Nothing to say when nothing is trusted: the warning below already covers the
+// empty case, and printing "networks=" would be a second line saying less.
+func TestBoot_SaysNothingAboutNetworksWhenThereAreNone(t *testing.T) {
+	out := bootLog(t, config.Config{
+		BindAddr:    "127.0.0.1:9089",
+		CORSOrigins: []string{"*"},
+	})
+	if strings.Contains(out, "trusted reverse proxies") {
+		t.Errorf("an empty set must not produce the inventory line; got:\n%s", out)
+	}
+}

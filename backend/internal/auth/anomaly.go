@@ -49,8 +49,19 @@ const (
 // question — is this worth acting on right now — and "info" has no answer to
 // it: a row that is not worth looking at should not be on the list at all.
 const (
-	AnomalySeverityCritical = "critical"
-	AnomalySeverityWarn     = "warn"
+	// Os MESMOS valores do vocabulário da trilha (SeverityWarning /
+	// SeverityCritical), e não um par próprio.
+	//
+	// A primeira versão deste arquivo dizia "warn" onde a trilha diz "warning",
+	// e a UI ganhou uma função só para traduzir um pelo outro. Dois
+	// vocabulários quase iguais no mesmo pacote não são um detalhe de
+	// nomenclatura: o painel de anomalias e a linha do tempo aparecem na MESMA
+	// tela, lado a lado, e um badge amarelo teria de ser produzido por dois
+	// caminhos diferentes que ninguém garante que combinam. Um deles esquecer a
+	// tradução é um badge sem estilo — invisível para o TypeScript, para o jsdom
+	// e para os testes com `css:false` (INV-159).
+	AnomalySeverityCritical = SeverityCritical
+	AnomalySeverityWarn     = SeverityWarning
 )
 
 // maxAnomalyRows bounds what one response carries.

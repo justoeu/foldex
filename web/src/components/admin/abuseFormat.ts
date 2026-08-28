@@ -1,5 +1,4 @@
 import type { AbuseBound, AbuseObserved, AbusePolicy, Anomaly, AnomalyKind } from '../../api/admin'
-import { severityClass } from './auditFormat'
 
 /** One knob, named exactly as the server names it in `bounds` and in a 400. */
 export type AbuseField = keyof AbusePolicy
@@ -117,18 +116,6 @@ export function restoreBandDefaults(
   }, policy)
 }
 
-/**
- * The badge class for an anomaly's severity.
- *
- * The anomaly contract says `warn`; the trail's stylesheet says `warning`, and
- * `.fx-aud-sev-warn` does not exist. Passing the value straight through would
- * ask for a class nothing declares and render an unstyled badge — the exact
- * defect INV-159 exists for, and one no type error catches because both are
- * strings.
- */
-export function anomalySeverityClass(severity: 'critical' | 'warn'): string {
-  return severityClass(severity === 'warn' ? 'warning' : 'critical')
-}
 
 /**
  * Severity first, most recent first inside a severity.

@@ -152,6 +152,27 @@ func New(d Deps) http.Handler {
 			"the proxy it names is NOT trusted, so client addresses behind it "+
 			"will be recorded as the proxy's own", "entry", logsafe.String(entry))
 	}
+	// Say out loud who this instance believes, at INFO, on every boot.
+	//
+	// The warning below only fires when the list is EMPTY, so the far more
+	// common question — "we DO have a value; is it the right one?" — had no
+	// answer in the logs at all. Answering it meant reading docker-compose.yml,
+	// then .env, then the container's environment, and an investigation in this
+	// repo lost real time to exactly that: a trail line reading
+	// `trusted=false` was diagnosed as a missing default that had in fact been
+	// configured for a year, and the SDD carried the wrong conclusion until
+	// someone checked the running process.
+	//
+	// The set is printed as parsed, not as configured, so a CIDR that widened
+	// under parsing is visible as what it became.
+	if len(trustedNets) > 0 {
+		nets := make([]string, 0, len(trustedNets))
+		for _, n := range trustedNets {
+			nets = append(nets, n.String())
+		}
+		d.Logger.Info("trusted reverse proxies: X-Forwarded-For is believed ONLY from these",
+			"networks", strings.Join(nets, ","), "count", len(trustedNets))
+	}
 	// Empty on a network-reachable bind almost always means a proxy in front
 	// that nobody told us about — and then EVERY request is attributed to that
 	// proxy, collapsing the per-IP login bucket into one global budget where
@@ -360,6 +381,20 @@ func New(d Deps) http.Handler {
 					}
 					ar.Use(authgate.RejectAPIToken)
 					d.AdminHandler.Mount(ar)
+
+					// ADR-47 — os limites de abuso e o painel de anomalias.
+					// Construído aqui pela razão do backupstatus: precisa só do
+					// pool, do hook de auditoria e dos grants.
+					//
+					// O cache é o MESMO objeto que a cota e o login leem
+					// (d.AbusePolicy), e isso é o que faz o Invalidate() do PUT
+					// significar alguma coisa. Um cache próprio aqui compilaria,
+					// passaria nos testes, e deixaria a tela salvando um valor
+					// que só entraria em vigor depois do TTL — o tipo de defeito
+					// que se manifesta como "salvei e não mudou nada".
+					auth.NewAbuseHandler(auth.NewRepository(d.Pool),
+						abusepolicy.NewRepository(d.Pool), d.AbusePolicy,
+						d.Logger, d.AdminHandler.AuditPolicyChange, grants).Mount(ar)
 					if d.PolicyHandler != nil {
 						ar.Route("/policy", d.PolicyHandler.Mount)
 					}

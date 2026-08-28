@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  ABUSE_BANDS, anomalySeverityClass, blockReasonKey, boundOf, observedFor,
+  ABUSE_BANDS, blockReasonKey, boundOf, observedFor,
   restoreBandDefaults, sortAnomalies, spanMinutes,
 } from './abuseFormat'
 import type { AbuseBound, AbuseObserved, AbusePolicy, Anomaly } from '../../api/admin'
@@ -34,7 +34,7 @@ function anomaly(over: Partial<Anomaly> = {}): Anomaly {
     kind: 'spray', ip: '10.0.0.1', ip_trusted: false,
     distinct_accounts: 14, failures: 22, throttles: 0,
     first_seen: '2026-08-28T10:00:00Z', last_seen: '2026-08-28T10:09:00Z',
-    blocked: false, severity: 'warn', ...over,
+    blocked: false, severity: 'warning', ...over,
   }
 }
 
@@ -101,20 +101,10 @@ describe('ABUSE_BANDS', () => {
   })
 })
 
-describe('anomalySeverityClass', () => {
-  // The anomaly contract says 'warn'; the trail's stylesheet says 'warning'.
-  // Mapping is the whole job — passing 'warn' straight through would ask for a
-  // class that does not exist and render an unstyled badge.
-  it('maps the anomaly vocabulary onto the trail stylesheet', () => {
-    expect(anomalySeverityClass('warn')).toBe('fx-aud-sev fx-aud-sev-warning')
-    expect(anomalySeverityClass('critical')).toBe('fx-aud-sev fx-aud-sev-critical')
-  })
-})
-
 describe('sortAnomalies', () => {
   it('puts critical first and the most recent first within a severity', () => {
     const out = sortAnomalies([
-      anomaly({ ip: 'a', severity: 'warn' }),
+      anomaly({ ip: 'a', severity: 'warning' }),
       anomaly({ ip: 'b', severity: 'critical', last_seen: '2026-08-28T09:00:00Z' }),
       anomaly({ ip: 'c', severity: 'critical', last_seen: '2026-08-28T11:00:00Z' }),
     ])
@@ -122,7 +112,7 @@ describe('sortAnomalies', () => {
   })
 
   it('does not mutate the array it was handed', () => {
-    const input = [anomaly({ ip: 'a', severity: 'warn' }), anomaly({ ip: 'b', severity: 'critical' })]
+    const input = [anomaly({ ip: 'a', severity: 'warning' }), anomaly({ ip: 'b', severity: 'critical' })]
     sortAnomalies(input)
     expect(input.map((a) => a.ip)).toEqual(['a', 'b'])
   })

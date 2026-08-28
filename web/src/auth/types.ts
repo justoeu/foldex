@@ -41,6 +41,8 @@ export type Permission =
   | 'instance.transfer'
   | 'instance.backup'
   | 'instance.backup_schedule'
+  | 'instance.ip_block'
+  | 'instance.rate_limits'
 
 /** Mirrors authctx.Role.IsAdmin — who may reach /api/admin at all. */
 /**

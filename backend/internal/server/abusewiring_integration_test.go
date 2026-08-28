@@ -18,6 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/auth"
 	"foldex/internal/config"
 	"foldex/internal/links"
 	"foldex/internal/server"
@@ -42,10 +43,16 @@ func abuseWiringServer(t *testing.T) (*httptest.Server, *links.Repository, *pgxp
 	require.NoError(t, testdb.Reset(context.Background(), pool))
 	_ = testdb.SeedUser(t, pool, "owner@test.local", "owner")
 
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router := server.New(server.Deps{
 		Pool:   pool,
 		Worker: nopWorker{},
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: logger,
+		// The administration group is gated on this being present, and the
+		// abuse surface hangs inside it because it writes through the same
+		// audit hook every other policy change uses.
+		AdminHandler: auth.NewAdminHandler(auth.NewRepository(pool), nil, logger,
+			"http://localhost:9088", nil, nil),
 		// AbusePolicy deliberately nil: an unwired policy must still enforce
 		// the compiled defaults, and that is what an instance whose owner never
 		// opened the screen actually runs.
@@ -191,4 +198,75 @@ func TestWiring_AResolveWithNoGateStillRecordsEveryClick(t *testing.T) {
 	}
 	assert.Equal(t, 3, countClicks(t, pool, "link", link.ID),
 		"an absent gate must mean record, not suppress")
+}
+
+// The administration surface is mounted too, and it is worth its own test for
+// the reason the two above exist: the handler has its own suite in
+// internal/auth, and every one of those tests would stay green with the
+// `Mount(ar)` line deleted from router.go. A settings screen that 404s is not a
+// subtle failure — but it is one that no unit test in the owning package can
+// see, and this repo has shipped exactly that shape before (INV-177).
+//
+// AUTH_ENABLED is off here, so the caller resolves to the bootstrap OWNER, who
+// holds the locked instance.rate_limits permission. That makes this also the
+// proof that the write route is reachable by the seat that is supposed to reach
+// it — a permission wired to a name nobody holds refuses everyone, which reads
+// as "the screen is broken" rather than "the gate works".
+func TestWiring_TheAbusePolicySurfaceIsMountedUnderAdmin(t *testing.T) {
+	srv, _, _ := abuseWiringServer(t)
+
+	res, err := http.Get(srv.URL + "/api/admin/abuse-policy")
+	require.NoError(t, err)
+	defer func() { _ = res.Body.Close() }()
+	require.Equal(t, http.StatusOK, res.StatusCode,
+		"GET /api/admin/abuse-policy must be mounted on the real router")
+
+	var payload struct {
+		Policy   map[string]any           `json:"policy"`
+		Bounds   []struct{ Field string } `json:"bounds"`
+		CanWrite bool                     `json:"can_write"`
+	}
+	require.NoError(t, json.NewDecoder(res.Body).Decode(&payload))
+
+	// Every knob the payload carries must advertise its range, or the screen
+	// grows a second copy of these numbers in TypeScript — the copy that goes
+	// stale. This is the same contract abusepolicy's own unit test states; it is
+	// repeated here because only the wired handler proves the two travel
+	// together over the wire.
+	described := map[string]bool{}
+	for _, b := range payload.Bounds {
+		described[b.Field] = true
+	}
+	for field := range payload.Policy {
+		assert.True(t, described[field], "knob %q shipped with no bound", field)
+	}
+	assert.True(t, payload.CanWrite,
+		"the bootstrap owner holds instance.rate_limits; can_write:false here would disable the form for the only seat that may use it")
+}
+
+// The anomaly panel is a separate route with a separate permission, so a mount
+// test for one says nothing about the other.
+func TestWiring_TheAnomalyPanelIsMountedUnderAdmin(t *testing.T) {
+	srv, _, _ := abuseWiringServer(t)
+
+	res, err := http.Get(srv.URL + "/api/admin/anomalies?window=24h")
+	require.NoError(t, err)
+	defer func() { _ = res.Body.Close() }()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+
+	var payload struct {
+		Window     string           `json:"window"`
+		Thresholds map[string]int   `json:"thresholds"`
+		Anomalies  []map[string]any `json:"anomalies"`
+	}
+	require.NoError(t, json.NewDecoder(res.Body).Decode(&payload))
+	assert.Equal(t, "24h", payload.Window)
+	assert.NotEmpty(t, payload.Thresholds,
+		"the panel renders the thresholds it judged by; an empty set means the screen cannot say what it measured")
+
+	// A quiet instance is the healthy case, and it must answer with an empty
+	// LIST rather than null: the screen renders its own empty state from an
+	// array, and null would send it down the error path on a working instance.
+	assert.NotNil(t, payload.Anomalies)
+	assert.Empty(t, payload.Anomalies)
 }

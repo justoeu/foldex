@@ -375,7 +375,7 @@ export type AnomalyMock = {
   first_seen: string
   last_seen: string
   blocked: boolean
-  severity: 'critical' | 'warn'
+  severity: 'critical' | 'warning'
 }
 
 /**

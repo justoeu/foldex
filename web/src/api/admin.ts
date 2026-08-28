@@ -691,8 +691,8 @@ export type Anomaly = {
   first_seen: string
   last_seen: string
   blocked: boolean
-  /** 'warn' here, NOT the trail's 'warning' — two vocabularies, one mapping. */
-  severity: 'critical' | 'warn'
+  /** The trail's vocabulary, not a second one — see internal/auth/anomaly.go. */
+  severity: AuditSeverity
 }
 
 export type AnomalyResponse = {

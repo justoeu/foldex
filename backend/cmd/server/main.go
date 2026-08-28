@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"foldex/internal/abusepolicy"
 	"foldex/internal/auth"
 	"foldex/internal/backup"
 	"foldex/internal/changecheck"
@@ -340,6 +341,14 @@ func main() {
 		logger.Info("google oauth enabled", "redirect_uri", cfg.GoogleRedirectURL())
 	}
 
+	// ONE cache, shared by everything that enforces a limit: the login buckets,
+	// the authenticated quota, the click coalescer, and the handler that edits
+	// it. Separate caches would each honour the policy on their own TTL, so the
+	// same instance would be running two different rulebooks for up to thirty
+	// seconds after every save — and the PUT's Invalidate would only reach one.
+	abuseCache := abusepolicy.NewCache(
+		abusepolicy.NewRepository(pool), abusepolicy.DefaultTTL, logger)
+
 	authHandler := auth.NewHandler(auth.HandlerConfig{
 		Repo: authRepo, MW: authMW, Mailer: mail, Cookies: cookieOpts,
 		TTL: authTTL, Logger: logger, BaseURL: cfg.AuthPublicURL,
@@ -347,6 +356,7 @@ func main() {
 		Require2FAForAdmins: cfg.AuthRequire2FAForAdmins,
 		Google:              google,
 		Policy:              policyRepo,
+		Abuse:               abuseCache,
 	})
 	adminHandler := auth.NewAdminHandler(authRepo, mail, logger, cfg.AuthPublicURL, policyRepo, grantsRepo)
 	// The audit hook is passed as a function so internal/policy never imports
@@ -394,6 +404,7 @@ func main() {
 		PolicyHandler:  policyHandler,
 		AuthMiddleware: authMW,
 		FolderHandler:  folderHandler,
+		AbusePolicy:    abuseCache,
 	}
 	if storageClient != nil {
 		deps.Screenshotter = screenshotPool

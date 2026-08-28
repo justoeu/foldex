@@ -60,8 +60,8 @@ describe('AuditAnomalies — what each row says', () => {
 
   it('translates each kind rather than printing the token', async () => {
     state.anomalies = [
-      anomaly({ kind: 'hammer', ip: '10.1.1.1', severity: 'warn' }),
-      anomaly({ kind: 'throttle', ip: '10.1.1.2', severity: 'warn', throttles: 9 }),
+      anomaly({ kind: 'hammer', ip: '10.1.1.1', severity: 'warning' }),
+      anomaly({ kind: 'throttle', ip: '10.1.1.2', severity: 'warning', throttles: 9 }),
     ]
     renderWithProviders(<AuditAnomalies canBlock onInspect={() => {}} />)
 
@@ -91,7 +91,7 @@ describe('AuditAnomalies — what each row says', () => {
 
   it('orders the critical signals above the merely notable ones', async () => {
     state.anomalies = [
-      anomaly({ ip: '10.0.0.9', severity: 'warn', kind: 'throttle' }),
+      anomaly({ ip: '10.0.0.9', severity: 'warning', kind: 'throttle' }),
       anomaly({ ip: '10.0.0.1', severity: 'critical' }),
     ]
     renderWithProviders(<AuditAnomalies canBlock onInspect={() => {}} />)
