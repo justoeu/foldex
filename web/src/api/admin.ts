@@ -637,7 +637,8 @@ export type AbuseBound = { field: string; min: number; max: number; default: num
  * measurement of zero, and the screen says so instead of printing the digit.
  */
 export type AbuseObserved = {
-  window_days: number
+  /** `days`, matching the Go json tag — see internal/auth/anomaly.go. */
+  days: number
   max_distinct_accounts_per_ip: number
   max_failures_per_account: number
   peak_writes_per_minute: number

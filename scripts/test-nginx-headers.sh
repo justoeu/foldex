@@ -251,7 +251,25 @@ health_codes=$(burst_codes /healthz 60)
 [[ $(grep -c '^429$' <<<"$health_codes" || true) -eq 0 ]] \
   || note "/healthz was rate limited — a throttled health check turns load into a restart loop"
 
-# 5. Every declared zone is used, and every used zone is declared. nginx -t
+# 5. Every path the tight zone NAMES is actually throttled by it.
+#
+#    The alternation is parsed out of the config and each branch is burst
+#    individually, because the failure this catches is a path that LOOKS
+#    covered: a typo, a route renamed on the Go side, or a branch that a later
+#    regex or a more specific location quietly wins over. The comment above the
+#    block claimed "the seven unauthenticated paths that guess something" while
+#    two credential/mail-spending routes sat in the loose zone — a count in
+#    prose is not a guard.
+paths=$(grep -oE 'location ~ \^/api/auth/\([^)]+\)' "$ROOT/web/nginx.conf" \
+        | sed -E 's|.*\(||; s|\)$||' | tr '|' ' ')
+[[ -n "$paths" ]] || note "could not parse the fx_login alternation out of nginx.conf"
+for p in $paths; do
+  codes=$(burst_codes "/api/auth/$p" 40)
+  [[ $(grep -c '^429$' <<<"$codes" || true) -gt 0 ]] \
+    || note "/api/auth/$p is named in the tight zone and was never throttled — it is not actually covered"
+done
+
+# 6. Every declared zone is used, and every used zone is declared. nginx -t
 #    catches a reference to a missing zone; nothing catches a zone that is
 #    declared, costs 10 MiB of shared memory, and limits nothing.
 declared=$(grep -oE 'zone=[a-z_]+:' "$ROOT/web/nginx.main.conf" | sed 's/zone=//;s/://' | sort -u)

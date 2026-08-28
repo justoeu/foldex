@@ -58,6 +58,23 @@ describe('AuditAnomalies — what each row says', () => {
     expect(within(row).getByText(/14 distinct accounts · 22 failures · 9 min/i)).toBeInTheDocument()
   })
 
+  // A throttle row is produced by a DIFFERENT query, which counts lockouts and
+  // populates neither distinct_accounts nor failures. Rendering the sweep's
+  // evidence line for it printed "0 distinct accounts · 0 failures" beside the
+  // strongest signal the panel has — a row that reads as nothing happening.
+  it('gives a throttle row its own evidence, not the sweep line reading zero', async () => {
+    state.anomalies = [
+      anomaly({ kind: 'throttle', ip: '10.2.2.2', severity: 'critical', throttles: 9,
+        distinct_accounts: 0, failures: 0 }),
+    ]
+    renderWithProviders(<AuditAnomalies canBlock onInspect={() => {}} />)
+
+    const row = await screen.findByRole('listitem')
+    expect(within(row).getByText(/9 rate lockouts/i)).toBeInTheDocument()
+    expect(within(row).queryByText(/0 distinct accounts/i)).not.toBeInTheDocument()
+    expect(within(row).queryByText(/0 failures/i)).not.toBeInTheDocument()
+  })
+
   it('translates each kind rather than printing the token', async () => {
     state.anomalies = [
       anomaly({ kind: 'hammer', ip: '10.1.1.1', severity: 'warning' }),

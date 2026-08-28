@@ -247,6 +247,11 @@ func TestClickCoalesce_TheMapNeverExceedsItsCeiling(t *testing.T) {
 	for i := 0; i < 10_000; i++ {
 		cc.allow("link", int64(i), cc.visitor(fmt.Sprintf("198.51.100.%d", i%256)), 10*time.Second)
 	}
+
+	// A ceiling assertion alone passes at ZERO — deleting the insert entirely
+	// would satisfy it, and a limiter that stores nothing limits nothing. The
+	// floor is what makes the ceiling mean something.
+	assert.Positive(t, cc.len(), "the map is empty — nothing was ever recorded, so the ceiling proves nothing")
 	assert.LessOrEqual(t, cc.len(), 64, "the dedup map grew past its ceiling")
 }
 

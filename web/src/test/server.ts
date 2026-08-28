@@ -359,7 +359,7 @@ export type AbusePolicyMock = {
 }
 
 export type AbuseObservedMock = {
-  window_days: number
+  days: number
   max_distinct_accounts_per_ip: number
   max_failures_per_account: number
   peak_writes_per_minute: number
@@ -406,7 +406,7 @@ function abuseDefaults(): AbusePolicyMock {
 
 /** An instance that has seen nothing yet. Zero is "no data", not a measurement. */
 const ABUSE_OBSERVED_NONE: AbuseObservedMock = {
-  window_days: 30,
+  days: 30,
   max_distinct_accounts_per_ip: 0,
   max_failures_per_account: 0,
   peak_writes_per_minute: 0,

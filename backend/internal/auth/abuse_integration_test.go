@@ -82,7 +82,20 @@ func TestAbusePolicyAPI_GetCarriesThePolicyBoundsAndObservations(t *testing.T) {
 		"the nullable knob has to advertise its range like every other one")
 
 	assert.Equal(t, true, body["can_write"], "the owner holds instance.rate_limits")
-	assert.Contains(t, body, "observed")
+	// The VALUE, not just the key. The client mirror of this payload once
+	// declared `window_days` while the server sent `days`, and every test on
+	// both sides passed: the TypeScript fixture had been written from the
+	// TypeScript type, so the two copies agreed with each other and with
+	// nothing real. The screen rendered "highest observed in  days". An
+	// assertion on existence cannot see that; an assertion on the name and the
+	// number can.
+	observed, ok := body["observed"].(map[string]any)
+	require.True(t, ok, "the payload must carry an observed object, got %#v", body["observed"])
+	assert.Equal(t, float64(auth.AbuseObservedDays), observed["days"],
+		"the window is reported under `days`, and the screen labels itself from it")
+	for _, k := range []string{"max_distinct_accounts_per_ip", "max_failures_per_account", "peak_writes_per_minute"} {
+		assert.Contains(t, observed, k, "the screen renders a measurement per knob")
+	}
 }
 
 func TestAbusePolicyAPI_PutStoresAndTakesEffectImmediately(t *testing.T) {
@@ -355,23 +368,6 @@ func anomalies(t *testing.T, c *client, window string) []any {
 	}
 	require.NoError(t, json.Unmarshal(res.Body.Bytes(), &body))
 	return body.Anomalies
-}
-
-// The migration is verified against the DATABASE, not against its exit code.
-// CLAUDE.md §7 records what trusting the exit code cost once: a migration file
-// and a running schema disagreed, nothing reported it, and the disagreement
-// surfaced later as a query against an object that existed in the repo and not
-// in the instance.
-func TestMigration_AuditIPIndexExists(t *testing.T) {
-	h := newHarnessWithGrants(t)
-	var def string
-	require.NoError(t, h.pool.QueryRow(context.Background(),
-		`SELECT indexdef FROM pg_indexes
-		 WHERE tablename = 'audit_log' AND indexname = 'audit_log_ip_time_idx'`).Scan(&def))
-	assert.Contains(t, def, "ip")
-	assert.Contains(t, def, "created_at DESC")
-	assert.Contains(t, def, "WHERE (ip IS NOT NULL)",
-		"the partial predicate is what keeps the index off the bulk of the table")
 }
 
 // A degraded database must answer 500, never a plausible-looking policy.

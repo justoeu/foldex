@@ -52,7 +52,7 @@ describe('AbuseSection — the limits come from the payload', () => {
           },
           bounds: [{ field: 'login_failures_per_account', min: 4, max: 9, default: 6 }],
           observed: {
-            window_days: 30, max_distinct_accounts_per_ip: 0,
+            days: 30, max_distinct_accounts_per_ip: 0,
             max_failures_per_account: 0, peak_writes_per_minute: 0,
           },
           can_write: true,
@@ -86,7 +86,7 @@ describe('AbuseSection — a degraded payload', () => {
         },
         bounds: [],
         observed: {
-          window_days: 30, max_distinct_accounts_per_ip: 0,
+          days: 30, max_distinct_accounts_per_ip: 0,
           max_failures_per_account: 0, peak_writes_per_minute: 0,
         },
         can_write: true,

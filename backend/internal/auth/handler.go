@@ -528,7 +528,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// itself an oracle, since the attacker learns which addresses can be
 	// locked out.
 	if !found || verr != nil || user.Status != StatusActive {
-		h.recordLoginFailure(ipKey, emailKey, bucket)
+		lockedBucket := h.recordLoginFailure(ipKey, emailKey, NormalizeEmail(in.who()))
 		// One audit write for all three causes, on the one branch they share.
 		// Writing different entries — or writing only for a known address —
 		// would rebuild the enumeration oracle this branch exists to close, both
@@ -546,6 +546,25 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 			TargetEmail: truncateTo(NormalizeEmail(in.who()), maxAuditEmail),
 		}.WithRequest(r)); err != nil {
 			h.logger.Error("audit login failure", "err", err)
+		}
+		// The lockout itself is a separate, rarer event, and the anomaly panel
+		// reads THIS action to answer "which origins are already being
+		// throttled?" (ADR-47). Recorded only at the transition — the attempt
+		// that crossed the ceiling — because a row per refused request would
+		// let the attacker choose how many rows to insert, turning the trail
+		// into the amplifier the limiter exists to remove.
+		//
+		// The address travels via WithRequest; the panel groups by it. The
+		// attempted mailbox is recorded for the same reason the failure row
+		// above records it, and truncated for the same reason.
+		if lockedBucket != "" {
+			if err := h.repo.Audit(r.Context(), AuditRecord{
+				Action:      AuditRateLimited,
+				TargetEmail: truncateTo(NormalizeEmail(in.who()), maxAuditEmail),
+				Detail:      lockedBucket,
+			}.WithRequest(r)); err != nil {
+				h.logger.Error("audit login lockout", "err", err)
+			}
 		}
 		httperr.Write(w, errInvalidCredentials())
 		return
@@ -587,13 +606,53 @@ func (h *Handler) configureLoginLimits(ctx context.Context) {
 // address, wrong password and disabled account must remain indistinguishable
 // (INV-041) — including in what they spend. A second call site is how a
 // difference gets in.
-func (h *Handler) recordLoginFailure(ipKey, emailKey, bucket string) {
+//
+// It reports which bucket, if any, this attempt pushed INTO lockout, so the
+// caller can record that transition once. Begin refuses an already-locked key
+// before the handler ever reaches the failure branch, so a non-zero expiry
+// here is the edge and not a repeat.
+func (h *Handler) recordLoginFailure(ipKey, emailKey, submitted string) (lockedBucket string) {
+	// The member is the identifier the caller SUBMITTED, normalized — not the
+	// account it resolves to, which is what the per-account bucket keys on.
+	//
+	// Resolving first would make the set size depend on whether two identifiers
+	// name the same account, and that is an unauthenticated oracle: post
+	// `alice` and `alice@x.com` among ten probes and the origin answers 429 if
+	// they collapsed to one member and 401 if they did not, which tells a
+	// stranger that the username belongs to that mailbox. The only username
+	// probe this instance offers is authenticated on purpose (INV-013), and a
+	// rate limiter must not become a second one.
+	//
+	// The cost of not resolving is that an attacker can spend the origin's own
+	// breadth budget on aliases of a single account — their budget, their
+	// origin, and being throttled for it is the correct outcome.
+	//
 	// Truncated for the reason the audit row is: Login deliberately does not
 	// validate the address, so an unauthenticated caller can submit a 64 KiB
 	// one, and this set keeps up to MaxMembersPerKey members per origin.
-	h.loginByIP.CommitFailFor(ipKey, truncateTo(bucket, maxAuditEmail))
-	h.loginByEmail.CommitFail(emailKey)
+	_, ipUntil := h.loginByIP.CommitFailFor(ipKey, truncateTo(submitted, maxAuditEmail))
+	_, emailUntil := h.loginByEmail.CommitFail(emailKey)
+
+	// Both buckets are charged before either is reported: returning early on
+	// the first lockout would leave the other uncounted, and the two answer
+	// different questions (SDD §4.2). The origin is named first when both trip
+	// on the same attempt, because a sweep is the larger finding.
+	switch {
+	case !ipUntil.IsZero():
+		return lockedBucketOrigin
+	case !emailUntil.IsZero():
+		return lockedBucketAccount
+	}
+	return ""
 }
+
+// The two buckets, named for the audit detail. Not free-form strings at the
+// call site: this value is written into a permanent row that a screen filters
+// on, and a typo would be a category nobody can search for.
+const (
+	lockedBucketOrigin  = "origin"
+	lockedBucketAccount = "account"
+)
 
 // Logout revokes the current session and always answers 204.
 //

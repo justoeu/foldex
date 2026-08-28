@@ -57,5 +57,28 @@ for (const p of tsPerms) {
     bad = true
   }
 }
+// The third link in the same chain. The roles grid renders each permission's
+// description with t('admin.perm_' + p.replaceAll('.', '_')), so a permission
+// with no key shows the raw id as its own explanation — a cell the owner is
+// asked to grant without being told what it does. `instance.rate_limits`
+// shipped exactly like that, one commit after the Go↔TS half was closed.
+const locales = ['en', 'pt', 'es']
+for (const loc of locales) {
+  const raw = readFileSync(`web/src/i18n/locales/${loc}.json`, 'utf8')
+  const messages = JSON.parse(raw)
+  const admin = messages.admin ?? {}
+  for (const p of goPerms) {
+    const key = `perm_${p.replaceAll('.', '_')}`
+    if (typeof admin[key] !== 'string' || admin[key].trim() === '') {
+      console.error(`FAIL: ${loc}.json is missing admin.${key} for permission ${p} —`)
+      console.error('      the roles grid would render the raw id as the description')
+      bad = true
+    }
+  }
+}
+
 if (bad) process.exit(1)
-console.log(`ok: the permission vocabulary matches across Go and TypeScript (${goPerms.size} permissions)`)
+console.log(
+  `ok: the permission vocabulary matches across Go, TypeScript and ${locales.length} locales ` +
+    `(${goPerms.size} permissions)`,
+)

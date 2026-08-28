@@ -317,7 +317,11 @@ func New(d Deps) http.Handler {
 			// below principal resolution, because it keys on the principal;
 			// above everything else, because a request it refuses must cost
 			// nothing further. No role is exempt, the owner included.
-			pr.Use(newAPIQuota(d.AbusePolicy).middleware)
+			// The recorder is what makes an API-quota lockout visible in the
+			// anomaly panel; without it a throttled principal is a 429 in the
+			// access log and nothing in the trail. Nil when no repository is
+			// wired: the quota still enforces, it just says nothing.
+			pr.Use(newAPIQuota(d.AbusePolicy, quotaAuditor(d.AuthRepo, d.Logger)).middleware)
 
 			// Content auditing (ADR-46). Inside the principal group so the
 			// actor is resolved, and above every content route so a route

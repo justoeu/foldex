@@ -115,6 +115,8 @@ func TestParallelAttemptsCannotExceedTheCap(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+	assert.Positive(t, admitted, "no attempt was admitted at all — the cap cannot be under test")
+	assert.Positive(t, admitted, "no attempt was admitted at all — the cap cannot be under test")
 	assert.LessOrEqual(t, admitted, max,
 		"%d of 50 parallel attempts were admitted against a cap of %d", admitted, max)
 }
@@ -308,7 +310,14 @@ func TestSetMode_SweepFreesTheSet(t *testing.T) {
 	assert.Equal(t, 1, distinct, "a swept key starts from an empty set, not from the old one")
 }
 
-func TestSetMode_SuccessAndResetClearTheSet(t *testing.T) {
+// Success and Reset are NOT the same operation for a set key, and the
+// difference is the control.
+//
+// This test asserted that a success cleared the set, "like it clears the scalar
+// count". That symmetry was the bug: it made the breadth control cost one login
+// to reset. Reset is the explicit "forget this key" API used by administration
+// and by tests, and it still clears everything.
+func TestSetMode_SuccessKeepsTheSetAndResetClearsIt(t *testing.T) {
 	t.Parallel()
 	l := attemptlimit.New(10, time.Hour)
 	l.FailFor("ip", "a@example.com")
@@ -316,11 +325,12 @@ func TestSetMode_SuccessAndResetClearTheSet(t *testing.T) {
 
 	l.CommitSuccess("ip")
 	distinct, _ := l.FailFor("ip", "c@example.com")
-	require.Equal(t, 1, distinct, "a success clears the set, like it clears the scalar count")
+	require.Equal(t, 3, distinct,
+		"one successful sign-in is no evidence about the accounts the origin already swept")
 
 	l.Reset("ip")
 	distinct, _ = l.FailFor("ip", "d@example.com")
-	assert.Equal(t, 1, distinct, "Reset clears the set")
+	assert.Equal(t, 1, distinct, "Reset is the explicit forget, and it clears the set")
 }
 
 func TestSetMode_LockoutExpiryClearsTheSet(t *testing.T) {
@@ -448,4 +458,94 @@ func TestConfigure_IsSafeConcurrentlyWithAttempts(t *testing.T) {
 	}
 	wg.Wait()
 	assert.Positive(t, l.Len(), "the key must still exist after the storm")
+}
+
+// A success must NOT hand the origin its breadth budget back.
+//
+// The two modes reset differently because they measure different things. For a
+// scalar key the cap is on CONSECUTIVE failures against one account, so a
+// correct password genuinely ends the streak. For a set key the cap is on how
+// many distinct accounts an origin has failed against, and one successful
+// sign-in says nothing about the other nine it probed.
+//
+// Left as-is, this was a complete bypass of the control and cost one login:
+// fail against nine accounts (ceiling ten, still admitted), sign in to your own,
+// and CommitSuccess deleted the whole entry — members included. Repeat forever.
+// It is the same hole the Release path had, through a different door.
+func TestSetMode_ASuccessDoesNotForgiveTheAccountsAlreadySwept(t *testing.T) {
+	l := attemptlimit.New(4, time.Minute)
+	for _, victim := range []string{"a@x", "b@x", "c@x"} {
+		l.FailFor("origin", victim)
+	}
+
+	l.CommitSuccess("origin")
+
+	// The fourth distinct account must still be the one that trips it.
+	n, until := l.FailFor("origin", "d@x")
+	assert.Equal(t, 4, n, "the sweep so far must survive a successful sign-in from the same origin")
+	assert.False(t, until.IsZero(), "the ceiling must still be reachable after a success")
+}
+
+// The set is a window, not a running total.
+//
+// "Distinct accounts per origin" was implemented as "distinct accounts since the
+// last lockout or sweep", which is a different and much longer period: a busy
+// office keeps its entry alive, so ten different people mistyping once each over
+// an afternoon would accumulate to the ceiling and lock the building out. That
+// is precisely the false positive docs/SDD-ABUSE-DEFENSE.md §8 names as the
+// criterion for reverting the change.
+func TestSetMode_MembersAgeOutOfTheWindow(t *testing.T) {
+	now := time.Now()
+	l := attemptlimit.New(3, 15*time.Minute).WithClock(func() time.Time { return now })
+
+	l.FailFor("origin", "morning-1@x")
+	l.FailFor("origin", "morning-2@x")
+
+	// Two hours later, the morning is not evidence about the afternoon.
+	now = now.Add(2 * time.Hour)
+	n, until := l.FailFor("origin", "afternoon@x")
+	assert.Equal(t, 1, n, "members older than the window must not count toward the ceiling")
+	assert.True(t, until.IsZero(), "one account in the window is not a sweep")
+
+	// Inside the window they do count.
+	l.FailFor("origin", "afternoon-2@x")
+	n, until = l.FailFor("origin", "afternoon-3@x")
+	assert.Equal(t, 3, n)
+	assert.False(t, until.IsZero(), "three distinct accounts inside one window IS a sweep")
+}
+
+// Every path out of Begin releases the slot, and this is the test that says so.
+//
+// CommitSuccess used to delete the entry, which cleared inFlight as a side
+// effect. When it stopped deleting — so a set key would stop forgiving its
+// breadth — the release went with it, and the key drifted one reservation
+// closer to a lockout on every successful sign-in. An existing test caught it;
+// this one names the property so the next change cannot lose it quietly.
+func TestEveryTerminalPathReleasesTheReservation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		close func(l *attemptlimit.Limiter, key string)
+	}{
+		{"CommitSuccess", func(l *attemptlimit.Limiter, k string) { l.CommitSuccess(k) }},
+		{"CommitFail", func(l *attemptlimit.Limiter, k string) { l.CommitFail(k) }},
+		{"CommitFailFor", func(l *attemptlimit.Limiter, k string) { l.CommitFailFor(k, "m") }},
+		{"Release", func(l *attemptlimit.Limiter, k string) { l.Release(k) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := attemptlimit.New(3, time.Hour)
+			// Two rounds, so a leak of one slot per round shows up as a refusal
+			// on the round after the budget is nominally exhausted.
+			for i := range 6 {
+				_, ok := l.Begin("k")
+				require.True(t, ok, "%s leaked a slot: round %d was refused", tc.name, i+1)
+				tc.close(l, "k")
+				if tc.name == "CommitFail" || tc.name == "CommitFailFor" {
+					// Those two legitimately accumulate; clear so the loop
+					// measures the reservation and not the failure count.
+					l.Reset("k")
+				}
+			}
+		})
+	}
 }

@@ -1869,11 +1869,14 @@ negação por lockout.
   não um par próprio. A primeira versão do contrato dizia `warn` e a UI ganhou
   uma função só para traduzir — dois painéis na mesma tela produzindo o mesmo
   badge por caminhos diferentes é a forma exata do INV-159.
-- A migração 000046 acrescenta `audit_log_ip_time_idx` e **não** move
-  `RequiredSchemaVersion`: é só índice, e nenhuma query depende de um índice
-  existir. Fazer o bump recusaria o boot de toda instância ainda não migrada,
-  trocando indisponibilidade real por melhoria de planner — a mesma decisão que
-  a 000038 já documenta.
+- **Não há migração nenhuma**, e isso é um resultado medido. O ADR foi desenhado
+  com uma 000046 criando `audit_log_ip_time_idx` em `(ip, created_at DESC)`;
+  `EXPLAIN ANALYZE` sobre uma trilha de 1,2 M linhas mostrou as SEIS consultas
+  novas escolhendo `audit_log_action_created_idx`, porque todas carregam uma
+  IGUALDADE em `action` ao lado do intervalo em `created_at` — exatamente a
+  forma do índice da 000033, e exatamente o que o comentário da 000044 previu. O
+  índice não usado custava +43 % em INSERT em lote e 18 MB numa tabela de
+  102 MB. Foi removido antes de shipar.
 
 **Consequências.**
 

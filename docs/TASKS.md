@@ -825,3 +825,67 @@ Followups abertos:
   só para `rate_limited`. Traduzir só um seria pior que a lacuna honesta; o conserto é um
   mapa código→i18n central, e é uma mudança própria.
 - **Screenshots do README** das duas telas novas.
+
+### 2026-08-28 (cont.) — o que o sweep de 5 agentes achou, e o que ele custou
+
+Cinco agentes em paralelo sobre o merge das quatro frentes. **Quatro HIGH**, todos
+confirmados por leitura do código antes de qualquer correção, todos corrigidos nesta
+sessão com teste vermelho antes.
+
+1. **`CommitSuccess` apagava o conjunto de largura da origem** (Code Review; ninguém mais
+   viu). Falhe contra nove contas sob um teto de dez, entre na sua própria, repita para
+   sempre — o balde de IP nunca tranca. O controle central do ADR-47 custava **um login**
+   para resetar. Corrigido: sucesso zera a contagem escalar e preserva o conjunto.
+   ↳ Consertar isso introduziu um segundo bug em três minutos: ao parar de apagar a
+   entrada, o `CommitSuccess` parou junto de liberar o `inFlight`, e a chave andava uma
+   reserva mais perto de um lockout a cada login bem-sucedido. **Um teste existente pegou.**
+   Virou `TestEveryTerminalPathReleasesTheReservation`, para a propriedade ter nome.
+2. **O conjunto não tinha janela de tempo** (achado ao consertar o item 1). "Contas
+   distintas por origem" estava implementado como "desde o último lockout ou sweep" — sem
+   limite superior para uma chave ativa, então dez pessoas errando uma vez cada ao longo de
+   uma tarde acumulavam até o teto. É exatamente o falso positivo que o §8 do SDD declara
+   como critério de reversão, e ele estava embutido no desenho.
+3. **`auth.rate_limited` era declarada, classificada, indexada, consultada, renderizada e
+   escrita por NINGUÉM** (achado por três agentes independentes). O sinal mais forte do
+   painel não podia disparar, com teste verde: a fixture inseria a linha à mão, então o
+   teste provava a consulta e nunca o recurso. Lacuna entre frentes — eu pedi a emissão a
+   uma e a leitura a outra, e nenhuma era dona do encontro.
+4. **`AbuseObserved.window_days` não existia no fio** (dois agentes). O Go mandava `days`,
+   o TypeScript declarava `window_days`, e a tela renderizava "maior valor observado em
+   ␣ dias". Passou porque o mock em `src/test/server.ts` foi escrito a partir do TIPO e não
+   do servidor: as duas cópias concordavam entre si e com nada real. O `assert.Contains(body,
+   "observed")` do teste de integração afirmava existência, não valor.
+
+**Um HIGH de performance, medido e não lido:** o índice `audit_log_ip_time_idx` da migração
+000046 **nunca era escolhido**. `EXPLAIN ANALYZE` sobre 1,2 M linhas mostrou as seis
+consultas preferindo `audit_log_action_created_idx`, porque todas têm igualdade em `action`
+ao lado do intervalo em `created_at`. Custava +43 % em INSERT e 18 MB. A migração foi
+apagada antes de shipar — o ADR-47 não tem migração nenhuma.
+
+**Segurança, dois MEDIUM que eram desenho meu:**
+- O membro do conjunto era a conta RESOLVIDA, então `alice` e `alice@x.com` colapsavam
+  quando a conta existia e não colapsavam quando não existia: 429-vs-401 respondia "este
+  username pertence a esta caixa?" para um anônimo. Passou a ser o identificador submetido.
+- Os pisos eram por knob e o produto não: `{3 contas, 1440 min}` era legal e trancaria a
+  instância inteira por 24 h. `MaxLoginWindowMinutes` caiu para 60.
+
+**Guards novos, todos provados por mutação:** paridade de permissões Go↔TS↔i18n (`instance.
+ip_block` estava faltando na união desde o ADR-46, e `instance.rate_limits` sem rótulo em
+três locales); e o guard do nginx passou a **rajar cada caminho nomeado na zona apertada**,
+porque o comentário dizia "as sete rotas" enquanto duas rotas que gastam recurso estavam na
+zona frouxa — uma contagem em prosa não é guard.
+
+**A lição do sweep:** as quatro frentes entregaram verde, com mutação, e o sweep achou
+quatro HIGH. Três deles só eram visíveis de fora de uma frente — na costura, no vocabulário
+compartilhado, ou no encontro entre quem escreve e quem lê.
+
+Followup adicionado:
+
+- **Um clique suprimido ainda custa uma transação inteira.** O gate remove o `INSERT`, mas
+  `Begin` → `SELECT` → `Commit` continuam: 3 round-trips e uma transação com permissão de
+  escrita segurando uma das 16 conexões. Sob a inundação que a coalescência existe para
+  absorver, o caminho defendido é só ~⅓ mais barato. O conserto NÃO é remover a transação
+  às cegas — é mudar a chave do gate do id RESOLVIDO para a referência PÚBLICA (o slug da
+  URL), que o middleware já conhece antes da consulta. Com isso a decisão precede o SQL e o
+  resolve inteiro vira uma única instrução. Custa reabrir o desenho do `clickctx`, que hoje
+  é keyed no id justamente porque o middleware não o tem.

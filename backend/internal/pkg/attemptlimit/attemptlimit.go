@@ -75,8 +75,16 @@ type attempt struct {
 	fails    int
 	inFlight int
 	// members is nil for a scalar key and allocated on the first CommitFailFor.
-	// Its LENGTH is the count that key is judged by.
-	members     map[string]struct{}
+	//
+	// The value is WHEN that member last failed, because the cap is "distinct
+	// members inside a window" and a set without timestamps cannot express the
+	// window. Implemented as a running total, it counted distinct members since
+	// the last lockout or sweep instead — a period that has no upper bound for a
+	// continuously active key, so ten different people mistyping once each over
+	// an afternoon accumulate to a ceiling meant for ten accounts in a quarter
+	// of an hour. That is the false positive docs/SDD-ABUSE-DEFENSE.md §8 names
+	// as the criterion for reverting the whole change.
+	members     map[string]time.Time
 	lockedUntil time.Time
 	lastFail    time.Time
 }
@@ -88,6 +96,23 @@ type attempt struct {
 // scalar Fail on a set key hand back budget that was already spent.
 func (e *attempt) count() int {
 	return max(e.fails, len(e.members))
+}
+
+// pruneMembersLocked drops members that fell out of the window.
+//
+// Called on every set-mode write, which is what keeps the map bounded by the
+// window's traffic rather than by the key's lifetime — and is why there is no
+// separate expiry pass to forget.
+func (e *attempt) pruneMembersLocked(now time.Time, window time.Duration) {
+	if e.members == nil {
+		return
+	}
+	cutoff := now.Add(-window)
+	for m, at := range e.members {
+		if !at.After(cutoff) {
+			delete(e.members, m)
+		}
+	}
 }
 
 // New returns a limiter allowing max consecutive failures per key before
@@ -149,6 +174,7 @@ func (l *Limiter) Begin(key string) (lockedUntil time.Time, ok bool) {
 	// all and learning afterwards, which is the check-then-act this API exists
 	// to remove. The over-refusal it can cause is one request deep and lifts as
 	// soon as the reservations settle.
+	e.pruneMembersLocked(now, l.lockout)
 	if e.count()+e.inFlight >= l.max {
 		e.lockedUntil = now.Add(l.lockout)
 		return e.lockedUntil, false
@@ -219,10 +245,13 @@ func (l *Limiter) commitFailForLocked(key, member string, releaseSlot bool) (int
 	}
 	l.clearExpiredLocked(e, now)
 	if e.members == nil {
-		e.members = make(map[string]struct{})
+		e.members = make(map[string]time.Time)
 	}
-	if _, seen := e.members[member]; !seen && len(e.members) < MaxMembersPerKey {
-		e.members[member] = struct{}{}
+	// Prune BEFORE admitting, so an old member leaving makes room for a new one
+	// and the cap below is measured against the window and not against history.
+	e.pruneMembersLocked(now, l.lockout)
+	if _, seen := e.members[member]; seen || len(e.members) < MaxMembersPerKey {
+		e.members[member] = now
 	}
 	e.lastFail = now
 	n := len(e.members)
@@ -252,12 +281,38 @@ func (l *Limiter) Configure(max int, lockout time.Duration) {
 	l.lockout = lockout
 }
 
-// CommitSuccess clears all attempt state for key. A correct credential resets
-// the budget — the cap is on consecutive failures, not lifetime attempts.
+// CommitSuccess clears the FAILURE streak for key, and deliberately keeps any
+// member set.
+//
+// The two modes forgive different things because they measure different things.
+// A scalar key caps CONSECUTIVE failures against one account, so a correct
+// password genuinely ends the streak. A set key caps how many distinct accounts
+// an ORIGIN has failed against, and one successful sign-in is no evidence about
+// the other nine it probed.
+//
+// Deleting the entry outright made the breadth control cost one login to reset:
+// fail against nine accounts under a ceiling of ten, sign in to your own
+// account, repeat forever, and the origin never trips. It is the same hole the
+// Release path had, through a different door — and the members age out of the
+// window on their own, which is the right way for them to be forgiven.
 func (l *Limiter) CommitSuccess(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.entries, key)
+	e := l.entries[key]
+	if e == nil {
+		return
+	}
+	// Consume the reservation. Deleting the whole entry used to do this
+	// implicitly; keeping the entry means the slot has to be released by hand,
+	// and leaking it walks the key toward a lockout nobody earned — which is
+	// exactly what INV-155 exists to prevent, one level down.
+	if e.inFlight > 0 {
+		e.inFlight--
+	}
+	e.fails = 0
+	e.lockedUntil = time.Time{}
+	e.pruneMembersLocked(l.now(), l.lockout)
+	l.gcLocked(key, e)
 }
 
 // Fail records a failure without a prior Begin, for call sites that do not need

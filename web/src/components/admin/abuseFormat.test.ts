@@ -23,7 +23,7 @@ const POLICY: AbusePolicy = {
 }
 
 const OBSERVED: AbuseObserved = {
-  window_days: 30,
+  days: 30,
   max_distinct_accounts_per_ip: 2,
   max_failures_per_account: 0,
   peak_writes_per_minute: 340,

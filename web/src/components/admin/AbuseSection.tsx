@@ -223,7 +223,7 @@ function Knob({
       {seen !== null && (
         <span className="fx-field-hint fx-abuse-observed">
           {seen > 0
-            ? t('admin.abuse_observed', { days: observed.window_days, value: seen })
+            ? t('admin.abuse_observed', { days: observed.days, value: seen })
             : t('admin.abuse_observed_none')}
         </span>
       )}

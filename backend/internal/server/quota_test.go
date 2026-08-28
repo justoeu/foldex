@@ -42,7 +42,7 @@ func policyWith(writes, expensive int) fixedPolicy {
 // above it, which is exactly where router.go mounts it.
 func quotaHarness(pol policyReader, principal authctx.Principal) (http.Handler, *atomic.Int64) {
 	var reached atomic.Int64
-	q := newAPIQuota(pol)
+	q := newAPIQuota(pol, nil)
 	h := q.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		reached.Add(1)
 		w.WriteHeader(http.StatusOK)
@@ -155,7 +155,7 @@ func TestAPIQuota_ARefusedRequestCostsNoBudgetAtAll(t *testing.T) {
 	pol.set(1, 5)
 
 	c := newTestClock()
-	q := newAPIQuota(pol)
+	q := newAPIQuota(pol, nil)
 	q.writes.WithClock(c.now)
 	q.expensive.WithClock(c.now)
 
@@ -219,7 +219,7 @@ func (c *testClock) advance(d time.Duration) {
 func TestAPIQuota_TwoPrincipalsHaveIndependentBudgets(t *testing.T) {
 	t.Parallel()
 	pol := policyWith(2, 20)
-	q := newAPIQuota(pol)
+	q := newAPIQuota(pol, nil)
 	serve := func(p authctx.Principal, method, path string) int {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(method, path, nil)
@@ -259,7 +259,7 @@ func TestAPIQuota_TheOwnerIsNotExempt(t *testing.T) {
 func TestAPIQuota_AnAPITokenShareTheAccountsBudget(t *testing.T) {
 	t.Parallel()
 	pol := policyWith(2, 20)
-	q := newAPIQuota(pol)
+	q := newAPIQuota(pol, nil)
 	serve := func(p authctx.Principal) int {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/api/links", nil)
@@ -308,7 +308,7 @@ func TestAPIQuota_ANewLimitTakesEffectWithoutARestart(t *testing.T) {
 	t.Parallel()
 	pol := &mutablePolicy{p: abusepolicy.Default()}
 	pol.set(50, 20)
-	q := newAPIQuota(pol)
+	q := newAPIQuota(pol, nil)
 	serve := func() int {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/api/links", nil)
@@ -363,7 +363,7 @@ func TestAPIQuota_ANilPolicySourceEnforcesTheCompiledDefaults(t *testing.T) {
 
 	t.Run("typed nil cache, the shape router.go actually passes", func(t *testing.T) {
 		var cache *abusepolicy.Cache
-		q := newAPIQuota(cache)
+		q := newAPIQuota(cache, nil)
 		// A plain Go comparison, not require.NotNil: testify reflects INTO the
 		// interface and calls a nil pointer nil, which is the opposite of what
 		// the language does here — and the language is what `q.pol == nil` in
@@ -375,7 +375,7 @@ func TestAPIQuota_ANilPolicySourceEnforcesTheCompiledDefaults(t *testing.T) {
 
 	t.Run("no reader at all", func(t *testing.T) {
 		var absent policyReader
-		q := newAPIQuota(absent)
+		q := newAPIQuota(absent, nil)
 		require.True(t, q.pol == nil)
 		assert.Equal(t, want.APIWritesPerMinute, q.writeLimit(context.Background()))
 		assert.Equal(t, want.APIExpensivePerHour, q.expensiveLimit(context.Background()))
@@ -385,7 +385,7 @@ func TestAPIQuota_ANilPolicySourceEnforcesTheCompiledDefaults(t *testing.T) {
 	// refuses.
 	t.Run("still refuses past the compiled budget", func(t *testing.T) {
 		var absent policyReader
-		q := newAPIQuota(absent)
+		q := newAPIQuota(absent, nil)
 		q.writes.WithClock(newTestClock().now) // freeze: no refill mid-loop
 		h := q.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -470,7 +470,7 @@ func TestExpensiveRoutes_EveryPatternNamesARouteTheRouterMounts(t *testing.T) {
 // a denial of service built out of the defence rather than a quota.
 func TestAPIQuota_WithoutAPrincipalTheRequestPassesThrough(t *testing.T) {
 	t.Parallel()
-	q := newAPIQuota(policyWith(1, 1))
+	q := newAPIQuota(policyWith(1, 1), nil)
 	served := 0
 	h := q.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		served++
@@ -548,3 +548,47 @@ var (
 	_ links.Uploader       = stubUploader{}
 	_ backup.StorageBucket = stubBucket{}
 )
+
+// The refusal is recorded ONCE per principal per hour, not once per 429.
+//
+// A refusal is the one event an attacker produces at will, so a row per
+// rejected request would make the trail the amplifier the quota exists to
+// remove — the caller would choose how many permanent rows to insert. Recording
+// nothing was the other failure: `auth.rate_limited` shipped with a reader and
+// no writer, so the anomaly panel's "already throttled" rule could never fire.
+func TestAPIQuota_ARefusalIsAuditedOncePerPrincipal(t *testing.T) {
+	var recorded int
+	q := newAPIQuota(policyWith(1, 1000), func(*http.Request) { recorded++ })
+	inner := q.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	as := func(id int64) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			inner.ServeHTTP(w, r.WithContext(authctx.WithPrincipal(r.Context(), editor(id))))
+		})
+	}
+
+	refused := 0
+	for range 20 {
+		if hit(as(7), http.MethodPost, "/api/tags").Code == http.StatusTooManyRequests {
+			refused++
+		}
+	}
+	require.Greater(t, refused, 5, "the budget of 1 must produce many refusals for this to measure anything")
+	assert.Equal(t, 1, recorded,
+		"%d refusals produced %d rows — the caller must not choose how many rows to write", refused, recorded)
+
+	// A different principal is a different budget and a different row.
+	hit(as(8), http.MethodPost, "/api/tags")
+	require.Equal(t, http.StatusTooManyRequests,
+		hit(as(8), http.MethodPost, "/api/tags").Code)
+	assert.Equal(t, 2, recorded, "each principal's own lockout is its own signal")
+}
+
+// A nil recorder enforces identically and simply says nothing.
+func TestAPIQuota_WithoutARecorderItStillRefuses(t *testing.T) {
+	h, _ := quotaHarness(policyWith(1, 1000), editor(9))
+	hit(h, http.MethodPost, "/api/tags")
+	assert.Equal(t, http.StatusTooManyRequests,
+		hit(h, http.MethodPost, "/api/tags").Code)
+}

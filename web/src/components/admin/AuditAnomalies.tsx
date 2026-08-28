@@ -149,11 +149,17 @@ function AnomalyRow({
           <span className="fx-aud-row-ip">{anomaly.ip}</span>
         </span>
         <span className="fx-aud-row-sub">
-          {t('admin.anomaly_evidence', {
-            accounts: anomaly.distinct_accounts,
-            failures: anomaly.failures,
-            minutes,
-          })}
+          {/* A throttle row comes from a different query, which counts
+              lockouts and populates neither of the two numbers below. Sharing
+              the sweep's line printed "0 distinct accounts · 0 failures"
+              beside the strongest signal the panel has. */}
+          {anomaly.kind === 'throttle'
+            ? t('admin.anomaly_evidence_throttle', { throttles: anomaly.throttles, minutes })
+            : t('admin.anomaly_evidence', {
+                accounts: anomaly.distinct_accounts,
+                failures: anomaly.failures,
+                minutes,
+              })}
         </span>
         {anomaly.ip_trusted ? (
           <span className="fx-aud-row-sub">{t('admin.audit_ip_trusted')}</span>

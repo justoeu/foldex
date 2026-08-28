@@ -175,6 +175,11 @@ func TestAllow_TheMapNeverExceedsItsCeiling(t *testing.T) {
 	for i := 0; i < 5000; i++ {
 		l.Allow(fmt.Sprintf("u:%d", i), 10)
 	}
+
+	// A ceiling assertion alone passes at ZERO — deleting the insert entirely
+	// would satisfy it, and a limiter that stores nothing limits nothing. The
+	// floor is what makes the ceiling mean something.
+	assert.Positive(t, l.Len(), "the map is empty — nothing was ever stored, so the ceiling proves nothing")
 	assert.LessOrEqual(t, l.Len(), 32, "the bucket map grew past its ceiling")
 }
 
@@ -298,6 +303,7 @@ func TestAllow_ConcurrentDistinctKeysStayWithinTheCeiling(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+	assert.Positive(t, l.Len(), "the map is empty — nothing was ever stored, so the ceiling proves nothing")
 	assert.LessOrEqual(t, l.Len(), 64)
 }
 

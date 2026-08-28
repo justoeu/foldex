@@ -191,3 +191,29 @@ func render(p Policy) string {
 	}
 	return string(b)
 }
+
+// The bounds are per knob; the danger is in the product.
+//
+// `{3 distinct accounts, 1440 minutes}` was a legal document, and behind a
+// proxy the instance does not vouch for it meant three failed sign-ins locking
+// every user out for a day. The floor on the count is not enough on its own —
+// this test names the pair so a later widening of the window has to argue with
+// the worst case rather than with a single number.
+func TestTheWorstLegalCombinationIsSurvivable(t *testing.T) {
+	worst := Default()
+	worst.LoginDistinctAccountsPerIP = MinLoginDistinctAccountsPerIP
+	worst.LoginFailuresPerAccount = MinLoginFailuresPerAccount
+	worst.LoginWindowMinutes = MaxLoginWindowMinutes
+	if err := worst.ValidateForWrite(); err != nil {
+		t.Fatalf("this combination must remain legal, or the test is measuring nothing: %v", err)
+	}
+
+	// An hour is the ceiling the rest of this codebase already uses for its
+	// long lockouts. Anything beyond that is a denial an operator cannot easily
+	// undo, installed through a settings screen.
+	if MaxLoginWindowMinutes > 60 {
+		t.Errorf("MaxLoginWindowMinutes = %d: %d failures could lock an origin out for %d minutes, "+
+			"and behind an unvouched proxy that origin is everybody",
+			MaxLoginWindowMinutes, MinLoginDistinctAccountsPerIP, MaxLoginWindowMinutes)
+	}
+}

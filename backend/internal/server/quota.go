@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"foldex/internal/abusepolicy"
+	"foldex/internal/auth"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/quota"
@@ -104,14 +106,39 @@ type apiQuota struct {
 	pol       policyReader
 	writes    *quota.Limiter
 	expensive *quota.Limiter
+
+	// audit records that a principal ran out of budget. Optional: a nil
+	// recorder enforces exactly the same, it just says nothing.
+	audit func(*http.Request)
+	// auditOnce throttles the RECORDING, not the request.
+	//
+	// A refusal is the one event an attacker can produce at will, so a row per
+	// 429 would make the trail the amplifier the quota exists to remove. This
+	// is a third bucket rather than a fourth bounded map with its own sweep:
+	// "at most one row per principal per hour" is a quota, and there is already
+	// a quota here that bounds and sweeps itself.
+	auditOnce *quota.Limiter
 }
 
-func newAPIQuota(pol policyReader) *apiQuota {
+func newAPIQuota(pol policyReader, audit func(*http.Request)) *apiQuota {
 	return &apiQuota{
 		pol:       pol,
 		writes:    quota.New(time.Minute, quotaMaxPrincipals),
 		expensive: quota.New(time.Hour, quotaMaxPrincipals),
+		audit:     audit,
+		auditOnce: quota.New(time.Hour, quotaMaxPrincipals),
 	}
+}
+
+// auditRefusal records at most one row per principal per hour.
+func (q *apiQuota) auditRefusal(r *http.Request, key string) {
+	if q.audit == nil {
+		return
+	}
+	if d := q.auditOnce.Allow(key, 1); !d.Allowed {
+		return
+	}
+	q.audit(r)
 }
 
 // current resolves the policy in force.
@@ -173,6 +200,7 @@ func (q *apiQuota) middleware(next http.Handler) http.Handler {
 		charged := false
 		if isExpensive(r.Method, r.URL.Path) {
 			if d := q.expensive.Allow(key, expensiveLimit); !d.Allowed {
+				q.auditRefusal(r, key)
 				writeRateLimited(w, d.RetryAfter)
 				return
 			}
@@ -189,6 +217,7 @@ func (q *apiQuota) middleware(next http.Handler) http.Handler {
 				// their imports for the rest of the hour.
 				q.expensive.Refund(key, expensiveLimit)
 			}
+			q.auditRefusal(r, key)
 			writeRateLimited(w, d.RetryAfter)
 			return
 		}
@@ -261,4 +290,32 @@ func normalizeRoutePath(p string) string {
 		return strings.TrimSuffix(p, "/")
 	}
 	return p
+}
+
+// quotaAuditor returns the recorder the quota middleware calls when a principal
+// runs out of budget, or nil when there is no repository to write through.
+//
+// A closure rather than an interface on Deps: the middleware needs exactly one
+// verb, and the alternative is a second seam that every test has to satisfy to
+// exercise a control that has nothing to do with auditing.
+func quotaAuditor(repo *auth.Repository, logger *slog.Logger) func(*http.Request) {
+	if repo == nil {
+		return nil
+	}
+	return func(r *http.Request) {
+		// Detached, like the content-audit middleware's own write: the caller's
+		// context is about to be cancelled by the 429 response, and a row that
+		// only lands when the client waits around is a row that goes missing
+		// exactly under load.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), auditWriteTimeout)
+		defer cancel()
+		rec := auth.AuditRecord{Action: auth.AuditRateLimited, Detail: "api_quota"}.WithRequest(r)
+		if p, ok := authctx.FromContext(r.Context()); ok {
+			id := p.UserID
+			rec.ActorID = &id
+		}
+		if err := repo.Audit(ctx, rec); err != nil {
+			logger.Error("audit api quota lockout", "err", err)
+		}
+	}
 }

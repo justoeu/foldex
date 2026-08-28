@@ -69,7 +69,22 @@ const (
 	MaxLoginFailuresPerAccount = 50
 
 	MinLoginWindowMinutes = 5
-	MaxLoginWindowMinutes = 1440
+	// MaxLoginWindowMinutes is one hour, not a day.
+	//
+	// The bounds are per knob, but the DANGER is in their product, and the
+	// legal document `{3 distinct accounts, 1440 minutes}` was a way to lock
+	// every user out for twenty-four hours after three failed sign-ins from one
+	// origin — behind any proxy the instance does not vouch for, that origin is
+	// everybody. Owner-only and recoverable by a restart (the buckets are in
+	// memory), but "restart the container" is not a recovery an operator locked
+	// out of their own instance can be expected to find.
+	//
+	// One hour is also the value this codebase already treats as its long
+	// lockout: bootstrapIP, inviteIP, pwResetIP and oauthIP all use it. A
+	// longer penalty buys little from an in-memory limiter that a restart
+	// clears anyway, and the durable tool for a persistent attacker is the IP
+	// blocklist (ADR-46), which is deliberately manual.
+	MaxLoginWindowMinutes = 60
 
 	// MinAPIWritesPerMinute is set where a legitimate burst still fits. Pasting
 	// a folder of links, an import applying rows, a backup restore streaming
