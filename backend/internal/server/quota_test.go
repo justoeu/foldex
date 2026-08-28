@@ -585,6 +585,28 @@ func TestAPIQuota_ARefusalIsAuditedOncePerPrincipal(t *testing.T) {
 	assert.Equal(t, 2, recorded, "each principal's own lockout is its own signal")
 }
 
+// The EXPENSIVE branch has its own refusal path and its own audit call, and
+// `policyWith(1, 1000)` never reaches it. Deleting the recorder from that branch
+// left the whole suite green.
+func TestAPIQuota_AnExpensiveRefusalIsAuditedToo(t *testing.T) {
+	t.Parallel()
+	var recorded int
+	// Writes wide open, expensive at 1: the second import is refused by the
+	// hourly bucket and nothing else.
+	q := newAPIQuota(policyWith(1000, 1), func(*http.Request) { recorded++ })
+	inner := q.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inner.ServeHTTP(w, r.WithContext(authctx.WithPrincipal(r.Context(), editor(21))))
+	})
+
+	require.Equal(t, http.StatusOK, hit(h, http.MethodPost, "/api/import").Code)
+	require.Equal(t, http.StatusTooManyRequests, hit(h, http.MethodPost, "/api/import").Code,
+		"the second expensive call must be refused by the hourly bucket")
+	assert.Equal(t, 1, recorded, "an expensive-bucket lockout is a lockout and must be recorded")
+}
+
 // A nil recorder enforces identically and simply says nothing.
 func TestAPIQuota_WithoutARecorderItStillRefuses(t *testing.T) {
 	h, _ := quotaHarness(policyWith(1, 1000), editor(9))

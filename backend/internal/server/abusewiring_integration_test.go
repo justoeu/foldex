@@ -53,6 +53,10 @@ func abuseWiringServer(t *testing.T) (*httptest.Server, *links.Repository, *pgxp
 		// audit hook every other policy change uses.
 		AdminHandler: auth.NewAdminHandler(auth.NewRepository(pool), nil, logger,
 			"http://localhost:9088", nil, nil),
+		// The quota's audit recorder is built from this. Leaving it nil made the
+		// wiring test below assert against a recorder that production has and
+		// the harness did not — a green that says nothing about the binary.
+		AuthRepo: auth.NewRepository(pool),
 		// AbusePolicy deliberately nil: an unwired policy must still enforce
 		// the compiled defaults, and that is what an instance whose owner never
 		// opened the screen actually runs.
@@ -269,4 +273,46 @@ func TestWiring_TheAnomalyPanelIsMountedUnderAdmin(t *testing.T) {
 	// array, and null would send it down the error path on a working instance.
 	assert.NotNil(t, payload.Anomalies)
 	assert.Empty(t, payload.Anomalies)
+}
+
+// The quota's own lockout leaves a row, through the REAL recorder.
+//
+// Every unit test above drives a hand-written func(*http.Request) double, so
+// `quotaAuditor` returning nil unconditionally kept the whole suite green — and
+// the anomaly panel's strongest signal would have silently disappeared for the
+// authenticated half, which is the exact failure this ADR already shipped once
+// with `auth.rate_limited` having a reader and no writer.
+func TestWiring_AnAPIQuotaLockoutIsRecordedThroughTheRealRecorder(t *testing.T) {
+	srv, _, pool := abuseWiringServer(t)
+
+	// Walk past the compiled default of 120 writes per minute.
+	refused := false
+	for i := 0; i < 200 && !refused; i++ {
+		res, err := http.Post(srv.URL+"/api/tags", "application/json",
+			strings.NewReader(`{"name":"q`+strconv.Itoa(i)+`","color":"#6366F1"}`))
+		require.NoError(t, err)
+		refused = res.StatusCode == http.StatusTooManyRequests
+		require.NoError(t, res.Body.Close())
+	}
+	require.True(t, refused, "200 writes were never refused — the quota is not mounted")
+
+	var (
+		rows    int
+		detail  *string
+		actorID *int64
+		ipText  *string
+	)
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_log WHERE action = 'auth.rate_limited'`).Scan(&rows))
+	assert.Equal(t, 1, rows,
+		"a quota lockout must record exactly one row — more would let the caller choose how many")
+
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT detail, actor_id, host(ip) FROM audit_log WHERE action = 'auth.rate_limited'`).
+		Scan(&detail, &actorID, &ipText))
+	require.NotNil(t, detail)
+	assert.Equal(t, "api_quota", *detail,
+		"the label is what tells an API lockout apart from a login one on the same screen")
+	require.NotNil(t, actorID, "the panel and the trail both need to know WHOSE budget ran out")
+	require.NotNil(t, ipText, "the anomaly panel groups by origin; a row with no origin is invisible to it")
 }

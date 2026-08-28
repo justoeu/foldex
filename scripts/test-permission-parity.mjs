@@ -17,7 +17,7 @@
 //   Go has it, TS does not  → the grid cannot offer a permission that exists.
 //   TS has it, Go does not  → the grid offers a permission nothing enforces,
 //                             which reads as a granted power that does nothing.
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 
 const goSrc = readFileSync('backend/internal/pkg/authctx/permissions.go', 'utf8')
 const tsSrc = readFileSync('web/src/auth/types.ts', 'utf8')
@@ -62,13 +62,25 @@ for (const p of tsPerms) {
 // with no key shows the raw id as its own explanation — a cell the owner is
 // asked to grant without being told what it does. `instance.rate_limits`
 // shipped exactly like that, one commit after the Go↔TS half was closed.
-const locales = ['en', 'pt', 'es']
+// Derived from the directory, never listed here: a fourth locale added to the
+// app would otherwise go uncovered in silence, which is the same "a count in
+// prose is not a guard" this file enforces one layer up.
+const locales = readdirSync('web/src/i18n/locales')
+  .filter((f) => f.endsWith('.json'))
+  .map((f) => f.replace(/\.json$/, ''))
+if (locales.length === 0) {
+  console.error('FAIL: no locale files found under web/src/i18n/locales')
+  process.exit(1)
+}
 for (const loc of locales) {
   const raw = readFileSync(`web/src/i18n/locales/${loc}.json`, 'utf8')
   const messages = JSON.parse(raw)
   const admin = messages.admin ?? {}
   for (const p of goPerms) {
-    const key = `perm_${p.replaceAll('.', '_')}`
+    // replaceAll, matching RolesMatrix.tsx — which uses replace(). They agree
+    // only because every permission today has exactly one dot; the first
+    // two-dot name would give a green guard and a cell rendering the raw id.
+    const key = `perm_${p.split('.').join('_')}`
     if (typeof admin[key] !== 'string' || admin[key].trim() === '') {
       console.error(`FAIL: ${loc}.json is missing admin.${key} for permission ${p} —`)
       console.error('      the roles grid would render the raw id as the description')

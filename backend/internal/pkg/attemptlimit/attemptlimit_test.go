@@ -115,9 +115,12 @@ func TestParallelAttemptsCannotExceedTheCap(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	assert.Positive(t, admitted, "no attempt was admitted at all — the cap cannot be under test")
-	assert.Positive(t, admitted, "no attempt was admitted at all — the cap cannot be under test")
-	assert.LessOrEqual(t, admitted, max,
+	// EXACTLY max, not "at most". A one-sided assertion passes on a limiter
+	// that admits nothing, which is the denial-of-service half of the same
+	// defect — and the reservation is deterministic here: Begin admits while
+	// count()+inFlight < max, so the first max callers win and the rest are
+	// refused, whatever order they arrive in.
+	assert.Equal(t, max, admitted,
 		"%d of 50 parallel attempts were admitted against a cap of %d", admitted, max)
 }
 
@@ -269,7 +272,7 @@ func TestSetMode_ParallelAttemptsCannotExceedTheCap(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	assert.LessOrEqual(t, admitted, max,
+	assert.Equal(t, max, admitted,
 		"%d of 50 parallel attempts were admitted against a cap of %d", admitted, max)
 }
 
@@ -521,31 +524,110 @@ func TestSetMode_MembersAgeOutOfTheWindow(t *testing.T) {
 // breadth — the release went with it, and the key drifted one reservation
 // closer to a lockout on every successful sign-in. An existing test caught it;
 // this one names the property so the next change cannot lose it quietly.
+//
+// It measures the RESERVATION by counting how many further admissions remain,
+// which is the only way to see it: two earlier attempts failed here, one by
+// resetting between rounds (which deleted the entry and the leak with it) and
+// one by raising the ceiling so far that six leaked slots could not reach it.
+// A leak is invisible unless something asks the limiter how much budget is
+// left.
 func TestEveryTerminalPathReleasesTheReservation(t *testing.T) {
 	t.Parallel()
+	const max, rounds = 10, 3
 	for _, tc := range []struct {
-		name  string
-		close func(l *attemptlimit.Limiter, key string)
+		name string
+		// accrues reports whether this path also counts a FAILURE, which
+		// legitimately consumes budget and must not be mistaken for a leak.
+		accrues bool
+		close   func(l *attemptlimit.Limiter, key string, round int)
 	}{
-		{"CommitSuccess", func(l *attemptlimit.Limiter, k string) { l.CommitSuccess(k) }},
-		{"CommitFail", func(l *attemptlimit.Limiter, k string) { l.CommitFail(k) }},
-		{"CommitFailFor", func(l *attemptlimit.Limiter, k string) { l.CommitFailFor(k, "m") }},
-		{"Release", func(l *attemptlimit.Limiter, k string) { l.Release(k) }},
+		{"CommitSuccess", false, func(l *attemptlimit.Limiter, k string, _ int) { l.CommitSuccess(k) }},
+		{"Release", false, func(l *attemptlimit.Limiter, k string, _ int) { l.Release(k) }},
+		{"CommitFail", true, func(l *attemptlimit.Limiter, k string, _ int) { l.CommitFail(k) }},
+		// A DISTINCT member per round: the set counts breadth, so repeating one
+		// member would consume one unit of budget for three rounds and the
+		// arithmetic below would read the difference as a leak.
+		{"CommitFailFor", true, func(l *attemptlimit.Limiter, k string, r int) {
+			l.CommitFailFor(k, fmt.Sprintf("m%d", r))
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			l := attemptlimit.New(3, time.Hour)
-			// Two rounds, so a leak of one slot per round shows up as a refusal
-			// on the round after the budget is nominally exhausted.
-			for i := range 6 {
+			t.Parallel()
+			l := attemptlimit.New(max, time.Hour)
+			for r := range rounds {
 				_, ok := l.Begin("k")
-				require.True(t, ok, "%s leaked a slot: round %d was refused", tc.name, i+1)
-				tc.close(l, "k")
-				if tc.name == "CommitFail" || tc.name == "CommitFailFor" {
-					// Those two legitimately accumulate; clear so the loop
-					// measures the reservation and not the failure count.
-					l.Reset("k")
-				}
+				require.True(t, ok, "%s: the setup itself was refused", tc.name)
+				tc.close(l, "k", r)
 			}
+
+			// How much budget is actually left?
+			remaining := 0
+			for {
+				if _, ok := l.Begin("k"); !ok {
+					break
+				}
+				remaining++
+			}
+
+			want := max
+			if tc.accrues {
+				want = max - rounds // the failures themselves, and nothing else
+			}
+			assert.Equal(t, want, remaining,
+				"%s: %d admissions left, want %d — the difference is reservations it never released",
+				tc.name, remaining, want)
 		})
 	}
+}
+
+// The expiry a commit returns is the TRANSITION, not the state.
+//
+// Begin arms lockedUntil when it refuses on the in-flight cap, so every
+// concurrent attempt that already held a reservation then committed against a
+// key that was ALREADY locked — and each of them read back a non-zero expiry.
+// The login handler writes one audit row per non-zero expiry, so a caller who
+// simply sends N requests at once made the server insert ~N permanent rows
+// while probing a single account. The trail became the amplifier the limiter
+// exists to remove, and the attacker chose the multiplier.
+func TestCommit_ReportsTheEdgeAndNotTheStandingLockout(t *testing.T) {
+	t.Parallel()
+	l := attemptlimit.New(3, time.Minute)
+
+	// Three reservations, then a fourth Begin that is refused and arms the
+	// lockout as a side effect — exactly what a burst of four does.
+	for range 3 {
+		_, ok := l.Begin("origin")
+		require.True(t, ok)
+	}
+	if _, ok := l.Begin("origin"); ok {
+		t.Fatal("the fourth reservation must be refused; the setup is not reproducing the case")
+	}
+
+	armed := 0
+	for i := range 3 {
+		_, until := l.CommitFail("origin")
+		if !until.IsZero() {
+			armed++
+		}
+		_ = i
+	}
+	assert.Equal(t, 0, armed,
+		"the lockout was already standing when these committed; none of them is the edge, "+
+			"and %d of 3 claimed to be", armed)
+}
+
+// The same property for the set mode, and the positive case: the commit that
+// actually crosses the ceiling DOES report the edge, exactly once.
+func TestCommitFailFor_ReportsTheEdgeExactlyOnce(t *testing.T) {
+	t.Parallel()
+	l := attemptlimit.New(2, time.Minute)
+
+	_, until := l.FailFor("origin", "a@x")
+	require.True(t, until.IsZero(), "one account is not a sweep")
+
+	_, until = l.FailFor("origin", "b@x")
+	require.False(t, until.IsZero(), "the commit that crosses the ceiling is the edge")
+
+	_, until = l.FailFor("origin", "c@x")
+	assert.True(t, until.IsZero(), "a later commit against a standing lockout is not a new edge")
 }

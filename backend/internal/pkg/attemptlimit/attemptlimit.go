@@ -209,12 +209,13 @@ func (l *Limiter) CommitFail(key string) (fails int, lockedUntil time.Time) {
 		e.inFlight--
 	}
 	l.clearExpiredLocked(e, now)
+	wasLocked := e.lockedUntil.After(now)
 	e.fails++
 	e.lastFail = now
 	if e.count() >= l.max {
 		e.lockedUntil = now.Add(l.lockout)
 	}
-	return e.fails, e.lockedUntil
+	return e.fails, edge(wasLocked, e.lockedUntil)
 }
 
 // CommitFailFor records a failure ATTRIBUTED to a member, for a reserved slot,
@@ -244,6 +245,7 @@ func (l *Limiter) commitFailForLocked(key, member string, releaseSlot bool) (int
 		e.inFlight--
 	}
 	l.clearExpiredLocked(e, now)
+	wasLocked := e.lockedUntil.After(now)
 	if e.members == nil {
 		e.members = make(map[string]time.Time)
 	}
@@ -262,7 +264,7 @@ func (l *Limiter) commitFailForLocked(key, member string, releaseSlot bool) (int
 	if n >= l.max || n >= MaxMembersPerKey {
 		e.lockedUntil = now.Add(l.lockout)
 	}
-	return n, e.lockedUntil
+	return n, edge(wasLocked, e.lockedUntil)
 }
 
 // Configure replaces the ceiling and the lockout duration in place, so an owner
@@ -310,7 +312,14 @@ func (l *Limiter) CommitSuccess(key string) {
 		e.inFlight--
 	}
 	e.fails = 0
-	e.lockedUntil = time.Time{}
+	// Only a SCALAR key has its penalty lifted by a success. For a set key the
+	// lockout was earned by breadth, and a successful sign-in from the same
+	// origin is not evidence about it — lifting it here would also restart the
+	// clock, handing the attacker a way to shorten their own penalty with a
+	// login they are entitled to make.
+	if e.members == nil {
+		e.lockedUntil = time.Time{}
+	}
 	e.pruneMembersLocked(l.now(), l.lockout)
 	l.gcLocked(key, e)
 }
@@ -323,12 +332,13 @@ func (l *Limiter) Fail(key string) (fails int, lockedUntil time.Time) {
 	now := l.now()
 	e := l.entryLocked(key)
 	l.clearExpiredLocked(e, now)
+	wasLocked := e.lockedUntil.After(now)
 	e.fails++
 	e.lastFail = now
 	if e.count() >= l.max {
 		e.lockedUntil = now.Add(l.lockout)
 	}
-	return e.fails, e.lockedUntil
+	return e.fails, edge(wasLocked, e.lockedUntil)
 }
 
 // Reset clears attempt state for key.
@@ -394,6 +404,22 @@ func (l *Limiter) clearExpiredLocked(e *attempt, now time.Time) {
 		e.members = nil
 		e.lockedUntil = time.Time{}
 	}
+}
+
+// edge returns the expiry ONLY when this call is the one that armed it.
+//
+// Callers use the returned time to decide whether to record a lockout, and the
+// standing state is the wrong answer to that question: Begin arms lockedUntil
+// when it refuses on the in-flight cap, so every concurrent attempt that
+// already held a reservation would report a lockout it did not cause. One
+// burst then wrote one permanent audit row per request — the trail becoming
+// the amplifier the limiter exists to remove, with the attacker choosing the
+// multiplier.
+func edge(wasLocked bool, until time.Time) time.Time {
+	if wasLocked {
+		return time.Time{}
+	}
+	return until
 }
 
 func (l *Limiter) gcLocked(key string, e *attempt) {

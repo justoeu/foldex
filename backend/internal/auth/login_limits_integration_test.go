@@ -187,9 +187,13 @@ func TestLogin_AliasesOfOneAccountCostTheSameAsStrangers(t *testing.T) {
 		h := newHarness(t)
 		c := h.client(t)
 		testdb.SeedUserWithPassword(t, h.pool, "alias@example.com", "a good password", "editor")
-		_, err := h.pool.Exec(t.Context(),
+		tag, err := h.pool.Exec(t.Context(),
 			`UPDATE app_user SET username = 'aliasuser', username_normalized = 'aliasuser' WHERE email = 'alias@example.com'`)
 		require.NoError(t, err)
+		// A zero-row UPDATE would make BOTH arms measure a pair that names
+		// nothing, and the test would agree with itself while the oracle was
+		// live. The fixture has to prove it built the case.
+		require.EqualValues(t, 1, tag.RowsAffected(), "the alias fixture did not take")
 		return probesUntilRefused(t, c, n+2, []string{"aliasuser", "alias@example.com"})
 	}
 	// The same two shapes, naming nothing at all.
@@ -199,7 +203,12 @@ func TestLogin_AliasesOfOneAccountCostTheSameAsStrangers(t *testing.T) {
 		return probesUntilRefused(t, c, n+2, []string{"ghostuser", "ghost@example.com"})
 	}
 
-	assert.Equal(t, withoutAccount(t), withAccount(t),
+	// Anchored absolutely as well as against each other: two arms that agree on
+	// the WRONG number would pass a comparison-only assertion.
+	strangers := withoutAccount(t)
+	require.Equal(t, n+1, strangers,
+		"two identifiers that name nothing must each cost one member, so the ceiling falls on probe %d", n+1)
+	assert.Equal(t, strangers, withAccount(t),
 		"the origin must reach its ceiling after the same number of probes whether or not "+
 			"two submitted identifiers happen to name one account — otherwise 429-vs-401 is a "+
 			"username-to-mailbox oracle for an anonymous caller")
@@ -224,4 +233,32 @@ func probesUntilRefused(t *testing.T, c *client, max int, first []string) int {
 	}
 	t.Fatalf("never refused after %d probes", max)
 	return 0
+}
+
+// The per-account lockout writes its own row, labelled `account`.
+//
+// The two constants exist "so a typo would be a category nobody can search
+// for", and until this test nothing read either of them back: the sweep test
+// used a distinct address per probe, so only the origin bucket ever tripped and
+// swapping the two labels was green.
+func TestLogin_AnAccountLockoutIsLabelledAsSuch(t *testing.T) {
+	h := newHarness(t)
+	c := h.client(t)
+	testdb.SeedUserWithPassword(t, h.pool, "hammered@example.com", "a good password", "editor")
+
+	// The SAME account every time, so the account bucket is what trips and the
+	// origin's breadth stays at one.
+	for i := range abusepolicy.Default().LoginFailuresPerAccount {
+		rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
+			"email": "hammered@example.com", "password": "wrong",
+		})
+		require.Equal(t, http.StatusUnauthorized, rec.Code, "attempt %d", i+1)
+	}
+
+	var detail *string
+	require.NoError(t, h.pool.QueryRow(t.Context(),
+		`SELECT detail FROM audit_log WHERE action = 'auth.rate_limited'`).Scan(&detail))
+	require.NotNil(t, detail)
+	assert.Equal(t, "account", *detail,
+		"a lockout earned by hammering ONE account must not be filed as a sweep of many")
 }

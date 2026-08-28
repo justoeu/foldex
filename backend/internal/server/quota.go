@@ -200,8 +200,12 @@ func (q *apiQuota) middleware(next http.Handler) http.Handler {
 		charged := false
 		if isExpensive(r.Method, r.URL.Path) {
 			if d := q.expensive.Allow(key, expensiveLimit); !d.Allowed {
-				q.auditRefusal(r, key)
+				// Answer FIRST. The audit write is best-effort bookkeeping
+				// against a database that may be slow, and making the caller
+				// wait for it puts a stall in front of the very response whose
+				// job is to say "back off now".
 				writeRateLimited(w, d.RetryAfter)
+				q.auditRefusal(r, key)
 				return
 			}
 			charged = true
@@ -217,8 +221,8 @@ func (q *apiQuota) middleware(next http.Handler) http.Handler {
 				// their imports for the rest of the hour.
 				q.expensive.Refund(key, expensiveLimit)
 			}
-			q.auditRefusal(r, key)
 			writeRateLimited(w, d.RetryAfter)
+			q.auditRefusal(r, key)
 			return
 		}
 		next.ServeHTTP(w, r)

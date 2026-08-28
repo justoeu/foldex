@@ -251,7 +251,8 @@ func TestClickCoalesce_TheMapNeverExceedsItsCeiling(t *testing.T) {
 	// A ceiling assertion alone passes at ZERO — deleting the insert entirely
 	// would satisfy it, and a limiter that stores nothing limits nothing. The
 	// floor is what makes the ceiling mean something.
-	assert.Positive(t, cc.len(), "the map is empty — nothing was ever recorded, so the ceiling proves nothing")
+	assert.GreaterOrEqual(t, cc.len(), 64-clickCoalesceEvictionBatch,
+		"the map holds %d of a 64 ceiling; the visitor keys are collapsing, not evicting", cc.len())
 	assert.LessOrEqual(t, cc.len(), 64, "the dedup map grew past its ceiling")
 }
 

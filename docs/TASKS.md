@@ -889,3 +889,58 @@ Followup adicionado:
   URL), que o middleware já conhece antes da consulta. Com isso a decisão precede o SQL e o
   resolve inteiro vira uma única instrução. Custa reabrir o desenho do `clickctx`, que hoje
   é keyed no id justamente porque o middleware não o tem.
+
+### 2026-08-28 (cont. 2) — a re-revisão do patch achou que dois consertos deslocaram o defeito
+
+Três agentes re-rodados sobre o commit de correção. Segurança: **nenhum HIGH**. Code Review:
+**dois**, e os dois eram meus.
+
+1. **A auditoria de lockout continuava sendo um amplificador.** O comentário que eu escrevi
+   — "`Begin` recusa uma chave já trancada antes do ramo de falha, então uma expiração
+   não-zero aqui é a borda e não uma repetição" — é **falso sob concorrência**, e
+   concorrência é o que o atacante controla. `Begin` também GRAVA `lockedUntil` quando
+   recusa pelo teto de in-flight, então cada requisição em voo lia de volta uma expiração
+   não-zero e gravava uma linha. Reproduzido pelo agente: 3 commits, 1 conta sondada,
+   3 linhas. Os commits passam a reportar a BORDA (`edge()`), não o estado.
+2. **`CommitSuccess` limpava o `lockedUntil` de uma chave em modo conjunto** — não era
+   bypass (o próximo `Begin` re-arma), mas reiniciava o relógio da penalidade com um login
+   legítimo do próprio atacante, e contrariava a doutrina que o conserto anterior tinha
+   acabado de estabelecer.
+
+**E o Test Quality achou fraquezas nos meus próprios testes**, o que é o resultado mais útil
+da rodada:
+
+- `TestEveryTerminalPathReleasesTheReservation` se **auto-neutralizava**: o `Reset` no meio
+  apagava a entrada e o vazamento com ela, então dois dos quatro subtestes afirmavam só
+  "`Begin` num limitador novo funciona". A segunda tentativa (teto de 1000) tinha o defeito
+  oposto — seis slots vazados não alcançam mil. Reescrito para MEDIR o orçamento restante,
+  que é a única forma de ver uma reserva vazada. Mutante agora morre.
+- Uma asserção estava **duplicada verbatim** e a irmã dela ficou sem piso: é a armadilha do
+  `replace_all` que a memória do projeto já registra — dois trechos idênticos, uma edição
+  com `count=1`, e as duas mudanças caem na mesma linha. Ambas viraram igualdade EXATA
+  (`Equal(max, admitted)`), porque um `LessOrEqual` sozinho passa num limitador que não
+  admite nada — a metade "negação de serviço" do mesmo defeito.
+- A fixture do teste de oráculo não conferia `RowsAffected`: um `UPDATE` de zero linhas
+  faria os dois braços medirem um par que não nomeia nada, e o teste concordaria consigo
+  mesmo com o oráculo vivo.
+- `quotaAuditor` **não era exercido por nada** — todos os testes usavam um dublê, então
+  `return nil` incondicional deixava a suíte verde e o sinal da metade autenticada
+  desaparecia em silêncio. É a tese deste próprio ADR se repetindo. Ganhou teste de fiação
+  pelo router real; o mutante morre.
+- O ramo CARO da cota nunca refusava sob teste (`policyWith(1, 1000)` só alcança o de
+  escrita), então apagar a auditoria dali era verde.
+- **O guard do nginx que eu escrevi era auto-referencial**: ele extrai a alternância do
+  próprio arquivo que audita, então prova "todo caminho NOMEADO é limitado" e nunca "todo
+  caminho que deve ser limitado está nomeado" — não pode pegar o defeito que o originou.
+  Entrou `TestEdgeZone_EveryAuthPOSTIsClassified`, que caminha o router REAL e exige que
+  todo POST de `/api/auth` esteja na zona apertada ou numa lista de exceções com motivo
+  escrito. A primeira versão dele, em `internal/server`, iterava sobre ZERO rotas
+  (`fullyWiredDeps()` não monta `AuthHandler`) e sobreviveu a apagar `login` da zona — o
+  teste ganhou uma asserção de que o walk não é vazio por causa disso.
+
+Correções menores da mesma rodada: `2fa/email/confirm` e `2fa/totp/confirm` entraram na zona
+apertada; o 429 passa a ser escrito ANTES da auditoria (a escrita pode esperar até 5 s por um
+banco lento); as locales do guard de paridade vêm do diretório e não de uma lista; o
+`replace('.', '_')` do `RolesMatrix` trocava só o PRIMEIRO ponto e concordava com o guard por
+sorte; e o comentário do `memoryRetain` afirmava que derrubar um balde cedo "é inofensivo,
+ele se re-semeia" — verdade para uma sequência escalar, falso para um conjunto de largura.

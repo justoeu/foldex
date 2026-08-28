@@ -179,7 +179,12 @@ func TestAllow_TheMapNeverExceedsItsCeiling(t *testing.T) {
 	// A ceiling assertion alone passes at ZERO — deleting the insert entirely
 	// would satisfy it, and a limiter that stores nothing limits nothing. The
 	// floor is what makes the ceiling mean something.
-	assert.Positive(t, l.Len(), "the map is empty — nothing was ever stored, so the ceiling proves nothing")
+	// A NEAR-FULL map, not merely a non-empty one. `Positive` would pass on a
+	// limiter whose key derivation collapsed every caller into one bucket —
+	// which is a shared budget for the whole instance, the denial of service
+	// this ceiling exists beside.
+	assert.GreaterOrEqual(t, l.Len(), 32-evictionBatch,
+		"the map holds %d of a 32 ceiling; the keys are collapsing, not evicting", l.Len())
 	assert.LessOrEqual(t, l.Len(), 32, "the bucket map grew past its ceiling")
 }
 

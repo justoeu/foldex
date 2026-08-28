@@ -106,14 +106,14 @@ func (c *Cache) Current(ctx context.Context) Policy {
 	}
 	now := c.clock()
 	if c.exp.Load() > now.UnixNano() {
-		return *c.current.Load()
+		return c.snapshot()
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Double-check: another goroutine may have refreshed while we waited.
 	if c.exp.Load() > c.clock().UnixNano() {
-		return *c.current.Load()
+		return c.snapshot()
 	}
 
 	// Detached context. The caller's request may be cancelled a millisecond
@@ -131,7 +131,7 @@ func (c *Cache) Current(ctx context.Context) Policy {
 		// exists to prevent, arriving from inside.
 		c.exp.Store(c.clock().Add(c.ttl).UnixNano())
 		c.log.Warn("abuse policy load failed; keeping the previous values", "error", err)
-		return *c.current.Load()
+		return c.snapshot()
 	}
 	next := p.Sanitize()
 	c.current.Store(&next)
@@ -147,6 +147,16 @@ func (c *Cache) Invalidate() {
 		return
 	}
 	c.exp.Store(0)
+}
+
+// snapshot reads the stored document, tolerating a Cache built as a literal
+// rather than through NewCache. Dereferencing the pointer directly turned that
+// case from "a zero Policy" into a panic — on a path that every request runs.
+func (c *Cache) snapshot() Policy {
+	if p := c.current.Load(); p != nil {
+		return *p
+	}
+	return Default()
 }
 
 func (c *Cache) clock() time.Time {

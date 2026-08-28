@@ -141,13 +141,20 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 	}
 }
 
-// memoryRetain is how long an idle in-memory key survives.
+// memoryRetain is how long an idle in-memory key survives, and it MUST stay at
+// or above abusepolicy.MaxLoginWindowMinutes.
 //
-// Much shorter than the row retention: these caches hold no durable state
-// worth keeping, and dropping a live entry early is harmless — a rate-limit
-// bucket re-seeds on the next attempt, and a throttle entry costs one extra
-// last_seen_at UPDATE. A live LOCKOUT is never dropped; attemptlimit.Sweep
-// skips those explicitly.
+// Much shorter than the row retention, because these caches hold no durable
+// state worth keeping. What used to be written here — "dropping a live entry
+// early is harmless, a rate-limit bucket re-seeds on the next attempt" — stopped
+// being true when the login-by-IP bucket started counting BREADTH (ADR-47): its
+// entry is not a streak that rebuilds itself, it is the set of accounts that
+// origin has already failed against, and dropping it forgives a sweep in
+// progress. A live LOCKOUT is still never dropped; attemptlimit.Sweep skips
+// those explicitly.
+//
+// TestMemoryRetainOutlivesTheWidestLoginWindow is what keeps the two numbers in
+// step — they live in different packages and nothing else connects them.
 func (s *Sweeper) memoryRetain() time.Duration {
 	return 2 * time.Hour
 }
