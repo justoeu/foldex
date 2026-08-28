@@ -35,7 +35,20 @@ web/certs/
 backups/
 
 # Claude Code per-session state (lock files, local user settings)
-.claude/
+# `.claude/*`, não `.claude/` — git não reabre um caminho cujo DIRETÓRIO pai foi
+# excluído, então a forma com barra faz as negações abaixo não terem efeito
+# nenhum, em silêncio.
+.claude/*
+# As skills do PROJETO ficam versionadas: elas referenciam os invariantes deste
+# repo e carregam uma linha de "estado conhecido" que envelhece junto com o
+# código — mantê-las fora dele seria garantir que ficassem erradas.
+!.claude/skills/
+# ...exceto as skills do PROJETO. Elas referenciam os invariantes deste repo e
+# carregam uma linha de "estado conhecido" que envelhece junto com o código —
+# versioná-las fora dele seria garantir que ficassem erradas. O resto de
+# .claude/ (settings.local.json, worktrees) continua ignorado.
+!.claude/skills/
+!.claude/skills/**
 
 # Playwright MCP artifacts (snapshots, console logs from in-session debugging)
 .playwright-mcp/
