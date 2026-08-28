@@ -26,7 +26,7 @@ func TestAuditCategory_IsExactlyTheDocumentedSplit(t *testing.T) {
 		AuditInviteCreated, AuditInviteRevoked, AuditSessionsRevoked,
 		AuditPasswordRecovery, AuditPolicyChanged, AuditRolePermissions,
 		AuditBackupRunRequested, AuditBackupScheduleChanged, AuditEmailChanged,
-		AuditIPBlocked, AuditIPUnblocked,
+		AuditIPBlocked, AuditIPUnblocked, AuditRateLimited,
 	}
 	for _, a := range content {
 		assert.Equal(t, CategoryContent, AuditCategory(a), "action %q", a)
@@ -83,6 +83,10 @@ func TestAuditSeverity_ClassifiesTheVocabulary(t *testing.T) {
 	assert.Equal(t, SeverityInfo, AuditSeverity(AuditLinkCreated, 0))
 	assert.Equal(t, SeverityWarning, AuditSeverity(AuditRoleChanged, 0))
 	assert.Equal(t, SeverityWarning, AuditSeverity(AuditIPBlocked, 0))
+	// A lockout is a warning, not an incident: it is the control WORKING.
+	// Critical is reserved for authority moving, and warn is what makes the
+	// anomaly panel's throttle rule findable in the same trail.
+	assert.Equal(t, SeverityWarning, AuditSeverity(AuditRateLimited, 0))
 	assert.Equal(t, SeverityCritical, AuditSeverity(AuditUserDeleted, 0))
 	assert.Equal(t, SeverityCritical, AuditSeverity(AuditOwnershipMoved, 0))
 	assert.Equal(t, SeverityCritical, AuditSeverity(AuditRolePermissions, 0))
@@ -112,4 +116,16 @@ func TestAuditActions_IsStableAndCopied(t *testing.T) {
 	first[0] = "mutated"
 	assert.NotEqual(t, "mutated", AuditActions()[0],
 		"AuditActions must hand out a copy, or one caller can corrupt the vocabulary")
+}
+
+// A lockout is an IDENTITY event. Classified as content it would be withheld
+// from the administrative projection — and the throttle rule of the anomaly
+// panel reads exactly these rows, so the screen built to surface the strongest
+// signal there is would have been the one screen that could not see it.
+func TestAuditCategory_RateLimitedIsIdentityNotContent(t *testing.T) {
+	assert.Equal(t, CategoryIdentity, AuditCategory(AuditRateLimited))
+	assert.True(t, KnownAuditAction(AuditRateLimited))
+	assert.Contains(t, AuditActions(), AuditRateLimited,
+		"an action absent from the order is absent from the filter row")
+	assert.NotContains(t, ContentActions(), AuditRateLimited)
 }
