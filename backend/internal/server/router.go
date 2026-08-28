@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/abusepolicy"
 	"foldex/internal/auth"
 	"foldex/internal/backup"
 	"foldex/internal/backupstatus"
@@ -92,7 +93,13 @@ type Deps struct {
 	AuthRepo *auth.Repository
 	// PolicyHandler serves the owner-configurable instance rules. Nil leaves the
 	// routes unmounted and every rule at its compiled-in floor.
-	PolicyHandler  *policy.Handler
+	PolicyHandler *policy.Handler
+	// AbusePolicy is the live rate-limit policy (ADR-47 / SDD-ABUSE-DEFENSE).
+	// It is read per request so an owner tightening a limit does not have to
+	// restart the instance being defended. Nil — the zero-value Deps every
+	// router test uses — enforces the COMPILED DEFAULTS, never "no limit": an
+	// unwired dependency must not switch a defence off silently.
+	AbusePolicy    *abusepolicy.Cache
 	AuthMiddleware *auth.Middleware
 	FolderHandler  *folders.Handler
 
@@ -241,8 +248,15 @@ func New(d Deps) http.Handler {
 	// Both public share routes resolve with NO session, so a numeric id there
 	// is an enumeration oracle across every tenant — see ADR-32. Off unless the
 	// operator opts in for the sake of already-shared /go/42 links.
-	redirect.NewHandler(linksRepo, d.Config.PublicNumericIDs).Mount(r)
-	notes.NewPublicHandler(notesRepo, d.Config.PublicNumericIDs).Mount(r)
+	// A Group, not r.Use: chi requires every middleware to be registered before
+	// any route on the same mux, and /healthz is already registered above. The
+	// narrower scope is what we want anyway — the coalescer decides nothing
+	// outside these two public surfaces.
+	r.Group(func(pub chi.Router) {
+		pub.Use(newClickCoalescer(d.AbusePolicy).middleware)
+		redirect.NewHandler(linksRepo, d.Config.PublicNumericIDs).Mount(pub)
+		notes.NewPublicHandler(notesRepo, d.Config.PublicNumericIDs).Mount(pub)
+	})
 	if fileHandler != nil {
 		// Public note HTML references these exact URLs. This one narrow
 		// UUID-keyed read is deliberately session-less; all other object
@@ -277,6 +291,12 @@ func New(d Deps) http.Handler {
 			} else {
 				pr.Use(bootstrapPrincipal(d.Pool, d.Logger))
 			}
+
+			// The authenticated write quota (SDD-ABUSE-DEFENSE §5.3). Directly
+			// below principal resolution, because it keys on the principal;
+			// above everything else, because a request it refuses must cost
+			// nothing further. No role is exempt, the owner included.
+			pr.Use(newAPIQuota(d.AbusePolicy).middleware)
 
 			// Content auditing (ADR-46). Inside the principal group so the
 			// actor is resolved, and above every content route so a route
