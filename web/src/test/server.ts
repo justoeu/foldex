@@ -7,6 +7,15 @@ import type { Entry, Folder, Link, Note, Tag } from '../api/types'
 
 export type MockState = {
   tags: Tag[]
+  /**
+   * The signed-in account's own content activity (ADR-46).
+   *
+   * Rows carry `subject` — the link's title, the folder's name — because this
+   * feed's reader IS the actor. The administrative trail never selects that
+   * column, so a fixture that leaked one here would be describing a projection
+   * the server does not have.
+   */
+  activity: AuditEntryMock[]
   links: Link[]
   notes: Note[]
   folders: Folder[]
@@ -89,18 +98,37 @@ export type MockState = {
   // Configurable backup schedule (ADR-44). `backupScheduleRows` is the stored
   // (editable) layer keyed by job — only jobs with a row appear, mirroring the
   // backend. `backupAgent` is the heartbeat; unset = never seen, served as
-  // null. PUT validates the per-job shape like backupagent.ValidateJobConfig
-  // (400 invalid_schedule) and upserts the row; DELETE removes it. Requests
+  // null — and each of its per-job reports carries the structured env
+  // `baseline` the editor seeds from. PUT validates the unified shape like
+  // backupagent.ValidateJobConfig (400 invalid_schedule) and upserts the row;
+  // DELETE removes it. Requests
   // are recorded in `backupSchedulePuts` / `backupScheduleDeletes` so tests
   // assert WHAT was sent, not only that something was.
   backupScheduleRows?: Record<string, any>
   backupAgent?: any
   backupSchedulePuts?: Array<{ job: string; config: any }>
   backupScheduleDeletes?: string[]
+  // Limits and abuse (SDD-ABUSE-DEFENSE). `abusePolicy` overrides individual
+  // knobs on top of the compiled defaults; `abuseCanWrite` drives the
+  // owner-only affordance (default true, so a test that does not care gets the
+  // writable form). PUT enforces the SAME two-sided bounds the Go package does
+  // and refuses with the SAME sentence — the screen renders that message
+  // verbatim, so a mock that invented its own wording would be testing nothing.
+  abusePolicy?: Partial<AbusePolicyMock>
+  abuseCanWrite?: boolean
+  abuseObserved?: Partial<AbuseObservedMock>
+  abusePolicyPuts?: AbusePolicyMock[]
+  // The anomalies panel. Unset = a quiet instance, which is the healthy state
+  // and the one the empty copy has to describe without sounding like a failure.
+  anomalies?: AnomalyMock[]
+  anomalyWindows?: string[]
 }
 
 export function freshState(): MockState {
-  return { tags: [], links: [], notes: [], folders: [], folderPasswords: {}, urlMetadataCalls: [] }
+  return {
+    tags: [], links: [], notes: [], folders: [], folderPasswords: {},
+    urlMetadataCalls: [], activity: [],
+  }
 }
 
 type Method = 'get' | 'post' | 'put' | 'patch' | 'delete'
@@ -122,6 +150,18 @@ function availability(value: string | null, s: MockState) {
 const buildRoutes = (): Record<Method, Route[]> => ({
   get: [
     { url: /^\/api\/tags$/, handle: (_m, _d, _p, s) => s.tags },
+    // The caller's OWN activity (ADR-46). Real route and real cursor param, so
+    // a rename on either side is caught here rather than in a blanket mock —
+    // and this is the ONE projection that returns `subject`, which is the
+    // property the read split exists to keep true.
+    {
+      url: /^\/api\/activity$/,
+      handle: (_m, _d, p, s) => {
+        const before = Number(p.get('before') ?? 0)
+        const rows = before > 0 ? s.activity.filter((e) => e.id < before) : s.activity
+        return { entries: rows.slice(0, 50) }
+      },
+    },
     // The availability probes. Present so component tests exercise the REAL
     // route and query-param name — a suite that only blanket-mocks `http.get`
     // stays green through a rename on either side. `takenIdentifiers` is empty
@@ -171,8 +211,9 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     { url: /^\/api\/admin\/backup\/schedule$/, handle: (_m, _d, _p, s) => ({
       jobs: ['dump', 'drill', 'mirror', 'user_zip'],
       rows: s.backupScheduleRows ?? {},
-      bounds: { dump_times_min: 1, dump_times_max: 6, mirror_interval_min: 15, mirror_interval_max: 1440 },
+      bounds: SCHEDULE_BOUNDS,
       agent: s.backupAgent ?? null,
+      agent_schema_version: AGENT_SCHEMA_VERSION,
     }) },
     { url: /^\/api\/admin\/backup\/runs$/, handle: (_m, _d, _p, s) => ({
       jobs: s.backupJobs ?? ['dump', 'drill', 'mirror', 'user_zip'].map((job) => ({
@@ -180,6 +221,26 @@ const buildRoutes = (): Record<Method, Route[]> => ({
       })),
       runs: s.backupStatusRuns ?? [],
     }) },
+    { url: /^\/api\/admin\/abuse-policy$/, handle: (_m, _d, _p, s) => ({
+      policy: abusePolicyOf(s),
+      bounds: ABUSE_BOUNDS,
+      observed: { ...ABUSE_OBSERVED_NONE, ...(s.abuseObserved ?? {}) },
+      can_write: s.abuseCanWrite !== false,
+    }) },
+    { url: /^\/api\/admin\/anomalies$/, handle: (_m, _d, p, s) => {
+      const w = p.get('window') ?? '24h'
+      ;(s.anomalyWindows ??= []).push(w)
+      const policy = abusePolicyOf(s)
+      return {
+        window: w,
+        thresholds: {
+          spray_accounts: policy.anomaly_spray_accounts,
+          hammer_failures: policy.anomaly_hammer_failures,
+          window_minutes: policy.anomaly_window_minutes,
+        },
+        anomalies: s.anomalies ?? [],
+      }
+    } },
   ],
   post: [
     { url: /^\/api\/admin\/users$/, handle: (_m, d, _p, s) => {
@@ -232,6 +293,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
   put: [
     { url: /^\/api\/settings\/master-password$/, handle: setMaster },
     { url: /^\/api\/admin\/backup\/schedule\/([a-z_]+)$/, handle: putBackupSchedule },
+    { url: /^\/api\/admin\/abuse-policy$/, handle: putAbusePolicy },
   ],
   patch: [
     { url: /^\/api\/tags\/(\d+)$/, handle: patchTag },
@@ -257,6 +319,133 @@ const buildRoutes = (): Record<Method, Route[]> => ({
 const SCHEDULE_JOBS = ['dump', 'drill', 'mirror', 'user_zip']
 const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 
+/**
+ * The compiled floors, in the server's own numbers — the same ones GET
+ * /api/admin/backup/schedule answers as `bounds`.
+ */
+
+const SCHEDULE_BOUNDS = {
+  times_min: 1,
+  times_max: 6,
+  weekdays_min: 1,
+  dump_weekdays_min: 5,
+  interval_min: 15,
+  interval_max: 1440,
+}
+
+/**
+ * The document shape the backend writes — backupagent.RequiredSchemaVersion.
+ * The band compares the heartbeat's own number against it to tell an agent
+ * that predates the unified agenda from one that speaks it.
+ */
+const AGENT_SCHEMA_VERSION = 43
+
+/** Only user_zip may be switched off — the other three are the instance's floor. */
+const MAY_DISABLE = ['user_zip']
+
+// ────────────────────────────────────────────────────────────────────────────
+// Limits and abuse (SDD-ABUSE-DEFENSE).
+
+export type AbusePolicyMock = {
+  login_distinct_accounts_per_ip: number
+  login_failures_per_account: number
+  login_window_minutes: number
+  api_writes_per_minute: number
+  api_expensive_per_hour: number
+  public_click_coalesce_seconds: number | null
+  anomaly_spray_accounts: number
+  anomaly_hammer_failures: number
+  anomaly_window_minutes: number
+}
+
+export type AbuseObservedMock = {
+  days: number
+  max_distinct_accounts_per_ip: number
+  max_failures_per_account: number
+  peak_writes_per_minute: number
+}
+
+export type AnomalyMock = {
+  kind: 'spray' | 'hammer' | 'throttle'
+  ip: string
+  ip_trusted: boolean
+  distinct_accounts: number
+  failures: number
+  throttles: number
+  first_seen: string
+  last_seen: string
+  blocked: boolean
+  severity: 'critical' | 'warning'
+}
+
+/**
+ * `abusepolicy.Bounds()`, field for field — including the ORDER, which puts the
+ * nullable coalesce knob last because the Go side appends it after the loop.
+ * The screen must look its bounds up by name; keeping the odd order here is
+ * what makes a screen that reads them positionally fail in a test rather than
+ * on an instance.
+ */
+const ABUSE_BOUNDS = [
+  { field: 'login_distinct_accounts_per_ip', min: 3, max: 100, default: 10 },
+  { field: 'login_failures_per_account', min: 3, max: 50, default: 5 },
+  { field: 'login_window_minutes', min: 5, max: 1440, default: 15 },
+  { field: 'api_writes_per_minute', min: 30, max: 6000, default: 120 },
+  { field: 'api_expensive_per_hour', min: 5, max: 1000, default: 20 },
+  { field: 'anomaly_spray_accounts', min: 2, max: 1000, default: 10 },
+  { field: 'anomaly_hammer_failures', min: 3, max: 1000, default: 20 },
+  { field: 'anomaly_window_minutes', min: 5, max: 10080, default: 15 },
+  { field: 'public_click_coalesce_seconds', min: 0, max: 3600, default: 10 },
+]
+
+/** `abusepolicy.Default()`, assembled from the bounds so the two cannot drift. */
+function abuseDefaults(): AbusePolicyMock {
+  const out: Record<string, number> = {}
+  for (const b of ABUSE_BOUNDS) out[b.field] = b.default
+  return out as unknown as AbusePolicyMock
+}
+
+/** An instance that has seen nothing yet. Zero is "no data", not a measurement. */
+const ABUSE_OBSERVED_NONE: AbuseObservedMock = {
+  days: 30,
+  max_distinct_accounts_per_ip: 0,
+  max_failures_per_account: 0,
+  peak_writes_per_minute: 0,
+}
+
+function abusePolicyOf(s: MockState): AbusePolicyMock {
+  return { ...abuseDefaults(), ...(s.abusePolicy ?? {}) }
+}
+
+/**
+ * `abusepolicy.ValidateForWrite`, refusal for refusal.
+ *
+ * The message is reproduced to the character because the screen renders it
+ * VERBATIM: it names the field and the two real numbers on purpose, and a mock
+ * that summarised it would let a component that rewrites the sentence pass.
+ */
+function putAbusePolicy(_m: RegExpMatchArray, d: any, _p: URLSearchParams, s: MockState) {
+  if (s.abuseCanWrite === false) {
+    const e: any = new Error('forbidden')
+    e.response = { status: 403, data: { error: { code: 'forbidden_role', message: 'only the instance owner may change these limits' } } }
+    throw e
+  }
+  for (const b of ABUSE_BOUNDS) {
+    const v = d?.[b.field]
+    // The nullable knob: absent means "leave it at the default", a legal write.
+    if (v == null && b.field === 'public_click_coalesce_seconds') continue
+    if (typeof v !== 'number' || v < b.min || v > b.max) {
+      const message = `${b.field} must be between ${b.min} and ${b.max}, got ${v}`
+      const e: any = new Error(message)
+      e.response = { status: 400, data: { error: { code: 'invalid_policy', message } } }
+      throw e
+    }
+  }
+  const policy = { ...abusePolicyOf(s), ...d } as AbusePolicyMock
+  ;(s.abusePolicyPuts ??= []).push(policy)
+  s.abusePolicy = policy
+  return { policy }
+}
+
 function invalidSchedule(message: string) {
   const e: any = new Error(message)
   e.response = { status: 400, data: { error: { code: 'invalid_schedule', message } } }
@@ -269,37 +458,134 @@ function invalidJob() {
   return e
 }
 
-const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
+/** Go's %q, near enough for the values a schedule document carries. */
+function q(v: unknown) {
+  return JSON.stringify(typeof v === 'string' ? v : String(v))
+}
 
-// Mirrors backupagent.ValidateJobConfig closely enough that a component test
-// exercising a bad payload sees the same 400 invalid_schedule + message shape
-// the real handler answers.
+/**
+ * backupagent.ParseAnchor, refusal for refusal. The mock reproduces it rather
+ * than testing "HH:MM" with a regex because the messages BELOW are asserted as
+ * the server's own words, and a message this file invents is a contract the
+ * suite cannot prove (CLAUDE.md §2: the mock tracks the backend).
+ */
+function parseAnchor(raw: string): { key: string; weekly: boolean } {
+  const fields = raw.trim().split(/\s+/).filter((f) => f !== '')
+  if (fields.length === 0 || fields.length > 2) {
+    throw new Error(`want "HH:MM" or "HH:MM sun", got ${q(raw)}`)
+  }
+  const hm = fields[0].split(':')
+  if (hm.length !== 2) throw new Error(`want "HH:MM", got ${q(fields[0])}`)
+  const hour = Number(hm[0])
+  const minute = Number(hm[1])
+  if (
+    !/^-?\d+$/.test(hm[0]) || !/^-?\d+$/.test(hm[1]) ||
+    hour < 0 || hour > 23 || minute < 0 || minute > 59
+  ) {
+    throw new Error(`${q(fields[0])} is not a valid 24h wall time`)
+  }
+  // Rendered back the way Anchor.String() does, so "3:30" and "03:30" are the
+  // same anchor and the repeat check catches them.
+  const key = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+  if (fields.length === 1) return { key, weekly: false }
+  if (!WEEKDAYS.includes(fields[1].toLowerCase())) {
+    throw new Error(`${q(fields[1])} is not a weekday (sun..sat)`)
+  }
+  return { key, weekly: true }
+}
+
+/** backupagent.validateTimes. */
+function validateTimes(job: string, times: any) {
+  const list: any[] = Array.isArray(times) ? times : []
+  if (list.length < SCHEDULE_BOUNDS.times_min || list.length > SCHEDULE_BOUNDS.times_max) {
+    throw invalidSchedule(
+      `${job} needs between ${SCHEDULE_BOUNDS.times_min} and ${SCHEDULE_BOUNDS.times_max} wall times — the floor is one run per scheduled day, never zero`,
+    )
+  }
+  const seen = new Set<string>()
+  for (const raw of list) {
+    let anchor: { key: string; weekly: boolean }
+    try {
+      anchor = parseAnchor(String(raw))
+    } catch (err) {
+      throw invalidSchedule(`${job} time ${q(raw)}: ${(err as Error).message}`)
+    }
+    if (anchor.weekly) {
+      throw invalidSchedule(`${job} time ${q(raw)}: the weekday belongs in "weekdays", not in the time`)
+    }
+    if (seen.has(anchor.key)) throw invalidSchedule(`${job} time ${q(raw)} repeats`)
+    seen.add(anchor.key)
+  }
+}
+
+/** backupagent.validateWeekdays. */
+function validateWeekdays(job: string, days: any, minDays: number) {
+  const list: any[] = Array.isArray(days) ? days : []
+  if (list.length === 0) {
+    throw invalidSchedule(
+      `${job} needs at least ${minDays} weekday(s) — an agenda that fires on no day is the job switched off`,
+    )
+  }
+  const seen = new Set<string>()
+  for (const raw of list) {
+    const wd = String(raw).trim().toLowerCase()
+    if (!WEEKDAYS.includes(wd)) throw invalidSchedule(`${job} weekday ${q(raw)} is not one of sun..sat`)
+    if (seen.has(wd)) throw invalidSchedule(`${job} weekday ${q(raw)} repeats`)
+    seen.add(wd)
+  }
+  if (seen.size < minDays) {
+    throw invalidSchedule(`${job} needs at least ${minDays} weekdays, got ${seen.size}`)
+  }
+}
+
+/**
+ * backupagent.ValidateJobConfig, refusal for refusal and message for message.
+ * The UI renders the server's 400 verbatim (INV-138 by analogy), so a test
+ * asserting that text is only proving a contract while THIS function says what
+ * the backend says — a message invented here drifts, and the assertion then
+ * proves the screen renders a string the product never sends.
+ */
 function validateScheduleConfig(job: string, cfg: any) {
-  if (job === 'dump') {
-    const times = cfg?.times
-    if (!Array.isArray(times) || times.length < 1 || times.length > 6) {
-      throw invalidSchedule('dump needs between 1 and 6 daily times — the floor is one dump per day, never zero')
+  const floorWeekdays = job === 'dump'
+    ? SCHEDULE_BOUNDS.dump_weekdays_min
+    : SCHEDULE_BOUNDS.weekdays_min
+
+  if (cfg?.time || cfg?.weekday) {
+    throw invalidSchedule('"time" and "weekday" are the previous schedule vocabulary and are read-only — send {"mode":"times","times":[…],"weekdays":[…]}')
+  }
+  if (cfg?.mode !== 'times' && cfg?.mode !== 'interval') {
+    throw invalidSchedule(`${job} needs "mode": "times" or "interval"`)
+  }
+  if (cfg?.enabled !== undefined && !MAY_DISABLE.includes(job)) {
+    throw invalidSchedule(`${job} cannot be switched off — only user_zip carries "enabled", because it is the one job that is a product convenience rather than the instance's protection`)
+  }
+  if (cfg?.enabled === false) {
+    if (
+      (Array.isArray(cfg.times) && cfg.times.length > 0) ||
+      (Array.isArray(cfg.weekdays) && cfg.weekdays.length > 0) ||
+      (cfg.interval_min ?? 0) !== 0
+    ) {
+      throw invalidSchedule(`a disabled ${job} carries no agenda — send "enabled": false alone`)
     }
-    const seen = new Set<string>()
-    for (const t of times) {
-      if (typeof t !== 'string' || !HHMM.test(t)) throw invalidSchedule(`dump time ${JSON.stringify(t)}: expected HH:MM`)
-      if (seen.has(t)) throw invalidSchedule(`dump time "${t}" repeats`)
-      seen.add(t)
+    return
+  }
+
+  if (cfg.mode === 'times') {
+    if ((cfg.interval_min ?? 0) !== 0) {
+      throw invalidSchedule('mode "times" does not carry "interval_min"')
     }
-  } else if (job === 'drill') {
-    if (typeof cfg?.time !== 'string' || !HHMM.test(cfg.time) || !WEEKDAYS.includes(cfg?.weekday)) {
-      throw invalidSchedule('drill needs "time" and "weekday" — it is weekly by design and a row cannot switch it off')
-    }
-  } else if (job === 'mirror') {
-    const n = cfg?.interval_min
-    if (typeof n !== 'number' || n < 15 || n > 1440) {
-      throw invalidSchedule('mirror interval must be between 15 and 1440 minutes — a row tunes the cadence, it cannot switch the mirror off')
-    }
-  } else {
-    if (typeof cfg?.enabled !== 'boolean') throw invalidSchedule('user_zip needs "enabled"')
-    if (cfg.enabled && (typeof cfg.time !== 'string' || !HHMM.test(cfg.time))) {
-      throw invalidSchedule('user_zip needs "time" while enabled')
-    }
+    validateTimes(job, cfg.times)
+    validateWeekdays(job, cfg.weekdays, floorWeekdays)
+    return
+  }
+  if (cfg.times != null || cfg.weekdays != null) {
+    throw invalidSchedule('mode "interval" does not carry "times" or "weekdays"')
+  }
+  const n = cfg.interval_min
+  if (typeof n !== 'number' || n < SCHEDULE_BOUNDS.interval_min || n > SCHEDULE_BOUNDS.interval_max) {
+    throw invalidSchedule(
+      `${job} interval must be between ${SCHEDULE_BOUNDS.interval_min} and ${SCHEDULE_BOUNDS.interval_max} minutes — a row tunes the cadence, it cannot switch the job off`,
+    )
   }
 }
 
@@ -361,6 +647,22 @@ function seenChange(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockSt
   }
   s.links[idx] = { ...s.links[idx], change_seen_at: new Date().toISOString() }
   return null
+}
+
+/** One row of the own-activity feed, as /api/activity returns it. */
+export type AuditEntryMock = {
+  id: number
+  action: string
+  category: 'content'
+  severity: 'info'
+  detail: string | null
+  ip: string | null
+  ip_trusted: boolean
+  user_agent: string | null
+  entity_kind: string | null
+  entity_id: number | null
+  subject: string | null
+  created_at: string
 }
 
 export function installAxiosMock(state: MockState) {

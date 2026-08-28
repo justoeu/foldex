@@ -1,8 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BackupSection } from './BackupSection'
-import { renderWithProviders, testAdminSession, testAdminUser } from '../../test/renderWithProviders'
+import {
+  makeQueryClient,
+  renderWithProviders,
+  testAdminSession,
+  testAdminUser,
+} from '../../test/renderWithProviders'
+import { backupScheduleQueryKey } from '../../api/admin'
+import { http } from '../../api/client'
 import { freshState, installAxiosMock, type MockState } from '../../test/server'
 import type { SessionState } from '../../auth/types'
 
@@ -50,21 +57,41 @@ function jobsSummary(
   ].map((j) => ({ ...j, ...extra[j.job] }))
 }
 
+/** The card for one job, addressed through the control that selects it. */
+function jobCard(name: string): HTMLElement {
+  const head = screen.getByRole('button', { name: `Show the schedule for ${name}` })
+  return head.closest('.fx-bkp-job') as HTMLElement
+}
+
+/** One headline number, addressed by its LABEL rather than by its position. */
+function kpiValue(label: string): HTMLElement {
+  const kpi = screen.getByText(label).closest('.fx-bkp-kpi') as HTMLElement
+  return kpi.querySelector('.fx-bkp-kpi-value') as HTMLElement
+}
+
+/** The agent's own panel — the heartbeat, not the editable agenda beside it. */
+function agentPanel(): HTMLElement {
+  return document.querySelector('.fx-bkp-agent') as HTMLElement
+}
+
 describe('BackupSection', () => {
   it('renders one row per job and the honest empty state when nothing ever ran', async () => {
     renderWithProviders(<BackupSection />)
 
-    // Each job name renders twice: the status table row and the schedule row.
+    // One card per job, plus the agenda tab that mirrors it.
     expect(await screen.findAllByText('Database dump')).not.toHaveLength(0)
     expect(screen.getAllByText('Restore drill')).not.toHaveLength(0)
     expect(screen.getAllByText('Object mirror')).not.toHaveLength(0)
     expect(screen.getAllByText('Per-user ZIPs')).not.toHaveLength(0)
+    expect(document.querySelectorAll('.fx-bkp-job')).toHaveLength(4)
 
     // Never ran + no history = the service is off, and the band says so
     // instead of looking healthy (the mailer incident's lesson).
-    expect(screen.getByText('The backup service is not active')).toBeInTheDocument()
-    expect(screen.getByText('COMPOSE_PROFILES=backup')).toBeInTheDocument()
-    expect(screen.getAllByText('never ran')).toHaveLength(4)
+    const inactive = screen.getByText('The backup service is not active').closest('.fx-banner')!
+    expect(within(inactive as HTMLElement).getByText('COMPOSE_PROFILES=backup')).toBeInTheDocument()
+    // One "never ran" chip per job card, plus the two KPI hints that have no
+    // run to describe.
+    expect(screen.getAllByText('never ran').length).toBeGreaterThanOrEqual(4)
     expect(screen.getByText('No runs recorded.')).toBeInTheDocument()
   })
 
@@ -74,7 +101,8 @@ describe('BackupSection', () => {
     state.backupStatusRuns = [fresh]
 
     const { unmount } = renderWithProviders(<BackupSection />)
-    const freshCell = (await screen.findByText(/2h/)).closest('span')
+    await screen.findAllByText(/2h/)
+    const freshCell = document.querySelector('.fx-bkp-metric-value')
     expect(freshCell?.className).not.toContain('fx-bkp-stale')
     expect(screen.queryByText(/older than 26h/)).not.toBeInTheDocument()
     unmount()
@@ -177,14 +205,266 @@ describe('BackupSection', () => {
 
     renderWithProviders(<BackupSection />)
     expect(await screen.findByText('Last restore drill')).toBeInTheDocument()
-    expect(screen.getByText(/Validated dump run #21/)).toBeInTheDocument()
-    expect(screen.getByText('link: 42')).toBeInTheDocument()
-    expect(screen.getByText('note: 7')).toBeInTheDocument()
+    expect(screen.getByText('Dump #21 validated successfully')).toBeInTheDocument()
+    // Table and count are separate elements so the number can carry its own
+    // weight; the chip still reads "link 42".
+    const counts = [...document.querySelectorAll('.fx-bkp-count')].map((n) => n.textContent)
+    expect(counts).toContain('link42')
+    expect(counts).toContain('note7')
 
     // The artifact row renders truncated but titled with the full key, and the
     // SHA is copiable behind a visible label (INV-151).
-    expect(screen.getAllByTitle('foldex/dump/2026-08-26.dump.age').length).toBeGreaterThan(0)
-    expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
+    const dumpCard = jobCard('Database dump')
+    expect(within(dumpCard).getByTitle('foldex/dump/2026-08-26.dump.age')).toBeInTheDocument()
+    expect(within(dumpCard).getByRole('button', { name: /Copy/ })).toBeInTheDocument()
+  })
+})
+
+describe('BackupSection layout', () => {
+  /*
+   * The four headline numbers are values the API answered — nothing here is
+   * derived from a window the query does not have. "Retained artifacts" and
+   * "failures in 7 days" are deliberately absent for exactly that reason.
+   */
+  it('summarises the instance with numbers the server actually returned', async () => {
+    const dump = run({ id: 30, artifact_bytes: 134_000 })
+    const drill = run({ id: 31, job: 'drill', drill_of_run_id: 30, meta: { tables: { link: 42, note: 7 } } })
+    state.backupJobs = jobsSummary(dump, {
+      drill: { last_success: drill },
+      // Two jobs failing, with DIFFERENT counts: a regression from
+      // max-across-jobs to sum-across-jobs would read 5 here, not 3.
+      mirror: { consecutive_failures: 3 },
+      user_zip: { consecutive_failures: 2 },
+    })
+    state.backupStatusRuns = [drill, dump]
+
+    renderWithProviders(<BackupSection />)
+
+    expect(await screen.findByText('Last dump')).toBeInTheDocument()
+    expect(kpiValue('Dump size')).toHaveTextContent('131 KB')
+    expect(screen.getByText('drill validated 2 tables')).toBeInTheDocument()
+    // The failure KPI is the longest streak across jobs — the same number the
+    // alert rule compares against — and it is read through its own label, so
+    // reordering the four cannot make this assertion describe another one.
+    expect(kpiValue('Consecutive failures')).toHaveTextContent('3')
+  })
+
+  it('moves the agenda to whichever job card is selected', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    renderWithProviders(<BackupSection />)
+
+    expect(await screen.findByText('Database dump schedule')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Show the schedule for Object mirror' }))
+    expect(await screen.findByText('Object mirror schedule')).toBeInTheDocument()
+    // The card and the tab are one selection, so both report it.
+    expect(screen.getByRole('tab', { name: 'Object mirror' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+
+    // …and the binding runs the other way too: choosing a tab rings its card.
+    await user.click(screen.getByRole('tab', { name: 'Per-user ZIPs' }))
+    expect(await screen.findByText('Per-user ZIPs schedule')).toBeInTheDocument()
+    const selectedCard = document.querySelector('.fx-bkp-job-on')
+    expect(selectedCard?.textContent).toContain('Per-user ZIPs')
+  })
+
+  /*
+   * The job cards sit above the fold and the agenda below it, so a click that
+   * only changed state moved a form the reader could not see. The card brings
+   * the agenda to them; a TAB inside the agenda does not, because the click
+   * already happened in that card and moving it under the cursor is gratuitous.
+   */
+  it('brings the agenda into view from a job CARD, and leaves it alone from a TAB', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    renderWithProviders(<BackupSection />)
+    await screen.findByText('Database dump schedule')
+
+    const agenda = document.querySelector('.fx-bkp-agenda')!
+    // jsdom implements no scrollIntoView, so assigning it is what makes the
+    // call observable at all (same shape as useDialogInitialFocus.test.tsx).
+    const scrollIntoView = vi.fn()
+    ;(agenda as unknown as { scrollIntoView: () => void }).scrollIntoView = scrollIntoView
+    expect(agenda).toHaveAttribute('tabindex', '-1')
+
+    await user.click(screen.getByRole('button', { name: 'Show the schedule for Object mirror' }))
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled())
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: 'center',
+      behavior: expect.stringMatching(/^(auto|smooth)$/),
+    })
+
+    scrollIntoView.mockClear()
+    await user.click(screen.getByRole('tab', { name: 'Per-user ZIPs' }))
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('filters the history without asking the server for a different page', async () => {
+    const user = userEvent.setup()
+    const ok = run({ id: 40, status: 'succeeded' })
+    const bad = run({ id: 41, job: 'mirror', status: 'failed', last_error: 'upload_failed' })
+    state.backupStatusRuns = [bad, ok]
+
+    renderWithProviders(<BackupSection />)
+    expect(await screen.findByText('2 runs on this page.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Failed' }))
+    expect(screen.getByText('upload_failed')).toBeInTheDocument()
+    expect(screen.queryByText('succeeded')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Succeeded' }))
+    expect(screen.queryByText('upload_failed')).not.toBeInTheDocument()
+    // The count keeps describing the PAGE, not the filter — it is what the
+    // keyset query returned, and the filter is a local view of it.
+    expect(screen.getByText('2 runs on this page.')).toBeInTheDocument()
+  })
+})
+
+type Getter = (url: string, config?: unknown) => Promise<never>
+/**
+ * The mock `installAxiosMock` already put on `http.get`. Taken as its
+ * IMPLEMENTATION, never as a bound reference to the spy: `vi.spyOn` on an
+ * already-spied method hands back the same spy, so calling the reference back
+ * would call the replacement — one recursion per request, and a screen that
+ * reports every endpoint as down.
+ */
+function scheduleInterceptor(intercept: (fallthrough: Getter) => Getter) {
+  const spy = http.get as unknown as {
+    getMockImplementation(): Getter
+    mockImplementation(fn: Getter): void
+  }
+  spy.mockImplementation(intercept(spy.getMockImplementation()))
+}
+
+/**
+ * Replaces the agenda's OWN request; every other endpoint keeps the shared
+ * mock, so the screen around the agenda renders exactly as it always does.
+ */
+function answerSchedule(answer: () => Promise<{ data: unknown }>) {
+  scheduleInterceptor(
+    (mocked) => (url, config) =>
+      url.startsWith('/api/admin/backup/schedule')
+        ? (answer() as Promise<never>)
+        : mocked(url, config),
+  )
+}
+
+/**
+ * Holds the agenda's request open so the rest of the screen finishes loading
+ * around a still-pending agenda — the exact window a job card clicked during
+ * the first load lands in. Returns the release.
+ */
+function holdSchedule(): () => void {
+  let release!: () => void
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  scheduleInterceptor((mocked) => async (url, config) => {
+    if (url.startsWith('/api/admin/backup/schedule')) await held
+    return mocked(url, config)
+  })
+  return release
+}
+
+/** jsdom implements no scrollIntoView, so assigning it is what makes it observable. */
+function watchReveal(el: Element) {
+  const scrollIntoView = vi.fn()
+  ;(el as unknown as { scrollIntoView: () => void }).scrollIntoView = scrollIntoView
+  return { scrollIntoView, focus: vi.spyOn(el as HTMLElement, 'focus') }
+}
+
+/*
+ * The agenda slot is a focus target in ALL THREE of its states, not only the
+ * loaded one: a job card clicked during the first load reveals whatever is in
+ * the slot at that moment, and a placeholder that dropped the ref would send
+ * the reveal nowhere.
+ */
+describe('BackupSection agenda slot', () => {
+  it('keeps the agenda slot, its grid class and its focus target while the schedule loads', async () => {
+    const release = holdSchedule()
+    renderWithProviders(<BackupSection />)
+
+    // The screen is up — only the agenda is still waiting.
+    await screen.findByRole('button', { name: 'Show the schedule for Object mirror' })
+    const slot = document.querySelector('.fx-bkp-agenda')!
+    expect(slot).toHaveAttribute('tabindex', '-1')
+    expect(within(slot as HTMLElement).getByText('Loading…')).toBeInTheDocument()
+
+    release()
+    expect(await screen.findByText('Database dump schedule')).toBeInTheDocument()
+    expect(within(slot as HTMLElement).queryByText('Loading…')).not.toBeInTheDocument()
+  })
+
+  it('says the agenda is unavailable when its request fails, and stays a focus target', async () => {
+    answerSchedule(() => Promise.reject(new Error('schedule down')))
+    renderWithProviders(<BackupSection />)
+
+    const message = await screen.findByText('The job schedule is unavailable right now.')
+    const slot = message.closest('.fx-bkp-agenda')
+    expect(slot).not.toBeNull()
+    expect(slot).toHaveAttribute('tabindex', '-1')
+  })
+
+  it('treats an answer missing any of jobs/rows/bounds as unavailable, not as an empty form', async () => {
+    // A 200 whose body lost a field is not a schedule: rendering the editor
+    // from it would read `bounds.times_max` off undefined and take the screen
+    // down. Each of the three is checked, so a partial answer cannot slip in.
+    for (const partial of [
+      { rows: {}, bounds: { times_min: 1, times_max: 6, weekdays_min: 1, dump_weekdays_min: 5, interval_min: 15, interval_max: 1440 }, agent: null },
+      { jobs: ['dump'], bounds: { times_min: 1, times_max: 6, weekdays_min: 1, dump_weekdays_min: 5, interval_min: 15, interval_max: 1440 }, agent: null },
+      { jobs: ['dump'], rows: {}, agent: null },
+    ]) {
+      answerSchedule(() => Promise.resolve({ data: partial }))
+      const view = renderWithProviders(<BackupSection />)
+      expect(
+        await screen.findByText('The job schedule is unavailable right now.'),
+      ).toBeInTheDocument()
+      view.unmount()
+    }
+  })
+
+  /*
+   * A reveal fired during the first load centres the PLACEHOLDER, a few lines
+   * tall; the card then grows into a full form and the position the scroll
+   * centred is the middle of nothing. So the reveal repeats once the real card
+   * is on screen — and only the scroll repeats: the caret is already there,
+   * and re-focusing would rip it away from whoever moved on in the meantime.
+   */
+  it('re-centres the agenda when the placeholder becomes the real card, without focusing twice', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    const release = holdSchedule()
+    renderWithProviders(<BackupSection />)
+
+    await screen.findByRole('button', { name: 'Show the schedule for Object mirror' })
+    const slot = document.querySelector('.fx-bkp-agenda')!
+    const { scrollIntoView, focus } = watchReveal(slot)
+
+    await user.click(screen.getByRole('button', { name: 'Show the schedule for Object mirror' }))
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1))
+    expect(focus).toHaveBeenCalledTimes(1)
+
+    release()
+    expect(await screen.findByText('Object mirror schedule')).toBeInTheDocument()
+    // The slot is one DOM node across all three states, so the second reveal
+    // lands on the same element — now grown to its real height.
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(2))
+    expect(slot.textContent).toContain('Object mirror schedule')
+    expect(focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not re-centre a schedule that finished loading before anyone asked', async () => {
+    state.backupAgent = healthyAgent()
+    renderWithProviders(<BackupSection />)
+    await screen.findByText('Database dump schedule')
+
+    const { scrollIntoView } = watchReveal(document.querySelector('.fx-bkp-agenda')!)
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(scrollIntoView).not.toHaveBeenCalled()
   })
 })
 
@@ -194,33 +474,69 @@ const ownerSession: SessionState = {
   user: { ...testAdminUser, role: 'owner' },
 } as SessionState
 
-/** A healthy heartbeat, fresh, every job capable, all on the env baseline. */
+const ALL_DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+
+/**
+ * A healthy heartbeat, fresh, every job capable, all on the env baseline —
+ * which each report now carries STRUCTURED, because it is what the editor
+ * seeds from when no row is stored.
+ */
 function healthyAgent(over: Record<string, unknown> = {}) {
   return {
     seen_at: new Date(Date.now() - 30_000).toISOString(),
     version: '2.10.1',
+    // Matches AGENT_SCHEMA_VERSION in the mock: a healthy agent is one that
+    // knows the document shape the backend writes.
+    schema_version: 43,
     jobs: {
-      dump: { capable: true, source: 'env', schedule: '03:30' },
-      drill: { capable: true, source: 'env', schedule: '01:00 sun' },
-      mirror: { capable: true, source: 'env', schedule: 'every 360m' },
-      user_zip: { capable: true, source: 'env', schedule: '02:30' },
+      dump: {
+        capable: true, source: 'env', schedule: '03:30',
+        baseline: { mode: 'times', times: ['03:30'], weekdays: ALL_DAYS },
+        destination: { endpoint: 's3.example.test:9000', bucket: 'foldex-backups', prefix: 'backups/dump/' },
+      },
+      drill: {
+        capable: true, source: 'env', schedule: '01:00 sun',
+        baseline: { mode: 'times', times: ['01:00'], weekdays: ['sun'] },
+        destination: { endpoint: 's3.example.test:9000', bucket: 'foldex-backups', prefix: 'backups/dump/' },
+      },
+      mirror: {
+        capable: true, source: 'env', schedule: 'every 360m',
+        baseline: { mode: 'interval', interval_min: 360 },
+        destination: { endpoint: 's3.example.test:9000', bucket: 'foldex-backups', prefix: 'backups/rustfs/' },
+      },
+      user_zip: {
+        capable: true, source: 'env', schedule: '02:30',
+        baseline: { mode: 'times', times: ['02:30'], weekdays: ALL_DAYS },
+        destination: { endpoint: 's3.example.test:9000', bucket: 'foldex-backups', prefix: 'backups/users/' },
+      },
     },
     ...over,
   }
 }
 
+
+/**
+ * The agenda editor speaks ONE vocabulary for all four jobs (ADR-44): a mode
+ * (times or interval), a multi-select of weekdays, a list of wall times, an
+ * interval — and, for user_zip alone, an off switch. What still differs per
+ * job is only the floor the SERVER enforces, which this screen renders as a
+ * hint and never re-derives (INV-138 by analogy).
+ */
 describe('BackupSection schedule', () => {
   it('renders the effective agenda from the agent report with a source badge per job', async () => {
     state.backupAgent = healthyAgent({
       jobs: {
         ...healthyAgent().jobs,
-        drill: { capable: true, source: 'db', schedule: '04:00 wed' },
+        drill: {
+          capable: true, source: 'db', schedule: '04:00 wed',
+          baseline: { mode: 'times', times: ['01:00'], weekdays: ['sun'] },
+        },
       },
     })
     state.backupScheduleRows = {
       drill: {
         job: 'drill',
-        config: { time: '04:00', weekday: 'wed' },
+        config: { mode: 'times', times: ['04:00'], weekdays: ['wed'] },
         updated_at: '2026-08-01T00:00:00Z',
         updated_by_email: 'owner@foldex.test',
       },
@@ -228,30 +544,50 @@ describe('BackupSection schedule', () => {
 
     renderWithProviders(<BackupSection />)
 
+    const user = userEvent.setup()
     expect(await screen.findByText(/Agent seen/)).toBeInTheDocument()
     expect(screen.getByText(/version 2\.10\.1/)).toBeInTheDocument()
-    // The agenda strings the agent reported, verbatim.
-    expect(screen.getByText('03:30')).toBeInTheDocument()
-    expect(screen.getByText('04:00 wed')).toBeInTheDocument()
-    expect(screen.getByText('every 360m')).toBeInTheDocument()
-    // Origin badges: the drill row came from the database, the rest from env.
-    expect(screen.getAllByText('env default')).toHaveLength(3)
-    expect(screen.getByText('configured here')).toBeInTheDocument()
+    // The agenda strings the agent reported, verbatim, each on the card of the
+    // job it describes — the whole point is that the card says what the AGENT
+    // is running, so "somewhere on the page" would not be the claim.
+    expect(within(jobCard('Database dump')).getByText('03:30')).toBeInTheDocument()
+    expect(within(jobCard('Restore drill')).getByText('04:00 wed')).toBeInTheDocument()
+    expect(within(jobCard('Object mirror')).getByText('every 360m')).toBeInTheDocument()
+    // …and again in the agent panel, which is the process's own report.
+    expect(within(agentPanel()).getByText('04:00 wed')).toBeInTheDocument()
+
+    // The origin badge belongs to the job on screen: dump is on the env
+    // baseline, and switching to the drill shows the stored row's origin.
+    expect(screen.getByText('env default')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: 'Restore drill' }))
+    expect(await screen.findByText('configured here')).toBeInTheDocument()
   })
 
   it('shows the translated reason and no editors for a job the agent cannot run', async () => {
     state.backupAgent = healthyAgent({
       jobs: {
         ...healthyAgent().jobs,
-        mirror: { capable: false, reason: 'mirror_off', source: 'env', schedule: 'every 360m' },
+        mirror: {
+          capable: false, reason: 'mirror_off', source: 'env', schedule: 'every 360m',
+          // An env agenda that is off answers `{}` — no mode, nothing claimed.
+          baseline: {},
+        },
       },
     })
 
     renderWithProviders(<BackupSection />, { session: ownerSession })
 
-    expect(await screen.findByText('the mirror source is not configured')).toBeInTheDocument()
-    // Three editable jobs get a save button; the incapable mirror gets none.
-    expect(screen.getAllByRole('button', { name: 'Save schedule' })).toHaveLength(3)
+    const user = userEvent.setup()
+    // The dump is editable…
+    expect(await screen.findByRole('button', { name: 'Save schedule' })).toBeInTheDocument()
+
+    // …and the mirror, which the agent says it cannot run, is not: its reason
+    // is shown instead of controls that would store a row no process reads.
+    await user.click(screen.getByRole('tab', { name: 'Object mirror' }))
+    // Twice on purpose: once where the agenda would be edited, once in the
+    // agent panel that reports what the process can actually do.
+    expect((await screen.findAllByText('the mirror source is not configured')).length).toBe(2)
+    expect(screen.queryByRole('button', { name: 'Save schedule' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Interval (minutes)')).not.toBeInTheDocument()
   })
 
@@ -261,9 +597,15 @@ describe('BackupSection schedule', () => {
     // gate here would break that ordering.
     state.backupAgent = undefined
 
+    const user = userEvent.setup()
     renderWithProviders(<BackupSection />, { session: ownerSession })
 
-    expect(await screen.findAllByRole('button', { name: 'Save schedule' })).toHaveLength(4)
+    expect(await screen.findByRole('button', { name: 'Save schedule' })).toBeInTheDocument()
+    // Every job, not just the one that happens to be selected first.
+    for (const job of ['Restore drill', 'Object mirror', 'Per-user ZIPs']) {
+      await user.click(screen.getByRole('tab', { name: job }))
+      expect(await screen.findByRole('button', { name: 'Save schedule' })).toBeInTheDocument()
+    }
   })
 
   it('treats a job missing from a live report as not runnable — no editors', async () => {
@@ -274,28 +616,205 @@ describe('BackupSection schedule', () => {
     delete jobs.mirror
     state.backupAgent = healthyAgent({ jobs })
 
+    const user = userEvent.setup()
     renderWithProviders(<BackupSection />, { session: ownerSession })
 
-    expect(await screen.findAllByRole('button', { name: 'Save schedule' })).toHaveLength(3)
+    await user.click(await screen.findByRole('tab', { name: 'Object mirror' }))
+    expect((await screen.findAllByText('no agent report for this job')).length).toBeGreaterThan(1)
+    expect(screen.queryByRole('button', { name: 'Save schedule' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Interval (minutes)')).not.toBeInTheDocument()
   })
 
-  it('lets the owner add a dump time and PUTs the full times list', async () => {
+  /*
+   * The `.env` is the first option and a row is the override (INV-173). The
+   * editor used to open on hardcoded constants, so an owner who saved without
+   * touching anything silently REPLACED their environment's agenda with the
+   * screen's opinion of a good one.
+   */
+  it('seeds the draft from the env baseline the agent publishes, not from a constant', async () => {
+    const user = userEvent.setup()
+    const jobs: any = { ...healthyAgent().jobs }
+    jobs.dump = {
+      capable: true, source: 'env', schedule: '04:20, 16:20 mon,wed,fri,sat,sun',
+      baseline: { mode: 'times', times: ['04:20', '16:20'], weekdays: ['sun', 'mon', 'wed', 'fri', 'sat'] },
+    }
+    state.backupAgent = healthyAgent({ jobs })
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findByLabelText('Time 1')).toHaveValue('04:20')
+    expect(screen.getByLabelText('Time 2')).toHaveValue('16:20')
+    expect(screen.getByRole('button', { name: 'Sunday' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Tuesday' })).toHaveAttribute('aria-pressed', 'false')
+
+    // Saving an untouched draft writes the environment's own agenda back —
+    // never a default the screen invented.
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        {
+          job: 'dump',
+          config: {
+            mode: 'times',
+            times: ['04:20', '16:20'],
+            weekdays: ['sun', 'mon', 'wed', 'fri', 'sat'],
+          },
+        },
+      ]),
+    )
+  })
+
+  it('lets the owner add a time and PUTs the whole unified document', async () => {
     const user = userEvent.setup()
     state.backupAgent = healthyAgent()
 
     renderWithProviders(<BackupSection />, { session: ownerSession })
 
     await user.click(await screen.findByRole('button', { name: 'Add time' }))
-    await user.click(screen.getAllByRole('button', { name: 'Save schedule' })[0])
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
 
     // More dumps than today — no confirmation stands between click and PUT.
     await waitFor(() =>
       expect(state.backupSchedulePuts).toEqual([
-        { job: 'dump', config: { times: ['03:30', '12:00'] } },
+        {
+          job: 'dump',
+          config: { mode: 'times', times: ['03:30', '12:00'], weekdays: ALL_DAYS },
+        },
       ]),
     )
     expect(screen.queryByText(/Reduce “Database dump” protection\?/)).not.toBeInTheDocument()
+  })
+
+  /*
+   * Every job gets BOTH shapes now. The mirror used to be the only one with an
+   * interval and the dump the only one with times; a weekly mirror and a
+   * six-hourly dump were both unsayable.
+   */
+  it('switches a job between times and interval, keeping what the other mode held', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    // The dump opens on its env baseline, which is a times agenda…
+    expect(await screen.findByLabelText('Time 1')).toBeInTheDocument()
+    await user.click(screen.getByRole('radio', { name: 'Interval' }))
+    expect(screen.queryByLabelText('Time 1')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Interval (minutes)')).toBeInTheDocument()
+
+    // …and coming back restores the times the draft was holding, rather than
+    // the screen's default.
+    await user.click(screen.getByRole('radio', { name: 'Times' }))
+    expect(screen.getByLabelText('Time 1')).toHaveValue('03:30')
+
+    await user.click(screen.getByRole('radio', { name: 'Interval' }))
+    await user.click(screen.getByRole('button', { name: '6h' }))
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+
+    // The payload carries the chosen mode and NOTHING from the other one: an
+    // agenda no process reads is the defect this shape exists to kill.
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        { job: 'dump', config: { mode: 'interval', interval_min: 360 } },
+      ]),
+    )
+  })
+
+  it('lets the mirror run on wall times, which it never could before', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Object mirror' }))
+    // The mirror's env baseline is an interval, so it opens there.
+    expect(screen.getByLabelText('Interval (minutes)')).toHaveValue(360)
+    await user.click(screen.getByRole('radio', { name: 'Times' }))
+    await user.click(screen.getByRole('button', { name: 'Weekdays' }))
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+
+    // 1 time × 5 days is far below 28 firings a week, so it confirms first.
+    await user.click(await screen.findByRole('button', { name: 'Apply schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        {
+          job: 'mirror',
+          config: { mode: 'times', times: ['03:30'], weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'] },
+        },
+      ]),
+    )
+  })
+
+  it('toggles weekdays on and off — it is a multi-select, not a radio', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Restore drill' }))
+    const sunday = screen.getByRole('button', { name: 'Sunday' })
+    const wednesday = screen.getByRole('button', { name: 'Wednesday' })
+    expect(sunday).toHaveAttribute('aria-pressed', 'true')
+    expect(wednesday).toHaveAttribute('aria-pressed', 'false')
+
+    // "mon, wed and fri" is the whole point: a second day must not unpick the
+    // first the way the old single-select did.
+    await user.click(wednesday)
+    expect(sunday).toHaveAttribute('aria-pressed', 'true')
+    expect(wednesday).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(sunday)
+    expect(sunday).toHaveAttribute('aria-pressed', 'false')
+
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    // Written in the server's own sun-first order, never in click order.
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        { job: 'drill', config: { mode: 'times', times: ['01:00'], weekdays: ['wed'] } },
+      ]),
+    )
+  })
+
+  it('fills the week from the shortcuts', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Restore drill' }))
+    await user.click(screen.getByRole('button', { name: 'Every day' }))
+    for (const day of ['Sunday', 'Monday', 'Saturday']) {
+      expect(screen.getByRole('button', { name: day })).toHaveAttribute('aria-pressed', 'true')
+    }
+
+    await user.click(screen.getByRole('button', { name: 'Weekdays' }))
+    expect(screen.getByRole('button', { name: 'Saturday' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Monday' })).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        {
+          job: 'drill',
+          config: { mode: 'times', times: ['01:00'], weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'] },
+        },
+      ]),
+    )
+  })
+
+  /*
+   * The dump's floor is five days a week and every other job's is one. The
+   * hint states the server's number; the refusal itself stays the server's.
+   */
+  it('states the dump weekday floor and states no floor where there is none', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findByText('At least 5 days a week for this job.')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: 'Restore drill' }))
+    expect(screen.queryByText(/At least .* days a week/)).not.toBeInTheDocument()
   })
 
   it('asks for confirmation when the change reduces protection, and only writes after it', async () => {
@@ -304,7 +823,7 @@ describe('BackupSection schedule', () => {
     state.backupScheduleRows = {
       dump: {
         job: 'dump',
-        config: { times: ['03:30', '15:30'] },
+        config: { mode: 'times', times: ['03:30', '15:30'], weekdays: ALL_DAYS },
         updated_at: '2026-08-01T00:00:00Z',
         updated_by_email: 'owner@foldex.test',
       },
@@ -312,19 +831,107 @@ describe('BackupSection schedule', () => {
 
     renderWithProviders(<BackupSection />, { session: ownerSession })
 
-    // Two stored times seed the editor; dropping one is a reduction.
-    const removes = await screen.findAllByRole('button', { name: 'Remove' })
-    await user.click(removes[1])
-    await user.click(screen.getAllByRole('button', { name: 'Save schedule' })[0])
+    // Two stored times seed the editor; dropping one halves the firings.
+    await user.click(await screen.findByRole('button', { name: 'Remove time 2' }))
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
 
     expect(await screen.findByText('Reduce “Database dump” protection?')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(state.backupSchedulePuts ?? []).toHaveLength(0)
 
-    await user.click(screen.getAllByRole('button', { name: 'Save schedule' })[0])
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
     await user.click(await screen.findByRole('button', { name: 'Apply schedule' }))
     await waitFor(() =>
-      expect(state.backupSchedulePuts).toEqual([{ job: 'dump', config: { times: ['03:30'] } }]),
+      expect(state.backupSchedulePuts).toEqual([
+        { job: 'dump', config: { mode: 'times', times: ['03:30'], weekdays: ALL_DAYS } },
+      ]),
+    )
+  })
+
+  it('writes the typed interval as a number, not the input string', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Object mirror' }))
+    fireEvent.change(screen.getByLabelText('Interval (minutes)'), { target: { value: '45' } })
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        { job: 'mirror', config: { mode: 'interval', interval_min: 45 } },
+      ]),
+    )
+    // A string would pass the server's JSON decode and fail its bounds check —
+    // the coercion is the contract.
+    expect(typeof state.backupSchedulePuts![0].config.interval_min).toBe('number')
+  })
+
+  it('turning the per-user ZIP off writes a bare enabled:false and drops the agenda', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Per-user ZIPs' }))
+    // On by default, and the whole agenda goes with the switch.
+    expect(screen.getByLabelText('Time 1')).toBeInTheDocument()
+    await user.click(screen.getByRole('checkbox', { name: 'Generate per-user ZIPs' }))
+    expect(screen.queryByLabelText('Time 1')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    // Switching a job OFF reduces protection, so it is behind the confirmation.
+    await user.click(await screen.findByRole('button', { name: 'Apply schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        { job: 'user_zip', config: { mode: 'times', enabled: false } },
+      ]),
+    )
+  })
+
+  it('offers the off switch to user_zip and to nothing else', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    // The other three are the instance's floor: the server refuses to switch
+    // them off, so the screen never offers it (INV-173).
+    expect(await screen.findByRole('button', { name: 'Save schedule' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: 'Per-user ZIPs' }))
+    expect(screen.getByRole('checkbox', { name: 'Generate per-user ZIPs' })).toBeInTheDocument()
+  })
+
+  /*
+   * The switch keeps the agenda the owner typed. What reaches the server is a
+   * bare `{mode, enabled:false}` — a time on a disabled job is an agenda
+   * nothing reads — but toggling back on must return their own times, not the
+   * default, or the switch quietly discards their edit.
+   */
+  it('keeps the typed ZIP agenda across an off/on toggle', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Per-user ZIPs' }))
+    fireEvent.change(screen.getByLabelText('Time 1'), { target: { value: '04:45' } })
+
+    const toggle = screen.getByRole('checkbox', { name: 'Generate per-user ZIPs' })
+    await user.click(toggle)
+    await user.click(toggle)
+
+    expect(screen.getByLabelText('Time 1')).toHaveValue('04:45')
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        {
+          job: 'user_zip',
+          config: { mode: 'times', times: ['04:45'], weekdays: ALL_DAYS, enabled: true },
+        },
+      ]),
     )
   })
 
@@ -338,10 +945,35 @@ describe('BackupSection schedule', () => {
     // backupagent.ValidateJobConfig does, and the band shows THAT message.
     await user.click(await screen.findByRole('button', { name: 'Add time' }))
     fireEvent.change(screen.getByLabelText('Time 2'), { target: { value: '03:30' } })
-    await user.click(screen.getAllByRole('button', { name: 'Save schedule' })[0])
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
 
     expect(await screen.findByText('dump time "03:30" repeats')).toBeInTheDocument()
     expect(state.backupSchedulePuts ?? []).toHaveLength(0)
+  })
+
+  /*
+   * The client never enforces the weekday floor itself: unpicking the last day
+   * is allowed, the PUT goes out, and the SERVER's own message is what says no.
+   * Pinning a day client-side would be a second copy of a policy that lives in
+   * one place — and it could not express the dump's floor of five anyway.
+   */
+  it('lets the server refuse an empty weekday set, in its own words', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Restore drill' }))
+    await user.click(screen.getByRole('button', { name: 'Sunday' }))
+    expect(screen.getByRole('button', { name: 'Sunday' })).toHaveAttribute('aria-pressed', 'false')
+
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await user.click(await screen.findByRole('button', { name: 'Apply schedule' }))
+    expect(
+      await screen.findByText(
+        'drill needs at least 1 weekday(s) — an agenda that fires on no day is the job switched off',
+      ),
+    ).toBeInTheDocument()
   })
 
   it('resets to the env baseline via DELETE, always behind a confirmation', async () => {
@@ -350,7 +982,7 @@ describe('BackupSection schedule', () => {
     state.backupScheduleRows = {
       mirror: {
         job: 'mirror',
-        config: { interval_min: 60 },
+        config: { mode: 'interval', interval_min: 60 },
         updated_at: '2026-08-01T00:00:00Z',
         updated_by_email: 'owner@foldex.test',
       },
@@ -358,15 +990,18 @@ describe('BackupSection schedule', () => {
 
     renderWithProviders(<BackupSection />, { session: ownerSession })
 
+    // The stored row belongs to the mirror, so the editor has to be on it.
+    await user.click(await screen.findByRole('tab', { name: 'Object mirror' }))
     await user.click(await screen.findByRole('button', { name: 'Restore env default' }))
     expect(await screen.findByText('Reset “Object mirror” to the env default?')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(state.backupScheduleDeletes ?? []).toHaveLength(0)
 
     await user.click(screen.getByRole('button', { name: 'Restore env default' }))
-    const dialogConfirm = await screen.findAllByRole('button', { name: 'Restore env default' })
-    // The dialog's confirm button is the last rendered.
-    await user.click(dialogConfirm[dialogConfirm.length - 1])
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Reset “Object mirror” to the env default?',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Restore env default' }))
     await waitFor(() => expect(state.backupScheduleDeletes).toEqual(['mirror']))
   })
 
@@ -374,8 +1009,49 @@ describe('BackupSection schedule', () => {
     renderWithProviders(<BackupSection />)
 
     expect(await screen.findByText('The agent never reported')).toBeInTheDocument()
-    expect(screen.getAllByText('COMPOSE_PROFILES=backup').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('no agent report for this job')).toHaveLength(4)
+    expect(within(agentPanel()).getByText('COMPOSE_PROFILES=backup')).toBeInTheDocument()
+    // No heartbeat = no per-job report to show, and the AGENDA says exactly
+    // that in both places it would otherwise state an origin: the chip that
+    // names the source, and the line that would carry the effective agenda.
+    const agenda = document.querySelector('.fx-bkp-agenda') as HTMLElement
+    const head = agenda.querySelector('.fx-bkp-agenda-head') as HTMLElement
+    const effective = agenda.querySelector('.fx-bkp-effective') as HTMLElement
+    expect(within(head).getByText('no agent report for this job')).toBeInTheDocument()
+    expect(within(effective).getByText('no agent report for this job')).toBeInTheDocument()
+  })
+
+  /*
+   * RequiredSchemaVersion is a FLOOR on both sides, so an agent built before
+   * the unified agenda boots happily against the newer schema and reads the
+   * rows honouring `times` while ignoring `weekdays` entirely — it over-runs,
+   * which is the safe direction, and says nothing at all. The band is the only
+   * place that can name it, and it does so by COMPARING the two numbers the
+   * server sends, never by re-deriving the policy (INV-138).
+   */
+  it('names an agent whose build predates the current agenda format', async () => {
+    state.backupAgent = healthyAgent({ schema_version: 42 })
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findByText(/older agent build/i)).toBeInTheDocument()
+  })
+
+  it('says nothing when the agent is on the same document shape', async () => {
+    state.backupAgent = healthyAgent({ schema_version: 43 })
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await screen.findByRole('tab', { name: 'Database dump' })
+    expect(screen.queryByText(/older agent build/i)).not.toBeInTheDocument()
+  })
+
+  it('treats a heartbeat with no schema version as skewed, not as matching', async () => {
+    // Written by an agent that predates the field: a missing number is not a
+    // matching one, and guessing "probably fine" is how the mailer incident
+    // looked from the outside.
+    state.backupAgent = healthyAgent()
+    delete (state.backupAgent as Record<string, unknown>).schema_version
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findByText(/older agent build/i)).toBeInTheDocument()
   })
 
   it('warns when the heartbeat is older than two minutes', async () => {
@@ -394,9 +1070,312 @@ describe('BackupSection schedule', () => {
     // permission is owner-only and locked).
     renderWithProviders(<BackupSection />)
 
-    expect(await screen.findByText('03:30')).toBeInTheDocument()
+    await screen.findByText('Database dump schedule')
+    const agenda = document.querySelector('.fx-bkp-agenda') as HTMLElement
+    expect(within(agenda).getByText('03:30')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Save schedule' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Restore env default' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Add time' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Interval' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Every day' })).not.toBeInTheDocument()
+  })
+
+  /** A stored row, with the boilerplate every one of them carries. */
+  function storedRow(job: string, config: Record<string, unknown>) {
+    return {
+      [job]: {
+        job,
+        config,
+        updated_at: '2026-08-01T00:00:00Z',
+        updated_by_email: 'owner@foldex.test',
+      },
+    }
+  }
+
+  /*
+   * The first successful fetch can land before the agent's first heartbeat, so
+   * the editor opens on the last-resort draft. The baseline arriving later is
+   * a NEW document to seed from — an editor that ignored it would let an owner
+   * write this screen's opinion over their own env agenda by saving an
+   * untouched form (INV-173).
+   */
+  it('reseeds the draft when the env baseline arrives after the first fetch', async () => {
+    const client = makeQueryClient()
+    state.backupAgent = undefined
+
+    renderWithProviders(<BackupSection />, { session: ownerSession, client })
+    expect(await screen.findByLabelText('Time 1')).toHaveValue('03:30')
+
+    const jobs: any = { ...healthyAgent().jobs }
+    jobs.dump = {
+      capable: true, source: 'env', schedule: '04:20',
+      baseline: { mode: 'times', times: ['04:20'], weekdays: ALL_DAYS },
+    }
+    state.backupAgent = healthyAgent({ jobs })
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: backupScheduleQueryKey })
+    })
+
+    await waitFor(() => expect(screen.getByLabelText('Time 1')).toHaveValue('04:20'))
+  })
+
+  /*
+   * The other half of the rule above: once a baseline is present its MODE is
+   * what the editor keys on, and a heartbeat is written every ~30 s. Keying on
+   * anything that moves with the clock would throw the owner's half-typed
+   * agenda away once a minute.
+   */
+  it('keeps a half-typed draft across a poll that only refreshes the heartbeat', async () => {
+    const client = makeQueryClient()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession, client })
+    fireEvent.change(await screen.findByLabelText('Time 1'), { target: { value: '05:15' } })
+
+    state.backupAgent = healthyAgent({ seen_at: new Date().toISOString(), version: '9.9.9' })
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: backupScheduleQueryKey })
+    })
+    await waitFor(() => expect(screen.getByText(/version 9\.9\.9/)).toBeInTheDocument())
+
+    expect(screen.getByLabelText('Time 1')).toHaveValue('05:15')
+  })
+
+  /*
+   * A stored row states only the mode it uses. Seeding the draft from it
+   * literally left the OTHER half empty — an off ZIP toggled back on had no
+   * day and no time at all, which is a guaranteed 400. The draft is fat on
+   * purpose; `payloadOf` is what canonicalises it on the way out.
+   */
+  it('toggling the per-user ZIP back on restores an agenda instead of an empty form', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    state.backupScheduleRows = storedRow('user_zip', { mode: 'times', enabled: false })
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Per-user ZIPs' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Generate per-user ZIPs' }))
+
+    // The env baseline fills what the disabled row never stated.
+    expect(screen.getByLabelText('Time 1')).toHaveValue('02:30')
+    expect(screen.getByRole('button', { name: 'Sunday' })).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        {
+          job: 'user_zip',
+          config: { mode: 'times', times: ['02:30'], weekdays: ALL_DAYS, enabled: true },
+        },
+      ]),
+    )
+  })
+
+  it('fills the mode a stored row does not state from the env baseline', async () => {
+    const user = userEvent.setup()
+    const jobs: any = { ...healthyAgent().jobs }
+    jobs.dump = {
+      capable: true, source: 'db', schedule: 'every 60m',
+      baseline: { mode: 'times', times: ['04:20'], weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'] },
+    }
+    jobs.mirror = {
+      capable: true, source: 'db', schedule: '02:00 sun',
+      baseline: { mode: 'interval', interval_min: 720 },
+    }
+    state.backupAgent = healthyAgent({ jobs })
+    state.backupScheduleRows = {
+      ...storedRow('dump', { mode: 'interval', interval_min: 60 }),
+      ...storedRow('mirror', { mode: 'times', times: ['02:00'], weekdays: ['sun'] }),
+    }
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    // The dump's row states an interval, so the times half comes from the env.
+    expect(await screen.findByLabelText('Interval (minutes)')).toHaveValue(60)
+    await user.click(screen.getByRole('radio', { name: 'Times' }))
+    expect(screen.getByLabelText('Time 1')).toHaveValue('04:20')
+    expect(screen.getByRole('button', { name: 'Saturday' })).toHaveAttribute('aria-pressed', 'false')
+
+    // And the mirror's row states times, so the interval half comes from the env.
+    await user.click(screen.getByRole('tab', { name: 'Object mirror' }))
+    expect(screen.getByLabelText('Time 1')).toHaveValue('02:00')
+    await user.click(screen.getByRole('radio', { name: 'Interval' }))
+    expect(screen.getByLabelText('Interval (minutes)')).toHaveValue(720)
+  })
+
+  /*
+   * The env is exempt from the floors by design — it IS the baseline — so
+   * `BACKUP_DUMP_AT="03:30 sun"` is legal there and the agent publishes it.
+   * Opening the form on a document the server would refuse teaches the owner
+   * the screen is broken, so the seed widens the days it cannot keep.
+   */
+  it('widens an env baseline below the job floor, keeping its times', async () => {
+    const user = userEvent.setup()
+    const jobs: any = { ...healthyAgent().jobs }
+    jobs.dump = {
+      capable: true, source: 'env', schedule: '03:30 sun',
+      baseline: { mode: 'times', times: ['03:30'], weekdays: ['sun'] },
+    }
+    state.backupAgent = healthyAgent({ jobs })
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findByLabelText('Time 1')).toHaveValue('03:30')
+    for (const day of ['Sunday', 'Monday', 'Saturday']) {
+      expect(screen.getByRole('button', { name: day })).toHaveAttribute('aria-pressed', 'true')
+    }
+
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        { job: 'dump', config: { mode: 'times', times: ['03:30'], weekdays: ALL_DAYS } },
+      ]),
+    )
+  })
+
+  /*
+   * ScheduleStore.Load returns invalid rows on purpose, so the env fallback
+   * stays visible — which means a row written by hand in SQL reaches this
+   * form. Rendering one input per element of an unbounded array is a list the
+   * server would never accept and the browser has to lay out anyway.
+   */
+  it('renders no more times than the server accepts, even from a hand-written row', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    state.backupScheduleRows = storedRow('dump', {
+      mode: 'times',
+      times: ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00', '06:00', '07:00', '08:00'],
+      weekdays: ALL_DAYS,
+    })
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    expect(await screen.findByLabelText('Time 6')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Time 7')).not.toBeInTheDocument()
+    expect(document.querySelectorAll('.fx-bkp-time')).toHaveLength(6)
+
+    // And what the screen shows is what the wire carries: six inputs beside a
+    // 400 saying "between 1 and 6" is a refusal the owner cannot act on.
+    // Trimming thins the agenda, so it goes through the confirmation.
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await user.click(await screen.findByRole('button', { name: 'Apply schedule' }))
+    await waitFor(() =>
+      expect(state.backupSchedulePuts).toEqual([
+        {
+          job: 'dump',
+          config: {
+            mode: 'times',
+            times: ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00'],
+            weekdays: ALL_DAYS,
+          },
+        },
+      ]),
+    )
+  })
+
+  /*
+   * Two mutually exclusive options that swap the form's fields are a
+   * radiogroup. They were dressed as tabs with no panel and no `aria-controls`
+   * — a shape a screen reader announces as navigation that goes nowhere. The
+   * JOB picker above stays a tablist, because those really are tabs.
+   */
+  it('offers the two schedule modes as a radiogroup, not as tabs', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    const group = await screen.findByRole('radiogroup', { name: 'Schedule mode' })
+    const times = within(group).getByRole('radio', { name: 'Times' })
+    const interval = within(group).getByRole('radio', { name: 'Interval' })
+    expect(times).toHaveAttribute('aria-checked', 'true')
+    expect(interval).toHaveAttribute('aria-checked', 'false')
+
+    await user.click(interval)
+    expect(interval).toHaveAttribute('aria-checked', 'true')
+    expect(times).toHaveAttribute('aria-checked', 'false')
+
+    expect(screen.getByRole('tab', { name: 'Database dump' })).toBeInTheDocument()
+  })
+
+  /*
+   * A radiogroup is a SINGLE tab stop whose options move with the arrow keys —
+   * that is the half of the role that is a keyboard contract, not a label. Two
+   * plain buttons announced as radios but reachable only by Tab tell a screen
+   * reader user to press an arrow key that does nothing.
+   */
+  it('moves between the schedule modes with the arrow keys, as one tab stop', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    const group = await screen.findByRole('radiogroup', { name: 'Schedule mode' })
+    const times = within(group).getByRole('radio', { name: 'Times' })
+    const interval = within(group).getByRole('radio', { name: 'Interval' })
+
+    // Only the checked option is in the tab order (roving tabindex).
+    expect(times).toHaveAttribute('tabindex', '0')
+    expect(interval).toHaveAttribute('tabindex', '-1')
+
+    times.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(interval).toHaveAttribute('aria-checked', 'true')
+    expect(interval).toHaveFocus()
+    expect(interval).toHaveAttribute('tabindex', '0')
+
+    // And it wraps, in both directions.
+    await user.keyboard('{ArrowRight}')
+    expect(times).toHaveAttribute('aria-checked', 'true')
+    await user.keyboard('{ArrowLeft}')
+    expect(interval).toHaveAttribute('aria-checked', 'true')
+  })
+})
+
+/*
+ * "Copies the objects to the external bucket" names no bucket, and the endpoint
+ * is the field most likely to point somewhere other than intended — at the same
+ * host as the origin, say, which is a mirror that survives nothing. The card
+ * says the address so the operator can check it against what they meant.
+ */
+describe('BackupSection destination', () => {
+  it('names the bucket and endpoint the selected job ships to', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Object mirror' }))
+    const line = await screen.findByTestId('fx-bkp-destination')
+    expect(line).toHaveTextContent('s3.example.test:9000')
+    expect(line).toHaveTextContent('foldex-backups')
+    expect(line).toHaveTextContent('backups/rustfs/')
+  })
+
+  // The prefix is the half that differs per job, and it is what makes the line
+  // actionable: it is where the operator looks with their own S3 client.
+  it('moves the prefix with the selected job', async () => {
+    const user = userEvent.setup()
+    state.backupAgent = healthyAgent()
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Per-user ZIPs' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('fx-bkp-destination')).toHaveTextContent('backups/users/'))
+  })
+
+  // An agent that reports no destination has no bucket configured. Rendering
+  // "bucket" with nothing after it would read as a misconfiguration the
+  // operator does not have.
+  it('says nothing when the agent reports no destination', async () => {
+    const agent = healthyAgent()
+    delete (agent.jobs as Record<string, { destination?: unknown }>).mirror.destination
+    state.backupAgent = agent
+    const user = userEvent.setup()
+    renderWithProviders(<BackupSection />, { session: ownerSession })
+
+    await user.click(await screen.findByRole('tab', { name: 'Object mirror' }))
+    await screen.findByLabelText('Interval (minutes)')
+    expect(screen.queryByTestId('fx-bkp-destination')).not.toBeInTheDocument()
   })
 })

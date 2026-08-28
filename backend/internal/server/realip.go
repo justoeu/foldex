@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	"foldex/internal/pkg/auditctx"
 )
 
 // trustedProxyRealIP rewrites RemoteAddr from X-Forwarded-For, but ONLY when
@@ -27,6 +29,11 @@ func trustedProxyRealIP(trusted []*net.IPNet) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if ip := forwardedFor(r, trusted); ip != "" {
 				r.RemoteAddr = ip
+				// Mark it: the audit trail records WHERE an address came from
+				// next to the address itself, and this is the only place that
+				// still knows. One line down, RemoteAddr looks identical
+				// whether a proxy vouched for it or the peer simply is it.
+				r = r.WithContext(auditctx.MarkTrustedIP(r.Context()))
 			}
 			next.ServeHTTP(w, r)
 		})

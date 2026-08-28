@@ -1,60 +1,96 @@
 import { describe, it, expect } from 'vitest'
-import { reducesProtection } from './backupSchedule'
-import type { BackupAgentJobReport } from '../../api/admin'
+import { firingsPerWeek, reducesProtection } from './backupSchedule'
+import type { BackupScheduleConfig as Cfg } from '../../api/admin'
 
-const report = (schedule: string): BackupAgentJobReport => ({
-  capable: true,
-  source: 'env',
-  schedule,
+const daily: Cfg = { mode: 'times', times: ['03:30'], weekdays: ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] }
+
+describe('firingsPerWeek', () => {
+  it('multiplies times by weekdays — the only honest measure of "how often"', () => {
+    expect(firingsPerWeek(daily)).toBe(7)
+    expect(firingsPerWeek({ mode: 'times', times: ['03:30', '15:30'], weekdays: ['mon', 'wed', 'fri'] })).toBe(6)
+    expect(firingsPerWeek({ mode: 'times', times: ['01:00'], weekdays: ['sun'] })).toBe(1)
+  })
+
+  it('turns an interval into firings over the 10080 minutes of a week', () => {
+    expect(firingsPerWeek({ mode: 'interval', interval_min: 1440 })).toBe(7)
+    expect(firingsPerWeek({ mode: 'interval', interval_min: 360 })).toBe(28)
+    expect(firingsPerWeek({ mode: 'interval', interval_min: 15 })).toBe(672)
+  })
+
+  it('counts a switched-off job as zero, whatever else the config holds', () => {
+    expect(firingsPerWeek({ mode: 'times', enabled: false })).toBe(0)
+    expect(firingsPerWeek({ enabled: false })).toBe(0)
+    expect(firingsPerWeek({ mode: 'interval', interval_min: 60, enabled: false })).toBe(0)
+  })
+
+  it('claims nothing about a config it cannot read', () => {
+    expect(firingsPerWeek({})).toBeNaN()
+    expect(firingsPerWeek({ enabled: true })).toBeNaN()
+    // A mode whose own field is missing is exactly as unknown as no mode —
+    // either half of the times mode alone says nothing about a cadence.
+    expect(firingsPerWeek({ mode: 'times', times: ['03:30'] })).toBeNaN()
+    expect(firingsPerWeek({ mode: 'times', weekdays: ['mon'] })).toBeNaN()
+    expect(firingsPerWeek({ mode: 'interval' })).toBeNaN()
+  })
 })
 
 describe('reducesProtection', () => {
   it('always confirms a DELETE — the baseline it returns to is not on screen', () => {
-    expect(reducesProtection('dump', { times: ['03:30'] }, null, report('03:30'))).toBe(true)
-    expect(reducesProtection('user_zip', null, null, null)).toBe(true)
+    expect(reducesProtection(daily, null, daily)).toBe(true)
+    expect(reducesProtection(null, null, null)).toBe(true)
   })
 
-  it('flags a dump with fewer times than the stored row', () => {
-    const stored = { times: ['03:30', '15:30'] }
-    expect(reducesProtection('dump', stored, { times: ['03:30'] }, null)).toBe(true)
-    expect(reducesProtection('dump', stored, { times: ['03:30', '15:30'] }, null)).toBe(false)
-    expect(reducesProtection('dump', stored, { times: ['01:00', '09:00', '17:00'] }, null)).toBe(false)
-  })
-
-  it('reads the dump baseline from the agent render when no row exists', () => {
-    expect(reducesProtection('dump', null, { times: ['03:30'] }, report('03:30, 15:30'))).toBe(true)
-    expect(reducesProtection('dump', null, { times: ['03:30', '15:30'] }, report('03:30, 15:30'))).toBe(false)
-  })
-
-  it('claims no reduction when nothing states the current dump agenda', () => {
-    expect(reducesProtection('dump', null, { times: ['03:30'] }, null)).toBe(false)
-    expect(reducesProtection('dump', null, { times: ['03:30'] }, undefined)).toBe(false)
-  })
-
-  it('flags a mirror stretched to a LONGER interval, from row or agent baseline', () => {
-    expect(reducesProtection('mirror', { interval_min: 60 }, { interval_min: 120 }, null)).toBe(true)
-    expect(reducesProtection('mirror', { interval_min: 60 }, { interval_min: 30 }, null)).toBe(false)
-    expect(reducesProtection('mirror', { interval_min: 60 }, { interval_min: 60 }, null)).toBe(false)
-    expect(reducesProtection('mirror', null, { interval_min: 720 }, report('every 360m'))).toBe(true)
-    expect(reducesProtection('mirror', null, { interval_min: 60 }, report('every 360m'))).toBe(false)
-    expect(reducesProtection('mirror', null, { interval_min: 720 }, null)).toBe(false)
-  })
-
-  it('flags switching user_zip off, but only when it is on today', () => {
-    expect(reducesProtection('user_zip', { enabled: true, time: '02:30' }, { enabled: false }, null)).toBe(true)
-    expect(reducesProtection('user_zip', { enabled: false }, { enabled: false }, null)).toBe(false)
+  it('flags fewer weekdays on the same times', () => {
+    const stored: Cfg = { mode: 'times', times: ['03:30'], weekdays: ['mon', 'wed', 'fri'] }
+    expect(reducesProtection(stored, { mode: 'times', times: ['03:30'], weekdays: ['mon'] }, null)).toBe(true)
+    expect(reducesProtection(stored, { mode: 'times', times: ['03:30'], weekdays: ['mon', 'wed', 'fri'] }, null)).toBe(false)
     expect(
-      reducesProtection('user_zip', { enabled: false }, { enabled: true, time: '02:30' }, null),
+      reducesProtection(stored, { mode: 'times', times: ['03:30'], weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'] }, null),
     ).toBe(false)
-    // No row: the agent's render is the baseline — "disabled" means already off.
-    expect(reducesProtection('user_zip', null, { enabled: false }, report('02:30'))).toBe(true)
-    expect(reducesProtection('user_zip', null, { enabled: false }, report('disabled'))).toBe(false)
-    expect(reducesProtection('user_zip', null, { enabled: false }, null)).toBe(false)
   })
 
-  it('never flags the drill — weekly by design, a row only moves the slot', () => {
+  it('flags fewer times on the same weekdays', () => {
+    const stored: Cfg = { mode: 'times', times: ['03:30', '15:30'], weekdays: ['sun'] }
+    expect(reducesProtection(stored, { mode: 'times', times: ['03:30'], weekdays: ['sun'] }, null)).toBe(true)
     expect(
-      reducesProtection('drill', { time: '01:00', weekday: 'sun' }, { time: '23:00', weekday: 'sat' }, report('01:00 sun')),
+      reducesProtection(stored, { mode: 'times', times: ['03:30', '09:00', '15:30'], weekdays: ['sun'] }, null),
     ).toBe(false)
+  })
+
+  it('compares ACROSS the two modes — fewer firings is fewer firings', () => {
+    // 2 times × 7 days = 14/week; every 12h = 14/week. Equal is not a cut.
+    expect(reducesProtection({ mode: 'interval', interval_min: 720 }, { mode: 'times', times: ['03:30', '15:30'], weekdays: daily.weekdays }, null)).toBe(false)
+    // …but one weekly slot instead of that interval is.
+    expect(reducesProtection({ mode: 'interval', interval_min: 720 }, { mode: 'times', times: ['03:30'], weekdays: ['sun'] }, null)).toBe(true)
+  })
+
+  it('flags a stretched interval and never a tightened one', () => {
+    const stored: Cfg = { mode: 'interval', interval_min: 60 }
+    expect(reducesProtection(stored, { mode: 'interval', interval_min: 120 }, null)).toBe(true)
+    expect(reducesProtection(stored, { mode: 'interval', interval_min: 30 }, null)).toBe(false)
+    expect(reducesProtection(stored, { mode: 'interval', interval_min: 60 }, null)).toBe(false)
+  })
+
+  it('flags switching a job off, but only when it runs today', () => {
+    expect(reducesProtection(daily, { mode: 'times', enabled: false }, null)).toBe(true)
+    expect(reducesProtection({ mode: 'times', enabled: false }, { mode: 'times', enabled: false }, null)).toBe(false)
+    expect(reducesProtection({ mode: 'times', enabled: false }, daily, null)).toBe(false)
+  })
+
+  it('falls back to the ENV baseline when no row is stored yet', () => {
+    // No stored row: what the job runs today is the agent's env agenda.
+    expect(reducesProtection(null, { mode: 'times', times: ['03:30'], weekdays: ['sun'] }, daily)).toBe(true)
+    expect(reducesProtection(null, { mode: 'times', times: ['03:30', '15:30'], weekdays: daily.weekdays }, daily)).toBe(false)
+    // A stored row WINS over the baseline — it is what runs today.
+    expect(
+      reducesProtection({ mode: 'times', times: ['03:30'], weekdays: ['sun'] }, daily, { mode: 'times', times: ['03:30'], weekdays: ['sun'] }),
+    ).toBe(false)
+  })
+
+  it('claims nothing when the current agenda is unknown', () => {
+    expect(reducesProtection(null, { mode: 'times', times: ['03:30'], weekdays: ['sun'] }, null)).toBe(false)
+    expect(reducesProtection(null, { mode: 'times', times: ['03:30'], weekdays: ['sun'] }, undefined)).toBe(false)
+    // A report whose env agenda is off answers `{}` — no mode, nothing to compare.
+    expect(reducesProtection(null, { mode: 'times', times: ['03:30'], weekdays: ['sun'] }, {})).toBe(false)
   })
 })

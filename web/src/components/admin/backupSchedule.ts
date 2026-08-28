@@ -1,60 +1,48 @@
-import type { BackupAgentJobReport, BackupJob, BackupScheduleConfig } from '../../api/admin'
+import type { BackupScheduleConfig } from '../../api/admin'
+
+const MINUTES_PER_WEEK = 7 * 24 * 60
 
 /**
- * Whether applying `newCfg` over `oldCfg` runs the job LESS than it runs
- * today — the one direction that asks for a confirmation (INV-122): backups
- * are the instance's disaster floor, and thinning them deserves a deliberate
- * second click. Raising frequency never confirms.
+ * How many times a config fires in a week — the one number that makes the two
+ * modes comparable, and therefore the only honest answer to "does this run the
+ * job less than it runs today?".
  *
- * "Today" is the stored row when one exists; with no row the baseline is what
- * the agent reported it is actually following (its rendered `schedule`
- * string). When neither is known there is nothing to compare against, so no
- * reduction can honestly be claimed.
+ * `NaN` is a real answer, not a failure: a config with no mode (the `{}` an
+ * agent reports for a job whose env agenda is off), or a mode whose own field
+ * is missing, states no cadence at all. Every comparison below propagates it
+ * as "nothing can be claimed" rather than guessing zero.
+ */
+export function firingsPerWeek(cfg: BackupScheduleConfig): number {
+  if (cfg.enabled === false) return 0
+  if (cfg.mode === 'interval') return MINUTES_PER_WEEK / (cfg.interval_min ?? NaN)
+  if (cfg.mode === 'times') return (cfg.times?.length ?? NaN) * (cfg.weekdays?.length ?? NaN)
+  return NaN
+}
+
+/**
+ * Whether applying `next` runs the job LESS than it runs today — the one
+ * direction that asks for a confirmation (INV-122): backups are the instance's
+ * disaster floor, and thinning them deserves a deliberate second click.
+ * Raising the frequency never confirms.
  *
- * `newCfg === null` is the DELETE — always confirmed, because "back to the
- * env baseline" replaces the visible agenda with one this screen cannot show
- * until the agent's next heartbeat.
+ * "Today" is the stored row when one exists; with no row it is the ENV
+ * baseline the agent publishes (INV-173: absent row = env baseline). When
+ * neither states a cadence, no reduction can honestly be claimed.
+ *
+ * `next === null` is the DELETE — always confirmed, because "back to the env
+ * baseline" replaces the visible agenda with one this screen cannot show until
+ * the agent's next heartbeat.
  */
 export function reducesProtection(
-  job: BackupJob,
-  oldCfg: BackupScheduleConfig | null,
-  newCfg: BackupScheduleConfig | null,
-  agent: BackupAgentJobReport | null | undefined,
+  stored: BackupScheduleConfig | null,
+  next: BackupScheduleConfig | null,
+  baseline: BackupScheduleConfig | null | undefined,
 ): boolean {
-  if (newCfg === null) return true
-  switch (job) {
-    case 'dump': {
-      const current = oldCfg?.times?.length ?? countAnchors(agent?.schedule)
-      return current !== null && (newCfg.times?.length ?? 0) < current
-    }
-    case 'mirror': {
-      const current = oldCfg?.interval_min ?? parseEveryMinutes(agent?.schedule)
-      return current !== null && (newCfg.interval_min ?? 0) > current
-    }
-    case 'user_zip': {
-      const currentlyOn =
-        oldCfg !== null ? oldCfg.enabled === true : agent ? agent.schedule !== 'disabled' : false
-      return currentlyOn && newCfg.enabled === false
-    }
-    // The drill is weekly by design — a row only moves WHICH slot, never how
-    // often, so no edit of it can reduce protection.
-    default:
-      return false
-  }
-}
-
-/**
- * How many wall-time anchors the agent's rendered schedule carries
- * ("03:30, 15:30" → 2). null when there is no report to read.
- */
-function countAnchors(schedule: string | undefined): number | null {
-  if (!schedule) return null
-  const m = schedule.match(/\d{1,2}:\d{2}/g)
-  return m ? m.length : 0
-}
-
-/** The mirror cadence out of the agent's "every 360m" render. */
-function parseEveryMinutes(schedule: string | undefined): number | null {
-  const m = schedule?.match(/every (\d+)m/)
-  return m ? Number(m[1]) : null
+  if (next === null) return true
+  const current = stored ?? baseline
+  if (!current) return false
+  const before = firingsPerWeek(current)
+  const after = firingsPerWeek(next)
+  if (Number.isNaN(before) || Number.isNaN(after)) return false
+  return after < before
 }

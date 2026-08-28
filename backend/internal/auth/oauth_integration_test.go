@@ -1840,8 +1840,9 @@ func (h *harness) login(t *testing.T, email, password string) *client {
 
 // The per-IP cap on /start is what bounds oauth_state, a table an
 // unauthenticated caller writes to on every request. A limiter that reset its
-// bucket on each call — CommitSuccess deletes the entry outright — would leave
-// the cap decorative, and nothing else bounds that table between sweeps.
+// bucket on each call — CommitSuccess zeroes a scalar key's failure count —
+// would leave the cap decorative, and nothing else bounds that table between
+// sweeps.
 func TestOAuthStart_IsRateLimitedPerAddress(t *testing.T) {
 	h, _ := newGoogleHarness(t, harnessOpts{})
 	c := h.client(t)

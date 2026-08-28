@@ -22,7 +22,8 @@ func TestMatrix_IsExactlyTheDocumentedGrid(t *testing.T) {
 			authctx.PermInvitesRead, authctx.PermInvitesWrite,
 			authctx.PermAuditRead, authctx.PermPolicyRead, authctx.PermPolicyWrite,
 			authctx.PermInstanceTransfer, authctx.PermInstanceBackupRead,
-			authctx.PermInstanceBackupSchedule,
+			authctx.PermInstanceBackupSchedule, authctx.PermInstanceIPBlock,
+			authctx.PermInstanceRateLimits,
 		},
 		authctx.RoleAdmin: {
 			authctx.PermContentRead, authctx.PermContentWrite,
@@ -51,6 +52,15 @@ func TestMatrix_IsExactlyTheDocumentedGrid(t *testing.T) {
 func TestMatrix_AdminCannotWritePolicyOrTransferTheInstance(t *testing.T) {
 	assert.False(t, authctx.RoleAdmin.Can(authctx.PermPolicyWrite))
 	assert.False(t, authctx.RoleAdmin.Can(authctx.PermInstanceTransfer))
+	// ADR-46: the same argument at the network edge. An admin who could
+	// install a permanent block could lock the owner out of the screen that
+	// would remove it.
+	assert.False(t, authctx.RoleAdmin.Can(authctx.PermInstanceIPBlock))
+	// The abuse limits are the same class: an admin who could lower
+	// login_distinct_accounts_per_ip to its floor would lock the whole office
+	// out of the instance, and one who could raise every ceiling to its
+	// maximum would switch the defence off without touching code.
+	assert.False(t, authctx.RoleAdmin.Can(authctx.PermInstanceRateLimits))
 	assert.True(t, authctx.RoleAdmin.Can(authctx.PermPolicyRead),
 		"an admin still has to be able to see the rules it manages people under")
 }
@@ -96,6 +106,7 @@ func TestAllPermissions_IsExactlyTheDeclaredVocabulary(t *testing.T) {
 		"invites.read", "invites.write",
 		"audit.read", "policy.read", "policy.write",
 		"instance.transfer", "instance.backup", "instance.backup_schedule",
+		"instance.ip_block", "instance.rate_limits",
 	}, authctx.AllPermissions)
 
 	seen := map[authctx.Permission]bool{}
@@ -104,4 +115,16 @@ func TestAllPermissions_IsExactlyTheDeclaredVocabulary(t *testing.T) {
 		seen[p] = true
 	}
 	assert.Equal(t, []authctx.Role{"owner", "admin", "editor", "viewer"}, authctx.AllRoles)
+}
+
+// The abuse limits are LOCKED for instance.ip_block's reason, one step over:
+// this permission does not decide who may reach the instance, it decides how
+// many attempts an origin gets before the instance stops answering — and both
+// directions of a wrong value are a denial of service the holder installs.
+func TestMatrix_RateLimitsAreLockedToTheOwner(t *testing.T) {
+	assert.True(t, authctx.IsPermissionLocked(authctx.PermInstanceRateLimits))
+	assert.True(t, authctx.RoleOwner.Can(authctx.PermInstanceRateLimits))
+	for _, r := range []authctx.Role{authctx.RoleAdmin, authctx.RoleEditor, authctx.RoleViewer} {
+		assert.False(t, r.Can(authctx.PermInstanceRateLimits), "role %q must not hold it", r)
+	}
 }

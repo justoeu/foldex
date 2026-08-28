@@ -1,29 +1,36 @@
-import { useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { useConfirm } from '../ConfirmDialog'
 import { useCopy } from '../../hooks/useCopy'
 import { useCurrentUser } from '../../auth/AuthProvider'
+import { useRevealTarget } from '../../hooks/useRevealTarget'
 import { relativeTime } from '../../lib/time'
+import { Icon, I } from '../icons'
 import {
   backupScheduleQueryKey,
   backupStatusQueryKey,
   fetchBackupSchedule,
   fetchBackupStatus,
   requestBackupRun,
-  resetBackupSchedule,
-  saveBackupSchedule,
   type BackupAgentJobReport,
+  type BackupAgentState,
   type BackupJob,
   type BackupJobStatus,
   type BackupRun,
-  type BackupScheduleConfig,
+  type BackupRunStatus,
   type BackupScheduleResponse,
-  type BackupScheduleRow,
 } from '../../api/admin'
-import { reducesProtection } from './backupSchedule'
-import { apiErrorCode, apiErrorMessage } from '../../lib/apiError'
+import { ScheduleCard } from './BackupScheduleEditor'
+import {
+  drillTableCount,
+  drillTables,
+  formatBytes,
+  runDuration,
+  statusTone,
+} from './backupFormat'
+import { apiErrorCode } from '../../lib/apiError'
 
 /**
  * The dump freshness contract, mirrored from the shipped alert rule
@@ -52,24 +59,59 @@ const REQUESTED_STALE_MS = 5 * 60 * 1000
 const AGENT_STALE_MS = 2 * 60 * 1000
 const SCHEDULE_REFETCH_MS = 60 * 1000
 
+/** The four jobs in the order the layout presents them. */
+const JOBS: readonly BackupJob[] = ['dump', 'drill', 'mirror', 'user_zip'] as const
+
+/** One glyph per job, from the shared registry — no one-off SVGs here. */
+const JOB_ICON: Record<BackupJob, typeof I.folder> = {
+  dump: I.layers,
+  drill: I.refresh,
+  mirror: I.swap,
+  user_zip: I.users,
+}
+
+type HistoryFilter = 'all' | 'succeeded' | 'failed'
+
+/* Frozen empties for the pending render: `?? []` allocates a new array every
+   time, which would change the memo inputs on every render. */
+const NO_JOBS: BackupJobStatus[] = []
+const NO_RUNS: BackupRun[] = []
+
 /**
- * The instance-wide backup status band (ADR-43, SDD-OPS-BACKUP §10.2).
+ * The instance-wide backup surface (ADR-43/ADR-44, SDD-OPS-BACKUP §10.2).
  *
- * Read-only over backup_run except for one verb: "run now" enqueues a
- * requested row for the agent to claim. The S3 credentials, the schedule and
- * the execution never touch the web process, so the only feedback a trigger
- * has is the new row in the history below.
+ * Read-only over backup_run and backup_schedule except for two verbs: "run
+ * now" enqueues a requested row for the agent to claim, and the owner's
+ * agenda editors write the schedule rows. The S3 credentials and the
+ * execution never touch the web process, so a trigger's only feedback is the
+ * new row in the history at the bottom.
+ *
+ * Everything on screen is a value the server answered. The deliberate
+ * absences matter as much: there is no "download the last dump" (the web
+ * process holds no S3 credential, by design) and no retention/destination
+ * panel (the agent's env is not exposed through the API) — a disaster-recovery
+ * screen that shows a plausible number nobody computed is worse than one that
+ * shows nothing, which is the whole lesson of the mailer incident.
  */
 export function BackupSection() {
   const { t } = useTranslation()
   const confirm = useConfirm()
   const queryClient = useQueryClient()
+  const isOwner = useCurrentUser()?.role === 'owner'
   const [pages, setPages] = useState<number[]>([])
+  const [selected, setSelected] = useState<BackupJob>('dump')
+  const [filter, setFilter] = useState<HistoryFilter>('all')
+  const { ref: agendaRef, reveal: revealAgenda } = useRevealTarget<HTMLDivElement>()
 
   const before = pages.length > 0 ? pages[pages.length - 1] : 0
   const query = useQuery({
     queryKey: backupStatusQueryKey(before),
     queryFn: () => fetchBackupStatus(before > 0 ? { before } : {}),
+  })
+  const schedule = useQuery({
+    queryKey: backupScheduleQueryKey,
+    queryFn: fetchBackupSchedule,
+    refetchInterval: SCHEDULE_REFETCH_MS,
   })
 
   const trigger = useMutation({
@@ -77,16 +119,84 @@ export function BackupSection() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['admin', 'backup'] }),
   })
 
-  async function runNow(job: BackupJob) {
-    trigger.reset()
+  /* The two stable members, not the mutation itself: `useMutation` answers a
+     NEW object on every render, so depending on it would make the callback
+     below a fresh prop on every poll tick and undo all four card memos. */
+  const { mutate: mutateRun, reset: resetRun } = trigger
+
+  const runNow = useCallback(async function runNow(job: BackupJob) {
+    resetRun()
     const ok = await confirm({
       title: t('admin.backup_run_confirm_title', { job: t(`admin.backup_job_${job}`) }),
       message: t('admin.backup_run_confirm_message'),
       confirmLabel: t('admin.backup_run_confirm_action'),
     })
-    if (ok) trigger.mutate(job)
-  }
+    if (ok) mutateRun(job)
+  }, [confirm, t, mutateRun, resetRun])
 
+  /* Stable identities: an inline arrow here would hand every card a new prop
+     on each render and quietly undo the memo on all four. */
+  const handleRun = useCallback((job: BackupJob) => void runNow(job), [runNow])
+
+  /* The pending flag is read through a ref so the select callback below keeps
+     ONE identity: taking `schedule.isPending` as a dependency would hand the
+     four job cards a new prop the moment the load finished and undo their
+     memos. */
+  const revealedWhileLoading = useRef(false)
+  const schedulePendingRef = useRef(schedule.isPending)
+
+  /* The cards sit above the fold and the agenda below it, so picking a job up
+     there used to change a form the reader could not see. The tabs INSIDE the
+     agenda deliberately do NOT reveal: the click already happened in that
+     card, and moving it under the cursor is gratuitous. */
+  const handleSelectFromCard = useCallback(
+    (job: BackupJob) => {
+      setSelected(job)
+      revealedWhileLoading.current = schedulePendingRef.current
+      revealAgenda()
+    },
+    [revealAgenda],
+  )
+
+  /* A reveal fired during the first load centres the PLACEHOLDER, which is a
+     few lines tall; the card then grows into the whole form and the position
+     the scroll settled on is the middle of nothing. So the reveal repeats once
+     the real card is there — and only the scroll repeats, because the caret
+     already went there on the first one and the reader may have moved it since. */
+  const schedulePending = schedule.isPending
+  useEffect(() => {
+    schedulePendingRef.current = schedulePending
+    if (schedulePending || !revealedWhileLoading.current) return
+    revealedWhileLoading.current = false
+    revealAgenda({ keepFocus: true })
+  }, [schedulePending, revealAgenda])
+
+  const jobs = query.data?.jobs ?? NO_JOBS
+  const runs = query.data?.runs ?? NO_RUNS
+  const byJob = useMemo(() => new Map(jobs.map((j) => [j.job, j])), [jobs])
+  const neverRan =
+    runs.length === 0 &&
+    pages.length === 0 &&
+    jobs.every((j) => j.last_success === null && j.consecutive_failures === 0)
+  const staleRequested = useMemo(
+    () =>
+      runs.filter(
+        (r) =>
+          r.status === 'requested' &&
+          Date.now() - Date.parse(r.scheduled_for) > REQUESTED_STALE_MS,
+      ),
+    [runs],
+  )
+  const drill = byJob.get('drill')?.last_success ?? null
+  const triggerError = trigger.isError
+    ? (apiErrorCode(trigger.error) ?? t('admin.backup_trigger_failed'))
+    : null
+  const filtered = useMemo(
+    () => runs.filter((r) => filter === 'all' || r.status === filter),
+    [runs, filter],
+  )
+
+  // Every hook has run by here — the guards below may return early.
   if (query.isPending) {
     return <div className="fx-card"><div className="fx-card-body"><div className="fx-empty">{t('common.loading')}</div></div></div>
   }
@@ -94,22 +204,16 @@ export function BackupSection() {
     return <div className="fx-card"><div className="fx-card-body"><div className="fx-empty">{t('admin.backup_unavailable')}</div></div></div>
   }
 
-  const jobs = query.data.jobs
-  const runs = query.data.runs
-  const neverRan =
-    runs.length === 0 &&
-    pages.length === 0 &&
-    jobs.every((j) => j.last_success === null && j.consecutive_failures === 0)
-  const staleRequested = runs.filter(
-    (r) => r.status === 'requested' && Date.now() - Date.parse(r.scheduled_for) > REQUESTED_STALE_MS,
-  )
-  const drill = jobs.find((j) => j.job === 'drill')?.last_success ?? null
-  const triggerError = trigger.isError
-    ? (apiErrorCode(trigger.error) ?? t('admin.backup_trigger_failed'))
-    : null
+  const agent = schedule.data?.agent ?? null
+  const agentStale = agent !== null && Date.now() - Date.parse(agent.seen_at) > AGENT_STALE_MS
+  // Build skew, compared and not re-derived: both numbers come from the
+  // server. An agent that predates the field reports nothing, and nothing is
+  // not a match — it is precisely the old build this row exists to name.
+  const agentSchemaSkewed =
+    agent !== null && (agent.schema_version ?? 0) < (schedule.data?.agent_schema_version ?? 0)
 
   return (
-    <div className="fx-hub-stack">
+    <div className="fx-bkp">
       {neverRan && (
         <div className="fx-banner fx-banner-warn">
           <div>
@@ -144,57 +248,78 @@ export function BackupSection() {
         </div>
       )}
 
-      <div className="fx-card">
-        <div className="fx-card-body">
-          <div className="fx-utable-wrap">
-            <table className="fx-utable fx-bkp-table">
-              <thead>
-                <tr>
-                  <th>{t('admin.backup_col_job')}</th>
-                  <th>{t('admin.backup_col_last_success')}</th>
-                  <th>{t('admin.backup_col_artifact')}</th>
-                  <th>{t('admin.backup_col_size')}</th>
-                  <th>{t('admin.backup_col_sha')}</th>
-                  <th>{t('admin.backup_col_duration')}</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map((j) => (
-                  <JobRow key={j.job} status={j} onRun={() => void runNow(j.job)} />
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <Kpis jobs={jobs} drill={drill} />
+
+      <div className="fx-bkp-jobs">
+        {JOBS.map((job) => (
+          <JobCard
+            key={job}
+            job={job}
+            status={byJob.get(job) ?? null}
+            report={agent?.jobs[job] ?? null}
+            selected={selected === job}
+            onSelect={handleSelectFromCard}
+            onRun={handleRun}
+          />
+        ))}
+      </div>
+
+      <div className="fx-bkp-split">
+        {/* Narrowed on purpose: the agenda card must not depend on `agent`,
+            whose `seen_at` moves with every heartbeat. The banner below is
+            where that timestamp belongs. */}
+        <ScheduleCard
+          selected={selected}
+          onSelect={setSelected}
+          jobs={schedule.data?.jobs}
+          rows={schedule.data?.rows}
+          bounds={schedule.data?.bounds}
+          report={agent?.jobs[selected] ?? null}
+          agentSeen={agent !== null}
+          isPending={schedule.isPending}
+          isError={schedule.isError}
+          isOwner={isOwner}
+          cardRef={agendaRef}
+        />
+        <div className="fx-bkp-aside">
+          <DrillCard drill={drill} />
+          <AgentCard
+            agent={agent}
+            stale={agentStale}
+            pending={schedule.isPending}
+            skewed={agentSchemaSkewed}
+          />
         </div>
       </div>
 
-      <ScheduleSection />
-
-      {drill && (
-        <div className="fx-panel">
-          <div className="fx-panel-head">
+      <div className="fx-card">
+        <div className="fx-card-body fx-bkp-history">
+          <div className="fx-bkp-history-head">
             <div>
-              <div className="fx-panel-title">{t('admin.backup_drill_title')}</div>
+              <div className="fx-panel-title">{t('admin.backup_history_title')}</div>
+              {/* "on this page", never "in the last 24 h": the count is what
+                  this keyset page holds, and the query has no window. */}
               <div className="fx-panel-desc">
-                {drill.drill_of_run_id !== null
-                  ? t('admin.backup_drill_desc', {
-                      run: drill.drill_of_run_id,
-                      when: relativeTime(drill.started_at, t),
-                    })
-                  : relativeTime(drill.started_at, t)}
+                {t('admin.backup_history_count', { count: runs.length })}
               </div>
             </div>
+            <div className="fx-bkp-filters" role="group" aria-label={t('admin.backup_filter_label')}>
+              {(['all', 'succeeded', 'failed'] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  className={'fx-bkp-filter' + (filter === f ? ' fx-bkp-filter-on' : '')}
+                  aria-pressed={filter === f}
+                  onClick={() => setFilter(f)}
+                >
+                  {t(`admin.backup_filter_${f}`)}
+                </button>
+              ))}
+            </div>
           </div>
-          <DrillCounts meta={drill.meta} />
-        </div>
-      )}
 
-      <div className="fx-card">
-        <div className="fx-card-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div className="fx-panel-title">{t('admin.backup_history_title')}</div>
-          {runs.length === 0 && <div className="fx-empty">{t('admin.backup_history_empty')}</div>}
-          {runs.length > 0 && (
+          {filtered.length === 0 && <div className="fx-empty">{t('admin.backup_history_empty')}</div>}
+          {filtered.length > 0 && (
             <div className="fx-utable-wrap">
               <table className="fx-utable fx-bkp-table">
                 <thead>
@@ -204,17 +329,19 @@ export function BackupSection() {
                     <th>{t('admin.backup_col_status')}</th>
                     <th>{t('admin.backup_col_artifact')}</th>
                     <th>{t('admin.backup_col_error')}</th>
+                    <th>{t('admin.backup_col_duration')}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {runs.map((r) => (
+                  {filtered.map((r) => (
                     <HistoryRow key={r.id} run={r} />
                   ))}
                 </tbody>
               </table>
             </div>
           )}
-          <div style={{ display: 'flex', gap: 8 }}>
+
+          <div className="fx-bkp-pager">
             {pages.length > 0 && (
               <button className="fx-pillbtn" onClick={() => setPages((p) => p.slice(0, -1))}>
                 {t('admin.audit_prev')}
@@ -239,420 +366,323 @@ export function BackupSection() {
 }
 
 /**
- * The configurable agenda (ADR-44) as one sub-band: what the agent is
- * ACTUALLY following (its heartbeat is the truth), which layer each agenda
- * comes from (env baseline vs a stored row), and — for the owner only — the
- * editors that write the rows. The permission split mirrors the server:
- * reading rides `instance.backup`, writing is `instance.backup_schedule`,
- * owner-only and locked, so a non-owner sees no controls at all.
+ * Four headline numbers, each one a value the API answered.
+ *
+ * Deliberately NOT "artifacts retained" or "failures in 7 days": retention
+ * lives in the agent's env and the history is a keyset page, not a window —
+ * both would be numbers the screen invented.
  */
-function ScheduleSection() {
+const Kpis = memo(function Kpis({ jobs, drill }: { jobs: BackupJobStatus[]; drill: BackupRun | null }) {
   const { t } = useTranslation()
-  const isOwner = useCurrentUser()?.role === 'owner'
-  const query = useQuery({
-    queryKey: backupScheduleQueryKey,
-    queryFn: fetchBackupSchedule,
-    refetchInterval: SCHEDULE_REFETCH_MS,
-  })
-
-  if (query.isPending) {
-    return <div className="fx-card"><div className="fx-card-body"><div className="fx-empty">{t('common.loading')}</div></div></div>
-  }
-  if (query.isError || !query.data) {
-    return <div className="fx-card"><div className="fx-card-body"><div className="fx-empty">{t('admin.backup_schedule_unavailable')}</div></div></div>
-  }
-
-  const data = query.data
-  const agent = data.agent
-  const agentStale = agent !== null && Date.now() - Date.parse(agent.seen_at) > AGENT_STALE_MS
+  const dump = jobs.find((j) => j.job === 'dump')?.last_success ?? null
+  const dumpStale = dump !== null && Date.now() - Date.parse(dump.started_at) > DUMP_STALE_MS
+  const failures = jobs.reduce((max, j) => Math.max(max, j.consecutive_failures), 0)
+  const tables = drill ? drillTableCount(drill.meta) : 0
 
   return (
-    <div className="fx-card">
-      <div className="fx-card-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div>
-          <div className="fx-panel-title">{t('admin.backup_schedule_title')}</div>
-          <div className="fx-panel-desc">
-            {agent !== null
-              ? t('admin.backup_agent_seen', {
-                  when: relativeTime(agent.seen_at, t),
-                  version: agent.version,
-                })
-              : t('admin.backup_schedule_desc')}
-          </div>
-        </div>
+    <div className="fx-bkp-kpis">
+      <Kpi
+        tone={dump === null ? 'warn' : dumpStale ? 'warn' : 'ok'}
+        label={t('admin.backup_kpi_last_dump')}
+        value={dump === null ? '—' : relativeTime(dump.started_at, t)}
+        hint={dump === null ? t('admin.backup_never_ran') : new Date(dump.started_at).toLocaleString()}
+      />
+      <Kpi
+        tone={drill === null ? 'warn' : 'ok'}
+        label={t('admin.backup_kpi_integrity')}
+        value={drill === null ? '—' : t('admin.backup_integrity_ok')}
+        hint={
+          drill === null
+            ? t('admin.backup_integrity_none')
+            : t('admin.backup_integrity_hint', { count: tables })
+        }
+      />
+      <Kpi
+        tone="info"
+        label={t('admin.backup_kpi_dump_size')}
+        value={dump?.artifact_bytes != null ? formatBytes(dump.artifact_bytes) : '—'}
+        hint={dump ? runDuration(dump, t) : t('admin.backup_never_ran')}
+      />
+      <Kpi
+        tone={failures > 0 ? 'danger' : 'ok'}
+        label={t('admin.backup_kpi_failures')}
+        value={String(failures)}
+        hint={t('admin.backup_kpi_failures_hint')}
+      />
+    </div>
+  )
+})
 
-        {agent === null && (
-          <div className="fx-banner fx-banner-warn">
-            <div>
-              <div className="fx-banner-title">{t('admin.backup_agent_never_title')}</div>
-              <div className="fx-banner-desc">
-                {t('admin.backup_agent_never_desc')} <code>COMPOSE_PROFILES=backup</code>
-              </div>
-            </div>
-          </div>
-        )}
-        {agentStale && (
-          <div className="fx-banner fx-banner-warn">
-            <div>
-              <div className="fx-banner-title">{t('admin.backup_agent_stale_title')}</div>
-              <div className="fx-banner-desc">{t('admin.backup_agent_stale_desc')}</div>
-            </div>
-          </div>
-        )}
-
-        {data.jobs.map((job) => (
-          <ScheduleJobRow
-            // A saved or reset row remounts the editor so its draft reseeds
-            // from what the server now holds, instead of a stale local copy.
-            key={`${job}:${data.rows[job]?.updated_at ?? 'baseline'}`}
-            job={job}
-            row={data.rows[job] ?? null}
-            report={agent?.jobs[job] ?? null}
-            agentSeen={agent !== null}
-            bounds={data.bounds}
-            isOwner={isOwner}
-          />
-        ))}
+function Kpi({
+  tone,
+  label,
+  value,
+  hint,
+}: {
+  tone: 'ok' | 'warn' | 'danger' | 'info'
+  label: string
+  value: string
+  hint: string
+}) {
+  return (
+    <div className="fx-bkp-kpi">
+      <div className="fx-bkp-kpi-head">
+        <span className="fx-bkp-kpi-label">{label}</span>
+        <span className={`fx-bkp-dot fx-bkp-dot-${tone}`} />
       </div>
+      <div className="fx-bkp-kpi-value">{value}</div>
+      <div className="fx-bkp-kpi-hint">{hint}</div>
     </div>
   )
 }
 
-function ScheduleJobRow({
+/**
+ * One job as a selectable card: what it is, the agenda the AGENT says it is
+ * following, and its last proven outcome. Selecting it moves the agenda
+ * editor below to the same job, so the card and the form never disagree
+ * about which job is on screen.
+ */
+const JobCard = memo(function JobCard({
   job,
-  row,
+  status,
   report,
-  agentSeen,
-  bounds,
-  isOwner,
+  selected,
+  onSelect,
+  onRun,
 }: {
   job: BackupJob
-  row: BackupScheduleRow | null
+  status: BackupJobStatus | null
   report: BackupAgentJobReport | null
-  agentSeen: boolean
-  bounds: BackupScheduleResponse['bounds']
-  isOwner: boolean
+  selected: boolean
+  onSelect: (job: BackupJob) => void
+  onRun: (job: BackupJob) => void
 }) {
   const { t } = useTranslation()
-  const confirm = useConfirm()
-  const queryClient = useQueryClient()
-  const stored = row?.config ?? null
-
-  const [times, setTimes] = useState<string[]>(stored?.times ?? ['03:30'])
-  const [time, setTime] = useState(stored?.time ?? (job === 'drill' ? '01:00' : '02:30'))
-  const [weekday, setWeekday] = useState(stored?.weekday ?? 'sun')
-  const [intervalMin, setIntervalMin] = useState(stored?.interval_min ?? 360)
-  const [enabled, setEnabled] = useState(stored?.enabled ?? true)
-
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: backupScheduleQueryKey })
-  const save = useMutation({
-    mutationFn: (cfg: BackupScheduleConfig) => saveBackupSchedule(job, cfg),
-    onSuccess: invalidate,
-  })
-  const reset = useMutation({
-    mutationFn: () => resetBackupSchedule(job),
-    onSuccess: invalidate,
-  })
-
-  // The server's own message, verbatim: the bounds are configurable
-  // (compiled, but the message names the real numbers) and a client
-  // restatement would drift — same reasoning as the password floor.
-  const error = save.isError
-    ? (apiErrorMessage(save.error) ?? t('common.error'))
-    : reset.isError
-      ? (apiErrorMessage(reset.error) ?? t('common.error'))
-      : null
-
-  // A job the agent reports it CANNOT run gets no editors: a schedule for it
-  // would be a promise the process already said it cannot keep. A job MISSING
-  // from a live agent's report is the same promise (older agent build) — only
-  // when no agent ever reported at all does the owner get to pre-configure.
-  const editable = isOwner && (agentSeen ? report?.capable === true : true)
-
-  function draftConfig(): BackupScheduleConfig {
-    switch (job) {
-      case 'dump':
-        return { times }
-      case 'drill':
-        return { time, weekday }
-      case 'mirror':
-        return { interval_min: intervalMin }
-      default:
-        return enabled ? { enabled: true, time } : { enabled: false }
-    }
-  }
-
-  async function submit() {
-    save.reset()
-    reset.reset()
-    const cfg = draftConfig()
-    if (reducesProtection(job, stored, cfg, report)) {
-      const ok = await confirm({
-        title: t('admin.backup_schedule_reduce_confirm_title', {
-          job: t(`admin.backup_job_${job}`),
-        }),
-        message: t('admin.backup_schedule_reduce_confirm_message'),
-        confirmLabel: t('admin.backup_schedule_reduce_confirm_action'),
-      })
-      if (!ok) return
-    }
-    save.mutate(cfg)
-  }
-
-  async function resetToEnv() {
-    save.reset()
-    reset.reset()
-    const ok = await confirm({
-      title: t('admin.backup_schedule_reset_confirm_title', {
-        job: t(`admin.backup_job_${job}`),
-      }),
-      message: t('admin.backup_schedule_reset_confirm_message'),
-      confirmLabel: t('admin.backup_schedule_reset_confirm_action'),
-    })
-    if (ok) reset.mutate()
-  }
+  const copier = useCopy()
+  const last = status?.last_success ?? null
+  const failures = status?.consecutive_failures ?? 0
+  const stale = job === 'dump' && last !== null && Date.now() - Date.parse(last.started_at) > DUMP_STALE_MS
+  const name = t(`admin.backup_job_${job}`)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span className="fx-utable-name">{t(`admin.backup_job_${job}`)}</span>
-        {report !== null ? (
-          <>
-            {/* The agent's render, verbatim — it is the same string its logs
-                print, and the one agenda that is actually running. */}
-            <code>{report.schedule}</code>
-            <span className={'fx-chip' + (report.source === 'db' ? ' fx-chip-ok' : '')}>
-              {t(`admin.backup_schedule_source_${report.source}`)}
+    <div className={'fx-bkp-job' + (selected ? ' fx-bkp-job-on' : '')}>
+      <button
+        type="button"
+        className="fx-bkp-job-head"
+        aria-pressed={selected}
+        aria-label={t('admin.backup_select_job', { job: name })}
+        onClick={() => onSelect(job)}
+      >
+        <span className={`fx-bkp-job-icon fx-bkp-job-icon-${job}`}>
+          <Icon d={JOB_ICON[job]} size={17} />
+        </span>
+        <span className="fx-bkp-job-titles">
+          <span className="fx-bkp-job-title">
+            {name}
+            {/* The agent's own render of the agenda, verbatim — the same
+                string its logs print, and the one that is actually running. */}
+            {report && <code className="fx-bkp-job-cron">{report.schedule}</code>}
+          </span>
+          <span className="fx-bkp-job-desc">{t(`admin.backup_job_desc_${job}`)}</span>
+        </span>
+        <span className="fx-bkp-job-state">
+          {failures > 0 ? (
+            <span className="fx-chip fx-chip-danger">
+              {t('admin.backup_failures_chip', { count: failures })}
             </span>
-            {!report.capable && (
-              <span className="fx-chip fx-chip-warn">
-                {t(`admin.backup_reason_${report.reason}`, { defaultValue: report.reason })}
-              </span>
-            )}
-          </>
-        ) : (
-          <span className="fx-utable-meta">{t('admin.backup_schedule_no_report')}</span>
-        )}
+          ) : last ? (
+            <span className="fx-chip fx-chip-ok">{t('admin.backup_status_succeeded')}</span>
+          ) : (
+            <span className="fx-chip">{t('admin.backup_never_ran')}</span>
+          )}
+        </span>
+      </button>
+
+      <div className="fx-bkp-job-metrics">
+        <div>
+          <span className="fx-bkp-metric-label">{t('admin.backup_col_last_success')}</span>
+          <span className={'fx-bkp-metric-value' + (stale ? ' fx-bkp-stale' : '')}>
+            {last ? relativeTime(last.started_at, t) : '—'}
+            {stale && ` · ${t('admin.backup_stale_hint')}`}
+          </span>
+        </div>
+        <div>
+          <span className="fx-bkp-metric-label">{t('admin.backup_col_duration')}</span>
+          <span className="fx-bkp-metric-value">{last ? runDuration(last, t) : '—'}</span>
+        </div>
+        <div>
+          <span className="fx-bkp-metric-label">{t('admin.backup_col_size')}</span>
+          <span className="fx-bkp-metric-value">
+            {last?.artifact_bytes != null ? formatBytes(last.artifact_bytes) : '—'}
+          </span>
+        </div>
       </div>
 
-      {editable && (
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
-          {job === 'dump' && (
-            <div className="fx-field">
-              <span className="fx-field-label">{t('admin.backup_schedule_times_label')}</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                {times.map((v, i) => (
-                  <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <input
-                      className="fx-input"
-                      type="time"
-                      value={v}
-                      aria-label={t('admin.backup_schedule_time_n_label', { n: i + 1 })}
-                      onChange={(e) =>
-                        setTimes(times.map((old, j) => (j === i ? e.target.value : old)))
-                      }
-                    />
-                    {times.length > bounds.dump_times_min && (
-                      <button
-                        className="fx-pillbtn"
-                        onClick={() => setTimes(times.filter((_, j) => j !== i))}
-                      >
-                        {t('admin.backup_schedule_remove_time')}
-                      </button>
-                    )}
-                  </span>
-                ))}
-                {times.length < bounds.dump_times_max && (
-                  <button className="fx-pillbtn" onClick={() => setTimes([...times, '12:00'])}>
-                    {t('admin.backup_schedule_add_time')}
-                  </button>
-                )}
-              </div>
-            </div>
+      {(last?.artifact_key || last?.artifact_sha256) && (
+        <div className="fx-bkp-job-artifact">
+          {last.artifact_key && (
+            <span className="fx-bkp-key" title={last.artifact_key}>
+              {last.artifact_key}
+            </span>
           )}
-
-          {job === 'drill' && (
-            <>
-              <label className="fx-field">
-                <span className="fx-field-label">{t('admin.backup_schedule_weekday_label')}</span>
-                <select
-                  className="fx-input"
-                  value={weekday}
-                  onChange={(e) => setWeekday(e.target.value)}
-                >
-                  {WEEKDAYS.map((d) => (
-                    <option key={d} value={d}>
-                      {t(`admin.backup_weekday_${d}`)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="fx-field">
-                <span className="fx-field-label">{t('admin.backup_schedule_time_label')}</span>
-                <input
-                  className="fx-input"
-                  type="time"
-                  value={time}
-                  onChange={(e) => setTime(e.target.value)}
-                />
-              </label>
-            </>
-          )}
-
-          {job === 'mirror' && (
-            <label className="fx-field">
-              <span className="fx-field-label">{t('admin.backup_schedule_interval_label')}</span>
-              <input
-                className="fx-input"
-                type="number"
-                min={bounds.mirror_interval_min}
-                max={bounds.mirror_interval_max}
-                value={intervalMin}
-                onChange={(e) => setIntervalMin(Number(e.target.value))}
-              />
-              <span className="fx-field-hint">
-                {t('admin.backup_schedule_interval_hint', {
-                  min: bounds.mirror_interval_min,
-                  max: bounds.mirror_interval_max,
-                })}
-              </span>
-            </label>
-          )}
-
-          {job === 'user_zip' && (
-            <>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input
-                  type="checkbox"
-                  checked={enabled}
-                  onChange={(e) => setEnabled(e.target.checked)}
-                />
-                <span>{t('admin.backup_schedule_enabled_label')}</span>
-              </label>
-              {enabled && (
-                <label className="fx-field">
-                  <span className="fx-field-label">{t('admin.backup_schedule_time_label')}</span>
-                  <input
-                    className="fx-input"
-                    type="time"
-                    value={time}
-                    onChange={(e) => setTime(e.target.value)}
-                  />
-                </label>
-              )}
-            </>
-          )}
-
-          <button
-            className="fx-btn fx-btn-primary"
-            disabled={save.isPending || reset.isPending}
-            onClick={() => void submit()}
-          >
-            {save.isPending ? t('common.saving') : t('admin.backup_schedule_save')}
-          </button>
-          {row !== null && (
+          {last.artifact_sha256 && (
             <button
-              className="fx-pillbtn"
-              disabled={save.isPending || reset.isPending}
-              onClick={() => void resetToEnv()}
+              type="button"
+              className="fx-bkp-sha-btn"
+              title={last.artifact_sha256}
+              onClick={() => void copier.copy(last.artifact_sha256!)}
             >
-              {t('admin.backup_schedule_reset')}
+              <code>{last.artifact_sha256.slice(0, 12)}…</code>
+              <span>
+                {copier.copied(last.artifact_sha256)
+                  ? t('admin.backup_copied')
+                  : t('admin.backup_copy')}
+              </span>
             </button>
           )}
         </div>
       )}
 
-      {error && (
-        <div className="fx-inline-error" role="alert">
-          {error}
-        </div>
+      <button type="button" className="fx-bkp-job-run" onClick={() => onRun(job)}>
+        {t('admin.backup_run_now')}
+      </button>
+    </div>
+  )
+})
+
+/**
+ * The last drill, as the proof it is: which dump it restored, how long the
+ * restore took, and the row counts it compared. No drill on record renders
+ * the honest absence — a green panel with no numbers behind it would claim a
+ * restore nobody ran.
+ */
+const DrillCard = memo(function DrillCard({ drill }: { drill: BackupRun | null }) {
+  const { t } = useTranslation()
+  return (
+    <div className="fx-bkp-drill">
+      <div className="fx-bkp-drill-head">
+        <span className="fx-bkp-kpi-label">{t('admin.backup_drill_title')}</span>
+        <span className={`fx-bkp-dot fx-bkp-dot-${drill ? 'ok' : 'warn'}`} />
+      </div>
+      {drill === null ? (
+        <>
+          <div className="fx-bkp-drill-title">{t('admin.backup_integrity_none')}</div>
+          <div className="fx-bkp-drill-sub">{t('admin.backup_drill_never_desc')}</div>
+        </>
+      ) : (
+        <>
+          <div className="fx-bkp-drill-title">
+            {drill.drill_of_run_id !== null
+              ? t('admin.backup_drill_headline', { run: drill.drill_of_run_id })
+              : t('admin.backup_integrity_ok')}
+          </div>
+          <div className="fx-bkp-drill-sub">
+            {t('admin.backup_drill_sub', {
+              when: relativeTime(drill.started_at, t),
+              duration: runDuration(drill, t),
+            })}
+          </div>
+          <DrillCounts meta={drill.meta} />
+        </>
       )}
     </div>
   )
-}
+})
 
-/** The server's closed weekday vocabulary, in its own order (sun-first). */
-const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
-
-function JobRow({ status, onRun }: { status: BackupJobStatus; onRun: () => void }) {
+/**
+ * The heartbeat, as its own panel: which build is running, when it last
+ * reported, and what it says about each job. This is the honesty layer — the
+ * agenda above is only the editable row; THIS is the process that reads it.
+ */
+const AgentCard = memo(function AgentCard({
+  agent,
+  stale,
+  pending,
+  skewed,
+}: {
+  agent: BackupAgentState | null
+  stale: boolean
+  pending: boolean
+  skewed: boolean
+}) {
   const { t } = useTranslation()
-  const copier = useCopy()
-  const last = status.last_success
-  const stale =
-    status.job === 'dump' &&
-    last !== null &&
-    Date.now() - Date.parse(last.started_at) > DUMP_STALE_MS
+  if (pending) return null
 
   return (
-    <tr>
-      <td>
-        <span className="fx-utable-name">{t(`admin.backup_job_${status.job}`)}</span>
-        {status.consecutive_failures > 0 && (
-          <span className="fx-chip fx-chip-danger" style={{ marginLeft: 8 }}>
-            {t('admin.backup_failures_chip', { count: status.consecutive_failures })}
-          </span>
-        )}
-      </td>
-      <td>
-        {last === null ? (
-          <span className="fx-utable-meta">{t('admin.backup_never_ran')}</span>
-        ) : (
-          <span className={'fx-utable-meta' + (stale ? ' fx-bkp-stale' : '')}>
-            {relativeTime(last.started_at, t)}
-            {stale && ` · ${t('admin.backup_stale_hint')}`}
-          </span>
-        )}
-      </td>
-      <td>
-        {last?.artifact_key ? (
-          <span className="fx-bkp-key" title={last.artifact_key}>{last.artifact_key}</span>
-        ) : (
-          <span className="fx-utable-meta">—</span>
-        )}
-      </td>
-      <td className="fx-utable-meta">
-        {last?.artifact_bytes != null ? formatBytes(last.artifact_bytes) : '—'}
-      </td>
-      <td>
-        {last?.artifact_sha256 ? (
-          <span className="fx-bkp-sha">
-            <code title={last.artifact_sha256}>{last.artifact_sha256.slice(0, 12)}…</code>
-            <button
-              className="fx-pillbtn"
-              onClick={() => void copier.copy(last.artifact_sha256!)}
-            >
-              {copier.copied(last.artifact_sha256) ? t('admin.backup_copied') : t('admin.backup_copy')}
-            </button>
-          </span>
-        ) : (
-          <span className="fx-utable-meta">—</span>
-        )}
-      </td>
-      <td className="fx-utable-meta">{last ? runDuration(last, t) : '—'}</td>
-      <td>
-        <div className="fx-utable-actions">
-          <button className="fx-pillbtn" onClick={onRun}>
-            {t('admin.backup_run_now')}
-          </button>
+    <div className="fx-panel fx-bkp-agent">
+      <div className="fx-panel-head">
+        <div>
+          <div className="fx-panel-title">{t('admin.backup_agent_title')}</div>
+          <div className="fx-panel-desc">
+            {agent === null
+              ? t('admin.backup_agent_never_desc')
+              : t('admin.backup_agent_seen', {
+                  when: relativeTime(agent.seen_at, t),
+                  version: agent.version,
+                })}
+          </div>
         </div>
-      </td>
-    </tr>
-  )
-}
+        <span className={`fx-bkp-dot fx-bkp-dot-${agent === null || stale ? 'warn' : 'ok'}`} />
+      </div>
 
-function HistoryRow({ run }: { run: BackupRun }) {
+      {agent === null && (
+        <div className="fx-bkp-agent-empty">
+          {t('admin.backup_agent_never_title')} <code>COMPOSE_PROFILES=backup</code>
+        </div>
+      )}
+      {stale && (
+        <div className="fx-bkp-agent-empty">
+          <b>{t('admin.backup_agent_stale_title')}</b> {t('admin.backup_agent_stale_desc')}
+        </div>
+      )}
+      {skewed && (
+        <div className="fx-bkp-agent-empty">
+          <b>{t('admin.backup_agent_skew_title')}</b> {t('admin.backup_agent_skew_desc')}
+        </div>
+      )}
+
+      {agent !== null && (
+        <ul className="fx-bkp-agent-jobs">
+          {JOBS.map((job) => {
+            const report = agent.jobs[job]
+            return (
+              <li key={job}>
+                <span className="fx-bkp-agent-job">{t(`admin.backup_job_${job}`)}</span>
+                {report ? (
+                  report.capable ? (
+                    <code>{report.schedule}</code>
+                  ) : (
+                    <span className="fx-chip fx-chip-warn">
+                      {t(`admin.backup_reason_${report.reason}`, { defaultValue: report.reason })}
+                    </span>
+                  )
+                ) : (
+                  <span className="fx-utable-meta">{t('admin.backup_schedule_no_report')}</span>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+})
+
+const HistoryRow = memo(function HistoryRow({ run }: { run: BackupRun }) {
   const { t } = useTranslation()
-  const tone =
-    run.status === 'succeeded' ? ' fx-chip-ok'
-    : run.status === 'failed' ? ' fx-chip-danger'
-    : ' fx-chip-warn'
   return (
     <tr>
       <td className="fx-utable-meta">{new Date(run.started_at).toLocaleString()}</td>
-      <td className="fx-utable-meta">{t(`admin.backup_job_${run.job}`)}</td>
       <td>
-        <span className={'fx-chip' + tone}>{t(`admin.backup_status_${run.status}`)}</span>
+        <span className="fx-bkp-history-job">
+          <span className={`fx-bkp-jobdot fx-bkp-jobdot-${run.job}`} />
+          {t(`admin.backup_job_${run.job}`)}
+        </span>
+      </td>
+      <td>
+        <span className={'fx-chip' + statusTone(run.status)}>
+          {t(`admin.backup_status_${run.status}`)}
+        </span>
       </td>
       <td>
         {run.artifact_key ? (
@@ -666,9 +696,10 @@ function HistoryRow({ run }: { run: BackupRun }) {
             operator greps the agent's logs and the runbook for. */}
         {run.last_error ? <code>{run.last_error}</code> : <span className="fx-utable-meta">—</span>}
       </td>
+      <td className="fx-utable-meta">{runDuration(run, t)}</td>
     </tr>
   )
-}
+})
 
 /**
  * The restored table counts the drill proved, straight from its meta. Absent
@@ -677,40 +708,19 @@ function HistoryRow({ run }: { run: BackupRun }) {
  */
 function DrillCounts({ meta }: { meta: Record<string, unknown> }) {
   const { t } = useTranslation()
-  const tables = meta['tables']
-  if (tables === null || typeof tables !== 'object' || Array.isArray(tables)) return null
-  const entries = Object.entries(tables as Record<string, unknown>).filter(
-    (e): e is [string, number] => typeof e[1] === 'number',
-  )
+  const entries = drillTables(meta)
   if (entries.length === 0) return null
   return (
-    <div className="fx-bkp-counts">
-      {entries.map(([table, count]) => (
-        <span className="fx-chip" key={table}>
-          {table}: {count.toLocaleString()}
-        </span>
-      ))}
-      <span className="fx-utable-meta">{t('admin.backup_drill_counts_hint')}</span>
-    </div>
+    <>
+      <div className="fx-bkp-counts">
+        {entries.map(([table, count]) => (
+          <span className="fx-bkp-count" key={table}>
+            {table}
+            <b>{count.toLocaleString()}</b>
+          </span>
+        ))}
+      </div>
+      <div className="fx-bkp-drill-sub">{t('admin.backup_drill_counts_hint')}</div>
+    </>
   )
-}
-
-function runDuration(run: BackupRun, t: TFunction): string {
-  if (!run.finished_at) return '—'
-  const ms = Date.parse(run.finished_at) - Date.parse(run.started_at)
-  if (!Number.isFinite(ms) || ms < 0) return '—'
-  if (ms < 1000) return t('admin.backup_duration_ms', { value: ms })
-  return t('admin.backup_duration_s', { value: (ms / 1000).toFixed(1) })
-}
-
-function formatBytes(b: number): string {
-  if (b < 1024) return `${b} B`
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let n = b / 1024
-  let i = 0
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024
-    i++
-  }
-  return `${n.toFixed(n >= 10 ? 0 : 1)} ${units[i]}`
 }

@@ -211,7 +211,7 @@ export function RolesMatrix() {
                         against the API docs needs to read the same token in
                         both places. The prose sits beside it, not instead. */}
                     <code className="fx-permchip">{p}</code>
-                    <span className="fx-matrix-permdesc">{t(`admin.perm_${p.replace('.', '_')}`)}</span>
+                    <span className="fx-matrix-permdesc">{t(`admin.perm_${p.split('.').join('_')}`)}</span>
                   </th>
                   {rows.map((r) => {
                     const on = effective[r.role].has(p)

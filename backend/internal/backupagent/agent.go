@@ -21,8 +21,9 @@ import (
 // Deliberately NOT db.RequiredSchemaVersion: that number tracks what the
 // BACKEND reads, and moves whenever any backend query gains a dependency.
 // This one moves only for tables the agent itself touches: 40 for backup_run,
-// 42 for backup_schedule (read) and backup_agent_state (heartbeat, written).
-const RequiredSchemaVersion = 42
+// 42 for backup_schedule (read) and backup_agent_state (heartbeat, written),
+// 43 for the unified shape of backup_schedule.config.
+const RequiredSchemaVersion = 43
 
 const janitorInterval = time.Hour
 
@@ -185,10 +186,19 @@ func (a *Agent) computeTimings(rows map[string]ScheduleRow) map[string]Timing {
 		var row *JobConfig
 		if r, ok := rows[spec.name]; ok {
 			cfg := r.Config
-			if err := ValidateJobConfig(spec.name, cfg); err != nil {
-				a.logger.Warn("schedule row is invalid; using the env baseline", "job", spec.name, "err", err)
-			} else {
-				row = &cfg
+			switch {
+			// A document json could not read at all says nothing the floors
+			// could judge, so report what actually went wrong rather than the
+			// downstream "needs mode" the empty config would produce.
+			case r.Malformed != "":
+				a.logger.Warn("schedule row could not be decoded; using the env baseline",
+					"job", spec.name, "err", r.Malformed)
+			default:
+				if err := ValidateJobConfig(spec.name, cfg); err != nil {
+					a.logger.Warn("schedule row is invalid; using the env baseline", "job", spec.name, "err", err)
+				} else {
+					row = &cfg
+				}
 			}
 		}
 		if capable, reason := a.capability(spec.name); !capable {
@@ -263,19 +273,68 @@ func (a *Agent) agentState() AgentState {
 	for _, spec := range a.jobs {
 		capable, reason := a.capability(spec.name)
 		t := a.timing(spec.name)
-		jobs[spec.name] = JobReport{Capable: capable, Reason: reason, Source: t.Source, Schedule: t.String()}
+		jobs[spec.name] = JobReport{
+			Capable:     capable,
+			Reason:      reason,
+			Source:      t.Source,
+			Schedule:    t.String(),
+			Baseline:    envTiming(spec.name, a.cfg).ToConfig(),
+			Destination: a.destination(spec.name),
+		}
 	}
 	// Unregistered jobs are reported anyway: absent from the map they would
 	// render as "unknown" instead of "unavailable, and here is why" — and an
 	// absent mirror let the UI offer editors for a row no process would ever
 	// read.
+	//
+	// They carry their destination anyway: WHERE a job would ship is part of
+	// the configuration the operator is checking, and a job that cannot run is
+	// exactly when they are checking it.
 	if !a.registered(JobUserZip) {
-		jobs[JobUserZip] = JobReport{Capable: false, Reason: "no_source_credentials", Source: "env", Schedule: "disabled"}
+		jobs[JobUserZip] = JobReport{
+			Capable: false, Reason: "no_source_credentials", Source: "env", Schedule: "disabled",
+			Destination: a.destination(JobUserZip),
+		}
 	}
 	if !a.registered(JobMirror) {
-		jobs[JobMirror] = JobReport{Capable: false, Reason: "mirror_off", Source: "env", Schedule: "disabled"}
+		jobs[JobMirror] = JobReport{
+			Capable: false, Reason: "mirror_off", Source: "env", Schedule: "disabled",
+			Destination: a.destination(JobMirror),
+		}
 	}
-	return AgentState{SeenAt: time.Now(), Version: a.cfg.Version, Jobs: jobs}
+	return AgentState{
+		SeenAt:  time.Now(),
+		Version: a.cfg.Version,
+		// The constant this binary was compiled with, not a value read from
+		// anywhere: it is a claim about what THIS code understands.
+		SchemaVersion: RequiredSchemaVersion,
+		Jobs:          jobs,
+	}
+}
+
+// destination reports where a job's objects live in the external bucket, or nil
+// when the bucket is not configured at all — a half-named address ("bucket "
+// with nothing after it) would read as a misconfiguration the operator does not
+// have.
+func (a *Agent) destination(job string) *Destination {
+	if a.cfg.S3Endpoint == "" || a.cfg.S3Bucket == "" {
+		return nil
+	}
+	prefix, ok := jobKeyPrefix[job]
+	if !ok {
+		return nil
+	}
+	return &Destination{Endpoint: a.cfg.S3Endpoint, Bucket: a.cfg.S3Bucket, Prefix: prefix}
+}
+
+// jobKeyPrefix maps each job to its namespace in the external bucket. The drill
+// shares the dump's: it RESTORES what the dump wrote, and naming that is the
+// point — the two agendas are one story told from both ends.
+var jobKeyPrefix = map[string]string{
+	JobDump:    dumpKeyPrefix,
+	JobDrill:   dumpKeyPrefix,
+	JobMirror:  mirrorKeyPrefix,
+	JobUserZip: userZipKeyPrefix,
 }
 
 // CheckSchema gates the boot on the agent's own migrations being applied.
@@ -434,7 +493,7 @@ func (a *Agent) scheduleLoop(ctx context.Context, spec jobSpec) {
 				fireAt = time.Now()
 			}
 		} else {
-			fireAt, _ = t.Next(time.Now())
+			fireAt = t.Next(time.Now())
 		}
 		a.logger.Info("next run scheduled", "job", spec.name, "at", fireAt, "source", t.Source)
 		timer := time.NewTimer(time.Until(fireAt))
@@ -467,19 +526,13 @@ func (a *Agent) bootCatchUp(ctx context.Context, spec jobSpec) {
 		a.logger.Error("catch-up decision failed", "job", spec.name, "err", err)
 		return
 	}
-	var slot time.Time
-	switch {
-	case t.Interval > 0:
-		if !intervalDue(time.Now(), last, t.Interval) {
-			return
-		}
-		// There is no missed wall-clock slot to reconstruct for an interval
-		// job: scheduled_for is simply the moment it fires.
-		slot = time.Now()
-	default:
-		if !t.Due(time.Now(), last) {
-			return
-		}
+	if !t.Due(time.Now(), last) {
+		return
+	}
+	// There is no missed wall-clock slot to reconstruct for an interval job:
+	// scheduled_for is simply the moment it fires.
+	slot := time.Now()
+	if t.Interval == 0 {
 		slot = t.PreviousSlot(time.Now())
 	}
 	jitter := a.catchUpJitter()

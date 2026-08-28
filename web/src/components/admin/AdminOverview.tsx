@@ -6,7 +6,7 @@ import { fetchMetrics, fetchAudit, auditQueryKey, type InstanceMetrics } from '.
 import { RolesMatrix } from './RolesMatrix'
 
 /** The sections the administration scope can open. */
-export type AdminSection = 'users' | 'roles' | 'audit' | 'policy' | 'backup'
+export type AdminSection = 'users' | 'roles' | 'audit' | 'policy' | 'backup' | 'abuse'
 
 type Props = { onOpen: (section: AdminSection) => void }
 
@@ -73,6 +73,11 @@ export function AdminOverview({ onOpen }: Props) {
             icon={I.shield} tone="fx-tone-green"
             title={t('admin.card_backup_title')} desc={t('admin.card_backup_desc')}
             action={t('admin.card_backup_action')} onClick={() => onOpen('backup')}
+          />
+          <HubCard
+            icon={I.alert} tone="fx-tone-pink"
+            title={t('admin.card_abuse_title')} desc={t('admin.card_abuse_desc')}
+            action={t('admin.card_abuse_action')} onClick={() => onOpen('abuse')}
           />
         </div>
       </section>

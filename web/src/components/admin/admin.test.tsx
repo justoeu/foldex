@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AdminOverview, relativeTime } from './AdminOverview'
 import { RolesMatrix } from './RolesMatrix'
@@ -68,19 +68,61 @@ const POLICY = {
 const AUDIT = {
   entries: [
     {
-      id: 9, action: 'login.failed', actor_email: null,
+      id: 9, action: 'login.failed', category: 'identity', severity: 'critical',
+      actor_email: null, actor_ref: null,
       target_email: 'someone@foldex.test', detail: null,
+      ip: '189.42.11.7', ip_trusted: false, user_agent: 'curl/8',
       created_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
     },
     {
-      id: 8, action: 'user.role_changed', actor_email: 'admin@foldex.test',
+      id: 8, action: 'user.role_changed', category: 'identity', severity: 'warning',
+      actor_email: 'admin@foldex.test', actor_ref: 1,
       target_email: 'rafa@foldex.test', detail: 'admin',
+      ip: '177.20.4.19', ip_trusted: true, user_agent: 'Chrome/141',
       created_at: new Date(Date.now() - 26 * 3600_000).toISOString(),
+    },
+    // A CONTENT row as the server actually projects it for an administrator:
+    // no e-mail, no detail, no subject — only the opaque actor reference.
+    {
+      id: 7, action: 'link.created', category: 'content', severity: 'info',
+      actor_email: null, actor_ref: 7,
+      target_email: null, detail: null,
+      ip: '191.55.8.140', ip_trusted: false, user_agent: 'Safari/19',
+      created_at: new Date(Date.now() - 30 * 3600_000).toISOString(),
     },
   ],
 }
 
-/** Answers every administration endpoint, so a component under test hits only its own. */
+const AUDIT_STATS = {
+  totals: {
+    events: 89, events_prev: 79,
+    failures: 16, failures_prev: 11,
+    access_changes: 9, access_changes_prev: 6,
+    actors: 7, active_users: 18,
+  },
+  days: [
+    { day: new Date(Date.now() - 86400_000).toISOString(), logins: 3, failed: 1, admin: 0, content: 2 },
+    { day: new Date().toISOString(), logins: 5, failed: 4, admin: 2, content: 1 },
+  ],
+  distribution: [
+    { action: 'login.failed', category: 'identity', count: 16 },
+    { action: 'link.created', category: 'content', count: 9 },
+  ],
+  actors: [{ email: 'admin@foldex.test', role: 'admin', count: 34 }],
+  origins: [
+    {
+      ip: '189.42.11.7', trusted: false, user_agent: 'curl/8',
+      count: 16, failures: 16, last_seen: new Date().toISOString(), blocked: false,
+    },
+  ],
+  risk: {
+    ip: '189.42.11.7', failures: 5, targets: 1,
+    first_at: new Date(Date.now() - 300_000).toISOString(),
+    last_at: new Date().toISOString(),
+    blocked: false,
+  },
+}
+
 function mockAdminApi(over: Record<string, unknown> = {}) {
   return vi.spyOn(http, 'get').mockImplementation(async (url: string) => {
     const path = url.split('?')[0]
@@ -88,6 +130,8 @@ function mockAdminApi(over: Record<string, unknown> = {}) {
       '/api/admin/metrics': METRICS,
       '/api/admin/roles': ROLES,
       '/api/admin/audit': AUDIT,
+      '/api/admin/audit/stats': AUDIT_STATS,
+      '/api/admin/audit/blocks': { blocks: [], max: 1000 },
       '/api/admin/policy': POLICY,
       ...over,
     }
@@ -426,15 +470,67 @@ describe('RolesMatrix', () => {
 })
 
 describe('AuditSection', () => {
-  it('lists entries with who did what to whom', async () => {
+  it('lists identity entries with who did what to whom', async () => {
     mockAdminApi()
     renderWithProviders(<AuditSection />)
 
-    // Awaited on the ROW's content, not on the action label: the filter bar
-    // renders every action name immediately, so awaiting "role changed" would
-    // resolve against a button while the list is still loading.
     expect(await screen.findByText(/rafa@foldex.test/)).toBeInTheDocument()
     expect(screen.getByText(/someone@foldex.test/)).toBeInTheDocument()
+    expect(screen.getByText(/by admin@foldex.test/i)).toBeInTheDocument()
+  })
+
+  // The whole point of ADR-46's read split, asserted on what actually renders:
+  // a content row names nobody and describes nothing. The server withholds the
+  // columns in SQL; this is the screen agreeing rather than compensating.
+  it('shows a content row pseudonymously, with no e-mail and no label', async () => {
+    mockAdminApi()
+    renderWithProviders(<AuditSection />)
+    await screen.findByText(/rafa@foldex.test/)
+
+    expect(screen.getByText(/user #7/i)).toBeInTheDocument()
+    expect(screen.getByText(/detail not visible in administration/i)).toBeInTheDocument()
+  })
+
+  it('escalates a burst of failures to critical, and says so', async () => {
+    mockAdminApi()
+    renderWithProviders(<AuditSection />)
+    await screen.findByText(/someone@foldex.test/)
+
+    expect(screen.getByText(/^critical$/i)).toBeInTheDocument()
+  })
+
+  // Expanding is where the address, its PROVENANCE and the device live. The
+  // provenance is the reason storing an ip is honest at all (000044).
+  it('expands a row to its address, provenance and device', async () => {
+    mockAdminApi()
+    renderWithProviders(<AuditSection />)
+    const rows = await screen.findAllByRole('button', { expanded: false })
+    const target = rows.find((r) => r.textContent?.includes('rafa@foldex.test'))!
+
+    await userEvent.setup().click(target)
+
+    expect(await screen.findByText('177.20.4.19')).toBeInTheDocument()
+    expect(screen.getByText(/via trusted proxy/i)).toBeInTheDocument()
+    expect(screen.getByText('Chrome/141')).toBeInTheDocument()
+  })
+
+  it('renders the headline numbers with a delta against the previous window', async () => {
+    mockAdminApi()
+    renderWithProviders(<AuditSection />)
+
+    const events = await screen.findByTestId('fx-aud-metric-events')
+    expect(events).toHaveTextContent('89')
+    expect(events).toHaveTextContent('+13%')
+    // More failures is BAD, and the tone says so rather than following the sign.
+    const failures = screen.getByTestId('fx-aud-metric-failures')
+    expect(failures.querySelector('.fx-aud-delta-bad')).toBeTruthy()
+  })
+
+  it('draws one column per day, empty days included', async () => {
+    mockAdminApi()
+    renderWithProviders(<AuditSection />)
+
+    expect(await screen.findAllByTestId('fx-aud-bar')).toHaveLength(2)
   })
 
   it('narrows to one action and restarts pagination when the filter changes', async () => {
@@ -442,11 +538,54 @@ describe('AuditSection', () => {
     renderWithProviders(<AuditSection />)
     await screen.findByText(/rafa@foldex.test/)
 
-    await userEvent.setup().click(screen.getByRole('button', { name: /^failed sign-in$/i }))
+    await userEvent.setup().click(screen.getByRole('button', { name: /^failed sign-in/i }))
 
     await waitFor(() =>
       expect(get).toHaveBeenCalledWith('/api/admin/audit', {
-        params: { action: 'login.failed', before: undefined },
+        params: { window: '7d', action: 'login.failed' },
+      }),
+    )
+  })
+
+  it('filters by category', async () => {
+    const get = mockAdminApi()
+    renderWithProviders(<AuditSection />)
+    await screen.findByText(/rafa@foldex.test/)
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /^content$/i }))
+
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith('/api/admin/audit', {
+        params: { window: '7d', category: 'content' },
+      }),
+    )
+  })
+
+  it('changes the window for both the list and the header', async () => {
+    const get = mockAdminApi()
+    renderWithProviders(<AuditSection />)
+    await screen.findByText(/rafa@foldex.test/)
+
+    await userEvent.setup().click(screen.getByRole('button', { name: '24 h' }))
+
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith('/api/admin/audit/stats', { params: { window: '24h' } }),
+    )
+    expect(get).toHaveBeenCalledWith('/api/admin/audit', { params: { window: '24h' } })
+  })
+
+  // Oldest-first is a different QUERY, not a reversed page: reversing here
+  // would order only the rows already loaded.
+  it('asks the server for the other end rather than reversing the page', async () => {
+    const get = mockAdminApi()
+    renderWithProviders(<AuditSection />)
+    await screen.findByText(/rafa@foldex.test/)
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /newest first/i }))
+
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith('/api/admin/audit', {
+        params: { window: '7d', order: 'asc' },
       }),
     )
   })
@@ -455,14 +594,13 @@ describe('AuditSection', () => {
   it('pages with the last id as the cursor', async () => {
     const get = mockAdminApi()
     renderWithProviders(<AuditSection />)
-    // The pager only exists once a page has loaded.
     await screen.findByText(/rafa@foldex.test/)
 
     await userEvent.setup().click(screen.getByRole('button', { name: /older/i }))
 
     await waitFor(() =>
       expect(get).toHaveBeenCalledWith('/api/admin/audit', {
-        params: { action: undefined, before: 8 },
+        params: { window: '7d', before: 7 },
       }),
     )
   })
@@ -471,6 +609,62 @@ describe('AuditSection', () => {
     mockAdminApi({ '/api/admin/audit': { entries: [] } })
     renderWithProviders(<AuditSection />)
     expect(await screen.findByText(/nothing recorded yet/i)).toBeInTheDocument()
+  })
+
+  // instance.ip_block is LOCKED and owner-only. An admin sees the signal and
+  // is offered no control that the server would refuse.
+  it('offers the permanent block only to the owner', async () => {
+    mockAdminApi()
+    const { unmount } = renderWithProviders(<AuditSection />)
+    await screen.findByText(/5 failed sign-ins from one address/i)
+    expect(screen.queryByRole('button', { name: /block ip permanently/i })).not.toBeInTheDocument()
+    unmount()
+
+    mockAdminApi()
+    renderWithProviders(<AuditSection />, { session: ownerSession })
+    expect(await screen.findByRole('button', { name: /block ip permanently/i })).toBeInTheDocument()
+  })
+
+  it('confirms before installing a block, and sends a derived reason', async () => {
+    mockAdminApi()
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+    renderWithProviders(<AuditSection />, { session: ownerSession })
+
+    await userEvent.setup().click(
+      await screen.findByRole('button', { name: /block ip permanently/i }),
+    )
+    // Scoped to the dialog: the origins card carries its own "Block" button,
+    // and an unscoped query would be ambiguous between the trigger and the
+    // confirmation — which is the pair this test exists to keep distinct.
+    // The confirmation is the rail in front of the one control that can make
+    // the instance unreachable (INV-122).
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.setup().click(within(dialog).getByRole('button', { name: /^block$/i }))
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/api/admin/audit/blocks', {
+        ip: '189.42.11.7',
+        reason: expect.stringContaining('5'),
+      }),
+    )
+  })
+
+  // Each rail answers with a sentence describing the OPERATOR's situation, and
+  // "invalid" in its place is something nobody can act on.
+  it('renders the server\'s refusal verbatim', async () => {
+    mockAdminApi()
+    vi.spyOn(http, 'post').mockRejectedValue({
+      response: { data: { error: { code: 'block_self', message: 'that is the address you are connected from' } } },
+    })
+    renderWithProviders(<AuditSection />, { session: ownerSession })
+
+    await userEvent.setup().click(
+      await screen.findByRole('button', { name: /block ip permanently/i }),
+    )
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.setup().click(within(dialog).getByRole('button', { name: /^block$/i }))
+
+    expect(await screen.findByText(/address you are connected from/i)).toBeInTheDocument()
   })
 })
 

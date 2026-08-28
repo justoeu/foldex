@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/folders"
+	"foldex/internal/pkg/auditctx"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/listquery"
@@ -79,6 +80,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
+	// Names the row for the owner's own-activity feed (ADR-46). The
+	// content-audit middleware records the event either way; this is what
+	// gives it a label its owner can recognise a month later.
+	auditctx.SetRequest(r, "note", n.ID, n.Title)
 	httperr.JSON(w, http.StatusCreated, n)
 }
 
@@ -122,6 +127,10 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
+	// Names the row for the owner's own-activity feed (ADR-46). The
+	// content-audit middleware records the event either way; this is what
+	// gives it a label its owner can recognise a month later.
+	auditctx.SetRequest(r, "note", n.ID, n.Title)
 	httperr.JSON(w, http.StatusOK, n)
 }
 
@@ -131,9 +140,17 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
+	// Read BEFORE the delete: a moment later the label exists nowhere, and an
+	// entry its owner cannot resolve is not a record of anything. One
+	// primary-key read on an operation nobody performs in a loop.
+	title := ""
+	if existing, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id); err == nil {
+		title = existing.Title
+	}
 	if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id, h.storage); err != nil {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
+	auditctx.SetRequest(r, "note", id, title)
 	w.WriteHeader(http.StatusNoContent)
 }

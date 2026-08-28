@@ -463,9 +463,9 @@ Cada execução fica registrada na tabela `backup_run`, e o agente serve métric
 O agente também pode enviar o **ZIP per-user do produto** de forma agendada: defina `BACKUP_USERZIP_AT` (ex.: `02:15`, vazio = desligado) e as variáveis `RUSTFS_*` do bucket de origem no serviço de backup, e toda noite o arquivo `/api/backup/export` de cada usuário ativo — só conteúdo, nunca dados de login — é cifrado com age e enviado para `backups/users/<id>/`, mantendo os `BACKUP_RETAIN_USERZIP` (7) mais recentes por usuário. Ao contrário do dump completo, esses ZIPs são os que o *usuário* consegue restaurar pelo app sem operador.
 Cada execução fica registrada na tabela `backup_run`, e o agente serve métricas Prometheus (`/metrics`, mesmo `METRICS_TOKEN` do backend) com alert rules prontas para Grafana/Prometheus em [`deploy/observability/`](deploy/observability/) — incluindo uma regra `absent()` que pega o agente que nunca subiu e uma regra de staleness para os drills. Configuração pelo bloco `BACKUP_*` do `.env.example`.
 
-O settings hub ganhou a banda **"Backup da instância"** (escopo administração, atrás da permissão `instance.backup` — owner e admin por default, editável na matriz de papéis): status por job com o último sucesso, chave de destino, tamanho, SHA-256 copiável e duração; alarme de frescor quando o último dump passa de 26 h; destaque do último drill de restauração com o dump que ele validou e as contagens que provaram a restauração; histórico paginado com razões de erro normalizadas; e um botão **"Executar agora"** por job que apenas enfileira um pedido para o agente — o processo web nunca executa backup e nunca vê as credenciais do S3. Sem nenhuma execução registrada (ou com um pedido envelhecendo sem claim), a banda avisa que o serviço não está ativo em vez de parecer saudável. Um dashboard Grafana acompanha as alert rules em [`deploy/observability/grafana-backup-dashboard.json`](deploy/observability/grafana-backup-dashboard.json). *(Screenshot da banda pendente.)*
+O settings hub tem a tela **"Backup da instância"** (escopo administração, atrás da permissão `instance.backup` — owner e admin por default, editável na matriz de papéis). Ela abre com quatro números de destaque — último dump, integridade (o veredito do drill), tamanho do dump e a maior sequência de falhas consecutivas, que é o número comparado pela alert rule — sobre um quadro 2×2 de cards, um por job. Cada card mostra a agenda que o AGENTE diz estar seguindo, o último sucesso, duração, tamanho, chave de destino, SHA-256 copiável e o próprio **"Executar agora"**; selecionar um card leva o editor de agenda abaixo para aquele job. Não existe botão de "baixar o último dump" nem painel de retenção, de propósito: o processo web não guarda credencial do S3 — numa tela de disaster recovery, mostrar um número que ninguém calculou é pior do que não mostrar nada. O editor de agenda nomeia sim o **destino** de cada job — endpoint, bucket e prefixo de chave, publicados pelo próprio agente no seu heartbeat — porque uma agenda que você não consegue mirar é uma agenda que você não consegue conferir; as credenciais que chegam nesse bucket nunca saem do processo do agente. O resto segue: status por job com o último sucesso, chave de destino, tamanho, SHA-256 copiável e duração; alarme de frescor quando o último dump passa de 26 h; destaque do último drill de restauração com o dump que ele validou e as contagens que provaram a restauração; histórico de execuções, filtrável por desfecho e paginado, com razões de erro normalizadas; e um botão **"Executar agora"** por job que apenas enfileira um pedido para o agente — o processo web nunca executa backup e nunca vê as credenciais do S3. Sem nenhuma execução registrada (ou com um pedido envelhecendo sem claim), a banda avisa que o serviço não está ativo em vez de parecer saudável. Um dashboard Grafana acompanha as alert rules em [`deploy/observability/grafana-backup-dashboard.json`](deploy/observability/grafana-backup-dashboard.json). *(Screenshot da banda pendente.)*
 
-A banda também traz um **editor de agenda dos jobs** (ADR-44): o owner define os horários diários do dump (1–6 por dia), move o drill semanal para outro dia/horário, ajusta a cadência do mirror e liga/desliga o ZIP por usuário — tudo gravado no banco e adotado pelo agente em execução em ~30 s, sem restart. A env continua sendo a baseline: ela decide **quais** jobs existem (credenciais, a identidade age), enquanto o banco decide só **quando** rodam, dentro de pisos compilados que a UI não cruza (o dump nunca cai abaixo de 1×/dia, o drill permanece semanal, o mirror nunca é desligado por uma linha). A edição é owner-only atrás da permissão travada `instance.backup_schedule`; uma mudança que reduz proteção pede confirmação, e a banda mostra o heartbeat do agente (visto por último, versão, capacidade por job) — um job que o agente não consegue rodar diz o porquê em vez de ignorar a agenda em silêncio.
+A banda também traz um **editor de agenda dos jobs** (ADR-44, vocabulário revisado pelo ADR-45): todos os jobs — dump, drill de restauração, espelho de objetos e ZIP por usuário — oferecem os mesmos controles, então qualquer um roda **nos dias da semana que você escolher** (segunda, quarta e sexta, por exemplo), em até **seis horários por dia**, ou em **modo intervalo**, a cada N minutos (15–1440). Clicar num card de job traz o editor para o centro da página, com foco naquele job. Tudo fica gravado no banco e é adotado pelo agente em execução em ~30 s, sem restart. A env continua sendo a baseline: ela decide **quais** jobs existem (credenciais, a identidade age) e fornece a agenda com que o formulário abre, enquanto o banco decide só **quando** rodam — salvar é o ato que cria a sobrescrita. Os pisos compilados que a UI não cruza continuam: de um a seis horários por dia, ao menos um dia da semana, intervalo entre 15 e 1440 minutos e **no mínimo cinco dias da semana para o dump**, que é a proteção da instância e não uma conveniência de produto; o ZIP por usuário é o único job que uma linha pode desligar. A agenda de cada job também diz onde os objetos dele param — `endpoint/bucket/prefixo` —, que é como se percebe um bucket "externo" que na verdade é a mesma máquina da origem. A edição é owner-only atrás da permissão travada `instance.backup_schedule`; uma mudança que reduz proteção pede confirmação, e a banda mostra o heartbeat do agente (visto por último, versão, capacidade por job) — um job que o agente não consegue rodar diz o porquê em vez de ignorar a agenda em silêncio.
 
 Design: [docs/SDD-OPS-BACKUP.md](docs/SDD-OPS-BACKUP.md) (ADR-43).
 
@@ -502,8 +502,9 @@ conta, e os destrutivos mantêm o diálogo de confirmação.
 
 **A tela de acesso.** Dois painéis: o formulário à esquerda — marca, título, e-mail ou
 nome de usuário, senha com **Esqueceu a senha?** na própria linha do rótulo, *Lembrar meu
-e-mail* e um único botão primário — e um painel de produto à direita, com uma chamada curta
-e uma maquete do app. O painel da direita é decoração: fica fora do leitor de tela e some
+e-mail* e um único botão primário, que só habilita com os dois campos preenchidos — e um
+painel de produto à direita, com uma chamada curta e uma maquete do app que vai até a
+borda do próprio painel. O painel da direita é decoração: fica fora do leitor de tela e some
 por completo abaixo de 1024px, onde o formulário se centraliza sozinho. Abaixo do
 formulário ficam a versão e a data de build da instância, já que a tela de acesso é a única
 superfície alcançável sem conta. As bandeiras de idioma seguem no canto superior esquerdo
@@ -603,9 +604,66 @@ ou excluir **a si mesmo**; o **último administrador ativo** não pode ser remov
 ninguém; e o papel e o status do **proprietário** não mudam de forma alguma a não ser
 transferindo. Transferir encerra as sessões das duas contas.
 
-**Auditoria.** **Configurações → Administração → Log de auditoria** registra logins e
-falhas, mudanças de papel e status, convites, recuperações forçadas e edições de política.
-Ela sobrevive às contas que descreve: excluir um usuário não apaga o que ele fez.
+**Auditoria.** **Configurações → Administração → Log de auditoria** registra dois tipos de
+evento. *Identidade*: logins e falhas, mudanças de papel e status, convites, recuperações
+forçadas, edições de política e mudanças na lista de bloqueio. *Conteúdo*: toda criação,
+edição e exclusão aceita de link, nota, pasta ou tag, além de importações e restaurações.
+Ela sobrevive às contas que descreve — excluir um usuário não apaga o que ele fez.
+
+A tela abre num período (24 h, 7 dias, 30 dias) e mostra os números do período comparados
+com o anterior, eventos por dia, a participação de cada tipo, as contas mais ativas, os
+endereços e dispositivos vistos, e qualquer rajada de falhas de login vinda de um mesmo
+endereço. Dá para filtrar por tipo ou categoria, buscar por conta, endereço ou evento,
+ordenar do mais antigo, e **exportar o filtro atual em CSV**.
+
+**Eventos de conteúdo não nomeiam ninguém nem descrevem nada.** O administrador vê *"link
+criado · usuário #7"* — nunca o título, a URL ou o e-mail de quem escreveu. Conteúdo é
+privado por conta, administradores inclusive, e isso é garantido no SQL, não na tela. A
+própria conta vê o histórico dela completo, com títulos, em **Configurações → Conta →
+Atividade**.
+
+**Toda linha registra de onde veio**, e diz se é para acreditar: o endereço que o servidor
+observou mais a string do dispositivo, marcados *via proxy confiável* quando um proxy que
+você configurou em `TRUSTED_PROXY_IPS` respondeu por ele, e *endereço direto* quando
+ninguém respondeu. Na instalação padrão — presa ao loopback, sem proxy — toda linha é o
+par cru.
+
+**Anomalias.** A mesma tela ordena as origens que parecem abuso e não tráfego: *varredura
+de contas* (um endereço falhando contra muitas contas distintas), *martelo numa conta*, e
+*origem já limitada* (um endereço que o limitador trancou). Cada linha traz a evidência em
+números — contas distintas, falhas, o intervalo em minutos —, um atalho que filtra a linha
+do tempo por aquele endereço, e um botão de bloquear já preenchido.
+
+Nada aqui dispara sozinho, de propósito. Um heurístico que bloqueia endereços por conta
+própria acaba bloqueando o errado às três da manhã, e quem fica do lado de fora é o
+operador. O painel também mostra **contagens de contas, nunca os endereços atacados** — os
+alvos já aparecem na linha do tempo, e um segundo lugar para lê-los seria um segundo lugar
+para vazá-los. As linhas cuja origem *não* veio de proxy confiável dizem isso com todas as
+letras: atrás de um proxy reverso aquele endereço é o proxy, então a linha é sobre todo
+mundo, e bloqueá-la bloquearia o seu próprio nginx.
+
+**Limites e abuso (só o proprietário).** **Configurações → Administração → Limites e
+abuso** guarda os números com que esta instância se defende, em quatro faixas: login
+(contas distintas que uma origem pode falhar, falhas por conta, a janela de lockout), a
+API autenticada (escritas por minuto, operações caras por hora), a superfície pública
+(janela de coalescência de clique, `0` desliga) e os limiares de anomalia. **A última faixa
+não muda nada na aplicação das regras** — aqueles três números só decidem o que o painel
+acima chama de anômalo, e a tela diz isso ao lado deles.
+
+Todo valor tem piso *e* teto, porque um rate limit é perigoso nas duas pontas: alto demais
+deixa de ser controle, baixo demais vira o ataque — um limite de uma conta por hora
+deixaria qualquer um que alcance o formulário de login trancar um escritório inteiro
+digitando uma senha errada. Ao lado dos campos de login e da API a tela mostra o que a
+trilha de fato mediu nos últimos 30 dias, para você ajustar com evidência em vez de
+intuição; onde não há medida ela diz isso, em vez de mostrar zero. As mudanças valem **sem
+restart**. Ler é tarefa de qualquer administrador; escrever é só do proprietário.
+
+**Bloquear um endereço (só o proprietário).** O cartão de risco instala um bloqueio
+permanente num endereço, e os endereços bloqueados aparecem numa lista com o caminho de
+volta. Três coisas são recusadas de saída, porque este é o único controle capaz de deixar
+a instância inalcançável para quem o detém: o endereço de onde você está conectado, o
+loopback e qualquer proxy listado em `TRUSTED_PROXY_IPS`. Bloqueio não é autenticação — se
+o banco estiver inacessível o filtro abre, em vez de trancar todo mundo do lado de fora.
 
 **Política da instância (só o proprietário).** **Configurações → Administração → Política
 de senha e acesso** define o tamanho mínimo da senha, a validade dos códigos enviados por
@@ -874,6 +932,36 @@ intacto, e é o caminho mais rápido de volta.
 > nota da instância, inclusive de outras pessoas. Slugs não são afetados. Use
 > `PUBLIC_NUMERIC_IDS=1` se você tem links numéricos antigos já compartilhados e prefere
 > mantê-los funcionando.
+
+> **Cota de escrita (429).** Toda conta autenticada tem um orçamento de requisições
+> **mutantes**: 120 por minuto no geral e um teto menor de **20 por hora** para as rotas
+> que custam muito mais que uma linha — importação, exportação e restauração de backup,
+> captura de screenshot, refresh de preview. Leituras nunca são contabilizadas, então
+> navegar pela própria biblioteca não é afetado. Acima do orçamento a resposta é `429`
+> com um `Retry-After` dizendo quanto esperar; a requisição não chega ao handler. A cota
+> é **por conta, não por rota** — um laço espalhado por vinte endpoints ficaria dentro do
+> limite em cada um e mesmo assim seguraria o pool inteiro — e **nenhum papel é isento,
+> nem o owner**. Os dois números são editáveis pelo owner da instância e valem sem
+> reiniciar.
+
+> **A borda também limita.** O nginx que acompanha o projeto aplica `limit_req` por
+> endereço antes de a requisição chegar ao backend — uma zona apertada (2 r/s) nas sete
+> rotas não autenticadas que *adivinham* algo (login, bootstrap, aceite de convite, reset
+> de senha, código de segundo fator, conversão do Google), uma frouxa (30 r/s) no resto de
+> `/api/auth/*` porque a própria aplicação faz rajada ali, e uma pública (20 r/s) em `/go/`
+> e `/n/`. Acima do limite a resposta é `429`. `/api/*` inteiro fica de fora de propósito:
+> a API autenticada tem rajada legítima e o backend tem contexto para distinguir pessoa de
+> laço. **Se você tem outro proxy na frente deste nginx**, ligue o
+> `ngx_http_realip_module` lá — senão todas as zonas enxergam o endereço daquele proxy e a
+> instância limita a si mesma.
+
+> **Cliques repetidos são coalescidos.** `/go/{slug}` e `/n/{slug}` não pedem sessão e
+> cada acerto grava uma linha em `click_log`, então um laço sobre um slug conhecido era
+> escrita ilimitada no banco por um visitante anônimo. O mesmo visitante acertando o
+> mesmo link ou nota de novo dentro de **10 segundos** não gera uma segunda linha. O
+> redirect e a página da nota não mudam — só a linha do contador é pulada — e o estado
+> de dedup vive só em memória: nenhum endereço de visitante é armazenado. Ponha a janela
+> em `0` para desligar e ter o contador exato de volta.
 
 > **Política de rede do preview.** Ranges de metadata/credenciais cloud e RFC6598 são
 > sempre bloqueados. Use `PREVIEW_STRICT_SSRF=1` quando usuários não puderem alcançar

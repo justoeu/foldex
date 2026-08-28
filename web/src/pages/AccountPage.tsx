@@ -6,6 +6,7 @@ import { AccountHero } from '../components/account/AccountHero'
 import { ProfileFields } from '../components/account/ProfileFields'
 import { AccessSection } from '../components/account/AccessSection'
 import { SessionsSection } from '../components/account/SessionsSection'
+import { ActivitySection } from '../components/account/ActivitySection'
 import { TwoFactorSection } from '../components/TwoFactorSection'
 import { ApiTokensSection } from '../components/ApiTokensSection'
 import { forgetRememberedEmail } from '../components/auth/LoginScreen'
@@ -13,7 +14,7 @@ import { useAuth, useCurrentUser } from '../auth/AuthProvider'
 import { http } from '../api/client'
 
 /** The sub-sections of the account page, in the order the rail lists them. */
-export const ACCOUNT_TABS = ['profile', 'access', 'security', 'tokens', 'sessions'] as const
+export const ACCOUNT_TABS = ['profile', 'access', 'security', 'tokens', 'sessions', 'activity'] as const
 export type AccountTab = (typeof ACCOUNT_TABS)[number]
 
 export function isAccountTab(value: string | undefined): value is AccountTab {
@@ -26,6 +27,7 @@ const TAB_ICON: Record<AccountTab, ReactNode> = {
   security: I.shield,
   tokens: I.link,
   sessions: I.users,
+  activity: I.clock,
 }
 
 /**
@@ -114,6 +116,7 @@ export function AccountPage({ initialTab }: { initialTab?: AccountTab }) {
           {tab === 'access' && <AccessSection user={user} googleEnabled={googleEnabled} />}
           {tab === 'security' && <TwoFactorSection />}
           {tab === 'tokens' && <ApiTokensSection />}
+          {tab === 'activity' && <ActivitySection />}
           {tab === 'sessions' && (
             <SessionsSection
               onSignOut={() => void signOut()}

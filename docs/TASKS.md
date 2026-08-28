@@ -79,6 +79,9 @@ Lista faseada de tasks `T1..T30`. Cada fase desbloqueia a próxima — segue em 
 
 | Data       | Task   | Hash | Notas |
 |------------|--------|------|-------|
+| 2026-08-27 | **A agenda diz para ONDE cada job manda** | — | Perguntado por quem opera, olhando o card do espelho: "copia os objetos do RustFS para o bucket externo — para onde ele copia?". A tela não respondia, e a resposta importava: naquela instância `RUSTFS_ENDPOINT` e `BACKUP_S3_ENDPOINT` são o MESMO host, mudando só o bucket — um espelho que não sobrevive a nada que ele existe para cobrir, e nada na tela dizia isso. O heartbeat passou a carregar por job um `destination` `{endpoint, bucket, prefix}` e o editor de agenda o renderiza sob a descrição. Os quatro jobs falam com o bucket, cada um sob o seu prefixo (`backups/dump/` para dump e drill — o drill RESTAURA o que o dump escreveu —, `backups/rustfs/`, `backups/users/`), e um job incapaz também publica o seu: onde ele mandaria é parte da configuração, e um job que não roda é exatamente quando se confere isso. São os três campos NÃO secretos, de propósito: o INV-171 ganhou o corolário "o ENDEREÇO é publicado, o ACESSO nunca" e um guard (`TestAgent_HeartbeatCarriesNoCredential`) que lê a linha crua do heartbeat e recusa qualquer uma das quatro chaves dentro dela — tudo o que esse payload carrega está numa tela. O README afirmava que "a env do agente não é exposta pela API", o que deixou de ser inteiramente verdade; corrigido nos dois idiomas em vez de deixar a frase envelhecer. Layout medido em Chrome real com um endpoint deliberadamente absurdo (58 caracteres): quebra em duas linhas dentro do card, sem estourar a coluna nem rolar a página, com `min-width: 0` na coluna do head, que é o que permite a quebra em vez do empurrão. |
+| 2026-08-27 | **Login → pedido do OTP apagava a viewport inteira** | — | Reportado por quem usa: entre "Entrar" e o pedido do código a página piscava 100% em vez de trocar o card. Causa: o `AuthGate` carrega `TwoFactorScreen`/`EnrollTotpScreen` por `lazy()`, e o fallback do `Suspense` é o `boot` — `.fx-auth fx-auth-boot`, sobreposição de tela cheia. Para as outras quatro telas lazy o fallback é honesto (entram no MOUNT, por token na URL, sem nada pintado); as duas de desafio entram por TRANSIÇÃO a partir do formulário já pintado, e como atualização urgente o React commita o fallback. Fix em duas partes, ambas necessárias e cada uma provada por mutação: `startTransition` na troca de sessão (o React SEGURA a tela anterior enquanto a nova suspende — sem isso, chunk lento continua apagando) e aquecimento dos dois chunks enquanto o formulário está na tela (torna a espera imperceptível, e o segundo fator é o DEFAULT, então quem olha o formulário está a um submit dali). Prefetch sozinho não bastaria: `React.lazy` chama a fábrica no primeiro render e anexa um `then`, então suspende ao menos uma vez mesmo com o módulo em cache. Registrado como INV-174. O review achou duas coisas que o fix original errou e as duas foram pagas na hora: (1) a regra classificava as telas por "token na URL" quando o critério real é "havia algo pintado?" — a `ForgotScreen` entra por `useState` local do gate, a um clique do formulário, e tinha exatamente o mesmo defeito (fix: prefetch + transição própria no `onForgotPassword`, com o vermelho reproduzindo o mesmo `Loading…` de tela cheia); (2) a transição estava larga demais — o `queryClient.clear()` do `applySession` é NÃO-escopado e o argumento que o torna seguro é a árvore desmontar no MESMO commit, o que só vale enquanto a atualização é urgente (fix: adiar só o status `two_factor_required`, o único que jamais coincide com um clear porque não carrega user id, fixado por teste e provado por mutação). A alegação de vazamento cross-tab do relatório não se sustentou: naquele caminho o `clear()` já está separado do flip por um `await fetchMe()` inteiro, então a janela é anterior ao change e dominada pelo round-trip — o estreitamento foi feito pelo argumento da mesma aba, não por aquele. O teste começou mockando o módulo com uma fábrica pendente e o mock não segurava o `React.lazy` no registro do Vitest — passou a modelar a suspensão em React, que é sobre o que a asserção fala. Achado de tabela no caminho: `COMPOSE_APP := docker compose -f docker-compose.yml` — o `-f` explícito desliga o pickup automático do `docker-compose.override.yml`, então todo `make up*` recriava o backup-agent sem a identidade age e ele entrava em crashloop. |
+| 2026-08-27 | **ADR-45: um vocabulário de agendamento para os quatro jobs de backup, e a agenda que a env semeia** | — | O ADR-44 tinha dado a cada job uma gramática própria (`dump` só `times[]`, `drill` só `time`+`weekday` de UM dia, `mirror` só `interval_min`, `user_zip` só `enabled`+`time`), e a validação recusava campo "estrangeiro": nenhum job escolhia um CONJUNTO de dias, não existia "segunda, quarta e sexta", e o formulário precisava de quatro componentes de campos. A síntese: a segurança do ADR-44 está nos PISOS, não na pobreza da forma. Documento único `{mode, times[], weekdays[], interval_min, enabled}` com `mode` EXPLÍCITO (linha com `times` e `interval_min` juntos seria meio-honrada em silêncio); pisos assimétricos — 1..6 horários, intervalo 15..1440 e ≥1 dia para todos, **≥5 dias para o `dump`** (a proteção da instância, não conveniência), `user_zip` o único deslígável. A matemática subiu de `Anchor` (agora só o parser da sintaxe da env) para `Timing`, cujo `MaxGap` enumera a grade da semana e SUBSTITUI os três casos especiais — um horário num único dia dá 7 dias naturalmente. O heartbeat passou a publicar a baseline da env ESTRUTURADA, que é o que faz "a env é a primeira opção, o banco é a sobrescrita" existir na tela e não só no documento. Migração 000043 + `RequiredSchemaVersion` 42→43 nos dois gates. Na UI: um editor só, dias multisseleção com atalhos, segmentado de modo, e a agenda centralizada com foco ao clicar num card (`useRevealTarget`, rAF + `scrollIntoView({block:'center'})`, `behavior:'auto'` sob reduced-motion) — as duas colunas passaram a terminar na mesma linha (`stretch` + `flex:1` no último card da lateral), conferido no navegador em 510px/451px/564px iguais nos quatro jobs. Execução em worktrees paralelos (backend/frontend/docs) com red-to-green obrigatório. O sweep de 5 agentes não achou HIGH nenhum e achou um BLOCKER + 12 achados reais, todos pagos na hora: (1) **blocker** — a chave de remontagem do editor não incluía a CHEGADA da baseline, então o primeiro fetch com `agent: null` semeava das constantes da tela e nenhum poll corrigia: quem salvasse sem tocar em nada gravava a opinião da tela por cima da agenda da env, exatamente o defeito que a mudança existia para matar; (2) a migração e o `normalized` DISCORDAVAM em três formas legadas — provado com red-to-green de verdade, rodando a migração ANTIGA contra 16 linhas legadas num Postgres descartável: 7 divergências, entre elas `{"enabled":false,"times":["02:30"]}` no `user_zip` voltando COM agenda e SEM `enabled`, isto é, um job que o operador desligou explicitamente voltando a rodar; (3) rascunho magro deixava campos vazios ao religar o `user_zip` ou trocar de modo → 400 garantido (fix: rascunho GORDO por construção, `payloadOf` canonicaliza no envio, e o `switchMode` perdeu seus defaults concorrentes); (4) a baseline da env pode estar ABAIXO do piso (`BACKUP_DUMP_AT="03:30 sun"` é legal na env e ilegal como linha) e o formulário semeava dela → alargamento para os sete dias mantendo os horários, a única correção automática segura porque aumenta a proteção; (5) duas fronteiras de `memo` que não fechavam sob o poll de 60s — `runNow` dependia do objeto do `useMutation` (identidade nova a cada render, derrubando os quatro `JobCard`) e o `ScheduleCard` dependia de `data` inteiro, cujo `seen_at` avança a cada heartbeat (fix: props estreitadas; provado com spies de passagem em `useCopy` e `formatMinutes`, cada um dentro de exatamente uma subárvore memoizada, e com assert de que o poll REALMENTE aconteceu — a primeira versão do teste passava pelo motivo errado); (6) as mensagens de recusa do mock tinham derivado das reais e dois testes as afirmavam como "as palavras do servidor" — provavam que a UI renderiza *uma* string, nunca o contrato; (7) todo negativo de `TestValidateJobConfig_FloorsHold` era `assert.Error` pelado, então recusa pelo motivo ERRADO passava (provado por mutação: troquei a mensagem de weekday inválido por "repeats" e a tabela antiga passou); (8) o ramo de máximo interior do `MaxGap` era a ÚNICA linha descoberta do arquivo — justamente a borda que a reescrita introduziu; (9) `down.sql` sem teste nenhum; (10) trilha de auditoria sem payload, agora com documento anterior + novo no PUT e no DELETE (INV-047); (11) render de `times` ilimitado a partir de linha escrita à mão (clampado na SEMENTE, não só no render, senão a tela mostra 6 e o servidor recusa 9); (12) o segmentado de modo era um radiogroup vestido de `role="tablist"`. Registrados como aceitos/follow-up: `RequiredSchemaVersion` é PISO, não igualdade — agente antigo sobe contra schema 43 e ignora `weekdays` em silêncio (roda MAIS vezes, direção segura, mas sem log; fechar pede comparar a versão do heartbeat na banda); `ScheduleFields` com 234 linhas pede split dos três pickers quando o arquivo crescer de novo. Validação de layout feita com o harness de CSS (dump da DOM real + bundle de produção servido num http.server), porque a tela exige sessão e não há como autenticar daqui — o clique-a-clique no app real fica para o usuário. |
 | 2026-08-26 | **Remodelagem da tela "Política de senha e acesso"** | — | De pilha única de campos para três seções lado-a-lado (o-que-isto-governa à esquerda, controles à direita, separadores) — Credenciais, Acesso de administradores, Entrar com Google — com hints por campo, switch `fx-toggle-row` no auto-provision e divulgação progressiva (o papel das contas novas só aparece com o provisionamento LIGADO: um default para contas que não podem nascer é um controle que não responde nada). O sweep pagou de novo em remodel "só visual": (1) o switch estilizado dentro de `fieldset disabled` ficava com cara 100% ativa na visão read-only do admin — o checkbox nativo o UA acinzenta, a casca CSS não (fix: `:has(input:disabled)` espelha o estado); (2) o checkbox real do toggle é `opacity:0` e focável, e NÃO havia anel de foco — navegação por Tab pousava no switch sem indicação nenhuma, padrão herdado do LinkDialog que o remodel ia propagar (fix na classe compartilhada: `:has(input:focus-visible)`, conserta as duas telas). Teste read-only agora asserta `toBeDisabled()` no mecanismo (fieldset), não só a ausência do botão Salvar. |
 | 2026-08-26 | **PR6 do ADR-44: agenda de backup configurável na UI, com pisos que a configuração não alcança** | — | Migração 000042 (`backup_schedule` linha-por-job + `backup_agent_state` heartbeat) + `backupagent/schedule.go` (JobConfig, `ValidateJobConfig` com os pisos, `Timing` multi-âncora com MaxGap/Due/PreviousSlot, ScheduleStore) + agent.go reescrito para agenda VIVA (snapshot de Timings sob RWMutex, canal de mudança fechado a cada swap, scheduleLoop unificado âncora+intervalo, sync ~30s que recarrega agenda e grava heartbeat) + permissão `instance.backup_schedule` TRAVADA owner-only + `GET/PUT/DELETE /api/admin/backup/schedule[/{job}]` com auditoria própria + editor na banda (badges env/banco, motivo traduzido para job incapaz, confirmação quando a mudança REDUZ proteção via `reducesProtection` puro). Princípio = INV-173: env decide QUAIS jobs existem (credencial/identidade), o banco decide QUANDO rodam, e os pisos (dump 1..6×/dia nunca off; drill sempre semanal; mirror 15..1440min nunca off; user_zip é o único deslígável) valem nos DOIS lados — o PUT e o load do agente chamam a MESMA função, então linha escrita por SQL direto degrada à baseline. Sweep+triple review acharam e o fix pagou na hora: (1) race real de ordem — `timing()` lido antes de `changeCh()` deixava um swap entre as duas leituras fechar um canal que ninguém segurava; job desabilitado→habilitado dormia até a PRÓXIMA edição (fix: inverter a ordem; teste `TestScheduleLoop_WakesAJobEnabledAfterStart`); (2) mirror-off ficava FORA do heartbeat e a UI oferecia editores para linha que nenhum processo leria — a lição do mailer dentro da feature que existe para evitá-la (fix: agentState força os 4 jobs); (3) banner de agente parado comparava `Date.now()` contra `seen_at` cacheado sem `refetchInterval` — qualquer rerender após 2min no ar acusava agente morto vivo (fix: refetch 60s); (4) `intervalStart` — edições frequentes de agenda reiniciavam a contagem de um intervalo que nunca disparou. Registrados como aceitos: âncoras do dump mais próximas que a duração do job são absorvidas pelo run em andamento (serial por job — N horários é teto, não promessa); advisory lock único entre jobs (skip-don't-wait, ADR-43); `updated_by_email` visível a quem tem `instance.backup`. |
 | 2026-08-26 | **Compose do v2.16.0 não parseava — e nenhum guard olhava** | — | O serviço `backup` shipou com o bloco `RUSTFS_*` duplicado (merge dos agentes paralelos do PR3/PR4): chave YAML duplicada é PARSE ERROR no compose v2, então o `docker-compose.yml` inteiro recusava carregar — `make up` quebrado para todo operador, com CI verde, porque todo guard que lê esse arquivo o lê com grep/awk (que atravessa chave duplicada sem ver) e `docker compose config` não rodava em lugar nenhum. Fix: dedupe (blocos byte-idênticos, nenhuma env perdida — conferido contra o que `backupagent/config.go` lê) + guard novo `scripts/test-compose-config.sh` no ci.yml: `docker compose config --no-interpolate --quiet` sobre `docker-compose*.yml` (o `--no-interpolate` preserva os gates `${VAR:?}` do services.yml para usuários reais sem disparar num runner sem .env; detecção de chave duplicada acontece ANTES da interpolação), com self-test que prova que o guard sabe falhar e red-before confirmado contra o HEAD quebrado. Lição: a stack de produção local rodava o binário antigo — um parse error no compose só aparece no PRÓXIMO `docker compose` de alguém, que foi exatamente como apareceu (ao habilitar o profile `backup`). |
@@ -552,3 +555,392 @@ existe auto-registro no produto — a entrada de uma conta nova é convite ou
   `justify-content` em vez de herdar o layout do overlay. Provado vermelho
   contra o defeito real e verde de volta. Não é um motor de layout — cobre
   exatamente a dependência que quebrou, e diz isso na mensagem.
+
+### Tela de backup reconstruída no padrão do mockup (2026-08-26)
+
+A banda virou tela: quatro KPIs no topo, quadro 2×2 de cards (um por job,
+selecionável), editor de agenda com abas espelhando a seleção, card escuro do
+drill e painel do agente na coluna da direita, e o histórico com filtro por
+desfecho. Os controles por job saíram dos `fx-input` genéricos e viraram o que
+o mockup pede: lista de horários com "adicionar", pílulas de dia da semana,
+campo de intervalo com presets (30m/1h/6h/12h) e o mesmo switch da tela de
+política para o único job que pode ser desligado.
+
+- **O que NÃO foi copiado do mockup, e por quê.** "Baixar último dump" não
+  existe: o processo web não tem credencial do S3 — por design (ADR-43) — então
+  o botão só poderia mentir. O painel "Retenção e destino" (destino primário,
+  espelho, retenção, criptografia) também não: esses valores vivem na env do
+  agente e não passam pela API. No lugar dele, a coluna da direita mostra o
+  heartbeat — versão, visto há quanto tempo, capacidade por job — que é dado
+  real e responde à mesma pergunta ("para onde isso está indo, e está indo?").
+- **Dois KPIs do mockup foram trocados por outros dois.** "Artefatos retidos"
+  não é computável (retenção é do agente) e "falhas nos últimos 7 dias" seria
+  uma janela que a query não tem — o histórico é keyset, não período. Viraram
+  "tamanho do dump" e "falhas consecutivas", que é exatamente o número que a
+  alert rule compara. A contagem do histórico diz "nesta página", não "nas
+  últimas 24 horas", pelo mesmo motivo.
+- **O filtro do histórico é local e assumido como tal**: filtra a página
+  carregada, e o subtítulo continua descrevendo a página inteira para não
+  sugerir que o servidor foi consultado de novo.
+- **Todo botão novo tem seletor qualificado por elemento** (`button.fx-bkp-…`)
+  e os seis segmentados entraram na lista do `test-css-button-reset.mjs` —
+  INV-154 já shipou quatro vezes neste arquivo.
+- **Validação visual sem sessão no browser**: a tela exige login e esta sessão
+  não pode autenticar, então o DOM renderizado foi despejado num harness
+  temporário e servido com o CSS do bundle de produção. Foi assim que apareceram
+  o quadro virando 3+1 numa tela larga (`auto-fit` trocado por duas colunas
+  fixas) e o campo de horário esticando a largura do card.
+- **O sweep pegou um Rules of Hooks**: ao memoizar os derivados, três `useMemo`
+  ficaram DEPOIS dos early returns de pending/error — a contagem de hooks muda
+  no instante em que a query resolve, e a tela quebrava inteira. Os 22 testes
+  do arquivo falharam junto, o que é o comportamento certo do gate: a regra é
+  invisível no typecheck e óbvia no render.
+- **Memo boundaries eram obrigatórios aqui, não enfeite**: a agenda revalida a
+  cada 60 s e o `seen_at` do heartbeat muda em toda tick, então sem `memo` nas
+  folhas cada poll re-renderizava a tabela de histórico inteira. `ScheduleCard`
+  recebe `data`/`isPending`/`isError` em vez do `UseQueryResult` — o objeto da
+  query troca de identidade a cada tick e anularia o próprio memo.
+- **`backupFormat.ts` saiu do componente** e ganhou teste próprio: `formatBytes`
+  tinha uma única asserção indireta, e as bordas (< 1 KiB, uma casa abaixo de
+  dez, teto em TB) e o filtro de valores não-numéricos do `tables` do drill
+  agora estão fixados sem render.
+- **O MEDIUM do Code Quality foi pago em seguida** — e a decisão de adiá-lo foi
+  errada por processo, não por técnica: adiar dívida é escolha de quem toca o
+  projeto, e eu tratei como escopo meu. `ScheduleEditor` virou uma casca que
+  detém o rascunho, as duas mutações e as confirmações, com `DumpFields`,
+  `DrillFields`, `MirrorFields` e `UserZipFields` puros sobre UM `BackupScheduleConfig`
+  — melhor do que "cada um com o próprio estado", porque não há nada para
+  sincronizar. `seedDraft` substituiu os cinco `useState`, e `draftConfig`
+  deixou de existir: o rascunho JÁ é a config que vai no PUT.
+  Os 26 testes passaram sem uma linha tocada — que é exatamente para isso que
+  os testes de PUT por job tinham sido escritos na rodada anterior.
+- **A única exceção que precisou de estado local é o `UserZipFields`**: o
+  servidor tem que receber `{enabled:false}` puro (horário em job desligado é
+  agenda que ninguém lê), mas quem desliga e religa deve receber de volta o
+  horário que digitou, não o default. Fixado em teste.
+
+### Ajustes na tela de acesso após o primeiro olhar (2026-08-26)
+
+- **A maquete do app ocupa a largura toda do painel, centrada.** Sangrar só
+  para a borda direita foi tentado e lê como desalinhado — o painel tem padding
+  simétrico em todo o resto. Agora só o TEXTO mantém a medida de 470px: uma chamada com 40 ems de linha
+  não se lê, por mais espaço que o painel tenha.
+- **O botão virou "Entrar" e só habilita com identificador E senha.** A senha é
+  medida por COMPRIMENTO, nunca trimada: espaço no começo ou no fim é caractere
+  legítimo, e trimar aqui recusaria uma senha que o servidor aceitaria. O
+  identificador, esse sim, é trimado — só espaço é vazio.
+- **O estado desabilitado perdeu o `cursor: progress`**, que prometia trabalho
+  em andamento num botão que está apenas esperando o formulário.
+
+### Log de conclusão — Auditoria remodelada (ADR-46)
+
+**O que mudou.** A trilha de auditoria passou a cobrir conteúdo, ganhou o contexto de
+origem de cada evento, agregados, uma lista de bloqueio de IP, uma tela remodelada e uma
+aba de atividade própria na conta. Migrações `000044` (contexto) e `000045` (`ip_block`);
+`db.RequiredSchemaVersion` 43 → 45; permissão nova `instance.ip_block` (owner-only,
+travada).
+
+**O diagnóstico, que era pior que o relatado.** O usuário notou que "só o login está sendo
+catalogado". Não era um bug: a `000033` diz no próprio comentário *"Content is
+deliberately out of scope"*. As 15 ações existentes eram todas de identidade, e link,
+nota, pasta e tag não tinham ponto de escrita nenhum. A mesma migração também recusava
+`ip` e `user_agent` de propósito. Metade do mockup pedia dados que não existiam.
+
+**Lições.**
+
+1. **Uma recusa antiga pode estar certa pelo motivo errado hoje.** A `000033` recusou uma
+   coluna `ip` porque um valor forjável com aparência autoritativa é a pior combinação
+   possível numa tabela de incidente. O argumento continua correto — mas proíbe uma coluna
+   *sem procedência*, não o registro em si. Guardar o endereço observado **ao lado da flag
+   que diz se alguém respondeu por ele** honra o argumento em vez de contorná-lo.
+
+2. **Escopo de leitura tem que ser SQL.** `subject` é a única coluna fora das tabelas de
+   conteúdo que guarda conteúdo. Filtrar em Go depois que a linha chegou sobrevive até
+   alguém adicionar a coluna "para o CSV ficar mais rico". A projeção administrativa não
+   seleciona a coluna, e apaga e-mail e detalhe das linhas de conteúdo dentro do `SELECT`.
+
+3. **Um guard de AST precisa cobrir o lugar onde a regressão mora.** A primeira versão do
+   `TestAuditSubjectIsSelectedByExactlyOneQuery` andava só por `FuncDecl`, e a mutação
+   "adiciona `subject` à `adminProjection`" **passou** — a projeção é uma `const` de
+   pacote. Um guard que não cobre a edição mais provável é pior que nenhum, porque parece
+   cobrir. Segunda lição do mesmo teste: casar `subject` e `audit_log` no MESMO literal
+   deixava passar uma projeção montada por fragmentos; a tabela passou a ser casada contra
+   o arquivo inteiro.
+
+4. **Esconder na saída e selecionar na entrada não é esconder.** A busca casava em
+   `actor_email` das linhas de conteúdo. `?category=content&q=alice@example.com` devolvia
+   as linhas dela, e o `actor_ref` opaco virava a identidade dela — o pseudônimo era
+   cosmético enquanto o `WHERE` continuasse enxergando a coluna. Achado do sweep.
+
+5. **Um fuso horário entrou pela porta do driver.** `generate_series($1::date, $2::date)`
+   fez o Postgres inferir os parâmetros como `date`, e o driver codificou o dia de
+   calendário **local do processo** enquanto `created_at` era comparado no fuso da sessão.
+   Num servidor em UTC-3 o dia corrente caía depois do fim do gráfico. Só aparece fora do
+   UTC, e o sintoma é "um dia quieto". O limite passou a ser o `now()` do banco, dentro do
+   SQL.
+
+6. **Um middleware não testado MONTADO é um middleware que pode ser deletado.** Os testes
+   unitários de `contentAudit` e `blocklistGate` passavam com as duas linhas `r.Use(...)`
+   removidas do `router.go` — a mesma classe de falha do INV-170. Os testes de wiring
+   passaram a ir por `server.New` e a afirmar sobre efeitos observáveis de fora.
+
+7. **Repetir um agregado por página é um export virando cinquenta varreduras.**
+   `FailureBursts` estava dentro do laço de páginas do CSV. O resultado é invariante — a
+   janela não se move — então eram até 50 `GROUP BY` idênticos sobre o volume da tabela.
+   Achado do sweep.
+
+8. **Um parâmetro que é `null` em todos os call sites é código morto com cara de trava.**
+   `selfIP` era passado como `null` nos dois lugares, então o trilho de auto-bloqueio do
+   cliente nunca rodava. O navegador não tem como saber o endereço público dele — aquele
+   trilho é do servidor, e o parâmetro saiu.
+
+9. **Um índice que ninguém lê é escrita a mais na tabela mais escrita.** O
+   `audit_log_ip_idx` não servia consulta nenhuma: todas filtram por `created_at` e
+   agrupam por `ip`, sem igualdade na coluna líder. Removido antes de shipar.
+
+**Aberto / próximo.**
+
+- Validação manual no navegador (Configurações → Administração → Log de auditoria e
+  Configurações → Conta → Atividade) — depende de sessão autenticada.
+- Screenshots da tela nova nos dois READMEs.
+- Sem GeoIP: as origens mostram endereço e dispositivo, não cidade.
+
+
+### Log de conclusão — Cota da API autenticada (G2) e coalescência de clique público (G3)
+
+Fecha as duas lacunas que o `docs/SDD-ABUSE-DEFENSE.md` §3.3 mede como as mais sérias e
+que não tinham controle nenhum: **G2** (sessão válida = requisições ilimitadas contra um
+pool de 16 conexões) e **G3** (`/go/{slug}` e `/n/{slug}` públicos, sem limitador, cada
+acerto escrevendo em `click_log`). Detalhe e raciocínio em INV-181 e INV-182.
+
+**Entregue.**
+
+- `internal/pkg/quota` — token bucket por chave, limite passado por chamada (a política é
+  editável em runtime), teto de chaves, sweep dentro do próprio `Allow`, `Refund` para
+  que uma requisição recusada não custe orçamento.
+- `internal/server/quota.go` — middleware montado logo abaixo da resolução do principal;
+  mapa fechado de rotas caras casado por segmento ANTES do handler; 429 com `Retry-After`
+  no envelope uniforme.
+- `internal/pkg/clickctx` + `internal/server/clickcoalesce.go` — gate de clique no
+  contexto, coalescedor em memória chaveado por `(kind, id, HMAC do IP)`, teto e sweep.
+  `links`/`notes.repository_system.go` consultam o gate na única linha onde a entidade já
+  está identificada e a escrita ainda não aconteceu.
+- `router.go`: um campo em `Deps` e duas linhas de montagem (o `Group` público e o
+  `pr.Use` da cota).
+
+**Lições.**
+
+- **`attemptlimit` não podia ser reusado, e a justificativa é obrigatória** (o repo tem
+  regra contra segunda implementação paralela): ele conta falhas consecutivas e
+  `CommitSuccess` zera o contador — uma requisição aceita apagaria o registro inteiro.
+- **O padrão de rota do chi só existe depois do roteamento.** O `contentAudit` pode lê-lo
+  porque decide DEPOIS do handler; uma cota não pode, então o mapa fechado é casado
+  contra o path por segmento. O guard `TestExpensiveRoutes_EveryPatternNamesARouteTheRouterMounts`
+  anda pelo router real com `chi.Walk` para que um padrão que deixe de nomear uma rota
+  montada falhe o build em vez de cobrir nada em silêncio.
+- **Recusar sem devolver o token do primeiro balde acopla os dois tetos.** Quem estourasse
+  o limite por minuto perderia também os imports da hora — exatamente o falso positivo que
+  a §8 do SDD declara como critério de reversão.
+- **Um relógio falso instalado depois do construtor precisa que o `lastSweep` comece no
+  zero**, não semeado de `time.Now()`: comparar um agora falso com um agora real deixa o
+  sweep periódico sem nunca disparar, e o teste que deveria pegar isso passa por outro
+  motivo.
+
+**Aberto / próximo.**
+
+- Os testes de fiação (`abusewiring_integration_test.go`) foram escritos e compilam
+  (`go vet -tags integration ./...`), mas **não foram executados**: o daemon Docker estava
+  em uso por outra frente. Rodar `make test-integration` antes do merge.
+- `limit_req` no nginx (PR 3 do faseamento) e o balde de largura do `attemptlimit`
+  (PR 2 / G1) continuam abertos — são de outras frentes.
+- A tela que edita `api_writes_per_minute` / `api_expensive_per_hour` /
+  `public_click_coalesce_seconds` é do frontend e não faz parte desta frente.
+
+### 2026-08-28 — SDD-ABUSE-DEFENSE implementado por inteiro (ADR-47), em quatro frentes paralelas
+
+Fechadas todas as sete lacunas do levantamento (G1–G7), mais os dois pedidos que vieram
+depois: os tetos viraram configuráveis pelo proprietário e a trilha ganhou um painel de
+anomalias. Os PRs 1–5 do faseamento do SDD, mais os 6 e 7 acrescentados no caminho.
+
+Lições, na ordem em que custaram tempo:
+
+1. **A premissa do PR 1 estava errada, e era o único item do SDD não medido.** O documento
+   se apresenta como "estado medido, não presumido", e o §4.5 tinha sido inferido de uma
+   linha de log: `docker-compose.yml` já traz o default de `TRUSTED_PROXY_IPS` desde o PR3
+   do ADR-30, o container em execução tem o valor, e `192.168.107.5` está dentro de
+   `192.168.0.0/16`. G5 já estava fechada. A conclusão errada era plausível, citava um
+   endereço real e teria gerado um PR que "corrigia" algo correto. O que ficou no lugar é
+   um log de boot com o conjunto efetivo — porque "em quem esta instância acredita?" só era
+   respondível lendo dois arquivos e o ambiente do container, que foi o que fez a
+   investigação demorar.
+
+2. **A mutação achou um bug que nenhuma revisão acharia.** `attemptlimit.gcLocked` media só
+   `e.fails`, então um `Release` apagava a entrada inteira de uma chave em modo conjunto —
+   e o login libera o slot de IP quando o balde por conta recusa, caminho que o atacante
+   dispara à vontade. Martelar uma conta até trancá-la devolveria todo o orçamento de
+   largura daquela origem. Teria shipado.
+
+3. **Um teste de integração pode destruir a própria evidência.** `testdb.Shared(t)` não
+   devolve só um handle: ele RESETA o banco a cada chamada. O helper `countClicks` o
+   chamava inline, truncava `click_log` e contava as linhas que acabara de destruir. As três
+   falhas liam como "a coalescência suprimiu tudo, inclusive o primeiro clique" — um
+   defeito de produto grave que não existia. O teste que denunciou o diagnóstico foi o do
+   gate ausente: ali não há coalescedor nenhum para suprimir nada.
+
+4. **Relatório de frente não é verificação.** A frente 3 reportou que a suíte de integração
+   "compilaria e passaria"; ela falhava. A frente 1 não pôde rodar a dela por causa do
+   Docker ocupado. Rodar as duas no merge, e mutar o call site central de cada uma, é o que
+   transformou "verde" em prova.
+
+5. **Duas frentes acordaram no commit-base errado** (`e700748`, sem o pacote de contrato) e
+   as duas se recuperaram sozinhas — mas só porque o brief nomeava o contrato e elas
+   notaram a ausência. Fixar o SHA da base no brief.
+
+6. **Um contrato meu criou trabalho inútil em duas frentes.** Eu escrevi `severity: "warn"`
+   quando a trilha diz `"warning"`, e a UI ganhou uma função só para traduzir. Dois painéis
+   na mesma tela produzindo o mesmo badge por caminhos diferentes é a forma exata do
+   INV-159. Unificado no merge e o shim apagado.
+
+7. **`instance.ip_block` estava faltando na união `Permission` do TypeScript desde o
+   ADR-46** — a permissão existia no servidor e a grade de papéis não conseguia oferecê-la.
+   Nem `tsc` nem `go vet` enxergam isso, porque nenhuma das linguagens sabe que o arquivo
+   da outra existe. Entrou `scripts/test-permission-parity.mjs`, nas duas direções.
+
+8. **Provar um guard novo por mutação vale tanto quanto escrevê-lo.** As asserções de
+   `limit_req` passaram de primeira, o que é suspeito; colapsar as duas zonas numa só faz o
+   guard acusar `"/api/auth/me was throttled (59 of 60) — o polling do próprio SPA divide a
+   zona da credencial"`, que é a mensagem certa pelo motivo certo.
+
+Followups abertos:
+
+- **`/api/auth/*` fica fora da cota autenticada**, então `POST /api/auth/refresh` — uma
+  transação `SERIALIZABLE`, a escrita autenticada mais cara do pool — segue sem medição;
+  ali só existe `attemptlimit`, que conta falhas. O `limit_req` do nginx cobre o grosso.
+- **`GET /api/links/url-metadata` faz uma busca externa por chamada e não consome cota**,
+  porque a cota conta só verbos mutantes. É o caminho mais barato para um usuário
+  autenticado saturar o fetcher. Merece um balde de leitura cara, não uma cota de leitura.
+- **O 429 aparece em prosa inglesa numa UI em português.** `apiErrorMessage` devolve a
+  mensagem do servidor verbatim por desenho — existe para regras CONFIGURÁVEIS, cujo texto
+  do cliente diria o número errado — então isto vale para TODO código de erro do app, não
+  só para `rate_limited`. Traduzir só um seria pior que a lacuna honesta; o conserto é um
+  mapa código→i18n central, e é uma mudança própria.
+- **Screenshots do README** das duas telas novas.
+
+### 2026-08-28 (cont.) — o que o sweep de 5 agentes achou, e o que ele custou
+
+Cinco agentes em paralelo sobre o merge das quatro frentes. **Quatro HIGH**, todos
+confirmados por leitura do código antes de qualquer correção, todos corrigidos nesta
+sessão com teste vermelho antes.
+
+1. **`CommitSuccess` apagava o conjunto de largura da origem** (Code Review; ninguém mais
+   viu). Falhe contra nove contas sob um teto de dez, entre na sua própria, repita para
+   sempre — o balde de IP nunca tranca. O controle central do ADR-47 custava **um login**
+   para resetar. Corrigido: sucesso zera a contagem escalar e preserva o conjunto.
+   ↳ Consertar isso introduziu um segundo bug em três minutos: ao parar de apagar a
+   entrada, o `CommitSuccess` parou junto de liberar o `inFlight`, e a chave andava uma
+   reserva mais perto de um lockout a cada login bem-sucedido. **Um teste existente pegou.**
+   Virou `TestEveryTerminalPathReleasesTheReservation`, para a propriedade ter nome.
+2. **O conjunto não tinha janela de tempo** (achado ao consertar o item 1). "Contas
+   distintas por origem" estava implementado como "desde o último lockout ou sweep" — sem
+   limite superior para uma chave ativa, então dez pessoas errando uma vez cada ao longo de
+   uma tarde acumulavam até o teto. É exatamente o falso positivo que o §8 do SDD declara
+   como critério de reversão, e ele estava embutido no desenho.
+3. **`auth.rate_limited` era declarada, classificada, indexada, consultada, renderizada e
+   escrita por NINGUÉM** (achado por três agentes independentes). O sinal mais forte do
+   painel não podia disparar, com teste verde: a fixture inseria a linha à mão, então o
+   teste provava a consulta e nunca o recurso. Lacuna entre frentes — eu pedi a emissão a
+   uma e a leitura a outra, e nenhuma era dona do encontro.
+4. **`AbuseObserved.window_days` não existia no fio** (dois agentes). O Go mandava `days`,
+   o TypeScript declarava `window_days`, e a tela renderizava "maior valor observado em
+   ␣ dias". Passou porque o mock em `src/test/server.ts` foi escrito a partir do TIPO e não
+   do servidor: as duas cópias concordavam entre si e com nada real. O `assert.Contains(body,
+   "observed")` do teste de integração afirmava existência, não valor.
+
+**Um HIGH de performance, medido e não lido:** o índice `audit_log_ip_time_idx` da migração
+000046 **nunca era escolhido**. `EXPLAIN ANALYZE` sobre 1,2 M linhas mostrou as seis
+consultas preferindo `audit_log_action_created_idx`, porque todas têm igualdade em `action`
+ao lado do intervalo em `created_at`. Custava +43 % em INSERT e 18 MB. A migração foi
+apagada antes de shipar — o ADR-47 não tem migração nenhuma.
+
+**Segurança, dois MEDIUM que eram desenho meu:**
+- O membro do conjunto era a conta RESOLVIDA, então `alice` e `alice@x.com` colapsavam
+  quando a conta existia e não colapsavam quando não existia: 429-vs-401 respondia "este
+  username pertence a esta caixa?" para um anônimo. Passou a ser o identificador submetido.
+- Os pisos eram por knob e o produto não: `{3 contas, 1440 min}` era legal e trancaria a
+  instância inteira por 24 h. `MaxLoginWindowMinutes` caiu para 60.
+
+**Guards novos, todos provados por mutação:** paridade de permissões Go↔TS↔i18n (`instance.
+ip_block` estava faltando na união desde o ADR-46, e `instance.rate_limits` sem rótulo em
+três locales); e o guard do nginx passou a **rajar cada caminho nomeado na zona apertada**,
+porque o comentário dizia "as sete rotas" enquanto duas rotas que gastam recurso estavam na
+zona frouxa — uma contagem em prosa não é guard.
+
+**A lição do sweep:** as quatro frentes entregaram verde, com mutação, e o sweep achou
+quatro HIGH. Três deles só eram visíveis de fora de uma frente — na costura, no vocabulário
+compartilhado, ou no encontro entre quem escreve e quem lê.
+
+Followup adicionado:
+
+- **Um clique suprimido ainda custa uma transação inteira.** O gate remove o `INSERT`, mas
+  `Begin` → `SELECT` → `Commit` continuam: 3 round-trips e uma transação com permissão de
+  escrita segurando uma das 16 conexões. Sob a inundação que a coalescência existe para
+  absorver, o caminho defendido é só ~⅓ mais barato. O conserto NÃO é remover a transação
+  às cegas — é mudar a chave do gate do id RESOLVIDO para a referência PÚBLICA (o slug da
+  URL), que o middleware já conhece antes da consulta. Com isso a decisão precede o SQL e o
+  resolve inteiro vira uma única instrução. Custa reabrir o desenho do `clickctx`, que hoje
+  é keyed no id justamente porque o middleware não o tem.
+
+### 2026-08-28 (cont. 2) — a re-revisão do patch achou que dois consertos deslocaram o defeito
+
+Três agentes re-rodados sobre o commit de correção. Segurança: **nenhum HIGH**. Code Review:
+**dois**, e os dois eram meus.
+
+1. **A auditoria de lockout continuava sendo um amplificador.** O comentário que eu escrevi
+   — "`Begin` recusa uma chave já trancada antes do ramo de falha, então uma expiração
+   não-zero aqui é a borda e não uma repetição" — é **falso sob concorrência**, e
+   concorrência é o que o atacante controla. `Begin` também GRAVA `lockedUntil` quando
+   recusa pelo teto de in-flight, então cada requisição em voo lia de volta uma expiração
+   não-zero e gravava uma linha. Reproduzido pelo agente: 3 commits, 1 conta sondada,
+   3 linhas. Os commits passam a reportar a BORDA (`edge()`), não o estado.
+2. **`CommitSuccess` limpava o `lockedUntil` de uma chave em modo conjunto** — não era
+   bypass (o próximo `Begin` re-arma), mas reiniciava o relógio da penalidade com um login
+   legítimo do próprio atacante, e contrariava a doutrina que o conserto anterior tinha
+   acabado de estabelecer.
+
+**E o Test Quality achou fraquezas nos meus próprios testes**, o que é o resultado mais útil
+da rodada:
+
+- `TestEveryTerminalPathReleasesTheReservation` se **auto-neutralizava**: o `Reset` no meio
+  apagava a entrada e o vazamento com ela, então dois dos quatro subtestes afirmavam só
+  "`Begin` num limitador novo funciona". A segunda tentativa (teto de 1000) tinha o defeito
+  oposto — seis slots vazados não alcançam mil. Reescrito para MEDIR o orçamento restante,
+  que é a única forma de ver uma reserva vazada. Mutante agora morre.
+- Uma asserção estava **duplicada verbatim** e a irmã dela ficou sem piso: é a armadilha do
+  `replace_all` que a memória do projeto já registra — dois trechos idênticos, uma edição
+  com `count=1`, e as duas mudanças caem na mesma linha. Ambas viraram igualdade EXATA
+  (`Equal(max, admitted)`), porque um `LessOrEqual` sozinho passa num limitador que não
+  admite nada — a metade "negação de serviço" do mesmo defeito.
+- A fixture do teste de oráculo não conferia `RowsAffected`: um `UPDATE` de zero linhas
+  faria os dois braços medirem um par que não nomeia nada, e o teste concordaria consigo
+  mesmo com o oráculo vivo.
+- `quotaAuditor` **não era exercido por nada** — todos os testes usavam um dublê, então
+  `return nil` incondicional deixava a suíte verde e o sinal da metade autenticada
+  desaparecia em silêncio. É a tese deste próprio ADR se repetindo. Ganhou teste de fiação
+  pelo router real; o mutante morre.
+- O ramo CARO da cota nunca refusava sob teste (`policyWith(1, 1000)` só alcança o de
+  escrita), então apagar a auditoria dali era verde.
+- **O guard do nginx que eu escrevi era auto-referencial**: ele extrai a alternância do
+  próprio arquivo que audita, então prova "todo caminho NOMEADO é limitado" e nunca "todo
+  caminho que deve ser limitado está nomeado" — não pode pegar o defeito que o originou.
+  Entrou `TestEdgeZone_EveryAuthPOSTIsClassified`, que caminha o router REAL e exige que
+  todo POST de `/api/auth` esteja na zona apertada ou numa lista de exceções com motivo
+  escrito. A primeira versão dele, em `internal/server`, iterava sobre ZERO rotas
+  (`fullyWiredDeps()` não monta `AuthHandler`) e sobreviveu a apagar `login` da zona — o
+  teste ganhou uma asserção de que o walk não é vazio por causa disso.
+
+Correções menores da mesma rodada: `2fa/email/confirm` e `2fa/totp/confirm` entraram na zona
+apertada; o 429 passa a ser escrito ANTES da auditoria (a escrita pode esperar até 5 s por um
+banco lento); as locales do guard de paridade vêm do diretório e não de uma lista; o
+`replace('.', '_')` do `RolesMatrix` trocava só o PRIMEIRO ponto e concordava com o guard por
+sorte; e o comentário do `memoryRetain` afirmava que derrubar um balde cedo "é inofensivo,
+ele se re-semeia" — verdade para uma sequência escalar, falso para um conjunto de largura.

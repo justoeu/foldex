@@ -18,7 +18,30 @@ import (
 	"time"
 )
 
-// Limiter caps consecutive failures per key.
+// MaxMembersPerKey bounds the set a key remembers in set mode.
+//
+// Without a bound the limiter becomes the exhaustion vector it exists to close:
+// members are caller strings, and on the login path the caller is an
+// unauthenticated stranger who can mint a new one per request. The correction
+// cannot open the hole it closes.
+//
+// The value is chosen ABOVE the largest ceiling any caller may configure —
+// abusepolicy.MaxLoginDistinctAccountsPerIP is 100 — and not at the 64 the SDD
+// sketched, because the two numbers meet: a cap BELOW the configurable ceiling
+// would silently enforce a limit the operator did not choose and could not see,
+// which is the INV-169 failure (a knob that reverts must say so, and this one
+// could not). Sitting above every legal ceiling, the cap only ever binds on a
+// caller that configured something illegal, and there its answer is "locked"
+// (see commitFailForLocked) rather than "keep counting" — a full set is the one
+// state where the limiter has lost the ability to tell breadth from noise, and
+// the safe reading of that is refusal.
+//
+// internal/auth owns the guard that keeps the two in step; attemptlimit does
+// not import abusepolicy, because a generic limiter that knows the login policy
+// is no longer generic.
+const MaxMembersPerKey = 128
+
+// Limiter caps failures per key, counting either ATTEMPTS or DISTINCT MEMBERS.
 //
 // The reserve-then-commit API (Begin → CommitFail / CommitSuccess / Release)
 // is what makes the cap hold under concurrency. A naive check-then-act — read
@@ -26,6 +49,20 @@ import (
 // same pre-cap count and all proceed, so an attacker gets N tries for the price
 // of one. Begin reserves a slot under the same mutex that reads the count, so
 // in-flight attempts count against the budget while the slow hash runs.
+//
+// # The two modes, and why they are one type
+//
+// A key written with CommitFail counts DEPTH: consecutive failures, the shape
+// every anti-brute-force bucket needs. A key written with CommitFailFor counts
+// BREADTH: how many distinct members failed under it. docs/SDD-ABUSE-DEFENSE.md
+// §4.2 argues why the login-by-IP bucket needs the second: counting depth there
+// answered "is anyone at this address getting a password wrong?", which behind
+// an office NAT is always yes, instead of "is this origin sweeping accounts?".
+//
+// They share one type because they share every guarantee that is hard to get
+// right — the reservation, the lockout arithmetic, the sweep. A second
+// structure would have to reimplement all three and would drift from this one,
+// which is the reason this package exists in the first place.
 type Limiter struct {
 	mu      sync.Mutex
 	entries map[string]*attempt
@@ -35,10 +72,47 @@ type Limiter struct {
 }
 
 type attempt struct {
-	fails       int
-	inFlight    int
+	fails    int
+	inFlight int
+	// members is nil for a scalar key and allocated on the first CommitFailFor.
+	//
+	// The value is WHEN that member last failed, because the cap is "distinct
+	// members inside a window" and a set without timestamps cannot express the
+	// window. Implemented as a running total, it counted distinct members since
+	// the last lockout or sweep instead — a period that has no upper bound for a
+	// continuously active key, so ten different people mistyping once each over
+	// an afternoon accumulate to a ceiling meant for ten accounts in a quarter
+	// of an hour. That is the false positive docs/SDD-ABUSE-DEFENSE.md §8 names
+	// as the criterion for reverting the whole change.
+	members     map[string]time.Time
 	lockedUntil time.Time
 	lastFail    time.Time
+}
+
+// count is what the cap is measured against.
+//
+// Writing one key in both modes is a caller mistake, and the larger of the two
+// counts is the only safe reading of it: taking the smaller would let a stray
+// scalar Fail on a set key hand back budget that was already spent.
+func (e *attempt) count() int {
+	return max(e.fails, len(e.members))
+}
+
+// pruneMembersLocked drops members that fell out of the window.
+//
+// Called on every set-mode write, which is what keeps the map bounded by the
+// window's traffic rather than by the key's lifetime — and is why there is no
+// separate expiry pass to forget.
+func (e *attempt) pruneMembersLocked(now time.Time, window time.Duration) {
+	if e.members == nil {
+		return
+	}
+	cutoff := now.Add(-window)
+	for m, at := range e.members {
+		if !at.After(cutoff) {
+			delete(e.members, m)
+		}
+	}
 }
 
 // New returns a limiter allowing max consecutive failures per key before
@@ -94,7 +168,14 @@ func (l *Limiter) Begin(key string) (lockedUntil time.Time, ok bool) {
 	if e.lockedUntil.After(now) {
 		return e.lockedUntil, false
 	}
-	if e.fails+e.inFlight >= l.max {
+	// In-flight attempts count against the budget in BOTH modes. In set mode
+	// that is deliberately conservative — the requests in flight may all name
+	// the member already counted — because the alternative is admitting them
+	// all and learning afterwards, which is the check-then-act this API exists
+	// to remove. The over-refusal it can cause is one request deep and lifts as
+	// soon as the reservations settle.
+	e.pruneMembersLocked(now, l.lockout)
+	if e.count()+e.inFlight >= l.max {
 		e.lockedUntil = now.Add(l.lockout)
 		return e.lockedUntil, false
 	}
@@ -128,20 +209,119 @@ func (l *Limiter) CommitFail(key string) (fails int, lockedUntil time.Time) {
 		e.inFlight--
 	}
 	l.clearExpiredLocked(e, now)
+	wasLocked := e.lockedUntil.After(now)
 	e.fails++
 	e.lastFail = now
-	if e.fails >= l.max {
+	if e.count() >= l.max {
 		e.lockedUntil = now.Add(l.lockout)
 	}
-	return e.fails, e.lockedUntil
+	return e.fails, edge(wasLocked, e.lockedUntil)
 }
 
-// CommitSuccess clears all attempt state for key. A correct credential resets
-// the budget — the cap is on consecutive failures, not lifetime attempts.
+// CommitFailFor records a failure ATTRIBUTED to a member, for a reserved slot,
+// and returns how many distinct members the key now holds plus the lockout
+// expiry (zero when not yet locked out).
+//
+// The member is stored, so a caller whose member strings are attacker-supplied
+// must bound their length before passing them: MaxMembersPerKey bounds how MANY
+// are kept, not how big each one is.
+func (l *Limiter) CommitFailFor(key, member string) (distinct int, lockedUntil time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.commitFailForLocked(key, member, true)
+}
+
+// FailFor records a member failure without a prior Begin, mirroring Fail.
+func (l *Limiter) FailFor(key, member string) (distinct int, lockedUntil time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.commitFailForLocked(key, member, false)
+}
+
+func (l *Limiter) commitFailForLocked(key, member string, releaseSlot bool) (int, time.Time) {
+	now := l.now()
+	e := l.entryLocked(key)
+	if releaseSlot && e.inFlight > 0 {
+		e.inFlight--
+	}
+	l.clearExpiredLocked(e, now)
+	wasLocked := e.lockedUntil.After(now)
+	if e.members == nil {
+		e.members = make(map[string]time.Time)
+	}
+	// Prune BEFORE admitting, so an old member leaving makes room for a new one
+	// and the cap below is measured against the window and not against history.
+	e.pruneMembersLocked(now, l.lockout)
+	if _, seen := e.members[member]; seen || len(e.members) < MaxMembersPerKey {
+		e.members[member] = now
+	}
+	e.lastFail = now
+	n := len(e.members)
+	// A full set locks the key even when the configured ceiling is higher: at
+	// that point the limiter can no longer tell a new account from one it has
+	// already seen, so counting further would report a number it is not
+	// measuring.
+	if n >= l.max || n >= MaxMembersPerKey {
+		e.lockedUntil = now.Add(l.lockout)
+	}
+	return n, edge(wasLocked, e.lockedUntil)
+}
+
+// Configure replaces the ceiling and the lockout duration in place, so an owner
+// tightening a limit during an incident does not have to redeploy to be obeyed.
+//
+// It changes only the limits: what a key has already accumulated stays, because
+// the alternative — resetting the counters on every policy reload — would hand
+// anyone who can save the screen a way to clear every live lockout.
+func (l *Limiter) Configure(max int, lockout time.Duration) {
+	if max < 1 {
+		max = 1
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.max = max
+	l.lockout = lockout
+}
+
+// CommitSuccess clears the FAILURE streak for key, and deliberately keeps any
+// member set.
+//
+// The two modes forgive different things because they measure different things.
+// A scalar key caps CONSECUTIVE failures against one account, so a correct
+// password genuinely ends the streak. A set key caps how many distinct accounts
+// an ORIGIN has failed against, and one successful sign-in is no evidence about
+// the other nine it probed.
+//
+// Deleting the entry outright made the breadth control cost one login to reset:
+// fail against nine accounts under a ceiling of ten, sign in to your own
+// account, repeat forever, and the origin never trips. It is the same hole the
+// Release path had, through a different door — and the members age out of the
+// window on their own, which is the right way for them to be forgiven.
 func (l *Limiter) CommitSuccess(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.entries, key)
+	e := l.entries[key]
+	if e == nil {
+		return
+	}
+	// Consume the reservation. Deleting the whole entry used to do this
+	// implicitly; keeping the entry means the slot has to be released by hand,
+	// and leaking it walks the key toward a lockout nobody earned — which is
+	// exactly what INV-155 exists to prevent, one level down.
+	if e.inFlight > 0 {
+		e.inFlight--
+	}
+	e.fails = 0
+	// Only a SCALAR key has its penalty lifted by a success. For a set key the
+	// lockout was earned by breadth, and a successful sign-in from the same
+	// origin is not evidence about it — lifting it here would also restart the
+	// clock, handing the attacker a way to shorten their own penalty with a
+	// login they are entitled to make.
+	if e.members == nil {
+		e.lockedUntil = time.Time{}
+	}
+	e.pruneMembersLocked(l.now(), l.lockout)
+	l.gcLocked(key, e)
 }
 
 // Fail records a failure without a prior Begin, for call sites that do not need
@@ -152,12 +332,13 @@ func (l *Limiter) Fail(key string) (fails int, lockedUntil time.Time) {
 	now := l.now()
 	e := l.entryLocked(key)
 	l.clearExpiredLocked(e, now)
+	wasLocked := e.lockedUntil.After(now)
 	e.fails++
 	e.lastFail = now
-	if e.fails >= l.max {
+	if e.count() >= l.max {
 		e.lockedUntil = now.Add(l.lockout)
 	}
-	return e.fails, e.lockedUntil
+	return e.fails, edge(wasLocked, e.lockedUntil)
 }
 
 // Reset clears attempt state for key.
@@ -217,12 +398,32 @@ func (l *Limiter) entryLocked(key string) *attempt {
 func (l *Limiter) clearExpiredLocked(e *attempt, now time.Time) {
 	if !e.lockedUntil.IsZero() && !e.lockedUntil.After(now) {
 		e.fails = 0
+		// A served penalty starts a fresh set. Keeping the members would leave
+		// the key one failure from locking again forever, which is a permanent
+		// lockout wearing a lockout's clothes.
+		e.members = nil
 		e.lockedUntil = time.Time{}
 	}
 }
 
+// edge returns the expiry ONLY when this call is the one that armed it.
+//
+// Callers use the returned time to decide whether to record a lockout, and the
+// standing state is the wrong answer to that question: Begin arms lockedUntil
+// when it refuses on the in-flight cap, so every concurrent attempt that
+// already held a reservation would report a lockout it did not cause. One
+// burst then wrote one permanent audit row per request — the trail becoming
+// the amplifier the limiter exists to remove, with the attacker choosing the
+// multiplier.
+func edge(wasLocked bool, until time.Time) time.Time {
+	if wasLocked {
+		return time.Time{}
+	}
+	return until
+}
+
 func (l *Limiter) gcLocked(key string, e *attempt) {
-	if e.fails == 0 && e.inFlight == 0 && e.lockedUntil.IsZero() {
+	if e.count() == 0 && e.inFlight == 0 && e.lockedUntil.IsZero() {
 		delete(l.entries, key)
 	}
 }

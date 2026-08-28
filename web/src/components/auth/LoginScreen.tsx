@@ -144,7 +144,15 @@ export function LoginScreen({ onForgotPassword }: { onForgotPassword?: () => voi
           <span>{t('auth.remember_email')}</span>
         </label>
 
-        <AuthSubmit busy={busy}>{t('auth_login.submit')}</AuthSubmit>
+        {/*
+          Disabled until both credentials are typed. The password is checked by
+          LENGTH, never trimmed: a leading or trailing space is a legitimate
+          character in one, and trimming here would refuse to submit a password
+          the server would have accepted.
+        */}
+        <AuthSubmit busy={busy} disabled={email.trim() === '' || password.length === 0}>
+          {t('auth_login.submit')}
+        </AuthSubmit>
       </form>
     </AuthShell>
   )

@@ -459,9 +459,9 @@ Every run is recorded in the `backup_run` table, and the agent serves Prometheus
 The agent can also ship the **per-user product ZIP** on a schedule: set `BACKUP_USERZIP_AT` (e.g. `02:15`, empty = off) and the `RUSTFS_*` source-bucket variables on the backup service, and every night each active user's own `/api/backup/export` archive — content only, never login data — is encrypted with age and uploaded to `backups/users/<id>/`, keeping the newest `BACKUP_RETAIN_USERZIP` (7) per user. Unlike the full dump, these ZIPs are the ones a *user* can restore through the app without an operator.
 Every run is recorded in the `backup_run` table, and the agent serves Prometheus metrics (`/metrics`, same `METRICS_TOKEN` as the backend) with ready-made Grafana/Prometheus alert rules in [`deploy/observability/`](deploy/observability/) — including an `absent()` rule that catches the agent that never started and a staleness rule for drills. Configure via the `BACKUP_*` block in `.env.example`.
 
-The settings hub carries an **"Instance backup" band** (administration scope, behind the `instance.backup` permission — owner and admin by default, editable in the roles matrix): per-job status with the last success, destination key, size, copyable SHA-256 and duration; a freshness alarm when the last dump is older than 26 h; a highlight of the last restore drill with the dump it validated and the row counts it proved; the paginated run history with normalized error reasons; and a per-job **"Run now"** button that only enqueues a request for the agent — the web process never executes a backup and never sees the S3 credentials. When no run was ever recorded (or a request ages unclaimed) the band says the service is not active instead of looking healthy. A Grafana dashboard ships alongside the alert rules in [`deploy/observability/grafana-backup-dashboard.json`](deploy/observability/grafana-backup-dashboard.json). *(Screenshot of the band pending.)*
+The settings hub carries an **"Instance backup" screen** (administration scope, behind the `instance.backup` permission — owner and admin by default, editable in the roles matrix). It opens on four headline numbers — last dump, integrity (the drill's verdict), dump size, and the longest streak of consecutive failures, which is the number the alert rule compares — over a 2×2 board of job cards. Each card carries the agenda the AGENT reports it is following, the last success, duration, size, destination key, copyable SHA-256 and its own **"Run now"**; selecting a card moves the schedule editor below to that job. There is deliberately no "download the last dump" button and no retention panel: the web process holds no S3 credential, and a disaster-recovery screen showing a number nobody computed is worse than one showing nothing. The agenda editor does name the **destination** each job ships to — endpoint, bucket and key prefix, published by the agent in its own heartbeat — because an agenda you cannot aim is an agenda you cannot verify; the credentials that reach that bucket never leave the agent process. The rest is unchanged: per-job status with the last success, destination key, size, copyable SHA-256 and duration; a freshness alarm when the last dump is older than 26 h; a highlight of the last restore drill with the dump it validated and the row counts it proved; the run history, filterable by outcome and paginated, with normalized error reasons; and a per-job **"Run now"** button that only enqueues a request for the agent — the web process never executes a backup and never sees the S3 credentials. When no run was ever recorded (or a request ages unclaimed) the band says the service is not active instead of looking healthy. A Grafana dashboard ships alongside the alert rules in [`deploy/observability/grafana-backup-dashboard.json`](deploy/observability/grafana-backup-dashboard.json). *(Screenshot of the band pending.)*
 
-The band also carries a **job agenda editor** (ADR-44): the owner can set the dump's daily times (1–6 per day), move the weekly restore drill to another weekday/time, tune the mirror cadence and enable/disable the per-user ZIP — all stored in the database and picked up by the running agent within ~30 s, no restart. The environment stays the baseline: it decides **which** jobs exist (credentials, the age identity), while the database only decides **when** they run, inside compiled floors the UI cannot cross (the dump can never go below once a day, the drill stays weekly, the mirror can never be switched off by a row). Editing is owner-only behind the locked `instance.backup_schedule` permission; a change that reduces protection asks for confirmation, and the band shows an agent heartbeat (last seen, version, per-job capability) so a job the agent cannot run says why instead of silently ignoring its schedule.
+The band also carries a **job agenda editor** (ADR-44, vocabulary revised by ADR-45): every job — dump, restore drill, object mirror and per-user ZIP — offers the same controls, so any of them can run **on the weekdays you pick** (Monday, Wednesday and Friday, say), at up to **six wall times a day**, or in **interval mode** every N minutes (15–1440). Clicking a job card brings the editor to the centre of the page focused on that job. Everything is stored in the database and picked up by the running agent within ~30 s, no restart. The environment stays the baseline: it decides **which** jobs exist (credentials, the age identity) and supplies the agenda the form opens with, while the database only decides **when** they run — saving is what creates the override. Compiled floors the UI cannot cross remain: one to six times a day, at least one weekday, an interval between 15 and 1440 minutes, and **at least five weekdays for the dump**, which is the instance's disaster floor rather than a product convenience; the per-user ZIP is the only job a row may switch off. Each job's agenda also states where its objects land — `endpoint/bucket/prefix` — which is how you catch an external bucket that is really the same host as the origin. Editing is owner-only behind the locked `instance.backup_schedule` permission; a change that reduces protection asks for confirmation, and the band shows an agent heartbeat (last seen, version, per-job capability) so a job the agent cannot run says why instead of silently ignoring its schedule.
 
 Design: [docs/SDD-OPS-BACKUP.md](docs/SDD-OPS-BACKUP.md) (ADR-43).
 
@@ -498,8 +498,9 @@ action and the account, and the destructive ones keep their confirmation dialog.
 
 **The sign-in screen.** Two panes: the form on the left — brand, heading, e-mail or
 username, password with **Forgot your password?** on its own label row, *Remember my
-e-mail*, and one primary button — and a product panel on the right with a short pitch and a
-mock of the app. The right pane is decoration: it is hidden from screen readers and dropped
+e-mail*, and one primary button, which stays disabled until both fields are filled — and a
+product panel on the right with a short pitch and a mock of the app that runs to
+the panel's own edge. The right pane is decoration: it is hidden from screen readers and dropped
 entirely below 1024px, where the form centres on its own. Under the form sits the instance's
 version and build date, since the sign-in screen is the one surface reachable without an
 account. Language flags stay in the top-left corner on every signed-out screen.
@@ -594,9 +595,66 @@ not just hidden in the UI: you cannot demote, disable or delete **yourself**; th
 active administrator** cannot be removed by anyone; and the **owner's** role and status
 cannot be changed at all except by transferring. Transferring signs out both accounts.
 
-**Audit trail.** **Settings → Administration → Audit log** records sign-ins and their
-failures, role and status changes, invitations, forced recoveries and policy edits. It
-survives the accounts it describes: deleting a user does not erase what that user did.
+**Audit trail.** **Settings → Administration → Audit log** records two kinds of event.
+*Identity*: sign-ins and their failures, role and status changes, invitations, forced
+recoveries, policy edits and blocklist changes. *Content*: every accepted create, edit and
+delete of a link, note, folder or tag, plus imports and restores. It survives the accounts
+it describes — deleting a user does not erase what that user did.
+
+The screen opens on a period (24 h, 7 days, 30 days) and shows headline counts against the
+period before, events per day, the share of each event type, the busiest accounts, the
+addresses and devices seen, and any burst of failed sign-ins from one address. You can
+filter by type or category, search by account, address or event, sort oldest-first, and
+**export the current filter as CSV**.
+
+**Content events name no one and describe nothing.** An administrator sees *"link
+created · user #7"* — never the title, the URL, or the address of the account that wrote
+it. Content stays private per account, administrators included, and that is enforced in
+the SQL rather than in the screen. The account itself sees its own history in full, with
+titles, under **Settings → Account → Activity**.
+
+**Every row records where it came from**, and says whether to believe it: the address the
+server observed plus the device string, marked *via trusted proxy* when a proxy you
+configured in `TRUSTED_PROXY_IPS` vouched for it and *direct address* when nothing did.
+On the default deployment — bound to loopback with no proxy — every row is the raw peer.
+
+**Anomalies.** The same screen ranks origins that look like abuse rather than traffic:
+*account sweep* (one address failing against many distinct accounts), *hammering one
+account*, and *already throttled* (an address the limiter locked out). Each row carries the
+evidence in numbers — distinct accounts, failures, the span in minutes — a link that
+filters the timeline down to that address, and a pre-filled block button.
+
+Nothing here fires on its own, deliberately. A heuristic that blocks addresses by itself
+eventually blocks the wrong one at three in the morning, and the person locked out is the
+operator. The panel also shows **counts of accounts, never the addresses attacked** — the
+targets already appear in the timeline, and a second place to read them would be a second
+place to leak them. Rows whose origin is *not* from a trusted proxy say so loudly: behind a
+reverse proxy that address is the proxy, so the row is about everyone, and blocking it
+would block your own nginx.
+
+**Limits and abuse (owner only).** **Settings → Administration → Limits and abuse** holds
+the numbers this instance defends itself with, in four bands: login (distinct accounts one
+origin may fail against, failures per account, the lockout window), the authenticated API
+(writes per minute, expensive operations per hour), the public surface (click coalescing
+window, `0` to switch it off), and the anomaly thresholds. **The last band changes nothing
+about enforcement** — those three numbers only decide what the panel above calls anomalous,
+and the screen says so beside them.
+
+Every value has a floor *and* a ceiling, because a rate limit is dangerous in both
+directions: too high and it stops being a control, too low and it becomes the attack — a
+limit of one account per hour would let anyone who reaches the login form lock out an
+office by typing one wrong password. Beside the login and API fields the screen shows what
+the trail actually measured over the last 30 days, so you can tune from evidence instead
+of intuition; where there is no measurement it says so rather than showing a zero. Changes
+take effect **without a restart**. Reading is any administrator's job; writing is the
+owner's alone.
+
+**Blocking an address (owner only).** The risk card can install a permanent block on an
+address, and blocked addresses are listed with a way back out. Four things are refused
+outright, because this is the one control that can make an instance unreachable to the
+person holding it: the address you are connected from, loopback, and any proxy listed in
+`TRUSTED_PROXY_IPS`. Blocking is not authentication — if the database is unreachable the
+filter opens rather than locking everyone out.
 
 **Instance policy (owner only).** **Settings → Administration → Password and sign-in
 policy** sets the minimum password length, the mailed-code lifetime and resend cooldown,
@@ -863,6 +921,36 @@ content intact, which is the fastest way back in.
 > anyone walk 1, 2, 3… and enumerate every link and note on the instance, other people's
 > included. Slugs are unaffected. Set `PUBLIC_NUMERIC_IDS=1` if you have old numeric
 > links already shared and would rather keep them working.
+
+> **Write quota (429).** Every authenticated account gets a budget of **mutating**
+> requests: 120 per minute overall, and a smaller **20 per hour** for the routes that
+> cost far more than one row — import, backup export and restore, screenshot capture,
+> preview refresh. Reads are never metered, so browsing your own library is unaffected.
+> Past the budget the answer is `429` with a `Retry-After` telling you how long to wait;
+> the request never reaches the handler. The quota is **per account, not per route** — a
+> loop spread across twenty endpoints would otherwise stay inside the limit on each of
+> them while holding the whole connection pool — and **no role is exempt, the owner
+> included**. Both numbers are editable by the instance owner and take effect without a
+> restart.
+
+> **The edge throttles too.** The bundled nginx applies `limit_req` per address before a
+> request reaches the backend at all — a tight zone (2 r/s) on the seven unauthenticated
+> routes that *guess* something (sign-in, bootstrap, invite acceptance, password reset,
+> second-factor codes, Google conversion), a loose one (30 r/s) on the rest of
+> `/api/auth/*` because the app itself bursts there, and a public zone (20 r/s) on `/go/`
+> and `/n/`. Over the limit the answer is `429`. `/api/*` as a whole is deliberately not
+> throttled at the edge: the authenticated API bursts legitimately and the backend has the
+> context to tell a person from a loop. **If you run another proxy in front of this
+> nginx**, enable `ngx_http_realip_module` there — otherwise every zone sees that proxy's
+> address and the instance throttles itself.
+
+> **Repeat clicks are coalesced.** `/go/{slug}` and `/n/{slug}` take no session and each
+> hit writes a row to `click_log`, so a loop over one known slug was unlimited database
+> writing by an anonymous visitor. The same visitor hitting the same link or note again
+> within **10 seconds** no longer adds a second row. The redirect and the note page are
+> unaffected — only the counter row is skipped — and the dedup state is in memory only:
+> no visitor address is ever stored. Set the window to `0` to switch it off and get an
+> exact counter back.
 
 > **Preview network policy.** Cloud metadata/credential ranges and RFC6598 are
 > always blocked. Set `PREVIEW_STRICT_SSRF=1` when users must not reach services

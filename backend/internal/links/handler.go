@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/folders"
+	"foldex/internal/pkg/auditctx"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/clampint"
 	"foldex/internal/pkg/httperr"
@@ -100,6 +101,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		// link row exists, the next requeuePending tick picks it up.
 		_ = h.worker.Enqueue(l.ID)
 	}
+	// Names the row for the owner's own-activity feed (ADR-46). The
+	// content-audit middleware records the event either way; this is what
+	// gives it a label its owner can recognise a month later.
+	auditctx.SetRequest(r, "link", l.ID, l.Title)
 	httperr.JSON(w, http.StatusCreated, l)
 }
 
@@ -143,6 +148,10 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
+	// Names the row for the owner's own-activity feed (ADR-46). The
+	// content-audit middleware records the event either way; this is what
+	// gives it a label its owner can recognise a month later.
+	auditctx.SetRequest(r, "link", l.ID, l.Title)
 	httperr.JSON(w, http.StatusOK, l)
 }
 
@@ -152,10 +161,18 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
+	// Read BEFORE the delete: a moment later the title exists nowhere, and
+	// "link excluído #42" is a feed entry its owner can never resolve. One
+	// primary-key read on an operation nobody performs in a loop.
+	title := ""
+	if existing, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id); err == nil {
+		title = existing.Title
+	}
 	if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
+	auditctx.SetRequest(r, "link", id, title)
 	w.WriteHeader(http.StatusNoContent)
 }
 

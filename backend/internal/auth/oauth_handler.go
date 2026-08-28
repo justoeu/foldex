@@ -89,9 +89,12 @@ func (h *Handler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 	}
 	// CHARGED, not released on success. There is no success/failure distinction
 	// here: every start writes an oauth_state row, so the thing worth bounding
-	// is the request itself. CommitSuccess would DELETE the bucket entry, which
-	// would reset the counter on every call and make the cap decorative — the
-	// same reasoning ForgotPassword's "every request is charged" comment gives.
+	// is the request itself. CommitSuccess ZEROES the failure count on a scalar
+	// key, which would reset this counter on every call and make the cap
+	// decorative — the same reasoning ForgotPassword's "every request is
+	// charged" comment gives. (It no longer deletes the entry, since ADR-47
+	// gave set keys a breadth tally that a success must not forgive; the
+	// conclusion here is unchanged, the mechanism is not.)
 	defer h.oauthIP.CommitFail(key)
 
 	purpose := r.URL.Query().Get("purpose")

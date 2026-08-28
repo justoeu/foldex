@@ -62,6 +62,13 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **One channel must never satisfy both factors** → [INV-005](docs/INVARIANTS.md#inv-005) | guard: `TestReset_MailboxAloneCannotSatisfyBothFactors`, `TestEmailOTP_IsNotOfferedWhenMailOnlyGoesToTheLog`
 - **Credentials are redacted at the ROOT log handler, not at each call site** → [INV-006](docs/INVARIANTS.md#inv-006) | guard: `TestRedactionListMatchesTheDocumentedSet`
 - **`X-Forwarded-For` is honoured ONLY from a configured proxy** → [INV-007](docs/INVARIANTS.md#inv-007)
+- **Nenhuma entrada controlada pelo cliente compõe uma chave de rate limit** → [INV-183](docs/INVARIANTS.md#inv-183)
+  ↳ `IP + User-Agent` daria ao atacante um orçamento novo por requisição; o balde deixa de existir enquanto continua parecendo existir. Registrar ≠ confiar.
+- **O balde de IP do login conta LARGURA (contas distintas); o de e-mail conta PROFUNDIDADE; conjunto cheio TRANCA** → [INV-184](docs/INVARIANTS.md#inv-184) | guard: `TestLoginFailure_TheIPBucketCountsAccounts_NotAttempts`, `TestLogin_ManyPeopleBehindOneAddressDoNotLockEachOtherOut`, `TestSetMode_ASuccessDoesNotForgiveTheAccountsAlreadySwept`, `TestSetMode_MembersAgeOutOfTheWindow`, `TestEveryTerminalPathReleasesTheReservation`, `TestLogin_AliasesOfOneAccountCostTheSameAsStrangers`
+  ↳ `gcLocked` media só `e.fails`: um `Release` apagava o conjunto inteiro, e martelar uma conta devolvia todo o orçamento de largura da origem. Achado por mutação.
+- **Limites de abuso: pisos dos DOIS lados, fora de faixa reverte o CAMPO, e "dinâmico" é RECARREGAR** → [INV-185](docs/INVARIANTS.md#inv-185) | guard: `TestValidateForWrite_RefusesBothDirections`, `TestSanitize_RevertsOneKnobAndKeepsTheRest`, `TestCache_FailStaticKeepsTheLastGoodPolicy`
+  ↳ Um rate limit baixo demais VIRA o ataque: 1 conta/hora tranca um escritório com uma senha errada.
+- **O detector de anomalias RELATA; o bloqueio é do humano, e o painel não mostra e-mails** → [INV-186](docs/INVARIANTS.md#inv-186) | guard: `TestAnomaly_CarriesNoEmailAnywhereInItsJSON`
 - **E-mail confirmation is a LINK, not a code, and its endpoint is unauthenticated** → [INV-008](docs/INVARIANTS.md#inv-008)
 - **`Optional` enforces CSRF on unsafe verbs** → [INV-009](docs/INVARIANTS.md#inv-009)
 - **Second-factor budgets live in the DATABASE, not in `attemptlimit`** → [INV-010](docs/INVARIANTS.md#inv-010)
@@ -78,6 +85,10 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **`POST /api/admin/users` is a DECLARED EXCEPTION to the rule below, taken by the instance owner** → [INV-021](docs/INVARIANTS.md#inv-021) | guard: `TestAdminCreateUser_*`
 - **An administrator never chooses, installs or receives another user's credential** → [INV-022](docs/INVARIANTS.md#inv-022)
 - **API tokens are scoped to CONTENT, and the scope is enforced by middleware, not by discipline** → [INV-023](docs/INVARIANTS.md#inv-023)
+- **A cota da API autenticada é por PRINCIPAL, conta só escrita, e não isenta ninguém** → [INV-181](docs/INVARIANTS.md#inv-181) | guard: `TestAPIQuota_TwoPrincipalsHaveIndependentBudgets`, `TestAPIQuota_TheOwnerIsNotExempt`, `TestExpensiveRoutes_EveryPatternNamesARouteTheRouterMounts`, `TestWiring_APIQuotaRefusesAWriteLoopThroughTheRealRouter`
+  ↳ Por rota, um laço espalhado por vinte endpoints fica dentro do limite em cada um e segura o pool inteiro; `attemptlimit` não serve porque conta falhas consecutivas e `CommitSuccess` zera o contador.
+- **O clique público é coalescido em MEMÓRIA, por visitante hasheado, e a supressão nunca alcança o redirect** → [INV-182](docs/INVARIANTS.md#inv-182) | guard: `TestClickCoalesce_ARepeatVisitWritesOneRowAndStillRedirects`, `TestClickCoalesce_TheMapNeverExceedsItsCeiling`, `TestWiring_RepeatClicksFromOneVisitorWriteOneRowAndStillRedirect`
+  ↳ Sem teto, o coalescedor é o novo alvo: o atacante enche o mapa em vez do `click_log`.
 - **`/go/{42}` and `/n/{42}` are OFF by default** → [INV-024](docs/INVARIANTS.md#inv-024)
 - **`totp_enabled` and `email_2fa_enabled` are derived with `EXISTS`, never stored, and `HasSecondFactor()` is their OR** → [INV-025](docs/INVARIANTS.md#inv-025)
 - **"May this factor be removed?" is answered in ONE place** → [INV-026](docs/INVARIANTS.md#inv-026)
@@ -122,13 +133,21 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **Public note-media references are read capabilities only, never write/delete authority** → [INV-106](docs/INVARIANTS.md#inv-106)
 - **The `foldex-web` image NEVER ships a private TLS key** → [INV-109](docs/INVARIANTS.md#inv-109)
 - **VAPID private key is `0o600` and never baked into the image** → [INV-117](docs/INVARIANTS.md#inv-117)
+- **`audit_log.subject` é CONTEÚDO, e existe exatamente UMA consulta que o lê** → [INV-175](docs/INVARIANTS.md#inv-175) | guard: `TestAuditSubjectIsSelectedByExactlyOneQuery`, `TestAudit_AdminNeverSeesAContentSubjectOrItsActorEmail`
+  ↳ O guard nasceu andando só por `FuncDecl` e passou com a coluna adicionada direto na const `adminProjection` — a edição mais provável era a que ele não via.
+  ↳ A busca também precisou de trava: `?category=content&q=alice@…` casava em `actor_email` e devolvia o `actor_ref` dela. Coluna escondida na SAÍDA e selecionável na ENTRADA não é enforcement.
+- **`ip`, `ip_trusted` e `user_agent` são um CONJUNTO** → [INV-176](docs/INVARIANTS.md#inv-176) | guard: `TestAuditProvenance_*`
+- **A cobertura de conteúdo é um MIDDLEWARE; o rótulo é opcional por construção** → [INV-177](docs/INVARIANTS.md#inv-177) | guard: `TestWiring_ContentAuditRecordsAMutationThroughTheRealRouter`
+- **O bloqueio permanente de IP é owner-only e TRAVADO, e o cache falha ABERTO** → [INV-178](docs/INVARIANTS.md#inv-178) | guard: `TestValidateBlockIP_*`, `TestBlocklist_FailsOpenWhenTheLoadErrors`, `TestWiring_BlocklistGateRefusesBeforeRouting`
 - **A request span identifies its caller by OPAQUE ID ONLY, and the annotation hangs off principal CREATION, not a route group** → [INV-170](docs/INVARIANTS.md#inv-170) | guard: `TestEveryPrincipalSeamAnnotatesTheSpan`, `TestAnnotatePrincipalRecordsNoIdentifyingAttributeBeyondTheOpaqueID`, `TestAuthenticate_StampsUserIDOnSpansOfTheAuthSurfaceItself`, `TestQuerySpansNeverCarryThePostgresRole`
   ↳ Montado num grupo de rotas, perdeu em silêncio toda a metade autenticada de `/api/auth`.
   ↳ `user.name` do `otelpgx` é o PAPEL do Postgres: ao lado de `user.id` vira "requests por usuário" respondendo `user_foldex` para 100% do tráfego.
 
-- **As credenciais do S3 externo existem SÓ no processo do backup-agent, e o dump operacional é cifrado por DEFAULT** → [INV-171](docs/INVARIANTS.md#inv-171) | guard: `TestLoad_PlaintextIsAnExplicitOptOutNeverAFallback`, `TestDumpRun_ShipsAnEncryptedVerifiableArtifact`
+- **As credenciais do S3 externo existem SÓ no processo do backup-agent, e o dump operacional é cifrado por DEFAULT** → [INV-171](docs/INVARIANTS.md#inv-171) | guard: `TestLoad_PlaintextIsAnExplicitOptOutNeverAFallback`, `TestDumpRun_ShipsAnEncryptedVerifiableArtifact`, `TestAgent_HeartbeatCarriesNoCredential`
+  ↳ O heartbeat publica o ENDEREÇO do bucket (`{endpoint, bucket, prefix}`) para a tela poder mirar; o acesso a ele, nunca.
 - **Um job de backup roda no máximo uma vez por vez, e a exclusão tem TRÊS camadas que se cobrem** → [INV-172](docs/INVARIANTS.md#inv-172) | guard: `TestBegin_TheRunningSlotIsExclusivePerJob`, `TestExpireStale_FreesTheSlotADeadAgentHeld`
-- **A env decide QUAIS jobs de backup existem; o banco decide QUANDO rodam; pisos compilados seguram a baseline** → [INV-173](docs/INVARIANTS.md#inv-173) | guard: `TestValidateJobConfig_FloorsHold`, `TestSchedule_WriteIsOwnerOnlyThroughTheLockedPermission`
+- **A env decide QUAIS jobs de backup existem; o banco decide QUANDO rodam; pisos compilados seguram o mínimo** → [INV-173](docs/INVARIANTS.md#inv-173) | guard: `TestValidateJobConfig_FloorsHold`, `TestSchedule_WriteIsOwnerOnlyThroughTheLockedPermission`, `TestAgent_HeartbeatCarriesTheEnvBaseline`
+  ↳ Um vocabulário por job (ADR-44) não deixava nenhum job escolher dias da semana; o ADR-45 unificou a forma e manteve os pisos, com o do `dump` maior que o dos outros.
 ### 4.2 Contratos de dados — consulte ao tocar em schema, query ou payload
 
 - **`tag.name` is unique PER USER** → [INV-052](docs/INVARIANTS.md#inv-052)
@@ -138,6 +157,9 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **`click_log` is the single source of truth for clicks** → [INV-056](docs/INVARIANTS.md#inv-056)
 - **`link_tag` is the only place link↔tag lives** → [INV-057](docs/INVARIANTS.md#inv-057)
 - **`link_tag` and `click_log` are polymorphic (mig 000014) — shared by `link` and `note` via an `entity_kind ∈ {'link','note'}` discriminator on `entity_id`** → [INV-058](docs/INVARIANTS.md#inv-058) | guard: `TestCrossContamination_LinkAndNoteRowsDoNotLeak`
+- **Ordenação crescente na trilha é uma CONSULTA diferente, nunca a página invertida** → [INV-179](docs/INVARIANTS.md#inv-179)
+- **O balde do dia é construído no BANCO; a data local do processo não é a data das linhas** → [INV-180](docs/INVARIANTS.md#inv-180)
+  ↳ Com o servidor em UTC-3 o último balde terminava onde o dia começava: a coluna mais movimentada lia zero, e parecia "um dia quieto".
 - **`internal/entries` (`GET /api/entries`) is the single, read-only source for the interleaved link+note grid** → [INV-060](docs/INVARIANTS.md#inv-060)
 - **`preview_status ∈ {pending, ok, failed}`** → [INV-061](docs/INVARIANTS.md#inv-061)
 - **Change-check claims carry their configuration snapshot** → [INV-062](docs/INVARIANTS.md#inv-062)
@@ -250,6 +272,8 @@ Part of the product contract, not nice-to-haves. Uma linha = uma regra; o porqu�
 - **Monitored / unseen-change UI** → [INV-163](docs/INVARIANTS.md#inv-163)
 - **Push subscription UI is a bell in the Topbar** → [INV-164](docs/INVARIANTS.md#inv-164)
 - **Mobile responsiveness** → [INV-165](docs/INVARIANTS.md#inv-165)
+- **Uma troca de tela DENTRO de um fluxo nunca apaga a tela que já está no vidro** → [INV-174](docs/INVARIANTS.md#inv-174) | guard: `AuthGate.transition.test.tsx`
+  ↳ Login → pedido do OTP piscava a viewport inteira: o fallback do `Suspense` é uma sobreposição de tela cheia. A linha não é "token na URL", é "havia algo pintado?" — a recuperação de senha entra por `useState` local e tinha o mesmo defeito.
 - **A password an administrator installs is either CONFIRMED or GENERATED, never typed once** → [INV-166](docs/INVARIANTS.md#inv-166) | guard: `CreateUserDialog.test.tsx`, `generatePassword.test.ts`
 - **Papéis e permissões is a GRID, and every cell it cannot offer says why** → [INV-168](docs/INVARIANTS.md#inv-168) | guard: `admin.test.tsx`
 

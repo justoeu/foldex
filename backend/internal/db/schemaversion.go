@@ -25,10 +25,33 @@ import (
 // expecting role_permission's instance.backup seed (000041) — before PR5 only
 // the agent touched that table, which is why 000040 itself did not bump this.
 // 42 is ADR-44: the backend reads and writes backup_schedule and reads
-// backup_agent_state (the agenda surface). Distinct from
-// backupagent.RequiredSchemaVersion — also 42 now, but tracked separately
-// because the two binaries' dependencies move independently.
-const RequiredSchemaVersion = 42
+// backup_agent_state (the agenda surface). 43 unifies the four per-job
+// scheduling vocabularies stored in backup_schedule.config into one document
+// — the backend writes the new shape, and an unmigrated database would still
+// hold rows in the old one. Distinct from backupagent.RequiredSchemaVersion —
+// also 43 now, but tracked separately because the two binaries' dependencies
+// move independently. 45 is ADR-46: 000044 adds the audit trail's context
+// columns (ip, ip_trusted, user_agent) and its content columns (entity_kind,
+// entity_id, subject), which every audit write now populates and both read
+// projections select; 000045 adds ip_block, which the enforcement middleware
+// reads on the request path. An unmigrated database would fail the first
+// INSERT into audit_log — that is, on the first login — so this is a hard
+// floor rather than a degradation.
+//
+// ADR-47 adds no migration at all, and that is a measured result rather than an
+// oversight. It was drafted with a 000046 creating audit_log_ip_time_idx on
+// (ip, created_at DESC); EXPLAIN ANALYZE over a 1.2M-row trail showed all six
+// of the anomaly and observation queries choosing audit_log_action_created_idx
+// instead, because every one of them carries an EQUALITY on action next to the
+// range on created_at — exactly what 000033's index is shaped for and what
+// 000044's comment predicted. The unused index measured +43% on bulk INSERT and
+// 18 MB on a 102 MB table, so it was pure cost. It was removed before shipping.
+//
+// The rest of ADR-47 does not move the floor either: the abuse policy lives in
+// app_setting, a table that has existed since 000016, and audit_log.action has
+// no enumeration to extend (000033 constrains only its LENGTH), so a database
+// at 45 accepts auth.rate_limited exactly as it accepts every other action.
+const RequiredSchemaVersion = 45
 
 // ErrSchemaOutdated is returned when the database has not been migrated.
 var ErrSchemaOutdated = errors.New("db: schema is older than this binary requires")

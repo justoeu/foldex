@@ -373,7 +373,7 @@ Ciclo de vida do processo: modelo `cmd/mailer` — `signal.NotifyContext(SIGINT,
 andamento recebe o cancelamento do ctx e registra `failed('shutdown')`; o catch-up do
 próximo boot o refaz.
 
-### 6.1 Agenda configurável (ADR-44, PR6)
+### 6.1 Agenda configurável (ADR-44, PR6; vocabulário revisado pelo ADR-45, PR7)
 
 A env deixou de ser a única dona do QUANDO. A divisão de autoridade (INV-173):
 
@@ -385,22 +385,53 @@ A env deixou de ser a única dona do QUANDO. A divisão de autoridade (INV-173):
   e recarregada pelo agente a cada tick do poll (~30 s), sem restart: o loop de sync
   troca o snapshot de `Timing`s e fecha um canal que acorda cada schedule loop
   mid-sleep.
+
+#### O documento (ADR-45): uma forma para os quatro jobs
+
+O PR6 shipou quatro vocabulários — `dump` só `times[]`, `drill` só `time`+`weekday`,
+`mirror` só `interval_min`, `user_zip` só `enabled`+`time` — e a validação recusava
+qualquer campo "estrangeiro". Nenhum job escolhia um CONJUNTO de dias da semana, e o
+formulário precisava de quatro componentes que não compartilhavam nada. O PR7 unificou:
+
+```json
+{"mode":"times","times":["03:30","15:30"],"weekdays":["mon","wed","fri"]}
+{"mode":"interval","interval_min":360}
+{"mode":"times","enabled":false}
+```
+
+`mode` é **explícito, nunca inferido**: uma linha carregando `times` e `interval_min`
+juntos seria meio-honrada em silêncio, que é o defeito que os pisos existem para impedir.
+Os quatro jobs aceitam os dois modos.
+
 - **Pisos compilados** (`backupagent.ValidateJobConfig`, aplicados pelo PUT do backend
-  E pelo load do agente): dump 1..6 horários/dia (nunca zero — o piso que importa);
-  drill sempre semanal (`time`+`weekday`, sem estado "off"); mirror 15..1440 min
-  (linha ajusta cadência, nunca desliga); user_zip é o ÚNICO que uma linha pode
-  desligar (conveniência de produto, não proteção). Linha ausente, inválida ou de job
-  incapaz ⇒ baseline da env — degradação para a agenda de ontem, nunca para job morto.
+  E pelo load do agente): 1..6 horários por dia, intervalo 15..1440 min e ≥1 dia da semana
+  para todos; **≥5 dias para o `dump`**, porque o dump é a proteção da instância e os
+  outros três são verificação, cópia contínua e conveniência de produto; `user_zip` é o
+  ÚNICO que uma linha pode desligar. Linha ausente, inválida ou de job incapaz ⇒ baseline
+  da env — degradação para a agenda de ontem, nunca para job morto. Uma linha na forma
+  legada é normalizada na leitura em vez de degradar em silêncio; a migração 000043 fez a
+  conversão das existentes.
 - **Heartbeat** — tabela `backup_agent_state` (uma linha, upsert no mesmo loop):
-  `seen_at`, versão e por job `{capable, reason, source, schedule}`. É a camada de
-  honestidade da UI (lição do mailer): sem ela a tela deixaria o owner agendar um
+  `seen_at`, versão e por job `{capable, reason, source, schedule, baseline, destination}`. É a camada
+  de honestidade da UI (lição do mailer): sem ela a tela deixaria o owner agendar um
   drill num agente sem identidade montada, e a agenda ficaria configurada e ignorada
-  para sempre.
+  para sempre. O `destination` é o endereço do bucket externo — `{endpoint, bucket, prefix}` — para que a tela possa NOMEAR para onde cada job manda: uma agenda que o operador não consegue mirar é uma agenda que ele não consegue conferir, e o endpoint é o campo que mais aponta para lugar diferente do pretendido (a mesma máquina da origem, por exemplo, que é um espelho que não sobrevive a nada). São os três campos NÃO secretos, de propósito: o INV-171 mantém `BACKUP_S3_ACCESS_KEY`/`BACKUP_S3_SECRET_KEY` dentro do processo do agente, e este payload é renderizado numa tela de administração. O `baseline` é a agenda da ENV **estruturada** (não só renderizada) — é o
+  que faz "a env é a primeira opção, o banco é a sobrescrita" existir na tela: um job sem
+  linha abre com o formulário já preenchido pela env, e salvar é o ato que cria a
+  sobrescrita. Antes dele o editor semeava com constantes e a env não era opção nenhuma.
 - **Escrita owner-only** pela permissão nova `instance.backup_schedule`, TRAVADA
   (argumento do `policy.write` aplicado a DR): admin lê a agenda, só o owner a move,
   e os pisos limitam até o owner. Auditoria própria (`backup.schedule_changed`).
-- O dump aceita MÚLTIPLOS horários diários; o catch-up passa a comparar contra o
-  maior gap legítimo entre âncoras consecutivas (wraparound incluído) + 25% de grace.
+- **A matemática subiu de `Anchor` para `Timing`.** Um horário sozinho não sabe em que
+  dias dispara, então `Anchor` ficou sendo só o parser da sintaxe da env
+  (`"HH:MM"` / `"HH:MM sun"`) e `Timing{Anchors, Weekdays, Interval}` passou a responder
+  `Next`, `Due`, `PreviousSlot` e `MaxGap`. O `MaxGap` enumera a **grade da semana**
+  (dias × horários) em minutos desde o início da semana e devolve o maior vão com
+  wraparound — isso substitui os três casos especiais do PR6 (intervalo / âncora única /
+  wraparound diário): um horário num único dia dá 7 dias naturalmente, e o galho "se
+  alguma âncora é semanal, devolve a maior" desapareceu junto com o defeito que ele
+  contornava.
+- **`RequiredSchemaVersion` 42→43** nos dois gates (backend e agente), pela migração 000043.
 
 ---
 
@@ -635,7 +666,7 @@ Trade-off: latência de até ~30 s do poll — irrelevante para backup.
 | Perda máxima de até 24 h (sem PITR) | Cadência configurável; non-goal declarado; pgBackRest pode entrar como serviço irmão depois |
 | Dump e mirror não são um snapshot atômico conjunto (DB ≠ bucket, mesmo problema do INV-104) | Órfão de referência vira card sem imagem, re-armado pelo próprio pipeline de preview (INV-081); dump e mirror rodam em sequência sob o mesmo lock para encurtar a janela |
 | Alerta por e-mail depende do backend vivo | Métricas + `absent()` são o canal independente (§9.1) |
-| DST pode duplicar/pular uma âncora no dia da transição | Catch-up cobre o pulo; duplicação é inócua (segundo run é rápido e a retenção poda) |
+| DST pode duplicar/pular uma âncora no dia da transição | Catch-up cobre o pulo; duplicação é inócua (segundo run é rápido e a retenção poda). Medido e pinado em teste: no **spring forward** a perturbação dura DOIS dias e o disparo extra cai no dia SEGUINTE — a âncora `02:30` inexistente resolve uma hora ANTES (`01:30 EST`), não depois, e no dia seguinte a agenda dispara `01:30 EDT` e `02:30 EDT`. No **fall back** não custa nada: a primeira passagem vence e não há duplicata. |
 | Modo retenção `agent`: host comprometido apaga histórico | `BACKUP_RETENTION_MODE=bucket` + credencial sem delete + lifecycle (§7) |
 | Drill valida a major corrente, não upgrades futuros | O guard de versão no boot detecta drift; upgrade de major do Postgres já é um evento operacional com runbook próprio |
 | `requested` sem agente vivo fica pendente | UI mostra o envelhecimento + empty-state aponta o profile |
@@ -721,6 +752,7 @@ lista de exclusão de MEDIÇÃO como os demais `cmd/*`, com a lógica toda em pa
 | PR4 | Job `user_zip` (reuso de `Service.Export`, deferência ao `RestoreAdvisoryLockKey`) | `BACKUP_USERZIP_AT` (vazio = off) |
 | PR5 | ✅ Superfície de status: endpoint admin (`internal/backupstatus`) + permissão `instance.backup` (migração 000041) + **bump `RequiredSchemaVersion` 37→41** + banda completa no settings hub + dashboard Grafana completo. O alerta e-mail via outbox (template 3 locales, §9.3) ficou FORA — pendência pós-PR5 | permissão `instance.backup` |
 | PR6 | ✅ Agenda configurável (ADR-44, §6.1): migração 000042 (`backup_schedule` + `backup_agent_state`) + pisos compilados + reload ao vivo no agente + heartbeat + permissão travada `instance.backup_schedule` + `GET/PUT/DELETE /api/admin/backup/schedule[/{job}]` + editor de agenda na banda + **bump `RequiredSchemaVersion` 41→42 e gate do agente 40→42** | permissão `instance.backup_schedule` |
+| PR7 | ✅ Vocabulário unificado (ADR-45, §6.1): uma forma `{mode, times[], weekdays[], interval_min, enabled}` para os quatro jobs, dias da semana multisseleção, os dois modos em todo job, pisos revistos (≥5 dias no `dump`), baseline da env estruturada no heartbeat, matemática de `Anchor` para `Timing`, migração 000043 + **bump `RequiredSchemaVersion` 42→43 nos dois gates**; na UI, um editor só e a agenda centralizada ao clicar num card | — |
 
 Ordem justificada: cada PR é shippável sozinho; o drill vem em segundo porque a
 verificação é o núcleo da proposta — expandir escopo (mirror, user_zip) antes de provar

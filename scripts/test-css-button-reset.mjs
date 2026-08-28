@@ -52,6 +52,13 @@ const FILES = SELF_TEST
 // earlier version of this guard passed every longhand mutation.
 const RESET_PROPS = ['background', 'color', 'padding', 'border']
 const GUARDED = [
+  'fx-aud-window',
+  'fx-aud-window-on',
+  'fx-aud-chip',
+  'fx-aud-chip-on',
+  'fx-aud-event-row',
+  'fx-aud-event-open',
+  'fx-aud-risk-cta',
   'fx-hub-seg-btn',
   'fx-hub-seg-btn-active',
   'fx-vs',
@@ -66,6 +73,23 @@ const GUARDED = [
   'fx-acard',
   'fx-acct-railbtn',
   'fx-acct-railbtn-active',
+  'fx-bkp-tab',
+  'fx-bkp-tab-on',
+  'fx-bkp-mode',
+  'fx-bkp-mode-on',
+  'fx-bkp-dayset',
+  'fx-bkp-day',
+  'fx-bkp-day-on',
+  'fx-bkp-preset',
+  'fx-bkp-preset-on',
+  'fx-bkp-filter',
+  'fx-bkp-filter-on',
+  'fx-bkp-job-run',
+  'fx-bkp-add',
+  'fx-bkp-job-head',
+  'fx-bkp-sha-btn',
+  'fx-bkp-time-remove',
+  'fx-abuse-reset',
 ]
 
 const css = FILES.map((f) => readFileSync(join(STYLES, f), 'utf8')).join('\n').replace(

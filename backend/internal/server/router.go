@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/abusepolicy"
 	"foldex/internal/auth"
 	"foldex/internal/backup"
 	"foldex/internal/backupstatus"
@@ -83,9 +84,22 @@ type Deps struct {
 	// route groups mount. AuthMiddleware is required whenever AuthEnabled is true.
 	AuthHandler  *auth.Handler
 	AdminHandler *auth.AdminHandler
+	// AuthRepo is the SAME repository the handlers above were built with, not a
+	// second one over the same pool. The audit trail's writer and the
+	// blocklist's reader both live on it, and two instances would be two
+	// prepared-statement caches for one table — harmless today and exactly the
+	// kind of duplicate that drifts. Nil unmounts content auditing and the
+	// blocklist gate, which is what the router-level tests want.
+	AuthRepo *auth.Repository
 	// PolicyHandler serves the owner-configurable instance rules. Nil leaves the
 	// routes unmounted and every rule at its compiled-in floor.
-	PolicyHandler  *policy.Handler
+	PolicyHandler *policy.Handler
+	// AbusePolicy is the live rate-limit policy (ADR-47 / SDD-ABUSE-DEFENSE).
+	// It is read per request so an owner tightening a limit does not have to
+	// restart the instance being defended. Nil — the zero-value Deps every
+	// router test uses — enforces the COMPILED DEFAULTS, never "no limit": an
+	// unwired dependency must not switch a defence off silently.
+	AbusePolicy    *abusepolicy.Cache
 	AuthMiddleware *auth.Middleware
 	FolderHandler  *folders.Handler
 
@@ -138,6 +152,27 @@ func New(d Deps) http.Handler {
 			"the proxy it names is NOT trusted, so client addresses behind it "+
 			"will be recorded as the proxy's own", "entry", logsafe.String(entry))
 	}
+	// Say out loud who this instance believes, at INFO, on every boot.
+	//
+	// The warning below only fires when the list is EMPTY, so the far more
+	// common question — "we DO have a value; is it the right one?" — had no
+	// answer in the logs at all. Answering it meant reading docker-compose.yml,
+	// then .env, then the container's environment, and an investigation in this
+	// repo lost real time to exactly that: a trail line reading
+	// `trusted=false` was diagnosed as a missing default that had in fact been
+	// configured for a year, and the SDD carried the wrong conclusion until
+	// someone checked the running process.
+	//
+	// The set is printed as parsed, not as configured, so a CIDR that widened
+	// under parsing is visible as what it became.
+	if len(trustedNets) > 0 {
+		nets := make([]string, 0, len(trustedNets))
+		for _, n := range trustedNets {
+			nets = append(nets, n.String())
+		}
+		d.Logger.Info("trusted reverse proxies: X-Forwarded-For is believed ONLY from these",
+			"networks", strings.Join(nets, ","), "count", len(trustedNets))
+	}
 	// Empty on a network-reachable bind almost always means a proxy in front
 	// that nobody told us about — and then EVERY request is attributed to that
 	// proxy, collapsing the per-IP login bucket into one global budget where
@@ -149,6 +184,23 @@ func New(d Deps) http.Handler {
 			"rate limits will apply to all users as one")
 	}
 	r.Use(trustedProxyRealIP(trustedNets))
+	// isTrustedProxy is the CIDR test both the block rail and this file need.
+	isTrustedProxy := func(ip string) bool {
+		parsed := net.ParseIP(ip)
+		return parsed != nil && containsIP(trustedNets, parsed)
+	}
+	// The permanent blocklist (ADR-46). Mounted immediately after the address is
+	// resolved and BEFORE routing, so a blocked caller reaches no handler; and
+	// after RequestID would be wrong only in that a refused request would take a
+	// number it never uses.
+	var blocklist *auth.Blocklist
+	if d.AuthRepo != nil {
+		blocklist = auth.NewBlocklist(d.AuthRepo.BlockedIPs)
+		r.Use(blocklistGate(blocklist))
+		if d.AdminHandler != nil {
+			d.AdminHandler.WithBlocklist(blocklist, isTrustedProxy)
+		}
+	}
 	r.Use(middleware.RequestID)
 	if d.Trace != nil {
 		r.Use(d.Trace)
@@ -217,8 +269,15 @@ func New(d Deps) http.Handler {
 	// Both public share routes resolve with NO session, so a numeric id there
 	// is an enumeration oracle across every tenant — see ADR-32. Off unless the
 	// operator opts in for the sake of already-shared /go/42 links.
-	redirect.NewHandler(linksRepo, d.Config.PublicNumericIDs).Mount(r)
-	notes.NewPublicHandler(notesRepo, d.Config.PublicNumericIDs).Mount(r)
+	// A Group, not r.Use: chi requires every middleware to be registered before
+	// any route on the same mux, and /healthz is already registered above. The
+	// narrower scope is what we want anyway — the coalescer decides nothing
+	// outside these two public surfaces.
+	r.Group(func(pub chi.Router) {
+		pub.Use(newClickCoalescer(d.AbusePolicy).middleware)
+		redirect.NewHandler(linksRepo, d.Config.PublicNumericIDs).Mount(pub)
+		notes.NewPublicHandler(notesRepo, d.Config.PublicNumericIDs).Mount(pub)
+	})
 	if fileHandler != nil {
 		// Public note HTML references these exact URLs. This one narrow
 		// UUID-keyed read is deliberately session-less; all other object
@@ -254,6 +313,58 @@ func New(d Deps) http.Handler {
 				pr.Use(bootstrapPrincipal(d.Pool, d.Logger))
 			}
 
+			// The authenticated write quota (SDD-ABUSE-DEFENSE §5.3). Directly
+			// below principal resolution, because it keys on the principal;
+			// above everything else, because a request it refuses must cost
+			// nothing further. No role is exempt, the owner included.
+			// The recorder is what makes an API-quota lockout visible in the
+			// anomaly panel; without it a throttled principal is a 429 in the
+			// access log and nothing in the trail. Nil when no repository is
+			// wired: the quota still enforces, it just says nothing.
+			pr.Use(newAPIQuota(d.AbusePolicy, quotaAuditor(d.AuthRepo, d.Logger)).middleware)
+
+			// Content auditing (ADR-46). Inside the principal group so the
+			// actor is resolved, and above every content route so a route
+			// added later is covered without anyone having to remember — the
+			// same reason credential redaction lives at the root log handler
+			// rather than at each call site. It records nothing for a method
+			// or route pattern outside contentAuditActions, so mounting it
+			// broadly costs a map lookup on mutations only.
+			if d.AuthRepo != nil {
+				pr.Use(contentAudit(func(r *http.Request, rec auth.AuditRecord) {
+					// WithoutCancel, not the request context. The handler has
+					// already committed by the time this runs, so a client that
+					// hangs up after a successful DELETE would otherwise take
+					// the audit row with it — cancelled context, write aborted,
+					// nothing but a log line left. That is not a lost log
+					// entry, it is a way to delete a row without being
+					// recorded, available to anyone who closes the connection
+					// fast enough. The deadline keeps a hung database from
+					// holding the goroutine open indefinitely.
+					ctx, cancel := context.WithTimeout(
+						context.WithoutCancel(r.Context()), auditWriteTimeout)
+					defer cancel()
+					if err := d.AuthRepo.Audit(ctx, rec.WithRequest(r)); err != nil {
+						d.Logger.Error("content audit write", "err", err, "action", rec.Action)
+					}
+				}))
+				// The caller reading their OWN activity. Not under /admin:
+				// this needs no administrative permission and must work for a
+				// viewer, and it is the only projection that returns the
+				// subject column.
+				if d.AuthHandler != nil {
+					// RejectAPIToken for INV-023's reason: a token is scoped to
+					// CONTENT, and this feed carries the account's sign-in
+					// ORIGINS — the addresses and devices it was used from.
+					// That is account metadata, which is why every other
+					// surface returning it (/api/admin, /api/settings, the
+					// session half of /api/auth) refuses a bearer credential
+					// too. A token pasted into an extension's configuration
+					// must not read the owner's movements.
+					pr.With(authgate.RejectAPIToken).Get("/activity", d.AuthHandler.ListOwnActivity)
+				}
+			}
+
 			if d.AdminHandler != nil {
 				// RequireAdmin answers 404 (not 403) for a non-admin — see
 				// auth.Middleware.RequireAdmin. With AUTH_ENABLED=0 the bootstrap
@@ -274,6 +385,20 @@ func New(d Deps) http.Handler {
 					}
 					ar.Use(authgate.RejectAPIToken)
 					d.AdminHandler.Mount(ar)
+
+					// ADR-47 — os limites de abuso e o painel de anomalias.
+					// Construído aqui pela razão do backupstatus: precisa só do
+					// pool, do hook de auditoria e dos grants.
+					//
+					// O cache é o MESMO objeto que a cota e o login leem
+					// (d.AbusePolicy), e isso é o que faz o Invalidate() do PUT
+					// significar alguma coisa. Um cache próprio aqui compilaria,
+					// passaria nos testes, e deixaria a tela salvando um valor
+					// que só entraria em vigor depois do TTL — o tipo de defeito
+					// que se manifesta como "salvei e não mudou nada".
+					auth.NewAbuseHandler(auth.NewRepository(d.Pool),
+						abusepolicy.NewRepository(d.Pool), d.AbusePolicy,
+						d.Logger, d.AdminHandler.AuditPolicyChange, grants).Mount(ar)
 					if d.PolicyHandler != nil {
 						ar.Route("/policy", d.PolicyHandler.Mount)
 					}

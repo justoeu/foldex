@@ -1539,4 +1539,352 @@ segurança do ADR-43 (uma sessão admin comprometida não pode reduzir a proteç
   agente 40→42 (lê `backup_schedule`, escreve o heartbeat).
 
 Detalhe em [`docs/SDD-OPS-BACKUP.md`](./SDD-OPS-BACKUP.md) §6.1. Status: **Aceito ·
-implementado (PR6)**.
+implementado (PR6) · vocabulário revisado pelo ADR-45**.
+
+### ADR-45 — Um vocabulário de agendamento para os quatro jobs
+
+O ADR-44 acertou a divisão de autoridade e errou a forma do documento: deu a cada job um
+vocabulário próprio — `dump` só `times[]`, `drill` só `time`+`weekday`, `mirror` só
+`interval_min`, `user_zip` só `enabled`+`time` — e `ValidateJobConfig` recusava qualquer
+campo "estrangeiro". O custo apareceu na primeira demanda de uso: **nenhum job escolhia
+dias da semana de verdade** (o drill escolhia UM dia; os outros três, nenhum), não existia
+"segunda, quarta e sexta", e o formulário precisava de quatro componentes de campos que
+não compartilhavam nada além do botão de salvar. Quatro vocabulários para quatro jobs
+tornam a superfície quatro vezes maior sem tornar nada mais seguro: a segurança do ADR-44
+está nos PISOS, não na pobreza da forma.
+
+- **Uma forma só**, discriminada por `mode` EXPLÍCITO (`times` | `interval`), nunca
+  inferido: `{mode, times[], weekdays[], interval_min, enabled}`. Modo explícito porque
+  uma linha que carregasse `times` e `interval_min` juntos seria meio-honrada em silêncio,
+  que é exatamente o defeito que os pisos existem para impedir. Os quatro jobs aceitam os
+  dois modos: horários de parede (1..6 por dia) cruzados com um conjunto de dias da
+  semana, ou um intervalo em minutos.
+- **Os pisos continuam compilados e assimétricos**, aplicados nos dois lados (PUT do
+  backend e load do agente, a mesma função): 1..6 horários, intervalo 15..1440 e ≥1 dia
+  para todos; **≥5 dias para o `dump`**, porque o dump é a proteção da instância e não uma
+  conveniência de produto; e `user_zip` segue sendo o único que uma linha desliga. O
+  trade-off aceito e nomeado: o piso "dump todo dia" virou "dump em ≥5 dias" — a agenda
+  ganhou expressividade e o piso cedeu um degrau, deliberadamente, com o diálogo de
+  confirmação do INV-122 cobrindo toda mudança que REDUZ a frequência.
+- **O heartbeat passa a publicar o baseline da env estruturado** (`JobReport.baseline`),
+  não só a string de display. Sem isso a tela não conseguia cumprir a promessa do ADR-44 —
+  "a env é a primeira opção, o banco é a sobrescrita" —, porque o formulário não tinha de
+  onde carregar a agenda da env e semeava com constantes. Com ele, um job sem linha abre
+  preenchido com o que a env sempre teve, e salvar é o ato que cria a sobrescrita.
+- **A matemática de agendamento sobe de `Anchor` para `Timing`.** Um horário sozinho não
+  sabe mais em que dias dispara; `Anchor` fica sendo só o parser da sintaxe da env. O
+  `MaxGap` passa a enumerar a grade da semana (dias × horários) e devolver o maior vão com
+  wraparound, o que **substitui** os três casos especiais anteriores: um horário num único
+  dia dá 7 dias naturalmente, sem o galho "se alguma âncora é semanal, devolve a maior".
+- Migração 000043 normaliza as linhas existentes e `RequiredSchemaVersion` vai 42→43 nos
+  dois gates. A leitura ainda normaliza documentos legados em memória, para que uma linha
+  escrita à mão em SQL seja honrada em vez de degradar em silêncio para a baseline. A
+  migração e o `normalized` da leitura precisam concordar em TODA forma legada: enquanto
+  discordaram, um `user_zip` que o operador havia desligado voltava a rodar (a migração
+  mantinha a agenda ao lado do `enabled:false`, o validador recusava o documento inteiro e
+  o job caía na baseline da env, que roda).
+- **O formulário nunca abre num documento que o servidor recusaria** — o corolário que o
+  INV-173 detalha. A env é isenta dos pisos, então a baseline pode estar abaixo deles e é
+  alargada para os sete dias (mantendo os horários) ao semear; o rascunho é gordo para que
+  trocar de modo não abra campos vazios; e a chave de remontagem do editor inclui a
+  CHEGADA da baseline, sem o que o primeiro fetch com `agent: null` semeava de constantes
+  e o Salvar seguinte gravava a opinião da tela por cima da agenda do operador.
+
+- **O heartbeat diz qual FORMA de documento o agente sabe ler.** `RequiredSchemaVersion`
+  é um PISO, não uma igualdade: um agente compilado contra 42 sobe contra o schema 43 e lê
+  as linhas unificadas honrando `times` e ignorando `weekdays` inteiro — roda MAIS vezes do
+  que a agenda pede, que é a direção segura, e não diz nada. A string de versão não resolve
+  (ela diz o que foi shipado, não o que o processo entende), então o heartbeat carrega
+  `schema_version`, a constante do binário do agente, e o `GET /schedule` devolve
+  `agent_schema_version`, a do backend. A banda COMPARA os dois em vez de re-derivar a
+  política (INV-138); ausente lê como zero, e zero não é igual.
+
+Detalhe em [`docs/SDD-OPS-BACKUP.md`](./SDD-OPS-BACKUP.md) §6.1. Status: **Aceito ·
+implementado (PR7)**.
+
+### ADR-46 — A trilha de auditoria cobre CONTEÚDO, ganha contexto de origem e uma lista de bloqueio
+
+**Contexto.** A migração `000033` criou `audit_log` com duas recusas escritas no
+próprio comentário, e as duas envelheceram de formas diferentes.
+
+A primeira: *"Content is deliberately out of scope"* — um clique já tem `click_log`,
+e misturar os dois enterraria os eventos de segurança que a tabela existe para
+mostrar. O efeito prático, três anos depois, é uma tela de auditoria onde só
+aparecem logins. Criar, editar e excluir link, nota, pasta e tag — a atividade
+inteira do produto — não deixa rastro nenhum. Numa investigação, "quem apagou
+isto" é a pergunta mais frequente e a trilha não sabe responder.
+
+A segunda: *"There is no ip or user_agent column"*, porque `X-Forwarded-For` é
+forjável num bind direto e uma coluna alimentada por ele seria ao mesmo tempo
+**autoritativa na aparência e controlada pelo atacante** — a pior combinação
+para uma tabela que se consulta durante um incidente. Esse argumento continua
+correto, mas o que ele proíbe é uma coluna que **não sabe dizer de onde veio o
+valor**. Não proíbe registrar o endereço que o servidor de fato observou, ao
+lado de uma flag dizendo se algum proxy configurado respondeu por ele.
+
+**Decisão.**
+
+1. **A trilha passa a ter duas CATEGORIAS derivadas, `identity` e `content`**, e
+   a categoria decide o **escopo de leitura**. Derivadas em
+   `internal/auth/audit_vocab.go`, nunca armazenadas: uma classificação gravada
+   no momento da escrita congelaria o significado daquele dia, e todo
+   refinamento posterior valeria só para linhas futuras. `AuditCategory` falha
+   **para o lado de conteúdo** — uma ação que ninguém classificou é tratada como
+   se carregasse dado privado, porque o custo de errar assim é uma linha faltando
+   numa tela, e o custo do outro default é um vazamento entre contas.
+
+2. **O split de leitura é SQL, não disciplina.** `audit_log` ganha `subject` — o
+   rótulo humano da linha tocada — e existe exatamente **uma** consulta que o
+   projeta: `ListOwnActivity`, escopada em `actor_id = o chamador`. A projeção
+   administrativa (`adminProjection`) não seleciona a coluna, e além disso
+   apaga `actor_email`, `target_email` e `detail` das linhas de conteúdo **no
+   próprio SELECT**, via `CASE WHEN action = ANY($content)`. O administrador
+   recebe `actor_ref`, um id opaco. `TestAuditSubjectIsSelectedByExactlyOneQuery`
+   varre o AST de todo fonte de produção e falha se qualquer outra declaração —
+   função **ou constante de pacote** — nomear a coluna num SELECT sobre
+   `audit_log`. A primeira versão do guard só andava por `FuncDecl` e passou com
+   a coluna adicionada direto na constante da projeção: a edição mais provável
+   era justamente a que ele não enxergava.
+
+   **O que o pseudônimo protege, e o que não protege.** Ele remove a exposição
+   **incidental** — nomes ao lado de atividade de conteúdo numa tela que o
+   administrador abre por outros motivos — e permite correlacionar linhas entre
+   si sem nomear ninguém. Não defende contra um administrador determinado: a
+   superfície de administração entrega ids de usuário em outros lugares (precisa,
+   para endereçar um PATCH), e numa instância self-hosted quem tem shell tem o
+   banco. O cartão "contas mais ativas" nomeia contas mas deliberadamente **não
+   carrega id**, então não serve de tabela de-para. Qualquer coisa mais forte que
+   isso seria decoração.
+
+3. **`ip`, `ip_trusted` e `user_agent` são um CONJUNTO.** `ip` é o `RemoteAddr`
+   depois de `server.trustedProxyRealIP`, e `ip_trusted` só é verdadeiro quando
+   aquele middleware reescreveu o valor a partir de um par dentro de
+   `TRUSTED_PROXY_IPS` — a flag viaja no contexto (`auditctx.MarkTrustedIP`)
+   porque uma linha depois o `RemoteAddr` já foi sobrescrito e a evidência sumiu.
+   Sem proxy configurado toda linha é o par cru e `ip_trusted` é falso: honesto,
+   e a tela mostra a diferença em vez de escondê-la. `AuditRecord.WithRequest` é
+   um helper único porque copiar duas das três linhas recria exatamente a forma
+   que a `000033` recusou.
+
+4. **Eventos de conteúdo são gravados por um MIDDLEWARE**, não por chamadas em
+   cada handler — o mesmo raciocínio que põe a redação de credenciais no handler
+   raiz de log: cobertura que depende de todo autor lembrar é cobertura com
+   buracos, e os buracos são invisíveis (uma entrada faltando parece um dia
+   quieto). O mapa é fechado e chaveado pelo **padrão de rota** do chi, não pelo
+   caminho. Só 2xx é gravado: uma escrita recusada não mudou nada. O rótulo é
+   opcional por construção — o handler o anota por `auditctx.SetRequest`, e um
+   handler que esqueça ainda produz a linha, perdendo só a coluna do rótulo.
+
+5. **Lista de bloqueio permanente**, atrás da permissão `instance.ip_block`,
+   **owner-only e TRAVADA**. O argumento é o do `instance.backup_schedule` levado
+   à borda de rede, um passo além: é a única permissão cujo mau uso deixa a
+   instância inalcançável — inclusive para quem a detém. Os trilhos em
+   `ValidateBlockIP` recusam o endereço de onde a requisição veio (o que dispara
+   na prática, porque o operador investigando uma rajada está com frequência
+   atrás do mesmo NAT), o loopback (é como se administra localmente, e é o
+   caminho inteiro com `AUTH_ENABLED=0`) e qualquer proxy confiável configurado
+   (atrás do nginx toda requisição chega dele quando a cadeia não está como o
+   operador pensa — e a tela teria acabado de mostrar esse endereço como a origem
+   mais movimentada). Cada trilho responde com **seu próprio código**: "inválido"
+   na frente de um controle desses não é algo sobre o que agir.
+
+   O cache de enforcement **falha ABERTO**. É a inversão deliberada da regra
+   usual, pelo mesmo motivo dos trilhos: isto é um filtro de incômodo, não uma
+   fronteira de autenticação — quem decide o que alguém pode fazer é o middleware
+   de sessão. Falhar fechado transformaria uma oscilação do banco numa
+   indisponibilidade total, e entre os trancados do lado de fora estariam as
+   pessoas que poderiam consertá-la.
+
+6. **Ordenação crescente é uma CONSULTA diferente**, com o cursor invertido
+   (`id > $n`), não a página invertida no cliente. Inverter no cliente ordenaria
+   só as cinquenta linhas já carregadas, então "mais antigos" mostraria os mais
+   antigos **dos mais recentes**: um controle que parece funcionar e responde
+   outra pergunta.
+
+**Trade-offs aceitos.**
+
+- A trilha cresce com o tráfego de conteúdo, não só com eventos de segurança —
+  que é exatamente o que a `000033` quis evitar. A mitigação é a categoria: os
+  filtros da tela separam as duas metades, e a retenção de 90 dias continua.
+- Uma escrita de auditoria a mais por mutação aceita. É uma linha por requisição
+  que já escreveu no banco, num caminho que ninguém executa em laço.
+- `subject` é a única coluna da instância que guarda conteúdo fora das tabelas de
+  conteúdo. O guard de AST é o preço de admiti-la.
+- Sem GeoIP: as origens mostram endereço e dispositivo, não cidade. Uma base
+  MaxMind é dependência, licença e cadeia de suprimentos novas por uma coluna
+  decorativa.
+
+Migrações `000044` (contexto) e `000045` (`ip_block`);
+`db.RequiredSchemaVersion` 43 → 45. Status: **Aceito · implementado**.
+
+### ADR-47 — Defesa contra abuso: largura em vez de profundidade, cota autenticada, tetos configuráveis e um painel que relata sem agir
+
+> Implementa `docs/SDD-ABUSE-DEFENSE.md` (v1.1). Emenda o ADR-46, cujo painel de
+> risco e cuja lista de bloqueio passam a ter um consumidor a mais.
+
+**Contexto.** A conversa começou num defeito de configuração e virou uma pergunta
+de projeto: *olhar só para o IP não é frágil, dado que empresas põem centenas de
+pessoas atrás de um NAT?* A sugestão foi compor a chave do limitador com
+`IP + e-mail + User-Agent`.
+
+As duas metades da pergunta têm respostas opostas, e é isso que torna o item
+interessante.
+
+O levantamento que precedeu a decisão mediu onze limitadores, os tetos reais de
+cada um, a ausência total de `limit_req` no nginx, o `MaxConns = 16` do pool, e
+as duas superfícies sem controle nenhum. Nada aqui foi presumido; §3 do SDD é a
+tabela.
+
+**Decisão.**
+
+1. **Nenhuma entrada controlada pelo cliente compõe uma chave de rate limit.**
+   O `User-Agent` é escrito pelo cliente: com a chave em `IP + UA`, o atacante
+   manda um UA por tentativa e ganha um orçamento inteiro por requisição. O balde
+   deixa de existir enquanto continua parecendo existir. É exatamente o defeito
+   que `server.trustedProxyRealIP` já documenta para o `X-Forwarded-For`, e
+   reintroduzi-lo numa chave nova depois de tê-lo corrigido numa seria a pior
+   regressão possível. IP e e-mail passam no teste porque nenhum dos dois é
+   grátis de trocar: o IP custa infraestrutura, e o e-mail é o alvo — trocá-lo
+   abandona a conta que se quer invadir. Registrar ≠ confiar: o UA continua na
+   trilha (INV-176), onde é útil justamente por não ter autoridade nenhuma.
+
+2. **O balde de IP conta LARGURA, não profundidade.** Os dois baldes do login
+   respondem perguntas diferentes e contavam a mesma coisa. "Alguém está
+   martelando ESTA conta?" continua sendo falhas consecutivas por conta. "Esta
+   origem está varrendo MUITAS contas?" passa a ser **contas distintas falhadas
+   por origem**. Um escritório inteiro atrás de um NAT errando as próprias senhas
+   nunca encosta no balde de IP — cada pessoa é um e-mail com o próprio
+   orçamento — e um spray tropeça na décima conta em vez da vigésima tentativa.
+   Isto resolve o NAT e a lacuna G1 ao mesmo tempo, sem enfraquecer nada: a
+   defesa contra força bruta em conta específica é do balde de e-mail, que não
+   muda. Trade-off declarado: quem martela UMA conta de um só IP deixa de
+   tropeçar aos 20 e passa a ser segurado aos 5 pelo balde de e-mail — parado
+   antes, não depois.
+
+3. **A API autenticada ganha cota por principal.** Era a lacuna mais séria e a
+   menos visível: uma sessão válida não tinha limite nenhum contra um pool de 16
+   conexões, então um usuário hostil — ou um script bugado de um legítimo —
+   saturava a instância e todos os outros tenants sentiam. Por principal e não
+   por rota, porque um laço espalhado por vinte endpoints fica dentro do limite
+   em cada um e mesmo assim segura o pool. Só verbos mutantes. Rotas caras
+   (import, restore, screenshot, refresh de preview) ganham um segundo balde,
+   menor e por hora. 429 com `Retry-After`, nunca desconexão. **O owner não é
+   isento** — uma isenção seria uma conta capaz de derrubar a instância, e a
+   primeira pessoa a tropeçar nela seria o próprio operador rodando um import.
+
+4. **`limit_req` no nginx, em três zonas estreitas.** É a única camada que roda
+   antes de qualquer alocação do backend — antes do bcrypt, antes do pool, antes
+   do piso de duração do login — e também a mais burra: conhece um endereço e um
+   path, então só pode decidir "rápido demais", nunca "quem". Uma zona apertada
+   (2r/s) nas sete rotas que ADIVINHAM algo, uma frouxa (30r/s) no resto de
+   `/api/auth/*` porque o SPA legitimamente faz rajada ali, e uma pública
+   (20r/s) em `/go/` e `/n/`. `/api/*` inteiro fica de fora de propósito: a API
+   autenticada tem rajada legítima e irregular, e o backend tem contexto para
+   distinguir usuário de laço.
+
+5. **A escrita pública é coalescida, não bloqueada.** Cada acerto em `/go/` e
+   `/n/` escrevia uma linha em `click_log`, o que faz de um laço sobre um slug
+   conhecido uma escrita ilimitada por anônimo. Contagem de clique é métrica de
+   produto, não contabilidade: perder o segundo clique do mesmo visitante em dez
+   segundos não muda nada que alguém leia, e remove o amplificador. O estado de
+   dedup é **efêmero e em memória** — persistir o endereço do visitante numa
+   tabela de cliques é uma decisão de privacidade que este trabalho não precisa
+   tomar.
+
+6. **Os tetos são configuráveis, com pisos dos DOIS lados.** O SDD fixou a forma
+   de cada controle e deixou a magnitude aberta, porque magnitude depende da
+   instância: cinco pessoas num servidor doméstico e quarenta atrás de um NAT não
+   são o mesmo tráfego. Diferente do `internal/policy`, onde um piso de senha só
+   é perigoso quando baixo, um rate limit é perigoso nas duas pontas — alto
+   demais deixa de ser controle, baixo demais **vira** o ataque. Escrita
+   owner-only por permissão travada (`instance.rate_limits`), pela mesma razão
+   do `instance.ip_block`: é a permissão cujo uso errado torna a instância
+   inalcançável para quem a detém.
+
+7. **Um valor fora de faixa reverte o CAMPO, nunca o documento.** É a lição do
+   INV-169 aplicada por construção. No `internal/policy`, um `Validate` que falha
+   devolve o default inteiro, e apertar um limite fez uma instância perder
+   silenciosamente a allowlist do Google junto. Aqui `Sanitize` troca exatamente
+   o knob fora da faixa.
+
+8. **"Dinâmico" significa RECARREGAR, não se auto-ajustar.** Os valores tomam
+   efeito sem restart — a tela que os define está na mesma instância que está
+   sendo defendida, e não se pode pedir a um operador que faça deploy no meio de
+   um incidente. O cache falha **estático**: uma falha do banco não decide
+   quantas tentativas uma origem ganha; segue valendo a última política boa, e os
+   defaults compilados antes do primeiro load.
+
+9. **O painel de anomalias RELATA; o bloqueio continua sendo do humano.** Ele
+   ordena origens por sinal — varredura de contas, martelo numa conta, origem já
+   limitada — com a evidência em números e o botão de bloquear pré-preenchido.
+   Nunca dispara sozinho, e o INV-178 é a razão: o modo de falha desse controle
+   não é "um bloqueio que não funciona", é uma instância que ninguém alcança,
+   trancada de madrugada por um heurístico cuja entrada o atacante fornece, com
+   o operador do lado de fora. O painel também não mostra e-mails, só a
+   **contagem** de contas distintas: o alvo já vive na timeline da trilha, e
+   repeti-lo aqui criaria uma segunda superfície de leitura que o INV-175 teve o
+   trabalho de reduzir a uma.
+
+10. **A recomendação é informada, não automática.** Ao lado de cada knob a tela
+    mostra o que a trilha de fato observou em 30 dias. É o que permite ajustar
+    com base em dado em vez de em intuição, sem entregar a decisão a um
+    heurístico. Quando não há dado, a tela diz "sem dado" — inventar um número
+    aqui seria pior que não ter nenhum.
+
+**O que foi recusado, e por quê.** Fingerprinting de dispositivo (a decisão 1
+vestida de solução); CAPTCHA (um terceiro na tela de login de uma instância
+self-hosted, com custo de privacidade e acessibilidade que o ganho não paga);
+Redis ou limitador distribuído (um nó — mas com um corolário: se um dia houver
+segundo nó, os limitadores em memória viram *por nó* e todos os tetos dobram, e
+isso tem de ser item de bloqueio do ADR que introduzir o segundo nó, não uma
+descoberta); banir por ASN ou geografia; `limit_conn` no nginx (com HTTP/2 conta
+conexão e não requisição, e engana mais do que informa); e **bloqueio automático
+de IP**, pela decisão 9.
+
+**Fora de escopo, declarado.** DDoS volumétrico. Não é defensável nesta camada e
+fingir que é seria pior que admitir — resolve-se upstream, fora da máquina do
+operador. O que está no escopo é o que a maioria das pessoas quer dizer com
+"DDoS" na prática: exaustão de recursos com pouco tráfego, amplificação, e
+negação por lockout.
+
+**Detalhes que só a implementação fixou.**
+
+- `attemptlimit` ganhou o modo conjunto **no mesmo tipo**, não numa estrutura
+  paralela: os dois modos compartilham a reserva, a aritmética de lockout e o
+  sweep, que são as três garantias difíceis de acertar. `MaxMembersPerKey = 128`
+  fica ACIMA de todo teto configurável (100) porque um cap abaixo imporia em
+  silêncio um limite que o dono não escolheu e não consegue ver — a falha do
+  INV-169 — e um conjunto cheio TRANCA, porque cheio é o único estado em que o
+  limitador perdeu a capacidade de distinguir largura de ruído.
+- A cota **não** reusou `attemptlimit`, e a justificativa é obrigatória porque o
+  repo tem regra contra segunda implementação paralela: aquele conta falhas
+  CONSECUTIVAS e `CommitSuccess` zera o contador, então uma requisição aceita
+  apagaria o registro inteiro; não tem recarga, então não distingue rajada
+  legítima de laço. `internal/pkg/quota` é um token bucket, que é outra coisa.
+- A coalescência viaja pelo CONTEXTO (`internal/pkg/clickctx`) porque as duas
+  pontas não se encontram de outro jeito: a identidade do visitante só existe na
+  borda HTTP e o id da entidade só existe no meio da transação do repositório. É
+  o `auditctx` ao contrário. Contexto ausente significa GRAVAR.
+- A severidade das anomalias usa o vocabulário da TRILHA (`warning`/`critical`),
+  não um par próprio. A primeira versão do contrato dizia `warn` e a UI ganhou
+  uma função só para traduzir — dois painéis na mesma tela produzindo o mesmo
+  badge por caminhos diferentes é a forma exata do INV-159.
+- **Não há migração nenhuma**, e isso é um resultado medido. O ADR foi desenhado
+  com uma 000046 criando `audit_log_ip_time_idx` em `(ip, created_at DESC)`;
+  `EXPLAIN ANALYZE` sobre uma trilha de 1,2 M linhas mostrou as SEIS consultas
+  novas escolhendo `audit_log_action_created_idx`, porque todas carregam uma
+  IGUALDADE em `action` ao lado do intervalo em `created_at` — exatamente a
+  forma do índice da 000033, e exatamente o que o comentário da 000044 previu. O
+  índice não usado custava +43 % em INSERT em lote e 18 MB numa tabela de
+  102 MB. Foi removido antes de shipar.
+
+**Consequências.**
+
+- Existe um caminho novo de negação (429) que antes não existia, e ele é a
+  primeira coisa a olhar quando alguém disser "o Foldex ficou lento".
+- **Critério de reversão explícito:** se a trilha registrar lockout de conta que
+  não estava sob ataque, a mudança está errada e volta. Um limitador que tranca
+  usuário legítimo é pior que um frouxo — nega serviço de graça e ensina o
+  operador a afrouxá-lo até virar decoração.
+- A tela de auditoria do ADR-46 é o instrumento de verificação, e isso não é
+  coincidência: ela foi construída para responder exatamente estas perguntas.
