@@ -1,6 +1,6 @@
 # SDD — Defesa contra abuso: rate limiting, força bruta e exaustão de recursos
 
-> Software Design Document. Status: **Draft · v1.0 · 2026-08-28**
+> Software Design Document. Status: **v1.1 · 2026-08-28** (v1.0 no mesmo dia; §4.5 corrigida na implementação, §7 estendida)
 > Owner: foldex
 > Related ADRs: **ADR-30/31/37** (sessões, convites, segundo fator), **ADR-46** (trilha de auditoria e lista de bloqueio) — em `docs/ARCHITECTURE.md`.
 > Invariantes tocados: INV-007, INV-010, INV-041, INV-089, INV-155, INV-176, INV-178.
@@ -240,18 +240,52 @@ Estreito de propósito:
 instalação atrás de outro proxy, `limit_req_zone $binary_remote_addr` limita o proxy —
 mesmo defeito do G5, uma camada acima.
 
-### 4.5 `TRUSTED_PROXY_IPS` ganha um default que corresponde ao compose
+### 4.5 `TRUSTED_PROXY_IPS` — a premissa original estava ERRADA, e o que sobra é outra coisa
 
-**Decisão: aceita.**
+**Decisão: revista. Ver a correção abaixo.**
 
-G5 é acidental e afeta toda instalação padrão: o compose põe nginx na frente, e a
-configuração que faria o backend acreditar nele vem vazia. O aviso de boot existe mas é
-silencioso em bind loopback — que é justamente o default.
+A v1.0 deste documento propôs "dar ao `TRUSTED_PROXY_IPS` um default que corresponda ao
+compose", partindo do smoke test que registrou toda requisição vinda pelo nginx como
+`192.168.107.5` com procedência **não confiável**. Ao implementar, a premissa foi
+verificada e **não sobreviveu**:
 
-Proposta: o `.env.example` e o compose passam a trazer a rede do compose como valor
-padrão, com comentário explicando o que ele faz e quando mudar. **Não** deduzir a rede em
-runtime: adivinhar em quem confiar é a decisão que o INV-007 tira das mãos do código de
-propósito.
+- `docker-compose.yml` **já** traz
+  `TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}`,
+  e traz desde o PR3 do ADR-30 (commit `67650bb`) — não desde este trabalho.
+- O container em execução **tem** esse valor. `192.168.107.5` está dentro de
+  `192.168.0.0/16`, portanto o backend **confia** no nginx.
+- `web/nginx.conf` define `X-Forwarded-For $proxy_add_x_forwarded_for` nas quatro
+  locations proxiadas.
+
+Ou seja: **G5 já estava fechada para a stack padrão**, e a linha da trilha que originou
+esta investigação tem outra causa — muito provavelmente uma requisição feita direto à
+porta do backend, sem passar pelo nginx, onde `trusted=false` é a resposta correta.
+
+Registrar isso importa mais do que teria importado acertar de primeira. O documento inteiro
+se apresenta como "estado medido, não presumido" (§3), e este item era o único que não
+havia sido medido — foi inferido de uma linha de log. A conclusão errada era plausível,
+citava um endereço real e teria produzido um PR que "corrigia" algo já correto, deixando
+para trás um `.env.example` com duas fontes de verdade para a mesma variável.
+
+**O que sobra, e é menor:** o default é **largo**. Ele confia em qualquer par dentro das
+faixas RFC1918, não só no nginx. Numa máquina cuja porta do backend seja alcançável pela
+LAN, qualquer host da LAN pode forjar `X-Forwarded-For` e tanto escapar do próprio balde
+quanto imputar o custo ao endereço de outra pessoa. Não é o defeito descrito acima, e a
+mitigação também é outra: o `BACKEND_BIND` continua em `127.0.0.1` por padrão, que é o
+que torna esse cenário uma configuração deliberada e não o caminho comum.
+
+**O que fica como trabalho real, portanto:**
+
+1. O boot passa a **registrar o conjunto efetivo de proxies confiáveis** em nível INFO.
+   Hoje só existe aviso quando a lista está VAZIA num bind não-loopback; "em quem esta
+   instância acredita?" só é respondível lendo dois arquivos e o ambiente do container —
+   que foi exatamente o que fez esta investigação demorar.
+2. **Não** deduzir a rede em runtime, e isso não muda: adivinhar em quem confiar é a
+   decisão que o INV-007 tira das mãos do código de propósito.
+3. Estreitar o default para a sub-rede do compose foi **considerado e recusado**: a rede
+   `foldex` é `external: true`, criada pelo operador, e sua sub-rede varia por máquina.
+   Um default que só funciona numa faixa específica é um default que quebra em silêncio
+   para quem não a tem — trocaria um risco estreito por uma falha comum.
 
 ---
 
@@ -366,14 +400,22 @@ madrugada.
 
 | PR | Escopo | Risco | Depende |
 |---|---|---|---|
-| **1** | `TRUSTED_PROXY_IPS` com default do compose + doc (§4.5) | Baixo | — |
+| **1** | Log de boot com o conjunto efetivo de proxies confiáveis + doc (§4.5 revisto) | Baixo | — |
 | **2** | `attemptlimit` conta contas distintas no balde de IP (§5.2) | **Médio** — mexe em autenticação | — |
 | **3** | `limit_req` no nginx para `/api/auth/*` e rotas públicas (§4.4) | Baixo | 1 |
 | **4** | Cota da API autenticada (§5.3) | **Médio** — pode gerar falso positivo | — |
 | **5** | Coalescência de `click_log` (§5.4) | Baixo | — |
 
+PR 6 e PR 7 foram acrescentados depois da v1.0, a pedido:
+
+| PR | Escopo | Risco | Depende |
+|---|---|---|---|
+| **6** | Os tetos viram configuráveis (`internal/abusepolicy` + tela do owner) | Médio | 2, 4 |
+| **7** | Painel de anomalias na trilha + skill `/abuse-audit` | Baixo | 6 |
+
 PR 2 e PR 4 são os que merecem sweep de agentes e testes de concorrência próprios.
-PR 1 é o que resolve o defeito que originou esta conversa e pode ir sozinho, hoje.
+PR 1 deixou de ser "o que resolve o defeito que originou esta conversa" — §4.5 explica
+por quê — e virou o menor dos sete.
 
 ---
 
