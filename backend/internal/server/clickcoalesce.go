@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -28,6 +29,14 @@ const clickCoalesceMaxKeys = 50_000
 // reason quota.evictionSample does: scanning the whole map on every insert
 // would be O(n) exactly when n is largest.
 const clickCoalesceEvictionSample = 64
+
+// clickCoalesceEvictionBatch is how many entries one eviction frees.
+//
+// More than one, because freeing a single slot leaves the very next insert at
+// the ceiling: the sampling scan would then run on every insert for as long as
+// the pressure lasts, which is precisely the period when it can least be
+// afforded. A batch amortises that scan over the whole batch.
+const clickCoalesceEvictionBatch = 32
 
 // visitorKey is the opaque per-process identity of one visitor.
 //
@@ -113,7 +122,18 @@ func (c *clickCoalescer) middleware(next http.Handler) http.Handler {
 		// it, and NormalizeIP is what stops "::ffff:1.2.3.4" being a second
 		// visitor. Without that, the IPv4-mapped form would be a free way to
 		// double every counter.
-		v := c.visitor(clientIP(r))
+		ip := clientIP(r)
+		if ip == "" {
+			// NormalizeIP answers "" for a RemoteAddr it cannot parse. Hashing
+			// that would put every such caller under ONE key, and one of them
+			// would then suppress the clicks of all the others — a coalescer
+			// that loses other people's rows is worse than no coalescer, since
+			// the counter it protects is the thing it just corrupted. No gate,
+			// so these record.
+			next.ServeHTTP(w, r)
+			return
+		}
+		v := c.visitor(ip)
 		gate := func(kind string, id int64) bool { return c.allow(kind, id, v, window) }
 		next.ServeHTTP(w, r.WithContext(clickctx.WithGate(r.Context(), gate)))
 	})
@@ -165,6 +185,10 @@ func (c *clickCoalescer) maybeSweepLocked(now time.Time, window time.Duration) {
 		return
 	}
 	c.lastSweep = now
+	c.dropExpiredLocked(now, window)
+}
+
+func (c *clickCoalescer) dropExpiredLocked(now time.Time, window time.Duration) {
 	for k, seenAt := range c.seen {
 		if now.Sub(seenAt) >= window {
 			delete(c.seen, k)
@@ -184,30 +208,45 @@ func (c *clickCoalescer) makeRoomLocked(now time.Time, window time.Duration) {
 	if len(c.seen) < c.maxKeys {
 		return
 	}
-	for k, seenAt := range c.seen {
-		if now.Sub(seenAt) >= window {
-			delete(c.seen, k)
+	// Only when the periodic sweep did not just run: at the ceiling, repeating
+	// a scan that has already been done this window is a full O(n) pass under
+	// the lock for zero deletions, on every insert — and being at the ceiling
+	// IS the attack this defends against, so that is exactly the wrong moment
+	// to serialise every visitor behind a scan.
+	if now.Sub(c.lastSweep) >= window {
+		c.lastSweep = now
+		c.dropExpiredLocked(now, window)
+		if len(c.seen) < c.maxKeys {
+			return
 		}
 	}
-	if len(c.seen) < c.maxKeys {
-		return
+	// A BATCH, not one entry. Freeing a single slot leaves the next insert at
+	// the ceiling again, so the eviction scan would run once per insert forever.
+	c.evictBatchLocked(clickCoalesceEvictionBatch)
+}
+
+// evictBatchLocked drops up to n of the stalest entries it finds in a bounded
+// sample. Go randomises map iteration order, so the sample is a fresh one each
+// time; being slightly wrong about WHICH entry to drop costs the evicted
+// visitor at most one extra click row.
+func (c *clickCoalescer) evictBatchLocked(n int) {
+	type victim struct {
+		key    coalesceKey
+		seenAt time.Time
 	}
-	var (
-		stalestKey coalesceKey
-		stalest    time.Time
-		n          int
-	)
+	sample := make([]victim, 0, clickCoalesceEvictionSample)
 	for k, seenAt := range c.seen {
-		if n == 0 || seenAt.Before(stalest) {
-			stalestKey, stalest = k, seenAt
-		}
-		n++
-		if n >= clickCoalesceEvictionSample {
+		sample = append(sample, victim{key: k, seenAt: seenAt})
+		if len(sample) >= clickCoalesceEvictionSample {
 			break
 		}
 	}
-	if n > 0 {
-		delete(c.seen, stalestKey)
+	sort.Slice(sample, func(i, j int) bool { return sample[i].seenAt.Before(sample[j].seenAt) })
+	if n > len(sample) {
+		n = len(sample)
+	}
+	for _, v := range sample[:n] {
+		delete(c.seen, v.key)
 	}
 }
 

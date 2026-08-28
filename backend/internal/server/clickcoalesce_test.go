@@ -297,11 +297,70 @@ func TestClickCoalesce_ConcurrentHitsFromOneVisitorWriteOneRow(t *testing.T) {
 		"200 concurrent hits from one visitor produced %d click rows", allowed.Load())
 }
 
-// A nil policy source is the zero-value Deps every router test uses. Coalescing
-// must fall back to the compiled default rather than switching itself off.
+// Coalescing must fall back to the compiled default rather than switching
+// itself off. Both nils are asserted for the reason spelled out in
+// TestAPIQuota_ANilPolicySourceEnforcesTheCompiledDefaults: the typed nil that
+// router.go passes is answered by Cache.Current's nil-receiver guard, and the
+// local `c.pol != nil` check only ever fires for an absent reader.
 func TestClickCoalesce_ANilPolicySourceUsesTheCompiledDefault(t *testing.T) {
 	t.Parallel()
+	want := abusepolicy.Default().ClickCoalesceSeconds()
+
 	var cache *abusepolicy.Cache
 	cc := newClickCoalescer(cache)
-	assert.Equal(t, abusepolicy.Default().ClickCoalesceSeconds(), int(cc.window(context.Background())/time.Second))
+	require.True(t, cc.pol != nil, "a typed nil in an interface is not a nil interface")
+	assert.Equal(t, want, int(cc.window(context.Background())/time.Second))
+
+	var absent policyReader
+	cc = newClickCoalescer(absent)
+	require.True(t, cc.pol == nil)
+	assert.Equal(t, want, int(cc.window(context.Background())/time.Second))
+}
+
+// An address the proxy chain left unresolvable must NOT be coalesced: hashing
+// "" would put every such caller under one key, and the first of them would
+// then suppress the click rows of all the others. A coalescer that loses other
+// people's rows has corrupted the counter it exists to protect.
+func TestClickCoalesce_AnUnresolvableAddressIsNotCoalesced(t *testing.T) {
+	t.Parallel()
+	repo := &countingResolver{}
+	r := chi.NewRouter()
+	r.Use(newClickCoalescer(coalescePolicy(10)).middleware)
+	redirect.NewHandler(repo, true).Mount(r)
+
+	for i := 0; i < 3; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/go/release-notes", nil)
+		req.RemoteAddr = "not-an-address"
+		r.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusFound, rec.Code)
+	}
+
+	clicks, _ := repo.counts()
+	assert.Equal(t, 3, clicks, "an unidentifiable visitor must record, never share a bucket")
+}
+
+// Eviction under ceiling pressure frees a BATCH. Freeing one slot would leave
+// the next insert at the ceiling again, so the sampling scan would run on every
+// insert for as long as the pressure lasts — which is exactly the period when
+// it can least be afforded.
+func TestClickCoalesce_EvictionFreesABatchNotASingleSlot(t *testing.T) {
+	t.Parallel()
+	c := newTestClock()
+	cc := newClickCoalescer(coalescePolicy(10))
+	cc.now = c.now
+	cc.maxKeys = 100
+
+	v := cc.visitor("203.0.113.7")
+	for i := 0; i < 100; i++ {
+		cc.allow("link", int64(i), v, 10*time.Second)
+	}
+	require.Equal(t, 100, cc.len(), "the map should be exactly at its ceiling")
+
+	// Nothing is expired and the sweep already ran this window, so this insert
+	// can only make room by evicting.
+	cc.allow("link", 1000, v, 10*time.Second)
+	assert.LessOrEqual(t, cc.len(), 100, "the ceiling must still hold")
+	assert.LessOrEqual(t, cc.len(), 100-clickCoalesceEvictionBatch+1,
+		"one insert past the ceiling should have freed a batch, not a single slot")
 }

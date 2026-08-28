@@ -346,16 +346,61 @@ func (m *mutablePolicy) Current(context.Context) abusepolicy.Policy {
 	return m.p
 }
 
-// A nil policy source is the zero-value Deps every router test uses. It must
-// resolve to the compiled defaults rather than to "no limit" — an unwired
-// dependency that silently switches a defence off is the failure mode INV-177
-// was written about.
+// An unwired policy must resolve to the compiled defaults rather than to "no
+// limit" — a dependency that silently switches a defence off is the failure
+// mode INV-177 was written about.
+//
+// There are TWO nils here and they are answered by different code, which is
+// worth spelling out because one of them looks like it covers the other and
+// does not. `Deps.AbusePolicy == nil` is a TYPED nil in a non-nil interface, so
+// apiQuota.current's own `q.pol == nil` never fires for it; what answers is
+// Cache.Current's nil-receiver guard. A caller that passes no reader at all —
+// an untyped nil interface — is the only thing that reaches the local check.
+// Assert both, or deleting the one that actually works looks safe.
 func TestAPIQuota_ANilPolicySourceEnforcesTheCompiledDefaults(t *testing.T) {
 	t.Parallel()
-	var cache *abusepolicy.Cache
-	q := newAPIQuota(cache)
-	assert.Equal(t, abusepolicy.Default().APIWritesPerMinute, q.writeLimit(context.Background()))
-	assert.Equal(t, abusepolicy.Default().APIExpensivePerHour, q.expensiveLimit(context.Background()))
+	want := abusepolicy.Default()
+
+	t.Run("typed nil cache, the shape router.go actually passes", func(t *testing.T) {
+		var cache *abusepolicy.Cache
+		q := newAPIQuota(cache)
+		// A plain Go comparison, not require.NotNil: testify reflects INTO the
+		// interface and calls a nil pointer nil, which is the opposite of what
+		// the language does here — and the language is what `q.pol == nil` in
+		// the production code is evaluated by.
+		require.True(t, q.pol != nil, "a typed nil in an interface is not a nil interface")
+		assert.Equal(t, want.APIWritesPerMinute, q.writeLimit(context.Background()))
+		assert.Equal(t, want.APIExpensivePerHour, q.expensiveLimit(context.Background()))
+	})
+
+	t.Run("no reader at all", func(t *testing.T) {
+		var absent policyReader
+		q := newAPIQuota(absent)
+		require.True(t, q.pol == nil)
+		assert.Equal(t, want.APIWritesPerMinute, q.writeLimit(context.Background()))
+		assert.Equal(t, want.APIExpensivePerHour, q.expensiveLimit(context.Background()))
+	})
+
+	// And the enforcement is real, not just the number: an unwired quota still
+	// refuses.
+	t.Run("still refuses past the compiled budget", func(t *testing.T) {
+		var absent policyReader
+		q := newAPIQuota(absent)
+		q.writes.WithClock(newTestClock().now) // freeze: no refill mid-loop
+		h := q.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		serve := func() int {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/links", nil)
+			h.ServeHTTP(rec, req.WithContext(authctx.WithPrincipal(req.Context(), editor(7))))
+			return rec.Code
+		}
+		for i := 0; i < want.APIWritesPerMinute; i++ {
+			require.Equal(t, http.StatusOK, serve(), "write %d of the compiled budget", i+1)
+		}
+		assert.Equal(t, http.StatusTooManyRequests, serve())
+	})
 }
 
 // The expensive set is matched by ROUTE SHAPE, not by substring: "/api/import"
@@ -372,14 +417,20 @@ func TestIsExpensive_MatchesTheRouteShapeAndNothingElse(t *testing.T) {
 		{http.MethodPost, "/api/import/apply", true},
 		{http.MethodPost, "/api/import/validate", true},
 		{http.MethodPost, "/api/backup/restore", true},
+		{http.MethodPost, "/api/backup/validate", true},
 		{http.MethodPost, "/api/links/42/screenshot", true},
 		{http.MethodPost, "/api/links/42/refresh-preview", true},
+		// Image ingest decodes up to 50 MP per call (INV-076/077); the body
+		// limit bounds the bytes, not the pixels.
+		{http.MethodPost, "/api/links/42/image", true},
+		{http.MethodPost, "/api/notes/images", true},
 
 		{http.MethodGet, "/api/import/apply", false},
+		{http.MethodGet, "/api/links/42/image", false},
 		{http.MethodPost, "/api/links", false},
 		{http.MethodPost, "/api/links/42", false},
 		{http.MethodPost, "/api/links/42/seen-change", false},
-		{http.MethodPost, "/api/links/42/image", false},
+		{http.MethodDelete, "/api/links/42/image", false},
 		{http.MethodPost, "/api/links/42/extra/screenshot", false},
 		{http.MethodPost, "/api/links//screenshot", false},
 		{http.MethodPost, "/api/notimport/apply", false},
@@ -403,7 +454,8 @@ func TestExpensiveRoutes_EveryPatternNamesARouteTheRouterMounts(t *testing.T) {
 			return nil
 		}))
 
-	for pattern := range expensiveRoutes {
+	require.NotEmpty(t, expensiveRoutes, "an empty set would make this guard vacuous")
+	for _, pattern := range expensiveRoutes {
 		method, path, ok := strings.Cut(pattern, " ")
 		require.True(t, ok, "malformed expensive route key %q", pattern)
 		assert.Truef(t, mounted[method+" "+normalizeRoutePath(path)],

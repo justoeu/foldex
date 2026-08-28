@@ -43,15 +43,46 @@ type policyReader interface {
 // though SDD §5.3 names only restore: export walks every row and every object
 // the caller owns into one stream, and is the single most expensive thing this
 // instance can be asked to do.
-var expensiveRoutes = map[string]struct{}{
-	"POST /api/import":                     {}, // parses an uploaded bookmarks file
-	"POST /api/import/validate":            {},
-	"POST /api/import/apply":               {}, // inserts rows and enqueues previews
-	"POST /api/backup":                     {}, // streams the whole library out
-	"POST /api/backup/download":            {},
-	"POST /api/backup/restore":             {},
-	"POST /api/links/{id}/screenshot":      {}, // launches Chromium
-	"POST /api/links/{id}/refresh-preview": {}, // outbound fetch per call
+var expensiveRoutes = []string{
+	"POST /api/import",          // parses an uploaded bookmarks file
+	"POST /api/import/validate", // same parser, same cost
+	"POST /api/import/apply",    // inserts rows and enqueues previews
+	"POST /api/backup",          // streams the whole library out
+	"POST /api/backup/download", // issues the ticket the stream is fetched with
+	"POST /api/backup/validate", // unzips and checksums an uploaded archive
+	"POST /api/backup/restore",
+	"POST /api/links/{id}/screenshot",      // launches Chromium
+	"POST /api/links/{id}/refresh-preview", // outbound fetch per call
+	// Image ingest decodes and re-encodes through internal/imageopt, under a
+	// 50 MP cap (INV-076/077). At the ordinary write budget that is 120 fifty-
+	// megapixel decodes a minute, which is the cheapest CPU exhaustion left on
+	// the authenticated surface — the body limit bounds the BYTES, and a small
+	// file can still be an enormous image.
+	"POST /api/links/{id}/image",
+	"POST /api/notes/images",
+}
+
+// expensiveMatchers is expensiveRoutes split once, at init, rather than once
+// per entry on every mutating request. A slice and not a map because every use
+// is a scan: a map would advertise an O(1) lookup that a parameterised pattern
+// cannot provide.
+var expensiveMatchers = compileExpensiveRoutes()
+
+type routeMatcher struct {
+	method string
+	segs   []string
+}
+
+func compileExpensiveRoutes() []routeMatcher {
+	out := make([]routeMatcher, 0, len(expensiveRoutes))
+	for _, pattern := range expensiveRoutes {
+		method, path, ok := strings.Cut(pattern, " ")
+		if !ok {
+			panic("server: malformed expensive route pattern: " + pattern)
+		}
+		out = append(out, routeMatcher{method: method, segs: strings.Split(normalizeRoutePath(path), "/")})
+	}
+	return out
 }
 
 // quotaMaxPrincipals bounds each limiter's bucket map. See quota's own note on
@@ -83,6 +114,14 @@ func newAPIQuota(pol policyReader) *apiQuota {
 	}
 }
 
+// current resolves the policy in force.
+//
+// The nil check catches an absent SEAM — a caller that passed no reader at all.
+// It does NOT catch `Deps.AbusePolicy == nil`, which is the common case: a
+// typed-nil *abusepolicy.Cache in an interface is not a nil interface, and what
+// answers the compiled defaults there is Cache.Current's own nil-receiver
+// guard. Both paths are covered, by different code, and it is worth knowing
+// which is which before deleting either.
 func (q *apiQuota) current(ctx context.Context) abusepolicy.Policy {
 	if q.pol == nil {
 		return abusepolicy.Default()
@@ -125,9 +164,12 @@ func (q *apiQuota) middleware(next http.Handler) http.Handler {
 		// credential of an account, not a second account, so minting one must
 		// not multiply the budget (INV-023 draws the same line for scope).
 		key := strconv.FormatInt(int64(p.UserID), 10)
-		ctx := r.Context()
+		// Read ONCE. Two reads would take the policy cache's lock twice on the
+		// write path and — worse — could straddle a refresh, enforcing two
+		// different documents against the same request.
+		pol := q.current(r.Context())
 
-		expensiveLimit := q.expensiveLimit(ctx)
+		expensiveLimit := pol.APIExpensivePerHour
 		charged := false
 		if isExpensive(r.Method, r.URL.Path) {
 			if d := q.expensive.Allow(key, expensiveLimit); !d.Allowed {
@@ -137,7 +179,7 @@ func (q *apiQuota) middleware(next http.Handler) http.Handler {
 			charged = true
 		}
 
-		writeLimit := q.writeLimit(ctx)
+		writeLimit := pol.APIWritesPerMinute
 		if d := q.writes.Allow(key, writeLimit); !d.Allowed {
 			if charged {
 				// The expensive token bought nothing: the request is being
@@ -176,17 +218,16 @@ func writeRateLimited(w http.ResponseWriter, retryAfter time.Duration) {
 
 // isExpensive reports whether this request belongs in the small hourly bucket.
 func isExpensive(method, path string) bool {
-	path = normalizeRoutePath(path)
-	for pattern := range expensiveRoutes {
-		m, p, ok := strings.Cut(pattern, " ")
-		if ok && m == method && matchesPattern(normalizeRoutePath(p), path) {
+	segs := strings.Split(normalizeRoutePath(path), "/")
+	for _, m := range expensiveMatchers {
+		if m.method == method && matchesSegments(m.segs, segs) {
 			return true
 		}
 	}
 	return false
 }
 
-// matchesPattern compares a chi pattern to a path, segment by segment.
+// matchesSegments compares a split chi pattern to a split path.
 //
 // Segment-wise rather than by prefix or substring, because both of those are
 // wrong in a way that only shows up later: a prefix test would put
@@ -194,20 +235,18 @@ func isExpensive(method, path string) bool {
 // anything containing the word anywhere. A "{param}" segment matches exactly
 // one NON-EMPTY segment, so "/api/links//screenshot" — which routes nowhere —
 // does not match either.
-func matchesPattern(pattern, path string) bool {
-	pp := strings.Split(pattern, "/")
-	sp := strings.Split(path, "/")
-	if len(pp) != len(sp) {
+func matchesSegments(pattern, path []string) bool {
+	if len(pattern) != len(path) {
 		return false
 	}
-	for i := range pp {
-		if strings.HasPrefix(pp[i], "{") && strings.HasSuffix(pp[i], "}") {
-			if sp[i] == "" {
+	for i := range pattern {
+		if strings.HasPrefix(pattern[i], "{") && strings.HasSuffix(pattern[i], "}") {
+			if path[i] == "" {
 				return false
 			}
 			continue
 		}
-		if pp[i] != sp[i] {
+		if pattern[i] != path[i] {
 			return false
 		}
 	}
