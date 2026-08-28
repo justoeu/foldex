@@ -628,6 +628,36 @@ você configurou em `TRUSTED_PROXY_IPS` respondeu por ele, e *endereço direto* 
 ninguém respondeu. Na instalação padrão — presa ao loopback, sem proxy — toda linha é o
 par cru.
 
+**Anomalias.** A mesma tela ordena as origens que parecem abuso e não tráfego: *varredura
+de contas* (um endereço falhando contra muitas contas distintas), *martelo numa conta*, e
+*origem já limitada* (um endereço que o limitador trancou). Cada linha traz a evidência em
+números — contas distintas, falhas, o intervalo em minutos —, um atalho que filtra a linha
+do tempo por aquele endereço, e um botão de bloquear já preenchido.
+
+Nada aqui dispara sozinho, de propósito. Um heurístico que bloqueia endereços por conta
+própria acaba bloqueando o errado às três da manhã, e quem fica do lado de fora é o
+operador. O painel também mostra **contagens de contas, nunca os endereços atacados** — os
+alvos já aparecem na linha do tempo, e um segundo lugar para lê-los seria um segundo lugar
+para vazá-los. As linhas cuja origem *não* veio de proxy confiável dizem isso com todas as
+letras: atrás de um proxy reverso aquele endereço é o proxy, então a linha é sobre todo
+mundo, e bloqueá-la bloquearia o seu próprio nginx.
+
+**Limites e abuso (só o proprietário).** **Configurações → Administração → Limites e
+abuso** guarda os números com que esta instância se defende, em quatro faixas: login
+(contas distintas que uma origem pode falhar, falhas por conta, a janela de lockout), a
+API autenticada (escritas por minuto, operações caras por hora), a superfície pública
+(janela de coalescência de clique, `0` desliga) e os limiares de anomalia. **A última faixa
+não muda nada na aplicação das regras** — aqueles três números só decidem o que o painel
+acima chama de anômalo, e a tela diz isso ao lado deles.
+
+Todo valor tem piso *e* teto, porque um rate limit é perigoso nas duas pontas: alto demais
+deixa de ser controle, baixo demais vira o ataque — um limite de uma conta por hora
+deixaria qualquer um que alcance o formulário de login trancar um escritório inteiro
+digitando uma senha errada. Ao lado dos campos de login e da API a tela mostra o que a
+trilha de fato mediu nos últimos 30 dias, para você ajustar com evidência em vez de
+intuição; onde não há medida ela diz isso, em vez de mostrar zero. As mudanças valem **sem
+restart**. Ler é tarefa de qualquer administrador; escrever é só do proprietário.
+
 **Bloquear um endereço (só o proprietário).** O cartão de risco instala um bloqueio
 permanente num endereço, e os endereços bloqueados aparecem numa lista com o caminho de
 volta. Três coisas são recusadas de saída, porque este é o único controle capaz de deixar
@@ -913,6 +943,17 @@ intacto, e é o caminho mais rápido de volta.
 > limite em cada um e mesmo assim seguraria o pool inteiro — e **nenhum papel é isento,
 > nem o owner**. Os dois números são editáveis pelo owner da instância e valem sem
 > reiniciar.
+
+> **A borda também limita.** O nginx que acompanha o projeto aplica `limit_req` por
+> endereço antes de a requisição chegar ao backend — uma zona apertada (2 r/s) nas sete
+> rotas não autenticadas que *adivinham* algo (login, bootstrap, aceite de convite, reset
+> de senha, código de segundo fator, conversão do Google), uma frouxa (30 r/s) no resto de
+> `/api/auth/*` porque a própria aplicação faz rajada ali, e uma pública (20 r/s) em `/go/`
+> e `/n/`. Acima do limite a resposta é `429`. `/api/*` inteiro fica de fora de propósito:
+> a API autenticada tem rajada legítima e o backend tem contexto para distinguir pessoa de
+> laço. **Se você tem outro proxy na frente deste nginx**, ligue o
+> `ngx_http_realip_module` lá — senão todas as zonas enxergam o endereço daquele proxy e a
+> instância limita a si mesma.
 
 > **Cliques repetidos são coalescidos.** `/go/{slug}` e `/n/{slug}` não pedem sessão e
 > cada acerto grava uma linha em `click_log`, então um laço sobre um slug conhecido era

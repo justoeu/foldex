@@ -1303,3 +1303,52 @@ Uma política nula (`Deps.AbusePolicy == nil`) enforça os **defaults compilados
 - **`public_click_coalesce_seconds = 0` desliga**, e é a única configuração deste conjunto cujo estado desligado é suportado: o operador está comprando de volta o contador exato, com o `limit_req` do nginx ainda cobrindo a superfície.
 
 O gate viaja pelo CONTEXTO (`internal/pkg/clickctx`) e não por parâmetro porque as duas pontas não se encontram de outro jeito: a identidade do visitante só existe na borda HTTP e o id da entidade só existe no meio da transação do repositório. É o `auditctx` ao contrário — lá um middleware instala um recipiente que o código de baixo anota, aqui instala uma decisão que o código de baixo pergunta.
+
+### INV-183 — Nenhuma entrada controlada pelo cliente compõe uma chave de rate limit.
+
+*Guards:* `TestLoginLimits_TheConfigurableCeilingFitsInsideTheLimiterSet`, e a lente 3 da skill `/abuse-audit`
+
+A pergunta que originou o ADR-47 propunha compor a chave do limitador com `IP + e-mail + User-Agent`. O User-Agent é um cabeçalho que **o cliente escreve**: com ele na chave, o atacante manda um valor diferente por tentativa — dimensão livre e infinita — e ganha um orçamento inteiro por requisição. O balde deixa de existir **enquanto continua parecendo existir**, que é o pior modo de falha desta categoria: a configuração mostra um teto, o log mostra contagens, e nada nunca tranca.
+
+É exatamente o defeito que `server.trustedProxyRealIP` já documenta para o `X-Forwarded-For` (INV-007) — *"an attacker rotates one header value per attempt and never trips a cap"*. Reintroduzi-lo numa chave nova, depois de tê-lo corrigido numa, seria a pior regressão possível.
+
+- **IP e e-mail passam no teste** porque nenhum dos dois é grátis de trocar: o IP custa infraestrutura, e o e-mail é o alvo — trocá-lo abandona a conta que se quer invadir.
+- **Registrar ≠ confiar.** O User-Agent continua gravado na trilha (INV-176), onde é útil justamente por não ter autoridade nenhuma: *"mesma conta, dispositivo novo"* é uma pergunta que investigações fazem. A regra proíbe que ele DECIDA, não que ele apareça.
+- **Vale para qualquer chave futura**: cabeçalho custom, campo do corpo, cookie, fingerprint de dispositivo. Fingerprinting é esta regra vestida de solução.
+
+### INV-184 — O balde de IP do login conta LARGURA (contas distintas), o de e-mail conta PROFUNDIDADE, e um conjunto cheio TRANCA.
+
+*Guards:* `TestSetMode_RepeatedFailuresOnOneMemberNeverLockTheKey`, `TestLoginFailure_TheIPBucketCountsAccounts_NotAttempts`, `TestLoginFailure_DistinctAccountsFromOneOriginLockIt`, `TestSetMode_MembersAreCappedAndAFullSetIsLockedOut`, `TestSetMode_ReleaseKeepsTheSetTheKeyAlreadyHolds`, `TestLogin_ManyPeopleBehindOneAddressDoNotLockEachOtherOut`, `TestLogin_ASprayAcrossManyAccountsLocksTheOrigin`
+
+Os dois baldes do login respondem perguntas diferentes e contavam a mesma coisa. *"Alguém está martelando ESTA conta?"* é falhas consecutivas por conta e não muda. *"Esta origem está varrendo MUITAS contas?"* passou a ser **contas distintas falhadas por origem** — antes, vinte erros de senha da mesma pessoa e vinte contas sondadas eram indistinguíveis, e atrás de um NAT corporativo a origem é um prédio.
+
+- **Um escritório atrás de um NAT nunca encosta no balde de IP**: cada pessoa é um e-mail com o próprio orçamento. Um spray tropeça na décima conta em vez da vigésima tentativa.
+- **Trade-off declarado, e não há perda**: quem martela UMA conta de um só IP deixa de tropeçar aos 20 e passa a ser segurado aos 5 pelo balde de e-mail — parado **antes**, não depois.
+- **O e-mail inexistente É membro.** Uma origem sondando quinhentos endereços que não existem é o spray mais puro que existe, e sai de graça porque o endereço desconhecido já cai no mesmo ramo de `CommitFail` que a senha errada (INV-041). O caminho tem de continuar byte-idêntico: `Release` versus contagem não pode virar oráculo de enumeração observável por tempo nem por status.
+- **`MaxMembersPerKey` fica ACIMA de todo teto configurável** (128 > 100), e um conjunto cheio TRANCA. Um cap abaixo do teto imporia em silêncio um limite que o dono não escolheu e não consegue ver — a falha do INV-169. Cheio é o único estado em que o limitador perdeu a capacidade de distinguir largura de ruído, e a leitura segura disso é recusar.
+- **`Release` preserva o conjunto.** O `gcLocked` media só `e.fails`, então um `Release` apagava a entrada inteira de uma chave em modo conjunto — e o login libera o slot de IP quando o balde por conta recusa, caminho que o atacante dispara à vontade: martelar uma conta até trancá-la devolveria todo o orçamento de largura da origem. Achado por mutação, não por revisão.
+
+### INV-185 — Os limites de abuso são configuráveis com pisos dos DOIS lados, um valor fora de faixa reverte o CAMPO, e "dinâmico" significa RECARREGAR.
+
+*Guards:* `TestValidateForWrite_RefusesBothDirections`, `TestSanitize_RevertsOneKnobAndKeepsTheRest`, `TestEnforcementFloorsAreNotOne`, `TestCache_FailStaticKeepsTheLastGoodPolicy`, `TestGet_AnOutOfRangeKnobRevertsAloneAndTheRestSurvives`, `TestAbusePolicyAPI_AnAdminReadsButNeverWrites`
+
+O SDD fixou a FORMA de cada controle e deixou a MAGNITUDE aberta, porque magnitude depende da instância: cinco pessoas num servidor doméstico e quarenta atrás de um NAT corporativo não são o mesmo tráfego, e um número compilado estaria errado para uma das duas sem meio de dizer isso.
+
+- **Pisos dos dois lados, ao contrário do INV-048.** Um piso de senha só é perigoso quando BAIXO. Um rate limit é perigoso nas duas pontas: alto demais deixa de ser controle e vira observação; baixo demais **VIRA** o ataque — um limite de uma conta por hora entrega a qualquer um que alcance o formulário a capacidade de trancar um escritório inteiro digitando uma senha errada. Por isso `MinLoginDistinctAccountsPerIP = 3`, e não 1.
+- **Knobs que AGEM e knobs que RELATAM têm bounds diferentes.** Os três limiares do painel de anomalias não recusam nada: um valor errado dá uma tela ruidosa ou quieta, nunca um usuário trancado. Guardá-los como se fossem a mesma coisa ensinaria que os dois grupos têm o mesmo peso.
+- **Fora de faixa reverte o CAMPO, nunca o documento.** É a lição do INV-169 aplicada por construção: no `internal/policy`, um `Validate` que falha devolve o default inteiro, e apertar um limite fez uma instância perder silenciosamente a allowlist do Google junto.
+- **Escrita owner-only por permissão TRAVADA** (`instance.rate_limits`), pela razão do INV-178: é a permissão cujo uso errado torna a instância inalcançável para quem a detém. Leitura é de qualquer administrador — quem opera precisa poder VER sob quais regras a instância se defende.
+- **"Dinâmico" é recarregar, não se auto-ajustar.** A tela que define os números está na mesma instância que está sendo defendida, e não se pede a um operador que faça deploy no meio de um incidente. O cache falha **ESTÁTICO**: uma falha do banco não decide quantas tentativas uma origem ganha — segue valendo a última política boa, e os defaults compilados antes do primeiro load.
+- **UM cache por processo.** Caches separados honrariam a política cada um no seu TTL: a mesma instância rodaria dois regulamentos por até trinta segundos depois de cada save, e o `Invalidate()` do PUT alcançaria só um deles.
+- **`app_setting` está fora da superfície de backup nos dois sentidos**, e é isso que impede um zip forjado de reescrever os limites da instância.
+
+### INV-186 — O detector de anomalias RELATA; o bloqueio continua sendo do humano, e o painel não mostra e-mails.
+
+*Guards:* `TestAnomaly_CarriesNoEmailAnywhereInItsJSON`, `TestWiring_TheAnomalyPanelIsMountedUnderAdmin`
+
+O painel ordena origens por sinal — varredura de contas, martelo numa conta, origem já limitada — com a evidência em números e o botão de bloquear pré-preenchido. Ele **nunca dispara sozinho**.
+
+- **Automatizar é entregar a chave da porta a um heurístico cuja entrada o atacante fornece.** O INV-178 já diz qual é o modo de falha deste controle: não é "um bloqueio que não funciona", é uma instância que ninguém alcança, instalada pela pessoa que mais precisava alcançá-la — e um heurístico faria isso sozinho, de madrugada.
+- **Só a CONTAGEM de contas distintas, nunca a lista.** O alvo já vive na linha do tempo da trilha; repeti-lo aqui criaria uma segunda superfície de leitura que o INV-175 teve o trabalho de reduzir a uma. O guard falha se QUALQUER campo do JSON contiver `@`.
+- **`ip_trusted = false` fica visível.** Numa instalação com proxy, isso significa que o endereço é o do PROXY e a linha é sobre *todo mundo* — esconder a distinção faria o operador bloquear o próprio nginx. É o defeito que originou o SDD inteiro.
+- **A recomendação é informada, não automática.** Ao lado de cada knob a tela mostra o que a trilha de fato observou em 30 dias, para o ajuste partir de dado em vez de intuição. Onde não há medida, não renderiza nada; onde a medida existe e vale zero, diz "sem dado" — são duas afirmações diferentes, e inventar um número aqui seria pior que não ter nenhum.

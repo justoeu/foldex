@@ -1716,3 +1716,172 @@ lado de uma flag dizendo se algum proxy configurado respondeu por ele.
 
 Migrações `000044` (contexto) e `000045` (`ip_block`);
 `db.RequiredSchemaVersion` 43 → 45. Status: **Aceito · implementado**.
+
+### ADR-47 — Defesa contra abuso: largura em vez de profundidade, cota autenticada, tetos configuráveis e um painel que relata sem agir
+
+> Implementa `docs/SDD-ABUSE-DEFENSE.md` (v1.1). Emenda o ADR-46, cujo painel de
+> risco e cuja lista de bloqueio passam a ter um consumidor a mais.
+
+**Contexto.** A conversa começou num defeito de configuração e virou uma pergunta
+de projeto: *olhar só para o IP não é frágil, dado que empresas põem centenas de
+pessoas atrás de um NAT?* A sugestão foi compor a chave do limitador com
+`IP + e-mail + User-Agent`.
+
+As duas metades da pergunta têm respostas opostas, e é isso que torna o item
+interessante.
+
+O levantamento que precedeu a decisão mediu onze limitadores, os tetos reais de
+cada um, a ausência total de `limit_req` no nginx, o `MaxConns = 16` do pool, e
+as duas superfícies sem controle nenhum. Nada aqui foi presumido; §3 do SDD é a
+tabela.
+
+**Decisão.**
+
+1. **Nenhuma entrada controlada pelo cliente compõe uma chave de rate limit.**
+   O `User-Agent` é escrito pelo cliente: com a chave em `IP + UA`, o atacante
+   manda um UA por tentativa e ganha um orçamento inteiro por requisição. O balde
+   deixa de existir enquanto continua parecendo existir. É exatamente o defeito
+   que `server.trustedProxyRealIP` já documenta para o `X-Forwarded-For`, e
+   reintroduzi-lo numa chave nova depois de tê-lo corrigido numa seria a pior
+   regressão possível. IP e e-mail passam no teste porque nenhum dos dois é
+   grátis de trocar: o IP custa infraestrutura, e o e-mail é o alvo — trocá-lo
+   abandona a conta que se quer invadir. Registrar ≠ confiar: o UA continua na
+   trilha (INV-176), onde é útil justamente por não ter autoridade nenhuma.
+
+2. **O balde de IP conta LARGURA, não profundidade.** Os dois baldes do login
+   respondem perguntas diferentes e contavam a mesma coisa. "Alguém está
+   martelando ESTA conta?" continua sendo falhas consecutivas por conta. "Esta
+   origem está varrendo MUITAS contas?" passa a ser **contas distintas falhadas
+   por origem**. Um escritório inteiro atrás de um NAT errando as próprias senhas
+   nunca encosta no balde de IP — cada pessoa é um e-mail com o próprio
+   orçamento — e um spray tropeça na décima conta em vez da vigésima tentativa.
+   Isto resolve o NAT e a lacuna G1 ao mesmo tempo, sem enfraquecer nada: a
+   defesa contra força bruta em conta específica é do balde de e-mail, que não
+   muda. Trade-off declarado: quem martela UMA conta de um só IP deixa de
+   tropeçar aos 20 e passa a ser segurado aos 5 pelo balde de e-mail — parado
+   antes, não depois.
+
+3. **A API autenticada ganha cota por principal.** Era a lacuna mais séria e a
+   menos visível: uma sessão válida não tinha limite nenhum contra um pool de 16
+   conexões, então um usuário hostil — ou um script bugado de um legítimo —
+   saturava a instância e todos os outros tenants sentiam. Por principal e não
+   por rota, porque um laço espalhado por vinte endpoints fica dentro do limite
+   em cada um e mesmo assim segura o pool. Só verbos mutantes. Rotas caras
+   (import, restore, screenshot, refresh de preview) ganham um segundo balde,
+   menor e por hora. 429 com `Retry-After`, nunca desconexão. **O owner não é
+   isento** — uma isenção seria uma conta capaz de derrubar a instância, e a
+   primeira pessoa a tropeçar nela seria o próprio operador rodando um import.
+
+4. **`limit_req` no nginx, em três zonas estreitas.** É a única camada que roda
+   antes de qualquer alocação do backend — antes do bcrypt, antes do pool, antes
+   do piso de duração do login — e também a mais burra: conhece um endereço e um
+   path, então só pode decidir "rápido demais", nunca "quem". Uma zona apertada
+   (2r/s) nas sete rotas que ADIVINHAM algo, uma frouxa (30r/s) no resto de
+   `/api/auth/*` porque o SPA legitimamente faz rajada ali, e uma pública
+   (20r/s) em `/go/` e `/n/`. `/api/*` inteiro fica de fora de propósito: a API
+   autenticada tem rajada legítima e irregular, e o backend tem contexto para
+   distinguir usuário de laço.
+
+5. **A escrita pública é coalescida, não bloqueada.** Cada acerto em `/go/` e
+   `/n/` escrevia uma linha em `click_log`, o que faz de um laço sobre um slug
+   conhecido uma escrita ilimitada por anônimo. Contagem de clique é métrica de
+   produto, não contabilidade: perder o segundo clique do mesmo visitante em dez
+   segundos não muda nada que alguém leia, e remove o amplificador. O estado de
+   dedup é **efêmero e em memória** — persistir o endereço do visitante numa
+   tabela de cliques é uma decisão de privacidade que este trabalho não precisa
+   tomar.
+
+6. **Os tetos são configuráveis, com pisos dos DOIS lados.** O SDD fixou a forma
+   de cada controle e deixou a magnitude aberta, porque magnitude depende da
+   instância: cinco pessoas num servidor doméstico e quarenta atrás de um NAT não
+   são o mesmo tráfego. Diferente do `internal/policy`, onde um piso de senha só
+   é perigoso quando baixo, um rate limit é perigoso nas duas pontas — alto
+   demais deixa de ser controle, baixo demais **vira** o ataque. Escrita
+   owner-only por permissão travada (`instance.rate_limits`), pela mesma razão
+   do `instance.ip_block`: é a permissão cujo uso errado torna a instância
+   inalcançável para quem a detém.
+
+7. **Um valor fora de faixa reverte o CAMPO, nunca o documento.** É a lição do
+   INV-169 aplicada por construção. No `internal/policy`, um `Validate` que falha
+   devolve o default inteiro, e apertar um limite fez uma instância perder
+   silenciosamente a allowlist do Google junto. Aqui `Sanitize` troca exatamente
+   o knob fora da faixa.
+
+8. **"Dinâmico" significa RECARREGAR, não se auto-ajustar.** Os valores tomam
+   efeito sem restart — a tela que os define está na mesma instância que está
+   sendo defendida, e não se pode pedir a um operador que faça deploy no meio de
+   um incidente. O cache falha **estático**: uma falha do banco não decide
+   quantas tentativas uma origem ganha; segue valendo a última política boa, e os
+   defaults compilados antes do primeiro load.
+
+9. **O painel de anomalias RELATA; o bloqueio continua sendo do humano.** Ele
+   ordena origens por sinal — varredura de contas, martelo numa conta, origem já
+   limitada — com a evidência em números e o botão de bloquear pré-preenchido.
+   Nunca dispara sozinho, e o INV-178 é a razão: o modo de falha desse controle
+   não é "um bloqueio que não funciona", é uma instância que ninguém alcança,
+   trancada de madrugada por um heurístico cuja entrada o atacante fornece, com
+   o operador do lado de fora. O painel também não mostra e-mails, só a
+   **contagem** de contas distintas: o alvo já vive na timeline da trilha, e
+   repeti-lo aqui criaria uma segunda superfície de leitura que o INV-175 teve o
+   trabalho de reduzir a uma.
+
+10. **A recomendação é informada, não automática.** Ao lado de cada knob a tela
+    mostra o que a trilha de fato observou em 30 dias. É o que permite ajustar
+    com base em dado em vez de em intuição, sem entregar a decisão a um
+    heurístico. Quando não há dado, a tela diz "sem dado" — inventar um número
+    aqui seria pior que não ter nenhum.
+
+**O que foi recusado, e por quê.** Fingerprinting de dispositivo (a decisão 1
+vestida de solução); CAPTCHA (um terceiro na tela de login de uma instância
+self-hosted, com custo de privacidade e acessibilidade que o ganho não paga);
+Redis ou limitador distribuído (um nó — mas com um corolário: se um dia houver
+segundo nó, os limitadores em memória viram *por nó* e todos os tetos dobram, e
+isso tem de ser item de bloqueio do ADR que introduzir o segundo nó, não uma
+descoberta); banir por ASN ou geografia; `limit_conn` no nginx (com HTTP/2 conta
+conexão e não requisição, e engana mais do que informa); e **bloqueio automático
+de IP**, pela decisão 9.
+
+**Fora de escopo, declarado.** DDoS volumétrico. Não é defensável nesta camada e
+fingir que é seria pior que admitir — resolve-se upstream, fora da máquina do
+operador. O que está no escopo é o que a maioria das pessoas quer dizer com
+"DDoS" na prática: exaustão de recursos com pouco tráfego, amplificação, e
+negação por lockout.
+
+**Detalhes que só a implementação fixou.**
+
+- `attemptlimit` ganhou o modo conjunto **no mesmo tipo**, não numa estrutura
+  paralela: os dois modos compartilham a reserva, a aritmética de lockout e o
+  sweep, que são as três garantias difíceis de acertar. `MaxMembersPerKey = 128`
+  fica ACIMA de todo teto configurável (100) porque um cap abaixo imporia em
+  silêncio um limite que o dono não escolheu e não consegue ver — a falha do
+  INV-169 — e um conjunto cheio TRANCA, porque cheio é o único estado em que o
+  limitador perdeu a capacidade de distinguir largura de ruído.
+- A cota **não** reusou `attemptlimit`, e a justificativa é obrigatória porque o
+  repo tem regra contra segunda implementação paralela: aquele conta falhas
+  CONSECUTIVAS e `CommitSuccess` zera o contador, então uma requisição aceita
+  apagaria o registro inteiro; não tem recarga, então não distingue rajada
+  legítima de laço. `internal/pkg/quota` é um token bucket, que é outra coisa.
+- A coalescência viaja pelo CONTEXTO (`internal/pkg/clickctx`) porque as duas
+  pontas não se encontram de outro jeito: a identidade do visitante só existe na
+  borda HTTP e o id da entidade só existe no meio da transação do repositório. É
+  o `auditctx` ao contrário. Contexto ausente significa GRAVAR.
+- A severidade das anomalias usa o vocabulário da TRILHA (`warning`/`critical`),
+  não um par próprio. A primeira versão do contrato dizia `warn` e a UI ganhou
+  uma função só para traduzir — dois painéis na mesma tela produzindo o mesmo
+  badge por caminhos diferentes é a forma exata do INV-159.
+- A migração 000046 acrescenta `audit_log_ip_time_idx` e **não** move
+  `RequiredSchemaVersion`: é só índice, e nenhuma query depende de um índice
+  existir. Fazer o bump recusaria o boot de toda instância ainda não migrada,
+  trocando indisponibilidade real por melhoria de planner — a mesma decisão que
+  a 000038 já documenta.
+
+**Consequências.**
+
+- Existe um caminho novo de negação (429) que antes não existia, e ele é a
+  primeira coisa a olhar quando alguém disser "o Foldex ficou lento".
+- **Critério de reversão explícito:** se a trilha registrar lockout de conta que
+  não estava sob ataque, a mudança está errada e volta. Um limitador que tranca
+  usuário legítimo é pior que um frouxo — nega serviço de graça e ensina o
+  operador a afrouxá-lo até virar decoração.
+- A tela de auditoria do ADR-46 é o instrumento de verificação, e isso não é
+  coincidência: ela foi construída para responder exatamente estas perguntas.

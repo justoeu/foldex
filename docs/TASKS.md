@@ -755,3 +755,73 @@ acerto escrevendo em `click_log`). Detalhe e raciocínio em INV-181 e INV-182.
   (PR 2 / G1) continuam abertos — são de outras frentes.
 - A tela que edita `api_writes_per_minute` / `api_expensive_per_hour` /
   `public_click_coalesce_seconds` é do frontend e não faz parte desta frente.
+
+### 2026-08-28 — SDD-ABUSE-DEFENSE implementado por inteiro (ADR-47), em quatro frentes paralelas
+
+Fechadas todas as sete lacunas do levantamento (G1–G7), mais os dois pedidos que vieram
+depois: os tetos viraram configuráveis pelo proprietário e a trilha ganhou um painel de
+anomalias. Os PRs 1–5 do faseamento do SDD, mais os 6 e 7 acrescentados no caminho.
+
+Lições, na ordem em que custaram tempo:
+
+1. **A premissa do PR 1 estava errada, e era o único item do SDD não medido.** O documento
+   se apresenta como "estado medido, não presumido", e o §4.5 tinha sido inferido de uma
+   linha de log: `docker-compose.yml` já traz o default de `TRUSTED_PROXY_IPS` desde o PR3
+   do ADR-30, o container em execução tem o valor, e `192.168.107.5` está dentro de
+   `192.168.0.0/16`. G5 já estava fechada. A conclusão errada era plausível, citava um
+   endereço real e teria gerado um PR que "corrigia" algo correto. O que ficou no lugar é
+   um log de boot com o conjunto efetivo — porque "em quem esta instância acredita?" só era
+   respondível lendo dois arquivos e o ambiente do container, que foi o que fez a
+   investigação demorar.
+
+2. **A mutação achou um bug que nenhuma revisão acharia.** `attemptlimit.gcLocked` media só
+   `e.fails`, então um `Release` apagava a entrada inteira de uma chave em modo conjunto —
+   e o login libera o slot de IP quando o balde por conta recusa, caminho que o atacante
+   dispara à vontade. Martelar uma conta até trancá-la devolveria todo o orçamento de
+   largura daquela origem. Teria shipado.
+
+3. **Um teste de integração pode destruir a própria evidência.** `testdb.Shared(t)` não
+   devolve só um handle: ele RESETA o banco a cada chamada. O helper `countClicks` o
+   chamava inline, truncava `click_log` e contava as linhas que acabara de destruir. As três
+   falhas liam como "a coalescência suprimiu tudo, inclusive o primeiro clique" — um
+   defeito de produto grave que não existia. O teste que denunciou o diagnóstico foi o do
+   gate ausente: ali não há coalescedor nenhum para suprimir nada.
+
+4. **Relatório de frente não é verificação.** A frente 3 reportou que a suíte de integração
+   "compilaria e passaria"; ela falhava. A frente 1 não pôde rodar a dela por causa do
+   Docker ocupado. Rodar as duas no merge, e mutar o call site central de cada uma, é o que
+   transformou "verde" em prova.
+
+5. **Duas frentes acordaram no commit-base errado** (`e700748`, sem o pacote de contrato) e
+   as duas se recuperaram sozinhas — mas só porque o brief nomeava o contrato e elas
+   notaram a ausência. Fixar o SHA da base no brief.
+
+6. **Um contrato meu criou trabalho inútil em duas frentes.** Eu escrevi `severity: "warn"`
+   quando a trilha diz `"warning"`, e a UI ganhou uma função só para traduzir. Dois painéis
+   na mesma tela produzindo o mesmo badge por caminhos diferentes é a forma exata do
+   INV-159. Unificado no merge e o shim apagado.
+
+7. **`instance.ip_block` estava faltando na união `Permission` do TypeScript desde o
+   ADR-46** — a permissão existia no servidor e a grade de papéis não conseguia oferecê-la.
+   Nem `tsc` nem `go vet` enxergam isso, porque nenhuma das linguagens sabe que o arquivo
+   da outra existe. Entrou `scripts/test-permission-parity.mjs`, nas duas direções.
+
+8. **Provar um guard novo por mutação vale tanto quanto escrevê-lo.** As asserções de
+   `limit_req` passaram de primeira, o que é suspeito; colapsar as duas zonas numa só faz o
+   guard acusar `"/api/auth/me was throttled (59 of 60) — o polling do próprio SPA divide a
+   zona da credencial"`, que é a mensagem certa pelo motivo certo.
+
+Followups abertos:
+
+- **`/api/auth/*` fica fora da cota autenticada**, então `POST /api/auth/refresh` — uma
+  transação `SERIALIZABLE`, a escrita autenticada mais cara do pool — segue sem medição;
+  ali só existe `attemptlimit`, que conta falhas. O `limit_req` do nginx cobre o grosso.
+- **`GET /api/links/url-metadata` faz uma busca externa por chamada e não consome cota**,
+  porque a cota conta só verbos mutantes. É o caminho mais barato para um usuário
+  autenticado saturar o fetcher. Merece um balde de leitura cara, não uma cota de leitura.
+- **O 429 aparece em prosa inglesa numa UI em português.** `apiErrorMessage` devolve a
+  mensagem do servidor verbatim por desenho — existe para regras CONFIGURÁVEIS, cujo texto
+  do cliente diria o número errado — então isto vale para TODO código de erro do app, não
+  só para `rate_limited`. Traduzir só um seria pior que a lacuna honesta; o conserto é um
+  mapa código→i18n central, e é uma mudança própria.
+- **Screenshots do README** das duas telas novas.

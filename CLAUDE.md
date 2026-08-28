@@ -62,6 +62,13 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **One channel must never satisfy both factors** → [INV-005](docs/INVARIANTS.md#inv-005) | guard: `TestReset_MailboxAloneCannotSatisfyBothFactors`, `TestEmailOTP_IsNotOfferedWhenMailOnlyGoesToTheLog`
 - **Credentials are redacted at the ROOT log handler, not at each call site** → [INV-006](docs/INVARIANTS.md#inv-006) | guard: `TestRedactionListMatchesTheDocumentedSet`
 - **`X-Forwarded-For` is honoured ONLY from a configured proxy** → [INV-007](docs/INVARIANTS.md#inv-007)
+- **Nenhuma entrada controlada pelo cliente compõe uma chave de rate limit** → [INV-183](docs/INVARIANTS.md#inv-183)
+  ↳ `IP + User-Agent` daria ao atacante um orçamento novo por requisição; o balde deixa de existir enquanto continua parecendo existir. Registrar ≠ confiar.
+- **O balde de IP do login conta LARGURA (contas distintas); o de e-mail conta PROFUNDIDADE; conjunto cheio TRANCA** → [INV-184](docs/INVARIANTS.md#inv-184) | guard: `TestLoginFailure_TheIPBucketCountsAccounts_NotAttempts`, `TestLogin_ManyPeopleBehindOneAddressDoNotLockEachOtherOut`, `TestSetMode_ReleaseKeepsTheSetTheKeyAlreadyHolds`
+  ↳ `gcLocked` media só `e.fails`: um `Release` apagava o conjunto inteiro, e martelar uma conta devolvia todo o orçamento de largura da origem. Achado por mutação.
+- **Limites de abuso: pisos dos DOIS lados, fora de faixa reverte o CAMPO, e "dinâmico" é RECARREGAR** → [INV-185](docs/INVARIANTS.md#inv-185) | guard: `TestValidateForWrite_RefusesBothDirections`, `TestSanitize_RevertsOneKnobAndKeepsTheRest`, `TestCache_FailStaticKeepsTheLastGoodPolicy`
+  ↳ Um rate limit baixo demais VIRA o ataque: 1 conta/hora tranca um escritório com uma senha errada.
+- **O detector de anomalias RELATA; o bloqueio é do humano, e o painel não mostra e-mails** → [INV-186](docs/INVARIANTS.md#inv-186) | guard: `TestAnomaly_CarriesNoEmailAnywhereInItsJSON`
 - **E-mail confirmation is a LINK, not a code, and its endpoint is unauthenticated** → [INV-008](docs/INVARIANTS.md#inv-008)
 - **`Optional` enforces CSRF on unsafe verbs** → [INV-009](docs/INVARIANTS.md#inv-009)
 - **Second-factor budgets live in the DATABASE, not in `attemptlimit`** → [INV-010](docs/INVARIANTS.md#inv-010)

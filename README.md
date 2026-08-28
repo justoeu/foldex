@@ -618,6 +618,37 @@ server observed plus the device string, marked *via trusted proxy* when a proxy 
 configured in `TRUSTED_PROXY_IPS` vouched for it and *direct address* when nothing did.
 On the default deployment — bound to loopback with no proxy — every row is the raw peer.
 
+**Anomalies.** The same screen ranks origins that look like abuse rather than traffic:
+*account sweep* (one address failing against many distinct accounts), *hammering one
+account*, and *already throttled* (an address the limiter locked out). Each row carries the
+evidence in numbers — distinct accounts, failures, the span in minutes — a link that
+filters the timeline down to that address, and a pre-filled block button.
+
+Nothing here fires on its own, deliberately. A heuristic that blocks addresses by itself
+eventually blocks the wrong one at three in the morning, and the person locked out is the
+operator. The panel also shows **counts of accounts, never the addresses attacked** — the
+targets already appear in the timeline, and a second place to read them would be a second
+place to leak them. Rows whose origin is *not* from a trusted proxy say so loudly: behind a
+reverse proxy that address is the proxy, so the row is about everyone, and blocking it
+would block your own nginx.
+
+**Limits and abuse (owner only).** **Settings → Administration → Limits and abuse** holds
+the numbers this instance defends itself with, in four bands: login (distinct accounts one
+origin may fail against, failures per account, the lockout window), the authenticated API
+(writes per minute, expensive operations per hour), the public surface (click coalescing
+window, `0` to switch it off), and the anomaly thresholds. **The last band changes nothing
+about enforcement** — those three numbers only decide what the panel above calls anomalous,
+and the screen says so beside them.
+
+Every value has a floor *and* a ceiling, because a rate limit is dangerous in both
+directions: too high and it stops being a control, too low and it becomes the attack — a
+limit of one account per hour would let anyone who reaches the login form lock out an
+office by typing one wrong password. Beside the login and API fields the screen shows what
+the trail actually measured over the last 30 days, so you can tune from evidence instead
+of intuition; where there is no measurement it says so rather than showing a zero. Changes
+take effect **without a restart**. Reading is any administrator's job; writing is the
+owner's alone.
+
 **Blocking an address (owner only).** The risk card can install a permanent block on an
 address, and blocked addresses are listed with a way back out. Four things are refused
 outright, because this is the one control that can make an instance unreachable to the
@@ -901,6 +932,17 @@ content intact, which is the fastest way back in.
 > them while holding the whole connection pool — and **no role is exempt, the owner
 > included**. Both numbers are editable by the instance owner and take effect without a
 > restart.
+
+> **The edge throttles too.** The bundled nginx applies `limit_req` per address before a
+> request reaches the backend at all — a tight zone (2 r/s) on the seven unauthenticated
+> routes that *guess* something (sign-in, bootstrap, invite acceptance, password reset,
+> second-factor codes, Google conversion), a loose one (30 r/s) on the rest of
+> `/api/auth/*` because the app itself bursts there, and a public zone (20 r/s) on `/go/`
+> and `/n/`. Over the limit the answer is `429`. `/api/*` as a whole is deliberately not
+> throttled at the edge: the authenticated API bursts legitimately and the backend has the
+> context to tell a person from a loop. **If you run another proxy in front of this
+> nginx**, enable `ngx_http_realip_module` there — otherwise every zone sees that proxy's
+> address and the instance throttles itself.
 
 > **Repeat clicks are coalesced.** `/go/{slug}` and `/n/{slug}` take no session and each
 > hit writes a row to `click_log`, so a loop over one known slug was unlimited database
