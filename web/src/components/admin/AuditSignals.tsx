@@ -13,8 +13,9 @@ import { apiErrorMessage } from '../../lib/apiError'
 /**
  * Installing and removing a permanent block.
  *
- * One hook for both cards, because the confirmation, the cache invalidation and
- * the error surface are identical and the only thing that differs is the verb.
+ * One hook for every card that offers a block — the two here and the anomalies
+ * panel — because the confirmation, the cache invalidation and the error
+ * surface are identical and the only thing that differs is the verb.
  *
  * The reason is DERIVED from the signal that prompted the click rather than
  * typed: the operator is looking at "5 failures from this address in 4 minutes"
@@ -26,14 +27,19 @@ import { apiErrorMessage } from '../../lib/apiError'
  * are connected from" — and flattening those into "failed" would remove the one
  * thing that makes the refusal actionable.
  */
-function useBlockControls() {
+export function useBlockControls() {
   const confirm = useConfirm()
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [error, setError] = useState<string | null>(null)
 
+  // Every surface that shows whether an address is blocked, by PREFIX so all
+  // four anomaly windows go with it. A row that still offers "block" on an
+  // address just blocked asks for an action already taken, and the second
+  // click answers 409 for no reason the operator can see.
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ['admin', 'audit'] })
+    void qc.invalidateQueries({ queryKey: ['admin', 'anomalies'] })
     void qc.invalidateQueries({ queryKey: ipBlocksQueryKey })
   }
 

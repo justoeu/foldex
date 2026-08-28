@@ -4184,6 +4184,55 @@ button.fx-aud-event-open { background: var(--fx-surface-3); border-color: var(--
   .fx-aud-search { min-width: 0; width: 100%; }
 }
 
+/* Anomalias — o painel que a tela de auditoria abriga.
+   Reaproveita .fx-aud-card / .fx-aud-rows / .fx-aud-row inteiros; só o que
+   esta lista diz a mais tem regra própria. */
+.fx-anom-thresholds {
+  margin: 6px 0 0; font-family: var(--fx-mono);
+  font-size: 11.5px; line-height: 1.45; color: var(--fx-ink-4);
+}
+/* align-items em vez do `center` herdado: com o aviso de procedência a linha
+   passa de uma para três alturas, e a ação centralizada flutuaria no meio. */
+.fx-anom-row { align-items: flex-start; gap: 14px; }
+.fx-anom-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+/* O aviso NÃO é um subtítulo: ele é a diferença entre bloquear um atacante e
+   bloquear o próprio nginx, e precisa parar o olho antes do botão. */
+.fx-anom-provenance {
+  margin-top: 2px; padding: 6px 10px; border-radius: 9px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  font-size: 11.5px; line-height: 1.4; color: #B45309;
+}
+.fx-anom-actions { display: flex; align-items: center; gap: 8px; flex: none; flex-wrap: wrap; }
+
+/* Limites e abuso — quatro bandas sobre o mesmo esqueleto de .fx-policy-row,
+   porque é uma decisão em quatro partes e não quatro cartões (INV-146). */
+.fx-abuse-note {
+  margin: 10px 0 0; padding: 10px 12px; border-radius: 10px;
+  background: var(--fx-accent-soft);
+  border-left: 3px solid var(--fx-accent);
+  font-size: 12.5px; line-height: 1.5; color: var(--fx-ink-2);
+}
+/* Qualificado por elemento: `.fx-shell button` (0,1,1) zera fundo, borda,
+   padding e cor de TODO botão da shell e venceria uma regra de classe nua
+   (0,1,0) — INV-154, o defeito que já shipou quatro vezes. */
+button.fx-abuse-reset {
+  align-self: flex-start; margin-top: 12px;
+  height: 28px; padding: 0 12px;
+  border: 1px solid var(--fx-border); border-radius: 999px;
+  background: var(--fx-surface-2); color: var(--fx-ink-3);
+  font-family: var(--fx-mono); font-size: 10.5px; letter-spacing: 0.06em;
+  text-transform: uppercase; cursor: pointer;
+  transition: border-color .16s ease, color .16s ease;
+}
+button.fx-abuse-reset:hover { border-color: var(--fx-accent); color: var(--fx-accent-3); }
+button.fx-abuse-reset:disabled { opacity: 0.5; cursor: not-allowed; }
+.fx-abuse-observed { font-family: var(--fx-mono); font-size: 11px; color: var(--fx-ink-4); }
+/* Ocupa a coluna mesmo vazio, para o botão Salvar não andar de lugar entre um
+   salvamento bem-sucedido e um recusado. */
+.fx-abuse-status { min-width: 0; flex: 1; }
+.fx-abuse-saved { margin: 0; font-size: 13px; color: var(--fx-success); }
+
 /* Atividade da própria conta (ADR-46) — a metade do split de leitura que
    devolve o rótulo do conteúdo, porque quem lê é o dono da linha. */
 .fx-acc-activity { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }

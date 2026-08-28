@@ -89,6 +89,7 @@ const GUARDED = [
   'fx-bkp-job-head',
   'fx-bkp-sha-btn',
   'fx-bkp-time-remove',
+  'fx-abuse-reset',
 ]
 
 const css = FILES.map((f) => readFileSync(join(STYLES, f), 'utf8')).join('\n').replace(

@@ -34,6 +34,9 @@ const PolicySection = lazy(() =>
 const BackupSection = lazy(() =>
   import('../components/admin/BackupSection').then((m) => ({ default: m.BackupSection })),
 )
+const AbuseSection = lazy(() =>
+  import('../components/admin/AbuseSection').then((m) => ({ default: m.AbuseSection })),
+)
 const RolesMatrixSection = lazy(() =>
   import('../components/admin/RolesMatrix').then((m) => ({
     // Wrapped in the card the detail pages use, so the matrix looks the same
@@ -68,18 +71,20 @@ type FolderPwMode = 'reset' | 'remove'
 // detail page reached from a tile, with a back affordance to the grid.
 type HubSection =
   | 'overview' | 'profile' | 'account' | 'security' | 'tokens' | 'master' | 'locked'
-  | 'admin' | 'roles' | 'audit' | 'policy' | 'backup'
+  | 'admin' | 'roles' | 'audit' | 'policy' | 'backup' | 'abuse'
 type HubScope = 'personal' | 'admin'
 
 const HUB_SECTIONS: readonly HubSection[] = [
   'overview', 'profile', 'account', 'security', 'tokens', 'master', 'locked',
-  'admin', 'roles', 'audit', 'policy', 'backup',
+  'admin', 'roles', 'audit', 'policy', 'backup', 'abuse',
 ]
 
 // Every section that lives under the administration scope. A non-admin who
 // deep-links into one is bounced to the overview by resolveHubView, mirroring
 // the server's 404 on the whole /api/admin surface.
-const ADMIN_SECTIONS: readonly HubSection[] = ['admin', 'roles', 'audit', 'policy', 'backup']
+const ADMIN_SECTIONS: readonly HubSection[] = [
+  'admin', 'roles', 'audit', 'policy', 'backup', 'abuse',
+]
 
 function isHubSection(value: string | undefined): value is HubSection {
   return value !== undefined && (HUB_SECTIONS as readonly string[]).includes(value)
@@ -132,6 +137,7 @@ const SECTION_HEAD: Record<CanonicalSection, { kicker: string; title: string }> 
   audit: { kicker: 'settings.sec_audit_kicker', title: 'settings.sec_audit_title' },
   policy: { kicker: 'settings.sec_policy_kicker', title: 'settings.sec_policy_title' },
   backup: { kicker: 'settings.sec_backup_kicker', title: 'settings.sec_backup_title' },
+  abuse: { kicker: 'settings.sec_abuse_kicker', title: 'settings.sec_abuse_title' },
 }
 
 /**
@@ -205,6 +211,7 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
               {effectiveSection === 'audit' && <AuditSection />}
               {effectiveSection === 'policy' && <PolicySection />}
               {effectiveSection === 'backup' && <BackupSection />}
+              {effectiveSection === 'abuse' && <AbuseSection />}
             </Suspense>
           )}
         </div>
