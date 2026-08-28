@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/abusepolicy"
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/attemptlimit"
 	"foldex/internal/pkg/authctx"
@@ -106,6 +107,17 @@ type Handler struct {
 	// never-configured instance behave identically.
 	policy PolicyReader
 
+	// abuse supplies the live rate-limit magnitudes (ADR-47). Nil is safe and
+	// means the compiled defaults, which is also what the cache answers before
+	// its first load and during an outage of the store — so an unwired handler
+	// and a healthy one differ in what they can be TOLD, never in whether they
+	// enforce anything.
+	abuse *abusepolicy.Cache
+
+	// loginByIP is the ONLY bucket in set mode: it counts how many DISTINCT
+	// accounts one origin has failed against, not how many times it has failed.
+	// Depth per origin is the question the per-account bucket already answers,
+	// and asking it twice is what made a NAT look like a spray.
 	loginByIP    *attemptlimit.Limiter
 	loginByEmail *attemptlimit.Limiter
 	bootstrapIP  *attemptlimit.Limiter
@@ -181,9 +193,16 @@ type HandlerConfig struct {
 	// Policy supplies the owner-configurable rules. Optional: nil runs the
 	// compiled-in floors.
 	Policy PolicyReader
+
+	// Abuse supplies the owner-configurable rate-limit magnitudes. Optional:
+	// nil runs the compiled defaults, and so does a cache whose store is
+	// unreachable — the limits are always enforced at whatever they last were.
+	Abuse *abusepolicy.Cache
 }
 
 func NewHandler(cfg HandlerConfig) *Handler {
+	abuseDefaults := abusepolicy.Default()
+	loginLockout := time.Duration(abuseDefaults.LoginWindowMinutes) * time.Minute
 	return &Handler{
 		repo:    cfg.Repo,
 		mw:      cfg.MW,
@@ -199,9 +218,13 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		require2FAForAdmins: cfg.Require2FAForAdmins,
 		google:              cfg.Google,
 		policy:              cfg.Policy,
+		abuse:               cfg.Abuse,
 
-		loginByIP:    attemptlimit.New(20, 15*time.Minute),
-		loginByEmail: attemptlimit.New(5, 15*time.Minute),
+		// Seeded from the compiled defaults and re-read from the live policy on
+		// every attempt (configureLoginLimits). The seed is what a handler
+		// nothing configured still enforces.
+		loginByIP:    attemptlimit.New(abuseDefaults.LoginDistinctAccountsPerIP, loginLockout),
+		loginByEmail: attemptlimit.New(abuseDefaults.LoginFailuresPerAccount, loginLockout),
 		bootstrapIP:  attemptlimit.New(5, time.Hour),
 		inviteIP:     attemptlimit.New(20, time.Hour),
 		// A reset request costs an e-mail to a third party, so the per-address
@@ -477,6 +500,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	emailKey := "login:em:" + bucket
 
+	h.configureLoginLimits(r.Context())
 	if until, ok := h.loginByIP.Begin(ipKey); !ok {
 		writeRateLimited(w, until)
 		return
@@ -504,8 +528,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// itself an oracle, since the attacker learns which addresses can be
 	// locked out.
 	if !found || verr != nil || user.Status != StatusActive {
-		h.loginByIP.CommitFail(ipKey)
-		h.loginByEmail.CommitFail(emailKey)
+		h.recordLoginFailure(ipKey, emailKey, bucket)
 		// One audit write for all three causes, on the one branch they share.
 		// Writing different entries — or writing only for a known address —
 		// would rebuild the enumeration oracle this branch exists to close, both
@@ -534,6 +557,42 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// The password is proven. Whether that IS the login depends on the account's
 	// second factor and on the admin policy.
 	h.completeLogin(w, r, user, false)
+}
+
+// configureLoginLimits reloads both login buckets from the live abuse policy.
+//
+// Called per attempt rather than at construction because the numbers are
+// owner-editable and take effect without a restart: the screen that sets them
+// is on the instance being defended, and an operator tightening a limit during
+// an incident cannot be told to redeploy first. The cost is bounded — the cache
+// answers from memory for its whole TTL and never blocks — and a nil cache
+// answers with the compiled defaults, so this is safe on a handler nothing
+// wired.
+func (h *Handler) configureLoginLimits(ctx context.Context) {
+	p := h.abuse.Current(ctx)
+	lockout := time.Duration(p.LoginWindowMinutes) * time.Minute
+	h.loginByIP.Configure(p.LoginDistinctAccountsPerIP, lockout)
+	h.loginByEmail.Configure(p.LoginFailuresPerAccount, lockout)
+}
+
+// recordLoginFailure charges both login buckets for one rejected attempt.
+//
+// The two buckets count different things on purpose (SDD §4.2): the origin is
+// judged on how many DISTINCT accounts it has failed against, the account on
+// how many times in a row it has been missed. Counting depth per IP made twenty
+// mistypes by one person indistinguishable from twenty accounts probed, so an
+// office behind a NAT tripped a control aimed at a spray.
+//
+// One function, called from the ONE branch that rejects, because unknown
+// address, wrong password and disabled account must remain indistinguishable
+// (INV-041) — including in what they spend. A second call site is how a
+// difference gets in.
+func (h *Handler) recordLoginFailure(ipKey, emailKey, bucket string) {
+	// Truncated for the reason the audit row is: Login deliberately does not
+	// validate the address, so an unauthenticated caller can submit a 64 KiB
+	// one, and this set keeps up to MaxMembersPerKey members per origin.
+	h.loginByIP.CommitFailFor(ipKey, truncateTo(bucket, maxAuditEmail))
+	h.loginByEmail.CommitFail(emailKey)
 }
 
 // Logout revokes the current session and always answers 204.
