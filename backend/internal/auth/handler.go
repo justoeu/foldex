@@ -521,7 +521,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 			// per-address rate bucket cannot help: it is keyed by that same
 			// unique string, so every attempt gets a fresh budget.
 			TargetEmail: truncateTo(NormalizeEmail(in.who()), maxAuditEmail),
-		}); err != nil {
+		}.WithRequest(r)); err != nil {
 			h.logger.Error("audit login failure", "err", err)
 		}
 		httperr.Write(w, errInvalidCredentials())
@@ -964,7 +964,7 @@ func (h *Handler) issueAndRespond(w http.ResponseWriter, r *http.Request, user U
 		ActorEmail:  user.Email,
 		TargetID:    &user.ID,
 		TargetEmail: user.Email,
-	}); err != nil {
+	}.WithRequest(r)); err != nil {
 		h.logger.Error("audit login", "err", err)
 	}
 	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, tok.CSRF))

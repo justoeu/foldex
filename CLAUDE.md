@@ -122,6 +122,12 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **Public note-media references are read capabilities only, never write/delete authority** → [INV-106](docs/INVARIANTS.md#inv-106)
 - **The `foldex-web` image NEVER ships a private TLS key** → [INV-109](docs/INVARIANTS.md#inv-109)
 - **VAPID private key is `0o600` and never baked into the image** → [INV-117](docs/INVARIANTS.md#inv-117)
+- **`audit_log.subject` é CONTEÚDO, e existe exatamente UMA consulta que o lê** → [INV-175](docs/INVARIANTS.md#inv-175) | guard: `TestAuditSubjectIsSelectedByExactlyOneQuery`, `TestAudit_AdminNeverSeesAContentSubjectOrItsActorEmail`
+  ↳ O guard nasceu andando só por `FuncDecl` e passou com a coluna adicionada direto na const `adminProjection` — a edição mais provável era a que ele não via.
+  ↳ A busca também precisou de trava: `?category=content&q=alice@…` casava em `actor_email` e devolvia o `actor_ref` dela. Coluna escondida na SAÍDA e selecionável na ENTRADA não é enforcement.
+- **`ip`, `ip_trusted` e `user_agent` são um CONJUNTO** → [INV-176](docs/INVARIANTS.md#inv-176) | guard: `TestAuditProvenance_*`
+- **A cobertura de conteúdo é um MIDDLEWARE; o rótulo é opcional por construção** → [INV-177](docs/INVARIANTS.md#inv-177) | guard: `TestWiring_ContentAuditRecordsAMutationThroughTheRealRouter`
+- **O bloqueio permanente de IP é owner-only e TRAVADO, e o cache falha ABERTO** → [INV-178](docs/INVARIANTS.md#inv-178) | guard: `TestValidateBlockIP_*`, `TestBlocklist_FailsOpenWhenTheLoadErrors`, `TestWiring_BlocklistGateRefusesBeforeRouting`
 - **A request span identifies its caller by OPAQUE ID ONLY, and the annotation hangs off principal CREATION, not a route group** → [INV-170](docs/INVARIANTS.md#inv-170) | guard: `TestEveryPrincipalSeamAnnotatesTheSpan`, `TestAnnotatePrincipalRecordsNoIdentifyingAttributeBeyondTheOpaqueID`, `TestAuthenticate_StampsUserIDOnSpansOfTheAuthSurfaceItself`, `TestQuerySpansNeverCarryThePostgresRole`
   ↳ Montado num grupo de rotas, perdeu em silêncio toda a metade autenticada de `/api/auth`.
   ↳ `user.name` do `otelpgx` é o PAPEL do Postgres: ao lado de `user.id` vira "requests por usuário" respondendo `user_foldex` para 100% do tráfego.
@@ -140,6 +146,9 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **`click_log` is the single source of truth for clicks** → [INV-056](docs/INVARIANTS.md#inv-056)
 - **`link_tag` is the only place link↔tag lives** → [INV-057](docs/INVARIANTS.md#inv-057)
 - **`link_tag` and `click_log` are polymorphic (mig 000014) — shared by `link` and `note` via an `entity_kind ∈ {'link','note'}` discriminator on `entity_id`** → [INV-058](docs/INVARIANTS.md#inv-058) | guard: `TestCrossContamination_LinkAndNoteRowsDoNotLeak`
+- **Ordenação crescente na trilha é uma CONSULTA diferente, nunca a página invertida** → [INV-179](docs/INVARIANTS.md#inv-179)
+- **O balde do dia é construído no BANCO; a data local do processo não é a data das linhas** → [INV-180](docs/INVARIANTS.md#inv-180)
+  ↳ Com o servidor em UTC-3 o último balde terminava onde o dia começava: a coluna mais movimentada lia zero, e parecia "um dia quieto".
 - **`internal/entries` (`GET /api/entries`) is the single, read-only source for the interleaved link+note grid** → [INV-060](docs/INVARIANTS.md#inv-060)
 - **`preview_status ∈ {pending, ok, failed}`** → [INV-061](docs/INVARIANTS.md#inv-061)
 - **Change-check claims carry their configuration snapshot** → [INV-062](docs/INVARIANTS.md#inv-062)

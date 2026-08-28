@@ -631,3 +631,76 @@ política para o único job que pode ser desligado.
   identificador, esse sim, é trimado — só espaço é vazio.
 - **O estado desabilitado perdeu o `cursor: progress`**, que prometia trabalho
   em andamento num botão que está apenas esperando o formulário.
+
+### Log de conclusão — Auditoria remodelada (ADR-46)
+
+**O que mudou.** A trilha de auditoria passou a cobrir conteúdo, ganhou o contexto de
+origem de cada evento, agregados, uma lista de bloqueio de IP, uma tela remodelada e uma
+aba de atividade própria na conta. Migrações `000044` (contexto) e `000045` (`ip_block`);
+`db.RequiredSchemaVersion` 43 → 45; permissão nova `instance.ip_block` (owner-only,
+travada).
+
+**O diagnóstico, que era pior que o relatado.** O usuário notou que "só o login está sendo
+catalogado". Não era um bug: a `000033` diz no próprio comentário *"Content is
+deliberately out of scope"*. As 15 ações existentes eram todas de identidade, e link,
+nota, pasta e tag não tinham ponto de escrita nenhum. A mesma migração também recusava
+`ip` e `user_agent` de propósito. Metade do mockup pedia dados que não existiam.
+
+**Lições.**
+
+1. **Uma recusa antiga pode estar certa pelo motivo errado hoje.** A `000033` recusou uma
+   coluna `ip` porque um valor forjável com aparência autoritativa é a pior combinação
+   possível numa tabela de incidente. O argumento continua correto — mas proíbe uma coluna
+   *sem procedência*, não o registro em si. Guardar o endereço observado **ao lado da flag
+   que diz se alguém respondeu por ele** honra o argumento em vez de contorná-lo.
+
+2. **Escopo de leitura tem que ser SQL.** `subject` é a única coluna fora das tabelas de
+   conteúdo que guarda conteúdo. Filtrar em Go depois que a linha chegou sobrevive até
+   alguém adicionar a coluna "para o CSV ficar mais rico". A projeção administrativa não
+   seleciona a coluna, e apaga e-mail e detalhe das linhas de conteúdo dentro do `SELECT`.
+
+3. **Um guard de AST precisa cobrir o lugar onde a regressão mora.** A primeira versão do
+   `TestAuditSubjectIsSelectedByExactlyOneQuery` andava só por `FuncDecl`, e a mutação
+   "adiciona `subject` à `adminProjection`" **passou** — a projeção é uma `const` de
+   pacote. Um guard que não cobre a edição mais provável é pior que nenhum, porque parece
+   cobrir. Segunda lição do mesmo teste: casar `subject` e `audit_log` no MESMO literal
+   deixava passar uma projeção montada por fragmentos; a tabela passou a ser casada contra
+   o arquivo inteiro.
+
+4. **Esconder na saída e selecionar na entrada não é esconder.** A busca casava em
+   `actor_email` das linhas de conteúdo. `?category=content&q=alice@example.com` devolvia
+   as linhas dela, e o `actor_ref` opaco virava a identidade dela — o pseudônimo era
+   cosmético enquanto o `WHERE` continuasse enxergando a coluna. Achado do sweep.
+
+5. **Um fuso horário entrou pela porta do driver.** `generate_series($1::date, $2::date)`
+   fez o Postgres inferir os parâmetros como `date`, e o driver codificou o dia de
+   calendário **local do processo** enquanto `created_at` era comparado no fuso da sessão.
+   Num servidor em UTC-3 o dia corrente caía depois do fim do gráfico. Só aparece fora do
+   UTC, e o sintoma é "um dia quieto". O limite passou a ser o `now()` do banco, dentro do
+   SQL.
+
+6. **Um middleware não testado MONTADO é um middleware que pode ser deletado.** Os testes
+   unitários de `contentAudit` e `blocklistGate` passavam com as duas linhas `r.Use(...)`
+   removidas do `router.go` — a mesma classe de falha do INV-170. Os testes de wiring
+   passaram a ir por `server.New` e a afirmar sobre efeitos observáveis de fora.
+
+7. **Repetir um agregado por página é um export virando cinquenta varreduras.**
+   `FailureBursts` estava dentro do laço de páginas do CSV. O resultado é invariante — a
+   janela não se move — então eram até 50 `GROUP BY` idênticos sobre o volume da tabela.
+   Achado do sweep.
+
+8. **Um parâmetro que é `null` em todos os call sites é código morto com cara de trava.**
+   `selfIP` era passado como `null` nos dois lugares, então o trilho de auto-bloqueio do
+   cliente nunca rodava. O navegador não tem como saber o endereço público dele — aquele
+   trilho é do servidor, e o parâmetro saiu.
+
+9. **Um índice que ninguém lê é escrita a mais na tabela mais escrita.** O
+   `audit_log_ip_idx` não servia consulta nenhuma: todas filtram por `created_at` e
+   agrupam por `ip`, sem igualdade na coluna líder. Removido antes de shipar.
+
+**Aberto / próximo.**
+
+- Validação manual no navegador (Configurações → Administração → Log de auditoria e
+  Configurações → Conta → Atividade) — depende de sessão autenticada.
+- Screenshots da tela nova nos dois READMEs.
+- Sem GeoIP: as origens mostram endereço e dispositivo, não cidade.

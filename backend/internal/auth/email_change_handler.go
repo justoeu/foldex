@@ -205,7 +205,7 @@ func (h *Handler) ConfirmEmailChange(w http.ResponseWriter, r *http.Request) {
 		ActorID:     &user.ID,
 		TargetID:    &user.ID,
 		TargetEmail: user.Email,
-	}); err != nil {
+	}.WithRequest(r)); err != nil {
 		h.logger.Error("audit email change", "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)

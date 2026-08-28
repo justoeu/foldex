@@ -121,13 +121,103 @@ export type RolesResponse = {
   editable_disabled: boolean
 }
 
+export type AuditCategory = 'identity' | 'content'
+export type AuditSeverity = 'info' | 'warning' | 'critical'
+/** The periods the server offers. An arbitrary range is not one of them. */
+export type AuditWindow = '24h' | '7d' | '30d'
+
+/**
+ * One row of the trail.
+ *
+ * `actor_email` is null on a CONTENT row and `actor_ref` carries an opaque
+ * account id instead — the server withholds the name in SQL (ADR-46), so this
+ * is a shape the client renders, never a rule it applies. `subject` arrives
+ * only from the caller's OWN activity feed; the administrative projection does
+ * not select the column at all.
+ */
 export type AuditEntry = {
   id: number
   action: string
+  category: AuditCategory
+  severity: AuditSeverity
   actor_email: string | null
+  actor_ref: number | null
   target_email: string | null
   detail: string | null
+  ip: string | null
+  ip_trusted: boolean
+  user_agent: string | null
+  entity_kind?: string | null
+  entity_id?: number | null
+  subject?: string | null
   created_at: string
+}
+
+export type AuditTotals = {
+  events: number
+  events_prev: number
+  failures: number
+  failures_prev: number
+  access_changes: number
+  access_changes_prev: number
+  actors: number
+  active_users: number
+}
+
+export type AuditDayBucket = {
+  day: string
+  logins: number
+  failed: number
+  admin: number
+  content: number
+}
+
+export type AuditActionStat = { action: string; category: AuditCategory; count: number }
+export type AuditActorStat = { email: string; role: Role; count: number }
+export type AuditOriginStat = {
+  ip: string
+  trusted: boolean
+  user_agent: string | null
+  count: number
+  failures: number
+  last_seen: string
+  blocked: boolean
+}
+export type AuditRisk = {
+  ip: string
+  failures: number
+  targets: number
+  first_at: string
+  last_at: string
+  blocked: boolean
+}
+
+export type AuditStats = {
+  totals: AuditTotals
+  days: AuditDayBucket[]
+  distribution: AuditActionStat[]
+  actors: AuditActorStat[]
+  origins: AuditOriginStat[]
+  risk: AuditRisk | null
+}
+
+export type IPBlock = {
+  id: number
+  ip: string
+  reason: string | null
+  created_by: string | null
+  created_at: string
+}
+
+/** The filter the trail and its header are both read under. */
+export type AuditQuery = {
+  window?: AuditWindow
+  action?: string
+  category?: AuditCategory
+  q?: string
+  before?: number
+  /** Oldest-first. A different QUERY on the server, not a reversed page. */
+  order?: 'asc'
 }
 
 /** Which factors satisfy AUTH_REQUIRE_2FA_FOR_ADMINS (ADR-37). */
@@ -185,12 +275,89 @@ export async function setRolePermissions(
  * exactly that view, and two spellings of the same page would refetch it one
  * click later. `before` is the keyset cursor; 0 stands for "the head".
  */
-export function auditQueryKey(action = '', before = 0) {
-  return ['admin', 'audit', action, before] as const
+export function auditQueryKey(q: AuditQuery = {}) {
+  return [
+    'admin', 'audit',
+    q.window ?? '', q.action ?? '', q.category ?? '', q.q ?? '', q.before ?? 0, q.order ?? '',
+  ] as const
 }
 
-export async function fetchAudit(params: { action?: string; before?: number } = {}): Promise<AuditEntry[]> {
-  const { data } = await http.get<{ entries: AuditEntry[] }>('/api/admin/audit', { params })
+export async function fetchAudit(q: AuditQuery = {}): Promise<AuditEntry[]> {
+  const { data } = await http.get<{ entries: AuditEntry[] }>('/api/admin/audit', { params: auditParams(q) })
+  return data.entries
+}
+
+/**
+ * Drops empty values instead of sending them.
+ *
+ * `?action=` is not "no action filter" to the server — parseAuditFilter reads
+ * the empty string as absent, which happens to agree here, but `?before=0`
+ * would be a cursor of zero and `?q=` a search for nothing. Sending only what
+ * is set keeps the URL the same one the query key describes.
+ */
+function auditParams(q: AuditQuery): Record<string, string | number> {
+  const params: Record<string, string | number> = {}
+  if (q.window) params.window = q.window
+  if (q.action) params.action = q.action
+  if (q.category) params.category = q.category
+  if (q.q) params.q = q.q
+  if (q.before) params.before = q.before
+  if (q.order) params.order = q.order
+  return params
+}
+
+export function auditStatsQueryKey(window: AuditWindow) {
+  return ['admin', 'audit', 'stats', window] as const
+}
+
+export async function fetchAuditStats(window: AuditWindow): Promise<AuditStats> {
+  const { data } = await http.get<AuditStats>('/api/admin/audit/stats', { params: { window } })
+  return data
+}
+
+/**
+ * The CSV the browser saves.
+ *
+ * Fetched through the same axios client as everything else rather than a plain
+ * anchor: the session lives in a cookie the SPA sends with credentials, and the
+ * CSRF header is injected by the client — a bare <a href> would carry neither
+ * on a cross-origin dev setup, and the download would answer 401 with no
+ * visible reason.
+ */
+export async function exportAuditCsv(q: AuditQuery = {}): Promise<Blob> {
+  const { data } = await http.get('/api/admin/audit/export.csv', {
+    params: auditParams(q),
+    responseType: 'blob',
+  })
+  return data as Blob
+}
+
+export const ipBlocksQueryKey = ['admin', 'audit', 'blocks'] as const
+
+export async function fetchIPBlocks(): Promise<IPBlock[]> {
+  const { data } = await http.get<{ blocks: IPBlock[] }>('/api/admin/audit/blocks')
+  return data.blocks
+}
+
+/** Owner-only: `instance.ip_block` is locked to the owner (ADR-46). */
+export async function blockIP(ip: string, reason: string): Promise<IPBlock> {
+  const { data } = await http.post<IPBlock>('/api/admin/audit/blocks', { ip, reason })
+  return data
+}
+
+export async function unblockIP(ip: string): Promise<void> {
+  await http.delete(`/api/admin/audit/blocks/${encodeURIComponent(ip)}`)
+}
+
+/**
+ * The caller's OWN activity. Not an admin route: it needs no administrative
+ * permission and is the only projection that returns the content label.
+ */
+export const activityQueryKey = (before = 0) => ['activity', before] as const
+
+export async function fetchOwnActivity(before?: number): Promise<AuditEntry[]> {
+  const params = before ? { before } : {}
+  const { data } = await http.get<{ entries: AuditEntry[] }>('/api/activity', { params })
   return data.entries
 }
 

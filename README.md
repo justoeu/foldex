@@ -595,9 +595,35 @@ not just hidden in the UI: you cannot demote, disable or delete **yourself**; th
 active administrator** cannot be removed by anyone; and the **owner's** role and status
 cannot be changed at all except by transferring. Transferring signs out both accounts.
 
-**Audit trail.** **Settings → Administration → Audit log** records sign-ins and their
-failures, role and status changes, invitations, forced recoveries and policy edits. It
-survives the accounts it describes: deleting a user does not erase what that user did.
+**Audit trail.** **Settings → Administration → Audit log** records two kinds of event.
+*Identity*: sign-ins and their failures, role and status changes, invitations, forced
+recoveries, policy edits and blocklist changes. *Content*: every accepted create, edit and
+delete of a link, note, folder or tag, plus imports and restores. It survives the accounts
+it describes — deleting a user does not erase what that user did.
+
+The screen opens on a period (24 h, 7 days, 30 days) and shows headline counts against the
+period before, events per day, the share of each event type, the busiest accounts, the
+addresses and devices seen, and any burst of failed sign-ins from one address. You can
+filter by type or category, search by account, address or event, sort oldest-first, and
+**export the current filter as CSV**.
+
+**Content events name no one and describe nothing.** An administrator sees *"link
+created · user #7"* — never the title, the URL, or the address of the account that wrote
+it. Content stays private per account, administrators included, and that is enforced in
+the SQL rather than in the screen. The account itself sees its own history in full, with
+titles, under **Settings → Account → Activity**.
+
+**Every row records where it came from**, and says whether to believe it: the address the
+server observed plus the device string, marked *via trusted proxy* when a proxy you
+configured in `TRUSTED_PROXY_IPS` vouched for it and *direct address* when nothing did.
+On the default deployment — bound to loopback with no proxy — every row is the raw peer.
+
+**Blocking an address (owner only).** The risk card can install a permanent block on an
+address, and blocked addresses are listed with a way back out. Four things are refused
+outright, because this is the one control that can make an instance unreachable to the
+person holding it: the address you are connected from, loopback, and any proxy listed in
+`TRUSTED_PROXY_IPS`. Blocking is not authentication — if the database is unreachable the
+filter opens rather than locking everyone out.
 
 **Instance policy (owner only).** **Settings → Administration → Password and sign-in
 policy** sets the minimum password length, the mailed-code lifetime and resend cooldown,

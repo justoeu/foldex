@@ -83,6 +83,13 @@ type Deps struct {
 	// route groups mount. AuthMiddleware is required whenever AuthEnabled is true.
 	AuthHandler  *auth.Handler
 	AdminHandler *auth.AdminHandler
+	// AuthRepo is the SAME repository the handlers above were built with, not a
+	// second one over the same pool. The audit trail's writer and the
+	// blocklist's reader both live on it, and two instances would be two
+	// prepared-statement caches for one table — harmless today and exactly the
+	// kind of duplicate that drifts. Nil unmounts content auditing and the
+	// blocklist gate, which is what the router-level tests want.
+	AuthRepo *auth.Repository
 	// PolicyHandler serves the owner-configurable instance rules. Nil leaves the
 	// routes unmounted and every rule at its compiled-in floor.
 	PolicyHandler  *policy.Handler
@@ -149,6 +156,23 @@ func New(d Deps) http.Handler {
 			"rate limits will apply to all users as one")
 	}
 	r.Use(trustedProxyRealIP(trustedNets))
+	// isTrustedProxy is the CIDR test both the block rail and this file need.
+	isTrustedProxy := func(ip string) bool {
+		parsed := net.ParseIP(ip)
+		return parsed != nil && containsIP(trustedNets, parsed)
+	}
+	// The permanent blocklist (ADR-46). Mounted immediately after the address is
+	// resolved and BEFORE routing, so a blocked caller reaches no handler; and
+	// after RequestID would be wrong only in that a refused request would take a
+	// number it never uses.
+	var blocklist *auth.Blocklist
+	if d.AuthRepo != nil {
+		blocklist = auth.NewBlocklist(d.AuthRepo.BlockedIPs)
+		r.Use(blocklistGate(blocklist))
+		if d.AdminHandler != nil {
+			d.AdminHandler.WithBlocklist(blocklist, isTrustedProxy)
+		}
+	}
 	r.Use(middleware.RequestID)
 	if d.Trace != nil {
 		r.Use(d.Trace)
@@ -252,6 +276,48 @@ func New(d Deps) http.Handler {
 				pr.Use(d.AuthMiddleware.Authenticate)
 			} else {
 				pr.Use(bootstrapPrincipal(d.Pool, d.Logger))
+			}
+
+			// Content auditing (ADR-46). Inside the principal group so the
+			// actor is resolved, and above every content route so a route
+			// added later is covered without anyone having to remember — the
+			// same reason credential redaction lives at the root log handler
+			// rather than at each call site. It records nothing for a method
+			// or route pattern outside contentAuditActions, so mounting it
+			// broadly costs a map lookup on mutations only.
+			if d.AuthRepo != nil {
+				pr.Use(contentAudit(func(r *http.Request, rec auth.AuditRecord) {
+					// WithoutCancel, not the request context. The handler has
+					// already committed by the time this runs, so a client that
+					// hangs up after a successful DELETE would otherwise take
+					// the audit row with it — cancelled context, write aborted,
+					// nothing but a log line left. That is not a lost log
+					// entry, it is a way to delete a row without being
+					// recorded, available to anyone who closes the connection
+					// fast enough. The deadline keeps a hung database from
+					// holding the goroutine open indefinitely.
+					ctx, cancel := context.WithTimeout(
+						context.WithoutCancel(r.Context()), auditWriteTimeout)
+					defer cancel()
+					if err := d.AuthRepo.Audit(ctx, rec.WithRequest(r)); err != nil {
+						d.Logger.Error("content audit write", "err", err, "action", rec.Action)
+					}
+				}))
+				// The caller reading their OWN activity. Not under /admin:
+				// this needs no administrative permission and must work for a
+				// viewer, and it is the only projection that returns the
+				// subject column.
+				if d.AuthHandler != nil {
+					// RejectAPIToken for INV-023's reason: a token is scoped to
+					// CONTENT, and this feed carries the account's sign-in
+					// ORIGINS — the addresses and devices it was used from.
+					// That is account metadata, which is why every other
+					// surface returning it (/api/admin, /api/settings, the
+					// session half of /api/auth) refuses a bearer credential
+					// too. A token pasted into an extension's configuration
+					// must not read the owner's movements.
+					pr.With(authgate.RejectAPIToken).Get("/activity", d.AuthHandler.ListOwnActivity)
+				}
 			}
 
 			if d.AdminHandler != nil {

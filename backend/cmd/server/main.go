@@ -380,6 +380,10 @@ func main() {
 		FolderUnlockKey:     folderUnlockKey,
 		AuthHandler:         authHandler,
 		AdminHandler:        adminHandler,
+		// The same repository the two handlers above hold, not a second one:
+		// the content-audit middleware writes through it and the blocklist
+		// gate reads through it (ADR-46).
+		AuthRepo: authRepo,
 		// Without this the router falls back to the COMPILED matrix and the
 		// content, import and backup-restore gates keep enforcing it: a
 		// revocation would commit, audit, render as unticked, and change

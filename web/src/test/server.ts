@@ -7,6 +7,15 @@ import type { Entry, Folder, Link, Note, Tag } from '../api/types'
 
 export type MockState = {
   tags: Tag[]
+  /**
+   * The signed-in account's own content activity (ADR-46).
+   *
+   * Rows carry `subject` — the link's title, the folder's name — because this
+   * feed's reader IS the actor. The administrative trail never selects that
+   * column, so a fixture that leaked one here would be describing a projection
+   * the server does not have.
+   */
+  activity: AuditEntryMock[]
   links: Link[]
   notes: Note[]
   folders: Folder[]
@@ -102,7 +111,10 @@ export type MockState = {
 }
 
 export function freshState(): MockState {
-  return { tags: [], links: [], notes: [], folders: [], folderPasswords: {}, urlMetadataCalls: [] }
+  return {
+    tags: [], links: [], notes: [], folders: [], folderPasswords: {},
+    urlMetadataCalls: [], activity: [],
+  }
 }
 
 type Method = 'get' | 'post' | 'put' | 'patch' | 'delete'
@@ -124,6 +136,18 @@ function availability(value: string | null, s: MockState) {
 const buildRoutes = (): Record<Method, Route[]> => ({
   get: [
     { url: /^\/api\/tags$/, handle: (_m, _d, _p, s) => s.tags },
+    // The caller's OWN activity (ADR-46). Real route and real cursor param, so
+    // a rename on either side is caught here rather than in a blanket mock —
+    // and this is the ONE projection that returns `subject`, which is the
+    // property the read split exists to keep true.
+    {
+      url: /^\/api\/activity$/,
+      handle: (_m, _d, p, s) => {
+        const before = Number(p.get('before') ?? 0)
+        const rows = before > 0 ? s.activity.filter((e) => e.id < before) : s.activity
+        return { entries: rows.slice(0, 50) }
+      },
+    },
     // The availability probes. Present so component tests exercise the REAL
     // route and query-param name — a suite that only blanket-mocks `http.get`
     // stays green through a rename on either side. `takenIdentifiers` is empty
@@ -485,6 +509,22 @@ function seenChange(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockSt
   }
   s.links[idx] = { ...s.links[idx], change_seen_at: new Date().toISOString() }
   return null
+}
+
+/** One row of the own-activity feed, as /api/activity returns it. */
+export type AuditEntryMock = {
+  id: number
+  action: string
+  category: 'content'
+  severity: 'info'
+  detail: string | null
+  ip: string | null
+  ip_trusted: boolean
+  user_agent: string | null
+  entity_kind: string | null
+  entity_id: number | null
+  subject: string | null
+  created_at: string
 }
 
 export function installAxiosMock(state: MockState) {

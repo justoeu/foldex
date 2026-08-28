@@ -3,9 +3,14 @@ package auth
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
+	"net/netip"
+	"strings"
 	"time"
 	"unicode/utf8"
 
+	"foldex/internal/pkg/auditctx"
 	"foldex/internal/pkg/authctx"
 )
 
@@ -42,12 +47,28 @@ const (
 )
 
 // AuditEntry is one row of the trail as the API returns it.
+//
+// Category and Severity are derived (see audit_vocab.go), never stored. Subject
+// is populated by exactly one query — the owner's own-activity feed; the
+// administrative projection does not select the column at all, which is what
+// keeps INV-045 true for a table both readers share.
 type AuditEntry struct {
-	ID          int64     `json:"id"`
-	Action      string    `json:"action"`
+	ID       int64  `json:"id"`
+	Action   string `json:"action"`
+	Category string `json:"category"`
+	Severity string `json:"severity"`
+	// ActorEmail is withheld for content rows on the administrative
+	// projection: who edited a bookmark is answered by ActorRef, an opaque id.
 	ActorEmail  *string   `json:"actor_email"`
+	ActorRef    *int64    `json:"actor_ref"`
 	TargetEmail *string   `json:"target_email"`
 	Detail      *string   `json:"detail"`
+	IP          *string   `json:"ip"`
+	IPTrusted   bool      `json:"ip_trusted"`
+	UserAgent   *string   `json:"user_agent"`
+	EntityKind  *string   `json:"entity_kind,omitempty"`
+	EntityID    *int64    `json:"entity_id,omitempty"`
+	Subject     *string   `json:"subject,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -63,6 +84,35 @@ type AuditRecord struct {
 	TargetID    *authctx.UserID
 	TargetEmail string
 	Detail      string
+	// IP is the address the server OBSERVED — RemoteAddr after
+	// server.trustedProxyRealIP ran — and IPTrusted says whether a configured
+	// proxy vouched for it. The pair travels together on purpose: an address
+	// with no provenance is the thing migration 000033 refused to store.
+	IP        string
+	IPTrusted bool
+	UserAgent string
+	// EntityKind, EntityID and Subject describe the row a CONTENT event
+	// touched. Subject is user content and is projected only to its owner.
+	EntityKind string
+	EntityID   *int64
+	Subject    string
+}
+
+// WithRequest fills the context columns from the live request.
+//
+// One helper at every write site rather than three lines repeated: the address,
+// its provenance and the device are a SET — a row carrying an address without
+// the flag that says whether anyone vouched for it is the shape migration
+// 000033 refused, and the easiest way to recreate it is to copy two of the
+// three lines.
+func (rec AuditRecord) WithRequest(r *http.Request) AuditRecord {
+	if r == nil {
+		return rec
+	}
+	rec.IP = normalizeAuditIP(r.RemoteAddr)
+	rec.IPTrusted = auditctx.IPTrusted(r.Context())
+	rec.UserAgent = r.UserAgent()
+	return rec
 }
 
 // Audit appends one entry.
@@ -87,10 +137,21 @@ func (r *Repository) Audit(ctx context.Context, rec AuditRecord) error {
 		id := int64(*rec.TargetID)
 		target = &id
 	}
+	// The address goes in through NULLIF + a cast rather than as a typed
+	// value: an unparseable string must land as NULL, not abort the INSERT.
+	// An audit failure is logged and swallowed, so a malformed address would
+	// not surface as an error — the ENTRY would simply vanish, which is the one
+	// outcome a trail must not have.
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO audit_log (action, actor_id, actor_email, target_id, target_email, detail)
-		VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), NULLIF($6, ''))`,
-		rec.Action, actor, rec.ActorEmail, target, rec.TargetEmail, truncateDetail(rec.Detail))
+		INSERT INTO audit_log (
+			action, actor_id, actor_email, target_id, target_email, detail,
+			ip, ip_trusted, user_agent, entity_kind, entity_id, subject)
+		VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), NULLIF($6, ''),
+			NULLIF($7, '')::inet, $8, NULLIF($9, ''), NULLIF($10, ''), $11, NULLIF($12, ''))`,
+		rec.Action, actor, rec.ActorEmail, target, rec.TargetEmail, truncateDetail(rec.Detail),
+		normalizeAuditIP(rec.IP), rec.IPTrusted, truncateTo(rec.UserAgent, maxAuditUserAgent),
+		truncateTo(rec.EntityKind, maxAuditEntityKind), rec.EntityID,
+		truncateTo(rec.Subject, maxAuditSubject))
 	if err != nil {
 		return fmt.Errorf("audit: %w", err)
 	}
@@ -108,10 +169,44 @@ func truncateDetail(s string) string { return truncateTo(s, maxAuditDetail) }
 const (
 	maxAuditDetail = 512
 	maxAuditEmail  = MaxEmailLen
+	// Mirror migration 000044's CHECKs, for the reason above.
+	maxAuditUserAgent  = 256
+	maxAuditEntityKind = 32
+	maxAuditSubject    = 256
 	// maxAuditPageSize bounds one page of the trail. Shared with the handler so
 	// the range it validates and the range this clamps cannot drift apart.
 	maxAuditPageSize = 200
 )
+
+// normalizeAuditIP returns the address in Postgres's own spelling, or "" for
+// anything inet would reject.
+//
+// Parsing here rather than letting the cast fail: RemoteAddr is
+// "host:port" on a direct bind and a bare host once trustedProxyRealIP has
+// rewritten it, and an IPv4-mapped IPv6 address ("::ffff:1.2.3.4") is a second
+// spelling of a row that already exists. Both would make the blocklist's
+// equality test and the origins aggregate disagree with themselves.
+// NormalizeIP is normalizeAuditIP for callers outside this package — the
+// enforcement middleware and the blocklist share it so a blocked address and a
+// recorded one cannot be two spellings that never compare equal.
+func NormalizeIP(raw string) string { return normalizeAuditIP(raw) }
+
+func normalizeAuditIP(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		raw = host
+	}
+	addr, err := netip.ParseAddr(strings.Trim(raw, "[]"))
+	if err != nil {
+		return ""
+	}
+	if addr.Is4In6() {
+		addr = addr.Unmap()
+	}
+	return addr.String()
+}
 
 func truncateTo(s string, max int) string {
 	if len(s) <= max {
@@ -125,66 +220,6 @@ func truncateTo(s string, max int) string {
 		cut--
 	}
 	return s[:cut]
-}
-
-// ListAudit returns the newest entries, optionally narrowed to one action.
-//
-// Keyset pagination rather than OFFSET: the trail grows at its head, so an
-// offset-paged second page would re-show rows the first page already displayed
-// as soon as anything was written between the two requests.
-//
-// The predicates are BRANCHED in Go rather than expressed as an OR against an
-// empty-string parameter. pgx caches statements, so after a few executions Postgres
-// builds a GENERIC plan — and an OR against the same parameter is not sargable
-// there, so it cannot become an index condition. The filter would degrade to a
-// heap filter over a backward scan of the whole table, which on a trail
-// dominated by login.failed means reading hundreds of thousands of rows to fill
-// one 50-row page of a rare action. Four static strings keep every path on an
-// index; none of them interpolates user input.
-//
-// ORDER BY is id alone, matching the cursor. id is monotonic with created_at
-// (both come from the same INSERT) and was already the tiebreaker, so ordering
-// by it costs nothing in correctness and lets `id < $n` actually start the scan
-// instead of filtering after it.
-func (r *Repository) ListAudit(ctx context.Context, action string, beforeID int64, limit int) ([]AuditEntry, error) {
-	if limit <= 0 || limit > maxAuditPageSize {
-		limit = 50
-	}
-	const projection = `SELECT id, action, actor_email, target_email, detail, created_at FROM audit_log `
-
-	var (
-		query string
-		args  []any
-	)
-	switch {
-	case action == "" && beforeID == 0:
-		query = projection + `ORDER BY id DESC LIMIT $1`
-		args = []any{limit}
-	case action == "":
-		query = projection + `WHERE id < $1 ORDER BY id DESC LIMIT $2`
-		args = []any{beforeID, limit}
-	case beforeID == 0:
-		query = projection + `WHERE action = $1 ORDER BY id DESC LIMIT $2`
-		args = []any{action, limit}
-	default:
-		query = projection + `WHERE action = $1 AND id < $2 ORDER BY id DESC LIMIT $3`
-		args = []any{action, beforeID, limit}
-	}
-
-	rows, err := r.pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list audit: %w", err)
-	}
-	defer rows.Close()
-	out := []AuditEntry{}
-	for rows.Next() {
-		var e AuditEntry
-		if err := rows.Scan(&e.ID, &e.Action, &e.ActorEmail, &e.TargetEmail, &e.Detail, &e.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan audit: %w", err)
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
 }
 
 // AuditRetention is how long the trail is kept.

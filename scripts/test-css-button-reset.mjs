@@ -52,6 +52,13 @@ const FILES = SELF_TEST
 // earlier version of this guard passed every longhand mutation.
 const RESET_PROPS = ['background', 'color', 'padding', 'border']
 const GUARDED = [
+  'fx-aud-window',
+  'fx-aud-window-on',
+  'fx-aud-chip',
+  'fx-aud-chip-on',
+  'fx-aud-event-row',
+  'fx-aud-event-open',
+  'fx-aud-risk-cta',
   'fx-hub-seg-btn',
   'fx-hub-seg-btn-active',
   'fx-vs',

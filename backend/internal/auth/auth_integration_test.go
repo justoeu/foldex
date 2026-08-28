@@ -313,6 +313,13 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 		require.NoError(t, grantsRepo.Load(context.Background()))
 	}
 	admin := auth.NewAdminHandler(repo, mail, logger, testBaseURL, cfg.Policy, grantsRepo)
+	// The blocklist cache and the trusted-proxy predicate the block rails
+	// consult (ADR-46). Wired here rather than left nil so the HTTP tests
+	// exercise the SAME refusals production does — a nil blocklist would skip
+	// the invalidation and a nil predicate would silently pass the proxy rail.
+	admin.WithBlocklist(auth.NewBlocklist(repo.BlockedIPs), func(ip string) bool {
+		return ip == testTrustedProxyIP
+	})
 
 	r := chi.NewRouter()
 	r.Route("/api", func(api chi.Router) {
@@ -332,6 +339,10 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 						policyRepo, logger, admin.AuditPolicyChange, nil).Mount)
 				}
 			})
+			// The caller's own activity (ADR-46), mounted where internal/server
+			// mounts it: inside the principal group and OUTSIDE /admin, because
+			// it needs no administrative permission and must work for a viewer.
+			pr.Get("/activity", h.ListOwnActivity)
 			// A stand-in for the content surface, so tests can assert that a
 			// pre-session credential does not reach data endpoints.
 			pr.Get("/links", func(w http.ResponseWriter, r *http.Request) {

@@ -53,6 +53,14 @@ const (
 	// recovery and then walk in through the gap. The compiled floors in
 	// backupagent.ValidateJobConfig bound even the owner.
 	PermInstanceBackupSchedule Permission = "instance.backup_schedule"
+
+	// Installing and removing permanent IP blocks (ADR-46). Owner-only and
+	// LOCKED, for a reason the other two do not have: this is the only
+	// permission whose misuse can make the instance unreachable — including to
+	// the person holding it. The rails in auth.ValidateBlockIP refuse the
+	// addresses that would do it by accident; keeping the grant on the seat
+	// that cannot be locked out of its own instance is what covers the rest.
+	PermInstanceIPBlock Permission = "instance.ip_block"
 )
 
 // AllPermissions lists every permission in display order.
@@ -77,6 +85,7 @@ var AllPermissions = []Permission{
 	PermInstanceTransfer,
 	PermInstanceBackupRead,
 	PermInstanceBackupSchedule,
+	PermInstanceIPBlock,
 }
 
 // AllRoles lists every role from most to least privileged, in display order.
@@ -104,6 +113,7 @@ var rolePermissions = map[Role]map[Permission]bool{
 		PermInstanceTransfer:       true,
 		PermInstanceBackupRead:     true,
 		PermInstanceBackupSchedule: true,
+		PermInstanceIPBlock:        true,
 	},
 	RoleAdmin: {
 		PermContentRead:   true,
@@ -195,12 +205,16 @@ func DefaultGrants() map[Role]map[Permission]bool {
 //     disaster recovery: an admin who could stretch the dump agenda to its
 //     floor or park the drill on a dead slot could thin the instance's
 //     backups and then act inside the gap.
+//   - PermInstanceIPBlock is the same argument at the network edge, and one
+//     step further: a grantable power to decide who may reach the instance
+//     could be used to lock the owner out of the screen that would revoke it.
 var lockedPermissions = map[Permission]bool{
 	PermRolesAssign:            true,
 	PermPolicyWrite:            true,
 	PermInstanceTransfer:       true,
 	PermContentRead:            true,
 	PermInstanceBackupSchedule: true,
+	PermInstanceIPBlock:        true,
 }
 
 // IsPermissionLocked reports whether a permission is outside configuration.

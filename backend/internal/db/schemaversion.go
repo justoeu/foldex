@@ -30,8 +30,14 @@ import (
 // — the backend writes the new shape, and an unmigrated database would still
 // hold rows in the old one. Distinct from backupagent.RequiredSchemaVersion —
 // also 43 now, but tracked separately because the two binaries' dependencies
-// move independently.
-const RequiredSchemaVersion = 43
+// move independently. 45 is ADR-46: 000044 adds the audit trail's context
+// columns (ip, ip_trusted, user_agent) and its content columns (entity_kind,
+// entity_id, subject), which every audit write now populates and both read
+// projections select; 000045 adds ip_block, which the enforcement middleware
+// reads on the request path. An unmigrated database would fail the first
+// INSERT into audit_log — that is, on the first login — so this is a hard
+// floor rather than a degradation.
+const RequiredSchemaVersion = 45
 
 // ErrSchemaOutdated is returned when the database has not been migrated.
 var ErrSchemaOutdated = errors.New("db: schema is older than this binary requires")

@@ -1601,3 +1601,118 @@ está nos PISOS, não na pobreza da forma.
 
 Detalhe em [`docs/SDD-OPS-BACKUP.md`](./SDD-OPS-BACKUP.md) §6.1. Status: **Aceito ·
 implementado (PR7)**.
+
+### ADR-46 — A trilha de auditoria cobre CONTEÚDO, ganha contexto de origem e uma lista de bloqueio
+
+**Contexto.** A migração `000033` criou `audit_log` com duas recusas escritas no
+próprio comentário, e as duas envelheceram de formas diferentes.
+
+A primeira: *"Content is deliberately out of scope"* — um clique já tem `click_log`,
+e misturar os dois enterraria os eventos de segurança que a tabela existe para
+mostrar. O efeito prático, três anos depois, é uma tela de auditoria onde só
+aparecem logins. Criar, editar e excluir link, nota, pasta e tag — a atividade
+inteira do produto — não deixa rastro nenhum. Numa investigação, "quem apagou
+isto" é a pergunta mais frequente e a trilha não sabe responder.
+
+A segunda: *"There is no ip or user_agent column"*, porque `X-Forwarded-For` é
+forjável num bind direto e uma coluna alimentada por ele seria ao mesmo tempo
+**autoritativa na aparência e controlada pelo atacante** — a pior combinação
+para uma tabela que se consulta durante um incidente. Esse argumento continua
+correto, mas o que ele proíbe é uma coluna que **não sabe dizer de onde veio o
+valor**. Não proíbe registrar o endereço que o servidor de fato observou, ao
+lado de uma flag dizendo se algum proxy configurado respondeu por ele.
+
+**Decisão.**
+
+1. **A trilha passa a ter duas CATEGORIAS derivadas, `identity` e `content`**, e
+   a categoria decide o **escopo de leitura**. Derivadas em
+   `internal/auth/audit_vocab.go`, nunca armazenadas: uma classificação gravada
+   no momento da escrita congelaria o significado daquele dia, e todo
+   refinamento posterior valeria só para linhas futuras. `AuditCategory` falha
+   **para o lado de conteúdo** — uma ação que ninguém classificou é tratada como
+   se carregasse dado privado, porque o custo de errar assim é uma linha faltando
+   numa tela, e o custo do outro default é um vazamento entre contas.
+
+2. **O split de leitura é SQL, não disciplina.** `audit_log` ganha `subject` — o
+   rótulo humano da linha tocada — e existe exatamente **uma** consulta que o
+   projeta: `ListOwnActivity`, escopada em `actor_id = o chamador`. A projeção
+   administrativa (`adminProjection`) não seleciona a coluna, e além disso
+   apaga `actor_email`, `target_email` e `detail` das linhas de conteúdo **no
+   próprio SELECT**, via `CASE WHEN action = ANY($content)`. O administrador
+   recebe `actor_ref`, um id opaco. `TestAuditSubjectIsSelectedByExactlyOneQuery`
+   varre o AST de todo fonte de produção e falha se qualquer outra declaração —
+   função **ou constante de pacote** — nomear a coluna num SELECT sobre
+   `audit_log`. A primeira versão do guard só andava por `FuncDecl` e passou com
+   a coluna adicionada direto na constante da projeção: a edição mais provável
+   era justamente a que ele não enxergava.
+
+   **O que o pseudônimo protege, e o que não protege.** Ele remove a exposição
+   **incidental** — nomes ao lado de atividade de conteúdo numa tela que o
+   administrador abre por outros motivos — e permite correlacionar linhas entre
+   si sem nomear ninguém. Não defende contra um administrador determinado: a
+   superfície de administração entrega ids de usuário em outros lugares (precisa,
+   para endereçar um PATCH), e numa instância self-hosted quem tem shell tem o
+   banco. O cartão "contas mais ativas" nomeia contas mas deliberadamente **não
+   carrega id**, então não serve de tabela de-para. Qualquer coisa mais forte que
+   isso seria decoração.
+
+3. **`ip`, `ip_trusted` e `user_agent` são um CONJUNTO.** `ip` é o `RemoteAddr`
+   depois de `server.trustedProxyRealIP`, e `ip_trusted` só é verdadeiro quando
+   aquele middleware reescreveu o valor a partir de um par dentro de
+   `TRUSTED_PROXY_IPS` — a flag viaja no contexto (`auditctx.MarkTrustedIP`)
+   porque uma linha depois o `RemoteAddr` já foi sobrescrito e a evidência sumiu.
+   Sem proxy configurado toda linha é o par cru e `ip_trusted` é falso: honesto,
+   e a tela mostra a diferença em vez de escondê-la. `AuditRecord.WithRequest` é
+   um helper único porque copiar duas das três linhas recria exatamente a forma
+   que a `000033` recusou.
+
+4. **Eventos de conteúdo são gravados por um MIDDLEWARE**, não por chamadas em
+   cada handler — o mesmo raciocínio que põe a redação de credenciais no handler
+   raiz de log: cobertura que depende de todo autor lembrar é cobertura com
+   buracos, e os buracos são invisíveis (uma entrada faltando parece um dia
+   quieto). O mapa é fechado e chaveado pelo **padrão de rota** do chi, não pelo
+   caminho. Só 2xx é gravado: uma escrita recusada não mudou nada. O rótulo é
+   opcional por construção — o handler o anota por `auditctx.SetRequest`, e um
+   handler que esqueça ainda produz a linha, perdendo só a coluna do rótulo.
+
+5. **Lista de bloqueio permanente**, atrás da permissão `instance.ip_block`,
+   **owner-only e TRAVADA**. O argumento é o do `instance.backup_schedule` levado
+   à borda de rede, um passo além: é a única permissão cujo mau uso deixa a
+   instância inalcançável — inclusive para quem a detém. Os trilhos em
+   `ValidateBlockIP` recusam o endereço de onde a requisição veio (o que dispara
+   na prática, porque o operador investigando uma rajada está com frequência
+   atrás do mesmo NAT), o loopback (é como se administra localmente, e é o
+   caminho inteiro com `AUTH_ENABLED=0`) e qualquer proxy confiável configurado
+   (atrás do nginx toda requisição chega dele quando a cadeia não está como o
+   operador pensa — e a tela teria acabado de mostrar esse endereço como a origem
+   mais movimentada). Cada trilho responde com **seu próprio código**: "inválido"
+   na frente de um controle desses não é algo sobre o que agir.
+
+   O cache de enforcement **falha ABERTO**. É a inversão deliberada da regra
+   usual, pelo mesmo motivo dos trilhos: isto é um filtro de incômodo, não uma
+   fronteira de autenticação — quem decide o que alguém pode fazer é o middleware
+   de sessão. Falhar fechado transformaria uma oscilação do banco numa
+   indisponibilidade total, e entre os trancados do lado de fora estariam as
+   pessoas que poderiam consertá-la.
+
+6. **Ordenação crescente é uma CONSULTA diferente**, com o cursor invertido
+   (`id > $n`), não a página invertida no cliente. Inverter no cliente ordenaria
+   só as cinquenta linhas já carregadas, então "mais antigos" mostraria os mais
+   antigos **dos mais recentes**: um controle que parece funcionar e responde
+   outra pergunta.
+
+**Trade-offs aceitos.**
+
+- A trilha cresce com o tráfego de conteúdo, não só com eventos de segurança —
+  que é exatamente o que a `000033` quis evitar. A mitigação é a categoria: os
+  filtros da tela separam as duas metades, e a retenção de 90 dias continua.
+- Uma escrita de auditoria a mais por mutação aceita. É uma linha por requisição
+  que já escreveu no banco, num caminho que ninguém executa em laço.
+- `subject` é a única coluna da instância que guarda conteúdo fora das tabelas de
+  conteúdo. O guard de AST é o preço de admiti-la.
+- Sem GeoIP: as origens mostram endereço e dispositivo, não cidade. Uma base
+  MaxMind é dependência, licença e cadeia de suprimentos novas por uma coluna
+  decorativa.
+
+Migrações `000044` (contexto) e `000045` (`ip_block`);
+`db.RequiredSchemaVersion` 43 → 45. Status: **Aceito · implementado**.

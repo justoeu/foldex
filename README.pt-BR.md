@@ -604,9 +604,36 @@ ou excluir **a si mesmo**; o **último administrador ativo** não pode ser remov
 ninguém; e o papel e o status do **proprietário** não mudam de forma alguma a não ser
 transferindo. Transferir encerra as sessões das duas contas.
 
-**Auditoria.** **Configurações → Administração → Log de auditoria** registra logins e
-falhas, mudanças de papel e status, convites, recuperações forçadas e edições de política.
-Ela sobrevive às contas que descreve: excluir um usuário não apaga o que ele fez.
+**Auditoria.** **Configurações → Administração → Log de auditoria** registra dois tipos de
+evento. *Identidade*: logins e falhas, mudanças de papel e status, convites, recuperações
+forçadas, edições de política e mudanças na lista de bloqueio. *Conteúdo*: toda criação,
+edição e exclusão aceita de link, nota, pasta ou tag, além de importações e restaurações.
+Ela sobrevive às contas que descreve — excluir um usuário não apaga o que ele fez.
+
+A tela abre num período (24 h, 7 dias, 30 dias) e mostra os números do período comparados
+com o anterior, eventos por dia, a participação de cada tipo, as contas mais ativas, os
+endereços e dispositivos vistos, e qualquer rajada de falhas de login vinda de um mesmo
+endereço. Dá para filtrar por tipo ou categoria, buscar por conta, endereço ou evento,
+ordenar do mais antigo, e **exportar o filtro atual em CSV**.
+
+**Eventos de conteúdo não nomeiam ninguém nem descrevem nada.** O administrador vê *"link
+criado · usuário #7"* — nunca o título, a URL ou o e-mail de quem escreveu. Conteúdo é
+privado por conta, administradores inclusive, e isso é garantido no SQL, não na tela. A
+própria conta vê o histórico dela completo, com títulos, em **Configurações → Conta →
+Atividade**.
+
+**Toda linha registra de onde veio**, e diz se é para acreditar: o endereço que o servidor
+observou mais a string do dispositivo, marcados *via proxy confiável* quando um proxy que
+você configurou em `TRUSTED_PROXY_IPS` respondeu por ele, e *endereço direto* quando
+ninguém respondeu. Na instalação padrão — presa ao loopback, sem proxy — toda linha é o
+par cru.
+
+**Bloquear um endereço (só o proprietário).** O cartão de risco instala um bloqueio
+permanente num endereço, e os endereços bloqueados aparecem numa lista com o caminho de
+volta. Três coisas são recusadas de saída, porque este é o único controle capaz de deixar
+a instância inalcançável para quem o detém: o endereço de onde você está conectado, o
+loopback e qualquer proxy listado em `TRUSTED_PROXY_IPS`. Bloqueio não é autenticação — se
+o banco estiver inacessível o filtro abre, em vez de trancar todo mundo do lado de fora.
 
 **Política da instância (só o proprietário).** **Configurações → Administração → Política
 de senha e acesso** define o tamanho mínimo da senha, a validade dos códigos enviados por

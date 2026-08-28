@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/pkg/attemptlimit"
+	"foldex/internal/pkg/auditctx"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
@@ -223,6 +224,7 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.limiter.CommitSuccess(key)
+	auditctx.SetRequest(r, "folder", id, "")
 	httperr.JSON(w, http.StatusOK, unlockOutput{
 		UnlockToken: IssueUnlockToken(h.unlockKey, id, *hash),
 		ExpiresAt:   time.Now().Add(unlockTokenTTL),
@@ -291,6 +293,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, HTTPError(err))
 		return
 	}
+	// Names the row for the owner's own-activity feed (ADR-46). The
+	// content-audit middleware records the event either way; this is what
+	// gives it a label its owner can recognise a month later.
+	auditctx.SetRequest(r, "folder", f.ID, f.Name)
 	httperr.JSON(w, http.StatusCreated, f)
 }
 
@@ -334,6 +340,10 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, HTTPError(err))
 		return
 	}
+	// Names the row for the owner's own-activity feed (ADR-46). The
+	// content-audit middleware records the event either way; this is what
+	// gives it a label its owner can recognise a month later.
+	auditctx.SetRequest(r, "folder", f.ID, f.Name)
 	httperr.JSON(w, http.StatusOK, f)
 }
 
@@ -348,6 +358,13 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	cascade := false
 	if v := r.URL.Query().Get("cascade"); v == "1" || v == "true" {
 		cascade = true
+	}
+	// Read BEFORE the delete: a moment later the name exists nowhere, and an
+	// entry its owner cannot resolve is not a record of anything. One
+	// primary-key read on an operation nobody performs in a loop.
+	name := ""
+	if existing, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id); err == nil {
+		name = existing.Name
 	}
 	if cascade {
 		deletedIDs, err := h.repo.deleteCascade(r.Context(), authctx.MustUser(r.Context()), id, h.unlockKey, r.Header.Get(UnlockHeader))
@@ -371,6 +388,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		}
 		h.forgetDeletedUnlockAttempts([]int64{id})
 	}
+	auditctx.SetRequest(r, "folder", id, name)
 	w.WriteHeader(http.StatusNoContent)
 }
 

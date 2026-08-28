@@ -52,6 +52,7 @@ func TestEveryPermissionIsEnforcedSomewhere(t *testing.T) {
 		authctx.PermInstanceTransfer:       "PermInstanceTransfer",
 		authctx.PermInstanceBackupRead:     "PermInstanceBackupRead",
 		authctx.PermInstanceBackupSchedule: "PermInstanceBackupSchedule",
+		authctx.PermInstanceIPBlock:        "PermInstanceIPBlock",
 	}
 	// Locked from BOTH sides: a permission added to the vocabulary without an
 	// entry here fails, so the map cannot quietly stop covering the set.

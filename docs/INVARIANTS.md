@@ -1196,3 +1196,71 @@ O `AuthGate` carrega seis telas por `lazy()`, e o fallback do `Suspense` é o `b
 2. **Os três chunks alcançáveis a partir do formulário são aquecidos enquanto ele está na tela.** É o que torna a espera imperceptível em vez de apenas invisível. O segundo fator é o DEFAULT (`AUTH_REQUIRE_2FA_FOR_ADMINS`), então quem está olhando o formulário está a um submit de uma dessas telas — ou a um clique da recuperação; pagar o chunk ali é o que colocou o spinner no meio do fluxo. Quem já está autenticado nunca chega ao efeito — que é exatamente a visita para a qual o split foi feito, e por isso ele continua valendo.
 
 Prefetch sozinho NÃO basta e o motivo é mecânico: `React.lazy` chama a própria fábrica no primeiro render e anexa um `then`, então mesmo com o módulo em cache ele suspende ao menos uma vez, e nada garante que o React não pinte o fallback antes do microtask resolver.
+
+### INV-175 — `audit_log.subject` é CONTEÚDO, e existe exatamente UMA consulta que o lê.
+
+*Guards:* `TestAuditSubjectIsSelectedByExactlyOneQuery`, `TestAudit_AdminNeverSeesAContentSubjectOrItsActorEmail`, `TestCrossUser_OwnActivityNeverReturnsAnotherAccountsRows`, `TestAudit_OwnFeedReturnsTheSubject`
+
+O ADR-46 fez a trilha cobrir conteúdo, e com isso `audit_log` passou a ser a única tabela fora das tabelas de conteúdo que guarda conteúdo: `subject` é o título do link, o nome da pasta — o que o dono digitou. O INV-045 diz que conteúdo é privado por conta, **administradores inclusive**, e a trilha é lida por administradores. As duas coisas só coexistem porque a coluna tem **um** leitor.
+
+Esse leitor é `ListOwnActivity`, escopado em `actor_id = o chamador` — INV-001 aplicado a uma tabela que é, no resto, de instância inteira. A projeção administrativa (`adminProjection`) não seleciona `subject`, e apaga `actor_email`, `target_email` e `detail` das linhas de conteúdo **dentro do SELECT**, com `CASE WHEN action = ANY($content)`; o administrador recebe `actor_ref`, um id opaco. Fazer isso em SQL e não em Go é a diferença entre uma garantia e uma convenção: um filtro aplicado depois que a linha chegou sobrevive até alguém adicionar a coluna "para o CSV ficar mais rico".
+
+**Nenhum revisor humano pega a regressão**, e é por isso que o guard varre o AST. A coluna entraria por uma mudança de projeção num arquivo, e o vazamento apareceria numa tela em outro; quem revisa qualquer uma das metades não vê nada errado. O guard falha se **qualquer** declaração de produção — função **ou constante de pacote** — nomear `subject` num SELECT sobre `audit_log`. A primeira versão só andava por `FuncDecl` e passou com a coluna adicionada direto na constante `adminProjection`: a edição mais provável de causar o vazamento era exatamente a que ele não enxergava.
+
+**O que o `actor_ref` protege.** Exposição INCIDENTAL — nomes ao lado de atividade de conteúdo numa tela aberta por outro motivo — e a possibilidade de correlacionar linhas entre si sem nomear ninguém. Não é defesa contra um administrador determinado: a administração entrega ids de usuário em outros lugares porque precisa, e numa instância self-hosted quem tem shell tem o banco. O cartão "contas mais ativas" nomeia contas e deliberadamente **não** carrega id, então não serve de tabela de-para. Qualquer coisa mais forte seria decoração, e o ADR-46 diz isso com essas palavras.
+
+**A categoria falha para o lado do conteúdo.** `AuditCategory` devolve `content` para uma ação que ninguém classificou: o custo de errar assim é uma linha faltando numa tela, e o custo do outro default é dado de outra conta. A pertinência é um mapa fechado, não um teste de prefixo — `backup.restored` é conteúdo e `backup.run_requested` não é, e uma regra por prefixo poria os dois do mesmo lado enquanto parecesse ter decidido.
+
+### INV-176 — `ip`, `ip_trusted` e `user_agent` são um CONJUNTO; um endereço sem procedência é a coluna que a 000033 recusou.
+
+*Guards:* `TestAudit_StoresTheAddressWithItsProvenance`, `TestAudit_AMalformedAddressLosesTheColumnNotTheRow`, `TestAudit_TruncatesTheDeviceStringRatherThanFailing`
+
+A migração `000033` recusou uma coluna `ip` com um argumento correto: `X-Forwarded-For` é forjável num bind direto, e uma coluna alimentada por ele seria **autoritativa na aparência e controlada pelo atacante ao mesmo tempo** — a pior combinação para uma tabela consultada durante um incidente. O que esse argumento proíbe é uma coluna que não sabe dizer de onde veio o valor. Registrar o endereço que o servidor de fato observou, ao lado de uma flag dizendo se um proxy configurado respondeu por ele, é outra coisa.
+
+Por isso as três colunas andam juntas e `AuditRecord.WithRequest` é o único ponto que as preenche: copiar duas das três linhas num call site novo recria exatamente a forma recusada. `ip` é o `RemoteAddr` **depois** de `server.trustedProxyRealIP`; `ip_trusted` só é verdadeiro quando aquele middleware reescreveu o valor a partir de um par dentro de `TRUSTED_PROXY_IPS` (INV-007). A flag viaja pelo contexto (`auditctx.MarkTrustedIP`) porque uma linha adiante o `RemoteAddr` já foi sobrescrito e não há mais como saber. Sem proxy configurado toda linha é o par cru e a flag é falsa — honesto, e a tela renderiza a diferença em vez de escondê-la.
+
+Um endereço que não parseia vira **NULL, nunca um INSERT recusado**: uma falha de auditoria é logada e engolida, então uma linha rejeitada não apareceria como erro — a ENTRADA sumiria, que é o único desfecho que uma trilha não pode ter. `normalizeAuditIP` também tira porta, colchetes e colapsa IPv4-mapeado, porque duas grafias do mesmo host fariam o bloqueio e o agregado de origens discordarem de si mesmos. `user_agent` é cabeçalho controlado pelo cliente, capado em 256: o caminho de login falho aceita linha de qualquer chamador não autenticado, e o balde de rate limit é chaveado pelo endereço tentado — uma string nova compra orçamento novo.
+
+### INV-177 — A cobertura de conteúdo é um MIDDLEWARE; o rótulo é opcional por construção.
+
+*Guards:* `TestContentAudit_RecordsAnAcceptedMutation`, `TestContentAudit_IgnoresRejectedWrites`, `TestContentAudit_TreatsAnImplicitWriteAsSuccess`, `TestContentAudit_IgnoresUnmappedRoutes`, `TestContentAuditActions_AreAllKnownContentActions`
+
+Uma chamada de auditoria em cada handler é cobertura que depende de todo autor lembrar, e os buracos dela são invisíveis: uma entrada faltando parece um dia quieto. O middleware é o mesmo raciocínio que põe a redação de credenciais no handler raiz de log em vez de em cada call site.
+
+O mapa é **fechado** e chaveado pelo **padrão de rota** do chi (`"POST /api/links/{id}"`), não pelo caminho — um mapa por caminho ou erraria toda linha ou precisaria do seu próprio matcher. Rota ausente do mapa não grava nada, de propósito: uma rota nova deve ser uma decisão sobre se pertence à trilha, não uma entrada automática sob um nome que ninguém traduziu. Só **2xx** é gravado — uma escrita recusada não mudou nada, e uma trilha que listasse tentativas ao lado de efeitos tornaria "quem apagou isto" insolúvel na tela que existe para responder isso. O `statusWriter` trata escrita implícita como 200 porque esse é o caminho de sucesso ORDINÁRIO, e expõe `Unwrap` para que uma resposta em streaming (o export de backup passa por este grupo) continue podendo dar flush.
+
+O rótulo chega por `auditctx.SetRequest`, um holder mutável que o middleware instala — porque só o handler sabe que aquele POST criou a linha "ADR-46 rascunho", e devolver isso como valor de retorno significaria mudar toda assinatura de handler do produto por uma anotação opcional. **Um handler que nunca anota ainda produz a linha** e perde só a coluna do rótulo: a cobertura da trilha não depende de ninguém lembrar, e esquecer degrada uma coluna em vez de derrubar o evento. Nos deletes o rótulo é lido ANTES da exclusão — um instante depois ele não existe em lugar nenhum, e "link excluído #42" é uma entrada que o dono nunca consegue resolver.
+
+### INV-178 — O bloqueio permanente de IP é owner-only e TRAVADO, seus trilhos são a segurança da feature, e o cache falha ABERTO.
+
+*Guards:* `TestValidateBlockIP_RefusesTheAddressYouAreCallingFrom`, `TestValidateBlockIP_SelfRailSurvivesRespelling`, `TestValidateBlockIP_RefusesLoopbackAndUnspecified`, `TestValidateBlockIP_RefusesATrustedProxyByNetwork`, `TestBlocklist_FailsOpenWhenTheLoadErrors`, `TestBlocklist_KeepsTheLastGoodSnapshotOnFailure`, `TestAuditAPI_BlockRailsAnswerWithTheReasonTheyFired`
+
+`instance.ip_block` é o argumento do `instance.backup_schedule` levado à borda de rede, um passo além: é a **única permissão cujo mau uso deixa a instância inalcançável, inclusive para quem a detém**. Uma permissão concedível de decidir quem alcança a instância poderia ser usada para trancar o owner fora da tela que a revogaria. Daí travada e no assento que não pode ser trancado do lado de fora do próprio instance.
+
+O modo de falha desta feature **não é "um bloqueio que não funciona"** — é uma instância que ninguém alcança, instalada pela pessoa que mais precisava alcançá-la, por um botão colocado ao lado de um número vermelho assustador. Não há desfazer de fora: o endpoint de desbloqueio está atrás da mesma tranca. Cada trilho de `ValidateBlockIP` existe por isso:
+
+- **o próprio endereço**: bloquear de onde você está conectado encerra a sessão que removeria o bloqueio. É o trilho que dispara na prática, porque o operador investigando uma rajada está com frequência atrás do mesmo NAT que ela. A comparação é entre endereços **normalizados** — um operador em IPv6 cujo endereço chega como `::ffff:203.0.113.9` enquanto a tela oferece `203.0.113.9` está a uma grafia de se trancar fora.
+- **loopback**: é como um operador local administra a instância, e é o caminho de acesso INTEIRO com `AUTH_ENABLED=0`. Bloqueá-lo remove a escotilha que existe exatamente para este tipo de lockout.
+- **proxy confiável**: atrás do nginx toda requisição chega do endereço do proxy sempre que a cadeia de encaminhamento não está como se pensa — e a tela teria acabado de mostrar esse endereço como a origem mais movimentada, que é precisamente o que convida ao clique. O teste é por REDE, não por igualdade de string: a configuração aceita CIDR.
+
+Cada um responde com **seu próprio código** (`block_self`, `block_loopback`, `block_proxy`, `block_full`) e com a frase que descreve a situação do OPERADOR. "Endereço inválido" na frente de um controle que pode tornar a instância inalcançável não é algo sobre o que agir.
+
+**O cache de enforcement falha ABERTO**, e é a inversão deliberada da regra usual. Isto é um filtro de incômodo, não uma fronteira de autenticação — quem decide o que alguém pode fazer é o middleware de sessão. Falhar fechado transformaria uma oscilação do banco numa indisponibilidade total, e entre os trancados estariam as pessoas que poderiam consertá-la. Um refresh que falha **mantém o snapshot bom anterior** e faz backoff pelo TTL, para não virar uma tentativa de recarga por requisição em cima de um banco que já está sofrendo. `/healthz` é isento: uma instância que se declara doente porque alguém bloqueou o endereço de uma sonda seria reiniciada em laço.
+
+### INV-179 — Ordenação crescente na trilha é uma CONSULTA diferente, nunca a página invertida.
+
+*Guards:* `TestAudit_AscendingOrderPagesFromTheOtherEnd`, `TestParseAuditFilter_OrderIsAPreferenceNotAFilter`, `asks the server for the other end rather than reversing the page`
+
+A paginação é por keyset, e um cursor significa "continue depois desta linha" — de que lado é "depois" depende da direção, então `Ascending` inverte o cursor junto (`id > $n` em vez de `id < $n`). Inverter o array no cliente ordenaria só as cinquenta linhas já carregadas: "mais antigos" mostraria os mais antigos **dos mais recentes**, um controle que parece funcionar e responde outra pergunta. O mockup fazia exatamente isso sobre dez linhas de fixture, o que é aceitável num mockup e não sobrevive à paginação real.
+
+`order=asc` é uma **preferência, não um filtro**: qualquer outro valor cai no default em vez de recusar a página. Um filtro desconhecido muda quais linhas voltam e por isso é 400 (`action`, `category`, `window`); uma ordenação desconhecida não muda o conjunto, só a apresentação.
+
+### INV-180 — O balde do dia é construído no BANCO; a data local do processo não é a data das linhas.
+
+*Guard:* `TestAuditStats_DaysIncludeTheEmptyOnes`, `TestAuditStats_DaySeriesAreDisjointAndComplete`
+
+O gráfico diário usa `generate_series` porque um dia sem eventos não tem linhas para agrupar, e um gráfico que descarta dias vazios comprime uma semana quieta numa que parece movimentada.
+
+O limite superior da série é o `now()` **do banco**, dentro do SQL, e nunca um `::date` sobre um parâmetro vindo do cliente. Um rascunho anterior escreveu `generate_series($1::date, $2::date, ...)`, o que fez o Postgres inferir os parâmetros como `date`: o driver então codificou o dia de calendário **LOCAL do processo**, enquanto `created_at` é comparado no fuso da sessão. Num servidor em UTC-3 o último balde terminava onde o dia começava, e todo evento do dia corrente caía **depois do fim do gráfico** — a coluna mais movimentada lia zero. A falha é silenciosa, só aparece fora do UTC, e parece "um dia quieto". Por isso o limite fica dentro do SQL, onde o relógio e as linhas são o mesmo relógio.
+
+As quatro séries (`logins`, `failed`, `admin`, `content`) são disjuntas e juntas cobrem o vocabulário, então a soma delas é o total do dia e a coluna empilhada é honesta.

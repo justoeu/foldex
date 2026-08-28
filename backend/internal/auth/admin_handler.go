@@ -43,6 +43,26 @@ type AdminHandler struct {
 	// matrix, read-only — the screen then reports every role as locked rather
 	// than offering a save that has nowhere to go.
 	grants *roleperm.Repository
+	// blocklist is the enforcement cache the block routes invalidate, so an
+	// entry takes effect on the next request instead of up to a TTL later. Nil
+	// (tests, and any build without the gate mounted) simply skips the nudge —
+	// the row is written either way and the TTL still picks it up.
+	blocklist *Blocklist
+	// isTrustedProxy answers the rail that refuses to block the address every
+	// request would arrive from behind nginx. Supplied by the router, which
+	// owns the parsed CIDR set.
+	isTrustedProxy func(string) bool
+}
+
+// WithBlocklist wires the enforcement cache and the trusted-proxy set.
+//
+// A builder rather than two more constructor parameters, matching
+// links.Handler.WithFolderGate: NewAdminHandler already takes six, and the
+// blocklist is optional in exactly the way the others there are.
+func (h *AdminHandler) WithBlocklist(b *Blocklist, isTrustedProxy func(string) bool) *AdminHandler {
+	h.blocklist = b
+	h.isTrustedProxy = isTrustedProxy
+	return h
 }
 
 // validatePassword mirrors Handler's, and is a METHOD for the same reason
@@ -142,7 +162,20 @@ func (h *AdminHandler) Mount(r chi.Router) {
 		Post("/users/{id}/transfer-ownership", h.TransferOwnership)
 	r.Get("/metrics", h.Metrics)
 	r.Get("/roles", h.Roles)
-	r.With(authgate.RequirePermission(h.liveGrants(), authctx.PermAuditRead)).Get("/audit", h.ListAudit)
+	// The audit surface — ADR-46. Everything that READS the trail sits behind
+	// audit.read; the blocklist WRITES sit behind instance.ip_block, which is
+	// owner-only and locked. The distinction matters: reading who signed in is
+	// an administrator's job, and deciding who may reach the instance at all is
+	// the seat that cannot be locked out of it.
+	readAudit := authgate.RequirePermission(h.liveGrants(), authctx.PermAuditRead)
+	r.With(readAudit).Get("/audit", h.ListAudit)
+	r.With(readAudit).Get("/audit/stats", h.AuditStats)
+	r.With(readAudit).Get("/audit/vocabulary", h.AuditVocabulary)
+	r.With(readAudit).Get("/audit/export.csv", h.ExportAudit)
+	r.With(readAudit).Get("/audit/blocks", h.ListIPBlocks)
+	blockIP := authgate.RequirePermission(h.liveGrants(), authctx.PermInstanceIPBlock)
+	r.With(blockIP).Post("/audit/blocks", h.BlockIP)
+	r.With(blockIP).Delete("/audit/blocks/{ip}", h.UnblockIP)
 	// Gated, not merely listed. While the matrix was compiled these three
 	// permissions were inert constants and the omission was a documentation
 	// gap; with the matrix editable (ADR-42) an owner unticking invites.write
@@ -486,7 +519,7 @@ func (h *AdminHandler) audit(r *http.Request, action string, target *User, detai
 			rec.TargetID = &id
 		}
 	}
-	if err := h.repo.Audit(r.Context(), rec); err != nil {
+	if err := h.repo.Audit(r.Context(), rec.WithRequest(r)); err != nil {
 		h.logger.Error("audit write", "err", err, "action", action)
 	}
 }
@@ -511,32 +544,6 @@ func (h *AdminHandler) AuditBackupRun(r *http.Request, detail string) {
 // function-shaped hook as AuditBackupRun, for the same import-cycle reason.
 func (h *AdminHandler) AuditBackupSchedule(r *http.Request, detail string) {
 	h.audit(r, AuditBackupScheduleChanged, nil, detail)
-}
-
-// ListAudit serves the administrative trail.
-func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
-	before, err := optionalInt64(r.URL.Query().Get("before"))
-	if err != nil {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_cursor", "before must be an id"))
-		return
-	}
-	limit, err := optionalInt64(r.URL.Query().Get("limit"))
-	// Range-checked BEFORE the conversion, not after. ListAudit clamps its own
-	// argument, but by then the int64 has already been narrowed to int — and on
-	// a 32-bit build a value like 2^32+50 truncates to 50, arriving as a
-	// perfectly plausible number that no clamp can recognise as garbage.
-	if err != nil || limit < 0 || limit > maxAuditPageSize {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_limit",
-			fmt.Sprintf("limit must be a number between 0 and %d", maxAuditPageSize)))
-		return
-	}
-	entries, err := h.repo.ListAudit(r.Context(), r.URL.Query().Get("action"), before, int(limit))
-	if err != nil {
-		h.logger.Error("admin list audit", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-	httperr.JSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
 
 // optionalInt64 parses a query parameter that may be absent, treating "" as 0

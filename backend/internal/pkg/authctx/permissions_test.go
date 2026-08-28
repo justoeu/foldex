@@ -22,7 +22,7 @@ func TestMatrix_IsExactlyTheDocumentedGrid(t *testing.T) {
 			authctx.PermInvitesRead, authctx.PermInvitesWrite,
 			authctx.PermAuditRead, authctx.PermPolicyRead, authctx.PermPolicyWrite,
 			authctx.PermInstanceTransfer, authctx.PermInstanceBackupRead,
-			authctx.PermInstanceBackupSchedule,
+			authctx.PermInstanceBackupSchedule, authctx.PermInstanceIPBlock,
 		},
 		authctx.RoleAdmin: {
 			authctx.PermContentRead, authctx.PermContentWrite,
@@ -51,6 +51,10 @@ func TestMatrix_IsExactlyTheDocumentedGrid(t *testing.T) {
 func TestMatrix_AdminCannotWritePolicyOrTransferTheInstance(t *testing.T) {
 	assert.False(t, authctx.RoleAdmin.Can(authctx.PermPolicyWrite))
 	assert.False(t, authctx.RoleAdmin.Can(authctx.PermInstanceTransfer))
+	// ADR-46: the same argument at the network edge. An admin who could
+	// install a permanent block could lock the owner out of the screen that
+	// would remove it.
+	assert.False(t, authctx.RoleAdmin.Can(authctx.PermInstanceIPBlock))
 	assert.True(t, authctx.RoleAdmin.Can(authctx.PermPolicyRead),
 		"an admin still has to be able to see the rules it manages people under")
 }
@@ -96,6 +100,7 @@ func TestAllPermissions_IsExactlyTheDeclaredVocabulary(t *testing.T) {
 		"invites.read", "invites.write",
 		"audit.read", "policy.read", "policy.write",
 		"instance.transfer", "instance.backup", "instance.backup_schedule",
+		"instance.ip_block",
 	}, authctx.AllPermissions)
 
 	seen := map[authctx.Permission]bool{}
