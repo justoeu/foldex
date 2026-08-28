@@ -78,6 +78,10 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **`POST /api/admin/users` is a DECLARED EXCEPTION to the rule below, taken by the instance owner** → [INV-021](docs/INVARIANTS.md#inv-021) | guard: `TestAdminCreateUser_*`
 - **An administrator never chooses, installs or receives another user's credential** → [INV-022](docs/INVARIANTS.md#inv-022)
 - **API tokens are scoped to CONTENT, and the scope is enforced by middleware, not by discipline** → [INV-023](docs/INVARIANTS.md#inv-023)
+- **A cota da API autenticada é por PRINCIPAL, conta só escrita, e não isenta ninguém** → [INV-181](docs/INVARIANTS.md#inv-181) | guard: `TestAPIQuota_TwoPrincipalsHaveIndependentBudgets`, `TestAPIQuota_TheOwnerIsNotExempt`, `TestExpensiveRoutes_EveryPatternNamesARouteTheRouterMounts`, `TestWiring_APIQuotaRefusesAWriteLoopThroughTheRealRouter`
+  ↳ Por rota, um laço espalhado por vinte endpoints fica dentro do limite em cada um e segura o pool inteiro; `attemptlimit` não serve porque conta falhas consecutivas e `CommitSuccess` zera o contador.
+- **O clique público é coalescido em MEMÓRIA, por visitante hasheado, e a supressão nunca alcança o redirect** → [INV-182](docs/INVARIANTS.md#inv-182) | guard: `TestClickCoalesce_ARepeatVisitWritesOneRowAndStillRedirects`, `TestClickCoalesce_TheMapNeverExceedsItsCeiling`, `TestWiring_RepeatClicksFromOneVisitorWriteOneRowAndStillRedirect`
+  ↳ Sem teto, o coalescedor é o novo alvo: o atacante enche o mapa em vez do `click_log`.
 - **`/go/{42}` and `/n/{42}` are OFF by default** → [INV-024](docs/INVARIANTS.md#inv-024)
 - **`totp_enabled` and `email_2fa_enabled` are derived with `EXISTS`, never stored, and `HasSecondFactor()` is their OR** → [INV-025](docs/INVARIANTS.md#inv-025)
 - **"May this factor be removed?" is answered in ONE place** → [INV-026](docs/INVARIANTS.md#inv-026)

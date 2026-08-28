@@ -704,3 +704,54 @@ nota, pasta e tag não tinham ponto de escrita nenhum. A mesma migração també
   Configurações → Conta → Atividade) — depende de sessão autenticada.
 - Screenshots da tela nova nos dois READMEs.
 - Sem GeoIP: as origens mostram endereço e dispositivo, não cidade.
+
+
+### Log de conclusão — Cota da API autenticada (G2) e coalescência de clique público (G3)
+
+Fecha as duas lacunas que o `docs/SDD-ABUSE-DEFENSE.md` §3.3 mede como as mais sérias e
+que não tinham controle nenhum: **G2** (sessão válida = requisições ilimitadas contra um
+pool de 16 conexões) e **G3** (`/go/{slug}` e `/n/{slug}` públicos, sem limitador, cada
+acerto escrevendo em `click_log`). Detalhe e raciocínio em INV-181 e INV-182.
+
+**Entregue.**
+
+- `internal/pkg/quota` — token bucket por chave, limite passado por chamada (a política é
+  editável em runtime), teto de chaves, sweep dentro do próprio `Allow`, `Refund` para
+  que uma requisição recusada não custe orçamento.
+- `internal/server/quota.go` — middleware montado logo abaixo da resolução do principal;
+  mapa fechado de rotas caras casado por segmento ANTES do handler; 429 com `Retry-After`
+  no envelope uniforme.
+- `internal/pkg/clickctx` + `internal/server/clickcoalesce.go` — gate de clique no
+  contexto, coalescedor em memória chaveado por `(kind, id, HMAC do IP)`, teto e sweep.
+  `links`/`notes.repository_system.go` consultam o gate na única linha onde a entidade já
+  está identificada e a escrita ainda não aconteceu.
+- `router.go`: um campo em `Deps` e duas linhas de montagem (o `Group` público e o
+  `pr.Use` da cota).
+
+**Lições.**
+
+- **`attemptlimit` não podia ser reusado, e a justificativa é obrigatória** (o repo tem
+  regra contra segunda implementação paralela): ele conta falhas consecutivas e
+  `CommitSuccess` zera o contador — uma requisição aceita apagaria o registro inteiro.
+- **O padrão de rota do chi só existe depois do roteamento.** O `contentAudit` pode lê-lo
+  porque decide DEPOIS do handler; uma cota não pode, então o mapa fechado é casado
+  contra o path por segmento. O guard `TestExpensiveRoutes_EveryPatternNamesARouteTheRouterMounts`
+  anda pelo router real com `chi.Walk` para que um padrão que deixe de nomear uma rota
+  montada falhe o build em vez de cobrir nada em silêncio.
+- **Recusar sem devolver o token do primeiro balde acopla os dois tetos.** Quem estourasse
+  o limite por minuto perderia também os imports da hora — exatamente o falso positivo que
+  a §8 do SDD declara como critério de reversão.
+- **Um relógio falso instalado depois do construtor precisa que o `lastSweep` comece no
+  zero**, não semeado de `time.Now()`: comparar um agora falso com um agora real deixa o
+  sweep periódico sem nunca disparar, e o teste que deveria pegar isso passa por outro
+  motivo.
+
+**Aberto / próximo.**
+
+- Os testes de fiação (`abusewiring_integration_test.go`) foram escritos e compilam
+  (`go vet -tags integration ./...`), mas **não foram executados**: o daemon Docker estava
+  em uso por outra frente. Rodar `make test-integration` antes do merge.
+- `limit_req` no nginx (PR 3 do faseamento) e o balde de largura do `attemptlimit`
+  (PR 2 / G1) continuam abertos — são de outras frentes.
+- A tela que edita `api_writes_per_minute` / `api_expensive_per_hour` /
+  `public_click_coalesce_seconds` é do frontend e não faz parte desta frente.

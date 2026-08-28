@@ -903,6 +903,25 @@ intacto, e é o caminho mais rápido de volta.
 > `PUBLIC_NUMERIC_IDS=1` se você tem links numéricos antigos já compartilhados e prefere
 > mantê-los funcionando.
 
+> **Cota de escrita (429).** Toda conta autenticada tem um orçamento de requisições
+> **mutantes**: 120 por minuto no geral e um teto menor de **20 por hora** para as rotas
+> que custam muito mais que uma linha — importação, exportação e restauração de backup,
+> captura de screenshot, refresh de preview. Leituras nunca são contabilizadas, então
+> navegar pela própria biblioteca não é afetado. Acima do orçamento a resposta é `429`
+> com um `Retry-After` dizendo quanto esperar; a requisição não chega ao handler. A cota
+> é **por conta, não por rota** — um laço espalhado por vinte endpoints ficaria dentro do
+> limite em cada um e mesmo assim seguraria o pool inteiro — e **nenhum papel é isento,
+> nem o owner**. Os dois números são editáveis pelo owner da instância e valem sem
+> reiniciar.
+
+> **Cliques repetidos são coalescidos.** `/go/{slug}` e `/n/{slug}` não pedem sessão e
+> cada acerto grava uma linha em `click_log`, então um laço sobre um slug conhecido era
+> escrita ilimitada no banco por um visitante anônimo. O mesmo visitante acertando o
+> mesmo link ou nota de novo dentro de **10 segundos** não gera uma segunda linha. O
+> redirect e a página da nota não mudam — só a linha do contador é pulada — e o estado
+> de dedup vive só em memória: nenhum endereço de visitante é armazenado. Ponha a janela
+> em `0` para desligar e ter o contador exato de volta.
+
 > **Política de rede do preview.** Ranges de metadata/credenciais cloud e RFC6598 são
 > sempre bloqueados. Use `PREVIEW_STRICT_SSRF=1` quando usuários não puderem alcançar
 > serviços na rede interna do host; o modo strict rejeita os registries special-purpose

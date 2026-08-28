@@ -891,6 +891,25 @@ content intact, which is the fastest way back in.
 > included. Slugs are unaffected. Set `PUBLIC_NUMERIC_IDS=1` if you have old numeric
 > links already shared and would rather keep them working.
 
+> **Write quota (429).** Every authenticated account gets a budget of **mutating**
+> requests: 120 per minute overall, and a smaller **20 per hour** for the routes that
+> cost far more than one row — import, backup export and restore, screenshot capture,
+> preview refresh. Reads are never metered, so browsing your own library is unaffected.
+> Past the budget the answer is `429` with a `Retry-After` telling you how long to wait;
+> the request never reaches the handler. The quota is **per account, not per route** — a
+> loop spread across twenty endpoints would otherwise stay inside the limit on each of
+> them while holding the whole connection pool — and **no role is exempt, the owner
+> included**. Both numbers are editable by the instance owner and take effect without a
+> restart.
+
+> **Repeat clicks are coalesced.** `/go/{slug}` and `/n/{slug}` take no session and each
+> hit writes a row to `click_log`, so a loop over one known slug was unlimited database
+> writing by an anonymous visitor. The same visitor hitting the same link or note again
+> within **10 seconds** no longer adds a second row. The redirect and the note page are
+> unaffected — only the counter row is skipped — and the dedup state is in memory only:
+> no visitor address is ever stored. Set the window to `0` to switch it off and get an
+> exact counter back.
+
 > **Preview network policy.** Cloud metadata/credential ranges and RFC6598 are
 > always blocked. Set `PREVIEW_STRICT_SSRF=1` when users must not reach services
 > on the host's internal network; strict mode rejects the complete IANA
