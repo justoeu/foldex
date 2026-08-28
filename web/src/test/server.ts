@@ -108,6 +108,20 @@ export type MockState = {
   backupAgent?: any
   backupSchedulePuts?: Array<{ job: string; config: any }>
   backupScheduleDeletes?: string[]
+  // Limits and abuse (SDD-ABUSE-DEFENSE). `abusePolicy` overrides individual
+  // knobs on top of the compiled defaults; `abuseCanWrite` drives the
+  // owner-only affordance (default true, so a test that does not care gets the
+  // writable form). PUT enforces the SAME two-sided bounds the Go package does
+  // and refuses with the SAME sentence — the screen renders that message
+  // verbatim, so a mock that invented its own wording would be testing nothing.
+  abusePolicy?: Partial<AbusePolicyMock>
+  abuseCanWrite?: boolean
+  abuseObserved?: Partial<AbuseObservedMock>
+  abusePolicyPuts?: AbusePolicyMock[]
+  // The anomalies panel. Unset = a quiet instance, which is the healthy state
+  // and the one the empty copy has to describe without sounding like a failure.
+  anomalies?: AnomalyMock[]
+  anomalyWindows?: string[]
 }
 
 export function freshState(): MockState {
@@ -207,6 +221,26 @@ const buildRoutes = (): Record<Method, Route[]> => ({
       })),
       runs: s.backupStatusRuns ?? [],
     }) },
+    { url: /^\/api\/admin\/abuse-policy$/, handle: (_m, _d, _p, s) => ({
+      policy: abusePolicyOf(s),
+      bounds: ABUSE_BOUNDS,
+      observed: { ...ABUSE_OBSERVED_NONE, ...(s.abuseObserved ?? {}) },
+      can_write: s.abuseCanWrite !== false,
+    }) },
+    { url: /^\/api\/admin\/anomalies$/, handle: (_m, _d, p, s) => {
+      const w = p.get('window') ?? '24h'
+      ;(s.anomalyWindows ??= []).push(w)
+      const policy = abusePolicyOf(s)
+      return {
+        window: w,
+        thresholds: {
+          spray_accounts: policy.anomaly_spray_accounts,
+          hammer_failures: policy.anomaly_hammer_failures,
+          window_minutes: policy.anomaly_window_minutes,
+        },
+        anomalies: s.anomalies ?? [],
+      }
+    } },
   ],
   post: [
     { url: /^\/api\/admin\/users$/, handle: (_m, d, _p, s) => {
@@ -259,6 +293,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
   put: [
     { url: /^\/api\/settings\/master-password$/, handle: setMaster },
     { url: /^\/api\/admin\/backup\/schedule\/([a-z_]+)$/, handle: putBackupSchedule },
+    { url: /^\/api\/admin\/abuse-policy$/, handle: putAbusePolicy },
   ],
   patch: [
     { url: /^\/api\/tags\/(\d+)$/, handle: patchTag },
@@ -307,6 +342,109 @@ const AGENT_SCHEMA_VERSION = 43
 
 /** Only user_zip may be switched off — the other three are the instance's floor. */
 const MAY_DISABLE = ['user_zip']
+
+// ────────────────────────────────────────────────────────────────────────────
+// Limits and abuse (SDD-ABUSE-DEFENSE).
+
+export type AbusePolicyMock = {
+  login_distinct_accounts_per_ip: number
+  login_failures_per_account: number
+  login_window_minutes: number
+  api_writes_per_minute: number
+  api_expensive_per_hour: number
+  public_click_coalesce_seconds: number | null
+  anomaly_spray_accounts: number
+  anomaly_hammer_failures: number
+  anomaly_window_minutes: number
+}
+
+export type AbuseObservedMock = {
+  window_days: number
+  max_distinct_accounts_per_ip: number
+  max_failures_per_account: number
+  peak_writes_per_minute: number
+}
+
+export type AnomalyMock = {
+  kind: 'spray' | 'hammer' | 'throttle'
+  ip: string
+  ip_trusted: boolean
+  distinct_accounts: number
+  failures: number
+  throttles: number
+  first_seen: string
+  last_seen: string
+  blocked: boolean
+  severity: 'critical' | 'warn'
+}
+
+/**
+ * `abusepolicy.Bounds()`, field for field — including the ORDER, which puts the
+ * nullable coalesce knob last because the Go side appends it after the loop.
+ * The screen must look its bounds up by name; keeping the odd order here is
+ * what makes a screen that reads them positionally fail in a test rather than
+ * on an instance.
+ */
+const ABUSE_BOUNDS = [
+  { field: 'login_distinct_accounts_per_ip', min: 3, max: 100, default: 10 },
+  { field: 'login_failures_per_account', min: 3, max: 50, default: 5 },
+  { field: 'login_window_minutes', min: 5, max: 1440, default: 15 },
+  { field: 'api_writes_per_minute', min: 30, max: 6000, default: 120 },
+  { field: 'api_expensive_per_hour', min: 5, max: 1000, default: 20 },
+  { field: 'anomaly_spray_accounts', min: 2, max: 1000, default: 10 },
+  { field: 'anomaly_hammer_failures', min: 3, max: 1000, default: 20 },
+  { field: 'anomaly_window_minutes', min: 5, max: 10080, default: 15 },
+  { field: 'public_click_coalesce_seconds', min: 0, max: 3600, default: 10 },
+]
+
+/** `abusepolicy.Default()`, assembled from the bounds so the two cannot drift. */
+function abuseDefaults(): AbusePolicyMock {
+  const out: Record<string, number> = {}
+  for (const b of ABUSE_BOUNDS) out[b.field] = b.default
+  return out as unknown as AbusePolicyMock
+}
+
+/** An instance that has seen nothing yet. Zero is "no data", not a measurement. */
+const ABUSE_OBSERVED_NONE: AbuseObservedMock = {
+  window_days: 30,
+  max_distinct_accounts_per_ip: 0,
+  max_failures_per_account: 0,
+  peak_writes_per_minute: 0,
+}
+
+function abusePolicyOf(s: MockState): AbusePolicyMock {
+  return { ...abuseDefaults(), ...(s.abusePolicy ?? {}) }
+}
+
+/**
+ * `abusepolicy.ValidateForWrite`, refusal for refusal.
+ *
+ * The message is reproduced to the character because the screen renders it
+ * VERBATIM: it names the field and the two real numbers on purpose, and a mock
+ * that summarised it would let a component that rewrites the sentence pass.
+ */
+function putAbusePolicy(_m: RegExpMatchArray, d: any, _p: URLSearchParams, s: MockState) {
+  if (s.abuseCanWrite === false) {
+    const e: any = new Error('forbidden')
+    e.response = { status: 403, data: { error: { code: 'forbidden_role', message: 'only the instance owner may change these limits' } } }
+    throw e
+  }
+  for (const b of ABUSE_BOUNDS) {
+    const v = d?.[b.field]
+    // The nullable knob: absent means "leave it at the default", a legal write.
+    if (v == null && b.field === 'public_click_coalesce_seconds') continue
+    if (typeof v !== 'number' || v < b.min || v > b.max) {
+      const message = `${b.field} must be between ${b.min} and ${b.max}, got ${v}`
+      const e: any = new Error(message)
+      e.response = { status: 400, data: { error: { code: 'invalid_policy', message } } }
+      throw e
+    }
+  }
+  const policy = { ...abusePolicyOf(s), ...d } as AbusePolicyMock
+  ;(s.abusePolicyPuts ??= []).push(policy)
+  s.abusePolicy = policy
+  return { policy }
+}
 
 function invalidSchedule(message: string) {
   const e: any = new Error(message)

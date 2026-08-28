@@ -600,3 +600,113 @@ export async function emailAvailable(
   })
   return data
 }
+
+// ── Limits and abuse (SDD-ABUSE-DEFENSE) ───────────────────────────────
+
+/**
+ * The nine numbers this instance uses to decide when a caller is abusing it —
+ * the client mirror of `abusepolicy.Policy`.
+ *
+ * Six of them REFUSE requests and three only decide what the anomalies panel
+ * calls anomalous. That difference is the point of the screen and lives in
+ * `ABUSE_BANDS`, not here: this type is only the wire shape.
+ */
+export type AbusePolicy = {
+  login_distinct_accounts_per_ip: number
+  login_failures_per_account: number
+  login_window_minutes: number
+  api_writes_per_minute: number
+  api_expensive_per_hour: number
+  /**
+   * The only nullable knob, for the reason the server gives: 0 is a MEANING
+   * here — coalescing off — so "absent" cannot be spelled as zero. null asks
+   * for the default.
+   */
+  public_click_coalesce_seconds: number | null
+  anomaly_spray_accounts: number
+  anomaly_hammer_failures: number
+  anomaly_window_minutes: number
+}
+
+/** One knob's advertised range. The form renders these, never a local copy. */
+export type AbuseBound = { field: string; min: number; max: number; default: number }
+
+/**
+ * What this instance actually saw, so a number being typed can be compared
+ * against the traffic it will govern. A zero is "nothing observed", not a
+ * measurement of zero, and the screen says so instead of printing the digit.
+ */
+export type AbuseObserved = {
+  window_days: number
+  max_distinct_accounts_per_ip: number
+  max_failures_per_account: number
+  peak_writes_per_minute: number
+}
+
+export type AbusePolicyResponse = {
+  policy: AbusePolicy
+  bounds: AbuseBound[]
+  observed: AbuseObserved
+  /** Owner-only, like every instance-wide write. Affordance, not the gate. */
+  can_write: boolean
+}
+
+export const abusePolicyQueryKey = ['admin', 'abuse-policy'] as const
+
+export async function fetchAbusePolicy(): Promise<AbusePolicyResponse> {
+  const { data } = await http.get<AbusePolicyResponse>('/api/admin/abuse-policy')
+  return data
+}
+
+/**
+ * Owner-only. A refused write answers 400 `invalid_policy` with a message that
+ * NAMES the field and the real numbers; the screen renders it verbatim, so
+ * nothing here reshapes it.
+ */
+export async function saveAbusePolicy(p: AbusePolicy): Promise<AbusePolicy> {
+  const { data } = await http.put<{ policy: AbusePolicy }>('/api/admin/abuse-policy', p)
+  return data.policy
+}
+
+/** The lookback the anomalies panel offers — NOT the audit trail's vocabulary. */
+export type AnomalyWindow = '15m' | '1h' | '24h' | '7d'
+
+export type AnomalyKind = 'spray' | 'hammer' | 'throttle'
+
+/**
+ * One origin the panel calls anomalous.
+ *
+ * `ip_trusted` is the field the screen must never bury: on an instance behind a
+ * proxy, an address no proxy vouched for is the PROXY's own, and the row is
+ * then about everyone behind it. Blocking it blocks the building — the defect
+ * that produced docs/SDD-ABUSE-DEFENSE.md in the first place.
+ */
+export type Anomaly = {
+  kind: AnomalyKind
+  ip: string
+  ip_trusted: boolean
+  distinct_accounts: number
+  failures: number
+  throttles: number
+  first_seen: string
+  last_seen: string
+  blocked: boolean
+  /** 'warn' here, NOT the trail's 'warning' — two vocabularies, one mapping. */
+  severity: 'critical' | 'warn'
+}
+
+export type AnomalyResponse = {
+  window: string
+  /** The live thresholds, echoed so the panel can state what it is applying. */
+  thresholds: { spray_accounts: number; hammer_failures: number; window_minutes: number }
+  anomalies: Anomaly[]
+}
+
+export function anomaliesQueryKey(window: AnomalyWindow) {
+  return ['admin', 'anomalies', window] as const
+}
+
+export async function fetchAnomalies(window: AnomalyWindow): Promise<AnomalyResponse> {
+  const { data } = await http.get<AnomalyResponse>('/api/admin/anomalies', { params: { window } })
+  return data
+}

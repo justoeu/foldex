@@ -7,8 +7,10 @@ import {
   type AuditCategory, type AuditQuery, type AuditWindow,
 } from '../../api/admin'
 import { useAuth } from '../../auth/AuthProvider'
+import { useRevealTarget } from '../../hooks/useRevealTarget'
 import { AUDIT_WINDOWS } from './auditFormat'
 import { actionLabel } from '../../lib/auditLabels'
+import { AuditAnomalies } from './AuditAnomalies'
 import { AuditDaysChart, AuditDistribution, AuditMetrics } from './AuditCharts'
 import { AuditActors, AuditBlocklist, AuditOrigins, AuditRiskCard } from './AuditSignals'
 import { AuditTimeline } from './AuditTimeline'
@@ -74,6 +76,25 @@ export function AuditSection() {
   // from the previous result set points at an id this one may not contain.
   const resetPaging = () => setPages([])
 
+  const timeline = useRevealTarget<HTMLElement>()
+
+  /**
+   * "See the events behind this signal."
+   *
+   * The trail's search already matches `host(ip)`, so this is the SAME query
+   * the operator would have typed — not a second endpoint and not a separate
+   * screen. Every other filter is cleared with it: an address inspected under
+   * a leftover action chip would show a filtered subset of its own events and
+   * read as "there is nothing here".
+   */
+  const inspectIP = (ip: string) => {
+    setSearch(ip)
+    setAction('')
+    setCategory('')
+    resetPaging()
+    timeline.reveal()
+  }
+
   const entries = list.data ?? []
 
   return (
@@ -135,9 +156,19 @@ export function AuditSection() {
         </>
       )}
 
+      <AuditAnomalies canBlock={canBlock} onInspect={inspectIP} />
+
       <AuditBlocklist blocks={blocks.data ?? []} canBlock={canBlock} />
 
-      <section className="fx-aud-card fx-aud-list" aria-labelledby="fx-aud-list-title">
+      <section
+        className="fx-aud-card fx-aud-list"
+        aria-labelledby="fx-aud-list-title"
+        ref={timeline.ref}
+        // Focusable only as a REVEAL target: the reveal moves the caret here so
+        // the next Tab continues inside the list the operator just asked for,
+        // instead of jumping back to the panel above it.
+        tabIndex={-1}
+      >
         <header className="fx-aud-card-head">
           <div>
             <h3 id="fx-aud-list-title">{t('admin.audit_timeline_title')}</h3>
