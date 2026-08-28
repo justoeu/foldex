@@ -40,6 +40,22 @@ const (
 	AuditIPUnblocked = "instance.ip_unblocked"
 )
 
+// AuditRateLimited records a limiter ENTERING LOCKOUT — not a refused request.
+//
+// The distinction is the whole design of the entry. A limiter under attack
+// refuses thousands of requests; one row per refusal would make the trail
+// itself the amplifier the control exists to remove, and the table is already
+// the most written one in the instance. A lockout is a state CHANGE and there
+// is one of them per budget, so the row count is bounded by the number of
+// buckets rather than by the attacker's request rate.
+//
+// It is an IDENTITY event: what changed is whether an origin or an account may
+// authenticate at all. Classified as content it would be withheld from the
+// administrative projection, and the anomaly panel's throttle rule — which
+// reads exactly these rows — would be the one screen unable to see the
+// strongest signal the instance produces.
+const AuditRateLimited = "auth.rate_limited"
+
 // Category decides the READ SCOPE of a row, which is the whole reason it
 // exists. A content row carries a subject — the link's title, the folder's
 // name — and that is the caller's private content, which INV-045 keeps out of
@@ -140,6 +156,11 @@ var identitySeverity = map[string]string{
 	AuditEmailChanged:          SeverityWarning,
 	AuditIPBlocked:             SeverityWarning,
 	AuditIPUnblocked:           SeverityWarning,
+	// A lockout is the control WORKING, so it is a warning rather than the
+	// critical reserved for authority moving. It still has to be above info:
+	// a run of these is what the anomaly panel calls a throttle, and a level
+	// nobody scans for would bury it among the sign-ins.
+	AuditRateLimited: SeverityWarning,
 }
 
 // AuditSeverity classifies one entry.
@@ -185,6 +206,7 @@ var auditActionOrder = []string{
 	AuditBackupScheduleChanged,
 	AuditIPBlocked,
 	AuditIPUnblocked,
+	AuditRateLimited,
 	AuditLinkCreated,
 	AuditLinkUpdated,
 	AuditLinkDeleted,

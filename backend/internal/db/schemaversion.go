@@ -37,6 +37,17 @@ import (
 // reads on the request path. An unmigrated database would fail the first
 // INSERT into audit_log — that is, on the first login — so this is a hard
 // floor rather than a degradation.
+//
+// Migration 000046 deliberately does NOT bump it, for 000038's reason: it adds
+// only an INDEX, and no query depends on an index existing — the anomaly panel
+// returns the same rows without audit_log_ip_time_idx, only slower. ADR-47's
+// other two additions do not move the floor either: the abuse policy lives in
+// app_setting, a table that has existed since 000016, and audit_log.action has
+// no enumeration to extend (000033 constrains only its LENGTH), so a database
+// at 45 accepts auth.rate_limited exactly as it accepts every other action.
+// Bumping here would refuse the boot of every instance that upgraded its image
+// before running the migration, trading a real outage for a planner
+// improvement.
 const RequiredSchemaVersion = 45
 
 // ErrSchemaOutdated is returned when the database has not been migrated.

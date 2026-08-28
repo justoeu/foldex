@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"foldex/internal/abusepolicy"
 	"foldex/internal/auth"
 	"foldex/internal/mailer"
 	"foldex/internal/mailoutbox"
@@ -334,6 +335,15 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 				ar.Use(mw.RequireAdmin)
 				ar.Use(mw.RejectAPIToken)
 				admin.Mount(ar)
+				// The abuse surface (ADR-47), mounted where internal/server
+				// mounts it: inside the administration group, so the 404 for a
+				// non-admin and the token rejection are the same ones
+				// production applies. Wired unconditionally rather than behind
+				// an opt-in — an unmounted route would make every assertion
+				// about its gates vacuous.
+				auth.NewAbuseHandler(repo, abusepolicy.NewRepository(pool),
+					abusepolicy.NewCache(abusepolicy.NewRepository(pool), 0, logger),
+					logger, admin.AuditPolicyChange, roleperm.OrDefault(grantsRepo)).Mount(ar)
 				if policyRepo != nil {
 					ar.Route("/policy", policy.NewHandler(
 						policyRepo, logger, admin.AuditPolicyChange, nil).Mount)
