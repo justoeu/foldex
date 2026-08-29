@@ -124,6 +124,16 @@ if grep -Fq 'imagetools inspect ${{ matrix.image.repo }}:sha-' <<<"$manifest_job
   fail "inspect still interpolates the unsuffixed sha- tag into run:"
 fi
 
+# A job-level concurrency group that does not include the matrix key is
+# shared by every cell of the same run. GitHub then cancels previously
+# pending siblings when the next cell queues ("Canceling since a higher
+# priority waiting request for <group> exists"). Per-image keeps the
+# cross-run serialization of :latest without the three cells of one run
+# fighting each other.
+# shellcheck disable=SC2016
+grep -Fq 'github.workflow }}-manifest-${{ matrix.image.name }}' <<<"$manifest_job" ||
+  fail "publish-manifest concurrency must be per image, not one group for the whole matrix"
+
 # write_compose builds the fixture. The optional third argument adds a second
 # service running the backend image, which is what the real file looks like:
 # the mailer is the backend binary with a different entrypoint. Callers that

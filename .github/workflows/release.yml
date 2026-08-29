@@ -57,9 +57,10 @@ permissions:
 # SAME version, which is exactly what it should block.
 #
 # What the global group was protecting — two approved dispatches racing to
-# overwrite `:latest` via `imagetools create` — is preserved, one level down:
-# `publish-manifest` carries its own global group. Builds and approval waits
-# now overlap freely; the tag write does not.
+# overwrite `:latest` via `imagetools create` — is preserved one level down
+# on `publish-manifest`, keyed by image so the three cells of one run do
+# not share a group (GitHub would cancel pending siblings). Builds and
+# approval waits overlap freely; two runs of the same image do not.
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.target }}
   cancel-in-progress: false
@@ -226,12 +227,12 @@ jobs:
     needs: [validate-release-ref, publish]
     environment: release
     runs-on: ubuntu-latest
-    # The global serialization the workflow-level group used to provide, kept
-    # exactly where it is load-bearing: this is the only job that writes the
-    # moving tags (`:latest`, `:X`, `:X.Y`), and two of them interleaving could
-    # leave `:latest` pointing at the older release.
+    # A group without the matrix key is shared by backend, web and
+    # backup-agent; GitHub then cancels previously pending siblings when
+    # the next cell queues. Same-run cells write different repos/tags and
+    # must overlap; two runs of the same image must not.
     concurrency:
-      group: ${{ github.workflow }}-manifest
+      group: ${{ github.workflow }}-manifest-${{ matrix.image.name }}
       cancel-in-progress: false
     permissions:
       contents: read
