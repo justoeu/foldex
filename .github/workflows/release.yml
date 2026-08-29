@@ -274,6 +274,7 @@ jobs:
           # The backup-agent cell suffixes every tag (2.12.0-backup-agent,
           # latest-backup-agent, ...); the plain cells pass an empty suffix.
           flavor: |
+            latest=false
             suffix=${{ matrix.image.suffix || '' }},onlatest=true
           tags: |
             type=semver,pattern={{version}},value=${{ needs.validate-release-ref.outputs.release_tag }},enable=${{ needs.validate-release-ref.outputs.is_semver == 'true' }}
@@ -321,4 +322,11 @@ jobs:
           docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
 
       - name: Inspect manifest
-        run: docker buildx imagetools inspect ${{ matrix.image.repo }}:sha-${{ needs.validate-release-ref.outputs.short_sha }}
+        # backup-agent publishes into the same repository as backend, with
+        # every tag suffixed (`sha-<short>-backup-agent`). Inspecting the
+        # unsuffixed :sha-<short> looks up the backend image — which the
+        # sibling matrix cell may not have written yet — and fails "not
+        # found" after a successful imagetools create, skipping the git tag.
+        env:
+          IMAGE_REF: ${{ matrix.image.repo }}:sha-${{ needs.validate-release-ref.outputs.short_sha }}${{ matrix.image.suffix || '' }}
+        run: docker buildx imagetools inspect "$IMAGE_REF"
