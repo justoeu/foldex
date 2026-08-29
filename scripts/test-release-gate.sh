@@ -98,6 +98,31 @@ grep -Fq 'seen_digest' <<<"$manifest_job" || fail "manifest must require distinc
 grep -Fq 'ref: ${{ needs.validate-release-ref.outputs.target_sha }}' <<<"$publish_job" ||
   fail "publishers must build the validated target SHA, not the workflow SHA"
 grep -Fq "type=raw,value=latest,enable=" "$WORKFLOW" || fail "historical targets must not move latest"
+# flavor latest=auto would mint :latest on every semver cell, duplicating the
+# explicit raw latest (gated on publish_latest) and applying it when the
+# target is no longer the tip of main. latest=false leaves that knob as the
+# only source. onlatest=true is load-bearing for the backup-agent cell:
+# without it the suffix skips latest and a bare :latest from that cell
+# would overwrite the backend's moving tag.
+grep -Eq '^[[:space:]]+latest=false$' <<<"$manifest_job" || fail "flavor must not auto-add latest; publish_latest is the only source"
+grep -Fq 'onlatest=true' <<<"$manifest_job" || fail "suffix must apply to latest or backup-agent would stamp the backend tag"
+grep -Fq 'suffix: -backup-agent' <<<"$manifest_job" || fail "backup-agent matrix cell must declare its tag suffix"
+
+# backup-agent publishes :sha-<short>-backup-agent into the SAME repository
+# as backend. Inspecting the unsuffixed :sha-<short> looks up the backend
+# tag — which the sibling cell may not have written yet, and is the wrong
+# image even when it has. Both halves are the contract: IMAGE_REF must
+# carry the suffix, and inspect must consume IMAGE_REF rather than a
+# second unsuffixed interpolation in run:.
+# shellcheck disable=SC2016
+grep -Fq 'IMAGE_REF: ${{ matrix.image.repo }}:sha-${{ needs.validate-release-ref.outputs.short_sha }}${{ matrix.image.suffix || '"''"' }}' <<<"$manifest_job" ||
+  fail "inspect must look up sha-<short> WITH the cell suffix, not the unsuffixed backend tag"
+# shellcheck disable=SC2016
+grep -Fq 'imagetools inspect "$IMAGE_REF"' <<<"$manifest_job" ||
+  fail "inspect must consume IMAGE_REF; interpolating the unsuffixed sha- tag into run: is the production failure"
+if grep -Fq 'imagetools inspect ${{ matrix.image.repo }}:sha-' <<<"$manifest_job"; then
+  fail "inspect still interpolates the unsuffixed sha- tag into run:"
+fi
 
 # write_compose builds the fixture. The optional third argument adds a second
 # service running the backend image, which is what the real file looks like:
