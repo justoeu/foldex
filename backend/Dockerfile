@@ -36,7 +36,7 @@ ENTRYPOINT ["/rustfs-bootstrap"]
 # (docs/STACK.md tracks all four). Published as an extra tag of the SAME
 # repository (justoeu/foldex-backend:<ver>-backup-agent) — same reasoning as
 # the mailer: a third Docker Hub repository is worse than a second tag.
-FROM postgres:18.4-alpine AS backup-agent
+FROM postgres:18.6-alpine AS backup-agent
 # Accepted wart: the postgres base declares VOLUME for its data dir, so each
 # recreate of this container leaves an unused anonymous volume behind (the
 # agent never runs the bundled server outside the drill's /tmp cluster).
