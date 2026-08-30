@@ -12,7 +12,7 @@
 
 # Base tags minor-pinned (bun:1.3-alpine, nginx:1.31-alpine). Digest pins on
 # intentional upgrades via `docker buildx imagetools inspect <image>`.
-FROM oven/bun:1.3-alpine AS builder
+FROM oven/bun:1.4-alpine AS builder
 WORKDIR /app
 # Lockfile + package.json first so the install layer caches across edits.
 COPY package.json bun.lock ./
