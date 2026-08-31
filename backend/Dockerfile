@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Base tags are minor-pinned (golang:1.26-alpine, alpine:3.24). Digest pins are
 # refreshed on intentional base upgrades via `docker buildx imagetools inspect`.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 WORKDIR /src
 # Cross-compile target arch comes from buildkit via $TARGETARCH (set when the
 # build runs with `--platform linux/arm64` or `linux/amd64`). Hardcoding
