@@ -31,7 +31,7 @@ import (
 // mirror prod (a version-specific planner/default change can't hide behind an
 // older test engine). TestPostgresImageMatchesCompose enforces this — bump all
 // three together. See CLAUDE.md §1.
-const pgImage = "postgres:18.4-alpine"
+const pgImage = "postgres:18.6-alpine"
 
 // New starts a DEDICATED Postgres container, applies the migrations and returns
 // a pool. The container is terminated via t.Cleanup.
@@ -137,7 +137,7 @@ func StopShared() {
 // (New) and outside one (Shared, from sync.Once, where there is no T to fail).
 func startContainer(fatalf func(string, ...any), cleanup func(func())) *container {
 	// Generous timeout: this budget covers a COLD image pull (the ~400 MB
-	// postgres:18.4-alpine layer) which happens inside pgmod.Run, plus connect
+	// postgres:18.6-alpine layer) which happens inside pgmod.Run, plus connect
 	// + migrations. 90s was enough only while the image stayed warm; a fresh
 	// runner pulling under parallel package load (each package spins its own
 	// container) blew past it. Once cached, startup is a few seconds.
