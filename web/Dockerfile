@@ -10,7 +10,7 @@
 #           own pair at /etc/nginx/certs/{cert,key}.pem or let the entrypoint
 #           generate an ephemeral one per container.
 
-# Base tags minor-pinned (bun:1.3-alpine, nginx:1.31-alpine). Digest pins on
+# Base tags minor-pinned (bun:1.4-alpine, nginx:1.31-alpine). Digest pins on
 # intentional upgrades via `docker buildx imagetools inspect <image>`.
 FROM oven/bun:1.4-alpine AS builder
 WORKDIR /app

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Base tags are minor-pinned (golang:1.26-alpine, alpine:3.24). Digest pins are
+# Base tags are minor-pinned (golang:1.27-alpine, alpine:3.24). Digest pins are
 # refreshed on intentional base upgrades via `docker buildx imagetools inspect`.
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 WORKDIR /src
@@ -28,7 +28,7 @@ COPY --from=build /out/rustfs-bootstrap /rustfs-bootstrap
 USER bootstrap:bootstrap
 ENTRYPOINT ["/rustfs-bootstrap"]
 
-# Operational backup agent (ADR-43). Derives from postgres:18.4-alpine, NOT
+# Operational backup agent (ADR-43). Derives from postgres:18.6-alpine, NOT
 # from the backend image: the drill needs initdb/pg_ctl/postgres — a whole
 # ephemeral server — and postgresql*-client packages ship only the clients.
 # The base also keeps pg_dump version-matched with foldex-db; bump this pin in

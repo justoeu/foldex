@@ -74,7 +74,7 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 | PWA          | **vite-plugin-pwa 1.3** com `strategies: 'injectManifest'`            | SW hand-rolled em `web/src/sw.ts` (Cache API + push/notificationclick listeners). Workbox só injeta `__WB_MANIFEST` no build. |
 | Testes web   | **Vitest 4** + `@testing-library/react 16` + jsdom 29                 | Mesmo gate ≥85% (`vitest.config.ts`). |
 | Extension    | Vanilla MV3 (sem bundler)                                            | Popup tem ~80 LoC. Sem build = "load unpacked" direto. |
-| Node runtime | **bun 1.3** (oven/bun:1.3-alpine)                                    | Bate com Vite 8 / Vitest 4 e resolve melhor packages platform-specific que npm em mirror privado. |
+| Node runtime | **bun 1.4** (oven/bun:1.4-alpine)                                    | Bate com Vite 8 / Vitest 4 e resolve melhor packages platform-specific que npm em mirror privado. |
 
 ## Data model (estado atual, após 34 migrations)
 
@@ -651,7 +651,7 @@ Definido em `CLAUDE.md`. Backend: `make coverage` executa unit + integration tes
 Em uma máquina sem Chrome/Chromium local, o equivalente isolado para os testes live usa Chromium como usuário não-root dentro de container (rode da raiz do repositório):
 
 ```bash
-docker run --rm -v "$PWD/backend:/src" -w /src golang:1.26-alpine sh -ec '
+docker run --rm -v "$PWD/backend:/src" -w /src golang:1.27-alpine sh -ec '
   apk add --no-cache chromium su-exec
   adduser -D -h /tmp/foldex-test foldex-test
   chown -R foldex-test:foldex-test /go /tmp/foldex-test
@@ -1480,7 +1480,7 @@ O backup per-user (ADR-20) é um recurso de produto e deliberadamente não resta
 instância: exclui todo material de auth (INV-105). O disaster recovery operacional é um
 quarto binário, `cmd/backup-agent`, rodando como serviço opcional do compose
 (`COMPOSE_PROFILES=backup`, modelo do `mailer`: mesma imagem-repositório, entrypoint
-próprio, off por default), com imagem derivada de `postgres:18.4-alpine` — o que dá
+próprio, off por default), com imagem derivada de `postgres:18.6-alpine` — o que dá
 `pg_dump`/`initdb`/`postgres` version-matched sem docker-in-docker.
 
 - **Quatro jobs agendados**: `dump` (pg_dump -Fc do banco inteiro → cifrado com age →
