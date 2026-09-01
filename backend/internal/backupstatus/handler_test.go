@@ -19,9 +19,14 @@ import (
 func TestValidJob(t *testing.T) {
 	for _, job := range []string{"dump", "drill", "mirror", "user_zip"} {
 		assert.True(t, backupstatus.ValidJob(job), "job %q", job)
+		got, ok := backupstatus.CanonicalJob(job)
+		assert.True(t, ok, "job %q", job)
+		assert.Equal(t, job, got)
 	}
 	for _, bad := range []string{"", "DUMP", "userzip", "restore", "dump "} {
 		assert.False(t, backupstatus.ValidJob(bad), "job %q", bad)
+		_, ok := backupstatus.CanonicalJob(bad)
+		assert.False(t, ok, "job %q", bad)
 	}
 }
 

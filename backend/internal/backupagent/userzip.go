@@ -194,8 +194,8 @@ func (j *UserZipJob) shipOne(ctx context.Context, uid authctx.UserID) (string, i
 		return "", 0, "", fmt.Errorf("create spool: %w", err)
 	}
 	defer func() {
-		spool.Close()
-		os.Remove(spool.Name())
+		_ = spool.Close()
+		_ = os.Remove(spool.Name())
 	}()
 
 	hasher := sha256.New()

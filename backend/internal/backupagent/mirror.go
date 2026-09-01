@@ -320,8 +320,8 @@ func (j *MirrorJob) copyOne(ctx context.Context, o ObjectInfo) error {
 		return fmt.Errorf("create mirror spool: %w", err)
 	}
 	defer func() {
-		spool.Close()
-		os.Remove(spool.Name())
+		_ = spool.Close()
+		_ = os.Remove(spool.Name())
 	}()
 	enc, err := encryptTo(spool, j.recipients)
 	if err != nil {

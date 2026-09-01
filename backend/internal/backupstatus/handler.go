@@ -106,27 +106,28 @@ func (h *Handler) RequestRun(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if !ValidJob(in.Job) {
+	job, ok := CanonicalJob(in.Job)
+	if !ok {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_job",
 			"job must be one of dump, drill, mirror, user_zip"))
 		return
 	}
-	id, err := h.repo.Request(r.Context(), in.Job)
+	id, err := h.repo.Request(r.Context(), job)
 	if errors.Is(err, ErrRunPending) {
 		httperr.Write(w, httperr.New(http.StatusConflict, "backup_run_pending",
 			"a run of this job is already requested or running"))
 		return
 	}
 	if err != nil {
-		h.logger.Error("backup run request", "err", err, "job", in.Job)
+		h.logger.Error("backup run request", "err", err, "job", job)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
 	if h.audit != nil {
-		h.audit(r, in.Job)
+		h.audit(r, job)
 	}
 	// 202, not 201: nothing ran yet. The row is a request the agent claims on
 	// its next poll — or never, on an instance without the backup profile,
 	// which is exactly what the band's aging-requested warning surfaces.
-	httperr.JSON(w, http.StatusAccepted, map[string]any{"id": id, "job": in.Job, "status": "requested"})
+	httperr.JSON(w, http.StatusAccepted, map[string]any{"id": id, "job": job, "status": "requested"})
 }

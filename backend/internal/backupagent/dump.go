@@ -104,7 +104,7 @@ func pgDumpCommand(ctx context.Context, cfg Config, snapshotID string) *exec.Cmd
 		args = append(args, "--snapshot="+snapshotID)
 	}
 	args = append(args, cfg.PGDatabase)
-	cmd := exec.CommandContext(ctx, "pg_dump", args...)
+	cmd := exec.CommandContext(ctx, "pg_dump", args...) // #nosec G204 -- binary is the literal pg_dump; argv is operator config, never request input
 	cmd.Env = append(os.Environ(),
 		"PGPASSWORD="+cfg.PGPassword,
 		"PGSSLMODE="+cfg.PGSSLMode,
@@ -149,8 +149,8 @@ func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, e
 		return nil, nil, ReasonSpoolFailed, fmt.Errorf("create spool: %w", err)
 	}
 	defer func() {
-		spool.Close()
-		os.Remove(spool.Name())
+		_ = spool.Close()
+		_ = os.Remove(spool.Name())
 	}()
 
 	// The hash is taken over the CIPHERTEXT — what actually sits in the
