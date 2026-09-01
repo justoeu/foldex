@@ -2,10 +2,10 @@ package backupagent
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2" // nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- catch-up delay, not a credential
 	"net"
 	"net/http"
 	"sync"
@@ -79,22 +79,32 @@ type Agent struct {
 	httpAddr string // bound address, once serveHTTP has a listener
 }
 
+// defaultCatchUpJitter is 1–4 extra minutes on top of a one-minute floor so a
+// compose-up does not dump into a half-started stack. crypto/rand because
+// math/rand is a Semgrep finding even when the value is not a secret; a
+// boot-once delay does not care which CSPRNG it came from.
+func defaultCatchUpJitter() time.Duration {
+	var b [1]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return time.Minute
+	}
+	return time.Minute + time.Duration(b[0]%4)*time.Minute
+}
+
 // New builds the agent. store carries the external bucket; mirrorSource is a
 // second client pointed at the RustFS origin, nil when the mirror is off —
 // the mirror registers only when both the interval and the source exist.
 func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBucket, logger *slog.Logger) (*Agent, error) {
 	a := &Agent{
-		cfg:         cfg,
-		pool:        pool,
-		store:       store,
-		runs:        NewRunStore(pool),
-		sched:       NewScheduleStore(pool),
-		metrics:     NewMetrics(),
-		logger:      logger,
-		schedChange: make(chan struct{}),
-		catchUpJitter: func() time.Duration {
-			return time.Minute + rand.N(4*time.Minute) // #nosec G404 -- catch-up delay so compose-up does not dump into a half-started stack; not a credential
-		},
+		cfg:           cfg,
+		pool:          pool,
+		store:         store,
+		runs:          NewRunStore(pool),
+		sched:         NewScheduleStore(pool),
+		metrics:       NewMetrics(),
+		logger:        logger,
+		schedChange:   make(chan struct{}),
+		catchUpJitter: defaultCatchUpJitter,
 	}
 	dump, err := NewDumpJob(cfg, pool, store, logger)
 	if err != nil {

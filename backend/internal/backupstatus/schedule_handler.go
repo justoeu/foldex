@@ -106,7 +106,10 @@ func (h *Handler) PutSchedule(w http.ResponseWriter, r *http.Request) {
 		before = h.storedSchedule(r.Context(), job)
 	}
 	if err := h.repo.SetSchedule(r.Context(), job, in, by); err != nil {
-		h.logger.Error("backup schedule set", "err", err, "job", job)
+		// SetSchedule takes the request document; logging err re-taints the
+		// sink (CodeQL go/log-injection) the same way abuse policy Set did.
+		// The interned job is already on the audit trail when that path runs.
+		h.logger.Error("backup schedule set")
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
