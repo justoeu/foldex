@@ -77,8 +77,8 @@ func (h *Handler) GetSchedule(w http.ResponseWriter, r *http.Request) {
 // backupagent.ValidateJobConfig — the same function the agent applies when it
 // loads, so what saves here is exactly what runs there.
 func (h *Handler) PutSchedule(w http.ResponseWriter, r *http.Request) {
-	job := chi.URLParam(r, "job")
-	if !ValidJob(job) {
+	job, ok := CanonicalJob(chi.URLParam(r, "job"))
+	if !ok {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_job",
 			"job must be one of dump, drill, mirror, user_zip"))
 		return
@@ -120,8 +120,8 @@ func (h *Handler) PutSchedule(w http.ResponseWriter, r *http.Request) {
 // baseline on its next sync. Idempotent: deleting an absent row is the state
 // the caller asked for.
 func (h *Handler) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
-	job := chi.URLParam(r, "job")
-	if !ValidJob(job) {
+	job, ok := CanonicalJob(chi.URLParam(r, "job"))
+	if !ok {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_job",
 			"job must be one of dump, drill, mirror, user_zip"))
 		return

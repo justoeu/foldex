@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
+	"math/rand/v2" // nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- catch-up delay, not a credential
 	"net"
 	"net/http"
 	"sync"
@@ -93,7 +93,7 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 		logger:      logger,
 		schedChange: make(chan struct{}),
 		catchUpJitter: func() time.Duration {
-			return time.Minute + rand.N(4*time.Minute)
+			return time.Minute + rand.N(4*time.Minute) // #nosec G404 -- catch-up delay so compose-up does not dump into a half-started stack; not a credential
 		},
 	}
 	dump, err := NewDumpJob(cfg, pool, store, logger)

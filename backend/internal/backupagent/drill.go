@@ -90,7 +90,7 @@ func NewDrillJob(cfg Config, runs drillRuns, store Uploader, logger *slog.Logger
 }
 
 func execCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- production callers pass literal binaries (initdb/pg_ctl/createdb/pg_restore); the name is a test seam, never request input
 	// Minimal environment, not os.Environ(): the drill EXECUTES bytes that
 	// came from the bucket (pg_restore runs the archive's SQL), and a
 	// malicious artifact restored as superuser can spawn children that read
@@ -120,7 +120,7 @@ func loadAgeIdentities(path string) ([]age.Identity, error) {
 			return nil, fmt.Errorf("backupagent: BACKUP_AGE_IDENTITY_FILE (%s) is mode %o — must not be group- or world-readable (chmod 600)", path, info.Mode().Perm())
 		}
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // G304: operator-configured path only
+	data, err := os.ReadFile(path) // #nosec G304 -- operator-configured BACKUP_AGE_IDENTITY_FILE, never request input
 	if err != nil {
 		return nil, fmt.Errorf("backupagent: BACKUP_AGE_IDENTITY_FILE: %w", err)
 	}
@@ -284,7 +284,7 @@ func (j *DrillJob) download(ctx context.Context, key, path string) (string, erro
 		return "", fmt.Errorf("open %s: %w", key, err)
 	}
 	defer obj.Close()
-	out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G304: path inside our own MkdirTemp
+	out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- path inside our own MkdirTemp
 	if err != nil {
 		return "", fmt.Errorf("create download spool: %w", err)
 	}
@@ -310,7 +310,7 @@ func (j *DrillJob) decrypt(src *DumpRunRef, spoolPath, dumpPath string) (string,
 	if len(j.identities) == 0 {
 		return "", fmt.Errorf("artifact %s is age-encrypted and BACKUP_AGE_IDENTITY_FILE is not configured — the drill cannot open it", src.Key)
 	}
-	in, err := os.Open(spoolPath) //nolint:gosec // G304: path inside our own MkdirTemp
+	in, err := os.Open(spoolPath) // #nosec G304 -- path inside our own MkdirTemp
 	if err != nil {
 		return "", fmt.Errorf("reopen spool: %w", err)
 	}
@@ -319,7 +319,7 @@ func (j *DrillJob) decrypt(src *DumpRunRef, spoolPath, dumpPath string) (string,
 	if err != nil {
 		return "", fmt.Errorf("age decrypt %s: %w", src.Key, err)
 	}
-	out, err := os.OpenFile(dumpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G304: path inside our own MkdirTemp
+	out, err := os.OpenFile(dumpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- path inside our own MkdirTemp
 	if err != nil {
 		return "", fmt.Errorf("create decrypted dump: %w", err)
 	}

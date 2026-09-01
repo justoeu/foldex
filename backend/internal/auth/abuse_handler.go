@@ -133,7 +133,11 @@ func (h *AbuseHandler) PutPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.policy.Set(r.Context(), in); err != nil {
-		h.logger.Error("abuse policy set", "err", err)
+		// The write error is a database/encode failure after ValidateForWrite
+		// already accepted the body. Logging err would re-taint the sink with
+		// the request document (CodeQL go/log-injection); the static line is
+		// the same fact the operator needs, without the body.
+		h.logger.Error("abuse policy set")
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}

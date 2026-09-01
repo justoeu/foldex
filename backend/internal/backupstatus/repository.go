@@ -29,14 +29,28 @@ var Jobs = []string{
 	backupagent.JobUserZip,
 }
 
+// CanonicalJob returns the interned job name (a package constant) so log and
+// audit sinks never carry the request string. A match against the constant
+// is what ValidJob reports; the interned value is what handlers log.
+func CanonicalJob(name string) (string, bool) {
+	switch name {
+	case backupagent.JobDump:
+		return backupagent.JobDump, true
+	case backupagent.JobDrill:
+		return backupagent.JobDrill, true
+	case backupagent.JobMirror:
+		return backupagent.JobMirror, true
+	case backupagent.JobUserZip:
+		return backupagent.JobUserZip, true
+	default:
+		return "", false
+	}
+}
+
 // ValidJob reports whether name is one of the four jobs.
 func ValidJob(name string) bool {
-	for _, j := range Jobs {
-		if j == name {
-			return true
-		}
-	}
-	return false
+	_, ok := CanonicalJob(name)
+	return ok
 }
 
 // ErrRunPending reports that the job already has a 'requested' or 'running'
