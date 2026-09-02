@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
-import { removeLinkImage, uploadLinkImage, useCreateLink, useUpdateLink } from '../api/links'
+import { captureLinkScreenshot, removeLinkImage, uploadLinkImage, useCreateLink, useUpdateLink } from '../api/links'
 import { apiErrorCode } from '../lib/apiError'
 import { tagNameTakenErrorKey, type SelectedTag } from '../lib/dialogTags'
 import { buildLinkCreatePayload, buildLinkUpdatePayload, type LinkDialogValues } from '../lib/linkDialogPayload'
@@ -10,6 +10,7 @@ type ImageState = {
   file: File | null
   removed: boolean
   busy: boolean
+  captureOnSave: boolean
   setBusy: (busy: boolean) => void
   setUploadError: (message: string | null) => void
 }
@@ -42,15 +43,18 @@ export function useLinkDialogSubmit(options: Options) {
   }
 
   const syncImage = async (linkId: number | null) => {
-    if (!linkId || (!options.image.file && !options.image.removed)) return true
+    if (!linkId) return true
+    const { file, removed, captureOnSave } = options.image
+    if (!file && !removed && !captureOnSave) return true
     options.image.setBusy(true)
     try {
-      if (options.image.file) await uploadLinkImage(linkId, options.image.file)
+      if (file) await uploadLinkImage(linkId, file)
+      else if (captureOnSave) await captureLinkScreenshot(linkId)
       else if (options.link) await removeLinkImage(linkId)
       invalidateImageQueries(queryClient)
       return true
     } catch (error) {
-      options.image.setUploadError(uploadErrorMessage(error, t('link_dialog.image_error_generic')))
+      options.image.setUploadError(uploadErrorMessage(error, t))
       return false
     } finally {
       options.image.setBusy(false)
@@ -98,7 +102,17 @@ function saveErrorMessage(
   return message || t('link_dialog.error_generic')
 }
 
-function uploadErrorMessage(error: unknown, fallback: string): string {
-  const value = error as { response?: { data?: { error?: { message?: string } } }; message?: string }
-  return value.response?.data?.error?.message ?? value.message ?? fallback
+function uploadErrorMessage(
+  error: unknown,
+  t: (key: string) => string,
+): string {
+  const code = apiErrorCode(error)
+  if (code === 'storage_unavailable') return t('link_dialog.image_error_storage')
+  if (code === 'screenshot_failed' || code === 'private_target' || code === 'invalid_scheme') {
+    return t('link_dialog.image_error_screenshot')
+  }
+  const value = error as { response?: { data?: { error?: { message?: string } }; status?: number } }
+  // Chi's empty 404 (route omitted) has no envelope; a JSON not_found is INV-050.
+  if (value.response?.status === 404 && !code) return t('link_dialog.image_error_storage')
+  return value.response?.data?.error?.message ?? t('link_dialog.image_error_generic')
 }

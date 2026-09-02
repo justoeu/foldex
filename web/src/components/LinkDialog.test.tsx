@@ -804,4 +804,34 @@ describe('LinkDialog', () => {
     await waitFor(() => expect(zone).toHaveAttribute('aria-disabled', 'true'))
     post.mockRestore()
   })
+
+  it('captures a screenshot immediately on an existing link', async () => {
+    const link = {
+      id: 51, url: 'https://www.youtube.com/watch?v=XLQ0El6V5kE', title: 'RustDesk',
+      slug: 'rustdesk', click_count: 1, preview_status: 'failed', pinned: false,
+      created_at: '', updated_at: '', tags: [], og_image_url: null,
+    } as unknown as Link
+    state.links.push(link)
+    renderWithProviders(<LinkDialog open link={link} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /capture page screenshot/i }))
+    await waitFor(() => expect(state.links[0].og_image_url).toContain('/api/files/screenshots/51'))
+  })
+
+  it('names a missing object store instead of echoing axios 404', async () => {
+    const link = {
+      id: 52, url: 'https://example.test', title: 'X', slug: 'x',
+      click_count: 0, preview_status: 'ok', pinned: false,
+      created_at: '', updated_at: '', tags: [], og_image_url: '/gone.jpg',
+    } as unknown as Link
+    state.links.push(link)
+    state.linkImageRemoveError = { status: 404, code: '', message: '' }
+    renderWithProviders(<LinkDialog open link={link} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /remove image/i }))
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+    expect(await screen.findByText(/image storage is unavailable/i)).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    state.linkImageRemoveError = undefined
+  })
 })

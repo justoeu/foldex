@@ -130,6 +130,23 @@ export function useRefreshPreview() {
     mutationFn: async (id: number) => {
       await http.post(`/api/links/${id}/refresh-preview`)
     },
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: ['links'] })
+      await qc.cancelQueries({ queryKey: ['entries'] })
+      const linkSnapshots = qc.getQueriesData<LinksCache>({ queryKey: ['links'] })
+      const entrySnapshots = qc.getQueriesData<LinksCache>({ queryKey: ['entries'] })
+      const markPending = (l: Link): Link =>
+        l.id === id ? { ...l, preview_status: 'pending' } : l
+      mapCachedLinks(qc, markPending)
+      mapCachedLinkEntries(qc, markPending)
+      return { linkSnapshots, entrySnapshots }
+    },
+    onError: (_err, _id, ctx) => {
+      if (!ctx) return
+      for (const [key, snapshot] of [...ctx.linkSnapshots, ...ctx.entrySnapshots]) {
+        qc.setQueryData(key, snapshot)
+      }
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['links'] })
       qc.invalidateQueries({ queryKey: ['entries'] })
@@ -173,8 +190,13 @@ export function useFetchUrlMetadata() {
 export async function uploadLinkImage(id: number, file: File): Promise<{ url: string }> {
   const fd = new FormData()
   fd.append('image', file)
-  const { data } = await http.post<{ url: string }>(`/api/links/${id}/image`, fd, {
-    headers: { 'Content-Type': 'multipart/form-data' },
+  const { data } = await http.post<{ url: string }>(`/api/links/${id}/image`, fd)
+  return data
+}
+
+export async function captureLinkScreenshot(id: number): Promise<{ url: string }> {
+  const { data } = await http.post<{ url: string }>(`/api/links/${id}/screenshot`, undefined, {
+    timeout: 80_000,
   })
   return data
 }

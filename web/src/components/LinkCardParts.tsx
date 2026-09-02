@@ -233,12 +233,16 @@ function LinkCardActions({
         <button
           type="button"
           className="fx-iconbtn"
-          data-tooltip={t('link_card.refresh_preview')}
+          data-tooltip={link.preview_status === 'pending' ? t('link_card.capturing') : t('link_card.refresh_preview')}
           data-tooltip-side="top"
-          aria-label={t('link_card.refresh_preview')}
+          aria-label={link.preview_status === 'pending' ? t('link_card.capturing') : t('link_card.refresh_preview')}
+          aria-busy={link.preview_status === 'pending' || undefined}
+          disabled={link.preview_status === 'pending'}
           onClick={() => actions.onRefreshPreview(link.id)}
         >
-          <Icon d={I.refresh} size={14} />
+          {link.preview_status === 'pending'
+            ? <span className="fx-spinner" aria-hidden="true" />
+            : <Icon d={I.refresh} size={14} />}
         </button>
       )}
       <button

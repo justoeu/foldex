@@ -59,6 +59,17 @@ describe('CSRF double-submit', () => {
     })
     expect((cfg.headers as Record<string, string>)[CSRF_HEADER]).toBe('explicit')
   })
+
+  it('drops Content-Type on FormData so the browser can set the multipart boundary', async () => {
+    const cfg = await runRequestInterceptor({
+      method: 'post',
+      headers: { 'Content-Type': 'application/json' },
+      data: new FormData(),
+    })
+    const headers = cfg.headers as Record<string, string>
+    expect(headers['Content-Type']).toBeUndefined()
+    expect(headers['content-type']).toBeUndefined()
+  })
 })
 
 describe('session cookies', () => {

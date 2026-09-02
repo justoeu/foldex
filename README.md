@@ -393,7 +393,7 @@ to come as the project gets more populated content:
 
 - Populated home grid (cards + 3/5/8-column density)
 - Command palette (`⌥K`)
-- New link dialog with tag autocomplete + auto-detect of title/description (500 ms after you paste a URL; oEmbed enrichment for YouTube/Vimeo)
+- New link dialog with tag autocomplete + auto-detect of title/description (500 ms after you paste a URL; oEmbed enrichment for YouTube/Vimeo). If the preview is blank or broken, **Capture page screenshot** on the image panel asks Chromium for a print (the same SSRF-gated path as the worker fallback — never the default).
 - Import page (drag-drop) + preview with the mode picker
 - Stats page (KPIs, top hosts, tag distribution)
 - Extension popup

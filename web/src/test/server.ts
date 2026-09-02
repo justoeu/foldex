@@ -249,7 +249,8 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     } },
     { url: /^\/api\/tags$/, handle: createTag },
     { url: /^\/api\/folders$/, handle: createFolder },
-    { url: /^\/api\/links\/(\d+)\/refresh-preview$/, handle: () => null },
+    { url: /^\/api\/links\/(\d+)\/refresh-preview$/, handle: refreshPreview },
+    { url: /^\/api\/links\/(\d+)\/screenshot$/, handle: captureScreenshot },
     { url: /^\/api\/links\/(\d+)\/seen-change$/, handle: seenChange },
     { url: /^\/api\/links\/(\d+)\/image$/, handle: uploadLinkImage },
     { url: /^\/api\/links$/, handle: createLink },
@@ -1068,6 +1069,24 @@ function createLink(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Moc
   }
   s.links.push(link)
   return link
+}
+
+function refreshPreview(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
+  const id = Number(m[1])
+  const link = s.links.find((x) => x.id === id)
+  if (!link) throw notFound()
+  link.preview_status = 'pending'
+  return null
+}
+
+function captureScreenshot(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): { url: string } {
+  const id = Number(m[1])
+  const link = s.links.find((x) => x.id === id)
+  if (!link) throw notFound()
+  const url = `/api/files/screenshots/${id}.jpg`
+  link.og_image_url = url
+  link.preview_status = 'ok'
+  return { url }
 }
 
 function uploadLinkImage(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): { url: string } {

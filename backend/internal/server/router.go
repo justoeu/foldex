@@ -491,6 +491,20 @@ func New(d Deps) http.Handler {
 				// otherwise have nowhere to be served back from.
 				nih := notes.NewImageHandler(d.Storage, notesRepo, d.Logger)
 				pr.With(writeGate).Post("/notes/images", nih.Upload)
+			} else {
+				// Keep the mutating image routes on the mux when the object
+				// store is down. Omitting them made Chi answer an empty 404,
+				// which the SPA surfaced as "Request failed with status code
+				// 404" on Save after picking a file. 503 with an envelope is
+				// the honest answer; GET /files stays unmounted because there
+				// is nothing to serve.
+				unavailable := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					httperr.Write(w, httperr.New(http.StatusServiceUnavailable, "storage_unavailable", "object store is unavailable"))
+				})
+				pr.With(writeGate).Post("/links/{id}/screenshot", unavailable)
+				pr.With(writeGate).Post("/links/{id}/image", unavailable)
+				pr.With(writeGate).Delete("/links/{id}/image", unavailable)
+				pr.With(writeGate).Post("/notes/images", unavailable)
 			}
 
 			pr.Route("/import", func(ir chi.Router) {

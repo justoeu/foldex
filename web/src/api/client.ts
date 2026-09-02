@@ -50,6 +50,13 @@ http.interceptors.request.use((config) => {
     // bootstrap flow both need to drive this directly.
     if (csrf && !headers[CSRF_HEADER]) headers[CSRF_HEADER] = csrf
   }
+  // The instance default is application/json. FormData must carry its own
+  // multipart boundary; a hardcoded multipart/form-data header (or the JSON
+  // default) makes the backend reject the body.
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    delete headers['Content-Type']
+    delete headers['content-type']
+  }
   config.headers = headers as never
   return config
 })
