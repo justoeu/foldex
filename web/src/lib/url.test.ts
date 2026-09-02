@@ -36,6 +36,9 @@ describe('safeImageUrl', () => {
     ['HTTPS://EXAMPLE.COM/X', 'HTTPS://EXAMPLE.COM/X'], // case-insensitive scheme
     ['/static/icon.png', '/static/icon.png'],           // site-relative
     ['  https://example.com  ', 'https://example.com'], // trim
+    ['blob:https://example.com/abc', 'blob:https://example.com/abc'],
+    ['blob:http://localhost/uuid', 'blob:http://localhost/uuid'],
+    ['blob:preview', 'blob:preview'], // createObjectURL mock shape used in dialog tests
   ])('accepts %j', (input, expected) => {
     expect(safeImageUrl(input)).toBe(expected)
   })
@@ -57,7 +60,8 @@ describe('safeImageUrl', () => {
     ['\tjavascript:alert(1)'],       // leading tab (trim removes it then regex rejects)
     ['JavaScript:alert(1)'],         // mixed-case javascript scheme
     ['%6Aavascript:alert(1)'],       // URL-encoded scheme prefix
-    ['blob:https://example.com/abc'],// blob URLs not allowed (only the LinkDialog path supplies blobs, and it bypasses the helper)
+    ['blob:'],                       // parseable but empty — not a resource
+    ['data:blob:https://example.com/abc'],
   ])('rejects %j', (input) => {
     expect(safeImageUrl(input as never)).toBeUndefined()
   })

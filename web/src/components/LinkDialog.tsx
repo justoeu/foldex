@@ -267,7 +267,7 @@ function LinkStatus({ form, link }: { form: Form; link: Link | null }) {
 function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link: Link | null }) {
   const { t } = useTranslation()
   const storedImage = image.removed ? undefined : safeImageUrl(link?.og_image_url)
-  const stagedPreview = image.preview?.startsWith('blob:') ? image.preview : safeImageUrl(image.preview)
+  const stagedPreview = safeImageUrl(image.preview)
   const currentImage = image.previewBroken ? undefined : (stagedPreview ?? storedImage)
   const canRemove = !image.removed && !!(image.preview || link?.og_image_url)
   const href = safeLinkHref(form.url)
@@ -332,10 +332,14 @@ function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link:
 
 function LinkImagePreview({ url, busy, onBroken }: { url: string; busy: boolean; onBroken: () => void }) {
   const { t } = useTranslation()
+  // Taint analysis does not treat a pre-checked prop as a sanitizer, so
+  // the helper runs at the <img> sink. blob: previews go through it too.
+  const src = safeImageUrl(url)
+  if (!src) return null
   return (
     <div className="fx-modal-side-ogwrap">
       <img
-        src={url}
+        src={src}
         alt=""
         referrerPolicy="no-referrer"
         className="fx-modal-side-ogimg"

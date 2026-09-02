@@ -520,6 +520,18 @@ describe('LinkDialog', () => {
     expect(screen.getByText(/could not auto-fill/i)).toBeInTheDocument()
   })
 
+  it('refuses to render an unsafe og_image_url as an img', () => {
+    const link: Link = {
+      id: 9, url: 'https://poison.example', title: 'poisoned', slug: 'poisoned', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+      og_image_url: 'javascript:alert(1)', description: null, favicon_url: null,
+    } as Link
+    renderWithProviders(<LinkDialog open link={link} onClose={vi.fn()} />)
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(document.querySelector('.fx-modal-side-ogimg')).toBeNull()
+    expect(document.querySelector('img')).toBeNull()
+  })
+
   it('stages an image file via the hidden input and uploads on create', async () => {
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview')
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
@@ -531,6 +543,7 @@ describe('LinkDialog', () => {
     const file = new File(['png'], 'cover.png', { type: 'image/png' })
     await user.upload(fileInput, file)
     expect(screen.getByText(/will be saved with the link/i)).toBeInTheDocument()
+    expect(document.querySelector('.fx-modal-side-ogimg')).toHaveAttribute('src', 'blob:preview')
     await user.click(screen.getByRole('button', { name: /Save link/i }))
     await waitFor(() => expect(state.links).toHaveLength(1))
     await waitFor(() => expect(state.links[0].og_image_url).toContain('/api/files/links/'))
