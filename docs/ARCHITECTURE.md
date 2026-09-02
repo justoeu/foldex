@@ -395,6 +395,7 @@ LIMIT $3 OFFSET $4;
 |        | POST   | `/api/push/test`                      | Dispara notificação de teste pra todas as subscriptions ativas. Útil pra validar VAPID/SW. |
 | Redir  | GET    | `/go/{id-or-slug}`                    | 302 + INSERT no click_log (fora de `/api`). ID-first; fallback pra slug (mig 000009). |
 | Health | GET    | `/healthz`                            | `{status, db}` + 200/503                           |
+| Status | GET    | `/api/status`                         | Sessão; `{resources:[{id,state}]}` dos extras opcionais (`object_store`, `mail_broker` se `MAIL_TRANSPORT=amqp`). `state` é `ok` ou `unreachable`. Sem host, URL ou texto de erro. Sempre 200. Token de API → 403. |
 
 Erros em JSON uniforme: `{ "error": { "code": "not_found", "message": "..." } }`.
 

@@ -58,6 +58,36 @@
     transition: grid-template-columns .2s cubic-bezier(.2,.8,.2,1);
   }
 }
+
+/* Optional-dependency footer. The shell is a column so the bar takes its
+   own row instead of covering the last cards; .fx-frame was height:100%. */
+.fx-shell {
+  display: flex;
+  flex-direction: column;
+}
+.fx-frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+.fx-dep-status {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  padding: 7px 14px calc(7px + env(safe-area-inset-bottom, 0px));
+  font-family: var(--fx-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-align: center;
+  color: var(--fx-warn);
+  background: color-mix(in srgb, var(--fx-warn) 12%, var(--fx-surface));
+  border-top: 1px solid color-mix(in srgb, var(--fx-warn) 35%, var(--fx-border));
+}
+/* The mobile FAB is position:fixed at the same bottom edge. Lift it when
+   the bar is in the tree so the two do not occupy the same 56px. */
+.fx-shell:has(.fx-dep-status) .fx-fab {
+  bottom: max(52px, calc(20px + env(safe-area-inset-bottom, 0px) + 28px));
+}
 .fx-sidebar {
   min-height: 100%;
   min-width: 0;

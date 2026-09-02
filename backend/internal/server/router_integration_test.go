@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"foldex/internal/auth"
 	"foldex/internal/backup"
 	"foldex/internal/config"
+	"foldex/internal/depstatus"
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
@@ -386,13 +388,110 @@ func TestHealthzDegradedDoesNotLeakErr(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.Equal(t, "degraded", body["status"], "status must reflect db-down")
 	assert.Equal(t, "unreachable", body["db"], "db field must be the fixed marker, not the raw err")
-
 	// Defense-in-depth: scan the db field for typical DSN/err substrings that
 	// pool.Ping would otherwise leak. Catches regressions even if the field
 	// name were ever changed.
 	for _, leak := range []string{"connection", "dsn", "foldex@", "127.0.0.1", "dial"} {
 		assert.NotContains(t, body["db"], leak, "leaked substring %q in db field", leak)
 	}
+}
+
+func TestStatusEndpointEmptyWhenUnwired(t *testing.T) {
+	srv, done := newServer(t)
+	defer done()
+	resp, err := http.Get(srv.URL + "/api/status")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var body struct {
+		Resources []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		} `json:"resources"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Empty(t, body.Resources)
+}
+
+func TestStatusEndpointReportsUnreachableWithoutLeakingTheProbe(t *testing.T) {
+	pool := testdb.Shared(t)
+	_ = testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	checker := depstatus.New()
+	checker.Add(depstatus.ObjectStore, func(context.Context) error {
+		return errors.New(`Get "http://192.168.68.70:9000/foldex/": dial tcp 192.168.68.70:9000: i/o timeout`)
+	})
+	checker.Add(depstatus.MailBroker, depstatus.AlwaysUnreachable)
+	router := server.New(server.Deps{
+		Pool:      pool,
+		Worker:    nopWorker{},
+		Logger:    logger,
+		Config:    config.Config{Port: "0", CORSOrigins: []string{"*"}, PreviewConcurrency: 1, PreviewTimeoutSec: 1},
+		DepStatus: checker,
+	})
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/status")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	for _, leak := range []string{"192.168.68.70", "9000", "timeout", "foldex/", "http://"} {
+		assert.NotContains(t, string(raw), leak)
+	}
+	var body struct {
+		Resources []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		} `json:"resources"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &body))
+	require.Len(t, body.Resources, 2)
+	assert.Equal(t, "object_store", body.Resources[0].ID)
+	assert.Equal(t, "unreachable", body.Resources[0].State)
+	assert.Equal(t, "mail_broker", body.Resources[1].ID)
+	assert.Equal(t, "unreachable", body.Resources[1].State)
+}
+
+func TestStatusEndpointAuthSurface(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "editor@test.local", "editor")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	repo := auth.NewRepository(pool)
+	apiToken, err := repo.CreateAPIToken(context.Background(), uid, "status", time.Hour)
+	require.NoError(t, err)
+	session, _, err := repo.IssueSession(context.Background(), uid, 0, auth.SessionTTL{
+		Access: time.Minute, Refresh: time.Hour, Absolute: 24 * time.Hour, Grace: time.Second,
+	}, "", "")
+	require.NoError(t, err)
+
+	router := server.New(server.Deps{
+		Pool:           pool,
+		Worker:         nopWorker{},
+		Logger:         logger,
+		Config:         config.Config{AuthEnabled: true, CORSOrigins: []string{"http://localhost:9088"}},
+		AuthMiddleware: auth.NewMiddleware(repo, auth.CookieOptions{}, logger, false),
+	})
+
+	missing := httptest.NewRecorder()
+	router.ServeHTTP(missing, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	assert.Equal(t, http.StatusUnauthorized, missing.Code)
+
+	tok := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req.Header.Set("Authorization", "Bearer "+apiToken.Token)
+	router.ServeHTTP(tok, req)
+	assert.Equal(t, http.StatusForbidden, tok.Code)
+	assert.Contains(t, tok.Body.String(), `"code":"token_scope"`)
+
+	ok := httptest.NewRecorder()
+	sess := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	sess.AddCookie(&http.Cookie{Name: auth.CookieAccess, Value: session.Access})
+	router.ServeHTTP(ok, sess)
+	assert.Equal(t, http.StatusOK, ok.Code)
+	assert.Contains(t, ok.Body.String(), `"resources"`)
 }
 
 func TestFullCRUDFlow(t *testing.T) {

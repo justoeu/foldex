@@ -133,6 +133,12 @@
     "expand": "Expandir barra lateral",
     "collapse": "Contraer"
   },
+  "status": {
+    "unreachable": "No fue posible conectar: {{names}}",
+    "list_sep": ", ",
+    "resource_object_store": "almacenamiento de objetos",
+    "resource_mail_broker": "broker de correo"
+  },
   "home": {
     "empty_title": "Tu base aún está vacía.",
     "empty_body": "Pega una URL, importa tu <code>{{file}}</code> o instala la extensión.",
