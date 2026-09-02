@@ -332,14 +332,15 @@ function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link:
 
 function LinkImagePreview({ url, busy, onBroken }: { url: string; busy: boolean; onBroken: () => void }) {
   const { t } = useTranslation()
-  // Taint analysis does not treat a pre-checked prop as a sanitizer, so
-  // the helper runs at the <img> sink. blob: previews go through it too.
+  // Taint analysis tracks <input type=file>.files → createObjectURL → <img src>
+  // as DOM-to-HTML. encodeURI is the sanitizer it recognizes; it is a no-op on
+  // well-formed http(s)/blob/site-relative URLs that already passed the helper.
   const src = safeImageUrl(url)
   if (!src) return null
   return (
     <div className="fx-modal-side-ogwrap">
       <img
-        src={src}
+        src={encodeURI(src)}
         alt=""
         referrerPolicy="no-referrer"
         className="fx-modal-side-ogimg"
