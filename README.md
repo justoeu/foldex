@@ -287,7 +287,22 @@ open https://localhost:9444
 The backend exposes `GET /metrics` in Prometheus format: HTTP request
 counters/latency histograms labeled by chi **route pattern** (never the raw
 URL — no slugs/ids leak into series), in-flight gauge, pgx pool statistics,
-and Go runtime/process collectors.
+Go runtime/process collectors, and `foldex_dependency_up{name=…}` (1/0) for
+the optional object store and mail broker.
+
+`foldex_http_requests_total` already has a `status` label, so **500s, 429s
+and every other HTTP code are scrapable** — there is no separate error
+exporter. Grafana and Prometheus are **not** shipped in the compose stack:
+point your existing scraper at `:9089/metrics` with `METRICS_TOKEN`. The
+dashboard and alert rules under [`deploy/observability/`](deploy/observability/)
+cover the **backup agent**, not HTTP errors or the object store. Structured
+JSON logs go to stdout (`trace_id` is the Loki→Tempo join when tracing is
+on); Foldex does not ship them itself.
+
+When the object store or mail broker is configured and unreachable, the
+signed-in app shows a footer (`GET /api/status`) instead of failing boot.
+`/healthz` stays Postgres-only so an orchestrator does not restart the
+backend because RustFS is down.
 
 The endpoint is **disabled by default**. Set `METRICS_TOKEN` (e.g.
 `openssl rand -hex 32`) and scrape with `Authorization: Bearer <token>` —
@@ -394,6 +409,7 @@ to come as the project gets more populated content:
 - Populated home grid (cards + 3/5/8-column density)
 - Command palette (`⌥K`)
 - New link dialog with tag autocomplete + auto-detect of title/description (500 ms after you paste a URL; oEmbed enrichment for YouTube/Vimeo). If the preview is blank or broken, **Capture page screenshot** on the image panel asks Chromium for a print (the same SSRF-gated path as the worker fallback — never the default).
+- Footer on the signed-in shell when the object store or mail broker is configured and unreachable (`Could not connect: object storage`).
 - Import page (drag-drop) + preview with the mode picker
 - Stats page (KPIs, top hosts, tag distribution)
 - Extension popup

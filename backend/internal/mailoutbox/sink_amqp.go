@@ -183,6 +183,63 @@ func Dial(cfg AMQPConfig) (*amqp.Connection, error) {
 	return dialAMQP(cfg.URL, cfg.TLSConfig)
 }
 
+// Ping reports whether the broker accepts a connection. The deadline on ctx
+// is the whole budget — without it the library's 30s dial would pin a
+// status refresh (and the footer poll behind it) to a missing host. The URL
+// never appears in the error: it carries the broker password.
+func Ping(ctx context.Context, cfg AMQPConfig) error {
+	if cfg.URL == "" {
+		return ErrNoBrokerURL
+	}
+	u, err := url.Parse(cfg.URL)
+	if err != nil {
+		return errors.New("mailoutbox: AMQP_URL is not a valid URL")
+	}
+	timeout := 2 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return ctx.Err()
+		}
+		timeout = remaining
+	}
+	deadline := time.Now().Add(timeout)
+	if d, ok := ctx.Deadline(); ok {
+		deadline = d
+	}
+	dialer := func(network, addr string) (net.Conn, error) {
+		d := net.Dialer{Timeout: timeout}
+		conn, err := d.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		// DialConfig's handshake does not take ctx. Without a deadline a
+		// broker that accepts TCP and never speaks AMQP pins Ping (and
+		// whoever is waiting on Snapshot) past the 2s budget.
+		if err := conn.SetDeadline(deadline); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		if u.Scheme != "amqps" {
+			if err := requirePrivatePeer(conn, addr); err != nil {
+				return nil, err
+			}
+		}
+		return conn, nil
+	}
+	conn, err := amqp.DialConfig(cfg.URL, amqp.Config{
+		Dial:            dialer,
+		TLSClientConfig: cfg.TLSConfig,
+		Heartbeat:       0,
+		Locale:          "en_US",
+	})
+	if err != nil {
+		return errors.New("mailoutbox: broker unreachable")
+	}
+	_ = conn.Close()
+	return nil
+}
+
 // ErrBrokerNotPrivate is returned when a plaintext dial lands on an address
 // outside the operator's own network. It is a refusal, never a downgrade: the
 // connection is closed before a byte of the AMQP handshake — and therefore
