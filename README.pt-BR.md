@@ -270,7 +270,23 @@ open https://localhost:9444
 O backend expõe `GET /metrics` no formato Prometheus: contadores/histogramas
 de requisições HTTP rotulados pelo **padrão de rota** do chi (nunca a URL
 crua — slugs/ids não vazam para as séries), gauge de requisições em voo,
-estatísticas do pool pgx e coletores de runtime/processo do Go.
+estatísticas do pool pgx, coletores de runtime/processo do Go, e
+`foldex_dependency_up{name=…}` (1/0) para o object store e o broker de
+e-mail opcionais.
+
+`foldex_http_requests_total` já tem o rótulo `status`, então **500, 429 e
+qualquer outro código HTTP já são raspáveis** — não há um exporter separado
+de erro. Grafana e Prometheus **não** vêm no compose: aponte o scraper que
+você já tem para `:9089/metrics` com `METRICS_TOKEN`. O dashboard e as
+alert rules em [`deploy/observability/`](deploy/observability/) cobrem o
+**agente de backup**, não erros HTTP nem o object store. Logs JSON vão para
+stdout (`trace_id` é o elo Loki→Tempo quando o tracing está ligado); o
+Foldex não os envia sozinho.
+
+Quando o object store ou o broker de e-mail está configurado e inalcançável,
+o app autenticado mostra um rodapé (`GET /api/status`) em vez de recusar o
+boot. `/healthz` continua só o Postgres, para o orquestrador não reiniciar o
+backend porque o RustFS caiu.
 
 O endpoint é **desabilitado por padrão**. Defina `METRICS_TOKEN` (ex.:
 `openssl rand -hex 32`) e faça o scrape com `Authorization: Bearer <token>` —
@@ -387,6 +403,7 @@ Mais capturas vêm conforme o projeto ganha conteúdo:
 - Grid de home populado (cards + densidade 3/5/8 colunas)
 - Command palette (`⌥K`)
 - Dialog de novo link com tag autocomplete. Se a prévia vier vazia ou quebrada, **Capturar print da página** no painel de imagem pede o Chromium (o mesmo caminho com gate SSRF do fallback do worker — nunca o default).
+- Rodapé no shell autenticado quando o object store ou o broker de e-mail está configurado e inalcançável (`Não foi possível conectar: armazenamento de arquivos`).
 - Página de import (drag-drop) + preview com mode picker
 - Página de stats (KPIs, top hosts, distribuição por tag)
 - Popup da extensão

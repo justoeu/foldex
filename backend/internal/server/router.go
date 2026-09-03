@@ -20,6 +20,7 @@ import (
 	"foldex/internal/backup"
 	"foldex/internal/backupstatus"
 	"foldex/internal/config"
+	"foldex/internal/depstatus"
 	"foldex/internal/entries"
 	"foldex/internal/exporter"
 	"foldex/internal/folders"
@@ -121,6 +122,11 @@ type Deps struct {
 	// zero-value Deps) keeps tracing off; main only sets it when
 	// OTEL_EXPORTER_OTLP_ENDPOINT is configured.
 	Trace func(http.Handler) http.Handler
+
+	// DepStatus is the optional-dependency snapshot the signed-in footer
+	// reads (object store, mail broker). Nil answers `{resources:[]}` —
+	// the zero-value Deps used across router tests.
+	DepStatus *depstatus.Checker
 
 	// FolderUnlockKey is the HMAC secret for folder-password unlock tokens
 	// (see folders.LoadOrGenerateFolderUnlockKey) — shared between the
@@ -364,6 +370,14 @@ func New(d Deps) http.Handler {
 					pr.With(authgate.RejectAPIToken).Get("/activity", d.AuthHandler.ListOwnActivity)
 				}
 			}
+
+			// Optional-dependency reachability for the SPA footer. Session
+			// only: a content-scoped API token is not an operator console,
+			// and the payload is reconnaissance of which extras this
+			// instance runs. Always 200 — a down store is the body, not
+			// the status; 503 here would hide the footer that exists to
+			// say so.
+			pr.With(authgate.RejectAPIToken).Get("/status", statusHandler(d.DepStatus))
 
 			if d.AdminHandler != nil {
 				// RequireAdmin answers 404 (not 403) for a non-admin — see
@@ -626,6 +640,14 @@ func containsWildcard(origins []string) bool {
 		}
 	}
 	return false
+}
+
+func statusHandler(c *depstatus.Checker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		snap := c.Snapshot(r.Context())
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(snap)
+	}
 }
 
 func healthz(pool *pgxpool.Pool) http.HandlerFunc {

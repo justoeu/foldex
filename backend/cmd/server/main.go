@@ -18,6 +18,7 @@ import (
 	"foldex/internal/changecheck"
 	"foldex/internal/config"
 	"foldex/internal/db"
+	"foldex/internal/depstatus"
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/mailer"
@@ -265,8 +266,9 @@ func main() {
 	var mailSink mailoutbox.Sink = mailoutbox.NewInprocSink(outbox, mail)
 	var closeMailSink func()
 	var deadLetters *mailoutbox.DeadLetterWatcher
+	var amqpCfg mailoutbox.AMQPConfig
 	if cfg.Mail.UsesBroker() {
-		amqpCfg := mailoutbox.AMQPConfig{
+		amqpCfg = mailoutbox.AMQPConfig{
 			URL: cfg.Mail.AMQPURL,
 			Topology: mailoutbox.Topology{
 				Exchange:   cfg.Mail.AMQPExchange,
@@ -377,12 +379,34 @@ func main() {
 		WithInMemory(authHandler.SweepLimiters, folderHandler.SweepLimiters, authMW.SweepTouch)
 	sweeper.Start(rootCtx)
 
+	appMetrics := metrics.New(pool)
+	depStatus := depstatus.New(depstatus.WithLogger(logger))
+	if storageClient != nil {
+		depStatus.Add(depstatus.ObjectStore, storageClient.Ping)
+	} else if cfg.ObjectStore.Endpoint != "" {
+		// Boot could not wire a client. The footer must still say so, but
+		// redialling a host that already timed out at start would pin every
+		// status refresh to that same wait.
+		depStatus.Add(depstatus.ObjectStore, depstatus.AlwaysUnreachable)
+	}
+	if cfg.Mail.UsesBroker() {
+		broker := amqpCfg
+		depStatus.Add(depstatus.MailBroker, func(ctx context.Context) error {
+			return mailoutbox.Ping(ctx, broker)
+		})
+	}
+	if err := appMetrics.Registerer().Register(depStatus); err != nil {
+		logger.Error("dependency metrics", "err", err)
+	}
+	depStatus.Start(rootCtx)
+
 	deps := server.Deps{
 		Pool:                pool,
 		Worker:              worker,
 		Logger:              logger,
 		Config:              cfg,
-		Metrics:             metrics.New(pool),
+		Metrics:             appMetrics,
+		DepStatus:           depStatus,
 		Trace:               traceMiddleware(traceShutdown),
 		Storage:             storageClient,
 		PushHandler:         pushHandler,

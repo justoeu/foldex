@@ -122,6 +122,9 @@ export type MockState = {
   // and the one the empty copy has to describe without sounding like a failure.
   anomalies?: AnomalyMock[]
   anomalyWindows?: string[]
+  /** GET /api/status — optional-dependency reachability for the app footer. */
+  depStatus?: { resources: { id: string; state: string }[] }
+  depStatusCalls?: number
 }
 
 export function freshState(): MockState {
@@ -150,6 +153,13 @@ function availability(value: string | null, s: MockState) {
 const buildRoutes = (): Record<Method, Route[]> => ({
   get: [
     { url: /^\/api\/tags$/, handle: (_m, _d, _p, s) => s.tags },
+    {
+      url: /^\/api\/status$/,
+      handle: (_m, _d, _p, s) => {
+        s.depStatusCalls = (s.depStatusCalls ?? 0) + 1
+        return s.depStatus ?? { resources: [] }
+      },
+    },
     // The caller's OWN activity (ADR-46). Real route and real cursor param, so
     // a rename on either side is caught here rather than in a blanket mock —
     // and this is the ONE projection that returns `subject`, which is the

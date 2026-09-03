@@ -133,6 +133,12 @@
     "expand": "Expandir sidebar",
     "collapse": "Recolher"
   },
+  "status": {
+    "unreachable": "Não foi possível conectar: {{names}}",
+    "list_sep": ", ",
+    "resource_object_store": "armazenamento de arquivos",
+    "resource_mail_broker": "broker de e-mail"
+  },
   "home": {
     "empty_title": "Sua base ainda está vazia.",
     "empty_body": "Cole uma URL, importe seu <code>{{file}}</code> ou instale a extensão.",

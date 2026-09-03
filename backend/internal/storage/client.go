@@ -98,6 +98,16 @@ func NewReadOnly(ctx context.Context, cfg Config, logger *slog.Logger) (*Client,
 	return &Client{mc: mc, bucket: cfg.Bucket, logger: logger}, nil
 }
 
+// Ping reports whether the bucket endpoint answers. The error may name the
+// host — callers that surface status to a client must not forward it.
+func (c *Client) Ping(ctx context.Context) error {
+	_, err := c.mc.BucketExists(ctx, c.bucket)
+	if err != nil {
+		return fmt.Errorf("storage: ping: %w", err)
+	}
+	return nil
+}
+
 // Upload stores data at key inside the configured bucket.
 // contentType should be a MIME type like "image/png".
 func (c *Client) Upload(ctx context.Context, key string, data []byte, contentType string) error {

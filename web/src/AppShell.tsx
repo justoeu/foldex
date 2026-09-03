@@ -1,6 +1,7 @@
 import { lazy, Suspense, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TagSidebar } from './components/TagSidebar'
+import { DepStatusBar } from './components/DepStatusBar'
 import { Topbar } from './components/Topbar'
 import { Home } from './components/HomeView'
 import { LinkDialog } from './components/LinkDialog'
@@ -59,6 +60,7 @@ export function AppShell(props: Props) {
         <AppSidebar {...props} />
         <MainWorkspace {...props} />
       </div>
+      <DepStatusBar />
       <AppOverlays {...props} />
     </div>
   )

@@ -488,6 +488,21 @@ func TestImageRoutesStayMountedWithoutObjectStore(t *testing.T) {
 	}
 }
 
+func TestStatusRouteIsMounted(t *testing.T) {
+	t.Parallel()
+	router := New(Deps{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Config: config.Config{BindAddr: "127.0.0.1"},
+	})
+	mounted := map[string]bool{}
+	require.NoError(t, chi.Walk(router.(chi.Routes),
+		func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+			mounted[method+" "+normalizeRoutePath(route)] = true
+			return nil
+		}))
+	assert.True(t, mounted["GET /api/status"], "GET /api/status must be mounted even with a zero-value Deps")
+}
+
 // A request with no principal reaches this middleware only through a mount
 // mistake — the principal middleware above it refuses anonymous callers itself.
 // Passing through is deliberate: inventing a shared bucket for "everyone

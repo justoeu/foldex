@@ -133,6 +133,12 @@
     "expand": "Expand sidebar",
     "collapse": "Collapse"
   },
+  "status": {
+    "unreachable": "Could not connect: {{names}}",
+    "list_sep": ", ",
+    "resource_object_store": "object storage",
+    "resource_mail_broker": "mail broker"
+  },
   "home": {
     "empty_title": "Your base is still empty.",
     "empty_body": "Paste a URL, import your <code>{{file}}</code> or install the extension.",
