@@ -12,6 +12,7 @@ import {
   usePinLink,
   useRecentChanges,
   useMarkChangeSeen,
+  captureLinkScreenshot,
   uploadLinkImage,
   removeLinkImage,
   useFetchUrlMetadata,
@@ -75,8 +76,13 @@ describe('useCreateLink + useUpdateLink + useDeleteLink + useRefreshPreview', ()
   })
 
   it('refreshes preview without error', async () => {
+    state.links.push({
+      id: 1, url: 'https://r', title: 'R', click_count: 0,
+      preview_status: 'failed', created_at: '', updated_at: '', tags: [],
+    } as any)
     const { result } = renderHook(() => useRefreshPreview(), { wrapper })
     await expect(result.current.mutateAsync(1)).resolves.toBeUndefined()
+    expect(state.links[0].preview_status).toBe('pending')
   })
 })
 
@@ -221,6 +227,17 @@ describe('uploadLinkImage / removeLinkImage', () => {
     expect(state.links[0].og_image_url).toBeTruthy()
     await removeLinkImage(6)
     expect(state.links[0].og_image_url).toBeNull()
+  })
+
+  it('captures a screenshot for a link', async () => {
+    state.links.push({
+      id: 8, url: 'https://yt', title: 'YT', click_count: 0,
+      preview_status: 'failed', created_at: '', updated_at: '', tags: [],
+      og_image_url: null,
+    } as any)
+    const shot = await captureLinkScreenshot(8)
+    expect(shot.url).toContain('/api/files/screenshots/8')
+    expect(state.links[0].og_image_url).toBe(shot.url)
   })
 })
 

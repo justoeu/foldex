@@ -54,10 +54,10 @@ export function looksLikeUrl(raw: string): boolean {
 // renderer's default. Returns the URL when safe, `undefined` otherwise so
 // `<img src={undefined}>` skips the network request entirely.
 //
-// Accepts: absolute http(s) URLs and site-relative paths starting with a
-// single `/`. The site-relative branch is defensive — no current caller
-// produces such URLs (the preview worker stamps absolute URLs only), so
-// removing it would be a behavior change visible only to future writers.
+// Accepts: absolute http(s) URLs, site-relative paths starting with a
+// single `/`, and well-formed `blob:` object URLs (local file / screenshot
+// preview in LinkDialog). The site-relative branch is defensive — stored
+// covers are `/api/files/…`; the preview worker stamps absolute URLs.
 // Protocol-relative `//host/path` is rejected deliberately — the caller
 // can pick a scheme. Everything else (data:, file:, javascript:, vbscript:,
 // bare hostnames) is rejected.
@@ -68,15 +68,21 @@ export function safeImageUrl(raw: string | null | undefined): string | undefined
   // Single leading slash = site-relative path. `//` would be a
   // protocol-relative URL ("//host/x"), which we deliberately reject above.
   if (trimmed.startsWith('/') && !trimmed.startsWith('//')) return trimmed
-  // Strict whitelist — `new URL` is too lenient (it happily parses
-  // `javascript:alert(1)` as `protocol: 'javascript:'`).
-  if (!/^https?:\/\//i.test(trimmed)) return undefined
   try {
-    new URL(trimmed) // throws on malformed authority
-    return trimmed
+    const parsed = new URL(trimmed)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      // `https:javascript:…` chimeras parse in some engines as https.
+      // Requiring `//` after the scheme is the extra gate.
+      if (!/^https?:\/\//i.test(trimmed)) return undefined
+      return trimmed
+    }
+    // Object URLs from createObjectURL. Empty `blob:` is parseable but
+    // is not a resource; pathname is the well-formedness check.
+    if (parsed.protocol === 'blob:' && parsed.pathname) return trimmed
   } catch {
     return undefined
   }
+  return undefined
 }
 
 // Extract the hostname from a URL, stripping the "www." prefix.

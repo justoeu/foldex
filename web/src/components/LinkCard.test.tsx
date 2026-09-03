@@ -388,6 +388,18 @@ describe('LinkCard', () => {
     expect(entries?.pages[0][0].last_clicked_at).toBe(links?.pages[0][0].last_clicked_at)
   })
 
+  it('shows capturing on the refresh control while preview is pending', () => {
+    renderWithProviders(
+      <LinkCard
+        link={{ ...baseLink, preview_status: 'pending', og_image_url: null }}
+        {...noopCardProps}
+      />,
+    )
+    const btn = screen.getByRole('button', { name: /capturing/i })
+    expect(btn).toBeDisabled()
+    expect(btn).toHaveAttribute('aria-busy', 'true')
+  })
+
   it('fires onRefreshPreview when status is not ok', async () => {
     const onRefreshPreview = vi.fn()
     renderWithProviders(

@@ -386,7 +386,7 @@ Mais capturas vêm conforme o projeto ganha conteúdo:
 
 - Grid de home populado (cards + densidade 3/5/8 colunas)
 - Command palette (`⌥K`)
-- Dialog de novo link com tag autocomplete
+- Dialog de novo link com tag autocomplete. Se a prévia vier vazia ou quebrada, **Capturar print da página** no painel de imagem pede o Chromium (o mesmo caminho com gate SSRF do fallback do worker — nunca o default).
 - Página de import (drag-drop) + preview com mode picker
 - Página de stats (KPIs, top hosts, distribuição por tag)
 - Popup da extensão

@@ -463,6 +463,31 @@ func TestExpensiveRoutes_EveryPatternNamesARouteTheRouterMounts(t *testing.T) {
 	}
 }
 
+// When the object store is down, screenshot/upload used to be omitted from the
+// mux. The SPA then saw Chi's empty 404 ("Request failed with status code 404")
+// on Save after picking a file. The routes must stay mounted so the handler
+// can answer 503 with a JSON envelope.
+func TestImageRoutesStayMountedWithoutObjectStore(t *testing.T) {
+	t.Parallel()
+	router := New(Deps{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Config: config.Config{BindAddr: "127.0.0.1"},
+	})
+	mounted := map[string]bool{}
+	require.NoError(t, chi.Walk(router.(chi.Routes),
+		func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+			mounted[method+" "+normalizeRoutePath(route)] = true
+			return nil
+		}))
+	for _, pattern := range []string{
+		"POST /api/links/{id}/image",
+		"DELETE /api/links/{id}/image",
+		"POST /api/links/{id}/screenshot",
+	} {
+		assert.Truef(t, mounted[pattern], "route %q must stay mounted when storage is nil", pattern)
+	}
+}
+
 // A request with no principal reaches this middleware only through a mount
 // mistake — the principal middleware above it refuses anonymous callers itself.
 // Passing through is deliberate: inventing a shared bucket for "everyone

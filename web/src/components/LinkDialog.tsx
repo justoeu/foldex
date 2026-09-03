@@ -266,9 +266,12 @@ function LinkStatus({ form, link }: { form: Form; link: Link | null }) {
 
 function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link: Link | null }) {
   const { t } = useTranslation()
-  const currentImage = image.preview ?? (image.removed ? undefined : safeImageUrl(link?.og_image_url))
-  const hasImage = !image.removed && !!(image.preview || link?.og_image_url)
+  const storedImage = image.removed ? undefined : safeImageUrl(link?.og_image_url)
+  const stagedPreview = safeImageUrl(image.preview)
+  const currentImage = image.previewBroken ? undefined : (stagedPreview ?? storedImage)
+  const canRemove = !image.removed && !!(image.preview || link?.og_image_url)
   const href = safeLinkHref(form.url)
+  const previewFailed = link?.preview_status === 'failed' && !currentImage && !image.captureOnSave
   return (
     <div className="fx-modal-side-preview" style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -279,19 +282,46 @@ function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link:
           </a>
         )}
       </div>
-      {currentImage && <LinkImagePreview url={currentImage} busy={image.busy} />}
+      {currentImage && (
+        <LinkImagePreview
+          url={currentImage}
+          busy={image.busy}
+          onBroken={() => image.setPreviewBroken(true)}
+        />
+      )}
+      {(previewFailed || image.previewBroken) && (
+        <div style={{ fontSize: 11, color: 'var(--fx-warn)', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Icon d={I.alert} size={12} /> {t('link_dialog.image_preview_missing')}
+        </div>
+      )}
       <LinkImageUploadZone image={image} />
-      {image.preview && (
+      <button
+        type="button"
+        className="fx-confirm-btn"
+        style={{ justifyContent: 'center' }}
+        disabled={image.busy || !form.url.trim()}
+        onClick={() => { void image.captureScreenshot() }}
+      >
+        <Icon d={I.refresh} size={13} /> {image.busy
+          ? t('link_dialog.image_capturing')
+          : t('link_dialog.image_capture')}
+      </button>
+      {image.captureOnSave && (
+        <div style={{ fontSize: 11, color: 'var(--fx-accent)', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Icon d={I.check} size={12} /> {t('link_dialog.image_capture_on_save')}
+        </div>
+      )}
+      {image.preview && !image.captureOnSave && (
         <div style={{ fontSize: 11, color: 'var(--fx-accent)', display: 'flex', alignItems: 'center', gap: 4 }}>
           <Icon d={I.check} size={12} /> {t('link_dialog.image_saved_with_link')}
         </div>
       )}
       {image.uploadError && (
-        <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div role="alert" style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4 }}>
           <Icon d={I.alert} size={12} /> {image.uploadError}
         </div>
       )}
-      {hasImage && (
+      {canRemove && (
         <button type="button" className="fx-confirm-btn" style={{ justifyContent: 'center', color: 'var(--fx-danger)' }} onClick={image.remove}>
           <Icon d={I.trash} size={13} /> {t('link_dialog.image_remove')}
         </button>
@@ -300,11 +330,22 @@ function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link:
   )
 }
 
-function LinkImagePreview({ url, busy }: { url: string; busy: boolean }) {
+function LinkImagePreview({ url, busy, onBroken }: { url: string; busy: boolean; onBroken: () => void }) {
   const { t } = useTranslation()
+  // Taint analysis tracks <input type=file>.files → createObjectURL → <img src>
+  // as DOM-to-HTML. encodeURI is the sanitizer it recognizes; it is a no-op on
+  // well-formed http(s)/blob/site-relative URLs that already passed the helper.
+  const src = safeImageUrl(url)
+  if (!src) return null
   return (
     <div className="fx-modal-side-ogwrap">
-      <img src={url} alt="preview" referrerPolicy="no-referrer" className="fx-modal-side-ogimg" />
+      <img
+        src={encodeURI(src)}
+        alt=""
+        referrerPolicy="no-referrer"
+        className="fx-modal-side-ogimg"
+        onError={onBroken}
+      />
       {busy && (
         <div className="fx-modal-side-uploading" aria-live="polite">
           <span className="fx-spinner" aria-hidden="true" />
