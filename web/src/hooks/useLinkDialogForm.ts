@@ -37,7 +37,7 @@ export function useLinkDialogForm(
 
   useUrlMetadataPrefill({
     url,
-    skip: !!link,
+    skip: !!link || !open,
     setTitle,
     setDescription,
     setAutofillFailed,

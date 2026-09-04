@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { FolderPicker } from './FolderPicker'
@@ -274,8 +274,11 @@ function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link:
   const { t } = useTranslation()
   const storedImage = image.removed ? undefined : safeImageUrl(link?.og_image_url)
   const stagedPreview = safeImageUrl(image.preview)
-  const remotePreview = image.removed || image.captureOnSave ? undefined : safeImageUrl(form.ogPreview)
+  const remotePreview = image.removed || image.captureOnSave ? undefined : safeLinkHref(form.ogPreview)
   const currentImage = image.previewBroken ? undefined : (stagedPreview ?? storedImage ?? remotePreview)
+  useEffect(() => {
+    image.setPreviewBroken(false)
+  }, [form.ogPreview, form.url])
   const canRemove = !image.removed && !!(image.preview || link?.og_image_url)
   const href = safeLinkHref(form.url)
   const previewFailed = link?.preview_status === 'failed' && !currentImage && !image.captureOnSave
@@ -356,6 +359,7 @@ function LinkImagePreview({ url, busy, onBroken }: { url: string; busy: boolean;
         alt=""
         referrerPolicy="no-referrer"
         className="fx-modal-side-ogimg"
+        decoding="async"
         onError={onBroken}
       />
       {busy && (

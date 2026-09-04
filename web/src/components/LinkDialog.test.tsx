@@ -508,6 +508,16 @@ describe('LinkDialog', () => {
     expect(screen.getByRole('button', { name: /Save link/i })).toBeEnabled()
   })
 
+  it('AUTO-FILL: empty page title does not overwrite a typed title', async () => {
+    vi.useFakeTimers()
+    state.urlMetadata = { title: '', description: '' }
+    renderWithProviders(<LinkDialog open link={null} initialUrl="https://empty-title.example" onClose={vi.fn()} />)
+    const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
+    fireEvent.change(titleInput, { target: { value: 'my custom title' } })
+    await advanceMetadataDebounce()
+    expect(titleInput.value).toBe('my custom title')
+  })
+
   it('AUTO-FILL: empty page title falls back to the hostname', async () => {
     vi.useFakeTimers()
     state.urlMetadata = { title: '', description: '' }
