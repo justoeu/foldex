@@ -86,6 +86,8 @@ export type MockState = {
   statsStorageError?: boolean
   // When set, DELETE /api/links/:id/image rejects with this error object.
   linkImageRemoveError?: { status?: number; code?: string; message: string }
+  // When set, POST /api/links/:id/screenshot rejects with this error object.
+  linkScreenshotError?: { status?: number; code?: string; message: string }
   // Operational backup status (ADR-43). `backupJobs` overrides the per-job
   // summary; unset, every job reports "never ran". `backupStatusRuns` is the
   // history page; POST /api/admin/backup/run appends a `requested` row here
@@ -194,6 +196,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     // path matches first; the catch-all /api/links handler is fine after.
     { url: /^\/api\/links\/recent-changes$/, handle: listRecentChanges },
     { url: /^\/api\/links\/url-metadata$/, handle: fetchUrlMetadata },
+    { url: /^\/api\/links\/by-url$/, handle: getLinkByURL },
     { url: /^\/api\/links$/, handle: listLinks },
     { url: /^\/api\/entries$/, handle: listEntries },
     { url: /^\/api\/notes\/(\d+)$/, handle: getNote },
@@ -1089,7 +1092,27 @@ function refreshPreview(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: Mo
   return null
 }
 
+function getLinkByURL(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState) {
+  const url = params.get('url') ?? ''
+  const link = s.links.find((row) => row.url === url)
+  if (!link) throw notFound()
+  return link
+}
+
 function captureScreenshot(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): { url: string } {
+  if (s.linkScreenshotError) {
+    const e: any = new Error(s.linkScreenshotError.message)
+    e.response = {
+      status: s.linkScreenshotError.status ?? 400,
+      data: {
+        error: {
+          code: s.linkScreenshotError.code ?? 'screenshot_failed',
+          message: s.linkScreenshotError.message,
+        },
+      },
+    }
+    throw e
+  }
   const id = Number(m[1])
   const link = s.links.find((x) => x.id === id)
   if (!link) throw notFound()

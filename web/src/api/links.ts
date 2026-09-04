@@ -62,6 +62,7 @@ export function useUpdateLink() {
       previousFolderId: 'folder_id' in body ? cachedEntryFolderId(qc, 'link', id) : undefined,
     }),
     onSuccess: (data, vars, context) => {
+      qc.invalidateQueries({ queryKey: ['links', 'by-url'] })
       // Association caches are refreshed only when their inputs changed.
       if (vars.body.tag_ids !== undefined || vars.body.pending_tags !== undefined) {
         qc.invalidateQueries({ queryKey: ['tags'] })
@@ -254,6 +255,17 @@ export function useMarkChangeSeen() {
       qc.invalidateQueries({ queryKey: ['entries'] })
     },
   })
+}
+
+export async function lookupLinkByURL(url: string): Promise<Link | null> {
+  try {
+    const { data } = await http.get<Link>('/api/links/by-url', { params: { url } })
+    return data
+  } catch (error) {
+    const status = (error as { response?: { status?: number } })?.response?.status
+    if (status === 404) return null
+    throw error
+  }
 }
 
 export function goHref(linkOrId: { id: number; slug: string } | number): string {

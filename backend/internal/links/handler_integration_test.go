@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"testing"
 	"time"
@@ -86,6 +87,8 @@ func doLinkJSON(t *testing.T, h http.Handler, method, path string, body any) *ht
 }
 
 func linkID(id int64) string { return strconv.FormatInt(id, 10) }
+
+func urlQuery(raw string) string { return url.QueryEscape(raw) }
 
 func TestHandler_CRUD(t *testing.T) {
 	enq := &recordingEnqueuer{}
@@ -418,6 +421,52 @@ func TestRepository_GetBySlug_NotFound(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
 	_, err := lrepo.GetBySlug(ctx, uid, "missing")
 	require.Error(t, err)
+}
+
+func TestHandler_GetByURL_ReturnsTheCallersRow(t *testing.T) {
+	h, repo, uid := newLinksRouter(t, &recordingEnqueuer{}, nil, nil)
+	ctx := context.Background()
+	created, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://dup.example", Title: "Dup"})
+	require.NoError(t, err)
+
+	rr := doLinkJSON(t, h, http.MethodGet, "/links/by-url?url="+urlQuery("https://dup.example"), nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got links.Link
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	assert.Equal(t, created.ID, got.ID)
+	assert.Equal(t, "https://dup.example", got.URL)
+}
+
+func TestHandler_GetByURL_UnknownIsNotFound(t *testing.T) {
+	h, _, _ := newLinksRouter(t, &recordingEnqueuer{}, nil, nil)
+	rr := doLinkJSON(t, h, http.MethodGet, "/links/by-url?url="+urlQuery("https://missing.example"), nil)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	assert.Contains(t, rr.Body.String(), "not_found")
+}
+
+func TestHandler_GetByURL_EmptyIsInvalid(t *testing.T) {
+	h, _, _ := newLinksRouter(t, &recordingEnqueuer{}, nil, nil)
+	rr := doLinkJSON(t, h, http.MethodGet, "/links/by-url", nil)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), "invalid_url")
+}
+
+func TestHandler_GetByURL_AnotherTenantsRowIsNotFound(t *testing.T) {
+	pool := testdb.Shared(t)
+	owner := testdb.SeedUser(t, pool, "byurl-owner@test.local", "admin")
+	other := testdb.SeedUser(t, pool, "byurl-other@test.local", "editor")
+	repo := links.NewRepository(pool)
+	h := links.NewHandler(repo, &recordingEnqueuer{})
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(owner))
+	r.Route("/links", h.Mount)
+
+	ctx := context.Background()
+	_, err := repo.Create(ctx, other, links.CreateInput{URL: "https://secret.example", Title: "Secret"})
+	require.NoError(t, err)
+
+	rr := doLinkJSON(t, r, http.MethodGet, "/links/by-url?url="+urlQuery("https://secret.example"), nil)
+	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
 func TestRepository_Create_WithTagsAndFolder(t *testing.T) {

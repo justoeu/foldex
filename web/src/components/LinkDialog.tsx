@@ -10,6 +10,8 @@ import { useDialogInitialFocus } from '../hooks/useDialogInitialFocus'
 import { useLinkDialogForm } from '../hooks/useLinkDialogForm'
 import { useLinkDialogImage } from '../hooks/useLinkDialogImage'
 import { useLinkDialogSubmit } from '../hooks/useLinkDialogSubmit'
+import { useExistingLinkByURL } from '../hooks/useExistingLinkByURL'
+import { useFolders } from '../api/folders'
 import { safeImageUrl, safeLinkHref, hostOf } from '../lib/url'
 import { nextCheckPreview } from '../lib/time'
 import type { Link } from '../api/types'
@@ -22,19 +24,26 @@ type Props = {
   focus?: 'url' | 'image'
   defaultFolderId?: number | null
   onClose: () => void
+  onOpenExisting?: (link: Link) => void
 }
 
 type Form = ReturnType<typeof useLinkDialogForm> & ReturnType<typeof useSlugFieldState>
 type Tags = ReturnType<typeof useTagPicker>
 type Image = ReturnType<typeof useLinkDialogImage>
 
-export function LinkDialog({ open, link, initialUrl, focus = 'url', defaultFolderId, onClose }: Props) {
+export function LinkDialog({ open, link, initialUrl, focus = 'url', defaultFolderId, onClose, onOpenExisting }: Props) {
   const { t } = useTranslation()
   const formState = useLinkDialogForm(open, link, initialUrl, defaultFolderId)
   const slugState = useSlugFieldState(open, formState.title, link?.slug, link?.id ?? null)
   const form = { ...formState, ...slugState }
   const tags = useTagPicker(open, link?.tags)
   const image = useLinkDialogImage(open, link)
+  const { existing } = useExistingLinkByURL(
+    form.url,
+    open && (!link || form.url.trim() !== link.url),
+    link?.id ?? null,
+  )
+  const duplicate = existing
   const save = useLinkDialogSubmit({
     link,
     values: form,
@@ -73,13 +82,16 @@ export function LinkDialog({ open, link, initialUrl, focus = 'url', defaultFolde
           image={image}
           link={link}
           defaultFolderId={defaultFolderId}
+          duplicate={duplicate}
+          onOpenExisting={onOpenExisting}
         />
-        <LinkDialogError message={form.saveError} />
+        <LinkDialogError message={duplicate ? null : form.saveError} />
         <LinkDialogFooter
           form={form}
           image={image}
           isEdit={!!link}
           busy={save.busy}
+          blocked={!!duplicate}
           onClose={onClose}
           onSubmit={save.submit}
         />
@@ -91,8 +103,43 @@ export function LinkDialog({ open, link, initialUrl, focus = 'url', defaultFolde
 function LinkDialogError({ message }: { message: string | null }) {
   if (!message) return null
   return (
-    <div role="alert" style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 20px 8px' }}>
-      <Icon d={I.alert} size={12} /> {message}
+    <div className="fx-inline-error" role="alert" style={{ margin: '0 20px 10px' }}>
+      <Icon d={I.alert} size={14} /> {message}
+    </div>
+  )
+}
+
+function DuplicateURLNotice({
+  link,
+  onOpenExisting,
+}: {
+  link: Link
+  onOpenExisting?: (link: Link) => void
+}) {
+  const { t } = useTranslation()
+  const { data: folders = [] } = useFolders({ fields: 'minimal' })
+  const folderName = link.folder_id != null
+    ? folders.find((folder) => folder.id === link.folder_id)?.name
+    : undefined
+  const where = folderName
+    ? t('link_dialog.error_url_taken_in_folder', { name: folderName })
+    : t('link_dialog.error_url_taken_on_home')
+  return (
+    <div className="fx-inline-error" role="alert">
+      <Icon d={I.alert} size={14} />
+      <div className="fx-inline-error-body">
+        <div className="fx-inline-error-title">{t('link_dialog.error_url_taken')}</div>
+        <div>{where}</div>
+      </div>
+      {onOpenExisting && (
+        <button
+          type="button"
+          className="fx-confirm-btn"
+          onClick={() => onOpenExisting(link)}
+        >
+          {t('link_dialog.open_existing')}
+        </button>
+      )}
     </div>
   )
 }
@@ -118,17 +165,21 @@ function LinkDialogBody({
   image,
   link,
   defaultFolderId,
+  duplicate,
+  onOpenExisting,
 }: {
   form: Form
   tags: Tags
   image: Image
   link: Link | null
   defaultFolderId?: number | null
+  duplicate: Link | null
+  onOpenExisting?: (link: Link) => void
 }) {
   return (
     <div className="fx-modal-body">
       <div className="fx-modal-col">
-        <LinkBasicsFields form={form} />
+        <LinkBasicsFields form={form} duplicate={duplicate} onOpenExisting={onOpenExisting} />
         <LinkTagsField tags={tags} />
         <LinkOrganizationFields form={form} link={link} defaultFolderId={defaultFolderId} />
       </div>
@@ -140,7 +191,15 @@ function LinkDialogBody({
   )
 }
 
-function LinkBasicsFields({ form }: { form: Form }) {
+function LinkBasicsFields({
+  form,
+  duplicate,
+  onOpenExisting,
+}: {
+  form: Form
+  duplicate: Link | null
+  onOpenExisting?: (link: Link) => void
+}) {
   const { t } = useTranslation()
   return (
     <>
@@ -154,9 +213,13 @@ function LinkBasicsFields({ form }: { form: Form }) {
             onChange={(event) => form.setUrl(event.target.value)}
             placeholder={t('link_dialog.url_placeholder')}
             aria-label={t('common.url_aria')}
+            aria-invalid={duplicate ? true : undefined}
           />
         </div>
       </label>
+      {duplicate && (
+        <DuplicateURLNotice link={duplicate} onOpenExisting={onOpenExisting} />
+      )}
       <label className="fx-field">
         <span className="fx-field-label">
           {t('link_dialog.title_label')}
@@ -331,8 +394,13 @@ function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link:
           <Icon d={I.check} size={12} /> {t('link_dialog.image_saved_with_link')}
         </div>
       )}
+      {image.captureWarning && (
+        <div className="fx-inline-warn" role="status">
+          <Icon d={I.alert} size={12} /> {image.captureWarning}
+        </div>
+      )}
       {image.uploadError && (
-        <div role="alert" style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div className="fx-inline-error" role="alert">
           <Icon d={I.alert} size={12} /> {image.uploadError}
         </div>
       )}
@@ -437,6 +505,7 @@ function LinkDialogFooter({
   image,
   isEdit,
   busy,
+  blocked,
   onClose,
   onSubmit,
 }: {
@@ -444,6 +513,7 @@ function LinkDialogFooter({
   image: Image
   isEdit: boolean
   busy: boolean
+  blocked: boolean
   onClose: () => void
   onSubmit: () => Promise<void>
 }) {
@@ -451,7 +521,7 @@ function LinkDialogFooter({
   return (
     <footer className="fx-modal-foot">
       <button className="fx-confirm-btn" onClick={onClose}>{t('common.cancel')}</button>
-      <button className="fx-confirm-btn fx-confirm-btn-primary" onClick={() => void onSubmit()} disabled={!form.url.trim() || busy}>
+      <button className="fx-confirm-btn fx-confirm-btn-primary" onClick={() => void onSubmit()} disabled={!form.url.trim() || busy || blocked}>
         {image.busy
           ? <><span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}</>
           : <>{isEdit ? t('link_dialog.submit_save') : t('link_dialog.submit_create')}<Icon d={I.arrowR} size={14} stroke={2} /></>}

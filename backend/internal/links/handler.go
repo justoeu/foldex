@@ -3,6 +3,7 @@ package links
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -47,12 +48,11 @@ func (h *Handler) WithFolderGate(lookup folders.PasswordHashLookup, unlockKey []
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/", h.list)
 	r.Post("/", h.create)
-	// /recent-changes and /url-metadata are static — must be registered
-	// before /{id} so Chi routes them to the right handler. Chi matches
-	// longest/most-specific path regardless of registration order, but
-	// keeping the source order intuitive avoids surprises during refactors.
+	// Static paths must be registered before /{id} so Chi does not treat
+	// "by-url" / "url-metadata" / "recent-changes" as ids.
 	r.Get("/recent-changes", h.listRecentChanges)
 	r.Get("/url-metadata", h.fetchURLMetadata)
+	r.Get("/by-url", h.getByURL)
 	r.Get("/{id}", h.get)
 	r.Patch("/{id}", h.update)
 	r.Delete("/{id}", h.delete)
@@ -73,6 +73,25 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httperr.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) getByURL(w http.ResponseWriter, r *http.Request) {
+	raw := strings.TrimSpace(r.URL.Query().Get("url"))
+	if raw == "" {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_url", "url is required"))
+		return
+	}
+	if len(raw) > urlMetadataMaxLen {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_url", "url too long"))
+		return
+	}
+	uid := authctx.MustUser(r.Context())
+	link, err := h.repo.GetByURL(r.Context(), uid, raw)
+	if err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
+		return
+	}
+	httperr.JSON(w, http.StatusOK, link)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {

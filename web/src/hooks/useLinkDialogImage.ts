@@ -9,6 +9,7 @@ export function useLinkDialogImage(open: boolean, link: Link | null) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [captureWarning, setCaptureWarning] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
@@ -29,6 +30,7 @@ export function useLinkDialogImage(open: boolean, link: Link | null) {
       return
     }
     setUploadError(null)
+    setCaptureWarning(null)
     setDragging(false)
     setFile(null)
     setPreview(null)
@@ -47,6 +49,7 @@ export function useLinkDialogImage(open: boolean, link: Link | null) {
       return
     }
     setUploadError(null)
+    setCaptureWarning(null)
     setRemoved(false)
     setPreviewBroken(false)
     setCaptureOnSave(false)
@@ -63,21 +66,25 @@ export function useLinkDialogImage(open: boolean, link: Link | null) {
     setRemoved(true)
     setPreviewBroken(false)
     setCaptureOnSave(false)
+    setCaptureWarning(null)
   }
 
   const captureScreenshot = async (): Promise<boolean> => {
     if (!link) {
       setUploadError(null)
+      setCaptureWarning(null)
       setCaptureOnSave(true)
       setRemoved(false)
       return true
     }
     setBusy(true)
     setUploadError(null)
+    setCaptureWarning(null)
     try {
       const { url } = await captureLinkScreenshot(link.id)
       setRemoved(false)
       setPreviewBroken(false)
+      setCaptureWarning(null)
       setFile(null)
       setPreview((current) => {
         if (current?.startsWith('blob:')) URL.revokeObjectURL(current)
@@ -88,7 +95,7 @@ export function useLinkDialogImage(open: boolean, link: Link | null) {
       queryClient.invalidateQueries({ queryKey: ['folders'] })
       return true
     } catch (error) {
-      setUploadError(screenshotErrorMessage(error, t))
+      setCaptureWarning(screenshotErrorMessage(error, t))
       return false
     } finally {
       setBusy(false)
@@ -97,6 +104,7 @@ export function useLinkDialogImage(open: boolean, link: Link | null) {
 
   return {
     uploadError,
+    captureWarning,
     dragging,
     file,
     preview,

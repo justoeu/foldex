@@ -176,6 +176,29 @@ func (r *Repository) Get(ctx context.Context, uid authctx.UserID, id int64) (Lin
 	return l, nil
 }
 
+// GetByURL is the uniqueness probe for the new-link dialog: the same
+// owner-scoped predicate as the UNIQUE (user_id, url) index. Another
+// tenant's matching URL is invisible (INV-050 / INV-054).
+func (r *Repository) GetByURL(ctx context.Context, uid authctx.UserID, pageURL string) (Link, error) {
+	var l Link
+	err := scanLink(r.pool.QueryRow(ctx, `SELECT `+linkColumns+linkFrom+` WHERE l.user_id = $1 AND l.url = $2`, int64(uid), pageURL), &l)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Link{}, domainerr.ErrNotFound
+	}
+	if err != nil {
+		return Link{}, fmt.Errorf("get link by url: %w", err)
+	}
+	tags, err := r.tagsFor(ctx, uid, []int64{l.ID})
+	if err != nil {
+		return Link{}, err
+	}
+	l.Tags = tags[l.ID]
+	if l.Tags == nil {
+		l.Tags = []Tag{}
+	}
+	return l, nil
+}
+
 // GetBySlug is the slug-keyed sibling of Get. Used by the redirect handler's
 // fallback path (ID-first → slug fallback) and by anywhere that needs to
 // resolve a public-facing slug back to the full link row.

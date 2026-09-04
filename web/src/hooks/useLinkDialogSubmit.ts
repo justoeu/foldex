@@ -54,6 +54,8 @@ export function useLinkDialogSubmit(options: Options) {
       invalidateImageQueries(queryClient)
       return true
     } catch (error) {
+      // Capture-on-save is a hint, not a save gate: the row already exists.
+      if (captureOnSave && !file) return true
       options.image.setUploadError(uploadErrorMessage(error, t))
       return false
     } finally {

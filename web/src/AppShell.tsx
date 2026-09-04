@@ -286,6 +286,20 @@ function AppOverlays({ workspace, navigation, dialogs }: Props) {
         focus={dialogs.linkFocus}
         defaultFolderId={navigation.openFolder}
         onClose={dialogs.closeLink}
+        onOpenExisting={(existing) => {
+          dialogs.openEditLink(existing)
+          workspace.setView('home')
+          workspace.setQ('')
+          workspace.clearTags()
+          if (existing.folder_id == null) {
+            navigation.goHome()
+            workspace.requestReveal({ kind: 'link', id: existing.id })
+            return
+          }
+          void navigation.jumpToFolder(existing.folder_id).then((opened) => {
+            if (opened) workspace.requestReveal({ kind: 'link', id: existing.id })
+          })
+        }}
       />
       <FolderDialog
         open={dialogs.folderDialogOpen}
