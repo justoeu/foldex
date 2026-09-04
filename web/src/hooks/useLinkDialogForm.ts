@@ -16,6 +16,8 @@ export function useLinkDialogForm(
   const [folderId, setFolderId] = useState<number | null>(null)
   const [checkInterval, setCheckInterval] = useState<CheckInterval | null>(null)
   const [autofillFailed, setAutofillFailed] = useState(false)
+  const [autofillPending, setAutofillPending] = useState(false)
+  const [ogPreview, setOgPreview] = useState<string | undefined>(undefined)
   const [saveError, setSaveError] = useState<string | null>(null)
   const urlInputRef = useRef<HTMLInputElement>(null)
 
@@ -28,6 +30,8 @@ export function useLinkDialogForm(
     setFolderId(link?.folder_id ?? defaultFolderId ?? null)
     setCheckInterval(link?.check_interval ?? null)
     setAutofillFailed(false)
+    setAutofillPending(false)
+    setOgPreview(undefined)
     setSaveError(null)
   }, [open, link, initialUrl, defaultFolderId])
 
@@ -37,6 +41,8 @@ export function useLinkDialogForm(
     setTitle,
     setDescription,
     setAutofillFailed,
+    setAutofillPending,
+    setOgPreview,
   })
 
   const values = {
@@ -50,6 +56,8 @@ export function useLinkDialogForm(
   return {
     ...values,
     autofillFailed,
+    autofillPending,
+    ogPreview,
     saveError,
     urlInputRef,
     setUrl,

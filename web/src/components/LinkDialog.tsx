@@ -158,13 +158,19 @@ function LinkBasicsFields({ form }: { form: Form }) {
         </div>
       </label>
       <label className="fx-field">
-        <span className="fx-field-label">{t('link_dialog.title_label')}</span>
+        <span className="fx-field-label">
+          {t('link_dialog.title_label')}
+          {form.autofillPending && (
+            <span className="fx-spinner" aria-hidden="true" style={{ marginLeft: 8 }} />
+          )}
+        </span>
         <div className="fx-input">
           <input
             value={form.title}
             onChange={(event) => form.setTitle(event.target.value)}
             placeholder={t('link_dialog.title_placeholder')}
             aria-label={t('common.title_aria')}
+            aria-busy={form.autofillPending || undefined}
           />
         </div>
         {form.autofillFailed && !form.title.trim() && (
@@ -268,19 +274,36 @@ function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link:
   const { t } = useTranslation()
   const storedImage = image.removed ? undefined : safeImageUrl(link?.og_image_url)
   const stagedPreview = safeImageUrl(image.preview)
-  const currentImage = image.previewBroken ? undefined : (stagedPreview ?? storedImage)
+  const remotePreview = image.removed || image.captureOnSave ? undefined : safeImageUrl(form.ogPreview)
+  const currentImage = image.previewBroken ? undefined : (stagedPreview ?? storedImage ?? remotePreview)
   const canRemove = !image.removed && !!(image.preview || link?.og_image_url)
   const href = safeLinkHref(form.url)
   const previewFailed = link?.preview_status === 'failed' && !currentImage && !image.captureOnSave
+  const captureLabel = image.busy ? t('link_dialog.image_capturing') : t('link_dialog.image_capture')
   return (
     <div className="fx-modal-side-preview" style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div className="fx-modal-side-label">{t('link_dialog.image_label')}</div>
-        {href && (
-          <a href={href} target="_blank" rel="noopener noreferrer" className="fx-modal-side-open-link">
-            <Icon d={I.arrowR} size={11} /> {t('link_dialog.image_open_browser')}
-          </a>
-        )}
+        <div className="fx-modal-side-image-actions">
+          <button
+            type="button"
+            className="fx-modal-side-icon"
+            disabled={image.busy || !form.url.trim()}
+            onClick={() => { void image.captureScreenshot() }}
+            aria-label={captureLabel}
+            data-tooltip={t('link_dialog.image_capture_hint')}
+            data-tooltip-side="bottom"
+          >
+            {image.busy
+              ? <span className="fx-spinner" aria-hidden="true" />
+              : <Icon d={I.camera} size={14} />}
+          </button>
+          {href && (
+            <a href={href} target="_blank" rel="noopener noreferrer" className="fx-modal-side-open-link">
+              <Icon d={I.arrowR} size={11} /> {t('link_dialog.image_open_browser')}
+            </a>
+          )}
+        </div>
       </div>
       {currentImage && (
         <LinkImagePreview
@@ -295,17 +318,6 @@ function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link:
         </div>
       )}
       <LinkImageUploadZone image={image} />
-      <button
-        type="button"
-        className="fx-confirm-btn"
-        style={{ justifyContent: 'center' }}
-        disabled={image.busy || !form.url.trim()}
-        onClick={() => { void image.captureScreenshot() }}
-      >
-        <Icon d={I.refresh} size={13} /> {image.busy
-          ? t('link_dialog.image_capturing')
-          : t('link_dialog.image_capture')}
-      </button>
       {image.captureOnSave && (
         <div style={{ fontSize: 11, color: 'var(--fx-accent)', display: 'flex', alignItems: 'center', gap: 4 }}>
           <Icon d={I.check} size={12} /> {t('link_dialog.image_capture_on_save')}

@@ -255,6 +255,7 @@
     "image_uploading": "Enviando imagem…",
     "image_remove": "Remover imagem",
     "image_capture": "Capturar print da página",
+    "image_capture_hint": "Tentar carregar a imagem automaticamente",
     "image_capturing": "Capturando print…",
     "image_capture_on_save": "O print será capturado ao salvar",
     "image_preview_missing": "Não foi possível carregar a prévia. Capture um print ou escolha um arquivo.",

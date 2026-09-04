@@ -255,6 +255,7 @@
     "image_uploading": "Subiendo imagen…",
     "image_remove": "Quitar imagen",
     "image_capture": "Capturar pantalla de la página",
+    "image_capture_hint": "Intentar cargar la imagen automáticamente",
     "image_capturing": "Capturando…",
     "image_capture_on_save": "La captura se tomará al guardar",
     "image_preview_missing": "No se pudo cargar la vista previa. Captura la página o elige un archivo.",

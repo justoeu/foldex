@@ -1,6 +1,6 @@
 import { useEffect, type Dispatch, type SetStateAction } from 'react'
 import { useFetchUrlMetadata } from '../api/links'
-import { looksLikeUrl } from '../lib/url'
+import { hostOf, looksLikeUrl } from '../lib/url'
 
 type PrefillTarget = {
   url: string
@@ -9,6 +9,18 @@ type PrefillTarget = {
   setTitle: Dispatch<SetStateAction<string>>
   setDescription: Dispatch<SetStateAction<string>>
   setAutofillFailed: (failed: boolean) => void
+  setAutofillPending: (pending: boolean) => void
+  setOgPreview: (url: string | undefined) => void
+}
+
+function isCanceled(err: unknown): boolean {
+  const value = err as { code?: string; name?: string }
+  return value.code === 'ERR_CANCELED' || value.name === 'CanceledError'
+}
+
+function fillEmpty(setter: Dispatch<SetStateAction<string>>, next: string) {
+  if (!next) return
+  setter((cur) => (cur.trim() ? cur : next))
 }
 
 /** Debounced URL metadata prefill for LinkDialog create mode. */
@@ -18,31 +30,38 @@ export function useUrlMetadataPrefill({
   setTitle,
   setDescription,
   setAutofillFailed,
+  setAutofillPending,
+  setOgPreview,
 }: PrefillTarget) {
   const fetchMetadata = useFetchUrlMetadata()
 
   useEffect(() => {
     if (skip) return
     const trimmed = url.trim()
-    if (!trimmed || !looksLikeUrl(trimmed)) return
+    if (!trimmed || !looksLikeUrl(trimmed)) {
+      setAutofillPending(false)
+      setOgPreview(undefined)
+      return
+    }
 
     const controller = new AbortController()
     setAutofillFailed(false)
+    setOgPreview(undefined)
     const timer = window.setTimeout(() => {
+      setAutofillPending(true)
       fetchMetadata.mutate(
         { url: trimmed, signal: controller.signal },
         {
           onSuccess: (data) => {
-            if (data.title) {
-              setTitle((cur) => (cur.trim() ? cur : data.title))
-            }
-            if (data.description) {
-              setDescription((cur) => (cur.trim() ? cur : data.description))
-            }
+            setAutofillPending(false)
+            fillEmpty(setTitle, (data.title ?? '').trim() || hostOf(trimmed))
+            if (data.description) fillEmpty(setDescription, data.description)
+            setOgPreview((data.og_image_url ?? '').trim() || undefined)
           },
-          onError: (_err) => {
-            const code = (_err as { code?: string })?.code
-            setAutofillFailed(code !== 'ERR_CANCELED')
+          onError: (err) => {
+            setAutofillPending(false)
+            if (isCanceled(err)) return
+            setAutofillFailed(true)
           },
         },
       )
@@ -51,6 +70,7 @@ export function useUrlMetadataPrefill({
     return () => {
       window.clearTimeout(timer)
       controller.abort()
+      setAutofillPending(false)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchMetadata is stable from useMutation
   }, [url, skip])

@@ -255,6 +255,7 @@
     "image_uploading": "Uploading image…",
     "image_remove": "Remove image",
     "image_capture": "Capture page screenshot",
+    "image_capture_hint": "Try to load the image automatically",
     "image_capturing": "Capturing screenshot…",
     "image_capture_on_save": "Screenshot will be captured when you save",
     "image_preview_missing": "Preview could not be loaded. Capture a screenshot or pick a file.",

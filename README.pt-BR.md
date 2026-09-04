@@ -402,7 +402,7 @@ Mais capturas vêm conforme o projeto ganha conteúdo:
 
 - Grid de home populado (cards + densidade 3/5/8 colunas)
 - Command palette (`⌥K`)
-- Dialog de novo link com tag autocomplete. Se a prévia vier vazia ou quebrada, **Capturar print da página** no painel de imagem pede o Chromium (o mesmo caminho com gate SSRF do fallback do worker — nunca o default).
+- Dialog de novo link com tag autocomplete + auto-detecção de título/descrição (500 ms após colar a URL; oEmbed para YouTube/Vimeo; título vazio cai no hostname). A imagem OG desse fetch aparece no painel. O ícone de câmera no cabeçalho da imagem (**Tentar carregar a imagem automaticamente**) pede o Chromium por um print (o mesmo caminho com gate SSRF do fallback do worker — nunca o default).
 - Rodapé no shell autenticado quando o object store ou o broker de e-mail está configurado e inalcançável (`Não foi possível conectar: armazenamento de arquivos`).
 - Página de import (drag-drop) + preview com mode picker
 - Página de stats (KPIs, top hosts, distribuição por tag)
