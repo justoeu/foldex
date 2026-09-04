@@ -719,4 +719,97 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: /Open folder Secret/i }))
     expect(await screen.findByLabelText('folder password')).toBeInTheDocument()
   })
+
+  it('palette reveal opens the folder and highlights the link', async () => {
+    state.folders.push({
+      id: 1, name: 'Work', color: '#000', parent_id: null, has_password: false,
+      link_count: 1, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.links.push({
+      id: 10, url: 'https://news.ycombinator.com', title: 'Hacker News', slug: 'hn',
+      click_count: 0, preview_status: 'ok', folder_id: 1, created_at: '', updated_at: '', tags: [],
+    } as any)
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Work/i })).toBeInTheDocument())
+    expect(screen.queryByText('Hacker News')).not.toBeInTheDocument()
+    await user.click(screen.getByLabelText(/^Search$/i))
+    const palette = await screen.findByRole('dialog', { name: /command palette/i })
+    await waitFor(() => expect(within(palette).getAllByText('Hacker News').length).toBeGreaterThan(0))
+    await user.click(within(palette).getAllByRole('button', { name: 'Show in Work' })[0])
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /command palette/i })).not.toBeInTheDocument())
+    expect(screen.getByRole('heading', { name: 'Work' })).toBeInTheDocument()
+    const card = document.querySelector('[data-entry="link-10"]')
+    expect(card).toBeInTheDocument()
+    expect(card).toHaveClass('fx-entry-reveal')
+  })
+
+  it('palette reveal of a home link leaves a folder and highlights the card', async () => {
+    state.folders.push({
+      id: 1, name: 'Work', color: '#000', parent_id: null, has_password: false,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.links.push({
+      id: 10, url: 'https://example.com', title: 'Home link', slug: 'home-link',
+      click_count: 0, preview_status: 'ok', folder_id: null, created_at: '', updated_at: '', tags: [],
+    } as any)
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Work/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder Work/i }))
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Work' })).toBeInTheDocument())
+    await user.click(screen.getByLabelText(/^Search$/i))
+    const palette = await screen.findByRole('dialog', { name: /command palette/i })
+    await waitFor(() => expect(within(palette).getAllByText('Home link').length).toBeGreaterThan(0))
+    await user.click(within(palette).getAllByRole('button', { name: 'Show on Home' })[0])
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 1, name: 'Work' })).not.toBeInTheDocument())
+    expect(screen.getByText('Home link')).toBeInTheDocument()
+    expect(document.querySelector('[data-entry="link-10"]')).toHaveClass('fx-entry-reveal')
+  })
+
+  it('palette reveal replaces the folder path instead of nesting', async () => {
+    state.folders.push(
+      {
+        id: 1, name: 'Work', color: '#000', parent_id: null, has_password: false,
+        link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+      } as any,
+      {
+        id: 2, name: 'Personal', color: '#111', parent_id: null, has_password: false,
+        link_count: 1, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+      } as any,
+    )
+    state.links.push({
+      id: 10, url: 'https://personal.test', title: 'Personal link', slug: 'personal-link',
+      click_count: 0, preview_status: 'ok', folder_id: 2, created_at: '', updated_at: '', tags: [],
+    } as any)
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Open folder Work/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Open folder Work/i }))
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Work' })).toBeInTheDocument())
+    await user.click(screen.getByLabelText(/^Search$/i))
+    const palette = await screen.findByRole('dialog', { name: /command palette/i })
+    await waitFor(() => expect(within(palette).getAllByText('Personal link').length).toBeGreaterThan(0))
+    await user.click(within(palette).getAllByRole('button', { name: 'Show in Personal' })[0])
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Personal' })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: '← Folders' }))
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 1, name: 'Personal' })).not.toBeInTheDocument())
+    expect(screen.queryByRole('heading', { level: 1, name: 'Work' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Open folder Work/i })).toBeInTheDocument()
+  })
+
+  it('palette edit opens the link dialog when content.write is granted', async () => {
+    state.links.push({
+      id: 10, url: 'https://example.com', title: 'Example', slug: 'example',
+      click_count: 0, preview_status: 'ok', created_at: '', updated_at: '', tags: [],
+    } as any)
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByText('Example')).toBeInTheDocument())
+    await user.click(screen.getByLabelText(/^Search$/i))
+    const palette = await screen.findByRole('dialog', { name: /command palette/i })
+    await user.click(within(palette).getAllByRole('button', { name: 'Edit link' })[0])
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /command palette/i })).not.toBeInTheDocument())
+    expect(await screen.findByDisplayValue('https://example.com')).toBeInTheDocument()
+  })
 })

@@ -149,7 +149,7 @@ export type SessionState =
    * satisfy.
    */
   | { status: 'convert_password_account'; email: string; features: AuthFeatures }
-  | { status: 'authenticated'; user: AuthUser; csrfToken: string; features: AuthFeatures }
+  | { status: 'authenticated'; user: AuthUser; csrfToken: string; features: AuthFeatures; permissions?: Permission[] }
 
 export const defaultFeatures: AuthFeatures = {
   google_oauth: false,

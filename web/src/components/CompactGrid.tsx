@@ -6,6 +6,7 @@ import { Icon, I } from './icons'
 import { goHref } from '../api/links'
 import { goNoteHref } from '../api/notes'
 import { primaryColor } from '../lib/tagColor'
+import { entryAnchor } from '../lib/entryAnchor'
 import { mergeAlphaCells } from '../lib/mergeAlphaCells'
 import type { Entry, Folder, Link } from '../api/types'
 
@@ -76,7 +77,7 @@ CompactLink.displayName = 'CompactLink'
 function CompactLinkImpl({ link: l, onEdit }: { link: Link; onEdit: (l: Link) => void }) {
   const { t } = useTranslation()
   return (
-    <article className="fx-compact">
+    <article className="fx-compact" data-entry={entryAnchor('link', l.id)} tabIndex={-1}>
       <Favicon link={l} size={32} />
       <div className="fx-compact-text">
         <button

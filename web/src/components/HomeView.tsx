@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState, type CSSProperties } from 'react'
+import { useRevealEntry, type RevealTarget } from '../hooks/useRevealEntry'
 import { useQueryClient } from '@tanstack/react-query'
 import { Trans, useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
@@ -66,6 +67,8 @@ export type HomeProps = {
   hasMoreLinks: boolean
   loadingMoreLinks: boolean
   onLoadMoreLinks: () => void
+  revealTarget?: RevealTarget | null
+  onRevealed?: () => void
 }
 
 export function Home({
@@ -96,10 +99,17 @@ export function Home({
   hasMoreLinks,
   loadingMoreLinks,
   onLoadMoreLinks,
+  revealTarget = null,
+  onRevealed,
 }: HomeProps) {
   const { t } = useTranslation()
   const totalClicks = useMemo(() => entries.reduce((acc, e) => acc + e.click_count, 0), [entries])
   const { data: tags = [] } = useTags()
+  const clearReveal = useCallback(() => onRevealed?.(), [onRevealed])
+  const revealReady = !isLoading &&
+    revealTarget != null &&
+    entries.some((entry) => entry.kind === revealTarget.kind && entry.id === revealTarget.id)
+  useRevealEntry(revealTarget, revealReady, clearReveal)
   const currentFolder = openFolder !== null ? allFolders.find((f) => f.id === openFolder) : null
   // Esc goes back one level (matches the breadcrumb "← Pastas" affordance).
   useEscape(onNavigateBack, openFolder !== null)

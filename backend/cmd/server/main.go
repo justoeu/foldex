@@ -359,6 +359,7 @@ func main() {
 		Google:              google,
 		Policy:              policyRepo,
 		Abuse:               abuseCache,
+		Grants:              grantsRepo,
 	})
 	adminHandler := auth.NewAdminHandler(authRepo, mail, logger, cfg.AuthPublicURL, policyRepo, grantsRepo)
 	// The audit hook is passed as a function so internal/policy never imports

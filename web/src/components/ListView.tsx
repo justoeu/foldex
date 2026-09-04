@@ -7,6 +7,7 @@ import { useConfirm } from './ConfirmDialog'
 import { goHref, useDeleteLink } from '../api/links'
 import { goNoteHref, useDeleteNote } from '../api/notes'
 import { primaryColor } from '../lib/tagColor'
+import { entryAnchor } from '../lib/entryAnchor'
 import { mergeAlphaCells } from '../lib/mergeAlphaCells'
 import type { Entry, Folder, Link } from '../api/types'
 
@@ -128,7 +129,7 @@ function LinkRowImpl({
 }) {
   const { t } = useTranslation()
   return (
-    <div className="fx-list-row">
+    <div className="fx-list-row" data-entry={entryAnchor('link', l.id)} tabIndex={-1}>
       <div className="fx-list-main">
         <Favicon link={l} size={28} />
         <div className="fx-list-text">

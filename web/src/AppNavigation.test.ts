@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  folderPathTo,
   isFolderLockedError,
   pruneFolderContextMap,
   pruneFolderPath,
@@ -46,6 +47,19 @@ describe('App navigation contracts', () => {
       2: { token: 'kept', expiresAt: 2_000 },
     })
     expect(pruneFolderUnlocks(unlocks, new Set([1, 2]))).toBe(unlocks)
+  })
+
+  it('walks parent_id to the library root and stops on a cycle', () => {
+    const folders = [
+      { id: 1, parent_id: null },
+      { id: 2, parent_id: 1 },
+      { id: 3, parent_id: 2 },
+      { id: 4, parent_id: 4 },
+    ]
+    expect(folderPathTo(folders, 3)).toEqual([1, 2, 3])
+    expect(folderPathTo(folders, 1)).toEqual([1])
+    expect(folderPathTo(folders, 99)).toEqual([])
+    expect(folderPathTo(folders, 4)).toEqual([4])
   })
 
   it('classifies only the exact folder_locked 403 contract as recoverable', () => {

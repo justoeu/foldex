@@ -1406,7 +1406,12 @@ mantém o snapshot anterior e é logada: substituí-lo pela matriz compilada em 
 restauraria em silêncio permissões que o dono revogou deliberadamente. Uma segunda réplica só
 vê a mudança no próximo `Load`.
 
-**Consequências.** `GET /api/admin/roles` passa a devolver a matriz EFETIVA (não a compilada —
+**Consequências.** `GET /api/auth/me` (e o payload autenticado de login/bootstrap) ecoa o conjunto
+EFETIVO em `permissions[]`, o mesmo snapshot que o gate consulta. A SPA usa essa
+lista só para esconder ações que o servidor recusaria (`content.write` no lápis
+da paleta); a busca continua devolvendo apenas as linhas do próprio dono.
+
+`GET /api/admin/roles` passa a devolver a matriz EFETIVA (não a compilada —
 uma tela cujo trabalho é mostrar o que o servidor aplica não pode descrever a regra que o
 servidor parou de aplicar), mais `locked`, `caller_role`, `can_edit` e `editable_disabled`,
 para que a tela renderize da resposta do servidor em vez de re-derivar a política. `PUT

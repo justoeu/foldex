@@ -893,6 +893,10 @@ func TestMe_ReportsTheAuthenticatedUser(t *testing.T) {
 	assert.Equal(t, "authenticated", body["status"])
 	assert.Equal(t, "admin@example.com", body["user"].(map[string]any)["email"])
 	assert.NotEmpty(t, body["csrf_token"])
+	perms, ok := body["permissions"].([]any)
+	require.True(t, ok, "/me must echo the effective RBAC grants")
+	assert.Contains(t, perms, "content.read")
+	assert.Contains(t, perms, "content.write")
 	assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"),
 		"/api/auth responses carry session state and must never be cached")
 }

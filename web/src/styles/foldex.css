@@ -1333,6 +1333,61 @@ button.fx-usermenu-item {
 .fx-cmdk-row:hover { background: var(--fx-bg-tint); }
 .fx-cmdk-row-sel { background: var(--fx-accent-soft-2); }
 .fx-cmdk-row-sel .fx-cmdk-hint { color: var(--fx-accent-3); }
+
+/* Link rows split the /go hit from the reveal/edit icons so a click on
+   the pencil does not also open the bookmark. Element-qualified against
+   `.fx-shell button` (INV-154). */
+div.fx-cmdk-link-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 0;
+  border-radius: 10px;
+}
+div.fx-cmdk-link-row:hover { background: var(--fx-bg-tint); }
+div.fx-cmdk-link-row.fx-cmdk-row-sel { background: var(--fx-accent-soft-2); }
+a.fx-cmdk-row-go {
+  display: grid;
+  grid-template-columns: 22px 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 8px 8px 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.fx-cmdk-row-actions {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding-right: 6px;
+}
+button.fx-cmdk-icon {
+  width: 28px; height: 28px;
+  display: grid; place-items: center;
+  border-radius: 8px;
+  color: var(--fx-ink-4);
+  background: transparent;
+  border: 0;
+  flex: 0 0 auto;
+  transition: background .12s, color .12s;
+}
+button.fx-cmdk-icon:hover { background: var(--fx-surface-3); color: var(--fx-ink); }
+button.fx-cmdk-icon:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
+
+.fx-entry-reveal {
+  outline: 2px solid var(--fx-accent);
+  outline-offset: -2px;
+  animation: fx-entry-reveal-flash 1.4s ease-out;
+}
+@keyframes fx-entry-reveal-flash {
+  0% { box-shadow: 0 0 0 6px var(--fx-accent-soft-2); }
+  100% { box-shadow: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fx-entry-reveal { animation: none; }
+}
 .fx-cmdk-main { min-width: 0; }
 .fx-cmdk-title { font-size: 14px; font-weight: 700; color: var(--fx-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fx-cmdk-title b { color: var(--fx-accent-3); }

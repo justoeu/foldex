@@ -473,6 +473,9 @@
     "footer_open_new_tab": "abrir em nova aba",
     "footer_indexed": "⌥K · {{count}} itens indexados",
     "open_folder_aria": "abrir pasta {{name}}",
+    "reveal_in_folder": "Mostrar em {{name}}",
+    "reveal_on_home": "Mostrar na Home",
+    "edit_link": "Editar link",
     "search_aria": "buscar",
     "footer_open": "↵ abrir",
     "footer_close": "esc fechar"
@@ -1258,7 +1261,7 @@
     "err_email_taken": "Esse e-mail já está cadastrado.",
     "err_invalid_role": "Esse papel não pode ser atribuído aqui.",
     "perm_content_read": "Ver a própria biblioteca",
-    "perm_content_write": "Criar e alterar as próprias entradas",
+    "perm_content_write": "Criar e alterar as próprias entradas, inclusive pela busca",
     "perm_backup_export": "Baixar um backup completo",
     "perm_backup_restore": "Aplicar um arquivo de backup",
     "perm_import_run": "Importar favoritos",

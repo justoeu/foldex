@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { safeImageUrl } from '../lib/url'
+import { entryAnchor } from '../lib/entryAnchor'
 import type { Link, MergeSource } from '../api/types'
 import { hasUnseenChange, useLinkCardInteractions } from './LinkCardInteractions'
 import { LinkCardBadges, LinkCardBody, LinkCardPreview } from './LinkCardParts'
@@ -62,6 +63,8 @@ function LinkCardImpl(props: Props) {
         interaction.dragging,
         interaction.dragOver,
       )}
+      data-entry={entryAnchor('link', link.id)}
+      tabIndex={-1}
       draggable
       onDragStart={interaction.onDragStart}
       onDragEnd={interaction.onDragEnd}

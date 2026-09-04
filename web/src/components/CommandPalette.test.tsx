@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CommandPalette } from './CommandPalette'
-import { renderWithProviders } from '../test/renderWithProviders'
+import { renderWithProviders, testAdminUser } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import { http } from '../api/client'
 
@@ -65,6 +65,49 @@ describe('CommandPalette', () => {
     const user = userEvent.setup()
     await user.click(screen.getAllByText('Hacker News')[0])
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('reveals a foldered link without following /go', async () => {
+    state.folders.push({
+      id: 9, name: 'Work', color: '#000', parent_id: null, has_password: false,
+      link_count: 1, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    })
+    state.links[0] = { ...state.links[0], folder_id: 9 } as MockState['links'][number]
+    const onRevealLink = vi.fn()
+    const onClose = vi.fn()
+    renderWithProviders(<CommandPalette open onClose={onClose} onRevealLink={onRevealLink} />)
+    await waitFor(() => expect(screen.getAllByText('Hacker News').length).toBeGreaterThan(0))
+    await userEvent.click(screen.getAllByRole('button', { name: 'Show in Work' })[0])
+    expect(onRevealLink).toHaveBeenCalledTimes(1)
+    expect(onRevealLink.mock.calls[0][0].id).toBe(1)
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('hides the edit icon when content.write is missing', async () => {
+    renderWithProviders(
+      <CommandPalette open onClose={vi.fn()} onRevealLink={vi.fn()} onEditLink={vi.fn()} />,
+      {
+        session: {
+          status: 'authenticated',
+          user: { ...testAdminUser, role: 'viewer' },
+          csrfToken: 'test-csrf-token',
+          features: { google_oauth: false, two_factor: false, email_delivery: false },
+          permissions: ['content.read'],
+        },
+      },
+    )
+    await waitFor(() => expect(screen.getAllByText('Hacker News').length).toBeGreaterThan(0))
+    expect(screen.queryByRole('button', { name: 'Edit link' })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Show on Home' }).length).toBeGreaterThan(0)
+  })
+
+  it('edit icon calls onEditLink', async () => {
+    const onEditLink = vi.fn()
+    renderWithProviders(<CommandPalette open onClose={vi.fn()} onEditLink={onEditLink} />)
+    await waitFor(() => expect(screen.getAllByText('Hacker News').length).toBeGreaterThan(0))
+    await userEvent.click(screen.getAllByRole('button', { name: 'Edit link' })[0])
+    expect(onEditLink).toHaveBeenCalledTimes(1)
+    expect(onEditLink.mock.calls[0][0].title).toBe('Hacker News')
   })
 
   it('debounces: fires one query per settled input, not one per keystroke', async () => {

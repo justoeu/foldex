@@ -72,11 +72,12 @@ type setupRequiredAuthResponse struct {
 func (setupRequiredAuthResponse) authWireResponse() {}
 
 type authenticatedAuthResponse struct {
-	Status        authStatus   `json:"status"`
-	User          User         `json:"user"`
-	CSRFToken     string       `json:"csrf_token"`
-	Features      AuthFeatures `json:"features"`
-	RecoveryCodes []string     `json:"recovery_codes,omitempty"`
+	Status        authStatus           `json:"status"`
+	User          User                 `json:"user"`
+	CSRFToken     string               `json:"csrf_token"`
+	Features      AuthFeatures         `json:"features"`
+	Permissions   []authctx.Permission `json:"permissions"`
+	RecoveryCodes []string             `json:"recovery_codes,omitempty"`
 }
 
 func (authenticatedAuthResponse) authWireResponse() {}

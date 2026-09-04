@@ -131,7 +131,7 @@ func TestAuthWireResponseVariantsMarshalOnlyTheirContractFields(t *testing.T) {
 		{"setup required", setupRequiredAuthResponse{Status: statusSetupRequired, Features: h.features},
 			[]string{"status", "features"}},
 		{"authenticated", h.authenticatedPayload(u, "csrf"),
-			[]string{"status", "user", "csrf_token", "features"}},
+			[]string{"status", "user", "csrf_token", "features", "permissions"}},
 		{"TOTP", totp,
 			[]string{"status", "purpose", "email", "methods", "expires_in", "max_attempts", "features"}},
 		{"enrollment", enrollment,

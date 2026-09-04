@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { AuthProvider, useAuth, useCurrentUser } from './AuthProvider'
+import { AuthProvider, useAuth, useCurrentUser, useHasPermission } from './AuthProvider'
 import { makeQueryClient, testAdminSession, testAdminUser } from '../test/renderWithProviders'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render } from '@testing-library/react'
@@ -119,6 +119,23 @@ const mappingCases: Array<{ response: MeResponse; expected: SessionState }> = [
       user: testAdminUser,
       csrfToken: 'wire-csrf',
       features,
+      permissions: [],
+    },
+  },
+  {
+    response: {
+      status: 'authenticated',
+      user: testAdminUser,
+      csrf_token: 'wire-csrf',
+      features,
+      permissions: ['content.read', 'content.write'],
+    },
+    expected: {
+      status: 'authenticated',
+      user: testAdminUser,
+      csrfToken: 'wire-csrf',
+      features,
+      permissions: ['content.read', 'content.write'],
     },
   },
   {
@@ -604,5 +621,58 @@ describe('AuthProvider', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(() => render(<Probe />)).toThrow(/must be used inside <AuthProvider>/)
     spy.mockRestore()
+  })
+})
+
+function PermissionProbe({ permission }: { permission: 'content.read' | 'content.write' }) {
+  const allowed = useHasPermission(permission)
+  return <span data-testid="can">{String(allowed)}</span>
+}
+
+describe('useHasPermission', () => {
+  it('fails closed when the session has no permissions list', () => {
+    const session: SessionState = {
+      status: 'authenticated',
+      user: testAdminUser,
+      csrfToken: 'test-csrf-token',
+      features,
+    }
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <AuthProvider initialState={session}>
+          <PermissionProbe permission="content.write" />
+        </AuthProvider>
+      </QueryClientProvider>,
+    )
+    expect(screen.getByTestId('can')).toHaveTextContent('false')
+  })
+
+  it('is true only for grants echoed on the session', () => {
+    const session: SessionState = {
+      status: 'authenticated',
+      user: testAdminUser,
+      csrfToken: 'test-csrf-token',
+      features,
+      permissions: ['content.read'],
+    }
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <AuthProvider initialState={session}>
+          <PermissionProbe permission="content.write" />
+        </AuthProvider>
+      </QueryClientProvider>,
+    )
+    expect(screen.getByTestId('can')).toHaveTextContent('false')
+  })
+
+  it('is true when the live matrix includes the permission', () => {
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <AuthProvider initialState={testAdminSession}>
+          <PermissionProbe permission="content.write" />
+        </AuthProvider>
+      </QueryClientProvider>,
+    )
+    expect(screen.getByTestId('can')).toHaveTextContent('true')
   })
 })
