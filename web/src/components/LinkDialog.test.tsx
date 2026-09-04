@@ -488,6 +488,16 @@ describe('LinkDialog', () => {
     expect(titleInput.value).toBe('Title B')
   })
 
+  it('AUTO-FILL: empty 200 (site blocked fetch) falls back to hostname', async () => {
+    vi.useFakeTimers()
+    state.urlMetadata = { title: '', description: '' }
+    renderWithProviders(<LinkDialog open link={null} initialUrl="https://blocked.example/path" onClose={vi.fn()} />)
+    await advanceMetadataDebounce()
+    const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
+    expect(titleInput.value).toBe('blocked.example')
+    expect(screen.getByRole('button', { name: /Save link/i })).toBeEnabled()
+  })
+
   it('AUTO-FILL: tolerates a 502 from the backend silently', async () => {
     vi.useFakeTimers()
     state.urlMetadataError = Object.assign(new Error('fetch_failed'), {

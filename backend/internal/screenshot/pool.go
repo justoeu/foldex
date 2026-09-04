@@ -50,6 +50,7 @@ type Pool struct {
 	createBrowserContext  func(context.Context, *rod.Browser, browserContextProxy) (proto.BrowserBrowserContextID, error)
 	disposeBrowserContext func(context.Context, *rod.Browser, proto.BrowserBrowserContextID) error
 	captureBrowserContext func(context.Context, *rod.Browser, proto.BrowserBrowserContextID, string) ([]byte, error)
+	extractBrowserContext func(context.Context, *rod.Browser, proto.BrowserBrowserContextID, string) (PageMetadata, error)
 	closeBrowser          func(context.Context, *rod.Browser) error
 	connectBrowser        func(*rod.Browser) error
 	newBrowserLauncher    func(string) browserLauncher
@@ -75,6 +76,9 @@ func NewPool() *Pool {
 	}
 	p.captureBrowserContext = func(ctx context.Context, browser *rod.Browser, contextID proto.BrowserBrowserContextID, pageURL string) ([]byte, error) {
 		return capturePage(ctx, browser, contextID, pageURL, p.requestLimit)
+	}
+	p.extractBrowserContext = func(ctx context.Context, browser *rod.Browser, contextID proto.BrowserBrowserContextID, pageURL string) (PageMetadata, error) {
+		return extractPage(ctx, browser, contextID, pageURL, p.requestLimit)
 	}
 	p.createBrowserContext = func(ctx context.Context, browser *rod.Browser, proxy browserContextProxy) (proto.BrowserBrowserContextID, error) {
 		result, err := (proto.TargetCreateBrowserContext{

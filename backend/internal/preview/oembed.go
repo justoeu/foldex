@@ -92,7 +92,7 @@ func (f *Fetcher) fetchOEmbed(ctx context.Context, oembedURL string) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
-	req.Header.Set("User-Agent", "FoldexPreviewBot/1.0 (+local)")
+	req.Header.Set("User-Agent", previewUserAgent)
 	req.Header.Set("Accept", "application/json")
 	resp, err := f.client.Do(req)
 	if err != nil {

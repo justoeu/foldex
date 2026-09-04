@@ -122,8 +122,10 @@ func main() {
 	// preview.NewFetcher so the SSRF guards (IMDS always blocked, RFC1918
 	// gated by PREVIEW_STRICT_SSRF) are identical to the async worker —
 	// per CLAUDE.md §4 we never re-roll a second HTTP client / SSRF posture.
-	metadataFetcher := preview.NewFetcher(time.Duration(cfg.PreviewTimeoutSec) * time.Second)
+	// Chromium is a fallback only (INV-083): FetchThenRender asks the
+	// screenshot pool when the HTTP/oEmbed pass is blocked or title-less.
 	screenshotPool := screenshot.NewPool()
+	metadataFetcher := preview.NewFetcher(time.Duration(cfg.PreviewTimeoutSec) * time.Second)
 
 	// Object store (RustFS / S3 API) is optional — if it cannot be reached, we
 	// log a warning and disable screenshot/upload endpoints rather than
@@ -411,7 +413,7 @@ func main() {
 		Trace:               traceMiddleware(traceShutdown),
 		Storage:             storageClient,
 		PushHandler:         pushHandler,
-		LinkMetadataFetcher: linkMetadataAdapter{f: metadataFetcher},
+		LinkMetadataFetcher: linkMetadataAdapter{f: metadataFetcher, render: screenshotRenderer{p: screenshotPool}},
 		FolderUnlockKey:     folderUnlockKey,
 		AuthHandler:         authHandler,
 		AdminHandler:        adminHandler,
@@ -563,10 +565,13 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 // links.MetadataFetcher (returning links.URLMetadata). The two shapes are
 // field-for-field identical — the adapter exists to keep the links package
 // from depending on preview directly.
-type linkMetadataAdapter struct{ f *preview.Fetcher }
+type linkMetadataAdapter struct {
+	f      *preview.Fetcher
+	render preview.Renderer
+}
 
 func (a linkMetadataAdapter) FetchMetadata(ctx context.Context, pageURL string) (links.URLMetadata, error) {
-	r, err := a.f.Fetch(ctx, pageURL)
+	r, err := a.f.FetchThenRender(ctx, pageURL, a.render)
 	if err != nil {
 		return links.URLMetadata{}, err
 	}
@@ -575,6 +580,32 @@ func (a linkMetadataAdapter) FetchMetadata(ctx context.Context, pageURL string) 
 		Description: r.Description,
 		FaviconURL:  r.FaviconURL,
 		OGImageURL:  r.OGImageURL,
+	}, nil
+}
+
+// screenshotRenderer maps screenshot.Pool.ExtractMetadata onto preview.Renderer
+// without pulling the preview package into screenshot (or vice versa).
+type screenshotRenderer struct{ p *screenshot.Pool }
+
+func (s screenshotRenderer) ExtractMetadata(ctx context.Context, pageURL string) (preview.Result, error) {
+	if s.p == nil {
+		return preview.Result{}, errors.New("screenshot pool unavailable")
+	}
+	// Same pre-gate as the screenshot fallback and the manual capture
+	// endpoint (INV-083/085). The HTTP fetch may still hit RFC1918 when
+	// PREVIEW_STRICT_SSRF is off; Chromium must not.
+	if !preview.IsPublicURL(ctx, pageURL) {
+		return preview.Result{}, errors.New("private target")
+	}
+	md, err := s.p.ExtractMetadata(ctx, pageURL)
+	if err != nil {
+		return preview.Result{}, err
+	}
+	return preview.Result{
+		Title:       md.Title,
+		Description: md.Description,
+		FaviconURL:  md.FaviconURL,
+		OGImageURL:  md.OGImageURL,
 	}, nil
 }
 
