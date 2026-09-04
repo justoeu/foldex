@@ -512,7 +512,8 @@ Reversibilidade honesta: **schema volta, dados de identidade não.** Todo `app_u
 { "status": "authenticated",
   "user": { "id": 1, "email": "a@b.c", "username": "ana", "name": "Ana", "role": "admin",
             "totp_enabled": true, "email_verified": true, "google_only": false },
-  "csrf_token": "…", "features": { … } }
+  "csrf_token": "…", "features": { … },
+  "permissions": ["content.read", "content.write", "…"] }
 
 // 200 — login OK, 2FA pendente
 { "status": "twofa_pending", "method": "totp", "masked_email": "a••@b.c",

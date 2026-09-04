@@ -12,7 +12,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query'
 import { fetchMe, logout as apiLogout, type MeResponse } from '../api/auth'
 import { advanceAuthEpoch, setSessionLostHandler } from '../api/client'
-import { defaultFeatures, type SessionState, type TwoFactorPending } from './types'
+import { defaultFeatures, type Permission, type SessionState, type TwoFactorPending } from './types'
 
 type AuthContextValue = {
   session: SessionState
@@ -37,6 +37,13 @@ export function useCurrentUser() {
   return session.status === 'authenticated' ? session.user : null
 }
 
+/** Live matrix for this session. Missing /me.permissions (tests) fail closed. */
+export function useHasPermission(permission: Permission): boolean {
+  const { session } = useAuth()
+  if (session.status !== 'authenticated') return false
+  return session.permissions?.includes(permission) === true
+}
+
 function toState(me: MeResponse): SessionState {
   switch (me.status) {
     case 'anonymous':
@@ -49,6 +56,7 @@ function toState(me: MeResponse): SessionState {
         user: me.user,
         csrfToken: me.csrf_token,
         features: me.features,
+        permissions: me.permissions ?? [],
       }
     case 'two_factor_required':
       // A half-finished login. It is a SESSION state rather than local state in

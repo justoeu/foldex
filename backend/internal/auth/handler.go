@@ -17,6 +17,7 @@ import (
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/attemptlimit"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/pwhash"
 	"foldex/internal/pkg/secrets"
@@ -114,6 +115,8 @@ type Handler struct {
 	// enforce anything.
 	abuse *abusepolicy.Cache
 
+	grants authgate.Grants
+
 	// loginByIP is the ONLY bucket in set mode: it counts how many DISTINCT
 	// accounts one origin has failed against, not how many times it has failed.
 	// Depth per origin is the question the per-account bucket already answers,
@@ -198,6 +201,12 @@ type HandlerConfig struct {
 	// nil runs the compiled defaults, and so does a cache whose store is
 	// unreachable — the limits are always enforced at whatever they last were.
 	Abuse *abusepolicy.Cache
+
+	// Grants is the live RBAC matrix (ADR-42). Nil uses the compiled
+	// role.Can defaults, which is also what an instance with an empty
+	// role_permission table resolves to. /me echoes the EFFECTIVE set so
+	// the SPA can hide writes the server would refuse.
+	Grants authgate.Grants
 }
 
 func NewHandler(cfg HandlerConfig) *Handler {
@@ -219,6 +228,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		google:              cfg.Google,
 		policy:              cfg.Policy,
 		abuse:               cfg.Abuse,
+		grants:              cfg.Grants,
 
 		// Seeded from the compiled defaults and re-read from the live policy on
 		// every attempt (configureLoginLimits). The seed is what a handler
@@ -800,11 +810,29 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) authenticatedPayload(u User, csrf string) authenticatedAuthResponse {
 	return authenticatedAuthResponse{
-		Status:    statusAuthenticated,
-		User:      u,
-		CSRFToken: csrf,
-		Features:  h.features,
+		Status:      statusAuthenticated,
+		User:        u,
+		CSRFToken:   csrf,
+		Features:    h.features,
+		Permissions: h.permissionsFor(u.Role),
 	}
+}
+
+func (h *Handler) permissionsFor(role authctx.Role) []authctx.Permission {
+	out := make([]authctx.Permission, 0, len(authctx.AllPermissions))
+	for _, p := range authctx.AllPermissions {
+		if h.can(role, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (h *Handler) can(role authctx.Role, p authctx.Permission) bool {
+	if h.grants != nil {
+		return h.grants.Can(role, p)
+	}
+	return role.Can(p)
 }
 
 type updateProfileInput struct {

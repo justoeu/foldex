@@ -572,8 +572,8 @@ independente.
 Banda **"Backup da instância"** no settings hub (INV-148 — superfície única; não é página
 avulsa; seção `backup` do escopo administração, com card no overview), visível atrás de
 `instance.backup` — na prática o escopo admin inteiro segue o padrão existente da UI
-(`isAdminRole`; `/api/auth/me` não expõe permissões, e o servidor continua sendo o
-guarda: 404/403 na API). Pendência anotada: screenshot da banda para o README.
+(`isAdminRole`; `/api/auth/me` agora ecoa `permissions[]` da matriz viva, e o
+servidor continua sendo o guarda: 404/403 na API). Pendência anotada: screenshot da banda para o README.
 
 - **Estado por job**: último sucesso relativo ("há 6 h"), destino (`bucket/chave` do
   artefato enviado), tamanho, SHA-256 (truncado, copiável), duração.

@@ -61,6 +61,26 @@ export function pruneFolderUnlocks(unlocks: UnlockMap, validIds: Set<number>): U
   return changed ? next : unlocks
 }
 
+/** Ancestor chain from the library root to `id`, inclusive. Cycles stop. */
+export function folderPathTo(
+  folders: Pick<Folder, 'id' | 'parent_id'>[],
+  id: number,
+): number[] {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]))
+  const path: number[] = []
+  const seen = new Set<number>()
+  let current: number | null = id
+  while (current != null) {
+    if (seen.has(current)) break
+    const folder = byId.get(current)
+    if (!folder) break
+    seen.add(current)
+    path.unshift(current)
+    current = folder.parent_id ?? null
+  }
+  return path
+}
+
 export function isFolderLockedError(error: unknown): boolean {
   const candidate = error as FolderError | null
   return candidate?.response?.status === 403 &&
@@ -126,18 +146,35 @@ export function useAppNavigationController(allFolders: Folder[] | undefined) {
     })
   }, [])
 
-  const requestOpenFolder = useCallback(async (id: number) => {
+  const requestOpenFolder = useCallback(async (id: number): Promise<boolean> => {
     const folder = allFolders?.find((candidate) => candidate.id === id)
     const token = validUnlockToken(unlockedFoldersRef.current[id])
     if (!folder?.has_password || token) {
       openFolderDirectly(id)
-      return
+      return true
     }
     const result = await passwordPrompt(folder)
-    if (!result) return
+    if (!result) return false
     rememberFolderUnlock(id, result)
     openFolderDirectly(id)
+    return true
   }, [allFolders, openFolderDirectly, passwordPrompt, rememberFolderUnlock])
+
+  // Replace the path (do not append): revealing a link from search must land
+  // ON its folder, even if the user is currently inside a different one.
+  const jumpToFolder = useCallback(async (id: number): Promise<boolean> => {
+    if (openFolder === id) return true
+    const folder = allFolders?.find((candidate) => candidate.id === id)
+    const token = validUnlockToken(unlockedFoldersRef.current[id])
+    if (folder?.has_password && !token) {
+      const result = await passwordPrompt(folder)
+      if (!result) return false
+      rememberFolderUnlock(id, result)
+    }
+    const path = folderPathTo(allFolders ?? [], id)
+    setFolderPath(path.length > 0 ? path : [id])
+    return true
+  }, [allFolders, openFolder, passwordPrompt, rememberFolderUnlock])
 
   const unlockTokenFor = useCallback((id: number | null) => (
     id === null ? undefined : validUnlockToken(unlockedFolders[id])
@@ -148,6 +185,7 @@ export function useAppNavigationController(allFolders: Folder[] | undefined) {
     goHome,
     navigateBack,
     requestOpenFolder,
+    jumpToFolder,
     rememberFolderUnlock,
     forgetFolderUnlock,
     unlockTokenFor,

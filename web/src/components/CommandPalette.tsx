@@ -11,15 +11,20 @@ import { useFolders } from '../api/folders'
 import { searchFolderTree } from '../lib/folderTree'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useHasPermission } from '../auth/AuthProvider'
+import type { Link } from '../api/types'
 
 type Props = {
   open: boolean
   onClose: () => void
   onOpenFolder?: (id: number) => void
+  onRevealLink?: (link: Link) => void
+  onEditLink?: (link: Link) => void
 }
 
-export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
+export function CommandPalette({ open, onClose, onOpenFolder, onRevealLink, onEditLink }: Props) {
   const { t } = useTranslation()
+  const canEdit = useHasPermission('content.write')
   const [q, setQ] = useState('')
   const [debounced, setDebounced] = useState('')
 
@@ -63,6 +68,12 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
     if (!folders.length) return []
     return searchFolderTree(folders, debounced).slice(0, 8)
   }, [folders, debounced])
+
+  const folderNameById = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const folder of folders) map.set(folder.id, folder.name)
+    return map
+  }, [folders])
 
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(dialogRef, open)
@@ -115,26 +126,17 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
             <div className="fx-cmdk-group">
               <div className="fx-cmdk-grouplabel">{t('command_palette.suggested_section')}</div>
               {suggested.map((l, i) => (
-                <a
+                <PaletteLinkRow
                   key={l.id}
-                  className={'fx-cmdk-row' + (i === 0 ? ' fx-cmdk-row-sel' : '')}
-                  href={goHref(l)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={onClose}
-                >
-                  <Favicon link={l} size={22} />
-                  <div className="fx-cmdk-main">
-                    <div className="fx-cmdk-title">{l.title}</div>
-                    <div className="fx-cmdk-sub">{l.url}</div>
-                  </div>
-                  <div className="fx-cmdk-tags">
-                    {l.tags.slice(0, 2).map((tag) => (
-                      <TagChip key={tag.id} tag={tag} />
-                    ))}
-                  </div>
-                  <span className="fx-cmdk-hint">{t('command_palette.clicks_count', { count: l.click_count })}</span>
-                </a>
+                  link={l}
+                  selected={i === 0}
+                  hint={t('command_palette.clicks_count', { count: l.click_count })}
+                  canEdit={canEdit}
+                  folderName={l.folder_id != null ? folderNameById.get(l.folder_id) : undefined}
+                  onClose={onClose}
+                  onReveal={onRevealLink}
+                  onEdit={onEditLink}
+                />
               ))}
             </div>
           )}
@@ -143,26 +145,16 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
             <div className="fx-cmdk-group">
               <div className="fx-cmdk-grouplabel">{t('command_palette.links_section')}</div>
               {matches.map((l) => (
-                <a
+                <PaletteLinkRow
                   key={l.id}
-                  className="fx-cmdk-row"
-                  href={goHref(l)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={onClose}
-                >
-                  <Favicon link={l} size={22} />
-                  <div className="fx-cmdk-main">
-                    <div className="fx-cmdk-title">{l.title}</div>
-                    <div className="fx-cmdk-sub">{l.url}</div>
-                  </div>
-                  <div className="fx-cmdk-tags">
-                    {l.tags.slice(0, 2).map((tag) => (
-                      <TagChip key={tag.id} tag={tag} />
-                    ))}
-                  </div>
-                  <span className="fx-cmdk-hint">/go/{l.slug}</span>
-                </a>
+                  link={l}
+                  hint={`/go/${l.slug}`}
+                  canEdit={canEdit}
+                  folderName={l.folder_id != null ? folderNameById.get(l.folder_id) : undefined}
+                  onClose={onClose}
+                  onReveal={onRevealLink}
+                  onEdit={onEditLink}
+                />
               ))}
             </div>
           )}
@@ -299,6 +291,90 @@ export function CommandPalette({ open, onClose, onOpenFolder }: Props) {
             {t('command_palette.footer_indexed', { count: entries.length })}
           </span>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function PaletteLinkRow({
+  link,
+  selected,
+  hint,
+  canEdit,
+  folderName,
+  onClose,
+  onReveal,
+  onEdit,
+}: {
+  link: Link
+  selected?: boolean
+  hint: string
+  canEdit: boolean
+  folderName?: string
+  onClose: () => void
+  onReveal?: (link: Link) => void
+  onEdit?: (link: Link) => void
+}) {
+  const { t } = useTranslation()
+  const inFolder = link.folder_id != null
+  const revealLabel = inFolder
+    ? t('command_palette.reveal_in_folder', { name: folderName || t('command_palette.folder_hint') })
+    : t('command_palette.reveal_on_home')
+
+  return (
+    <div className={'fx-cmdk-link-row' + (selected ? ' fx-cmdk-row-sel' : '')}>
+      <a
+        className="fx-cmdk-row-go"
+        href={goHref(link)}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={onClose}
+      >
+        <Favicon link={link} size={22} />
+        <div className="fx-cmdk-main">
+          <div className="fx-cmdk-title">{link.title}</div>
+          <div className="fx-cmdk-sub">{link.url}</div>
+        </div>
+        <div className="fx-cmdk-tags">
+          {link.tags.slice(0, 2).map((tag) => (
+            <TagChip key={tag.id} tag={tag} />
+          ))}
+        </div>
+        <span className="fx-cmdk-hint">{hint}</span>
+      </a>
+      <div className="fx-cmdk-row-actions">
+        {onReveal && (
+          <button
+            type="button"
+            className="fx-cmdk-icon"
+            aria-label={revealLabel}
+            data-tooltip={revealLabel}
+            data-tooltip-side="top"
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              onReveal(link)
+            }}
+          >
+            <Icon d={inFolder ? I.folder : I.home} size={14} />
+          </button>
+        )}
+        {canEdit && onEdit && (
+          <button
+            type="button"
+            className="fx-cmdk-icon"
+            aria-label={t('command_palette.edit_link')}
+            data-tooltip={t('command_palette.edit_link')}
+            data-tooltip-side="top"
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              onEdit(link)
+            }}
+          >
+            <Icon d={I.pen} size={14} />
+          </button>
+        )}
       </div>
     </div>
   )

@@ -375,7 +375,7 @@ trace ids or exclude themselves from telemetry with `sampled=0`.
 
 | Shortcut         | Action                          |
 |------------------|---------------------------------|
-| `⌥K` / `Alt+K`   | Command palette (fuzzy search). `⌘K` conflicts with browsers' URL-bar focus. |
+| `⌥K` / `Alt+K`   | Command palette (fuzzy search). Each link row can jump to the link in its folder (or Home) and, when `content.write` is granted, open the editor. Search only returns the signed-in account's rows. `⌘K` conflicts with browsers' URL-bar focus. |
 | `⌥N` / `Alt+N`   | New link (⌘N is hard-claimed by browser for "New window") |
 | `⌥F` / `Alt+F`   | New folder (⌥P collided with other handlers; "F" for Folder) |
 | `⌥M` / `Alt+M`   | New note (⌘M is hard-claimed by macOS for "Minimize window") |

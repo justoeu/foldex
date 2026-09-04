@@ -473,6 +473,9 @@
     "footer_open_new_tab": "abrir en nueva pestaña",
     "footer_indexed": "⌥K · {{count}} elementos indexados",
     "open_folder_aria": "abrir carpeta {{name}}",
+    "reveal_in_folder": "Mostrar en {{name}}",
+    "reveal_on_home": "Mostrar en Inicio",
+    "edit_link": "Editar enlace",
     "search_aria": "buscar",
     "footer_open": "↵ abrir",
     "footer_close": "esc cerrar"
@@ -1258,7 +1261,7 @@
     "err_email_taken": "Ese correo ya está registrado.",
     "err_invalid_role": "Ese rol no puede asignarse aquí.",
     "perm_content_read": "Ver su propia biblioteca",
-    "perm_content_write": "Crear y modificar sus propias entradas",
+    "perm_content_write": "Crear y modificar sus propias entradas, también desde la búsqueda",
     "perm_backup_export": "Descargar una copia completa",
     "perm_backup_restore": "Aplicar un archivo de copia",
     "perm_import_run": "Importar marcadores",

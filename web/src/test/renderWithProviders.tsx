@@ -55,6 +55,7 @@ export const testAdminSession: SessionState = {
   },
   csrfToken: 'test-csrf-token',
   features: { google_oauth: false, two_factor: false, email_delivery: false },
+  permissions: ['content.read', 'content.write'],
 }
 
 export function renderWithProviders(

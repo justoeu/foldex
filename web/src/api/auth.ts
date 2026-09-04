@@ -1,6 +1,6 @@
 import { http } from './client'
 import type { AvailabilityResponse } from '../hooks/useAvailability'
-import type { AuthFeatures, AuthUser, Role } from '../auth/types'
+import type { AuthFeatures, AuthUser, Permission, Role } from '../auth/types'
 
 export type AnonymousMeResponse = {
   status: 'anonymous'
@@ -17,6 +17,8 @@ export type AuthenticatedMeResponse = {
   user: AuthUser
   csrf_token: string
   features: AuthFeatures
+  /** Effective grants for this session's role (live matrix, ADR-42). */
+  permissions?: Permission[]
 }
 
 type TwoFactorRequiredMeResponseBase = {

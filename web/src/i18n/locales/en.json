@@ -473,6 +473,9 @@
     "footer_open_new_tab": "open in new tab",
     "footer_indexed": "⌥K · {{count}} entries indexed",
     "open_folder_aria": "open folder {{name}}",
+    "reveal_in_folder": "Show in {{name}}",
+    "reveal_on_home": "Show on Home",
+    "edit_link": "Edit link",
     "search_aria": "search",
     "footer_open": "↵ open",
     "footer_close": "esc close"
@@ -1258,7 +1261,7 @@
     "err_email_taken": "That e-mail is already registered.",
     "err_invalid_role": "That role cannot be assigned here.",
     "perm_content_read": "See their own library",
-    "perm_content_write": "Create and change their own entries",
+    "perm_content_write": "Create and change their own entries, including from search",
     "perm_backup_export": "Download a full backup",
     "perm_backup_restore": "Apply a backup archive",
     "perm_import_run": "Import bookmarks",

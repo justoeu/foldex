@@ -3,6 +3,7 @@ import { useHotkeys } from 'react-hotkeys-hook'
 import { useDarkMode } from './hooks/useDarkMode'
 import { isBoolean, usePersistedState } from './hooks/usePersistedState'
 import type { Sort } from './components/HomeView'
+import type { RevealTarget } from './hooks/useRevealEntry'
 
 // 'admin' is gone as a view: the administration surface lives inside the
 // settings hub (RBAC-scoped segment) instead of a topbar destination.
@@ -31,12 +32,15 @@ export function useAppWorkspaceController() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [gridCols, setGridCols] = usePersistedState<3 | 5 | 8>('foldex.grid.cols', 5, isGridDensity)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [revealTarget, setRevealTarget] = useState<RevealTarget | null>(null)
 
   const toggleSidebar = useCallback(() => setSidebarCollapsed((collapsed) => !collapsed), [setSidebarCollapsed])
   const openMobileSidebar = useCallback(() => setMobileSidebarOpen(true), [])
   const closeMobileSidebar = useCallback(() => setMobileSidebarOpen(false), [])
   const openPalette = useCallback(() => setPaletteOpen(true), [])
   const closePalette = useCallback(() => setPaletteOpen(false), [])
+  const requestReveal = useCallback((target: RevealTarget) => setRevealTarget(target), [])
+  const clearReveal = useCallback(() => setRevealTarget(null), [])
   // Deep link into a settings-hub section (used by the topbar user menu).
   const openSettingsAt = useCallback((section: string) => {
     setSettingsJump((prev) => ({ section, n: (prev?.n ?? 0) + 1 }))
@@ -87,6 +91,9 @@ export function useAppWorkspaceController() {
     paletteOpen,
     openPalette,
     closePalette,
+    revealTarget,
+    requestReveal,
+    clearReveal,
     toggleTag,
     clearTags,
   }

@@ -10,7 +10,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { TooltipPortal } from './components/TooltipPortal'
 import { Icon, I } from './components/icons'
 import { useAccountLocale } from './i18n/useAccountLocale'
-import type { Entry, Folder } from './api/types'
+import type { Entry, Folder, Link } from './api/types'
 import type { AppWorkspaceController, AppView } from './AppWorkspace'
 import type { AppNavigationController } from './AppNavigation'
 import type { AppDialogController } from './AppDialogs'
@@ -207,6 +207,8 @@ function HomePage({ workspace, navigation, dialogs, dnd, content, totalLinks }: 
       hasMoreLinks={content.hasMoreEntries}
       loadingMoreLinks={content.fetchingMoreEntries}
       onLoadMoreLinks={() => void content.fetchMoreEntries()}
+      revealTarget={workspace.revealTarget}
+      onRevealed={workspace.clearReveal}
       onMoveLinkToFolder={dnd.onMoveLinkToFolder}
       onMoveNoteToFolder={dnd.onMoveNoteToFolder}
       onMergeEntries={dnd.onMergeEntries}
@@ -256,6 +258,24 @@ function AppOverlays({ workspace, navigation, dialogs }: Props) {
     workspace.closePalette()
     void navigation.requestOpenFolder(id)
   }
+  const revealLinkFromPalette = async (link: Link) => {
+    workspace.closePalette()
+    workspace.setView('home')
+    workspace.setQ('')
+    workspace.clearTags()
+    const folderId = link.folder_id ?? null
+    if (folderId == null) {
+      navigation.goHome()
+      workspace.requestReveal({ kind: 'link', id: link.id })
+      return
+    }
+    const opened = await navigation.jumpToFolder(folderId)
+    if (opened) workspace.requestReveal({ kind: 'link', id: link.id })
+  }
+  const editLinkFromPalette = (link: Link) => {
+    workspace.closePalette()
+    dialogs.openEditLink(link)
+  }
 
   return (
     <>
@@ -290,6 +310,8 @@ function AppOverlays({ workspace, navigation, dialogs }: Props) {
         open={workspace.paletteOpen}
         onClose={workspace.closePalette}
         onOpenFolder={openPaletteFolder}
+        onRevealLink={(link) => void revealLinkFromPalette(link)}
+        onEditLink={editLinkFromPalette}
       />
       <TooltipPortal />
     </>

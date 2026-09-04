@@ -362,7 +362,7 @@ nossos trace ids ou excluir o próprio tráfego da telemetria com `sampled=0`.
 
 | Atalho           | Ação                            |
 |------------------|---------------------------------|
-| `⌥K` / `Alt+K`   | Command palette (busca fuzzy). `⌘K` conflita com o foco da URL bar do navegador. |
+| `⌥K` / `Alt+K`   | Command palette (busca fuzzy). Cada linha de link pode saltar para o link na pasta (ou na Home) e, com `content.write`, abrir o editor. A busca só devolve as linhas da conta autenticada. `⌘K` conflita com o foco da URL bar do navegador. |
 | `⌥N` / `Alt+N`   | Novo link (⌘N é hard-claimed pelo navegador para "Nova janela") |
 | `⌥F` / `Alt+F`   | Nova pasta (⌥P colidia com outros handlers; "F" de Folder) |
 | `⌥M` / `Alt+M`   | Nova nota (⌘M é hard-claimed pelo macOS para "Minimizar janela") |
