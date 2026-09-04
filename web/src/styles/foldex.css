@@ -3403,11 +3403,22 @@ button.fx-bkp-filter-on { background: var(--fx-surface-3); color: var(--fx-accen
  * the reason the thing they just tried did not happen.
  */
 .fx-inline-error {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: flex-start; gap: 8px;
   padding: 9px 11px;
   border-radius: 10px;
   background: rgba(244, 63, 94, 0.10);
   color: var(--fx-danger);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.fx-inline-error-body { flex: 1; min-width: 0; }
+.fx-inline-error-title { font-weight: 700; }
+.fx-inline-warn {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--fx-amber, #b45309) 14%, transparent);
+  color: var(--fx-amber, #b45309);
   font-size: 12.5px;
   line-height: 1.45;
 }

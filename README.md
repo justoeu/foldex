@@ -408,7 +408,7 @@ to come as the project gets more populated content:
 
 - Populated home grid (cards + 3/5/8-column density)
 - Command palette (`⌥K`)
-- New link dialog with tag autocomplete + auto-detect of title/description (500 ms after you paste a URL; oEmbed enrichment for YouTube/Vimeo; empty page titles fall back to the hostname). The OG image from that fetch shows in the preview panel. A camera icon on the image header (**Try to load the image automatically**) asks Chromium for a print (the same SSRF-gated path as the worker fallback — never the default).
+- New link dialog with tag autocomplete + auto-detect of title/description (500 ms after you paste a URL; oEmbed enrichment for YouTube/Vimeo; empty page titles fall back to the hostname). The OG image from that fetch shows in the preview panel. A camera icon on the image header (**Try to load the image automatically**) asks Chromium for a print (the same SSRF-gated path as the worker fallback — never the default); a failed print is a warning, not a blocked save. Pasting a URL that is already in the library blocks save and offers **Edit saved link**.
 - Footer on the signed-in shell when the object store or mail broker is configured and unreachable (`Could not connect: object storage`).
 - Import page (drag-drop) + preview with the mode picker
 - Stats page (KPIs, top hosts, tag distribution)

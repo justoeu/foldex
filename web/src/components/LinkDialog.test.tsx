@@ -637,16 +637,68 @@ describe('LinkDialog', () => {
     state.linkImageRemoveError = undefined
   })
 
-  it('surfaces url_taken on create', async () => {
+  it('blocks save and offers to edit when the URL is already bookmarked', async () => {
+    state.folders.push({
+      id: 9, name: 'Server Local', color: '#000', parent_id: null, has_password: false,
+      link_count: 1, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
     state.links.push({
       id: 1, url: 'https://dup.example', title: 'Dup', slug: 'dup', click_count: 0,
-      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+      preview_status: 'ok', pinned: false, folder_id: 9, created_at: '', updated_at: '', tags: [],
     } as Link)
-    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} />)
+    const onOpenExisting = vi.fn()
+    renderWithProviders(<LinkDialog open link={null} onClose={vi.fn()} onOpenExisting={onOpenExisting} />)
     const user = userEvent.setup()
     await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://dup.example')
-    await user.click(screen.getByRole('button', { name: /Save link/i }))
     expect(await screen.findByText(/already bookmarked/i)).toBeInTheDocument()
+    expect(screen.getByText(/saved in server local/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /save link/i })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: /edit saved link/i }))
+    expect(onOpenExisting).toHaveBeenCalledWith(expect.objectContaining({ id: 1, folder_id: 9 }))
+  })
+
+  it('closes after save even if screenshot capture fails', async () => {
+    state.linkScreenshotError = { code: 'private_target', message: 'private' }
+    const onClose = vi.fn()
+    const post = vi.spyOn(http, 'post')
+    renderWithProviders(<LinkDialog open link={null} onClose={onClose} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://ok.example')
+    await user.click(screen.getByRole('button', { name: /capture page screenshot/i }))
+    await user.click(screen.getByRole('button', { name: /save link/i }))
+    await waitFor(() => expect(state.links).toHaveLength(1))
+    expect(post.mock.calls.some(([url]) => String(url).includes('/screenshot'))).toBe(true)
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('still surfaces url_taken if save races the uniqueness probe', async () => {
+    const onClose = vi.fn()
+    renderWithProviders(<LinkDialog open link={null} initialUrl="https://race.example" onClose={onClose} />)
+    state.links.push({
+      id: 1, url: 'https://race.example', title: 'Race', slug: 'race', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    } as Link)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /save link/i }))
+    expect(await screen.findByText(/already bookmarked/i)).toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('treats a failed screenshot on edit as a warning, not a blocked save', async () => {
+    state.linkScreenshotError = { code: 'screenshot_failed', message: 'no print' }
+    const link: Link = {
+      id: 3, url: 'https://lan.example', title: 'LAN', slug: 'lan', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    } as Link
+    state.links.push(link)
+    const onClose = vi.fn()
+    renderWithProviders(<LinkDialog open link={link} onClose={onClose} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /capture page screenshot/i }))
+    expect(await screen.findByText(/could not capture a screenshot/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /save changes/i })).not.toBeDisabled()
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 
   it('surfaces slug_taken on create with a custom dirty slug', async () => {
