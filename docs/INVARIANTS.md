@@ -371,7 +371,7 @@ Unlike `password_hash`, the hint is returned verbatim in every folder response (
 <a id="inv-068"></a>
 ### INV-068 — Home view excludes links inside folders.
 
-`GET /api/links?ungrouped=1` returns `folder_id IS NULL` only. A link never appears in two places.
+`GET /api/links?ungrouped=1` returns `folder_id IS NULL` only. A link never appears in two places. The SPA grid reads `['entries']`: a folder_id PATCH must **remove** the card from those caches (`removeCachedEntry`) rather than mapping `folder_id` in place, or the home view keeps rendering a row the backend would no longer return.
 
 <a id="inv-069"></a>
 ### INV-069 — Tag filter and folder scope compose via AND.

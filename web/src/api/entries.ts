@@ -165,6 +165,20 @@ export function mapCachedLinkEntries(qc: QueryClient, fn: (l: Link) => Link) {
   mapCachedEntries(qc, (e) => (e.kind === 'link' ? { ...e, ...fn(e) } : e))
 }
 
+// Drop one entry from every ['entries'] cache. Used when a link/note moves
+// into a folder: mapCachedLinkEntries would leave it in the home
+// (ungrouped) page with a new folder_id, so the card stayed on the grid
+// until a later refetch (INV-068).
+export function removeCachedEntry(qc: QueryClient, kind: Entry['kind'], id: number): void {
+  qc.setQueriesData<EntriesCache>({ queryKey: ['entries'] }, (old) => {
+    if (!old || !Array.isArray(old.pages)) return old
+    return {
+      ...old,
+      pages: old.pages.map((page) => page.filter((entry) => !(entry.kind === kind && entry.id === id))),
+    }
+  })
+}
+
 // A single backend query preserves ordering across links and notes (ADR-27).
 export function useEntries(params: EntryListParams, options?: { enabled?: boolean }) {
   const pageSize = params.limit && params.limit > 0 ? Math.min(params.limit, 500) : ENTRY_PAGE_SIZE

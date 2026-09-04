@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
-import { invalidateEntryCounts } from './entries'
+import { invalidateEntryCounts, removeCachedEntry } from './entries'
 import type { Note, NoteCreate, NoteUpdate } from './types'
 
 export function useNote(id: number | null) {
@@ -41,13 +41,15 @@ export function useUpdateNote() {
       return data
     },
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: ['entries'] })
       if (vars.body.tag_ids !== undefined || vars.body.pending_tags !== undefined) {
         qc.invalidateQueries({ queryKey: ['tags'] })
       }
       if ('folder_id' in vars.body) {
+        removeCachedEntry(qc, 'note', vars.id)
         qc.invalidateQueries({ queryKey: ['folders'] })
+        invalidateEntryCounts(qc)
       }
+      qc.invalidateQueries({ queryKey: ['entries'] })
     },
   })
 }

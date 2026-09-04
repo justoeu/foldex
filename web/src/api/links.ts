@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query'
 import { http } from './client'
-import { invalidateEntryCounts, mapCachedLinkEntries } from './entries'
+import { invalidateEntryCounts, mapCachedLinkEntries, removeCachedEntry } from './entries'
 import type { Link, LinkCreate, LinkUpdate } from './types'
 
 type LinksCache = InfiniteData<Link[]>
@@ -65,6 +65,7 @@ export function useUpdateLink() {
       }
       if ('folder_id' in vars.body) {
         qc.invalidateQueries({ queryKey: ['folders'] })
+        invalidateEntryCounts(qc)
       }
       if (context.sequence !== currentUpdateSequence(qc, vars.id)) {
         qc.invalidateQueries({ queryKey: ['links'] })
@@ -72,6 +73,11 @@ export function useUpdateLink() {
         return
       }
       mapCachedLinks(qc, (l) => (l.id === data.id ? data : l))
+      if ('folder_id' in vars.body) {
+        removeCachedEntry(qc, 'link', data.id)
+        qc.invalidateQueries({ queryKey: ['entries'] })
+        return
+      }
       mapCachedLinkEntries(qc, (l) => (l.id === data.id ? data : l))
     },
   })

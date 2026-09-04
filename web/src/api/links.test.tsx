@@ -272,6 +272,28 @@ describe('useUpdateLink invalidation branches', () => {
     expect(state.links[0].title).toBe('U2')
   })
 
+  it('removes a link from the ungrouped entries cache when it moves into a folder', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const wrap = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const original = {
+      id: 20, url: 'https://u', title: 'U', slug: 'u', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: 'v1', tags: [], folder_id: null,
+    } as any
+    state.links.push(original)
+    client.setQueryData(['entries', '', '', 'created', 'ungrouped', 'locked', 100], {
+      pages: [[{ ...original, kind: 'link' }]],
+      pageParams: [0],
+    })
+    const { result } = renderHook(() => useUpdateLink(), { wrapper: wrap })
+    await result.current.mutateAsync({ id: 20, body: { folder_id: 9 } })
+    const cached = client.getQueryData<{ pages: any[] }>(['entries', '', '', 'created', 'ungrouped', 'locked', 100])
+    expect(cached!.pages[0]).toEqual([])
+  })
+
   it('does not let an older response overwrite a newer cached link', async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

@@ -8,6 +8,7 @@ import {
   flattenEntries,
   mapCachedLinkEntries,
   pendingPreviewIDs,
+  removeCachedEntry,
 } from './entries'
 import { http } from './client'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
@@ -185,6 +186,25 @@ describe('mapCachedLinkEntries', () => {
     expect(linkEntry.kind).toBe('link')
     expect(noteEntry.pinned).toBe(false)
     expect(noteEntry.kind).toBe('note')
+  })
+
+  it('removeCachedEntry drops the moved card from every entries page', () => {
+    const client = makeQueryClient()
+    const link = (id: number) => ({
+      kind: 'link', id, url: `https://${id}.example`, title: String(id), slug: String(id),
+      click_count: 0, preview_status: 'ok', pinned: false, folder_id: null,
+      created_at: '', updated_at: '', tags: [],
+    }) as any
+    client.setQueryData(['entries', '', '', 'created', 'ungrouped', 'locked', 100], {
+      pages: [[link(1), link(2)]],
+      pageParams: [0],
+    })
+
+    removeCachedEntry(client, 'link', 1)
+
+    const cached = client.getQueryData<{ pages: any[] }>(['entries', '', '', 'created', 'ungrouped', 'locked', 100])
+    expect(cached!.pages[0]).toHaveLength(1)
+    expect(cached!.pages[0][0].id).toBe(2)
   })
 })
 

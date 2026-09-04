@@ -448,6 +448,27 @@ describe('App', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 
+  it('drops a home link onto a folder and removes the card from the grid', async () => {
+    state.folders.push({
+      id: 3, name: 'Tools', color: '#111111', parent_id: null, has_password: false,
+      link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.links.push({
+      id: 1, url: 'https://a', title: 'Alpha', slug: 'alpha', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+    })
+    renderWithProviders(<App />)
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument())
+    fireEvent.drop(document.querySelector('.fx-folder-card') as HTMLElement, {
+      dataTransfer: {
+        types: ['application/x-foldex-link'],
+        getData: (type: string) => type === 'application/x-foldex-link' ? '1' : '',
+      },
+    })
+    await waitFor(() => expect(state.links[0].folder_id).toBe(3))
+    await waitFor(() => expect(screen.queryByText('Alpha')).not.toBeInTheDocument())
+  })
+
   it('merges a dropped note and link into a new root folder and opens the naming dialog', async () => {
     state.links.push({
       id: 1, url: 'https://a', title: 'Alpha', slug: 'alpha', click_count: 0,
