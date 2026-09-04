@@ -173,6 +173,11 @@ export function useFetchUrlMetadata() {
   return useMutation({
     mutationFn: async ({ url, signal }: { url: string; signal?: AbortSignal }): Promise<UrlMetadata> => {
       const now = Date.now()
+      if (signal?.aborted) {
+        const canceled = new Error('canceled')
+        canceled.name = 'CanceledError'
+        throw canceled
+      }
       const hit = urlMetadataCache.get(url)
       if (hit && hit.expiresAt > now) {
         return hit.data

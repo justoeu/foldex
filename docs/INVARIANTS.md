@@ -666,7 +666,7 @@ Pending tags use `id: 0`; submit sends their definitions beside existing `tag_id
 <a id="inv-125"></a>
 ### INV-125 — LinkDialog auto-fills Title/Description from the URL after a 500 ms debounce
 
-— only on **create** (edit mode skips entirely; the link already has its own copy), only when the field is **empty** (`setTitle((cur) => cur.trim() ? cur : data.title)` — user input always wins), and only when `looksLikeUrl(url)` passes. Effect uses `AbortController` so a fresh keystroke cancels the previous in-flight fetch AND unmounting the dialog aborts cleanly (no setState on dead component). Failure is silent (no toast, no submit block). Image stays async via the preview worker.
+— only on **create** (edit mode skips entirely; the link already has its own copy), only when the field is **empty** (`setTitle((cur) => cur.trim() ? cur : next)` — user input always wins), and only when `looksLikeUrl(url)` passes. If the page returns an empty title, the hostname (`hostOf`) fills the field so the slug has something to derive from. Effect uses `AbortController` so a fresh keystroke cancels the previous in-flight fetch AND unmounting the dialog aborts cleanly (no setState on dead component). A spinner on the title label covers the debounce+fetch window. Failure is silent (no toast, no submit block) aside from the hint under an empty title. The dialog may **display** `og_image_url` from the same payload as a preview; the stored cover is still written by the preview worker (or a manual screenshot/upload). Screenshot capture lives as an icon on the image-panel header so it stays visible when the side column clips.
 
 <a id="inv-126"></a>
 ### INV-126 — Tooltips are CSS-only via `data-tooltip` (+ optional `data-tooltip-side`)

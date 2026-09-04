@@ -508,6 +508,36 @@ describe('LinkDialog', () => {
     expect(screen.getByRole('button', { name: /Save link/i })).toBeEnabled()
   })
 
+  it('AUTO-FILL: empty page title does not overwrite a typed title', async () => {
+    vi.useFakeTimers()
+    state.urlMetadata = { title: '', description: '' }
+    renderWithProviders(<LinkDialog open link={null} initialUrl="https://empty-title.example" onClose={vi.fn()} />)
+    const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
+    fireEvent.change(titleInput, { target: { value: 'my custom title' } })
+    await advanceMetadataDebounce()
+    expect(titleInput.value).toBe('my custom title')
+  })
+
+  it('AUTO-FILL: empty page title falls back to the hostname', async () => {
+    vi.useFakeTimers()
+    state.urlMetadata = { title: '', description: '' }
+    renderWithProviders(<LinkDialog open link={null} initialUrl="https://www.s3-console.prontyx.com/auth/" onClose={vi.fn()} />)
+    await advanceMetadataDebounce()
+    const titleInput = screen.getByRole('textbox', { name: /Title/i }) as HTMLInputElement
+    expect(titleInput.value).toBe('s3-console.prontyx.com')
+  })
+
+  it('AUTO-FILL: shows the og:image from metadata in the preview panel', async () => {
+    vi.useFakeTimers()
+    state.urlMetadata = {
+      title: 'Console',
+      og_image_url: 'https://cdn.example/og.png',
+    }
+    renderWithProviders(<LinkDialog open link={null} initialUrl="https://cdn.example" onClose={vi.fn()} />)
+    await advanceMetadataDebounce()
+    expect(document.querySelector('.fx-modal-side-ogimg')).toHaveAttribute('src', 'https://cdn.example/og.png')
+  })
+
   it('AUTO-FILL: shows failed hint under empty title after a real error', async () => {
     vi.useFakeTimers()
     state.urlMetadataError = Object.assign(new Error('fetch_failed'), {
