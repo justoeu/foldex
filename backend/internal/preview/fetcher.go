@@ -32,6 +32,12 @@ type Fetcher struct {
 	client *http.Client
 }
 
+// previewUserAgent is sent on HTML and oEmbed fetches. A bare *Bot* token
+// is enough for a lot of origins to 403; a Chrome-compatible string still
+// names Foldex so operators can allowlist us. Change-check keeps
+// FoldexChangeCheckBot — that path is a crawler and should say so.
+const previewUserAgent = "Mozilla/5.0 (compatible; Foldex/2.0; +https://github.com/justoeu/foldex) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
 func NewFetcher(timeout time.Duration) *Fetcher {
 	return &Fetcher{
 		client: &http.Client{
@@ -119,8 +125,9 @@ func (f *Fetcher) Fetch(ctx context.Context, pageURL string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	req.Header.Set("User-Agent", "FoldexPreviewBot/1.0 (+local)")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("User-Agent", previewUserAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en,pt;q=0.9")
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return Result{}, err

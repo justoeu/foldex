@@ -35,10 +35,10 @@ type MetadataFetcher interface {
 // larger is hostile input we don't want to spend resolver cycles on.
 const urlMetadataMaxLen = 2048
 
-// urlMetadataTimeout is the per-request ceiling for the upstream HTTP fetch.
-// 10s matches the preview worker's expectation that a single page should
-// resolve quickly; a slow target shouldn't tie up the request goroutine.
-const urlMetadataTimeout = 10 * time.Second
+// urlMetadataTimeout is the per-request ceiling for metadata resolution.
+// HTTP/oEmbed is capped at 5s inside FetchThenRender; Chromium gets 10s.
+// 15s stays under the SPA axios default (30s) so the dialog spinner ends first.
+const urlMetadataTimeout = 15 * time.Second
 
 // Per-field byte caps applied before returning to the client. The preview
 // fetcher only caps the total body at 2 MiB — a single hostile <meta
@@ -109,9 +109,13 @@ func (h *Handler) fetchURLMetadata(w http.ResponseWriter, r *http.Request) {
 
 	md, err := h.fetcher.FetchMetadata(ctx, raw)
 	if err != nil {
-		// Don't leak DNS / TLS / SSRF / 4xx error text downstream — the
-		// client only needs to know the fetch didn't produce metadata.
-		httperr.Write(w, httperr.New(http.StatusBadGateway, "fetch_failed", "could not fetch URL metadata"))
+		// Third-party fetch failed (timeout, bot wall, SSRF refusal, TLS).
+		// That is not an API fault: the request was well-formed and the
+		// dialog can still Save. Returning 502 made Grafana's 5xx ratio
+		// treat "this page blocked us" as a backend outage. Empty 200
+		// lets the SPA fall back to the hostname; the error text never
+		// leaves the process (DNS / SSRF / IMDS stay in the log).
+		httperr.JSON(w, http.StatusOK, URLMetadata{})
 		return
 	}
 	md.Title = truncateRunes(md.Title, MaxTitleBytes)

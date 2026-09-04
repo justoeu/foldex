@@ -36,6 +36,23 @@ func TestFetcher_Fetch_Success(t *testing.T) {
 	assert.Contains(t, got.OGImageURL, "cover.png")
 }
 
+func TestFetcher_Fetch_SendsBrowserCompatibleUserAgent(t *testing.T) {
+	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, `<html><head><title>UA</title></head></html>`)
+	}))
+	defer srv.Close()
+	f := NewFetcher(2 * time.Second)
+	_, err := f.Fetch(context.Background(), srv.URL)
+	require.NoError(t, err)
+	assert.Equal(t, previewUserAgent, gotUA)
+	assert.Contains(t, gotUA, "Foldex/")
+	assert.NotContains(t, gotUA, "Bot")
+}
+
 func TestFetcher_Fetch_HTTPError(t *testing.T) {
 	t.Setenv("PREVIEW_STRICT_SSRF", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -139,18 +139,19 @@ func TestFetchURLMetadata_RejectsNonHTTPScheme(t *testing.T) {
 	}
 }
 
-func TestFetchURLMetadata_FetcherErrorMaskedAs502(t *testing.T) {
+func TestFetchURLMetadata_FetcherErrorReturnsEmpty200(t *testing.T) {
 	// The fetcher can fail for many reasons (DNS, SSRF refusal, TLS, 4xx
-	// from origin). The handler must NOT leak those details to the client —
-	// every failure mode collapses to a uniform 502 fetch_failed envelope.
+	// from origin). That is not an API fault — the dialog still Saves —
+	// so the handler answers 200 with empty fields. Details must NOT leak.
 	stub := &stubMetadataFetcher{err: errors.New("ssrf: refusing IMDS endpoint 169.254.169.254")}
 	resp, body := doGet(t, newMetadataRouter(stub), "https://attacker.example/")
-	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 	s := string(body)
-	assert.Contains(t, s, "fetch_failed")
+	assert.NotContains(t, s, "fetch_failed")
 	assert.NotContains(t, s, "ssrf", "internal error text must not reach the client")
 	assert.NotContains(t, s, "IMDS")
 	assert.NotContains(t, s, "169.254")
+	assert.Contains(t, s, `"title":""`)
 }
 
 func TestFetchURLMetadata_NoFetcherWired(t *testing.T) {
