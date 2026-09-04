@@ -220,19 +220,19 @@ describe('service worker (sw.ts)', () => {
   it('fetch ignores non-GET and non-file API routes', () => {
     const respondWith = vi.fn()
     handlers.fetch![0]({
-      request: new Request('https://x.test/api/links', { method: 'POST' }),
+      request: new Request(here('/api/links'), { method: 'POST' }),
       respondWith,
     })
     handlers.fetch![0]({
-      request: new Request('https://x.test/api/links'),
+      request: new Request(here('/api/links')),
       respondWith,
     })
     handlers.fetch![0]({
-      request: new Request('https://x.test/go/1'),
+      request: new Request(here('/go/1')),
       respondWith,
     })
     handlers.fetch![0]({
-      request: new Request('https://x.test/healthz'),
+      request: new Request(here('/healthz')),
       respondWith,
     })
     expect(respondWith).not.toHaveBeenCalled()

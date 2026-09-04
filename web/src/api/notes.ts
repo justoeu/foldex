@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
-import { invalidateEntryCounts, removeCachedEntry } from './entries'
+import { cachedEntryFolderId, invalidateEntryCounts, removeCachedEntry } from './entries'
 import type { Note, NoteCreate, NoteUpdate } from './types'
 
 export function useNote(id: number | null) {
@@ -40,14 +40,17 @@ export function useUpdateNote() {
       const { data } = await http.patch<Note>(`/api/notes/${id}`, body)
       return data
     },
-    onSuccess: (_data, vars) => {
+    onMutate: ({ id, body }) => ({
+      previousFolderId: 'folder_id' in body ? cachedEntryFolderId(qc, 'note', id) : undefined,
+    }),
+    onSuccess: (data, vars, context) => {
       if (vars.body.tag_ids !== undefined || vars.body.pending_tags !== undefined) {
         qc.invalidateQueries({ queryKey: ['tags'] })
       }
-      if ('folder_id' in vars.body) {
-        removeCachedEntry(qc, 'note', vars.id)
+      const folderMoved = 'folder_id' in vars.body && data.folder_id !== context?.previousFolderId
+      if (folderMoved) {
+        removeCachedEntry(qc, 'note', data.id)
         qc.invalidateQueries({ queryKey: ['folders'] })
-        invalidateEntryCounts(qc)
       }
       qc.invalidateQueries({ queryKey: ['entries'] })
     },

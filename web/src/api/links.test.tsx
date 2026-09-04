@@ -294,6 +294,29 @@ describe('useUpdateLink invalidation branches', () => {
     expect(cached!.pages[0]).toEqual([])
   })
 
+  it('does not drop the card when folder_id is sent unchanged', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const wrap = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const original = {
+      id: 21, url: 'https://v', title: 'V', slug: 'v', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: 'v1', tags: [], folder_id: null,
+    } as any
+    state.links.push(original)
+    client.setQueryData(['entries', '', '', 'created', 'ungrouped', 'locked', 100], {
+      pages: [[{ ...original, kind: 'link' }]],
+      pageParams: [0],
+    })
+    const { result } = renderHook(() => useUpdateLink(), { wrapper: wrap })
+    await result.current.mutateAsync({ id: 21, body: { title: 'V2', folder_id: null } })
+    const cached = client.getQueryData<{ pages: any[] }>(['entries', '', '', 'created', 'ungrouped', 'locked', 100])
+    expect(cached!.pages[0]).toHaveLength(1)
+    expect(cached!.pages[0][0].title).toBe('V2')
+  })
+
   it('does not let an older response overwrite a newer cached link', async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
