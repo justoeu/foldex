@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query'
 import { http } from './client'
-import { invalidateEntryCounts, mapCachedLinkEntries } from './entries'
+import { cachedEntryFolderId, invalidateEntryCounts, mapCachedLinkEntries, removeCachedEntry } from './entries'
 import type { Link, LinkCreate, LinkUpdate } from './types'
 
 type LinksCache = InfiniteData<Link[]>
@@ -57,21 +57,31 @@ export function useUpdateLink() {
       const { data } = await http.patch<Link>(`/api/links/${id}`, body)
       return data
     },
-    onMutate: ({ id }) => ({ sequence: nextUpdateSequence(qc, id) }),
+    onMutate: ({ id, body }) => ({
+      sequence: nextUpdateSequence(qc, id),
+      previousFolderId: 'folder_id' in body ? cachedEntryFolderId(qc, 'link', id) : undefined,
+    }),
     onSuccess: (data, vars, context) => {
       // Association caches are refreshed only when their inputs changed.
       if (vars.body.tag_ids !== undefined || vars.body.pending_tags !== undefined) {
         qc.invalidateQueries({ queryKey: ['tags'] })
       }
-      if ('folder_id' in vars.body) {
+      const folderMoved = 'folder_id' in vars.body && data.folder_id !== context.previousFolderId
+      if (folderMoved) {
         qc.invalidateQueries({ queryKey: ['folders'] })
       }
       if (context.sequence !== currentUpdateSequence(qc, vars.id)) {
+        if (folderMoved) removeCachedEntry(qc, 'link', data.id)
         qc.invalidateQueries({ queryKey: ['links'] })
         qc.invalidateQueries({ queryKey: ['entries'] })
         return
       }
       mapCachedLinks(qc, (l) => (l.id === data.id ? data : l))
+      if (folderMoved) {
+        removeCachedEntry(qc, 'link', data.id)
+        qc.invalidateQueries({ queryKey: ['entries'] })
+        return
+      }
       mapCachedLinkEntries(qc, (l) => (l.id === data.id ? data : l))
     },
   })

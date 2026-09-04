@@ -129,6 +129,13 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return
   const url = new URL(req.url)
 
+  // Cross-origin GETs (og:image, favicon, Google Fonts CSS) must not go
+  // through respondWith. The SW's fetch() is a connect-src action; the
+  // document CSP is connect-src 'self', while img-src/style-src/font-src
+  // already allow those hosts. Intercepting turns a legal <img src=https:…>
+  // into a refused connect.
+  if (url.origin !== self.location.origin) return
+
   // /api and /go must always reach the backend — no caching, no offline
   // fallback. They mutate state on click and the backend is the source of
   // truth.

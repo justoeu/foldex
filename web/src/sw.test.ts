@@ -41,6 +41,10 @@ function makeCache(name: string) {
   }
 }
 
+function here(path: string): string {
+  return new URL(path, self.location.origin).href
+}
+
 function makeExtendableEvent(extra: Record<string, unknown> = {}) {
   let waitPromise: Promise<unknown> = Promise.resolve()
   return {
@@ -116,7 +120,7 @@ describe('service worker (sw.ts)', () => {
     }))
     let responded: Promise<Response> | undefined
     handlers.fetch![0]({
-      request: { url: 'https://x.test/folder', method: 'GET', mode: 'navigate' },
+      request: { url: here('/folder'), method: 'GET', mode: 'navigate' },
       respondWith(p: Promise<Response>) {
         responded = p
       },
@@ -127,7 +131,7 @@ describe('service worker (sw.ts)', () => {
 
   it('retains and serves the prior asset generation after activation', async () => {
     const previous = makeCache('foldex-precache-v3')
-    await previous.put('/assets/old-lazy.js', new Response('old lazy chunk'))
+    await previous.put(here('/assets/old-lazy.js'), new Response('old lazy chunk'))
 
     const install = makeExtendableEvent()
     handlers.install![0](install)
@@ -138,7 +142,7 @@ describe('service worker (sw.ts)', () => {
 
     let responded: Promise<Response> | undefined
     handlers.fetch![0]({
-      request: new Request('https://x.test/assets/old-lazy.js'),
+      request: new Request(here('/assets/old-lazy.js')),
       respondWith(p: Promise<Response>) {
         responded = p
       },
@@ -155,7 +159,7 @@ describe('service worker (sw.ts)', () => {
       current: 'foldex-precache-generation-before-this-build',
       previous: 'foldex-precache-two-generations-old',
     })))
-    await makeCache('foldex-precache-generation-before-this-build').put('/assets/prior-lazy.js', new Response('prior'))
+    await makeCache('foldex-precache-generation-before-this-build').put(here('/assets/prior-lazy.js'), new Response('prior'))
     await makeCache('foldex-precache-two-generations-old').put('/assets/oldest-lazy.js', new Response('oldest'))
     ;(globalThis as any).caches.keys = vi.fn(async () => [
       ...cacheStore.keys(),
@@ -178,7 +182,7 @@ describe('service worker (sw.ts)', () => {
 
     let responded: Promise<Response> | undefined
     handlers.fetch![0]({
-      request: new Request('https://x.test/assets/prior-lazy.js'),
+      request: new Request(here('/assets/prior-lazy.js')),
       respondWith(p: Promise<Response>) {
         responded = p
       },
@@ -216,19 +220,32 @@ describe('service worker (sw.ts)', () => {
   it('fetch ignores non-GET and non-file API routes', () => {
     const respondWith = vi.fn()
     handlers.fetch![0]({
-      request: new Request('https://x.test/api/links', { method: 'POST' }),
+      request: new Request(here('/api/links'), { method: 'POST' }),
       respondWith,
     })
     handlers.fetch![0]({
-      request: new Request('https://x.test/api/links'),
+      request: new Request(here('/api/links')),
       respondWith,
     })
     handlers.fetch![0]({
-      request: new Request('https://x.test/go/1'),
+      request: new Request(here('/go/1')),
       respondWith,
     })
     handlers.fetch![0]({
-      request: new Request('https://x.test/healthz'),
+      request: new Request(here('/healthz')),
+      respondWith,
+    })
+    expect(respondWith).not.toHaveBeenCalled()
+  })
+
+  it('fetch does not intercept cross-origin GETs (SW fetch is connect-src)', () => {
+    const respondWith = vi.fn()
+    handlers.fetch![0]({
+      request: new Request('https://www.cambioreal.com/img/social-thumb.png'),
+      respondWith,
+    })
+    handlers.fetch![0]({
+      request: new Request('https://fonts.googleapis.com/css2?family=Nunito+Sans'),
       respondWith,
     })
     expect(respondWith).not.toHaveBeenCalled()
@@ -239,7 +256,7 @@ describe('service worker (sw.ts)', () => {
     vi.stubGlobal('fetch', vi.fn(async () => body.clone()))
     let responded: Promise<Response> | undefined
     handlers.fetch![0]({
-      request: new Request('https://x.test/api/files/links/1.jpg'),
+      request: new Request(here('/api/files/links/1.jpg')),
       respondWith(p: Promise<Response>) {
         responded = p
       },
@@ -271,13 +288,13 @@ describe('service worker (sw.ts)', () => {
     // Seed near the real cap so a few network puts trigger prune.
     const { FILES_CACHE_MAX_ENTRIES } = await import('./sw')
     for (let i = 0; i < FILES_CACHE_MAX_ENTRIES; i++) {
-      await cache.put(new Request(`https://x.test/api/files/seed-${i}.jpg`), new Response('s'))
+      await cache.put(new Request(here(`/api/files/seed-${i}.jpg`)), new Response('s'))
     }
     vi.stubGlobal('fetch', vi.fn(async (req: Request) => new Response('img', { status: 200 })))
     for (let i = 0; i < 5; i++) {
       let responded: Promise<Response> | undefined
       handlers.fetch![0]({
-        request: new Request(`https://x.test/api/files/new-${i}.jpg`),
+        request: new Request(here(`/api/files/new-${i}.jpg`)),
         respondWith(p: Promise<Response>) {
           responded = p
         },
@@ -289,14 +306,14 @@ describe('service worker (sw.ts)', () => {
 
   it('networkFirst falls back to cache when offline', async () => {
     const cache = makeCache('foldex-files-v1')
-    await cache.put(new Request('https://x.test/api/files/x.png'), new Response('cached', { status: 200 }))
+    await cache.put(new Request(here('/api/files/x.png')), new Response('cached', { status: 200 }))
     ;(globalThis as any).caches.open = vi.fn(async () => cache)
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new Error('offline')
     }))
     let responded: Promise<Response> | undefined
     handlers.fetch![0]({
-      request: new Request('https://x.test/api/files/x.png'),
+      request: new Request(here('/api/files/x.png')),
       respondWith(p: Promise<Response>) {
         responded = p
       },
@@ -312,7 +329,7 @@ describe('service worker (sw.ts)', () => {
     }))
     let responded: Promise<Response> | undefined
     handlers.fetch![0]({
-      request: new Request('https://x.test/api/files/miss.png'),
+      request: new Request(here('/api/files/miss.png')),
       respondWith(p: Promise<Response>) {
         responded = p
       },
@@ -324,7 +341,7 @@ describe('service worker (sw.ts)', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('live', { status: 200 })))
     let responded: Promise<Response> | undefined
     handlers.fetch![0]({
-      request: { url: 'https://x.test/', method: 'GET', mode: 'navigate' },
+      request: { url: here('/'), method: 'GET', mode: 'navigate' },
       respondWith(p: Promise<Response>) {
         responded = p
       },
@@ -341,7 +358,7 @@ describe('service worker (sw.ts)', () => {
     }))
     let responded: Promise<Response> | undefined
     handlers.fetch![0]({
-      request: { url: 'https://x.test/folder', method: 'GET', mode: 'navigate' },
+      request: { url: here('/folder'), method: 'GET', mode: 'navigate' },
       respondWith(p: Promise<Response>) {
         responded = p
       },
@@ -356,7 +373,7 @@ describe('service worker (sw.ts)', () => {
     }))
     let responded: Promise<Response> | undefined
     handlers.fetch![0]({
-      request: { url: 'https://x.test/', method: 'GET', mode: 'navigate' },
+      request: { url: here('/'), method: 'GET', mode: 'navigate' },
       respondWith(p: Promise<Response>) {
         responded = p
       },
@@ -366,11 +383,11 @@ describe('service worker (sw.ts)', () => {
 
   it('fetch uses cacheFirst for static assets', async () => {
     const cache = makeCache('foldex-precache-v3')
-    await cache.put(new Request('https://x.test/assets/app.js'), new Response('js', { status: 200 }))
+    await cache.put(new Request(here('/assets/app.js')), new Response('js', { status: 200 }))
     ;(globalThis as any).caches.open = vi.fn(async () => cache)
     let responded: Promise<Response> | undefined
     handlers.fetch![0]({
-      request: new Request('https://x.test/assets/app.js'),
+      request: new Request(here('/assets/app.js')),
       respondWith(p: Promise<Response>) {
         responded = p
       },
@@ -383,7 +400,7 @@ describe('service worker (sw.ts)', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('net', { status: 200 })))
     let responded: Promise<Response> | undefined
     handlers.fetch![0]({
-      request: new Request('https://x.test/assets/miss.js'),
+      request: new Request(here('/assets/miss.js')),
       respondWith(p: Promise<Response>) {
         responded = p
       },
