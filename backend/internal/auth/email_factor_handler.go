@@ -186,9 +186,13 @@ func (h *Handler) ConfirmEmailFactor(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	user, tok, err := h.repo.CompleteEmailFactorEnrollment(r.Context(), uid, tokenVersion,
-		h.codeMAC.EmailOTPDigest(uid, OTPPurposeEnrollEmail2FA, nil, normalizeOTPCode(in.Code)),
-		hashes, sessionID, challenge, h.ttl, clientIP(r), r.UserAgent())
+	var session SessionIssue = LiveSession{ID: sessionID}
+	if challenge != nil {
+		session = PreAuth{Challenge: *challenge, TTL: h.ttl, IP: clientIP(r), UA: r.UserAgent()}
+	}
+	user, tok, err := h.repo.CompleteEmailFactorEnrollment(r.Context(), EnrollmentComplete{
+		UID: uid, TokenVersion: tokenVersion, RecoveryHashes: hashes, Session: session,
+	}, h.codeMAC.EmailOTPDigest(uid, OTPPurposeEnrollEmail2FA, nil, normalizeOTPCode(in.Code)))
 	settleErr = err
 	switch {
 	case err == nil:

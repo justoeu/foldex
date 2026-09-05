@@ -1450,6 +1450,15 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 
+// NewUser is the named input for AdminCreateUser so email, name and
+// password cannot compile into each other's slots.
+type NewUser struct {
+	Email    string
+	Name     string
+	Password string
+	Role     authctx.Role
+}
+
 // AdminCreateUser creates an account whose FIRST password was chosen by an
 // administrator rather than by its owner.
 //
@@ -1472,26 +1481,22 @@ func truncate(s string, n int) string {
 // Never mints an owner: the single-owner partial index would reject a second
 // one anyway, and refusing here gives the caller an honest 400 instead of a
 // constraint error surfacing as a 500.
-func (r *Repository) AdminCreateUser(
-	ctx context.Context,
-	email, name, password string,
-	role authctx.Role,
-) (User, error) {
-	if role == authctx.RoleOwner || !role.Valid() {
+func (r *Repository) AdminCreateUser(ctx context.Context, in NewUser) (User, error) {
+	if in.Role == authctx.RoleOwner || !in.Role.Valid() {
 		return User{}, ErrInvalidRole
 	}
-	hash, err := pwhash.Hash(password)
+	hash, err := pwhash.Hash(in.Password)
 	if err != nil {
 		return User{}, err
 	}
 
 	// Trimmed so the stored address is byte-identical to the one the caller
 	// sees echoed back, matching CreateInvite.
-	trimmed := strings.TrimSpace(email)
+	trimmed := strings.TrimSpace(in.Email)
 	u, err := scanUser(r.pool.QueryRow(ctx, `
 		INSERT INTO app_user (email, email_normalized, name, password_hash, role, status)
 		VALUES ($1, $2, $3, $4, $5, 'active')
-		RETURNING `+userColumns, trimmed, NormalizeEmail(email), strings.TrimSpace(name), hash, role))
+		RETURNING `+userColumns, trimmed, NormalizeEmail(in.Email), strings.TrimSpace(in.Name), hash, in.Role))
 	if err != nil {
 		// Matched by CONSTRAINT NAME, like the two other insert paths in this
 		// file: a bare 23505 would also swallow the single-owner index, and the

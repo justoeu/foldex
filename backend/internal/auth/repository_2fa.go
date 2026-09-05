@@ -616,17 +616,61 @@ func (r *Repository) HasConfirmedSecondFactor(ctx context.Context, uid authctx.U
 	return confirmed, nil
 }
 
+// EnrollmentComplete is the shared input for TOTP and e-mail enrollment so
+// the session clump (live id vs pre-auth challenge, TTL, IP, UA) cannot
+// compile a string into another string's slot.
+type EnrollmentComplete struct {
+	UID            authctx.UserID
+	TokenVersion   int
+	RecoveryHashes [][]byte
+	Session        SessionIssue
+}
+
+// SessionIssue is either a live session or a pre-auth challenge that mints
+// the first session. Construct with LiveSession{ID} or PreAuth{...}.
+type SessionIssue interface {
+	isSessionIssue()
+}
+
+// LiveSession is the Settings path: an already-authenticated session.
+type LiveSession struct{ ID int64 }
+
+func (LiveSession) isSessionIssue() {}
+
+// PreAuth is the mandatory-enrollment path: consume the challenge and mint
+// the first session in the same transaction.
+type PreAuth struct {
+	Challenge Challenge
+	TTL       SessionTTL
+	IP, UA    string
+}
+
+func (PreAuth) isSessionIssue() {}
+
+func (in EnrollmentComplete) liveSessionID() int64 {
+	if live, ok := in.Session.(LiveSession); ok {
+		return live.ID
+	}
+	return 0
+}
+
+func (in EnrollmentComplete) preAuth() *PreAuth {
+	if p, ok := in.Session.(PreAuth); ok {
+		cp := p
+		return &cp
+	}
+	return nil
+}
+
 // CompleteTOTPEnrollment activates the exact seed that was verified, replaces
 // recovery codes and, for mandatory pre-auth enrollment, consumes the challenge
 // and issues the first session in one transaction.
-func (r *Repository) CompleteTOTPEnrollment(ctx context.Context, uid authctx.UserID, tokenVersion int,
-	proof TOTPProof, recoveryHashes [][]byte, sessionID int64, challenge *Challenge, ttl SessionTTL,
-	ip, ua string) (User, issuedTokens, error) {
-
+func (r *Repository) CompleteTOTPEnrollment(ctx context.Context, in EnrollmentComplete, proof TOTPProof) (User, issuedTokens, error) {
+	pre := in.preAuth()
 	var issue sessionIssue
 	var err error
-	if challenge != nil {
-		issue, err = newSessionIssue(ttl)
+	if pre != nil {
+		issue, err = newSessionIssue(pre.TTL)
 		if err != nil {
 			return User{}, issuedTokens{}, err
 		}
@@ -641,46 +685,46 @@ func (r *Repository) CompleteTOTPEnrollment(ctx context.Context, uid authctx.Use
 	err = tx.QueryRow(ctx, `
 		SELECT id FROM app_user
 		WHERE id = $1 AND status = 'active' AND token_version = $2
-		FOR NO KEY UPDATE`, int64(uid), tokenVersion).Scan(&lockedUser)
+		FOR NO KEY UPDATE`, int64(in.UID), in.TokenVersion).Scan(&lockedUser)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, issuedTokens{}, ErrChallengeInvalid
 	}
 	if err != nil {
 		return User{}, issuedTokens{}, fmt.Errorf("complete totp enrollment lock user: %w", err)
 	}
-	if challenge == nil {
-		if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
+	if pre == nil {
+		if err := requireLiveSessionTx(ctx, tx, in.UID, in.liveSessionID()); err != nil {
 			return User{}, issuedTokens{}, err
 		}
 	}
-	if err := confirmTOTPRowTx(ctx, tx, uid, tokenVersion, sessionID, proof); err != nil {
+	if err := confirmTOTPRowTx(ctx, tx, in.UID, in.TokenVersion, in.liveSessionID(), proof); err != nil {
 		return User{}, issuedTokens{}, err
 	}
-	if err := replaceRecoveryCodesTx(ctx, tx, uid, recoveryHashes); err != nil {
+	if err := replaceRecoveryCodesTx(ctx, tx, in.UID, in.RecoveryHashes); err != nil {
 		return User{}, issuedTokens{}, err
 	}
 
-	if challenge != nil {
+	if pre != nil {
 		ct, err := tx.Exec(ctx, `
 			UPDATE auth_challenge SET consumed_at = now()
 			WHERE id = $1 AND user_id = $2 AND purpose = 'enroll_2fa'
 			  AND token_version = $3 AND consumed_at IS NULL AND expires_at > now()`,
-			challenge.ID, int64(uid), tokenVersion)
+			pre.Challenge.ID, int64(in.UID), in.TokenVersion)
 		if err != nil {
 			return User{}, issuedTokens{}, fmt.Errorf("complete enrollment consume challenge: %w", err)
 		}
 		if ct.RowsAffected() == 0 {
 			return User{}, issuedTokens{}, ErrChallengeInvalid
 		}
-		if _, err := issueSessionTx(ctx, tx, uid, issue, ip, ua); err != nil {
+		if _, err := issueSessionTx(ctx, tx, in.UID, issue, pre.IP, pre.UA); err != nil {
 			return User{}, issuedTokens{}, err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(uid)); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(in.UID)); err != nil {
 			return User{}, issuedTokens{}, fmt.Errorf("complete enrollment touch user: %w", err)
 		}
 	}
 
-	user, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM app_user WHERE id = $1`, int64(uid)))
+	user, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM app_user WHERE id = $1`, int64(in.UID)))
 	if err != nil {
 		return User{}, issuedTokens{}, fmt.Errorf("complete enrollment load user: %w", err)
 	}
@@ -959,6 +1003,24 @@ func (r *Repository) DisableTOTP(ctx context.Context, uid authctx.UserID, sessio
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if err := lockUserWithPasswordAndProof(ctx, tx, uid, sessionID, tokenVersion, password, proof); err != nil {
+		return err
+	}
+	if err := disableFactorTx(ctx, tx, uid, sessionID, tokenVersion, disableKindTOTP); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("disable totp commit: %w", err)
+	}
+	return nil
+}
+
+// lockUserWithPasswordAndProof is the one credential step-up lock: row lock,
+// bcrypt, live session, spend the proof. Disable TOTP and regenerate recovery
+// codes share it so a bound added to one cannot miss the other.
+func lockUserWithPasswordAndProof(ctx context.Context, tx pgx.Tx, uid authctx.UserID,
+	sessionID int64, tokenVersion int, password string, proof SecondFactorProof) error {
+
 	var passwordHash *string
 	var liveVersion int
 	var status string
@@ -966,7 +1028,7 @@ func (r *Repository) DisableTOTP(ctx context.Context, uid authctx.UserID, sessio
 		SELECT password_hash, token_version, status
 		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).
 		Scan(&passwordHash, &liveVersion, &status); err != nil {
-		return fmt.Errorf("disable totp lock user: %w", err)
+		return fmt.Errorf("lock user with password: %w", err)
 	}
 	if status != StatusActive || liveVersion != tokenVersion {
 		return ErrSessionInvalid
@@ -980,16 +1042,7 @@ func (r *Repository) DisableTOTP(ctx context.Context, uid authctx.UserID, sessio
 	if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
 		return err
 	}
-	if err := consumeSecondFactorTx(ctx, tx, uid, proof); err != nil {
-		return err
-	}
-	if err := disableFactorTx(ctx, tx, uid, sessionID, tokenVersion, disableKindTOTP); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("disable totp commit: %w", err)
-	}
-	return nil
+	return consumeSecondFactorTx(ctx, tx, uid, proof)
 }
 
 // disableFactorKind names which factor row disableFactorTx removes.
@@ -1087,28 +1140,7 @@ func (r *Repository) RegenerateRecoveryCodes(ctx context.Context, uid authctx.Us
 		return fmt.Errorf("regenerate recovery codes begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var passwordHash *string
-	var liveVersion int
-	var status string
-	if err := tx.QueryRow(ctx, `
-		SELECT password_hash, token_version, status
-		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).
-		Scan(&passwordHash, &liveVersion, &status); err != nil {
-		return fmt.Errorf("regenerate recovery codes lock user: %w", err)
-	}
-	if status != StatusActive || liveVersion != tokenVersion {
-		return ErrSessionInvalid
-	}
-	if passwordHash == nil {
-		return ErrPasswordMissing
-	}
-	if !pwhash.Verify(*passwordHash, password) {
-		return ErrBadCredentials
-	}
-	if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
-		return err
-	}
-	if err := consumeSecondFactorTx(ctx, tx, uid, proof); err != nil {
+	if err := lockUserWithPasswordAndProof(ctx, tx, uid, sessionID, tokenVersion, password, proof); err != nil {
 		return err
 	}
 	if err := replaceRecoveryCodesTx(ctx, tx, uid, hashes); err != nil {

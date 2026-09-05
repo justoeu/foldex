@@ -165,11 +165,13 @@ func TestAdminCreateUserRefusesTheOwnerRoleBeforeTouchingTheDatabase(t *testing.
 	t.Parallel()
 	r := NewRepository(nil)
 
-	_, err := r.AdminCreateUser(context.Background(),
-		"usurper@example.com", "X", "a fine temporary password", authctx.RoleOwner)
+	_, err := r.AdminCreateUser(context.Background(), NewUser{
+		Email: "usurper@example.com", Name: "X", Password: "a fine temporary password", Role: authctx.RoleOwner,
+	})
 	assert.ErrorIs(t, err, ErrInvalidRole)
 
-	_, err = r.AdminCreateUser(context.Background(),
-		"bogus@example.com", "X", "a fine temporary password", authctx.Role("superuser"))
+	_, err = r.AdminCreateUser(context.Background(), NewUser{
+		Email: "bogus@example.com", Name: "X", Password: "a fine temporary password", Role: authctx.Role("superuser"),
+	})
 	assert.ErrorIs(t, err, ErrInvalidRole)
 }

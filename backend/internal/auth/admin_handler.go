@@ -652,7 +652,9 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u, err := h.repo.AdminCreateUser(r.Context(), in.Email, in.Name, in.Password, role)
+	u, err := h.repo.AdminCreateUser(r.Context(), NewUser{
+		Email: in.Email, Name: in.Name, Password: in.Password, Role: role,
+	})
 	switch {
 	case errors.Is(err, ErrEmailTaken):
 		httperr.Write(w, httperr.New(http.StatusConflict, "email_taken", "e-mail already registered"))
