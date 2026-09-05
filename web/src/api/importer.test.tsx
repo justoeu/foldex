@@ -66,6 +66,27 @@ describe('importer api', () => {
     )
   })
 
+  it('applyImport overrides the 30s default timeout', async () => {
+    const post = vi.spyOn(http, 'post')
+    const file = new File(['<DL></DL>'], 'b.html', { type: 'text/html' })
+    await applyImport(file, 'netscape', 'skip', [])
+    expect(post).toHaveBeenCalledWith(
+      '/api/import/apply',
+      expect.any(FormData),
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    )
+    const timeout = (post.mock.calls[0]?.[2] as { timeout?: number } | undefined)?.timeout
+    expect(timeout).toBeGreaterThanOrEqual(5 * 60_000)
+  })
+
+  it('validateImport overrides the 30s default timeout', async () => {
+    const post = vi.spyOn(http, 'post')
+    const file = new File(['<DL></DL>'], 'b.html', { type: 'text/html' })
+    await validateImport(file, 'netscape')
+    const timeout = (post.mock.calls[0]?.[2] as { timeout?: number } | undefined)?.timeout
+    expect(timeout).toBeGreaterThanOrEqual(5 * 60_000)
+  })
+
   it('useApplyImport invalidates caches on success', async () => {
     const invalidate = vi.fn()
     const client = new QueryClient({

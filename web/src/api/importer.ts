@@ -2,6 +2,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
 import { invalidateEntryCounts } from './entries'
 
+// Import can parse 100 MiB / 50k bookmarks; the global 30s axios ceiling
+// would abort a valid validate/apply. Same envelope as backup restore.
+export const IMPORT_REQUEST_TIMEOUT_MS = 30 * 60_000
+
 export type ImportFormat = 'netscape' | 'json'
 export type ImportMode = 'skip' | 'wipe' | 'duplicate'
 
@@ -52,6 +56,7 @@ export async function validateImport(
   const { data } = await http.post<ImportValidation>('/api/import/validate', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
     signal,
+    timeout: IMPORT_REQUEST_TIMEOUT_MS,
   })
   return data
 }
@@ -71,6 +76,7 @@ export async function applyImport(
   const { data } = await http.post<ImportResult>('/api/import/apply', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
     signal,
+    timeout: IMPORT_REQUEST_TIMEOUT_MS,
   })
   return data
 }
