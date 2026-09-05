@@ -46,7 +46,7 @@ export function CommandPalette({ open, onClose, onOpenFolder, onRevealLink, onEd
   // When searching, request up to 200 matches so palette doesn't silently
   // drop hits beyond the default Home page size of 100 (N1-NEX-015).
   const paletteLimit = debounced ? 200 : 50
-  const entriesQuery = useEntries({ q: debounced, limit: paletteLimit }, { enabled: open })
+  const entriesQuery = useEntries({ q: debounced, limit: paletteLimit }, { enabled: open, qSettled: true })
   const entries = useMemo(() => flattenEntries(entriesQuery.data), [entriesQuery.data])
   const links = useMemo(() => entries.filter((e) => e.kind === 'link'), [entries])
   const notes = useMemo(() => entries.filter((e) => e.kind === 'note'), [entries])

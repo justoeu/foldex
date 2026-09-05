@@ -233,10 +233,13 @@ function entriesRequestConfig(unlockToken: string | undefined, signal: AbortSign
 }
 
 // A single backend query preserves ordering across links and notes (ADR-27).
-export function useEntries(params: EntryListParams, options?: { enabled?: boolean }) {
+export function useEntries(params: EntryListParams, options?: { enabled?: boolean; qSettled?: boolean }) {
   const pageSize = params.limit && params.limit > 0 ? Math.min(params.limit, 500) : ENTRY_PAGE_SIZE
   const queryClient = useQueryClient()
-  const q = useDebouncedQ(params.q)
+  const debouncedQ = useDebouncedQ(params.q)
+  // CommandPalette already settles q (200ms). Debouncing again here made ⌘K
+  // wait ~700ms. Home still types into workspace.q on every keystroke.
+  const q = options?.qSettled ? (params.q ?? '') : debouncedQ
   const key = entriesKey({ ...params, q })
   const batchCursor = useRef(0)
   const entries = useInfiniteQuery({
