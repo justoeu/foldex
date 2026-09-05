@@ -54,6 +54,7 @@ var expensiveRoutes = []string{
 	"POST /api/backup/validate", // unzips and checksums an uploaded archive
 	"POST /api/backup/restore",
 	"POST /api/links/{id}/screenshot",      // launches Chromium
+	"POST /api/links/url-metadata",         // outbound HTTP, Chromium fallback
 	"POST /api/links/{id}/refresh-preview", // outbound fetch per call
 	// Image ingest decodes and re-encodes through internal/imageopt, under a
 	// 50 MP cap (INV-076/077). At the ordinary write budget that is 120 fifty-

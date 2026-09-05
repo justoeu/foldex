@@ -79,6 +79,7 @@ Lista faseada de tasks `T1..T30`. Cada fase desbloqueia a próxima — segue em 
 
 | Data       | Task   | Hash | Notas |
 |------------|--------|------|-------|
+| 2026-09-05 | **url-metadata: POST + write + cota + slot** | — | `GET /api/links/url-metadata` lançava Chromium sem `content.write`, CSRF ou cota. Virou `POST` (body `{url}`), entra em `expensiveRoutes`, e o handler admite no máximo 2 in-flight / 1 por usuário — 429 `metadata_busy` antes do dial. Viewer e token sem write → 403. SSRF/200-vazio intactos (INV-087). |
 | 2026-09-04 | **url-metadata: Chromium fallback, 502 some** | — | O 3% de 5xx no Grafana era `GET /api/links/url-metadata` devolvendo 502 quando o origin 403ia (bot wall). HTTP/oEmbed continua primeiro; se título vem vazio/interstitial, o pool Chromium (mesmo proxy SSRF do print) lê o DOM. SSRF não dispara browser. Os dois falhando: 200 vazio, o diálogo Salva com o hostname. Dash Foldex Application ganha card `5xx (5m)` + tabela Erros por rota. |
 | 2026-09-04 | **Diálogo de link: avisos visíveis, URL duplicada no input** | — | Print que falha (LAN/SSRF) era erro vermelho e travava o Salvar depois de criar a linha — o segundo clique caía em `url_taken`. Agora o print é aviso e não bloqueia. URL já guardada é checada no campo (GET `/api/links/by-url`, debounce 500 ms), bloqueia o Salvar e oferece **Editar o link guardado**, que abre o diálogo na pasta certa. |
 | 2026-09-03 | **Paleta: ir à pasta + editar (RBAC)** | — | Pesquisa de link na ⌥K ganha ícone que abre a pasta (ou Home) e destaca o card, e um lápis que abre o diálogo de edição. O lápis some sem `content.write` (matriz viva, ecoada em `/me.permissions`). Sem permissão nova: a busca já é owner-scoped; o servidor continua recusando PATCH de outro dono com 404. |
@@ -826,9 +827,8 @@ Followups abertos:
 - **`/api/auth/*` fica fora da cota autenticada**, então `POST /api/auth/refresh` — uma
   transação `SERIALIZABLE`, a escrita autenticada mais cara do pool — segue sem medição;
   ali só existe `attemptlimit`, que conta falhas. O `limit_req` do nginx cobre o grosso.
-- **`GET /api/links/url-metadata` faz uma busca externa por chamada e não consome cota**,
-  porque a cota conta só verbos mutantes. É o caminho mais barato para um usuário
-  autenticado saturar o fetcher. Merece um balde de leitura cara, não uma cota de leitura.
+- **`POST /api/links/url-metadata` consome a cota cara** (fechado 2026-09-05: o GET
+  virou POST, entra em `expensiveRoutes`, e um slot in-flight recusa extras com 429).
 - **O 429 aparece em prosa inglesa numa UI em português.** `apiErrorMessage` devolve a
   mensagem do servidor verbatim por desenho — existe para regras CONFIGURÁVEIS, cujo texto
   do cliente diria o número errado — então isto vale para TODO código de erro do app, não

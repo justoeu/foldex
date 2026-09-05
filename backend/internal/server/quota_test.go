@@ -424,7 +424,10 @@ func TestIsExpensive_MatchesTheRouteShapeAndNothingElse(t *testing.T) {
 		// limit bounds the bytes, not the pixels.
 		{http.MethodPost, "/api/links/42/image", true},
 		{http.MethodPost, "/api/notes/images", true},
+		// Chromium fallback + outbound HTTP: the former GET was unmetered.
+		{http.MethodPost, "/api/links/url-metadata", true},
 
+		{http.MethodGet, "/api/links/url-metadata", false},
 		{http.MethodGet, "/api/import/apply", false},
 		{http.MethodGet, "/api/links/42/image", false},
 		{http.MethodPost, "/api/links", false},
@@ -461,6 +464,11 @@ func TestExpensiveRoutes_EveryPatternNamesARouteTheRouterMounts(t *testing.T) {
 		assert.Truef(t, mounted[method+" "+normalizeRoutePath(path)],
 			"expensive route %q is not mounted by the router — it names nothing", pattern)
 	}
+
+	assert.True(t, mounted["POST /api/links/url-metadata"],
+		"POST /api/links/url-metadata must be mounted so CSRF, writeGate and the quota apply")
+	assert.False(t, mounted["GET /api/links/url-metadata"],
+		"GET /api/links/url-metadata must not remain — it bypassed CSRF and the write quota")
 }
 
 // When the object store is down, screenshot/upload used to be omitted from the

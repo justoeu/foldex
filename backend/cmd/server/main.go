@@ -117,7 +117,7 @@ func main() {
 
 	worker := preview.NewWorker(pool, cfg.PreviewConcurrency, time.Duration(cfg.PreviewTimeoutSec)*time.Second, logger)
 
-	// Dedicated Fetcher for the synchronous GET /api/links/url-metadata
+	// Dedicated Fetcher for the synchronous POST /api/links/url-metadata
 	// endpoint that pre-fills the LinkDialog Title/Description. Reuses
 	// preview.NewFetcher so the SSRF guards (IMDS always blocked, RFC1918
 	// gated by PREVIEW_STRICT_SSRF) are identical to the async worker —

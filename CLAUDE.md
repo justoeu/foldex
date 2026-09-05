@@ -123,7 +123,7 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **Every screenshot capture gets a fresh Chromium BrowserContext and a per-capture strict local proxy** → [INV-084](docs/INVARIANTS.md#inv-084)
 - **Manual screenshot endpoint applies the same SSRF gate** → [INV-085](docs/INVARIANTS.md#inv-085)
 - **Screenshot resource budgets are fail-closed** → [INV-086](docs/INVARIANTS.md#inv-086)
-- **`GET /api/links/url-metadata` reuses the preview `Fetcher` — same SSRF posture, no duplicate HTTP client** → [INV-087](docs/INVARIANTS.md#inv-087)
+- **`POST /api/links/url-metadata` reuses the preview `Fetcher` — same SSRF posture, no duplicate HTTP client** → [INV-087](docs/INVARIANTS.md#inv-087)
 - **oEmbed enrichment reuses the SAME `preview.Fetcher` client — never a second HTTP stack** → [INV-088](docs/INVARIANTS.md#inv-088)
 - **The cookie `Secure` flag is derived from `AUTH_PUBLIC_URL`'s scheme, NOT from the bind address** → [INV-091](docs/INVARIANTS.md#inv-091) | guard: `TestLoad_CookieSecureFollowsThePublicURLScheme`
 - **`SetSession` expires `fx_pa`** → [INV-092](docs/INVARIANTS.md#inv-092)

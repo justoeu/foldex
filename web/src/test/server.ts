@@ -195,7 +195,6 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     // /recent-changes is static — keep it before /api/links so the static
     // path matches first; the catch-all /api/links handler is fine after.
     { url: /^\/api\/links\/recent-changes$/, handle: listRecentChanges },
-    { url: /^\/api\/links\/url-metadata$/, handle: fetchUrlMetadata },
     { url: /^\/api\/links\/by-url$/, handle: getLinkByURL },
     { url: /^\/api\/links$/, handle: listLinks },
     { url: /^\/api\/entries$/, handle: listEntries },
@@ -262,6 +261,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     } },
     { url: /^\/api\/tags$/, handle: createTag },
     { url: /^\/api\/folders$/, handle: createFolder },
+    { url: /^\/api\/links\/url-metadata$/, handle: fetchUrlMetadata },
     { url: /^\/api\/links\/(\d+)\/refresh-preview$/, handle: refreshPreview },
     { url: /^\/api\/links\/(\d+)\/screenshot$/, handle: captureScreenshot },
     { url: /^\/api\/links\/(\d+)\/seen-change$/, handle: seenChange },
@@ -625,8 +625,8 @@ function deleteBackupSchedule(m: RegExpMatchArray, _d: any, _p: URLSearchParams,
   return null
 }
 
-function fetchUrlMetadata(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState) {
-  const requested = params.get('url') ?? ''
+function fetchUrlMetadata(_m: RegExpMatchArray, d: any, params: URLSearchParams, s: MockState) {
+  const requested = (typeof d?.url === 'string' ? d.url : params.get('url')) ?? ''
   s.urlMetadataCalls.push(requested)
   if (s.urlMetadataError) throw s.urlMetadataError
   const md = s.urlMetadata ?? {}
