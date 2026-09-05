@@ -520,7 +520,7 @@ Reversibilidade honesta: **schema volta, dados de identidade não.** Todo `app_u
   "email_otp_available": true, "expires_at": "2026-08-03T12:05:00Z" }
 ```
 
-**Erros do login** — todos `401` com o mesmo corpo `{"error":{"code":"invalid_credentials","message":"invalid e-mail or password"}}`, para e-mail inexistente, senha errada e conta desabilitada. `429 too_many_attempts` com header `Retry-After` quando um bucket estoura.
+**Erros do login** — todos `401` com o mesmo corpo `{"error":{"code":"invalid_credentials","message":"invalid e-mail or password"}}`, para e-mail inexistente, senha errada, conta desabilitada **e lockout do balde por conta**. `429 too_many_attempts` com header `Retry-After` só quando o balde de ORIGEM estoura (spray). O balde por conta continua trancando — a senha certa também é recusada — mas um 429 ali ligava username à caixa.
 
 ### 4.2 Senha, convites e verificação
 

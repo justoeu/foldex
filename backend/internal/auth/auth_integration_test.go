@@ -828,7 +828,10 @@ func TestLogin_RateLimitedPerEmail(t *testing.T) {
 	testdb.SeedUserWithPassword(t, h.pool, "target@example.com", "a good password", "editor")
 	c := h.client(t)
 
-	// The e-mail bucket caps at 5 consecutive failures.
+	// The e-mail bucket caps at 5 consecutive failures. The 6th is still 401 —
+	// a 429 here is a username-to-mailbox oracle because the bucket is keyed
+	// on the resolved account (INV-041). Lockout is that a valid credential
+	// is refused too, with no session cookie.
 	for i := range 5 {
 		rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
 			"email": "target@example.com", "password": "wrong",
@@ -838,16 +841,17 @@ func TestLogin_RateLimitedPerEmail(t *testing.T) {
 	rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "target@example.com", "password": "wrong",
 	})
-	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
-	assert.Equal(t, "too_many_attempts", errCode(t, rec))
-	assert.NotEmpty(t, rec.Header().Get("Retry-After"), "a 429 must tell the client when to retry")
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, "invalid_credentials", errCode(t, rec))
+	assert.Empty(t, rec.Header().Get("Retry-After"),
+		"Retry-After on an account lockout is the oracle in a header")
 
-	// The correct password is refused too: a lockout that a valid credential
-	// walks straight through protects nothing.
 	rec = c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "target@example.com", "password": "a good password",
 	})
-	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Nil(t, cookieByName(rec, auth.CookieAccess),
+		"a lockout that a valid credential walks straight through protects nothing")
 }
 
 // Not incrementing the bucket for an unknown address is itself an oracle: the
@@ -860,11 +864,21 @@ func TestLogin_RateLimitCountsUnknownEmailsToo(t *testing.T) {
 			"email": "ghost@example.com", "password": "wrong",
 		})
 	}
+	// Counting still happens — the transition writes the same audit row a
+	// real account does. The 6th request must not grow a 429: that status
+	// is how an attacker used to learn which strings are lockable.
+	var rows int
+	require.NoError(t, h.pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM audit_log WHERE action = 'auth.rate_limited'`).Scan(&rows))
+	assert.Equal(t, 1, rows, "an unknown address must consume its bucket exactly like a real one")
+
 	rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "ghost@example.com", "password": "wrong",
 	})
-	assert.Equal(t, http.StatusTooManyRequests, rec.Code,
-		"an unknown address must consume its bucket exactly like a real one")
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"an unknown address's lockout must look like a miss, not like a lockable name")
+	assert.Equal(t, "invalid_credentials", errCode(t, rec))
+	assert.Empty(t, rec.Header().Get("Retry-After"))
 }
 
 // ─────────────────────────────────────────────────────────────────────

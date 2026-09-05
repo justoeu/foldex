@@ -109,8 +109,9 @@ não fez nada para merecer.
 
 ### 3.2 O que já está bem resolvido
 
-- **Login é byte-idêntico** para e-mail desconhecido, senha errada e conta desativada
-  (INV-041), com `burnDummyHash` e piso de duração. Sem oráculo de enumeração.
+- **Login é byte-idêntico** para e-mail desconhecido, senha errada, conta desativada
+  e lockout do balde por conta (INV-041), com `burnDummyHash` e piso de duração. Sem
+  oráculo de enumeração nem de username↔caixa. `429` fica no balde de origem.
 - **Chave do balde de e-mail é normalizada e resolvida** — `A@x.com`, `a@x.com ` e o
   username da mesma conta caem no mesmo orçamento, em vez de 5 tentativas novas por
   grafia.
