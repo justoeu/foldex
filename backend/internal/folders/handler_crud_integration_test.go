@@ -175,8 +175,7 @@ func TestHandler_Delete_DefaultAndCascade(t *testing.T) {
 }
 
 func TestHandler_ResetPassword_NotFoundAndBadJSON(t *testing.T) {
-	master := fakeMaster{configured: true, password: "master-ok"}
-	h, _, _ := newHandlerRouterMaster(t, master)
+	h, _, _ := newHandlerRouterLiveMaster(t, "master-ok")
 
 	rr := doJSON(t, h, http.MethodPost, "/folders/999999/reset-password",
 		map[string]any{"master_password": "master-ok"})

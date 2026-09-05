@@ -459,18 +459,44 @@ func checkHintNotPassword(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id
 	return nil
 }
 
-// ResetPasswordByMaster clears a folder's password AND hint. Used by the
-// master-password recovery flow (ADR-29) after the master has been verified by
-// the handler. Because the unlock-token HMAC input includes the folder's
-// password_hash, nulling it here invalidates every previously issued unlock
-// token automatically. Returns ErrNotFound when the folder does not exist.
-func (r *Repository) ResetPasswordByMaster(ctx context.Context, uid authctx.UserID, id int64) error {
-	ct, err := r.pool.Exec(ctx, `UPDATE folder SET password_hash = NULL, password_hint = NULL WHERE user_id = $1 AND id = $2`, int64(uid), id)
+// ResetPasswordByMaster clears a folder's password AND hint after re-proving
+// the master under the user-row lock (RACE-HER-002). The handler may have
+// already bcrypt'd; this CAS is what stops a proof of hash H1 from clearing
+// folders after a concurrent rotation to H2. The unlock-token HMAC input
+// includes password_hash, so nulling it invalidates outstanding tokens.
+func (r *Repository) ResetPasswordByMaster(ctx context.Context, uid authctx.UserID, id int64, plain string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin master reset: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var live *string
+	err = tx.QueryRow(ctx,
+		`SELECT master_password_hash FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).Scan(&live)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrMasterNotConfigured
+	}
+	if err != nil {
+		return fmt.Errorf("lock master password: %w", err)
+	}
+	if live == nil {
+		return ErrMasterNotConfigured
+	}
+	if !VerifyPassword(*live, plain) {
+		return ErrStaleMasterProof
+	}
+	ct, err := tx.Exec(ctx,
+		`UPDATE folder SET password_hash = NULL, password_hint = NULL WHERE user_id = $1 AND id = $2`,
+		int64(uid), id)
 	if err != nil {
 		return fmt.Errorf("reset folder password: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
 		return domainerr.ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit master reset: %w", err)
 	}
 	return nil
 }
