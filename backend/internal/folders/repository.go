@@ -283,9 +283,9 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 
 	// Hint handling. Removing the password (PasswordSet && Password == nil)
 	// also clears any hint — a hint for a nonexistent password is dead data.
-	// Otherwise apply an explicit hint change. The equality check (hint must
-	// not equal the effective password) needs the folder's live hash, so it
-	// runs inside the tx below via hintToValidate.
+	// Otherwise apply an explicit hint change. Password-only writes leave
+	// the column untouched, so updateOnce still loads the live hint and
+	// runs checkHintNotPassword against the new hash (INV-067).
 	clearHintWithPassword := in.PasswordSet && in.Password == nil
 	var hintToValidate *string
 	var noHint *string
@@ -369,6 +369,16 @@ func (r *Repository) updateOnce(
 		if err := checkParentCycle(ctx, tx, uid, id, *in.ParentID); err != nil {
 			return Folder{}, err
 		}
+	}
+	if hintToValidate == nil && in.PasswordSet && newPasswordHash != nil && !in.PasswordHintSet {
+		var liveHint *string
+		if err := tx.QueryRow(ctx, `SELECT password_hint FROM folder WHERE user_id = $1 AND id = $2`, int64(uid), id).Scan(&liveHint); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return Folder{}, domainerr.ErrNotFound
+			}
+			return Folder{}, fmt.Errorf("read password hint for equality check: %w", err)
+		}
+		hintToValidate = liveHint
 	}
 	if hintToValidate != nil {
 		if err := checkHintNotPassword(ctx, tx, uid, id, in.PasswordSet, newPasswordHash, *hintToValidate); err != nil {

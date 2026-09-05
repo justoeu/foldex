@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,6 +25,10 @@ import (
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/pwhash"
 )
+
+// ErrHintMatchesPassword is the INV-066/067 sentinel: a master write must
+// not leave the non-secret reminder equal to the recovery secret.
+var ErrHintMatchesPassword = errors.New("hint must not be the same as the password")
 
 type Repository struct {
 	pool *pgxpool.Pool
@@ -78,6 +83,15 @@ func (r *Repository) MasterPasswordHint(ctx context.Context, uid authctx.UserID)
 //   - non-nil, ""    → clear the hint
 //   - non-nil, "x"   → set/replace the hint (stored verbatim, never hashed)
 func (r *Repository) SetMasterPassword(ctx context.Context, uid authctx.UserID, plain string, hint *string) error {
+	if hint == nil {
+		stored, err := r.MasterPasswordHint(ctx, uid)
+		if err != nil {
+			return err
+		}
+		if stored != nil && strings.EqualFold(strings.TrimSpace(*stored), strings.TrimSpace(plain)) {
+			return ErrHintMatchesPassword
+		}
+	}
 	hash, err := pwhash.Hash(plain)
 	if err != nil {
 		return fmt.Errorf("hash master password: %w", err)
