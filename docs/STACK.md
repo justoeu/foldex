@@ -19,7 +19,7 @@
 | golang.org/x/crypto (bcrypt) | `v0.55.0` | Folder-password hashing — `internal/folders/password.go`. Already in `go.sum` as indirect before this landed. |
 | Vite / React / TS / Vitest / jsdom | `^8 / ^19.2 / ^6 / ^4.1 / ^29` | |
 | MUI | `^9.0` | **only** `createTheme` + `ThemeProvider`. Visual lives in `web/src/styles/foldex.css`. |
-| Tiptap | `3.30` (`@tiptap/react` + `@tiptap/starter-kit` + `@tiptap/extension-image` + `@tiptap/extension-placeholder` + `@tiptap/extension-text-align` + `@tiptap/extension-text-style`) | Rich-text editor for notes, with a formatting toolbar (`NoteToolbar.tsx`). `@tiptap/extension-link` and Underline are NOT separate deps — StarterKit v3 bundles both. `@tiptap/extension-text-style` bundles Color + FontFamily. The toolbar's output (text-align/color/font-family styles) MUST stay in lockstep with the server sanitizer allowlist (§4). |
+| Tiptap | `3.31.3` (`@tiptap/react` + `@tiptap/starter-kit` + `@tiptap/extension-image` + `@tiptap/extension-placeholder` + `@tiptap/extension-text-align` + `@tiptap/extension-text-style`) | Rich-text editor for notes, with a formatting toolbar (`NoteToolbar.tsx`). Exact peers stay in lockstep (GHSA-cp6q-959q-f8rh). `@tiptap/extension-link` and Underline are NOT separate deps — StarterKit v3 bundles both. `@tiptap/extension-text-style` bundles Color + FontFamily. The toolbar's output (text-align/color/font-family styles) MUST stay in lockstep with the server sanitizer allowlist (§4). |
 | react-i18next | `^17` (wraps i18next `^26`) | en (source-of-truth) / pt / es. New visible strings MUST go through `t()` and ship in all 3 locales. Plurals use `_one`/`_other` (not legacy `_plural`). |
 | TanStack Query | `^5.101` | |
 | Testing Library / vite-plugin-pwa | `^16.3 / ^1.3` | |
