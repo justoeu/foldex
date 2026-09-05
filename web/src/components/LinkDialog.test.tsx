@@ -923,6 +923,45 @@ describe('LinkDialog', () => {
     await waitFor(() => expect(state.links[0].og_image_url).toContain('/api/files/screenshots/51'))
   })
 
+  // Create then image-upload is two requests. If the image fails, the row
+  // already exists — Save again must retry the image against that id, not
+  // POST a second bookmark (and uniqueness would then lock the dialog).
+  it('imageFailureRetriesAgainstCreatedId', async () => {
+    state.linkImageUploadError = {
+      status: 503,
+      code: 'storage_unavailable',
+      message: 'image storage is unavailable',
+    }
+    const onClose = vi.fn()
+    const { container } = renderWithProviders(<LinkDialog open link={null} onClose={onClose} />)
+    const user = userEvent.setup()
+    await user.type(screen.getByRole('textbox', { name: /^URL$/i }), 'https://img-retry.example')
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, {
+      target: { files: [new File(['x'], 'cover.png', { type: 'image/png' })] },
+    })
+
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
+    expect(await screen.findByText(/image storage is unavailable/i)).toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(state.links).toHaveLength(1)
+    const createdId = state.links[0].id
+    const createPosts = () => vi.mocked(http.post).mock.calls.filter(([url]) => url === '/api/links')
+    const imagePosts = () => vi.mocked(http.post).mock.calls.filter(
+      ([url]) => url === `/api/links/${createdId}/image`,
+    )
+    expect(createPosts()).toHaveLength(1)
+    expect(imagePosts()).toHaveLength(1)
+
+    state.linkImageUploadError = undefined
+    await user.click(screen.getByRole('button', { name: /Save link/i }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(createPosts()).toHaveLength(1)
+    expect(imagePosts()).toHaveLength(2)
+    expect(state.links).toHaveLength(1)
+    expect(state.links[0].og_image_url).toContain(`/api/files/links/${createdId}`)
+  })
+
   it('names a missing object store instead of echoing axios 404', async () => {
     const link = {
       id: 52, url: 'https://example.test', title: 'X', slug: 'x',
