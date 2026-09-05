@@ -1,82 +1,84 @@
 package auth
 
 import (
+	"context"
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/pkg/httperr"
 )
 
 // TestPasswordValidationHasOneOwner is the DUP-ECH-004 twin of DUP-ECH-002:
 // two methods independently rune-count a password against max(policy, 8).
 // A third bound added to one writer of credentials would miss admin-create
-// (or vice versa). The scan looks for the envelope code, not the identifier,
-// because renaming the helper is how a second copy would hide.
+// (or vice versa). The scan looks at the floor BODY (rune-count + byte cap)
+// as well as the envelope codes, because renaming the helper — or swapping
+// the envelope string — is how a second copy would hide.
 func TestPasswordValidationHasOneOwner(t *testing.T) {
 	var owners []string
-	fset := token.NewFileSet()
-
-	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	err := walkProductionFuncs(func(path string, fn *ast.FuncDecl) {
+		if !ownsPasswordFloor(fn) {
+			return
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		f, perr := parser.ParseFile(fset, path, nil, 0)
-		if perr != nil {
-			return perr
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			fn, ok := n.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				return true
-			}
-			if !emitsPasswordTooShort(fn.Body) {
-				return true
-			}
-			name := fn.Name.Name
-			if fn.Recv != nil && len(fn.Recv.List) > 0 {
-				name = recvName(fn.Recv.List[0].Type) + "." + name
-			}
-			owners = append(owners, filepath.ToSlash(path)+":"+name)
-			return true
-		})
-		return nil
+		owners = append(owners, path+":"+funcName(fn))
 	})
 	require.NoError(t, err)
 	require.Len(t, owners, 1,
-		"password_too_short must have one owner, found %v", owners)
+		"password floor (rune-count / byte-cap / envelope) must have one owner, found %v", owners)
 }
 
-func emitsPasswordTooShort(body *ast.BlockStmt) bool {
-	var hit bool
-	ast.Inspect(body, func(n ast.Node) bool {
-		lit, ok := n.(*ast.BasicLit)
-		if !ok {
-			return true
-		}
-		if strings.Contains(lit.Value, "password_too_short") {
-			hit = true
-			return false
+func ownsPasswordFloor(fn *ast.FuncDecl) bool {
+	if fn.Body == nil {
+		return false
+	}
+	var hasRuneCount, hasBound, hasEnvelope bool
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			if x.Sel.Name == "RuneCountInString" {
+				if id, ok := x.X.(*ast.Ident); ok && id.Name == "utf8" {
+					hasRuneCount = true
+				}
+			}
+		case *ast.Ident:
+			switch x.Name {
+			case "MaxPasswordLen", "MinPasswordLen", "passwordFloorOf":
+				hasBound = true
+			}
+		case *ast.BasicLit:
+			if strings.Contains(x.Value, "password_too_short") ||
+				strings.Contains(x.Value, "password_too_long") {
+				hasEnvelope = true
+			}
 		}
 		return true
 	})
-	return hit
+	return hasEnvelope || (hasRuneCount && hasBound)
 }
 
-func recvName(expr ast.Expr) string {
-	switch t := expr.(type) {
-	case *ast.StarExpr:
-		return recvName(t.X)
-	case *ast.Ident:
-		return t.Name
-	default:
-		return "?"
+func TestValidatePassword_BothHandlersRefuseTooShortAndTooLong(t *testing.T) {
+	ctx := context.Background()
+	handlers := []struct {
+		name string
+		fn   func(context.Context, string) error
+	}{
+		{"Handler", (&Handler{}).validatePassword},
+		{"AdminHandler", (&AdminHandler{}).validatePassword},
+	}
+	for _, h := range handlers {
+		t.Run(h.name+"/short", func(t *testing.T) {
+			var he *httperr.Error
+			require.ErrorAs(t, h.fn(ctx, "short"), &he)
+			assert.Equal(t, "password_too_short", he.Code)
+		})
+		t.Run(h.name+"/long", func(t *testing.T) {
+			var he *httperr.Error
+			require.ErrorAs(t, h.fn(ctx, strings.Repeat("x", MaxPasswordLen+1)), &he)
+			assert.Equal(t, "password_too_long", he.Code)
+		})
 	}
 }

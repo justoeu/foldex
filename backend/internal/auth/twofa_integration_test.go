@@ -878,9 +878,10 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	assert.ErrorIs(t, h.repo.StartTOTPEnrollment(ctx, user.ID, stale, 0, []byte("cipher"), []byte("nonce")),
 		auth.ErrChallengeInvalid)
-	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, user.ID, stale,
-		auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")},
-		[][]byte{[]byte("h")}, 0, nil, testSessionTTL(), "", "")
+	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, auth.EnrollmentComplete{
+		UID: user.ID, TokenVersion: stale, RecoveryHashes: [][]byte{[]byte("h")},
+		Session: auth.LiveSession{ID: 0},
+	}, auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")})
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	_, _, err = h.repo.IssueSession(ctx, user.ID, stale, testSessionTTL(), "", "")
 	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
@@ -906,9 +907,10 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	assert.ErrorIs(t, h.repo.StartTOTPEnrollment(ctx, user.ID, user.TokenVersion, 0,
 		[]byte("replacement"), []byte("replacement")), auth.ErrChallengeInvalid)
-	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, user.ID, user.TokenVersion,
-		auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")},
-		[][]byte{[]byte("h")}, 0, nil, testSessionTTL(), "", "")
+	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, auth.EnrollmentComplete{
+		UID: user.ID, TokenVersion: user.TokenVersion, RecoveryHashes: [][]byte{[]byte("h")},
+		Session: auth.LiveSession{ID: 0},
+	}, auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")})
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	_, _, err = h.repo.IssueSession(ctx, user.ID, user.TokenVersion, testSessionTTL(), "", "")
 	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
@@ -1892,10 +1894,11 @@ func TestConfirmTOTP_SeedReplacementBetweenVerifyAndConfirmCannotActivateTheRepl
 	require.NoError(t, h.repo.StartTOTPEnrollment(context.Background(), uid, user.TokenVersion, sid,
 		replacementCiphertext, replacementNonce))
 
-	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), uid, user.TokenVersion,
-		auth.TOTPProof{Counter: time.Now().Unix() / 30,
-			Ciphertext: verified.Ciphertext, Nonce: verified.Nonce},
-		[][]byte{[]byte("h")}, sid, nil, testSessionTTL(), "", "")
+	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), auth.EnrollmentComplete{
+		UID: uid, TokenVersion: user.TokenVersion, RecoveryHashes: [][]byte{[]byte("h")},
+		Session: auth.LiveSession{ID: sid},
+	}, auth.TOTPProof{Counter: time.Now().Unix() / 30,
+		Ciphertext: verified.Ciphertext, Nonce: verified.Nonce})
 	require.ErrorIs(t, err, auth.ErrTOTPEnrollmentChanged,
 		"confirmation activated a seed that was not the one verified")
 
@@ -1997,10 +2000,11 @@ func TestConfirmTOTP_SettingsEnrollmentRefusesARevokedSession(t *testing.T) {
 	require.NoError(t, err)
 	row, err := h.repo.LoadTOTPSecret(context.Background(), user.ID)
 	require.NoError(t, err)
-	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), user.ID, user.TokenVersion,
-		auth.TOTPProof{Counter: time.Now().Unix() / 30,
-			Ciphertext: row.Ciphertext, Nonce: row.Nonce},
-		[][]byte{[]byte("recovery")}, sid, nil, testSessionTTL(), "", "")
+	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), auth.EnrollmentComplete{
+		UID: user.ID, TokenVersion: user.TokenVersion, RecoveryHashes: [][]byte{[]byte("recovery")},
+		Session: auth.LiveSession{ID: sid},
+	}, auth.TOTPProof{Counter: time.Now().Unix() / 30,
+		Ciphertext: row.Ciphertext, Nonce: row.Nonce})
 	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
 
 	var confirmed bool
@@ -2036,10 +2040,11 @@ func TestConfirmTOTP_SettingsEnrollmentIsBoundToTheStartingSession(t *testing.T)
 		SELECT id FROM session WHERE access_token_hash = $1`,
 		secrets.Hash(second.cookies[auth.CookieAccess])).Scan(&secondSession))
 
-	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), user.ID, user.TokenVersion,
-		auth.TOTPProof{Counter: time.Now().Unix() / 30,
-			Ciphertext: row.Ciphertext, Nonce: row.Nonce},
-		[][]byte{[]byte("recovery")}, secondSession, nil, testSessionTTL(), "", "")
+	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), auth.EnrollmentComplete{
+		UID: user.ID, TokenVersion: user.TokenVersion, RecoveryHashes: [][]byte{[]byte("recovery")},
+		Session: auth.LiveSession{ID: secondSession},
+	}, auth.TOTPProof{Counter: time.Now().Unix() / 30,
+		Ciphertext: row.Ciphertext, Nonce: row.Nonce})
 	assert.ErrorIs(t, err, auth.ErrTOTPEnrollmentChanged)
 
 	current, err := h.repo.LoadTOTPSecret(context.Background(), user.ID)

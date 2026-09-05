@@ -838,9 +838,10 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 		assert.Error(t, h.repo.StartTOTPEnrollment(ctx, uid, 0, 0, []byte("x"), []byte("y")))
 		_, err := h.repo.LoadTOTPSecret(ctx, uid)
 		assert.Error(t, err)
-		_, _, err = h.repo.CompleteTOTPEnrollment(ctx, uid, 0,
-			auth.TOTPProof{Counter: 1, Ciphertext: []byte("x"), Nonce: []byte("y")},
-			[][]byte{[]byte("h")}, 0, nil, testSessionTTL(), "", "")
+		_, _, err = h.repo.CompleteTOTPEnrollment(ctx, auth.EnrollmentComplete{
+			UID: uid, TokenVersion: 0, RecoveryHashes: [][]byte{[]byte("h")},
+			Session: auth.LiveSession{ID: 0},
+		}, auth.TOTPProof{Counter: 1, Ciphertext: []byte("x"), Nonce: []byte("y")})
 		assert.Error(t, err)
 		assert.Error(t, h.repo.ConsumeTOTPProof(ctx, uid, auth.TOTPProof{Counter: 1}))
 		assert.Error(t, h.repo.DisableTOTP(ctx, uid, 1, 0, "password", auth.SecondFactorProof{}))
@@ -852,8 +853,10 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 	t.Run("email factor", func(t *testing.T) {
 		assert.Error(t, h.repo.StartEmailFactorEnrollment(ctx, uid, 0, 0,
 			[]byte("hash"), time.Minute, time.Minute, auth.MailDraft{}))
-		_, _, err := h.repo.CompleteEmailFactorEnrollment(ctx, uid, 0, []byte("hash"),
-			[][]byte{[]byte("h")}, 0, nil, testSessionTTL(), "", "")
+		_, _, err := h.repo.CompleteEmailFactorEnrollment(ctx, auth.EnrollmentComplete{
+			UID: uid, TokenVersion: 0, RecoveryHashes: [][]byte{[]byte("h")},
+			Session: auth.LiveSession{ID: 0},
+		}, []byte("hash"))
 		assert.Error(t, err)
 		assert.Error(t, h.repo.DisableEmailFactor(ctx, uid, 1, 0, auth.SecondFactorProof{}))
 		assert.Error(t, h.repo.CreateStepUpEmailOTP(ctx, uid, 1, 0,
@@ -908,9 +911,10 @@ func TestTwoFactorRepository_NotFoundIsTyped(t *testing.T) {
 	_, err := h.repo.LoadTOTPSecret(ctx, uid)
 	assert.ErrorIs(t, err, auth.ErrNoTOTP)
 
-	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, uid, 0,
-		auth.TOTPProof{Counter: 1, Ciphertext: []byte("x"), Nonce: []byte("y")},
-		[][]byte{[]byte("h")}, sid, nil, testSessionTTL(), "", "")
+	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, auth.EnrollmentComplete{
+		UID: uid, TokenVersion: 0, RecoveryHashes: [][]byte{[]byte("h")},
+		Session: auth.LiveSession{ID: sid},
+	}, auth.TOTPProof{Counter: 1, Ciphertext: []byte("x"), Nonce: []byte("y")})
 	assert.ErrorIs(t, err, auth.ErrNoTOTP)
 	assert.ErrorIs(t, h.repo.ConsumeTOTPProof(ctx, uid, auth.TOTPProof{Counter: 1}), auth.ErrTOTPReplay)
 	assert.ErrorIs(t, h.repo.ConsumeRecoveryCode(ctx, uid, []byte("nope")), auth.ErrBadCredentials)
@@ -954,9 +958,10 @@ func TestLegacyPendingTOTPEnrollmentWithoutEpochFailsClosed(t *testing.T) {
 		VALUES ($1, $2, $3)`, int64(uid), []byte("cipher"), []byte("nonce"))
 	require.NoError(t, err)
 
-	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, uid, 0,
-		auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")},
-		[][]byte{[]byte("h")}, sid, nil, testSessionTTL(), "", "")
+	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, auth.EnrollmentComplete{
+		UID: uid, TokenVersion: 0, RecoveryHashes: [][]byte{[]byte("h")},
+		Session: auth.LiveSession{ID: sid},
+	}, auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")})
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	var confirmed bool
 	require.NoError(t, h.pool.QueryRow(ctx,

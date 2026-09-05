@@ -130,14 +130,12 @@ func (r *Repository) StartEmailFactorEnrollment(ctx context.Context, uid authctx
 // channel cannot satisfy both steps. Without recovery codes that safety property
 // would become a lockout: the user would hold a factor the flow refuses to
 // accept and no other way in.
-func (r *Repository) CompleteEmailFactorEnrollment(ctx context.Context, uid authctx.UserID,
-	tokenVersion int, codeHash []byte, recoveryHashes [][]byte, sessionID int64,
-	challenge *Challenge, ttl SessionTTL, ip, ua string) (User, issuedTokens, error) {
-
+func (r *Repository) CompleteEmailFactorEnrollment(ctx context.Context, in EnrollmentComplete, codeHash []byte) (User, issuedTokens, error) {
+	pre := in.preAuth()
 	var issue sessionIssue
 	var err error
-	if challenge != nil {
-		issue, err = newSessionIssue(ttl)
+	if pre != nil {
+		issue, err = newSessionIssue(pre.TTL)
 		if err != nil {
 			return User{}, issuedTokens{}, err
 		}
@@ -152,15 +150,15 @@ func (r *Repository) CompleteEmailFactorEnrollment(ctx context.Context, uid auth
 	err = tx.QueryRow(ctx, `
 		SELECT id FROM app_user
 		WHERE id = $1 AND status = 'active' AND token_version = $2
-		FOR NO KEY UPDATE`, int64(uid), tokenVersion).Scan(&lockedUser)
+		FOR NO KEY UPDATE`, int64(in.UID), in.TokenVersion).Scan(&lockedUser)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, issuedTokens{}, ErrChallengeInvalid
 	}
 	if err != nil {
 		return User{}, issuedTokens{}, fmt.Errorf("complete email factor lock user: %w", err)
 	}
-	if challenge == nil {
-		if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
+	if pre == nil {
+		if err := requireLiveSessionTx(ctx, tx, in.UID, in.liveSessionID()); err != nil {
 			return User{}, issuedTokens{}, err
 		}
 	}
@@ -172,7 +170,7 @@ func (r *Repository) CompleteEmailFactorEnrollment(ctx context.Context, uid auth
 		UPDATE email_otp SET consumed_at = now()
 		WHERE user_id = $1 AND purpose = $2 AND code_hash = $3
 		  AND consumed_at IS NULL AND expires_at > now()`,
-		int64(uid), OTPPurposeEnrollEmail2FA, codeHash)
+		int64(in.UID), OTPPurposeEnrollEmail2FA, codeHash)
 	if err != nil {
 		return User{}, issuedTokens{}, fmt.Errorf("complete email factor consume code: %w", err)
 	}
@@ -191,7 +189,7 @@ func (r *Repository) CompleteEmailFactorEnrollment(ctx context.Context, uid auth
 		WHERE user_id = $1 AND confirmed_at IS NULL
 		  AND enrollment_token_version = $2
 		  AND ($3::bigint = 0 OR enrollment_session_id = $3)`,
-		int64(uid), tokenVersion, sessionID)
+		int64(in.UID), in.TokenVersion, in.liveSessionID())
 	if err != nil {
 		return User{}, issuedTokens{}, fmt.Errorf("complete email factor confirm: %w", err)
 	}
@@ -199,32 +197,32 @@ func (r *Repository) CompleteEmailFactorEnrollment(ctx context.Context, uid auth
 		return User{}, issuedTokens{}, ErrNoPendingFactor
 	}
 
-	if err := replaceRecoveryCodesTx(ctx, tx, uid, recoveryHashes); err != nil {
+	if err := replaceRecoveryCodesTx(ctx, tx, in.UID, in.RecoveryHashes); err != nil {
 		return User{}, issuedTokens{}, err
 	}
 
-	if challenge != nil {
+	if pre != nil {
 		ct, err := tx.Exec(ctx, `
 			UPDATE auth_challenge SET consumed_at = now()
 			WHERE id = $1 AND user_id = $2 AND purpose = 'enroll_2fa'
 			  AND token_version = $3 AND consumed_at IS NULL AND expires_at > now()`,
-			challenge.ID, int64(uid), tokenVersion)
+			pre.Challenge.ID, int64(in.UID), in.TokenVersion)
 		if err != nil {
 			return User{}, issuedTokens{}, fmt.Errorf("complete email factor consume challenge: %w", err)
 		}
 		if ct.RowsAffected() == 0 {
 			return User{}, issuedTokens{}, ErrChallengeInvalid
 		}
-		if _, err := issueSessionTx(ctx, tx, uid, issue, ip, ua); err != nil {
+		if _, err := issueSessionTx(ctx, tx, in.UID, issue, pre.IP, pre.UA); err != nil {
 			return User{}, issuedTokens{}, err
 		}
 		if _, err := tx.Exec(ctx,
-			`UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(uid)); err != nil {
+			`UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(in.UID)); err != nil {
 			return User{}, issuedTokens{}, fmt.Errorf("complete email factor touch user: %w", err)
 		}
 	}
 
-	user, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM app_user WHERE id = $1`, int64(uid)))
+	user, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM app_user WHERE id = $1`, int64(in.UID)))
 	if err != nil {
 		return User{}, issuedTokens{}, fmt.Errorf("complete email factor load user: %w", err)
 	}
