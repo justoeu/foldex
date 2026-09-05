@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	LeaseTTL       = 24 * time.Hour
-	DeleteBatchMax = 100
+	LeaseTTL        = 24 * time.Hour
+	DeleteBatchMax  = 100
+	objectDeleteMax = 1000
 )
 
 type RestoredRef struct {
@@ -23,6 +24,7 @@ type RestoredRef struct {
 
 type ObjectDeleter interface {
 	DeleteObject(ctx context.Context, key string) error
+	DeleteObjects(ctx context.Context, keys []string) error
 }
 
 func RegisterLease(ctx context.Context, pool *pgxpool.Pool, uid authctx.UserID, key string) error {
@@ -203,7 +205,7 @@ func RestoreRefs(ctx context.Context, tx pgx.Tx, uid authctx.UserID, keys []stri
 
 // DeleteOwnedUnreferenced holds row locks across the bounded object-store
 // deletes, preventing a concurrent note save from claiming a key after the
-// authorization check but before DeleteObject.
+// authorization check but before DeleteObjects.
 func DeleteOwnedUnreferenced(ctx context.Context, pool *pgxpool.Pool, uid authctx.UserID, candidates []string, storage ObjectDeleter) (int64, error) {
 	if storage == nil || len(candidates) == 0 {
 		return 0, nil
@@ -234,17 +236,7 @@ func DeleteOwnedUnreferenced(ctx context.Context, pool *pgxpool.Pool, uid authct
 	if err != nil {
 		return 0, err
 	}
-	deleted := make([]string, 0, len(keys))
-	var deleteErr error
-	for _, key := range keys {
-		if err := storage.DeleteObject(ctx, key); err != nil {
-			if deleteErr == nil {
-				deleteErr = fmt.Errorf("delete note media object %q: %w", key, err)
-			}
-			continue
-		}
-		deleted = append(deleted, key)
-	}
+	deleted, deleteErr := deleteLockedObjects(ctx, storage, keys)
 	if len(deleted) > 0 {
 		if _, err := tx.Exec(ctx, `
             DELETE FROM note_media
@@ -262,6 +254,30 @@ func DeleteOwnedUnreferenced(ctx context.Context, pool *pgxpool.Pool, uid authct
 		return 0, fmt.Errorf("commit note media cleanup: %w", err)
 	}
 	return int64(len(deleted)), deleteErr
+}
+
+func deleteLockedObjects(ctx context.Context, storage ObjectDeleter, keys []string) ([]string, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	if err := deleteStorageObjects(ctx, storage, keys); err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+func deleteStorageObjects(ctx context.Context, storage ObjectDeleter, keys []string) error {
+	var firstErr error
+	for start := 0; start < len(keys); start += objectDeleteMax {
+		end := start + objectDeleteMax
+		if end > len(keys) {
+			end = len(keys)
+		}
+		if err := storage.DeleteObjects(ctx, keys[start:end]); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("delete note media objects: %w", err)
+		}
+	}
+	return firstErr
 }
 
 func expireReleased(ctx context.Context, tx pgx.Tx, uid authctx.UserID, keys []string) ([]string, error) {

@@ -260,7 +260,7 @@ func New(d Deps) http.Handler {
 	// redirect) and /n/{id-or-slug} (note render) are public share
 	// surfaces resolved by slug.
 	linksRepo := links.NewRepository(d.Pool)
-	notesRepo := notes.NewRepository(d.Pool).WithStorage(d.Storage)
+	notesRepo := notes.NewRepository(d.Pool).WithStorage(d.Storage).WithLogger(d.Logger)
 	var fileHandler *links.ScreenshotHandler
 	if d.Screenshotter != nil && d.Storage != nil {
 		if d.ScreenshotURL == nil {

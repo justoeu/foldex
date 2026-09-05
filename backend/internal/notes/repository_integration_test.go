@@ -3,7 +3,10 @@
 package notes_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"math/big"
 	"strconv"
 	"testing"
@@ -44,6 +47,24 @@ func (b *mediaBucket) DeleteObject(_ context.Context, key string) error {
 	delete(b.objects, key)
 	return nil
 }
+
+func (b *mediaBucket) DeleteObjects(ctx context.Context, keys []string) error {
+	for _, key := range keys {
+		if err := b.DeleteObject(ctx, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type failingMediaBucket struct {
+	*mediaBucket
+	err error
+}
+
+func (b *failingMediaBucket) DeleteObject(context.Context, string) error { return b.err }
+
+func (b *failingMediaBucket) DeleteObjects(context.Context, []string) error { return b.err }
 
 func setup(t *testing.T) (context.Context, authctx.UserID, *notes.Repository, *tags.Repository, *folders.Repository) {
 	t.Helper()
@@ -414,6 +435,34 @@ func TestRepository_OwnedMediaIsCleanedWhenLastReferenceIsDeleted(t *testing.T) 
 	assert.NotContains(t, bucket.objects, key)
 	assert.Zero(t, scalarCount(t, pool,
 		`SELECT count(*) FROM note_media WHERE user_id = $1 AND object_key = $2`, int64(uid), key))
+}
+
+func TestRepository_FailedNoteMediaDeleteIsVisibleAfterSuccessfulNoteDelete(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
+	const key = "notes/7c1f0c2a-9e11-4b2a-8f0d-1a2b3c4d5e6f.jpg"
+	bucket := &failingMediaBucket{
+		mediaBucket: &mediaBucket{objects: map[string][]byte{key: []byte("owned-bytes")}},
+		err:         errors.New("object store down"),
+	}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	prev := slog.Default()
+	slog.SetDefault(logger)
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	repo := notes.NewRepository(pool)
+	require.NoError(t, repo.RegisterMediaLease(ctx, uid, key))
+	note, err := repo.Create(ctx, uid, notes.CreateInput{
+		Title: "Owned media", BodyHTML: `<img src="/api/files/` + key + `">`,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Delete(ctx, uid, note.ID, bucket), "storage delete must not fail the note delete")
+	_, err = repo.Get(ctx, uid, note.ID)
+	require.ErrorIs(t, err, domainerr.ErrNotFound)
+	assert.Contains(t, logs.String(), "object store down",
+		"a storage delete error after a successful note delete must be visible")
 }
 
 func TestRepository_UpdateCleansMediaAfterRemovingLastReference(t *testing.T) {

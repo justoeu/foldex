@@ -123,6 +123,7 @@ func capturePage(ctx context.Context, browser *rod.Browser, contextID proto.Brow
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errPageOpen, err)
 	}
+	defer uncacheRodPage(page)
 	var requests atomic.Int64
 	var budgetExceeded atomic.Bool
 	router := page.HijackRequests()
@@ -170,6 +171,17 @@ func capturePage(ctx context.Context, browser *rod.Browser, contextID proto.Brow
 		return nil, fmt.Errorf("screenshot: capture: %w", err)
 	}
 	return png, nil
+}
+
+func uncacheRodPage(page *rod.Page) {
+	if page == nil {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultContextCleanupTimeout)
+	defer cancel()
+	if err := page.Context(cleanupCtx).Close(); err != nil {
+		page.Browser().RemoveState(page.TargetID)
+	}
 }
 
 func captureErrorReason(err error) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -26,12 +27,18 @@ import (
 type Repository struct {
 	pool    *pgxpool.Pool
 	storage ports.Uploader
+	logger  *slog.Logger
 }
 
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
 func (r *Repository) WithStorage(storage ports.Uploader) *Repository {
 	r.storage = storage
+	return r
+}
+
+func (r *Repository) WithLogger(logger *slog.Logger) *Repository {
+	r.logger = logger
 	return r
 }
 
@@ -366,7 +373,39 @@ func (r *Repository) cleanupMedia(ctx context.Context, uid authctx.UserID, keys 
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	_, _ = notemedia.DeleteOwnedUnreferenced(cleanupCtx, r.pool, uid, keys, storage)
+	deleted, err := notemedia.DeleteOwnedUnreferenced(cleanupCtx, r.pool, uid, keys, asObjectDeleter(storage))
+	if err != nil {
+		r.loggerOrDefault().Warn("note media cleanup failed", "deleted", deleted, "err", err)
+	}
+}
+
+func (r *Repository) loggerOrDefault() *slog.Logger {
+	if r.logger != nil {
+		return r.logger
+	}
+	return slog.Default()
+}
+
+type uploaderObjectDeleter struct{ ports.Uploader }
+
+func (d uploaderObjectDeleter) DeleteObject(ctx context.Context, key string) error {
+	return d.Uploader.DeleteObject(ctx, key)
+}
+
+func (d uploaderObjectDeleter) DeleteObjects(ctx context.Context, keys []string) error {
+	for _, key := range keys {
+		if err := d.DeleteObject(ctx, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func asObjectDeleter(storage ports.Uploader) notemedia.ObjectDeleter {
+	if d, ok := any(storage).(notemedia.ObjectDeleter); ok {
+		return d
+	}
+	return uploaderObjectDeleter{storage}
 }
 
 func (r *Repository) tagsFor(ctx context.Context, uid authctx.UserID, noteIDs []int64) (map[int64][]tags.Chip, error) {
