@@ -46,7 +46,7 @@ func recordCheckResult(t *testing.T, ctx context.Context, repo *links.Repository
 
 func claimChecks(t *testing.T, ctx context.Context, repo *links.Repository, ids ...int64) map[int64]links.DueLink {
 	t.Helper()
-	due, err := repo.SystemFindDueForCheck(ctx, 1000)
+	due, err := repo.SystemClaimDueForCheck(ctx, 1000)
 	require.NoError(t, err)
 	claims := make(map[int64]links.DueLink, len(ids))
 	for _, claim := range due {
@@ -198,7 +198,7 @@ func TestRepository_UpdatePreview(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
 	created, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x", Title: "x"})
 	fav, og, desc := "https://x/fav.ico", "https://x/og.png", "desc"
-	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusOK, &fav, &og, &desc, nil))
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusOK, links.PreviewPatch{Favicon: &fav, OGImage: &og, Description: &desc}))
 
 	got, _ := lrepo.Get(ctx, uid, created.ID)
 	assert.Equal(t, string(links.StatusOK), got.PreviewStatus)
@@ -214,7 +214,7 @@ func TestUpdatePreview_StatusCAS_PendingOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, string(links.StatusPending), created.PreviewStatus)
 
-	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusOK, nil, nil, nil, nil))
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusOK, links.PreviewPatch{}))
 	got, err := lrepo.Get(ctx, uid, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(links.StatusOK), got.PreviewStatus)
@@ -222,14 +222,14 @@ func TestUpdatePreview_StatusCAS_PendingOnly(t *testing.T) {
 	// Stale worker finishing after status left pending must not flip ok→ok via
 	// overwriting metadata path when already ok — CAS rejects non-pending.
 	msg := "stale"
-	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusFailed, nil, nil, nil, &msg))
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusFailed, links.PreviewPatch{Error: &msg}))
 	got, err = lrepo.Get(ctx, uid, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(links.StatusOK), got.PreviewStatus, "failed must not overwrite ok")
 
 	// refresh → pending is unconditional, then ok CAS succeeds again.
-	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, nil, nil, nil, nil))
-	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusOK, nil, nil, nil, nil))
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, links.PreviewPatch{}))
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusOK, links.PreviewPatch{}))
 	got, err = lrepo.Get(ctx, uid, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(links.StatusOK), got.PreviewStatus)
@@ -327,7 +327,7 @@ func TestSystemFinishScreenshotFallback_DoesNotFinishNewerRefresh(t *testing.T) 
 	work, err := lrepo.SystemGetPreview(ctx, created.ID)
 	require.NoError(t, err)
 	time.Sleep(time.Millisecond)
-	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, nil, nil, nil, nil))
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, links.PreviewPatch{}))
 
 	applied, err := lrepo.SystemFinishScreenshotFallback(ctx, created.ID, work.UpdatedAt, work.Generation)
 	require.NoError(t, err)
@@ -337,16 +337,29 @@ func TestSystemFinishScreenshotFallback_DoesNotFinishNewerRefresh(t *testing.T) 
 	assert.Equal(t, string(links.StatusPending), got.PreviewStatus)
 }
 
+func TestPreviewPatch_NamedErrorWritesPreviewErrorNotDescription(t *testing.T) {
+	ctx, uid, lrepo, _ := setup(t)
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://patch.example", Title: "patch"})
+	require.NoError(t, err)
+	msg := "fetch_failed"
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusFailed, links.PreviewPatch{Error: &msg}))
+	got, err := lrepo.Get(ctx, uid, created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.PreviewError)
+	assert.Equal(t, msg, *got.PreviewError)
+	assert.Nil(t, got.Description, "named Error must not land in description")
+}
+
 func TestSystemUpdatePreviewIfUnchanged_DoesNotOverwriteNewerRefresh(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
 	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://preview-cas.example", Title: "cas"})
 	require.NoError(t, err)
 	work, err := lrepo.SystemGetPreview(ctx, created.ID)
 	require.NoError(t, err)
-	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, nil, nil, nil, nil))
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, links.PreviewPatch{}))
 
 	staleDescription := "stale"
-	applied, err := lrepo.SystemUpdatePreviewIfUnchanged(ctx, created.ID, work.UpdatedAt, work.Generation, links.StatusOK, nil, nil, &staleDescription, nil)
+	applied, err := lrepo.SystemUpdatePreviewIfUnchanged(ctx, created.ID, work.UpdatedAt, work.Generation, links.StatusOK, links.PreviewPatch{Description: &staleDescription})
 	require.NoError(t, err)
 	assert.False(t, applied)
 	got, err := lrepo.Get(ctx, uid, created.ID)
@@ -365,12 +378,12 @@ func TestSystemUpdatePreview_GenerationRejectsStaleClaimWithEqualTimestamp(t *te
 	stale, err := lrepo.SystemGetPreview(ctx, created.ID)
 	require.NoError(t, err)
 
-	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, nil, nil, nil, nil))
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, created.ID, links.StatusPending, links.PreviewPatch{}))
 	_, err = pool.Exec(ctx, `UPDATE link SET updated_at = $1 WHERE id = $2`, stale.UpdatedAt, created.ID)
 	require.NoError(t, err)
 
 	staleDescription := "stale"
-	applied, err := lrepo.SystemUpdatePreviewIfUnchanged(ctx, created.ID, stale.UpdatedAt, stale.Generation, links.StatusOK, nil, nil, &staleDescription, nil)
+	applied, err := lrepo.SystemUpdatePreviewIfUnchanged(ctx, created.ID, stale.UpdatedAt, stale.Generation, links.StatusOK, links.PreviewPatch{Description: &staleDescription})
 	require.NoError(t, err)
 	assert.False(t, applied)
 
@@ -388,7 +401,7 @@ func TestSystemPendingPreviews_ReturnsSlimPendingProjectionWithinLimit(t *testin
 	require.NoError(t, err)
 	done, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://done.example", Title: "done"})
 	require.NoError(t, err)
-	require.NoError(t, lrepo.SystemUpdatePreview(ctx, done.ID, links.StatusOK, nil, nil, nil, nil))
+	require.NoError(t, lrepo.SystemUpdatePreview(ctx, done.ID, links.StatusOK, links.PreviewPatch{}))
 
 	previews, err := lrepo.SystemPendingPreviews(ctx, 1)
 	require.NoError(t, err)
@@ -711,7 +724,7 @@ func TestRepository_CheckInterval_TriStateOnUpdate(t *testing.T) {
 
 // dueIDs projects the DueLink rows to bare ids.
 //
-// SystemFindDueForCheck returns []links.DueLink{ID, UserID} since ADR-30 — the
+// SystemClaimDueForCheck returns []links.DueLink{ID, UserID} since ADR-30 — the
 // worker needs the owner to attribute the push. Asserting Contains/NotContains
 // with a bare int64 against that slice is VACUOUS: the element types never
 // match, so NotContains passes unconditionally and Contains can only ever fail.
@@ -722,6 +735,33 @@ func dueIDs(due []links.DueLink) []int64 {
 		out = append(out, d.ID)
 	}
 	return out
+}
+
+func TestSystemClaimDueForCheck_SecondCallReturnsEmpty(t *testing.T) {
+	ctx, uid, lrepo, _ := setup(t)
+	daily := "daily"
+	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/claim-once", Title: "claim"})
+	require.NoError(t, err)
+	_, err = lrepo.Update(ctx, uid, created.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true})
+	require.NoError(t, err)
+
+	first, err := lrepo.SystemClaimDueForCheck(ctx, 100)
+	require.NoError(t, err)
+	require.Contains(t, dueIDs(first), created.ID)
+	var claimed links.DueLink
+	for _, row := range first {
+		if row.ID == created.ID {
+			claimed = row
+			break
+		}
+	}
+	require.NotZero(t, claimed.ClaimedAt)
+
+	second, err := lrepo.SystemClaimDueForCheck(ctx, 100)
+	require.NoError(t, err)
+	assert.NotContains(t, dueIDs(second), created.ID,
+		"claiming must bump last_checked_at so a second sweep does not re-lease the same link")
+	assert.Empty(t, second, "no other opted-in link exists in this test")
 }
 
 func TestRepository_FindDueForCheck_OnlyOptedIn(t *testing.T) {
@@ -735,7 +775,7 @@ func TestRepository_FindDueForCheck_OnlyOptedIn(t *testing.T) {
 	// Opted-OUT link must NOT appear.
 	_, _ = lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/b", Title: "b"})
 
-	due, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	due, err := lrepo.SystemClaimDueForCheck(ctx, 100)
 	require.NoError(t, err)
 	assert.Contains(t, dueIDs(due), a.ID, "opted-in link with NULL last_checked_at must be due")
 	assert.Len(t, due, 1, "only opted-in links may be due")
@@ -768,7 +808,7 @@ func TestRepository_ChangeCheckExcludesLockedLinksAndRejectsFolderMoveRace(t *te
 	})
 	require.NoError(t, err)
 
-	due, err := repo.SystemFindDueForCheck(ctx, 100)
+	due, err := repo.SystemClaimDueForCheck(ctx, 100)
 	require.NoError(t, err)
 	assert.NotContains(t, dueIDs(due), locked.ID)
 	require.Contains(t, dueIDs(due), open.ID)
@@ -797,7 +837,7 @@ func TestRepository_RecordCheckResultRejectsStaleConfiguration(t *testing.T) {
 	daily := "daily"
 	_, err = repo.Update(ctx, uid, link.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true})
 	require.NoError(t, err)
-	due, err := repo.SystemFindDueForCheck(ctx, 1)
+	due, err := repo.SystemClaimDueForCheck(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, due, 1)
 
@@ -876,14 +916,14 @@ func TestRepository_FindDueForCheck_RespectsInterval(t *testing.T) {
 	_, err = pool.Exec(ctx, `UPDATE link SET last_checked_at = now() - interval '30 minutes' WHERE id = $1`, l.ID)
 	require.NoError(t, err)
 
-	due, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	due, err := lrepo.SystemClaimDueForCheck(ctx, 100)
 	require.NoError(t, err)
 	assert.NotContains(t, dueIDs(due), l.ID, "30 minutes < 1 hour: must NOT be due")
 
 	// Backdate further → past 1h → now due.
 	_, err = pool.Exec(ctx, `UPDATE link SET last_checked_at = now() - interval '2 hours' WHERE id = $1`, l.ID)
 	require.NoError(t, err)
-	due, err = lrepo.SystemFindDueForCheck(ctx, 100)
+	due, err = lrepo.SystemClaimDueForCheck(ctx, 100)
 	require.NoError(t, err)
 	assert.Contains(t, dueIDs(due), l.ID, "2h > 1h: hourly link is due")
 	assert.Equal(t, uid, due[0].UserID, "the due row must carry its owner")
@@ -1104,7 +1144,7 @@ func TestRepository_FindDueForCheck_SkipsDisabledOwners(t *testing.T) {
 	_, err = lrepo.Update(ctx, other, theirs.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
 	require.NoError(t, err)
 
-	due, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	due, err := lrepo.SystemClaimDueForCheck(ctx, 100)
 	require.NoError(t, err)
 	require.Contains(t, dueIDs(due), mine.ID)
 	require.Contains(t, dueIDs(due), theirs.ID)
@@ -1119,7 +1159,7 @@ func TestRepository_FindDueForCheck_SkipsDisabledOwners(t *testing.T) {
 		[]int64{mine.ID, theirs.ID})
 	require.NoError(t, err)
 
-	after, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	after, err := lrepo.SystemClaimDueForCheck(ctx, 100)
 	require.NoError(t, err)
 	assert.NotContains(t, dueIDs(after), mine.ID, "a disabled owner's links must not be claimed")
 	assert.Contains(t, dueIDs(after), theirs.ID, "an active owner in the same sweep is unaffected")
@@ -1141,7 +1181,7 @@ func TestRepository_FindDueForCheck_SkipsDisabledOwners(t *testing.T) {
 	// without the user having to set the interval again.
 	_, err = pool.Exec(ctx, `UPDATE app_user SET status = 'active' WHERE id = $1`, int64(uid))
 	require.NoError(t, err)
-	back, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	back, err := lrepo.SystemClaimDueForCheck(ctx, 100)
 	require.NoError(t, err)
 	assert.Contains(t, dueIDs(back), mine.ID, "re-enabling the account resumes the sweep")
 
@@ -1155,7 +1195,7 @@ func TestRepository_FindDueForCheck_SkipsDisabledOwners(t *testing.T) {
 	_, err = pool.Exec(ctx,
 		`UPDATE link SET last_checked_at = now() - interval '2 days' WHERE id = $1`, mine.ID)
 	require.NoError(t, err)
-	pending, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	pending, err := lrepo.SystemClaimDueForCheck(ctx, 100)
 	require.NoError(t, err)
 	assert.NotContains(t, dueIDs(pending), mine.ID, "a pending owner is not swept either")
 }
@@ -1190,7 +1230,7 @@ func TestRepository_FindDueForCheck_DoesNotLockTheOwnerRow(t *testing.T) {
 	require.NoError(t, tx.QueryRow(ctx,
 		`SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).Scan(&locked))
 
-	due, err := lrepo.SystemFindDueForCheck(ctx, 100)
+	due, err := lrepo.SystemClaimDueForCheck(ctx, 100)
 	require.NoError(t, err)
 	assert.Contains(t, dueIDs(due), l.ID,
 		"a due link must be claimed even while its owner row is locked by another transaction")

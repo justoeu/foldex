@@ -53,7 +53,7 @@ type Uploader interface {
 
 type previewRepository interface {
 	SystemGetPreview(context.Context, int64) (links.PreviewWork, error)
-	SystemUpdatePreviewIfUnchanged(context.Context, int64, time.Time, int64, links.PreviewStatus, *string, *string, *string, *string) (bool, error)
+	SystemUpdatePreviewIfUnchanged(context.Context, int64, time.Time, int64, links.PreviewStatus, links.PreviewPatch) (bool, error)
 	SystemUpdateOGImage(context.Context, int64, string, time.Time, int64) (bool, error)
 	SystemFinishScreenshotFallback(context.Context, int64, time.Time, int64) (bool, error)
 	SystemPendingPreviews(context.Context, int) ([]links.PreviewWork, error)
@@ -329,7 +329,7 @@ func (w *Worker) process(ctx context.Context, job previewJob) {
 	// Create and the worker picking up the job). No HTML fetch, no screenshot
 	// — and lift the "capturando…" label by flipping preview_status to ok.
 	if link.OGImageURL != nil && *link.OGImageURL != "" {
-		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, links.StatusOK, nil, nil, nil, nil); uErr != nil {
+		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, links.StatusOK, links.PreviewPatch{}); uErr != nil {
 			w.logger.Error("preview short-circuit update failed", "link_id", id, "err", uErr)
 		}
 		w.logger.Info("preview skipped: image already present", "link_id", id)
@@ -340,7 +340,7 @@ func (w *Worker) process(ctx context.Context, job previewJob) {
 	res, err := w.fetcher.Fetch(fetchCtx, link.URL)
 	if err != nil {
 		msg := "fetch_failed"
-		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, links.StatusFailed, nil, nil, nil, &msg); uErr != nil {
+		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, links.StatusFailed, links.PreviewPatch{Error: &msg}); uErr != nil {
 			w.logger.Error("update preview failure row", "err", uErr)
 		}
 		w.logger.Info("preview failed", "link_id", id, "reason", operationErrorReason(err))
@@ -366,7 +366,11 @@ func (w *Worker) process(ctx context.Context, job previewJob) {
 	if willTryScreenshot {
 		firstStatus = links.StatusPending
 	}
-	applied, err := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, firstStatus, favicon, ogImage, description, nil)
+	applied, err := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, firstStatus, links.PreviewPatch{
+		Favicon:     favicon,
+		OGImage:     ogImage,
+		Description: description,
+	})
 	if err != nil {
 		w.logger.Error("update preview row", "err", err)
 		return

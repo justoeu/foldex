@@ -45,7 +45,7 @@ func (r *fakeRepo) SystemGet(_ context.Context, id int64) (links.Link, error) {
 	return l, nil
 }
 
-func (r *fakeRepo) SystemFindDueForCheck(_ context.Context, limit int) ([]links.DueLink, error) {
+func (r *fakeRepo) SystemClaimDueForCheck(_ context.Context, limit int) ([]links.DueLink, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.findLimits = append(r.findLimits, limit)

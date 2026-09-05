@@ -95,7 +95,7 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg
 // flipped back to pending keeps its turn; a stale worker finishing after a
 // newer job was re-enqueued cannot overwrite a non-pending status. Setting
 // pending itself is unconditional so refresh/retry always restarts the poll.
-func (r *Repository) SystemUpdatePreview(ctx context.Context, id int64, status PreviewStatus, favicon, ogImage, description, errMsg *string) error {
+func (r *Repository) SystemUpdatePreview(ctx context.Context, id int64, status PreviewStatus, patch PreviewPatch) error {
 	if !status.Valid() {
 		return fmt.Errorf("invalid preview status %q", status)
 	}
@@ -112,13 +112,13 @@ func (r *Repository) SystemUpdatePreview(ctx context.Context, id int64, status P
 	if status != StatusPending {
 		q += ` AND preview_status = 'pending'`
 	}
-	_, err := r.pool.Exec(ctx, q, status, favicon, ogImage, description, errMsg, id)
+	_, err := r.pool.Exec(ctx, q, status, patch.Favicon, patch.OGImage, patch.Description, patch.Error, id)
 	return err
 }
 
 // SystemUpdatePreviewIfUnchanged prevents an older fetch from overwriting a
 // refresh or edit that landed while network work was in progress.
-func (r *Repository) SystemUpdatePreviewIfUnchanged(ctx context.Context, id int64, expectedUpdatedAt time.Time, expectedGeneration int64, status PreviewStatus, favicon, ogImage, description, errMsg *string) (bool, error) {
+func (r *Repository) SystemUpdatePreviewIfUnchanged(ctx context.Context, id int64, expectedUpdatedAt time.Time, expectedGeneration int64, status PreviewStatus, patch PreviewPatch) (bool, error) {
 	if !status.Valid() {
 		return false, fmt.Errorf("invalid conditional preview status %q", status)
 	}
@@ -134,16 +134,16 @@ func (r *Repository) SystemUpdatePreviewIfUnchanged(ctx context.Context, id int6
 		  AND updated_at = $7
 		  AND preview_generation = $8
 		  AND preview_status = 'pending'
-	`, status, favicon, ogImage, description, errMsg, id, expectedUpdatedAt, expectedGeneration)
+	`, status, patch.Favicon, patch.OGImage, patch.Description, patch.Error, id, expectedUpdatedAt, expectedGeneration)
 	if err != nil {
 		return false, fmt.Errorf("conditionally update preview: %w", err)
 	}
 	return ct.RowsAffected() == 1, nil
 }
 
-// SystemFindDueForCheck claims links whose check interval elapsed and returns
+// SystemClaimDueForCheck claims links whose check interval elapsed and returns
 // the narrow projection needed by the change-check worker.
-func (r *Repository) SystemFindDueForCheck(ctx context.Context, limit int) ([]DueLink, error) {
+func (r *Repository) SystemClaimDueForCheck(ctx context.Context, limit int) ([]DueLink, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 256
 	}
@@ -196,7 +196,7 @@ func (r *Repository) SystemFindDueForCheck(ctx context.Context, limit int) ([]Du
 		RETURNING id, user_id, url, title, check_interval, last_fingerprint, last_checked_at
     `, folders.SQLNotInLockedFolder("l")), limit)
 	if err != nil {
-		return nil, fmt.Errorf("find due for check: %w", err)
+		return nil, fmt.Errorf("claim due for check: %w", err)
 	}
 	defer rows.Close()
 	out := make([]DueLink, 0)
@@ -231,6 +231,16 @@ type DueLink struct {
 	ClaimedAt       time.Time
 }
 
+// PreviewPatch is the optional metadata written with a preview status
+// transition. Nil pointer fields leave the column unchanged (COALESCE),
+// except Error which is always written.
+type PreviewPatch struct {
+	Favicon     *string
+	OGImage     *string
+	Description *string
+	Error       *string
+}
+
 // PreviewWork is the narrow projection required by the preview worker. Keeping
 // it separate avoids the click-log aggregate in the full Link projection.
 type PreviewWork struct {
@@ -258,7 +268,7 @@ func (r *Repository) SystemGetPreview(ctx context.Context, id int64) (PreviewWor
 	return work, nil
 }
 
-// Deliberately NOT joined to app_user, unlike SystemFindDueForCheck.
+// Deliberately NOT joined to app_user, unlike SystemClaimDueForCheck.
 //
 // The asymmetry is the consequence, not the sweep: this one ends in a fetch and
 // a status write, never in a notification, and each row leaves `pending` after

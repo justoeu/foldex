@@ -72,7 +72,7 @@ func TestChangeCheckPushGoesOnlyToTheLinkOwner(t *testing.T) {
 	fetcher := staticChangeFetcher{body: newBody}
 	kind, hash, err := changecheck.NewFingerprinter(fetcher).Compute(ctx, linkA.URL, oldBody)
 	require.NoError(t, err)
-	due, err := linkRepo.SystemFindDueForCheck(ctx, 1)
+	due, err := linkRepo.SystemClaimDueForCheck(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, due, 1)
 	applied, err := linkRepo.SystemRecordCheckResult(ctx, linkA.ID, due[0].ClaimedAt, links.CheckResult{
