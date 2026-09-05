@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData, type QueryClient, type QueryKey } from '@tanstack/react-query'
 import { http } from './client'
 import { FOLDER_UNLOCK_HEADER } from './folders'
@@ -209,17 +209,41 @@ export function cachedEntryFolderId(qc: QueryClient, kind: Entry['kind'], id: nu
   return undefined
 }
 
+// Same idle window as LinkDialog URL autofill (INV-125): Home types into
+// workspace.q on every keystroke, and without this the query key would
+// fire one GET /api/entries per character.
+const SEARCH_DEBOUNCE_MS = 500
+
+function useDebouncedQ(q: string | undefined): string {
+  const value = q ?? ''
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    if (value === settled) return
+    const id = window.setTimeout(() => setSettled(value), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(id)
+  }, [value, settled])
+  return settled
+}
+
+function entriesRequestConfig(unlockToken: string | undefined, signal: AbortSignal) {
+  return {
+    signal,
+    headers: unlockToken ? { [FOLDER_UNLOCK_HEADER]: unlockToken } : undefined,
+  }
+}
+
 // A single backend query preserves ordering across links and notes (ADR-27).
 export function useEntries(params: EntryListParams, options?: { enabled?: boolean }) {
   const pageSize = params.limit && params.limit > 0 ? Math.min(params.limit, 500) : ENTRY_PAGE_SIZE
   const queryClient = useQueryClient()
-  const key = entriesKey(params)
+  const q = useDebouncedQ(params.q)
+  const key = entriesKey({ ...params, q })
   const batchCursor = useRef(0)
   const entries = useInfiniteQuery({
     queryKey: key,
-    queryFn: async ({ pageParam }) => {
+    queryFn: async ({ pageParam, signal }) => {
       const search = new URLSearchParams()
-      if (params.q) search.set('q', params.q)
+      if (q) search.set('q', q)
       for (const id of params.tagIds ?? []) search.append('tag', String(id))
       if (params.sort) search.set('sort', params.sort)
       if (typeof params.folderId === 'number') {
@@ -229,9 +253,7 @@ export function useEntries(params: EntryListParams, options?: { enabled?: boolea
       }
       search.set('limit', String(pageSize))
       search.set('offset', String(pageParam))
-      const { data } = await http.get<Entry[]>(`/api/entries?${search.toString()}`, {
-        headers: params.unlockToken ? { [FOLDER_UNLOCK_HEADER]: params.unlockToken } : undefined,
-      })
+      const { data } = await http.get<Entry[]>(`/api/entries?${search.toString()}`, entriesRequestConfig(params.unlockToken, signal))
       return data
     },
     initialPageParam: 0,
@@ -243,7 +265,7 @@ export function useEntries(params: EntryListParams, options?: { enabled?: boolea
   useQuery({
     queryKey: ['entries-preview-status', key],
     enabled: (options?.enabled ?? true) && pendingIDs.length > 0,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const currentIDs = pendingPreviewIDs(queryClient.getQueryData<EntriesCache>(key))
       if (batchCursor.current >= currentIDs.length) batchCursor.current = 0
       const batch = currentIDs.slice(batchCursor.current, batchCursor.current + PREVIEW_STATUS_BATCH_SIZE)
@@ -254,9 +276,7 @@ export function useEntries(params: EntryListParams, options?: { enabled?: boolea
       const search = new URLSearchParams()
       for (const id of batch) search.append('id', String(id))
       if (typeof params.folderId === 'number') search.set('folder_id', String(params.folderId))
-      const { data } = await http.get<PreviewStatusResult[]>(`/api/entries/preview-status?${search.toString()}`, {
-        headers: params.unlockToken ? { [FOLDER_UNLOCK_HEADER]: params.unlockToken } : undefined,
-      })
+      const { data } = await http.get<PreviewStatusResult[]>(`/api/entries/preview-status?${search.toString()}`, entriesRequestConfig(params.unlockToken, signal))
       applyPreviewStatusResults(queryClient, key, data)
       return data
     },
