@@ -114,6 +114,7 @@ func extractPage(ctx context.Context, browser *rod.Browser, contextID proto.Brow
 	if err != nil {
 		return PageMetadata{}, fmt.Errorf("%w: %w", errPageOpen, err)
 	}
+	defer uncacheRodPage(page)
 	var requests atomic.Int64
 	var budgetExceeded atomic.Bool
 	router := page.HijackRequests()

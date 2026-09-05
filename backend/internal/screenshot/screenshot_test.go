@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -793,6 +794,83 @@ func TestConcurrentCaptureDuringResetClosesEachGenerationExactlyOnce(t *testing.
 		assert.False(t, state.closedWhileActive, "generation %d closed while references were active", generationIndex)
 		assert.Equal(t, 1, state.closes, "generation %d must close exactly once", generationIndex)
 	}
+}
+
+func TestCaptureAndExtractUncacheRodPagesOnThePooledBrowser(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires live Chromium")
+	}
+	chrome := availableChrome(t)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/extract":
+			_, _ = io.WriteString(w, `<html><head><title>extract</title><meta name="description" content="meta"></head><body>extract</body></html>`)
+		default:
+			_, _ = io.WriteString(w, "<html><body>capture</body></html>")
+		}
+	}))
+	t.Cleanup(origin.Close)
+	t.Setenv("CHROME_PATH", chrome)
+	pool := NewPool()
+	t.Cleanup(pool.Close)
+	pool.newCaptureProxy = func() (*captureProxy, error) {
+		return newCaptureProxyWithDial(func(ctx context.Context, network, _ string) (net.Conn, error) {
+			conn, err := (&net.Dialer{}).DialContext(ctx, network, origin.Listener.Addr().String())
+			if err != nil {
+				return nil, err
+			}
+			return &reportedRemoteConn{Conn: conn, addr: &net.TCPAddr{IP: net.ParseIP("93.184.216.34"), Port: 80}}, nil
+		})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	_, port, err := net.SplitHostPort(origin.Listener.Addr().String())
+	require.NoError(t, err)
+	pageURL := "http://93.184.216.34:" + port
+	extractURL := pageURL + "/extract"
+
+	png, err := pool.Capture(ctx, pageURL)
+	require.NoError(t, err)
+	require.NotEmpty(t, png)
+	baseline := pooledBrowserCachedPageCount(t, pool)
+
+	const n = 3
+	for range n {
+		png, err = pool.Capture(ctx, pageURL)
+		require.NoError(t, err)
+		require.NotEmpty(t, png)
+		md, extractErr := pool.ExtractMetadata(ctx, extractURL)
+		require.NoError(t, extractErr)
+		assert.Equal(t, "extract", md.Title)
+	}
+
+	assert.Equal(t, baseline, pooledBrowserCachedPageCount(t, pool),
+		"each capture/extract must Close the rod page so Browser.states does not retain it")
+	assert.Zero(t, baseline, "the first successful capture must also uncache its rod page")
+}
+
+func pooledBrowserCachedPageCount(t *testing.T, pool *Pool) int {
+	t.Helper()
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	require.NotNil(t, pool.current)
+	require.NotNil(t, pool.current.browser)
+	return cachedRodPageCount(t, pool.current.browser)
+}
+
+func cachedRodPageCount(t *testing.T, browser *rod.Browser) int {
+	t.Helper()
+	v := reflect.ValueOf(browser).Elem().FieldByName("states")
+	require.True(t, v.IsValid() && !v.IsNil(), "rod.Browser.states must exist")
+	states := (*sync.Map)(v.UnsafePointer())
+	count := 0
+	states.Range(func(_, value any) bool {
+		if _, ok := value.(*rod.Page); ok {
+			count++
+		}
+		return true
+	})
+	return count
 }
 
 func TestCapture_LiveChrome(t *testing.T) {
