@@ -63,6 +63,12 @@ var expensiveRoutes = []string{
 	// file can still be an enormous image.
 	"POST /api/links/{id}/image",
 	"POST /api/notes/images",
+	// Bookmark export is GET so the SPA can keep a native <a href> download
+	// (converting it to POST would break ImportPage). It still walks every
+	// row the caller owns, which is why the middleware special-cases this
+	// GET the same way it charges any other expensive route — without that
+	// skip, mutating() would let a tab-loop dump the library unmetered.
+	"GET /api/export",
 }
 
 // expensiveMatchers is expensiveRoutes split once, at init, rather than once
@@ -168,12 +174,15 @@ func (q *apiQuota) expensiveLimit(ctx context.Context) int {
 // middleware charges the request and answers 429 when the budget is spent.
 //
 // Mounted inside the principal group, so the identity it keys on is already
-// resolved. Reads pass untouched: a read is one indexed SELECT, and metering it
-// would spend a person's budget on browsing their own library while doing
-// nothing about the write amplification the quota exists for.
+// resolved. Ordinary reads pass untouched: a read is one indexed SELECT, and
+// metering it would spend a person's budget on browsing their own library
+// while doing nothing about the write amplification the quota exists for.
+// GET /api/export is the declared exception — it is in expensiveRoutes
+// because it materializes the whole tenant, and isExpensive is what keeps
+// mutating() from letting that dump through unmetered.
 func (q *apiQuota) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !mutating(r.Method) {
+		if !mutating(r.Method) && !isExpensive(r.Method, r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

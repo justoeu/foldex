@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -17,6 +19,11 @@ import (
 	"foldex/internal/pkg/authctx"
 )
 
+// maxExportLinks is the same ceiling import refuses above (maxImportItems).
+// A library that grew past it via the unbounded create API still cannot dump
+// an unbounded []linkRow plus the grouped Netscape/JSON payload in one GET.
+const maxExportLinks = 50_000
+
 // ExportReader is satisfied by *Repository.
 type ExportReader interface {
 	ListAllLinks(ctx context.Context, uid authctx.UserID) ([]linkRow, error)
@@ -26,10 +33,18 @@ type ExportReader interface {
 
 type Handler struct {
 	repo ExportReader
+
+	slotMu sync.Mutex
+	slots  chan struct{}
 }
 
+const maxExportInFlight = 1
+
 func NewHandler(pool *pgxpool.Pool) *Handler {
-	return &Handler{repo: NewRepository(pool)}
+	return &Handler{
+		repo:  NewRepository(pool),
+		slots: make(chan struct{}, maxExportInFlight),
+	}
 }
 
 func (h *Handler) Mount(r chi.Router) {
@@ -41,18 +56,52 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 	if format == "" {
 		format = "netscape"
 	}
-	switch format {
-	case "netscape":
-		h.exportNetscape(w, r)
-	case "json":
-		h.exportJSON(w, r)
-	default:
+	if format != "netscape" && format != "json" {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "unknown_format", "format must be netscape or json"))
+		return
+	}
+
+	release, ok := h.admit(w)
+	if !ok {
+		return
+	}
+	defer release()
+
+	if format == "json" {
+		h.exportJSON(w, r)
+		return
+	}
+	h.exportNetscape(w, r)
+}
+
+func (h *Handler) admit(w http.ResponseWriter) (func(), bool) {
+	h.slotMu.Lock()
+	if h.slots == nil {
+		h.slots = make(chan struct{}, maxExportInFlight)
+	}
+	slots := h.slots
+	h.slotMu.Unlock()
+
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, true
+	default:
+		w.Header().Set("Retry-After", "1")
+		httperr.Write(w, httperr.New(http.StatusTooManyRequests, "export_busy", "another export is already in progress"))
+		return func() {}, false
 	}
 }
 
 func (h *Handler) queryAll(r *http.Request) ([]linkRow, error) {
-	return h.repo.ListAllLinks(r.Context(), authctx.MustUser(r.Context()))
+	all, err := h.repo.ListAllLinks(r.Context(), authctx.MustUser(r.Context()))
+	if err != nil {
+		return nil, err
+	}
+	if len(all) > maxExportLinks {
+		return nil, httperr.New(http.StatusRequestEntityTooLarge, "export_too_large",
+			"library exceeds the export row ceiling of "+strconv.Itoa(maxExportLinks)+" links")
+	}
+	return all, nil
 }
 
 func (h *Handler) exportNetscape(w http.ResponseWriter, r *http.Request) {

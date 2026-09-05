@@ -952,10 +952,14 @@ intacto, e é o caminho mais rápido de volta.
 
 > **Cota de escrita (429).** Toda conta autenticada tem um orçamento de requisições
 > **mutantes**: 120 por minuto no geral e um teto menor de **20 por hora** para as rotas
-> que custam muito mais que uma linha — importação, exportação e restauração de backup,
-> captura de screenshot, refresh de preview. Leituras nunca são contabilizadas, então
-> navegar pela própria biblioteca não é afetado. Acima do orçamento a resposta é `429`
-> com um `Retry-After` dizendo quanto esperar; a requisição não chega ao handler. A cota
+> que custam muito mais que uma linha — importação, exportação de bookmarks
+> (`GET /api/export`), exportação e restauração de backup, captura de screenshot, refresh
+> de preview. Leituras ordinárias nunca são contabilizadas, então navegar pela própria
+> biblioteca não é afetado. A exportação de bookmarks continua GET para a página de
+> Importar manter um `<a href>` nativo; um segundo export sobreposto é `429 export_busy`,
+> e uma biblioteca acima de 50.000 links é `413 export_too_large`. Acima do orçamento a
+> resposta é `429` com um `Retry-After` dizendo quanto esperar; a requisição não chega ao
+> handler. A cota
 > é **por conta, não por rota** — um laço espalhado por vinte endpoints ficaria dentro do
 > limite em cada um e mesmo assim seguraria o pool inteiro — e **nenhum papel é isento,
 > nem o owner**. Os dois números são editáveis pelo owner da instância e valem sem
