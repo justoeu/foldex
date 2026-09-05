@@ -160,6 +160,29 @@ func Optimize(data []byte, opts Options) (Result, error) {
 	}, nil
 }
 
+const (
+	storeMaxDim  = 1024
+	storeQuality = defaultQuality
+)
+
+// OptimizeForStore is the single re-encode entry for note uploads, link
+// image uploads, screenshots and the preview worker. A non-nil error means
+// the original bytes must not be stored — there is no fallback Result
+// (INV-076, INV-077).
+func OptimizeForStore(data []byte) (Result, error) {
+	return Optimize(data, Options{MaxDim: storeMaxDim, Quality: storeQuality})
+}
+
+// RejectHTTP maps an Optimize/OptimizeForStore error to the JSON envelope
+// handlers write. Client-caused failures (too large, undecodable,
+// unsupported) are 400 invalid_image; anything else is 500.
+func RejectHTTP(err error) (status int, code, message string) {
+	if errors.Is(err, ErrTooLarge) || errors.Is(err, ErrDecode) || errors.Is(err, ErrUnsupportedFormat) {
+		return http.StatusBadRequest, "invalid_image", "invalid image"
+	}
+	return http.StatusInternalServerError, "optimize_failed", "failed to process image"
+}
+
 // scaledDims returns the new (w, h) so the longest side equals maxDim and the
 // aspect ratio is preserved.
 func scaledDims(w, h, maxDim int) (int, int) {

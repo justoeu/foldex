@@ -38,13 +38,8 @@ export function LinkDialog({ open, link, initialUrl, focus = 'url', defaultFolde
   const form = { ...formState, ...slugState }
   const tags = useTagPicker(open, link?.tags)
   const image = useLinkDialogImage(open, link)
-  const { existing } = useExistingLinkByURL(
-    form.url,
-    open && (!link || form.url.trim() !== link.url),
-    link?.id ?? null,
-  )
-  const duplicate = existing
   const save = useLinkDialogSubmit({
+    open,
     link,
     values: form,
     selected: tags.selected,
@@ -52,6 +47,12 @@ export function LinkDialog({ open, link, initialUrl, focus = 'url', defaultFolde
     setSaveError: form.setSaveError,
     onClose,
   })
+  const { existing } = useExistingLinkByURL(
+    form.url,
+    open && (!link || form.url.trim() !== link.url),
+    link?.id ?? save.createdId ?? null,
+  )
+  const duplicate = existing
   const dialogRef = useRef<HTMLDivElement>(null)
   useEscape(onClose, open)
   useFocusTrap(dialogRef, open)

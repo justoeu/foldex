@@ -664,3 +664,107 @@ func TestWorker_EnqueueDuringStop_ReturnsErrStopped(t *testing.T) {
 	w2.Stop()
 	assert.Equal(t, 0, len(w2.jobs), "Stop must drain leftover jobs")
 }
+
+// A panic inside Fetch/screenshot used to kill the API process because the
+// worker loop had no recover. The slot also stayed running, so that id could
+// never be scheduled again. One poisoned link must not take down /api/*.
+func TestPreviewWorker_PanicOnOneJobDoesNotKillTheProcessOrStickTheSlot(t *testing.T) {
+	img := "https://example.com/ok.jpg"
+	repo := &panicOnIDPreviewRepo{
+		panicID: 1,
+		items: map[int64]links.PreviewWork{
+			2: {
+				ID: 2, URL: "https://ok.example/", OGImageURL: &img,
+				PreviewStatus: links.StatusPending, UpdatedAt: time.Now(), Generation: 1,
+			},
+		},
+	}
+	var logs bytes.Buffer
+	w := NewWorker(nil, 1, time.Second, slog.New(slog.NewTextHandler(&logs, nil)))
+	w.repo = repo
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		w.Stop()
+	})
+
+	require.NoError(t, w.Enqueue(1))
+	require.Eventually(t, func() bool { return repo.saw(1) }, time.Second, 5*time.Millisecond,
+		"panicking job never reached SystemGetPreview")
+
+	require.NoError(t, w.Enqueue(2))
+	require.Eventually(t, func() bool { return repo.updatedID(2) }, time.Second, 5*time.Millisecond,
+		"successor job did not run after the panic")
+
+	w.jobsMu.Lock()
+	_, stuck := w.scheduled[1]
+	running := w.scheduled[1].running
+	w.jobsMu.Unlock()
+	assert.False(t, stuck, "panicking job must not leave scheduled[id] behind")
+	assert.False(t, running)
+	assert.Contains(t, logs.String(), "preview boom")
+	assert.Contains(t, logs.String(), "panicked")
+}
+
+type panicOnIDPreviewRepo struct {
+	mu      sync.Mutex
+	panicID int64
+	got     []int64
+	updated []int64
+	items   map[int64]links.PreviewWork
+}
+
+func (r *panicOnIDPreviewRepo) SystemGetPreview(_ context.Context, id int64) (links.PreviewWork, error) {
+	r.mu.Lock()
+	r.got = append(r.got, id)
+	r.mu.Unlock()
+	if id == r.panicID {
+		panic("preview boom")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.items[id], nil
+}
+
+func (r *panicOnIDPreviewRepo) SystemUpdatePreviewIfUnchanged(_ context.Context, id int64, _ time.Time, _ int64, _ links.PreviewStatus, _ *string, _ *string, _ *string, _ *string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.updated = append(r.updated, id)
+	return true, nil
+}
+
+func (*panicOnIDPreviewRepo) SystemUpdateOGImage(context.Context, int64, string, time.Time, int64) (bool, error) {
+	return false, nil
+}
+
+func (*panicOnIDPreviewRepo) SystemFinishScreenshotFallback(context.Context, int64, time.Time, int64) (bool, error) {
+	return false, nil
+}
+
+func (*panicOnIDPreviewRepo) SystemPendingPreviews(context.Context, int) ([]links.PreviewWork, error) {
+	return nil, nil
+}
+
+func (r *panicOnIDPreviewRepo) saw(id int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, got := range r.got {
+		if got == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *panicOnIDPreviewRepo) updatedID(id int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, got := range r.updated {
+		if got == id {
+			return true
+		}
+	}
+	return false
+}

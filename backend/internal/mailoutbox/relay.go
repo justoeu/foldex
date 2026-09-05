@@ -52,6 +52,14 @@ type Options struct {
 	FailedTTL    time.Duration
 }
 
+type queue interface {
+	Claim(context.Context, int) ([]Outgoing, error)
+	MarkPublished(context.Context, int64, string) error
+	MarkFailed(context.Context, int64, string, string, time.Duration, int, bool) error
+	RequeueStuck(context.Context, time.Duration) (int64, error)
+	Purge(context.Context, time.Duration, time.Duration) (int64, error)
+}
+
 // Relay drains the outbox into a Sink.
 //
 // It is the only component that knows both the queue and the transport, which
@@ -59,7 +67,7 @@ type Options struct {
 // nothing about brokers, and the sink delivers messages and knows nothing about
 // Postgres.
 type Relay struct {
-	repo   *Repository
+	repo   queue
 	sink   Sink
 	logger *slog.Logger
 	opts   Options
@@ -188,7 +196,14 @@ func (rl *Relay) drain() bool {
 		go func() {
 			defer wg.Done()
 			for m := range jobs {
-				rl.deliver(m)
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							rl.logger.Error("mail delivery panicked", "id", m.ID, "panic", r)
+						}
+					}()
+					rl.deliver(m)
+				}()
 			}
 		}()
 	}

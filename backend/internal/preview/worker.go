@@ -249,7 +249,14 @@ func (w *Worker) loop(ctx context.Context) {
 				w.wakeRecoveryIfNeeded()
 			}
 			w.startJob(job.id)
-			w.process(ctx, job)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						w.logger.Error("preview job panicked", "link_id", job.id, "panic", r)
+					}
+				}()
+				w.process(ctx, job)
+			}()
 			w.finishJob(job.id)
 		}
 	}
@@ -414,23 +421,13 @@ func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string, 
 		return &cur.UpdatedAt
 	}
 
-	opt, err := imageopt.Optimize(png, imageopt.Options{MaxDim: screenshotMaxDim, Quality: screenshotQuality})
+	opt, err := imageopt.OptimizeForStore(png)
 	if err != nil {
-		// ErrTooLarge means a hostile page returned a decode-bomb image
-		// (small payload, huge declared dimensions). Storing the raw PNG
-		// would let any browser opening /api/files/screenshots/{id} OOM
-		// on decode. Abort the fallback entirely — link keeps og_image_url
-		// empty, UI just shows no preview.
-		if errors.Is(err, imageopt.ErrTooLarge) {
-			w.logger.Warn("screenshot fallback rejected: decode bomb", "link_id", id, "err", err)
-			return &cur.UpdatedAt
-		}
-		// Other errors (truncated/corrupt encode) fall back to storing the
-		// raw PNG so a re-encode bug never blocks a working screenshot —
-		// ProxyFile streams bytes without re-decoding, so backend stays safe.
-		w.logger.Warn("screenshot fallback optimize failed, storing original PNG",
-			"link_id", id, "err", err)
-		opt = imageopt.Result{Data: png, ContentType: "image/png", Ext: "png"}
+		// Any Optimize failure (decode bomb included) aborts the fallback.
+		// Storing the original would skip INV-077 re-encode and, for
+		// ErrTooLarge, leave a payload that OOMs any decoder of /api/files.
+		w.logger.Warn("screenshot fallback rejected", "link_id", id, "err", err)
+		return &cur.UpdatedAt
 	}
 
 	storageCtx, storageCancel := context.WithTimeout(ctx, screenshotStorageTimeout)

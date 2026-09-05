@@ -18,8 +18,6 @@ import (
 var allowedUploadMIMEs = imageopt.AllowedUploadMIMEs
 
 const (
-	imageMaxDim  = 1024
-	imageQuality = 82
 	// maxImageSize mirrors links.ScreenshotHandler.UploadImage's 5 MiB cap —
 	// a single pasted screenshot comfortably fits under it once downscaled.
 	maxImageSize = 5 << 20
@@ -101,17 +99,18 @@ func (h *ImageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	// Detect MIME from the actual bytes — never trust the client-supplied
 	// Content-Type (same rationale as links.UploadImage).
 	detected := http.DetectContentType(data)
-	srcExt, ok := allowedUploadMIMEs[detected]
-	if !ok {
+	if _, ok := allowedUploadMIMEs[detected]; !ok {
 		h.logger.Warn("note image upload: rejected MIME", "reason", "unsupported")
 		httperr.Write(w, httperr.New(http.StatusUnsupportedMediaType, "invalid_mime", "file must be a PNG, JPEG, GIF, or WebP image"))
 		return
 	}
 
-	opt, err := imageopt.Optimize(data, imageopt.Options{MaxDim: imageMaxDim, Quality: imageQuality})
+	opt, err := imageopt.OptimizeForStore(data)
 	if err != nil {
-		h.logger.Warn("note image upload: optimize failed, storing original", "err", err)
-		opt = imageopt.Result{Data: data, ContentType: detected, Ext: srcExt, SourceMIME: detected}
+		h.logger.Warn("note image upload: optimize failed", "err", err)
+		status, code, msg := imageopt.RejectHTTP(err)
+		httperr.Write(w, httperr.New(status, code, msg))
+		return
 	}
 
 	key := fmt.Sprintf("notes/%s.%s", uuid.NewString(), opt.Ext)
