@@ -4,6 +4,7 @@ package notemedia_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -155,6 +156,29 @@ func TestDeleteOwnedUnreferenced_UsesOneBulkObjectDelete(t *testing.T) {
 			`SELECT count(*) FROM note_media WHERE user_id = $1 AND object_key = $2`, int64(uid), key).Scan(&rows))
 		assert.Zero(t, rows, key)
 	}
+}
+
+func TestDeleteOwnedUnreferenced_StorageErrorLeavesOwnershipRows(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
+	key := "notes/" + uuid.NewString() + ".jpg"
+	storage := &recordingStorage{
+		objects: map[string][]byte{key: []byte("blob")},
+		bulkErr: errors.New("object store down"),
+	}
+	require.NoError(t, notemedia.RegisterLease(ctx, pool, uid, key))
+
+	removed, err := notemedia.DeleteOwnedUnreferenced(ctx, pool, uid, []string{key}, storage)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "object store down")
+	assert.Zero(t, removed)
+	assert.Equal(t, 1, storage.deleteObjectsN)
+	assert.Contains(t, storage.objects, key, "failed bulk delete must not drop the object locally")
+	var rows int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM note_media WHERE user_id = $1 AND object_key = $2`, int64(uid), key).Scan(&rows))
+	assert.EqualValues(t, 1, rows, "ownership row must survive an S3 error")
 }
 
 func TestSystemSweepExpired_UsesOneBulkObjectDelete(t *testing.T) {
