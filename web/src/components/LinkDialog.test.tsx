@@ -954,12 +954,18 @@ describe('LinkDialog', () => {
     expect(imagePosts()).toHaveLength(1)
 
     state.linkImageUploadError = undefined
+    const title = screen.getByRole('textbox', { name: /^Title$/i })
+    await user.clear(title)
+    await user.type(title, 'Retry Title')
     await user.click(screen.getByRole('button', { name: /Save link/i }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
     expect(createPosts()).toHaveLength(1)
     expect(imagePosts()).toHaveLength(2)
     expect(state.links).toHaveLength(1)
     expect(state.links[0].og_image_url).toContain(`/api/files/links/${createdId}`)
+    const patches = vi.mocked(http.patch).mock.calls.filter(([url]) => url === `/api/links/${createdId}`)
+    expect(patches).toHaveLength(1)
+    expect(patches[0]?.[1]).toEqual(expect.objectContaining({ title: 'Retry Title' }))
   })
 
   it('names a missing object store instead of echoing axios 404', async () => {
