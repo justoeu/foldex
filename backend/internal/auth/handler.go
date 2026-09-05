@@ -786,12 +786,12 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		}
 		if needs {
 			httperr.JSON(w, http.StatusOK, setupRequiredAuthResponse{
-				Status: statusSetupRequired, Features: h.features,
+				Status: statusSetupRequired, Features: h.liveFeatures(r.Context()),
 			})
 			return
 		}
 		httperr.JSON(w, http.StatusOK, anonymousAuthResponse{
-			Status: statusAnonymous, Features: h.features,
+			Status: statusAnonymous, Features: h.liveFeatures(r.Context()),
 		})
 		return
 	}
@@ -813,7 +813,7 @@ func (h *Handler) authenticatedPayload(u User, csrf string) authenticatedAuthRes
 		Status:      statusAuthenticated,
 		User:        u,
 		CSRFToken:   csrf,
-		Features:    h.features,
+		Features:    h.liveFeatures(context.Background()),
 		Permissions: h.permissionsFor(u.Role),
 	}
 }
@@ -1168,6 +1168,15 @@ type PolicyReader interface {
 // policy.Validate.
 func (h *Handler) passwordFloor(ctx context.Context) int {
 	return passwordFloorOf(ctx, h.policy)
+}
+
+// liveFeatures is the boot-time capability flags plus the live password floor.
+// The floor is owner-configurable, so it cannot live on the static struct
+// NewHandler captured — every auth-state payload has to read it now.
+func (h *Handler) liveFeatures(ctx context.Context) AuthFeatures {
+	f := h.features
+	f.PasswordMinLength = h.passwordFloor(ctx)
+	return f
 }
 
 func passwordFloorOf(ctx context.Context, policy PolicyReader) int {

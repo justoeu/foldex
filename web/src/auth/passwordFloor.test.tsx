@@ -173,4 +173,19 @@ describe('password floor copy and client block follow instance policy', () => {
       ),
     ).toBe('auth_errors.password_too_short:12')
   })
+
+  it('InviteScreen follows /me features when the admin policy document 404s', async () => {
+    vi.spyOn(http, 'get').mockRejectedValue({ response: { status: 404 } })
+    mockInviteLookup()
+    renderWithProviders(<InviteScreen token="TOK" onGiveUp={() => {}} />, {
+      client: makeQueryClient(),
+      session: {
+        ...anonymous,
+        features: { ...anonymous.features, password_min_length: LIVE_FLOOR },
+      },
+    })
+
+    await screen.findByDisplayValue(preview.email)
+    expect(await screen.findByText(/at least 12 characters/i)).toBeInTheDocument()
+  })
 })

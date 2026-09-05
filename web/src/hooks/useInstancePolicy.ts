@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { fetchPolicy, type InstancePolicy } from '../api/admin'
+import { useAuth } from '../auth/AuthProvider'
 import { MIN_PASSWORD_LEN } from '../auth/types'
 
 /** The one cache key for the instance policy document. */
@@ -46,5 +47,9 @@ export function useInstancePolicy() {
 
 /** The password floor every SPA writer of credentials must use. */
 export function usePasswordFloor(): number {
-  return useInstancePolicy().minPasswordLen
+  const { session } = useAuth()
+  const { policy } = useInstancePolicy()
+  const featured =
+    session.status === 'loading' ? undefined : session.features.password_min_length
+  return passwordFloor(policy?.password_min_length ?? featured)
 }
