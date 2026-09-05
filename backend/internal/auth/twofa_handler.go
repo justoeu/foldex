@@ -720,6 +720,11 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
 		return
 	}
+	if errors.Is(err, ErrNoPendingFactor) {
+		httperr.Write(w, httperr.New(http.StatusConflict, "totp_not_enabled",
+			"an authenticator is not enrolled as a second factor"))
+		return
+	}
 	if errors.Is(err, ErrSessionInvalid) {
 		h.writeSessionInvalid(w)
 		return

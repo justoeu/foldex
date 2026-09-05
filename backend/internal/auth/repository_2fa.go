@@ -983,41 +983,94 @@ func (r *Repository) DisableTOTP(ctx context.Context, uid authctx.UserID, sessio
 	if err := consumeSecondFactorTx(ctx, tx, uid, proof); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM totp_secret WHERE user_id = $1`, int64(uid)); err != nil {
-		return fmt.Errorf("delete totp secret: %w", err)
+	if err := disableFactorTx(ctx, tx, uid, sessionID, tokenVersion, disableKindTOTP); err != nil {
+		return err
 	}
-	// Recovery codes guard the FACTORS, not the authenticator specifically. This
-	// used to delete them unconditionally, which was correct while TOTP was the
-	// only factor there could be — and became a lockout the moment e-mail could
-	// be enrolled too (ADR-37): disabling TOTP would leave an account holding an
-	// e-mail factor with no way past the reset-link guard that deliberately
-	// refuses it. Read under the user lock already held, so a concurrent e-mail
-	// disable cannot have both paths conclude the other factor survives.
-	var emailLeft bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM email_factor WHERE user_id = $1 AND confirmed_at IS NOT NULL
-		)`, int64(uid)).Scan(&emailLeft); err != nil {
-		return fmt.Errorf("disable totp check email factor: %w", err)
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("disable totp commit: %w", err)
 	}
-	if !emailLeft {
+	return nil
+}
+
+// disableFactorKind names which factor row disableFactorTx removes.
+type disableFactorKind string
+
+const (
+	disableKindTOTP  disableFactorKind = "totp"
+	disableKindEmail disableFactorKind = "email"
+)
+
+// disableFactorTx owns the remaining-factor cascade for both disable paths.
+//
+// Zero rows fail closed: a missing factor must not look like a credential-set
+// mutation. A successful removal bumps the epoch and revokes every other
+// session — otherwise dropping a factor because the mailbox (or phone) was
+// compromised leaves the intruder's session live. Recovery codes guard the
+// FACTORS, not one authenticator: they stay while a sibling is still enrolled,
+// read under the user lock the caller already holds so a concurrent disable of
+// the other factor cannot leave both paths believing the sibling survived.
+func disableFactorTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID,
+	sessionID int64, tokenVersion int, kind disableFactorKind) error {
+
+	var deleteSQL, siblingSQL, op string
+	switch kind {
+	case disableKindTOTP:
+		deleteSQL = `DELETE FROM totp_secret WHERE user_id = $1`
+		siblingSQL = `
+			SELECT EXISTS (
+				SELECT 1 FROM email_factor WHERE user_id = $1 AND confirmed_at IS NOT NULL
+			)`
+		op = "disable totp"
+	case disableKindEmail:
+		deleteSQL = `DELETE FROM email_factor WHERE user_id = $1`
+		siblingSQL = `
+			SELECT EXISTS (
+				SELECT 1 FROM totp_secret WHERE user_id = $1 AND confirmed_at IS NOT NULL
+			)`
+		op = "disable email factor"
+	default:
+		return fmt.Errorf("disable factor: unknown kind %q", kind)
+	}
+
+	ct, err := tx.Exec(ctx, deleteSQL, int64(uid))
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNoPendingFactor
+	}
+
+	if kind == disableKindEmail {
+		// Both purposes: an outstanding step-up code is a live proof issued BY
+		// the factor being removed, so leaving it behind would let a mailbox
+		// authorize operations after the account stopped accepting that mailbox
+		// as a factor.
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM email_otp WHERE user_id = $1 AND purpose = ANY($2)`,
+			int64(uid), []string{OTPPurposeEnrollEmail2FA, OTPPurposeStepUp2FA}); err != nil {
+			return fmt.Errorf("disable email factor clear codes: %w", err)
+		}
+	}
+
+	var siblingLeft bool
+	if err := tx.QueryRow(ctx, siblingSQL, int64(uid)).Scan(&siblingLeft); err != nil {
+		return fmt.Errorf("%s check remaining factor: %w", op, err)
+	}
+	if !siblingLeft {
 		if _, err := tx.Exec(ctx, `DELETE FROM recovery_code WHERE user_id = $1`, int64(uid)); err != nil {
-			return fmt.Errorf("delete recovery codes: %w", err)
+			return fmt.Errorf("%s clear recovery: %w", op, err)
 		}
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE app_user SET token_version = token_version + 1, updated_at = now()
 		WHERE id = $1 AND token_version = $2`, int64(uid), tokenVersion); err != nil {
-		return fmt.Errorf("disable totp bump epoch: %w", err)
+		return fmt.Errorf("%s bump epoch: %w", op, err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE session SET revoked_at = now(), revoked_reason = $3
 		WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
 		int64(uid), sessionID, ReasonPasswordChanged); err != nil {
-		return fmt.Errorf("disable totp revoke sessions: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("disable totp commit: %w", err)
+		return fmt.Errorf("%s revoke sessions: %w", op, err)
 	}
 	return nil
 }
