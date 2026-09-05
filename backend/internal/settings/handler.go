@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -79,6 +80,10 @@ func (h *Handler) setMaster(w http.ResponseWriter, r *http.Request) {
 		hintArg = &s
 	}
 	if err := h.repo.SetMasterPassword(r.Context(), authctx.MustUser(r.Context()), in.Password, hintArg); err != nil {
+		if errors.Is(err, ErrHintMatchesPassword) {
+			httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_input", err.Error()))
+			return
+		}
 		httperr.Write(w, err)
 		return
 	}

@@ -303,6 +303,39 @@ func TestHandler_Update_HintEqualsExistingPassword(t *testing.T) {
 	assert.Nil(t, got.PasswordHint)
 }
 
+func TestHandler_Update_PasswordOnlyEqualsStoredHint(t *testing.T) {
+	h, repo, uid := newHandlerRouter(t)
+	ctx := context.Background()
+
+	oldPW := "alpha1"
+	hint := "the usual"
+	f, err := repo.Create(ctx, uid, folders.CreateInput{
+		Name: "Secret", Color: "#abc", Password: &oldPW, PasswordHint: &hint,
+	})
+	require.NoError(t, err)
+
+	// Password-only PATCH (INV-067): omitting password_hint must still reject
+	// a new password equal to the live stored hint. The SPA rotate payload
+	// does exactly this — it never resends the hint.
+	rr := doJSON(t, h, http.MethodPatch, "/folders/"+strconv.FormatInt(f.ID, 10),
+		map[string]any{"password": hint, "current_password": oldPW})
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assertErrorCode(t, rr, "invalid_input")
+
+	got := getFolder(t, h, f.ID)
+	assert.True(t, got.HasPassword, "rejected rotation must not drop the lock")
+	require.NotNil(t, got.PasswordHint)
+	assert.Equal(t, hint, *got.PasswordHint)
+
+	// Distinct new password, still omitting hint, keeps the reminder.
+	rr = doJSON(t, h, http.MethodPatch, "/folders/"+strconv.FormatInt(f.ID, 10),
+		map[string]any{"password": "bravo2", "current_password": oldPW})
+	assert.Equal(t, http.StatusOK, rr.Code)
+	got = getFolder(t, h, f.ID)
+	require.NotNil(t, got.PasswordHint)
+	assert.Equal(t, hint, *got.PasswordHint)
+}
+
 func TestHandler_HintOnUnprotectedFolder_Rejected(t *testing.T) {
 	h, repo, uid := newHandlerRouter(t)
 	ctx := context.Background()

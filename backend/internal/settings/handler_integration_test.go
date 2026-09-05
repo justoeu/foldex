@@ -176,6 +176,53 @@ func TestHandler_MasterPassword_HintEqualsPassword(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), "invalid_input")
 }
 
+func TestHandler_MasterPassword_RotationOmittingHintEqualToStored(t *testing.T) {
+	h := newSettingsRouter(t)
+
+	rr := do(t, h, http.MethodPut, "/settings/master-password", map[string]any{
+		"password": "recovery-key1",
+		"hint":     "the usual",
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// Settings UI omits hint when the reminder field is left blank; COALESCE
+	// then keeps the stored phrase. Rotating the master onto that phrase
+	// must 400 (INV-066/067) instead of publishing the recovery secret.
+	rr = do(t, h, http.MethodPut, "/settings/master-password", map[string]any{
+		"password":         "the usual",
+		"current_password": "recovery-key1",
+	})
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), "invalid_input")
+
+	rr = do(t, h, http.MethodGet, "/settings/master-password", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var out struct {
+		Configured bool    `json:"configured"`
+		Hint       *string `json:"hint"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &out))
+	assert.True(t, out.Configured)
+	require.NotNil(t, out.Hint)
+	assert.Equal(t, "the usual", *out.Hint)
+
+	// Old master still authorizes a legitimate rotation that keeps the hint.
+	rr = do(t, h, http.MethodPut, "/settings/master-password", map[string]any{
+		"password":         "second-master-pw",
+		"current_password": "the usual",
+	})
+	assert.Equal(t, http.StatusUnauthorized, rr.Code, "rejected rotation must not install the hint as the master")
+
+	rr = do(t, h, http.MethodPut, "/settings/master-password", map[string]any{
+		"password":         "second-master-pw",
+		"current_password": "recovery-key1",
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &out))
+	require.NotNil(t, out.Hint)
+	assert.Equal(t, "the usual", *out.Hint)
+}
+
 func TestHandler_Status_UnconfiguredHasNilHint(t *testing.T) {
 	h := newSettingsRouter(t)
 	rr := do(t, h, http.MethodGet, "/settings/master-password", nil)
