@@ -49,7 +49,12 @@ func run(logger *slog.Logger) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := pgxpool.New(ctx, cfg.DBURL())
+	poolCfg, err := backupagent.PoolConfig(cfg.DBURL())
+	if err != nil {
+		logger.Error("database pool config", "err", err)
+		return 1
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		logger.Error("database pool", "err", err)
 		return 1

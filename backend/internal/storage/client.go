@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -16,12 +17,39 @@ import (
 	"foldex/internal/ports"
 )
 
+// listedObject is the subset of minio.ObjectInfo Stats walks. Tests inject a
+// listFn that yields this shape so a fake bucket does not need a live SDK.
+type listedObject struct {
+	Key  string
+	Size int64
+	Err  error
+}
+
 // Client wraps an S3-compatible client (RustFS via minio-go) and exposes a minimal interface for foldex.
 type Client struct {
 	mc     *minio.Client
 	bucket string
 	logger *slog.Logger
+
+	listFn func(ctx context.Context) <-chan listedObject
+
+	listMu    sync.Mutex
+	listItems []listedObject
+	listErr   error
+	listAt    time.Time
+	listCall  *listingCall
 }
+
+type listingCall struct {
+	done  chan struct{}
+	items []listedObject
+	err   error
+}
+
+// statsCacheTTL is the window during which Stats reuses one bucket listing.
+// Tests shrink it; production keeps a minute so the stats page cannot LIST
+// the shared bucket on every poll.
+var statsCacheTTL = time.Minute
 
 // Config holds S3-compatible object-store connection parameters (RustFS).
 type Config struct {
@@ -206,16 +234,108 @@ type Stats struct {
 }
 
 func (c *Client) Stats(ctx context.Context) (Stats, error) {
+	return c.statsFiltered(ctx, nil)
+}
+
+// StatsOwned sums only keys in owned. A nil/empty set returns zeros without
+// walking the shared bucket — listing everything and filtering later would
+// still expose other tenants' objects as a side channel of LIST I/O.
+func (c *Client) StatsOwned(ctx context.Context, owned map[string]struct{}) (Stats, error) {
+	if len(owned) == 0 {
+		return Stats{}, nil
+	}
+	return c.statsFiltered(ctx, owned)
+}
+
+func (c *Client) statsFiltered(ctx context.Context, owned map[string]struct{}) (Stats, error) {
+	items, err := c.cachedListing(ctx)
+	if err != nil {
+		return Stats{}, err
+	}
 	var s Stats
-	ch := c.mc.ListObjects(ctx, c.bucket, minio.ListObjectsOptions{Recursive: true})
-	for obj := range ch {
-		if obj.Err != nil {
-			return s, fmt.Errorf("storage: list objects: %w", obj.Err)
+	for _, obj := range items {
+		if owned != nil {
+			if _, ok := owned[obj.Key]; !ok {
+				continue
+			}
 		}
 		s.Objects++
 		s.TotalBytes += obj.Size
 	}
 	return s, nil
+}
+
+func (c *Client) cachedListing(ctx context.Context) ([]listedObject, error) {
+	now := time.Now()
+	c.listMu.Lock()
+	if !c.listAt.IsZero() && now.Before(c.listAt.Add(statsCacheTTL)) {
+		items, err := c.listItems, c.listErr
+		c.listMu.Unlock()
+		return items, err
+	}
+	if call := c.listCall; call != nil {
+		c.listMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-call.done:
+			return call.items, call.err
+		}
+	}
+	call := &listingCall{done: make(chan struct{})}
+	c.listCall = call
+	c.listMu.Unlock()
+
+	items, err := c.collectListing(ctx)
+
+	c.listMu.Lock()
+	call.items, call.err = items, err
+	if err == nil {
+		c.listItems = items
+		c.listErr = nil
+		c.listAt = time.Now()
+	}
+	c.listCall = nil
+	close(call.done)
+	c.listMu.Unlock()
+	return items, err
+}
+
+func (c *Client) collectListing(ctx context.Context) ([]listedObject, error) {
+	var items []listedObject
+	for obj := range c.eachObject(ctx) {
+		if obj.Err != nil {
+			return nil, fmt.Errorf("storage: list objects: %w", obj.Err)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		items = append(items, listedObject{Key: obj.Key, Size: obj.Size})
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (c *Client) eachObject(ctx context.Context) <-chan listedObject {
+	if c.listFn != nil {
+		return c.listFn(ctx)
+	}
+	out := make(chan listedObject)
+	go func() {
+		defer close(out)
+		ch := c.mc.ListObjects(ctx, c.bucket, minio.ListObjectsOptions{Recursive: true})
+		for obj := range ch {
+			item := listedObject{Key: obj.Key, Size: obj.Size, Err: obj.Err}
+			select {
+			case <-ctx.Done():
+				return
+			case out <- item:
+			}
+		}
+	}()
+	return out
 }
 
 // ObjectInfo is the minimal metadata the backup module needs to enumerate the

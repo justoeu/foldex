@@ -26,6 +26,7 @@ import (
 	"foldex/internal/metrics"
 	"foldex/internal/notemedia"
 	"foldex/internal/oauthgoogle"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/keyfile"
 	"foldex/internal/pkg/logsafe"
 	"foldex/internal/pkg/secrets"
@@ -441,7 +442,7 @@ func main() {
 		// schemes. Without this, the endpoint becomes a read-anywhere
 		// primitive (file:///etc/passwd → screenshot → /api/files).
 		deps.ScreenshotURL = preview.IsPublicURL
-		deps.StorageStatter = storageStatsAdapter{c: storageClient}
+		deps.StorageStatter = storageStatsAdapter{c: storageClient, keys: stats.NewRepository(pool).ObjectKeys}
 		deps.StorageBucket = backupStorageAdapter{c: storageClient}
 	}
 
@@ -630,10 +631,24 @@ func (a pushSenderAdapter) Notify(ctx context.Context, n changecheck.Notificatio
 
 // storageStatsAdapter bridges storage.Client to the stats.StorageStatter
 // contract without making the storage package depend on stats.
-type storageStatsAdapter struct{ c *storage.Client }
+type storageStatsAdapter struct {
+	c    *storage.Client
+	keys func(context.Context, authctx.UserID) ([]string, error)
+}
 
-func (a storageStatsAdapter) Stats(ctx context.Context) (stats.StorageStats, error) {
-	s, err := a.c.Stats(ctx)
+func (a storageStatsAdapter) Stats(ctx context.Context, uid authctx.UserID) (stats.StorageStats, error) {
+	var owned map[string]struct{}
+	if a.keys != nil {
+		list, err := a.keys(ctx, uid)
+		if err != nil {
+			return stats.StorageStats{}, err
+		}
+		owned = make(map[string]struct{}, len(list))
+		for _, key := range list {
+			owned[key] = struct{}{}
+		}
+	}
+	s, err := a.c.StatsOwned(ctx, owned)
 	if err != nil {
 		return stats.StorageStats{}, err
 	}

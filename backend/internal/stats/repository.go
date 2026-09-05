@@ -400,3 +400,36 @@ func (r *Repository) TagBuckets(ctx context.Context, uid authctx.UserID) ([]TagB
 	}
 	return out, rows.Err()
 }
+
+// ObjectKeys returns the RustFS keys this owner actually owns. Link image
+// paths are accepted only when they name the row's own id — og_image_url is
+// attacker-controlled remote text and must not mint another tenant's key.
+func (r *Repository) ObjectKeys(ctx context.Context, uid authctx.UserID) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT object_key FROM note_media WHERE user_id = $1
+		UNION
+		SELECT regexp_replace(og_image_url, '^/api/files/', '')
+		FROM link
+		WHERE user_id = $1
+		  AND (
+		    og_image_url LIKE ('/api/files/screenshots/' || id::text || '.%')
+		    OR og_image_url LIKE ('/api/files/images/' || id::text || '.%')
+		  )
+	`, int64(uid))
+	if err != nil {
+		return nil, fmt.Errorf("storage object keys: %w", err)
+	}
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		if key == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
