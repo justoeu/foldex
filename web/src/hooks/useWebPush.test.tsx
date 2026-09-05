@@ -26,21 +26,30 @@ function installPushEnv(opts: {
   const supported = opts.supported ?? true
   const permission = opts.permission ?? 'default'
   const endpoint = 'https://push.example/sub/1'
-  const sub = opts.subscribed
-    ? {
-        endpoint,
-        toJSON: () => ({ endpoint, keys: { p256dh: 'pk', auth: 'ak' } }),
-        unsubscribe: vi.fn().mockResolvedValue(true),
-      }
-    : null
+  let current: {
+    endpoint: string
+    toJSON: () => { endpoint: string; keys: { p256dh: string; auth: string } }
+    unsubscribe: ReturnType<typeof vi.fn>
+  } | null = null
+
+  const makeSub = () => ({
+    endpoint,
+    toJSON: () => ({ endpoint, keys: { p256dh: 'pk', auth: 'ak' } }),
+    unsubscribe: vi.fn().mockImplementation(async () => {
+      current = null
+      return true
+    }),
+  })
+
+  if (opts.subscribed) current = makeSub()
+  const sub = current
 
   const pushManager = {
-    getSubscription: vi.fn().mockResolvedValue(sub),
-    subscribe: vi.fn().mockImplementation(async () => ({
-      endpoint,
-      toJSON: () => ({ endpoint, keys: { p256dh: 'pk', auth: 'ak' } }),
-      unsubscribe: vi.fn().mockResolvedValue(true),
-    })),
+    getSubscription: vi.fn().mockImplementation(async () => current),
+    subscribe: vi.fn().mockImplementation(async () => {
+      current = makeSub()
+      return current
+    }),
   }
 
   if (supported) {
@@ -80,7 +89,7 @@ function installPushEnv(opts: {
     },
   })
 
-  return { pushManager, sub }
+  return { pushManager, sub, getCurrentSub: () => current }
 }
 
 beforeEach(() => {
@@ -173,6 +182,65 @@ describe('useSubscribePush', () => {
       }
     })
     expect((err as Error).message).toBe('permission_denied')
+  })
+
+  it('rolls back the browser subscription when the server POST fails', async () => {
+    const { pushManager, getCurrentSub } = installPushEnv({
+      supported: true,
+      permission: 'default',
+      requestPermission: 'granted',
+    })
+    const postSpy = vi.spyOn(http, 'post')
+    const original = postSpy.getMockImplementation()!
+    postSpy.mockImplementation(async (url: string, ...rest: any[]) => {
+      if (String(url).includes('/api/push/subscriptions')) {
+        throw new Error('backend down')
+      }
+      return original(url, ...rest)
+    })
+    const { result } = renderHook(() => useSubscribePush(), { wrapper })
+    let err: unknown
+    await act(async () => {
+      try {
+        await result.current.mutateAsync()
+      } catch (e) {
+        err = e
+      }
+    })
+    expect((err as Error).message).toBe('backend down')
+    expect(pushManager.subscribe).toHaveBeenCalled()
+    expect(getCurrentSub()).toBeNull()
+  })
+
+  it('still surfaces the POST error if local unsubscribe also fails', async () => {
+    const { pushManager } = installPushEnv({
+      supported: true,
+      permission: 'granted',
+      requestPermission: 'granted',
+    })
+    pushManager.subscribe.mockImplementation(async () => ({
+      endpoint: 'https://push.example/sub/1',
+      toJSON: () => ({ endpoint: 'https://push.example/sub/1', keys: { p256dh: 'pk', auth: 'ak' } }),
+      unsubscribe: vi.fn().mockRejectedValue(new Error('unsubscribe failed')),
+    }))
+    const postSpy = vi.spyOn(http, 'post')
+    const original = postSpy.getMockImplementation()!
+    postSpy.mockImplementation(async (url: string, ...rest: any[]) => {
+      if (String(url).includes('/api/push/subscriptions')) {
+        throw new Error('backend down')
+      }
+      return original(url, ...rest)
+    })
+    const { result } = renderHook(() => useSubscribePush(), { wrapper })
+    let err: unknown
+    await act(async () => {
+      try {
+        await result.current.mutateAsync()
+      } catch (e) {
+        err = e
+      }
+    })
+    expect((err as Error).message).toBe('backend down')
   })
 })
 
