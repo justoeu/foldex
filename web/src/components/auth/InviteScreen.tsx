@@ -6,8 +6,8 @@ import { PasswordStrength } from '../PasswordStrength'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 import { AuthDivider, GoogleButton } from './GoogleButton'
 import { PasswordInput } from '../PasswordInput'
+import { usePasswordFloor } from '../../hooks/useInstancePolicy'
 
-const MIN_PASSWORD = 8
 type LookupState = 'loading' | 'ready' | 'invalid' | 'failed'
 
 /**
@@ -21,6 +21,7 @@ type LookupState = 'loading' | 'ready' | 'invalid' | 'failed'
 export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () => void }) {
   const { t } = useTranslation()
   const { adopt, session } = useAuth()
+  const minLen = usePasswordFloor()
   const [preview, setPreview] = useState<InvitePreview | null>(null)
   const [lookupState, setLookupState] = useState<LookupState>('loading')
   const [lookupError, setLookupError] = useState<'network' | 'generic'>('network')
@@ -136,7 +137,7 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
       if (!controller.signal.aborted && tokenRef.current === submittedToken) adopt(response)
     } catch (err) {
       if (!controller.signal.aborted && tokenRef.current === submittedToken) {
-        setError(messageFor(err, t))
+        setError(messageFor(err, t, minLen))
       }
     } finally {
       if (acceptAbortRef.current === controller) acceptAbortRef.current = null
@@ -203,7 +204,7 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
         <AuthField
           id="fx-invite-password"
           label={t('auth.password')}
-          hint={t('auth.password_min', { count: MIN_PASSWORD })}
+          hint={t('auth.password_min', { count: minLen })}
         >
           <PasswordInput
             id="fx-invite-password"
@@ -228,20 +229,26 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
           />
         </AuthField>
 
-        <AuthSubmit busy={busy} disabled={oauthBusy}>{t('auth_invite.submit')}</AuthSubmit>
+        <AuthSubmit busy={busy} disabled={oauthBusy || (password.length > 0 && password.length < minLen)}>
+          {t('auth_invite.submit')}
+        </AuthSubmit>
       </form>
     </AuthShell>
   )
 }
 
-function messageFor(err: unknown, t: (k: string, o?: Record<string, unknown>) => string): string {
+function messageFor(
+  err: unknown,
+  t: (k: string, o?: Record<string, unknown>) => string,
+  minLen: number,
+): string {
   switch (errorCode(err)) {
     case 'invite_invalid':
       return t('auth_invite.invalid_body')
     case 'email_taken':
       return t('auth_errors.email_taken')
     case 'password_too_short':
-      return t('auth_errors.password_too_short', { count: MIN_PASSWORD })
+      return t('auth_errors.password_too_short', { count: minLen })
     case 'password_too_long':
       return t('auth_errors.password_too_long')
     case 'too_many_attempts':

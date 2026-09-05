@@ -1167,10 +1167,14 @@ type PolicyReader interface {
 // even if a row is edited directly in SQL past the validation in
 // policy.Validate.
 func (h *Handler) passwordFloor(ctx context.Context) int {
-	if h.policy == nil {
+	return passwordFloorOf(ctx, h.policy)
+}
+
+func passwordFloorOf(ctx context.Context, policy PolicyReader) int {
+	if policy == nil {
 		return MinPasswordLen
 	}
-	return max(h.policy.PasswordMinLength(ctx), MinPasswordLen)
+	return max(policy.PasswordMinLength(ctx), MinPasswordLen)
 }
 
 // otpTTL and otpCooldown resolve the configured values, never below the
@@ -1197,7 +1201,11 @@ func (h *Handler) otpCooldown(ctx context.Context) time.Duration {
 // configured floor. As a package function it would have kept silently applying
 // the constant, and a policy nothing enforces is worse than no policy.
 func (h *Handler) validatePassword(ctx context.Context, p string) error {
-	minLen := h.passwordFloor(ctx)
+	return validatePasswordAgainst(ctx, h.policy, p)
+}
+
+func validatePasswordAgainst(ctx context.Context, policy PolicyReader, p string) error {
+	minLen := passwordFloorOf(ctx, policy)
 	if utf8.RuneCountInString(p) < minLen {
 		return httperr.New(http.StatusBadRequest, "password_too_short",
 			fmt.Sprintf("password must be at least %d characters", minLen))
