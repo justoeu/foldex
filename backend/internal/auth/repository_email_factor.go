@@ -23,7 +23,10 @@ const OTPPurposeEnrollEmail2FA = "enroll_email_2fa"
 // ErrFactorAlreadyConfirmed means the account already holds this factor.
 var ErrFactorAlreadyConfirmed = errors.New("auth: factor already confirmed")
 
-// ErrNoPendingFactor means confirmation arrived with nothing to confirm.
+// ErrNoPendingFactor means a factor mutation found no row to act on:
+// confirmation with nothing to confirm, or a disable of a factor that is not
+// enrolled. Both disable paths share this sentinel so a missing factor cannot
+// look like a credential-set mutation on one twin and a 409 on the other.
 var ErrNoPendingFactor = errors.New("auth: no pending factor enrollment")
 
 // StartEmailFactorEnrollment opens a pending e-mail factor and mails its code.
@@ -273,56 +276,8 @@ func (r *Repository) DisableEmailFactor(ctx context.Context, uid authctx.UserID,
 	if err := consumeSecondFactorTx(ctx, tx, uid, proof); err != nil {
 		return err
 	}
-
-	ct, err := tx.Exec(ctx, `DELETE FROM email_factor WHERE user_id = $1`, int64(uid))
-	if err != nil {
-		return fmt.Errorf("disable email factor: %w", err)
-	}
-	if ct.RowsAffected() == 0 {
-		return ErrNoPendingFactor
-	}
-	// Both purposes: an outstanding step-up code is a live proof issued BY the
-	// factor being removed, so leaving it behind would let a mailbox authorize
-	// operations after the account stopped accepting that mailbox as a factor.
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM email_otp WHERE user_id = $1 AND purpose = ANY($2)`,
-		int64(uid), []string{OTPPurposeEnrollEmail2FA, OTPPurposeStepUp2FA}); err != nil {
-		return fmt.Errorf("disable email factor clear codes: %w", err)
-	}
-
-	// Read the remaining factor INSIDE the transaction, under the user lock, so
-	// a concurrent TOTP disable cannot leave both paths believing the other
-	// factor survives and both keeping the recovery codes.
-	var totpLeft bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM totp_secret WHERE user_id = $1 AND confirmed_at IS NOT NULL
-		)`, int64(uid)).Scan(&totpLeft); err != nil {
-		return fmt.Errorf("disable email factor check totp: %w", err)
-	}
-	if !totpLeft {
-		if _, err := tx.Exec(ctx, `DELETE FROM recovery_code WHERE user_id = $1`, int64(uid)); err != nil {
-			return fmt.Errorf("disable email factor clear recovery: %w", err)
-		}
-	}
-
-	// Removing a factor is a CREDENTIAL-SET mutation, so it bumps the epoch and
-	// revokes every other session — exactly as disabling TOTP does. Without it
-	// the account that removes its e-mail factor BECAUSE the mailbox was
-	// compromised leaves the intruder's other session live, along with any
-	// password_reset or auth_challenge bound to the epoch that just stopped
-	// being trustworthy. The caller's own session survives, so the user is not
-	// signed out of the device they are using.
-	if _, err := tx.Exec(ctx, `
-		UPDATE app_user SET token_version = token_version + 1, updated_at = now()
-		WHERE id = $1 AND token_version = $2`, int64(uid), tokenVersion); err != nil {
-		return fmt.Errorf("disable email factor bump epoch: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE session SET revoked_at = now(), revoked_reason = $3
-		WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
-		int64(uid), sessionID, ReasonPasswordChanged); err != nil {
-		return fmt.Errorf("disable email factor revoke sessions: %w", err)
+	if err := disableFactorTx(ctx, tx, uid, sessionID, tokenVersion, disableKindEmail); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("disable email factor commit: %w", err)
