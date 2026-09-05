@@ -483,10 +483,13 @@ func (in loginInput) who() string {
 
 // Login authenticates a password and issues a session.
 //
-// Every failure — unknown e-mail, wrong password, disabled account — produces
-// the SAME 401 body, and the handler takes the same minimum time. A distinct
-// `account_disabled` code would confirm that the address is registered, which
-// is exactly the fact the anti-enumeration design refuses to leak.
+// Every failure — unknown e-mail, wrong password, disabled account, and a
+// per-account lockout — produces the SAME 401 body, and the handler takes the
+// same minimum time. A distinct `account_disabled` code would confirm that the
+// address is registered; a 429 on the account bucket would confirm that two
+// identifiers name one account. Both are facts the anti-enumeration design
+// refuses to leak. Origin-bucket 429 is a different question (how many
+// distinct identifiers this address has probed) and stays 429.
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	defer floorDuration(time.Now(), loginFloor)
 
@@ -515,9 +518,11 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		writeRateLimited(w, until)
 		return
 	}
-	if until, ok := h.loginByEmail.Begin(emailKey); !ok {
+	if _, ok := h.loginByEmail.Begin(emailKey); !ok {
 		h.loginByIP.Release(ipKey)
-		writeRateLimited(w, until)
+		// 401, not 429: the bucket is keyed on the resolved account, so a
+		// distinct lockout status is a username-to-mailbox oracle (INV-041).
+		httperr.Write(w, errInvalidCredentials())
 		return
 	}
 

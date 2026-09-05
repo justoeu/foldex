@@ -64,7 +64,7 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **`X-Forwarded-For` is honoured ONLY from a configured proxy** → [INV-007](docs/INVARIANTS.md#inv-007)
 - **Nenhuma entrada controlada pelo cliente compõe uma chave de rate limit** → [INV-183](docs/INVARIANTS.md#inv-183)
   ↳ `IP + User-Agent` daria ao atacante um orçamento novo por requisição; o balde deixa de existir enquanto continua parecendo existir. Registrar ≠ confiar.
-- **O balde de IP do login conta LARGURA (contas distintas); o de e-mail conta PROFUNDIDADE; conjunto cheio TRANCA** → [INV-184](docs/INVARIANTS.md#inv-184) | guard: `TestLoginFailure_TheIPBucketCountsAccounts_NotAttempts`, `TestLogin_ManyPeopleBehindOneAddressDoNotLockEachOtherOut`, `TestSetMode_ASuccessDoesNotForgiveTheAccountsAlreadySwept`, `TestSetMode_MembersAgeOutOfTheWindow`, `TestEveryTerminalPathReleasesTheReservation`, `TestLogin_AliasesOfOneAccountCostTheSameAsStrangers`
+- **O balde de IP do login conta LARGURA (contas distintas); o de e-mail conta PROFUNDIDADE; conjunto cheio TRANCA** → [INV-184](docs/INVARIANTS.md#inv-184) | guard: `TestLoginFailure_TheIPBucketCountsAccounts_NotAttempts`, `TestLogin_ManyPeopleBehindOneAddressDoNotLockEachOtherOut`, `TestSetMode_ASuccessDoesNotForgiveTheAccountsAlreadySwept`, `TestSetMode_MembersAgeOutOfTheWindow`, `TestEveryTerminalPathReleasesTheReservation`, `TestLogin_AliasesOfOneAccountCostTheSameAsStrangers`, `TestLogin_AccountLockoutDoesNotDistinguishAnAliasFromAStranger`
   ↳ `gcLocked` media só `e.fails`: um `Release` apagava o conjunto inteiro, e martelar uma conta devolvia todo o orçamento de largura da origem. Achado por mutação.
 - **Limites de abuso: pisos dos DOIS lados, fora de faixa reverte o CAMPO, e "dinâmico" é RECARREGAR** → [INV-185](docs/INVARIANTS.md#inv-185) | guard: `TestValidateForWrite_RefusesBothDirections`, `TestSanitize_RevertsOneKnobAndKeepsTheRest`, `TestCache_FailStaticKeepsTheLastGoodPolicy`
   ↳ Um rate limit baixo demais VIRA o ataque: 1 conta/hora tranca um escritório com uma senha errada.
@@ -103,7 +103,7 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **`AUTH_REQUIRE_2FA_FOR_ADMINS` diverts, it does not refuse, and has no privileged-session exception** → [INV-038](docs/INVARIANTS.md#inv-038)
 - **Sessions are opaque tokens stored as sha256, and the CSRF header is checked against the SESSION ROW** → [INV-039](docs/INVARIANTS.md#inv-039)
 - **Refresh rotation runs in ONE `SERIALIZABLE` transaction, and a replayed token kills the whole FAMILY** → [INV-040](docs/INVARIANTS.md#inv-040) | guard: `TestRefresh_GraceSiblingInheritsFamilyAndAbsoluteCeiling`
-- **Login is byte-identical for unknown e-mail, wrong password and disabled account** → [INV-041](docs/INVARIANTS.md#inv-041)
+- **Login is byte-identical for unknown e-mail, wrong password, disabled account and per-account lockout** → [INV-041](docs/INVARIANTS.md#inv-041) | guard: `TestLogin_FailuresAreByteIdentical`, `TestLogin_AccountLockoutDoesNotDistinguishAnAliasFromAStranger`
 - **`/api/auth/me` ALWAYS answers 200** → [INV-042](docs/INVARIANTS.md#inv-042)
 - **A non-admin gets 404 from `/api/admin/*`, not 403** → [INV-043](docs/INVARIANTS.md#inv-043)
 - **No API call may leave the instance with zero active administrators** → [INV-044](docs/INVARIANTS.md#inv-044)

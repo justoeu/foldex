@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"foldex/internal/abusepolicy"
 	"foldex/internal/auth"
 	"foldex/internal/testdb"
 
@@ -152,20 +153,24 @@ func TestUsername_SharesTheLoginBudgetWithTheAddress(t *testing.T) {
 		map[string]string{"username": "target"}).Code)
 
 	// Spend the budget under the ADDRESS...
-	var last int
-	for i := 0; i < 8; i++ {
-		last = h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
+	n := abusepolicy.Default().LoginFailuresPerAccount
+	for i := 0; i < n; i++ {
+		rec := h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
 			"email": "user@example.com", "password": "wrong password",
-		}).Code
-		if last == http.StatusTooManyRequests {
-			break
-		}
+		})
+		require.Equal(t, http.StatusUnauthorized, rec.Code, "attempt %d", i+1)
 	}
-	require.Equal(t, http.StatusTooManyRequests, last, "the per-account bucket never locked")
 
-	// ...and the USERNAME must find it already spent.
-	assert.Equal(t, http.StatusTooManyRequests, h.client(t).do(http.MethodPost, "/api/auth/login",
-		map[string]string{"identifier": "target", "password": "wrong password"}).Code)
+	// ...and the USERNAME must find it already spent. The observable is no
+	// longer 429 (that status is the alias oracle); lockout is that the
+	// correct password does not issue a session.
+	rec := h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
+		"identifier": "target", "password": "a good password",
+	})
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"the username must share the address's spent budget")
+	assert.Nil(t, cookieByName(rec, auth.CookieAccess),
+		"a shared budget that a valid credential on the other name walks through is two budgets")
 }
 
 // ─────────────────────────────────────────────────────────────────────

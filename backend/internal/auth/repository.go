@@ -275,9 +275,10 @@ func (r *Repository) verifyPassword(ctx context.Context, identifier, password st
 // itself an anti-enumeration measure (not incrementing would teach an attacker
 // which names are lockable, hence which exist).
 //
-// Nothing observable depends on the answer: both branches are one indexed
-// probe, and the response path that follows always runs bcrypt and always takes
-// the same floor.
+// The observable does not depend on the answer: both branches are one indexed
+// probe, the response path always takes the same floor, and a locked account
+// bucket answers the same 401 as a miss (INV-041). The resolution only shares
+// depth, it does not change status, body or Retry-After.
 func (r *Repository) loginBucketKey(ctx context.Context, identifier string) (string, error) {
 	norm := NormalizeEmail(identifier)
 	var canonical string

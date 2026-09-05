@@ -235,6 +235,46 @@ func probesUntilRefused(t *testing.T, c *client, max int, first []string) int {
 	return 0
 }
 
+// After the per-account bucket locks, a 429 on the other name of the same
+// account is an unauthenticated username-to-mailbox oracle: five wrong
+// passwords on alice@x.com, then 429 on `alice` and 401 on a stranger, answers
+// the question INV-013 keeps behind a session. Depth stays shared (INV-184);
+// only the observable must match a credential miss (INV-041 extended).
+func TestLogin_AccountLockoutDoesNotDistinguishAnAliasFromAStranger(t *testing.T) {
+	h := newHarness(t)
+	c := h.client(t)
+	testdb.SeedUserWithPassword(t, h.pool, "oracle@example.com", "a good password", "editor")
+	tag, err := h.pool.Exec(t.Context(),
+		`UPDATE app_user SET username = 'oracleuser', username_normalized = 'oracleuser' WHERE email = 'oracle@example.com'`)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, tag.RowsAffected(), "the alias fixture did not take")
+
+	n := abusepolicy.Default().LoginFailuresPerAccount
+	for i := range n {
+		rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
+			"email": "oracle@example.com", "password": "wrong",
+		})
+		require.Equal(t, http.StatusUnauthorized, rec.Code, "attempt %d", i+1)
+	}
+
+	alias := c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"identifier": "oracleuser", "password": "wrong",
+	})
+	stranger := c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"identifier": "nosuchuser", "password": "wrong",
+	})
+
+	require.Equal(t, http.StatusUnauthorized, stranger.Code,
+		"fixture: a miss on an unknown identifier is 401, not the lockout shape")
+	assert.Equal(t, stranger.Code, alias.Code,
+		"status %d on the alias vs %d on a stranger tells an anonymous caller they name one account",
+		alias.Code, stranger.Code)
+	assert.Equal(t, stranger.Body.String(), alias.Body.String(),
+		"the bodies must be byte-identical: a distinct code or message is the same oracle as a distinct status")
+	assert.Equal(t, stranger.Header().Get("Retry-After"), alias.Header().Get("Retry-After"),
+		"Retry-After on the alias and not on the stranger is the oracle in a header")
+}
+
 // The per-account lockout writes its own row, labelled `account`.
 //
 // The two constants exist "so a typo would be a category nobody can search
