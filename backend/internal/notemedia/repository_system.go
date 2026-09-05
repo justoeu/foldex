@@ -8,9 +8,9 @@ import (
 )
 
 // SystemSweepExpired deletes at most limit expired, unreferenced objects across
-// all tenants. It holds row locks while calling the single-object storage port;
-// the cap bounds transaction and object-store work, and SKIP LOCKED allows a
-// future second worker without duplicate deletion.
+// all tenants. It holds row locks while calling the bulk storage port; the cap
+// bounds transaction and object-store work, and SKIP LOCKED allows a future
+// second worker without duplicate deletion.
 func SystemSweepExpired(ctx context.Context, pool *pgxpool.Pool, storage ObjectDeleter, limit int) (int64, error) {
 	if storage == nil {
 		return 0, nil
@@ -41,17 +41,7 @@ func SystemSweepExpired(ctx context.Context, pool *pgxpool.Pool, storage ObjectD
 	if err != nil {
 		return 0, err
 	}
-	deleted := make([]string, 0, len(keys))
-	var deleteErr error
-	for _, key := range keys {
-		if err := storage.DeleteObject(ctx, key); err != nil {
-			if deleteErr == nil {
-				deleteErr = fmt.Errorf("delete expired note media object %q: %w", key, err)
-			}
-			continue
-		}
-		deleted = append(deleted, key)
-	}
+	deleted, deleteErr := deleteLockedObjects(ctx, storage, keys)
 	if len(deleted) > 0 {
 		if _, err := tx.Exec(ctx, `
             DELETE FROM note_media m

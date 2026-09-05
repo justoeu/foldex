@@ -366,7 +366,29 @@ func (r *Repository) cleanupMedia(ctx context.Context, uid authctx.UserID, keys 
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	_, _ = notemedia.DeleteOwnedUnreferenced(cleanupCtx, r.pool, uid, keys, storage)
+	_, _ = notemedia.DeleteOwnedUnreferenced(cleanupCtx, r.pool, uid, keys, asObjectDeleter(storage))
+}
+
+type uploaderObjectDeleter struct{ ports.Uploader }
+
+func (d uploaderObjectDeleter) DeleteObject(ctx context.Context, key string) error {
+	return d.Uploader.DeleteObject(ctx, key)
+}
+
+func (d uploaderObjectDeleter) DeleteObjects(ctx context.Context, keys []string) error {
+	for _, key := range keys {
+		if err := d.DeleteObject(ctx, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func asObjectDeleter(storage ports.Uploader) notemedia.ObjectDeleter {
+	if d, ok := any(storage).(notemedia.ObjectDeleter); ok {
+		return d
+	}
+	return uploaderObjectDeleter{storage}
 }
 
 func (r *Repository) tagsFor(ctx context.Context, uid authctx.UserID, noteIDs []int64) (map[int64][]tags.Chip, error) {
