@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -22,7 +21,6 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
-	"foldex/internal/pkg/httperr"
 	"foldex/internal/settings"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
@@ -728,10 +726,7 @@ func TestRestore_AdvisoryLockRejectsConcurrentRestore(t *testing.T) {
 	svc := backup.NewService(pool, newStubBucket(), discardLogger())
 	_, err = svc.Restore(ctx, uid, minimalZipWithFile(t, "files/images/1.jpg"), backup.ModeSkip)
 	require.Error(t, err)
-	var he *httperr.Error
-	require.ErrorAs(t, err, &he)
-	assert.Equal(t, 409, he.Status)
-	assert.Equal(t, "restore_in_progress", he.Code)
+	require.ErrorIs(t, err, backup.ErrRestoreInProgress)
 }
 
 func TestRestore_RejectsInvalidFolderPasswordHashesBeforeWipe(t *testing.T) {
@@ -769,10 +764,8 @@ func TestRestore_RejectsInvalidFolderPasswordHashesBeforeWipe(t *testing.T) {
 
 			_, err = backup.NewService(pool, newStubBucket(), discardLogger()).Restore(ctx, uid, zr, backup.ModeWipe)
 			if assert.Error(t, err) {
-				var httpErr *httperr.Error
-				require.ErrorAs(t, err, &httpErr)
-				assert.Equal(t, http.StatusBadRequest, httpErr.Status)
-				assert.Equal(t, "invalid_backup", httpErr.Code)
+				require.ErrorIs(t, err, backup.ErrInvalidBackup)
+				assert.False(t, backup.IsUnprocessableBackup(err))
 				assert.NotContains(t, err.Error(), hash, "restore error must not reflect credential material")
 			}
 			_, err = frepo.Get(ctx, uid, keep.ID)

@@ -219,7 +219,7 @@ func (h *Handler) restore(w http.ResponseWriter, r *http.Request) {
 	defer cleanup()
 	rep, err := h.svc.Restore(r.Context(), authctx.MustUser(r.Context()), zr, mode)
 	if err != nil {
-		httperr.Write(w, err)
+		httperr.Write(w, restoreHTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, rep)

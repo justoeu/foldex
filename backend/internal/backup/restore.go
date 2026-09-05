@@ -5,14 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/pkg/httperr"
 )
 
 type restoreTransactionResult struct {
@@ -64,11 +62,10 @@ func preflightRestore(ctx context.Context, zr *zip.Reader) (backupArchiveInspect
 	if preflight.manifest != nil && preflight.manifest.Kind != ManifestKind {
 		message = "backup is not a foldex backup"
 	}
-	status := http.StatusBadRequest
 	if preflight.unprocessable {
-		status = http.StatusUnprocessableEntity
+		return preflight, unprocessableBackup(message)
 	}
-	return preflight, httperr.New(status, "invalid_backup", message)
+	return preflight, invalidBackup(message)
 }
 
 func (s *Service) restoreFromLedger(ctx context.Context, uid authctx.UserID, zr *zip.Reader, mode ConflictMode, digest [sha256.Size]byte, start time.Time) (RestoreReport, bool, error) {
@@ -129,7 +126,7 @@ func lockRestoreTransaction(ctx context.Context, tx pgx.Tx) error {
 		return fmt.Errorf("backup: advisory lock: %w", err)
 	}
 	if !acquired {
-		return httperr.New(http.StatusConflict, "restore_in_progress", "another restore is already in progress")
+		return ErrRestoreInProgress
 	}
 	return nil
 }

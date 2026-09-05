@@ -7,15 +7,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
-	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"foldex/internal/pkg/httperr"
 )
 
 func zipReaderWithEntries(t *testing.T, entries ...struct {
@@ -158,10 +154,8 @@ func TestValidateAndRestore_EnforceSharedArchiveLimits(t *testing.T) {
 			_, err = svc.Restore(context.Background(), 1, tc.build(), ModeSkip)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.contains)
-			var httpErr *httperr.Error
-			require.True(t, errors.As(err, &httpErr))
-			assert.Equal(t, http.StatusBadRequest, httpErr.Status)
-			assert.Equal(t, "invalid_backup", httpErr.Code)
+			require.ErrorIs(t, err, ErrInvalidBackup)
+			assert.False(t, IsUnprocessableBackup(err))
 		})
 	}
 }

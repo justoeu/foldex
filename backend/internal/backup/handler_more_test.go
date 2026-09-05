@@ -70,6 +70,50 @@ func TestHandler_Restore_ServiceError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
+func TestHandler_Restore_MapsOrchestrationErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		status int
+		code   string
+		msg    string
+	}{
+		{
+			name:   "in_progress",
+			err:    ErrRestoreInProgress,
+			status: http.StatusConflict,
+			code:   "restore_in_progress",
+			msg:    "another restore is already in progress",
+		},
+		{
+			name:   "invalid",
+			err:    invalidBackup("backup contains invalid note media"),
+			status: http.StatusBadRequest,
+			code:   "invalid_backup",
+			msg:    "backup contains invalid note media",
+		},
+		{
+			name:   "unprocessable",
+			err:    unprocessableBackup("checksum mismatch: files/images/1.jpg"),
+			status: http.StatusUnprocessableEntity,
+			code:   "invalid_backup",
+			msg:    "checksum mismatch: files/images/1.jpg",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := mount(t, &fakeBackupSvc{restoreErr: tc.err})
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/backup/restore?mode=skip", bytes.NewReader(minimalZip(t)))
+			req.Header.Set("Content-Type", "application/zip")
+			r.ServeHTTP(rec, req)
+			assert.Equal(t, tc.status, rec.Code)
+			assert.Contains(t, rec.Body.String(), tc.code)
+			assert.Contains(t, rec.Body.String(), tc.msg)
+		})
+	}
+}
+
 func TestHandler_Restore_EmptyBody(t *testing.T) {
 	r := mount(t, &fakeBackupSvc{})
 	rec := httptest.NewRecorder()

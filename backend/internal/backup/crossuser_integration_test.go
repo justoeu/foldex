@@ -25,7 +25,6 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/notes"
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/pkg/httperr"
 	"foldex/internal/testdb"
 )
 
@@ -365,10 +364,8 @@ func TestRestore_RejectsNoteMediaDecodeBombBeforeWipe(t *testing.T) {
 
 	_, err = backup.NewService(pool, newStubBucket(), discardLogger()).Restore(ctx, uid, zr, backup.ModeWipe)
 	require.Error(t, err)
-	var httpErr *httperr.Error
-	require.ErrorAs(t, err, &httpErr)
-	assert.Equal(t, http.StatusBadRequest, httpErr.Status)
-	assert.Equal(t, "invalid_backup", httpErr.Code)
+	require.ErrorIs(t, err, backup.ErrInvalidBackup)
+	assert.False(t, backup.IsUnprocessableBackup(err))
 	_, err = repo.Get(ctx, uid, keep.ID)
 	require.NoError(t, err, "note-media validation must run before wipe mutates the database")
 }

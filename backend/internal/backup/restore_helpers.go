@@ -17,7 +17,6 @@ import (
 	"foldex/internal/notes"
 
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/pkg/httperr"
 )
 
 const maxRestoredNoteMediaBytes = 16 << 20
@@ -81,10 +80,10 @@ func prepareNoteMediaRestore(ctx context.Context, snap *Snapshot, zr *zip.Reader
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return nil, ctxErr
 				}
-				return nil, httperr.New(400, "invalid_backup", "backup contains invalid note media")
+				return nil, invalidBackup("backup contains invalid note media")
 			}
 			if len(opt.Data) > maxRestoredNoteMediaBytes || int64(len(opt.Data)) > maxArchiveExpandedBytes-prepared.size {
-				return nil, httperr.New(400, "invalid_backup", "optimized note media exceeds restore limits")
+				return nil, invalidBackup("optimized note media exceeds restore limits")
 			}
 			if prepared.spool == nil {
 				prepared.spool, err = os.CreateTemp("", "foldex-backup-note-media-*.bin")
