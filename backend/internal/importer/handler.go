@@ -16,7 +16,6 @@ import (
 	"foldex/internal/pkg/cssvalid"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/ports"
-	"foldex/internal/preview"
 )
 
 // defaultImportColor mirrors the indigo the DTO layer defaults to when a
@@ -353,7 +352,7 @@ func (h *Handler) importItemsWithMode(ctx context.Context, uid authctx.UserID, i
 	}
 	if h.worker != nil {
 		for i, id := range freshIDs {
-			if err := h.worker.Enqueue(id); errors.Is(err, preview.ErrQueueFull) {
+			if err := h.worker.Enqueue(id); errors.Is(err, ports.ErrQueueFull) {
 				warnings = append(warnings, fmt.Sprintf(
 					"Fila de previews cheia; %d previews pendentes serão recuperados em segundo plano.",
 					len(freshIDs)-i,

@@ -8,7 +8,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/folders"
-	"foldex/internal/links"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/listquery"
 	"foldex/internal/tags"
@@ -167,7 +166,7 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
 		); err != nil {
 			return nil, err
 		}
-		e.Tags = []links.Tag{}
+		e.Tags = []tags.Chip{}
 		out = append(out, e)
 		if e.Kind == "link" {
 			linkIDs = append(linkIDs, e.ID)

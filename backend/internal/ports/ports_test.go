@@ -19,3 +19,9 @@ func TestIsObjectTooLarge(t *testing.T) {
 	assert.False(t, IsObjectTooLarge(fmt.Errorf("adapter: %w", errors.New("storage: object exceeds max serve size"))))
 	assert.False(t, IsObjectTooLarge(errors.New("not found")))
 }
+
+func TestEnqueueSentinelsUnwrap(t *testing.T) {
+	assert.ErrorIs(t, fmt.Errorf("preview admission: %w", ErrQueueFull), ErrQueueFull)
+	assert.ErrorIs(t, fmt.Errorf("preview admission: %w", ErrStopped), ErrStopped)
+	assert.False(t, errors.Is(ErrQueueFull, ErrStopped))
+}
