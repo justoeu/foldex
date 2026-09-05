@@ -148,10 +148,20 @@ export function applyPreviewStatusResults(qc: QueryClient, key: QueryKey, result
 export function mapCachedEntries(qc: QueryClient, fn: (e: Entry) => Entry) {
   qc.setQueriesData<EntriesCache>({ queryKey: ['entries'] }, (old) => {
     if (!old || !Array.isArray(old.pages)) return old
-    return {
-      ...old,
-      pages: old.pages.map((page) => (page ? page.map(fn) : page)),
-    }
+    let changed = false
+    const pages = old.pages.map((page) => {
+      if (!page) return page
+      let pageChanged = false
+      const next = page.map((entry) => {
+        const mapped = fn(entry)
+        if (mapped !== entry) pageChanged = true
+        return mapped
+      })
+      if (!pageChanged) return page
+      changed = true
+      return next
+    })
+    return changed ? { ...old, pages } : old
   })
 }
 
@@ -160,9 +170,14 @@ export function mapCachedEntries(qc: QueryClient, fn: (e: Entry) => Entry) {
 // passed through untouched. Callers that already have a (Link) => Link
 // transform (e.g. every link mutation's optimistic update) can reuse the
 // same fn for BOTH ['links'] and ['entries'] caches without restating the
-// discrimination at every call site.
+// discrimination at every call site. A PATCH payload is a Link, not an
+// Entry — spreading onto `e` is what keeps `kind: 'link'` on a replace.
 export function mapCachedLinkEntries(qc: QueryClient, fn: (l: Link) => Link) {
-  mapCachedEntries(qc, (e) => (e.kind === 'link' ? { ...e, ...fn(e) } : e))
+  mapCachedEntries(qc, (e) => {
+    if (e.kind !== 'link') return e
+    const next = fn(e)
+    return next === e ? e : { ...e, ...next }
+  })
 }
 
 // Drop one entry from every ['entries'] cache. Used when a link/note moves

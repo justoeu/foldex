@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { ReactNode } from 'react'
-import { QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   applyPreviewStatusResults,
   useEntries,
@@ -186,6 +186,65 @@ describe('mapCachedLinkEntries', () => {
     expect(linkEntry.kind).toBe('link')
     expect(noteEntry.pinned).toBe(false)
     expect(noteEntry.kind).toBe('note')
+  })
+
+  // Production callers pass identity-preserving fns (`l.id === id ? changed : l`).
+  // Spreading every link allocates a new object for the whole page and
+  // defeats React.memo on LinkCard. structuralSharing is off so this
+  // asserts the mapper, not TQ replaceEqualDeep recovering cloned-but-equal rows.
+  it('preserves identity of untouched links', () => {
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0, staleTime: 0, structuralSharing: false },
+        mutations: { retry: false },
+      },
+    })
+    const link = (id: number) => ({
+      kind: 'link' as const,
+      id,
+      url: `https://${id}.example`,
+      title: String(id),
+      slug: String(id),
+      click_count: 0,
+      preview_status: 'ok' as const,
+      pinned: false,
+      created_at: '',
+      updated_at: '',
+      tags: [],
+    })
+    const target = link(1)
+    const untouched = [link(2), link(3)]
+    const note = {
+      kind: 'note' as const,
+      id: 99,
+      title: 'Note',
+      slug: 'n',
+      pinned: false,
+      click_count: 0,
+      created_at: '',
+      updated_at: '',
+      tags: [],
+    }
+    const key = ['entries', '', '', 'created', 'all', 'locked']
+    client.setQueryData(key, {
+      pages: [[target, ...untouched, note]],
+      pageParams: [0],
+    })
+
+    // Same shape as useUpdateLink: replace the hit with a Link payload
+    // that has no `kind`, pass every other row through.
+    const { kind: _kind, ...linkFields } = target
+    const patched = { ...linkFields, pinned: true }
+    mapCachedLinkEntries(client, (l) => (l.id === 1 ? patched : l))
+
+    const cached = client.getQueryData<{ pages: typeof target[][] }>(key)
+    const [nextTarget, nextTwo, nextThree, nextNote] = cached!.pages[0]
+    expect(nextTarget).not.toBe(target)
+    expect(nextTarget.pinned).toBe(true)
+    expect(nextTarget.kind).toBe('link')
+    expect(nextTwo).toBe(untouched[0])
+    expect(nextThree).toBe(untouched[1])
+    expect(nextNote).toBe(note)
   })
 
   it('removeCachedEntry drops the moved card from every entries page', () => {
