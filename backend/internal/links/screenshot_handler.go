@@ -33,14 +33,6 @@ var allowedFilePrefixes = []string{"screenshots/", "images/", "notes/"}
 // allowedUploadMIMEs is the shared imageopt allowlist.
 var allowedUploadMIMEs = imageopt.AllowedUploadMIMEs
 
-// Image optimization defaults — JPEG q≈82 caps thumbnails at 1024 px on the
-// longest side. UI cards render at 150 px; 1024 leaves headroom for retina
-// and zoom.
-const (
-	imageMaxDim  = 1024
-	imageQuality = 82
-)
-
 // Screenshotter captures a URL and returns PNG bytes.
 type Screenshotter interface {
 	Capture(ctx context.Context, pageURL string) ([]byte, error)
@@ -183,7 +175,13 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	opt := optimizeOrFallback(png, "image/png", "png", h.logger, "screenshot", id)
+	opt, err := imageopt.OptimizeForStore(png)
+	if err != nil {
+		h.logger.Warn("screenshot rejected: optimize failed", "id", id, "err", err)
+		status, code, msg := imageopt.RejectHTTP(err)
+		httperr.Write(w, httperr.New(status, code, msg))
+		return
+	}
 
 	storageCtx, storageCancel := context.WithTimeout(r.Context(), captureStorageTimeout)
 	defer storageCancel()
@@ -539,14 +537,19 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	// `image/png` declaration that would later be served back as that MIME
 	// (stored XSS via the ProxyFile cache).
 	detected := http.DetectContentType(data)
-	srcExt, ok := allowedUploadMIMEs[detected]
-	if !ok {
+	if _, ok := allowedUploadMIMEs[detected]; !ok {
 		h.logger.Warn("image upload: rejected MIME", "id", id, "reason", "non_image")
 		httperr.Write(w, httperr.New(http.StatusUnsupportedMediaType, "invalid_mime", "file must be a PNG, JPEG, GIF, or WebP image"))
 		return
 	}
 
-	opt := optimizeOrFallback(data, detected, srcExt, h.logger, "image upload", id)
+	opt, err := imageopt.OptimizeForStore(data)
+	if err != nil {
+		h.logger.Warn("image upload: optimize failed", "id", id, "err", err)
+		status, code, msg := imageopt.RejectHTTP(err)
+		httperr.Write(w, httperr.New(status, code, msg))
+		return
+	}
 
 	stored, err := linkimage.Store(r.Context(), h.storage, "images", id, opt.Ext, opt.Data, opt.ContentType)
 	if err != nil {
@@ -612,24 +615,6 @@ func (h *ScreenshotHandler) DeleteImage(w http.ResponseWriter, r *http.Request) 
 	}
 	h.logger.Info("image cleared", "id", id)
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// optimizeOrFallback runs imageopt.Optimize and, on failure, returns a Result
-// that wraps the original bytes so the upload pipeline never blocks on a
-// re-encode bug. The fallback decision is logged at warn level.
-func optimizeOrFallback(data []byte, sourceMIME, sourceExt string, logger *slog.Logger, op string, id int64) imageopt.Result {
-	res, err := imageopt.Optimize(data, imageopt.Options{MaxDim: imageMaxDim, Quality: imageQuality})
-	if err != nil {
-		logger.Warn(op+": optimize failed, storing original",
-			"id", id, "source_mime", sourceMIME, "err", err)
-		return imageopt.Result{
-			Data:        data,
-			ContentType: sourceMIME,
-			Ext:         sourceExt,
-			SourceMIME:  sourceMIME,
-		}
-	}
-	return res
 }
 
 // healMissingObject re-arms the preview worker for a link-derived key whose

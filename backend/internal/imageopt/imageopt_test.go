@@ -2,7 +2,10 @@ package imageopt
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/gif"
@@ -180,6 +183,37 @@ func TestErrors_AreDistinct(t *testing.T) {
 	assert.False(t, errors.Is(ErrUnsupportedFormat, ErrDecode))
 	assert.False(t, errors.Is(ErrTooLarge, ErrDecode))
 	assert.False(t, errors.Is(ErrTooLarge, ErrUnsupportedFormat))
+}
+
+func TestOptimizeForStore_NeverReturnsBytesOnError(t *testing.T) {
+	bomb := encodePNG(t, makeSolid(1, 1))
+	require.GreaterOrEqual(t, len(bomb), 33)
+	binary.BigEndian.PutUint32(bomb[16:20], 8_000)
+	binary.BigEndian.PutUint32(bomb[20:24], 8_000)
+	binary.BigEndian.PutUint32(bomb[29:33], crc32.ChecksumIEEE(bomb[12:29]))
+
+	res, err := OptimizeForStore(bomb)
+	require.ErrorIs(t, err, ErrTooLarge)
+	assert.Empty(t, res.Data, "failed OptimizeForStore must not carry original bytes")
+
+	status, code, _ := RejectHTTP(err)
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, "invalid_image", code)
+}
+
+func TestRejectHTTP_MapsClientAndServerFailures(t *testing.T) {
+	status, code, _ := RejectHTTP(fmt.Errorf("%w: decode", ErrDecode))
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, "invalid_image", code)
+
+	status, code, _ = RejectHTTP(fmt.Errorf("%w: svg", ErrUnsupportedFormat))
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, "invalid_image", code)
+
+	status, code, msg := RejectHTTP(errors.New("jpeg encoder exploded"))
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "optimize_failed", code)
+	assert.Equal(t, "failed to process image", msg)
 }
 
 // TestOptimize_RejectsDecodeBomb locks the H4 fix. A single-color 8000x8000
