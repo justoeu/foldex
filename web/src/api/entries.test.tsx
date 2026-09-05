@@ -158,6 +158,78 @@ describe('useEntries', () => {
     expect(renders).toBe(rendersBeforeRefetch)
   })
 
+  it('aborts the in-flight page when the search key changes', async () => {
+    // N1-NEX-007: Topbar search is the query key, but queryFn dropped
+    // TanStack's AbortSignal, so a stale GET /api/entries kept running and
+    // could still settle after the user had moved on. The first page is
+    // hung on purpose so the abort is observable; the replacement query
+    // uses the mock so the grid can show only the latest rows.
+    state.links.push(
+      {
+        id: 1, url: 'https://alpha.example', title: 'Alpha', slug: 'alpha', click_count: 0,
+        preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+      } as any,
+      {
+        id: 2, url: 'https://beta.example', title: 'Beta', slug: 'beta', click_count: 0,
+        preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+      } as any,
+    )
+    const fallback = vi.mocked(http.get).getMockImplementation()!
+    const signals: Array<AbortSignal | undefined> = []
+    let firstPage = true
+    vi.mocked(http.get).mockImplementation((async (url: string, ...rest: any[]) => {
+      const path = String(url).split('?')[0]
+      if (path === '/api/entries') {
+        const config = rest[0] as { signal?: AbortSignal } | undefined
+        signals.push(config?.signal)
+        if (firstPage) {
+          firstPage = false
+          return new Promise((_resolve, reject) => {
+            const err = Object.assign(new Error('canceled'), { code: 'ERR_CANCELED', name: 'CanceledError' })
+            const signal = config?.signal
+            if (signal?.aborted) {
+              reject(err)
+              return
+            }
+            signal?.addEventListener('abort', () => reject(err))
+          })
+        }
+      }
+      return fallback(url, ...rest)
+    }) as never)
+
+    const client = makeQueryClient()
+    const localWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const { result, rerender } = renderHook(({ q }: { q: string }) => useEntries({ q }), {
+      wrapper: localWrapper,
+      initialProps: { q: 'Alpha' },
+    })
+    await waitFor(() => expect(signals).toHaveLength(1))
+
+    // One act per keystroke so React cannot collapse the burst into a single
+    // props update — that is the Home search shape, and it is what used to
+    // fan out one GET /api/entries per character.
+    await act(async () => { rerender({ q: 'B' }) })
+    await act(async () => { rerender({ q: 'Be' }) })
+    await act(async () => { rerender({ q: 'Bet' }) })
+    await act(async () => { rerender({ q: 'Beta' }) })
+    // Debounce (LinkDialog-style 500ms): a burst must not issue one GET per
+    // keystroke. Without it this is already 5 overlapping page fetches.
+    expect(signals).toHaveLength(1)
+
+    await waitFor(() => expect(signals).toHaveLength(2))
+    expect(signals[0]).toBeInstanceOf(AbortSignal)
+    expect(signals[0]?.aborted).toBe(true)
+    expect(signals[1]?.aborted).toBe(false)
+
+    await waitFor(() => {
+      const titles = flattenEntries(result.current.data).map((entry) => entry.title)
+      expect(titles).toEqual(['Beta'])
+    })
+  })
+
 })
 
 describe('mapCachedLinkEntries', () => {
