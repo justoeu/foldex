@@ -760,7 +760,9 @@ and the worker logs one line per message it sends.
 
 The worker gets `AUTH_ENCRYPTION_KEY` (it is the only process that opens the
 payload) and **no database credential at all** — that separation is the point of
-running it apart. Failed sends walk a retry ladder of dedicated queues (1 min →
+running it apart. It also refuses `MAIL_DRIVER=log`: that driver is the mailbox
+on an inproc instance, but a worker that has just decrypted a reset link must
+not print it. Failed sends walk a retry ladder of dedicated queues (1 min →
 5 min → 30 min) and then land in `foldex.mail.dead`, which the backend watches
 so the outbox row still ends up marked `failed`.
 

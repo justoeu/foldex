@@ -55,12 +55,14 @@ func run(logger *slog.Logger) int {
 		logger.Error("mailer requires MAIL_TRANSPORT=amqp", "transport", cfg.Mail.Transport)
 		return 1
 	}
-	// The same refusal the backend applies: the log driver would print reset
-	// links and sign-in codes to stdout, and a worker is exactly the process
-	// whose stdout ends up in a shared aggregator.
+	// Fail closed, not a warning. The log driver prints the opened body —
+	// reset links and sign-in codes — and a worker is exactly the process
+	// whose stdout ends up in a shared aggregator. On inproc the log IS the
+	// mailbox; on AMQP it is a leak. The backend's MAIL_DRIVER=log default
+	// stays: that path never decrypts for a broker.
 	if cfg.Mail.Driver != "smtp" {
-		logger.Warn("mailer is running with a non-SMTP driver — message bodies will be logged, not sent",
-			"driver", cfg.Mail.Driver)
+		logger.Error("mailer requires MAIL_DRIVER=smtp", "driver", cfg.Mail.Driver)
+		return 1
 	}
 
 	// AllowEphemeral is false here for the same reason it is in cfg/server: a
