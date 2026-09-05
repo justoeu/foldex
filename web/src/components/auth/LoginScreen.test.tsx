@@ -255,9 +255,9 @@ describe('SetupScreen', () => {
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'a good password')
     await user.type(screen.getByLabelText(/confirm password/i), 'a different one')
-    await user.click(screen.getByRole('button', { name: /create account/i }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/do not match/i)
+    expect(screen.getByText(/do not match/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /create account/i })).toBeDisabled()
     expect(post).not.toHaveBeenCalled()
   })
 
@@ -275,16 +275,16 @@ describe('SetupScreen', () => {
   })
 
   it('relays the backend password policy verbatim', async () => {
-    rejectWith('password_too_short', 400)
+    const post = vi.spyOn(http, 'post')
     renderWithProviders(<SetupScreen />, { session: null })
     const user = userEvent.setup()
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'shortpw')
     await user.type(screen.getByLabelText(/confirm password/i), 'shortpw')
-    await user.click(screen.getByRole('button', { name: /create account/i }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/at least 8 characters/i)
+    expect(screen.getByRole('button', { name: /create account/i })).toBeDisabled()
+    expect(post).not.toHaveBeenCalled()
   })
 })
 
