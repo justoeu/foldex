@@ -72,6 +72,26 @@ describe('OtpInput', () => {
     expect(screen.getByTestId('value')).toHaveTextContent('12')
   })
 
+  // Compact `value` plus `chars[index] = typed` creates holes; Array#join skips
+  // them, so a tap on cell 6 stores the digit at the first empty compact slot
+  // while focus stays on the empty last cell.
+  it('typing in a later empty cell keeps index in agreement with value', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<Host />)
+    const inputs = cells()
+
+    await user.type(inputs[0], '1')
+    await user.type(inputs[1], '2')
+    await user.click(inputs[5])
+    await user.keyboard('9')
+
+    expect(screen.getByTestId('value')).toHaveTextContent('129')
+    expect(inputs[2]).toHaveValue('9')
+    expect(inputs[5]).toHaveValue('')
+    // Next empty slot — not the cell that was tapped past the prefix.
+    expect(inputs[3]).toHaveFocus()
+  })
+
   it('ignores non-digits', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Host />)

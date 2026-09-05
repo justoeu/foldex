@@ -463,13 +463,14 @@ describe('buildImageUploadHandler', () => {
     const dispatch = vi.fn()
     const imageNode = { type: 'image' }
     const view = {
+      isDestroyed: false,
       state: {
+        selection: { from: 0, to: 0 },
         schema: { nodes: { image: { create: vi.fn().mockReturnValue(imageNode) } } },
-        tr: { }, // replaceSelectionWith is chained below
+        tr: { replaceWith: vi.fn().mockReturnValue('final-tr') },
       },
       dispatch,
     } as any
-    view.state.tr.replaceSelectionWith = vi.fn().mockReturnValue('final-tr')
 
     const handler = buildImageUploadHandler(uploadFn, onError)
     const file = new File(['x'], 'a.png', { type: 'image/png' })
@@ -484,13 +485,91 @@ describe('buildImageUploadHandler', () => {
   it('calls onError when the upload fails', async () => {
     const uploadFn = vi.fn().mockRejectedValue(new Error('nope'))
     const onError = vi.fn()
-    const view = { state: { schema: { nodes: { image: { create: vi.fn() } } }, tr: {} }, dispatch: vi.fn() } as any
+    const view = {
+      isDestroyed: false,
+      state: { selection: { from: 0, to: 0 }, schema: { nodes: { image: { create: vi.fn() } } }, tr: {} },
+      dispatch: vi.fn(),
+    } as any
 
     const handler = buildImageUploadHandler(uploadFn, onError)
     handler(view, new File(['x'], 'a.png', { type: 'image/png' }))
 
     await waitFor(() => expect(onError).toHaveBeenCalledWith('upload_failed'))
     expect(view.dispatch).not.toHaveBeenCalled()
+  })
+
+  it('inserts at the captured selection after the caret moves', async () => {
+    let resolveUpload!: (value: { url: string }) => void
+    const uploadFn = vi.fn(
+      () =>
+        new Promise<{ url: string }>((resolve) => {
+          resolveUpload = resolve
+        }),
+    )
+    const imageNode = { type: 'image' }
+    const create = vi.fn().mockReturnValue(imageNode)
+    const replaceWith = vi.fn().mockReturnValue('captured-tr')
+    const dispatch = vi.fn()
+    const view = {
+      isDestroyed: false,
+      state: {
+        selection: { from: 4, to: 4 },
+        schema: { nodes: { image: { create } } },
+        tr: {
+          replaceSelectionWith: vi.fn().mockReturnValue('paste-sel-tr'),
+          replaceWith,
+        },
+      },
+      dispatch,
+    } as any
+
+    buildImageUploadHandler(uploadFn, vi.fn())(view, new File(['x'], 'a.png', { type: 'image/png' }))
+
+    view.state.selection = { from: 20, to: 28 }
+    view.state.tr = {
+      replaceSelectionWith: vi.fn().mockReturnValue('moved-sel-tr'),
+      replaceWith,
+    }
+
+    await act(async () => {
+      resolveUpload({ url: '/api/files/notes/abc.jpg' })
+    })
+
+    expect(replaceWith).toHaveBeenCalledWith(4, 4, imageNode)
+    expect(dispatch).toHaveBeenCalledWith('captured-tr')
+    expect(dispatch).not.toHaveBeenCalledWith('moved-sel-tr')
+  })
+
+  it('does not dispatch into a destroyed editor', async () => {
+    let resolveUpload!: (value: { url: string }) => void
+    const uploadFn = vi.fn(
+      () =>
+        new Promise<{ url: string }>((resolve) => {
+          resolveUpload = resolve
+        }),
+    )
+    const dispatch = vi.fn()
+    const view = {
+      isDestroyed: false,
+      state: {
+        selection: { from: 1, to: 1 },
+        schema: { nodes: { image: { create: vi.fn().mockReturnValue({ type: 'image' }) } } },
+        tr: {
+          replaceSelectionWith: vi.fn().mockReturnValue('late-tr'),
+          replaceWith: vi.fn().mockReturnValue('late-tr'),
+        },
+      },
+      dispatch,
+    } as any
+
+    buildImageUploadHandler(uploadFn, vi.fn())(view, new File(['x'], 'a.png', { type: 'image/png' }))
+    view.isDestroyed = true
+
+    await act(async () => {
+      resolveUpload({ url: '/api/files/notes/abc.jpg' })
+    })
+
+    expect(dispatch).not.toHaveBeenCalled()
   })
 })
 
