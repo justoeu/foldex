@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -33,10 +34,19 @@ func sanitizeImportColor(c string) string {
 type Handler struct {
 	pool   *pgxpool.Pool
 	worker ports.Enqueuer
+
+	slotMu sync.Mutex
+	slots  chan struct{}
 }
 
+const maxImportInFlight = 1
+
 func NewHandler(pool *pgxpool.Pool, worker ports.Enqueuer) *Handler {
-	return &Handler{pool: pool, worker: worker}
+	return &Handler{
+		pool:   pool,
+		worker: worker,
+		slots:  make(chan struct{}, maxImportInFlight),
+	}
 }
 
 func (h *Handler) Mount(r chi.Router) {
@@ -88,6 +98,11 @@ func parseMode(s string) (importMode, bool) {
 }
 
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
+	release, ok := h.admit(w)
+	if !ok {
+		return
+	}
+	defer release()
 	up, err := h.parseUpload(w, r)
 	if err != nil {
 		return
@@ -108,6 +123,11 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
+	release, ok := h.admit(w)
+	if !ok {
+		return
+	}
+	defer release()
 	up, err := h.parseUpload(w, r)
 	if err != nil {
 		return
@@ -125,6 +145,11 @@ func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 // exclusion list. Body shape: multipart with `file`, `format`, `mode`, and
 // `exclude_folders` (CSV of folder paths to skip).
 func (h *Handler) apply(w http.ResponseWriter, r *http.Request) {
+	release, ok := h.admit(w)
+	if !ok {
+		return
+	}
+	defer release()
 	up, err := h.parseUpload(w, r)
 	if err != nil {
 		return
@@ -152,6 +177,24 @@ func (h *Handler) apply(w http.ResponseWriter, r *http.Request) {
 		Wiped:    wiped,
 		Warnings: warnings,
 	})
+}
+
+func (h *Handler) admit(w http.ResponseWriter) (func(), bool) {
+	h.slotMu.Lock()
+	if h.slots == nil {
+		h.slots = make(chan struct{}, maxImportInFlight)
+	}
+	slots := h.slots
+	h.slotMu.Unlock()
+
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, true
+	default:
+		w.Header().Set("Retry-After", "1")
+		httperr.Write(w, httperr.New(http.StatusTooManyRequests, "import_busy", "another import is already in progress"))
+		return func() {}, false
+	}
 }
 
 type uploadParse struct {

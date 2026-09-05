@@ -483,7 +483,7 @@ Every POST/PATCH handler in `links`/`folders`/`tags` wraps `r.Body` with `http.M
 <a id="inv-090"></a>
 ### INV-090 — Stats handler clamps every numeric knob via `clampInt`.
 
-`?days` ∈ [1,365], `?limit` ∈ [1,100]. Without the cap, `?days=2147483647` lands in a `generate_series(...)` and the planner attempts it.
+`?days` ∈ [1,365], `?limit` ∈ [1,100]. Without the cap, `?days=2147483647` lands in a `generate_series(...)` and the planner attempts it. `GET /api/stats/storage` is owner-scoped (note_media + link image keys that name the row's own id) and the bucket LIST is cached 60s with singleflight so a stats-page poll does not walk every tenant's objects; a cancelled request stops the iterator. Guard: `TestStorageStats_DoesNotRescanWholeBucketOnEveryGet`.
 
 <a id="inv-091"></a>
 ### INV-091 — The cookie `Secure` flag is derived from `AUTH_PUBLIC_URL`'s scheme, NOT from the bind address.

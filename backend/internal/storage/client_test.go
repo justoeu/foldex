@@ -3,9 +3,13 @@ package storage
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
@@ -18,6 +22,141 @@ import (
 // tests here drive the helpers (readAll) and the construction/error paths
 // directly; the full PutObject/GetObject surface is covered by
 // client_integration_test.go against a real RustFS.
+
+func TestStorageStats_DoesNotRescanWholeBucketOnEveryGet(t *testing.T) {
+	const objectCount = 20
+	objects := make([]listedObject, 0, objectCount+1)
+	for i := 0; i < objectCount; i++ {
+		objects = append(objects, listedObject{Key: fmt.Sprintf("screenshots/%d.jpg", i), Size: 10})
+	}
+	objects = append(objects, listedObject{Key: "screenshots/999.jpg", Size: 50}) // other tenant
+
+	t.Run("second get inside TTL does not re-walk", func(t *testing.T) {
+		var yields atomic.Int64
+		c := &Client{listFn: countingList(&yields, objects, nil)}
+		first, err := c.Stats(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, int64(objectCount+1), first.Objects)
+		require.Equal(t, int64(objectCount)*10+50, first.TotalBytes)
+		require.Equal(t, int64(objectCount+1), yields.Load())
+
+		second, err := c.Stats(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, first, second)
+		assert.Equal(t, int64(objectCount+1), yields.Load(),
+			"second Stats inside TTL must not re-walk ListObjects")
+	})
+
+	t.Run("cancelled ctx stops the iterator", func(t *testing.T) {
+		started := make(chan struct{})
+		block := make(chan struct{})
+		var yields atomic.Int64
+		c := &Client{listFn: countingList(&yields, objects, &listGate{started: started, block: block})}
+		ctx, cancel := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := c.Stats(ctx)
+			errCh <- err
+		}()
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("list never started")
+		}
+		cancel()
+		select {
+		case err := <-errCh:
+			require.Error(t, err)
+			assert.ErrorIs(t, err, context.Canceled)
+		case <-time.After(2 * time.Second):
+			t.Fatal("cancelled Stats did not return")
+		}
+		assert.Less(t, yields.Load(), int64(objectCount+1), "cancelled ctx must stop the iterator")
+		close(block)
+	})
+
+	t.Run("concurrent gets share one in-flight listing", func(t *testing.T) {
+		started := make(chan struct{})
+		block := make(chan struct{})
+		var yields atomic.Int64
+		c := &Client{listFn: countingList(&yields, objects, &listGate{started: started, block: block})}
+
+		var wg sync.WaitGroup
+		errCh := make(chan error, 2)
+		for i := 0; i < 2; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := c.Stats(context.Background())
+				errCh <- err
+			}()
+		}
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("shared list never started")
+		}
+		close(block)
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			require.NoError(t, err)
+		}
+		assert.Equal(t, int64(objectCount+1), yields.Load(),
+			"concurrent Stats must share one in-flight listing")
+	})
+
+	t.Run("does not count other tenants", func(t *testing.T) {
+		var yields atomic.Int64
+		c := &Client{listFn: countingList(&yields, objects, nil)}
+		owned := map[string]struct{}{"screenshots/1.jpg": {}, "screenshots/2.jpg": {}}
+		got, err := c.StatsOwned(context.Background(), owned)
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), got.Objects)
+		assert.Equal(t, int64(20), got.TotalBytes)
+		_, err = c.StatsOwned(context.Background(), owned)
+		require.NoError(t, err)
+		assert.Equal(t, int64(objectCount+1), yields.Load(),
+			"cached owner stats must not re-walk the shared bucket")
+	})
+}
+
+type listGate struct {
+	started chan struct{}
+	block   chan struct{}
+}
+
+func countingList(yields *atomic.Int64, objects []listedObject, gate *listGate) func(context.Context) <-chan listedObject {
+	return func(ctx context.Context) <-chan listedObject {
+		ch := make(chan listedObject)
+		go func() {
+			defer close(ch)
+			if gate != nil {
+				select {
+				case gate.started <- struct{}{}:
+				default:
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-gate.block:
+				}
+			}
+			for _, obj := range objects {
+				if err := ctx.Err(); err != nil {
+					return
+				}
+				yields.Add(1)
+				select {
+				case <-ctx.Done():
+					return
+				case ch <- obj:
+				}
+			}
+		}()
+		return ch
+	}
+}
 
 func TestReadAll(t *testing.T) {
 	t.Run("reads full content", func(t *testing.T) {

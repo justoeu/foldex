@@ -109,6 +109,10 @@ Pontos estruturais:
   recebe; o botão "Executar agora" da UI só INSERE uma linha `requested` em `backup_run`,
   e o agente a reivindica. Comprometer o processo exposto à web não dá escrita no bucket
   de backup.
+- **O pool pgx do agente é teto 4** (`backupagent.MaxPoolConns`, `PoolConfig`), não
+  `pgxpool.New` (default `max(4, GOMAXPROCS)`). O backend já abre 16; dump segura um
+  REPEATABLE READ o `pg_dump` inteiro. Backend+agente ficam ≤ 20 contra o default 100
+  do Postgres. Guard: `TestBackupAgentPoolMaxConnsIsCapped`.
 - **A imagem do agente deriva de `postgres:18.4-alpine`** (novo estágio `backup-agent` no
   `backend/Dockerfile`, binário Go copiado do estágio `build`). É o que dá `pg_dump`,
   `pg_restore`, `initdb` e `postgres` version-matched com `foldex-db` sem docker-in-docker

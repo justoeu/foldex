@@ -183,7 +183,7 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
   ↳ Sentinela larga = uma indisponibilidade momentânea limpa todo `og_image_url` e recaptura a biblioteca inteira.
 - **A card whose image fails to load falls back to its glyph, never to the browser's broken-image icon** → [INV-082](docs/INVARIANTS.md#inv-082)
 - **JSON request bodies are capped at 64 KiB** → [INV-089](docs/INVARIANTS.md#inv-089)
-- **Stats handler clamps every numeric knob via `clampInt`** → [INV-090](docs/INVARIANTS.md#inv-090)
+- **Stats handler clamps every numeric knob via `clampInt`; `/api/stats/storage` is owner-scoped and LIST-cached** → [INV-090](docs/INVARIANTS.md#inv-090)
 - **Backup is a complete DB + RustFS snapshot ZIP** → [INV-102](docs/INVARIANTS.md#inv-102)
 - **Every backup operation is admitted before work; export and restore stream** → [INV-103](docs/INVARIANTS.md#inv-103)
 - **Backup restore is idempotent by default, never atomic across DB+RustFS** → [INV-104](docs/INVARIANTS.md#inv-104)

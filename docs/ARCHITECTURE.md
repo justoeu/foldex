@@ -379,9 +379,9 @@ LIMIT $3 OFFSET $4;
 |        | GET    | `/api/stats/daily?days=N`             | Rota legada retida; `days` default 60/clamp 1..365; array zero-filled via `generate_series`. |
 |        | GET    | `/api/stats/top?limit=N`              | Rota legada retida; `limit` default 10/clamp 1..100; top links lifetime + janelas 30d/prev. |
 |        | GET    | `/api/stats/tags`                     | Rota legada retida; por tag, soma de cliques + nº de links. |
-| I/O    | POST   | `/api/import`                         | Multipart `file` + `format=netscape\|json` (JSON restaura cliques via click_log) |
-|        | POST   | `/api/import/validate`                | Preflight multipart agregado, sem itens: `{format, counts, conflicts, folders:[{path,name,count,conflicts}], ungrouped:{links,conflicts}, warnings}`. Conflitos de URL/tag são owner-scoped. |
-|        | POST   | `/api/import/apply`                   | Aplica multipart com `mode=skip\|wipe\|duplicate` e `exclude_folders` opcional. |
+| I/O    | POST   | `/api/import`                         | Multipart `file` + `format=netscape\|json` (JSON restaura cliques via click_log). Caps 100 MiB / 50k itens; 1 slot in-flight → `429 import_busy` antes de `ParseMultipartForm`. |
+|        | POST   | `/api/import/validate`                | Preflight multipart agregado, sem itens: `{format, counts, conflicts, folders:[{path,name,count,conflicts}], ungrouped:{links,conflicts}, warnings}`. Conflitos de URL/tag são owner-scoped. Mesmo slot `import_busy`. |
+|        | POST   | `/api/import/apply`                   | Aplica multipart com `mode=skip\|wipe\|duplicate` e `exclude_folders` opcional. Mesmo slot `import_busy`. |
 |        | GET    | `/api/export?format=netscape\|json`   | Download owner-scoped (click_count em subquery). Continua GET para `<a href>` nativo. Entra no balde caro da cota (`expensiveRoutes`); um segundo export concorrente é `429 export_busy`; acima de 50k links é `413 export_too_large` sem montar o payload. Token de API continua autorizado (INV-023: export de bookmarks é conteúdo). |
 | Backup | POST   | `/api/backup`                         | Stream ZIP completo (DB + RustFS). `Content-Type: application/zip`. Disponível só quando RustFS está acessível. Ver [SDD-BACKUP-RESTORE.md](./SDD-BACKUP-RESTORE.md). |
 |        | POST   | `/api/backup/download`                | Emite ticket opaco one-time (TTL 60 s), owner/session-bound, para download nativo sem Blob; exige sessão + CSRF e recusa API token. |
@@ -389,7 +389,7 @@ LIMIT $3 OFFSET $4;
 |        | GET    | `/api/backup/download/status?id=…`    | Estado owner-bound (`pending|running|complete|failed`) para histórico com counts, bytes e duração, sem ler o ZIP no JS; sobrevive ao refresh da sessão. |
 |        | POST   | `/api/backup/validate`                | Multipart `file=<zip>` → `{ok, manifest, conflicts, warnings, errors}` sem aplicar |
 |        | POST   | `/api/backup/restore?mode=…`          | Multipart `file=<zip>` + `mode=wipe\|skip\|duplicate` (default `skip`) → `{inserted, skipped, wiped, files, duration_ms}` |
-| Stats  | GET    | `/api/stats/storage`                  | `{objects, total_bytes}` do bucket RustFS; registrado só quando o storage está disponível |
+| Stats  | GET    | `/api/stats/storage`                  | `{objects, total_bytes}` **do chamador** (keys owner-scoped; og_image_url só conta se nomear o próprio id). LIST do bucket é cacheado 60s + singleflight; um GET cancelado para o iterator. Registrado só quando o storage está disponível. |
 | Push   | GET    | `/api/push/vapid-key`                 | Retorna a chave pública VAPID (base64url) — front usa em `PushManager.subscribe({applicationServerKey})`. Exige sessão. |
 |        | POST   | `/api/push/subscriptions`             | Upsert por `endpoint` (UNIQUE) com p256dh/auth atualizados. Cap transacional de 16 por usuário; renovar endpoint próprio continua permitido no teto, novo row retorna `409 subscription_limit_reached`. |
 |        | DELETE | `/api/push/subscriptions`             | Remove a subscription pelo endpoint (chamado no unsubscribe do usuário). |
@@ -1501,6 +1501,8 @@ próprio, off por default), com imagem derivada de `postgres:18.6-alpine` — o 
   índice parcial único por job em `running`, `last_error` normalizado, janitor de
   `stale_claim`. O botão "Executar agora" da UI só INSERE `requested`; quem executa é
   sempre o agente — **as credenciais do S3 externo nunca entram no processo web**.
+- **Pool pgx do agente teto 4** (`backupagent.MaxPoolConns`). `pgxpool.New` seguiria
+  GOMAXPROCS; o backend já usa 16 e o dump segura um REPEATABLE READ o `pg_dump` inteiro.
 - **Cifragem default-obrigatória** (age/X25519, opt-out explícito): o dump carrega auth e
   todo o conteúdo; o operador decifra sem o Foldex (`age -d`), que é a história de DR
   correta. Sem autogenerate de chave — chave que só existe ao lado dos dados é backup
