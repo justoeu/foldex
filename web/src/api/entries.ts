@@ -14,9 +14,7 @@ export type EntryListParams = {
   // gates GET /api/entries?folder_id=X the same way it gates the folders
   // list. Ignored when folderId is unset.
   unlockToken?: string
-  // Optional page size override (default ENTRY_PAGE_SIZE). Command palette
-  // uses a higher limit when searching so matches beyond the first page
-  // are visible (N1-NEX-015). Backend clamps to [1, 500].
+  // Optional page size override (default ENTRY_PAGE_SIZE). Backend clamps to [1, 500].
   limit?: number
 }
 
@@ -71,6 +69,23 @@ export function flattenEntries(data: EntriesCache | undefined): Entry[] {
   return out
 }
 
+// Empty-open command palette suggestions reuse whatever Home (or a folder
+// view) already fetched. A second GET /api/entries?limit=200 just to paint
+// 12 rows is the N1-NEX-009 defect.
+export function collectCachedEntries(qc: QueryClient): Entry[] {
+  const seen = new Set<string>()
+  const out: Entry[] = []
+  for (const [, data] of qc.getQueriesData<EntriesCache>({ queryKey: ['entries'] })) {
+    for (const entry of flattenEntries(data)) {
+      const id = `${entry.kind}:${entry.id}`
+      if (seen.has(id)) continue
+      seen.add(id)
+      out.push(entry)
+    }
+  }
+  return out
+}
+
 export function pendingPreviewIDs(data: EntriesCache | undefined): number[] {
   const ids = new Set<number>()
   for (const entry of flattenEntries(data)) {
@@ -103,6 +118,12 @@ export function applyPreviewStatusResults(qc: QueryClient, key: QueryKey, result
           continue
         }
         if (!result.preview_status || !result.updated_at) {
+          next.push(entry)
+          continue
+        }
+        const resultTime = Date.parse(result.updated_at)
+        const entryTime = Date.parse(entry.updated_at)
+        if (!Number.isNaN(resultTime) && !Number.isNaN(entryTime) && resultTime < entryTime) {
           next.push(entry)
           continue
         }

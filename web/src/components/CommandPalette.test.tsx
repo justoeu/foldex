@@ -1,12 +1,36 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { ReactNode } from 'react'
 import { CommandPalette } from './CommandPalette'
 import { renderWithProviders, testAdminUser } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import { http } from '../api/client'
+import { QueryClient } from '@tanstack/react-query'
 
 let state: MockState
+
+function paletteClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 60_000, staleTime: Infinity },
+      mutations: { retry: false },
+    },
+  })
+}
+
+function seedCachedEntries(client: QueryClient) {
+  client.setQueryData(['entries', '', '', 'created', 'ungrouped', 'locked', 100], {
+    pages: [state.links.map((link) => ({ kind: 'link' as const, ...link }))],
+    pageParams: [0],
+  })
+}
+
+function renderPalette(ui: ReactNode, options?: Parameters<typeof renderWithProviders>[1]) {
+  const client = options?.client ?? paletteClient()
+  seedCachedEntries(client)
+  return renderWithProviders(ui, { ...options, client })
+}
 
 beforeEach(() => {
   state = freshState()
@@ -43,7 +67,7 @@ describe('CommandPalette', () => {
   })
 
   it('lists results matching the query', async () => {
-    renderWithProviders(<CommandPalette open onClose={vi.fn()} />)
+    renderPalette(<CommandPalette open onClose={vi.fn()} />)
     const user = userEvent.setup()
     const input = await screen.findByPlaceholderText(/Search by/i)
     await user.type(input, 'Hacker')
@@ -51,7 +75,7 @@ describe('CommandPalette', () => {
   })
 
   it('shows "no matches" when filter excludes everything', async () => {
-    renderWithProviders(<CommandPalette open onClose={vi.fn()} />)
+    renderPalette(<CommandPalette open onClose={vi.fn()} />)
     const user = userEvent.setup()
     const input = await screen.findByPlaceholderText(/Search by/i)
     await user.type(input, 'zzzzz')
@@ -60,10 +84,10 @@ describe('CommandPalette', () => {
 
   it('closes when a result is selected', async () => {
     const onClose = vi.fn()
-    renderWithProviders(<CommandPalette open onClose={onClose} />)
-    await waitFor(() => expect(screen.getAllByText('Hacker News').length).toBeGreaterThan(0))
+    renderPalette(<CommandPalette open onClose={onClose} />)
     const user = userEvent.setup()
-    await user.click(screen.getAllByText('Hacker News')[0])
+    const title = await screen.findAllByText('Hacker News')
+    await user.click(title[0].closest('a') ?? title[0])
     expect(onClose).toHaveBeenCalled()
   })
 
@@ -75,16 +99,15 @@ describe('CommandPalette', () => {
     state.links[0] = { ...state.links[0], folder_id: 9 } as MockState['links'][number]
     const onRevealLink = vi.fn()
     const onClose = vi.fn()
-    renderWithProviders(<CommandPalette open onClose={onClose} onRevealLink={onRevealLink} />)
-    await waitFor(() => expect(screen.getAllByText('Hacker News').length).toBeGreaterThan(0))
-    await userEvent.click(screen.getAllByRole('button', { name: 'Show in Work' })[0])
+    renderPalette(<CommandPalette open onClose={onClose} onRevealLink={onRevealLink} />)
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Show in Work' }))[0])
     expect(onRevealLink).toHaveBeenCalledTimes(1)
     expect(onRevealLink.mock.calls[0][0].id).toBe(1)
     expect(onClose).not.toHaveBeenCalled()
   })
 
   it('hides the edit icon when content.write is missing', async () => {
-    renderWithProviders(
+    renderPalette(
       <CommandPalette open onClose={vi.fn()} onRevealLink={vi.fn()} onEditLink={vi.fn()} />,
       {
         session: {
@@ -103,9 +126,8 @@ describe('CommandPalette', () => {
 
   it('edit icon calls onEditLink', async () => {
     const onEditLink = vi.fn()
-    renderWithProviders(<CommandPalette open onClose={vi.fn()} onEditLink={onEditLink} />)
-    await waitFor(() => expect(screen.getAllByText('Hacker News').length).toBeGreaterThan(0))
-    await userEvent.click(screen.getAllByRole('button', { name: 'Edit link' })[0])
+    renderPalette(<CommandPalette open onClose={vi.fn()} onEditLink={onEditLink} />)
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Edit link' }))[0])
     expect(onEditLink).toHaveBeenCalledTimes(1)
     expect(onEditLink.mock.calls[0][0].title).toBe('Hacker News')
   })
@@ -114,7 +136,7 @@ describe('CommandPalette', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) })
 
-    renderWithProviders(<CommandPalette open onClose={vi.fn()} />)
+    renderPalette(<CommandPalette open onClose={vi.fn()} />)
     const input = await screen.findByPlaceholderText(/Search by/i)
 
     await user.type(input, 'hack')
@@ -130,5 +152,27 @@ describe('CommandPalette', () => {
         .filter(([u]: [string]) => u.includes('q=hack')).length
       expect(callsAfter).toBe(1)
     })
+  })
+
+  it('does not refetch a 200-row entries page', async () => {
+    renderPalette(<CommandPalette open onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getAllByText('Hacker News').length).toBeGreaterThan(0))
+
+    const entryListCalls = () =>
+      vi.mocked(http.get).mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => url.split('?')[0] === '/api/entries')
+
+    expect(entryListCalls()).toEqual([])
+
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText(/Search by/i), 'Hacker')
+    await waitFor(() => {
+      expect(entryListCalls().some((url) => url.includes('q=Hacker'))).toBe(true)
+    })
+    const limits = entryListCalls().map((url) => Number(new URL(url, 'https://foldex.test').searchParams.get('limit')))
+    expect(limits.length).toBeGreaterThan(0)
+    expect(limits.every((limit) => limit > 0 && limit < 100)).toBe(true)
+    expect(entryListCalls().some((url) => /(?:\?|&)limit=200(?:&|$)/.test(url))).toBe(false)
   })
 })

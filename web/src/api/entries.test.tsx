@@ -363,4 +363,51 @@ describe('applyPreviewStatusResults', () => {
     expect(second.find((entry) => entry.id === 1)).toMatchObject({ preview_status: 'pending', updated_at: 'before' })
     expect(second.some((entry) => entry.id === 2)).toBe(true)
   })
+
+  it('ignores a payload older than the cached updated_at', () => {
+    const client = makeQueryClient()
+    const key = ['entries', 'preview-race'] as const
+    const cached = {
+      kind: 'link', id: 1, url: 'https://1.example', title: '1', slug: '1', click_count: 0,
+      preview_status: 'ok', description: 'fresh', favicon_url: '/fresh.ico',
+      og_image_url: '/fresh.jpg', preview_error: null, pinned: false,
+      created_at: '', updated_at: '2026-09-05T12:00:00.000Z', tags: [],
+    } as any
+    client.setQueryData(key, { pages: [[cached]], pageParams: [0] })
+
+    applyPreviewStatusResults(client, key, [{
+      id: 1, found: true, preview_status: 'pending', description: 'stale',
+      favicon_url: '/stale.ico', og_image_url: '/stale.jpg', preview_error: null,
+      updated_at: '2026-09-05T11:00:00.000Z',
+    }])
+
+    expect(client.getQueryData<{ pages: any[][] }>(key)!.pages[0][0]).toMatchObject({
+      preview_status: 'ok',
+      description: 'fresh',
+      og_image_url: '/fresh.jpg',
+      updated_at: '2026-09-05T12:00:00.000Z',
+    })
+
+    applyPreviewStatusResults(client, key, [{
+      id: 1, found: true, preview_status: 'ok', description: 'same-tick',
+      favicon_url: '/fresh.ico', og_image_url: '/same.jpg', preview_error: null,
+      updated_at: '2026-09-05T12:00:00.000Z',
+    }])
+    expect(client.getQueryData<{ pages: any[][] }>(key)!.pages[0][0]).toMatchObject({
+      description: 'same-tick',
+      og_image_url: '/same.jpg',
+      updated_at: '2026-09-05T12:00:00.000Z',
+    })
+
+    applyPreviewStatusResults(client, key, [{
+      id: 1, found: true, preview_status: 'ok', description: 'newer',
+      favicon_url: '/fresh.ico', og_image_url: '/newer.jpg', preview_error: null,
+      updated_at: '2026-09-05T13:00:00.000Z',
+    }])
+    expect(client.getQueryData<{ pages: any[][] }>(key)!.pages[0][0]).toMatchObject({
+      description: 'newer',
+      og_image_url: '/newer.jpg',
+      updated_at: '2026-09-05T13:00:00.000Z',
+    })
+  })
 })
