@@ -33,14 +33,15 @@ type Props = {
 // holds in every sort mode, including this one.
 export function ListView({ folders, entries, sort, onEdit, onEditNote, onOpenFolder, onEditFolder }: Props) {
   const { t } = useTranslation()
-  const del = useDeleteLink()
-  const delNote = useDeleteNote()
+  const { mutate: deleteLink } = useDeleteLink()
+  const { mutate: deleteNote } = useDeleteNote()
   const confirm = useConfirm()
   // useCallback is REQUIRED here, not optional: this closure is passed as
   // `onDelete` to every <LinkRow>, which is React.memo'd. A new identity per
   // render would defeat the memo (every parent keystroke would re-render all
-  // rows). del.mutate and confirm are stable hook returns; t from
-  // useTranslation is stable per i18n instance.
+  // rows). mutate and confirm are stable hook returns; t from
+  // useTranslation is stable per i18n instance. Depend on the function, not
+  // the whole useMutation result — that object is new every render.
   const askDelete = useCallback(
     async (l: Link) => {
       const ok = await confirm({
@@ -49,9 +50,9 @@ export function ListView({ folders, entries, sort, onEdit, onEditNote, onOpenFol
         confirmLabel: t('link_card.delete_confirm_action'),
         destructive: true,
       })
-      if (ok) del.mutate(l.id)
+      if (ok) deleteLink(l.id)
     },
-    [confirm, del, t],
+    [confirm, deleteLink, t],
   )
   const askDeleteNote = useCallback(
     async (n: NoteEntry) => {
@@ -61,9 +62,9 @@ export function ListView({ folders, entries, sort, onEdit, onEditNote, onOpenFol
         confirmLabel: t('note_card.delete_confirm_action'),
         destructive: true,
       })
-      if (ok) delNote.mutate(n.id)
+      if (ok) deleteNote(n.id)
     },
-    [confirm, delNote, t],
+    [confirm, deleteNote, t],
   )
 
   const isAlpha = sort === 'alpha' || sort === 'alpha_desc'
