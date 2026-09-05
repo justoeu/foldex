@@ -566,7 +566,7 @@ func TestRepository_UpdatePreview_InvalidStatus(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
 	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://pv.example", Title: "pv"})
 	require.NoError(t, err)
-	err = lrepo.SystemUpdatePreview(ctx, l.ID, links.PreviewStatus("nope"), nil, nil, nil, nil)
+	err = lrepo.SystemUpdatePreview(ctx, l.ID, links.PreviewStatus("nope"), links.PreviewPatch{})
 	require.Error(t, err)
 }
 

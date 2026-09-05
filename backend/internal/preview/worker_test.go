@@ -75,14 +75,14 @@ func (f *fakePreviewRepo) SystemGetPreview(context.Context, int64) (links.Previe
 	return f.work, nil
 }
 
-func (f *fakePreviewRepo) SystemUpdatePreviewIfUnchanged(_ context.Context, id int64, updatedAt time.Time, generation int64, status links.PreviewStatus, _ *string, imageURL *string, _ *string, _ *string) (bool, error) {
+func (f *fakePreviewRepo) SystemUpdatePreviewIfUnchanged(_ context.Context, id int64, updatedAt time.Time, generation int64, status links.PreviewStatus, patch links.PreviewPatch) (bool, error) {
 	f.updates = append(f.updates, fakePreviewCAS{id: id, updatedAt: updatedAt, generation: generation, status: status})
 	if !f.matchesPendingCAS(id, updatedAt, generation) {
 		return false, nil
 	}
 	f.work.PreviewStatus = status
-	if imageURL != nil && (f.work.OGImageURL == nil || *f.work.OGImageURL == "") {
-		value := *imageURL
+	if patch.OGImage != nil && (f.work.OGImageURL == nil || *f.work.OGImageURL == "") {
+		value := *patch.OGImage
 		f.work.OGImageURL = &value
 	}
 	if !f.nextUpdatedAt.IsZero() {
@@ -342,7 +342,7 @@ func (r *refillPreviewRepo) SystemGetPreview(context.Context, int64) (links.Prev
 	return links.PreviewWork{}, nil
 }
 
-func (r *refillPreviewRepo) SystemUpdatePreviewIfUnchanged(_ context.Context, id int64, updatedAt time.Time, generation int64, status links.PreviewStatus, _ *string, _ *string, _ *string, _ *string) (bool, error) {
+func (r *refillPreviewRepo) SystemUpdatePreviewIfUnchanged(_ context.Context, id int64, updatedAt time.Time, generation int64, status links.PreviewStatus, _ links.PreviewPatch) (bool, error) {
 	r.started <- id
 	if id <= int64(r.waveSize) {
 		<-r.firstRelease
@@ -728,7 +728,7 @@ func (r *panicOnIDPreviewRepo) SystemGetPreview(_ context.Context, id int64) (li
 	return r.items[id], nil
 }
 
-func (r *panicOnIDPreviewRepo) SystemUpdatePreviewIfUnchanged(_ context.Context, id int64, _ time.Time, _ int64, _ links.PreviewStatus, _ *string, _ *string, _ *string, _ *string) (bool, error) {
+func (r *panicOnIDPreviewRepo) SystemUpdatePreviewIfUnchanged(_ context.Context, id int64, _ time.Time, _ int64, _ links.PreviewStatus, _ links.PreviewPatch) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.updated = append(r.updated, id)

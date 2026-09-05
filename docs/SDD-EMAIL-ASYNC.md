@@ -257,7 +257,7 @@ CREATE INDEX mail_outbox_stuck_idx
   frequentemente ecoa o envelope.
 - **`claim_token`** é o que torna a publicação idempotente sob concorrência. O relay
   reivindica com `FOR UPDATE SKIP LOCKED` (mesmo padrão de
-  `SystemFindDueForCheck`) e só marca `published` com CAS naquele token exato — um
+  `SystemClaimDueForCheck`) e só marca `published` com CAS naquele token exato — um
   relay que dormiu e acordou depois de outro ter reivindicado a linha não sobrescreve
   o resultado.
 - **`mail_outbox_stuck_idx`** existe para o varredor de linhas presas em

@@ -40,7 +40,7 @@ type Notification struct {
 // Repo is the storage contract used by the worker. Narrowed from
 // *links.Repository so tests can mock it without standing up Postgres.
 type Repo interface {
-	SystemFindDueForCheck(ctx context.Context, limit int) ([]links.DueLink, error)
+	SystemClaimDueForCheck(ctx context.Context, limit int) ([]links.DueLink, error)
 	SystemRecordCheckResult(ctx context.Context, id int64, expectedClaimedAt time.Time, res links.CheckResult) (bool, error)
 }
 
@@ -222,9 +222,9 @@ func (w *Worker) scan(ctx context.Context) {
 	if available == 0 {
 		return
 	}
-	due, err := w.repo.SystemFindDueForCheck(ctx, available)
+	due, err := w.repo.SystemClaimDueForCheck(ctx, available)
 	if err != nil {
-		w.logger.Warn("scan: find due failed", "err", err)
+		w.logger.Warn("scan: claim due failed", "err", err)
 		return
 	}
 	enqueued := 0

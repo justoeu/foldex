@@ -214,7 +214,7 @@ func (h *Handler) refreshPreview(w http.ResponseWriter, r *http.Request) {
 	// sees "capturando…" and the auto-polling in useLinks kicks in. Without
 	// this, a previously 'failed' link stays 'failed' visually and the user
 	// has no signal the retry is running.
-	if err := h.repo.SystemUpdatePreview(r.Context(), id, StatusPending, nil, nil, nil, nil); err != nil {
+	if err := h.repo.SystemUpdatePreview(r.Context(), id, StatusPending, PreviewPatch{}); err != nil {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
