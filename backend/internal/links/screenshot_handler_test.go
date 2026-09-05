@@ -3,9 +3,11 @@ package links
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
@@ -59,6 +61,18 @@ func realPNG(t *testing.T, w, h int) []byte {
 	var buf bytes.Buffer
 	require.NoError(t, png.Encode(&buf, img))
 	return buf.Bytes()
+}
+
+// decodeBombPNG is a tiny PNG whose IHDR declares 8000×8000 (64 MP, over the
+// 50 MP cap) while the IDAT stays a 1×1 pixel.
+func decodeBombPNG(t *testing.T) []byte {
+	t.Helper()
+	bomb := append([]byte(nil), realPNG(t, 1, 1)...)
+	require.GreaterOrEqual(t, len(bomb), 33)
+	binary.BigEndian.PutUint32(bomb[16:20], 8_000)
+	binary.BigEndian.PutUint32(bomb[20:24], 8_000)
+	binary.BigEndian.PutUint32(bomb[29:33], crc32.ChecksumIEEE(bomb[12:29]))
+	return bomb
 }
 
 // --- fakes ---
@@ -687,10 +701,9 @@ func TestCaptureAndStore_InvalidID(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestCaptureAndStore_OptimizeFailureFallsBackToPNG(t *testing.T) {
+func TestCaptureAndStore_OptimizeFailureStoresNothing(t *testing.T) {
 	// fakePNG sniffs as image/png but isn't a decodable PNG — Optimize
-	// returns ErrDecode, handler falls back to storing the raw bytes under
-	// the legacy .png extension.
+	// returns ErrDecode. Storing the original would skip INV-077 re-encode.
 	bad := fakePNG("not really a png")
 	sc := &fakeScreenshotter{png: bad}
 	up := newFakeUploader()
@@ -702,12 +715,34 @@ func TestCaptureAndStore_OptimizeFailureFallsBackToPNG(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	require.Equal(t, http.StatusOK, w.Code)
-	require.Len(t, fakeUp.ops, 1)
-	assert.Regexp(t, `^screenshots/7\.[0-9a-f-]{36}\.png$`, fakeUp.ops[0].key)
-	assert.Equal(t, bad, fakeUp.uploaded[fakeUp.ops[0].key])
-	require.Len(t, fakeUp.ops, 1)
-	assert.Equal(t, "image/png", fakeUp.ops[0].contentType)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	errBlock, _ := body["error"].(map[string]any)
+	assert.Equal(t, "invalid_image", errBlock["code"])
+	assert.Empty(t, fakeUp.ops, "undecodable screenshot must not be stored")
+	assert.Empty(t, fakeUp.uploaded)
+}
+
+func TestCaptureAndStore_RejectsDecodeBomb(t *testing.T) {
+	sc := &fakeScreenshotter{png: decodeBombPNG(t)}
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	repo.links[7] = Link{ID: 7, URL: "https://example.com"}
+	r, fakeUp, _ := buildRouter(t, sc, up, repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/links/7/screenshot", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	errBlock, _ := body["error"].(map[string]any)
+	assert.Equal(t, "invalid_image", errBlock["code"])
+	assert.Empty(t, fakeUp.ops, "decode bomb must not be written to object storage")
+	assert.Empty(t, fakeUp.uploaded)
+	assert.Empty(t, repo.updatedURL)
 }
 
 func TestProxyFile_Success(t *testing.T) {
@@ -1052,26 +1087,48 @@ func TestUploadImage_PurgesLegacyExtensions(t *testing.T) {
 	assert.False(t, oldStillThere, "fakeUploader DeleteObject should have removed the stale .png")
 }
 
-func TestUploadImage_OptimizeFailureStoresOriginal(t *testing.T) {
+func TestUploadImage_OptimizeFailureStoresNothing(t *testing.T) {
 	up := newFakeUploader()
 	repo := newFakeRepo()
 	repo.links[9] = Link{ID: 9}
 	r, fakeUp, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 
 	// PNG-sniff header but body isn't a real PNG — Optimize returns
-	// ErrDecode, handler falls back to storing original under .png.
+	// ErrDecode. Storing the original would skip INV-077 re-encode.
 	bad := fakePNG("nope")
 	req, ct := buildMultipart(t, 9, "image", "broken.png", "image/png", bad)
 	req.Header.Set("Content-Type", ct)
 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	errBlock, _ := body["error"].(map[string]any)
+	assert.Equal(t, "invalid_image", errBlock["code"])
+	assert.Empty(t, fakeUp.ops, "undecodable upload must not be stored")
+	assert.Empty(t, fakeUp.uploaded)
+}
 
-	require.Len(t, fakeUp.ops, 1)
-	assert.Regexp(t, `^images/9\.[0-9a-f-]{36}\.png$`, fakeUp.ops[0].key)
-	assert.Equal(t, "image/png", fakeUp.ops[0].contentType)
-	assert.Equal(t, bad, fakeUp.ops[0].bytes)
+func TestUploadImage_RejectsDecodeBomb(t *testing.T) {
+	up := newFakeUploader()
+	repo := newFakeRepo()
+	repo.links[9] = Link{ID: 9}
+	r, fakeUp, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
+
+	req, ct := buildMultipart(t, 9, "image", "bomb.png", "image/png", decodeBombPNG(t))
+	req.Header.Set("Content-Type", ct)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	errBlock, _ := body["error"].(map[string]any)
+	assert.Equal(t, "invalid_image", errBlock["code"])
+	assert.Empty(t, fakeUp.ops, "decode bomb must not be written to object storage")
+	assert.Empty(t, fakeUp.uploaded)
+	assert.Empty(t, repo.updatedURL)
 }
 
 // TestUploadImage_Rejects5MBPlus locks the H4 follow-on: the cap dropped from

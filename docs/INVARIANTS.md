@@ -411,7 +411,7 @@ Re-importing the same `bookmarks.html` produces `skipped` matches. When JSON exp
 <a id="inv-076"></a>
 ### INV-076 — Image input has a 50 MP decode cap.
 
-`imageopt.Optimize` calls `image.DecodeConfig` before `Decode` and refuses with `ErrTooLarge` if `width × height > 50_000_000`. Without this, a ~30 KB PNG declaring 60000×60000 allocates ~14 GB. Upload entry point also caps body at 5 MiB — both caps must stay.
+`imageopt.Optimize` calls `image.DecodeConfig` before `Decode` and refuses with `ErrTooLarge` if `width × height > 50_000_000`. Without this, a ~30 KB PNG declaring 60000×60000 allocates ~14 GB. Upload entry point also caps body at 5 MiB — both caps must stay. Callers (note upload, link image upload, screenshot capture, preview worker) go through `OptimizeForStore` and must not store the original bytes on any Optimize error.
 
 <a id="inv-077"></a>
 ### INV-077 — Uploads and screenshots are always re-encoded via `internal/imageopt`

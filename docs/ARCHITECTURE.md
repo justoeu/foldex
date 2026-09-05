@@ -492,7 +492,7 @@ Após publicar a URL nova, cada fluxo remove a imagem local anteriormente refere
 
 ### imageopt — decode-bomb guard
 
-`imageopt.Optimize` chama `image.DecodeConfig` antes de `image.Decode` e rejeita com `ErrTooLarge` qualquer payload cujas dimensões declaradas excedam `maxPixels = 50_000_000` (50 MP). Sem isso, um PNG de ~30 KB declarando 60000×60000 alocaria ~14 GB de RGBA em `image.NewRGBA` e travaria o backend. O cap é generoso para qualquer foto de celular (top consumer é ~108 MP, mas esses comprimem para >5 MB e o upload pré-cap de 5 MiB já corta antes).
+`imageopt.Optimize` chama `image.DecodeConfig` antes de `image.Decode` e rejeita com `ErrTooLarge` qualquer payload cujas dimensões declaradas excedam `maxPixels = 50_000_000` (50 MP). Sem isso, um PNG de ~30 KB declarando 60000×60000 alocaria ~14 GB de RGBA em `image.NewRGBA` e travaria o backend. O cap é generoso para qualquer foto de celular (top consumer é ~108 MP, mas esses comprimem para >5 MB e o upload pré-cap de 5 MiB já corta antes). `OptimizeForStore` é a entrada única de notes, upload de link, screenshot e o worker de preview: qualquer erro (decode bomb incluído) recusa o payload — nunca grava os bytes originais.
 
 ## Portas, hostnames e deploy local
 
