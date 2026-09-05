@@ -285,7 +285,15 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 	relay.Start(context.Background())
 	t.Cleanup(relay.Stop)
 	cookies := auth.CookieOptions{Secure: true}
-	mw := auth.NewMiddleware(repo, cookies, logger, opts.Require2FAForAdmins)
+	var policyRepo *policy.Repository
+	var mwOpts []auth.MiddlewareOption
+	if opts.Policy {
+		policyRepo = policy.NewRepository(pool)
+		// Production always passes this (cmd/server). Omitting it leaves
+		// totp_only stored but unread, and every test on the permissive floor.
+		mwOpts = append(mwOpts, auth.WithAdminFactorPolicy(policyRepo.RequiresTOTPForAdmins))
+	}
+	mw := auth.NewMiddleware(repo, cookies, logger, opts.Require2FAForAdmins, mwOpts...)
 
 	cfg := auth.HandlerConfig{
 		Repo: repo, MW: mw, Mailer: mail, Cookies: cookies,
@@ -293,9 +301,7 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 		Require2FAForAdmins: opts.Require2FAForAdmins,
 		Google:              opts.Google,
 	}
-	var policyRepo *policy.Repository
-	if opts.Policy {
-		policyRepo = policy.NewRepository(pool)
+	if policyRepo != nil {
 		cfg.Policy = policyRepo
 	}
 	if opts.TwoFactor || opts.Require2FAForAdmins {
