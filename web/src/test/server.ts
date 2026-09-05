@@ -86,6 +86,8 @@ export type MockState = {
   statsStorageError?: boolean
   // When set, DELETE /api/links/:id/image rejects with this error object.
   linkImageRemoveError?: { status?: number; code?: string; message: string }
+  // When set, POST /api/links/:id/image rejects with this error object.
+  linkImageUploadError?: { status?: number; code?: string; message: string }
   // When set, POST /api/links/:id/screenshot rejects with this error object.
   linkScreenshotError?: { status?: number; code?: string; message: string }
   // Operational backup status (ADR-43). `backupJobs` overrides the per-job
@@ -1123,6 +1125,19 @@ function captureScreenshot(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s:
 }
 
 function uploadLinkImage(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): { url: string } {
+  if (s.linkImageUploadError) {
+    const e: any = new Error(s.linkImageUploadError.message)
+    e.response = {
+      status: s.linkImageUploadError.status ?? 500,
+      data: {
+        error: {
+          code: s.linkImageUploadError.code ?? 'storage',
+          message: s.linkImageUploadError.message,
+        },
+      },
+    }
+    throw e
+  }
   const id = Number(m[1])
   const link = s.links.find((x) => x.id === id)
   if (!link) throw notFound()

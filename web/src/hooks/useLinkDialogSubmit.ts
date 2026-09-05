@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { captureLinkScreenshot, removeLinkImage, uploadLinkImage, useCreateLink, useUpdateLink } from '../api/links'
@@ -16,6 +17,7 @@ type ImageState = {
 }
 
 type Options = {
+  open: boolean
   link: Link | null
   values: LinkDialogValues
   selected: SelectedTag[]
@@ -29,17 +31,29 @@ export function useLinkDialogSubmit(options: Options) {
   const queryClient = useQueryClient()
   const create = useCreateLink()
   const update = useUpdateLink()
+  // Create then image-upload is two requests. Remembering the id makes a
+  // retry after a failed image hit the existing row instead of POSTing a
+  // second bookmark.
+  const createdIdRef = useRef<number | null>(null)
+  const editedId = options.link?.id ?? null
+
+  useEffect(() => {
+    createdIdRef.current = null
+  }, [options.open, editedId])
 
   const persist = async (): Promise<number | null> => {
     if (options.link) {
+      createdIdRef.current = options.link.id
       await update.mutateAsync({
         id: options.link.id,
         body: buildLinkUpdatePayload(options.link, options.values, options.selected),
       })
       return options.link.id
     }
+    if (createdIdRef.current != null) return createdIdRef.current
     const link = await create.mutateAsync(buildLinkCreatePayload(options.values, options.selected))
-    return link?.id ?? null
+    createdIdRef.current = link?.id ?? null
+    return createdIdRef.current
   }
 
   const syncImage = async (linkId: number | null) => {
@@ -80,6 +94,7 @@ export function useLinkDialogSubmit(options: Options) {
   return {
     submit,
     busy: create.isPending || update.isPending || options.image.busy,
+    createdId: createdIdRef.current,
   }
 }
 
