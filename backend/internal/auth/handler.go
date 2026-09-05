@@ -519,9 +519,13 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, ok := h.loginByEmail.Begin(emailKey); !ok {
-		h.loginByIP.Release(ipKey)
-		// 401, not 429: the bucket is keyed on the resolved account, so a
-		// distinct lockout status is a username-to-mailbox oracle (INV-041).
+		// Charge origin with the SUBMITTED identifier, same as a miss
+		// (INV-184). Release would skip the member and reopen a 429-on-canary
+		// oracle after filling the IP set. 401, not 429: the account bucket
+		// is resolved, so a distinct lockout status is a username-to-mailbox
+		// oracle (INV-041).
+		h.loginByIP.CommitFailFor(ipKey, truncateTo(NormalizeEmail(in.who()), maxAuditEmail))
+		burnDummyHash(in.Password)
 		httperr.Write(w, errInvalidCredentials())
 		return
 	}
