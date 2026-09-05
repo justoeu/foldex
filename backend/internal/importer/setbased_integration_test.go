@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/preview"
+	"foldex/internal/ports"
 	"foldex/internal/testdb"
 )
 
@@ -148,7 +148,7 @@ type queueFullEnqueuer struct {
 func (e *queueFullEnqueuer) Enqueue(int64) error {
 	e.calls++
 	if e.calls == e.fullAt {
-		return fmt.Errorf("preview admission: %w", preview.ErrQueueFull)
+		return fmt.Errorf("preview admission: %w", ports.ErrQueueFull)
 	}
 	return nil
 }

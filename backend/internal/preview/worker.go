@@ -14,19 +14,16 @@ import (
 	"foldex/internal/linkimage"
 	"foldex/internal/links"
 	"foldex/internal/pkg/resourcebudget"
+	"foldex/internal/ports"
 )
 
-// ErrQueueFull is returned by Enqueue when the bounded jobs channel has no
-// available slot. Callers can decide to retry, log + drop, or fail the request.
-// Returning an error (instead of silent drop) lets handlers surface
-// backpressure to the client rather than pretending success.
-var ErrQueueFull = errors.New("preview: queue full")
-
-// ErrStopped is returned by Enqueue when the worker has been Stop()ped. The
-// jobs channel stays open by design (sending to a closed channel panics, and
-// requeuePending could race a shutdown), so this flag is the explicit signal
-// that no further work will be processed.
-var ErrStopped = errors.New("preview: worker stopped")
+// ErrQueueFull / ErrStopped alias the port sentinels. Delivery packages
+// match ports.ErrQueueFull without importing preview; preview's own tests
+// keep using the local names.
+var (
+	ErrQueueFull = ports.ErrQueueFull
+	ErrStopped   = ports.ErrStopped
+)
 
 const (
 	screenshotMaxDim         = 1024

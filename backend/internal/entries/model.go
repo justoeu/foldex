@@ -6,8 +6,8 @@ package entries
 import (
 	"time"
 
-	"foldex/internal/links"
 	"foldex/internal/pkg/listquery"
+	"foldex/internal/tags"
 )
 
 // Entry is a flat union of link + note fields with a Kind discriminator.
@@ -26,7 +26,7 @@ type Entry struct {
 	UpdatedAt     time.Time   `json:"updated_at"`
 	ClickCount    int64       `json:"click_count"`
 	LastClickedAt *time.Time  `json:"last_clicked_at,omitempty"`
-	Tags          []links.Tag `json:"tags"`
+	Tags          []tags.Chip `json:"tags"`
 
 	// link-only — nil/empty for kind="note". Mirrors links.Link's full shape
 	// (including change-detection columns) so the frontend can treat a

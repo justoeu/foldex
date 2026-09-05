@@ -142,6 +142,62 @@ func TestNotesDoesNotImportLinks(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestEntriesDoesNotImportLinks(t *testing.T) {
+	root := filepath.Join("..", "entries")
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || strings.HasSuffix(path, "_test.go") || filepath.Ext(path) != ".go" {
+			return nil
+		}
+
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, imp := range f.Imports {
+			importPath, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				return err
+			}
+			if importPath == "foldex/internal/links" {
+				t.Errorf("production entries file %s imports links", filepath.Base(path))
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestImporterDoesNotImportPreview(t *testing.T) {
+	root := filepath.Join("..", "importer")
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || strings.HasSuffix(path, "_test.go") || filepath.Ext(path) != ".go" {
+			return nil
+		}
+
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, imp := range f.Imports {
+			importPath, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				return err
+			}
+			if importPath == "foldex/internal/preview" {
+				t.Errorf("production importer file %s imports preview", filepath.Base(path))
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
 func TestPasswordResetRepositoryBindsEveryTokenToACredentialEpoch(t *testing.T) {
 	path := filepath.Join("..", "auth", "repository_2fa.go")
 	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
