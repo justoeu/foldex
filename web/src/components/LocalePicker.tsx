@@ -48,29 +48,10 @@ export function LocalePicker() {
         createPortal(
           <div
             ref={menuRef}
-            className="fx-portalmenu"
+            className="fx-portalmenu fx-localemenu"
             role="menu"
             aria-label={t('topbar.language')}
-            style={{
-              position: 'fixed',
-              top: pos.top,
-              right: pos.right,
-              minWidth: 160,
-              // "Near-opaque" is still not opaque: --fx-surface-3 carries 0.92
-              // alpha, which reads solid only where something opaque sits
-              // behind it. A portaled menu floats over arbitrary content, so
-              // the layer underneath showed through — same defect the user
-              // menu had. Composited over --fx-bg it keeps the tint and stays
-              // readable whatever is beneath.
-              background: 'linear-gradient(var(--fx-surface-3), var(--fx-surface-3)), var(--fx-bg)',
-              backdropFilter: 'blur(20px) saturate(140%)',
-              WebkitBackdropFilter: 'blur(20px) saturate(140%)',
-              border: '1px solid var(--fx-border)',
-              borderRadius: 10,
-              boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
-              padding: 4,
-              zIndex: 1000,
-            }}
+            style={{ top: pos.top, right: pos.right }}
           >
             {SUPPORTED_LOCALES.map((l) => {
               const active = l.code === current.code
@@ -80,35 +61,17 @@ export function LocalePicker() {
                   type="button"
                   role="menuitem"
                   aria-current={active ? 'true' : undefined}
+                  className="fx-localemenu-item"
                   onClick={() => pick(l.code)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    width: '100%',
-                    padding: '8px 10px',
-                    border: 0,
-                    background: active ? 'rgba(99,102,241,0.08)' : 'transparent',
-                    color: 'var(--fx-ink)',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    fontFamily: 'inherit',
-                    borderRadius: 6,
-                    fontSize: 13,
-                  }}
                 >
                   <span aria-hidden="true">{l.flag}</span>
-                  <span style={{ flex: 1 }}>{l.label}</span>
+                  <span className="fx-localemenu-label">{l.label}</span>
                   {active && (
-                    <span style={{ color: 'var(--fx-accent)', display: 'inline-flex' }}>
+                    <span className="fx-localemenu-check">
                       <Icon d={I.check} size={13} />
                     </span>
                   )}
-                  <span
-                    style={{ fontFamily: 'var(--fx-mono)', fontSize: 10, color: 'var(--fx-ink-4)' }}
-                  >
-                    {l.code.toUpperCase()}
-                  </span>
+                  <span className="fx-localemenu-code">{l.code.toUpperCase()}</span>
                 </button>
               )
             })}

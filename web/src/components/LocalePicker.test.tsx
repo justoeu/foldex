@@ -54,6 +54,20 @@ describe('LocalePicker', () => {
     expect(document.body.contains(menu)).toBe(true)
   })
 
+  it('keeps only top/right inline on the portaled menu', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<LocalePicker />)
+    await user.click(screen.getByRole('button', { name: langName }))
+
+    const menu = screen.getByRole('menu')
+    expect(menu).toHaveClass('fx-portalmenu')
+    expect(menu).toHaveClass('fx-localemenu')
+    expect(menu.getAttribute('style') ?? '').toMatch(/top:/)
+    expect(menu.getAttribute('style') ?? '').toMatch(/right:/)
+    expect(menu.getAttribute('style') ?? '').not.toMatch(/min-width|background|z-index|padding|border-radius|box-shadow|backdrop-filter/)
+    expect(screen.getByRole('menuitem', { name: /English/ }).getAttribute('style') ?? '').toBe('')
+  })
+
   it('picking a locale switches the language and closes the menu', async () => {
     const user = userEvent.setup()
     const spy = vi.spyOn(i18n, 'changeLanguage')
