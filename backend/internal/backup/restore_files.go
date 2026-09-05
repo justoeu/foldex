@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"path"
 	"strings"
 	"sync"
@@ -14,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/pkg/httperr"
 )
 
 type restoreFileWork struct {
@@ -162,7 +160,7 @@ func (s *Service) applyRestoreNoteObject(ctx context.Context, item restoreFileWo
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return restoreObjectResult{}, ctxErr
 		}
-		return restoreObjectResult{}, httperr.New(http.StatusBadRequest, "invalid_backup", "backup contains invalid note media")
+		return restoreObjectResult{}, invalidBackup("backup contains invalid note media")
 	}
 	if err := s.storage.PutObjectStream(ctx, item.key, bytes.NewReader(optimized.Data), int64(len(optimized.Data)), optimized.ContentType); err != nil {
 		return restoreObjectResult{}, fmt.Errorf("backup: put %q: %w", item.key, err)

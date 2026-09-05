@@ -13,6 +13,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOrchestrationDoesNotImportHTTPDelivery(t *testing.T) {
+	forbidden := map[string]struct{}{
+		"net/http":                    {},
+		"foldex/internal/pkg/httperr": {},
+	}
+	files := []string{
+		filepath.Join("..", "backup", "restore.go"),
+		filepath.Join("..", "backup", "restore_helpers.go"),
+		filepath.Join("..", "backup", "restore_files.go"),
+	}
+	for _, path := range files {
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		require.NoError(t, err)
+		for _, imp := range f.Imports {
+			importPath, err := strconv.Unquote(imp.Path.Value)
+			require.NoError(t, err)
+			if _, found := forbidden[importPath]; found {
+				t.Errorf("production restore orchestration %s imports HTTP delivery package %q", filepath.ToSlash(filepath.Base(path)), importPath)
+			}
+		}
+	}
+}
+
 func TestRepositoriesDoNotImportHTTPDelivery(t *testing.T) {
 	root := ".."
 	forbidden := map[string]struct{}{
