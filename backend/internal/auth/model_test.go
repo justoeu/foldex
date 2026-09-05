@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -155,6 +156,13 @@ func TestPendingPayloadRejectsAnInvalidPurpose(t *testing.T) {
 	payload, err := h.pendingPayload(User{Email: "admin@example.com"}, ChallengePurpose("impossible"), false)
 	assert.ErrorIs(t, err, errInvalidChallengePurpose)
 	assert.Nil(t, payload)
+}
+
+func TestLiveFeatures_CarriesThePasswordFloor(t *testing.T) {
+	h := &Handler{features: AuthFeatures{GoogleOAuth: true}}
+	f := h.liveFeatures(context.Background())
+	assert.Equal(t, MinPasswordLen, f.PasswordMinLength)
+	assert.True(t, f.GoogleOAuth)
 }
 
 func mapKeys[V any](values map[string]V) []string {

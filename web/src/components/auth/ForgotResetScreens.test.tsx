@@ -201,8 +201,8 @@ describe('ResetScreen', () => {
     vi.spyOn(http, 'post').mockImplementation(() => rejectWith(400, 'password_too_short') as never)
 
     renderWithProviders(<ResetScreen token="TOK" onGiveUp={() => {}} />, { session: null })
-    await user.type(screen.getByLabelText(/^new password$/i), 'short')
-    await user.type(screen.getByLabelText(/confirm new password/i), 'short')
+    await user.type(screen.getByLabelText(/^new password$/i), 'a brand new password')
+    await user.type(screen.getByLabelText(/confirm new password/i), 'a brand new password')
     await user.click(screen.getByRole('button', { name: /save and sign in/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/at least/i)

@@ -103,6 +103,8 @@ export type AuthFeatures = {
   google_oauth: boolean
   two_factor: boolean
   email_delivery: boolean
+  /** Live instance floor (ADR-35). Absent on a client that predates the field. */
+  password_min_length?: number
 }
 
 /**

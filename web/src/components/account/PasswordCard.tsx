@@ -9,7 +9,8 @@ import * as auth from '../../api/auth'
 import { MailCodeButton } from './MailCodeButton'
 import { accountErrorMessage } from './accountErrors'
 import { useAuth } from '../../auth/AuthProvider'
-import { MIN_PASSWORD_LEN, canMailStepUpCode, hasSecondFactor, type AuthUser } from '../../auth/types'
+import { canMailStepUpCode, hasSecondFactor, type AuthUser } from '../../auth/types'
+import { usePasswordFloor } from '../../hooks/useInstancePolicy'
 
 /**
  * The account's password: change it when there is one, create one when there
@@ -29,6 +30,7 @@ import { MIN_PASSWORD_LEN, canMailStepUpCode, hasSecondFactor, type AuthUser } f
 export function PasswordRow({ user }: { user: AuthUser }) {
   const { t } = useTranslation()
   const { reload } = useAuth()
+  const minLen = usePasswordFloor()
   const hasPassword = user.has_password
 
   const [open, setOpen] = useState(false)
@@ -73,13 +75,13 @@ export function PasswordRow({ user }: { user: AuthUser }) {
       // burns another attempt from the server's budget — and on the e-mail
       // path, another message.
       setCode('')
-      setError(accountErrorMessage(e, t))
+      setError(accountErrorMessage(e, t, minLen))
     } finally {
       setBusy(false)
     }
   }
 
-  const tooShort = next.length < MIN_PASSWORD_LEN
+  const tooShort = next.length < minLen
   const blocked =
     busy ||
     tooShort ||

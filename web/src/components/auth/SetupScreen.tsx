@@ -3,15 +3,14 @@ import { useTranslation } from 'react-i18next'
 import { bootstrap, errorCode, errorStatus } from '../../api/auth'
 import { useAuth } from '../../auth/AuthProvider'
 import { PasswordStrength } from '../PasswordStrength'
-import { MIN_PASSWORD_LEN } from '../../auth/types'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 import { PasswordInput } from '../PasswordInput'
-
-/** Mirrors auth.MinPasswordLen; the backend is the authority. */
+import { usePasswordFloor } from '../../hooks/useInstancePolicy'
 
 export function SetupScreen() {
   const { t } = useTranslation()
   const { adopt } = useAuth()
+  const minLen = usePasswordFloor()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -20,7 +19,7 @@ export function SetupScreen() {
   const [busy, setBusy] = useState(false)
 
   const mismatch = confirm.length > 0 && password !== confirm
-  const tooShort = password.length > 0 && password.length < MIN_PASSWORD_LEN
+  const tooShort = password.length > 0 && password.length < minLen
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -36,7 +35,7 @@ export function SetupScreen() {
     try {
       adopt(await bootstrap(email, name, password))
     } catch (err) {
-      setError(messageFor(err, t))
+      setError(messageFor(err, t, minLen))
     } finally {
       setBusy(false)
     }
@@ -78,7 +77,7 @@ export function SetupScreen() {
         <AuthField
           id="fx-setup-password"
           label={t('auth.password')}
-          hint={t('auth.password_min', { count: MIN_PASSWORD_LEN })}
+          hint={t('auth.password_min', { count: minLen })}
         >
           <PasswordInput
             id="fx-setup-password"
@@ -105,13 +104,17 @@ export function SetupScreen() {
         </AuthField>
         {mismatch ? <p className="fx-auth-hint fx-auth-hint-error">{t('auth_errors.password_mismatch')}</p> : null}
 
-        <AuthSubmit busy={busy}>{t('auth_setup.submit')}</AuthSubmit>
+        <AuthSubmit busy={busy} disabled={tooShort || mismatch}>{t('auth_setup.submit')}</AuthSubmit>
       </form>
     </AuthShell>
   )
 }
 
-function messageFor(err: unknown, t: (k: string, o?: Record<string, unknown>) => string): string {
+function messageFor(
+  err: unknown,
+  t: (k: string, o?: Record<string, unknown>) => string,
+  minLen: number,
+): string {
   switch (errorCode(err)) {
     case 'already_configured':
       // A second operator got there first. Nothing to retry — reloading shows
@@ -122,7 +125,7 @@ function messageFor(err: unknown, t: (k: string, o?: Record<string, unknown>) =>
     case 'invalid_email':
       return t('auth_errors.invalid_email')
     case 'password_too_short':
-      return t('auth_errors.password_too_short', { count: MIN_PASSWORD_LEN })
+      return t('auth_errors.password_too_short', { count: minLen })
     case 'password_too_long':
       return t('auth_errors.password_too_long')
     default:

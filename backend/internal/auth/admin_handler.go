@@ -65,24 +65,10 @@ func (h *AdminHandler) WithBlocklist(b *Blocklist, isTrustedProxy func(string) b
 	return h
 }
 
-// validatePassword mirrors Handler's, and is a METHOD for the same reason
-// (§4): as a package function it would silently keep applying the constant
-// while the owner believed their configured floor was in force.
+// validatePassword is a METHOD so every call site is forced through the
+// configured floor — the same helper Handler uses, not a second copy.
 func (h *AdminHandler) validatePassword(ctx context.Context, p string) error {
-	minLen := MinPasswordLen
-	if h.policy != nil {
-		minLen = max(h.policy.PasswordMinLength(ctx), MinPasswordLen)
-	}
-	if utf8.RuneCountInString(p) < minLen {
-		return httperr.New(http.StatusBadRequest, "password_too_short",
-			fmt.Sprintf("password must be at least %d characters", minLen))
-	}
-	// Measured in BYTES, because that is the unit bcrypt truncates in.
-	if len(p) > MaxPasswordLen {
-		return httperr.New(http.StatusBadRequest, "password_too_long",
-			fmt.Sprintf("password must be at most %d bytes", MaxPasswordLen))
-	}
-	return nil
+	return validatePasswordAgainst(ctx, h.policy, p)
 }
 
 // NewAdminHandler builds the administration surface.

@@ -1,9 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
 import { fetchPolicy, type InstancePolicy } from '../api/admin'
+import { useAuth } from '../auth/AuthProvider'
 import { MIN_PASSWORD_LEN } from '../auth/types'
 
 /** The one cache key for the instance policy document. */
 export const INSTANCE_POLICY_KEY = ['admin', 'policy'] as const
+
+/** The live floor, never below the compiled-in minimum. */
+export function passwordFloor(live?: number | null): number {
+  return Math.max(live ?? MIN_PASSWORD_LEN, MIN_PASSWORD_LEN)
+}
 
 /**
  * The owner-configurable instance rules (ADR-35), read.
@@ -35,6 +41,15 @@ export function useInstancePolicy() {
      * what makes a policy document that predates a raised constant — or one
      * that failed to load — safe rather than weaker than the code.
      */
-    minPasswordLen: Math.max(query.data?.password_min_length ?? MIN_PASSWORD_LEN, MIN_PASSWORD_LEN),
+    minPasswordLen: passwordFloor(query.data?.password_min_length),
   }
+}
+
+/** The password floor every SPA writer of credentials must use. */
+export function usePasswordFloor(): number {
+  const { session } = useAuth()
+  const { policy } = useInstancePolicy()
+  const featured =
+    session.status === 'loading' ? undefined : session.features.password_min_length
+  return passwordFloor(policy?.password_min_length ?? featured)
 }

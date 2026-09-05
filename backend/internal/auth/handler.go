@@ -786,12 +786,12 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		}
 		if needs {
 			httperr.JSON(w, http.StatusOK, setupRequiredAuthResponse{
-				Status: statusSetupRequired, Features: h.features,
+				Status: statusSetupRequired, Features: h.liveFeatures(r.Context()),
 			})
 			return
 		}
 		httperr.JSON(w, http.StatusOK, anonymousAuthResponse{
-			Status: statusAnonymous, Features: h.features,
+			Status: statusAnonymous, Features: h.liveFeatures(r.Context()),
 		})
 		return
 	}
@@ -813,7 +813,7 @@ func (h *Handler) authenticatedPayload(u User, csrf string) authenticatedAuthRes
 		Status:      statusAuthenticated,
 		User:        u,
 		CSRFToken:   csrf,
-		Features:    h.features,
+		Features:    h.liveFeatures(context.Background()),
 		Permissions: h.permissionsFor(u.Role),
 	}
 }
@@ -1167,10 +1167,23 @@ type PolicyReader interface {
 // even if a row is edited directly in SQL past the validation in
 // policy.Validate.
 func (h *Handler) passwordFloor(ctx context.Context) int {
-	if h.policy == nil {
+	return passwordFloorOf(ctx, h.policy)
+}
+
+// liveFeatures is the boot-time capability flags plus the live password floor.
+// The floor is owner-configurable, so it cannot live on the static struct
+// NewHandler captured — every auth-state payload has to read it now.
+func (h *Handler) liveFeatures(ctx context.Context) AuthFeatures {
+	f := h.features
+	f.PasswordMinLength = h.passwordFloor(ctx)
+	return f
+}
+
+func passwordFloorOf(ctx context.Context, policy PolicyReader) int {
+	if policy == nil {
 		return MinPasswordLen
 	}
-	return max(h.policy.PasswordMinLength(ctx), MinPasswordLen)
+	return max(policy.PasswordMinLength(ctx), MinPasswordLen)
 }
 
 // otpTTL and otpCooldown resolve the configured values, never below the
@@ -1197,7 +1210,11 @@ func (h *Handler) otpCooldown(ctx context.Context) time.Duration {
 // configured floor. As a package function it would have kept silently applying
 // the constant, and a policy nothing enforces is worse than no policy.
 func (h *Handler) validatePassword(ctx context.Context, p string) error {
-	minLen := h.passwordFloor(ctx)
+	return validatePasswordAgainst(ctx, h.policy, p)
+}
+
+func validatePasswordAgainst(ctx context.Context, policy PolicyReader, p string) error {
+	minLen := passwordFloorOf(ctx, policy)
 	if utf8.RuneCountInString(p) < minLen {
 		return httperr.New(http.StatusBadRequest, "password_too_short",
 			fmt.Sprintf("password must be at least %d characters", minLen))

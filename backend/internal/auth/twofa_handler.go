@@ -203,13 +203,13 @@ func (h *Handler) pendingPayload(u User, purpose ChallengePurpose, mailboxAlread
 		return twoFactorAuthResponse{
 			Status: statusTwoFactorRequired, Purpose: purpose, Email: MaskEmail(u.Email),
 			Methods: methods, ExpiresIn: int(challengeTTL.Seconds()),
-			MaxAttempts: maxChallengeAttempts, Features: h.features,
+			MaxAttempts: maxChallengeAttempts, Features: h.liveFeatures(context.Background()),
 		}, nil
 	case PurposeEnroll2FA:
 		return enrollmentAuthResponse{
 			Status: statusTwoFactorRequired, Purpose: purpose, Email: MaskEmail(u.Email),
 			Methods: []string{}, ExpiresIn: int(challengeTTL.Seconds()),
-			MaxAttempts: maxChallengeAttempts, Features: h.features,
+			MaxAttempts: maxChallengeAttempts, Features: h.liveFeatures(context.Background()),
 			Reason: "admin_enrollment_required",
 		}, nil
 	case PurposeConvertGoogle:
@@ -219,7 +219,7 @@ func (h *Handler) pendingPayload(u User, purpose ChallengePurpose, mailboxAlread
 		return conversionAuthResponse{
 			Status: statusConvertPasswordAccount, Purpose: purpose, Email: MaskEmail(u.Email),
 			Methods: []string{}, ExpiresIn: int(challengeTTL.Seconds()),
-			MaxAttempts: maxChallengeAttempts, Features: h.features,
+			MaxAttempts: maxChallengeAttempts, Features: h.liveFeatures(context.Background()),
 		}, nil
 	default:
 		return nil, errInvalidChallengePurpose
