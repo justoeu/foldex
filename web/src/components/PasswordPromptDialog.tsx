@@ -156,10 +156,13 @@ function PasswordPromptModal({
       aria-modal="true"
       aria-label={t('folder_lock.dialog_aria', { name: folder.name })}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault()
-          void submit()
-        }
+        if (e.key !== 'Enter') return
+        // A focused button (Cancel, Unlock, close) must keep its native
+        // activation. Swallowing Enter here was how Tab-then-Enter on Cancel
+        // unlocked the folder instead of dismissing.
+        if ((e.target as HTMLElement).closest('button')) return
+        e.preventDefault()
+        void submit()
       }}
     >
       <div className="fx-modal fx-confirm fx-lockmodal">

@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { forgotPassword } from '../../api/auth'
-import { AuthShell, AuthField, AuthSubmit } from './AuthShell'
+import { errorStatus, forgotPassword } from '../../api/auth'
+import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 
 /**
  * "Forgot password" and its confirmation, in one component.
@@ -21,25 +21,26 @@ export function ForgotScreen({ onBack }: { onBack: () => void }) {
   const [email, setEmail] = useState('')
   const [sent, setSent] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     if (busy) return
     setBusy(true)
+    setError('')
     try {
       // The language this screen is speaking travels with the request, so the
       // reset e-mail speaks it too. Without it the server falls back to
       // Accept-Language — a different browser setting, and the reason a
       // Portuguese login screen produced an English reset link.
       await forgotPassword(email, i18n.resolvedLanguage ?? i18n.language)
-    } catch {
-      // Swallowed on purpose. The endpoint is contractually 202 for every
-      // input, so the only errors reaching here are transport failures — and
-      // showing one for a malformed address while staying silent for a valid
-      // one would leak precisely what the 202 exists to hide.
+      setSent(true)
+    } catch (err) {
+      // INV-029's uniform 202 hides account existence, not connectivity. A
+      // status-0 failure is the same for every address and is not an oracle.
+      setError(t(errorStatus(err) === 0 ? 'auth_errors.network' : 'auth_errors.generic'))
     } finally {
       setBusy(false)
-      setSent(true)
     }
   }
 
@@ -74,6 +75,7 @@ export function ForgotScreen({ onBack }: { onBack: () => void }) {
       subtitle={t('auth_forgot.subtitle')}
     >
       <form className="fx-auth-form" onSubmit={onSubmit} noValidate>
+        <AuthError message={error} />
         <AuthField id="fx-forgot-email" label={t('auth.email')}>
           <input
             id="fx-forgot-email"

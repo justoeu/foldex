@@ -24,12 +24,17 @@ export function buildImageUploadHandler(
   onError: (message: string) => void,
 ) {
   return (view: EditorView, file: File) => {
+    const { from, to } = view.state.selection
     uploadFn(file)
       .then(({ url }) => {
+        if (view.isDestroyed) return
         const node = view.state.schema.nodes.image.create({ src: url })
-        view.dispatch(view.state.tr.replaceSelectionWith(node))
+        view.dispatch(view.state.tr.replaceWith(from, to, node))
       })
-      .catch(() => onError('upload_failed'))
+      .catch(() => {
+        if (view.isDestroyed) return
+        onError('upload_failed')
+      })
   }
 }
 
