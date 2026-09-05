@@ -84,8 +84,14 @@ describe('session cookies', () => {
 describe('authenticatedFetch', () => {
   beforeEach(() => {
     resetRefreshState()
+    setSessionLostHandler(null)
     localStorage.clear()
     document.cookie = 'fx_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/'
+  })
+
+  afterEach(() => {
+    setSessionLostHandler(null)
+    vi.restoreAllMocks()
   })
 
   it('adds session and CSRF credentials to streamed POSTs', async () => {
@@ -113,6 +119,60 @@ describe('authenticatedFetch', () => {
     expect(cancel).toHaveBeenCalledOnce()
     expect(fetchSpy).toHaveBeenCalledTimes(2)
     expect(http.post).toHaveBeenCalledWith('/api/auth/refresh', null, expect.anything())
+  })
+
+  it('never refreshes /api/auth and notifies session-lost', async () => {
+    const lost = vi.fn()
+    setSessionLostHandler(lost)
+    const cancel = vi.fn(async () => undefined)
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      status: 401,
+      body: { cancel },
+    } as unknown as Response)
+    const post = vi.spyOn(http, 'post')
+
+    const response = await authenticatedFetch('/api/auth/login', { method: 'POST' })
+
+    expect(response.status).toBe(401)
+    expect(post).not.toHaveBeenCalled()
+    expect(lost).not.toHaveBeenCalled()
+    expect(cancel).not.toHaveBeenCalled()
+  })
+
+  it('notifies session-lost once when the refresh itself fails', async () => {
+    const lost = vi.fn()
+    setSessionLostHandler(lost)
+    const cancel = vi.fn(async () => undefined)
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      status: 401,
+      body: { cancel },
+    } as unknown as Response)
+    vi.spyOn(http, 'post').mockRejectedValue(new Error('refresh failed'))
+
+    await expect(authenticatedFetch('/api/backup')).rejects.toThrow('refresh failed')
+    expect(lost).toHaveBeenCalledTimes(1)
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
+  it('does not retry when the auth epoch advances during refresh', async () => {
+    let finishRefresh!: () => void
+    const refresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve
+    })
+    const cancel = vi.fn(async () => undefined)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      status: 401,
+      body: { cancel },
+    } as unknown as Response)
+    vi.spyOn(http, 'post').mockReturnValue(refresh as never)
+
+    const pending = authenticatedFetch('/api/backup')
+    await vi.waitFor(() => expect(http.post).toHaveBeenCalledWith('/api/auth/refresh', null, expect.anything()))
+    advanceAuthEpoch()
+    finishRefresh()
+
+    await expect(pending).rejects.toThrow(/authentication changed/)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 })
 
