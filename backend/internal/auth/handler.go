@@ -1241,6 +1241,12 @@ func validateEmail(email string) error {
 	if len(e) < 3 || len(e) > MaxEmailLen {
 		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
 	}
+	// Refuse a scheme before splitting: `user@ok.com://phish` has a legal
+	// local part and a domain that "has a dot", and it is exactly the string
+	// the linkless change notice interpolates into {{.NewEmail}}.
+	if strings.Contains(e, "://") {
+		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
+	}
 	at := strings.LastIndex(e, "@")
 	if at <= 0 || at == len(e)-1 || strings.ContainsAny(e, " \t\r\n") {
 		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
@@ -1255,15 +1261,36 @@ func validateEmail(email string) error {
 	if !validLocalPart(e[:at]) {
 		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
 	}
-	// A dot INSIDE the domain, not merely present in it: `a@b.` satisfies
-	// Contains and is not deliverable anywhere. It reached here from the e-mail
-	// change, whose own check was stricter — and this is the validator that also
-	// gates registration and invitations, so the looser one was the shared one.
-	domain := e[at+1:]
-	if dot := strings.LastIndex(domain, "."); dot <= 0 || dot == len(domain)-1 {
+	if !validEmailDomain(e[at+1:]) {
 		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
 	}
 	return nil
+}
+
+// validEmailDomain is the same hostname allowlist as policy.validDomain:
+// letters, digits, hyphen, dots; no scheme, slash, colon, or query. A-Z is
+// accepted because addresses are not folded before this check.
+func validEmailDomain(d string) bool {
+	if d == "" || len(d) > 253 {
+		return false
+	}
+	for i := 0; i < len(d); i++ {
+		c := d[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '.':
+		default:
+			return false
+		}
+	}
+	if strings.HasPrefix(d, ".") || strings.HasSuffix(d, ".") || !strings.Contains(d, ".") {
+		return false
+	}
+	for _, label := range strings.Split(d, ".") {
+		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+	}
+	return true
 }
 
 // validLocalPart implements RFC 5321's dot-string: atoms of `atext` joined by
