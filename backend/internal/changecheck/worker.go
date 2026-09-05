@@ -161,7 +161,14 @@ func (w *Worker) loop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case job := <-w.jobs:
-			w.process(ctx, job)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						w.logger.Error("changecheck job panicked", "link_id", job.ID, "panic", r)
+					}
+				}()
+				w.process(ctx, job)
+			}()
 		}
 	}
 }
@@ -176,12 +183,19 @@ func (w *Worker) pushLoop(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			pushCtx, cancel := context.WithTimeout(ctx, pushTimeout)
-			err := w.sender.Notify(pushCtx, notification)
-			cancel()
-			if err != nil && ctx.Err() == nil {
-				w.logger.Warn("push notify failed", "link_id", notification.LinkID, "err", err)
-			}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						w.logger.Error("changecheck push panicked", "link_id", notification.LinkID, "panic", r)
+					}
+				}()
+				pushCtx, cancel := context.WithTimeout(ctx, pushTimeout)
+				err := w.sender.Notify(pushCtx, notification)
+				cancel()
+				if err != nil && ctx.Err() == nil {
+					w.logger.Warn("push notify failed", "link_id", notification.LinkID, "err", err)
+				}
+			}()
 		}
 	}
 }

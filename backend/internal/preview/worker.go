@@ -249,7 +249,14 @@ func (w *Worker) loop(ctx context.Context) {
 				w.wakeRecoveryIfNeeded()
 			}
 			w.startJob(job.id)
-			w.process(ctx, job)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						w.logger.Error("preview job panicked", "link_id", job.id, "panic", r)
+					}
+				}()
+				w.process(ctx, job)
+			}()
 			w.finishJob(job.id)
 		}
 	}

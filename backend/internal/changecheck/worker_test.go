@@ -152,6 +152,35 @@ func TestStop_Idempotent(t *testing.T) {
 	w.Stop() // must not panic or deadlock
 }
 
+func TestChangeCheckWorker_PanicOnOneJobDoesNotKillTheProcess(t *testing.T) {
+	repo := &fakeRepo{}
+	var logs bytes.Buffer
+	w := New(repo, panicOnURLFetcher{panicURL: "https://panic.test/"}, nil,
+		Options{Concurrency: 1, ScanInterval: time.Hour},
+		slog.New(slog.NewTextHandler(&logs, nil)))
+	w.jobs <- workerJob(1, links.Link{ID: 1, URL: "https://panic.test/", Title: "p", CheckInterval: ptrStr("daily")})
+	w.jobs <- workerJob(1, links.Link{ID: 2, URL: "https://ok.test/", Title: "o", CheckInterval: ptrStr("daily")})
+
+	w.Start(context.Background())
+	t.Cleanup(w.Stop)
+
+	require.Eventually(t, func() bool { return len(repo.snapshotResults()) == 1 }, time.Second, 5*time.Millisecond,
+		"successor job did not record a result after the panic")
+	assert.Contains(t, logs.String(), "changecheck boom")
+	assert.Contains(t, logs.String(), "panicked")
+}
+
+type panicOnURLFetcher struct {
+	panicURL string
+}
+
+func (f panicOnURLFetcher) GetRaw(_ context.Context, pageURL string) ([]byte, string, error) {
+	if pageURL == f.panicURL {
+		panic("changecheck boom")
+	}
+	return []byte(newPage("x", "hello")), "text/html", nil
+}
+
 func TestNew_ClampsHighConcurrency(t *testing.T) {
 	w := New(&fakeRepo{}, fakeFetcher{}, nil, Options{Concurrency: 100_000}, testLogger())
 	assert.Equal(t, 8, w.concurrent)
