@@ -10,7 +10,7 @@ import { MailCodeButton } from './MailCodeButton'
 import { accountErrorMessage } from './accountErrors'
 import { useAuth } from '../../auth/AuthProvider'
 import { canMailStepUpCode, hasSecondFactor, type AuthUser } from '../../auth/types'
-import { usePasswordFloor } from '../../hooks/useInstancePolicy'
+import { passwordGateLen, usePasswordFloor } from '../../hooks/useInstancePolicy'
 
 /**
  * The account's password: change it when there is one, create one when there
@@ -81,7 +81,7 @@ export function PasswordRow({ user }: { user: AuthUser }) {
     }
   }
 
-  const tooShort = next.length < minLen
+  const tooShort = next.length < passwordGateLen(minLen)
   const blocked =
     busy ||
     tooShort ||

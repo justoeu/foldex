@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { errorCode, errorStatus, resetPassword } from '../../api/auth'
 import { useAuth } from '../../auth/AuthProvider'
 import { PasswordStrength } from '../PasswordStrength'
-import { usePasswordFloor } from '../../hooks/useInstancePolicy'
+import { passwordGateLen, usePasswordFloor } from '../../hooks/useInstancePolicy'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 import { PasswordInput } from '../PasswordInput'
 
@@ -26,7 +26,7 @@ export function ResetScreen({ token, onGiveUp }: { token: string; onGiveUp: () =
   const [busy, setBusy] = useState(false)
 
   const mismatch = confirm.length > 0 && password !== confirm
-  const tooShort = password.length > 0 && password.length < minLen
+  const tooShort = password.length > 0 && password.length < passwordGateLen(minLen)
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()

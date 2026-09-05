@@ -5,7 +5,7 @@ import { useAuth } from '../../auth/AuthProvider'
 import { PasswordStrength } from '../PasswordStrength'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 import { PasswordInput } from '../PasswordInput'
-import { usePasswordFloor } from '../../hooks/useInstancePolicy'
+import { passwordGateLen, usePasswordFloor } from '../../hooks/useInstancePolicy'
 
 export function SetupScreen() {
   const { t } = useTranslation()
@@ -19,7 +19,7 @@ export function SetupScreen() {
   const [busy, setBusy] = useState(false)
 
   const mismatch = confirm.length > 0 && password !== confirm
-  const tooShort = password.length > 0 && password.length < minLen
+  const tooShort = password.length > 0 && password.length < passwordGateLen(minLen)
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()

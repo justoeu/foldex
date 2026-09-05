@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { fetchPolicy, type InstancePolicy } from '../api/admin'
 import { useAuth } from '../auth/AuthProvider'
 import { MIN_PASSWORD_LEN } from '../auth/types'
+import { GENERATED_MAX_LENGTH } from '../lib/generatePassword'
 
 /** The one cache key for the instance policy document. */
 export const INSTANCE_POLICY_KEY = ['admin', 'policy'] as const
@@ -9,6 +10,11 @@ export const INSTANCE_POLICY_KEY = ['admin', 'policy'] as const
 /** The live floor, never below the compiled-in minimum. */
 export function passwordFloor(live?: number | null): number {
   return Math.max(live ?? MIN_PASSWORD_LEN, MIN_PASSWORD_LEN)
+}
+
+/** Client submit gate: INV-169 write bound is bcrypt's 72 bytes. */
+export function passwordGateLen(minLen: number): number {
+  return Math.min(minLen, GENERATED_MAX_LENGTH)
 }
 
 /**

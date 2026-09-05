@@ -6,7 +6,7 @@ import { PasswordStrength } from '../PasswordStrength'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 import { AuthDivider, GoogleButton } from './GoogleButton'
 import { PasswordInput } from '../PasswordInput'
-import { usePasswordFloor } from '../../hooks/useInstancePolicy'
+import { passwordGateLen, usePasswordFloor } from '../../hooks/useInstancePolicy'
 
 type LookupState = 'loading' | 'ready' | 'invalid' | 'failed'
 
@@ -229,7 +229,7 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
           />
         </AuthField>
 
-        <AuthSubmit busy={busy} disabled={oauthBusy || (password.length > 0 && password.length < minLen)}>
+        <AuthSubmit busy={busy} disabled={oauthBusy || (password.length > 0 && password.length < passwordGateLen(minLen))}>
           {t('auth_invite.submit')}
         </AuthSubmit>
       </form>
