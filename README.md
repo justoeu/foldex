@@ -940,8 +940,11 @@ content intact, which is the fastest way back in.
 
 > **Write quota (429).** Every authenticated account gets a budget of **mutating**
 > requests: 120 per minute overall, and a smaller **20 per hour** for the routes that
-> cost far more than one row — import, backup export and restore, screenshot capture,
-> preview refresh. Reads are never metered, so browsing your own library is unaffected.
+> cost far more than one row — import, bookmark export (`GET /api/export`), backup export
+> and restore, screenshot capture, preview refresh. Ordinary reads are never metered, so
+> browsing your own library is unaffected. Bookmark export stays a GET so the Import page
+> can keep a native `<a href>` download; a second overlapping export is `429 export_busy`,
+> and a library above 50,000 links is `413 export_too_large`.
 > Past the budget the answer is `429` with a `Retry-After` telling you how long to wait;
 > the request never reaches the handler. The quota is **per account, not per route** — a
 > loop spread across twenty endpoints would otherwise stay inside the limit on each of

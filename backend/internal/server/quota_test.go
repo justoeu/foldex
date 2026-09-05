@@ -426,6 +426,10 @@ func TestIsExpensive_MatchesTheRouteShapeAndNothingElse(t *testing.T) {
 		{http.MethodPost, "/api/notes/images", true},
 		// Chromium fallback + outbound HTTP: the former GET was unmetered.
 		{http.MethodPost, "/api/links/url-metadata", true},
+		// Bookmark export is GET so a native <a href> download still works, but
+		// it materializes the whole library and belongs in the hourly bucket.
+		{http.MethodGet, "/api/export", true},
+		{http.MethodGet, "/api/export/", true},
 
 		{http.MethodGet, "/api/links/url-metadata", false},
 		{http.MethodGet, "/api/import/apply", false},
@@ -469,6 +473,27 @@ func TestExpensiveRoutes_EveryPatternNamesARouteTheRouterMounts(t *testing.T) {
 		"POST /api/links/url-metadata must be mounted so CSRF, writeGate and the quota apply")
 	assert.False(t, mounted["GET /api/links/url-metadata"],
 		"GET /api/links/url-metadata must not remain — it bypassed CSRF and the write quota")
+	assert.True(t, mounted["GET /api/export"],
+		"GET /api/export must stay mounted: native <a href> download is the contract")
+	assert.False(t, mounted["POST /api/export"],
+		"POST /api/export must not appear — converting it would break the SPA download links")
+}
+
+// GET /api/export is the one read that is not a cheap indexed SELECT: it dumps
+// the caller's whole library. The mutating() skip must not let it through the
+// hourly bucket, or a loop of tabs spends no write budget while pinning heap.
+func TestAPIQuota_ExportGetChargesTheExpensiveBucket(t *testing.T) {
+	t.Parallel()
+	h, reached := quotaHarness(policyWith(100, 1), editor(7))
+
+	require.Equal(t, http.StatusOK, hit(h, http.MethodGet, "/api/export").Code)
+	rec := hit(h, http.MethodGet, "/api/export")
+	require.Equal(t, http.StatusTooManyRequests, rec.Code,
+		"a second GET /api/export must spend the hourly expensive budget")
+	assert.EqualValues(t, 1, reached.Load(), "the refused GET must not reach the handler")
+
+	assert.Equal(t, http.StatusOK, hit(h, http.MethodGet, "/api/links").Code,
+		"ordinary reads must still pass after an export has spent the expensive bucket")
 }
 
 // When the object store is down, screenshot/upload used to be omitted from the

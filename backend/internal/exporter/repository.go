@@ -39,7 +39,9 @@ type Repository struct {
 
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
-// ListAllLinks returns every non-locked-folder link for export.
+// ListAllLinks returns non-locked-folder links for export, capped at
+// maxExportLinks+1 so the handler can refuse an oversize library without
+// scanning the rest into []linkRow.
 func (r *Repository) ListAllLinks(ctx context.Context, uid authctx.UserID) ([]linkRow, error) {
 	rows, err := r.pool.Query(ctx, `
         WITH link_clicks AS (
@@ -61,7 +63,8 @@ func (r *Repository) ListAllLinks(ctx context.Context, uid authctx.UserID) ([]li
         WHERE l.user_id = $1 AND (l.folder_id IS NULL OR f.password_hash IS NULL)
         GROUP BY l.id, f.name, f.password_hash, lc.cnt
         ORDER BY l.created_at ASC
-    `, int64(uid))
+        LIMIT $2
+    `, int64(uid), maxExportLinks+1)
 	if err != nil {
 		return nil, err
 	}

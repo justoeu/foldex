@@ -382,7 +382,7 @@ LIMIT $3 OFFSET $4;
 | I/O    | POST   | `/api/import`                         | Multipart `file` + `format=netscape\|json` (JSON restaura cliques via click_log) |
 |        | POST   | `/api/import/validate`                | Preflight multipart agregado, sem itens: `{format, counts, conflicts, folders:[{path,name,count,conflicts}], ungrouped:{links,conflicts}, warnings}`. Conflitos de URL/tag são owner-scoped. |
 |        | POST   | `/api/import/apply`                   | Aplica multipart com `mode=skip\|wipe\|duplicate` e `exclude_folders` opcional. |
-|        | GET    | `/api/export?format=netscape\|json`   | Download (click_count derivado em subquery)        |
+|        | GET    | `/api/export?format=netscape\|json`   | Download owner-scoped (click_count em subquery). Continua GET para `<a href>` nativo. Entra no balde caro da cota (`expensiveRoutes`); um segundo export concorrente é `429 export_busy`; acima de 50k links é `413 export_too_large` sem montar o payload. Token de API continua autorizado (INV-023: export de bookmarks é conteúdo). |
 | Backup | POST   | `/api/backup`                         | Stream ZIP completo (DB + RustFS). `Content-Type: application/zip`. Disponível só quando RustFS está acessível. Ver [SDD-BACKUP-RESTORE.md](./SDD-BACKUP-RESTORE.md). |
 |        | POST   | `/api/backup/download`                | Emite ticket opaco one-time (TTL 60 s), owner/session-bound, para download nativo sem Blob; exige sessão + CSRF e recusa API token. |
 |        | GET    | `/api/backup/download?id=…&token=…`   | Consome ticket uma vez e streama o mesmo export com `Content-Disposition`; continua session-authenticated e usa o slot compartilhado. |
