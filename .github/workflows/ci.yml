@@ -187,6 +187,10 @@ jobs:
         # past a duplicate YAML key. --no-interpolate keeps it a parse check
         # (the ${VAR:?} gates in services.yml must not fire on a bare runner).
         run: bash scripts/test-compose-config.sh
+      - name: Mailpit publishes on loopback
+        # docker-compose.mail.yml used to map :1025/:8025 on all interfaces,
+        # so a development inbox with no auth was reachable on the LAN.
+        run: bash scripts/test-mailpit-bind.sh
       - name: nginx security headers survive on every response
         # Boots the real config and makes the requests. Reading the file is not
         # enough: nginx drops every inherited add_header the moment a location

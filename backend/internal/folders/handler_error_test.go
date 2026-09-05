@@ -28,6 +28,8 @@ func TestHTTPErrorMapping(t *testing.T) {
 		{"hint matches password", ErrHintMatchesPassword, http.StatusBadRequest, "invalid_input", "password hint must not be the same as the password"},
 		{"parent cycle", fmt.Errorf("update: %w", ErrParentCycle), http.StatusConflict, "parent_cycle", "parent_id would create a folder cycle"},
 		{"protected descendant", fmt.Errorf("delete: %w", ErrDescendantProtected), http.StatusConflict, "descendant_protected", "folder subtree contains password-protected descendants"},
+		{"stale master proof", ErrStaleMasterProof, http.StatusConflict, "master_changed", "master password changed; prove the new one to reset a folder"},
+		{"password changed during unlock", ErrPasswordChanged, http.StatusConflict, "password_changed", "folder password changed during unlock; try again"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

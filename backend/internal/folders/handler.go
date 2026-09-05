@@ -26,6 +26,14 @@ type MasterPasswordVerifier interface {
 	VerifyMaster(ctx context.Context, uid authctx.UserID, plain string) (ok bool, configured bool, err error)
 }
 
+// afterUnlockProof / afterMasterProof are test seams for the bcrypt TOCTOU
+// windows: they run after a successful proof and before the follow-up write.
+// Production leaves them nil.
+var (
+	afterUnlockProof func()
+	afterMasterProof func()
+)
+
 type Handler struct {
 	repo        *Repository
 	contentGate ContentGate
@@ -224,9 +232,21 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.limiter.CommitSuccess(key)
+	if afterUnlockProof != nil {
+		afterUnlockProof()
+	}
+	live, err := h.repo.PasswordHashFor(r.Context(), authctx.MustUser(r.Context()), id)
+	if err != nil {
+		httperr.Write(w, HTTPError(err))
+		return
+	}
+	if live == nil || *live != *hash {
+		httperr.Write(w, httperr.New(http.StatusConflict, "password_changed", "folder password changed during unlock; try again"))
+		return
+	}
 	auditctx.SetRequest(r, "folder", id, "")
 	httperr.JSON(w, http.StatusOK, unlockOutput{
-		UnlockToken: IssueUnlockToken(h.unlockKey, id, *hash),
+		UnlockToken: IssueUnlockToken(h.unlockKey, id, *live),
 		ExpiresAt:   time.Now().Add(unlockTokenTTL),
 	})
 }
@@ -265,7 +285,10 @@ func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "wrong_master_password", "incorrect master password"))
 		return
 	}
-	if err := h.repo.ResetPasswordByMaster(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
+	if afterMasterProof != nil {
+		afterMasterProof()
+	}
+	if err := h.repo.ResetPasswordByMaster(r.Context(), authctx.MustUser(r.Context()), id, in.MasterPassword); err != nil {
 		httperr.Write(w, HTTPError(err))
 		return
 	}

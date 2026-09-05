@@ -19,6 +19,7 @@ import (
 
 	"foldex/internal/folders"
 	"foldex/internal/pkg/domainerr"
+	"foldex/internal/settings"
 	"foldex/internal/testdb"
 
 	"foldex/internal/pkg/authctx"
@@ -73,6 +74,21 @@ func newHandlerRouterMaster(t *testing.T, master folders.MasterPasswordVerifier)
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
 	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, master, nil).Mount)
+	return r, repo, uid
+}
+
+// newHandlerRouterLiveMaster seeds a real master hash on the user so reset's
+// CAS against app_user.master_password_hash has something to lock and prove.
+func newHandlerRouterLiveMaster(t *testing.T, password string) (http.Handler, *folders.Repository, authctx.UserID) {
+	t.Helper()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	settingsRepo := settings.NewRepository(pool)
+	require.NoError(t, settingsRepo.SetMasterPassword(context.Background(), uid, password, nil))
+	repo := folders.NewRepository(pool)
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
+	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, settingsRepo, nil).Mount)
 	return r, repo, uid
 }
 
@@ -224,8 +240,7 @@ func getFolder(t *testing.T, h http.Handler, id int64) folderResp {
 }
 
 func TestHandler_ResetPassword_Master(t *testing.T) {
-	master := fakeMaster{configured: true, password: "the-master-pass"}
-	h, repo, uid := newHandlerRouterMaster(t, master)
+	h, repo, uid := newHandlerRouterLiveMaster(t, "the-master-pass")
 	ctx := context.Background()
 
 	pw := "folder-pass"
@@ -664,4 +679,139 @@ func TestHandler_DeletePasswordCheckAndMutationAreAtomic(t *testing.T) {
 	}
 	_, err = repo.Get(context.Background(), uid, folder.ID)
 	require.NoError(t, err, "stale unlock token must not delete after a concurrent password change")
+}
+
+// TestFolderResetCannotResumeAcrossMasterRotation is the RACE-HER-002
+// check-then-act: bcrypt against master hash H1, rotate to H2, resume the
+// reset. A proof of H1 must not clear folders after the master has moved.
+func TestFolderResetCannotResumeAcrossMasterRotation(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	ctx := context.Background()
+	settingsRepo := settings.NewRepository(pool)
+	require.NoError(t, settingsRepo.SetMasterPassword(ctx, uid, "master-one-pass", nil))
+
+	folderRepo := folders.NewRepository(pool)
+	pw := "folder-pass"
+	f, err := folderRepo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
+	r.Route("/folders", folders.NewHandler(folderRepo, testUnlockKey, settingsRepo, nil).Mount)
+
+	paused := make(chan struct{})
+	resume := make(chan struct{})
+	folders.SetAfterMasterProof(func() {
+		close(paused)
+		<-resume
+	})
+	t.Cleanup(func() { folders.SetAfterMasterProof(nil) })
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- doJSON(t, r, http.MethodPost, "/folders/"+strconv.FormatInt(f.ID, 10)+"/reset-password",
+			map[string]any{"master_password": "master-one-pass"})
+	}()
+
+	select {
+	case <-paused:
+	case <-time.After(15 * time.Second):
+		t.Fatal("reset never paused after bcrypt against H1")
+	}
+
+	require.NoError(t, settingsRepo.SetMasterPassword(ctx, uid, "master-two-pass", nil))
+	close(resume)
+
+	var rr *httptest.ResponseRecorder
+	select {
+	case rr = <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("reset did not resume")
+	}
+	require.NotEqual(t, http.StatusNoContent, rr.Code,
+		"a proof of the old master must not clear folders after rotation")
+	assert.Equal(t, http.StatusConflict, rr.Code)
+	assertErrorCode(t, rr, "master_changed")
+
+	got := getFolder(t, r, f.ID)
+	assert.True(t, got.HasPassword, "folder password must survive a stale master proof")
+
+	ok, _, err := settingsRepo.VerifyMaster(ctx, uid, "master-two-pass")
+	require.NoError(t, err)
+	assert.True(t, ok, "the rotated master is what remains")
+	ok, _, err = settingsRepo.VerifyMaster(ctx, uid, "master-one-pass")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+// TestUnlock_PasswordChangedDuringBcryptDoesNotReturnADeadToken is
+// RACE-HER-005: a concurrent password change during bcrypt must fail closed
+// rather than mint a token bound to the hash that is no longer live.
+func TestUnlock_PasswordChangedDuringBcryptDoesNotReturnADeadToken(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	ctx := context.Background()
+	repo := folders.NewRepository(pool)
+	oldPW := "old-password"
+	newPW := "new-password"
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &oldPW})
+	require.NoError(t, err)
+
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
+	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, fakeMaster{}, nil).Mount)
+
+	paused := make(chan struct{})
+	resume := make(chan struct{})
+	var pauseOnce sync.Once
+	folders.SetAfterUnlockProof(func() {
+		pauseOnce.Do(func() { close(paused) })
+		<-resume
+	})
+	t.Cleanup(func() { folders.SetAfterUnlockProof(nil) })
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- doJSON(t, r, http.MethodPost, "/folders/"+strconv.FormatInt(f.ID, 10)+"/unlock",
+			map[string]string{"password": oldPW})
+	}()
+
+	select {
+	case <-paused:
+	case <-time.After(15 * time.Second):
+		t.Fatal("unlock never paused after bcrypt")
+	}
+
+	_, err = repo.Update(ctx, uid, f.ID, folders.UpdateInput{
+		PasswordSet:     true,
+		Password:        &newPW,
+		CurrentPassword: &oldPW,
+	})
+	require.NoError(t, err)
+	close(resume)
+
+	var rr *httptest.ResponseRecorder
+	select {
+	case rr = <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("unlock did not resume")
+	}
+	require.NotEqual(t, http.StatusOK, rr.Code, "must not issue a token minted from the old hash")
+	assert.Equal(t, http.StatusConflict, rr.Code)
+	assertErrorCode(t, rr, "password_changed")
+	assert.NotContains(t, rr.Body.String(), "unlock_token")
+
+	folders.SetAfterUnlockProof(nil)
+	live, err := repo.PasswordHashFor(ctx, uid, f.ID)
+	require.NoError(t, err)
+	require.NotNil(t, live)
+	rrOK := doJSON(t, r, http.MethodPost, "/folders/"+strconv.FormatInt(f.ID, 10)+"/unlock",
+		map[string]string{"password": newPW})
+	require.Equal(t, http.StatusOK, rrOK.Code)
+	var out struct {
+		UnlockToken string `json:"unlock_token"`
+	}
+	require.NoError(t, json.Unmarshal(rrOK.Body.Bytes(), &out))
+	assert.True(t, folders.VerifyUnlockToken(testUnlockKey, f.ID, *live, out.UnlockToken))
 }

@@ -237,6 +237,29 @@ func TestEmailChange_OnlyMovesAfterTheNewAddressConfirms(t *testing.T) {
 	}).Code)
 }
 
+func TestEmailChange_RefusesAURLShapedDomain(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{SMTP: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	c := h.bootstrapAdmin(t, "old@example.com", "a good password")
+
+	h.mail.reset()
+	rec := c.do(http.MethodPost, "/api/auth/email/change", map[string]string{
+		"new_email": "user@ok.com://phish", "password": "a good password",
+	})
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.Equal(t, "invalid_email", errCode(t, rec))
+	assert.Empty(t, h.drainMail(t), "a refused address must not be mailed to anyone")
+
+	h.mail.reset()
+	rec = c.do(http.MethodPost, "/api/auth/email/change", map[string]string{
+		"new_email": "new@example.com", "password": "a good password",
+	})
+	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+	notice := h.mail.waitFor(t, "old@example.com")
+	assert.Contains(t, notice.Text, "new@example.com")
+	assert.NotContains(t, notice.Text, "://")
+}
+
 func TestEmailChange_RefusesAnAddressAnotherAccountHolds(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{SMTP: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))

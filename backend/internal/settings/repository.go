@@ -96,10 +96,26 @@ func (r *Repository) SetMasterPassword(ctx context.Context, uid authctx.UserID, 
 	if err != nil {
 		return fmt.Errorf("hash master password: %w", err)
 	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin set master password: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	// Same user-row lock folder reset takes (RACE-HER-002): rotate and recover
+	// serialize so a proof of H1 cannot land after this write of H2.
+	var locked int64
+	err = tx.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("set master password: user %d not found", int64(uid))
+	}
+	if err != nil {
+		return fmt.Errorf("lock master password: %w", err)
+	}
 	// Both columns live on the same row, so the tri-state collapses into one
 	// UPDATE: COALESCE keeps the current hint when hint is nil, and NULLIF maps
 	// the explicit "" to NULL.
-	ct, err := r.pool.Exec(ctx, `
+	ct, err := tx.Exec(ctx, `
         UPDATE app_user
         SET master_password_hash = $2,
             master_password_hint = CASE
@@ -115,18 +131,38 @@ func (r *Repository) SetMasterPassword(ctx context.Context, uid authctx.UserID, 
 	if ct.RowsAffected() == 0 {
 		return fmt.Errorf("set master password: user %d not found", int64(uid))
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit set master password: %w", err)
+	}
 	return nil
 }
 
 // ClearMasterPassword removes the master password AND its hint for uid
 // (recovery disabled — a hint for a nonexistent password is dead data).
 func (r *Repository) ClearMasterPassword(ctx context.Context, uid authctx.UserID) error {
-	if _, err := r.pool.Exec(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin clear master password: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var locked int64
+	err = tx.QueryRow(ctx,
+		`SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lock master password: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
         UPDATE app_user
         SET master_password_hash = NULL, master_password_hint = NULL, updated_at = now()
         WHERE id = $1
     `, int64(uid)); err != nil {
 		return fmt.Errorf("clear master password: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit clear master password: %w", err)
 	}
 	return nil
 }
