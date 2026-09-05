@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 
@@ -24,6 +25,9 @@ type Handler struct {
 	worker     Enqueuer
 	fetcher    MetadataFetcher // optional — disables /url-metadata when nil
 	folderGate folders.ContentGate
+	metaMu     sync.Mutex
+	metaSem    chan struct{}
+	metaUsers  map[authctx.UserID]int
 }
 
 func NewHandler(repo *Repository, worker Enqueuer) *Handler {
@@ -48,10 +52,11 @@ func (h *Handler) WithFolderGate(lookup folders.PasswordHashLookup, unlockKey []
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/", h.list)
 	r.Post("/", h.create)
-	// Static paths must be registered before /{id} so Chi does not treat
-	// "by-url" / "url-metadata" / "recent-changes" as ids.
+	// Static GET paths must be registered before /{id} so Chi does not treat
+	// "by-url" / "recent-changes" as ids. POST /url-metadata is similarly
+	// registered before POST /{id}/… so the literal path wins.
 	r.Get("/recent-changes", h.listRecentChanges)
-	r.Get("/url-metadata", h.fetchURLMetadata)
+	r.Post("/url-metadata", h.fetchURLMetadata)
 	r.Get("/by-url", h.getByURL)
 	r.Get("/{id}", h.get)
 	r.Patch("/{id}", h.update)

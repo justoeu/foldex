@@ -7,10 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 )
 
-// URLMetadata is the wire shape returned by GET /api/links/url-metadata. Fields
+// URLMetadata is the wire shape returned by POST /api/links/url-metadata. Fields
 // mirror what the preview worker extracts asynchronously after a link is
 // created — exposing them synchronously lets the LinkDialog pre-fill Title /
 // Description before the user clicks Save.
@@ -30,7 +31,11 @@ type MetadataFetcher interface {
 	FetchMetadata(ctx context.Context, pageURL string) (URLMetadata, error)
 }
 
-// urlMetadataMaxLen caps the accepted ?url= length before we ever hit DNS /
+type urlMetadataInput struct {
+	URL string `json:"url"`
+}
+
+// urlMetadataMaxLen caps the accepted url length before we ever hit DNS /
 // the SSRF dialer. 2 KiB is well above any real bookmarkable URL — anything
 // larger is hostile input we don't want to spend resolver cycles on.
 const urlMetadataMaxLen = 2048
@@ -39,6 +44,12 @@ const urlMetadataMaxLen = 2048
 // HTTP/oEmbed is capped at 5s inside FetchThenRender; Chromium gets 10s.
 // 15s stays under the SPA axios default (30s) so the dialog spinner ends first.
 const urlMetadataTimeout = 15 * time.Second
+
+// maxMetadataInFlight bounds concurrent url-metadata fetches so a flood cannot
+// pin unbounded goroutines on outbound HTTP or the singleton Chromium pool.
+const maxMetadataInFlight = 2
+
+const maxMetadataPerUser = 1
 
 // Per-field byte caps applied before returning to the client. The preview
 // fetcher only caps the total body at 2 MiB — a single hostile <meta
@@ -76,6 +87,66 @@ func truncateRunes(s string, n int) string {
 	return s[:n]
 }
 
+func readURLMetadataTarget(w http.ResponseWriter, r *http.Request) (string, error) {
+	raw := ""
+	if r.Body != nil && r.ContentLength != 0 {
+		in, err := httperr.DecodeJSON[urlMetadataInput](w, r)
+		if err != nil {
+			return "", err
+		}
+		raw = strings.TrimSpace(in.URL)
+	}
+	if raw == "" {
+		raw = strings.TrimSpace(r.URL.Query().Get("url"))
+	}
+	if raw == "" {
+		return "", httperr.New(http.StatusBadRequest, "invalid_url", "url is required")
+	}
+	if len(raw) > urlMetadataMaxLen {
+		return "", httperr.New(http.StatusBadRequest, "invalid_url", "url too long")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", httperr.New(http.StatusBadRequest, "invalid_url", "url must be a valid absolute URL")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", httperr.New(http.StatusBadRequest, "invalid_scheme", "only http and https are supported")
+	}
+	return raw, nil
+}
+
+func (h *Handler) acquireMetadata(uid authctx.UserID) bool {
+	h.metaMu.Lock()
+	defer h.metaMu.Unlock()
+	if h.metaSem == nil {
+		h.metaSem = make(chan struct{}, maxMetadataInFlight)
+	}
+	if h.metaUsers == nil {
+		h.metaUsers = make(map[authctx.UserID]int)
+	}
+	if h.metaUsers[uid] >= maxMetadataPerUser {
+		return false
+	}
+	select {
+	case h.metaSem <- struct{}{}:
+		h.metaUsers[uid]++
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *Handler) releaseMetadata(uid authctx.UserID) {
+	h.metaMu.Lock()
+	if h.metaUsers[uid] <= 1 {
+		delete(h.metaUsers, uid)
+	} else {
+		h.metaUsers[uid]--
+	}
+	<-h.metaSem
+	h.metaMu.Unlock()
+}
+
 func (h *Handler) fetchURLMetadata(w http.ResponseWriter, r *http.Request) {
 	// Boot-time guarantee in router.go means this should never be nil at
 	// request time, but fail closed if the route ever gets mounted without
@@ -85,24 +156,19 @@ func (h *Handler) fetchURLMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw := strings.TrimSpace(r.URL.Query().Get("url"))
-	if raw == "" {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_url", "url query param is required"))
+	raw, err := readURLMetadataTarget(w, r)
+	if err != nil {
+		httperr.Write(w, err)
 		return
 	}
-	if len(raw) > urlMetadataMaxLen {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_url", "url too long"))
+
+	uid := authctx.MustUser(r.Context())
+	if !h.acquireMetadata(uid) {
+		w.Header().Set("Retry-After", "5")
+		httperr.Write(w, httperr.New(http.StatusTooManyRequests, "metadata_busy", "too many URL metadata fetches in flight"))
 		return
 	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_url", "url must be a valid absolute URL"))
-		return
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_scheme", "only http and https are supported"))
-		return
-	}
+	defer h.releaseMetadata(uid)
 
 	ctx, cancel := context.WithTimeout(r.Context(), urlMetadataTimeout)
 	defer cancel()

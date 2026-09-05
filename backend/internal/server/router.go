@@ -71,7 +71,7 @@ type Deps struct {
 	StorageStatter stats.StorageStatter // optional — surfaces bucket usage on /stats/storage
 	StorageBucket  backup.StorageBucket // optional — enables /api/backup/* when the object store is up
 
-	// LinkMetadataFetcher gates GET /api/links/url-metadata. When nil the route
+	// LinkMetadataFetcher gates POST /api/links/url-metadata. When nil the route
 	// is still registered but responds 503 — the dialog falls back to manual
 	// title entry without breaking the create flow.
 	LinkMetadataFetcher links.MetadataFetcher
