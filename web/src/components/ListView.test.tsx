@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ListView } from './ListView'
+import listViewSource from './ListView.tsx?raw'
 import { renderWithProviders } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import type { Entry, Folder, Link } from '../api/types'
@@ -290,5 +291,18 @@ describe('ListView', () => {
     // TagChip renders; just ensure we didn't dump all 4 tag names
     expect(screen.queryByText('z')).toBeNull()
     expect(chips.length).toBeLessThanOrEqual(3)
+  })
+
+  // N1-NEX-002/008: useMutation returns a new result object every render.
+  // Closing askDelete over `del` / `delNote` busts React.memo on every row
+  // whenever any mutation observer ticks. HomeView already destructures
+  // `mutate`; ListView must match.
+  it('closes delete callbacks over mutate, not the mutation result object', () => {
+    expect(listViewSource).toMatch(/const \{ mutate: deleteLink \} = useDeleteLink\(\)/)
+    expect(listViewSource).toMatch(/const \{ mutate: deleteNote \} = useDeleteNote\(\)/)
+    expect(listViewSource).not.toMatch(/\bconst del = useDeleteLink\(\)/)
+    expect(listViewSource).not.toMatch(/\bconst delNote = useDeleteNote\(\)/)
+    expect(listViewSource).toMatch(/\[confirm, deleteLink, t\]/)
+    expect(listViewSource).toMatch(/\[confirm, deleteNote, t\]/)
   })
 })
