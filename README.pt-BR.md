@@ -771,7 +771,9 @@ enviada.
 
 O worker recebe `AUTH_ENCRYPTION_KEY` (é o único processo que abre o payload) e
 **nenhuma credencial de banco** — essa separação é justamente o motivo de ele
-rodar à parte. Envios que falham sobem uma escada de retry em filas dedicadas
+rodar à parte. Ele também recusa `MAIL_DRIVER=log`: esse driver é a caixa postal
+numa instância inproc, mas um worker que acabou de decifrar um link de reset
+não pode imprimi-lo. Envios que falham sobem uma escada de retry em filas dedicadas
 (1 min → 5 min → 30 min) e depois caem em `foldex.mail.dead`, que o backend
 observa para que a linha do outbox ainda termine marcada como `failed`.
 

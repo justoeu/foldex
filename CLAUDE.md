@@ -96,7 +96,7 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **Recovery codes and six-digit e-mail OTPs use keyed, context-bound digests and remain single-use by conditional UPDATE** → [INV-028](docs/INVARIANTS.md#inv-028)
 - **`POST /api/auth/password/forgot` ALWAYS answers 202, on three channels** → [INV-029](docs/INVARIANTS.md#inv-029)
 - **Auth mail is written to a TRANSACTIONAL OUTBOX, in the same transaction as the credential it carries** → [INV-030](docs/INVARIANTS.md#inv-030)
-- **The mail TRANSPORT is pluggable, and only the sink changes** → [INV-031](docs/INVARIANTS.md#inv-031)
+- **The mail TRANSPORT is pluggable, and only the sink changes** → [INV-031](docs/INVARIANTS.md#inv-031) | guard: `TestRun_NonSMTPDriverRefusesToBoot`
 - **Every auth e-mail renders from an embedded template at DELIVERY time, in the recipient's locale** → [INV-035](docs/INVARIANTS.md#inv-035) | guard: `TestLinklessMessagesCannotBeGivenALink`, `TestEveryLinkCarryingMessageRendersItsLinkInBothArms`
 - **E-mail credentials live in URL fragments, never queries or access-log-visible paths** → [INV-036](docs/INVARIANTS.md#inv-036)
 - **A password reset proves the FIRST factor only** → [INV-037](docs/INVARIANTS.md#inv-037) | guard: `TestResetPassword_StillRequiresTheSecondFactor`
