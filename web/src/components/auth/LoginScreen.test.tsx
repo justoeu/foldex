@@ -224,12 +224,29 @@ describe('LoginScreen', () => {
   })
 })
 
+const enrollChallenge: MeResponse = {
+  status: 'two_factor_required',
+  purpose: 'enroll_2fa',
+  reason: 'admin_policy',
+  email: 'a•••@b.test',
+  methods: ['totp'],
+  expires_in: 300,
+  max_attempts: 5,
+  features: { google_oauth: false, two_factor: true, email_delivery: false },
+}
+
 describe('SetupScreen', () => {
   it('creates the first administrator', async () => {
     const post = vi.spyOn(http, 'post').mockResolvedValue({
       data: { status: 'authenticated', user: { email: 'a@b.c' }, csrf_token: 't', features },
     } as never)
-    renderWithProviders(<SetupScreen />, { session: null })
+    renderWithProviders(
+      <>
+        <SetupScreen />
+        <SessionProbe />
+      </>,
+      { session: null },
+    )
     const user = userEvent.setup()
 
     await user.type(screen.getByLabelText(/name/i), 'Ana')
@@ -244,6 +261,31 @@ describe('SetupScreen', () => {
         name: 'Ana',
         password: 'a good password',
       }),
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status')).toHaveTextContent('authenticated'),
+    )
+  })
+
+  it('stops at enroll_2fa when bootstrap still owes a second factor', async () => {
+    vi.spyOn(http, 'post').mockResolvedValue({ data: enrollChallenge } as never)
+    renderWithProviders(
+      <>
+        <SetupScreen />
+        <SessionProbe />
+      </>,
+      { session: null },
+    )
+    const user = userEvent.setup()
+
+    await user.type(screen.getByLabelText(/name/i), 'Ana')
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
+    await user.type(screen.getByLabelText(/^password$/i), 'a good password')
+    await user.type(screen.getByLabelText(/confirm password/i), 'a good password')
+    await user.click(screen.getByRole('button', { name: /create account/i }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status')).toHaveTextContent('two_factor_required'),
     )
   })
 
