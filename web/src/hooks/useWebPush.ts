@@ -43,11 +43,23 @@ export function useSubscribePush() {
       })
       const json = sub.toJSON()
       const keys = json.keys ?? {}
-      await createPushSubscription({
-        endpoint: sub.endpoint,
-        p256dh: keys.p256dh,
-        auth: keys.auth,
-      })
+      try {
+        await createPushSubscription({
+          endpoint: sub.endpoint,
+          p256dh: keys.p256dh,
+          auth: keys.auth,
+        })
+      } catch (err) {
+        // A live browser subscription with no server row leaves the bell
+        // off and the next subscribe throwing InvalidStateError. Roll back
+        // locally; failing to clear must not hide the POST error.
+        try {
+          await sub.unsubscribe()
+        } catch {
+          // Best-effort: the POST error is the one the caller acts on.
+        }
+        throw err
+      }
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: PUSH_STATUS_KEY }),
   })
