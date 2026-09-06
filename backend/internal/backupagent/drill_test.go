@@ -312,6 +312,15 @@ func TestDrillRun_CountsMismatch(t *testing.T) {
 	assert.Empty(t, f.leftovers(t))
 }
 
+func compareRaw(t *testing.T, raw map[string]any, got map[string]int64, ver int64) error {
+	t.Helper()
+	meta, err := parseDumpMeta(raw)
+	if err != nil {
+		return err
+	}
+	return compareCounts(meta, got, ver)
+}
+
 func TestCompareCounts_Verdicts(t *testing.T) {
 	meta := map[string]any{
 		"tables":         map[string]any{"link": float64(3), "note": float64(1)},
@@ -319,25 +328,53 @@ func TestCompareCounts_Verdicts(t *testing.T) {
 	}
 	got := map[string]int64{"link": 3, "note": 1}
 
-	assert.NoError(t, compareCounts(meta, got, 40))
+	assert.NoError(t, compareRaw(t, meta, got, 40))
 
-	err := compareCounts(meta, map[string]int64{"link": 2, "note": 1}, 40)
+	err := compareRaw(t, meta, map[string]int64{"link": 2, "note": 1}, 40)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "link")
 
-	err = compareCounts(meta, map[string]int64{"note": 1}, 40)
+	err = compareRaw(t, meta, map[string]int64{"note": 1}, 40)
 	require.Error(t, err, "a table counted at dump time but absent from the restore is a lost table, not a pass")
 
-	err = compareCounts(meta, got, 39)
+	err = compareRaw(t, meta, got, 39)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "schema_migrations")
 
-	assert.NoError(t, compareCounts(map[string]any{}, got, 40),
+	assert.NoError(t, compareRaw(t, map[string]any{}, got, 40),
 		"a dump whose meta predates the counts is compared on nothing — restore success is all it can prove")
-	assert.NoError(t, compareCounts(map[string]any{"schema_version": float64(40)}, map[string]int64{}, 40))
+	assert.NoError(t, compareRaw(t, map[string]any{"schema_version": float64(40)}, map[string]int64{}, 40))
 
-	err = compareCounts(map[string]any{"tables": map[string]any{"link": "three"}}, got, 40)
+	err = compareRaw(t, map[string]any{"tables": map[string]any{"link": "three"}}, got, 40)
 	require.Error(t, err, "an unreadable recorded count is a mismatch, never a silent skip")
+}
+
+// TestCompareCounts_RefusesAnUnexpectedTablesShape is BP-MEN-006: a type
+// assert to map[string]any treated every other tables shape (the dump's own
+// map[string]int64, a JSON array, a string) as "no counts, pass". Wrong
+// shape is a refusal, not a silent success.
+func TestCompareCounts_RefusesAnUnexpectedTablesShape(t *testing.T) {
+	got := map[string]int64{"link": 3}
+
+	_, err := parseDumpMeta(map[string]any{
+		"tables":         []any{"link"},
+		"schema_version": float64(40),
+	})
+	require.Error(t, err, "an unexpected tables shape must not fail-open as a silent pass")
+
+	err = compareRaw(t, map[string]any{
+		"tables":         "link=3",
+		"schema_version": float64(40),
+	}, got, 40)
+	require.Error(t, err, "a string tables field is not 'no counts'")
+
+	// dump.go writes map[string]int64 into the open meta map. That is not
+	// map[string]any; asserting the JSONB shape fail-opened the native one.
+	err = compareRaw(t, map[string]any{
+		"tables":         map[string]int64{"link": 3},
+		"schema_version": int64(40),
+	}, map[string]int64{"link": 999}, 40)
+	require.Error(t, err, "the dump's native tables map must still be compared")
 }
 
 func TestMetaInt_CoercesEveryJSONBShape(t *testing.T) {
