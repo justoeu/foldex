@@ -10,7 +10,7 @@
 
 Foldex is a personal "smart bookmarks bar" — it stores links organized by **nestable folders + M:N tags** (a new folder or tag opens on a suggested colour nothing else is using), shows **what you actually click** (telemetry via `/go/{slug}`), captures every URL visually (OG image / favicon / screenshot fallback, and a preview whose stored file goes missing regenerates itself), lets you jot down **rich-text notes** (Tiptap editor with inline images) that live in the same grid/search/tags/folders as links, **watches the pages you care about** (RSS/Atom feed fingerprint with content-hash fallback) and pings you via Web Push when they change, and runs **entirely on your own machine** (Postgres + RustFS + Go + React in containers).
 
-> Stack: **Go 1.26 (Chi · pgx) · PostgreSQL 18 · RustFS · Vite 8 + React 19 + TypeScript + bun · TanStack Query · Tiptap 3 · react-i18next (en/pt/es) · Vitest 4**. Versioning policy + invariants in [`CLAUDE.md`](CLAUDE.md).
+> Stack: **Go 1.26 (Chi · pgx) · PostgreSQL 18 · RustFS · Vite 8 + React 19 + TypeScript 7 + bun · TanStack Query · Tiptap 3 · react-i18next (en/pt/es) · Vitest 5**. Versioning policy + invariants in [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
