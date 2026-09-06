@@ -50,7 +50,7 @@ func TestBuildListQuery_PageBoundsOrdinarySortClickAggregation(t *testing.T) {
 	}
 }
 
-func TestBuildListQuery_PreAggregatesClickRankedSorts(t *testing.T) {
+func TestBuildListQuery_ClickRankedSortsJoinStats(t *testing.T) {
 	t.Parallel()
 	for _, sort := range []string{"clicks", "recent"} {
 		t.Run(sort, func(t *testing.T) {
@@ -58,8 +58,10 @@ func TestBuildListQuery_PreAggregatesClickRankedSorts(t *testing.T) {
 
 			require.NotContains(t, sql, "WITH candidates")
 			require.NotContains(t, sql, "LATERAL")
-			require.Equal(t, 2, strings.Count(sql, "FROM click_log WHERE user_id"))
-			require.Less(t, strings.Index(sql, "FROM click_log"), strings.Index(sql, "LIMIT $3"))
+			require.Contains(t, sql, "entity_click_stats",
+				"click/recent sorts must join the stats projection, not aggregate click_log")
+			require.NotContains(t, sql, "FROM click_log")
+			require.NotContains(t, sql, "GROUP BY entity_id")
 			require.Equal(t, []any{int64(9), int64(9), 5, 0}, args)
 		})
 	}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import backupSrc from './components/BackupRestoreDialog.tsx?raw'
 import previewSrc from './components/ImportPreviewDialog.tsx?raw'
+import previewHookSrc from './hooks/useImportPreview.ts?raw'
 import pickerSrc from './components/ConflictModePicker.tsx?raw'
 import fieldsSrc from './components/ColorModeFields.tsx?raw'
 import gradSrc from './components/GradientPicker.tsx?raw'
@@ -24,9 +25,10 @@ describe('web deadcode contracts', () => {
     expect(backupSrc).not.toMatch(/function ModeOption/)
     expect(previewSrc).not.toMatch(/function ModeOption/)
     expect(backupSrc).toMatch(/apiErrorMessage|apiErrorText/)
-    expect(previewSrc).toMatch(/apiErrorMessage|apiErrorText/)
+    expect(previewHookSrc).toMatch(/apiErrorMessage|apiErrorText/)
     expect(backupSrc).not.toMatch(/function extractErr/)
     expect(previewSrc).not.toMatch(/function extractErr/)
+    expect(previewHookSrc).not.toMatch(/function extractErr/)
   })
 
   it('solid and gradient pickers share one swatch list', () => {

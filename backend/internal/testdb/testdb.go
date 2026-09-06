@@ -232,7 +232,7 @@ func migrationsDir() string {
 var resetStatement = `TRUNCATE
 	    backup_restore_file, backup_restore_entity, backup_restore,
 	    note_media_ref, note_media,
-	    click_log, link_tag, note, link, folder, tag,
+	    entity_click_stats, click_log, link_tag, note, link, folder, tag,
 	    push_subscription, app_setting, audit_log, mail_outbox,
 	    session_used_token, session, oauth_state, api_token,
 	    recovery_code, totp_secret, email_factor, email_otp, auth_challenge,

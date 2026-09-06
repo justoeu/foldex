@@ -15,6 +15,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
+	"foldex/internal/pkg/clicklog"
 	"foldex/internal/pkg/listquery"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
@@ -334,6 +335,10 @@ func TestList_ClickRankedSortsKeepCrossKindOrdering(t *testing.T) {
 		VALUES ('note', $1, $2, now() - interval '1 hour')
 	`, note.ID, int64(uid))
 	require.NoError(t, err)
+	tx, err := f.pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, clicklog.RefreshOwner(ctx, tx, int64(uid)))
+	require.NoError(t, tx.Commit(ctx))
 
 	byClicks, err := f.erepo.List(ctx, uid, entries.ListQuery{Sort: "clicks"})
 	require.NoError(t, err)
@@ -348,6 +353,34 @@ func TestList_ClickRankedSortsKeepCrossKindOrdering(t *testing.T) {
 	require.Len(t, byRecent, 2)
 	assert.Equal(t, "note", byRecent[0].Kind)
 	assert.Equal(t, "link", byRecent[1].Kind)
+}
+
+func TestRecord_IncrementsEntityClickStats(t *testing.T) {
+	ctx, uid, f := setup(t)
+	link, err := f.lrepo.Create(ctx, uid, links.CreateInput{URL: "https://stats-record.example", Title: "Counted"})
+	require.NoError(t, err)
+
+	tx, err := f.pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, clicklog.Record(ctx, tx, "link", link.ID, int64(uid)))
+	require.NoError(t, clicklog.Record(ctx, tx, "link", link.ID, int64(uid)))
+	require.NoError(t, tx.Commit(ctx))
+
+	var count int64
+	err = f.pool.QueryRow(ctx, `
+		SELECT click_count FROM entity_click_stats
+		WHERE user_id = $1 AND entity_kind = 'link' AND entity_id = $2
+	`, int64(uid), link.ID).Scan(&count)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, count)
+
+	var logRows int64
+	err = f.pool.QueryRow(ctx, `
+		SELECT count(*) FROM click_log
+		WHERE user_id = $1 AND entity_kind = 'link' AND entity_id = $2
+	`, int64(uid), link.ID).Scan(&logRows)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, logRows, "click_log remains the source of truth")
 }
 
 func TestCounts_AreGlobalAndOwnerScopedInOneRoundTrip(t *testing.T) {

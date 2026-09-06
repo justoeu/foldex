@@ -23,6 +23,10 @@ func PurgeOne(ctx context.Context, tx pgx.Tx, kind string, id int64) error {
 		`DELETE FROM click_log WHERE entity_kind = $1 AND entity_id = $2`, kind, id); err != nil {
 		return fmt.Errorf("delete %s click_log: %w", kind, err)
 	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM entity_click_stats WHERE entity_kind = $1 AND entity_id = $2`, kind, id); err != nil {
+		return fmt.Errorf("delete %s entity_click_stats: %w", kind, err)
+	}
 	return nil
 }
 
@@ -44,8 +48,12 @@ func PurgeOwnerSet(ctx context.Context, tx pgx.Tx, uid authctx.UserID, kind stri
             DELETE FROM link_tag refs
             USING targets
             WHERE refs.entity_kind = $3 AND refs.entity_id = targets.id
+        ), deleted_clicks AS (
+            DELETE FROM click_log refs
+            USING targets
+            WHERE refs.entity_kind = $3 AND refs.entity_id = targets.id
         )
-        DELETE FROM click_log refs
+        DELETE FROM entity_click_stats refs
         USING targets
         WHERE refs.entity_kind = $3 AND refs.entity_id = targets.id
     `, table)
@@ -69,7 +77,7 @@ func entityTable(kind string) (string, error) {
 // PurgeFolderSubtree removes relations for entities selected by the
 // owner-scoped _cascade_subtree temp table materialized by folders.Repository.
 func PurgeFolderSubtree(ctx context.Context, tx pgx.Tx, uid authctx.UserID) error {
-	for _, table := range []string{"link_tag", "click_log"} {
+	for _, table := range []string{"link_tag", "click_log", "entity_click_stats"} {
 		query := fmt.Sprintf(`
             DELETE FROM %s
             WHERE (entity_kind = 'link' AND entity_id IN (
@@ -91,7 +99,7 @@ func PurgeFolderSubtree(ctx context.Context, tx pgx.Tx, uid authctx.UserID) erro
 // account-scoped backup wipe. The entity rows remain until the caller deletes
 // them in the same transaction.
 func PurgeOwner(ctx context.Context, tx pgx.Tx, uid authctx.UserID) error {
-	for _, table := range []string{"link_tag", "click_log"} {
+	for _, table := range []string{"link_tag", "click_log", "entity_click_stats"} {
 		query := fmt.Sprintf(`
             DELETE FROM %s
             WHERE (entity_kind = 'link' AND entity_id IN (

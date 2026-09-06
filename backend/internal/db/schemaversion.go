@@ -51,7 +51,11 @@ import (
 // app_setting, a table that has existed since 000016, and audit_log.action has
 // no enumeration to extend (000033 constrains only its LENGTH), so a database
 // at 45 accepts auth.rate_limited exactly as it accepts every other action.
-const RequiredSchemaVersion = 45
+//
+// 46 is entity_click_stats (000046): ranking sorts JOIN that projection, and
+// clicklog.Record UPSERTs it. An unmigrated database 500s the first /go click
+// and every click/recent list.
+const RequiredSchemaVersion = 46
 
 // ErrSchemaOutdated is returned when the database has not been migrated.
 var ErrSchemaOutdated = errors.New("db: schema is older than this binary requires")

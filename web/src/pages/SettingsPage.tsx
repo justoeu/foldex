@@ -14,6 +14,7 @@ import {
 import { useCurrentUser } from '../auth/AuthProvider'
 import { hasSecondFactor, isAdminRole } from '../auth/types'
 import { apiErrorCode as errCode } from '../lib/apiError'
+import { validateMasterForm, validateMasterRemove } from '../lib/masterPasswordForm'
 import type { AppView } from '../AppWorkspace'
 import { PasswordInput } from '../components/PasswordInput'
 
@@ -397,27 +398,13 @@ function MasterPasswordSection() {
   const save = async () => {
     setError(null)
     setOk(null)
-    if (next.length < 8) {
-      setError(t('settings.master_too_short'))
-      return
-    }
-    if (next !== confirm) {
-      setError(t('settings.master_mismatch'))
-      return
-    }
-    const trimmedHint = hint.trim()
-    if (trimmedHint && trimmedHint.toLowerCase() === next.toLowerCase()) {
-      setError(t('settings.master_hint_equals'))
+    const result = validateMasterForm({ next, confirm, hint, configured, current })
+    if (!result.ok) {
+      setError(t(result.errorKey))
       return
     }
     try {
-      await setMaster.mutateAsync({
-        password: next,
-        currentPassword: configured ? current : undefined,
-        // Omit when empty → the backend keeps the existing hint (a password
-        // change doesn't silently wipe it). A non-empty value replaces it.
-        hint: trimmedHint || undefined,
-      })
+      await setMaster.mutateAsync(result.payload)
       setCurrent('')
       setNext('')
       setConfirm('')
@@ -431,8 +418,13 @@ function MasterPasswordSection() {
   const remove = async () => {
     setError(null)
     setOk(null)
+    const result = validateMasterRemove(current)
+    if (!result.ok) {
+      setError(t(result.errorKey))
+      return
+    }
     try {
-      await removeMaster.mutateAsync({ currentPassword: current })
+      await removeMaster.mutateAsync(result.payload)
       setCurrent('')
       setNext('')
       setConfirm('')
@@ -466,82 +458,29 @@ function MasterPasswordSection() {
           </div>
         )}
 
-        {configured && (
-          <label className="fx-field">
-            <span className="fx-field-label">{t('settings.master_current_label')}</span>
-            <div className="fx-input">
-              <PasswordInput
-                autoComplete="off"
-                value={current}
-                onChange={(e) => {
-                  setCurrent(e.target.value)
-                  setError(null)
-                }}
-                placeholder={t('settings.master_current_placeholder')}
-                aria-label={t('settings.master_current_label')}
-              />
-            </div>
-          </label>
+        {configured ? (
+          <MasterConfiguredFields
+            current={current}
+            next={next}
+            confirm={confirm}
+            hint={hint}
+            onCurrent={setCurrent}
+            onNext={setNext}
+            onConfirm={setConfirm}
+            onHint={setHint}
+            onClearError={() => setError(null)}
+          />
+        ) : (
+          <MasterUnconfiguredFields
+            next={next}
+            confirm={confirm}
+            hint={hint}
+            onNext={setNext}
+            onConfirm={setConfirm}
+            onHint={setHint}
+            onClearError={() => setError(null)}
+          />
         )}
-
-        <label className="fx-field">
-          <span className="fx-field-label">
-            {configured ? t('settings.master_new_label') : t('settings.master_new_label_first')}
-          </span>
-          <div className="fx-input">
-            <PasswordInput
-              autoComplete="new-password"
-              value={next}
-              onChange={(e) => {
-                setNext(e.target.value)
-                setError(null)
-              }}
-              placeholder={t('settings.master_new_placeholder')}
-              aria-label={configured ? t('settings.master_new_label') : t('settings.master_new_label_first')}
-            />
-          </div>
-          <span className="fx-field-hint">{t('settings.master_min_hint')}</span>
-          <PasswordStrength value={next} />
-        </label>
-
-        <label className="fx-field">
-          <span className="fx-field-label">{t('settings.master_confirm_label')}</span>
-          <div className="fx-input">
-            <PasswordInput
-              autoComplete="new-password"
-              value={confirm}
-              onChange={(e) => {
-                setConfirm(e.target.value)
-                setError(null)
-              }}
-              placeholder={t('settings.master_confirm_placeholder')}
-              aria-label={t('settings.master_confirm_label')}
-            />
-          </div>
-          {confirm.length > 0 && next !== confirm && (
-            <span className="fx-field-hint" style={{ color: 'var(--fx-danger)' }}>
-              {t('settings.master_mismatch')}
-            </span>
-          )}
-        </label>
-
-        <label className="fx-field">
-          <span className="fx-field-label">{t('settings.master_hint_label')}</span>
-          <div className="fx-input">
-            <input
-              type="text"
-              maxLength={200}
-              value={hint}
-              onChange={(e) => {
-                setHint(e.target.value)
-                setError(null)
-              }}
-              placeholder={configured ? t('settings.master_hint_placeholder_keep') : t('settings.master_hint_placeholder')}
-              aria-label={t('settings.master_hint_label')}
-            />
-          </div>
-          <span className="fx-field-hint">{t('settings.master_hint_help')}</span>
-        </label>
 
         {error && (
           <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -567,6 +506,116 @@ function MasterPasswordSection() {
         </div>
       </div>
     </section>
+  )
+}
+
+type MasterValueFields = {
+  next: string
+  confirm: string
+  hint: string
+  onNext: (value: string) => void
+  onConfirm: (value: string) => void
+  onHint: (value: string) => void
+  onClearError: () => void
+}
+
+function MasterUnconfiguredFields(props: MasterValueFields) {
+  return <MasterPasswordValueFields {...props} configured={false} />
+}
+
+function MasterConfiguredFields({
+  current,
+  onCurrent,
+  ...values
+}: MasterValueFields & { current: string; onCurrent: (value: string) => void }) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <label className="fx-field">
+        <span className="fx-field-label">{t('settings.master_current_label')}</span>
+        <div className="fx-input">
+          <PasswordInput
+            autoComplete="off"
+            value={current}
+            onChange={(e) => {
+              onCurrent(e.target.value)
+              values.onClearError()
+            }}
+            placeholder={t('settings.master_current_placeholder')}
+            aria-label={t('settings.master_current_label')}
+          />
+        </div>
+      </label>
+      <MasterPasswordValueFields {...values} configured />
+    </>
+  )
+}
+
+function MasterPasswordValueFields({
+  next, confirm, hint, onNext, onConfirm, onHint, onClearError, configured,
+}: MasterValueFields & { configured: boolean }) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <label className="fx-field">
+        <span className="fx-field-label">
+          {configured ? t('settings.master_new_label') : t('settings.master_new_label_first')}
+        </span>
+        <div className="fx-input">
+          <PasswordInput
+            autoComplete="new-password"
+            value={next}
+            onChange={(e) => {
+              onNext(e.target.value)
+              onClearError()
+            }}
+            placeholder={t('settings.master_new_placeholder')}
+            aria-label={configured ? t('settings.master_new_label') : t('settings.master_new_label_first')}
+          />
+        </div>
+        <span className="fx-field-hint">{t('settings.master_min_hint')}</span>
+        <PasswordStrength value={next} />
+      </label>
+
+      <label className="fx-field">
+        <span className="fx-field-label">{t('settings.master_confirm_label')}</span>
+        <div className="fx-input">
+          <PasswordInput
+            autoComplete="new-password"
+            value={confirm}
+            onChange={(e) => {
+              onConfirm(e.target.value)
+              onClearError()
+            }}
+            placeholder={t('settings.master_confirm_placeholder')}
+            aria-label={t('settings.master_confirm_label')}
+          />
+        </div>
+        {confirm.length > 0 && next !== confirm && (
+          <span className="fx-field-hint" style={{ color: 'var(--fx-danger)' }}>
+            {t('settings.master_mismatch')}
+          </span>
+        )}
+      </label>
+
+      <label className="fx-field">
+        <span className="fx-field-label">{t('settings.master_hint_label')}</span>
+        <div className="fx-input">
+          <input
+            type="text"
+            maxLength={200}
+            value={hint}
+            onChange={(e) => {
+              onHint(e.target.value)
+              onClearError()
+            }}
+            placeholder={configured ? t('settings.master_hint_placeholder_keep') : t('settings.master_hint_placeholder')}
+            aria-label={t('settings.master_hint_label')}
+          />
+        </div>
+        <span className="fx-field-hint">{t('settings.master_hint_help')}</span>
+      </label>
+    </>
   )
 }
 

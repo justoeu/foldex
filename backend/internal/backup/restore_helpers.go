@@ -17,6 +17,7 @@ import (
 	"foldex/internal/notes"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/clicklog"
 )
 
 const maxRestoredNoteMediaBytes = 16 << 20
@@ -330,6 +331,9 @@ func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m
 	}
 	if inserted != nil {
 		inserted.ClickLogs += int64(len(rows))
+	}
+	if err := clicklog.RefreshOwner(ctx, tx, int64(uid)); err != nil {
+		return err
 	}
 	return nil
 }

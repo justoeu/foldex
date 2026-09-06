@@ -8,6 +8,11 @@
 //  5. attach the policy to the app user
 //
 // Root credentials never leave the init path; the backend runs as the app user.
+//
+// madmin-go talks the MinIO admin API that this RustFS digest happens to
+// mirror. Before bumping rustfs OR madmin-go, run this binary against the
+// digest pinned in docker-compose.services.yml / docs/STACK.md. Replacing
+// madmin-go with ad-hoc HTTP does not remove the coupling.
 package main
 
 import (

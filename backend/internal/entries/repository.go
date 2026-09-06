@@ -40,32 +40,26 @@ func buildListQuery(uid authctx.UserID, q ListQuery) (string, []any) {
 
 	if page.ClickRanking {
 		linkSQL := fmt.Sprintf(`SELECT 'link' AS kind, l.id, l.title, l.slug, l.pinned, l.folder_id, l.created_at, l.updated_at,
-            COALESCE(clk.cnt, 0) AS click_count, clk.last_at AS last_clicked_at,
+            COALESCE(clk.click_count, 0) AS click_count, clk.last_clicked_at AS last_clicked_at,
             l.url, l.description, l.favicon_url, l.og_image_url, l.preview_status, l.preview_error,
             l.check_interval, l.last_checked_at, l.last_change_detected_at,
             l.change_seen_at,
             NULL::text AS cover_url, NULL::text AS body_snippet
         FROM link l
-        LEFT JOIN (
-            SELECT entity_id, count(*)::bigint AS cnt, max(clicked_at) AS last_at
-			FROM click_log WHERE user_id = $%d AND entity_kind = 'link'
-            GROUP BY entity_id
-		) clk ON clk.entity_id = l.id`, linkScope.OwnerArg)
+        LEFT JOIN entity_click_stats clk
+            ON clk.user_id = $%d AND clk.entity_kind = 'link' AND clk.entity_id = l.id`, linkScope.OwnerArg)
 		linkSQL += " WHERE " + strings.Join(linkScope.Where, " AND ")
 
 		noteSQL := fmt.Sprintf(`SELECT 'note' AS kind, n.id, n.title, n.slug, n.pinned, n.folder_id, n.created_at, n.updated_at,
-            COALESCE(clk.cnt, 0) AS click_count, clk.last_at AS last_clicked_at,
+            COALESCE(clk.click_count, 0) AS click_count, clk.last_clicked_at AS last_clicked_at,
             NULL::text AS url, NULL::text AS description, NULL::text AS favicon_url,
             NULL::text AS og_image_url, NULL::text AS preview_status, NULL::text AS preview_error,
             NULL::text AS check_interval, NULL::timestamptz AS last_checked_at,
             NULL::timestamptz AS last_change_detected_at, NULL::timestamptz AS change_seen_at,
             n.cover_url, left(n.body_text, 240) AS body_snippet
         FROM note n
-        LEFT JOIN (
-            SELECT entity_id, count(*)::bigint AS cnt, max(clicked_at) AS last_at
-			FROM click_log WHERE user_id = $%d AND entity_kind = 'note'
-            GROUP BY entity_id
-		) clk ON clk.entity_id = n.id`, noteScope.OwnerArg)
+        LEFT JOIN entity_click_stats clk
+            ON clk.user_id = $%d AND clk.entity_kind = 'note' AND clk.entity_id = n.id`, noteScope.OwnerArg)
 		noteSQL += " WHERE " + strings.Join(noteScope.Where, " AND ")
 
 		sql := fmt.Sprintf("SELECT * FROM (\n%s\nUNION ALL\n%s\n) u ORDER BY %s LIMIT $%d OFFSET $%d", linkSQL, noteSQL, page.OrderBy, page.LimitArg, page.OffsetArg)
@@ -138,8 +132,9 @@ func buildListQuery(uid authctx.UserID, q ListQuery) (string, []any) {
 }
 
 // List uses one mixed link+note page and one batched tag query. Click-ranked
-// sorts aggregate before pagination because the aggregate determines rank;
-// other sorts aggregate only the selected candidate IDs.
+// sorts join entity_click_stats (a projection of click_log, INV-056) because
+// the aggregate determines rank; other sorts still aggregate only the
+// selected candidate IDs.
 func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) ([]Entry, error) {
 	sql, args := buildListQuery(uid, q)
 
