@@ -50,8 +50,8 @@ export async function createUser(input: {
   password: string
   role: Role
 }): Promise<AuthUser> {
-  const { data } = await http.post('/api/admin/users', input)
-  return data as AuthUser
+  const { data } = await http.post<AuthUser>('/api/admin/users', input)
+  return data
 }
 
 export async function deleteUser(id: number): Promise<void> {
@@ -353,7 +353,7 @@ export async function unblockIP(ip: string): Promise<void> {
  * The caller's OWN activity. Not an admin route: it needs no administrative
  * permission and is the only projection that returns the content label.
  */
-export const activityQueryKey = (before = 0) => ['activity', before] as const
+export const activityQueryKey = ['activity'] as const
 
 export async function fetchOwnActivity(before?: number): Promise<AuditEntry[]> {
   const params = before ? { before } : {}

@@ -181,7 +181,7 @@ function LinkDialogBody({
     <div className="fx-modal-body">
       <div className="fx-modal-col">
         <LinkBasicsFields form={form} duplicate={duplicate} onOpenExisting={onOpenExisting} />
-        <LinkTagsField tags={tags} />
+        <TagPicker picker={tags} i18nPrefix="link_dialog" />
         <LinkOrganizationFields form={form} link={link} defaultFolderId={defaultFolderId} />
       </div>
       <aside className="fx-modal-side">
@@ -267,10 +267,6 @@ function LinkBasicsFields({
       </label>
     </>
   )
-}
-
-function LinkTagsField({ tags }: { tags: Tags }) {
-  return <TagPicker picker={tags} i18nPrefix="link_dialog" />
 }
 
 function LinkOrganizationFields({ form, link, defaultFolderId }: { form: Form; link: Link | null; defaultFolderId?: number | null }) {

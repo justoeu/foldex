@@ -4,7 +4,7 @@ import { Icon, I } from '../components/icons'
 import { HubCard, HubShortcut, HubRule } from '../components/HubCard'
 import { PasswordStrength } from '../components/PasswordStrength'
 import { initialsOf } from '../lib/initials'
-import { AccountPage, type AccountTab } from './AccountPage'
+import { AccountPage, isAccountTab, type AccountTab } from './AccountPage'
 import { useFolders, useResetFolderPassword } from '../api/folders'
 import {
   useMasterPasswordStatus,
@@ -179,7 +179,8 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
   )
   const effective = resolveHubView(isAdmin, scope, canonicalSection(section))
   // Read from the ORIGINAL name, before it is canonicalized away.
-  const accountTab = SECTION_TAB[section] ?? 'profile'
+  const mappedTab = SECTION_TAB[section]
+  const accountTab = isAccountTab(mappedTab) ? mappedTab : 'profile'
   const effectiveScope = effective.scope
   const effectiveSection = effective.section
 

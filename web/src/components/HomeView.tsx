@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState, type CSSProperties } from 'react'
 import { useRevealEntry, type RevealTarget } from '../hooks/useRevealEntry'
-import { useQueryClient } from '@tanstack/react-query'
 import { Trans, useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
@@ -280,7 +279,6 @@ export function CardsView({
   const { mutate: deleteNote } = useDeleteNote()
   const { mutate: pinNote } = usePinNote()
   const confirm = useConfirm()
-  const queryClient = useQueryClient()
   const onDeleteLink = useCallback(
     async (l: LinkT) => {
       const ok = await confirm({
