@@ -1749,6 +1749,58 @@ func TestInvite_AcceptCannotEscalateItsOwnRole(t *testing.T) {
 // Admin users
 // ─────────────────────────────────────────────────────────────────────
 
+func TestAdminListUsers_HonorsLimitAndCursor(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	var hash string
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT password_hash FROM app_user WHERE email_normalized = 'admin@example.com'`).Scan(&hash))
+	_, err := h.pool.Exec(context.Background(), `
+		INSERT INTO app_user (email, email_normalized, name, role, status, password_hash)
+		SELECT 'bulk' || i || '@example.com', 'bulk' || i || '@example.com', 'bulk', 'editor', 'active', $1
+		FROM generate_series(1, 500) AS i
+	`, hash)
+	require.NoError(t, err)
+
+	rec := admin.do(http.MethodGet, "/api/admin/users", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	users := decode(t, rec)["users"].([]any)
+	require.Equal(t, 200, len(users), "compiled ceiling must hold; got %d", len(users))
+
+	rec = admin.do(http.MethodGet, "/api/admin/users?limit=50", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	page := decode(t, rec)["users"].([]any)
+	require.Len(t, page, 50)
+
+	last := page[len(page)-1].(map[string]any)
+	afterID := int64(last["id"].(float64))
+	rec = admin.do(http.MethodGet, fmt.Sprintf("/api/admin/users?limit=50&after=%d", afterID), nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	next := decode(t, rec)["users"].([]any)
+	require.Len(t, next, 50)
+	firstNext := int64(next[0].(map[string]any)["id"].(float64))
+	assert.Greater(t, firstNext, afterID)
+
+	seen := make(map[int64]struct{}, len(page))
+	for _, raw := range page {
+		seen[int64(raw.(map[string]any)["id"].(float64))] = struct{}{}
+	}
+	for _, raw := range next {
+		id := int64(raw.(map[string]any)["id"].(float64))
+		_, dup := seen[id]
+		assert.False(t, dup, "cursor page overlapped id %d", id)
+	}
+
+	testdb.SeedUserWithPassword(t, h.pool, "editor@example.com", "a good password", "editor")
+	ed := h.client(t)
+	require.Equal(t, http.StatusOK, ed.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "editor@example.com", "password": "a good password",
+	}).Code)
+	assert.Equal(t, http.StatusNotFound, ed.do(http.MethodGet, "/api/admin/users", nil).Code,
+		"INV-043: a non-admin must see 404, not 403")
+}
+
 func TestAdmin_ListUsersNeverIncludesHashes(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")

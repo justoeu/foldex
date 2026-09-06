@@ -88,7 +88,11 @@ func TestClient_ErrorPaths_WrongBucket(t *testing.T) {
 	_, _, err = cli.GetObject(ctx, "k")
 	require.Error(t, err)
 
-	_, err = cli.OpenObject(ctx, "k")
+	rc, err := cli.OpenObject(ctx, "k")
+	if err == nil {
+		_, err = io.ReadAll(rc)
+		_ = rc.Close()
+	}
 	require.Error(t, err)
 
 	_, err = cli.ObjectExists(ctx, "k")
