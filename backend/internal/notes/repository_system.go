@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"foldex/internal/folders"
-	"foldex/internal/pkg/clickctx"
+	"foldex/internal/pkg/clicklog"
 	"foldex/internal/pkg/domainerr"
 	"foldex/internal/pkg/publictarget"
 	"foldex/internal/tags"
@@ -62,14 +62,10 @@ func (r *Repository) systemViewAndResolveWhere(ctx context.Context, where string
 	// The same coalescing gate the link redirect consults — see
 	// internal/pkg/clickctx. Absent gate means record, so nothing but the
 	// public HTTP path changes behaviour, and a suppressed view still RENDERS:
-	// only the click row is skipped.
-	if clickctx.Allow(ctx, "note", id) {
-		// Owner from the resolved row — /n/ is public, there is no session here.
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO click_log (entity_kind, entity_id, user_id) VALUES ('note', $1, $2)`,
-			id, owner); err != nil {
-			return Note{}, fmt.Errorf("insert click_log: %w", err)
-		}
+	// only the click row is skipped. Owner from the resolved row — /n/ is
+	// public, there is no session here.
+	if err := clicklog.Record(ctx, tx, "note", id, owner); err != nil {
+		return Note{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Note{}, fmt.Errorf("commit view tx: %w", err)

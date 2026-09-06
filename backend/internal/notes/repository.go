@@ -122,7 +122,7 @@ func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateIn
 			return id, err
 		},
 		func(ctx context.Context, tx pgx.Tx, id int64) error {
-			if err := setNoteTags(ctx, tx, uid, id, in.TagIDs, in.PendingTags); err != nil {
+			if err := tags.SetEntityTagsWithPending(ctx, tx, uid, "note", id, in.TagIDs, in.PendingTags); err != nil {
 				return err
 			}
 			_, err := notemedia.SyncRefs(ctx, tx, uid, id, notemedia.Keys(bodyHTML))
@@ -246,7 +246,7 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 		i++
 	}
 	if in.SlugSet {
-		newSlug, err := resolveUpdateSlug(ctx, tx, uid, "note", id, in.Slug, in.Title)
+		newSlug, err := slug.ResolveUpdate(ctx, tx, uid, "note", id, in.Slug, in.Title, "note")
 		if err != nil {
 			return Note{}, err
 		}
@@ -294,7 +294,7 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 		if in.TagIDs != nil {
 			tagIDs = *in.TagIDs
 		}
-		if err := setNoteTags(ctx, tx, uid, id, tagIDs, in.PendingTags); err != nil {
+		if err := tags.SetEntityTagsWithPending(ctx, tx, uid, "note", id, tagIDs, in.PendingTags); err != nil {
 			return Note{}, err
 		}
 	}
@@ -363,10 +363,6 @@ func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, s
 	return nil
 }
 
-func extractImageKeys(bodyHTML string) []string {
-	return notemedia.Keys(bodyHTML)
-}
-
 func (r *Repository) cleanupMedia(ctx context.Context, uid authctx.UserID, keys []string, storage ports.Uploader) {
 	if storage == nil || len(keys) == 0 {
 		return
@@ -410,8 +406,4 @@ func asObjectDeleter(storage ports.Uploader) notemedia.ObjectDeleter {
 
 func (r *Repository) tagsFor(ctx context.Context, uid authctx.UserID, noteIDs []int64) (map[int64][]tags.Chip, error) {
 	return tags.TagsForEntities(ctx, r.pool, uid, "note", noteIDs)
-}
-
-func setNoteTags(ctx context.Context, tx pgx.Tx, uid authctx.UserID, noteID int64, tagIDs []int64, pending []tags.CreateInput) error {
-	return tags.SetEntityTagsWithPending(ctx, tx, uid, "note", noteID, tagIDs, pending)
 }

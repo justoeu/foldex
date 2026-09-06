@@ -15,10 +15,11 @@ import (
 
 // clickLogWriters are the packages allowed to insert into click_log.
 //
-// The list is short by design — INV-056 makes click_log the single source of
-// truth for clicks, so a third package appearing here is a change worth
-// noticing rather than a file this guard should discover on its own.
-var clickLogWriters = []string{"../../links", "../../notes"}
+// The public path's INSERT lives in clicklog (INV-056 / INV-182). links and
+// notes still resolve the row and must not grow their own writers. importer
+// and backup write historical rows with a different shape and are out of
+// this guard's scope.
+var clickLogWriters = []string{"../../links", "../../notes", "../clicklog"}
 
 const clickLogInsert = "INSERT INTO click_log"
 
@@ -45,9 +46,44 @@ func TestEveryClickLogInsertIsGatedByAllow(t *testing.T) {
 			found += assertGatedInserts(t, path)
 		}
 	}
-	assert.GreaterOrEqual(t, found, 2,
-		"expected the link and note public paths to insert into click_log; "+
+	assert.GreaterOrEqual(t, found, 1,
+		"expected the public click path to insert into click_log; "+
 			"finding fewer means this guard is watching nothing")
+}
+
+func TestPublicClickInsertIsOnePrimitive(t *testing.T) {
+	t.Parallel()
+
+	found := 0
+	var sites []string
+	for _, dir := range clickLogWriters {
+		for _, path := range productionFiles(t, dir) {
+			n := countClickLogInserts(t, path)
+			if n > 0 {
+				found += n
+				sites = append(sites, path)
+			}
+		}
+	}
+	require.Equal(t, 1, found,
+		"public click+resolve must share one INSERT primitive, found %d in %v", found, sites)
+}
+
+func countClickLogInserts(t *testing.T, path string) int {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	require.NoError(t, err)
+	count := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING || !strings.Contains(lit.Value, clickLogInsert) {
+			return true
+		}
+		count++
+		return true
+	})
+	return count
 }
 
 // assertGatedInserts checks one file and returns how many INSERTs it saw.

@@ -19,7 +19,7 @@ import (
 
 	"foldex/internal/folders"
 	"foldex/internal/pkg/authctx"
-	"foldex/internal/pkg/clickctx"
+	"foldex/internal/pkg/clicklog"
 	"foldex/internal/pkg/domainerr"
 )
 
@@ -69,15 +69,11 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg
 	// public HTTP path (imports, tests, jobs) is unaffected. Suppression skips
 	// the click row ONLY: the destination below is returned either way, because
 	// coalescing a redirect would break every shared link on the instance.
-	if clickctx.Allow(ctx, "link", id) {
-		// user_id comes from the row we just resolved, not from a session —
-		// /go/ is public. It is a denormalized accelerator (migration 000018);
-		// entity_kind / entity_id remain authoritative for WHAT was clicked.
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO click_log (entity_kind, entity_id, user_id) VALUES ('link', $1, $2)`,
-			id, owner); err != nil {
-			return "", fmt.Errorf("insert click_log: %w", err)
-		}
+	// user_id comes from the row we just resolved, not from a session — /go/ is
+	// public. It is a denormalized accelerator (migration 000018); entity_kind /
+	// entity_id remain authoritative for WHAT was clicked.
+	if err := clicklog.Record(ctx, tx, "link", id, owner); err != nil {
+		return "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("commit click tx: %w", err)

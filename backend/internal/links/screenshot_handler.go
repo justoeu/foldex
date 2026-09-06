@@ -103,7 +103,7 @@ func (h *ScreenshotHandler) WithEnqueuer(e ports.Enqueuer) *ScreenshotHandler {
 // NewScreenshotHandler creates a ScreenshotHandler. urlPolicy gates
 // CaptureAndStore — pass preview.IsPublicURL from main.go. A nil policy is
 // treated as "deny all", which fails closed.
-func NewScreenshotHandler(repo *Repository, sc Screenshotter, st Uploader, urlPolicy URLPolicy, logger *slog.Logger) *ScreenshotHandler {
+func NewScreenshotHandler(repo screenshotRepo, sc Screenshotter, st Uploader, urlPolicy URLPolicy, logger *slog.Logger) *ScreenshotHandler {
 	return &ScreenshotHandler{
 		repo:          repo,
 		screenshotter: sc,
@@ -194,7 +194,7 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 	applied, err := h.repo.UpdateOGImageIfUnchanged(storageCtx, uid, id, stored.URL, link.UpdatedAt)
 	if err != nil || !applied {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), captureStorageTimeout)
-		cleanupErr := linkimage.Delete(cleanupCtx, h.storage, stored.Key)
+		cleanupErr := h.storage.DeleteObject(cleanupCtx, stored.Key)
 		cleanupCancel()
 		if cleanupErr != nil {
 			h.logger.Warn("screenshot orphan cleanup failed", "id", id)

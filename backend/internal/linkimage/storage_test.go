@@ -3,6 +3,9 @@ package linkimage
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,6 +35,19 @@ func (u *memoryUploader) DeleteObject(ctx context.Context, key string) error {
 	u.deleteContextError = ctx.Err()
 	delete(u.objects, key)
 	return nil
+}
+
+func TestDeleteTrampolineIsGone(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "storage.go", nil, 0)
+	require.NoError(t, err)
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "Delete" {
+			return true
+		}
+		t.Fatalf("linkimage.Delete only calls DeleteObject; handlers already hold the uploader")
+		return false
+	})
 }
 
 func TestStoreUsesOperationOwnedKey(t *testing.T) {

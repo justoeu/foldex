@@ -36,10 +36,6 @@ func Store(ctx context.Context, uploader Uploader, prefix string, id int64, ext 
 	return Stored{Key: key, URL: "/api/files/" + key}, nil
 }
 
-func Delete(ctx context.Context, uploader Uploader, key string) error {
-	return uploader.DeleteObject(ctx, key)
-}
-
 // PurgeLegacy removes only the deterministic pre-versioning keys. It never
 // touches another operation's versioned object.
 func PurgeLegacy(ctx context.Context, uploader Uploader, prefix string, id int64) []error {
