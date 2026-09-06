@@ -1001,13 +1001,18 @@ that second case is forever, and it fails OPEN.
 handler capturing `Grants()` there freezes every route it mounts on the matrix as it stood
 at startup. That shipped once (`AdminHandler`) and was the same defect the gate's parameter
 exists to prevent, one level up. `liveGrants()` returns the repository; `grantsSnapshot()`
-is per request and is never captured at Mount. **And `cmd/server/main.go` must set
-`Deps.Grants`**: the nil-means-compiled default exists for tests, and leaving it in force in
-production makes a revocation commit, audit, render as unticked and change nothing on
-`/links`, `/notes`, `/tags`, `/import` and `/backup/restore` — while the gates main wires by
-hand still honour it, so it looks partially applied rather than broken. Guard:
-`TestServerDepsCarriesTheLiveGrants`, which walks main's AST, because the defect is one
-absent struct field in a literal that compiles.
+is per request and is never captured at Mount. **And `cmd/server` must set `Deps.Grants`**
+(`boot.go` / `loadGrants` / `assembleDeps`, not exclusively `main.go`): the live value is
+`h.grants` from `loadGrants` → `roleperm.NewRepository`, or a local ident assigned from
+`roleperm.NewRepository`. The nil-means-compiled default exists for tests, and leaving it
+in force in production makes a revocation commit, audit, render as unticked and change
+nothing on `/links`, `/notes`, `/tags`, `/import` and `/backup/restore` — while the gates
+the boot path wires by hand still honour it, so it looks partially applied rather than
+broken. Guard: `TestServerDepsCarriesTheLiveGrants`, which walks every production `.go`
+file under `cmd/server` (skipping `_test.go`), because the defect is one absent struct
+field in a literal that compiles. `nil`, `roleperm.Default()`, and a missing field are
+still the defects; walking only `main.go` is how this guard went silent after the boot
+extract.
 
 **Every permission in the vocabulary is gated by some route.** Three were not —
 `backup.export`, `invites.read`, `invites.write` — which was a documentation gap while the

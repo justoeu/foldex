@@ -68,13 +68,13 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 | Imagem       | `golang.org/x/image` + stdlib decoders (pure Go, sem CGO)            | Re-encode JPEG q82 + downscale Catmull-Rom + decode-bomb guard 50 MP (`internal/imageopt`). |
 | Headless     | `github.com/go-rod/rod v0.116` (Chromium)                            | Screenshot fallback quando o site não tem `og:image`. BrowserContext isolado + proxy de egress estrito por captura. |
 | Testes Go    | `testify` (unit) + `testcontainers-go v0.44` (integration, build tag)| Suite real contra Postgres efêmero; gate ≥85% (ver `CLAUDE.md`). |
-| SPA          | **Vite 8 + React 19.2 + TypeScript 6 + MUI 9**                        | MUI só pra `createTheme`/`ThemeProvider`; visual vive em `web/src/styles/foldex.css` (CSS handoff). Bundle ~80 kB. |
+| SPA          | **Vite 8 + React 19.2 + TypeScript 7 + MUI 9**                        | MUI só pra `createTheme`/`ThemeProvider`; visual vive em `web/src/styles/foldex.css` (CSS handoff). Bundle ~80 kB. |
 | Server state | **TanStack Query 5**                                                  | Cache + invalidação por mutation + optimistic updates. |
 | i18n         | **react-i18next 17** + i18next 26 (en/pt/es)                          | Locale picker no topbar persiste em `localStorage["foldex.locale"]`. Plurais via `_one`/`_other`. |
 | PWA          | **vite-plugin-pwa 1.3** com `strategies: 'injectManifest'`            | SW hand-rolled em `web/src/sw.ts` (Cache API + push/notificationclick listeners). Workbox só injeta `__WB_MANIFEST` no build. |
-| Testes web   | **Vitest 4** + `@testing-library/react 16` + jsdom 29                 | Mesmo gate ≥85% (`vitest.config.ts`). |
+| Testes web   | **Vitest 5** + `@testing-library/react 16` + jsdom 30                 | Mesmo gate ≥85% (`vitest.config.ts`). `undici` 8.10.2 is pinned (direct + override). |
 | Extension    | Vanilla MV3 (sem bundler)                                            | Popup tem ~80 LoC. Sem build = "load unpacked" direto. |
-| Node runtime | **bun 1.4** (oven/bun:1.4-alpine)                                    | Bate com Vite 8 / Vitest 4 e resolve melhor packages platform-specific que npm em mirror privado. |
+| Node runtime | **bun 1.4** (oven/bun:1.4-alpine)                                    | Bate com Vite 8 / Vitest 5 e resolve melhor packages platform-specific que npm em mirror privado. |
 
 ## Data model (estado atual, após 34 migrations)
 
@@ -1446,8 +1446,12 @@ auditada, aparecia desmarcada na tela — e não valia ali. Pior: os gates que `
 à mão (admin, folders, policy) **honravam**, então a revogação ficava PARCIALMENTE
 aplicada, o que se lê como instabilidade e não como bug. O default `nil = compilada`, que
 existe para os testes, foi exatamente o que permitiu esquecer. `TestServerDepsCarriesTheLiveGrants`
-percorre o AST de `main.go` e recusa o literal sem o campo — nenhum teste de unidade
-consegue ver isso, porque o defeito é um campo ausente num composite literal que compila.
+percorre os `.go` de produção em `cmd/server` (não só `main.go`; ignora `_test.go`) e recusa
+`nil`, `roleperm.Default()` e o campo ausente — o valor vivo é `h.grants` de `loadGrants` →
+`roleperm.NewRepository`, ou um ident local atribuído a partir dele. O literal vive em
+`assembleDeps` (`boot.go`) depois do extract; percorrer só `main.go` é como o guard ficou
+mudo. Nenhum teste de unidade consegue ver isso, porque o defeito é um campo ausente num
+composite literal que compila.
 
 **`AdminHandler.Mount` capturava a matriz como valor**, congelando os gates de `/api/admin`
 no snapshot do boot. Mesma direção de falha (permissão a mais), mesma causa (uma indireção
