@@ -1,11 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { errorCode, errorStatus } from '../../api/auth'
 import {
   confirmEmailFactor,
   confirmTotp,
-  startEmailFactor,
-  startTotp,
   type EmailFactorEnrollment,
   type FactorMethod,
   type TotpEnrollment,
@@ -14,6 +11,12 @@ import { useAuth } from '../../auth/AuthProvider'
 import { AuthShell, AuthError, AuthSubmit } from './AuthShell'
 import { OtpInput, OTP_LENGTH } from './OtpInput'
 import { RecoveryCodes } from './RecoveryCodes'
+import {
+  enrollPhase,
+  enrollSubmitErrorKey,
+  initialEnrollMethod,
+} from './EnrollTotpScreen.state'
+import { useEnrollStart } from './EnrollTotpScreen.start'
 
 /**
  * Mandatory second-factor enrollment for an administrator.
@@ -24,7 +27,7 @@ import { RecoveryCodes } from './RecoveryCodes'
  *
  * Since ADR-37 the admin CHOOSES a method, so the screen opens on that choice
  * rather than firing an enrollment on mount. That is also what makes the
- * ref-guard below sound: nothing starts until a deliberate click.
+ * ref-guard in useEnrollStart sound: nothing starts until a deliberate click.
  */
 export function EnrollTotpScreen() {
   const { t } = useTranslation()
@@ -34,13 +37,7 @@ export function EnrollTotpScreen() {
   // could arrive at all.
   const emailAvailable = session.status !== 'loading' && session.features.email_delivery
 
-  // Null means "ask". An instance with no SMTP offers no choice at all, so it
-  // starts the authenticator straight away rather than showing a one-button
-  // chooser — the screen is mandatory and mid-login, and a question with one
-  // possible answer is pure friction there.
-  const [method, setMethod] = useState<FactorMethod | null>(
-    () => (emailAvailable ? null : 'totp'),
-  )
+  const [method, setMethod] = useState<FactorMethod | null>(() => initialEnrollMethod(emailAvailable))
   const [totp, setTotp] = useState<TotpEnrollment | null>(null)
   const [mailed, setMailed] = useState<EmailFactorEnrollment | null>(null)
   const [code, setCode] = useState('')
@@ -50,32 +47,11 @@ export function EnrollTotpScreen() {
   const [busy, setBusy] = useState(false)
   const [showSecret, setShowSecret] = useState(false)
 
-  // A ref, and DELIBERATELY no per-effect `alive` flag — see the same guard in
-  // VerifyEmailScreen for why the flag breaks it.
-  //
-  // What must be prevented is the second REQUEST, not the second setState:
-  // starting an enrollment mints a new secret (or mails a new code) and
-  // supersedes the pending row, so firing it twice replaces what the user is
-  // already looking at, and out-of-order responses leave the manual-entry key
-  // disagreeing with what the server stored. Both StrictMode's double mount and
-  // a mid-enrollment language change would do that — `t` is a new function
-  // identity on every locale switch, so it must not be a dependency here.
-  const started = useRef<FactorMethod | null>(null)
-  useEffect(() => {
-    if (!method || started.current === method) return
-    started.current = method
-    if (method === 'totp') {
-      startTotp()
-        .then(setTotp)
-        .catch(() => setError(t('twofa.enroll_failed')))
-    } else {
-      startEmailFactor()
-        .then(setMailed)
-        .catch(() => setError(t('twofa.enroll_failed')))
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- see the ref above:
-    // re-running this effect replaces a live enrollment secret.
-  }, [method])
+  useEnrollStart(method, {
+    totp: setTotp,
+    email: setMailed,
+    error: () => setError(t('twofa.enroll_failed')),
+  })
 
   async function submit(raw: string) {
     if (busy || !method) return
@@ -89,18 +65,16 @@ export function EnrollTotpScreen() {
       setCodes(res.recovery_codes)
       setPendingSession(res)
     } catch (err) {
-      const c = errorCode(err)
-      if (c === 'invalid_code') setError(t('auth_errors.invalid_code'))
-      else if (c === 'challenge_invalid') setError(t('auth_otp.expired'))
-      else if (errorStatus(err) === 0) setError(t('auth_errors.network'))
-      else setError(t('auth_errors.generic'))
+      setError(t(enrollSubmitErrorKey(err)))
       setCode('')
     } finally {
       setBusy(false)
     }
   }
 
-  if (codes && pendingSession) {
+  const phase = enrollPhase({ method, totp, mailed, codes, pendingSession })
+
+  if (phase === 'codes' && codes && pendingSession) {
     return (
       <AuthShell
         kicker={t('twofa.codes_kicker')}
@@ -111,8 +85,6 @@ export function EnrollTotpScreen() {
       </AuthShell>
     )
   }
-
-  const ready = method === 'totp' ? totp !== null : mailed !== null
 
   return (
     <AuthShell
@@ -130,72 +102,32 @@ export function EnrollTotpScreen() {
       >
         <AuthError message={error} />
 
-        {!method ? (
-          <MethodChoice onPick={setMethod} />
-        ) : ready ? (
-          <>
-            {method === 'totp' && totp && (
-              <>
-                <div className="fx-auth-qr">
-                  {/*
-                    The QR is rendered by the server (/2fa/totp/qr.png). It keeps
-                    the base32 seed out of any JavaScript QR library and adds no
-                    frontend dependency; the endpoint sends Cache-Control:
-                    no-store, because the image IS the secret in visual form.
-                  */}
-                  <img src={totp.qr_url} alt={t('twofa.qr_alt')} width={240} height={240} />
-                </div>
-
-                <button
-                  type="button"
-                  className="fx-auth-link"
-                  onClick={() => setShowSecret((v) => !v)}
-                  aria-expanded={showSecret}
-                >
-                  {showSecret ? t('twofa.hide_secret') : t('twofa.cannot_scan')}
-                </button>
-                {showSecret && (
-                  <p className="fx-auth-secret" data-testid="totp-secret">
-                    {totp.secret}
-                  </p>
-                )}
-              </>
-            )}
-
-            {method === 'email' && mailed && (
-              <p className="fx-auth-hint">
-                {t('twofa.enroll_email_sent', { account: mailed.account })}
-              </p>
-            )}
-
-            <p className="fx-auth-hint">
-              {method === 'totp' ? t('twofa.enter_code_hint') : t('twofa.enter_mailed_hint')}
-            </p>
-            <OtpInput
-              value={code}
-              onChange={setCode}
-              onComplete={(full) => void submit(full)}
-              disabled={busy}
-              autoFocus
-              invalid={Boolean(error)}
-            />
-
-            <AuthSubmit busy={busy} disabled={code.length < OTP_LENGTH}>
-              {t('twofa.confirm')}
-            </AuthSubmit>
-          </>
-        ) : (
-          !error && (
-            <p className="fx-auth-notice" role="status">
-              <span className="fx-auth-spinner" aria-hidden="true" /> {t('auth.loading')}
-            </p>
-          )
+        {phase === 'choose' && <MethodChoice onPick={setMethod} />}
+        {phase === 'confirm' && (
+          <EnrollReadyForm
+            method={method!}
+            totp={totp}
+            mailed={mailed}
+            code={code}
+            busy={busy}
+            error={error}
+            showSecret={showSecret}
+            onCode={setCode}
+            onToggleSecret={() => setShowSecret((v) => !v)}
+            onComplete={(full) => void submit(full)}
+          />
+        )}
+        {phase === 'enroll' && !error && (
+          <p className="fx-auth-notice" role="status">
+            <span className="fx-auth-spinner" aria-hidden="true" /> {t('auth.loading')}
+          </p>
         )}
 
         <div className="fx-auth-alt">
           {/*
-            No "skip". The only way out is signing out — the policy exists so
-            that an administrator password alone is never a session.
+            No "skip" (enrollMaySkip is false by construction). The only way
+            out is signing out — the policy exists so that an administrator
+            password alone is never a session.
           */}
           <button type="button" className="fx-auth-link" onClick={() => void signOut()}>
             {t('auth_otp.cancel')}
@@ -203,6 +135,85 @@ export function EnrollTotpScreen() {
         </div>
       </form>
     </AuthShell>
+  )
+}
+
+function EnrollReadyForm({
+  method,
+  totp,
+  mailed,
+  code,
+  busy,
+  error,
+  showSecret,
+  onCode,
+  onToggleSecret,
+  onComplete,
+}: {
+  method: FactorMethod
+  totp: TotpEnrollment | null
+  mailed: EmailFactorEnrollment | null
+  code: string
+  busy: boolean
+  error: string
+  showSecret: boolean
+  onCode: (next: string) => void
+  onToggleSecret: () => void
+  onComplete: (full: string) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <>
+      {method === 'totp' && totp && (
+        <>
+          <div className="fx-auth-qr">
+            {/*
+              The QR is rendered by the server (/2fa/totp/qr.png). It keeps
+              the base32 seed out of any JavaScript QR library and adds no
+              frontend dependency; the endpoint sends Cache-Control:
+              no-store, because the image IS the secret in visual form.
+            */}
+            <img src={totp.qr_url} alt={t('twofa.qr_alt')} width={240} height={240} />
+          </div>
+
+          <button
+            type="button"
+            className="fx-auth-link"
+            onClick={onToggleSecret}
+            aria-expanded={showSecret}
+          >
+            {showSecret ? t('twofa.hide_secret') : t('twofa.cannot_scan')}
+          </button>
+          {showSecret && (
+            <p className="fx-auth-secret" data-testid="totp-secret">
+              {totp.secret}
+            </p>
+          )}
+        </>
+      )}
+
+      {method === 'email' && mailed && (
+        <p className="fx-auth-hint">
+          {t('twofa.enroll_email_sent', { account: mailed.account })}
+        </p>
+      )}
+
+      <p className="fx-auth-hint">
+        {method === 'totp' ? t('twofa.enter_code_hint') : t('twofa.enter_mailed_hint')}
+      </p>
+      <OtpInput
+        value={code}
+        onChange={onCode}
+        onComplete={onComplete}
+        disabled={busy}
+        autoFocus
+        invalid={Boolean(error)}
+      />
+
+      <AuthSubmit busy={busy} disabled={code.length < OTP_LENGTH}>
+        {t('twofa.confirm')}
+      </AuthSubmit>
+    </>
   )
 }
 
