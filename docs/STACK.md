@@ -18,9 +18,9 @@
 | pquerna/otp | `v1.5.0` | TOTP (RFC 6238) — `internal/auth/totp.go`. Pulls `boombuler/barcode` as an INDIRECT dep for the server-side QR PNG. Parameters are pinned to SHA1/6/30 in code: authenticator apps silently ignore non-default values and then produce codes that never validate. |
 | golang.org/x/crypto (bcrypt) | `v0.56.0` | Folder-password hashing — `internal/folders/password.go`. Already in `go.sum` as indirect before this landed. GO-2026-5932 (openpgp subtree "unmaintained") is module-level only: no foldex code imports openpgp, govulncheck reports 0 reachable vulns and runs in CI — if OpenPGP is ever needed use ProtonMail/go-crypto instead. |
 | Vite / React / TS / Vitest / jsdom | `^8 / ^19.2 / ^7 / ^5 / ^30` | TypeScript 7.0.2; jsdom 30.0.1. `undici` is pinned at `8.10.2` as both a direct devDependency and `overrides.undici` so a transitive cannot silently revert (jsdom 30 asks for `^8.9`). Vitest 5 + `@vitest/coverage-v8` 5 already landed (DEP-PRI-001). |
-| MUI | `^9.0` | **only** `createTheme` + `ThemeProvider`. Visual lives in `web/src/styles/foldex.css`. |
+| MUI | `9.4.0` (exact) | **only** `createTheme` + `ThemeProvider`. Visual lives in `web/src/styles/foldex.css`. |
 | Tiptap | `3.31.3` (`@tiptap/react` + `@tiptap/starter-kit` + `@tiptap/extension-image` + `@tiptap/extension-placeholder` + `@tiptap/extension-text-align` + `@tiptap/extension-text-style`) | Rich-text editor for notes, with a formatting toolbar (`NoteToolbar.tsx`). Exact peers stay in lockstep (GHSA-cp6q-959q-f8rh). `@tiptap/extension-link` and Underline are NOT separate deps — StarterKit v3 bundles both. `@tiptap/extension-text-style` bundles Color + FontFamily. The toolbar's output (text-align/color/font-family styles) MUST stay in lockstep with the server sanitizer allowlist (§4). |
 | react-i18next | `^17` (wraps i18next `^26`) | en (source-of-truth) / pt / es. New visible strings MUST go through `t()` and ship in all 3 locales. Plurals use `_one`/`_other` (not legacy `_plural`). |
-| TanStack Query | `^5.101` | |
+| TanStack Query | `^5.102` | |
 | Testing Library / vite-plugin-pwa | `^16.3 / ^1.3` | |
 | Package manager | **bun ≥ 1.3** | bun's resolver handles platform-specific packages more robustly than npm against a misconfigured mirror. |
