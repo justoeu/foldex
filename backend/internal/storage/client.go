@@ -32,6 +32,8 @@ type Client struct {
 	logger *slog.Logger
 
 	listFn func(ctx context.Context) <-chan listedObject
+	getFn  func(ctx context.Context, key string) (io.ReadCloser, error)
+	statFn func(ctx context.Context, key string) error // test seam: OpenObject must not call this after listing Size
 
 	listMu    sync.Mutex
 	listItems []listedObject
@@ -372,15 +374,16 @@ func (c *Client) WalkObjects(ctx context.Context, prefix string, visit func(Obje
 // Unlike GetObject which buffers the whole payload in memory, this is the
 // path for large objects (e.g. screenshots that the backup module pipes
 // straight into a zip entry).
+//
+// No HEAD probe: WalkObjects already returns Size, and export compares the
+// streamed byte count against that listing. A missing key surfaces on Read.
 func (c *Client) OpenObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	if c.getFn != nil {
+		return c.getFn(ctx, key)
+	}
 	obj, err := c.mc.GetObject(ctx, c.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("storage: open object %q: %w", key, err)
-	}
-	// Probe stat so callers see a "not found" error here, not mid-stream.
-	if _, err := obj.Stat(); err != nil {
-		_ = obj.Close()
-		return nil, fmt.Errorf("storage: stat object %q: %w", key, err)
 	}
 	return obj, nil
 }

@@ -23,6 +23,46 @@ import (
 // directly; the full PutObject/GetObject surface is covered by
 // client_integration_test.go against a real RustFS.
 
+func TestExport_DoesNotStatObjectsAlreadyListed(t *testing.T) {
+	payload := []byte("img-bytes")
+	var stats atomic.Int64
+	objects := []listedObject{
+		{Key: "images/1.jpg", Size: int64(len(payload))},
+		{Key: "screenshots/2.jpg", Size: int64(len(payload))},
+	}
+	c := &Client{
+		listFn: func(ctx context.Context) <-chan listedObject {
+			ch := make(chan listedObject, len(objects))
+			for _, object := range objects {
+				ch <- object
+			}
+			close(ch)
+			return ch
+		},
+		statFn: func(context.Context, string) error {
+			stats.Add(1)
+			return nil
+		},
+		getFn: func(context.Context, string) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(payload)), nil
+		},
+	}
+
+	items, err := c.collectListing(context.Background())
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	for _, object := range items {
+		require.Positive(t, object.Size, "listing already returned Size")
+		rc, err := c.OpenObject(context.Background(), object.Key)
+		require.NoError(t, err)
+		got, err := io.ReadAll(rc)
+		_ = rc.Close()
+		require.NoError(t, err)
+		assert.Equal(t, payload, got)
+	}
+	assert.Zero(t, stats.Load(), "export must not StatObject per key after List already returned Size")
+}
+
 func TestStorageStats_DoesNotRescanWholeBucketOnEveryGet(t *testing.T) {
 	const objectCount = 20
 	objects := make([]listedObject, 0, objectCount+1)

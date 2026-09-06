@@ -63,8 +63,9 @@ const linkFrom = `
 // rowScanner is the Scan method shared by pgx.Row and pgx.Rows. Letting one
 // helper read into a *Link from either single-row or multi-row results keeps
 // the 21-column scan list in exactly one place — adding a column used to mean
-// editing four near-identical Scan(...) blocks (Get, GetByURL, List,
-// ListRecentChanges) and silently dropping one was a latent bug.
+// editing three near-identical Scan(...) blocks (Get, GetByURL, List)
+// and silently dropping one was a latent bug. ListRecentChanges uses a
+// narrower projection and does not go through scanLink.
 type rowScanner interface {
 	Scan(dest ...any) error
 }
@@ -571,13 +572,7 @@ func (r *Repository) ListRecentChanges(ctx context.Context, uid authctx.UserID, 
 	if sinceSeconds <= 0 {
 		sinceSeconds = 7 * 24 * 60 * 60
 	}
-	sql := `SELECT ` + linkColumns + linkFrom + `
-        WHERE l.user_id = $1
-          AND l.last_change_detected_at IS NOT NULL
-          AND l.last_change_detected_at > now() - make_interval(secs => $2::int)
-          AND ` + folders.SQLNotInLockedFolder("l") + `
-        ORDER BY l.last_change_detected_at DESC
-        LIMIT $3`
+	sql := recentChangesSQL()
 	rows, err := r.pool.Query(ctx, sql, int64(uid), sinceSeconds, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list recent changes: %w", err)
@@ -585,32 +580,26 @@ func (r *Repository) ListRecentChanges(ctx context.Context, uid authctx.UserID, 
 	defer rows.Close()
 
 	links := make([]Link, 0)
-	ids := []int64{}
 	for rows.Next() {
 		var l Link
-		if err := scanLink(rows, &l); err != nil {
+		if err := rows.Scan(&l.ID, &l.URL, &l.Title, &l.Slug, &l.LastChangeDetectedAt); err != nil {
 			return nil, err
 		}
 		l.Tags = []Tag{}
 		links = append(links, l)
-		ids = append(ids, l.ID)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(ids) == 0 {
-		return links, nil
-	}
-	tagsByLink, err := r.tagsFor(ctx, uid, ids)
-	if err != nil {
-		return nil, err
-	}
-	for i := range links {
-		if t, ok := tagsByLink[links[i].ID]; ok {
-			links[i].Tags = t
-		}
-	}
-	return links, nil
+	return links, rows.Err()
+}
+
+func recentChangesSQL() string {
+	return `SELECT l.id, l.url, l.title, l.slug, l.last_change_detected_at
+        FROM link l
+        WHERE l.user_id = $1
+          AND l.last_change_detected_at IS NOT NULL
+          AND l.last_change_detected_at > now() - make_interval(secs => $2::int)
+          AND ` + folders.SQLNotInLockedFolder("l") + `
+        ORDER BY l.last_change_detected_at DESC
+        LIMIT $3`
 }
 
 func (r *Repository) tagsFor(ctx context.Context, uid authctx.UserID, linkIDs []int64) (map[int64][]Tag, error) {

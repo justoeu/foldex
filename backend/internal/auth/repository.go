@@ -205,9 +205,21 @@ func (r *Repository) GetUser(ctx context.Context, id authctx.UserID) (User, erro
 	return u, nil
 }
 
-// ListUsers returns every account, oldest first. Admin-only surface.
-func (r *Repository) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := r.pool.Query(ctx, `SELECT `+userColumns+` FROM app_user ORDER BY id ASC`)
+// adminListCeiling is the compiled page cap for /api/admin/users and /invites.
+// The SPA does not paginate those lists; without a ceiling a large instance
+// would JSON every account in one response.
+const adminListCeiling = 200
+
+// ListUsers returns accounts oldest first, capped at limit (ceiling 200).
+// afterID is an exclusive cursor on app_user.id; 0 means the first page.
+func (r *Repository) ListUsers(ctx context.Context, limit int, afterID int64) ([]User, error) {
+	if limit <= 0 || limit > adminListCeiling {
+		limit = adminListCeiling
+	}
+	rows, err := r.pool.Query(ctx, `SELECT `+userColumns+` FROM app_user
+		WHERE ($2::bigint = 0 OR app_user.id > $2)
+		ORDER BY app_user.id ASC
+		LIMIT $1`, limit, afterID)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -978,13 +990,17 @@ func (r *Repository) LookupInvite(ctx context.Context, rawToken string) (Invite,
 
 // ListInvites returns the open invitations for the admin screen. The token
 // hash is never selected — there is nothing useful an admin could do with it,
-// and the raw value is unrecoverable by design.
-func (r *Repository) ListInvites(ctx context.Context) ([]Invite, error) {
+// and the raw value is unrecoverable by design. Capped at limit (ceiling 200).
+func (r *Repository) ListInvites(ctx context.Context, limit int) ([]Invite, error) {
+	if limit <= 0 || limit > adminListCeiling {
+		limit = adminListCeiling
+	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, email, role, created_at, expires_at, accepted_at
 		FROM invite
 		WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
-		ORDER BY created_at DESC`)
+		ORDER BY created_at DESC
+		LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list invites: %w", err)
 	}
