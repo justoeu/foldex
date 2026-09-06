@@ -1446,8 +1446,12 @@ auditada, aparecia desmarcada na tela — e não valia ali. Pior: os gates que `
 à mão (admin, folders, policy) **honravam**, então a revogação ficava PARCIALMENTE
 aplicada, o que se lê como instabilidade e não como bug. O default `nil = compilada`, que
 existe para os testes, foi exatamente o que permitiu esquecer. `TestServerDepsCarriesTheLiveGrants`
-percorre o AST de `main.go` e recusa o literal sem o campo — nenhum teste de unidade
-consegue ver isso, porque o defeito é um campo ausente num composite literal que compila.
+percorre os `.go` de produção em `cmd/server` (não só `main.go`; ignora `_test.go`) e recusa
+`nil`, `roleperm.Default()` e o campo ausente — o valor vivo é `h.grants` de `loadGrants` →
+`roleperm.NewRepository`, ou um ident local atribuído a partir dele. O literal vive em
+`assembleDeps` (`boot.go`) depois do extract; percorrer só `main.go` é como o guard ficou
+mudo. Nenhum teste de unidade consegue ver isso, porque o defeito é um campo ausente num
+composite literal que compila.
 
 **`AdminHandler.Mount` capturava a matriz como valor**, congelando os gates de `/api/admin`
 no snapshot do boot. Mesma direção de falha (permissão a mais), mesma causa (uma indireção
