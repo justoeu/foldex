@@ -56,6 +56,7 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x@y/z")
 	t.Setenv("BACKEND_PORT", "")
 	t.Setenv("PREVIEW_WORKER_CONCURRENCY", "")
+	t.Setenv("CHANGECHECK_WORKER_CONCURRENCY", "")
 	t.Setenv("PREVIEW_FETCH_TIMEOUT_SEC", "")
 	t.Setenv("CORS_ORIGINS", "")
 
@@ -63,6 +64,8 @@ func TestLoad_Defaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "9089", cfg.Port)
 	assert.Equal(t, 4, cfg.PreviewConcurrency)
+	assert.Equal(t, 2, cfg.ChangeCheckConcurrency)
+	assert.LessOrEqual(t, cfg.PreviewConcurrency+cfg.ChangeCheckConcurrency, 8)
 	assert.Equal(t, 5, cfg.PreviewTimeoutSec)
 	assert.Equal(t, []string{"*"}, cfg.CORSOrigins)
 }
@@ -70,14 +73,14 @@ func TestLoad_Defaults(t *testing.T) {
 func TestLoad_Overrides(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x@y/z")
 	t.Setenv("BACKEND_PORT", "9090")
-	t.Setenv("PREVIEW_WORKER_CONCURRENCY", "8")
+	t.Setenv("PREVIEW_WORKER_CONCURRENCY", "5")
 	t.Setenv("PREVIEW_FETCH_TIMEOUT_SEC", "10")
 	t.Setenv("CORS_ORIGINS", "http://localhost:9088, https://foldex.example")
 
 	cfg, err := Load()
 	require.NoError(t, err)
 	assert.Equal(t, "9090", cfg.Port)
-	assert.Equal(t, 8, cfg.PreviewConcurrency)
+	assert.Equal(t, 5, cfg.PreviewConcurrency)
 	assert.Equal(t, 10, cfg.PreviewTimeoutSec)
 	assert.Equal(t, []string{"http://localhost:9088", "https://foldex.example"}, cfg.CORSOrigins)
 }
@@ -97,8 +100,26 @@ func TestLoad_ClampsWorkerConcurrencyAtResourceCeiling(t *testing.T) {
 
 	cfg, err := Load()
 	require.NoError(t, err)
-	assert.Equal(t, 8, cfg.PreviewConcurrency)
-	assert.Equal(t, 8, cfg.ChangeCheckConcurrency)
+	assert.LessOrEqual(t, cfg.PreviewConcurrency, 8)
+	assert.LessOrEqual(t, cfg.ChangeCheckConcurrency, 8)
+}
+
+func TestWorkerConcurrencySumStaysUnderPoolHeadroom(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x@y/z")
+	t.Setenv("PREVIEW_WORKER_CONCURRENCY", "8")
+	t.Setenv("CHANGECHECK_WORKER_CONCURRENCY", "8")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, cfg.PreviewConcurrency, 1)
+	assert.GreaterOrEqual(t, cfg.ChangeCheckConcurrency, 1)
+
+	// Pool MaxConns=16; HTTP keeps ≥50%, so preview+changecheck ≤ 8.
+	const httpHeadroom = 16 / 2
+	sum := cfg.PreviewConcurrency + cfg.ChangeCheckConcurrency
+	assert.LessOrEqual(t, sum, httpHeadroom,
+		"preview=%d changecheck=%d sum=%d fills the 16-conn pool; HTTP headroom is %d",
+		cfg.PreviewConcurrency, cfg.ChangeCheckConcurrency, sum, httpHeadroom)
 }
 
 func TestLoad_UsesDefaultForNegativeChangeCheckConcurrency(t *testing.T) {
