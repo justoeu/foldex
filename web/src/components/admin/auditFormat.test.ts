@@ -5,6 +5,11 @@ import {
 } from './auditFormat'
 import type { AuditEntry } from '../../api/admin'
 
+// The browser tsconfig has no @types/node on purpose. This file is the only
+// consumer of Node's TZ pin: UTC-midnight buckets must not shift a civil day
+// west of Greenwich (INV-180).
+declare const process: { env: { TZ?: string } }
+
 describe('delta', () => {
   // The tone is the DIRECTION OF CONCERN, not the sign. Colouring by sign
   // alone paints a drop in failed sign-ins red, which is the opposite of what

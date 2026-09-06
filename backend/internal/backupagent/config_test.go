@@ -73,9 +73,9 @@ func TestBackupAgentLoadMatrix(t *testing.T) {
 		{
 			name: "drill with identity",
 			env: map[string]string{
-				"BACKUP_DRILL_AT":           "04:30 sun",
-				"BACKUP_AGE_IDENTITY_FILE":  "/run/secrets/backup-age-identity",
-				"BACKUP_AGE_RECIPIENTS":     agePub,
+				"BACKUP_DRILL_AT":          "04:30 sun",
+				"BACKUP_AGE_IDENTITY_FILE": "/run/secrets/backup-age-identity",
+				"BACKUP_AGE_RECIPIENTS":    agePub,
 			},
 			check: func(t *testing.T, c Config) {
 				assert.True(t, c.DrillAt.Enabled())
