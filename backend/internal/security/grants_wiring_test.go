@@ -31,9 +31,30 @@ import (
 // guards here. The literal used to live in main.go; after the boot extract it
 // lives next to loadGrants. Walking only main.go is how this guard went silent.
 func TestServerDepsCarriesTheLiveGrants(t *testing.T) {
-	files := parseServerCmd(t)
+	w := analyzeGrantsWiring(parseServerCmd(t))
+	// Both halves are asserted. Without the first, a rename of Deps makes the
+	// whole test pass while checking nothing.
+	require.True(t, w.found, "fixture precondition: cmd/server builds a server.Deps literal")
+	require.True(t, w.wired,
+		"cmd/server builds server.Deps with no `Grants`, or with a value "+
+			"that is not a live store (`nil`, or a compiled matrix). The router "+
+			"then enforces the COMPILED matrix on every gate mounted there — "+
+			"/links, /notes, /tags, /import, /backup/restore — so an owner's "+
+			"revocation commits, audits, renders as unticked and changes nothing "+
+			"on those routes. Set `Grants: grantsRepo` or `Grants: h.grants` from loadGrants.")
+	require.True(t, w.liveStore,
+		"`Grants` is wired, but the value is not a roleperm.NewRepository — the field "+
+			"has to carry the live store, not merely be present")
+}
 
-	var found, wired bool
+type grantsWiring struct {
+	found     bool
+	wired     bool
+	liveStore bool
+}
+
+func analyzeGrantsWiring(files []*ast.File) grantsWiring {
+	var out grantsWiring
 	var grantsValue ast.Expr
 	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
@@ -49,7 +70,7 @@ func TestServerDepsCarriesTheLiveGrants(t *testing.T) {
 			if !ok || pkg.Name != "server" {
 				return true
 			}
-			found = true
+			out.found = true
 			for _, el := range lit.Elts {
 				kv, ok := el.(*ast.KeyValueExpr)
 				if !ok {
@@ -68,28 +89,17 @@ func TestServerDepsCarriesTheLiveGrants(t *testing.T) {
 				// a local ident (not `nil`) or `h.grants` filled by loadGrants.
 				// A call expression (`roleperm.Default()`) is neither.
 				if liveGrantsValue(kv.Value) {
-					wired = true
+					out.wired = true
 					grantsValue = kv.Value
 				}
 			}
 			return true
 		})
 	}
-
-	// Both halves are asserted. Without the first, a rename of Deps makes the
-	// whole test pass while checking nothing.
-	require.True(t, found, "fixture precondition: cmd/server builds a server.Deps literal")
-	require.True(t, wired,
-		"cmd/server builds server.Deps with no `Grants`, or with a value "+
-			"that is not a live store (`nil`, or a compiled matrix). The router "+
-			"then enforces the COMPILED matrix on every gate mounted there — "+
-			"/links, /notes, /tags, /import, /backup/restore — so an owner's "+
-			"revocation commits, audits, renders as unticked and changes nothing "+
-			"on those routes. Set `Grants: grantsRepo` or `Grants: h.grants` from loadGrants.")
-
-	require.True(t, grantsValueComesFromNewRepository(files, grantsValue),
-		"`Grants` is wired, but the value is not a roleperm.NewRepository — the field "+
-			"has to carry the live store, not merely be present")
+	if out.wired {
+		out.liveStore = grantsValueComesFromNewRepository(files, grantsValue)
+	}
+	return out
 }
 
 func parseServerCmd(t *testing.T) []*ast.File {
@@ -112,6 +122,111 @@ func parseServerCmd(t *testing.T) []*ast.File {
 	return files
 }
 
+func parseSnippet(t *testing.T, src string) []*ast.File {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "snippet.go", src, 0)
+	require.NoError(t, err)
+	return []*ast.File{file}
+}
+
+func TestGrantsWiringSnippets(t *testing.T) {
+	tests := []struct {
+		name      string
+		src       string
+		found     bool
+		wired     bool
+		liveStore bool
+	}{
+		{
+			name: "current-good loadGrants",
+			src: `package p
+func f() {
+	h.grants = loadGrants(h)
+	_ = server.Deps{Grants: h.grants}
+}
+func loadGrants(h *handles) *roleperm.Repository {
+	grantsRepo := roleperm.NewRepository(h.pool)
+	return grantsRepo
+}
+`,
+			found: true, wired: true, liveStore: true,
+		},
+		{
+			name: "missing Grants field",
+			src: `package p
+func f() {
+	_ = server.Deps{Pool: p}
+}
+`,
+			found: true, wired: false, liveStore: false,
+		},
+		{
+			name: "Grants nil",
+			src: `package p
+func f() {
+	_ = server.Deps{Grants: nil}
+}
+`,
+			found: true, wired: false, liveStore: false,
+		},
+		{
+			name: "Grants Default",
+			src: `package p
+func f() {
+	_ = server.Deps{Grants: roleperm.Default()}
+}
+`,
+			found: true, wired: false, liveStore: false,
+		},
+		{
+			name: "Grants other ident",
+			src: `package p
+func f() {
+	other := somethingElse()
+	_ = server.Deps{Grants: other}
+}
+`,
+			found: true, wired: true, liveStore: false,
+		},
+		{
+			// The call in the body is not the store. Returning Default after
+			// discarding NewRepository used to pass because the helper only
+			// asked whether the call appeared.
+			name: "loadGrants discards NewRepository",
+			src: `package p
+func f() {
+	h.grants = loadGrants(h)
+	_ = server.Deps{Grants: h.grants}
+}
+func loadGrants(h *handles) *roleperm.Repository {
+	_ = roleperm.NewRepository(p)
+	return roleperm.Default()
+}
+`,
+			found: true, wired: true, liveStore: false,
+		},
+		{
+			name: "old inline NewRepository",
+			src: `package p
+func f() {
+	grantsRepo := roleperm.NewRepository(p)
+	_ = server.Deps{Grants: grantsRepo}
+}
+`,
+			found: true, wired: true, liveStore: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := analyzeGrantsWiring(parseSnippet(t, tc.src))
+			require.Equal(t, tc.found, w.found, "found")
+			require.Equal(t, tc.wired, w.wired, "wired")
+			require.Equal(t, tc.liveStore, w.liveStore, "liveStore")
+		})
+	}
+}
+
 func liveGrantsValue(v ast.Expr) bool {
 	switch x := v.(type) {
 	case *ast.Ident:
@@ -129,7 +244,7 @@ func grantsValueComesFromNewRepository(files []*ast.File, v ast.Expr) bool {
 	case *ast.Ident:
 		return identAssignedByRolepermNewRepository(files, x.Name)
 	case *ast.SelectorExpr:
-		return selectorFilledByLoadGrants(files) && funcCallsRolepermNewRepository(files, "loadGrants")
+		return selectorFilledByLoadGrants(files) && loadGrantsReturnsNewRepository(files)
 	default:
 		return false
 	}
@@ -192,21 +307,47 @@ func selectorFilledByLoadGrants(files []*ast.File) bool {
 	return false
 }
 
-func funcCallsRolepermNewRepository(files []*ast.File, name string) bool {
+// loadGrantsReturnsNewRepository is true only when the last return of
+// loadGrants is roleperm.NewRepository itself, or an ident assigned from
+// that call. A NewRepository in the body that is discarded (and Default
+// returned) is the hole this used to miss.
+func loadGrantsReturnsNewRepository(files []*ast.File) bool {
 	for _, file := range files {
 		for _, d := range file.Decls {
 			fn, ok := d.(*ast.FuncDecl)
-			if !ok || fn.Name.Name != name || fn.Recv != nil || fn.Body == nil {
+			if !ok || fn.Name.Name != "loadGrants" || fn.Recv != nil || fn.Body == nil {
 				continue
 			}
-			found := false
+			fromNewRepo := map[string]bool{}
+			var lastReturn ast.Expr
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				if isRolepermNewRepository(n) {
-					found = true
+				switch x := n.(type) {
+				case *ast.AssignStmt:
+					if len(x.Lhs) != 1 || len(x.Rhs) != 1 {
+						return true
+					}
+					id, ok := x.Lhs[0].(*ast.Ident)
+					if !ok || id.Name == "_" {
+						return true
+					}
+					if isRolepermNewRepository(x.Rhs[0]) {
+						fromNewRepo[id.Name] = true
+					}
+				case *ast.ReturnStmt:
+					if len(x.Results) == 1 {
+						lastReturn = x.Results[0]
+					}
 				}
 				return true
 			})
-			return found
+			if lastReturn == nil {
+				return false
+			}
+			if isRolepermNewRepository(lastReturn) {
+				return true
+			}
+			id, ok := lastReturn.(*ast.Ident)
+			return ok && fromNewRepo[id.Name]
 		}
 	}
 	return false
