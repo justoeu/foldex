@@ -15,9 +15,9 @@ import (
 // order to ENROLL it as a factor.
 //
 // A distinct purpose, not a reuse of login_2fa, and the separation is the whole
-// point: ConsumeEmailOTP matches on (user, purpose, hash), so a shared purpose
-// would let a code mailed at a login prompt be redeemed to install a new factor
-// — and a code mailed to install one be redeemed to sign in.
+// point: Complete2FA and ConsumeSecondFactor match on (user, purpose, hash), so
+// a shared purpose would let a code mailed at a login prompt be redeemed to
+// install a new factor — and a code mailed to install one be redeemed to sign in.
 const OTPPurposeEnrollEmail2FA = "enroll_email_2fa"
 
 // ErrFactorAlreadyConfirmed means the account already holds this factor.

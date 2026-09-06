@@ -615,7 +615,7 @@ func TestRepository_ListByFolderANDTag(t *testing.T) {
 
 // TestRepository_GoEndpointIsOnlyClickInserter locks CLAUDE.md §4: `click_log`
 // is the single source of truth for clicks AND `/go/:id` is the only path
-// that inserts into it. Reading a link via Get/List/GetBySlug must NOT bump
+// that inserts into it. Reading a link via Get/List/GetByURL must NOT bump
 // the count.
 func TestRepository_GoEndpointIsOnlyClickInserter(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
@@ -624,7 +624,7 @@ func TestRepository_GoEndpointIsOnlyClickInserter(t *testing.T) {
 
 	// Exercise every read path that is NOT /go/:id.
 	_, _ = lrepo.Get(ctx, uid, link.ID)
-	_, _ = lrepo.GetBySlug(ctx, uid, link.Slug)
+	_, _ = lrepo.GetByURL(ctx, uid, link.URL)
 	_, _ = lrepo.List(ctx, uid, links.ListQuery{})
 
 	got, err := lrepo.Get(ctx, uid, link.ID)

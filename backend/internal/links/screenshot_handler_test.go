@@ -1287,10 +1287,12 @@ func TestNewScreenshotHandler(t *testing.T) {
 	sc := &fakeScreenshotter{}
 	up := newFakeUploader()
 	logger := newTestLogger()
-	sh := NewScreenshotHandler(nil, sc, up, allowAllPolicy, logger)
+	repo := newFakeRepo()
+	sh := NewScreenshotHandler(repo, sc, up, allowAllPolicy, logger)
 	require.NotNil(t, sh)
 	assert.Equal(t, sc, sh.screenshotter)
 	assert.Equal(t, up, sh.storage)
+	assert.Equal(t, screenshotRepo(repo), sh.repo)
 }
 
 // --- cross-tenant object-store tests ---

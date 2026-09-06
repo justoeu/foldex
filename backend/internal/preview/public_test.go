@@ -2,13 +2,49 @@ package preview
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // IsPublicURL is a thin wrapper around the SSRF helpers — these checks lock in
 // the contract used by the screenshot fallback gate (never burn Chrome on a
 // host that can't reasonably exist on the public internet).
+
+func TestIsPublicURL_DelegatesToNetpolicy(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "public.go", nil, 0)
+	require.NoError(t, err)
+	var calls []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "IsPublicURL" || fn.Body == nil {
+			return true
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			calls = append(calls, pkg.Name+"."+sel.Sel.Name)
+			return true
+		})
+		return false
+	})
+	require.Equal(t, []string{"netpolicy.IsPublicURL"}, calls,
+		"preview.IsPublicURL must stay a documented alias of netpolicy (INV-079); do not duplicate SSRF guards")
+}
 
 func TestIsPublicURL_RejectsInvalidScheme(t *testing.T) {
 	if IsPublicURL(context.Background(), "file:///etc/passwd") {

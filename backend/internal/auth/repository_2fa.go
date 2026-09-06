@@ -768,21 +768,6 @@ func confirmTOTPRowTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID,
 	return ErrTOTPEnrollmentChanged
 }
 
-func (r *Repository) ConsumeTOTPProof(ctx context.Context, uid authctx.UserID, proof TOTPProof) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("consume totp proof begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := consumeTOTPProofTx(ctx, tx, uid, proof); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("consume totp proof commit: %w", err)
-	}
-	return nil
-}
-
 // Complete2FA spends exactly one accepted proof and its challenge, then creates
 // the session. A failure in any later write restores both bearer credentials.
 func (r *Repository) Complete2FA(ctx context.Context, ch Challenge, proof challengeProof,
@@ -1164,25 +1149,6 @@ func replaceRecoveryCodesTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 	return nil
 }
 
-// ConsumeRecoveryCode spends one code, or reports ErrBadCredentials.
-//
-// The user_id predicate is not redundant with the unique hash index: without
-// it, a code belonging to another account would verify. The conditional UPDATE
-// makes single-use atomic — two parallel requests with the same code produce
-// one success and one ErrBadCredentials, never two successes.
-func (r *Repository) ConsumeRecoveryCode(ctx context.Context, uid authctx.UserID, codeHash []byte) error {
-	ct, err := r.pool.Exec(ctx, `
-		UPDATE recovery_code SET used_at = now()
-		WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL`, int64(uid), codeHash)
-	if err != nil {
-		return fmt.Errorf("consume recovery code: %w", err)
-	}
-	if ct.RowsAffected() == 0 {
-		return ErrBadCredentials
-	}
-	return nil
-}
-
 // CountRecoveryCodes reports how many remain unused, for the settings screen's
 // "3 of 10 remaining" nudge.
 func (r *Repository) CountRecoveryCodes(ctx context.Context, uid authctx.UserID) (int, error) {
@@ -1285,31 +1251,6 @@ func (r *Repository) CreateEmailVerification(ctx context.Context, uid authctx.Us
 		return "", fmt.Errorf("create verification commit: %w", err)
 	}
 	return raw, nil
-}
-
-// ConsumeEmailOTP spends a code for (user, purpose), or reports
-// ErrBadCredentials.
-//
-// Like the recovery-code path, single-use is enforced by the UPDATE's own
-// WHERE clause rather than by a preceding SELECT.
-func (r *Repository) ConsumeEmailOTP(ctx context.Context, uid authctx.UserID, purpose string, codeHash []byte, challengeID *int64) error {
-	// challengeID binds a login code to the exact challenge that mailed it.
-	// Without it a code issued for one sign-in attempt would satisfy another,
-	// which quietly widens the attempt budget: each challenge carries its own
-	// 5-guess cap. It is nil for verify-email, which has no challenge.
-	ct, err := r.pool.Exec(ctx, `
-		UPDATE email_otp SET consumed_at = now()
-		WHERE user_id = $1 AND purpose = $2 AND code_hash = $3
-		  AND consumed_at IS NULL AND expires_at > now()
-		  AND ($4::bigint IS NULL OR challenge_id = $4)`,
-		int64(uid), purpose, codeHash, challengeID)
-	if err != nil {
-		return fmt.Errorf("consume otp: %w", err)
-	}
-	if ct.RowsAffected() == 0 {
-		return ErrBadCredentials
-	}
-	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────

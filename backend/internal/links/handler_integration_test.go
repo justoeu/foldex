@@ -417,12 +417,6 @@ func TestRepository_Delete_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRepository_GetBySlug_NotFound(t *testing.T) {
-	ctx, uid, lrepo, _ := setup(t)
-	_, err := lrepo.GetBySlug(ctx, uid, "missing")
-	require.Error(t, err)
-}
-
 func TestHandler_GetByURL_ReturnsTheCallersRow(t *testing.T) {
 	h, repo, uid := newLinksRouter(t, &recordingEnqueuer{}, nil, nil)
 	ctx := context.Background()
