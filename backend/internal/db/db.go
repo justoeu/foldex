@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+
+	"foldex/internal/pkg/resourcebudget"
 )
 
 func New(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
@@ -33,7 +35,7 @@ func New(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 		otelpgx.WithDisableConnectionDetailsInAttributes(),
 		otelpgx.WithTracerAttributes(connAttrs(cfg.ConnConfig)...),
 	)
-	cfg.MaxConns = 16
+	cfg.MaxConns = int32(resourcebudget.PoolMaxConns)
 	cfg.MinConns = 1
 	cfg.MaxConnLifetime = 30 * time.Minute
 	cfg.MaxConnIdleTime = 10 * time.Minute

@@ -38,13 +38,8 @@ export function LinkDialog({ open, link, initialUrl, focus = 'url', defaultFolde
   const form = { ...formState, ...slugState }
   const tags = useTagPicker(open, link?.tags)
   const image = useLinkDialogImage(open, link)
-  const { existing } = useExistingLinkByURL(
-    form.url,
-    open && (!link || form.url.trim() !== link.url),
-    link?.id ?? null,
-  )
-  const duplicate = existing
   const save = useLinkDialogSubmit({
+    open,
     link,
     values: form,
     selected: tags.selected,
@@ -52,6 +47,12 @@ export function LinkDialog({ open, link, initialUrl, focus = 'url', defaultFolde
     setSaveError: form.setSaveError,
     onClose,
   })
+  const { existing } = useExistingLinkByURL(
+    form.url,
+    open && (!link || form.url.trim() !== link.url),
+    link?.id ?? save.createdId ?? null,
+  )
+  const duplicate = existing
   const dialogRef = useRef<HTMLDivElement>(null)
   useEscape(onClose, open)
   useFocusTrap(dialogRef, open)
@@ -180,7 +181,7 @@ function LinkDialogBody({
     <div className="fx-modal-body">
       <div className="fx-modal-col">
         <LinkBasicsFields form={form} duplicate={duplicate} onOpenExisting={onOpenExisting} />
-        <LinkTagsField tags={tags} />
+        <TagPicker picker={tags} i18nPrefix="link_dialog" />
         <LinkOrganizationFields form={form} link={link} defaultFolderId={defaultFolderId} />
       </div>
       <aside className="fx-modal-side">
@@ -266,10 +267,6 @@ function LinkBasicsFields({
       </label>
     </>
   )
-}
-
-function LinkTagsField({ tags }: { tags: Tags }) {
-  return <TagPicker picker={tags} i18nPrefix="link_dialog" />
 }
 
 function LinkOrganizationFields({ form, link, defaultFolderId }: { form: Form; link: Link | null; defaultFolderId?: number | null }) {

@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData, type QueryClient, type QueryKey } from '@tanstack/react-query'
 import { http } from './client'
 import { FOLDER_UNLOCK_HEADER } from './folders'
@@ -14,9 +14,7 @@ export type EntryListParams = {
   // gates GET /api/entries?folder_id=X the same way it gates the folders
   // list. Ignored when folderId is unset.
   unlockToken?: string
-  // Optional page size override (default ENTRY_PAGE_SIZE). Command palette
-  // uses a higher limit when searching so matches beyond the first page
-  // are visible (N1-NEX-015). Backend clamps to [1, 500].
+  // Optional page size override (default ENTRY_PAGE_SIZE). Backend clamps to [1, 500].
   limit?: number
 }
 
@@ -71,6 +69,23 @@ export function flattenEntries(data: EntriesCache | undefined): Entry[] {
   return out
 }
 
+// Empty-open command palette suggestions reuse whatever Home (or a folder
+// view) already fetched. A second GET /api/entries?limit=200 just to paint
+// 12 rows is the N1-NEX-009 defect.
+export function collectCachedEntries(qc: QueryClient): Entry[] {
+  const seen = new Set<string>()
+  const out: Entry[] = []
+  for (const [, data] of qc.getQueriesData<EntriesCache>({ queryKey: ['entries'] })) {
+    for (const entry of flattenEntries(data)) {
+      const id = `${entry.kind}:${entry.id}`
+      if (seen.has(id)) continue
+      seen.add(id)
+      out.push(entry)
+    }
+  }
+  return out
+}
+
 export function pendingPreviewIDs(data: EntriesCache | undefined): number[] {
   const ids = new Set<number>()
   for (const entry of flattenEntries(data)) {
@@ -103,6 +118,12 @@ export function applyPreviewStatusResults(qc: QueryClient, key: QueryKey, result
           continue
         }
         if (!result.preview_status || !result.updated_at) {
+          next.push(entry)
+          continue
+        }
+        const resultTime = Date.parse(result.updated_at)
+        const entryTime = Date.parse(entry.updated_at)
+        if (!Number.isNaN(resultTime) && !Number.isNaN(entryTime) && resultTime < entryTime) {
           next.push(entry)
           continue
         }
@@ -148,10 +169,20 @@ export function applyPreviewStatusResults(qc: QueryClient, key: QueryKey, result
 export function mapCachedEntries(qc: QueryClient, fn: (e: Entry) => Entry) {
   qc.setQueriesData<EntriesCache>({ queryKey: ['entries'] }, (old) => {
     if (!old || !Array.isArray(old.pages)) return old
-    return {
-      ...old,
-      pages: old.pages.map((page) => (page ? page.map(fn) : page)),
-    }
+    let changed = false
+    const pages = old.pages.map((page) => {
+      if (!page) return page
+      let pageChanged = false
+      const next = page.map((entry) => {
+        const mapped = fn(entry)
+        if (mapped !== entry) pageChanged = true
+        return mapped
+      })
+      if (!pageChanged) return page
+      changed = true
+      return next
+    })
+    return changed ? { ...old, pages } : old
   })
 }
 
@@ -160,9 +191,14 @@ export function mapCachedEntries(qc: QueryClient, fn: (e: Entry) => Entry) {
 // passed through untouched. Callers that already have a (Link) => Link
 // transform (e.g. every link mutation's optimistic update) can reuse the
 // same fn for BOTH ['links'] and ['entries'] caches without restating the
-// discrimination at every call site.
+// discrimination at every call site. A PATCH payload is a Link, not an
+// Entry — spreading onto `e` is what keeps `kind: 'link'` on a replace.
 export function mapCachedLinkEntries(qc: QueryClient, fn: (l: Link) => Link) {
-  mapCachedEntries(qc, (e) => (e.kind === 'link' ? { ...e, ...fn(e) } : e))
+  mapCachedEntries(qc, (e) => {
+    if (e.kind !== 'link') return e
+    const next = fn(e)
+    return next === e ? e : { ...e, ...next }
+  })
 }
 
 // Drop one entry from every ['entries'] cache. Used when a link/note moves
@@ -194,17 +230,44 @@ export function cachedEntryFolderId(qc: QueryClient, kind: Entry['kind'], id: nu
   return undefined
 }
 
+// Same idle window as LinkDialog URL autofill (INV-125): Home types into
+// workspace.q on every keystroke, and without this the query key would
+// fire one GET /api/entries per character.
+const SEARCH_DEBOUNCE_MS = 500
+
+function useDebouncedQ(q: string | undefined): string {
+  const value = q ?? ''
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    if (value === settled) return
+    const id = window.setTimeout(() => setSettled(value), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(id)
+  }, [value, settled])
+  return settled
+}
+
+function entriesRequestConfig(unlockToken: string | undefined, signal: AbortSignal) {
+  return {
+    signal,
+    headers: unlockToken ? { [FOLDER_UNLOCK_HEADER]: unlockToken } : undefined,
+  }
+}
+
 // A single backend query preserves ordering across links and notes (ADR-27).
-export function useEntries(params: EntryListParams, options?: { enabled?: boolean }) {
+export function useEntries(params: EntryListParams, options?: { enabled?: boolean; qSettled?: boolean }) {
   const pageSize = params.limit && params.limit > 0 ? Math.min(params.limit, 500) : ENTRY_PAGE_SIZE
   const queryClient = useQueryClient()
-  const key = entriesKey(params)
+  const debouncedQ = useDebouncedQ(params.q)
+  // CommandPalette already settles q (200ms). Debouncing again here made ⌘K
+  // wait ~700ms. Home still types into workspace.q on every keystroke.
+  const q = options?.qSettled ? (params.q ?? '') : debouncedQ
+  const key = entriesKey({ ...params, q })
   const batchCursor = useRef(0)
   const entries = useInfiniteQuery({
     queryKey: key,
-    queryFn: async ({ pageParam }) => {
+    queryFn: async ({ pageParam, signal }) => {
       const search = new URLSearchParams()
-      if (params.q) search.set('q', params.q)
+      if (q) search.set('q', q)
       for (const id of params.tagIds ?? []) search.append('tag', String(id))
       if (params.sort) search.set('sort', params.sort)
       if (typeof params.folderId === 'number') {
@@ -214,9 +277,7 @@ export function useEntries(params: EntryListParams, options?: { enabled?: boolea
       }
       search.set('limit', String(pageSize))
       search.set('offset', String(pageParam))
-      const { data } = await http.get<Entry[]>(`/api/entries?${search.toString()}`, {
-        headers: params.unlockToken ? { [FOLDER_UNLOCK_HEADER]: params.unlockToken } : undefined,
-      })
+      const { data } = await http.get<Entry[]>(`/api/entries?${search.toString()}`, entriesRequestConfig(params.unlockToken, signal))
       return data
     },
     initialPageParam: 0,
@@ -228,7 +289,7 @@ export function useEntries(params: EntryListParams, options?: { enabled?: boolea
   useQuery({
     queryKey: ['entries-preview-status', key],
     enabled: (options?.enabled ?? true) && pendingIDs.length > 0,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const currentIDs = pendingPreviewIDs(queryClient.getQueryData<EntriesCache>(key))
       if (batchCursor.current >= currentIDs.length) batchCursor.current = 0
       const batch = currentIDs.slice(batchCursor.current, batchCursor.current + PREVIEW_STATUS_BATCH_SIZE)
@@ -239,9 +300,7 @@ export function useEntries(params: EntryListParams, options?: { enabled?: boolea
       const search = new URLSearchParams()
       for (const id of batch) search.append('id', String(id))
       if (typeof params.folderId === 'number') search.set('folder_id', String(params.folderId))
-      const { data } = await http.get<PreviewStatusResult[]>(`/api/entries/preview-status?${search.toString()}`, {
-        headers: params.unlockToken ? { [FOLDER_UNLOCK_HEADER]: params.unlockToken } : undefined,
-      })
+      const { data } = await http.get<PreviewStatusResult[]>(`/api/entries/preview-status?${search.toString()}`, entriesRequestConfig(params.unlockToken, signal))
       applyPreviewStatusResults(queryClient, key, data)
       return data
     },

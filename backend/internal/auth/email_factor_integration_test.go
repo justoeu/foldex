@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,6 +14,7 @@ import (
 
 	"foldex/internal/auth"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/secrets"
 	"foldex/internal/testdb"
 )
 
@@ -646,6 +648,117 @@ func tokenVersionOf(t *testing.T, h *harness, email string) int {
 	require.NoError(t, h.pool.QueryRow(context.Background(),
 		`SELECT token_version FROM app_user WHERE email_normalized = $1`, email).Scan(&v))
 	return v
+}
+
+// TestDisableMissingFactorIsIdenticalForTotpAndEmail locks the remaining-factor
+// cascade to one fail-closed owner.
+//
+// DisableEmailFactor already treats a missing row as ErrNoPendingFactor and
+// leaves the epoch alone. DisableTOTP used to ignore RowsAffected, consume the
+// proof, bump token_version and revoke sibling sessions — a 204-shaped
+// credential-set mutation for a factor nobody held.
+func TestDisableMissingFactorIsIdenticalForTotpAndEmail(t *testing.T) {
+	t.Run("totp disable without totp", func(t *testing.T) {
+		h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
+		require.NoError(t, testdb.Reset(context.Background(), h.pool))
+		h.bootstrapAdmin(t, "admin@example.com", "a good password")
+		uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
+
+		c := h.client(t)
+		require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
+			"email": "user@example.com", "password": "a good password",
+		}).Code)
+		codes := enrolEmailFactor(t, h, c, "user@example.com", "a good password")
+		_ = openSiblingSession(t, h, "user@example.com", "a good password", codes[0])
+
+		assertMissingFactorDisableLeavesEpoch(t, h, uid, c, codes[1],
+			func(sid int64, version int, proof auth.SecondFactorProof) error {
+				return h.repo.DisableTOTP(context.Background(), uid, sid, version, "a good password", proof)
+			})
+	})
+
+	t.Run("email disable without email", func(t *testing.T) {
+		h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true, SMTP: true})
+		require.NoError(t, testdb.Reset(context.Background(), h.pool))
+		h.bootstrapAdmin(t, "admin@example.com", "a good password")
+		uid := testdb.SeedUserWithPassword(t, h.pool, "user@example.com", "a good password", "editor")
+		e := enrolUser(t, h, "user@example.com", "a good password")
+		_ = openSiblingSession(t, h, "user@example.com", "a good password", codeNextStep(t, e.secret))
+
+		assertMissingFactorDisableLeavesEpoch(t, h, uid, e.client, e.codes[0],
+			func(sid int64, version int, proof auth.SecondFactorProof) error {
+				return h.repo.DisableEmailFactor(context.Background(), uid, sid, version, proof)
+			})
+	})
+}
+
+func assertMissingFactorDisableLeavesEpoch(t *testing.T, h *harness, uid authctx.UserID,
+	holder *client, recovery string, disable func(int64, int, auth.SecondFactorProof) error) {
+
+	t.Helper()
+	sid := sessionIDOf(t, h, holder)
+	beforeVersion := tokenVersionOf(t, h, "user@example.com")
+	beforeSessions := liveSessionCount(t, h, uid)
+	beforeUnused := unusedRecoveryCodes(t, h, uid)
+	require.GreaterOrEqual(t, beforeSessions, 2, "the sibling session is what revocation would drop")
+
+	err := disable(sid, beforeVersion, recoveryProofOf(t, h, uid, recovery))
+	assert.ErrorIs(t, err, auth.ErrNoPendingFactor,
+		"a missing factor must fail closed on both disable paths, not succeed on one")
+	assert.Equal(t, beforeVersion, tokenVersionOf(t, h, "user@example.com"),
+		"a refused disable must not bump the credential epoch")
+	assert.Equal(t, beforeSessions, liveSessionCount(t, h, uid),
+		"a refused disable must not revoke sibling sessions")
+	assert.Equal(t, beforeUnused, unusedRecoveryCodes(t, h, uid),
+		"the proof spent inside the failed transaction must come back")
+}
+
+func openSiblingSession(t *testing.T, h *harness, email, password, code string) *client {
+	t.Helper()
+	other := h.client(t)
+	require.Equal(t, http.StatusOK, other.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": email, "password": password,
+	}).Code)
+	rec := other.do(http.MethodPost, "/api/auth/2fa/verify", map[string]string{"code": code})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, http.StatusOK, other.do(http.MethodGet, "/api/links", nil).Code)
+	return other
+}
+
+func sessionIDOf(t *testing.T, h *harness, c *client) int64 {
+	t.Helper()
+	var sid int64
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT id FROM session WHERE access_token_hash = $1`,
+		secrets.Hash(c.cookies[auth.CookieAccess])).Scan(&sid))
+	return sid
+}
+
+func liveSessionCount(t *testing.T, h *harness, uid authctx.UserID) int {
+	t.Helper()
+	var n int
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM session WHERE user_id = $1 AND revoked_at IS NULL`,
+		int64(uid)).Scan(&n))
+	return n
+}
+
+func unusedRecoveryCodes(t *testing.T, h *harness, uid authctx.UserID) int {
+	t.Helper()
+	var n int
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM recovery_code WHERE user_id = $1 AND used_at IS NULL`,
+		int64(uid)).Scan(&n))
+	return n
+}
+
+func recoveryProofOf(t *testing.T, h *harness, uid authctx.UserID, code string) auth.SecondFactorProof {
+	t.Helper()
+	normalized := strings.ReplaceAll(strings.ToUpper(code), "-", "")
+	return auth.SecondFactorProof{
+		Method: auth.MethodRecovery,
+		Digest: h.codeMAC.RecoveryCodeDigest(uid, normalized),
+	}
 }
 
 // A successful disable must settle the attempt-limit slot it reserved.

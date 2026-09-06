@@ -43,3 +43,14 @@ type Uploader interface {
 type Enqueuer interface {
 	Enqueue(linkID int64) error
 }
+
+// ErrQueueFull is returned by Enqueuer when the bounded jobs channel has no
+// slot. Callers decide to retry, log + drop, or fail the request — returning
+// an error (instead of a silent drop) is what lets delivery surface
+// backpressure without importing the worker package.
+var ErrQueueFull = errors.New("preview: queue full")
+
+// ErrStopped is returned by Enqueuer when the worker has been Stop()ped. The
+// jobs channel stays open by design (sending to a closed channel panics), so
+// this flag is the explicit signal that no further work will be processed.
+var ErrStopped = errors.New("preview: worker stopped")

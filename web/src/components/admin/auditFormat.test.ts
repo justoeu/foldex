@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
-  actorOf, blockable, dayColumns, delta, deltaPercent, distributionWidth,
+  actorOf, blockable, dayColumns, dayLabel, delta, deltaPercent, distributionWidth,
   severityClass,
 } from './auditFormat'
 import type { AuditEntry } from '../../api/admin'
+
+// The browser tsconfig has no @types/node on purpose. This file is the only
+// consumer of Node's TZ pin: UTC-midnight buckets must not shift a civil day
+// west of Greenwich (INV-180).
+declare const process: { env: { TZ?: string } }
 
 describe('delta', () => {
   // The tone is the DIRECTION OF CONCERN, not the sign. Colouring by sign
@@ -80,6 +85,41 @@ describe('dayColumns', () => {
     const [only] = dayColumns([{ day: '2026-08-27T00:00:00Z', logins: 0, failed: 0, admin: 0, content: 0 }], 'en')
     expect(only.logins).toBe(0)
     expect(only.total).toBe(0)
+  })
+})
+
+describe('dayLabel', () => {
+  // The defect is invisible on UTC: midnight UTC is that civil date. Pin a
+  // west-of-Greenwich zone so 2026-08-27T00:00:00Z localizes as the 26th.
+  const prevTZ = process.env.TZ
+  beforeAll(() => { process.env.TZ = 'America/Sao_Paulo' })
+  afterAll(() => {
+    if (prevTZ === undefined) delete process.env.TZ
+    else process.env.TZ = prevTZ
+  })
+
+  const civil = (locale: string) =>
+    new Date(2026, 7, 27).toLocaleDateString(locale, { day: '2-digit', month: '2-digit' })
+
+  // INV-180's client echo: the bucket is a civil date. Parsing the UTC
+  // midnight instant then localizing shifts the day west of Greenwich.
+  it('does not shift a UTC-midnight bucket one calendar day west', () => {
+    const iso = '2026-08-27T00:00:00Z'
+    expect(new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })).toBe('26/08')
+    expect(dayLabel(iso, 'en-GB')).toBe(civil('en-GB'))
+    expect(dayLabel(iso, 'en-GB')).toBe('27/08')
+  })
+
+  it('treats a YYYY-MM-DD prefix as the same civil date', () => {
+    expect(dayLabel('2026-08-27', 'pt-BR')).toBe(civil('pt-BR'))
+  })
+
+  it('labels the chart column with that civil date', () => {
+    const [col] = dayColumns(
+      [{ day: '2026-08-27T00:00:00Z', logins: 1, failed: 0, admin: 0, content: 0 }],
+      'en-GB',
+    )
+    expect(col.label).toBe('27/08')
   })
 })
 

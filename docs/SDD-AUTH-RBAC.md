@@ -520,7 +520,7 @@ Reversibilidade honesta: **schema volta, dados de identidade não.** Todo `app_u
   "email_otp_available": true, "expires_at": "2026-08-03T12:05:00Z" }
 ```
 
-**Erros do login** — todos `401` com o mesmo corpo `{"error":{"code":"invalid_credentials","message":"invalid e-mail or password"}}`, para e-mail inexistente, senha errada e conta desabilitada. `429 too_many_attempts` com header `Retry-After` quando um bucket estoura.
+**Erros do login** — todos `401` com o mesmo corpo `{"error":{"code":"invalid_credentials","message":"invalid e-mail or password"}}`, para e-mail inexistente, senha errada, conta desabilitada **e lockout do balde por conta**. `429 too_many_attempts` com header `Retry-After` só quando o balde de ORIGEM estoura (spray). O balde por conta continua trancando — a senha certa também é recusada — mas um 429 ali ligava username à caixa.
 
 ### 4.2 Senha, convites e verificação
 
@@ -780,7 +780,7 @@ Reforço barato no CI:
   | grep -v repository_system.go | grep -v _test.go | grep -v user_id
 ```
 
-Habitantes: `ClickAndResolve*` e `ViewAndResolve` (rotas públicas), `SystemFindDueForCheck` e `SystemRecordCheckResult` (change-check), `SystemPendingPreviewIDs` e os writers `SystemUpdatePreview*` (preview worker).
+Habitantes: `ClickAndResolve*` e `ViewAndResolve` (rotas públicas), `SystemClaimDueForCheck` e `SystemRecordCheckResult` (change-check), `SystemPendingPreviewIDs` e os writers `SystemUpdatePreview*` (preview worker).
 
 ### 8.3 O padrão mecânico
 
@@ -808,7 +808,7 @@ O sub-select de tags (`link_tag WHERE entity_kind=… AND tag_id = ANY($n)`) **n
 
 ### 8.4 Workers e rotas públicas
 
-O preview worker e o change-check worker são cross-tenant por natureza. `SystemFindDueForCheck` devolve a projeção estreita `DueLink` com ID, owner, URL, título, intervalo, fingerprint e token do claim; assim não existe lookup/aggregate por item e o push resultante vai **só** para o dono do link. `push.Notification.UserID` continua propagado pelo `pushSenderAdapter` de `main.go`.
+O preview worker e o change-check worker são cross-tenant por natureza. `SystemClaimDueForCheck` devolve a projeção estreita `DueLink` com ID, owner, URL, título, intervalo, fingerprint e token do claim; assim não existe lookup/aggregate por item e o push resultante vai **só** para o dono do link. `push.Notification.UserID` continua propagado pelo `pushSenderAdapter` de `main.go`.
 
 `/go/{id-or-slug}` e `/n/{id-or-slug}` continuam públicos e tenant-blind, mantendo o predicado `folders.SQLNotInLockedFolder` que já impede vazamento de pasta trancada.
 

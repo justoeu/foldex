@@ -62,15 +62,17 @@ export function OtpInput({ value, onChange, onComplete, disabled, autoFocus, inv
     const typed = raw.replace(/\D/g, '')
     if (!typed) return
 
-    // Typing into a cell REPLACES that position and appends the rest, so that
-    // holding a key or pasting into a middle cell behaves predictably instead
-    // of interleaving with what is already there.
-    const chars = value.split('')
-    for (let i = 0; i < typed.length && index + i < OTP_LENGTH; i++) {
-      chars[index + i] = typed[i]
+    // Compact `value` cannot host holes: assigning past value.length and
+    // joining drops the empties, so a tap on a later cell fills an earlier
+    // digit. Write at the next empty slot (or the tapped cell if it is
+    // already inside the prefix) so index and display stay in agreement.
+    const writeAt = Math.min(index, value.length)
+    const chars = value.padEnd(OTP_LENGTH, ' ').slice(0, OTP_LENGTH).split('')
+    for (let i = 0; i < typed.length && writeAt + i < OTP_LENGTH; i++) {
+      chars[writeAt + i] = typed[i]
     }
     setDigits(chars.join('').slice(0, OTP_LENGTH))
-    focusCell(index + typed.length)
+    focusCell(writeAt + typed.length)
   }
 
   function handleKeyDown(index: number, e: KeyboardEvent<HTMLInputElement>) {

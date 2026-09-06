@@ -1,17 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
-import {
-  validateImport,
-  useApplyImport,
-  type ImportFormat,
-  type ImportMode,
-  type ImportResult,
-  type ImportValidation,
-} from '../api/importer'
+import { useImportPreview } from '../hooks/useImportPreview'
+import type { ImportFormat, ImportResult, ImportValidation } from '../api/importer'
+import { ConflictModePicker } from './ConflictModePicker'
 
 type Props = {
   file: File
@@ -22,102 +17,17 @@ type Props = {
 
 export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props) {
   const { t } = useTranslation()
-  const [validation, setValidation] = useState<ImportValidation | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [errMsg, setErrMsg] = useState<string | null>(null)
-  const [mode, setMode] = useState<ImportMode>('skip')
-  const [excluded, setExcluded] = useState<Set<string>>(new Set())
-  const [applying, setApplying] = useState(false)
-  const [report, setReport] = useState<ImportResult | null>(null)
-  const validationAbortRef = useRef<AbortController | null>(null)
-  const applyAbortRef = useRef<AbortController | null>(null)
-  const applyLockedRef = useRef(false)
-  const applyImport = useApplyImport()
+  const preview = useImportPreview(file, format)
+  const {
+    phase, validation, mode, setMode, excluded, toggle, selectAll, selectNone,
+    effectiveCounts, errMsg, report, apply, requestClose: tryClose, canApply, canClose,
+  } = preview
 
   const requestClose = () => {
-    if (applyLockedRef.current || report) return
-    validationAbortRef.current?.abort()
-    onClose()
+    if (tryClose()) onClose()
   }
 
   useEscape(requestClose, true)
-
-  useEffect(() => {
-    const controller = new AbortController()
-    validationAbortRef.current = controller
-    setLoading(true)
-    setValidation(null)
-    setExcluded(new Set())
-    setErrMsg(null)
-    validateImport(file, format, controller.signal)
-      .then((v) => { if (!controller.signal.aborted) setValidation(v) })
-      .catch((e) => {
-        if (!controller.signal.aborted) setErrMsg(extractErr(e, t('common.unknown_error')))
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-        if (validationAbortRef.current === controller) validationAbortRef.current = null
-      })
-    return () => {
-      controller.abort()
-      if (validationAbortRef.current === controller) validationAbortRef.current = null
-    }
-  }, [file, format, t])
-
-  useEffect(() => () => applyAbortRef.current?.abort(), [file, format])
-
-  // Effective counts after the user's folder exclusions.
-  const effectiveCounts = useMemo(() => {
-    if (!validation) return { links: 0, folders: 0, conflicts: 0 }
-    let links = validation.ungrouped.links
-    let conflicts = validation.ungrouped.conflicts
-    let folders = 0
-    for (const folder of validation.folders) {
-      if (excluded.has(folder.path)) continue
-      links += folder.count
-      conflicts += folder.conflicts
-      folders++
-    }
-    return { links, folders, conflicts }
-  }, [validation, excluded])
-
-  const handleApply = async () => {
-    if (applyLockedRef.current) return
-    applyLockedRef.current = true
-    const controller = new AbortController()
-    applyAbortRef.current = controller
-    setApplying(true)
-    setErrMsg(null)
-    try {
-      const r = await applyImport.mutateAsync({
-        file,
-        format,
-        mode,
-        excludeFolders: Array.from(excluded),
-        signal: controller.signal,
-      })
-      if (!controller.signal.aborted) setReport(r)
-    } catch (e: unknown) {
-      if (!controller.signal.aborted) {
-        applyLockedRef.current = false
-        setErrMsg(extractErr(e, t('common.unknown_error')))
-      }
-    } finally {
-      if (applyAbortRef.current === controller) applyAbortRef.current = null
-      if (!controller.signal.aborted) setApplying(false)
-    }
-  }
-
-  const toggle = (path: string) => {
-    setExcluded((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
-  }
-  const selectAll = () => setExcluded(new Set())
-  const selectNone = () => setExcluded(new Set((validation?.folders ?? []).map((f) => f.path)))
 
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(dialogRef, true)
@@ -133,16 +43,16 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
               {file.name} · {format === 'netscape' ? 'Bookmarks HTML' : 'Foldex JSON'}
             </div>
           </div>
-          <button className="fx-confirm-x" onClick={requestClose} disabled={applying || !!report} aria-label={t('common.close')}>
+          <button className="fx-confirm-x" onClick={requestClose} disabled={!canClose} aria-label={t('common.close')}>
             <Icon d={I.x} size={14} />
           </button>
         </header>
 
         <div className="fx-modal-body" style={{ gridTemplateColumns: '1fr' }}>
           <div className="fx-modal-col">
-            {loading && <div style={{ color: 'var(--fx-ink-4)' }}>{t('common.validating')}</div>}
+            {phase === 'loading' && <div style={{ color: 'var(--fx-ink-4)' }}>{t('common.validating')}</div>}
 
-            {applying && (
+            {phase === 'applying' && (
               <div role="status" className="fx-confirm-msg" style={{ color: 'var(--fx-ink-3)' }}>
                 <Icon d={I.alert} size={14} /> {t('import.operation_locked')}
               </div>
@@ -154,14 +64,27 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
               </div>
             )}
 
-            {validation && !report && (
+            {validation && phase !== 'done' && (
               <>
                 <Counts validation={validation} effective={effectiveCounts} t={t} />
 
                 <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)', marginTop: 6 }}>
                   {t('import.mode_section')}
                 </div>
-                <ModePicker value={mode} onChange={setMode} conflicts={validation.conflicts.links} disabled={applying} t={t} />
+                <ConflictModePicker
+                  value={mode}
+                  onChange={setMode}
+                  disabled={phase === 'applying'}
+                  wipeDanger
+                  labels={{
+                    skipTitle: t('import.mode_skip_title'),
+                    skipDesc: t('import.mode_skip_desc', { count: validation.conflicts.links }),
+                    duplicateTitle: t('import.mode_duplicate_title'),
+                    duplicateDesc: t('import.mode_duplicate_desc'),
+                    wipeTitle: t('import.mode_wipe_title'),
+                    wipeDesc: t('import.mode_wipe_desc', { count: validation.conflicts.links }),
+                  }}
+                />
 
                 {validation.folders.length > 0 && (
                   <>
@@ -170,35 +93,35 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
                         {t('import.folders_section_title')}
                       </div>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <button type="button" className="fx-pillbtn" onClick={selectAll} disabled={applying} style={{ fontSize: 11 }}>{t('import.select_all')}</button>
-                        <button type="button" className="fx-pillbtn" onClick={selectNone} disabled={applying} style={{ fontSize: 11 }}>{t('import.select_none')}</button>
+                        <button type="button" className="fx-pillbtn" onClick={selectAll} disabled={phase === 'applying'} style={{ fontSize: 11 }}>{t('import.select_all')}</button>
+                        <button type="button" className="fx-pillbtn" onClick={selectNone} disabled={phase === 'applying'} style={{ fontSize: 11 }}>{t('import.select_none')}</button>
                       </div>
                     </div>
-                    <FolderList folders={validation.folders} excluded={excluded} onToggle={toggle} disabled={applying} />
+                    <FolderList folders={validation.folders} excluded={excluded} onToggle={toggle} disabled={phase === 'applying'} />
                   </>
                 )}
               </>
             )}
 
-            {report && <ResultBlock r={report} t={t} />}
+            {phase === 'done' && report && <ResultBlock r={report} t={t} />}
           </div>
         </div>
 
         <footer className="fx-modal-foot">
-          {report ? (
+          {phase === 'done' ? (
             <button className="fx-confirm-btn fx-confirm-btn-primary" onClick={onApplied}>
               {t('import.submit_done')}
               <Icon d={I.check} size={14} stroke={2} />
             </button>
           ) : (
             <>
-              <button className="fx-confirm-btn" onClick={requestClose} disabled={applying}>{t('common.cancel')}</button>
+              <button className="fx-confirm-btn" onClick={requestClose} disabled={!canClose}>{t('common.cancel')}</button>
               <button
                 className={'fx-confirm-btn ' + (mode === 'wipe' ? 'fx-confirm-btn-danger' : 'fx-confirm-btn-primary')}
-                onClick={handleApply}
-                disabled={!validation || applying || effectiveCounts.links === 0}
+                onClick={() => { void apply() }}
+                disabled={!canApply}
               >
-                {applying ? (
+                {phase === 'applying' ? (
                   <>
                     <span className="fx-spinner" aria-hidden="true" /> {t('import.submit_importing')}
                   </>
@@ -207,7 +130,7 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
                 ) : (
                   t('import.submit_apply', { count: effectiveCounts.links })
                 )}
-                {!applying && <Icon d={I.arrowR} size={14} stroke={2} />}
+                {phase !== 'applying' && <Icon d={I.arrowR} size={14} stroke={2} />}
               </button>
             </>
           )}
@@ -250,76 +173,6 @@ function Row({ label, value, accent }: { label: string; value: string; accent?: 
       <span style={{ color: 'var(--fx-ink-4)' }}>{label}</span>
       <span style={{ color: accent ? 'var(--fx-accent)' : 'var(--fx-ink)', fontFamily: 'var(--fx-mono)', fontWeight: accent ? 700 : 400 }}>{value}</span>
     </div>
-  )
-}
-
-function ModePicker({
-  value, onChange, conflicts, disabled, t,
-}: {
-  value: ImportMode
-  onChange: (m: ImportMode) => void
-  conflicts: number
-  disabled: boolean
-  t: TFunction
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <ModeOption
-        active={value === 'skip'}
-        disabled={disabled}
-        onClick={() => onChange('skip')}
-        title={t('import.mode_skip_title')}
-        desc={t('import.mode_skip_desc', { count: conflicts })}
-      />
-      <ModeOption
-        active={value === 'duplicate'}
-        disabled={disabled}
-        onClick={() => onChange('duplicate')}
-        title={t('import.mode_duplicate_title')}
-        desc={t('import.mode_duplicate_desc')}
-      />
-      <ModeOption
-        active={value === 'wipe'}
-        disabled={disabled}
-        onClick={() => onChange('wipe')}
-        title={t('import.mode_wipe_title')}
-        desc={t('import.mode_wipe_desc', { count: conflicts })}
-        danger
-      />
-    </div>
-  )
-}
-
-function ModeOption({
-  active, onClick, title, desc, danger, disabled,
-}: {
-  active: boolean
-  onClick: () => void
-  title: string
-  desc: string
-  danger?: boolean
-  disabled: boolean
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      style={{
-        textAlign: 'left',
-        padding: '10px 12px',
-        borderRadius: 10,
-        border: active ? `1.5px solid ${danger ? 'var(--fx-danger)' : 'var(--fx-accent)'}` : '1px solid var(--fx-border)',
-        background: active ? (danger ? 'rgba(244,63,94,0.06)' : 'rgba(99,102,241,0.06)') : 'transparent',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 3,
-      }}
-    >
-      <span style={{ fontSize: 13, fontWeight: 700, color: danger ? 'var(--fx-danger)' : 'var(--fx-ink)' }}>{title}</span>
-      <span style={{ fontSize: 11.5, color: 'var(--fx-ink-3)' }}>{desc}</span>
-    </button>
   )
 }
 
@@ -375,7 +228,4 @@ function ResultBlock({ r, t }: { r: ImportResult; t: TFunction }) {
   )
 }
 
-function extractErr(e: unknown, fallback: string): string {
-  const obj = e as { response?: { data?: { error?: { message?: string } } }; message?: string }
-  return obj?.response?.data?.error?.message ?? obj?.message ?? fallback
-}
+

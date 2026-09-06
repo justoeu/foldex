@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useQueryClient } from '@tanstack/react-query'
 import { Icon, I } from './icons'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
 import { goHref } from '../api/links'
 import { goNoteHref } from '../api/notes'
-import { useEntries, flattenEntries } from '../api/entries'
+import { collectCachedEntries, flattenEntries, useEntries } from '../api/entries'
 import { useTags } from '../api/tags'
 import { useFolders } from '../api/folders'
 import { searchFolderTree } from '../lib/folderTree'
@@ -21,6 +22,10 @@ type Props = {
   onRevealLink?: (link: Link) => void
   onEditLink?: (link: Link) => void
 }
+
+// Search paints at most 12 links + 12 notes. Fetching 200 rows to fill that
+// is the N1-NEX-009 overfetch; 24 mixed rows is enough to fill both lists.
+export const PALETTE_SEARCH_LIMIT = 24
 
 export function CommandPalette({ open, onClose, onOpenFolder, onRevealLink, onEditLink }: Props) {
   const { t } = useTranslation()
@@ -43,11 +48,17 @@ export function CommandPalette({ open, onClose, onOpenFolder, onRevealLink, onEd
   // folder's navigateBack).
   useEscape(onClose, open)
 
-  // When searching, request up to 200 matches so palette doesn't silently
-  // drop hits beyond the default Home page size of 100 (N1-NEX-015).
-  const paletteLimit = debounced ? 200 : 50
-  const entriesQuery = useEntries({ q: debounced, limit: paletteLimit }, { enabled: open })
-  const entries = useMemo(() => flattenEntries(entriesQuery.data), [entriesQuery.data])
+  const qc = useQueryClient()
+  const searching = debounced.length > 0
+  // Empty-open reuses Home's ['entries'] cache (client-side top-clicks).
+  // Search is a slim page, still with qSettled so the palette's 200ms
+  // debounce is not stacked on useEntries' 500ms Home debounce.
+  const searchQuery = useEntries(
+    { q: debounced, limit: PALETTE_SEARCH_LIMIT },
+    { enabled: open && searching, qSettled: true },
+  )
+  const cached = !open || searching ? [] : collectCachedEntries(qc)
+  const entries = searching ? flattenEntries(searchQuery.data) : cached
   const links = useMemo(() => entries.filter((e) => e.kind === 'link'), [entries])
   const notes = useMemo(() => entries.filter((e) => e.kind === 'note'), [entries])
   const { data: tags = [] } = useTags()

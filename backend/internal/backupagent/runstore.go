@@ -26,6 +26,11 @@ const (
 // queueing: the retry policy for backups is "the next scheduled run".
 var ErrAlreadyRunning = errors.New("backupagent: a run of this job is already recorded as running")
 
+// ErrRunNotRunning reports that Succeed/Fail matched zero rows: the claim is
+// gone, or the janitor already flipped the row off 'running'. Callers must
+// not treat a silent no-op as a recorded outcome.
+var ErrRunNotRunning = errors.New("backupagent: run is not running under this claim")
+
 // Normalized failure reasons — the only values ever written to
 // backup_run.last_error. Raw tool output never lands there: pg_dump stderr can
 // carry a DSN, and this column is rendered by the admin UI and mailed in
@@ -145,27 +150,33 @@ func (s *RunStore) Succeed(ctx context.Context, id int64, artifact *Artifact, me
 	if meta == nil {
 		meta = map[string]any{}
 	}
-	_, err := s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE backup_run
 		SET status = 'succeeded', finished_at = now(),
 		    artifact_key = $2, artifact_bytes = $3, artifact_sha256 = $4,
 		    objects_scanned = $5, objects_copied = $6, bytes_copied = $7, meta = $8
-		WHERE id = $1 AND claim_token = $9`,
+		WHERE id = $1 AND claim_token = $9 AND status = 'running'`,
 		id, key, size, sha, scanned, copied, copiedBytes, meta, s.claim)
 	if err != nil {
 		return fmt.Errorf("backupagent: finish run: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRunNotRunning
 	}
 	return nil
 }
 
 // Fail finishes a run with a normalized reason.
 func (s *RunStore) Fail(ctx context.Context, id int64, reason string) error {
-	_, err := s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE backup_run
 		SET status = 'failed', finished_at = now(), last_error = $2
-		WHERE id = $1 AND claim_token = $3`, id, reason, s.claim)
+		WHERE id = $1 AND claim_token = $3 AND status = 'running'`, id, reason, s.claim)
 	if err != nil {
 		return fmt.Errorf("backupagent: fail run: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRunNotRunning
 	}
 	return nil
 }
@@ -265,7 +276,8 @@ func (s *RunStore) ConsecutiveFailures(ctx context.Context, job string) (int, er
 func (s *RunStore) ExpireStale(ctx context.Context, ttl time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE backup_run
-		SET status = 'failed', finished_at = now(), last_error = $1
+		SET status = 'failed', finished_at = now(), last_error = $1,
+		    claim_token = gen_random_uuid()
 		WHERE status = 'running' AND started_at < now() - $2::interval`,
 		ReasonStaleClaim, ttl.String())
 	if err != nil {

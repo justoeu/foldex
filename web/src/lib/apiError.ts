@@ -20,3 +20,15 @@ export function apiErrorMessage(e: unknown): string | undefined {
     ?.response?.data?.error?.message
   return typeof msg === 'string' && msg.trim() !== '' ? msg : undefined
 }
+
+export function apiErrorStatus(e: unknown): number | undefined {
+  const status = (e as { response?: { status?: unknown } })?.response?.status
+  return typeof status === 'number' ? status : undefined
+}
+
+export function apiErrorText(e: unknown, fallback: string): string {
+  const envelope = apiErrorMessage(e)
+  if (envelope) return envelope
+  const msg = (e as { message?: unknown })?.message
+  return typeof msg === 'string' && msg.trim() !== '' ? msg : fallback
+}

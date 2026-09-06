@@ -81,6 +81,71 @@ type clickPlanStats struct {
 	hasSequentialScan    bool
 }
 
+func TestList_ClickSortDoesNotGroupTheUsersEntireClickHistory(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	uid := testdb.SeedUser(t, pool, "click-rank-plan@test.local", "admin")
+	lrepo := links.NewRepository(pool)
+	nrepo := notes.NewRepository(pool)
+
+	history, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://history-rank.example", Title: "Quiet"})
+	require.NoError(t, err)
+	hot, err := nrepo.Create(ctx, uid, notes.CreateInput{Title: "Hot"})
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO click_log (entity_kind, entity_id, user_id, clicked_at)
+		SELECT 'link', $1, $2, now() - interval '1 day'
+		FROM generate_series(1, 50000)
+	`, history.ID, int64(uid))
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO click_log (entity_kind, entity_id, user_id, clicked_at)
+		SELECT 'note', $1, $2, now() - interval '1 hour'
+		FROM generate_series(1, 3)
+	`, hot.ID, int64(uid))
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO entity_click_stats (user_id, entity_kind, entity_id, click_count, last_clicked_at)
+		SELECT user_id, entity_kind, entity_id, count(*)::bigint, max(clicked_at)
+		FROM click_log WHERE user_id = $1
+		GROUP BY user_id, entity_kind, entity_id
+	`, int64(uid))
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `ANALYZE click_log; ANALYZE entity_click_stats`)
+	require.NoError(t, err)
+
+	sql, args := buildListQuery(uid, ListQuery{Sort: "clicks", Limit: 1})
+	require.Contains(t, sql, "entity_click_stats")
+	require.NotContains(t, sql, "FROM click_log")
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, `SET LOCAL enable_seqscan = off`)
+	require.NoError(t, err)
+	var raw json.RawMessage
+	err = tx.QueryRow(ctx, "EXPLAIN (ANALYZE, COSTS OFF, FORMAT JSON) "+sql, args...).Scan(&raw)
+	require.NoError(t, err)
+
+	var plan []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &plan))
+	require.Len(t, plan, 1)
+	stats := clickPlanStats{}
+	collectClickPlanStats(plan[0]["Plan"], &stats)
+	executionMS, _ := plan[0]["Execution Time"].(float64)
+	t.Logf("EXPLAIN read %.0f click_log rows through %d scan nodes in %.3f ms", stats.rowsRead, stats.scanNodes, executionMS)
+	assert.False(t, stats.hasSequentialScan, "click_log must not be sequentially scanned: %s", raw)
+	assert.Equal(t, 0, stats.scanNodes, "ranking must not scan click_log at all: %s", raw)
+	assert.LessOrEqual(t, stats.rowsRead, float64(0), "the 50,000 off-ranking clicks must not be read: %s", raw)
+
+	out, err := NewRepository(pool).List(ctx, uid, ListQuery{Sort: "clicks", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, "link", out[0].Kind)
+	assert.Equal(t, history.ID, out[0].ID)
+	assert.EqualValues(t, 50000, out[0].ClickCount)
+}
+
 func collectClickPlanStats(value any, stats *clickPlanStats) {
 	node, ok := value.(map[string]any)
 	if !ok {

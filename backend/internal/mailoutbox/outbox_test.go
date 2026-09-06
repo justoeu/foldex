@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,4 +142,98 @@ func TestIntervalArgIsAPostgresLiteral(t *testing.T) {
 	// the failure would only surface against a real database.
 	assert.Equal(t, "60 seconds", intervalArg(time.Minute))
 	assert.Equal(t, "0 seconds", intervalArg(-time.Minute))
+}
+
+func TestRelay_PanicOnOneMessageDoesNotAckOrKillTheProcess(t *testing.T) {
+	q := &fakeQueue{claimed: []Outgoing{
+		{ID: 1, ClaimToken: "tok-1"},
+		{ID: 2, ClaimToken: "tok-2"},
+	}}
+	sink := &panicThenOKSink{panicID: 1}
+	var logs bytes.Buffer
+	rl := NewRelay(nil, sink, Options{Workers: 1, Batch: 8, PollInterval: time.Hour},
+		slog.New(slog.NewTextHandler(&logs, nil)))
+	rl.repo = q
+	rl.ctx = context.Background()
+
+	assert.False(t, rl.drain())
+
+	assert.Equal(t, []int64{2}, sink.snapshot())
+	assert.Equal(t, []int64{2}, q.snapshotPublished())
+	assert.Empty(t, q.snapshotFailed(), "a panic is not a delivery failure to settle")
+	assert.Contains(t, logs.String(), "mail boom")
+	assert.Contains(t, logs.String(), "panicked")
+}
+
+type fakeQueue struct {
+	mu        sync.Mutex
+	claimed   []Outgoing
+	published []int64
+	failed    []int64
+}
+
+func (q *fakeQueue) Claim(_ context.Context, n int) ([]Outgoing, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if n > len(q.claimed) {
+		n = len(q.claimed)
+	}
+	out := append([]Outgoing(nil), q.claimed[:n]...)
+	q.claimed = q.claimed[n:]
+	return out, nil
+}
+
+func (q *fakeQueue) MarkPublished(_ context.Context, id int64, _ string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.published = append(q.published, id)
+	return nil
+}
+
+func (q *fakeQueue) MarkFailed(_ context.Context, id int64, _ string, _ string, _ time.Duration, _ int, _ bool) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.failed = append(q.failed, id)
+	return nil
+}
+
+func (*fakeQueue) RequeueStuck(context.Context, time.Duration) (int64, error) { return 0, nil }
+func (*fakeQueue) Purge(context.Context, time.Duration, time.Duration) (int64, error) {
+	return 0, nil
+}
+
+func (q *fakeQueue) snapshotPublished() []int64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return append([]int64(nil), q.published...)
+}
+
+func (q *fakeQueue) snapshotFailed() []int64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return append([]int64(nil), q.failed...)
+}
+
+type panicThenOKSink struct {
+	mu      sync.Mutex
+	panicID int64
+	got     []int64
+}
+
+func (*panicThenOKSink) Name() string { return "test" }
+
+func (s *panicThenOKSink) Deliver(_ context.Context, m Outgoing) error {
+	if m.ID == s.panicID {
+		panic("mail boom")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.got = append(s.got, m.ID)
+	return nil
+}
+
+func (s *panicThenOKSink) snapshot() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int64(nil), s.got...)
 }

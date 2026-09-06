@@ -10,9 +10,11 @@ import { Notice, SectionCard, SectionRow } from './SectionCard'
  * it does to THIS browser and to the others — the distinction the panel exists
  * to make, and the one a label alone cannot carry.
  *
- * There is no session LIST: the server exposes no endpoint for one, and a list
- * of devices is the thing people expect here. Saying so is better than an empty
- * table that reads as "no other sessions".
+ * `GET /api/auth/sessions` lists live sessions and `DELETE /api/auth/sessions/{id}`
+ * revokes one. This panel currently offers sign-out of this browser and of
+ * every session, not the list itself — a list of devices is the thing people
+ * expect here, and shipping the two bulk actions without it is an explicit
+ * product choice, not a missing route.
  */
 export function SessionsSection({
   onSignOut,

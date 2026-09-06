@@ -40,6 +40,30 @@ type ObjectInfo struct {
 	LastModified time.Time
 }
 
+// DumpMeta is the dump run's recorded yardstick. Tables is map[string]int64
+// on purpose: asserting the JSONB map[string]any shape fail-opened every
+// other type (including this one, which is what the dump actually writes).
+type DumpMeta struct {
+	Encrypted     bool             `json:"encrypted"`
+	SchemaVersion int64            `json:"schema_version"`
+	Tables        map[string]int64 `json:"tables,omitempty"`
+	PruneError    string           `json:"prune_error,omitempty"`
+}
+
+func (m DumpMeta) asMap() map[string]any {
+	out := map[string]any{"encrypted": m.Encrypted}
+	if m.SchemaVersion != 0 {
+		out["schema_version"] = m.SchemaVersion
+	}
+	if m.Tables != nil {
+		out["tables"] = m.Tables
+	}
+	if m.PruneError != "" {
+		out["prune_error"] = m.PruneError
+	}
+	return out
+}
+
 // DumpJob owns one full-database export: pg_dump -Fc → age → sha256 → spool →
 // upload → GFS prune.
 type DumpJob struct {
@@ -211,13 +235,12 @@ func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, e
 	}
 
 	artifact := &Artifact{Key: key, Bytes: size, SHA256: hex.EncodeToString(hasher.Sum(nil))}
-	meta := map[string]any{
-		"encrypted": len(j.recipients) > 0,
-	}
+	dumpMeta := DumpMeta{Encrypted: len(j.recipients) > 0}
 	if haveCounts {
-		meta["tables"] = sourceTables
-		meta["schema_version"] = sourceSchema
+		dumpMeta.Tables = sourceTables
+		dumpMeta.SchemaVersion = sourceSchema
 	}
+	meta := dumpMeta.asMap()
 
 	if j.cfg.RetentionMode == "agent" {
 		if pruned, err := j.prune(ctx); err != nil {
@@ -225,7 +248,8 @@ func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, e
 			// not a failed backup. It gets its own visibility instead of
 			// poisoning the success the operator actually cares about.
 			j.logger.Warn("retention prune failed", "err", err)
-			meta["prune_error"] = ReasonPruneFailed
+			dumpMeta.PruneError = ReasonPruneFailed
+			meta = dumpMeta.asMap()
 		} else if pruned > 0 {
 			meta["pruned_objects"] = pruned
 		}

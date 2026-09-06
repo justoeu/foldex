@@ -14,19 +14,16 @@ import (
 	"foldex/internal/linkimage"
 	"foldex/internal/links"
 	"foldex/internal/pkg/resourcebudget"
+	"foldex/internal/ports"
 )
 
-// ErrQueueFull is returned by Enqueue when the bounded jobs channel has no
-// available slot. Callers can decide to retry, log + drop, or fail the request.
-// Returning an error (instead of silent drop) lets handlers surface
-// backpressure to the client rather than pretending success.
-var ErrQueueFull = errors.New("preview: queue full")
-
-// ErrStopped is returned by Enqueue when the worker has been Stop()ped. The
-// jobs channel stays open by design (sending to a closed channel panics, and
-// requeuePending could race a shutdown), so this flag is the explicit signal
-// that no further work will be processed.
-var ErrStopped = errors.New("preview: worker stopped")
+// ErrQueueFull / ErrStopped alias the port sentinels. Delivery packages
+// match ports.ErrQueueFull without importing preview; preview's own tests
+// keep using the local names.
+var (
+	ErrQueueFull = ports.ErrQueueFull
+	ErrStopped   = ports.ErrStopped
+)
 
 const (
 	screenshotMaxDim         = 1024
@@ -53,7 +50,7 @@ type Uploader interface {
 
 type previewRepository interface {
 	SystemGetPreview(context.Context, int64) (links.PreviewWork, error)
-	SystemUpdatePreviewIfUnchanged(context.Context, int64, time.Time, int64, links.PreviewStatus, *string, *string, *string, *string) (bool, error)
+	SystemUpdatePreviewIfUnchanged(context.Context, int64, time.Time, int64, links.PreviewStatus, links.PreviewPatch) (bool, error)
 	SystemUpdateOGImage(context.Context, int64, string, time.Time, int64) (bool, error)
 	SystemFinishScreenshotFallback(context.Context, int64, time.Time, int64) (bool, error)
 	SystemPendingPreviews(context.Context, int) ([]links.PreviewWork, error)
@@ -249,7 +246,14 @@ func (w *Worker) loop(ctx context.Context) {
 				w.wakeRecoveryIfNeeded()
 			}
 			w.startJob(job.id)
-			w.process(ctx, job)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						w.logger.Error("preview job panicked", "link_id", job.id, "panic", r)
+					}
+				}()
+				w.process(ctx, job)
+			}()
 			w.finishJob(job.id)
 		}
 	}
@@ -322,7 +326,7 @@ func (w *Worker) process(ctx context.Context, job previewJob) {
 	// Create and the worker picking up the job). No HTML fetch, no screenshot
 	// — and lift the "capturando…" label by flipping preview_status to ok.
 	if link.OGImageURL != nil && *link.OGImageURL != "" {
-		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, links.StatusOK, nil, nil, nil, nil); uErr != nil {
+		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, links.StatusOK, links.PreviewPatch{}); uErr != nil {
 			w.logger.Error("preview short-circuit update failed", "link_id", id, "err", uErr)
 		}
 		w.logger.Info("preview skipped: image already present", "link_id", id)
@@ -333,7 +337,7 @@ func (w *Worker) process(ctx context.Context, job previewJob) {
 	res, err := w.fetcher.Fetch(fetchCtx, link.URL)
 	if err != nil {
 		msg := "fetch_failed"
-		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, links.StatusFailed, nil, nil, nil, &msg); uErr != nil {
+		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, links.StatusFailed, links.PreviewPatch{Error: &msg}); uErr != nil {
 			w.logger.Error("update preview failure row", "err", uErr)
 		}
 		w.logger.Info("preview failed", "link_id", id, "reason", operationErrorReason(err))
@@ -359,7 +363,11 @@ func (w *Worker) process(ctx context.Context, job previewJob) {
 	if willTryScreenshot {
 		firstStatus = links.StatusPending
 	}
-	applied, err := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, firstStatus, favicon, ogImage, description, nil)
+	applied, err := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, firstStatus, links.PreviewPatch{
+		Favicon:     favicon,
+		OGImage:     ogImage,
+		Description: description,
+	})
 	if err != nil {
 		w.logger.Error("update preview row", "err", err)
 		return
@@ -414,23 +422,13 @@ func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string, 
 		return &cur.UpdatedAt
 	}
 
-	opt, err := imageopt.Optimize(png, imageopt.Options{MaxDim: screenshotMaxDim, Quality: screenshotQuality})
+	opt, err := imageopt.OptimizeForStore(png)
 	if err != nil {
-		// ErrTooLarge means a hostile page returned a decode-bomb image
-		// (small payload, huge declared dimensions). Storing the raw PNG
-		// would let any browser opening /api/files/screenshots/{id} OOM
-		// on decode. Abort the fallback entirely — link keeps og_image_url
-		// empty, UI just shows no preview.
-		if errors.Is(err, imageopt.ErrTooLarge) {
-			w.logger.Warn("screenshot fallback rejected: decode bomb", "link_id", id, "err", err)
-			return &cur.UpdatedAt
-		}
-		// Other errors (truncated/corrupt encode) fall back to storing the
-		// raw PNG so a re-encode bug never blocks a working screenshot —
-		// ProxyFile streams bytes without re-decoding, so backend stays safe.
-		w.logger.Warn("screenshot fallback optimize failed, storing original PNG",
-			"link_id", id, "err", err)
-		opt = imageopt.Result{Data: png, ContentType: "image/png", Ext: "png"}
+		// Any Optimize failure (decode bomb included) aborts the fallback.
+		// Storing the original would skip INV-077 re-encode and, for
+		// ErrTooLarge, leave a payload that OOMs any decoder of /api/files.
+		w.logger.Warn("screenshot fallback rejected", "link_id", id, "err", err)
+		return &cur.UpdatedAt
 	}
 
 	storageCtx, storageCancel := context.WithTimeout(ctx, screenshotStorageTimeout)

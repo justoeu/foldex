@@ -1,19 +1,10 @@
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { GradientPicker } from './GradientPicker'
+import { DEFAULT_ENTITY_COLORS } from '../lib/entityColors'
 
 export type ColorMode = 'solid' | 'gradient'
-
-export const DEFAULT_ENTITY_COLORS = [
-  '#6366F1',
-  '#0EA5E9',
-  '#8B5CF6',
-  '#EC4899',
-  '#F59E0B',
-  '#10B981',
-  '#64748B',
-  '#FFD400',
-] as const
+export { DEFAULT_ENTITY_COLORS }
 
 type Props = {
   mode: ColorMode

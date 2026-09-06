@@ -40,6 +40,81 @@ func setBaseline(t *testing.T) {
 	}
 }
 
+func TestBackupAgentLoadMatrix(t *testing.T) {
+	agePub := "age1qqnl0eg9annqfy0596hyp2pkjsjm0cvqp23exd6yzvfhq7fyf5dsegvzt5"
+	cases := []struct {
+		name    string
+		env     map[string]string
+		wantErr string
+		check   func(*testing.T, Config)
+	}{
+		{name: "half-config S3 endpoint", env: map[string]string{"BACKUP_S3_ENDPOINT": ""}, wantErr: "BACKUP_S3_ENDPOINT"},
+		{name: "half-config S3 bucket", env: map[string]string{"BACKUP_S3_BUCKET": ""}, wantErr: "BACKUP_S3_BUCKET"},
+		{name: "half-config S3 access key", env: map[string]string{"BACKUP_S3_ACCESS_KEY": ""}, wantErr: "BACKUP_S3_ACCESS_KEY"},
+		{name: "half-config S3 secret key", env: map[string]string{"BACKUP_S3_SECRET_KEY": ""}, wantErr: "BACKUP_S3_SECRET_KEY"},
+		{
+			name:    "plaintext without opt-out INV-171",
+			env:     map[string]string{"BACKUP_AGE_RECIPIENTS": ""},
+			wantErr: "BACKUP_ALLOW_PLAINTEXT",
+		},
+		{
+			name: "plaintext opt-out INV-171",
+			env:  map[string]string{"BACKUP_AGE_RECIPIENTS": "", "BACKUP_ALLOW_PLAINTEXT": "1"},
+			check: func(t *testing.T, c Config) {
+				assert.True(t, c.AllowPlaintext)
+				assert.Empty(t, c.AgeRecipients)
+			},
+		},
+		{
+			name:    "drill without identity",
+			env:     map[string]string{"BACKUP_DRILL_AT": "04:30 sun"},
+			wantErr: "BACKUP_AGE_IDENTITY_FILE",
+		},
+		{
+			name: "drill with identity",
+			env: map[string]string{
+				"BACKUP_DRILL_AT":          "04:30 sun",
+				"BACKUP_AGE_IDENTITY_FILE": "/run/secrets/backup-age-identity",
+				"BACKUP_AGE_RECIPIENTS":    agePub,
+			},
+			check: func(t *testing.T, c Config) {
+				assert.True(t, c.DrillAt.Enabled())
+				assert.Equal(t, "/run/secrets/backup-age-identity", c.AgeIdentityFile)
+			},
+		},
+		{
+			name:    "user_zip without rustfs secret",
+			env:     map[string]string{"BACKUP_USERZIP_AT": "02:15"},
+			wantErr: "RUSTFS_SECRET_KEY",
+		},
+		{
+			name: "user_zip with source",
+			env:  map[string]string{"BACKUP_USERZIP_AT": "02:15", "RUSTFS_SECRET_KEY": "sk"},
+			check: func(t *testing.T, c Config) {
+				assert.True(t, c.UserZipAt.Enabled())
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setBaseline(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			if tc.check != nil {
+				tc.check(t, cfg)
+			}
+		})
+	}
+}
+
 func TestLoad_RefusesToBootHalfConfigured(t *testing.T) {
 	for _, missing := range []string{"BACKUP_S3_ENDPOINT", "BACKUP_S3_BUCKET", "BACKUP_S3_ACCESS_KEY", "BACKUP_S3_SECRET_KEY"} {
 		t.Run(missing, func(t *testing.T) {

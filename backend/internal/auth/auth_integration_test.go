@@ -285,7 +285,15 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 	relay.Start(context.Background())
 	t.Cleanup(relay.Stop)
 	cookies := auth.CookieOptions{Secure: true}
-	mw := auth.NewMiddleware(repo, cookies, logger, opts.Require2FAForAdmins)
+	var policyRepo *policy.Repository
+	var mwOpts []auth.MiddlewareOption
+	if opts.Policy {
+		policyRepo = policy.NewRepository(pool)
+		// Production always passes this (cmd/server). Omitting it leaves
+		// totp_only stored but unread, and every test on the permissive floor.
+		mwOpts = append(mwOpts, auth.WithAdminFactorPolicy(policyRepo.RequiresTOTPForAdmins))
+	}
+	mw := auth.NewMiddleware(repo, cookies, logger, opts.Require2FAForAdmins, mwOpts...)
 
 	cfg := auth.HandlerConfig{
 		Repo: repo, MW: mw, Mailer: mail, Cookies: cookies,
@@ -293,9 +301,7 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 		Require2FAForAdmins: opts.Require2FAForAdmins,
 		Google:              opts.Google,
 	}
-	var policyRepo *policy.Repository
-	if opts.Policy {
-		policyRepo = policy.NewRepository(pool)
+	if policyRepo != nil {
 		cfg.Policy = policyRepo
 	}
 	if opts.TwoFactor || opts.Require2FAForAdmins {
@@ -822,7 +828,10 @@ func TestLogin_RateLimitedPerEmail(t *testing.T) {
 	testdb.SeedUserWithPassword(t, h.pool, "target@example.com", "a good password", "editor")
 	c := h.client(t)
 
-	// The e-mail bucket caps at 5 consecutive failures.
+	// The e-mail bucket caps at 5 consecutive failures. The 6th is still 401 —
+	// a 429 here is a username-to-mailbox oracle because the bucket is keyed
+	// on the resolved account (INV-041). Lockout is that a valid credential
+	// is refused too, with no session cookie.
 	for i := range 5 {
 		rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
 			"email": "target@example.com", "password": "wrong",
@@ -832,16 +841,17 @@ func TestLogin_RateLimitedPerEmail(t *testing.T) {
 	rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "target@example.com", "password": "wrong",
 	})
-	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
-	assert.Equal(t, "too_many_attempts", errCode(t, rec))
-	assert.NotEmpty(t, rec.Header().Get("Retry-After"), "a 429 must tell the client when to retry")
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, "invalid_credentials", errCode(t, rec))
+	assert.Empty(t, rec.Header().Get("Retry-After"),
+		"Retry-After on an account lockout is the oracle in a header")
 
-	// The correct password is refused too: a lockout that a valid credential
-	// walks straight through protects nothing.
 	rec = c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "target@example.com", "password": "a good password",
 	})
-	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Nil(t, cookieByName(rec, auth.CookieAccess),
+		"a lockout that a valid credential walks straight through protects nothing")
 }
 
 // Not incrementing the bucket for an unknown address is itself an oracle: the
@@ -854,11 +864,21 @@ func TestLogin_RateLimitCountsUnknownEmailsToo(t *testing.T) {
 			"email": "ghost@example.com", "password": "wrong",
 		})
 	}
+	// Counting still happens — the transition writes the same audit row a
+	// real account does. The 6th request must not grow a 429: that status
+	// is how an attacker used to learn which strings are lockable.
+	var rows int
+	require.NoError(t, h.pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM audit_log WHERE action = 'auth.rate_limited'`).Scan(&rows))
+	assert.Equal(t, 1, rows, "an unknown address must consume its bucket exactly like a real one")
+
 	rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "ghost@example.com", "password": "wrong",
 	})
-	assert.Equal(t, http.StatusTooManyRequests, rec.Code,
-		"an unknown address must consume its bucket exactly like a real one")
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"an unknown address's lockout must look like a miss, not like a lockable name")
+	assert.Equal(t, "invalid_credentials", errCode(t, rec))
+	assert.Empty(t, rec.Header().Get("Retry-After"))
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1729,6 +1749,58 @@ func TestInvite_AcceptCannotEscalateItsOwnRole(t *testing.T) {
 // Admin users
 // ─────────────────────────────────────────────────────────────────────
 
+func TestAdminListUsers_HonorsLimitAndCursor(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+
+	var hash string
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT password_hash FROM app_user WHERE email_normalized = 'admin@example.com'`).Scan(&hash))
+	_, err := h.pool.Exec(context.Background(), `
+		INSERT INTO app_user (email, email_normalized, name, role, status, password_hash)
+		SELECT 'bulk' || i || '@example.com', 'bulk' || i || '@example.com', 'bulk', 'editor', 'active', $1
+		FROM generate_series(1, 500) AS i
+	`, hash)
+	require.NoError(t, err)
+
+	rec := admin.do(http.MethodGet, "/api/admin/users", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	users := decode(t, rec)["users"].([]any)
+	require.Equal(t, 200, len(users), "compiled ceiling must hold; got %d", len(users))
+
+	rec = admin.do(http.MethodGet, "/api/admin/users?limit=50", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	page := decode(t, rec)["users"].([]any)
+	require.Len(t, page, 50)
+
+	last := page[len(page)-1].(map[string]any)
+	afterID := int64(last["id"].(float64))
+	rec = admin.do(http.MethodGet, fmt.Sprintf("/api/admin/users?limit=50&after=%d", afterID), nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	next := decode(t, rec)["users"].([]any)
+	require.Len(t, next, 50)
+	firstNext := int64(next[0].(map[string]any)["id"].(float64))
+	assert.Less(t, firstNext, afterID, "newest-first cursor walks toward older ids")
+
+	seen := make(map[int64]struct{}, len(page))
+	for _, raw := range page {
+		seen[int64(raw.(map[string]any)["id"].(float64))] = struct{}{}
+	}
+	for _, raw := range next {
+		id := int64(raw.(map[string]any)["id"].(float64))
+		_, dup := seen[id]
+		assert.False(t, dup, "cursor page overlapped id %d", id)
+	}
+
+	testdb.SeedUserWithPassword(t, h.pool, "editor@example.com", "a good password", "editor")
+	ed := h.client(t)
+	require.Equal(t, http.StatusOK, ed.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "editor@example.com", "password": "a good password",
+	}).Code)
+	assert.Equal(t, http.StatusNotFound, ed.do(http.MethodGet, "/api/admin/users", nil).Code,
+		"INV-043: a non-admin must see 404, not 403")
+}
+
 func TestAdmin_ListUsersNeverIncludesHashes(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
@@ -2071,6 +2143,30 @@ func TestSweeper_ClampsNonsenseIntervals(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 // Invite listing
 // ─────────────────────────────────────────────────────────────────────
+
+func TestAdminListInvites_HonorsLimit(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	var adminID int64
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT id FROM app_user WHERE email_normalized = 'admin@example.com'`).Scan(&adminID))
+	_, err := h.pool.Exec(context.Background(), `
+		INSERT INTO invite (email, email_normalized, role, token_hash, invited_by, expires_at)
+		SELECT 'bulk' || i || '@example.com', 'bulk' || i || '@example.com', 'editor',
+		       sha256(('invite-bulk-' || i)::bytea), $1, now() + interval '7 days'
+		FROM generate_series(1, 201) AS i
+	`, adminID)
+	require.NoError(t, err)
+
+	rec := admin.do(http.MethodGet, "/api/admin/invites", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	invites := decode(t, rec)["invites"].([]any)
+	require.Equal(t, 200, len(invites), "compiled ceiling must hold; got %d", len(invites))
+
+	rec = admin.do(http.MethodGet, "/api/admin/invites?limit=50", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, decode(t, rec)["invites"].([]any), 50)
+}
 
 func TestAdmin_ListInvitesShowsOpenOnesAndNeverTheToken(t *testing.T) {
 	h := newHarness(t)

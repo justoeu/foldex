@@ -13,6 +13,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOrchestrationDoesNotImportHTTPDelivery(t *testing.T) {
+	forbidden := map[string]struct{}{
+		"net/http":                    {},
+		"foldex/internal/pkg/httperr": {},
+	}
+	files := []string{
+		filepath.Join("..", "backup", "restore.go"),
+		filepath.Join("..", "backup", "restore_helpers.go"),
+		filepath.Join("..", "backup", "restore_files.go"),
+	}
+	for _, path := range files {
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		require.NoError(t, err)
+		for _, imp := range f.Imports {
+			importPath, err := strconv.Unquote(imp.Path.Value)
+			require.NoError(t, err)
+			if _, found := forbidden[importPath]; found {
+				t.Errorf("production restore orchestration %s imports HTTP delivery package %q", filepath.ToSlash(filepath.Base(path)), importPath)
+			}
+		}
+	}
+}
+
 func TestRepositoriesDoNotImportHTTPDelivery(t *testing.T) {
 	root := ".."
 	forbidden := map[string]struct{}{
@@ -112,6 +135,62 @@ func TestNotesDoesNotImportLinks(t *testing.T) {
 			}
 			if importPath == "foldex/internal/links" {
 				t.Errorf("production notes file %s imports links", filepath.Base(path))
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestEntriesDoesNotImportLinks(t *testing.T) {
+	root := filepath.Join("..", "entries")
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || strings.HasSuffix(path, "_test.go") || filepath.Ext(path) != ".go" {
+			return nil
+		}
+
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, imp := range f.Imports {
+			importPath, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				return err
+			}
+			if importPath == "foldex/internal/links" {
+				t.Errorf("production entries file %s imports links", filepath.Base(path))
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestImporterDoesNotImportPreview(t *testing.T) {
+	root := filepath.Join("..", "importer")
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || strings.HasSuffix(path, "_test.go") || filepath.Ext(path) != ".go" {
+			return nil
+		}
+
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, imp := range f.Imports {
+			importPath, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				return err
+			}
+			if importPath == "foldex/internal/preview" {
+				t.Errorf("production importer file %s imports preview", filepath.Base(path))
 			}
 		}
 		return nil

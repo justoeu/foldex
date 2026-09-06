@@ -53,8 +53,10 @@ func TestLatestSucceededDump_PicksTheNewestArtifact(t *testing.T) {
 	assert.Equal(t, "backups/dump/new", ref.Key)
 	assert.Equal(t, "bb", ref.SHA256)
 	// The meta round-trips through JSONB — numbers come back as float64,
-	// which is exactly the shape compareCounts' coercion exists for.
-	assert.NoError(t, compareCounts(ref.Meta, map[string]int64{"link": 3}, 40))
+	// which parseDumpMeta coerces into DumpMeta.Tables.
+	parsed, err := parseDumpMeta(ref.Meta)
+	require.NoError(t, err)
+	assert.NoError(t, compareCounts(parsed, map[string]int64{"link": 3}, 40))
 }
 
 func TestSetDrillSource_StampsOnlyTheOwnRow(t *testing.T) {

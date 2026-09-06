@@ -1,6 +1,6 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { fetchOwnActivity, type AuditEntry } from '../../api/admin'
+import { activityQueryKey, fetchOwnActivity, type AuditEntry } from '../../api/admin'
 import { actionLabel } from '../../lib/auditLabels'
 
 /** One page of the feed. The server clamps this too. */
@@ -27,7 +27,7 @@ export function ActivitySection() {
   // fetcher — a side effect in a function React Query is free to re-run on
   // focus, which is why it needed a dedupe set to stay correct.
   const query = useInfiniteQuery({
-    queryKey: ['activity'],
+    queryKey: activityQueryKey,
     queryFn: ({ pageParam }) => fetchOwnActivity(pageParam),
     initialPageParam: undefined as number | undefined,
     // The keyset cursor is the last id on the page. A short page is the end of

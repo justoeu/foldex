@@ -3,24 +3,22 @@ import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Icon, I } from '../components/icons'
 import { CreateUserDialog } from '../components/admin/CreateUserDialog'
-import { useConfirm } from '../components/ConfirmDialog'
+import { InvitePanel } from '../components/admin/InvitePanel'
+import { UserRowActions } from '../components/admin/UserRowActions'
 import {
-  createInvite,
   deleteUser,
-  listInvites,
   listUsers,
-  revokeInvite,
   revokeUserSessions,
   sendPasswordRecovery,
   transferOwnership,
   updateUser,
-  type Invite,
 } from '../api/admin'
 import { apiErrorCode as errCode } from '../lib/apiError'
 import { useAuth } from '../auth/AuthProvider'
-import { ASSIGNABLE_ROLES, isAdminRole, type AuthUser, type Role } from '../auth/types'
+import { ASSIGNABLE_ROLES, type AuthUser, type Role } from '../auth/types'
 import { ROLE_INITIALS, ROLE_TONE } from '../components/admin/RolesMatrix'
 import { relativeTime } from '../components/admin/AdminOverview'
+import { canMutateAccount, countActiveAdmins } from '../components/admin/canMutateAccount'
 
 function statusTone(status: AuthUser['status']): string {
   if (status === 'active') return 'fx-chip-ok'
@@ -45,18 +43,13 @@ export function AdminUsersPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const { t } = useTranslation()
   const qc = useQueryClient()
-  const confirmAction = useConfirm()
   const { session } = useAuth()
   const me = session.status === 'authenticated' ? session.user : null
 
   const users = useQuery({ queryKey: ['admin', 'users'], queryFn: listUsers })
-  const invites = useQuery({ queryKey: ['admin', 'invites'], queryFn: listInvites })
 
   const [error, setError] = useState('')
   const [recoverySent, setRecoverySent] = useState('')
-  const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole] = useState<Role>('editor')
-  const [lastInvite, setLastInvite] = useState<Invite | null>(null)
 
   function refresh() {
     return qc.invalidateQueries({ queryKey: ['admin'] })
@@ -96,23 +89,6 @@ export function AdminUsersPage() {
     onError,
   })
 
-  const invite = useMutation({
-    mutationFn: () => createInvite(inviteEmail.trim(), inviteRole),
-    onSuccess: (inv) => {
-      setError('')
-      setLastInvite(inv)
-      setInviteEmail('')
-      return refresh()
-    },
-    onError,
-  })
-
-  const dropInvite = useMutation({
-    mutationFn: revokeInvite,
-    onSuccess: () => refresh(),
-    onError,
-  })
-
   // Transferring revokes EVERY session of both accounts, including the caller's
   // own — so there is nothing to refresh afterwards. The next request lands as
   // anonymous and the app's refresh interceptor routes to the login screen,
@@ -123,38 +99,13 @@ export function AdminUsersPage() {
     onError,
   })
 
-  // Counts every role that can administer, mirroring guardLastAdminTx: with
-  // four roles, counting only 'admin' would call an instance whose sole
-  // administrator is the owner "down to zero" and disable buttons that work.
-  const activeAdmins = (users.data ?? []).filter(
-    (u) => isAdminRole(u.role) && u.status === 'active',
-  ).length
-
-  async function askDelete(u: AuthUser) {
-    const ok = await confirmAction({
-      title: t('admin.delete_title'),
-      message: t('admin.delete_message', { email: u.email }),
-      destructive: true,
-    })
-    if (ok) remove.mutate(u.id)
-  }
-
-  async function askTransfer(u: AuthUser) {
-    const ok = await confirmAction({
-      title: t('admin.transfer_title'),
-      message: t('admin.transfer_message', { email: u.email }),
-      destructive: true,
-    })
-    if (ok) transfer.mutate(u.id)
-  }
-
-  async function askReset(u: AuthUser) {
-    const ok = await confirmAction({
-      title: t('admin.reset_title'),
-      message: t('admin.reset_message', { email: u.email }),
-      destructive: true,
-    })
-    if (ok) resetPassword.mutate(u)
+  const activeAdmins = countActiveAdmins(users.data ?? [])
+  const busy = {
+    patch: patch.isPending,
+    revoke: revokeSessions.isPending,
+    reset: resetPassword.isPending,
+    transfer: transfer.isPending,
+    remove: remove.isPending,
   }
 
   return (
@@ -203,16 +154,8 @@ export function AdminUsersPage() {
               </thead>
               <tbody>
                 {(users.data ?? []).map((u) => {
-                  const isSelf = me?.id === u.id
-                  const isLastAdmin = isAdminRole(u.role) && u.status === 'active' && activeAdmins <= 1
-                  // The owner is out of reach of every ordinary edit — the server
-                  // refuses role and status changes on that row outright, and the
-                  // seat moves only through transfer.
+                  const can = canMutateAccount(u, me, activeAdmins)
                   const isOwner = u.role === 'owner'
-                  // One rule, three buttons: demote, disable and delete all end in
-                  // "this account stops being an active admin", and each is blocked
-                  // for the same reasons.
-                  const locked = isSelf || isLastAdmin || isOwner
                   return (
                     <tr key={u.id}>
                       <td>
@@ -232,7 +175,7 @@ export function AdminUsersPage() {
                           style={{ width: 'auto' }}
                           aria-label={t('admin.role_label', { email: u.email })}
                           value={u.role}
-                          disabled={locked || patch.isPending}
+                          disabled={!can.role || patch.isPending}
                           onChange={(e) => patch.mutate({ id: u.id, role: e.target.value as Role })}
                         >
                           {/* Owner appears only when the row already holds it,
@@ -264,86 +207,22 @@ export function AdminUsersPage() {
                         )}
                       </td>
                       <td>
-                        {/* Icon-only, and therefore LABELLED TWICE: `aria-label`
-                            names the action for a screen reader and `data-tooltip`
-                            shows the same words on hover/focus for everyone else.
-                            A row of five unlabelled glyphs — two of which disable
-                            an account and delete it — would be a guessing game,
-                            and the two destructive ones keep their confirmation
-                            dialog regardless. Every label already carries the
-                            e-mail, so two rows never read the same. */}
-                        <div className="fx-utable-actions">
-                          <button
-                            className="fx-rowact"
-                            aria-label={
-                              u.status === 'active'
-                                ? t('admin.disable_label', { email: u.email })
-                                : t('admin.enable_label', { email: u.email })
-                            }
-                            data-tooltip={
-                              u.status === 'active' ? t('admin.disable') : t('admin.enable')
-                            }
-                            disabled={locked || patch.isPending}
-                            onClick={() =>
-                              patch.mutate({
-                                id: u.id,
-                                status: u.status === 'active' ? 'disabled' : 'active',
-                              })
-                            }
-                          >
-                            <Icon d={u.status === 'active' ? I.userOff : I.userCheck} size={14} />
-                            {u.status === 'active' ? t('admin.disable') : t('admin.enable')}
-                          </button>
-
-                          <button
-                            className="fx-rowact"
-                            aria-label={t('admin.revoke_sessions_label', { email: u.email })}
-                            data-tooltip={t('admin.revoke_sessions')}
-                            disabled={revokeSessions.isPending}
-                            onClick={() => revokeSessions.mutate(u.id)}
-                          >
-                            <Icon d={I.logout} size={14} />
-                            {t('admin.revoke_sessions')}
-                          </button>
-
-                          <button
-                            className="fx-rowact"
-                            aria-label={t('admin.force_reset_label', { email: u.email })}
-                            data-tooltip={t('admin.force_reset')}
-                            disabled={isSelf || resetPassword.isPending}
-                            onClick={() => void askReset(u)}
-                          >
-                            <Icon d={I.key} size={14} />
-                            {t('admin.force_reset')}
-                          </button>
-
-                          {/* Transferring is offered only by the owner, and only
-                              onto an active account — the two conditions the
-                              server checks before it moves the seat. */}
-                          {me?.role === 'owner' && !isSelf && u.status === 'active' && (
-                            <button
-                              className="fx-rowact"
-                              aria-label={t('admin.transfer_label', { email: u.email })}
-                              data-tooltip={t('admin.transfer')}
-                              disabled={transfer.isPending}
-                              onClick={() => void askTransfer(u)}
-                            >
-                              <Icon d={I.crown} size={14} />
-                              {t('admin.transfer')}
-                            </button>
-                          )}
-
-                          <button
-                            className="fx-rowact fx-rowact-danger"
-                            aria-label={t('admin.delete_label', { email: u.email })}
-                            data-tooltip={t('admin.delete')}
-                            disabled={locked || remove.isPending}
-                            onClick={() => void askDelete(u)}
-                          >
-                            <Icon d={I.trash} size={14} />
-                            {t('admin.delete')}
-                          </button>
-                        </div>
+                        <UserRowActions
+                          u={u}
+                          me={me}
+                          activeAdmins={activeAdmins}
+                          busy={busy}
+                          onToggleStatus={(row) =>
+                            patch.mutate({
+                              id: row.id,
+                              status: row.status === 'active' ? 'disabled' : 'active',
+                            })
+                          }
+                          onRevokeSessions={(id) => revokeSessions.mutate(id)}
+                          onReset={(row) => resetPassword.mutate(row)}
+                          onTransfer={(id) => transfer.mutate(id)}
+                          onDelete={(id) => remove.mutate(id)}
+                        />
                       </td>
                     </tr>
                   )
@@ -354,90 +233,7 @@ export function AdminUsersPage() {
         </div>
       </section>
 
-      <section className="fx-card">
-        <div className="fx-card-body" style={{ gap: 12, padding: 18 }}>
-          <h3
-            className="fx-card-title"
-            style={{ fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}
-          >
-            <Icon d={I.plus} size={15} /> {t('admin.invites_title')}
-          </h3>
-          <p style={{ fontSize: 12, color: 'var(--fx-ink-3)', margin: 0 }}>
-            {t('admin.invites_desc')}
-          </p>
-
-          {/* The accept URL is shown because with the default `log` mail driver
-              there is no inbox to check — an admin who cannot copy the link has
-              no way to invite anybody. It is also the only time the raw token
-              exists: the database keeps sha256. */}
-          {lastInvite?.accept_url && (
-            <div style={{ display: 'grid', gap: 6 }}>
-              <strong style={{ fontSize: 12 }}>{t('admin.invite_link_title')}</strong>
-              <code
-                data-testid="invite-link"
-                style={{ fontSize: 11, wordBreak: 'break-all', fontFamily: 'var(--fx-mono)' }}
-              >
-                {lastInvite.accept_url}
-              </code>
-            </div>
-          )}
-
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
-            {(invites.data ?? []).map((inv) => (
-              <li key={inv.id} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12 }}>
-                <span style={{ flex: 1 }}>
-                  <strong>{inv.email}</strong>
-                  <span style={{ color: 'var(--fx-ink-4)' }}> · {t(`admin.role_${inv.role}`)}</span>
-                </span>
-                <button
-                  className="fx-btn"
-                  aria-label={t('admin.revoke_invite_label', { email: inv.email })}
-                  onClick={() => dropInvite.mutate(inv.id)}
-                >
-                  <Icon d={I.trash} size={13} />
-                </button>
-              </li>
-            ))}
-            {invites.data?.length === 0 && (
-              <li style={{ fontSize: 12, color: 'var(--fx-ink-4)' }}>{t('admin.no_invites')}</li>
-            )}
-          </ul>
-
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <label className="fx-field" style={{ margin: 0, flex: 1, minWidth: 200 }}>
-              <span className="fx-field-label">{t('admin.invite_email')}</span>
-              <input
-                className="fx-input"
-                type="email"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-              />
-            </label>
-            <label className="fx-field">
-              <span className="fx-field-label">{t('admin.invite_role')}</span>
-              <select
-                className="fx-input"
-                value={inviteRole}
-                onChange={(e) => setInviteRole(e.target.value as Role)}
-              >
-                {/* Same source as the row editor above: an invitation can mint
-                    an administrator but never an owner, which is exactly what
-                    ASSIGNABLE_ROLES encodes. */}
-                {ASSIGNABLE_ROLES.map((r) => (
-                  <option value={r} key={r}>{t(`admin.role_${r}`)}</option>
-                ))}
-              </select>
-            </label>
-            <button
-              className="fx-btn fx-btn-primary"
-              disabled={invite.isPending || !inviteEmail.trim()}
-              onClick={() => invite.mutate()}
-            >
-              {t('admin.send_invite')}
-            </button>
-          </div>
-        </div>
-      </section>
+      <InvitePanel onError={onError} onClearError={() => setError('')} />
 
       {createOpen && <CreateUserDialog onClose={() => setCreateOpen(false)} />}
     </div>

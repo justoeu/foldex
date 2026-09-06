@@ -64,7 +64,7 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **`X-Forwarded-For` is honoured ONLY from a configured proxy** → [INV-007](docs/INVARIANTS.md#inv-007)
 - **Nenhuma entrada controlada pelo cliente compõe uma chave de rate limit** → [INV-183](docs/INVARIANTS.md#inv-183)
   ↳ `IP + User-Agent` daria ao atacante um orçamento novo por requisição; o balde deixa de existir enquanto continua parecendo existir. Registrar ≠ confiar.
-- **O balde de IP do login conta LARGURA (contas distintas); o de e-mail conta PROFUNDIDADE; conjunto cheio TRANCA** → [INV-184](docs/INVARIANTS.md#inv-184) | guard: `TestLoginFailure_TheIPBucketCountsAccounts_NotAttempts`, `TestLogin_ManyPeopleBehindOneAddressDoNotLockEachOtherOut`, `TestSetMode_ASuccessDoesNotForgiveTheAccountsAlreadySwept`, `TestSetMode_MembersAgeOutOfTheWindow`, `TestEveryTerminalPathReleasesTheReservation`, `TestLogin_AliasesOfOneAccountCostTheSameAsStrangers`
+- **O balde de IP do login conta LARGURA (contas distintas); o de e-mail conta PROFUNDIDADE; conjunto cheio TRANCA** → [INV-184](docs/INVARIANTS.md#inv-184) | guard: `TestLoginFailure_TheIPBucketCountsAccounts_NotAttempts`, `TestLogin_ManyPeopleBehindOneAddressDoNotLockEachOtherOut`, `TestSetMode_ASuccessDoesNotForgiveTheAccountsAlreadySwept`, `TestSetMode_MembersAgeOutOfTheWindow`, `TestEveryTerminalPathReleasesTheReservation`, `TestLogin_AliasesOfOneAccountCostTheSameAsStrangers`, `TestLogin_AccountLockoutDoesNotDistinguishAnAliasFromAStranger`
   ↳ `gcLocked` media só `e.fails`: um `Release` apagava o conjunto inteiro, e martelar uma conta devolvia todo o orçamento de largura da origem. Achado por mutação.
 - **Limites de abuso: pisos dos DOIS lados, fora de faixa reverte o CAMPO, e "dinâmico" é RECARREGAR** → [INV-185](docs/INVARIANTS.md#inv-185) | guard: `TestValidateForWrite_RefusesBothDirections`, `TestSanitize_RevertsOneKnobAndKeepsTheRest`, `TestCache_FailStaticKeepsTheLastGoodPolicy`
   ↳ Um rate limit baixo demais VIRA o ataque: 1 conta/hora tranca um escritório com uma senha errada.
@@ -85,7 +85,7 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **`POST /api/admin/users` is a DECLARED EXCEPTION to the rule below, taken by the instance owner** → [INV-021](docs/INVARIANTS.md#inv-021) | guard: `TestAdminCreateUser_*`
 - **An administrator never chooses, installs or receives another user's credential** → [INV-022](docs/INVARIANTS.md#inv-022)
 - **API tokens are scoped to CONTENT, and the scope is enforced by middleware, not by discipline** → [INV-023](docs/INVARIANTS.md#inv-023)
-- **A cota da API autenticada é por PRINCIPAL, conta só escrita, e não isenta ninguém** → [INV-181](docs/INVARIANTS.md#inv-181) | guard: `TestAPIQuota_TwoPrincipalsHaveIndependentBudgets`, `TestAPIQuota_TheOwnerIsNotExempt`, `TestExpensiveRoutes_EveryPatternNamesARouteTheRouterMounts`, `TestWiring_APIQuotaRefusesAWriteLoopThroughTheRealRouter`
+- **A cota da API autenticada é por PRINCIPAL, conta só escrita, e não isenta ninguém** → [INV-181](docs/INVARIANTS.md#inv-181) | guard: `TestAPIQuota_TwoPrincipalsHaveIndependentBudgets`, `TestAPIQuota_TheOwnerIsNotExempt`, `TestExpensiveRoutes_EveryPatternNamesARouteTheRouterMounts`, `TestWiring_APIQuotaRefusesAWriteLoopThroughTheRealRouter`, `TestAPIQuota_ExportGetChargesTheExpensiveBucket`, `TestExport_SecondConcurrentRequestIs429AndRowCeilingHolds`
   ↳ Por rota, um laço espalhado por vinte endpoints fica dentro do limite em cada um e segura o pool inteiro; `attemptlimit` não serve porque conta falhas consecutivas e `CommitSuccess` zera o contador.
 - **O clique público é coalescido em MEMÓRIA, por visitante hasheado, e a supressão nunca alcança o redirect** → [INV-182](docs/INVARIANTS.md#inv-182) | guard: `TestClickCoalesce_ARepeatVisitWritesOneRowAndStillRedirects`, `TestClickCoalesce_TheMapNeverExceedsItsCeiling`, `TestWiring_RepeatClicksFromOneVisitorWriteOneRowAndStillRedirect`
   ↳ Sem teto, o coalescedor é o novo alvo: o atacante enche o mapa em vez do `click_log`.
@@ -96,14 +96,14 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **Recovery codes and six-digit e-mail OTPs use keyed, context-bound digests and remain single-use by conditional UPDATE** → [INV-028](docs/INVARIANTS.md#inv-028)
 - **`POST /api/auth/password/forgot` ALWAYS answers 202, on three channels** → [INV-029](docs/INVARIANTS.md#inv-029)
 - **Auth mail is written to a TRANSACTIONAL OUTBOX, in the same transaction as the credential it carries** → [INV-030](docs/INVARIANTS.md#inv-030)
-- **The mail TRANSPORT is pluggable, and only the sink changes** → [INV-031](docs/INVARIANTS.md#inv-031)
+- **The mail TRANSPORT is pluggable, and only the sink changes** → [INV-031](docs/INVARIANTS.md#inv-031) | guard: `TestRun_NonSMTPDriverRefusesToBoot`
 - **Every auth e-mail renders from an embedded template at DELIVERY time, in the recipient's locale** → [INV-035](docs/INVARIANTS.md#inv-035) | guard: `TestLinklessMessagesCannotBeGivenALink`, `TestEveryLinkCarryingMessageRendersItsLinkInBothArms`
 - **E-mail credentials live in URL fragments, never queries or access-log-visible paths** → [INV-036](docs/INVARIANTS.md#inv-036)
 - **A password reset proves the FIRST factor only** → [INV-037](docs/INVARIANTS.md#inv-037) | guard: `TestResetPassword_StillRequiresTheSecondFactor`
 - **`AUTH_REQUIRE_2FA_FOR_ADMINS` diverts, it does not refuse, and has no privileged-session exception** → [INV-038](docs/INVARIANTS.md#inv-038)
 - **Sessions are opaque tokens stored as sha256, and the CSRF header is checked against the SESSION ROW** → [INV-039](docs/INVARIANTS.md#inv-039)
 - **Refresh rotation runs in ONE `SERIALIZABLE` transaction, and a replayed token kills the whole FAMILY** → [INV-040](docs/INVARIANTS.md#inv-040) | guard: `TestRefresh_GraceSiblingInheritsFamilyAndAbsoluteCeiling`
-- **Login is byte-identical for unknown e-mail, wrong password and disabled account** → [INV-041](docs/INVARIANTS.md#inv-041)
+- **Login is byte-identical for unknown e-mail, wrong password, disabled account and per-account lockout** → [INV-041](docs/INVARIANTS.md#inv-041) | guard: `TestLogin_FailuresAreByteIdentical`, `TestLogin_AccountLockoutDoesNotDistinguishAnAliasFromAStranger`
 - **`/api/auth/me` ALWAYS answers 200** → [INV-042](docs/INVARIANTS.md#inv-042)
 - **A non-admin gets 404 from `/api/admin/*`, not 403** → [INV-043](docs/INVARIANTS.md#inv-043)
 - **No API call may leave the instance with zero active administrators** → [INV-044](docs/INVARIANTS.md#inv-044)
@@ -123,7 +123,7 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **Every screenshot capture gets a fresh Chromium BrowserContext and a per-capture strict local proxy** → [INV-084](docs/INVARIANTS.md#inv-084)
 - **Manual screenshot endpoint applies the same SSRF gate** → [INV-085](docs/INVARIANTS.md#inv-085)
 - **Screenshot resource budgets are fail-closed** → [INV-086](docs/INVARIANTS.md#inv-086)
-- **`GET /api/links/url-metadata` reuses the preview `Fetcher` — same SSRF posture, no duplicate HTTP client** → [INV-087](docs/INVARIANTS.md#inv-087)
+- **`POST /api/links/url-metadata` reuses the preview `Fetcher` — same SSRF posture, no duplicate HTTP client** → [INV-087](docs/INVARIANTS.md#inv-087)
 - **oEmbed enrichment reuses the SAME `preview.Fetcher` client — never a second HTTP stack** → [INV-088](docs/INVARIANTS.md#inv-088)
 - **The cookie `Secure` flag is derived from `AUTH_PUBLIC_URL`'s scheme, NOT from the bind address** → [INV-091](docs/INVARIANTS.md#inv-091) | guard: `TestLoad_CookieSecureFollowsThePublicURLScheme`
 - **`SetSession` expires `fx_pa`** → [INV-092](docs/INVARIANTS.md#inv-092)
@@ -183,7 +183,7 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
   ↳ Sentinela larga = uma indisponibilidade momentânea limpa todo `og_image_url` e recaptura a biblioteca inteira.
 - **A card whose image fails to load falls back to its glyph, never to the browser's broken-image icon** → [INV-082](docs/INVARIANTS.md#inv-082)
 - **JSON request bodies are capped at 64 KiB** → [INV-089](docs/INVARIANTS.md#inv-089)
-- **Stats handler clamps every numeric knob via `clampInt`** → [INV-090](docs/INVARIANTS.md#inv-090)
+- **Stats handler clamps every numeric knob via `clampInt`; `/api/stats/storage` is owner-scoped and LIST-cached** → [INV-090](docs/INVARIANTS.md#inv-090)
 - **Backup is a complete DB + RustFS snapshot ZIP** → [INV-102](docs/INVARIANTS.md#inv-102)
 - **Every backup operation is admitted before work; export and restore stream** → [INV-103](docs/INVARIANTS.md#inv-103)
 - **Backup restore is idempotent by default, never atomic across DB+RustFS** → [INV-104](docs/INVARIANTS.md#inv-104)

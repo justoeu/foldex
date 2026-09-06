@@ -414,6 +414,10 @@ describe('account page — sign-in methods', () => {
 
   it('requires TOTP or a recovery code when two-step verification is enabled', async () => {
     const user = userEvent.setup()
+    const navigate = vi.spyOn(auth, 'navigateToOAuth').mockImplementation(() => {})
+    const post = vi.spyOn(http, 'post').mockResolvedValue({
+      data: { redirect_url: 'https://accounts.google.test/oauth?state=safe-state' },
+    } as never)
     render(sessionWith({ has_password: true, totp_enabled: true }))
 
     await user.click(await screen.findByRole('button', { name: /connect google/i }))
@@ -423,6 +427,27 @@ describe('account page — sign-in methods', () => {
 
     await user.click(dlg.getByRole('button', { name: /use a recovery code/i }))
     expect(dlg.getByLabelText(/recovery code/i)).toBeInTheDocument()
+    await user.click(dlg.getByRole('button', { name: /use authenticator|authenticator/i }))
+
+    await user.type(dlg.getByLabelText(/current password/i), 'hunter2hunter2')
+    const continueBtn = screen.getByRole('button', { name: /continue to google/i })
+    expect(continueBtn).toBeDisabled()
+
+    const cells = dlg.getAllByRole('textbox')
+    expect(cells).toHaveLength(6)
+    for (const [i, cell] of cells.entries()) {
+      await user.type(cell, String(i + 1))
+    }
+    expect(continueBtn).toBeEnabled()
+    await user.click(continueBtn)
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/api/auth/oauth/google/start', {
+        current_password: 'hunter2hunter2',
+        code: '123456',
+      }),
+    )
+    expect(navigate).toHaveBeenCalledWith('https://accounts.google.test/oauth?state=safe-state')
   })
 
   it('shows the linked address once Google is connected', async () => {

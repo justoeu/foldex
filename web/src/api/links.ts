@@ -193,8 +193,7 @@ export function useFetchUrlMetadata() {
       if (hit && hit.expiresAt > now) {
         return hit.data
       }
-      const { data } = await http.get<UrlMetadata>('/api/links/url-metadata', {
-        params: { url },
+      const { data } = await http.post<UrlMetadata>('/api/links/url-metadata', { url }, {
         signal,
       })
       urlMetadataCache.set(url, { data, expiresAt: now + URL_METADATA_CACHE_TTL_MS })

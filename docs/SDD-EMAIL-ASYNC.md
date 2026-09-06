@@ -257,7 +257,7 @@ CREATE INDEX mail_outbox_stuck_idx
   frequentemente ecoa o envelope.
 - **`claim_token`** é o que torna a publicação idempotente sob concorrência. O relay
   reivindica com `FOR UPDATE SKIP LOCKED` (mesmo padrão de
-  `SystemFindDueForCheck`) e só marca `published` com CAS naquele token exato — um
+  `SystemClaimDueForCheck`) e só marca `published` com CAS naquele token exato — um
   relay que dormiu e acordou depois de outro ter reivindicado a linha não sobrescreve
   o resultado.
 - **`mail_outbox_stuck_idx`** existe para o varredor de linhas presas em
@@ -440,8 +440,10 @@ construídas e injetadas de cima para baixo. Sem DI, sem estado global, sem serv
 locator (`CLAUDE.md` §7).
 
 - Consome `foldex.mail.send`, decifra o payload com `secrets.Cipher`, renderiza o
-  template no `locale` da mensagem, envia via `mailer.Mailer` — os drivers `smtp` e
-  `log` atuais são reaproveitados **sem nenhuma mudança**.
+  template no `locale` da mensagem, envia via `mailer.Mailer`. O driver `smtp` é
+  o único aceito: `MAIL_DRIVER=log` recusa o boot (não é um aviso), porque o
+  worker já decifrou o link e o stdout dele cai num agregador compartilhado. O
+  driver `log` continua sendo a caixa postal do transporte `inproc`.
 - `Ack` só depois de `Send` retornar `nil`. `Nack(requeue=false)` em falha, para o
   DLX cuidar do backoff. Requeue imediato seria um loop apertado contra um servidor
   que acabou de recusar.

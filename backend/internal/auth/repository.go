@@ -205,9 +205,23 @@ func (r *Repository) GetUser(ctx context.Context, id authctx.UserID) (User, erro
 	return u, nil
 }
 
-// ListUsers returns every account, oldest first. Admin-only surface.
-func (r *Repository) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := r.pool.Query(ctx, `SELECT `+userColumns+` FROM app_user ORDER BY id ASC`)
+// adminListCeiling is the compiled page cap for /api/admin/users and /invites.
+// The SPA does not paginate those lists; without a ceiling a large instance
+// would JSON every account in one response.
+const adminListCeiling = 200
+
+// ListUsers returns accounts newest first, capped at limit (ceiling 200).
+// The SPA does not send a cursor, so ASC would hide the accounts an
+// administrator just created once the instance grows past the ceiling.
+// afterID is an exclusive cursor on app_user.id (older than); 0 is the first page.
+func (r *Repository) ListUsers(ctx context.Context, limit int, afterID int64) ([]User, error) {
+	if limit <= 0 || limit > adminListCeiling {
+		limit = adminListCeiling
+	}
+	rows, err := r.pool.Query(ctx, `SELECT `+userColumns+` FROM app_user
+		WHERE ($2::bigint = 0 OR app_user.id < $2)
+		ORDER BY app_user.id DESC
+		LIMIT $1`, limit, afterID)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -275,9 +289,10 @@ func (r *Repository) verifyPassword(ctx context.Context, identifier, password st
 // itself an anti-enumeration measure (not incrementing would teach an attacker
 // which names are lockable, hence which exist).
 //
-// Nothing observable depends on the answer: both branches are one indexed
-// probe, and the response path that follows always runs bcrypt and always takes
-// the same floor.
+// The observable does not depend on the answer: both branches are one indexed
+// probe, the response path always takes the same floor, and a locked account
+// bucket answers the same 401 as a miss (INV-041). The resolution only shares
+// depth, it does not change status, body or Retry-After.
 func (r *Repository) loginBucketKey(ctx context.Context, identifier string) (string, error) {
 	norm := NormalizeEmail(identifier)
 	var canonical string
@@ -977,13 +992,17 @@ func (r *Repository) LookupInvite(ctx context.Context, rawToken string) (Invite,
 
 // ListInvites returns the open invitations for the admin screen. The token
 // hash is never selected — there is nothing useful an admin could do with it,
-// and the raw value is unrecoverable by design.
-func (r *Repository) ListInvites(ctx context.Context) ([]Invite, error) {
+// and the raw value is unrecoverable by design. Capped at limit (ceiling 200).
+func (r *Repository) ListInvites(ctx context.Context, limit int) ([]Invite, error) {
+	if limit <= 0 || limit > adminListCeiling {
+		limit = adminListCeiling
+	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, email, role, created_at, expires_at, accepted_at
 		FROM invite
 		WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
-		ORDER BY created_at DESC`)
+		ORDER BY created_at DESC
+		LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list invites: %w", err)
 	}
@@ -1449,6 +1468,15 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 
+// NewUser is the named input for AdminCreateUser so email, name and
+// password cannot compile into each other's slots.
+type NewUser struct {
+	Email    string
+	Name     string
+	Password string
+	Role     authctx.Role
+}
+
 // AdminCreateUser creates an account whose FIRST password was chosen by an
 // administrator rather than by its owner.
 //
@@ -1471,26 +1499,22 @@ func truncate(s string, n int) string {
 // Never mints an owner: the single-owner partial index would reject a second
 // one anyway, and refusing here gives the caller an honest 400 instead of a
 // constraint error surfacing as a 500.
-func (r *Repository) AdminCreateUser(
-	ctx context.Context,
-	email, name, password string,
-	role authctx.Role,
-) (User, error) {
-	if role == authctx.RoleOwner || !role.Valid() {
+func (r *Repository) AdminCreateUser(ctx context.Context, in NewUser) (User, error) {
+	if in.Role == authctx.RoleOwner || !in.Role.Valid() {
 		return User{}, ErrInvalidRole
 	}
-	hash, err := pwhash.Hash(password)
+	hash, err := pwhash.Hash(in.Password)
 	if err != nil {
 		return User{}, err
 	}
 
 	// Trimmed so the stored address is byte-identical to the one the caller
 	// sees echoed back, matching CreateInvite.
-	trimmed := strings.TrimSpace(email)
+	trimmed := strings.TrimSpace(in.Email)
 	u, err := scanUser(r.pool.QueryRow(ctx, `
 		INSERT INTO app_user (email, email_normalized, name, password_hash, role, status)
 		VALUES ($1, $2, $3, $4, $5, 'active')
-		RETURNING `+userColumns, trimmed, NormalizeEmail(email), strings.TrimSpace(name), hash, role))
+		RETURNING `+userColumns, trimmed, NormalizeEmail(in.Email), strings.TrimSpace(in.Name), hash, in.Role))
 	if err != nil {
 		// Matched by CONSTRAINT NAME, like the two other insert paths in this
 		// file: a bare 23505 would also swallow the single-owner index, and the

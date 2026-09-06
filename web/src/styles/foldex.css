@@ -938,7 +938,8 @@
 }
 .fx-userbtn:hover { color: var(--fx-ink); }
 .fx-userbtn-active { color: var(--fx-accent); box-shadow: 0 0 0 1.5px var(--fx-accent-2); }
-.fx-usermenu {
+.fx-usermenu,
+.fx-localemenu {
   position: fixed; z-index: 80; min-width: 232px; padding: 6px;
   /* Composited over an OPAQUE base, not just tinted.
      Every --fx-surface-* token carries alpha (0.62 → 0.94), which reads solid
@@ -952,21 +953,29 @@
   box-shadow: var(--fx-shadow-2, var(--fx-shadow-1));
   backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%);
 }
+.fx-localemenu { min-width: 160px; padding: 4px; border-radius: 10px; }
 .fx-usermenu-head { display: flex; gap: 10px; align-items: center; padding: 8px 10px 10px; border-bottom: 1px solid var(--fx-border); margin-bottom: 6px; }
 .fx-usermenu-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fx-usermenu-mail { font-size: 11px; color: var(--fx-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Element-qualified and self-sufficient: outside the shell there is no reset to
    inherit from, so the item declares its own border/background/font. The two
    :hover rules below are (0,2,0) and still win over this (0,1,1). */
-button.fx-usermenu-item {
+button.fx-usermenu-item,
+button.fx-localemenu-item {
   display: flex; width: 100%; gap: 8px; align-items: center; padding: 8px 10px;
   border: 0; background: transparent; cursor: pointer; text-align: left;
   border-radius: 8px; font-family: inherit; font-size: 12.5px; font-weight: 550;
   color: var(--fx-ink-2);
   transition: background .15s, color .15s;
 }
+button.fx-localemenu-item { border-radius: 6px; font-size: 13px; color: var(--fx-ink); }
 .fx-usermenu-item:hover { background: var(--fx-surface-3); color: var(--fx-ink); }
 .fx-usermenu-item-danger:hover { color: var(--fx-danger); }
+.fx-localemenu-item:hover,
+.fx-localemenu-item[aria-current="true"] { background: rgba(99, 102, 241, 0.08); }
+.fx-localemenu-label { flex: 1; }
+.fx-localemenu-check { color: var(--fx-accent); display: inline-flex; }
+.fx-localemenu-code { font-family: var(--fx-mono); font-size: 10px; color: var(--fx-ink-4); }
 
 :is(.fx-shell, .fx-overlay) .fx-hub-back {
   display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px 0 8px;

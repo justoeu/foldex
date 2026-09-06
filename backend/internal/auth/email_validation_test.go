@@ -51,4 +51,21 @@ func TestValidateEmail(t *testing.T) {
 			require.Errorf(t, validateEmail(attack), "accepted %q", attack)
 		}
 	})
+
+	// The local-part allowlist killed URL-shaped LOCAL parts. The domain was
+	// only "has a dot not at the ends", so `user@ok.com://phish` still landed
+	// in {{.NewEmail}} of the linkless change notice — and mail clients
+	// linkify a bare scheme.
+	t.Run("refuses a URL-shaped domain", func(t *testing.T) {
+		for _, attack := range []string{
+			"user@ok.com://phish",
+			"user@ok.com/phish",
+			"user@ok.com:80",
+			"user@ok.com?x=1",
+			"user@ok.com#frag",
+			"user://ok.com",
+		} {
+			require.Errorf(t, validateEmail(attack), "accepted %q", attack)
+		}
+	})
 }

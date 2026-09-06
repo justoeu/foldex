@@ -24,6 +24,7 @@ import (
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/secrets"
+	"foldex/internal/policy"
 	"foldex/internal/testdb"
 )
 
@@ -877,9 +878,10 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	assert.ErrorIs(t, h.repo.StartTOTPEnrollment(ctx, user.ID, stale, 0, []byte("cipher"), []byte("nonce")),
 		auth.ErrChallengeInvalid)
-	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, user.ID, stale,
-		auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")},
-		[][]byte{[]byte("h")}, 0, nil, testSessionTTL(), "", "")
+	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, auth.EnrollmentComplete{
+		UID: user.ID, TokenVersion: stale, RecoveryHashes: [][]byte{[]byte("h")},
+		Session: auth.LiveSession{ID: 0},
+	}, auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")})
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	_, _, err = h.repo.IssueSession(ctx, user.ID, stale, testSessionTTL(), "", "")
 	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
@@ -905,9 +907,10 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	assert.ErrorIs(t, h.repo.StartTOTPEnrollment(ctx, user.ID, user.TokenVersion, 0,
 		[]byte("replacement"), []byte("replacement")), auth.ErrChallengeInvalid)
-	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, user.ID, user.TokenVersion,
-		auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")},
-		[][]byte{[]byte("h")}, 0, nil, testSessionTTL(), "", "")
+	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, auth.EnrollmentComplete{
+		UID: user.ID, TokenVersion: user.TokenVersion, RecoveryHashes: [][]byte{[]byte("h")},
+		Session: auth.LiveSession{ID: 0},
+	}, auth.TOTPProof{Counter: 1, Ciphertext: []byte("cipher"), Nonce: []byte("nonce")})
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
 	_, _, err = h.repo.IssueSession(ctx, user.ID, user.TokenVersion, testSessionTTL(), "", "")
 	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
@@ -1795,6 +1798,81 @@ func TestAdminPolicy_AdminCannotDisableTOTP(t *testing.T) {
 	assert.Equal(t, "totp_required_for_admins", errCode(t, rec))
 }
 
+// totp_only is the owner-tightened half of INV-038: e-mail satisfies
+// AUTH_REQUIRE_2FA_FOR_ADMINS only at the floor (`any`). Without
+// WithAdminFactorPolicy on the harness every run sees that floor, so an
+// e-mail-only admin would keep /api/admin and could still DisableTOTP.
+func TestAdminPolicy_TotpOnlyRefusesEmailOnlyAdminsAndBlocksTOTPRemoval(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{
+		TwoFactor: true, SMTP: true, Require2FAForAdmins: true, Policy: true,
+	})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+
+	c := h.client(t)
+	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/bootstrap", map[string]string{
+		"email": "admin@example.com", "name": "Admin", "password": "a good password",
+	}).Code)
+	rec := c.do(http.MethodPost, "/api/auth/2fa/totp/start", nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var start struct {
+		Secret string `json:"secret"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &start))
+	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/2fa/totp/confirm",
+		map[string]string{"code": codeNow(t, start.Secret)}).Code)
+	enrolEmailFactor(t, h, c, "admin@example.com", "a good password")
+
+	totpAdminID := testdb.SeedUserWithPassword(t, h.pool, "totp-admin@example.com", "a good password", "admin")
+	totpAdmin := h.client(t)
+	require.Equal(t, http.StatusOK, totpAdmin.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "totp-admin@example.com", "password": "a good password",
+	}).Code)
+	rec = totpAdmin.do(http.MethodPost, "/api/auth/2fa/totp/start", nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var totpStart struct {
+		Secret string `json:"secret"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &totpStart))
+	require.Equal(t, http.StatusOK, totpAdmin.do(http.MethodPost, "/api/auth/2fa/totp/confirm",
+		map[string]string{"code": codeNow(t, totpStart.Secret)}).Code)
+
+	p := policy.Default()
+	p.AdminSecondFactor = policy.AdminFactorTOTPOnly
+	require.NoError(t, policy.NewRepository(h.pool).Set(context.Background(), p))
+
+	rec = c.do(http.MethodPost, "/api/auth/2fa/totp/disable", map[string]string{
+		"password": "a good password",
+		"code":     codeNextStep(t, start.Secret),
+	})
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	assert.Equal(t, "totp_required_for_admins", errCode(t, rec))
+
+	var emailAdminID int64
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT id FROM app_user WHERE email_normalized = $1`, "admin@example.com").Scan(&emailAdminID))
+	_, err := h.pool.Exec(context.Background(),
+		`DELETE FROM totp_secret WHERE user_id = $1`, emailAdminID)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	ok, err := h.repo.HasConfirmedSecondFactor(ctx, authctx.UserID(emailAdminID), true)
+	require.NoError(t, err)
+	assert.False(t, ok, "an e-mail factor must not satisfy totp_only")
+	ok, err = h.repo.HasConfirmedSecondFactor(ctx, authctx.UserID(emailAdminID), false)
+	require.NoError(t, err)
+	assert.True(t, ok, "the e-mail factor is still there; only totp_only refuses it")
+
+	rec = c.do(http.MethodGet, "/api/admin/users", nil)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	assert.Equal(t, "admin_2fa_required", errCode(t, rec))
+
+	assert.Equal(t, http.StatusOK, totpAdmin.do(http.MethodGet, "/api/admin/users", nil).Code)
+
+	ok, err = h.repo.HasConfirmedSecondFactor(ctx, totpAdminID, true)
+	require.NoError(t, err)
+	assert.True(t, ok)
+}
+
 func TestConfirmTOTP_SeedReplacementBetweenVerifyAndConfirmCannotActivateTheReplacement(t *testing.T) {
 	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
 	require.NoError(t, testdb.Reset(context.Background(), h.pool))
@@ -1816,10 +1894,11 @@ func TestConfirmTOTP_SeedReplacementBetweenVerifyAndConfirmCannotActivateTheRepl
 	require.NoError(t, h.repo.StartTOTPEnrollment(context.Background(), uid, user.TokenVersion, sid,
 		replacementCiphertext, replacementNonce))
 
-	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), uid, user.TokenVersion,
-		auth.TOTPProof{Counter: time.Now().Unix() / 30,
-			Ciphertext: verified.Ciphertext, Nonce: verified.Nonce},
-		[][]byte{[]byte("h")}, sid, nil, testSessionTTL(), "", "")
+	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), auth.EnrollmentComplete{
+		UID: uid, TokenVersion: user.TokenVersion, RecoveryHashes: [][]byte{[]byte("h")},
+		Session: auth.LiveSession{ID: sid},
+	}, auth.TOTPProof{Counter: time.Now().Unix() / 30,
+		Ciphertext: verified.Ciphertext, Nonce: verified.Nonce})
 	require.ErrorIs(t, err, auth.ErrTOTPEnrollmentChanged,
 		"confirmation activated a seed that was not the one verified")
 
@@ -1921,10 +2000,11 @@ func TestConfirmTOTP_SettingsEnrollmentRefusesARevokedSession(t *testing.T) {
 	require.NoError(t, err)
 	row, err := h.repo.LoadTOTPSecret(context.Background(), user.ID)
 	require.NoError(t, err)
-	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), user.ID, user.TokenVersion,
-		auth.TOTPProof{Counter: time.Now().Unix() / 30,
-			Ciphertext: row.Ciphertext, Nonce: row.Nonce},
-		[][]byte{[]byte("recovery")}, sid, nil, testSessionTTL(), "", "")
+	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), auth.EnrollmentComplete{
+		UID: user.ID, TokenVersion: user.TokenVersion, RecoveryHashes: [][]byte{[]byte("recovery")},
+		Session: auth.LiveSession{ID: sid},
+	}, auth.TOTPProof{Counter: time.Now().Unix() / 30,
+		Ciphertext: row.Ciphertext, Nonce: row.Nonce})
 	assert.ErrorIs(t, err, auth.ErrSessionInvalid)
 
 	var confirmed bool
@@ -1960,10 +2040,11 @@ func TestConfirmTOTP_SettingsEnrollmentIsBoundToTheStartingSession(t *testing.T)
 		SELECT id FROM session WHERE access_token_hash = $1`,
 		secrets.Hash(second.cookies[auth.CookieAccess])).Scan(&secondSession))
 
-	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), user.ID, user.TokenVersion,
-		auth.TOTPProof{Counter: time.Now().Unix() / 30,
-			Ciphertext: row.Ciphertext, Nonce: row.Nonce},
-		[][]byte{[]byte("recovery")}, secondSession, nil, testSessionTTL(), "", "")
+	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), auth.EnrollmentComplete{
+		UID: user.ID, TokenVersion: user.TokenVersion, RecoveryHashes: [][]byte{[]byte("recovery")},
+		Session: auth.LiveSession{ID: secondSession},
+	}, auth.TOTPProof{Counter: time.Now().Unix() / 30,
+		Ciphertext: row.Ciphertext, Nonce: row.Nonce})
 	assert.ErrorIs(t, err, auth.ErrTOTPEnrollmentChanged)
 
 	current, err := h.repo.LoadTOTPSecret(context.Background(), user.ID)

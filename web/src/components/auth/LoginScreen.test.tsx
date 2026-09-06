@@ -5,8 +5,33 @@ import { LoginScreen } from './LoginScreen'
 import { SetupScreen } from './SetupScreen'
 import { renderWithProviders, testAdminUser } from '../../test/renderWithProviders'
 import { http } from '../../api/client'
+import { useAuth } from '../../auth/AuthProvider'
+import type { MeResponse } from '../../api/auth'
 
 const features = { google_oauth: false, two_factor: false, email_delivery: false }
+
+/**
+ * Renders the screen next to a probe that reports the live session status.
+ *
+ * Asserting only on `http.post` arguments would be asserting on the mock:
+ * deleting `adopt(...)` from the component leaves every request-shape test
+ * green while the user is never actually signed in. The probe makes the EFFECT
+ * observable.
+ */
+function SessionProbe() {
+  const { session } = useAuth()
+  return <span data-testid="session-status">{session.status}</span>
+}
+
+const twoFactorChallenge: MeResponse = {
+  status: 'two_factor_required',
+  purpose: 'totp',
+  email: 'a•••@b.test',
+  methods: ['totp', 'recovery_code'],
+  expires_in: 300,
+  max_attempts: 5,
+  features: { google_oauth: false, two_factor: true, email_delivery: false },
+}
 
 function rejectWith(code: string, status = 401) {
   return vi.spyOn(http, 'post').mockRejectedValue({
@@ -21,7 +46,13 @@ describe('LoginScreen', () => {
     const post = vi.spyOn(http, 'post').mockResolvedValue({
       data: { status: 'authenticated', user: { email: 'a@b.c' }, csrf_token: 't', features },
     } as never)
-    renderWithProviders(<LoginScreen />, { session: null })
+    renderWithProviders(
+      <>
+        <LoginScreen />
+        <SessionProbe />
+      </>,
+      { session: null },
+    )
     const user = userEvent.setup()
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
@@ -33,6 +64,31 @@ describe('LoginScreen', () => {
         identifier: 'a@b.c',
         password: 'a good password',
       }),
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status')).toHaveTextContent('authenticated'),
+    )
+  })
+
+  // A password is one factor. An account that still owes a code must not be
+  // signed in by this screen — `adopt` is what hands the challenge to the gate.
+  it('stops at the second factor when the server asks for one', async () => {
+    vi.spyOn(http, 'post').mockResolvedValue({ data: twoFactorChallenge } as never)
+    renderWithProviders(
+      <>
+        <LoginScreen />
+        <SessionProbe />
+      </>,
+      { session: null },
+    )
+    const user = userEvent.setup()
+
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
+    await user.type(screen.getByLabelText(/^password$/i), 'a good password')
+    await user.click(screen.getByRole('button', { name: /sign in/i }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status')).toHaveTextContent('two_factor_required'),
     )
   })
 
@@ -168,12 +224,29 @@ describe('LoginScreen', () => {
   })
 })
 
+const enrollChallenge: MeResponse = {
+  status: 'two_factor_required',
+  purpose: 'enroll_2fa',
+  reason: 'admin_policy',
+  email: 'a•••@b.test',
+  methods: ['totp'],
+  expires_in: 300,
+  max_attempts: 5,
+  features: { google_oauth: false, two_factor: true, email_delivery: false },
+}
+
 describe('SetupScreen', () => {
   it('creates the first administrator', async () => {
     const post = vi.spyOn(http, 'post').mockResolvedValue({
       data: { status: 'authenticated', user: { email: 'a@b.c' }, csrf_token: 't', features },
     } as never)
-    renderWithProviders(<SetupScreen />, { session: null })
+    renderWithProviders(
+      <>
+        <SetupScreen />
+        <SessionProbe />
+      </>,
+      { session: null },
+    )
     const user = userEvent.setup()
 
     await user.type(screen.getByLabelText(/name/i), 'Ana')
@@ -189,6 +262,31 @@ describe('SetupScreen', () => {
         password: 'a good password',
       }),
     )
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status')).toHaveTextContent('authenticated'),
+    )
+  })
+
+  it('stops at enroll_2fa when bootstrap still owes a second factor', async () => {
+    vi.spyOn(http, 'post').mockResolvedValue({ data: enrollChallenge } as never)
+    renderWithProviders(
+      <>
+        <SetupScreen />
+        <SessionProbe />
+      </>,
+      { session: null },
+    )
+    const user = userEvent.setup()
+
+    await user.type(screen.getByLabelText(/name/i), 'Ana')
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
+    await user.type(screen.getByLabelText(/^password$/i), 'a good password')
+    await user.type(screen.getByLabelText(/confirm password/i), 'a good password')
+    await user.click(screen.getByRole('button', { name: /create account/i }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status')).toHaveTextContent('two_factor_required'),
+    )
   })
 
   it('refuses to submit when the two passwords differ', async () => {
@@ -199,9 +297,9 @@ describe('SetupScreen', () => {
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'a good password')
     await user.type(screen.getByLabelText(/confirm password/i), 'a different one')
-    await user.click(screen.getByRole('button', { name: /create account/i }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/do not match/i)
+    expect(screen.getByText(/do not match/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /create account/i })).toBeDisabled()
     expect(post).not.toHaveBeenCalled()
   })
 
@@ -219,16 +317,16 @@ describe('SetupScreen', () => {
   })
 
   it('relays the backend password policy verbatim', async () => {
-    rejectWith('password_too_short', 400)
+    const post = vi.spyOn(http, 'post')
     renderWithProviders(<SetupScreen />, { session: null })
     const user = userEvent.setup()
 
     await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
     await user.type(screen.getByLabelText(/^password$/i), 'shortpw')
     await user.type(screen.getByLabelText(/confirm password/i), 'shortpw')
-    await user.click(screen.getByRole('button', { name: /create account/i }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/at least 8 characters/i)
+    expect(screen.getByRole('button', { name: /create account/i })).toBeDisabled()
+    expect(post).not.toHaveBeenCalled()
   })
 })
 

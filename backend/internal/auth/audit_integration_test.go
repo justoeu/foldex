@@ -32,11 +32,15 @@ func auditFixture(t *testing.T) (*auth.Repository, *pgxpool.Pool, auth.User, aut
 	require.NoError(t, err)
 
 	uniq := time.Now().UnixNano()
-	owner, err := repo.AdminCreateUser(ctx,
-		fmt.Sprintf("owner-%d@foldex.test", uniq), "Owner", "correct horse battery staple", authctx.RoleAdmin)
+	owner, err := repo.AdminCreateUser(ctx, auth.NewUser{
+		Email: fmt.Sprintf("owner-%d@foldex.test", uniq), Name: "Owner",
+		Password: "correct horse battery staple", Role: authctx.RoleAdmin,
+	})
 	require.NoError(t, err)
-	member, err := repo.AdminCreateUser(ctx,
-		fmt.Sprintf("member-%d@foldex.test", uniq), "Member", "correct horse battery staple", authctx.RoleEditor)
+	member, err := repo.AdminCreateUser(ctx, auth.NewUser{
+		Email: fmt.Sprintf("member-%d@foldex.test", uniq), Name: "Member",
+		Password: "correct horse battery staple", Role: authctx.RoleEditor,
+	})
 	require.NoError(t, err)
 	return repo, pool, owner, member
 }

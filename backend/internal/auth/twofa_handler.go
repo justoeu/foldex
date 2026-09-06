@@ -203,13 +203,13 @@ func (h *Handler) pendingPayload(u User, purpose ChallengePurpose, mailboxAlread
 		return twoFactorAuthResponse{
 			Status: statusTwoFactorRequired, Purpose: purpose, Email: MaskEmail(u.Email),
 			Methods: methods, ExpiresIn: int(challengeTTL.Seconds()),
-			MaxAttempts: maxChallengeAttempts, Features: h.features,
+			MaxAttempts: maxChallengeAttempts, Features: h.liveFeatures(context.Background()),
 		}, nil
 	case PurposeEnroll2FA:
 		return enrollmentAuthResponse{
 			Status: statusTwoFactorRequired, Purpose: purpose, Email: MaskEmail(u.Email),
 			Methods: []string{}, ExpiresIn: int(challengeTTL.Seconds()),
-			MaxAttempts: maxChallengeAttempts, Features: h.features,
+			MaxAttempts: maxChallengeAttempts, Features: h.liveFeatures(context.Background()),
 			Reason: "admin_enrollment_required",
 		}, nil
 	case PurposeConvertGoogle:
@@ -219,7 +219,7 @@ func (h *Handler) pendingPayload(u User, purpose ChallengePurpose, mailboxAlread
 		return conversionAuthResponse{
 			Status: statusConvertPasswordAccount, Purpose: purpose, Email: MaskEmail(u.Email),
 			Methods: []string{}, ExpiresIn: int(challengeTTL.Seconds()),
-			MaxAttempts: maxChallengeAttempts, Features: h.features,
+			MaxAttempts: maxChallengeAttempts, Features: h.liveFeatures(context.Background()),
 		}, nil
 	default:
 		return nil, errInvalidChallengePurpose
@@ -637,9 +637,13 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		}
 		challenge = &ch
 	}
-	user, tok, err := h.repo.CompleteTOTPEnrollment(r.Context(), uid, tokenVersion,
-		TOTPProof{Counter: counter, Ciphertext: row.Ciphertext, Nonce: row.Nonce}, hashes,
-		sessionID, challenge, h.ttl, clientIP(r), r.UserAgent())
+	var session SessionIssue = LiveSession{ID: sessionID}
+	if challenge != nil {
+		session = PreAuth{Challenge: *challenge, TTL: h.ttl, IP: clientIP(r), UA: r.UserAgent()}
+	}
+	user, tok, err := h.repo.CompleteTOTPEnrollment(r.Context(), EnrollmentComplete{
+		UID: uid, TokenVersion: tokenVersion, RecoveryHashes: hashes, Session: session,
+	}, TOTPProof{Counter: counter, Ciphertext: row.Ciphertext, Nonce: row.Nonce})
 	if err != nil {
 		if errors.Is(err, ErrTOTPEnrollmentChanged) {
 			httperr.Write(w, httperr.New(http.StatusConflict, "enrollment_changed",
@@ -718,6 +722,11 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, ErrTOTPReplay) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
+		return
+	}
+	if errors.Is(err, ErrNoPendingFactor) {
+		httperr.Write(w, httperr.New(http.StatusConflict, "totp_not_enabled",
+			"an authenticator is not enrolled as a second factor"))
 		return
 	}
 	if errors.Is(err, ErrSessionInvalid) {

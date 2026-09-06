@@ -294,20 +294,56 @@ func TestOutcomes_AnotherAgentsStoreCannotFinishMyRun(t *testing.T) {
 	// The claim_token WHERE clause is what stops a janitor-expired straggler
 	// from overwriting the outcome of the run its successor now owns.
 	other := NewRunStore(pool)
-	require.NoError(t, other.Fail(ctx, id, ReasonDumpFailed))
+	assert.ErrorIs(t, other.Fail(ctx, id, ReasonDumpFailed), ErrRunNotRunning)
 	var status string
 	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM backup_run WHERE id = $1`, id).Scan(&status))
 	assert.Equal(t, "running", status, "a foreign claim token must not finish the row")
 
 	// Succeed carries the symmetric guard — the straggler cannot forge a
 	// success over the successor's run either.
-	require.NoError(t, other.Succeed(ctx, id, &Artifact{Key: "forged", Bytes: 1, SHA256: "00"}, nil))
+	assert.ErrorIs(t, other.Succeed(ctx, id, &Artifact{Key: "forged", Bytes: 1, SHA256: "00"}, nil), ErrRunNotRunning)
 	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM backup_run WHERE id = $1`, id).Scan(&status))
 	assert.Equal(t, "running", status, "a foreign claim token must not succeed the row either")
 
 	require.NoError(t, mine.Succeed(ctx, id, nil, nil))
 	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM backup_run WHERE id = $1`, id).Scan(&status))
 	assert.Equal(t, "succeeded", status)
+}
+
+// TestSucceed_AfterExpireStaleAffectsZeroRows is RACE-HER-004: a straggler
+// that finishes after the janitor has already flipped the row to
+// failed(stale_claim) must not resurrect it as succeeded — that would both
+// lie about the outcome and hold the running slot against a successor.
+func TestSucceed_AfterExpireStaleAffectsZeroRows(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+	s := NewRunStore(pool)
+
+	id, err := s.Begin(ctx, JobDump, time.Now())
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE backup_run SET started_at = now() - interval '5 hours' WHERE id = $1`, id)
+	require.NoError(t, err)
+
+	n, err := s.ExpireStale(ctx, 4*time.Hour)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, n)
+
+	err = s.Succeed(ctx, id, &Artifact{Key: "late", Bytes: 1, SHA256: "aa"}, nil)
+	assert.Error(t, err, "Succeed after ExpireStale must not mark the corpse succeeded")
+	assert.ErrorIs(t, err, ErrRunNotRunning)
+
+	var status, reason string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status, last_error FROM backup_run WHERE id = $1`, id).Scan(&status, &reason))
+	assert.Equal(t, "failed", status, "the janitor's outcome must stick")
+	assert.Equal(t, ReasonStaleClaim, reason)
+
+	_, err = s.Begin(ctx, JobDump, time.Now())
+	require.NoError(t, err, "the running slot must be free for a successor after ExpireStale")
+
+	err = s.Fail(ctx, id, ReasonDumpFailed)
+	assert.ErrorIs(t, err, ErrRunNotRunning, "Fail is the same CAS: a stale claim cannot overwrite the janitor")
 }
 
 func TestConsecutiveFailures_OperationalReasonsDoNotCount(t *testing.T) {

@@ -52,15 +52,12 @@ func TestSlugifyMaxLen(t *testing.T) {
 	// Build a title that exceeds MaxLen and verify truncation to ≤80 chars
 	long := "this-is-a-very-long-title-that-definitely-exceeds-the-80-character-slug-limit-and-must-be-truncated-correctly"
 	got := Slugify(long)
+	want := "this-is-a-very-long-title-that-definitely-exceeds-the-80-character-slug-limit"
+	if got != want {
+		t.Fatalf("Slugify(long) = %q; want hyphen-boundary %q", got, want)
+	}
 	if len(got) > MaxLen {
 		t.Fatalf("slug %q has len %d, must be ≤ %d", got, len(got), MaxLen)
-	}
-	if got == long {
-		t.Fatal("slug was not truncated")
-	}
-	// Truncation should end on a word boundary, not mid-word
-	if got[len(got)-1] == '-' {
-		t.Fatal("slug ends with a hyphen")
 	}
 }
 

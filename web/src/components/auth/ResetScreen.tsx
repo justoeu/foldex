@@ -2,8 +2,8 @@ import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { errorCode, errorStatus, resetPassword } from '../../api/auth'
 import { useAuth } from '../../auth/AuthProvider'
-import { MIN_PASSWORD_LEN } from '../../auth/types'
 import { PasswordStrength } from '../PasswordStrength'
+import { passwordGateLen, usePasswordFloor } from '../../hooks/useInstancePolicy'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 import { PasswordInput } from '../PasswordInput'
 
@@ -19,12 +19,14 @@ import { PasswordInput } from '../PasswordInput'
 export function ResetScreen({ token, onGiveUp }: { token: string; onGiveUp: () => void }) {
   const { t } = useTranslation()
   const { adopt } = useAuth()
+  const minLen = usePasswordFloor()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
   const mismatch = confirm.length > 0 && password !== confirm
+  const tooShort = password.length > 0 && password.length < passwordGateLen(minLen)
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -40,7 +42,7 @@ export function ResetScreen({ token, onGiveUp }: { token: string; onGiveUp: () =
     } catch (err) {
       const code = errorCode(err)
       if (code === 'reset_invalid') setError(t('auth_reset.link_invalid'))
-      else if (code === 'password_too_short') setError(t('auth_errors.password_too_short', { count: MIN_PASSWORD_LEN }))
+      else if (code === 'password_too_short') setError(t('auth_errors.password_too_short', { count: minLen }))
       else if (code === 'password_too_long') setError(t('auth_errors.password_too_long'))
       else if (code === 'too_many_attempts') setError(t('auth_errors.too_many_attempts'))
       else if (errorStatus(err) === 0) setError(t('auth_errors.network'))
@@ -59,7 +61,11 @@ export function ResetScreen({ token, onGiveUp }: { token: string; onGiveUp: () =
       <form className="fx-auth-form" onSubmit={onSubmit} noValidate>
         <AuthError message={error} />
 
-        <AuthField id="fx-reset-password" label={t('auth_reset.new_password')}>
+        <AuthField
+          id="fx-reset-password"
+          label={t('auth_reset.new_password')}
+          hint={t('auth.password_min', { count: minLen })}
+        >
           <PasswordInput
             id="fx-reset-password"
             className="fx-auth-input"
@@ -67,6 +73,7 @@ export function ResetScreen({ token, onGiveUp }: { token: string; onGiveUp: () =
             autoComplete="new-password"
             autoFocus
             required
+            aria-invalid={tooShort || undefined}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
@@ -86,7 +93,7 @@ export function ResetScreen({ token, onGiveUp }: { token: string; onGiveUp: () =
           />
         </AuthField>
 
-        <AuthSubmit busy={busy} disabled={!password || mismatch}>
+        <AuthSubmit busy={busy} disabled={!password || tooShort || mismatch}>
           {t('auth_reset.submit')}
         </AuthSubmit>
 

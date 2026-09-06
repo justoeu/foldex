@@ -4,9 +4,11 @@ package notemedia_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -29,6 +31,41 @@ func (s *memoryStorage) GetObject(_ context.Context, key string) ([]byte, string
 
 func (s *memoryStorage) DeleteObject(_ context.Context, key string) error {
 	delete(s.objects, key)
+	return nil
+}
+
+func (s *memoryStorage) DeleteObjects(ctx context.Context, keys []string) error {
+	for _, key := range keys {
+		if err := s.DeleteObject(ctx, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type recordingStorage struct {
+	objects          map[string][]byte
+	deleteObjectN    int
+	deleteObjectsN   int
+	deleteObjectsArg [][]string
+	bulkErr          error
+}
+
+func (s *recordingStorage) DeleteObject(_ context.Context, key string) error {
+	s.deleteObjectN++
+	delete(s.objects, key)
+	return nil
+}
+
+func (s *recordingStorage) DeleteObjects(_ context.Context, keys []string) error {
+	s.deleteObjectsN++
+	s.deleteObjectsArg = append(s.deleteObjectsArg, append([]string(nil), keys...))
+	if s.bulkErr != nil {
+		return s.bulkErr
+	}
+	for _, key := range keys {
+		delete(s.objects, key)
+	}
 	return nil
 }
 
@@ -87,6 +124,95 @@ func TestSystemSweepExpired_KeepsReferencedMedia(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, removed)
 	assert.Equal(t, []byte("live"), storage.objects[key])
+}
+
+func TestDeleteOwnedUnreferenced_UsesOneBulkObjectDelete(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
+	const n = 5
+	keys := make([]string, n)
+	storage := &recordingStorage{objects: map[string][]byte{}}
+	for i := range n {
+		keys[i] = "notes/" + uuid.NewString() + ".jpg"
+		storage.objects[keys[i]] = []byte("blob")
+		require.NoError(t, notemedia.RegisterLease(ctx, pool, uid, keys[i]))
+	}
+	missing := "notes/" + uuid.NewString() + ".jpg"
+	require.NoError(t, notemedia.RegisterLease(ctx, pool, uid, missing))
+	candidates := append(append([]string{}, keys...), missing)
+
+	removed, err := notemedia.DeleteOwnedUnreferenced(ctx, pool, uid, candidates, storage)
+	require.NoError(t, err)
+	assert.EqualValues(t, len(candidates), removed)
+	assert.Zero(t, storage.deleteObjectN, "cleanup must not issue one DELETE per key")
+	require.Equal(t, 1, storage.deleteObjectsN, "cleanup must use one S3 multi-delete")
+	require.Len(t, storage.deleteObjectsArg, 1)
+	assert.ElementsMatch(t, candidates, storage.deleteObjectsArg[0])
+	for _, key := range candidates {
+		assert.NotContains(t, storage.objects, key)
+		var rows int64
+		require.NoError(t, pool.QueryRow(ctx,
+			`SELECT count(*) FROM note_media WHERE user_id = $1 AND object_key = $2`, int64(uid), key).Scan(&rows))
+		assert.Zero(t, rows, key)
+	}
+}
+
+func TestDeleteOwnedUnreferenced_StorageErrorLeavesOwnershipRows(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
+	key := "notes/" + uuid.NewString() + ".jpg"
+	storage := &recordingStorage{
+		objects: map[string][]byte{key: []byte("blob")},
+		bulkErr: errors.New("object store down"),
+	}
+	require.NoError(t, notemedia.RegisterLease(ctx, pool, uid, key))
+
+	removed, err := notemedia.DeleteOwnedUnreferenced(ctx, pool, uid, []string{key}, storage)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "object store down")
+	assert.Zero(t, removed)
+	assert.Equal(t, 1, storage.deleteObjectsN)
+	assert.Contains(t, storage.objects, key, "failed bulk delete must not drop the object locally")
+	var rows int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM note_media WHERE user_id = $1 AND object_key = $2`, int64(uid), key).Scan(&rows))
+	assert.EqualValues(t, 1, rows, "ownership row must survive an S3 error")
+}
+
+func TestSystemSweepExpired_UsesOneBulkObjectDelete(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
+	const n = 40
+	storage := &recordingStorage{objects: map[string][]byte{}}
+	keys := make([]string, n)
+	for i := range n {
+		keys[i] = "notes/" + uuid.NewString() + ".jpg"
+		storage.objects[keys[i]] = []byte("expired")
+		require.NoError(t, notemedia.RegisterLease(ctx, pool, uid, keys[i]))
+	}
+	_, err := pool.Exec(ctx, `
+        UPDATE note_media SET lease_expires_at = now() - interval '1 minute'
+        WHERE user_id = $1 AND object_key = ANY($2::text[])
+    `, int64(uid), keys)
+	require.NoError(t, err)
+
+	removed, err := notemedia.SystemSweepExpired(ctx, pool, storage, n)
+	require.NoError(t, err)
+	assert.EqualValues(t, n, removed)
+	assert.Zero(t, storage.deleteObjectN, "sweep must not issue one DELETE per key")
+	require.Equal(t, 1, storage.deleteObjectsN, "sweep must use one S3 multi-delete")
+	require.Len(t, storage.deleteObjectsArg, 1)
+	assert.ElementsMatch(t, keys, storage.deleteObjectsArg[0])
+	for _, key := range keys {
+		assert.NotContains(t, storage.objects, key)
+	}
+	var rows int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM note_media WHERE user_id = $1 AND object_key = ANY($2::text[])`, int64(uid), keys).Scan(&rows))
+	assert.Zero(t, rows)
 }
 
 func TestRestoreRefs_ObjectKeyCollisionFailsClosed(t *testing.T) {

@@ -92,12 +92,16 @@ function share(n: number, max: number): number {
 /**
  * The axis label.
  *
- * Parsed as a date and formatted in the viewer's locale rather than sliced out
- * of the ISO string: the server sends a UTC instant, and "2026-08-27" read as
- * text would label a bar with a day the viewer never had.
+ * Backend day buckets are civil dates (`YYYY-MM-DD` or midnight UTC). Parsing
+ * as a UTC Date then using local `toLocaleDateString` shifts the day west of
+ * Greenwich — the INV-180 shape on the admin chart. Format the prefix as a
+ * local civil date instead, same approach as `formatChartDate`.
  */
 export function dayLabel(iso: string, locale: string): string {
-  const d = new Date(iso)
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+  const d = m
+    ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    : new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
   return d.toLocaleDateString(locale, { day: '2-digit', month: '2-digit' })
 }

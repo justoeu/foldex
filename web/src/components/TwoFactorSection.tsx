@@ -12,24 +12,16 @@ import {
   SectionCard,
   SectionRow,
 } from './account/SectionCard'
+import {
+  LOW_RECOVERY_CODES,
+  methodActionDisabled,
+  methodKind,
+  twoFactorMethods,
+  type MethodSnapshot,
+} from './TwoFactorSection.methods'
+import type { FactorMethod } from '../api/twofa'
 
 type Controller = ReturnType<typeof useTwoFactorController>
-
-/** Below this, the band turns amber and says so. */
-const LOW_RECOVERY_CODES = 3
-
-/**
- * The step-up the destructive actions require: the same two proofs that turned
- * the factor on.
- *
- * Derived in one place because two components gate on it — the method rows and
- * the recovery band — and an identical expression copied into both drifts in
- * the direction nobody notices: the UI would offer one operation and refuse the
- * other, for a rule that is supposed to be the same rule.
- */
-function proofMissing(controller: Controller): boolean {
-  return !controller.password || controller.code.length < OTP_LENGTH
-}
 
 /**
  * The second-factor surface, in three mutually exclusive states.
@@ -126,143 +118,135 @@ function ProofHint({ controller }: { controller: Controller }) {
 
 function MethodList({ controller }: { controller: Controller }) {
   const { t } = useTranslation()
-  const missing = proofMissing(controller)
-  const low = controller.remaining < LOW_RECOVERY_CODES
+  const methods = twoFactorMethods({
+    totpEnabled: controller.totpEnabled,
+    canDisableTotp: controller.canDisableTotp,
+    emailEnabled: controller.emailEnabled,
+    canDisableEmail: controller.canDisableEmail,
+    emailAvailable: controller.emailAvailable,
+    twoFactorEnabled: controller.enabled,
+  })
   return (
     <SectionBlock label={t('twofa.methods_label')}>
       <div className="fx-sec-rows">
-        <SectionRow
-          icon={I.key}
-          name={t('twofa.method_app')}
-          hint={t('twofa.method_app_hint')}
-          tone={controller.totpEnabled ? 'on' : undefined}
-          state={{
-            label: controller.totpEnabled ? t('twofa.state_active') : t('twofa.state_off'),
-            on: controller.totpEnabled,
-          }}
-          /*
-            The lock is shown against the METHOD it applies to, and only when
-            that method is on. A note at the foot of the card explained nothing
-            about which of the two buttons was missing, and a missing button
-            with no explanation beside it reads as a broken screen.
-
-            The enrolled half is load-bearing here, unlike on the button below:
-            `can_disable_*` is also false for a method nobody enrolled, so a
-            lock keyed on it alone would claim every unused method is protected.
-
-            One reason, not a ternary. The server refuses a removal in exactly
-            one case — `mayRemoveFactor` returns false only under
-            `require2FAForAdmins && role.IsAdmin()`, which is what `required`
-            already reports — so a second arm could never render, and the copy
-            it would have carried ("this is your only method") asserts a
-            last-factor guard that does not exist: an ordinary user may remove
-            their last one freely.
-          */
-          lock={
-            controller.totpEnabled && !controller.canDisableTotp
-              ? t('twofa.required_note')
-              : undefined
-          }
-          action={
-            <>
-              {!controller.totpEnabled && (
-                <button
-                  className="fx-btn fx-btn-primary"
-                  disabled={controller.busy || !controller.password}
-                  onClick={() => void controller.begin('totp')}
-                >
-                  {t('twofa.enable_app')}
-                </button>
-              )}
-              {/*
-                Enrolled AND removable. The server already folds the first half
-                in (`can_disable_totp` is `TOTPEnabled && mayRemoveFactor(…)`),
-                so this is a restatement, not a second opinion — and it stays
-                because the two buttons share ONE row: were that ever to drift,
-                the row would render "set up" and "turn off" side by side,
-                describing a state that cannot exist.
-              */}
-              {controller.totpEnabled && controller.canDisableTotp && (
-                <button
-                  className="fx-btn fx-btn-danger"
-                  disabled={controller.busy || missing}
-                  onClick={() => void controller.turnOff('totp')}
-                >
-                  {t('twofa.disable')}
-                </button>
-              )}
-            </>
-          }
-        />
-        <SectionRow
-          icon={I.mail}
-          name={t('twofa.method_email')}
-          hint={t('twofa.method_email_hint')}
-          tone={controller.emailEnabled ? 'on' : undefined}
-          state={{
-            label: controller.emailEnabled ? t('twofa.state_active') : t('twofa.state_off'),
-            on: controller.emailEnabled,
-          }}
-          lock={
-            controller.emailEnabled && !controller.canDisableEmail
-              ? t('twofa.required_note')
-              : undefined
-          }
-          /*
-            An instance whose mail driver prints to stdout refuses this
-            enrollment, so the row says so instead of offering a button the
-            backend would always reject.
-          */
-          note={
-            !controller.emailEnabled && !controller.emailAvailable
-              ? t('twofa.email_unavailable')
-              : undefined
-          }
-          action={
-            <>
-              {!controller.emailEnabled && controller.emailAvailable && (
-                <button
-                  className="fx-btn"
-                  disabled={controller.busy || !controller.password}
-                  onClick={() => void controller.begin('email')}
-                >
-                  {t('twofa.enable_email')}
-                </button>
-              )}
-              {controller.emailEnabled && controller.canDisableEmail && (
-                <button
-                  className="fx-btn fx-btn-danger"
-                  disabled={controller.busy || missing}
-                  onClick={() => void controller.turnOff('email')}
-                >
-                  {t('twofa.disable_email')}
-                </button>
-              )}
-            </>
-          }
-        />
-        {controller.enabled && (
-          <SectionRow
-            icon={I.key}
-            /* Two encodings, deliberately: the count is easy to read past, and
-               running out of recovery codes is only discovered when they are
-               already needed. */
-            tone={low ? 'warn' : undefined}
-            name={t('twofa.remaining', { count: controller.remaining })}
-            hint={low ? t('twofa.recovery_low') : t('twofa.recovery_hint')}
-            action={
-              <button
-                className="fx-btn"
-                disabled={controller.busy || missing}
-                onClick={() => void controller.regenerate()}
-              >
-                {t('twofa.regenerate')}
-              </button>
-            }
-          />
-        )}
+        {methods.map((method) => (
+          <MethodRow key={method.id} method={method} controller={controller} />
+        ))}
       </div>
     </SectionBlock>
+  )
+}
+
+function MethodRow({
+  method,
+  controller,
+}: {
+  method: MethodSnapshot
+  controller: Controller
+}) {
+  const kind = methodKind(method)
+  if (kind === 'hidden') return null
+  if (method.id === 'recovery') {
+    return <RecoveryRow controller={controller} />
+  }
+  return <FactorRow method={method} kind={kind} controller={controller} />
+}
+
+function RecoveryRow({ controller }: { controller: Controller }) {
+  const { t } = useTranslation()
+  const low = controller.remaining < LOW_RECOVERY_CODES
+  return (
+    <SectionRow
+      icon={I.key}
+      /* Two encodings, deliberately: the count is easy to read past, and
+         running out of recovery codes is only discovered when they are
+         already needed. */
+      tone={low ? 'warn' : undefined}
+      name={t('twofa.remaining', { count: controller.remaining })}
+      hint={low ? t('twofa.recovery_low') : t('twofa.recovery_hint')}
+      action={
+        <button
+          className="fx-btn"
+          disabled={methodActionDisabled('regenerate', controller.password, controller.code, controller.busy)}
+          onClick={() => void controller.regenerate()}
+        >
+          {t('twofa.regenerate')}
+        </button>
+      }
+    />
+  )
+}
+
+function FactorRow({
+  method,
+  kind,
+  controller,
+}: {
+  method: MethodSnapshot
+  kind: ReturnType<typeof methodKind>
+  controller: Controller
+}) {
+  const { t } = useTranslation()
+  const totp = method.id === 'totp'
+  const disabled = methodActionDisabled(kind, controller.password, controller.code, controller.busy)
+  return (
+    <SectionRow
+      icon={totp ? I.key : I.mail}
+      name={t(totp ? 'twofa.method_app' : 'twofa.method_email')}
+      hint={t(totp ? 'twofa.method_app_hint' : 'twofa.method_email_hint')}
+      tone={method.enabled ? 'on' : undefined}
+      state={{
+        label: method.enabled ? t('twofa.state_active') : t('twofa.state_off'),
+        on: method.enabled,
+      }}
+      /*
+        The lock is shown against the METHOD it applies to, and only when
+        that method is on. A note at the foot of the card explained nothing
+        about which of the two buttons was missing, and a missing button
+        with no explanation beside it reads as a broken screen.
+
+        The enrolled half is load-bearing here: `can_disable_*` is also false
+        for a method nobody enrolled, so a lock keyed on it alone would claim
+        every unused method is protected. methodKind already folds that in.
+
+        One reason, not a ternary. The server refuses a removal in exactly
+        one case — `mayRemoveFactor` returns false only under
+        `require2FAForAdmins && role.IsAdmin()`, which is what `required`
+        already reports — so a second arm could never render, and the copy
+        it would have carried ("this is your only method") asserts a
+        last-factor guard that does not exist: an ordinary user may remove
+        their last one freely.
+      */
+      lock={kind === 'lock' ? t('twofa.required_note') : undefined}
+      /*
+        An instance whose mail driver prints to stdout refuses this
+        enrollment, so the row says so instead of offering a button the
+        backend would always reject.
+      */
+      note={kind === 'unavailable' ? t('twofa.email_unavailable') : undefined}
+      action={
+        <>
+          {kind === 'enable' && (
+            <button
+              className={totp ? 'fx-btn fx-btn-primary' : 'fx-btn'}
+              disabled={disabled}
+              onClick={() => void controller.begin(method.id as FactorMethod)}
+            >
+              {t(totp ? 'twofa.enable_app' : 'twofa.enable_email')}
+            </button>
+          )}
+          {kind === 'disable' && (
+            <button
+              className="fx-btn fx-btn-danger"
+              disabled={disabled}
+              onClick={() => void controller.turnOff(method.id as FactorMethod)}
+            >
+              {t(totp ? 'twofa.disable' : 'twofa.disable_email')}
+            </button>
+          )}
+        </>
+      }
+    />
   )
 }
 

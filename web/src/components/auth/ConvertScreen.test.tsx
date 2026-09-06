@@ -5,6 +5,9 @@ import { ConvertScreen } from './ConvertScreen'
 import { renderWithProviders } from '../../test/renderWithProviders'
 import { http } from '../../api/client'
 import { defaultFeatures } from '../../auth/types'
+import { useAuth } from '../../auth/AuthProvider'
+import type { MeResponse } from '../../api/auth'
+import { AuthGate } from '../../auth/AuthGate'
 
 /**
  * The account-portability screen: someone came back from Google with an address
@@ -18,10 +21,40 @@ import { defaultFeatures } from '../../auth/types'
 
 afterEach(() => vi.restoreAllMocks())
 
+/**
+ * See TwoFactorScreen.test.tsx: without this, deleting `adopt(...)` from the
+ * component leaves the request-shape assertions green while the user is never
+ * signed in — or, worse, never diverted to the second factor (INV-016).
+ */
+function SessionProbe() {
+  const { session } = useAuth()
+  return <span data-testid="session-status">{session.status}</span>
+}
+
+const convertSession = {
+  status: 'convert_password_account' as const,
+  email: 'a••@b.test',
+  features: defaultFeatures,
+}
+
+const twoFactorChallenge: MeResponse = {
+  status: 'two_factor_required',
+  purpose: 'totp',
+  email: 'a••@b.test',
+  methods: ['totp', 'recovery_code'],
+  expires_in: 300,
+  max_attempts: 5,
+  features: { google_oauth: false, two_factor: true, email_delivery: false },
+}
+
 function render() {
-  return renderWithProviders(<ConvertScreen email="a••@b.test" />, {
-    session: { status: 'convert_password_account', email: 'a••@b.test', features: defaultFeatures },
-  })
+  return renderWithProviders(
+    <>
+      <ConvertScreen email="a••@b.test" />
+      <SessionProbe />
+    </>,
+    { session: convertSession },
+  )
 }
 
 describe('ConvertScreen', () => {
@@ -51,7 +84,7 @@ describe('ConvertScreen', () => {
   it('sends the password and adopts the resulting session', async () => {
     const user = userEvent.setup()
     const post = vi.spyOn(http, 'post').mockResolvedValue({
-      data: { status: 'authenticated', user: {}, features: {} },
+      data: { status: 'authenticated', user: {}, csrf_token: 't', features: defaultFeatures },
     } as never)
     render()
 
@@ -63,6 +96,45 @@ describe('ConvertScreen', () => {
         password: 'hunter2hunter2',
       }),
     )
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status')).toHaveTextContent('authenticated'),
+    )
+  })
+
+  // Conversion proves the password, which is one factor. INV-016: OAuth never
+  // skips the second. `adopt` is what routes the challenge; this screen must
+  // not swallow it as a finished sign-in.
+  it('stops at the second factor when the server asks for one', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(http, 'post').mockResolvedValue({ data: twoFactorChallenge } as never)
+    render()
+
+    await user.type(screen.getByLabelText(/current password/i), 'hunter2hunter2')
+    await user.click(screen.getByRole('button', { name: /link google/i }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status')).toHaveTextContent('two_factor_required'),
+    )
+  })
+
+  // The probe above proves `adopt` ran. This one proves the GATE actually
+  // swaps the convert form for the code screen — the UI half of INV-016.
+  it('shows the second-factor screen instead of the app when conversion still owes a code', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(http, 'post').mockResolvedValue({ data: twoFactorChallenge } as never)
+    renderWithProviders(
+      <AuthGate>
+        <div>the app</div>
+      </AuthGate>,
+      { session: convertSession },
+    )
+
+    await user.type(await screen.findByLabelText(/current password/i), 'hunter2hunter2')
+    await user.click(screen.getByRole('button', { name: /link google/i }))
+
+    expect(await screen.findByRole('heading', { name: /enter your code/i })).toBeInTheDocument()
+    expect(screen.queryByText('the app')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /confirm your password/i })).not.toBeInTheDocument()
   })
 
   it('reports a wrong password and clears the field', async () => {

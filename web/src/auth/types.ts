@@ -16,7 +16,6 @@ export const MIN_PASSWORD_LEN = 8
  */
 export type Role = 'owner' | 'admin' | 'editor' | 'viewer'
 
-export const ALL_ROLES: readonly Role[] = ['owner', 'admin', 'editor', 'viewer']
 export const ASSIGNABLE_ROLES: readonly Role[] = ['admin', 'editor', 'viewer']
 
 /**
@@ -103,6 +102,8 @@ export type AuthFeatures = {
   google_oauth: boolean
   two_factor: boolean
   email_delivery: boolean
+  /** Live instance floor (ADR-35). Absent on a client that predates the field. */
+  password_min_length?: number
 }
 
 /**

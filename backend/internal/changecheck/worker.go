@@ -40,7 +40,7 @@ type Notification struct {
 // Repo is the storage contract used by the worker. Narrowed from
 // *links.Repository so tests can mock it without standing up Postgres.
 type Repo interface {
-	SystemFindDueForCheck(ctx context.Context, limit int) ([]links.DueLink, error)
+	SystemClaimDueForCheck(ctx context.Context, limit int) ([]links.DueLink, error)
 	SystemRecordCheckResult(ctx context.Context, id int64, expectedClaimedAt time.Time, res links.CheckResult) (bool, error)
 }
 
@@ -161,7 +161,14 @@ func (w *Worker) loop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case job := <-w.jobs:
-			w.process(ctx, job)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						w.logger.Error("changecheck job panicked", "link_id", job.ID, "panic", r)
+					}
+				}()
+				w.process(ctx, job)
+			}()
 		}
 	}
 }
@@ -176,12 +183,19 @@ func (w *Worker) pushLoop(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			pushCtx, cancel := context.WithTimeout(ctx, pushTimeout)
-			err := w.sender.Notify(pushCtx, notification)
-			cancel()
-			if err != nil && ctx.Err() == nil {
-				w.logger.Warn("push notify failed", "link_id", notification.LinkID, "err", err)
-			}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						w.logger.Error("changecheck push panicked", "link_id", notification.LinkID, "panic", r)
+					}
+				}()
+				pushCtx, cancel := context.WithTimeout(ctx, pushTimeout)
+				err := w.sender.Notify(pushCtx, notification)
+				cancel()
+				if err != nil && ctx.Err() == nil {
+					w.logger.Warn("push notify failed", "link_id", notification.LinkID, "err", err)
+				}
+			}()
 		}
 	}
 }
@@ -208,9 +222,9 @@ func (w *Worker) scan(ctx context.Context) {
 	if available == 0 {
 		return
 	}
-	due, err := w.repo.SystemFindDueForCheck(ctx, available)
+	due, err := w.repo.SystemClaimDueForCheck(ctx, available)
 	if err != nil {
-		w.logger.Warn("scan: find due failed", "err", err)
+		w.logger.Warn("scan: claim due failed", "err", err)
 		return
 	}
 	enqueued := 0

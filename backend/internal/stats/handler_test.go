@@ -47,7 +47,9 @@ type fakeStorage struct {
 	err error
 }
 
-func (f *fakeStorage) Stats(context.Context) (StorageStats, error) { return f.s, f.err }
+func (f *fakeStorage) Stats(context.Context, authctx.UserID) (StorageStats, error) {
+	return f.s, f.err
+}
 
 func mount(h *Handler) http.Handler {
 	r := chi.NewRouter()

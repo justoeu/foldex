@@ -64,14 +64,11 @@ describe('ForgotScreen', () => {
   })
 
   /**
-   * The single most important behaviour on this screen.
-   *
-   * The backend answers 202 for every input precisely so the endpoint cannot
-   * enumerate accounts, and the UI must not undo that by reacting differently
-   * to a failure. A transport error, a rejected address, a real send — the user
-   * sees one outcome.
+   * The backend answers 202 for every input so the endpoint cannot enumerate
+   * accounts. An unexpected HTTP error is the same for every address and is
+   * not an oracle — but claiming the mail was sent would strand the user.
    */
-  it('shows the identical confirmation when the request fails', async () => {
+  it('stays on the form with a generic error when the request fails', async () => {
     const user = userEvent.setup()
     vi.spyOn(http, 'post').mockImplementation(() => rejectWith(500, 'internal') as never)
 
@@ -79,8 +76,21 @@ describe('ForgotScreen', () => {
     await user.type(screen.getByLabelText(/e-mail/i), 'nobody@example.com')
     await user.click(screen.getByRole('button', { name: /send reset link/i }))
 
-    expect(await screen.findByRole('heading', { name: /check your e-mail/i })).toBeInTheDocument()
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent(/something went wrong/i)
+    expect(screen.queryByRole('heading', { name: /check your e-mail/i })).not.toBeInTheDocument()
+  })
+
+  it('does not show the sent screen after a transport failure', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(http, 'post').mockImplementation(() => Promise.reject({ response: undefined }) as never)
+
+    renderWithProviders(<ForgotScreen onBack={() => {}} />, { session: null })
+    await user.type(screen.getByLabelText(/e-mail/i), 'someone@example.com')
+    await user.click(screen.getByRole('button', { name: /send reset link/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not reach the server/i)
+    expect(screen.queryByRole('heading', { name: /check your e-mail/i })).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/e-mail/i)).toBeInTheDocument()
   })
 
   // The copy must not claim something the product will not confirm. "We sent
@@ -201,8 +211,8 @@ describe('ResetScreen', () => {
     vi.spyOn(http, 'post').mockImplementation(() => rejectWith(400, 'password_too_short') as never)
 
     renderWithProviders(<ResetScreen token="TOK" onGiveUp={() => {}} />, { session: null })
-    await user.type(screen.getByLabelText(/^new password$/i), 'short')
-    await user.type(screen.getByLabelText(/confirm new password/i), 'short')
+    await user.type(screen.getByLabelText(/^new password$/i), 'a brand new password')
+    await user.type(screen.getByLabelText(/confirm new password/i), 'a brand new password')
     await user.click(screen.getByRole('button', { name: /save and sign in/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/at least/i)

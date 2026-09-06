@@ -1,13 +1,34 @@
 package entries
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/pkg/authctx"
 )
+
+func TestEntriesList_OmitsFingerprintAndCheckError(t *testing.T) {
+	t.Parallel()
+	for _, sort := range []string{"", "alpha", "clicks", "recent"} {
+		t.Run(sort, func(t *testing.T) {
+			sql, _ := buildListQuery(authctx.UserID(1), ListQuery{Sort: sort, Limit: 10})
+			require.NotContains(t, sql, "last_fingerprint")
+			require.NotContains(t, sql, "last_check_error")
+			require.Contains(t, sql, "last_change_detected_at")
+		})
+	}
+
+	st := reflect.TypeOf(Entry{})
+	for i := 0; i < st.NumField(); i++ {
+		name := strings.Split(st.Field(i).Tag.Get("json"), ",")[0]
+		assert.NotEqual(t, "last_fingerprint", name)
+		assert.NotEqual(t, "last_check_error", name)
+	}
+}
 
 func TestBuildListQuery_PageBoundsOrdinarySortClickAggregation(t *testing.T) {
 	t.Parallel()
@@ -29,7 +50,7 @@ func TestBuildListQuery_PageBoundsOrdinarySortClickAggregation(t *testing.T) {
 	}
 }
 
-func TestBuildListQuery_PreAggregatesClickRankedSorts(t *testing.T) {
+func TestBuildListQuery_ClickRankedSortsJoinStats(t *testing.T) {
 	t.Parallel()
 	for _, sort := range []string{"clicks", "recent"} {
 		t.Run(sort, func(t *testing.T) {
@@ -37,8 +58,10 @@ func TestBuildListQuery_PreAggregatesClickRankedSorts(t *testing.T) {
 
 			require.NotContains(t, sql, "WITH candidates")
 			require.NotContains(t, sql, "LATERAL")
-			require.Equal(t, 2, strings.Count(sql, "FROM click_log WHERE user_id"))
-			require.Less(t, strings.Index(sql, "FROM click_log"), strings.Index(sql, "LIMIT $3"))
+			require.Contains(t, sql, "entity_click_stats",
+				"click/recent sorts must join the stats projection, not aggregate click_log")
+			require.NotContains(t, sql, "FROM click_log")
+			require.NotContains(t, sql, "GROUP BY entity_id")
 			require.Equal(t, []any{int64(9), int64(9), 5, 0}, args)
 		})
 	}

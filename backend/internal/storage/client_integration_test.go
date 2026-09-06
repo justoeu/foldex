@@ -119,7 +119,11 @@ func TestClient_MissingObjectPaths(t *testing.T) {
 	_, _, err := cli.GetObject(ctx, "no/such/key")
 	require.Error(t, err)
 
-	_, err = cli.OpenObject(ctx, "no/such/key")
+	rc, err := cli.OpenObject(ctx, "no/such/key")
+	if err == nil {
+		_, err = io.ReadAll(rc)
+		_ = rc.Close()
+	}
 	require.Error(t, err)
 
 	exists, err := cli.ObjectExists(ctx, "no/such/key")

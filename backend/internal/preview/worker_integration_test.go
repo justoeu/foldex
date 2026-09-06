@@ -212,7 +212,7 @@ func (s *refreshDuringCaptureScreenshotter) Capture(context.Context, string) ([]
 	if s.calls.Add(1) == 1 {
 		claimed, err := s.repo.SystemGetPreview(context.Background(), s.id)
 		require.NoError(s.t, err)
-		require.NoError(s.t, s.repo.SystemUpdatePreview(context.Background(), s.id, links.StatusPending, nil, nil, nil, nil))
+		require.NoError(s.t, s.repo.SystemUpdatePreview(context.Background(), s.id, links.StatusPending, links.PreviewPatch{}))
 		// Reproduce equal timestamp tokens deterministically. A refresh is a new
 		// generation even when the row clock cannot distinguish both claims.
 		_, err = s.pool.Exec(context.Background(), `UPDATE link SET updated_at = $1 WHERE id = $2`, claimed.UpdatedAt, s.id)

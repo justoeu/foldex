@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"foldex/internal/abusepolicy"
 	"foldex/internal/auth"
 	"foldex/internal/testdb"
 
@@ -152,20 +153,24 @@ func TestUsername_SharesTheLoginBudgetWithTheAddress(t *testing.T) {
 		map[string]string{"username": "target"}).Code)
 
 	// Spend the budget under the ADDRESS...
-	var last int
-	for i := 0; i < 8; i++ {
-		last = h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
+	n := abusepolicy.Default().LoginFailuresPerAccount
+	for i := 0; i < n; i++ {
+		rec := h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
 			"email": "user@example.com", "password": "wrong password",
-		}).Code
-		if last == http.StatusTooManyRequests {
-			break
-		}
+		})
+		require.Equal(t, http.StatusUnauthorized, rec.Code, "attempt %d", i+1)
 	}
-	require.Equal(t, http.StatusTooManyRequests, last, "the per-account bucket never locked")
 
-	// ...and the USERNAME must find it already spent.
-	assert.Equal(t, http.StatusTooManyRequests, h.client(t).do(http.MethodPost, "/api/auth/login",
-		map[string]string{"identifier": "target", "password": "wrong password"}).Code)
+	// ...and the USERNAME must find it already spent. The observable is no
+	// longer 429 (that status is the alias oracle); lockout is that the
+	// correct password does not issue a session.
+	rec := h.client(t).do(http.MethodPost, "/api/auth/login", map[string]string{
+		"identifier": "target", "password": "a good password",
+	})
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"the username must share the address's spent budget")
+	assert.Nil(t, cookieByName(rec, auth.CookieAccess),
+		"a shared budget that a valid credential on the other name walks through is two budgets")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -230,6 +235,29 @@ func TestEmailChange_OnlyMovesAfterTheNewAddressConfirms(t *testing.T) {
 	assert.Equal(t, http.StatusOK, after.do(http.MethodPost, "/api/auth/login", map[string]string{
 		"email": "new@example.com", "password": "a good password",
 	}).Code)
+}
+
+func TestEmailChange_RefusesAURLShapedDomain(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{SMTP: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	c := h.bootstrapAdmin(t, "old@example.com", "a good password")
+
+	h.mail.reset()
+	rec := c.do(http.MethodPost, "/api/auth/email/change", map[string]string{
+		"new_email": "user@ok.com://phish", "password": "a good password",
+	})
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.Equal(t, "invalid_email", errCode(t, rec))
+	assert.Empty(t, h.drainMail(t), "a refused address must not be mailed to anyone")
+
+	h.mail.reset()
+	rec = c.do(http.MethodPost, "/api/auth/email/change", map[string]string{
+		"new_email": "new@example.com", "password": "a good password",
+	})
+	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+	notice := h.mail.waitFor(t, "old@example.com")
+	assert.Contains(t, notice.Text, "new@example.com")
+	assert.NotContains(t, notice.Text, "://")
 }
 
 func TestEmailChange_RefusesAnAddressAnotherAccountHolds(t *testing.T) {

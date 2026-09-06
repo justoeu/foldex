@@ -60,21 +60,9 @@ func restoreSkipStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap 
 		return inserted, skipped, mapping, fmt.Errorf("map staged restore tags: %w", err)
 	}
 
-	ct, err = tx.Exec(ctx, `
-		INSERT INTO folder
-		    (id, user_id, name, color, parent_id, password_hash, password_hint, created_at)
-		SELECT child.new_id, $1, child.name, child.color, parent.new_id,
-		       child.password_hash, child.password_hint, child.created_at
-		FROM _backup_restore_folder child
-		LEFT JOIN _backup_restore_folder parent ON parent.old_id = child.parent_old_id
-		ORDER BY child.ordinal`, int64(uid))
+	inserted.Folders, err = insertStagedFolders(ctx, tx, uid, mapping)
 	if err != nil {
-		return inserted, skipped, mapping, fmt.Errorf("insert staged restore folders: %w", err)
-	}
-	inserted.Folders = ct.RowsAffected()
-	if err := loadStagedIDMapping(ctx, tx,
-		`SELECT old_id, new_id FROM _backup_restore_folder`, mapping.folderMap); err != nil {
-		return inserted, skipped, mapping, fmt.Errorf("map staged restore folders: %w", err)
+		return inserted, skipped, mapping, err
 	}
 
 	links, err := restoreConflictLinks(ctx, tx, uid, snap.Links, existingLinks, mapping, ModeSkip)
@@ -83,23 +71,9 @@ func restoreSkipStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap 
 	}
 	inserted.Links, skipped.Links = links.inserted, links.skipped
 
-	ct, err = tx.Exec(ctx, `
-		INSERT INTO note
-		    (id, user_id, title, slug, body_html, body_text, pinned, folder_id,
-		     cover_url, created_at, updated_at)
-		SELECT staged.new_id, $1, staged.title, staged.slug, staged.body_html,
-		       staged.body_text, staged.pinned, folder.new_id, staged.cover_url,
-		       staged.created_at, staged.updated_at
-		FROM _backup_restore_note staged
-		LEFT JOIN _backup_restore_folder folder ON folder.old_id = staged.folder_old_id
-		ORDER BY staged.ordinal`, int64(uid))
+	inserted.Notes, err = insertStagedNotes(ctx, tx, uid, mapping)
 	if err != nil {
-		return inserted, skipped, mapping, fmt.Errorf("insert staged restore notes: %w", err)
-	}
-	inserted.Notes = ct.RowsAffected()
-	if err := loadStagedIDMapping(ctx, tx,
-		`SELECT old_id, new_id FROM _backup_restore_note`, mapping.noteMap); err != nil {
-		return inserted, skipped, mapping, fmt.Errorf("map staged restore notes: %w", err)
+		return inserted, skipped, mapping, err
 	}
 
 	if err := attachPolymorphicTags(ctx, tx, mapping, snap, &inserted, &skipped, true); err != nil {
@@ -158,21 +132,9 @@ func restoreDuplicateStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 		}
 	}
 
-	ct, err = tx.Exec(ctx, `
-		INSERT INTO folder
-		    (id, user_id, name, color, parent_id, password_hash, password_hint, created_at)
-		SELECT child.new_id, $1, child.name, child.color, parent.new_id,
-		       child.password_hash, child.password_hint, child.created_at
-		FROM _backup_restore_folder child
-		LEFT JOIN _backup_restore_folder parent ON parent.old_id = child.parent_old_id
-		ORDER BY child.ordinal`, int64(uid))
+	inserted.Folders, err = insertStagedFolders(ctx, tx, uid, mapping)
 	if err != nil {
-		return inserted, warnings, mapping, fmt.Errorf("insert staged duplicate folders: %w", err)
-	}
-	inserted.Folders = ct.RowsAffected()
-	if err := loadStagedIDMapping(ctx, tx,
-		`SELECT old_id, new_id FROM _backup_restore_folder`, mapping.folderMap); err != nil {
-		return inserted, warnings, mapping, fmt.Errorf("map staged duplicate folders: %w", err)
+		return inserted, warnings, mapping, err
 	}
 
 	links, err := restoreConflictLinks(ctx, tx, uid, snap.Links, existingLinks, mapping, ModeDuplicate)
@@ -182,7 +144,41 @@ func restoreDuplicateStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 	inserted.Links = links.inserted
 	warnings = append(warnings, links.warnings...)
 
-	ct, err = tx.Exec(ctx, `
+	inserted.Notes, err = insertStagedNotes(ctx, tx, uid, mapping)
+	if err != nil {
+		return inserted, warnings, mapping, err
+	}
+
+	if err := attachPolymorphicTags(ctx, tx, mapping, snap, &inserted, nil, false); err != nil {
+		return inserted, warnings, mapping, err
+	}
+	if err := copyPolymorphicClicks(ctx, tx, uid, mapping, snap, &inserted, nil, false); err != nil {
+		return inserted, warnings, mapping, err
+	}
+	return inserted, warnings, mapping, nil
+}
+
+func insertStagedFolders(ctx context.Context, tx pgx.Tx, uid authctx.UserID, mapping idMapping) (int64, error) {
+	ct, err := tx.Exec(ctx, `
+		INSERT INTO folder
+		    (id, user_id, name, color, parent_id, password_hash, password_hint, created_at)
+		SELECT child.new_id, $1, child.name, child.color, parent.new_id,
+		       child.password_hash, child.password_hint, child.created_at
+		FROM _backup_restore_folder child
+		LEFT JOIN _backup_restore_folder parent ON parent.old_id = child.parent_old_id
+		ORDER BY child.ordinal`, int64(uid))
+	if err != nil {
+		return 0, fmt.Errorf("insert staged folders: %w", err)
+	}
+	if err := loadStagedIDMapping(ctx, tx,
+		`SELECT old_id, new_id FROM _backup_restore_folder`, mapping.folderMap); err != nil {
+		return 0, fmt.Errorf("map staged folders: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
+func insertStagedNotes(ctx context.Context, tx pgx.Tx, uid authctx.UserID, mapping idMapping) (int64, error) {
+	ct, err := tx.Exec(ctx, `
 		INSERT INTO note
 		    (id, user_id, title, slug, body_html, body_text, pinned, folder_id,
 		     cover_url, created_at, updated_at)
@@ -193,21 +189,13 @@ func restoreDuplicateStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 		LEFT JOIN _backup_restore_folder folder ON folder.old_id = staged.folder_old_id
 		ORDER BY staged.ordinal`, int64(uid))
 	if err != nil {
-		return inserted, warnings, mapping, fmt.Errorf("insert staged duplicate notes: %w", err)
+		return 0, fmt.Errorf("insert staged notes: %w", err)
 	}
-	inserted.Notes = ct.RowsAffected()
 	if err := loadStagedIDMapping(ctx, tx,
 		`SELECT old_id, new_id FROM _backup_restore_note`, mapping.noteMap); err != nil {
-		return inserted, warnings, mapping, fmt.Errorf("map staged duplicate notes: %w", err)
+		return 0, fmt.Errorf("map staged notes: %w", err)
 	}
-
-	if err := attachPolymorphicTags(ctx, tx, mapping, snap, &inserted, nil, false); err != nil {
-		return inserted, warnings, mapping, err
-	}
-	if err := copyPolymorphicClicks(ctx, tx, uid, mapping, snap, &inserted, nil, false); err != nil {
-		return inserted, warnings, mapping, err
-	}
-	return inserted, warnings, mapping, nil
+	return ct.RowsAffected(), nil
 }
 
 type conflictLinkRestore struct {

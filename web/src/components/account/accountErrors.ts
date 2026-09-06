@@ -1,5 +1,5 @@
 import { apiErrorCode as errCode } from '../../lib/apiError'
-import { MIN_PASSWORD_LEN } from '../../auth/types'
+import { passwordFloor } from '../../hooks/useInstancePolicy'
 
 type Translate = (key: string, opts?: Record<string, unknown>) => string
 
@@ -12,7 +12,7 @@ type Translate = (key: string, opts?: Record<string, unknown>) => string
  * a second copy drifts on whichever surface nobody re-tests. `password_too_short`
  * carries the count so the message states the floor instead of implying one.
  */
-export function accountErrorMessage(err: unknown, t: Translate): string {
+export function accountErrorMessage(err: unknown, t: Translate, minLen?: number): string {
   switch (errCode(err)) {
     case 'invalid_credentials':
       return t('account.wrong_password')
@@ -26,7 +26,7 @@ export function accountErrorMessage(err: unknown, t: Translate): string {
     case 'invalid_code':
       return t('auth_errors.invalid_code')
     case 'password_too_short':
-      return t('auth_errors.password_too_short', { count: MIN_PASSWORD_LEN })
+      return t('auth_errors.password_too_short', { count: passwordFloor(minLen) })
     case 'password_too_long':
       return t('auth_errors.password_too_long')
     case 'not_linked':

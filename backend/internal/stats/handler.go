@@ -15,7 +15,7 @@ import (
 // StorageStatter abstracts the object-storage size lookup so the stats handler
 // stays decoupled from the concrete object-store client.
 type StorageStatter interface {
-	Stats(ctx context.Context) (StorageStats, error)
+	Stats(ctx context.Context, uid authctx.UserID) (StorageStats, error)
 }
 
 // StorageStats mirrors the shape we expose on the wire. Keep it in this
@@ -71,7 +71,7 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) storageStats(w http.ResponseWriter, r *http.Request) {
-	s, err := h.storage.Stats(r.Context())
+	s, err := h.storage.Stats(r.Context(), authctx.MustUser(r.Context()))
 	if err != nil {
 		httperr.Write(w, err)
 		return

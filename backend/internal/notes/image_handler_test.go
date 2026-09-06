@@ -3,7 +3,12 @@ package notes
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"hash/crc32"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -17,11 +22,6 @@ import (
 
 	"foldex/internal/pkg/authctx"
 )
-
-// pngSignature is enough for http.DetectContentType to sniff "image/png" —
-// it doesn't need to be a fully decodable image, since imageopt.Optimize's
-// decode failure is handled by a fallback path (stores the original bytes).
-var pngSignature = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0}
 
 type fakeUploader struct {
 	uploaded map[string][]byte
@@ -96,16 +96,52 @@ func TestImageHandler_Upload_Success(t *testing.T) {
 	leases := newFakeMediaLeases()
 	h := NewImageHandler(up, leases, discardLogger())
 
-	req := multipartImageRequest(t, "image", "shot.png", pngSignature)
+	req := multipartImageRequest(t, "image", "shot.png", realPNG(t, 80, 60))
 	rr := httptest.NewRecorder()
 	h.Upload(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
 	var body map[string]string
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
-	assert.Regexp(t, `^/api/files/notes/[A-Za-z0-9-]+\.(png|jpg)$`, body["url"])
+	assert.Regexp(t, `^/api/files/notes/[A-Za-z0-9-]+\.jpg$`, body["url"])
 	assert.Len(t, up.uploaded, 1)
 	assert.Equal(t, authctx.UserID(7), leases.owned[strings.TrimPrefix(body["url"], "/api/files/")])
+}
+
+func TestNoteImageUploadReencodesAsJPEG(t *testing.T) {
+	up := newFakeUploader()
+	h := NewImageHandler(up, newFakeMediaLeases(), discardLogger())
+
+	src := realPNG(t, 200, 150)
+	req := multipartImageRequest(t, "image", "photo.png", src)
+	rr := httptest.NewRecorder()
+	h.Upload(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, up.uploaded, 1)
+	for key, data := range up.uploaded {
+		assert.True(t, strings.HasSuffix(key, ".jpg"), "stored key %s", key)
+		assert.Equal(t, "image/jpeg", http.DetectContentType(data))
+		assert.NotEqual(t, src, data, "PNG must be re-encoded, not stored raw")
+	}
+}
+
+func TestNoteImageUploadRejectsDecodeBomb(t *testing.T) {
+	up := newFakeUploader()
+	leases := newFakeMediaLeases()
+	h := NewImageHandler(up, leases, discardLogger())
+
+	req := multipartImageRequest(t, "image", "bomb.png", decodeBombPNG(t))
+	rr := httptest.NewRecorder()
+	h.Upload(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+	errBlock, _ := body["error"].(map[string]any)
+	assert.Equal(t, "invalid_image", errBlock["code"])
+	assert.Empty(t, up.uploaded, "decode bomb must not be written to object storage")
+	assert.Empty(t, leases.owned, "decode bomb must not register a media lease")
 }
 
 func TestImageHandler_Upload_MissingField(t *testing.T) {
@@ -149,7 +185,7 @@ func TestImageHandler_Upload_StorageFailure(t *testing.T) {
 	leases := newFakeMediaLeases()
 	h := NewImageHandler(up, leases, discardLogger())
 
-	req := multipartImageRequest(t, "image", "shot.png", pngSignature)
+	req := multipartImageRequest(t, "image", "shot.png", realPNG(t, 40, 30))
 	rr := httptest.NewRecorder()
 	h.Upload(rr, req)
 
@@ -163,7 +199,7 @@ func TestImageHandler_Upload_LeaseFailureStoresNothing(t *testing.T) {
 	leases.failAdd = true
 	h := NewImageHandler(up, leases, discardLogger())
 
-	req := multipartImageRequest(t, "image", "shot.png", pngSignature)
+	req := multipartImageRequest(t, "image", "shot.png", realPNG(t, 40, 30))
 	rr := httptest.NewRecorder()
 	h.Upload(rr, req)
 
@@ -174,4 +210,30 @@ func TestImageHandler_Upload_LeaseFailureStoresNothing(t *testing.T) {
 func TestNewImageHandlerAcceptsUploadOnlyStorage(t *testing.T) {
 	h := NewImageHandler(uploadOnly{}, newFakeMediaLeases(), discardLogger())
 	assert.NotNil(t, h)
+}
+
+func realPNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.SetNRGBA(x, y, color.NRGBA{R: 40, G: 80, B: 120, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, img))
+	return buf.Bytes()
+}
+
+// decodeBombPNG is a tiny PNG whose IHDR declares 8000×8000 (64 MP, over the
+// 50 MP cap) while the IDAT stays a 1×1 pixel. Storing it would let any
+// decoder OOM; Optimize must refuse before image.Decode allocates.
+func decodeBombPNG(t *testing.T) []byte {
+	t.Helper()
+	bomb := append([]byte(nil), realPNG(t, 1, 1)...)
+	require.GreaterOrEqual(t, len(bomb), 33)
+	binary.BigEndian.PutUint32(bomb[16:20], 8_000)
+	binary.BigEndian.PutUint32(bomb[20:24], 8_000)
+	binary.BigEndian.PutUint32(bomb[29:33], crc32.ChecksumIEEE(bomb[12:29]))
+	return bomb
 }

@@ -16,6 +16,7 @@ import (
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/authgate"
+	"foldex/internal/pkg/clampint"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/roleperm"
 )
@@ -65,24 +66,10 @@ func (h *AdminHandler) WithBlocklist(b *Blocklist, isTrustedProxy func(string) b
 	return h
 }
 
-// validatePassword mirrors Handler's, and is a METHOD for the same reason
-// (§4): as a package function it would silently keep applying the constant
-// while the owner believed their configured floor was in force.
+// validatePassword is a METHOD so every call site is forced through the
+// configured floor — the same helper Handler uses, not a second copy.
 func (h *AdminHandler) validatePassword(ctx context.Context, p string) error {
-	minLen := MinPasswordLen
-	if h.policy != nil {
-		minLen = max(h.policy.PasswordMinLength(ctx), MinPasswordLen)
-	}
-	if utf8.RuneCountInString(p) < minLen {
-		return httperr.New(http.StatusBadRequest, "password_too_short",
-			fmt.Sprintf("password must be at least %d characters", minLen))
-	}
-	// Measured in BYTES, because that is the unit bcrypt truncates in.
-	if len(p) > MaxPasswordLen {
-		return httperr.New(http.StatusBadRequest, "password_too_long",
-			fmt.Sprintf("password must be at most %d bytes", MaxPasswordLen))
-	}
-	return nil
+	return validatePasswordAgainst(ctx, h.policy, p)
 }
 
 // NewAdminHandler builds the administration surface.
@@ -190,13 +177,25 @@ func (h *AdminHandler) Mount(r chi.Router) {
 }
 
 func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := h.repo.ListUsers(r.Context())
+	limit := clampint.Int(r.URL.Query().Get("limit"), adminListCeiling, 1, adminListCeiling)
+	users, err := h.repo.ListUsers(r.Context(), limit, parseAfterID(r.URL.Query().Get("after")))
 	if err != nil {
 		h.logger.Error("admin list users", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
 	httperr.JSON(w, http.StatusOK, map[string]any{"users": users})
+}
+
+func parseAfterID(raw string) int64 {
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 type updateUserInput struct {
@@ -477,7 +476,8 @@ func (h *AdminHandler) TransferOwnership(w http.ResponseWriter, r *http.Request)
 // ─────────────────────────────────────────────────────────────────────
 
 func (h *AdminHandler) ListInvites(w http.ResponseWriter, r *http.Request) {
-	invites, err := h.repo.ListInvites(r.Context())
+	limit := clampint.Int(r.URL.Query().Get("limit"), adminListCeiling, 1, adminListCeiling)
+	invites, err := h.repo.ListInvites(r.Context(), limit)
 	if err != nil {
 		h.logger.Error("admin list invites", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -666,7 +666,9 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u, err := h.repo.AdminCreateUser(r.Context(), in.Email, in.Name, in.Password, role)
+	u, err := h.repo.AdminCreateUser(r.Context(), NewUser{
+		Email: in.Email, Name: in.Name, Password: in.Password, Role: role,
+	})
 	switch {
 	case errors.Is(err, ErrEmailTaken):
 		httperr.Write(w, httperr.New(http.StatusConflict, "email_taken", "e-mail already registered"))

@@ -45,9 +45,10 @@ const (
 // client. Keeping this typed prevents a misspelled feature key from silently
 // disappearing from every auth-state response.
 type AuthFeatures struct {
-	GoogleOAuth   bool `json:"google_oauth"`
-	TwoFactor     bool `json:"two_factor"`
-	EmailDelivery bool `json:"email_delivery"`
+	GoogleOAuth       bool `json:"google_oauth"`
+	TwoFactor         bool `json:"two_factor"`
+	EmailDelivery     bool `json:"email_delivery"`
+	PasswordMinLength int  `json:"password_min_length"`
 }
 
 // authWireResponse is the closed set of state-bearing auth responses. Each

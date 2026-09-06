@@ -108,7 +108,22 @@ func (c Config) DBURL() string {
 // fail-fast: a half-configured backup agent that boots anyway is exactly the
 // silent non-backup this design exists to kill.
 func Load() (Config, error) {
-	c := Config{
+	c := configFromEnv()
+	if err := parseAnchors(&c); err != nil {
+		return Config{}, err
+	}
+	c.AgeRecipients = splitRecipients(os.Getenv("BACKUP_AGE_RECIPIENTS"))
+	if err := requireNonEmpty(c.requiredEnv()); err != nil {
+		return Config{}, err
+	}
+	if c.RetentionMode != "agent" && c.RetentionMode != "bucket" {
+		return Config{}, fmt.Errorf("backupagent: BACKUP_RETENTION_MODE must be \"agent\" or \"bucket\", got %q — the mode is declared, never inferred from an AccessDenied", c.RetentionMode)
+	}
+	return c, nil
+}
+
+func configFromEnv() Config {
+	return Config{
 		PGHost:     envOr("POSTGRES_HOST", "db"),
 		PGPort:     envInt("POSTGRES_PORT", 5432),
 		PGUser:     envOr("POSTGRES_USER", "foldex"),
@@ -149,90 +164,107 @@ func Load() (Config, error) {
 		Version:      os.Getenv("FOLDEX_VERSION"),
 		MetricsToken: os.Getenv("METRICS_TOKEN"),
 	}
+}
 
-	for _, missing := range []struct{ name, val string }{
-		{"BACKUP_S3_ENDPOINT", c.S3Endpoint},
-		{"BACKUP_S3_BUCKET", c.S3Bucket},
-		{"BACKUP_S3_ACCESS_KEY", c.S3AccessKey},
-		{"BACKUP_S3_SECRET_KEY", c.S3SecretKey},
-	} {
-		if strings.TrimSpace(missing.val) == "" {
-			return Config{}, fmt.Errorf("backupagent: %s is required — the backup agent refuses to boot half-configured", missing.name)
-		}
+type envField struct{ name, val string }
+
+type envGroup struct {
+	when   bool
+	fields []envField
+	format string
+}
+
+func (c Config) requiredEnv() []envGroup {
+	return []envGroup{
+		{
+			when: true,
+			fields: []envField{
+				{"BACKUP_S3_ENDPOINT", c.S3Endpoint},
+				{"BACKUP_S3_BUCKET", c.S3Bucket},
+				{"BACKUP_S3_ACCESS_KEY", c.S3AccessKey},
+				{"BACKUP_S3_SECRET_KEY", c.S3SecretKey},
+			},
+			format: "backupagent: %s is required — the backup agent refuses to boot half-configured",
+		},
+		{
+			when: c.MirrorEnabled(),
+			fields: []envField{
+				{"RUSTFS_ENDPOINT", c.RustFSEndpoint},
+				{"RUSTFS_ACCESS_KEY", c.RustFSAccessKey},
+				{"RUSTFS_SECRET_KEY", c.RustFSSecretKey},
+				{"RUSTFS_BUCKET", c.RustFSBucket},
+			},
+			format: "backupagent: %s is required while the mirror job is enabled — set it, or set BACKUP_MIRROR_INTERVAL_MIN=0 to turn the mirror off",
+		},
+		{
+			when:   c.UserZipAt.Enabled() && !c.MirrorEnabled(),
+			fields: []envField{{"RUSTFS_SECRET_KEY", c.RustFSSecretKey}},
+			format: "backupagent: BACKUP_USERZIP_AT is set but %s is empty — user_zip reads the source bucket and refuses to boot half-configured",
+		},
+		{
+			when:   !c.AllowPlaintext,
+			fields: []envField{{"BACKUP_AGE_RECIPIENTS", strings.Join(c.AgeRecipients, ",")}},
+			format: "backupagent: %s is empty: refusing to upload plaintext dumps (set it, or set BACKUP_ALLOW_PLAINTEXT=1 if the bucket itself encrypts)",
+		},
+		{
+			when:   c.DrillAt.Enabled() && len(c.AgeRecipients) > 0,
+			fields: []envField{{"BACKUP_AGE_IDENTITY_FILE", c.AgeIdentityFile}},
+			format: "backupagent: BACKUP_DRILL_AT is set but %s is empty — the drill cannot decrypt the dumps it must restore (mount the private age identity read-only, mode 0600)",
+		},
 	}
+}
 
-	// The mirror is on by default (SDD §4) and reads the RustFS origin, so
-	// its credentials are required exactly while it is on: a mirror that
-	// silently never copies is the mailer incident again. An instance with no
-	// object store turns the job off explicitly.
-	if c.MirrorEnabled() {
-		for _, missing := range []struct{ name, val string }{
-			{"RUSTFS_ENDPOINT", c.RustFSEndpoint},
-			{"RUSTFS_ACCESS_KEY", c.RustFSAccessKey},
-			{"RUSTFS_SECRET_KEY", c.RustFSSecretKey},
-			{"RUSTFS_BUCKET", c.RustFSBucket},
-		} {
-			if strings.TrimSpace(missing.val) == "" {
-				return Config{}, fmt.Errorf("backupagent: %s is required while the mirror job is enabled — set it, or set BACKUP_MIRROR_INTERVAL_MIN=0 to turn the mirror off", missing.name)
+func requireNonEmpty(groups []envGroup) error {
+	for _, g := range groups {
+		if !g.when {
+			continue
+		}
+		for _, f := range g.fields {
+			if strings.TrimSpace(f.val) == "" {
+				return fmt.Errorf(g.format, f.name)
 			}
 		}
 	}
+	return nil
+}
 
+func parseAnchors(c *Config) error {
 	if raw := strings.TrimSpace(os.Getenv("BACKUP_DUMP_AT")); raw != "" {
 		anchor, err := ParseAnchor(raw)
 		if err != nil {
-			return Config{}, fmt.Errorf("backupagent: BACKUP_DUMP_AT: %w", err)
+			return fmt.Errorf("backupagent: BACKUP_DUMP_AT: %w", err)
 		}
 		c.DumpAt = anchor
 	}
 	if raw := strings.TrimSpace(os.Getenv("BACKUP_DRILL_AT")); raw != "" {
 		anchor, err := ParseAnchor(raw)
 		if err != nil {
-			return Config{}, fmt.Errorf("backupagent: BACKUP_DRILL_AT: %w", err)
+			return fmt.Errorf("backupagent: BACKUP_DRILL_AT: %w", err)
 		}
 		c.DrillAt = anchor
 	}
-
 	if raw := strings.TrimSpace(os.Getenv("BACKUP_USERZIP_AT")); raw != "" {
 		anchor, err := ParseAnchor(raw)
 		if err != nil {
-			return Config{}, fmt.Errorf("backupagent: BACKUP_USERZIP_AT: %w", err)
+			return fmt.Errorf("backupagent: BACKUP_USERZIP_AT: %w", err)
 		}
 		c.UserZipAt = anchor
 	}
-	// The user_zip Export reads the caller's objects from the SOURCE bucket,
-	// so opting into the job without its credentials is the same half-
-	// configured boot the S3 checks above refuse.
-	if c.UserZipAt.Enabled() && strings.TrimSpace(c.RustFSSecretKey) == "" {
-		return Config{}, fmt.Errorf("backupagent: BACKUP_USERZIP_AT is set but RUSTFS_SECRET_KEY is empty — user_zip reads the source bucket and refuses to boot half-configured")
-	}
+	return nil
+}
 
-	if c.RetentionMode != "agent" && c.RetentionMode != "bucket" {
-		return Config{}, fmt.Errorf("backupagent: BACKUP_RETENTION_MODE must be \"agent\" or \"bucket\", got %q — the mode is declared, never inferred from an AccessDenied", c.RetentionMode)
+func splitRecipients(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
 	}
-
-	if recips := strings.TrimSpace(os.Getenv("BACKUP_AGE_RECIPIENTS")); recips != "" {
-		for _, r := range strings.Split(recips, ",") {
-			if r = strings.TrimSpace(r); r != "" {
-				c.AgeRecipients = append(c.AgeRecipients, r)
-			}
+	var out []string
+	for _, r := range strings.Split(raw, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			out = append(out, r)
 		}
 	}
-	// The dump carries bcrypt hashes and every user's content, and the target
-	// is a bucket off the machine. Plaintext is an explicit, named opt-out for
-	// operators who encrypt at the bucket (SSE-KMS) — never a fallback.
-	if len(c.AgeRecipients) == 0 && !c.AllowPlaintext {
-		return Config{}, fmt.Errorf("backupagent: BACKUP_AGE_RECIPIENTS is empty: refusing to upload plaintext dumps (set it, or set BACKUP_ALLOW_PLAINTEXT=1 if the bucket itself encrypts)")
-	}
-
-	// A scheduled drill over encrypted dumps without the identity would boot
-	// fine and fail every week at 04:30 — the silent non-backup shape again.
-	// Fail at boot, naming the knob.
-	if c.DrillAt.Enabled() && len(c.AgeRecipients) > 0 && c.AgeIdentityFile == "" {
-		return Config{}, fmt.Errorf("backupagent: BACKUP_DRILL_AT is set but BACKUP_AGE_IDENTITY_FILE is empty — the drill cannot decrypt the dumps it must restore (mount the private age identity read-only, mode 0600)")
-	}
-
-	return c, nil
+	return out
 }
 
 // Duration helpers keep call sites honest about units.

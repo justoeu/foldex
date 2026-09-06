@@ -483,10 +483,13 @@ func (in loginInput) who() string {
 
 // Login authenticates a password and issues a session.
 //
-// Every failure — unknown e-mail, wrong password, disabled account — produces
-// the SAME 401 body, and the handler takes the same minimum time. A distinct
-// `account_disabled` code would confirm that the address is registered, which
-// is exactly the fact the anti-enumeration design refuses to leak.
+// Every failure — unknown e-mail, wrong password, disabled account, and a
+// per-account lockout — produces the SAME 401 body, and the handler takes the
+// same minimum time. A distinct `account_disabled` code would confirm that the
+// address is registered; a 429 on the account bucket would confirm that two
+// identifiers name one account. Both are facts the anti-enumeration design
+// refuses to leak. Origin-bucket 429 is a different question (how many
+// distinct identifiers this address has probed) and stays 429.
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	defer floorDuration(time.Now(), loginFloor)
 
@@ -515,9 +518,15 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		writeRateLimited(w, until)
 		return
 	}
-	if until, ok := h.loginByEmail.Begin(emailKey); !ok {
-		h.loginByIP.Release(ipKey)
-		writeRateLimited(w, until)
+	if _, ok := h.loginByEmail.Begin(emailKey); !ok {
+		// Charge origin with the SUBMITTED identifier, same as a miss
+		// (INV-184). Release would skip the member and reopen a 429-on-canary
+		// oracle after filling the IP set. 401, not 429: the account bucket
+		// is resolved, so a distinct lockout status is a username-to-mailbox
+		// oracle (INV-041).
+		h.loginByIP.CommitFailFor(ipKey, truncateTo(NormalizeEmail(in.who()), maxAuditEmail))
+		burnDummyHash(in.Password)
+		httperr.Write(w, errInvalidCredentials())
 		return
 	}
 
@@ -786,12 +795,12 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		}
 		if needs {
 			httperr.JSON(w, http.StatusOK, setupRequiredAuthResponse{
-				Status: statusSetupRequired, Features: h.features,
+				Status: statusSetupRequired, Features: h.liveFeatures(r.Context()),
 			})
 			return
 		}
 		httperr.JSON(w, http.StatusOK, anonymousAuthResponse{
-			Status: statusAnonymous, Features: h.features,
+			Status: statusAnonymous, Features: h.liveFeatures(r.Context()),
 		})
 		return
 	}
@@ -813,7 +822,7 @@ func (h *Handler) authenticatedPayload(u User, csrf string) authenticatedAuthRes
 		Status:      statusAuthenticated,
 		User:        u,
 		CSRFToken:   csrf,
-		Features:    h.features,
+		Features:    h.liveFeatures(context.Background()),
 		Permissions: h.permissionsFor(u.Role),
 	}
 }
@@ -1167,10 +1176,23 @@ type PolicyReader interface {
 // even if a row is edited directly in SQL past the validation in
 // policy.Validate.
 func (h *Handler) passwordFloor(ctx context.Context) int {
-	if h.policy == nil {
+	return passwordFloorOf(ctx, h.policy)
+}
+
+// liveFeatures is the boot-time capability flags plus the live password floor.
+// The floor is owner-configurable, so it cannot live on the static struct
+// NewHandler captured — every auth-state payload has to read it now.
+func (h *Handler) liveFeatures(ctx context.Context) AuthFeatures {
+	f := h.features
+	f.PasswordMinLength = h.passwordFloor(ctx)
+	return f
+}
+
+func passwordFloorOf(ctx context.Context, policy PolicyReader) int {
+	if policy == nil {
 		return MinPasswordLen
 	}
-	return max(h.policy.PasswordMinLength(ctx), MinPasswordLen)
+	return max(policy.PasswordMinLength(ctx), MinPasswordLen)
 }
 
 // otpTTL and otpCooldown resolve the configured values, never below the
@@ -1197,7 +1219,11 @@ func (h *Handler) otpCooldown(ctx context.Context) time.Duration {
 // configured floor. As a package function it would have kept silently applying
 // the constant, and a policy nothing enforces is worse than no policy.
 func (h *Handler) validatePassword(ctx context.Context, p string) error {
-	minLen := h.passwordFloor(ctx)
+	return validatePasswordAgainst(ctx, h.policy, p)
+}
+
+func validatePasswordAgainst(ctx context.Context, policy PolicyReader, p string) error {
+	minLen := passwordFloorOf(ctx, policy)
 	if utf8.RuneCountInString(p) < minLen {
 		return httperr.New(http.StatusBadRequest, "password_too_short",
 			fmt.Sprintf("password must be at least %d characters", minLen))
@@ -1215,6 +1241,12 @@ func validateEmail(email string) error {
 	if len(e) < 3 || len(e) > MaxEmailLen {
 		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
 	}
+	// Refuse a scheme before splitting: `user@ok.com://phish` has a legal
+	// local part and a domain that "has a dot", and it is exactly the string
+	// the linkless change notice interpolates into {{.NewEmail}}.
+	if strings.Contains(e, "://") {
+		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
+	}
 	at := strings.LastIndex(e, "@")
 	if at <= 0 || at == len(e)-1 || strings.ContainsAny(e, " \t\r\n") {
 		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
@@ -1229,15 +1261,36 @@ func validateEmail(email string) error {
 	if !validLocalPart(e[:at]) {
 		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
 	}
-	// A dot INSIDE the domain, not merely present in it: `a@b.` satisfies
-	// Contains and is not deliverable anywhere. It reached here from the e-mail
-	// change, whose own check was stricter — and this is the validator that also
-	// gates registration and invitations, so the looser one was the shared one.
-	domain := e[at+1:]
-	if dot := strings.LastIndex(domain, "."); dot <= 0 || dot == len(domain)-1 {
+	if !validEmailDomain(e[at+1:]) {
 		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
 	}
 	return nil
+}
+
+// validEmailDomain is the same hostname allowlist as policy.validDomain:
+// letters, digits, hyphen, dots; no scheme, slash, colon, or query. A-Z is
+// accepted because addresses are not folded before this check.
+func validEmailDomain(d string) bool {
+	if d == "" || len(d) > 253 {
+		return false
+	}
+	for i := 0; i < len(d); i++ {
+		c := d[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '.':
+		default:
+			return false
+		}
+	}
+	if strings.HasPrefix(d, ".") || strings.HasSuffix(d, ".") || !strings.Contains(d, ".") {
+		return false
+	}
+	for _, label := range strings.Split(d, ".") {
+		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+	}
+	return true
 }
 
 // validLocalPart implements RFC 5321's dot-string: atoms of `atext` joined by

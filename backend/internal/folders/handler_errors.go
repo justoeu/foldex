@@ -26,6 +26,14 @@ func HTTPError(err error) error {
 		return httperr.New(http.StatusConflict, "parent_cycle", "parent_id would create a folder cycle")
 	case errors.Is(err, ErrDescendantProtected):
 		return httperr.New(http.StatusConflict, "descendant_protected", "folder subtree contains password-protected descendants")
+	case errors.Is(err, ErrMasterNotConfigured):
+		return httperr.New(http.StatusBadRequest, "master_not_configured", "no master password is configured; set one in Settings first")
+	case errors.Is(err, ErrWrongMasterPassword):
+		return httperr.New(http.StatusUnauthorized, "wrong_master_password", "incorrect master password")
+	case errors.Is(err, ErrStaleMasterProof):
+		return httperr.New(http.StatusConflict, "master_changed", "master password changed; prove the new one to reset a folder")
+	case errors.Is(err, ErrPasswordChanged):
+		return httperr.New(http.StatusConflict, "password_changed", "folder password changed during unlock; try again")
 	default:
 		return err
 	}

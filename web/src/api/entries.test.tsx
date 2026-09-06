@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { ReactNode } from 'react'
-import { QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   applyPreviewStatusResults,
   useEntries,
@@ -158,6 +158,78 @@ describe('useEntries', () => {
     expect(renders).toBe(rendersBeforeRefetch)
   })
 
+  it('aborts the in-flight page when the search key changes', async () => {
+    // N1-NEX-007: Topbar search is the query key, but queryFn dropped
+    // TanStack's AbortSignal, so a stale GET /api/entries kept running and
+    // could still settle after the user had moved on. The first page is
+    // hung on purpose so the abort is observable; the replacement query
+    // uses the mock so the grid can show only the latest rows.
+    state.links.push(
+      {
+        id: 1, url: 'https://alpha.example', title: 'Alpha', slug: 'alpha', click_count: 0,
+        preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+      } as any,
+      {
+        id: 2, url: 'https://beta.example', title: 'Beta', slug: 'beta', click_count: 0,
+        preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+      } as any,
+    )
+    const fallback = vi.mocked(http.get).getMockImplementation()!
+    const signals: Array<AbortSignal | undefined> = []
+    let firstPage = true
+    vi.mocked(http.get).mockImplementation((async (url: string, ...rest: any[]) => {
+      const path = String(url).split('?')[0]
+      if (path === '/api/entries') {
+        const config = rest[0] as { signal?: AbortSignal } | undefined
+        signals.push(config?.signal)
+        if (firstPage) {
+          firstPage = false
+          return new Promise((_resolve, reject) => {
+            const err = Object.assign(new Error('canceled'), { code: 'ERR_CANCELED', name: 'CanceledError' })
+            const signal = config?.signal
+            if (signal?.aborted) {
+              reject(err)
+              return
+            }
+            signal?.addEventListener('abort', () => reject(err))
+          })
+        }
+      }
+      return fallback(url, ...rest)
+    }) as never)
+
+    const client = makeQueryClient()
+    const localWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const { result, rerender } = renderHook(({ q }: { q: string }) => useEntries({ q }), {
+      wrapper: localWrapper,
+      initialProps: { q: 'Alpha' },
+    })
+    await waitFor(() => expect(signals).toHaveLength(1))
+
+    // One act per keystroke so React cannot collapse the burst into a single
+    // props update — that is the Home search shape, and it is what used to
+    // fan out one GET /api/entries per character.
+    await act(async () => { rerender({ q: 'B' }) })
+    await act(async () => { rerender({ q: 'Be' }) })
+    await act(async () => { rerender({ q: 'Bet' }) })
+    await act(async () => { rerender({ q: 'Beta' }) })
+    // Debounce (LinkDialog-style 500ms): a burst must not issue one GET per
+    // keystroke. Without it this is already 5 overlapping page fetches.
+    expect(signals).toHaveLength(1)
+
+    await waitFor(() => expect(signals).toHaveLength(2))
+    expect(signals[0]).toBeInstanceOf(AbortSignal)
+    expect(signals[0]?.aborted).toBe(true)
+    expect(signals[1]?.aborted).toBe(false)
+
+    await waitFor(() => {
+      const titles = flattenEntries(result.current.data).map((entry) => entry.title)
+      expect(titles).toEqual(['Beta'])
+    })
+  })
+
 })
 
 describe('mapCachedLinkEntries', () => {
@@ -186,6 +258,65 @@ describe('mapCachedLinkEntries', () => {
     expect(linkEntry.kind).toBe('link')
     expect(noteEntry.pinned).toBe(false)
     expect(noteEntry.kind).toBe('note')
+  })
+
+  // Production callers pass identity-preserving fns (`l.id === id ? changed : l`).
+  // Spreading every link allocates a new object for the whole page and
+  // defeats React.memo on LinkCard. structuralSharing is off so this
+  // asserts the mapper, not TQ replaceEqualDeep recovering cloned-but-equal rows.
+  it('preserves identity of untouched links', () => {
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0, staleTime: 0, structuralSharing: false },
+        mutations: { retry: false },
+      },
+    })
+    const link = (id: number) => ({
+      kind: 'link' as const,
+      id,
+      url: `https://${id}.example`,
+      title: String(id),
+      slug: String(id),
+      click_count: 0,
+      preview_status: 'ok' as const,
+      pinned: false,
+      created_at: '',
+      updated_at: '',
+      tags: [],
+    })
+    const target = link(1)
+    const untouched = [link(2), link(3)]
+    const note = {
+      kind: 'note' as const,
+      id: 99,
+      title: 'Note',
+      slug: 'n',
+      pinned: false,
+      click_count: 0,
+      created_at: '',
+      updated_at: '',
+      tags: [],
+    }
+    const key = ['entries', '', '', 'created', 'all', 'locked']
+    client.setQueryData(key, {
+      pages: [[target, ...untouched, note]],
+      pageParams: [0],
+    })
+
+    // Same shape as useUpdateLink: replace the hit with a Link payload
+    // that has no `kind`, pass every other row through.
+    const { kind: _kind, ...linkFields } = target
+    const patched = { ...linkFields, pinned: true }
+    mapCachedLinkEntries(client, (l) => (l.id === 1 ? patched : l))
+
+    const cached = client.getQueryData<{ pages: typeof target[][] }>(key)
+    const [nextTarget, nextTwo, nextThree, nextNote] = cached!.pages[0]
+    expect(nextTarget).not.toBe(target)
+    expect(nextTarget.pinned).toBe(true)
+    expect(nextTarget.kind).toBe('link')
+    expect(nextTwo).toBe(untouched[0])
+    expect(nextThree).toBe(untouched[1])
+    expect(nextNote).toBe(note)
   })
 
   it('removeCachedEntry drops the moved card from every entries page', () => {
@@ -231,5 +362,52 @@ describe('applyPreviewStatusResults', () => {
     const second = client.getQueryData<{ pages: any[][] }>(secondKey)!.pages.flat()
     expect(second.find((entry) => entry.id === 1)).toMatchObject({ preview_status: 'pending', updated_at: 'before' })
     expect(second.some((entry) => entry.id === 2)).toBe(true)
+  })
+
+  it('ignores a payload older than the cached updated_at', () => {
+    const client = makeQueryClient()
+    const key = ['entries', 'preview-race'] as const
+    const cached = {
+      kind: 'link', id: 1, url: 'https://1.example', title: '1', slug: '1', click_count: 0,
+      preview_status: 'ok', description: 'fresh', favicon_url: '/fresh.ico',
+      og_image_url: '/fresh.jpg', preview_error: null, pinned: false,
+      created_at: '', updated_at: '2026-09-05T12:00:00.000Z', tags: [],
+    } as any
+    client.setQueryData(key, { pages: [[cached]], pageParams: [0] })
+
+    applyPreviewStatusResults(client, key, [{
+      id: 1, found: true, preview_status: 'pending', description: 'stale',
+      favicon_url: '/stale.ico', og_image_url: '/stale.jpg', preview_error: null,
+      updated_at: '2026-09-05T11:00:00.000Z',
+    }])
+
+    expect(client.getQueryData<{ pages: any[][] }>(key)!.pages[0][0]).toMatchObject({
+      preview_status: 'ok',
+      description: 'fresh',
+      og_image_url: '/fresh.jpg',
+      updated_at: '2026-09-05T12:00:00.000Z',
+    })
+
+    applyPreviewStatusResults(client, key, [{
+      id: 1, found: true, preview_status: 'ok', description: 'same-tick',
+      favicon_url: '/fresh.ico', og_image_url: '/same.jpg', preview_error: null,
+      updated_at: '2026-09-05T12:00:00.000Z',
+    }])
+    expect(client.getQueryData<{ pages: any[][] }>(key)!.pages[0][0]).toMatchObject({
+      description: 'same-tick',
+      og_image_url: '/same.jpg',
+      updated_at: '2026-09-05T12:00:00.000Z',
+    })
+
+    applyPreviewStatusResults(client, key, [{
+      id: 1, found: true, preview_status: 'ok', description: 'newer',
+      favicon_url: '/fresh.ico', og_image_url: '/newer.jpg', preview_error: null,
+      updated_at: '2026-09-05T13:00:00.000Z',
+    }])
+    expect(client.getQueryData<{ pages: any[][] }>(key)!.pages[0][0]).toMatchObject({
+      description: 'newer',
+      og_image_url: '/newer.jpg',
+      updated_at: '2026-09-05T13:00:00.000Z',
+    })
   })
 })

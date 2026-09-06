@@ -128,6 +128,38 @@ describe('PasswordPromptDialog', () => {
     expect(onResolved).toHaveBeenCalledWith(null)
   })
 
+  it('does not unlock when Enter is pressed on focused Cancel', async () => {
+    state.folders.push(protectedFolder)
+    state.folderPasswords[1] = 'correct'
+    const onResolved = vi.fn()
+    renderWithProviders(<TriggerFlow folder={protectedFolder} onResolved={onResolved} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('trigger'))
+    await user.type(screen.getByLabelText('folder password'), 'correct')
+    screen.getByRole('button', { name: /cancel/i }).focus()
+
+    await user.keyboard('{Enter}')
+
+    await waitFor(() => expect(onResolved).toHaveBeenCalled())
+    expect(onResolved).toHaveBeenCalledWith(null)
+  })
+
+  it('still unlocks when Enter is pressed in the password field', async () => {
+    state.folders.push(protectedFolder)
+    state.folderPasswords[1] = 'correct'
+    const onResolved = vi.fn()
+    renderWithProviders(<TriggerFlow folder={protectedFolder} onResolved={onResolved} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('trigger'))
+    await user.type(screen.getByLabelText('folder password'), 'correct')
+    screen.getByLabelText('folder password').focus()
+
+    await user.keyboard('{Enter}')
+
+    await waitFor(() => expect(onResolved).toHaveBeenCalled())
+    expect(onResolved.mock.calls[0][0]).not.toBeNull()
+  })
+
   it('closes on Escape and resolves null', async () => {
     state.folders.push(protectedFolder)
     state.folderPasswords[1] = 'correct'

@@ -9,7 +9,7 @@ import type { EditorView } from '@tiptap/pm/view'
 import { useTranslation } from 'react-i18next'
 import { useCreateNote, useUpdateNote, uploadNoteImage } from '../api/notes'
 import type { Note } from '../api/types'
-import { apiErrorCode } from '../lib/apiError'
+import { apiErrorCode, apiErrorMessage, apiErrorStatus } from '../lib/apiError'
 import { tagNameTakenErrorKey } from '../lib/dialogTags'
 import { useSlugFieldState } from './SlugField'
 import { useTagPicker } from './TagPicker'
@@ -24,12 +24,17 @@ export function buildImageUploadHandler(
   onError: (message: string) => void,
 ) {
   return (view: EditorView, file: File) => {
+    const { from, to } = view.state.selection
     uploadFn(file)
       .then(({ url }) => {
+        if (view.isDestroyed) return
         const node = view.state.schema.nodes.image.create({ src: url })
-        view.dispatch(view.state.tr.replaceSelectionWith(node))
+        view.dispatch(view.state.tr.replaceWith(from, to, node))
       })
-      .catch(() => onError('upload_failed'))
+      .catch(() => {
+        if (view.isDestroyed) return
+        onError('upload_failed')
+      })
   }
 }
 
@@ -54,14 +59,6 @@ export function buildNoteEditorProps(handleUpload: ImageUploadHandler) {
       return true
     },
   }
-}
-
-function responseMessage(error: unknown) {
-  return (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
-}
-
-function responseStatus(error: unknown) {
-  return (error as { response?: { status?: number } })?.response?.status
 }
 
 type ControllerOptions = {
@@ -131,8 +128,8 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
       const code = apiErrorCode(error)
       const tagErrorKey = tagNameTakenErrorKey(error, 'note')
       if (tagErrorKey) return setSaveError(t(tagErrorKey))
-      if (code === 'conflict' || responseStatus(error) === 409) return setSaveError(t('note_dialog.error_conflict'))
-      setSaveError(responseMessage(error) || t('note_dialog.error_generic'))
+      if (code === 'conflict' || apiErrorStatus(error) === 409) return setSaveError(t('note_dialog.error_conflict'))
+      setSaveError(apiErrorMessage(error) || t('note_dialog.error_generic'))
     }
   }
 

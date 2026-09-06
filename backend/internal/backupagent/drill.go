@@ -256,14 +256,18 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*Artifact, map[string]
 		return nil, nil, ReasonDrillRestoreFailed, err
 	}
 
-	if _, hasTables := src.Meta["tables"]; !hasTables {
+	sourceMeta, err := parseDumpMeta(src.Meta)
+	if err != nil {
+		return nil, nil, ReasonDrillCountsMismatch, err
+	}
+	if len(sourceMeta.Tables) == 0 {
 		j.logger.Warn("source dump carries no table counts (pre-PR2 artifact) — sanity degrades to schema version only")
 	}
 	gotTables, gotVersion, err := j.readCounts(ctx, dir, drillDatabase)
 	if err != nil {
 		return nil, nil, ReasonDrillRestoreFailed, fmt.Errorf("query restored cluster: %w", err)
 	}
-	if err := compareCounts(src.Meta, gotTables, gotVersion); err != nil {
+	if err := compareCounts(sourceMeta, gotTables, gotVersion); err != nil {
 		return nil, nil, ReasonDrillCountsMismatch, err
 	}
 
@@ -408,24 +412,67 @@ func queryRestoredCounts(ctx context.Context, socketDir, database, user string) 
 	return collectSanityCounts(ctx, conn)
 }
 
+// parseDumpMeta turns the JSONB map a dump row carries into DumpMeta.
+// Missing tables is a typed empty (schema-only degrade); any other tables
+// shape is an error — the old type-assert to map[string]any fail-opened.
+func parseDumpMeta(raw map[string]any) (DumpMeta, error) {
+	if raw == nil {
+		return DumpMeta{}, nil
+	}
+	var meta DumpMeta
+	if v, ok := raw["encrypted"].(bool); ok {
+		meta.Encrypted = v
+	}
+	if v, ok := raw["schema_version"]; ok {
+		if n, ok := metaInt(v); ok {
+			meta.SchemaVersion = n
+		}
+	}
+	if v, ok := raw["prune_error"].(string); ok {
+		meta.PruneError = v
+	}
+	if v, ok := raw["tables"]; ok && v != nil {
+		tables, err := parseDumpTables(v)
+		if err != nil {
+			return DumpMeta{}, err
+		}
+		meta.Tables = tables
+	}
+	return meta, nil
+}
+
+func parseDumpTables(v any) (map[string]int64, error) {
+	switch t := v.(type) {
+	case map[string]int64:
+		return t, nil
+	case map[string]any:
+		out := make(map[string]int64, len(t))
+		for table, raw := range t {
+			n, ok := metaInt(raw)
+			if !ok {
+				return nil, fmt.Errorf("source meta count for %s is not a number", table)
+			}
+			out[table] = n
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("source meta tables is %T, want a map of table counts", v)
+	}
+}
+
 // compareCounts is the drill's verdict: the restored database must hold the
 // row counts and the schema version the source dump recorded in its meta.
 // Pure on purpose — the stubbed cluster of the unit tests cannot answer SQL,
 // so the comparison logic is tested directly. A dump whose meta predates the
 // counts (or shipped without them) is compared on schema version alone.
-func compareCounts(sourceMeta map[string]any, gotTables map[string]int64, gotVersion int64) error {
-	if want, ok := metaInt(sourceMeta["schema_version"]); ok && want != gotVersion {
-		return fmt.Errorf("restored schema_migrations.version is %d, source recorded %d", gotVersion, want)
+func compareCounts(source DumpMeta, gotTables map[string]int64, gotVersion int64) error {
+	if source.SchemaVersion != 0 && source.SchemaVersion != gotVersion {
+		return fmt.Errorf("restored schema_migrations.version is %d, source recorded %d", gotVersion, source.SchemaVersion)
 	}
-	want, ok := sourceMeta["tables"].(map[string]any)
-	if !ok {
+	if len(source.Tables) == 0 {
 		return nil
 	}
-	for table, raw := range want {
-		wanted, ok := metaInt(raw)
-		if !ok {
-			return fmt.Errorf("source meta count for %s is not a number", table)
-		}
+	for table, wanted := range source.Tables {
 		got, present := gotTables[table]
 		if !present {
 			return fmt.Errorf("table %s was counted at dump time but is absent from the restored database", table)

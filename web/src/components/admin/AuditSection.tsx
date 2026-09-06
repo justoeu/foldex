@@ -1,22 +1,19 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
-  auditQueryKey, auditStatsQueryKey, exportAuditCsv, fetchAudit, fetchAuditStats,
+  auditQueryKey, auditStatsQueryKey, fetchAudit, fetchAuditStats,
   fetchIPBlocks, ipBlocksQueryKey,
-  type AuditCategory, type AuditQuery, type AuditWindow,
 } from '../../api/admin'
 import { useAuth } from '../../auth/AuthProvider'
-import { useRevealTarget } from '../../hooks/useRevealTarget'
 import { AUDIT_WINDOWS } from './auditFormat'
 import { actionLabel } from '../../lib/auditLabels'
 import { AuditAnomalies } from './AuditAnomalies'
 import { AuditDaysChart, AuditDistribution, AuditMetrics } from './AuditCharts'
 import { AuditActors, AuditBlocklist, AuditOrigins, AuditRiskCard } from './AuditSignals'
 import { AuditTimeline } from './AuditTimeline'
-
-/** How long the search box waits before it becomes a request. */
-const SEARCH_DEBOUNCE_MS = 300
+import { downloadAuditCsv } from './auditExport'
+import { useAuditFilters } from './useAuditFilters'
 
 /**
  * The administrative trail — ADR-46.
@@ -34,27 +31,13 @@ const SEARCH_DEBOUNCE_MS = 300
 export function AuditSection() {
   const { t } = useTranslation()
   const { session } = useAuth()
-  const [period, setPeriod] = useState<AuditWindow>('7d')
-  const [action, setAction] = useState('')
-  const [category, setCategory] = useState<AuditCategory | ''>('')
-  const [search, setSearch] = useState('')
-  const [oldestFirst, setOldestFirst] = useState(false)
-  const [pages, setPages] = useState<number[]>([])
+  const {
+    period, action, category, search, oldestFirst, pages, filter, timeline,
+    inspectIP, setPeriod, setSearch, toggleOrder, setCategory, setAction,
+    clearFilters, nextPage, prevPage,
+  } = useAuditFilters()
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
-
-  // Debounced so a typed address is one request, not one per keystroke. The
-  // predicate behind it is a LIKE over the window and deliberately not indexed.
-  const debounced = useDebounced(search, SEARCH_DEBOUNCE_MS)
-
-  const filter: AuditQuery = useMemo(() => ({
-    window: period,
-    action: action || undefined,
-    category: category || undefined,
-    q: debounced || undefined,
-    before: pages.length > 0 ? pages[pages.length - 1] : undefined,
-    order: oldestFirst ? 'asc' : undefined,
-  }), [period, action, category, debounced, pages, oldestFirst])
 
   const list = useQuery({ queryKey: auditQueryKey(filter), queryFn: () => fetchAudit(filter) })
   const stats = useQuery({
@@ -71,29 +54,6 @@ export function AuditSection() {
   // permission list that can never contain it for anyone else. Affordance, not
   // enforcement: the route is gated regardless of what renders here.
   const canBlock = session.status === 'authenticated' && session.user.role === 'owner'
-
-  // Any change to what is being FILTERED restarts pagination: a cursor taken
-  // from the previous result set points at an id this one may not contain.
-  const resetPaging = () => setPages([])
-
-  const timeline = useRevealTarget<HTMLElement>()
-
-  /**
-   * "See the events behind this signal."
-   *
-   * The trail's search already matches `host(ip)`, so this is the SAME query
-   * the operator would have typed — not a second endpoint and not a separate
-   * screen. Every other filter is cleared with it: an address inspected under
-   * a leftover action chip would show a filtered subset of its own events and
-   * read as "there is nothing here".
-   */
-  const inspectIP = (ip: string) => {
-    setSearch(ip)
-    setAction('')
-    setCategory('')
-    resetPaging()
-    timeline.reveal()
-  }
 
   const entries = list.data ?? []
 
@@ -112,7 +72,7 @@ export function AuditSection() {
                 type="button"
                 className={'fx-aud-window' + (period === w ? ' fx-aud-window-on' : '')}
                 aria-pressed={period === w}
-                onClick={() => { setPeriod(w); resetPaging() }}
+                onClick={() => setPeriod(w)}
               >
                 {t(`admin.audit_window_${w}`)}
               </button>
@@ -126,7 +86,7 @@ export function AuditSection() {
               setExporting(true)
               setExportError(null)
               try {
-                await downloadCsv(filter)
+                await downloadAuditCsv(filter)
               } catch {
                 setExportError(t('admin.audit_export_failed'))
               } finally {
@@ -164,9 +124,6 @@ export function AuditSection() {
         className="fx-aud-card fx-aud-list"
         aria-labelledby="fx-aud-list-title"
         ref={timeline.ref}
-        // Focusable only as a REVEAL target: the reveal moves the caret here so
-        // the next Tab continues inside the list the operator just asked for,
-        // instead of jumping back to the panel above it.
         tabIndex={-1}
       >
         <header className="fx-aud-card-head">
@@ -182,14 +139,14 @@ export function AuditSection() {
                 type="search"
                 value={search}
                 placeholder={t('admin.audit_search_placeholder')}
-                onChange={(e) => { setSearch(e.target.value); resetPaging() }}
+                onChange={(e) => setSearch(e.target.value)}
               />
             </label>
             <button
               type="button"
               className="fx-pillbtn"
               aria-pressed={oldestFirst}
-              onClick={() => { setOldestFirst((v) => !v); resetPaging() }}
+              onClick={toggleOrder}
             >
               {t(oldestFirst ? 'admin.audit_sort_oldest' : 'admin.audit_sort_newest')}
             </button>
@@ -197,22 +154,16 @@ export function AuditSection() {
         </header>
 
         <div className="fx-aud-chips">
-          <Chip active={action === '' && category === ''} onClick={() => {
-            setAction(''); setCategory(''); resetPaging()
-          }}>
+          <Chip active={action === '' && category === ''} onClick={clearFilters}>
             {t('admin.audit_filter_all')}
           </Chip>
           {(['identity', 'content'] as const).map((c) => (
-            <Chip key={c} active={category === c} onClick={() => {
-              setCategory(category === c ? '' : c); setAction(''); resetPaging()
-            }}>
+            <Chip key={c} active={category === c} onClick={() => setCategory(c)}>
               {t(`admin.audit_category_${c}`)}
             </Chip>
           ))}
           {(stats.data?.distribution ?? []).slice(0, 6).map((d) => (
-            <Chip key={d.action} active={action === d.action} onClick={() => {
-              setAction(action === d.action ? '' : d.action); setCategory(''); resetPaging()
-            }}>
+            <Chip key={d.action} active={action === d.action} onClick={() => setAction(d.action)}>
               {actionLabel(t, d.action)}
               <span className="fx-aud-chip-count">{d.count}</span>
             </Chip>
@@ -231,7 +182,7 @@ export function AuditSection() {
 
         <div className="fx-aud-pager">
           {pages.length > 0 && (
-            <button type="button" className="fx-pillbtn" onClick={() => setPages((p) => p.slice(0, -1))}>
+            <button type="button" className="fx-pillbtn" onClick={prevPage}>
               {t('admin.audit_prev')}
             </button>
           )}
@@ -241,7 +192,7 @@ export function AuditSection() {
               className="fx-pillbtn"
               onClick={() => {
                 const last = entries[entries.length - 1]
-                if (last) setPages((p) => [...p, last.id])
+                if (last) nextPage(last.id)
               }}
             >
               {t('admin.audit_next')}
@@ -266,43 +217,4 @@ function Chip({
       {children}
     </button>
   )
-}
-
-/**
- * Saves the CSV the server streamed.
- *
- * The blob is fetched through the axios client (cookies and the CSRF header)
- * and handed to the browser through an object URL. The URL is revoked in a
- * `finally`, because leaking one pins the whole file in memory for the life of
- * the document — and this file is deliberately allowed to be large.
- */
-async function downloadCsv(filter: AuditQuery) {
-  const blob = await exportAuditCsv(filter)
-  const url = URL.createObjectURL(blob)
-  try {
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `foldex-audit-${new Date().toISOString().slice(0, 10)}.csv`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-  } finally {
-    URL.revokeObjectURL(url)
-  }
-}
-
-/**
- * Delays a value until it stops changing.
- *
- * The timer is cleared on every change AND on unmount — without the cleanup a
- * component unmounted mid-type would set state on a gone tree, which React
- * tolerates silently and which leaves the request in flight for nothing.
- */
-function useDebounced<T>(value: T, ms: number): T {
-  const [settled, setSettled] = useState(value)
-  useEffect(() => {
-    const id = setTimeout(() => setSettled(value), ms)
-    return () => clearTimeout(id)
-  }, [value, ms])
-  return settled
 }

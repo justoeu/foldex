@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +21,6 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
-	"foldex/internal/pkg/httperr"
 	"foldex/internal/settings"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
@@ -566,40 +564,39 @@ func TestRestore_DirectPreflightRejectsBeforeDatabaseMutation(t *testing.T) {
 	missingCover := "/api/files/" + missingKey
 
 	for _, tc := range []struct {
-		name       string
-		version    string
-		checksum   string
-		bodyHTML   string
-		coverURL   *string
-		contains   string
-		wantStatus int
+		name              string
+		version           string
+		checksum          string
+		bodyHTML          string
+		coverURL          *string
+		contains          string
+		wantUnprocessable bool
 	}{
 		{
-			name:       "manifest_major_version",
-			version:    "2.0",
-			contains:   "major version mismatch",
-			wantStatus: http.StatusBadRequest,
+			name:     "manifest_major_version",
+			version:  "2.0",
+			contains: "major version mismatch",
 		},
 		{
-			name:       "database_checksum",
-			version:    backup.ManifestVersion,
-			checksum:   "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-			contains:   "checksum mismatch",
-			wantStatus: http.StatusUnprocessableEntity,
+			name:              "database_checksum",
+			version:           backup.ManifestVersion,
+			checksum:          "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			contains:          "checksum mismatch",
+			wantUnprocessable: true,
 		},
 		{
-			name:       "missing_local_note_media",
-			version:    backup.ManifestVersion,
-			bodyHTML:   `<p><img src="/api/files/` + missingKey + `"></p>`,
-			contains:   "missing note media",
-			wantStatus: http.StatusUnprocessableEntity,
+			name:              "missing_local_note_media",
+			version:           backup.ManifestVersion,
+			bodyHTML:          `<p><img src="/api/files/` + missingKey + `"></p>`,
+			contains:          "missing note media",
+			wantUnprocessable: true,
 		},
 		{
-			name:       "missing_local_note_cover",
-			version:    backup.ManifestVersion,
-			coverURL:   &missingCover,
-			contains:   "missing note media",
-			wantStatus: http.StatusUnprocessableEntity,
+			name:              "missing_local_note_cover",
+			version:           backup.ManifestVersion,
+			coverURL:          &missingCover,
+			contains:          "missing note media",
+			wantUnprocessable: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -632,10 +629,8 @@ func TestRestore_DirectPreflightRejectsBeforeDatabaseMutation(t *testing.T) {
 
 			_, err = backup.NewService(pool, newStubBucket(), discardLogger()).Restore(ctx, uid, zr, backup.ModeWipe)
 			require.Error(t, err)
-			var httpErr *httperr.Error
-			require.ErrorAs(t, err, &httpErr)
-			assert.Equal(t, tc.wantStatus, httpErr.Status)
-			assert.Equal(t, "invalid_backup", httpErr.Code)
+			require.ErrorIs(t, err, backup.ErrInvalidBackup)
+			assert.Equal(t, tc.wantUnprocessable, backup.IsUnprocessableBackup(err))
 			assert.Contains(t, err.Error(), tc.contains)
 
 			_, err = notes.NewRepository(pool).Get(ctx, uid, keeper.ID)
@@ -686,10 +681,8 @@ func TestRestoreRejectsChecksumMismatchBeforeMutation(t *testing.T) {
 
 	_, err = backup.NewService(pool, bucket, discardLogger()).Restore(ctx, uid, zr, backup.ModeWipe)
 	require.Error(t, err)
-	var httpErr *httperr.Error
-	require.ErrorAs(t, err, &httpErr)
-	assert.Equal(t, http.StatusUnprocessableEntity, httpErr.Status)
-	assert.Equal(t, "invalid_backup", httpErr.Code)
+	require.ErrorIs(t, err, backup.ErrInvalidBackup)
+	assert.True(t, backup.IsUnprocessableBackup(err))
 	assert.Contains(t, err.Error(), "checksum mismatch: "+archiveKey)
 
 	_, err = repo.Get(ctx, uid, keeper.ID)
@@ -726,9 +719,8 @@ func TestRestoreRejectsChecksumMismatchBeforeMutation(t *testing.T) {
 
 			_, err := backup.NewService(pool, bucket, discardLogger()).Restore(ctx, uid, zr, backup.ModeWipe)
 			require.Error(t, err)
-			var httpErr *httperr.Error
-			require.ErrorAs(t, err, &httpErr)
-			assert.Equal(t, http.StatusUnprocessableEntity, httpErr.Status)
+			require.ErrorIs(t, err, backup.ErrInvalidBackup)
+			assert.True(t, backup.IsUnprocessableBackup(err))
 			assert.Contains(t, err.Error(), "missing checksum: "+tc.missing)
 			_, err = repo.Get(ctx, uid, keeper.ID)
 			require.NoError(t, err)

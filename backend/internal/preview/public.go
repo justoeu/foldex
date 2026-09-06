@@ -6,14 +6,11 @@ import (
 	"foldex/internal/pkg/netpolicy"
 )
 
-// IsPublicURL reports whether the URL's hostname resolves to ONLY public IP
-// addresses. Used as a gate before triggering an expensive screenshot fallback:
-// we never screenshot intranet hosts (the page would usually be a login wall
-// and the bytes would leak to the object store unnecessarily).
-//
-// Unlike the SSRF guard in the dialer, this is strict by design — there is no
-// env opt-out. The default preview HTML fetch keeps the permissive behavior
-// because intranet links are foldex's primary use case.
+// IsPublicURL is a documented alias of netpolicy.IsPublicURL (INV-079).
+// Kept so the preview worker and its tests share one name without duplicating
+// SSRF guards. Strict by design — there is no env opt-out. The default preview
+// HTML fetch stays permissive because intranet links are foldex's primary use
+// case; this gate is only the expensive screenshot fallback.
 func IsPublicURL(ctx context.Context, pageURL string) bool {
 	return netpolicy.IsPublicURL(ctx, pageURL)
 }

@@ -616,17 +616,61 @@ func (r *Repository) HasConfirmedSecondFactor(ctx context.Context, uid authctx.U
 	return confirmed, nil
 }
 
+// EnrollmentComplete is the shared input for TOTP and e-mail enrollment so
+// the session clump (live id vs pre-auth challenge, TTL, IP, UA) cannot
+// compile a string into another string's slot.
+type EnrollmentComplete struct {
+	UID            authctx.UserID
+	TokenVersion   int
+	RecoveryHashes [][]byte
+	Session        SessionIssue
+}
+
+// SessionIssue is either a live session or a pre-auth challenge that mints
+// the first session. Construct with LiveSession{ID} or PreAuth{...}.
+type SessionIssue interface {
+	isSessionIssue()
+}
+
+// LiveSession is the Settings path: an already-authenticated session.
+type LiveSession struct{ ID int64 }
+
+func (LiveSession) isSessionIssue() {}
+
+// PreAuth is the mandatory-enrollment path: consume the challenge and mint
+// the first session in the same transaction.
+type PreAuth struct {
+	Challenge Challenge
+	TTL       SessionTTL
+	IP, UA    string
+}
+
+func (PreAuth) isSessionIssue() {}
+
+func (in EnrollmentComplete) liveSessionID() int64 {
+	if live, ok := in.Session.(LiveSession); ok {
+		return live.ID
+	}
+	return 0
+}
+
+func (in EnrollmentComplete) preAuth() *PreAuth {
+	if p, ok := in.Session.(PreAuth); ok {
+		cp := p
+		return &cp
+	}
+	return nil
+}
+
 // CompleteTOTPEnrollment activates the exact seed that was verified, replaces
 // recovery codes and, for mandatory pre-auth enrollment, consumes the challenge
 // and issues the first session in one transaction.
-func (r *Repository) CompleteTOTPEnrollment(ctx context.Context, uid authctx.UserID, tokenVersion int,
-	proof TOTPProof, recoveryHashes [][]byte, sessionID int64, challenge *Challenge, ttl SessionTTL,
-	ip, ua string) (User, issuedTokens, error) {
-
+func (r *Repository) CompleteTOTPEnrollment(ctx context.Context, in EnrollmentComplete, proof TOTPProof) (User, issuedTokens, error) {
+	pre := in.preAuth()
 	var issue sessionIssue
 	var err error
-	if challenge != nil {
-		issue, err = newSessionIssue(ttl)
+	if pre != nil {
+		issue, err = newSessionIssue(pre.TTL)
 		if err != nil {
 			return User{}, issuedTokens{}, err
 		}
@@ -641,46 +685,46 @@ func (r *Repository) CompleteTOTPEnrollment(ctx context.Context, uid authctx.Use
 	err = tx.QueryRow(ctx, `
 		SELECT id FROM app_user
 		WHERE id = $1 AND status = 'active' AND token_version = $2
-		FOR NO KEY UPDATE`, int64(uid), tokenVersion).Scan(&lockedUser)
+		FOR NO KEY UPDATE`, int64(in.UID), in.TokenVersion).Scan(&lockedUser)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, issuedTokens{}, ErrChallengeInvalid
 	}
 	if err != nil {
 		return User{}, issuedTokens{}, fmt.Errorf("complete totp enrollment lock user: %w", err)
 	}
-	if challenge == nil {
-		if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
+	if pre == nil {
+		if err := requireLiveSessionTx(ctx, tx, in.UID, in.liveSessionID()); err != nil {
 			return User{}, issuedTokens{}, err
 		}
 	}
-	if err := confirmTOTPRowTx(ctx, tx, uid, tokenVersion, sessionID, proof); err != nil {
+	if err := confirmTOTPRowTx(ctx, tx, in.UID, in.TokenVersion, in.liveSessionID(), proof); err != nil {
 		return User{}, issuedTokens{}, err
 	}
-	if err := replaceRecoveryCodesTx(ctx, tx, uid, recoveryHashes); err != nil {
+	if err := replaceRecoveryCodesTx(ctx, tx, in.UID, in.RecoveryHashes); err != nil {
 		return User{}, issuedTokens{}, err
 	}
 
-	if challenge != nil {
+	if pre != nil {
 		ct, err := tx.Exec(ctx, `
 			UPDATE auth_challenge SET consumed_at = now()
 			WHERE id = $1 AND user_id = $2 AND purpose = 'enroll_2fa'
 			  AND token_version = $3 AND consumed_at IS NULL AND expires_at > now()`,
-			challenge.ID, int64(uid), tokenVersion)
+			pre.Challenge.ID, int64(in.UID), in.TokenVersion)
 		if err != nil {
 			return User{}, issuedTokens{}, fmt.Errorf("complete enrollment consume challenge: %w", err)
 		}
 		if ct.RowsAffected() == 0 {
 			return User{}, issuedTokens{}, ErrChallengeInvalid
 		}
-		if _, err := issueSessionTx(ctx, tx, uid, issue, ip, ua); err != nil {
+		if _, err := issueSessionTx(ctx, tx, in.UID, issue, pre.IP, pre.UA); err != nil {
 			return User{}, issuedTokens{}, err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(uid)); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(in.UID)); err != nil {
 			return User{}, issuedTokens{}, fmt.Errorf("complete enrollment touch user: %w", err)
 		}
 	}
 
-	user, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM app_user WHERE id = $1`, int64(uid)))
+	user, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM app_user WHERE id = $1`, int64(in.UID)))
 	if err != nil {
 		return User{}, issuedTokens{}, fmt.Errorf("complete enrollment load user: %w", err)
 	}
@@ -722,21 +766,6 @@ func confirmTOTPRowTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID,
 		return ErrChallengeInvalid
 	}
 	return ErrTOTPEnrollmentChanged
-}
-
-func (r *Repository) ConsumeTOTPProof(ctx context.Context, uid authctx.UserID, proof TOTPProof) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("consume totp proof begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := consumeTOTPProofTx(ctx, tx, uid, proof); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("consume totp proof commit: %w", err)
-	}
-	return nil
 }
 
 // Complete2FA spends exactly one accepted proof and its challenge, then creates
@@ -959,6 +988,24 @@ func (r *Repository) DisableTOTP(ctx context.Context, uid authctx.UserID, sessio
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if err := lockUserWithPasswordAndProof(ctx, tx, uid, sessionID, tokenVersion, password, proof); err != nil {
+		return err
+	}
+	if err := disableFactorTx(ctx, tx, uid, sessionID, tokenVersion, disableKindTOTP); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("disable totp commit: %w", err)
+	}
+	return nil
+}
+
+// lockUserWithPasswordAndProof is the one credential step-up lock: row lock,
+// bcrypt, live session, spend the proof. Disable TOTP and regenerate recovery
+// codes share it so a bound added to one cannot miss the other.
+func lockUserWithPasswordAndProof(ctx context.Context, tx pgx.Tx, uid authctx.UserID,
+	sessionID int64, tokenVersion int, password string, proof SecondFactorProof) error {
+
 	var passwordHash *string
 	var liveVersion int
 	var status string
@@ -966,7 +1013,7 @@ func (r *Repository) DisableTOTP(ctx context.Context, uid authctx.UserID, sessio
 		SELECT password_hash, token_version, status
 		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).
 		Scan(&passwordHash, &liveVersion, &status); err != nil {
-		return fmt.Errorf("disable totp lock user: %w", err)
+		return fmt.Errorf("lock user with password: %w", err)
 	}
 	if status != StatusActive || liveVersion != tokenVersion {
 		return ErrSessionInvalid
@@ -980,44 +1027,88 @@ func (r *Repository) DisableTOTP(ctx context.Context, uid authctx.UserID, sessio
 	if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
 		return err
 	}
-	if err := consumeSecondFactorTx(ctx, tx, uid, proof); err != nil {
-		return err
+	return consumeSecondFactorTx(ctx, tx, uid, proof)
+}
+
+// disableFactorKind names which factor row disableFactorTx removes.
+type disableFactorKind string
+
+const (
+	disableKindTOTP  disableFactorKind = "totp"
+	disableKindEmail disableFactorKind = "email"
+)
+
+// disableFactorTx owns the remaining-factor cascade for both disable paths.
+//
+// Zero rows fail closed: a missing factor must not look like a credential-set
+// mutation. A successful removal bumps the epoch and revokes every other
+// session — otherwise dropping a factor because the mailbox (or phone) was
+// compromised leaves the intruder's session live. Recovery codes guard the
+// FACTORS, not one authenticator: they stay while a sibling is still enrolled,
+// read under the user lock the caller already holds so a concurrent disable of
+// the other factor cannot leave both paths believing the sibling survived.
+func disableFactorTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID,
+	sessionID int64, tokenVersion int, kind disableFactorKind) error {
+
+	var deleteSQL, siblingSQL, op string
+	switch kind {
+	case disableKindTOTP:
+		deleteSQL = `DELETE FROM totp_secret WHERE user_id = $1`
+		siblingSQL = `
+			SELECT EXISTS (
+				SELECT 1 FROM email_factor WHERE user_id = $1 AND confirmed_at IS NOT NULL
+			)`
+		op = "disable totp"
+	case disableKindEmail:
+		deleteSQL = `DELETE FROM email_factor WHERE user_id = $1`
+		siblingSQL = `
+			SELECT EXISTS (
+				SELECT 1 FROM totp_secret WHERE user_id = $1 AND confirmed_at IS NOT NULL
+			)`
+		op = "disable email factor"
+	default:
+		return fmt.Errorf("disable factor: unknown kind %q", kind)
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM totp_secret WHERE user_id = $1`, int64(uid)); err != nil {
-		return fmt.Errorf("delete totp secret: %w", err)
+
+	ct, err := tx.Exec(ctx, deleteSQL, int64(uid))
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
 	}
-	// Recovery codes guard the FACTORS, not the authenticator specifically. This
-	// used to delete them unconditionally, which was correct while TOTP was the
-	// only factor there could be — and became a lockout the moment e-mail could
-	// be enrolled too (ADR-37): disabling TOTP would leave an account holding an
-	// e-mail factor with no way past the reset-link guard that deliberately
-	// refuses it. Read under the user lock already held, so a concurrent e-mail
-	// disable cannot have both paths conclude the other factor survives.
-	var emailLeft bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM email_factor WHERE user_id = $1 AND confirmed_at IS NOT NULL
-		)`, int64(uid)).Scan(&emailLeft); err != nil {
-		return fmt.Errorf("disable totp check email factor: %w", err)
+	if ct.RowsAffected() == 0 {
+		return ErrNoPendingFactor
 	}
-	if !emailLeft {
+
+	if kind == disableKindEmail {
+		// Both purposes: an outstanding step-up code is a live proof issued BY
+		// the factor being removed, so leaving it behind would let a mailbox
+		// authorize operations after the account stopped accepting that mailbox
+		// as a factor.
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM email_otp WHERE user_id = $1 AND purpose = ANY($2)`,
+			int64(uid), []string{OTPPurposeEnrollEmail2FA, OTPPurposeStepUp2FA}); err != nil {
+			return fmt.Errorf("disable email factor clear codes: %w", err)
+		}
+	}
+
+	var siblingLeft bool
+	if err := tx.QueryRow(ctx, siblingSQL, int64(uid)).Scan(&siblingLeft); err != nil {
+		return fmt.Errorf("%s check remaining factor: %w", op, err)
+	}
+	if !siblingLeft {
 		if _, err := tx.Exec(ctx, `DELETE FROM recovery_code WHERE user_id = $1`, int64(uid)); err != nil {
-			return fmt.Errorf("delete recovery codes: %w", err)
+			return fmt.Errorf("%s clear recovery: %w", op, err)
 		}
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE app_user SET token_version = token_version + 1, updated_at = now()
 		WHERE id = $1 AND token_version = $2`, int64(uid), tokenVersion); err != nil {
-		return fmt.Errorf("disable totp bump epoch: %w", err)
+		return fmt.Errorf("%s bump epoch: %w", op, err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE session SET revoked_at = now(), revoked_reason = $3
 		WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
 		int64(uid), sessionID, ReasonPasswordChanged); err != nil {
-		return fmt.Errorf("disable totp revoke sessions: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("disable totp commit: %w", err)
+		return fmt.Errorf("%s revoke sessions: %w", op, err)
 	}
 	return nil
 }
@@ -1034,28 +1125,7 @@ func (r *Repository) RegenerateRecoveryCodes(ctx context.Context, uid authctx.Us
 		return fmt.Errorf("regenerate recovery codes begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var passwordHash *string
-	var liveVersion int
-	var status string
-	if err := tx.QueryRow(ctx, `
-		SELECT password_hash, token_version, status
-		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).
-		Scan(&passwordHash, &liveVersion, &status); err != nil {
-		return fmt.Errorf("regenerate recovery codes lock user: %w", err)
-	}
-	if status != StatusActive || liveVersion != tokenVersion {
-		return ErrSessionInvalid
-	}
-	if passwordHash == nil {
-		return ErrPasswordMissing
-	}
-	if !pwhash.Verify(*passwordHash, password) {
-		return ErrBadCredentials
-	}
-	if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
-		return err
-	}
-	if err := consumeSecondFactorTx(ctx, tx, uid, proof); err != nil {
+	if err := lockUserWithPasswordAndProof(ctx, tx, uid, sessionID, tokenVersion, password, proof); err != nil {
 		return err
 	}
 	if err := replaceRecoveryCodesTx(ctx, tx, uid, hashes); err != nil {
@@ -1075,25 +1145,6 @@ func replaceRecoveryCodesTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 		INSERT INTO recovery_code (user_id, code_hash)
 		SELECT $1, code_hash FROM unnest($2::bytea[]) AS code_hash`, int64(uid), hashes); err != nil {
 		return fmt.Errorf("insert recovery codes: %w", err)
-	}
-	return nil
-}
-
-// ConsumeRecoveryCode spends one code, or reports ErrBadCredentials.
-//
-// The user_id predicate is not redundant with the unique hash index: without
-// it, a code belonging to another account would verify. The conditional UPDATE
-// makes single-use atomic — two parallel requests with the same code produce
-// one success and one ErrBadCredentials, never two successes.
-func (r *Repository) ConsumeRecoveryCode(ctx context.Context, uid authctx.UserID, codeHash []byte) error {
-	ct, err := r.pool.Exec(ctx, `
-		UPDATE recovery_code SET used_at = now()
-		WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL`, int64(uid), codeHash)
-	if err != nil {
-		return fmt.Errorf("consume recovery code: %w", err)
-	}
-	if ct.RowsAffected() == 0 {
-		return ErrBadCredentials
 	}
 	return nil
 }
@@ -1200,31 +1251,6 @@ func (r *Repository) CreateEmailVerification(ctx context.Context, uid authctx.Us
 		return "", fmt.Errorf("create verification commit: %w", err)
 	}
 	return raw, nil
-}
-
-// ConsumeEmailOTP spends a code for (user, purpose), or reports
-// ErrBadCredentials.
-//
-// Like the recovery-code path, single-use is enforced by the UPDATE's own
-// WHERE clause rather than by a preceding SELECT.
-func (r *Repository) ConsumeEmailOTP(ctx context.Context, uid authctx.UserID, purpose string, codeHash []byte, challengeID *int64) error {
-	// challengeID binds a login code to the exact challenge that mailed it.
-	// Without it a code issued for one sign-in attempt would satisfy another,
-	// which quietly widens the attempt budget: each challenge carries its own
-	// 5-guess cap. It is nil for verify-email, which has no challenge.
-	ct, err := r.pool.Exec(ctx, `
-		UPDATE email_otp SET consumed_at = now()
-		WHERE user_id = $1 AND purpose = $2 AND code_hash = $3
-		  AND consumed_at IS NULL AND expires_at > now()
-		  AND ($4::bigint IS NULL OR challenge_id = $4)`,
-		int64(uid), purpose, codeHash, challengeID)
-	if err != nil {
-		return fmt.Errorf("consume otp: %w", err)
-	}
-	if ct.RowsAffected() == 0 {
-		return ErrBadCredentials
-	}
-	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────
