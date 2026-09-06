@@ -471,6 +471,19 @@ func insertStagedImportRelations(ctx context.Context, tx pgx.Tx, uid authctx.Use
 		return fmt.Errorf("insert import clicks: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
+        INSERT INTO entity_click_stats (user_id, entity_kind, entity_id, click_count, last_clicked_at)
+        SELECT $1, 'link', inserted.id, item.click_count, COALESCE(item.created_at, now())
+        FROM _import_item item
+        JOIN _import_inserted inserted ON inserted.url = item.url
+        WHERE item.selected AND item.click_count > 0
+        ON CONFLICT (user_id, entity_kind, entity_id)
+        DO UPDATE SET
+            click_count = entity_click_stats.click_count + EXCLUDED.click_count,
+            last_clicked_at = GREATEST(entity_click_stats.last_clicked_at, EXCLUDED.last_clicked_at)
+    `, int64(uid)); err != nil {
+		return fmt.Errorf("upsert import click stats: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
         DELETE FROM link_tag refs
         USING link rows, _import_item item
         WHERE rows.user_id = $1

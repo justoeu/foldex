@@ -311,7 +311,7 @@ validated by `internal/pkg/cssvalid` — only hex (`#abc`/`#abcd`/`#aabbcc`/`#aa
 <a id="inv-056"></a>
 ### INV-056 — `click_log` is the single source of truth for clicks.
 
-`link.click_count`/`last_clicked_at` columns no longer exist (mig 000006); both are derived either via `LEFT JOIN LATERAL` for a row projection or a set-based aggregate restricted by owner, `entity_kind`, and the candidate IDs for mixed/page queries. `/go/{id-or-slug}` is the **only** path that INSERTs into `click_log`, inside a tx that also verifies the link exists (404 otherwise) — never an UPDATE on `link`.
+`link.click_count`/`last_clicked_at` columns no longer exist (mig 000006); both are derived either via a set-based aggregate restricted by owner, `entity_kind`, and the candidate IDs for mixed/page queries, or by joining `entity_click_stats` (mig 000046) for click/recent sorts. That table is a **projection** — one row per (owner, kind, entity), UPSERTed from `clicklog.Record` and rebuilt by import/restore. It is not a second source of truth and must never be written onto `link`/`note`. `/go/{id-or-slug}` is the **only** path that INSERTs into `click_log` on the public click path, inside a tx that also verifies the link exists (404 otherwise) — never an UPDATE on `link`.
 
 <a id="inv-057"></a>
 ### INV-057 — `link_tag` is the only place link↔tag lives.

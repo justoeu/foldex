@@ -121,6 +121,7 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 -- 000033_audit_log        → trilha administrativa (ADR-34)
 -- 000034_mail_outbox      → outbox transacional de e-mail, payload cifrado (ADR-36)
 -- 000035_user_locale      → idioma preferido da conta; NULL = sem preferência (ADR-36 §12.3)
+-- 000046_entity_click_stats → projection of click_log for click/recent sorts (INV-056)
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -630,7 +631,7 @@ A versão original (numeric-only) foi implementada primeiro porque IDs são triv
 Fetcher visita URLs arbitrárias fornecidas pelo usuário. **Ranges de metadata/credenciais cloud e RFC6598 são sempre bloqueados**, sem opt-out. Os demais ranges special-purpose da IANA só são bloqueados quando `PREVIEW_STRICT_SSRF=1`. O default permissivo para RFC1918 é uma compatibilidade explícita com links de intranet (Jira/Grid/Confluence/dashboards internos), não uma suposição de usuário único; em modo multi-tenant o operador deve habilitar strict quando usuários não devem alcançar serviços internos do host.
 
 ### ADR-9 — Click_log como única fonte de verdade
-Migration 000006 dropou `link.click_count` e `link.last_clicked_at`. Cliques agora vivem só em `click_log`. Contagens e timestamps são derivados via `LEFT JOIN LATERAL` no SELECT. **Por quê:** durante o desenvolvimento, percebemos que mantinhamos dois lugares pra contar (UPDATE atômico no link + INSERT no click_log) e qualquer divergência seria irrecuperável (qual é a verdade?). Single source of truth elimina o problema. **Trade-off:** O(log N) lookup por link na listagem (mitigado pelo índice `click_log_link_id_ts`). Pra single-user com até 10k links, é irrelevante. Se virar gargalo no futuro: materialized view com REFRESH no /go handler.
+Migration 000006 dropou `link.click_count` e `link.last_clicked_at`. Cliques agora vivem só em `click_log`. Contagens e timestamps na página comum derivam de um aggregate restrito aos IDs candidatos; click/recent sorts JOIN `entity_click_stats` (mig 000046), uma projeção 1:1 por (owner, kind, entity) mantida por `clicklog.Record` e refeita pelos writers em lote (import/restore). **Por quê:** durante o desenvolvimento, percebemos que mantinhamos dois lugares pra contar (UPDATE atômico no link + INSERT no click_log) e qualquer divergência seria irrecuperável (qual é a verdade?). Single source of truth elimina o problema. A tabela de stats não é uma segunda verdade — é um cache derivado, e o down da 000046 a descarta. **Trade-off:** um UPSERT extra no /go; ranking deixa de GROUP BY o histórico inteiro antes do LIMIT.
 
 ### ADR-10 — Pin é coluna na `link`, não tabela
 `link.pinned BOOLEAN` (migration 000005) + índice `link_pinned_created (pinned DESC, created_at DESC)`. Optei por coluna em vez de tabela separada `pinned_links` porque (a) é 1:1 com link (b) toggle é uma operação simples (c) ORDER BY pinned DESC é trivial. Hipotético upgrade futuro pra "pinado por contexto/lista": só virar uma tabela `link_pin (link_id, list_id)`.
