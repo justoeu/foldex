@@ -1780,7 +1780,7 @@ func TestAdminListUsers_HonorsLimitAndCursor(t *testing.T) {
 	next := decode(t, rec)["users"].([]any)
 	require.Len(t, next, 50)
 	firstNext := int64(next[0].(map[string]any)["id"].(float64))
-	assert.Greater(t, firstNext, afterID)
+	assert.Less(t, firstNext, afterID, "newest-first cursor walks toward older ids")
 
 	seen := make(map[int64]struct{}, len(page))
 	for _, raw := range page {
@@ -2143,6 +2143,30 @@ func TestSweeper_ClampsNonsenseIntervals(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 // Invite listing
 // ─────────────────────────────────────────────────────────────────────
+
+func TestAdminListInvites_HonorsLimit(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")
+	var adminID int64
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT id FROM app_user WHERE email_normalized = 'admin@example.com'`).Scan(&adminID))
+	_, err := h.pool.Exec(context.Background(), `
+		INSERT INTO invite (email, email_normalized, role, token_hash, invited_by, expires_at)
+		SELECT 'bulk' || i || '@example.com', 'bulk' || i || '@example.com', 'editor',
+		       sha256(('invite-bulk-' || i)::bytea), $1, now() + interval '7 days'
+		FROM generate_series(1, 201) AS i
+	`, adminID)
+	require.NoError(t, err)
+
+	rec := admin.do(http.MethodGet, "/api/admin/invites", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	invites := decode(t, rec)["invites"].([]any)
+	require.Equal(t, 200, len(invites), "compiled ceiling must hold; got %d", len(invites))
+
+	rec = admin.do(http.MethodGet, "/api/admin/invites?limit=50", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, decode(t, rec)["invites"].([]any), 50)
+}
 
 func TestAdmin_ListInvitesShowsOpenOnesAndNeverTheToken(t *testing.T) {
 	h := newHarness(t)

@@ -210,15 +210,17 @@ func (r *Repository) GetUser(ctx context.Context, id authctx.UserID) (User, erro
 // would JSON every account in one response.
 const adminListCeiling = 200
 
-// ListUsers returns accounts oldest first, capped at limit (ceiling 200).
-// afterID is an exclusive cursor on app_user.id; 0 means the first page.
+// ListUsers returns accounts newest first, capped at limit (ceiling 200).
+// The SPA does not send a cursor, so ASC would hide the accounts an
+// administrator just created once the instance grows past the ceiling.
+// afterID is an exclusive cursor on app_user.id (older than); 0 is the first page.
 func (r *Repository) ListUsers(ctx context.Context, limit int, afterID int64) ([]User, error) {
 	if limit <= 0 || limit > adminListCeiling {
 		limit = adminListCeiling
 	}
 	rows, err := r.pool.Query(ctx, `SELECT `+userColumns+` FROM app_user
-		WHERE ($2::bigint = 0 OR app_user.id > $2)
-		ORDER BY app_user.id ASC
+		WHERE ($2::bigint = 0 OR app_user.id < $2)
+		ORDER BY app_user.id DESC
 		LIMIT $1`, limit, afterID)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
