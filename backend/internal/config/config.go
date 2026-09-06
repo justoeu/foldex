@@ -272,15 +272,11 @@ func Load() (Config, error) {
 	if cfg.PreviewConcurrency < 1 {
 		cfg.PreviewConcurrency = 1
 	}
-	if cfg.PreviewConcurrency > resourcebudget.BackgroundWorkerConcurrency {
-		cfg.PreviewConcurrency = resourcebudget.BackgroundWorkerConcurrency
-	}
 	if cfg.ChangeCheckConcurrency < 1 {
 		cfg.ChangeCheckConcurrency = 2
 	}
-	if cfg.ChangeCheckConcurrency > resourcebudget.BackgroundWorkerConcurrency {
-		cfg.ChangeCheckConcurrency = resourcebudget.BackgroundWorkerConcurrency
-	}
+	cfg.PreviewConcurrency, cfg.ChangeCheckConcurrency = resourcebudget.FitBackgroundWorkers(
+		cfg.PreviewConcurrency, cfg.ChangeCheckConcurrency, resourcebudget.PoolMaxConns)
 	cfg.normalizeAuth()
 	cfg.normalizeMail()
 	if err := cfg.validateSecureDefaults(); err != nil {
