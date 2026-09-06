@@ -42,16 +42,16 @@ func (h *Handler) GetSchedule(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	out := map[string]any{
-		"jobs": Jobs,
-		"rows": rows,
-		"bounds": map[string]int{
-			"times_min":         backupagent.MinTimes,
-			"times_max":         backupagent.MaxTimes,
-			"weekdays_min":      backupagent.MinWeekdays,
-			"dump_weekdays_min": backupagent.MinDumpWeekdays,
-			"interval_min":      backupagent.MinIntervalMin,
-			"interval_max":      backupagent.MaxIntervalMin,
+	out := scheduleResponse{
+		Jobs: Jobs,
+		Rows: rows,
+		Bounds: scheduleBounds{
+			TimesMin:        backupagent.MinTimes,
+			TimesMax:        backupagent.MaxTimes,
+			WeekdaysMin:     backupagent.MinWeekdays,
+			DumpWeekdaysMin: backupagent.MinDumpWeekdays,
+			IntervalMin:     backupagent.MinIntervalMin,
+			IntervalMax:     backupagent.MaxIntervalMin,
 		},
 		// The document shape THIS backend writes. Paired with the heartbeat's
 		// own schema_version it lets the band say "the agent predates the
@@ -60,17 +60,35 @@ func (h *Handler) GetSchedule(w http.ResponseWriter, r *http.Request) {
 		// fine on a newer schema and simply ignores the fields it never
 		// learned. The client COMPARES the two numbers; it does not re-derive
 		// the policy (INV-138).
-		"agent_schema_version": backupagent.RequiredSchemaVersion,
+		AgentSchemaVersion: backupagent.RequiredSchemaVersion,
 	}
 	// null, not a zero struct: "no agent ever wrote a heartbeat" is the
 	// honest empty state the band renders as "agente nunca visto" — a zero
 	// SeenAt would render as 1970 and look like a bug instead of a fact.
 	if seen {
-		out["agent"] = agent
-	} else {
-		out["agent"] = nil
+		out.Agent = &agent
 	}
 	httperr.JSON(w, http.StatusOK, out)
+}
+
+// scheduleResponse is the GET /schedule document. Field names and json tags
+// match BackupScheduleResponse; encoding an open map let a dropped key
+// (agent_schema_version) compile and ship.
+type scheduleResponse struct {
+	Jobs               []string                           `json:"jobs"`
+	Rows               map[string]backupagent.ScheduleRow `json:"rows"`
+	Bounds             scheduleBounds                     `json:"bounds"`
+	Agent              *backupagent.AgentState            `json:"agent"`
+	AgentSchemaVersion int                                `json:"agent_schema_version"`
+}
+
+type scheduleBounds struct {
+	TimesMin        int `json:"times_min"`
+	TimesMax        int `json:"times_max"`
+	WeekdaysMin     int `json:"weekdays_min"`
+	DumpWeekdaysMin int `json:"dump_weekdays_min"`
+	IntervalMin     int `json:"interval_min"`
+	IntervalMax     int `json:"interval_max"`
 }
 
 // PutSchedule stores one job's agenda row. The floors live in
