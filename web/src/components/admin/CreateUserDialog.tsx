@@ -7,15 +7,13 @@ import { PasswordStrength } from '../PasswordStrength'
 import { useEscape } from '../../hooks/useEscape'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { apiErrorCode as errCode, apiErrorMessage } from '../../lib/apiError'
-import { MIN_PASSWORD_LEN, type Role } from '../../auth/types'
+import { ASSIGNABLE_ROLES, type Role } from '../../auth/types'
 import * as admin from '../../api/admin'
 import { AvailabilityHint } from '../AvailabilityHint'
 import { useAvailability } from '../../hooks/useAvailability'
 import { generatePassword, GENERATED_MAX_LENGTH } from '../../lib/generatePassword'
 import { useInstancePolicy } from '../../hooks/useInstancePolicy'
 import { SecretBand } from '../SecretBand'
-
-const ASSIGNABLE: readonly Role[] = ['admin', 'editor', 'viewer']
 
 /**
  * Creates an account with a password the administrator types.
@@ -258,7 +256,7 @@ export function CreateUserDialog({ onClose }: { onClose: () => void }) {
                 <select value={role} onChange={(e) => setRole(e.target.value as Role)}
                         aria-label={t('admin.col_role')}
                         style={{ width: '100%', border: 0, background: 'transparent', font: 'inherit', color: 'inherit' }}>
-                  {ASSIGNABLE.map((r) => (
+                  {ASSIGNABLE_ROLES.map((r) => (
                     <option key={r} value={r}>{t(`admin.role_${r}`)}</option>
                   ))}
                 </select>

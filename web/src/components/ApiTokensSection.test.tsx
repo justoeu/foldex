@@ -66,6 +66,7 @@ describe('ApiTokensSection', () => {
 
     expect(await screen.findByTestId('new-token')).toHaveTextContent('fx_1_secret')
     expect(screen.getByText(/only time it is shown/i)).toBeInTheDocument()
+    expect(vi.mocked(http.post)).toHaveBeenCalledWith('/api/auth/tokens', { name: 'extension' })
   })
 
   it('dismisses the plaintext when the user is done with it', async () => {

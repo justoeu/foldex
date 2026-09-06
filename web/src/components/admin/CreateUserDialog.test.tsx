@@ -6,6 +6,7 @@ import { freshState, installAxiosMock, type MockState } from '../../test/server'
 import { http } from '../../api/client'
 import { GENERATED_LENGTH, GENERATED_MAX_LENGTH } from '../../lib/generatePassword'
 import { renderWithProviders } from '../../test/renderWithProviders'
+import { ASSIGNABLE_ROLES } from '../../auth/types'
 
 let state: MockState
 
@@ -30,6 +31,16 @@ const passwordField = () => screen.getByLabelText(/^temporary password$/i)
 const confirmField = () => screen.getByLabelText(/^confirm the temporary password$/i)
 const submitButton = () => screen.getByRole('button', { name: /add user/i })
 const generateButton = () => screen.getByRole('button', { name: /generate a password/i })
+
+describe('CreateUserDialog — roles', () => {
+  it('create-user role options come from ASSIGNABLE_ROLES', async () => {
+    renderWithProviders(<CreateUserDialog onClose={vi.fn()} />)
+    const select = await screen.findByLabelText(/^role$/i)
+    const values = [...select.querySelectorAll('option')].map((option) => option.value)
+    expect(values).toEqual([...ASSIGNABLE_ROLES])
+    expect(values).not.toContain('owner')
+  })
+})
 
 describe('CreateUserDialog — confirmation', () => {
   it('refuses to submit while the two typed passwords differ', async () => {

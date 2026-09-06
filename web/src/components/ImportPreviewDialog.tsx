@@ -12,6 +12,8 @@ import {
   type ImportResult,
   type ImportValidation,
 } from '../api/importer'
+import { apiErrorText } from '../lib/apiError'
+import { ConflictModePicker } from './ConflictModePicker'
 
 type Props = {
   file: File
@@ -52,7 +54,7 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
     validateImport(file, format, controller.signal)
       .then((v) => { if (!controller.signal.aborted) setValidation(v) })
       .catch((e) => {
-        if (!controller.signal.aborted) setErrMsg(extractErr(e, t('common.unknown_error')))
+        if (!controller.signal.aborted) setErrMsg(apiErrorText(e, t('common.unknown_error')))
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false)
@@ -100,7 +102,7 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
     } catch (e: unknown) {
       if (!controller.signal.aborted) {
         applyLockedRef.current = false
-        setErrMsg(extractErr(e, t('common.unknown_error')))
+        setErrMsg(apiErrorText(e, t('common.unknown_error')))
       }
     } finally {
       if (applyAbortRef.current === controller) applyAbortRef.current = null
@@ -161,7 +163,20 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
                 <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)', marginTop: 6 }}>
                   {t('import.mode_section')}
                 </div>
-                <ModePicker value={mode} onChange={setMode} conflicts={validation.conflicts.links} disabled={applying} t={t} />
+                <ConflictModePicker
+                  value={mode}
+                  onChange={setMode}
+                  disabled={applying}
+                  wipeDanger
+                  labels={{
+                    skipTitle: t('import.mode_skip_title'),
+                    skipDesc: t('import.mode_skip_desc', { count: validation.conflicts.links }),
+                    duplicateTitle: t('import.mode_duplicate_title'),
+                    duplicateDesc: t('import.mode_duplicate_desc'),
+                    wipeTitle: t('import.mode_wipe_title'),
+                    wipeDesc: t('import.mode_wipe_desc', { count: validation.conflicts.links }),
+                  }}
+                />
 
                 {validation.folders.length > 0 && (
                   <>
@@ -253,76 +268,6 @@ function Row({ label, value, accent }: { label: string; value: string; accent?: 
   )
 }
 
-function ModePicker({
-  value, onChange, conflicts, disabled, t,
-}: {
-  value: ImportMode
-  onChange: (m: ImportMode) => void
-  conflicts: number
-  disabled: boolean
-  t: TFunction
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <ModeOption
-        active={value === 'skip'}
-        disabled={disabled}
-        onClick={() => onChange('skip')}
-        title={t('import.mode_skip_title')}
-        desc={t('import.mode_skip_desc', { count: conflicts })}
-      />
-      <ModeOption
-        active={value === 'duplicate'}
-        disabled={disabled}
-        onClick={() => onChange('duplicate')}
-        title={t('import.mode_duplicate_title')}
-        desc={t('import.mode_duplicate_desc')}
-      />
-      <ModeOption
-        active={value === 'wipe'}
-        disabled={disabled}
-        onClick={() => onChange('wipe')}
-        title={t('import.mode_wipe_title')}
-        desc={t('import.mode_wipe_desc', { count: conflicts })}
-        danger
-      />
-    </div>
-  )
-}
-
-function ModeOption({
-  active, onClick, title, desc, danger, disabled,
-}: {
-  active: boolean
-  onClick: () => void
-  title: string
-  desc: string
-  danger?: boolean
-  disabled: boolean
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      style={{
-        textAlign: 'left',
-        padding: '10px 12px',
-        borderRadius: 10,
-        border: active ? `1.5px solid ${danger ? 'var(--fx-danger)' : 'var(--fx-accent)'}` : '1px solid var(--fx-border)',
-        background: active ? (danger ? 'rgba(244,63,94,0.06)' : 'rgba(99,102,241,0.06)') : 'transparent',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 3,
-      }}
-    >
-      <span style={{ fontSize: 13, fontWeight: 700, color: danger ? 'var(--fx-danger)' : 'var(--fx-ink)' }}>{title}</span>
-      <span style={{ fontSize: 11.5, color: 'var(--fx-ink-3)' }}>{desc}</span>
-    </button>
-  )
-}
-
 function FolderList({
   folders, excluded, onToggle, disabled,
 }: {
@@ -375,7 +320,4 @@ function ResultBlock({ r, t }: { r: ImportResult; t: TFunction }) {
   )
 }
 
-function extractErr(e: unknown, fallback: string): string {
-  const obj = e as { response?: { data?: { error?: { message?: string } } }; message?: string }
-  return obj?.response?.data?.error?.message ?? obj?.message ?? fallback
-}
+

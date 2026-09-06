@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { useExistingLinkByURL } from './useExistingLinkByURL'
 import { makeQueryClient } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
+import { http } from '../api/client'
 import type { ReactNode } from 'react'
 
 let state: MockState
@@ -22,6 +23,12 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={makeQueryClient()}>{children}</QueryClientProvider>
 }
 
+function lookupCalls(): string[] {
+  return vi.mocked(http.get).mock.calls
+    .filter(([url]) => String(url).includes('/api/links/by-url'))
+    .map(([, config]) => String((config as { params?: { url?: string } } | undefined)?.params?.url ?? ''))
+}
+
 describe('useExistingLinkByURL', () => {
   it('returns the owner-scoped row after the debounce', async () => {
     const { result } = renderHook(
@@ -38,7 +45,7 @@ describe('useExistingLinkByURL', () => {
       () => useExistingLinkByURL('https://dup.example', true, 4),
       { wrapper },
     )
-    await new Promise((resolve) => setTimeout(resolve, 800))
+    await waitFor(() => expect(lookupCalls()).toContain('https://dup.example'))
     expect(result.current.existing).toBeNull()
     expect(result.current.pending).toBe(false)
   })
@@ -48,7 +55,7 @@ describe('useExistingLinkByURL', () => {
       () => useExistingLinkByURL('https://new.example', true),
       { wrapper },
     )
-    await new Promise((resolve) => setTimeout(resolve, 800))
+    await waitFor(() => expect(lookupCalls()).toContain('https://new.example'))
     expect(result.current.existing).toBeNull()
     expect(result.current.pending).toBe(false)
   })

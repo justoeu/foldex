@@ -2,17 +2,7 @@ import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { makeGradient, hexToHsl, hslToHex } from '../lib/tagColor'
-
-const DEFAULT_COLORS = [
-  '#6366F1',
-  '#0EA5E9',
-  '#8B5CF6',
-  '#EC4899',
-  '#F59E0B',
-  '#10B981',
-  '#64748B',
-  '#FFD400',
-]
+import { DEFAULT_ENTITY_COLORS } from '../lib/entityColors'
 
 type Props = {
   from: string
@@ -138,7 +128,7 @@ function Stop({
         />
       </div>
       <div className="fx-gradient-stop-palette">
-        {DEFAULT_COLORS.map((c) => (
+        {DEFAULT_ENTITY_COLORS.map((c) => (
           <button
             key={c}
             type="button"

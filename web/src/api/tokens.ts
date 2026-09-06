@@ -22,11 +22,8 @@ export async function listTokens(): Promise<ApiToken[]> {
   return data.tokens
 }
 
-export async function createToken(name: string, expiresInDays = 0): Promise<ApiToken> {
-  const { data } = await http.post<ApiToken>('/api/auth/tokens', {
-    name,
-    expires_in_days: expiresInDays,
-  })
+export async function createToken(name: string): Promise<ApiToken> {
+  const { data } = await http.post<ApiToken>('/api/auth/tokens', { name })
   return data
 }
 

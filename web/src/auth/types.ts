@@ -16,7 +16,6 @@ export const MIN_PASSWORD_LEN = 8
  */
 export type Role = 'owner' | 'admin' | 'editor' | 'viewer'
 
-export const ALL_ROLES: readonly Role[] = ['owner', 'admin', 'editor', 'viewer']
 export const ASSIGNABLE_ROLES: readonly Role[] = ['admin', 'editor', 'viewer']
 
 /**

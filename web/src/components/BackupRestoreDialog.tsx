@@ -10,8 +10,8 @@ import {
   type BackupValidation,
   type RestoreReport,
 } from '../api/backup'
-
-type Mode = 'wipe' | 'skip' | 'duplicate'
+import { apiErrorText } from '../lib/apiError'
+import { ConflictModePicker, type ConflictMode } from './ConflictModePicker'
 
 type Props = {
   file: File
@@ -24,7 +24,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
   const [validation, setValidation] = useState<BackupValidation | null>(null)
   const [loading, setLoading] = useState(true)
   const [errMsg, setErrMsg] = useState<string | null>(null)
-  const [mode, setMode] = useState<Mode>('skip')
+  const [mode, setMode] = useState<ConflictMode>('skip')
   const [restoring, setRestoring] = useState(false)
   const [report, setReport] = useState<RestoreReport | null>(null)
   const validationAbortRef = useRef<AbortController | null>(null)
@@ -50,7 +50,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
         if (!controller.signal.aborted) setValidation(v)
       })
       .catch((e) => {
-        if (!controller.signal.aborted) setErrMsg(extractErr(e, t('common.unknown_error')))
+        if (!controller.signal.aborted) setErrMsg(apiErrorText(e, t('common.unknown_error')))
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false)
@@ -72,7 +72,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
       setReport(r)
     } catch (e: unknown) {
       restoreLockedRef.current = false
-      setErrMsg(extractErr(e, t('common.unknown_error')))
+      setErrMsg(apiErrorText(e, t('common.unknown_error')))
     } finally {
       setRestoring(false)
     }
@@ -143,7 +143,20 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
                     <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)', marginTop: 8 }}>
                       {t('backup.mode_section_short')}
                     </div>
-                    <ModePicker value={mode} onChange={setMode} conflicts={validation.conflicts} disabled={restoring} t={t} />
+                    <ConflictModePicker
+                      value={mode}
+                      onChange={setMode}
+                      disabled={restoring}
+                      wipeDanger
+                      labels={{
+                        skipTitle: t('backup.mode_skip_title'),
+                        skipDesc: t('backup.mode_skip_desc', { links: validation.conflicts.links, tags: validation.conflicts.tags }),
+                        duplicateTitle: t('backup.mode_duplicate_title'),
+                        duplicateDesc: t('backup.mode_duplicate_desc'),
+                        wipeTitle: t('backup.mode_wipe_title'),
+                        wipeDesc: t('backup.mode_wipe_desc'),
+                      }}
+                    />
                   </>
                 )}
 
@@ -212,80 +225,6 @@ function Row({ label, value }: { label: string; value: string }) {
   )
 }
 
-function ModePicker({
-  value, onChange, conflicts, disabled, t,
-}: {
-  value: Mode
-  onChange: (m: Mode) => void
-  conflicts: { links: number; tags: number; folders: number }
-  disabled: boolean
-  t: TFunction
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <ModeOption
-        active={value === 'skip'}
-        disabled={disabled}
-        onClick={() => onChange('skip')}
-        title={t('backup.mode_skip_title')}
-        desc={t('backup.mode_skip_desc', { links: conflicts.links, tags: conflicts.tags })}
-      />
-      <ModeOption
-        active={value === 'duplicate'}
-        disabled={disabled}
-        onClick={() => onChange('duplicate')}
-        title={t('backup.mode_duplicate_title')}
-        desc={t('backup.mode_duplicate_desc')}
-      />
-      <ModeOption
-        active={value === 'wipe'}
-        disabled={disabled}
-        onClick={() => onChange('wipe')}
-        title={t('backup.mode_wipe_title')}
-        desc={t('backup.mode_wipe_desc')}
-        danger
-      />
-    </div>
-  )
-}
-
-function ModeOption({
-  active, onClick, title, desc, danger, disabled,
-}: {
-  active: boolean
-  onClick: () => void
-  title: string
-  desc: string
-  danger?: boolean
-  disabled: boolean
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      style={{
-        textAlign: 'left',
-        padding: '10px 12px',
-        borderRadius: 10,
-        border: active
-          ? `1.5px solid ${danger ? 'var(--fx-danger)' : 'var(--fx-accent)'}`
-          : '1px solid var(--fx-border)',
-        background: active
-          ? danger ? 'rgba(244,63,94,0.06)' : 'rgba(99,102,241,0.06)'
-          : 'transparent',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 3,
-      }}
-    >
-      <span style={{ fontSize: 13, fontWeight: 700, color: danger ? 'var(--fx-danger)' : 'var(--fx-ink)' }}>{title}</span>
-      <span style={{ fontSize: 11.5, color: 'var(--fx-ink-3)' }}>{desc}</span>
-    </button>
-  )
-}
-
 function RestoreReportBlock({ r, t }: { r: RestoreReport; t: TFunction }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -301,11 +240,6 @@ function RestoreReportBlock({ r, t }: { r: RestoreReport; t: TFunction }) {
       )}
     </div>
   )
-}
-
-function extractErr(e: unknown, fallback: string): string {
-  const obj = e as { response?: { data?: { error?: { message?: string } } }; message?: string }
-  return obj?.response?.data?.error?.message ?? obj?.message ?? fallback
 }
 
 function formatBytes(b: number): string {
