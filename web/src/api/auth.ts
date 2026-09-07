@@ -1,5 +1,5 @@
 import { http } from './client'
-import type { AvailabilityResponse } from '../hooks/useAvailability'
+import type { AvailabilityResponse } from './types'
 import type { AuthFeatures, AuthUser, Permission, Role } from '../auth/types'
 
 export type AnonymousMeResponse = {
