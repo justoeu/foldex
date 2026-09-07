@@ -370,16 +370,23 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	return r.Get(ctx, uid, id)
 }
 
-// assertLinkOwned reports ErrNotFound unless the link belongs to uid.
+// assertLinkOwned reports ErrNotFound unless the link belongs to uid. The
+// lock is load-bearing for tag-only PATCHes and deletes: link_tag has had no
+// FK since the 000014 polymorphization, so this row lock is what serializes
+// concurrent SetEntityTags writers on the same entity (a raw link_tag PK
+// violation otherwise reaches the client as an unmapped 500) and what stops
+// a tag write from landing rows for an entity a concurrent delete already
+// purged. Full PATCHes already hold the lock via their UPDATE.
 func assertLinkOwned(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int64) error {
-	var exists bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM link WHERE user_id = $1 AND id = $2)`,
-		int64(uid), id).Scan(&exists); err != nil {
-		return fmt.Errorf("check link owner: %w", err)
-	}
-	if !exists {
+	var locked int64
+	err := tx.QueryRow(ctx,
+		`SELECT id FROM link WHERE user_id = $1 AND id = $2 FOR NO KEY UPDATE`,
+		int64(uid), id).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return domainerr.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("check link owner: %w", err)
 	}
 	return nil
 }
