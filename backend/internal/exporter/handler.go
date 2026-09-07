@@ -11,10 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"foldex/internal/pkg/httperr"
+	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/pkg/authctx"
 )
@@ -40,9 +38,9 @@ type Handler struct {
 
 const maxExportInFlight = 1
 
-func NewHandler(pool *pgxpool.Pool) *Handler {
+func NewHandler(repo ExportReader) *Handler {
 	return &Handler{
-		repo:  NewRepository(pool),
+		repo:  repo,
 		slots: make(chan struct{}, maxExportInFlight),
 	}
 }

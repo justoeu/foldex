@@ -60,7 +60,7 @@ func TestImportNetscape_HappyPath(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, enq).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), enq).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -112,7 +112,7 @@ func TestImportJSON_RoundTrip(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -155,7 +155,7 @@ func TestImportJSON_EmptyTitleFallsBackToURL(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -179,7 +179,7 @@ func TestImportJSON_InvalidVersion(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -197,7 +197,7 @@ func TestImportJSON_InvalidURL(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -215,7 +215,7 @@ func TestImport_BadFormat(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -232,7 +232,7 @@ func TestImport_BodyTooLarge(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -264,7 +264,7 @@ func TestImport_MissingFile(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 

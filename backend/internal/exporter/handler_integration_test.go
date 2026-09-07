@@ -51,7 +51,7 @@ func seed(t *testing.T) (*chi.Mux, func()) {
 
 	r := chi.NewMux()
 	r.Use(authctxtest.Middleware(uid))
-	exporter.NewHandler(pool).Mount(r)
+	exporter.NewHandler(exporter.NewRepository(pool)).Mount(r)
 	return r, pool.Close
 }
 
@@ -124,7 +124,7 @@ func TestExportNetscape_EscapesHostileURL(t *testing.T) {
 
 	r := chi.NewMux()
 	r.Use(authctxtest.Middleware(uid))
-	exporter.NewHandler(pool).Mount(r)
+	exporter.NewHandler(exporter.NewRepository(pool)).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 

@@ -236,3 +236,31 @@ func TestPasswordResetRepositoryBindsEveryTokenToACredentialEpoch(t *testing.T) 
 	require.Len(t, spends, 1)
 	require.Contains(t, spends[0], "token_version =")
 }
+
+// Importer/exporter delivery must not hold the persistence driver: the
+// composition root (mount.go) builds the repository/stager and hands the
+// handler a port, mirroring every sibling feature. A handler that begins its
+// own transactions blurs the §7 error-mapping contract and is invisible to
+// the repository* guards because its SQL lives elsewhere.
+func TestImportExportHandlersDoNotImportPersistenceDriver(t *testing.T) {
+	for _, dir := range []string{"importer", "exporter"} {
+		entries, err := os.ReadDir(filepath.Join("..", dir))
+		require.NoError(t, err)
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || filepath.Ext(name) != ".go" ||
+				strings.HasSuffix(name, "_test.go") || !strings.HasPrefix(name, "handler") {
+				continue
+			}
+			f, err := parser.ParseFile(token.NewFileSet(), filepath.Join("..", dir, name), nil, parser.ImportsOnly)
+			require.NoError(t, err)
+			for _, imp := range f.Imports {
+				importPath, err := strconv.Unquote(imp.Path.Value)
+				require.NoError(t, err)
+				if strings.HasPrefix(importPath, "github.com/jackc/pgx") {
+					t.Errorf("production %s/%s imports persistence driver %q — construct the repository at composition instead", dir, name, importPath)
+				}
+			}
+		}
+	}
+}

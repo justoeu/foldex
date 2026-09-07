@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/cssvalid"
@@ -31,7 +30,7 @@ func sanitizeImportColor(c string) string {
 }
 
 type Handler struct {
-	pool   *pgxpool.Pool
+	stager *Stager
 	worker ports.Enqueuer
 
 	slotMu sync.Mutex
@@ -40,9 +39,9 @@ type Handler struct {
 
 const maxImportInFlight = 1
 
-func NewHandler(pool *pgxpool.Pool, worker ports.Enqueuer) *Handler {
+func NewHandler(stager *Stager, worker ports.Enqueuer) *Handler {
 	return &Handler{
-		pool:   pool,
+		stager: stager,
 		worker: worker,
 		slots:  make(chan struct{}, maxImportInFlight),
 	}
@@ -131,7 +130,7 @@ func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	rep, err := Validate(r.Context(), h.pool, authctx.MustUser(r.Context()), up.items)
+	rep, err := h.stager.Validate(r.Context(), authctx.MustUser(r.Context()), up.items)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -332,23 +331,9 @@ func filterByFolder(items []Item, excluded map[string]struct{}) []Item {
 
 // Preview jobs are enqueued after commit so workers can observe the inserted rows.
 func (h *Handler) importItemsWithMode(ctx context.Context, uid authctx.UserID, items []Item, mode importMode, seed *jsonSeed) (int, int, int, []string, error) {
-	if err := validateImportClickBudget(items); err != nil {
-		return 0, 0, 0, nil, err
-	}
-
-	tx, err := h.pool.Begin(ctx)
+	imported, skipped, wiped, warnings, freshIDs, err := h.stager.ApplyWithMode(ctx, uid, items, mode, seed)
 	if err != nil {
-		return 0, 0, 0, nil, fmt.Errorf("begin import tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	imported, skipped, wiped, warnings, freshIDs, err := applyStagedImport(ctx, tx, uid, items, mode, seed)
-	if err != nil {
-		return 0, 0, 0, nil, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return imported, skipped, wiped, warnings, fmt.Errorf("commit import: %w", err)
+		return imported, skipped, wiped, warnings, err
 	}
 	if h.worker != nil {
 		for i, id := range freshIDs {
