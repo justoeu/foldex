@@ -27,6 +27,12 @@ import { SecretBand } from '../SecretBand'
  * `owner` is absent from the role list because the server refuses it: the one
  * role that cannot be demoted is reachable only through an explicit transfer.
  */
+export const CREATE_USER_ERROR_I18N: Record<string, string> = {
+  email_taken: 'admin.err_email_taken',
+  invalid_email: 'auth_errors.invalid_email',
+  invalid_role: 'admin.err_invalid_role',
+}
+
 export function CreateUserDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
@@ -86,16 +92,16 @@ export function CreateUserDialog({ onClose }: { onClose: () => void }) {
       onClose()
     },
     onError: (e) => {
-      const code = errCode(e)
-      if (code === 'email_taken') setError(t('admin.err_email_taken'))
-      else if (code === 'invalid_email') setError(t('auth_errors.invalid_email'))
-      else if (code === 'password_too_short')
+      const code = errCode(e) ?? ''
+      if (code === 'password_too_short') {
         // The SERVER's message, because the floor is owner-configurable: an
         // instance demanding twenty characters would otherwise be told "at
         // least 8" by a client constant that cannot know better.
         setError(apiErrorMessage(e) ?? t('auth_errors.password_too_short', { count: minLen }))
-      else if (code === 'invalid_role') setError(t('admin.err_invalid_role'))
-      else setError(t('auth_errors.generic'))
+        return
+      }
+      const key = CREATE_USER_ERROR_I18N[code]
+      setError(key ? t(key) : t('auth_errors.generic'))
     },
   })
 
