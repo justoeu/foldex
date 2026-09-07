@@ -36,48 +36,94 @@ func TestOrchestrationDoesNotImportHTTPDelivery(t *testing.T) {
 	}
 }
 
-func TestRepositoriesDoNotImportHTTPDelivery(t *testing.T) {
-	root := ".."
+func persistenceHTTPHits(root string, skip func(rel string) bool) ([]string, error) {
 	forbidden := map[string]struct{}{
 		"net/http":                    {},
 		"foldex/internal/pkg/httperr": {},
 	}
-
+	var hits []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || strings.HasSuffix(path, "_test.go") ||
-			!strings.HasPrefix(filepath.Base(path), "repository") || filepath.Ext(path) != ".go" {
+		if info.IsDir() || strings.HasSuffix(path, "_test.go") || filepath.Ext(path) != ".go" {
 			return nil
 		}
-
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		rel = filepath.ToSlash(rel)
+		if skip != nil && skip(rel) {
+			return nil
+		}
 		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
 		if err != nil {
 			return err
 		}
+		imports := map[string]struct{}{}
 		for _, imp := range f.Imports {
 			importPath, err := strconv.Unquote(imp.Path.Value)
 			if err != nil {
 				return err
 			}
-			if _, found := forbidden[importPath]; found {
-				rel, relErr := filepath.Rel(root, path)
-				if relErr != nil {
-					return relErr
-				}
-				t.Errorf("production repository %s imports HTTP delivery package %q", filepath.ToSlash(rel), importPath)
+			imports[importPath] = struct{}{}
+		}
+		usesPGX := false
+		for p := range imports {
+			if strings.HasPrefix(p, "github.com/jackc/pgx") {
+				usesPGX = true
+				break
+			}
+		}
+		if !usesPGX {
+			return nil
+		}
+		for p := range forbidden {
+			if _, found := imports[p]; found {
+				hits = append(hits, rel+" imports "+p)
 			}
 		}
 		return nil
 	})
+	return hits, err
+}
+
+func skipPersistenceComposition(rel string) bool {
+	first, _, _ := strings.Cut(rel, "/")
+	switch first {
+	case "server", "db", "testdb", "backupagent", "metrics":
+		return true
+	}
+	return false
+}
+
+func TestRepositoriesDoNotImportHTTPDelivery(t *testing.T) {
+	// Persistence is detected by a pgx import, not a repository* filename —
+	// staging.go, anomaly.go, ipblock.go and the rest of the SQL-bearing
+	// files were previously unscanned. Composition/process packages that
+	// legitimately hold both a pool and an HTTP server are skipped:
+	// server (router), db/testdb, backupagent (metrics endpoint), metrics.
+	hits, err := persistenceHTTPHits("..", skipPersistenceComposition)
 	require.NoError(t, err)
+	for _, hit := range hits {
+		t.Errorf("production persistence file %s", hit)
+	}
+}
+
+func TestPersistenceScanFlagsAFileNotNamedRepository(t *testing.T) {
+	dir := t.TempDir()
+	src := "package p\nimport (\n\t\"net/http\"\n\t\"github.com/jackc/pgx/v5\"\n)\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "anomaly.go"), []byte(src), 0o644))
+	hits, err := persistenceHTTPHits(dir, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, hits, "a pgx+net/http file not named repository* must fail the scan")
 }
 
 func TestDeliveryDoesNotImportStorageAdapters(t *testing.T) {
-	// cmd/server is intentionally outside this root: concrete adapters are
-	// allowed only at the application composition boundary.
-	root := filepath.Join("..", "links")
+	// Concrete S3 adapters belong at composition (cmd/server, cmd/backup-agent)
+	// and in backupagent (the only process that holds those credentials).
+	root := ".."
 	forbiddenPrefixes := []string{
 		"foldex/internal/storage",
 		"foldex/internal/adapters",
@@ -87,6 +133,15 @@ func TestDeliveryDoesNotImportStorageAdapters(t *testing.T) {
 			return err
 		}
 		if info.IsDir() || strings.HasSuffix(path, "_test.go") || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		rel = filepath.ToSlash(rel)
+		first, _, _ := strings.Cut(rel, "/")
+		if first == "storage" || first == "backupagent" {
 			return nil
 		}
 
@@ -101,11 +156,7 @@ func TestDeliveryDoesNotImportStorageAdapters(t *testing.T) {
 			}
 			for _, prefix := range forbiddenPrefixes {
 				if importPath == prefix || strings.HasPrefix(importPath, prefix+"/") {
-					rel, relErr := filepath.Rel(root, path)
-					if relErr != nil {
-						return relErr
-					}
-					t.Errorf("production links delivery file %s imports storage adapter %q", filepath.ToSlash(rel), importPath)
+					t.Errorf("production delivery file %s imports storage adapter %q", rel, importPath)
 				}
 			}
 		}
