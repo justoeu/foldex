@@ -27,7 +27,11 @@ export function useLinkDialogForm(
     setTitle(link?.title ?? '')
     setDescription(link?.description ?? '')
     setPinned(link?.pinned ?? false)
-    setFolderId(link?.folder_id ?? defaultFolderId ?? null)
+    // The context default is CREATE-mode only. An existing link's folder_id
+    // is authoritative even when null ("lives on Home") — falling back to
+    // defaultFolderId there silently moved an ungrouped link into whatever
+    // folder was open on edit (FolderDialog's parentId rule, AppShell).
+    setFolderId(link ? link.folder_id : (defaultFolderId ?? null))
     setCheckInterval(link?.check_interval ?? null)
     setAutofillFailed(false)
     setAutofillPending(false)
