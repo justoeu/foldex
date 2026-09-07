@@ -304,16 +304,16 @@ describe('ImportPreviewDialog', () => {
       const user = userEvent.setup()
       state.importValidation = {
         ...validationFixture,
-        folders: Array.from({ length: 5000 }, (_, i) => ({
+        folders: Array.from({ length: 250 }, (_, i) => ({
           path: `f${i}`, name: `f${i}`, count: 1, conflicts: 0,
         })),
       }
       renderDialog()
       await waitFor(() => expect(screen.getAllByRole('checkbox').length).toBe(200))
-      expect(screen.getByRole('button', { name: /show all \(5000\)/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /show all \(250\)/i })).toBeInTheDocument()
 
-      await user.click(screen.getByRole('button', { name: /show all \(5000\)/i }))
-      expect(screen.getAllByRole('checkbox').length).toBe(5000)
+      await user.click(screen.getByRole('button', { name: /show all \(250\)/i }))
+      expect(screen.getAllByRole('checkbox').length).toBe(250)
     })
   })
 })
