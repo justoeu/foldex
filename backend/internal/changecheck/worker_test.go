@@ -23,16 +23,18 @@ func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard,
 // ----- Mocks -----
 
 type fakeRepo struct {
-	mu         sync.Mutex
-	links      map[int64]links.Link
-	due        []links.DueLink
-	findLimits []int
-	results    []links.CheckResult
-	getCalls   int
-	findErr    error
-	recErr     error
-	recNoop    bool
-	recDelay   time.Duration
+	mu          sync.Mutex
+	links       map[int64]links.Link
+	due         []links.DueLink
+	findLimits  []int
+	results     []links.CheckResult
+	releasedIDs []int64
+	getCalls    int
+	findErr     error
+	recErr      error
+	recNoop     bool
+	recDelay    time.Duration
+	claimHook   func()
 }
 
 func (r *fakeRepo) SystemGet(_ context.Context, id int64) (links.Link, error) {
@@ -48,9 +50,9 @@ func (r *fakeRepo) SystemGet(_ context.Context, id int64) (links.Link, error) {
 
 func (r *fakeRepo) SystemClaimDueForCheck(_ context.Context, limit int) ([]links.DueLink, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.findLimits = append(r.findLimits, limit)
 	if r.findErr != nil {
+		r.mu.Unlock()
 		return nil, r.findErr
 	}
 	if limit > len(r.due) {
@@ -58,7 +60,19 @@ func (r *fakeRepo) SystemClaimDueForCheck(_ context.Context, limit int) ([]links
 	}
 	out := append([]links.DueLink(nil), r.due[:limit]...)
 	r.due = r.due[limit:]
+	hook := r.claimHook
+	r.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return out, nil
+}
+
+func (r *fakeRepo) SystemReleaseCheckClaims(_ context.Context, ids []int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.releasedIDs = append(r.releasedIDs, ids...)
+	return nil
 }
 
 func (r *fakeRepo) SystemRecordCheckResult(_ context.Context, _ int64, _ time.Time, res links.CheckResult) (bool, error) {
@@ -93,6 +107,12 @@ func (r *fakeRepo) snapshotScanState() ([]links.DueLink, []int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]links.DueLink(nil), r.due...), append([]int(nil), r.findLimits...)
+}
+
+func (r *fakeRepo) snapshotReleased() []int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]int64(nil), r.releasedIDs...)
 }
 
 type fakeFetcher struct {
@@ -600,6 +620,31 @@ func TestScan_FindDueErrorIsTolerated(t *testing.T) {
 	w := New(repo, fakeFetcher{}, nil, Options{ScanInterval: time.Hour}, testLogger())
 	// Must not panic; the next scan retries.
 	w.scan(context.Background())
+}
+
+// A claim (last_checked_at = now()) committed before the job reaches the
+// queue is the only scheduling state changecheck has: if a shutdown lands
+// between claim and enqueue, those links must be handed back, not postponed
+// by a whole interval (7 days for weekly checks).
+func TestScan_ShutdownMidEnqueue_ReleasesUnenqueuedClaims(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	repo := &fakeRepo{due: []links.DueLink{{ID: 41}}}
+	w := New(repo, fakeFetcher{}, nil, Options{ScanInterval: time.Hour}, testLogger())
+	for i := 0; i < cap(w.jobs)-1; i++ {
+		w.jobs <- links.DueLink{ID: int64(1000 + i)}
+	}
+	// Shutdown right after the claim, with the queue refilled underneath the
+	// scan (Stop drains while a scan may still be enqueueing): the send
+	// blocks and ctx.Done is the only ready case.
+	repo.claimHook = func() {
+		cancel()
+		w.jobs <- links.DueLink{ID: 999_999}
+	}
+
+	w.scan(ctx)
+
+	assert.Equal(t, []int64{41}, repo.snapshotReleased(),
+		"the claimed link the shutdown prevented from enqueueing must be released back to due")
 }
 
 func TestScan_DueBatchDoesNotCallSystemGetPerJob(t *testing.T) {
