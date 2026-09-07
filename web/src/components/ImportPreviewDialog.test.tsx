@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ImportPreviewDialog } from './ImportPreviewDialog'
@@ -260,5 +260,60 @@ describe('ImportPreviewDialog', () => {
     view.unmount()
 
     expect(signal?.aborted).toBe(true)
+  })
+
+  // N1-NEX-001/002 + TEST-ARG-006: the backend emits one warning per
+  // duplicate URL and one row per distinct folder path, uncapped up to the
+  // 50k import ceiling — the dialog used to render every one of them. A
+  // 5k-duplicate re-import froze the tab committing 5k divs inside a
+  // 200px scroll box.
+  describe('bounded rendering of large imports', () => {
+    const MANY_WARNINGS = Array.from({ length: 5000 }, (_, i) => `dup ${i}`)
+
+    async function warningRows() {
+      const first = await screen.findByText(/⚠ dup 0/)
+      const list = first.closest('ul')!
+      return within(list)
+    }
+
+    it('caps validation warnings at 50 rows with a +N overflow line', async () => {
+      state.importValidation = { ...validationFixture, warnings: MANY_WARNINGS }
+      renderDialog()
+      const rows = await warningRows()
+      await waitFor(() => expect(rows.getAllByText(/^⚠/).length).toBe(50))
+      expect(rows.getByText(/\+4950 more/i)).toBeInTheDocument()
+    })
+
+    it('caps apply-result warnings the same way', async () => {
+      const user = userEvent.setup()
+      renderDialog()
+      await waitFor(() => expect(screen.getByText(/Import mode/i)).toBeInTheDocument())
+      vi.mocked(http.post).mockImplementation((url) => {
+        if (url === '/api/import/apply') {
+          return Promise.resolve({ data: { ...importResult(), warnings: MANY_WARNINGS } })
+        }
+        throw new Error(`unexpected request: ${url}`)
+      })
+      await user.click(screen.getByRole('button', { name: /Import \d+ links?/i }))
+      const rows = await warningRows()
+      await waitFor(() => expect(rows.getAllByText(/^⚠/).length).toBe(50))
+      expect(rows.getByText(/\+4950 more/i)).toBeInTheDocument()
+    })
+
+    it('renders at most 200 folder rows until "show all" expands them', async () => {
+      const user = userEvent.setup()
+      state.importValidation = {
+        ...validationFixture,
+        folders: Array.from({ length: 250 }, (_, i) => ({
+          path: `f${i}`, name: `f${i}`, count: 1, conflicts: 0,
+        })),
+      }
+      renderDialog()
+      await waitFor(() => expect(screen.getAllByRole('checkbox').length).toBe(200))
+      expect(screen.getByRole('button', { name: /show all \(250\)/i })).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: /show all \(250\)/i }))
+      expect(screen.getAllByRole('checkbox').length).toBe(250)
+    })
   })
 })

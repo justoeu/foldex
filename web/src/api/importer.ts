@@ -4,7 +4,7 @@ import { invalidateEntryCounts } from './entries'
 
 // Import can parse 100 MiB / 50k bookmarks; the global 30s axios ceiling
 // would abort a valid validate/apply. Same envelope as backup restore.
-export const IMPORT_REQUEST_TIMEOUT_MS = 30 * 60_000
+const IMPORT_REQUEST_TIMEOUT_MS = 30 * 60_000
 
 export type ImportFormat = 'netscape' | 'json'
 export type ImportMode = 'skip' | 'wipe' | 'duplicate'

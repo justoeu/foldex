@@ -28,6 +28,25 @@ describe('tags hooks', () => {
     expect(result.current.data).toEqual([])
   })
 
+  // N1-NEX-004: the queryFn must hand TanStack's AbortSignal to the HTTP
+  // layer (entries.ts already does) so an outdating render can cancel the
+  // in-flight GET instead of letting it run to completion.
+  it('forwards the query AbortSignal to the tags GET', async () => {
+    const { http } = await import('./client')
+    const fallback = vi.mocked(http.get).getMockImplementation()!
+    let seen: AbortSignal | undefined
+    vi.mocked(http.get).mockImplementation(((url: string, ...rest: any[]) => {
+      if (String(url).startsWith('/api/tags')) {
+        seen = (rest[0] as { signal?: AbortSignal } | undefined)?.signal
+      }
+      return fallback(url, ...rest)
+    }) as never)
+
+    const { result } = renderHook(() => useTags(), { wrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(seen).toBeInstanceOf(AbortSignal)
+  })
+
   it('creates a tag', async () => {
     const { result } = renderHook(() => useCreateTag(), { wrapper })
     const t = await result.current.mutateAsync({ name: 'docs', color: '#a78bfa' })

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { SUPPORTED_LOCALES, type LocaleCode } from '../i18n'
+import { useLocaleChoice } from '../i18n/useLocaleChoice'
 
 type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
 type ViewMode = 'cards' | 'compact' | 'list'
@@ -47,14 +48,11 @@ export function MobileOverflowMenu({
   view,
   setView,
 }: Props) {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
+  const { current: currentLocale, choose: chooseLocale } = useLocaleChoice()
   const [open, setOpen] = useState(false)
   const [langOpen, setLangOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
-
-  const currentLocale =
-    SUPPORTED_LOCALES.find((l) => l.code === (i18n.resolvedLanguage ?? i18n.language)) ??
-    SUPPORTED_LOCALES[0]
 
   useEffect(() => {
     if (!open) return
@@ -81,7 +79,10 @@ export function MobileOverflowMenu({
   const closeAll = () => { setOpen(false); setLangOpen(false) }
 
   const pickLocale = (code: LocaleCode) => {
-    void i18n.changeLanguage(code)
+    // Same write-through as the topbar LocalePicker: a direct
+    // i18n.changeLanguage here skipped the account update and
+    // useAccountLocale silently reverted the pick on the next load.
+    chooseLocale(code)
     closeAll()
   }
 

@@ -93,7 +93,10 @@ describe('the note reader', () => {
     renderWithProviders(<NoteViewDialog noteId={7} onClose={vi.fn()} onEdit={vi.fn()} />)
     await screen.findByRole('heading', { level: 2, name: 'Produce' })
 
-    await waitFor(() => expect(get).toHaveBeenCalledWith('/api/notes/7'))
+    await waitFor(() => expect(get).toHaveBeenCalledWith(
+      '/api/notes/7',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ))
     // One read of the note, and nothing that would log a click.
     expect(get.mock.calls.every(([url]) => String(url).startsWith('/api/notes/'))).toBe(true)
   })

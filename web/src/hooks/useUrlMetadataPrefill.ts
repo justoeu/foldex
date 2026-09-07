@@ -2,6 +2,11 @@ import { useEffect, type Dispatch, type SetStateAction } from 'react'
 import { useFetchUrlMetadata } from '../api/links'
 import { hostOf, looksLikeUrl } from '../lib/url'
 
+// INV-125: LinkDialog auto-fills Title/Description from the URL after a
+// 500 ms debounce. Named because it is a documented interaction contract —
+// CommandPalette's 200ms exists precisely to not stack on top of it.
+const PREFILL_DEBOUNCE_MS = 500
+
 type PrefillTarget = {
   url: string
   /** When set (edit mode), auto-fetch is skipped. */
@@ -75,7 +80,7 @@ export function useUrlMetadataPrefill({
           },
         },
       )
-    }, 500)
+    }, PREFILL_DEBOUNCE_MS)
 
     return () => {
       window.clearTimeout(timer)

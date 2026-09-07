@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
-import { cachedEntryFolderId, invalidateEntryCounts, removeCachedEntry } from './entries'
+import { cachedEntryFolderId, invalidateLibrary, optimisticEntryPatch, removeCachedEntry } from './entries'
 import type { Note, NoteCreate, NoteUpdate } from './types'
 
 export function useNote(id: number | null) {
   return useQuery({
     queryKey: ['notes', id],
-    queryFn: async () => {
-      const { data } = await http.get<Note>(`/api/notes/${id}`)
+    queryFn: async ({ signal }) => {
+      const { data } = await http.get<Note>(`/api/notes/${id}`, { signal })
       return data
     },
     enabled: id != null,
@@ -22,13 +22,9 @@ export function useCreateNote() {
       return data
     },
     onSuccess: () => {
-      // The home/folder grid reads from ['entries'], not ['notes'] — every
-      // note mutation invalidates that key so the interleaved grid reflects
-      // the change. See api/entries.ts.
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['tags'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      invalidateEntryCounts(qc)
+      // Notes have no ['links'] cache presence — entries/tags/folders/counts
+      // is the deliberate reach here (see invalidateLibrary).
+      invalidateLibrary(qc, { entries: true, tags: true, folders: true, counts: true })
     },
   })
 }
@@ -63,19 +59,13 @@ export function useDeleteNote() {
     mutationFn: async (id: number) => {
       await http.delete(`/api/notes/${id}`)
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['tags'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      invalidateEntryCounts(qc)
-    },
+    onSuccess: () => invalidateLibrary(qc, { entries: true, tags: true, folders: true, counts: true }),
   })
 }
 
-// usePinNote mirrors usePinLink's optimistic recipe, but since the grid reads
-// from ['entries'] (a flat Entry[] cache, not InfiniteData<Note[]>), the
-// patch/rollback walks every cached ['entries'] page directly rather than
-// going through a Note-specific cache helper.
+// usePinNote shares optimisticEntryPatch with usePinLink/useRefreshPreview;
+// notes only exist in the ['entries'] caches, which the helper keys on
+// kind === 'note'.
 export function usePinNote() {
   const qc = useQueryClient()
   return useMutation({
@@ -83,33 +73,9 @@ export function usePinNote() {
       const { data } = await http.patch<Note>(`/api/notes/${id}`, { pinned })
       return data
     },
-    onMutate: async ({ id, pinned }) => {
-      await qc.cancelQueries({ queryKey: ['entries'] })
-      const snapshots = qc.getQueriesData({ queryKey: ['entries'] })
-      qc.setQueriesData<{ pages: Array<Array<{ kind: string; id: number; pinned: boolean }>> } | undefined>(
-        { queryKey: ['entries'] },
-        (old) => {
-          if (!old) return old
-          return {
-            ...old,
-            pages: old.pages.map((page) =>
-              page.map((e) => (e.kind === 'note' && e.id === id ? { ...e, pinned } : e)),
-            ),
-          }
-        },
-      )
-      return { snapshots }
-    },
-    onError: (_err, _vars, ctx) => {
-      if (!ctx) return
-      for (const [key, snapshot] of ctx.snapshots) {
-        qc.setQueryData(key, snapshot)
-      }
-    },
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-    },
+    onMutate: async ({ id, pinned }) => optimisticEntryPatch(qc, 'note', id, { pinned }),
+    onError: (_err, _vars, ctx) => ctx?.rollback(),
+    onSettled: () => invalidateLibrary(qc, { entries: true, folders: true }),
   })
 }
 

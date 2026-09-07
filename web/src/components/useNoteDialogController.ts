@@ -21,7 +21,7 @@ import {
 
 export function buildImageUploadHandler(
   uploadFn: (file: File) => Promise<{ url: string }>,
-  onError: (message: string) => void,
+  onError: (error: unknown) => void,
 ) {
   return (view: EditorView, file: File) => {
     const { from, to } = view.state.selection
@@ -31,11 +31,22 @@ export function buildImageUploadHandler(
         const node = view.state.schema.nodes.image.create({ src: url })
         view.dispatch(view.state.tr.replaceWith(from, to, node))
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (view.isDestroyed) return
-        onError('upload_failed')
+        onError(error)
       })
   }
+}
+
+// Same code→message mapping the link dialog applies to upload failures
+// (useLinkDialogImage/useLinkDialogSubmit): storage outages get the
+// actionable message, everything else surfaces the server's own words.
+export function noteImageErrorMessage(
+  error: unknown,
+  t: (key: string) => string,
+): string {
+  if (apiErrorCode(error) === 'storage_unavailable') return t('note_dialog.image_error_storage')
+  return apiErrorMessage(error) || t('note_dialog.image_error_generic')
 }
 
 type ImageUploadHandler = (view: EditorView, file: File) => void
@@ -73,7 +84,12 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
   const [title, setTitle] = useState(baselineNote?.title ?? '')
   const slugField = useSlugFieldState(true, title, baselineNote?.slug, baselineNote?.id ?? null)
   const [pinned, setPinned] = useState(baselineNote?.pinned ?? false)
-  const [folderId, setFolderId] = useState<number | null>(baselineNote?.folder_id ?? defaultFolderId ?? null)
+  // Edit mode seeds from the note's own folder — null included ("lives on
+  // Home"); the ambient folder default is CREATE-mode only, same rule as
+  // useLinkDialogForm / FolderDialog's parentId.
+  const [folderId, setFolderId] = useState<number | null>(
+    baselineNote ? (baselineNote.folder_id ?? null) : (defaultFolderId ?? null),
+  )
   const tagPicker = useTagPicker(true, baselineNote?.tags)
   const [imgUploadError, setImgUploadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -81,7 +97,7 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
   const updateNote = useUpdateNote()
 
   const handleUpload = useMemo(
-    () => buildImageUploadHandler(uploadNoteImage, () => setImgUploadError(t('note_dialog.image_error_generic'))),
+    () => buildImageUploadHandler(uploadNoteImage, (error) => setImgUploadError(noteImageErrorMessage(error, t))),
     [t],
   )
   const editor = useEditor(

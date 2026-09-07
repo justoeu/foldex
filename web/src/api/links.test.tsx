@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
@@ -187,6 +187,56 @@ describe('usePinLink', () => {
     expect(out.pinned).toBe(true)
     expect(state.links[0].pinned).toBe(true)
   })
+
+  // RACE-HER-004, link arm: rollback must restore only the failed link —
+  // both cache families (['links'] and ['entries']) hold it, and a
+  // whole-snapshot restore used to wipe a concurrent pin that had landed.
+  it('a failed pin rolls back only its own link across both cache families', async () => {
+    const localClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const localWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={localClient}>{children}</QueryClientProvider>
+    )
+    const linkA = { id: 1, url: 'https://a', title: 'A', slug: 'a', pinned: false, preview_status: 'ok' as const, tags: [], created_at: '', updated_at: '' }
+    const linkB = { ...linkA, id: 2, url: 'https://b', title: 'B', slug: 'b' }
+    const linksKey = ['links', '', '', 'created', 'all']
+    const entriesKey = ['entries', '', '', 'created', 'all', 'locked', 100]
+    localClient.setQueryData(linksKey, { pages: [[linkA, linkB]], pageParams: [0] })
+    localClient.setQueryData(entriesKey, {
+      pages: [[{ kind: 'link', ...linkA }, { kind: 'link', ...linkB }]],
+      pageParams: [0],
+    })
+
+    let rejectA!: (reason: unknown) => void
+    vi.mocked(http.patch).mockImplementation(((url: string) => {
+      if (String(url) === '/api/links/1') {
+        return new Promise((_resolve, reject) => { rejectA = reject }) as never
+      }
+      if (String(url) === '/api/links/2') {
+        return Promise.resolve({ data: { ...linkB, pinned: true } }) as never
+      }
+      throw new Error(`unexpected PATCH ${url}`)
+    }) as never)
+
+    const { result } = renderHook(() => usePinLink(), { wrapper: localWrapper })
+    const pinA = result.current.mutateAsync({ id: 1, pinned: true })
+    await waitFor(() => {
+      const page = localClient.getQueryData<{ pages: typeof linkA[][] }>(linksKey)!.pages[0]
+      expect(page.find((l) => l.id === 1)?.pinned).toBe(true)
+    })
+    const pinB = await result.current.mutateAsync({ id: 2, pinned: true })
+
+    rejectA(new Error('network down'))
+    await expect(pinA).rejects.toThrow('network down')
+    await pinB
+
+    for (const key of [linksKey, entriesKey]) {
+      const page = localClient.getQueryData<{ pages: Record<string, unknown>[][] }>(key)!.pages[0]
+      expect(page.find((l) => l.id === 1)?.pinned).toBe(false)
+      expect(page.find((l) => l.id === 2)?.pinned).toBe(true)
+    }
+  })
 })
 
 describe('useRecentChanges', () => {
@@ -199,6 +249,48 @@ describe('useRecentChanges', () => {
     const { result } = renderHook(() => useRecentChanges(7, 10), { wrapper })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(Array.isArray(result.current.data)).toBe(true)
+  })
+
+  // N1-NEX-003: the poll never stopped even when there was nothing to
+  // report — ~1,440 GETs/day per open tab for a user with zero monitored
+  // links. It must stand down once the list is empty (entries.ts's
+  // preview-status poll already returns false the same way).
+  it('stops polling once the list is empty, and resumes after activity', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    // One client for both hooks — the pause/resume contract crosses the
+    // seen-change invalidation into the poll's cache.
+    const client = makeQueryClient()
+    const sharedWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const recentCalls = () =>
+      (http.get as ReturnType<typeof vi.spyOn>).mock.calls
+        .filter(([u]: [string]) => u.startsWith('/api/links/recent-changes')).length
+
+    const { result } = renderHook(() => useRecentChanges(7, 10), { wrapper: sharedWrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toEqual([])
+    expect(recentCalls()).toBe(1)
+
+    await act(() => vi.advanceTimersByTimeAsync(3 * 60_000))
+    expect(recentCalls()).toBe(1)
+
+    // Real activity re-arms it: MarkChangeSeen invalidates the key, and
+    // the next answer being non-empty restores the interval.
+    state.links.push({
+      id: 2, url: 'https://rc2', title: 'RC2', click_count: 0,
+      preview_status: 'ok', created_at: '', updated_at: '', tags: [],
+      last_change_detected_at: '2026-01-01T00:00:00Z',
+    } as any)
+    const seen = renderHook(() => useMarkChangeSeen(), { wrapper: sharedWrapper })
+    await act(async () => {
+      await seen.result.current.mutateAsync(2)
+    })
+    await waitFor(() => expect(recentCalls()).toBeGreaterThan(1))
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000))
+    expect(recentCalls()).toBeGreaterThan(2)
+    vi.useRealTimers()
   })
 })
 

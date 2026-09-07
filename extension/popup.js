@@ -1,23 +1,12 @@
 import {
   apiUrl,
+  authHeaders,
+  credentialProblem,
   getStoredConfig,
   normalizeBaseUrl,
   requestOriginAccess,
   requireOriginAccess,
 } from "./config.js";
-
-function authHeaders(config, includeContentType = false) {
-  const headers = {};
-  if (includeContentType) headers["Content-Type"] = "application/json";
-  if (config.apiToken) headers.Authorization = "Bearer " + config.apiToken;
-  return headers;
-}
-
-function credentialProblem(status) {
-  if (status === 401) return "not signed in — set an API token in settings";
-  if (status === 403) return "this token is not allowed here";
-  return null;
-}
 
 export async function loadTags(
   config,
@@ -48,6 +37,10 @@ export async function saveLink(
   if (!resp.ok) {
     const problem = credentialProblem(resp.status);
     if (problem) throw new Error(problem);
+    // The backend answers {error:{code,message}} — surface the human
+    // message it already wrote; the raw slice is only for non-JSON bodies.
+    const parsed = await resp.json().catch(() => null);
+    if (parsed?.error?.message) throw new Error(parsed.error.message);
     const body = await resp.text();
     throw new Error("HTTP " + resp.status + " " + body.slice(0, 120));
   }
@@ -64,6 +57,10 @@ export function initPopup({
   const saveBtn = $("save");
   const selected = new Set();
   let config;
+
+  // Let the "Saved ✓" status actually be seen before the popup dies —
+  // closing immediately made the success invisible.
+  const CLOSE_AFTER_SAVE_MS = 600;
 
   function setStatus(msg, level) {
     statusEl.textContent = msg || "";
@@ -126,7 +123,7 @@ export function initPopup({
         { chromeApi, fetchImpl },
       );
       setStatus("Saved ✓", "ok");
-      setTimeout(() => window.close(), 600);
+      setTimeout(() => window.close(), CLOSE_AFTER_SAVE_MS);
     } catch (error) {
       setStatus("Save failed: " + error.message, "error");
       saveBtn.disabled = false;
