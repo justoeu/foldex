@@ -77,7 +77,7 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
   // Home"); the ambient folder default is CREATE-mode only, same rule as
   // useLinkDialogForm / FolderDialog's parentId.
   const [folderId, setFolderId] = useState<number | null>(
-    baselineNote ? baselineNote.folder_id : (defaultFolderId ?? null),
+    baselineNote ? (baselineNote.folder_id ?? null) : (defaultFolderId ?? null),
   )
   const tagPicker = useTagPicker(true, baselineNote?.tags)
   const [imgUploadError, setImgUploadError] = useState<string | null>(null)

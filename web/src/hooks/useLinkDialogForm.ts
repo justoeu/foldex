@@ -31,7 +31,7 @@ export function useLinkDialogForm(
     // is authoritative even when null ("lives on Home") — falling back to
     // defaultFolderId there silently moved an ungrouped link into whatever
     // folder was open on edit (FolderDialog's parentId rule, AppShell).
-    setFolderId(link ? link.folder_id : (defaultFolderId ?? null))
+    setFolderId(link ? (link.folder_id ?? null) : (defaultFolderId ?? null))
     setCheckInterval(link?.check_interval ?? null)
     setAutofillFailed(false)
     setAutofillPending(false)
