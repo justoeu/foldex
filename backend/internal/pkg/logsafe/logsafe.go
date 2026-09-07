@@ -41,7 +41,6 @@ func String(s string) string {
 	return b.String()
 }
 
-
 // HTTPPath returns a non-tainted route class for request paths.
 func HTTPPath(path string) string {
 	switch {
