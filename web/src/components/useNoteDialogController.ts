@@ -73,7 +73,12 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
   const [title, setTitle] = useState(baselineNote?.title ?? '')
   const slugField = useSlugFieldState(true, title, baselineNote?.slug, baselineNote?.id ?? null)
   const [pinned, setPinned] = useState(baselineNote?.pinned ?? false)
-  const [folderId, setFolderId] = useState<number | null>(baselineNote?.folder_id ?? defaultFolderId ?? null)
+  // Edit mode seeds from the note's own folder — null included ("lives on
+  // Home"); the ambient folder default is CREATE-mode only, same rule as
+  // useLinkDialogForm / FolderDialog's parentId.
+  const [folderId, setFolderId] = useState<number | null>(
+    baselineNote ? baselineNote.folder_id : (defaultFolderId ?? null),
+  )
   const tagPicker = useTagPicker(true, baselineNote?.tags)
   const [imgUploadError, setImgUploadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
