@@ -2,7 +2,6 @@ package links
 
 import (
 	"encoding/json"
-	"net/url"
 	"strings"
 	"time"
 
@@ -65,12 +64,8 @@ func (c CreateInput) Validate() error {
 	if c.URL == "" {
 		return errMsg("url is required")
 	}
-	u, err := url.Parse(c.URL)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return errMsg("url must be an absolute http(s) URL")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return errMsg("url scheme must be http or https")
+	if err := ValidateAbsoluteHTTPURL(c.URL); err != nil {
+		return errMsg(err.Error())
 	}
 	if len(c.Title) > MaxTitleBytes {
 		return errMsg("title too long (max 500)")
@@ -136,12 +131,8 @@ func (u UpdateInput) Validate() error {
 		if *u.URL == "" {
 			return errMsg("url is required")
 		}
-		parsed, err := url.Parse(*u.URL)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return errMsg("url must be an absolute http(s) URL")
-		}
-		if parsed.Scheme != "http" && parsed.Scheme != "https" {
-			return errMsg("url scheme must be http or https")
+		if err := ValidateAbsoluteHTTPURL(*u.URL); err != nil {
+			return errMsg(err.Error())
 		}
 	}
 	if u.Title != nil {

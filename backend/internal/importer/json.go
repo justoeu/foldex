@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
 	"time"
 
+	"foldex/internal/links"
 	"foldex/internal/pkg/cssvalid"
 )
 
@@ -104,15 +104,11 @@ func (f JSONFile) Validate() error {
 		if rawURL == "" {
 			return fmt.Errorf("links[%d]: url is required", i)
 		}
-		u, err := url.Parse(rawURL)
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			return fmt.Errorf("links[%d]: url must be an absolute http(s) URL", i)
+		if err := links.ValidateAbsoluteHTTPURL(rawURL); err != nil {
+			return fmt.Errorf("links[%d]: %w", i, err)
 		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("links[%d]: url scheme must be http or https", i)
-		}
-		if len(strings.TrimSpace(l.Title)) > 500 {
-			return fmt.Errorf("links[%d]: title too long (max 500)", i)
+		if len(strings.TrimSpace(l.Title)) > links.MaxTitleBytes {
+			return fmt.Errorf("links[%d]: title too long (max %d)", i, links.MaxTitleBytes)
 		}
 		if l.ClickCount < 0 || l.ClickCount > maxImportClickCount {
 			return fmt.Errorf("links[%d]: click_count out of range (0..%d)", i, maxImportClickCount)
