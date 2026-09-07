@@ -254,9 +254,9 @@ func contentCRUD(pr chi.Router, d Deps, grants authgate.Grants, linksRepo *links
 
 	pr.Route("/import", func(ir chi.Router) {
 		ir.Use(authgate.RequireWrite(grants, authctx.PermImportRun))
-		importer.NewHandler(d.Pool, d.Worker).Mount(ir)
+		importer.NewHandler(importer.NewStager(d.Pool), d.Worker).Mount(ir)
 	})
-	pr.Route("/export", exporter.NewHandler(d.Pool).Mount)
+	pr.Route("/export", exporter.NewHandler(exporter.NewRepository(d.Pool)).Mount)
 	statsHandler := stats.NewHandler(stats.NewRepository(d.Pool))
 	if d.StorageStatter != nil {
 		statsHandler = statsHandler.WithStorage(d.StorageStatter)

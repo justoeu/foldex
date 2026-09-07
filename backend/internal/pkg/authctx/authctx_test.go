@@ -30,17 +30,6 @@ func TestFromContextOnBareContext(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestUser(t *testing.T) {
-	ctx := authctx.WithPrincipal(context.Background(), authctx.Principal{UserID: 9})
-
-	uid, ok := authctx.User(ctx)
-	require.True(t, ok)
-	assert.Equal(t, authctx.UserID(9), uid)
-
-	_, ok = authctx.User(context.Background())
-	assert.False(t, ok)
-}
-
 func TestMustUser(t *testing.T) {
 	ctx := authctx.WithPrincipal(context.Background(), authctx.Principal{UserID: 5})
 

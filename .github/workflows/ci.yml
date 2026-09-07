@@ -109,6 +109,8 @@ jobs:
       - name: extension tests
         working-directory: extension
         run: bun run test
+      - name: extension i18n parity
+        run: node scripts/test-extension-i18n.mjs
       - name: tests + coverage gate
         working-directory: web
         # Vitest runs the suite once under v8 and enforces the statement,

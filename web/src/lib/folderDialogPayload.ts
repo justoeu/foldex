@@ -1,6 +1,6 @@
 import type { Folder, FolderCreate, FolderUpdate } from '../api/types'
 import { makeGradient } from './tagColor'
-import type { ColorMode } from '../components/ColorModeFields'
+import type { ColorMode } from './entityColors'
 
 export type FolderDialogValues = {
   name: string

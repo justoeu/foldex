@@ -7,6 +7,7 @@ import {
   requestOriginAccess,
   requireOriginAccess,
 } from "./config.js";
+import { t } from "./i18n.js";
 
 export async function loadTags(
   config,
@@ -18,7 +19,9 @@ export async function loadTags(
     redirect: "error",
   });
   if (!resp.ok)
-    throw new Error(credentialProblem(resp.status) || "HTTP " + resp.status);
+    throw new Error(
+      credentialProblem(resp.status) || "HTTP " + resp.status,
+    );
   return resp.json();
 }
 
@@ -105,12 +108,12 @@ export function initPopup({
     if (saveBtn.disabled) return;
     const url = $("url").value.trim();
     if (!url) {
-      setStatus("URL is required", "error");
+      setStatus(t(chromeApi, "urlRequired"), "error");
       return;
     }
 
     saveBtn.disabled = true;
-    setStatus("Saving…");
+    setStatus(t(chromeApi, "saving"));
     try {
       await saveLink(
         config,
@@ -122,10 +125,10 @@ export function initPopup({
         },
         { chromeApi, fetchImpl },
       );
-      setStatus("Saved ✓", "ok");
+      setStatus(t(chromeApi, "saved"), "ok");
       setTimeout(() => window.close(), CLOSE_AFTER_SAVE_MS);
     } catch (error) {
-      setStatus("Save failed: " + error.message, "error");
+      setStatus(t(chromeApi, "saveFailed", [error.message]), "error");
       saveBtn.disabled = false;
     }
   }
@@ -151,18 +154,15 @@ export function initPopup({
       try {
         renderTags(await loadTags(config, { chromeApi, fetchImpl }));
       } catch (error) {
-        setStatus(
-          "Could not load tags: " + error.message + " — check settings",
-          "error",
-        );
+        setStatus(t(chromeApi, "tagsLoadFailed", [error.message]), "error");
       }
     } catch (error) {
-      setStatus("Could not load settings: " + error.message, "error");
+      setStatus(t(chromeApi, "settingsLoadFailed", [error.message]), "error");
     }
   })();
 
   const tab = prefill().catch((error) =>
-    setStatus("Could not read this tab: " + error.message, "error"),
+    setStatus(t(chromeApi, "tabReadFailed", [error.message]), "error"),
   );
   return { ready: Promise.all([load, tab]), save };
 }

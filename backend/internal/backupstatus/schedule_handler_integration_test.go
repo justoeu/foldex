@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"foldex/internal/backupagent"
+	"foldex/internal/backupjobs"
 	"foldex/internal/backupstatus"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/authgate"
@@ -78,12 +78,12 @@ func TestSchedule_PutStoresRowAndGetServesIt(t *testing.T) {
 	// One vocabulary for every job, so one set of bounds: the form refuses
 	// locally what the server would refuse anyway.
 	bounds, _ := body["bounds"].(map[string]any)
-	assert.Equal(t, float64(backupagent.MinTimes), bounds["times_min"])
-	assert.Equal(t, float64(backupagent.MaxTimes), bounds["times_max"])
-	assert.Equal(t, float64(backupagent.MinWeekdays), bounds["weekdays_min"])
-	assert.Equal(t, float64(backupagent.MinDumpWeekdays), bounds["dump_weekdays_min"])
-	assert.Equal(t, float64(backupagent.MinIntervalMin), bounds["interval_min"])
-	assert.Equal(t, float64(backupagent.MaxIntervalMin), bounds["interval_max"])
+	assert.Equal(t, float64(backupjobs.MinTimes), bounds["times_min"])
+	assert.Equal(t, float64(backupjobs.MaxTimes), bounds["times_max"])
+	assert.Equal(t, float64(backupjobs.MinWeekdays), bounds["weekdays_min"])
+	assert.Equal(t, float64(backupjobs.MinDumpWeekdays), bounds["dump_weekdays_min"])
+	assert.Equal(t, float64(backupjobs.MinIntervalMin), bounds["interval_min"])
+	assert.Equal(t, float64(backupjobs.MaxIntervalMin), bounds["interval_max"])
 
 	assert.Nil(t, body["agent"],
 		"no heartbeat ever written must serve null — a zero time would render as 1970 and read as a bug")
@@ -187,7 +187,7 @@ func TestSchedule_DeleteResetsToTheEnvBaselineAndAudits(t *testing.T) {
 	rec = h.doAs(uid, authctx.RoleOwner, http.MethodDelete, "/api/admin/backup/schedule/user_zip", "")
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 
-	rows, err := backupagent.NewScheduleStore(pool).Load(context.Background())
+	rows, err := backupjobs.NewScheduleStore(pool).Load(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, rows)
 
@@ -213,12 +213,12 @@ func TestSchedule_GetServesTheHeartbeat(t *testing.T) {
 	h := newHarness(t, roleperm.Default())
 	uid := h.seedUser("owner@foldex.test", "owner")
 
-	require.NoError(t, backupagent.NewScheduleStore(h.pool).Heartbeat(context.Background(), backupagent.AgentState{
+	require.NoError(t, backupjobs.NewScheduleStore(h.pool).Heartbeat(context.Background(), backupjobs.AgentState{
 		SeenAt:  time.Now().UTC(),
 		Version: "2.17.0",
 		// One BEHIND the backend: the skew the band exists to name.
-		SchemaVersion: backupagent.RequiredSchemaVersion - 1,
-		Jobs: map[string]backupagent.JobReport{
+		SchemaVersion: backupjobs.RequiredSchemaVersion - 1,
+		Jobs: map[string]backupjobs.JobReport{
 			"drill": {Capable: false, Reason: "no_identity", Source: "env", Schedule: "disabled"},
 		},
 	}))
@@ -231,8 +231,8 @@ func TestSchedule_GetServesTheHeartbeat(t *testing.T) {
 	assert.Equal(t, "2.17.0", agent["version"])
 	// Both numbers travel, so the client compares rather than re-deriving a
 	// policy the server already knows (INV-138's reasoning).
-	assert.EqualValues(t, backupagent.RequiredSchemaVersion-1, agent["schema_version"])
-	assert.EqualValues(t, backupagent.RequiredSchemaVersion, body["agent_schema_version"])
+	assert.EqualValues(t, backupjobs.RequiredSchemaVersion-1, agent["schema_version"])
+	assert.EqualValues(t, backupjobs.RequiredSchemaVersion, body["agent_schema_version"])
 	jobs, _ := agent["jobs"].(map[string]any)
 	drill, _ := jobs["drill"].(map[string]any)
 	assert.Equal(t, false, drill["capable"])

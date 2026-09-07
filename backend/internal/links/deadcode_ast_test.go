@@ -2,13 +2,12 @@ package links
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/testsupport"
 )
 
 func TestLinkSlugResolutionHasOneReachableProductionMethod(t *testing.T) {
@@ -47,7 +46,7 @@ func TestLinkTagAttachmentUsesCanonicalHelper(t *testing.T) {
 func productionFuncNames(t *testing.T) []string {
 	t.Helper()
 	var names []string
-	for _, fn := range productionFuncs(t) {
+	for _, fn := range testsupport.ProductionFuncs(t) {
 		names = append(names, funcIdent(fn))
 	}
 	return names
@@ -55,37 +54,12 @@ func productionFuncNames(t *testing.T) []string {
 
 func productionFunc(t *testing.T, name string) *ast.FuncDecl {
 	t.Helper()
-	for _, fn := range productionFuncs(t) {
+	for _, fn := range testsupport.ProductionFuncs(t) {
 		if fn.Name.Name == name {
 			return fn
 		}
 	}
 	return nil
-}
-
-func productionFuncs(t *testing.T) []*ast.FuncDecl {
-	t.Helper()
-	entries, err := os.ReadDir(".")
-	require.NoError(t, err)
-	fset := token.NewFileSet()
-	var out []*ast.FuncDecl
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, name, nil, 0)
-		require.NoError(t, err, name)
-		ast.Inspect(f, func(n ast.Node) bool {
-			fn, ok := n.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				return true
-			}
-			out = append(out, fn)
-			return true
-		})
-	}
-	return out
 }
 
 func funcIdent(fn *ast.FuncDecl) string {

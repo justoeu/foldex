@@ -52,7 +52,7 @@ func TestStagedImport_WipeLateRelationFailureRollsBackPriorState(t *testing.T) {
 	`, faultTag.ID))
 	require.NoError(t, err)
 
-	h := NewHandler(pool, nil)
+	h := NewHandler(NewStager(pool), nil)
 	_, _, _, _, err = h.importItemsWithMode(ctx, uid, []Item{
 		{URL: first.URL, Title: "First replacement", Tags: []string{faultTag.Name}, ClickCount: 4},
 		{URL: second.URL, Title: "Second replacement", Tags: []string{secondTag.Name}, ClickCount: 3},
@@ -116,7 +116,7 @@ func TestStagedImport_WipeDoesNotOrphanTagsOrClicks(t *testing.T) {
 	_, err = lrepo.ClickAndResolve(ctx, original.ID, uid)
 	require.NoError(t, err)
 
-	h := NewHandler(pool, nil)
+	h := NewHandler(NewStager(pool), nil)
 	imported, skipped, wiped, warnings, err := h.importItemsWithMode(ctx, uid, []Item{{
 		URL: "https://wipe-target.example", Title: "Replacement",
 	}}, modeWipe, nil)
@@ -158,7 +158,7 @@ func TestStagedImport_PreservesGlobalSlugsAndOwnerScopedURLs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "shared-title", otherLink.Slug)
 
-	h := NewHandler(pool, nil)
+	h := NewHandler(NewStager(pool), nil)
 	imported, skipped, wiped, warnings, err := h.importItemsWithMode(ctx, owner, []Item{
 		{URL: "https://shared-owner-url.example", Title: "Shared Title"},
 		{URL: "https://second-owner-url.example", Title: "Shared Title"},
@@ -214,7 +214,7 @@ func TestStagedImport_DeduplicatesRepeatedURLs(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
 	uid := testdb.SeedUser(t, pool, "import-duplicates@test.local", "admin")
-	h := NewHandler(pool, nil)
+	h := NewHandler(NewStager(pool), nil)
 	items := []Item{
 		{URL: "https://repeated-import.example", Title: "First", ClickCount: 1},
 		{URL: "https://repeated-import.example", Title: "Last", ClickCount: 2},

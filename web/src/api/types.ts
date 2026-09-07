@@ -192,3 +192,6 @@ export type Entry =
 // lives here (not in either card component) so neither card has to import
 // the other just to reference the merge-target shape.
 export type MergeSource = { kind: 'link' | 'note'; id: number }
+
+export type AvailabilityReason = 'shape' | 'reserved' | 'taken' | 'empty' | 'pending'
+export type AvailabilityResponse = { available: boolean; reason?: AvailabilityReason }

@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"foldex/internal/backupagent"
+	"foldex/internal/backupjobs"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -14,9 +14,9 @@ func boolPtr(b bool) *bool { return &b }
 // now moves the mode, the weekday set and every wall time at once, so the
 // event name alone says nothing — the detail carries both documents (INV-047).
 func TestScheduleAudit_CarriesBothDocuments(t *testing.T) {
-	before := renderSchedule(backupagent.JobConfig{
+	before := renderSchedule(backupjobs.JobConfig{
 		Mode: "times", Times: []string{"03:30"}, Weekdays: []string{"sun", "mon", "tue", "wed", "thu", "fri", "sat"}})
-	after := renderSchedule(backupagent.JobConfig{
+	after := renderSchedule(backupjobs.JobConfig{
 		Mode: "times", Times: []string{"06:00", "18:00"}, Weekdays: []string{"mon", "tue", "wed", "thu", "fri"}})
 
 	detail := scheduleAudit("dump", scheduleActionSet, before, after)
@@ -29,9 +29,9 @@ func TestScheduleAudit_CarriesBothDocuments(t *testing.T) {
 
 func TestRenderSchedule_KeepsEveryFieldThatDecidesWhenAJobRuns(t *testing.T) {
 	assert.Equal(t, `{"mode":"interval","interval_min":360}`,
-		renderSchedule(backupagent.JobConfig{Mode: "interval", IntervalMin: 360}))
+		renderSchedule(backupjobs.JobConfig{Mode: "interval", IntervalMin: 360}))
 	assert.Equal(t, `{"enabled":false,"mode":"times"}`,
-		renderSchedule(backupagent.JobConfig{Mode: "times", Enabled: boolPtr(false)}),
+		renderSchedule(backupjobs.JobConfig{Mode: "times", Enabled: boolPtr(false)}),
 		"\"switched off\" is the whole content of that edit — dropping it would record a no-op")
 }
 
@@ -39,7 +39,7 @@ func TestRenderSchedule_KeepsEveryFieldThatDecidesWhenAJobRuns(t *testing.T) {
 // reads the trail later, so they are different words.
 func TestScheduleAudit_NamesTheAbsenceOfARowAndTheFailureToReadOne(t *testing.T) {
 	reset := scheduleAudit("user_zip", scheduleActionReset,
-		renderSchedule(backupagent.JobConfig{Mode: "times", Enabled: boolPtr(false)}), scheduleBaseline)
+		renderSchedule(backupjobs.JobConfig{Mode: "times", Enabled: boolPtr(false)}), scheduleBaseline)
 	assert.Contains(t, reset, "user_zip schedule reset to the env baseline")
 	assert.Contains(t, reset, "env baseline")
 

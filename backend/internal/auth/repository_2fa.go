@@ -1165,35 +1165,6 @@ func (r *Repository) CountRecoveryCodes(ctx context.Context, uid authctx.UserID)
 // E-mail OTP
 // ─────────────────────────────────────────────────────────────────────
 
-// CreateEmailOTP stores a one-time code digest. Six-digit login codes use a
-// keyed, context-bound MAC; high-entropy e-mail verification links use SHA-256.
-//
-// Any earlier live code for the same user and purpose is consumed, so only the
-// most recently e-mailed code works. Otherwise every resend would ADD a valid
-// code, and three resends would leave three simultaneously-correct guesses in a
-// space of only a million.
-func (r *Repository) CreateEmailOTP(ctx context.Context, uid authctx.UserID, challengeID *int64, purpose string, codeHash []byte, ttl time.Duration) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("create otp begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if _, err := tx.Exec(ctx, `
-		UPDATE email_otp SET consumed_at = now()
-		WHERE user_id = $1 AND purpose = $2 AND consumed_at IS NULL`,
-		int64(uid), purpose); err != nil {
-		return fmt.Errorf("supersede otps: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO email_otp (user_id, challenge_id, purpose, code_hash, expires_at)
-		VALUES ($1, $2, $3, $4, now() + $5::interval)`,
-		int64(uid), challengeID, purpose, codeHash, intervalArg(ttl)); err != nil {
-		return fmt.Errorf("insert otp: %w", err)
-	}
-	return tx.Commit(ctx)
-}
-
 // CreateEmailVerification coalesces rapid authenticated resends while keeping
 // token superseding and publication in one transaction.
 func (r *Repository) CreateEmailVerification(ctx context.Context, uid authctx.UserID,

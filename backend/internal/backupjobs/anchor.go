@@ -1,4 +1,4 @@
-package backupagent
+package backupjobs
 
 import (
 	"fmt"
@@ -82,8 +82,8 @@ func (a Anchor) String() string {
 	return s
 }
 
-// timeOnly strips the weekday off an env anchor: inside a Timing the days are
+// TimeOnly strips the weekday off an env anchor: inside a Timing the days are
 // the Timing's, and an anchor that kept its own would render "01:00 sun · sun".
-func timeOnly(a Anchor) Anchor {
+func TimeOnly(a Anchor) Anchor {
 	return Anchor{Hour: a.Hour, Minute: a.Minute, set: a.set}
 }

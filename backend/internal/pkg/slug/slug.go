@@ -3,7 +3,6 @@
 package slug
 
 import (
-	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -14,33 +13,18 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// MaxUniqueAttempts caps collision suffixes (-2, -3, …) for UniqueAvailable.
+// MaxUniqueAttempts caps collision suffixes (-2, -3, …) for every allocator.
 const MaxUniqueAttempts = 1000
-
-// ExistsFn reports whether candidate is already taken.
-type ExistsFn func(ctx context.Context, candidate string) (exists bool, err error)
-
-// UniqueAvailable returns base if free, else base-2, base-3, …
-func UniqueAvailable(ctx context.Context, base string, exists ExistsFn) (string, error) {
-	if base == "" {
-		return "", fmt.Errorf("unique slug: empty base")
-	}
-	for attempt := 1; attempt < MaxUniqueAttempts; attempt++ {
-		candidate := candidateForAttempt(base, attempt)
-		taken, err := exists(ctx, candidate)
-		if err != nil {
-			return "", fmt.Errorf("check slug availability: %w", err)
-		}
-		if !taken {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("unique slug: exhausted attempts for %q", base)
-}
 
 // MaxLen is the upper bound the DB CHECK constraint enforces too. Long titles
 // get truncated on a hyphen boundary so we don't slice through a word.
 const MaxLen = 80
+
+// InvalidFormatMessage is the human-readable statement of the rule IsValid
+// enforces, next to the predicate on purpose: if the rule changes (e.g. the
+// length cap), the message and the check move together instead of the four
+// DTO sites that quote it going stale.
+const InvalidFormatMessage = "slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)"
 
 // formatRE mirrors the DB CHECK constraint:
 //

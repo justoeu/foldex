@@ -3,6 +3,7 @@ package httperr
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/pkg/domainerr"
 )
 
 func TestWrite_KnownError(t *testing.T) {
@@ -144,4 +147,22 @@ func TestParseID(t *testing.T) {
 		assert.Equal(t, "invalid_id", he.Code)
 		assert.Equal(t, http.StatusBadRequest, he.Status)
 	}
+}
+
+func TestFromDomain(t *testing.T) {
+	assert.Equal(t, ErrNotFound, FromDomain(domainerr.ErrNotFound))
+	assert.Equal(t, ErrNotFound, FromDomain(fmt.Errorf("wrap: %w", domainerr.ErrNotFound)))
+
+	bare := FromDomain(domainerr.ErrInvalidInput)
+	require.NotNil(t, bare)
+	assert.Equal(t, http.StatusBadRequest, bare.(*Error).Status)
+	assert.Empty(t, bare.(*Error).Message, "bare sentinel carries no message, by prior behavior")
+
+	with := FromDomain(domainerr.InvalidInput("name is required"))
+	require.NotNil(t, with)
+	assert.Equal(t, http.StatusBadRequest, with.(*Error).Status)
+	assert.Equal(t, "invalid_input", with.(*Error).Code)
+	assert.Equal(t, "name is required", with.(*Error).Message)
+
+	assert.Nil(t, FromDomain(errors.New("unrelated")))
 }

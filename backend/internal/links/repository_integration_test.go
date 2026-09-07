@@ -722,6 +722,69 @@ func TestRepository_CheckInterval_TriStateOnUpdate(t *testing.T) {
 	assert.Nil(t, cleared.LastCheckError, "opt-out must wipe last_check_error")
 }
 
+// TestRepository_Update_CombinationWithIfMatch locks the shared placeholder
+// counter: URL + slug + check_interval in ONE Update under optimistic
+// concurrency exercises every SET block plus the reset-CASE fan-out and the
+// If-Match WHERE tail in a single statement. Inserting a column mid-sequence
+// renumbers every $N downstream — this is the regression net for that.
+func TestRepository_Update_CombinationWithIfMatch(t *testing.T) {
+	ctx, uid, lrepo, _ := setup(t)
+	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/combo", Title: "combo"})
+	require.NoError(t, err)
+
+	// Seed change-check state so the reset-CASE fan-out has something to clear.
+	daily := "daily"
+	l, err = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true})
+	require.NoError(t, err)
+	claim := claimChecks(t, ctx, lrepo, l.ID)[l.ID]
+	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "content:abc", Changed: true})
+	withState, err := lrepo.Get(ctx, uid, l.ID)
+	require.NoError(t, err)
+	require.NotNil(t, withState.LastFingerprint)
+
+	newURL := "https://x.test/combo-2"
+	newTitle := "combo two"
+	newSlug := "combo-two"
+	hourly := "hourly"
+	updated, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{
+		URL:              &newURL,
+		Title:            &newTitle,
+		Slug:             &newSlug,
+		SlugSet:          true,
+		CheckInterval:    &hourly,
+		CheckIntervalSet: true,
+		IfMatchUpdatedAt: &l.UpdatedAt,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, newURL, updated.URL)
+	assert.Equal(t, newTitle, updated.Title)
+	assert.Equal(t, newSlug, updated.Slug)
+	require.NotNil(t, updated.CheckInterval)
+	assert.Equal(t, "hourly", *updated.CheckInterval)
+	assert.Nil(t, updated.LastFingerprint, "URL+interval change must reset the check baseline")
+	assert.Nil(t, updated.LastChangeDetectedAt)
+
+	// The If-Match that just succeeded consumed the old updated_at: replaying
+	// it must disambiguate stale (row exists) from missing.
+	_, err = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{
+		URL:              &newURL,
+		IfMatchUpdatedAt: &l.UpdatedAt,
+	})
+	require.ErrorIs(t, err, links.ErrStaleWrite)
+}
+
+func TestRepository_Update_NotFoundViaIfMatch(t *testing.T) {
+	ctx, uid, lrepo, _ := setup(t)
+	stale := time.Now()
+	_, err := lrepo.Update(ctx, uid, 999999, links.UpdateInput{
+		URL:              ptrURL("https://x.test/none"),
+		IfMatchUpdatedAt: &stale,
+	})
+	require.ErrorIs(t, err, domainerr.ErrNotFound)
+}
+
+func ptrURL(s string) *string { return &s }
+
 // dueIDs projects the DueLink rows to bare ids.
 //
 // SystemClaimDueForCheck returns []links.DueLink{ID, UserID} since ADR-30 — the

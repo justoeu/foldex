@@ -15,6 +15,7 @@ import (
 	"filippo.io/age"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/backupjobs"
 	"foldex/internal/pkg/resourcebudget"
 )
 
@@ -74,7 +75,7 @@ type MirrorJob struct {
 	restoreProbeDeadline time.Duration
 }
 
-func NewMirrorJob(cfg Config, pool *pgxpool.Pool, runs *RunStore, source SourceBucket, dest Uploader, logger *slog.Logger) (*MirrorJob, error) {
+func NewMirrorJob(cfg Config, pool *pgxpool.Pool, runs *backupjobs.RunStore, source SourceBucket, dest Uploader, logger *slog.Logger) (*MirrorJob, error) {
 	recipients, err := parseRecipients(cfg.AgeRecipients)
 	if err != nil {
 		return nil, err
@@ -84,9 +85,9 @@ func NewMirrorJob(cfg Config, pool *pgxpool.Pool, runs *RunStore, source SourceB
 		dest:       dest,
 		recipients: recipients,
 		spoolDir:   cfg.SpoolDir,
-		logger:     logger.With("job", JobMirror),
+		logger:     logger.With("job", backupjobs.JobMirror),
 		lastSuccess: func(ctx context.Context) (time.Time, error) {
-			return runs.LastSuccess(ctx, JobMirror)
+			return runs.LastSuccess(ctx, backupjobs.JobMirror)
 		},
 		restoreBusy: func(ctx context.Context) (bool, error) {
 			return restoreInFlight(ctx, pool)
@@ -101,14 +102,14 @@ func (j *MirrorJob) encrypted() bool { return len(j.recipients) > 0 }
 
 // Run executes one mirror pass: wait out any per-user restore, list both
 // sides, copy the delta. Signature matches jobSpec.run.
-func (j *MirrorJob) Run(ctx context.Context) (*Artifact, map[string]any, string, error) {
+func (j *MirrorJob) Run(ctx context.Context) (*backupjobs.Artifact, map[string]any, string, error) {
 	if reason, err := j.waitRestoreClear(ctx); err != nil {
 		return nil, nil, reason, err
 	}
 
 	last, err := j.lastSuccess(ctx)
 	if err != nil {
-		return nil, nil, ReasonMirrorScanFailed, fmt.Errorf("read watermark: %w", err)
+		return nil, nil, backupjobs.ReasonMirrorScanFailed, fmt.Errorf("read watermark: %w", err)
 	}
 	watermark := mirrorWatermark(last)
 
@@ -129,20 +130,20 @@ func (j *MirrorJob) Run(ctx context.Context) (*Artifact, map[string]any, string,
 		src = append(src, o)
 		return nil
 	}); err != nil {
-		return nil, nil, ReasonMirrorScanFailed, fmt.Errorf("list source: %w", err)
+		return nil, nil, backupjobs.ReasonMirrorScanFailed, fmt.Errorf("list source: %w", err)
 	}
 	dst := make(map[string]ObjectInfo)
 	if err := j.dest.WalkObjects(ctx, mirrorKeyPrefix, func(o ObjectInfo) error {
 		dst[strings.TrimPrefix(o.Key, mirrorKeyPrefix)] = o
 		return nil
 	}); err != nil {
-		return nil, nil, ReasonMirrorScanFailed, fmt.Errorf("list destination: %w", err)
+		return nil, nil, backupjobs.ReasonMirrorScanFailed, fmt.Errorf("list destination: %w", err)
 	}
 
 	delta := mirrorDelta(src, dst, watermark, j.encrypted())
 	bytesCopied, err := j.copyDelta(ctx, delta)
 	if err != nil {
-		return nil, nil, ReasonMirrorCopyFailed, err
+		return nil, nil, backupjobs.ReasonMirrorCopyFailed, err
 	}
 
 	stats := &MirrorStats{
@@ -159,7 +160,7 @@ func (j *MirrorJob) Run(ctx context.Context) (*Artifact, map[string]any, string,
 	}
 	j.logger.Info("mirror pass complete",
 		"scanned", stats.ObjectsScanned, "copied", stats.ObjectsCopied, "bytes", stats.BytesCopied)
-	return &Artifact{Mirror: stats}, meta, "", nil
+	return &backupjobs.Artifact{Mirror: stats}, meta, "", nil
 }
 
 // waitRestoreClear defers the pass while a per-user restore holds
@@ -171,18 +172,18 @@ func (j *MirrorJob) waitRestoreClear(ctx context.Context) (string, error) {
 	for {
 		busy, err := j.restoreBusy(ctx)
 		if err != nil {
-			return ReasonMirrorScanFailed, fmt.Errorf("probe restore lock: %w", err)
+			return backupjobs.ReasonMirrorScanFailed, fmt.Errorf("probe restore lock: %w", err)
 		}
 		if !busy {
 			return "", nil
 		}
 		if !time.Now().Before(deadline) {
-			return ReasonRestoreInFlight, errors.New("a per-user restore still holds the bucket after the wait deadline")
+			return backupjobs.ReasonRestoreInFlight, errors.New("a per-user restore still holds the bucket after the wait deadline")
 		}
 		j.logger.Info("per-user restore in flight; waiting before mirroring")
 		select {
 		case <-ctx.Done():
-			return ReasonRestoreInFlight, ctx.Err()
+			return backupjobs.ReasonRestoreInFlight, ctx.Err()
 		case <-time.After(j.restoreProbeEvery):
 		}
 	}

@@ -207,26 +207,6 @@ func (c *Client) GetObject(ctx context.Context, key string) ([]byte, string, err
 	return buf, info.ContentType, nil
 }
 
-// readAll reads all bytes from an io.Reader when a pre-allocated read fails.
-// Retained for unit tests that exercise the drain helper shape.
-func readAll(obj io.Reader, size int64) ([]byte, error) {
-	if size > MaxServeObjectBytes {
-		size = MaxServeObjectBytes
-	}
-	if size < 0 {
-		size = 0
-	}
-	limited := io.LimitReader(obj, MaxServeObjectBytes+1)
-	buf := bytes.NewBuffer(make([]byte, 0, size))
-	if _, err := buf.ReadFrom(limited); err != nil {
-		return nil, err
-	}
-	if int64(buf.Len()) > MaxServeObjectBytes {
-		return nil, ErrObjectTooLarge
-	}
-	return buf.Bytes(), nil
-}
-
 // Stats walks every object in the bucket and aggregates count + total bytes.
 // Cheap on personal-scale buckets (≤ a few thousand objects); for large
 // installs the API call is paginated by the SDK.

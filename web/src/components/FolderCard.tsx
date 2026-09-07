@@ -38,6 +38,18 @@ const MIME_LINK = 'application/x-foldex-link'
 const MIME_NOTE = 'application/x-foldex-note'
 const MIME_FOLDER = 'application/x-foldex-folder'
 
+export function parseDropId(raw: string): number | null {
+  const id = Number(raw)
+  return id ? id : null
+}
+
+function dropKind(types: ReadonlyArray<string>): 'link' | 'note' | 'folder' | null {
+  if (types.includes(MIME_LINK)) return 'link'
+  if (types.includes(MIME_NOTE)) return 'note'
+  if (types.includes(MIME_FOLDER)) return 'folder'
+  return null
+}
+
 // iPhone-style folder card: 2x2 grid of mini-thumbnails (preview_links) inside
 // the preview area, folder name + link count in the body. Empty folder shows
 // dashed tiles + "Pasta vazia" label.
@@ -55,12 +67,19 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropNote, onDrop
   const [dragOver, setDragOver] = useState(false)
   const [dragging, setDragging] = useState(false)
 
-  const acceptsDrop = (types: ReadonlyArray<string>): 'link' | 'note' | 'folder' | null => {
-    if (types.includes(MIME_LINK)) return 'link'
-    if (types.includes(MIME_NOTE)) return 'note'
-    if (types.includes(MIME_FOLDER)) return 'folder'
-    return null
-  }
+  const dropHandlers: Array<{
+    mime: string
+    call?: (id: number) => void
+    reject?: (id: number) => boolean
+  }> = [
+    { mime: MIME_LINK, call: onDropLink && ((id) => onDropLink(id, folder.id)) },
+    { mime: MIME_NOTE, call: onDropNote && ((id) => onDropNote(id, folder.id)) },
+    {
+      mime: MIME_FOLDER,
+      call: onDropFolder && ((id) => onDropFolder(id, folder.id)),
+      reject: (id) => id === folder.id,
+    },
+  ]
 
   return (
     <div
@@ -78,19 +97,20 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropNote, onDrop
       }}
       onDragEnd={() => setDragging(false)}
       onDragOver={(e) => {
-        const kind = acceptsDrop(Array.from(e.dataTransfer.types))
+        const kind = dropKind(Array.from(e.dataTransfer.types))
         if (!kind) return
         // Same-folder drop = no-op (signals the user is dragging the card
         // back to itself); don't show the highlight.
         if (kind === 'folder') {
           const raw = e.dataTransfer.getData(MIME_FOLDER)
-          if (raw && Number(raw) === folder.id) return
+          const id = parseDropId(raw)
+          if (id === folder.id) return
         }
         e.preventDefault()
         e.dataTransfer.dropEffect = 'move'
       }}
       onDragEnter={(e) => {
-        const kind = acceptsDrop(Array.from(e.dataTransfer.types))
+        const kind = dropKind(Array.from(e.dataTransfer.types))
         if (!kind) return
         if (kind === 'folder') {
           // dataTransfer.getData is empty during dragenter on some browsers,
@@ -104,28 +124,14 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropNote, onDrop
       }}
       onDrop={(e) => {
         setDragOver(false)
-        const linkRaw = e.dataTransfer.getData(MIME_LINK)
-        const noteRaw = e.dataTransfer.getData(MIME_NOTE)
-        const folderRaw = e.dataTransfer.getData(MIME_FOLDER)
-        if (linkRaw) {
-          const sourceId = Number(linkRaw)
-          if (!sourceId) return
+        for (const handler of dropHandlers) {
+          const raw = e.dataTransfer.getData(handler.mime)
+          if (!raw) continue
+          const sourceId = parseDropId(raw)
+          if (!sourceId || handler.reject?.(sourceId)) return
           e.preventDefault()
-          onDropLink?.(sourceId, folder.id)
+          handler.call?.(sourceId)
           return
-        }
-        if (noteRaw) {
-          const sourceId = Number(noteRaw)
-          if (!sourceId) return
-          e.preventDefault()
-          onDropNote?.(sourceId, folder.id)
-          return
-        }
-        if (folderRaw) {
-          const sourceId = Number(folderRaw)
-          if (!sourceId || sourceId === folder.id) return
-          e.preventDefault()
-          onDropFolder?.(sourceId, folder.id)
         }
       }}
     >

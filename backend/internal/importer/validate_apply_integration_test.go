@@ -57,7 +57,7 @@ func TestValidate_ReportsConflictsAndFolders(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -106,7 +106,7 @@ func TestValidateImport_ResponseIsAggregateSized(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -173,7 +173,7 @@ func TestValidate_EmptyFile(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -200,7 +200,7 @@ func TestApply_SkipMode_Default(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -236,7 +236,7 @@ func TestApply_WipeMode(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -274,7 +274,7 @@ func TestApply_DuplicateMode_WarnsOnURLCollision(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -310,7 +310,7 @@ func TestApply_ExcludeFolders(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -350,7 +350,7 @@ func TestApply_JSONWithSeedColors(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -382,7 +382,7 @@ func TestApply_EmptyModeDefaultsToSkip(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
@@ -410,7 +410,7 @@ func TestApply_JSONValidateViaApply(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
-	importer.NewHandler(pool, &fakeEnqueuer{}).Mount(r)
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 

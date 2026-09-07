@@ -12,18 +12,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-)
 
-// RequiredSchemaVersion is the migration the agent needs. The agent never
-// runs migrations — the backend owns the schema — so boot fails with an
-// instruction instead of a missing-table error mid-job.
-//
-// Deliberately NOT db.RequiredSchemaVersion: that number tracks what the
-// BACKEND reads, and moves whenever any backend query gains a dependency.
-// This one moves only for tables the agent itself touches: 40 for backup_run,
-// 42 for backup_schedule (read) and backup_agent_state (heartbeat, written),
-// 43 for the unified shape of backup_schedule.config.
-const RequiredSchemaVersion = 43
+	"foldex/internal/backupjobs"
+)
 
 const janitorInterval = time.Hour
 
@@ -36,7 +27,7 @@ type jobSpec struct {
 	// run receives the backup_run row id it executes under: the drill needs
 	// it to stamp drill_of_run_id as soon as it picks a source, so even a run
 	// that fails mid-pipeline records WHICH dump it was validating.
-	run func(ctx context.Context, runID int64) (*Artifact, map[string]any, string, error)
+	run func(ctx context.Context, runID int64) (*backupjobs.Artifact, map[string]any, string, error)
 }
 
 // Agent wires the jobs to their schedule and to backup_run.
@@ -44,8 +35,8 @@ type Agent struct {
 	cfg     Config
 	pool    *pgxpool.Pool
 	store   Uploader
-	runs    *RunStore
-	sched   *ScheduleStore
+	runs    *backupjobs.RunStore
+	sched   *backupjobs.ScheduleStore
 	metrics *Metrics
 	logger  *slog.Logger
 	jobs    []jobSpec
@@ -54,11 +45,11 @@ type Agent struct {
 	// refreshed by the sync loop. schedChange is closed (and replaced) on
 	// every swap so the schedule loops recompute their timers mid-sleep.
 	schedMu     sync.RWMutex
-	timings     map[string]Timing
+	timings     map[string]backupjobs.Timing
 	schedChange chan struct{}
 	// timingOverrides pins a job's Timing past the sync loop — tests need
 	// sub-second cadences no row or env var can express.
-	timingOverrides map[string]Timing
+	timingOverrides map[string]backupjobs.Timing
 
 	// catchUpJitter delays a boot catch-up run so a `compose up` does not fire
 	// a dump into a half-started stack. A seam because it is minutes long and
@@ -99,8 +90,8 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 		cfg:           cfg,
 		pool:          pool,
 		store:         store,
-		runs:          NewRunStore(pool),
-		sched:         NewScheduleStore(pool),
+		runs:          backupjobs.NewRunStore(pool),
+		sched:         backupjobs.NewScheduleStore(pool),
 		metrics:       NewMetrics(),
 		logger:        logger,
 		schedChange:   make(chan struct{}),
@@ -110,7 +101,7 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 	if err != nil {
 		return nil, err
 	}
-	a.jobs = append(a.jobs, jobSpec{name: JobDump, run: func(ctx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
+	a.jobs = append(a.jobs, jobSpec{name: backupjobs.JobDump, run: func(ctx context.Context, _ int64) (*backupjobs.Artifact, map[string]any, string, error) {
 		return dump.Run(ctx)
 	}})
 	a.skewWarning = dump.VersionSkewWarning
@@ -122,7 +113,7 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 	// Registered even with no schedule: the registry is also what the
 	// requested-claim loop iterates, so an operator can trigger a manual
 	// drill from the admin surface without scheduling one.
-	a.jobs = append(a.jobs, jobSpec{name: JobDrill, run: drill.Run})
+	a.jobs = append(a.jobs, jobSpec{name: backupjobs.JobDrill, run: drill.Run})
 
 	if cfg.MirrorEnabled() {
 		if mirrorSource == nil {
@@ -135,7 +126,7 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 		if err != nil {
 			return nil, err
 		}
-		a.jobs = append(a.jobs, jobSpec{name: JobMirror, run: func(ctx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
+		a.jobs = append(a.jobs, jobSpec{name: backupjobs.JobMirror, run: func(ctx context.Context, _ int64) (*backupjobs.Artifact, map[string]any, string, error) {
 			return mirror.Run(ctx)
 		}})
 	}
@@ -146,8 +137,8 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 // RegisterJob appends a job to the registry, between New and Start. It exists
 // for jobs whose dependencies New does not carry: user_zip needs a
 // backup.Service over the SOURCE bucket, which only the binary constructs.
-func (a *Agent) RegisterJob(name string, run func(ctx context.Context) (*Artifact, map[string]any, string, error)) {
-	a.jobs = append(a.jobs, jobSpec{name: name, run: func(ctx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
+func (a *Agent) RegisterJob(name string, run func(ctx context.Context) (*backupjobs.Artifact, map[string]any, string, error)) {
+	a.jobs = append(a.jobs, jobSpec{name: name, run: func(ctx context.Context, _ int64) (*backupjobs.Artifact, map[string]any, string, error) {
 		return run(ctx)
 	}})
 	a.setTimings(a.computeTimings(nil))
@@ -170,16 +161,16 @@ func (a *Agent) registered(name string) bool {
 // a capability (INV-173).
 func (a *Agent) capability(name string) (bool, string) {
 	switch name {
-	case JobDrill:
+	case backupjobs.JobDrill:
 		if a.cfg.AgeIdentityFile == "" {
 			return false, "no_identity"
 		}
-	case JobMirror:
+	case backupjobs.JobMirror:
 		if !a.cfg.MirrorEnabled() {
 			return false, "mirror_off"
 		}
-	case JobUserZip:
-		if !a.registered(JobUserZip) {
+	case backupjobs.JobUserZip:
+		if !a.registered(backupjobs.JobUserZip) {
 			return false, "no_source_credentials"
 		}
 	}
@@ -190,10 +181,10 @@ func (a *Agent) capability(name string) (bool, string) {
 // baseline merged with its backup_schedule row, capability-gated, then test
 // overrides. A row for an incapable job is logged and ignored — honouring it
 // would schedule work the process cannot perform.
-func (a *Agent) computeTimings(rows map[string]ScheduleRow) map[string]Timing {
-	out := make(map[string]Timing, len(a.jobs))
+func (a *Agent) computeTimings(rows map[string]backupjobs.ScheduleRow) map[string]backupjobs.Timing {
+	out := make(map[string]backupjobs.Timing, len(a.jobs))
 	for _, spec := range a.jobs {
-		var row *JobConfig
+		var row *backupjobs.JobConfig
 		if r, ok := rows[spec.name]; ok {
 			cfg := r.Config
 			switch {
@@ -204,7 +195,7 @@ func (a *Agent) computeTimings(rows map[string]ScheduleRow) map[string]Timing {
 				a.logger.Warn("schedule row could not be decoded; using the env baseline",
 					"job", spec.name, "err", r.Malformed)
 			default:
-				if err := ValidateJobConfig(spec.name, cfg); err != nil {
+				if err := backupjobs.ValidateJobConfig(spec.name, cfg); err != nil {
 					a.logger.Warn("schedule row is invalid; using the env baseline", "job", spec.name, "err", err)
 				} else {
 					row = &cfg
@@ -215,7 +206,7 @@ func (a *Agent) computeTimings(rows map[string]ScheduleRow) map[string]Timing {
 			if row != nil {
 				a.logger.Warn("schedule row for a job this agent cannot run; ignoring", "job", spec.name, "reason", reason)
 			}
-			out[spec.name] = Timing{Source: "env"}
+			out[spec.name] = backupjobs.Timing{Source: "env"}
 			continue
 		}
 		out[spec.name] = EffectiveTiming(spec.name, a.cfg, row)
@@ -229,7 +220,7 @@ func (a *Agent) computeTimings(rows map[string]ScheduleRow) map[string]Timing {
 }
 
 // timing returns the current Timing for a job.
-func (a *Agent) timing(name string) Timing {
+func (a *Agent) timing(name string) backupjobs.Timing {
 	a.schedMu.RLock()
 	defer a.schedMu.RUnlock()
 	return a.timings[name]
@@ -243,7 +234,7 @@ func (a *Agent) changeCh() <-chan struct{} {
 }
 
 // setTimings swaps the agenda and wakes every schedule loop.
-func (a *Agent) setTimings(next map[string]Timing) {
+func (a *Agent) setTimings(next map[string]backupjobs.Timing) {
 	a.schedMu.Lock()
 	a.timings = next
 	close(a.schedChange)
@@ -252,17 +243,17 @@ func (a *Agent) setTimings(next map[string]Timing) {
 }
 
 // forceTiming pins one job's Timing past the sync loop (tests only).
-func (a *Agent) forceTiming(name string, t Timing) {
+func (a *Agent) forceTiming(name string, t backupjobs.Timing) {
 	a.schedMu.Lock()
 	if a.timingOverrides == nil {
-		a.timingOverrides = map[string]Timing{}
+		a.timingOverrides = map[string]backupjobs.Timing{}
 	}
 	a.timingOverrides[name] = t
 	a.schedMu.Unlock()
 	a.setTimings(a.computeTimings(nil))
 }
 
-func timingsEqual(x, y map[string]Timing) bool {
+func timingsEqual(x, y map[string]backupjobs.Timing) bool {
 	if len(x) != len(y) {
 		return false
 	}
@@ -278,12 +269,12 @@ func timingsEqual(x, y map[string]Timing) bool {
 // agentState renders the heartbeat: per-job capability and the agenda this
 // process is actually following — the honesty layer the schedule UI needs
 // before it lets an owner agenda a job the agent cannot run.
-func (a *Agent) agentState() AgentState {
-	jobs := make(map[string]JobReport, len(a.jobs))
+func (a *Agent) agentState() backupjobs.AgentState {
+	jobs := make(map[string]backupjobs.JobReport, len(a.jobs))
 	for _, spec := range a.jobs {
 		capable, reason := a.capability(spec.name)
 		t := a.timing(spec.name)
-		jobs[spec.name] = JobReport{
+		jobs[spec.name] = backupjobs.JobReport{
 			Capable:     capable,
 			Reason:      reason,
 			Source:      t.Source,
@@ -300,24 +291,24 @@ func (a *Agent) agentState() AgentState {
 	// They carry their destination anyway: WHERE a job would ship is part of
 	// the configuration the operator is checking, and a job that cannot run is
 	// exactly when they are checking it.
-	if !a.registered(JobUserZip) {
-		jobs[JobUserZip] = JobReport{
+	if !a.registered(backupjobs.JobUserZip) {
+		jobs[backupjobs.JobUserZip] = backupjobs.JobReport{
 			Capable: false, Reason: "no_source_credentials", Source: "env", Schedule: "disabled",
-			Destination: a.destination(JobUserZip),
+			Destination: a.destination(backupjobs.JobUserZip),
 		}
 	}
-	if !a.registered(JobMirror) {
-		jobs[JobMirror] = JobReport{
+	if !a.registered(backupjobs.JobMirror) {
+		jobs[backupjobs.JobMirror] = backupjobs.JobReport{
 			Capable: false, Reason: "mirror_off", Source: "env", Schedule: "disabled",
-			Destination: a.destination(JobMirror),
+			Destination: a.destination(backupjobs.JobMirror),
 		}
 	}
-	return AgentState{
+	return backupjobs.AgentState{
 		SeenAt:  time.Now(),
 		Version: a.cfg.Version,
 		// The constant this binary was compiled with, not a value read from
 		// anywhere: it is a claim about what THIS code understands.
-		SchemaVersion: RequiredSchemaVersion,
+		SchemaVersion: backupjobs.RequiredSchemaVersion,
 		Jobs:          jobs,
 	}
 }
@@ -326,7 +317,7 @@ func (a *Agent) agentState() AgentState {
 // when the bucket is not configured at all — a half-named address ("bucket "
 // with nothing after it) would read as a misconfiguration the operator does not
 // have.
-func (a *Agent) destination(job string) *Destination {
+func (a *Agent) destination(job string) *backupjobs.Destination {
 	if a.cfg.S3Endpoint == "" || a.cfg.S3Bucket == "" {
 		return nil
 	}
@@ -334,17 +325,17 @@ func (a *Agent) destination(job string) *Destination {
 	if !ok {
 		return nil
 	}
-	return &Destination{Endpoint: a.cfg.S3Endpoint, Bucket: a.cfg.S3Bucket, Prefix: prefix}
+	return &backupjobs.Destination{Endpoint: a.cfg.S3Endpoint, Bucket: a.cfg.S3Bucket, Prefix: prefix}
 }
 
 // jobKeyPrefix maps each job to its namespace in the external bucket. The drill
 // shares the dump's: it RESTORES what the dump wrote, and naming that is the
 // point — the two agendas are one story told from both ends.
 var jobKeyPrefix = map[string]string{
-	JobDump:    dumpKeyPrefix,
-	JobDrill:   dumpKeyPrefix,
-	JobMirror:  mirrorKeyPrefix,
-	JobUserZip: userZipKeyPrefix,
+	backupjobs.JobDump:    dumpKeyPrefix,
+	backupjobs.JobDrill:   dumpKeyPrefix,
+	backupjobs.JobMirror:  mirrorKeyPrefix,
+	backupjobs.JobUserZip: userZipKeyPrefix,
 }
 
 // CheckSchema gates the boot on the agent's own migrations being applied.
@@ -353,8 +344,8 @@ func (a *Agent) CheckSchema(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if v < RequiredSchemaVersion {
-		return fmt.Errorf("backupagent: database schema is at %d, need >= %d — run backend migrations first (make migrate-up)", v, RequiredSchemaVersion)
+	if v < backupjobs.RequiredSchemaVersion {
+		return fmt.Errorf("backupagent: database schema is at %d, need >= %d — run backend migrations first (make migrate-up)", v, backupjobs.RequiredSchemaVersion)
 	}
 	return nil
 }
@@ -614,7 +605,7 @@ func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Tim
 	if !ok {
 		a.logger.Warn("another agent holds the job lock; skipping slot", "job", spec.name)
 		if claimedID != 0 {
-			_ = a.runs.Fail(ctx, claimedID, ReasonLockBusy)
+			_ = a.runs.Fail(ctx, claimedID, backupjobs.ReasonLockBusy)
 		}
 		return
 	}
@@ -623,7 +614,7 @@ func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Tim
 	id := claimedID
 	if id == 0 {
 		id, err = a.runs.Begin(ctx, spec.name, scheduledFor)
-		if errors.Is(err, ErrAlreadyRunning) {
+		if errors.Is(err, backupjobs.ErrAlreadyRunning) {
 			a.logger.Warn("a run is already recorded as running; skipping slot", "job", spec.name)
 			return
 		}
@@ -645,7 +636,7 @@ func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Tim
 
 	if runErr != nil {
 		if ctx.Err() != nil {
-			reason = ReasonShutdown
+			reason = backupjobs.ReasonShutdown
 		}
 		a.logger.Error("run failed", "job", spec.name, "run_id", id, "reason", reason, "err", runErr)
 		if err := a.runs.Fail(recordCtx, id, reason); err != nil {

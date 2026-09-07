@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"foldex/internal/backupjobs"
 )
 
 // Config carries everything the agent needs. Postgres connection details come
@@ -48,10 +50,10 @@ type Config struct {
 	RustFSUseSSL    bool
 
 	// Scheduling.
-	DumpAt            Anchor // zero Anchor = job disabled
-	DrillAt           Anchor // restore drill; zero Anchor = job disabled
-	UserZipAt         Anchor // per-user product ZIPs; zero Anchor = job disabled
-	MirrorIntervalMin int    // 0 = mirror off
+	DumpAt            backupjobs.Anchor // zero backupjobs.Anchor = job disabled
+	DrillAt           backupjobs.Anchor // restore drill; zero backupjobs.Anchor = job disabled
+	UserZipAt         backupjobs.Anchor // per-user product ZIPs; zero backupjobs.Anchor = job disabled
+	MirrorIntervalMin int               // 0 = mirror off
 	RequestedPollSec  int
 	StaleRunMin       int
 
@@ -230,21 +232,21 @@ func requireNonEmpty(groups []envGroup) error {
 
 func parseAnchors(c *Config) error {
 	if raw := strings.TrimSpace(os.Getenv("BACKUP_DUMP_AT")); raw != "" {
-		anchor, err := ParseAnchor(raw)
+		anchor, err := backupjobs.ParseAnchor(raw)
 		if err != nil {
 			return fmt.Errorf("backupagent: BACKUP_DUMP_AT: %w", err)
 		}
 		c.DumpAt = anchor
 	}
 	if raw := strings.TrimSpace(os.Getenv("BACKUP_DRILL_AT")); raw != "" {
-		anchor, err := ParseAnchor(raw)
+		anchor, err := backupjobs.ParseAnchor(raw)
 		if err != nil {
 			return fmt.Errorf("backupagent: BACKUP_DRILL_AT: %w", err)
 		}
 		c.DrillAt = anchor
 	}
 	if raw := strings.TrimSpace(os.Getenv("BACKUP_USERZIP_AT")); raw != "" {
-		anchor, err := ParseAnchor(raw)
+		anchor, err := backupjobs.ParseAnchor(raw)
 		if err != nil {
 			return fmt.Errorf("backupagent: BACKUP_USERZIP_AT: %w", err)
 		}

@@ -2,15 +2,14 @@ package server
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/testsupport"
 )
 
 func TestServerNewCyclomaticIsUnder20(t *testing.T) {
@@ -33,7 +32,7 @@ func TestRouterMountCharter(t *testing.T) {
 		}
 	})
 
-	decls := productionFuncs(t)
+	decls := testsupport.ProductionFuncs(t)
 	t.Run("writeGate wraps content groups", func(t *testing.T) {
 		for _, route := range []string{"/tags", "/settings", "/links", "/notes"} {
 			fn := funcRouting(t, decls, route)
@@ -61,36 +60,13 @@ func TestRouterMountCharter(t *testing.T) {
 
 func productionFunc(t *testing.T, name string) *ast.FuncDecl {
 	t.Helper()
-	for _, fn := range productionFuncs(t) {
+	for _, fn := range testsupport.ProductionFuncs(t) {
 		if fn.Name.Name == name && fn.Recv == nil {
 			return fn
 		}
 	}
 	t.Fatalf("func %s not found in server production files", name)
 	return nil
-}
-
-func productionFuncs(t *testing.T) []*ast.FuncDecl {
-	t.Helper()
-	entries, err := os.ReadDir(".")
-	require.NoError(t, err)
-	var out []*ast.FuncDecl
-	fset := token.NewFileSet()
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, filepath.Clean(name), nil, 0)
-		require.NoError(t, err, name)
-		for _, d := range f.Decls {
-			fn, ok := d.(*ast.FuncDecl)
-			if ok {
-				out = append(out, fn)
-			}
-		}
-	}
-	return out
 }
 
 func cyclomatic(fn *ast.FuncDecl) int {

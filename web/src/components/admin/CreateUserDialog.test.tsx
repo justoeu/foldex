@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { CreateUserDialog } from './CreateUserDialog'
+import { CREATE_USER_ERROR_I18N, CreateUserDialog } from './CreateUserDialog'
 import { freshState, installAxiosMock, type MockState } from '../../test/server'
 import { http } from '../../api/client'
 import { GENERATED_LENGTH, GENERATED_MAX_LENGTH } from '../../lib/generatePassword'
@@ -263,5 +263,28 @@ describe('CreateUserDialog — generated password', () => {
     await user.click(generateButton())
     expect(await screen.findByTestId('generated-password'))
       .toHaveAttribute('translate', 'no')
+  })
+})
+
+const CREATE_USER_ERROR_COPY: Record<string, RegExp> = {
+  email_taken: /already registered/i,
+  invalid_email: /valid e-mail address/i,
+  invalid_role: /cannot be assigned/i,
+}
+
+describe('CreateUserDialog — server errors', () => {
+  it.each(Object.keys(CREATE_USER_ERROR_I18N))('renders the specific message for %s', async (code) => {
+    expect(CREATE_USER_ERROR_COPY[code], `add English copy for ${code}`).toBeDefined()
+    vi.spyOn(http, 'post').mockRejectedValue({
+      response: { status: 400, data: { error: { code } } },
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<CreateUserDialog onClose={vi.fn()} />)
+    await user.type(emailField(), 'nova@foldex.test')
+    await user.type(passwordField(), 'correct-horse-battery')
+    await user.type(confirmField(), 'correct-horse-battery')
+    await waitFor(() => expect(submitButton()).toBeEnabled())
+    await user.click(submitButton())
+    expect(await screen.findByText(CREATE_USER_ERROR_COPY[code])).toBeInTheDocument()
   })
 })

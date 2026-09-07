@@ -56,7 +56,8 @@ func TestAlwaysUnreachableDoesNotDial(t *testing.T) {
 func TestSnapshotReusesTheCacheUntilTTL(t *testing.T) {
 	t.Parallel()
 	var n atomic.Int32
-	c := New(WithTTL(time.Hour))
+	c := New()
+	c.ttl = time.Hour
 	c.Add(ObjectStore, func(context.Context) error {
 		n.Add(1)
 		return nil
@@ -69,7 +70,8 @@ func TestSnapshotReusesTheCacheUntilTTL(t *testing.T) {
 func TestSnapshotRefreshesAfterTTL(t *testing.T) {
 	t.Parallel()
 	var n atomic.Int32
-	c := New(WithTTL(time.Millisecond))
+	c := New()
+	c.ttl = time.Millisecond
 	c.Add(ObjectStore, func(context.Context) error {
 		n.Add(1)
 		return nil
@@ -100,7 +102,8 @@ func TestTransitionLogsDoNotCarryTheProbeError(t *testing.T) {
 	t.Parallel()
 	var buf strings.Builder
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	c := New(WithTTL(time.Millisecond), WithLogger(logger))
+	c := New(WithLogger(logger))
+	c.ttl = time.Millisecond
 	up := atomic.Bool{}
 	c.Add(ObjectStore, func(context.Context) error {
 		if up.Load() {
@@ -127,7 +130,8 @@ func TestTransitionLogsDoNotCarryTheProbeError(t *testing.T) {
 func TestCollectDoesNotWaitOnAHungProbe(t *testing.T) {
 	t.Parallel()
 	started := make(chan struct{})
-	c := New(WithTTL(time.Hour), WithTimeout(2*time.Second))
+	c := New()
+	c.ttl = time.Hour
 	c.Add(ObjectStore, func(ctx context.Context) error {
 		close(started)
 		<-ctx.Done()
@@ -152,7 +156,8 @@ func TestCollectDoesNotWaitOnAHungProbe(t *testing.T) {
 func TestCollectorEmitsCachedGaugesWithoutProbing(t *testing.T) {
 	t.Parallel()
 	var n atomic.Int32
-	c := New(WithTTL(time.Hour))
+	c := New()
+	c.ttl = time.Hour
 	c.Add(ObjectStore, func(context.Context) error {
 		n.Add(1)
 		return nil

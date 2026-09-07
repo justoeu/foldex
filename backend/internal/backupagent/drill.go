@@ -18,6 +18,8 @@ import (
 	"filippo.io/age"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"foldex/internal/backupjobs"
 )
 
 // sanityTables are the content tables whose row counts travel in the dump's
@@ -39,7 +41,7 @@ const drillPort = "5432"
 // drillRuns is the slice of RunStore the drill needs; a fake stands in for it
 // in the unit tests, which have no database.
 type drillRuns interface {
-	LatestSucceededDump(ctx context.Context) (*DumpRunRef, error)
+	LatestSucceededDump(ctx context.Context) (*backupjobs.DumpRunRef, error)
 	SetDrillSource(ctx context.Context, runID, sourceRunID int64) error
 }
 
@@ -69,7 +71,7 @@ type DrillJob struct {
 func NewDrillJob(cfg Config, runs drillRuns, store Uploader, logger *slog.Logger) (*DrillJob, error) {
 	j := &DrillJob{
 		cfg: cfg, runs: runs, store: store,
-		logger:  logger.With("job", JobDrill),
+		logger:  logger.With("job", backupjobs.JobDrill),
 		command: execCommand,
 	}
 	j.readCounts = func(ctx context.Context, socketDir, database string) (map[string]int64, int64, error) {
@@ -133,15 +135,15 @@ func loadAgeIdentities(path string) ([]age.Identity, error) {
 
 // Run executes one drill under the backup_run row runID. It never returns an
 // Artifact — a drill ships nothing; its product is the verdict.
-func (j *DrillJob) Run(ctx context.Context, runID int64) (*Artifact, map[string]any, string, error) {
+func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, map[string]any, string, error) {
 	src, err := j.runs.LatestSucceededDump(ctx)
-	if errors.Is(err, ErrNoDumpToDrill) {
-		return nil, nil, ReasonDrillNoDump, err
+	if errors.Is(err, backupjobs.ErrNoDumpToDrill) {
+		return nil, nil, backupjobs.ReasonDrillNoDump, err
 	}
 	if err != nil {
 		// A database that cannot answer is NOT "nothing to validate": the
 		// no-dump token would tell the operator the opposite of the truth.
-		return nil, nil, ReasonDrillSourceFailed, err
+		return nil, nil, backupjobs.ReasonDrillSourceFailed, err
 	}
 	if err := j.runs.SetDrillSource(ctx, runID, src.ID); err != nil {
 		// The meta below still records the source; losing the column linkage
@@ -158,7 +160,7 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*Artifact, map[string]
 	sweepOrphanDrillDirs(j.cfg.SpoolDir, j.logger)
 	dir, err := os.MkdirTemp(j.cfg.SpoolDir, "foldex-drill-*")
 	if err != nil {
-		return nil, nil, ReasonSpoolFailed, fmt.Errorf("create drill dir: %w", err)
+		return nil, nil, backupjobs.ReasonSpoolFailed, fmt.Errorf("create drill dir: %w", err)
 	}
 	clusterInitialized := false
 	dataDir := filepath.Join(dir, "data")
@@ -191,10 +193,10 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*Artifact, map[string]
 	spoolPath := filepath.Join(dir, "artifact.spool")
 	digest, err := j.download(ctx, src.Key, spoolPath)
 	if err != nil {
-		return nil, nil, ReasonDrillDownloadFailed, err
+		return nil, nil, backupjobs.ReasonDrillDownloadFailed, err
 	}
 	if digest != src.SHA256 {
-		return nil, nil, ReasonDrillDigestMismatch,
+		return nil, nil, backupjobs.ReasonDrillDigestMismatch,
 			fmt.Errorf("artifact %s digest %s does not match recorded %s — the bytes in the bucket are not the bytes the dump shipped", src.Key, digest, src.SHA256)
 	}
 
@@ -203,12 +205,12 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*Artifact, map[string]
 	// an un-suffixed key would let anyone with UPDATE on backup_run strip the
 	// authentication that age gives every legitimate dump for free.
 	if len(j.identities) > 0 && !j.cfg.AllowPlaintext && !strings.HasSuffix(src.Key, ".age") {
-		return nil, nil, ReasonDrillDecryptFailed,
+		return nil, nil, backupjobs.ReasonDrillDecryptFailed,
 			fmt.Errorf("artifact %s is not .age but this instance encrypts its dumps — refusing to restore unauthenticated bytes", src.Key)
 	}
 	dumpPath, err := j.decrypt(src, spoolPath, filepath.Join(dir, "restore.dump"))
 	if err != nil {
-		return nil, nil, ReasonDrillDecryptFailed, err
+		return nil, nil, backupjobs.ReasonDrillDecryptFailed, err
 	}
 
 	// Ephemeral cluster: same superuser name as production (ownership in the
@@ -220,7 +222,7 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*Artifact, map[string]
 		"--locale=C",
 		"--encoding=UTF8",
 	); err != nil {
-		return nil, nil, ReasonDrillRestoreFailed, err
+		return nil, nil, backupjobs.ReasonDrillRestoreFailed, err
 	}
 	clusterInitialized = true
 	serverOpts := fmt.Sprintf("-c listen_addresses='' -c unix_socket_directories='%s' -c port=%s"+
@@ -232,7 +234,7 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*Artifact, map[string]
 		"--log="+filepath.Join(dir, "postgres.log"),
 		"-o", serverOpts,
 	); err != nil {
-		return nil, nil, ReasonDrillRestoreFailed, err
+		return nil, nil, backupjobs.ReasonDrillRestoreFailed, err
 	}
 
 	// template0: the artifact deliberately carries no CREATE DATABASE (dump
@@ -244,7 +246,7 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*Artifact, map[string]
 		"--template=template0", "--encoding=UTF8",
 		drillDatabase,
 	); err != nil {
-		return nil, nil, ReasonDrillRestoreFailed, err
+		return nil, nil, backupjobs.ReasonDrillRestoreFailed, err
 	}
 	if err := j.exec(ctx, "pg_restore",
 		"--host="+dir, "--port="+drillPort,
@@ -253,22 +255,22 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*Artifact, map[string]
 		"--jobs=1", "--exit-on-error",
 		dumpPath,
 	); err != nil {
-		return nil, nil, ReasonDrillRestoreFailed, err
+		return nil, nil, backupjobs.ReasonDrillRestoreFailed, err
 	}
 
 	sourceMeta, err := parseDumpMeta(src.Meta)
 	if err != nil {
-		return nil, nil, ReasonDrillCountsMismatch, err
+		return nil, nil, backupjobs.ReasonDrillCountsMismatch, err
 	}
 	if len(sourceMeta.Tables) == 0 {
 		j.logger.Warn("source dump carries no table counts (pre-PR2 artifact) — sanity degrades to schema version only")
 	}
 	gotTables, gotVersion, err := j.readCounts(ctx, dir, drillDatabase)
 	if err != nil {
-		return nil, nil, ReasonDrillRestoreFailed, fmt.Errorf("query restored cluster: %w", err)
+		return nil, nil, backupjobs.ReasonDrillRestoreFailed, fmt.Errorf("query restored cluster: %w", err)
 	}
 	if err := compareCounts(sourceMeta, gotTables, gotVersion); err != nil {
-		return nil, nil, ReasonDrillCountsMismatch, err
+		return nil, nil, backupjobs.ReasonDrillCountsMismatch, err
 	}
 
 	meta := map[string]any{
@@ -307,7 +309,7 @@ func (j *DrillJob) download(ctx context.Context, key, path string) (string, erro
 // decrypt turns the spooled ciphertext into the pg_restore input. A plaintext
 // artifact (explicit BACKUP_ALLOW_PLAINTEXT deployments, ".dump" with no
 // ".age") passes through untouched.
-func (j *DrillJob) decrypt(src *DumpRunRef, spoolPath, dumpPath string) (string, error) {
+func (j *DrillJob) decrypt(src *backupjobs.DumpRunRef, spoolPath, dumpPath string) (string, error) {
 	if !strings.HasSuffix(src.Key, ".age") {
 		return spoolPath, nil
 	}

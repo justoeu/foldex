@@ -90,7 +90,7 @@ func TestImportRoundTripsStayBoundedAsInputGrows(t *testing.T) {
 	largeUID := testdb.SeedUser(t, base, "roundtrips-large@test.local", "admin")
 
 	counter := &roundTripCounter{}
-	h := NewHandler(tracedPool(t, base, counter), nil)
+	h := NewHandler(NewStager(tracedPool(t, base, counter)), nil)
 	small := runCountedImport(t, h, counter, smallUID, "small-roundtrips", 4, modeSkip)
 	large := runCountedImport(t, h, counter, largeUID, "large-roundtrips", 200, modeSkip)
 	smallWipe := runCountedImport(t, h, counter, smallUID, "small-roundtrips", 4, modeWipe)
@@ -121,7 +121,7 @@ func TestStagedImport_EnqueuesOnlyAfterCommit(t *testing.T) {
 	pool := testdb.Shared(t)
 	uid := testdb.SeedUser(t, pool, "enqueue-after-commit@test.local", "admin")
 	enqueuer := &commitObservingEnqueuer{pool: pool}
-	h := NewHandler(pool, enqueuer)
+	h := NewHandler(NewStager(pool), enqueuer)
 
 	imported, skipped, wiped, warnings, err := h.importItemsWithMode(context.Background(), uid, []Item{{
 		URL: "https://enqueue-after-commit.example", Title: "Committed",
@@ -161,7 +161,7 @@ func TestStagedImport_StopsPreviewEnqueuesAtFirstQueueFull(t *testing.T) {
 	pool := testdb.Shared(t)
 	uid := testdb.SeedUser(t, pool, "enqueue-queue-full@test.local", "admin")
 	enqueuer := &queueFullEnqueuer{fullAt: fullAt}
-	h := NewHandler(pool, enqueuer)
+	h := NewHandler(NewStager(pool), enqueuer)
 
 	imported, skipped, wiped, warnings, err := h.importItemsWithMode(
 		context.Background(), uid, importRoundTripFixture("enqueue-queue-full", itemCount), modeSkip, nil,

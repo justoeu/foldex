@@ -6,6 +6,8 @@ import pickerSrc from './components/ConflictModePicker.tsx?raw'
 import fieldsSrc from './components/ColorModeFields.tsx?raw'
 import gradSrc from './components/GradientPicker.tsx?raw'
 import adminSrc from './api/admin.ts?raw'
+import authSrc from './api/auth.ts?raw'
+import folderPayloadSrc from './lib/folderDialogPayload.ts?raw'
 import createUserSrc from './components/admin/CreateUserDialog.tsx?raw'
 import sessionsSrc from './components/account/SessionsSection.tsx?raw'
 import typesSrc from './auth/types.ts?raw'
@@ -94,5 +96,14 @@ describe('web deadcode contracts', () => {
     expect(noteControllerSrc).toMatch(/apiErrorMessage/)
     expect(noteControllerSrc).not.toMatch(/function responseMessage/)
     expect(noteControllerSrc).not.toMatch(/function responseStatus/)
+  })
+
+  it('api modules do not import upward from hooks', () => {
+    expect(authSrc).not.toMatch(/from ['"]\.\.\/hooks/)
+    expect(adminSrc).not.toMatch(/from ['"]\.\.\/hooks/)
+  })
+
+  it('lib modules do not import upward from components', () => {
+    expect(folderPayloadSrc).not.toMatch(/from ['"]\.\.\/components/)
   })
 })

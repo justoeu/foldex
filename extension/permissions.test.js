@@ -1,4 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const EN_MESSAGES = JSON.parse(
+  readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "_locales/en/messages.json"),
+    "utf8",
+  ),
+);
 
 import {
   getStoredConfig,
@@ -64,7 +74,25 @@ function mockChrome({
     writes: [],
     events: [],
   };
+  const messages = EN_MESSAGES;
   const chromeApi = {
+    i18n: {
+      getMessage(key, substitutions) {
+        const entry = messages[key];
+        if (!entry) return "";
+        let text = entry.message;
+        const list =
+          substitutions == null
+            ? []
+            : Array.isArray(substitutions)
+              ? substitutions
+              : [substitutions];
+        list.forEach((value, i) => {
+          text = text.replaceAll("$" + (i + 1), String(value));
+        });
+        return text;
+      },
+    },
     runtime: { openOptionsPage() {} },
     tabs: {
       async query() {
@@ -132,6 +160,29 @@ describe("optional Foldex origin access", () => {
       "http://*/*",
       "https://*/*",
     ]);
+  });
+
+  test("declares only permissions the code actually calls", async () => {
+    const manifest = await Bun.file(
+      new URL("./manifest.json", import.meta.url),
+    ).json();
+    const sources = await Promise.all(
+      ["popup.js", "options.js", "config.js"].map((name) =>
+        Bun.file(new URL(`./${name}`, import.meta.url)).text(),
+      ),
+    );
+
+    const namespaces = new Set();
+    for (const match of sources.join("\n").matchAll(/chromeApi\.(\w+)/g)) {
+      namespaces.add(match[1]);
+    }
+
+    // runtime is permission-free; popup queries the active tab only after a
+    // user gesture, which is exactly what activeTab grants.
+    expect(namespaces).toEqual(
+      new Set(["runtime", "tabs", "permissions", "storage"]),
+    );
+    expect(manifest.permissions.sort()).toEqual(["activeTab", "storage"]);
   });
 
   test("normalizes the backend URL while retaining a reverse-proxy path", () => {

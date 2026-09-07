@@ -1,4 +1,4 @@
-package backupagent
+package backupjobs
 
 import (
 	"testing"

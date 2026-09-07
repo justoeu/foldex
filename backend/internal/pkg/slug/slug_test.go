@@ -101,49 +101,9 @@ func TestIsValid(t *testing.T) {
 	}
 }
 
-func TestUniqueAvailable(t *testing.T) {
-	taken := map[string]bool{"foo": true, "foo-2": true}
-	got, err := UniqueAvailable(context.Background(), "foo", func(_ context.Context, c string) (bool, error) {
-		return taken[c], nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "foo-3" {
-		t.Fatalf("got %q want foo-3", got)
-	}
-}
-
-func TestUniqueAvailableReservesSpaceForSuffix(t *testing.T) {
-	base := strings.Repeat("word-", 15) + "abcde"
-	seen := make(map[string]struct{})
-
-	got, err := UniqueAvailable(t.Context(), base, func(_ context.Context, candidate string) (bool, error) {
-		if len(candidate) > MaxLen {
-			t.Fatalf("candidate %q has len %d, must be <= %d", candidate, len(candidate), MaxLen)
-		}
-		if !IsValid(candidate) {
-			t.Fatalf("candidate %q is invalid", candidate)
-		}
-		if _, duplicate := seen[candidate]; duplicate {
-			t.Fatalf("candidate %q was tried more than once", candidate)
-		}
-		seen[candidate] = struct{}{}
-		return len(seen) < 102, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasSuffix(got, "-102") {
-		t.Fatalf("got %q, want suffix -102", got)
-	}
-}
-
-func TestUniqueAvailablePreservesCompleteBoundarySegment(t *testing.T) {
+func TestAllocatorPreservesCompleteBoundarySegment(t *testing.T) {
 	base := strings.Repeat("1", 78) + "-a-2"
-	got, err := UniqueAvailable(t.Context(), base, func(_ context.Context, candidate string) (bool, error) {
-		return false, nil
-	})
+	got, err := NewAllocator(nil).Allocate(base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,11 +115,9 @@ func TestUniqueAvailablePreservesCompleteBoundarySegment(t *testing.T) {
 	}
 }
 
-func TestUniqueAvailableKeepsTruncatedCandidateNonNumeric(t *testing.T) {
+func TestAllocatorKeepsTruncatedCandidateNonNumeric(t *testing.T) {
 	base := strings.Repeat("1", MaxLen) + "-a"
-	got, err := UniqueAvailable(t.Context(), base, func(_ context.Context, candidate string) (bool, error) {
-		return false, nil
-	})
+	got, err := NewAllocator(nil).Allocate(base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,4 +285,13 @@ func randomValidBase(rng *rand.Rand) string {
 		total += n + 1
 	}
 	return strings.Join(parts, "-")
+}
+
+func TestInvalidFormatMessageMatchesMaxLen(t *testing.T) {
+	// The message quotes the cap the predicate enforces; if MaxLen moves and
+	// the message text does not, users get told a rule the server no longer
+	// applies.
+	if !strings.Contains(InvalidFormatMessage, fmt.Sprintf("max %d chars", MaxLen)) {
+		t.Fatalf("InvalidFormatMessage does not quote MaxLen=%d", MaxLen)
+	}
 }
