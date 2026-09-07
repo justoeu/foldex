@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
@@ -199,6 +199,48 @@ describe('useRecentChanges', () => {
     const { result } = renderHook(() => useRecentChanges(7, 10), { wrapper })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(Array.isArray(result.current.data)).toBe(true)
+  })
+
+  // N1-NEX-003: the poll never stopped even when there was nothing to
+  // report — ~1,440 GETs/day per open tab for a user with zero monitored
+  // links. It must stand down once the list is empty (entries.ts's
+  // preview-status poll already returns false the same way).
+  it('stops polling once the list is empty, and resumes after activity', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    // One client for both hooks — the pause/resume contract crosses the
+    // seen-change invalidation into the poll's cache.
+    const client = makeQueryClient()
+    const sharedWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const recentCalls = () =>
+      (http.get as ReturnType<typeof vi.spyOn>).mock.calls
+        .filter(([u]: [string]) => u.startsWith('/api/links/recent-changes')).length
+
+    const { result } = renderHook(() => useRecentChanges(7, 10), { wrapper: sharedWrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toEqual([])
+    expect(recentCalls()).toBe(1)
+
+    await act(() => vi.advanceTimersByTimeAsync(3 * 60_000))
+    expect(recentCalls()).toBe(1)
+
+    // Real activity re-arms it: MarkChangeSeen invalidates the key, and
+    // the next answer being non-empty restores the interval.
+    state.links.push({
+      id: 2, url: 'https://rc2', title: 'RC2', click_count: 0,
+      preview_status: 'ok', created_at: '', updated_at: '', tags: [],
+      last_change_detected_at: '2026-01-01T00:00:00Z',
+    } as any)
+    const seen = renderHook(() => useMarkChangeSeen(), { wrapper: sharedWrapper })
+    await act(async () => {
+      await seen.result.current.mutateAsync(2)
+    })
+    await waitFor(() => expect(recentCalls()).toBeGreaterThan(1))
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000))
+    expect(recentCalls()).toBeGreaterThan(2)
+    vi.useRealTimers()
   })
 })
 

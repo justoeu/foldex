@@ -227,7 +227,11 @@ export function useRecentChanges(days = 7, limit = 20, enabled = true) {
       const { data } = await http.get<Link[]>(`/api/links/recent-changes?days=${days}&limit=${limit}`)
       return data
     },
-    refetchInterval: 60_000,
+    // Stand down while there is nothing to report — the sidebar hides the
+    // section on an empty answer, so an unconditional minute tick was pure
+    // background traffic (~1,440 GETs/day per tab). MarkChangeSeen's
+    // invalidation re-evaluates the interval after real activity.
+    refetchInterval: (query) => ((query.state.data?.length ?? 0) > 0 ? 60_000 : false),
     enabled,
   })
 }
