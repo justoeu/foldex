@@ -1,16 +1,12 @@
 import {
   apiUrl,
+  authHeaders,
+  credentialProblem,
   getStoredConfig,
   normalizeBaseUrl,
   requestOriginAccess,
   setStoredConfig,
 } from "./config.js";
-
-function authHeaders(token) {
-  const headers = {};
-  if (token) headers.Authorization = "Bearer " + token;
-  return headers;
-}
 
 function normalizeOptions(values) {
   return {
@@ -34,12 +30,11 @@ export async function testConnection(
   await requestOriginAccess(config.baseUrl, chromeApi);
 
   const resp = await fetchImpl(apiUrl(config.baseUrl, "/api/tags"), {
-    headers: authHeaders(config.apiToken),
+    headers: authHeaders(config),
     redirect: "error",
   });
-  if (resp.status === 401 || resp.status === 403) {
-    throw new Error("the server rejected the token (HTTP " + resp.status + ")");
-  }
+  const problem = credentialProblem(resp.status);
+  if (problem) throw new Error(problem);
   if (!resp.ok) throw new Error("HTTP " + resp.status);
   const tags = await resp.json();
   return tags.length;

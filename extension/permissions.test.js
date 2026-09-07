@@ -414,3 +414,80 @@ describe("optional Foldex origin access", () => {
     });
   });
 });
+
+describe("error and auth contract shared across surfaces", () => {
+  test("saveLink surfaces the envelope's message instead of raw JSON", async () => {
+    const { chromeApi } = mockChrome();
+    const fetchImpl = async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: { code: "url_taken", message: "url already bookmarked" },
+      }),
+      text: async () =>
+        JSON.stringify({
+          error: { code: "url_taken", message: "url already bookmarked" },
+        }),
+    });
+
+    await expect(
+      saveLink(
+        { baseUrl: "http://localhost:9089", apiToken: "fx_token" },
+        { url: "https://example.com" },
+        { chromeApi, fetchImpl },
+      ),
+    ).rejects.toThrow(/^url already bookmarked$/);
+  });
+
+  test("saveLink keeps a bounded HTTP fallback for non-JSON bodies", async () => {
+    const { chromeApi } = mockChrome();
+    const fetchImpl = async () => ({
+      ok: false,
+      status: 502,
+      json: async () => {
+        throw new Error("not json");
+      },
+      text: async () => "x".repeat(500),
+    });
+
+    await expect(
+      saveLink(
+        { baseUrl: "http://localhost:9089", apiToken: "fx_token" },
+        { url: "https://example.com" },
+        { chromeApi, fetchImpl },
+      ),
+    ).rejects.toThrow(/^HTTP 502 .{0,120}$/);
+  });
+
+  test("testConnection maps 401/403 with the same wording as the popup", async () => {
+    const { chromeApi } = mockChrome();
+    const fetch401 = async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({}),
+      text: async () => "",
+    });
+
+    await expect(
+      testConnection(
+        { baseUrl: "http://localhost:9089", apiToken: "bad" },
+        { chromeApi, fetchImpl: fetch401 },
+      ),
+    ).rejects.toThrow("not signed in — set an API token in settings");
+  });
+
+  test("authHeaders and credentialProblem live in config.js, one shape for both surfaces", async () => {
+    const { authHeaders, credentialProblem } = await import("./config.js");
+
+    expect(authHeaders({ apiToken: "tok" }, true)).toEqual({
+      "Content-Type": "application/json",
+      Authorization: "Bearer tok",
+    });
+    expect(authHeaders({ apiToken: "" })).toEqual({});
+    expect(credentialProblem(401)).toBe(
+      "not signed in — set an API token in settings",
+    );
+    expect(credentialProblem(403)).toBe("this token is not allowed here");
+    expect(credentialProblem(500)).toBe(null);
+  });
+});

@@ -35,6 +35,24 @@ export function apiUrl(baseUrl, path) {
   return normalizeBaseUrl(baseUrl) + path;
 }
 
+// One header builder for both surfaces (popup + options). The two files
+// used to carry divergent shapes for the same job.
+export function authHeaders(config, includeContentType = false) {
+  const headers = {};
+  if (includeContentType) headers['Content-Type'] = 'application/json';
+  if (config.apiToken) headers.Authorization = 'Bearer ' + config.apiToken;
+  return headers;
+}
+
+// One wording for credential failures, shared by the popup and the
+// options page — the 401 hint about setting a token used to exist only on
+// the popup arm.
+export function credentialProblem(status) {
+  if (status === 401) return 'not signed in — set an API token in settings';
+  if (status === 403) return 'this token is not allowed here';
+  return null;
+}
+
 function permissionError(baseUrl) {
   const origin = new URL(normalizeBaseUrl(baseUrl)).origin;
   return new Error(
