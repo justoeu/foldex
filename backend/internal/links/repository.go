@@ -13,6 +13,7 @@ import (
 	"foldex/internal/entityrefs"
 	"foldex/internal/folders"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/crudupdate"
 	"foldex/internal/pkg/domainerr"
 	"foldex/internal/pkg/listquery"
 	"foldex/internal/pkg/pgerr"
@@ -249,38 +250,80 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	}
 	defer tx.Rollback(ctx)
 
-	sets := []string{}
-	args := []any{}
-	i := 1
-	resetCheckConditions := []string{}
+	b := &crudupdate.SetBuilder{}
+	resetCheckConditions, err := applyLinkColumns(ctx, tx, uid, id, b, in)
+	if err != nil {
+		return Link{}, err
+	}
+	if len(resetCheckConditions) > 0 {
+		appendCheckResetCases(b, strings.Join(resetCheckConditions, " OR "))
+	}
+	if !b.Empty() {
+		if err := crudupdate.Exec(ctx, tx, crudupdate.Request{
+			Entity:   "link",
+			UID:      uid,
+			ID:       id,
+			IfMatch:  in.IfMatchUpdatedAt,
+			StaleErr: ErrStaleWrite,
+			Translate: func(err error) error {
+				if isURLUniqueViolation(err) {
+					return ErrURLTaken
+				}
+				if isSlugUniqueViolation(err) {
+					return ErrSlugTaken
+				}
+				return nil
+			},
+		}, b); err != nil {
+			return Link{}, err
+		}
+	}
+	if err := crudupdate.SetEntityTags(ctx, tx, "link", uid, id, crudupdate.TagChanges{
+		TagIDs:      in.TagIDs,
+		PendingTags: in.PendingTags,
+	}); err != nil {
+		return Link{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Link{}, err
+	}
+	return r.Get(ctx, uid, id)
+}
+
+// appendCheckResetCases fans the changed-value predicates out over the whole
+// change-check column group: when any watched input actually changed, the
+// stored baseline (fingerprint, detection timestamps, seen marker, last
+// error) is wiped so the next check starts clean.
+func appendCheckResetCases(b *crudupdate.SetBuilder, resetCondition string) {
+	for _, col := range []string{"last_checked_at", "last_fingerprint", "last_change_detected_at", "change_seen_at", "last_check_error"} {
+		b.Raw(fmt.Sprintf("%s = CASE WHEN %s THEN NULL ELSE %s END", col, resetCondition, col))
+	}
+}
+
+// applyLinkColumns writes the caller-supplied column assignments of a PATCH
+// onto b. It returns the change-check reset conditions: the "value actually
+// changed" predicates for the columns whose edit invalidates the stored
+// fingerprint baseline.
+func applyLinkColumns(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int64, b *crudupdate.SetBuilder, in UpdateInput) ([]string, error) {
+	var resetCheckConditions []string
 	if in.URL != nil {
-		sets = append(sets, fmt.Sprintf("url = $%d", i))
-		resetCheckConditions = append(resetCheckConditions, fmt.Sprintf("url IS DISTINCT FROM $%d", i))
-		args = append(args, strings.TrimSpace(*in.URL))
-		i++
+		arg := b.Set("url", strings.TrimSpace(*in.URL))
+		resetCheckConditions = append(resetCheckConditions, fmt.Sprintf("url IS DISTINCT FROM $%d", arg))
 	}
 	if in.Title != nil {
-		sets = append(sets, fmt.Sprintf("title = $%d", i))
-		args = append(args, strings.TrimSpace(*in.Title))
-		i++
+		b.Set("title", strings.TrimSpace(*in.Title))
 	}
 	if in.Description != nil {
-		sets = append(sets, fmt.Sprintf("description = $%d", i))
-		args = append(args, *in.Description)
-		i++
+		b.Set("description", *in.Description)
 	}
 	if in.Pinned != nil {
-		sets = append(sets, fmt.Sprintf("pinned = $%d", i))
-		args = append(args, *in.Pinned)
-		i++
+		b.Set("pinned", *in.Pinned)
 	}
 	// folder_id: only writes when the JSON payload included the field
 	// (FolderIDSet). FolderID == nil + FolderIDSet means "clear", which the
 	// driver translates to NULL.
 	if in.FolderIDSet {
-		sets = append(sets, fmt.Sprintf("folder_id = $%d", i))
-		args = append(args, in.FolderID)
-		i++
+		b.Set("folder_id", in.FolderID)
 	}
 	// slug: tri-state same as folder_id, except `null` doesn't mean "clear"
 	// (slug is NOT NULL) — it means "regenerate from current title". We need
@@ -289,11 +332,9 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	if in.SlugSet {
 		newSlug, err := sharedslug.ResolveUpdate(ctx, tx, uid, "link", id, in.Slug, in.Title, "link")
 		if err != nil {
-			return Link{}, err
+			return nil, err
 		}
-		sets = append(sets, fmt.Sprintf("slug = $%d", i))
-		args = append(args, newSlug)
-		i++
+		b.Set("slug", newSlug)
 	}
 	// check_interval: tri-state. CheckIntervalSet=true + CheckInterval=nil means
 	// "opt-out" — clearing the full change-check column group (fingerprint,
@@ -301,87 +342,10 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	// a stale "you have updates" badge from before. Reconfiguring the interval
 	// or URL also resets the baseline and makes the link immediately due.
 	if in.CheckIntervalSet {
-		sets = append(sets, fmt.Sprintf("check_interval = $%d", i))
-		resetCheckConditions = append(resetCheckConditions, fmt.Sprintf("check_interval IS DISTINCT FROM $%d", i))
-		args = append(args, in.CheckInterval)
-		i++
+		arg := b.Set("check_interval", in.CheckInterval)
+		resetCheckConditions = append(resetCheckConditions, fmt.Sprintf("check_interval IS DISTINCT FROM $%d", arg))
 	}
-	if len(resetCheckConditions) > 0 {
-		resetCondition := strings.Join(resetCheckConditions, " OR ")
-		sets = append(sets,
-			fmt.Sprintf("last_checked_at = CASE WHEN %s THEN NULL ELSE last_checked_at END", resetCondition),
-			fmt.Sprintf("last_fingerprint = CASE WHEN %s THEN NULL ELSE last_fingerprint END", resetCondition),
-			fmt.Sprintf("last_change_detected_at = CASE WHEN %s THEN NULL ELSE last_change_detected_at END", resetCondition),
-			fmt.Sprintf("change_seen_at = CASE WHEN %s THEN NULL ELSE change_seen_at END", resetCondition),
-			fmt.Sprintf("last_check_error = CASE WHEN %s THEN NULL ELSE last_check_error END", resetCondition),
-		)
-	}
-	if len(sets) > 0 {
-		sets = append(sets, "updated_at = now()")
-		args = append(args, int64(uid), id)
-		where := fmt.Sprintf(`WHERE user_id = $%d AND id = $%d`, i, i+1)
-		i++
-		if in.IfMatchUpdatedAt != nil {
-			i++
-			args = append(args, *in.IfMatchUpdatedAt)
-			where += fmt.Sprintf(` AND updated_at = $%d`, i)
-		}
-		q := fmt.Sprintf(`UPDATE link SET %s %s`, strings.Join(sets, ", "), where)
-		ct, err := tx.Exec(ctx, q, args...)
-		if err != nil {
-			if isURLUniqueViolation(err) {
-				return Link{}, ErrURLTaken
-			}
-			if isSlugUniqueViolation(err) {
-				return Link{}, ErrSlugTaken
-			}
-			return Link{}, fmt.Errorf("update link: %w", err)
-		}
-		if ct.RowsAffected() == 0 {
-			if in.IfMatchUpdatedAt != nil {
-				var exists bool
-				if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM link WHERE user_id = $1 AND id = $2)`, int64(uid), id).Scan(&exists); err != nil {
-					return Link{}, fmt.Errorf("check link exists: %w", err)
-				}
-				if exists {
-					return Link{}, ErrStaleWrite
-				}
-			}
-			return Link{}, domainerr.ErrNotFound
-		}
-	}
-	if in.TagIDs != nil || len(in.PendingTags) > 0 {
-		// A tag-only PATCH still must not touch a link the caller does not own:
-		// nothing above ran a WHERE user_id when `sets` was empty.
-		if err := assertLinkOwned(ctx, tx, uid, id); err != nil {
-			return Link{}, err
-		}
-		tagIDs := []int64(nil)
-		if in.TagIDs != nil {
-			tagIDs = *in.TagIDs
-		}
-		if err := tags.SetEntityTagsWithPending(ctx, tx, uid, "link", id, tagIDs, in.PendingTags); err != nil {
-			return Link{}, err
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return Link{}, err
-	}
-	return r.Get(ctx, uid, id)
-}
-
-// assertLinkOwned reports ErrNotFound unless the link belongs to uid.
-func assertLinkOwned(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int64) error {
-	var exists bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM link WHERE user_id = $1 AND id = $2)`,
-		int64(uid), id).Scan(&exists); err != nil {
-		return fmt.Errorf("check link owner: %w", err)
-	}
-	if !exists {
-		return domainerr.ErrNotFound
-	}
-	return nil
+	return resetCheckConditions, nil
 }
 
 // Delete removes a link and its dependent link_tag/click_log rows. The
@@ -398,7 +362,7 @@ func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64) e
 	// Ownership is proven first: link_tag and click_log carry no user_id, so
 	// their DELETEs cannot be scoped and would otherwise purge another tenant's
 	// rows for a colliding entity_id before the link DELETE reported 404.
-	if err := assertLinkOwned(ctx, tx, uid, id); err != nil {
+	if err := crudupdate.AssertOwned(ctx, tx, "link", uid, id); err != nil {
 		return err
 	}
 	if err := entityrefs.PurgeOne(ctx, tx, "link", id); err != nil {

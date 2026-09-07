@@ -15,6 +15,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/notemedia"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/crudupdate"
 	"foldex/internal/pkg/domainerr"
 	"foldex/internal/pkg/htmlsanitize"
 	"foldex/internal/pkg/listquery"
@@ -215,88 +216,33 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	}
 	defer tx.Rollback(ctx)
 
-	sets := []string{}
-	args := []any{}
-	i := 1
-	var mediaKeys []string
-	if in.Title != nil {
-		sets = append(sets, fmt.Sprintf("title = $%d", i))
-		args = append(args, *in.Title)
-		i++
+	b := &crudupdate.SetBuilder{}
+	mediaKeys, err := applyNoteColumns(ctx, tx, uid, id, b, in)
+	if err != nil {
+		return Note{}, err
 	}
-	if in.BodyHTML != nil {
-		// Defense in depth — see the matching comment in Create.
-		bodyHTML := htmlsanitize.Sanitize(*in.BodyHTML)
-		mediaKeys = notemedia.Keys(bodyHTML)
-		sets = append(sets, fmt.Sprintf("body_html = $%d", i))
-		args = append(args, bodyHTML)
-		i++
-		sets = append(sets, fmt.Sprintf("body_text = $%d", i))
-		args = append(args, htmlsanitize.PlainText(bodyHTML))
-		i++
-	}
-	if in.Pinned != nil {
-		sets = append(sets, fmt.Sprintf("pinned = $%d", i))
-		args = append(args, *in.Pinned)
-		i++
-	}
-	if in.FolderIDSet {
-		sets = append(sets, fmt.Sprintf("folder_id = $%d", i))
-		args = append(args, in.FolderID)
-		i++
-	}
-	if in.SlugSet {
-		newSlug, err := slug.ResolveUpdate(ctx, tx, uid, "note", id, in.Slug, in.Title, "note")
-		if err != nil {
-			return Note{}, err
-		}
-		sets = append(sets, fmt.Sprintf("slug = $%d", i))
-		args = append(args, newSlug)
-		i++
-	}
-	if len(sets) > 0 {
-		sets = append(sets, "updated_at = now()")
-		args = append(args, int64(uid), id)
-		where := fmt.Sprintf(`WHERE user_id = $%d AND id = $%d`, i, i+1)
-		i++
-		if in.IfMatchUpdatedAt != nil {
-			i++
-			args = append(args, *in.IfMatchUpdatedAt)
-			where += fmt.Sprintf(` AND updated_at = $%d`, i)
-		}
-		q := fmt.Sprintf(`UPDATE note SET %s %s`, strings.Join(sets, ", "), where)
-		ct, err := tx.Exec(ctx, q, args...)
-		if err != nil {
-			if isSlugUniqueViolation(err) {
-				return Note{}, ErrSlugTaken
-			}
-			return Note{}, fmt.Errorf("update note: %w", err)
-		}
-		if ct.RowsAffected() == 0 {
-			if in.IfMatchUpdatedAt != nil {
-				var exists bool
-				if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM note WHERE user_id = $1 AND id = $2)`, int64(uid), id).Scan(&exists); err != nil {
-					return Note{}, fmt.Errorf("check note exists: %w", err)
+	if !b.Empty() {
+		if err := crudupdate.Exec(ctx, tx, crudupdate.Request{
+			Entity:   "note",
+			UID:      uid,
+			ID:       id,
+			IfMatch:  in.IfMatchUpdatedAt,
+			StaleErr: ErrStaleWrite,
+			Translate: func(err error) error {
+				if isSlugUniqueViolation(err) {
+					return ErrSlugTaken
 				}
-				if exists {
-					return Note{}, ErrStaleWrite
-				}
-			}
-			return Note{}, domainerr.ErrNotFound
+				return nil
+			},
+		}, b); err != nil {
+			return Note{}, err
 		}
 	}
-	if in.TagIDs != nil || len(in.PendingTags) > 0 {
-		// A tag-only PATCH ran no owner-scoped UPDATE above; prove ownership.
-		if err := assertNoteOwned(ctx, tx, uid, id); err != nil {
-			return Note{}, err
-		}
-		tagIDs := []int64(nil)
-		if in.TagIDs != nil {
-			tagIDs = *in.TagIDs
-		}
-		if err := tags.SetEntityTagsWithPending(ctx, tx, uid, "note", id, tagIDs, in.PendingTags); err != nil {
-			return Note{}, err
-		}
+	if err := crudupdate.SetEntityTags(ctx, tx, "note", uid, id, crudupdate.TagChanges{
+		TagIDs:      in.TagIDs,
+		PendingTags: in.PendingTags,
+	}); err != nil {
+		return Note{}, err
 	}
 	var releasedMedia []string
 	if in.BodyHTML != nil {
@@ -312,18 +258,35 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	return r.Get(ctx, uid, id)
 }
 
-// assertNoteOwned reports ErrNotFound unless the note belongs to uid.
-func assertNoteOwned(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int64) error {
-	var exists bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM note WHERE user_id = $1 AND id = $2)`,
-		int64(uid), id).Scan(&exists); err != nil {
-		return fmt.Errorf("check note owner: %w", err)
+// applyNoteColumns writes the caller-supplied column assignments of a PATCH
+// onto b, returning the media keys referenced by the new body (for the
+// post-commit reference sync).
+func applyNoteColumns(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int64, b *crudupdate.SetBuilder, in UpdateInput) ([]string, error) {
+	var mediaKeys []string
+	if in.Title != nil {
+		b.Set("title", *in.Title)
 	}
-	if !exists {
-		return domainerr.ErrNotFound
+	if in.BodyHTML != nil {
+		// Defense in depth — see the matching comment in Create.
+		bodyHTML := htmlsanitize.Sanitize(*in.BodyHTML)
+		mediaKeys = notemedia.Keys(bodyHTML)
+		b.Set("body_html", bodyHTML)
+		b.Set("body_text", htmlsanitize.PlainText(bodyHTML))
 	}
-	return nil
+	if in.Pinned != nil {
+		b.Set("pinned", *in.Pinned)
+	}
+	if in.FolderIDSet {
+		b.Set("folder_id", in.FolderID)
+	}
+	if in.SlugSet {
+		newSlug, err := slug.ResolveUpdate(ctx, tx, uid, "note", id, in.Slug, in.Title, "note")
+		if err != nil {
+			return nil, err
+		}
+		b.Set("slug", newSlug)
+	}
+	return mediaKeys, nil
 }
 
 // Delete removes a note and its dependent link_tag/click_log rows (app-level
@@ -338,7 +301,7 @@ func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, s
 	}
 	defer tx.Rollback(ctx)
 
-	if err := assertNoteOwned(ctx, tx, uid, id); err != nil {
+	if err := crudupdate.AssertOwned(ctx, tx, "note", uid, id); err != nil {
 		return err
 	}
 	releasedMedia, err := notemedia.ReleaseNoteRefs(ctx, tx, uid, id)
