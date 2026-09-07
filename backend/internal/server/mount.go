@@ -44,6 +44,19 @@ func mountFrontDoor(r chi.Router, d Deps) {
 		}
 		d.Logger.Info("trusted reverse proxies: X-Forwarded-For is believed ONLY from these",
 			"networks", strings.Join(nets, ","), "count", len(trustedNets))
+		if coversLANClientRanges(trustedNets) {
+			// The walk skips every hop inside the trust set, so a set that
+			// includes the CLIENTS' own range makes an honest RFC1918 client
+			// vanish (all hops trusted → everyone collapses onto the proxy's
+			// address and the per-IP login bucket becomes one global bucket),
+			// while a spoofing client gets its own XFF value adopted verbatim.
+			// Explicitly configured, so honoured — but never silently.
+			d.Logger.Warn("TRUSTED_PROXY_IPS covers LAN client ranges (10.0.0.0/8 or " +
+				"192.168.0.0/16): X-Forwarded-For from those clients will be believed and " +
+				"honest clients behind the proxy collapse onto its address — narrow the " +
+				"set to the ranges your proxies actually live in (the compose default is " +
+				"172.16.0.0/12)")
+		}
 	}
 	if len(trustedNets) == 0 && !isLoopbackBind(d.Config.BindAddr) {
 		d.Logger.Warn("TRUSTED_PROXY_IPS is empty on a non-loopback bind — if a reverse " +

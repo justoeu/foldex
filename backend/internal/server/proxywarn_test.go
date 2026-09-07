@@ -150,3 +150,39 @@ func TestBoot_SaysNothingAboutNetworksWhenThereAreNone(t *testing.T) {
 		t.Errorf("an empty set must not produce the inventory line; got:\n%s", out)
 	}
 }
+
+// SEC-SEN-003/004: the shipped compose default once named all of RFC1918, so
+// every LAN client was itself a "trusted proxy". Trusting a range the CLIENTS
+// live in does two quiet damages: an honest RFC1918 client behind nginx is
+// SKIPPED by the right-to-left walk (all hops trusted → every user collapses
+// onto the proxy's address, one shared login width bucket), and a spoofing
+// client gets its own XFF value adopted verbatim. An operator who deliberately
+// widens the set must be told that is what they bought — the only alternative
+// to the warning is discovering it as an unexplainable login lockout.
+func TestBootWarnsWhenTrustedProxiesCoverLANClientRanges(t *testing.T) {
+	t.Parallel()
+	out := bootLog(t, config.Config{
+		BindAddr:        "0.0.0.0:9089",
+		TrustedProxyIPs: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+	})
+	if !strings.Contains(out, "covers LAN client ranges") {
+		t.Fatalf("no warning for a trust set that includes the clients themselves: %s", out)
+	}
+	if !strings.Contains(out, `"level":"WARN"`) {
+		t.Errorf("expected WARN level: %s", out)
+	}
+}
+
+// 172.16.0.0/12 is where compose allocates the foldex network — the shipped
+// default. Warning on it would be noise on every correct install, and noise is
+// how operators learn to ignore the real warnings.
+func TestBootIsSilentWhenOnlyTheComposeBridgeRangeIsTrusted(t *testing.T) {
+	t.Parallel()
+	out := bootLog(t, config.Config{
+		BindAddr:        "0.0.0.0:9089",
+		TrustedProxyIPs: "172.16.0.0/12",
+	})
+	if strings.Contains(out, "covers LAN client ranges") {
+		t.Fatalf("warned about the docker bridge range, which is exactly the set the proxy lives in: %s", out)
+	}
+}
