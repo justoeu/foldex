@@ -1,3 +1,5 @@
+export type ColorMode = 'solid' | 'gradient'
+
 export const DEFAULT_ENTITY_COLORS = [
   '#6366F1',
   '#0EA5E9',
