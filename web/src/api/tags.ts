@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
+import { invalidateLibrary } from './entries'
 import type { Tag, TagCreate } from './types'
 
 export function useTags() {
   return useQuery({
     queryKey: ['tags'],
-    queryFn: async () => {
-      const { data } = await http.get<Tag[]>('/api/tags')
+    queryFn: async ({ signal }) => {
+      const { data } = await http.get<Tag[]>('/api/tags', { signal })
       return data
     },
   })
@@ -31,9 +32,7 @@ export function useUpdateTag() {
       return data
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['tags'] })
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
+      invalidateLibrary(qc, { tags: true, links: true, entries: true })
     },
   })
 }
@@ -45,9 +44,7 @@ export function useDeleteTag() {
       await http.delete(`/api/tags/${id}`)
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['tags'] })
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
+      invalidateLibrary(qc, { tags: true, links: true, entries: true })
     },
   })
 }

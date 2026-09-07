@@ -1,6 +1,12 @@
 import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query'
 import { http } from './client'
-import { cachedEntryFolderId, invalidateEntryCounts, mapCachedLinkEntries, removeCachedEntry } from './entries'
+import {
+  cachedEntryFolderId,
+  invalidateLibrary,
+  mapCachedLinkEntries,
+  optimisticEntryPatch,
+  removeCachedEntry,
+} from './entries'
 import type { Link, LinkCreate, LinkUpdate } from './types'
 
 type LinksCache = InfiniteData<Link[]>
@@ -40,13 +46,7 @@ export function useCreateLink() {
       const { data } = await http.post<Link>('/api/links', body)
       return data
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['tags'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      invalidateEntryCounts(qc)
-    },
+    onSuccess: () => invalidateLibrary(qc, { links: true, entries: true, tags: true, folders: true, counts: true }),
   })
 }
 
@@ -94,13 +94,7 @@ export function useDeleteLink() {
     mutationFn: async (id: number) => {
       await http.delete(`/api/links/${id}`)
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['tags'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      invalidateEntryCounts(qc)
-    },
+    onSuccess: () => invalidateLibrary(qc, { links: true, entries: true, tags: true, folders: true, counts: true }),
   })
 }
 
@@ -111,27 +105,9 @@ export function usePinLink() {
       const { data } = await http.patch<Link>(`/api/links/${id}`, { pinned })
       return data
     },
-    onMutate: async ({ id, pinned }) => {
-      await qc.cancelQueries({ queryKey: ['links'] })
-      await qc.cancelQueries({ queryKey: ['entries'] })
-      // The grid and sidebar keep separate caches for the same link.
-      const linkSnapshots = qc.getQueriesData<LinksCache>({ queryKey: ['links'] })
-      const entrySnapshots = qc.getQueriesData<LinksCache>({ queryKey: ['entries'] })
-      mapCachedLinks(qc, (l) => (l.id === id ? { ...l, pinned } : l))
-      mapCachedLinkEntries(qc, (l) => (l.id === id ? { ...l, pinned } : l))
-      return { linkSnapshots, entrySnapshots }
-    },
-    onError: (_err, _vars, ctx) => {
-      if (!ctx) return
-      for (const [key, snapshot] of [...ctx.linkSnapshots, ...ctx.entrySnapshots]) {
-        qc.setQueryData(key, snapshot)
-      }
-    },
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-    },
+    onMutate: async ({ id, pinned }) => optimisticEntryPatch(qc, 'link', id, { pinned }),
+    onError: (_err, _vars, ctx) => ctx?.rollback(),
+    onSettled: () => invalidateLibrary(qc, { links: true, entries: true, folders: true }),
   })
 }
 
@@ -141,28 +117,9 @@ export function useRefreshPreview() {
     mutationFn: async (id: number) => {
       await http.post(`/api/links/${id}/refresh-preview`)
     },
-    onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: ['links'] })
-      await qc.cancelQueries({ queryKey: ['entries'] })
-      const linkSnapshots = qc.getQueriesData<LinksCache>({ queryKey: ['links'] })
-      const entrySnapshots = qc.getQueriesData<LinksCache>({ queryKey: ['entries'] })
-      const markPending = (l: Link): Link =>
-        l.id === id ? { ...l, preview_status: 'pending' } : l
-      mapCachedLinks(qc, markPending)
-      mapCachedLinkEntries(qc, markPending)
-      return { linkSnapshots, entrySnapshots }
-    },
-    onError: (_err, _id, ctx) => {
-      if (!ctx) return
-      for (const [key, snapshot] of [...ctx.linkSnapshots, ...ctx.entrySnapshots]) {
-        qc.setQueryData(key, snapshot)
-      }
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-    },
+    onMutate: async (id) => optimisticEntryPatch(qc, 'link', id, { preview_status: 'pending' }),
+    onError: (_err, _id, ctx) => ctx?.rollback(),
+    onSuccess: () => invalidateLibrary(qc, { links: true, entries: true, folders: true }),
   })
 }
 
@@ -227,7 +184,11 @@ export function useRecentChanges(days = 7, limit = 20, enabled = true) {
       const { data } = await http.get<Link[]>(`/api/links/recent-changes?days=${days}&limit=${limit}`)
       return data
     },
-    refetchInterval: 60_000,
+    // Stand down while there is nothing to report — the sidebar hides the
+    // section on an empty answer, so an unconditional minute tick was pure
+    // background traffic (~1,440 GETs/day per tab). MarkChangeSeen's
+    // invalidation re-evaluates the interval after real activity.
+    refetchInterval: (query) => ((query.state.data?.length ?? 0) > 0 ? 60_000 : false),
     enabled,
   })
 }

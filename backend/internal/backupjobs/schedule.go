@@ -1,4 +1,9 @@
-package backupagent
+// Package backupjobs is the shared schedule vocabulary and persistence for
+// operational backup jobs (ADR-44/45). The backup-agent process and the
+// server-mounted backupstatus API both import this leaf; neither may import
+// the other, so a refactor of one deployable cannot silently pull the other's
+// adapters.
+package backupjobs
 
 import (
 	"context"
@@ -50,6 +55,17 @@ const (
 	modeTimes    = "times"
 	modeInterval = "interval"
 )
+
+// RequiredSchemaVersion is the migration the agent needs. The agent never
+// runs migrations — the backend owns the schema — so boot fails with an
+// instruction instead of a missing-table error mid-job.
+//
+// Deliberately NOT db.RequiredSchemaVersion: that number tracks what the
+// BACKEND reads, and moves whenever any backend query gains a dependency.
+// This one moves only for tables the agent itself touches: 40 for backup_run,
+// 42 for backup_schedule (read) and backup_agent_state (heartbeat, written),
+// 43 for the unified shape of backup_schedule.config.
+const RequiredSchemaVersion = 43
 
 // JobConfig is the per-job document stored in backup_schedule.config. One
 // shape for all four jobs: what differs between them is the floors, not the
@@ -423,10 +439,10 @@ func (t Timing) ToConfig() JobConfig {
 	return cfg
 }
 
-// timingFromConfig turns a validated row into a Timing. Only reached after
+// TimingFromConfig turns a validated row into a Timing. Only reached after
 // ValidateJobConfig, so parse errors here are impossible by construction —
 // they still surface (as a disabled timing) rather than panic.
-func timingFromConfig(cfg JobConfig) Timing {
+func TimingFromConfig(cfg JobConfig) Timing {
 	t := Timing{Source: "db"}
 	if cfg.Enabled != nil && !*cfg.Enabled {
 		return t
@@ -437,7 +453,7 @@ func timingFromConfig(cfg JobConfig) Timing {
 	case modeTimes:
 		for _, raw := range cfg.Times {
 			if a, err := ParseAnchor(raw); err == nil {
-				t.Anchors = append(t.Anchors, timeOnly(a))
+				t.Anchors = append(t.Anchors, TimeOnly(a))
 			}
 		}
 		for _, raw := range cfg.Weekdays {
@@ -447,53 +463,6 @@ func timingFromConfig(cfg JobConfig) Timing {
 		}
 	}
 	return t
-}
-
-// envTiming is the env-baseline Timing for one job. A weekly env anchor
-// becomes a one-day weekday set: the days live on the Timing now.
-func envTiming(job string, cfg Config) Timing {
-	t := Timing{Source: "env"}
-	var anchor Anchor
-	switch job {
-	case JobDump:
-		anchor = cfg.DumpAt
-	case JobDrill:
-		anchor = cfg.DrillAt
-	case JobUserZip:
-		anchor = cfg.UserZipAt
-	case JobMirror:
-		if cfg.MirrorEnabled() {
-			t.Interval = cfg.MirrorInterval()
-		}
-		return t
-	default:
-		return t
-	}
-	if !anchor.Enabled() {
-		return t
-	}
-	t.Anchors = []Anchor{timeOnly(anchor)}
-	if anchor.Weekly {
-		t.Weekdays = []time.Weekday{anchor.Weekday}
-	}
-	return t
-}
-
-// EffectiveTiming merges the env baseline with a database row for one job. A
-// nil or invalid row means the baseline; an invalid row is the caller's to
-// log — this function only refuses to honour it. The mirror keeps its
-// capability from env: with the mirror off in env there is no source client
-// in the process, so a row cannot switch it on and a row only tunes a mirror
-// that exists.
-func EffectiveTiming(job string, cfg Config, row *JobConfig) Timing {
-	env := envTiming(job, cfg)
-	if row == nil || ValidateJobConfig(job, *row) != nil {
-		return env
-	}
-	if job == JobMirror && !cfg.MirrorEnabled() {
-		return env
-	}
-	return timingFromConfig(*row)
 }
 
 // ScheduleStore reads and writes backup_schedule and the agent heartbeat.

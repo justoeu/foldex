@@ -18,7 +18,7 @@ import (
 )
 
 // Pin must stay in lockstep with docker-compose.services.yml (CLAUDE.md §1).
-const rustfsImage = "rustfs/rustfs:1.0.0-rc.2@sha256:7d6d361c49c08d427250fb59aae5d78df83d644c3405d9ccf4b21cda0b0692d0"
+const rustfsImage = "rustfs/rustfs:1.0.0-rc.5@sha256:c36b3efea3d1e503f1a2581abd0e7611e0e5820dd30e1850a52384b3fc52bda4"
 
 func startRustFSInternal(t *testing.T) (endpoint, user, pass string) {
 	t.Helper()

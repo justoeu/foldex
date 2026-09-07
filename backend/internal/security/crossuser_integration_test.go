@@ -314,9 +314,9 @@ func TestCrossUser_SlugStaysGloballyUnique(t *testing.T) {
 func TestCrossUser_StatsExcludeAnotherUsersClicks(t *testing.T) {
 	ctx, f := setup(t)
 
-	// Three public clicks on B's link, none on A's.
+	// Three clicks on B's link (B as the viewer), none on A's.
 	for range 3 {
-		_, err := f.lrepo.ClickAndResolve(ctx, f.b.link.ID)
+		_, err := f.lrepo.ClickAndResolve(ctx, f.b.link.ID, f.b.uid)
 		require.NoError(t, err)
 	}
 
@@ -370,21 +370,39 @@ func TestCrossUser_StatsExcludeAnotherUsersClicks(t *testing.T) {
 	assert.EqualValues(t, 0, bucketsA[0].Clicks)
 }
 
-// The public routes are tenant-blind by design — that is why slugs stay global.
+// The anonymous surface of /go and /n is opt-in only (SEC-SEN-001/002): the
+// slug namespace stays GLOBAL so a shared /go/{slug} keeps meaning one row,
+// but guessing another tenant's title-derived slug must resolve nothing.
+// The owner's viewer keeps both surfaces, and is_public re-opens the
+// anonymous one.
 func TestCrossUser_PublicRoutesResolveWithoutASession(t *testing.T) {
 	ctx, f := setup(t)
 
-	dest, err := f.lrepo.ClickAndResolve(ctx, f.a.link.ID)
+	_, err := f.lrepo.ClickAndResolve(ctx, f.a.link.ID, 0)
+	require.ErrorIs(t, err, domainerr.ErrNotFound, "an anonymous slug/id guess must not resolve")
+	_, err = f.lrepo.ClickAndResolveBySlug(ctx, f.b.link.Slug, 0)
+	require.ErrorIs(t, err, domainerr.ErrNotFound)
+
+	dest, err := f.lrepo.ClickAndResolve(ctx, f.a.link.ID, f.a.uid)
 	require.NoError(t, err)
 	assert.Equal(t, "https://alpha.example", dest)
 
-	dest, err = f.lrepo.ClickAndResolveBySlug(ctx, f.b.link.Slug)
+	dest, err = f.lrepo.ClickAndResolveBySlug(ctx, f.b.link.Slug, f.b.uid)
 	require.NoError(t, err)
 	assert.Equal(t, "https://bravo.example", dest)
 
-	n, err := f.nrepo.SystemViewAndResolve(ctx, f.b.note.Slug)
+	_, err = f.pool.Exec(ctx, `UPDATE link SET is_public = TRUE WHERE id = $1`, f.b.link.ID)
 	require.NoError(t, err)
-	assert.Equal(t, f.b.note.ID, n.ID)
+	dest, err = f.lrepo.ClickAndResolveBySlug(ctx, f.b.link.Slug, 0)
+	require.NoError(t, err)
+	assert.Equal(t, "https://bravo.example", dest, "an opted-in link resolves anonymously again")
+
+	// Notes share the same contract on their surface.
+	_, err = f.nrepo.SystemViewAndResolve(ctx, f.b.note.Slug, 0)
+	require.ErrorIs(t, err, domainerr.ErrNotFound)
+	owned, err := f.nrepo.SystemViewAndResolve(ctx, f.b.note.Slug, f.b.uid)
+	require.NoError(t, err)
+	assert.Equal(t, f.b.note.ID, owned.ID)
 }
 
 // TestClickLogOwnerMatchesEntityOwner is the drift guard migration 000018 names
@@ -404,11 +422,11 @@ func TestClickLogOwnerMatchesEntityOwner(t *testing.T) {
 	// Exercise every production writer of click_log: the public link route, the
 	// public note route, both for both tenants.
 	for _, tn := range []tenant{f.a, f.b} {
-		_, err := f.lrepo.ClickAndResolve(ctx, tn.link.ID)
+		_, err := f.lrepo.ClickAndResolve(ctx, tn.link.ID, tn.uid)
 		require.NoError(t, err)
-		_, err = f.lrepo.ClickAndResolveBySlug(ctx, tn.link.Slug)
+		_, err = f.lrepo.ClickAndResolveBySlug(ctx, tn.link.Slug, tn.uid)
 		require.NoError(t, err)
-		_, err = f.nrepo.SystemViewAndResolve(ctx, tn.note.Slug)
+		_, err = f.nrepo.SystemViewAndResolve(ctx, tn.note.Slug, tn.uid)
 		require.NoError(t, err)
 	}
 

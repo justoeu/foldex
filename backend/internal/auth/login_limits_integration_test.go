@@ -75,7 +75,7 @@ func TestLogin_ASprayAcrossManyAccountsLocksTheOrigin(t *testing.T) {
 // The lockout has to leave a ROW, and this is the test that says so.
 //
 // `auth.rate_limited` shipped declared, classified, ordered and READ — the
-// anomaly panel's third rule (internal/auth/anomaly.go) queries for it — with
+// anomaly panel's third rule (internal/auth/anomaly) queries for it — with
 // nothing in production writing it. Every unit test passed, the vocabulary
 // guard passed, and the "already throttled" signal could never fire on a real
 // instance. Two parallel workstreams each owned one half and neither owned the

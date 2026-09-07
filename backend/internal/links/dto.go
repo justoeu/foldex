@@ -2,12 +2,12 @@ package links
 
 import (
 	"encoding/json"
-	"net/url"
 	"strings"
 	"time"
 
 	"foldex/internal/pkg/jsonopt"
 	"foldex/internal/pkg/listquery"
+	"foldex/internal/pkg/slug"
 	"foldex/internal/tags"
 )
 
@@ -24,16 +24,20 @@ type CreateInput struct {
 	URL   string `json:"url"`
 	Title string `json:"title"`
 	// Slug is optional on create — when nil/empty the repository derives it
-	// from Title via Slugify (with auto-suffix on collision).
+	// from Title via slug.Slugify (with auto-suffix on collision).
 	Slug        *string            `json:"slug"`
 	Description *string            `json:"description"`
 	TagIDs      []int64            `json:"tag_ids"`
 	PendingTags []tags.CreateInput `json:"pending_tags"`
 	Pinned      bool               `json:"pinned"`
-	FolderID    *int64             `json:"folder_id"`
+	// IsPublic opts the link into the anonymous /go/{slug} redirect. Default
+	// false: a title-derived slug is guessable, so the destination cannot
+	// rest on it (SEC-SEN-002). The owner's own session always resolves.
+	IsPublic bool `json:"is_public"`
 	// CheckInterval opts the link into the changecheck worker. Nil/empty =
 	// disabled. Must be one of "hourly"/"daily"/"weekly" or Validate rejects.
 	CheckInterval *string `json:"check_interval"`
+	FolderID      *int64  `json:"folder_id"`
 }
 
 func (c *CreateInput) Normalize() {
@@ -65,18 +69,14 @@ func (c CreateInput) Validate() error {
 	if c.URL == "" {
 		return errMsg("url is required")
 	}
-	u, err := url.Parse(c.URL)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return errMsg("url must be an absolute http(s) URL")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return errMsg("url scheme must be http or https")
+	if err := ValidateAbsoluteHTTPURL(c.URL); err != nil {
+		return errMsg(err.Error())
 	}
 	if len(c.Title) > MaxTitleBytes {
 		return errMsg("title too long (max 500)")
 	}
-	if c.Slug != nil && !SlugIsValid(*c.Slug) {
-		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
+	if c.Slug != nil && !slug.IsValid(*c.Slug) {
+		return errMsg(slug.InvalidFormatMessage)
 	}
 	if c.CheckInterval != nil && !ValidCheckInterval(*c.CheckInterval) {
 		return errMsg("check_interval must be one of hourly, daily, weekly")
@@ -94,6 +94,10 @@ type UpdateInput struct {
 	TagIDs      *[]int64           `json:"tag_ids"`
 	PendingTags []tags.CreateInput `json:"pending_tags"`
 	Pinned      *bool              `json:"pinned"`
+	// IsPublic: absent → keep the current visibility, true/false → set it.
+	// Explicit null also means don't touch, matching the tri-state contract
+	// of every other optional field here.
+	IsPublic *bool `json:"is_public"`
 	// FolderID has 3 states by intent:
 	//   field absent in JSON → don't touch
 	//   {"folder_id": N}     → assign to folder N
@@ -105,7 +109,7 @@ type UpdateInput struct {
 	FolderIDSet bool   `json:"-"`
 	// Slug shares the same tri-state pattern: absent → don't touch,
 	// {"slug": "foo-bar"} → set explicitly, {"slug": null} → regenerate
-	// from title via Slugify().
+	// from title via slug.Slugify().
 	Slug    *string `json:"-"`
 	SlugSet bool    `json:"-"`
 	// CheckInterval tri-state: absent → don't touch, {"check_interval": "daily"}
@@ -136,12 +140,8 @@ func (u UpdateInput) Validate() error {
 		if *u.URL == "" {
 			return errMsg("url is required")
 		}
-		parsed, err := url.Parse(*u.URL)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return errMsg("url must be an absolute http(s) URL")
-		}
-		if parsed.Scheme != "http" && parsed.Scheme != "https" {
-			return errMsg("url scheme must be http or https")
+		if err := ValidateAbsoluteHTTPURL(*u.URL); err != nil {
+			return errMsg(err.Error())
 		}
 	}
 	if u.Title != nil {
@@ -155,8 +155,8 @@ func (u UpdateInput) Validate() error {
 	// Slug: explicit value must pass the same check the DB enforces. A
 	// `null` payload (SlugSet=true, Slug=nil) means "regenerate from
 	// title" — that's handled by the repository, not validated here.
-	if u.SlugSet && u.Slug != nil && !SlugIsValid(*u.Slug) {
-		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
+	if u.SlugSet && u.Slug != nil && !slug.IsValid(*u.Slug) {
+		return errMsg(slug.InvalidFormatMessage)
 	}
 	if u.CheckIntervalSet && u.CheckInterval != nil && !ValidCheckInterval(*u.CheckInterval) {
 		return errMsg("check_interval must be one of hourly, daily, weekly")

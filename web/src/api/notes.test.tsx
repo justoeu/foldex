@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { ReactNode } from 'react'
-import { QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useCreateNote, useUpdateNote, useDeleteNote, usePinNote, useNote, uploadNoteImage, goNoteHref } from './notes'
+import { http } from './client'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import { makeQueryClient } from '../test/renderWithProviders'
 
@@ -88,6 +89,55 @@ describe('usePinNote', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(state.notes[0].pinned).toBe(true)
   })
+
+  // RACE-HER-004: the rollback used to restore a WHOLE-cache snapshot from
+  // onMutate, so a slow pin(A) failing after a fast pin(B) succeeded wiped
+  // B's already-applied optimistic state from every cached page until the
+  // next refetch. The rollback must touch only the entry whose patch failed.
+  it('a failed pin rolls back only its own note, not a concurrent pin that landed', async () => {
+    // gcTime must not be 0 here: the seeded cache has no observer, and a
+    // zero gc would sweep it before the interleaving even starts.
+    const localClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const localWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={localClient}>{children}</QueryClientProvider>
+    )
+    const noteA = {
+      kind: 'note' as const, id: 1, title: 'A', slug: 'a', pinned: false, tags: [],
+      created_at: '', updated_at: '',
+    }
+    const noteB = { ...noteA, id: 2, title: 'B', slug: 'b' }
+    const entriesKey = ['entries', '', '', 'created', 'all', 'locked', 100]
+    localClient.setQueryData(entriesKey, { pages: [[noteA, noteB]], pageParams: [0] })
+
+    let rejectA!: (reason: unknown) => void
+    vi.mocked(http.patch).mockImplementation(((url: string) => {
+      if (String(url) === '/api/notes/1') {
+        return new Promise((_resolve, reject) => { rejectA = reject }) as never
+      }
+      if (String(url) === '/api/notes/2') {
+        return Promise.resolve({ data: { ...noteB, pinned: true } }) as never
+      }
+      throw new Error(`unexpected PATCH ${url}`)
+    }) as never)
+
+    const { result } = renderHook(() => usePinNote(), { wrapper: localWrapper })
+    const pinA = result.current.mutateAsync({ id: 1, pinned: true })
+    await waitFor(() => {
+      const page = localClient.getQueryData<{ pages: typeof noteA[][] }>(entriesKey)!.pages[0]
+      expect(page.find((n) => n.id === 1)?.pinned).toBe(true)
+    })
+    const pinB = await result.current.mutateAsync({ id: 2, pinned: true })
+
+    rejectA(new Error('network down'))
+    await expect(pinA).rejects.toThrow('network down')
+    await pinB
+
+    const page = localClient.getQueryData<{ pages: typeof noteA[][] }>(entriesKey)!.pages[0]
+    expect(page.find((n) => n.id === 1)?.pinned).toBe(false)
+    expect(page.find((n) => n.id === 2)?.pinned).toBe(true)
+  })
 })
 
 describe('useNote', () => {
@@ -104,6 +154,59 @@ describe('useNote', () => {
   it('stays disabled when id is null', () => {
     const { result } = renderHook(() => useNote(null), { wrapper })
     expect(result.current.fetchStatus).toBe('idle')
+  })
+
+  // N1-NEX-004: forward TanStack's AbortSignal (entries.ts already does)
+  // so switching notes cancels the stale GET instead of completing it.
+  it('forwards the query AbortSignal to the note GET', async () => {
+    state.notes.push({
+      id: 30, title: 'A', slug: 'a', body_html: '', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    state.notes.push({
+      id: 31, title: 'B', slug: 'b', body_html: '', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    const fallback = vi.mocked(http.get).getMockImplementation()!
+    const signals: Array<AbortSignal | undefined> = []
+    vi.mocked(http.get).mockImplementation(((url: string, ...rest: any[]) => {
+      if (/^\/api\/notes\/(\d+)$/.test(String(url))) {
+        const config = rest[0] as { signal?: AbortSignal } | undefined
+        signals.push(config?.signal)
+        // First note hangs until aborted — an instant answer would settle
+        // the query before the rerender and leave nothing to cancel.
+        if (String(url).endsWith('/30')) {
+          return new Promise((_resolve, reject) => {
+            if (config?.signal?.aborted) {
+              reject(Object.assign(new Error('canceled'), { name: 'CanceledError' }))
+              return
+            }
+            config?.signal?.addEventListener('abort', () =>
+              reject(Object.assign(new Error('canceled'), { name: 'CanceledError' })),
+            )
+          })
+        }
+      }
+      return fallback(url, ...rest)
+    }) as never)
+
+    const localClient = makeQueryClient()
+    const localWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={localClient}>{children}</QueryClientProvider>
+    )
+    const { rerender } = renderHook(({ id }: { id: number }) => useNote(id), {
+      wrapper: localWrapper,
+      initialProps: { id: 30 },
+    })
+    await waitFor(() => expect(signals).toHaveLength(1))
+    expect(signals[0]).toBeInstanceOf(AbortSignal)
+
+    rerender({ id: 31 })
+    await waitFor(() => expect(signals).toHaveLength(2))
+    expect(signals[0]?.aborted).toBe(true)
+    expect(signals[1]?.aborted).toBe(false)
   })
 })
 

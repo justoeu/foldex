@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/domainerr"
 )
 
@@ -21,7 +22,7 @@ type fakeResolver struct {
 	err    error
 }
 
-func (f *fakeResolver) ClickAndResolve(_ context.Context, id int64) (string, error) {
+func (f *fakeResolver) ClickAndResolve(_ context.Context, id int64, _ authctx.UserID) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}
@@ -31,7 +32,7 @@ func (f *fakeResolver) ClickAndResolve(_ context.Context, id int64) (string, err
 	return "", domainerr.ErrNotFound
 }
 
-func (f *fakeResolver) ClickAndResolveBySlug(_ context.Context, slug string) (string, error) {
+func (f *fakeResolver) ClickAndResolveBySlug(_ context.Context, slug string, _ authctx.UserID) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}

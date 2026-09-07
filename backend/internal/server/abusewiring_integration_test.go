@@ -145,6 +145,11 @@ func TestWiring_RepeatClicksFromOneVisitorWriteOneRowAndStillRedirect(t *testing
 	uid := testdb.SeedUser(t, pool, "vis@test.local", "editor")
 	link, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://example.com/go", Title: "Go Target"})
 	require.NoError(t, err)
+	// The request walks the public surface with no session, so the link is
+	// opted in (is_public) — since SEC-SEN-002 that is what makes it resolve
+	// for an anonymous visitor.
+	_, err = pool.Exec(ctx, `UPDATE link SET is_public = TRUE WHERE id = $1`, link.ID)
+	require.NoError(t, err)
 
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -162,7 +167,9 @@ func TestWiring_RepeatClicksFromOneVisitorWriteOneRowAndStillRedirect(t *testing
 		"eight hits from one visitor inside the default 10s window must be one row")
 }
 
-// The note surface is the same amplifier, and it renders every time.
+// The note surface is the same amplifier, and it renders every time. The
+// request walks the public surface with no session, so the note is opted in
+// (is_public) — since SEC-SEN-001 that is what makes it render for one.
 func TestWiring_RepeatNoteViewsFromOneVisitorWriteOneRowAndStillRender(t *testing.T) {
 	srv, _, pool := abuseWiringServer(t)
 	uid := testdb.SeedUser(t, pool, "note@test.local", "editor")
@@ -170,7 +177,7 @@ func TestWiring_RepeatNoteViewsFromOneVisitorWriteOneRowAndStillRender(t *testin
 	var id int64
 	var slug string
 	require.NoError(t, pool.QueryRow(context.Background(),
-		`INSERT INTO note (user_id, title, body_html, slug) VALUES ($1,'N','<p>b</p>','wiring-note')
+		`INSERT INTO note (user_id, title, body_html, slug, is_public) VALUES ($1,'N','<p>b</p>','wiring-note', TRUE)
 		 RETURNING id, slug`, int64(uid)).Scan(&id, &slug))
 
 	for i := 0; i < 5; i++ {
@@ -197,7 +204,7 @@ func TestWiring_AResolveWithNoGateStillRecordsEveryClick(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := 0; i < 3; i++ {
-		_, err := repo.ClickAndResolve(ctx, link.ID)
+		_, err := repo.ClickAndResolve(ctx, link.ID, uid)
 		require.NoError(t, err)
 	}
 	assert.Equal(t, 3, countClicks(t, pool, "link", link.ID),

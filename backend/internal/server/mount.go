@@ -44,6 +44,19 @@ func mountFrontDoor(r chi.Router, d Deps) {
 		}
 		d.Logger.Info("trusted reverse proxies: X-Forwarded-For is believed ONLY from these",
 			"networks", strings.Join(nets, ","), "count", len(trustedNets))
+		if coversLANClientRanges(trustedNets) {
+			// The walk skips every hop inside the trust set, so a set that
+			// includes the CLIENTS' own range makes an honest RFC1918 client
+			// vanish (all hops trusted → everyone collapses onto the proxy's
+			// address and the per-IP login bucket becomes one global bucket),
+			// while a spoofing client gets its own XFF value adopted verbatim.
+			// Explicitly configured, so honoured — but never silently.
+			d.Logger.Warn("TRUSTED_PROXY_IPS covers LAN client ranges (10.0.0.0/8 or " +
+				"192.168.0.0/16): X-Forwarded-For from those clients will be believed and " +
+				"honest clients behind the proxy collapse onto its address — narrow the " +
+				"set to the ranges your proxies actually live in (the compose default is " +
+				"172.16.0.0/12)")
+		}
 	}
 	if len(trustedNets) == 0 && !isLoopbackBind(d.Config.BindAddr) {
 		d.Logger.Warn("TRUSTED_PROXY_IPS is empty on a non-loopback bind — if a reverse " +
@@ -112,6 +125,18 @@ func newFileHandler(d Deps, linksRepo *links.Repository) *links.ScreenshotHandle
 
 func publicShareRoutes(r chi.Router, d Deps, linksRepo *links.Repository, notesRepo *notes.Repository, fileHandler *links.ScreenshotHandler) {
 	r.Group(func(pub chi.Router) {
+		// /n/ and /go/ resolve viewer-scoped: the owner's session keeps them
+		// working, everyone else needs the row's explicit public opt-in. The
+		// same Vary the /api surface sets — these responses now differ by
+		// caller, and a shared cache must not serve one caller another's.
+		// Under AUTH_ENABLED=0 the bootstrap principal plays the viewer, per
+		// that escape hatch's "whoever reaches the port owns the library".
+		pub.Use(auth.VaryCookie)
+		if d.Config.AuthEnabled {
+			pub.Use(d.AuthMiddleware.Optional)
+		} else {
+			pub.Use(bootstrapPrincipal(d.Pool, d.Logger))
+		}
 		pub.Use(newClickCoalescer(d.AbusePolicy).middleware)
 		redirect.NewHandler(linksRepo, d.Config.PublicNumericIDs).Mount(pub)
 		notes.NewPublicHandler(notesRepo, d.Config.PublicNumericIDs).Mount(pub)
@@ -229,9 +254,9 @@ func contentCRUD(pr chi.Router, d Deps, grants authgate.Grants, linksRepo *links
 
 	pr.Route("/import", func(ir chi.Router) {
 		ir.Use(authgate.RequireWrite(grants, authctx.PermImportRun))
-		importer.NewHandler(d.Pool, d.Worker).Mount(ir)
+		importer.NewHandler(importer.NewStager(d.Pool), d.Worker).Mount(ir)
 	})
-	pr.Route("/export", exporter.NewHandler(d.Pool).Mount)
+	pr.Route("/export", exporter.NewHandler(exporter.NewRepository(d.Pool)).Mount)
 	statsHandler := stats.NewHandler(stats.NewRepository(d.Pool))
 	if d.StorageStatter != nil {
 		statsHandler = statsHandler.WithStorage(d.StorageStatter)

@@ -29,7 +29,16 @@ describe('dialog deferred-tag parity', () => {
       const conflict = Object.assign(new Error('tag conflict'), {
         response: { status: 409, data: { error: { code: 'tag_name_taken' } } },
       })
-      vi.mocked(http.post).mockRejectedValueOnce(conflict)
+      const originalPost = vi.mocked(http.post).getMockImplementation()
+      let rejectedCreate = false
+      vi.mocked(http.post).mockImplementation((url, ...rest) => {
+        if (!rejectedCreate && url === endpoint) {
+          rejectedCreate = true
+          return Promise.reject(conflict)
+        }
+        if (originalPost) return originalPost(url, ...rest)
+        return Promise.resolve({ data: {} } as never)
+      })
       const onClose = vi.fn()
       if (host === 'link') {
         renderWithProviders(<LinkDialog open link={null} onClose={onClose} />)

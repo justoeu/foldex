@@ -179,7 +179,7 @@ func TestRepository_ClickAndResolveIsAtomic(t *testing.T) {
 	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://hn.example", Title: "HN"})
 	require.NoError(t, err)
 
-	url, err := lrepo.ClickAndResolve(ctx, created.ID)
+	url, err := lrepo.ClickAndResolve(ctx, created.ID, uid)
 	require.NoError(t, err)
 	assert.Equal(t, "https://hn.example", url)
 
@@ -190,7 +190,7 @@ func TestRepository_ClickAndResolveIsAtomic(t *testing.T) {
 
 func TestRepository_ClickAndResolveNotFound(t *testing.T) {
 	ctx, _, lrepo, _ := setup(t)
-	_, err := lrepo.ClickAndResolve(ctx, 999)
+	_, err := lrepo.ClickAndResolve(ctx, 999, 0)
 	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
@@ -632,7 +632,7 @@ func TestRepository_GoEndpointIsOnlyClickInserter(t *testing.T) {
 	assert.EqualValues(t, 0, got.ClickCount, "no read path may write click_log")
 
 	// Now exercise the /go/:id atomic path and confirm count moves to 1.
-	_, err = lrepo.ClickAndResolve(ctx, link.ID)
+	_, err = lrepo.ClickAndResolve(ctx, link.ID, uid)
 	require.NoError(t, err)
 	got, err = lrepo.Get(ctx, uid, link.ID)
 	require.NoError(t, err)
@@ -671,9 +671,9 @@ func TestRepository_SortByClicks(t *testing.T) {
 	b, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b", Title: "B"})
 
 	// Bump b twice, a once.
-	_, _ = lrepo.ClickAndResolve(ctx, b.ID)
-	_, _ = lrepo.ClickAndResolve(ctx, b.ID)
-	_, _ = lrepo.ClickAndResolve(ctx, a.ID)
+	_, _ = lrepo.ClickAndResolve(ctx, b.ID, uid)
+	_, _ = lrepo.ClickAndResolve(ctx, b.ID, uid)
+	_, _ = lrepo.ClickAndResolve(ctx, a.ID, uid)
 
 	out, err := lrepo.List(ctx, uid, links.ListQuery{Sort: "clicks"})
 	require.NoError(t, err)
@@ -721,6 +721,69 @@ func TestRepository_CheckInterval_TriStateOnUpdate(t *testing.T) {
 	assert.Nil(t, cleared.ChangeSeenAt, "opt-out must wipe change_seen_at")
 	assert.Nil(t, cleared.LastCheckError, "opt-out must wipe last_check_error")
 }
+
+// TestRepository_Update_CombinationWithIfMatch locks the shared placeholder
+// counter: URL + slug + check_interval in ONE Update under optimistic
+// concurrency exercises every SET block plus the reset-CASE fan-out and the
+// If-Match WHERE tail in a single statement. Inserting a column mid-sequence
+// renumbers every $N downstream — this is the regression net for that.
+func TestRepository_Update_CombinationWithIfMatch(t *testing.T) {
+	ctx, uid, lrepo, _ := setup(t)
+	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/combo", Title: "combo"})
+	require.NoError(t, err)
+
+	// Seed change-check state so the reset-CASE fan-out has something to clear.
+	daily := "daily"
+	l, err = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true})
+	require.NoError(t, err)
+	claim := claimChecks(t, ctx, lrepo, l.ID)[l.ID]
+	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "content:abc", Changed: true})
+	withState, err := lrepo.Get(ctx, uid, l.ID)
+	require.NoError(t, err)
+	require.NotNil(t, withState.LastFingerprint)
+
+	newURL := "https://x.test/combo-2"
+	newTitle := "combo two"
+	newSlug := "combo-two"
+	hourly := "hourly"
+	updated, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{
+		URL:              &newURL,
+		Title:            &newTitle,
+		Slug:             &newSlug,
+		SlugSet:          true,
+		CheckInterval:    &hourly,
+		CheckIntervalSet: true,
+		IfMatchUpdatedAt: &l.UpdatedAt,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, newURL, updated.URL)
+	assert.Equal(t, newTitle, updated.Title)
+	assert.Equal(t, newSlug, updated.Slug)
+	require.NotNil(t, updated.CheckInterval)
+	assert.Equal(t, "hourly", *updated.CheckInterval)
+	assert.Nil(t, updated.LastFingerprint, "URL+interval change must reset the check baseline")
+	assert.Nil(t, updated.LastChangeDetectedAt)
+
+	// The If-Match that just succeeded consumed the old updated_at: replaying
+	// it must disambiguate stale (row exists) from missing.
+	_, err = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{
+		URL:              &newURL,
+		IfMatchUpdatedAt: &l.UpdatedAt,
+	})
+	require.ErrorIs(t, err, links.ErrStaleWrite)
+}
+
+func TestRepository_Update_NotFoundViaIfMatch(t *testing.T) {
+	ctx, uid, lrepo, _ := setup(t)
+	stale := time.Now()
+	_, err := lrepo.Update(ctx, uid, 999999, links.UpdateInput{
+		URL:              ptrURL("https://x.test/none"),
+		IfMatchUpdatedAt: &stale,
+	})
+	require.ErrorIs(t, err, domainerr.ErrNotFound)
+}
+
+func ptrURL(s string) *string { return &s }
 
 // dueIDs projects the DueLink rows to bare ids.
 //

@@ -3,13 +3,11 @@ package auth
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
-	"net/netip"
-	"strings"
 	"time"
 	"unicode/utf8"
 
+	"foldex/internal/auth/ipblock"
 	"foldex/internal/pkg/auditctx"
 	"foldex/internal/pkg/authctx"
 )
@@ -189,24 +187,9 @@ const (
 // NormalizeIP is normalizeAuditIP for callers outside this package — the
 // enforcement middleware and the blocklist share it so a blocked address and a
 // recorded one cannot be two spellings that never compare equal.
-func NormalizeIP(raw string) string { return normalizeAuditIP(raw) }
+func NormalizeIP(raw string) string { return ipblock.Normalize(raw) }
 
-func normalizeAuditIP(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	if host, _, err := net.SplitHostPort(raw); err == nil {
-		raw = host
-	}
-	addr, err := netip.ParseAddr(strings.Trim(raw, "[]"))
-	if err != nil {
-		return ""
-	}
-	if addr.Is4In6() {
-		addr = addr.Unmap()
-	}
-	return addr.String()
-}
+func normalizeAuditIP(raw string) string { return ipblock.Normalize(raw) }
 
 func truncateTo(s string, max int) string {
 	if len(s) <= max {

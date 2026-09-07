@@ -1,0 +1,15 @@
+-- Public /go/{slug} becomes an OPT-IN capability (SEC-SEN-002).
+--
+-- Link slugs default to Slugify(title) with sequential -2/-3 suffixes in a
+-- GLOBAL namespace, so guessing a title handed any anonymous caller the
+-- stored destination URL (bookmark URLs carry reset tokens and shared-doc
+-- secrets in query strings) AND wrote a click_log row owned by the victim —
+-- polluting the click statistics click_log is the single source of truth
+-- for (INV-056).
+--
+-- is_public defaults to FALSE: every existing link becomes owner-only. The
+-- redirect resolves for the anonymous caller only when the owner opts in;
+-- the owner's own session (cards, palette, push notifications all navigate
+-- /go/{slug} with the session cookie attached) is unchanged, and
+-- AUTH_ENABLED=0 keeps attributing every caller to the bootstrap owner.
+ALTER TABLE link ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT FALSE;

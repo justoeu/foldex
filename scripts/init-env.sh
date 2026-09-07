@@ -15,6 +15,7 @@ random_secret() {
 
 root_secret=$(random_secret)
 app_secret=$(random_secret)
+pg_password=$(random_secret)
 tmp=$(mktemp "${ENV_FILE}.tmp.XXXXXX")
 trap 'rm -f "$tmp"' EXIT
 
@@ -25,6 +26,13 @@ while IFS= read -r line || [[ -n "$line" ]]; do
       ;;
     RUSTFS_SECRET_KEY=|RUSTFS_SECRET_KEY=foldex-change-me)
       printf 'RUSTFS_SECRET_KEY=%s\n' "$app_secret"
+      ;;
+    # Only the EMPTY value is generated: an .env that already carries a
+    # password belongs to an existing volume whose Postgres was initialized
+    # with it, and rewriting it here would break the next boot. The backend
+    # warns at boot when the value is still the known default.
+    POSTGRES_PASSWORD=)
+      printf 'POSTGRES_PASSWORD=%s\n' "$pg_password"
       ;;
     *)
       printf '%s\n' "$line"

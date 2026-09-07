@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
-import { useNote, goNoteHref } from '../api/notes'
+import { useNote, useUpdateNote, goNoteHref } from '../api/notes'
 import { TagChip } from './TagChip'
 import { relativeTime } from '../lib/time'
 import type { Note } from '../api/types'
@@ -43,6 +43,7 @@ export function NoteViewDialog({
 
   const noteQuery = useNote(noteId)
   const note = noteQuery.data
+  const updateNote = useUpdateNote()
   // Same rule as the card: a cover whose object is gone is hidden, not left as
   // a broken-image icon on top of the text.
   const [coverErrored, setCoverErrored] = useState(false)
@@ -132,16 +133,45 @@ export function NoteViewDialog({
           </button>
           {note && (
             <>
-              {/* The public page, for when a real visit IS what you want — this
-                  is the path that records one. */}
-              <a
-                className="fx-confirm-btn"
-                href={goNoteHref(note)}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <Icon d={I.arrowR} size={13} /> {t('note_view.open_public')}
-              </a>
+              {note.is_public ? (
+                <>
+                  <a
+                    className="fx-confirm-btn"
+                    href={goNoteHref(note)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Icon d={I.arrowR} size={13} /> {t('note_view.open_public')}
+                  </a>
+                  <button
+                    type="button"
+                    className="fx-confirm-btn"
+                    disabled={updateNote.isPending}
+                    onClick={() =>
+                      updateNote.mutate(
+                        { id: note.id, body: { is_public: false, if_match_updated_at: note.updated_at } },
+                        { onSuccess: () => void noteQuery.refetch() },
+                      )
+                    }
+                  >
+                    {t('note_view.make_private')}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="fx-confirm-btn"
+                  disabled={updateNote.isPending}
+                  onClick={() =>
+                    updateNote.mutate(
+                      { id: note.id, body: { is_public: true, if_match_updated_at: note.updated_at } },
+                      { onSuccess: () => void noteQuery.refetch() },
+                    )
+                  }
+                >
+                  {t('note_view.share_public')}
+                </button>
+              )}
               <button
                 type="button"
                 className="fx-confirm-btn fx-confirm-btn-primary"

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
-import { invalidateEntryCounts } from './entries'
+import { invalidateLibrary } from './entries'
 import type { Folder, FolderCreate, FolderUpdate } from './types'
 
 // Header carrying a folder unlock token — matches folders.UnlockHeader /
@@ -32,13 +32,14 @@ export function useFolders(params?: FolderListParams) {
     // bust the cache) — only whether one is present, so the locked→
     // unlocked transition still triggers a refetch.
     queryKey: ['folders', scope, unlockToken ? 'unlocked' : 'locked', fields],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const search = new URLSearchParams()
       if (scope === 'root') search.set('root', '1')
       else if (typeof scope === 'number') search.set('parent_id', String(scope))
       if (fields === 'minimal') search.set('fields', 'minimal')
       const qs = search.toString()
       const { data } = await http.get<Folder[]>(`/api/folders${qs ? '?' + qs : ''}`, {
+        signal,
         headers: unlockToken ? { [FOLDER_UNLOCK_HEADER]: unlockToken } : undefined,
       })
       return data
@@ -60,9 +61,7 @@ export function useCreateFolder() {
       return data
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
+      invalidateLibrary(qc, { folders: true, links: true, entries: true })
     },
   })
 }
@@ -75,9 +74,7 @@ export function useUpdateFolder() {
       return data
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
+      invalidateLibrary(qc, { folders: true, links: true, entries: true })
     },
   })
 }
@@ -107,9 +104,7 @@ export function useResetFolderPassword() {
       await http.post(`/api/folders/${id}/reset-password`, { master_password: masterPassword })
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
+      invalidateLibrary(qc, { folders: true, links: true, entries: true })
     },
   })
 }
@@ -135,10 +130,14 @@ export function useDeleteFolder() {
       }
     },
     onSuccess: (_data, args) => {
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      if (typeof args === 'object' && args.cascade) invalidateEntryCounts(qc)
+      invalidateLibrary(qc, {
+        folders: true,
+        links: true,
+        entries: true,
+        // Only a cascade delete changes entry counts (plain delete unflags
+        // the children back to ungrouped).
+        counts: typeof args === 'object' && !!args.cascade,
+      })
     },
   })
 }

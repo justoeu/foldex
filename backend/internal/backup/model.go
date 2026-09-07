@@ -184,6 +184,7 @@ type LinkRow struct {
 	PreviewStatus string    `json:"preview_status"`
 	PreviewError  *string   `json:"preview_error"`
 	FolderID      *int64    `json:"folder_id"`
+	IsPublic      bool      `json:"is_public"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
@@ -209,6 +210,7 @@ type NoteRow struct {
 	Pinned    bool      `json:"pinned"`
 	FolderID  *int64    `json:"folder_id"`
 	CoverURL  *string   `json:"cover_url"`
+	IsPublic  bool      `json:"is_public"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

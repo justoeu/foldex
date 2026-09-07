@@ -133,7 +133,7 @@ func TestRestore_SkipRetryAfterFileFailureUsesCommittedMapping(t *testing.T) {
 		Title: "Retry note", BodyHTML: "<p>durable</p>", TagIDs: []int64{tag.ID},
 	})
 	require.NoError(t, err)
-	_, err = notes.NewRepository(pool).SystemViewAndResolve(ctx, note.Slug)
+	_, err = notes.NewRepository(pool).SystemViewAndResolve(ctx, note.Slug, uid)
 	require.NoError(t, err)
 
 	var archive bytes.Buffer

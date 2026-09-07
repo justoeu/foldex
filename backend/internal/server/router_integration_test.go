@@ -600,87 +600,44 @@ func TestBadRequestPaths(t *testing.T) {
 	defer done()
 	c := srv.Client()
 
-	// Invalid JSON
-	resp, err := c.Post(srv.URL+"/api/tags", "application/json", bytes.NewBufferString("{"))
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-
-	// Missing name
-	resp, err = c.Post(srv.URL+"/api/tags", "application/json", bytes.NewBufferString(`{}`))
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-
-	// Bad URL on link
-	resp, err = c.Post(srv.URL+"/api/links", "application/json", bytes.NewBufferString(`{"url":"ftp://x"}`))
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-
-	// Link not found
-	resp, err = c.Get(srv.URL + "/api/links/77777")
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-
-	// Tag not found
-	resp, err = c.Get(srv.URL + "/api/tags/77777")
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-
-	// Tag invalid id
-	resp, err = c.Get(srv.URL + "/api/tags/0")
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-
-	// PATCH invalid JSON
-	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/tags/1", bytes.NewBufferString("{"))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err = c.Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-
-	// DELETE missing tag
-	req, _ = http.NewRequest(http.MethodDelete, srv.URL+"/api/tags/8888", nil)
-	resp, err = c.Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-
-	// DELETE missing link
-	req, _ = http.NewRequest(http.MethodDelete, srv.URL+"/api/links/9999", nil)
-	resp, err = c.Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-
-	// PATCH missing tag
-	req, _ = http.NewRequest(http.MethodPatch, srv.URL+"/api/tags/9999",
-		bytes.NewBufferString(`{"name":"x"}`))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err = c.Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-
-	// PATCH missing link
-	req, _ = http.NewRequest(http.MethodPatch, srv.URL+"/api/links/9999",
-		bytes.NewBufferString(`{"title":"x"}`))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err = c.Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-
-	// Tag invalid id (links handler shares httperr.ParseID)
-	resp, err = c.Get(srv.URL + "/api/links/abc")
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		want   int
+	}{
+		{"invalid JSON", http.MethodPost, "/api/tags", "{", http.StatusBadRequest},
+		{"missing name", http.MethodPost, "/api/tags", `{}`, http.StatusBadRequest},
+		{"bad URL on link", http.MethodPost, "/api/links", `{"url":"ftp://x"}`, http.StatusBadRequest},
+		{"link not found", http.MethodGet, "/api/links/77777", "", http.StatusNotFound},
+		{"tag not found", http.MethodGet, "/api/tags/77777", "", http.StatusNotFound},
+		{"tag invalid id", http.MethodGet, "/api/tags/0", "", http.StatusBadRequest},
+		{"PATCH invalid JSON", http.MethodPatch, "/api/tags/1", "{", http.StatusBadRequest},
+		{"DELETE missing tag", http.MethodDelete, "/api/tags/8888", "", http.StatusNotFound},
+		{"DELETE missing link", http.MethodDelete, "/api/links/9999", "", http.StatusNotFound},
+		{"PATCH missing tag", http.MethodPatch, "/api/tags/9999", `{"name":"x"}`, http.StatusNotFound},
+		{"PATCH missing link", http.MethodPatch, "/api/links/9999", `{"title":"x"}`, http.StatusNotFound},
+		// links handler shares httperr.ParseID
+		{"tag invalid id via links", http.MethodGet, "/api/links/abc", "", http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var body io.Reader
+			if tc.body != "" {
+				body = bytes.NewBufferString(tc.body)
+			}
+			req, err := http.NewRequest(tc.method, srv.URL+tc.path, body)
+			require.NoError(t, err)
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			resp, err := c.Do(req)
+			require.NoError(t, err)
+			_ = resp.Body.Close()
+			assert.Equal(t, tc.want, resp.StatusCode)
+		})
+	}
 }
 
 func TestImportExportThroughRouter(t *testing.T) {

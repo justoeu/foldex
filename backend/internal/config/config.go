@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -510,6 +511,31 @@ func (c Config) validateSecureDefaults() error {
 	return nil
 }
 
+// defaultPostgresPassword is the literal docker-compose.db.yml and legacy
+// .env.example shipped before SEC-SEN-005. Anything that can reach the
+// `foldex` docker network and lands a foothold in one container reads and
+// writes the whole database with it.
+const defaultPostgresPassword = "foldex"
+
+// InsecureDBPasswordWarning reports (as a boot log line) that DB_URL still
+// embeds the known default Postgres password. It WARNS rather than refusing:
+// an existing volume was initialized with that password and a boot check
+// cannot re-key it — breaking boot would trade a defense-in-depth gap for an
+// outage on every upgraded install. Empty means nothing to say.
+func (c Config) InsecureDBPasswordWarning() string {
+	u, err := url.Parse(c.DBURL)
+	if err != nil || u.User == nil {
+		return ""
+	}
+	if pw, _ := u.User.Password(); pw != defaultPostgresPassword {
+		return ""
+	}
+	return "DB_URL uses the DEFAULT Postgres password '" + defaultPostgresPassword + "' — any process " +
+		"on the docker network can read and write the whole database. Run `make env` to generate one, " +
+		"then set the same value on the existing volume (ALTER USER " +
+		"foldex WITH PASSWORD '…') before restarting, or re-create the volume for a fresh install"
+}
+
 // validateMailTransport refuses the three ways the broker wiring fails quietly.
 func (c Config) validateMailTransport() error {
 	// Empty is UNSET, not unknown. normalizeMail fills it in on the Load path,
@@ -640,14 +666,12 @@ func envFirst(primary, legacy, def string) string {
 
 func envBoolFirst(primary, legacy string, def bool) bool {
 	if v := os.Getenv(primary); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err == nil {
+		if b, ok := parseBoolEnv(v); ok {
 			return b
 		}
 	}
 	if v := os.Getenv(legacy); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err == nil {
+		if b, ok := parseBoolEnv(v); ok {
 			return b
 		}
 	}
@@ -675,7 +699,29 @@ func envBool(k string, def bool) bool {
 	if v == "" {
 		return def
 	}
-	return v == "1" || v == "true" || v == "TRUE" || v == "yes"
+	if b, ok := parseBoolEnv(v); ok {
+		return b
+	}
+	// An unrecognized value is a typo or an unfamiliar idiom ("on"), and
+	// silently mapping it to false would turn security knobs (2FA-for-admins,
+	// STARTTLS) OFF with no boot-time signal — warn and keep the default.
+	slog.Warn("config: unrecognized boolean env value, using default",
+		"key", k, "value", v, "default", def)
+	return def
+}
+
+// parseBoolEnv is the one boolean spelling policy shared by envBool and
+// envBoolFirst: strconv.ParseBool plus the "yes" idiom envBool always
+// accepted. The second return reports whether the value was recognized.
+func parseBoolEnv(raw string) (bool, bool) {
+	v := strings.TrimSpace(raw)
+	if b, err := strconv.ParseBool(v); err == nil {
+		return b, true
+	}
+	if strings.EqualFold(v, "yes") {
+		return true, true
+	}
+	return false, false
 }
 
 func splitCSV(s string) []string {

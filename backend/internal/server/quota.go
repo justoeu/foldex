@@ -163,14 +163,6 @@ func (q *apiQuota) current(ctx context.Context) abusepolicy.Policy {
 	return q.pol.Current(ctx)
 }
 
-func (q *apiQuota) writeLimit(ctx context.Context) int {
-	return q.current(ctx).APIWritesPerMinute
-}
-
-func (q *apiQuota) expensiveLimit(ctx context.Context) int {
-	return q.current(ctx).APIExpensivePerHour
-}
-
 // middleware charges the request and answers 429 when the budget is spent.
 //
 // Mounted inside the principal group, so the identity it keys on is already

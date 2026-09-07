@@ -369,16 +369,18 @@ func TestAPIQuota_ANilPolicySourceEnforcesTheCompiledDefaults(t *testing.T) {
 		// the language does here — and the language is what `q.pol == nil` in
 		// the production code is evaluated by.
 		require.True(t, q.pol != nil, "a typed nil in an interface is not a nil interface")
-		assert.Equal(t, want.APIWritesPerMinute, q.writeLimit(context.Background()))
-		assert.Equal(t, want.APIExpensivePerHour, q.expensiveLimit(context.Background()))
+		pol := q.current(context.Background())
+		assert.Equal(t, want.APIWritesPerMinute, pol.APIWritesPerMinute)
+		assert.Equal(t, want.APIExpensivePerHour, pol.APIExpensivePerHour)
 	})
 
 	t.Run("no reader at all", func(t *testing.T) {
 		var absent policyReader
 		q := newAPIQuota(absent, nil)
 		require.True(t, q.pol == nil)
-		assert.Equal(t, want.APIWritesPerMinute, q.writeLimit(context.Background()))
-		assert.Equal(t, want.APIExpensivePerHour, q.expensiveLimit(context.Background()))
+		pol := q.current(context.Background())
+		assert.Equal(t, want.APIWritesPerMinute, pol.APIWritesPerMinute)
+		assert.Equal(t, want.APIExpensivePerHour, pol.APIExpensivePerHour)
 	})
 
 	// And the enforcement is real, not just the number: an unwired quota still

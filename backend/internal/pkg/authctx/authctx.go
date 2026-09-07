@@ -100,12 +100,3 @@ func MustUser(ctx context.Context) UserID {
 	}
 	return p.UserID
 }
-
-// User returns the authenticated user id and whether one was present.
-func User(ctx context.Context) (UserID, bool) {
-	p, ok := FromContext(ctx)
-	if !ok {
-		return 0, false
-	}
-	return p.UserID, true
-}

@@ -55,8 +55,8 @@ func (r *Repository) Dashboard(ctx context.Context, uid authctx.UserID, days, li
             GROUP BY entity_id
         ),
         host_totals AS (
-            SELECT regexp_replace(l.url, '^https?://([^/]+).*$', '\1') AS host,
-                   sum(c.clicks)::bigint AS clicks
+            SELECT regexp_replace(lower(l.url), '^https?://([^/]+).*$', '\1') AS host,
+                    sum(c.clicks)::bigint AS clicks
             FROM owned_links l
             JOIN clicks_by_link c ON c.entity_id = l.id
             GROUP BY 1
@@ -100,8 +100,8 @@ func (r *Repository) Dashboard(ctx context.Context, uid authctx.UserID, days, li
             LEFT JOIN daily_counts c USING (day)
         ),
         top_rows AS (
-            SELECT l.id, l.url, l.title, l.slug,
-                   regexp_replace(l.url, '^https?://([^/]+).*$', '\1') AS host,
+         SELECT l.id, l.url, l.title, l.slug,
+                regexp_replace(lower(l.url), '^https?://([^/]+).*$', '\1') AS host,
                    COALESCE(c.clicks, 0)::bigint AS clicks,
                    COALESCE(c.clicks_30d, 0)::bigint AS clicks_30d,
                    COALESCE(c.clicks_prev_30d, 0)::bigint AS clicks_prev_30d
@@ -221,8 +221,12 @@ func (r *Repository) Summary(ctx context.Context, uid authctx.UserID) (Summary, 
 		return s, fmt.Errorf("summary scalars: %w", err)
 	}
 
-	// Top host: pre-aggregate clicks per entity once, then join link and run
-	// regexp_replace once per link (not once per click_log row) — N1-NEX-007.
+	// Top host: pre-aggregate clicks per entity once, then join link and
+	// run regexp_replace once per link (not once per click_log row) —
+	// N1-NEX-007. lower(l.url) folds scheme AND host case: url.Parse
+	// lowercases only the scheme, so mixed-case spellings of the same
+	// site reach the aggregation and would otherwise split into their
+	// own "host" buckets (the whole URL surfacing as top_host).
 	err := r.pool.QueryRow(ctx, fmt.Sprintf(`
         WITH visible_links AS MATERIALIZED (
             SELECT l.id, l.url
@@ -230,15 +234,15 @@ func (r *Repository) Summary(ctx context.Context, uid authctx.UserID) (Summary, 
             WHERE l.user_id = $1 AND %s
         ),
         link_clicks AS (
-			SELECT c.entity_id, count(*)::bigint AS cnt
-			FROM click_log c
-			JOIN visible_links l ON l.id = c.entity_id
-			WHERE c.user_id = $1 AND c.entity_kind = 'link'
-			GROUP BY c.entity_id
+		SELECT c.entity_id, count(*)::bigint AS cnt
+		FROM click_log c
+		JOIN visible_links l ON l.id = c.entity_id
+		WHERE c.user_id = $1 AND c.entity_kind = 'link'
+		GROUP BY c.entity_id
         )
         SELECT host, sum(cnt)::bigint
         FROM (
-            SELECT regexp_replace(l.url, '^https?://([^/]+).*$', '\1') AS host, lc.cnt
+            SELECT regexp_replace(lower(l.url), '^https?://([^/]+).*$', '\1') AS host, lc.cnt
             FROM link_clicks lc
 			JOIN visible_links l ON l.id = lc.entity_id
         ) t
@@ -327,7 +331,7 @@ func (r *Repository) TopLinks(ctx context.Context, uid authctx.UserID, limit int
         )
         SELECT
             l.id, l.url, l.title, l.slug,
-            regexp_replace(l.url, '^https?://([^/]+).*$', '\1') AS host,
+            regexp_replace(lower(l.url), '^https?://([^/]+).*$', '\1') AS host,
             COALESCE(lc.clicks, 0) AS clicks,
             COALESCE(lc.c30, 0) AS c30,
             COALESCE(lc.cprev, 0) AS cprev

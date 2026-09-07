@@ -102,6 +102,27 @@ describe('NoteDialog', () => {
     expect(await screen.findByPlaceholderText('Give your note a title…')).toHaveValue('Recovered note')
   })
 
+  // Regression (silent move, BUG-ART-102): the note's own folder_id — null
+  // included — must win in edit mode. Seeding from defaultFolderId made any
+  // edit of an ungrouped note while a folder is open PATCH folder_id to that
+  // folder, filing the note out of Home on save.
+  it('editing an ungrouped note keeps it on Home even when a folder is open', async () => {
+    state.notes.push({
+      id: 21, title: 'Home note', slug: 'home-note', body_html: '<p>x</p>', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: 'v1', tags: [],
+    })
+    renderWithProviders(<NoteDialog open noteId={21} defaultFolderId={9} onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByPlaceholderText('Give your note a title…')).toHaveValue('Home note'))
+    await userEvent.setup().click(screen.getByRole('button', { name: /Save changes/i }))
+    const patch = await waitFor(() => {
+      const call = vi.mocked(http.patch).mock.calls.find(([url]) => url === '/api/notes/21')
+      expect(call).toBeDefined()
+      return call!
+    })
+    expect(patch[1]).toEqual(expect.objectContaining({ folder_id: null }))
+  })
+
   it('ignores a stale request when noteId changes before the first note loads', async () => {
     const first = {
       id: 20, title: 'First note', slug: 'first-note', body_html: '<p>first</p>', pinned: false,
@@ -482,8 +503,9 @@ describe('buildImageUploadHandler', () => {
     expect(onError).not.toHaveBeenCalled()
   })
 
-  it('calls onError when the upload fails', async () => {
-    const uploadFn = vi.fn().mockRejectedValue(new Error('nope'))
+  it('calls onError with the raw error when the upload fails', async () => {
+    const failure = new Error('nope')
+    const uploadFn = vi.fn().mockRejectedValue(failure)
     const onError = vi.fn()
     const view = {
       isDestroyed: false,
@@ -494,7 +516,7 @@ describe('buildImageUploadHandler', () => {
     const handler = buildImageUploadHandler(uploadFn, onError)
     handler(view, new File(['x'], 'a.png', { type: 'image/png' }))
 
-    await waitFor(() => expect(onError).toHaveBeenCalledWith('upload_failed'))
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(failure))
     expect(view.dispatch).not.toHaveBeenCalled()
   })
 

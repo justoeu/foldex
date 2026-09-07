@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"foldex/internal/backupagent"
+	"foldex/internal/backupjobs"
 )
 
 // TestScheduleResponseHasATypedWireShape is BP-MEN-005: GET /schedule used to
@@ -68,9 +68,9 @@ func TestScheduleResponseHasATypedWireShape(t *testing.T) {
 
 	raw, err := json.Marshal(scheduleResponse{
 		Jobs:               Jobs,
-		Rows:               map[string]backupagent.ScheduleRow{},
-		Bounds:             scheduleBounds{TimesMin: backupagent.MinTimes},
-		AgentSchemaVersion: backupagent.RequiredSchemaVersion,
+		Rows:               map[string]backupjobs.ScheduleRow{},
+		Bounds:             scheduleBounds{TimesMin: backupjobs.MinTimes},
+		AgentSchemaVersion: backupjobs.RequiredSchemaVersion,
 	})
 	require.NoError(t, err)
 	var wire map[string]json.RawMessage
@@ -80,7 +80,7 @@ func TestScheduleResponseHasATypedWireShape(t *testing.T) {
 
 	var got scheduleResponse
 	require.NoError(t, json.Unmarshal(raw, &got))
-	assert.Equal(t, backupagent.RequiredSchemaVersion, got.AgentSchemaVersion)
+	assert.Equal(t, backupjobs.RequiredSchemaVersion, got.AgentSchemaVersion)
 
 	var missing scheduleResponse
 	require.NoError(t, json.Unmarshal([]byte(`{"jobs":[],"rows":{},"bounds":{},"agent":null}`), &missing))

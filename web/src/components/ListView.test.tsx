@@ -306,3 +306,21 @@ describe('ListView', () => {
     expect(listViewSource).toMatch(/\[confirm, deleteNote, t\]/)
   })
 })
+
+describe('shortLast', () => {
+  // BUG-ART-106: the server clock a few minutes ahead of the device made a
+  // freshly clicked link render "-3m"; the card view collapses the same
+  // skew to "just now".
+  it('clamps a future timestamp to 0m instead of rendering a negative age', async () => {
+    const { shortLast } = await import('./ListView')
+    const threeMinutesAhead = new Date(Date.now() + 3 * 60_000).toISOString()
+    expect(shortLast(threeMinutesAhead)).toBe('0m')
+  })
+
+  it('formats past timestamps and the never-clicked sentinel', async () => {
+    const { shortLast } = await import('./ListView')
+    expect(shortLast(new Date(Date.now() - 90 * 60_000).toISOString())).toBe('2h')
+    expect(shortLast(new Date(Date.now() - 3 * 86400_000).toISOString())).toBe('3d')
+    expect(shortLast(null)).toBe('—')
+  })
+})

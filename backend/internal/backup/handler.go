@@ -260,7 +260,7 @@ func readZipFromRequest(w http.ResponseWriter, r *http.Request, createTemp func(
 	// or multipart). Applies to both branches below — multipart parts that
 	// would individually pass maxBackupBytes still trip this when summed.
 	// Passing the real ResponseWriter (not nil) lets the cap surface as a
-	// 413 instead of a 500 when streamToTempZip wraps the limit error.
+	// 413 instead of a 500 when streamToTempZipWith wraps the limit error.
 	r.Body = http.MaxBytesReader(w, r.Body, maxBackupBytes)
 
 	if strings.HasPrefix(ct, "application/zip") {
@@ -290,14 +290,12 @@ func readZipFromRequest(w http.ResponseWriter, r *http.Request, createTemp func(
 	return nil, noop, fmt.Errorf("no `file` part in multipart upload")
 }
 
-// ErrPayloadTooLarge is returned by streamToTempZip when the body exceeded
+// ErrPayloadTooLarge is returned by streamToTempZipWith when the body exceeded
 // maxBackupBytes. Callers map it to 413 instead of a generic 500.
 var ErrPayloadTooLarge = fmt.Errorf("backup: upload exceeds %d-byte limit", maxBackupBytes)
 
-// streamToTempZip copies src to a temp file, opens it as a zip.Reader, and
-// returns a cleanup that closes + removes the temp file. The temp file lives
-// only for the duration of the restore — successful and failed paths both go
-// through the cleanup closure. Permissions default to 0600 via os.CreateTemp.
+// streamToTempZip is streamToTempZipWith with the default temp-file creator
+// (tests only — production callers inject their own creator).
 func streamToTempZip(src io.Reader) (*zip.Reader, func(), error) {
 	return streamToTempZipWith(src, func() (*os.File, error) {
 		return os.CreateTemp("", "foldex-backup-*.zip")

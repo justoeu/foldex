@@ -54,6 +54,33 @@ func sha256hex(b []byte) string {
 	return "sha256:" + hex.EncodeToString(h[:])
 }
 
+// backupZip builds the canonical two-entry archive (manifest + database.json)
+// from a snapshot, checksumming the database automatically; mutate adjusts the
+// manifest for the branch under test. The Kind/Version/SchemaVersion triple
+// appeared 23 times before this helper — a new validation branch should not
+// copy it again. backupZipRaw is the same for a hand-built database payload.
+func backupZip(t *testing.T, snap backup.Snapshot, mutate func(*backup.Manifest)) *zip.Reader {
+	t.Helper()
+	return backupZipRaw(t, mustJSON(t, snap), mutate)
+}
+
+func backupZipRaw(t *testing.T, db []byte, mutate func(*backup.Manifest)) *zip.Reader {
+	t.Helper()
+	m := backup.Manifest{
+		Kind:          backup.ManifestKind,
+		Version:       backup.ManifestVersion,
+		SchemaVersion: backup.CurrentSchemaVersion,
+		Checksums:     map[string]string{"database.json": sha256hex(db)},
+	}
+	if mutate != nil {
+		mutate(&m)
+	}
+	return zipFromEntries(t, map[string][]byte{
+		"manifest.json": mustJSON(t, m),
+		"database.json": db,
+	})
+}
+
 func TestValidate_ErrorBranches(t *testing.T) {
 	pool := testdb.Shared(t)
 
@@ -109,13 +136,8 @@ func TestValidate_ErrorBranches(t *testing.T) {
 	})
 
 	t.Run("schema_old_warns", func(t *testing.T) {
-		db := mustJSON(t, backup.Snapshot{Version: backup.DatabaseSnapshotVersion})
-		zr := zipFromEntries(t, map[string][]byte{
-			"manifest.json": mustJSON(t, backup.Manifest{
-				Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: 1,
-				Checksums: map[string]string{"database.json": sha256hex(db)},
-			}),
-			"database.json": db,
+		zr := backupZip(t, backup.Snapshot{Version: backup.DatabaseSnapshotVersion}, func(m *backup.Manifest) {
+			m.SchemaVersion = 1
 		})
 		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
@@ -125,16 +147,8 @@ func TestValidate_ErrorBranches(t *testing.T) {
 	})
 
 	t.Run("missing_checksum_entry", func(t *testing.T) {
-		db := mustJSON(t, backup.Snapshot{Version: backup.DatabaseSnapshotVersion})
-		zr := zipFromEntries(t, map[string][]byte{
-			"manifest.json": mustJSON(t, backup.Manifest{
-				Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
-				Checksums: map[string]string{
-					"database.json":     sha256hex(db),
-					"files/missing.jpg": "sha256:deadbeef",
-				},
-			}),
-			"database.json": db,
+		zr := backupZip(t, backup.Snapshot{Version: backup.DatabaseSnapshotVersion}, func(m *backup.Manifest) {
+			m.Checksums["files/missing.jpg"] = "sha256:deadbeef"
 		})
 		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
@@ -144,13 +158,8 @@ func TestValidate_ErrorBranches(t *testing.T) {
 	})
 
 	t.Run("checksum_mismatch", func(t *testing.T) {
-		db := mustJSON(t, backup.Snapshot{Version: backup.DatabaseSnapshotVersion})
-		zr := zipFromEntries(t, map[string][]byte{
-			"manifest.json": mustJSON(t, backup.Manifest{
-				Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
-				Checksums: map[string]string{"database.json": "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
-			}),
-			"database.json": db,
+		zr := backupZip(t, backup.Snapshot{Version: backup.DatabaseSnapshotVersion}, func(m *backup.Manifest) {
+			m.Checksums["database.json"] = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 		})
 		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
@@ -173,14 +182,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 	})
 
 	t.Run("bad_database_json", func(t *testing.T) {
-		db := []byte(`{not-json`)
-		zr := zipFromEntries(t, map[string][]byte{
-			"manifest.json": mustJSON(t, backup.Manifest{
-				Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
-				Checksums: map[string]string{"database.json": sha256hex(db)},
-			}),
-			"database.json": db,
-		})
+		zr := backupZipRaw(t, []byte(`{not-json`), nil)
 		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.False(t, v.OK)
@@ -197,14 +199,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 				OGImageURL: &og, CreatedAt: time.Now().UTC(),
 			}},
 		}
-		db := mustJSON(t, snap)
-		zr := zipFromEntries(t, map[string][]byte{
-			"manifest.json": mustJSON(t, backup.Manifest{
-				Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
-				Checksums: map[string]string{"database.json": sha256hex(db)},
-			}),
-			"database.json": db,
-		})
+		zr := backupZip(t, snap, nil)
 		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.True(t, v.OK)
@@ -221,14 +216,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 				OGImageURL: &og, CreatedAt: time.Now().UTC(),
 			}},
 		}
-		db := mustJSON(t, snap)
-		zr := zipFromEntries(t, map[string][]byte{
-			"manifest.json": mustJSON(t, backup.Manifest{
-				Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
-				Checksums: map[string]string{"database.json": sha256hex(db)},
-			}),
-			"database.json": db,
-		})
+		zr := backupZip(t, snap, nil)
 		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.True(t, v.OK)
@@ -247,14 +235,7 @@ func TestValidate_ErrorBranches(t *testing.T) {
 			}},
 			Tags: []backup.TagRow{{ID: 1, Name: "fresh-tag-only", Color: "#abc", CreatedAt: time.Now().UTC()}},
 		}
-		db := mustJSON(t, snap)
-		zr := zipFromEntries(t, map[string][]byte{
-			"manifest.json": mustJSON(t, backup.Manifest{
-				Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
-				Checksums: map[string]string{"database.json": sha256hex(db)},
-			}),
-			"database.json": db,
-		})
+		zr := backupZip(t, snap, nil)
 		v, err := svc.Validate(ctx, uid, zr)
 		require.NoError(t, err)
 		assert.True(t, v.OK)
@@ -296,14 +277,7 @@ func TestRestore_EmptySlugAndNoteTags(t *testing.T) {
 		ClickLogs:  []backup.ClickRow{{LinkID: 10, ClickedAt: now}},
 		NoteClicks: []backup.NoteClickRow{{NoteID: 20, ClickedAt: now}},
 	}
-	db := mustJSON(t, snap)
-	zr := zipFromEntries(t, map[string][]byte{
-		"manifest.json": mustJSON(t, backup.Manifest{
-			Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
-			Checksums: map[string]string{"database.json": sha256hex(db)},
-		}),
-		"database.json": db,
-	})
+	zr := backupZip(t, snap, nil)
 
 	rep, err := svc.Restore(ctx, uid, zr, backup.ModeWipe)
 	require.NoError(t, err)
@@ -323,14 +297,7 @@ func TestRestore_EmptySlugAndNoteTags(t *testing.T) {
 	snap2.NoteTags = append(snap2.NoteTags, backup.NoteTagRow{NoteID: 888, TagID: 1})
 	snap2.ClickLogs = append(snap2.ClickLogs, backup.ClickRow{LinkID: 999, ClickedAt: now})
 	snap2.NoteClicks = append(snap2.NoteClicks, backup.NoteClickRow{NoteID: 888, ClickedAt: now})
-	db2 := mustJSON(t, snap2)
-	zr2 := zipFromEntries(t, map[string][]byte{
-		"manifest.json": mustJSON(t, backup.Manifest{
-			Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
-			Checksums: map[string]string{"database.json": sha256hex(db2)},
-		}),
-		"database.json": db2,
-	})
+	zr2 := backupZip(t, snap2, nil)
 	rep2, err := svc.Restore(ctx, uid, zr2, backup.ModeSkip)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep2.Skipped.Links)
@@ -412,14 +379,7 @@ func TestRestore_UniqueTagNameWalksPast2(t *testing.T) {
 		Version: backup.DatabaseSnapshotVersion,
 		Tags:    []backup.TagRow{{ID: 9, Name: "walk", Color: "#def", CreatedAt: now}},
 	}
-	db := mustJSON(t, snap)
-	zr := zipFromEntries(t, map[string][]byte{
-		"manifest.json": mustJSON(t, backup.Manifest{
-			Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
-			Checksums: map[string]string{"database.json": sha256hex(db)},
-		}),
-		"database.json": db,
-	})
+	zr := backupZip(t, snap, nil)
 	rep, err := svc.Restore(ctx, uid, zr, backup.ModeDuplicate)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep.Inserted.Tags)
@@ -457,14 +417,7 @@ func TestRestore_SkipIntoEmptyDB_InsertsEverything(t *testing.T) {
 			Key: "master_password_hash", Value: "$2a$10$placeholder", UpdatedAt: now,
 		}},
 	}
-	db := mustJSON(t, snap)
-	zr := zipFromEntries(t, map[string][]byte{
-		"manifest.json": mustJSON(t, backup.Manifest{
-			Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
-			Checksums: map[string]string{"database.json": sha256hex(db)},
-		}),
-		"database.json": db,
-	})
+	zr := backupZip(t, snap, nil)
 	rep, err := svc.Restore(ctx, uid, zr, backup.ModeSkip)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep.Inserted.Links)
@@ -504,14 +457,7 @@ func TestRestore_DuplicateIntoEmptyDB(t *testing.T) {
 		NoteTags:  []backup.NoteTagRow{{NoteID: 1, TagID: 1}},
 		ClickLogs: []backup.ClickRow{{LinkID: 1, ClickedAt: now}},
 	}
-	db := mustJSON(t, snap)
-	zr := zipFromEntries(t, map[string][]byte{
-		"manifest.json": mustJSON(t, backup.Manifest{
-			Kind: backup.ManifestKind, Version: backup.ManifestVersion, SchemaVersion: backup.CurrentSchemaVersion,
-			Checksums: map[string]string{"database.json": sha256hex(db)},
-		}),
-		"database.json": db,
-	})
+	zr := backupZip(t, snap, nil)
 	rep, err := svc.Restore(ctx, uid, zr, backup.ModeDuplicate)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rep.Inserted.Links)
@@ -613,18 +559,11 @@ func TestRestore_DirectPreflightRejectsBeforeDatabaseMutation(t *testing.T) {
 					BodyHTML: tc.bodyHTML, CoverURL: tc.coverURL, CreatedAt: now, UpdatedAt: now,
 				}},
 			}
-			db := mustJSON(t, snap)
-			checksum := tc.checksum
-			if checksum == "" {
-				checksum = sha256hex(db)
-			}
-			zr := zipFromEntries(t, map[string][]byte{
-				"manifest.json": mustJSON(t, backup.Manifest{
-					Kind: backup.ManifestKind, Version: tc.version,
-					SchemaVersion: backup.CurrentSchemaVersion,
-					Checksums:     map[string]string{"database.json": checksum},
-				}),
-				"database.json": db,
+			zr := backupZip(t, snap, func(m *backup.Manifest) {
+				m.Version = tc.version
+				if tc.checksum != "" {
+					m.Checksums["database.json"] = tc.checksum
+				}
 			})
 
 			_, err = backup.NewService(pool, newStubBucket(), discardLogger()).Restore(ctx, uid, zr, backup.ModeWipe)
@@ -746,15 +685,7 @@ func TestRestore_DirectPreflightPreservesExternalNoteMediaInAllModes(t *testing.
 					BodyHTML: bodyHTML, CoverURL: &coverURL, CreatedAt: now, UpdatedAt: now,
 				}},
 			}
-			db := mustJSON(t, snap)
-			zr := zipFromEntries(t, map[string][]byte{
-				"manifest.json": mustJSON(t, backup.Manifest{
-					Kind: backup.ManifestKind, Version: backup.ManifestVersion,
-					SchemaVersion: backup.CurrentSchemaVersion,
-					Checksums:     map[string]string{"database.json": sha256hex(db)},
-				}),
-				"database.json": db,
-			})
+			zr := backupZip(t, snap, nil)
 
 			rep, err := backup.NewService(pool, newStubBucket(), discardLogger()).Restore(ctx, uid, zr, mode)
 			require.NoError(t, err)
@@ -895,15 +826,7 @@ func TestValidate_RejectsInvalidFolderPasswordHashes(t *testing.T) {
 					ID: 1, Name: "Locked", Color: "#abc", PasswordHash: &tc.hash,
 				}},
 			}
-			db := mustJSON(t, snap)
-			zr := zipFromEntries(t, map[string][]byte{
-				"manifest.json": mustJSON(t, backup.Manifest{
-					Kind: backup.ManifestKind, Version: backup.ManifestVersion,
-					SchemaVersion: backup.CurrentSchemaVersion,
-					Checksums:     map[string]string{"database.json": sha256hex(db)},
-				}),
-				"database.json": db,
-			})
+			zr := backupZip(t, snap, nil)
 
 			v, err := svc.Validate(context.Background(), uid, zr)
 			require.NoError(t, err)
@@ -919,15 +842,7 @@ func TestValidate_RejectsInvalidFolderPasswordHashes(t *testing.T) {
 func TestValidate_RejectsUserIDAnywhereInSnapshot(t *testing.T) {
 	pool := testdb.Shared(t)
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "editor")
-	db := []byte(`{"version":7,"tags":[{"id":1,"user_id":999,"name":"x","color":"#abc"}]}`)
-	zr := zipFromEntries(t, map[string][]byte{
-		"manifest.json": mustJSON(t, backup.Manifest{
-			Kind: backup.ManifestKind, Version: backup.ManifestVersion,
-			SchemaVersion: backup.CurrentSchemaVersion,
-			Checksums:     map[string]string{"database.json": sha256hex(db)},
-		}),
-		"database.json": db,
-	})
+	zr := backupZipRaw(t, []byte(`{"version":7,"tags":[{"id":1,"user_id":999,"name":"x","color":"#abc"}]}`), nil)
 
 	got, err := backup.NewService(pool, newStubBucket(), discardLogger()).Validate(context.Background(), uid, zr)
 	require.NoError(t, err)

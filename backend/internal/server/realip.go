@@ -179,3 +179,19 @@ func parseTrustedProxies(csv string) ([]*net.IPNet, []string) {
 	}
 	return nets, bad
 }
+
+// coversLANClientRanges reports whether the trust set reaches into ranges
+// end-user devices live in (SEC-SEN-003/004). Docker allocates the compose
+// network from 172.16.0.0/12 — that is where the proxy itself lives and is
+// the shipped default — but 10.0.0.0/8 and 192.168.0.0/16 are where the
+// PHONES and laptops arriving through nginx come from: trusting them means
+// trusting the clients, which both collapses honest attribution and lets a
+// LAN spoofer choose their rate-limit identity via a header.
+func coversLANClientRanges(trusted []*net.IPNet) bool {
+	for _, probe := range [...]string{"10.0.0.1", "192.168.0.1"} {
+		if containsIP(trusted, net.ParseIP(probe)) {
+			return true
+		}
+	}
+	return false
+}

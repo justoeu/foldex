@@ -725,8 +725,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "account_inactive", "account is not active"))
 		return
 	case errors.Is(err, ErrSessionInvalid):
-		h.cookies.ClearSession(w)
-		httperr.Write(w, httperr.New(http.StatusUnauthorized, "session_expired", "session expired"))
+		h.writeSessionInvalid(w)
 		return
 	case err != nil:
 		h.logger.Error("refresh", "err", err)

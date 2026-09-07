@@ -1,23 +1,13 @@
 import {
   apiUrl,
+  authHeaders,
+  credentialProblem,
   getStoredConfig,
   normalizeBaseUrl,
   requestOriginAccess,
   requireOriginAccess,
 } from "./config.js";
-
-function authHeaders(config, includeContentType = false) {
-  const headers = {};
-  if (includeContentType) headers["Content-Type"] = "application/json";
-  if (config.apiToken) headers.Authorization = "Bearer " + config.apiToken;
-  return headers;
-}
-
-function credentialProblem(status) {
-  if (status === 401) return "not signed in — set an API token in settings";
-  if (status === 403) return "this token is not allowed here";
-  return null;
-}
+import { t } from "./i18n.js";
 
 export async function loadTags(
   config,
@@ -29,7 +19,9 @@ export async function loadTags(
     redirect: "error",
   });
   if (!resp.ok)
-    throw new Error(credentialProblem(resp.status) || "HTTP " + resp.status);
+    throw new Error(
+      credentialProblem(resp.status) || "HTTP " + resp.status,
+    );
   return resp.json();
 }
 
@@ -48,7 +40,15 @@ export async function saveLink(
   if (!resp.ok) {
     const problem = credentialProblem(resp.status);
     if (problem) throw new Error(problem);
+    // The backend answers {error:{code,message}} — surface the human
+    // message it already wrote; the raw slice is only for non-JSON bodies.
     const body = await resp.text();
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed?.error?.message) throw new Error(parsed.error.message);
+    } catch (err) {
+      if (!(err instanceof SyntaxError)) throw err;
+    }
     throw new Error("HTTP " + resp.status + " " + body.slice(0, 120));
   }
 }
@@ -64,6 +64,10 @@ export function initPopup({
   const saveBtn = $("save");
   const selected = new Set();
   let config;
+
+  // Let the success status actually be seen before the popup dies —
+  // closing immediately made the confirmation invisible.
+  const CLOSE_AFTER_SAVE_MS = 600;
 
   function setStatus(msg, level) {
     statusEl.textContent = msg || "";
@@ -108,12 +112,12 @@ export function initPopup({
     if (saveBtn.disabled) return;
     const url = $("url").value.trim();
     if (!url) {
-      setStatus("URL is required", "error");
+      setStatus(t(chromeApi, "urlRequired"), "error");
       return;
     }
 
     saveBtn.disabled = true;
-    setStatus("Saving…");
+    setStatus(t(chromeApi, "saving"));
     try {
       await saveLink(
         config,
@@ -125,10 +129,10 @@ export function initPopup({
         },
         { chromeApi, fetchImpl },
       );
-      setStatus("Saved ✓", "ok");
-      setTimeout(() => window.close(), 600);
+      setStatus(t(chromeApi, "saved"), "ok");
+      setTimeout(() => window.close(), CLOSE_AFTER_SAVE_MS);
     } catch (error) {
-      setStatus("Save failed: " + error.message, "error");
+      setStatus(t(chromeApi, "saveFailed", [error.message]), "error");
       saveBtn.disabled = false;
     }
   }
@@ -154,18 +158,15 @@ export function initPopup({
       try {
         renderTags(await loadTags(config, { chromeApi, fetchImpl }));
       } catch (error) {
-        setStatus(
-          "Could not load tags: " + error.message + " — check settings",
-          "error",
-        );
+        setStatus(t(chromeApi, "tagsLoadFailed", [error.message]), "error");
       }
     } catch (error) {
-      setStatus("Could not load settings: " + error.message, "error");
+      setStatus(t(chromeApi, "settingsLoadFailed", [error.message]), "error");
     }
   })();
 
   const tab = prefill().catch((error) =>
-    setStatus("Could not read this tab: " + error.message, "error"),
+    setStatus(t(chromeApi, "tabReadFailed", [error.message]), "error"),
   );
   return { ready: Promise.all([load, tab]), save };
 }

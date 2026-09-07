@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { FolderCard } from './FolderCard'
+import { FolderCard, parseDropId } from './FolderCard'
 import type { Folder, PreviewTile } from '../api/types'
 
 const RAPID_VIEW_DELAY_MS = 220
@@ -153,6 +153,34 @@ describe('FolderCard', () => {
       },
     })
     expect(onDropLink).toHaveBeenCalledWith(42, 1)
+  })
+
+  it('ignores an unparseable drop id', () => {
+    const onDropLink = vi.fn()
+    const onDropNote = vi.fn()
+    const onDropFolder = vi.fn()
+    const { container } = render(
+      <FolderCard
+        folder={makeFolder({ link_count: 0, preview_links: [] })}
+        onOpen={vi.fn()}
+        onDropLink={onDropLink}
+        onDropNote={onDropNote}
+        onDropFolder={onDropFolder}
+      />,
+    )
+    const root = container.querySelector('.fx-folder-card') as HTMLElement
+    fireEvent.drop(root, {
+      dataTransfer: {
+        types: ['application/x-foldex-link'],
+        getData: (k: string) => (k === 'application/x-foldex-link' ? 'abc' : ''),
+      },
+    })
+    expect(onDropLink).not.toHaveBeenCalled()
+    expect(onDropNote).not.toHaveBeenCalled()
+    expect(onDropFolder).not.toHaveBeenCalled()
+    expect(parseDropId('abc')).toBeNull()
+    expect(parseDropId('0')).toBeNull()
+    expect(parseDropId('42')).toBe(42)
   })
 
   it('ignores drops without the foldex link payload', () => {

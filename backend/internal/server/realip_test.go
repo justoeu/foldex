@@ -160,6 +160,37 @@ func TestIPv6PeerAndClient(t *testing.T) {
 	}
 }
 
+// The shipped default (docker-compose.yml) is 172.16.0.0/12 — where Docker
+// allocates the foldex network, so the nginx peer is inside it while the LAN
+// CLIENTS are not. That asymmetry is the whole point (SEC-SEN-004): the walk
+// must skip the proxy and ADOPT the honest 192.168.x client, or every user
+// collapses onto nginx's address and the per-IP login width bucket becomes
+// one global bucket an anonymous LAN peer can lock for everyone.
+func TestComposeBridgeDefaultAdoptsTheHonestLANClient(t *testing.T) {
+	t.Parallel()
+	got := seen(t, nets(t, "172.16.0.0/12"), "172.18.0.9:5555", map[string]string{
+		"X-Forwarded-For": "192.168.1.23",
+	})
+	if got != "192.168.1.23" {
+		t.Fatalf("RemoteAddr = %q, want the honest LAN client, not the proxy's address", got)
+	}
+}
+
+// The old compose default trusted all of RFC1918 — including the clients.
+// The walk then skips the honest client hop too and returns "" (RemoteAddr
+// keeps the proxy), while a spoofer's XFF is adopted verbatim. Kept here as
+// the documented failure mode the narrowed default and the boot warning
+// exist to prevent.
+func TestTrustingTheClientRangeCollapsesHonestClients(t *testing.T) {
+	t.Parallel()
+	got := seen(t, nets(t, "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"), "172.18.0.9:5555", map[string]string{
+		"X-Forwarded-For": "192.168.1.23",
+	})
+	if got != "172.18.0.9:5555" {
+		t.Fatalf("RemoteAddr = %q, want collapse onto the proxy (the defect the narrowed default removes)", got)
+	}
+}
+
 func TestParseTrustedProxies(t *testing.T) {
 	t.Parallel()
 

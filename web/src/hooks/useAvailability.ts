@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import type { AvailabilityReason, AvailabilityResponse } from '../api/types'
 
-export type AvailabilityReason = 'shape' | 'reserved' | 'taken' | 'empty' | 'pending'
+export type { AvailabilityReason, AvailabilityResponse }
+
 export type Availability =
   | { state: 'idle' }
   | { state: 'checking' }
@@ -12,8 +14,6 @@ export type Availability =
   | { state: 'warn'; reason: AvailabilityReason }
   | { state: 'refused'; reason: AvailabilityReason }
   | { state: 'error' }
-
-export type AvailabilityResponse = { available: boolean; reason?: AvailabilityReason }
 
 /** What the hook calls. Injected rather than a URL string, so the route and the
  *  response type live in `api/*` beside every other server call — and so a

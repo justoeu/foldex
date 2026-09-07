@@ -31,13 +31,13 @@ Bookmark nativo é ótimo para "salvar uma página rápida e esquecer". Quando v
 | **Só em inglês / sem localização.**                                                      | UI totalmente localizada em **English / Português / Español** via `react-i18next`. Seletor de idioma no topbar, fileira de bandeiras em toda tela deslogada; autodetecção pelo idioma do navegador no primeiro acesso; escolha persiste no `localStorage` e na conta. |
 | **Pinned/favoritos = uma pastinha à parte.** Só visual.                                 | `pinned` é coluna real na tabela. `ORDER BY pinned DESC, …` aplica em todo modo de ordenação. Badge gradient sempre visível. |
 | **Dados embutidos no navegador.** Trocou de máquina? Reinstalou Chrome? Reza.           | Postgres + RustFS em containers. `make up` numa máquina nova e seu ZIP de backup restaura tudo (DB + imagens) em ~minutos. |
-| **Pastebin/app de notas é outra ferramenta.** Snippets e links vivem em lugares diferentes. | **Notas** (`⌥M`) são uma entidade de primeira classe junto com os links: editor rich-text (Tiptap) com **barra de formatação** — negrito/itálico/sublinhado/tachado, títulos, listas com marcadores e numeradas, alinhamento, cor do texto, fonte, citações/código, links e imagens inline —, mesmas tags/pastas/pin/busca dos links, intercaladas no mesmo grid com badge esmeralda, compartilháveis via página pública `/n/{slug}`. **Abrir** uma nota a lê num modal dentro do app, não numa aba nova — a página pública fica a um clique dali, e é ela que conta uma visualização. |
+| **Pastebin/app de notas é outra ferramenta.** Snippets e links vivem em lugares diferentes. | **Notas** (`⌥M`) são uma entidade de primeira classe junto com os links: editor rich-text (Tiptap) com **barra de formatação** — negrito/itálico/sublinhado/tachado, títulos, listas com marcadores e numeradas, alinhamento, cor do texto, fonte, citações/código, links e imagens inline —, mesmas tags/pastas/pin/busca dos links, intercaladas no mesmo grid com badge esmeralda, compartilháveis via página pública `/n/{slug}` assim que você publicar a nota (notas são privadas por padrão — o slug deriva do título, então não é segredo). **Abrir** uma nota a lê num modal dentro do app, não numa aba nova — a página pública fica a um clique dali, e é ela que conta uma visualização. |
 | **Sem como manter uma pasta privada** numa tela/máquina compartilhada sem criar uma segunda conta inteira. | **Senha por pasta.** Defina uma senha (hash bcrypt) em qualquer pasta — os links/notas dela ficam ocultos (e os thumbnails de preview são redigidos, mesmo no hover) até você desbloquear pra aquela sessão. Aplicado no backend, não só na UI: a API em si recusa entregar o conteúdo de uma pasta trancada sem prova da senha. Excluir uma pasta protegida pede essa senha; excluir uma árvore inteira é recusado se ela contiver subpastas protegidas independentemente, então desbloquear só a raiz nunca as apaga. Adicione uma **palavra-dica** opcional (exibida no popup de unlock; não pode ser a própria senha) e configure uma **senha master** em **Configurações** (com medidor de complexidade, confirmação e um lembrete próprio) pra redefinir a senha de uma pasta caso você esqueça. |
 
 ### Cenários reais que viraram a chave (bookmark nativo → foldex)
 
 - **"Quais dashboards eu de fato uso?"** → a página de stats mostra top hosts e top links nos últimos 30 dias. Larga os de 0 cliques.
-- **"Quero compartilhar um link curto com a equipe."** → toda URL ganha um alias estável `/go/{slug}` que redireciona + loga o clique.
+- **"Quero compartilhar um link curto com a equipe."** → toda URL ganha um alias estável `/go/{slug}` que redireciona + loga o clique — a resolução pública (anônima) é opt-in por link (`is_public`); sem isso o `/go/{slug}` responde só pra sua sessão.
 - **"Trocar de máquina sem perder nada."** → 1 botão na UI gera o ZIP de backup completo. Outro botão na máquina nova restaura com `mode=wipe`.
 - **"O mesmo link mora em 3 contextos (trabalho + ia + arquitetura)."** → 3 tags. Aparece nos 3 filtros.
 - **"Quero saber visualmente qual link é qual antes de clicar."** → cada card mostra um preview OG/screenshot/upload em 150px.
@@ -223,19 +223,23 @@ curl -s -X POST localhost:9089/api/tags -H "$AUTH" -H "$JSON" \
 
 # 3. Cria um link com essa tag (o preview é enfileirado async).
 curl -s -X POST localhost:9089/api/links -H "$AUTH" -H "$JSON" \
-  -d '{"url":"https://news.ycombinator.com","title":"HN","tag_ids":[1]}' | jq .
+  -d '{"url":"https://news.ycombinator.com","title":"HN","tag_ids":[1],"is_public":true}' | jq .
 
 # 4. Espera ~2s pelo worker; então busca — `preview_status` deve ser "ok".
 sleep 3 && curl -s localhost:9089/api/links/1 -H "$AUTH" -H "$JSON" | jq '.preview_status, .og_image_url'
 
 # 5. Resolve o link curto (302 + contador). Por SLUG: o /go/1 numérico agora vem
 #    desligado, porque essa rota resolve sem sessão e os ids de link são
-#    compartilhados entre contas. Veja PUBLIC_NUMERIC_IDS.
+#    compartilhados entre contas. Veja PUBLIC_NUMERIC_IDS. O link é criado com
+#    is_public — o /go/{slug} anônimo é opt-in (slugs derivam de títulos, então
+#    não são segredos); sem isso o redirect responde só pra sua sessão.
 curl -sI localhost:9089/go/hn | head -3
 
-# 6. Cria uma nota (HTML rico sanitizado no servidor) e renderiza a página pública.
+# 6. Cria uma nota (HTML rico sanitizado no servidor), publica ela (notas são
+#    privadas por padrão: o slug deriva do título, então não é segredo) e
+#    renderiza a página pública.
 curl -s -X POST localhost:9089/api/notes -H "$AUTH" -H "$JSON" \
-  -d '{"title":"Scratchpad","body_html":"<p>Olá <strong>mundo</strong></p>"}' | jq .
+  -d '{"title":"Scratchpad","body_html":"<p>Olá <strong>mundo</strong></p>","is_public":true}' | jq .
 curl -s localhost:9089/n/scratchpad | grep -o '<h1>.*</h1>'
 
 # 7. Cria uma pasta com senha, confirma que o conteúdo fica bloqueado sem o

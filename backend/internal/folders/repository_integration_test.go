@@ -169,7 +169,7 @@ func TestRepository_DeleteCascadeDoesNotOrphanTagsOrClicks(t *testing.T) {
 		URL: "https://orphan-check.example", Title: "L", FolderID: &folder.ID, TagIDs: []int64{tag.ID},
 	})
 	require.NoError(t, err)
-	_, err = lrepo.ClickAndResolve(ctx, link.ID)
+	_, err = lrepo.ClickAndResolve(ctx, link.ID, uid)
 	require.NoError(t, err)
 
 	require.NoError(t, frepo.DeleteCascade(ctx, uid, folder.ID, testUnlockKey, ""))

@@ -228,15 +228,44 @@ func TestEnvBool(t *testing.T) {
 		{"1", true},
 		{"true", true},
 		{"TRUE", true},
+		{"True", true},
 		{"yes", true},
 		{"false", false},
 		{"0", false},
+		{"FALSE", false},
 		{"", false},
+		{"true ", true},
+		{" true", true},
 	}
 	for _, tc := range cases {
 		t.Setenv("TEST_BOOL", tc.val)
 		assert.Equal(t, tc.want, envBool("TEST_BOOL", false), "value: %q", tc.val)
 	}
+}
+
+// An unrecognized value is a typo or an idiom the parser does not know, and
+// silently mapping it to false turns security knobs (2FA-for-admins,
+// STARTTLS) OFF with no boot-time signal. It must fall back to the DEFAULT,
+// loudly.
+func TestEnvBool_UnrecognizedValueFallsBackToDefault(t *testing.T) {
+	t.Setenv("TEST_BOOL", "on")
+	assert.True(t, envBool("TEST_BOOL", true), "'on' is unrecognized: the default (true) must win, not false")
+	assert.False(t, envBool("TEST_BOOL", false))
+
+	t.Setenv("TEST_BOOL", "treu")
+	assert.True(t, envBool("TEST_BOOL", true), "a typo must fall back to the default, not silently false")
+}
+
+func TestEnvBoolFirst_AlignedWithEnvBool(t *testing.T) {
+	t.Setenv("TEST_BOOL_PRIMARY", "true ")
+	assert.True(t, envBoolFirst("TEST_BOOL_PRIMARY", "TEST_BOOL_LEGACY", false), "trailing space must not defeat the primary")
+	t.Setenv("TEST_BOOL_PRIMARY", "on")
+	t.Setenv("TEST_BOOL_LEGACY", "1")
+	assert.True(t, envBoolFirst("TEST_BOOL_PRIMARY", "TEST_BOOL_LEGACY", false),
+		"an unparseable primary is absent, not false: the legacy value must be consulted")
+	t.Setenv("TEST_BOOL_LEGACY", "off")
+	assert.True(t, envBoolFirst("TEST_BOOL_PRIMARY", "TEST_BOOL_LEGACY", true),
+		"nothing parseable anywhere: the default must win")
 }
 
 // normalizeAuth clamps rather than rejects: these are tuning values, and an
@@ -536,4 +565,27 @@ func TestLoad_CookieSecureFollowsThePublicURLScheme(t *testing.T) {
 			assert.Equal(t, tc.want, cfg.AuthCookieSecure)
 		})
 	}
+}
+
+// SEC-SEN-005: the Postgres password shipped as the literal 'foldex' in every
+// default install. Refusing to boot would break existing volumes (a running
+// cluster cannot be re-keyed by a config check), so the contract is WARN,
+// never refuse — and an operator who set a real password must hear nothing.
+func TestInsecureDBPasswordWarning(t *testing.T) {
+	c := Config{
+		BindAddr: "127.0.0.1",
+		DBURL:    "postgres://foldex:foldex@db:5432/foldex?sslmode=disable",
+	}
+	require.NoError(t, c.validateSecureDefaults(),
+		"a default DB password must warn, never refuse — an existing volume cannot be re-keyed by a boot check")
+	require.NotEmpty(t, c.InsecureDBPasswordWarning(),
+		"the known default password must be called out at boot")
+
+	c.DBURL = "postgres://foldex:hunter2-secret@db:5432/foldex?sslmode=disable"
+	assert.Empty(t, c.InsecureDBPasswordWarning(),
+		"a real password is the operator's business, not a warning")
+
+	c.DBURL = "not a url at all"
+	assert.Empty(t, c.InsecureDBPasswordWarning(),
+		"an unparseable DSN has its own failure path; the warning must not guess")
 }

@@ -21,9 +21,21 @@ export function normalizeBaseUrl(rawBaseUrl) {
   if (url.username || url.password) {
     throw new Error('The backend URL must not contain credentials.');
   }
+  // Bearer token rides every extension call; http to a non-loopback host
+  // puts it on the wire in clear (INV-093).
+  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+    throw new Error(
+      'HTTP is only allowed for loopback (localhost, 127.0.0.1, ::1). Use HTTPS for any other host.',
+    );
+  }
 
   const path = url.pathname.replace(/\/+$/, '');
   return url.origin + (path === '/' ? '' : path);
+}
+
+function isLoopbackHost(hostname) {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
 
 export function permissionForBaseUrl(baseUrl) {
@@ -33,6 +45,24 @@ export function permissionForBaseUrl(baseUrl) {
 
 export function apiUrl(baseUrl, path) {
   return normalizeBaseUrl(baseUrl) + path;
+}
+
+// One header builder for both surfaces (popup + options). The two files
+// used to carry divergent shapes for the same job.
+export function authHeaders(config, includeContentType = false) {
+  const headers = {};
+  if (includeContentType) headers['Content-Type'] = 'application/json';
+  if (config.apiToken) headers.Authorization = 'Bearer ' + config.apiToken;
+  return headers;
+}
+
+// One wording for credential failures, shared by the popup and the
+// options page — the 401 hint about setting a token used to exist only on
+// the popup arm.
+export function credentialProblem(status) {
+  if (status === 401) return 'not signed in — set an API token in settings';
+  if (status === 403) return 'this token is not allowed here';
+  return null;
 }
 
 function permissionError(baseUrl) {

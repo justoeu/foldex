@@ -34,6 +34,22 @@ export function invalidateEntryCounts(qc: QueryClient) {
   return qc.invalidateQueries({ queryKey: entryCountsKey })
 }
 
+// The standard invalidation fan-out for library mutations, replacing the
+// hand-rolled per-mutation bundles that had already drifted (folders.ts
+// omitted ['tags'] and entry-counts; every new cache a mutation must
+// refresh is a ~10-site edit to miss one of). Flags keep each call site's
+// existing reach — behavior-preserving consolidation.
+export function invalidateLibrary(
+  qc: QueryClient,
+  keys: { links?: boolean; entries?: boolean; tags?: boolean; folders?: boolean; counts?: boolean },
+) {
+  if (keys.links) void qc.invalidateQueries({ queryKey: ['links'] })
+  if (keys.entries) void qc.invalidateQueries({ queryKey: ['entries'] })
+  if (keys.tags) void qc.invalidateQueries({ queryKey: ['tags'] })
+  if (keys.folders) void qc.invalidateQueries({ queryKey: ['folders'] })
+  if (keys.counts) invalidateEntryCounts(qc)
+}
+
 const entriesKey = (p: EntryListParams) =>
   [
     'entries',
@@ -228,6 +244,89 @@ export function cachedEntryFolderId(qc: QueryClient, kind: Entry['kind'], id: nu
     }
   }
   return undefined
+}
+
+// The optimistic patch recipe shared by usePinLink / usePinNote /
+// useRefreshPreview: cancel both cache families, record the matched
+// entry's PREVIOUS object per query, apply the patch, and hand back a
+// surgical rollback. Restoring only the touched entry — not a whole-cache
+// snapshot — is what keeps a slow failed mutation from wiping a
+// concurrent mutation's already-applied optimistic state (RACE-HER-004).
+// Notes never touch ['links'] (Link caches hold no notes), so the helper
+// keys that family on kind === 'link'.
+export type OptimisticEntryPatch = {
+  patched: boolean
+  rollback: () => void
+}
+
+export async function optimisticEntryPatch(
+  qc: QueryClient,
+  kind: Entry['kind'],
+  id: number,
+  patch: Partial<Pick<Link, 'pinned' | 'preview_status'>>,
+): Promise<OptimisticEntryPatch> {
+  await qc.cancelQueries({ queryKey: ['links'] })
+  await qc.cancelQueries({ queryKey: ['entries'] })
+
+  const previousLinks = new Map<QueryKey, Link>()
+  if (kind === 'link') {
+    for (const [key, data] of qc.getQueriesData<LinksCache>({ queryKey: ['links'] })) {
+      if (!data || !Array.isArray(data.pages)) continue
+      for (const page of data.pages) {
+        const found = (page ?? []).find((l) => l.id === id)
+        if (found) {
+          previousLinks.set(key, found)
+          break
+        }
+      }
+    }
+  }
+  const previousEntries = new Map<QueryKey, Entry>()
+  for (const [key, data] of qc.getQueriesData<EntriesCache>({ queryKey: ['entries'] })) {
+    if (!data || !Array.isArray(data.pages)) continue
+    for (const page of data.pages) {
+      const found = (page ?? []).find((e) => e.kind === kind && e.id === id)
+      if (found) {
+        previousEntries.set(key, found)
+        break
+      }
+    }
+  }
+
+  if (kind === 'link') mapCachedLinksPatch(qc, id, patch)
+  mapCachedEntries(qc, (e) =>
+    e.kind === kind && e.id === id ? { ...e, ...patch } as Entry : e,
+  )
+
+  const rollback = () => {
+    for (const [key, previous] of previousLinks) {
+      qc.setQueryData<LinksCache>(key, (old) =>
+        old && Array.isArray(old.pages)
+          ? { ...old, pages: old.pages.map((page) => page?.map((l) => (l.id === id ? previous : l))) }
+          : old,
+      )
+    }
+    for (const [key, previous] of previousEntries) {
+      qc.setQueryData<EntriesCache>(key, (old) =>
+        old && Array.isArray(old.pages)
+          ? { ...old, pages: old.pages.map((page) => page?.map((e) => (e.kind === kind && e.id === id ? previous : e))) }
+          : old,
+      )
+    }
+  }
+  return { patched: previousLinks.size > 0 || previousEntries.size > 0, rollback }
+}
+
+type LinksCache = InfiniteData<Link[]>
+
+function mapCachedLinksPatch(qc: QueryClient, id: number, patch: Partial<Pick<Link, 'pinned' | 'preview_status'>>) {
+  qc.setQueriesData<LinksCache>({ queryKey: ['links'] }, (old) => {
+    if (!old || !Array.isArray(old.pages)) return old
+    return {
+      ...old,
+      pages: old.pages.map((page) => (page ? page.map((l) => (l.id === id ? { ...l, ...patch } : l)) : page)),
+    }
+  })
 }
 
 // Same idle window as LinkDialog URL autofill (INV-125): Home types into

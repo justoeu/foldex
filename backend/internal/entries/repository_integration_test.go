@@ -237,9 +237,9 @@ func TestList_QueryParityWithLinkAndNoteRepositories(t *testing.T) {
 		Title: "Beta note", BodyHTML: "<p>page-note-b</p>", FolderID: &folder.ID, TagIDs: []int64{tagA.ID},
 	})
 	require.NoError(t, err)
-	_, err = f.lrepo.ClickAndResolve(ctx, rootLink.ID)
+	_, err = f.lrepo.ClickAndResolve(ctx, rootLink.ID, uid)
 	require.NoError(t, err)
-	_, err = f.nrepo.SystemViewAndResolve(ctx, rootNote.Slug)
+	_, err = f.nrepo.SystemViewAndResolve(ctx, rootNote.Slug, uid)
 	require.NoError(t, err)
 
 	tests := []struct {

@@ -29,9 +29,13 @@ export function PolicySection() {
   const [domainsText, setDomainsText] = useState('')
   const [error, setError] = useState('')
 
-  // Seeds the form once the server answers, and re-seeds if the query refetches
-  // while nothing is being edited. Keyed on the query data rather than done in
-  // the queryFn so the form stays the single owner of in-progress edits.
+  // Seeds the form exactly once per mount: the draft===null guard is true
+  // only until the first server answer, and only save.onSuccess re-seeds
+  // (with the value the server just accepted). A refetch therefore does
+  // NOT overwrite the draft — in-progress edits survive window refocus,
+  // and a non-owner admin sees their snapshot until remount. Keyed on the
+  // query data rather than done in the queryFn so the form stays the
+  // single owner of in-progress edits.
   useEffect(() => {
     if (query.policy && draft === null) {
       setDraft(query.policy)

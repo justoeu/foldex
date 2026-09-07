@@ -32,7 +32,6 @@ type preparedNoteMediaRestore struct {
 	mapping map[string]string
 	files   map[string]preparedNoteMediaFile
 	spool   *os.File
-	size    int64
 }
 
 func (p *preparedNoteMediaRestore) cleanup() {
@@ -42,6 +41,51 @@ func (p *preparedNoteMediaRestore) cleanup() {
 	name := p.spool.Name()
 	_ = p.spool.Close()
 	_ = os.Remove(name)
+}
+
+// noteMediaSpool owns the two independent restore caps and the spool-file
+// bookkeeping behind them:
+//
+//   - per-file: one optimized image may not exceed maxRestoredNoteMediaBytes;
+//   - aggregate: everything spooled so far may not exceed the archive's
+//     expanded-bytes budget (maxArchiveExpandedBytes in production).
+//
+// They sit two lines apart in the write path but guard different invariants —
+// the per-file one bounds a single decode, the aggregate one bounds the whole
+// restore's disk footprint — so each is separately testable via budget.
+type noteMediaSpool struct {
+	file            *os.File
+	size            int64
+	aggregateBudget int64
+}
+
+func newNoteMediaSpool() *noteMediaSpool {
+	return &noteMediaSpool{aggregateBudget: maxArchiveExpandedBytes}
+}
+
+// write stores one optimized image, lazily creating the spool file on first
+// use, and returns its offset window.
+func (s *noteMediaSpool) write(data []byte, contentType string) (preparedNoteMediaFile, error) {
+	if int64(len(data)) > maxRestoredNoteMediaBytes || int64(len(data)) > s.aggregateBudget-s.size {
+		return preparedNoteMediaFile{}, invalidBackup("optimized note media exceeds restore limits")
+	}
+	if s.file == nil {
+		f, err := os.CreateTemp("", "foldex-backup-note-media-*.bin")
+		if err != nil {
+			return preparedNoteMediaFile{}, fmt.Errorf("create note media spool: %w", err)
+		}
+		s.file = f
+	}
+	offset := s.size
+	n, err := s.file.Write(data)
+	if err != nil {
+		return preparedNoteMediaFile{}, fmt.Errorf("write note media spool: %w", err)
+	}
+	if n != len(data) {
+		return preparedNoteMediaFile{}, io.ErrShortWrite
+	}
+	s.size += int64(n)
+	return preparedNoteMediaFile{offset: offset, size: int64(n), contentType: contentType}, nil
 }
 
 func prepareNoteMediaRestore(ctx context.Context, snap *Snapshot, zr *zip.Reader) (_ *preparedNoteMediaRestore, err error) {
@@ -54,65 +98,61 @@ func prepareNoteMediaRestore(ctx context.Context, snap *Snapshot, zr *zip.Reader
 			prepared.cleanup()
 		}
 	}()
+	spool := newNoteMediaSpool()
 	fileEntries := zipFileEntries(zr, "files/")
 	for i := range snap.Notes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		bodyHTML, _ := notes.SanitizeBody(snap.Notes[i].BodyHTML)
-		snap.Notes[i].BodyHTML = bodyHTML
-		values := []string{bodyHTML}
-		if snap.Notes[i].CoverURL != nil {
-			values = append(values, *snap.Notes[i].CoverURL)
-		}
-		for _, oldKey := range notemedia.Keys(values...) {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			if _, exists := prepared.mapping[oldKey]; exists {
-				continue
-			}
-			entry, exists := fileEntries["files/"+oldKey]
-			if !exists {
-				continue
-			}
-			opt, err := optimizeRestoredNoteMedia(ctx, entry)
-			if err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return nil, ctxErr
-				}
-				return nil, invalidBackup("backup contains invalid note media")
-			}
-			if len(opt.Data) > maxRestoredNoteMediaBytes || int64(len(opt.Data)) > maxArchiveExpandedBytes-prepared.size {
-				return nil, invalidBackup("optimized note media exceeds restore limits")
-			}
-			if prepared.spool == nil {
-				prepared.spool, err = os.CreateTemp("", "foldex-backup-note-media-*.bin")
-				if err != nil {
-					return nil, fmt.Errorf("create note media spool: %w", err)
-				}
-			}
-			offset := prepared.size
-			n, writeErr := prepared.spool.Write(opt.Data)
-			if writeErr != nil {
-				return nil, fmt.Errorf("write note media spool: %w", writeErr)
-			}
-			if n != len(opt.Data) {
-				return nil, io.ErrShortWrite
-			}
-			prepared.files[oldKey] = preparedNoteMediaFile{
-				offset: offset, size: int64(n), contentType: opt.ContentType,
-			}
-			prepared.size += int64(n)
-			prepared.mapping[oldKey] = "notes/" + uuid.NewString() + "." + opt.Ext
-		}
-		snap.Notes[i].BodyHTML = notemedia.Rewrite(snap.Notes[i].BodyHTML, prepared.mapping)
-		if snap.Notes[i].CoverURL != nil {
-			rewritten := notemedia.Rewrite(*snap.Notes[i].CoverURL, prepared.mapping)
-			snap.Notes[i].CoverURL = &rewritten
+		if err := spoolNoteMedia(ctx, &snap.Notes[i], fileEntries, prepared, spool); err != nil {
+			return nil, err
 		}
 	}
+	prepared.spool = spool.file
 	return prepared, nil
+}
+
+// spoolNoteMedia sanitizes one note's body, spools every referenced media
+// object that exists in the archive, and rewrites the note's references to
+// the restored keys.
+func spoolNoteMedia(ctx context.Context, note *NoteRow, fileEntries map[string]*zip.File, prepared *preparedNoteMediaRestore, spool *noteMediaSpool) error {
+	bodyHTML, _ := notes.SanitizeBody(note.BodyHTML)
+	note.BodyHTML = bodyHTML
+	values := []string{bodyHTML}
+	if note.CoverURL != nil {
+		values = append(values, *note.CoverURL)
+	}
+	for _, oldKey := range notemedia.Keys(values...) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, exists := prepared.mapping[oldKey]; exists {
+			continue
+		}
+		entry, exists := fileEntries["files/"+oldKey]
+		if !exists {
+			continue
+		}
+		opt, err := optimizeRestoredNoteMedia(ctx, entry)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return invalidBackup("backup contains invalid note media")
+		}
+		file, err := spool.write(opt.Data, opt.ContentType)
+		if err != nil {
+			return err
+		}
+		prepared.files[oldKey] = file
+		prepared.mapping[oldKey] = "notes/" + uuid.NewString() + "." + opt.Ext
+	}
+	note.BodyHTML = notemedia.Rewrite(note.BodyHTML, prepared.mapping)
+	if note.CoverURL != nil {
+		rewritten := notemedia.Rewrite(*note.CoverURL, prepared.mapping)
+		note.CoverURL = &rewritten
+	}
+	return nil
 }
 
 func optimizeRestoredNoteMedia(ctx context.Context, entry *zip.File) (imageopt.Result, error) {

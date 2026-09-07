@@ -12,6 +12,18 @@
 # Bring the services up first (`make db-up` / `make storage-up`) when you host
 # them here; point the env at them when you do not.
 
+# Docker's default json-file driver retains container logs unbounded, and the
+# backend writes slog/access/metrics lines on every request while the mailer
+# and backup agent log per message/run — a long-lived instance slowly eats
+# the host disk and takes every Foldex container down with it months later.
+# Shared rotation cap; per-service mem_limit bounds a runaway path
+# (backup upload streams, the screenshot Chromium pool) to one container.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   backend:
     # Pulled from Docker Hub by default. FOLDEX_VERSION overrides the current
@@ -22,6 +34,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
     environment:
       # DB_URL is derived from the POSTGRES_* vars in .env so credentials live
       # in one place only. POSTGRES_HOST decides where the backend looks:
@@ -110,11 +124,16 @@ services:
       # the per-IP login bucket becomes one global bucket — 20 bad passwords
       # from anyone would lock out every user at once.
       #
-      # The default names the private ranges Docker allocates from, because the
-      # `foldex` network is external and declares no subnet, so its address
-      # cannot be hardcoded here. Anything on that network is already inside the
-      # trust boundary. On a direct bind (no proxy), set this to empty.
-      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      # The default is the range Docker allocates the `foldex` network from
+      # (the `foldex` network is external and declares no subnet, so its
+      # address cannot be hardcoded more narrowly). Do NOT widen it to the
+      # LAN ranges your clients live in (10.0.0.0/8, 192.168.0.0/16): the
+      # XFF walk skips every trusted hop, so trusting the clients collapses
+      # honest attribution onto nginx's address and lets a spoofing client
+      # choose its rate-limit identity via a header — the backend warns at
+      # boot when the set covers them. On a direct bind (no proxy), set this
+      # to empty.
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-172.16.0.0/12}
       # Transactional mail. The `log` default prints the invite link to the
       # backend log rather than sending it — see .env.example for why.
       MAIL_DRIVER: ${MAIL_DRIVER:-log}
@@ -244,6 +263,8 @@ services:
       dockerfile: Dockerfile
     entrypoint: ["/foldex-mailer"]
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 128m
     environment:
       # NO DB_URL, deliberately. This is the process that decrypts live reset
       # links and sign-in codes; handing it a database credential as well would
@@ -307,6 +328,8 @@ services:
       dockerfile: Dockerfile
       target: backup-agent
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 1g
     environment:
       # This is the ONLY process that holds the external bucket's credentials.
       # The backend can request a run (an INSERT into backup_run), never
@@ -389,6 +412,8 @@ services:
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://localhost:9089}
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 64m
     environment:
       # Host:port used in the HTTP→HTTPS redirect (never the request Host
       # header). The port matters: nginx redirects to https://<this value>, so

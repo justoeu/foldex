@@ -379,7 +379,7 @@ func TestRepository_ClickAndResolveBySlug(t *testing.T) {
 	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://slug-go.example", Title: "Slug Go"})
 	require.NoError(t, err)
 
-	url, err := lrepo.ClickAndResolveBySlug(ctx, l.Slug)
+	url, err := lrepo.ClickAndResolveBySlug(ctx, l.Slug, uid)
 	require.NoError(t, err)
 	assert.Equal(t, "https://slug-go.example", url)
 
@@ -387,7 +387,7 @@ func TestRepository_ClickAndResolveBySlug(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, got.ClickCount)
 
-	_, err = lrepo.ClickAndResolveBySlug(ctx, "no-such-slug")
+	_, err = lrepo.ClickAndResolveBySlug(ctx, "no-such-slug", 0)
 	require.Error(t, err)
 }
 

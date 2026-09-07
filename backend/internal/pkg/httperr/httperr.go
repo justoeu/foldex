@@ -70,6 +70,21 @@ func Wrap(status int, code, msg string, cause error) *Error {
 	return &Error{Status: status, Code: code, Message: msg, cause: cause}
 }
 
+// FromDomain maps the shared domain sentinels to their HTTP envelope. It is
+// the one canonical mapping for domainerr.ErrNotFound / ErrInvalidInput so
+// every feature's repositoryHTTPError stays in lockstep; returns nil when err
+// is neither, leaving feature-specific switches to try their own cases.
+func FromDomain(err error) error {
+	if errors.Is(err, domainerr.ErrNotFound) {
+		return ErrNotFound
+	}
+	if errors.Is(err, domainerr.ErrInvalidInput) {
+		message, _ := domainerr.InvalidInputMessage(err)
+		return New(http.StatusBadRequest, "invalid_input", message)
+	}
+	return nil
+}
+
 // envelope is the JSON shape used in responses: {"error": {...}}.
 type envelope struct {
 	Error *Error `json:"error"`

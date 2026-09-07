@@ -1,4 +1,4 @@
-import { useState, lazy, Suspense } from 'react'
+import { useState, lazy, Suspense, type ComponentType, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from '../components/icons'
 import { HubCard, HubShortcut, HubRule } from '../components/HubCard'
@@ -123,6 +123,43 @@ function canonicalSection(section: HubSection): CanonicalSection {
   return MERGED_INTO_ACCOUNT.includes(section) ? 'account' : (section as CanonicalSection)
 }
 
+const ADMIN_SECTION_COMPONENTS: Partial<Record<CanonicalSection, ComponentType>> = {
+  admin: AdminUsersPage,
+  roles: RolesMatrixSection,
+  audit: AuditSection,
+  policy: PolicySection,
+  backup: BackupSection,
+  abuse: AbuseSection,
+}
+
+type HubSectionProps = {
+  accountTab: AccountTab
+  onEditFolder?: (folderId: number) => void
+}
+
+const PERSONAL_SECTION: Partial<Record<CanonicalSection, (p: HubSectionProps) => ReactNode>> = {
+  account: (p) => <AccountPage initialTab={p.accountTab} />,
+  master: () => <MasterPasswordSection />,
+  locked: (p) => <LockedFoldersSection onEditFolder={p.onEditFolder} />,
+}
+
+function renderHubSection(
+  section: CanonicalSection,
+  isAdmin: boolean,
+  props: HubSectionProps,
+): ReactNode {
+  const personal = PERSONAL_SECTION[section]
+  if (personal) return personal(props)
+  if (!isAdmin) return null
+  const Admin = ADMIN_SECTION_COMPONENTS[section]
+  if (!Admin) return null
+  return (
+    <Suspense fallback={<div className="fx-empty">...</div>}>
+      <Admin />
+    </Suspense>
+  )
+}
+
 // Literal keys per section: dynamic `t(\`settings.sec_${section}…\`)` template
 // keys are invisible to static key checking, so a typo would ship the raw key
 // string to the UI instead of failing anywhere.
@@ -203,19 +240,7 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {effectiveSection === 'account' && <AccountPage initialTab={accountTab} />}
-          {effectiveSection === 'master' && <MasterPasswordSection />}
-          {effectiveSection === 'locked' && <LockedFoldersSection onEditFolder={onEditFolder} />}
-          {isAdmin && ADMIN_SECTIONS.includes(effectiveSection) && (
-            <Suspense fallback={<div className="fx-empty">...</div>}>
-              {effectiveSection === 'admin' && <AdminUsersPage />}
-              {effectiveSection === 'roles' && <RolesMatrixSection />}
-              {effectiveSection === 'audit' && <AuditSection />}
-              {effectiveSection === 'policy' && <PolicySection />}
-              {effectiveSection === 'backup' && <BackupSection />}
-              {effectiveSection === 'abuse' && <AbuseSection />}
-            </Suspense>
-          )}
+          {renderHubSection(effectiveSection, isAdmin, { accountTab, onEditFolder })}
         </div>
       </div>
     )

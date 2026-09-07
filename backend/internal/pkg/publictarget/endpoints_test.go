@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"foldex/internal/notes"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/redirect"
 )
 
@@ -17,12 +18,12 @@ type endpointLinkResolver struct {
 	call string
 }
 
-func (r *endpointLinkResolver) ClickAndResolve(_ context.Context, _ int64) (string, error) {
+func (r *endpointLinkResolver) ClickAndResolve(_ context.Context, _ int64, _ authctx.UserID) (string, error) {
 	r.call = "id"
 	return "https://example.com/id", nil
 }
 
-func (r *endpointLinkResolver) ClickAndResolveBySlug(_ context.Context, _ string) (string, error) {
+func (r *endpointLinkResolver) ClickAndResolveBySlug(_ context.Context, _ string, _ authctx.UserID) (string, error) {
 	r.call = "slug"
 	return "https://example.com/slug", nil
 }
@@ -31,12 +32,12 @@ type endpointNoteResolver struct {
 	call string
 }
 
-func (r *endpointNoteResolver) SystemViewAndResolveByID(_ context.Context, _ int64) (notes.Note, error) {
+func (r *endpointNoteResolver) SystemViewAndResolveByID(_ context.Context, _ int64, _ authctx.UserID) (notes.Note, error) {
 	r.call = "id"
 	return notes.Note{Title: "By ID", BodyHTML: "<p>body</p>"}, nil
 }
 
-func (r *endpointNoteResolver) SystemViewAndResolveBySlug(_ context.Context, _ string) (notes.Note, error) {
+func (r *endpointNoteResolver) SystemViewAndResolveBySlug(_ context.Context, _ string, _ authctx.UserID) (notes.Note, error) {
 	r.call = "slug"
 	return notes.Note{Title: "By slug", BodyHTML: "<p>body</p>"}, nil
 }

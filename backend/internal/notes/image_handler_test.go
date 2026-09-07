@@ -3,9 +3,7 @@ package notes
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
-	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
@@ -21,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/testsupport"
 )
 
 type fakeUploader struct {
@@ -131,7 +130,7 @@ func TestNoteImageUploadRejectsDecodeBomb(t *testing.T) {
 	leases := newFakeMediaLeases()
 	h := NewImageHandler(up, leases, discardLogger())
 
-	req := multipartImageRequest(t, "image", "bomb.png", decodeBombPNG(t))
+	req := multipartImageRequest(t, "image", "bomb.png", testsupport.BombPNG(t))
 	rr := httptest.NewRecorder()
 	h.Upload(rr, req)
 
@@ -223,17 +222,4 @@ func realPNG(t *testing.T, w, h int) []byte {
 	var buf bytes.Buffer
 	require.NoError(t, png.Encode(&buf, img))
 	return buf.Bytes()
-}
-
-// decodeBombPNG is a tiny PNG whose IHDR declares 8000×8000 (64 MP, over the
-// 50 MP cap) while the IDAT stays a 1×1 pixel. Storing it would let any
-// decoder OOM; Optimize must refuse before image.Decode allocates.
-func decodeBombPNG(t *testing.T) []byte {
-	t.Helper()
-	bomb := append([]byte(nil), realPNG(t, 1, 1)...)
-	require.GreaterOrEqual(t, len(bomb), 33)
-	binary.BigEndian.PutUint32(bomb[16:20], 8_000)
-	binary.BigEndian.PutUint32(bomb[20:24], 8_000)
-	binary.BigEndian.PutUint32(bomb[29:33], crc32.ChecksumIEEE(bomb[12:29]))
-	return bomb
 }

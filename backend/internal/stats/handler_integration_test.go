@@ -47,8 +47,8 @@ func TestHandler_RoutesAndShapes(t *testing.T) {
 	// Seed: one link + 2 clicks so non-zero numbers come back.
 	lrepo := links.NewRepository(pool)
 	l, _ := lrepo.Create(context.Background(), uid, links.CreateInput{URL: "https://hn.example", Title: "HN"})
-	_, _ = lrepo.ClickAndResolve(context.Background(), l.ID)
-	_, _ = lrepo.ClickAndResolve(context.Background(), l.ID)
+	_, _ = lrepo.ClickAndResolve(context.Background(), l.ID, uid)
+	_, _ = lrepo.ClickAndResolve(context.Background(), l.ID, uid)
 
 	t.Run("summary", func(t *testing.T) {
 		resp, err := http.Get(srv.URL + "/summary")

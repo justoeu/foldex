@@ -1,16 +1,12 @@
 import {
   apiUrl,
+  authHeaders,
   getStoredConfig,
   normalizeBaseUrl,
   requestOriginAccess,
   setStoredConfig,
 } from "./config.js";
-
-function authHeaders(token) {
-  const headers = {};
-  if (token) headers.Authorization = "Bearer " + token;
-  return headers;
-}
+import { t } from "./i18n.js";
 
 function normalizeOptions(values) {
   return {
@@ -34,11 +30,11 @@ export async function testConnection(
   await requestOriginAccess(config.baseUrl, chromeApi);
 
   const resp = await fetchImpl(apiUrl(config.baseUrl, "/api/tags"), {
-    headers: authHeaders(config.apiToken),
+    headers: authHeaders(config),
     redirect: "error",
   });
   if (resp.status === 401 || resp.status === 403) {
-    throw new Error("the server rejected the token (HTTP " + resp.status + ")");
+    throw new Error(t(chromeApi, "tokenRejected", [String(resp.status)]));
   }
   if (!resp.ok) throw new Error("HTTP " + resp.status);
   const tags = await resp.json();
@@ -70,27 +66,27 @@ export function initOptionsPage({
       $("apiToken").value = config.apiToken;
     })
     .catch((error) =>
-      setStatus("Could not load settings: " + error.message, "error"),
+      setStatus(t(chromeApi, "settingsLoadFailed", [error.message]), "error"),
     );
 
   async function save() {
-    setStatus("Requesting access…");
+    setStatus(t(chromeApi, "requestingAccess"));
     try {
       const config = await saveOptions(readOptions(), { chromeApi });
       $("baseUrl").value = config.baseUrl;
-      setStatus("Saved.", "ok");
+      setStatus(t(chromeApi, "savedOk"), "ok");
     } catch (error) {
-      setStatus("Not saved: " + error.message, "error");
+      setStatus(t(chromeApi, "notSaved", [error.message]), "error");
     }
   }
 
   async function testCurrentConnection() {
-    setStatus("Testing…");
+    setStatus(t(chromeApi, "testing"));
     try {
       const tagCount = await testConnection(readOptions(), { chromeApi });
-      setStatus("Connected. " + tagCount + " tag(s) visible.", "ok");
+      setStatus(t(chromeApi, "connected", [String(tagCount)]), "ok");
     } catch (error) {
-      setStatus("Failed: " + error.message, "error");
+      setStatus(t(chromeApi, "failed", [error.message]), "error");
     }
   }
 

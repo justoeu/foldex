@@ -1,4 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const EN_MESSAGES = JSON.parse(
+  readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "_locales/en/messages.json"),
+    "utf8",
+  ),
+);
 
 import {
   getStoredConfig,
@@ -64,7 +74,25 @@ function mockChrome({
     writes: [],
     events: [],
   };
+  const messages = EN_MESSAGES;
   const chromeApi = {
+    i18n: {
+      getMessage(key, substitutions) {
+        const entry = messages[key];
+        if (!entry) return "";
+        let text = entry.message;
+        const list =
+          substitutions == null
+            ? []
+            : Array.isArray(substitutions)
+              ? substitutions
+              : [substitutions];
+        list.forEach((value, i) => {
+          text = text.replaceAll("$" + (i + 1), String(value));
+        });
+        return text;
+      },
+    },
     runtime: { openOptionsPage() {} },
     tabs: {
       async query() {
@@ -132,6 +160,29 @@ describe("optional Foldex origin access", () => {
       "http://*/*",
       "https://*/*",
     ]);
+  });
+
+  test("declares only permissions the code actually calls", async () => {
+    const manifest = await Bun.file(
+      new URL("./manifest.json", import.meta.url),
+    ).json();
+    const sources = await Promise.all(
+      ["popup.js", "options.js", "config.js"].map((name) =>
+        Bun.file(new URL(`./${name}`, import.meta.url)).text(),
+      ),
+    );
+
+    const namespaces = new Set();
+    for (const match of sources.join("\n").matchAll(/chromeApi\.(\w+)/g)) {
+      namespaces.add(match[1]);
+    }
+
+    // runtime is permission-free; popup queries the active tab only after a
+    // user gesture, which is exactly what activeTab grants.
+    expect(namespaces).toEqual(
+      new Set(["runtime", "tabs", "permissions", "storage"]),
+    );
+    expect(manifest.permissions.sort()).toEqual(["activeTab", "storage"]);
   });
 
   test("normalizes the backend URL while retaining a reverse-proxy path", () => {
@@ -412,5 +463,82 @@ describe("optional Foldex origin access", () => {
       method: "POST",
       redirect: "error",
     });
+  });
+});
+
+describe("error and auth contract shared across surfaces", () => {
+  test("saveLink surfaces the envelope's message instead of raw JSON", async () => {
+    const { chromeApi } = mockChrome();
+    const fetchImpl = async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: { code: "url_taken", message: "url already bookmarked" },
+      }),
+      text: async () =>
+        JSON.stringify({
+          error: { code: "url_taken", message: "url already bookmarked" },
+        }),
+    });
+
+    await expect(
+      saveLink(
+        { baseUrl: "http://localhost:9089", apiToken: "fx_token" },
+        { url: "https://example.com" },
+        { chromeApi, fetchImpl },
+      ),
+    ).rejects.toThrow(/^url already bookmarked$/);
+  });
+
+  test("saveLink keeps a bounded HTTP fallback for non-JSON bodies", async () => {
+    const { chromeApi } = mockChrome();
+    const fetchImpl = async () => ({
+      ok: false,
+      status: 502,
+      json: async () => {
+        throw new Error("not json");
+      },
+      text: async () => "x".repeat(500),
+    });
+
+    await expect(
+      saveLink(
+        { baseUrl: "http://localhost:9089", apiToken: "fx_token" },
+        { url: "https://example.com" },
+        { chromeApi, fetchImpl },
+      ),
+    ).rejects.toThrow(/^HTTP 502 .{0,120}$/);
+  });
+
+  test("testConnection maps 401/403 with the same wording as the popup", async () => {
+    const { chromeApi } = mockChrome();
+    const fetch401 = async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({}),
+      text: async () => "",
+    });
+
+    await expect(
+      testConnection(
+        { baseUrl: "http://localhost:9089", apiToken: "bad" },
+        { chromeApi, fetchImpl: fetch401 },
+      ),
+    ).rejects.toThrow("the server rejected the token (HTTP 401)");
+  });
+
+  test("authHeaders and credentialProblem live in config.js, one shape for both surfaces", async () => {
+    const { authHeaders, credentialProblem } = await import("./config.js");
+
+    expect(authHeaders({ apiToken: "tok" }, true)).toEqual({
+      "Content-Type": "application/json",
+      Authorization: "Bearer tok",
+    });
+    expect(authHeaders({ apiToken: "" })).toEqual({});
+    expect(credentialProblem(401)).toBe(
+      "not signed in — set an API token in settings",
+    );
+    expect(credentialProblem(403)).toBe("this token is not allowed here");
+    expect(credentialProblem(500)).toBe(null);
   });
 });

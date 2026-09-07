@@ -334,7 +334,11 @@ func TestRestore_NotesRoundTripWipeMode(t *testing.T) {
 	nrepo := notes.NewRepository(pool)
 	n, err := nrepo.Create(ctx, uid, notes.CreateInput{Title: "Recipe", BodyHTML: "<p>flour</p>", TagIDs: []int64{tag.ID}})
 	require.NoError(t, err)
-	_, err = nrepo.SystemViewAndResolve(ctx, n.Slug)
+	pub := true
+	n, err = nrepo.Update(ctx, uid, n.ID, notes.UpdateInput{IsPublic: &pub})
+	require.NoError(t, err)
+	require.True(t, n.IsPublic)
+	_, err = nrepo.SystemViewAndResolve(ctx, n.Slug, uid)
 	require.NoError(t, err)
 
 	zr := exportToReader(t, svc, uid)
@@ -347,8 +351,10 @@ func TestRestore_NotesRoundTripWipeMode(t *testing.T) {
 	// what must survive is the note and its polymorphic tag/click rows, re-keyed
 	// onto the new id.
 	var restored int64
+	var restoredPublic bool
 	require.NoError(t, pool.QueryRow(ctx,
-		`SELECT id FROM note WHERE user_id = $1`, int64(uid)).Scan(&restored))
+		`SELECT id, is_public FROM note WHERE user_id = $1`, int64(uid)).Scan(&restored, &restoredPublic))
+	assert.True(t, restoredPublic, "is_public must survive export→wipe→restore")
 	assert.EqualValues(t, 1, scalar(t, pool, `SELECT count(*) FROM link_tag WHERE entity_kind='note' AND entity_id=$1`, restored))
 	assert.EqualValues(t, 1, scalar(t, pool, `SELECT count(*) FROM click_log WHERE entity_kind='note' AND entity_id=$1`, restored))
 }

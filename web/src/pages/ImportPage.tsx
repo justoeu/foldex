@@ -30,7 +30,7 @@ export function ImportPage({ onDone }: Props) {
         <div className="fx-card-body" style={{ gap: 14, padding: 18 }}>
           <h3 className="fx-card-title" style={{ fontSize: 16 }}>{t('import.import_section_title')}</h3>
 
-          <div className="fx-segment" role="group" aria-label="format">
+          <div className="fx-segment" role="group" aria-label={t('import.format_group_aria')}>
             <button
               className={'fx-seg' + (format === 'netscape' ? ' fx-seg-active' : '')}
               onClick={() => setFormat('netscape')}

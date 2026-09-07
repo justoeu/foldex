@@ -26,36 +26,50 @@ import (
 // ClickAndResolve appends a row to click_log and returns the destination URL.
 // Used by /go/{id}; returns domainerr.ErrNotFound when no link matches.
 //
+// viewer is the resolved principal of the request (0 when anonymous): the
+// redirect serves opted-in (is_public) rows to anyone and anything else only
+// to its owner (SEC-SEN-002).
+//
 // click_log is the only writer for click data — there's no longer a
 // denormalized counter on `link`, so this is a single INSERT (counter views
 // are derived in SELECT via a LATERAL join). The two statements still share
 // a transaction so a missing link returns 404 instead of producing an
 // orphan click_log row via FK violation.
-func (r *Repository) ClickAndResolve(ctx context.Context, id int64) (string, error) {
-	return r.clickAndResolveWhere(ctx, "l.id = $1", id)
+func (r *Repository) ClickAndResolve(ctx context.Context, id int64, viewer authctx.UserID) (string, error) {
+	return r.clickAndResolveWhere(ctx, viewer, "l.id = $1", id)
 }
 
 // ClickAndResolveBySlug is the slug-keyed sibling of ClickAndResolve. Same
 // invariants — atomic resolve + click insert in one tx.
-func (r *Repository) ClickAndResolveBySlug(ctx context.Context, slug string) (string, error) {
-	return r.clickAndResolveWhere(ctx, "l.slug = $1", slug)
+func (r *Repository) ClickAndResolveBySlug(ctx context.Context, slug string, viewer authctx.UserID) (string, error) {
+	return r.clickAndResolveWhere(ctx, viewer, "l.slug = $1", slug)
 }
 
-func (r *Repository) clickAndResolveWhere(ctx context.Context, where string, arg any) (string, error) {
+func (r *Repository) clickAndResolveWhere(ctx context.Context, viewer authctx.UserID, where string, arg any) (string, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("begin click tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
+	// SEC-SEN-002: the destination and the click row are the two things a
+	// slug guess must not buy. Title-derived slugs are guessable, so the
+	// anonymous branch requires the owner's explicit opt-in; the owner's
+	// viewer keeps card/palette navigation identical. Locked folders stay a
+	// further AND on every branch.
+	visibility := "l.is_public"
+	args := []any{arg}
+	if viewer != 0 {
+		visibility = "(l.is_public OR l.user_id = $2)"
+		args = append(args, int64(viewer))
+	}
+
 	var id int64
 	var owner int64
 	var u string
-	// 404 for links inside password-protected folders — public /go must not
-	// leak destinations (or inflate click_log) without unlock.
 	err = tx.QueryRow(ctx, `
         SELECT l.id, l.user_id, l.url FROM link l
-        WHERE `+where+` AND `+folders.SQLNotInLockedFolder("l"), arg).Scan(&id, &owner, &u)
+        WHERE `+where+` AND `+visibility+` AND `+folders.SQLNotInLockedFolder("l"), args...).Scan(&id, &owner, &u)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", domainerr.ErrNotFound
 	}
@@ -225,6 +239,29 @@ type DueLink struct {
 	CheckInterval   string
 	LastFingerprint *string
 	ClaimedAt       time.Time
+}
+
+// SystemReleaseCheckClaims undoes a sweep claim for links whose jobs never
+// reached the worker queue (shutdown mid-scan). last_checked_at IS the
+// scheduler here — no recovery sweep exists — and NULL is the never-checked
+// state the due predicate treats as immediately due, so a released link is
+// reclaimed on the next tick instead of waiting out a full interval. Any
+// late result against a released row is still discarded by the
+// expectedClaimedAt CAS in SystemRecordCheckResult.
+func (r *Repository) SystemReleaseCheckClaims(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := r.pool.Exec(ctx, `
+		UPDATE link
+		SET last_checked_at = NULL
+		WHERE id = ANY($1)
+		  AND check_interval IS NOT NULL
+		  AND last_checked_at IS NOT NULL
+	`, ids); err != nil {
+		return fmt.Errorf("release check claims: %w", err)
+	}
+	return nil
 }
 
 // PreviewPatch is the optional metadata written with a preview status

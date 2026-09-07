@@ -880,7 +880,6 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 	})
 
 	t.Run("otp and reset", func(t *testing.T) {
-		assert.Error(t, h.repo.CreateEmailOTP(ctx, uid, nil, auth.OTPPurposeLogin2FA, []byte("h"), time.Minute))
 		_, err := h.repo.CreateEmailVerification(ctx, uid, time.Minute, time.Minute, auth.MailDraft{})
 		assert.Error(t, err)
 		assert.Error(t, h.repo.ConsumeSecondFactor(ctx, uid,

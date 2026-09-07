@@ -39,17 +39,23 @@ export function readCsrfToken(): string {
 
 const UNSAFE_METHODS = new Set(['post', 'put', 'patch', 'delete'])
 
+/**
+ * The CSRF double-submit rule, shared by both transports (axios instance for
+ * the API surface, authenticatedFetch for streaming): echo the fx_csrf cookie
+ * in a header on unsafe verbs, never overwriting a value the caller set.
+ */
+function csrfTokenFor(method: string | undefined): string {
+  if (!UNSAFE_METHODS.has((method ?? 'get').toLowerCase())) return ''
+  return readCsrfToken()
+}
+
 http.interceptors.request.use((config) => {
   const authConfig = config as RetryConfig
   authConfig._authEpoch ??= authEpoch
   const headers = (config.headers ?? {}) as Record<string, string>
 
-  if (UNSAFE_METHODS.has((config.method ?? 'get').toLowerCase())) {
-    const csrf = readCsrfToken()
-    // Never overwrite a header a caller set explicitly — tests and the
-    // bootstrap flow both need to drive this directly.
-    if (csrf && !headers[CSRF_HEADER]) headers[CSRF_HEADER] = csrf
-  }
+  const csrf = csrfTokenFor(config.method)
+  if (csrf && !headers[CSRF_HEADER]) headers[CSRF_HEADER] = csrf
   // The instance default is application/json. FormData must carry its own
   // multipart boundary; a hardcoded multipart/form-data header (or the JSON
   // default) makes the backend reject the body.
@@ -125,23 +131,15 @@ export async function authenticatedFetch(input: string, init: RequestInit = {}):
   const requestEpoch = authEpoch
   const request = () => {
     const headers = new Headers(init.headers)
-    if (UNSAFE_METHODS.has((init.method ?? 'get').toLowerCase())) {
-      const csrf = readCsrfToken()
-      if (csrf && !headers.has(CSRF_HEADER)) headers.set(CSRF_HEADER, csrf)
-    }
+    const csrf = csrfTokenFor(init.method)
+    if (csrf && !headers.has(CSRF_HEADER)) headers.set(CSRF_HEADER, csrf)
     return fetch(input, { ...init, credentials: init.credentials ?? 'include', headers })
   }
 
   const response = await request()
-  if (response.status !== 401 || input.includes('/api/auth/') || requestEpoch !== authEpoch) return response
+  if (!isRefreshable401(response.status, input, requestEpoch)) return response
   await response.body?.cancel().catch(() => undefined)
-  try {
-    await refreshOnce(requestEpoch)
-  } catch (error) {
-    if (requestEpoch === authEpoch) onSessionLost?.()
-    throw error
-  }
-  if (requestEpoch !== authEpoch) throw new Error('authentication changed during request')
+  await refreshForRetry(requestEpoch)
   return request()
 }
 
@@ -151,31 +149,53 @@ type RetryConfig = InternalAxiosRequestConfig & {
   _authEpoch?: number
 }
 
+/**
+ * Whether a 401 may be answered with a refresh+retry. The auth endpoints are
+ * the ones that ESTABLISH a session, so retrying them through a refresh would
+ * be circular — and /api/auth/me is contractually always 200 anyway. Shared by
+ * both transports; `skipRetry`/`alreadyRetried` are axios-only knobs.
+ */
+function isRefreshable401(status: number, url: string, requestEpoch: number, skipRetry = false, alreadyRetried = false): boolean {
+  return status === 401 && !skipRetry && !alreadyRetried && !url.includes('/api/auth/') && requestEpoch === authEpoch
+}
+
+/**
+ * Runs the shared single-flight refresh and re-checks the auth generation.
+ * Throws the refresh error (after firing session-lost) or the epoch-mismatch
+ * error; callers decide which error surface their transport should expose.
+ */
+async function refreshForRetry(requestEpoch: number): Promise<void> {
+  try {
+    await refreshOnce(requestEpoch)
+  } catch (error) {
+    if (requestEpoch === authEpoch) onSessionLost?.()
+    throw error
+  }
+  if (requestEpoch !== authEpoch) throw new Error('authentication changed during request')
+}
+
 http.interceptors.response.use(
   (resp) => resp,
   async (error: AxiosError) => {
     const status = error.response?.status
     const config = error.config as RetryConfig | undefined
     if (config) config._authEpoch ??= authEpoch
-    if (status !== 401 || !config || config._retried || config._skipAuthRetry) {
+    if (status !== 401 || !config) {
       return Promise.reject(error)
     }
 
-    // The auth endpoints are the ones that ESTABLISH a session, so retrying
-    // them through a refresh would be circular — and /api/auth/me is
-    // contractually always 200 anyway.
-    if ((config.url ?? '').includes('/api/auth/')) return Promise.reject(error)
-
-    const requestEpoch = config._authEpoch
-    if (requestEpoch !== authEpoch) return Promise.reject(error)
+    const requestEpoch = config._authEpoch ?? authEpoch
+    if (!isRefreshable401(status, config.url ?? '', requestEpoch, config._skipAuthRetry, config._retried)) {
+      return Promise.reject(error)
+    }
 
     try {
-      await refreshOnce(requestEpoch)
+      await refreshForRetry(requestEpoch)
     } catch {
-      if (requestEpoch === authEpoch) onSessionLost?.()
+      // The original 401 is the error axios callers assert on; the refresh
+      // failure is logged/fired inside refreshForRetry.
       return Promise.reject(error)
     }
-    if (requestEpoch !== authEpoch) return Promise.reject(error)
     config._retried = true
     return http.request(config)
   },

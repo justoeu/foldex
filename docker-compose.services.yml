@@ -1,8 +1,19 @@
+# Docker's default json-file driver retains container logs unbounded; the
+# shared rotation cap keeps a long-lived instance from slowly eating the
+# host disk, and mem_limit bounds the blast radius of one runaway service.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:18.6-alpine
     container_name: foldex-db
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-foldex}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-foldex}
@@ -46,9 +57,11 @@ services:
   rustfs:
     # RustFS has no GA release yet. Pin its newest non-preview release candidate
     # by digest instead of following the mutable latest/rc/main channels.
-    image: rustfs/rustfs:1.0.0-rc.2@sha256:7d6d361c49c08d427250fb59aae5d78df83d644c3405d9ccf4b21cda0b0692d0
+    image: rustfs/rustfs:1.0.0-rc.5@sha256:c36b3efea3d1e503f1a2581abd0e7611e0e5820dd30e1850a52384b3fc52bda4
     container_name: foldex-rustfs
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
     security_opt:
       - "no-new-privileges:true"
     environment:
@@ -98,6 +111,8 @@ services:
       target: rustfs-bootstrap
     container_name: foldex-rustfs-init
     restart: "no"
+    logging: *default-logging
+    mem_limit: 256m
     depends_on:
       rustfs:
         condition: service_healthy

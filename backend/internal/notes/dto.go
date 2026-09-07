@@ -36,7 +36,11 @@ type CreateInput struct {
 	TagIDs      []int64            `json:"tag_ids"`
 	PendingTags []tags.CreateInput `json:"pending_tags"`
 	Pinned      bool               `json:"pinned"`
-	FolderID    *int64             `json:"folder_id"`
+	// IsPublic opts the note into the anonymous /n/{slug} page. Default
+	// false: a title-derived slug is guessable, so privacy cannot rest on it
+	// (SEC-SEN-001). The owner's own session always renders the note.
+	IsPublic bool   `json:"is_public"`
+	FolderID *int64 `json:"folder_id"`
 }
 
 // Normalize trims text fields and sanitizes BodyHTML server-side — the
@@ -65,7 +69,7 @@ func (c CreateInput) Validate() error {
 		return errMsg(fmt.Sprintf("title too long (max %d)", MaxTitleBytes))
 	}
 	if c.Slug != nil && !slug.IsValid(*c.Slug) {
-		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
+		return errMsg(slug.InvalidFormatMessage)
 	}
 	if len(c.BodyHTML) > MaxBodyHTMLBytes {
 		return errMsg(fmt.Sprintf("body too long (max %d bytes after sanitization)", MaxBodyHTMLBytes))
@@ -94,6 +98,8 @@ type UpdateInput struct {
 	// {"slug": null} → regenerate from title via slug.Slugify().
 	Slug    *string `json:"-"`
 	SlugSet bool    `json:"-"`
+	// IsPublic: absent → keep the current visibility, true/false → set it.
+	IsPublic *bool `json:"is_public"`
 	// IfMatchUpdatedAt is optional optimistic concurrency (RACE-HER-012):
 	// when set, UPDATE requires row.updated_at equality; 0 rows → 409 conflict.
 	// Omitted = last-writer-wins (default single-user clients).
@@ -125,7 +131,7 @@ func (u UpdateInput) Validate() error {
 		return errMsg(fmt.Sprintf("body too long (max %d bytes after sanitization)", MaxBodyHTMLBytes))
 	}
 	if u.SlugSet && u.Slug != nil && !slug.IsValid(*u.Slug) {
-		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
+		return errMsg(slug.InvalidFormatMessage)
 	}
 	if err := tags.ValidateCreateInputs(u.PendingTags); err != nil {
 		return errMsg(err.Error())
