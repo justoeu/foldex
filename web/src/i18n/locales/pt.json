@@ -433,6 +433,7 @@
     "pinned_label": "Fixar no topo",
     "pinned_hint": "Notas fixadas sempre aparecem primeiro",
     "image_error_generic": "Falha ao enviar imagem",
+    "image_error_storage": "O armazenamento de imagens está indisponível. Confira o object store e tente de novo.",
     "error_tag_taken": "Já existe uma tag com este nome.",
     "error_conflict": "Esta nota foi alterada noutro local. Recarregue a página antes de tentar novamente para não substituir alterações mais recentes.",
     "error_generic": "Não foi possível salvar — tente novamente.",

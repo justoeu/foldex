@@ -433,6 +433,7 @@
     "pinned_label": "Fijar arriba",
     "pinned_hint": "Las notas fijadas siempre aparecen primero",
     "image_error_generic": "Error al subir la imagen",
+    "image_error_storage": "El almacén de imágenes no está disponible. Revisa el object store e inténtalo de nuevo.",
     "error_tag_taken": "Ya existe una etiqueta con este nombre.",
     "error_conflict": "Esta nota cambió en otro lugar. Recarga la página antes de intentarlo de nuevo para no sobrescribir cambios más recientes.",
     "error_generic": "No se pudo guardar — inténtalo de nuevo.",

@@ -433,6 +433,7 @@
     "pinned_label": "Pin to top",
     "pinned_hint": "Pinned notes always sort first",
     "image_error_generic": "Failed to upload image",
+    "image_error_storage": "Image storage is unavailable. Check the object store and try again.",
     "error_tag_taken": "A tag with this name already exists.",
     "error_conflict": "This note changed elsewhere. Reload the page before trying again so you do not overwrite newer changes.",
     "error_generic": "Could not save — please try again.",

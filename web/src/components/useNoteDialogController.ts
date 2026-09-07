@@ -21,7 +21,7 @@ import {
 
 export function buildImageUploadHandler(
   uploadFn: (file: File) => Promise<{ url: string }>,
-  onError: (message: string) => void,
+  onError: (error: unknown) => void,
 ) {
   return (view: EditorView, file: File) => {
     const { from, to } = view.state.selection
@@ -31,11 +31,22 @@ export function buildImageUploadHandler(
         const node = view.state.schema.nodes.image.create({ src: url })
         view.dispatch(view.state.tr.replaceWith(from, to, node))
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (view.isDestroyed) return
-        onError('upload_failed')
+        onError(error)
       })
   }
+}
+
+// Same code→message mapping the link dialog applies to upload failures
+// (useLinkDialogImage/useLinkDialogSubmit): storage outages get the
+// actionable message, everything else surfaces the server's own words.
+export function noteImageErrorMessage(
+  error: unknown,
+  t: (key: string) => string,
+): string {
+  if (apiErrorCode(error) === 'storage_unavailable') return t('note_dialog.image_error_storage')
+  return apiErrorMessage(error) || t('note_dialog.image_error_generic')
 }
 
 type ImageUploadHandler = (view: EditorView, file: File) => void
@@ -86,7 +97,7 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
   const updateNote = useUpdateNote()
 
   const handleUpload = useMemo(
-    () => buildImageUploadHandler(uploadNoteImage, () => setImgUploadError(t('note_dialog.image_error_generic'))),
+    () => buildImageUploadHandler(uploadNoteImage, (error) => setImgUploadError(noteImageErrorMessage(error, t))),
     [t],
   )
   const editor = useEditor(
