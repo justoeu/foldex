@@ -7,6 +7,7 @@ import (
 
 	"foldex/internal/pkg/jsonopt"
 	"foldex/internal/pkg/listquery"
+	"foldex/internal/pkg/slug"
 	"foldex/internal/tags"
 )
 
@@ -23,7 +24,7 @@ type CreateInput struct {
 	URL   string `json:"url"`
 	Title string `json:"title"`
 	// Slug is optional on create — when nil/empty the repository derives it
-	// from Title via Slugify (with auto-suffix on collision).
+	// from Title via slug.Slugify (with auto-suffix on collision).
 	Slug        *string            `json:"slug"`
 	Description *string            `json:"description"`
 	TagIDs      []int64            `json:"tag_ids"`
@@ -70,7 +71,7 @@ func (c CreateInput) Validate() error {
 	if len(c.Title) > MaxTitleBytes {
 		return errMsg("title too long (max 500)")
 	}
-	if c.Slug != nil && !SlugIsValid(*c.Slug) {
+	if c.Slug != nil && !slug.IsValid(*c.Slug) {
 		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
 	}
 	if c.CheckInterval != nil && !ValidCheckInterval(*c.CheckInterval) {
@@ -100,7 +101,7 @@ type UpdateInput struct {
 	FolderIDSet bool   `json:"-"`
 	// Slug shares the same tri-state pattern: absent → don't touch,
 	// {"slug": "foo-bar"} → set explicitly, {"slug": null} → regenerate
-	// from title via Slugify().
+	// from title via slug.Slugify().
 	Slug    *string `json:"-"`
 	SlugSet bool    `json:"-"`
 	// CheckInterval tri-state: absent → don't touch, {"check_interval": "daily"}
@@ -146,7 +147,7 @@ func (u UpdateInput) Validate() error {
 	// Slug: explicit value must pass the same check the DB enforces. A
 	// `null` payload (SlugSet=true, Slug=nil) means "regenerate from
 	// title" — that's handled by the repository, not validated here.
-	if u.SlugSet && u.Slug != nil && !SlugIsValid(*u.Slug) {
+	if u.SlugSet && u.Slug != nil && !slug.IsValid(*u.Slug) {
 		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
 	}
 	if u.CheckIntervalSet && u.CheckInterval != nil && !ValidCheckInterval(*u.CheckInterval) {

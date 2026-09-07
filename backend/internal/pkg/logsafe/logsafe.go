@@ -41,22 +41,6 @@ func String(s string) string {
 	return b.String()
 }
 
-// ObjectKey returns a non-tainted prefix label for object-store keys
-// (screenshots|images|notes|other). Never echoes the raw key.
-func ObjectKey(key string) string {
-	switch {
-	case strings.HasPrefix(key, "screenshots/"):
-		return "screenshots"
-	case strings.HasPrefix(key, "images/"):
-		return "images"
-	case strings.HasPrefix(key, "notes/"):
-		return "notes"
-	case strings.HasPrefix(key, "files/"):
-		return "files"
-	default:
-		return "other"
-	}
-}
 
 // HTTPPath returns a non-tainted route class for request paths.
 func HTTPPath(path string) string {

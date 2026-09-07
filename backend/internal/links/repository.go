@@ -88,7 +88,7 @@ func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateIn
 	if userSupplied {
 		slug = *in.Slug
 	} else {
-		slug = Slugify(in.Title)
+		slug = sharedslug.Slugify(in.Title)
 		if slug == "" {
 			slug = "link-untitled"
 		}

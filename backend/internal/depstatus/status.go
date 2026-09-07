@@ -75,31 +75,16 @@ type Checker struct {
 // Option configures a Checker.
 type Option func(*Checker)
 
-// WithTTL is how long a snapshot is reused. Zero keeps the default.
-func WithTTL(d time.Duration) Option {
-	return func(c *Checker) {
-		if d > 0 {
-			c.ttl = d
-		}
-	}
-}
-
-// WithTimeout bounds each probe. Zero keeps the default (2s, same as /healthz).
-func WithTimeout(d time.Duration) Option {
-	return func(c *Checker) {
-		if d > 0 {
-			c.timeout = d
-		}
-	}
-}
-
 // WithLogger records ok↔unreachable transitions. Probe errors are not logged:
 // they routinely contain the endpoint.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *Checker) { c.logger = l }
 }
 
-// New builds an empty checker. Add probes before the first Snapshot.
+// New builds an empty checker. Add probes before the first Snapshot. The
+// snapshot TTL (30s) and per-probe bound (2s, same as /healthz) are fixed:
+// no deployment tunes them, so presenting knobs for them would only send
+// readers hunting for env vars that do not exist.
 func New(opts ...Option) *Checker {
 	c := &Checker{
 		ttl:     defaultTTL,

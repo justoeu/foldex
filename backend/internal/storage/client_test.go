@@ -19,9 +19,9 @@ import (
 )
 
 // Client holds a concrete *minio.Client, so we can't swap in a fake. The unit
-// tests here drive the helpers (readAll) and the construction/error paths
-// directly; the full PutObject/GetObject surface is covered by
-// client_integration_test.go against a real RustFS.
+// tests here drive the helpers and the construction/error paths directly; the
+// full PutObject/GetObject surface is covered by client_integration_test.go
+// against a real RustFS.
 
 func TestExport_DoesNotStatObjectsAlreadyListed(t *testing.T) {
 	payload := []byte("img-bytes")
@@ -198,24 +198,6 @@ func countingList(yields *atomic.Int64, objects []listedObject, gate *listGate) 
 	}
 }
 
-func TestReadAll(t *testing.T) {
-	t.Run("reads full content", func(t *testing.T) {
-		payload := []byte("hello world")
-		got, err := readAll(bytes.NewReader(payload), int64(len(payload)))
-		require.NoError(t, err)
-		assert.Equal(t, payload, got)
-	})
-	t.Run("empty reader", func(t *testing.T) {
-		got, err := readAll(bytes.NewReader(nil), 0)
-		require.NoError(t, err)
-		assert.Empty(t, got)
-	})
-	t.Run("error reader", func(t *testing.T) {
-		_, err := readAll(errReader{}, 8)
-		require.Error(t, err)
-	})
-}
-
 func TestCheckServeSize(t *testing.T) {
 	assert.ErrorIs(t, ErrObjectTooLarge, ports.ErrObjectTooLarge)
 	require.NoError(t, checkServeSize(0))
@@ -236,18 +218,6 @@ func TestExplicitKeyPrefixesAreBoundedByNamespace(t *testing.T) {
 	assert.Equal(t, []string{""}, explicitKeyPrefixes([]string{"top-level"}))
 	assert.Empty(t, explicitKeyPrefixes(nil))
 }
-
-func TestReadAll_RejectsOverCeiling(t *testing.T) {
-	// Stream larger than MaxServeObjectBytes must fail closed.
-	payload := bytes.Repeat([]byte("x"), int(MaxServeObjectBytes)+8)
-	_, err := readAll(bytes.NewReader(payload), int64(len(payload)))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrObjectTooLarge)
-}
-
-type errReader struct{}
-
-func (errReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 
 func TestConfigDefaults(t *testing.T) {
 	cfg := Config{
@@ -288,27 +258,4 @@ func TestNew_ConnectionRefused(t *testing.T) {
 	// We expect an error because BucketExists will fail.
 	assert.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "storage:"), "should wrap with storage: prefix")
-}
-
-func TestUpload_ContentType(t *testing.T) {
-	// Verify that the content type is forwarded. We test via a mock that
-	// captures the options passed to PutObject.
-	type call struct {
-		key         string
-		contentType string
-		size        int64
-	}
-	var got *call
-
-	// Build a minimal stub by monkey-patching through the testable wrapper.
-	// Because we can't swap *minio.Client (S3 SDK) internals, we test the high-level
-	// behaviour through integration (see storage_integration_test.go).
-	// Here we only verify that our readAll helper correctly drains a reader.
-	payload := []byte("PNG data here")
-	buf := bytes.NewBuffer(nil)
-	n, err := buf.ReadFrom(bytes.NewReader(payload))
-	require.NoError(t, err)
-	assert.Equal(t, int64(len(payload)), n)
-	got = &call{key: "screenshots/1.png", contentType: "image/png", size: n}
-	assert.Equal(t, "image/png", got.contentType)
 }
