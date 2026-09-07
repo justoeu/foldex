@@ -5,8 +5,8 @@ import type { Tag, TagCreate } from './types'
 export function useTags() {
   return useQuery({
     queryKey: ['tags'],
-    queryFn: async () => {
-      const { data } = await http.get<Tag[]>('/api/tags')
+    queryFn: async ({ signal }) => {
+      const { data } = await http.get<Tag[]>('/api/tags', { signal })
       return data
     },
   })

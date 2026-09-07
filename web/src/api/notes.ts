@@ -6,8 +6,8 @@ import type { Note, NoteCreate, NoteUpdate } from './types'
 export function useNote(id: number | null) {
   return useQuery({
     queryKey: ['notes', id],
-    queryFn: async () => {
-      const { data } = await http.get<Note>(`/api/notes/${id}`)
+    queryFn: async ({ signal }) => {
+      const { data } = await http.get<Note>(`/api/notes/${id}`, { signal })
       return data
     },
     enabled: id != null,

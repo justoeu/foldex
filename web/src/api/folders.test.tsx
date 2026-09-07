@@ -51,6 +51,54 @@ describe('useFolders', () => {
     const call = spy.mock.calls.find((c) => String(c[0]).includes('/api/folders'))
     expect(call?.[1]?.headers?.[FOLDER_UNLOCK_HEADER]).toBe('tok-xyz')
   })
+
+  // N1-NEX-004: rapid folder navigation changes the query key per folder;
+  // without forwarding TanStack's AbortSignal the outdates keep running to
+  // completion (entries.ts already forwards — same contract here).
+  it('forwards the query AbortSignal so an outdated scope request can be aborted', async () => {
+    const fallback = vi.mocked(http.get).getMockImplementation()!
+    const signals: Array<AbortSignal | undefined> = []
+    vi.mocked(http.get).mockImplementation(((url: string, ...rest: any[]) => {
+      const path = String(url).split('?')[0]
+      if (path === '/api/folders') {
+        const config = rest[0] as { signal?: AbortSignal } | undefined
+        signals.push(config?.signal)
+        // The first scope hangs until aborted — an instant answer settles
+        // the query before the rerender and leaves nothing to cancel.
+        if (String(url).includes('parent_id=1')) {
+          return new Promise((_resolve, reject) => {
+            if (config?.signal?.aborted) {
+              reject(Object.assign(new Error('canceled'), { name: 'CanceledError' }))
+              return
+            }
+            config?.signal?.addEventListener('abort', () =>
+              reject(Object.assign(new Error('canceled'), { name: 'CanceledError' })),
+            )
+          })
+        }
+      }
+      return fallback(url, ...rest)
+    }) as never)
+
+    state.folders.push(
+      { id: 1, name: 'A', color: '#abc', parent_id: null, has_password: false, link_count: 0, folder_count: 0, preview_links: [], preview_folders: [], created_at: '' },
+    )
+    const client = makeQueryClient()
+    const localWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const { rerender } = renderHook(({ scope }: { scope: number }) => useFolders({ scope }), {
+      wrapper: localWrapper,
+      initialProps: { scope: 1 },
+    })
+    await waitFor(() => expect(signals).toHaveLength(1))
+    expect(signals[0]).toBeInstanceOf(AbortSignal)
+
+    rerender({ scope: 2 })
+    await waitFor(() => expect(signals).toHaveLength(2))
+    expect(signals[0]?.aborted).toBe(true)
+    expect(signals[1]?.aborted).toBe(false)
+  })
 })
 
 describe('folder CRUD mutations', () => {

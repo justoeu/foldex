@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { ReactNode } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { useCreateNote, useUpdateNote, useDeleteNote, usePinNote, useNote, uploadNoteImage, goNoteHref } from './notes'
+import { http } from './client'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import { makeQueryClient } from '../test/renderWithProviders'
 
@@ -104,6 +105,59 @@ describe('useNote', () => {
   it('stays disabled when id is null', () => {
     const { result } = renderHook(() => useNote(null), { wrapper })
     expect(result.current.fetchStatus).toBe('idle')
+  })
+
+  // N1-NEX-004: forward TanStack's AbortSignal (entries.ts already does)
+  // so switching notes cancels the stale GET instead of completing it.
+  it('forwards the query AbortSignal to the note GET', async () => {
+    state.notes.push({
+      id: 30, title: 'A', slug: 'a', body_html: '', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    state.notes.push({
+      id: 31, title: 'B', slug: 'b', body_html: '', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    const fallback = vi.mocked(http.get).getMockImplementation()!
+    const signals: Array<AbortSignal | undefined> = []
+    vi.mocked(http.get).mockImplementation(((url: string, ...rest: any[]) => {
+      if (/^\/api\/notes\/(\d+)$/.test(String(url))) {
+        const config = rest[0] as { signal?: AbortSignal } | undefined
+        signals.push(config?.signal)
+        // First note hangs until aborted — an instant answer would settle
+        // the query before the rerender and leave nothing to cancel.
+        if (String(url).endsWith('/30')) {
+          return new Promise((_resolve, reject) => {
+            if (config?.signal?.aborted) {
+              reject(Object.assign(new Error('canceled'), { name: 'CanceledError' }))
+              return
+            }
+            config?.signal?.addEventListener('abort', () =>
+              reject(Object.assign(new Error('canceled'), { name: 'CanceledError' })),
+            )
+          })
+        }
+      }
+      return fallback(url, ...rest)
+    }) as never)
+
+    const localClient = makeQueryClient()
+    const localWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={localClient}>{children}</QueryClientProvider>
+    )
+    const { rerender } = renderHook(({ id }: { id: number }) => useNote(id), {
+      wrapper: localWrapper,
+      initialProps: { id: 30 },
+    })
+    await waitFor(() => expect(signals).toHaveLength(1))
+    expect(signals[0]).toBeInstanceOf(AbortSignal)
+
+    rerender({ id: 31 })
+    await waitFor(() => expect(signals).toHaveLength(2))
+    expect(signals[0]?.aborted).toBe(true)
+    expect(signals[1]?.aborted).toBe(false)
   })
 })
 

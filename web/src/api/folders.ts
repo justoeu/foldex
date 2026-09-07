@@ -32,13 +32,14 @@ export function useFolders(params?: FolderListParams) {
     // bust the cache) — only whether one is present, so the locked→
     // unlocked transition still triggers a refetch.
     queryKey: ['folders', scope, unlockToken ? 'unlocked' : 'locked', fields],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const search = new URLSearchParams()
       if (scope === 'root') search.set('root', '1')
       else if (typeof scope === 'number') search.set('parent_id', String(scope))
       if (fields === 'minimal') search.set('fields', 'minimal')
       const qs = search.toString()
       const { data } = await http.get<Folder[]>(`/api/folders${qs ? '?' + qs : ''}`, {
+        signal,
         headers: unlockToken ? { [FOLDER_UNLOCK_HEADER]: unlockToken } : undefined,
       })
       return data
