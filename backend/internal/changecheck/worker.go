@@ -264,7 +264,14 @@ func (w *Worker) process(ctx context.Context, job links.DueLink) {
 		return
 	}
 
-	kind, hash, err := w.fingerprint.Compute(fetchCtx, job.URL, body)
+	// Fresh deadline for the fingerprint leg: Compute performs a second
+	// network fetch (the feed), and inheriting the page-fetch ctx let a slow
+	// page starve that fetch to DeadlineExceeded — Compute then silently fell
+	// back to kind=content, flipping the stored baseline kind and permanently
+	// masking the next real feed change behind the kind-must-match rule.
+	hashCtx, hashCancel := context.WithTimeout(ctx, w.fetchTimeout)
+	defer hashCancel()
+	kind, hash, err := w.fingerprint.Compute(hashCtx, job.URL, body)
 	if err != nil {
 		w.logger.Info("process: fingerprint failed", "link_id", id, "reason", fetchFailureReason(err))
 		if _, recErr := w.repo.SystemRecordCheckResult(ctx, id, job.ClaimedAt, links.CheckResult{
