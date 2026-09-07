@@ -40,7 +40,7 @@ func (p *preparedNoteMediaRestore) cleanup() {
 	}
 	name := p.spool.Name()
 	_ = p.spool.Close()
-	_ = os.Remove(name)
+	_ = os.Remove(name) // #nosec G703 -- path comes from os.CreateTemp, never from user input
 }
 
 // noteMediaSpool owns the two independent restore caps and the spool-file
