@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -640,14 +641,12 @@ func envFirst(primary, legacy, def string) string {
 
 func envBoolFirst(primary, legacy string, def bool) bool {
 	if v := os.Getenv(primary); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err == nil {
+		if b, ok := parseBoolEnv(v); ok {
 			return b
 		}
 	}
 	if v := os.Getenv(legacy); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err == nil {
+		if b, ok := parseBoolEnv(v); ok {
 			return b
 		}
 	}
@@ -675,7 +674,29 @@ func envBool(k string, def bool) bool {
 	if v == "" {
 		return def
 	}
-	return v == "1" || v == "true" || v == "TRUE" || v == "yes"
+	if b, ok := parseBoolEnv(v); ok {
+		return b
+	}
+	// An unrecognized value is a typo or an unfamiliar idiom ("on"), and
+	// silently mapping it to false would turn security knobs (2FA-for-admins,
+	// STARTTLS) OFF with no boot-time signal — warn and keep the default.
+	slog.Warn("config: unrecognized boolean env value, using default",
+		"key", k, "value", v, "default", def)
+	return def
+}
+
+// parseBoolEnv is the one boolean spelling policy shared by envBool and
+// envBoolFirst: strconv.ParseBool plus the "yes" idiom envBool always
+// accepted. The second return reports whether the value was recognized.
+func parseBoolEnv(raw string) (bool, bool) {
+	v := strings.TrimSpace(raw)
+	if b, err := strconv.ParseBool(v); err == nil {
+		return b, true
+	}
+	if strings.EqualFold(v, "yes") {
+		return true, true
+	}
+	return false, false
 }
 
 func splitCSV(s string) []string {
