@@ -21,9 +21,21 @@ export function normalizeBaseUrl(rawBaseUrl) {
   if (url.username || url.password) {
     throw new Error('The backend URL must not contain credentials.');
   }
+  // Bearer token rides every extension call; http to a non-loopback host
+  // puts it on the wire in clear (INV-093).
+  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+    throw new Error(
+      'HTTP is only allowed for loopback (localhost, 127.0.0.1, ::1). Use HTTPS for any other host.',
+    );
+  }
 
   const path = url.pathname.replace(/\/+$/, '');
   return url.origin + (path === '/' ? '' : path);
+}
+
+function isLoopbackHost(hostname) {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
 
 export function permissionForBaseUrl(baseUrl) {
