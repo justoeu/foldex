@@ -73,9 +73,9 @@ func TestSummary_TopHostFoldsSchemeCase(t *testing.T) {
 	require.NoError(t, err)
 	upper, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "HTTPS://example.com/b", Title: "upper"})
 	require.NoError(t, err)
-	_, err = lrepo.ClickAndResolve(ctx, lower.ID)
+	_, err = lrepo.ClickAndResolve(ctx, lower.ID, uid)
 	require.NoError(t, err)
-	_, err = lrepo.ClickAndResolve(ctx, upper.ID)
+	_, err = lrepo.ClickAndResolve(ctx, upper.ID, uid)
 	require.NoError(t, err)
 
 	s, err := srepo.Summary(ctx, uid)

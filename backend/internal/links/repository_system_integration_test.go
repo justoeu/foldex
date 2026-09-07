@@ -63,7 +63,7 @@ func TestClickAndResolve_ConcurrentClicksAreCountedMonotonically(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < perGoroutine; i++ {
-				if _, err := repo.ClickAndResolve(ctx, link.ID); err != nil {
+				if _, err := repo.ClickAndResolve(ctx, link.ID, uid); err != nil {
 					errs <- err
 				}
 			}

@@ -524,7 +524,7 @@ describe("error and auth contract shared across surfaces", () => {
         { baseUrl: "http://localhost:9089", apiToken: "bad" },
         { chromeApi, fetchImpl: fetch401 },
       ),
-    ).rejects.toThrow("not signed in — set an API token in settings");
+    ).rejects.toThrow("the server rejected the token (HTTP 401)");
   });
 
   test("authHeaders and credentialProblem live in config.js, one shape for both surfaces", async () => {

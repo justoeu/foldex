@@ -61,8 +61,8 @@ export function initPopup({
   const selected = new Set();
   let config;
 
-  // Let the "Saved ✓" status actually be seen before the popup dies —
-  // closing immediately made the success invisible.
+  // Let the success status actually be seen before the popup dies —
+  // closing immediately made the confirmation invisible.
   const CLOSE_AFTER_SAVE_MS = 600;
 
   function setStatus(msg, level) {
