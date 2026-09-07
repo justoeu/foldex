@@ -698,24 +698,7 @@ func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *st
 	// rename-happy account contend with real administration. A plain UPDATE
 	// is also the correct isolation: nothing below reads-then-writes.
 	if role == nil && status == nil {
-		// name is also optional in the DTO, so `PATCH {}` reaches here with all
-		// three nil. Dereferencing it would panic — recovered as a 500, but a
-		// crash path is not an input-validation answer. An edit that changes
-		// nothing returns the row unchanged.
-		if name == nil {
-			return r.GetUser(ctx, id)
-		}
-		u, err := scanUser(r.pool.QueryRow(ctx, `
-			UPDATE app_user SET name = $2, updated_at = now()
-			WHERE id = $1
-			RETURNING `+userColumns, int64(id), *name))
-		if errors.Is(err, pgx.ErrNoRows) {
-			return User{}, ErrNoUser
-		}
-		if err != nil {
-			return User{}, fmt.Errorf("update user rename: %w", err)
-		}
-		return u, nil
+		return r.renameUser(ctx, id, name)
 	}
 
 	tx, err := r.pool.Begin(ctx)
@@ -767,16 +750,48 @@ func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *st
 		return User{}, fmt.Errorf("update user: %w", err)
 	}
 	if role != nil && !previousRole.IsAdmin() && role.IsAdmin() {
-		if _, err := tx.Exec(ctx, `
-			UPDATE session SET revoked_at = now(), revoked_reason = $2
-			WHERE user_id = $1 AND revoked_at IS NULL`, int64(id), ReasonAdminRevoked); err != nil {
-			return User{}, fmt.Errorf("revoke sessions on admin promotion: %w", err)
+		if err := revokeSessionsOnPromotion(ctx, tx, id); err != nil {
+			return User{}, err
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return User{}, fmt.Errorf("update user commit: %w", err)
 	}
 	return u, nil
+}
+
+// renameUser is the no-role/no-status fast path of UpdateUser. A nil name
+// means `PATCH {}`: name is optional in the DTO and all three fields nil
+// reaches here, so dereferencing it would panic — recovered as a 500, but a
+// crash path is not an input-validation answer. An edit that changes nothing
+// returns the row unchanged.
+func (r *Repository) renameUser(ctx context.Context, id authctx.UserID, name *string) (User, error) {
+	if name == nil {
+		return r.GetUser(ctx, id)
+	}
+	u, err := scanUser(r.pool.QueryRow(ctx, `
+		UPDATE app_user SET name = $2, updated_at = now()
+		WHERE id = $1
+		RETURNING `+userColumns, int64(id), *name))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrNoUser
+	}
+	if err != nil {
+		return User{}, fmt.Errorf("update user rename: %w", err)
+	}
+	return u, nil
+}
+
+// revokeSessionsOnPromotion kills every live session of a newly-promoted
+// admin: the promotion was earned with a credential proof made as a
+// non-admin, so pre-promotion sessions must not keep admin authority.
+func revokeSessionsOnPromotion(ctx context.Context, tx pgx.Tx, id authctx.UserID) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE session SET revoked_at = now(), revoked_reason = $2
+		WHERE user_id = $1 AND revoked_at IS NULL`, int64(id), ReasonAdminRevoked); err != nil {
+		return fmt.Errorf("revoke sessions on admin promotion: %w", err)
+	}
+	return nil
 }
 
 // DeleteUser removes an account. Every content row cascades away with it via
