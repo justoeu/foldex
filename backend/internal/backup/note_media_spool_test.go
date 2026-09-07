@@ -173,3 +173,33 @@ func TestRestoreSingleObjectStagesPropagateUploadFailure(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, sentinel)
 }
+
+func TestNoteMediaSpoolAggregateCapRejectsSecondFile(t *testing.T) {
+	spool := newNoteMediaSpool()
+	spool.aggregateBudget = 4 // two 2-byte writes fit; a third does not
+
+	first, err := spool.write([]byte("ab"), "image/jpeg")
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, first.size)
+	_, err = spool.write([]byte("cd"), "image/jpeg")
+	require.NoError(t, err)
+
+	_, err = spool.write([]byte("ef"), "image/jpeg")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds restore limits")
+	require.NotNil(t, spool.file)
+	t.Cleanup(func() {
+		name := spool.file.Name()
+		_ = spool.file.Close()
+		_ = os.Remove(name)
+	})
+}
+
+func TestNoteMediaSpoolPerFileCapIndependentOfAggregate(t *testing.T) {
+	spool := newNoteMediaSpool()
+	spool.aggregateBudget = int64(maxRestoredNoteMediaBytes) + 1
+
+	_, err := spool.write(make([]byte, maxRestoredNoteMediaBytes+1), "image/jpeg")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds restore limits")
+}
