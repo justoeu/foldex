@@ -181,10 +181,10 @@ func insertStagedNotes(ctx context.Context, tx pgx.Tx, uid authctx.UserID, mappi
 	ct, err := tx.Exec(ctx, `
 		INSERT INTO note
 		    (id, user_id, title, slug, body_html, body_text, pinned, folder_id,
-		     cover_url, created_at, updated_at)
+		     cover_url, is_public, created_at, updated_at)
 		SELECT staged.new_id, $1, staged.title, staged.slug, staged.body_html,
 		       staged.body_text, staged.pinned, folder.new_id, staged.cover_url,
-		       staged.created_at, staged.updated_at
+		       staged.is_public, staged.created_at, staged.updated_at
 		FROM _backup_restore_note staged
 		LEFT JOIN _backup_restore_folder folder ON folder.old_id = staged.folder_old_id
 		ORDER BY staged.ordinal`, int64(uid))
@@ -213,11 +213,11 @@ func restoreConflictLinks(ctx context.Context, tx pgx.Tx, uid authctx.UserID, li
 	ct, err := tx.Exec(ctx, `
 		INSERT INTO link
 		    (id, user_id, url, title, slug, description, favicon_url, og_image_url,
-		     pinned, preview_status, preview_error, folder_id, created_at, updated_at)
+		     pinned, preview_status, preview_error, folder_id, is_public, created_at, updated_at)
 		SELECT staged.new_id, $1, staged.url, staged.title, staged.slug,
 		       staged.description, staged.favicon_url, staged.og_image_url,
 		       staged.pinned, staged.preview_status, staged.preview_error,
-		       folder.new_id, staged.created_at, staged.updated_at
+		       folder.new_id, staged.is_public, staged.created_at, staged.updated_at
 		FROM _backup_restore_link staged
 		LEFT JOIN _backup_restore_folder folder ON folder.old_id = staged.folder_old_id
 		ORDER BY staged.ordinal
@@ -426,13 +426,13 @@ func createRestoreStagingTables(ctx context.Context, tx pgx.Tx) error {
 			url text NOT NULL, title text NOT NULL, slug text NOT NULL, description text,
 			favicon_url text, og_image_url text, pinned boolean NOT NULL,
 			preview_status text NOT NULL, preview_error text, folder_old_id bigint,
-			created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
+			is_public boolean NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
 		) ON COMMIT DROP;
 		CREATE TEMP TABLE _backup_restore_note (
 			ordinal integer NOT NULL, old_id bigint NOT NULL, new_id bigint NOT NULL,
 			title text NOT NULL, slug text NOT NULL, body_html text NOT NULL,
 			body_text text NOT NULL, pinned boolean NOT NULL, folder_old_id bigint,
-			cover_url text, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
+			cover_url text, is_public boolean NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
 		) ON COMMIT DROP`)
 	if err != nil {
 		return fmt.Errorf("create backup restore staging tables: %w", err)
@@ -487,12 +487,12 @@ func copyRestoreStaging(ctx context.Context, tx pgx.Tx, snap *Snapshot, tagNames
 	}
 	if len(snap.Links) > 0 {
 		_, err = tx.CopyFrom(ctx, pgx.Identifier{"_backup_restore_link"},
-			[]string{"ordinal", "old_id", "new_id", "url", "title", "slug", "description", "favicon_url", "og_image_url", "pinned", "preview_status", "preview_error", "folder_old_id", "created_at", "updated_at"},
+			[]string{"ordinal", "old_id", "new_id", "url", "title", "slug", "description", "favicon_url", "og_image_url", "pinned", "preview_status", "preview_error", "folder_old_id", "is_public", "created_at", "updated_at"},
 			pgx.CopyFromSlice(len(snap.Links), func(i int) ([]any, error) {
 				row := snap.Links[i]
 				return []any{i, row.ID, linkIDs[i], row.URL, row.Title, linkSlugs[i], row.Description,
 					row.FaviconURL, row.OGImageURL, row.Pinned, row.PreviewStatus, row.PreviewError,
-					row.FolderID, row.CreatedAt, row.UpdatedAt}, nil
+					row.FolderID, row.IsPublic, row.CreatedAt, row.UpdatedAt}, nil
 			}))
 		if err != nil {
 			return fmt.Errorf("copy restore links: %w", err)
@@ -500,12 +500,12 @@ func copyRestoreStaging(ctx context.Context, tx pgx.Tx, snap *Snapshot, tagNames
 	}
 	if len(snap.Notes) > 0 {
 		_, err = tx.CopyFrom(ctx, pgx.Identifier{"_backup_restore_note"},
-			[]string{"ordinal", "old_id", "new_id", "title", "slug", "body_html", "body_text", "pinned", "folder_old_id", "cover_url", "created_at", "updated_at"},
+			[]string{"ordinal", "old_id", "new_id", "title", "slug", "body_html", "body_text", "pinned", "folder_old_id", "cover_url", "is_public", "created_at", "updated_at"},
 			pgx.CopyFromSlice(len(snap.Notes), func(i int) ([]any, error) {
 				row := snap.Notes[i]
 				bodyHTML, bodyText := notes.SanitizeBody(row.BodyHTML)
 				return []any{i, row.ID, noteIDs[i], row.Title, noteSlugs[i], bodyHTML, bodyText,
-					row.Pinned, row.FolderID, row.CoverURL, row.CreatedAt, row.UpdatedAt}, nil
+					row.Pinned, row.FolderID, row.CoverURL, row.IsPublic, row.CreatedAt, row.UpdatedAt}, nil
 			}))
 		if err != nil {
 			return fmt.Errorf("copy restore notes: %w", err)

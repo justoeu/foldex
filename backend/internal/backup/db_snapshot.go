@@ -57,13 +57,13 @@ func streamSnapshotJSON(ctx context.Context, tx pgx.Tx, uid authctx.UserID, w io
 	}
 	counts.Links, err = encoder.rows(ctx, tx, `,"links":`, `
         SELECT id, url, title, slug, description, favicon_url, og_image_url, pinned,
-               preview_status, preview_error, folder_id, created_at, updated_at
+               preview_status, preview_error, folder_id, is_public, created_at, updated_at
 		FROM link WHERE user_id = $1 ORDER BY id`, []any{int64(uid)}, scanLinkRow)
 	if err != nil {
 		return counts, err
 	}
 	counts.Notes, err = encoder.rows(ctx, tx, `,"notes":`, `
-        SELECT id, title, slug, body_html, body_text, pinned, folder_id, cover_url, created_at, updated_at
+        SELECT id, title, slug, body_html, body_text, pinned, folder_id, cover_url, is_public, created_at, updated_at
 		FROM note WHERE user_id = $1 ORDER BY id`, []any{int64(uid)}, scanNoteRow)
 	if err != nil {
 		return counts, err
@@ -185,14 +185,14 @@ func scanLinkRow(rows pgx.Rows) (any, error) {
 	var row LinkRow
 	err := rows.Scan(&row.ID, &row.URL, &row.Title, &row.Slug, &row.Description, &row.FaviconURL,
 		&row.OGImageURL, &row.Pinned, &row.PreviewStatus, &row.PreviewError, &row.FolderID,
-		&row.CreatedAt, &row.UpdatedAt)
+		&row.IsPublic, &row.CreatedAt, &row.UpdatedAt)
 	return row, err
 }
 
 func scanNoteRow(rows pgx.Rows) (any, error) {
 	var row NoteRow
 	err := rows.Scan(&row.ID, &row.Title, &row.Slug, &row.BodyHTML, &row.BodyText, &row.Pinned,
-		&row.FolderID, &row.CoverURL, &row.CreatedAt, &row.UpdatedAt)
+		&row.FolderID, &row.CoverURL, &row.IsPublic, &row.CreatedAt, &row.UpdatedAt)
 	return row, err
 }
 

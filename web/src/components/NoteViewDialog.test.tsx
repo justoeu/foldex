@@ -17,6 +17,7 @@ const note: Note = {
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-02T00:00:00Z',
   tags: [{ id: 1, name: 'home', color: '#8B85FF' }],
+  is_public: false,
 }
 
 function mockGet(data: Note | Error) {
@@ -47,10 +48,16 @@ describe('the note reader', () => {
     expect(screen.getByText(/3 views/i)).toBeInTheDocument()
   })
 
-  // The public page is the only path that records a view, so the reader must
-  // keep a way to reach it — and it must still be a real link, in a new tab.
-  it('keeps the public page one click away, as a link', async () => {
+  it('does not advertise /n/{slug} while the note is private', async () => {
     mockGet(note)
+    renderWithProviders(<NoteViewDialog noteId={7} onClose={vi.fn()} onEdit={vi.fn()} />)
+
+    expect(await screen.findByRole('button', { name: /share publicly/i })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /open public page/i })).not.toBeInTheDocument()
+  })
+
+  it('keeps the public page one click away once the note is opted in', async () => {
+    mockGet({ ...note, is_public: true })
     renderWithProviders(<NoteViewDialog noteId={7} onClose={vi.fn()} onEdit={vi.fn()} />)
 
     const link = await screen.findByRole('link', { name: /open public page/i })

@@ -42,9 +42,13 @@ export async function saveLink(
     if (problem) throw new Error(problem);
     // The backend answers {error:{code,message}} — surface the human
     // message it already wrote; the raw slice is only for non-JSON bodies.
-    const parsed = await resp.json().catch(() => null);
-    if (parsed?.error?.message) throw new Error(parsed.error.message);
     const body = await resp.text();
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed?.error?.message) throw new Error(parsed.error.message);
+    } catch (err) {
+      if (!(err instanceof SyntaxError)) throw err;
+    }
     throw new Error("HTTP " + resp.status + " " + body.slice(0, 120));
   }
 }

@@ -407,7 +407,9 @@
     "updated": "Updated {{when}}",
     "views_one": "{{count}} view",
     "views_other": "{{count}} views",
-    "open_public": "Open public page"
+    "open_public": "Open public page",
+    "share_public": "Share publicly",
+    "make_private": "Make private"
   },
   "note_dialog": {
     "kicker_create": "Note",

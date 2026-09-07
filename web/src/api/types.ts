@@ -23,6 +23,7 @@ export type Link = {
   last_clicked_at?: string | null
   pinned: boolean
   folder_id?: number | null
+  is_public?: boolean
   created_at: string
   updated_at: string
   // Change-detection fields (migration 000010). Nullable across the board —
@@ -45,6 +46,7 @@ export type LinkCreate = {
   pending_tags?: TagCreate[]
   pinned?: boolean
   folder_id?: number | null
+  is_public?: boolean
   check_interval?: 'hourly' | 'daily' | 'weekly' | null
 }
 
@@ -59,6 +61,7 @@ export type LinkUpdate = Partial<{
   pending_tags: TagCreate[]
   pinned: boolean
   folder_id: number | null
+  is_public: boolean
   // null on PATCH = opt out (backend wipes fingerprint + timestamps).
   check_interval: 'hourly' | 'daily' | 'weekly' | null
 }>
@@ -133,6 +136,7 @@ export type Note = {
   body_html: string
   pinned: boolean
   folder_id?: number | null
+  is_public?: boolean
   cover_url?: string | null
   click_count: number
   last_clicked_at?: string | null
@@ -150,6 +154,7 @@ export type NoteCreate = {
   pending_tags?: TagCreate[]
   pinned?: boolean
   folder_id?: number | null
+  is_public?: boolean
 }
 
 export type NoteUpdate = Partial<{
@@ -162,6 +167,7 @@ export type NoteUpdate = Partial<{
   pending_tags: TagCreate[]
   pinned: boolean
   folder_id: number | null
+  is_public: boolean
 }>
 
 // Entry is the discriminated union GET /api/entries returns — one row per
