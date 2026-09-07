@@ -208,17 +208,20 @@ function AreaChart({ data, width, height, t }: { data: DailyPoint[]; width: numb
   const series = data.map((d) => d.clicks)
   const max = Math.max(...series, 1) * 1.1
   const step = w / Math.max(series.length - 1, 1)
-  const pts = series.map((v, i) => [pad.l + i * step, pad.t + h - (v / max) * h] as [number, number])
-  const path = pts.map(([x, y], i) => (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1)).join(' ')
+  // Shared plot-space math so the path builders and the hover overlay
+  // cannot drift apart on padding or precision changes.
+  const px = (i: number) => pad.l + i * step
+  const py = (v: number) => pad.t + h - (v / max) * h
+  const toPath = (pts: Array<[number, number]>) =>
+    pts.map(([x, y], i) => (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1)).join(' ')
+  const pts = series.map((v, i) => [px(i), py(v)] as [number, number])
+  const path = toPath(pts)
   const area = path + ` L${pad.l + w},${pad.t + h} L${pad.l},${pad.t + h} Z`
   const avg = series.map((_, i) => {
     const slice = series.slice(Math.max(0, i - 6), i + 1)
     return slice.reduce((a, b) => a + b, 0) / slice.length
   })
-  const avgPts = avg.map((v, i) => [pad.l + i * step, pad.t + h - (v / max) * h] as [number, number])
-  const avgPath = avgPts
-    .map(([x, y], i) => (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1))
-    .join(' ')
+  const avgPath = toPath(avg.map((v, i) => [px(i), py(v)] as [number, number]))
   const yTicks = [0, 0.5, 1].map((pct) => Math.round(max * pct))
   const [hover, setHover] = useState<number | null>(null)
 
@@ -226,8 +229,8 @@ function AreaChart({ data, width, height, t }: { data: DailyPoint[]; width: numb
   // card. Anchored from left/right depending on hover position.
   let tooltipStyle: CSSProperties = { display: 'none' }
   if (hover !== null) {
-    const x = pad.l + hover * step
-    const y = pad.t + h - (series[hover] / max) * h
+    const x = px(hover)
+    const y = py(series[hover])
     const nearLeft = x < 80
     const nearRight = x > width - 80
     tooltipStyle = {
@@ -253,7 +256,7 @@ function AreaChart({ data, width, height, t }: { data: DailyPoint[]; width: numb
           </linearGradient>
         </defs>
         {yTicks.map((tick, i) => {
-          const y = pad.t + h - (tick / max) * h
+          const y = py(tick)
           return (
             <g key={i}>
               <line x1={pad.l} y1={y} x2={pad.l + w} y2={y} stroke="var(--fx-border-2)" strokeDasharray="2 3" />
@@ -268,7 +271,7 @@ function AreaChart({ data, width, height, t }: { data: DailyPoint[]; width: numb
         <path d={avgPath} fill="none" stroke="var(--fx-ink-3)" strokeWidth="1.4" strokeDasharray="3 3" opacity="0.7" />
 
         {[0, Math.floor(series.length * 0.25), Math.floor(series.length * 0.5), Math.floor(series.length * 0.75), series.length - 1].map((i, idx) => {
-          const x = pad.l + i * step
+          const x = px(i)
           const days = series.length
           const labels = [
             t('stats.chart_days_ago', { count: days - 1 }),
@@ -288,8 +291,8 @@ function AreaChart({ data, width, height, t }: { data: DailyPoint[]; width: numb
         {hover !== null && (
           <>
             <line
-              x1={pad.l + hover * step}
-              x2={pad.l + hover * step}
+              x1={px(hover)}
+              x2={px(hover)}
               y1={pad.t}
               y2={pad.t + h}
               stroke="var(--fx-accent)"
@@ -298,15 +301,15 @@ function AreaChart({ data, width, height, t }: { data: DailyPoint[]; width: numb
               opacity="0.55"
             />
             <circle
-              cx={pad.l + hover * step}
-              cy={pad.t + h - (series[hover] / max) * h}
+              cx={px(hover)}
+              cy={py(series[hover])}
               r="7"
               fill="var(--fx-accent)"
               fillOpacity="0.18"
             />
             <circle
-              cx={pad.l + hover * step}
-              cy={pad.t + h - (series[hover] / max) * h}
+              cx={px(hover)}
+              cy={py(series[hover])}
               r="3.5"
               fill="var(--fx-accent)"
               stroke="var(--fx-surface-3)"
@@ -320,7 +323,7 @@ function AreaChart({ data, width, height, t }: { data: DailyPoint[]; width: numb
         {data.map((_, i) => (
           <rect
             key={i}
-            x={pad.l + i * step - step / 2}
+            x={px(i) - step / 2}
             y={pad.t}
             width={step}
             height={h}
