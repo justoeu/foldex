@@ -24,6 +24,15 @@ function flatten(obj: Tree, prefix = ''): string[] {
   })
 }
 
+function flattenEntries(obj: Tree, prefix = ''): Array<[string, unknown]> {
+  return Object.entries(obj).flatMap(([k, v]) => {
+    const path = prefix ? `${prefix}.${k}` : k
+    return v && typeof v === 'object' && !Array.isArray(v)
+      ? flattenEntries(v as Tree, path)
+      : [[path, v] as [string, unknown]]
+  })
+}
+
 const enKeys = flatten(en as Tree)
 
 describe('locale parity', () => {
@@ -68,5 +77,40 @@ describe('locale parity', () => {
   // matches, so the interpolated count renders against the singular form.
   it('uses _one/_other and never the legacy _plural suffix', () => {
     expect(enKeys.filter((k) => k.endsWith('_plural'))).toEqual([])
+  })
+
+  // {{count}} keys WITHOUT _one/_other render "1 clicks" at count=1
+  // (BUG-ART-105: clicks_count shipped that way in all three locales, and
+  // nothing noticed). Exempted are the number-as-glyph labels — durations
+  // ("3m ago"), deltas ("−2d"), "+N" chips — where the plural forms would
+  // be byte-identical and carrying them is noise, not information.
+  const COUNT_GLYPH_KEYS = new Set([
+    'sidebar.load_more',
+    'link_card.last_click_minutes',
+    'link_card.last_click_hours',
+    'link_card.last_click_days',
+    'folder_card.more_overlay',
+    'backup.history_title',
+    'backup.summary_files_value',
+    'stats.kpi_links_new_30d',
+    'stats.section_clicks_day_sub',
+    'stats.chart_days_ago',
+  ])
+
+  it.each([
+    ['en', en],
+    ['pt', pt],
+    ['es', es],
+  ])('%s pluralizes every count-bearing key', (name, locale) => {
+    const entries = flattenEntries(locale as Tree)
+    const paths = new Set(entries.map(([path]) => path))
+    const pluralSuffix = /_(one|other|zero|two|few|many)$/
+    const missing: string[] = []
+    for (const [path, value] of entries) {
+      if (typeof value !== 'string' || !value.includes('{{count}}')) continue
+      if (pluralSuffix.test(path) || COUNT_GLYPH_KEYS.has(path)) continue
+      if (!paths.has(`${path}_one`) || !paths.has(`${path}_other`)) missing.push(path)
+    }
+    expect(missing, `${name}.json count keys lacking _one/_other`).toEqual([])
   })
 })
