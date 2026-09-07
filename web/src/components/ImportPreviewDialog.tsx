@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
@@ -7,6 +7,15 @@ import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useImportPreview } from '../hooks/useImportPreview'
 import type { ImportFormat, ImportResult, ImportValidation } from '../api/importer'
 import { ConflictModePicker } from './ConflictModePicker'
+
+// The backend emits one warning PER duplicate URL and one row per distinct
+// folder path, uncapped up to the 50k import ceiling — re-importing a large
+// library in duplicate mode ships thousands of strings. Rendering them all
+// froze the tab on commit (N1-NEX-001/002), so both lists are capped and
+// overflow is summarized; folders keep an explicit expander because the
+// checkboxes are the only way to EXCLUDE a path.
+const MAX_RENDERED_WARNINGS = 50
+const MAX_RENDERED_FOLDERS = 200
 
 type Props = {
   file: File
@@ -159,11 +168,23 @@ function Counts({
         />
       )}
       {validation.warnings.length > 0 && (
-        <div style={{ background: 'rgba(245,158,11,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-ink-3)' }}>
-          {validation.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
-        </div>
+        <WarningList warnings={validation.warnings} t={t} />
       )}
     </div>
+  )
+}
+
+function WarningList({ warnings, t }: { warnings: string[]; t: TFunction }) {
+  const hidden = warnings.length - MAX_RENDERED_WARNINGS
+  return (
+    <ul
+      style={{ listStyle: 'none', margin: 0, background: 'rgba(245,158,11,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-ink-3)', maxHeight: 200, overflowY: 'auto' }}
+    >
+      {warnings.slice(0, MAX_RENDERED_WARNINGS).map((w, i) => (
+        <li key={i}>⚠ {w}</li>
+      ))}
+      {hidden > 0 && <li>{t('import.warnings_more', { count: hidden })}</li>}
+    </ul>
   )
 }
 
@@ -184,9 +205,13 @@ function FolderList({
   onToggle: (path: string) => void
   disabled: boolean
 }) {
+  const [showAll, setShowAll] = useState(false)
+  const { t } = useTranslation()
+  const visible = showAll ? folders : folders.slice(0, MAX_RENDERED_FOLDERS)
+  const hidden = folders.length - visible.length
   return (
     <ul style={{ listStyle: 'none', margin: 0, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 280, overflowY: 'auto', border: '1px solid var(--fx-border)', borderRadius: 10, padding: 6 }}>
-      {folders.map((f) => {
+      {visible.map((f) => {
         const checked = !excluded.has(f.path)
         return (
           <li key={f.path}>
@@ -208,6 +233,19 @@ function FolderList({
           </li>
         )
       })}
+      {hidden > 0 && (
+        <li>
+          <button
+            type="button"
+            className="fx-pillbtn"
+            disabled={disabled}
+            onClick={() => setShowAll(true)}
+            style={{ fontSize: 11 }}
+          >
+            {t('import.folders_show_all', { count: folders.length })}
+          </button>
+        </li>
+      )}
     </ul>
   )
 }
@@ -220,9 +258,7 @@ function ResultBlock({ r, t }: { r: ImportResult; t: TFunction }) {
       <Row label={t('import.result_skipped')} value={`${r.skipped}`} />
       {r.wiped > 0 && <Row label={t('import.result_wiped')} value={`${r.wiped}`} />}
       {r.warnings && r.warnings.length > 0 && (
-        <div style={{ background: 'rgba(245,158,11,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-ink-3)', maxHeight: 200, overflowY: 'auto' }}>
-          {r.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
-        </div>
+        <WarningList warnings={r.warnings} t={t} />
       )}
     </div>
   )
