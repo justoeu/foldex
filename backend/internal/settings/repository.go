@@ -83,15 +83,6 @@ func (r *Repository) MasterPasswordHint(ctx context.Context, uid authctx.UserID)
 //   - non-nil, ""    → clear the hint
 //   - non-nil, "x"   → set/replace the hint (stored verbatim, never hashed)
 func (r *Repository) SetMasterPassword(ctx context.Context, uid authctx.UserID, plain string, hint *string) error {
-	if hint == nil {
-		stored, err := r.MasterPasswordHint(ctx, uid)
-		if err != nil {
-			return err
-		}
-		if stored != nil && strings.EqualFold(strings.TrimSpace(*stored), strings.TrimSpace(plain)) {
-			return ErrHintMatchesPassword
-		}
-	}
 	hash, err := pwhash.Hash(plain)
 	if err != nil {
 		return fmt.Errorf("hash master password: %w", err)
@@ -102,15 +93,22 @@ func (r *Repository) SetMasterPassword(ctx context.Context, uid authctx.UserID, 
 	}
 	defer tx.Rollback(ctx)
 	// Same user-row lock folder reset takes (RACE-HER-002): rotate and recover
-	// serialize so a proof of H1 cannot land after this write of H2.
-	var locked int64
+	// serialize so a proof of H1 cannot land after this write of H2. The hint
+	// equality check reads THIS locked row on purpose: a pre-lock read on the
+	// pool could pass while a concurrent write commits hint == password right
+	// after, persisting the exact equality INV-066/067 exists to refuse.
+	var storedHint *string
 	err = tx.QueryRow(ctx,
-		`SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).Scan(&locked)
+		`SELECT master_password_hint FROM app_user WHERE id = $1 FOR NO KEY UPDATE`,
+		int64(uid)).Scan(&storedHint)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("set master password: user %d not found", int64(uid))
 	}
 	if err != nil {
 		return fmt.Errorf("lock master password: %w", err)
+	}
+	if hint == nil && storedHint != nil && strings.EqualFold(strings.TrimSpace(*storedHint), strings.TrimSpace(plain)) {
+		return ErrHintMatchesPassword
 	}
 	// Both columns live on the same row, so the tri-state collapses into one
 	// UPDATE: COALESCE keeps the current hint when hint is nil, and NULLIF maps
