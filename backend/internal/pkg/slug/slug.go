@@ -20,6 +20,12 @@ const MaxUniqueAttempts = 1000
 // get truncated on a hyphen boundary so we don't slice through a word.
 const MaxLen = 80
 
+// InvalidFormatMessage is the human-readable statement of the rule IsValid
+// enforces, next to the predicate on purpose: if the rule changes (e.g. the
+// length cap), the message and the check move together instead of the four
+// DTO sites that quote it going stale.
+const InvalidFormatMessage = "slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)"
+
 // formatRE mirrors the DB CHECK constraint:
 //
 //	^[a-z0-9]+(-[a-z0-9]+)*$

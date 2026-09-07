@@ -3,6 +3,7 @@ package slug
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -179,5 +180,14 @@ func TestResolveUpdateMissingRowUsesDomainNotFound(t *testing.T) {
 	}
 	if len(gotArgs) != 2 || gotArgs[0] != int64(7) || gotArgs[1] != int64(42) {
 		t.Fatalf("ResolveUpdate args = %#v; want owner then row id", gotArgs)
+	}
+}
+
+func TestInvalidFormatMessageMatchesMaxLen(t *testing.T) {
+	// The message quotes the cap the predicate enforces; if MaxLen moves and
+	// the message text does not, users get told a rule the server no longer
+	// applies.
+	if !strings.Contains(InvalidFormatMessage, fmt.Sprintf("max %d chars", MaxLen)) {
+		t.Fatalf("InvalidFormatMessage does not quote MaxLen=%d", MaxLen)
 	}
 }

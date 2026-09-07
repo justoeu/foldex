@@ -72,7 +72,7 @@ func (c CreateInput) Validate() error {
 		return errMsg("title too long (max 500)")
 	}
 	if c.Slug != nil && !slug.IsValid(*c.Slug) {
-		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
+		return errMsg(slug.InvalidFormatMessage)
 	}
 	if c.CheckInterval != nil && !ValidCheckInterval(*c.CheckInterval) {
 		return errMsg("check_interval must be one of hourly, daily, weekly")
@@ -148,7 +148,7 @@ func (u UpdateInput) Validate() error {
 	// `null` payload (SlugSet=true, Slug=nil) means "regenerate from
 	// title" — that's handled by the repository, not validated here.
 	if u.SlugSet && u.Slug != nil && !slug.IsValid(*u.Slug) {
-		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
+		return errMsg(slug.InvalidFormatMessage)
 	}
 	if u.CheckIntervalSet && u.CheckInterval != nil && !ValidCheckInterval(*u.CheckInterval) {
 		return errMsg("check_interval must be one of hourly, daily, weekly")

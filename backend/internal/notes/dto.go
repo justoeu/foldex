@@ -65,7 +65,7 @@ func (c CreateInput) Validate() error {
 		return errMsg(fmt.Sprintf("title too long (max %d)", MaxTitleBytes))
 	}
 	if c.Slug != nil && !slug.IsValid(*c.Slug) {
-		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
+		return errMsg(slug.InvalidFormatMessage)
 	}
 	if len(c.BodyHTML) > MaxBodyHTMLBytes {
 		return errMsg(fmt.Sprintf("body too long (max %d bytes after sanitization)", MaxBodyHTMLBytes))
@@ -125,7 +125,7 @@ func (u UpdateInput) Validate() error {
 		return errMsg(fmt.Sprintf("body too long (max %d bytes after sanitization)", MaxBodyHTMLBytes))
 	}
 	if u.SlugSet && u.Slug != nil && !slug.IsValid(*u.Slug) {
-		return errMsg("slug must match [a-z0-9-]+ (no leading/trailing/consecutive hyphens, not purely numeric, max 80 chars)")
+		return errMsg(slug.InvalidFormatMessage)
 	}
 	if err := tags.ValidateCreateInputs(u.PendingTags); err != nil {
 		return errMsg(err.Error())
