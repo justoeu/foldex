@@ -134,6 +134,29 @@ describe("optional Foldex origin access", () => {
     ]);
   });
 
+  test("declares only permissions the code actually calls", async () => {
+    const manifest = await Bun.file(
+      new URL("./manifest.json", import.meta.url),
+    ).json();
+    const sources = await Promise.all(
+      ["popup.js", "options.js", "config.js"].map((name) =>
+        Bun.file(new URL(`./${name}`, import.meta.url)).text(),
+      ),
+    );
+
+    const namespaces = new Set();
+    for (const match of sources.join("\n").matchAll(/chromeApi\.(\w+)/g)) {
+      namespaces.add(match[1]);
+    }
+
+    // runtime is permission-free; popup queries the active tab only after a
+    // user gesture, which is exactly what activeTab grants.
+    expect(namespaces).toEqual(
+      new Set(["runtime", "tabs", "permissions", "storage"]),
+    );
+    expect(manifest.permissions.sort()).toEqual(["activeTab", "storage"]);
+  });
+
   test("normalizes the backend URL while retaining a reverse-proxy path", () => {
     expect(
       normalizeBaseUrl(" HTTPS://Foldex.Example:443/app///?ignored=1#ignored "),

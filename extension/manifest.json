@@ -5,8 +5,7 @@
   "description": "Save the current tab to your Foldex bookmark manager.",
   "permissions": [
     "activeTab",
-    "storage",
-    "notifications"
+    "storage"
   ],
   "optional_host_permissions": [
     "http://*/*",
