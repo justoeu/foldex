@@ -73,6 +73,9 @@ func warnDeprecatedEnv(logger *slog.Logger, cfg config.Config) {
 			"credential at all, and every request is attributed to the bootstrap administrator. " +
 			"Safe only on a loopback bind; turn AUTH_ENABLED back on before exposing this server.")
 	}
+	if w := cfg.InsecureDBPasswordWarning(); w != "" {
+		logger.Warn(w)
+	}
 }
 
 func serveHTTP(srv *http.Server, logger *slog.Logger, stop context.CancelFunc) {

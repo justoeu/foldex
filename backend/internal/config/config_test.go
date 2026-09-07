@@ -537,3 +537,26 @@ func TestLoad_CookieSecureFollowsThePublicURLScheme(t *testing.T) {
 		})
 	}
 }
+
+// SEC-SEN-005: the Postgres password shipped as the literal 'foldex' in every
+// default install. Refusing to boot would break existing volumes (a running
+// cluster cannot be re-keyed by a config check), so the contract is WARN,
+// never refuse — and an operator who set a real password must hear nothing.
+func TestInsecureDBPasswordWarning(t *testing.T) {
+	c := Config{
+		BindAddr: "127.0.0.1",
+		DBURL:    "postgres://foldex:foldex@db:5432/foldex?sslmode=disable",
+	}
+	require.NoError(t, c.validateSecureDefaults(),
+		"a default DB password must warn, never refuse — an existing volume cannot be re-keyed by a boot check")
+	require.NotEmpty(t, c.InsecureDBPasswordWarning(),
+		"the known default password must be called out at boot")
+
+	c.DBURL = "postgres://foldex:hunter2-secret@db:5432/foldex?sslmode=disable"
+	assert.Empty(t, c.InsecureDBPasswordWarning(),
+		"a real password is the operator's business, not a warning")
+
+	c.DBURL = "not a url at all"
+	assert.Empty(t, c.InsecureDBPasswordWarning(),
+		"an unparseable DSN has its own failure path; the warning must not guess")
+}
