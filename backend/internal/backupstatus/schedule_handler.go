@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"foldex/internal/backupagent"
+	"foldex/internal/backupjobs"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 )
@@ -46,21 +46,21 @@ func (h *Handler) GetSchedule(w http.ResponseWriter, r *http.Request) {
 		Jobs: Jobs,
 		Rows: rows,
 		Bounds: scheduleBounds{
-			TimesMin:        backupagent.MinTimes,
-			TimesMax:        backupagent.MaxTimes,
-			WeekdaysMin:     backupagent.MinWeekdays,
-			DumpWeekdaysMin: backupagent.MinDumpWeekdays,
-			IntervalMin:     backupagent.MinIntervalMin,
-			IntervalMax:     backupagent.MaxIntervalMin,
+			TimesMin:        backupjobs.MinTimes,
+			TimesMax:        backupjobs.MaxTimes,
+			WeekdaysMin:     backupjobs.MinWeekdays,
+			DumpWeekdaysMin: backupjobs.MinDumpWeekdays,
+			IntervalMin:     backupjobs.MinIntervalMin,
+			IntervalMax:     backupjobs.MaxIntervalMin,
 		},
 		// The document shape THIS backend writes. Paired with the heartbeat's
 		// own schema_version it lets the band say "the agent predates the
 		// current agenda format" — a skew that is otherwise silent, because
-		// backupagent.RequiredSchemaVersion is a floor: an older agent boots
+		// backupjobs.RequiredSchemaVersion is a floor: an older agent boots
 		// fine on a newer schema and simply ignores the fields it never
 		// learned. The client COMPARES the two numbers; it does not re-derive
 		// the policy (INV-138).
-		AgentSchemaVersion: backupagent.RequiredSchemaVersion,
+		AgentSchemaVersion: backupjobs.RequiredSchemaVersion,
 	}
 	// null, not a zero struct: "no agent ever wrote a heartbeat" is the
 	// honest empty state the band renders as "agente nunca visto" — a zero
@@ -75,11 +75,11 @@ func (h *Handler) GetSchedule(w http.ResponseWriter, r *http.Request) {
 // match BackupScheduleResponse; encoding an open map let a dropped key
 // (agent_schema_version) compile and ship.
 type scheduleResponse struct {
-	Jobs               []string                           `json:"jobs"`
-	Rows               map[string]backupagent.ScheduleRow `json:"rows"`
-	Bounds             scheduleBounds                     `json:"bounds"`
-	Agent              *backupagent.AgentState            `json:"agent"`
-	AgentSchemaVersion int                                `json:"agent_schema_version"`
+	Jobs               []string                          `json:"jobs"`
+	Rows               map[string]backupjobs.ScheduleRow `json:"rows"`
+	Bounds             scheduleBounds                    `json:"bounds"`
+	Agent              *backupjobs.AgentState            `json:"agent"`
+	AgentSchemaVersion int                               `json:"agent_schema_version"`
 }
 
 type scheduleBounds struct {
@@ -92,7 +92,7 @@ type scheduleBounds struct {
 }
 
 // PutSchedule stores one job's agenda row. The floors live in
-// backupagent.ValidateJobConfig — the same function the agent applies when it
+// backupjobs.ValidateJobConfig — the same function the agent applies when it
 // loads, so what saves here is exactly what runs there.
 func (h *Handler) PutSchedule(w http.ResponseWriter, r *http.Request) {
 	job, ok := CanonicalJob(chi.URLParam(r, "job"))
@@ -101,12 +101,12 @@ func (h *Handler) PutSchedule(w http.ResponseWriter, r *http.Request) {
 			"job must be one of dump, drill, mirror, user_zip"))
 		return
 	}
-	in, err := httperr.DecodeJSON[backupagent.JobConfig](w, r)
+	in, err := httperr.DecodeJSON[backupjobs.JobConfig](w, r)
 	if err != nil {
 		httperr.Write(w, err)
 		return
 	}
-	if err := backupagent.ValidateJobConfig(job, in); err != nil {
+	if err := backupjobs.ValidateJobConfig(job, in); err != nil {
 		// The message names the field and its bounds — documented limits,
 		// not secrets, and an owner told the real floor can fix the form
 		// (INV-169's reasoning).
@@ -177,7 +177,7 @@ func scheduleAudit(job, action, before, after string) string {
 // renderSchedule is one agenda document as the trail stores it. JSON rather
 // than Timing.String(): a line someone reads a year later has to be enough to
 // reconstruct the row, and the display form drops "enabled" and the mode.
-func renderSchedule(cfg backupagent.JobConfig) string {
+func renderSchedule(cfg backupjobs.JobConfig) string {
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return scheduleUnknown

@@ -264,3 +264,33 @@ func TestImportExportHandlersDoNotImportPersistenceDriver(t *testing.T) {
 		}
 	}
 }
+
+// backupstatus is the server-mounted admin surface over backup_run. The
+// schedule vocabulary (job names, bounds, ScheduleRow, AgentState) lives in
+// backupjobs so this package cannot pull the agent process's S3 adapters.
+func TestBackupStatusDoesNotImportBackupAgent(t *testing.T) {
+	root := filepath.Join("..", "backupstatus")
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || strings.HasSuffix(path, "_test.go") || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, imp := range f.Imports {
+			importPath, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				return err
+			}
+			if importPath == "foldex/internal/backupagent" {
+				t.Errorf("production backupstatus file %s imports backupagent — shared vocabulary lives in backupjobs", filepath.Base(path))
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}

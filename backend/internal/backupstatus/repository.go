@@ -16,17 +16,17 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"foldex/internal/backupagent"
+	"foldex/internal/backupjobs"
 )
 
 // Jobs lists every job in the order the admin surface renders them. Reused
-// from backupagent so this package cannot drift from the CHECK constraint in
+// from backupjobs so this package cannot drift from the CHECK constraint in
 // migration 000040.
 var Jobs = []string{
-	backupagent.JobDump,
-	backupagent.JobDrill,
-	backupagent.JobMirror,
-	backupagent.JobUserZip,
+	backupjobs.JobDump,
+	backupjobs.JobDrill,
+	backupjobs.JobMirror,
+	backupjobs.JobUserZip,
 }
 
 // CanonicalJob returns the interned job name (a package constant) so log and
@@ -34,14 +34,14 @@ var Jobs = []string{
 // is what ValidJob reports; the interned value is what handlers log.
 func CanonicalJob(name string) (string, bool) {
 	switch name {
-	case backupagent.JobDump:
-		return backupagent.JobDump, true
-	case backupagent.JobDrill:
-		return backupagent.JobDrill, true
-	case backupagent.JobMirror:
-		return backupagent.JobMirror, true
-	case backupagent.JobUserZip:
-		return backupagent.JobUserZip, true
+	case backupjobs.JobDump:
+		return backupjobs.JobDump, true
+	case backupjobs.JobDrill:
+		return backupjobs.JobDrill, true
+	case backupjobs.JobMirror:
+		return backupjobs.JobMirror, true
+	case backupjobs.JobUserZip:
+		return backupjobs.JobUserZip, true
 	default:
 		return "", false
 	}
@@ -137,31 +137,30 @@ func (s *Repository) Summary(ctx context.Context) ([]JobStatus, error) {
 	return out, nil
 }
 
-// consecutiveFailures delegates to the agent's own counter: the number the
+// consecutiveFailures delegates to the shared backupjobs counter: the number the
 // band shows MUST be the number the alert threshold compares against, and two
 // hand-copied queries is exactly how they drift apart.
 func (s *Repository) consecutiveFailures(ctx context.Context, job string) (int, error) {
-	return backupagent.NewRunStore(s.pool).ConsecutiveFailures(ctx, job)
+	return backupjobs.NewRunStore(s.pool).ConsecutiveFailures(ctx, job)
 }
 
 // Schedule, SetSchedule, DeleteSchedule and AgentState delegate to the
-// agent's ScheduleStore for consecutiveFailures's reason: one validation, one
-// query shape, written once in the package whose process actually honours
-// them (ADR-44).
-func (s *Repository) Schedule(ctx context.Context) (map[string]backupagent.ScheduleRow, error) {
-	return backupagent.NewScheduleStore(s.pool).Load(ctx)
+// shared backupjobs ScheduleStore: one validation, one query shape, written
+// once so the agent and the admin API cannot drift (ADR-44).
+func (s *Repository) Schedule(ctx context.Context) (map[string]backupjobs.ScheduleRow, error) {
+	return backupjobs.NewScheduleStore(s.pool).Load(ctx)
 }
 
-func (s *Repository) SetSchedule(ctx context.Context, job string, cfg backupagent.JobConfig, updatedBy int64) error {
-	return backupagent.NewScheduleStore(s.pool).Upsert(ctx, job, cfg, updatedBy)
+func (s *Repository) SetSchedule(ctx context.Context, job string, cfg backupjobs.JobConfig, updatedBy int64) error {
+	return backupjobs.NewScheduleStore(s.pool).Upsert(ctx, job, cfg, updatedBy)
 }
 
 func (s *Repository) DeleteSchedule(ctx context.Context, job string) error {
-	return backupagent.NewScheduleStore(s.pool).Delete(ctx, job)
+	return backupjobs.NewScheduleStore(s.pool).Delete(ctx, job)
 }
 
-func (s *Repository) AgentState(ctx context.Context) (backupagent.AgentState, bool, error) {
-	return backupagent.NewScheduleStore(s.pool).AgentSeen(ctx)
+func (s *Repository) AgentState(ctx context.Context) (backupjobs.AgentState, bool, error) {
+	return backupjobs.NewScheduleStore(s.pool).AgentSeen(ctx)
 }
 
 // ListRuns pages the history newest-first. before is a keyset cursor (the last

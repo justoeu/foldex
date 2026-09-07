@@ -15,6 +15,8 @@ import (
 
 	"filippo.io/age"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"foldex/internal/backupjobs"
 )
 
 // Uploader is the slice of the storage client the dump job needs. Narrow on
@@ -96,7 +98,7 @@ func NewDumpJob(cfg Config, pool *pgxpool.Pool, store Uploader, logger *slog.Log
 	}
 	j := &DumpJob{
 		cfg: cfg, pool: pool, store: store, recipients: recipients,
-		logger:  logger.With("job", JobDump),
+		logger:  logger.With("job", backupjobs.JobDump),
 		command: pgDumpCommand,
 		now:     time.Now,
 	}
@@ -139,7 +141,7 @@ func pgDumpCommand(ctx context.Context, cfg Config, snapshotID string) *exec.Cmd
 // Run executes one dump. The error is for the log; the normalized reason for
 // backup_run is returned separately so raw tool output never reaches the
 // table (its stderr can carry a DSN, and the column feeds the UI and alerts).
-func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, error) {
+func (j *DumpJob) Run(ctx context.Context) (*backupjobs.Artifact, map[string]any, string, error) {
 	started := j.now()
 
 	// Source counts are read BEFORE pg_dump, from the same pool the dump
@@ -170,7 +172,7 @@ func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, e
 	// writable layer — see Config.SpoolDir for when to point it at a volume).
 	spool, err := os.CreateTemp(j.cfg.SpoolDir, "foldex-dump-*.spool")
 	if err != nil {
-		return nil, nil, ReasonSpoolFailed, fmt.Errorf("create spool: %w", err)
+		return nil, nil, backupjobs.ReasonSpoolFailed, fmt.Errorf("create spool: %w", err)
 	}
 	defer func() {
 		_ = spool.Close()
@@ -186,55 +188,55 @@ func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, e
 	cmd := j.command(ctx, j.cfg, snapshotID)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, nil, ReasonDumpFailed, fmt.Errorf("stdout pipe: %w", err)
+		return nil, nil, backupjobs.ReasonDumpFailed, fmt.Errorf("stdout pipe: %w", err)
 	}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
-		return nil, nil, ReasonDumpFailed, fmt.Errorf("start pg_dump: %w", err)
+		return nil, nil, backupjobs.ReasonDumpFailed, fmt.Errorf("start pg_dump: %w", err)
 	}
 
 	encrypter, err := encryptTo(buffered, j.recipients)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return nil, nil, ReasonEncryptFailed, err
+		return nil, nil, backupjobs.ReasonEncryptFailed, err
 	}
 	_, copyErr := io.Copy(encrypter, stdout)
 	closeErr := encrypter.Close()
 	waitErr := cmd.Wait()
 	switch {
 	case waitErr != nil:
-		return nil, nil, ReasonDumpFailed, fmt.Errorf("pg_dump: %w (stderr: %s)", waitErr, firstLine(stderr.String()))
+		return nil, nil, backupjobs.ReasonDumpFailed, fmt.Errorf("pg_dump: %w (stderr: %s)", waitErr, firstLine(stderr.String()))
 	case copyErr != nil:
-		return nil, nil, ReasonSpoolFailed, fmt.Errorf("copy dump stream: %w", copyErr)
+		return nil, nil, backupjobs.ReasonSpoolFailed, fmt.Errorf("copy dump stream: %w", copyErr)
 	case closeErr != nil:
-		return nil, nil, ReasonEncryptFailed, fmt.Errorf("finish age stream: %w", closeErr)
+		return nil, nil, backupjobs.ReasonEncryptFailed, fmt.Errorf("finish age stream: %w", closeErr)
 	}
 	if err := buffered.Flush(); err != nil {
-		return nil, nil, ReasonSpoolFailed, fmt.Errorf("flush spool: %w", err)
+		return nil, nil, backupjobs.ReasonSpoolFailed, fmt.Errorf("flush spool: %w", err)
 	}
 
 	size, err := spool.Seek(0, io.SeekEnd)
 	if err != nil {
-		return nil, nil, ReasonSpoolFailed, fmt.Errorf("size spool: %w", err)
+		return nil, nil, backupjobs.ReasonSpoolFailed, fmt.Errorf("size spool: %w", err)
 	}
 	if size == 0 {
 		// pg_dump exiting 0 with zero bytes is not a backup; refuse to record
 		// success over an empty artifact.
-		return nil, nil, ReasonDumpFailed, fmt.Errorf("pg_dump produced no output")
+		return nil, nil, backupjobs.ReasonDumpFailed, fmt.Errorf("pg_dump produced no output")
 	}
 	if _, err := spool.Seek(0, io.SeekStart); err != nil {
-		return nil, nil, ReasonSpoolFailed, fmt.Errorf("rewind spool: %w", err)
+		return nil, nil, backupjobs.ReasonSpoolFailed, fmt.Errorf("rewind spool: %w", err)
 	}
 
 	key := dumpKey(started, len(j.recipients) > 0)
 	if err := j.store.PutObjectStream(ctx, key, spool, size, "application/octet-stream"); err != nil {
-		return nil, nil, ReasonUploadFailed, fmt.Errorf("upload %s: %w", key, err)
+		return nil, nil, backupjobs.ReasonUploadFailed, fmt.Errorf("upload %s: %w", key, err)
 	}
 
-	artifact := &Artifact{Key: key, Bytes: size, SHA256: hex.EncodeToString(hasher.Sum(nil))}
+	artifact := &backupjobs.Artifact{Key: key, Bytes: size, SHA256: hex.EncodeToString(hasher.Sum(nil))}
 	dumpMeta := DumpMeta{Encrypted: len(j.recipients) > 0}
 	if haveCounts {
 		dumpMeta.Tables = sourceTables
@@ -248,7 +250,7 @@ func (j *DumpJob) Run(ctx context.Context) (*Artifact, map[string]any, string, e
 			// not a failed backup. It gets its own visibility instead of
 			// poisoning the success the operator actually cares about.
 			j.logger.Warn("retention prune failed", "err", err)
-			dumpMeta.PruneError = ReasonPruneFailed
+			dumpMeta.PruneError = backupjobs.ReasonPruneFailed
 			meta = dumpMeta.asMap()
 		} else if pruned > 0 {
 			meta["pruned_objects"] = pruned

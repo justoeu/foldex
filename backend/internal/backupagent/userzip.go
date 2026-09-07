@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/backup"
+	"foldex/internal/backupjobs"
 	"foldex/internal/pkg/authctx"
 )
 
@@ -65,7 +66,7 @@ func NewUserZipJob(cfg Config, pool *pgxpool.Pool, svc *backup.Service, store Up
 	}
 	return &UserZipJob{
 		cfg: cfg, store: store, recipients: recipients,
-		logger: logger.With("job", JobUserZip),
+		logger: logger.With("job", backupjobs.JobUserZip),
 		export: func(ctx context.Context, uid authctx.UserID, w io.Writer) error {
 			_, err := svc.Export(ctx, uid, w, nil)
 			return err
@@ -103,10 +104,10 @@ func listActiveUsers(pool *pgxpool.Pool) func(ctx context.Context) ([]authctx.Us
 // failures are collected per user and the run itself fails only when the
 // listing fails or when every attempted export failed — anything less is a
 // success whose meta names the stragglers for the admin surface to render.
-func (j *UserZipJob) Run(ctx context.Context) (*Artifact, map[string]any, string, error) {
+func (j *UserZipJob) Run(ctx context.Context) (*backupjobs.Artifact, map[string]any, string, error) {
 	uids, err := j.listActive(ctx)
 	if err != nil {
-		return nil, nil, ReasonUserZipFailed, err
+		return nil, nil, backupjobs.ReasonUserZipFailed, err
 	}
 
 	var (
@@ -118,7 +119,7 @@ func (j *UserZipJob) Run(ctx context.Context) (*Artifact, map[string]any, string
 	)
 	for _, uid := range uids {
 		if err := ctx.Err(); err != nil {
-			return nil, nil, ReasonUserZipFailed, err
+			return nil, nil, backupjobs.ReasonUserZipFailed, err
 		}
 		// The Export reads the source bucket while a per-user restore leaves
 		// it mid-write (the database is transactional, the bucket is not —
@@ -159,7 +160,7 @@ func (j *UserZipJob) Run(ctx context.Context) (*Artifact, map[string]any, string
 	}
 
 	if len(failed) > 0 && shipped == 0 {
-		return nil, nil, ReasonUserZipFailed,
+		return nil, nil, backupjobs.ReasonUserZipFailed,
 			fmt.Errorf("all %d attempted user exports failed", len(failed))
 	}
 
@@ -175,7 +176,7 @@ func (j *UserZipJob) Run(ctx context.Context) (*Artifact, map[string]any, string
 		meta["deferred_users"] = deferred
 	}
 	if pruneErr {
-		meta["prune_error"] = ReasonPruneFailed
+		meta["prune_error"] = backupjobs.ReasonPruneFailed
 	}
 	return nil, meta, "", nil
 }
