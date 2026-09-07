@@ -179,7 +179,7 @@ func TestRepository_ClickAndResolveIsAtomic(t *testing.T) {
 	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://hn.example", Title: "HN"})
 	require.NoError(t, err)
 
-	url, err := lrepo.ClickAndResolve(ctx, created.ID)
+	url, err := lrepo.ClickAndResolve(ctx, created.ID, uid)
 	require.NoError(t, err)
 	assert.Equal(t, "https://hn.example", url)
 
@@ -190,7 +190,7 @@ func TestRepository_ClickAndResolveIsAtomic(t *testing.T) {
 
 func TestRepository_ClickAndResolveNotFound(t *testing.T) {
 	ctx, _, lrepo, _ := setup(t)
-	_, err := lrepo.ClickAndResolve(ctx, 999)
+	_, err := lrepo.ClickAndResolve(ctx, 999, 0)
 	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
@@ -632,7 +632,7 @@ func TestRepository_GoEndpointIsOnlyClickInserter(t *testing.T) {
 	assert.EqualValues(t, 0, got.ClickCount, "no read path may write click_log")
 
 	// Now exercise the /go/:id atomic path and confirm count moves to 1.
-	_, err = lrepo.ClickAndResolve(ctx, link.ID)
+	_, err = lrepo.ClickAndResolve(ctx, link.ID, uid)
 	require.NoError(t, err)
 	got, err = lrepo.Get(ctx, uid, link.ID)
 	require.NoError(t, err)
@@ -671,9 +671,9 @@ func TestRepository_SortByClicks(t *testing.T) {
 	b, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b", Title: "B"})
 
 	// Bump b twice, a once.
-	_, _ = lrepo.ClickAndResolve(ctx, b.ID)
-	_, _ = lrepo.ClickAndResolve(ctx, b.ID)
-	_, _ = lrepo.ClickAndResolve(ctx, a.ID)
+	_, _ = lrepo.ClickAndResolve(ctx, b.ID, uid)
+	_, _ = lrepo.ClickAndResolve(ctx, b.ID, uid)
+	_, _ = lrepo.ClickAndResolve(ctx, a.ID, uid)
 
 	out, err := lrepo.List(ctx, uid, links.ListQuery{Sort: "clicks"})
 	require.NoError(t, err)

@@ -8,15 +8,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/domainerr"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/publictarget"
 )
 
-// LinkResolver resolves /go targets (satisfied by *links.Repository).
+// LinkResolver resolves /go targets (satisfied by *links.Repository). viewer
+// is 0 for an anonymous request; the repository serves opted-in (is_public)
+// links to anyone and everything else only to the owner.
 type LinkResolver interface {
-	ClickAndResolve(ctx context.Context, id int64) (string, error)
-	ClickAndResolveBySlug(ctx context.Context, slug string) (string, error)
+	ClickAndResolve(ctx context.Context, id int64, viewer authctx.UserID) (string, error)
+	ClickAndResolveBySlug(ctx context.Context, slug string, viewer authctx.UserID) (string, error)
 }
 
 type Handler struct {
@@ -42,13 +45,14 @@ func (h *Handler) Mount(r chi.Router) {
 // redirect resolves /go/{value} where {value} is a slug — or, when the
 // operator has opted in, a numeric link id.
 //
-// **Numeric ids are OFF by default (ADR-32).** This route resolves with NO
-// session: it is a public share link, so there is no tenant to scope the lookup
-// by. `link.id` is a dense global BIGSERIAL now shared across every account, so
-// leaving /go/42 enabled would let anyone walk 1, 2, 3… and enumerate — and
-// silently CLICK-LOG — every link on the instance, including other people's.
-// Slugs are not a secret either, but they are not a counter: you cannot
-// discover the next one by adding 1.
+// **Numeric ids are OFF by default (ADR-32).** `link.id` is a dense global
+// BIGSERIAL shared across every account, so leaving /go/42 enabled would let
+// anyone walk 1, 2, 3… and enumerate — and silently CLICK-LOG — every link
+// on the instance, including other people's. Slugs are not a secret either,
+// which is why the resolution below is viewer-scoped (SEC-SEN-002): the
+// anonymous surface answers only opted-in (is_public) rows, while the
+// owner's session — the cards, palette and push notifications that all
+// navigate through /go/ — keeps the exact same behaviour.
 //
 // The escape hatch exists because old /go/42 links are already shared
 // somewhere, and an upgrade that breaks every one of them without a way back
@@ -64,10 +68,18 @@ func (h *Handler) redirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var viewer authctx.UserID
+	if p, ok := authctx.FromContext(r.Context()); ok {
+		viewer = p.UserID
+	}
 	dest, err := publictarget.Resolve(
 		r.Context(), raw, h.allowNumericIDs,
-		h.repo.ClickAndResolve,
-		h.repo.ClickAndResolveBySlug,
+		func(ctx context.Context, id int64) (string, error) {
+			return h.repo.ClickAndResolve(ctx, id, viewer)
+		},
+		func(ctx context.Context, slug string) (string, error) {
+			return h.repo.ClickAndResolveBySlug(ctx, slug, viewer)
+		},
 	)
 	if err != nil {
 		if errors.Is(err, domainerr.ErrNotFound) {

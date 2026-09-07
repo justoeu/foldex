@@ -46,7 +46,7 @@ const linkColumns = `
     COALESCE(cl.cnt, 0) AS click_count,
     l.preview_status, l.preview_error,
     cl.last_at AS last_clicked_at,
-    l.pinned, l.folder_id, l.created_at, l.updated_at,
+    l.pinned, l.folder_id, l.is_public, l.created_at, l.updated_at,
     l.check_interval, l.last_checked_at, l.last_fingerprint,
     l.last_change_detected_at, l.change_seen_at, l.last_check_error
 `
@@ -75,7 +75,7 @@ func scanLink(s rowScanner, l *Link) error {
 	return s.Scan(
 		&l.ID, &l.URL, &l.Title, &l.Slug, &l.Description, &l.FaviconURL, &l.OGImageURL,
 		&l.ClickCount, &l.PreviewStatus, &l.PreviewError, &l.LastClickedAt,
-		&l.Pinned, &l.FolderID, &l.CreatedAt, &l.UpdatedAt,
+		&l.Pinned, &l.FolderID, &l.IsPublic, &l.CreatedAt, &l.UpdatedAt,
 		&l.CheckInterval, &l.LastCheckedAt, &l.LastFingerprint,
 		&l.LastChangeDetectedAt, &l.ChangeSeenAt, &l.LastCheckError,
 	)
@@ -97,10 +97,10 @@ func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateIn
 		func(ctx context.Context, tx pgx.Tx, candidate string) (int64, error) {
 			var id int64
 			err := tx.QueryRow(ctx, `
-            INSERT INTO link (user_id, url, title, slug, description, pinned, folder_id, check_interval)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO link (user_id, url, title, slug, description, pinned, folder_id, is_public, check_interval)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id
-        `, int64(uid), in.URL, in.Title, candidate, in.Description, in.Pinned, in.FolderID, in.CheckInterval).Scan(&id)
+        `, int64(uid), in.URL, in.Title, candidate, in.Description, in.Pinned, in.FolderID, in.IsPublic, in.CheckInterval).Scan(&id)
 			if err != nil && !isURLUniqueViolation(err) && !isSlugUniqueViolation(err) {
 				return 0, fmt.Errorf("insert link: %w", err)
 			}
@@ -272,6 +272,11 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	if in.Pinned != nil {
 		sets = append(sets, fmt.Sprintf("pinned = $%d", i))
 		args = append(args, *in.Pinned)
+		i++
+	}
+	if in.IsPublic != nil {
+		sets = append(sets, fmt.Sprintf("is_public = $%d", i))
+		args = append(args, *in.IsPublic)
 		i++
 	}
 	// folder_id: only writes when the JSON payload included the field

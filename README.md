@@ -38,7 +38,7 @@ Native bookmarks are fine for "save a page quickly and forget it". Once you pass
 ### Real scenarios that flipped the switch (native bookmarks → foldex)
 
 - **"Which dashboards am I actually using?"** → the stats page surfaces top hosts and top links over 30 days. Drop the ones at 0 clicks.
-- **"I want to share a short link with the team."** → every URL gets a stable alias `/go/{slug}` that redirects + logs the click.
+- **"I want to share a short link with the team."** → every URL gets a stable alias `/go/{slug}` that redirects + logs the click — public (anonymous) resolution is opt-in per link (`is_public`); otherwise `/go/{slug}` answers only your signed-in session.
 - **"Switch machines without losing anything."** → 1 button in the UI generates the full backup ZIP. Another button on the new machine restores with `mode=wipe`.
 - **"The same link lives in 3 contexts (work + ai + architecture)."** → 3 tags. It shows up in all 3 filters.
 - **"I want to know visually which link is which before clicking."** → every card shows an OG/screenshot/upload preview at 150px.
@@ -240,14 +240,17 @@ curl -s -X POST localhost:9089/api/tags -H "$AUTH" -H "$JSON" \
 
 # 3. Create a link tied to that tag (preview is enqueued async).
 curl -s -X POST localhost:9089/api/links -H "$AUTH" -H "$JSON" \
-  -d '{"url":"https://news.ycombinator.com","title":"HN","tag_ids":[1]}' | jq .
+  -d '{"url":"https://news.ycombinator.com","title":"HN","tag_ids":[1],"is_public":true}' | jq .
 
 # 4. Wait ~2s for the worker; then fetch — `preview_status` should be "ok".
 sleep 3 && curl -s localhost:9089/api/links/1 -H "$AUTH" -H "$JSON" | jq '.preview_status, .og_image_url'
 
 # 5. Resolve the short link (302 + counter bump). By SLUG: numeric /go/1 is off
 #    by default now, because that route resolves with no session and link ids
-#    are shared across accounts. See PUBLIC_NUMERIC_IDS.
+#    are shared across accounts. See PUBLIC_NUMERIC_IDS. The link is created
+#    with is_public — anonymous /go/{slug} is opt-in (slugs derive from titles,
+#    so they are not secrets); without it the redirect answers only your
+#    signed-in session.
 curl -sI localhost:9089/go/hn | head -3
 
 # 6. Create a note (server-side sanitized rich HTML), opt it into the public

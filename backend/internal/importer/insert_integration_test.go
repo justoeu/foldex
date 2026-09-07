@@ -38,10 +38,10 @@ func TestStagedImport_WipeLateRelationFailureRollsBackPriorState(t *testing.T) {
 	})
 	require.NoError(t, err)
 	for range 2 {
-		_, err = lrepo.ClickAndResolve(ctx, first.ID)
+		_, err = lrepo.ClickAndResolve(ctx, first.ID, uid)
 		require.NoError(t, err)
 	}
-	_, err = lrepo.ClickAndResolve(ctx, second.ID)
+	_, err = lrepo.ClickAndResolve(ctx, second.ID, uid)
 	require.NoError(t, err)
 
 	// Existing relations satisfy this test-only constraint; the staged fault tag
@@ -113,7 +113,7 @@ func TestStagedImport_WipeDoesNotOrphanTagsOrClicks(t *testing.T) {
 		URL: "https://wipe-target.example", Title: "Original", TagIDs: []int64{tag.ID},
 	})
 	require.NoError(t, err)
-	_, err = lrepo.ClickAndResolve(ctx, original.ID)
+	_, err = lrepo.ClickAndResolve(ctx, original.ID, uid)
 	require.NoError(t, err)
 
 	h := NewHandler(pool, nil)
@@ -154,7 +154,7 @@ func TestStagedImport_PreservesGlobalSlugsAndOwnerScopedURLs(t *testing.T) {
 		URL: "https://shared-owner-url.example", Title: "Shared Title", TagIDs: []int64{otherTag.ID},
 	})
 	require.NoError(t, err)
-	_, err = lrepo.ClickAndResolve(ctx, otherLink.ID)
+	_, err = lrepo.ClickAndResolve(ctx, otherLink.ID, other)
 	require.NoError(t, err)
 	assert.Equal(t, "shared-title", otherLink.Slug)
 

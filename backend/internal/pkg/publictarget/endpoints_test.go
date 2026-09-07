@@ -18,12 +18,12 @@ type endpointLinkResolver struct {
 	call string
 }
 
-func (r *endpointLinkResolver) ClickAndResolve(_ context.Context, _ int64) (string, error) {
+func (r *endpointLinkResolver) ClickAndResolve(_ context.Context, _ int64, _ authctx.UserID) (string, error) {
 	r.call = "id"
 	return "https://example.com/id", nil
 }
 
-func (r *endpointLinkResolver) ClickAndResolveBySlug(_ context.Context, _ string) (string, error) {
+func (r *endpointLinkResolver) ClickAndResolveBySlug(_ context.Context, _ string, _ authctx.UserID) (string, error) {
 	r.call = "slug"
 	return "https://example.com/slug", nil
 }

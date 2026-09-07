@@ -31,11 +31,11 @@ type countingResolver struct {
 	resolve int
 }
 
-func (c *countingResolver) ClickAndResolve(ctx context.Context, id int64) (string, error) {
+func (c *countingResolver) ClickAndResolve(ctx context.Context, id int64, _ authctx.UserID) (string, error) {
 	return c.record(ctx, id)
 }
 
-func (c *countingResolver) ClickAndResolveBySlug(ctx context.Context, _ string) (string, error) {
+func (c *countingResolver) ClickAndResolveBySlug(ctx context.Context, _ string, _ authctx.UserID) (string, error) {
 	return c.record(ctx, 7)
 }
 

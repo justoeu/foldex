@@ -37,7 +37,7 @@ Bookmark nativo é ótimo para "salvar uma página rápida e esquecer". Quando v
 ### Cenários reais que viraram a chave (bookmark nativo → foldex)
 
 - **"Quais dashboards eu de fato uso?"** → a página de stats mostra top hosts e top links nos últimos 30 dias. Larga os de 0 cliques.
-- **"Quero compartilhar um link curto com a equipe."** → toda URL ganha um alias estável `/go/{slug}` que redireciona + loga o clique.
+- **"Quero compartilhar um link curto com a equipe."** → toda URL ganha um alias estável `/go/{slug}` que redireciona + loga o clique — a resolução pública (anônima) é opt-in por link (`is_public`); sem isso o `/go/{slug}` responde só pra sua sessão.
 - **"Trocar de máquina sem perder nada."** → 1 botão na UI gera o ZIP de backup completo. Outro botão na máquina nova restaura com `mode=wipe`.
 - **"O mesmo link mora em 3 contextos (trabalho + ia + arquitetura)."** → 3 tags. Aparece nos 3 filtros.
 - **"Quero saber visualmente qual link é qual antes de clicar."** → cada card mostra um preview OG/screenshot/upload em 150px.
@@ -223,14 +223,16 @@ curl -s -X POST localhost:9089/api/tags -H "$AUTH" -H "$JSON" \
 
 # 3. Cria um link com essa tag (o preview é enfileirado async).
 curl -s -X POST localhost:9089/api/links -H "$AUTH" -H "$JSON" \
-  -d '{"url":"https://news.ycombinator.com","title":"HN","tag_ids":[1]}' | jq .
+  -d '{"url":"https://news.ycombinator.com","title":"HN","tag_ids":[1],"is_public":true}' | jq .
 
 # 4. Espera ~2s pelo worker; então busca — `preview_status` deve ser "ok".
 sleep 3 && curl -s localhost:9089/api/links/1 -H "$AUTH" -H "$JSON" | jq '.preview_status, .og_image_url'
 
 # 5. Resolve o link curto (302 + contador). Por SLUG: o /go/1 numérico agora vem
 #    desligado, porque essa rota resolve sem sessão e os ids de link são
-#    compartilhados entre contas. Veja PUBLIC_NUMERIC_IDS.
+#    compartilhados entre contas. Veja PUBLIC_NUMERIC_IDS. O link é criado com
+#    is_public — o /go/{slug} anônimo é opt-in (slugs derivam de títulos, então
+#    não são segredos); sem isso o redirect responde só pra sua sessão.
 curl -sI localhost:9089/go/hn | head -3
 
 # 6. Cria uma nota (HTML rico sanitizado no servidor), publica ela (notas são

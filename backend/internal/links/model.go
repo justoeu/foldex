@@ -22,9 +22,13 @@ type Link struct {
 	PreviewError  *string    `json:"preview_error,omitempty"`
 	LastClickedAt *time.Time `json:"last_clicked_at,omitempty"`
 	Pinned        bool       `json:"pinned"`
-	FolderID      *int64     `json:"folder_id,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	// IsPublic reports whether the anonymous /go/{slug} redirect may resolve
+	// this link. False is the safe default; the owner's session resolves
+	// regardless.
+	IsPublic  bool      `json:"is_public"`
+	FolderID  *int64    `json:"folder_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 	// Change-detection columns (migration 000010). All nullable — when
 	// CheckInterval is nil the link is opted out and the rest stay nil.
 	CheckInterval        *string    `json:"check_interval,omitempty"`

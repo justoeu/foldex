@@ -30,10 +30,14 @@ type CreateInput struct {
 	TagIDs      []int64            `json:"tag_ids"`
 	PendingTags []tags.CreateInput `json:"pending_tags"`
 	Pinned      bool               `json:"pinned"`
-	FolderID    *int64             `json:"folder_id"`
+	// IsPublic opts the link into the anonymous /go/{slug} redirect. Default
+	// false: a title-derived slug is guessable, so the destination cannot
+	// rest on it (SEC-SEN-002). The owner's own session always resolves.
+	IsPublic bool `json:"is_public"`
 	// CheckInterval opts the link into the changecheck worker. Nil/empty =
 	// disabled. Must be one of "hourly"/"daily"/"weekly" or Validate rejects.
 	CheckInterval *string `json:"check_interval"`
+	FolderID      *int64  `json:"folder_id"`
 }
 
 func (c *CreateInput) Normalize() {
@@ -94,6 +98,10 @@ type UpdateInput struct {
 	TagIDs      *[]int64           `json:"tag_ids"`
 	PendingTags []tags.CreateInput `json:"pending_tags"`
 	Pinned      *bool              `json:"pinned"`
+	// IsPublic: absent → keep the current visibility, true/false → set it.
+	// Explicit null also means don't touch, matching the tri-state contract
+	// of every other optional field here.
+	IsPublic *bool `json:"is_public"`
 	// FolderID has 3 states by intent:
 	//   field absent in JSON → don't touch
 	//   {"folder_id": N}     → assign to folder N

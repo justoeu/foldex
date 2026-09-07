@@ -173,6 +173,10 @@ CREATE TABLE link (
   preview_error  TEXT,
   preview_generation BIGINT NOT NULL DEFAULT 1 CHECK (preview_generation > 0),
   pinned         BOOLEAN NOT NULL DEFAULT FALSE,
+  -- 000048: the anonymous /go redirect is an OPT-IN capability. Title-derived
+  -- slugs are guessable, so before this column any slug guess disclosed the
+  -- destination URL and forged a click_log row owned by the victim.
+  is_public      BOOLEAN NOT NULL DEFAULT FALSE,
   -- 000010: change-detection per-link (todos nullable, opt-in)
   check_interval          TEXT,                          -- CHECK NULL OR IN ('hourly','daily','weekly')
   last_checked_at         TIMESTAMPTZ,

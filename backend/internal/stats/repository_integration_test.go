@@ -50,7 +50,7 @@ func TestSummary_AfterClicks(t *testing.T) {
 
 	// 3 clicks → click_log has 3 rows.
 	for i := 0; i < 3; i++ {
-		_, err := lrepo.ClickAndResolve(ctx, link.ID)
+		_, err := lrepo.ClickAndResolve(ctx, link.ID, uid)
 		require.NoError(t, err)
 	}
 
@@ -68,7 +68,7 @@ func TestSummary_AfterClicks(t *testing.T) {
 func TestDaily_BackfillsEmptyDays(t *testing.T) {
 	ctx, uid, srepo, lrepo, _ := setup(t)
 	link, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://a", Title: "a"})
-	_, _ = lrepo.ClickAndResolve(ctx, link.ID)
+	_, _ = lrepo.ClickAndResolve(ctx, link.ID, uid)
 
 	out, err := srepo.Daily(ctx, uid, 7)
 	require.NoError(t, err)
@@ -102,12 +102,12 @@ func TestTopLinks_OrdersByClicks(t *testing.T) {
 	c, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://c", Title: "C"})
 
 	for i := 0; i < 3; i++ {
-		_, _ = lrepo.ClickAndResolve(ctx, b.ID)
+		_, _ = lrepo.ClickAndResolve(ctx, b.ID, uid)
 	}
 	for i := 0; i < 2; i++ {
-		_, _ = lrepo.ClickAndResolve(ctx, a.ID)
+		_, _ = lrepo.ClickAndResolve(ctx, a.ID, uid)
 	}
-	_, _ = lrepo.ClickAndResolve(ctx, c.ID)
+	_, _ = lrepo.ClickAndResolve(ctx, c.ID, uid)
 
 	out, err := srepo.TopLinks(ctx, uid, 10)
 	require.NoError(t, err)
@@ -139,10 +139,10 @@ func TestTagBuckets_AggregatesClicks(t *testing.T) {
 	la, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://a", Title: "A", TagIDs: []int64{t1.ID}})
 	lb, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b", Title: "B", TagIDs: []int64{t1.ID, t2.ID}})
 	for i := 0; i < 5; i++ {
-		_, _ = lrepo.ClickAndResolve(ctx, la.ID)
+		_, _ = lrepo.ClickAndResolve(ctx, la.ID, uid)
 	}
 	for i := 0; i < 2; i++ {
-		_, _ = lrepo.ClickAndResolve(ctx, lb.ID)
+		_, _ = lrepo.ClickAndResolve(ctx, lb.ID, uid)
 	}
 
 	out, err := srepo.TagBuckets(ctx, uid)
@@ -181,11 +181,11 @@ func TestDashboard_IsOwnerScopedAndUsesOneDatabaseRoundTrip(t *testing.T) {
 	otherLink, err := lrepo.Create(ctx, otherUID, links.CreateInput{URL: "https://other.example", Title: "Other"})
 	require.NoError(t, err)
 	for range 2 {
-		_, err = lrepo.ClickAndResolve(ctx, ownerLink.ID)
+		_, err = lrepo.ClickAndResolve(ctx, ownerLink.ID, uid)
 		require.NoError(t, err)
 	}
 	for range 3 {
-		_, err = lrepo.ClickAndResolve(ctx, otherLink.ID)
+		_, err = lrepo.ClickAndResolve(ctx, otherLink.ID, otherUID)
 		require.NoError(t, err)
 	}
 	// The entity join succeeds, but the denormalized owner must still exclude
@@ -257,7 +257,7 @@ func TestDashboard_BaseClicksCanUseOwnerEntityIndex(t *testing.T) {
 	lrepo := links.NewRepository(pool)
 	link, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://owner.example", Title: "Owner"})
 	require.NoError(t, err)
-	_, err = lrepo.ClickAndResolve(ctx, link.ID)
+	_, err = lrepo.ClickAndResolve(ctx, link.ID, uid)
 	require.NoError(t, err)
 
 	tx, err := pool.Begin(ctx)

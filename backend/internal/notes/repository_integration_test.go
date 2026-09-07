@@ -564,7 +564,7 @@ func TestCrossContamination_LinkAndNoteRowsDoNotLeak(t *testing.T) {
 	// collision fails loudly here instead of silently testing nothing.
 	require.Equal(t, link.ID, note.ID, "test premise: link and note must share the same numeric id")
 
-	_, err = lrepo.ClickAndResolve(ctx, link.ID)
+	_, err = lrepo.ClickAndResolve(ctx, link.ID, uid)
 	require.NoError(t, err)
 	_, err = nrepo.SystemViewAndResolve(ctx, note.Slug, uid)
 	require.NoError(t, err)

@@ -145,6 +145,11 @@ func TestWiring_RepeatClicksFromOneVisitorWriteOneRowAndStillRedirect(t *testing
 	uid := testdb.SeedUser(t, pool, "vis@test.local", "editor")
 	link, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://example.com/go", Title: "Go Target"})
 	require.NoError(t, err)
+	// The request walks the public surface with no session, so the link is
+	// opted in (is_public) — since SEC-SEN-002 that is what makes it resolve
+	// for an anonymous visitor.
+	_, err = pool.Exec(ctx, `UPDATE link SET is_public = TRUE WHERE id = $1`, link.ID)
+	require.NoError(t, err)
 
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -199,7 +204,7 @@ func TestWiring_AResolveWithNoGateStillRecordsEveryClick(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := 0; i < 3; i++ {
-		_, err := repo.ClickAndResolve(ctx, link.ID)
+		_, err := repo.ClickAndResolve(ctx, link.ID, uid)
 		require.NoError(t, err)
 	}
 	assert.Equal(t, 3, countClicks(t, pool, "link", link.ID),
