@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { ReactNode } from 'react'
-import { QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useCreateNote, useUpdateNote, useDeleteNote, usePinNote, useNote, uploadNoteImage, goNoteHref } from './notes'
 import { http } from './client'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
@@ -88,6 +88,55 @@ describe('usePinNote', () => {
     result.current.mutate({ id: 1, pinned: true })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(state.notes[0].pinned).toBe(true)
+  })
+
+  // RACE-HER-004: the rollback used to restore a WHOLE-cache snapshot from
+  // onMutate, so a slow pin(A) failing after a fast pin(B) succeeded wiped
+  // B's already-applied optimistic state from every cached page until the
+  // next refetch. The rollback must touch only the entry whose patch failed.
+  it('a failed pin rolls back only its own note, not a concurrent pin that landed', async () => {
+    // gcTime must not be 0 here: the seeded cache has no observer, and a
+    // zero gc would sweep it before the interleaving even starts.
+    const localClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const localWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={localClient}>{children}</QueryClientProvider>
+    )
+    const noteA = {
+      kind: 'note' as const, id: 1, title: 'A', slug: 'a', pinned: false, tags: [],
+      created_at: '', updated_at: '',
+    }
+    const noteB = { ...noteA, id: 2, title: 'B', slug: 'b' }
+    const entriesKey = ['entries', '', '', 'created', 'all', 'locked', 100]
+    localClient.setQueryData(entriesKey, { pages: [[noteA, noteB]], pageParams: [0] })
+
+    let rejectA!: (reason: unknown) => void
+    vi.mocked(http.patch).mockImplementation(((url: string) => {
+      if (String(url) === '/api/notes/1') {
+        return new Promise((_resolve, reject) => { rejectA = reject }) as never
+      }
+      if (String(url) === '/api/notes/2') {
+        return Promise.resolve({ data: { ...noteB, pinned: true } }) as never
+      }
+      throw new Error(`unexpected PATCH ${url}`)
+    }) as never)
+
+    const { result } = renderHook(() => usePinNote(), { wrapper: localWrapper })
+    const pinA = result.current.mutateAsync({ id: 1, pinned: true })
+    await waitFor(() => {
+      const page = localClient.getQueryData<{ pages: typeof noteA[][] }>(entriesKey)!.pages[0]
+      expect(page.find((n) => n.id === 1)?.pinned).toBe(true)
+    })
+    const pinB = await result.current.mutateAsync({ id: 2, pinned: true })
+
+    rejectA(new Error('network down'))
+    await expect(pinA).rejects.toThrow('network down')
+    await pinB
+
+    const page = localClient.getQueryData<{ pages: typeof noteA[][] }>(entriesKey)!.pages[0]
+    expect(page.find((n) => n.id === 1)?.pinned).toBe(false)
+    expect(page.find((n) => n.id === 2)?.pinned).toBe(true)
   })
 })
 

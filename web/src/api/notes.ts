@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
-import { cachedEntryFolderId, invalidateEntryCounts, removeCachedEntry } from './entries'
+import { cachedEntryFolderId, invalidateEntryCounts, optimisticEntryPatch, removeCachedEntry } from './entries'
 import type { Note, NoteCreate, NoteUpdate } from './types'
 
 export function useNote(id: number | null) {
@@ -72,10 +72,9 @@ export function useDeleteNote() {
   })
 }
 
-// usePinNote mirrors usePinLink's optimistic recipe, but since the grid reads
-// from ['entries'] (a flat Entry[] cache, not InfiniteData<Note[]>), the
-// patch/rollback walks every cached ['entries'] page directly rather than
-// going through a Note-specific cache helper.
+// usePinNote shares optimisticEntryPatch with usePinLink/useRefreshPreview;
+// notes only exist in the ['entries'] caches, which the helper keys on
+// kind === 'note'.
 export function usePinNote() {
   const qc = useQueryClient()
   return useMutation({
@@ -83,29 +82,8 @@ export function usePinNote() {
       const { data } = await http.patch<Note>(`/api/notes/${id}`, { pinned })
       return data
     },
-    onMutate: async ({ id, pinned }) => {
-      await qc.cancelQueries({ queryKey: ['entries'] })
-      const snapshots = qc.getQueriesData({ queryKey: ['entries'] })
-      qc.setQueriesData<{ pages: Array<Array<{ kind: string; id: number; pinned: boolean }>> } | undefined>(
-        { queryKey: ['entries'] },
-        (old) => {
-          if (!old) return old
-          return {
-            ...old,
-            pages: old.pages.map((page) =>
-              page.map((e) => (e.kind === 'note' && e.id === id ? { ...e, pinned } : e)),
-            ),
-          }
-        },
-      )
-      return { snapshots }
-    },
-    onError: (_err, _vars, ctx) => {
-      if (!ctx) return
-      for (const [key, snapshot] of ctx.snapshots) {
-        qc.setQueryData(key, snapshot)
-      }
-    },
+    onMutate: async ({ id, pinned }) => optimisticEntryPatch(qc, 'note', id, { pinned }),
+    onError: (_err, _vars, ctx) => ctx?.rollback(),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ['entries'] })
       qc.invalidateQueries({ queryKey: ['folders'] })

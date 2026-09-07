@@ -187,6 +187,56 @@ describe('usePinLink', () => {
     expect(out.pinned).toBe(true)
     expect(state.links[0].pinned).toBe(true)
   })
+
+  // RACE-HER-004, link arm: rollback must restore only the failed link —
+  // both cache families (['links'] and ['entries']) hold it, and a
+  // whole-snapshot restore used to wipe a concurrent pin that had landed.
+  it('a failed pin rolls back only its own link across both cache families', async () => {
+    const localClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const localWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={localClient}>{children}</QueryClientProvider>
+    )
+    const linkA = { id: 1, url: 'https://a', title: 'A', slug: 'a', pinned: false, preview_status: 'ok' as const, tags: [], created_at: '', updated_at: '' }
+    const linkB = { ...linkA, id: 2, url: 'https://b', title: 'B', slug: 'b' }
+    const linksKey = ['links', '', '', 'created', 'all']
+    const entriesKey = ['entries', '', '', 'created', 'all', 'locked', 100]
+    localClient.setQueryData(linksKey, { pages: [[linkA, linkB]], pageParams: [0] })
+    localClient.setQueryData(entriesKey, {
+      pages: [[{ kind: 'link', ...linkA }, { kind: 'link', ...linkB }]],
+      pageParams: [0],
+    })
+
+    let rejectA!: (reason: unknown) => void
+    vi.mocked(http.patch).mockImplementation(((url: string) => {
+      if (String(url) === '/api/links/1') {
+        return new Promise((_resolve, reject) => { rejectA = reject }) as never
+      }
+      if (String(url) === '/api/links/2') {
+        return Promise.resolve({ data: { ...linkB, pinned: true } }) as never
+      }
+      throw new Error(`unexpected PATCH ${url}`)
+    }) as never)
+
+    const { result } = renderHook(() => usePinLink(), { wrapper: localWrapper })
+    const pinA = result.current.mutateAsync({ id: 1, pinned: true })
+    await waitFor(() => {
+      const page = localClient.getQueryData<{ pages: typeof linkA[][] }>(linksKey)!.pages[0]
+      expect(page.find((l) => l.id === 1)?.pinned).toBe(true)
+    })
+    const pinB = await result.current.mutateAsync({ id: 2, pinned: true })
+
+    rejectA(new Error('network down'))
+    await expect(pinA).rejects.toThrow('network down')
+    await pinB
+
+    for (const key of [linksKey, entriesKey]) {
+      const page = localClient.getQueryData<{ pages: Record<string, unknown>[][] }>(key)!.pages[0]
+      expect(page.find((l) => l.id === 1)?.pinned).toBe(false)
+      expect(page.find((l) => l.id === 2)?.pinned).toBe(true)
+    }
+  })
 })
 
 describe('useRecentChanges', () => {
