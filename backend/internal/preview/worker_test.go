@@ -3,8 +3,6 @@ package preview
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
-	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
@@ -22,6 +20,7 @@ import (
 
 	"foldex/internal/imageopt"
 	"foldex/internal/links"
+	"foldex/internal/testsupport"
 )
 
 type fakeScreenshotter struct {
@@ -261,7 +260,7 @@ func TestWorker_ScreenshotFallbackRejectsDecodeBombWithoutPublication(t *testing
 		},
 		nextUpdatedAt: captureAt,
 	}
-	bomb := workerDecodeBombPNG(t)
+	bomb := testsupport.BombPNG(t)
 	_, err := imageopt.Optimize(bomb, imageopt.Options{MaxDim: screenshotMaxDim, Quality: screenshotQuality})
 	require.ErrorIs(t, err, imageopt.ErrTooLarge)
 	shot := &fakeScreenshotter{payload: bomb}
@@ -489,16 +488,6 @@ func workerTestPNG(t *testing.T) []byte {
 	var out bytes.Buffer
 	require.NoError(t, png.Encode(&out, img))
 	return out.Bytes()
-}
-
-func workerDecodeBombPNG(t *testing.T) []byte {
-	t.Helper()
-	bomb := append([]byte(nil), workerTestPNG(t)...)
-	require.GreaterOrEqual(t, len(bomb), 33)
-	binary.BigEndian.PutUint32(bomb[16:20], 8_000)
-	binary.BigEndian.PutUint32(bomb[20:24], 8_000)
-	binary.BigEndian.PutUint32(bomb[29:33], crc32.ChecksumIEEE(bomb[12:29]))
-	return bomb
 }
 
 func TestWorker_RemoveFallbackObjectSurvivesCallerCancellation(t *testing.T) {

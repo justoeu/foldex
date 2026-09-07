@@ -3,11 +3,9 @@ package links
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
@@ -30,6 +28,7 @@ import (
 	"foldex/internal/linkimage"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/ports"
+	"foldex/internal/testsupport"
 
 	"foldex/internal/pkg/authctx/authctxtest"
 	"foldex/internal/pkg/domainerr"
@@ -61,18 +60,6 @@ func realPNG(t *testing.T, w, h int) []byte {
 	var buf bytes.Buffer
 	require.NoError(t, png.Encode(&buf, img))
 	return buf.Bytes()
-}
-
-// decodeBombPNG is a tiny PNG whose IHDR declares 8000×8000 (64 MP, over the
-// 50 MP cap) while the IDAT stays a 1×1 pixel.
-func decodeBombPNG(t *testing.T) []byte {
-	t.Helper()
-	bomb := append([]byte(nil), realPNG(t, 1, 1)...)
-	require.GreaterOrEqual(t, len(bomb), 33)
-	binary.BigEndian.PutUint32(bomb[16:20], 8_000)
-	binary.BigEndian.PutUint32(bomb[20:24], 8_000)
-	binary.BigEndian.PutUint32(bomb[29:33], crc32.ChecksumIEEE(bomb[12:29]))
-	return bomb
 }
 
 // --- fakes ---
@@ -725,7 +712,7 @@ func TestCaptureAndStore_OptimizeFailureStoresNothing(t *testing.T) {
 }
 
 func TestCaptureAndStore_RejectsDecodeBomb(t *testing.T) {
-	sc := &fakeScreenshotter{png: decodeBombPNG(t)}
+	sc := &fakeScreenshotter{png: testsupport.BombPNG(t)}
 	up := newFakeUploader()
 	repo := newFakeRepo()
 	repo.links[7] = Link{ID: 7, URL: "https://example.com"}
@@ -1116,7 +1103,7 @@ func TestUploadImage_RejectsDecodeBomb(t *testing.T) {
 	repo.links[9] = Link{ID: 9}
 	r, fakeUp, _ := buildRouter(t, &fakeScreenshotter{}, up, repo)
 
-	req, ct := buildMultipart(t, 9, "image", "bomb.png", "image/png", decodeBombPNG(t))
+	req, ct := buildMultipart(t, 9, "image", "bomb.png", "image/png", testsupport.BombPNG(t))
 	req.Header.Set("Content-Type", ct)
 
 	w := httptest.NewRecorder()
