@@ -5,6 +5,7 @@ import {
   requestOriginAccess,
   requireOriginAccess,
 } from "./config.js";
+import { t } from "./i18n.js";
 
 function authHeaders(config, includeContentType = false) {
   const headers = {};
@@ -13,9 +14,9 @@ function authHeaders(config, includeContentType = false) {
   return headers;
 }
 
-function credentialProblem(status) {
-  if (status === 401) return "not signed in — set an API token in settings";
-  if (status === 403) return "this token is not allowed here";
+function credentialProblem(chromeApi, status) {
+  if (status === 401) return t(chromeApi, "notSignedIn");
+  if (status === 403) return t(chromeApi, "tokenForbidden");
   return null;
 }
 
@@ -29,7 +30,9 @@ export async function loadTags(
     redirect: "error",
   });
   if (!resp.ok)
-    throw new Error(credentialProblem(resp.status) || "HTTP " + resp.status);
+    throw new Error(
+      credentialProblem(chromeApi, resp.status) || "HTTP " + resp.status,
+    );
   return resp.json();
 }
 
@@ -46,7 +49,7 @@ export async function saveLink(
     redirect: "error",
   });
   if (!resp.ok) {
-    const problem = credentialProblem(resp.status);
+    const problem = credentialProblem(chromeApi, resp.status);
     if (problem) throw new Error(problem);
     const body = await resp.text();
     throw new Error("HTTP " + resp.status + " " + body.slice(0, 120));
@@ -108,12 +111,12 @@ export function initPopup({
     if (saveBtn.disabled) return;
     const url = $("url").value.trim();
     if (!url) {
-      setStatus("URL is required", "error");
+      setStatus(t(chromeApi, "urlRequired"), "error");
       return;
     }
 
     saveBtn.disabled = true;
-    setStatus("Saving…");
+    setStatus(t(chromeApi, "saving"));
     try {
       await saveLink(
         config,
@@ -125,10 +128,10 @@ export function initPopup({
         },
         { chromeApi, fetchImpl },
       );
-      setStatus("Saved ✓", "ok");
+      setStatus(t(chromeApi, "saved"), "ok");
       setTimeout(() => window.close(), 600);
     } catch (error) {
-      setStatus("Save failed: " + error.message, "error");
+      setStatus(t(chromeApi, "saveFailed", [error.message]), "error");
       saveBtn.disabled = false;
     }
   }
@@ -154,18 +157,15 @@ export function initPopup({
       try {
         renderTags(await loadTags(config, { chromeApi, fetchImpl }));
       } catch (error) {
-        setStatus(
-          "Could not load tags: " + error.message + " — check settings",
-          "error",
-        );
+        setStatus(t(chromeApi, "tagsLoadFailed", [error.message]), "error");
       }
     } catch (error) {
-      setStatus("Could not load settings: " + error.message, "error");
+      setStatus(t(chromeApi, "settingsLoadFailed", [error.message]), "error");
     }
   })();
 
   const tab = prefill().catch((error) =>
-    setStatus("Could not read this tab: " + error.message, "error"),
+    setStatus(t(chromeApi, "tabReadFailed", [error.message]), "error"),
   );
   return { ready: Promise.all([load, tab]), save };
 }

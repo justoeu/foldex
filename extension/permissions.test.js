@@ -1,4 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const EN_MESSAGES = JSON.parse(
+  readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "_locales/en/messages.json"),
+    "utf8",
+  ),
+);
 
 import {
   getStoredConfig,
@@ -64,7 +74,25 @@ function mockChrome({
     writes: [],
     events: [],
   };
+  const messages = EN_MESSAGES;
   const chromeApi = {
+    i18n: {
+      getMessage(key, substitutions) {
+        const entry = messages[key];
+        if (!entry) return "";
+        let text = entry.message;
+        const list =
+          substitutions == null
+            ? []
+            : Array.isArray(substitutions)
+              ? substitutions
+              : [substitutions];
+        list.forEach((value, i) => {
+          text = text.replaceAll("$" + (i + 1), String(value));
+        });
+        return text;
+      },
+    },
     runtime: { openOptionsPage() {} },
     tabs: {
       async query() {

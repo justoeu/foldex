@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Foldex — Settings</title>
+  <title>__MSG_optionsTitle__</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       max-width: 480px; margin: 24px auto; padding: 0 16px; color: #f5f7fb; background: #0b0d12; }
@@ -21,20 +21,17 @@
   </style>
 </head>
 <body>
-  <h2>Foldex extension settings</h2>
-  <label for="baseUrl">Backend base URL</label>
+  <h2>__MSG_optionsHeading__</h2>
+  <label for="baseUrl">__MSG_baseUrl__</label>
   <input id="baseUrl" type="url" placeholder="http://localhost:9089" />
 
-  <label for="apiToken">API token</label>
+  <label for="apiToken">__MSG_apiToken__</label>
   <input id="apiToken" type="password" placeholder="fx_…" autocomplete="off" />
-  <p class="hint">
-    Create one in Foldex under <strong>Settings → API tokens</strong>. It reads and writes
-    your links and notes; it cannot change your password, manage users or download a backup.
-  </p>
+  <p class="hint">__MSG_apiTokenHint__</p>
 
   <div>
-    <button id="save">Save</button>
-    <button id="test" class="secondary">Test connection</button>
+    <button id="save">__MSG_save__</button>
+    <button id="test" class="secondary">__MSG_testConnection__</button>
   </div>
   <div id="status" class="status"></div>
   <script type="module" src="options.js"></script>

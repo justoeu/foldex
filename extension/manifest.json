@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Foldex Capture",
+  "default_locale": "en",
+  "name": "__MSG_extName__",
   "version": "2.21.1",
-  "description": "Save the current tab to your Foldex bookmark manager.",
+  "description": "__MSG_extDescription__",
   "permissions": [
     "activeTab",
     "storage"
@@ -13,7 +14,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Save to Foldex"
+    "default_title": "__MSG_saveToFoldex__"
   },
   "options_page": "options.html"
 }
