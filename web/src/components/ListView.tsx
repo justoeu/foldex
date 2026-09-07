@@ -341,10 +341,13 @@ function FolderRowImpl({
   )
 }
 
-function shortLast(lastClickedAt: string | null | undefined) {
+/** Exported for unit tests. */
+export function shortLast(lastClickedAt: string | null | undefined) {
   if (!lastClickedAt) return '—'
   const ms = Date.now() - new Date(lastClickedAt).getTime()
-  const min = Math.round(ms / 60000)
+  // Clamp at zero: a server clock a few minutes ahead otherwise renders
+  // "-3m" for a just-clicked link (the card view collapses the same skew).
+  const min = Math.max(0, Math.round(ms / 60000))
   if (min < 60) return `${min}m`
   const h = Math.round(min / 60)
   if (h < 24) return `${h}h`
