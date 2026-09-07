@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"foldex/internal/notes"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/domainerr"
 )
 
@@ -19,14 +20,14 @@ type fakePublicNoteResolver struct {
 	bySlug map[string]notes.Note
 }
 
-func (f *fakePublicNoteResolver) SystemViewAndResolveByID(_ context.Context, id int64) (notes.Note, error) {
+func (f *fakePublicNoteResolver) SystemViewAndResolveByID(_ context.Context, id int64, _ authctx.UserID) (notes.Note, error) {
 	if note, ok := f.byID[id]; ok {
 		return note, nil
 	}
 	return notes.Note{}, domainerr.ErrNotFound
 }
 
-func (f *fakePublicNoteResolver) SystemViewAndResolveBySlug(_ context.Context, slug string) (notes.Note, error) {
+func (f *fakePublicNoteResolver) SystemViewAndResolveBySlug(_ context.Context, slug string, _ authctx.UserID) (notes.Note, error) {
 	if note, ok := f.bySlug[slug]; ok {
 		return note, nil
 	}

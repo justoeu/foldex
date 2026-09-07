@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"foldex/internal/notes"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/redirect"
 )
 
@@ -31,12 +32,12 @@ type endpointNoteResolver struct {
 	call string
 }
 
-func (r *endpointNoteResolver) SystemViewAndResolveByID(_ context.Context, _ int64) (notes.Note, error) {
+func (r *endpointNoteResolver) SystemViewAndResolveByID(_ context.Context, _ int64, _ authctx.UserID) (notes.Note, error) {
 	r.call = "id"
 	return notes.Note{Title: "By ID", BodyHTML: "<p>body</p>"}, nil
 }
 
-func (r *endpointNoteResolver) SystemViewAndResolveBySlug(_ context.Context, _ string) (notes.Note, error) {
+func (r *endpointNoteResolver) SystemViewAndResolveBySlug(_ context.Context, _ string, _ authctx.UserID) (notes.Note, error) {
 	r.call = "slug"
 	return notes.Note{Title: "By slug", BodyHTML: "<p>body</p>"}, nil
 }

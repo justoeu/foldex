@@ -32,7 +32,7 @@ Native bookmarks are fine for "save a page quickly and forget it". Once you pass
 | **Pinned/favorites = a tiny separate folder.** Visual only.                     | `pinned` is a real column on the table. `ORDER BY pinned DESC, …` applies in every sort mode. Gradient badge always visible. |
 | **Data embedded in the browser.** Switched machines? Reinstalled Chrome? Pray. | Postgres + RustFS in containers. `make up` on a new machine and your backup ZIP restores everything (DB + images) in ~minutes. |
 | **No way to know when a page you bookmarked changes.** A board, a release notes page, a status page — you find out by opening it. | Per-link opt-in (hourly/daily/weekly). Backend runs a fingerprint worker (RSS/Atom feed if present, content-hash fallback) and fires a **Web Push notification** when content changes. Bell in the Topbar manages the subscription; amber badge on the card flags unseen changes; "Recent updates" section in the sidebar lists the last N. Works with the tab closed (Service Worker). |
-| **Pastebin/notes app is a separate tool.** Snippets and links live in different places. | **Notes** (`⌥M`) are a first-class entity alongside links: rich-text editor (Tiptap) with a **formatting toolbar** — bold/italic/underline/strike, headings, bullet & numbered lists, text alignment, text color, font family, quotes/code, links and inline images, same tags/folders/pin/search as links, interleaved in the same grid with an emerald badge, shareable via a public `/n/{slug}` page. **Open** reads a note in a modal inside the app rather than spending a browser tab — the public page is one click away from there, and it is the path that records a view. |
+| **Pastebin/notes app is a separate tool.** Snippets and links live in different places. | **Notes** (`⌥M`) are a first-class entity alongside links: rich-text editor (Tiptap) with a **formatting toolbar** — bold/italic/underline/strike, headings, bullet & numbered lists, text alignment, text color, font family, quotes/code, links and inline images, same tags/folders/pin/search as links, interleaved in the same grid with an emerald badge, shareable via a public `/n/{slug}` page once you opt the note in (notes are private by default — the slug derives from the title, so it is not a secret). **Open** reads a note in a modal inside the app rather than spending a browser tab — the public page is one click away from there, and it is the path that records a view. |
 | **No way to keep a folder private** on a shared screen/machine without a whole second account. | **Folder passwords.** Set a bcrypt-hashed password on any folder — its links/notes stay hidden (and its preview thumbnails redacted, even on hover) until you unlock it for the session. Backend-enforced, not just a UI prompt: the API itself refuses a locked folder's contents without proof of the password. Deleting a protected folder prompts for that password; deleting a whole tree is refused if it contains independently protected subfolders, so unlocking only the root never erases them. Add an optional **reminder hint** (shown on the unlock prompt; can't be the password itself), and set a **master password** in **Settings** (with a strength meter, confirm field, and its own reminder hint) to reset a folder's password if you ever forget it. |
 
 ### Real scenarios that flipped the switch (native bookmarks → foldex)
@@ -250,9 +250,11 @@ sleep 3 && curl -s localhost:9089/api/links/1 -H "$AUTH" -H "$JSON" | jq '.previ
 #    are shared across accounts. See PUBLIC_NUMERIC_IDS.
 curl -sI localhost:9089/go/hn | head -3
 
-# 6. Create a note (server-side sanitized rich HTML) and render its public page.
+# 6. Create a note (server-side sanitized rich HTML), opt it into the public
+#    page (notes are private by default: the slug derives from the title, so it
+#    is not a secret), and render it.
 curl -s -X POST localhost:9089/api/notes -H "$AUTH" -H "$JSON" \
-  -d '{"title":"Scratchpad","body_html":"<p>Hello <strong>world</strong></p>"}' | jq .
+  -d '{"title":"Scratchpad","body_html":"<p>Hello <strong>world</strong></p>","is_public":true}' | jq .
 curl -s localhost:9089/n/scratchpad | grep -o '<h1>.*</h1>'
 
 # 7. Create a password-protected folder, confirm its contents are gated

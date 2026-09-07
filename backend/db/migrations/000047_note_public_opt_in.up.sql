@@ -1,0 +1,13 @@
+-- Public /n/{slug} becomes an OPT-IN capability (SEC-SEN-001, INV-045).
+--
+-- Before this column, every note outside a password-protected folder was
+-- public-by-default and reachable at a slug derived from its title
+-- (slug.Slugify, sequential -2/-3 suffixes on collision, GLOBAL namespace).
+-- The slug therefore carried no entropy: guessing a title was enough to read
+-- any tenant's note, and 200-vs-404 confirmed which titles existed.
+--
+-- is_public defaults to FALSE, which moves every existing note to
+-- owner-only. The public page renders a note only when the owner has opted
+-- in; the owner's own session keeps access unchanged (viewer-scoped OR
+-- clause in notes.repository_system).
+ALTER TABLE note ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT FALSE;

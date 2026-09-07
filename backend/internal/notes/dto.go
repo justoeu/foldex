@@ -36,7 +36,11 @@ type CreateInput struct {
 	TagIDs      []int64            `json:"tag_ids"`
 	PendingTags []tags.CreateInput `json:"pending_tags"`
 	Pinned      bool               `json:"pinned"`
-	FolderID    *int64             `json:"folder_id"`
+	// IsPublic opts the note into the anonymous /n/{slug} page. Default
+	// false: a title-derived slug is guessable, so privacy cannot rest on it
+	// (SEC-SEN-001). The owner's own session always renders the note.
+	IsPublic bool   `json:"is_public"`
+	FolderID *int64 `json:"folder_id"`
 }
 
 // Normalize trims text fields and sanitizes BodyHTML server-side — the
@@ -94,6 +98,8 @@ type UpdateInput struct {
 	// {"slug": null} → regenerate from title via slug.Slugify().
 	Slug    *string `json:"-"`
 	SlugSet bool    `json:"-"`
+	// IsPublic: absent → keep the current visibility, true/false → set it.
+	IsPublic *bool `json:"is_public"`
 	// IfMatchUpdatedAt is optional optimistic concurrency (RACE-HER-012):
 	// when set, UPDATE requires row.updated_at equality; 0 rows → 409 conflict.
 	// Omitted = last-writer-wins (default single-user clients).

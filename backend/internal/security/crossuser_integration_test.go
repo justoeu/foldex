@@ -382,9 +382,14 @@ func TestCrossUser_PublicRoutesResolveWithoutASession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "https://bravo.example", dest)
 
-	n, err := f.nrepo.SystemViewAndResolve(ctx, f.b.note.Slug)
+	// Notes are opt-in since SEC-SEN-001: an anonymous viewer gets 404 for a
+	// private note no matter how guessable its title-derived slug is, while
+	// the owner's viewer keeps the page.
+	_, err = f.nrepo.SystemViewAndResolve(ctx, f.b.note.Slug, 0)
+	require.ErrorIs(t, err, domainerr.ErrNotFound)
+	owned, err := f.nrepo.SystemViewAndResolve(ctx, f.b.note.Slug, f.b.uid)
 	require.NoError(t, err)
-	assert.Equal(t, f.b.note.ID, n.ID)
+	assert.Equal(t, f.b.note.ID, owned.ID)
 }
 
 // TestClickLogOwnerMatchesEntityOwner is the drift guard migration 000018 names
@@ -408,7 +413,7 @@ func TestClickLogOwnerMatchesEntityOwner(t *testing.T) {
 		require.NoError(t, err)
 		_, err = f.lrepo.ClickAndResolveBySlug(ctx, tn.link.Slug)
 		require.NoError(t, err)
-		_, err = f.nrepo.SystemViewAndResolve(ctx, tn.note.Slug)
+		_, err = f.nrepo.SystemViewAndResolve(ctx, tn.note.Slug, tn.uid)
 		require.NoError(t, err)
 	}
 

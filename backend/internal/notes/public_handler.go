@@ -8,21 +8,29 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/domainerr"
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/publictarget"
 )
 
-// PublicNoteResolver resolves and records views of public notes.
+// PublicNoteResolver resolves and records views of public notes. viewer is 0
+// for an anonymous request; the repository renders only opted-in (is_public)
+// notes for anonymous callers and owner-scoped rows for signed-in ones.
 type PublicNoteResolver interface {
-	SystemViewAndResolveByID(ctx context.Context, id int64) (Note, error)
-	SystemViewAndResolveBySlug(ctx context.Context, slug string) (Note, error)
+	SystemViewAndResolveByID(ctx context.Context, id int64, viewer authctx.UserID) (Note, error)
+	SystemViewAndResolveBySlug(ctx context.Context, slug string, viewer authctx.UserID) (Note, error)
 }
 
 // PublicHandler serves the read-only rendered note page at GET /n/{id-or-slug},
 // mounted outside /api (same place /go/{id-or-slug} lives) so it stays a
 // session-less share surface. Unlike /go/, this renders content rather than
 // redirecting: a note has no external URL to forward to.
+//
+// The route is mounted behind auth.Middleware.Optional (or the bootstrap
+// principal under AUTH_ENABLED=0), so a signed-in owner keeps reading their
+// own notes here while the page stays 404 for everyone else unless the note
+// is opted in via is_public (SEC-SEN-001).
 type PublicHandler struct {
 	repo PublicNoteResolver
 	// allowNumericIDs re-enables /n/42 — off by default since ADR-32, and for
@@ -46,10 +54,15 @@ func (h *PublicHandler) view(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_target", "target is required"))
 		return
 	}
+	viewer := viewerUserID(r)
 	n, err := publictarget.Resolve(
 		r.Context(), raw, h.allowNumericIDs,
-		h.repo.SystemViewAndResolveByID,
-		h.repo.SystemViewAndResolveBySlug,
+		func(ctx context.Context, id int64) (Note, error) {
+			return h.repo.SystemViewAndResolveByID(ctx, id, viewer)
+		},
+		func(ctx context.Context, slug string) (Note, error) {
+			return h.repo.SystemViewAndResolveBySlug(ctx, slug, viewer)
+		},
 	)
 	if err != nil {
 		if errors.Is(err, domainerr.ErrNotFound) {
@@ -79,6 +92,16 @@ func (h *PublicHandler) view(w http.ResponseWriter, r *http.Request) {
 type pageData struct {
 	Title string
 	Body  template.HTML
+}
+
+// viewerUserID is 0 when no principal rode the request — the anonymous share
+// reader. The router mounts the optional principal middleware; a handler test
+// without it is exercising the anonymous path.
+func viewerUserID(r *http.Request) authctx.UserID {
+	if p, ok := authctx.FromContext(r.Context()); ok {
+		return p.UserID
+	}
+	return 0
 }
 
 var pageTemplate = template.Must(template.New("note").Parse(`<!DOCTYPE html>

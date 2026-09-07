@@ -58,14 +58,14 @@ const noteDetailColumns = `
     n.id, n.title, n.slug, n.body_html, n.body_text,
     COALESCE(cl.cnt, 0) AS click_count,
     cl.last_at AS last_clicked_at,
-    n.pinned, n.folder_id, n.cover_url, n.created_at, n.updated_at
+    n.pinned, n.folder_id, n.cover_url, n.is_public, n.created_at, n.updated_at
 `
 
 const noteListColumns = `
     n.id, n.title, n.slug, ''::text AS body_html, ''::text AS body_text,
     COALESCE(cl.cnt, 0) AS click_count,
     cl.last_at AS last_clicked_at,
-    n.pinned, n.folder_id, n.cover_url, n.created_at, n.updated_at
+    n.pinned, n.folder_id, n.cover_url, n.is_public, n.created_at, n.updated_at
 `
 
 const noteFrom = `
@@ -85,7 +85,7 @@ func scanNote(s rowScanner, n *Note) error {
 	return s.Scan(
 		&n.ID, &n.Title, &n.Slug, &n.BodyHTML, &n.BodyText,
 		&n.ClickCount, &n.LastClickedAt,
-		&n.Pinned, &n.FolderID, &n.CoverURL, &n.CreatedAt, &n.UpdatedAt,
+		&n.Pinned, &n.FolderID, &n.CoverURL, &n.IsPublic, &n.CreatedAt, &n.UpdatedAt,
 	)
 }
 
@@ -112,10 +112,10 @@ func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateIn
 		func(ctx context.Context, tx pgx.Tx, candidate string) (int64, error) {
 			var id int64
 			err := tx.QueryRow(ctx, `
-            INSERT INTO note (user_id, title, slug, body_html, body_text, pinned, folder_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO note (user_id, title, slug, body_html, body_text, pinned, folder_id, is_public)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING id
-        `, int64(uid), in.Title, candidate, bodyHTML, bodyText, in.Pinned, in.FolderID).Scan(&id)
+        `, int64(uid), in.Title, candidate, bodyHTML, bodyText, in.Pinned, in.FolderID, in.IsPublic).Scan(&id)
 			if err != nil && !isSlugUniqueViolation(err) {
 				return 0, fmt.Errorf("insert note: %w", err)
 			}
@@ -238,6 +238,11 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	if in.Pinned != nil {
 		sets = append(sets, fmt.Sprintf("pinned = $%d", i))
 		args = append(args, *in.Pinned)
+		i++
+	}
+	if in.IsPublic != nil {
+		sets = append(sets, fmt.Sprintf("is_public = $%d", i))
+		args = append(args, *in.IsPublic)
 		i++
 	}
 	if in.FolderIDSet {

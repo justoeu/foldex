@@ -190,3 +190,21 @@ func TestUpdateInput_DoesNotAcceptBodyTextField(t *testing.T) {
 	require.NoError(t, dec.Decode(&u))
 	assert.Nil(t, u.BodyHTML, "an unrecognized body_text key must not populate BodyHTML or any other field")
 }
+
+// is_public is opt-in on purpose, so its tri-state decode is a contract:
+// absent and explicit null both mean "don't touch" — a null must not silently
+// unpublish a note the owner meant to leave shared.
+func TestUpdateInput_IsPublicTriState(t *testing.T) {
+	var absent UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"title":"x"}`), &absent))
+	assert.Nil(t, absent.IsPublic)
+
+	var on UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"is_public":true}`), &on))
+	require.NotNil(t, on.IsPublic)
+	assert.True(t, *on.IsPublic)
+
+	var nullKeeps UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"is_public":null}`), &nullKeeps))
+	assert.Nil(t, nullKeeps.IsPublic, "explicit null means don't touch, never unpublish")
+}

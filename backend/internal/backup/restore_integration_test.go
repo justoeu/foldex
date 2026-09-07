@@ -334,7 +334,7 @@ func TestRestore_NotesRoundTripWipeMode(t *testing.T) {
 	nrepo := notes.NewRepository(pool)
 	n, err := nrepo.Create(ctx, uid, notes.CreateInput{Title: "Recipe", BodyHTML: "<p>flour</p>", TagIDs: []int64{tag.ID}})
 	require.NoError(t, err)
-	_, err = nrepo.SystemViewAndResolve(ctx, n.Slug)
+	_, err = nrepo.SystemViewAndResolve(ctx, n.Slug, uid)
 	require.NoError(t, err)
 
 	zr := exportToReader(t, svc, uid)

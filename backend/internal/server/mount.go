@@ -112,6 +112,18 @@ func newFileHandler(d Deps, linksRepo *links.Repository) *links.ScreenshotHandle
 
 func publicShareRoutes(r chi.Router, d Deps, linksRepo *links.Repository, notesRepo *notes.Repository, fileHandler *links.ScreenshotHandler) {
 	r.Group(func(pub chi.Router) {
+		// /n/ and /go/ resolve viewer-scoped: the owner's session keeps them
+		// working, everyone else needs the row's explicit public opt-in. The
+		// same Vary the /api surface sets — these responses now differ by
+		// caller, and a shared cache must not serve one caller another's.
+		// Under AUTH_ENABLED=0 the bootstrap principal plays the viewer, per
+		// that escape hatch's "whoever reaches the port owns the library".
+		pub.Use(auth.VaryCookie)
+		if d.Config.AuthEnabled {
+			pub.Use(d.AuthMiddleware.Optional)
+		} else {
+			pub.Use(bootstrapPrincipal(d.Pool, d.Logger))
+		}
 		pub.Use(newClickCoalescer(d.AbusePolicy).middleware)
 		redirect.NewHandler(linksRepo, d.Config.PublicNumericIDs).Mount(pub)
 		notes.NewPublicHandler(notesRepo, d.Config.PublicNumericIDs).Mount(pub)

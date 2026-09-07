@@ -162,7 +162,9 @@ func TestWiring_RepeatClicksFromOneVisitorWriteOneRowAndStillRedirect(t *testing
 		"eight hits from one visitor inside the default 10s window must be one row")
 }
 
-// The note surface is the same amplifier, and it renders every time.
+// The note surface is the same amplifier, and it renders every time. The
+// request walks the public surface with no session, so the note is opted in
+// (is_public) — since SEC-SEN-001 that is what makes it render for one.
 func TestWiring_RepeatNoteViewsFromOneVisitorWriteOneRowAndStillRender(t *testing.T) {
 	srv, _, pool := abuseWiringServer(t)
 	uid := testdb.SeedUser(t, pool, "note@test.local", "editor")
@@ -170,7 +172,7 @@ func TestWiring_RepeatNoteViewsFromOneVisitorWriteOneRowAndStillRender(t *testin
 	var id int64
 	var slug string
 	require.NoError(t, pool.QueryRow(context.Background(),
-		`INSERT INTO note (user_id, title, body_html, slug) VALUES ($1,'N','<p>b</p>','wiring-note')
+		`INSERT INTO note (user_id, title, body_html, slug, is_public) VALUES ($1,'N','<p>b</p>','wiring-note', TRUE)
 		 RETURNING id, slug`, int64(uid)).Scan(&id, &slug))
 
 	for i := 0; i < 5; i++ {

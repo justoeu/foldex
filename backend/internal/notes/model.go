@@ -22,8 +22,11 @@ type Note struct {
 	// to clients (the frontend renders BodyHTML; BodyText only feeds
 	// ILIKE/trigram search). Excluded from JSON to keep response payloads
 	// from doubling the body size for no reader benefit.
-	BodyText      string      `json:"-"`
-	Pinned        bool        `json:"pinned"`
+	BodyText string `json:"-"`
+	Pinned   bool   `json:"pinned"`
+	// IsPublic reports whether the anonymous /n/{slug} page may render this
+	// note. False is the safe default; the owner's session reads regardless.
+	IsPublic      bool        `json:"is_public"`
 	FolderID      *int64      `json:"folder_id,omitempty"`
 	CoverURL      *string     `json:"cover_url,omitempty"`
 	ClickCount    int64       `json:"click_count"`

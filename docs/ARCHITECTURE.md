@@ -219,6 +219,10 @@ CREATE TABLE note (
   pinned     BOOLEAN NOT NULL DEFAULT FALSE,
   folder_id  BIGINT REFERENCES folder(id) ON DELETE SET NULL,
   cover_url  TEXT,
+  -- 000047: the anonymous /n page is an OPT-IN capability. Title-derived
+  -- slugs are guessable, so before this column every note outside a locked
+  -- folder was public-by-default across tenants.
+  is_public  BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

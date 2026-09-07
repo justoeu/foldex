@@ -16,6 +16,7 @@ import (
 
 	"foldex/internal/abusepolicy"
 	"foldex/internal/notes"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/clickctx"
 	"foldex/internal/redirect"
 )
@@ -59,11 +60,11 @@ type countingNoteResolver struct {
 	clicks int
 }
 
-func (c *countingNoteResolver) SystemViewAndResolveByID(ctx context.Context, id int64) (notes.Note, error) {
+func (c *countingNoteResolver) SystemViewAndResolveByID(ctx context.Context, id int64, _ authctx.UserID) (notes.Note, error) {
 	return c.record(ctx, id)
 }
 
-func (c *countingNoteResolver) SystemViewAndResolveBySlug(ctx context.Context, _ string) (notes.Note, error) {
+func (c *countingNoteResolver) SystemViewAndResolveBySlug(ctx context.Context, _ string, _ authctx.UserID) (notes.Note, error) {
 	return c.record(ctx, 3)
 }
 
