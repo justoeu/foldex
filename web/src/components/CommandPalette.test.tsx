@@ -176,3 +176,61 @@ describe('CommandPalette', () => {
     expect(entryListCalls().some((url) => /(?:\?|&)limit=200(?:&|$)/.test(url))).toBe(false)
   })
 })
+
+describe('CommandPalette keyboard activation', () => {
+  // The footer promises ↵ "open via /go" and ⌘↵ "open in new tab", but the
+  // input had no Enter handler — keyboard users (the palette's natural
+  // audience, it opens with Alt+K) hit a dead key on every search.
+  let openSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+  })
+
+  async function search(query: string) {
+    renderPalette(<CommandPalette open onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    const input = await screen.findByPlaceholderText(/Search by/i)
+    await user.type(input, query)
+    await waitFor(() => expect(screen.getByText('Hacker News')).toBeInTheDocument())
+    return { user, input }
+  }
+
+  it('Enter opens the first match via /go in the same tab and closes the palette', async () => {
+    const onClose = vi.fn()
+    renderPalette(<CommandPalette open onClose={onClose} />)
+    const user = userEvent.setup()
+    const input = await screen.findByPlaceholderText(/Search by/i)
+    await user.type(input, 'Hacker')
+    await waitFor(() => expect(screen.getByText('Hacker News')).toBeInTheDocument())
+    await user.keyboard('{Enter}')
+    expect(openSpy).toHaveBeenCalledWith('/go/1', '_self')
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('⌘↵ opens the first match in a new tab', async () => {
+    const { user } = await search('Hacker')
+    await user.keyboard('{Meta>}{Enter}{/Meta}')
+    expect(openSpy).toHaveBeenCalledWith('/go/1', '_blank')
+  })
+
+  it('ArrowDown moves the highlight (aria-activedescendant) and Enter opens the second match', async () => {
+    const { user, input } = await search('a') // matches Hacker News + Example
+    await waitFor(() => expect(screen.getByText('Example')).toBeInTheDocument())
+    expect(input).toHaveAttribute('aria-activedescendant', 'fx-cmdk-row-0')
+    await user.keyboard('{ArrowDown}')
+    expect(input).toHaveAttribute('aria-activedescendant', 'fx-cmdk-row-1')
+    await user.keyboard('{Enter}')
+    expect(openSpy).toHaveBeenCalledWith('/go/2', '_self')
+  })
+
+  it('Enter with no matches does nothing', async () => {
+    renderPalette(<CommandPalette open onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    const input = await screen.findByPlaceholderText(/Search by/i)
+    await user.type(input, 'zzzzz')
+    await waitFor(() => expect(screen.getByText(/no matches/i)).toBeInTheDocument())
+    await user.keyboard('{Enter}')
+    expect(openSpy).not.toHaveBeenCalled()
+  })
+})
