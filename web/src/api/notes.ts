@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
-import { cachedEntryFolderId, invalidateEntryCounts, optimisticEntryPatch, removeCachedEntry } from './entries'
+import { cachedEntryFolderId, invalidateLibrary, optimisticEntryPatch, removeCachedEntry } from './entries'
 import type { Note, NoteCreate, NoteUpdate } from './types'
 
 export function useNote(id: number | null) {
@@ -22,13 +22,9 @@ export function useCreateNote() {
       return data
     },
     onSuccess: () => {
-      // The home/folder grid reads from ['entries'], not ['notes'] — every
-      // note mutation invalidates that key so the interleaved grid reflects
-      // the change. See api/entries.ts.
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['tags'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      invalidateEntryCounts(qc)
+      // Notes have no ['links'] cache presence — entries/tags/folders/counts
+      // is the deliberate reach here (see invalidateLibrary).
+      invalidateLibrary(qc, { entries: true, tags: true, folders: true, counts: true })
     },
   })
 }
@@ -63,12 +59,7 @@ export function useDeleteNote() {
     mutationFn: async (id: number) => {
       await http.delete(`/api/notes/${id}`)
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['tags'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      invalidateEntryCounts(qc)
-    },
+    onSuccess: () => invalidateLibrary(qc, { entries: true, tags: true, folders: true, counts: true }),
   })
 }
 
@@ -84,10 +75,7 @@ export function usePinNote() {
     },
     onMutate: async ({ id, pinned }) => optimisticEntryPatch(qc, 'note', id, { pinned }),
     onError: (_err, _vars, ctx) => ctx?.rollback(),
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-    },
+    onSettled: () => invalidateLibrary(qc, { entries: true, folders: true }),
   })
 }
 

@@ -34,6 +34,22 @@ export function invalidateEntryCounts(qc: QueryClient) {
   return qc.invalidateQueries({ queryKey: entryCountsKey })
 }
 
+// The standard invalidation fan-out for library mutations, replacing the
+// hand-rolled per-mutation bundles that had already drifted (folders.ts
+// omitted ['tags'] and entry-counts; every new cache a mutation must
+// refresh is a ~10-site edit to miss one of). Flags keep each call site's
+// existing reach — behavior-preserving consolidation.
+export function invalidateLibrary(
+  qc: QueryClient,
+  keys: { links?: boolean; entries?: boolean; tags?: boolean; folders?: boolean; counts?: boolean },
+) {
+  if (keys.links) void qc.invalidateQueries({ queryKey: ['links'] })
+  if (keys.entries) void qc.invalidateQueries({ queryKey: ['entries'] })
+  if (keys.tags) void qc.invalidateQueries({ queryKey: ['tags'] })
+  if (keys.folders) void qc.invalidateQueries({ queryKey: ['folders'] })
+  if (keys.counts) invalidateEntryCounts(qc)
+}
+
 const entriesKey = (p: EntryListParams) =>
   [
     'entries',

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryCli
 import { http } from './client'
 import {
   cachedEntryFolderId,
-  invalidateEntryCounts,
+  invalidateLibrary,
   mapCachedLinkEntries,
   optimisticEntryPatch,
   removeCachedEntry,
@@ -46,13 +46,7 @@ export function useCreateLink() {
       const { data } = await http.post<Link>('/api/links', body)
       return data
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['tags'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      invalidateEntryCounts(qc)
-    },
+    onSuccess: () => invalidateLibrary(qc, { links: true, entries: true, tags: true, folders: true, counts: true }),
   })
 }
 
@@ -100,13 +94,7 @@ export function useDeleteLink() {
     mutationFn: async (id: number) => {
       await http.delete(`/api/links/${id}`)
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['tags'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-      invalidateEntryCounts(qc)
-    },
+    onSuccess: () => invalidateLibrary(qc, { links: true, entries: true, tags: true, folders: true, counts: true }),
   })
 }
 
@@ -119,11 +107,7 @@ export function usePinLink() {
     },
     onMutate: async ({ id, pinned }) => optimisticEntryPatch(qc, 'link', id, { pinned }),
     onError: (_err, _vars, ctx) => ctx?.rollback(),
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-    },
+    onSettled: () => invalidateLibrary(qc, { links: true, entries: true, folders: true }),
   })
 }
 
@@ -135,11 +119,7 @@ export function useRefreshPreview() {
     },
     onMutate: async (id) => optimisticEntryPatch(qc, 'link', id, { preview_status: 'pending' }),
     onError: (_err, _id, ctx) => ctx?.rollback(),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['links'] })
-      qc.invalidateQueries({ queryKey: ['entries'] })
-      qc.invalidateQueries({ queryKey: ['folders'] })
-    },
+    onSuccess: () => invalidateLibrary(qc, { links: true, entries: true, folders: true }),
   })
 }
 
