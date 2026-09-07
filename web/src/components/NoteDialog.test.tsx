@@ -503,8 +503,9 @@ describe('buildImageUploadHandler', () => {
     expect(onError).not.toHaveBeenCalled()
   })
 
-  it('calls onError when the upload fails', async () => {
-    const uploadFn = vi.fn().mockRejectedValue(new Error('nope'))
+  it('calls onError with the raw error when the upload fails', async () => {
+    const failure = new Error('nope')
+    const uploadFn = vi.fn().mockRejectedValue(failure)
     const onError = vi.fn()
     const view = {
       isDestroyed: false,
@@ -515,7 +516,7 @@ describe('buildImageUploadHandler', () => {
     const handler = buildImageUploadHandler(uploadFn, onError)
     handler(view, new File(['x'], 'a.png', { type: 'image/png' }))
 
-    await waitFor(() => expect(onError).toHaveBeenCalledWith('upload_failed'))
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(failure))
     expect(view.dispatch).not.toHaveBeenCalled()
   })
 
