@@ -41,6 +41,7 @@ type Notification struct {
 // *links.Repository so tests can mock it without standing up Postgres.
 type Repo interface {
 	SystemClaimDueForCheck(ctx context.Context, limit int) ([]links.DueLink, error)
+	SystemReleaseCheckClaims(ctx context.Context, ids []int64) error
 	SystemRecordCheckResult(ctx context.Context, id int64, expectedClaimedAt time.Time, res links.CheckResult) (bool, error)
 }
 
@@ -231,6 +232,7 @@ func (w *Worker) scan(ctx context.Context) {
 	for _, job := range due {
 		select {
 		case <-ctx.Done():
+			w.releaseClaims(context.WithoutCancel(ctx), due[enqueued:])
 			return
 		case w.jobs <- job:
 			enqueued++
@@ -238,6 +240,24 @@ func (w *Worker) scan(ctx context.Context) {
 	}
 	if enqueued > 0 {
 		w.logger.Info("scan: enqueued due links", "count", enqueued)
+	}
+}
+
+// releaseClaims hands back claims whose jobs never reached the queue. The
+// claim bump (last_checked_at = now()) is the ONLY scheduling state
+// changecheck has — unlike preview's pending rows there is no recovery
+// sweep — so a shutdown mid-scan would otherwise postpone those links by a
+// full interval (a week for weekly checks).
+func (w *Worker) releaseClaims(ctx context.Context, due []links.DueLink) {
+	if len(due) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(due))
+	for _, job := range due {
+		ids = append(ids, job.ID)
+	}
+	if err := w.repo.SystemReleaseCheckClaims(ctx, ids); err != nil {
+		w.logger.Warn("scan: release un-enqueued claims failed", "count", len(ids), "err", err)
 	}
 }
 
@@ -264,7 +284,14 @@ func (w *Worker) process(ctx context.Context, job links.DueLink) {
 		return
 	}
 
-	kind, hash, err := w.fingerprint.Compute(fetchCtx, job.URL, body)
+	// Fresh deadline for the fingerprint leg: Compute performs a second
+	// network fetch (the feed), and inheriting the page-fetch ctx let a slow
+	// page starve that fetch to DeadlineExceeded — Compute then silently fell
+	// back to kind=content, flipping the stored baseline kind and permanently
+	// masking the next real feed change behind the kind-must-match rule.
+	hashCtx, hashCancel := context.WithTimeout(ctx, w.fetchTimeout)
+	defer hashCancel()
+	kind, hash, err := w.fingerprint.Compute(hashCtx, job.URL, body)
 	if err != nil {
 		w.logger.Info("process: fingerprint failed", "link_id", id, "reason", fetchFailureReason(err))
 		if _, recErr := w.repo.SystemRecordCheckResult(ctx, id, job.ClaimedAt, links.CheckResult{

@@ -12,6 +12,18 @@
 # Bring the services up first (`make db-up` / `make storage-up`) when you host
 # them here; point the env at them when you do not.
 
+# Docker's default json-file driver retains container logs unbounded, and the
+# backend writes slog/access/metrics lines on every request while the mailer
+# and backup agent log per message/run — a long-lived instance slowly eats
+# the host disk and takes every Foldex container down with it months later.
+# Shared rotation cap; per-service mem_limit bounds a runaway path
+# (backup upload streams, the screenshot Chromium pool) to one container.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   backend:
     # Pulled from Docker Hub by default. FOLDEX_VERSION overrides the current
@@ -22,6 +34,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
     environment:
       # DB_URL is derived from the POSTGRES_* vars in .env so credentials live
       # in one place only. POSTGRES_HOST decides where the backend looks:
@@ -249,6 +263,8 @@ services:
       dockerfile: Dockerfile
     entrypoint: ["/foldex-mailer"]
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 128m
     environment:
       # NO DB_URL, deliberately. This is the process that decrypts live reset
       # links and sign-in codes; handing it a database credential as well would
@@ -312,6 +328,8 @@ services:
       dockerfile: Dockerfile
       target: backup-agent
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 1g
     environment:
       # This is the ONLY process that holds the external bucket's credentials.
       # The backend can request a run (an INSERT into backup_run), never
@@ -394,6 +412,8 @@ services:
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://localhost:9089}
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 64m
     environment:
       # Host:port used in the HTTP→HTTPS redirect (never the request Host
       # header). The port matters: nginx redirects to https://<this value>, so

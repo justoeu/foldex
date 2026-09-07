@@ -65,6 +65,31 @@ func TestSummary_AfterClicks(t *testing.T) {
 	assert.Equal(t, "example.com", s.TopHost)
 }
 
+func TestSummary_TopHostFoldsSchemeCase(t *testing.T) {
+	ctx, uid, srepo, lrepo, _ := setup(t)
+	// url.Parse lowercases the scheme, so links/dto Validate accepts both
+	// spellings and the raw string is stored as typed.
+	lower, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://example.com/a", Title: "lower"})
+	require.NoError(t, err)
+	upper, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "HTTPS://example.com/b", Title: "upper"})
+	require.NoError(t, err)
+	_, err = lrepo.ClickAndResolve(ctx, lower.ID)
+	require.NoError(t, err)
+	_, err = lrepo.ClickAndResolve(ctx, upper.ID)
+	require.NoError(t, err)
+
+	s, err := srepo.Summary(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, "example.com", s.TopHost, "uppercase-scheme URL must aggregate with its lowercase twin, not surface as its own 'host'")
+	assert.EqualValues(t, 2, s.TopHostClicks)
+
+	top, err := srepo.TopLinks(ctx, uid, 10)
+	require.NoError(t, err)
+	for _, row := range top {
+		assert.Equal(t, "example.com", row.Host, "TopLinks host extraction must fold case too, got %q for %q", row.Host, row.URL)
+	}
+}
+
 func TestDaily_BackfillsEmptyDays(t *testing.T) {
 	ctx, uid, srepo, lrepo, _ := setup(t)
 	link, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://a", Title: "a"})

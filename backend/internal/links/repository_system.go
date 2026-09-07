@@ -241,6 +241,29 @@ type DueLink struct {
 	ClaimedAt       time.Time
 }
 
+// SystemReleaseCheckClaims undoes a sweep claim for links whose jobs never
+// reached the worker queue (shutdown mid-scan). last_checked_at IS the
+// scheduler here — no recovery sweep exists — and NULL is the never-checked
+// state the due predicate treats as immediately due, so a released link is
+// reclaimed on the next tick instead of waiting out a full interval. Any
+// late result against a released row is still discarded by the
+// expectedClaimedAt CAS in SystemRecordCheckResult.
+func (r *Repository) SystemReleaseCheckClaims(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := r.pool.Exec(ctx, `
+		UPDATE link
+		SET last_checked_at = NULL
+		WHERE id = ANY($1)
+		  AND check_interval IS NOT NULL
+		  AND last_checked_at IS NOT NULL
+	`, ids); err != nil {
+		return fmt.Errorf("release check claims: %w", err)
+	}
+	return nil
+}
+
 // PreviewPatch is the optional metadata written with a preview status
 // transition. Nil pointer fields leave the column unchanged (COALESCE),
 // except Error which is always written.

@@ -317,16 +317,21 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	return r.Get(ctx, uid, id)
 }
 
-// assertNoteOwned reports ErrNotFound unless the note belongs to uid.
+// assertNoteOwned reports ErrNotFound unless the note belongs to uid. Takes
+// the parent row lock for the same reason assertLinkOwned does: tag-only
+// PATCHes run no owner-scoped UPDATE of their own, and without this lock a
+// concurrent SetEntityTags collides on the link_tag PK (unmapped 500) or
+// leaves orphan rows behind a racing delete.
 func assertNoteOwned(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int64) error {
-	var exists bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM note WHERE user_id = $1 AND id = $2)`,
-		int64(uid), id).Scan(&exists); err != nil {
-		return fmt.Errorf("check note owner: %w", err)
-	}
-	if !exists {
+	var locked int64
+	err := tx.QueryRow(ctx,
+		`SELECT id FROM note WHERE user_id = $1 AND id = $2 FOR NO KEY UPDATE`,
+		int64(uid), id).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return domainerr.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("check note owner: %w", err)
 	}
 	return nil
 }

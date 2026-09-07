@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,16 +23,18 @@ func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard,
 // ----- Mocks -----
 
 type fakeRepo struct {
-	mu         sync.Mutex
-	links      map[int64]links.Link
-	due        []links.DueLink
-	findLimits []int
-	results    []links.CheckResult
-	getCalls   int
-	findErr    error
-	recErr     error
-	recNoop    bool
-	recDelay   time.Duration
+	mu          sync.Mutex
+	links       map[int64]links.Link
+	due         []links.DueLink
+	findLimits  []int
+	results     []links.CheckResult
+	releasedIDs []int64
+	getCalls    int
+	findErr     error
+	recErr      error
+	recNoop     bool
+	recDelay    time.Duration
+	claimHook   func()
 }
 
 func (r *fakeRepo) SystemGet(_ context.Context, id int64) (links.Link, error) {
@@ -47,9 +50,9 @@ func (r *fakeRepo) SystemGet(_ context.Context, id int64) (links.Link, error) {
 
 func (r *fakeRepo) SystemClaimDueForCheck(_ context.Context, limit int) ([]links.DueLink, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.findLimits = append(r.findLimits, limit)
 	if r.findErr != nil {
+		r.mu.Unlock()
 		return nil, r.findErr
 	}
 	if limit > len(r.due) {
@@ -57,7 +60,19 @@ func (r *fakeRepo) SystemClaimDueForCheck(_ context.Context, limit int) ([]links
 	}
 	out := append([]links.DueLink(nil), r.due[:limit]...)
 	r.due = r.due[limit:]
+	hook := r.claimHook
+	r.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return out, nil
+}
+
+func (r *fakeRepo) SystemReleaseCheckClaims(_ context.Context, ids []int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.releasedIDs = append(r.releasedIDs, ids...)
+	return nil
 }
 
 func (r *fakeRepo) SystemRecordCheckResult(_ context.Context, _ int64, _ time.Time, res links.CheckResult) (bool, error) {
@@ -92,6 +107,12 @@ func (r *fakeRepo) snapshotScanState() ([]links.DueLink, []int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]links.DueLink(nil), r.due...), append([]int(nil), r.findLimits...)
+}
+
+func (r *fakeRepo) snapshotReleased() []int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]int64(nil), r.releasedIDs...)
 }
 
 type fakeFetcher struct {
@@ -417,6 +438,84 @@ func TestProcess_FingerprintFailure_LogsRecordCheckResultError(t *testing.T) {
 	assert.Empty(t, repo.snapshotResults())
 }
 
+// deadlineAwareFetcher honors context deadlines the way the real SSRF-guarded
+// Fetcher does: the page leg consumes the whole budget before succeeding with
+// a body (a slow-but-healthy page), and the feed leg refuses to run under an
+// already-expired context. The pre-existing fakes in this file discard ctx,
+// which is exactly why the shared-deadline defect was untestable.
+type deadlineAwareFetcher struct {
+	pageBody []byte
+	feedBody []byte
+}
+
+func (f *deadlineAwareFetcher) GetRaw(ctx context.Context, pageURL string) ([]byte, string, error) {
+	if pageURL != "https://x.test/feed.xml" {
+		<-ctx.Done()
+		return f.pageBody, "text/html", nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	return f.feedBody, "application/rss+xml", nil
+}
+
+func TestProcess_StarvedPageFetchDoesNotFlipFeedBaseline(t *testing.T) {
+	feedV1 := []byte(`<rss><channel><item><guid>a</guid></item></channel></rss>`)
+	feedV2 := []byte(`<rss><channel><item><guid>a</guid></item><item><guid>b</guid></item></channel></rss>`)
+	page := `<html><head>
+        <link rel="alternate" type="application/rss+xml" href="https://x.test/feed.xml">
+    </head><body><main>hello</main></body></html>`
+	prev := FormatFingerprint(KindFeed, "oldfeedhash")
+
+	starved := &deadlineAwareFetcher{pageBody: []byte(page), feedBody: feedV1}
+	repo := &fakeRepo{
+		links: map[int64]links.Link{
+			1: {
+				ID:              1,
+				URL:             "https://x.test/",
+				Title:           "x",
+				CheckInterval:   ptrStr("daily"),
+				LastFingerprint: &prev,
+			},
+		},
+	}
+	w := New(repo, starved, nil, Options{FetchTimeout: 150 * time.Millisecond}, testLogger())
+
+	w.process(context.Background(), workerJob(1, repo.links[1]))
+
+	rs := repo.snapshotResults()
+	require.Len(t, rs, 1)
+	assert.True(t, strings.HasPrefix(rs[0].Fingerprint, KindFeed+":"),
+		"a page fetch that consumed the whole deadline must not flip the baseline kind, got %q", rs[0].Fingerprint)
+
+	// The change the starved scan sat on must still surface on the next
+	// healthy scan — a content: baseline recorded in between would reset it.
+	healthy := newQueueFetcher([]byte(page), feedV2)
+	stored := rs[0].Fingerprint
+	repo2 := &fakeRepo{
+		links: map[int64]links.Link{
+			1: {
+				ID:              1,
+				URL:             "https://x.test/",
+				Title:           "x",
+				CheckInterval:   ptrStr("daily"),
+				LastFingerprint: &stored,
+			},
+		},
+	}
+	sender := &fakeSender{}
+	w2 := New(repo2, healthy, sender, Options{}, testLogger())
+	w2.Start(context.Background())
+	t.Cleanup(w2.Stop)
+
+	w2.process(context.Background(), workerJob(1, repo2.links[1]))
+
+	rs2 := repo2.snapshotResults()
+	require.Len(t, rs2, 1)
+	assert.True(t, rs2[0].Changed, "a real feed change must still be detected after a starved scan")
+	assert.Eventually(t, func() bool { return len(sender.seen()) == 1 }, time.Second, 10*time.Millisecond)
+}
+
 func TestProcess_KindSwitchDoesNotFirePush(t *testing.T) {
 	// Previous run was content kind, page now declares a feed → kind=feed
 	// after this pass. The kind mismatch must suppress the push (fresh
@@ -521,6 +620,31 @@ func TestScan_FindDueErrorIsTolerated(t *testing.T) {
 	w := New(repo, fakeFetcher{}, nil, Options{ScanInterval: time.Hour}, testLogger())
 	// Must not panic; the next scan retries.
 	w.scan(context.Background())
+}
+
+// A claim (last_checked_at = now()) committed before the job reaches the
+// queue is the only scheduling state changecheck has: if a shutdown lands
+// between claim and enqueue, those links must be handed back, not postponed
+// by a whole interval (7 days for weekly checks).
+func TestScan_ShutdownMidEnqueue_ReleasesUnenqueuedClaims(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	repo := &fakeRepo{due: []links.DueLink{{ID: 41}}}
+	w := New(repo, fakeFetcher{}, nil, Options{ScanInterval: time.Hour}, testLogger())
+	for i := 0; i < cap(w.jobs)-1; i++ {
+		w.jobs <- links.DueLink{ID: int64(1000 + i)}
+	}
+	// Shutdown right after the claim, with the queue refilled underneath the
+	// scan (Stop drains while a scan may still be enqueueing): the send
+	// blocks and ctx.Done is the only ready case.
+	repo.claimHook = func() {
+		cancel()
+		w.jobs <- links.DueLink{ID: 999_999}
+	}
+
+	w.scan(ctx)
+
+	assert.Equal(t, []int64{41}, repo.snapshotReleased(),
+		"the claimed link the shutdown prevented from enqueueing must be released back to due")
 }
 
 func TestScan_DueBatchDoesNotCallSystemGetPerJob(t *testing.T) {
