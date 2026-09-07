@@ -143,6 +143,12 @@ export function CommandPalette({ open, onClose, onOpenFolder, onRevealLink, onEd
   const notesOffset = linksOffset + matches.length
   const foldersOffset = notesOffset + noteMatches.length
 
+  // Derived once so the empty state cannot fall out of sync with the group
+  // list — a new group only extends `hasResults`, never a hand-written
+  // conjunction at the render site.
+  const hasResults =
+    matches.length + noteMatches.length + tagMatches.length + folderMatches.length > 0
+
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(dialogRef, open)
 
@@ -273,58 +279,13 @@ export function CommandPalette({ open, onClose, onOpenFolder, onRevealLink, onEd
                 </span>
               </div>
               {folderMatches.map((f, i) => (
-                <button
+                <PaletteFolderRow
                   key={f.id}
-                  type="button"
                   id={`fx-cmdk-row-${foldersOffset + i}`}
-                  className="fx-cmdk-row fx-cmdk-folder-row"
-                  onClick={() => onOpenFolder?.(f.id)}
-                  aria-label={t('command_palette.open_folder_aria', { name: f.name })}
-                  data-tooltip={f.path.length > 1 ? f.path.join(' / ') : f.name}
-                >
-                  {f.depth > 0 && (
-                    <span className="fx-cmdk-folder-indent" aria-hidden="true">
-                      {Array.from({ length: f.depth }).map((_, i) => (
-                        <span
-                          key={i}
-                          className={
-                            'fx-cmdk-folder-guide' +
-                            (i === f.depth - 1 ? ' fx-cmdk-folder-guide-last' : '')
-                          }
-                        />
-                      ))}
-                    </span>
-                  )}
-                  <span className="fx-cmdk-folder-icon" style={{ color: f.color }}>
-                    <Icon d={I.folder} size={14} />
-                  </span>
-                  <span className="fx-cmdk-folder-counts" aria-hidden="true">
-                    <span className="fx-cmdk-folder-count">
-                      {f.link_count}
-                      <span className="fx-cmdk-folder-unit">L</span>
-                    </span>
-                    {f.folder_count > 0 && (
-                      <span className="fx-cmdk-folder-count">
-                        {f.folder_count}
-                        <span className="fx-cmdk-folder-unit">P</span>
-                      </span>
-                    )}
-                  </span>
-                  <span className="fx-cmdk-folder-name">
-                    {f.has_password && (
-                      <span
-                        className="fx-folder-lock-icon"
-                        aria-hidden="true"
-                        data-tooltip={t('folder_card.locked_tooltip')}
-                        data-tooltip-side="top"
-                      >
-                        <Icon d={I.lock} size={12} />
-                      </span>
-                    )}
-                    {f.name}
-                  </span>
-                  <span className="fx-cmdk-hint">{t('command_palette.folder_hint')}</span>
-                </button>
+                  folder={f}
+                  selected={highlight === foldersOffset + i}
+                  onOpenFolder={onOpenFolder}
+                />
               ))}
             </div>
           )}
@@ -347,7 +308,7 @@ export function CommandPalette({ open, onClose, onOpenFolder, onRevealLink, onEd
             </div>
           )}
 
-          {debounced && matches.length === 0 && noteMatches.length === 0 && tagMatches.length === 0 && folderMatches.length === 0 && (
+          {debounced && !hasResults && (
             <div style={{ padding: 24, textAlign: 'center', color: 'var(--fx-ink-4)', fontSize: 13 }}>
               {t('command_palette.no_results')}
             </div>
@@ -371,8 +332,7 @@ export function CommandPalette({ open, onClose, onOpenFolder, onRevealLink, onEd
   )
 }
 
-function PaletteLinkRow({
-  link,
+function PaletteLinkRow({  link,
   id,
   selected,
   hint,
@@ -454,5 +414,77 @@ function PaletteLinkRow({
         )}
       </div>
     </div>
+  )
+}
+
+// The folder row, extracted like PaletteLinkRow: depth guides, lock badge,
+// L/P counts. Own component so the palette body stays a flat list of
+// groups and the row is testable in isolation as it grows.
+function PaletteFolderRow({
+  folder: f,
+  id,
+  selected,
+  onOpenFolder,
+}: {
+  folder: ReturnType<typeof searchFolderTree>[number]
+  id?: string
+  selected?: boolean
+  onOpenFolder?: (id: number) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <button
+      type="button"
+      id={id}
+      className={
+        'fx-cmdk-row fx-cmdk-folder-row' + (selected ? ' fx-cmdk-row-sel' : '')
+      }
+      onClick={() => onOpenFolder?.(f.id)}
+      aria-label={t('command_palette.open_folder_aria', { name: f.name })}
+      data-tooltip={f.path.length > 1 ? f.path.join(' / ') : f.name}
+    >
+      {f.depth > 0 && (
+        <span className="fx-cmdk-folder-indent" aria-hidden="true">
+          {Array.from({ length: f.depth }).map((_, i) => (
+            <span
+              key={i}
+              className={
+                'fx-cmdk-folder-guide' +
+                (i === f.depth - 1 ? ' fx-cmdk-folder-guide-last' : '')
+              }
+            />
+          ))}
+        </span>
+      )}
+      <span className="fx-cmdk-folder-icon" style={{ color: f.color }}>
+        <Icon d={I.folder} size={14} />
+      </span>
+      <span className="fx-cmdk-folder-counts" aria-hidden="true">
+        <span className="fx-cmdk-folder-count">
+          {f.link_count}
+          <span className="fx-cmdk-folder-unit">L</span>
+        </span>
+        {f.folder_count > 0 && (
+          <span className="fx-cmdk-folder-count">
+            {f.folder_count}
+            <span className="fx-cmdk-folder-unit">P</span>
+          </span>
+        )}
+      </span>
+      <span className="fx-cmdk-folder-name">
+        {f.has_password && (
+          <span
+            className="fx-folder-lock-icon"
+            aria-hidden="true"
+            data-tooltip={t('folder_card.locked_tooltip')}
+            data-tooltip-side="top"
+          >
+            <Icon d={I.lock} size={12} />
+          </span>
+        )}
+        {f.name}
+      </span>
+      <span className="fx-cmdk-hint">{t('command_palette.folder_hint')}</span>
+    </button>
   )
 }

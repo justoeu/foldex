@@ -233,4 +233,18 @@ describe('CommandPalette keyboard activation', () => {
     await user.keyboard('{Enter}')
     expect(openSpy).not.toHaveBeenCalled()
   })
+
+  // CC-DAE-005: the empty state used to be a five-term conjunction that
+  // had to grow with every new group. A tag-only match is results — this
+  // is the extension-regression the derived hasResults guard makes
+  // structural.
+  it('a query matching only a tag is results, not "no matches"', async () => {
+    state.tags.push({ id: 1, name: 'jira', color: '#1f6feb', icon: null })
+    renderPalette(<CommandPalette open onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    const input = await screen.findByPlaceholderText(/Search by/i)
+    await user.type(input, 'jira')
+    await waitFor(() => expect(screen.getByText(/filter by/i)).toBeInTheDocument())
+    expect(screen.queryByText(/no matches/i)).not.toBeInTheDocument()
+  })
 })
