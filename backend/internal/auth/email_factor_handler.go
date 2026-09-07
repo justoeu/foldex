@@ -69,7 +69,6 @@ func (h *Handler) StartEmailFactor(w http.ResponseWriter, r *http.Request) {
 		h.codeMAC.EmailOTPDigest(uid, OTPPurposeEnrollEmail2FA, nil, code),
 		ttl, h.otpCooldown(r.Context()), draft)
 	switch {
-	case err == nil:
 	case errors.Is(err, ErrFactorAlreadyConfirmed):
 		httperr.Write(w, httperr.New(http.StatusConflict, "email_factor_already_enabled",
 			"e-mail is already enrolled as a second factor; disable it first"))
@@ -80,15 +79,8 @@ func (h *Handler) StartEmailFactor(w http.ResponseWriter, r *http.Request) {
 		// cooldown as an error would invite a retry loop on a code already sent.
 		w.WriteHeader(http.StatusAccepted)
 		return
-	case errors.Is(err, ErrChallengeInvalid):
-		h.writeChallengeError(w, err)
-		return
-	case errors.Is(err, ErrSessionInvalid):
-		h.writeSessionInvalid(w)
-		return
-	default:
-		h.logger.Error("email factor start", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
+	}
+	if h.writeFactorTxnError(w, err, "email factor start") {
 		return
 	}
 	httperr.JSON(w, http.StatusOK, map[string]any{
@@ -195,7 +187,6 @@ func (h *Handler) ConfirmEmailFactor(w http.ResponseWriter, r *http.Request) {
 	}, h.codeMAC.EmailOTPDigest(uid, OTPPurposeEnrollEmail2FA, nil, normalizeOTPCode(in.Code)))
 	settleErr = err
 	switch {
-	case err == nil:
 	case errors.Is(err, ErrBadCredentials):
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code",
 			"that code is not valid"))
@@ -204,15 +195,8 @@ func (h *Handler) ConfirmEmailFactor(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "no_enrollment",
 			"start an enrollment first"))
 		return
-	case errors.Is(err, ErrChallengeInvalid):
-		h.writeChallengeError(w, err)
-		return
-	case errors.Is(err, ErrSessionInvalid):
-		h.writeSessionInvalid(w)
-		return
-	default:
-		h.logger.Error("email factor confirm", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
+	}
+	if h.writeFactorTxnError(w, err, "email factor confirm") {
 		return
 	}
 
@@ -285,17 +269,9 @@ func (h *Handler) SendStepUpEmailOTP(w http.ResponseWriter, r *http.Request) {
 		// and reporting that as an error invites a retry loop against a message
 		// the user simply has not read yet.
 		w.WriteHeader(http.StatusAccepted)
-	case errors.Is(err, ErrNoPendingFactor):
-		httperr.Write(w, httperr.New(http.StatusConflict, "email_factor_not_enabled",
-			"e-mail is not enrolled as a second factor"))
-	case errors.Is(err, ErrChallengeInvalid):
-		h.writeChallengeError(w, err)
-	case errors.Is(err, ErrSessionInvalid):
-		h.writeSessionInvalid(w)
-	default:
-		h.logger.Error("step-up otp", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
+		return
 	}
+	h.writeFactorTxnError(w, err, "step-up otp")
 }
 
 type emailFactorDisableInput struct {
@@ -366,16 +342,8 @@ func (h *Handler) DisableEmailFactor(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, ErrTOTPReplay), errors.Is(err, ErrBadCredentials):
 			httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code",
 				"that code is not valid"))
-		case errors.Is(err, ErrNoPendingFactor):
-			httperr.Write(w, httperr.New(http.StatusConflict, "email_factor_not_enabled",
-				"e-mail is not enrolled as a second factor"))
-		case errors.Is(err, ErrChallengeInvalid):
-			h.writeChallengeError(w, err)
-		case errors.Is(err, ErrSessionInvalid):
-			h.writeSessionInvalid(w)
 		default:
-			h.logger.Error("email factor disable", "err", err)
-			httperr.Write(w, httperr.ErrInternal)
+			h.writeFactorTxnError(w, err, "email factor disable")
 		}
 		return
 	}

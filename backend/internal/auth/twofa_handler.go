@@ -994,6 +994,30 @@ func (h *Handler) writeSessionInvalid(w http.ResponseWriter) {
 	httperr.Write(w, httperr.New(http.StatusUnauthorized, "session_expired", "session expired"))
 }
 
+// writeFactorTxnError answers the transaction outcomes every factor endpoint
+// shares: a dead challenge, a dead session, a factor that was never enrolled,
+// or an unexpected failure. Returns false only when err is nil, so endpoints
+// keep their endpoint-specific cases ahead of the call. One mapping for all
+// enroll/confirm/send/disable surfaces is what keeps their response semantics
+// in lockstep — security-sensitive 2FA endpoints must not drift per handler.
+func (h *Handler) writeFactorTxnError(w http.ResponseWriter, err error, logCtx string) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, ErrChallengeInvalid):
+		h.writeChallengeError(w, err)
+	case errors.Is(err, ErrSessionInvalid):
+		h.writeSessionInvalid(w)
+	case errors.Is(err, ErrNoPendingFactor):
+		httperr.Write(w, httperr.New(http.StatusConflict, "email_factor_not_enabled",
+			"e-mail is not enrolled as a second factor"))
+	default:
+		h.logger.Error(logCtx, "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+	}
+	return true
+}
+
 // enrollmentPrincipal resolves who is enrolling, demanding a password from a
 // session-authenticated caller.
 //
