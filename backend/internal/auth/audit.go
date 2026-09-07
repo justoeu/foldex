@@ -187,11 +187,9 @@ const (
 // NormalizeIP is normalizeAuditIP for callers outside this package — the
 // enforcement middleware and the blocklist share it so a blocked address and a
 // recorded one cannot be two spellings that never compare equal.
-func NormalizeIP(raw string) string { return normalizeAuditIP(raw) }
+func NormalizeIP(raw string) string { return ipblock.Normalize(raw) }
 
-func normalizeAuditIP(raw string) string {
-	return ipblock.Normalize(raw)
-}
+func normalizeAuditIP(raw string) string { return ipblock.Normalize(raw) }
 
 func truncateTo(s string, max int) string {
 	if len(s) <= max {
