@@ -9,6 +9,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParseHead_EmptyTitleDoesNotDropFollowingOGImage(t *testing.T) {
+	for _, raw := range []string{
+		`<title></title><meta property="og:image" content="https://x/y.jpg">`,
+		`<html><title></title><meta property="og:image" content="https://x/y.jpg">`,
+	} {
+		got := parseHead(strings.NewReader(raw))
+		assert.Equal(t, "https://x/y.jpg", got.OGImageURL, raw)
+	}
+}
+
 func TestParseHead_TitleAndOG(t *testing.T) {
 	html := `<!DOCTYPE html>
 <html>

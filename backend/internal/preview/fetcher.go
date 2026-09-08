@@ -181,6 +181,7 @@ func parseHead(r io.Reader) Result {
 	out := Result{}
 	depth := 0
 	inHead := false
+	inTitle := false
 loop:
 	for {
 		tt := z.Next()
@@ -188,38 +189,59 @@ loop:
 		case html.ErrorToken:
 			break loop
 		case html.StartTagToken, html.SelfClosingTagToken:
-			tok := z.Token()
-			name := tok.Data
-			switch name {
-			case "head":
-				inHead = true
-			case "body":
+			if handleStartTag(z, tt, &out, &depth, &inHead, &inTitle) {
 				break loop
-			case "title":
-				if tt == html.StartTagToken {
-					if z.Next() == html.TextToken {
-						out.Title = strings.TrimSpace(z.Token().Data)
-					}
-				}
-			case "meta":
-				if inHead || depth <= 1 {
-					applyMetaTag(&out, tok)
-				}
-			case "link":
-				applyLinkTag(&out, tok)
-			}
-			if tt == html.StartTagToken && !isVoid(name) {
-				depth++
 			}
 		case html.EndTagToken:
-			tok := z.Token()
-			if tok.Data == "head" {
+			if handleEndTag(z, &depth, &inTitle) {
 				break loop
 			}
-			depth--
+		case html.TextToken:
+			if inTitle && out.Title == "" {
+				out.Title = strings.TrimSpace(string(z.Text()))
+			}
 		}
 	}
 	return out
+}
+
+func handleStartTag(z *html.Tokenizer, tt html.TokenType, out *Result, depth *int, inHead, inTitle *bool) bool {
+	tok := z.Token()
+	name := tok.Data
+	switch name {
+	case "head":
+		*inHead = true
+	case "body":
+		return true
+	case "title":
+		if tt == html.StartTagToken {
+			*inTitle = true
+		}
+	case "meta":
+		if *inHead || *depth <= 1 {
+			applyMetaTag(out, tok)
+		}
+	case "link":
+		applyLinkTag(out, tok)
+	}
+	if tt == html.StartTagToken && !isVoid(name) {
+		*depth++
+	}
+	return false
+}
+
+func handleEndTag(z *html.Tokenizer, depth *int, inTitle *bool) bool {
+	tok := z.Token()
+	switch tok.Data {
+	case "head":
+		return true
+	case "title":
+		*inTitle = false
+	}
+	if *depth > 0 {
+		*depth--
+	}
+	return false
 }
 
 func applyMetaTag(out *Result, tok html.Token) {
