@@ -61,6 +61,7 @@ func TestCheckRemoteAddrBlocksRebinding(t *testing.T) {
 				return
 			}
 			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrSSRF)
 			assert.Contains(t, err.Error(), tt.want)
 		})
 	}
@@ -86,6 +87,7 @@ func TestSafeDialerBlocksResolvedTargetsBeforeDial(t *testing.T) {
 				_ = conn.Close()
 			}
 			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrSSRF)
 			assert.Contains(t, err.Error(), tt.want)
 		})
 	}
