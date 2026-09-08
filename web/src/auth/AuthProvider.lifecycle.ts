@@ -90,10 +90,6 @@ export function ownerIdOf(session: SessionState): number | null {
   return session.status === 'authenticated' ? session.user.id : null
 }
 
-export function isCurrentGeneration(request: number, current: number): boolean {
-  return request === current
-}
-
 export type ApplySessionPlan = {
   nextId: number | null
   clearCache: boolean
@@ -280,13 +276,13 @@ export function useSessionLifecycle({
     const request = ++reloadRequest.current
     try {
       const next = toState(await fetchMe())
-      if (isCurrentGeneration(request, reloadRequest.current)) applySession(next, writeOwnerMarker)
+      if (request === reloadRequest.current) applySession(next, writeOwnerMarker)
     } catch {
       // /api/auth/me is contractually always 200, so a throw means the backend
       // is unreachable rather than the caller being signed out. A cold load
       // may show the login screen, but only an authoritative response may
       // discard tenant data or replace a session that was already usable.
-      if (isCurrentGeneration(request, reloadRequest.current)) {
+      if (request === reloadRequest.current) {
         setSession((current) => {
           const fallback = unreachableFallback(current)
           return fallback === 'keep' ? current : fallback
