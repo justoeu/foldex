@@ -206,7 +206,7 @@ func (h *Handler) ConfirmEmailFactor(w http.ResponseWriter, r *http.Request) {
 	if challenge != nil {
 		h.cookies.ClearPreAuth(w)
 		h.cookies.SetSession(w, tok)
-		payload := h.authenticatedPayload(user, tok.CSRF)
+		payload := h.authenticatedPayload(r.Context(), user, tok.CSRF)
 		payload.RecoveryCodes = codes
 		httperr.JSON(w, http.StatusOK, payload)
 		return
@@ -318,18 +318,14 @@ func (h *Handler) DisableEmailFactor(w http.ResponseWriter, r *http.Request) {
 			"administrators must keep two-factor authentication enabled"))
 		return
 	}
-	proof, key, ok := h.stepUpSecondFactor(w, r, p.UserID, user, in.Code)
-	if !ok {
+	var proof SecondFactorProof
+	if !h.withStepUp(w, r, p.UserID, user, in.Code, func(p2 SecondFactorProof) error {
+		proof = p2
+		err = h.repo.DisableEmailFactor(r.Context(), p.UserID, p.SessionID, tokenVersion, proof)
+		return err
+	}) {
 		return
 	}
-	// Deferred for the same reason as ConfirmEmailFactor above, and the key is
-	// SHARED with every other step-up, so one unsettled exit here locks the
-	// account out of disabling TOTP, regenerating codes and setting a password
-	// too.
-	disableErr := errProofNotAttempted
-	defer func() { h.settleStepUp(key, disableErr) }()
-	err = h.repo.DisableEmailFactor(r.Context(), p.UserID, p.SessionID, tokenVersion, proof)
-	disableErr = err
 	if err != nil {
 		switch {
 		// The proof is verified before the transaction and SPENT inside it, so

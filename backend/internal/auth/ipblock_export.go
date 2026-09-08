@@ -26,6 +26,8 @@ func ValidateBlockIP(candidate, callerIP string, isTrustedProxy func(string) boo
 	return ipblock.ValidateBlockIP(candidate, callerIP, isTrustedProxy)
 }
 
+func NormalizeIP(raw string) string { return ipblock.Normalize(raw) }
+
 func NewBlocklist(load func(context.Context) ([]string, error)) *ipblock.Blocklist {
 	return ipblock.NewBlocklist(load)
 }

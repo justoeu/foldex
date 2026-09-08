@@ -191,12 +191,18 @@ func (p Policy) Validate() error {
 	return nil
 }
 
-// validDomain accepts a bare registrable name — no scheme, no path, no wildcard.
+func validDomain(d string) bool {
+	return ValidHostname(strings.ToLower(d))
+}
+
+// ValidHostname accepts a bare registrable name — no scheme, no path, no wildcard.
+// Callers fold with ToLower first; the allowlist is lowercase letters, digits,
+// hyphen and dots.
 //
 // A wildcard is refused rather than interpreted: "*.example.com" reads as if it
 // excluded example.com itself, and guessing which the owner meant is how an
 // allowlist ends up wider than it looks.
-func validDomain(d string) bool {
+func ValidHostname(d string) bool {
 	if d == "" || len(d) > maxDomainLen {
 		return false
 	}
@@ -218,7 +224,6 @@ func validDomain(d string) bool {
 		return false
 	}
 	for _, label := range strings.Split(d, ".") {
-		// A label may not be empty, nor start or end with a hyphen (RFC 1035).
 		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
 			return false
 		}
@@ -244,7 +249,7 @@ func (p Policy) AllowsEmail(email string) bool {
 	// "example.com" would also accept "notexample.com".
 	domain := strings.ToLower(email[at+1:])
 	for _, d := range p.GoogleAllowedDomains {
-		if domain == d {
+		if domain == strings.ToLower(d) {
 			return true
 		}
 	}

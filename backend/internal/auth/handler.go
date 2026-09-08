@@ -21,6 +21,7 @@ import (
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/pwhash"
 	"foldex/internal/pkg/secrets"
+	"foldex/internal/policy"
 )
 
 // Password policy. The minimum matches the master recovery password (ADR-29) so
@@ -743,7 +744,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, res.Tokens.CSRF))
+	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(r.Context(), user, res.Tokens.CSRF))
 }
 
 // notifyReuse tells the owner their sessions were killed.
@@ -777,7 +778,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		// with no response body of its own.
 		if ch, err := h.repo.ResolveChallenge(r.Context(), cookieValue(r, CookiePreAuth)); err == nil {
 			if u, err := h.repo.GetUser(r.Context(), ch.UserID); err == nil {
-				payload, payloadErr := h.pendingPayload(u, ch.Purpose, ch.MailboxAlreadyProven)
+				payload, payloadErr := h.pendingPayload(r.Context(), u, ch.Purpose, ch.MailboxAlreadyProven)
 				if payloadErr == nil {
 					httperr.JSON(w, http.StatusOK, payload)
 					return
@@ -813,15 +814,15 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	// not a new one — /me is a GET and must not rotate credentials. The SPA
 	// reads it from the cookie; this field exists so a client that cannot read
 	// cookies (tests, curl) can still drive the API.
-	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, cookieValue(r, CookieCSRF)))
+	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(r.Context(), user, cookieValue(r, CookieCSRF)))
 }
 
-func (h *Handler) authenticatedPayload(u User, csrf string) authenticatedAuthResponse {
+func (h *Handler) authenticatedPayload(ctx context.Context, u User, csrf string) authenticatedAuthResponse {
 	return authenticatedAuthResponse{
 		Status:      statusAuthenticated,
 		User:        u,
 		CSRFToken:   csrf,
-		Features:    h.liveFeatures(context.Background()),
+		Features:    h.liveFeatures(ctx),
 		Permissions: h.permissionsFor(u.Role),
 	}
 }
@@ -937,7 +938,7 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, cookieValue(r, CookieCSRF)))
+	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(r.Context(), user, cookieValue(r, CookieCSRF)))
 }
 
 func (h *Handler) Sessions(w http.ResponseWriter, r *http.Request) {
@@ -1121,7 +1122,7 @@ func (h *Handler) issueAndRespond(w http.ResponseWriter, r *http.Request, user U
 	}.WithRequest(r)); err != nil {
 		h.logger.Error("audit login", "err", err)
 	}
-	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, tok.CSRF))
+	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(r.Context(), user, tok.CSRF))
 }
 
 // errInvalidCredentials is the single failure shape the login path emits.
@@ -1266,30 +1267,8 @@ func validateEmail(email string) error {
 	return nil
 }
 
-// validEmailDomain is the same hostname allowlist as policy.validDomain:
-// letters, digits, hyphen, dots; no scheme, slash, colon, or query. A-Z is
-// accepted because addresses are not folded before this check.
 func validEmailDomain(d string) bool {
-	if d == "" || len(d) > 253 {
-		return false
-	}
-	for i := 0; i < len(d); i++ {
-		c := d[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '.':
-		default:
-			return false
-		}
-	}
-	if strings.HasPrefix(d, ".") || strings.HasSuffix(d, ".") || !strings.Contains(d, ".") {
-		return false
-	}
-	for _, label := range strings.Split(d, ".") {
-		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
-			return false
-		}
-	}
-	return true
+	return policy.ValidHostname(strings.ToLower(d))
 }
 
 // validLocalPart implements RFC 5321's dot-string: atoms of `atext` joined by

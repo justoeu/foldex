@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,7 +41,7 @@ func TestPermissionsFor_LiveGrantsOverrideTheCompiledRole(t *testing.T) {
 
 func TestAuthenticatedPayload_AlwaysEmitsPermissions(t *testing.T) {
 	h := &Handler{}
-	payload := h.authenticatedPayload(User{Role: authctx.RoleViewer}, "csrf")
+	payload := h.authenticatedPayload(context.Background(), User{Role: authctx.RoleViewer}, "csrf")
 	require.NotNil(t, payload.Permissions)
 	assert.Contains(t, payload.Permissions, authctx.PermContentRead)
 	assert.NotContains(t, payload.Permissions, authctx.PermContentWrite)

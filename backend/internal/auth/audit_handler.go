@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/auth/ipblock"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 )
@@ -339,7 +340,7 @@ func (h *AdminHandler) BlockIP(w http.ResponseWriter, r *http.Request) {
 // UnblockIP removes a block. Idempotent: 204 whether or not a row was there,
 // because "this address is not blocked" is the state the caller asked for.
 func (h *AdminHandler) UnblockIP(w http.ResponseWriter, r *http.Request) {
-	ip := NormalizeIP(chi.URLParam(r, "ip"))
+	ip := ipblock.Normalize(chi.URLParam(r, "ip"))
 	if ip == "" {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_ip", "not an ip address"))
 		return
@@ -376,7 +377,7 @@ func blockError(err error) error {
 }
 
 // callerIP is the address THIS request arrived from, for the self-block rail.
-func (h *AdminHandler) callerIP(r *http.Request) string { return NormalizeIP(r.RemoteAddr) }
+func (h *AdminHandler) callerIP(r *http.Request) string { return ipblock.Normalize(r.RemoteAddr) }
 
 // ListOwnActivity serves the signed-in account its own content activity.
 //
@@ -414,8 +415,9 @@ func (h *Handler) ListOwnActivity(w http.ResponseWriter, r *http.Request) {
 // filters this binary can produce instead of a list copied into the client that
 // drifts the first time one is added.
 func auditActionsPayload() []map[string]string {
-	out := make([]map[string]string, 0, len(auditActionOrder))
-	for _, a := range auditActionOrder {
+	actions := AuditActions()
+	out := make([]map[string]string, 0, len(actions))
+	for _, a := range actions {
 		out = append(out, map[string]string{
 			"action":   a,
 			"category": AuditCategory(a),

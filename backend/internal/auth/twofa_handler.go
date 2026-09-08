@@ -8,6 +8,7 @@ import (
 
 	"github.com/pquerna/otp"
 
+	"foldex/internal/auth/twofa"
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
@@ -97,22 +98,8 @@ const (
 // twice per request, and resolving inside would make that two round-trips for
 // one answer that cannot change between them.
 func (h *Handler) mayRemoveFactor(totpOnly bool, u User, removing factorKind) bool {
-	if !h.require2FAForAdmins || !u.Role.IsAdmin() {
-		return true
-	}
-	if totpOnly {
-		// Only an authenticator satisfies the policy, so it is never the factor
-		// that may go — and the e-mail factor never counted, so removing it
-		// changes nothing the gate cares about.
-		return removing != factorTOTP
-	}
-	// Either may go, provided the other one stays. Reading the CURRENT state is
-	// what makes this correct for an admin holding both: refusing them outright
-	// would treat "has two factors" as stricter than "has one".
-	if removing == factorTOTP {
-		return u.Email2FAEnabled
-	}
-	return u.TOTPEnabled
+	return twofa.MayRemove(h.require2FAForAdmins, totpOnly, u.Role.IsAdmin(),
+		u.Email2FAEnabled, u.TOTPEnabled, twofa.Factor(removing))
 }
 
 // emailFactorAvailable reports whether a mailed code may serve as the second
@@ -190,7 +177,7 @@ var errInvalidChallengePurpose = errors.New("auth: invalid challenge purpose")
 // creates the challenge, and /me — which reports it on a cold boot so a reload
 // during the code step, or the fresh page load an OAuth redirect produces,
 // lands back on the code screen instead of on the login form.
-func (h *Handler) pendingPayload(u User, purpose ChallengePurpose, mailboxAlreadyProven bool) (authWireResponse, error) {
+func (h *Handler) pendingPayload(ctx context.Context, u User, purpose ChallengePurpose, mailboxAlreadyProven bool) (authWireResponse, error) {
 	// The address is masked because a successful credential-stuffing attempt
 	// must not receive the confirmed full address. The raw pre-auth token stays
 	// exclusively in its httpOnly cookie.
@@ -203,13 +190,13 @@ func (h *Handler) pendingPayload(u User, purpose ChallengePurpose, mailboxAlread
 		return twoFactorAuthResponse{
 			Status: statusTwoFactorRequired, Purpose: purpose, Email: MaskEmail(u.Email),
 			Methods: methods, ExpiresIn: int(challengeTTL.Seconds()),
-			MaxAttempts: maxChallengeAttempts, Features: h.liveFeatures(context.Background()),
+			MaxAttempts: maxChallengeAttempts, Features: h.liveFeatures(ctx),
 		}, nil
 	case PurposeEnroll2FA:
 		return enrollmentAuthResponse{
 			Status: statusTwoFactorRequired, Purpose: purpose, Email: MaskEmail(u.Email),
 			Methods: []string{}, ExpiresIn: int(challengeTTL.Seconds()),
-			MaxAttempts: maxChallengeAttempts, Features: h.liveFeatures(context.Background()),
+			MaxAttempts: maxChallengeAttempts, Features: h.liveFeatures(ctx),
 			Reason: "admin_enrollment_required",
 		}, nil
 	case PurposeConvertGoogle:
@@ -219,7 +206,7 @@ func (h *Handler) pendingPayload(u User, purpose ChallengePurpose, mailboxAlread
 		return conversionAuthResponse{
 			Status: statusConvertPasswordAccount, Purpose: purpose, Email: MaskEmail(u.Email),
 			Methods: []string{}, ExpiresIn: int(challengeTTL.Seconds()),
-			MaxAttempts: maxChallengeAttempts, Features: h.liveFeatures(context.Background()),
+			MaxAttempts: maxChallengeAttempts, Features: h.liveFeatures(ctx),
 		}, nil
 	default:
 		return nil, errInvalidChallengePurpose
@@ -228,7 +215,7 @@ func (h *Handler) pendingPayload(u User, purpose ChallengePurpose, mailboxAlread
 
 // startChallenge mints the pre-auth cookie and writes the pending payload.
 func (h *Handler) startChallenge(w http.ResponseWriter, r *http.Request, u User, purpose ChallengePurpose, mailboxAlreadyProven bool) {
-	payload, err := h.pendingPayload(u, purpose, mailboxAlreadyProven)
+	payload, err := h.pendingPayload(r.Context(), u, purpose, mailboxAlreadyProven)
 	if err != nil {
 		h.logger.Error("build challenge response", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -333,7 +320,7 @@ func (h *Handler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 	}
 	h.cookies.ClearPreAuth(w)
 	h.cookies.SetSession(w, tok)
-	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(user, tok.CSRF))
+	httperr.JSON(w, http.StatusOK, h.authenticatedPayload(r.Context(), user, tok.CSRF))
 }
 
 // challengeProof prepares every proof the submitted shape can represent.
@@ -669,7 +656,7 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 	if challenge != nil {
 		h.cookies.ClearPreAuth(w)
 		h.cookies.SetSession(w, tok)
-		payload := h.authenticatedPayload(user, tok.CSRF)
+		payload := h.authenticatedPayload(r.Context(), user, tok.CSRF)
 		payload.RecoveryCodes = codes
 		httperr.JSON(w, http.StatusOK, payload)
 		return
@@ -706,14 +693,14 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 			"administrators must keep two-factor authentication enabled"))
 		return
 	}
-	proof, stepUpKey, ok := h.stepUpSecondFactor(w, r, p.UserID, user, in.Code)
-	if !ok {
+	if !h.withStepUp(w, r, p.UserID, user, in.Code, func(proof SecondFactorProof) error {
+		err = h.repo.DisableTOTP(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, proof)
+		if err == nil {
+			h.notifyIfRecovery(r, user, proof)
+		}
+		return err
+	}) {
 		return
-	}
-	err = h.repo.DisableTOTP(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, proof)
-	h.settleStepUp(stepUpKey, err)
-	if err == nil {
-		h.notifyIfRecovery(r, user, proof)
 	}
 	if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
@@ -759,25 +746,21 @@ func (h *Handler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	proof, stepUpKey, ok := h.stepUpSecondFactor(w, r, p.UserID, user, in.Code)
-	if !ok {
+	var codes []string
+	if !h.withStepUp(w, r, p.UserID, user, in.Code, func(proof SecondFactorProof) error {
+		var hashes [][]byte
+		codes, hashes, err = h.newRecoveryCodeSet(p.UserID)
+		if err != nil {
+			return err
+		}
+		err = h.repo.RegenerateRecoveryCodes(r.Context(), p.UserID, p.SessionID, user.TokenVersion,
+			in.Password, proof, hashes)
+		if err == nil {
+			h.notifyIfRecovery(r, user, proof)
+		}
+		return err
+	}) {
 		return
-	}
-	codes, hashes, err := h.newRecoveryCodeSet(p.UserID)
-	if err != nil {
-		h.stepUpUser.Release(stepUpKey)
-		h.logger.Error("regenerate recovery codes", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-	err = h.repo.RegenerateRecoveryCodes(r.Context(), p.UserID, p.SessionID, user.TokenVersion,
-		in.Password, proof, hashes)
-	h.settleStepUp(stepUpKey, err)
-	if err == nil {
-		// Someone holding ONE printed code can replace the whole sheet, which
-		// locks the real owner out of every other code they were keeping. That
-		// is precisely the event only the owner can judge, and only if told.
-		h.notifyIfRecovery(r, user, proof)
 	}
 	if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
@@ -874,6 +857,36 @@ func (h *Handler) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 // operation that never happened. That property is stated in CLAUDE.md §4 for
 // TOTP and matters at least as much for a recovery code, which is a lockout
 // credential rather than a 30-second counter.
+func (h *Handler) tryStepUpProof(ctx context.Context, uid authctx.UserID, user User, code string) (SecondFactorProof, error) {
+	if digits, numeric := numericOTP(code); numeric {
+		if h.cipher != nil {
+			if p := h.verifyTOTPProof(ctx, uid, digits); p != nil {
+				return SecondFactorProof{Method: MethodTOTP, TOTP: p}, nil
+			}
+		}
+		if user.Email2FAEnabled && h.codeMAC != nil {
+			digest := h.codeMAC.EmailOTPDigest(uid, OTPPurposeStepUp2FA, nil, digits)
+			live, err := h.repo.StepUpEmailOTPIsLive(ctx, uid, digest)
+			if err != nil {
+				h.logger.Error("step-up mailed code lookup", "err", err)
+			}
+			if err == nil && live {
+				return SecondFactorProof{Method: MethodEmailOTP, Digest: digest}, nil
+			}
+		}
+	} else if normalized := normalizeRecoveryCode(code); len(normalized) == recoveryCodeChars && h.codeMAC != nil {
+		digest := h.codeMAC.RecoveryCodeDigest(uid, normalized)
+		live, err := h.repo.RecoveryCodeIsLive(ctx, uid, digest)
+		if err != nil {
+			h.logger.Error("step-up recovery code lookup", "err", err)
+		}
+		if err == nil && live {
+			return SecondFactorProof{Method: MethodRecovery, Digest: digest}, nil
+		}
+	}
+	return SecondFactorProof{}, ErrBadCredentials
+}
+
 func (h *Handler) stepUpSecondFactor(w http.ResponseWriter, r *http.Request,
 	uid authctx.UserID, user User, code string) (SecondFactorProof, string, bool) {
 
@@ -883,51 +896,29 @@ func (h *Handler) stepUpSecondFactor(w http.ResponseWriter, r *http.Request,
 		writeRateLimited(w, until)
 		return SecondFactorProof{}, "", false
 	}
-
-	var proof SecondFactorProof
-	if digits, numeric := numericOTP(code); numeric {
-		if h.cipher != nil {
-			if p := h.verifyTOTPProof(r.Context(), uid, digits); p != nil {
-				proof = SecondFactorProof{Method: MethodTOTP, TOTP: p}
-			}
-		}
-		if proof.Method == "" && user.Email2FAEnabled && h.codeMAC != nil {
-			// Verified by presence rather than by spending: an unexpired,
-			// unconsumed row for this exact digest is the proof, and the
-			// conditional UPDATE that spends it runs in the caller's transaction.
-			digest := h.codeMAC.EmailOTPDigest(uid, OTPPurposeStepUp2FA, nil, digits)
-			live, err := h.repo.StepUpEmailOTPIsLive(r.Context(), uid, digest)
-			if err != nil {
-				// The CLIENT still gets the uniform refusal below — telling a
-				// database blip apart from a wrong code would be an oracle. But
-				// the SERVER must not stay silent: without this, a Postgres
-				// hiccup turns a valid code into "invalid" with nothing in the
-				// log to explain the support ticket that follows.
-				h.logger.Error("step-up mailed code lookup", "err", err)
-			}
-			if err == nil && live {
-				proof = SecondFactorProof{Method: MethodEmailOTP, Digest: digest}
-			}
-		}
-	} else if normalized := normalizeRecoveryCode(code); len(normalized) == recoveryCodeChars && h.codeMAC != nil {
-		digest := h.codeMAC.RecoveryCodeDigest(uid, normalized)
-		live, err := h.repo.RecoveryCodeIsLive(r.Context(), uid, digest)
-		if err != nil {
-			// Same reasoning, and it matters more here: a recovery code is a
-			// lockout credential, so a silent failure looks to the user like the
-			// sheet they carefully saved has stopped working.
-			h.logger.Error("step-up recovery code lookup", "err", err)
-		}
-		if err == nil && live {
-			proof = SecondFactorProof{Method: MethodRecovery, Digest: digest}
-		}
-	}
-	if proof.Method == "" {
-		h.stepUpUser.CommitFail(key)
+	proof, err := h.tryStepUpProof(r.Context(), uid, user, code)
+	if err != nil {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
-		return SecondFactorProof{}, "", false
+		return SecondFactorProof{}, key, false
 	}
 	return proof, key, true
+}
+
+func (h *Handler) withStepUp(w http.ResponseWriter, r *http.Request,
+	uid authctx.UserID, user User, code string, work func(SecondFactorProof) error) bool {
+
+	proof, key, ok := h.stepUpSecondFactor(w, r, uid, user, code)
+	if key == "" {
+		return false
+	}
+	opErr := errProofNotAttempted
+	defer func() { h.settleStepUp(key, opErr) }()
+	if !ok {
+		opErr = ErrBadCredentials
+		return false
+	}
+	opErr = work(proof)
+	return true
 }
 
 // notifyIfRecovery tells the owner a recovery code was spent — either them, or
