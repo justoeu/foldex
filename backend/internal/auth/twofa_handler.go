@@ -556,7 +556,7 @@ func (h *Handler) TOTPQR(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(png)
+	_, _ = w.Write(png) // #nosec G705 -- PNG from totpQRPNG; Content-Type is image/png, never HTML
 }
 
 type totpConfirmInput struct {

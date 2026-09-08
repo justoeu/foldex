@@ -3,6 +3,7 @@
 package auth_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -2573,7 +2574,10 @@ func TestTOTPQR_OnlyExistsForAPendingEnrollment(t *testing.T) {
 		Secret string `json:"secret"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &start))
-	require.Equal(t, http.StatusOK, c.do(http.MethodGet, "/api/auth/2fa/totp/qr.png", nil).Code)
+	qr := c.do(http.MethodGet, "/api/auth/2fa/totp/qr.png", nil)
+	require.Equal(t, http.StatusOK, qr.Code)
+	assert.Equal(t, "image/png", qr.Header().Get("Content-Type"))
+	assert.True(t, bytes.HasPrefix(qr.Body.Bytes(), []byte("\x89PNG")), "body is a PNG, not HTML")
 
 	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/2fa/totp/confirm",
 		map[string]string{"code": codeNow(t, start.Secret)}).Code)
