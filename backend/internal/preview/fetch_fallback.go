@@ -6,6 +6,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"foldex/internal/pkg/outboundhttp"
 )
 
 // Renderer extracts title/description from a fully rendered page (Chromium).
@@ -79,23 +81,20 @@ func shouldRender(ctx context.Context, err error, title string) bool {
 	if err == nil {
 		return !usableTitle(title)
 	}
-	if isSSRFError(err) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, outboundhttp.ErrSSRF) || errors.Is(err, context.Canceled) {
 		return false
 	}
 	if isTimeout(err) {
 		return true
 	}
-	msg := err.Error()
-	for _, code := range []string{"status 401", "status 403", "status 429"} {
-		if strings.Contains(msg, code) {
+	var status *HTTPStatusError
+	if errors.As(err, &status) {
+		switch status.Code {
+		case 401, 403, 429:
 			return true
 		}
 	}
 	return false
-}
-
-func isSSRFError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "ssrf:")
 }
 
 func isTimeout(err error) bool {

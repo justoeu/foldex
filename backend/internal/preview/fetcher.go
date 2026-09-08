@@ -15,6 +15,16 @@ import (
 	"foldex/internal/pkg/outboundhttp"
 )
 
+// HTTPStatusError is the Fetch-boundary status failure. shouldRender matches
+// it with errors.As so a wrapper that rewrites Error() cannot flip 401 vs 500.
+type HTTPStatusError struct {
+	Code int
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("status %d", e.Code)
+}
+
 // Result holds the metadata extracted from a page (any field may be empty).
 type Result struct {
 	Title       string
@@ -76,7 +86,7 @@ func (f *Fetcher) GetRaw(ctx context.Context, pageURL string) ([]byte, string, e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, "", fmt.Errorf("status %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("fetch: %w", &HTTPStatusError{Code: resp.StatusCode})
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
@@ -134,7 +144,7 @@ func (f *Fetcher) Fetch(ctx context.Context, pageURL string) (Result, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return Result{}, fmt.Errorf("status %d", resp.StatusCode)
+		return Result{}, fmt.Errorf("fetch: %w", &HTTPStatusError{Code: resp.StatusCode})
 	}
 	// Cap to 2 MB of HTML — the head is always at the top.
 	body := io.LimitReader(resp.Body, 2<<20)

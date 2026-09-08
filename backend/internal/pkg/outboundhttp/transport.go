@@ -2,6 +2,7 @@ package outboundhttp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,6 +11,10 @@ import (
 
 	"foldex/internal/pkg/netpolicy"
 )
+
+// ErrSSRF is the dialer sentinel for refused destinations. Wrappers must keep
+// it via %w so callers classify with errors.Is instead of Error() text.
+var ErrSSRF = errors.New("ssrf")
 
 // NewSafeTransport returns an HTTP transport that checks resolved addresses
 // before dialing and the connected peer afterward to prevent DNS rebinding.
@@ -53,13 +58,13 @@ func (d *safeDialer) DialContext(ctx context.Context, network, addr string) (net
 	}
 	for _, ip := range ips {
 		if netpolicy.IsMetadataIP(ip) {
-			return nil, fmt.Errorf("ssrf: refusing IMDS endpoint %s", ip)
+			return nil, fmt.Errorf("%w: refusing IMDS endpoint %s", ErrSSRF, ip)
 		}
 		if netpolicy.IsAlwaysDeniedIP(ip) {
-			return nil, fmt.Errorf("ssrf: refusing special-use endpoint %s", ip)
+			return nil, fmt.Errorf("%w: refusing special-use endpoint %s", ErrSSRF, ip)
 		}
 		if d.strict && netpolicy.IsPrivateIP(ip) {
-			return nil, fmt.Errorf("ssrf: refusing to dial %s (%s)", host, ip)
+			return nil, fmt.Errorf("%w: refusing to dial %s (%s)", ErrSSRF, host, ip)
 		}
 	}
 	conn, err := d.base.DialContext(ctx, network, addr)
@@ -78,16 +83,16 @@ func (d *safeDialer) DialContext(ctx context.Context, network, addr string) (net
 func checkRemoteAddr(strict bool, addr net.Addr, host string) error {
 	tcp, ok := addr.(*net.TCPAddr)
 	if !ok {
-		return fmt.Errorf("ssrf: non-TCP remote addr %T - refusing", addr)
+		return fmt.Errorf("%w: non-TCP remote addr %T - refusing", ErrSSRF, addr)
 	}
 	if netpolicy.IsMetadataIP(tcp.IP) {
-		return fmt.Errorf("ssrf: refusing IMDS endpoint %s (post-dial)", tcp.IP)
+		return fmt.Errorf("%w: refusing IMDS endpoint %s (post-dial)", ErrSSRF, tcp.IP)
 	}
 	if netpolicy.IsAlwaysDeniedIP(tcp.IP) {
-		return fmt.Errorf("ssrf: refusing special-use endpoint %s (post-dial)", tcp.IP)
+		return fmt.Errorf("%w: refusing special-use endpoint %s (post-dial)", ErrSSRF, tcp.IP)
 	}
 	if strict && netpolicy.IsPrivateIP(tcp.IP) {
-		return fmt.Errorf("ssrf: refusing peer %s for host %s (post-dial)", tcp.IP, host)
+		return fmt.Errorf("%w: refusing peer %s for host %s (post-dial)", ErrSSRF, tcp.IP, host)
 	}
 	return nil
 }
