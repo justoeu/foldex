@@ -63,10 +63,10 @@ func TestSet_LastAnnotationWins(t *testing.T) {
 	}
 }
 
-func TestSetRequest_AnnotatesTheRequestsContext(t *testing.T) {
+func TestSet_AnnotatesTheRequestsContext(t *testing.T) {
 	r := httptest.NewRequest("POST", "/api/links", nil)
 	r = r.WithContext(With(r.Context()))
-	SetRequest(r, "tag", 7, "reading")
+	Set(r.Context(), "tag", 7, "reading")
 
 	kind, id, _ := Get(r.Context())
 	assert.Equal(t, "tag", kind)

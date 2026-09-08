@@ -45,7 +45,7 @@ func do(r *chi.Mux, method, path string) *httptest.ResponseRecorder {
 // on every author remembering is coverage with invisible holes.
 func TestContentAudit_RecordsAnAcceptedMutation(t *testing.T) {
 	r, got := mount(t, "POST", "/api/links", func(w http.ResponseWriter, req *http.Request) {
-		auditctx.SetRequest(req, "link", 42, "ADR-46 draft")
+		auditctx.Set(req.Context(), "link", 42, "ADR-46 draft")
 		w.WriteHeader(http.StatusCreated)
 	})
 	do(r, "POST", "/api/links")
