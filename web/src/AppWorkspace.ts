@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { useHotkeys } from 'react-hotkeys-hook'
 import { useDarkMode } from './hooks/useDarkMode'
 import { isBoolean, usePersistedState } from './hooks/usePersistedState'
-import type { Sort } from './components/HomeView'
+import type { Sort } from './lib/viewPrefs'
 import type { RevealTarget } from './hooks/useRevealEntry'
 
 // 'admin' is gone as a view: the administration surface lives inside the

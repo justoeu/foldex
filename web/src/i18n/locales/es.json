@@ -698,6 +698,7 @@
     "master_change_action": "Cambiar",
     "master_remove_action": "Eliminar",
     "master_too_short": "La contraseña maestra debe tener al menos 8 caracteres.",
+    "master_too_long": "La contraseña maestra debe tener como máximo 72 bytes.",
     "master_wrong_current": "La contraseña maestra actual es incorrecta.",
     "master_set": "Contraseña maestra definida.",
     "master_changed": "Contraseña maestra cambiada.",

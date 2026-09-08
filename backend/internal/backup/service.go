@@ -223,6 +223,9 @@ type ownedObjectListing struct {
 }
 
 func listOwnedObjects(ctx context.Context, storage StorageBucket, owned map[string]struct{}, databaseBytes int64) (ownedObjectListing, error) {
+	if _, err := expandedBudgetRemaining(databaseBytes, 0); err != nil {
+		return ownedObjectListing{}, err
+	}
 	listing := ownedObjectListing{objects: make([]ObjectInfo, 0, len(owned))}
 	selected := make(map[string]struct{}, len(owned))
 	manifestIndexBytes := checksumManifestBytes("database.json")
@@ -234,34 +237,57 @@ func listOwnedObjects(ctx context.Context, storage StorageBucket, owned map[stri
 			if _, duplicate := selected[object.Key]; duplicate {
 				return nil
 			}
-			if !strings.HasPrefix(object.Key, prefix) || len(object.Key) > maxBackupObjectKeyBytes {
-				return fmt.Errorf("object key %q is outside the backup key budget", object.Key)
+			if err := acceptBackupObject(object, prefix); err != nil {
+				return err
 			}
-			if object.Size < 0 || object.Size > maxArchiveFileBytes {
-				return fmt.Errorf("object %q has size %d (max %d)", object.Key, object.Size, maxArchiveFileBytes)
-			}
-			if listing.count >= maxBackupFileEntries {
-				return fmt.Errorf("backup has more than %d file entries", maxBackupFileEntries)
-			}
-			if object.Size > maxArchiveExpandedBytes-maxManifestJSONBytes-databaseBytes-listing.bytes {
-				return fmt.Errorf("backup expanded bytes exceed %d-byte limit", maxArchiveExpandedBytes)
-			}
-			entryName := "files/" + object.Key
-			manifestIndexBytes += checksumManifestBytes(entryName)
-			if manifestIndexBytes > maxManifestJSONBytes-manifestFixedHeadroom {
-				return fmt.Errorf("backup manifest checksum index exceeds %d-byte limit", maxManifestJSONBytes)
-			}
-			selected[object.Key] = struct{}{}
-			listing.objects = append(listing.objects, object)
-			listing.count++
-			listing.bytes += object.Size
-			return nil
+			return listing.addToListing(object, selected, databaseBytes, &manifestIndexBytes)
 		})
 		if err != nil {
 			return ownedObjectListing{}, fmt.Errorf("backup: list %q: %w", prefix, err)
 		}
 	}
 	return listing, nil
+}
+
+func expandedBudgetRemaining(databaseBytes, listingBytes int64) (int64, error) {
+	remaining := maxArchiveExpandedBytes - maxManifestJSONBytes - databaseBytes - listingBytes
+	if remaining < 0 {
+		return 0, fmt.Errorf("backup expanded bytes exceed %d-byte limit", maxArchiveExpandedBytes)
+	}
+	return remaining, nil
+}
+
+func acceptBackupObject(object ObjectInfo, prefix string) error {
+	if !strings.HasPrefix(object.Key, prefix) || len(object.Key) > maxBackupObjectKeyBytes {
+		return fmt.Errorf("object key %q is outside the backup key budget", object.Key)
+	}
+	if object.Size < 0 || object.Size > maxArchiveFileBytes {
+		return fmt.Errorf("object %q has size %d (max %d)", object.Key, object.Size, maxArchiveFileBytes)
+	}
+	return nil
+}
+
+func (l *ownedObjectListing) addToListing(object ObjectInfo, selected map[string]struct{}, databaseBytes int64, manifestIndexBytes *int64) error {
+	if l.count >= maxBackupFileEntries {
+		return fmt.Errorf("backup has more than %d file entries", maxBackupFileEntries)
+	}
+	remaining, err := expandedBudgetRemaining(databaseBytes, l.bytes)
+	if err != nil {
+		return err
+	}
+	if object.Size > remaining {
+		return fmt.Errorf("backup expanded bytes exceed %d-byte limit", maxArchiveExpandedBytes)
+	}
+	entryName := "files/" + object.Key
+	*manifestIndexBytes += checksumManifestBytes(entryName)
+	if *manifestIndexBytes > maxManifestJSONBytes-manifestFixedHeadroom {
+		return fmt.Errorf("backup manifest checksum index exceeds %d-byte limit", maxManifestJSONBytes)
+	}
+	selected[object.Key] = struct{}{}
+	l.objects = append(l.objects, object)
+	l.count++
+	l.bytes += object.Size
+	return nil
 }
 
 func (s *Service) streamObjectIntoZip(ctx context.Context, zw *zip.Writer, entryName, key string, expectedSize int64, checksums map[string]string) error {

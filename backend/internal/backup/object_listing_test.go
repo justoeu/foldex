@@ -64,6 +64,37 @@ func TestListOwnedObjectsRejectsPerFileAndExpandedBudgets(t *testing.T) {
 	})
 }
 
+func TestListOwnedObjectsRejectsNegativeRemaining(t *testing.T) {
+	bucket := &generatedObjectBucket{count: 0}
+	_, err := listOwnedObjects(context.Background(), bucket, map[string]struct{}{}, maxArchiveExpandedBytes)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "expanded bytes")
+}
+
+func TestListOwnedObjectsDedupsKeysAcrossPrefixes(t *testing.T) {
+	bucket := &duplicatePrefixBucket{key: "images/1.jpg", size: 1}
+	owned := map[string]struct{}{"images/1.jpg": {}}
+	listing, err := listOwnedObjects(context.Background(), bucket, owned, 1)
+	require.NoError(t, err)
+	assert.Len(t, listing.objects, 1)
+}
+
+type duplicatePrefixBucket struct {
+	StorageBucket
+	key  string
+	size int64
+}
+
+func (b *duplicatePrefixBucket) WalkObjects(_ context.Context, prefix string, visit func(ObjectInfo) error) error {
+	if prefix != "images/" {
+		return nil
+	}
+	if err := visit(ObjectInfo{Key: b.key, Size: b.size}); err != nil {
+		return err
+	}
+	return visit(ObjectInfo{Key: b.key, Size: b.size})
+}
+
 func TestChecksumManifestBudgetCoversIndentedManifest(t *testing.T) {
 	checksums := make(map[string]string, 20_001)
 	estimated := int64(0)

@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/crudupdate"
 	"foldex/internal/pkg/domainerr"
 )
 
@@ -51,6 +52,20 @@ func SetEntityTags(ctx context.Context, tx pgx.Tx, uid authctx.UserID, kind stri
 
 // SetEntityTagsWithPending creates inline tag definitions and replaces the
 // entity's complete tag set inside the caller's transaction.
+func ApplyPatchTags(ctx context.Context, tx pgx.Tx, uid authctx.UserID, kind string, entityID int64, tagIDs *[]int64, pending []CreateInput) error {
+	if tagIDs == nil && len(pending) == 0 {
+		return nil
+	}
+	if err := crudupdate.AssertOwned(ctx, tx, kind, uid, entityID); err != nil {
+		return err
+	}
+	ids := []int64(nil)
+	if tagIDs != nil {
+		ids = *tagIDs
+	}
+	return SetEntityTagsWithPending(ctx, tx, uid, kind, entityID, ids, pending)
+}
+
 func SetEntityTagsWithPending(ctx context.Context, tx pgx.Tx, uid authctx.UserID, kind string, entityID int64, tagIDs []int64, pending []CreateInput) error {
 	resolved := append([]int64(nil), tagIDs...)
 	if len(pending) > 0 {

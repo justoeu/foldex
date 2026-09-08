@@ -1,4 +1,5 @@
 import type { Folder, FolderCreate, FolderUpdate } from '../api/types'
+import { hintEqualsPassword } from './hintEqualsPassword'
 import { makeGradient } from './tagColor'
 import type { ColorMode } from './entityColors'
 
@@ -26,8 +27,7 @@ export function folderHintMatchesPassword(folder: Folder | null | undefined, val
   const candidate = folder?.has_password && values.passwordEditing && !values.removePassword
     ? values.newPassword
     : values.password
-  const hint = values.hint.trim()
-  return !!hint && !!candidate && hint.toLowerCase() === candidate.toLowerCase()
+  return hintEqualsPassword(values.hint, candidate)
 }
 
 export function buildFolderCreatePayload(

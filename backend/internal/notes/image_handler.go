@@ -14,9 +14,6 @@ import (
 	"foldex/internal/pkg/httperr"
 )
 
-// allowedUploadMIMEs is the single imageopt allowlist (ARCH-ATL-009).
-var allowedUploadMIMEs = imageopt.AllowedUploadMIMEs
-
 const (
 	// maxImageSize mirrors links.ScreenshotHandler.UploadImage's 5 MiB cap —
 	// a single pasted screenshot comfortably fits under it once downscaled.
@@ -91,24 +88,10 @@ func (h *ImageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "missing_image", "field 'image' is required"))
 		return
 	}
-	if int64(len(data)) > maxImageSize {
-		httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "too_large", "image exceeds 5MB limit"))
-		return
-	}
-
-	// Detect MIME from the actual bytes — never trust the client-supplied
-	// Content-Type (same rationale as links.UploadImage).
-	detected := http.DetectContentType(data)
-	if _, ok := allowedUploadMIMEs[detected]; !ok {
-		h.logger.Warn("note image upload: rejected MIME", "reason", "unsupported")
-		httperr.Write(w, httperr.New(http.StatusUnsupportedMediaType, "invalid_mime", "file must be a PNG, JPEG, GIF, or WebP image"))
-		return
-	}
-
-	opt, err := imageopt.OptimizeForStore(data)
+	opt, err := imageopt.AdmitBytes(data, maxImageSize)
 	if err != nil {
-		h.logger.Warn("note image upload: optimize failed", "err", err)
-		status, code, msg := imageopt.RejectHTTP(err)
+		h.logger.Warn("note image upload: rejected", "err", err)
+		status, code, msg := imageopt.AdmitHTTP(err)
 		httperr.Write(w, httperr.New(status, code, msg))
 		return
 	}

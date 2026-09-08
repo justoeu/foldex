@@ -107,6 +107,11 @@ func Sanitize(html string) string {
 	return policy.Sanitize(html)
 }
 
+func SanitizeAndPlain(bodyHTML string) (cleanHTML, plainText string) {
+	clean := Sanitize(bodyHTML)
+	return clean, PlainText(clean)
+}
+
 // PlainText strips all markup, returning trimmed plain text suitable for the
 // note.body_text search column (ILIKE/trigram). Always derived server-side
 // from the already-sanitized HTML — never accepted from the client — so the

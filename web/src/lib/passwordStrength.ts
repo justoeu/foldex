@@ -1,10 +1,8 @@
-// Password complexity helpers shared by the strength meter. Pure functions so
-// they're unit-testable without the DOM. This is UI guidance only — the backend
-// enforces the hard minimum length (see internal/settings), not this score.
+import { MIN_PASSWORD_LEN } from '../auth/types'
 
 export type PasswordChecks = {
-  length: boolean // >= 8 chars (matches the backend master-password floor)
-  longer: boolean // >= 12 chars
+  length: boolean
+  longer: boolean
   lower: boolean
   upper: boolean
   digit: boolean
@@ -13,7 +11,7 @@ export type PasswordChecks = {
 
 export function passwordChecks(pw: string): PasswordChecks {
   return {
-    length: pw.length >= 8,
+    length: pw.length >= MIN_PASSWORD_LEN,
     longer: pw.length >= 12,
     lower: /[a-z]/.test(pw),
     upper: /[A-Z]/.test(pw),

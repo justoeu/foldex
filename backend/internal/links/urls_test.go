@@ -11,6 +11,8 @@ import (
 func TestValidateAbsoluteHTTPURL(t *testing.T) {
 	assert.NoError(t, ValidateAbsoluteHTTPURL("https://example.com/a?b=c"))
 	assert.NoError(t, ValidateAbsoluteHTTPURL("http://localhost:9089"))
+	assert.NoError(t, ValidateAbsoluteHTTPURL("HTTPS://EXAMPLE.com"))
+	assert.NoError(t, ValidateAbsoluteHTTPURL("  https://example.com  "))
 
 	for raw, want := range map[string]string{
 		"/relative/path":      "absolute http(s) URL",
@@ -19,6 +21,7 @@ func TestValidateAbsoluteHTTPURL(t *testing.T) {
 		"file:///etc/passwd":  "absolute http(s) URL",
 		"javascript:alert(1)": "absolute http(s) URL",
 		"http://%zz":          "absolute http(s) URL",
+		"https:":              "absolute http(s) URL",
 	} {
 		err := ValidateAbsoluteHTTPURL(raw)
 		assert.ErrorContains(t, err, want, "raw=%q", raw)

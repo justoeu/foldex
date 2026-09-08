@@ -18,7 +18,6 @@ import (
 
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/domainerr"
-	"foldex/internal/tags"
 )
 
 // SetBuilder accumulates "col = $N" assignments with one shared placeholder
@@ -113,31 +112,6 @@ func AssertOwned(ctx context.Context, tx pgx.Tx, table string, uid authctx.UserI
 		return fmt.Errorf("check %s owner: %w", table, err)
 	}
 	return nil
-}
-
-// TagChanges carries the tag portion of a PATCH, shared by the links/notes
-// UpdateInputs.
-type TagChanges struct {
-	TagIDs      *[]int64
-	PendingTags []tags.CreateInput
-}
-
-// SetEntityTags applies the tag portion of a PATCH when one is present. It
-// also closes the tag-only-PATCH ownership hole: with no column writes, no
-// owner-scoped UPDATE ran inside the caller's transaction, so ownership must
-// be proven before the tag write touches the row.
-func SetEntityTags(ctx context.Context, tx pgx.Tx, kind string, uid authctx.UserID, id int64, in TagChanges) error {
-	if in.TagIDs == nil && len(in.PendingTags) == 0 {
-		return nil
-	}
-	if err := AssertOwned(ctx, tx, kind, uid, id); err != nil {
-		return err
-	}
-	tagIDs := []int64(nil)
-	if in.TagIDs != nil {
-		tagIDs = *in.TagIDs
-	}
-	return tags.SetEntityTagsWithPending(ctx, tx, uid, kind, id, tagIDs, in.PendingTags)
 }
 
 func rowExists(ctx context.Context, tx pgx.Tx, table string, uid authctx.UserID, id int64) (bool, error) {

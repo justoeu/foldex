@@ -4,11 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
 	"time"
 
 	"golang.org/x/net/html"
+
+	"foldex/internal/links"
 )
 
 // ErrTooManyItems is returned when a Netscape/JSON import exceeds maxImportItems.
@@ -199,12 +200,7 @@ func deepestNonBlank(names []string) int {
 // parse errors, missing schemes, and anything else (javascript:, data:, file:,
 // vbscript:, mailto:, tel:, etc.) as rejected.
 func isHTTPScheme(href string) bool {
-	u, err := url.Parse(strings.TrimSpace(href))
-	if err != nil {
-		return false
-	}
-	s := strings.ToLower(u.Scheme)
-	return s == "http" || s == "https"
+	return links.ValidateAbsoluteHTTPURL(href) == nil
 }
 
 func attr(t html.Token, key string) string {

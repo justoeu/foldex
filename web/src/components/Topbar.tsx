@@ -4,14 +4,13 @@ import { LocalePicker } from './LocalePicker'
 import { MobileOverflowMenu } from './MobileOverflowMenu'
 import { PushToggle } from './PushToggle'
 import { UserMenu } from './UserMenu'
+import type { Sort, ViewMode } from '../lib/viewPrefs'
 
 // 'import' and 'admin' are gone as topbar destinations: the settings hub (gear
 // button) owns them now — import/export as a shortcut tile, administration as
 // the RBAC-scoped segment. The type keeps 'import' because the mobile menu and
 // active-state checks still receive the full AppView from the workspace.
 type View = 'home' | 'import' | 'stats' | 'settings'
-type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
-type ViewMode = 'cards' | 'compact' | 'list'
 
 type Props = {
   view: View

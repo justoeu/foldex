@@ -2,10 +2,12 @@ package crudupdate
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSetBuilder_PositionsNeverRenumber(t *testing.T) {
@@ -30,4 +32,10 @@ func TestSetBuilder_PositionsNeverRenumber(t *testing.T) {
 	// the position of the value they compare against.
 	reset := fmt.Sprintf("url IS DISTINCT FROM $%d", first)
 	assert.True(t, strings.Contains(reset, "$1"))
+}
+
+func TestSourceDoesNotImportTags(t *testing.T) {
+	src, err := os.ReadFile("crudupdate.go")
+	require.NoError(t, err)
+	assert.NotContains(t, string(src), "foldex/internal/tags")
 }

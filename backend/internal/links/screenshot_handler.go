@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,9 +28,6 @@ import (
 // editor (notes.ImageHandler) — ProxyFile is shared infrastructure so notes
 // reuses it rather than standing up a second file-serving endpoint.
 var allowedFilePrefixes = []string{"screenshots/", "images/", "notes/"}
-
-// allowedUploadMIMEs is the shared imageopt allowlist.
-var allowedUploadMIMEs = imageopt.AllowedUploadMIMEs
 
 // Screenshotter captures a URL and returns PNG bytes.
 type Screenshotter interface {
@@ -436,12 +432,7 @@ func isValidNoteKey(key string) bool {
 // Used to fail-fast before the SSRF policy check (the policy does DNS, this
 // catches non-network schemes for free).
 func isHTTPScheme(pageURL string) bool {
-	u, err := url.Parse(strings.TrimSpace(pageURL))
-	if err != nil {
-		return false
-	}
-	s := strings.ToLower(u.Scheme)
-	return s == "http" || s == "https"
+	return ValidateAbsoluteHTTPURL(pageURL) == nil
 }
 
 // isAllowedKey rejects empty keys, anything containing ".." or starting with
@@ -462,7 +453,7 @@ func isAllowedKey(key string) bool {
 }
 
 func isAllowedServeMIME(m string) bool {
-	for allowed := range allowedUploadMIMEs {
+	for allowed := range imageopt.AllowedUploadMIMEs {
 		if m == allowed {
 			return true
 		}
@@ -523,30 +514,10 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "read_failed", "failed to read uploaded file"))
 		return
 	}
-	if len(data) == 0 {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "empty_file", "uploaded file is empty"))
-		return
-	}
-	if int64(len(data)) > maxSize {
-		httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "too_large", "image exceeds 5MB limit"))
-		return
-	}
-
-	// Detect MIME from the actual bytes — never trust the client-supplied
-	// Content-Type. Stops HTML/SVG/script files smuggled in with an
-	// `image/png` declaration that would later be served back as that MIME
-	// (stored XSS via the ProxyFile cache).
-	detected := http.DetectContentType(data)
-	if _, ok := allowedUploadMIMEs[detected]; !ok {
-		h.logger.Warn("image upload: rejected MIME", "id", id, "reason", "non_image")
-		httperr.Write(w, httperr.New(http.StatusUnsupportedMediaType, "invalid_mime", "file must be a PNG, JPEG, GIF, or WebP image"))
-		return
-	}
-
-	opt, err := imageopt.OptimizeForStore(data)
+	opt, err := imageopt.AdmitBytes(data, maxSize)
 	if err != nil {
-		h.logger.Warn("image upload: optimize failed", "id", id, "err", err)
-		status, code, msg := imageopt.RejectHTTP(err)
+		h.logger.Warn("image upload: rejected", "id", id, "err", err)
+		status, code, msg := imageopt.AdmitHTTP(err)
 		httperr.Write(w, httperr.New(status, code, msg))
 		return
 	}

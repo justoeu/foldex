@@ -17,7 +17,7 @@ func TestNormalizeRestoreFolderParents(t *testing.T) {
 		{ID: 5, ParentID: int64Ptr(6)},
 		{ID: 6, ParentID: int64Ptr(5)},
 	}
-	parents := normalizeRestoreFolderParents(folders)
+	parents, _ := normalizeRestoreFolderParents(folders)
 	requireParent := func(index int) int64 {
 		t.Helper()
 		if parents[index] == nil {
@@ -29,8 +29,39 @@ func TestNormalizeRestoreFolderParents(t *testing.T) {
 	assert.EqualValues(t, 1, requireParent(1))
 	assert.Nil(t, parents[2])
 	assert.Nil(t, parents[3], "dangling parent must flatten to root")
-	assert.Nil(t, parents[4], "the first row in a cycle must become a root")
-	assert.EqualValues(t, 5, requireParent(5), "remaining cycle members may attach to the new root")
+	assert.Nil(t, parents[4], "A↔B cycle: both members become roots")
+	assert.Nil(t, parents[5], "A↔B cycle: both members become roots")
+}
+
+func TestNormalizeRestoreFolderParents_ChildOfCycleKeepsParent(t *testing.T) {
+	folders := []FolderRow{
+		{ID: 5, ParentID: int64Ptr(6)},
+		{ID: 6, ParentID: int64Ptr(5)},
+		{ID: 7, ParentID: int64Ptr(5)},
+	}
+	parents, _ := normalizeRestoreFolderParents(folders)
+	assert.Nil(t, parents[0], "cycle member 5 is a root")
+	assert.Nil(t, parents[1], "cycle member 6 is a root")
+	if parents[2] == nil {
+		t.Fatal("child of a cycle member must keep its parent, not flatten")
+	}
+	assert.EqualValues(t, 5, *parents[2])
+}
+
+func TestNormalizeRestoreFolderParents_DuplicateIDsWarn(t *testing.T) {
+	folders := []FolderRow{
+		{ID: 1, Name: "first"},
+		{ID: 1, Name: "dup", ParentID: int64Ptr(1)},
+		{ID: 2, ParentID: int64Ptr(1)},
+	}
+	parents, warnings := normalizeRestoreFolderParents(folders)
+	assert.NotEmpty(t, warnings, "duplicate folder ids must not be silent first-wins")
+	assert.Nil(t, parents[0])
+	assert.Nil(t, parents[1], "duplicate row is not a second graph node")
+	if parents[2] == nil {
+		t.Fatal("child of the first duplicate id should keep its parent")
+	}
+	assert.EqualValues(t, 1, *parents[2])
 }
 
 // TestRemapFileKey covers the id mapping helper used by ModeDuplicate.

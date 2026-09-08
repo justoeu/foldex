@@ -7,8 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"foldex/internal/notes"
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/htmlsanitize"
 	slugpkg "foldex/internal/pkg/slug"
 )
 
@@ -457,7 +457,7 @@ func copyRestoreStaging(ctx context.Context, tx pgx.Tx, snap *Snapshot, tagNames
 	if err != nil {
 		return err
 	}
-	folderParents := normalizeRestoreFolderParents(snap.Folders)
+	folderParents, _ := normalizeRestoreFolderParents(snap.Folders)
 
 	if len(snap.Tags) > 0 {
 		_, err = tx.CopyFrom(ctx, pgx.Identifier{"_backup_restore_tag"},
@@ -503,7 +503,7 @@ func copyRestoreStaging(ctx context.Context, tx pgx.Tx, snap *Snapshot, tagNames
 			[]string{"ordinal", "old_id", "new_id", "title", "slug", "body_html", "body_text", "pinned", "folder_old_id", "cover_url", "is_public", "created_at", "updated_at"},
 			pgx.CopyFromSlice(len(snap.Notes), func(i int) ([]any, error) {
 				row := snap.Notes[i]
-				bodyHTML, bodyText := notes.SanitizeBody(row.BodyHTML)
+				bodyHTML, bodyText := htmlsanitize.SanitizeAndPlain(row.BodyHTML)
 				return []any{i, row.ID, noteIDs[i], row.Title, noteSlugs[i], bodyHTML, bodyText,
 					row.Pinned, row.FolderID, row.CoverURL, row.IsPublic, row.CreatedAt, row.UpdatedAt}, nil
 			}))
@@ -514,18 +514,39 @@ func copyRestoreStaging(ctx context.Context, tx pgx.Tx, snap *Snapshot, tagNames
 	return nil
 }
 
-func normalizeRestoreFolderParents(folders []FolderRow) []*int64 {
+func normalizeRestoreFolderParents(folders []FolderRow) ([]*int64, []string) {
+	indexByID, warnings := indexRestoreFolders(folders)
+	children, hasPendingParent := buildRestoreAdjacency(folders, indexByID)
 	parents := make([]*int64, len(folders))
-	indexByID := make(map[int64]int, len(folders))
-	for i := range folders {
-		if _, exists := indexByID[folders[i].ID]; !exists {
-			indexByID[folders[i].ID] = i
-		}
-	}
+	processed := make([]bool, len(folders))
+	drainRestoreParents(folders, children, hasPendingParent, parents, processed)
+	nilRestoreCycleMembers(folders, indexByID, hasPendingParent, parents)
+	drainRestoreParents(folders, children, hasPendingParent, parents, processed)
+	return parents, warnings
+}
 
+func indexRestoreFolders(folders []FolderRow) (map[int64]int, []string) {
+	indexByID := make(map[int64]int, len(folders))
+	var warnings []string
+	for i := range folders {
+		if _, exists := indexByID[folders[i].ID]; exists {
+			warnings = append(warnings, fmt.Sprintf("duplicate folder id %d; later row ignored", folders[i].ID))
+			continue
+		}
+		indexByID[folders[i].ID] = i
+	}
+	return indexByID, warnings
+}
+
+func buildRestoreAdjacency(folders []FolderRow, indexByID map[int64]int) ([][]int, []bool) {
 	children := make([][]int, len(folders))
 	hasPendingParent := make([]bool, len(folders))
+	seenID := make(map[int64]struct{}, len(indexByID))
 	for i := range folders {
+		if _, dup := seenID[folders[i].ID]; dup {
+			continue
+		}
+		seenID[folders[i].ID] = struct{}{}
 		if folders[i].ParentID == nil {
 			continue
 		}
@@ -536,47 +557,75 @@ func normalizeRestoreFolderParents(folders []FolderRow) []*int64 {
 		hasPendingParent[i] = true
 		children[parentIndex] = append(children[parentIndex], i)
 	}
+	return children, hasPendingParent
+}
 
-	processed := make([]bool, len(folders))
+func drainRestoreParents(folders []FolderRow, children [][]int, hasPendingParent []bool, parents []*int64, processed []bool) {
 	queue := make([]int, 0, len(folders))
 	for i := range folders {
-		if !hasPendingParent[i] {
+		if !processed[i] && !hasPendingParent[i] {
 			queue = append(queue, i)
 		}
 	}
 	head := 0
-	drain := func() {
-		for head < len(queue) {
-			index := queue[head]
-			head++
-			if processed[index] {
-				continue
-			}
-			processed[index] = true
-			for _, child := range children[index] {
-				if processed[child] || !hasPendingParent[child] {
-					continue
-				}
-				hasPendingParent[child] = false
-				parentID := folders[index].ID
-				parents[child] = &parentID
-				queue = append(queue, child)
-			}
-		}
-	}
-	drain()
-
-	for i := range folders {
-		if processed[i] {
+	for head < len(queue) {
+		index := queue[head]
+		head++
+		if processed[index] {
 			continue
 		}
-		// Break cycles deterministically at the first unresolved row; later
-		// rows may then retain a parent that has become reachable.
-		hasPendingParent[i] = false
-		queue = append(queue, i)
-		drain()
+		processed[index] = true
+		for _, child := range children[index] {
+			if processed[child] || !hasPendingParent[child] {
+				continue
+			}
+			hasPendingParent[child] = false
+			parentID := folders[index].ID
+			parents[child] = &parentID
+			queue = append(queue, child)
+		}
 	}
-	return parents
+}
+
+func nilRestoreCycleMembers(folders []FolderRow, indexByID map[int64]int, hasPendingParent []bool, parents []*int64) {
+	inCycle := make([]bool, len(folders))
+	for i := range folders {
+		if !hasPendingParent[i] {
+			continue
+		}
+		for _, idx := range restoreCycleSlice(i, folders, indexByID, hasPendingParent) {
+			inCycle[idx] = true
+		}
+	}
+	for i := range inCycle {
+		if !inCycle[i] {
+			continue
+		}
+		parents[i] = nil
+		hasPendingParent[i] = false
+	}
+}
+
+func restoreCycleSlice(start int, folders []FolderRow, indexByID map[int64]int, pending []bool) []int {
+	path := make([]int, 0, 8)
+	at := map[int]int{}
+	cur := start
+	for pending[cur] {
+		if j, ok := at[cur]; ok {
+			return path[j:]
+		}
+		at[cur] = len(path)
+		path = append(path, cur)
+		if folders[cur].ParentID == nil {
+			return nil
+		}
+		next, ok := indexByID[*folders[cur].ParentID]
+		if !ok {
+			return nil
+		}
+		cur = next
+	}
+	return nil
 }
 
 func reserveRestoreIDs(ctx context.Context, tx pgx.Tx, sequence string, count int) ([]int64, error) {
