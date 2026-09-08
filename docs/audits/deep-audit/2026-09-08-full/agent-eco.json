@@ -1,0 +1,90 @@
+{
+  "agent": "Eco",
+  "lens": "duplication",
+  "findings": [
+    {
+      "title": "Password floor/cap diverged across auth, master, SPA",
+      "severity": "HIGH",
+      "confidence": "high",
+      "path": "backend/internal/auth/handler.go",
+      "line": 1224,
+      "category": "cross-layer-rule",
+      "description": "One product rule (min length + bcrypt 72-byte cap) is reimplemented and already disagrees. auth.validatePasswordAgainst (handler.go:1224) uses utf8.RuneCount vs policy floor and len>MaxPasswordLen=72. settings.setMasterInput.Validate (dto.go:41) uses len() bytes vs hardcoded minMasterPasswordLen=8 and has no 72-byte cap — pwhash.Hash then 500s. web masterPasswordForm.ts:20 hardcodes length<8. passwordStrength.ts:16 hardcodes >=8 and claims to match the master floor. Account SPA (useInstancePolicy.passwordGateLen) already follows live policy+72. folders/dto.go:49 uses len() vs min 4 and also skips the 72-byte cap. Auth comment (handler.go:26) says the product has ONE number; policy raises leave master+meter at 8.",
+      "fix": "Export one PasswordBounds helper next to auth.validatePasswordAgainst (rune min from policy, byte max 72). Call it from settings master Validate and folder password Validate (cap only). SPA: masterPasswordForm + passwordChecks must use passwordGateLen/usePasswordFloor, not literal 8.",
+      "status": "open",
+      "agent": "Eco",
+      "lens": "duplication",
+      "impact": "One product rule (min length + bcrypt 72-byte cap) is reimplemented and already disagrees. auth.validatePasswordAgainst (handler.go:1224) uses utf8.RuneCount vs policy floor and len>MaxPasswordLen=72. settings.setMasterInput.Validate (dto.g"
+    },
+    {
+      "title": "HasSecondFactor copies still read totp_enabled alone",
+      "severity": "HIGH",
+      "confidence": "high",
+      "path": "web/src/auth/types.ts",
+      "line": 57,
+      "category": "diverged-clone",
+      "description": "INV-005 / HasSecondFactor is TOTP OR email. Canonical: auth/model.go:173 and web hasSecondFactor (types.ts:57). SettingsPage.tsx:213 already uses the helper, but IdentityHero at SettingsPage.tsx:370 sets needs2fa=!me.totp_enabled — email-only accounts see '2FA off' on the hub hero. AdminUsersPage.tsx:198 shows admin.has_2fa only when totp_enabled. types.ts:51 documents this exact prior drift. AccountHero.tsx:19 is correct.",
+      "fix": "Replace remaining totp_enabled 'has 2FA' reads with hasSecondFactor(user). Keep totp_enabled only for authenticator-specific UI.",
+      "status": "open",
+      "agent": "Eco",
+      "lens": "duplication",
+      "impact": "INV-005 / HasSecondFactor is TOTP OR email. Canonical: auth/model.go:173 and web hasSecondFactor (types.ts:57). SettingsPage.tsx:213 already uses the helper, but IdentityHero at SettingsPage.tsx:370 sets needs2fa=!me.totp_enabled — email-on"
+    },
+    {
+      "title": "http(s) URL gate forked: Host vs ToLower vs prefix",
+      "severity": "HIGH",
+      "confidence": "high",
+      "path": "backend/internal/links/urls.go",
+      "line": 13,
+      "category": "diverged-clone",
+      "description": "urls.go:13 ValidateAbsoluteHTTPURL is the documented single scheme rule (DTO + JSON import): requires Host, scheme == http|https (case-sensitive). Netscape isHTTPScheme (netscape.go:201) and screenshot isHTTPScheme (screenshot_handler.go:438) ToLower the scheme and skip Host — HTTP://example.com and https: (empty host) pass Netscape, fail CRUD/JSON. metadata_handler.go:108 re-parses instead of calling ValidateAbsoluteHTTPURL (different error codes, extra length cap). redirect/handler.go:100 uses HasPrefix http://|https:// (also case-sensitive, no parse). preview/fetcher.go:64 and netpolicy.go:108 are more copies; netpolicy does check Hostname.",
+      "fix": "Make ValidateAbsoluteHTTPURL (or netpolicy) the only write-path predicate. Netscape + metadata + screenshot scheme pre-check must call it. Keep redirect HasPrefix as defense-in-depth or fold into the same helper.",
+      "status": "open",
+      "agent": "Eco",
+      "lens": "duplication",
+      "impact": "urls.go:13 ValidateAbsoluteHTTPURL is the documented single scheme rule (DTO + JSON import): requires Host, scheme == http|https (case-sensitive). Netscape isHTTPScheme (netscape.go:201) and screenshot isHTTPScheme (screenshot_handler.go:43"
+    },
+    {
+      "title": "Hostname allowlist copied: A-Z vs lowercase-only",
+      "severity": "MEDIUM",
+      "confidence": "high",
+      "path": "backend/internal/policy/policy.go",
+      "line": 199,
+      "category": "diverged-clone",
+      "description": "auth.validEmailDomain (handler.go:1269) comments it is the same allowlist as policy.validDomain (policy.go:199). They are not: policy accepts only a-z (Google domain list is folded); auth also accepts A-Z because addresses are not folded first. Both cap at 253 and share the hyphen/label skeleton. A rule change (IDNA, underscore, punycode) must be applied twice or Google allowlist vs signup email disagree on Example.COM vs example.com after folding.",
+      "fix": "One validHostname(s, allowUpper bool) in a tiny pkg (or fold then call policy.validDomain from auth after ToLower of the domain part).",
+      "status": "open",
+      "agent": "Eco",
+      "lens": "duplication",
+      "impact": "auth.validEmailDomain (handler.go:1269) comments it is the same allowlist as policy.validDomain (policy.go:199). They are not: policy accepts only a-z (Google domain list is folded); auth also accepts A-Z because addresses are not folded fi"
+    },
+    {
+      "title": "Image upload admission is a T3 twin that drifted",
+      "severity": "MEDIUM",
+      "confidence": "high",
+      "path": "backend/internal/imageopt/imageopt.go",
+      "line": 50,
+      "category": "diverged-clone",
+      "description": "links.ScreenshotHandler.UploadImage (screenshot_handler.go:499) and notes.ImageHandler.Upload (image_handler.go:55) share 5MiB, DetectContentType vs AllowedUploadMIMEs, OptimizeForStore, same 413/415 envelopes. Already diverged: ParseMultipartForm+empty_file vs MultipartReader that maps empty to missing_image; notes skips empty-file as a distinct 400. MIME/size/optimize must change together (notes comment even says it mirrors the 5MiB cap).",
+      "fix": "Extract ReadUploadedImage(r, max) in imageopt (MaxBytesReader, field 'image', size, MIME, OptimizeForStore). Handlers keep ownership/lease/key policy only.",
+      "status": "open",
+      "agent": "Eco",
+      "lens": "duplication",
+      "impact": "links.ScreenshotHandler.UploadImage (screenshot_handler.go:499) and notes.ImageHandler.Upload (image_handler.go:55) share 5MiB, DetectContentType vs AllowedUploadMIMEs, OptimizeForStore, same 413/415 envelopes. Already diverged: ParseMultip"
+    },
+    {
+      "title": "Hint-must-not-equal-password copied with trim drift",
+      "severity": "MEDIUM",
+      "confidence": "medium",
+      "path": "backend/internal/folders/dto.go",
+      "line": 175,
+      "category": "cross-layer-rule",
+      "description": "Same equality rule in folders.validateHint (dto.go:175, EqualFold after TrimSpace on password, hint already normalized), settings.setMasterInput.Validate (dto.go:49, EqualFold hint vs TrimSpace(password)), settings/repository.go:110 (stored hint vs new password), masterPasswordForm.ts:27 (toLowerCase, does not trim password), folderDialogPayload.ts:29 (toLowerCase, no trim). '  Secret' vs hint 'secret' can pass the SPA and fail the API, or the reverse depending on which path trims.",
+      "fix": "One HintEqualsPassword(hint, password string) bool (trim + EqualFold) in a small shared helper; SPA ports the same trim before compare.",
+      "status": "open",
+      "agent": "Eco",
+      "lens": "duplication",
+      "impact": "Same equality rule in folders.validateHint (dto.go:175, EqualFold after TrimSpace on password, hint already normalized), settings.setMasterInput.Validate (dto.go:49, EqualFold hint vs TrimSpace(password)), settings/repository.go:110 (stored"
+    }
+  ]
+}

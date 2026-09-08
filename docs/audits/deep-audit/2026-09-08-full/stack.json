@@ -1,0 +1,80 @@
+{
+  "root": "/Users/justoeu/Developer/Workspace/foldex",
+  "languages": [
+    "go",
+    "javascript",
+    "typescript"
+  ],
+  "frameworks": [
+    "docker",
+    "postgres",
+    "react",
+    "vite",
+    "vitest"
+  ],
+  "package_managers": [
+    "bun",
+    "docker-compose",
+    "go-modules",
+    "npm"
+  ],
+  "ecosystems": [
+    "docker",
+    "go",
+    "npm"
+  ],
+  "manifests": [
+    {
+      "kind": "dockerfile",
+      "path": "backend/Dockerfile"
+    },
+    {
+      "kind": "go",
+      "path": "backend/go.mod"
+    },
+    {
+      "kind": "docker-compose",
+      "path": "docker-compose.db.yml"
+    },
+    {
+      "kind": "docker-compose",
+      "path": "docker-compose.mail.yml"
+    },
+    {
+      "kind": "docker-compose",
+      "path": "docker-compose.override.yml"
+    },
+    {
+      "kind": "docker-compose",
+      "path": "docker-compose.services.yml"
+    },
+    {
+      "kind": "docker-compose",
+      "path": "docker-compose.yml"
+    },
+    {
+      "kind": "npm",
+      "path": "extension/package.json"
+    },
+    {
+      "kind": "dockerfile",
+      "path": "web/Dockerfile"
+    },
+    {
+      "kind": "npm",
+      "path": "web/package.json"
+    }
+  ],
+  "signals": [
+    "docker-image:axllent/mailpit:v1.31.1@sha256:98b916bd3c8d61f7633a52d3ea2f58d00620cb01ca57ab59edde68c347a95365",
+    "docker-image:justoeu/foldex-backend:${FOLDEX_VERSION:-2.21.2}",
+    "docker-image:justoeu/foldex-backend:${FOLDEX_VERSION:-2.21.2}-backup-agent",
+    "docker-image:justoeu/foldex-web:${FOLDEX_VERSION:-2.21.2}",
+    "docker-image:postgres:18.6-alpine",
+    "docker-image:rustfs/rustfs:1.0.0-rc.5@sha256:c36b3efea3d1e503f1a2581abd0e7611e0e5820dd30e1850a52384b3fc52bda4",
+    "node:foldex-extension",
+    "node:foldex-web",
+    "vite-config:web/vite.config.ts"
+  ],
+  "catalog": "catalogs/classic-bugs.md"
+}
