@@ -467,6 +467,157 @@ func TestRepository_Update_RemovePassword_OnUnprotectedFolder_IsIdempotent(t *te
 	assert.False(t, updated.HasPassword)
 }
 
+func TestRepository_Update_PasswordHintParentMatrix(t *testing.T) {
+	ptr := func(s string) *string { return &s }
+	type bits struct {
+		passwordSet, passwordHintSet, liveHint, parent bool
+	}
+	tests := []struct {
+		name    string
+		bits    bits
+		in      func(current *string, parentID *int64, liveHint string) folders.UpdateInput
+		wantErr error
+	}{
+		{
+			name: "password_only_equals_live_hint/INV-067",
+			bits: bits{passwordSet: true, liveHint: true},
+			in: func(current *string, _ *int64, liveHint string) folders.UpdateInput {
+				return folders.UpdateInput{PasswordSet: true, Password: ptr(liveHint), CurrentPassword: current}
+			},
+			wantErr: folders.ErrHintMatchesPassword,
+		},
+		{
+			name: "password_only_equals_live_hint_with_parent/INV-067",
+			bits: bits{passwordSet: true, liveHint: true, parent: true},
+			in: func(current *string, parentID *int64, liveHint string) folders.UpdateInput {
+				return folders.UpdateInput{
+					PasswordSet: true, Password: ptr(liveHint), CurrentPassword: current,
+					ParentIDSet: true, ParentID: parentID,
+				}
+			},
+			wantErr: folders.ErrHintMatchesPassword,
+		},
+		{
+			name: "password_only_distinct_from_live_hint",
+			bits: bits{passwordSet: true, liveHint: true},
+			in: func(current *string, _ *int64, _ string) folders.UpdateInput {
+				return folders.UpdateInput{PasswordSet: true, Password: ptr("new-pass-ok"), CurrentPassword: current}
+			},
+		},
+		{
+			name: "hint_only_without_current_password",
+			bits: bits{passwordHintSet: true, liveHint: true},
+			in: func(*string, *int64, string) folders.UpdateInput {
+				return folders.UpdateInput{PasswordHintSet: true, PasswordHint: ptr("fresh hint")}
+			},
+			wantErr: folders.ErrWrongPassword,
+		},
+		{
+			name: "hint_only_equals_password",
+			bits: bits{passwordHintSet: true, liveHint: true},
+			in: func(current *string, _ *int64, _ string) folders.UpdateInput {
+				return folders.UpdateInput{PasswordHintSet: true, PasswordHint: current, CurrentPassword: current}
+			},
+			wantErr: folders.ErrHintMatchesPassword,
+		},
+		{
+			name: "hint_only_ok",
+			bits: bits{passwordHintSet: true, liveHint: true},
+			in: func(current *string, _ *int64, _ string) folders.UpdateInput {
+				return folders.UpdateInput{PasswordHintSet: true, PasswordHint: ptr("fresh hint"), CurrentPassword: current}
+			},
+		},
+		{
+			name: "password_and_hint_equal",
+			bits: bits{passwordSet: true, passwordHintSet: true, liveHint: true},
+			in: func(current *string, _ *int64, _ string) folders.UpdateInput {
+				same := ptr("same-secret")
+				return folders.UpdateInput{PasswordSet: true, Password: same, PasswordHintSet: true, PasswordHint: same, CurrentPassword: current}
+			},
+			wantErr: folders.ErrHintMatchesPassword,
+		},
+		{
+			name: "password_and_hint_ok_with_parent",
+			bits: bits{passwordSet: true, passwordHintSet: true, liveHint: true, parent: true},
+			in: func(current *string, parentID *int64, _ string) folders.UpdateInput {
+				return folders.UpdateInput{
+					PasswordSet: true, Password: ptr("new-pass-ok"), CurrentPassword: current,
+					PasswordHintSet: true, PasswordHint: ptr("fresh hint"),
+					ParentIDSet: true, ParentID: parentID,
+				}
+			},
+		},
+		{
+			name: "parent_cycle",
+			bits: bits{parent: true},
+			in: func(_ *string, parentID *int64, _ string) folders.UpdateInput {
+				return folders.UpdateInput{ParentIDSet: true, ParentID: parentID}
+			},
+			wantErr: folders.ErrParentCycle,
+		},
+		{
+			name: "parent_ok",
+			bits: bits{parent: true},
+			in: func(_ *string, parentID *int64, _ string) folders.UpdateInput {
+				return folders.UpdateInput{ParentIDSet: true, ParentID: parentID}
+			},
+		},
+		{
+			name: "first_password_no_live_hint",
+			bits: bits{passwordSet: true},
+			in: func(*string, *int64, string) folders.UpdateInput {
+				return folders.UpdateInput{PasswordSet: true, Password: ptr("first-pass")}
+			},
+		},
+		{
+			name: "hint_on_unprotected",
+			bits: bits{passwordHintSet: true},
+			in: func(*string, *int64, string) folders.UpdateInput {
+				return folders.UpdateInput{PasswordHintSet: true, PasswordHint: ptr("orphan hint")}
+			},
+			wantErr: folders.ErrHintWithoutPassword,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, uid, frepo, _ := setup(t)
+			pw := "folder-pass"
+			hint := "the usual"
+			in := folders.CreateInput{Name: "Target", Color: "#abc"}
+			if tt.bits.liveHint {
+				in.Password = &pw
+				in.PasswordHint = &hint
+			}
+			target, err := frepo.Create(ctx, uid, in)
+			require.NoError(t, err)
+
+			var parentID *int64
+			if tt.bits.parent {
+				other, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Other", Color: "#def"})
+				require.NoError(t, err)
+				if tt.wantErr == folders.ErrParentCycle {
+					child, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Child", Color: "#fed", ParentID: &target.ID})
+					require.NoError(t, err)
+					parentID = &child.ID
+				} else {
+					parentID = &other.ID
+				}
+			}
+
+			var current *string
+			if target.HasPassword {
+				current = &pw
+			}
+			_, err = frepo.Update(ctx, uid, target.ID, tt.in(current, parentID, hint))
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func assertWrongPassword(t *testing.T, err error) {
 	t.Helper()
 	require.ErrorIs(t, err, folders.ErrWrongPassword)
