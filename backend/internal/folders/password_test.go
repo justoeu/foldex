@@ -12,19 +12,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-)
 
-func TestHashPassword_VerifyPassword_RoundTrip(t *testing.T) {
-	hash, err := HashPassword("correct horse battery staple")
-	require.NoError(t, err)
-	assert.NotEqual(t, "correct horse battery staple", hash, "hash must not equal the plaintext")
-	assert.True(t, VerifyPassword(hash, "correct horse battery staple"))
-	assert.False(t, VerifyPassword(hash, "wrong password"))
-}
+	"foldex/internal/pkg/pwhash"
+)
 
 func TestIssueUnlockToken_VerifyUnlockToken_HappyPath(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
-	hash, err := HashPassword("secret123")
+	hash, err := pwhash.Hash("secret123")
 	require.NoError(t, err)
 
 	token := IssueUnlockToken(secret, 42, hash)
@@ -33,7 +27,7 @@ func TestIssueUnlockToken_VerifyUnlockToken_HappyPath(t *testing.T) {
 
 func TestVerifyUnlockToken_RejectsWrongFolderOrSecret(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
-	hash, err := HashPassword("secret123")
+	hash, err := pwhash.Hash("secret123")
 	require.NoError(t, err)
 	token := IssueUnlockToken(secret, 42, hash)
 
@@ -45,9 +39,9 @@ func TestVerifyUnlockToken_RejectsWrongFolderOrSecret(t *testing.T) {
 
 func TestVerifyUnlockToken_InvalidatedByPasswordChange(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
-	oldHash, err := HashPassword("old-password")
+	oldHash, err := pwhash.Hash("old-password")
 	require.NoError(t, err)
-	newHash, err := HashPassword("new-password")
+	newHash, err := pwhash.Hash("new-password")
 	require.NoError(t, err)
 
 	token := IssueUnlockToken(secret, 7, oldHash)
@@ -60,7 +54,7 @@ func TestVerifyUnlockToken_InvalidatedByPasswordChange(t *testing.T) {
 
 func TestVerifyUnlockToken_RejectsExpiredToken(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
-	hash, err := HashPassword("secret123")
+	hash, err := pwhash.Hash("secret123")
 	require.NoError(t, err)
 
 	// Hand-craft an already-expired token (exp = 1 second ago) instead of
@@ -74,7 +68,7 @@ func TestVerifyUnlockToken_RejectsExpiredToken(t *testing.T) {
 
 func TestCheckUnlock(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
-	hash, err := HashPassword("secret123")
+	hash, err := pwhash.Hash("secret123")
 	require.NoError(t, err)
 	token := IssueUnlockToken(secret, 1, hash)
 

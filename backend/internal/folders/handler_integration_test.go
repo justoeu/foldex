@@ -23,6 +23,7 @@ import (
 	"foldex/internal/testdb"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/pwhash"
 
 	"foldex/internal/pkg/authctx/authctxtest"
 	"os"
@@ -634,7 +635,7 @@ func TestHandler_DeletePasswordCheckAndMutationAreAtomic(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, oldHash)
 	oldToken := folders.IssueUnlockToken(testUnlockKey, folder.ID, *oldHash)
-	newHash, err := folders.HashPassword("new-password")
+	newHash, err := pwhash.Hash("new-password")
 	require.NoError(t, err)
 
 	changeTx, err := pool.Begin(context.Background())

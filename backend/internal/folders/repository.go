@@ -15,6 +15,7 @@ import (
 	"foldex/internal/notemedia"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/domainerr"
+	"foldex/internal/pkg/pwhash"
 )
 
 // maxSerializationRetries bounds SERIALIZABLE update retries on SQLSTATE 40001
@@ -31,7 +32,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateInput) (Folder, error) {
 	var passwordHash *string
 	if in.Password != nil {
-		h, err := HashPassword(*in.Password)
+		h, err := pwhash.Hash(*in.Password)
 		if err != nil {
 			return Folder{}, fmt.Errorf("hash password: %w", err)
 		}
@@ -269,7 +270,7 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	// check, under the same SERIALIZABLE isolation.
 	var newPasswordHash *string
 	if in.PasswordSet && in.Password != nil {
-		h, err := HashPassword(*in.Password)
+		h, err := pwhash.Hash(*in.Password)
 		if err != nil {
 			return Folder{}, fmt.Errorf("hash new password: %w", err)
 		}
@@ -462,7 +463,7 @@ func checkPasswordChangeAuthorized(ctx context.Context, tx pgx.Tx, uid authctx.U
 		return fmt.Errorf("read current password hash: %w", err)
 	}
 	if currentHash != nil {
-		if currentPassword == nil || !VerifyPassword(*currentHash, *currentPassword) {
+		if currentPassword == nil || !pwhash.Verify(*currentHash, *currentPassword) {
 			return ErrWrongPassword
 		}
 	}
@@ -487,7 +488,7 @@ func checkHintNotPassword(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id
 	if effHash == nil {
 		return ErrHintWithoutPassword
 	}
-	if VerifyPassword(*effHash, hint) {
+	if pwhash.Verify(*effHash, hint) {
 		return ErrHintMatchesPassword
 	}
 	return nil
@@ -517,7 +518,7 @@ func (r *Repository) ResetPasswordByMaster(ctx context.Context, uid authctx.User
 	if live == nil {
 		return ErrMasterNotConfigured
 	}
-	if !VerifyPassword(*live, plain) {
+	if !pwhash.Verify(*live, plain) {
 		return ErrStaleMasterProof
 	}
 	ct, err := tx.Exec(ctx,

@@ -14,6 +14,7 @@ import (
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/pwhash"
 	"foldex/internal/roleperm"
 )
 
@@ -214,7 +215,7 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		h.writeLocked(w, until)
 		return
 	}
-	if !VerifyPassword(*hash, in.Password) {
+	if !pwhash.Verify(*hash, in.Password) {
 		fails, lockedUntil := h.limiter.CommitFail(key)
 		if !lockedUntil.IsZero() {
 			h.writeLocked(w, lockedUntil)

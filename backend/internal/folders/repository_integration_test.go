@@ -18,6 +18,7 @@ import (
 	"foldex/internal/testdb"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/pwhash"
 )
 
 func setup(t *testing.T) (context.Context, authctx.UserID, *folders.Repository, *links.Repository) {
@@ -235,7 +236,7 @@ func TestRepository_DeleteCascadeLocksSubtreeBeforeProtectionCheck(t *testing.T)
 	require.NoError(t, err)
 	child, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Child", Color: "#def", ParentID: &root.ID})
 	require.NoError(t, err)
-	hash, err := folders.HashPassword("became-protected")
+	hash, err := pwhash.Hash("became-protected")
 	require.NoError(t, err)
 
 	changeTx, err := pool.Begin(ctx)
@@ -310,7 +311,7 @@ func TestRepository_CreateWithPassword(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hash)
 	assert.NotEqual(t, pw, *hash, "stored value must be a hash, not the plaintext")
-	assert.True(t, folders.VerifyPassword(*hash, pw))
+	assert.True(t, pwhash.Verify(*hash, pw))
 
 	unprotected, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Open", Color: "#def"})
 	require.NoError(t, err)
@@ -382,7 +383,7 @@ func TestRepository_Update_SetPasswordFirstTime_NoCurrentPasswordNeeded(t *testi
 	hash, err := frepo.PasswordHashFor(ctx, uid, f.ID)
 	require.NoError(t, err)
 	require.NotNil(t, hash)
-	assert.True(t, folders.VerifyPassword(*hash, pw))
+	assert.True(t, pwhash.Verify(*hash, pw))
 }
 
 // TestRepository_Update_ChangePassword_RequiresCurrentPassword locks the
@@ -412,7 +413,7 @@ func TestRepository_Update_ChangePassword_RequiresCurrentPassword(t *testing.T) 
 	hash, err := frepo.PasswordHashFor(ctx, uid, f.ID)
 	require.NoError(t, err)
 	require.NotNil(t, hash)
-	assert.True(t, folders.VerifyPassword(*hash, oldPW), "rejected change attempts must not mutate the stored hash")
+	assert.True(t, pwhash.Verify(*hash, oldPW), "rejected change attempts must not mutate the stored hash")
 
 	// Correct CurrentPassword succeeds.
 	updated, err := frepo.Update(ctx, uid, f.ID, folders.UpdateInput{PasswordSet: true, Password: &newPW, CurrentPassword: &oldPW})
@@ -422,8 +423,8 @@ func TestRepository_Update_ChangePassword_RequiresCurrentPassword(t *testing.T) 
 	hash, err = frepo.PasswordHashFor(ctx, uid, f.ID)
 	require.NoError(t, err)
 	require.NotNil(t, hash)
-	assert.True(t, folders.VerifyPassword(*hash, newPW))
-	assert.False(t, folders.VerifyPassword(*hash, oldPW), "old password must no longer verify")
+	assert.True(t, pwhash.Verify(*hash, newPW))
+	assert.False(t, pwhash.Verify(*hash, oldPW), "old password must no longer verify")
 }
 
 // TestRepository_Update_RemovePassword_RequiresCurrentPassword mirrors the

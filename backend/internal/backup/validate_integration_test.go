@@ -21,6 +21,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
+	"foldex/internal/pkg/pwhash"
 	"foldex/internal/settings"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
@@ -802,7 +803,7 @@ func int64Ptr(v int64) *int64 { return &v }
 
 func cost31Hash(t *testing.T) string {
 	t.Helper()
-	hash, err := folders.HashPassword("backup-password")
+	hash, err := pwhash.Hash("backup-password")
 	require.NoError(t, err)
 	return hash[:4] + "31" + hash[6:]
 }
