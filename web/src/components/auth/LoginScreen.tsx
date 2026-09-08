@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { login, errorCode, errorStatus } from '../../api/auth'
+import { login } from '../../api/auth'
+import { apiErrorCode, apiErrorStatus } from '../../lib/apiError'
 import { useAuth } from '../../auth/AuthProvider'
 import { urlTokens } from '../../auth/authUrl'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
@@ -168,10 +169,10 @@ export function LoginScreen({ onForgotPassword }: { onForgotPassword?: () => voi
  * hash and a 250 ms duration floor to remove.
  */
 function messageFor(err: unknown, t: (k: string, o?: Record<string, unknown>) => string): string {
-  const code = errorCode(err)
+  const code = apiErrorCode(err)
   if (code === 'too_many_attempts') return t('auth_errors.too_many_attempts')
   if (code === 'invalid_credentials') return t('auth_errors.invalid_credentials')
-  if (errorStatus(err) === 0) return t('auth_errors.network')
+  if ((apiErrorStatus(err) ?? 0) === 0) return t('auth_errors.network')
   return t('auth_errors.generic')
 }
 

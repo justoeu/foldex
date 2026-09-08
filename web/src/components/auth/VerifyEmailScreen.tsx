@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { confirmEmailChange, errorCode, errorStatus, verifyEmail } from '../../api/auth'
+import { confirmEmailChange, verifyEmail } from '../../api/auth'
+import { apiErrorCode, apiErrorStatus } from '../../lib/apiError'
 import { AuthShell, AuthError } from './AuthShell'
 
 type State = 'working' | 'done' | 'invalid' | 'failed' | 'taken'
@@ -69,8 +70,8 @@ export function VerifyEmailScreen({
       .catch((err) => {
         // A dead link and an unreachable server are different problems: the
         // first needs a new e-mail, the second needs a retry.
-        const code = errorCode(err)
-        if (code === 'verify_invalid' || code === 'email_change_invalid' || errorStatus(err) === 404) {
+        const code = apiErrorCode(err)
+        if (code === 'verify_invalid' || code === 'email_change_invalid' || apiErrorStatus(err) === 404) {
           setState('invalid')
         } else if (code === 'email_taken') {
           // The one failure worth telling apart: somebody claimed the address

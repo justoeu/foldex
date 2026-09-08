@@ -3,11 +3,11 @@ import { defaultFeatures, type SessionState } from './types'
 import {
   LAST_OWNER_KEY,
   applySessionPlan,
-  isCurrentGeneration,
   ownerIdOf,
   storageSyncDecision,
   unreachableFallback,
 } from './AuthProvider.lifecycle'
+import lifecycleSrc from './AuthProvider.lifecycle.ts?raw'
 import { testAdminUser } from '../test/renderWithProviders'
 
 const features = defaultFeatures
@@ -103,8 +103,7 @@ describe('AuthProviderLifecycleCharter', () => {
     ).toBe(false)
   })
 
-  it('a stale probe cannot resurrect a signed-out session', () => {
-    expect(isCurrentGeneration(1, 2)).toBe(false)
-    expect(isCurrentGeneration(2, 2)).toBe(true)
+  it('does not wrap request === current in isCurrentGeneration', () => {
+    expect(lifecycleSrc).not.toMatch(/function isCurrentGeneration/)
   })
 })

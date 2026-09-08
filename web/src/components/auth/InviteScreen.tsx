@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { acceptInvite, lookupInvite, errorCode, errorStatus, type InvitePreview } from '../../api/auth'
+import { acceptInvite, lookupInvite, type InvitePreview } from '../../api/auth'
+import { apiErrorCode, apiErrorStatus } from '../../lib/apiError'
 import { useAuth } from '../../auth/AuthProvider'
 import { PasswordStrength } from '../PasswordStrength'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
@@ -68,12 +69,12 @@ export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () 
         if (controller.signal.aborted) return
         // Expired, revoked, already used and never-existed are one
         // indistinguishable 404 by design — so there is exactly one message.
-        const code = errorCode(err)
-        if (code === 'invite_invalid' || code === 'not_found' || errorStatus(err) === 404) {
+        const code = apiErrorCode(err)
+        if (code === 'invite_invalid' || code === 'not_found' || apiErrorStatus(err) === 404) {
           setLookupState('invalid')
           return
         }
-        setLookupError(errorStatus(err) === 0 ? 'network' : 'generic')
+        setLookupError((apiErrorStatus(err) ?? 0) === 0 ? 'network' : 'generic')
         setLookupState('failed')
       })
     return () => controller.abort()
@@ -242,7 +243,7 @@ function messageFor(
   t: (k: string, o?: Record<string, unknown>) => string,
   minLen: number,
 ): string {
-  switch (errorCode(err)) {
+  switch (apiErrorCode(err)) {
     case 'invite_invalid':
       return t('auth_invite.invalid_body')
     case 'email_taken':
@@ -254,6 +255,6 @@ function messageFor(
     case 'too_many_attempts':
       return t('auth_errors.too_many_attempts')
     default:
-      return errorStatus(err) === 0 ? t('auth_errors.network') : t('auth_errors.generic')
+      return (apiErrorStatus(err) ?? 0) === 0 ? t('auth_errors.network') : t('auth_errors.generic')
   }
 }

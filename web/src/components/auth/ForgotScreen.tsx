@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { errorStatus, forgotPassword } from '../../api/auth'
+import { forgotPassword } from '../../api/auth'
+import { apiErrorStatus } from '../../lib/apiError'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 
 /**
@@ -38,7 +39,7 @@ export function ForgotScreen({ onBack }: { onBack: () => void }) {
     } catch (err) {
       // INV-029's uniform 202 hides account existence, not connectivity. A
       // status-0 failure is the same for every address and is not an oracle.
-      setError(t(errorStatus(err) === 0 ? 'auth_errors.network' : 'auth_errors.generic'))
+      setError(t((apiErrorStatus(err) ?? 0) === 0 ? 'auth_errors.network' : 'auth_errors.generic'))
     } finally {
       setBusy(false)
     }

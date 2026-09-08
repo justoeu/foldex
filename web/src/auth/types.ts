@@ -58,18 +58,6 @@ export function hasSecondFactor(user: Pick<AuthUser, 'totp_enabled' | 'email_2fa
   return user.totp_enabled === true || user.email_2fa_enabled === true
 }
 
-/**
- * Whether a mailed step-up code is obtainable.
- *
- * Separate from `hasSecondFactor`: an account whose only factor is an
- * authenticator has no mailbox path, and one with only e-mail has no six digits
- * to read from an app. The alternative for the latter is a recovery code, which
- * is a lockout credential — too expensive for a settings change.
- */
-export function canMailStepUpCode(user: Pick<AuthUser, 'email_2fa_enabled'>): boolean {
-  return user.email_2fa_enabled === true
-}
-
 export function isAdminRole(role: Role): boolean {
   return role === 'owner' || role === 'admin'
 }

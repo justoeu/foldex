@@ -294,9 +294,12 @@ export async function optimisticEntryPatch(
   }
 
   if (kind === 'link') mapCachedLinksPatch(qc, id, patch)
-  mapCachedEntries(qc, (e) =>
-    e.kind === kind && e.id === id ? { ...e, ...patch } as Entry : e,
-  )
+  mapCachedEntries(qc, (e) => {
+    if (e.kind !== kind || e.id !== id) return e
+    if (e.kind === 'link') return { ...e, ...patch }
+    if ('pinned' in patch) return { ...e, pinned: patch.pinned ?? e.pinned }
+    return e
+  })
 
   const rollback = () => {
     for (const [key, previous] of previousLinks) {

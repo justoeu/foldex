@@ -1,4 +1,4 @@
-import { errorCode, errorStatus } from '../../api/auth'
+import { apiErrorCode, apiErrorStatus } from '../../lib/apiError'
 import type { FactorMethod } from '../../api/twofa'
 
 export type EnrollPhase = 'choose' | 'enroll' | 'confirm' | 'codes'
@@ -27,10 +27,10 @@ export function enrollPhase(state: {
 }
 
 export function enrollSubmitErrorKey(err: unknown): string {
-  const code = errorCode(err)
+  const code = apiErrorCode(err)
   if (code === 'invalid_code') return 'auth_errors.invalid_code'
   if (code === 'challenge_invalid') return 'auth_otp.expired'
-  if (errorStatus(err) === 0) return 'auth_errors.network'
+  if ((apiErrorStatus(err) ?? 0) === 0) return 'auth_errors.network'
   return 'auth_errors.generic'
 }
 
