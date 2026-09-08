@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"image"
 	"image/color"
 	"image/png"
@@ -21,6 +24,7 @@ import (
 
 	"foldex/internal/imageopt"
 	"foldex/internal/links"
+	"foldex/internal/ports"
 	"foldex/internal/testsupport"
 )
 
@@ -141,6 +145,25 @@ func (f *fakeUploader) DeleteObject(ctx context.Context, key string) error {
 
 // These unit tests exercise the worker's branching that does not require a
 // real database — channel-full Enqueue path and concurrency clamping.
+
+func TestPreviewDoesNotReexportQueueSentinels(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "worker.go", nil, 0)
+	require.NoError(t, err)
+	var aliases []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		spec, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		for _, name := range spec.Names {
+			if name.Name == "ErrQueueFull" || name.Name == "ErrStopped" {
+				aliases = append(aliases, name.Name)
+			}
+		}
+		return true
+	})
+	require.Empty(t, aliases, "preview must use ports.ErrQueueFull / ports.ErrStopped directly")
+}
 
 func TestNewWorker_ClampsZeroConcurrency(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -557,7 +580,7 @@ func TestWorker_EnqueueDropsWhenChannelFull(t *testing.T) {
 	}()
 	select {
 	case err := <-done:
-		assert.ErrorIs(t, err, ErrQueueFull)
+		assert.ErrorIs(t, err, ports.ErrQueueFull)
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Enqueue blocked when channel was full")
 	}
@@ -660,7 +683,7 @@ func TestWorker_EnqueueAfterStopReturnsErrStopped(t *testing.T) {
 	w.Stop() // safe without Start — cancel guard is nil-safe
 
 	err := w.Enqueue(42)
-	assert.ErrorIs(t, err, ErrStopped)
+	assert.ErrorIs(t, err, ports.ErrStopped)
 }
 
 // TestWorker_StopDrainsBufferedJobs proves that jobs accepted into the
@@ -672,21 +695,21 @@ func TestWorker_StopDrainsBufferedJobs(t *testing.T) {
 	assert.NoError(t, w.Enqueue(2))
 	w.Stop() // no Start — Wait is no-op; drain empties buffer
 	assert.Equal(t, 0, len(w.jobs))
-	assert.ErrorIs(t, w.Enqueue(3), ErrStopped)
+	assert.ErrorIs(t, w.Enqueue(3), ports.ErrStopped)
 }
 
 func TestWorker_EnqueueDuringStop_ReturnsErrStopped(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := NewWorker(nil, 1, time.Second, logger)
 	w.stopped.Store(true)
-	assert.ErrorIs(t, w.Enqueue(1), ErrStopped)
+	assert.ErrorIs(t, w.Enqueue(1), ports.ErrStopped)
 
 	w2 := NewWorker(nil, 1, time.Second, logger)
 	assert.NoError(t, w2.Enqueue(9))
 	w2.stopped.Store(true)
 	// Channel still has capacity; send succeeds then post-check fails.
 	err := w2.Enqueue(10)
-	assert.ErrorIs(t, err, ErrStopped)
+	assert.ErrorIs(t, err, ports.ErrStopped)
 	w2.Stop()
 	assert.Equal(t, 0, len(w2.jobs), "Stop must drain leftover jobs")
 }

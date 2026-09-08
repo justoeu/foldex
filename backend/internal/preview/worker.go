@@ -17,14 +17,6 @@ import (
 	"foldex/internal/ports"
 )
 
-// ErrQueueFull / ErrStopped alias the port sentinels. Delivery packages
-// match ports.ErrQueueFull without importing preview; preview's own tests
-// keep using the local names.
-var (
-	ErrQueueFull = ports.ErrQueueFull
-	ErrStopped   = ports.ErrStopped
-)
-
 const (
 	screenshotMaxDim         = 1024
 	screenshotQuality        = 82
@@ -156,7 +148,7 @@ func (w *Worker) requeueLoop(ctx context.Context) {
 // requeuePending or in-flight HTTP handlers, and a closed-channel send would
 // panic. Goroutines exit on ctx.Done(). After workers exit, leftover buffered
 // jobs are drained so Enqueue-vs-Stop TOCTOU cannot park work forever.
-// After Stop returns, Enqueue rejects with ErrStopped.
+// After Stop returns, Enqueue rejects with ports.ErrStopped.
 func (w *Worker) Stop() {
 	w.stopOnce.Do(func() {
 		w.stopped.Store(true)
@@ -187,7 +179,7 @@ func (w *Worker) WithScreenshotFallback(sc Screenshotter, up Uploader) {
 }
 
 // Enqueue tries to schedule a preview job for linkID. Non-blocking — returns
-// ErrQueueFull when the bounded jobs channel has no slot and ErrStopped after
+// ports.ErrQueueFull when the bounded jobs channel has no slot and ports.ErrStopped after
 // Stop has been called. The link row is already pending, so queue-full work is
 // recovered as capacity returns. The internal Warn keeps the operational
 // signal even when a caller discards the error.
@@ -198,12 +190,12 @@ func (w *Worker) Enqueue(linkID int64) error {
 func (w *Worker) enqueue(job previewJob, mode enqueueMode) error {
 	linkID := job.id
 	if w.stopped.Load() {
-		return ErrStopped
+		return ports.ErrStopped
 	}
 	w.jobsMu.Lock()
 	defer w.jobsMu.Unlock()
 	if w.stopped.Load() {
-		return ErrStopped
+		return ports.ErrStopped
 	}
 	if job, exists := w.scheduled[linkID]; exists {
 		if mode == explicitEnqueue && (job.running || job.recovery) {
@@ -218,14 +210,14 @@ func (w *Worker) enqueue(job previewJob, mode enqueueMode) error {
 		// Re-check after send: Stop may have begun between Load and send. Job
 		// sits in the buffer until Stop drains, so surface ErrStopped.
 		if w.stopped.Load() {
-			return ErrStopped
+			return ports.ErrStopped
 		}
 		return nil
 	default:
 		delete(w.scheduled, linkID)
 		w.requireRecovery()
 		w.logger.Warn("preview queue full, dropping job", "link_id", linkID)
-		return ErrQueueFull
+		return ports.ErrQueueFull
 	}
 }
 
@@ -499,7 +491,7 @@ func (w *Worker) requeuePending(ctx context.Context) {
 			return
 		}
 		err := w.enqueueRecovered(work)
-		if errors.Is(err, ErrQueueFull) {
+		if errors.Is(err, ports.ErrQueueFull) {
 			break
 		}
 		if err == nil {
