@@ -29,12 +29,17 @@ func TestDecodeOptionalInt64(t *testing.T) {
 
 func TestDecodeOptionalString(t *testing.T) {
 	t.Parallel()
-	set, v, err := jsonopt.DecodeOptionalString(json.RawMessage(`"  hi  "`), true)
+	set, v, err := jsonopt.DecodeOptionalString(json.RawMessage(`"  hi  "`))
 	require.NoError(t, err)
 	require.True(t, set)
 	require.Equal(t, "hi", *v)
 
-	set, v, err = jsonopt.DecodeOptionalString(json.RawMessage(`"  "`), true)
+	set, v, err = jsonopt.DecodeOptionalString(json.RawMessage(`"  "`))
+	require.NoError(t, err)
+	require.True(t, set)
+	require.Nil(t, v, "empty-after-trim collapses to nil")
+
+	set, v, err = jsonopt.DecodeOptionalString(json.RawMessage(`""`))
 	require.NoError(t, err)
 	require.True(t, set)
 	require.Nil(t, v)
