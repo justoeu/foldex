@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { looksLikeUrl, safeImageUrl, safeLinkHref } from './url'
+import { hostOf, looksLikeUrl, safeImageUrl, safeLinkHref } from './url'
+
+describe('hostOf', () => {
+  it.each([
+    ['https://www.example.com/path', 'example.com'],
+    ['https://example.com', 'example.com'],
+    ['http://sub.example.com:8080/', 'sub.example.com'],
+    ['not a url', ''],
+    ['', ''],
+  ])('%j → %j', (input, expected) => {
+    expect(hostOf(input)).toBe(expected)
+  })
+})
 
 describe('looksLikeUrl', () => {
   it.each([
