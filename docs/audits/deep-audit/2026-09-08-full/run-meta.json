@@ -1,0 +1,62 @@
+{
+  "generated_at": "2026-09-08 02:11:14 UTC",
+  "root": "/Users/justoeu/Developer/Workspace/foldex",
+  "app": "foldex",
+  "version": "2.21.0",
+  "version_source": "git tag",
+  "mode": "full",
+  "depth": "deep",
+  "effort": "max",
+  "base": "origin/main",
+  "head": "429c7ba",
+  "branch": "main",
+  "only": [
+    "architecture",
+    "complexity",
+    "duplication",
+    "verbosity",
+    "best_practices"
+  ],
+  "scope": [],
+  "changed_files": [],
+  "changed_file_count": 0,
+  "history": [
+    {
+      "at": "2026-09-08 02:11:14 UTC",
+      "mode": "full",
+      "depth": "deep",
+      "effort": "max",
+      "head": "429c7ba",
+      "event": "init"
+    }
+  ],
+  "merged_at": "2026-09-08 02:31:17 UTC",
+  "agent_sources": [
+    {
+      "file": "agent-atena.json",
+      "count": 4
+    },
+    {
+      "file": "agent-atlas.json",
+      "count": 4
+    },
+    {
+      "file": "agent-cerbero.json",
+      "count": 6
+    },
+    {
+      "file": "agent-dedalo.json",
+      "count": 8
+    },
+    {
+      "file": "agent-eco.json",
+      "count": 6
+    },
+    {
+      "file": "agent-laconio.json",
+      "count": 10
+    }
+  ],
+  "raw_findings": 38,
+  "unique_findings": 38
+}

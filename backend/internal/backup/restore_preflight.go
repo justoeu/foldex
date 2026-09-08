@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"foldex/internal/notemedia"
-	"foldex/internal/notes"
+	"foldex/internal/pkg/htmlsanitize"
 )
 
 type backupArchiveInspection struct {
@@ -127,7 +127,7 @@ func sanitizeSnapshotNotes(ctx context.Context, snapshot *Snapshot) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		snapshot.Notes[i].BodyHTML, snapshot.Notes[i].BodyText = notes.SanitizeBody(snapshot.Notes[i].BodyHTML)
+		snapshot.Notes[i].BodyHTML, snapshot.Notes[i].BodyText = htmlsanitize.SanitizeAndPlain(snapshot.Notes[i].BodyHTML)
 	}
 	return nil
 }

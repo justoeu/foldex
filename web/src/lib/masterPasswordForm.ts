@@ -1,3 +1,6 @@
+import { MIN_PASSWORD_LEN } from '../auth/types'
+import { hintEqualsPassword } from './hintEqualsPassword'
+
 export type MasterFormInput = {
   next: string
   confirm: string
@@ -17,14 +20,17 @@ export type MasterFormResult =
   | { ok: false; errorKey: string }
 
 export function validateMasterForm(input: MasterFormInput): MasterFormResult {
-  if (input.next.length < 8) {
+  if (input.next.length < MIN_PASSWORD_LEN) {
     return { ok: false, errorKey: 'settings.master_too_short' }
+  }
+  if (new TextEncoder().encode(input.next).length > 72) {
+    return { ok: false, errorKey: 'settings.master_too_long' }
   }
   if (input.next !== input.confirm) {
     return { ok: false, errorKey: 'settings.master_mismatch' }
   }
   const trimmedHint = input.hint.trim()
-  if (trimmedHint && trimmedHint.toLowerCase() === input.next.toLowerCase()) {
+  if (hintEqualsPassword(trimmedHint, input.next)) {
     return { ok: false, errorKey: 'settings.master_hint_equals' }
   }
   if (input.configured && !input.current) {

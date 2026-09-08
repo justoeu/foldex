@@ -12,41 +12,9 @@ import (
 	"foldex/internal/pkg/authctx"
 )
 
-// Audit actions. Closed vocabulary: the administration screen groups and
-// translates by these, so a free-form string invented at a call site would
-// render as an untranslated key nobody planned for.
-const (
-	AuditLoginSucceeded   = "login.succeeded"
-	AuditLoginFailed      = "login.failed"
-	AuditRoleChanged      = "user.role_changed"
-	AuditStatusChanged    = "user.status_changed"
-	AuditUserCreated      = "user.created"
-	AuditUserDeleted      = "user.deleted"
-	AuditOwnershipMoved   = "instance.ownership_transferred"
-	AuditInviteCreated    = "invite.created"
-	AuditInviteRevoked    = "invite.revoked"
-	AuditSessionsRevoked  = "user.sessions_revoked"
-	AuditPasswordRecovery = "user.password_recovery_sent"
-	AuditPolicyChanged    = "policy.changed"
-	AuditRolePermissions  = "role.permissions_changed"
-	// AuditBackupRunRequested records a manual "run now" on the operational
-	// backup surface (ADR-43). What executed — or failed — is backup_run's
-	// story; the trail only answers WHO asked.
-	AuditBackupRunRequested = "backup.run_requested"
-	// AuditBackupScheduleChanged records an edit (or reset to the env
-	// baseline) of the backup agenda (ADR-44). WHO moved the schedule is the
-	// trail's story; what the agent then does is backup_run's.
-	AuditBackupScheduleChanged = "backup.schedule_changed"
-	// AuditEmailChanged records the address MOVING, at the moment the
-	// confirmation link is consumed — never when it is requested. A request
-	// that nobody confirms changed nothing, and an entry for it would make the
-	// trail claim an account moved when it did not.
-	AuditEmailChanged = "user.email_changed"
-)
-
 // AuditEntry is one row of the trail as the API returns it.
 //
-// Category and Severity are derived (see audit_vocab.go), never stored. Subject
+// Category and Severity are derived (see auditpkg), never stored. Subject
 // is populated by exactly one query — the owner's own-activity feed; the
 // administrative projection does not select the column at all, which is what
 // keeps INV-045 true for a table both readers share.
@@ -107,7 +75,7 @@ func (rec AuditRecord) WithRequest(r *http.Request) AuditRecord {
 	if r == nil {
 		return rec
 	}
-	rec.IP = normalizeAuditIP(r.RemoteAddr)
+	rec.IP = ipblock.Normalize(r.RemoteAddr)
 	rec.IPTrusted = auditctx.IPTrusted(r.Context())
 	rec.UserAgent = r.UserAgent()
 	return rec
@@ -147,7 +115,7 @@ func (r *Repository) Audit(ctx context.Context, rec AuditRecord) error {
 		VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), NULLIF($6, ''),
 			NULLIF($7, '')::inet, $8, NULLIF($9, ''), NULLIF($10, ''), $11, NULLIF($12, ''))`,
 		rec.Action, actor, rec.ActorEmail, target, rec.TargetEmail, truncateDetail(rec.Detail),
-		normalizeAuditIP(rec.IP), rec.IPTrusted, truncateTo(rec.UserAgent, maxAuditUserAgent),
+		ipblock.Normalize(rec.IP), rec.IPTrusted, truncateTo(rec.UserAgent, maxAuditUserAgent),
 		truncateTo(rec.EntityKind, maxAuditEntityKind), rec.EntityID,
 		truncateTo(rec.Subject, maxAuditSubject))
 	if err != nil {
@@ -175,21 +143,6 @@ const (
 	// the range it validates and the range this clamps cannot drift apart.
 	maxAuditPageSize = 200
 )
-
-// normalizeAuditIP returns the address in Postgres's own spelling, or "" for
-// anything inet would reject.
-//
-// Parsing here rather than letting the cast fail: RemoteAddr is
-// "host:port" on a direct bind and a bare host once trustedProxyRealIP has
-// rewritten it, and an IPv4-mapped IPv6 address ("::ffff:1.2.3.4") is a second
-// spelling of a row that already exists. Both would make the blocklist's
-// equality test and the origins aggregate disagree with themselves.
-// NormalizeIP is normalizeAuditIP for callers outside this package — the
-// enforcement middleware and the blocklist share it so a blocked address and a
-// recorded one cannot be two spellings that never compare equal.
-func NormalizeIP(raw string) string { return ipblock.Normalize(raw) }
-
-func normalizeAuditIP(raw string) string { return ipblock.Normalize(raw) }
 
 func truncateTo(s string, max int) string {
 	if len(s) <= max {

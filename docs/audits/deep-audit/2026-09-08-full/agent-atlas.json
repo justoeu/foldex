@@ -1,0 +1,62 @@
+{
+  "agent": "Atlas",
+  "lens": "architecture",
+  "findings": [
+    {
+      "title": "auth is a god package (HTTP+SQL+crypto+admin+audit)",
+      "severity": "HIGH",
+      "confidence": "high",
+      "path": "backend/internal/auth/handler.go",
+      "line": 79,
+      "category": "god-module",
+      "description": "backend/internal/auth is 13918 LOC / 36 production files mixing Chi handlers, pgx repositories, cookies, TOTP/MAC, OAuth, admin people-management, and audit. Handler at handler.go:79 holds repo, mailer, cipher, GoogleProvider, PolicyReader, abusepolicy.Cache, Grants, and 9+ limiters. repository.go:22 claims every identity table; repository.go is 1590 lines, handler.go 1345, twofa_handler.go 1114, admin_handler.go 844. CRUD colocation is an allowed exception (CLAUDE.md §7) for links/notes/folders/tags/entries/stats/settings — auth is not in that list and has already spilled abusepolicy/roleperm/policy/oauthgoogle/mailoutbox without shrinking the core.",
+      "fix": "Split along already-extracted seams: keep session/login/cookies in auth; move admin_* to internal/admin (users/invites/transfer); move audit_* to internal/audit; move 2FA/TOTP/recovery to internal/auth/twofa (or authfactor). Handler should take narrow ports instead of owning every limiter and provider field.",
+      "status": "open",
+      "agent": "Atlas",
+      "lens": "architecture",
+      "impact": "backend/internal/auth is 13918 LOC / 36 production files mixing Chi handlers, pgx repositories, cookies, TOTP/MAC, OAuth, admin people-management, and audit. Handler at handler.go:79 holds repo, mailer, cipher, GoogleProvider, PolicyReader,"
+    },
+    {
+      "title": "pkg/crudupdate imports domain package tags",
+      "severity": "HIGH",
+      "confidence": "high",
+      "path": "backend/internal/pkg/crudupdate/crudupdate.go",
+      "line": 21,
+      "category": "inverted-dep",
+      "description": "pkg/ is the shared kernel (authctx, domainerr, httperr). crudupdate.go:21 imports foldex/internal/tags. TagChanges at crudupdate.go:120 embeds []tags.CreateInput; SetEntityTags at crudupdate.go:129 calls tags.SetEntityTagsWithPending. tags is a handler+repository CRUD package (tags/handler.go, tags/dto.go CreateInput with json tags). Kernel depending on a feature package inverts the layer: links/notes already call tags.SetEntityTagsWithPending directly (links/repository.go:111, notes/repository.go:126), so crudupdate is a second, upward edge. tags already imports pkg/authctx and pkg/domainerr; a future tags→crudupdate import would cycle.",
+      "fix": "Remove SetEntityTags/TagChanges from pkg/crudupdate. Keep Exec/AssertOwned/SetBuilder as the SQL skeleton only. Callers in links/notes.Update already have tags.SetEntityTagsWithPending — use that (CLAUDE.md §7: prefer tags.SetEntityTags over a pkg wrapper).",
+      "status": "open",
+      "agent": "Atlas",
+      "lens": "architecture",
+      "impact": "pkg/ is the shared kernel (authctx, domainerr, httperr). crudupdate.go:21 imports foldex/internal/tags. TagChanges at crudupdate.go:120 embeds []tags.CreateInput; SetEntityTags at crudupdate.go:129 calls tags.SetEntityTagsWithPending. tags "
+    },
+    {
+      "title": "backup restore imports notes HTTP package for sanitizer",
+      "severity": "MEDIUM",
+      "confidence": "high",
+      "path": "backend/internal/backup/db_restore_staged.go",
+      "line": 10,
+      "category": "layer-leak",
+      "description": "backup/db_restore_staged.go:10, restore_helpers.go:17, restore_preflight.go:10 import foldex/internal/notes solely to call notes.SanitizeBody (db_restore_staged.go:506, restore_helpers.go:119, restore_preflight.go:130). notes is a mixed HTTP+repository package (notes/handler.go imports net/http, chi, httperr). SanitizeBody in notes/body.go:8 is a 10-line wrapper over pkg/htmlsanitize.Sanitize + PlainText. Importing notes pulls the Chi/HTTP graph into backup orchestration (which already talks to pgx per the allowed backup.Service exception).",
+      "fix": "Move the HTML+plaintext pair into pkg/htmlsanitize (e.g. SanitizeAndPlain) or keep notes.SanitizeBody but have backup call htmlsanitize directly. notes Create/Update Normalize should use the same helper so INV-059 stays in one place.",
+      "status": "open",
+      "agent": "Atlas",
+      "lens": "architecture",
+      "impact": "backup/db_restore_staged.go:10, restore_helpers.go:17, restore_preflight.go:10 import foldex/internal/notes solely to call notes.SanitizeBody (db_restore_staged.go:506, restore_helpers.go:119, restore_preflight.go:130). notes is a mixed HTT"
+    },
+    {
+      "title": "App shell types owned by HomeView leaf",
+      "severity": "MEDIUM",
+      "confidence": "high",
+      "path": "web/src/AppWorkspace.ts",
+      "line": 5,
+      "category": "inverted-dep",
+      "description": "AppWorkspace.ts:5 imports type Sort from components/HomeView; AppNavigation.ts:5 imports type ViewMode from the same leaf. HomeView.tsx:26-27 exports those types. Controllers/shell depending on a view inverts UI layering. Damage: Sort is re-declared locally in CompactGrid.tsx:13, ListView.tsx:14, Topbar.tsx:13, MobileOverflowMenu.tsx:7 instead of a shared module — four copies of the same union because the canonical type lives under a component they cannot import without a cycle.",
+      "fix": "Move Sort and ViewMode to web/src/lib/viewPrefs.ts (or api/types.ts). HomeView, Topbar, ListView, CompactGrid, MobileOverflowMenu, AppWorkspace, and AppNavigation all import from there.",
+      "status": "open",
+      "agent": "Atlas",
+      "lens": "architecture",
+      "impact": "AppWorkspace.ts:5 imports type Sort from components/HomeView; AppNavigation.ts:5 imports type ViewMode from the same leaf. HomeView.tsx:26-27 exports those types. Controllers/shell depending on a view inverts UI layering. Damage: Sort is re"
+    }
+  ]
+}

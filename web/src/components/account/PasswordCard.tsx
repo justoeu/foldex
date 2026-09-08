@@ -9,7 +9,7 @@ import * as auth from '../../api/auth'
 import { MailCodeButton } from './MailCodeButton'
 import { accountErrorMessage } from './accountErrors'
 import { useAuth } from '../../auth/AuthProvider'
-import { canMailStepUpCode, hasSecondFactor, type AuthUser } from '../../auth/types'
+import { hasSecondFactor, type AuthUser } from '../../auth/types'
 import { usePasswordFloor } from '../../hooks/useInstancePolicy'
 import { canSubmit, passwordMode, passwordsMismatch } from './PasswordCard.submit'
 
@@ -153,7 +153,7 @@ function SetPasswordForm({
   const { reload } = useAuth()
   const minLen = usePasswordFloor()
   const needsStepUp = hasSecondFactor(user)
-  const canMailCode = canMailStepUpCode(user)
+  const canMailCode = user.email_2fa_enabled === true
 
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')

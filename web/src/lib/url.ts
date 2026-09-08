@@ -85,8 +85,6 @@ export function safeImageUrl(raw: string | null | undefined): string | undefined
   return undefined
 }
 
-// Extract the hostname from a URL, stripping the "www." prefix.
-// Used by LinkCard and LinkDialog for the domain badge.
 export function hostOf(u: string): string {
   try {
     return new URL(u).hostname.replace(/^www\./, '')

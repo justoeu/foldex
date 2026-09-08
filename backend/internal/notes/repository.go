@@ -238,10 +238,7 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 			return Note{}, err
 		}
 	}
-	if err := crudupdate.SetEntityTags(ctx, tx, "note", uid, id, crudupdate.TagChanges{
-		TagIDs:      in.TagIDs,
-		PendingTags: in.PendingTags,
-	}); err != nil {
+	if err := tags.ApplyPatchTags(ctx, tx, uid, "note", id, in.TagIDs, in.PendingTags); err != nil {
 		return Note{}, err
 	}
 	var releasedMedia []string

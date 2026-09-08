@@ -11,7 +11,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/pkg/outboundhttp"
 )
+
+type rewrittenError struct{ inner error }
+
+func (e rewrittenError) Error() string { return "rewritten without original text" }
+func (e rewrittenError) Unwrap() error { return e.inner }
+
+func TestShouldRender_ClassifiesSentinelsWhenErrorTextIsRewritten(t *testing.T) {
+	ctx := context.Background()
+	unauthorized := rewrittenError{inner: &HTTPStatusError{Code: http.StatusUnauthorized}}
+	ssrf := rewrittenError{inner: outboundhttp.ErrSSRF}
+	assert.NotContains(t, unauthorized.Error(), "status 401")
+	assert.NotContains(t, ssrf.Error(), "ssrf:")
+	assert.True(t, shouldRender(ctx, unauthorized, ""), "401 must still launch Chromium after Error() rewrite")
+	assert.False(t, shouldRender(ctx, ssrf, ""), "SSRF must still refuse Chromium after Error() rewrite")
+}
 
 type stubRenderer struct {
 	res Result

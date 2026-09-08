@@ -32,16 +32,12 @@ export function useTagPicker(open: boolean, initialSelected?: SelectedTag[]) {
     return search ? available.filter((tag) => tag.name.toLowerCase().includes(search)) : available
   }, [available, filter])
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
-  const pageTags = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+  const safePage = Math.min(page, Math.max(0, totalPages - 1))
+  const pageTags = filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
   const normalizedFilter = filter.trim().toLowerCase()
   const canCreate = Boolean(normalizedFilter)
     && !tags.some((tag) => tag.name.toLowerCase() === normalizedFilter)
     && !selected.some((tag) => tag.name.toLowerCase() === normalizedFilter)
-
-  useEffect(() => {
-    const lastPage = Math.max(0, totalPages - 1)
-    if (page > lastPage) setPage(lastPage)
-  }, [page, totalPages])
 
   const setSearch = (value: string) => {
     setFilter(value)
@@ -88,7 +84,7 @@ export function useTagPicker(open: boolean, initialSelected?: SelectedTag[]) {
     selected,
     setSelected,
     filter,
-    page,
+    page: safePage,
     pageTags,
     totalPages,
     canCreate,

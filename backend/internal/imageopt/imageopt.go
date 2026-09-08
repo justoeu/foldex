@@ -173,6 +173,37 @@ func OptimizeForStore(data []byte) (Result, error) {
 	return Optimize(data, Options{MaxDim: storeMaxDim, Quality: storeQuality})
 }
 
+var (
+	ErrEmpty        = errors.New("imageopt: empty upload")
+	ErrTooManyBytes = errors.New("imageopt: upload exceeds size cap")
+)
+
+func AdmitBytes(data []byte, maxBytes int64) (Result, error) {
+	if len(data) == 0 {
+		return Result{}, ErrEmpty
+	}
+	if int64(len(data)) > maxBytes {
+		return Result{}, ErrTooManyBytes
+	}
+	if _, ok := AllowedUploadMIMEs[http.DetectContentType(data)]; !ok {
+		return Result{}, ErrUnsupportedFormat
+	}
+	return OptimizeForStore(data)
+}
+
+func AdmitHTTP(err error) (status int, code, message string) {
+	switch {
+	case errors.Is(err, ErrEmpty):
+		return http.StatusBadRequest, "empty_file", "uploaded file is empty"
+	case errors.Is(err, ErrTooManyBytes):
+		return http.StatusRequestEntityTooLarge, "too_large", "image exceeds 5MB limit"
+	case errors.Is(err, ErrUnsupportedFormat):
+		return http.StatusUnsupportedMediaType, "invalid_mime", "file must be a PNG, JPEG, GIF, or WebP image"
+	default:
+		return RejectHTTP(err)
+	}
+}
+
 // RejectHTTP maps an Optimize/OptimizeForStore error to the JSON envelope
 // handlers write. Client-caused failures (too large, undecodable,
 // unsupported) are 400 invalid_image; anything else is 500.

@@ -22,9 +22,7 @@ import { useDeleteNote, usePinNote } from '../api/notes'
 import { useEscape } from '../hooks/useEscape'
 import { mergeAlphaCells } from '../lib/mergeAlphaCells'
 import type { Link as LinkT, Folder as FolderT, Entry, MergeSource } from '../api/types'
-
-export type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
-export type ViewMode = 'cards' | 'compact' | 'list'
+import type { Sort, ViewMode } from '../lib/viewPrefs'
 
 export type HomeProps = {
   entries: Entry[]

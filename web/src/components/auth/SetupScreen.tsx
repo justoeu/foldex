@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { bootstrap, errorCode, errorStatus } from '../../api/auth'
+import { bootstrap } from '../../api/auth'
+import { apiErrorCode, apiErrorStatus } from '../../lib/apiError'
 import { useAuth } from '../../auth/AuthProvider'
 import { PasswordStrength } from '../PasswordStrength'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
@@ -115,7 +116,7 @@ function messageFor(
   t: (k: string, o?: Record<string, unknown>) => string,
   minLen: number,
 ): string {
-  switch (errorCode(err)) {
+  switch (apiErrorCode(err)) {
     case 'already_configured':
       // A second operator got there first. Nothing to retry — reloading shows
       // the login screen.
@@ -129,6 +130,6 @@ function messageFor(
     case 'password_too_long':
       return t('auth_errors.password_too_long')
     default:
-      return errorStatus(err) === 0 ? t('auth_errors.network') : t('auth_errors.generic')
+      return (apiErrorStatus(err) ?? 0) === 0 ? t('auth_errors.network') : t('auth_errors.generic')
   }
 }

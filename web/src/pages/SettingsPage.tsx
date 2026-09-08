@@ -367,7 +367,7 @@ function IdentityHero({ onOpenSecurity }: { onOpenSecurity: () => void }) {
   if (!me) return null
 
   const verified = me.email_verified_at != null
-  const needs2fa = !me.totp_enabled
+  const needs2fa = !hasSecondFactor(me)
 
   return (
     <div className={needs2fa ? 'fx-hub-hero' : undefined}>

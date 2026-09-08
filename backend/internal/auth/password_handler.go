@@ -209,23 +209,22 @@ func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var proof SecondFactorProof
-	var stepUpKey string
 	// HasSecondFactor: an account whose only factor is e-mail still owes a
 	// step-up proof here. Reading TOTPEnabled would let it set a password with
 	// no second factor at all — the exact bypass this branch exists to close.
 	if user.HasSecondFactor() {
-		var ok bool
-		proof, stepUpKey, ok = h.stepUpSecondFactor(w, r, p.UserID, user, in.Code)
-		if !ok {
+		if !h.withStepUp(w, r, p.UserID, user, in.Code, func(p2 SecondFactorProof) error {
+			proof = p2
+			err = h.repo.SetPassword(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, proof)
+			if err == nil {
+				h.notifyIfRecovery(r, user, proof)
+			}
+			return err
+		}) {
 			return
 		}
-	}
-	err = h.repo.SetPassword(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, proof)
-	if stepUpKey != "" {
-		h.settleStepUp(stepUpKey, err)
-		if err == nil {
-			h.notifyIfRecovery(r, user, proof)
-		}
+	} else {
+		err = h.repo.SetPassword(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, proof)
 	}
 	if errors.Is(err, ErrPasswordExists) {
 		httperr.Write(w, httperr.New(http.StatusConflict, "password_exists",

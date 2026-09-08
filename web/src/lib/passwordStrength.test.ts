@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { MIN_PASSWORD_LEN } from '../auth/types'
 import { passwordChecks, passwordScore } from './passwordStrength'
 
 describe('passwordChecks', () => {
@@ -6,6 +7,11 @@ describe('passwordChecks', () => {
     expect(passwordChecks('abc')).toMatchObject({ length: false, lower: true, upper: false, digit: false, symbol: false })
     expect(passwordChecks('Abcdefg1!')).toMatchObject({ length: true, lower: true, upper: true, digit: true, symbol: true })
     expect(passwordChecks('abcdefghijkl').longer).toBe(true)
+  })
+
+  it('uses MIN_PASSWORD_LEN instead of a literal 8', () => {
+    expect(passwordChecks('x'.repeat(MIN_PASSWORD_LEN - 1)).length).toBe(false)
+    expect(passwordChecks('x'.repeat(MIN_PASSWORD_LEN)).length).toBe(true)
   })
 })
 

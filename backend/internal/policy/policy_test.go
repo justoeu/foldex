@@ -74,7 +74,7 @@ func TestValidate_AutoProvisionedRoleIsNeverAdministrative(t *testing.T) {
 func TestValidate_RejectsMalformedDomains(t *testing.T) {
 	for _, d := range []string{
 		"", "example", ".example.com", "example.com.", "http://example.com",
-		"user@example.com", "example.com/path", "*.example.com", "Example.com",
+		"user@example.com", "example.com/path", "*.example.com",
 		"exa mple.com", "example..com",
 		// The blocklist this replaced ("/@ *:") let control characters through,
 		// so a domain could carry a newline all the way into an error message

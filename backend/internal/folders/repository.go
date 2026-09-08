@@ -15,6 +15,7 @@ import (
 	"foldex/internal/notemedia"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/domainerr"
+	"foldex/internal/pkg/pwhash"
 )
 
 // maxSerializationRetries bounds SERIALIZABLE update retries on SQLSTATE 40001
@@ -31,7 +32,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 func (r *Repository) Create(ctx context.Context, uid authctx.UserID, in CreateInput) (Folder, error) {
 	var passwordHash *string
 	if in.Password != nil {
-		h, err := HashPassword(*in.Password)
+		h, err := pwhash.Hash(*in.Password)
 		if err != nil {
 			return Folder{}, fmt.Errorf("hash password: %w", err)
 		}
@@ -269,7 +270,7 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	// check, under the same SERIALIZABLE isolation.
 	var newPasswordHash *string
 	if in.PasswordSet && in.Password != nil {
-		h, err := HashPassword(*in.Password)
+		h, err := pwhash.Hash(*in.Password)
 		if err != nil {
 			return Folder{}, fmt.Errorf("hash new password: %w", err)
 		}
@@ -323,7 +324,12 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 
 	var lastErr error
 	for attempt := 0; attempt < maxSerializationRetries; attempt++ {
-		f, err := r.updateOnce(ctx, uid, id, in, q, args, cycleCheckNeeded, newPasswordHash, hintToValidate)
+		f, err := r.updateOnce(ctx, &folderUpdate{
+			uid: uid, id: id, in: in, q: q, args: args,
+			cycleCheckNeeded: cycleCheckNeeded,
+			newPasswordHash:  newPasswordHash,
+			hintToValidate:   hintToValidate,
+		})
 		if err == nil {
 			return f, nil
 		}
@@ -335,60 +341,89 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	return Folder{}, lastErr
 }
 
-func (r *Repository) updateOnce(
-	ctx context.Context,
-	uid authctx.UserID,
-	id int64,
-	in UpdateInput,
-	q string,
-	args []any,
-	cycleCheckNeeded bool,
-	newPasswordHash *string,
-	hintToValidate *string,
-) (Folder, error) {
+type folderUpdate struct {
+	uid              authctx.UserID
+	id               int64
+	in               UpdateInput
+	q                string
+	args             []any
+	cycleCheckNeeded bool
+	newPasswordHash  *string
+	hintToValidate   *string
+}
+
+func (r *Repository) updateOnce(ctx context.Context, a *folderUpdate) (Folder, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Folder{}, fmt.Errorf("begin update tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	if in.PasswordSet {
-		if err := checkPasswordChangeAuthorized(ctx, tx, uid, id, in.CurrentPassword); err != nil {
-			return Folder{}, err
-		}
+	if err := authorizePasswordMutation(ctx, tx, a); err != nil {
+		return Folder{}, err
 	}
-	// Hint mutation on an already-protected folder is a bcrypt oracle without
-	// CurrentPassword (distinct 400 on hint==password). Require the same
-	// authorization as a password change whenever the folder already has a hash.
-	if in.PasswordHintSet && !in.PasswordSet {
-		if err := checkPasswordChangeAuthorized(ctx, tx, uid, id, in.CurrentPassword); err != nil {
-			return Folder{}, err
-		}
+	if err := authorizeHintMutation(ctx, tx, a); err != nil {
+		return Folder{}, err
 	}
-	if cycleCheckNeeded {
-		if err := checkParentCycle(ctx, tx, uid, id, *in.ParentID); err != nil {
-			return Folder{}, err
-		}
+	if err := loadHintIfPasswordOnly(ctx, tx, a); err != nil {
+		return Folder{}, err
 	}
-	if hintToValidate == nil && in.PasswordSet && newPasswordHash != nil && !in.PasswordHintSet {
-		var liveHint *string
-		if err := tx.QueryRow(ctx, `SELECT password_hint FROM folder WHERE user_id = $1 AND id = $2`, int64(uid), id).Scan(&liveHint); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return Folder{}, domainerr.ErrNotFound
-			}
-			return Folder{}, fmt.Errorf("read password hint for equality check: %w", err)
-		}
-		hintToValidate = liveHint
+	if err := rejectHintEqualsPassword(ctx, tx, a); err != nil {
+		return Folder{}, err
 	}
-	if hintToValidate != nil {
-		if err := checkHintNotPassword(ctx, tx, uid, id, in.PasswordSet, newPasswordHash, *hintToValidate); err != nil {
-			return Folder{}, err
-		}
+	if err := rejectParentCycle(ctx, tx, a); err != nil {
+		return Folder{}, err
 	}
+	return execUpdate(ctx, tx, a)
+}
 
+func authorizePasswordMutation(ctx context.Context, tx pgx.Tx, a *folderUpdate) error {
+	if !a.in.PasswordSet {
+		return nil
+	}
+	return checkPasswordChangeAuthorized(ctx, tx, a.uid, a.id, a.in.CurrentPassword)
+}
+
+func authorizeHintMutation(ctx context.Context, tx pgx.Tx, a *folderUpdate) error {
+	if !a.in.PasswordHintSet || a.in.PasswordSet {
+		return nil
+	}
+	return checkPasswordChangeAuthorized(ctx, tx, a.uid, a.id, a.in.CurrentPassword)
+}
+
+func loadHintIfPasswordOnly(ctx context.Context, tx pgx.Tx, a *folderUpdate) error {
+	if a.hintToValidate != nil || !a.in.PasswordSet || a.newPasswordHash == nil || a.in.PasswordHintSet {
+		return nil
+	}
+	var liveHint *string
+	if err := tx.QueryRow(ctx, `SELECT password_hint FROM folder WHERE user_id = $1 AND id = $2`, int64(a.uid), a.id).Scan(&liveHint); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domainerr.ErrNotFound
+		}
+		return fmt.Errorf("read password hint for equality check: %w", err)
+	}
+	a.hintToValidate = liveHint
+	return nil
+}
+
+func rejectHintEqualsPassword(ctx context.Context, tx pgx.Tx, a *folderUpdate) error {
+	if a.hintToValidate == nil {
+		return nil
+	}
+	return checkHintNotPassword(ctx, tx, a.uid, a.id, a.in.PasswordSet, a.newPasswordHash, *a.hintToValidate)
+}
+
+func rejectParentCycle(ctx context.Context, tx pgx.Tx, a *folderUpdate) error {
+	if !a.cycleCheckNeeded {
+		return nil
+	}
+	return checkParentCycle(ctx, tx, a.uid, a.id, *a.in.ParentID)
+}
+
+func execUpdate(ctx context.Context, tx pgx.Tx, a *folderUpdate) (Folder, error) {
 	var f Folder
 	var scannedHash *string
-	err = tx.QueryRow(ctx, q, args...).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &scannedHash, &f.PasswordHint)
+	err := tx.QueryRow(ctx, a.q, a.args...).Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &scannedHash, &f.PasswordHint)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Folder{}, domainerr.ErrNotFound
 	}
@@ -428,7 +463,7 @@ func checkPasswordChangeAuthorized(ctx context.Context, tx pgx.Tx, uid authctx.U
 		return fmt.Errorf("read current password hash: %w", err)
 	}
 	if currentHash != nil {
-		if currentPassword == nil || !VerifyPassword(*currentHash, *currentPassword) {
+		if currentPassword == nil || !pwhash.Verify(*currentHash, *currentPassword) {
 			return ErrWrongPassword
 		}
 	}
@@ -453,7 +488,7 @@ func checkHintNotPassword(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id
 	if effHash == nil {
 		return ErrHintWithoutPassword
 	}
-	if VerifyPassword(*effHash, hint) {
+	if pwhash.Verify(*effHash, hint) {
 		return ErrHintMatchesPassword
 	}
 	return nil
@@ -483,7 +518,7 @@ func (r *Repository) ResetPasswordByMaster(ctx context.Context, uid authctx.User
 	if live == nil {
 		return ErrMasterNotConfigured
 	}
-	if !VerifyPassword(*live, plain) {
+	if !pwhash.Verify(*live, plain) {
 		return ErrStaleMasterProof
 	}
 	ct, err := tx.Exec(ctx,

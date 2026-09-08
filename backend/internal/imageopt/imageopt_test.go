@@ -319,6 +319,20 @@ func encodeJPEG(t *testing.T, img image.Image, q int) []byte {
 	return buf.Bytes()
 }
 
+func TestAdmitBytes_EmptyAndCap(t *testing.T) {
+	_, err := AdmitBytes(nil, 10)
+	require.ErrorIs(t, err, ErrEmpty)
+	status, code, _ := AdmitHTTP(err)
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, "empty_file", code)
+
+	_, err = AdmitBytes([]byte("x"), 0)
+	require.ErrorIs(t, err, ErrTooManyBytes)
+	status, code, _ = AdmitHTTP(err)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, status)
+	assert.Equal(t, "too_large", code)
+}
+
 func encodeGIF(t *testing.T, img image.Image) []byte {
 	t.Helper()
 	var buf bytes.Buffer

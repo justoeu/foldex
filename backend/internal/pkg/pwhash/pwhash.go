@@ -11,6 +11,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+const MaxPlainBytes = 72
+
 // Hash bcrypt-hashes a plaintext password for storage. Never store the plaintext.
 func Hash(plain string) (string, error) {
 	b, err := bcrypt.GenerateFromPassword([]byte(plain), bcrypt.DefaultCost)

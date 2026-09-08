@@ -15,6 +15,16 @@ import (
 	"foldex/internal/pkg/outboundhttp"
 )
 
+// HTTPStatusError is the Fetch-boundary status failure. shouldRender matches
+// it with errors.As so a wrapper that rewrites Error() cannot flip 401 vs 500.
+type HTTPStatusError struct {
+	Code int
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("status %d", e.Code)
+}
+
 // Result holds the metadata extracted from a page (any field may be empty).
 type Result struct {
 	Title       string
@@ -76,7 +86,7 @@ func (f *Fetcher) GetRaw(ctx context.Context, pageURL string) ([]byte, string, e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, "", fmt.Errorf("status %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("fetch: %w", &HTTPStatusError{Code: resp.StatusCode})
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
@@ -134,7 +144,7 @@ func (f *Fetcher) Fetch(ctx context.Context, pageURL string) (Result, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return Result{}, fmt.Errorf("status %d", resp.StatusCode)
+		return Result{}, fmt.Errorf("fetch: %w", &HTTPStatusError{Code: resp.StatusCode})
 	}
 	// Cap to 2 MB of HTML — the head is always at the top.
 	body := io.LimitReader(resp.Body, 2<<20)
@@ -171,6 +181,7 @@ func parseHead(r io.Reader) Result {
 	out := Result{}
 	depth := 0
 	inHead := false
+	inTitle := false
 loop:
 	for {
 		tt := z.Next()
@@ -178,38 +189,59 @@ loop:
 		case html.ErrorToken:
 			break loop
 		case html.StartTagToken, html.SelfClosingTagToken:
-			tok := z.Token()
-			name := tok.Data
-			switch name {
-			case "head":
-				inHead = true
-			case "body":
+			if handleStartTag(z, tt, &out, &depth, &inHead, &inTitle) {
 				break loop
-			case "title":
-				if tt == html.StartTagToken {
-					if z.Next() == html.TextToken {
-						out.Title = strings.TrimSpace(z.Token().Data)
-					}
-				}
-			case "meta":
-				if inHead || depth <= 1 {
-					applyMetaTag(&out, tok)
-				}
-			case "link":
-				applyLinkTag(&out, tok)
-			}
-			if tt == html.StartTagToken && !isVoid(name) {
-				depth++
 			}
 		case html.EndTagToken:
-			tok := z.Token()
-			if tok.Data == "head" {
+			if handleEndTag(z, &depth, &inTitle) {
 				break loop
 			}
-			depth--
+		case html.TextToken:
+			if inTitle && out.Title == "" {
+				out.Title = strings.TrimSpace(string(z.Text()))
+			}
 		}
 	}
 	return out
+}
+
+func handleStartTag(z *html.Tokenizer, tt html.TokenType, out *Result, depth *int, inHead, inTitle *bool) bool {
+	tok := z.Token()
+	name := tok.Data
+	switch name {
+	case "head":
+		*inHead = true
+	case "body":
+		return true
+	case "title":
+		if tt == html.StartTagToken {
+			*inTitle = true
+		}
+	case "meta":
+		if *inHead || *depth <= 1 {
+			applyMetaTag(out, tok)
+		}
+	case "link":
+		applyLinkTag(out, tok)
+	}
+	if tt == html.StartTagToken && !isVoid(name) {
+		*depth++
+	}
+	return false
+}
+
+func handleEndTag(z *html.Tokenizer, depth *int, inTitle *bool) bool {
+	tok := z.Token()
+	switch tok.Data {
+	case "head":
+		return true
+	case "title":
+		*inTitle = false
+	}
+	if *depth > 0 {
+		*depth--
+	}
+	return false
 }
 
 func applyMetaTag(out *Result, tok html.Token) {

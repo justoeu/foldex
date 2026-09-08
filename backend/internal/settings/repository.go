@@ -17,13 +17,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/pwhash"
+	"foldex/internal/pkg/secrethint"
 )
 
 // ErrHintMatchesPassword is the INV-066/067 sentinel: a master write must
@@ -107,7 +107,7 @@ func (r *Repository) SetMasterPassword(ctx context.Context, uid authctx.UserID, 
 	if err != nil {
 		return fmt.Errorf("lock master password: %w", err)
 	}
-	if hint == nil && storedHint != nil && strings.EqualFold(strings.TrimSpace(*storedHint), strings.TrimSpace(plain)) {
+	if hint == nil && storedHint != nil && secrethint.EqualsPassword(*storedHint, plain) {
 		return ErrHintMatchesPassword
 	}
 	// Both columns live on the same row, so the tri-state collapses into one

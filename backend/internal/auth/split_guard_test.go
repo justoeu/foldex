@@ -18,13 +18,13 @@ func TestGodPackageSplit_AnomalyAndIPBlockAreSubpackages(t *testing.T) {
 		t.Fatal("runtime.Caller")
 	}
 	dir := filepath.Dir(file)
-	for _, name := range []string{"ipblock", "anomaly"} {
+	for _, name := range []string{"ipblock", "anomaly", "admin", "auditpkg", "twofa"} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil || !info.IsDir() {
 			t.Errorf("expected subpackage internal/auth/%s/", name)
 		}
 	}
-	for _, name := range []string{"ipblock.go", "anomaly.go"} {
+	for _, name := range []string{"ipblock.go", "anomaly.go", "totp.go", "recovery.go", "audit_vocab.go"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 			t.Errorf("%s still lives in the god package; it belongs in a subpackage", name)
 		}

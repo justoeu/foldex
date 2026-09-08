@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { isBoolean, usePersistedMap } from './hooks/usePersistedState'
 import { usePasswordPrompt, type FolderUnlock } from './components/PasswordPromptDialog'
 import type { Folder } from './api/types'
-import type { ViewMode } from './components/HomeView'
+import type { ViewMode } from './lib/viewPrefs'
 
 type UnlockMap = Record<number, FolderUnlock>
 const VIEW_MODES: readonly ViewMode[] = ['cards', 'compact', 'list']

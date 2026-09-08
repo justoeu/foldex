@@ -3,6 +3,10 @@ package settings
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
+
+	"foldex/internal/pkg/pwhash"
+	"foldex/internal/pkg/secrethint"
 )
 
 // minMasterPasswordLen is stricter than the folder-password minimum: the
@@ -39,14 +43,17 @@ func (in setMasterInput) NormalizedHint() *string {
 }
 
 func (in setMasterInput) Validate() error {
-	if len(in.Password) < minMasterPasswordLen {
+	if utf8.RuneCountInString(in.Password) < minMasterPasswordLen {
 		return fmt.Errorf("master password must be at least %d characters", minMasterPasswordLen)
+	}
+	if len(in.Password) > pwhash.MaxPlainBytes {
+		return fmt.Errorf("master password must be at most %d bytes", pwhash.MaxPlainBytes)
 	}
 	if hint := in.NormalizedHint(); hint != nil {
 		if len(*hint) > maxMasterHintLen {
 			return fmt.Errorf("hint too long (max %d)", maxMasterHintLen)
 		}
-		if strings.EqualFold(*hint, strings.TrimSpace(in.Password)) {
+		if secrethint.EqualsPassword(*hint, in.Password) {
 			return fmt.Errorf("hint must not be the same as the password")
 		}
 	}

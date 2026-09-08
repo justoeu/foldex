@@ -3,6 +3,10 @@ package preview
 import (
 	"bytes"
 	"context"
+	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"image"
 	"image/color"
 	"image/png"
@@ -20,6 +24,7 @@ import (
 
 	"foldex/internal/imageopt"
 	"foldex/internal/links"
+	"foldex/internal/ports"
 	"foldex/internal/testsupport"
 )
 
@@ -52,6 +57,8 @@ type fakePreviewRepo struct {
 	pending       []links.PreviewWork
 	nextUpdatedAt time.Time
 	getCalls      int
+	getErr        error
+	getFailFrom   int
 	updates       []fakePreviewCAS
 	publications  []fakePreviewPublication
 	finishes      []fakePreviewCAS
@@ -71,6 +78,9 @@ type fakePreviewPublication struct {
 
 func (f *fakePreviewRepo) SystemGetPreview(context.Context, int64) (links.PreviewWork, error) {
 	f.getCalls++
+	if f.getErr != nil && (f.getFailFrom == 0 || f.getCalls >= f.getFailFrom) {
+		return links.PreviewWork{}, f.getErr
+	}
 	return f.work, nil
 }
 
@@ -136,6 +146,25 @@ func (f *fakeUploader) DeleteObject(ctx context.Context, key string) error {
 // These unit tests exercise the worker's branching that does not require a
 // real database — channel-full Enqueue path and concurrency clamping.
 
+func TestPreviewDoesNotReexportQueueSentinels(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "worker.go", nil, 0)
+	require.NoError(t, err)
+	var aliases []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		spec, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		for _, name := range spec.Names {
+			if name.Name == "ErrQueueFull" || name.Name == "ErrStopped" {
+				aliases = append(aliases, name.Name)
+			}
+		}
+		return true
+	})
+	require.Empty(t, aliases, "preview must use ports.ErrQueueFull / ports.ErrStopped directly")
+}
+
 func TestNewWorker_ClampsZeroConcurrency(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := NewWorker(nil, 0, time.Second, logger)
@@ -175,11 +204,42 @@ func TestWithScreenshotFallback_NilArgsIsNoop(t *testing.T) {
 	assert.NotNil(t, w.uploader)
 }
 
+func TestProcess_GetPreviewErrorAfterPendingWriteReleasesStatus(t *testing.T) {
+	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, `<html><head><title>plain</title></head></html>`)
+	}))
+	t.Cleanup(target.Close)
+
+	const linkID int64 = 77
+	claimAt := time.Date(2026, time.August, 16, 15, 0, 0, 0, time.UTC)
+	repo := &fakePreviewRepo{
+		work: links.PreviewWork{
+			ID: linkID, URL: target.URL, PreviewStatus: links.StatusPending,
+			UpdatedAt: claimAt, Generation: 4,
+		},
+		getErr:      errors.New("lookup failed"),
+		getFailFrom: 2,
+	}
+	w := NewWorker(nil, 1, time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	w.repo = repo
+	w.screenshotURLPolicy = func(context.Context, string) bool { return true }
+	w.WithScreenshotFallback(&fakeScreenshotter{payload: workerTestPNG(t)}, &fakeUploader{})
+
+	w.process(context.Background(), previewJob{id: linkID})
+
+	assert.Equal(t, links.StatusOK, repo.work.PreviewStatus, "GetPreview error must not leave the card on capturando…")
+	require.Len(t, repo.finishes, 1)
+	assert.Empty(t, repo.publications)
+}
+
 func TestMaybeScreenshot_DoesNothingWhenFallbackDisabled(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := NewWorker(nil, 1, time.Second, logger)
-	// repo is nil; if we entered the screenshot path it would panic on Get.
-	assert.Nil(t, w.maybeScreenshot(context.Background(), 1, "http://example.com", 1))
+	followup, finishAt := w.maybeScreenshot(context.Background(), 1, "http://example.com", 1, time.Time{})
+	assert.Equal(t, screenshotFinished, followup)
+	assert.True(t, finishAt.IsZero())
 }
 
 func TestWorker_ScreenshotFallbackPersistsOptimizedPublicCapture(t *testing.T) {
@@ -520,7 +580,7 @@ func TestWorker_EnqueueDropsWhenChannelFull(t *testing.T) {
 	}()
 	select {
 	case err := <-done:
-		assert.ErrorIs(t, err, ErrQueueFull)
+		assert.ErrorIs(t, err, ports.ErrQueueFull)
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Enqueue blocked when channel was full")
 	}
@@ -623,7 +683,7 @@ func TestWorker_EnqueueAfterStopReturnsErrStopped(t *testing.T) {
 	w.Stop() // safe without Start — cancel guard is nil-safe
 
 	err := w.Enqueue(42)
-	assert.ErrorIs(t, err, ErrStopped)
+	assert.ErrorIs(t, err, ports.ErrStopped)
 }
 
 // TestWorker_StopDrainsBufferedJobs proves that jobs accepted into the
@@ -635,21 +695,21 @@ func TestWorker_StopDrainsBufferedJobs(t *testing.T) {
 	assert.NoError(t, w.Enqueue(2))
 	w.Stop() // no Start — Wait is no-op; drain empties buffer
 	assert.Equal(t, 0, len(w.jobs))
-	assert.ErrorIs(t, w.Enqueue(3), ErrStopped)
+	assert.ErrorIs(t, w.Enqueue(3), ports.ErrStopped)
 }
 
 func TestWorker_EnqueueDuringStop_ReturnsErrStopped(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := NewWorker(nil, 1, time.Second, logger)
 	w.stopped.Store(true)
-	assert.ErrorIs(t, w.Enqueue(1), ErrStopped)
+	assert.ErrorIs(t, w.Enqueue(1), ports.ErrStopped)
 
 	w2 := NewWorker(nil, 1, time.Second, logger)
 	assert.NoError(t, w2.Enqueue(9))
 	w2.stopped.Store(true)
 	// Channel still has capacity; send succeeds then post-check fails.
 	err := w2.Enqueue(10)
-	assert.ErrorIs(t, err, ErrStopped)
+	assert.ErrorIs(t, err, ports.ErrStopped)
 	w2.Stop()
 	assert.Equal(t, 0, len(w2.jobs), "Stop must drain leftover jobs")
 }

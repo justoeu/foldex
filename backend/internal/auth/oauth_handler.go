@@ -248,22 +248,19 @@ func (h *Handler) OAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) checkOAuthLinkSecondFactor(w http.ResponseWriter, r *http.Request, user User, code string) bool {
-	proof, key, ok := h.stepUpSecondFactor(w, r, user.ID, user, code)
-	if !ok {
+	consumed := false
+	if !h.withStepUp(w, r, user.ID, user, code, func(proof SecondFactorProof) error {
+		if err := h.repo.ConsumeSecondFactor(r.Context(), user.ID, proof); err != nil {
+			httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
+			return ErrBadCredentials
+		}
+		h.notifyIfRecovery(r, user, proof)
+		consumed = true
+		return nil
+	}) {
 		return false
 	}
-	// Spent here rather than in a later transaction, because what this proof
-	// authorizes IS the oauth_state row minted a few lines down, and that row is
-	// itself the capability: leaving the code live until the callback returns
-	// would let the same proof mint a second state after the first was used.
-	if err := h.repo.ConsumeSecondFactor(r.Context(), user.ID, proof); err != nil {
-		h.stepUpUser.CommitFail(key)
-		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
-		return false
-	}
-	h.stepUpUser.CommitSuccess(key)
-	h.notifyIfRecovery(r, user, proof)
-	return true
+	return consumed
 }
 
 func (h *Handler) oauthStartTarget(ctx context.Context, purpose string, inviteID *int64,

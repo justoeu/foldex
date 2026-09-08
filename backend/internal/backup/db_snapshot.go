@@ -272,7 +272,6 @@ var objectKeyRE = regexp.MustCompile(`(?:^|["'\s(=])/api/files/((?:screenshots|i
 // the same isolation with no migration.
 func userObjectKeys(ctx context.Context, tx pgx.Tx, uid authctx.UserID, includeUnreferencedNoteMedia bool) ([]string, error) {
 	seen := map[string]struct{}{}
-	linkCandidates := map[string]int64{}
 	add := func(key string) error {
 		if _, exists := seen[key]; exists {
 			return nil
@@ -283,6 +282,26 @@ func userObjectKeys(ctx context.Context, tx pgx.Tx, uid authctx.UserID, includeU
 		seen[key] = struct{}{}
 		return nil
 	}
+	linkCandidates, err := collectLinkCandidates(ctx, tx, uid)
+	if err != nil {
+		return nil, err
+	}
+	if err := collectNoteMediaKeys(ctx, tx, uid, includeUnreferencedNoteMedia, add); err != nil {
+		return nil, err
+	}
+	if err := filterOwnedLinkKeys(ctx, tx, uid, linkCandidates, add); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func collectLinkCandidates(ctx context.Context, tx pgx.Tx, uid authctx.UserID) (map[string][]int64, error) {
+	linkCandidates := map[string][]int64{}
 	if err := scanRows(ctx, tx,
 		`SELECT id, COALESCE(og_image_url, '') FROM link WHERE user_id = $1`, []any{int64(uid)},
 		func(rows pgx.Rows) error {
@@ -291,23 +310,38 @@ func userObjectKeys(ctx context.Context, tx pgx.Tx, uid authctx.UserID, includeU
 			if err := rows.Scan(&id, &u); err != nil {
 				return err
 			}
-			for _, match := range objectKeyRE.FindAllStringSubmatch(u, -1) {
-				key := match[1]
-				if _, candidateID, _, ok := linkObjectID(key); ok {
-					if _, exists := linkCandidates[key]; !exists && len(linkCandidates) >= maxBackupFileEntries {
-						return fmt.Errorf("owner has more than %d candidate object keys", maxBackupFileEntries)
-					}
-					linkCandidates[key] = candidateID
-				}
-			}
-			return nil
+			return recordLinkCandidateURLs(u, linkCandidates)
 		}); err != nil {
 		return nil, fmt.Errorf("link object keys: %w", err)
 	}
+	return linkCandidates, nil
+}
+
+func recordLinkCandidateURLs(ogImageURL string, linkCandidates map[string][]int64) error {
+	for _, match := range objectKeyRE.FindAllStringSubmatch(ogImageURL, -1) {
+		key := match[1]
+		if _, candidateID, _, ok := linkObjectID(key); ok {
+			if _, exists := linkCandidates[key]; !exists && len(linkCandidates) >= maxBackupFileEntries {
+				return fmt.Errorf("owner has more than %d candidate object keys", maxBackupFileEntries)
+			}
+			linkCandidates[key] = appendUniqueID(linkCandidates[key], candidateID)
+		}
+	}
+	return nil
+}
+
+func appendUniqueID(ids []int64, id int64) []int64 {
+	for _, existing := range ids {
+		if existing == id {
+			return ids
+		}
+	}
+	return append(ids, id)
+}
+
+func collectNoteMediaKeys(ctx context.Context, tx pgx.Tx, uid authctx.UserID, includeUnreferencedNoteMedia bool, add func(string) error) error {
 	mediaQuery := `SELECT DISTINCT object_key FROM note_media_ref WHERE user_id = $1`
 	if includeUnreferencedNoteMedia {
-		// Wipe owns pending leases too. Export deliberately uses only refs so an
-		// abandoned upload does not become a durable backup file.
 		mediaQuery = `SELECT object_key FROM note_media WHERE user_id = $1`
 	}
 	if err := scanRows(ctx, tx, mediaQuery, []any{int64(uid)},
@@ -318,33 +352,35 @@ func userObjectKeys(ctx context.Context, tx pgx.Tx, uid authctx.UserID, includeU
 			}
 			return add(key)
 		}); err != nil {
-		return nil, fmt.Errorf("note object keys: %w", err)
+		return fmt.Errorf("note object keys: %w", err)
 	}
-	// REFERENCING a link key is not owning it: og_image_url can contain remote
-	// attacker-controlled text, so id-derived keys are checked against ids uid
-	// owns. Note-media ownership never comes from body_html; migration 000022's
-	// owner/ref rows above are the only authority, and legacy keys fail closed.
+	return nil
+}
+
+func filterOwnedLinkKeys(ctx context.Context, tx pgx.Tx, uid authctx.UserID, linkCandidates map[string][]int64, add func(string) error) error {
 	candidateIDs := make([]int64, 0, len(linkCandidates))
-	for _, id := range linkCandidates {
-		candidateIDs = append(candidateIDs, id)
+	for _, ids := range linkCandidates {
+		candidateIDs = append(candidateIDs, ids...)
 	}
 	ownedLinks, err := ownedLinkIDs(ctx, tx, uid, candidateIDs)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	for key, id := range linkCandidates {
-		if _, ok := ownedLinks[id]; ok {
-			if err := add(key); err != nil {
-				return nil, err
+	return keepOwnedLinkKeys(linkCandidates, ownedLinks, add)
+}
+
+func keepOwnedLinkKeys(linkCandidates map[string][]int64, ownedLinks map[int64]struct{}, add func(string) error) error {
+	for key, ids := range linkCandidates {
+		for _, id := range ids {
+			if _, ok := ownedLinks[id]; ok {
+				if err := add(key); err != nil {
+					return err
+				}
+				break
 			}
 		}
 	}
-	out := make([]string, 0, len(seen))
-	for k := range seen {
-		out = append(out, k)
-	}
-	sort.Strings(out) // deterministic delete order keeps failures reproducible
-	return out, nil
+	return nil
 }
 
 func ownedLinkIDs(ctx context.Context, tx pgx.Tx, uid authctx.UserID, ids []int64) (map[int64]struct{}, error) {

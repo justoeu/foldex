@@ -59,6 +59,12 @@ describe('AdminUsersPage', () => {
     expect(screen.getByText(/disabled/i)).toBeInTheDocument()
   })
 
+  it('shows the 2FA chip when the account has only an e-mail factor', async () => {
+    render([me, user({ id: 2, totp_enabled: false, email_2fa_enabled: true })])
+    const row = await rowFor('user2@foldex.test')
+    expect(row.getByText(/2fa/i)).toBeInTheDocument()
+  })
+
   // ── Adding a user ───────────────────────────────────────────────────
   //
   // A deliberate exception to §4 ("an administrator never chooses another

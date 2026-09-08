@@ -229,6 +229,15 @@ describe('SettingsPage — hub', () => {
     expect(screen.queryByText(/turn on two-step verification/i)).not.toBeInTheDocument()
   })
 
+  it('treats an email-only second factor as 2FA on in the hero', async () => {
+    renderWithProviders(<SettingsPage />, {
+      session: sessionWith({ totp_enabled: false, email_2fa_enabled: true }),
+    })
+    expect(await screen.findByText('admin@foldex.test')).toBeInTheDocument()
+    expect(screen.queryByText(/2fa off/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/turn on two-step verification/i)).not.toBeInTheDocument()
+  })
+
   it('exports a backup from the page head, and offers the invite only to admins', async () => {
     const onNavigate = vi.fn()
     const { unmount } = renderWithProviders(<SettingsPage onNavigate={onNavigate} />)

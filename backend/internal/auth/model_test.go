@@ -115,11 +115,11 @@ func TestAuthWireResponseVariantsMarshalOnlyTheirContractFields(t *testing.T) {
 	h := &Handler{features: AuthFeatures{GoogleOAuth: true}, mailer: m}
 	u := User{Email: "admin@example.com", Name: "Admin"}
 
-	totp, err := h.pendingPayload(u, PurposeTOTP, false)
+	totp, err := h.pendingPayload(context.Background(), u, PurposeTOTP, false)
 	require.NoError(t, err)
-	enrollment, err := h.pendingPayload(u, PurposeEnroll2FA, false)
+	enrollment, err := h.pendingPayload(context.Background(), u, PurposeEnroll2FA, false)
 	require.NoError(t, err)
-	conversion, err := h.pendingPayload(u, PurposeConvertGoogle, false)
+	conversion, err := h.pendingPayload(context.Background(), u, PurposeConvertGoogle, false)
 	require.NoError(t, err)
 
 	cases := []struct {
@@ -131,7 +131,7 @@ func TestAuthWireResponseVariantsMarshalOnlyTheirContractFields(t *testing.T) {
 			[]string{"status", "features"}},
 		{"setup required", setupRequiredAuthResponse{Status: statusSetupRequired, Features: h.features},
 			[]string{"status", "features"}},
-		{"authenticated", h.authenticatedPayload(u, "csrf"),
+		{"authenticated", h.authenticatedPayload(context.Background(), u, "csrf"),
 			[]string{"status", "user", "csrf_token", "features", "permissions"}},
 		{"TOTP", totp,
 			[]string{"status", "purpose", "email", "methods", "expires_in", "max_attempts", "features"}},
@@ -153,7 +153,7 @@ func TestAuthWireResponseVariantsMarshalOnlyTheirContractFields(t *testing.T) {
 
 func TestPendingPayloadRejectsAnInvalidPurpose(t *testing.T) {
 	h := &Handler{}
-	payload, err := h.pendingPayload(User{Email: "admin@example.com"}, ChallengePurpose("impossible"), false)
+	payload, err := h.pendingPayload(context.Background(), User{Email: "admin@example.com"}, ChallengePurpose("impossible"), false)
 	assert.ErrorIs(t, err, errInvalidChallengePurpose)
 	assert.Nil(t, payload)
 }

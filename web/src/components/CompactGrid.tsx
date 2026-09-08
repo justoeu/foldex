@@ -9,8 +9,7 @@ import { primaryColor } from '../lib/tagColor'
 import { entryAnchor } from '../lib/entryAnchor'
 import { mergeAlphaCells } from '../lib/mergeAlphaCells'
 import type { Entry, Folder, Link } from '../api/types'
-
-type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
+import type { Sort } from '../lib/viewPrefs'
 type NoteEntry = Extract<Entry, { kind: 'note' }>
 
 type Props = {

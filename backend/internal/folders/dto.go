@@ -7,6 +7,8 @@ import (
 
 	"foldex/internal/pkg/cssvalid"
 	"foldex/internal/pkg/jsonopt"
+	"foldex/internal/pkg/pwhash"
+	"foldex/internal/pkg/secrethint"
 )
 
 // minPasswordLen is deliberately low — this protects against casual
@@ -48,6 +50,9 @@ func (c CreateInput) Validate() error {
 	}
 	if c.Password != nil && len(*c.Password) < minPasswordLen {
 		return errMsg(fmt.Sprintf("password must be at least %d characters", minPasswordLen))
+	}
+	if c.Password != nil && len(*c.Password) > pwhash.MaxPlainBytes {
+		return errMsg(fmt.Sprintf("password must be at most %d bytes", pwhash.MaxPlainBytes))
 	}
 	if err := validateHint(c.PasswordHint, c.Password); err != nil {
 		return err
@@ -140,6 +145,9 @@ func (u UpdateInput) Validate() error {
 	if u.PasswordSet && u.Password != nil && len(*u.Password) < minPasswordLen {
 		return errMsg(fmt.Sprintf("password must be at least %d characters", minPasswordLen))
 	}
+	if u.PasswordSet && u.Password != nil && len(*u.Password) > pwhash.MaxPlainBytes {
+		return errMsg(fmt.Sprintf("password must be at most %d bytes", pwhash.MaxPlainBytes))
+	}
 	// hint == password equality is checked in the repository (it needs the
 	// folder's effective hash); here we only bound length. When the hint is
 	// set alongside a new password, we can also catch equality early.
@@ -179,7 +187,7 @@ func validateHint(hint, password *string) error {
 	if len(*hint) > maxPasswordHintLen {
 		return errMsg(fmt.Sprintf("password hint too long (max %d)", maxPasswordHintLen))
 	}
-	if password != nil && strings.EqualFold(strings.TrimSpace(*password), *hint) {
+	if password != nil && secrethint.EqualsPassword(*hint, *password) {
 		return errMsg("password hint must not be the same as the password")
 	}
 	return nil

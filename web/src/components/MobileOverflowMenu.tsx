@@ -3,9 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { SUPPORTED_LOCALES, type LocaleCode } from '../i18n'
 import { useLocaleChoice } from '../i18n/useLocaleChoice'
+import type { Sort, ViewMode } from '../lib/viewPrefs'
 
-type Sort = 'created' | 'clicks' | 'recent' | 'alpha' | 'alpha_desc'
-type ViewMode = 'cards' | 'compact' | 'list'
 type View = 'home' | 'import' | 'stats' | 'settings'
 
 type Props = {

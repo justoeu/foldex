@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { errorCode, errorStatus, resetPassword } from '../../api/auth'
+import { resetPassword } from '../../api/auth'
+import { apiErrorCode, apiErrorStatus } from '../../lib/apiError'
 import { useAuth } from '../../auth/AuthProvider'
 import { PasswordStrength } from '../PasswordStrength'
 import { passwordGateLen, usePasswordFloor } from '../../hooks/useInstancePolicy'
@@ -40,12 +41,12 @@ export function ResetScreen({ token, onGiveUp }: { token: string; onGiveUp: () =
     try {
       adopt(await resetPassword(token, password))
     } catch (err) {
-      const code = errorCode(err)
+      const code = apiErrorCode(err)
       if (code === 'reset_invalid') setError(t('auth_reset.link_invalid'))
       else if (code === 'password_too_short') setError(t('auth_errors.password_too_short', { count: minLen }))
       else if (code === 'password_too_long') setError(t('auth_errors.password_too_long'))
       else if (code === 'too_many_attempts') setError(t('auth_errors.too_many_attempts'))
-      else if (errorStatus(err) === 0) setError(t('auth_errors.network'))
+      else if ((apiErrorStatus(err) ?? 0) === 0) setError(t('auth_errors.network'))
       else setError(t('auth_errors.generic'))
     } finally {
       setBusy(false)

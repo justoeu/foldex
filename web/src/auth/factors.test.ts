@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { canMailStepUpCode, hasSecondFactor } from './types'
+import { hasSecondFactor } from './types'
+import typesSrc from './types.ts?raw'
 
 /**
  * The client mirror of the server's `HasSecondFactor()`. It feeds the settings
@@ -26,9 +27,7 @@ describe('hasSecondFactor', () => {
 })
 
 describe('canMailStepUpCode', () => {
-  it('is true only for an enrolled e-mail factor', () => {
-    expect(canMailStepUpCode({ email_2fa_enabled: true })).toBe(true)
-    expect(canMailStepUpCode({ email_2fa_enabled: false })).toBe(false)
-    expect(canMailStepUpCode({})).toBe(false)
+  it('is gone; callers read email_2fa_enabled directly', () => {
+    expect(typesSrc).not.toMatch(/function canMailStepUpCode/)
   })
 })

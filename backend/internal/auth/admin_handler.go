@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"foldex/internal/auth/admin"
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/authgate"
@@ -187,17 +188,6 @@ func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	httperr.JSON(w, http.StatusOK, map[string]any{"users": users})
 }
 
-func parseAfterID(raw string) int64 {
-	if raw == "" {
-		return 0
-	}
-	n, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || n < 0 {
-		return 0
-	}
-	return n
-}
-
 type updateUserInput struct {
 	Name   *string       `json:"name"`
 	Role   *authctx.Role `json:"role"`
@@ -227,12 +217,12 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	// through the transfer endpoint, which demotes the outgoing owner in the
 	// same statement. Allowing it here would let a promotion race the partial
 	// unique index and surface as a 500 instead of a refusal.
-	if in.Role != nil && (!in.Role.Valid() || *in.Role == authctx.RoleOwner) {
+	if in.Role != nil && !admin.AssignableRole(*in.Role) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role",
 			"role must be admin, editor or viewer"))
 		return
 	}
-	if in.Status != nil && *in.Status != StatusActive && *in.Status != StatusDisabled {
+	if in.Status != nil && !admin.ValidStatus(*in.Status) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_status",
 			"status must be active or disabled"))
 		return
@@ -246,7 +236,7 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	demoting := in.Role != nil && !in.Role.IsAdmin()
 	disabling := in.Status != nil && *in.Status == StatusDisabled
 
-	if target == caller.UserID && (demoting || disabling) {
+	if admin.IsSelf(caller.UserID, target) && (demoting || disabling) {
 		httperr.Write(w, httperr.New(http.StatusConflict, "self_target",
 			"you cannot demote or disable your own account"))
 		return
@@ -297,7 +287,7 @@ func (h *AdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := authctx.UserID(id)
-	if target == caller.UserID {
+	if admin.IsSelf(caller.UserID, target) {
 		httperr.Write(w, httperr.New(http.StatusConflict, "self_target",
 			"you cannot delete your own account"))
 		return
@@ -365,7 +355,7 @@ func (h *AdminHandler) ForcePasswordReset(w http.ResponseWriter, r *http.Request
 		return
 	}
 	target := authctx.UserID(id)
-	if target == caller.UserID {
+	if admin.IsSelf(caller.UserID, target) {
 		httperr.Write(w, httperr.New(http.StatusConflict, "self_target",
 			"use the change-password form for your own account"))
 		return
@@ -660,7 +650,7 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// Same rule the invitation carries: this may mint an administrator but
 	// never an owner, so the one role that cannot be demoted is reachable only
 	// through an explicit transfer.
-	if !role.Valid() || role == authctx.RoleOwner {
+	if !admin.AssignableRole(role) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role",
 			"role must be admin, editor or viewer"))
 		return
@@ -707,7 +697,7 @@ func (h *AdminHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	// Mirrors the invite_role_check constraint: an invitation can mint an
 	// administrator but never an owner, so a leaked invite cannot hand someone
 	// the one role that cannot be demoted.
-	if !role.Valid() || role == authctx.RoleOwner {
+	if !admin.AssignableRole(role) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role",
 			"role must be admin, editor or viewer"))
 		return

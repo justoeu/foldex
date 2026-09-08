@@ -698,6 +698,7 @@
     "master_change_action": "Alterar",
     "master_remove_action": "Remover",
     "master_too_short": "A senha master deve ter ao menos 8 caracteres.",
+    "master_too_long": "A senha master deve ter no máximo 72 bytes.",
     "master_wrong_current": "A senha master atual está incorreta.",
     "master_set": "Senha master definida.",
     "master_changed": "Senha master alterada.",

@@ -1,0 +1,62 @@
+{
+  "agent": "Atena",
+  "lens": "best_practices",
+  "findings": [
+    {
+      "title": "Bot-wall/SSRF fallback keys off error text",
+      "severity": "MEDIUM",
+      "confidence": "high",
+      "path": "backend/internal/preview/fetch_fallback.go",
+      "line": 88,
+      "category": "go-error-discarded",
+      "description": "shouldRender classifies HTTP 401/403/429 via strings.Contains(err.Error(), \"status 401\") and isSSRFError via \"ssrf:\". Producers emit untyped fmt.Errorf (fetcher.go:137 \"status %d\"; outboundhttp/transport.go:56 \"ssrf: refusing…\") with no sentinel. Chromium fallback for bot walls and the SSRF-do-not-render guard are therefore a wording contract. A later wrap, HTTP %d, or errors.Is rewrite silently skips Chromium (worse metadata) or, if a new message happens to contain those substrings, launches a browser against a denied target. Every consumer of the same strings (fetch_fallback_test, metadata_handler_test) will keep the lie green.",
+      "fix": "Add sentinels (var ErrSSRF = errors.New(\"ssrf\"); type httpStatusError struct{code int}) at the dialer/Fetch boundary, wrap with %w, and switch shouldRender to errors.Is/As. Keep the prefix only in Error() text for logs.",
+      "status": "open",
+      "agent": "Atena",
+      "lens": "best_practices",
+      "impact": "shouldRender classifies HTTP 401/403/429 via strings.Contains(err.Error(), \"status 401\") and isSSRFError via \"ssrf:\". Producers emit untyped fmt.Errorf (fetcher.go:137 \"status %d\"; outboundhttp/transport.go:56 \"ssrf: refusing…\") with no sen"
+    },
+    {
+      "title": "Auth payloads read policy with Background",
+      "severity": "MEDIUM",
+      "confidence": "high",
+      "path": "backend/internal/auth/handler.go",
+      "line": 824,
+      "category": "go-context-ignored",
+      "description": "liveFeatures(ctx) does policy.PasswordMinLength → Repository.Get (SELECT app_setting) on every auth-state payload. Me() anonymous/setup correctly pass r.Context() (handler.go:797/802). authenticatedPayload (824) and pendingPayload (twofa_handler.go:206/212/222) hard-code context.Background() because neither helper takes ctx — even though every production caller has *http.Request. Login, /me, 2FA challenge, OAuth convert, and session issue therefore ignore cancel/deadline/trace on a DB read that already exists for this request. Client abort still holds a pool conn; a future timeout on Get never applies on the hottest identity paths.",
+      "fix": "Thread ctx into authenticatedPayload/pendingPayload (first param) and pass r.Context() from startChallenge, Me, and the other JSON call sites. Tests can keep context.Background().",
+      "status": "open",
+      "agent": "Atena",
+      "lens": "best_practices",
+      "impact": "liveFeatures(ctx) does policy.PasswordMinLength → Repository.Get (SELECT app_setting) on every auth-state payload. Me() anonymous/setup correctly pass r.Context() (handler.go:797/802). authenticatedPayload (824) and pendingPayload (twofa_ha"
+    },
+    {
+      "title": "TagPicker page clamp is effect-derived state",
+      "severity": "LOW",
+      "confidence": "high",
+      "path": "web/src/components/TagPicker.tsx",
+      "line": 41,
+      "category": "react-effect-for-derived-state",
+      "description": "useEffect([page, totalPages]) calls setPage(lastPage) when the filter shrinks the list. That is a value computable during render (safePage = min(page, lastPage)), not an external sync. Cost: extra commit (and a frame of an empty page) every time inline-create/filter drops totalPages; the same pattern will be copied into the next picker. setSearch already resets page to 0 — the effect only exists for the leftover overflow case.",
+      "fix": "const safePage = Math.min(page, Math.max(0, totalPages - 1)); slice with safePage. Drop the effect. Optionally setPage(0) inside setSearch/queue only.",
+      "status": "open",
+      "agent": "Atena",
+      "lens": "best_practices",
+      "impact": "useEffect([page, totalPages]) calls setPage(lastPage) when the filter shrinks the list. That is a value computable during render (safePage = min(page, lastPage)), not an external sync. Cost: extra commit (and a frame of an empty page) every"
+    },
+    {
+      "title": "Optimistic entry patch asserts across the union",
+      "severity": "LOW",
+      "confidence": "medium",
+      "path": "web/src/api/entries.ts",
+      "line": 298,
+      "category": "ts-assertion-over-narrowing",
+      "description": "optimisticEntryPatch types patch as Partial<Pick<Link, 'pinned' | 'preview_status'>> then writes `{ ...e, ...patch } as Entry` onto both link and note arms. Note has pinned but no preview_status (types.ts:181–195). The assertion turns the compiler off at the cache write: adding a Link-only field to the patch type (url, preview_error, og_image_url) will stamp illegal note rows into every ['entries'] page. Rollback restores the previous object, so the bug only shows while the mutation is in flight — exactly when cards re-render from cache.",
+      "fix": "Split the helper (patchLink vs patchNote) or narrow: if (e.kind === 'link') return { ...e, ...patch }; if ('pinned' in patch) return { ...e, pinned: patch.pinned }; return e. Delete the `as Entry`.",
+      "status": "open",
+      "agent": "Atena",
+      "lens": "best_practices",
+      "impact": "optimisticEntryPatch types patch as Partial<Pick<Link, 'pinned' | 'preview_status'>> then writes `{ ...e, ...patch } as Entry` onto both link and note arms. Note has pinned but no preview_status (types.ts:181–195). The assertion turns the c"
+    }
+  ]
+}

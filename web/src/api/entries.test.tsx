@@ -7,9 +7,11 @@ import {
   useEntries,
   flattenEntries,
   mapCachedLinkEntries,
+  optimisticEntryPatch,
   pendingPreviewIDs,
   removeCachedEntry,
 } from './entries'
+import entriesSrc from './entries.ts?raw'
 import { http } from './client'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import { makeQueryClient } from '../test/renderWithProviders'
@@ -409,5 +411,54 @@ describe('applyPreviewStatusResults', () => {
       og_image_url: '/newer.jpg',
       updated_at: '2026-09-05T13:00:00.000Z',
     })
+  })
+})
+
+describe('optimisticEntryPatch', () => {
+  it('does not copy link-only fields onto a note, and still patches a link', async () => {
+    const client = makeQueryClient()
+    const note = {
+      kind: 'note' as const,
+      id: 1,
+      title: 'N',
+      slug: 'n',
+      pinned: false,
+      tags: [],
+      created_at: '',
+      updated_at: '',
+      click_count: 0,
+    }
+    const link = {
+      kind: 'link' as const,
+      id: 2,
+      url: 'https://a.example',
+      title: 'A',
+      slug: 'a',
+      click_count: 0,
+      preview_status: 'ok' as const,
+      pinned: false,
+      created_at: '',
+      updated_at: '',
+      tags: [],
+    }
+    const key = ['entries', 'patch']
+    client.setQueryData(key, { pages: [[note, link]], pageParams: [0] })
+
+    await optimisticEntryPatch(client, 'note', 1, { pinned: true, preview_status: 'pending' })
+    const afterNote = client.getQueryData<{ pages: typeof note[][] }>(key)!.pages[0]
+    const nextNote = afterNote.find((entry) => entry.kind === 'note') as typeof note
+    expect(nextNote.pinned).toBe(true)
+    expect(nextNote).not.toHaveProperty('preview_status')
+    expect(nextNote).not.toHaveProperty('url')
+
+    await optimisticEntryPatch(client, 'link', 2, { pinned: true, preview_status: 'pending' })
+    const afterLink = client.getQueryData<{ pages: Array<typeof note | typeof link>[] }>(key)!.pages[0]
+    const nextLink = afterLink.find((entry) => entry.kind === 'link') as typeof link
+    expect(nextLink.pinned).toBe(true)
+    expect(nextLink.preview_status).toBe('pending')
+  })
+
+  it('does not assert the patched union with as Entry', () => {
+    expect(entriesSrc).not.toMatch(/as Entry/)
   })
 })

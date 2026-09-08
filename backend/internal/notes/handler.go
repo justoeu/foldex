@@ -83,7 +83,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	// Names the row for the owner's own-activity feed (ADR-46). The
 	// content-audit middleware records the event either way; this is what
 	// gives it a label its owner can recognise a month later.
-	auditctx.SetRequest(r, "note", n.ID, n.Title)
+	auditctx.Set(r.Context(), "note", n.ID, n.Title)
 	httperr.JSON(w, http.StatusCreated, n)
 }
 
@@ -130,7 +130,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	// Names the row for the owner's own-activity feed (ADR-46). The
 	// content-audit middleware records the event either way; this is what
 	// gives it a label its owner can recognise a month later.
-	auditctx.SetRequest(r, "note", n.ID, n.Title)
+	auditctx.Set(r.Context(), "note", n.ID, n.Title)
 	httperr.JSON(w, http.StatusOK, n)
 }
 
@@ -151,6 +151,6 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
-	auditctx.SetRequest(r, "note", id, title)
+	auditctx.Set(r.Context(), "note", id, title)
 	w.WriteHeader(http.StatusNoContent)
 }

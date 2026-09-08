@@ -1,0 +1,16 @@
+{
+  "generated_at": "2026-09-08T00:00:00Z",
+  "skipped": true,
+  "reason": "Rodada scoped a architecture+quality-guild+csrf/ssrf; deps/CVE fora do escopo.",
+  "summary": {
+    "checked": 0,
+    "outdated": 0,
+    "errors": 0,
+    "skipped": 0,
+    "by_bump": { "major": 0, "minor": 0, "patch": 0 },
+    "by_ecosystem": {}
+  },
+  "packages": [],
+  "update_map": { "batches": [] },
+  "runner_errors": ["deps not consulted this round (scope: Atlas+Quality Guild+CSRF/SSRF)"]
+}

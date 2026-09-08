@@ -14,10 +14,9 @@ import (
 
 	"foldex/internal/imageopt"
 	"foldex/internal/notemedia"
-	"foldex/internal/notes"
-
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/clicklog"
+	"foldex/internal/pkg/htmlsanitize"
 )
 
 const maxRestoredNoteMediaBytes = 16 << 20
@@ -116,7 +115,7 @@ func prepareNoteMediaRestore(ctx context.Context, snap *Snapshot, zr *zip.Reader
 // object that exists in the archive, and rewrites the note's references to
 // the restored keys.
 func spoolNoteMedia(ctx context.Context, note *NoteRow, fileEntries map[string]*zip.File, prepared *preparedNoteMediaRestore, spool *noteMediaSpool) error {
-	bodyHTML, _ := notes.SanitizeBody(note.BodyHTML)
+	bodyHTML, _ := htmlsanitize.SanitizeAndPlain(note.BodyHTML)
 	note.BodyHTML = bodyHTML
 	values := []string{bodyHTML}
 	if note.CoverURL != nil {

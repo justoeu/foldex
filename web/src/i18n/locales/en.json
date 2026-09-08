@@ -698,6 +698,7 @@
     "master_change_action": "Change",
     "master_remove_action": "Remove",
     "master_too_short": "Master password must be at least 8 characters.",
+    "master_too_long": "Master password must be at most 72 bytes.",
     "master_wrong_current": "Current master password is incorrect.",
     "master_set": "Master password set.",
     "master_changed": "Master password changed.",

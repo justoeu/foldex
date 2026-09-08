@@ -328,21 +328,3 @@ export async function listIdentities(): Promise<Identity[]> {
 export async function unlinkGoogle(password: string): Promise<void> {
   await http.delete('/api/auth/oauth/google', { data: { password } })
 }
-
-/**
- * Extracts the machine-readable code from the backend's error envelope.
- *
- * Screens branch on the CODE, never on the human-readable message: the message
- * is translated and reworded freely, while the code is part of the API
- * contract. Matching on message text is how error handling silently breaks the
- * first time someone improves the copy.
- */
-export function errorCode(err: unknown): string {
-  const e = err as { response?: { data?: { error?: { code?: string } } } }
-  return e?.response?.data?.error?.code ?? ''
-}
-
-export function errorStatus(err: unknown): number {
-  const e = err as { response?: { status?: number } }
-  return e?.response?.status ?? 0
-}

@@ -15,7 +15,7 @@ import {
 } from '../api/admin'
 import { apiErrorCode as errCode } from '../lib/apiError'
 import { useAuth } from '../auth/AuthProvider'
-import { ASSIGNABLE_ROLES, type AuthUser, type Role } from '../auth/types'
+import { ASSIGNABLE_ROLES, hasSecondFactor, type AuthUser, type Role } from '../auth/types'
 import { ROLE_INITIALS, ROLE_TONE } from '../components/admin/RolesMatrix'
 import { relativeTime } from '../components/admin/AdminOverview'
 import { canMutateAccount, countActiveAdmins } from '../components/admin/canMutateAccount'
@@ -195,7 +195,7 @@ export function AdminUsersPage() {
                         <span className={'fx-chip ' + statusTone(u.status)}>
                           {t(`admin.status_${u.status}`)}
                         </span>
-                        {u.totp_enabled && (
+                        {hasSecondFactor(u) && (
                           <span className="fx-chip fx-chip-ok" style={{ marginLeft: 4 }}>
                             {t('admin.has_2fa')}
                           </span>
