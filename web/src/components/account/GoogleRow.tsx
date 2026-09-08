@@ -9,7 +9,7 @@ import { GoogleLinkDialog } from './GoogleLinkDialog'
 import { accountErrorMessage } from './accountErrors'
 import * as auth from '../../api/auth'
 import { useAuth } from '../../auth/AuthProvider'
-import { canMailStepUpCode, hasSecondFactor, type AuthUser } from '../../auth/types'
+import { hasSecondFactor, type AuthUser } from '../../auth/types'
 
 /**
  * The Google identity linked to this account.
@@ -36,7 +36,7 @@ export function GoogleRow({ user }: { user: AuthUser }) {
   const [busy, setBusy] = useState(false)
 
   const needsStepUp = hasSecondFactor(user)
-  const canMailCode = canMailStepUpCode(user)
+  const canMailCode = user.email_2fa_enabled === true
 
   async function disconnect() {
     setBusy(true)
