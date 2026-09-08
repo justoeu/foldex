@@ -26,6 +26,7 @@ import (
 	"foldex/internal/testdb"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/pwhash"
 )
 
 // Restore is the most destructive code in the system (TRUNCATE on wipe,
@@ -413,7 +414,7 @@ func TestRestore_FolderPasswordRoundTripWipeMode(t *testing.T) {
 	hash, err := frepo.PasswordHashFor(ctx, uid, restoredFolder)
 	require.NoError(t, err)
 	require.NotNil(t, hash)
-	assert.True(t, folders.VerifyPassword(*hash, pw), "the restored hash must still verify the ORIGINAL password — restore must never re-hash")
+	assert.True(t, pwhash.Verify(*hash, pw), "the restored hash must still verify the ORIGINAL password — restore must never re-hash")
 }
 
 // TestRestore_FolderPasswordRoundTripSkipMode documents the same "no
@@ -448,7 +449,7 @@ func TestRestore_FolderPasswordRoundTripSkipMode(t *testing.T) {
 		hash, err := frepo.PasswordHashFor(ctx, uid, f.ID)
 		require.NoError(t, err)
 		require.NotNil(t, hash, "the skip-restored copy must carry the password forward, not drop it")
-		assert.True(t, folders.VerifyPassword(*hash, pw))
+		assert.True(t, pwhash.Verify(*hash, pw))
 	}
 }
 
@@ -482,7 +483,7 @@ func TestRestore_FolderPasswordRoundTripDuplicateMode(t *testing.T) {
 		hash, err := frepo.PasswordHashFor(ctx, uid, f.ID)
 		require.NoError(t, err)
 		require.NotNil(t, hash, "the duplicate-restored copy must carry the password forward, not drop it")
-		assert.True(t, folders.VerifyPassword(*hash, pw))
+		assert.True(t, pwhash.Verify(*hash, pw))
 	}
 }
 

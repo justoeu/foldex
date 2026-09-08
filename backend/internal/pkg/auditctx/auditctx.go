@@ -18,7 +18,6 @@ package auditctx
 
 import (
 	"context"
-	"net/http"
 	"sync"
 )
 
@@ -57,11 +56,6 @@ func Set(ctx context.Context, kind string, id int64, subject string) {
 		v := id
 		h.id = &v
 	}
-}
-
-// SetRequest is Set for a handler that has the request rather than the context.
-func SetRequest(r *http.Request, kind string, id int64, subject string) {
-	Set(r.Context(), kind, id, subject)
 }
 
 // Get returns the annotation, or zero values when nothing annotated.

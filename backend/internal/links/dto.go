@@ -188,10 +188,10 @@ func (u *UpdateInput) UnmarshalJSON(data []byte) error {
 	if u.FolderIDSet, u.FolderID, err = jsonopt.DecodeOptionalInt64(aux.FolderID); err != nil {
 		return err
 	}
-	if u.SlugSet, u.Slug, err = jsonopt.DecodeOptionalString(aux.Slug, true); err != nil {
+	if u.SlugSet, u.Slug, err = jsonopt.DecodeOptionalString(aux.Slug); err != nil {
 		return err
 	}
-	if u.CheckIntervalSet, u.CheckInterval, err = jsonopt.DecodeOptionalString(aux.CheckInterval, true); err != nil {
+	if u.CheckIntervalSet, u.CheckInterval, err = jsonopt.DecodeOptionalString(aux.CheckInterval); err != nil {
 		return err
 	}
 	return nil

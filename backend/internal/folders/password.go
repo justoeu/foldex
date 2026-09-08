@@ -11,16 +11,7 @@ import (
 	"time"
 
 	"foldex/internal/pkg/keyfile"
-	"foldex/internal/pkg/pwhash"
 )
-
-// HashPassword bcrypt-hashes a plaintext folder password for storage in
-// folder.password_hash. Never store or log the plaintext. Thin alias over the
-// shared pwhash leaf so folder and master passwords use identical hashing.
-func HashPassword(plain string) (string, error) { return pwhash.Hash(plain) }
-
-// VerifyPassword reports whether plain matches the bcrypt hash.
-func VerifyPassword(hash, plain string) bool { return pwhash.Verify(hash, plain) }
 
 // unlockTokenTTL is a safety ceiling, not the intended session length — the
 // frontend never persists the token past a page reload (CLAUDE.md-documented

@@ -23,8 +23,8 @@ func DecodeOptionalInt64(raw json.RawMessage) (set bool, val *int64, err error) 
 }
 
 // DecodeOptionalString decodes a RawMessage into tri-state string fields.
-// Empty string after TrimSpace is treated as null (clear) when trim is true.
-func DecodeOptionalString(raw json.RawMessage, trim bool) (set bool, val *string, err error) {
+// Empty string after TrimSpace collapses to null (clear).
+func DecodeOptionalString(raw json.RawMessage) (set bool, val *string, err error) {
 	if len(raw) == 0 {
 		return false, nil, nil
 	}
@@ -35,9 +35,7 @@ func DecodeOptionalString(raw json.RawMessage, trim bool) (set bool, val *string
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return false, nil, err
 	}
-	if trim {
-		s = strings.TrimSpace(s)
-	}
+	s = strings.TrimSpace(s)
 	if s == "" {
 		return true, nil, nil
 	}

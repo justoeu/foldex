@@ -14,6 +14,7 @@ import (
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/pwhash"
 	"foldex/internal/roleperm"
 )
 
@@ -214,7 +215,7 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		h.writeLocked(w, until)
 		return
 	}
-	if !VerifyPassword(*hash, in.Password) {
+	if !pwhash.Verify(*hash, in.Password) {
 		fails, lockedUntil := h.limiter.CommitFail(key)
 		if !lockedUntil.IsZero() {
 			h.writeLocked(w, lockedUntil)
@@ -244,7 +245,7 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusConflict, "password_changed", "folder password changed during unlock; try again"))
 		return
 	}
-	auditctx.SetRequest(r, "folder", id, "")
+	auditctx.Set(r.Context(), "folder", id, "")
 	httperr.JSON(w, http.StatusOK, unlockOutput{
 		UnlockToken: IssueUnlockToken(h.unlockKey, id, *live),
 		ExpiresAt:   time.Now().Add(unlockTokenTTL),
@@ -319,7 +320,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	// Names the row for the owner's own-activity feed (ADR-46). The
 	// content-audit middleware records the event either way; this is what
 	// gives it a label its owner can recognise a month later.
-	auditctx.SetRequest(r, "folder", f.ID, f.Name)
+	auditctx.Set(r.Context(), "folder", f.ID, f.Name)
 	httperr.JSON(w, http.StatusCreated, f)
 }
 
@@ -366,7 +367,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	// Names the row for the owner's own-activity feed (ADR-46). The
 	// content-audit middleware records the event either way; this is what
 	// gives it a label its owner can recognise a month later.
-	auditctx.SetRequest(r, "folder", f.ID, f.Name)
+	auditctx.Set(r.Context(), "folder", f.ID, f.Name)
 	httperr.JSON(w, http.StatusOK, f)
 }
 
@@ -411,7 +412,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		}
 		h.forgetDeletedUnlockAttempts([]int64{id})
 	}
-	auditctx.SetRequest(r, "folder", id, name)
+	auditctx.Set(r.Context(), "folder", id, name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
