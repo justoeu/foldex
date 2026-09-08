@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { convertToGoogle, errorCode, errorStatus } from '../../api/auth'
+import { convertToGoogle } from '../../api/auth'
+import { apiErrorCode, apiErrorStatus } from '../../lib/apiError'
 import { useAuth } from '../../auth/AuthProvider'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
 import { PasswordInput } from '../PasswordInput'
@@ -50,7 +51,7 @@ export function ConvertScreen({ email }: { email: string }) {
       // already cleared the pre-auth cookie, and nothing on this screen can
       // mint another. Re-probing drops the user back to the login form, the
       // only place the flow can start again.
-      const c = errorCode(err)
+      const c = apiErrorCode(err)
       if (c === 'challenge_invalid' || c === 'too_many_attempts') void reload()
     } finally {
       setBusy(false)
@@ -103,11 +104,11 @@ export function ConvertScreen({ email }: { email: string }) {
 }
 
 function messageFor(err: unknown, t: (k: string) => string): string {
-  const code = errorCode(err)
+  const code = apiErrorCode(err)
   if (code === 'invalid_credentials') return t('auth_convert.wrong_password')
   if (code === 'oauth_already_linked') return t('auth_errors.oauth_already_linked')
   if (code === 'too_many_attempts') return t('auth_otp.locked_out')
   if (code === 'challenge_invalid') return t('auth_otp.expired')
-  if (errorStatus(err) === 0) return t('auth_errors.network')
+  if ((apiErrorStatus(err) ?? 0) === 0) return t('auth_errors.network')
   return t('auth_errors.generic')
 }

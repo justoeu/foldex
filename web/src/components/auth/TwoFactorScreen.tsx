@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { errorCode, errorStatus } from '../../api/auth'
+import { apiErrorCode, apiErrorStatus } from '../../lib/apiError'
 import { sendEmailOtp, verifyTwoFactor } from '../../api/twofa'
 import { useAuth } from '../../auth/AuthProvider'
 import type { TwoFactorPending } from '../../auth/types'
@@ -46,7 +46,7 @@ export function TwoFactorScreen({ pending }: { pending: TwoFactorPending }) {
         adopt(res)
         return
       } catch (err) {
-        const c = errorCode(err)
+        const c = apiErrorCode(err)
         if (c === 'invalid_code') {
           const left = attemptsRemaining(err)
           setRemaining(left)
@@ -59,7 +59,7 @@ export function TwoFactorScreen({ pending }: { pending: TwoFactorPending }) {
           setError(t('auth_otp.locked_out'))
         } else if (c === 'challenge_invalid') {
           setError(t('auth_otp.expired'))
-        } else if (errorStatus(err) === 0) {
+        } else if ((apiErrorStatus(err) ?? 0) === 0) {
           setError(t('auth_errors.network'))
         } else {
           setError(t('auth_errors.generic'))
@@ -85,7 +85,7 @@ export function TwoFactorScreen({ pending }: { pending: TwoFactorPending }) {
       await sendEmailOtp()
       sent = true
     } catch (err) {
-      setError(t(errorStatus(err) === 0 ? 'auth_errors.network' : 'auth_errors.generic'))
+      setError(t((apiErrorStatus(err) ?? 0) === 0 ? 'auth_errors.network' : 'auth_errors.generic'))
     } finally {
       emailSubmittingRef.current = false
       setEmailSubmitting(false)
@@ -179,7 +179,7 @@ export function TwoFactorScreen({ pending }: { pending: TwoFactorPending }) {
  * Reads `attempts_remaining` off the 401 body.
  *
  * The backend puts it alongside the error envelope rather than inside it, so
- * this cannot go through errorCode's path.
+ * this cannot go through apiErrorCode's path.
  */
 function attemptsRemaining(err: unknown): number | null {
   const e = err as { response?: { data?: { attempts_remaining?: number } } }
