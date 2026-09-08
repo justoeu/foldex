@@ -378,34 +378,38 @@ func (w *Worker) process(ctx context.Context, job previewJob) {
 	w.logger.Info("preview ok", "link_id", id)
 
 	if willTryScreenshot {
-		finishAt := w.maybeScreenshot(ctx, id, link.URL, link.Generation)
-		// A skipped or failed fallback releases the frontend poll only if no
-		// manual upload or newer refresh changed the row while capture ran.
-		if finishAt != nil {
-			if _, uErr := w.repo.SystemFinishScreenshotFallback(ctx, id, *finishAt, link.Generation); uErr != nil {
+		followup, finishAt := w.maybeScreenshot(ctx, id, link.URL, link.Generation, link.UpdatedAt)
+		switch followup {
+		case screenshotFinished:
+		case screenshotNeedsRelease, screenshotAbort:
+			if _, uErr := w.repo.SystemFinishScreenshotFallback(ctx, id, finishAt, link.Generation); uErr != nil {
 				w.logger.Error("status flip after screenshot fallback", "err", uErr)
 			}
 		}
 	}
 }
 
-// maybeScreenshot is the post-preview fallback. It runs only when the link has
-// no og:image after the HTML fetch AND the URL is public AND the user has not
-// uploaded a custom image in the meantime. Each guard short-circuits silently.
-func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string, generation int64) *time.Time {
+type screenshotFollowup int
+
+const (
+	screenshotFinished screenshotFollowup = iota
+	screenshotNeedsRelease
+	screenshotAbort
+)
+
+func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string, generation int64, knownAt time.Time) (screenshotFollowup, time.Time) {
 	if w.screenshotter == nil || w.uploader == nil {
-		return nil
+		return screenshotFinished, time.Time{}
 	}
 	cur, err := w.repo.SystemGetPreview(ctx, id)
 	if err != nil {
-		return nil
+		return screenshotAbort, knownAt
 	}
 	if cur.Generation != generation || cur.PreviewStatus != links.StatusPending {
-		return nil
+		return screenshotFinished, time.Time{}
 	}
 	if cur.OGImageURL != nil && *cur.OGImageURL != "" {
-		// Either preview found one or the user uploaded one — leave it alone.
-		return nil
+		return screenshotFinished, time.Time{}
 	}
 	shotCtx, cancel := context.WithTimeout(ctx, screenshotCaptureTimeout)
 	defer cancel()
@@ -414,21 +418,20 @@ func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string, 
 	policyCancel()
 	if !allowed {
 		w.logger.Info("screenshot fallback skipped: non-public host", "link_id", id)
-		return &cur.UpdatedAt
+		return screenshotNeedsRelease, cur.UpdatedAt
 	}
 	png, err := w.screenshotter.Capture(shotCtx, pageURL)
 	if err != nil {
 		w.logger.Warn("screenshot fallback capture failed", "link_id", id, "reason", operationErrorReason(err))
-		return &cur.UpdatedAt
+		return screenshotNeedsRelease, cur.UpdatedAt
 	}
 
 	opt, err := imageopt.OptimizeForStore(png)
 	if err != nil {
-		// Any Optimize failure (decode bomb included) aborts the fallback.
 		// Storing the original would skip INV-077 re-encode and, for
 		// ErrTooLarge, leave a payload that OOMs any decoder of /api/files.
 		w.logger.Warn("screenshot fallback rejected", "link_id", id, "err", err)
-		return &cur.UpdatedAt
+		return screenshotNeedsRelease, cur.UpdatedAt
 	}
 
 	storageCtx, storageCancel := context.WithTimeout(ctx, screenshotStorageTimeout)
@@ -436,18 +439,18 @@ func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string, 
 	stored, err := linkimage.Store(storageCtx, w.uploader, "screenshots", id, opt.Ext, opt.Data, opt.ContentType)
 	if err != nil {
 		w.logger.Warn("screenshot fallback upload failed", "link_id", id, "err", err)
-		return &cur.UpdatedAt
+		return screenshotNeedsRelease, cur.UpdatedAt
 	}
 	applied, err := w.repo.SystemUpdateOGImage(storageCtx, id, stored.URL, cur.UpdatedAt, generation)
 	if err != nil {
 		w.logger.Warn("screenshot fallback db update failed", "link_id", id, "err", err)
 		w.removeFallbackObject(ctx, id, stored.Key)
-		return &cur.UpdatedAt
+		return screenshotNeedsRelease, cur.UpdatedAt
 	}
 	if !applied {
 		w.removeFallbackObject(ctx, id, stored.Key)
 		w.logger.Info("screenshot fallback superseded", "link_id", id)
-		return nil
+		return screenshotFinished, time.Time{}
 	}
 	for _, purgeErr := range linkimage.PurgeLegacy(storageCtx, w.uploader, "screenshots", id) {
 		w.logger.Warn("screenshot fallback purge legacy failed", "link_id", id, "err", purgeErr)
@@ -457,7 +460,7 @@ func (w *Worker) maybeScreenshot(ctx context.Context, id int64, pageURL string, 
 		"source_bytes", len(png), "stored_bytes", len(opt.Data),
 		"resized", opt.Resized, "reencoded", opt.Reencoded,
 	)
-	return nil
+	return screenshotFinished, time.Time{}
 }
 
 func (w *Worker) removeFallbackObject(ctx context.Context, id int64, key string) {
