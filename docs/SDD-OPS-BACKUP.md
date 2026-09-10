@@ -232,7 +232,8 @@ continua vindo de `POSTGRES_*` (INV-101); RustFS de origem, de `RUSTFS_*`.
 | `BACKUP_RETAIN_USERZIP` | `7` | últimos N ZIPs por usuário (§5.4); só em `RETENTION_MODE=agent` |
 | `BACKUP_RETENTION_MODE` | `agent` | `agent` \| `bucket` (§7) |
 | `BACKUP_AGE_RECIPIENTS` | — | chaves públicas age, separadas por vírgula (§8) |
-| `BACKUP_AGE_IDENTITY_FILE` | — | só o drill precisa; padrão `keyfile`, sem autogenerate |
+| `BACKUP_AGE_IDENTITY_FILE` | — | drill e ponte de download; padrão `keyfile` (0600), sem autogenerate |
+| `BACKUP_AGE_IDENTITY` | — | a mesma identidade, inline, para plataformas sem mount 0600 (ADR-49); exclusiva com a de cima |
 | `BACKUP_ALLOW_PLAINTEXT` | `0` | opt-out explícito da cifragem (§8) |
 | `BACKUP_ALERT_AFTER` | `2` | falhas consecutivas → e-mail ao owner (§9.3) |
 | `BACKUP_METRICS_ADDR` | `:9099` | interno à rede `foldex`; sem porta no host por default |
@@ -283,7 +284,7 @@ docker-in-docker, porque a imagem-base já traz o servidor:
    BYTES do bucket, não a memória que o pipeline tem deles. O `drill_of_run_id` é
    carimbado na própria linha do drill assim que a fonte é escolhida, para que até um
    drill que falha no meio registre QUAL dump estava validando.
-2. Download do S3 → decrypt com `BACKUP_AGE_IDENTITY_FILE` → spool. Isso valida os BYTES
+2. Download do S3 → decrypt com a identidade privada (arquivo ou inline, §8) → spool. Isso valida os BYTES
    ARMAZENADOS e o round-trip da cifragem num passo só — um drill do arquivo local
    provaria menos.
 3. Cluster efêmero como uid 999 (`postgres` da imagem; o servidor recusa root de qualquer
@@ -413,7 +414,7 @@ próximo boot o refaz.
 A env deixou de ser a única dona do QUANDO. A divisão de autoridade (INV-173):
 
 - **A env decide QUAIS jobs existem** — capacidade é credencial/identidade
-  (`BACKUP_S3_*`, `RUSTFS_*`, `BACKUP_AGE_IDENTITY_FILE`, `BACKUP_MIRROR_INTERVAL_MIN>0`),
+  (`BACKUP_S3_*`, `RUSTFS_*`, a identidade age por arquivo ou inline, `BACKUP_MIRROR_INTERVAL_MIN>0`),
   e uma linha de banco não conjura um segredo dentro do processo.
 - **O banco decide QUANDO os jobs existentes rodam** — tabela `backup_schedule`
   (migração 000042, uma linha por job, `config jsonb`), editada pela superfície admin
@@ -506,8 +507,11 @@ Motor: **`filippo.io/age`** (X25519), não AES-GCM caseiro:
   em qualquer máquina. Um formato proprietário transformaria "perdi o host" em "perdi o
   backup".
 - `BACKUP_AGE_RECIPIENTS` (chaves públicas) cifra — **o caminho de upload não carrega
-  segredo nenhum**. `BACKUP_AGE_IDENTITY_FILE` (privada; padrão `internal/pkg/keyfile`,
-  modo 0600) é exigida apenas pelo drill.
+  segredo nenhum**. A identidade privada é exigida só por quem decifra (drill e ponte de
+  download), e entra por `BACKUP_AGE_IDENTITY_FILE` (padrão `internal/pkg/keyfile`, modo
+  0600) **ou** por `BACKUP_AGE_IDENTITY` inline, nunca pelos dois (ADR-49). O agente lê a
+  inline uma vez e a apaga do próprio ambiente: `pg_dump` herda `os.Environ()` e não deve
+  carregar a chave que abre todos os backups.
 - **Sem autogenerate** (na contramão do `AUTH_ENCRYPTION_KEY_AUTOGEN`): uma chave gerada
   que só existe ao lado dos dados protege o bucket mas convida ao backup indecriptável
   quando o host morre. Falhar no boot sem recipients configurados é o comportamento

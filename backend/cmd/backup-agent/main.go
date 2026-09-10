@@ -140,6 +140,7 @@ func run(logger *slog.Logger) int {
 		"userzip_at", cfg.UserZipAt.String(),
 		"retention_mode", cfg.RetentionMode,
 		"encrypted", len(cfg.AgeRecipients) > 0,
+		"identity_source", cfg.IdentitySource(),
 		"metrics_addr", cfg.MetricsAddr)
 
 	<-ctx.Done()

@@ -49,6 +49,7 @@ var sensitiveKeys = map[string]struct{}{
 	"code_verifier":      {},
 	"api_token":          {},
 	"temporary_password": {},
+	"age_identity":       {},
 	"state":              {},
 	"authorization":      {},
 	"cookie":             {},

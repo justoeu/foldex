@@ -1977,3 +1977,42 @@ como segunda camada: um guard que depende de uma configuração continuar de um 
 guard.
 
 O evento `backup.downloaded` é `warning`, nunca dobrado no gatilho de execução.
+
+### ADR-49 — A identidade age entra por arquivo OU por variável, e a regra de modo não afrouxa
+
+> Emenda o ADR-43 (§8 do `SDD-OPS-BACKUP.md`). Sem migração.
+
+**Contexto.** O agente aceitava a identidade privada só por `BACKUP_AGE_IDENTITY_FILE` e recusava
+o boot com o arquivo em modo diferente de 0600 — correto: essa chave abre todos os backups, e a
+regra do INV-117 vale aqui com mais força. Na produção em Coolify isso não tinha caminho: a
+plataforma materializa file mounts em 0644, de propriedade do root do host, e o agente roda
+como `postgres` — o modelo de file storage até tem `chmod`/`chown`, mas chegam nulos e a UI
+não os oferece, e um 0600 do root seria ilegível pelo processo de qualquer forma. O container
+só subiu com um wrapper `install -m 600 … && exec` no entrypoint. Um requisito de segurança que só
+se satisfaz reescrevendo o entrypoint por fora da imagem é um requisito que a próxima pessoa
+contorna de outro jeito.
+
+**Decisão.** `BACKUP_AGE_IDENTITY` recebe a mesma identidade **inline**. Três regras seguram o
+que a novidade poderia soltar:
+
+1. **Exclusividade.** Arquivo e inline ao mesmo tempo recusam o boot. Duas fontes para uma
+   chave é a forma em que se rotaciona a errada e o drill segue passando com a antiga.
+2. **A regra de modo não muda.** O arquivo continua exigindo 0600. A inline é uma alternativa
+   para quem não controla o modo, não um afrouxamento para quem controla — o `.env.example`
+   diz qual é a recomendada e por quê.
+3. **Lida uma vez, apagada em seguida.** `Load` lê a variável e faz `os.Unsetenv`. `pg_dump`
+   herda `os.Environ()` (precisa de `PGPASSWORD`), e sem o scrub carregaria a chave; o drill
+   já montava ambiente mínimo para os filhos do `pg_restore`, que executam bytes vindos do
+   bucket, e o guard desse ambiente passa a cobrir também a inline.
+
+**O que a inline custa, dito às claras.** `docker inspect` e `/proc/<pid>/environ` mostram o
+valor inicial a quem pode rodá-los no host; o scrub fecha o caminho dos filhos, não esse. Um
+arquivo 0600 montado read-only não tem esse vazamento. É por isso que o arquivo continua sendo
+o padrão documentado, e a inline existe para a plataforma que não oferece o outro.
+
+**Rejeitado.** (a) Um campo `BACKUP_AGE_IDENTITY_MODE_OK=1` que aceite 0644: transforma uma
+recusa correta em opt-out, e o operador que a liga é exatamente o que não deveria. (b) Copiar
+o arquivo para 0600 dentro do próprio agente no boot: resolve o Coolify, mas o agente passaria
+a mexer no filesystem do host por conta própria e a ler um arquivo que outros uids leem — a
+proteção some, só o erro para de aparecer.
+

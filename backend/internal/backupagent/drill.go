@@ -78,16 +78,14 @@ func NewDrillJob(cfg Config, runs drillRuns, store Uploader, logger *slog.Logger
 		return queryRestoredCounts(ctx, socketDir, database, cfg.PGUser)
 	}
 	// The identity loads at construction, not first run: a bad or missing
-	// file is a configuration error and must fail the boot (keyfile posture —
-	// no autogenerate, no ephemeral fallback), not surface weeks later as the
-	// first failed drill.
-	if strings.TrimSpace(cfg.AgeIdentityFile) != "" {
-		identities, err := loadAgeIdentities(cfg.AgeIdentityFile)
-		if err != nil {
-			return nil, err
-		}
-		j.identities = identities
+	// identity is a configuration error and must fail the boot (keyfile
+	// posture — no autogenerate, no ephemeral fallback), not surface weeks
+	// later as the first failed drill.
+	identities, err := loadIdentities(cfg)
+	if err != nil {
+		return nil, err
 	}
+	j.identities = identities
 	return j, nil
 }
 
@@ -107,10 +105,39 @@ func execCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 	return cmd
 }
 
-// loadAgeIdentities reads the private age identity file for the drill. Error
-// messages never echo file content (encrypt.go precedent: the one value that
-// could land here is a private key, and this flows to container logs).
-func loadAgeIdentities(path string) ([]age.Identity, error) {
+// loadIdentities resolves the configured identity, whichever way it arrived.
+// nil, nil when none is configured: that is a capability gap the agent
+// reports (no_identity), not a boot error — plaintext deployments have no
+// identity to load.
+func loadIdentities(cfg Config) ([]age.Identity, error) {
+	switch {
+	case cfg.AgeIdentity != "":
+		return parseInlineIdentity(cfg.AgeIdentity)
+	case cfg.AgeIdentityFile != "":
+		return loadIdentityFile(cfg.AgeIdentityFile)
+	}
+	return nil, nil
+}
+
+// errNoIdentity is the one message both decrypt sites share when an
+// encrypted artifact meets a process that holds no identity.
+const errNoIdentity = "no age identity is configured (BACKUP_AGE_IDENTITY_FILE or BACKUP_AGE_IDENTITY)"
+
+// parseInlineIdentity parses BACKUP_AGE_IDENTITY. The message never echoes
+// the value: the likely paste mistake here IS a private key, and this line
+// flows to container logs.
+func parseInlineIdentity(raw string) ([]age.Identity, error) {
+	identities, err := age.ParseIdentities(strings.NewReader(raw))
+	if err != nil {
+		return nil, errors.New("backupagent: BACKUP_AGE_IDENTITY holds no parseable age identities")
+	}
+	return identities, nil
+}
+
+// loadIdentityFile reads the private age identity file. Error messages never
+// echo file content (encrypt.go precedent: the one value that could land here
+// is a private key, and this flows to container logs).
+func loadIdentityFile(path string) ([]age.Identity, error) {
 	// Operator configuration, never request input — same gosec posture as
 	// keyfile.Read.
 	path = filepath.Clean(path)
@@ -329,7 +356,7 @@ func (j *DrillJob) decrypt(src *backupjobs.DumpRunRef, spoolPath, dumpPath strin
 		return spoolPath, nil
 	}
 	if len(j.identities) == 0 {
-		return "", fmt.Errorf("artifact %s is age-encrypted and BACKUP_AGE_IDENTITY_FILE is not configured — the drill cannot open it", src.Key)
+		return "", fmt.Errorf("artifact %s is age-encrypted and %s — the drill cannot open it", src.Key, errNoIdentity)
 	}
 	in, err := os.Open(spoolPath) // #nosec G304 -- path inside our own MkdirTemp
 	if err != nil {

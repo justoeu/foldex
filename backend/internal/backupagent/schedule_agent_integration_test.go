@@ -4,6 +4,7 @@ package backupagent
 
 import (
 	"context"
+	"filippo.io/age"
 	"testing"
 	"time"
 
@@ -170,6 +171,9 @@ func TestAgent_HeartbeatCarriesNoCredential(t *testing.T) {
 	cfg.S3SecretKey = "s3cr3t-do-not-publish"
 	cfg.RustFSAccessKey = "rustfs-access-key"
 	cfg.RustFSSecretKey = "rustfs-secret-key"
+	inline, err := age.GenerateX25519Identity()
+	require.NoError(t, err)
+	cfg.AgeIdentity = inline.String()
 	agent, err := New(cfg, pool, newRecorderStore(), nil, testLogger())
 	require.NoError(t, err)
 	agent.skewWarning = nil
@@ -184,7 +188,7 @@ func TestAgent_HeartbeatCarriesNoCredential(t *testing.T) {
 		`SELECT capabilities::text FROM backup_agent_state WHERE id = 1`).Scan(&raw))
 
 	for _, secret := range []string{
-		cfg.S3AccessKey, cfg.S3SecretKey, cfg.RustFSAccessKey, cfg.RustFSSecretKey,
+		cfg.S3AccessKey, cfg.S3SecretKey, cfg.RustFSAccessKey, cfg.RustFSSecretKey, cfg.AgeIdentity,
 	} {
 		assert.NotContains(t, raw, secret,
 			"the heartbeat is rendered on the admin screen; a credential in it is a credential on a screen")
