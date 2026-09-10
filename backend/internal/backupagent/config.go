@@ -10,6 +10,7 @@
 package backupagent
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -71,12 +72,21 @@ type Config struct {
 	// Encryption.
 	AgeRecipients  []string
 	AllowPlaintext bool
-	// AgeIdentityFile is the private identity the drill decrypts with — the
-	// only secret this agent holds beyond the S3 credentials. keyfile
-	// posture: no autogenerate, no ephemeral fallback — a generated key that
-	// only exists next to the data is an undecryptable backup on the day the
-	// host dies.
+	// AgeIdentityFile is the private identity the drill and the download
+	// bridge decrypt with — the only secret this agent holds beyond the S3
+	// credentials. keyfile posture: no autogenerate, no ephemeral fallback —
+	// a generated key that only exists next to the data is an undecryptable
+	// backup on the day the host dies.
 	AgeIdentityFile string
+	// AgeIdentity is the same identity passed INLINE (BACKUP_AGE_IDENTITY),
+	// for platforms that materialise secrets as environment variables and
+	// cannot write a file the agent will accept: a file mount whose mode the
+	// operator does not control arrives 0644, and the 0600 rule above refuses
+	// it — correctly. The two are exclusive; Load refuses both at once, since
+	// two sources for one key is the shape where the wrong one gets rotated.
+	// Load also scrubs the variable from the process environment after
+	// reading it, so pg_dump's inherited environment never carries it.
+	AgeIdentity string
 
 	// SpoolDir is where the dump ciphertext is staged before upload. Empty
 	// means the OS temp dir — which in the container is the writable LAYER,
@@ -119,9 +129,18 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	c.AgeRecipients = splitRecipients(os.Getenv("BACKUP_AGE_RECIPIENTS"))
+	if c.AgeIdentityFile != "" && c.AgeIdentity != "" {
+		return Config{}, errors.New("backupagent: BACKUP_AGE_IDENTITY_FILE and BACKUP_AGE_IDENTITY are both set — pick one; two sources for one key is how the wrong one gets rotated")
+	}
 	if err := requireNonEmpty(c.requiredEnv()); err != nil {
 		return Config{}, err
 	}
+	// The inline identity is read exactly once, here. Unset afterwards so
+	// nothing that inherits os.Environ() — pg_dump does — carries the key
+	// that opens every backup. /proc/<pid>/environ still shows the initial
+	// environment to the same uid and root; this closes the child path, not
+	// that one, and the file form remains the tighter posture.
+	_ = os.Unsetenv("BACKUP_AGE_IDENTITY")
 	if c.RetentionMode != "agent" && c.RetentionMode != "bucket" {
 		return Config{}, fmt.Errorf("backupagent: BACKUP_RETENTION_MODE must be \"agent\" or \"bucket\", got %q — the mode is declared, never inferred from an AccessDenied", c.RetentionMode)
 	}
@@ -164,6 +183,7 @@ func configFromEnv() Config {
 		AllowPlaintext: envBool("BACKUP_ALLOW_PLAINTEXT", false),
 
 		AgeIdentityFile: strings.TrimSpace(os.Getenv("BACKUP_AGE_IDENTITY_FILE")),
+		AgeIdentity:     strings.TrimSpace(os.Getenv("BACKUP_AGE_IDENTITY")),
 
 		SpoolDir: os.Getenv("BACKUP_SPOOL_DIR"),
 
@@ -215,10 +235,24 @@ func (c Config) requiredEnv() []envGroup {
 		},
 		{
 			when:   c.DrillAt.Enabled() && len(c.AgeRecipients) > 0,
-			fields: []envField{{"BACKUP_AGE_IDENTITY_FILE", c.AgeIdentityFile}},
-			format: "backupagent: BACKUP_DRILL_AT is set but %s is empty — the drill cannot decrypt the dumps it must restore (mount the private age identity read-only, mode 0600)",
+			fields: []envField{{"BACKUP_AGE_IDENTITY_FILE or BACKUP_AGE_IDENTITY", c.ageIdentitySource()}},
+			format: "backupagent: BACKUP_DRILL_AT is set but neither %s is set — the drill cannot decrypt the dumps it must restore (mount the private age identity read-only, mode 0600, or pass it inline)",
 		},
 	}
+}
+
+// HasAgeIdentity answers whether THIS process can decrypt at all — the
+// capability the drill and the download bridge are gated on. Either source
+// counts; which one is the operator's platform constraint, not a capability.
+func (c Config) HasAgeIdentity() bool {
+	return c.ageIdentitySource() != ""
+}
+
+func (c Config) ageIdentitySource() string {
+	if c.AgeIdentity != "" {
+		return c.AgeIdentity
+	}
+	return c.AgeIdentityFile
 }
 
 func requireNonEmpty(groups []envGroup) error {

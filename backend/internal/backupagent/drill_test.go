@@ -538,9 +538,12 @@ func TestLoadAgeIdentities_RefusesAWorldReadableFile(t *testing.T) {
 func TestExecCommand_ChildrenNeverSeeTheAgentsSecrets(t *testing.T) {
 	t.Setenv("BACKUP_S3_SECRET_KEY", "leakme")
 	t.Setenv("BACKUP_AGE_IDENTITY_FILE", "/secrets/id.txt")
+	t.Setenv("BACKUP_AGE_IDENTITY", "AGE-SECRET-KEY-1LEAKME")
 	cmd := execCommand(context.Background(), "true")
 	joined := strings.Join(cmd.Env, "\n")
 	assert.NotContains(t, joined, "leakme")
+	assert.NotContains(t, joined, "AGE-SECRET-KEY-1LEAKME",
+		"the inline identity must not reach pg_restore's children either")
 	assert.NotContains(t, joined, "BACKUP_AGE_IDENTITY_FILE",
 		"pg_restore executes bytes from the bucket; its children must not inherit what INV-171 isolates")
 	assert.Contains(t, joined, "PATH=")

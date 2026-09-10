@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -188,8 +187,8 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 	   group-readable identity file is a configuration error that must fail the
 	   boot, exactly as it does for the drill — not surface weeks later as the
 	   first failed download in the middle of an incident. */
-	if cfg.ArtifactToken != "" && strings.TrimSpace(cfg.AgeIdentityFile) != "" {
-		identities, err := loadAgeIdentities(cfg.AgeIdentityFile)
+	if cfg.ArtifactToken != "" {
+		identities, err := loadIdentities(cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -252,7 +251,7 @@ func (a *Agent) registered(name string) bool {
 func (a *Agent) capability(name string) (bool, string) {
 	switch name {
 	case backupjobs.JobDrill:
-		if a.cfg.AgeIdentityFile == "" {
+		if !a.cfg.HasAgeIdentity() {
 			return false, "no_identity"
 		}
 	case backupjobs.JobMirror:

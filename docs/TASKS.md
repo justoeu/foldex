@@ -1175,3 +1175,16 @@ configuração; a regra tem que valer sozinha*.
 - **`backup.downloaded` entrou nos chips fixados da trilha.** É o evento mais raro da tela e
   aquele cuja AUSÊNCIA é a resposta; deixá-lo depender do top-N de um período movimentado é
   não poder perguntar "saiu uma cópia da instância?" sem paginar por edições de link.
+
+### Log de conclusão — Identidade age inline (ADR-49)
+
+- **`BACKUP_AGE_IDENTITY` aceita a identidade privada por variável de ambiente.** Nasceu do
+  deploy de 2.22.0 em Coolify: file mounts chegam em 0644 sem campo de modo, o agente recusa
+  (certo), e a produção ficou dependendo de um `install -m 600 … && exec` no entrypoint do
+  compose. Arquivo e inline são exclusivos; a regra 0600 do arquivo não mudou; `Load` apaga a
+  variável do ambiente depois de lê-la, e o teste afirma que o `pg_dump` não a herda.
+- **Lição.** Um requisito de segurança que só se satisfaz por fora da imagem convida ao
+  contorno. A resposta certa não é afrouxar a regra, é dar um segundo caminho que a respeite.
+- **Follow-up de deploy.** Trocar o serviço `backup` da produção para a inline, remover o
+  wrapper de entrypoint e o file storage do Coolify, e confirmar um drill verde depois.
+

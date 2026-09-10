@@ -402,6 +402,9 @@ services:
       # the agent's only secret beyond the S3 credentials. Keep the file 0600
       # on the host and mount it read-only (see the volumes example below).
       BACKUP_AGE_IDENTITY_FILE: ${BACKUP_AGE_IDENTITY_FILE:-}
+      # The same identity inline, for platforms that cannot produce a 0600
+      # file mount. One or the other, never both (see .env.example).
+      BACKUP_AGE_IDENTITY: ${BACKUP_AGE_IDENTITY:-}
       BACKUP_ALLOW_PLAINTEXT: ${BACKUP_ALLOW_PLAINTEXT:-0}
       BACKUP_METRICS_ADDR: ${BACKUP_METRICS_ADDR:-:9099}
       BACKUP_REQUESTED_POLL_SEC: ${BACKUP_REQUESTED_POLL_SEC:-30}
@@ -420,7 +423,8 @@ services:
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       TZ: ${TZ:-UTC}
     # To enable the drill, mount the private age identity read-only and point
-    # BACKUP_AGE_IDENTITY_FILE at the container path, e.g.:
+    # BACKUP_AGE_IDENTITY_FILE at the container path (or pass it inline via
+    # BACKUP_AGE_IDENTITY where a 0600 mount is not possible), e.g.:
     # volumes:
     #   - ./secrets/backup-age-identity.txt:/etc/foldex/backup-age-identity.txt:ro
     networks:
