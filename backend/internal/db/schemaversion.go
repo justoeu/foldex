@@ -55,7 +55,21 @@ import (
 // 46 is entity_click_stats (000046): ranking sorts JOIN that projection, and
 // clicklog.Record UPSERTs it. An unmigrated database 500s the first /go click
 // and every click/recent list.
-const RequiredSchemaVersion = 46
+// 50 is 000050: it revokes the admin grant 000049 seeded for
+// instance.backup_download. The floor moves because a database still carrying
+// that row and a binary that treats the permission as locked disagree about
+// who may hold a dump — and the honest reading of that disagreement is "this
+// database predates the fix".
+//
+// 49 is backup_download (000049): the artifact download handler INSERTs a
+// reservation before every stream and counts the rows back to enforce the
+// per-administrator ceiling (ADR-48 / INV-187). An unmigrated database fails
+// the reservation, which fails the download closed — the safe direction, but a
+// 500 the operator cannot act on, so the floor moves.
+//
+// 47 and 48 (note_public_opt_in, link_public_opt_in) do not appear here on
+// purpose: nothing in the backend reads or writes those columns yet.
+const RequiredSchemaVersion = 50
 
 // ErrSchemaOutdated is returned when the database has not been migrated.
 var ErrSchemaOutdated = errors.New("db: schema is older than this binary requires")

@@ -88,6 +88,33 @@ func TestAgent_HeartbeatCarriesTheEnvBaseline(t *testing.T) {
 		"the form opens on this document and saves it back — it has to pass the floors")
 }
 
+// The screen has to be able to say "this run is stuck" without inventing a
+// threshold: the janitor's TTL is the agent's policy, so the agent is what
+// publishes it (INV-138). Before this, a row whose outcome write was lost sat
+// 'running' for hours and the UI counted the seconds up as if it were progress.
+func TestAgent_HeartbeatCarriesTheJanitorThreshold(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+
+	cfg := lifecycleConfig()
+	cfg.StaleRunMin = 137
+	agent, err := New(cfg, pool, newRecorderStore(), nil, testLogger())
+	require.NoError(t, err)
+	agent.skewWarning = nil
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	agent.Start(runCtx)
+	defer agent.Stop()
+
+	state, seen, err := NewScheduleStore(pool).AgentSeen(ctx)
+	require.NoError(t, err)
+	require.True(t, seen)
+	assert.Equal(t, 137, state.StaleRunMin,
+		"the number the screen renders must be the one the janitor actually enforces")
+}
+
 // The operator cannot verify a destination they cannot see, and the endpoint
 // is the field that most often points somewhere other than intended — here it
 // named the SAME host as the origin, which is a mirror that survives nothing.

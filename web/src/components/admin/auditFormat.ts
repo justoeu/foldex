@@ -1,5 +1,5 @@
 import type {
-  AuditDayBucket, AuditEntry, AuditSeverity, AuditWindow,
+  AuditActionStat, AuditDayBucket, AuditEntry, AuditSeverity, AuditWindow,
 } from '../../api/admin'
 
 /** The periods the server accepts. Anything else is a 400, not a wider page. */
@@ -154,4 +154,39 @@ export function blockable(ip: string | null): boolean {
 
 function isLoopback(ip: string): boolean {
   return ip === '::1' || ip === '0.0.0.0' || ip === '::' || ip.startsWith('127.')
+}
+
+/**
+ * Identity events that must stay one click away even when the period is
+ * dominated by content edits. Login and a manual backup trigger are easy to
+ * lose in the top-N distribution; pinning them is how the trail still answers
+ * "did anyone sign in?" without paging through link updates.
+ *
+ * `backup.downloaded` is pinned for the strongest version of that reason: it
+ * is the rarest event here and the one whose ABSENCE is the answer — "did a
+ * copy of the whole instance leave the box?" is not a question worth paging
+ * through link updates to ask.
+ */
+export const PINNED_AUDIT_ACTIONS = [
+  'login.succeeded',
+  'login.failed',
+  'backup.run_requested',
+  'backup.downloaded',
+] as const
+
+const PINNED_CHIP_EXTRA = 6
+
+export function timelineActionChips(distribution: AuditActionStat[]): AuditActionStat[] {
+  const byAction = new Map(distribution.map((d) => [d.action, d]))
+  const out: AuditActionStat[] = PINNED_AUDIT_ACTIONS.map((action) => (
+    byAction.get(action) ?? { action, category: 'identity', count: 0 }
+  ))
+  const seen = new Set<string>(PINNED_AUDIT_ACTIONS)
+  for (const d of distribution) {
+    if (seen.has(d.action)) continue
+    out.push(d)
+    seen.add(d.action)
+    if (out.length >= PINNED_AUDIT_ACTIONS.length + PINNED_CHIP_EXTRA) break
+  }
+  return out
 }

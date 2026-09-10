@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { authenticatedFetch, http } from './client'
 import { invalidateEntryCounts } from './entries'
+import { apiErrorCode, apiErrorStatus } from '../lib/apiError'
 
 export type BackupManifest = {
   kind: string
@@ -189,6 +190,10 @@ async function backupResponseError(response: Response): Promise<Error> {
   const message = (data as { error?: { message?: string } } | undefined)?.error?.message
     ?? `backup request failed (${response.status})`
   return Object.assign(new Error(message), { response: { status: response.status, data } })
+}
+
+export function isBackupStorageUnavailable(error: unknown): boolean {
+  return apiErrorCode(error) === 'storage_unavailable' || apiErrorStatus(error) === 503
 }
 
 type BackupDownloadTicket = {

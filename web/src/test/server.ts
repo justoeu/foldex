@@ -98,6 +98,10 @@ export type MockState = {
   // requested/running row — same rule the real handler enforces.
   backupJobs?: any[]
   backupStatusRuns?: any[]
+  /* The artifact download budget (ADR-48). Unset means the caller still has
+     the full allowance. The DOWNLOAD itself goes through fetch, not axios, so
+     tests stub globalThis.fetch rather than adding a route here. */
+  backupDownloadBudget?: { used: number; limit: number; available: number }
   backupRunRequests?: string[]
   // Configurable backup schedule (ADR-44). `backupScheduleRows` is the stored
   // (editable) layer keyed by job — only jobs with a row appear, mirroring the
@@ -229,6 +233,8 @@ const buildRoutes = (): Record<Method, Route[]> => ({
       agent: s.backupAgent ?? null,
       agent_schema_version: AGENT_SCHEMA_VERSION,
     }) },
+    { url: /^\/api\/admin\/backup\/runs\/(\d+)\/download-budget$/, handle: (_m, _d, _p, s) =>
+      s.backupDownloadBudget ?? { used: 0, limit: 3, available: 3 } },
     { url: /^\/api\/admin\/backup\/runs$/, handle: (_m, _d, _p, s) => ({
       jobs: s.backupJobs ?? ['dump', 'drill', 'mirror', 'user_zip'].map((job) => ({
         job, last_success: null, consecutive_failures: 0,

@@ -16,7 +16,11 @@ const (
 	AuditRolePermissions       = "role.permissions_changed"
 	AuditBackupRunRequested    = "backup.run_requested"
 	AuditBackupScheduleChanged = "backup.schedule_changed"
-	AuditEmailChanged          = "user.email_changed"
+	// An artifact left the instance (ADR-48). Its own event, never folded into
+	// the run trigger: "someone pressed Run now" and "someone walked out with
+	// every user's content and every bcrypt hash" are not the same sentence.
+	AuditBackupDownloaded = "backup.downloaded"
+	AuditEmailChanged     = "user.email_changed"
 )
 
 const (
@@ -109,10 +113,13 @@ var identitySeverity = map[string]string{
 	AuditRolePermissions:       SeverityCritical,
 	AuditBackupRunRequested:    SeverityInfo,
 	AuditBackupScheduleChanged: SeverityWarning,
-	AuditEmailChanged:          SeverityWarning,
-	AuditIPBlocked:             SeverityWarning,
-	AuditIPUnblocked:           SeverityWarning,
-	AuditRateLimited:           SeverityWarning,
+	// Warning, not info: routine in a healthy instance, and the first line an
+	// investigator reads in an unhealthy one.
+	AuditBackupDownloaded: SeverityWarning,
+	AuditEmailChanged:     SeverityWarning,
+	AuditIPBlocked:        SeverityWarning,
+	AuditIPUnblocked:      SeverityWarning,
+	AuditRateLimited:      SeverityWarning,
 }
 
 func AuditSeverity(action string, burst int) string {
@@ -145,6 +152,7 @@ var auditActionOrder = []string{
 	AuditRolePermissions,
 	AuditBackupRunRequested,
 	AuditBackupScheduleChanged,
+	AuditBackupDownloaded,
 	AuditIPBlocked,
 	AuditIPUnblocked,
 	AuditRateLimited,

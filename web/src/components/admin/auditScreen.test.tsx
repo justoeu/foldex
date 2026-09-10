@@ -91,6 +91,19 @@ describe('AuditSection — header', () => {
     expect(hint.closest('.fx-empty')).toHaveTextContent(/nothing recorded yet/i)
   })
 
+  it('keeps sign-in chips visible when the period is all content edits', async () => {
+    mockApi({
+      '/api/admin/audit/stats': {
+        ...EMPTY_STATS,
+        distribution: [{ action: 'link.updated', category: 'content', count: 40 }],
+      },
+    })
+    renderWithProviders(<AuditSection />)
+    expect(await screen.findByRole('button', { name: /Signed in/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Failed sign-in/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Backup run requested/i })).toBeInTheDocument()
+  })
+
   it('says there is no burst when nothing looks like an attack', async () => {
     mockApi()
     renderWithProviders(<AuditSection />)

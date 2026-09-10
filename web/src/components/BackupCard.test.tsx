@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BackupCard } from './BackupCard'
@@ -13,11 +13,57 @@ beforeEach(() => {
   localStorage.clear()
 })
 
+afterEach(() => {
+  delete (window as Window & { showSaveFilePicker?: unknown }).showSaveFilePicker
+})
+
 describe('BackupCard', () => {
   it('renders the generate button and a hint about scope', () => {
     renderWithProviders(<BackupCard onRestored={vi.fn()} />)
     expect(screen.getByRole('button', { name: /Generate full backup/i })).toBeInTheDocument()
     expect(screen.getByText(/DB \+ RustFS/i)).toBeInTheDocument()
+  })
+
+  it('disables generate and restore when the object store is down', async () => {
+    state.depStatus = { resources: [{ id: 'object_store', state: 'unreachable' }] }
+    const { container } = renderWithProviders(<BackupCard onRestored={vi.fn()} />)
+    const button = await screen.findByRole('button', { name: /Generate full backup/i })
+    await waitFor(() => expect(button).toBeDisabled())
+    expect(screen.getByText(/Object storage is unavailable/i)).toBeInTheDocument()
+    const input = container.querySelector('input[type=file]') as HTMLInputElement
+    expect(input).toBeDisabled()
+    const zone = container.querySelector('.fx-backup-dropzone') as HTMLElement
+    fireEvent.drop(zone, {
+      dataTransfer: { files: [new File([new Uint8Array([0])], 'backup.zip', { type: 'application/zip' })] },
+    })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('maps a 503 generate failure to the storage-unavailable copy', async () => {
+    state.depStatus = { resources: [{ id: 'object_store', state: 'ok' }] }
+    Object.defineProperty(window, 'showSaveFilePicker', {
+      configurable: true,
+      value: vi.fn(async () => ({
+        createWritable: async () => ({
+          getWriter: () => ({
+            write: vi.fn(async () => undefined),
+            close: vi.fn(async () => undefined),
+            abort: vi.fn(async () => undefined),
+          }),
+        }),
+      })),
+    })
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({ error: { code: 'storage_unavailable', message: 'object store is unavailable' } }),
+    } as unknown as Response)
+
+    renderWithProviders(<BackupCard onRestored={vi.fn()} />)
+    const button = await screen.findByRole('button', { name: /Generate full backup/i })
+    await waitFor(() => expect(button).toBeEnabled())
+    await userEvent.setup().click(button)
+    expect(await screen.findByText(/Object storage is unavailable/i)).toBeInTheDocument()
   })
 
   it('shows empty history by default', () => {

@@ -1,0 +1,22 @@
+-- `instance.backup_download` passa a ser OWNER-ONLY e TRAVADA (ADR-48, revisto).
+--
+-- A 000049 semeou o grant para `admin`. Estava errado, e o erro é de modelo de
+-- ameaça, não de código: um dump é indivisível — `pg_dump` não tem fatia por
+-- conta — então conceder o download a um administrador significa que ele lê as
+-- linhas de TODAS as outras contas, que é exatamente a única coisa que o §0
+-- diz que um administrador nunca faz.
+--
+-- Não dá para editar a 000049: ela já rodou. Uma migração aplicada é congelada
+-- (CLAUDE.md §7) — `schema_migrations` guarda só um número, então o que for
+-- mudado nela nunca alcança um banco que já a aplicou.
+--
+-- Removida da tabela, e não só da matriz compilada: `roleperm.Load` já ignora
+-- linhas de permissão travada, então a linha seria inerte de qualquer forma —
+-- mas uma linha inerte que diz "admin pode baixar o backup" é uma resposta
+-- errada esperando alguém que leia a tabela em vez do código.
+--
+-- Os ZIPs por usuário continuam acessíveis à conta dona: a chave carrega o uid
+-- (`backups/users/<uid>/…`) e o handler confere posse. Isso não passa por
+-- permissão nenhuma porque é o mesmo dado que `/api/backup` já exporta para
+-- aquela conta.
+DELETE FROM role_permission WHERE permission = 'instance.backup_download';

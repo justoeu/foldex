@@ -1,16 +1,18 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import type { TFunction } from 'i18next'
 import { useConfirm } from '../ConfirmDialog'
 import { useCopy } from '../../hooks/useCopy'
-import { useCurrentUser } from '../../auth/AuthProvider'
+import { useCurrentUser, useHasPermission } from '../../auth/AuthProvider'
 import { useRevealTarget } from '../../hooks/useRevealTarget'
+import { useTicker } from '../../hooks/useTicker'
 import { relativeTime } from '../../lib/time'
 import { Icon, I } from '../icons'
 import {
+  backupDownloadBudgetKey,
   backupScheduleQueryKey,
   backupStatusQueryKey,
+  fetchBackupDownloadBudget,
   fetchBackupSchedule,
   fetchBackupStatus,
   requestBackupRun,
@@ -23,11 +25,18 @@ import {
   type BackupScheduleResponse,
 } from '../../api/admin'
 import { ScheduleCard } from './BackupScheduleEditor'
+import { BackupDownloadDialog } from './BackupDownloadDialog'
+import { artifactFilename, saveBackupArtifact } from './backupDownload'
 import {
+  backupErrorBlurb,
   drillTableCount,
   drillTables,
   formatBytes,
+  formatDurationMs,
+  isRunInFlight,
   runDuration,
+  runElapsedMs,
+  runMetaRows,
   statusTone,
 } from './backupFormat'
 import { apiErrorCode } from '../../lib/apiError'
@@ -58,6 +67,27 @@ const REQUESTED_STALE_MS = 5 * 60 * 1000
  */
 const AGENT_STALE_MS = 2 * 60 * 1000
 const SCHEDULE_REFETCH_MS = 60 * 1000
+
+/**
+ * How often the history re-reads itself while a run is in flight, and while
+ * none is.
+ *
+ * The idle number is the agent's own requested-poll cadence
+ * (BACKUP_REQUESTED_POLL_SEC, default 30 s): asking faster than the process
+ * that writes the rows only re-reads bytes that cannot have changed. The live
+ * number is short enough that a run which finishes in a few seconds — the
+ * mirror scan is routinely under one — does not sit on screen as `executando`
+ * after it is over, which is the state an operator reads as a hang.
+ *
+ * The idle value coincides with the app-wide `staleTime` in main.tsx, and that
+ * is a coincidence, not a derivation: lowering the global staleTime must not
+ * silently speed this screen up, so the number lives here.
+ */
+const LIVE_REFETCH_MS = 5 * 1000
+const IDLE_REFETCH_MS = 30 * 1000
+
+/** The elapsed counters advance in whole seconds; anything finer is noise. */
+const TICK_MS = 1000
 
 /** The four jobs in the order the layout presents them. */
 const JOBS: readonly BackupJob[] = ['dump', 'drill', 'mirror', 'user_zip'] as const
@@ -98,6 +128,10 @@ export function BackupSection() {
   const confirm = useConfirm()
   const queryClient = useQueryClient()
   const isOwner = useCurrentUser()?.role === 'owner'
+  /* The live matrix, not the role: the owner can grant or revoke this one
+     (ADR-48), so re-deriving it from `role === 'admin'` would show a button the
+     server refuses — the UI re-stating server policy INV-138 forbids. */
+  const canDownloadArtifacts = useHasPermission('instance.backup_download')
   const [pages, setPages] = useState<number[]>([])
   const [selected, setSelected] = useState<BackupJob>('dump')
   const [filter, setFilter] = useState<HistoryFilter>('all')
@@ -107,6 +141,19 @@ export function BackupSection() {
   const query = useQuery({
     queryKey: backupStatusQueryKey(before),
     queryFn: () => fetchBackupStatus(before > 0 ? { before } : {}),
+    /* Read from the query's own state rather than a `runs` variable derived
+       below: the interval depends on the answer it is scheduling the next
+       fetch of, and closing over a value computed further down would pin the
+       cadence to whatever the FIRST render saw.
+
+       Only the head page refreshes. A keyset page below the head is a frozen
+       window into the past — rows never appear in it — so polling it would be
+       churn under an operator who paged back deliberately. */
+    refetchInterval: (q) => {
+      if (before > 0) return false
+      const rows = q.state.data?.runs ?? NO_RUNS
+      return rows.some((r) => isRunInFlight(r.status)) ? LIVE_REFETCH_MS : IDLE_REFETCH_MS
+    },
   })
   const schedule = useQuery({
     queryKey: backupScheduleQueryKey,
@@ -196,6 +243,21 @@ export function BackupSection() {
     [runs, filter],
   )
 
+  /* The clock runs only while there is something to count. `useTicker(null)`
+     registers no interval, so the common case — a screen of finished runs —
+     costs nothing per second. */
+  const inFlight = useMemo(() => runs.filter((r) => isRunInFlight(r.status)), [runs])
+  const now = useTicker(inFlight.length > 0 ? TICK_MS : null)
+  /* One entry per job that is mid-run, so a card can say so without scanning
+     the page again. The unique index backup_run_one_running_idx makes at most
+     one RUNNING row per job; a queued `requested` alongside it is possible,
+     and the running one is the interesting half — hence the ordering. */
+  const inFlightByJob = useMemo(() => {
+    const m = new Map<BackupJob, BackupRun>()
+    for (const r of inFlight) if (r.status === 'running' || !m.has(r.job)) m.set(r.job, r)
+    return m
+  }, [inFlight])
+
   // Every hook has run by here — the guards below may return early.
   if (query.isPending) {
     return <div className="fx-card"><div className="fx-card-body"><div className="fx-empty">{t('common.loading')}</div></div></div>
@@ -211,6 +273,18 @@ export function BackupSection() {
   // not a match — it is precisely the old build this row exists to name.
   const agentSchemaSkewed =
     agent !== null && (agent.schema_version ?? 0) < (schedule.data?.agent_schema_version ?? 0)
+
+  /* A `running` row older than the agent's OWN janitor threshold: the agent
+     has already stopped considering it alive. `stale_run_min` comes from the
+     heartbeat because this screen must not invent a threshold (INV-138) — an
+     agent that publishes none gets silence, never a guess. */
+  const staleRunMs = (agent?.stale_run_min ?? 0) * 60 * 1000
+  const staleRunning =
+    staleRunMs > 0
+      ? inFlight.filter(
+          (r) => r.status === 'running' && now - Date.parse(r.started_at) > staleRunMs,
+        )
+      : NO_RUNS
 
   return (
     <div className="fx-bkp">
@@ -236,6 +310,19 @@ export function BackupSection() {
           </div>
         </div>
       )}
+      {staleRunning.length > 0 && (
+        <div className="fx-banner fx-banner-warn">
+          <div>
+            <div className="fx-banner-title">{t('admin.backup_running_stale_title')}</div>
+            <div className="fx-banner-desc">
+              {t('admin.backup_running_stale_desc', {
+                jobs: staleRunning.map((r) => t(`admin.backup_job_${r.job}`)).join(', '),
+                minutes: agent?.stale_run_min ?? 0,
+              })}
+            </div>
+          </div>
+        </div>
+      )}
       {triggerError && (
         <div className="fx-banner fx-banner-warn">
           <div>
@@ -251,17 +338,25 @@ export function BackupSection() {
       <Kpis jobs={jobs} drill={drill} />
 
       <div className="fx-bkp-jobs">
-        {JOBS.map((job) => (
-          <JobCard
-            key={job}
-            job={job}
-            status={byJob.get(job) ?? null}
-            report={agent?.jobs[job] ?? null}
-            selected={selected === job}
-            onSelect={handleSelectFromCard}
-            onRun={handleRun}
-          />
-        ))}
+        {JOBS.map((job) => {
+          /* The card takes the elapsed NUMBER, not the clock: a card whose
+             job is idle then receives a stable null and keeps its memo while
+             the one that is running re-renders each second. */
+          const running = inFlightByJob.get(job) ?? null
+          return (
+            <JobCard
+              key={job}
+              job={job}
+              status={byJob.get(job) ?? null}
+              running={running}
+              elapsedMs={running ? runElapsedMs(running, now) : null}
+              report={agent?.jobs[job] ?? null}
+              selected={selected === job}
+              onSelect={handleSelectFromCard}
+              onRun={handleRun}
+            />
+          )
+        })}
       </div>
 
       <div className="fx-bkp-split">
@@ -301,6 +396,12 @@ export function BackupSection() {
                   this keyset page holds, and the query has no window. */}
               <div className="fx-panel-desc">
                 {t('admin.backup_history_count', { count: runs.length })}
+                {inFlight.length > 0 && (
+                  <span className="fx-bkp-live">
+                    <span className="fx-bkp-live-dot" aria-hidden="true" />
+                    {t('admin.backup_live', { count: inFlight.length })}
+                  </span>
+                )}
               </div>
             </div>
             <div className="fx-bkp-filters" role="group" aria-label={t('admin.backup_filter_label')}>
@@ -330,11 +431,20 @@ export function BackupSection() {
                     <th>{t('admin.backup_col_artifact')}</th>
                     <th>{t('admin.backup_col_error')}</th>
                     <th>{t('admin.backup_col_duration')}</th>
+                    <th><span className="fx-visually-hidden">{t('admin.backup_col_details')}</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map((r) => (
-                    <HistoryRow key={r.id} run={r} />
+                    /* Only an in-flight row is handed the ticking clock. The
+                       finished ones get the frozen 0 and keep their memo, so a
+                       tick re-renders the one row that changed, not the page. */
+                    <HistoryRow
+                      key={r.id}
+                      run={r}
+                      now={isRunInFlight(r.status) ? now : 0}
+                      canDownload={canDownloadArtifacts}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -445,6 +555,8 @@ function Kpi({
 const JobCard = memo(function JobCard({
   job,
   status,
+  running,
+  elapsedMs,
   report,
   selected,
   onSelect,
@@ -452,6 +564,8 @@ const JobCard = memo(function JobCard({
 }: {
   job: BackupJob
   status: BackupJobStatus | null
+  running: BackupRun | null
+  elapsedMs: number | null
   report: BackupAgentJobReport | null
   selected: boolean
   onSelect: (job: BackupJob) => void
@@ -486,7 +600,17 @@ const JobCard = memo(function JobCard({
           <span className="fx-bkp-job-desc">{t(`admin.backup_job_desc_${job}`)}</span>
         </span>
         <span className="fx-bkp-job-state">
-          {failures > 0 ? (
+          {/* What the job is doing NOW outranks what it last did: a card
+              reading "sucesso" beside a row that says `executando` is the
+              disagreement this whole screen exists to avoid. */}
+          {running ? (
+            <span className="fx-chip fx-chip-warn fx-bkp-live-chip">
+              <span className="fx-bkp-live-dot" aria-hidden="true" />
+              {t(`admin.backup_state_${running.status}`, {
+                duration: elapsedMs === null ? '—' : formatDurationMs(elapsedMs, t),
+              })}
+            </span>
+          ) : failures > 0 ? (
             <span className="fx-chip fx-chip-danger">
               {t('admin.backup_failures_chip', { count: failures })}
             </span>
@@ -543,6 +667,11 @@ const JobCard = memo(function JobCard({
         </div>
       )}
 
+      {/* Deliberately NOT disabled while a run is in flight. The agent's claim
+          is a CAS on a unique partial index and the API answers 409
+          backup_run_pending (INV-172); hiding the click here would replace a
+          server verdict the operator can read with a greyed button that
+          explains nothing. */}
       <button type="button" className="fx-bkp-job-run" onClick={() => onRun(job)}>
         {t('admin.backup_run_now')}
       </button>
@@ -668,36 +797,233 @@ const AgentCard = memo(function AgentCard({
   )
 })
 
-const HistoryRow = memo(function HistoryRow({ run }: { run: BackupRun }) {
+/**
+ * One run.
+ *
+ * `now` is the ticking clock, passed in rather than read from a hook here so
+ * the parent can hand the frozen 0 to every finished row — a `useTicker` on
+ * this component would tick in all twenty of them at once.
+ */
+const HistoryRow = memo(function HistoryRow({
+  run,
+  now,
+  canDownload,
+}: {
+  run: BackupRun
+  now: number
+  /* Whether the instance has the download bridge at all (ADR-48). The server
+     is still the authority — it 404s without it — but an affordance that
+     always fails is worse than no affordance. */
+  canDownload: boolean
+}) {
   const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [asking, setAsking] = useState(false)
+  /* Only a run that shipped ONE named object can be offered: a mirror or
+     user_zip run wrote N and its row names none of them. */
+  const downloadable = canDownload && run.artifact_key !== null && run.status === 'succeeded'
+  const budget = useQuery({
+    queryKey: backupDownloadBudgetKey(run.id),
+    queryFn: () => fetchBackupDownloadBudget(run.id),
+    // Only when the dialog is actually open: one request per visible row would
+    // be twenty requests to render a page nobody has clicked yet.
+    enabled: asking,
+  })
+  const blurb = backupErrorBlurb(t, run.last_error)
+  const elapsed = runElapsedMs(run, now)
+  const tables = drillTables(run.meta)
+  /* Every job but `dump` ships its product in meta, not in artifact_key —
+     user_zip writes one object per user, mirror copies many — so counting only
+     the columns told the operator "nenhum contador foi gravado" about a run
+     that had recorded three. */
+  const metaRows = runMetaRows(run.meta, t)
+  const hasDetails = Boolean(
+    run.last_error
+    || run.artifact_key
+    || run.artifact_sha256
+    || run.artifact_bytes != null
+    || run.objects_scanned != null
+    || run.objects_copied != null
+    || run.bytes_copied != null
+    || run.drill_of_run_id != null
+    || tables.length > 0
+    || metaRows.length > 0,
+  )
+  const toggle = () => setOpen((v) => !v)
+  /*
+   * The whole row stays clickable for the mouse, but the KEYBOARD and the
+   * screen reader go through the real button in the last cell. A `<tr>` with
+   * tabIndex and aria-expanded announces as a plain table row — the attribute
+   * is not conveyed on a non-widget role — and taking `role="button"` off the
+   * row to fix that would cost the table its own structure. Same reasoning as
+   * AuditTimeline's button-instead-of-<summary>.
+   */
   return (
-    <tr>
-      <td className="fx-utable-meta">{new Date(run.started_at).toLocaleString()}</td>
-      <td>
-        <span className="fx-bkp-history-job">
-          <span className={`fx-bkp-jobdot fx-bkp-jobdot-${run.job}`} />
-          {t(`admin.backup_job_${run.job}`)}
-        </span>
-      </td>
-      <td>
-        <span className={'fx-chip' + statusTone(run.status)}>
-          {t(`admin.backup_status_${run.status}`)}
-        </span>
-      </td>
-      <td>
-        {run.artifact_key ? (
-          <span className="fx-bkp-key" title={run.artifact_key}>{run.artifact_key}</span>
-        ) : (
-          <span className="fx-utable-meta">—</span>
-        )}
-      </td>
-      <td>
-        {/* Verbatim, as code (never translated): the token is what the
-            operator greps the agent's logs and the runbook for. */}
-        {run.last_error ? <code>{run.last_error}</code> : <span className="fx-utable-meta">—</span>}
-      </td>
-      <td className="fx-utable-meta">{runDuration(run, t)}</td>
-    </tr>
+    <>
+      <tr
+        className={'fx-bkp-run' + (open ? ' fx-bkp-run-open' : '')}
+        onClick={toggle}
+      >
+        <td className="fx-utable-meta">{new Date(run.started_at).toLocaleString()}</td>
+        <td>
+          <span className="fx-bkp-history-job">
+            <span className={`fx-bkp-jobdot fx-bkp-jobdot-${run.job}`} />
+            {t(`admin.backup_job_${run.job}`)}
+          </span>
+        </td>
+        <td>
+          <span className={'fx-chip' + statusTone(run.status)}>
+            {t(`admin.backup_status_${run.status}`)}
+          </span>
+        </td>
+        <td>
+          {run.artifact_key ? (
+            <span className="fx-bkp-key" title={run.artifact_key}>{run.artifact_key}</span>
+          ) : (
+            <span className="fx-utable-meta">—</span>
+          )}
+        </td>
+        <td>
+          {/* Verbatim, as code (never translated): the token is what the
+              operator greps the agent's logs and the runbook for. */}
+          {run.last_error ? <code>{run.last_error}</code> : <span className="fx-utable-meta">—</span>}
+        </td>
+        <td className="fx-utable-meta" data-testid="fx-bkp-run-duration">
+          {elapsed === null ? (
+            runDuration(run, t)
+          ) : (
+            /* The counter is a measurement in progress, not a result: the
+               live class is what keeps a reader from copying it into a report
+               as this run's duration. */
+            <span className="fx-bkp-elapsed">{formatDurationMs(elapsed, t)}</span>
+          )}
+        </td>
+        <td>
+          {downloadable && (
+            <button
+              type="button"
+              className="fx-bkp-run-download"
+              /* The row's own onClick would fire on the way up and expand the
+                 details behind the dialog. */
+              onClick={(e) => { e.stopPropagation(); setAsking(true) }}
+            >
+              <Icon d={I.download} size={13} />
+              {t('admin.backup_download_action')}
+            </button>
+          )}
+          <button
+            type="button"
+            className="fx-bkp-run-toggle"
+            aria-expanded={open}
+            /* The row's own onClick would fire again on the way up and undo
+               this one. */
+            onClick={(e) => { e.stopPropagation(); toggle() }}
+          >
+            {t('admin.backup_run_details')}
+            <span aria-hidden="true">{open ? ' ▴' : ' ▾'}</span>
+          </button>
+        </td>
+      </tr>
+      {asking && run.artifact_key !== null && (
+        <BackupDownloadDialog
+          filename={artifactFilename(run.artifact_key)}
+          budget={budget.data ?? null}
+          onCancel={() => setAsking(false)}
+          onConfirm={async (password) => {
+            await saveBackupArtifact(run.id, password, artifactFilename(run.artifact_key!))
+            setAsking(false)
+            // The budget just changed; the next open must not show the old one.
+            await budget.refetch()
+          }}
+        />
+      )}
+      {open && (
+        <tr className="fx-bkp-run-details-row">
+          <td colSpan={7}>
+            <dl className="fx-bkp-run-details">
+              {run.last_error && (
+                <div>
+                  <dt>{t('admin.backup_detail_error')}</dt>
+                  <dd>
+                    <code>{run.last_error}</code>
+                    {blurb && <p>{blurb}</p>}
+                  </dd>
+                </div>
+              )}
+              {run.artifact_key && (
+                <div>
+                  <dt>{t('admin.backup_col_artifact')}</dt>
+                  <dd><code>{run.artifact_key}</code></dd>
+                </div>
+              )}
+              {run.artifact_sha256 && (
+                <div>
+                  <dt>{t('admin.backup_detail_sha')}</dt>
+                  <dd><code>{run.artifact_sha256}</code></dd>
+                </div>
+              )}
+              {run.artifact_bytes != null && (
+                <div>
+                  <dt>{t('admin.backup_col_size')}</dt>
+                  <dd>{formatBytes(run.artifact_bytes)}</dd>
+                </div>
+              )}
+              {run.objects_scanned != null && (
+                <div>
+                  <dt>{t('admin.backup_detail_scanned')}</dt>
+                  <dd>{run.objects_scanned.toLocaleString()}</dd>
+                </div>
+              )}
+              {run.objects_copied != null && (
+                <div>
+                  <dt>{t('admin.backup_detail_copied')}</dt>
+                  <dd>{run.objects_copied.toLocaleString()}</dd>
+                </div>
+              )}
+              {run.bytes_copied != null && (
+                <div>
+                  <dt>{t('admin.backup_detail_bytes_copied')}</dt>
+                  <dd>{formatBytes(run.bytes_copied)}</dd>
+                </div>
+              )}
+              {run.drill_of_run_id != null && (
+                <div>
+                  <dt>{t('admin.backup_detail_drill_of')}</dt>
+                  <dd>#{run.drill_of_run_id}</dd>
+                </div>
+              )}
+              {tables.length > 0 && (
+                <div>
+                  <dt>{t('admin.backup_detail_tables')}</dt>
+                  <dd>
+                    {tables.map(([table, count]) => (
+                      <span className="fx-bkp-count" key={table}>
+                        {table}
+                        <b>{count.toLocaleString()}</b>
+                      </span>
+                    ))}
+                  </dd>
+                </div>
+              )}
+              {!hasDetails && (
+                <div>
+                  <dt>{t('admin.backup_detail_empty')}</dt>
+                  <dd>{t('admin.backup_detail_empty_desc')}</dd>
+                </div>
+              )}
+              {metaRows.map((row) => (
+                <div key={row.key}>
+                  <dt>{t(`admin.backup_meta_${row.key}`)}</dt>
+                  {/* A normalized token stays code, never translated — it is
+                      what the operator greps the agent's logs for. */}
+                  <dd>{row.token ? <code>{row.value}</code> : row.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </td>
+        </tr>
+      )}
+    </>
   )
 })
 

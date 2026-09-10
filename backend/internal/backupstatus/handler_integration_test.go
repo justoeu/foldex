@@ -54,8 +54,9 @@ func newHarness(t *testing.T, grants authgate.Grants) *harness {
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		nil,
 		nil,
+		nil,
 		grants,
-	)
+		nil)
 	r := chi.NewRouter()
 	r.Route("/api/admin", func(ar chi.Router) {
 		ar.Use(authgate.RequireAdmin)
@@ -297,8 +298,9 @@ func TestRequestRun_FiresTheAuditHookWithTheJob(t *testing.T) {
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		func(_ *http.Request, job string) { audited = append(audited, job) },
 		nil,
+		nil,
 		roleperm.Default(),
-	)
+		nil)
 	r := chi.NewRouter()
 	r.Route("/api/admin", func(ar chi.Router) {
 		ar.Use(authgate.RequireAdmin)

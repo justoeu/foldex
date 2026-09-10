@@ -49,6 +49,16 @@ services:
       # disabled (503). The SAME value goes into the scrape job of the central
       # observability stack (app-deployments/observability).
       METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # The backup-artifact download bridge (ADR-48). BOTH must be set on this
+      # service AND BACKUP_AGENT_TOKEN on `backup`, or the bridge does not
+      # exist: the download routes answer 404 and the button never appears.
+      #
+      # Leaving them unset is the DEFAULT and keeps INV-171's wall where it
+      # was — this process holds no bucket credential either way, but with the
+      # bridge open it can ask the agent for an artifact encrypted under a
+      # passphrase of its choosing. That reach is the price of the feature.
+      BACKUP_AGENT_URL: ${BACKUP_AGENT_URL:-}
+      BACKUP_AGENT_TOKEN: ${BACKUP_AGENT_TOKEN:-}
       # OTLP gRPC endpoint for distributed traces (e.g. http://obs-host:4317).
       # Empty = tracing fully off (no provider, no exporter, no spans). Spans
       # are named by chi route pattern — raw paths/ids never leave the process.
@@ -177,10 +187,11 @@ services:
       RUSTFS_ENDPOINT: ${RUSTFS_ENDPOINT:-rustfs:9000}
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-foldex}
       # NOT ${RUSTFS_SECRET_KEY:?...}. The object store is OPTIONAL to the
-      # backend — main.go boots without it and only withholds the backup routes
-      # and the screenshot fallback — so the colon form converts a documented,
-      # deliberate degradation into a hard refusal of the entire compose file,
-      # mailer and web included. The backend reports the missing store itself.
+      # backend — main.go boots without it and the backup/screenshot routes
+      # stay mounted answering 503 storage_unavailable — so the colon form
+      # converts a documented, deliberate degradation into a hard refusal of
+      # the entire compose file, mailer and web included. The backend reports
+      # the missing store itself.
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-foldex-screenshots}
       RUSTFS_USE_SSL: ${RUSTFS_USE_SSL:-false}
@@ -328,6 +339,14 @@ services:
       dockerfile: Dockerfile
       target: backup-agent
     restart: unless-stopped
+    # SIGTERM cancels the run context, but Agent.Stop() then waits on the
+    # WaitGroup — and a job that just ended is inside recordOutcome, which
+    # retries the outcome write for up to 2 minutes on a context Docker's
+    # signal deliberately cannot cancel (backupagent/agent.go). At Docker's
+    # 10 s default this SIGKILLs the agent mid-retry and leaves the row in
+    # 'running' until the janitor sweeps it hours later — which is precisely
+    # the failure the retry exists to prevent, re-created by a redeploy.
+    stop_grace_period: 150s
     logging: *default-logging
     mem_limit: 1g
     environment:
@@ -387,6 +406,10 @@ services:
       BACKUP_METRICS_ADDR: ${BACKUP_METRICS_ADDR:-:9099}
       BACKUP_REQUESTED_POLL_SEC: ${BACKUP_REQUESTED_POLL_SEC:-30}
       BACKUP_STALE_RUN_MIN: ${BACKUP_STALE_RUN_MIN:-240}
+      # The other half of the download bridge (ADR-48). Empty — the default —
+      # makes /internal/artifact answer 503: the bridge does not exist rather
+      # than existing in a permissive state.
+      BACKUP_AGENT_TOKEN: ${BACKUP_AGENT_TOKEN:-}
       # Reported in the agent's heartbeat (backup_agent_state) so the agenda
       # screen can say which agent build is running. Same no-default rule as
       # the backend's copy of this variable: a stale literal here would lie.

@@ -574,7 +574,9 @@ Keys remain flat: `screenshots/{link_id}.ext` / `images/{link_id}.ext` derive ow
 <a id="inv-107"></a>
 ### INV-107 — Backup endpoints require RustFS.
 
-`/api/backup/*` is mounted only when the storage client came up. Without RustFS the backup would be silently incomplete; routes don't exist at all (404, not partial 200).
+*Guards:* `TestBackupRoutesStayMountedWithoutObjectStore`, `TestBackupWithoutObjectStoreAnswers503WithEnvelope`
+
+`/api/backup/*` is always mounted. Without the object store a ZIP would be silently incomplete (DB rows, no files), so the handlers answer **503 `storage_unavailable`** with the uniform envelope — never a 200 partial archive and never Chi's empty 404. Omitting the group made the SPA report `backup request failed (404)` and look like a missing feature rather than a down dependency; same shape as screenshot/upload after 2026-08-29.
 
 <a id="inv-108"></a>
 ### INV-108 — `preview.Worker.Enqueue` returns an error
@@ -1368,3 +1370,62 @@ O painel ordena origens por sinal — varredura de contas, martelo numa conta, o
 - **Só a CONTAGEM de contas distintas, nunca a lista.** O alvo já vive na linha do tempo da trilha; repeti-lo aqui criaria uma segunda superfície de leitura que o INV-175 teve o trabalho de reduzir a uma. O guard falha se QUALQUER campo do JSON contiver `@`.
 - **`ip_trusted = false` fica visível.** Numa instalação com proxy, isso significa que o endereço é o do PROXY e a linha é sobre *todo mundo* — esconder a distinção faria o operador bloquear o próprio nginx. É o defeito que originou o SDD inteiro.
 - **A recomendação é informada, não automática.** Ao lado de cada knob a tela mostra o que a trilha de fato observou em 30 dias, para o ajuste partir de dado em vez de intuição. Onde não há medida, não renderiza nada; onde a medida existe e vale zero, diz "sem dado" — são duas afirmações diferentes, e inventar um número aqui seria pior que não ter nenhum.
+
+<a id="inv-187"></a>
+### INV-187 — A ponte de download de backup é OPT-IN, o backend nunca vê texto claro nem credencial, e o teto é de 3 por administrador por artefato.
+
+*Guards:* `TestMatrix_DownloadingAWholeInstanceBackupIsOwnerOnlyAndLocked`, `TestMayDownload_AWholeInstanceArtifactBelongsOnlyToTheOwner`, `TestDownload_AnAdministratorTakesNothingFromThisRoute`, `TestArtifactOwner_RefusesEveryShapeThatIsNotAUserID`, `TestServeArtifact_RoundTripsUnderTheCallersPassphrase`, `TestServeArtifact_TheBodyIsNotThePlaintext`, `TestServeArtifact_TheResponseCarriesNoSecretOfItsOwn`, `TestServeArtifact_RefusesAKeyOutsideTheBackupNamespaces`, `TestArtifactAuth_AnUnsetTokenDisablesTheBridgeEntirely`, `TestReserveDownload_ThreePerAdministratorAndNoMore`, `TestReserveDownload_EachAdministratorHasTheirOwnBudget`, `TestReserveDownload_ConcurrentRequestsCannotOverrunTheCeiling`, `TestReleaseDownload_GivesBackOnlyAReservationThatMovedNothing`, `TestDownload_AFailedBridgeCostsNothing`
+
+O ADR-48 **emenda o INV-171 de propósito**, e a emenda é toda a segurança do recurso.
+Qualquer forma de "a tela entrega o backup ao navegador" concede ao processo exposto à web
+um caminho até o conteúdo do bucket; não existe versão esperta que evite. O que existe é
+estreitar:
+
+1. **Opt-in.** Sem `BACKUP_AGENT_URL` **e** `BACKUP_AGENT_TOKEN`, `NewArtifactClient`
+   devolve `nil`, as três rotas respondem 404 e o `/internal/artifact` do agente responde
+   503. Meio configurado é DESLIGADO — o estado seguro é o que não muda nada. Uma instância
+   que nunca definir as duas mantém o INV-171 intacto.
+2. **Nada de texto claro no backend.** O agente decifra com a identidade privada e re-cifra
+   numa passada de streaming para um recipient scrypt. O backend faz `io.Copy` de bytes que
+   o administrador consegue abrir e mais nada — sem spool, sem `io.ReadAll`, em nenhum ponto
+   da cadeia.
+3. **Nada de credencial no backend.** `BACKUP_S3_*` continua existindo só no agente.
+4. **A senha nunca é persistida.** Não há coluna para ela, e não pode haver. Ela existe
+   durante a requisição e vai direto ao `age.NewScryptRecipient`. Ela também **não é a senha
+   da conta**: o arquivo sai da instância, e uma senha de login dentro dele seria quebrável
+   offline, sem rate limit e sem lockout — contornando tudo o que o INV-184 e o INV-041
+   protegem.
+5. **A chave é validada contra um conjunto FECHADO de prefixos.** `key` chega por HTTP e o
+   store é um cliente S3 que buscaria qualquer outra coisa do bucket com o mesmo prazer.
+
+O teto é **por administrador, por artefato**. Por administrador porque um balde
+compartilhado deixaria o primeiro a topar com uma queda de rede gastar o orçamento de todos;
+por artefato porque um run de `user_zip` aponta para N objetos e um teto por run trancaria
+todos por causa de um. A reserva é gasta **antes do primeiro byte** — cobrar na conclusão
+deixaria baixar 99% e abortar em laço, e quem recebeu 99% do dump recebeu o dump. Uma falha
+no meio do stream, portanto, **não** devolve a reserva.
+
+**A contagem e a inserção rodam numa transação, atrás de `pg_advisory_xact_lock`.** Dobrar a
+contagem dentro do INSERT (`INSERT ... SELECT ... WHERE (count) < n`) PARECE atômico e não
+é: sob READ COMMITTED cada statement tira o próprio snapshot, então duas requisições
+paralelas leem "dois usados" — nenhuma enxerga a linha não-commitada da outra — e ambas
+inserem. Medido: 12 requisições concorrentes concederam 5 downloads num teto de 3. Um único
+statement SQL não é uma seção crítica.
+
+↳ **A ponte que não respondeu não custa nada.** É a ÚNICA devolução, e existe porque o teto
+é pequeno: com o agente inalcançável, três tentativas trancariam o owner fora daquele
+artefato para sempre — justamente enquanto ele conserta a ponte que falhou. O `DELETE` só
+alcança reserva com `bytes_sent IS NULL`, então uma tentativa que produziu bytes continua
+cobrada como qualquer outra e isto não vira laço de retry grátis.
+
+↳ `instance.backup_download` é **owner-only e TRAVADA**, e a razão é o §0: um dump é
+indivisível — `pg_dump` não tem fatia por conta — então um administrador que possa baixá-lo
+lê as linhas de todas as outras contas. Travada porque uma permissão destravada é uma
+decisão esperando ser revertida por quem editar a matriz em seguida.
+
+↳ Os ZIPs por usuário são fatiáveis (a chave carrega o uid) e ainda assim não foram abertos a
+administradores: `/api/backup` já exporta os próprios dados de qualquer conta, e uma segunda
+porta para os mesmos bytes é superfície sem capacidade nova. A regra de posse
+(`backupstatus.mayDownload`) vive no handler como SEGUNDA camada — hoje inalcançável para um
+não-owner, e é justamente por isso que ela tem teste próprio: reachability é configuração, a
+regra tem que valer sozinha.

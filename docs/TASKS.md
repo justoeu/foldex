@@ -82,6 +82,8 @@ Lista faseada de tasks `T1..T30`. Cada fase desbloqueia a próxima — segue em 
 | 2026-09-05 | **BP-HYD-003/005/006: import slot, pool do agente, stats/storage** | — | Import: 1 slot in-flight → `429 import_busy` + Retry-After **antes** de ParseMultipartForm (caps 100 MiB / 50k intactos). backup-agent: pgx MaxConns=4 via `PoolConfig`, não GOMAXPROCS. `GET /api/stats/storage`: LIST cache 60s + singleflight; totais owner-scoped (note_media + og_image_url só se nomear o id do próprio link). Testes: `TestImport_OverlappingUploadsAreRejectedBeforeTempSpill`, `TestBackupAgentPoolMaxConnsIsCapped`, `TestStorageStats_DoesNotRescanWholeBucketOnEveryGet`. |
 | 2026-09-05 | **BP-HYD-002: GET /api/export cota + slot + teto** | — | `GET /api/export` materializava a biblioteca sem cota, slot nem LIMIT. Continua GET (`<a href>` nativo, token de API ok — INV-023). Entra em `expensiveRoutes`; o middleware cobra GET caro em vez de pular todo GET. 1 slot in-flight → `429 export_busy` antes da query. Teto 50k (o mesmo do import) → `413 export_too_large` sem montar o payload; SQL `LIMIT 50001`. Teste: `TestExport_SecondConcurrentRequestIs429AndRowCeilingHolds`. |
 | 2026-09-05 | **url-metadata: POST + write + cota + slot** | — | `GET /api/links/url-metadata` lançava Chromium sem `content.write`, CSRF ou cota. Virou `POST` (body `{url}`), entra em `expensiveRoutes`, e o handler admite no máximo 2 in-flight / 1 por usuário — 429 `metadata_busy` antes do dial. Viewer e token sem write → 403. SSRF/200-vazio intactos (INV-087). |
+| 2026-09-09 | **Auditoria: linha quebrada, título duplicado, chips de login; backup: detalhe da execução** | — | O painel expandido da trilha era irmão flex da linha (`[pip] [botão] [detalhes]`), então IP/UA/data se sobrepunham. Detalhe vai numa coluna abaixo. O h2 "Log de auditoria" repetia o h1 do hub. Chips de `login.succeeded` / `login.failed` / `backup.run_requested` ficam afixados mesmo com a distribuição dominada por conteúdo. Histórico de backup: clique na linha abre o que processou e o que falhou (token + frase + contagens). |
+| 2026-09-09 | **Backup completo 404 com object store fora** | — | `POST /api/backup` era omitido do mux quando o client S3 não subia (`BucketExists` Access Denied em `s3.prontyx.com`). Chi respondia 404 vazio; a SPA mostrava `backup request failed (404)` e o botão "Gerar backup completo" parecia saudável. Mesmo contrato das rotas de imagem (2026-08-29): as rotas ficam montadas e respondem 503 `storage_unavailable` com envelope. `GET /api/files/*` idem. O card desabilita gerar/restaurar quando `/api/status` marca `object_store` unreachable. INV-107 atualizado. Causa operacional por baixo: credencial `RUSTFS_*` Access Denied no bucket (Head/List/Stat) — o 503 não restaura o acesso, só deixa de mentir. |
 | 2026-09-04 | **url-metadata: Chromium fallback, 502 some** | — | O 3% de 5xx no Grafana era `GET /api/links/url-metadata` devolvendo 502 quando o origin 403ia (bot wall). HTTP/oEmbed continua primeiro; se título vem vazio/interstitial, o pool Chromium (mesmo proxy SSRF do print) lê o DOM. SSRF não dispara browser. Os dois falhando: 200 vazio, o diálogo Salva com o hostname. Dash Foldex Application ganha card `5xx (5m)` + tabela Erros por rota. |
 | 2026-09-04 | **Diálogo de link: avisos visíveis, URL duplicada no input** | — | Print que falha (LAN/SSRF) era erro vermelho e travava o Salvar depois de criar a linha — o segundo clique caía em `url_taken`. Agora o print é aviso e não bloqueia. URL já guardada é checada no campo (GET `/api/links/by-url`, debounce 500 ms), bloqueia o Salvar e oferece **Editar o link guardado**, que abre o diálogo na pasta certa. |
 | 2026-09-03 | **Paleta: ir à pasta + editar (RBAC)** | — | Pesquisa de link na ⌥K ganha ícone que abre a pasta (ou Home) e destaca o card, e um lápis que abre o diálogo de edição. O lápis some sem `content.write` (matriz viva, ecoada em `/me.permissions`). Sem permissão nova: a busca já é owner-scoped; o servidor continua recusando PATCH de outro dono com 404. |
@@ -957,3 +959,219 @@ banco lento); as locales do guard de paridade vêm do diretório e não de uma l
 `replace('.', '_')` do `RolesMatrix` trocava só o PRIMEIRO ponto e concordava com o guard por
 sorte; e o comentário do `memoryRetain` afirmava que derrubar um balde cedo "é inofensivo,
 ele se re-semeia" — verdade para uma sequência escalar, falso para um conjunto de largura.
+
+---
+
+### Log de conclusão — Backup ao vivo: cadência adaptativa e contador decorrido
+
+A tela de backup mostrava um run `executando` com "—" na coluna Duração e não voltava a
+consultar o servidor: para saber que o job tinha acabado era preciso recarregar a página.
+Duas mudanças, ambas em `web/`:
+
+- **`useTicker(periodMs: number | null)`** — um relógio que só existe enquanto alguém está
+  contando. O braço `null` é o ponto do hook: não registra `setInterval` nenhum, então uma
+  tela que PODERIA mostrar um contador não re-renderiza uma vez por segundo nos dias em que
+  nada roda. O teste que prova isso espia `setInterval`; afirmar que o valor está congelado
+  passaria mesmo com um timer rodando e setando o mesmo número.
+- **Cadência adaptativa** no `refetchInterval` de `backupStatusQueryKey`: 5 s enquanto
+  houver run em voo, 30 s quando não houver, `false` em qualquer página de keyset abaixo da
+  cabeça.
+
+Lições da rodada:
+
+- **Ler `q.state.data` dentro do `refetchInterval`, não a variável `runs` derivada abaixo.**
+  A cadência depende da resposta cujo próximo fetch ela está agendando; fechar sobre um
+  valor calculado adiante prenderia o intervalo ao que o PRIMEIRO render viu.
+- **`requested` e `running` contam a partir de instantes diferentes.** `running` conta de
+  `started_at`, que o `UPDATE` do claim sobrescreve com `now()` (`runstore.go`) — trabalho
+  de verdade. `requested` conta de `scheduled_for`: numa linha não reivindicada,
+  `started_at` é só quando o processo web a inseriu, e chamar isso de "processando" é a
+  mentira que o banner de requested envelhecido existe para pegar.
+- **O relógio é do navegador, os carimbos são do servidor.** Um laptop adiantado põe o
+  início no futuro; sem o piso em zero o contador anda para trás.
+- **Não desabilitei "Executar agora" durante um run.** A tentação era óbvia e teria apagado
+  a única forma de observar o 409 `backup_run_pending` pela UI — um teste existente morreu
+  na primeira versão exatamente por isso, e foi o teste que estava certo (INV-138: a UI não
+  re-deriva política do servidor).
+- **A checagem por mutação encontrou o que a suíte verde não mostrava.** Anular a cadência
+  adaptativa, congelar o ticker e remover a guarda de página-da-cabeça derrubou 4 dos 7
+  testes novos. Os 2 que sobreviveram só afirmam em `t=0` — corretos, mas não são eles que
+  seguram o comportamento vivo, e saber disso é o ponto de rodar a mutação.
+- **Achado do sweep, em código não commitado da rodada anterior:** a linha expansível do
+  histórico era um `<tr>` com `tabIndex={0}` e `aria-expanded`. Num `tr` o atributo não é
+  transmitido — o leitor de tela anuncia uma linha comum — e pôr `role="button"` custaria
+  ao `<table>` a própria estrutura. O toggle virou um `<button>` real na última célula
+  (mesmo raciocínio do `AuditTimeline`), com `stopPropagation` porque o `onClick` do `tr`
+  dispararia de novo na subida e reabriria o que acabara de fechar. O `<tr>` segue clicável
+  para o mouse.
+- **`formatDurationMs` ganhou braço de minutos** porque um drill de cinco minutos lia
+  "312.4 s" — um número que o leitor precisa dividir antes de significar algo. O braço
+  sub-segundo continua em ms: 489 ms arredondado para "0.5 s" perde o único dígito que
+  separa um scan que rodou de um que não achou nada.
+
+---
+
+### Log de conclusão — Incidente: o drill nunca provou um restore, e a linha ficou presa
+
+O contador ao vivo da rodada anterior expôs um `Drill de restauração` "executando há
+106 min". Não estava. Os logs do agente:
+
+```
+16:55:12  run started      job=drill run_id=55
+16:56:42  run failed       reason=drill_restore_failed
+          pg_restore: error: could not execute query:
+          ERROR: role "postgres" does not exist
+16:56:57  record failure   err=backupagent: fail run: context deadline exceeded
+```
+
+Três defeitos, um encadeado no outro.
+
+**1. `pg_restore` sem `--no-owner --no-privileges`.** O cluster efêmero do drill é
+`initdb`'d com UM papel. Todo `ALTER ... OWNER TO` e `GRANT` que o cluster de origem emitiu
+nomeia um papel que deliberadamente não existe ali, e `--exit-on-error` faz o primeiro
+abortar o restore inteiro. Contra um Postgres gerenciado, **todo** drill falhava — a
+instância carregava um dump verde e um restore que nunca uma vez foi provado, que é o
+estado exato que este job existe para tornar impossível. Reproduzido fora do código com os
+binários reais (dois clusters, tabela com `OWNER TO` de um papel ausente no alvo): argv
+antigo → `role "..." does not exist`, exit 1; argv novo → exit 0 e as linhas de volta.
+
+**2. A gravação do desfecho não tinha retry.** É a única chamada ao banco do agente sem
+segunda chance: perdê-la deixa a linha em `running` para sempre, segurando
+`backup_run_one_running_idx`, e o job só volta a rodar quando o janitor varre —
+`BACKUP_STALE_RUN_MIN` (240) + até uma hora. `recordOutcome` agora tenta por 2 min, cada
+tentativa num `context.Background()` novo.
+
+**3. A tela não tinha como dizer "travado".** Havia banner para `requested` sem claim e
+nada para `running` velho. O agente passou a publicar `BACKUP_STALE_RUN_MIN` no heartbeat
+(`stale_run_min`, campo novo do JSONB — sem migração) e a tela usa esse número; heartbeat
+sem o campo → silêncio, nunca um palpite (INV-138).
+
+A linha 55 foi destravada à mão (`UPDATE … SET status='failed', last_error='drill_restore_failed'`),
+com o motivo que os logs registraram e não com `stale_claim` — o motivo era conhecido.
+
+Lições, e as três primeiras vieram do sweep:
+
+- **O lock do job cobre o TRABALHO, não a burocracia depois dele.** O `defer release()`
+  segurava o advisory lock por toda a janela de retry. `acquireJobLock` não espera na
+  contenção — ele PULA o slot — e o próximo slot de um job pode ser daqui a seis horas.
+  Uma escrita lenta viraria três jobs pulados. O release passou a ser explícito assim que
+  o run termina, e o que sobra é o estado da linha, que já é o guarda (INV-172).
+- **Um retry de 2 min sem `stop_grace_period` recria o bug pelo deploy.** `Agent.Stop()`
+  espera o WaitGroup e o retry roda num contexto que o SIGTERM não cancela de propósito;
+  com os 10 s padrão do Docker, um redeploy mata o agente no meio da retentativa e deixa
+  a linha em `running`. `stop_grace_period: 150s` no serviço `backup`.
+- **Afirmar que a flag está no argv não é provar que ela conserta.** O e2e existente dumpa
+  do MESMO papel em que restaura, então o artefato nunca nomeia um papel ausente: ele
+  passava alegremente enquanto todo drill real falhava. Entrou
+  `TestDrill_RestoresAnArtifactThatNamesAForeignRole`, que planta o papel estrangeiro,
+  o `OWNER TO` e o `GRANT`.
+- **Um campo de teste cujo zero é inválido é uma armadilha.** A primeira versão do seam de
+  retry lia os campos crus, e todo teste de integração deste pacote monta `&Agent{...}` na
+  mão — zero virava um contexto já expirado e a escrita nunca podia acontecer. Dois testes
+  PRÉ-EXISTENTES pegaram. Zero passou a significar a constante compilada.
+- **A doc afirmava o contrário do incidente.** §5.2 passo 3 dizia que `initdb` com o mesmo
+  usuário da produção "elimina erros de ownership no restore". Elimina os do papel que ESSE
+  usuário possui, e só. Corrigido junto.
+
+---
+
+### Log de conclusão — Download de artefato de backup (ADR-48 / INV-187)
+
+A tela mostrava `artifact_key` e `artifact_sha256` e não deixava baixar nada: as credenciais
+do S3 e a identidade privada vivem só no agente. Agora dá, com senha no arquivo, teto de 3
+por administrador e uma emenda ao INV-171 escrita às claras.
+
+O desenho, e por que ele é assim:
+
+- **O agente cifra, o backend só proxia.** O agente decifra com a identidade privada e
+  re-cifra numa passada de streaming para um recipient `age` scrypt. O backend nunca vê
+  texto claro e nunca recebe credencial de S3.
+- **Opt-in.** Sem `BACKUP_AGENT_URL` + `BACKUP_AGENT_TOKEN` o cliente é `nil`, as rotas
+  respondem 404 e o `/internal/artifact` responde 503. Quem nunca configurar mantém o
+  INV-171 intacto.
+- **A senha cifra o ARQUIVO, nunca é a da conta.** O pedido original era usar a senha do
+  administrador. Duas razões contra, e a segunda decide: o sistema não conhece a senha (só o
+  hash), e o arquivo sai da instância — quem o obtivesse quebraria essa senha **offline**,
+  sem rate limit e sem lockout, contornando todo o INV-184/INV-041.
+- **age, não ZIP com senha.** `archive/zip` não cifra, as libs de ZIP-AES estão abandonadas
+  e `ZipCrypto` é quebrado. `age` já era dependência e o operador abre o arquivo sem o
+  Foldex.
+
+Lições da rodada — as três primeiras vieram do sweep, e as três eram defeitos meus:
+
+- **Uma instrução SQL não é uma seção crítica.** Escrevi
+  `INSERT … SELECT … WHERE (SELECT count) < 3` e um comentário afirmando que era atômico.
+  Não é: sob READ COMMITTED cada instrução tira o próprio snapshot, então duas requisições
+  paralelas leem "dois usados" — nenhuma vê a linha não commitada da outra — e ambas
+  inserem. Reproduzido: **12 requisições simultâneas concederam 5 downloads num teto de 3.**
+  Virou transação com `pg_advisory_xact_lock` na tripla (run, usuário, chave). O teste
+  sequencial passava nas duas versões; só o concorrente separa.
+- **scrypt custa memória, e o container tem teto.** `age.NewScryptRecipient` usa N=2^18,
+  logo ~256 MiB por chamada. O agente tem `mem_limit: 1g` e não tinha limite de
+  concorrência: quatro downloads o matariam por OOM, levando junto um dump em execução — um
+  canal lateral em volta do INV-172, que serializa dumps e não sabe nada sobre downloads.
+  Semáforo de 2, e o work factor fica no padrão (baixá-lo enfraqueceria todo artefato
+  baixado para comprar um limite que o semáforo dá de graça).
+- **Três timeouts no mesmo caminho precisam concordar.** O nginx cortava em 600 s enquanto
+  o axios e o cliente do backend achavam ter 30 min. Um dump de onze minutos chegaria
+  truncado, e o operador veria arquivo corrompido em vez de timeout. Alinhados em 1800 s, com
+  `proxy_buffering off` para não spoolar um dump no disco do nginx.
+- **Cinco guards PRÉ-EXISTENTES pegaram omissões minhas**: a classificação da ação de
+  auditoria, a contagem de permissões do RBAC, a semente da matriz na migração, o
+  `TestEveryPermissionIsEnforcedSomewhere` e a lista de tabelas do `testdb.Reset`. Nenhum
+  deles é sobre este recurso; todos falharam porque o recurso existe.
+- **O guard de rota cara não enxergava rota de admin nenhuma.** `fullyWiredDeps()` não monta
+  `AdminHandler`, então `adminSurface` retornava cedo e
+  `TestExpensiveRoutes_EveryPatternNamesARouteTheRouterMounts` iterava sobre zero rotas de
+  `/api/admin` — o mesmo formato do defeito que o CLAUDE.md §4.1 registra para a zona de
+  auth. Passou a montar.
+- **O guard de `button.` tem lista explícita.** Ele passou sem olhar minha classe nova até
+  ela ser adicionada. Verificado por mutação: com o seletor sem qualificação de elemento, o
+  guard falha.
+- **Uma migração aplicada é congelada.** A permissão nova não podia entrar na `000039`, que
+  semeou a matriz — ela já rodou em bancos reais e `schema_migrations` guarda só um número.
+  Entrou na `000049`, com `ON CONFLICT DO NOTHING` para não sobrescrever um owner que já
+  tenha decidido o contrário.
+
+**Fechado no mesmo passo:** o SPA passou a fazer STREAMING. A primeira versão baixava como
+`Blob`, o que segura o dump inteiro na memória da aba antes de um byte chegar ao disco —
+serve para os 184 KB desta instância e congela a aba na instância cujo backup de fato
+importa. Agora vai por `fetch` POST + `response.body.getReader()` direto no arquivo que o
+operador escolheu (`showSaveFilePicker`), no mesmo molde do `streamBackupToFile` do
+`api/backup.ts`. O `Blob` sobrevive só como fallback para Firefox e Safari, que não têm a
+File System Access API — um download pesado é melhor que um impossível.
+
+Detalhe que só aparece implementando: **o picker abre ANTES da requisição.** Um diálogo de
+arquivo é um gesto do usuário e o navegador recusa um que chegue depois de um `await` de
+rede — e, pior, a requisição já teria gasto um download do orçamento antes de o operador
+escolher onde salvar.
+
+**Revisão no mesmo passo: apenas o OWNER baixa.** A primeira versão dava
+`instance.backup_download` a qualquer administrador, como pedido. Implementando, o custo
+ficou explícito e foi levado ao usuário: **um dump é indivisível** — `pg_dump` não tem fatia
+por conta, é um arquivo só com as linhas de todo mundo — logo "baixar só o que é seu" não
+existe para ele, e entregá-lo a um administrador é ele ler todas as contas, que é o §0 ao
+contrário. A permissão virou **owner-only e TRAVADA** (`lockedPermissions`), migração `000050`
+apagando a semente da `000049`, `RequiredSchemaVersion` 49 → 50.
+
+Os ZIPs por usuário são o único artefato fatiável (a chave carrega o uid) e ainda assim
+**não** foram abertos a administradores: `/api/backup` já exporta os próprios dados de
+qualquer conta, e uma segunda porta para os mesmos bytes é superfície nova com capacidade
+zero. A posse continua conferida no handler (`mayDownload`) como segunda camada, hoje
+inalcançável para um não-owner — e é por isso que ela tem teste próprio: *reachability é
+configuração; a regra tem que valer sozinha*.
+
+- **A ponte que não respondeu não custa nada.** O teto de 3 é permanente, então três 502 de
+  um agente inalcançável trancavam o owner fora daquele artefato para sempre — enquanto ele
+  consertava a própria ponte que falhou. `ReleaseDownload` devolve a reserva, e o
+  `WHERE bytes_sent IS NULL` é o que a impede de virar refund geral: uma tentativa que moveu
+  bytes continua cobrada. Achado pelo agente de Code Review; o teste que afirmava o
+  comportamento antigo foi invertido.
+- **A prosa do INV-187 tinha envelhecido junto com o código.** Ainda descrevia a reserva como
+  um `INSERT ... SELECT ... WHERE (count) < n` — a forma que foi PROVADA quebrada (12
+  requisições concorrentes concederam 5 num teto de 3) e substituída por transação +
+  `pg_advisory_xact_lock`. Um invariante que descreve o código que não existe mais é pior que
+  nenhum.
+- **`backup.downloaded` entrou nos chips fixados da trilha.** É o evento mais raro da tela e
+  aquele cuja AUSÊNCIA é a resposta; deixá-lo depender do top-N de um período movimentado é
+  não poder perguntar "saiu uma cópia da instância?" sem paginar por edições de link.

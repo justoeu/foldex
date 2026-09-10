@@ -19,7 +19,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/abusepolicy"
+	"foldex/internal/auth"
 	"foldex/internal/backup"
+	"foldex/internal/backupstatus"
 	"foldex/internal/config"
 	"foldex/internal/links"
 	"foldex/internal/pkg/authctx"
@@ -518,9 +520,63 @@ func TestImageRoutesStayMountedWithoutObjectStore(t *testing.T) {
 		"POST /api/links/{id}/image",
 		"DELETE /api/links/{id}/image",
 		"POST /api/links/{id}/screenshot",
+		"GET /api/files/*",
 	} {
 		assert.Truef(t, mounted[pattern], "route %q must stay mounted when storage is nil", pattern)
 	}
+}
+
+// Backup used to be omitted from the mux when StorageBucket was nil, so the
+// SPA's "Generate full backup" hit Chi's empty 404. Same contract as images:
+// the route stays, the handler answers 503 with the uniform envelope.
+func TestBackupRoutesStayMountedWithoutObjectStore(t *testing.T) {
+	t.Parallel()
+	router := New(Deps{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Config: config.Config{BindAddr: "127.0.0.1"},
+	})
+	mounted := map[string]bool{}
+	require.NoError(t, chi.Walk(router.(chi.Routes),
+		func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+			mounted[method+" "+normalizeRoutePath(route)] = true
+			return nil
+		}))
+	for _, pattern := range []string{
+		"POST /api/backup",
+		"POST /api/backup/download",
+		"GET /api/backup/download",
+		"GET /api/backup/download/status",
+		"POST /api/backup/validate",
+		"POST /api/backup/restore",
+	} {
+		assert.Truef(t, mounted[pattern], "route %q must stay mounted when storage is nil", pattern)
+	}
+}
+
+func TestBackupWithoutObjectStoreAnswers503WithEnvelope(t *testing.T) {
+	t.Parallel()
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			next.ServeHTTP(w, req.WithContext(authctx.WithPrincipal(req.Context(), editor(7))))
+		})
+	})
+	backupOrUnavailable(r, Deps{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}, nil)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/backup", nil))
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "storage_unavailable", body.Error.Code)
+	assert.NotEmpty(t, body.Error.Message)
 }
 
 func TestStatusRouteIsMounted(t *testing.T) {
@@ -589,6 +645,17 @@ func fullyWiredDeps() Deps {
 		Storage:       stubUploader{},
 		ScreenshotURL: func(context.Context, string) bool { return false },
 		StorageBucket: stubBucket{},
+		/* Without an AdminHandler, adminSurface returns before mounting
+		   anything and every guard that walks this router is blind to the whole
+		   /api/admin tree — it passes by iterating over routes that are not
+		   there. The same shape as TestEdgeZone_EveryAuthPOSTIsClassified
+		   walking zero routes (CLAUDE.md §4.1). Nothing here dials a database:
+		   the handler only needs to exist for its routes to be declared. */
+		AdminHandler: auth.NewAdminHandler(nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), "", nil, nil),
+		/* Likewise the artifact bridge: unset, the download routes still mount
+		   (they answer 404 at request time), so the expensive-route guard can
+		   see them. */
+		BackupArtifacts: backupstatus.NewArtifactClient("http://agent.invalid", "t0ken"),
 	}
 }
 

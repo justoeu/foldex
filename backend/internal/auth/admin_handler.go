@@ -536,6 +536,13 @@ func (h *AdminHandler) AuditBackupSchedule(r *http.Request, detail string) {
 	h.audit(r, AuditBackupScheduleChanged, nil, detail)
 }
 
+// AuditBackupDownload records an artifact leaving the instance (ADR-48) — same
+// function-shaped hook, same import-cycle reason. The detail is the object key;
+// the passphrase is not a parameter here and never will be.
+func (h *AdminHandler) AuditBackupDownload(r *http.Request, detail string) {
+	h.audit(r, AuditBackupDownloaded, nil, detail)
+}
+
 // optionalInt64 parses a query parameter that may be absent, treating "" as 0
 // so the caller can express "no cursor" and "no explicit limit" the same way.
 func optionalInt64(raw string) (int64, error) {

@@ -4,9 +4,12 @@ import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import {
   generateBackup,
+  isBackupStorageUnavailable,
   readBackupHistory,
   type BackupHistoryEntry,
 } from '../api/backup'
+import { unreachableResources, useDepStatus } from '../api/status'
+import { apiErrorText } from '../lib/apiError'
 import { BackupRestoreDialog } from './BackupRestoreDialog'
 
 type Props = {
@@ -15,12 +18,15 @@ type Props = {
 
 export function BackupCard({ onRestored }: Props) {
   const { t } = useTranslation()
+  const { data: depStatus } = useDepStatus()
+  const storageDown = unreachableResources(depStatus).some((r) => r.id === 'object_store')
   const [history, setHistory] = useState<BackupHistoryEntry[]>(() => readBackupHistory())
   const [generating, setGenerating] = useState(false)
   const [errMsg, setErrMsg] = useState<string | null>(null)
   const [restoreFile, setRestoreFile] = useState<File | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const generateDisabled = generating || storageDown
 
   useEffect(() => {
     // Sync if another tab generated a backup.
@@ -32,15 +38,16 @@ export function BackupCard({ onRestored }: Props) {
   }, [])
 
   const handleGenerate = async () => {
+    if (storageDown) return
     setErrMsg(null)
     setGenerating(true)
     try {
       await generateBackup()
       setHistory(readBackupHistory())
     } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
-        ?? (e as Error).message
-        ?? t('backup.generate_failed')
+      const msg = isBackupStorageUnavailable(e)
+        ? t('backup.storage_unavailable')
+        : apiErrorText(e, t('backup.generate_failed'))
       setErrMsg(msg)
     } finally {
       setGenerating(false)
@@ -48,7 +55,7 @@ export function BackupCard({ onRestored }: Props) {
   }
 
   const handleFile = (f: File | null) => {
-    if (!f) return
+    if (!f || storageDown) return
     if (!f.name.toLowerCase().endsWith('.zip')) {
       setErrMsg(t('backup.restore_file_invalid'))
       return
@@ -76,7 +83,7 @@ export function BackupCard({ onRestored }: Props) {
           <button
             type="button"
             className="fx-cta fx-cta-fill"
-            disabled={generating}
+            disabled={generateDisabled}
             onClick={handleGenerate}
             style={{ justifyContent: 'center' }}
           >
@@ -84,8 +91,10 @@ export function BackupCard({ onRestored }: Props) {
             <Icon d={I.upload} size={14} stroke={2} />
           </button>
 
-          {errMsg && (
-            <div style={{ fontSize: 12, color: 'var(--fx-danger)' }}>{errMsg}</div>
+          {(errMsg || storageDown) && (
+            <div style={{ fontSize: 12, color: 'var(--fx-danger)' }}>
+              {storageDown ? t('backup.storage_unavailable') : errMsg}
+            </div>
           )}
 
           <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)', marginTop: 6 }}>
@@ -98,17 +107,19 @@ export function BackupCard({ onRestored }: Props) {
               borderRadius: 12,
               padding: 22,
               textAlign: 'center',
-              cursor: 'pointer',
+              cursor: storageDown ? 'not-allowed' : 'pointer',
               background: 'var(--fx-surface)',
+              opacity: storageDown ? 0.6 : 1,
             }}
-            onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
+            aria-disabled={storageDown}
+            onDragOver={(e) => { if (storageDown) return; e.preventDefault(); setIsDragging(true) }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={(e) => {
               e.preventDefault()
               setIsDragging(false)
-              handleFile(e.dataTransfer.files?.[0] ?? null)
+              if (!storageDown) handleFile(e.dataTransfer.files?.[0] ?? null)
             }}
-            onClick={() => fileRef.current?.click()}
+            onClick={() => { if (!storageDown) fileRef.current?.click() }}
           >
             <Icon d={I.upload} size={22} />
             <div style={{ marginTop: 6, color: 'var(--fx-ink-3)', fontSize: 13 }}>
@@ -119,6 +130,7 @@ export function BackupCard({ onRestored }: Props) {
               type="file"
               hidden
               accept=".zip"
+              disabled={storageDown}
               onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
             />
           </div>

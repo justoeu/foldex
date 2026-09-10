@@ -136,6 +136,9 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **`audit_log.subject` é CONTEÚDO, e existe exatamente UMA consulta que o lê** → [INV-175](docs/INVARIANTS.md#inv-175) | guard: `TestAuditSubjectIsSelectedByExactlyOneQuery`, `TestAudit_AdminNeverSeesAContentSubjectOrItsActorEmail`
   ↳ O guard nasceu andando só por `FuncDecl` e passou com a coluna adicionada direto na const `adminProjection` — a edição mais provável era a que ele não via.
   ↳ A busca também precisou de trava: `?category=content&q=alice@…` casava em `actor_email` e devolvia o `actor_ref` dela. Coluna escondida na SAÍDA e selecionável na ENTRADA não é enforcement.
+- **O download de backup é OPT-IN e OWNER-ONLY, o backend nunca vê texto claro nem credencial, e o teto é 3 por conta por artefato** → [INV-187](docs/INVARIANTS.md#inv-187) | guard: `TestMatrix_DownloadingAWholeInstanceBackupIsOwnerOnlyAndLocked`, `TestDownload_AnAdministratorTakesNothingFromThisRoute`, `TestServeArtifact_TheBodyIsNotThePlaintext`, `TestReserveDownload_ConcurrentRequestsCannotOverrunTheCeiling`
+  ↳ O ADR-48 emenda o INV-171 de propósito: não existe "a tela entrega o backup" que preserve o muro, só estreitar. A senha cifra o ARQUIVO e nunca é a da conta — um `.age` vazado seria oráculo de cracking offline contra o login.
+  ↳ Um dump é INDIVISÍVEL: `pg_dump` não tem fatia por conta, então não existe "baixar só o que é seu" para ele, e dá-lo a um admin é ele ler todas as contas — o §0 ao contrário.
 - **`ip`, `ip_trusted` e `user_agent` são um CONJUNTO** → [INV-176](docs/INVARIANTS.md#inv-176) | guard: `TestAuditProvenance_*`
 - **A cobertura de conteúdo é um MIDDLEWARE; o rótulo é opcional por construção** → [INV-177](docs/INVARIANTS.md#inv-177) | guard: `TestWiring_ContentAuditRecordsAMutationThroughTheRealRouter`
 - **O bloqueio permanente de IP é owner-only e TRAVADO, e o cache falha ABERTO** → [INV-178](docs/INVARIANTS.md#inv-178) | guard: `TestValidateBlockIP_*`, `TestBlocklist_FailsOpenWhenTheLoadErrors`, `TestWiring_BlocklistGateRefusesBeforeRouting`
@@ -187,7 +190,7 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **Backup is a complete DB + RustFS snapshot ZIP** → [INV-102](docs/INVARIANTS.md#inv-102)
 - **Every backup operation is admitted before work; export and restore stream** → [INV-103](docs/INVARIANTS.md#inv-103)
 - **Backup restore is idempotent by default, never atomic across DB+RustFS** → [INV-104](docs/INVARIANTS.md#inv-104)
-- **Backup endpoints require RustFS** → [INV-107](docs/INVARIANTS.md#inv-107)
+- **Backup endpoints require RustFS — without it they answer 503 `storage_unavailable`, never a partial ZIP** → [INV-107](docs/INVARIANTS.md#inv-107)
 - **`preview.Worker.Enqueue` returns an error** → [INV-108](docs/INVARIANTS.md#inv-108)
 - **The change-check worker reuses the preview `Fetcher` — never duplicate SSRF guards** → [INV-110](docs/INVARIANTS.md#inv-110)
 - **`link.last_fingerprint` is prefixed `feed:<hex>` or `content:<hex>`** → [INV-111](docs/INVARIANTS.md#inv-111)

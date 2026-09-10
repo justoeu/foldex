@@ -51,6 +51,7 @@ func TestEveryPermissionIsEnforcedSomewhere(t *testing.T) {
 		authctx.PermPolicyWrite:            "PermPolicyWrite",
 		authctx.PermInstanceTransfer:       "PermInstanceTransfer",
 		authctx.PermInstanceBackupRead:     "PermInstanceBackupRead",
+		authctx.PermInstanceBackupDownload: "PermInstanceBackupDownload",
 		authctx.PermInstanceBackupSchedule: "PermInstanceBackupSchedule",
 		authctx.PermInstanceIPBlock:        "PermInstanceIPBlock",
 		authctx.PermInstanceRateLimits:     "PermInstanceRateLimits",

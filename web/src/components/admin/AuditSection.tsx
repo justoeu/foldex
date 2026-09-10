@@ -6,7 +6,7 @@ import {
   fetchIPBlocks, ipBlocksQueryKey,
 } from '../../api/admin'
 import { useAuth } from '../../auth/AuthProvider'
-import { AUDIT_WINDOWS } from './auditFormat'
+import { AUDIT_WINDOWS, timelineActionChips } from './auditFormat'
 import { actionLabel } from '../../lib/auditLabels'
 import { AuditAnomalies } from './AuditAnomalies'
 import { AuditDaysChart, AuditDistribution, AuditMetrics } from './AuditCharts'
@@ -61,7 +61,6 @@ export function AuditSection() {
     <div className="fx-aud">
       <header className="fx-aud-head">
         <div className="fx-aud-head-text">
-          <h2>{t('admin.audit_title')}</h2>
           <p>{t('admin.audit_lede')}</p>
         </div>
         <div className="fx-aud-head-tools">
@@ -162,10 +161,10 @@ export function AuditSection() {
               {t(`admin.audit_category_${c}`)}
             </Chip>
           ))}
-          {(stats.data?.distribution ?? []).slice(0, 6).map((d) => (
+          {timelineActionChips(stats.data?.distribution ?? []).map((d) => (
             <Chip key={d.action} active={action === d.action} onClick={() => setAction(d.action)}>
               {actionLabel(t, d.action)}
-              <span className="fx-aud-chip-count">{d.count}</span>
+              {d.count > 0 && <span className="fx-aud-chip-count">{d.count}</span>}
             </Chip>
           ))}
         </div>

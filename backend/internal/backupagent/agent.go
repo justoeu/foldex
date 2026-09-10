@@ -8,15 +8,79 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"filippo.io/age"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/backupjobs"
 )
 
 const janitorInterval = time.Hour
+
+// The budget for writing a run's OUTCOME, and the gap between attempts.
+//
+// The outcome write is the one database call in the whole agent that has no
+// second chance: lose it and the row stays 'running' forever, holding
+// backup_run_one_running_idx so the job cannot run again until the janitor
+// sweeps it up to BACKUP_STALE_RUN_MIN + janitorInterval later. That happened
+// on a live instance — a drill failed in 90 s, the single 15 s attempt to
+// record the failure timed out against a remote Postgres, and the screen
+// showed a drill "running" for hours that had been dead the whole time.
+//
+// So the write gets retried, and generously: the run is already over, nobody
+// is waiting on this, and the alternative to spending two more minutes here is
+// a lie in the table for four hours.
+const (
+	recordAttemptTimeout = 15 * time.Second
+	recordTotalBudget    = 2 * time.Minute
+	recordRetryGap       = 5 * time.Second
+)
+
+func orDefault(d, fallback time.Duration) time.Duration {
+	if d <= 0 {
+		return fallback
+	}
+	return d
+}
+
+// recordOutcome runs write until it succeeds or the budget is spent.
+//
+// It deliberately builds a FRESH context per attempt from context.Background():
+// the run's ctx is exactly what shutdown cancels, and an outcome that goes
+// unrecorded because the process is stopping is the stale row this exists to
+// prevent. `what` names the write in the log so a partial failure says which
+// half was lost.
+func (a *Agent) recordOutcome(what, job string, write func(context.Context) error) bool {
+	budget := orDefault(a.recordBudget, recordTotalBudget)
+	gap := orDefault(a.recordGap, recordRetryGap)
+	perAttempt := orDefault(a.recordAttempt, recordAttemptTimeout)
+
+	deadline := time.Now().Add(budget)
+	for attempt := 1; ; attempt++ {
+		ctx, done := context.WithTimeout(context.Background(), perAttempt)
+		err := write(ctx)
+		done()
+		if err == nil {
+			if attempt > 1 {
+				a.logger.Warn("outcome recorded after retry", "what", what, "job", job, "attempts", attempt)
+			}
+			return true
+		}
+		if time.Now().Add(gap).After(deadline) {
+			// The last word before the row is left inconsistent. The janitor
+			// is the only thing that will fix it, and this line is what tells
+			// the operator why a row sat 'running' with nothing running.
+			a.logger.Error("outcome NOT recorded — row stays 'running' until the janitor sweeps it",
+				"what", what, "job", job, "attempts", attempt, "err", err)
+			return false
+		}
+		a.logger.Warn("outcome write failed, retrying", "what", what, "job", job, "attempt", attempt, "err", err)
+		time.Sleep(gap)
+	}
+}
 
 // jobSpec is one entry in the agent's registry. The WHEN no longer lives
 // here: schedules are Timings resolved from the env baseline plus the
@@ -57,6 +121,21 @@ type Agent struct {
 	// worse: a test that enables a schedule right after Start can lose the
 	// race into bootCatchUp and sleep production minutes inside a 10s test.
 	catchUpJitter func() time.Duration
+
+	// The outcome-write retry budget (see recordOutcome), as fields so a test
+	// can shrink it: the exhaustion path is minutes long. ZERO means the
+	// compiled constant — an Agent assembled by hand, which every integration
+	// test in this package does, must retry like production instead of getting
+	// a zero timeout, which is an already-expired context and a write that can
+	// never land.
+	recordBudget  time.Duration
+	recordGap     time.Duration
+	recordAttempt time.Duration
+
+	// identities opens stored artifacts for the download bridge (artifact.go).
+	// Loaded once at construction and only when the bridge is enabled — the
+	// same file the drill reads, and the same refusal on bad permissions.
+	identities []age.Identity
 
 	// skewWarning is checked from Start, not the constructor: it does I/O
 	// (SHOW server_version + exec pg_dump), and a constructor that can hang on
@@ -105,6 +184,17 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 		return dump.Run(ctx)
 	}})
 	a.skewWarning = dump.VersionSkewWarning
+	/* Loaded at CONSTRUCTION, not on first download: a missing or
+	   group-readable identity file is a configuration error that must fail the
+	   boot, exactly as it does for the drill — not surface weeks later as the
+	   first failed download in the middle of an incident. */
+	if cfg.ArtifactToken != "" && strings.TrimSpace(cfg.AgeIdentityFile) != "" {
+		identities, err := loadAgeIdentities(cfg.AgeIdentityFile)
+		if err != nil {
+			return nil, err
+		}
+		a.identities = identities
+	}
 
 	drill, err := NewDrillJob(cfg, a.runs, store, logger)
 	if err != nil {
@@ -309,7 +399,10 @@ func (a *Agent) agentState() backupjobs.AgentState {
 		// The constant this binary was compiled with, not a value read from
 		// anywhere: it is a claim about what THIS code understands.
 		SchemaVersion: backupjobs.RequiredSchemaVersion,
-		Jobs:          jobs,
+		// The janitor's own threshold, so the admin screen can name a stuck
+		// run instead of inventing a number (INV-138).
+		StaleRunMin: a.cfg.StaleRunMin,
+		Jobs:        jobs,
 	}
 }
 
@@ -609,7 +702,23 @@ func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Tim
 		}
 		return
 	}
-	defer release()
+	/* The lock covers the WORK, not the bookkeeping after it.
+	   `acquireJobLock` does not wait on contention — it skips the slot — and a
+	   job's next slot can be six hours out, so every second the lock is held
+	   past the end of the run is a slot some other job may lose. The outcome
+	   write below retries for up to two minutes; holding an instance-wide lock
+	   across that would turn one slow write into three skipped jobs. What the
+	   lock protects is two agents running the same work at once, and by the
+	   time the outcome is being written the work is over — `backup_run`'s own
+	   row state is what guards the rest (INV-172). */
+	released := false
+	releaseWork := func() {
+		if !released {
+			released = true
+			release()
+		}
+	}
+	defer releaseWork()
 
 	id := claimedID
 	if id == 0 {
@@ -628,21 +737,24 @@ func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Tim
 	a.logger.Info("run started", "job", spec.name, "run_id", id)
 	artifact, meta, reason, runErr := spec.run(ctx, id)
 	duration := time.Since(started)
-
-	// Outcomes are recorded on a fresh context: the run's ctx is exactly what
-	// shutdown cancels, and an unrecorded outcome is a stale 'running' row.
-	recordCtx, done := context.WithTimeout(context.Background(), 15*time.Second)
-	defer done()
+	releaseWork()
 
 	if runErr != nil {
 		if ctx.Err() != nil {
 			reason = backupjobs.ReasonShutdown
 		}
 		a.logger.Error("run failed", "job", spec.name, "run_id", id, "reason", reason, "err", runErr)
-		if err := a.runs.Fail(recordCtx, id, reason); err != nil {
-			a.logger.Error("record failure", "job", spec.name, "err", err)
-		}
-		consecutive, _ := a.runs.ConsecutiveFailures(recordCtx, spec.name)
+		a.recordOutcome("fail", spec.name, func(c context.Context) error {
+			return a.runs.Fail(c, id, reason)
+		})
+		// The counter is only a gauge input; a read that fails leaves it at
+		// zero and must not cost the failure its own recording above. It
+		// borrows the per-attempt timeout on purpose — same database, same
+		// reachability — but takes no retry: a missing gauge sample is not a
+		// stale row.
+		countCtx, done := context.WithTimeout(context.Background(), orDefault(a.recordAttempt, recordAttemptTimeout))
+		consecutive, _ := a.runs.ConsecutiveFailures(countCtx, spec.name)
+		done()
 		a.metrics.ObserveFailure(spec.name, duration, consecutive)
 		return
 	}
@@ -653,8 +765,9 @@ func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Tim
 	// One measurement feeds both the row and the gauge — two clocks would let
 	// them disagree.
 	meta["duration_ms"] = duration.Milliseconds()
-	if err := a.runs.Succeed(recordCtx, id, artifact, meta); err != nil {
-		a.logger.Error("record success", "job", spec.name, "err", err)
+	if !a.recordOutcome("succeed", spec.name, func(c context.Context) error {
+		return a.runs.Succeed(c, id, artifact, meta)
+	}) {
 		return
 	}
 	var artifactBytes int64
@@ -717,6 +830,11 @@ func (a *Agent) serveHTTP() {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 	mux.Handle("/metrics", a.metrics.Handler(a.cfg.MetricsToken))
+	/* The download bridge (ADR-48). Both routes carry the same bearer guard,
+	   and an unset BACKUP_AGENT_TOKEN makes them answer 503 rather than exist
+	   in a permissive state — the safe direction for a wall INV-171 built. */
+	mux.Handle("/internal/artifact", artifactAuth(a.cfg.ArtifactToken, a.serveArtifact))
+	mux.Handle("/internal/artifacts", artifactAuth(a.cfg.ArtifactToken, a.listArtifacts))
 
 	a.http = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	// Listen synchronously, serve in the goroutine: a bad address fails HERE,

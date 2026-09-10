@@ -248,10 +248,25 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 	); err != nil {
 		return nil, nil, backupjobs.ReasonDrillRestoreFailed, err
 	}
+	// --no-owner --no-privileges: the ephemeral cluster is initdb'd with ONE
+	// role (cfg.PGUser), so every `ALTER ... OWNER TO` and `GRANT` the source
+	// cluster emitted names a role that deliberately does not exist here. With
+	// --exit-on-error the first of them aborts the whole restore, and the
+	// drill then reports drill_restore_failed for a difference it created
+	// itself — the artifact is fine. Observed against a managed Postgres whose
+	// dump references `postgres`: every drill failed, so the instance had a
+	// green dump and a restore that had never once been proven.
+	//
+	// This does NOT weaken the drill. What it proves is that the SCHEMA and
+	// the ROWS come back — the row counts are compared right below. Replaying
+	// grants into a cluster whose role list is a fixture proves nothing about
+	// the backup; a real recovery restores into a cluster that already has the
+	// roles, and keeps ownership.
 	if err := j.exec(ctx, "pg_restore",
 		"--host="+dir, "--port="+drillPort,
 		"--username="+j.cfg.PGUser,
 		"--dbname="+drillDatabase,
+		"--no-owner", "--no-privileges",
 		"--jobs=1", "--exit-on-error",
 		dumpPath,
 	); err != nil {

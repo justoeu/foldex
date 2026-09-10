@@ -92,6 +92,15 @@ type Config struct {
 	// same value as `Authorization: Bearer <token>`.
 	MetricsToken string
 
+	// BackupAgentURL and BackupAgentToken open the artifact download bridge
+	// (ADR-48). BOTH are required; either alone leaves the bridge closed,
+	// which is the default and keeps INV-171's wall exactly where it was — the
+	// web process still holds no bucket credential and still cannot read a
+	// backup on its own. Half-configured is treated as OFF rather than as a
+	// boot error: the safe state is the one that changes nothing.
+	BackupAgentURL   string
+	BackupAgentToken string
+
 	// OTelEndpoint is the OTLP gRPC endpoint distributed traces are exported
 	// to (standard OTEL_EXPORTER_OTLP_ENDPOINT: "host:4317" or with an
 	// http/https scheme). Empty keeps tracing fully disabled — no provider,
@@ -221,6 +230,8 @@ func Load() (Config, error) {
 		PreviewTimeoutSec:  envInt("PREVIEW_FETCH_TIMEOUT_SEC", 5),
 		CORSOrigins:        splitCSV(envOr("CORS_ORIGINS", "*")),
 		MetricsToken:       os.Getenv("METRICS_TOKEN"),
+		BackupAgentURL:     strings.TrimSpace(os.Getenv("BACKUP_AGENT_URL")),
+		BackupAgentToken:   strings.TrimSpace(os.Getenv("BACKUP_AGENT_TOKEN")),
 		OTelEndpoint:       os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		AuthEnabled:        envBool("AUTH_ENABLED", true),
 		AuthPublicURL:      envOr("AUTH_PUBLIC_URL", "http://localhost:9088"),

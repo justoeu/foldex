@@ -626,8 +626,16 @@ type AgentState struct {
 	// the unified rows honouring `times` while ignoring `weekdays` entirely.
 	// It over-runs, which is the safe direction, and says nothing. Zero means
 	// a heartbeat written before this field existed — not a match.
-	SchemaVersion int                  `json:"schema_version,omitempty"`
-	Jobs          map[string]JobReport `json:"jobs"`
+	SchemaVersion int `json:"schema_version,omitempty"`
+	// StaleRunMin is BACKUP_STALE_RUN_MIN: how long THIS agent lets a
+	// 'running' row age before its janitor calls it dead and flips it to
+	// failed('stale_claim'). It is published so the admin screen can say a run
+	// is stuck without inventing a threshold of its own — the number is the
+	// agent's policy, and INV-138 keeps the UI from re-deriving it. Zero means
+	// a heartbeat written before this field existed, and zero is not a
+	// threshold: the screen stays silent rather than guessing.
+	StaleRunMin int                  `json:"stale_run_min,omitempty"`
+	Jobs        map[string]JobReport `json:"jobs"`
 }
 
 // Heartbeat upserts the single agent-state row.
@@ -635,6 +643,7 @@ func (s *ScheduleStore) Heartbeat(ctx context.Context, state AgentState) error {
 	caps, err := json.Marshal(map[string]any{
 		"version":        state.Version,
 		"schema_version": state.SchemaVersion,
+		"stale_run_min":  state.StaleRunMin,
 		"jobs":           state.Jobs,
 	})
 	if err != nil {
@@ -666,6 +675,7 @@ func (s *ScheduleStore) AgentSeen(ctx context.Context) (AgentState, bool, error)
 	var doc struct {
 		Version       string               `json:"version"`
 		SchemaVersion int                  `json:"schema_version"`
+		StaleRunMin   int                  `json:"stale_run_min"`
 		Jobs          map[string]JobReport `json:"jobs"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
@@ -675,6 +685,7 @@ func (s *ScheduleStore) AgentSeen(ctx context.Context) (AgentState, bool, error)
 		SeenAt:        seenAt,
 		Version:       doc.Version,
 		SchemaVersion: doc.SchemaVersion,
+		StaleRunMin:   doc.StaleRunMin,
 		Jobs:          doc.Jobs,
 	}, true, nil
 }

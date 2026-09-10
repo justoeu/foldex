@@ -2999,6 +2999,32 @@ button.fx-bkp-job-run {
 
 button.fx-bkp-job-run:hover { background: var(--fx-accent-soft-2); }
 
+/* Live run indicators ---------------------------------------------- */
+
+/* The pulse is the ONLY thing on the screen that moves on its own, and it
+   moves because the number beside it is changing — a static dot next to a
+   ticking counter reads as a stale render. */
+@keyframes fx-bkp-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .45; transform: scale(.72); }
+}
+.fx-bkp-live-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: currentColor;
+  animation: fx-bkp-pulse 1.6s ease-in-out infinite;
+}
+.fx-bkp-live {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: 10px;
+  color: var(--fx-accent-3); font-weight: 600;
+}
+.fx-chip.fx-bkp-live-chip { display: inline-flex; align-items: center; gap: 6px; }
+/* Mono so the seconds column does not jitter as the digits change width. */
+.fx-bkp-elapsed { font-family: var(--fx-mono); color: var(--fx-accent-3); font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-bkp-live-dot { animation: none; }
+}
+
 /* Agenda + aside --------------------------------------------------- */
 
 /*
@@ -3296,19 +3322,28 @@ button.fx-bkp-preset-on {
 
 .fx-bkp-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0 2px; }
 
+/* The chip defaults to TOKENS, and the light-on-dark palette is scoped to the
+   one card that paints its own dark ground. It was the other way round: the
+   near-white default lived on the bare class, so the moment the expandable run
+   row reused the chip on var(--fx-surface-2) the counts rendered as very
+   nearly nothing. A colour written for one hard-coded surface has to name that
+   surface in its selector. */
 .fx-bkp-count {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 4px 9px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--fx-bg-tint);
   font-family: var(--fx-mono);
   font-size: 10.5px;
-  color: rgba(244, 242, 255, 0.75);
+  color: var(--fx-ink-3);
 }
 
-.fx-bkp-count b { color: #f4f2ff; }
+.fx-bkp-count b { color: var(--fx-ink); font-weight: 700; }
+
+.fx-bkp-drill .fx-bkp-count { background: rgba(255, 255, 255, 0.08); color: rgba(244, 242, 255, 0.75); }
+.fx-bkp-drill .fx-bkp-count b { color: #f4f2ff; }
 
 /* Agent panel ------------------------------------------------------ */
 
@@ -3370,6 +3405,59 @@ button.fx-bkp-filter-on { background: var(--fx-surface-3); color: var(--fx-accen
 .fx-bkp-pager { display: flex; gap: 8px; }
 
 .fx-bkp-table { min-width: 680px; }
+
+tr.fx-bkp-run { cursor: pointer; }
+tr.fx-bkp-run:hover, tr.fx-bkp-run-open { background: var(--fx-surface-2); }
+tr.fx-bkp-run:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: -2px; }
+/* Element-qualified: the toggle is a real <button> and would otherwise inherit
+   the UA reset ahead of this rule (INV-154). */
+button.fx-bkp-run-toggle {
+  padding: 0; border: 0; background: none; cursor: pointer;
+  font-family: var(--fx-ui); font-size: 12px; font-weight: 600;
+  color: var(--fx-accent-3); white-space: nowrap;
+}
+button.fx-bkp-run-toggle:hover { text-decoration: underline; }
+.fx-bkp-run-details-row td { padding: 0 14px 14px; }
+.fx-bkp-run-details {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 14px;
+  margin: 0; padding: 12px 14px;
+  border: 1px solid var(--fx-border-2); border-radius: 14px;
+  background: var(--fx-surface-2);
+}
+.fx-bkp-run-details dt {
+  font-family: var(--fx-mono); font-size: 8.5px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--fx-ink-5);
+}
+.fx-bkp-run-details dd {
+  margin: 5px 0 0; font-family: var(--fx-mono); font-size: 11px;
+  color: var(--fx-ink-2); overflow-wrap: anywhere;
+}
+.fx-bkp-run-details dd p { margin: 6px 0 0; font-family: var(--fx-ui); font-size: 12.5px; color: var(--fx-ink-2); }
+/* Spacing only — the chip's own defaults already follow the theme. */
+.fx-bkp-run-details .fx-bkp-count { margin-right: 10px; }
+
+/* Download action (ADR-48) -----------------------------------------
+   Element-qualified like every other button in this block: `.fx-shell button`
+   resets background, border, padding and font at (0,1,1) and would out-specify
+   a bare class (INV-154). */
+button.fx-bkp-run-download {
+  display: inline-flex; align-items: center; gap: 5px; margin-right: 14px;
+  padding: 4px 9px; border: 1px solid var(--fx-border-2); border-radius: 9px;
+  background: var(--fx-surface-2); color: var(--fx-accent-3);
+  font-family: var(--fx-ui); font-size: 12px; font-weight: 600;
+  white-space: nowrap; cursor: pointer;
+}
+button.fx-bkp-run-download:hover { background: var(--fx-surface-3); border-color: var(--fx-accent-soft-2); }
+
+.fx-bkp-budget {
+  font-family: var(--fx-mono); font-size: 11.5px; color: var(--fx-ink-3);
+  padding: 8px 10px; border-radius: 10px; background: var(--fx-bg-tint);
+}
+.fx-bkp-download-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+/* The one thing nobody can recover for them, so it does not read as a hint. */
+.fx-bkp-download-warn {
+  margin: 0; font-size: 12.5px; font-weight: 600; color: var(--fx-danger);
+}
 .fx-bkp-key {
   display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; vertical-align: bottom;
@@ -4199,7 +4287,8 @@ button.fx-aud-chip-on {
 button.fx-aud-chip-on .fx-aud-chip-count { color: var(--fx-accent-3); }
 
 .fx-aud-timeline { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
-.fx-aud-event { display: flex; gap: 14px; }
+.fx-aud-event { display: flex; align-items: flex-start; gap: 14px; }
+.fx-aud-event-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .fx-aud-pip {
   width: 10px; height: 10px; border-radius: 50%; flex: none; margin-top: 18px;
   box-shadow: 0 0 0 4px var(--fx-bg-tint);
@@ -4209,8 +4298,8 @@ button.fx-aud-chip-on .fx-aud-chip-count { color: var(--fx-accent-3); }
 .fx-aud-pip-critical { background: var(--fx-danger); }
 
 button.fx-aud-event-row {
-  flex: 1; min-width: 0; display: grid;
-  grid-template-columns: 150px 160px 1fr auto; gap: 14px; align-items: center;
+  width: 100%; min-width: 0; display: grid;
+  grid-template-columns: minmax(9.5rem, 11rem) minmax(8rem, 11rem) 1fr auto; gap: 14px; align-items: center;
   margin-bottom: 7px; padding: 12px 14px; text-align: left;
   border: 1px solid var(--fx-border-2); border-radius: 14px;
   background: var(--fx-surface-2); color: var(--fx-ink);
@@ -4219,7 +4308,7 @@ button.fx-aud-event-row {
 }
 button.fx-aud-event-row:hover { background: var(--fx-surface-3); }
 button.fx-aud-event-open { background: var(--fx-surface-3); border-color: var(--fx-accent-soft-2); }
-.fx-aud-when { font-family: var(--fx-mono); font-size: 11px; color: var(--fx-ink-4); }
+.fx-aud-when { font-family: var(--fx-mono); font-size: 11px; color: var(--fx-ink-4); white-space: nowrap; }
 .fx-aud-kind {
   justify-self: start; font-size: 11.5px; font-weight: 700;
   padding: 4px 9px; border-radius: 8px; white-space: nowrap;
@@ -4257,7 +4346,7 @@ button.fx-aud-event-open { background: var(--fx-surface-3); border-color: var(--
 }
 .fx-aud-details dd {
   margin: 5px 0 0; font-family: var(--fx-mono); font-size: 11px;
-  color: var(--fx-ink-2); word-break: break-all;
+  color: var(--fx-ink-2); overflow-wrap: anywhere;
 }
 .fx-aud-provenance { color: var(--fx-ink-4); }
 .fx-aud-pager { display: flex; gap: 8px; }

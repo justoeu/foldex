@@ -431,6 +431,22 @@ export type BackupJobStatus = {
   consecutive_failures: number
 }
 
+/** What one administrator has left for one artifact (ADR-48 / INV-187). */
+export type BackupDownloadBudget = {
+  used: number
+  limit: number
+  available: number
+}
+
+export function backupDownloadBudgetKey(runID: number) {
+  return ['admin', 'backup', 'download-budget', runID] as const
+}
+
+export async function fetchBackupDownloadBudget(runID: number): Promise<BackupDownloadBudget> {
+  const { data } = await http.get<BackupDownloadBudget>(`/api/admin/backup/runs/${runID}/download-budget`)
+  return data
+}
+
 export type BackupStatusResponse = {
   jobs: BackupJobStatus[]
   runs: BackupRun[]
@@ -533,6 +549,15 @@ export type BackupAgentState = {
    * fine on a newer schema and silently ignores the fields it never learned.
    */
   schema_version?: number
+  /**
+   * `BACKUP_STALE_RUN_MIN`: how long the agent lets a `running` row age before
+   * its janitor calls it dead and flips it to failed('stale_claim'). Published
+   * so the screen can name a stuck run without inventing a threshold of its
+   * own (INV-138). Absent on a heartbeat written before the field existed —
+   * and absent is not a threshold, so the screen stays silent rather than
+   * guessing.
+   */
+  stale_run_min?: number
   jobs: Record<string, BackupAgentJobReport>
 }
 

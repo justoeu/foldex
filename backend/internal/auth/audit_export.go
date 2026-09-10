@@ -17,6 +17,7 @@ const (
 	AuditPolicyChanged         = auditpkg.AuditPolicyChanged
 	AuditRolePermissions       = auditpkg.AuditRolePermissions
 	AuditBackupRunRequested    = auditpkg.AuditBackupRunRequested
+	AuditBackupDownloaded      = auditpkg.AuditBackupDownloaded
 	AuditBackupScheduleChanged = auditpkg.AuditBackupScheduleChanged
 	AuditEmailChanged          = auditpkg.AuditEmailChanged
 	AuditLinkCreated           = auditpkg.AuditLinkCreated
