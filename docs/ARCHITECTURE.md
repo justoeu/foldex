@@ -1985,8 +1985,10 @@ O evento `backup.downloaded` é `warning`, nunca dobrado no gatilho de execuçã
 **Contexto.** O agente aceitava a identidade privada só por `BACKUP_AGE_IDENTITY_FILE` e recusava
 o boot com o arquivo em modo diferente de 0600 — correto: essa chave abre todos os backups, e a
 regra do INV-117 vale aqui com mais força. Na produção em Coolify isso não tinha caminho: a
-plataforma materializa file mounts em 0644 e não expõe campo de modo, então o container só
-subiu com um wrapper `install -m 600 … && exec` no entrypoint. Um requisito de segurança que só
+plataforma materializa file mounts em 0644, de propriedade do root do host, e o agente roda
+como `postgres` — o modelo de file storage até tem `chmod`/`chown`, mas chegam nulos e a UI
+não os oferece, e um 0600 do root seria ilegível pelo processo de qualquer forma. O container
+só subiu com um wrapper `install -m 600 … && exec` no entrypoint. Um requisito de segurança que só
 se satisfaz reescrevendo o entrypoint por fora da imagem é um requisito que a próxima pessoa
 contorna de outro jeito.
 
