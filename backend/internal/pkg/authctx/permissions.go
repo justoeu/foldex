@@ -46,6 +46,23 @@ const (
 	// whole instance's disaster-recovery state.
 	PermInstanceBackupRead Permission = "instance.backup"
 
+	// Downloading a WHOLE-INSTANCE backup artifact — the dump, the object
+	// mirror (ADR-48). Separate from PermInstanceBackupRead because reading the
+	// backup surface is knowing that a dump ran, and this is holding the dump.
+	//
+	// Owner-only and LOCKED, and the reason is §0 itself: a dump is every
+	// user's content and every bcrypt hash in one indivisible file. It cannot
+	// be filtered by owner — a pg_dump has no per-account slice — so granting
+	// it to administrators would mean an administrator reads every other
+	// account's rows, which is the one thing the threat model says they never
+	// do. Locked so that no configuration can put that back.
+	//
+	// The per-user ZIPs are the exception, and they are not gated here: those
+	// keys carry their owner's id (backups/users/<uid>/…), so an account can
+	// take ITS OWN and nothing else — the same data /api/backup already
+	// exports for them.
+	PermInstanceBackupDownload Permission = "instance.backup_download"
+
 	// Writing the backup agenda (ADR-44): which wall times the dump, drill,
 	// mirror and user_zip jobs fire at. Owner-only and LOCKED for
 	// policy.write's reason: an administrator who could stretch the dump to
@@ -98,6 +115,7 @@ var AllPermissions = []Permission{
 	PermPolicyWrite,
 	PermInstanceTransfer,
 	PermInstanceBackupRead,
+	PermInstanceBackupDownload,
 	PermInstanceBackupSchedule,
 	PermInstanceIPBlock,
 	PermInstanceRateLimits,
@@ -127,6 +145,7 @@ var rolePermissions = map[Role]map[Permission]bool{
 		PermPolicyWrite:            true,
 		PermInstanceTransfer:       true,
 		PermInstanceBackupRead:     true,
+		PermInstanceBackupDownload: true,
 		PermInstanceBackupSchedule: true,
 		PermInstanceIPBlock:        true,
 		PermInstanceRateLimits:     true,
@@ -148,6 +167,9 @@ var rolePermissions = map[Role]map[Permission]bool{
 		// that is operating the instance, not rewriting its rules — the trigger
 		// only enqueues, and the agent's credentials never pass through here.
 		PermInstanceBackupRead: true,
+		// No PermInstanceBackupDownload: the dump cannot be sliced per account,
+		// so holding it means reading every account — the line §0 draws around
+		// what an administrator does.
 		// No PermPolicyWrite and no PermInstanceTransfer: an admin manages
 		// people, the owner sets the rules those people are managed under. An
 		// admin who could rewrite the password policy or the OAuth allowlist
@@ -235,6 +257,7 @@ var lockedPermissions = map[Permission]bool{
 	PermPolicyWrite:            true,
 	PermInstanceTransfer:       true,
 	PermContentRead:            true,
+	PermInstanceBackupDownload: true,
 	PermInstanceBackupSchedule: true,
 	PermInstanceIPBlock:        true,
 	PermInstanceRateLimits:     true,

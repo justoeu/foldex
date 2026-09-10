@@ -39,6 +39,7 @@ export type Permission =
   | 'policy.write'
   | 'instance.transfer'
   | 'instance.backup'
+  | 'instance.backup_download'
   | 'instance.backup_schedule'
   | 'instance.ip_block'
   | 'instance.rate_limits'

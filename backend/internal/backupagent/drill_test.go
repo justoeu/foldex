@@ -190,6 +190,17 @@ func TestDrillRun_FullPipelineDownloadsVerifiesRestoresAndCleansUp(t *testing.T)
 
 	restore := f.rec.call("pg_restore")
 	assert.Contains(t, restore, "--jobs=1")
+	// The ephemeral cluster has exactly ONE role. Every `ALTER ... OWNER TO`
+	// and `GRANT` in the archive names a role that deliberately does not exist
+	// here, and --exit-on-error turns the first one into a failed drill for a
+	// difference the drill itself created. Observed in production against a
+	// managed Postgres: every drill reported drill_restore_failed on
+	// `role "postgres" does not exist`, so the instance carried a green dump
+	// and a restore that had never once been proven.
+	assert.Contains(t, restore, "--no-owner")
+	assert.Contains(t, restore, "--no-privileges")
+	assert.Contains(t, restore, "--exit-on-error",
+		"skipping owners and grants must not soften the verdict on everything else")
 
 	// The verified counts are the meta — what the admin surface renders as
 	// "the counts that proved the restore".

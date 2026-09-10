@@ -173,10 +173,27 @@ Decisões deliberadas, na contramão do `mail_outbox` de onde o resto veio:
   `(job, status='requested', scheduled_for=now())`; o agente faz poll (~30 s) e reivindica
   por `UPDATE … SET status='running', claim_token=$1, started_at=now() WHERE id=$2 AND
   status='requested'` — CAS no molde do claim do outbox.
-- **Janitor obrigatório.** No boot e antes de cada INSERT `running`, o agente expira
-  `running AND started_at < now() - ttl` para `failed` com `last_error='stale_claim'`.
-  Sem isso, um agente morto no meio de um run trava o índice parcial único para sempre —
-  o análogo do claim-TTL do outbox.
+- **Janitor obrigatório.** No boot, de hora em hora e antes de cada INSERT `running`, o
+  agente expira `running AND started_at < now() - ttl` (`BACKUP_STALE_RUN_MIN`, padrão
+  240) para `failed` com `last_error='stale_claim'`. Sem isso, um agente morto no meio de
+  um run trava o índice parcial único para sempre — o análogo do claim-TTL do outbox.
+- **A gravação do DESFECHO é a única chamada ao banco sem segunda chance, e por isso ela
+  tem retry.** Perder o `UPDATE … SET status='failed'|'succeeded'` deixa a linha em
+  `running` para sempre — segurando `backup_run_one_running_idx`, logo o job não roda de
+  novo até o janitor varrer, o que é `BACKUP_STALE_RUN_MIN` + até uma hora depois.
+  Aconteceu numa instância viva: um drill falhou em 90 s, a ÚNICA tentativa de gravar a
+  falha estourou o timeout contra um Postgres remoto, e a tela contou uma execução morta
+  para cima por horas. `Agent.recordOutcome` agora tenta por até 2 min (15 s por
+  tentativa, 5 s de intervalo), **cada tentativa num `context.Background()` novo** — o ctx
+  do run é exatamente o que o shutdown cancela, e um desfecho não gravado porque o
+  processo está parando é a linha órfã que isso existe para evitar. Esgotado o orçamento,
+  a última linha de log NOMEIA a consequência ("row stays 'running' until the janitor
+  sweeps it"), porque o próximo a olhar a tela precisa saber por quê.
+- **O agente publica `BACKUP_STALE_RUN_MIN` no heartbeat** (`stale_run_min`, campo novo do
+  JSONB — sem migração). A tela de administração usa esse número para dizer que uma
+  execução está TRAVADA em vez de contar os segundos como se fossem progresso; sem ele a
+  tela precisaria inventar um limiar, que é a UI re-derivando política do servidor
+  (INV-138). Heartbeat antigo não traz o campo, e ausência não é limiar: a tela cala.
 - **`last_error` é um token estável** (`pg_dump_failed`, `upload_failed`, `s3_unreachable`,
   `drill_restore_failed`, `drill_counts_mismatch`, `stale_claim`, …), nunca stderr cru:
   stderr de `pg_dump` pode carregar DSN, e a UI/e-mail exibem esse campo.
@@ -274,9 +291,23 @@ docker-in-docker, porque a imagem-base já traz o servidor:
    (layer gravável, sem volume), `pg_ctl start -o "-c listen_addresses='' -c
    unix_socket_directories=/tmp/drill -c shared_buffers=64MB -c max_connections=10 -c
    fsync=off -c synchronous_commit=off -c autovacuum=off"` — `fsync=off` é seguro para
-   dados descartáveis e corta o tempo do drill. `initdb` com o MESMO usuário do cluster
-   de produção elimina erros de ownership no restore.
-4. `createdb -T template0 -E UTF8` + `pg_restore -j1` via unix socket.
+   dados descartáveis e corta o tempo do drill. `initdb` usa o MESMO usuário do cluster de
+   produção, o que resolve o ownership dos objetos que ESSE papel possui — **e só ele.**
+   O cluster efêmero tem exatamente UM papel.
+4. `createdb -T template0 -E UTF8` + `pg_restore -j1 --no-owner --no-privileges` via unix
+   socket. **`--no-owner --no-privileges` não é conveniência, é correção.** Todo
+   `ALTER ... OWNER TO` e todo `GRANT` que o cluster de origem emitiu nomeia um papel que
+   deliberadamente não existe aqui, e com `--exit-on-error` o primeiro deles aborta o
+   restore inteiro — o drill então reporta `drill_restore_failed` por uma diferença que
+   ele mesmo criou, com o artefato intacto. Aconteceu contra um Postgres gerenciado cujo
+   dump referencia `postgres`: **todo** drill falhou, e a instância passou a carregar um
+   dump verde e um restore que nunca uma vez foi provado — exatamente o estado que este
+   job existe para tornar impossível.
+
+   Isso NÃO enfraquece o drill. O que ele prova é que o SCHEMA e as LINHAS voltam, e é
+   isso que o passo 5 confere. Replayar grants num cluster cuja lista de papéis é uma
+   fixture não prova nada sobre o backup; uma recuperação real restaura num cluster que
+   já tem os papéis, e mantém o ownership.
 5. Sanidade: contagem por tabela vs `meta["tables"]` do run de origem (o job `dump`
    grava as contagens lidas do pool ANTES do `pg_dump`, mesmas tabelas de conteúdo que o
    drill reconta) e `schema_migrations.version` igual ao registrado. Divergência ⇒
@@ -586,9 +617,55 @@ servidor continua sendo o guarda: 404/403 na API). Pendência anotada: screensho
 - **Último drill em destaque**: quando rodou, qual dump validou (`drill_of_run_id`) e as
   contagens que provaram a restauração. Um dump verde com drill velho é meio-backup, e a
   UI diz isso.
-- **Histórico paginado** de `backup_run` com `last_error` normalizado por linha.
+- **Histórico paginado** de `backup_run` com `last_error` normalizado por linha. Cada linha
+  expande (botão real na última célula — o `<tr>` fica clicável só para o mouse; `tabIndex`
+  + `aria-expanded` num `tr` anuncia como linha comum e o estado não é transmitido) para os
+  contadores que aquele run gravou — **das colunas E do `meta`.** Só o `dump` tem
+  `artifact_key`: o `user_zip` grava um objeto por usuário e o `mirror` copia muitos, então
+  o produto deles vive inteiro no `meta` (`users`, `shipped`, `bytes_total`,
+  `objects_skipped`, `pruned_objects`, …). Um painel que lia só as colunas dizia "nenhum
+  contador foi gravado" sobre um run que gravara três. O conjunto de chaves é FECHADO
+  (`META_ROWS`, precedente do `KNOWN_BACKUP_ERRORS`): o `meta` é jsonb e a chave é
+  interpolada numa chave de i18n, então um conjunto aberto deixaria uma chave inesperada
+  caminhar o catálogo. `failed_users`/`deferred_users` renderizam a CONTAGEM, nunca os ids.
+- **Atualização ao vivo, em duas cadências**: a página da cabeça se re-lê sozinha a cada
+  **5 s enquanto houver run em `requested`/`running`** e a cada **30 s** quando não houver.
+  30 s é a cadência do próprio agente (`BACKUP_REQUESTED_POLL_SEC`) — pedir mais rápido só
+  relê bytes que não podem ter mudado. Uma página de keyset abaixo da cabeça **não** faz
+  poll: linhas nunca aparecem nela. O valor ocioso coincide com o `staleTime` global do
+  TanStack Query por acaso, não por derivação; baixar o global não pode acelerar esta tela.
+- **Contador de tempo decorrido** na coluna Duração enquanto o run não terminou, avançando
+  de segundo em segundo (`useTicker`, que não registra `setInterval` nenhum quando não há
+  nada para contar). `running` conta a partir de `started_at` — que o `UPDATE` do claim
+  sobrescreve com `now()`, logo é trabalho de verdade; `requested` conta a partir de
+  `scheduled_for`, porque `started_at` numa linha não reivindicada é só o instante em que o
+  processo web a inseriu, e exibir isso como "processando" é exatamente a mentira que o
+  banner de requested envelhecido existe para pegar. O relógio é o do NAVEGADOR e os
+  carimbos são do SERVIDOR: o piso em zero impede um contador que anda para trás.
+- **O card do job diz o que está acontecendo AGORA** ("executando há 1min 05s") à frente do
+  último desfecho — um card lendo "sucesso" ao lado de uma linha `executando` é a
+  discordância que esta tela existe para evitar. O botão "Executar agora" continua
+  habilitado: quem recusa a segunda linha é o 409 `backup_run_pending` do servidor
+  (INV-172), e trocar um veredito legível por um botão cinza que não explica nada seria
+  a UI re-derivando política do servidor (INV-138).
 - **"Executar agora"** por job — botão com rótulo (INV-151) e confirmação (INV-122); só
   enfileira `requested`, o feedback é a linha nova no histórico.
+- **Baixar um artefato (ADR-48 / INV-187)** — ação na linha do histórico, só para runs que
+  enviaram UM objeto nomeado (isto é, `dump`). Desligada por padrão: sem
+  `BACKUP_AGENT_URL` + `BACKUP_AGENT_TOKEN` a permissão não existe, as rotas respondem 404 e
+  o botão não aparece. O administrador escolhe uma senha na hora — **não** a senha da conta,
+  porque o arquivo sai da instância e uma senha de login dentro dele seria quebrável offline,
+  sem rate limit e sem lockout. O **agente** decifra com a identidade privada e re-cifra em
+  streaming para um recipient `age` scrypt; o backend só proxia bytes já cifrados. Teto de 3
+  por administrador por artefato, cobrado ANTES do primeiro byte, sob
+  `pg_advisory_xact_lock` — a versão de uma instrução só (`INSERT … WHERE (count) < n`)
+  parecia atômica e não é: sob READ COMMITTED duas requisições paralelas leem "dois usados"
+  e ambas inserem. O agente admite no máximo 2 re-cifragens simultâneas: scrypt segura
+  ~256 MiB por chamada e o container tem 1 GiB, então quatro downloads o matariam por OOM e
+  levariam junto o backup em execução. No navegador o artefato faz **streaming** direto para
+  o arquivo escolhido (`fetch` + `showSaveFilePicker`); o `Blob` é só fallback para quem não
+  tem a File System Access API, porque bufferar um dump inteiro na aba congela a aba
+  justamente na instância grande.
 - **Empty-state honesto**: sem o profile `backup` ativo (nenhum run jamais registrado, ou
   `requested` envelhecendo sem claim), a banda diz "o serviço de backup não está ativo —
   habilite `COMPOSE_PROFILES=backup`" em tom de aviso. Um serviço opcional que nunca subiu

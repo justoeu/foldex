@@ -392,7 +392,7 @@ LIMIT $3 OFFSET $4;
 |        | POST   | `/api/import/validate`                | Preflight multipart agregado, sem itens: `{format, counts, conflicts, folders:[{path,name,count,conflicts}], ungrouped:{links,conflicts}, warnings}`. Conflitos de URL/tag são owner-scoped. Mesmo slot `import_busy`. |
 |        | POST   | `/api/import/apply`                   | Aplica multipart com `mode=skip\|wipe\|duplicate` e `exclude_folders` opcional. Mesmo slot `import_busy`. |
 |        | GET    | `/api/export?format=netscape\|json`   | Download owner-scoped (click_count em subquery). Continua GET para `<a href>` nativo. Entra no balde caro da cota (`expensiveRoutes`); um segundo export concorrente é `429 export_busy`; acima de 50k links é `413 export_too_large` sem montar o payload. Token de API continua autorizado (INV-023: export de bookmarks é conteúdo). |
-| Backup | POST   | `/api/backup`                         | Stream ZIP completo (DB + RustFS). `Content-Type: application/zip`. Disponível só quando RustFS está acessível. Ver [SDD-BACKUP-RESTORE.md](./SDD-BACKUP-RESTORE.md). |
+| Backup | POST   | `/api/backup`                         | Stream ZIP completo (DB + RustFS). `Content-Type: application/zip`. Sem object store: 503 `storage_unavailable` (nunca ZIP parcial). Ver [SDD-BACKUP-RESTORE.md](./SDD-BACKUP-RESTORE.md). |
 |        | POST   | `/api/backup/download`                | Emite ticket opaco one-time (TTL 60 s), owner/session-bound, para download nativo sem Blob; exige sessão + CSRF e recusa API token. |
 |        | GET    | `/api/backup/download?id=…&token=…`   | Consome ticket uma vez e streama o mesmo export com `Content-Disposition`; continua session-authenticated e usa o slot compartilhado. |
 |        | GET    | `/api/backup/download/status?id=…`    | Estado owner-bound (`pending|running|complete|failed`) para histórico com counts, bytes e duração, sem ler o ZIP no JS; sobrevive ao refresh da sessão. |
@@ -1912,3 +1912,68 @@ negação por lockout.
   operador a afrouxá-lo até virar decoração.
 - A tela de auditoria do ADR-46 é o instrumento de verificação, e isso não é
   coincidência: ela foi construída para responder exatamente estas perguntas.
+
+### ADR-48 — Download de artefato de backup pela administração: o agente cifra, o backend só proxia, e o muro do INV-171 é emendado de propósito
+
+> Emenda o ADR-43/44 e, explicitamente, o **INV-171**. Migração `000049_backup_download`.
+
+**Contexto.** Os artefatos vivem num bucket S3 externo (`backups/dump/`, `backups/users/`,
+`backups/rustfs/`), cifrados com age/X25519. Para pegar um dump o operador precisava das
+credenciais do S3 **e** da identidade privada — nenhuma das duas na tela. O §10.2 do
+`SDD-OPS-BACKUP.md` listava "baixar o último dump" como ausência deliberada.
+
+**A decisão, e o que ela custa.** O muro (1) do INV-171 mantém `BACKUP_S3_*` só no processo
+`backup` para que um RCE no backend — o processo exposto à web — não alcance um bucket com
+hashes bcrypt e o conteúdo de todos os usuários. **Qualquer** implementação de "a tela
+entrega o backup ao navegador" concede esse alcance; não existe versão que preserve o muro.
+Este ADR o estreita ao máximo e o torna opt-in:
+
+- O backend **nunca** recebe credencial de S3, e **nunca** vê texto claro. Ele proxia bytes
+  já cifrados sob a senha que o administrador escolheu.
+- O **agente** decifra com a identidade privada e re-cifra em UMA passada de streaming
+  (`age.NewScryptRecipient`). O texto claro não toca disco nem sai do processo em claro.
+- A ponte só existe com `BACKUP_AGENT_URL` **e** `BACKUP_AGENT_TOKEN` definidos. Sem elas o
+  cliente é `nil`, as rotas respondem 404 e o muro fica exatamente onde estava. Meio
+  configurado é tratado como DESLIGADO — o estado seguro é o que não muda nada.
+
+O que passa a ser possível, dito às claras: um backend comprometido pode pedir ao agente
+qualquer artefato cifrado com uma senha que ele mesmo escolha. Esse é o preço, e ele é real.
+
+**A senha é escolhida no download, e não é a senha da conta.** A tentação era usar a senha
+do administrador. Duas razões contra, e a segunda é decisiva: (a) o sistema não conhece a
+senha — só o hash bcrypt; (b) o arquivo sai da instância e vai para o disco de alguém, então
+quem o obtiver poderia quebrar essa senha **offline**, sem rate limit e sem lockout, e ela
+seria a senha de login de um administrador. Todo o INV-184/INV-041 protege o login *online*;
+um `.age` na pasta de Downloads contornaria tudo. A senha digitada aqui protege o arquivo e
+nada mais, e a tela diz isso.
+
+**age, não ZIP com senha.** `archive/zip` não cifra; as libs de ZIP-AES em Go estão sem
+manutenção e `ZipCrypto` é criptografia quebrada. `filippo.io/age` já é dependência, tem KDF
+forte (scrypt) e — decisivo para recuperação de desastre — o operador abre o arquivo **sem o
+Foldex** (`age -d`).
+
+**Teto de 3 por administrador, por artefato.** Por administrador e não por instância: um
+balde compartilhado deixaria o primeiro admin a topar com uma queda de rede gastar o
+orçamento de todos, e a trilha já nomeia quem baixou o quê. A reserva é gasta **antes** do
+primeiro byte, num único `INSERT ... SELECT ... WHERE (count) < n` — ler a contagem em Go e
+depois inserir deixa uma janela em que duas requisições intercaladas veem "dois usados" e
+ambas passam. Uma falha no meio do stream **não** devolve a reserva: quem recebeu 99% do
+dump recebeu o dump.
+
+**Permissão própria, OWNER-ONLY e TRAVADA — revisto durante a implementação.** A primeira
+versão concedia `instance.backup_download` a administradores. Estava errada, e o erro era de
+modelo de ameaça: **um dump é indivisível.** `pg_dump` não tem fatia por conta, então não
+existe "baixar só o que é seu" para ele — conceder o download a um administrador significa
+que ele lê as linhas de todas as outras contas, que é a única coisa que o §0 diz que um
+administrador nunca faz. Passou a ser owner-only e entrou em `lockedPermissions`: uma
+permissão destravada é uma decisão esperando ser revertida por quem editar a matriz em
+seguida, e esta não pode ser revertida assim.
+
+Os **ZIPs por usuário** são o único artefato fatiável por dono — a chave carrega o uid
+(`backups/users/<uid>/…`) — e mesmo assim NÃO foram abertos a administradores: seria uma
+segunda porta para uma sala que já tem porta, porque `/api/backup` já exporta os próprios
+dados de qualquer conta. A regra de posse (`mayDownload`) existe no handler mesmo assim,
+como segunda camada: um guard que depende de uma configuração continuar de um jeito não é um
+guard.
+
+O evento `backup.downloaded` é `warning`, nunca dobrado no gatilho de execução.

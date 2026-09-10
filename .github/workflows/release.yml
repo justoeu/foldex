@@ -10,7 +10,8 @@ name: release
 # workflow loaded from any ref other than main, loose targets, and any SHA
 # outside origin/main before a publishing job can start.
 #
-# Build topology: 2 images × 2 architectures = 4 runners in parallel.
+# Build topology: 3 images (backend, backup-agent, web) × 2 architectures =
+# 6 runners in parallel.
 # Each cell builds a **single-arch** image on a **native** runner
 # (ubuntu-latest for amd64, ubuntu-24.04-arm for arm64) — no QEMU
 # emulation. Per-arch images are pushed *by digest only* (no tags yet).

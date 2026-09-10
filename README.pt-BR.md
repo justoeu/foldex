@@ -37,6 +37,7 @@ HTTPS em `:9444` usa mkcert no dev — ver [`docs/ARCHITECTURE.md`](docs/ARCHITE
 - Import/export: Netscape HTML, JSON, ZIP completo (DB + imagens)
 - Extensão MV3 + paleta (`⌥K`)
 - Multi-usuário (sessão, 2FA, Google, RBAC) — ligado por padrão
+- Backups agendados fora da máquina (dump, drill de restauração, espelho de objetos, ZIPs por usuário) — artefatos baixáveis pelo owner da instância, opt-in
 
 Bookmark nativo basta para poucas dezenas de links num único browser. Foldex vale a pena com acesso cross-browser, telemetria e organização em duas dimensões.
 

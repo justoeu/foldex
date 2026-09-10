@@ -158,6 +158,78 @@ describe('BackupSection', () => {
     expect(screen.getByText('failed')).toBeInTheDocument()
   })
 
+  it('expands a failed run into what processed and what failed', async () => {
+    const user = userEvent.setup()
+    state.backupStatusRuns = [run({
+      id: 7,
+      job: 'mirror',
+      status: 'failed',
+      last_error: 'mirror_scan_failed',
+      objects_scanned: 12,
+    })]
+
+    renderWithProviders(<BackupSection />)
+    const token = await screen.findByText('mirror_scan_failed')
+    const row = token.closest('tr') as HTMLElement
+    expect(screen.queryByText(/Could not list the source bucket/i)).toBeNull()
+
+    // The mouse gets the whole row; the keyboard and the screen reader get the
+    // real button in the last cell — a <tr> with tabIndex and aria-expanded
+    // announces as a plain row, and the state is not conveyed there.
+    const toggle = within(row).getByRole('button', { name: /Details/ })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+    await user.click(row)
+    expect(await screen.findByText(/Could not list the source bucket/i)).toBeInTheDocument()
+    expect(screen.getByText('Objects scanned')).toBeInTheDocument()
+    expect(screen.getByText('12')).toBeInTheDocument()
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+    // Enter on the button collapses it — and exactly once: the row's own
+    // onClick must not fire again on the way up and re-open what just closed.
+    toggle.focus()
+    await user.keyboard('{Enter}')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/Could not list the source bucket/i)).toBeNull()
+  })
+
+  /*
+   * The row from the incident. `user_zip` ships ONE object per user, so its
+   * artifact_key is legitimately empty and its whole product lives in meta —
+   * and the panel, reading only the columns, said "nenhum contador extra foi
+   * gravado" about a run that had recorded three.
+   */
+  it('shows what a user_zip run recorded instead of claiming it recorded nothing', async () => {
+    const user = userEvent.setup()
+    state.backupStatusRuns = [run({
+      id: 54,
+      job: 'user_zip',
+      status: 'succeeded',
+      artifact_key: null,
+      meta: { users: 1, shipped: 1, bytes_total: 489_750, duration_ms: 3387 },
+    })]
+
+    renderWithProviders(<BackupSection />)
+    await user.click(await screen.findByRole('button', { name: /Details/ }))
+
+    expect(await screen.findByText('ZIPs shipped')).toBeInTheDocument()
+    expect(screen.getByText('Users in scope')).toBeInTheDocument()
+    expect(screen.getByText('478 KB')).toBeInTheDocument()
+    expect(screen.queryByText(/No extra counters/i)).not.toBeInTheDocument()
+  })
+
+  // The honest empty state still has to exist: a run that truly recorded
+  // nothing must not get a panel of invented rows.
+  it('still says so when a run really recorded nothing', async () => {
+    const user = userEvent.setup()
+    state.backupStatusRuns = [run({ id: 60, job: 'user_zip', status: 'succeeded', meta: {} })]
+
+    renderWithProviders(<BackupSection />)
+    await user.click(await screen.findByRole('button', { name: /Details/ }))
+
+    expect(await screen.findByText(/No extra counters/i)).toBeInTheDocument()
+  })
+
   it('warns when a requested run has aged past five minutes without a claim', async () => {
     state.backupStatusRuns = [
       run({
@@ -488,6 +560,7 @@ function healthyAgent(over: Record<string, unknown> = {}) {
     // Matches AGENT_SCHEMA_VERSION in the mock: a healthy agent is one that
     // knows the document shape the backend writes.
     schema_version: 43,
+    stale_run_min: 240,
     jobs: {
       dump: {
         capable: true, source: 'env', schedule: '03:30',
@@ -1377,5 +1450,497 @@ describe('BackupSection destination', () => {
     await user.click(await screen.findByRole('tab', { name: 'Object mirror' }))
     await screen.findByLabelText('Interval (minutes)')
     expect(screen.queryByTestId('fx-bkp-destination')).not.toBeInTheDocument()
+  })
+})
+
+
+/*
+ * The live half of the screen. Everything below drives real time with fake
+ * timers rather than asserting a refetchInterval number: the contract the
+ * operator has is "the row stops saying `running` on its own", and only a
+ * clock that actually advances can prove it.
+ */
+describe('BackupSection live runs', () => {
+  /** A claimed run, started `agoMs` before now and never finished. */
+  function running(agoMs: number, over: Record<string, unknown> = {}) {
+    return run({
+      id: 77,
+      status: 'running',
+      finished_at: null,
+      scheduled_for: new Date(Date.now() - agoMs).toISOString(),
+      started_at: new Date(Date.now() - agoMs).toISOString(),
+      ...over,
+    })
+  }
+
+  /* Addressed by testid rather than by column index: a reordered <th> would
+     make a positional lookup read the wrong cell and still pass. */
+  function durationCells(): HTMLElement[] {
+    return screen.getAllByTestId('fx-bkp-run-duration')
+  }
+
+  function durationCell(): HTMLElement {
+    return durationCells()[0]
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(new Date('2026-09-09T12:00:00Z'))
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('counts the elapsed time up, once a second, instead of rendering a dash', async () => {
+    state.backupStatusRuns = [running(65_000)]
+    renderWithProviders(<BackupSection />)
+
+    await screen.findByText('running')
+    expect(durationCell()).toHaveTextContent('1min 05s')
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+    expect(durationCell()).toHaveTextContent('1min 08s')
+  })
+
+  // A queued row counts from the SLOT, not from the insert: `started_at` on
+  // a row no agent has claimed is only when the web process filed it, and
+  // showing that as elapsed work is the lie the stale banner exists to catch.
+  it('counts a queued run from the slot it was filed against', async () => {
+    state.backupStatusRuns = [
+      running(0, {
+        status: 'requested',
+        scheduled_for: new Date(Date.now() - 90_000).toISOString(),
+        started_at: new Date(Date.now() - 10_000).toISOString(),
+      }),
+    ]
+    renderWithProviders(<BackupSection />)
+
+    await screen.findByText('requested')
+    expect(durationCell()).toHaveTextContent('1min 30s')
+  })
+
+  // The queued wording is a DIFFERENT key from the running one, rendered by the
+  // same branch — and the card is the only place it appears.
+  it('says a job is queued, not running, before the agent claims it', async () => {
+    state.backupStatusRuns = [
+      running(0, {
+        status: 'requested',
+        scheduled_for: new Date(Date.now() - 45_000).toISOString(),
+      }),
+    ]
+    renderWithProviders(<BackupSection />)
+
+    await screen.findByText('requested')
+    expect(jobCard('Database dump')).toHaveTextContent('queued for 45.0 s')
+  })
+
+  // The plural arm of backup_live_*: a catalog that only ever renders count=1
+  // ships a broken "N runs in progress" nobody sees until two jobs overlap.
+  it('counts every unfinished run in the live badge', async () => {
+    state.backupStatusRuns = [
+      running(1000, { id: 70 }),
+      running(2000, { id: 71, job: 'mirror' }),
+    ]
+    renderWithProviders(<BackupSection />)
+
+    expect(await screen.findByText('2 runs in progress')).toBeInTheDocument()
+    expect(durationCells()).toHaveLength(2)
+  })
+
+  /*
+   * The state this whole band exists to name. A drill failed in 90 s, the
+   * agent's single attempt to record the failure timed out, and the row stayed
+   * 'running' — holding backup_run_one_running_idx so no drill could start —
+   * while the screen counted the seconds up as if it were progress. Past the
+   * agent's OWN janitor threshold, a counter is not a status.
+   */
+  it('calls a run stuck once it passes the janitor threshold the agent published', async () => {
+    state.backupAgent = healthyAgent({ stale_run_min: 60 })
+    state.backupStatusRuns = [running(90 * 60 * 1000, { job: 'drill' })]
+    renderWithProviders(<BackupSection />)
+
+    const banner = (await screen.findByText('A run is stuck, not in progress')).closest('.fx-banner')!
+    expect(banner).toHaveTextContent('Restore drill')
+    expect(banner).toHaveTextContent('60 min')
+  })
+
+  it('says nothing while the run is still inside the threshold', async () => {
+    state.backupAgent = healthyAgent({ stale_run_min: 60 })
+    state.backupStatusRuns = [running(30 * 60 * 1000, { job: 'drill' })]
+    renderWithProviders(<BackupSection />)
+
+    await screen.findByText('running')
+    expect(screen.queryByText('A run is stuck, not in progress')).not.toBeInTheDocument()
+  })
+
+  /*
+   * An agent too old to publish the threshold gets SILENCE, not a default.
+   * Inventing 240 here would be the screen re-deriving server policy (INV-138)
+   * — and it would cry wolf on an operator who deliberately raised the limit.
+   */
+  it('invents no threshold when the agent publishes none', async () => {
+    const agent = healthyAgent()
+    delete (agent as Record<string, unknown>).stale_run_min
+    state.backupAgent = agent
+    state.backupStatusRuns = [running(48 * 60 * 60 * 1000, { job: 'drill' })]
+    renderWithProviders(<BackupSection />)
+
+    await screen.findByText('running')
+    expect(screen.queryByText('A run is stuck, not in progress')).not.toBeInTheDocument()
+  })
+
+  it('names the in-flight state on the job card, ahead of the last outcome', async () => {
+    const finished = run({ id: 1, started_at: new Date(Date.now() - HOUR).toISOString() })
+    state.backupJobs = jobsSummary(finished)
+    state.backupStatusRuns = [running(30_000), finished]
+    renderWithProviders(<BackupSection />)
+
+    await screen.findByText('running')
+    const card = jobCard('Database dump')
+    expect(card).toHaveTextContent('running for 30.0 s')
+    // The card must not simultaneously claim the job succeeded: what it is
+    // doing now outranks what it last did.
+    expect(within(card).queryByText('succeeded')).not.toBeInTheDocument()
+  })
+
+  it('marks the history as live while something is unfinished, and not after', async () => {
+    state.backupStatusRuns = [running(1000)]
+    renderWithProviders(<BackupSection />)
+
+    expect(await screen.findByText('1 run in progress')).toBeInTheDocument()
+
+    state.backupStatusRuns = [run({ id: 77, status: 'succeeded' })]
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    await waitFor(() => expect(screen.queryByText('1 run in progress')).not.toBeInTheDocument())
+  })
+
+  it('picks up the finish on its own, without the operator reloading', async () => {
+    state.backupStatusRuns = [running(2000)]
+    renderWithProviders(<BackupSection />)
+    await screen.findByText('running')
+
+    state.backupStatusRuns = [
+      run({ id: 77, status: 'succeeded', artifact_key: 'backups/dump/2026/09/09/x.enc' }),
+    ]
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+
+    expect(await screen.findByText('succeeded')).toBeInTheDocument()
+    expect(durationCell()).not.toHaveTextContent('—')
+  })
+
+  /*
+   * The idle cadence is the agent's own requested-poll tick (30 s): asking
+   * faster than the process that WRITES the rows only re-reads bytes that
+   * cannot have changed. Asserting both sides is what keeps a future edit
+   * from quietly leaving the fast poll running forever.
+   */
+  it('slows to the agent cadence once nothing is in flight', async () => {
+    state.backupStatusRuns = [run({ id: 1, status: 'succeeded' })]
+    renderWithProviders(<BackupSection />)
+    await screen.findByText('succeeded')
+
+    state.backupStatusRuns = [run({ id: 2, status: 'failed', last_error: 'upload_failed' })]
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(screen.queryByText('failed')).not.toBeInTheDocument()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(25_000) })
+    expect(await screen.findByText('failed')).toBeInTheDocument()
+  })
+
+  /*
+   * A keyset page below the head is a frozen window into the past — rows
+   * never appear in it — so polling it would be churn under an operator who
+   * paged back deliberately.
+   */
+  it('stops polling entirely once the operator pages back', async () => {
+    state.backupStatusRuns = [running(1000)]
+    renderWithProviders(<BackupSection />)
+    await screen.findByText('running')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Older' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    state.backupStatusRuns = [run({ id: 99, status: 'failed', last_error: 'upload_failed' })]
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(screen.queryByText('failed')).not.toBeInTheDocument()
+  })
+})
+
+/*
+ * Downloading an artifact (ADR-48). Everything here is gated on the LIVE
+ * permission, not on the role: the owner can grant or revoke it, and a button
+ * the server refuses is worse than no button (INV-138).
+ */
+describe('BackupSection artifact download', () => {
+  const downloadKey = 'backups/dump/2026/09/09/foldex-20260909.dump.age'
+
+  /* The OWNER's session. instance.backup_download is owner-only and locked
+     (INV-187): a dump has no per-account slice, so holding it means reading
+     every account. Narrowed to the authenticated arm first — SessionState is a
+     union and `permissions` only exists on that one. */
+  function withDownload(): SessionState {
+    if (testAdminSession.status !== 'authenticated') throw new Error('fixture must be authenticated')
+    return {
+      ...testAdminSession,
+      user: { ...testAdminSession.user, role: 'owner' },
+      permissions: [...(testAdminSession.permissions ?? []), 'instance.backup_download'],
+    }
+  }
+
+  function shippedDump(over: Record<string, unknown> = {}) {
+    return run({ id: 31, job: 'dump', status: 'succeeded', artifact_key: downloadKey, ...over })
+  }
+
+  /* The download goes through fetch, not axios, because it STREAMS — so it is
+     stubbed here rather than in the axios mock. Returns what the agent would:
+     an age envelope the caller can only open with their own passphrase. */
+  type DownloadCall = { url: string; password: string; method: string }
+  function stubDownload(calls: DownloadCall[], ok = true) {
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(((url: string, init: RequestInit) => {
+      calls.push({
+        url,
+        method: init.method ?? 'GET',
+        password: JSON.parse(String(init.body ?? '{}')).password ?? '',
+      })
+      return Promise.resolve({
+        ok,
+        status: ok ? 200 : 429,
+        body: new ReadableStream({
+          start(c) { c.enqueue(new TextEncoder().encode('age-encrypted-bytes')); c.close() },
+        }),
+        blob: () => Promise.resolve(new Blob(['age-encrypted-bytes'])),
+        json: () => Promise.resolve({ error: { code: 'download_budget_spent', message: 'spent' } }),
+      } as unknown as Response)
+    }) as unknown as typeof fetch)
+  }
+
+  /** A File System Access picker that captures what was written. */
+  function stubPicker(chunks: Uint8Array[], name: { value: string }) {
+    const picker = vi.fn().mockImplementation((opts: { suggestedName: string }) => {
+      name.value = opts.suggestedName
+      return Promise.resolve({
+        createWritable: () => Promise.resolve({
+          getWriter: () => ({
+            write: (c: Uint8Array) => { chunks.push(c); return Promise.resolve() },
+            close: () => Promise.resolve(),
+            abort: () => Promise.resolve(),
+          }),
+        }),
+      })
+    })
+    Object.defineProperty(window, 'showSaveFilePicker', {
+      value: picker, configurable: true, writable: true,
+    })
+    return picker
+  }
+
+  /*
+   * An ADMINISTRATOR does not get this button, and that is the point of the
+   * feature's final shape: a dump carries every account's rows, and §0 says an
+   * administrator never reads another account's. The button follows the LIVE
+   * permission rather than the role string, so a matrix change moves it
+   * without a deploy (INV-138).
+   */
+  it('offers the download to the owner and not to an administrator', async () => {
+    state.backupStatusRuns = [shippedDump()]
+
+    const { unmount } = renderWithProviders(<BackupSection />, { session: withDownload() })
+    expect(await screen.findByRole('button', { name: /Download/ })).toBeInTheDocument()
+    unmount()
+
+    // The same row, seen by an admin — who holds instance.backup but not the
+    // download.
+    renderWithProviders(<BackupSection />, { session: testAdminSession })
+    await screen.findByText('succeeded')
+    expect(screen.queryByRole('button', { name: /Download/ })).not.toBeInTheDocument()
+  })
+
+  /*
+   * A mirror or user_zip run wrote N objects and its row names none of them,
+   * so there is nothing for this button to fetch. Offering it anyway would
+   * produce a 409 the operator cannot act on.
+   */
+  it('offers nothing for a run that shipped no single artifact', async () => {
+    state.backupStatusRuns = [run({ id: 32, job: 'mirror', status: 'succeeded', artifact_key: null })]
+    renderWithProviders(<BackupSection />, { session: withDownload() })
+
+    await screen.findByText('succeeded')
+    expect(screen.queryByRole('button', { name: /Download/ })).not.toBeInTheDocument()
+  })
+
+  it('offers nothing for a run that failed', async () => {
+    state.backupStatusRuns = [shippedDump({ status: 'failed', last_error: 'upload_failed' })]
+    renderWithProviders(<BackupSection />, { session: withDownload() })
+
+    await screen.findByText('failed')
+    expect(screen.queryByRole('button', { name: /Download/ })).not.toBeInTheDocument()
+  })
+
+  /*
+   * The password protects the FILE, not the account — and the dialog has to say
+   * so, because "type your password" is otherwise read as "type your login
+   * password", which is the arrangement that turns a leaked backup into an
+   * offline cracking oracle against this instance.
+   */
+  it('asks for a file password and says it is not the account password', async () => {
+    const user = userEvent.setup()
+    state.backupStatusRuns = [shippedDump()]
+    renderWithProviders(<BackupSection />, { session: withDownload() })
+
+    await user.click(await screen.findByRole('button', { name: /Download/ }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/not, and must not be, your account password/i)).toBeInTheDocument()
+    expect(within(dialog).getByText(/1 of 3 downloads left|3 of 3 downloads left/i)).toBeInTheDocument()
+  })
+
+  // Below the floor the server enforces, the dialog refuses locally so the
+  // budget is not spent on a request that cannot succeed.
+  it('refuses to submit a password shorter than the floor', async () => {
+    const user = userEvent.setup()
+    state.backupStatusRuns = [shippedDump()]
+    const calls: DownloadCall[] = []
+    stubDownload(calls)
+    renderWithProviders(<BackupSection />, { session: withDownload() })
+
+    await user.click(await screen.findByRole('button', { name: /Download/ }))
+    const dialog = await screen.findByRole('dialog')
+    const submit = within(dialog).getByRole('button', { name: 'Download' })
+    expect(submit).toBeDisabled()
+
+    await user.type(within(dialog).getByLabelText(/File password/i), 'short')
+    expect(submit).toBeDisabled()
+    expect(within(dialog).getByText(/at least 12 characters/i)).toBeInTheDocument()
+    expect(calls).toHaveLength(0)
+  })
+
+  /*
+   * The artifact STREAMS to the file the operator picked. Buffering a dump as
+   * a Blob first holds the whole thing in the tab's memory before a byte
+   * reaches disk — fine for a small instance, a frozen tab for the instance
+   * whose backup actually matters.
+   */
+  it('streams the artifact to disk without buffering it, password in the BODY', async () => {
+    const user = userEvent.setup()
+    state.backupStatusRuns = [shippedDump()]
+    const calls: DownloadCall[] = []
+    stubDownload(calls)
+    const chunks: Uint8Array[] = []
+    const picked = { value: '' }
+    stubPicker(chunks, picked)
+    const blobURL = vi.spyOn(URL, 'createObjectURL')
+
+    renderWithProviders(<BackupSection />, { session: withDownload() })
+    await user.click(await screen.findByRole('button', { name: /Download/ }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText(/File password/i), 'a-long-enough-passphrase')
+    await user.click(within(dialog).getByRole('button', { name: 'Download' }))
+
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].method).toBe('POST')
+    expect(calls[0].password).toBe('a-long-enough-passphrase')
+    // The password must never reach the URL — access logs and history (INV-036).
+    expect(calls[0].url).not.toContain('a-long-enough-passphrase')
+    expect(calls[0].url).toBe('/api/admin/backup/runs/31/download')
+
+    await waitFor(() => expect(chunks).toHaveLength(1))
+    expect(new TextDecoder().decode(chunks[0])).toBe('age-encrypted-bytes')
+    expect(blobURL).not.toHaveBeenCalled()
+    // .age, always: a file named .dump that age wrote fails in pg_restore
+    // looking like corruption rather than like an undecrypted file.
+    expect(picked.value).toBe('foldex-20260909.dump.age')
+  })
+
+  // Firefox and Safari have no File System Access API, and a heavy download
+  // beats an impossible one.
+  it('falls back to a blob when the browser cannot stream to a file', async () => {
+    const user = userEvent.setup()
+    state.backupStatusRuns = [shippedDump()]
+    const calls: DownloadCall[] = []
+    stubDownload(calls)
+    delete (window as Window & { showSaveFilePicker?: unknown }).showSaveFilePicker
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:artifact')
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    renderWithProviders(<BackupSection />, { session: withDownload() })
+    await user.click(await screen.findByRole('button', { name: /Download/ }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText(/File password/i), 'a-long-enough-passphrase')
+    await user.click(within(dialog).getByRole('button', { name: 'Download' }))
+
+    await waitFor(() => expect(click).toHaveBeenCalled())
+    expect(createObjectURL).toHaveBeenCalled()
+    // Leaking the object URL pins the whole dump in memory for the life of the
+    // document.
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith('blob:artifact'))
+  })
+
+  // The server's refusal has to reach the operator, not vanish into a console.
+  it('shows the server error instead of writing a broken file', async () => {
+    const user = userEvent.setup()
+    state.backupStatusRuns = [shippedDump()]
+    stubDownload([], false)
+    const chunks: Uint8Array[] = []
+    stubPicker(chunks, { value: '' })
+
+    renderWithProviders(<BackupSection />, { session: withDownload() })
+    await user.click(await screen.findByRole('button', { name: /Download/ }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText(/File password/i), 'a-long-enough-passphrase')
+    await user.click(within(dialog).getByRole('button', { name: 'Download' }))
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('spent')
+    expect(chunks).toHaveLength(0)
+  })
+
+  // The generator exists because typing a strong passphrase is the step people
+  // skip — and this password protects a database dump.
+  it('can generate a password that clears the floor', async () => {
+    const user = userEvent.setup()
+    state.backupStatusRuns = [shippedDump()]
+    renderWithProviders(<BackupSection />, { session: withDownload() })
+
+    await user.click(await screen.findByRole('button', { name: /Download/ }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: /Generate a password/i }))
+
+    const field = within(dialog).getByLabelText(/File password/i) as HTMLInputElement
+    expect(field.value.length).toBeGreaterThanOrEqual(12)
+    expect(within(dialog).getByRole('button', { name: 'Download' })).toBeEnabled()
+  })
+
+  it('says how many downloads are left when the budget is nearly spent', async () => {
+    const user = userEvent.setup()
+    state.backupStatusRuns = [shippedDump()]
+    state.backupDownloadBudget = { used: 2, limit: 3, available: 1 }
+    renderWithProviders(<BackupSection />, { session: withDownload() })
+
+    await user.click(await screen.findByRole('button', { name: /Download/ }))
+    expect(await screen.findByText(/1 of 3 downloads left/i)).toBeInTheDocument()
+  })
+
+  it('closes on Escape without sending anything', async () => {
+    const user = userEvent.setup()
+    state.backupStatusRuns = [shippedDump()]
+    const calls: DownloadCall[] = []
+    stubDownload(calls)
+    renderWithProviders(<BackupSection />, { session: withDownload() })
+
+    await user.click(await screen.findByRole('button', { name: /Download/ }))
+    await screen.findByRole('dialog')
+    await user.keyboard('{Escape}')
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(calls).toHaveLength(0)
+  })
+
+  // The row's own onClick would fire on the way up and expand the details
+  // behind the dialog.
+  it('does not expand the row when the download button is used', async () => {
+    const user = userEvent.setup()
+    state.backupStatusRuns = [shippedDump({ artifact_sha256: 'abc123def456' })]
+    renderWithProviders(<BackupSection />, { session: withDownload() })
+
+    await user.click(await screen.findByRole('button', { name: /Download/ }))
+    await screen.findByRole('dialog')
+    expect(screen.queryByText('SHA-256')).not.toBeInTheDocument()
   })
 })

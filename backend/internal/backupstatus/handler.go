@@ -35,12 +35,25 @@ type Handler struct {
 	// the trail can answer "who moved the backup schedule" without string
 	// matching inside a shared detail.
 	auditSchedule func(*http.Request, string)
+	// auditDownload records an artifact leaving the instance under its OWN
+	// event. Folded into `audit` it would be indistinguishable from "someone
+	// pressed Run now", and the two are not remotely the same thing.
+	auditDownload func(*http.Request, string)
 	grants        authgate.Grants
+	// artifacts is the bridge to the agent, or NIL when the operator never
+	// configured it — which is the default and keeps INV-171's wall intact.
+	// Every download path asks Enabled() first; the client is nil-safe.
+	artifacts *ArtifactClient
 }
 
 func NewHandler(repo *Repository, logger *slog.Logger,
-	audit, auditSchedule func(*http.Request, string), grants authgate.Grants) *Handler {
-	return &Handler{repo: repo, logger: logger, audit: audit, auditSchedule: auditSchedule, grants: grants}
+	audit, auditSchedule, auditDownload func(*http.Request, string),
+	grants authgate.Grants, artifacts *ArtifactClient) *Handler {
+	return &Handler{
+		repo: repo, logger: logger,
+		audit: audit, auditSchedule: auditSchedule, auditDownload: auditDownload,
+		grants: grants, artifacts: artifacts,
+	}
 }
 
 func (h *Handler) Mount(r chi.Router) {
@@ -60,6 +73,15 @@ func (h *Handler) Mount(r chi.Router) {
 	write := authgate.RequirePermission(h.grants, authctx.PermInstanceBackupSchedule)
 	r.With(write).Put("/schedule/{job}", h.PutSchedule)
 	r.With(write).Delete("/schedule/{job}", h.DeleteSchedule)
+
+	/* Downloading an artifact (ADR-48) is its OWN permission, not the read.
+	   Seeing that a dump ran and holding the dump are different powers: the
+	   file is every user's content and every bcrypt hash. The routes 404 when
+	   the bridge is unconfigured, which is the default. */
+	download := authgate.RequirePermission(h.grants, authctx.PermInstanceBackupDownload)
+	r.With(download).Get("/runs/{id}/download-budget", h.DownloadBudget)
+	r.With(download).Post("/runs/{id}/download", h.Download)
+	r.With(download).Get("/user-zips", h.UserZips)
 }
 
 // ListRuns answers the whole band in one request: the per-job summary and one

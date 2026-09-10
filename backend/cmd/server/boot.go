@@ -11,6 +11,7 @@ import (
 
 	"foldex/internal/abusepolicy"
 	"foldex/internal/auth"
+	"foldex/internal/backupstatus"
 	"foldex/internal/changecheck"
 	"foldex/internal/config"
 	"foldex/internal/db"
@@ -371,12 +372,16 @@ func assembleDeps(h *handles) (*runtime, error) {
 		FolderUnlockKey:     h.folderUnlock,
 		AuthHandler:         authHandler,
 		AdminHandler:        adminHandler,
-		AuthRepo:            authRepo,
-		Grants:              h.grants,
-		PolicyHandler:       policyHandler,
-		AuthMiddleware:      authMW,
-		FolderHandler:       folderHandler,
-		AbusePolicy:         h.abuse,
+		// Nil unless BOTH BACKUP_AGENT_URL and BACKUP_AGENT_TOKEN are set —
+		// the constructor decides, so "half configured" cannot become "half
+		// open" (ADR-48).
+		BackupArtifacts: backupstatus.NewArtifactClient(h.cfg.BackupAgentURL, h.cfg.BackupAgentToken),
+		AuthRepo:        authRepo,
+		Grants:          h.grants,
+		PolicyHandler:   policyHandler,
+		AuthMiddleware:  authMW,
+		FolderHandler:   folderHandler,
+		AbusePolicy:     h.abuse,
 	}
 	if h.storage != nil {
 		deps.Screenshotter = screenshotPool

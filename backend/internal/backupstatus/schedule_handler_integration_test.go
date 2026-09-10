@@ -164,8 +164,9 @@ func TestSchedule_DeleteResetsToTheEnvBaselineAndAudits(t *testing.T) {
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		nil,
 		func(_ *http.Request, detail string) { audited = append(audited, detail) },
+		nil,
 		roleperm.Default(),
-	)
+		nil)
 	r := chi.NewRouter()
 	r.Route("/api/admin", func(ar chi.Router) {
 		ar.Use(authgate.RequireAdmin)

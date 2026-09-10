@@ -188,6 +188,120 @@ func TestDrill_EndToEndWithRealPostgresBinaries(t *testing.T) {
 	assert.Equal(t, dumpID, linked)
 }
 
+/*
+ * The incident, reproduced.
+ *
+ * The e2e test above dumps from the same role it restores as, so its artifact
+ * never names a role the ephemeral cluster lacks — it passed happily while
+ * every drill on a real instance failed. This one plants exactly that: an
+ * object owned by a role that exists in the SOURCE and, by construction,
+ * cannot exist in the disposable single-role target. `pg_dump` emits
+ * `ALTER ... OWNER TO` and `GRANT` for it, `--exit-on-error` makes the first
+ * one fatal, and the drill reports drill_restore_failed for a difference it
+ * created itself — leaving the instance with a green dump and a restore that
+ * had never once been proven.
+ *
+ * Asserting the argv carries --no-owner is not this: that proves a flag is
+ * passed, not that the restore survives.
+ */
+func TestDrill_RestoresAnArtifactThatNamesAForeignRole(t *testing.T) {
+	if testing.Short() {
+		t.Skip("drill end-to-end drives real postgres binaries; skipped under -short")
+	}
+	for _, bin := range []string{"pg_dump", "initdb", "pg_ctl", "createdb", "pg_restore", "postgres"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not on PATH — the full drill pipeline runs inside the backup-agent image (SDD-OPS-BACKUP §14)", bin)
+		}
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("the ephemeral cluster cannot run as root — the backup-agent image runs as `postgres`")
+	}
+
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(ctx, pool))
+
+	var server string
+	require.NoError(t, pool.QueryRow(ctx, `SHOW server_version`).Scan(&server))
+	out, err := exec.Command("pg_dump", "--version").Output()
+	require.NoError(t, err)
+	if major(server) != major(string(out)) {
+		t.Skipf("host pg_dump major (%s) differs from the test server (%s)", major(string(out)), major(server))
+	}
+
+	_, err = pool.Exec(ctx, `CREATE TABLE schema_migrations (version bigint NOT NULL, dirty boolean NOT NULL)`)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP TABLE schema_migrations`) })
+	_, err = pool.Exec(ctx, `INSERT INTO schema_migrations VALUES ($1, false)`, RequiredSchemaVersion)
+	require.NoError(t, err)
+
+	// The role the target cluster will not have. A managed Postgres supplies
+	// `postgres` and friends for free; here it is planted so the artifact
+	// carries the same shape.
+	const foreign = "drill_foreign_owner"
+	_, err = pool.Exec(ctx, `CREATE ROLE `+foreign+` NOLOGIN`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP OWNED BY `+foreign)
+		_, _ = pool.Exec(context.Background(), `DROP ROLE IF EXISTS `+foreign)
+	})
+	_, err = pool.Exec(ctx, `CREATE TABLE drill_foreign_table (id int PRIMARY KEY)`)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP TABLE IF EXISTS drill_foreign_table`) })
+	// Both statement kinds the restore used to die on.
+	_, err = pool.Exec(ctx, `ALTER TABLE drill_foreign_table OWNER TO `+foreign)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `GRANT SELECT ON drill_foreign_table TO `+foreign)
+	require.NoError(t, err)
+
+	uid := testdb.SeedUser(t, pool, "foreign-owner@example.com", "")
+	_, err = pool.Exec(ctx,
+		`INSERT INTO link (user_id, url, slug, title) VALUES ($1, 'https://example.com/owner', 'drill-owner', 'owner')`, uid)
+	require.NoError(t, err)
+
+	identity, err := age.GenerateX25519Identity()
+	require.NoError(t, err)
+	idFile := filepath.Join(t.TempDir(), "identity.txt")
+	require.NoError(t, os.WriteFile(idFile, []byte(identity.String()+"\n"), 0o600))
+
+	cc := pool.Config().ConnConfig
+	cfg := Config{
+		PGHost: cc.Host, PGPort: int(cc.Port), PGUser: cc.User,
+		PGPassword: cc.Password, PGDatabase: cc.Database, PGSSLMode: "disable",
+		AgeRecipients:   []string{identity.Recipient().String()},
+		AgeIdentityFile: idFile,
+		RetentionMode:   "bucket",
+		SpoolDir:        t.TempDir(),
+	}
+
+	store := newRecorderStore()
+	dump, err := NewDumpJob(cfg, pool, store, testLogger())
+	require.NoError(t, err)
+	artifact, meta, reason, err := dump.Run(ctx)
+	require.NoError(t, err)
+	require.Empty(t, reason)
+
+	runs := NewRunStore(pool)
+	dumpID, err := runs.Begin(ctx, JobDump, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, runs.Succeed(ctx, dumpID, artifact, meta))
+
+	drill, err := NewDrillJob(cfg, runs, store, testLogger())
+	require.NoError(t, err)
+	drillID, err := runs.Begin(ctx, JobDrill, time.Now())
+	require.NoError(t, err)
+
+	_, dMeta, dReason, err := drill.Run(ctx, drillID)
+	require.NoError(t, err, "an artifact naming a role the drill cluster lacks must still restore")
+	require.Empty(t, dReason, "this reported drill_restore_failed on `role ... does not exist` in production")
+
+	// And the verdict is still a real one: the rows came back and were counted.
+	got, ok := dMeta["tables"].(map[string]int64)
+	require.True(t, ok)
+	assert.EqualValues(t, 1, got["link"])
+	assert.EqualValues(t, 1, got["app_user"])
+}
+
 func TestLatestSucceededDump_AFailedRunWithAKeyIsNeverTheSource(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)

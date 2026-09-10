@@ -88,6 +88,8 @@ const GUARDED = [
   'fx-bkp-add',
   'fx-bkp-job-head',
   'fx-bkp-sha-btn',
+  'fx-bkp-run-toggle',
+  'fx-bkp-run-download',
   'fx-bkp-time-remove',
   'fx-abuse-reset',
 ]

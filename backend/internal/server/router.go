@@ -17,6 +17,7 @@ import (
 	"foldex/internal/abusepolicy"
 	"foldex/internal/auth"
 	"foldex/internal/backup"
+	"foldex/internal/backupstatus"
 	"foldex/internal/config"
 	"foldex/internal/depstatus"
 	"foldex/internal/folders"
@@ -61,7 +62,7 @@ type Deps struct {
 	Storage        links.Uploader       // optional — nil disables the endpoint
 	ScreenshotURL  links.URLPolicy      // required iff Screenshotter is set — gates the SSRF surface
 	StorageStatter stats.StorageStatter // optional — surfaces bucket usage on /stats/storage
-	StorageBucket  backup.StorageBucket // optional — enables /api/backup/* when the object store is up
+	StorageBucket  backup.StorageBucket // optional — nil keeps /api/backup/* mounted as 503 storage_unavailable
 
 	// LinkMetadataFetcher gates POST /api/links/url-metadata. When nil the route
 	// is still registered but responds 503 — the dialog falls back to manual
@@ -87,6 +88,11 @@ type Deps struct {
 	// PolicyHandler serves the owner-configurable instance rules. Nil leaves the
 	// routes unmounted and every rule at its compiled-in floor.
 	PolicyHandler *policy.Handler
+
+	// BackupArtifacts is the bridge to the backup agent (ADR-48), or NIL when
+	// the operator never configured it — which is the default and leaves
+	// INV-171's wall exactly where it was. The download routes 404 without it.
+	BackupArtifacts *backupstatus.ArtifactClient
 	// AbusePolicy is the live rate-limit policy (ADR-47 / SDD-ABUSE-DEFENSE).
 	// It is read per request so an owner tightening a limit does not have to
 	// restart the instance being defended. Nil — the zero-value Deps every

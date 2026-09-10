@@ -22,6 +22,7 @@ func TestMatrix_IsExactlyTheDocumentedGrid(t *testing.T) {
 			authctx.PermInvitesRead, authctx.PermInvitesWrite,
 			authctx.PermAuditRead, authctx.PermPolicyRead, authctx.PermPolicyWrite,
 			authctx.PermInstanceTransfer, authctx.PermInstanceBackupRead,
+			authctx.PermInstanceBackupDownload,
 			authctx.PermInstanceBackupSchedule, authctx.PermInstanceIPBlock,
 			authctx.PermInstanceRateLimits,
 		},
@@ -105,7 +106,7 @@ func TestAllPermissions_IsExactlyTheDeclaredVocabulary(t *testing.T) {
 		"users.read", "users.write", "roles.assign",
 		"invites.read", "invites.write",
 		"audit.read", "policy.read", "policy.write",
-		"instance.transfer", "instance.backup", "instance.backup_schedule",
+		"instance.transfer", "instance.backup", "instance.backup_download", "instance.backup_schedule",
 		"instance.ip_block", "instance.rate_limits",
 	}, authctx.AllPermissions)
 
@@ -127,4 +128,32 @@ func TestMatrix_RateLimitsAreLockedToTheOwner(t *testing.T) {
 	for _, r := range []authctx.Role{authctx.RoleAdmin, authctx.RoleEditor, authctx.RoleViewer} {
 		assert.False(t, r.Can(authctx.PermInstanceRateLimits), "role %q must not hold it", r)
 	}
+}
+
+/*
+ * Holding a whole-instance backup is OWNER-ONLY, and locked so no
+ * configuration can put it back.
+ *
+ * A dump is indivisible: pg_dump has no per-account slice, so an administrator
+ * who can download one reads every other account's rows — the single thing §0
+ * says an administrator never does. Separating it from instance.backup is not
+ * enough on its own; an unlocked permission is a decision waiting to be
+ * reversed by whoever next edits the matrix, and this one must not be
+ * reversible that way.
+ *
+ * The per-user ZIPs are deliberately NOT gated here: their keys carry the
+ * owner's id, the handler checks it, and the data is what /api/backup already
+ * exports for that account.
+ */
+func TestMatrix_DownloadingAWholeInstanceBackupIsOwnerOnlyAndLocked(t *testing.T) {
+	assert.NotEqual(t, authctx.PermInstanceBackupRead, authctx.PermInstanceBackupDownload)
+	assert.True(t, authctx.RoleOwner.Can(authctx.PermInstanceBackupDownload))
+	assert.False(t, authctx.RoleAdmin.Can(authctx.PermInstanceBackupDownload),
+		"an administrator holding the dump reads every account — the line §0 draws")
+	assert.False(t, authctx.RoleEditor.Can(authctx.PermInstanceBackupDownload))
+	assert.False(t, authctx.RoleViewer.Can(authctx.PermInstanceBackupDownload))
+	assert.True(t, authctx.IsPermissionLocked(authctx.PermInstanceBackupDownload))
+
+	// Seeing that a backup ran stays an ordinary administrative power.
+	assert.True(t, authctx.RoleAdmin.Can(authctx.PermInstanceBackupRead))
 }

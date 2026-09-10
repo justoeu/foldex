@@ -26,6 +26,11 @@ func TestAuditCategory_IsExactlyTheDocumentedSplit(t *testing.T) {
 		AuditInviteCreated, AuditInviteRevoked, AuditSessionsRevoked,
 		AuditPasswordRecovery, AuditPolicyChanged, AuditRolePermissions,
 		AuditBackupRunRequested, AuditBackupScheduleChanged, AuditEmailChanged,
+		// Identity, not content: the row names the ARTIFACT that left, never a
+		// user's link or note. It is an act of instance administration, and the
+		// content category is the one the admin projection withholds subjects
+		// from (INV-175).
+		AuditBackupDownloaded,
 		AuditIPBlocked, AuditIPUnblocked, AuditRateLimited,
 	}
 	for _, a := range content {

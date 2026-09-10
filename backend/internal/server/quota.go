@@ -53,6 +53,11 @@ var expensiveRoutes = []string{
 	"POST /api/backup/download", // issues the ticket the stream is fetched with
 	"POST /api/backup/validate", // unzips and checksums an uploaded archive
 	"POST /api/backup/restore",
+	// One instance dump streamed out through the agent and re-encrypted on the
+	// way (ADR-48). The most expensive thing on the ADMIN surface, and the one
+	// whose cost is paid twice — once decrypting, once re-encrypting under
+	// scrypt, which is deliberately slow.
+	"POST /api/admin/backup/runs/{id}/download",
 	"POST /api/links/{id}/screenshot",      // launches Chromium
 	"POST /api/links/url-metadata",         // outbound HTTP, Chromium fallback
 	"POST /api/links/{id}/refresh-preview", // outbound fetch per call

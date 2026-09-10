@@ -1,10 +1,22 @@
 // Package logsafe sanitizes untrusted strings before they enter structured
-// logs (CodeQL go/log-injection). slog itself does not escape CR/LF inside
-// attribute values, so a value containing "\nERROR fake" can forge lines.
+// logs (CodeQL go/log-injection).
 //
-// Prefer ObjectKey / HTTPPath over String when the value is attacker-
-// influenced: CodeQL does not model arbitrary sanitizers, so those helpers
-// return only non-tainted structural labels (never the raw input).
+// The three long-running binaries all install slog's JSON handler, which
+// escapes control characters, so forging a log LINE is not reachable at
+// today's sinks. Two things still are, and they are why this package exists:
+// the text handler does not escape (rustfs-bootstrap uses it, and a handler is
+// one line to swap), and an unbounded attacker-chosen string is unbounded log
+// volume regardless of encoding — hence the truncation in String.
+//
+// String clears CodeQL's go/log-injection at the sinks tried so far (the
+// artifact bridge's four, PR #123) — stated as a measurement, not a promise:
+// the analyzer's sanitizer model is not ours to depend on, and a future
+// version may well flag a String'd value again.
+//
+// Prefer HTTPPath when a structural label is enough. It returns a class rather
+// than the input, so it is safe by construction instead of by the analyzer
+// agreeing with us — and it keeps attacker-chosen text out of the log
+// entirely, which String only bounds.
 package logsafe
 
 import (

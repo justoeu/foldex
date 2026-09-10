@@ -6,6 +6,7 @@ import {
   appendBackupHistory,
   countsFromHeaders,
   generateBackup,
+  isBackupStorageUnavailable,
   readBackupHistory,
   restoreBackup,
   useRestoreBackup,
@@ -70,6 +71,17 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   delete (window as Window & { showSaveFilePicker?: unknown }).showSaveFilePicker
+})
+
+describe('isBackupStorageUnavailable', () => {
+  it('recognises the envelope and a 503, not a 404 from another backup route', () => {
+    expect(isBackupStorageUnavailable({
+      response: { status: 503, data: { error: { code: 'storage_unavailable' } } },
+    })).toBe(true)
+    expect(isBackupStorageUnavailable({ response: { status: 503 } })).toBe(true)
+    expect(isBackupStorageUnavailable({ response: { status: 404 } })).toBe(false)
+    expect(isBackupStorageUnavailable({ response: { status: 409, data: { error: { code: 'export_failed' } } } })).toBe(false)
+  })
 })
 
 describe('backup history (localStorage)', () => {
@@ -239,6 +251,30 @@ describe('generateBackup', () => {
       counts: { links: 5, notes: 4, tags: 2, folders: 1 },
     })
     expect(readBackupHistory()).toEqual([entry])
+  })
+
+  it('surfaces storage_unavailable from a 503 envelope', async () => {
+    const writer = {
+      write: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      abort: vi.fn(async () => undefined),
+    }
+    Object.defineProperty(window, 'showSaveFilePicker', {
+      configurable: true,
+      value: vi.fn(async () => ({ createWritable: async () => ({ getWriter: () => writer }) })),
+    })
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({ error: { code: 'storage_unavailable', message: 'object store is unavailable' } }),
+    } as unknown as Response)
+
+    await expect(generateBackup()).rejects.toMatchObject({
+      message: 'object store is unavailable',
+      response: { status: 503, data: { error: { code: 'storage_unavailable' } } },
+    })
+    expect(writer.abort).toHaveBeenCalled()
+    expect(writer.close).not.toHaveBeenCalled()
   })
 
   it('cancels the response and file writer when a streamed write fails', async () => {

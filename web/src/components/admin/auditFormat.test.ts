@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   actorOf, blockable, dayColumns, dayLabel, delta, deltaPercent, distributionWidth,
-  severityClass,
+  PINNED_AUDIT_ACTIONS, severityClass, timelineActionChips,
 } from './auditFormat'
 import type { AuditEntry } from '../../api/admin'
 
@@ -157,6 +157,38 @@ describe('actorOf', () => {
   // "user #0" there would invent an account that does not exist.
   it('reports no actor for an unauthenticated event', () => {
     expect(actorOf({ ...base, actor_email: null, actor_ref: null })).toEqual({ kind: 'none' })
+  })
+})
+
+describe('timelineActionChips', () => {
+  it('pins the identity events ahead of the top-N distribution', () => {
+    const chips = timelineActionChips([
+      { action: 'link.updated', category: 'content', count: 40 },
+      { action: 'login.failed', category: 'identity', count: 2 },
+      { action: 'tag.created', category: 'content', count: 3 },
+    ])
+    expect(chips.map((c) => c.action)).toEqual([
+      ...PINNED_AUDIT_ACTIONS,
+      'link.updated',
+      'tag.created',
+    ])
+    /* A pinned action with no events still gets a chip reading zero, and that
+       zero is the answer: "did a copy of the instance leave the box?" is not a
+       question an absent chip should make the reader assume. */
+    expect(chips.find((c) => c.action === 'backup.downloaded')?.count).toBe(0)
+    expect(chips.find((c) => c.action === 'login.failed')?.count).toBe(2)
+  })
+
+  it('caps extras so a busy distribution cannot flood the chip row', () => {
+    const pinned = PINNED_AUDIT_ACTIONS.length
+    const extras = Array.from({ length: 12 }, (_, i) => ({
+      action: `link.extra_${i}`,
+      category: 'content' as const,
+      count: 10 - (i % 9),
+    }))
+    const chips = timelineActionChips(extras)
+    expect(chips).toHaveLength(pinned + 6)
+    expect(chips.slice(pinned).map((c) => c.action)).toEqual(extras.slice(0, 6).map((d) => d.action))
   })
 })
 

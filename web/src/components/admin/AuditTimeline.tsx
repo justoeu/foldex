@@ -24,57 +24,63 @@ export function AuditTimeline({ entries }: { entries: AuditEntry[] }) {
         return (
           <li className="fx-aud-event" key={e.id} data-testid="fx-aud-event">
             <span className={`fx-aud-pip fx-aud-pip-${e.severity}`} aria-hidden="true" />
-            <button
-              type="button"
-              className={'fx-aud-event-row' + (expanded ? ' fx-aud-event-open' : '')}
-              aria-expanded={expanded}
-              onClick={() => setOpen(expanded ? null : e.id)}
-            >
-              <time className="fx-aud-when" dateTime={e.created_at}>
-                {new Date(e.created_at).toLocaleString()}
-              </time>
-              <span className={`fx-aud-kind fx-aud-kind-${e.category}`}>
-                {actionLabel(t, e.action)}
-              </span>
-              <span className="fx-aud-event-main">
-                <span className="fx-aud-event-summary">{summaryOf(e, t)}</span>
-                <span className="fx-aud-event-actor">{actorText(e, t)}</span>
-              </span>
-              <span className="fx-aud-event-end">
-                <span className={severityClass(e.severity)}>
-                  {t(`admin.audit_severity_${e.severity}`)}
+            <div className="fx-aud-event-body">
+              <button
+                type="button"
+                className={'fx-aud-event-row' + (expanded ? ' fx-aud-event-open' : '')}
+                aria-expanded={expanded}
+                onClick={() => setOpen(expanded ? null : e.id)}
+              >
+                <time className="fx-aud-when" dateTime={e.created_at}>
+                  {new Date(e.created_at).toLocaleString()}
+                </time>
+                <span className={`fx-aud-kind fx-aud-kind-${e.category}`}>
+                  {actionLabel(t, e.action)}
                 </span>
-                <span className="fx-aud-caret" aria-hidden="true">{expanded ? '▴' : '▾'}</span>
-              </span>
-            </button>
-            {expanded && (
-              <dl className="fx-aud-details">
-                <div>
-                  <dt>{t('admin.audit_detail_ip')}</dt>
-                  <dd>
-                    {e.ip ?? t('admin.audit_detail_absent')}
-                    {e.ip && (
-                      <span className="fx-aud-provenance">
-                        {' · '}
-                        {e.ip_trusted ? t('admin.audit_ip_trusted') : t('admin.audit_ip_direct')}
-                      </span>
-                    )}
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t('admin.audit_detail_device')}</dt>
-                  <dd>{e.user_agent ?? t('admin.audit_detail_absent')}</dd>
-                </div>
-                <div>
-                  <dt>{t('admin.audit_detail_result')}</dt>
-                  <dd>{e.detail ?? t('admin.audit_detail_absent')}</dd>
-                </div>
-                <div>
-                  <dt>{t('admin.audit_detail_scope')}</dt>
-                  <dd>{t(`admin.audit_category_${e.category}`)}</dd>
-                </div>
-              </dl>
-            )}
+                <span className="fx-aud-event-main">
+                  <span className="fx-aud-event-summary">{summaryOf(e, t)}</span>
+                  <span className="fx-aud-event-actor">{actorText(e, t)}</span>
+                </span>
+                <span className="fx-aud-event-end">
+                  <span className={severityClass(e.severity)}>
+                    {t(`admin.audit_severity_${e.severity}`)}
+                  </span>
+                  <span className="fx-aud-caret" aria-hidden="true">{expanded ? '▴' : '▾'}</span>
+                </span>
+              </button>
+              {expanded && (
+                <dl className="fx-aud-details">
+                  <div>
+                    <dt>{t('admin.audit_detail_ip')}</dt>
+                    <dd>
+                      {e.ip ?? t('admin.audit_detail_absent')}
+                      {e.ip && (
+                        <span className="fx-aud-provenance">
+                          {' · '}
+                          {e.ip_trusted ? t('admin.audit_ip_trusted') : t('admin.audit_ip_direct')}
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>{t('admin.audit_detail_device')}</dt>
+                    <dd>{e.user_agent ?? t('admin.audit_detail_absent')}</dd>
+                  </div>
+                  <div>
+                    <dt>{t('admin.audit_detail_result')}</dt>
+                    <dd>
+                      {e.category === 'content'
+                        ? t('admin.audit_detail_absent')
+                        : (e.detail ?? t('admin.audit_detail_absent'))}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>{t('admin.audit_detail_scope')}</dt>
+                    <dd>{t(`admin.audit_category_${e.category}`)}</dd>
+                  </div>
+                </dl>
+              )}
+            </div>
           </li>
         )
       })}

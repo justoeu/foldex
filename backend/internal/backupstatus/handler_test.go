@@ -38,8 +38,9 @@ func newValidationRouter() http.Handler {
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		nil,
 		nil,
+		nil,
 		roleperm.Default(),
-	)
+		nil)
 	r := chi.NewRouter()
 	r.Route("/api/admin/backup", h.Mount)
 	return r

@@ -37,6 +37,7 @@ HTTPS on `:9444` uses mkcert locally — see [`docs/ARCHITECTURE.md`](docs/ARCHI
 - Import/export: Netscape HTML, JSON, full ZIP (DB + images)
 - MV3 extension + palette (`⌥K`)
 - Multi-user (sessions, 2FA, Google, RBAC) — on by default
+- Scheduled off-site backups (dump, restore drill, object mirror, per-user ZIPs) — artifacts downloadable by the instance owner, opt-in
 
 Native browser bookmarks are simpler if you have a handful of links in one browser. Foldex pays off with cross-browser access, telemetry, and two-axis organization.
 

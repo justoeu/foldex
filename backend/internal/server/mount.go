@@ -25,6 +25,7 @@ import (
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/logsafe"
 	"foldex/internal/redirect"
+	"foldex/internal/roleperm"
 	"foldex/internal/settings"
 	"foldex/internal/stats"
 	"foldex/internal/tags"
@@ -210,7 +211,8 @@ func adminSurface(pr chi.Router, d Deps, grants authgate.Grants) {
 		}
 		ar.Route("/backup", backupstatus.NewHandler(
 			backupstatus.NewRepository(d.Pool), d.Logger,
-			d.AdminHandler.AuditBackupRun, d.AdminHandler.AuditBackupSchedule, grants,
+			d.AdminHandler.AuditBackupRun, d.AdminHandler.AuditBackupSchedule,
+			d.AdminHandler.AuditBackupDownload, grants, d.BackupArtifacts,
 		).Mount)
 	})
 }
@@ -262,16 +264,35 @@ func contentCRUD(pr chi.Router, d Deps, grants authgate.Grants, linksRepo *links
 		statsHandler = statsHandler.WithStorage(d.StorageStatter)
 	}
 	pr.Route("/stats", statsHandler.Mount)
-	if d.StorageBucket != nil {
-		pr.Route("/backup", func(br chi.Router) {
-			// Full-library export/restore is not a content-scoped token job.
-			br.Use(authgate.RejectAPIToken)
-			backup.NewHandler(backup.NewService(d.Pool, d.StorageBucket, d.Logger), d.Logger, grants).Mount(br)
-		})
-	}
+	backupOrUnavailable(pr, d, grants)
 	if d.PushHandler != nil {
 		pr.Route("/push", d.PushHandler.Mount)
 	}
+}
+
+// backupOrUnavailable always mounts /api/backup/* (INV-107). Omitting the
+// group when the object store is down made Chi answer an empty 404, and the
+// SPA reported "backup request failed (404)" — the same lie screenshot/upload
+// used to tell before those routes stayed mounted with 503. A ZIP without the
+// bucket would be silently incomplete, so the stub never streams one.
+func backupOrUnavailable(pr chi.Router, d Deps, grants authgate.Grants) {
+	grants = roleperm.OrDefault(grants)
+	pr.Route("/backup", func(br chi.Router) {
+		// Full-library export/restore is not a content-scoped token job.
+		br.Use(authgate.RejectAPIToken)
+		if d.StorageBucket != nil {
+			backup.NewHandler(backup.NewService(d.Pool, d.StorageBucket, d.Logger), d.Logger, grants).Mount(br)
+			return
+		}
+		unavailable := http.HandlerFunc(writeStorageUnavailable)
+		export := authgate.RequirePermission(grants, authctx.PermBackupExport)
+		br.With(export).Post("/", unavailable)
+		br.With(export).Post("/download", unavailable)
+		br.With(export).Get("/download", unavailable)
+		br.With(export).Get("/download/status", unavailable)
+		br.With(export).Post("/validate", unavailable)
+		br.With(authgate.RequirePermission(grants, authctx.PermBackupRestore)).Post("/restore", unavailable)
+	})
 }
 
 func storageOrUnavailable(pr chi.Router, d Deps, grants authgate.Grants, notesRepo *notes.Repository, fileHandler *links.ScreenshotHandler) {
@@ -285,11 +306,14 @@ func storageOrUnavailable(pr chi.Router, d Deps, grants authgate.Grants, notesRe
 		pr.With(writeGate).Post("/notes/images", nih.Upload)
 		return
 	}
-	unavailable := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		httperr.Write(w, httperr.New(http.StatusServiceUnavailable, "storage_unavailable", "object store is unavailable"))
-	})
+	unavailable := http.HandlerFunc(writeStorageUnavailable)
 	pr.With(writeGate).Post("/links/{id}/screenshot", unavailable)
 	pr.With(writeGate).Post("/links/{id}/image", unavailable)
 	pr.With(writeGate).Delete("/links/{id}/image", unavailable)
 	pr.With(writeGate).Post("/notes/images", unavailable)
+	pr.Get("/files/*", unavailable)
+}
+
+func writeStorageUnavailable(w http.ResponseWriter, _ *http.Request) {
+	httperr.Write(w, httperr.New(http.StatusServiceUnavailable, "storage_unavailable", "object store is unavailable"))
 }

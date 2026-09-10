@@ -56,6 +56,10 @@ type Config struct {
 	MirrorIntervalMin int               // 0 = mirror off
 	RequestedPollSec  int
 	StaleRunMin       int
+	// ArtifactToken enables the download bridge (artifact.go). EMPTY IS THE
+	// DEFAULT and means the bridge does not exist: an operator who never sets
+	// it keeps INV-171's wall exactly as it was before ADR-47.
+	ArtifactToken string
 
 	// Retention (GFS).
 	RetainDaily   int
@@ -149,6 +153,7 @@ func configFromEnv() Config {
 		MirrorIntervalMin: envInt("BACKUP_MIRROR_INTERVAL_MIN", 360),
 		RequestedPollSec:  envInt("BACKUP_REQUESTED_POLL_SEC", 30),
 		StaleRunMin:       envInt("BACKUP_STALE_RUN_MIN", 240),
+		ArtifactToken:     strings.TrimSpace(os.Getenv("BACKUP_AGENT_TOKEN")),
 
 		RetainDaily:   envInt("BACKUP_RETAIN_DAILY", 7),
 		RetainWeekly:  envInt("BACKUP_RETAIN_WEEKLY", 4),
