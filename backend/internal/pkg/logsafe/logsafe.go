@@ -8,10 +8,15 @@
 // one line to swap), and an unbounded attacker-chosen string is unbounded log
 // volume regardless of encoding — hence the truncation in String.
 //
-// Prefer HTTPPath over String when the value is attacker-influenced: it
-// returns a non-tainted structural label rather than the input, which is the
-// only form CodeQL accepts — it does not model arbitrary sanitizers, so a
-// String'd value stays flagged and the alert is dismissed with that reason.
+// String clears CodeQL's go/log-injection at the sinks tried so far (the
+// artifact bridge's four, PR #123) — stated as a measurement, not a promise:
+// the analyzer's sanitizer model is not ours to depend on, and a future
+// version may well flag a String'd value again.
+//
+// Prefer HTTPPath when a structural label is enough. It returns a class rather
+// than the input, so it is safe by construction instead of by the analyzer
+// agreeing with us — and it keeps attacker-chosen text out of the log
+// entirely, which String only bounds.
 package logsafe
 
 import (
