@@ -183,8 +183,8 @@ func New(cfg Config, pool *pgxpool.Pool, store Uploader, mirrorSource SourceBuck
 		return dump.Run(ctx)
 	}})
 	a.skewWarning = dump.VersionSkewWarning
-	/* Loaded at CONSTRUCTION, not on first download: a missing or
-	   group-readable identity file is a configuration error that must fail the
+	/* Loaded at CONSTRUCTION, not on first download: a missing, unparseable
+	   or group-readable identity is a configuration error that must fail the
 	   boot, exactly as it does for the drill — not surface weeks later as the
 	   first failed download in the middle of an incident. */
 	if cfg.ArtifactToken != "" {

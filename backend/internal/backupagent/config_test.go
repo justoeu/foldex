@@ -23,6 +23,7 @@ func setBaseline(t *testing.T) {
 	t.Setenv("BACKUP_DUMP_AT", "")
 	t.Setenv("BACKUP_DRILL_AT", "")
 	t.Setenv("BACKUP_AGE_IDENTITY_FILE", "")
+	t.Setenv("BACKUP_AGE_IDENTITY", "")
 	t.Setenv("BACKUP_RETENTION_MODE", "")
 	t.Setenv("POSTGRES_PASSWORD", "pw")
 	// The mirror defaults ON; the baseline turns it off so each test opts in
@@ -196,7 +197,7 @@ func TestLoad_DrillScheduleAndIdentity(t *testing.T) {
 		t.Setenv("BACKUP_DRILL_AT", "04:30 sun")
 		_, err := Load()
 		require.Error(t, err, "booting fine and failing every week at 04:30 is the silent non-backup shape")
-		assert.Contains(t, err.Error(), "BACKUP_AGE_IDENTITY_FILE")
+		assert.Contains(t, err.Error(), "neither BACKUP_AGE_IDENTITY_FILE nor BACKUP_AGE_IDENTITY")
 	})
 
 	t.Run("plaintext deployments drill without an identity", func(t *testing.T) {

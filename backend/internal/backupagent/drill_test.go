@@ -409,20 +409,20 @@ func TestMetaInt_CoercesEveryJSONBShape(t *testing.T) {
 	}
 }
 
-func TestLoadAgeIdentities_FileContract(t *testing.T) {
+func TestLoadIdentityFile_FileContract(t *testing.T) {
 	identity, err := age.GenerateX25519Identity()
 	require.NoError(t, err)
 
 	t.Run("parses a real identity file", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "id.txt")
 		require.NoError(t, os.WriteFile(path, []byte("# created: today\n"+identity.String()+"\n"), 0o600))
-		ids, err := loadAgeIdentities(path)
+		ids, err := loadIdentityFile(path)
 		require.NoError(t, err)
 		assert.Len(t, ids, 1)
 	})
 
 	t.Run("missing file fails the boot, not the first drill", func(t *testing.T) {
-		_, err := loadAgeIdentities(filepath.Join(t.TempDir(), "nope.txt"))
+		_, err := loadIdentityFile(filepath.Join(t.TempDir(), "nope.txt"))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "BACKUP_AGE_IDENTITY_FILE")
 	})
@@ -430,7 +430,7 @@ func TestLoadAgeIdentities_FileContract(t *testing.T) {
 	t.Run("garbage is rejected without being echoed", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "id.txt")
 		require.NoError(t, os.WriteFile(path, []byte("totally-not-an-identity"), 0o600))
-		_, err := loadAgeIdentities(path)
+		_, err := loadIdentityFile(path)
 		require.Error(t, err)
 		assert.NotContains(t, err.Error(), "totally-not-an-identity",
 			"file content never reaches logs — the likely paste mistake here is a private key")
@@ -523,12 +523,12 @@ func TestDrill_StartTimeoutStillStopsTheCluster(t *testing.T) {
 	assert.Equal(t, []string{"initdb", "pg_ctl start", "pg_ctl stop"}, f.rec.names())
 }
 
-func TestLoadAgeIdentities_RefusesAWorldReadableFile(t *testing.T) {
+func TestLoadIdentityFile_RefusesAWorldReadableFile(t *testing.T) {
 	identity, err := age.GenerateX25519Identity()
 	require.NoError(t, err)
 	idFile := filepath.Join(t.TempDir(), "identity.txt")
 	require.NoError(t, os.WriteFile(idFile, []byte(identity.String()+"\n"), 0o644))
-	_, err = loadAgeIdentities(idFile)
+	_, err = loadIdentityFile(idFile)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "chmod 600",
 		"the identity decrypts EVERY backup — group/world bits are a configuration error caught at boot")

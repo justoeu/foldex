@@ -188,7 +188,7 @@ func (a *Agent) openPlaintext(key string, src io.Reader) (io.Reader, error) {
 		return src, nil
 	}
 	if len(a.identities) == 0 {
-		return nil, fmt.Errorf("artifact is age-encrypted and no age identity is configured (BACKUP_AGE_IDENTITY_FILE or BACKUP_AGE_IDENTITY)")
+		return nil, errors.New("artifact is age-encrypted and " + errNoIdentity)
 	}
 	return age.Decrypt(src, a.identities...)
 }

@@ -2,6 +2,7 @@ package backupagent
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,7 +103,55 @@ func TestLoadIdentities_InlineDoesNotRelaxTheFileRule(t *testing.T) {
 	assert.Contains(t, err.Error(), "chmod 600")
 }
 
-func TestNewDrillJob_InlineIdentityDecrypts(t *testing.T) {
+// The bridge is the case that motivated the change: a Coolify deployment
+// with the identity inline must still be able to open an artifact. Built
+// through New, not by hand, so a regression that gates the bridge on the file
+// path alone cannot ship green.
+func TestNew_InlineIdentityOpensTheDownloadBridge(t *testing.T) {
+	store := newRecorderStore()
+	plain := []byte("PGDMP inline-identity dump body")
+	id := seedEncrypted(t, store, dumpKeyPrefix+"2026/09/10/foldex.dump.age", plain).(*age.X25519Identity)
+
+	agent, err := New(Config{AllowPlaintext: true, ArtifactToken: "t0ken", AgeIdentity: id.String()}, nil, store, nil, testLogger())
+	require.NoError(t, err)
+	require.Len(t, agent.identities, 1)
+
+	obj, err := store.OpenObject(t.Context(), dumpKeyPrefix+"2026/09/10/foldex.dump.age")
+	require.NoError(t, err)
+	defer obj.Close()
+	opened, err := agent.openPlaintext(dumpKeyPrefix+"2026/09/10/foldex.dump.age", obj)
+	require.NoError(t, err)
+	got, err := io.ReadAll(opened)
+	require.NoError(t, err)
+	assert.Equal(t, plain, got)
+
+	_, err = New(Config{AllowPlaintext: true, ArtifactToken: "t0ken", AgeIdentity: "nope"}, nil, store, nil, testLogger())
+	require.Error(t, err, "a bad inline identity fails the boot with the bridge on, exactly like a bad file")
+
+	noID, err := New(Config{AllowPlaintext: true, ArtifactToken: "t0ken"}, nil, store, nil, testLogger())
+	require.NoError(t, err)
+	_, err = noID.openPlaintext("x.dump.age", strings.NewReader(""))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "BACKUP_AGE_IDENTITY")
+}
+
+func TestIdentitySource_IsALabelNeverTheValue(t *testing.T) {
+	id := inlineIdentity(t)
+	assert.Equal(t, "inline", Config{AgeIdentity: id.String()}.IdentitySource())
+	assert.Equal(t, "file", Config{AgeIdentityFile: "/run/secrets/id"}.IdentitySource())
+	assert.Equal(t, "none", Config{}.IdentitySource())
+}
+
+func TestLoad_WhitespaceOnlyInlineIdentityIsUnset(t *testing.T) {
+	setBaseline(t)
+	t.Setenv("BACKUP_AGE_IDENTITY_FILE", "/run/secrets/backup-age-identity")
+	t.Setenv("BACKUP_AGE_IDENTITY", "   ")
+	cfg, err := Load()
+	require.NoError(t, err, "blank is unset, not a second source")
+	assert.Equal(t, "file", cfg.IdentitySource())
+}
+
+func TestNewDrillJob_InlineIdentityFailsFastLikeAFile(t *testing.T) {
 	id := inlineIdentity(t)
 	job, err := NewDrillJob(Config{PGUser: "user_foldex", AgeIdentity: id.String(), SpoolDir: t.TempDir()}, &fakeDrillRuns{}, newRecorderStore(), testLogger())
 	require.NoError(t, err)
@@ -113,14 +162,17 @@ func TestNewDrillJob_InlineIdentityDecrypts(t *testing.T) {
 }
 
 func TestCapability_EitherIdentitySourceEnablesTheDrill(t *testing.T) {
-	for name, cfg := range map[string]Config{
-		"file":   {AgeIdentityFile: "/run/secrets/id"},
-		"inline": {AgeIdentity: "AGE-SECRET-KEY-1..."},
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+	}{
+		{"file", Config{AgeIdentityFile: "/run/secrets/id"}},
+		{"inline", Config{AgeIdentity: "AGE-SECRET-KEY-1..."}},
 	} {
-		a := &Agent{cfg: cfg}
+		a := &Agent{cfg: tc.cfg}
 		ok, reason := a.capability("drill")
-		assert.True(t, ok, name)
-		assert.Empty(t, reason, name)
+		assert.True(t, ok, tc.name)
+		assert.Empty(t, reason, tc.name)
 	}
 	ok, reason := (&Agent{}).capability("drill")
 	assert.False(t, ok)

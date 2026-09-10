@@ -84,8 +84,8 @@ type Config struct {
 	// operator does not control arrives 0644, and the 0600 rule above refuses
 	// it — correctly. The two are exclusive; Load refuses both at once, since
 	// two sources for one key is the shape where the wrong one gets rotated.
-	// Load also scrubs the variable from the process environment after
-	// reading it, so pg_dump's inherited environment never carries it.
+	// configFromEnv scrubs the variable from the process environment the
+	// moment it is read, so pg_dump's inherited environment never carries it.
 	AgeIdentity string
 
 	// SpoolDir is where the dump ciphertext is staged before upload. Empty
@@ -132,15 +132,12 @@ func Load() (Config, error) {
 	if c.AgeIdentityFile != "" && c.AgeIdentity != "" {
 		return Config{}, errors.New("backupagent: BACKUP_AGE_IDENTITY_FILE and BACKUP_AGE_IDENTITY are both set — pick one; two sources for one key is how the wrong one gets rotated")
 	}
+	if c.DrillAt.Enabled() && len(c.AgeRecipients) > 0 && !c.HasAgeIdentity() {
+		return Config{}, errors.New("backupagent: BACKUP_DRILL_AT is set but neither BACKUP_AGE_IDENTITY_FILE nor BACKUP_AGE_IDENTITY is set — the drill cannot decrypt the dumps it must restore (mount the private age identity read-only, mode 0600, or pass it inline)")
+	}
 	if err := requireNonEmpty(c.requiredEnv()); err != nil {
 		return Config{}, err
 	}
-	// The inline identity is read exactly once, here. Unset afterwards so
-	// nothing that inherits os.Environ() — pg_dump does — carries the key
-	// that opens every backup. /proc/<pid>/environ still shows the initial
-	// environment to the same uid and root; this closes the child path, not
-	// that one, and the file form remains the tighter posture.
-	_ = os.Unsetenv("BACKUP_AGE_IDENTITY")
 	if c.RetentionMode != "agent" && c.RetentionMode != "bucket" {
 		return Config{}, fmt.Errorf("backupagent: BACKUP_RETENTION_MODE must be \"agent\" or \"bucket\", got %q — the mode is declared, never inferred from an AccessDenied", c.RetentionMode)
 	}
@@ -183,7 +180,7 @@ func configFromEnv() Config {
 		AllowPlaintext: envBool("BACKUP_ALLOW_PLAINTEXT", false),
 
 		AgeIdentityFile: strings.TrimSpace(os.Getenv("BACKUP_AGE_IDENTITY_FILE")),
-		AgeIdentity:     strings.TrimSpace(os.Getenv("BACKUP_AGE_IDENTITY")),
+		AgeIdentity:     readInlineIdentity(),
 
 		SpoolDir: os.Getenv("BACKUP_SPOOL_DIR"),
 
@@ -233,26 +230,40 @@ func (c Config) requiredEnv() []envGroup {
 			fields: []envField{{"BACKUP_AGE_RECIPIENTS", strings.Join(c.AgeRecipients, ",")}},
 			format: "backupagent: %s is empty: refusing to upload plaintext dumps (set it, or set BACKUP_ALLOW_PLAINTEXT=1 if the bucket itself encrypts)",
 		},
-		{
-			when:   c.DrillAt.Enabled() && len(c.AgeRecipients) > 0,
-			fields: []envField{{"BACKUP_AGE_IDENTITY_FILE or BACKUP_AGE_IDENTITY", c.ageIdentitySource()}},
-			format: "backupagent: BACKUP_DRILL_AT is set but neither %s is set — the drill cannot decrypt the dumps it must restore (mount the private age identity read-only, mode 0600, or pass it inline)",
-		},
 	}
+}
+
+// readInlineIdentity reads BACKUP_AGE_IDENTITY exactly once and unsets it in
+// the same breath, unconditionally: nothing that inherits os.Environ() —
+// pg_dump does — may carry the key that opens every backup, and a guarantee
+// that depended on which validation returned first would not be one.
+// /proc/<pid>/environ still shows the initial environment to the same uid and
+// root; this closes the child path, not that one, which is why the file form
+// remains the tighter posture.
+func readInlineIdentity() string {
+	raw := strings.TrimSpace(os.Getenv("BACKUP_AGE_IDENTITY"))
+	_ = os.Unsetenv("BACKUP_AGE_IDENTITY")
+	return raw
 }
 
 // HasAgeIdentity answers whether THIS process can decrypt at all — the
 // capability the drill and the download bridge are gated on. Either source
 // counts; which one is the operator's platform constraint, not a capability.
 func (c Config) HasAgeIdentity() bool {
-	return c.ageIdentitySource() != ""
+	return c.AgeIdentity != "" || c.AgeIdentityFile != ""
 }
 
-func (c Config) ageIdentitySource() string {
-	if c.AgeIdentity != "" {
-		return c.AgeIdentity
+// IdentitySource names where the identity came from, for the boot log —
+// "file", "inline" or "none". A label and never the value: it is the line an
+// operator reads to confirm a platform migration took.
+func (c Config) IdentitySource() string {
+	switch {
+	case c.AgeIdentity != "":
+		return "inline"
+	case c.AgeIdentityFile != "":
+		return "file"
 	}
-	return c.AgeIdentityFile
+	return "none"
 }
 
 func requireNonEmpty(groups []envGroup) error {

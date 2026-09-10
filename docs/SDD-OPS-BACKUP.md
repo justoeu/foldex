@@ -284,7 +284,7 @@ docker-in-docker, porque a imagem-base já traz o servidor:
    BYTES do bucket, não a memória que o pipeline tem deles. O `drill_of_run_id` é
    carimbado na própria linha do drill assim que a fonte é escolhida, para que até um
    drill que falha no meio registre QUAL dump estava validando.
-2. Download do S3 → decrypt com `BACKUP_AGE_IDENTITY_FILE` → spool. Isso valida os BYTES
+2. Download do S3 → decrypt com a identidade privada (arquivo ou inline, §8) → spool. Isso valida os BYTES
    ARMAZENADOS e o round-trip da cifragem num passo só — um drill do arquivo local
    provaria menos.
 3. Cluster efêmero como uid 999 (`postgres` da imagem; o servidor recusa root de qualquer
@@ -414,7 +414,7 @@ próximo boot o refaz.
 A env deixou de ser a única dona do QUANDO. A divisão de autoridade (INV-173):
 
 - **A env decide QUAIS jobs existem** — capacidade é credencial/identidade
-  (`BACKUP_S3_*`, `RUSTFS_*`, `BACKUP_AGE_IDENTITY_FILE`, `BACKUP_MIRROR_INTERVAL_MIN>0`),
+  (`BACKUP_S3_*`, `RUSTFS_*`, a identidade age por arquivo ou inline, `BACKUP_MIRROR_INTERVAL_MIN>0`),
   e uma linha de banco não conjura um segredo dentro do processo.
 - **O banco decide QUANDO os jobs existentes rodam** — tabela `backup_schedule`
   (migração 000042, uma linha por job, `config jsonb`), editada pela superfície admin

@@ -45,6 +45,7 @@ var wantRedacted = []string{
 	"secret", "secret_base32", "client_secret", "code_verifier", "state",
 	"authorization", "cookie", "set-cookie",
 	"sub", "email", "recipient", "api_key", "api_token", "temporary_password",
+	"age_identity",
 }
 
 func TestEverySensitiveKeyIsRedacted(t *testing.T) {

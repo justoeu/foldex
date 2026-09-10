@@ -78,9 +78,9 @@ func NewDrillJob(cfg Config, runs drillRuns, store Uploader, logger *slog.Logger
 		return queryRestoredCounts(ctx, socketDir, database, cfg.PGUser)
 	}
 	// The identity loads at construction, not first run: a bad or missing
-	// file is a configuration error and must fail the boot (keyfile posture —
-	// no autogenerate, no ephemeral fallback), not surface weeks later as the
-	// first failed drill.
+	// identity is a configuration error and must fail the boot (keyfile
+	// posture — no autogenerate, no ephemeral fallback), not surface weeks
+	// later as the first failed drill.
 	identities, err := loadIdentities(cfg)
 	if err != nil {
 		return nil, err
@@ -113,11 +113,15 @@ func loadIdentities(cfg Config) ([]age.Identity, error) {
 	switch {
 	case cfg.AgeIdentity != "":
 		return parseInlineIdentity(cfg.AgeIdentity)
-	case strings.TrimSpace(cfg.AgeIdentityFile) != "":
-		return loadAgeIdentities(cfg.AgeIdentityFile)
+	case cfg.AgeIdentityFile != "":
+		return loadIdentityFile(cfg.AgeIdentityFile)
 	}
 	return nil, nil
 }
+
+// errNoIdentity is the one message both decrypt sites share when an
+// encrypted artifact meets a process that holds no identity.
+const errNoIdentity = "no age identity is configured (BACKUP_AGE_IDENTITY_FILE or BACKUP_AGE_IDENTITY)"
 
 // parseInlineIdentity parses BACKUP_AGE_IDENTITY. The message never echoes
 // the value: the likely paste mistake here IS a private key, and this line
@@ -130,10 +134,10 @@ func parseInlineIdentity(raw string) ([]age.Identity, error) {
 	return identities, nil
 }
 
-// loadAgeIdentities reads the private age identity file for the drill. Error
-// messages never echo file content (encrypt.go precedent: the one value that
-// could land here is a private key, and this flows to container logs).
-func loadAgeIdentities(path string) ([]age.Identity, error) {
+// loadIdentityFile reads the private age identity file. Error messages never
+// echo file content (encrypt.go precedent: the one value that could land here
+// is a private key, and this flows to container logs).
+func loadIdentityFile(path string) ([]age.Identity, error) {
 	// Operator configuration, never request input — same gosec posture as
 	// keyfile.Read.
 	path = filepath.Clean(path)
@@ -352,7 +356,7 @@ func (j *DrillJob) decrypt(src *backupjobs.DumpRunRef, spoolPath, dumpPath strin
 		return spoolPath, nil
 	}
 	if len(j.identities) == 0 {
-		return "", fmt.Errorf("artifact %s is age-encrypted and no age identity is configured (BACKUP_AGE_IDENTITY_FILE or BACKUP_AGE_IDENTITY) — the drill cannot open it", src.Key)
+		return "", fmt.Errorf("artifact %s is age-encrypted and %s — the drill cannot open it", src.Key, errNoIdentity)
 	}
 	in, err := os.Open(spoolPath) // #nosec G304 -- path inside our own MkdirTemp
 	if err != nil {
