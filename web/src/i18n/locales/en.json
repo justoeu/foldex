@@ -1299,6 +1299,7 @@
     "perm_instance_transfer": "Hand the instance to someone else",
     "perm_instance_backup": "See instance backup status and trigger runs",
     "perm_instance_backup_schedule": "Change the backup job schedule",
+    "perm_instance_backup_download": "Download a backup artifact — a whole-instance dump, so owner-only",
     "permgroup_content": "Their own library",
     "permgroup_transfer": "Moving data in and out",
     "permgroup_people": "Administration of people",

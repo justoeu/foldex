@@ -1299,6 +1299,7 @@
     "perm_instance_transfer": "Entregar a instância a outra pessoa",
     "perm_instance_backup": "Ver o status do backup da instância e disparar execuções",
     "perm_instance_backup_schedule": "Alterar a agenda dos jobs de backup",
+    "perm_instance_backup_download": "Baixar um artefato de backup — é um dump da instância inteira, por isso só o owner",
     "permgroup_content": "A própria biblioteca",
     "permgroup_transfer": "Entrada e saída de dados",
     "permgroup_people": "Administração de pessoas",

@@ -1299,6 +1299,7 @@
     "perm_instance_transfer": "Entregar la instancia a otra persona",
     "perm_instance_backup": "Ver el estado del backup de la instancia y lanzar ejecuciones",
     "perm_instance_backup_schedule": "Cambiar la agenda de los trabajos de backup",
+    "perm_instance_backup_download": "Descargar un artefacto de backup — es un volcado de toda la instancia, por eso solo el owner",
     "permgroup_content": "Su propia biblioteca",
     "permgroup_transfer": "Entrada y salida de datos",
     "permgroup_people": "Administración de personas",
