@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"filippo.io/age"
+
+	"foldex/internal/pkg/logsafe"
 )
 
 /*
@@ -142,10 +144,15 @@ func (a *Agent) serveArtifact(w http.ResponseWriter, r *http.Request) {
 
 	obj, err := a.store.OpenObject(r.Context(), in.Key)
 	if err != nil {
-		// Not found and unreachable-bucket are one answer here on purpose: the
-		// caller is the backend, which cannot act on the difference, and the
-		// agent's own log carries the real reason for the operator.
-		a.logger.Warn("artifact open failed", "err", err)
+		/* Not found and unreachable-bucket are one answer here on purpose: the
+		   caller is the backend, which cannot act on the difference, and the
+		   agent's own log carries the real reason for the operator.
+
+		   Sanitized because that reason embeds `key`, which arrived over HTTP:
+		   an S3 error quotes the object it failed on, so the log line inherits
+		   whatever the caller sent. logsafe.String also truncates, which bounds
+		   how much attacker-chosen text one failed request can write. */
+		a.logger.Warn("artifact open failed", "err", logsafe.String(err.Error()))
 		http.Error(w, "artifact unavailable", http.StatusBadGateway)
 		return
 	}
@@ -153,7 +160,7 @@ func (a *Agent) serveArtifact(w http.ResponseWriter, r *http.Request) {
 
 	plain, err := a.openPlaintext(in.Key, obj)
 	if err != nil {
-		a.logger.Warn("artifact decrypt failed", "err", err)
+		a.logger.Warn("artifact decrypt failed", "err", logsafe.String(err.Error()))
 		http.Error(w, "artifact unavailable", http.StatusBadGateway)
 		return
 	}
@@ -169,7 +176,7 @@ func (a *Agent) serveArtifact(w http.ResponseWriter, r *http.Request) {
 		// The status is already written, so the only honest signal left is a
 		// truncated body — which age's chunk authentication makes undecryptable
 		// rather than silently short. Logging it is what tells the operator.
-		a.logger.Error("artifact stream failed", "err", err)
+		a.logger.Error("artifact stream failed", "err", logsafe.String(err.Error()))
 	}
 }
 
@@ -239,7 +246,7 @@ func (a *Agent) listArtifacts(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil && !errors.Is(err, errStopWalk) {
-		a.logger.Warn("artifact listing failed", "err", err)
+		a.logger.Warn("artifact listing failed", "err", logsafe.String(err.Error()))
 		http.Error(w, "listing unavailable", http.StatusBadGateway)
 		return
 	}
