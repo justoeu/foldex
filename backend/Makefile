@@ -10,7 +10,8 @@ ifneq (,$(wildcard $(ENV_FILE)))
 endif
 
 POSTGRES_USER     ?= foldex
-POSTGRES_PASSWORD ?= foldex
+# No fallback: make env generates a password for new installations.
+POSTGRES_PASSWORD ?=
 POSTGRES_DB       ?= foldex
 POSTGRES_PORT     ?= 5432
 POSTGRES_SSLMODE  ?= disable

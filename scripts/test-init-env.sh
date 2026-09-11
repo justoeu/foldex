@@ -29,6 +29,7 @@ RUSTFS_ROOT_ACCESS_KEY=rustfsadmin
 RUSTFS_ROOT_SECRET_KEY=rustfsadmin
 RUSTFS_ACCESS_KEY=foldex
 RUSTFS_SECRET_KEY=foldex-change-me
+POSTGRES_PASSWORD=
 UNCHANGED=value
 EOF
 
@@ -43,6 +44,9 @@ app_secret=$(awk -F= '$1 == "RUSTFS_SECRET_KEY" { print $2 }' "$TMP/.env")
 [[ "$root_secret" != "$app_secret" ]]
 [[ "$root_secret" != rustfsadmin ]]
 [[ "$app_secret" != foldex-change-me ]]
+pg_password=$(awk -F= '$1 == "POSTGRES_PASSWORD" { print $2 }' "$TMP/.env")
+[[ "$pg_password" =~ ^[a-f0-9]{64}$ ]]
+[[ "$pg_password" != "$app_secret" && "$pg_password" != "$root_secret" ]]
 grep -qx 'UNCHANGED=value' "$TMP/.env"
 mode=$(stat -c '%a' "$TMP/.env" 2>/dev/null || stat -f '%Lp' "$TMP/.env")
 [[ "$mode" == 600 ]]
@@ -51,5 +55,11 @@ cp "$TMP/.env" "$TMP/before"
 output=$(FOLDEX_ENV_FILE="$TMP/.env" FOLDEX_ENV_TEMPLATE="$TMP/template" bash "$INIT" 2>&1)
 [[ -z "$output" ]]
 cmp "$TMP/before" "$TMP/.env"
+
+for password in existing-custom-password foldex; do
+  printf 'POSTGRES_PASSWORD=%s\n' "$password" >"$TMP/existing.env"
+  FOLDEX_ENV_FILE="$TMP/existing.env" bash "$INIT"
+  grep -qx "POSTGRES_PASSWORD=$password" "$TMP/existing.env"
+done
 
 echo "init-env credential generation contract passed"

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"foldex/internal/pkg/netpolicy"
@@ -97,14 +98,13 @@ func checkRemoteAddr(strict bool, addr net.Addr, host string) error {
 	return nil
 }
 
-// Strict mode additionally blocks private and special-purpose ranges. The
-// default permits ordinary intranet targets while always denying metadata and
-// shared address space.
+// Intranet access requires an explicit opt-out; missing or malformed settings
+// must not expose services reachable only from the server's network.
 func strictFromEnv() bool {
-	switch os.Getenv("PREVIEW_STRICT_SSRF") {
-	case "1", "true", "TRUE", "yes":
-		return true
-	default:
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PREVIEW_STRICT_SSRF"))) {
+	case "0", "false", "no":
 		return false
+	default:
+		return true
 	}
 }

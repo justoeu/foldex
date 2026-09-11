@@ -117,7 +117,7 @@ Uma linha = uma regra. O **porquê**, a consequência observada e o detalhe est�
 - **A row belonging to another user is reported 404, never 403** → [INV-050](docs/INVARIANTS.md#inv-050) | guard: `TestCrossUser_GetOfAnotherUsersRowIsNotFound`
 - **Cross-tenant references are blocked by the DATABASE, not by handler discipline** → [INV-051](docs/INVARIANTS.md#inv-051)
 - **`note.body_html` is sanitized server-side on every write, no exceptions** → [INV-059](docs/INVARIANTS.md#inv-059)
-- **Cloud metadata ranges and RFC6598 shared address space (`100.64.0.0/10`) are always blocked** → [INV-079](docs/INVARIANTS.md#inv-079)
+- **Preview SSRF is strict by default; metadata and RFC6598 remain blocked after an explicit intranet opt-out** → [INV-079](docs/INVARIANTS.md#inv-079) | guard: `TestSafeTransportRequiresExplicitIntranetOptOut`
 - **SSRF dialer is checked twice** → [INV-080](docs/INVARIANTS.md#inv-080)
 - **Screenshot is a FALLBACK, never default** → [INV-083](docs/INVARIANTS.md#inv-083)
 - **Every screenshot capture gets a fresh Chromium BrowserContext and a per-capture strict local proxy** → [INV-084](docs/INVARIANTS.md#inv-084)

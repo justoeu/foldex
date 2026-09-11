@@ -88,7 +88,7 @@ func TestIsPublicURL_RejectsUnresolvableHost(t *testing.T) {
 }
 
 func TestIsPublicURL_RejectsRFC1918(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	for _, u := range []string{
 		"http://10.0.0.5/",
 		"http://192.168.1.10/",

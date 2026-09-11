@@ -21,6 +21,24 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail=0
 note() { echo "FAIL $*" >&2; fail=1; }
 
+migration_password() {
+  env -u POSTGRES_PASSWORD make -C "$ROOT/backend" --no-print-directory -s -f "$ROOT/backend/Makefile" -f - \
+    probe-postgres-password ENV_FILE=/dev/null DOCKER_HOST= COVER_PKGS= "$@" <<'MAKE'
+probe-postgres-password:
+	@printf '%s' '$(POSTGRES_PASSWORD)'
+MAKE
+}
+if ! migration_default=$(migration_password); then
+  note "could not evaluate the migration password default"
+elif [[ -n "$migration_default" ]]; then
+  note "the migration Makefile supplies a password fallback"
+fi
+if ! migration_explicit=$(migration_password POSTGRES_PASSWORD=fixture-migration-secret); then
+  note "could not evaluate the configured migration password"
+elif [[ "$migration_explicit" != fixture-migration-secret ]]; then
+  note "the migration Makefile does not preserve an explicitly configured password"
+fi
+
 # `|| true` on the capture, not decoration: under `set -e` a pipeline whose grep
 # matches nothing kills the assignment, so the script exited 1 printing NOTHING
 # — a silent failure inside the script whose whole job is to make one loud.

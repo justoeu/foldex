@@ -203,6 +203,7 @@ func (c Config) requiredEnv() []envGroup {
 		{
 			when: true,
 			fields: []envField{
+				{"POSTGRES_PASSWORD", c.PGPassword},
 				{"BACKUP_S3_ENDPOINT", c.S3Endpoint},
 				{"BACKUP_S3_BUCKET", c.S3Bucket},
 				{"BACKUP_S3_ACCESS_KEY", c.S3AccessKey},

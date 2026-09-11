@@ -41,7 +41,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestWorker_ProcessesEnqueuedJob(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	// Fake target page
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -150,7 +150,7 @@ func (m *memUploader) DeleteObject(_ context.Context, key string) error {
 }
 
 func TestWorker_ScreenshotFallback_ManualUploadWinsAfterCapture(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, `<html><head><title>plain</title></head></html>`)
@@ -227,7 +227,7 @@ func (s *refreshDuringCaptureScreenshotter) Capture(context.Context, string) ([]
 }
 
 func TestWorker_ScreenshotFallback_NewerRefreshWinsAndReruns(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, `<html><head><title>plain</title></head></html>`)
@@ -278,7 +278,7 @@ func TestWorker_ScreenshotFallback_NewerRefreshWinsAndReruns(t *testing.T) {
 // A loopback page may be fetched in permissive preview mode, but screenshot
 // egress remains strict and must skip it.
 func TestWorker_ScreenshotFallback_SkipsLoopbackTarget(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	// Page with NO og:image and no description.
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -341,7 +341,7 @@ func TestWorker_ScreenshotFallback_SuccessAndFailureConverge(t *testing.T) {
 		{name: "database update failure", dbUpdateErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("PREVIEW_STRICT_SSRF", "")
+			t.Setenv("PREVIEW_STRICT_SSRF", "0")
 			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "text/html")
 				_, _ = io.WriteString(w, `<html><head><title>plain</title></head></html>`)
@@ -423,7 +423,7 @@ func TestWorker_ScreenshotFallback_SuccessAndFailureConverge(t *testing.T) {
 // must short-circuit: NO HTML fetch, NO screenshot, and the "capturando…"
 // label disappears by flipping preview_status from pending to ok.
 func TestWorker_ShortCircuitsWhenImageAlreadyPresent(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	hits := 0
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits++
@@ -477,7 +477,7 @@ func TestWorker_ShortCircuitsWhenImageAlreadyPresent(t *testing.T) {
 }
 
 func TestWorker_MarksFailureOnUnreachable(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	pool := testdb.Shared(t)
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"foldex/internal/pkg/outboundhttp"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +19,7 @@ import (
 // using a local httptest server and the SSRF escape hatch.
 
 func TestFetcher_Fetch_Success(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, `<html><head>
@@ -37,7 +39,7 @@ func TestFetcher_Fetch_Success(t *testing.T) {
 }
 
 func TestFetcher_Fetch_SendsBrowserCompatibleUserAgent(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	var gotUA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotUA = r.Header.Get("User-Agent")
@@ -54,7 +56,7 @@ func TestFetcher_Fetch_SendsBrowserCompatibleUserAgent(t *testing.T) {
 }
 
 func TestFetcher_Fetch_HTTPError(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nope", http.StatusInternalServerError)
 	}))
@@ -70,18 +72,21 @@ func TestFetcher_Fetch_RejectsNonHTTP(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestFetcher_Fetch_BlocksLoopbackInStrictMode(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "1")
+func TestFetcher_Fetch_BlocksLoopbackByDefault(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
-	f := NewFetcher(time.Second)
-	_, err := f.Fetch(context.Background(), srv.URL)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ssrf")
+	for _, value := range []string{"", "invalid", "1"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("PREVIEW_STRICT_SSRF", value)
+			f := NewFetcher(time.Second)
+			_, err := f.Fetch(context.Background(), srv.URL)
+			require.ErrorIs(t, err, outboundhttp.ErrSSRF)
+		})
+	}
 }
 
 func TestFetcher_Fetch_BlocksIMDSEvenWhenPermissive(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(500 * time.Millisecond)
 	for _, target := range []string{
 		"http://169.254.169.254/latest/meta-data/",
@@ -95,7 +100,7 @@ func TestFetcher_Fetch_BlocksIMDSEvenWhenPermissive(t *testing.T) {
 }
 
 func TestFetcher_Fetch_BlocksRFC6598EvenWhenPermissive(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(500 * time.Millisecond)
 	for _, target := range []string{"http://100.64.0.1/", "http://100.127.255.255/"} {
 		_, err := f.Fetch(context.Background(), target)
@@ -105,7 +110,7 @@ func TestFetcher_Fetch_BlocksRFC6598EvenWhenPermissive(t *testing.T) {
 }
 
 func TestFetcher_Fetch_TooManyRedirects(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/loop", http.StatusFound)

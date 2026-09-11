@@ -426,9 +426,9 @@ Re-importing the same `bookmarks.html` produces `skipped` matches. When JSON exp
 New uploads and captures first write an operation-owned key. Manual upload atomically swaps the URL and returns the exact superseded value; captures CAS their exact URL into `link`. Only then may the caller remove deterministic legacy variants and the previously referenced local object. Publish failure, capture CAS loss, or a concurrent delete removes only the new operation-owned key. Pre-deploy files in RustFS are NOT backfilled and remain servable. `Uploader` requires `DeleteObject` for this cleanup.
 
 <a id="inv-079"></a>
-### INV-079 — Cloud metadata ranges and RFC6598 shared address space (`100.64.0.0/10`) are always blocked
+### INV-079 — Preview SSRF is strict by default; metadata and RFC6598 remain blocked after an intranet opt-out
 
-by the preview fetcher (no env opt-out). This includes EC2 IMDS, ECS credentials, EKS Pod Identity, Alibaba and Tencent metadata on their IPv4/IPv6 endpoints. `PREVIEW_STRICT_SSRF=1` *additionally* blocks the complete IANA special-purpose registries, including loopback, RFC1918, benchmarking/documentation/reserved space, link-local and IPv6 ULA. Default remains permissive for ordinary intranet addresses because intranet is foldex's primary use case (ADR-12). The shared policy lives in `internal/pkg/netpolicy`.
+Cloud metadata and RFC6598 shared address space (`100.64.0.0/10`) are always blocked by the preview fetcher (no env opt-out). This includes EC2 IMDS, ECS credentials, EKS Pod Identity, Alibaba and Tencent metadata on their IPv4/IPv6 endpoints. `PREVIEW_STRICT_SSRF` defaults to strict: missing, empty and invalid values block the complete IANA special-purpose registries, including loopback, RFC1918, benchmarking/documentation/reserved space, link-local and IPv6 ULA. Only an explicit `0`, `false` or `no` enables intranet access for trusted users (amends ADR-12). Screenshot and Web Push always remain strict. The shared policy lives in `internal/pkg/netpolicy`.
 
 <a id="inv-080"></a>
 ### INV-080 — SSRF dialer is checked twice.
@@ -542,7 +542,7 @@ Any future workflow service image must carry both a version and an immutable `sh
 <a id="inv-101"></a>
 ### INV-101 — Postgres credentials live in `POSTGRES_*` only — `DB_URL` is derived.
 
-`docker-compose.yml` + `backend/Makefile` build the DSN. Override `DB_URL` only for external DBs (TLS, schema). If you change `POSTGRES_USER`/`PASSWORD` in `.env`, **delete any `DB_URL=` line**. `POSTGRES_HOST` accepts `db`/`localhost`/`host.docker.internal`/external — backend container's `extra_hosts` aliases `localhost` + `host.docker.internal` to host gateway.
+`docker-compose.yml` + `backend/Makefile` build the DSN. No Compose or migration path supplies a default password. The bundled Postgres refuses fresh initialization without `POSTGRES_PASSWORD`, and the backup agent validates it at boot. `make up`/`make db-up` generate credentials through their `env` prerequisite. Existing explicitly configured passwords are preserved; rotating one requires changing the database role and all client settings together, never just rewriting `.env`. Override `DB_URL` only for external DBs (TLS, schema). If you change `POSTGRES_USER`/`PASSWORD` in `.env`, **delete any `DB_URL=` line**. `POSTGRES_HOST` accepts `db`/`localhost`/`host.docker.internal`/external — backend container's `extra_hosts` aliases `localhost` + `host.docker.internal` to host gateway.
 
 <a id="inv-102"></a>
 ### INV-102 — Backup is a complete DB + RustFS snapshot ZIP

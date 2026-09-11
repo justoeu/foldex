@@ -42,7 +42,7 @@ func (s *stubRenderer) ExtractMetadata(context.Context, string) (Result, error) 
 }
 
 func TestFetchThenRender_HTTPTitleWinsWithoutRenderer(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, `<html><head><title>From HTTP</title></head></html>`)
@@ -57,7 +57,7 @@ func TestFetchThenRender_HTTPTitleWinsWithoutRenderer(t *testing.T) {
 }
 
 func TestFetchThenRender_RendererFillsAfterHTTPBlock(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "bot wall", http.StatusForbidden)
 	}))
@@ -72,7 +72,7 @@ func TestFetchThenRender_RendererFillsAfterHTTPBlock(t *testing.T) {
 }
 
 func TestFetchThenRender_BothFailReturnsHTTPError(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "nope", http.StatusForbidden)
 	}))
@@ -85,7 +85,7 @@ func TestFetchThenRender_BothFailReturnsHTTPError(t *testing.T) {
 }
 
 func TestFetchThenRender_EmptyHTTPTitleUsesRenderer(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, `<html><head><meta name="description" content="from http"></head></html>`)
@@ -101,7 +101,7 @@ func TestFetchThenRender_EmptyHTTPTitleUsesRenderer(t *testing.T) {
 }
 
 func TestFetchThenRender_ChallengeTitleUsesRenderer(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, `<html><head><title>Just a moment...</title></head></html>`)
@@ -125,7 +125,7 @@ func TestFetchThenRender_SSRFDoesNotLaunchRenderer(t *testing.T) {
 }
 
 func TestFetchThenRender_Origin500DoesNotLaunchRenderer(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
@@ -138,7 +138,7 @@ func TestFetchThenRender_Origin500DoesNotLaunchRenderer(t *testing.T) {
 }
 
 func TestFetchThenRender_HTTPBudgetLeavesRoomForRenderer(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	started := time.Now()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {

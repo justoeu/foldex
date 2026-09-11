@@ -13,40 +13,76 @@
 # Reading the compose file cannot answer this. The image decides, and it decides
 # at runtime, so the test boots the REAL file.
 #
-# The overlay below changes identity only — container name, project, host port —
+# The overlay below changes identity only — container name, volume, network —
 # never the image, the mount or the healthcheck, which are the things under
 # test. Without it the probe would collide with an operator's own `foldex-db`.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="foldexdbprobe$$"
+PROBE_PASSWORD="probe-only-secret"
 OVERLAY="$(mktemp -t foldex-db-probe.XXXXXX.yml)"
+ENV_FIXTURE="$(mktemp -t foldex-db-env.XXXXXX)"
 
 cat >"$OVERLAY" <<YML
 services:
   db:
     container_name: ${PROJECT}
     restart: "no"
+volumes:
+  pgdata:
+    name: ${PROJECT}_pgdata
+networks:
+  foldex:
+    name: ${PROJECT}_network
+    external: false
 YML
 
+compose() {
+  env -u POSTGRES_PASSWORD -u POSTGRES_USER -u POSTGRES_DB \
+    docker compose --env-file "$ENV_FIXTURE" -p "$PROJECT" \
+    -f "$ROOT/docker-compose.db.yml" -f "$OVERLAY" "$@"
+}
+
 cleanup() {
-  docker compose -p "$PROJECT" -f "$ROOT/docker-compose.db.yml" -f "$OVERLAY" \
-    down -v --remove-orphans >/dev/null 2>&1 || true
-  rm -f "$OVERLAY"
+  compose down -v --remove-orphans >/dev/null 2>&1 || true
+  rm -f "$OVERLAY" "$ENV_FIXTURE"
 }
 trap cleanup EXIT
 
-# The compose file declares `foldex` as external; creating it is idempotent and
-# is what `make network` does anyway.
-docker network inspect foldex >/dev/null 2>&1 || docker network create foldex >/dev/null
+if ! compose up -d >/dev/null 2>&1; then
+  echo "FAIL compose could not create the database container for the missing-password check" >&2
+  exit 1
+fi
+refused=0
+for i in $(seq 1 20); do
+  state=$(docker inspect "$PROJECT" --format '{{.State.Status}}')
+  if [[ "$state" == "exited" ]]; then
+    if ! docker logs "$PROJECT" 2>&1 | grep 'superuser password is not specified' >/dev/null; then
+      echo "FAIL Postgres exited for a reason other than the missing password:" >&2
+      docker logs "$PROJECT" >&2
+      exit 1
+    fi
+    refused=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$refused" != 1 ]]; then
+  echo "FAIL Postgres did not refuse the missing password" >&2
+  exit 1
+fi
+echo "the bundled Postgres refuses a missing password"
+printf 'POSTGRES_PASSWORD=%s\n' "$PROBE_PASSWORD" >"$ENV_FIXTURE"
 
-if ! docker compose -p "$PROJECT" -f "$ROOT/docker-compose.db.yml" -f "$OVERLAY" up -d >/dev/null 2>&1; then
+if ! compose up -d >/dev/null 2>&1; then
   echo "FAIL compose could not even create the database container" >&2
   exit 1
 fi
 
 for i in $(seq 1 45); do
-  if docker exec "$PROJECT" pg_isready -U foldex -d foldex >/dev/null 2>&1; then
+  if docker exec -e "PGPASSWORD=$PROBE_PASSWORD" "$PROJECT" \
+    psql -h 127.0.0.1 -U foldex -d foldex -Atc 'SELECT 1' >/dev/null 2>&1; then
     echo "the bundled Postgres accepts connections (${i} tries)"
     exit 0
   fi

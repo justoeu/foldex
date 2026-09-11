@@ -542,9 +542,9 @@ func (c Config) InsecureDBPasswordWarning() string {
 		return ""
 	}
 	return "DB_URL uses the DEFAULT Postgres password '" + defaultPostgresPassword + "' — any process " +
-		"on the docker network can read and write the whole database. Run `make env` to generate one, " +
-		"then set the same value on the existing volume (ALTER USER " +
-		"foldex WITH PASSWORD '…') before restarting, or re-create the volume for a fresh install"
+		"on the docker network can read and write the whole database. Choose a new password, " +
+		"rotate the existing PostgreSQL role, and update POSTGRES_PASSWORD and any DB_URL override " +
+		"to match before restarting. make env preserves already configured passwords."
 }
 
 // validateMailTransport refuses the three ways the broker wiring fails quietly.
