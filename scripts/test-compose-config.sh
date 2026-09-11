@@ -7,11 +7,9 @@
 # which walks straight past a duplicate YAML key; CI stayed green while
 # `make up` was broken for every operator.
 #
-# --no-interpolate keeps this a pure parse check: duplicate-key detection
-# happens in the YAML parser, BEFORE interpolation, while interpolation is
-# exactly what cannot run here — docker-compose.services.yml carries
-# ${RUSTFS_ROOT_SECRET_KEY:?} gates that must keep failing for real users
-# without an .env (INV-099) and must not fail this guard on a bare runner.
+# --no-interpolate covers syntax without invoking production credential gates.
+# A separate render check supplies fixture secrets and an empty env file to
+# verify security defaults without reading the operator's configuration.
 #
 # The loop globs docker-compose*.yml so a sixth file is born covered.
 set -euo pipefail
@@ -39,6 +37,37 @@ YAML
 }
 
 self_test
+
+python3 - "$ROOT" <<'PY'
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from urllib.parse import urlsplit
+
+root = Path(sys.argv[1])
+base = dict(os.environ)
+for key in ('POSTGRES_PASSWORD', 'DB_URL', 'PREVIEW_STRICT_SSRF'):
+    base.pop(key, None)
+base.update(RUSTFS_ROOT_SECRET_KEY='fixture-root-secret', RUSTFS_SECRET_KEY='fixture-app-secret')
+for password in (None, '', 'fixture-custom-secret'):
+    env = dict(base)
+    if password is not None:
+        env['POSTGRES_PASSWORD'] = password
+    for name in ('docker-compose.db.yml', 'docker-compose.services.yml', 'docker-compose.yml'):
+        rendered = subprocess.check_output(
+            ['docker', 'compose', '--env-file', '/dev/null', '-f', str(root / name),
+             '--profile', 'backup', 'config', '--format', 'json'], env=env, text=True)
+        services = json.loads(rendered)['services']
+        if 'db' in services:
+            assert services['db']['environment']['POSTGRES_PASSWORD'] == (password or ''), name
+        if 'backend' in services:
+            assert urlsplit(services['backend']['environment']['DB_URL']).password == (password or ''), name
+            assert services['backup']['environment']['POSTGRES_PASSWORD'] == (password or ''), name
+            assert services['backend']['environment']['PREVIEW_STRICT_SSRF'] == '1', name
+print('ok: no known Postgres fallback, optional services parse, SSRF is strict by default')
+PY
 
 fail=0
 for f in "$ROOT"/docker-compose*.yml; do

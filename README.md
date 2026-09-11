@@ -25,7 +25,9 @@ make seed            # optional sample data
 open https://localhost:9444
 ```
 
-`make env` writes gitignored RustFS secrets into `.env` (mode `0600`) and never prints them. First visit is the **setup** screen (create the admin); after that, **sign in**.
+`make up` and `make db-up` run `make env` automatically, generating Postgres and RustFS credentials in gitignored `.env` (mode `0600`) without printing them. Direct Compose calls must supply `POSTGRES_PASSWORD`: there is no known-password fallback. Existing volumes retain their password; rotate it in Postgres and update client settings together. Preview fetches block private/loopback addresses by default. Set `PREVIEW_STRICT_SSRF=0` only when trusted users need intranet previews; screenshots and Web Push remain public-only. First visit is the **setup** screen (create the admin); after that, **sign in**.
+
+**Upgrading an existing volume:** before updating, make sure `.env` explicitly contains the password that Postgres currently accepts. Older installs may have no `POSTGRES_PASSWORD` line and rely on the removed `foldex` fallback. For such a volume, temporarily setting `POSTGRES_PASSWORD=foldex` preserves access; rotate the database role and all clients to a new secret as soon as possible. Do not leave that line empty, generate a replacement, or delete the volume expecting the existing database password to change. If you use intranet previews, explicitly set `PREVIEW_STRICT_SSRF=0` before upgrading. These configuration changes require a **major release** when published.
 
 HTTPS on `:9444` uses mkcert locally — see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (ports & TLS). Pin a release with `FOLDEX_VERSION` in `.env`. Source build: `make up-build`.
 

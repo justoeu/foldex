@@ -30,7 +30,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     # Only the EMPTY value is generated: an .env that already carries a
     # password belongs to an existing volume whose Postgres was initialized
     # with it, and rewriting it here would break the next boot. The backend
-    # warns at boot when the value is still the known default.
+    # warns for legacy volumes explicitly configured with the old password.
     POSTGRES_PASSWORD=)
       printf 'POSTGRES_PASSWORD=%s\n' "$pg_password"
       ;;

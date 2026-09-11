@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func TestNewSafeTransportSetsBoundedTimeouts(t *testing.T) {
 }
 
 func TestNewPublicTransportAlwaysBlocksPrivateAddresses(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	client := &http.Client{Transport: NewPublicTransport(time.Second)}
 
 	_, err := client.Get("http://127.0.0.1:1")
@@ -94,14 +95,39 @@ func TestSafeDialerBlocksResolvedTargetsBeforeDial(t *testing.T) {
 }
 
 func TestStrictFromEnv(t *testing.T) {
-	for _, value := range []string{"1", "true", "TRUE", "yes"} {
+	for _, value := range []string{"", "1", "true", "TRUE", "yes", "typo", "off", "2"} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("PREVIEW_STRICT_SSRF", value)
 			assert.True(t, strictFromEnv())
 		})
 	}
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
-	assert.False(t, strictFromEnv())
-	t.Setenv("PREVIEW_STRICT_SSRF", "0")
-	assert.False(t, strictFromEnv())
+	for _, value := range []string{"0", "false", "FALSE", "no", " 0 "} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("PREVIEW_STRICT_SSRF", value)
+			assert.False(t, strictFromEnv())
+		})
+	}
+}
+
+func TestSafeTransportRequiresExplicitIntranetOptOut(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	for _, value := range []string{"", "invalid", "1", "0"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("PREVIEW_STRICT_SSRF", value)
+			transport := NewSafeTransport(time.Second)
+			defer transport.CloseIdleConnections()
+			client := &http.Client{Transport: transport}
+			response, err := client.Get(server.URL)
+			if value != "0" {
+				require.ErrorIs(t, err, ErrSSRF)
+				return
+			}
+			require.NoError(t, err)
+			defer response.Body.Close()
+			assert.Equal(t, http.StatusNoContent, response.StatusCode)
+		})
+	}
 }

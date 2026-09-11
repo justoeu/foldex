@@ -66,7 +66,7 @@ func TestFetcher_FetchOEmbed_HappyPath(t *testing.T) {
 	defer srv.Close()
 
 	// Need strict SSRF off for the httptest loopback server.
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(5 * time.Second)
 	r, err := f.fetchOEmbed(context.Background(), srv.URL+"/oembed")
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func TestFetcher_FetchOEmbed_NonJSONIsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(5 * time.Second)
 	_, err := f.fetchOEmbed(context.Background(), srv.URL)
 	require.Error(t, err)
@@ -95,7 +95,7 @@ func TestFetcher_FetchOEmbed_5xxIsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(5 * time.Second)
 	_, err := f.fetchOEmbed(context.Background(), srv.URL)
 	require.Error(t, err)
@@ -155,7 +155,7 @@ func TestFetcher_Fetch_HardcodedShortCircuit_NeverHitsHTML(t *testing.T) {
 	knownOEmbedProviders[fakeHost] = srv.URL + "?url=%s"
 	defer delete(knownOEmbedProviders, fakeHost)
 
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(5 * time.Second)
 
 	// The page URL itself doesn't have to be reachable — the shortcut
@@ -189,7 +189,7 @@ func TestFetcher_Fetch_DiscoveryEnrichmentFillsGaps(t *testing.T) {
 	}))
 	defer page.Close()
 
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(5 * time.Second)
 
 	r, err := f.Fetch(context.Background(), page.URL+"/article")
@@ -205,7 +205,7 @@ func TestFetcher_FetchOEmbed_RejectsNonHTTPScheme(t *testing.T) {
 	// from arbitrary remote HTML can advertise file:///, gopher://,
 	// unix:// etc. Those bypass the IP-level SSRF dialer because they
 	// never hit a real socket dial. fetchOEmbed must refuse at the edge.
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(5 * time.Second)
 	cases := []string{
 		"file:///etc/passwd",
@@ -243,7 +243,7 @@ func TestFetcher_Fetch_HardcodedShortCircuit_FallsThroughOnEmptyTitle(t *testing
 	knownOEmbedProviders[pageURL.Host] = oe.URL + "?url=%s"
 	defer delete(knownOEmbedProviders, pageURL.Host)
 
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(5 * time.Second)
 	r, err := f.Fetch(context.Background(), page.URL+"/page")
 	require.NoError(t, err)
@@ -270,7 +270,7 @@ func TestFetcher_Fetch_HardcodedShortCircuit_FallsThroughOnError(t *testing.T) {
 	knownOEmbedProviders[pageURL.Host] = oe.URL + "?url=%s"
 	defer delete(knownOEmbedProviders, pageURL.Host)
 
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(5 * time.Second)
 	r, err := f.Fetch(context.Background(), page.URL+"/page")
 	require.NoError(t, err)
@@ -311,7 +311,7 @@ func TestFetcher_Fetch_DiscoveryURL_ResolvedAgainstPageBase(t *testing.T) {
 	}))
 	defer page.Close()
 
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(5 * time.Second)
 	r, err := f.Fetch(context.Background(), page.URL+"/article")
 	require.NoError(t, err)
@@ -333,7 +333,7 @@ func TestFetcher_FetchOEmbed_BodyCapTruncatesGracefully(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(5 * time.Second)
 	_, err := f.fetchOEmbed(context.Background(), srv.URL)
 	// JSON parse will error because the body is truncated mid-string.
@@ -359,7 +359,7 @@ func TestFetcher_Fetch_DiscoveryEnrichment_HTMLImageWinsOverOEmbed(t *testing.T)
 	}))
 	defer page.Close()
 
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(5 * time.Second)
 	r, err := f.Fetch(context.Background(), page.URL+"/article")
 	require.NoError(t, err)
@@ -392,7 +392,7 @@ func TestFetcher_Fetch_DiscoverySkippedWhenAllFieldsFilled(t *testing.T) {
 	}))
 	defer page.Close()
 
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	f := NewFetcher(5 * time.Second)
 
 	r, err := f.Fetch(context.Background(), page.URL+"/")

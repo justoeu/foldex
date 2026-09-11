@@ -10,6 +10,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestLoadRequiresPostgresPassword(t *testing.T) {
+	for _, tt := range []struct{ name, password string }{
+		{"empty", ""}, {"whitespace", "   "},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			setBaseline(t)
+			t.Setenv("POSTGRES_PASSWORD", tt.password)
+			_, err := Load()
+			require.ErrorContains(t, err, "POSTGRES_PASSWORD is required")
+		})
+	}
+}
+
 // setBaseline gives Load the minimum it accepts, so each test flips exactly
 // the knob under scrutiny.
 func setBaseline(t *testing.T) {

@@ -205,7 +205,7 @@ func TestWithScreenshotFallback_NilArgsIsNoop(t *testing.T) {
 }
 
 func TestProcess_GetPreviewErrorAfterPendingWriteReleasesStatus(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, `<html><head><title>plain</title></head></html>`)
@@ -243,7 +243,7 @@ func TestMaybeScreenshot_DoesNothingWhenFallbackDisabled(t *testing.T) {
 }
 
 func TestWorker_ScreenshotFallbackPersistsOptimizedPublicCapture(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, `<html><head><title>plain</title></head></html>`)
@@ -303,7 +303,7 @@ func TestWorker_ScreenshotFallbackPersistsOptimizedPublicCapture(t *testing.T) {
 }
 
 func TestWorker_ScreenshotFallbackRejectsDecodeBombWithoutPublication(t *testing.T) {
-	t.Setenv("PREVIEW_STRICT_SSRF", "")
+	t.Setenv("PREVIEW_STRICT_SSRF", "0")
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, `<html><head><title>plain</title></head></html>`)
