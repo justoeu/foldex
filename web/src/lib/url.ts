@@ -61,6 +61,11 @@ export function looksLikeUrl(raw: string): boolean {
 // Protocol-relative `//host/path` is rejected deliberately — the caller
 // can pick a scheme. Everything else (data:, file:, javascript:, vbscript:,
 // bare hostnames) is rejected.
+//
+// Absolute `http://` is rewritten to `https://` before it reaches `<img>`.
+// The SPA is served over HTTPS and nginx CSP `img-src` allows `https:` but
+// not `http:`; leaving the scheme as stored would log a mixed-content
+// warning even when Chrome auto-upgrades the request.
 export function safeImageUrl(raw: string | null | undefined): string | undefined {
   if (!raw) return undefined
   const trimmed = raw.trim()
@@ -74,6 +79,9 @@ export function safeImageUrl(raw: string | null | undefined): string | undefined
       // `https:javascript:…` chimeras parse in some engines as https.
       // Requiring `//` after the scheme is the extra gate.
       if (!/^https?:\/\//i.test(trimmed)) return undefined
+      if (parsed.protocol === 'http:') {
+        return 'https://' + trimmed.slice(trimmed.indexOf('://') + 3)
+      }
       return trimmed
     }
     // Object URLs from createObjectURL. Empty `blob:` is parseable but

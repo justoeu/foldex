@@ -66,6 +66,27 @@ func TestResolveRelatives(t *testing.T) {
 	assert.Equal(t, "https://example.com/path/img/og.jpg", got.OGImageURL)
 }
 
+func TestResolveRelatives_HTTPImageIsStoredAsHTTPS(t *testing.T) {
+	base, err := url.Parse("https://foldex.example/")
+	require.NoError(t, err)
+	got := resolveRelatives(Result{
+		OGImageURL: "http://www.dropitbrand.com/cdn/shop/files/seo-image.png?v=1749688874",
+		FaviconURL: "http://cdn.example/favicon.ico",
+		OEmbedURL:  "http://cdn.example/oembed",
+	}, base)
+	assert.Equal(t, "https://www.dropitbrand.com/cdn/shop/files/seo-image.png?v=1749688874", got.OGImageURL)
+	assert.Equal(t, "https://cdn.example/favicon.ico", got.FaviconURL)
+	assert.Equal(t, "http://cdn.example/oembed", got.OEmbedURL,
+		"oEmbed is fetched server-side; mixed-content rewrite does not apply")
+}
+
+func TestResolveRelatives_RelativeAgainstHTTPBaseBecomesHTTPS(t *testing.T) {
+	base, err := url.Parse("http://example.com/path/page.html")
+	require.NoError(t, err)
+	got := resolveRelatives(Result{OGImageURL: "/cover.png"}, base)
+	assert.Equal(t, "https://example.com/cover.png", got.OGImageURL)
+}
+
 func TestResolveOne(t *testing.T) {
 	base, _ := url.Parse("https://example.com/a/b")
 	assert.Equal(t, "", resolveOne("", base))

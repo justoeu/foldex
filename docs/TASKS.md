@@ -1188,3 +1188,14 @@ configuração; a regra tem que valer sozinha*.
 - **Follow-up de deploy.** Trocar o serviço `backup` da produção para a inline, remover o
   wrapper de entrypoint e o file storage do Coolify, e confirmar um drill verde depois.
 
+### Log de conclusão — Mixed content + meta PWA (foldex.justoeu.cloud)
+
+- **`<img src>` de `og:image` em `http://` logava mixed content na SPA HTTPS.** Chrome
+  auto-upgradeia o pedido (e o CSP `img-src` só permite `https:`), mas o atributo
+  continuava `http://` — o aviso saía em todo card, p.ex. `dropitbrand.com`. `safeImageUrl`
+  reescreve `http://` → `https://` no render; o preview worker grava a mesma forma para
+  previews novos. oEmbed (fetch no servidor) não é reescrito.
+- **`apple-mobile-web-app-capable` está deprecado no Chrome.** O manifesto continua
+  `display: standalone`; o HTML agora declara também `mobile-web-app-capable`. O prefixo
+  `apple-` fica porque o Safari ainda não honra todos os campos do manifest.
+
