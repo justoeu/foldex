@@ -290,14 +290,31 @@ func isVoid(name string) bool {
 }
 
 func resolveRelatives(r Result, base *url.URL) Result {
-	r.FaviconURL = resolveOne(r.FaviconURL, base)
-	r.OGImageURL = resolveOne(r.OGImageURL, base)
+	r.FaviconURL = preferHTTPS(resolveOne(r.FaviconURL, base))
+	r.OGImageURL = preferHTTPS(resolveOne(r.OGImageURL, base))
 	// Pages whose oEmbed discovery link is host-relative (`/oembed?url=…`)
 	// or path-relative (`oembed?url=…`) — WordPress, SoundCloud, Flickr —
 	// would otherwise fail the second fetch with an `invalid url` error
-	// inside http.NewRequest.
+	// inside http.NewRequest. oEmbed is fetched server-side, so mixed
+	// content does not apply and the declared scheme is left alone.
 	r.OEmbedURL = resolveOne(r.OEmbedURL, base)
 	return r
+}
+
+// preferHTTPS rewrites an absolute http URL to https. Stored og:image /
+// favicon URLs are rendered by the HTTPS SPA; leaving http:// in the row
+// is a mixed-content warning on every card, and nginx CSP img-src does
+// not allow http: in the first place.
+func preferHTTPS(s string) string {
+	if s == "" {
+		return ""
+	}
+	u, err := url.Parse(s)
+	if err != nil || !strings.EqualFold(u.Scheme, "http") {
+		return s
+	}
+	u.Scheme = "https"
+	return u.String()
 }
 
 func resolveOne(href string, base *url.URL) string {

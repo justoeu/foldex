@@ -44,7 +44,9 @@ describe('looksLikeUrl', () => {
 describe('safeImageUrl', () => {
   it.each([
     ['https://example.com/icon.png', 'https://example.com/icon.png'],
-    ['http://example.com/x.jpg', 'http://example.com/x.jpg'],
+    ['http://example.com/x.jpg', 'https://example.com/x.jpg'],
+    ['http://www.dropitbrand.com/cdn/shop/files/seo-image.png?v=1749688874', 'https://www.dropitbrand.com/cdn/shop/files/seo-image.png?v=1749688874'],
+    ['HTTP://CDN.EXAMPLE/X.PNG', 'https://CDN.EXAMPLE/X.PNG'],
     ['HTTPS://EXAMPLE.COM/X', 'HTTPS://EXAMPLE.COM/X'], // case-insensitive scheme
     ['/static/icon.png', '/static/icon.png'],           // site-relative
     ['  https://example.com  ', 'https://example.com'], // trim
