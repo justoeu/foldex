@@ -92,6 +92,8 @@ const GUARDED = [
   'fx-bkp-run-download',
   'fx-bkp-time-remove',
   'fx-abuse-reset',
+  'fx-chip-face',
+  'fx-chip-close',
 ]
 
 const css = FILES.map((f) => readFileSync(join(STYLES, f), 'utf8')).join('\n').replace(

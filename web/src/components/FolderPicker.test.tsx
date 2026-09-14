@@ -26,7 +26,10 @@ describe('FolderPicker', () => {
   it('opens and lists folders including locked ones', async () => {
     renderWithProviders(<FolderPicker selected={null} onChange={vi.fn()} />)
     await waitFor(() => expect(inputEl()).toBeInTheDocument())
+    expect(inputEl()).toHaveAttribute('role', 'combobox')
+    expect(inputEl()).toHaveAttribute('aria-expanded', 'false')
     await userEvent.setup().click(inputEl())
+    expect(inputEl()).toHaveAttribute('aria-expanded', 'true')
     await waitFor(() => expect(screen.getByText('Work')).toBeInTheDocument())
     expect(screen.getByText('Secret')).toBeInTheDocument()
     expect(document.querySelector('.fx-folder-lock-icon')).toBeTruthy()

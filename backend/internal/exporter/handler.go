@@ -86,7 +86,7 @@ func (h *Handler) admit(w http.ResponseWriter) (func(), bool) {
 	default:
 		w.Header().Set("Retry-After", "1")
 		httperr.Write(w, httperr.New(http.StatusTooManyRequests, "export_busy", "another export is already in progress"))
-		return func() {}, false
+		return func() { /* no export slot held */ }, false
 	}
 }
 

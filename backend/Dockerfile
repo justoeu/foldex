@@ -76,7 +76,6 @@ COPY --from=build /out/foldex-mailer /foldex-mailer
 COPY db/migrations /migrations
 EXPOSE 9089
 # Run as non-root so Chromium can keep its process sandbox enabled.
-RUN addgroup -S foldex && adduser -S foldex -G foldex
 # /data holds operator-persisted state: the autogen VAPID keypair lands at
 # /data/vapid.json (config.VAPID_STATE_PATH default). Docker named volumes
 # inherit ownership of the underlying directory on first mount, so creating
@@ -87,6 +86,9 @@ RUN addgroup -S foldex && adduser -S foldex -G foldex
 # 0700 is intentional — the only resident is the VAPID private key
 # (push.LoadOrGenerate writes 0600 vapid.json here). If a future feature
 # adds a world-readable file, widen the dir then.
-RUN mkdir -p /data && chown foldex:foldex /data && chmod 0700 /data
+# User creation and /data ownership stay in one RUN so the image does not
+# keep an intermediate layer that still has the directory as root.
+RUN addgroup -S foldex && adduser -S foldex -G foldex \
+ && mkdir -p /data && chown foldex:foldex /data && chmod 0700 /data
 USER foldex:foldex
 ENTRYPOINT ["/foldex"]

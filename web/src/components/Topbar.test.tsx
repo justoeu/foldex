@@ -81,7 +81,7 @@ describe('Topbar', () => {
     const onOpenPalette = vi.fn()
     const setQ = vi.fn()
     renderWithProviders(<Topbar {...base} onOpenPalette={onOpenPalette} setQ={setQ} q="hi" />)
-    fireEvent.click(document.querySelector('.fx-search')!)
+    fireEvent.click(screen.getByLabelText(/^search$/i))
     expect(onOpenPalette).toHaveBeenCalled()
     fireEvent.change(screen.getByLabelText(/^search$/i), { target: { value: 'abc' } })
     expect(setQ).toHaveBeenCalledWith('abc')

@@ -54,8 +54,9 @@ export function ImportPage({ onDone }: Props) {
               : t('import.format_hint_json')}
           </div>
 
-          <div
+          <label
             style={{
+              display: 'block',
               border: '1.5px dashed var(--fx-border)',
               borderRadius: 12,
               padding: 28,
@@ -69,7 +70,12 @@ export function ImportPage({ onDone }: Props) {
               const f = e.dataTransfer.files?.[0]
               if (f) setFile(f)
             }}
-            onClick={() => document.getElementById('foldex-file')?.click()}
+            onClick={(e) => {
+              const input = e.currentTarget.querySelector('input[type=file]') as HTMLInputElement | null
+              if (!input || e.target === input) return
+              e.preventDefault()
+              input.click()
+            }}
           >
             <Icon d={I.upload} size={28} />
             <div style={{ marginTop: 8, color: 'var(--fx-ink-3)' }}>
@@ -82,7 +88,7 @@ export function ImportPage({ onDone }: Props) {
               accept={format === 'netscape' ? '.html,.htm' : '.json'}
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
-          </div>
+          </label>
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button

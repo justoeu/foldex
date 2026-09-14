@@ -157,12 +157,13 @@ export function Topbar({
         </button>
       </nav>
 
-      <div className="fx-search" onClick={onOpenPalette}>
+      <div className="fx-search">
         <Icon d={I.search} size={16} />
         <input
           placeholder={t('topbar.search_placeholder')}
           value={q}
           onChange={(e) => setQ(e.target.value)}
+          onClick={onOpenPalette}
           aria-label={t('common.search')}
         />
         <kbd className="fx-kbd">⌥K</kbd>

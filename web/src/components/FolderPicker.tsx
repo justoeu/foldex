@@ -27,6 +27,7 @@ export function FolderPicker(props: Props) {
         onClick={() => picker.setOpen(true)}
         onKeyDown={picker.onKeyDown}
         placeholder={picker.selectedFolder ? picker.selectedFolder.name : t('folder_picker.placeholder')}
+        role="combobox"
         aria-label={t('folder_picker.input_aria')}
         aria-autocomplete="list"
         aria-expanded={picker.open}

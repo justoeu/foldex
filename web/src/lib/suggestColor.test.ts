@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { suggestColor } from './suggestColor'
 import { INLINE_PALETTE } from './inlinePalette'
 
@@ -46,5 +46,12 @@ describe('suggesting a colour for a new folder or tag', () => {
   it('actually varies across calls', () => {
     const seen = new Set(Array.from({ length: 200 }, () => suggestColor([])))
     expect(seen.size).toBeGreaterThan(5)
+  })
+
+  it('draws from crypto.getRandomValues, not Math.random', () => {
+    const spy = vi.spyOn(crypto, 'getRandomValues')
+    suggestColor([])
+    expect(spy).toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

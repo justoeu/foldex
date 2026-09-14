@@ -52,4 +52,18 @@ describe('TagChip', () => {
     expect(onClose).toHaveBeenCalledOnce()
     expect(onClick).not.toHaveBeenCalled()
   })
+
+  it('fires onClose from Enter and Space on the close control, without bubbling to onClick', async () => {
+    const onClick = vi.fn()
+    const onClose = vi.fn()
+    render(<TagChip tag={solidTag} onClick={onClick} closable onClose={onClose} />)
+    const close = screen.getByRole('button', { name: /remove jira/i })
+    close.focus()
+    await userEvent.setup().keyboard('{Enter}')
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(onClick).not.toHaveBeenCalled()
+    await userEvent.setup().keyboard(' ')
+    expect(onClose).toHaveBeenCalledTimes(2)
+    expect(onClick).not.toHaveBeenCalled()
+  })
 })

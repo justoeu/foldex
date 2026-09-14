@@ -1,10 +1,15 @@
 import { INLINE_PALETTE } from './inlinePalette'
 import { primaryColor } from './tagColor'
 
-/** Injected so a test can pin the choice; production uses Math.random. */
+/** Injected so a test can pin the choice; production uses crypto.getRandomValues. */
 export type Pick = (upperExclusive: number) => number
 
-const defaultPick: Pick = (n) => Math.floor(Math.random() * n)
+const defaultPick: Pick = (n) => {
+  if (n <= 0) return 0
+  const buf = new Uint32Array(1)
+  crypto.getRandomValues(buf)
+  return Math.floor((buf[0] / 0x1_0000_0000) * n)
+}
 
 /**
  * Proposes a colour for a NEW folder or tag.
@@ -16,7 +21,7 @@ const defaultPick: Pick = (n) => Math.floor(Math.random() * n)
  *
  * It is not a blind draw. A colour already in use is skipped while any unused
  * one remains, because two chips of the same colour is exactly what makes a
- * palette useless — and a plain `Math.random()` over twenty entries collides
+ * palette useless — and a plain draw over twenty entries collides
  * about half the time by the seventh tag (birthday problem). Once every colour
  * is taken it falls back to the whole palette, which is the honest answer: at
  * that point no choice avoids a repeat.

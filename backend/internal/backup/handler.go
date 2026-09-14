@@ -248,13 +248,15 @@ func (h *Handler) admitArchive(w http.ResponseWriter) (func(), bool) {
 	default:
 		w.Header().Set("Retry-After", "1")
 		httperr.Write(w, httperr.New(http.StatusTooManyRequests, "backup_busy", "another backup archive operation is in progress"))
-		return func() {}, false
+		return unusedCleanup, false
 	}
 }
 
+func unusedCleanup() { /* no temp file or archive slot to release */ }
+
 func readZipFromRequest(w http.ResponseWriter, r *http.Request, createTemp func() (*os.File, error)) (*zip.Reader, func(), error) {
 	ct := r.Header.Get("Content-Type")
-	noop := func() {}
+	noop := unusedCleanup
 
 	// Hard cap on the entire request body, regardless of transport (raw zip
 	// or multipart). Applies to both branches below — multipart parts that
@@ -305,7 +307,7 @@ func streamToTempZip(src io.Reader) (*zip.Reader, func(), error) {
 func streamToTempZipWith(src io.Reader, createTemp func() (*os.File, error)) (*zip.Reader, func(), error) {
 	tmp, err := createTemp()
 	if err != nil {
-		return nil, func() {}, fmt.Errorf("create temp: %w", err)
+		return nil, unusedCleanup, fmt.Errorf("create temp: %w", err)
 	}
 	cleanup := func() {
 		_ = tmp.Close()
@@ -318,18 +320,18 @@ func streamToTempZipWith(src io.Reader, createTemp func() (*os.File, error)) (*z
 		// typed sentinel so the handler can return 413 instead of 500.
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
-			return nil, func() {}, ErrPayloadTooLarge
+			return nil, unusedCleanup, ErrPayloadTooLarge
 		}
-		return nil, func() {}, fmt.Errorf("copy upload to temp: %w", err)
+		return nil, unusedCleanup, fmt.Errorf("copy upload to temp: %w", err)
 	}
 	if n == 0 {
 		cleanup()
-		return nil, func() {}, fmt.Errorf("upload is empty")
+		return nil, unusedCleanup, fmt.Errorf("upload is empty")
 	}
 	zr, err := zip.NewReader(tmp, n)
 	if err != nil {
 		cleanup()
-		return nil, func() {}, fmt.Errorf("parse zip: %w", err)
+		return nil, unusedCleanup, fmt.Errorf("parse zip: %w", err)
 	}
 	return zr, cleanup, nil
 }

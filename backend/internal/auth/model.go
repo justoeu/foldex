@@ -63,14 +63,14 @@ type anonymousAuthResponse struct {
 	Features AuthFeatures `json:"features"`
 }
 
-func (anonymousAuthResponse) authWireResponse() {}
+func (anonymousAuthResponse) authWireResponse() { /* closed-set discriminator */ }
 
 type setupRequiredAuthResponse struct {
 	Status   authStatus   `json:"status"`
 	Features AuthFeatures `json:"features"`
 }
 
-func (setupRequiredAuthResponse) authWireResponse() {}
+func (setupRequiredAuthResponse) authWireResponse() { /* closed-set discriminator */ }
 
 type authenticatedAuthResponse struct {
 	Status        authStatus           `json:"status"`
@@ -81,7 +81,7 @@ type authenticatedAuthResponse struct {
 	RecoveryCodes []string             `json:"recovery_codes,omitempty"`
 }
 
-func (authenticatedAuthResponse) authWireResponse() {}
+func (authenticatedAuthResponse) authWireResponse() { /* closed-set discriminator */ }
 
 type twoFactorAuthResponse struct {
 	Status      authStatus       `json:"status"`
@@ -93,7 +93,7 @@ type twoFactorAuthResponse struct {
 	Features    AuthFeatures     `json:"features"`
 }
 
-func (twoFactorAuthResponse) authWireResponse() {}
+func (twoFactorAuthResponse) authWireResponse() { /* closed-set discriminator */ }
 
 type enrollmentAuthResponse struct {
 	Status      authStatus       `json:"status"`
@@ -106,7 +106,7 @@ type enrollmentAuthResponse struct {
 	Reason      string           `json:"reason"`
 }
 
-func (enrollmentAuthResponse) authWireResponse() {}
+func (enrollmentAuthResponse) authWireResponse() { /* closed-set discriminator */ }
 
 type conversionAuthResponse struct {
 	Status      authStatus       `json:"status"`
@@ -118,7 +118,7 @@ type conversionAuthResponse struct {
 	Features    AuthFeatures     `json:"features"`
 }
 
-func (conversionAuthResponse) authWireResponse() {}
+func (conversionAuthResponse) authWireResponse() { /* closed-set discriminator */ }
 
 // User is one row of app_user, minus the secrets.
 //

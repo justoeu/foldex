@@ -519,11 +519,12 @@ describe('LinkCard', () => {
   it('accepts dragOver for link and note MIME types', () => {
     const { container } = renderWithProviders(<LinkCard link={baseLink} {...noopCardProps} />)
     const card = container.querySelector('.fx-card') as HTMLElement
-    const ev = { preventDefault: vi.fn(), dataTransfer: { types: ['application/x-foldex-note'], dropEffect: '' } }
-    fireEvent.dragOver(card, ev)
-    fireEvent.dragOver(card, {
-      dataTransfer: { types: ['text/plain'], dropEffect: '' },
-    })
+    const noteDt = { types: ['application/x-foldex-note'], dropEffect: '' }
+    fireEvent.dragOver(card, { dataTransfer: noteDt })
+    expect(noteDt.dropEffect).toBe('move')
+    const plainDt = { types: ['text/plain'], dropEffect: '' }
+    fireEvent.dragOver(card, { dataTransfer: plainDt })
+    expect(plainDt.dropEffect).toBe('')
   })
 
   it('collapses density when og:image errors at runtime', async () => {

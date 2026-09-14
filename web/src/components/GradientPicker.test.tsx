@@ -70,7 +70,7 @@ describe('GradientPicker', () => {
   it('drags hue thumbs and bar clicks update colors', () => {
     const onChange = vi.fn()
     renderWithProviders(<GradientPicker from="#6366F1" to="#EC4899" onChange={onChange} />)
-    const bar = screen.getByRole('slider', { name: /hue/i })
+    const bar = screen.getByRole('group', { name: /hue/i })
     // Mock getBoundingClientRect for position math.
     vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
       left: 0, top: 0, width: 200, height: 12, right: 200, bottom: 12, x: 0, y: 0, toJSON: () => ({}),
@@ -91,10 +91,31 @@ describe('GradientPicker', () => {
     fireEvent.pointerDown(thumbs[1], { clientX: 180, pointerId: 3 })
   })
 
+  it('exposes each hue thumb as a slider with a numeric value', () => {
+    renderWithProviders(<GradientPicker from="#6366F1" to="#EC4899" onChange={vi.fn()} />)
+    const thumbs = screen.getAllByRole('slider')
+    expect(thumbs).toHaveLength(2)
+    expect(thumbs[0]).toHaveAttribute('aria-valuenow')
+    expect(thumbs[1]).toHaveAttribute('aria-valuemin', '0')
+    expect(thumbs[1]).toHaveAttribute('aria-valuemax', '360')
+  })
+
+  it('moves a hue thumb with arrow keys', async () => {
+    const onChange = vi.fn()
+    renderWithProviders(<GradientPicker from="#6366F1" to="#EC4899" onChange={onChange} />)
+    const start = screen.getByRole('slider', { name: /^Start$/i })
+    start.focus()
+    await userEvent.setup().keyboard('{ArrowRight}')
+    expect(onChange).toHaveBeenCalled()
+    const [from] = onChange.mock.calls[0]
+    expect(from).toMatch(/^#/)
+    expect(from).not.toBe('#6366F1')
+  })
+
   it('handles near-neutral colors with S/L floor on hue drag', () => {
     const onChange = vi.fn()
     renderWithProviders(<GradientPicker from="#111111" to="#eeeeee" onChange={onChange} />)
-    const bar = screen.getByRole('slider', { name: /hue/i })
+    const bar = screen.getByRole('group', { name: /hue/i })
     vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
       left: 0, top: 0, width: 100, height: 12, right: 100, bottom: 12, x: 0, y: 0, toJSON: () => ({}),
     } as DOMRect)
