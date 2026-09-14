@@ -45,6 +45,8 @@ Native browser bookmarks are simpler if you have a handful of links in one brows
 
 ## Smoke test
 
+Code quality: pushes to `main` run tests with coverage and submit the same run's reports to [SonarQube](https://sonarqube.justoeu.cloud/dashboard?id=foldex). PR checks remain active; image releases remain manual. See [CI setup and troubleshooting](docs/SONARQUBE.md).
+
 Accounts are on. Create an API token under **Settings → API tokens**:
 
 ```bash
