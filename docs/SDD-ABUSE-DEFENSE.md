@@ -412,7 +412,7 @@ PR 6 e PR 7 foram acrescentados depois da v1.0, a pedido:
 | PR | Escopo | Risco | Depende |
 |---|---|---|---|
 | **6** | Os tetos viram configuráveis (`internal/abusepolicy` + tela do owner) | Médio | 2, 4 |
-| **7** | Painel de anomalias na trilha + skill `/abuse-audit` | Baixo | 6 |
+| **7** | Painel de anomalias na trilha + método de auditoria de abuso documentado neste SDD | Baixo | 6 |
 
 PR 2 e PR 4 são os que merecem sweep de agentes e testes de concorrência próprios.
 PR 1 deixou de ser "o que resolve o defeito que originou esta conversa" — §4.5 explica
