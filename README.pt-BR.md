@@ -45,6 +45,8 @@ Bookmark nativo basta para poucas dezenas de links num único browser. Foldex va
 
 ## Smoke test
 
+Qualidade de código: pushes na `main` executam testes com cobertura e enviam os relatórios da mesma execução ao [SonarQube](https://sonarqube.justoeu.cloud/dashboard?id=foldex). Os checks de PR continuam ativos; releases de imagens continuam manuais. Veja [configuração e diagnóstico do CI](docs/SONARQUBE.md).
+
 Contas ligadas. Crie um token em **Settings → API tokens**:
 
 ```bash

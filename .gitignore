@@ -11,6 +11,8 @@ backend/foldex
 
 # Node / Vite
 node_modules/
+__pycache__/
+.scannerwork/
 dist/
 .vite/
 *.local
