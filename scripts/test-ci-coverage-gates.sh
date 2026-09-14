@@ -84,6 +84,17 @@ backend_run_line=$(grep -nF -- '- name: unit + integration tests (with coverage)
 [[ "$chrome_line" -lt "$backend_run_line" ]] ||
   fail "the live Chrome prerequisite must run before backend tests"
 
+# govulncheck's action cleanup runs `git clean -ffdx`, which removes the
+# ignored coverage profile. Upload the profile before that action or the main
+# push job reaches the Sonar step without its backend report.
+coverage_harness_line=$(grep -nF -- '- name: coverage-check shell harness' "$WORKFLOW" | cut -d: -f1)
+backend_upload_line=$(grep -nF -- '- name: Upload SonarQube coverage' "$WORKFLOW" | head -1 | cut -d: -f1)
+govuln_line=$(grep -nF -- '- name: govulncheck (informational)' "$WORKFLOW" | cut -d: -f1)
+[[ "$coverage_harness_line" -lt "$backend_upload_line" ]] ||
+  fail "backend Sonar coverage must upload after the coverage harness"
+[[ "$backend_upload_line" -lt "$govuln_line" ]] ||
+  fail "backend Sonar coverage must upload before govulncheck cleanup"
+
 frontend_gate=$(step_block "tests + coverage gate")
 [[ -n "$frontend_gate" ]] || fail "frontend blocking coverage test step is missing"
 grep -Eq '^[[:space:]]+run: bun run coverage$' <<<"$frontend_gate" ||
