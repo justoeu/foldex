@@ -38,13 +38,13 @@ const BY_REASON: Record<AvailabilityReason, string> = {
 export function AvailabilityHint({
   result,
   shapeText,
-}: {
+}: Readonly<{
   result: Availability
   /** Overrides the generic shape message where the field can state its own
    *  rule. A refusal blocks the save, so the specific message the save path
    *  would have shown is otherwise unreachable. */
   shapeText?: string
-}) {
+}>) {
   const { t } = useTranslation()
   if (result.state === 'idle') return null
 

@@ -78,7 +78,7 @@ export function useBlockControls() {
 }
 
 /** Who generated the most events. */
-export function AuditActors({ stats }: { stats: AuditStats }) {
+export function AuditActors({ stats }: Readonly<{ stats: AuditStats }>) {
   const { t } = useTranslation()
   return (
     <section className="fx-aud-card" aria-labelledby="fx-aud-actors-title">
@@ -118,7 +118,7 @@ export function AuditActors({ stats }: { stats: AuditStats }) {
  */
 export function AuditOrigins({
   stats, canBlock,
-}: { stats: AuditStats; canBlock: boolean }) {
+}: Readonly<{ stats: AuditStats; canBlock: boolean }>) {
   const { t } = useTranslation()
   const controls = useBlockControls()
   return (
@@ -177,7 +177,7 @@ export function AuditOrigins({
  * fifteen minutes on its own — before offering the permanent block. A card that
  * only raised the alarm would invite a click that changes nothing new.
  */
-export function AuditRiskCard({ stats, canBlock }: { stats: AuditStats; canBlock: boolean }) {
+export function AuditRiskCard({ stats, canBlock }: Readonly<{ stats: AuditStats; canBlock: boolean }>) {
   const { t } = useTranslation()
   const controls = useBlockControls()
   const risk = stats.risk
@@ -227,7 +227,7 @@ export function AuditRiskCard({ stats, canBlock }: { stats: AuditStats; canBlock
 }
 
 /** The blocklist, with the way back out. */
-export function AuditBlocklist({ blocks, canBlock }: { blocks: IPBlock[]; canBlock: boolean }) {
+export function AuditBlocklist({ blocks, canBlock }: Readonly<{ blocks: IPBlock[]; canBlock: boolean }>) {
   const { t } = useTranslation()
   const controls = useBlockControls()
   if (blocks.length === 0) return null

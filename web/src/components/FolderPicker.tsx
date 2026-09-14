@@ -3,12 +3,12 @@ import { Icon, I } from './icons'
 import { useFolderPickerController } from '../hooks/useFolderPickerController'
 import type { FolderPickerRow } from '../lib/folderPicker'
 
-type Props = {
+type Props = Readonly<{
   selected: number | null
   onChange: (id: number | null) => void
   parentId?: number | null
   excludeIds?: Set<number>
-}
+}>
 
 type Controller = ReturnType<typeof useFolderPickerController>
 
@@ -52,7 +52,7 @@ export function FolderPicker(props: Props) {
   )
 }
 
-function FolderPickerOptions({ picker }: { picker: Controller }) {
+function FolderPickerOptions({ picker }: Readonly<{ picker: Controller }>) {
   const { t } = useTranslation()
   return (
     <ul id="fx-folderpicker-list" role="listbox" className="fx-folderpicker-list" aria-label={t('folder_picker.list_aria')}>
@@ -86,14 +86,14 @@ function FolderPickerOption({
   selected,
   onHighlight,
   onCommit,
-}: {
+}: Readonly<{
   row: FolderPickerRow
   index: number
   active: boolean
   selected: boolean
   onHighlight: (index: number) => void
   onCommit: (row: FolderPickerRow) => Promise<void>
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <li

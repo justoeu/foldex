@@ -4,9 +4,9 @@ import { Icon, I } from '../components/icons'
 import { BackupCard } from '../components/BackupCard'
 import { ImportPreviewDialog } from '../components/ImportPreviewDialog'
 
-type Props = {
+type Props = Readonly<{
   onDone: () => void
-}
+}>
 
 export function ImportPage({ onDone }: Props) {
   const { t } = useTranslation()

@@ -9,19 +9,19 @@ import { NoteDialogEditor } from './NoteDialogEditor'
 
 export { buildImageUploadHandler, buildNoteEditorProps } from './useNoteDialogController'
 
-type Props = {
+type Props = Readonly<{
   open: boolean
   noteId: number | null
   defaultFolderId?: number | null
   onClose: () => void
-}
+}>
 
-type LoadBoundaryProps = {
+type LoadBoundaryProps = Readonly<{
   failed: boolean
   retrying: boolean
   onRetry: () => void
   onClose: () => void
-}
+}>
 
 function NoteLoadBoundary({ failed, retrying, onRetry, onClose }: LoadBoundaryProps) {
   const { t } = useTranslation()
@@ -50,7 +50,7 @@ function NoteLoadBoundary({ failed, retrying, onRetry, onClose }: LoadBoundaryPr
   )
 }
 
-type DialogContentProps = {
+type DialogContentProps = Readonly<{
   noteId: number | null
   note: Note | null
   failed: boolean
@@ -58,7 +58,7 @@ type DialogContentProps = {
   retry: () => void
   defaultFolderId?: number | null
   onClose: () => void
-}
+}>
 
 function NoteDialogContent({ noteId, note, failed, retrying, retry, defaultFolderId, onClose }: DialogContentProps) {
   if (noteId != null && !note) {

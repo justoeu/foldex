@@ -33,7 +33,7 @@ export const CREATE_USER_ERROR_I18N: Record<string, string> = {
   invalid_role: 'admin.err_invalid_role',
 }
 
-export function CreateUserDialog({ onClose }: { onClose: () => void }) {
+export function CreateUserDialog({ onClose }: Readonly<{ onClose: () => void }>) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -143,13 +143,13 @@ export function CreateUserDialog({ onClose }: { onClose: () => void }) {
       role="dialog"
       aria-modal="true"
       aria-label={t('admin.create_title')}
-      // Only a click on the SCRIM itself dismisses; one that started inside the
-      // panel and drifted out (selecting text in the warning, say) must not
-      // throw away a half-typed credential.
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
-      }}
     >
+      <button
+        type="button"
+        className="fx-drawer-backdrop"
+        aria-label={t('common.close')}
+        onClick={onClose}
+      />
       <div className="fx-drawer" ref={dialogRef}>
         <form onSubmit={submit} style={{ display: 'contents' }}>
           <div className="fx-drawer-head">

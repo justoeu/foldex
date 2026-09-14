@@ -10,13 +10,13 @@ import { suggestColor } from '../lib/suggestColor'
 import { apiErrorCode } from '../lib/apiError'
 import type { Tag } from '../api/types'
 
-type Props = {
+type Props = Readonly<{
   open: boolean
   onClose: () => void
   // When set, the dialog is in EDIT mode: pre-fills from the tag and calls
   // useUpdateTag on submit. When null/undefined, it creates a new tag.
   tag?: Tag | null
-}
+}>
 
 export function TagDialog({ open, onClose, tag }: Props) {
   const { t } = useTranslation()

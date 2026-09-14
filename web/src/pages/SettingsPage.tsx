@@ -52,7 +52,7 @@ const RolesMatrixSection = lazy(() =>
   })),
 )
 
-type Props = {
+type Props = Readonly<{
   // Opens the folder edit dialog (to set a fresh password after a reset).
   onEditFolder?: (folderId: number) => void
   // Leaves the hub for the app views it links to (import/export, stats).
@@ -60,7 +60,7 @@ type Props = {
   // Deep-links the hub straight into a section (user menu → Profile). Valid
   // values are HubSection names; anything unknown falls back to 'overview'.
   initialSection?: string
-}
+}>
 
 // A locked folder's master-verified action: `reset` clears the password and
 // nudges you to set a new one; `remove` clears it and leaves the folder open.
@@ -132,10 +132,10 @@ const ADMIN_SECTION_COMPONENTS: Partial<Record<CanonicalSection, ComponentType>>
   abuse: AbuseSection,
 }
 
-type HubSectionProps = {
+type HubSectionProps = Readonly<{
   accountTab: AccountTab
   onEditFolder?: (folderId: number) => void
-}
+}>
 
 const PERSONAL_SECTION: Partial<Record<CanonicalSection, (p: HubSectionProps) => ReactNode>> = {
   account: (p) => <AccountPage initialTab={p.accountTab} />,
@@ -361,7 +361,7 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
  * permanent panel that always says "you are fine" trains the eye to skip the
  * slot, so the slot has to stay empty when there is nothing to say.
  */
-function IdentityHero({ onOpenSecurity }: { onOpenSecurity: () => void }) {
+function IdentityHero({ onOpenSecurity }: Readonly<{ onOpenSecurity: () => void }>) {
   const { t } = useTranslation()
   const me = useCurrentUser()
   if (!me) return null
@@ -693,13 +693,13 @@ function DoneFolderRow({
   color,
   mode,
   onEditFolder,
-}: {
+}: Readonly<{
   id: number
   name: string
   color: string
   mode: FolderPwMode
   onEditFolder?: (folderId: number) => void
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <li
@@ -733,12 +733,12 @@ function LockedFolderRow({
   name,
   color,
   onDone,
-}: {
+}: Readonly<{
   id: number
   name: string
   color: string
   onDone: (mode: FolderPwMode) => void
-}) {
+}>) {
   const { t } = useTranslation()
   const reset = useResetFolderPassword()
   const { data: masterStatus } = useMasterPasswordStatus()

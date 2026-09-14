@@ -173,29 +173,35 @@ export type BackupMetaRow = { key: string; value: string; token: boolean }
 export function runMetaRows(meta: Record<string, unknown>, t: TFunction): BackupMetaRow[] {
   const rows: BackupMetaRow[] = []
   for (const { key, kind } of META_ROWS) {
-    const raw = meta[key]
-    if (raw === undefined || raw === null) continue
-    if (kind === 'bool') {
-      if (typeof raw !== 'boolean') continue
-      rows.push({ key, value: t(raw ? 'common.yes' : 'common.no'), token: false })
-      continue
-    }
-    if (kind === 'token') {
-      if (typeof raw !== 'string') continue
-      rows.push({ key, value: raw, token: true })
-      continue
-    }
-    if (kind === 'size') {
-      if (!Array.isArray(raw)) continue
-      rows.push({ key, value: raw.length.toLocaleString(), token: false })
-      continue
-    }
-    if (typeof raw !== 'number') continue
-    rows.push({
-      key,
-      value: kind === 'bytes' ? formatBytes(raw) : raw.toLocaleString(),
-      token: false,
-    })
+    const row = formatMetaRow(key, kind, meta[key], t)
+    if (row) rows.push(row)
   }
   return rows
+}
+
+function formatMetaRow(
+  key: string,
+  kind: (typeof META_ROWS)[number]['kind'],
+  raw: unknown,
+  t: TFunction,
+): BackupMetaRow | null {
+  if (raw === undefined || raw === null) return null
+  if (kind === 'bool') {
+    if (typeof raw !== 'boolean') return null
+    return { key, value: t(raw ? 'common.yes' : 'common.no'), token: false }
+  }
+  if (kind === 'token') {
+    if (typeof raw !== 'string') return null
+    return { key, value: raw, token: true }
+  }
+  if (kind === 'size') {
+    if (!Array.isArray(raw)) return null
+    return { key, value: raw.length.toLocaleString(), token: false }
+  }
+  if (typeof raw !== 'number') return null
+  return {
+    key,
+    value: kind === 'bytes' ? formatBytes(raw) : raw.toLocaleString(),
+    token: false,
+  }
 }

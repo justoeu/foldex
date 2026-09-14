@@ -27,7 +27,7 @@ export function useConfirm(): Ctx {
   return fn
 }
 
-export function ConfirmProvider({ children }: { children: ReactNode }) {
+export function ConfirmProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [state, setState] = useState<{
     opts: ConfirmOpts
     resolve: Resolver

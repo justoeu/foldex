@@ -11,7 +11,7 @@ import { useCopy } from '../../hooks/useCopy'
  * without copying them has no second chance, and the checkbox is what turns
  * "we warned you" into "you confirmed".
  */
-export function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void }) {
+export function RecoveryCodes({ codes, onDone }: Readonly<{ codes: string[]; onDone: () => void }>) {
   const { t } = useTranslation()
   const [acknowledged, setAcknowledged] = useState(false)
   const { copied, copy } = useCopy()

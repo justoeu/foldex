@@ -15,7 +15,7 @@ import { OtpInput, OTP_LENGTH } from './OtpInput'
  * would make the recovery path — used exactly when someone is already stressed
  * — the hardest one to find.
  */
-export function TwoFactorScreen({ pending }: { pending: TwoFactorPending }) {
+export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPending }>) {
   const { t } = useTranslation()
   const { adopt, signOut } = useAuth()
 

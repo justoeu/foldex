@@ -19,10 +19,10 @@ import type { AuthUser } from '../../auth/types'
 export function AccessSection({
   user,
   googleEnabled,
-}: {
+}: Readonly<{
   user: AuthUser
   googleEnabled: boolean
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <SectionCard

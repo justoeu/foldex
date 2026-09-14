@@ -295,21 +295,26 @@ func backupOrUnavailable(pr chi.Router, d Deps, grants authgate.Grants) {
 	})
 }
 
+const (
+	pathLinkImage      = "/links/{id}/image"
+	pathLinkScreenshot = "/links/{id}/screenshot"
+)
+
 func storageOrUnavailable(pr chi.Router, d Deps, grants authgate.Grants, notesRepo *notes.Repository, fileHandler *links.ScreenshotHandler) {
 	writeGate := authgate.RequireWrite(grants, authctx.PermContentWrite)
 	if fileHandler != nil {
-		pr.With(writeGate).Post("/links/{id}/screenshot", fileHandler.CaptureAndStore)
-		pr.With(writeGate).Post("/links/{id}/image", fileHandler.UploadImage)
-		pr.With(writeGate).Delete("/links/{id}/image", fileHandler.DeleteImage)
+		pr.With(writeGate).Post(pathLinkScreenshot, fileHandler.CaptureAndStore)
+		pr.With(writeGate).Post(pathLinkImage, fileHandler.UploadImage)
+		pr.With(writeGate).Delete(pathLinkImage, fileHandler.DeleteImage)
 		pr.Get("/files/*", fileHandler.ProxyFile)
 		nih := notes.NewImageHandler(d.Storage, notesRepo, d.Logger)
 		pr.With(writeGate).Post("/notes/images", nih.Upload)
 		return
 	}
 	unavailable := http.HandlerFunc(writeStorageUnavailable)
-	pr.With(writeGate).Post("/links/{id}/screenshot", unavailable)
-	pr.With(writeGate).Post("/links/{id}/image", unavailable)
-	pr.With(writeGate).Delete("/links/{id}/image", unavailable)
+	pr.With(writeGate).Post(pathLinkScreenshot, unavailable)
+	pr.With(writeGate).Post(pathLinkImage, unavailable)
+	pr.With(writeGate).Delete(pathLinkImage, unavailable)
 	pr.With(writeGate).Post("/notes/images", unavailable)
 	pr.Get("/files/*", unavailable)
 }

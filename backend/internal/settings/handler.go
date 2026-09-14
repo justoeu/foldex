@@ -17,10 +17,12 @@ type Handler struct {
 
 func NewHandler(repo *Repository) *Handler { return &Handler{repo: repo} }
 
+const pathMasterPassword = "/master-password"
+
 func (h *Handler) Mount(r chi.Router) {
-	r.Get("/master-password", h.status)
-	r.Put("/master-password", h.setMaster)
-	r.Delete("/master-password", h.clearMaster)
+	r.Get(pathMasterPassword, h.status)
+	r.Put(pathMasterPassword, h.setMaster)
+	r.Delete(pathMasterPassword, h.clearMaster)
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {

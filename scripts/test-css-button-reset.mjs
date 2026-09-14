@@ -94,6 +94,8 @@ const GUARDED = [
   'fx-abuse-reset',
   'fx-chip-face',
   'fx-chip-close',
+  'fx-overlay-backdrop',
+  'fx-drawer-backdrop',
 ]
 
 const css = FILES.map((f) => readFileSync(join(STYLES, f), 'utf8')).join('\n').replace(

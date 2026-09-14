@@ -102,10 +102,10 @@ export type TagPickerController = ReturnType<typeof useTagPicker>
 export function TagPicker({
   picker,
   i18nPrefix,
-}: {
+}: Readonly<{
   picker: TagPickerController
   i18nPrefix: 'link_dialog' | 'note_dialog'
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <label className="fx-field">

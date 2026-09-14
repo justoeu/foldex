@@ -9,11 +9,11 @@ import { SlugField } from './SlugField'
 import { TagPicker } from './TagPicker'
 import { useNoteDialogController } from './useNoteDialogController'
 
-type Props = {
+type Props = Readonly<{
   note: Note | null
   defaultFolderId?: number | null
   onClose: () => void
-}
+}>
 
 export function NoteDialogEditor({ note, defaultFolderId, onClose }: Props) {
   const { t } = useTranslation()

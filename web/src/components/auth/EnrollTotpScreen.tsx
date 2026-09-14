@@ -149,7 +149,7 @@ function EnrollReadyForm({
   onCode,
   onToggleSecret,
   onComplete,
-}: {
+}: Readonly<{
   method: FactorMethod
   totp: TotpEnrollment | null
   mailed: EmailFactorEnrollment | null
@@ -160,7 +160,7 @@ function EnrollReadyForm({
   onCode: (next: string) => void
   onToggleSecret: () => void
   onComplete: (full: string) => void
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <>
@@ -220,7 +220,7 @@ function EnrollReadyForm({
 // Rendered only when `method` is null, which the initializer above only permits
 // when e-mail delivery is configured — so there is no "e-mail unavailable"
 // branch here to guard. A guard would be unreachable code dressed as caution.
-function MethodChoice({ onPick }: { onPick: (method: FactorMethod) => void }) {
+function MethodChoice({ onPick }: Readonly<{ onPick: (method: FactorMethod) => void }>) {
   const { t } = useTranslation()
   return (
     <div style={{ display: 'grid', gap: 8 }}>

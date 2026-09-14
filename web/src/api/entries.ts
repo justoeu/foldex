@@ -110,6 +110,48 @@ export function pendingPreviewIDs(data: EntriesCache | undefined): number[] {
   return [...ids]
 }
 
+type PreviewMerge =
+  | { action: 'keep'; entry: Entry }
+  | { action: 'drop' }
+  | { action: 'replace'; entry: Entry }
+
+function mergePreviewLink(entry: Extract<Entry, { kind: 'link' }>, result: PreviewStatusResult | undefined): PreviewMerge {
+  if (!result) return { action: 'keep', entry }
+  if (!result.found) return { action: 'drop' }
+  if (!result.preview_status || !result.updated_at) return { action: 'keep', entry }
+  const resultTime = Date.parse(result.updated_at)
+  const entryTime = Date.parse(entry.updated_at)
+  if (!Number.isNaN(resultTime) && !Number.isNaN(entryTime) && resultTime < entryTime) {
+    return { action: 'keep', entry }
+  }
+  const description = result.description ?? null
+  const faviconURL = result.favicon_url ?? null
+  const ogImageURL = result.og_image_url ?? null
+  const previewError = result.preview_error ?? null
+  if (
+    entry.preview_status === result.preview_status &&
+    entry.description === description &&
+    entry.favicon_url === faviconURL &&
+    entry.og_image_url === ogImageURL &&
+    entry.preview_error === previewError &&
+    entry.updated_at === result.updated_at
+  ) {
+    return { action: 'keep', entry }
+  }
+  return {
+    action: 'replace',
+    entry: {
+      ...entry,
+      preview_status: result.preview_status,
+      description,
+      favicon_url: faviconURL,
+      og_image_url: ogImageURL,
+      preview_error: previewError,
+      updated_at: result.updated_at,
+    },
+  }
+}
+
 export function applyPreviewStatusResults(qc: QueryClient, key: QueryKey, results: PreviewStatusResult[]) {
   const byID = new Map(results.map((result) => [result.id, result]))
   qc.setQueryData<EntriesCache>(key, (old) => {
@@ -123,52 +165,14 @@ export function applyPreviewStatusResults(qc: QueryClient, key: QueryKey, result
           next.push(entry)
           continue
         }
-        const result = byID.get(entry.id)
-        if (!result) {
-          next.push(entry)
-          continue
-        }
-        if (!result.found) {
-          changed = true
-          pageChanged = true
-          continue
-        }
-        if (!result.preview_status || !result.updated_at) {
-          next.push(entry)
-          continue
-        }
-        const resultTime = Date.parse(result.updated_at)
-        const entryTime = Date.parse(entry.updated_at)
-        if (!Number.isNaN(resultTime) && !Number.isNaN(entryTime) && resultTime < entryTime) {
-          next.push(entry)
-          continue
-        }
-        const description = result.description ?? null
-        const faviconURL = result.favicon_url ?? null
-        const ogImageURL = result.og_image_url ?? null
-        const previewError = result.preview_error ?? null
-        if (
-          entry.preview_status === result.preview_status &&
-          entry.description === description &&
-          entry.favicon_url === faviconURL &&
-          entry.og_image_url === ogImageURL &&
-          entry.preview_error === previewError &&
-          entry.updated_at === result.updated_at
-        ) {
-          next.push(entry)
+        const merged = mergePreviewLink(entry, byID.get(entry.id))
+        if (merged.action === 'keep') {
+          next.push(merged.entry)
           continue
         }
         changed = true
         pageChanged = true
-        next.push({
-          ...entry,
-          preview_status: result.preview_status,
-          description,
-          favicon_url: faviconURL,
-          og_image_url: ogImageURL,
-          preview_error: previewError,
-          updated_at: result.updated_at,
-        })
+        if (merged.action === 'replace') next.push(merged.entry)
       }
       return pageChanged ? next : page
     })
@@ -268,30 +272,13 @@ export async function optimisticEntryPatch(
   await qc.cancelQueries({ queryKey: ['links'] })
   await qc.cancelQueries({ queryKey: ['entries'] })
 
-  const previousLinks = new Map<QueryKey, Link>()
-  if (kind === 'link') {
-    for (const [key, data] of qc.getQueriesData<LinksCache>({ queryKey: ['links'] })) {
-      if (!data || !Array.isArray(data.pages)) continue
-      for (const page of data.pages) {
-        const found = (page ?? []).find((l) => l.id === id)
-        if (found) {
-          previousLinks.set(key, found)
-          break
-        }
-      }
-    }
-  }
-  const previousEntries = new Map<QueryKey, Entry>()
-  for (const [key, data] of qc.getQueriesData<EntriesCache>({ queryKey: ['entries'] })) {
-    if (!data || !Array.isArray(data.pages)) continue
-    for (const page of data.pages) {
-      const found = (page ?? []).find((e) => e.kind === kind && e.id === id)
-      if (found) {
-        previousEntries.set(key, found)
-        break
-      }
-    }
-  }
+  const previousLinks = kind === 'link'
+    ? firstMatchInPages(qc.getQueriesData<LinksCache>({ queryKey: ['links'] }), (l) => l.id === id)
+    : new Map<QueryKey, Link>()
+  const previousEntries = firstMatchInPages(
+    qc.getQueriesData<EntriesCache>({ queryKey: ['entries'] }),
+    (e) => e.kind === kind && e.id === id,
+  )
 
   if (kind === 'link') mapCachedLinksPatch(qc, id, patch)
   mapCachedEntries(qc, (e) => {
@@ -321,6 +308,24 @@ export async function optimisticEntryPatch(
 }
 
 type LinksCache = InfiniteData<Link[]>
+
+function firstMatchInPages<T>(
+  queries: Iterable<[QueryKey, InfiniteData<T[]> | undefined]>,
+  pred: (item: T) => boolean,
+): Map<QueryKey, T> {
+  const found = new Map<QueryKey, T>()
+  for (const [key, data] of queries) {
+    if (!data || !Array.isArray(data.pages)) continue
+    for (const page of data.pages) {
+      const hit = (page ?? []).find(pred)
+      if (hit) {
+        found.set(key, hit)
+        break
+      }
+    }
+  }
+  return found
+}
 
 function mapCachedLinksPatch(qc: QueryClient, id: number, patch: Partial<Pick<Link, 'pinned' | 'preview_status'>>) {
   qc.setQueriesData<LinksCache>({ queryKey: ['links'] }, (old) => {

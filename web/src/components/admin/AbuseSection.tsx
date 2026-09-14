@@ -133,7 +133,7 @@ export function AbuseSection() {
 
 function Band({
   band, draft, bounds, observed, canWrite, onPatch, onRestore,
-}: {
+}: Readonly<{
   band: AbuseBand
   draft: AbusePolicy
   bounds: AbuseBound[]
@@ -141,7 +141,7 @@ function Band({
   canWrite: boolean
   onPatch: (field: AbuseField, value: number) => void
   onRestore: (band: AbuseBand) => void
-}) {
+}>) {
   const { t } = useTranslation()
   const titleId = `fx-abuse-band-${band.id}`
   return (
@@ -192,13 +192,13 @@ function Band({
  */
 function Knob({
   field, value, bound, observed, onPatch,
-}: {
+}: Readonly<{
   field: AbuseField
   value: number
   bound: AbuseBound | null
   observed: AbuseObserved
   onPatch: (field: AbuseField, value: number) => void
-}) {
+}>) {
   const { t } = useTranslation()
   const seen = observedFor(field, observed)
   return (

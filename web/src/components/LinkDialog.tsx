@@ -16,7 +16,7 @@ import { safeImageUrl, safeLinkHref, hostOf } from '../lib/url'
 import { nextCheckPreview } from '../lib/time'
 import type { Link } from '../api/types'
 
-type Props = {
+type Props = Readonly<{
   open: boolean
   link: Link | null
   initialUrl?: string
@@ -25,7 +25,7 @@ type Props = {
   defaultFolderId?: number | null
   onClose: () => void
   onOpenExisting?: (link: Link) => void
-}
+}>
 
 type Form = ReturnType<typeof useLinkDialogForm> & ReturnType<typeof useSlugFieldState>
 type Tags = ReturnType<typeof useTagPicker>
@@ -101,7 +101,7 @@ export function LinkDialog({ open, link, initialUrl, focus = 'url', defaultFolde
   )
 }
 
-function LinkDialogError({ message }: { message: string | null }) {
+function LinkDialogError({ message }: Readonly<{ message: string | null }>) {
   if (!message) return null
   return (
     <div className="fx-inline-error" role="alert" style={{ margin: '0 20px 10px' }}>
@@ -113,10 +113,10 @@ function LinkDialogError({ message }: { message: string | null }) {
 function DuplicateURLNotice({
   link,
   onOpenExisting,
-}: {
+}: Readonly<{
   link: Link
   onOpenExisting?: (link: Link) => void
-}) {
+}>) {
   const { t } = useTranslation()
   const { data: folders = [] } = useFolders({ fields: 'minimal' })
   const folderName = link.folder_id != null
@@ -145,7 +145,7 @@ function DuplicateURLNotice({
   )
 }
 
-function LinkDialogHeader({ isEdit, onClose }: { isEdit: boolean; onClose: () => void }) {
+function LinkDialogHeader({ isEdit, onClose }: Readonly<{ isEdit: boolean; onClose: () => void }>) {
   const { t } = useTranslation()
   return (
     <header className="fx-modal-head">
@@ -168,7 +168,7 @@ function LinkDialogBody({
   defaultFolderId,
   duplicate,
   onOpenExisting,
-}: {
+}: Readonly<{
   form: Form
   tags: Tags
   image: Image
@@ -176,7 +176,7 @@ function LinkDialogBody({
   defaultFolderId?: number | null
   duplicate: Link | null
   onOpenExisting?: (link: Link) => void
-}) {
+}>) {
   return (
     <div className="fx-modal-body">
       <div className="fx-modal-col">
@@ -196,11 +196,11 @@ function LinkBasicsFields({
   form,
   duplicate,
   onOpenExisting,
-}: {
+}: Readonly<{
   form: Form
   duplicate: Link | null
   onOpenExisting?: (link: Link) => void
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <>
@@ -269,7 +269,7 @@ function LinkBasicsFields({
   )
 }
 
-function LinkOrganizationFields({ form, link, defaultFolderId }: { form: Form; link: Link | null; defaultFolderId?: number | null }) {
+function LinkOrganizationFields({ form, link, defaultFolderId }: Readonly<{ form: Form; link: Link | null; defaultFolderId?: number | null }>) {
   const { t } = useTranslation()
   return (
     <>
@@ -312,7 +312,7 @@ function LinkOrganizationFields({ form, link, defaultFolderId }: { form: Form; l
   )
 }
 
-function LinkStatus({ form, link }: { form: Form; link: Link | null }) {
+function LinkStatus({ form, link }: Readonly<{ form: Form; link: Link | null }>) {
   const { t } = useTranslation()
   return (
     <>
@@ -330,7 +330,7 @@ function LinkStatus({ form, link }: { form: Form; link: Link | null }) {
   )
 }
 
-function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link: Link | null }) {
+function LinkImagePanel({ form, image, link }: Readonly<{ form: Form; image: Image; link: Link | null }>) {
   const { t } = useTranslation()
   const storedImage = image.removed ? undefined : safeImageUrl(link?.og_image_url)
   const stagedPreview = safeImageUrl(image.preview)
@@ -410,7 +410,7 @@ function LinkImagePanel({ form, image, link }: { form: Form; image: Image; link:
   )
 }
 
-function LinkImagePreview({ url, busy, onBroken }: { url: string; busy: boolean; onBroken: () => void }) {
+function LinkImagePreview({ url, busy, onBroken }: Readonly<{ url: string; busy: boolean; onBroken: () => void }>) {
   const { t } = useTranslation()
   // Taint analysis tracks <input type=file>.files → createObjectURL → <img src>
   // as DOM-to-HTML. encodeURI is the sanitizer it recognizes; it is a no-op on
@@ -437,7 +437,7 @@ function LinkImagePreview({ url, busy, onBroken }: { url: string; busy: boolean;
   )
 }
 
-function LinkImageUploadZone({ image }: { image: Image }) {
+function LinkImageUploadZone({ image }: Readonly<{ image: Image }>) {
   const { t } = useTranslation()
   return (
     <>
@@ -505,7 +505,7 @@ function LinkDialogFooter({
   blocked,
   onClose,
   onSubmit,
-}: {
+}: Readonly<{
   form: Form
   image: Image
   isEdit: boolean
@@ -513,7 +513,7 @@ function LinkDialogFooter({
   blocked: boolean
   onClose: () => void
   onSubmit: () => Promise<void>
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <footer className="fx-modal-foot">

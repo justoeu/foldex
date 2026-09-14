@@ -24,7 +24,7 @@ export const MAX_DISPLAY_NAME = 120
  * username was here for one session and read as a nickname because of it.
  * Role is shown in the hero and changes only through administration.
  */
-export function ProfileFields({ user }: { user: AuthUser }) {
+export function ProfileFields({ user }: Readonly<{ user: AuthUser }>) {
   const { t } = useTranslation()
   const { adopt } = useAuth()
 

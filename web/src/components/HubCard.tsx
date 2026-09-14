@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Icon, I } from './icons'
 
-type CardProps = {
+type CardProps = Readonly<{
   icon: ReactNode
   /** Tone modifier class (`fx-tone-*`) applied to the icon square. */
   tone: string
@@ -13,7 +13,7 @@ type CardProps = {
   status?: string
   statusTone?: string
   onClick: () => void
-}
+}>
 
 type ShortcutProps = Omit<CardProps, 'action' | 'status' | 'statusTone'>
 
@@ -53,7 +53,7 @@ export function HubShortcut({ icon, tone, title, desc, onClick }: ShortcutProps)
 }
 
 /** Section heading whose rule runs to the container edge. */
-export function HubRule({ label }: { label: string }) {
+export function HubRule({ label }: Readonly<{ label: string }>) {
   return (
     <p className="fx-hub-rule">
       <span className="fx-hub-section-label">{label}</span>

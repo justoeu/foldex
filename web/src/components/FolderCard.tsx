@@ -14,7 +14,7 @@ type Tile =
   | { kind: 'folder'; data: PreviewFolderTile }
   | { kind: 'empty' }
 
-type Props = {
+type Props = Readonly<{
   folder: Folder
   onOpen: (id: number) => void
   onEdit?: (folder: Folder) => void
@@ -32,7 +32,7 @@ type Props = {
   // a thin one-line strip (icon + name + count). Hovering or focusing the
   // title opens the RapidView popover listing preview_folders + preview_links.
   compact?: boolean
-}
+}>
 
 const MIME_LINK = 'application/x-foldex-link'
 const MIME_NOTE = 'application/x-foldex-note'

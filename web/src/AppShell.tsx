@@ -37,14 +37,14 @@ export type AppContentState = {
   fetchMoreEntries: () => unknown
 }
 
-type Props = {
+type Props = Readonly<{
   workspace: AppWorkspaceController
   navigation: AppNavigationController
   dialogs: AppDialogController
   dnd: AppDndController
   content: AppContentState
   totalLinks: number
-}
+}>
 
 export function AppShell(props: Props) {
   const { workspace } = props
@@ -78,7 +78,7 @@ function Aurora() {
   )
 }
 
-function MobileBackdrop({ workspace }: { workspace: AppWorkspaceController }) {
+function MobileBackdrop({ workspace }: Readonly<{ workspace: AppWorkspaceController }>) {
   if (!workspace.mobileSidebarOpen) return null
   return (
     <div
@@ -222,12 +222,12 @@ function LazyPage({
   workspace,
   dialogs,
   initialSection,
-}: {
+}: Readonly<{
   view: Exclude<AppView, 'home'>
   workspace: AppWorkspaceController
   dialogs?: AppDialogController
   initialSection?: string
-}) {
+}>) {
   return (
     <div className="fx-mainarea">
       <Suspense fallback={<div className="fx-empty">...</div>}>

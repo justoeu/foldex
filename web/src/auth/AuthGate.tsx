@@ -44,7 +44,7 @@ const ConvertScreen = lazy(() =>
  * appear in the URL" an explicit invariant, and navigation is component state
  * throughout the product.
  */
-export function AuthGate({ children }: { children: ReactNode }) {
+export function AuthGate({ children }: Readonly<{ children: ReactNode }>) {
   const { session } = useAuth()
   const { t } = useTranslation()
   // Captured once at module scope (see authUrl.ts) and held in state so

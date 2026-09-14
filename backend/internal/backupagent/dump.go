@@ -121,7 +121,7 @@ func pgDumpCommand(ctx context.Context, cfg Config, snapshotID string) *exec.Cmd
 		"--no-password",
 		"--host=" + cfg.PGHost,
 		fmt.Sprintf("--port=%d", cfg.PGPort),
-		"--username=" + cfg.PGUser,
+		pgusernameFlag + cfg.PGUser,
 	}
 	if snapshotID != "" {
 		// The dump reads the exact snapshot the sanity counts were taken in

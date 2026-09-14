@@ -3,13 +3,13 @@ import { useTranslation } from 'react-i18next'
 import { isGradient, primaryColor } from '../lib/tagColor'
 import type { Tag } from '../api/types'
 
-type Props = {
+type Props = Readonly<{
   tag: Pick<Tag, 'name' | 'color'>
   onClick?: () => void
   active?: boolean
   closable?: boolean
   onClose?: () => void
-}
+}>
 
 // memo guards re-render storms: every LinkCard/Row mounts up to 3 TagChips
 // (cards) or 2 (compact) and a 200-card grid otherwise re-renders 600 chips

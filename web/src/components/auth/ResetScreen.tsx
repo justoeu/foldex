@@ -17,7 +17,7 @@ import { PasswordInput } from '../PasswordInput'
  * this component does not special-case that, because `adopt` handles every
  * shape the credential endpoints return.
  */
-export function ResetScreen({ token, onGiveUp }: { token: string; onGiveUp: () => void }) {
+export function ResetScreen({ token, onGiveUp }: Readonly<{ token: string; onGiveUp: () => void }>) {
   const { t } = useTranslation()
   const { adopt } = useAuth()
   const minLen = usePasswordFloor()

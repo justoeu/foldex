@@ -25,13 +25,13 @@ export function AuthShell({
   subtitle,
   children,
   footer,
-}: {
+}: Readonly<{
   kicker?: string
   title: string
   subtitle?: ReactNode
   children: ReactNode
   footer?: ReactNode
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <div className="fx-auth">
@@ -152,7 +152,7 @@ const AuthPromo = memo(function AuthPromo() {
 })
 
 /** A form-level error banner. `role="alert"` so it is announced on appearance. */
-export function AuthError({ message }: { message: string }) {
+export function AuthError({ message }: Readonly<{ message: string }>) {
   if (!message) return null
   return (
     <div className="fx-auth-error" role="alert">
@@ -167,14 +167,14 @@ export function AuthField({
   hint,
   action,
   children,
-}: {
+}: Readonly<{
   id: string
   label: string
   hint?: string
   /** Rendered on the label's own line, right-aligned — e.g. "forgot password?". */
   action?: ReactNode
   children: ReactNode
-}) {
+}>) {
   return (
     <div className="fx-auth-field">
       <div className="fx-auth-label-row">
@@ -193,12 +193,12 @@ export function AuthSubmit({
   busy,
   disabled,
   children,
-}: {
+}: Readonly<{
   busy: boolean
   /** Additional reason to block submission, e.g. an incomplete OTP field. */
   disabled?: boolean
   children: ReactNode
-}) {
+}>) {
   return (
     <button type="submit" className="fx-auth-submit" disabled={busy || disabled}>
       {busy ? <span className="fx-auth-spinner" aria-hidden="true" /> : null}

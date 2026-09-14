@@ -189,7 +189,7 @@ func (h *Handler) ConfirmEmailFactor(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrBadCredentials):
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code",
-			"that code is not valid"))
+			msgInvalidCode))
 		return
 	case errors.Is(err, ErrNoPendingFactor):
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "no_enrollment",
@@ -293,7 +293,7 @@ func (h *Handler) DisableEmailFactor(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
 			httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
-				"password is incorrect"))
+				msgPasswordIncorrect))
 			return
 		}
 		h.logger.Error("email factor disable password", "err", err)
@@ -337,7 +337,7 @@ func (h *Handler) DisableEmailFactor(w http.ResponseWriter, r *http.Request) {
 		// mapped ErrTOTPReplay this way since it was written.
 		case errors.Is(err, ErrTOTPReplay), errors.Is(err, ErrBadCredentials):
 			httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code",
-				"that code is not valid"))
+				msgInvalidCode))
 		default:
 			h.writeFactorTxnError(w, err, "email factor disable")
 		}

@@ -85,7 +85,7 @@ func validateManifestIntegrity(archive *inspectedArchive, manifest *Manifest) ([
 		return warnings, []string{fmt.Sprintf("manifest.checksums has %d entries (max %d) — refusing", len(manifest.Checksums), maxArchiveEntries)}, false
 	}
 	for _, name := range sortedKeys(archive.hashes) {
-		if name != "database.json" && !strings.HasPrefix(name, "files/") {
+		if name != snapshotDBName && !strings.HasPrefix(name, filesPrefix) {
 			continue
 		}
 		if _, exists := manifest.Checksums[name]; !exists {
@@ -108,10 +108,10 @@ func validateManifestIntegrity(archive *inspectedArchive, manifest *Manifest) ([
 
 func validateArchiveFileNames(archive *inspectedArchive) error {
 	for name := range archive.entries {
-		if !strings.HasPrefix(name, "files/") {
+		if !strings.HasPrefix(name, filesPrefix) {
 			continue
 		}
-		key := strings.TrimPrefix(name, "files/")
+		key := strings.TrimPrefix(name, filesPrefix)
 		if strings.Contains(name, "..") {
 			return fmt.Errorf("backup: rejected path traversal entry %q", name)
 		}
@@ -133,7 +133,7 @@ func sanitizeSnapshotNotes(ctx context.Context, snapshot *Snapshot) error {
 }
 
 func validateSnapshotFileReferences(ctx context.Context, snapshot *Snapshot, archive *inspectedArchive) ([]string, []string, error) {
-	fileEntries := zipEntries(archive, "files/")
+	fileEntries := zipEntries(archive, filesPrefix)
 	warnings, err := missingLinkFileWarnings(ctx, snapshot, fileEntries)
 	if err != nil {
 		return nil, nil, err
@@ -152,7 +152,7 @@ func missingLinkFileWarnings(ctx context.Context, snapshot *Snapshot, fileEntrie
 			continue
 		}
 		key := strings.TrimPrefix(*link.OGImageURL, "/api/files/")
-		if key != *link.OGImageURL && !fileEntries["files/"+key] {
+		if key != *link.OGImageURL && !fileEntries[filesPrefix+key] {
 			warnings = append(warnings, fmt.Sprintf("link %d aponta para %s mas o arquivo não está no ZIP", link.ID, key))
 		}
 	}
@@ -170,7 +170,7 @@ func missingNoteMediaErrors(ctx context.Context, snapshot *Snapshot, fileEntries
 			values = append(values, *note.CoverURL)
 		}
 		for _, key := range notemedia.Keys(values...) {
-			if !fileEntries["files/"+key] {
+			if !fileEntries[filesPrefix+key] {
 				validationErrors = append(validationErrors,
 					fmt.Sprintf("missing note media: note %d references %s but files/%s is absent", note.ID, key, key))
 			}

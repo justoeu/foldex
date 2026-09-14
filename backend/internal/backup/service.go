@@ -25,6 +25,13 @@ import (
 // two concurrent restores cannot interleave wipe/insert (RACE-HER-007). Chosen
 // as a stable int64 unrelated to row ids ('FOLDXRST' as hex-ish constant).
 // Exported so integration tests can hold the lock and assert 409.
+const (
+	snapshotDBName = "database.json"
+	filesPrefix    = "files/"
+	notesPrefix    = "notes/"
+	sha256Prefix   = "sha256:"
+)
+
 const RestoreAdvisoryLockKey int64 = 0x464F4C4458525354
 
 // InstanceBackupAdvisoryLockKey serializes the operational backup agent's jobs
@@ -55,7 +62,7 @@ type ObjectInfo struct {
 
 // File prefixes inside the bucket that backups should cover. "notes/" holds
 // inline images uploaded through the note rich-text editor.
-var bucketPrefixes = []string{"screenshots/", "images/", "notes/"}
+var bucketPrefixes = []string{"screenshots/", "images/", notesPrefix}
 
 // foldexVersion is overridden at build time via -ldflags. Empty string means
 // "unknown" and is left out of the manifest.
@@ -160,7 +167,7 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 	zw := zip.NewWriter(w)
 	checksums := map[string]string{}
 
-	dbWriter, err := zw.CreateHeader(&zip.FileHeader{Name: "database.json", Method: zip.Deflate})
+	dbWriter, err := zw.CreateHeader(&zip.FileHeader{Name: snapshotDBName, Method: zip.Deflate})
 	if err != nil {
 		return rep, fmt.Errorf("backup: zip create database.json: %w", err)
 	}
@@ -170,11 +177,11 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 	if _, err := io.Copy(dbWriter, spool.file); err != nil {
 		return rep, fmt.Errorf("backup: stream database.json: %w", err)
 	}
-	checksums["database.json"] = spool.checksum
+	checksums[snapshotDBName] = spool.checksum
 
 	// files/
 	for _, object := range listing.objects {
-		entryName := "files/" + object.Key
+		entryName := filesPrefix + object.Key
 		if err := s.streamObjectIntoZip(ctx, zw, entryName, object.Key, object.Size, checksums); err != nil {
 			return rep, err
 		}
@@ -228,7 +235,7 @@ func listOwnedObjects(ctx context.Context, storage StorageBucket, owned map[stri
 	}
 	listing := ownedObjectListing{objects: make([]ObjectInfo, 0, len(owned))}
 	selected := make(map[string]struct{}, len(owned))
-	manifestIndexBytes := checksumManifestBytes("database.json")
+	manifestIndexBytes := checksumManifestBytes(snapshotDBName)
 	for _, prefix := range bucketPrefixes {
 		err := storage.WalkObjects(ctx, prefix, func(object ObjectInfo) error {
 			if _, ok := owned[object.Key]; !ok {
@@ -278,7 +285,7 @@ func (l *ownedObjectListing) addToListing(object ObjectInfo, selected map[string
 	if object.Size > remaining {
 		return fmt.Errorf("backup expanded bytes exceed %d-byte limit", maxArchiveExpandedBytes)
 	}
-	entryName := "files/" + object.Key
+	entryName := filesPrefix + object.Key
 	*manifestIndexBytes += checksumManifestBytes(entryName)
 	if *manifestIndexBytes > maxManifestJSONBytes-manifestFixedHeadroom {
 		return fmt.Errorf("backup manifest checksum index exceeds %d-byte limit", maxManifestJSONBytes)
@@ -315,7 +322,7 @@ func (s *Service) streamObjectIntoZip(ctx context.Context, zw *zip.Writer, entry
 	if n != expectedSize {
 		return fmt.Errorf("backup: object %q changed after listing: listed=%d streamed=%d", key, expectedSize, n)
 	}
-	checksums[entryName] = "sha256:" + hex.EncodeToString(h.Sum(nil))
+	checksums[entryName] = sha256Prefix + hex.EncodeToString(h.Sum(nil))
 	return nil
 }
 
@@ -324,7 +331,7 @@ func checksumManifestBytes(name string) int64 {
 	// Include separators, quoted hash, newline, and indentation emitted by
 	// MarshalIndent. A small overestimate keeps admission ahead of HTTP headers.
 	const formattingBytes = 12
-	return int64(len(encodedName) + formattingBytes + 2 + len("sha256:") + sha256.Size*2)
+	return int64(len(encodedName) + formattingBytes + 2 + len(sha256Prefix) + sha256.Size*2)
 }
 
 type snapshotSpool struct {
@@ -357,7 +364,7 @@ func createSnapshotSpool(ctx context.Context, tx pgx.Tx, uid authctx.UserID) (*s
 	return &snapshotSpool{
 		file:     file,
 		counts:   counts,
-		checksum: "sha256:" + hex.EncodeToString(hash.Sum(nil)),
+		checksum: sha256Prefix + hex.EncodeToString(hash.Sum(nil)),
 		size:     bounded.written,
 	}, nil
 }
@@ -434,7 +441,7 @@ func readManifest(ctx context.Context, archive *inspectedArchive) (*Manifest, er
 }
 
 func readSnapshotFromZip(ctx context.Context, archive *inspectedArchive) (*Snapshot, error) {
-	entry, exists := archive.entries["database.json"]
+	entry, exists := archive.entries[snapshotDBName]
 	if !exists {
 		return nil, errors.New("database.json missing")
 	}

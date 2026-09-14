@@ -8,10 +8,10 @@ import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useDeleteTag, useTags } from '../api/tags'
 import type { Tag } from '../api/types'
 
-type Props = {
+type Props = Readonly<{
   open: boolean
   onClose: () => void
-}
+}>
 
 // One-stop modal for editing and deleting tags. Each row shows the colored
 // dot, the name, the link count and inline edit/delete buttons. Clicking

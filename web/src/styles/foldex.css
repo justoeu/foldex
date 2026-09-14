@@ -1296,7 +1296,18 @@ button.fx-localemenu-item { border-radius: 6px; font-size: 13px; color: var(--fx
 }
 .fx-dark .fx-overlay { background: rgba(0,0,0,0.55); }
 
+button.fx-overlay-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  cursor: default;
+}
 .fx-cmdk {
+  position: relative;
+  z-index: 1;
   width: min(720px, 92%);
   background: var(--fx-surface-3);
   backdrop-filter: blur(24px) saturate(180%);
@@ -3677,7 +3688,18 @@ button.fx-acct-railbtn-active {
   animation: fx-drawer-fade 0.18s ease;
 }
 
+button.fx-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  cursor: default;
+}
 .fx-drawer {
+  position: relative;
+  z-index: 1;
   display: flex; flex-direction: column;
   width: min(460px, 100%);
   height: 100%;

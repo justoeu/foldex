@@ -19,6 +19,8 @@ type Repository struct {
 
 func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
+const sqlWhere = " WHERE "
+
 func (r *Repository) Counts(ctx context.Context, uid authctx.UserID) (EntryCounts, error) {
 	var counts EntryCounts
 	err := r.pool.QueryRow(ctx, `
@@ -48,7 +50,7 @@ func buildListQuery(uid authctx.UserID, q ListQuery) (string, []any) {
         FROM link l
         LEFT JOIN entity_click_stats clk
             ON clk.user_id = $%d AND clk.entity_kind = 'link' AND clk.entity_id = l.id`, linkScope.OwnerArg)
-		linkSQL += " WHERE " + strings.Join(linkScope.Where, " AND ")
+		linkSQL += sqlWhere + strings.Join(linkScope.Where, " AND ")
 
 		noteSQL := fmt.Sprintf(`SELECT 'note' AS kind, n.id, n.title, n.slug, n.pinned, n.folder_id, n.created_at, n.updated_at,
             COALESCE(clk.click_count, 0) AS click_count, clk.last_clicked_at AS last_clicked_at,
@@ -60,7 +62,7 @@ func buildListQuery(uid authctx.UserID, q ListQuery) (string, []any) {
         FROM note n
         LEFT JOIN entity_click_stats clk
             ON clk.user_id = $%d AND clk.entity_kind = 'note' AND clk.entity_id = n.id`, noteScope.OwnerArg)
-		noteSQL += " WHERE " + strings.Join(noteScope.Where, " AND ")
+		noteSQL += sqlWhere + strings.Join(noteScope.Where, " AND ")
 
 		sql := fmt.Sprintf("SELECT * FROM (\n%s\nUNION ALL\n%s\n) u ORDER BY %s LIMIT $%d OFFSET $%d", linkSQL, noteSQL, page.OrderBy, page.LimitArg, page.OffsetArg)
 		return sql, planner.Args()
@@ -72,7 +74,7 @@ func buildListQuery(uid authctx.UserID, q ListQuery) (string, []any) {
             l.change_seen_at,
             NULL::text AS cover_url, NULL::text AS body_snippet
         FROM link l`
-	linkSQL += " WHERE " + strings.Join(linkScope.Where, " AND ")
+	linkSQL += sqlWhere + strings.Join(linkScope.Where, " AND ")
 
 	noteSQL := `SELECT 'note' AS kind, n.id, n.title, n.slug, n.pinned, n.folder_id, n.created_at, n.updated_at,
             NULL::text AS url, NULL::text AS description, NULL::text AS favicon_url,
@@ -81,7 +83,7 @@ func buildListQuery(uid authctx.UserID, q ListQuery) (string, []any) {
             NULL::timestamptz AS last_change_detected_at, NULL::timestamptz AS change_seen_at,
             n.cover_url, left(n.body_text, 240) AS body_snippet
         FROM note n`
-	noteSQL += " WHERE " + strings.Join(noteScope.Where, " AND ")
+	noteSQL += sqlWhere + strings.Join(noteScope.Where, " AND ")
 
 	// Postgres forbids expressions (e.g. lower(title)) directly in an ORDER BY
 	// that sits right under UNION ALL — only plain output-column references

@@ -8,7 +8,7 @@ import { RolesMatrix } from './RolesMatrix'
 /** The sections the administration scope can open. */
 export type AdminSection = 'users' | 'roles' | 'audit' | 'policy' | 'backup' | 'abuse'
 
-type Props = { onOpen: (section: AdminSection) => void }
+type Props = Readonly<{ onOpen: (section: AdminSection) => void }>
 
 /**
  * The administration landing screen: four derived metrics, the action cards,
@@ -150,7 +150,7 @@ export function relativeTime(iso: string): string {
   return `${Math.floor(hours / 24)}d`
 }
 
-function MetricRow({ metrics, loading }: { metrics?: InstanceMetrics; loading: boolean }) {
+function MetricRow({ metrics, loading }: Readonly<{ metrics?: InstanceMetrics; loading: boolean }>) {
   const { t } = useTranslation()
   // typeof-checked rather than merely truthy for the same reason the roles
   // matrix guards on its array: a response of an unexpected shape arrives as a
@@ -188,7 +188,7 @@ function MetricRow({ metrics, loading }: { metrics?: InstanceMetrics; loading: b
   )
 }
 
-function Metric({ tone, label, value, hint }: { tone: string; label: string; value: string; hint: string }) {
+function Metric({ tone, label, value, hint }: Readonly<{ tone: string; label: string; value: string; hint: string }>) {
   return (
     <div className="fx-metric">
       <div className="fx-metric-label">

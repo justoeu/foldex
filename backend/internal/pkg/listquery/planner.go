@@ -10,8 +10,10 @@ import (
 type entityKind string
 
 const (
-	linkKind entityKind = "link"
-	noteKind entityKind = "note"
+	linkKind     entityKind = "link"
+	noteKind     entityKind = "note"
+	colTitle                = ".title"
+	orderDescSep            = " DESC, "
 )
 
 type Entity struct {
@@ -34,7 +36,7 @@ func LinkEntity(unlockedFolder string) Entity {
 	const alias = "l"
 	return Entity{
 		alias: alias, kind: linkKind,
-		search:         []string{alias + ".title", alias + ".url", "COALESCE(" + alias + ".description,'')"},
+		search:         []string{alias + colTitle, alias + ".url", "COALESCE(" + alias + ".description,'')"},
 		unlockedFolder: unlockedFolder,
 	}
 }
@@ -43,7 +45,7 @@ func NoteEntity(unlockedFolder string) Entity {
 	const alias = "n"
 	return Entity{
 		alias: alias, kind: noteKind,
-		search:         []string{alias + ".title", alias + ".body_text"},
+		search:         []string{alias + colTitle, alias + ".body_text"},
 		unlockedFolder: unlockedFolder,
 	}
 }
@@ -61,7 +63,7 @@ func tableOrder(entityAlias string) OrderColumns {
 	return OrderColumns{
 		pinned: entityAlias + ".pinned", createdAt: entityAlias + ".created_at",
 		clickCount: "COALESCE(" + clickAlias + ".cnt, 0)", lastClickedAt: clickAlias + ".last_at",
-		title: entityAlias + ".title", stable: entityAlias + ".id ASC",
+		title: entityAlias + colTitle, stable: entityAlias + ".id ASC",
 	}
 }
 
@@ -132,19 +134,19 @@ func (p *Planner) AddScope(uid authctx.UserID, entity Entity) Scope {
 }
 
 func (p *Planner) AddPage(columns OrderColumns) Page {
-	order := columns.pinned + " DESC, " + columns.createdAt + " DESC"
+	order := columns.pinned + orderDescSep + columns.createdAt + " DESC"
 	clickRanking := false
 	switch p.params.Sort {
 	case "clicks":
-		order = columns.pinned + " DESC, " + columns.clickCount + " DESC, " + columns.createdAt + " DESC"
+		order = columns.pinned + orderDescSep + columns.clickCount + orderDescSep + columns.createdAt + " DESC"
 		clickRanking = true
 	case "recent":
-		order = columns.pinned + " DESC, COALESCE(" + columns.lastClickedAt + ", " + columns.createdAt + ") DESC"
+		order = columns.pinned + orderDescSep + "COALESCE(" + columns.lastClickedAt + ", " + columns.createdAt + ") DESC"
 		clickRanking = true
 	case "alpha":
-		order = columns.pinned + " DESC, lower(" + columns.title + ") ASC, " + columns.createdAt + " DESC"
+		order = columns.pinned + orderDescSep + "lower(" + columns.title + ") ASC, " + columns.createdAt + " DESC"
 	case "alpha_desc":
-		order = columns.pinned + " DESC, lower(" + columns.title + ") DESC, " + columns.createdAt + " DESC"
+		order = columns.pinned + orderDescSep + "lower(" + columns.title + ") DESC, " + columns.createdAt + " DESC"
 	}
 	order += ", " + columns.stable
 

@@ -19,10 +19,10 @@ import { Notice, SectionCard, SectionRow } from './SectionCard'
 export function SessionsSection({
   onSignOut,
   onSignOutEverywhere,
-}: {
+}: Readonly<{
   onSignOut: () => void
   onSignOutEverywhere: () => void
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <SectionCard

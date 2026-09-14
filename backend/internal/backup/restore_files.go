@@ -55,7 +55,7 @@ func (s *Service) applyFiles(ctx context.Context, uid authctx.UserID, zr *zip.Re
 func buildRestoreFilePlan(zr *zip.Reader, mapping idMapping, prepared *preparedNoteMediaRestore) (restoreFilePlan, error) {
 	plan := restoreFilePlan{work: make([]restoreFileWork, 0)}
 	for _, entry := range zr.File {
-		if !strings.HasPrefix(entry.Name, "files/") {
+		if !strings.HasPrefix(entry.Name, filesPrefix) {
 			continue
 		}
 		item, included, err := planRestoreFile(entry, mapping, prepared)
@@ -75,7 +75,7 @@ func planRestoreFile(entry *zip.File, mapping idMapping, prepared *preparedNoteM
 	if strings.Contains(entry.Name, "..") {
 		return restoreFileWork{}, false, fmt.Errorf("backup: rejected path traversal entry %q", entry.Name)
 	}
-	oldKey := strings.TrimPrefix(entry.Name, "files/")
+	oldKey := strings.TrimPrefix(entry.Name, filesPrefix)
 	if !hasAllowedPrefix(oldKey) {
 		return restoreFileWork{}, false, fmt.Errorf("backup: rejected entry %q (not under %v)", entry.Name, bucketPrefixes)
 	}
@@ -83,7 +83,7 @@ func planRestoreFile(entry *zip.File, mapping idMapping, prepared *preparedNoteM
 	if !included {
 		return restoreFileWork{}, false, nil
 	}
-	item := restoreFileWork{entry: entry, key: key, isNote: strings.HasPrefix(oldKey, "notes/")}
+	item := restoreFileWork{entry: entry, key: key, isNote: strings.HasPrefix(oldKey, notesPrefix)}
 	if item.isNote && prepared != nil {
 		item.preparedFile, item.hasPrepared = prepared.files[oldKey]
 	}
@@ -94,7 +94,7 @@ func remapRestoreFileKey(oldKey string, mapping idMapping) (string, bool) {
 	if _, _, _, isLinkKey := linkObjectID(oldKey); isLinkKey {
 		return mapping.remapFileKey(oldKey)
 	}
-	if strings.HasPrefix(oldKey, "notes/") {
+	if strings.HasPrefix(oldKey, notesPrefix) {
 		return mapping.remapNoteFileKey(oldKey)
 	}
 	return oldKey, true
@@ -188,7 +188,7 @@ func (s *Service) applyRestoreArchiveObject(ctx context.Context, item restoreFil
 func deleteWipedNoteMediaOwnership(ctx context.Context, pool *pgxpool.Pool, uid authctx.UserID, ownedKeys []string) error {
 	noteKeys := make([]string, 0)
 	for _, key := range ownedKeys {
-		if strings.HasPrefix(key, "notes/") {
+		if strings.HasPrefix(key, notesPrefix) {
 			noteKeys = append(noteKeys, key)
 		}
 	}

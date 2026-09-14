@@ -13,11 +13,11 @@ const FONT_STACKS = [
   { key: 'mono', value: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
 ]
 
-type Props = {
+type Props = Readonly<{
   editor: Editor | null
   // Opens the parent's hidden file picker to upload+insert an image.
   onInsertImage: () => void
-}
+}>
 
 // NoteToolbar is the formatting bar above the Tiptap editor. It re-renders with
 // NoteDialog on every editor transaction (useEditor subscribes the parent), so
@@ -145,12 +145,12 @@ function Btn({
   active,
   onClick,
   children,
-}: {
+}: Readonly<{
   label: string
   active: boolean
   onClick: () => void
   children: ReactNode
-}) {
+}>) {
   return (
     <button
       type="button"

@@ -31,11 +31,11 @@ export function NoteViewDialog({
   noteId,
   onClose,
   onEdit,
-}: {
+}: Readonly<{
   noteId: number
   onClose: () => void
   onEdit: (note: Note) => void
-}) {
+}>) {
   const { t } = useTranslation()
   const dialogRef = useRef<HTMLDivElement>(null)
   useEscape(onClose, true)

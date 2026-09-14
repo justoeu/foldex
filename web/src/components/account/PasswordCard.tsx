@@ -22,7 +22,7 @@ import { canSubmit, passwordMode, passwordsMismatch } from './PasswordCard.submi
  * proves the CURRENT password (INV-147); creating cannot — a Google-only
  * account has none — so it falls back to the second factor.
  */
-export function PasswordRow({ user }: { user: AuthUser }) {
+export function PasswordRow({ user }: Readonly<{ user: AuthUser }>) {
   const { t } = useTranslation()
   const hasPassword = user.has_password
   const mode = passwordMode(hasPassword)
@@ -82,7 +82,7 @@ export function PasswordRow({ user }: { user: AuthUser }) {
   )
 }
 
-function ChangePasswordForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+function ChangePasswordForm({ onDone, onCancel }: Readonly<{ onDone: () => void; onCancel: () => void }>) {
   const { t } = useTranslation()
   const { reload } = useAuth()
   const minLen = usePasswordFloor()
@@ -144,11 +144,11 @@ function SetPasswordForm({
   user,
   onDone,
   onCancel,
-}: {
+}: Readonly<{
   user: AuthUser
   onDone: () => void
   onCancel: () => void
-}) {
+}>) {
   const { t } = useTranslation()
   const { reload } = useAuth()
   const minLen = usePasswordFloor()
@@ -221,12 +221,12 @@ function NewPasswordFields({
   confirm,
   onNext,
   onConfirm,
-}: {
+}: Readonly<{
   next: string
   confirm: string
   onNext: (value: string) => void
   onConfirm: (value: string) => void
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <>
@@ -258,12 +258,12 @@ function FormActions({
   onSubmit,
   onCancel,
   note,
-}: {
+}: Readonly<{
   blocked: boolean
   onSubmit: () => void
   onCancel: () => void
   note: string
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <>

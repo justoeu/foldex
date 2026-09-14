@@ -12,7 +12,7 @@ import type { Entry, Folder, Link } from '../api/types'
 import type { Sort } from '../lib/viewPrefs'
 type NoteEntry = Extract<Entry, { kind: 'note' }>
 
-type Props = {
+type Props = Readonly<{
   folders: Folder[]
   entries: Entry[]
   sort: Sort
@@ -20,7 +20,7 @@ type Props = {
   onEditNote: (id: number) => void
   onOpenFolder: (id: number) => void
   onEditFolder: (f: Folder) => void
-}
+}>
 
 // Compact view: dense grid of one-line rows. Honours the same --fx-cols
 // CSS variable the cards grid uses, so the topbar's 3/5/8 density picker
@@ -73,7 +73,7 @@ export function CompactGrid({ folders, entries, sort, onEdit, onEditNote, onOpen
 const CompactLink = memo(CompactLinkImpl)
 CompactLink.displayName = 'CompactLink'
 
-function CompactLinkImpl({ link: l, onEdit }: { link: Link; onEdit: (l: Link) => void }) {
+function CompactLinkImpl({ link: l, onEdit }: Readonly<{ link: Link; onEdit: (l: Link) => void }>) {
   const { t } = useTranslation()
   return (
     <article className="fx-compact" data-entry={entryAnchor('link', l.id)} tabIndex={-1}>
@@ -126,7 +126,7 @@ function CompactLinkImpl({ link: l, onEdit }: { link: Link; onEdit: (l: Link) =>
 const CompactNote = memo(CompactNoteImpl)
 CompactNote.displayName = 'CompactNote'
 
-function CompactNoteImpl({ note: n, onEdit }: { note: NoteEntry; onEdit: (id: number) => void }) {
+function CompactNoteImpl({ note: n, onEdit }: Readonly<{ note: NoteEntry; onEdit: (id: number) => void }>) {
   const { t } = useTranslation()
   return (
     <article className="fx-compact">
@@ -185,11 +185,11 @@ function CompactFolderImpl({
   folder: f,
   onOpen,
   onEdit,
-}: {
+}: Readonly<{
   folder: Folder
   onOpen: (id: number) => void
   onEdit: (f: Folder) => void
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <article className="fx-compact fx-compact-folder" onDoubleClick={() => onOpen(f.id)}>

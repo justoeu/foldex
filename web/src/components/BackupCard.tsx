@@ -12,9 +12,9 @@ import { unreachableResources, useDepStatus } from '../api/status'
 import { apiErrorText } from '../lib/apiError'
 import { BackupRestoreDialog } from './BackupRestoreDialog'
 
-type Props = {
+type Props = Readonly<{
   onRestored: () => void
-}
+}>
 
 export function BackupCard({ onRestored }: Props) {
   const { t } = useTranslation()

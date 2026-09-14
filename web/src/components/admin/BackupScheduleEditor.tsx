@@ -182,7 +182,7 @@ export const ScheduleCard = memo(function ScheduleCard({
   isError,
   isOwner,
   cardRef,
-}: {
+}: Readonly<{
   selected: BackupJob
   onSelect: (job: BackupJob) => void
   /* The pieces of the response this card reads, never the response itself:
@@ -201,7 +201,7 @@ export const ScheduleCard = memo(function ScheduleCard({
   /* A ref object, not a callback: its identity is stable, so it does not
      defeat the memo the way an inline closure would. */
   cardRef: RefObject<HTMLDivElement | null>
-}) {
+}>) {
   const { t } = useTranslation()
 
   // Both placeholders go through the same shell as the loaded card: the slot
@@ -300,10 +300,10 @@ export const ScheduleCard = memo(function ScheduleCard({
 function AgendaShell({
   cardRef,
   children,
-}: {
+}: Readonly<{
   cardRef: RefObject<HTMLDivElement | null>
   children: ReactNode
-}) {
+}>) {
   return (
     <div className="fx-card fx-bkp-agenda" ref={cardRef} tabIndex={-1}>
       <div className="fx-card-body">{children}</div>
@@ -324,14 +324,14 @@ function ScheduleEditor({
   agentSeen,
   bounds,
   isOwner,
-}: {
+}: Readonly<{
   job: BackupJob
   row: BackupScheduleRow | null
   report: BackupAgentJobReport | null
   agentSeen: boolean
   bounds: BackupScheduleResponse['bounds']
   isOwner: boolean
-}) {
+}>) {
   const { t } = useTranslation()
   const confirm = useConfirm()
   const queryClient = useQueryClient()
@@ -476,12 +476,12 @@ function ScheduleFields({
   config,
   onChange,
   bounds,
-}: {
+}: Readonly<{
   job: BackupJob
   config: BackupScheduleConfig
   onChange: (config: BackupScheduleConfig) => void
   bounds: BackupScheduleResponse['bounds']
-}) {
+}>) {
   const enabled = config.enabled !== false
   const mode = config.mode === 'interval' ? 'interval' : 'times'
 
@@ -510,10 +510,10 @@ function ScheduleFields({
 }
 
 /** What every picker receives: the draft, and the way to replace it. */
-type PickerProps = {
+type PickerProps = Readonly<{
   config: BackupScheduleConfig
   onChange: (config: BackupScheduleConfig) => void
-}
+}>
 
 /** The one job a row may switch off, so the only one with a switch. */
 function EnabledSwitch({ enabled, config, onChange }: PickerProps & { enabled: boolean }) {

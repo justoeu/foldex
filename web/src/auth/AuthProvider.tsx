@@ -37,7 +37,7 @@ export function useHasPermission(permission: Permission): boolean {
 export function AuthProvider({
   children,
   initialState,
-}: {
+}: Readonly<{
   children: ReactNode
   /**
    * Pre-seeded session, used by tests.
@@ -48,7 +48,7 @@ export function AuthProvider({
    * path passes it explicitly.
    */
   initialState?: SessionState
-}) {
+}>) {
   const queryClient = useQueryClient()
   const { session, adopt, signOut, reload } = useSessionLifecycle({ queryClient, initialState })
   const value = useMemo<AuthContextValue>(

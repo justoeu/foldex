@@ -45,13 +45,13 @@ export function hexToHsl(hex: string): HSL {
   let g = 0
   let b = 0
   if (clean.length === 3) {
-    r = parseInt(clean[0] + clean[0], 16)
-    g = parseInt(clean[1] + clean[1], 16)
-    b = parseInt(clean[2] + clean[2], 16)
+    r = Number.parseInt(clean[0] + clean[0], 16)
+    g = Number.parseInt(clean[1] + clean[1], 16)
+    b = Number.parseInt(clean[2] + clean[2], 16)
   } else if (clean.length === 6) {
-    r = parseInt(clean.slice(0, 2), 16)
-    g = parseInt(clean.slice(2, 4), 16)
-    b = parseInt(clean.slice(4, 6), 16)
+    r = Number.parseInt(clean.slice(0, 2), 16)
+    g = Number.parseInt(clean.slice(2, 4), 16)
+    b = Number.parseInt(clean.slice(4, 6), 16)
   } else {
     return { h: 0, s: 0, l: 50 }
   }

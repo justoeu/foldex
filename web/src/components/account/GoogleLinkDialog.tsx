@@ -13,11 +13,11 @@ export function GoogleLinkDialog({
   hasSecondFactor,
   canMailCode,
   onClose,
-}: {
+}: Readonly<{
   hasSecondFactor: boolean
   canMailCode: boolean
   onClose: () => void
-}) {
+}>) {
   const { t } = useTranslation()
   const dialogRef = useRef<HTMLDivElement>(null)
   const [password, setPassword] = useState('')

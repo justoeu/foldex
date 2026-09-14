@@ -46,12 +46,14 @@ type oembedResponse struct {
 // from any IP.
 //
 // Order doesn't matter (Map lookup); patterns don't overlap.
+const youtubeOEmbed = "https://www.youtube.com/oembed?url=%s&format=json"
+
 var knownOEmbedProviders = map[string]string{
-	"youtube.com":       "https://www.youtube.com/oembed?url=%s&format=json",
-	"www.youtube.com":   "https://www.youtube.com/oembed?url=%s&format=json",
-	"m.youtube.com":     "https://www.youtube.com/oembed?url=%s&format=json",
-	"music.youtube.com": "https://www.youtube.com/oembed?url=%s&format=json",
-	"youtu.be":          "https://www.youtube.com/oembed?url=%s&format=json",
+	"youtube.com":       youtubeOEmbed,
+	"www.youtube.com":   youtubeOEmbed,
+	"m.youtube.com":     youtubeOEmbed,
+	"music.youtube.com": youtubeOEmbed,
+	"youtu.be":          youtubeOEmbed,
 	"vimeo.com":         "https://vimeo.com/api/oembed.json?url=%s",
 	"www.vimeo.com":     "https://vimeo.com/api/oembed.json?url=%s",
 }

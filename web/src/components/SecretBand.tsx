@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useCopy } from '../hooks/useCopy'
 
-type Props = {
+type Props = Readonly<{
   label: string
   /** The plaintext. Rendered as a text node — see the translate note below. */
   value: string
@@ -10,7 +10,7 @@ type Props = {
   testId?: string
   /** Rendered after the copy button — a "Done" or "Continue" that dismisses. */
   children?: React.ReactNode
-}
+}>
 
 /**
  * A secret shown exactly once, with a copy button.

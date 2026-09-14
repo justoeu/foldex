@@ -4,11 +4,11 @@ import { Icon, I } from './icons'
 import { makeGradient, hexToHsl, hslToHex } from '../lib/tagColor'
 import { DEFAULT_ENTITY_COLORS } from '../lib/entityColors'
 
-type Props = {
+type Props = Readonly<{
   from: string
   to: string
   onChange: (from: string, to: string) => void
-}
+}>
 
 const PAYLOAD = 'application/x-foldex-gradient-stop'
 
@@ -68,13 +68,13 @@ function Stop({
   value,
   onChange,
   onSwap,
-}: {
+}: Readonly<{
   side: 'from' | 'to'
   label: string
   value: string
   onChange: (c: string) => void
   onSwap: () => void
-}) {
+}>) {
   const { t } = useTranslation()
   const [dragOver, setDragOver] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -176,11 +176,11 @@ function HueSpectrumBar({
   from,
   to,
   onChange,
-}: {
+}: Readonly<{
   from: string
   to: string
   onChange: (f: string, t: string) => void
-}) {
+}>) {
   const { t } = useTranslation()
   const barRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState<'from' | 'to' | null>(null)
@@ -272,14 +272,14 @@ function HueThumb({
   active,
   onPointerDown,
   onKeyMove,
-}: {
+}: Readonly<{
   position: number
   color: string
   label: string
   active: boolean
   onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void
   onKeyMove: (position: number) => void
-}) {
+}>) {
   const hue = Math.round(position * 360)
   return (
     <div

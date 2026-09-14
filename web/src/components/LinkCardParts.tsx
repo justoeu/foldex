@@ -21,12 +21,12 @@ export function LinkCardBadges({
   unseenChange,
   actions,
   t,
-}: {
+}: Readonly<{
   link: Link
   unseenChange: boolean
   actions: CardActions
   t: TFunction
-}) {
+}>) {
   const togglePin = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation()
     actions.onPin(link, !link.pinned)
@@ -71,12 +71,12 @@ export function LinkCardPreview({
   previewSrc,
   onGo,
   onError,
-}: {
+}: Readonly<{
   link: Link
   previewSrc: string | undefined
   onGo: () => void
   onError: () => void
-}) {
+}>) {
   if (!previewSrc) return null
   return (
     <a
@@ -105,13 +105,13 @@ export function LinkCardBody({
   actions,
   onGo,
   t,
-}: {
+}: Readonly<{
   link: Link
   showPreview: boolean
   actions: CardActions
   onGo: () => void
   t: TFunction
-}) {
+}>) {
   return (
     <div className="fx-card-body">
       <header className="fx-card-head">
@@ -145,7 +145,7 @@ export function LinkCardBody({
   )
 }
 
-function LinkCardMeta({ link, t }: { link: Link; t: TFunction }) {
+function LinkCardMeta({ link, t }: Readonly<{ link: Link; t: TFunction }>) {
   const monitoringTooltip = link.check_interval
     ? t('link_card.monitoring_tooltip', { interval: t('link_card.interval_' + link.check_interval) })
     : undefined
@@ -194,13 +194,13 @@ function LinkCardActions({
   actions,
   onGo,
   t,
-}: {
+}: Readonly<{
   link: Link
   showPreview: boolean
   actions: CardActions
   onGo: () => void
   t: TFunction
-}) {
+}>) {
   return (
     <div className="fx-card-actions">
       {/* Gated on what the reader SEES, not on what the backend concluded.

@@ -13,7 +13,7 @@ import { useFolderDeleteController, useFolderSaveController } from '../hooks/use
 import type { Folder } from '../api/types'
 import { PasswordInput } from './PasswordInput'
 
-type Props = {
+type Props = Readonly<{
   open: boolean
   onClose: () => void
   folder?: Folder | null
@@ -21,7 +21,7 @@ type Props = {
   parentId?: number | null
   unlockToken?: string
   onUnlocked?: (result: FolderUnlock) => void
-}
+}>
 
 type Form = ReturnType<typeof useFolderDialogForm>
 
@@ -100,7 +100,7 @@ export function FolderDialog(props: Props) {
   )
 }
 
-function FolderDialogError({ message }: { message: string | null }) {
+function FolderDialogError({ message }: Readonly<{ message: string | null }>) {
   if (!message) return null
   return (
     <div role="alert" style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 20px 8px' }}>
@@ -114,12 +114,12 @@ function FolderDialogHeader({
   isEdit,
   isNaming,
   onClose,
-}: {
+}: Readonly<{
   folder?: Folder | null
   isEdit: boolean
   isNaming: boolean
   onClose: () => void
-}) {
+}>) {
   const { t } = useTranslation()
   const kicker = isNaming
     ? t('folder_dialog.kicker_naming')
@@ -145,12 +145,12 @@ function FolderDialogBody({
   folder,
   isEdit,
   isNaming,
-}: {
+}: Readonly<{
   form: Form
   folder?: Folder | null
   isEdit: boolean
   isNaming: boolean
-}) {
+}>) {
   return (
     <div className="fx-modal-body" style={{ gridTemplateColumns: '1fr' }}>
       <div className="fx-modal-col">
@@ -175,7 +175,7 @@ function FolderDialogBody({
   )
 }
 
-function FolderNameField({ form, isNaming }: { form: Form; isNaming: boolean }) {
+function FolderNameField({ form, isNaming }: Readonly<{ form: Form; isNaming: boolean }>) {
   const { t } = useTranslation()
   return (
     <label className="fx-field">
@@ -196,7 +196,7 @@ function FolderNameField({ form, isNaming }: { form: Form; isNaming: boolean }) 
   )
 }
 
-function FolderParentField({ form, folder }: { form: Form; folder: Folder }) {
+function FolderParentField({ form, folder }: Readonly<{ form: Form; folder: Folder }>) {
   const { t } = useTranslation()
   const { data: folders = [] } = useFolders()
   return (
@@ -220,18 +220,18 @@ function FolderPasswordSection({
   folder,
   isEdit,
   isNaming,
-}: {
+}: Readonly<{
   form: Form
   folder?: Folder | null
   isEdit: boolean
   isNaming: boolean
-}) {
+}>) {
   if (isNaming) return null
   if (!isEdit || !folder?.has_password) return <NewFolderPasswordFields form={form} />
   return <ProtectedFolderPasswordFields form={form} />
 }
 
-function NewFolderPasswordFields({ form }: { form: Form }) {
+function NewFolderPasswordFields({ form }: Readonly<{ form: Form }>) {
   const { t } = useTranslation()
   return (
     <>
@@ -254,7 +254,7 @@ function NewFolderPasswordFields({ form }: { form: Form }) {
   )
 }
 
-function ProtectedFolderPasswordFields({ form }: { form: Form }) {
+function ProtectedFolderPasswordFields({ form }: Readonly<{ form: Form }>) {
   const { t } = useTranslation()
   return (
     <>
@@ -279,7 +279,7 @@ function ProtectedFolderPasswordFields({ form }: { form: Form }) {
   )
 }
 
-function PasswordEditor({ form }: { form: Form }) {
+function PasswordEditor({ form }: Readonly<{ form: Form }>) {
   const { t } = useTranslation()
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -318,7 +318,7 @@ function PasswordEditor({ form }: { form: Form }) {
   )
 }
 
-function FolderHintField({ form }: { form: Form }) {
+function FolderHintField({ form }: Readonly<{ form: Form }>) {
   const { t } = useTranslation()
   return (
     <label className="fx-field">
@@ -341,7 +341,7 @@ function FolderHintField({ form }: { form: Form }) {
   )
 }
 
-function InlinePasswordError({ message, marginTop }: { message: string; marginTop?: boolean }) {
+function InlinePasswordError({ message, marginTop }: Readonly<{ message: string; marginTop?: boolean }>) {
   return (
     <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, marginTop: marginTop ? 6 : undefined }}>
       <Icon d={I.alert} size={12} /> {message}
@@ -358,7 +358,7 @@ function FolderDialogFooter({
   onSubmit,
   onDeleteKeepingLinks,
   onDeleteCascade,
-}: {
+}: Readonly<{
   form: Form
   isEdit: boolean
   isNaming: boolean
@@ -367,7 +367,7 @@ function FolderDialogFooter({
   onSubmit: () => Promise<void>
   onDeleteKeepingLinks: () => Promise<void>
   onDeleteCascade: () => Promise<void>
-}) {
+}>) {
   const { t } = useTranslation()
   const submitLabel = isNaming
     ? t('folder_dialog.submit_done')

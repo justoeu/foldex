@@ -27,7 +27,13 @@ import (
 // gateway. "notes/" holds inline images uploaded through the note rich-text
 // editor (notes.ImageHandler) — ProxyFile is shared infrastructure so notes
 // reuses it rather than standing up a second file-serving endpoint.
-var allowedFilePrefixes = []string{"screenshots/", "images/", "notes/"}
+const (
+	prefixScreenshots = "screenshots/"
+	prefixImages      = "images/"
+	prefixNotes       = "notes/"
+)
+
+var allowedFilePrefixes = []string{prefixScreenshots, prefixImages, prefixNotes}
 
 // Screenshotter captures a URL and returns PNG bytes.
 type Screenshotter interface {
@@ -273,7 +279,7 @@ func (h *ScreenshotHandler) ProxyFile(w http.ResponseWriter, r *http.Request) {
 // in the public /n/{slug} page remain readable. The fixed prefix prevents this
 // route from reaching id-derived link media, which still requires ownership.
 func (h *ScreenshotHandler) ProxyNoteFile(w http.ResponseWriter, r *http.Request) {
-	key := "notes/" + chi.URLParam(r, "*")
+	key := prefixNotes + chi.URLParam(r, "*")
 	if !isValidNoteKey(key) {
 		httperr.Write(w, httperr.ErrNotFound)
 		return
@@ -334,7 +340,7 @@ func (h *ScreenshotHandler) proxyFile(w http.ResponseWriter, r *http.Request, ke
 	}
 	w.Header().Set("Content-Type", detected)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if strings.HasPrefix(key, "notes/") {
+	if strings.HasPrefix(key, prefixNotes) {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 	} else {
 		w.Header().Set("Cache-Control", "private, max-age=86400")
@@ -363,12 +369,12 @@ func (h *ScreenshotHandler) proxyFile(w http.ResponseWriter, r *http.Request, ke
 func (h *ScreenshotHandler) authorizeKey(ctx context.Context, key string) error {
 	notFound := httperr.New(http.StatusNotFound, "not_found", "file not found")
 	switch {
-	case strings.HasPrefix(key, "notes/"):
+	case strings.HasPrefix(key, prefixNotes):
 		if isValidNoteKey(key) {
 			return nil
 		}
 		return notFound
-	case strings.HasPrefix(key, "screenshots/"), strings.HasPrefix(key, "images/"):
+	case strings.HasPrefix(key, prefixScreenshots), strings.HasPrefix(key, prefixImages):
 		id, ok := linkKeyID(key)
 		if !ok {
 			// Nothing under these prefixes is written with a non-numeric name,
@@ -409,7 +415,7 @@ func linkKeyID(key string) (int64, bool) {
 // bucket namespace: only canonical UUID names emitted by the note uploader and
 // restore paths, with supported raster-image extensions, are readable.
 func isValidNoteKey(key string) bool {
-	const prefix = "notes/"
+	const prefix = prefixNotes
 	if !strings.HasPrefix(key, prefix) {
 		return false
 	}
@@ -599,7 +605,7 @@ func (h *ScreenshotHandler) DeleteImage(w http.ResponseWriter, r *http.Request) 
 // decided its answer — the client gets the same 404 either way — and turning a
 // self-healing attempt into a 500 would make a broken thumbnail break the page.
 func (h *ScreenshotHandler) healMissingObject(ctx context.Context, key string) {
-	if !strings.HasPrefix(key, "screenshots/") && !strings.HasPrefix(key, "images/") {
+	if !strings.HasPrefix(key, prefixScreenshots) && !strings.HasPrefix(key, prefixImages) {
 		return
 	}
 	id, ok := linkKeyID(key)

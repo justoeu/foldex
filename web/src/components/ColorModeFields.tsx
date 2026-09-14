@@ -6,7 +6,7 @@ import { DEFAULT_ENTITY_COLORS, type ColorMode } from '../lib/entityColors'
 export type { ColorMode }
 export { DEFAULT_ENTITY_COLORS }
 
-type Props = {
+type Props = Readonly<{
   mode: ColorMode
   onModeChange: (m: ColorMode) => void
   solid: string
@@ -16,7 +16,7 @@ type Props = {
   onGradientChange: (from: string, to: string) => void
   /** i18n key prefix — tag_dialog or folder_dialog */
   i18nPrefix: 'tag_dialog' | 'folder_dialog'
-}
+}>
 
 export function ColorModeFields({
   mode,

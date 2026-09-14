@@ -13,7 +13,7 @@ import type { AuthUser } from '../../auth/types'
  * line of status each, so the state of the account was the one thing the
  * account screen did not show.
  */
-export function AccountHero({ user }: { user: AuthUser }) {
+export function AccountHero({ user }: Readonly<{ user: AuthUser }>) {
   const { t } = useTranslation()
   const hasPassword = user.has_password
   const hasFactor = hasSecondFactor(user)

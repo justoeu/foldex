@@ -16,13 +16,13 @@ export function SectionCard({
   subtitle,
   badge,
   children,
-}: {
+}: Readonly<{
   icon: ReactNode
   title: string
   subtitle?: string
   badge?: ReactNode
   children: ReactNode
-}) {
+}>) {
   return (
     <section className="fx-card">
       <div className="fx-card-body fx-sec-body">
@@ -45,10 +45,10 @@ export function SectionCard({
 export function SectionBadge({
   tone = 'off',
   children,
-}: {
+}: Readonly<{
   tone?: 'on' | 'off' | 'warn'
   children: ReactNode
-}) {
+}>) {
   return (
     <span className={`fx-sec-badge fx-sec-badge-${tone}`}>
       <Icon d={tone === 'on' ? I.check : I.info} size={12} />
@@ -68,10 +68,10 @@ export function SectionBadge({
 export function Notice({
   tone,
   children,
-}: {
+}: Readonly<{
   tone: 'ok' | 'bad' | 'info'
   children: ReactNode
-}) {
+}>) {
   const glyph = tone === 'ok' ? I.check : tone === 'bad' ? I.alert : I.info
   return (
     <p
@@ -85,7 +85,7 @@ export function Notice({
   )
 }
 
-export function SectionBlock({ label, children }: { label: string; children: ReactNode }) {
+export function SectionBlock({ label, children }: Readonly<{ label: string; children: ReactNode }>) {
   return (
     <div className="fx-sec-block">
       <span className="fx-sec-block-label">{label}</span>
@@ -112,7 +112,7 @@ export function SectionRow({
   lock,
   action,
   children,
-}: {
+}: Readonly<{
   icon: ReactNode
   name: string
   hint?: string
@@ -124,7 +124,7 @@ export function SectionRow({
   action?: ReactNode
   /** A form belonging to this row, revealed beneath it. */
   children?: ReactNode
-}) {
+}>) {
   return (
     /*
       A labelled group, not a list item. Every row is a heading plus the

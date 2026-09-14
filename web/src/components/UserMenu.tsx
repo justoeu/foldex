@@ -13,7 +13,7 @@ import { useAuth } from '../auth/AuthProvider'
  * clip an in-flow dropdown). Sign-out lives here so it is reachable from
  * EVERY view, not only from inside the settings hub.
  */
-export function UserMenu({ onOpenProfile }: { onOpenProfile: () => void }) {
+export function UserMenu({ onOpenProfile }: Readonly<{ onOpenProfile: () => void }>) {
   const { t } = useTranslation()
   const { session, signOut } = useAuth()
   const { open, pos, btnRef, menuRef, toggle, close } = usePortalMenu()

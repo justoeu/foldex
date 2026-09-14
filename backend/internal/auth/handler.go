@@ -37,6 +37,15 @@ const (
 // MaxEmailLen mirrors the CHECK on app_user.email.
 const MaxEmailLen = 320
 
+const (
+	pathEmailChange      = "/email/change"
+	bootstrapKeyPrefix   = "bootstrap:"
+	oauthKeyPrefix       = "oauth:"
+	msgInvalidEmail      = "invalid e-mail address"
+	msgInvalidCode       = "that code is not valid"
+	msgPasswordIncorrect = "password is incorrect"
+)
+
 // inviteTTL is how long an invitation stays usable.
 const inviteTTL = 7 * 24 * time.Hour
 
@@ -342,9 +351,9 @@ func (h *Handler) Mount(r chi.Router) {
 		pr.Post("/password/set", h.SetPassword)
 		pr.Get("/identities", h.ListIdentities)
 		pr.Post("/email/resend", h.SendEmailVerification)
-		pr.Post("/email/change", h.RequestEmailChange)
-		pr.Delete("/email/change", h.CancelEmailChange)
-		pr.Get("/email/change", h.GetEmailChange)
+		pr.Post(pathEmailChange, h.RequestEmailChange)
+		pr.Delete(pathEmailChange, h.CancelEmailChange)
+		pr.Get(pathEmailChange, h.GetEmailChange)
 		pr.Get("/2fa", h.TwoFactorStatus)
 		pr.Post("/2fa/totp/disable", h.DisableTOTP)
 		pr.Post("/2fa/email/send", h.SendStepUpEmailOTP)
@@ -412,14 +421,14 @@ type bootstrapInput struct {
 // Bootstrap claims the placeholder admin created by migration 000017.
 func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if until, ok := h.bootstrapIP.Begin("bootstrap:" + ip); !ok {
+	if until, ok := h.bootstrapIP.Begin(bootstrapKeyPrefix + ip); !ok {
 		writeRateLimited(w, until)
 		return
 	}
 	committed := false
 	defer func() {
 		if !committed {
-			h.bootstrapIP.Release("bootstrap:" + ip)
+			h.bootstrapIP.Release(bootstrapKeyPrefix + ip)
 		}
 	}()
 
@@ -440,13 +449,13 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	user, err := h.repo.Bootstrap(r.Context(), in.Email, strings.TrimSpace(in.Name), in.Password)
 	switch {
 	case errors.Is(err, ErrAlreadySetUp):
-		h.bootstrapIP.CommitFail("bootstrap:" + ip)
+		h.bootstrapIP.CommitFail(bootstrapKeyPrefix + ip)
 		committed = true
 		httperr.Write(w, httperr.New(http.StatusConflict, "already_configured",
 			"this instance already has an account"))
 		return
 	case errors.Is(err, ErrEmailTaken):
-		h.bootstrapIP.CommitFail("bootstrap:" + ip)
+		h.bootstrapIP.CommitFail(bootstrapKeyPrefix + ip)
 		committed = true
 		httperr.Write(w, httperr.New(http.StatusConflict, "email_taken", "e-mail already registered"))
 		return
@@ -455,7 +464,7 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	h.bootstrapIP.CommitSuccess("bootstrap:" + ip)
+	h.bootstrapIP.CommitSuccess(bootstrapKeyPrefix + ip)
 	committed = true
 
 	h.completeLogin(w, r, user, false)
@@ -1239,17 +1248,17 @@ func validatePasswordAgainst(ctx context.Context, policy PolicyReader, p string)
 func validateEmail(email string) error {
 	e := strings.TrimSpace(email)
 	if len(e) < 3 || len(e) > MaxEmailLen {
-		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
+		return httperr.New(http.StatusBadRequest, "invalid_email", msgInvalidEmail)
 	}
 	// Refuse a scheme before splitting: `user@ok.com://phish` has a legal
 	// local part and a domain that "has a dot", and it is exactly the string
 	// the linkless change notice interpolates into {{.NewEmail}}.
 	if strings.Contains(e, "://") {
-		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
+		return httperr.New(http.StatusBadRequest, "invalid_email", msgInvalidEmail)
 	}
 	at := strings.LastIndex(e, "@")
 	if at <= 0 || at == len(e)-1 || strings.ContainsAny(e, " \t\r\n") {
-		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
+		return httperr.New(http.StatusBadRequest, "invalid_email", msgInvalidEmail)
 	}
 	// The LOCAL part is an RFC 5321 dot-string, and checking it is not pedantry.
 	// Unchecked, it accepted anything without a space, so
@@ -1259,10 +1268,10 @@ func validateEmail(email string) error {
 	// auto-linkify a bare `https://`, so the anti-phishing warning became the
 	// phishing vehicle, delivered by us, to the person being attacked.
 	if !validLocalPart(e[:at]) {
-		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
+		return httperr.New(http.StatusBadRequest, "invalid_email", msgInvalidEmail)
 	}
 	if !validEmailDomain(e[at+1:]) {
-		return httperr.New(http.StatusBadRequest, "invalid_email", "invalid e-mail address")
+		return httperr.New(http.StatusBadRequest, "invalid_email", msgInvalidEmail)
 	}
 	return nil
 }

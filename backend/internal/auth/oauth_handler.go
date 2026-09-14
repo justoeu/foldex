@@ -82,7 +82,7 @@ func (h *Handler) OAuthStart(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, errOAuthDisabled())
 		return
 	}
-	key := "oauth:" + clientIP(r)
+	key := oauthKeyPrefix + clientIP(r)
 	if until, ok := h.oauthIP.Begin(key); !ok {
 		writeRateLimited(w, until)
 		return
@@ -145,7 +145,7 @@ func (h *Handler) OAuthInviteStart(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	key := "oauth:" + clientIP(r)
+	key := oauthKeyPrefix + clientIP(r)
 	if until, ok := h.oauthIP.Begin(key); !ok {
 		writeRateLimited(w, until)
 		return
@@ -224,7 +224,7 @@ func (h *Handler) OAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	oauthKey := "oauth:" + clientIP(r)
+	oauthKey := oauthKeyPrefix + clientIP(r)
 	if until, ok := h.oauthIP.Begin(oauthKey); !ok {
 		writeRateLimited(w, until)
 		return
@@ -251,7 +251,7 @@ func (h *Handler) checkOAuthLinkSecondFactor(w http.ResponseWriter, r *http.Requ
 	consumed := false
 	if !h.withStepUp(w, r, user.ID, user, code, func(proof SecondFactorProof) error {
 		if err := h.repo.ConsumeSecondFactor(r.Context(), user.ID, proof); err != nil {
-			httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
+			httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", msgInvalidCode))
 			return ErrBadCredentials
 		}
 		h.notifyIfRecovery(r, user, proof)
