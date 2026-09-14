@@ -1317,7 +1317,7 @@ O gate viaja pelo CONTEXTO (`internal/pkg/clickctx`) e não por parâmetro porqu
 
 ### INV-183 — Nenhuma entrada controlada pelo cliente compõe uma chave de rate limit.
 
-*Guards:* `TestLoginLimits_TheConfigurableCeilingFitsInsideTheLimiterSet`, e a lente 3 da skill `/abuse-audit`
+*Guards:* `TestLoginLimits_TheConfigurableCeilingFitsInsideTheLimiterSet`
 
 A pergunta que originou o ADR-47 propunha compor a chave do limitador com `IP + e-mail + User-Agent`. O User-Agent é um cabeçalho que **o cliente escreve**: com ele na chave, o atacante manda um valor diferente por tentativa — dimensão livre e infinita — e ganha um orçamento inteiro por requisição. O balde deixa de existir **enquanto continua parecendo existir**, que é o pior modo de falha desta categoria: a configuração mostra um teto, o log mostra contagens, e nada nunca tranca.
 
