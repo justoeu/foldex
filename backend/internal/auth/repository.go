@@ -434,49 +434,11 @@ func (r *Repository) SetPassword(ctx context.Context, id authctx.UserID, keepSes
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var currentHash *string
-	var liveVersion int
-	var status string
-	if err := tx.QueryRow(ctx, `
-		SELECT password_hash, token_version, status
-		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(id)).
-		Scan(&currentHash, &liveVersion, &status); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNoUser
-		}
-		return fmt.Errorf("set password lock user: %w", err)
-	}
-	if status != StatusActive || liveVersion != tokenVersion {
-		return ErrSessionInvalid
-	}
-	if currentHash != nil {
-		return ErrPasswordExists
-	}
-	if err := requireLiveSessionTx(ctx, tx, id, keepSession); err != nil {
+	if err := lockPasswordSetTx(ctx, tx, id, keepSession, tokenVersion); err != nil {
 		return err
 	}
-
-	// ANY second factor, not just an authenticator. Read inside the transaction
-	// under the user lock so it cannot disagree with the handler's own check —
-	// and reading only totp_secret here would let an account whose sole factor is
-	// e-mail set a password with no proof at all, because the handler would
-	// demand one and this re-check would then waive it.
-	var hasFactor bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM totp_secret
-		               WHERE user_id = $1 AND confirmed_at IS NOT NULL)
-		    OR EXISTS (SELECT 1 FROM email_factor
-		               WHERE user_id = $1 AND confirmed_at IS NOT NULL)`,
-		int64(id)).Scan(&hasFactor); err != nil {
-		return fmt.Errorf("set password check second factor: %w", err)
-	}
-	if hasFactor {
-		if proof.Method == "" {
-			return ErrTOTPReplay
-		}
-		if err := consumeSecondFactorTx(ctx, tx, id, proof); err != nil {
-			return err
-		}
+	if err := consumeFactorIfPresentTx(ctx, tx, id, proof); err != nil {
+		return err
 	}
 
 	ct, err := tx.Exec(ctx, `
@@ -500,6 +462,52 @@ func (r *Repository) SetPassword(ctx context.Context, id authctx.UserID, keepSes
 		return fmt.Errorf("set password commit: %w", err)
 	}
 	return nil
+}
+
+func lockPasswordSetTx(ctx context.Context, tx pgx.Tx, id authctx.UserID, keepSession int64, tokenVersion int) error {
+	var currentHash *string
+	var liveVersion int
+	var status string
+	if err := tx.QueryRow(ctx, `
+		SELECT password_hash, token_version, status
+		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(id)).
+		Scan(&currentHash, &liveVersion, &status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNoUser
+		}
+		return fmt.Errorf("set password lock user: %w", err)
+	}
+	if status != StatusActive || liveVersion != tokenVersion {
+		return ErrSessionInvalid
+	}
+	if currentHash != nil {
+		return ErrPasswordExists
+	}
+	return requireLiveSessionTx(ctx, tx, id, keepSession)
+}
+
+func consumeFactorIfPresentTx(ctx context.Context, tx pgx.Tx, id authctx.UserID, proof SecondFactorProof) error {
+	// ANY second factor, not just an authenticator. Read inside the transaction
+	// under the user lock so it cannot disagree with the handler's own check —
+	// and reading only totp_secret here would let an account whose sole factor is
+	// e-mail set a password with no proof at all, because the handler would
+	// demand one and this re-check would then waive it.
+	var hasFactor bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM totp_secret
+		               WHERE user_id = $1 AND confirmed_at IS NOT NULL)
+		    OR EXISTS (SELECT 1 FROM email_factor
+		               WHERE user_id = $1 AND confirmed_at IS NOT NULL)`,
+		int64(id)).Scan(&hasFactor); err != nil {
+		return fmt.Errorf("set password check second factor: %w", err)
+	}
+	if !hasFactor {
+		return nil
+	}
+	if proof.Method == "" {
+		return ErrTOTPReplay
+	}
+	return consumeSecondFactorTx(ctx, tx, id, proof)
 }
 
 // ChangePassword locks the credential row before verifying and replacing it,
@@ -707,31 +715,67 @@ func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *st
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(adminGuardLockKey)); err != nil {
-		return User{}, fmt.Errorf("update user lock: %w", err)
-	}
-	var previousRole authctx.Role
-	if err := tx.QueryRow(ctx, `SELECT role FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(id)).Scan(&previousRole); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return User{}, ErrNoUser
-		}
-		return User{}, fmt.Errorf("update user role: %w", err)
+	previousRole, err := lockUserForAdminEditTx(ctx, tx, id)
+	if err != nil {
+		return User{}, err
 	}
 	// The owner is out of reach of ordinary edits. Checked here, inside the
 	// advisory lock, rather than in the handler: the handler would have to read
 	// the row first, and between that read and this write a transfer could move
 	// the seat — leaving the edit applied to whoever now holds it.
-	if previousRole == authctx.RoleOwner && (role != nil || status != nil) {
+	if ownerIsImmutable(previousRole, role, status) {
 		return User{}, ErrOwnerImmutable
 	}
-	demoting := role != nil && !role.IsAdmin()
-	disabling := status != nil && *status == StatusDisabled
-	if demoting || disabling {
+	if isDemoteOrDisable(role, status) {
 		if err := guardLastAdminTx(ctx, tx, id); err != nil {
 			return User{}, err
 		}
 	}
 
+	u, err := applyUserUpdateTx(ctx, tx, id, name, role, status)
+	if err != nil {
+		return User{}, err
+	}
+	if isAdminPromotion(previousRole, role) {
+		if err := revokeSessionsOnPromotion(ctx, tx, id); err != nil {
+			return User{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, fmt.Errorf("update user commit: %w", err)
+	}
+	return u, nil
+}
+
+func ownerIsImmutable(previous authctx.Role, role *authctx.Role, status *string) bool {
+	return previous == authctx.RoleOwner && (role != nil || status != nil)
+}
+
+func isDemoteOrDisable(role *authctx.Role, status *string) bool {
+	demoting := role != nil && !role.IsAdmin()
+	disabling := status != nil && *status == StatusDisabled
+	return demoting || disabling
+}
+
+func isAdminPromotion(previous authctx.Role, role *authctx.Role) bool {
+	return role != nil && !previous.IsAdmin() && role.IsAdmin()
+}
+
+func lockUserForAdminEditTx(ctx context.Context, tx pgx.Tx, id authctx.UserID) (authctx.Role, error) {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(adminGuardLockKey)); err != nil {
+		return "", fmt.Errorf("update user lock: %w", err)
+	}
+	var previousRole authctx.Role
+	if err := tx.QueryRow(ctx, `SELECT role FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(id)).Scan(&previousRole); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrNoUser
+		}
+		return "", fmt.Errorf("update user role: %w", err)
+	}
+	return previousRole, nil
+}
+
+func applyUserUpdateTx(ctx context.Context, tx pgx.Tx, id authctx.UserID, name *string, role *authctx.Role, status *string) (User, error) {
 	u, err := scanUser(tx.QueryRow(ctx, `
 		UPDATE app_user SET
 			name   = COALESCE($2, name),
@@ -748,14 +792,6 @@ func (r *Repository) UpdateUser(ctx context.Context, id authctx.UserID, name *st
 	}
 	if err != nil {
 		return User{}, fmt.Errorf("update user: %w", err)
-	}
-	if role != nil && !previousRole.IsAdmin() && role.IsAdmin() {
-		if err := revokeSessionsOnPromotion(ctx, tx, id); err != nil {
-			return User{}, err
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return User{}, fmt.Errorf("update user commit: %w", err)
 	}
 	return u, nil
 }
@@ -1119,24 +1155,9 @@ func (r *Repository) acceptInvite(ctx context.Context, by inviteBy, name string,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var inviteID int64
-	var email string
-	var role authctx.Role
-	// The liveness predicates are identical for both locators, and stay in ONE
-	// statement: an id-located invite that skipped the accepted/revoked/expired
-	// checks would let a completed OAuth round-trip claim an invitation revoked
-	// while the user was on Google's consent screen.
-	err = tx.QueryRow(ctx, `
-		SELECT id, email, role FROM invite
-		WHERE ($1::bytea IS NULL OR token_hash = $1)
-		  AND ($2::bigint IS NULL OR id = $2)
-		  AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
-		FOR UPDATE`, by.tokenHash, by.id).Scan(&inviteID, &email, &role)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return User{}, ErrInviteInvalid
-	}
+	inviteID, email, role, err := lookupLiveInviteTx(ctx, tx, by)
 	if err != nil {
-		return User{}, fmt.Errorf("accept lookup: %w", err)
+		return User{}, err
 	}
 
 	norm := NormalizeEmail(email)
@@ -1144,6 +1165,45 @@ func (r *Repository) acceptInvite(ctx context.Context, by inviteBy, name string,
 		return User{}, ErrInviteEmailMismatch
 	}
 
+	u, err := insertAcceptedUserTx(ctx, tx, email, norm, name, cred, role)
+	if err != nil {
+		return User{}, err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE invite SET accepted_at = now(), accepted_user_id = $2 WHERE id = $1`,
+		inviteID, int64(u.ID)); err != nil {
+		return User{}, fmt.Errorf("accept consume: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, fmt.Errorf("accept commit: %w", err)
+	}
+	return u, nil
+}
+
+func lookupLiveInviteTx(ctx context.Context, tx pgx.Tx, by inviteBy) (int64, string, authctx.Role, error) {
+	var inviteID int64
+	var email string
+	var role authctx.Role
+	// The liveness predicates are identical for both locators, and stay in ONE
+	// statement: an id-located invite that skipped the accepted/revoked/expired
+	// checks would let a completed OAuth round-trip claim an invitation revoked
+	// while the user was on Google's consent screen.
+	err := tx.QueryRow(ctx, `
+		SELECT id, email, role FROM invite
+		WHERE ($1::bytea IS NULL OR token_hash = $1)
+		  AND ($2::bigint IS NULL OR id = $2)
+		  AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
+		FOR UPDATE`, by.tokenHash, by.id).Scan(&inviteID, &email, &role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, "", "", ErrInviteInvalid
+	}
+	if err != nil {
+		return 0, "", "", fmt.Errorf("accept lookup: %w", err)
+	}
+	return inviteID, email, role, nil
+}
+
+func insertAcceptedUserTx(ctx context.Context, tx pgx.Tx, email, norm, name string, cred inviteCredential, role authctx.Role) (User, error) {
 	u, err := scanUser(tx.QueryRow(ctx, `
 		INSERT INTO app_user (email, email_normalized, name, password_hash, role, status, email_verified_at)
 		VALUES ($1, $2, $3, $4, $5, 'active', now())
@@ -1162,14 +1222,6 @@ func (r *Repository) acceptInvite(ctx context.Context, by inviteBy, name string,
 			nullString(cred.identity.email)); err != nil {
 			return User{}, mapIdentityConflict(err)
 		}
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE invite SET accepted_at = now(), accepted_user_id = $2 WHERE id = $1`,
-		inviteID, int64(u.ID)); err != nil {
-		return User{}, fmt.Errorf("accept consume: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return User{}, fmt.Errorf("accept commit: %w", err)
 	}
 	return u, nil
 }
