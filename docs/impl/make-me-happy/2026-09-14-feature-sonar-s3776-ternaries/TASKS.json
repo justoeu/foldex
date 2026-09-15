@@ -7,9 +7,9 @@
       "title": "Characterize auth complexity functions before extract",
       "slice": "backend/internal/auth/** \u2014 lock current HTTP/repo outcomes of the 18 in-scope functions. Production code unchanged.",
       "worktree": 1,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 7,
+      "red_green": true,
       "immutability": true,
       "depends_on": [],
       "red_test": "backend/internal/auth/s3776_charter_test.go \u2014 table of success+error paths that already hold today. Must pass on current code."
@@ -19,9 +19,9 @@
       "title": "Extract CompleteEmailFactorEnrollment + ConfirmEmailFactor to \u226415",
       "slice": "backend/internal/auth/repository_email_factor.go, email_factor_handler.go",
       "worktree": 1,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 3,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-001"
@@ -33,9 +33,9 @@
       "title": "Extract tryStepUpProof + ConfirmTOTP to \u226415",
       "slice": "backend/internal/auth/twofa_handler.go",
       "worktree": 1,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 2,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-001"
@@ -47,9 +47,9 @@
       "title": "Extract CompleteTOTPEnrollment + CreateChallenge* to \u226415",
       "slice": "backend/internal/auth/repository_2fa.go",
       "worktree": 1,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-001"
@@ -61,9 +61,9 @@
       "title": "Extract UpdateUser + SetPassword + acceptInvite to \u226415",
       "slice": "backend/internal/auth/repository.go",
       "worktree": 1,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-001"
@@ -75,9 +75,9 @@
       "title": "Extract rotateOnce + handleConsumed to \u226415",
       "slice": "backend/internal/auth/rotate.go",
       "worktree": 1,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-001"
@@ -89,9 +89,9 @@
       "title": "Extract AuditStatsSince + ExportAudit to \u226415",
       "slice": "backend/internal/auth/audit_stats.go, audit_handler.go",
       "worktree": 1,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-001"
@@ -103,9 +103,9 @@
       "title": "Extract ConvertToProvider to \u226415",
       "slice": "backend/internal/auth/repository_oauth.go",
       "worktree": 1,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-001"
@@ -117,9 +117,9 @@
       "title": "Extract ConsumeEmailChange to \u226415",
       "slice": "backend/internal/auth/repository_email_change.go",
       "worktree": 1,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-001"
@@ -131,9 +131,9 @@
       "title": "Extract AdminHandler.UpdateUser to \u226415",
       "slice": "backend/internal/auth/admin_handler.go",
       "worktree": 1,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 3,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-001"
@@ -145,9 +145,9 @@
       "title": "Extract Handler.Login to \u226415",
       "slice": "backend/internal/auth/handler.go",
       "worktree": 1,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-001"

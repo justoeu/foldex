@@ -7,27 +7,27 @@ Gate after flatten: no nested `? : ?` in `web/src` production. No NOSONAR. No ne
 
 ## Worktree 1 — auth (11)
 
-- [ ] **T-001** Characterize auth complexity functions before extract  | tests: 0 | red-green: no | immutability: yes | wt: 1 | OPEN
+- [x] **T-001** Characterize auth complexity functions before extract  | tests: 7 | red-green: yes | immutability: yes | wt: 1 | DONE
   - RED: backend/internal/auth/s3776_charter_test.go — table of success+error paths that already hold today. Must pass on current code.
-- [ ] **T-002** Extract CompleteEmailFactorEnrollment + ConfirmEmailFactor to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 1 | OPEN
+- [x] **T-002** Extract CompleteEmailFactorEnrollment + ConfirmEmailFactor to ≤15  | tests: 3 | red-green: yes | immutability: no | wt: 1 | DONE
   - RED: backend/internal/auth/gocognit_test.go CompleteEmailFactorEnrollment (25) and ConfirmEmailFactor (17) ≤15.
-- [ ] **T-003** Extract tryStepUpProof + ConfirmTOTP to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 1 | OPEN
+- [x] **T-003** Extract tryStepUpProof + ConfirmTOTP to ≤15  | tests: 2 | red-green: yes | immutability: no | wt: 1 | DONE
   - RED: gocognit_test.go tryStepUpProof (23) and ConfirmTOTP (22) ≤15.
-- [ ] **T-004** Extract CompleteTOTPEnrollment + CreateChallenge* to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 1 | OPEN
+- [x] **T-004** Extract CompleteTOTPEnrollment + CreateChallenge* to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 1 | DONE
   - RED: gocognit_test.go CompleteTOTPEnrollment (22), CreateChallengeEmailOTP (19), CreateChallenge (17) ≤15.
-- [ ] **T-005** Extract UpdateUser + SetPassword + acceptInvite to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 1 | OPEN
+- [x] **T-005** Extract UpdateUser + SetPassword + acceptInvite to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 1 | DONE
   - RED: gocognit_test.go UpdateUser (23), SetPassword (19), acceptInvite (17) ≤15.
-- [ ] **T-006** Extract rotateOnce + handleConsumed to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 1 | OPEN
+- [x] **T-006** Extract rotateOnce + handleConsumed to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 1 | DONE
   - RED: gocognit_test.go rotateOnce (17) and handleConsumed (20) ≤15.
-- [ ] **T-007** Extract AuditStatsSince + ExportAudit to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 1 | OPEN
+- [x] **T-007** Extract AuditStatsSince + ExportAudit to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 1 | DONE
   - RED: gocognit_test.go AuditStatsSince (23) and ExportAudit (17) ≤15.
-- [ ] **T-008** Extract ConvertToProvider to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 1 | OPEN
+- [x] **T-008** Extract ConvertToProvider to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 1 | DONE
   - RED: gocognit_test.go ConvertToProvider (18) ≤15.
-- [ ] **T-009** Extract ConsumeEmailChange to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 1 | OPEN
+- [x] **T-009** Extract ConsumeEmailChange to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 1 | DONE
   - RED: gocognit_test.go ConsumeEmailChange (18) ≤15.
-- [ ] **T-010** Extract AdminHandler.UpdateUser to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 1 | OPEN
+- [x] **T-010** Extract AdminHandler.UpdateUser to ≤15  | tests: 3 | red-green: yes | immutability: no | wt: 1 | DONE
   - RED: gocognit_test.go AdminHandler.UpdateUser (18) ≤15.
-- [ ] **T-011** Extract Handler.Login to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 1 | OPEN
+- [x] **T-011** Extract Handler.Login to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 1 | DONE
   - RED: gocognit_test.go Login (16) ≤15.
 
 ## Worktree 2 — backup + folders (12)
