@@ -188,6 +188,14 @@ func (c *Checker) refresh() Snapshot {
 	logger := c.logger
 	c.mu.Unlock()
 
+	results := runProbes(probes, timeout)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	recordProbeTransitions(c.last, results, logger)
+	return Snapshot{Resources: results}
+}
+
+func runProbes(probes []namedProbe, timeout time.Duration) []Resource {
 	results := make([]Resource, len(probes))
 	var wg sync.WaitGroup
 	for i, p := range probes {
@@ -205,22 +213,24 @@ func (c *Checker) refresh() Snapshot {
 		}(i, p)
 	}
 	wg.Wait()
+	return results
+}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func recordProbeTransitions(last map[string]string, results []Resource, logger *slog.Logger) {
 	for _, r := range results {
-		if prev, ok := c.last[r.ID]; !ok || prev != r.State {
-			c.last[r.ID] = r.State
-			if logger != nil {
-				if r.State == StateUnreachable {
-					logger.Warn("dependency unreachable", "id", r.ID)
-				} else {
-					logger.Info("dependency recovered", "id", r.ID)
-				}
-			}
+		if prev, ok := last[r.ID]; ok && prev == r.State {
+			continue
+		}
+		last[r.ID] = r.State
+		if logger == nil {
+			continue
+		}
+		if r.State == StateUnreachable {
+			logger.Warn("dependency unreachable", "id", r.ID)
+		} else {
+			logger.Info("dependency recovered", "id", r.ID)
 		}
 	}
-	return Snapshot{Resources: results}
 }
 
 func clone(s Snapshot) Snapshot {
