@@ -288,7 +288,7 @@ function HueThumb({
       onPointerDown={onPointerDown}
       onKeyDown={(e) => {
         const step = e.shiftKey ? 10 : 1
-        let next = hue
+        let next: number
         if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = Math.max(0, hue - step)
         else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = Math.min(360, hue + step)
         else if (e.key === 'Home') next = 0

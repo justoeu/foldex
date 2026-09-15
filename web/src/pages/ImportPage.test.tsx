@@ -63,7 +63,7 @@ describe('ImportPage', () => {
   it('accepts a dropped file on the drop zone', async () => {
     renderWithProviders(<ImportPage onDone={vi.fn()} />)
     const file = new File(['{}'], 'export.json', { type: 'application/json' })
-    const zone = screen.getByText(/Drag a file here/i).closest('label')!
+    const zone = screen.getByText(/Drag a file here/i).closest('button')!
     fireEvent.dragOver(zone, { dataTransfer: { files: [file] } })
     fireEvent.drop(zone, {
       dataTransfer: { files: [file] },
@@ -76,7 +76,7 @@ describe('ImportPage', () => {
     renderWithProviders(<ImportPage onDone={vi.fn()} />)
     const input = document.getElementById('foldex-file') as HTMLInputElement
     const clickSpy = vi.spyOn(input, 'click')
-    const zone = screen.getByText(/Drag a file here/i).closest('label')!
+    const zone = screen.getByText(/Drag a file here/i).closest('button')!
     fireEvent.click(zone)
     expect(clickSpy).toHaveBeenCalled()
   })

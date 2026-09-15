@@ -100,50 +100,40 @@ export function BackupCard({ onRestored }: Props) {
           <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)', marginTop: 6 }}>
             {t('backup.restore_section_title')}
           </div>
-          <label
+          <button
+            type="button"
             className={'fx-backup-dropzone' + (isDragging ? ' fx-backup-dropzone-drag' : '')}
             style={{
-              display: 'block',
-              border: '1.5px dashed var(--fx-border)',
-              borderRadius: 12,
-              padding: 22,
-              textAlign: 'center',
               cursor: storageDown ? 'not-allowed' : 'pointer',
-              background: 'var(--fx-surface)',
               opacity: storageDown ? 0.6 : 1,
             }}
-            aria-disabled={storageDown}
-            onDragOver={(e) => { if (storageDown) return; e.preventDefault(); setIsDragging(true) }}
+            disabled={storageDown}
+            onDragOver={(e) => {
+              if (storageDown) return
+              e.preventDefault()
+              setIsDragging(true)
+            }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={(e) => {
               e.preventDefault()
               setIsDragging(false)
               if (!storageDown) handleFile(e.dataTransfer.files?.[0] ?? null)
             }}
-            onClick={(e) => {
-              if (storageDown) {
-                e.preventDefault()
-                return
-              }
-              const input = fileRef.current
-              if (!input || e.target === input) return
-              e.preventDefault()
-              input.click()
-            }}
+            onClick={() => fileRef.current?.click()}
           >
             <Icon d={I.upload} size={22} />
             <div style={{ marginTop: 6, color: 'var(--fx-ink-3)', fontSize: 13 }}>
               {t('backup.restore_dropzone')}
             </div>
-            <input
-              ref={fileRef}
-              type="file"
-              hidden
-              accept=".zip"
-              disabled={storageDown}
-              onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
-            />
-          </label>
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            hidden
+            accept=".zip"
+            disabled={storageDown}
+            onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+          />
 
           {history.length > 0 && (
             <>

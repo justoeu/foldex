@@ -54,41 +54,29 @@ export function ImportPage({ onDone }: Props) {
               : t('import.format_hint_json')}
           </div>
 
-          <label
-            style={{
-              display: 'block',
-              border: '1.5px dashed var(--fx-border)',
-              borderRadius: 12,
-              padding: 28,
-              textAlign: 'center',
-              cursor: 'pointer',
-              background: 'var(--fx-surface)',
-            }}
+          <button
+            type="button"
+            className="fx-import-dropzone"
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault()
               const f = e.dataTransfer.files?.[0]
               if (f) setFile(f)
             }}
-            onClick={(e) => {
-              const input = e.currentTarget.querySelector('input[type=file]') as HTMLInputElement | null
-              if (!input || e.target === input) return
-              e.preventDefault()
-              input.click()
-            }}
+            onClick={() => document.getElementById('foldex-file')?.click()}
           >
             <Icon d={I.upload} size={28} />
             <div style={{ marginTop: 8, color: 'var(--fx-ink-3)' }}>
               {file ? file.name : t('import.drop_zone')}
             </div>
-            <input
-              type="file"
-              id="foldex-file"
-              hidden
-              accept={format === 'netscape' ? '.html,.htm' : '.json'}
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            />
-          </label>
+          </button>
+          <input
+            type="file"
+            id="foldex-file"
+            hidden
+            accept={format === 'netscape' ? '.html,.htm' : '.json'}
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button

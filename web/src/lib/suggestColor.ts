@@ -8,7 +8,7 @@ const defaultPick: Pick = (n) => {
   if (n <= 0) return 0
   const buf = new Uint32Array(1)
   crypto.getRandomValues(buf)
-  return Math.floor((buf[0] / 0x1_0000_0000) * n)
+  return Math.floor((buf[0] / 2 ** 32) * n)
 }
 
 /**
