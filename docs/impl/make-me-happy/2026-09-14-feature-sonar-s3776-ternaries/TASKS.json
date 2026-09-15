@@ -159,9 +159,9 @@
       "title": "Characterize backup/folders complexity functions before extract",
       "slice": "backend/internal/{backup,backupagent,backupjobs,backupstatus,folders} \u2014 lock current outcomes. Production unchanged.",
       "worktree": 2,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 12,
+      "red_green": true,
       "immutability": true,
       "depends_on": [],
       "red_test": "s3776_charter_test.go in backup/backupagent/backupjobs/backupstatus/folders. Must pass on current code."
@@ -171,9 +171,9 @@
       "title": "Extract folders List, Update, deleteCascade, UpdateInput.Validate to \u226415",
       "slice": "backend/internal/folders/repository.go, dto.go",
       "worktree": 2,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 6,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-101"
@@ -185,9 +185,9 @@
       "title": "Extract ValidateJobConfig to \u226415",
       "slice": "backend/internal/backupjobs/schedule.go",
       "worktree": 2,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-101"
@@ -199,9 +199,9 @@
       "title": "Extract backupstatus Handler.Download to \u226415",
       "slice": "backend/internal/backupstatus/download_handler.go",
       "worktree": 2,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-101"
@@ -213,9 +213,9 @@
       "title": "Extract Service.Export + inspectArchive to \u226415",
       "slice": "backend/internal/backup/service.go, archive.go",
       "worktree": 2,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-101"
@@ -227,9 +227,9 @@
       "title": "Extract loadRestoreLedger + validateManifestIntegrity to \u226415",
       "slice": "backend/internal/backup/restore_ledger.go, restore_preflight.go",
       "worktree": 2,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-101"
@@ -241,9 +241,9 @@
       "title": "Extract restoreDuplicateStaged + copyRestoreStaging to \u226415",
       "slice": "backend/internal/backup/db_restore_staged.go",
       "worktree": 2,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-101"
@@ -255,9 +255,9 @@
       "title": "Extract spoolNoteMedia + attachPolymorphicTags + copyPolymorphicClicks to \u226415",
       "slice": "backend/internal/backup/restore_helpers.go",
       "worktree": 2,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-101"
@@ -269,9 +269,9 @@
       "title": "Extract DrillJob.Run + DumpJob.Run + UserZipJob.Run to \u226415",
       "slice": "backend/internal/backupagent/drill.go, dump.go, userzip.go",
       "worktree": 2,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-101"
@@ -283,9 +283,9 @@
       "title": "Extract MirrorJob.copyDelta to \u226415",
       "slice": "backend/internal/backupagent/mirror.go",
       "worktree": 2,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-101"
@@ -297,9 +297,9 @@
       "title": "Extract scheduleLoop + execute + computeTimings to \u226415",
       "slice": "backend/internal/backupagent/agent.go",
       "worktree": 2,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-101"
@@ -311,9 +311,9 @@
       "title": "Extract GFSPolicy.keep to \u226415",
       "slice": "backend/internal/backupagent/retention.go",
       "worktree": 2,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-101"

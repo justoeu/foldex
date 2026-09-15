@@ -32,29 +32,29 @@ Gate after flatten: no nested `? : ?` in `web/src` production. No NOSONAR. No ne
 
 ## Worktree 2 — backup + folders (12)
 
-- [ ] **T-101** Characterize backup/folders complexity functions before extract  | tests: 0 | red-green: no | immutability: yes | wt: 2 | OPEN
+- [x] **T-101** Characterize backup/folders complexity functions before extract  | tests: 12 | red-green: yes | immutability: yes | wt: 2 | DONE
   - RED: s3776_charter_test.go in backup/backupagent/backupjobs/backupstatus/folders. Must pass on current code.
-- [ ] **T-102** Extract folders List, Update, deleteCascade, UpdateInput.Validate to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 2 | OPEN
+- [x] **T-102** Extract folders List, Update, deleteCascade, UpdateInput.Validate to ≤15  | tests: 6 | red-green: yes | immutability: no | wt: 2 | DONE
   - RED: folders/gocognit_test.go List(23)/Update(21)/deleteCascade(19)/Validate(16) ≤15.
-- [ ] **T-103** Extract ValidateJobConfig to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 2 | OPEN
+- [x] **T-103** Extract ValidateJobConfig to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 2 | DONE
   - RED: backupjobs/gocognit_test.go ValidateJobConfig (22) ≤15.
-- [ ] **T-104** Extract backupstatus Handler.Download to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 2 | OPEN
+- [x] **T-104** Extract backupstatus Handler.Download to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 2 | DONE
   - RED: backupstatus/gocognit_test.go Download (18) ≤15.
-- [ ] **T-105** Extract Service.Export + inspectArchive to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 2 | OPEN
+- [x] **T-105** Extract Service.Export + inspectArchive to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 2 | DONE
   - RED: backup/gocognit_test.go Export (22) and inspectArchive (20) ≤15.
-- [ ] **T-106** Extract loadRestoreLedger + validateManifestIntegrity to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 2 | OPEN
+- [x] **T-106** Extract loadRestoreLedger + validateManifestIntegrity to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 2 | DONE
   - RED: backup/gocognit_test.go loadRestoreLedger (22) and validateManifestIntegrity (16) ≤15.
-- [ ] **T-107** Extract restoreDuplicateStaged + copyRestoreStaging to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 2 | OPEN
+- [x] **T-107** Extract restoreDuplicateStaged + copyRestoreStaging to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 2 | DONE
   - RED: backup/gocognit_test.go restoreDuplicateStaged (16) and copyRestoreStaging (19) ≤15.
-- [ ] **T-108** Extract spoolNoteMedia + attachPolymorphicTags + copyPolymorphicClicks to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 2 | OPEN
+- [x] **T-108** Extract spoolNoteMedia + attachPolymorphicTags + copyPolymorphicClicks to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 2 | DONE
   - RED: backup/gocognit_test.go spoolNoteMedia (16), attachPolymorphicTags (19), copyPolymorphicClicks (19) ≤15.
-- [ ] **T-109** Extract DrillJob.Run + DumpJob.Run + UserZipJob.Run to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 2 | OPEN
+- [x] **T-109** Extract DrillJob.Run + DumpJob.Run + UserZipJob.Run to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 2 | DONE
   - RED: backupagent/gocognit_test.go DrillJob.Run (24), DumpJob.Run (21), UserZipJob.Run (21) ≤15.
-- [ ] **T-110** Extract MirrorJob.copyDelta to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 2 | OPEN
+- [x] **T-110** Extract MirrorJob.copyDelta to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 2 | DONE
   - RED: backupagent/gocognit_test.go copyDelta (20) ≤15.
-- [ ] **T-111** Extract scheduleLoop + execute + computeTimings to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 2 | OPEN
+- [x] **T-111** Extract scheduleLoop + execute + computeTimings to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 2 | DONE
   - RED: backupagent/gocognit_test.go scheduleLoop (21), execute (19), computeTimings (17) ≤15.
-- [ ] **T-112** Extract GFSPolicy.keep to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 2 | OPEN
+- [x] **T-112** Extract GFSPolicy.keep to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 2 | DONE
   - RED: backupagent/gocognit_test.go GFSPolicy.keep (18) ≤15.
 
 ## Worktree 3 — remaining Go + web ternaries (20)
