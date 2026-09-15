@@ -195,11 +195,29 @@ func Ping(ctx context.Context, cfg AMQPConfig) error {
 	if err != nil {
 		return errors.New("mailoutbox: AMQP_URL is not a valid URL")
 	}
+	timeout, deadline, err := pingBudget(ctx)
+	if err != nil {
+		return err
+	}
+	conn, err := amqp.DialConfig(cfg.URL, amqp.Config{
+		Dial:            pingDialer(ctx, u.Scheme, timeout, deadline),
+		TLSClientConfig: cfg.TLSConfig,
+		Heartbeat:       0,
+		Locale:          "en_US",
+	})
+	if err != nil {
+		return errors.New("mailoutbox: broker unreachable")
+	}
+	_ = conn.Close()
+	return nil
+}
+
+func pingBudget(ctx context.Context) (time.Duration, time.Time, error) {
 	timeout := 2 * time.Second
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return ctx.Err()
+			return 0, time.Time{}, ctx.Err()
 		}
 		timeout = remaining
 	}
@@ -207,7 +225,11 @@ func Ping(ctx context.Context, cfg AMQPConfig) error {
 	if d, ok := ctx.Deadline(); ok {
 		deadline = d
 	}
-	dialer := func(network, addr string) (net.Conn, error) {
+	return timeout, deadline, nil
+}
+
+func pingDialer(ctx context.Context, scheme string, timeout time.Duration, deadline time.Time) func(network, addr string) (net.Conn, error) {
+	return func(network, addr string) (net.Conn, error) {
 		d := net.Dialer{Timeout: timeout}
 		conn, err := d.DialContext(ctx, network, addr)
 		if err != nil {
@@ -220,24 +242,13 @@ func Ping(ctx context.Context, cfg AMQPConfig) error {
 			_ = conn.Close()
 			return nil, err
 		}
-		if u.Scheme != "amqps" {
+		if scheme != "amqps" {
 			if err := requirePrivatePeer(conn, addr); err != nil {
 				return nil, err
 			}
 		}
 		return conn, nil
 	}
-	conn, err := amqp.DialConfig(cfg.URL, amqp.Config{
-		Dial:            dialer,
-		TLSClientConfig: cfg.TLSConfig,
-		Heartbeat:       0,
-		Locale:          "en_US",
-	})
-	if err != nil {
-		return errors.New("mailoutbox: broker unreachable")
-	}
-	_ = conn.Close()
-	return nil
 }
 
 // ErrBrokerNotPrivate is returned when a plaintext dial lands on an address

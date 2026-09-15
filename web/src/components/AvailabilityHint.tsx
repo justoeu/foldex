@@ -20,6 +20,16 @@ const BY_REASON: Record<AvailabilityReason, string> = {
   pending: 'common.avail_pending',
 }
 
+function hintParts(result: Exclude<Availability, { state: 'idle' }>) {
+  if (result.state === 'refused') {
+    return ['bad', I.x, BY_REASON[result.reason]] as const
+  }
+  if (result.state === 'warn') {
+    return ['wait', I.alert, BY_REASON[result.reason]] as const
+  }
+  return BY_STATE[result.state]
+}
+
 /**
  * The line under an identifier field: what the server said about the value
  * being typed.
@@ -48,12 +58,7 @@ export function AvailabilityHint({
   const { t } = useTranslation()
   if (result.state === 'idle') return null
 
-  const [tone, icon, key] =
-    result.state === 'refused'
-      ? (['bad', I.x, BY_REASON[result.reason]] as const)
-      : result.state === 'warn'
-        ? (['wait', I.alert, BY_REASON[result.reason]] as const)
-        : BY_STATE[result.state]
+  const [tone, icon, key] = hintParts(result)
 
   const text =
     shapeText && key === 'common.avail_shape' ? shapeText : t(key)

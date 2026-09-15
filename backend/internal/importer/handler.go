@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -229,41 +230,49 @@ func (h *Handler) parseUpload(w http.ResponseWriter, r *http.Request) (uploadPar
 
 	switch format {
 	case "netscape":
-		items, err := ParseNetscape(file)
-		if err != nil {
-			if errors.Is(err, ErrTooManyItems) {
-				httperr.Write(w, httperr.New(http.StatusBadRequest, "too_many_items", err.Error()))
-				return uploadParse{}, err
-			}
-			httperr.Write(w, httperr.New(http.StatusBadRequest, "parse_failed", err.Error()))
-			return uploadParse{}, err
-		}
-		return uploadParse{items: items, format: format}, nil
+		return parseNetscapeUpload(w, file, format)
 	case "json":
-		f, err := ParseJSON(file)
-		if err != nil {
-			httperr.Write(w, httperr.New(http.StatusBadRequest, "parse_failed", err.Error()))
-			return uploadParse{}, err
-		}
-		if len(f.Links) > maxImportItems {
-			err := fmt.Errorf("%w: got %d links (max %d)", ErrTooManyItems, len(f.Links), maxImportItems)
-			httperr.Write(w, httperr.New(http.StatusBadRequest, "too_many_items", err.Error()))
-			return uploadParse{}, err
-		}
-		if err := f.Validate(); err != nil {
-			httperr.Write(w, httperr.New(http.StatusBadRequest, "validation_failed", err.Error()))
-			return uploadParse{}, err
-		}
-		return uploadParse{
-			items:  jsonToItems(f),
-			format: format,
-			seed:   &jsonSeed{tags: f.Tags, folders: f.Folders},
-		}, nil
+		return parseJSONUpload(w, file, format)
 	default:
 		err := httperr.New(http.StatusBadRequest, "unknown_format", "format must be netscape or json")
 		httperr.Write(w, err)
 		return uploadParse{}, err
 	}
+}
+
+func parseNetscapeUpload(w http.ResponseWriter, file io.Reader, format string) (uploadParse, error) {
+	items, err := ParseNetscape(file)
+	if err != nil {
+		if errors.Is(err, ErrTooManyItems) {
+			httperr.Write(w, httperr.New(http.StatusBadRequest, "too_many_items", err.Error()))
+			return uploadParse{}, err
+		}
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "parse_failed", err.Error()))
+		return uploadParse{}, err
+	}
+	return uploadParse{items: items, format: format}, nil
+}
+
+func parseJSONUpload(w http.ResponseWriter, file io.Reader, format string) (uploadParse, error) {
+	f, err := ParseJSON(file)
+	if err != nil {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "parse_failed", err.Error()))
+		return uploadParse{}, err
+	}
+	if len(f.Links) > maxImportItems {
+		err := fmt.Errorf("%w: got %d links (max %d)", ErrTooManyItems, len(f.Links), maxImportItems)
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "too_many_items", err.Error()))
+		return uploadParse{}, err
+	}
+	if err := f.Validate(); err != nil {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "validation_failed", err.Error()))
+		return uploadParse{}, err
+	}
+	return uploadParse{
+		items:  jsonToItems(f),
+		format: format,
+		seed:   &jsonSeed{tags: f.Tags, folders: f.Folders},
+	}, nil
 }
 
 // jsonToItems flattens a Foldex JSON v1/v2 file into the same []Item shape the

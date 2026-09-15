@@ -69,41 +69,55 @@ func ApplyPatchTags(ctx context.Context, tx pgx.Tx, uid authctx.UserID, kind str
 func SetEntityTagsWithPending(ctx context.Context, tx pgx.Tx, uid authctx.UserID, kind string, entityID int64, tagIDs []int64, pending []CreateInput) error {
 	resolved := append([]int64(nil), tagIDs...)
 	if len(pending) > 0 {
-		rows := make([][]any, 0, len(pending))
-		names := make([]string, 0, len(pending))
-		for i := range pending {
-			in := pending[i]
-			in.Normalize()
-			if err := in.Validate(); err != nil {
-				return domainerr.InvalidInput(err.Error())
-			}
-			rows = append(rows, []any{int64(uid), in.Name, in.Color, in.Icon})
-			names = append(names, in.Name)
-		}
-		if _, err := tx.CopyFrom(ctx,
-			pgx.Identifier{"tag"},
-			[]string{"user_id", "name", "color", "icon"},
-			pgx.CopyFromRows(rows),
-		); err != nil {
-			return createError(err)
-		}
-		created, err := tx.Query(ctx, `SELECT id FROM tag WHERE user_id = $1 AND name = ANY($2)`, int64(uid), names)
+		ids, err := insertPendingTags(ctx, tx, uid, pending)
 		if err != nil {
-			return fmt.Errorf("resolve pending tags: %w", err)
+			return err
 		}
-		defer created.Close()
-		for created.Next() {
-			var id int64
-			if err := created.Scan(&id); err != nil {
-				return fmt.Errorf("resolve pending tag: %w", err)
-			}
-			resolved = append(resolved, id)
-		}
-		if err := created.Err(); err != nil {
-			return fmt.Errorf("resolve pending tags: %w", err)
-		}
+		resolved = append(resolved, ids...)
 	}
 	return SetEntityTags(ctx, tx, uid, kind, entityID, resolved)
+}
+
+func insertPendingTags(ctx context.Context, tx pgx.Tx, uid authctx.UserID, pending []CreateInput) ([]int64, error) {
+	rows := make([][]any, 0, len(pending))
+	names := make([]string, 0, len(pending))
+	for i := range pending {
+		in := pending[i]
+		in.Normalize()
+		if err := in.Validate(); err != nil {
+			return nil, domainerr.InvalidInput(err.Error())
+		}
+		rows = append(rows, []any{int64(uid), in.Name, in.Color, in.Icon})
+		names = append(names, in.Name)
+	}
+	if _, err := tx.CopyFrom(ctx,
+		pgx.Identifier{"tag"},
+		[]string{"user_id", "name", "color", "icon"},
+		pgx.CopyFromRows(rows),
+	); err != nil {
+		return nil, createError(err)
+	}
+	return lookupTagIDsByName(ctx, tx, uid, names)
+}
+
+func lookupTagIDsByName(ctx context.Context, tx pgx.Tx, uid authctx.UserID, names []string) ([]int64, error) {
+	created, err := tx.Query(ctx, `SELECT id FROM tag WHERE user_id = $1 AND name = ANY($2)`, int64(uid), names)
+	if err != nil {
+		return nil, fmt.Errorf("resolve pending tags: %w", err)
+	}
+	defer created.Close()
+	var ids []int64
+	for created.Next() {
+		var id int64
+		if err := created.Scan(&id); err != nil {
+			return nil, fmt.Errorf("resolve pending tag: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := created.Err(); err != nil {
+		return nil, fmt.Errorf("resolve pending tags: %w", err)
+	}
+	return ids, nil
 }
 
 // assertTagsOwned fails unless every id belongs to uid. It reports the generic

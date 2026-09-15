@@ -219,67 +219,96 @@ func (p *Pool) acquireBrowser(ctx context.Context) (*rod.Browser, *pooledBrowser
 	defer waitCancel()
 
 	for {
-		p.mu.Lock()
-		if p.closed {
-			p.mu.Unlock()
-			return nil, nil, errPoolClosed
+		claim := p.claimBrowserOrWait(waitCtx)
+		if claim.err != nil {
+			return nil, nil, claim.err
 		}
-		if p.current != nil {
-			p.current.refs++
-			browser, hold := p.current.browser, p.current
-			p.mu.Unlock()
-			return browser, hold, nil
+		if claim.hold != nil {
+			return claim.hold.browser, claim.hold, nil
 		}
-		if p.starting != nil {
-			startup := p.starting
-			p.mu.Unlock()
-			select {
-			case <-startup.done:
-				if startup.err != nil {
-					return nil, nil, startup.err
-				}
-				continue
-			case <-waitCtx.Done():
-				return nil, nil, fmt.Errorf("screenshot: wait for browser startup: %w", waitCtx.Err())
+		if claim.wait != nil {
+			if err := waitForExistingStartup(waitCtx, claim.wait); err != nil {
+				return nil, nil, err
 			}
+			continue
 		}
-
-		startupCtx, startupCancel := context.WithCancel(waitCtx)
-		startup := &browserStartup{done: make(chan struct{}), cancel: startupCancel}
-		p.starting = startup
-		epoch := p.epoch
-		p.mu.Unlock()
-
-		browser, pooled, err := p.startBrowserGeneration(startupCtx, startup)
-		startupCancel()
-
-		p.mu.Lock()
-		stale := p.closed || epoch != p.epoch || p.current != nil
-		if err == nil && !stale {
-			p.current = pooled
-			p.generations[pooled] = struct{}{}
-			startup.launcher = nil
-			startup.proxy = nil
-		} else if err == nil {
-			pooled.refs = 0
-			pooled.retired = true
-			pooled.stopping = true
-			err = fmt.Errorf("screenshot: browser startup retired")
-		}
-		startup.err = err
-		p.starting = nil
-		p.mu.Unlock()
-
-		if stale && pooled != nil {
-			p.stopBrowser(pooled)
-		}
-		// Stale generation teardown finishes before startup waiters are released.
-		close(startup.done)
-		if err != nil {
-			return nil, nil, err
-		}
-		return browser, pooled, nil
+		return p.launchOwnedBrowser(claim)
 	}
+}
+
+type browserClaim struct {
+	hold   *pooledBrowser
+	wait   *browserStartup
+	owned  *browserStartup
+	epoch  uint64
+	runCtx context.Context
+	cancel context.CancelFunc
+	err    error
+}
+
+func (p *Pool) claimBrowserOrWait(waitCtx context.Context) browserClaim {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return browserClaim{err: errPoolClosed}
+	}
+	if p.current != nil {
+		p.current.refs++
+		return browserClaim{hold: p.current}
+	}
+	if p.starting != nil {
+		return browserClaim{wait: p.starting}
+	}
+	runCtx, cancel := context.WithCancel(waitCtx)
+	owned := &browserStartup{done: make(chan struct{}), cancel: cancel}
+	p.starting = owned
+	return browserClaim{owned: owned, epoch: p.epoch, runCtx: runCtx, cancel: cancel}
+}
+
+func waitForExistingStartup(waitCtx context.Context, startup *browserStartup) error {
+	select {
+	case <-startup.done:
+		if startup.err != nil {
+			return startup.err
+		}
+		return nil
+	case <-waitCtx.Done():
+		return fmt.Errorf("screenshot: wait for browser startup: %w", waitCtx.Err())
+	}
+}
+
+func (p *Pool) launchOwnedBrowser(claim browserClaim) (*rod.Browser, *pooledBrowser, error) {
+	browser, pooled, err := p.startBrowserGeneration(claim.runCtx, claim.owned)
+	claim.cancel()
+	stale := p.adoptStartedBrowser(claim.owned, claim.epoch, pooled, err)
+	if stale && pooled != nil {
+		p.stopBrowser(pooled)
+	}
+	close(claim.owned.done)
+	if claim.owned.err != nil {
+		return nil, nil, claim.owned.err
+	}
+	return browser, pooled, nil
+}
+
+func (p *Pool) adoptStartedBrowser(startup *browserStartup, epoch uint64, pooled *pooledBrowser, err error) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	stale := p.closed || epoch != p.epoch || p.current != nil
+	if err == nil && !stale {
+		p.current = pooled
+		p.generations[pooled] = struct{}{}
+		startup.launcher = nil
+		startup.proxy = nil
+	} else if err == nil {
+		pooled.refs = 0
+		pooled.retired = true
+		pooled.stopping = true
+		err = fmt.Errorf("screenshot: browser startup retired")
+	}
+	startup.err = err
+	p.starting = nil
+	return stale
 }
 
 func (p *Pool) startBrowserGeneration(ctx context.Context, startup *browserStartup) (*rod.Browser, *pooledBrowser, error) {
@@ -458,23 +487,30 @@ func (p *Pool) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), p.shutdownTimeout)
 	defer cancel()
 
-	p.mu.Lock()
-	if p.closed {
-		done := p.closeDone
-		p.mu.Unlock()
-		waitForTeardown(ctx, done)
+	startup, generations, toStop, already := p.beginClose()
+	if already != nil {
+		waitForTeardown(ctx, already)
 		return
+	}
+	p.finishClose(ctx, startup, generations, toStop)
+}
+
+func (p *Pool) beginClose() (startup *browserStartup, generations, toStop []*pooledBrowser, already <-chan struct{}) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil, nil, nil, p.closeDone
 	}
 	p.closed = true
 	close(p.shutdown)
 	p.epoch++
-	startup := p.starting
+	startup = p.starting
 	if startup != nil {
 		startup.cancel()
 	}
 	p.current = nil
-	generations := make([]*pooledBrowser, 0, len(p.generations))
-	toStop := make([]*pooledBrowser, 0, len(p.generations))
+	generations = make([]*pooledBrowser, 0, len(p.generations))
+	toStop = make([]*pooledBrowser, 0, len(p.generations))
 	for generation := range p.generations {
 		generation.retired = true
 		generations = append(generations, generation)
@@ -482,12 +518,14 @@ func (p *Pool) Close() {
 			toStop = append(toStop, generation)
 		}
 	}
-	p.mu.Unlock()
+	return startup, generations, toStop, nil
+}
+
+func (p *Pool) finishClose(ctx context.Context, startup *browserStartup, generations, toStop []*pooledBrowser) {
 	defer close(p.closeDone)
 	if startup != nil {
 		p.hardStopStartup(startup)
 	}
-
 	for _, generation := range generations {
 		if generation.cancel != nil {
 			generation.cancel()
@@ -496,7 +534,6 @@ func (p *Pool) Close() {
 	for _, generation := range toStop {
 		go p.stopBrowser(generation)
 	}
-
 	if startup != nil && !waitForTeardown(ctx, startup.done) {
 		slog.Warn("screenshot: browser startup teardown exceeded shutdown timeout", "err", ctx.Err())
 	}

@@ -11,7 +11,7 @@ import { accountErrorMessage } from './accountErrors'
 import { useAuth } from '../../auth/AuthProvider'
 import { hasSecondFactor, type AuthUser } from '../../auth/types'
 import { usePasswordFloor } from '../../hooks/useInstancePolicy'
-import { canSubmit, passwordMode, passwordsMismatch } from './PasswordCard.submit'
+import { canSubmit, passwordMode, passwordsMismatch, type PasswordMode } from './PasswordCard.submit'
 
 /**
  * The account's password: change it when there is one, create one when there
@@ -58,11 +58,7 @@ export function PasswordRow({ user }: Readonly<{ user: AuthUser }>) {
             setOpen((v) => !v)
           }}
         >
-          {open
-            ? t('common.cancel')
-            : mode === 'change'
-              ? t('account.change_password')
-              : t('account.set_password')}
+          {passwordActionLabel(open, mode, t)}
         </button>
       }
     >
@@ -278,4 +274,10 @@ function FormActions({
       <span className="fx-sec-row-hint">{note}</span>
     </>
   )
+}
+
+function passwordActionLabel(open: boolean, mode: PasswordMode, t: (key: string) => string): string {
+  if (open) return t('common.cancel')
+  if (mode === 'change') return t('account.change_password')
+  return t('account.set_password')
 }

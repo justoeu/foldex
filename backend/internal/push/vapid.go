@@ -39,53 +39,62 @@ type VAPIDKeys struct {
 // file exists. The error message is actionable — it explicitly tells the
 // operator which env to set.
 func LoadOrGenerate(public, private, subject, statePath string, autoGen bool, logger *slog.Logger) (VAPIDKeys, error) {
-	// Path 1: explicit env. Treat partial env as a config bug, not a
-	// half-loaded keypair — we'd rather refuse to boot than silently swap
-	// the public key the operator pinned.
-	if public != "" || private != "" {
-		if public == "" || private == "" {
-			return VAPIDKeys{}, errors.New(
-				"VAPID config incomplete: set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY (or neither)",
-			)
-		}
-		return VAPIDKeys{PublicKey: public, PrivateKey: private, Subject: defaultSubject(subject)}, nil
+	if keys, err, done := keysFromEnv(public, private, subject); done {
+		return keys, err
 	}
-
-	// Path 2: persisted state from a previous autogen.
-	if statePath != "" {
-		if keys, err := readState(statePath); err == nil {
-			if subject != "" {
-				keys.Subject = subject
-			}
-			return keys, nil
-		}
+	if keys, ok := keysFromState(statePath, subject); ok {
+		return keys, nil
 	}
-
-	// Path 3: generate + persist. Bail when autogen is disabled — the
-	// operator opted out, refusing to boot makes the intent explicit.
 	if !autoGen {
 		return VAPIDKeys{}, errors.New(
 			"VAPID keys not configured: set VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY in env, " +
 				"or set VAPID_AUTO_GENERATE=1 to let the server generate and persist them on first boot",
 		)
 	}
+	return generateAndPersist(statePath, subject, logger)
+}
+
+func keysFromEnv(public, private, subject string) (VAPIDKeys, error, bool) {
+	if public == "" && private == "" {
+		return VAPIDKeys{}, nil, false
+	}
+	if public == "" || private == "" {
+		return VAPIDKeys{}, errors.New(
+			"VAPID config incomplete: set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY (or neither)",
+		), true
+	}
+	return VAPIDKeys{PublicKey: public, PrivateKey: private, Subject: defaultSubject(subject)}, nil, true
+}
+
+func keysFromState(statePath, subject string) (VAPIDKeys, bool) {
+	if statePath == "" {
+		return VAPIDKeys{}, false
+	}
+	keys, err := readState(statePath)
+	if err != nil {
+		return VAPIDKeys{}, false
+	}
+	if subject != "" {
+		keys.Subject = subject
+	}
+	return keys, true
+}
+
+func generateAndPersist(statePath, subject string, logger *slog.Logger) (VAPIDKeys, error) {
 	priv, pub, err := webpush.GenerateVAPIDKeys()
 	if err != nil {
 		return VAPIDKeys{}, fmt.Errorf("generate vapid keys: %w", err)
 	}
 	keys := VAPIDKeys{PublicKey: pub, PrivateKey: priv, Subject: defaultSubject(subject)}
-	if statePath != "" {
-		if err := writeState(statePath, keys); err != nil {
-			// Persisting failure is a warn, not fatal — the in-memory keys
-			// still work for this boot. Next boot will regenerate (which
-			// invalidates existing subscriptions; ugly but recoverable).
-			logger.Warn("vapid: persist failed, keys are session-only", "path", statePath, "err", err)
-		} else {
-			logger.Info("vapid: generated and persisted new keypair", "path", statePath, "public_key", pub)
-		}
-	} else {
+	if statePath == "" {
 		logger.Warn("vapid: generated session-only keypair (VAPID_STATE_PATH empty)", "public_key", pub)
+		return keys, nil
 	}
+	if err := writeState(statePath, keys); err != nil {
+		logger.Warn("vapid: persist failed, keys are session-only", "path", statePath, "err", err)
+		return keys, nil
+	}
+	logger.Info("vapid: generated and persisted new keypair", "path", statePath, "public_key", pub)
 	return keys, nil
 }
 

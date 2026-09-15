@@ -118,33 +118,41 @@ func (f JSONFile) validateTags() error {
 func (f JSONFile) validateLinks() error {
 	var totalClicks int64
 	for i, l := range f.Links {
-		rawURL := strings.TrimSpace(l.URL)
-		if rawURL == "" {
-			return fmt.Errorf("links[%d]: url is required", i)
-		}
-		if err := links.ValidateAbsoluteHTTPURL(rawURL); err != nil {
-			return fmt.Errorf("links[%d]: %w", i, err)
-		}
-		if len(strings.TrimSpace(l.Title)) > links.MaxTitleBytes {
-			return fmt.Errorf("links[%d]: title too long (max %d)", i, links.MaxTitleBytes)
-		}
-		if l.ClickCount < 0 || l.ClickCount > maxImportClickCount {
-			return fmt.Errorf("links[%d]: click_count out of range (0..%d)", i, maxImportClickCount)
-		}
-		if l.ClickCount > maxImportTotalClicks-totalClicks {
-			return fmt.Errorf("links[%d]: cumulative click_count exceeds %d", i, maxImportTotalClicks)
-		}
-		totalClicks += l.ClickCount
-		if err := validateLinkTags(i, l.Tags); err != nil {
+		n, err := validateOneLink(i, l, totalClicks)
+		if err != nil {
 			return err
 		}
-		if l.CreatedAt != "" {
-			if _, err := time.Parse(time.RFC3339, l.CreatedAt); err != nil {
-				return fmt.Errorf("links[%d]: invalid created_at %q (must be RFC3339)", i, l.CreatedAt)
-			}
-		}
+		totalClicks += n
 	}
 	return nil
+}
+
+func validateOneLink(i int, l JSONLink, totalClicks int64) (int64, error) {
+	rawURL := strings.TrimSpace(l.URL)
+	if rawURL == "" {
+		return 0, fmt.Errorf("links[%d]: url is required", i)
+	}
+	if err := links.ValidateAbsoluteHTTPURL(rawURL); err != nil {
+		return 0, fmt.Errorf("links[%d]: %w", i, err)
+	}
+	if len(strings.TrimSpace(l.Title)) > links.MaxTitleBytes {
+		return 0, fmt.Errorf("links[%d]: title too long (max %d)", i, links.MaxTitleBytes)
+	}
+	if l.ClickCount < 0 || l.ClickCount > maxImportClickCount {
+		return 0, fmt.Errorf("links[%d]: click_count out of range (0..%d)", i, maxImportClickCount)
+	}
+	if l.ClickCount > maxImportTotalClicks-totalClicks {
+		return 0, fmt.Errorf("links[%d]: cumulative click_count exceeds %d", i, maxImportTotalClicks)
+	}
+	if err := validateLinkTags(i, l.Tags); err != nil {
+		return 0, err
+	}
+	if l.CreatedAt != "" {
+		if _, err := time.Parse(time.RFC3339, l.CreatedAt); err != nil {
+			return 0, fmt.Errorf("links[%d]: invalid created_at %q (must be RFC3339)", i, l.CreatedAt)
+		}
+	}
+	return l.ClickCount, nil
 }
 
 func validateLinkTags(i int, names []string) error {

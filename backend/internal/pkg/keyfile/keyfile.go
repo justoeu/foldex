@@ -59,37 +59,49 @@ type Config struct {
 // else, only when that file does not exist, a fresh key written to Path.
 func Load(cfg Config, logger *slog.Logger) ([]byte, error) {
 	if cfg.EnvValue != "" {
-		key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(cfg.EnvValue))
-		if err != nil {
-			return nil, fmt.Errorf("%s is not valid base64: %w", cfg.EnvVar, err)
-		}
-		if len(key) < MinKeyBytes {
-			return nil, fmt.Errorf("%s must decode to at least %d bytes", cfg.EnvVar, MinKeyBytes)
-		}
-		return key, nil
+		return decodeEnvKey(cfg)
 	}
-
-	if cfg.Path != "" {
-		key, err := Read(cfg.Path)
-		if err == nil {
-			return key, nil
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("load %s from %s: %w", cfg.Name, cfg.Path, err)
-		}
+	if key, err, done := loadPersistedKey(cfg); done {
+		return key, err
 	}
-
 	if !cfg.AutoGenerate {
 		return nil, fmt.Errorf(
 			"%s not configured: set %s (base64, %d+ bytes), or enable auto-generation",
 			cfg.Name, cfg.EnvVar, MinKeyBytes)
 	}
+	return generateAndPersist(cfg, logger)
+}
 
+func decodeEnvKey(cfg Config) ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(cfg.EnvValue))
+	if err != nil {
+		return nil, fmt.Errorf("%s is not valid base64: %w", cfg.EnvVar, err)
+	}
+	if len(key) < MinKeyBytes {
+		return nil, fmt.Errorf("%s must decode to at least %d bytes", cfg.EnvVar, MinKeyBytes)
+	}
+	return key, nil
+}
+
+func loadPersistedKey(cfg Config) ([]byte, error, bool) {
+	if cfg.Path == "" {
+		return nil, nil, false
+	}
+	key, err := Read(cfg.Path)
+	if err == nil {
+		return key, nil, true
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("load %s from %s: %w", cfg.Name, cfg.Path, err), true
+	}
+	return nil, nil, false
+}
+
+func generateAndPersist(cfg Config, logger *slog.Logger) ([]byte, error) {
 	key := make([]byte, MinKeyBytes)
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("generate %s: %w", cfg.Name, err)
 	}
-
 	if cfg.Path == "" {
 		if !cfg.AllowEphemeral {
 			return nil, fmt.Errorf(

@@ -301,40 +301,66 @@ func (w *Worker) finishJob(id int64) {
 }
 
 func (w *Worker) process(ctx context.Context, job previewJob) {
-	id := job.id
+	link, ok := w.loadPendingPreview(ctx, job)
+	if !ok {
+		return
+	}
+	if w.shortCircuitExistingImage(ctx, link) {
+		return
+	}
+	res, ok := w.fetchPreview(ctx, link)
+	if !ok {
+		return
+	}
+	w.publishPreview(ctx, link, res)
+}
+
+func (w *Worker) loadPendingPreview(ctx context.Context, job previewJob) (links.PreviewWork, bool) {
 	link := job.work
 	if !job.claimed {
 		var err error
-		link, err = w.repo.SystemGetPreview(ctx, id)
+		link, err = w.repo.SystemGetPreview(ctx, job.id)
 		if err != nil {
-			w.logger.Warn("preview job: link not found", "link_id", id, "err", err)
-			return
+			w.logger.Warn("preview job: link not found", "link_id", job.id, "err", err)
+			return links.PreviewWork{}, false
 		}
 	}
 	if link.PreviewStatus != links.StatusPending {
-		return
+		return links.PreviewWork{}, false
 	}
-	// Short-circuit: the user already supplied an image (uploaded between
-	// Create and the worker picking up the job). No HTML fetch, no screenshot
-	// — and lift the "capturando…" label by flipping preview_status to ok.
-	if link.OGImageURL != nil && *link.OGImageURL != "" {
-		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, links.StatusOK, links.PreviewPatch{}); uErr != nil {
-			w.logger.Error("preview short-circuit update failed", "link_id", id, "err", uErr)
-		}
-		w.logger.Info("preview skipped: image already present", "link_id", id)
-		return
+	if link.ID == 0 {
+		link.ID = job.id
 	}
+	return link, true
+}
+
+func (w *Worker) shortCircuitExistingImage(ctx context.Context, link links.PreviewWork) bool {
+	if link.OGImageURL == nil || *link.OGImageURL == "" {
+		return false
+	}
+	if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, link.ID, link.UpdatedAt, link.Generation, links.StatusOK, links.PreviewPatch{}); uErr != nil {
+		w.logger.Error("preview short-circuit update failed", "link_id", link.ID, "err", uErr)
+	}
+	w.logger.Info("preview skipped: image already present", "link_id", link.ID)
+	return true
+}
+
+func (w *Worker) fetchPreview(ctx context.Context, link links.PreviewWork) (Result, bool) {
 	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	res, err := w.fetcher.Fetch(fetchCtx, link.URL)
-	if err != nil {
-		msg := "fetch_failed"
-		if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, links.StatusFailed, links.PreviewPatch{Error: &msg}); uErr != nil {
-			w.logger.Error("update preview failure row", "err", uErr)
-		}
-		w.logger.Info("preview failed", "link_id", id, "reason", operationErrorReason(err))
-		return
+	if err == nil {
+		return res, true
 	}
+	msg := "fetch_failed"
+	if _, uErr := w.repo.SystemUpdatePreviewIfUnchanged(ctx, link.ID, link.UpdatedAt, link.Generation, links.StatusFailed, links.PreviewPatch{Error: &msg}); uErr != nil {
+		w.logger.Error("update preview failure row", "err", uErr)
+	}
+	w.logger.Info("preview failed", "link_id", link.ID, "reason", operationErrorReason(err))
+	return Result{}, false
+}
+
+func (w *Worker) publishPreview(ctx context.Context, link links.PreviewWork, res Result) {
 	var favicon, ogImage, description *string
 	if res.FaviconURL != "" {
 		favicon = &res.FaviconURL
@@ -345,17 +371,12 @@ func (w *Worker) process(ctx context.Context, job previewJob) {
 	if res.Description != "" {
 		description = &res.Description
 	}
-
-	// Hold the "capturando…" label (preview_status='pending') while the
-	// screenshot fallback runs. Without this, the frontend polling stops at
-	// the first UpdatePreview and never sees the screenshot land — the card
-	// would only refresh after a manual reload.
 	willTryScreenshot := res.OGImageURL == "" && w.screenshotter != nil && w.uploader != nil
 	firstStatus := links.StatusOK
 	if willTryScreenshot {
 		firstStatus = links.StatusPending
 	}
-	applied, err := w.repo.SystemUpdatePreviewIfUnchanged(ctx, id, link.UpdatedAt, link.Generation, firstStatus, links.PreviewPatch{
+	applied, err := w.repo.SystemUpdatePreviewIfUnchanged(ctx, link.ID, link.UpdatedAt, link.Generation, firstStatus, links.PreviewPatch{
 		Favicon:     favicon,
 		OGImage:     ogImage,
 		Description: description,
@@ -367,16 +388,19 @@ func (w *Worker) process(ctx context.Context, job previewJob) {
 	if !applied {
 		return
 	}
-	w.logger.Info("preview ok", "link_id", id)
-
+	w.logger.Info("preview ok", "link_id", link.ID)
 	if willTryScreenshot {
-		followup, finishAt := w.maybeScreenshot(ctx, id, link.URL, link.Generation, link.UpdatedAt)
-		switch followup {
-		case screenshotFinished:
-		case screenshotNeedsRelease, screenshotAbort:
-			if _, uErr := w.repo.SystemFinishScreenshotFallback(ctx, id, finishAt, link.Generation); uErr != nil {
-				w.logger.Error("status flip after screenshot fallback", "err", uErr)
-			}
+		w.finishScreenshotFallback(ctx, link)
+	}
+}
+
+func (w *Worker) finishScreenshotFallback(ctx context.Context, link links.PreviewWork) {
+	followup, finishAt := w.maybeScreenshot(ctx, link.ID, link.URL, link.Generation, link.UpdatedAt)
+	switch followup {
+	case screenshotFinished:
+	case screenshotNeedsRelease, screenshotAbort:
+		if _, uErr := w.repo.SystemFinishScreenshotFallback(ctx, link.ID, finishAt, link.Generation); uErr != nil {
+			w.logger.Error("status flip after screenshot fallback", "err", uErr)
 		}
 	}
 }

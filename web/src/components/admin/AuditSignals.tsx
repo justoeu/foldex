@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import {
   blockIP, ipBlocksQueryKey, unblockIP,
-  type AuditStats, type IPBlock,
+  type AuditOriginStat, type AuditRisk, type AuditStats, type IPBlock,
 } from '../../api/admin'
 import { blockable } from './auditFormat'
 import { initialsOf } from '../../lib/initials'
@@ -136,7 +137,7 @@ export function AuditOrigins({
           {stats.origins.map((o) => (
             <li className="fx-aud-row" key={o.ip}>
               <span
-                className={`fx-aud-dot fx-aud-dot-${o.blocked ? 'danger' : o.failures > 0 ? 'warn' : 'ok'}`}
+                className={`fx-aud-dot fx-aud-dot-${originDotTone(o.blocked, o.failures)}`}
                 aria-hidden="true"
               />
               <div className="fx-aud-row-main">
@@ -148,19 +149,7 @@ export function AuditOrigins({
                 </span>
               </div>
               <span className="fx-aud-row-count">{o.count}</span>
-              {o.blocked ? (
-                <span className="fx-aud-tag fx-aud-tag-blocked">{t('admin.audit_blocked')}</span>
-              ) : canBlock && blockable(o.ip) ? (
-                <button
-                  type="button"
-                  className="fx-pillbtn"
-                  disabled={controls.busy}
-                  onClick={() => void controls.askBlock(o.ip,
-                    t('admin.audit_block_reason_origin', { count: o.failures }))}
-                >
-                  {t('admin.audit_block_action')}
-                </button>
-              ) : null}
+              {originAction(o, canBlock, controls, t)}
             </li>
           ))}
         </ul>
@@ -206,21 +195,7 @@ export function AuditRiskCard({ stats, canBlock }: Readonly<{ stats: AuditStats;
         <div><dt>{t('admin.audit_risk_last')}</dt><dd>{new Date(risk.last_at).toLocaleTimeString()}</dd></div>
         <div><dt>{t('admin.audit_risk_targets')}</dt><dd>{risk.targets}</dd></div>
       </dl>
-      {risk.blocked ? (
-        <p className="fx-aud-risk-done">{t('admin.audit_risk_already_blocked')}</p>
-      ) : canBlock && blockable(risk.ip) ? (
-        <button
-          type="button"
-          className="fx-btn fx-aud-risk-cta"
-          disabled={controls.busy}
-          onClick={() => void controls.askBlock(risk.ip,
-            t('admin.audit_block_reason_burst', { count: risk.failures }))}
-        >
-          {t('admin.audit_block_permanently')}
-        </button>
-      ) : (
-        <p className="fx-aud-risk-done">{t('admin.audit_risk_auto_handled')}</p>
-      )}
+      {riskAction(risk, canBlock, controls, t)}
       {controls.error && <p className="fx-aud-error" role="alert">{controls.error}</p>}
     </section>
   )
@@ -266,4 +241,60 @@ export function AuditBlocklist({ blocks, canBlock }: Readonly<{ blocks: IPBlock[
       {controls.error && <p className="fx-aud-error" role="alert">{controls.error}</p>}
     </section>
   )
+}
+
+function originDotTone(blocked: boolean, failures: number): 'danger' | 'warn' | 'ok' {
+  if (blocked) return 'danger'
+  if (failures > 0) return 'warn'
+  return 'ok'
+}
+
+function originAction(
+  origin: AuditOriginStat,
+  canBlock: boolean,
+  controls: ReturnType<typeof useBlockControls>,
+  t: TFunction,
+): ReactNode {
+  if (origin.blocked) {
+    return <span className="fx-aud-tag fx-aud-tag-blocked">{t('admin.audit_blocked')}</span>
+  }
+  if (canBlock && blockable(origin.ip)) {
+    return (
+      <button
+        type="button"
+        className="fx-pillbtn"
+        disabled={controls.busy}
+        onClick={() => void controls.askBlock(origin.ip,
+          t('admin.audit_block_reason_origin', { count: origin.failures }))}
+      >
+        {t('admin.audit_block_action')}
+      </button>
+    )
+  }
+  return null
+}
+
+function riskAction(
+  risk: AuditRisk,
+  canBlock: boolean,
+  controls: ReturnType<typeof useBlockControls>,
+  t: TFunction,
+): ReactNode {
+  if (risk.blocked) {
+    return <p className="fx-aud-risk-done">{t('admin.audit_risk_already_blocked')}</p>
+  }
+  if (canBlock && blockable(risk.ip)) {
+    return (
+      <button
+        type="button"
+        className="fx-btn fx-aud-risk-cta"
+        disabled={controls.busy}
+        onClick={() => void controls.askBlock(risk.ip,
+          t('admin.audit_block_reason_burst', { count: risk.failures }))}
+      >
+        {t('admin.audit_block_permanently')}
+      </button>
+    )
+  }
+  return <p className="fx-aud-risk-done">{t('admin.audit_risk_auto_handled')}</p>
 }

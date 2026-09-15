@@ -185,20 +185,22 @@ func (w *Worker) pushLoop(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						w.logger.Error("changecheck push panicked", "link_id", notification.LinkID, "panic", r)
-					}
-				}()
-				pushCtx, cancel := context.WithTimeout(ctx, pushTimeout)
-				err := w.sender.Notify(pushCtx, notification)
-				cancel()
-				if err != nil && ctx.Err() == nil {
-					w.logger.Warn("push notify failed", "link_id", notification.LinkID, "err", err)
-				}
-			}()
+			w.deliverPush(ctx, notification)
 		}
+	}
+}
+
+func (w *Worker) deliverPush(ctx context.Context, notification Notification) {
+	defer func() {
+		if r := recover(); r != nil {
+			w.logger.Error("changecheck push panicked", "link_id", notification.LinkID, "panic", r)
+		}
+	}()
+	pushCtx, cancel := context.WithTimeout(ctx, pushTimeout)
+	err := w.sender.Notify(pushCtx, notification)
+	cancel()
+	if err != nil && ctx.Err() == nil {
+		w.logger.Warn("push notify failed", "link_id", notification.LinkID, "err", err)
 	}
 }
 

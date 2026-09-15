@@ -57,29 +57,31 @@ func (g Grants) Permissions(r authctx.Role) []authctx.Permission {
 func Resolve(stored map[authctx.Role][]authctx.Permission) Grants {
 	compiled := authctx.DefaultGrants()
 	held := make(map[authctx.Role]map[authctx.Permission]bool, len(authctx.AllRoles))
-
 	for _, role := range authctx.AllRoles {
-		set := make(map[authctx.Permission]bool, len(authctx.AllPermissions))
-		if !authctx.IsRoleEditable(role) {
-			for p, ok := range compiled[role] {
-				set[p] = ok
-			}
-			held[role] = set
-			continue
-		}
-		for _, p := range stored[role] {
-			if !authctx.IsPermissionLocked(p) {
-				set[p] = true
-			}
-		}
-		for _, p := range authctx.AllPermissions {
-			if authctx.IsPermissionLocked(p) && compiled[role][p] {
-				set[p] = true
-			}
-		}
-		held[role] = set
+		held[role] = grantsForRole(role, stored[role], compiled)
 	}
 	return Grants{held: held}
+}
+
+func grantsForRole(role authctx.Role, stored []authctx.Permission, compiled map[authctx.Role]map[authctx.Permission]bool) map[authctx.Permission]bool {
+	set := make(map[authctx.Permission]bool, len(authctx.AllPermissions))
+	if !authctx.IsRoleEditable(role) {
+		for p, ok := range compiled[role] {
+			set[p] = ok
+		}
+		return set
+	}
+	for _, p := range stored {
+		if !authctx.IsPermissionLocked(p) {
+			set[p] = true
+		}
+	}
+	for _, p := range authctx.AllPermissions {
+		if authctx.IsPermissionLocked(p) && compiled[role][p] {
+			set[p] = true
+		}
+	}
+	return set
 }
 
 // Default is the matrix with nothing configured — the compiled one.

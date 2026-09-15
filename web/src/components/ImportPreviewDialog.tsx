@@ -189,10 +189,13 @@ function WarningList({ warnings, t }: Readonly<{ warnings: string[]; t: TFunctio
 }
 
 function Row({ label, value, accent }: Readonly<{ label: string; value: string; accent?: boolean }>) {
+  const valueStyle = accent
+    ? { color: 'var(--fx-accent)', fontFamily: 'var(--fx-mono)', fontWeight: 700 as const }
+    : { color: 'var(--fx-ink)', fontFamily: 'var(--fx-mono)', fontWeight: 400 as const }
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
       <span style={{ color: 'var(--fx-ink-4)' }}>{label}</span>
-      <span style={{ color: accent ? 'var(--fx-accent)' : 'var(--fx-ink)', fontFamily: 'var(--fx-mono)', fontWeight: accent ? 700 : 400 }}>{value}</span>
+      <span style={valueStyle}>{value}</span>
     </div>
   )
 }
