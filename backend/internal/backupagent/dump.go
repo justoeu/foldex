@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"log/slog"
 	"os"
@@ -143,33 +144,11 @@ func pgDumpCommand(ctx context.Context, cfg Config, snapshotID string) *exec.Cmd
 // table (its stderr can carry a DSN, and the column feeds the UI and alerts).
 func (j *DumpJob) Run(ctx context.Context) (*backupjobs.Artifact, map[string]any, string, error) {
 	started := j.now()
-
-	// Source counts are read BEFORE pg_dump, from the same pool the dump
-	// reads: they are the yardstick the drill compares the restored database
-	// against. Failing to read them must not fail the backup itself — the
-	// artifact is the product — so the dump degrades to shipping without them
-	// and the drill falls back to schema-version-only comparison.
-	var sourceTables map[string]int64
-	var sourceSchema int64
-	var snapshotID string
-	haveCounts := false
-	if j.snapshotCounts != nil {
-		tables, schema, snap, release, err := j.snapshotCounts(ctx)
-		if err != nil {
-			j.logger.Warn("source table counts unavailable — the drill will compare schema version only", "err", err)
-		} else {
-			sourceTables, sourceSchema, snapshotID = tables, schema, snap
-			haveCounts = true
-			if release != nil {
-				// The exporting transaction must outlive pg_dump: the
-				// snapshot dies with it, and pg_dump refuses a dead one.
-				defer release()
-			}
-		}
+	sourceTables, sourceSchema, snapshotID, haveCounts, release := j.loadSourceCounts(ctx)
+	if release != nil {
+		defer release()
 	}
 
-	// CreateTemp is born 0600; SpoolDir="" is the OS temp dir (the container's
-	// writable layer — see Config.SpoolDir for when to point it at a volume).
 	spool, err := os.CreateTemp(j.cfg.SpoolDir, "foldex-dump-*.spool")
 	if err != nil {
 		return nil, nil, backupjobs.ReasonSpoolFailed, fmt.Errorf("create spool: %w", err)
@@ -179,58 +158,11 @@ func (j *DumpJob) Run(ctx context.Context) (*backupjobs.Artifact, map[string]any
 		_ = os.Remove(spool.Name())
 	}()
 
-	// The hash is taken over the CIPHERTEXT — what actually sits in the
-	// bucket — so an operator can verify the artifact with sha256sum without
-	// decrypting anything.
 	hasher := sha256.New()
-	buffered := bufio.NewWriterSize(io.MultiWriter(spool, hasher), 1<<20)
-
-	cmd := j.command(ctx, j.cfg, snapshotID)
-	stdout, err := cmd.StdoutPipe()
+	size, reason, err := j.dumpToSpool(ctx, spool, hasher, snapshotID)
 	if err != nil {
-		return nil, nil, backupjobs.ReasonDumpFailed, fmt.Errorf("stdout pipe: %w", err)
+		return nil, nil, reason, err
 	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-
-	if err := cmd.Start(); err != nil {
-		return nil, nil, backupjobs.ReasonDumpFailed, fmt.Errorf("start pg_dump: %w", err)
-	}
-
-	encrypter, err := encryptTo(buffered, j.recipients)
-	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return nil, nil, backupjobs.ReasonEncryptFailed, err
-	}
-	_, copyErr := io.Copy(encrypter, stdout)
-	closeErr := encrypter.Close()
-	waitErr := cmd.Wait()
-	switch {
-	case waitErr != nil:
-		return nil, nil, backupjobs.ReasonDumpFailed, fmt.Errorf("pg_dump: %w (stderr: %s)", waitErr, firstLine(stderr.String()))
-	case copyErr != nil:
-		return nil, nil, backupjobs.ReasonSpoolFailed, fmt.Errorf("copy dump stream: %w", copyErr)
-	case closeErr != nil:
-		return nil, nil, backupjobs.ReasonEncryptFailed, fmt.Errorf("finish age stream: %w", closeErr)
-	}
-	if err := buffered.Flush(); err != nil {
-		return nil, nil, backupjobs.ReasonSpoolFailed, fmt.Errorf("flush spool: %w", err)
-	}
-
-	size, err := spool.Seek(0, io.SeekEnd)
-	if err != nil {
-		return nil, nil, backupjobs.ReasonSpoolFailed, fmt.Errorf("size spool: %w", err)
-	}
-	if size == 0 {
-		// pg_dump exiting 0 with zero bytes is not a backup; refuse to record
-		// success over an empty artifact.
-		return nil, nil, backupjobs.ReasonDumpFailed, fmt.Errorf("pg_dump produced no output")
-	}
-	if _, err := spool.Seek(0, io.SeekStart); err != nil {
-		return nil, nil, backupjobs.ReasonSpoolFailed, fmt.Errorf("rewind spool: %w", err)
-	}
-
 	key := dumpKey(started, len(j.recipients) > 0)
 	if err := j.store.PutObjectStream(ctx, key, spool, size, "application/octet-stream"); err != nil {
 		return nil, nil, backupjobs.ReasonUploadFailed, fmt.Errorf("upload %s: %w", key, err)
@@ -242,21 +174,92 @@ func (j *DumpJob) Run(ctx context.Context) (*backupjobs.Artifact, map[string]any
 		dumpMeta.Tables = sourceTables
 		dumpMeta.SchemaVersion = sourceSchema
 	}
-	meta := dumpMeta.asMap()
+	return artifact, j.finishDumpMeta(ctx, dumpMeta), "", nil
+}
 
-	if j.cfg.RetentionMode == "agent" {
-		if pruned, err := j.prune(ctx); err != nil {
-			// The dump itself landed; a failed prune is a warning on this run,
-			// not a failed backup. It gets its own visibility instead of
-			// poisoning the success the operator actually cares about.
-			j.logger.Warn("retention prune failed", "err", err)
-			dumpMeta.PruneError = backupjobs.ReasonPruneFailed
-			meta = dumpMeta.asMap()
-		} else if pruned > 0 {
-			meta["pruned_objects"] = pruned
-		}
+func (j *DumpJob) loadSourceCounts(ctx context.Context) (map[string]int64, int64, string, bool, func()) {
+	// Source counts are read BEFORE pg_dump, from the same pool the dump
+	// reads: they are the yardstick the drill compares the restored database
+	// against. Failing to read them must not fail the backup itself — the
+	// artifact is the product — so the dump degrades to shipping without them
+	// and the drill falls back to schema-version-only comparison.
+	if j.snapshotCounts == nil {
+		return nil, 0, "", false, nil
 	}
-	return artifact, meta, "", nil
+	tables, schema, snap, release, err := j.snapshotCounts(ctx)
+	if err != nil {
+		j.logger.Warn("source table counts unavailable — the drill will compare schema version only", "err", err)
+		return nil, 0, "", false, nil
+	}
+	return tables, schema, snap, true, release
+}
+
+func (j *DumpJob) dumpToSpool(ctx context.Context, spool *os.File, hasher hash.Hash, snapshotID string) (int64, string, error) {
+	// The hash is taken over the CIPHERTEXT — what actually sits in the
+	// bucket — so an operator can verify the artifact with sha256sum without
+	// decrypting anything.
+	buffered := bufio.NewWriterSize(io.MultiWriter(spool, hasher), 1<<20)
+	cmd := j.command(ctx, j.cfg, snapshotID)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return 0, backupjobs.ReasonDumpFailed, fmt.Errorf("stdout pipe: %w", err)
+	}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return 0, backupjobs.ReasonDumpFailed, fmt.Errorf("start pg_dump: %w", err)
+	}
+	encrypter, err := encryptTo(buffered, j.recipients)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return 0, backupjobs.ReasonEncryptFailed, err
+	}
+	_, copyErr := io.Copy(encrypter, stdout)
+	closeErr := encrypter.Close()
+	waitErr := cmd.Wait()
+	switch {
+	case waitErr != nil:
+		return 0, backupjobs.ReasonDumpFailed, fmt.Errorf("pg_dump: %w (stderr: %s)", waitErr, firstLine(stderr.String()))
+	case copyErr != nil:
+		return 0, backupjobs.ReasonSpoolFailed, fmt.Errorf("copy dump stream: %w", copyErr)
+	case closeErr != nil:
+		return 0, backupjobs.ReasonEncryptFailed, fmt.Errorf("finish age stream: %w", closeErr)
+	}
+	if err := buffered.Flush(); err != nil {
+		return 0, backupjobs.ReasonSpoolFailed, fmt.Errorf("flush spool: %w", err)
+	}
+	size, err := spool.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, backupjobs.ReasonSpoolFailed, fmt.Errorf("size spool: %w", err)
+	}
+	if size == 0 {
+		return 0, backupjobs.ReasonDumpFailed, fmt.Errorf("pg_dump produced no output")
+	}
+	if _, err := spool.Seek(0, io.SeekStart); err != nil {
+		return 0, backupjobs.ReasonSpoolFailed, fmt.Errorf("rewind spool: %w", err)
+	}
+	return size, "", nil
+}
+
+func (j *DumpJob) finishDumpMeta(ctx context.Context, dumpMeta DumpMeta) map[string]any {
+	meta := dumpMeta.asMap()
+	if j.cfg.RetentionMode != "agent" {
+		return meta
+	}
+	pruned, err := j.prune(ctx)
+	if err != nil {
+		// The dump itself landed; a failed prune is a warning on this run,
+		// not a failed backup. It gets its own visibility instead of
+		// poisoning the success the operator actually cares about.
+		j.logger.Warn("retention prune failed", "err", err)
+		dumpMeta.PruneError = backupjobs.ReasonPruneFailed
+		return dumpMeta.asMap()
+	}
+	if pruned > 0 {
+		meta["pruned_objects"] = pruned
+	}
+	return meta
 }
 
 // prune applies the GFS policy over the dump namespace.
