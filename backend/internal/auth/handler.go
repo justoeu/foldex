@@ -558,43 +558,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// locked out.
 	if !found || verr != nil || user.Status != StatusActive {
 		lockedBucket := h.recordLoginFailure(ipKey, emailKey, NormalizeEmail(in.who()))
-		// One audit write for all three causes, on the one branch they share.
-		// Writing different entries — or writing only for a known address —
-		// would rebuild the enumeration oracle this branch exists to close, both
-		// in timing and in what an administrator could read back out of the
-		// trail. The attempted address is recorded because a burst against one
-		// mailbox is precisely what this screen has to make visible.
-		if err := h.repo.Audit(r.Context(), AuditRecord{
-			Action: AuditLoginFailed,
-			// Truncated because Login deliberately does NOT validate the
-			// address — it must answer identically for garbage and for a real
-			// account. Without a cap, an unauthenticated caller can write a
-			// 64 KiB "address" into a permanent row on every attempt, and the
-			// per-address rate bucket cannot help: it is keyed by that same
-			// unique string, so every attempt gets a fresh budget.
-			TargetEmail: truncateTo(NormalizeEmail(in.who()), maxAuditEmail),
-		}.WithRequest(r)); err != nil {
-			h.logger.Error("audit login failure", "err", err)
-		}
-		// The lockout itself is a separate, rarer event, and the anomaly panel
-		// reads THIS action to answer "which origins are already being
-		// throttled?" (ADR-47). Recorded only at the transition — the attempt
-		// that crossed the ceiling — because a row per refused request would
-		// let the attacker choose how many rows to insert, turning the trail
-		// into the amplifier the limiter exists to remove.
-		//
-		// The address travels via WithRequest; the panel groups by it. The
-		// attempted mailbox is recorded for the same reason the failure row
-		// above records it, and truncated for the same reason.
-		if lockedBucket != "" {
-			if err := h.repo.Audit(r.Context(), AuditRecord{
-				Action:      AuditRateLimited,
-				TargetEmail: truncateTo(NormalizeEmail(in.who()), maxAuditEmail),
-				Detail:      lockedBucket,
-			}.WithRequest(r)); err != nil {
-				h.logger.Error("audit login lockout", "err", err)
-			}
-		}
+		h.auditLoginRejection(r, NormalizeEmail(in.who()), lockedBucket)
 		httperr.Write(w, errInvalidCredentials())
 		return
 	}
@@ -616,6 +580,47 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 // answers from memory for its whole TTL and never blocks — and a nil cache
 // answers with the compiled defaults, so this is safe on a handler nothing
 // wired.
+func (h *Handler) auditLoginRejection(r *http.Request, submitted, lockedBucket string) {
+	// One audit write for all three causes, on the one branch they share.
+	// Writing different entries — or writing only for a known address —
+	// would rebuild the enumeration oracle this branch exists to close, both
+	// in timing and in what an administrator could read back out of the
+	// trail. The attempted address is recorded because a burst against one
+	// mailbox is precisely what this screen has to make visible.
+	if err := h.repo.Audit(r.Context(), AuditRecord{
+		Action: AuditLoginFailed,
+		// Truncated because Login deliberately does NOT validate the
+		// address — it must answer identically for garbage and for a real
+		// account. Without a cap, an unauthenticated caller can write a
+		// 64 KiB "address" into a permanent row on every attempt, and the
+		// per-address rate bucket cannot help: it is keyed by that same
+		// unique string, so every attempt gets a fresh budget.
+		TargetEmail: truncateTo(submitted, maxAuditEmail),
+	}.WithRequest(r)); err != nil {
+		h.logger.Error("audit login failure", "err", err)
+	}
+	// The lockout itself is a separate, rarer event, and the anomaly panel
+	// reads THIS action to answer "which origins are already being
+	// throttled?" (ADR-47). Recorded only at the transition — the attempt
+	// that crossed the ceiling — because a row per refused request would
+	// let the attacker choose how many rows to insert, turning the trail
+	// into the amplifier the limiter exists to remove.
+	//
+	// The address travels via WithRequest; the panel groups by it. The
+	// attempted mailbox is recorded for the same reason the failure row
+	// above records it, and truncated for the same reason.
+	if lockedBucket == "" {
+		return
+	}
+	if err := h.repo.Audit(r.Context(), AuditRecord{
+		Action:      AuditRateLimited,
+		TargetEmail: truncateTo(submitted, maxAuditEmail),
+		Detail:      lockedBucket,
+	}.WithRequest(r)); err != nil {
+		h.logger.Error("audit login lockout", "err", err)
+	}
+}
+
 func (h *Handler) configureLoginLimits(ctx context.Context) {
 	p := h.abuse.Current(ctx)
 	lockout := time.Duration(p.LoginWindowMinutes) * time.Minute

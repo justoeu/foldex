@@ -155,22 +155,9 @@ func (r *Repository) CreateChallenge(ctx context.Context, in NewChallenge) (stri
 		return "", 0, ErrChallengeInvalid
 	}
 
-	var previousID int64
-	var attempts, sends int
-	var expiresAt time.Time
-	var mailboxAlreadyProven bool
-	err = tx.QueryRow(ctx, `
-		SELECT id, attempts, sends, expires_at, mailbox_already_proven
-		FROM auth_challenge
-		WHERE user_id = $1 AND purpose = $2
-		  AND token_version = $3
-		  AND consumed_at IS NULL AND expires_at > now()
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1
-		FOR UPDATE`, int64(in.UserID), in.Purpose, in.TokenVersion).
-		Scan(&previousID, &attempts, &sends, &expiresAt, &mailboxAlreadyProven)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return "", 0, fmt.Errorf("load previous challenge: %w", err)
+	prev, err := loadPreviousChallengeTx(ctx, tx, in)
+	if err != nil {
+		return "", 0, err
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -181,17 +168,8 @@ func (r *Repository) CreateChallenge(ctx context.Context, in NewChallenge) (stri
 		return "", 0, fmt.Errorf("supersede challenges: %w", err)
 	}
 
-	var provider, subject, email *string
-	if in.Identity != nil {
-		provider, subject = &in.Identity.provider, &in.Identity.subject
-		email = nullString(in.Identity.email)
-	}
-
-	var inheritedExpiry *time.Time
-	if previousID != 0 {
-		inheritedExpiry = &expiresAt
-	}
-	mailboxAlreadyProven = mailboxAlreadyProven || in.MailboxAlreadyProven
+	provider, subject, email := challengeIdentityArgs(in.Identity)
+	mailboxAlreadyProven := prev.mailboxAlreadyProven || in.MailboxAlreadyProven
 
 	var id int64
 	if err := tx.QueryRow(ctx, `
@@ -202,25 +180,69 @@ func (r *Repository) CreateChallenge(ctx context.Context, in NewChallenge) (stri
 		        $8, $9, $10, $11, $12, $13)
 		RETURNING id`,
 		int64(in.UserID), hash, in.Purpose, in.TokenVersion, intervalArg(in.TTL), nullIP(in.IP), in.UserAgent,
-		attempts, sends, mailboxAlreadyProven, provider, subject, email, inheritedExpiry).Scan(&id); err != nil {
+		prev.attempts, prev.sends, mailboxAlreadyProven, provider, subject, email, prev.inheritedExpiry).Scan(&id); err != nil {
 		return "", 0, fmt.Errorf("insert challenge: %w", err)
 	}
-	if previousID != 0 {
-		// The code MAC is bound to previousID and therefore cannot move to the
-		// replacement challenge. Move only its timestamp for resend-cooldown
-		// accounting and mark it spent so it can never be presented there.
-		if _, err := tx.Exec(ctx, `
-			UPDATE email_otp
-			SET challenge_id = $2, consumed_at = COALESCE(consumed_at, now())
-			WHERE challenge_id = $1`,
-			previousID, id); err != nil {
-			return "", 0, fmt.Errorf("invalidate moved challenge codes: %w", err)
-		}
+	if err := inheritChallengeCodesTx(ctx, tx, prev.id, id); err != nil {
+		return "", 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", 0, fmt.Errorf("challenge commit: %w", err)
 	}
 	return raw, id, nil
+}
+
+type previousChallenge struct {
+	id                   int64
+	attempts, sends      int
+	inheritedExpiry      *time.Time
+	mailboxAlreadyProven bool
+}
+
+func loadPreviousChallengeTx(ctx context.Context, tx pgx.Tx, in NewChallenge) (previousChallenge, error) {
+	var prev previousChallenge
+	var expiresAt time.Time
+	err := tx.QueryRow(ctx, `
+		SELECT id, attempts, sends, expires_at, mailbox_already_proven
+		FROM auth_challenge
+		WHERE user_id = $1 AND purpose = $2
+		  AND token_version = $3
+		  AND consumed_at IS NULL AND expires_at > now()
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+		FOR UPDATE`, int64(in.UserID), in.Purpose, in.TokenVersion).
+		Scan(&prev.id, &prev.attempts, &prev.sends, &expiresAt, &prev.mailboxAlreadyProven)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return previousChallenge{}, fmt.Errorf("load previous challenge: %w", err)
+	}
+	if prev.id != 0 {
+		prev.inheritedExpiry = &expiresAt
+	}
+	return prev, nil
+}
+
+func challengeIdentityArgs(identity *linkedIdentity) (provider, subject, email *string) {
+	if identity == nil {
+		return nil, nil, nil
+	}
+	return &identity.provider, &identity.subject, nullString(identity.email)
+}
+
+func inheritChallengeCodesTx(ctx context.Context, tx pgx.Tx, previousID, id int64) error {
+	if previousID == 0 {
+		return nil
+	}
+	// The code MAC is bound to previousID and therefore cannot move to the
+	// replacement challenge. Move only its timestamp for resend-cooldown
+	// accounting and mark it spent so it can never be presented there.
+	if _, err := tx.Exec(ctx, `
+		UPDATE email_otp
+		SET challenge_id = $2, consumed_at = COALESCE(consumed_at, now())
+		WHERE challenge_id = $1`,
+		previousID, id); err != nil {
+		return fmt.Errorf("invalidate moved challenge codes: %w", err)
+	}
+	return nil
 }
 
 // ResolveChallenge turns a raw pre-auth token into its live row.
@@ -390,34 +412,7 @@ func (r *Repository) CreateChallengeEmailOTP(ctx context.Context, id int64, code
 		  AND (last.at IS NULL OR last.at < now() - $3::interval)
 		RETURNING c.sends`, id, maxChallengeSends, intervalArg(cooldown)).Scan(&sends)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// The UPDATE matched nothing. Separate the two refusals so the handler
-		// can tell the user whether to wait or to use another factor.
-		var total int
-		var recent, live bool
-		if diagErr := tx.QueryRow(ctx, `
-			SELECT c.sends,
-			       EXISTS (SELECT 1 FROM email_otp o
-			               WHERE o.challenge_id = c.id AND o.created_at >= now() - $2::interval),
-			       c.consumed_at IS NULL AND c.expires_at > now()
-			       AND c.token_version = u.token_version AND u.status = 'active'
-			FROM auth_challenge c JOIN app_user u ON u.id = c.user_id
-			WHERE c.id = $1`,
-			id, intervalArg(cooldown)).Scan(&total, &recent, &live); diagErr != nil {
-			if !errors.Is(diagErr, pgx.ErrNoRows) {
-				return 0, fmt.Errorf("diagnose challenge send: %w", diagErr)
-			}
-			return 0, ErrChallengeInvalid
-		}
-		if !live {
-			return 0, ErrChallengeInvalid
-		}
-		if total >= maxChallengeSends {
-			return total, ErrSendsExhausted
-		}
-		if recent {
-			return total, ErrTooSoon
-		}
-		return total, ErrChallengeInvalid
+		return diagnoseChallengeSendTx(ctx, tx, id, cooldown)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("reserve challenge send: %w", err)
@@ -441,6 +436,38 @@ func (r *Repository) CreateChallengeEmailOTP(ctx context.Context, id int64, code
 		return 0, fmt.Errorf("reserve challenge send commit: %w", err)
 	}
 	return sends, nil
+}
+
+func diagnoseChallengeSendTx(ctx context.Context, tx pgx.Tx, id int64, cooldown time.Duration) (int, error) {
+	// The UPDATE matched nothing. Separate the two refusals so the handler
+	// can tell the user whether to wait or to use another factor.
+	var total int
+	var recent, live bool
+	diagErr := tx.QueryRow(ctx, `
+		SELECT c.sends,
+		       EXISTS (SELECT 1 FROM email_otp o
+		               WHERE o.challenge_id = c.id AND o.created_at >= now() - $2::interval),
+		       c.consumed_at IS NULL AND c.expires_at > now()
+		       AND c.token_version = u.token_version AND u.status = 'active'
+		FROM auth_challenge c JOIN app_user u ON u.id = c.user_id
+		WHERE c.id = $1`,
+		id, intervalArg(cooldown)).Scan(&total, &recent, &live)
+	if diagErr != nil {
+		if !errors.Is(diagErr, pgx.ErrNoRows) {
+			return 0, fmt.Errorf("diagnose challenge send: %w", diagErr)
+		}
+		return 0, ErrChallengeInvalid
+	}
+	if !live {
+		return 0, ErrChallengeInvalid
+	}
+	if total >= maxChallengeSends {
+		return total, ErrSendsExhausted
+	}
+	if recent {
+		return total, ErrTooSoon
+	}
+	return total, ErrChallengeInvalid
 }
 
 // lockChallengeUser establishes the package-wide lock order: app_user first,
@@ -667,13 +694,9 @@ func (in EnrollmentComplete) preAuth() *PreAuth {
 // and issues the first session in one transaction.
 func (r *Repository) CompleteTOTPEnrollment(ctx context.Context, in EnrollmentComplete, proof TOTPProof) (User, issuedTokens, error) {
 	pre := in.preAuth()
-	var issue sessionIssue
-	var err error
-	if pre != nil {
-		issue, err = newSessionIssue(pre.TTL)
-		if err != nil {
-			return User{}, issuedTokens{}, err
-		}
+	issue, err := enrollmentSessionIssue(pre)
+	if err != nil {
+		return User{}, issuedTokens{}, err
 	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -681,21 +704,8 @@ func (r *Repository) CompleteTOTPEnrollment(ctx context.Context, in EnrollmentCo
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var lockedUser int64
-	err = tx.QueryRow(ctx, `
-		SELECT id FROM app_user
-		WHERE id = $1 AND status = 'active' AND token_version = $2
-		FOR NO KEY UPDATE`, int64(in.UID), in.TokenVersion).Scan(&lockedUser)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return User{}, issuedTokens{}, ErrChallengeInvalid
-	}
-	if err != nil {
-		return User{}, issuedTokens{}, fmt.Errorf("complete totp enrollment lock user: %w", err)
-	}
-	if pre == nil {
-		if err := requireLiveSessionTx(ctx, tx, in.UID, in.liveSessionID()); err != nil {
-			return User{}, issuedTokens{}, err
-		}
+	if err := lockEnrollmentUserTx(ctx, tx, in, pre, "complete totp enrollment"); err != nil {
+		return User{}, issuedTokens{}, err
 	}
 	if err := confirmTOTPRowTx(ctx, tx, in.UID, in.TokenVersion, in.liveSessionID(), proof); err != nil {
 		return User{}, issuedTokens{}, err
@@ -703,25 +713,8 @@ func (r *Repository) CompleteTOTPEnrollment(ctx context.Context, in EnrollmentCo
 	if err := replaceRecoveryCodesTx(ctx, tx, in.UID, in.RecoveryHashes); err != nil {
 		return User{}, issuedTokens{}, err
 	}
-
-	if pre != nil {
-		ct, err := tx.Exec(ctx, `
-			UPDATE auth_challenge SET consumed_at = now()
-			WHERE id = $1 AND user_id = $2 AND purpose = 'enroll_2fa'
-			  AND token_version = $3 AND consumed_at IS NULL AND expires_at > now()`,
-			pre.Challenge.ID, int64(in.UID), in.TokenVersion)
-		if err != nil {
-			return User{}, issuedTokens{}, fmt.Errorf("complete enrollment consume challenge: %w", err)
-		}
-		if ct.RowsAffected() == 0 {
-			return User{}, issuedTokens{}, ErrChallengeInvalid
-		}
-		if _, err := issueSessionTx(ctx, tx, in.UID, issue, pre.IP, pre.UA); err != nil {
-			return User{}, issuedTokens{}, err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(in.UID)); err != nil {
-			return User{}, issuedTokens{}, fmt.Errorf("complete enrollment touch user: %w", err)
-		}
+	if err := finishPreAuthEnrollmentTx(ctx, tx, in.UID, in.TokenVersion, pre, issue, "complete enrollment"); err != nil {
+		return User{}, issuedTokens{}, err
 	}
 
 	user, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM app_user WHERE id = $1`, int64(in.UID)))

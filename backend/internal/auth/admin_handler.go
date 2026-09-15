@@ -215,18 +215,8 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	// Owner is absent from the assignable set on purpose: ownership moves only
-	// through the transfer endpoint, which demotes the outgoing owner in the
-	// same statement. Allowing it here would let a promotion race the partial
-	// unique index and surface as a 500 instead of a refusal.
-	if in.Role != nil && !admin.AssignableRole(*in.Role) {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role",
-			msgRoleMustBeAssignable))
-		return
-	}
-	if in.Status != nil && !admin.ValidStatus(*in.Status) {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_status",
-			"status must be active or disabled"))
+	if err := validateUpdateUserInput(in); err != nil {
+		httperr.Write(w, err)
 		return
 	}
 
@@ -248,20 +238,7 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	// here lets two concurrent demotions both observe two admins and both
 	// proceed — leaving zero, which no API call can undo.
 	user, err := h.repo.UpdateUser(r.Context(), target, in.Name, in.Role, in.Status)
-	switch {
-	case errors.Is(err, ErrNoUser):
-		httperr.Write(w, httperr.ErrNotFound)
-		return
-	case errors.Is(err, ErrLastAdmin):
-		httperr.Write(w, errLastAdmin())
-		return
-	case errors.Is(err, ErrOwnerImmutable):
-		httperr.Write(w, errOwnerImmutable())
-		return
-	}
-	if err != nil {
-		h.logger.Error("admin update user", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
+	if writeAdminUpdateUserError(w, h, err) {
 		return
 	}
 	if in.Role != nil {
@@ -278,6 +255,39 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	httperr.JSON(w, http.StatusOK, user)
+}
+
+func validateUpdateUserInput(in updateUserInput) error {
+	// Owner is absent from the assignable set on purpose: ownership moves only
+	// through the transfer endpoint, which demotes the outgoing owner in the
+	// same statement. Allowing it here would let a promotion race the partial
+	// unique index and surface as a 500 instead of a refusal.
+	if in.Role != nil && !admin.AssignableRole(*in.Role) {
+		return httperr.New(http.StatusBadRequest, "invalid_role",
+			msgRoleMustBeAssignable)
+	}
+	if in.Status != nil && !admin.ValidStatus(*in.Status) {
+		return httperr.New(http.StatusBadRequest, "invalid_status",
+			"status must be active or disabled")
+	}
+	return nil
+}
+
+func writeAdminUpdateUserError(w http.ResponseWriter, h *AdminHandler, err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, ErrNoUser):
+		httperr.Write(w, httperr.ErrNotFound)
+	case errors.Is(err, ErrLastAdmin):
+		httperr.Write(w, errLastAdmin())
+	case errors.Is(err, ErrOwnerImmutable):
+		httperr.Write(w, errOwnerImmutable())
+	default:
+		h.logger.Error("admin update user", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+	}
+	return true
 }
 
 // DeleteUser removes an account and, by cascade, all of its content.

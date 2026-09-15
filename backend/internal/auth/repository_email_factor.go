@@ -132,13 +132,9 @@ func (r *Repository) StartEmailFactorEnrollment(ctx context.Context, uid authctx
 // accept and no other way in.
 func (r *Repository) CompleteEmailFactorEnrollment(ctx context.Context, in EnrollmentComplete, codeHash []byte) (User, issuedTokens, error) {
 	pre := in.preAuth()
-	var issue sessionIssue
-	var err error
-	if pre != nil {
-		issue, err = newSessionIssue(pre.TTL)
-		if err != nil {
-			return User{}, issuedTokens{}, err
-		}
+	issue, err := enrollmentSessionIssue(pre)
+	if err != nil {
+		return User{}, issuedTokens{}, err
 	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -146,23 +142,52 @@ func (r *Repository) CompleteEmailFactorEnrollment(ctx context.Context, in Enrol
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if err := lockEnrollmentUserTx(ctx, tx, in, pre, "complete email factor"); err != nil {
+		return User{}, issuedTokens{}, err
+	}
+	if err := spendEmailFactorEnrollmentTx(ctx, tx, in, codeHash); err != nil {
+		return User{}, issuedTokens{}, err
+	}
+	if err := finishPreAuthEnrollmentTx(ctx, tx, in.UID, in.TokenVersion, pre, issue, "complete email factor"); err != nil {
+		return User{}, issuedTokens{}, err
+	}
+
+	user, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM app_user WHERE id = $1`, int64(in.UID)))
+	if err != nil {
+		return User{}, issuedTokens{}, fmt.Errorf("complete email factor load user: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, issuedTokens{}, fmt.Errorf("complete email factor commit: %w", err)
+	}
+	return user, issue.tokens, nil
+}
+
+func enrollmentSessionIssue(pre *PreAuth) (sessionIssue, error) {
+	if pre == nil {
+		return sessionIssue{}, nil
+	}
+	return newSessionIssue(pre.TTL)
+}
+
+func lockEnrollmentUserTx(ctx context.Context, tx pgx.Tx, in EnrollmentComplete, pre *PreAuth, op string) error {
 	var lockedUser int64
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		SELECT id FROM app_user
 		WHERE id = $1 AND status = 'active' AND token_version = $2
 		FOR NO KEY UPDATE`, int64(in.UID), in.TokenVersion).Scan(&lockedUser)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return User{}, issuedTokens{}, ErrChallengeInvalid
+		return ErrChallengeInvalid
 	}
 	if err != nil {
-		return User{}, issuedTokens{}, fmt.Errorf("complete email factor lock user: %w", err)
+		return fmt.Errorf("%s lock user: %w", op, err)
 	}
 	if pre == nil {
-		if err := requireLiveSessionTx(ctx, tx, in.UID, in.liveSessionID()); err != nil {
-			return User{}, issuedTokens{}, err
-		}
+		return requireLiveSessionTx(ctx, tx, in.UID, in.liveSessionID())
 	}
+	return nil
+}
 
+func spendEmailFactorEnrollmentTx(ctx context.Context, tx pgx.Tx, in EnrollmentComplete, codeHash []byte) error {
 	// The code is spent by the UPDATE's own WHERE clause, inside this
 	// transaction — so a later failure here restores it instead of burning a
 	// valid credential for an enrollment that never happened.
@@ -172,10 +197,10 @@ func (r *Repository) CompleteEmailFactorEnrollment(ctx context.Context, in Enrol
 		  AND consumed_at IS NULL AND expires_at > now()`,
 		int64(in.UID), OTPPurposeEnrollEmail2FA, codeHash)
 	if err != nil {
-		return User{}, issuedTokens{}, fmt.Errorf("complete email factor consume code: %w", err)
+		return fmt.Errorf("complete email factor consume code: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return User{}, issuedTokens{}, ErrBadCredentials
+		return ErrBadCredentials
 	}
 
 	// Confirmation requires the SAME epoch — and, from Settings, the same
@@ -191,45 +216,37 @@ func (r *Repository) CompleteEmailFactorEnrollment(ctx context.Context, in Enrol
 		  AND ($3::bigint = 0 OR enrollment_session_id = $3)`,
 		int64(in.UID), in.TokenVersion, in.liveSessionID())
 	if err != nil {
-		return User{}, issuedTokens{}, fmt.Errorf("complete email factor confirm: %w", err)
+		return fmt.Errorf("complete email factor confirm: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return User{}, issuedTokens{}, ErrNoPendingFactor
+		return ErrNoPendingFactor
 	}
+	return replaceRecoveryCodesTx(ctx, tx, in.UID, in.RecoveryHashes)
+}
 
-	if err := replaceRecoveryCodesTx(ctx, tx, in.UID, in.RecoveryHashes); err != nil {
-		return User{}, issuedTokens{}, err
+func finishPreAuthEnrollmentTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, tokenVersion int, pre *PreAuth, issue sessionIssue, op string) error {
+	if pre == nil {
+		return nil
 	}
-
-	if pre != nil {
-		ct, err := tx.Exec(ctx, `
-			UPDATE auth_challenge SET consumed_at = now()
-			WHERE id = $1 AND user_id = $2 AND purpose = 'enroll_2fa'
-			  AND token_version = $3 AND consumed_at IS NULL AND expires_at > now()`,
-			pre.Challenge.ID, int64(in.UID), in.TokenVersion)
-		if err != nil {
-			return User{}, issuedTokens{}, fmt.Errorf("complete email factor consume challenge: %w", err)
-		}
-		if ct.RowsAffected() == 0 {
-			return User{}, issuedTokens{}, ErrChallengeInvalid
-		}
-		if _, err := issueSessionTx(ctx, tx, in.UID, issue, pre.IP, pre.UA); err != nil {
-			return User{}, issuedTokens{}, err
-		}
-		if _, err := tx.Exec(ctx,
-			`UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(in.UID)); err != nil {
-			return User{}, issuedTokens{}, fmt.Errorf("complete email factor touch user: %w", err)
-		}
-	}
-
-	user, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM app_user WHERE id = $1`, int64(in.UID)))
+	ct, err := tx.Exec(ctx, `
+		UPDATE auth_challenge SET consumed_at = now()
+		WHERE id = $1 AND user_id = $2 AND purpose = 'enroll_2fa'
+		  AND token_version = $3 AND consumed_at IS NULL AND expires_at > now()`,
+		pre.Challenge.ID, int64(uid), tokenVersion)
 	if err != nil {
-		return User{}, issuedTokens{}, fmt.Errorf("complete email factor load user: %w", err)
+		return fmt.Errorf("%s consume challenge: %w", op, err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return User{}, issuedTokens{}, fmt.Errorf("complete email factor commit: %w", err)
+	if ct.RowsAffected() == 0 {
+		return ErrChallengeInvalid
 	}
-	return user, issue.tokens, nil
+	if _, err := issueSessionTx(ctx, tx, uid, issue, pre.IP, pre.UA); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(uid)); err != nil {
+		return fmt.Errorf("%s touch user: %w", op, err)
+	}
+	return nil
 }
 
 // DisableEmailFactor removes the factor, and the recovery codes with it when no
