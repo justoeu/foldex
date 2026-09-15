@@ -117,6 +117,52 @@ func TestExtractedHelpers_WalkEachTxStep(t *testing.T) {
 	walk(func(tx pgx.Tx) {
 		_, _ = insertAcceptedUserTx(ctx, tx, "a@b.c", "a@b.c", "n", inviteCredential{passwordHash: &pw}, authctx.RoleEditor)
 	})
+	walk(func(tx pgx.Tx) {
+		_, _ = loadPreviousChallengeTx(ctx, tx, NewChallenge{UserID: authctx.UserID(1), Purpose: PurposeTOTP, TokenVersion: 1})
+	})
+	walk(func(tx pgx.Tx) { _ = inheritChallengeCodesTx(ctx, tx, 7, 8) })
+	walk(func(tx pgx.Tx) { _, _ = diagnoseChallengeSendTx(ctx, tx, 1, time.Minute) })
+	walk(func(tx pgx.Tx) { _ = lockChallengeUser(ctx, tx, 1) })
+	walk(func(tx pgx.Tx) {
+		_ = confirmTOTPRowTx(ctx, tx, authctx.UserID(1), 1, 1, TOTPProof{})
+	})
+	walk(func(tx pgx.Tx) { _ = consumeTOTPProofTx(ctx, tx, authctx.UserID(1), TOTPProof{}) })
+	walk(func(tx pgx.Tx) { _ = replaceRecoveryCodesTx(ctx, tx, authctx.UserID(1), [][]byte{[]byte("ab")}) })
+	walk(func(tx pgx.Tx) { _, _ = lockConvertUserTx(ctx, tx, 1, 1, "hash") })
+	walk(func(tx pgx.Tx) { _, _, _, _ = consumeConvertChallengeTx(ctx, tx, 1, 1, 1) })
+	ph := "hash"
+	walk(func(tx pgx.Tx) { _, _ = retirePasswordTx(ctx, tx, 1, 1, &ph) })
+	walk(func(tx pgx.Tx) { _, _, _, _, _ = loadLiveEmailChangeTx(ctx, tx, hash) })
+	walk(func(tx pgx.Tx) { _ = lockEmailChangeTargetTx(ctx, tx, 1, 1) })
+	sid := int64(1)
+	walk(func(tx pgx.Tx) { _ = requireLiveEmailChangeSessionTx(ctx, tx, &sid) })
+}
+
+func TestChallengeIdentityArgs_NilAndSet(t *testing.T) {
+	t.Parallel()
+	p, s, e := challengeIdentityArgs(nil)
+	assert.Nil(t, p)
+	assert.Nil(t, s)
+	assert.Nil(t, e)
+	gotP, gotS, gotE := challengeIdentityArgs(&linkedIdentity{provider: "google", subject: "sub", email: "a@b.c"})
+	require.NotNil(t, gotP)
+	assert.Equal(t, "google", *gotP)
+	assert.Equal(t, "sub", *gotS)
+	assert.Equal(t, "a@b.c", *gotE)
+}
+
+func TestTryStepUpProof_RejectsUnknownShapes(t *testing.T) {
+	t.Parallel()
+	h := &Handler{}
+	_, err := h.tryStepUpProof(context.Background(), authctx.UserID(1), User{}, "nope")
+	assert.ErrorIs(t, err, ErrBadCredentials)
+	_, err = h.tryNumericStepUpProof(context.Background(), authctx.UserID(1), User{}, "123456")
+	assert.ErrorIs(t, err, ErrBadCredentials)
+}
+
+func TestRequireLiveEmailChangeSession_NilIsOK(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, requireLiveEmailChangeSessionTx(context.Background(), failTx{}, nil))
 }
 
 func TestScanAuditHelpers_SurfaceRowFailures(t *testing.T) {
