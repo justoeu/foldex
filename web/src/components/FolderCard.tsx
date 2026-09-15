@@ -1,4 +1,4 @@
-import { memo, useState } from 'react'
+import { memo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { primaryColor } from '../lib/tagColor'
@@ -83,12 +83,7 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropNote, onDrop
 
   return (
     <div
-      className={
-        'fx-card fx-folder-card' +
-        (compact ? ' fx-folder-card-compact' : '') +
-        (dragOver ? ' fx-card-drop-over' : '') +
-        (dragging ? ' fx-card-dragging' : '')
-      }
+      className={folderCardClass(compact, dragOver, dragging)}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData(MIME_FOLDER, String(folder.id))
@@ -231,6 +226,24 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropNote, onDrop
   )
 }
 
+function folderCardClass(compact: boolean, dragOver: boolean, dragging: boolean): string {
+  let className = 'fx-card fx-folder-card'
+  if (compact) className += ' fx-folder-card-compact'
+  if (dragOver) className += ' fx-card-drop-over'
+  if (dragging) className += ' fx-card-dragging'
+  return className
+}
+
+function folderTilePreview(ogSrc: string | undefined, faviconSrc: string | undefined, title: string): ReactNode {
+  if (ogSrc) {
+    return <img src={ogSrc} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" />
+  }
+  if (faviconSrc) {
+    return <img src={faviconSrc} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" className="fx-folder-tile-favicon" />
+  }
+  return <span className="fx-folder-tile-letter">{(title[0] ?? '?').toUpperCase()}</span>
+}
+
 function FolderTile({ tile, overflow }: Readonly<{ tile: Tile; overflow: number }>) {
   if (tile.kind === 'empty') {
     return <div className="fx-folder-tile fx-folder-tile-empty" />
@@ -248,13 +261,7 @@ function FolderTile({ tile, overflow }: Readonly<{ tile: Tile; overflow: number 
   const faviconSrc = safeImageUrl(link.favicon_url)
   return (
     <div className="fx-folder-tile">
-      {ogSrc ? (
-        <img src={ogSrc} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" />
-      ) : faviconSrc ? (
-        <img src={faviconSrc} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" className="fx-folder-tile-favicon" />
-      ) : (
-        <span className="fx-folder-tile-letter">{(link.title[0] ?? '?').toUpperCase()}</span>
-      )}
+      {folderTilePreview(ogSrc, faviconSrc, link.title)}
       {overflow > 0 && <span className="fx-folder-tile-more">+{overflow}</span>}
     </div>
   )

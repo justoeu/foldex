@@ -4,6 +4,9 @@ import usernameRow from './components/account/UsernameRow.tsx?raw'
 import emailRow from './components/account/EmailRow.tsx?raw'
 import sectionCard from './components/account/SectionCard.tsx?raw'
 import useAvailability from './hooks/useAvailability.ts?raw'
+import folderDialog from './components/FolderDialog.tsx?raw'
+import folderPicker from './components/FolderPicker.tsx?raw'
+import folderCard from './components/FolderCard.tsx?raw'
 
 /** Nested conditional expression: `cond ? a : cond2 ? b`. Optional `?:` types are not matches. */
 export function nestedTernaryHits(src: string): string[] {
@@ -30,9 +33,21 @@ const accountFiles = {
   'useAvailability.ts': useAvailability,
 }
 
+const folderFiles = {
+  'FolderDialog.tsx': folderDialog,
+  'FolderPicker.tsx': folderPicker,
+  'FolderCard.tsx': folderCard,
+}
+
 describe('S3358 contracts', () => {
   it('account files have no nested ternaries', () => {
     for (const [name, src] of Object.entries(accountFiles)) {
+      expect(nestedTernaryHits(src), name).toEqual([])
+    }
+  })
+
+  it('folder files have no nested ternaries', () => {
+    for (const [name, src] of Object.entries(folderFiles)) {
       expect(nestedTernaryHits(src), name).toEqual([])
     }
   })

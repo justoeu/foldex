@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import { FolderPicker } from './FolderPicker'
 import { ColorModeFields } from './ColorModeFields'
@@ -24,6 +25,33 @@ type Props = Readonly<{
 }>
 
 type Form = ReturnType<typeof useFolderDialogForm>
+
+function parentSelection(dirty: boolean, choice: number | null, parentId: number | null | undefined): number | null {
+  if (dirty) return choice
+  return parentId ?? null
+}
+
+function folderModeCopy(isNaming: boolean, isEdit: boolean, name: string, t: TFunction) {
+  if (isNaming) {
+    return {
+      kicker: t('folder_dialog.kicker_naming'),
+      title: t('folder_dialog.naming_title'),
+      submit: t('folder_dialog.submit_done'),
+    }
+  }
+  if (isEdit) {
+    return {
+      kicker: t('folder_dialog.kicker_edit'),
+      title: t('folder_dialog.edit_title', { name }),
+      submit: t('folder_dialog.submit_save'),
+    }
+  }
+  return {
+    kicker: t('folder_dialog.kicker_create'),
+    title: t('folder_dialog.create_title'),
+    submit: t('folder_dialog.submit_create'),
+  }
+}
 
 export function FolderDialog(props: Props) {
   const { t } = useTranslation()
@@ -60,9 +88,8 @@ export function FolderDialog(props: Props) {
   if (!props.open) return null
 
   const busy = save.busy || deletion.busy
-  const ariaLabel = isNaming
-    ? t('folder_dialog.kicker_naming')
-    : isEdit ? t('folder_dialog.kicker_edit') : t('folder_dialog.kicker_create')
+  const copy = folderModeCopy(isNaming, isEdit, props.folder?.name ?? '', t)
+  const ariaLabel = copy.kicker
   return (
     <div
       ref={dialogRef}
@@ -121,12 +148,9 @@ function FolderDialogHeader({
   onClose: () => void
 }>) {
   const { t } = useTranslation()
-  const kicker = isNaming
-    ? t('folder_dialog.kicker_naming')
-    : isEdit ? t('folder_dialog.kicker_edit') : t('folder_dialog.kicker_create')
-  const title = isNaming
-    ? t('folder_dialog.naming_title')
-    : isEdit ? t('folder_dialog.edit_title', { name: folder?.name ?? '' }) : t('folder_dialog.create_title')
+  const copy = folderModeCopy(isNaming, isEdit, folder?.name ?? '', t)
+  const kicker = copy.kicker
+  const title = copy.title
   return (
     <header className="fx-modal-head">
       <div>
@@ -203,7 +227,7 @@ function FolderParentField({ form, folder }: Readonly<{ form: Form; folder: Fold
     <label className="fx-field">
       <span className="fx-field-label">{t('folder_dialog.parent_label')}</span>
       <FolderPicker
-        selected={form.parentDirty ? form.parentChoice : (folder.parent_id ?? null)}
+        selected={parentSelection(form.parentDirty, form.parentChoice, folder.parent_id)}
         onChange={(id) => {
           form.setParentChoice(id)
           form.setParentDirty(true)
@@ -369,9 +393,7 @@ function FolderDialogFooter({
   onDeleteCascade: () => Promise<void>
 }>) {
   const { t } = useTranslation()
-  const submitLabel = isNaming
-    ? t('folder_dialog.submit_done')
-    : isEdit ? t('folder_dialog.submit_save') : t('folder_dialog.submit_create')
+  const submitLabel = folderModeCopy(isNaming, isEdit, '', t).submit
   return (
     <footer className="fx-modal-foot">
       {isEdit && !isNaming && (
