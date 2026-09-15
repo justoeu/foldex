@@ -142,13 +142,13 @@ func (r *Repository) CompleteEmailFactorEnrollment(ctx context.Context, in Enrol
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := lockEnrollmentUserTx(ctx, tx, in, pre); err != nil {
+	if err := lockEnrollmentUserTx(ctx, tx, in, pre, "complete email factor"); err != nil {
 		return User{}, issuedTokens{}, err
 	}
 	if err := spendEmailFactorEnrollmentTx(ctx, tx, in, codeHash); err != nil {
 		return User{}, issuedTokens{}, err
 	}
-	if err := finishPreAuthEnrollmentTx(ctx, tx, in.UID, in.TokenVersion, pre, issue); err != nil {
+	if err := finishPreAuthEnrollmentTx(ctx, tx, in.UID, in.TokenVersion, pre, issue, "complete email factor"); err != nil {
 		return User{}, issuedTokens{}, err
 	}
 
@@ -169,7 +169,7 @@ func enrollmentSessionIssue(pre *PreAuth) (sessionIssue, error) {
 	return newSessionIssue(pre.TTL)
 }
 
-func lockEnrollmentUserTx(ctx context.Context, tx pgx.Tx, in EnrollmentComplete, pre *PreAuth) error {
+func lockEnrollmentUserTx(ctx context.Context, tx pgx.Tx, in EnrollmentComplete, pre *PreAuth, op string) error {
 	var lockedUser int64
 	err := tx.QueryRow(ctx, `
 		SELECT id FROM app_user
@@ -179,7 +179,7 @@ func lockEnrollmentUserTx(ctx context.Context, tx pgx.Tx, in EnrollmentComplete,
 		return ErrChallengeInvalid
 	}
 	if err != nil {
-		return fmt.Errorf("complete email factor lock user: %w", err)
+		return fmt.Errorf("%s lock user: %w", op, err)
 	}
 	if pre == nil {
 		return requireLiveSessionTx(ctx, tx, in.UID, in.liveSessionID())
@@ -224,7 +224,7 @@ func spendEmailFactorEnrollmentTx(ctx context.Context, tx pgx.Tx, in EnrollmentC
 	return replaceRecoveryCodesTx(ctx, tx, in.UID, in.RecoveryHashes)
 }
 
-func finishPreAuthEnrollmentTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, tokenVersion int, pre *PreAuth, issue sessionIssue) error {
+func finishPreAuthEnrollmentTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, tokenVersion int, pre *PreAuth, issue sessionIssue, op string) error {
 	if pre == nil {
 		return nil
 	}
@@ -234,7 +234,7 @@ func finishPreAuthEnrollmentTx(ctx context.Context, tx pgx.Tx, uid authctx.UserI
 		  AND token_version = $3 AND consumed_at IS NULL AND expires_at > now()`,
 		pre.Challenge.ID, int64(uid), tokenVersion)
 	if err != nil {
-		return fmt.Errorf("complete email factor consume challenge: %w", err)
+		return fmt.Errorf("%s consume challenge: %w", op, err)
 	}
 	if ct.RowsAffected() == 0 {
 		return ErrChallengeInvalid
@@ -244,7 +244,7 @@ func finishPreAuthEnrollmentTx(ctx context.Context, tx pgx.Tx, uid authctx.UserI
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE app_user SET last_login_at = now() WHERE id = $1`, int64(uid)); err != nil {
-		return fmt.Errorf("complete email factor touch user: %w", err)
+		return fmt.Errorf("%s touch user: %w", op, err)
 	}
 	return nil
 }

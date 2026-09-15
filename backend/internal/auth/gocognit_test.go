@@ -12,6 +12,9 @@ func TestCognitiveComplexityAtMost15(t *testing.T) {
 		{"Handler", "ConfirmEmailFactor"},
 		{"Handler", "tryStepUpProof"},
 		{"Handler", "ConfirmTOTP"},
+		{"Repository", "CompleteTOTPEnrollment"},
+		{"Repository", "CreateChallengeEmailOTP"},
+		{"Repository", "CreateChallenge"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.recv+"."+tc.name, func(t *testing.T) {
