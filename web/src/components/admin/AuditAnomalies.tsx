@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import {
   anomaliesQueryKey, fetchAnomalies,
   type Anomaly, type AnomalyWindow,
@@ -18,6 +19,33 @@ import { useBlockControls } from './AuditSignals'
  * of the two screens to offer a period its endpoint answers 400 for.
  */
 const ANOMALY_WINDOWS: AnomalyWindow[] = ['15m', '1h', '24h', '7d']
+
+function anomalyBlockAction(
+  anomaly: Anomaly,
+  canBlock: boolean,
+  isBlockable: (ip: string) => boolean,
+  busy: boolean,
+  reason: string,
+  onBlock: (ip: string, reason: string) => void,
+  t: TFunction,
+) {
+  if (anomaly.blocked) {
+    return <span className="fx-aud-tag fx-aud-tag-blocked">{t('admin.anomaly_blocked')}</span>
+  }
+  if (canBlock && isBlockable(anomaly.ip)) {
+    return (
+      <button
+        type="button"
+        className="fx-pillbtn"
+        disabled={busy}
+        onClick={() => onBlock(anomaly.ip, reason)}
+      >
+        {t('admin.anomaly_block')}
+      </button>
+    )
+  }
+  return null
+}
 
 type Props = Readonly<{
   /** Whether the blocklist may be written. Affordance; the route is the gate. */
@@ -170,18 +198,7 @@ function AnomalyRow({
         <button type="button" className="fx-pillbtn" onClick={() => onInspect(anomaly.ip)}>
           {t('admin.anomaly_inspect')}
         </button>
-        {anomaly.blocked ? (
-          <span className="fx-aud-tag fx-aud-tag-blocked">{t('admin.anomaly_blocked')}</span>
-        ) : canBlock && blockable(anomaly.ip) ? (
-          <button
-            type="button"
-            className="fx-pillbtn"
-            disabled={busy}
-            onClick={() => onBlock(anomaly.ip, reason)}
-          >
-            {t('admin.anomaly_block')}
-          </button>
-        ) : null}
+        {anomalyBlockAction(anomaly, canBlock, blockable, busy, reason, onBlock, t)}
       </div>
     </li>
   )

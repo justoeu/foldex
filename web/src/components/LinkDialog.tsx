@@ -493,12 +493,30 @@ function LinkImageUploadZone({ image }: Readonly<{ image: Image }>) {
           if (file) image.selectFile(file)
         }}
       >
-        {image.busy
-          ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}</span>
-          : image.preview ? t('link_dialog.image_selected_hint') : t('link_dialog.image_drop_hint')}
+        {imageDropHint(image, t)}
       </div>
     </>
   )
+}
+
+function imageDropHint(image: Image, t: TFunction) {
+  if (image.busy) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}
+      </span>
+    )
+  }
+  if (image.preview) return t('link_dialog.image_selected_hint')
+  return t('link_dialog.image_drop_hint')
+}
+
+function imageSubmitLabel(busy: boolean, isEdit: boolean, t: TFunction) {
+  if (busy) {
+    return <><span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}</>
+  }
+  const label = isEdit ? t('link_dialog.submit_save') : t('link_dialog.submit_create')
+  return <>{label}<Icon d={I.arrowR} size={14} stroke={2} /></>
 }
 
 function LinkDialogFooter({
@@ -523,9 +541,7 @@ function LinkDialogFooter({
     <footer className="fx-modal-foot">
       <button className="fx-confirm-btn" onClick={onClose}>{t('common.cancel')}</button>
       <button className="fx-confirm-btn fx-confirm-btn-primary" onClick={() => void onSubmit()} disabled={!form.url.trim() || busy || blocked}>
-        {image.busy
-          ? <><span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}</>
-          : <>{isEdit ? t('link_dialog.submit_save') : t('link_dialog.submit_create')}<Icon d={I.arrowR} size={14} stroke={2} /></>}
+        {imageSubmitLabel(image.busy, isEdit, t)}
       </button>
     </footer>
   )

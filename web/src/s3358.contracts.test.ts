@@ -17,46 +17,31 @@ import linkDialog from './components/LinkDialog.tsx?raw'
 import importPreview from './components/ImportPreviewDialog.tsx?raw'
 import sw from './sw.ts?raw'
 
-/** Nested `cond ? a : b` including a ternary in either arm (parenthesized or not). Skips `?.`, `??`, and `?:`. */
+/** Nested `cond ? a : b` in either arm. Skips `?.`, `??`, and `?:`. */
 export function nestedTernaryHits(src: string): string[] {
   const cleaned = src
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\/\/.*$/gm, '')
     .replace(/(['"`])(?:\\.|(?!\1)[\s\S])*\1/g, '""')
   const hits: string[] = []
+  const falseArm = /\?[^\n?:]{1,80}:[^\n?:]{1,80}\?[^\n?:]{0,80}:/g
+  let m: RegExpExecArray | null
+  while ((m = falseArm.exec(cleaned))) {
+    hits.push(m[0].replace(/\s+/g, ' ').trim().slice(0, 160))
+  }
   type Frame = { kind: 'paren' | 'brace' | 'bracket' | 'ternary'; i: number }
   const stack: Frame[] = []
   let i = 0
   while (i < cleaned.length) {
     const ch = cleaned[i]
     const nxt = cleaned[i + 1]
-    if (ch === '?' && nxt === '.') {
+    if (ch === '?' && (nxt === '.' || nxt === '?' || nxt === ':')) {
       i += 2
       continue
     }
-    if (ch === '?' && nxt === '?') {
-      i += 2
-      continue
-    }
-    if (ch === '?' && nxt === ':') {
-      i += 2
-      continue
-    }
-    if (ch === '(') {
-      stack.push({ kind: 'paren', i })
-      i++
-      continue
-    }
-    if (ch === '{') {
-      stack.push({ kind: 'brace', i })
-      i++
-      continue
-    }
-    if (ch === '[') {
-      stack.push({ kind: 'bracket', i })
-      i++
-      continue
-    }
+    if (ch === '(') { stack.push({ kind: 'paren', i }); i++; continue }
+    if (ch === '{') { stack.push({ kind: 'brace', i }); i++; continue }
+    if (ch === '[') { stack.push({ kind: 'bracket', i }); i++; continue }
     if (ch === ')' || ch === '}' || ch === ']') {
       const want = ch === ')' ? 'paren' : ch === '}' ? 'brace' : 'bracket'
       while (stack.length > 0 && stack[stack.length - 1].kind !== want) stack.pop()
@@ -115,6 +100,12 @@ const folderFiles = {
 }
 
 describe('S3358 contracts', () => {
+  it('detects false-arm nesting and ignores a single ternary', () => {
+    expect(nestedTernaryHits('a ? b : c ? d : e').length).toBeGreaterThan(0)
+    expect(nestedTernaryHits('a ? b : c')).toEqual([])
+    expect(nestedTernaryHits('a ? (b ? c : d) : e').length).toBeGreaterThan(0)
+  })
+
   it('account files have no nested ternaries', () => {
     for (const [name, src] of Object.entries(accountFiles)) {
       expect(nestedTernaryHits(src), name).toEqual([])
