@@ -34,7 +34,9 @@
       "dir": "/Users/justoeu/Developer/Workspace/foldex/.worktrees/mmh-3",
       "base": "feature/sonar-s3776-ternaries",
       "head": "8062d8e2e39fae5bcbd969b0c9d6507e3f1783c1",
-      "merged": false
+      "merged": true,
+      "removed": true,
+      "merged_into": "feature/sonar-s3776-ternaries"
     }
   ]
 }
