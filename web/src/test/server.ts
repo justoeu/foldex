@@ -209,6 +209,16 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     // 32-byte zero key, unpadded base64url — valid input for urlBase64ToUint8Array.
     { url: /^\/api\/push\/vapid-key$/, handle: () => ({ public_key: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }) },
     { url: /^\/api\/settings\/master-password$/, handle: (_m, _d, _p, s) => ({ configured: s.masterPassword !== undefined, hint: s.masterHint ?? null }) },
+    { url: /^\/api\/stats\/dashboard/, handle: (_m, _d, _p, s) => ({
+      summary: s.statsSummary ?? {
+        total_links: 0, total_tags: 0, total_clicks: 0,
+        clicks_last_30d: 0, clicks_prev_30d: 0, new_links_last_30d: 0,
+        top_host: '', top_host_clicks: 0,
+      },
+      daily: s.statsDaily ?? [],
+      top: s.statsTop ?? [],
+      tags: s.statsTags ?? [],
+    }) },
     { url: /^\/api\/stats\/summary$/, handle: (_m, _d, _p, s) => s.statsSummary ?? {
       total_links: 0, total_tags: 0, total_clicks: 0,
       clicks_last_30d: 0, clicks_prev_30d: 0, new_links_last_30d: 0,
