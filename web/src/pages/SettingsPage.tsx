@@ -83,9 +83,9 @@ const HUB_SECTIONS: readonly HubSection[] = [
 // Every section that lives under the administration scope. A non-admin who
 // deep-links into one is bounced to the overview by resolveHubView, mirroring
 // the server's 404 on the whole /api/admin surface.
-const ADMIN_SECTIONS: readonly HubSection[] = [
+const ADMIN_SECTIONS = new Set<HubSection>([
   'admin', 'roles', 'audit', 'policy', 'backup', 'abuse',
-]
+])
 
 function isHubSection(value: string | undefined): value is HubSection {
   return value !== undefined && (HUB_SECTIONS as readonly string[]).includes(value)
@@ -99,7 +99,7 @@ function isHubSection(value: string | undefined): value is HubSection {
  * no explanation. Resolving them is also what keeps `resolveHubView`'s admin
  * bounce and the back affordance working unchanged.
  */
-const MERGED_INTO_ACCOUNT: readonly HubSection[] = ['profile', 'security', 'tokens']
+const MERGED_INTO_ACCOUNT = new Set<HubSection>(['profile', 'security', 'tokens'])
 
 /**
  * Which panel of the account page a merged name lands on.
@@ -120,7 +120,7 @@ const SECTION_TAB: Partial<Record<HubSection, AccountTab>> = {
 export type CanonicalSection = Exclude<HubSection, 'profile' | 'security' | 'tokens'>
 
 function canonicalSection(section: HubSection): CanonicalSection {
-  return MERGED_INTO_ACCOUNT.includes(section) ? 'account' : (section as CanonicalSection)
+  return MERGED_INTO_ACCOUNT.has(section) ? 'account' : (section as CanonicalSection)
 }
 
 const ADMIN_SECTION_COMPONENTS: Partial<Record<CanonicalSection, ComponentType>> = {
@@ -193,7 +193,7 @@ export function resolveHubView(
   if (isAdmin) return { scope, section }
   return {
     scope: 'personal',
-    section: ADMIN_SECTIONS.includes(section) ? 'overview' : section,
+    section: ADMIN_SECTIONS.has(section) ? 'overview' : section,
   }
 }
 
@@ -227,7 +227,7 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
     // container; everything else is a form, and stays in a readable column.
     // The account page carries a rail beside its panel and wants the room;
     // everything else here is a form and stays in a readable column.
-    const wide = ADMIN_SECTIONS.includes(effectiveSection) || effectiveSection === 'account'
+    const wide = ADMIN_SECTIONS.has(effectiveSection) || effectiveSection === 'account'
     return (
       <div className={'fx-hub-page' + (wide ? '' : ' fx-hub-page-narrow')}>
         <button className="fx-hub-back" onClick={() => setSection('overview')}>
@@ -534,7 +534,7 @@ function MasterPasswordSection() {
   )
 }
 
-type MasterValueFields = {
+type MasterValueFields = Readonly<{
   next: string
   confirm: string
   hint: string
@@ -542,7 +542,7 @@ type MasterValueFields = {
   onConfirm: (value: string) => void
   onHint: (value: string) => void
   onClearError: () => void
-}
+}>
 
 function MasterUnconfiguredFields(props: MasterValueFields) {
   return <MasterPasswordValueFields {...props} configured={false} />
@@ -552,7 +552,7 @@ function MasterConfiguredFields({
   current,
   onCurrent,
   ...values
-}: MasterValueFields & { current: string; onCurrent: (value: string) => void }) {
+}: Readonly<MasterValueFields & { current: string; onCurrent: (value: string) => void }>) {
   const { t } = useTranslation()
   return (
     <>

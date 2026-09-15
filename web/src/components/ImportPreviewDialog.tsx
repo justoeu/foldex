@@ -62,9 +62,9 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
             {phase === 'loading' && <div style={{ color: 'var(--fx-ink-4)' }}>{t('common.validating')}</div>}
 
             {phase === 'applying' && (
-              <div role="status" className="fx-confirm-msg" style={{ color: 'var(--fx-ink-3)' }}>
+              <output className="fx-confirm-msg" style={{ color: 'var(--fx-ink-3)' }}>
                 <Icon d={I.alert} size={14} /> {t('import.operation_locked')}
-              </div>
+              </output>
             )}
 
             {errMsg && (

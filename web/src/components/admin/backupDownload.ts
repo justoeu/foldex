@@ -26,7 +26,7 @@ type SaveFilePicker = (options: {
 
 export type BackupDownloadDeps = {
   fetchImpl?: typeof authenticatedFetch
-  picker?: SaveFilePicker | undefined
+  picker?: SaveFilePicker
   createObjectURL?: (blob: Blob) => string
   revokeObjectURL?: (url: string) => void
   doc?: Document
@@ -34,7 +34,7 @@ export type BackupDownloadDeps = {
 
 /** The last path segment of an object key — what the row already shows. */
 export function artifactFilename(key: string): string {
-  const name = key.split('/').filter(Boolean).pop() ?? ''
+  const name = key.split('/').filter(Boolean).at(-1) ?? ''
   return name === '' ? 'foldex-backup.age' : name
 }
 

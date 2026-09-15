@@ -6,14 +6,14 @@ export function urlBase64ToUint8Array(b64url: string): Uint8Array<ArrayBuffer> {
   // base64url uses `-` / `_` instead of `+` / `/` and drops `=` padding.
   // Restore both for atob().
   const pad = '='.repeat((4 - (b64url.length % 4)) % 4)
-  const b64 = (b64url + pad).replace(/-/g, '+').replace(/_/g, '/')
+  const b64 = (b64url + pad).replaceAll('-', '+').replaceAll('_', '/')
   const raw = atob(b64)
   // Allocate an explicit ArrayBuffer (not SharedArrayBuffer) so the result
   // satisfies `BufferSource` on PushManager.subscribe — TS 6's narrowed
   // typing rejects Uint8Array<ArrayBufferLike>.
   const buf = new ArrayBuffer(raw.length)
   const view = new Uint8Array(buf)
-  for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i)
+  for (let i = 0; i < raw.length; i++) view[i] = raw.codePointAt(i) ?? 0
   return view
 }
 

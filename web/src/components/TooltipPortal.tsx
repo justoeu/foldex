@@ -39,10 +39,11 @@ export function TooltipPortal() {
     }
     const open = (el: Element) => {
       if (currentEl.current === el || pressedEl.current === el) return
-      const text = el.getAttribute('data-tooltip')
+      const node = el as HTMLElement
+      const text = node.dataset.tooltip
       if (!text) return
       currentEl.current = el
-      const side = (el.getAttribute('data-tooltip-side') ?? 'bottom') as Side
+      const side = (node.dataset.tooltipSide ?? 'bottom') as Side
       clearTimer()
       // Small delay to match the previous CSS hover transition (180ms).
       showTimer.current = window.setTimeout(() => {

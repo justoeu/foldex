@@ -6,8 +6,7 @@ import {
   type Anomaly, type AnomalyWindow,
 } from '../../api/admin'
 import { blockReasonKey, sortAnomalies, spanMinutes } from './abuseFormat'
-import { severityClass } from './auditFormat'
-import { blockable } from './auditFormat'
+import { blockable, severityClass } from './auditFormat'
 import { useBlockControls } from './AuditSignals'
 
 /**

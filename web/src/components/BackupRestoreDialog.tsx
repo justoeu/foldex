@@ -111,9 +111,9 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
             {loading && <div style={{ color: 'var(--fx-ink-4)' }}>{t('common.validating')}</div>}
 
             {restoring && (
-              <div role="status" className="fx-confirm-msg" style={{ color: 'var(--fx-ink-3)' }}>
+              <output className="fx-confirm-msg" style={{ color: 'var(--fx-ink-3)' }}>
                 <Icon d={I.alert} size={14} /> {t('backup.operation_locked')}
-              </div>
+              </output>
             )}
 
             {!loading && errMsg && (

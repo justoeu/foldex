@@ -33,7 +33,7 @@ export function ActivitySection() {
     // The keyset cursor is the last id on the page. A short page is the end of
     // the feed — asking again would return the same nothing.
     getNextPageParam: (last: AuditEntry[]) =>
-      last.length < PAGE_SIZE ? undefined : last[last.length - 1]?.id,
+      last.length < PAGE_SIZE ? undefined : last.at(-1)?.id,
   })
 
   const entries = query.data?.pages.flat() ?? []

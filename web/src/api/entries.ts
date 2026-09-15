@@ -342,8 +342,8 @@ function mapCachedLinksPatch(qc: QueryClient, id: number, patch: Partial<Pick<Li
 // fire one GET /api/entries per character.
 const SEARCH_DEBOUNCE_MS = 500
 
-function useDebouncedQ(q: string | undefined): string {
-  const value = q ?? ''
+function useDebouncedQ(q = ''): string {
+  const value = q
   const [settled, setSettled] = useState(value)
   useEffect(() => {
     if (value === settled) return

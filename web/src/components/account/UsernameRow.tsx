@@ -28,7 +28,7 @@ export const MAX_USERNAME = 32
  * field on that endpoint is tri-state, so a row that replayed the cached
  * display name would revert a rename made in another tab.
  */
-export function UsernameRow({ user }: { user: AuthUser }) {
+export function UsernameRow({ user }: Readonly<{ user: AuthUser }>) {
   const { t } = useTranslation()
   const { adopt } = useAuth()
 

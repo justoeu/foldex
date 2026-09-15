@@ -53,9 +53,9 @@ export function ForgotScreen({ onBack }: Readonly<{ onBack: () => void }>) {
         subtitle={t('auth_sent.subtitle')}
       >
         <div className="fx-auth-form">
-          <p className="fx-auth-notice" role="status">
+          <output className="fx-auth-notice">
             {t('auth_sent.body')}
-          </p>
+          </output>
           <div className="fx-auth-alt">
             <button type="button" className="fx-auth-link" onClick={onBack}>
               {t('auth_sent.back_to_login')}

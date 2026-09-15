@@ -242,7 +242,7 @@ export function CardsView({
   onMergeEntries,
   onMoveFolder,
   t,
-}: {
+}: Readonly<{
   folders: FolderT[]
   entries: Entry[]
   sort: Sort
@@ -258,7 +258,7 @@ export function CardsView({
   onMergeEntries: (a: MergeSource, b: MergeSource) => void
   onMoveFolder: (sourceId: number, targetId: number) => void
   t: TFunction
-}) {
+}>) {
   const onMergeIntoLink = useCallback(
     (source: MergeSource, targetId: number) => onMergeEntries(source, { kind: 'link', id: targetId }),
     [onMergeEntries],
@@ -458,13 +458,13 @@ export function FolderBreadcrumb({
   onEdit,
   onReload,
   reloading,
-}: {
+}: Readonly<{
   folder: { id: number; name: string } | null
   onBack: () => void
   onEdit: () => void
   onReload: () => void
   reloading: boolean
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <div className="fx-pagehead fx-pagehead-folder">

@@ -231,7 +231,7 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropNote, onDrop
   )
 }
 
-function FolderTile({ tile, overflow }: { tile: Tile; overflow: number }) {
+function FolderTile({ tile, overflow }: Readonly<{ tile: Tile; overflow: number }>) {
   if (tile.kind === 'empty') {
     return <div className="fx-folder-tile fx-folder-tile-empty" />
   }

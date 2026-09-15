@@ -111,9 +111,9 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
       >
         <AuthError message={error} />
         {notice && (
-          <p className="fx-auth-notice" role="status">
+          <output className="fx-auth-notice">
             {notice}
-          </p>
+          </output>
         )}
 
         {useRecovery ? (

@@ -54,7 +54,7 @@ if (typeof Blob !== 'undefined' && !Blob.prototype.arrayBuffer) {
     return new Promise((resolve, reject) => {
       const r = new FileReader()
       r.onload = () => resolve(r.result as ArrayBuffer)
-      r.onerror = () => reject(r.error)
+      r.onerror = () => reject(r.error ?? new Error('FileReader failed'))
       r.readAsArrayBuffer(this as Blob)
     })
   }

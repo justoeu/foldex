@@ -122,11 +122,11 @@ function LinkRowImpl({
   link: l,
   onEdit,
   onDelete,
-}: {
+}: Readonly<{
   link: Link
   onEdit: (l: Link) => void
   onDelete: (l: Link) => void
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <div className="fx-list-row" data-entry={entryAnchor('link', l.id)} tabIndex={-1}>
@@ -192,11 +192,11 @@ function NoteRowImpl({
   note: n,
   onEdit,
   onDelete,
-}: {
+}: Readonly<{
   note: NoteEntry
   onEdit: (id: number) => void
   onDelete: (n: NoteEntry) => void
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <div className="fx-list-row">
@@ -271,11 +271,11 @@ function FolderRowImpl({
   folder: f,
   onOpen,
   onEdit,
-}: {
+}: Readonly<{
   folder: Folder
   onOpen: (id: number) => void
   onEdit: (f: Folder) => void
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <div

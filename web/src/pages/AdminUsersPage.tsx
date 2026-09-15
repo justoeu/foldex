@@ -117,14 +117,14 @@ export function AdminUsersPage() {
       )}
 
       {recoverySent && (
-        <div className="fx-card" role="status" style={{ marginBottom: 16 }}>
+        <output className="fx-card" style={{ display: 'block', marginBottom: 16 }}>
           <div className="fx-card-body" style={{ gap: 8, padding: 18 }}>
             <strong style={{ fontSize: 13 }}>{t('admin.recovery_sent', { email: recoverySent })}</strong>
             <p style={{ fontSize: 11, color: 'var(--fx-ink-3)', margin: 0 }}>
               {t('admin.recovery_sent_detail')}
             </p>
           </div>
-        </div>
+        </output>
       )}
 
       <section className="fx-card" style={{ marginBottom: 16 }}>

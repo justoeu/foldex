@@ -249,9 +249,9 @@ export function CreateUserDialog({ onClose }: Readonly<{ onClose: () => void }>)
                     still typing the second field, and an assertive region
                     would interrupt them on the keystroke before the match. */}
                 {confirm.length > 0 && mismatch && (
-                  <span className="fx-inline-error" role="status">
+                  <output className="fx-inline-error">
                     <Icon d={I.alert} size={13} /> {t('auth_errors.password_mismatch')}
-                  </span>
+                  </output>
                 )}
               </label>
             )}

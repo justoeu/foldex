@@ -47,7 +47,7 @@ function manifestHash(entries: Array<{ url: string; revision: string | null }>):
   const fnvPrime = 16777619
   let hash = fnvOffsetBasis
   for (const char of entries.map((entry) => `${entry.url}:${entry.revision ?? ''}`).join('|')) {
-    hash ^= char.charCodeAt(0)
+    hash ^= char.codePointAt(0) ?? 0
     hash = Math.imul(hash, fnvPrime)
   }
   return (hash >>> 0).toString(36)
@@ -167,7 +167,7 @@ async function networkFirst(req: Request, cacheName: string): Promise<Response> 
   const cache = await caches.open(cacheName)
   try {
     const res = await fetch(req)
-    if (res && res.status === 200) {
+    if (res?.status === 200) {
       // Clone before stashing — Response bodies are single-use streams.
       // Await put + prune so FILES_CACHE stays bounded (LEAK-HYD-008).
       try {

@@ -45,7 +45,7 @@ export function useFocusTrap<T extends HTMLElement>(ref: RefObject<T | null>, op
         return
       }
       const first = list[0]
-      const last = list[list.length - 1]
+      const last = list.at(-1)!
       const active = document.activeElement as HTMLElement | null
 
       if (e.shiftKey) {

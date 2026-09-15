@@ -118,9 +118,9 @@ export function EnrollTotpScreen() {
           />
         )}
         {phase === 'enroll' && !error && (
-          <p className="fx-auth-notice" role="status">
+          <output className="fx-auth-notice">
             <span className="fx-auth-spinner" aria-hidden="true" /> {t('auth.loading')}
-          </p>
+          </output>
         )}
 
         <div className="fx-auth-alt">

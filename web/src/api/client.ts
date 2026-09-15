@@ -33,7 +33,7 @@ export const CSRF_HEADER = 'X-Foldex-CSRF'
  */
 export function readCsrfToken(): string {
   if (typeof document === 'undefined') return ''
-  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${CSRF_COOKIE}=([^;]*)`))
+  const match = new RegExp(`(?:^|;\\s*)${CSRF_COOKIE}=([^;]*)`).exec(document.cookie)
   return match ? decodeURIComponent(match[1]) : ''
 }
 
@@ -111,7 +111,7 @@ export function resetRefreshState(): void {
 }
 
 function refreshOnce(epoch: number): Promise<void> {
-  if (!refreshFlight || refreshFlight.epoch !== epoch) {
+  if (refreshFlight?.epoch !== epoch) {
     const flight: RefreshFlight = { epoch, promise: Promise.resolve() }
     flight.promise = http
       .post('/api/auth/refresh', null, { _skipAuthRetry: true } as never)
@@ -181,12 +181,12 @@ http.interceptors.response.use(
     const config = error.config as RetryConfig | undefined
     if (config) config._authEpoch ??= authEpoch
     if (status !== 401 || !config) {
-      return Promise.reject(error)
+      throw error
     }
 
     const requestEpoch = config._authEpoch ?? authEpoch
     if (!isRefreshable401(status, config.url ?? '', requestEpoch, config._skipAuthRetry, config._retried)) {
-      return Promise.reject(error)
+      throw error
     }
 
     try {
@@ -194,7 +194,7 @@ http.interceptors.response.use(
     } catch {
       // The original 401 is the error axios callers assert on; the refresh
       // failure is logged/fired inside refreshForRetry.
-      return Promise.reject(error)
+      throw error
     }
     config._retried = true
     return http.request(config)

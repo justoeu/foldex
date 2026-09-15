@@ -392,9 +392,9 @@ function LinkImagePanel({ form, image, link }: Readonly<{ form: Form; image: Ima
         </div>
       )}
       {image.captureWarning && (
-        <div className="fx-inline-warn" role="status">
+        <output className="fx-inline-warn">
           <Icon d={I.alert} size={12} /> {image.captureWarning}
-        </div>
+        </output>
       )}
       {image.uploadError && (
         <div className="fx-inline-error" role="alert">
