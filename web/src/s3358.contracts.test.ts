@@ -11,6 +11,8 @@ import conflictModePicker from './components/ConflictModePicker.tsx?raw'
 import backupRestore from './components/BackupRestoreDialog.tsx?raw'
 import backupSection from './components/admin/BackupSection.tsx?raw'
 import backupSchedule from './components/admin/BackupScheduleEditor.tsx?raw'
+import auditSignals from './components/admin/AuditSignals.tsx?raw'
+import statsPage from './pages/StatsPage.tsx?raw'
 
 /** Nested conditional expression: `cond ? a : cond2 ? b`. Optional `?:` types are not matches. */
 export function nestedTernaryHits(src: string): string[] {
@@ -35,6 +37,11 @@ const accountFiles = {
   'EmailRow.tsx': emailRow,
   'SectionCard.tsx': sectionCard,
   'useAvailability.ts': useAvailability,
+}
+
+const auditStatsFiles = {
+  'AuditSignals.tsx': auditSignals,
+  'StatsPage.tsx': statsPage,
 }
 
 const backupFiles = {
@@ -65,6 +72,12 @@ describe('S3358 contracts', () => {
 
   it('backup files have no nested ternaries', () => {
     for (const [name, src] of Object.entries(backupFiles)) {
+      expect(nestedTernaryHits(src), name).toEqual([])
+    }
+  })
+
+  it('audit and stats files have no nested ternaries', () => {
+    for (const [name, src] of Object.entries(auditStatsFiles)) {
       expect(nestedTernaryHits(src), name).toEqual([])
     }
   })
