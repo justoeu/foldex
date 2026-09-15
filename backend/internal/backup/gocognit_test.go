@@ -27,6 +27,24 @@ func TestCognitiveComplexity_ExportAndInspectArchive(t *testing.T) {
 	}
 }
 
+func TestCognitiveComplexity_RestoreHelpers(t *testing.T) {
+	cases := []struct {
+		file string
+		name string
+	}{
+		{file: "restore_helpers.go", name: "spoolNoteMedia"},
+		{file: "restore_helpers.go", name: "attachPolymorphicTags"},
+		{file: "restore_helpers.go", name: "copyPolymorphicClicks"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cognitOf(t, tc.file, tc.name)
+			assert.LessOrEqual(t, got, 15,
+				"%s cognitive=%d — extract early returns / unexported helpers, no NOSONAR", tc.name, got)
+		})
+	}
+}
+
 func TestCognitiveComplexity_RestoreDuplicateStagedAndCopy(t *testing.T) {
 	cases := []struct {
 		file string

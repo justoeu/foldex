@@ -122,35 +122,42 @@ func spoolNoteMedia(ctx context.Context, note *NoteRow, fileEntries map[string]*
 		values = append(values, *note.CoverURL)
 	}
 	for _, oldKey := range notemedia.Keys(values...) {
-		if err := ctx.Err(); err != nil {
+		if err := spoolOneNoteMedia(ctx, oldKey, fileEntries, prepared, spool); err != nil {
 			return err
 		}
-		if _, exists := prepared.mapping[oldKey]; exists {
-			continue
-		}
-		entry, exists := fileEntries[filesPrefix+oldKey]
-		if !exists {
-			continue
-		}
-		opt, err := optimizeRestoredNoteMedia(ctx, entry)
-		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			return invalidBackup("backup contains invalid note media")
-		}
-		file, err := spool.write(opt.Data, opt.ContentType)
-		if err != nil {
-			return err
-		}
-		prepared.files[oldKey] = file
-		prepared.mapping[oldKey] = notesPrefix + uuid.NewString() + "." + opt.Ext
 	}
 	note.BodyHTML = notemedia.Rewrite(note.BodyHTML, prepared.mapping)
 	if note.CoverURL != nil {
 		rewritten := notemedia.Rewrite(*note.CoverURL, prepared.mapping)
 		note.CoverURL = &rewritten
 	}
+	return nil
+}
+
+func spoolOneNoteMedia(ctx context.Context, oldKey string, fileEntries map[string]*zip.File, prepared *preparedNoteMediaRestore, spool *noteMediaSpool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, exists := prepared.mapping[oldKey]; exists {
+		return nil
+	}
+	entry, exists := fileEntries[filesPrefix+oldKey]
+	if !exists {
+		return nil
+	}
+	opt, err := optimizeRestoredNoteMedia(ctx, entry)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return invalidBackup("backup contains invalid note media")
+	}
+	file, err := spool.write(opt.Data, opt.ContentType)
+	if err != nil {
+		return err
+	}
+	prepared.files[oldKey] = file
+	prepared.mapping[oldKey] = notesPrefix + uuid.NewString() + "." + opt.Ext
 	return nil
 }
 
@@ -268,6 +275,29 @@ func realignLinkImageURLs(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m 
 // (N1-NEX-009) instead of per-row Exec. When countSkips is true, unmapped or
 // conflict-no-op rows bump skipped.LinkTags.
 func attachPolymorphicTags(ctx context.Context, tx pgx.Tx, m idMapping, snap *Snapshot, inserted, skipped *Counts, countSkips bool) error {
+	rows, unmapped := mappedRestoreTagRows(m, snap)
+	if countSkips && skipped != nil && unmapped > 0 {
+		skipped.LinkTags += unmapped
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	nIns, err := insertRestoreTagRows(ctx, tx, rows)
+	if err != nil {
+		return err
+	}
+	if inserted != nil {
+		inserted.LinkTags += nIns
+	}
+	if countSkips && skipped != nil {
+		if n := int64(len(rows)) - nIns; n > 0 {
+			skipped.LinkTags += n
+		}
+	}
+	return nil
+}
+
+func mappedRestoreTagRows(m idMapping, snap *Snapshot) ([][]any, int64) {
 	rows := make([][]any, 0, len(snap.LinkTags)+len(snap.NoteTags))
 	var unmapped int64
 	for _, lt := range snap.LinkTags {
@@ -288,13 +318,10 @@ func attachPolymorphicTags(ctx context.Context, tx pgx.Tx, m idMapping, snap *Sn
 		}
 		rows = append(rows, []any{"note", noteID, tagID})
 	}
-	if countSkips && skipped != nil && unmapped > 0 {
-		skipped.LinkTags += unmapped
-	}
-	if len(rows) == 0 {
-		return nil
-	}
+	return rows, unmapped
+}
 
+func insertRestoreTagRows(ctx context.Context, tx pgx.Tx, rows [][]any) (int64, error) {
 	if _, err := tx.Exec(ctx, `
         CREATE TEMP TABLE _restore_link_tag (
             entity_kind text NOT NULL,
@@ -302,14 +329,14 @@ func attachPolymorphicTags(ctx context.Context, tx pgx.Tx, m idMapping, snap *Sn
             tag_id      bigint NOT NULL
         ) ON COMMIT DROP
     `); err != nil {
-		return fmt.Errorf("create restore link_tag temp: %w", err)
+		return 0, fmt.Errorf("create restore link_tag temp: %w", err)
 	}
 	if _, err := tx.CopyFrom(ctx,
 		pgx.Identifier{"_restore_link_tag"},
 		[]string{"entity_kind", "entity_id", "tag_id"},
 		pgx.CopyFromRows(rows),
 	); err != nil {
-		return fmt.Errorf("copy restore link_tag temp: %w", err)
+		return 0, fmt.Errorf("copy restore link_tag temp: %w", err)
 	}
 	ct, err := tx.Exec(ctx, `
         INSERT INTO link_tag (entity_kind, entity_id, tag_id)
@@ -317,19 +344,9 @@ func attachPolymorphicTags(ctx context.Context, tx pgx.Tx, m idMapping, snap *Sn
         ON CONFLICT DO NOTHING
     `)
 	if err != nil {
-		return fmt.Errorf("insert link_tag batch: %w", err)
+		return 0, fmt.Errorf("insert link_tag batch: %w", err)
 	}
-	nIns := ct.RowsAffected()
-	if inserted != nil {
-		inserted.LinkTags += nIns
-	}
-	if countSkips && skipped != nil {
-		// Conflicts / no-ops among the mapped batch.
-		if n := int64(len(rows)) - nIns; n > 0 {
-			skipped.LinkTags += n
-		}
-	}
-	return nil
+	return ct.RowsAffected(), nil
 }
 
 // copyPolymorphicClicks bulk-inserts click_log for mapped links and notes.
@@ -337,6 +354,27 @@ func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m
 	if len(snap.ClickLogs)+len(snap.NoteClicks) == 0 {
 		return nil
 	}
+	rows := mappedRestoreClickRows(uid, m, snap, skipped, countSkips)
+	if len(rows) == 0 {
+		return nil
+	}
+	if _, err := tx.CopyFrom(ctx,
+		pgx.Identifier{"click_log"},
+		[]string{"entity_kind", "entity_id", "clicked_at", "user_id"},
+		pgx.CopyFromRows(rows),
+	); err != nil {
+		return fmt.Errorf("copy click_log: %w", err)
+	}
+	if inserted != nil {
+		inserted.ClickLogs += int64(len(rows))
+	}
+	if err := clicklog.RefreshOwner(ctx, tx, int64(uid)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func mappedRestoreClickRows(uid authctx.UserID, m idMapping, snap *Snapshot, skipped *Counts, countSkips bool) [][]any {
 	rows := make([][]any, 0, len(snap.ClickLogs)+len(snap.NoteClicks))
 	for _, c := range snap.ClickLogs {
 		linkID, ok := m.linkMap[c.LinkID]
@@ -358,21 +396,5 @@ func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m
 		}
 		rows = append(rows, []any{"note", noteID, c.ClickedAt, int64(uid)})
 	}
-	if len(rows) == 0 {
-		return nil
-	}
-	if _, err := tx.CopyFrom(ctx,
-		pgx.Identifier{"click_log"},
-		[]string{"entity_kind", "entity_id", "clicked_at", "user_id"},
-		pgx.CopyFromRows(rows),
-	); err != nil {
-		return fmt.Errorf("copy click_log: %w", err)
-	}
-	if inserted != nil {
-		inserted.ClickLogs += int64(len(rows))
-	}
-	if err := clicklog.RefreshOwner(ctx, tx, int64(uid)); err != nil {
-		return err
-	}
-	return nil
+	return rows
 }
