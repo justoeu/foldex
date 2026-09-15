@@ -92,32 +92,36 @@ func extractFeedURL(pageHTML []byte, pageURL string) string {
 	z := html.NewTokenizer(bytes.NewReader(pageHTML))
 	base, _ := url.Parse(pageURL)
 	for {
-		tt := z.Next()
-		switch tt {
-		case html.ErrorToken:
+		href, done := nextFeedHref(z)
+		if done {
 			return ""
-		case html.StartTagToken, html.SelfClosingTagToken:
-			name, hasAttr := z.TagName()
-			n := string(name)
-			if n == "head" {
-				continue
-			}
-			if n == "body" {
-				return ""
-			}
-			if n != "link" || !hasAttr {
-				continue
-			}
-			if href := feedLinkHref(z); href != "" {
-				return resolveHref(base, href)
-			}
-		case html.EndTagToken:
-			name, _ := z.TagName()
-			if string(name) == "head" {
-				return ""
-			}
+		}
+		if href != "" {
+			return resolveHref(base, href)
 		}
 	}
+}
+
+func nextFeedHref(z *html.Tokenizer) (string, bool) {
+	tt := z.Next()
+	switch tt {
+	case html.ErrorToken:
+		return "", true
+	case html.StartTagToken, html.SelfClosingTagToken:
+		name, hasAttr := z.TagName()
+		n := string(name)
+		if n == "body" {
+			return "", true
+		}
+		if n == "head" || n != "link" || !hasAttr {
+			return "", false
+		}
+		return feedLinkHref(z), false
+	case html.EndTagToken:
+		name, _ := z.TagName()
+		return "", string(name) == "head"
+	}
+	return "", false
 }
 
 func feedLinkHref(z *html.Tokenizer) string {
@@ -296,37 +300,46 @@ func extractMainContent(pageHTML []byte) string {
 	if err != nil {
 		return ""
 	}
-	var main, article, body *html.Node
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if n.Type == html.ElementNode {
-			switch n.Data {
-			case "main":
-				if main == nil {
-					main = n
-				}
-			case "article":
-				if article == nil {
-					article = n
-				}
-			case "body":
-				if body == nil {
-					body = n
-				}
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(doc)
-	root := firstContentRoot(main, article, body)
+	root := firstContentRoot(findContentRoots(doc))
 	if root == nil {
 		return ""
 	}
 	var b strings.Builder
 	collectText(root, &b)
 	return b.String()
+}
+
+func findContentRoots(n *html.Node) (main, article, body *html.Node) {
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		main, article, body = noteContentRoot(n, main, article, body)
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(n)
+	return main, article, body
+}
+
+func noteContentRoot(n, main, article, body *html.Node) (*html.Node, *html.Node, *html.Node) {
+	if n.Type != html.ElementNode {
+		return main, article, body
+	}
+	switch n.Data {
+	case "main":
+		if main == nil {
+			main = n
+		}
+	case "article":
+		if article == nil {
+			article = n
+		}
+	case "body":
+		if body == nil {
+			body = n
+		}
+	}
+	return main, article, body
 }
 
 func firstContentRoot(main, article, body *html.Node) *html.Node {
