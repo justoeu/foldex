@@ -377,6 +377,35 @@ func TestDownload_AnAdministratorTakesNothingFromThisRoute(t *testing.T) {
 	assert.Zero(t, spent, "a refusal must not cost a download either")
 }
 
+func TestDownload_RejectsANonPositiveRunID(t *testing.T) {
+	agent := newFakeAgent(t)
+	h := newDownloadHarness(t, agent)
+	rec := h.do(authctx.RoleOwner, h.owner, http.MethodPost,
+		"/api/admin/backup/runs/0/download",
+		fmt.Sprintf(`{"password":%q}`, goodPassword))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "invalid_run", errCode(t, rec))
+	assert.Zero(t, agent.requests)
+}
+
+func TestDownload_RejectsMalformedJSON(t *testing.T) {
+	agent := newFakeAgent(t)
+	h := newDownloadHarness(t, agent)
+	rec := h.do(authctx.RoleOwner, h.owner, http.MethodPost,
+		fmt.Sprintf("/api/admin/backup/runs/%d/download", h.runID), `{`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Zero(t, agent.requests)
+}
+
+func TestDownloadBudget_RejectsANonPositiveRunID(t *testing.T) {
+	agent := newFakeAgent(t)
+	h := newDownloadHarness(t, agent)
+	rec := h.do(authctx.RoleOwner, h.owner, http.MethodGet,
+		"/api/admin/backup/runs/0/download-budget", "")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, "invalid_run", errCode(t, rec))
+}
+
 func TestDownload_TheOwnerMayTakeTheWholeInstanceArtifact(t *testing.T) {
 	agent := newFakeAgent(t)
 	h := newDownloadHarness(t, agent)

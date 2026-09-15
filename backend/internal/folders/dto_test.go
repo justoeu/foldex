@@ -53,6 +53,12 @@ func TestCreateInput_Validate(t *testing.T) {
 	}
 }
 
+func TestUpdateInput_UnmarshalJSON_RejectsGarbage(t *testing.T) {
+	var u UpdateInput
+	err := json.Unmarshal([]byte(`{`), &u)
+	require.Error(t, err)
+}
+
 func TestUpdateInput_Empty(t *testing.T) {
 	assert.True(t, UpdateInput{}.Empty())
 	name := "x"
