@@ -19,6 +19,12 @@ type Props = Readonly<{
   onRestored: () => void
 }>
 
+function restoreSubmitLabel(restoring: boolean, mode: ConflictMode, t: TFunction): string {
+  if (restoring) return t('backup.submit_restoring')
+  if (mode === 'wipe') return t('backup.submit_restore_wipe')
+  return t('backup.submit_restore')
+}
+
 export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
   const { t } = useTranslation()
   const [validation, setValidation] = useState<BackupValidation | null>(null)
@@ -182,11 +188,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
                 onClick={handleRestore}
                 disabled={!validation || hasErrors || restoring}
               >
-                {restoring
-                  ? t('backup.submit_restoring')
-                  : mode === 'wipe'
-                    ? t('backup.submit_restore_wipe')
-                    : t('backup.submit_restore')}
+                {restoreSubmitLabel(restoring, mode, t)}
                 <Icon d={I.arrowR} size={14} stroke={2} />
               </button>
             </>

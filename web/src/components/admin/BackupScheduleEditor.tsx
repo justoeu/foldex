@@ -1,6 +1,7 @@
 import { memo, useState, type ReactNode, type RefObject } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { useConfirm } from '../ConfirmDialog'
 import {
   backupScheduleQueryKey,
@@ -15,6 +16,18 @@ import {
 import { reducesProtection } from './backupSchedule'
 import { formatMinutes } from './backupFormat'
 import { apiErrorMessage } from '../../lib/apiError'
+
+function scheduleEditorError(
+  saveFailed: boolean,
+  saveErr: unknown,
+  resetFailed: boolean,
+  resetErr: unknown,
+  t: TFunction,
+): string | null {
+  if (saveFailed) return apiErrorMessage(saveErr) ?? t('common.error')
+  if (resetFailed) return apiErrorMessage(resetErr) ?? t('common.error')
+  return null
+}
 
 /** The two schedule modes, in render order — also the arrow-key order. */
 const MODES = ['times', 'interval'] as const
@@ -353,11 +366,7 @@ function ScheduleEditor({
   // The server's own message, verbatim: the bounds are configurable
   // (compiled, but the message names the real numbers) and a client
   // restatement would drift — same reasoning as the password floor.
-  const error = save.isError
-    ? (apiErrorMessage(save.error) ?? t('common.error'))
-    : reset.isError
-      ? (apiErrorMessage(reset.error) ?? t('common.error'))
-      : null
+  const error = scheduleEditorError(save.isError, save.error, reset.isError, reset.error, t)
 
   // A job the agent reports it CANNOT run gets no editors: a schedule for it
   // would be a promise the process already said it cannot keep. A job MISSING

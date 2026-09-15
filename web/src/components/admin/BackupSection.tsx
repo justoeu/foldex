@@ -48,6 +48,11 @@ import { apiErrorCode } from '../../lib/apiError'
  */
 const DUMP_STALE_MS = 26 * 60 * 60 * 1000
 
+function dumpTone(missing: boolean, stale: boolean): 'warn' | 'ok' {
+  if (missing || stale) return 'warn'
+  return 'ok'
+}
+
 /**
  * A 'requested' row the agent has not claimed within 5 minutes. The claim poll
  * runs every ~30 s, so anything past this is an agent that is not running —
@@ -491,7 +496,7 @@ const Kpis = memo(function Kpis({ jobs, drill }: Readonly<{ jobs: BackupJobStatu
   return (
     <div className="fx-bkp-kpis">
       <Kpi
-        tone={dump === null ? 'warn' : dumpStale ? 'warn' : 'ok'}
+        tone={dumpTone(dump === null, dumpStale)}
         label={t('admin.backup_kpi_last_dump')}
         value={dump === null ? '—' : relativeTime(dump.started_at, t)}
         hint={dump === null ? t('admin.backup_never_ran') : new Date(dump.started_at).toLocaleString()}

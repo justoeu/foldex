@@ -1,4 +1,16 @@
+import type { CSSProperties } from 'react'
+
 export type ConflictMode = 'wipe' | 'skip' | 'duplicate'
+
+function modeOptionChrome(active: boolean, danger: boolean): Pick<CSSProperties, 'border' | 'background'> {
+  if (!active) {
+    return { border: '1px solid var(--fx-border)', background: 'transparent' }
+  }
+  if (danger) {
+    return { border: '1.5px solid var(--fx-danger)', background: 'rgba(244,63,94,0.06)' }
+  }
+  return { border: '1.5px solid var(--fx-accent)', background: 'rgba(99,102,241,0.06)' }
+}
 
 type Labels = {
   skipTitle: string
@@ -72,12 +84,7 @@ function ModeOption({
         textAlign: 'left',
         padding: '10px 12px',
         borderRadius: 10,
-        border: active
-          ? `1.5px solid ${danger ? 'var(--fx-danger)' : 'var(--fx-accent)'}`
-          : '1px solid var(--fx-border)',
-        background: active
-          ? danger ? 'rgba(244,63,94,0.06)' : 'rgba(99,102,241,0.06)'
-          : 'transparent',
+        ...modeOptionChrome(active, !!danger),
         cursor: disabled ? 'not-allowed' : 'pointer',
         display: 'flex',
         flexDirection: 'column',

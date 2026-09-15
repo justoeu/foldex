@@ -7,6 +7,10 @@ import useAvailability from './hooks/useAvailability.ts?raw'
 import folderDialog from './components/FolderDialog.tsx?raw'
 import folderPicker from './components/FolderPicker.tsx?raw'
 import folderCard from './components/FolderCard.tsx?raw'
+import conflictModePicker from './components/ConflictModePicker.tsx?raw'
+import backupRestore from './components/BackupRestoreDialog.tsx?raw'
+import backupSection from './components/admin/BackupSection.tsx?raw'
+import backupSchedule from './components/admin/BackupScheduleEditor.tsx?raw'
 
 /** Nested conditional expression: `cond ? a : cond2 ? b`. Optional `?:` types are not matches. */
 export function nestedTernaryHits(src: string): string[] {
@@ -33,6 +37,13 @@ const accountFiles = {
   'useAvailability.ts': useAvailability,
 }
 
+const backupFiles = {
+  'ConflictModePicker.tsx': conflictModePicker,
+  'BackupRestoreDialog.tsx': backupRestore,
+  'BackupSection.tsx': backupSection,
+  'BackupScheduleEditor.tsx': backupSchedule,
+}
+
 const folderFiles = {
   'FolderDialog.tsx': folderDialog,
   'FolderPicker.tsx': folderPicker,
@@ -48,6 +59,12 @@ describe('S3358 contracts', () => {
 
   it('folder files have no nested ternaries', () => {
     for (const [name, src] of Object.entries(folderFiles)) {
+      expect(nestedTernaryHits(src), name).toEqual([])
+    }
+  })
+
+  it('backup files have no nested ternaries', () => {
+    for (const [name, src] of Object.entries(backupFiles)) {
       expect(nestedTernaryHits(src), name).toEqual([])
     }
   })
