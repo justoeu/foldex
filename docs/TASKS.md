@@ -79,6 +79,7 @@ Lista faseada de tasks `T1..T30`. Cada fase desbloqueia a próxima — segue em 
 
 | Data       | Task   | Hash | Notas |
 |------------|--------|------|-------|
+| 2026-09-15 | **Sonar QG: S7750 findLast** | — | Merge do #132 deixou `new_violations=1`: `filter(…).at(-1)` em `artifactFilename`. Volta `findLast` e `lib` ganha `ES2023.Array` para o typecheck tipar o método. |
 | 2026-09-15 | **Sonar: Reliability + Maintainability mecânico** | — | Reliability de produção (replaceAll, codePointAt). Maintainability: imports, optional chain, `.at()`, Set, throw, Readonly restante, CSS duplicado, output no lugar de role=status, branch OAuth duplicada. Sem `<dialog>` nativo nem contraste CSS. |
 | 2026-09-15 | **Sonar QG: 5 violações novas** | — | Quality Gate da main recusou `new_violations>0`. Dropzones viraram `<button>` (S6847), `COALESCE(` virou constante, `2**32` no suggestColor, assignment inútil no hue thumb. |
 | 2026-09-14 | **Sonar: complexidade TS, literais, readonly, scrims** | — | Continuação do lote de impacto. Extraídas funções acima do teto cognitivo no frontend (`entries`, Topbar, Stats, backupFormat, JobCard). Constantes no lugar de literais Go duplicados (auth, backup, drill, oEmbed, rotas). Props de componentes `Readonly<>`. Dropzones/diálogos: backdrop `<button>` e unlock via `<form>`. `Number.parseInt` / `Number.isNaN` / `Number.NaN`. Complexidade cognitiva Go de produção (ainda ~30 funções a 16–23) fica para o próximo corte. |

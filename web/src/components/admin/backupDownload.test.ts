@@ -128,6 +128,7 @@ describe('artifactFilename', () => {
   // browser can save.
   it('names something savable for a key that ends in nothing', () => {
     expect(artifactFilename('backups/dump/')).toBe('dump')
+    expect(artifactFilename('backups//dump//')).toBe('dump')
     expect(artifactFilename('')).toBe('foldex-backup.age')
   })
 })

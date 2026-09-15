@@ -34,7 +34,7 @@ export type BackupDownloadDeps = {
 
 /** The last path segment of an object key — what the row already shows. */
 export function artifactFilename(key: string): string {
-  const name = key.split('/').filter(Boolean).at(-1) ?? ''
+  const name = key.split('/').findLast(Boolean) ?? ''
   return name === '' ? 'foldex-backup.age' : name
 }
 
