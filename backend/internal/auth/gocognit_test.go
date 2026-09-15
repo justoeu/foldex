@@ -10,6 +10,8 @@ func TestCognitiveComplexityAtMost15(t *testing.T) {
 	cases := []struct{ recv, name string }{
 		{"Repository", "CompleteEmailFactorEnrollment"},
 		{"Handler", "ConfirmEmailFactor"},
+		{"Handler", "tryStepUpProof"},
+		{"Handler", "ConfirmTOTP"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.recv+"."+tc.name, func(t *testing.T) {

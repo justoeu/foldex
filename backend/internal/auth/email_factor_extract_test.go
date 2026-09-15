@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,6 +27,34 @@ func TestWriteEmailFactorConfirmError(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			handled := writeEmailFactorConfirmError(rec, tc.err)
+			assert.Equal(t, tc.handled, handled)
+			if !tc.handled {
+				assert.Equal(t, 200, rec.Code)
+				return
+			}
+			require.Equal(t, tc.status, rec.Code)
+			assert.Contains(t, rec.Body.String(), tc.contains)
+		})
+	}
+}
+
+func TestWriteTOTPConfirmError(t *testing.T) {
+	h := &Handler{cookies: CookieOptions{}, logger: slog.New(slog.DiscardHandler)}
+	for name, tc := range map[string]struct {
+		err      error
+		handled  bool
+		status   int
+		contains string
+	}{
+		"nil":       {nil, false, 0, ""},
+		"changed":   {ErrTOTPEnrollmentChanged, true, http.StatusConflict, `"code":"enrollment_changed"`},
+		"challenge": {ErrChallengeInvalid, true, http.StatusUnauthorized, `"code":"challenge_invalid"`},
+		"session":   {ErrSessionInvalid, true, http.StatusUnauthorized, `"code":"session_expired"`},
+		"unknown":   {errors.New("boom"), true, http.StatusInternalServerError, `"code":"internal"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handled := writeTOTPConfirmError(rec, h, tc.err)
 			assert.Equal(t, tc.handled, handled)
 			if !tc.handled {
 				assert.Equal(t, 200, rec.Code)
