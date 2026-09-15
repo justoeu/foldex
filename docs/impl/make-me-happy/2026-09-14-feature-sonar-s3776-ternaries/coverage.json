@@ -1,0 +1,12 @@
+{
+  "pct": 85.9,
+  "tool": "go test -tags=integration -covermode=atomic",
+  "report": "/tmp/mmh-cover-int.out",
+  "scope": "statements in production Go files present in origin/main...HEAD",
+  "helpers": {
+    "count": 164,
+    "ge95": 67,
+    "mean": 85.4
+  },
+  "web": "s3358 charter+contracts 40/40; not a v8 coverage run of flattened TS (global vitest thresholds fail on a subset run)"
+}

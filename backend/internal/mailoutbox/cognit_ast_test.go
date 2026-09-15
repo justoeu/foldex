@@ -359,7 +359,6 @@ func isBinaryLogicalOp(op token.Token) bool {
 	return op == token.LAND || op == token.LOR
 }
 
-
 func cognitScores(t *testing.T) map[string]int {
 	t.Helper()
 	out := make(map[string]int)

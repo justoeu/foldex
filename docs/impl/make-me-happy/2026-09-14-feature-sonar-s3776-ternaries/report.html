@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>foldex · make-me-happy</title>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, theme: "dark" });
+</script>
+<style>
+  :root { --bg:#0b1220; --panel:#111827; --text:#e5e7eb; --muted:#9ca3af; --border:#374151; --ok:#22c55e; --bad:#ef4444; --accent:#38bdf8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: ui-sans-serif, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding:1.25rem 2rem; border-bottom:1px solid var(--border); display:flex; gap:1rem; align-items:center; flex-wrap:wrap; }
+  h1 { margin:0; font-size:1.25rem; }
+  .pill { border:1px solid var(--border); border-radius:999px; padding:.2rem .7rem; font-size:.85rem; }
+  .pill.ok { border-color: var(--ok); color: var(--ok); }
+  .pill.bad { border-color: var(--bad); color: var(--bad); }
+  nav { display:flex; gap:.5rem; padding: .75rem 2rem; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+  nav button { background:transparent; color:var(--muted); border:1px solid var(--border); border-radius:8px; padding:.35rem .8rem; cursor:pointer; }
+  nav button[aria-selected="true"] { color:var(--text); border-color:var(--accent); }
+  main { padding:1.5rem 2rem 3rem; max-width:1100px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:1rem 1.2rem; margin: .8rem 0; }
+  table { width:100%; border-collapse: collapse; }
+  th, td { text-align:left; padding:.4rem .5rem; border-bottom:1px solid var(--border); font-size:.9rem; }
+  pre, .md { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size:.85rem; }
+  .muted { color: var(--muted); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+  @media (max-width: 800px) { .grid2 { grid-template-columns:1fr; } }
+  .panel { display:none; }
+  .panel.active { display:block; }
+</style>
+</head>
+<body>
+<header>
+  <h1>make-me-happy</h1>
+  <span class="pill">App <strong>foldex</strong></span>
+  <span class="pill">Branch <code>feature/sonar-s3776-ternaries</code></span>
+  <span class="pill">refactor</span>
+  <span class="pill bad">Score <strong>8</strong> / 10</span>
+  <span class="pill bad">Coverage <strong>85.9</strong>% (piso 95)</span>
+</header>
+<nav>
+  <button data-tab="sdd" aria-selected="true">sdd</button>
+  <button data-tab="impl" aria-selected="false">impl</button>
+  <button data-tab="fluxo" aria-selected="false">fluxo</button>
+  <button data-tab="payloads" aria-selected="false">payloads</button>
+  <button data-tab="testes" aria-selected="false">testes</button>
+  <button data-tab="review" aria-selected="false">review</button>
+  <button data-tab="score" aria-selected="false">score</button>
+</nav>
+<main>
+  <section class="panel active" id="sdd">
+    <div class="card"><h2>SDD / spec</h2>
+      <p class="muted">docs/SDD-SONAR-S3776-TERNARIES.md</p>
+      <div class="md"># Lower production cognitive complexity (go:S3776) and nested ternaries (typescript:S3358)
+
+Kind: refactor
+
+Goal:
+Clear Sonar `go:S3776` and `typescript:S3358` on production Foldex code by extracting helpers, using early returns, and replacing nested conditional expressions with if/else or closed lookup tables. Behavior, payloads, and UI contracts stay byte-equivalent.
+
+Actors:
+Maintainers and CI/Sonar. No user-facing actor. Operators and signed-in users must see the same screens, status codes, and JSON envelopes as before.
+
+In scope:
+- Production Go under `backend/internal/**` whose cognitive complexity is **&gt; 15** as measured by `gocognit` (Sonar `go:S3776` default). Inventory at pack start: **63 functions** (auth 18, backup 9, backupagent 8, folders 4, plus preview/mailer/changecheck/screenshot/importer/…). Worst: `CompleteEmailFactorEnrollment` 25, `acquireBrowser`/`preview.Worker.process`/`DrillJob.Run` 24, `AuditStatsSince`/`tryStepUpProof`/`folders.List`/`smtpMailer.Send`/`UpdateUser` 23.
+- Production TypeScript/TSX under `web/src/**` with **nested ternary expressions** (`cond ? a : cond2 ? b : c` and deeper), including but not limited to: `AvailabilityHint`, `FolderDialog` (kicker/title), `FolderPicker`, `ConflictModePicker`, `BackupRestoreDialog`, `BackupSection`, `BackupScheduleEditor`, `AuditSignals`, `UsernameRow`, `SectionCard`, `EmailRow`, `StatsPage`.
+- Tests added or extended for every extracted helper / flattened branch that currently has no direct coverage. Red → green per task.
+- Docs: this SDD plus a `docs/TASKS.md` log row when the pack ships. No README/user-facing copy unless a string actually changes (it must not).
+
+Out of scope:
+- Test-only files (`*_test.go`, `web/src/**/*.test.*`, `web/src/test/**`).
+- `backend/cmd/**` boot helpers (e.g. `cmd/rustfs-bootstrap`).
+- Native `&lt;dialog&gt;` / `&lt;fieldset&gt;` (`typescript:S6819`) — clashes with INV-121/156.
+- CSS contrast (`S7924`), React index keys (`S6479`), other Sonar rules.
+- New features, schema, API routes, i18n keys, CSS classes, or dependency bumps.
+- Version bump (stays on `main` after Quality Gate of #132).
+- Merging this pack into `main` from a worktree. Target branch is `feature/sonar-s3776-ternaries` only.
+
+Contracts:
+None new. Existing JSON envelopes, HTTP status mapping, `/api/*` shapes, and rendered copy stay identical. Extracted helpers are unexported unless a second package already needs them; prefer package-local functions over a new `pkg/` type.
+
+Invariants:
+- CLAUDE.md §4 and §5 (INV-001…187, UI INV-120…168) — especially owner-scoped queries, CSRF, 2FA spend-vs-verify, folder password split, note HTML sanitization, SSRF dialer, dialog Esc, overlay portals.
+- Layering: handlers do not grow a service type for single-repo CRUD; extract a helper, do not invent a layer.
+- Errors stay in `{ &quot;error&quot;: { &quot;code&quot;, &quot;message&quot; } }`; repositories remain HTTP-free.
+- No `NOSONAR` / complexity-suppression comments as the fix.
+- Flattening method: closed enum/state → lookup table; otherwise early-return if/else. No new libraries. No nested ternary left in the touched production file.
+- Go gate after each function: `gocognit` of that function ≤ 15. TS gate: the nested `? : ?` expression is gone.
+
+Done when:
+- Every in-scope Go function measures ≤ 15 (`gocognit -over 15` on `backend/internal` excluding `*_test.go` is empty).
+- Every in-scope production nested ternary is gone (no `typescript:S3358` on `web/src` production files).
+- Baseline tests on `feature/sonar-s3776-ternaries` green before the first RED; each task has a failing test first.
+- Coverage of **touched product code** ≥ 95% (MMH gate) and repo gates still hold (≥85% statements / ≥80% branches frontend; backend `./...`).
+- Immutability: existing tests that encoded the old control flow still pass without weakening asserts.
+- Three worktrees merged into `feature/sonar-s3776-ternaries`, never into `main`.
+</div>
+    </div>
+  </section>
+  <section class="panel" id="impl">
+    <div class="card"><h2>O que foi implementado</h2>
+      <table>
+        <thead><tr><th>id</th><th>task</th><th>status</th><th>tests</th><th>red→green</th><th>immut.</th><th>wt</th></tr></thead>
+        <tbody><tr>
+  <td><code>T-001</code></td>
+  <td>Characterize auth complexity functions before extract</td>
+  <td>DONE</td>
+  <td>7</td>
+  <td>yes</td>
+  <td>yes</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-002</code></td>
+  <td>Extract CompleteEmailFactorEnrollment + ConfirmEmailFactor to ≤15</td>
+  <td>DONE</td>
+  <td>3</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-003</code></td>
+  <td>Extract tryStepUpProof + ConfirmTOTP to ≤15</td>
+  <td>DONE</td>
+  <td>2</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-004</code></td>
+  <td>Extract CompleteTOTPEnrollment + CreateChallenge* to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-005</code></td>
+  <td>Extract UpdateUser + SetPassword + acceptInvite to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-006</code></td>
+  <td>Extract rotateOnce + handleConsumed to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-007</code></td>
+  <td>Extract AuditStatsSince + ExportAudit to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-008</code></td>
+  <td>Extract ConvertToProvider to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-009</code></td>
+  <td>Extract ConsumeEmailChange to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-010</code></td>
+  <td>Extract AdminHandler.UpdateUser to ≤15</td>
+  <td>DONE</td>
+  <td>3</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-011</code></td>
+  <td>Extract Handler.Login to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-101</code></td>
+  <td>Characterize backup/folders complexity functions before extract</td>
+  <td>DONE</td>
+  <td>12</td>
+  <td>yes</td>
+  <td>yes</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-102</code></td>
+  <td>Extract folders List, Update, deleteCascade, UpdateInput.Validate to ≤15</td>
+  <td>DONE</td>
+  <td>6</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-103</code></td>
+  <td>Extract ValidateJobConfig to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-104</code></td>
+  <td>Extract backupstatus Handler.Download to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-105</code></td>
+  <td>Extract Service.Export + inspectArchive to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-106</code></td>
+  <td>Extract loadRestoreLedger + validateManifestIntegrity to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-107</code></td>
+  <td>Extract restoreDuplicateStaged + copyRestoreStaging to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-108</code></td>
+  <td>Extract spoolNoteMedia + attachPolymorphicTags + copyPolymorphicClicks to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-109</code></td>
+  <td>Extract DrillJob.Run + DumpJob.Run + UserZipJob.Run to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-110</code></td>
+  <td>Extract MirrorJob.copyDelta to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-111</code></td>
+  <td>Extract scheduleLoop + execute + computeTimings to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-112</code></td>
+  <td>Extract GFSPolicy.keep to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-201</code></td>
+  <td>Characterize remaining Go complexity functions before extract</td>
+  <td>DONE</td>
+  <td>21</td>
+  <td>yes</td>
+  <td>yes</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-202</code></td>
+  <td>Characterize production nested-ternary copy/state before flatten</td>
+  <td>DONE</td>
+  <td>20</td>
+  <td>yes</td>
+  <td>yes</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-203</code></td>
+  <td>Extract acquireBrowser + Pool.Close to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-204</code></td>
+  <td>Extract preview Worker.process + Fetch + parseHead to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-205</code></td>
+  <td>Extract smtpMailer.Send + loadAssets + assets.render to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-206</code></td>
+  <td>Extract extractMainContent + extractFeedURL + pushLoop to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-207</code></td>
+  <td>Extract Relay.drain + Ping to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-208</code></td>
+  <td>Extract JSONFile.validateLinks + Handler.parseUpload to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-209</code></td>
+  <td>Extract push.LoadOrGenerate to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-210</code></td>
+  <td>Extract keyfile.Load to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-211</code></td>
+  <td>Extract SetEntityTagsWithPending to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-212</code></td>
+  <td>Extract roleperm.Resolve to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-213</code></td>
+  <td>Extract Policy.Validate to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-214</code></td>
+  <td>Extract ScreenshotHandler.CaptureAndStore to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-215</code></td>
+  <td>Extract Checker.refresh to ≤15</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-216</code></td>
+  <td>Flatten account nested ternaries</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-217</code></td>
+  <td>Flatten folder nested ternaries</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-218</code></td>
+  <td>Flatten backup nested ternaries</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-219</code></td>
+  <td>Flatten audit + stats nested ternaries</td>
+  <td>DONE</td>
+  <td>1</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-220</code></td>
+  <td>Flatten remaining dialog + SW nested ternaries</td>
+  <td>DONE</td>
+  <td>2</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr></tbody>
+      </table>
+    </div>
+  </section>
+  <section class="panel" id="fluxo">
+    <div class="card"><h2>Fluxo e impacto</h2>
+      <pre class="mermaid">flowchart TB
+  subgraph spec [SDD-SONAR-S3776-TERNARIES]
+    G[63 production Go funcs gocognit greater than 15]
+    T[production nested ternaries in web/src]
+  end
+
+  subgraph wt1 [Worktree 1 auth]
+    T001[T-001 charter 18 funcs]
+    T001 --> Aext[T-002 to T-011 extract by file]
+    Aext --> Agate[gocognit auth empty]
+  end
+
+  subgraph wt2 [Worktree 2 backup plus folders]
+    T101[T-101 charter backup/agent/jobs/status/folders]
+    T101 --> Bext[T-102 to T-112 extract by file]
+    Bext --> Bgate[gocognit those packages empty]
+  end
+
+  subgraph wt3 [Worktree 3 remaining Go plus web]
+    T201[T-201 charter remaining Go]
+    T202[T-202 charter nested-ternary copy]
+    T201 --> Cgo[T-203 to T-215 extract]
+    T202 --> Cts[T-216 to T-220 flatten lookup or if/else]
+    Cgo --> CgateG[gocognit remaining empty]
+    Cts --> CgateT[no nested ternary in web/src production]
+  end
+
+  G --> T001
+  G --> T101
+  G --> T201
+  T --> T202
+
+  Agate --> MERGE[merge slices into feature/sonar-s3776-ternaries never main]
+  Bgate --> MERGE
+  CgateG --> MERGE
+  CgateT --> MERGE
+  MERGE --> DONE[gocognit -over 15 empty AND no typescript:S3358]
+</pre>
+    </div>
+  </section>
+  <section class="panel" id="payloads">
+    <h2>Payloads de teste</h2>
+    <p class="muted">Nenhum payload no spec.</p>
+  </section>
+  <section class="panel" id="testes">
+    <div class="card">
+      <h2>Resultado dos testes</h2>
+      <p>cmd: <code>( cd backend &amp;&amp; go vet ./... &amp;&amp; go test ./internal/... ) &amp;&amp; ( cd web &amp;&amp; bun run typecheck &amp;&amp; bun run test )</code> — n/a</p>
+      <p>imutabilidade: green — backend/internal/auth/s3776_charter_test.go, backend/internal/backup/s3776_charter_test.go, backend/internal/backupagent/s3776_charter_test.go, backend/internal/backupjobs/s3776_charter_test.go, backend/internal/backupstatus/s3776_charter_test.go, backend/internal/folders/s3776_charter_test.go, backend/internal/screenshot/s3776_charter_test.go, backend/internal/preview/s3776_charter_test.go, backend/internal/mailer/s3776_charter_test.go, backend/internal/changecheck/s3776_charter_test.go, backend/internal/mailoutbox/s3776_charter_test.go, backend/internal/importer/s3776_charter_test.go, backend/internal/push/s3776_charter_test.go, backend/internal/pkg/keyfile/s3776_charter_test.go, backend/internal/tags/s3776_charter_test.go, backend/internal/roleperm/s3776_charter_test.go, backend/internal/policy/s3776_charter_test.go, backend/internal/links/s3776_charter_test.go, backend/internal/depstatus/s3776_charter_test.go, web/src/s3358.charter.test.tsx, web/src/s3358.contracts.test.ts, gocognit -over 15 backend/internal (production, excluding cmd/)</p>
+      <p>cobertura: 85.9% via go test -tags=integration -covermode=atomic — piso 95% abaixo do piso</p>
+      <pre></pre>
+    </div>
+  </section>
+  <section class="panel" id="review">
+    <div class="card"><h2>Standards</h2><div class="md"># Standards — `feature/sonar-s3776-ternaries`
+
+Scope: vs `origin/main`. Sources: CLAUDE.md §4/§5/§7, AGENTS.md, SDD-SONAR-S3776-TERNARIES.md, Fowler ch.3.
+
+## (a) Documented standards
+
+**No hard breach.**
+
+- **No NOSONAR as the fix**: production Go/TS has no `NOSONAR`. The string appears only in `gocognit_test.go` failure messages.
+- **No new libraries**: `backend/go.mod` / `web/package.json` unchanged. Cognitive gate is a test-only copy of gocognit (`cognit_ast_test.go`).
+- **No native `&lt;dialog&gt;`**; flatten keeps existing modal markup (INV-121/156).
+- **Layering**: extracts are package-local unexported helpers. No new CRUD service type.
+- **Repos stay HTTP-free**: `httperr` only in handler-side helpers.
+- INV-001 (`listWhere` still `f.user_id = $1`), INV-003/011/027 (spend vs verify), INV-019 (`userColumns`), INV-040 (Serializable rotate), INV-143 (ConflictModePicker dual encoding) held.
+
+## (b) Fowler smells (judgement)
+
+- **Shotgun Surgery** across many packages — the spec’s point; not a reject.
+- **Duplicated Code**: `cognitVisitor` copied into many `*_test.go` files. Allowed: SDD forbids a new library.
+- **Middle Man** (tiny): one-branch wraps as the cost of ≤15.
+
+VERDICT: APPROVE
+</div></div>
+    <div class="card"><h2>Spec</h2><div class="md"># Spec review — `feature/sonar-s3776-ternaries`
+
+Spec: `docs/SDD-SONAR-S3776-TERNARIES.md`
+
+## (a) Missing / partial
+
+**None vs the leftover REJECT list.** Flatten helpers: `imageDropHint`/`imageSubmitLabel`, `importSubmitLabel`, `anomalyBlockAction`, `NoteViewBody`. Scanner: true-arm stack + single-line false-arm regex + fixture. Production glob excludes tests.
+
+Go: `gocognit -over 15` empty under `backend/internal` production. `docs/TASKS.md` 2026-09-15 S3776 row present.
+
+**Coverage ≥ 95% of touched product code** is not met (`coverage.json` 85.9%). That is the MMH pack gate; correctness already REJECT. No missing flatten/extract vs this spec pass.
+
+## (b) Scope creep
+
+**None.** Helpers package-local; no new lib, NOSONAR, native `&lt;dialog&gt;`, i18n/CSS, or README.
+
+## (c) Wrong vs spec
+
+**None** on leftover sites. Remaining `? :` are single-level.
+
+VERDICT: APPROVE
+</div></div>
+    <div class="card"><h2>Correctness</h2><div class="md"># Correctness — `feature/sonar-s3776-ternaries`
+
+Kind: refactor. 43/43 tasks `DONE`. Oracle: unit + integration coverprofile green; `gocognit -over 15` empty under `backend/internal` production.
+
+## 1. Every DONE implemented?
+
+**Yes.** Extracts and flatten land in the claimed slices.
+
+## 2. Real red→green (`tests_added &gt;= 1`)?
+
+**Yes.** Extract RED is AST `≤15`; charter RED is behavior. T-216…T-220: `nestedTernaryHits` empty on production `web/src`.
+
+## 3. Immutability?
+
+**Present and green.** `immutability.json` `green: true`. Covered T-001, T-101, T-201, T-202.
+
+## 4. Worktree slices?
+
+**Inside files.** Merged into `feature/sonar-s3776-ternaries`, not `main`. `verify-clean` ok.
+
+## 5. Coverage ≥ 95%?
+
+**No.** `coverage.json` **`pct=85.9`** (integration, touched production Go). Helpers mean **85.4%**, **67/164 ≥95**. Repo gate ≥85% holds; MMH 95% of whole touched files does not.
+
+VERDICT: REJECT
+</div></div>
+  </section>
+  <section class="panel" id="score">
+    <div class="card">
+      <h2>Score 8 / 10 — não fecha</h2>
+      <p class="muted">85.9% &lt; 95% floor</p>
+      <table>
+        <thead><tr><th>gate</th><th></th><th>detalhe</th></tr></thead>
+        <tbody><tr>
+  <td>tasks</td>
+  <td>✓</td>
+  <td>43 DONE</td>
+</tr><tr>
+  <td>red-green</td>
+  <td>✓</td>
+  <td>each DONE has tests_added&gt;=1 and red_green</td>
+</tr><tr>
+  <td>immutability</td>
+  <td>✓</td>
+  <td>backend/internal/auth/s3776_charter_test.go, backend/internal/backup/s3776_charter_test.go, backend/internal/backupagent/s3776_charter_test.go, backend/internal/backupjobs/s3776_charter_test.go, backend/internal/backupstatus/s3776_charter_test.go, backend/internal/folders/s3776_charter_test.go, backend/internal/screenshot/s3776_charter_test.go, backend/internal/preview/s3776_charter_test.go, backend/internal/mailer/s3776_charter_test.go, backend/internal/changecheck/s3776_charter_test.go, backend/internal/mailoutbox/s3776_charter_test.go, backend/internal/importer/s3776_charter_test.go, backend/internal/push/s3776_charter_test.go, backend/internal/pkg/keyfile/s3776_charter_test.go, backend/internal/tags/s3776_charter_test.go, backend/internal/roleperm/s3776_charter_test.go, backend/internal/policy/s3776_charter_test.go, backend/internal/links/s3776_charter_test.go, backend/internal/depstatus/s3776_charter_test.go, web/src/s3358.charter.test.tsx, web/src/s3358.contracts.test.ts, gocognit -over 15 backend/internal (production, excluding cmd/)</td>
+</tr><tr>
+  <td>review</td>
+  <td>✗</td>
+  <td>standards=APPROVE spec=APPROVE correctness=REJECT</td>
+</tr><tr>
+  <td>worktrees</td>
+  <td>✓</td>
+  <td>3/3 merged+removed</td>
+</tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script>
+  const buttons = [...document.querySelectorAll('nav button')];
+  const panels = [...document.querySelectorAll('.panel')];
+  buttons.forEach((b) => b.addEventListener('click', () => {
+    buttons.forEach((x) => x.setAttribute('aria-selected', x === b ? 'true' : 'false'));
+    panels.forEach((p) => p.classList.toggle('active', p.id === b.dataset.tab));
+  }));
+</script>
+</body>
+</html>
