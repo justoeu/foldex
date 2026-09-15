@@ -132,6 +132,82 @@ func TestFolderUpdateGuards_SurfaceTxFailures(t *testing.T) {
 	require.Error(t, err)
 }
 
+type seqFolderTx struct {
+	n, failAt int
+}
+
+func (s *seqFolderTx) tick() bool {
+	s.n++
+	return s.n >= s.failAt
+}
+func (s *seqFolderTx) Begin(context.Context) (pgx.Tx, error) {
+	if s.tick() {
+		return s, errFolderTx
+	}
+	return s, nil
+}
+func (s *seqFolderTx) Commit(context.Context) error {
+	if s.tick() {
+		return errFolderTx
+	}
+	return nil
+}
+func (s *seqFolderTx) Rollback(context.Context) error { return nil }
+func (s *seqFolderTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	if s.tick() {
+		return pgconn.CommandTag{}, errFolderTx
+	}
+	return pgconn.NewCommandTag("UPDATE 1"), nil
+}
+func (s *seqFolderTx) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	if s.tick() {
+		return nil, errFolderTx
+	}
+	return failFolderRows{}, nil
+}
+func (s *seqFolderTx) QueryRow(context.Context, string, ...any) pgx.Row {
+	if s.tick() {
+		return failFolderRow{}
+	}
+	return failFolderRow{}
+}
+func (s *seqFolderTx) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
+	return 0, errFolderTx
+}
+func (s *seqFolderTx) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults { return nil }
+func (s *seqFolderTx) LargeObjects() pgx.LargeObjects                         { return pgx.LargeObjects{} }
+func (s *seqFolderTx) Prepare(context.Context, string, string) (*pgconn.StatementDescription, error) {
+	return nil, errFolderTx
+}
+func (s *seqFolderTx) Conn() *pgx.Conn { return nil }
+
+func TestFolderHelpers_WalkEachTxStep(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	walk := func(fn func(pgx.Tx)) {
+		t.Helper()
+		for n := 1; n <= 8; n++ {
+			fn(&seqFolderTx{failAt: n})
+		}
+	}
+	walk(func(tx pgx.Tx) { _ = authorizeFolderDelete(ctx, tx, 1, 2, nil, "") })
+	walk(func(tx pgx.Tx) { _ = materializeCascadeSubtree(ctx, tx, 1, 2) })
+	walk(func(tx pgx.Tx) { _, _, _ = lockCascadeSubtree(ctx, tx, 1, 2) })
+	walk(func(tx pgx.Tx) { _ = deleteCascadeContents(ctx, tx, 1) })
+	walk(func(tx pgx.Tx) { _ = checkParentCycle(ctx, tx, 1, 2, 9) })
+	walk(func(tx pgx.Tx) {
+		_ = checkHintNotPassword(ctx, tx, 1, 2, false, nil, "hint")
+	})
+	pw := "secret"
+	walk(func(tx pgx.Tx) {
+		_ = authorizePasswordMutation(ctx, tx, &folderUpdate{
+			uid: 1, id: 2,
+			in:              UpdateInput{PasswordSet: true, Password: &pw, CurrentPassword: &pw},
+			newPasswordHash: &pw,
+		})
+	})
+}
+
 func TestScanListedFolderRow_FailsOnBadRows(t *testing.T) {
 	t.Parallel()
 	_, _, _, err := scanListedFolderRow(failFolderRows{})
