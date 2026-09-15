@@ -41,31 +41,45 @@ func inspectArchive(ctx context.Context, zr *zip.Reader) (*inspectedArchive, err
 		entries: make(map[string]*zip.File, len(zr.File)),
 		hashes:  make(map[string]string, len(zr.File)),
 	}
+	if err := indexArchiveEntries(zr, result); err != nil {
+		return nil, err
+	}
+	if err := hashArchiveEntries(ctx, zr, result); err != nil {
+		return nil, err
+	}
+	result.digest = archiveDigest(result.hashes)
+	return result, nil
+}
+
+func indexArchiveEntries(zr *zip.Reader, result *inspectedArchive) error {
 	var declaredBytes int64
 	for _, entry := range zr.File {
 		if entry == nil {
-			return nil, fmt.Errorf("archive contains an invalid entry")
+			return fmt.Errorf("archive contains an invalid entry")
 		}
 		if _, exists := result.entries[entry.Name]; exists {
-			return nil, fmt.Errorf("archive contains duplicate entry %q", entry.Name)
+			return fmt.Errorf("archive contains duplicate entry %q", entry.Name)
 		}
 		result.entries[entry.Name] = entry
 
 		limit := archiveEntryLimit(entry.Name)
 		if entry.UncompressedSize64 > uint64(limit) { // #nosec G115 -- limit is a positive constant
-			return nil, fmt.Errorf("archive entry %q expands to %d bytes (max %d)", entry.Name, entry.UncompressedSize64, limit)
+			return fmt.Errorf("archive entry %q expands to %d bytes (max %d)", entry.Name, entry.UncompressedSize64, limit)
 		}
 		entryBytes := int64(entry.UncompressedSize64) // #nosec G115 -- bounded by the per-entry limit check above
 		if entryBytes > maxArchiveExpandedBytes-declaredBytes {
-			return nil, fmt.Errorf("archive expanded bytes exceed %d-byte limit", maxArchiveExpandedBytes)
+			return fmt.Errorf("archive expanded bytes exceed %d-byte limit", maxArchiveExpandedBytes)
 		}
 		declaredBytes += entryBytes
 	}
+	return nil
+}
 
+func hashArchiveEntries(ctx context.Context, zr *zip.Reader, result *inspectedArchive) error {
 	var actualBytes int64
 	for _, entry := range zr.File {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return err
 		}
 		entryLimit := archiveEntryLimit(entry.Name)
 		remaining := maxArchiveExpandedBytes - actualBytes
@@ -76,15 +90,14 @@ func inspectArchive(ctx context.Context, zr *zip.Reader) (*inspectedArchive, err
 		hash, n, err := hashAtMost(ctx, entry, readLimit)
 		if err != nil {
 			if remaining < entryLimit {
-				return nil, fmt.Errorf("archive expanded bytes exceed %d-byte limit", maxArchiveExpandedBytes)
+				return fmt.Errorf("archive expanded bytes exceed %d-byte limit", maxArchiveExpandedBytes)
 			}
-			return nil, fmt.Errorf("archive entry %q: %w", entry.Name, err)
+			return fmt.Errorf("archive entry %q: %w", entry.Name, err)
 		}
 		actualBytes += n
 		result.hashes[entry.Name] = hash
 	}
-	result.digest = archiveDigest(result.hashes)
-	return result, nil
+	return nil
 }
 
 func archiveDigest(hashes map[string]string) [sha256.Size]byte {

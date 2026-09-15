@@ -273,32 +273,7 @@ func (a *Agent) capability(name string) (bool, string) {
 func (a *Agent) computeTimings(rows map[string]backupjobs.ScheduleRow) map[string]backupjobs.Timing {
 	out := make(map[string]backupjobs.Timing, len(a.jobs))
 	for _, spec := range a.jobs {
-		var row *backupjobs.JobConfig
-		if r, ok := rows[spec.name]; ok {
-			cfg := r.Config
-			switch {
-			// A document json could not read at all says nothing the floors
-			// could judge, so report what actually went wrong rather than the
-			// downstream "needs mode" the empty config would produce.
-			case r.Malformed != "":
-				a.logger.Warn("schedule row could not be decoded; using the env baseline",
-					"job", spec.name, "err", r.Malformed)
-			default:
-				if err := backupjobs.ValidateJobConfig(spec.name, cfg); err != nil {
-					a.logger.Warn("schedule row is invalid; using the env baseline", "job", spec.name, "err", err)
-				} else {
-					row = &cfg
-				}
-			}
-		}
-		if capable, reason := a.capability(spec.name); !capable {
-			if row != nil {
-				a.logger.Warn("schedule row for a job this agent cannot run; ignoring", "job", spec.name, "reason", reason)
-			}
-			out[spec.name] = backupjobs.Timing{Source: "env"}
-			continue
-		}
-		out[spec.name] = EffectiveTiming(spec.name, a.cfg, row)
+		out[spec.name] = a.timingForJob(spec, rows)
 	}
 	a.schedMu.RLock()
 	for job, t := range a.timingOverrides {
@@ -306,6 +281,38 @@ func (a *Agent) computeTimings(rows map[string]backupjobs.ScheduleRow) map[strin
 	}
 	a.schedMu.RUnlock()
 	return out
+}
+
+func (a *Agent) timingForJob(spec jobSpec, rows map[string]backupjobs.ScheduleRow) backupjobs.Timing {
+	row := a.validatedScheduleRow(spec.name, rows)
+	if capable, reason := a.capability(spec.name); !capable {
+		if row != nil {
+			a.logger.Warn("schedule row for a job this agent cannot run; ignoring", "job", spec.name, "reason", reason)
+		}
+		return backupjobs.Timing{Source: "env"}
+	}
+	return EffectiveTiming(spec.name, a.cfg, row)
+}
+
+func (a *Agent) validatedScheduleRow(name string, rows map[string]backupjobs.ScheduleRow) *backupjobs.JobConfig {
+	r, ok := rows[name]
+	if !ok {
+		return nil
+	}
+	if r.Malformed != "" {
+		// A document json could not read at all says nothing the floors
+		// could judge, so report what actually went wrong rather than the
+		// downstream "needs mode" the empty config would produce.
+		a.logger.Warn("schedule row could not be decoded; using the env baseline",
+			"job", name, "err", r.Malformed)
+		return nil
+	}
+	cfg := r.Config
+	if err := backupjobs.ValidateJobConfig(name, cfg); err != nil {
+		a.logger.Warn("schedule row is invalid; using the env baseline", "job", name, "err", err)
+		return nil
+	}
+	return &cfg
 }
 
 // timing returns the current Timing for a job.
@@ -563,44 +570,62 @@ func (a *Agent) scheduleLoop(ctx context.Context, spec jobSpec) {
 		t := a.timing(spec.name)
 		if !t.Enabled() {
 			a.logger.Info("job has no schedule; waiting for one", "job", spec.name)
-			select {
-			case <-ctx.Done():
+			if waitForChange(ctx, change) {
 				return
-			case <-change:
-				continue
 			}
-		}
-		var fireAt time.Time
-		if t.Interval > 0 {
-			base := lastFire
-			if base.IsZero() {
-				if intervalStart.IsZero() {
-					intervalStart = time.Now()
-				}
-				base = intervalStart
-			}
-			fireAt = base.Add(t.Interval)
-			if !fireAt.After(time.Now()) {
-				// The interval shrank past the elapsed wait: fire promptly
-				// instead of stretching the old cadence one more period.
-				fireAt = time.Now()
-			}
-		} else {
-			fireAt = t.Next(time.Now())
-		}
-		a.logger.Info("next run scheduled", "job", spec.name, "at", fireAt, "source", t.Source)
-		timer := time.NewTimer(time.Until(fireAt))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-change:
-			timer.Stop()
 			continue
-		case <-timer.C:
+		}
+		fireAt := nextFireAt(t, &lastFire, &intervalStart)
+		a.logger.Info("next run scheduled", "job", spec.name, "at", fireAt, "source", t.Source)
+		if fired := waitForSlot(ctx, change, fireAt); fired {
 			lastFire = time.Now()
 			a.execute(ctx, spec, fireAt, 0)
+		} else if ctx.Err() != nil {
+			return
 		}
+	}
+}
+
+func nextFireAt(t backupjobs.Timing, lastFire, intervalStart *time.Time) time.Time {
+	if t.Interval <= 0 {
+		return t.Next(time.Now())
+	}
+	base := *lastFire
+	if base.IsZero() {
+		if intervalStart.IsZero() {
+			*intervalStart = time.Now()
+		}
+		base = *intervalStart
+	}
+	fireAt := base.Add(t.Interval)
+	if !fireAt.After(time.Now()) {
+		// The interval shrank past the elapsed wait: fire promptly
+		// instead of stretching the old cadence one more period.
+		return time.Now()
+	}
+	return fireAt
+}
+
+func waitForChange(ctx context.Context, change <-chan struct{}) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	case <-change:
+		return false
+	}
+}
+
+func waitForSlot(ctx context.Context, change <-chan struct{}, fireAt time.Time) bool {
+	timer := time.NewTimer(time.Until(fireAt))
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return false
+	case <-change:
+		timer.Stop()
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -689,17 +714,37 @@ func (a *Agent) janitorLoop(ctx context.Context) {
 // the job itself, outcome and metrics. claimedID != 0 means a 'requested' row
 // was already promoted to running and owns the slot.
 func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Time, claimedID int64) {
+	releaseWork, id, ok := a.beginLockedRun(ctx, spec, scheduledFor, claimedID)
+	if !ok {
+		return
+	}
+	defer releaseWork()
+
+	started := time.Now()
+	a.logger.Info("run started", "job", spec.name, "run_id", id)
+	artifact, meta, reason, runErr := spec.run(ctx, id)
+	duration := time.Since(started)
+	releaseWork()
+
+	if runErr != nil {
+		a.recordRunFailure(ctx, spec, id, reason, runErr, duration)
+		return
+	}
+	a.recordRunSuccess(spec, id, artifact, meta, duration)
+}
+
+func (a *Agent) beginLockedRun(ctx context.Context, spec jobSpec, scheduledFor time.Time, claimedID int64) (func(), int64, bool) {
 	release, ok, err := acquireJobLock(ctx, a.pool)
 	if err != nil {
 		a.logger.Error("advisory lock", "job", spec.name, "err", err)
-		return
+		return nil, 0, false
 	}
 	if !ok {
 		a.logger.Warn("another agent holds the job lock; skipping slot", "job", spec.name)
 		if claimedID != 0 {
 			_ = a.runs.Fail(ctx, claimedID, backupjobs.ReasonLockBusy)
 		}
-		return
+		return nil, 0, false
 	}
 	/* The lock covers the WORK, not the bookkeeping after it.
 	   `acquireJobLock` does not wait on contention — it skips the slot — and a
@@ -717,47 +762,44 @@ func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Tim
 			release()
 		}
 	}
-	defer releaseWork()
-
 	id := claimedID
-	if id == 0 {
-		id, err = a.runs.Begin(ctx, spec.name, scheduledFor)
-		if errors.Is(err, backupjobs.ErrAlreadyRunning) {
-			a.logger.Warn("a run is already recorded as running; skipping slot", "job", spec.name)
-			return
-		}
-		if err != nil {
-			a.logger.Error("record run", "job", spec.name, "err", err)
-			return
-		}
+	if id != 0 {
+		return releaseWork, id, true
 	}
-
-	started := time.Now()
-	a.logger.Info("run started", "job", spec.name, "run_id", id)
-	artifact, meta, reason, runErr := spec.run(ctx, id)
-	duration := time.Since(started)
-	releaseWork()
-
-	if runErr != nil {
-		if ctx.Err() != nil {
-			reason = backupjobs.ReasonShutdown
-		}
-		a.logger.Error("run failed", "job", spec.name, "run_id", id, "reason", reason, "err", runErr)
-		a.recordOutcome("fail", spec.name, func(c context.Context) error {
-			return a.runs.Fail(c, id, reason)
-		})
-		// The counter is only a gauge input; a read that fails leaves it at
-		// zero and must not cost the failure its own recording above. It
-		// borrows the per-attempt timeout on purpose — same database, same
-		// reachability — but takes no retry: a missing gauge sample is not a
-		// stale row.
-		countCtx, done := context.WithTimeout(context.Background(), orDefault(a.recordAttempt, recordAttemptTimeout))
-		consecutive, _ := a.runs.ConsecutiveFailures(countCtx, spec.name)
-		done()
-		a.metrics.ObserveFailure(spec.name, duration, consecutive)
-		return
+	id, err = a.runs.Begin(ctx, spec.name, scheduledFor)
+	if errors.Is(err, backupjobs.ErrAlreadyRunning) {
+		a.logger.Warn("a run is already recorded as running; skipping slot", "job", spec.name)
+		releaseWork()
+		return nil, 0, false
 	}
+	if err != nil {
+		a.logger.Error("record run", "job", spec.name, "err", err)
+		releaseWork()
+		return nil, 0, false
+	}
+	return releaseWork, id, true
+}
 
+func (a *Agent) recordRunFailure(ctx context.Context, spec jobSpec, id int64, reason string, runErr error, duration time.Duration) {
+	if ctx.Err() != nil {
+		reason = backupjobs.ReasonShutdown
+	}
+	a.logger.Error("run failed", "job", spec.name, "run_id", id, "reason", reason, "err", runErr)
+	a.recordOutcome("fail", spec.name, func(c context.Context) error {
+		return a.runs.Fail(c, id, reason)
+	})
+	// The counter is only a gauge input; a read that fails leaves it at
+	// zero and must not cost the failure its own recording above. It
+	// borrows the per-attempt timeout on purpose — same database, same
+	// reachability — but takes no retry: a missing gauge sample is not a
+	// stale row.
+	countCtx, done := context.WithTimeout(context.Background(), orDefault(a.recordAttempt, recordAttemptTimeout))
+	consecutive, _ := a.runs.ConsecutiveFailures(countCtx, spec.name)
+	done()
+	a.metrics.ObserveFailure(spec.name, duration, consecutive)
+}
+
+func (a *Agent) recordRunSuccess(spec jobSpec, id int64, artifact *backupjobs.Artifact, meta map[string]any, duration time.Duration) {
 	if meta == nil {
 		meta = map[string]any{}
 	}
@@ -769,18 +811,22 @@ func (a *Agent) execute(ctx context.Context, spec jobSpec, scheduledFor time.Tim
 	}) {
 		return
 	}
-	var artifactBytes int64
-	if artifact != nil {
-		artifactBytes = artifact.Bytes
-		if artifact.Mirror != nil {
-			// The mirror ships no single artifact; what the gauge should say
-			// is how much data the pass actually moved.
-			artifactBytes = artifact.Mirror.BytesCopied
-		}
-	}
+	artifactBytes := artifactBytesCopied(artifact)
 	a.metrics.ObserveSuccess(spec.name, time.Now(), duration, artifactBytes)
 	a.logger.Info("run succeeded", "job", spec.name, "run_id", id,
 		"duration", duration.Round(time.Millisecond), "artifact_bytes", artifactBytes)
+}
+
+func artifactBytesCopied(artifact *backupjobs.Artifact) int64 {
+	if artifact == nil {
+		return 0
+	}
+	if artifact.Mirror != nil {
+		// The mirror ships no single artifact; what the gauge should say
+		// is how much data the pass actually moved.
+		return artifact.Mirror.BytesCopied
+	}
+	return artifact.Bytes
 }
 
 // waitReady polls the database AND the backup target until both answer or

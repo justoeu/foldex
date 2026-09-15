@@ -168,21 +168,10 @@ func loadIdentityFile(path string) ([]age.Identity, error) {
 // Run executes one drill under the backup_run row runID. It never returns an
 // Artifact — a drill ships nothing; its product is the verdict.
 func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, map[string]any, string, error) {
-	src, err := j.runs.LatestSucceededDump(ctx)
-	if errors.Is(err, backupjobs.ErrNoDumpToDrill) {
-		return nil, nil, backupjobs.ReasonDrillNoDump, err
-	}
+	src, reason, err := j.pickDump(ctx, runID)
 	if err != nil {
-		// A database that cannot answer is NOT "nothing to validate": the
-		// no-dump token would tell the operator the opposite of the truth.
-		return nil, nil, backupjobs.ReasonDrillSourceFailed, err
+		return nil, nil, reason, err
 	}
-	if err := j.runs.SetDrillSource(ctx, runID, src.ID); err != nil {
-		// The meta below still records the source; losing the column linkage
-		// is not worth abandoning the validation itself.
-		j.logger.Warn("could not stamp drill_of_run_id", "err", err)
-	}
-	j.logger.Info("drilling dump", "source_run_id", src.ID, "artifact_key", src.Key)
 
 	// One disposable directory for everything — spool, decrypted dump, data
 	// dir, unix socket — so a single RemoveAll is the whole cleanup story.
@@ -196,39 +185,71 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 	}
 	clusterInitialized := false
 	dataDir := filepath.Join(dir, "data")
-	defer func() {
-		// Unconditional teardown, on a fresh context: the run's ctx is
-		// exactly what shutdown cancels, and an orphaned postmaster would
-		// outlive the job holding the data dir open. The stop is attempted
-		// whenever initdb created a data dir — NOT only after a successful
-		// `pg_ctl start`: a start that exits nonzero on its --timeout can
-		// leave a postmaster still coming up, and gating on success is
-		// exactly the path that would RemoveAll under a live server.
-		if clusterInitialized {
-			stopCtx, done := context.WithTimeout(context.Background(), 30*time.Second)
-			if err := j.command(stopCtx, "pg_ctl", "stop", pgdataFlag+dataDir, "--mode=immediate", "--wait").Run(); err != nil {
-				// A stop that fails on a cluster that never started is the
-				// expected noise; one that fails otherwise deserves a line —
-				// the RemoveAll below may be about to race a live postmaster.
-				j.logger.Warn("drill cluster stop reported an error", "err", err)
-			}
-			done()
-		}
-		if err := os.RemoveAll(dir); err != nil {
-			j.logger.Warn("drill teardown left files behind", "dir", dir, "err", err)
-		}
-	}()
+	defer j.teardownDrill(dir, dataDir, &clusterInitialized)
 
+	dumpPath, reason, err := j.prepareDump(ctx, src, dir)
+	if err != nil {
+		return nil, nil, reason, err
+	}
+	if err := j.restoreIntoCluster(ctx, dir, dataDir, dumpPath, &clusterInitialized); err != nil {
+		return nil, nil, backupjobs.ReasonDrillRestoreFailed, err
+	}
+	return j.drillVerdict(ctx, src, dir)
+}
+
+func (j *DrillJob) pickDump(ctx context.Context, runID int64) (*backupjobs.DumpRunRef, string, error) {
+	src, err := j.runs.LatestSucceededDump(ctx)
+	if errors.Is(err, backupjobs.ErrNoDumpToDrill) {
+		return src, backupjobs.ReasonDrillNoDump, err
+	}
+	if err != nil {
+		// A database that cannot answer is NOT "nothing to validate": the
+		// no-dump token would tell the operator the opposite of the truth.
+		return src, backupjobs.ReasonDrillSourceFailed, err
+	}
+	if err := j.runs.SetDrillSource(ctx, runID, src.ID); err != nil {
+		// The meta below still records the source; losing the column linkage
+		// is not worth abandoning the validation itself.
+		j.logger.Warn("could not stamp drill_of_run_id", "err", err)
+	}
+	j.logger.Info("drilling dump", "source_run_id", src.ID, "artifact_key", src.Key)
+	return src, "", nil
+}
+
+func (j *DrillJob) teardownDrill(dir, dataDir string, clusterInitialized *bool) {
+	// Unconditional teardown, on a fresh context: the run's ctx is
+	// exactly what shutdown cancels, and an orphaned postmaster would
+	// outlive the job holding the data dir open. The stop is attempted
+	// whenever initdb created a data dir — NOT only after a successful
+	// `pg_ctl start`: a start that exits nonzero on its --timeout can
+	// leave a postmaster still coming up, and gating on success is
+	// exactly the path that would RemoveAll under a live server.
+	if *clusterInitialized {
+		stopCtx, done := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := j.command(stopCtx, "pg_ctl", "stop", pgdataFlag+dataDir, "--mode=immediate", "--wait").Run(); err != nil {
+			// A stop that fails on a cluster that never started is the
+			// expected noise; one that fails otherwise deserves a line —
+			// the RemoveAll below may be about to race a live postmaster.
+			j.logger.Warn("drill cluster stop reported an error", "err", err)
+		}
+		done()
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		j.logger.Warn("drill teardown left files behind", "dir", dir, "err", err)
+	}
+}
+
+func (j *DrillJob) prepareDump(ctx context.Context, src *backupjobs.DumpRunRef, dir string) (string, string, error) {
 	// Download the REAL bytes from the bucket, hashing as they land: this
 	// validates the stored object and the encryption round-trip in one pass —
 	// a drill of a local copy would prove less.
 	spoolPath := filepath.Join(dir, "artifact.spool")
 	digest, err := j.download(ctx, src.Key, spoolPath)
 	if err != nil {
-		return nil, nil, backupjobs.ReasonDrillDownloadFailed, err
+		return "", backupjobs.ReasonDrillDownloadFailed, err
 	}
 	if digest != src.SHA256 {
-		return nil, nil, backupjobs.ReasonDrillDigestMismatch,
+		return "", backupjobs.ReasonDrillDigestMismatch,
 			fmt.Errorf("artifact %s digest %s does not match recorded %s — the bytes in the bucket are not the bytes the dump shipped", src.Key, digest, src.SHA256)
 	}
 
@@ -237,14 +258,17 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 	// an un-suffixed key would let anyone with UPDATE on backup_run strip the
 	// authentication that age gives every legitimate dump for free.
 	if len(j.identities) > 0 && !j.cfg.AllowPlaintext && !strings.HasSuffix(src.Key, ".age") {
-		return nil, nil, backupjobs.ReasonDrillDecryptFailed,
+		return "", backupjobs.ReasonDrillDecryptFailed,
 			fmt.Errorf("artifact %s is not .age but this instance encrypts its dumps — refusing to restore unauthenticated bytes", src.Key)
 	}
 	dumpPath, err := j.decrypt(src, spoolPath, filepath.Join(dir, "restore.dump"))
 	if err != nil {
-		return nil, nil, backupjobs.ReasonDrillDecryptFailed, err
+		return "", backupjobs.ReasonDrillDecryptFailed, err
 	}
+	return dumpPath, "", nil
+}
 
+func (j *DrillJob) restoreIntoCluster(ctx context.Context, dir, dataDir, dumpPath string, clusterInitialized *bool) error {
 	// Ephemeral cluster: same superuser name as production (ownership in the
 	// artifact restores without remapping), unix socket only, tuned for a
 	// throwaway (fsync off is safe for data that dies with the run).
@@ -254,9 +278,9 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 		"--locale=C",
 		"--encoding=UTF8",
 	); err != nil {
-		return nil, nil, backupjobs.ReasonDrillRestoreFailed, err
+		return err
 	}
-	clusterInitialized = true
+	*clusterInitialized = true
 	serverOpts := fmt.Sprintf("-c listen_addresses='' -c unix_socket_directories='%s' -c port=%s"+
 		" -c fsync=off -c synchronous_commit=off -c shared_buffers=64MB -c max_connections=10 -c autovacuum=off",
 		dir, drillPort)
@@ -266,7 +290,7 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 		"--log="+filepath.Join(dir, "postgres.log"),
 		"-o", serverOpts,
 	); err != nil {
-		return nil, nil, backupjobs.ReasonDrillRestoreFailed, err
+		return err
 	}
 
 	// template0: the artifact deliberately carries no CREATE DATABASE (dump
@@ -278,7 +302,7 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 		"--template=template0", "--encoding=UTF8",
 		drillDatabase,
 	); err != nil {
-		return nil, nil, backupjobs.ReasonDrillRestoreFailed, err
+		return err
 	}
 	// --no-owner --no-privileges: the ephemeral cluster is initdb'd with ONE
 	// role (cfg.PGUser), so every `ALTER ... OWNER TO` and `GRANT` the source
@@ -294,17 +318,17 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 	// grants into a cluster whose role list is a fixture proves nothing about
 	// the backup; a real recovery restores into a cluster that already has the
 	// roles, and keeps ownership.
-	if err := j.exec(ctx, "pg_restore",
+	return j.exec(ctx, "pg_restore",
 		"--host="+dir, "--port="+drillPort,
 		pgusernameFlag+j.cfg.PGUser,
 		"--dbname="+drillDatabase,
 		"--no-owner", "--no-privileges",
 		"--jobs=1", "--exit-on-error",
 		dumpPath,
-	); err != nil {
-		return nil, nil, backupjobs.ReasonDrillRestoreFailed, err
-	}
+	)
+}
 
+func (j *DrillJob) drillVerdict(ctx context.Context, src *backupjobs.DumpRunRef, dir string) (*backupjobs.Artifact, map[string]any, string, error) {
 	sourceMeta, err := parseDumpMeta(src.Meta)
 	if err != nil {
 		return nil, nil, backupjobs.ReasonDrillCountsMismatch, err
@@ -319,7 +343,6 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 	if err := compareCounts(sourceMeta, gotTables, gotVersion); err != nil {
 		return nil, nil, backupjobs.ReasonDrillCountsMismatch, err
 	}
-
 	meta := map[string]any{
 		"source_run_id":       src.ID,
 		"source_artifact_key": src.Key,

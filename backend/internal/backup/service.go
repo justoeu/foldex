@@ -95,6 +95,29 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 	start := time.Now()
 	var rep ExportReport
 
+	spool, listing, err := s.captureExportSnapshot(ctx, uid)
+	if err != nil {
+		return rep, err
+	}
+	defer spool.cleanup()
+
+	counts := spool.counts
+	counts.Files = listing.count
+	counts.FileBytes = listing.bytes
+	if onCountsReady != nil {
+		if err := onCountsReady(counts); err != nil {
+			return rep, fmt.Errorf("backup: header hook: %w", err)
+		}
+	}
+	if err := s.writeExportZip(ctx, w, spool, listing, counts); err != nil {
+		return rep, err
+	}
+	rep.Counts = counts
+	rep.DurationMs = time.Since(start).Milliseconds()
+	return rep, nil
+}
+
+func (s *Service) captureExportSnapshot(ctx context.Context, uid authctx.UserID) (*snapshotSpool, ownedObjectListing, error) {
 	// Pull a consistent snapshot under REPEATABLE READ so the 5 SELECTs and
 	// the object-store listing all see the same point in time. The tx is committed
 	// as soon as the snapshot + bucket listings finish — keeping it open
@@ -103,7 +126,7 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 	// downloads.
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return rep, fmt.Errorf("backup: begin tx: %w", err)
+		return nil, ownedObjectListing{}, fmt.Errorf("backup: begin tx: %w", err)
 	}
 	// Use a flag so the deferred rollback skips when we've already committed.
 	// A double-Rollback is a no-op in pgx, but the explicit flag documents
@@ -117,9 +140,8 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 
 	spool, err := createSnapshotSpool(ctx, tx, uid)
 	if err != nil {
-		return rep, fmt.Errorf("backup: spool snapshot: %w", err)
+		return nil, ownedObjectListing{}, fmt.Errorf("backup: spool snapshot: %w", err)
 	}
-	defer spool.cleanup()
 
 	// Which of the bucket's objects belong to the caller. Keys are FLAT
 	// ({prefix}/{id}.ext, no tenant segment), so the prefix listing alone cannot
@@ -134,7 +156,8 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 	// rewriting og_image_url on every row and moving live objects.
 	owned, err := userObjectKeys(ctx, tx, uid, false)
 	if err != nil {
-		return rep, fmt.Errorf("backup: enumerate own objects: %w", err)
+		spool.cleanup()
+		return nil, ownedObjectListing{}, fmt.Errorf("backup: enumerate own objects: %w", err)
 	}
 	ownedSet := make(map[string]struct{}, len(owned))
 	for _, k := range owned {
@@ -143,47 +166,41 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 
 	listing, err := listOwnedObjects(ctx, s.storage, ownedSet, spool.size)
 	if err != nil {
-		return rep, err
+		spool.cleanup()
+		return nil, ownedObjectListing{}, err
 	}
 
 	// Snapshot is fully captured; the tx no longer needs to be held while we
 	// stream bytes to the client. Commit (read-only tx — semantically the
 	// same as rollback for visibility) and release the WAL hold.
 	if err := tx.Commit(ctx); err != nil {
-		return rep, fmt.Errorf("backup: commit snapshot tx: %w", err)
+		spool.cleanup()
+		return nil, ownedObjectListing{}, fmt.Errorf("backup: commit snapshot tx: %w", err)
 	}
 	txDone = true
+	return spool, listing, nil
+}
 
-	counts := spool.counts
-	counts.Files = listing.count
-	counts.FileBytes = listing.bytes
-
-	if onCountsReady != nil {
-		if err := onCountsReady(counts); err != nil {
-			return rep, fmt.Errorf("backup: header hook: %w", err)
-		}
-	}
-
+func (s *Service) writeExportZip(ctx context.Context, w io.Writer, spool *snapshotSpool, listing ownedObjectListing, counts Counts) error {
 	zw := zip.NewWriter(w)
 	checksums := map[string]string{}
 
 	dbWriter, err := zw.CreateHeader(&zip.FileHeader{Name: snapshotDBName, Method: zip.Deflate})
 	if err != nil {
-		return rep, fmt.Errorf("backup: zip create database.json: %w", err)
+		return fmt.Errorf("backup: zip create database.json: %w", err)
 	}
 	if _, err := spool.file.Seek(0, io.SeekStart); err != nil {
-		return rep, fmt.Errorf("backup: seek database spool: %w", err)
+		return fmt.Errorf("backup: seek database spool: %w", err)
 	}
 	if _, err := io.Copy(dbWriter, spool.file); err != nil {
-		return rep, fmt.Errorf("backup: stream database.json: %w", err)
+		return fmt.Errorf("backup: stream database.json: %w", err)
 	}
 	checksums[snapshotDBName] = spool.checksum
 
-	// files/
 	for _, object := range listing.objects {
 		entryName := filesPrefix + object.Key
 		if err := s.streamObjectIntoZip(ctx, zw, entryName, object.Key, object.Size, checksums); err != nil {
-			return rep, err
+			return err
 		}
 	}
 
@@ -198,29 +215,25 @@ func (s *Service) Export(ctx context.Context, uid authctx.UserID, w io.Writer, o
 	}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return rep, fmt.Errorf("backup: marshal manifest: %w", err)
+		return fmt.Errorf("backup: marshal manifest: %w", err)
 	}
 	if int64(len(manifestBytes)) > maxManifestJSONBytes {
-		return rep, fmt.Errorf("backup: manifest exceeds %d-byte limit", maxManifestJSONBytes)
+		return fmt.Errorf("backup: manifest exceeds %d-byte limit", maxManifestJSONBytes)
 	}
 	// Manifest written last (and intentionally NOT included in `checksums`).
 	// Stored uncompressed (Method=Store) so the frontend can extract counts
 	// without an inflate step. The size cost is negligible (~few KB).
 	mw, err := zw.CreateHeader(&zip.FileHeader{Name: "manifest.json", Method: zip.Store})
 	if err != nil {
-		return rep, fmt.Errorf("backup: zip create manifest: %w", err)
+		return fmt.Errorf("backup: zip create manifest: %w", err)
 	}
 	if _, err := mw.Write(manifestBytes); err != nil {
-		return rep, fmt.Errorf("backup: zip write manifest: %w", err)
+		return fmt.Errorf("backup: zip write manifest: %w", err)
 	}
-
 	if err := zw.Close(); err != nil {
-		return rep, fmt.Errorf("backup: zip close: %w", err)
+		return fmt.Errorf("backup: zip close: %w", err)
 	}
-
-	rep.Counts = counts
-	rep.DurationMs = time.Since(start).Milliseconds()
-	return rep, nil
+	return nil
 }
 
 type ownedObjectListing struct {
