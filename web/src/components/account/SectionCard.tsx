@@ -65,6 +65,12 @@ export function SectionBadge({
  * that survives being glanced at. `info` is neither: it explains, so announcing
  * it would interrupt a screen reader for something that was always on screen.
  */
+const NOTICE_BY_TONE = {
+  ok: { glyph: I.check, role: 'status' as const },
+  bad: { glyph: I.alert, role: 'alert' as const },
+  info: { glyph: I.info, role: undefined },
+}
+
 export function Notice({
   tone,
   children,
@@ -72,14 +78,14 @@ export function Notice({
   tone: 'ok' | 'bad' | 'info'
   children: ReactNode
 }>) {
-  const glyph = tone === 'ok' ? I.check : tone === 'bad' ? I.alert : I.info
+  const notice = NOTICE_BY_TONE[tone]
   return (
     <p
       className={`fx-sec-note fx-sec-note-${tone}`}
-      role={tone === 'ok' ? 'status' : tone === 'bad' ? 'alert' : undefined}
+      role={notice.role}
       style={{ margin: 0 }}
     >
-      <Icon d={glyph} size={14} />
+      <Icon d={notice.glyph} size={14} />
       <span>{children}</span>
     </p>
   )

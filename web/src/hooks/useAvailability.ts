@@ -20,6 +20,12 @@ export type Availability =
  *  component test that mocks the probe still cannot drift from the real one. */
 export type Probe = (value: string, signal: AbortSignal) => Promise<AvailabilityResponse>
 
+function availabilityFromProbe(data: AvailabilityResponse): Availability {
+  if (data.available && !data.reason) return { state: 'free' }
+  if (data.available) return { state: 'warn', reason: data.reason as AvailabilityReason }
+  return { state: 'refused', reason: data.reason ?? 'taken' }
+}
+
 /**
  * Asks the server whether an identifier can be claimed, while it is typed.
  *
@@ -68,13 +74,7 @@ export function useAvailability(probe: Probe, value: string, initial = ''): Avai
           // Because `blocked` is derived from this state, the other ordering
           // clears a legitimate refusal and re-enables Save for the debounce.
           if (ac.signal.aborted) return
-          setResult(
-            data.available && !data.reason
-              ? { state: 'free' }
-              : data.available
-                ? { state: 'warn', reason: data.reason as AvailabilityReason }
-                : { state: 'refused', reason: data.reason ?? 'taken' },
-          )
+          setResult(availabilityFromProbe(data))
         })
         .catch(() => {
           // An aborted request is the NEXT keystroke, not a failure: reporting

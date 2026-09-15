@@ -1,0 +1,39 @@
+import { describe, expect, it } from 'vitest'
+import availabilityHint from './components/AvailabilityHint.tsx?raw'
+import usernameRow from './components/account/UsernameRow.tsx?raw'
+import emailRow from './components/account/EmailRow.tsx?raw'
+import sectionCard from './components/account/SectionCard.tsx?raw'
+import useAvailability from './hooks/useAvailability.ts?raw'
+
+/** Nested conditional expression: `cond ? a : cond2 ? b`. Optional `?:` types are not matches. */
+export function nestedTernaryHits(src: string): string[] {
+  const cleaned = src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '')
+    .replace(/(['"`])(?:\\.|(?!\1)[\s\S])*\1/g, '""')
+  const hits: string[] = []
+  const re = /\?(?![:.\d])[^?{};]{0,220}:\s*[^?{};]{0,160}\?/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(cleaned))) {
+    const snippet = m[0].replace(/\s+/g, ' ').trim()
+    if (snippet.includes('?:')) continue
+    hits.push(snippet.slice(0, 160))
+  }
+  return hits
+}
+
+const accountFiles = {
+  'AvailabilityHint.tsx': availabilityHint,
+  'UsernameRow.tsx': usernameRow,
+  'EmailRow.tsx': emailRow,
+  'SectionCard.tsx': sectionCard,
+  'useAvailability.ts': useAvailability,
+}
+
+describe('S3358 contracts', () => {
+  it('account files have no nested ternaries', () => {
+    for (const [name, src] of Object.entries(accountFiles)) {
+      expect(nestedTernaryHits(src), name).toEqual([])
+    }
+  })
+})
