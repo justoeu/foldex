@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
 	"net/http"
@@ -207,9 +208,13 @@ func (h *AdminHandler) ExportAudit(w http.ResponseWriter, r *http.Request) {
 		bursts = map[string]int{}
 	}
 
+	h.writeAuditCSVPages(r.Context(), cw, f, bursts)
+}
+
+func (h *AdminHandler) writeAuditCSVPages(ctx context.Context, cw *csv.Writer, f AuditFilter, bursts map[string]int) {
 	written := 0
 	for written < maxAuditExportRows {
-		entries, err := h.repo.ListAudit(r.Context(), f)
+		entries, err := h.repo.ListAudit(ctx, f)
 		if err != nil {
 			h.logger.Error("admin export audit", "err", err)
 			return

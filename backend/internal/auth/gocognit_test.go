@@ -20,6 +20,8 @@ func TestCognitiveComplexityAtMost15(t *testing.T) {
 		{"Repository", "acceptInvite"},
 		{"Repository", "rotateOnce"},
 		{"Repository", "handleConsumed"},
+		{"Repository", "AuditStatsSince"},
+		{"AdminHandler", "ExportAudit"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.recv+"."+tc.name, func(t *testing.T) {
