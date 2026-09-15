@@ -175,44 +175,59 @@ func (rl *Relay) loop() {
 // drain claims one batch and delivers it. It reports whether the batch was
 // full, which is the caller's signal that more work is queued.
 func (rl *Relay) drain() bool {
-	if rl.stopped.Load() || rl.ctx.Err() != nil {
+	msgs, ok := rl.claimBatch()
+	if !ok {
 		return false
+	}
+	jobs := make(chan Outgoing)
+	var wg sync.WaitGroup
+	rl.startDrainWorkers(jobs, &wg, len(msgs))
+	full := rl.dispatchBatch(jobs, &wg, msgs)
+	return full
+}
+
+func (rl *Relay) claimBatch() ([]Outgoing, bool) {
+	if rl.stopped.Load() || rl.ctx.Err() != nil {
+		return nil, false
 	}
 	msgs, err := rl.repo.Claim(rl.ctx, rl.opts.Batch)
 	if err != nil {
 		if rl.ctx.Err() == nil {
 			rl.logger.Error("mail outbox claim", "err", err)
 		}
-		return false
+		return nil, false
 	}
 	if len(msgs) == 0 {
-		return false
+		return nil, false
 	}
+	return msgs, true
+}
 
-	jobs := make(chan Outgoing)
-	var wg sync.WaitGroup
-	for range min(rl.opts.Workers, len(msgs)) {
+func (rl *Relay) startDrainWorkers(jobs <-chan Outgoing, wg *sync.WaitGroup, n int) {
+	for range min(rl.opts.Workers, n) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for m := range jobs {
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							rl.logger.Error("mail delivery panicked", "id", m.ID, "panic", r)
-						}
-					}()
-					rl.deliver(m)
-				}()
+				rl.deliverGuarded(m)
 			}
 		}()
 	}
+}
+
+func (rl *Relay) deliverGuarded(m Outgoing) {
+	defer func() {
+		if r := recover(); r != nil {
+			rl.logger.Error("mail delivery panicked", "id", m.ID, "panic", r)
+		}
+	}()
+	rl.deliver(m)
+}
+
+func (rl *Relay) dispatchBatch(jobs chan Outgoing, wg *sync.WaitGroup, msgs []Outgoing) bool {
 	for _, m := range msgs {
 		select {
 		case <-rl.ctx.Done():
-			// Cancelled mid-batch. The rows still hold their claim and the
-			// stuck-claim sweep returns them; abandoning them here is what
-			// keeps Stop bounded.
 			close(jobs)
 			wg.Wait()
 			return false
