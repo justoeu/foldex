@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import { FolderPicker } from './FolderPicker'
 import { SlugField, useSlugFieldState } from './SlugField'
@@ -110,6 +111,11 @@ function LinkDialogError({ message }: Readonly<{ message: string | null }>) {
   )
 }
 
+function duplicateWhere(folderName: string | undefined, t: TFunction): string {
+  if (folderName) return t('link_dialog.error_url_taken_in_folder', { name: folderName })
+  return t('link_dialog.error_url_taken_on_home')
+}
+
 function DuplicateURLNotice({
   link,
   onOpenExisting,
@@ -122,9 +128,7 @@ function DuplicateURLNotice({
   const folderName = link.folder_id != null
     ? folders.find((folder) => folder.id === link.folder_id)?.name
     : undefined
-  const where = folderName
-    ? t('link_dialog.error_url_taken_in_folder', { name: folderName })
-    : t('link_dialog.error_url_taken_on_home')
+  const where = duplicateWhere(folderName, t)
   return (
     <div className="fx-inline-error" role="alert">
       <Icon d={I.alert} size={14} />

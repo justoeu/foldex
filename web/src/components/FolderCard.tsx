@@ -83,7 +83,7 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropNote, onDrop
 
   return (
     <div
-      className={folderCardClass(compact, dragOver, dragging)}
+      className={folderCardClass(!!compact, dragOver, dragging)}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData(MIME_FOLDER, String(folder.id))

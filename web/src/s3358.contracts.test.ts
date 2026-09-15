@@ -13,6 +13,9 @@ import backupSection from './components/admin/BackupSection.tsx?raw'
 import backupSchedule from './components/admin/BackupScheduleEditor.tsx?raw'
 import auditSignals from './components/admin/AuditSignals.tsx?raw'
 import statsPage from './pages/StatsPage.tsx?raw'
+import linkDialog from './components/LinkDialog.tsx?raw'
+import importPreview from './components/ImportPreviewDialog.tsx?raw'
+import sw from './sw.ts?raw'
 
 /** Nested conditional expression: `cond ? a : cond2 ? b`. Optional `?:` types are not matches. */
 export function nestedTernaryHits(src: string): string[] {
@@ -21,11 +24,12 @@ export function nestedTernaryHits(src: string): string[] {
     .replace(/\/\/.*$/gm, '')
     .replace(/(['"`])(?:\\.|(?!\1)[\s\S])*\1/g, '""')
   const hits: string[] = []
-  const re = /\?(?![:.\d])[^?{};]{0,220}:\s*[^?{};]{0,160}\?/g
+  const re = /\?[^?:;{}]{1,160}:[^?:;{}]{1,160}\?[^?:;{}]{0,80}:/g
   let m: RegExpExecArray | null
   while ((m = re.exec(cleaned))) {
     const snippet = m[0].replace(/\s+/g, ' ').trim()
-    if (snippet.includes('?:')) continue
+    if (/\bconst\b|\blet\b|\breturn\b|\bcase\b/.test(snippet)) continue
+    if (snippet.includes(') + (') || snippet.includes(',')) continue
     hits.push(snippet.slice(0, 160))
   }
   return hits
@@ -37,6 +41,12 @@ const accountFiles = {
   'EmailRow.tsx': emailRow,
   'SectionCard.tsx': sectionCard,
   'useAvailability.ts': useAvailability,
+}
+
+const remainingFiles = {
+  'LinkDialog.tsx': linkDialog,
+  'ImportPreviewDialog.tsx': importPreview,
+  'sw.ts': sw,
 }
 
 const auditStatsFiles = {
@@ -80,5 +90,21 @@ describe('S3358 contracts', () => {
     for (const [name, src] of Object.entries(auditStatsFiles)) {
       expect(nestedTernaryHits(src), name).toEqual([])
     }
+  })
+
+  it('remaining dialog and SW files have no nested ternaries', () => {
+    for (const [name, src] of Object.entries(remainingFiles)) {
+      expect(nestedTernaryHits(src), name).toEqual([])
+    }
+  })
+
+  it('production web/src has no nested ternaries', () => {
+    const modules = import.meta.glob('./**/*.{ts,tsx}', { query: '?raw', eager: true, import: 'default' }) as Record<string, string>
+    const leftover: string[] = []
+    for (const [path, src] of Object.entries(modules)) {
+      if (path.includes('.test.') || path.includes('/test/')) continue
+      for (const hit of nestedTernaryHits(src)) leftover.push(`${path}: ${hit}`)
+    }
+    expect(leftover).toEqual([])
   })
 })

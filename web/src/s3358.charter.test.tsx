@@ -17,7 +17,7 @@ import { useAvailability } from './hooks/useAvailability'
 import { renderWithProviders, testAdminUser } from './test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from './test/server'
 import { http } from './api/client'
-import type { Availability } from './hooks/useAvailability'
+import type { Availability, AvailabilityResponse } from './hooks/useAvailability'
 import type { AuthUser, SessionState } from './auth/types'
 import type { AuditStats } from './api/admin'
 import type { Folder, PreviewTile } from './api/types'
@@ -329,7 +329,7 @@ describe('S3358 charter — nested ternary arms', () => {
   })
 
   describe('useAvailability', () => {
-    function ProbeView({ reply, value }: { reply: { available: boolean; reason?: string }; value: string }) {
+    function ProbeView({ reply, value }: { reply: AvailabilityResponse; value: string }) {
       const result = useAvailability(async () => reply, value, '')
       return <pre data-testid="avail">{JSON.stringify(result)}</pre>
     }
