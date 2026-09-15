@@ -51,34 +51,53 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrNotFound)
 		return
 	}
+	runID, password, ok := h.decodeDownload(w, r)
+	if !ok {
+		return
+	}
+	key, ok := h.downloadableKey(w, r, runID)
+	if !ok {
+		return
+	}
+	body, reservation, ok := h.openReservedArtifact(w, r, runID, key, password)
+	if !ok {
+		return
+	}
+	defer func() { _ = body.Close() }()
+	h.streamDownload(w, r, key, body, reservation)
+}
+
+func (h *Handler) decodeDownload(w http.ResponseWriter, r *http.Request) (int64, string, bool) {
 	runID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil || runID <= 0 {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_run", "run id must be a positive integer"))
-		return
+		return 0, "", false
 	}
-
 	// The shared decoder, not a hand-rolled one: it already caps the body
 	// (INV-089) and answers the house's error envelope.
 	in, decodeErr := httperr.DecodeJSON[downloadRequest](w, r)
 	if decodeErr != nil {
 		httperr.Write(w, decodeErr)
-		return
+		return 0, "", false
 	}
 	if len([]rune(in.Password)) < minDownloadPassphrase {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "password_too_short",
 			"the download password must be at least "+strconv.Itoa(minDownloadPassphrase)+" characters"))
-		return
+		return 0, "", false
 	}
+	return runID, in.Password, true
+}
 
+func (h *Handler) downloadableKey(w http.ResponseWriter, r *http.Request, runID int64) (string, bool) {
 	key, err := h.repo.ArtifactKeyForRun(r.Context(), runID)
 	if errors.Is(err, ErrRunNotFound) {
 		httperr.Write(w, httperr.ErrNotFound)
-		return
+		return "", false
 	}
 	if err != nil {
 		h.logger.Error("artifact key lookup", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
-		return
+		return "", false
 	}
 	if key == "" {
 		// A mirror or user_zip run ships N objects and names none of them on
@@ -86,31 +105,32 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 		// exist" for a run the operator is looking straight at.
 		httperr.Write(w, httperr.New(http.StatusConflict, "no_artifact",
 			"this run shipped no single artifact — list its objects instead"))
-		return
+		return "", false
 	}
-
 	principal, _ := authctx.FromContext(r.Context())
 	if !mayDownload(principal, key) {
 		// 404, not 403: the same reasoning the admin surface uses throughout —
 		// a refusal that names what exists is a refusal that maps it.
 		httperr.Write(w, httperr.ErrNotFound)
-		return
+		return "", false
 	}
+	return key, true
+}
 
+func (h *Handler) openReservedArtifact(w http.ResponseWriter, r *http.Request, runID int64, key, password string) (io.ReadCloser, int64, bool) {
 	uid := authctx.MustUser(r.Context())
 	reservation, err := h.repo.ReserveDownload(r.Context(), runID, uid, key)
 	if errors.Is(err, ErrDownloadBudgetSpent) {
 		httperr.Write(w, httperr.New(http.StatusTooManyRequests, "download_budget_spent",
 			"this artifact has already been downloaded "+strconv.Itoa(MaxDownloadsPerAdmin)+" times by this account"))
-		return
+		return nil, 0, false
 	}
 	if err != nil {
 		h.logger.Error("reserve download", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
-		return
+		return nil, 0, false
 	}
-
-	body, err := h.artifacts.Open(r.Context(), key, in.Password)
+	body, err := h.artifacts.Open(r.Context(), key, password)
 	if err != nil {
 		/* Given back, because nothing left the instance. The budget counts
 		   bytes that escaped, and an agent that never answered produced none —
@@ -124,10 +144,12 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("artifact bridge", "err", err)
 		httperr.Write(w, httperr.New(http.StatusBadGateway, "artifact_unavailable",
 			"the backup agent could not serve this artifact"))
-		return
+		return nil, 0, false
 	}
-	defer func() { _ = body.Close() }()
+	return body, reservation, true
+}
 
+func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, key string, body io.Reader, reservation int64) {
 	if h.auditDownload != nil {
 		h.auditDownload(r, key)
 	}
