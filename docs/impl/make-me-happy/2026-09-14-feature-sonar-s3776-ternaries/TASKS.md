@@ -59,43 +59,43 @@ Gate after flatten: no nested `? : ?` in `web/src` production. No NOSONAR. No ne
 
 ## Worktree 3 — remaining Go + web ternaries (20)
 
-- [ ] **T-201** Characterize remaining Go complexity functions before extract  | tests: 0 | red-green: no | immutability: yes | wt: 3 | OPEN
+- [x] **T-201** Characterize remaining Go complexity functions before extract  | tests: 21 | red-green: yes | immutability: yes | wt: 3 | DONE
   - RED: s3776_charter_test.go in screenshot, preview, mailer, changecheck, mailoutbox, importer, push, pkg/keyfile, tags, roleperm, policy, links, depstatus. Must pass on current code.
-- [ ] **T-202** Characterize production nested-ternary copy/state before flatten  | tests: 0 | red-green: no | immutability: yes | wt: 3 | OPEN
+- [x] **T-202** Characterize production nested-ternary copy/state before flatten  | tests: 20 | red-green: yes | immutability: yes | wt: 3 | DONE
   - RED: web/src/s3358.charter.test.tsx — one assertion per arm, passing today.
-- [ ] **T-203** Extract acquireBrowser + Pool.Close to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-203** Extract acquireBrowser + Pool.Close to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: screenshot/gocognit_test.go acquireBrowser (24) and Close (16) ≤15.
-- [ ] **T-204** Extract preview Worker.process + Fetch + parseHead to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-204** Extract preview Worker.process + Fetch + parseHead to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: preview/gocognit_test.go process (24), Fetch (16), parseHead (16) ≤15.
-- [ ] **T-205** Extract smtpMailer.Send + loadAssets + assets.render to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-205** Extract smtpMailer.Send + loadAssets + assets.render to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: mailer/gocognit_test.go Send (23), loadAssets (22), render (17) ≤15.
-- [ ] **T-206** Extract extractMainContent + extractFeedURL + pushLoop to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-206** Extract extractMainContent + extractFeedURL + pushLoop to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: changecheck/gocognit_test.go extractMainContent (21), extractFeedURL (19), pushLoop (16) ≤15.
-- [ ] **T-207** Extract Relay.drain + Ping to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-207** Extract Relay.drain + Ping to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: mailoutbox/gocognit_test.go drain (19) and Ping (16) ≤15.
-- [ ] **T-208** Extract JSONFile.validateLinks + Handler.parseUpload to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-208** Extract JSONFile.validateLinks + Handler.parseUpload to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: importer/gocognit_test.go validateLinks (19) and parseUpload (16) ≤15.
-- [ ] **T-209** Extract push.LoadOrGenerate to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-209** Extract push.LoadOrGenerate to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: push/gocognit_test.go LoadOrGenerate (18) ≤15.
-- [ ] **T-210** Extract keyfile.Load to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-210** Extract keyfile.Load to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: pkg/keyfile/gocognit_test.go Load (18) ≤15.
-- [ ] **T-211** Extract SetEntityTagsWithPending to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-211** Extract SetEntityTagsWithPending to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: tags/gocognit_test.go SetEntityTagsWithPending (17) ≤15.
-- [ ] **T-212** Extract roleperm.Resolve to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-212** Extract roleperm.Resolve to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: roleperm/gocognit_test.go Resolve (17) ≤15.
-- [ ] **T-213** Extract Policy.Validate to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-213** Extract Policy.Validate to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: policy/gocognit_test.go Validate (16) ≤15.
-- [ ] **T-214** Extract ScreenshotHandler.CaptureAndStore to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-214** Extract ScreenshotHandler.CaptureAndStore to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: links/gocognit_test.go CaptureAndStore (16) ≤15.
-- [ ] **T-215** Extract Checker.refresh to ≤15  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-215** Extract Checker.refresh to ≤15  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: depstatus/gocognit_test.go refresh (16) ≤15.
-- [ ] **T-216** Flatten account nested ternaries  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-216** Flatten account nested ternaries  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: web/src/s3358.contracts.test.ts nested-ternary regex on those files must fail today and pass after flatten.
-- [ ] **T-217** Flatten folder nested ternaries  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-217** Flatten folder nested ternaries  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: s3358.contracts.test.ts on FolderDialog/FolderPicker/FolderCard.
-- [ ] **T-218** Flatten backup nested ternaries  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-218** Flatten backup nested ternaries  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: s3358.contracts.test.ts on those backup UI files.
-- [ ] **T-219** Flatten audit + stats nested ternaries  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-219** Flatten audit + stats nested ternaries  | tests: 1 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: s3358.contracts.test.ts on AuditSignals and StatsPage.
-- [ ] **T-220** Flatten remaining dialog + SW nested ternaries  | tests: 0 | red-green: no | immutability: no | wt: 3 | OPEN
+- [x] **T-220** Flatten remaining dialog + SW nested ternaries  | tests: 2 | red-green: yes | immutability: no | wt: 3 | DONE
   - RED: s3358.contracts.test.ts on LinkDialog/ImportPreviewDialog/sw.ts and a production-wide empty nested-ternary scan.

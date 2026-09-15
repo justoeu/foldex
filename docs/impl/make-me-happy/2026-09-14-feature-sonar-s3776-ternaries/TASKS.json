@@ -325,9 +325,9 @@
       "title": "Characterize remaining Go complexity functions before extract",
       "slice": "backend/internal remaining packages \u2014 lock current outcomes. Production unchanged.",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 21,
+      "red_green": true,
       "immutability": true,
       "depends_on": [],
       "red_test": "s3776_charter_test.go in screenshot, preview, mailer, changecheck, mailoutbox, importer, push, pkg/keyfile, tags, roleperm, policy, links, depstatus. Must pass on current code."
@@ -337,9 +337,9 @@
       "title": "Characterize production nested-ternary copy/state before flatten",
       "slice": "web/src production files with nested ternaries \u2014 lock visible copy, tone, role, icons. Production unchanged.",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 20,
+      "red_green": true,
       "immutability": true,
       "depends_on": [],
       "red_test": "web/src/s3358.charter.test.tsx \u2014 one assertion per arm, passing today."
@@ -349,9 +349,9 @@
       "title": "Extract acquireBrowser + Pool.Close to \u226415",
       "slice": "backend/internal/screenshot/pool.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -363,9 +363,9 @@
       "title": "Extract preview Worker.process + Fetch + parseHead to \u226415",
       "slice": "backend/internal/preview/worker.go, fetcher.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -377,9 +377,9 @@
       "title": "Extract smtpMailer.Send + loadAssets + assets.render to \u226415",
       "slice": "backend/internal/mailer/mailer.go, render.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -391,9 +391,9 @@
       "title": "Extract extractMainContent + extractFeedURL + pushLoop to \u226415",
       "slice": "backend/internal/changecheck/fingerprint.go, worker.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -405,9 +405,9 @@
       "title": "Extract Relay.drain + Ping to \u226415",
       "slice": "backend/internal/mailoutbox/relay.go, sink_amqp.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -419,9 +419,9 @@
       "title": "Extract JSONFile.validateLinks + Handler.parseUpload to \u226415",
       "slice": "backend/internal/importer/json.go, handler.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -433,9 +433,9 @@
       "title": "Extract push.LoadOrGenerate to \u226415",
       "slice": "backend/internal/push/vapid.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -447,9 +447,9 @@
       "title": "Extract keyfile.Load to \u226415",
       "slice": "backend/internal/pkg/keyfile/keyfile.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -461,9 +461,9 @@
       "title": "Extract SetEntityTagsWithPending to \u226415",
       "slice": "backend/internal/tags/entity_tags.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -475,9 +475,9 @@
       "title": "Extract roleperm.Resolve to \u226415",
       "slice": "backend/internal/roleperm/roleperm.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -489,9 +489,9 @@
       "title": "Extract Policy.Validate to \u226415",
       "slice": "backend/internal/policy/policy.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -503,9 +503,9 @@
       "title": "Extract ScreenshotHandler.CaptureAndStore to \u226415",
       "slice": "backend/internal/links/screenshot_handler.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -517,9 +517,9 @@
       "title": "Extract Checker.refresh to \u226415",
       "slice": "backend/internal/depstatus/status.go",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-201"
@@ -531,9 +531,9 @@
       "title": "Flatten account nested ternaries",
       "slice": "web/src/components/AvailabilityHint.tsx, account/{UsernameRow,EmailRow,SectionCard}.tsx, hooks/useAvailability.ts",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-202"
@@ -545,9 +545,9 @@
       "title": "Flatten folder nested ternaries",
       "slice": "web/src/components/FolderDialog.tsx, FolderPicker.tsx, FolderCard.tsx",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-202"
@@ -559,9 +559,9 @@
       "title": "Flatten backup nested ternaries",
       "slice": "web/src/components/ConflictModePicker.tsx, BackupRestoreDialog.tsx, admin/BackupSection.tsx, admin/BackupScheduleEditor.tsx",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-202"
@@ -573,9 +573,9 @@
       "title": "Flatten audit + stats nested ternaries",
       "slice": "web/src/components/admin/AuditSignals.tsx, pages/StatsPage.tsx",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 1,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-202"
@@ -587,9 +587,9 @@
       "title": "Flatten remaining dialog + SW nested ternaries",
       "slice": "web/src/components/LinkDialog.tsx, ImportPreviewDialog.tsx, sw.ts plus production-wide empty scan",
       "worktree": 3,
-      "status": "OPEN",
-      "tests_added": 0,
-      "red_green": false,
+      "status": "DONE",
+      "tests_added": 2,
+      "red_green": true,
       "immutability": false,
       "depends_on": [
         "T-202"
