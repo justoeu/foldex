@@ -354,22 +354,9 @@ func (r *Repository) TouchIdentity(ctx context.Context, provider, subject string
 // request cannot re-run any of it.
 func (r *Repository) ConvertToProvider(ctx context.Context, challengeID int64,
 	password string) (User, string, error) {
-	var uid int64
-	var challengeVersion int
-	var provedHash *string
-	err := r.pool.QueryRow(ctx, `
-		SELECT c.user_id, c.token_version, u.password_hash
-		FROM auth_challenge c
-		JOIN app_user u ON u.id = c.user_id
-		WHERE c.id = $1 AND c.purpose = 'convert_google'
-		  AND c.consumed_at IS NULL AND c.expires_at > now()
-		  AND c.token_version = u.token_version AND u.status = 'active'`, challengeID).
-		Scan(&uid, &challengeVersion, &provedHash)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return User{}, "", ErrChallengeInvalid
-	}
+	uid, challengeVersion, provedHash, err := r.loadConvertProof(ctx, challengeID)
 	if err != nil {
-		return User{}, "", fmt.Errorf("load convert proof: %w", err)
+		return User{}, "", err
 	}
 	if provedHash == nil || !pwhash.Verify(*provedHash, password) {
 		return User{}, "", ErrBadCredentials
@@ -381,39 +368,13 @@ func (r *Repository) ConvertToProvider(ctx context.Context, challengeID int64,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var liveVersion int
-	var passwordHash *string
-	var status string
-	err = tx.QueryRow(ctx, `
-		SELECT password_hash, token_version, status
-		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, uid).
-		Scan(&passwordHash, &liveVersion, &status)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return User{}, "", ErrChallengeInvalid
-	}
+	passwordHash, err := lockConvertUserTx(ctx, tx, uid, challengeVersion, *provedHash)
 	if err != nil {
-		return User{}, "", fmt.Errorf("lock convert user: %w", err)
+		return User{}, "", err
 	}
-	if status != StatusActive || liveVersion != challengeVersion || passwordHash == nil || *passwordHash != *provedHash {
-		return User{}, "", ErrChallengeInvalid
-	}
-
-	var provider, subject, emailAtLink string
-	err = tx.QueryRow(ctx, `
-		UPDATE auth_challenge SET consumed_at = now()
-		WHERE id = $1 AND user_id = $2 AND purpose = 'convert_google'
-		  AND token_version = $3 AND consumed_at IS NULL AND expires_at > now()
-		RETURNING COALESCE(oauth_provider, ''), COALESCE(oauth_subject, ''),
-		          COALESCE(oauth_email, '')`, challengeID, uid, challengeVersion).
-		Scan(&provider, &subject, &emailAtLink)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return User{}, "", ErrChallengeInvalid
-	}
+	provider, subject, emailAtLink, err := consumeConvertChallengeTx(ctx, tx, challengeID, uid, challengeVersion)
 	if err != nil {
-		return User{}, "", fmt.Errorf("convert consume challenge: %w", err)
-	}
-	if provider == "" || subject == "" {
-		return User{}, "", ErrChallengeInvalid
+		return User{}, "", err
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -423,16 +384,9 @@ func (r *Repository) ConvertToProvider(ctx context.Context, challengeID int64,
 		return User{}, "", mapIdentityConflict(err)
 	}
 
-	u, err := scanUser(tx.QueryRow(ctx, `
-		UPDATE app_user SET password_hash = NULL, token_version = token_version + 1,
-		                    updated_at = now()
-		WHERE id = $1 AND status = 'active' AND token_version = $2 AND password_hash = $3
-		RETURNING `+userColumns, uid, challengeVersion, *passwordHash))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return User{}, "", ErrChallengeInvalid
-	}
+	u, err := retirePasswordTx(ctx, tx, uid, challengeVersion, passwordHash)
 	if err != nil {
-		return User{}, "", fmt.Errorf("retire password: %w", err)
+		return User{}, "", err
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -445,6 +399,79 @@ func (r *Repository) ConvertToProvider(ctx context.Context, challengeID int64,
 		return User{}, "", fmt.Errorf("convert commit: %w", err)
 	}
 	return u, emailAtLink, nil
+}
+
+func (r *Repository) loadConvertProof(ctx context.Context, challengeID int64) (uid int64, challengeVersion int, provedHash *string, err error) {
+	err = r.pool.QueryRow(ctx, `
+		SELECT c.user_id, c.token_version, u.password_hash
+		FROM auth_challenge c
+		JOIN app_user u ON u.id = c.user_id
+		WHERE c.id = $1 AND c.purpose = 'convert_google'
+		  AND c.consumed_at IS NULL AND c.expires_at > now()
+		  AND c.token_version = u.token_version AND u.status = 'active'`, challengeID).
+		Scan(&uid, &challengeVersion, &provedHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, nil, ErrChallengeInvalid
+	}
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("load convert proof: %w", err)
+	}
+	return uid, challengeVersion, provedHash, nil
+}
+
+func lockConvertUserTx(ctx context.Context, tx pgx.Tx, uid int64, challengeVersion int, provedHash string) (*string, error) {
+	var liveVersion int
+	var passwordHash *string
+	var status string
+	err := tx.QueryRow(ctx, `
+		SELECT password_hash, token_version, status
+		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, uid).
+		Scan(&passwordHash, &liveVersion, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrChallengeInvalid
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock convert user: %w", err)
+	}
+	if status != StatusActive || liveVersion != challengeVersion || passwordHash == nil || *passwordHash != provedHash {
+		return nil, ErrChallengeInvalid
+	}
+	return passwordHash, nil
+}
+
+func consumeConvertChallengeTx(ctx context.Context, tx pgx.Tx, challengeID, uid int64, challengeVersion int) (provider, subject, emailAtLink string, err error) {
+	err = tx.QueryRow(ctx, `
+		UPDATE auth_challenge SET consumed_at = now()
+		WHERE id = $1 AND user_id = $2 AND purpose = 'convert_google'
+		  AND token_version = $3 AND consumed_at IS NULL AND expires_at > now()
+		RETURNING COALESCE(oauth_provider, ''), COALESCE(oauth_subject, ''),
+		          COALESCE(oauth_email, '')`, challengeID, uid, challengeVersion).
+		Scan(&provider, &subject, &emailAtLink)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", "", ErrChallengeInvalid
+	}
+	if err != nil {
+		return "", "", "", fmt.Errorf("convert consume challenge: %w", err)
+	}
+	if provider == "" || subject == "" {
+		return "", "", "", ErrChallengeInvalid
+	}
+	return provider, subject, emailAtLink, nil
+}
+
+func retirePasswordTx(ctx context.Context, tx pgx.Tx, uid int64, challengeVersion int, passwordHash *string) (User, error) {
+	u, err := scanUser(tx.QueryRow(ctx, `
+		UPDATE app_user SET password_hash = NULL, token_version = token_version + 1,
+		                    updated_at = now()
+		WHERE id = $1 AND status = 'active' AND token_version = $2 AND password_hash = $3
+		RETURNING `+userColumns, uid, challengeVersion, *passwordHash))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrChallengeInvalid
+	}
+	if err != nil {
+		return User{}, fmt.Errorf("retire password: %w", err)
+	}
+	return u, nil
 }
 
 // UnlinkIdentity detaches a provider, refusing to strip the last credential.
