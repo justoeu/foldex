@@ -169,6 +169,34 @@ func TestUnwiredHandlers_RefuseBeforeTheRepo(t *testing.T) {
 		h.challengeProof(context.Background(), User{ID: 1}, "---", nil)
 	})
 
+	t.Run("totp start without session", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		h.StartTOTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"password":"x"}`)))
+		assert.NotEqual(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("totp start session malformed JSON", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{`))
+		req = req.WithContext(authctx.WithPrincipal(req.Context(), authctx.Principal{UserID: 1}))
+		rec := httptest.NewRecorder()
+		h.StartTOTP(rec, req)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("totp qr without session", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		h.TOTPQR(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		assert.NotEqual(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("enrollment session match", func(t *testing.T) {
+		assert.True(t, enrollmentSessionMatches(nil, 0))
+		assert.False(t, enrollmentSessionMatches(nil, 1))
+		id := int64(3)
+		assert.True(t, enrollmentSessionMatches(&id, 3))
+		assert.False(t, enrollmentSessionMatches(&id, 4))
+	})
+
 	t.Run("reserve email confirm session budget", func(t *testing.T) {
 		wired := &Handler{
 			logger:     log,
@@ -186,6 +214,13 @@ func TestUnwiredHandlers_RefuseBeforeTheRepo(t *testing.T) {
 		assert.False(t, ok)
 		assert.Equal(t, http.StatusTooManyRequests, rec.Code)
 	})
+}
+
+func TestEnqueueMail_WithoutOutbox(t *testing.T) {
+	t.Parallel()
+	err := (&Repository{}).EnqueueMail(context.Background(), mailer.Envelope{}, "en")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "without an outbox")
 }
 
 func TestCSVSafeAndAuditRow(t *testing.T) {

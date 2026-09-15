@@ -9,5 +9,5 @@
     "mean": 85.4
   },
   "web": "s3358 charter+contracts 40/40; not a v8 coverage run of flattened TS (global vitest thresholds fail on a subset run)",
-  "note": "Touched production Go files vs origin/main. 85.9% \u2192 87.8% across three test batches. Need ~685 statements for 95%."
+  "note": "Touched production Go files vs origin/main. 85.9% \u2192 87.8%. Remaining ~685 statements are mid-function DB/HTTP branches in auth repositories and twofa_handler."
 }
