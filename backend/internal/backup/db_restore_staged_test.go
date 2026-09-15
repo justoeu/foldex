@@ -23,6 +23,7 @@ func TestRestoreModesShareFolderAndNoteInsertSQL(t *testing.T) {
 	calls := map[string]map[string]int{
 		"restoreSkipStaged":      {},
 		"restoreDuplicateStaged": {},
+		"insertDuplicateRestore": {},
 	}
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch n := n.(type) {
@@ -68,10 +69,14 @@ func TestRestoreModesShareFolderAndNoteInsertSQL(t *testing.T) {
 	require.Equal(t, 1, noteSQL,
 		"AST/text finds duplicated INSERT INTO note in two restore modes")
 
-	for _, fn := range []string{"restoreSkipStaged", "restoreDuplicateStaged"} {
-		require.Greater(t, calls[fn]["insertStagedFolders"], 0,
-			"%s must call insertStagedFolders", fn)
-		require.Greater(t, calls[fn]["insertStagedNotes"], 0,
-			"%s must call insertStagedNotes", fn)
-	}
+	require.Greater(t, calls["restoreSkipStaged"]["insertStagedFolders"], 0,
+		"restoreSkipStaged must call insertStagedFolders")
+	require.Greater(t, calls["restoreSkipStaged"]["insertStagedNotes"], 0,
+		"restoreSkipStaged must call insertStagedNotes")
+	require.Greater(t, calls["insertDuplicateRestore"]["insertStagedFolders"], 0,
+		"insertDuplicateRestore must call insertStagedFolders")
+	require.Greater(t, calls["insertDuplicateRestore"]["insertStagedNotes"], 0,
+		"insertDuplicateRestore must call insertStagedNotes")
+	require.Greater(t, calls["restoreDuplicateStaged"]["insertDuplicateRestore"], 0,
+		"restoreDuplicateStaged must call insertDuplicateRestore")
 }

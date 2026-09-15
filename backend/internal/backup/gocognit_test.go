@@ -27,6 +27,23 @@ func TestCognitiveComplexity_ExportAndInspectArchive(t *testing.T) {
 	}
 }
 
+func TestCognitiveComplexity_RestoreDuplicateStagedAndCopy(t *testing.T) {
+	cases := []struct {
+		file string
+		name string
+	}{
+		{file: "db_restore_staged.go", name: "restoreDuplicateStaged"},
+		{file: "db_restore_staged.go", name: "copyRestoreStaging"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cognitOf(t, tc.file, tc.name)
+			assert.LessOrEqual(t, got, 15,
+				"%s cognitive=%d — extract early returns / unexported helpers, no NOSONAR", tc.name, got)
+		})
+	}
+}
+
 func TestCognitiveComplexity_LoadRestoreLedgerAndManifestIntegrity(t *testing.T) {
 	cases := []struct {
 		file string
