@@ -17,20 +17,67 @@ import linkDialog from './components/LinkDialog.tsx?raw'
 import importPreview from './components/ImportPreviewDialog.tsx?raw'
 import sw from './sw.ts?raw'
 
-/** Nested conditional expression: `cond ? a : cond2 ? b`. Optional `?:` types are not matches. */
+/** Nested `cond ? a : b` including a ternary in either arm (parenthesized or not). Skips `?.`, `??`, and `?:`. */
 export function nestedTernaryHits(src: string): string[] {
   const cleaned = src
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\/\/.*$/gm, '')
     .replace(/(['"`])(?:\\.|(?!\1)[\s\S])*\1/g, '""')
   const hits: string[] = []
-  const re = /\?[^?:;{}]{1,160}:[^?:;{}]{1,160}\?[^?:;{}]{0,80}:/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(cleaned))) {
-    const snippet = m[0].replace(/\s+/g, ' ').trim()
-    if (/\bconst\b|\blet\b|\breturn\b|\bcase\b/.test(snippet)) continue
-    if (snippet.includes(') + (') || snippet.includes(',')) continue
-    hits.push(snippet.slice(0, 160))
+  type Frame = { kind: 'paren' | 'brace' | 'bracket' | 'ternary'; i: number }
+  const stack: Frame[] = []
+  let i = 0
+  while (i < cleaned.length) {
+    const ch = cleaned[i]
+    const nxt = cleaned[i + 1]
+    if (ch === '?' && nxt === '.') {
+      i += 2
+      continue
+    }
+    if (ch === '?' && nxt === '?') {
+      i += 2
+      continue
+    }
+    if (ch === '?' && nxt === ':') {
+      i += 2
+      continue
+    }
+    if (ch === '(') {
+      stack.push({ kind: 'paren', i })
+      i++
+      continue
+    }
+    if (ch === '{') {
+      stack.push({ kind: 'brace', i })
+      i++
+      continue
+    }
+    if (ch === '[') {
+      stack.push({ kind: 'bracket', i })
+      i++
+      continue
+    }
+    if (ch === ')' || ch === '}' || ch === ']') {
+      const want = ch === ')' ? 'paren' : ch === '}' ? 'brace' : 'bracket'
+      while (stack.length > 0 && stack[stack.length - 1].kind !== want) stack.pop()
+      if (stack.length > 0) stack.pop()
+      i++
+      continue
+    }
+    if (ch === '?') {
+      if (stack.some((f) => f.kind === 'ternary')) {
+        hits.push(cleaned.slice(Math.max(0, i - 24), i + 48).replace(/\s+/g, ' ').trim().slice(0, 160))
+      }
+      stack.push({ kind: 'ternary', i })
+      i++
+      continue
+    }
+    if (ch === ':') {
+      if (stack.at(-1)?.kind === 'ternary') stack.pop()
+      i++
+      continue
+    }
+    i++
   }
   return hits
 }

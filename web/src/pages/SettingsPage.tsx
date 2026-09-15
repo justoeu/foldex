@@ -211,6 +211,9 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
   // The OR, not the authenticator alone: the tile and the account hero must
   // not disagree about whether the account has a second factor.
   const twoFactorOn = me !== null && hasSecondFactor(me)
+  const twoFactorChip = twoFactorOn
+    ? { label: t('settings.chip_2fa_on'), tone: 'fx-chip-ok' }
+    : { label: t('settings.chip_2fa_off'), tone: 'fx-chip-warn' }
   const [scope, setScope] = useState<HubScope>('personal')
   const [section, setSection] = useState<HubSection>(
     isHubSection(initialSection) ? initialSection : 'overview',
@@ -311,8 +314,8 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
                 icon={I.user} tone="fx-tone-accent"
                 title={t('settings.tile_account_title')} desc={t('settings.tile_account_desc')}
                 action={t('settings.tile_account_action')}
-                status={twoFactorOn ? t('settings.chip_2fa_on') : t('settings.chip_2fa_off')}
-                statusTone={twoFactorOn ? 'fx-chip-ok' : 'fx-chip-warn'}
+                status={twoFactorChip.label}
+                statusTone={twoFactorChip.tone}
                 onClick={() => setSection('account')}
               />
               <HubCard

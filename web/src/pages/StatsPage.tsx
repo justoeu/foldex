@@ -114,6 +114,12 @@ export function StatsPage() {
   )
 }
 
+function momDeltaLabel(s: StatsSummary | undefined, mom: number): string {
+  if (!s) return ''
+  const sign = mom >= 0 ? '+' : ''
+  return `${sign}${mom}%`
+}
+
 function StatsKpiStrip({
   s,
   mom,
@@ -134,7 +140,7 @@ function StatsKpiStrip({
       <KpiCard
         label={t('stats.kpi_clicks_30d')}
         value={s ? s.clicks_last_30d.toLocaleString() : '—'}
-        delta={s ? (mom >= 0 ? '+' : '') + mom + '%' : ''}
+        delta={momDeltaLabel(s, mom)}
         deltaKind={mom >= 0 ? 'up' : 'down'}
         spark={daily?.slice(-14).map((p) => p.clicks)}
       />

@@ -48,6 +48,18 @@ import { apiErrorCode } from '../../lib/apiError'
  */
 const DUMP_STALE_MS = 26 * 60 * 60 * 1000
 
+function agentJobReport(report: BackupAgentJobReport | undefined, t: TFunction) {
+  if (!report) {
+    return <span className="fx-utable-meta">{t('admin.backup_schedule_no_report')}</span>
+  }
+  if (report.capable) return <code>{report.schedule}</code>
+  return (
+    <span className="fx-chip fx-chip-warn">
+      {t(`admin.backup_reason_${report.reason}`, { defaultValue: report.reason })}
+    </span>
+  )
+}
+
 function dumpTone(missing: boolean, stale: boolean): 'warn' | 'ok' {
   if (missing || stale) return 'warn'
   return 'ok'
@@ -802,17 +814,7 @@ const AgentCard = memo(function AgentCard({
             return (
               <li key={job}>
                 <span className="fx-bkp-agent-job">{t(`admin.backup_job_${job}`)}</span>
-                {report ? (
-                  report.capable ? (
-                    <code>{report.schedule}</code>
-                  ) : (
-                    <span className="fx-chip fx-chip-warn">
-                      {t(`admin.backup_reason_${report.reason}`, { defaultValue: report.reason })}
-                    </span>
-                  )
-                ) : (
-                  <span className="fx-utable-meta">{t('admin.backup_schedule_no_report')}</span>
-                )}
+                {agentJobReport(report, t)}
               </li>
             )
           })}

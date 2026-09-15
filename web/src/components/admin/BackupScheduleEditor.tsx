@@ -137,6 +137,29 @@ function withinTimesCeiling(
  * fallback — `payloadOf` is what trims the document on the way out, so the
  * extra half costs nothing on the wire.
  */
+function scheduleSourceChip(report: BackupAgentJobReport | null | undefined, t: TFunction) {
+  if (!report) {
+    return <span className="fx-chip fx-chip-warn">{t('admin.backup_schedule_no_report')}</span>
+  }
+  const on = report.source === 'db' ? ' fx-chip-ok' : ''
+  return (
+    <span className={'fx-chip' + on}>
+      {t(`admin.backup_schedule_source_${report.source}`)}
+    </span>
+  )
+}
+
+function seedWithoutStored(
+  job: BackupJob,
+  env: BackupScheduleConfig | null,
+  baseline: BackupScheduleConfig | null | undefined,
+  fallback: BackupScheduleConfig,
+): BackupScheduleConfig {
+  if (env) return env
+  if (baseline && job === 'user_zip') return { ...fallback, enabled: false }
+  return fallback
+}
+
 export function seedDraft(
   job: BackupJob,
   stored: BackupScheduleConfig | null,
@@ -152,7 +175,7 @@ export function seedDraft(
   // as the effect of merely looking at it.
   const seed = stored
     ? { ...(env ?? fallback), ...stored }
-    : (env ?? (baseline && job === 'user_zip' ? { ...fallback, enabled: false } : fallback))
+    : seedWithoutStored(job, env, baseline, fallback)
   return withinTimesCeiling(seed, bounds)
 }
 
@@ -261,13 +284,7 @@ export const ScheduleCard = memo(function ScheduleCard({
             </p>
           ) : null}
         </div>
-        {report ? (
-          <span className={'fx-chip' + (report.source === 'db' ? ' fx-chip-ok' : '')}>
-            {t(`admin.backup_schedule_source_${report.source}`)}
-          </span>
-        ) : (
-          <span className="fx-chip fx-chip-warn">{t('admin.backup_schedule_no_report')}</span>
-        )}
+        {scheduleSourceChip(report, t)}
       </div>
 
       <div className="fx-bkp-tabs" role="tablist">

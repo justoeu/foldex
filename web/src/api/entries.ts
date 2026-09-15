@@ -290,18 +290,10 @@ export async function optimisticEntryPatch(
 
   const rollback = () => {
     for (const [key, previous] of previousLinks) {
-      qc.setQueryData<LinksCache>(key, (old) =>
-        old && Array.isArray(old.pages)
-          ? { ...old, pages: old.pages.map((page) => page?.map((l) => (l.id === id ? previous : l))) }
-          : old,
-      )
+      qc.setQueryData<LinksCache>(key, (old) => restoreLinkInCache(old, id, previous))
     }
     for (const [key, previous] of previousEntries) {
-      qc.setQueryData<EntriesCache>(key, (old) =>
-        old && Array.isArray(old.pages)
-          ? { ...old, pages: old.pages.map((page) => page?.map((e) => (e.kind === kind && e.id === id ? previous : e))) }
-          : old,
-      )
+      qc.setQueryData<EntriesCache>(key, (old) => restoreEntryInCache(old, kind, id, previous))
     }
   }
   return { patched: previousLinks.size > 0 || previousEntries.size > 0, rollback }
@@ -327,12 +319,36 @@ function firstMatchInPages<T>(
   return found
 }
 
+function restoreLinkInCache(old: LinksCache | undefined, id: number, previous: Link): LinksCache | undefined {
+  if (!old || !Array.isArray(old.pages)) return old
+  return {
+    ...old,
+    pages: old.pages.map((page) => page?.map((l) => (l.id === id ? previous : l))),
+  }
+}
+
+function restoreEntryInCache(
+  old: EntriesCache | undefined,
+  kind: string,
+  id: number,
+  previous: Entry,
+): EntriesCache | undefined {
+  if (!old || !Array.isArray(old.pages)) return old
+  return {
+    ...old,
+    pages: old.pages.map((page) => page?.map((e) => (e.kind === kind && e.id === id ? previous : e))),
+  }
+}
+
 function mapCachedLinksPatch(qc: QueryClient, id: number, patch: Partial<Pick<Link, 'pinned' | 'preview_status'>>) {
   qc.setQueriesData<LinksCache>({ queryKey: ['links'] }, (old) => {
     if (!old || !Array.isArray(old.pages)) return old
     return {
       ...old,
-      pages: old.pages.map((page) => (page ? page.map((l) => (l.id === id ? { ...l, ...patch } : l)) : page)),
+      pages: old.pages.map((page) => {
+        if (!page) return page
+        return page.map((l) => (l.id === id ? { ...l, ...patch } : l))
+      }),
     }
   })
 }
