@@ -27,6 +27,23 @@ func TestCognitiveComplexity_ExportAndInspectArchive(t *testing.T) {
 	}
 }
 
+func TestCognitiveComplexity_LoadRestoreLedgerAndManifestIntegrity(t *testing.T) {
+	cases := []struct {
+		file string
+		name string
+	}{
+		{file: "restore_ledger.go", name: "loadRestoreLedger"},
+		{file: "restore_preflight.go", name: "validateManifestIntegrity"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cognitOf(t, tc.file, tc.name)
+			assert.LessOrEqual(t, got, 15,
+				"%s cognitive=%d — extract early returns / unexported helpers, no NOSONAR", tc.name, got)
+		})
+	}
+}
+
 func cognitOf(t *testing.T, file, want string) int {
 	t.Helper()
 	fset := token.NewFileSet()

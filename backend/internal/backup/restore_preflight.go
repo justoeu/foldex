@@ -65,25 +65,39 @@ func inspectBackupArchive(ctx context.Context, zr *zip.Reader) backupArchiveInsp
 }
 
 func validateManifestIntegrity(archive *inspectedArchive, manifest *Manifest) ([]string, []string, bool) {
-	var warnings, validationErrors []string
+	warnings, fatal := manifestIdentityErrors(manifest)
+	if fatal != nil {
+		return warnings, fatal, false
+	}
+	validationErrors := manifestChecksumErrors(archive, manifest)
+	return warnings, validationErrors, len(validationErrors) > 0
+}
+
+func manifestIdentityErrors(manifest *Manifest) ([]string, []string) {
+	var warnings []string
 	if manifest.Kind != ManifestKind {
-		return warnings, []string{fmt.Sprintf("kind mismatch: got %q, want %q", manifest.Kind, ManifestKind)}, false
+		return warnings, []string{fmt.Sprintf("kind mismatch: got %q, want %q", manifest.Kind, ManifestKind)}
 	}
 	majorWant := strings.SplitN(ManifestVersion, ".", 2)[0]
 	majorGot := strings.SplitN(manifest.Version, ".", 2)[0]
 	if majorGot != majorWant {
-		return warnings, []string{fmt.Sprintf("major version mismatch: backup=%s, server=%s", manifest.Version, ManifestVersion)}, false
+		return warnings, []string{fmt.Sprintf("major version mismatch: backup=%s, server=%s", manifest.Version, ManifestVersion)}
 	}
 	if manifest.SchemaVersion > CurrentSchemaVersion {
-		return warnings, []string{fmt.Sprintf("schema_version too new: backup=%d, server=%d", manifest.SchemaVersion, CurrentSchemaVersion)}, false
+		return warnings, []string{fmt.Sprintf("schema_version too new: backup=%d, server=%d", manifest.SchemaVersion, CurrentSchemaVersion)}
 	}
 	if manifest.SchemaVersion < CurrentSchemaVersion {
 		warnings = append(warnings,
 			fmt.Sprintf("schema_version do backup (%d) é mais antigo que o atual (%d) — alguns campos serão default.", manifest.SchemaVersion, CurrentSchemaVersion))
 	}
 	if len(manifest.Checksums) > maxArchiveEntries {
-		return warnings, []string{fmt.Sprintf("manifest.checksums has %d entries (max %d) — refusing", len(manifest.Checksums), maxArchiveEntries)}, false
+		return warnings, []string{fmt.Sprintf("manifest.checksums has %d entries (max %d) — refusing", len(manifest.Checksums), maxArchiveEntries)}
 	}
+	return warnings, nil
+}
+
+func manifestChecksumErrors(archive *inspectedArchive, manifest *Manifest) []string {
+	var validationErrors []string
 	for _, name := range sortedKeys(archive.hashes) {
 		if name != snapshotDBName && !strings.HasPrefix(name, filesPrefix) {
 			continue
@@ -103,7 +117,7 @@ func validateManifestIntegrity(archive *inspectedArchive, manifest *Manifest) ([
 			validationErrors = append(validationErrors, fmt.Sprintf("checksum mismatch: %s", name))
 		}
 	}
-	return warnings, validationErrors, len(validationErrors) > 0
+	return validationErrors
 }
 
 func validateArchiveFileNames(archive *inspectedArchive) error {
