@@ -101,13 +101,7 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
 	// The tenant predicate always leads, so folder_user_parent_name_idx /
 	// folder_user_root_name_idx (migration 000017) can serve the ORDER BY.
 	args := []any{int64(uid)}
-	where := "WHERE f.user_id = $1"
-	if q.ParentID != nil {
-		args = append(args, *q.ParentID)
-		where += " AND f.parent_id = $2"
-	} else if q.RootOnly {
-		where += " AND f.parent_id IS NULL"
-	}
+	where := listWhere(q, &args)
 	if q.Slim {
 		return r.listSlim(ctx, where, args)
 	}
@@ -164,16 +158,10 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
 	defer rows.Close()
 	out := make([]Folder, 0)
 	for rows.Next() {
-		var f Folder
-		var passwordHash *string
-		var previewsJSON []byte
-		var previewFoldersJSON []byte
-		if err := rows.Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &passwordHash, &f.PasswordHint, &f.LinkCount, &f.FolderCount, &previewsJSON, &previewFoldersJSON); err != nil {
+		f, previewsJSON, previewFoldersJSON, err := scanListedFolderRow(rows)
+		if err != nil {
 			return nil, err
 		}
-		f.HasPassword = passwordHash != nil
-		f.Previews = []PreviewTile{}
-		f.PreviewFolders = []PreviewFolder{}
 		// Redaction: a protected folder's actual contents (link/subfolder
 		// names, thumbnails) never leave the server via a list response,
 		// regardless of whether the caller unlocked it — CheckUnlock gates
@@ -182,20 +170,53 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
 		// entirely (rather than unmarshaling then discarding) also avoids
 		// doing pointless work for every protected folder in a listing.
 		if !f.HasPassword {
-			if len(previewsJSON) > 0 {
-				if err := json.Unmarshal(previewsJSON, &f.Previews); err != nil {
-					return nil, fmt.Errorf("unmarshal previews: %w", err)
-				}
-			}
-			if len(previewFoldersJSON) > 0 {
-				if err := json.Unmarshal(previewFoldersJSON, &f.PreviewFolders); err != nil {
-					return nil, fmt.Errorf("unmarshal preview_folders: %w", err)
-				}
+			if err := unmarshalFolderPreviews(&f, previewsJSON, previewFoldersJSON); err != nil {
+				return nil, err
 			}
 		}
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+func listWhere(q ListQuery, args *[]any) string {
+	where := "WHERE f.user_id = $1"
+	if q.ParentID != nil {
+		*args = append(*args, *q.ParentID)
+		return where + " AND f.parent_id = $2"
+	}
+	if q.RootOnly {
+		return where + " AND f.parent_id IS NULL"
+	}
+	return where
+}
+
+func scanListedFolderRow(rows pgx.Rows) (Folder, []byte, []byte, error) {
+	var f Folder
+	var passwordHash *string
+	var previewsJSON []byte
+	var previewFoldersJSON []byte
+	if err := rows.Scan(&f.ID, &f.Name, &f.Color, &f.ParentID, &f.CreatedAt, &passwordHash, &f.PasswordHint, &f.LinkCount, &f.FolderCount, &previewsJSON, &previewFoldersJSON); err != nil {
+		return Folder{}, nil, nil, err
+	}
+	f.HasPassword = passwordHash != nil
+	f.Previews = []PreviewTile{}
+	f.PreviewFolders = []PreviewFolder{}
+	return f, previewsJSON, previewFoldersJSON, nil
+}
+
+func unmarshalFolderPreviews(f *Folder, previewsJSON, previewFoldersJSON []byte) error {
+	if len(previewsJSON) > 0 {
+		if err := json.Unmarshal(previewsJSON, &f.Previews); err != nil {
+			return fmt.Errorf("unmarshal previews: %w", err)
+		}
+	}
+	if len(previewFoldersJSON) > 0 {
+		if err := json.Unmarshal(previewFoldersJSON, &f.PreviewFolders); err != nil {
+			return fmt.Errorf("unmarshal preview_folders: %w", err)
+		}
+	}
+	return nil
 }
 
 // listSlim is the picker/flat-tree projection: base folder columns only.
@@ -250,86 +271,17 @@ func (r *Repository) Get(ctx context.Context, uid authctx.UserID, id int64) (Fol
 }
 
 func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, in UpdateInput) (Folder, error) {
-	sets := []string{}
-	args := []any{}
-	i := 1
-	if in.Name != nil {
-		sets = append(sets, fmt.Sprintf("name = $%d", i))
-		args = append(args, *in.Name)
-		i++
+	args, err := prepareFolderUpdate(uid, id, in)
+	if err != nil {
+		return Folder{}, err
 	}
-	if in.Color != nil {
-		sets = append(sets, fmt.Sprintf("color = $%d", i))
-		args = append(args, *in.Color)
-		i++
-	}
-
-	// Hashing (pure, no DB) happens upfront; the actual authorization check
-	// — "does CurrentPassword match the folder's CURRENT hash" — has to read
-	// live state, so it happens inside the tx below alongside the cycle
-	// check, under the same SERIALIZABLE isolation.
-	var newPasswordHash *string
-	if in.PasswordSet && in.Password != nil {
-		h, err := pwhash.Hash(*in.Password)
-		if err != nil {
-			return Folder{}, fmt.Errorf("hash new password: %w", err)
-		}
-		newPasswordHash = &h
-	}
-	if in.PasswordSet {
-		sets = append(sets, fmt.Sprintf("password_hash = $%d", i))
-		args = append(args, newPasswordHash)
-		i++
-	}
-
-	// Hint handling. Removing the password (PasswordSet && Password == nil)
-	// also clears any hint — a hint for a nonexistent password is dead data.
-	// Otherwise apply an explicit hint change. Password-only writes leave
-	// the column untouched, so updateOnce still loads the live hint and
-	// runs checkHintNotPassword against the new hash (INV-067).
-	clearHintWithPassword := in.PasswordSet && in.Password == nil
-	var hintToValidate *string
-	var noHint *string
-	if clearHintWithPassword {
-		sets = append(sets, fmt.Sprintf("password_hint = $%d", i))
-		args = append(args, noHint)
-		i++
-	} else if in.PasswordHintSet {
-		sets = append(sets, fmt.Sprintf("password_hint = $%d", i))
-		args = append(args, in.PasswordHint)
-		i++
-		hintToValidate = in.PasswordHint
-	}
-
-	// parent_id reassignment needs a tx so the cycle check and the UPDATE see
-	// the same snapshot. A naive check-then-update on the pool let another
-	// request slip a move between the two reads and create A→B→A in spite of
-	// the guard. SERIALIZABLE isolation is the simplest correct fix here:
-	// concurrent moves either serialize cleanly or one of them is retried.
-	cycleCheckNeeded := in.ParentIDSet && in.ParentID != nil
-	if in.ParentIDSet {
-		if in.ParentID != nil && *in.ParentID == id {
-			return Folder{}, fmt.Errorf("parent_id cannot equal id")
-		}
-		sets = append(sets, fmt.Sprintf("parent_id = $%d", i))
-		args = append(args, in.ParentID)
-		i++
-	}
-	if len(sets) == 0 {
+	if args == nil {
 		return r.Get(ctx, uid, id)
 	}
-	args = append(args, int64(uid), id)
-	q := fmt.Sprintf(`UPDATE folder SET %s WHERE user_id = $%d AND id = $%d
-                      RETURNING id, name, color, parent_id, created_at, password_hash, password_hint`, strings.Join(sets, ", "), i, i+1)
 
 	var lastErr error
 	for attempt := 0; attempt < maxSerializationRetries; attempt++ {
-		f, err := r.updateOnce(ctx, &folderUpdate{
-			uid: uid, id: id, in: in, q: q, args: args,
-			cycleCheckNeeded: cycleCheckNeeded,
-			newPasswordHash:  newPasswordHash,
-			hintToValidate:   hintToValidate,
-		})
+		f, err := r.updateOnce(ctx, args)
 		if err == nil {
 			return f, nil
 		}
@@ -339,6 +291,101 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 		lastErr = err
 	}
 	return Folder{}, lastErr
+}
+
+// prepareFolderUpdate hashes the new password (pure) and builds the UPDATE.
+// Authorization against the live hash happens inside the SERIALIZABLE tx.
+func prepareFolderUpdate(uid authctx.UserID, id int64, in UpdateInput) (*folderUpdate, error) {
+	b := updateSetBuilder{i: 1}
+	b.appendString("name", in.Name)
+	b.appendString("color", in.Color)
+
+	newPasswordHash, err := b.appendPassword(in)
+	if err != nil {
+		return nil, err
+	}
+	hintToValidate := b.appendHint(in)
+	if err := b.appendParent(id, in); err != nil {
+		return nil, err
+	}
+	if len(b.sets) == 0 {
+		return nil, nil
+	}
+	args := append(b.args, int64(uid), id)
+	q := fmt.Sprintf(`UPDATE folder SET %s WHERE user_id = $%d AND id = $%d
+                      RETURNING id, name, color, parent_id, created_at, password_hash, password_hint`, strings.Join(b.sets, ", "), b.i, b.i+1)
+	return &folderUpdate{
+		uid: uid, id: id, in: in, q: q, args: args,
+		cycleCheckNeeded: in.ParentIDSet && in.ParentID != nil,
+		newPasswordHash:  newPasswordHash,
+		hintToValidate:   hintToValidate,
+	}, nil
+}
+
+type updateSetBuilder struct {
+	sets []string
+	args []any
+	i    int
+}
+
+func (b *updateSetBuilder) appendString(col string, v *string) {
+	if v == nil {
+		return
+	}
+	b.sets = append(b.sets, fmt.Sprintf("%s = $%d", col, b.i))
+	b.args = append(b.args, *v)
+	b.i++
+}
+
+func (b *updateSetBuilder) appendPassword(in UpdateInput) (*string, error) {
+	var newPasswordHash *string
+	if in.PasswordSet && in.Password != nil {
+		h, err := pwhash.Hash(*in.Password)
+		if err != nil {
+			return nil, fmt.Errorf("hash new password: %w", err)
+		}
+		newPasswordHash = &h
+	}
+	if in.PasswordSet {
+		b.sets = append(b.sets, fmt.Sprintf("password_hash = $%d", b.i))
+		b.args = append(b.args, newPasswordHash)
+		b.i++
+	}
+	return newPasswordHash, nil
+}
+
+func (b *updateSetBuilder) appendHint(in UpdateInput) *string {
+	// Removing the password also clears any hint — a hint for a nonexistent
+	// password is dead data. Password-only writes leave the column untouched,
+	// so updateOnce still loads the live hint and runs checkHintNotPassword
+	// against the new hash (INV-067).
+	if in.PasswordSet && in.Password == nil {
+		var noHint *string
+		b.sets = append(b.sets, fmt.Sprintf("password_hint = $%d", b.i))
+		b.args = append(b.args, noHint)
+		b.i++
+		return nil
+	}
+	if in.PasswordHintSet {
+		b.sets = append(b.sets, fmt.Sprintf("password_hint = $%d", b.i))
+		b.args = append(b.args, in.PasswordHint)
+		b.i++
+		return in.PasswordHint
+	}
+	return nil
+}
+
+func (b *updateSetBuilder) appendParent(id int64, in UpdateInput) error {
+	if !in.ParentIDSet {
+		return nil
+	}
+	if in.ParentID != nil && *in.ParentID == id {
+		return fmt.Errorf("parent_id cannot equal id")
+	}
+	b.sets = append(b.sets, fmt.Sprintf("parent_id = $%d", b.i))
+	b.args = append(b.args, in.ParentID)
+	b.i++
+	return nil
 }
 
 type folderUpdate struct {
@@ -641,8 +688,28 @@ func (r *Repository) deleteCascade(ctx context.Context, uid authctx.UserID, id i
 	if err := authorizeFolderDelete(ctx, tx, uid, id, unlockKey, unlockToken); err != nil {
 		return nil, err
 	}
+	if err := materializeCascadeSubtree(ctx, tx, uid, id); err != nil {
+		return nil, err
+	}
 
-	if _, err := tx.Exec(ctx, `
+	deletedFolderIDs, protectedDescendants, err := lockCascadeSubtree(ctx, tx, uid, id)
+	if err != nil {
+		return nil, err
+	}
+	if protectedDescendants > 0 {
+		return nil, &descendantProtectedError{Count: protectedDescendants}
+	}
+	if err := deleteCascadeContents(ctx, tx, uid); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return deletedFolderIDs, nil
+}
+
+func materializeCascadeSubtree(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int64) error {
+	_, err := tx.Exec(ctx, `
         CREATE TEMP TABLE _cascade_subtree ON COMMIT DROP AS
         WITH RECURSIVE subtree AS (
           SELECT id FROM folder WHERE user_id = $2 AND id = $1
@@ -652,9 +719,14 @@ func (r *Repository) deleteCascade(ctx context.Context, uid authctx.UserID, id i
           WHERE f.user_id = $2
         )
         SELECT id FROM subtree
-    `, id, int64(uid)); err != nil {
-		return nil, fmt.Errorf("materialize cascade subtree: %w", err)
+    `, id, int64(uid))
+	if err != nil {
+		return fmt.Errorf("materialize cascade subtree: %w", err)
 	}
+	return nil
+}
+
+func lockCascadeSubtree(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int64) ([]int64, int64, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT f.id, f.password_hash
 		FROM folder f
@@ -664,16 +736,16 @@ func (r *Repository) deleteCascade(ctx context.Context, uid authctx.UserID, id i
 		FOR UPDATE
 	`, int64(uid))
 	if err != nil {
-		return nil, fmt.Errorf("lock cascade subtree: %w", err)
+		return nil, 0, fmt.Errorf("lock cascade subtree: %w", err)
 	}
+	defer rows.Close()
 	var protectedDescendants int64
 	deletedFolderIDs := make([]int64, 0)
 	for rows.Next() {
 		var folderID int64
 		var passwordHash *string
 		if err := rows.Scan(&folderID, &passwordHash); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("scan cascade subtree: %w", err)
+			return nil, 0, fmt.Errorf("scan cascade subtree: %w", err)
 		}
 		deletedFolderIDs = append(deletedFolderIDs, folderID)
 		if folderID != id && passwordHash != nil {
@@ -681,43 +753,38 @@ func (r *Repository) deleteCascade(ctx context.Context, uid authctx.UserID, id i
 		}
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, fmt.Errorf("read cascade subtree: %w", err)
+		return nil, 0, fmt.Errorf("read cascade subtree: %w", err)
 	}
-	rows.Close()
-	if protectedDescendants > 0 {
-		return nil, &descendantProtectedError{Count: protectedDescendants}
-	}
+	return deletedFolderIDs, protectedDescendants, nil
+}
 
+func deleteCascadeContents(ctx context.Context, tx pgx.Tx, uid authctx.UserID) error {
 	if err := notemedia.ReleaseFolderSubtreeRefs(ctx, tx, uid); err != nil {
-		return nil, err
+		return err
 	}
 	if err := entityrefs.PurgeFolderSubtree(ctx, tx, uid); err != nil {
-		return nil, err
+		return err
 	}
 	if _, err := tx.Exec(ctx, `
         DELETE FROM link
         WHERE user_id = $1 AND folder_id IN (SELECT id FROM _cascade_subtree)
     `, int64(uid)); err != nil {
-		return nil, fmt.Errorf("delete links in subtree: %w", err)
+		return fmt.Errorf("delete links in subtree: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
         DELETE FROM note
         WHERE user_id = $1 AND folder_id IN (SELECT id FROM _cascade_subtree)
     `, int64(uid)); err != nil {
-		return nil, fmt.Errorf("delete notes in subtree: %w", err)
+		return fmt.Errorf("delete notes in subtree: %w", err)
 	}
 	ct, err := tx.Exec(ctx, `
         DELETE FROM folder WHERE user_id = $1 AND id IN (SELECT id FROM _cascade_subtree)
 	`, int64(uid))
 	if err != nil {
-		return nil, fmt.Errorf("delete folder subtree: %w", err)
+		return fmt.Errorf("delete folder subtree: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return nil, domainerr.ErrNotFound
+		return domainerr.ErrNotFound
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	return deletedFolderIDs, nil
+	return nil
 }

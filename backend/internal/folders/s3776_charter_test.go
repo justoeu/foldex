@@ -59,9 +59,9 @@ func TestS3776_INV064_CascadeDoesNotCrossUnprovedPasswordBoundary(t *testing.T) 
 	require.ErrorIs(t, wrapped, ErrDescendantProtected)
 	assert.EqualValues(t, 2, wrapped.Count)
 
-	fn := parseFunc(t, "repository.go", "deleteCascade")
+	fn := parseFunc(t, "repository.go", "lockCascadeSubtree")
 	require.True(t, cascadeCountsProtectedDescendantsExcludingRoot(fn),
-		"deleteCascade must count password_hash descendants other than the root — an unlock for the root never authorizes a locked child")
+		"cascade must count password_hash descendants other than the root — an unlock for the root never authorizes a locked child")
 }
 
 func parseFunc(t *testing.T, file, name string) *ast.FuncDecl {

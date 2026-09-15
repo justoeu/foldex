@@ -131,36 +131,56 @@ func (u *UpdateInput) Normalize() {
 }
 
 func (u UpdateInput) Validate() error {
-	if u.Name != nil {
-		if *u.Name == "" {
-			return errMsg("name is required")
-		}
-		if len(*u.Name) > 200 {
-			return errMsg("name too long (max 200)")
-		}
+	if err := u.validateName(); err != nil {
+		return err
 	}
 	if u.Color != nil && !cssvalid.IsValidColor(*u.Color) {
 		return errMsg("color must be a hex (#abc, #aabbcc) or linear-gradient(135deg, #hex, #hex)")
 	}
-	if u.PasswordSet && u.Password != nil && len(*u.Password) < minPasswordLen {
+	if err := u.validatePassword(); err != nil {
+		return err
+	}
+	return u.validateHint()
+}
+
+func (u UpdateInput) validateName() error {
+	if u.Name == nil {
+		return nil
+	}
+	if *u.Name == "" {
+		return errMsg("name is required")
+	}
+	if len(*u.Name) > 200 {
+		return errMsg("name too long (max 200)")
+	}
+	return nil
+}
+
+func (u UpdateInput) validatePassword() error {
+	if !u.PasswordSet || u.Password == nil {
+		return nil
+	}
+	if len(*u.Password) < minPasswordLen {
 		return errMsg(fmt.Sprintf("password must be at least %d characters", minPasswordLen))
 	}
-	if u.PasswordSet && u.Password != nil && len(*u.Password) > pwhash.MaxPlainBytes {
+	if len(*u.Password) > pwhash.MaxPlainBytes {
 		return errMsg(fmt.Sprintf("password must be at most %d bytes", pwhash.MaxPlainBytes))
+	}
+	return nil
+}
+
+func (u UpdateInput) validateHint() error {
+	if !u.PasswordHintSet {
+		return nil
 	}
 	// hint == password equality is checked in the repository (it needs the
 	// folder's effective hash); here we only bound length. When the hint is
 	// set alongside a new password, we can also catch equality early.
-	if u.PasswordHintSet {
-		var pw *string
-		if u.PasswordSet {
-			pw = u.Password
-		}
-		if err := validateHint(u.PasswordHint, pw); err != nil {
-			return err
-		}
+	var pw *string
+	if u.PasswordSet {
+		pw = u.Password
 	}
-	return nil
+	return validateHint(u.PasswordHint, pw)
 }
 
 // normalizeHint trims a hint and collapses an empty/blank result to nil so a
