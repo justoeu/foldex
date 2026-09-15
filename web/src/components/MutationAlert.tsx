@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 
-export function MutationAlert({ message, onClose }: { message: string; onClose: () => void }) {
+export function MutationAlert({ message, onClose }: Readonly<{ message: string; onClose: () => void }>) {
   const { t } = useTranslation()
   return (
     <div

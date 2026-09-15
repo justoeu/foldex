@@ -7,14 +7,14 @@ import type { Entry, MergeSource } from '../api/types'
 
 export type NoteEntry = Extract<Entry, { kind: 'note' }>
 
-type Props = {
+type Props = Readonly<{
   note: NoteEntry
   onEdit: (id: number) => void
   onMergeWith?: (source: MergeSource, targetId: number) => void
   onDelete: (note: NoteEntry) => void
   onPin: (note: NoteEntry, pinned: boolean) => void
   onOpen: (note: NoteEntry) => void
-}
+}>
 
 // Density mirrors LinkCard's densityFor: tall when a cover image is present,
 // medium when there's a body snippet to show, short otherwise.

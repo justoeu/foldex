@@ -5,10 +5,10 @@ import { Icon, I } from '../icons'
 import { createInvite, listInvites, revokeInvite, type Invite } from '../../api/admin'
 import { ASSIGNABLE_ROLES, type Role } from '../../auth/types'
 
-type Props = {
+type Props = Readonly<{
   onError: (err: unknown) => void
   onClearError: () => void
-}
+}>
 
 /**
  * Invitations live next to the account table, not inside it: minting a user

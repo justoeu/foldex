@@ -38,6 +38,11 @@ const drillDatabase = "foldex_drill"
 // the environment point clients at a socket the server never opened.
 const drillPort = "5432"
 
+const (
+	pgdataFlag     = "--pgdata="
+	pgusernameFlag = "--username="
+)
+
 // drillRuns is the slice of RunStore the drill needs; a fake stands in for it
 // in the unit tests, which have no database.
 type drillRuns interface {
@@ -201,7 +206,7 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 		// exactly the path that would RemoveAll under a live server.
 		if clusterInitialized {
 			stopCtx, done := context.WithTimeout(context.Background(), 30*time.Second)
-			if err := j.command(stopCtx, "pg_ctl", "stop", "--pgdata="+dataDir, "--mode=immediate", "--wait").Run(); err != nil {
+			if err := j.command(stopCtx, "pg_ctl", "stop", pgdataFlag+dataDir, "--mode=immediate", "--wait").Run(); err != nil {
 				// A stop that fails on a cluster that never started is the
 				// expected noise; one that fails otherwise deserves a line —
 				// the RemoveAll below may be about to race a live postmaster.
@@ -244,8 +249,8 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 	// artifact restores without remapping), unix socket only, tuned for a
 	// throwaway (fsync off is safe for data that dies with the run).
 	if err := j.exec(ctx, "initdb",
-		"--pgdata="+dataDir,
-		"--username="+j.cfg.PGUser,
+		pgdataFlag+dataDir,
+		pgusernameFlag+j.cfg.PGUser,
 		"--locale=C",
 		"--encoding=UTF8",
 	); err != nil {
@@ -256,7 +261,7 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 		" -c fsync=off -c synchronous_commit=off -c shared_buffers=64MB -c max_connections=10 -c autovacuum=off",
 		dir, drillPort)
 	if err := j.exec(ctx, "pg_ctl", "start",
-		"--pgdata="+dataDir,
+		pgdataFlag+dataDir,
 		"--wait", "--timeout=60",
 		"--log="+filepath.Join(dir, "postgres.log"),
 		"-o", serverOpts,
@@ -269,7 +274,7 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 	// the drill creates the target the way a real disaster recovery would.
 	if err := j.exec(ctx, "createdb",
 		"--host="+dir, "--port="+drillPort,
-		"--username="+j.cfg.PGUser,
+		pgusernameFlag+j.cfg.PGUser,
 		"--template=template0", "--encoding=UTF8",
 		drillDatabase,
 	); err != nil {
@@ -291,7 +296,7 @@ func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, 
 	// roles, and keeps ownership.
 	if err := j.exec(ctx, "pg_restore",
 		"--host="+dir, "--port="+drillPort,
-		"--username="+j.cfg.PGUser,
+		pgusernameFlag+j.cfg.PGUser,
 		"--dbname="+drillDatabase,
 		"--no-owner", "--no-privileges",
 		"--jobs=1", "--exit-on-error",

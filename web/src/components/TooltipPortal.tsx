@@ -123,7 +123,7 @@ export function TooltipPortal() {
   )
 }
 
-function TooltipChip({ text, rect, side }: { text: string; rect: DOMRect; side: Side }) {
+function TooltipChip({ text, rect, side }: Readonly<{ text: string; rect: DOMRect; side: Side }>) {
   const ref = useRef<HTMLDivElement>(null)
   // Render at (0,0) hidden first so we can measure, then place + reveal in
   // the same paint to avoid a visible jump.

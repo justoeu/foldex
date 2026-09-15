@@ -10,7 +10,7 @@ import { actionLabel } from '../../lib/auditLabels'
  * the server computed — the client never derives a comparison it cannot see the
  * data for.
  */
-export function AuditMetrics({ stats }: { stats: AuditStats }) {
+export function AuditMetrics({ stats }: Readonly<{ stats: AuditStats }>) {
   const { t } = useTranslation()
   const s = stats.totals
   const cards: { key: string; value: number; d: Delta; hint: string; tone: string }[] = [
@@ -65,7 +65,7 @@ const SERIES = ['logins', 'failed', 'admin', 'content'] as const
  * dependency in the bundle of every visit for one screen an administrator opens
  * occasionally.
  */
-export function AuditDaysChart({ stats }: { stats: AuditStats }) {
+export function AuditDaysChart({ stats }: Readonly<{ stats: AuditStats }>) {
   const { t, i18n } = useTranslation()
   const columns = dayColumns(stats.days, i18n.language)
   const total = stats.days.reduce((a, d) => a + d.logins + d.failed + d.admin + d.content, 0)
@@ -116,7 +116,7 @@ export function AuditDaysChart({ stats }: { stats: AuditStats }) {
 }
 
 /** Share of each action in the period. */
-export function AuditDistribution({ stats }: { stats: AuditStats }) {
+export function AuditDistribution({ stats }: Readonly<{ stats: AuditStats }>) {
   const { t } = useTranslation()
   const max = Math.max(1, ...stats.distribution.map((d) => d.count))
   const total = stats.distribution.reduce((a, d) => a + d.count, 0)

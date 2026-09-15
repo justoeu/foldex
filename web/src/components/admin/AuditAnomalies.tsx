@@ -20,12 +20,12 @@ import { useBlockControls } from './AuditSignals'
  */
 const ANOMALY_WINDOWS: AnomalyWindow[] = ['15m', '1h', '24h', '7d']
 
-type Props = {
+type Props = Readonly<{
   /** Whether the blocklist may be written. Affordance; the route is the gate. */
   canBlock: boolean
   /** Hands an address to the trail below, already filtered. */
   onInspect: (ip: string) => void
-}
+}>
 
 /**
  * Origins the instance currently considers anomalous, worst first.
@@ -123,13 +123,13 @@ export function AuditAnomalies({ canBlock, onInspect }: Props) {
 
 function AnomalyRow({
   anomaly, canBlock, busy, onInspect, onBlock,
-}: {
+}: Readonly<{
   anomaly: Anomaly
   canBlock: boolean
   busy: boolean
   onInspect: (ip: string) => void
   onBlock: (ip: string, reason: string) => void
-}) {
+}>) {
   const { t } = useTranslation()
   const minutes = spanMinutes(anomaly)
   const reason = t(blockReasonKey(anomaly.kind), {

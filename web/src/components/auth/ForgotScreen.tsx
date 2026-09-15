@@ -17,7 +17,7 @@ import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
  * "we sent you an e-mail", because the second is a claim the product cannot
  * honestly make about an address it will not confirm.
  */
-export function ForgotScreen({ onBack }: { onBack: () => void }) {
+export function ForgotScreen({ onBack }: Readonly<{ onBack: () => void }>) {
   const { t, i18n } = useTranslation()
   const [email, setEmail] = useState('')
   const [sent, setSent] = useState(false)

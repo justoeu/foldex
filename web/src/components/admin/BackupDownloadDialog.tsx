@@ -28,12 +28,12 @@ export function BackupDownloadDialog({
   budget,
   onCancel,
   onConfirm,
-}: {
+}: Readonly<{
   filename: string
   budget: BackupDownloadBudget | null
   onCancel: () => void
   onConfirm: (password: string) => Promise<void>
-}) {
+}>) {
   const { t } = useTranslation()
   const dialogRef = useRef<HTMLDivElement>(null)
   const copier = useCopy()

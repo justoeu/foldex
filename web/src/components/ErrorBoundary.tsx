@@ -1,7 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
-type Props = { children: ReactNode }
+type Props = Readonly<{ children: ReactNode }>
 type State = { error: Error | null }
 
 // ErrorBoundary catches uncaught render-time exceptions anywhere below it and
@@ -35,7 +35,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 }
 
-function ErrorFallback({ error, onReload }: { error: Error; onReload: () => void }) {
+function ErrorFallback({ error, onReload }: Readonly<{ error: Error; onReload: () => void }>) {
   const { t } = useTranslation()
   return (
     <div

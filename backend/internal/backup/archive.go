@@ -110,7 +110,7 @@ func archiveEntryLimit(name string) int64 {
 	switch name {
 	case "manifest.json":
 		return maxManifestJSONBytes
-	case "database.json":
+	case snapshotDBName:
 		return maxDatabaseJSONBytes
 	default:
 		return maxArchiveFileBytes
@@ -134,7 +134,7 @@ func hashAtMost(ctx context.Context, entry *zip.File, max int64) (string, int64,
 	if closeErr != nil {
 		return "", n, closeErr
 	}
-	return "sha256:" + hex.EncodeToString(h.Sum(nil)), n, nil
+	return sha256Prefix + hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
 type contextReader struct {

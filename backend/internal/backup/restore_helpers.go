@@ -98,7 +98,7 @@ func prepareNoteMediaRestore(ctx context.Context, snap *Snapshot, zr *zip.Reader
 		}
 	}()
 	spool := newNoteMediaSpool()
-	fileEntries := zipFileEntries(zr, "files/")
+	fileEntries := zipFileEntries(zr, filesPrefix)
 	for i := range snap.Notes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -128,7 +128,7 @@ func spoolNoteMedia(ctx context.Context, note *NoteRow, fileEntries map[string]*
 		if _, exists := prepared.mapping[oldKey]; exists {
 			continue
 		}
-		entry, exists := fileEntries["files/"+oldKey]
+		entry, exists := fileEntries[filesPrefix+oldKey]
 		if !exists {
 			continue
 		}
@@ -144,7 +144,7 @@ func spoolNoteMedia(ctx context.Context, note *NoteRow, fileEntries map[string]*
 			return err
 		}
 		prepared.files[oldKey] = file
-		prepared.mapping[oldKey] = "notes/" + uuid.NewString() + "." + opt.Ext
+		prepared.mapping[oldKey] = notesPrefix + uuid.NewString() + "." + opt.Ext
 	}
 	note.BodyHTML = notemedia.Rewrite(note.BodyHTML, prepared.mapping)
 	if note.CoverURL != nil {

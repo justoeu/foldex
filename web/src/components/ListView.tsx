@@ -13,7 +13,7 @@ import type { Entry, Folder, Link } from '../api/types'
 import type { Sort } from '../lib/viewPrefs'
 type NoteEntry = Extract<Entry, { kind: 'note' }>
 
-type Props = {
+type Props = Readonly<{
   folders: Folder[]
   entries: Entry[]
   sort: Sort
@@ -21,7 +21,7 @@ type Props = {
   onEditNote: (id: number) => void
   onOpenFolder: (id: number) => void
   onEditFolder: (f: Folder) => void
-}
+}>
 
 // Table-style list view. Folders rendered as rows alongside links and notes.
 // Density picker doesn't apply here — the list is one column by design.

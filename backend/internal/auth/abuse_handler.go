@@ -15,6 +15,8 @@ import (
 	"foldex/internal/pkg/httperr"
 )
 
+const logAbusePolicyGet = "abuse policy get"
+
 // AbuseHandler serves the abuse-defence surface — ADR-47.
 //
 // Its own type rather than more methods on AdminHandler, for policy.Handler's
@@ -74,7 +76,7 @@ func (h *AbuseHandler) Mount(r chi.Router) {
 func (h *AbuseHandler) GetPolicy(w http.ResponseWriter, r *http.Request) {
 	p, err := h.policy.Get(r.Context())
 	if err != nil {
-		h.logger.Error("abuse policy get", "err", err)
+		h.logger.Error(logAbusePolicyGet, "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
@@ -108,7 +110,7 @@ func (h *AbuseHandler) canWrite(r *http.Request) bool {
 func (h *AbuseHandler) PutPolicy(w http.ResponseWriter, r *http.Request) {
 	current, err := h.policy.Get(r.Context())
 	if err != nil {
-		h.logger.Error("abuse policy get", "err", err)
+		h.logger.Error(logAbusePolicyGet, "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
@@ -173,7 +175,7 @@ func decodeInto(w http.ResponseWriter, r *http.Request,
 func (h *AbuseHandler) Anomalies(w http.ResponseWriter, r *http.Request) {
 	p, err := h.policy.Get(r.Context())
 	if err != nil {
-		h.logger.Error("abuse policy get", "err", err)
+		h.logger.Error(logAbusePolicyGet, "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}

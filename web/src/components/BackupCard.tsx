@@ -12,9 +12,9 @@ import { unreachableResources, useDepStatus } from '../api/status'
 import { apiErrorText } from '../lib/apiError'
 import { BackupRestoreDialog } from './BackupRestoreDialog'
 
-type Props = {
+type Props = Readonly<{
   onRestored: () => void
-}
+}>
 
 export function BackupCard({ onRestored }: Props) {
   const { t } = useTranslation()
@@ -100,9 +100,10 @@ export function BackupCard({ onRestored }: Props) {
           <div style={{ fontFamily: 'var(--fx-mono)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--fx-ink-4)', marginTop: 6 }}>
             {t('backup.restore_section_title')}
           </div>
-          <div
+          <label
             className={'fx-backup-dropzone' + (isDragging ? ' fx-backup-dropzone-drag' : '')}
             style={{
+              display: 'block',
               border: '1.5px dashed var(--fx-border)',
               borderRadius: 12,
               padding: 22,
@@ -119,7 +120,16 @@ export function BackupCard({ onRestored }: Props) {
               setIsDragging(false)
               if (!storageDown) handleFile(e.dataTransfer.files?.[0] ?? null)
             }}
-            onClick={() => { if (!storageDown) fileRef.current?.click() }}
+            onClick={(e) => {
+              if (storageDown) {
+                e.preventDefault()
+                return
+              }
+              const input = fileRef.current
+              if (!input || e.target === input) return
+              e.preventDefault()
+              input.click()
+            }}
           >
             <Icon d={I.upload} size={22} />
             <div style={{ marginTop: 6, color: 'var(--fx-ink-3)', fontSize: 13 }}>
@@ -133,7 +143,7 @@ export function BackupCard({ onRestored }: Props) {
               disabled={storageDown}
               onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
             />
-          </div>
+          </label>
 
           {history.length > 0 && (
             <>

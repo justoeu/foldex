@@ -20,7 +20,7 @@ import { hasSecondFactor, type AuthUser } from '../../auth/types'
  * be visible together for the ordering to be obvious instead of discovered
  * through a 409.
  */
-export function GoogleRow({ user }: { user: AuthUser }) {
+export function GoogleRow({ user }: Readonly<{ user: AuthUser }>) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const { reload } = useAuth()

@@ -598,18 +598,18 @@ describe('FolderCard', () => {
       <FolderCard folder={makeFolder({ link_count: 0, preview_links: [] })} onOpen={vi.fn()} />,
     )
     const root = container.querySelector('.fx-folder-card') as HTMLElement
-    fireEvent.dragOver(root, {
-      dataTransfer: { types: ['application/x-foldex-link'], dropEffect: '' },
-    })
-    fireEvent.dragOver(root, {
-      dataTransfer: { types: ['application/x-foldex-note'], dropEffect: '' },
-    })
-    fireEvent.dragOver(root, {
-      dataTransfer: { types: ['application/x-foldex-folder'], getData: () => '99', dropEffect: '' },
-    })
-    fireEvent.dragOver(root, {
-      dataTransfer: { types: ['text/plain'], dropEffect: '' },
-    })
+    const linkDt = { types: ['application/x-foldex-link'], dropEffect: '' }
+    fireEvent.dragOver(root, { dataTransfer: linkDt })
+    expect(linkDt.dropEffect).toBe('move')
+    const noteDt = { types: ['application/x-foldex-note'], dropEffect: '' }
+    fireEvent.dragOver(root, { dataTransfer: noteDt })
+    expect(noteDt.dropEffect).toBe('move')
+    const folderDt = { types: ['application/x-foldex-folder'], getData: () => '99', dropEffect: '' }
+    fireEvent.dragOver(root, { dataTransfer: folderDt })
+    expect(folderDt.dropEffect).toBe('move')
+    const plainDt = { types: ['text/plain'], dropEffect: '' }
+    fireEvent.dragOver(root, { dataTransfer: plainDt })
+    expect(plainDt.dropEffect).toBe('')
   })
 
   it('renders og image, favicon, and letter fallback tiles', () => {

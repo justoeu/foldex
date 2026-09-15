@@ -15,13 +15,13 @@ import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useHasPermission } from '../auth/AuthProvider'
 import type { Link } from '../api/types'
 
-type Props = {
+type Props = Readonly<{
   open: boolean
   onClose: () => void
   onOpenFolder?: (id: number) => void
   onRevealLink?: (link: Link) => void
   onEditLink?: (link: Link) => void
-}
+}>
 
 // Search paints at most 12 links + 12 notes. Fetching 200 rows to fill that
 // is the N1-NEX-009 overfetch; 24 mixed rows is enough to fill both lists.
@@ -161,12 +161,13 @@ export function CommandPalette({ open, onClose, onOpenFolder, onRevealLink, onEd
       role="dialog"
       aria-modal="true"
       aria-label={t('command_palette.dialog_aria')}
-      onMouseDown={(e) => {
-        // Backdrop click = close. The check `e.target === e.currentTarget`
-        // makes sure clicks inside the .fx-cmdk box don't bubble up here.
-        if (e.target === e.currentTarget) onClose()
-      }}
     >
+      <button
+        type="button"
+        className="fx-overlay-backdrop"
+        aria-label={t('common.close')}
+        onClick={onClose}
+      />
       <div className="fx-cmdk">
         <div className="fx-cmdk-input">
           <Icon d={I.search} size={18} />
@@ -341,7 +342,7 @@ function PaletteLinkRow({  link,
   onClose,
   onReveal,
   onEdit,
-}: {
+}: Readonly<{
   link: Link
   id?: string
   selected?: boolean
@@ -351,7 +352,7 @@ function PaletteLinkRow({  link,
   onClose: () => void
   onReveal?: (link: Link) => void
   onEdit?: (link: Link) => void
-}) {
+}>) {
   const { t } = useTranslation()
   const inFolder = link.folder_id != null
   const revealLabel = inFolder
@@ -425,12 +426,12 @@ function PaletteFolderRow({
   id,
   selected,
   onOpenFolder,
-}: {
+}: Readonly<{
   folder: ReturnType<typeof searchFolderTree>[number]
   id?: string
   selected?: boolean
   onOpenFolder?: (id: number) => void
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <button

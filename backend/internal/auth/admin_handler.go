@@ -22,6 +22,8 @@ import (
 	"foldex/internal/roleperm"
 )
 
+const msgRoleMustBeAssignable = "role must be admin, editor or viewer"
+
 // errOwnerImmutable is the one refusal every people-management route shares:
 // the owner's role and status move only through transfer.
 func errOwnerImmutable() error {
@@ -219,7 +221,7 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	// unique index and surface as a 500 instead of a refusal.
 	if in.Role != nil && !admin.AssignableRole(*in.Role) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role",
-			"role must be admin, editor or viewer"))
+			msgRoleMustBeAssignable))
 		return
 	}
 	if in.Status != nil && !admin.ValidStatus(*in.Status) {
@@ -659,7 +661,7 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// through an explicit transfer.
 	if !admin.AssignableRole(role) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role",
-			"role must be admin, editor or viewer"))
+			msgRoleMustBeAssignable))
 		return
 	}
 
@@ -672,7 +674,7 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, ErrInvalidRole):
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role",
-			"role must be admin, editor or viewer"))
+			msgRoleMustBeAssignable))
 		return
 	case err != nil:
 		h.logger.Error("admin create user", "err", err)
@@ -706,7 +708,7 @@ func (h *AdminHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	// the one role that cannot be demoted.
 	if !admin.AssignableRole(role) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_role",
-			"role must be admin, editor or viewer"))
+			msgRoleMustBeAssignable))
 		return
 	}
 

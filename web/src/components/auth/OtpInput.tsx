@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 
 export const OTP_LENGTH = 6
 
-type Props = {
+type Props = Readonly<{
   value: string
   onChange: (next: string) => void
   /** Fired once when the field reaches OTP_LENGTH digits. */
@@ -12,7 +12,7 @@ type Props = {
   autoFocus?: boolean
   /** Marks every cell invalid and clears the field, for a rejected code. */
   invalid?: boolean
-}
+}>
 
 /**
  * Six single-character cells behaving as one field.

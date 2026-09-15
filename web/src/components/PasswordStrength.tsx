@@ -5,7 +5,7 @@ import { passwordChecks, passwordScore } from '../lib/passwordStrength'
 // The complexity matrix + strength bar shown under a password field. Guidance
 // only — it never blocks submit on its own (the caller decides), it just makes
 // the criteria and current strength visible.
-export function PasswordStrength({ value }: { value: string }) {
+export function PasswordStrength({ value }: Readonly<{ value: string }>) {
   const { t } = useTranslation()
   if (!value) return null
 

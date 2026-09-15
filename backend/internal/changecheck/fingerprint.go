@@ -320,19 +320,23 @@ func extractMainContent(pageHTML []byte) string {
 		}
 	}
 	walk(doc)
-	root := main
-	if root == nil {
-		root = article
-	}
-	if root == nil {
-		root = body
-	}
+	root := firstContentRoot(main, article, body)
 	if root == nil {
 		return ""
 	}
 	var b strings.Builder
 	collectText(root, &b)
 	return b.String()
+}
+
+func firstContentRoot(main, article, body *html.Node) *html.Node {
+	if main != nil {
+		return main
+	}
+	if article != nil {
+		return article
+	}
+	return body
 }
 
 // noiseTags is the set of element names we skip entirely (including their

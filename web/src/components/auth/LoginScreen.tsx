@@ -34,7 +34,7 @@ export function forgetRememberedEmail() {
   }
 }
 
-export function LoginScreen({ onForgotPassword }: { onForgotPassword?: () => void }) {
+export function LoginScreen({ onForgotPassword }: Readonly<{ onForgotPassword?: () => void }>) {
   const { t } = useTranslation()
   const { adopt, session } = useAuth()
   const [remembered] = useState(readRemembered)

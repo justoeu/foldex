@@ -39,11 +39,11 @@ export function VerifyEmailScreen({
   token,
   onDone,
   kind = 'verify',
-}: {
+}: Readonly<{
   token: string
   onDone: () => void
   kind?: ConfirmKind
-}) {
+}>) {
   const { t } = useTranslation()
   const [state, setState] = useState<State>('working')
 

@@ -53,7 +53,7 @@ var ErrTooLarge = errors.New("imageopt: image dimensions exceed limit")
 // do not fork another copy.
 var AllowedUploadMIMEs = map[string]string{
 	"image/png":  "png",
-	"image/jpeg": "jpg",
+	jpegMIME:     "jpg",
 	"image/gif":  "gif",
 	"image/webp": "webp",
 }

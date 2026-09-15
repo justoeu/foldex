@@ -14,11 +14,11 @@ export function MailCodeHint({
   sent,
   busy,
   onSend,
-}: {
+}: Readonly<{
   sent: boolean
   busy: boolean
   onSend: () => void
-}) {
+}>) {
   const { t } = useTranslation()
   return (
     <span className="fx-field-hint" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -39,7 +39,7 @@ export function MailCodeHint({
  * authenticator to read six digits from, and the alternative — a recovery code —
  * is a lockout credential, too expensive to spend on a settings change.
  */
-export function MailCodeButton({ disabled }: { disabled: boolean }) {
+export function MailCodeButton({ disabled }: Readonly<{ disabled: boolean }>) {
   const [sent, setSent] = useState(false)
   const [busy, setBusy] = useState(false)
   return (

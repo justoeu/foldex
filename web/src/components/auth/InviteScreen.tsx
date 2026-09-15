@@ -19,7 +19,7 @@ type LookupState = 'loading' | 'ready' | 'invalid' | 'failed'
  * turn a `user` invitation into "create an account for any address I like",
  * which is the whole reason self-signup is off.
  */
-export function InviteScreen({ token, onGiveUp }: { token: string; onGiveUp: () => void }) {
+export function InviteScreen({ token, onGiveUp }: Readonly<{ token: string; onGiveUp: () => void }>) {
   const { t } = useTranslation()
   const { adopt, session } = useAuth()
   const minLen = usePasswordFloor()

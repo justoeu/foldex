@@ -10,13 +10,13 @@ import type { Folder } from '../api/types'
 const MAX_ITEMS = 10
 const SHOW_DELAY_MS = 220
 
-type Props = {
+type Props = Readonly<{
   folder: Folder
   children: ReactNode
   // When false, behaves as a passthrough wrapper (no popover). Lets the
   // FolderCard mount the same JSX subtree regardless of compact mode.
   enabled: boolean
-}
+}>
 
 export function FolderRapidView({ folder, children, enabled }: Props) {
   const { t } = useTranslation()
@@ -102,11 +102,11 @@ function RapidViewPopover({
   folder,
   rect,
   t,
-}: {
+}: Readonly<{
   folder: Folder
   rect: DOMRect
   t: ReturnType<typeof useTranslation>['t']
-}) {
+}>) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number; ready: boolean }>({
     left: 0,

@@ -205,7 +205,7 @@ export function AuditSection() {
 
 function Chip({
   active, onClick, children,
-}: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+}: Readonly<{ active: boolean; onClick: () => void; children: React.ReactNode }>) {
   return (
     <button
       type="button"

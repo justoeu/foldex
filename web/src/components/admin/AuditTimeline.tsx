@@ -14,7 +14,7 @@ import { actionLabel } from '../../lib/auditLabels'
  * mode that fight it; a button plus `aria-expanded` is the same semantics with
  * layout that survives.
  */
-export function AuditTimeline({ entries }: { entries: AuditEntry[] }) {
+export function AuditTimeline({ entries }: Readonly<{ entries: AuditEntry[] }>) {
   const { t } = useTranslation()
   const [open, setOpen] = useState<number | null>(null)
   return (

@@ -6,6 +6,8 @@ import {
   useStatsDashboard,
   useStatsStorage,
   type DailyPoint,
+  type StorageStats,
+  type StatsSummary,
   type TopLink,
 } from '../api/stats'
 
@@ -39,42 +41,7 @@ export function StatsPage() {
         </div>
       </div>
 
-      <div className="fx-kpis">
-        <KpiCard
-          label={t('stats.kpi_clicks_30d')}
-          value={s ? s.clicks_last_30d.toLocaleString() : '—'}
-          delta={s ? (mom >= 0 ? '+' : '') + mom + '%' : ''}
-          deltaKind={mom >= 0 ? 'up' : 'down'}
-          spark={daily?.slice(-14).map((p) => p.clicks)}
-        />
-        <KpiCard
-          label={t('stats.kpi_total_links')}
-          value={s ? s.total_links : '—'}
-          delta={s ? t('stats.kpi_links_new_30d', { count: s.new_links_last_30d }) : ''}
-          deltaKind="up"
-        />
-        <KpiCard
-          label={t('stats.kpi_clicks_per_link')}
-          value={clicksPerLink}
-          delta={s ? t('stats.kpi_clicks_per_link_delta', { clicks: s.clicks_last_30d, links: s.total_links }) : ''}
-          deltaKind="neutral"
-        />
-        <KpiCard
-          label={t('stats.kpi_top_host')}
-          value={s && s.top_host ? s.top_host : '—'}
-          valueClass="fx-kpi-host"
-          delta={s ? t('stats.kpi_top_host_delta', { count: s.top_host_clicks }) : ''}
-          deltaKind="neutral"
-        />
-        <KpiCard
-          label={t('stats.kpi_storage_objects')}
-          value={storage.data ? storage.data.objects.toLocaleString() : '—'}
-          delta={storage.data
-            ? t('stats.kpi_storage_object_delta', { size: formatBytes(storage.data.total_bytes) })
-            : t('stats.kpi_storage_object_unavailable')}
-          deltaKind="neutral"
-        />
-      </div>
+      <StatsKpiStrip s={s} mom={mom} daily={daily} clicksPerLink={clicksPerLink} storage={storage.data} t={t} />
 
       <div className="fx-stats-grid">
         <section className="fx-statcard fx-statcard-wide">
@@ -147,6 +114,61 @@ export function StatsPage() {
   )
 }
 
+function StatsKpiStrip({
+  s,
+  mom,
+  daily,
+  clicksPerLink,
+  storage,
+  t,
+}: Readonly<{
+  s: StatsSummary | undefined
+  mom: number
+  daily: DailyPoint[] | undefined
+  clicksPerLink: string
+  storage: StorageStats | null | undefined
+  t: TFunction
+}>) {
+  return (
+    <div className="fx-kpis">
+      <KpiCard
+        label={t('stats.kpi_clicks_30d')}
+        value={s ? s.clicks_last_30d.toLocaleString() : '—'}
+        delta={s ? (mom >= 0 ? '+' : '') + mom + '%' : ''}
+        deltaKind={mom >= 0 ? 'up' : 'down'}
+        spark={daily?.slice(-14).map((p) => p.clicks)}
+      />
+      <KpiCard
+        label={t('stats.kpi_total_links')}
+        value={s ? s.total_links : '—'}
+        delta={s ? t('stats.kpi_links_new_30d', { count: s.new_links_last_30d }) : ''}
+        deltaKind="up"
+      />
+      <KpiCard
+        label={t('stats.kpi_clicks_per_link')}
+        value={clicksPerLink}
+        delta={s ? t('stats.kpi_clicks_per_link_delta', { clicks: s.clicks_last_30d, links: s.total_links }) : ''}
+        deltaKind="neutral"
+      />
+      <KpiCard
+        label={t('stats.kpi_top_host')}
+        value={s && s.top_host ? s.top_host : '—'}
+        valueClass="fx-kpi-host"
+        delta={s ? t('stats.kpi_top_host_delta', { count: s.top_host_clicks }) : ''}
+        deltaKind="neutral"
+      />
+      <KpiCard
+        label={t('stats.kpi_storage_objects')}
+        value={storage ? storage.objects.toLocaleString() : '—'}
+        delta={storage
+          ? t('stats.kpi_storage_object_delta', { size: formatBytes(storage.total_bytes) })
+          : t('stats.kpi_storage_object_unavailable')}
+        deltaKind="neutral"
+      />
+    </div>
+  )
+}
+
 function KpiCard({
   label,
   value,
@@ -154,14 +176,14 @@ function KpiCard({
   delta,
   deltaKind = 'up',
   spark,
-}: {
+}: Readonly<{
   label: string
   value: string | number
   valueClass?: string
   delta: string
   deltaKind: 'up' | 'down' | 'neutral'
   spark?: number[]
-}) {
+}>) {
   return (
     <div className="fx-kpi">
       <div className="fx-kpi-label">{label}</div>
@@ -176,7 +198,7 @@ function KpiCard({
   )
 }
 
-function Sparkline({ data, width, height }: { data: number[]; width: number; height: number }) {
+function Sparkline({ data, width, height }: Readonly<{ data: number[]; width: number; height: number }>) {
   const max = Math.max(...data, 1)
   const min = Math.min(...data, 0)
   const step = width / (data.length - 1)
@@ -201,7 +223,7 @@ function Sparkline({ data, width, height }: { data: number[]; width: number; hei
   )
 }
 
-function AreaChart({ data, width, height, t }: { data: DailyPoint[]; width: number; height: number; t: TFunction }) {
+function AreaChart({ data, width, height, t }: Readonly<{ data: DailyPoint[]; width: number; height: number; t: TFunction }>) {
   const pad = { l: 36, r: 12, t: 14, b: 22 }
   const w = width - pad.l - pad.r
   const h = height - pad.t - pad.b
@@ -361,7 +383,7 @@ export function formatChartDate(iso: string) {
   return `${day} ${month} · ${wd}`
 }
 
-function MomCompare({ prev, curr, t }: { prev: number; curr: number; t: TFunction }) {
+function MomCompare({ prev, curr, t }: Readonly<{ prev: number; curr: number; t: TFunction }>) {
   const max = Math.max(prev, curr, 1)
   return (
     <div className="fx-mom">
@@ -388,7 +410,7 @@ function MomCompare({ prev, curr, t }: { prev: number; curr: number; t: TFunctio
   )
 }
 
-function TopLinksList({ links }: { links: TopLink[] }) {
+function TopLinksList({ links }: Readonly<{ links: TopLink[] }>) {
   const maxClicks = Math.max(...links.map((l) => l.clicks), 1)
   return (
     <ol className="fx-toplinks">
@@ -433,9 +455,9 @@ function TopLinksList({ links }: { links: TopLink[] }) {
 
 function TagDistribution({
   buckets,
-}: {
+}: Readonly<{
   buckets: { name: string; color: string; clicks: number; links: number }[]
-}) {
+}>) {
   const max = Math.max(...buckets.map((b) => b.clicks), 1)
   return (
     <ul className="fx-tagdist">
@@ -468,7 +490,7 @@ function formatBytes(b: number): string {
   return `${n.toFixed(n >= 10 ? 0 : 1)} ${units[i]}`
 }
 
-function EmptyChart({ hint }: { hint: string }) {
+function EmptyChart({ hint }: Readonly<{ hint: string }>) {
   return (
     <div
       style={{

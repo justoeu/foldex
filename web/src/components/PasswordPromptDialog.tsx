@@ -55,7 +55,7 @@ export function usePasswordPrompt(): Ctx {
   return fn
 }
 
-export function PasswordPromptProvider({ children }: { children: ReactNode }) {
+export function PasswordPromptProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [state, setState] = useState<{ folder: Folder; resolve: Resolver } | null>(null)
 
   const ask = useCallback<Ctx>((folder) => {
@@ -91,11 +91,11 @@ function PasswordPromptModal({
   folder,
   onCancel,
   onUnlocked,
-}: {
+}: Readonly<{
   folder: Folder
   onCancel: () => void
   onUnlocked: (result: FolderUnlock) => void
-}) {
+}>) {
   const { t } = useTranslation()
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -155,17 +155,14 @@ function PasswordPromptModal({
       role="dialog"
       aria-modal="true"
       aria-label={t('folder_lock.dialog_aria', { name: folder.name })}
-      onKeyDown={(e) => {
-        if (e.key !== 'Enter') return
-        // A focused button (Cancel, Unlock, close) must keep its native
-        // activation. Swallowing Enter here was how Tab-then-Enter on Cancel
-        // unlocked the folder instead of dismissing.
-        if ((e.target as HTMLElement).closest('button')) return
-        e.preventDefault()
-        void submit()
-      }}
     >
-      <div className="fx-modal fx-confirm fx-lockmodal">
+      <form
+        className="fx-modal fx-confirm fx-lockmodal"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submit()
+        }}
+      >
         <header className="fx-modal-head">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span className="fx-lock-badge">
@@ -176,7 +173,7 @@ function PasswordPromptModal({
               <h2 className="fx-modal-title">{t('folder_lock.title', { name: folder.name })}</h2>
             </div>
           </div>
-          <button className="fx-confirm-x" onClick={onCancel} aria-label={t('common.close')}>
+          <button type="button" className="fx-confirm-x" onClick={onCancel} aria-label={t('common.close')}>
             <Icon d={I.x} size={14} />
           </button>
         </header>
@@ -221,18 +218,18 @@ function PasswordPromptModal({
         </div>
 
         <footer className="fx-confirm-foot">
-          <button className="fx-confirm-btn" onClick={onCancel}>
+          <button type="button" className="fx-confirm-btn" onClick={onCancel}>
             {t('common.cancel')}
           </button>
           <button
+            type="submit"
             className="fx-confirm-btn fx-confirm-btn-primary"
-            onClick={submit}
             disabled={!password || unlock.isPending || locked}
           >
             <Icon d={I.lock} size={13} stroke={2.2} /> {t('folder_lock.submit')}
           </button>
         </footer>
-      </div>
+      </form>
     </div>
   )
 }

@@ -24,7 +24,7 @@ import { mergeAlphaCells } from '../lib/mergeAlphaCells'
 import type { Link as LinkT, Folder as FolderT, Entry, MergeSource } from '../api/types'
 import type { Sort, ViewMode } from '../lib/viewPrefs'
 
-export type HomeProps = {
+export type HomeProps = Readonly<{
   entries: Entry[]
   totalLinks: number
   folders: FolderT[]
@@ -66,7 +66,7 @@ export type HomeProps = {
   onLoadMoreLinks: () => void
   revealTarget?: RevealTarget | null
   onRevealed?: () => void
-}
+}>
 
 export function Home({
   entries,

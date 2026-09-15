@@ -2,10 +2,10 @@ import { memo, useEffect, useState } from 'react'
 import { safeImageUrl } from '../lib/url'
 import type { Link } from '../api/types'
 
-type Props = {
+type Props = Readonly<{
   link: Pick<Link, 'url' | 'title' | 'favicon_url'>
   size?: number
-}
+}>
 
 // Renders the real favicon when the backend resolved one. Falls back to a
 // gradient tile with the first letter of the hostname (the design uses

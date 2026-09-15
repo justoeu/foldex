@@ -7,7 +7,7 @@ import type { Sort, ViewMode } from '../lib/viewPrefs'
 
 type View = 'home' | 'import' | 'stats' | 'settings'
 
-type Props = {
+type Props = Readonly<{
   sort: Sort
   setSort: (s: Sort) => void
   viewMode: ViewMode
@@ -23,7 +23,7 @@ type Props = {
   setDark: (d: boolean) => void
   view: View
   setView: (v: View) => void
-}
+}>
 
 // Mobile-only overflow popover. The mobile topbar exposes only the three
 // primary affordances the user asked for (search + Home + Stats); every
@@ -259,7 +259,7 @@ export function MobileOverflowMenu({
   )
 }
 
-function Section({ label, children }: { label?: string; children: React.ReactNode }) {
+function Section({ label, children }: Readonly<{ label?: string; children: React.ReactNode }>) {
   return (
     <div className="fx-mobile-more-section">
       {label && <div className="fx-mobile-more-section-label">{label}</div>}
@@ -276,7 +276,7 @@ function Row({
   accent,
   chevron,
   onClick,
-}: {
+}: Readonly<{
   icon?: React.ReactNode
   glyph?: string
   label: string
@@ -284,7 +284,7 @@ function Row({
   accent?: boolean
   chevron?: 'right' | 'down'
   onClick: () => void
-}) {
+}>) {
   return (
     <button
       type="button"

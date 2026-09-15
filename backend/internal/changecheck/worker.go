@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	pushQueueSize = 32
-	pushTimeout   = 15 * time.Second
+	pushQueueSize         = 32
+	pushTimeout           = 15 * time.Second
+	logRecordResultFailed = "process: record result failed"
 )
 
 // Sender is the push notification dependency. Implemented by internal/push
@@ -279,7 +280,7 @@ func (w *Worker) process(ctx context.Context, job links.DueLink) {
 			Changed:     false,
 			FetchErr:    err.Error(),
 		}); recErr != nil {
-			w.logger.Error("process: record result failed", "link_id", id, "err", recErr)
+			w.logger.Error(logRecordResultFailed, "link_id", id, "err", recErr)
 		}
 		return
 	}
@@ -299,7 +300,7 @@ func (w *Worker) process(ctx context.Context, job links.DueLink) {
 			Changed:     false,
 			FetchErr:    "fingerprint: " + err.Error(),
 		}); recErr != nil {
-			w.logger.Error("process: record result failed", "link_id", id, "err", recErr)
+			w.logger.Error(logRecordResultFailed, "link_id", id, "err", recErr)
 		}
 		return
 	}
@@ -321,7 +322,7 @@ func (w *Worker) process(ctx context.Context, job links.DueLink) {
 		FetchErr:    "",
 	})
 	if err != nil {
-		w.logger.Error("process: record result failed", "link_id", id, "err", err)
+		w.logger.Error(logRecordResultFailed, "link_id", id, "err", err)
 		return
 	}
 	if !applied {

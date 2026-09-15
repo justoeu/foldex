@@ -7,7 +7,7 @@ export function relativeTime(
   t: (key: string, opts?: Record<string, unknown>) => string,
 ): string {
   const then = typeof isoOrDate === 'string' ? new Date(isoOrDate) : isoOrDate
-  if (isNaN(then.getTime())) return ''
+  if (Number.isNaN(then.getTime())) return ''
   const diffMs = Date.now() - then.getTime()
   // Future dates collapse to "now" — keeps the UI readable when a server
   // clock skew makes the stamp land slightly ahead.
@@ -66,7 +66,7 @@ export function nextCheckPreview(
   if (!step) return ''
   if (!lastCheckedAt) return t('common.next_check_soon', { defaultValue: 'soon (within a minute)' })
   const last = new Date(lastCheckedAt)
-  if (isNaN(last.getTime())) return t('common.next_check_soon', { defaultValue: 'soon (within a minute)' })
+  if (Number.isNaN(last.getTime())) return t('common.next_check_soon', { defaultValue: 'soon (within a minute)' })
   const nextMs = last.getTime() + step
   const remaining = nextMs - now.getTime()
   if (remaining <= 60_000) return t('common.next_check_soon', { defaultValue: 'soon (within a minute)' })

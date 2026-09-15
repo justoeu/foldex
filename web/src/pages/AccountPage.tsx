@@ -50,7 +50,7 @@ const TAB_ICON: Record<AccountTab, ReactNode> = {
  * `security` and `tokens` used to collapse into "the account page" and lose
  * which part the caller asked for.
  */
-export function AccountPage({ initialTab }: { initialTab?: AccountTab }) {
+export function AccountPage({ initialTab }: Readonly<{ initialTab?: AccountTab }>) {
   const { t } = useTranslation()
   const user = useCurrentUser()
   const { session, signOut } = useAuth()

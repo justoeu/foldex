@@ -100,7 +100,7 @@ func Shared(t *testing.T) *pgxpool.Pool {
 		}()
 		sharedC = startContainer(func(format string, args ...any) {
 			panic(fmt.Sprintf(format, args...))
-		}, func(func()) {})
+		}, func(func()) { /* Shared has no per-test cleanup registrar */ })
 	})
 	if sharedErr != nil {
 		t.Fatalf("testdb: %v", sharedErr)

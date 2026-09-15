@@ -4,11 +4,11 @@ import { Icon, I } from './icons'
 import { makeGradient, hexToHsl, hslToHex } from '../lib/tagColor'
 import { DEFAULT_ENTITY_COLORS } from '../lib/entityColors'
 
-type Props = {
+type Props = Readonly<{
   from: string
   to: string
   onChange: (from: string, to: string) => void
-}
+}>
 
 const PAYLOAD = 'application/x-foldex-gradient-stop'
 
@@ -68,13 +68,13 @@ function Stop({
   value,
   onChange,
   onSwap,
-}: {
+}: Readonly<{
   side: 'from' | 'to'
   label: string
   value: string
   onChange: (c: string) => void
   onSwap: () => void
-}) {
+}>) {
   const { t } = useTranslation()
   const [dragOver, setDragOver] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -176,11 +176,11 @@ function HueSpectrumBar({
   from,
   to,
   onChange,
-}: {
+}: Readonly<{
   from: string
   to: string
   onChange: (f: string, t: string) => void
-}) {
+}>) {
   const { t } = useTranslation()
   const barRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState<'from' | 'to' | null>(null)
@@ -232,7 +232,7 @@ function HueSpectrumBar({
     <div
       ref={barRef}
       className={'fx-hue-bar' + (dragging ? ' fx-hue-bar-dragging' : '')}
-      role="slider"
+      role="group"
       aria-label={t('tag_dialog.gradient_hue_aria')}
       onPointerDown={(e) => onPointerDown(e)}
       onPointerMove={onPointerMove}
@@ -248,6 +248,7 @@ function HueSpectrumBar({
           e.stopPropagation()
           onPointerDown(e, 'from')
         }}
+        onKeyMove={(p) => setStopHue('from', p)}
       />
       <HueThumb
         position={toHsl.h / 360}
@@ -258,6 +259,7 @@ function HueSpectrumBar({
           e.stopPropagation()
           onPointerDown(e, 'to')
         }}
+        onKeyMove={(p) => setStopHue('to', p)}
       />
     </div>
   )
@@ -269,20 +271,39 @@ function HueThumb({
   label,
   active,
   onPointerDown,
-}: {
+  onKeyMove,
+}: Readonly<{
   position: number
   color: string
   label: string
   active: boolean
   onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void
-}) {
+  onKeyMove: (position: number) => void
+}>) {
+  const hue = Math.round(position * 360)
   return (
     <div
       className={'fx-hue-thumb' + (active ? ' fx-hue-thumb-active' : '')}
       style={{ left: `${position * 100}%`, background: color }}
       onPointerDown={onPointerDown}
-      role="presentation"
-      aria-label={`${label}: ${color}`}
+      onKeyDown={(e) => {
+        const step = e.shiftKey ? 10 : 1
+        let next = hue
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = Math.max(0, hue - step)
+        else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = Math.min(360, hue + step)
+        else if (e.key === 'Home') next = 0
+        else if (e.key === 'End') next = 360
+        else return
+        e.preventDefault()
+        onKeyMove(next / 360)
+      }}
+      role="slider"
+      tabIndex={0}
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={360}
+      aria-valuenow={hue}
+      aria-valuetext={color}
       data-tooltip={`${label}: ${color}`}
       data-tooltip-side="top"
     />

@@ -17,12 +17,12 @@ import { ConflictModePicker } from './ConflictModePicker'
 const MAX_RENDERED_WARNINGS = 50
 const MAX_RENDERED_FOLDERS = 200
 
-type Props = {
+type Props = Readonly<{
   file: File
   format: ImportFormat
   onClose: () => void
   onApplied: () => void
-}
+}>
 
 export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props) {
   const { t } = useTranslation()
@@ -151,11 +151,11 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
 
 function Counts({
   validation, effective, t,
-}: {
+}: Readonly<{
   validation: ImportValidation
   effective: { links: number; folders: number; conflicts: number }
   t: TFunction
-}) {
+}>) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <Row label={t('import.counts_file')} value={t('import.counts_format', { links: validation.counts.links, folders: validation.counts.folders, tags: validation.counts.tags })} />
@@ -174,7 +174,7 @@ function Counts({
   )
 }
 
-function WarningList({ warnings, t }: { warnings: string[]; t: TFunction }) {
+function WarningList({ warnings, t }: Readonly<{ warnings: string[]; t: TFunction }>) {
   const hidden = warnings.length - MAX_RENDERED_WARNINGS
   return (
     <ul
@@ -188,7 +188,7 @@ function WarningList({ warnings, t }: { warnings: string[]; t: TFunction }) {
   )
 }
 
-function Row({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function Row({ label, value, accent }: Readonly<{ label: string; value: string; accent?: boolean }>) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
       <span style={{ color: 'var(--fx-ink-4)' }}>{label}</span>
@@ -199,12 +199,12 @@ function Row({ label, value, accent }: { label: string; value: string; accent?: 
 
 function FolderList({
   folders, excluded, onToggle, disabled,
-}: {
+}: Readonly<{
   folders: { path: string; name: string; count: number }[]
   excluded: Set<string>
   onToggle: (path: string) => void
   disabled: boolean
-}) {
+}>) {
   const [showAll, setShowAll] = useState(false)
   const { t } = useTranslation()
   const visible = showAll ? folders : folders.slice(0, MAX_RENDERED_FOLDERS)
@@ -250,7 +250,7 @@ function FolderList({
   )
 }
 
-function ResultBlock({ r, t }: { r: ImportResult; t: TFunction }) {
+function ResultBlock({ r, t }: Readonly<{ r: ImportResult; t: TFunction }>) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <Row label={t('import.result_mode')} value={r.mode} />

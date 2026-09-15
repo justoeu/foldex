@@ -12,7 +12,7 @@ type Busy = {
   remove: boolean
 }
 
-type Props = {
+type Props = Readonly<{
   u: AuthUser
   me: AuthUser | null
   activeAdmins: number
@@ -22,7 +22,7 @@ type Props = {
   onReset: (u: AuthUser) => void
   onTransfer: (id: number) => void
   onDelete: (id: number) => void
-}
+}>
 
 /**
  * The five row actions. Disable/delete/role/transfer come from the lock

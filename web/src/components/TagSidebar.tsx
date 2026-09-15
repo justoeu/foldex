@@ -8,7 +8,7 @@ import { useRecentChanges } from '../api/links'
 import { relativeTime } from '../lib/time'
 import { VERSION, BUILD_DATE, formatBuildDate } from '../version'
 
-type Props = {
+type Props = Readonly<{
   selected: number[]
   onToggle: (id: number) => void
   onClear: () => void
@@ -20,7 +20,7 @@ type Props = {
   // without otherwise affecting the desktop collapsed state.
   mobileOpen?: boolean
   onMobileClose?: () => void
-}
+}>
 
 // Bucket sizes: top 5 by usage live in the always-shown "Frequentes" group.
 // Everything else lands in "Outras" with a 15-item soft cap and a "load more"
@@ -264,7 +264,7 @@ export function TagSidebar({
   )
 }
 
-function RecentChangesSection({ enabled }: { enabled: boolean }) {
+function RecentChangesSection({ enabled }: Readonly<{ enabled: boolean }>) {
   const { t } = useTranslation()
   const { data: links = [], isLoading } = useRecentChanges(7, 10, enabled)
   const [open, setOpen] = useState(() => readBool(RECENT_OPEN_KEY, true))
@@ -307,11 +307,11 @@ function SectionHeader({
   label,
   open,
   onToggle,
-}: {
+}: Readonly<{
   label: string
   open: boolean
   onToggle: () => void
-}) {
+}>) {
   return (
     <button
       type="button"
@@ -331,13 +331,13 @@ function TagRow({
   count,
   active,
   onClick,
-}: {
+}: Readonly<{
   name: string
   color: string
   count: number
   active: boolean
   onClick: () => void
-}) {
+}>) {
   return (
     <button
       className={'fx-side-row' + (active ? ' fx-side-row-active' : '')}

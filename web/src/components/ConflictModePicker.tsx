@@ -9,14 +9,14 @@ type Labels = {
   wipeDesc: string
 }
 
-type Props = {
+type Props = Readonly<{
   value: ConflictMode
   onChange: (mode: ConflictMode) => void
   disabled?: boolean
   labels: Labels
   /** Wipe is always destructive; set false only if a caller must hide that encoding. */
   wipeDanger?: boolean
-}
+}>
 
 export function ConflictModePicker({
   value,
@@ -55,14 +55,14 @@ export function ConflictModePicker({
 
 function ModeOption({
   active, onClick, title, desc, danger, disabled,
-}: {
+}: Readonly<{
   active: boolean
   onClick: () => void
   title: string
   desc: string
   danger?: boolean
   disabled: boolean
-}) {
+}>) {
   return (
     <button
       type="button"

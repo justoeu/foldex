@@ -3,13 +3,13 @@ import { useTranslation } from 'react-i18next'
 import { isGradient, primaryColor } from '../lib/tagColor'
 import type { Tag } from '../api/types'
 
-type Props = {
+type Props = Readonly<{
   tag: Pick<Tag, 'name' | 'color'>
   onClick?: () => void
   active?: boolean
   closable?: boolean
   onClose?: () => void
-}
+}>
 
 // memo guards re-render storms: every LinkCard/Row mounts up to 3 TagChips
 // (cards) or 2 (compact) and a 200-card grid otherwise re-renders 600 chips
@@ -28,33 +28,47 @@ function TagChipImpl({ tag, onClick, active, closable, onClose }: Props) {
   const style = { '--chip-c': primaryColor(tag.color) } as CSSProperties
   const dotStyle = isGradient(tag.color) ? { background: tag.color } : undefined
 
-  const closeBtn = closable && (
-    <span
-      role="button"
-      className="fx-chip-close"
-      aria-label={t('common.remove_tag_aria', { name: tag.name })}
-      onClick={(e) => {
-        e.stopPropagation()
-        onClose?.()
-      }}
-    >
-      ×
-    </span>
+  const body = (
+    <>
+      <span className="fx-chip-dot" style={dotStyle} />
+      {tag.name}
+    </>
   )
 
-  if (onClick || closable) {
+  if (closable) {
+    return (
+      <span className={cls} style={style}>
+        {onClick ? (
+          <button type="button" className="fx-chip-face" onClick={onClick}>
+            {body}
+          </button>
+        ) : body}
+        <button
+          type="button"
+          className="fx-chip-close"
+          aria-label={t('common.remove_tag_aria', { name: tag.name })}
+          onClick={(e) => {
+            e.stopPropagation()
+            onClose?.()
+          }}
+        >
+          ×
+        </button>
+      </span>
+    )
+  }
+
+  if (onClick) {
     return (
       <button type="button" className={cls} style={style} onClick={onClick}>
-        <span className="fx-chip-dot" style={dotStyle} />
-        {tag.name}
-        {closeBtn}
+        {body}
       </button>
     )
   }
+
   return (
     <span className={cls} style={style}>
-      <span className="fx-chip-dot" style={dotStyle} />
-      {tag.name}
+      {body}
     </span>
   )
 }

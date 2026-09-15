@@ -635,7 +635,7 @@ type SessionIssue interface {
 // LiveSession is the Settings path: an already-authenticated session.
 type LiveSession struct{ ID int64 }
 
-func (LiveSession) isSessionIssue() {}
+func (LiveSession) isSessionIssue() { /* closed-set discriminator */ }
 
 // PreAuth is the mandatory-enrollment path: consume the challenge and mint
 // the first session in the same transaction.
@@ -645,7 +645,7 @@ type PreAuth struct {
 	IP, UA    string
 }
 
-func (PreAuth) isSessionIssue() {}
+func (PreAuth) isSessionIssue() { /* closed-set discriminator */ }
 
 func (in EnrollmentComplete) liveSessionID() int64 {
 	if live, ok := in.Session.(LiveSession); ok {

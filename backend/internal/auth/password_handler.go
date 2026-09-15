@@ -232,7 +232,7 @@ func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if errors.Is(err, ErrTOTPReplay) {
-		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", msgInvalidCode))
 		return
 	}
 	if errors.Is(err, ErrSessionInvalid) {

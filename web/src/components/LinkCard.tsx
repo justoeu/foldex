@@ -6,7 +6,7 @@ import type { Link, MergeSource } from '../api/types'
 import { hasUnseenChange, useLinkCardInteractions } from './LinkCardInteractions'
 import { LinkCardBadges, LinkCardBody, LinkCardPreview } from './LinkCardParts'
 
-type Props = {
+type Props = Readonly<{
   link: Link
   onEdit: (link: Link) => void
   density?: 'normal' | 'short' | 'medium' | 'tall'
@@ -16,7 +16,7 @@ type Props = {
   onRefreshPreview: (id: number) => void
   onAddImage: (link: Link) => void
   onMarkSeen: (id: number) => void
-}
+}>
 
 function densityFor(link: Link, imageVisible: boolean): 'tall' | 'medium' | 'short' {
   if (link.og_image_url && imageVisible) return 'tall'

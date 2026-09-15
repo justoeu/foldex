@@ -26,7 +26,7 @@ import { PasswordInput } from '../PasswordInput'
  * reversible from this screen: afterwards the only way back to a password is
  * Settings → set a password, or an administrator.
  */
-export function ConvertScreen({ email }: { email: string }) {
+export function ConvertScreen({ email }: Readonly<{ email: string }>) {
   const { t } = useTranslation()
   const { adopt, reload, signOut } = useAuth()
   const [password, setPassword] = useState('')

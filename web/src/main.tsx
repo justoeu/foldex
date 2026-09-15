@@ -26,7 +26,7 @@ const queryClient = new QueryClient({
  * Left inside App it would only mount once a session existed, so a dark-mode
  * user would get a white login screen and then a flash on sign-in.
  */
-function ThemedGate({ children }: { children: React.ReactNode }) {
+function ThemedGate({ children }: Readonly<{ children: React.ReactNode }>) {
   useDarkMode()
   return <AuthGate>{children}</AuthGate>
 }

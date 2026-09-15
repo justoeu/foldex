@@ -32,4 +32,14 @@ describe('slugifyClient', () => {
     const exactCap = 'a'.repeat(80)
     expect(slugifyClient(exactCap)).toBe(exactCap)
   })
+
+  it('collapses punctuation into a single hyphen and trims the edges', () => {
+    expect(slugifyClient('--Hello--World--')).toBe('hello-world')
+    expect(slugifyClient('***already-slug***')).toBe('already-slug')
+  })
+
+  it('strips every combining mark, including those outside U+0300–U+036F', () => {
+    expect(slugifyClient('Crème brûlée')).toBe('creme-brulee')
+    expect(slugifyClient('a\u20D7b')).toBe('ab')
+  })
 })

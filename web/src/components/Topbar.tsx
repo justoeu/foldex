@@ -12,7 +12,7 @@ import type { Sort, ViewMode } from '../lib/viewPrefs'
 // active-state checks still receive the full AppView from the workspace.
 type View = 'home' | 'import' | 'stats' | 'settings'
 
-type Props = {
+type Props = Readonly<{
   view: View
   setView: (v: View) => void
   // Home click is special: it not only switches to view='home' but also exits
@@ -45,7 +45,7 @@ type Props = {
   // "Profile" entry. Lives here (not inside UserMenu) so the workspace owns
   // navigation, exactly like every other topbar destination.
   onOpenProfile: () => void
-}
+}>
 
 export function Topbar({
   view,
@@ -113,56 +113,15 @@ export function Topbar({
         </div>
       </div>
 
-      <nav className="fx-quicknav">
-        <button
-          className={'fx-qn' + (view === 'home' ? ' fx-qn-active' : '')}
-          aria-label={t('topbar.home')}
-          data-tooltip={t('topbar.home')}
-          data-tooltip-side="bottom"
-          onClick={onHome}
-        >
-          <Icon d={I.home} size={16} />
-        </button>
-        <button
-          className={'fx-qn' + (view === 'stats' ? ' fx-qn-active' : '')}
-          aria-label={t('topbar.stats')}
-          data-tooltip={t('topbar.stats')}
-          onClick={() => setView('stats')}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M3 3v18h18" />
-            <path d="M7 14l4-5 3 3 5-7" />
-          </svg>
-        </button>
-        {/* The settings hub consolidates every settings/administration surface
-            (RBAC-scoped inside), so the topbar keeps exactly one gear entry —
-            no separate admin or import buttons. */}
-        <button
-          className={'fx-qn' + (view === 'settings' ? ' fx-qn-active' : '')}
-          aria-label={t('topbar.settings')}
-          data-tooltip={t('topbar.settings')}
-          onClick={() => setView('settings')}
-        >
-          <Icon d={I.gear} size={16} />
-        </button>
-      </nav>
+      <TopbarQuickNav view={view} setView={setView} onHome={onHome} />
 
-      <div className="fx-search" onClick={onOpenPalette}>
+      <div className="fx-search">
         <Icon d={I.search} size={16} />
         <input
           placeholder={t('topbar.search_placeholder')}
           value={q}
           onChange={(e) => setQ(e.target.value)}
+          onClick={onOpenPalette}
           aria-label={t('common.search')}
         />
         <kbd className="fx-kbd">⌥K</kbd>
@@ -339,9 +298,66 @@ export function Topbar({
   )
 }
 
+function TopbarQuickNav({
+  view,
+  setView,
+  onHome,
+}: Readonly<{
+  view: View
+  setView: (v: View) => void
+  onHome: () => void
+}>) {
+  const { t } = useTranslation()
+  return (
+    <nav className="fx-quicknav">
+      <button
+        className={'fx-qn' + (view === 'home' ? ' fx-qn-active' : '')}
+        aria-label={t('topbar.home')}
+        data-tooltip={t('topbar.home')}
+        data-tooltip-side="bottom"
+        onClick={onHome}
+      >
+        <Icon d={I.home} size={16} />
+      </button>
+      <button
+        className={'fx-qn' + (view === 'stats' ? ' fx-qn-active' : '')}
+        aria-label={t('topbar.stats')}
+        data-tooltip={t('topbar.stats')}
+        onClick={() => setView('stats')}
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M3 3v18h18" />
+          <path d="M7 14l4-5 3 3 5-7" />
+        </svg>
+      </button>
+      {/* The settings hub consolidates every settings/administration surface
+          (RBAC-scoped inside), so the topbar keeps exactly one gear entry —
+          no separate admin or import buttons. */}
+      <button
+        className={'fx-qn' + (view === 'settings' ? ' fx-qn-active' : '')}
+        aria-label={t('topbar.settings')}
+        data-tooltip={t('topbar.settings')}
+        onClick={() => setView('settings')}
+      >
+        <Icon d={I.gear} size={16} />
+      </button>
+    </nav>
+  )
+}
+
 // Tiny "N vertical bars in a rounded rect" — visually conveys the column count
 // without needing distinct labels. Lines scale to match the requested density.
-function DensityIcon({ cols }: { cols: 3 | 5 | 8 }) {
+function DensityIcon({ cols }: Readonly<{ cols: 3 | 5 | 8 }>) {
   const pad = 3
   const w = 20
   const inner = w - pad * 2

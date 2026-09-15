@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { useConfirm } from '../ConfirmDialog'
 import { useCopy } from '../../hooks/useCopy'
 import { useCurrentUser, useHasPermission } from '../../auth/AuthProvider'
@@ -482,7 +483,7 @@ export function BackupSection() {
  * lives in the agent's env and the history is a keyset page, not a window —
  * both would be numbers the screen invented.
  */
-const Kpis = memo(function Kpis({ jobs, drill }: { jobs: BackupJobStatus[]; drill: BackupRun | null }) {
+const Kpis = memo(function Kpis({ jobs, drill }: Readonly<{ jobs: BackupJobStatus[]; drill: BackupRun | null }>) {
   const { t } = useTranslation()
   const dump = jobs.find((j) => j.job === 'dump')?.last_success ?? null
   const dumpStale = dump !== null && Date.now() - Date.parse(dump.started_at) > DUMP_STALE_MS
@@ -528,12 +529,12 @@ function Kpi({
   label,
   value,
   hint,
-}: {
+}: Readonly<{
   tone: 'ok' | 'warn' | 'danger' | 'info'
   label: string
   value: string
   hint: string
-}) {
+}>) {
   return (
     <div className="fx-bkp-kpi">
       <div className="fx-bkp-kpi-head">
@@ -552,6 +553,45 @@ function Kpi({
  * editor below to the same job, so the card and the form never disagree
  * about which job is on screen.
  */
+function JobStateChip({
+  running,
+  elapsedMs,
+  failures,
+  last,
+  t,
+}: Readonly<{
+  running: BackupRun | null
+  elapsedMs: number | null
+  failures: number
+  last: BackupRun | null
+  t: TFunction
+}>) {
+  // What the job is doing NOW outranks what it last did: a card
+  // reading "sucesso" beside a row that says `executando` is the
+  // disagreement this whole screen exists to avoid.
+  if (running) {
+    return (
+      <span className="fx-chip fx-chip-warn fx-bkp-live-chip">
+        <span className="fx-bkp-live-dot" aria-hidden="true" />
+        {t(`admin.backup_state_${running.status}`, {
+          duration: elapsedMs === null ? '—' : formatDurationMs(elapsedMs, t),
+        })}
+      </span>
+    )
+  }
+  if (failures > 0) {
+    return (
+      <span className="fx-chip fx-chip-danger">
+        {t('admin.backup_failures_chip', { count: failures })}
+      </span>
+    )
+  }
+  if (last) {
+    return <span className="fx-chip fx-chip-ok">{t('admin.backup_status_succeeded')}</span>
+  }
+  return <span className="fx-chip">{t('admin.backup_never_ran')}</span>
+}
+
 const JobCard = memo(function JobCard({
   job,
   status,
@@ -561,7 +601,7 @@ const JobCard = memo(function JobCard({
   selected,
   onSelect,
   onRun,
-}: {
+}: Readonly<{
   job: BackupJob
   status: BackupJobStatus | null
   running: BackupRun | null
@@ -570,7 +610,7 @@ const JobCard = memo(function JobCard({
   selected: boolean
   onSelect: (job: BackupJob) => void
   onRun: (job: BackupJob) => void
-}) {
+}>) {
   const { t } = useTranslation()
   const copier = useCopy()
   const last = status?.last_success ?? null
@@ -600,25 +640,7 @@ const JobCard = memo(function JobCard({
           <span className="fx-bkp-job-desc">{t(`admin.backup_job_desc_${job}`)}</span>
         </span>
         <span className="fx-bkp-job-state">
-          {/* What the job is doing NOW outranks what it last did: a card
-              reading "sucesso" beside a row that says `executando` is the
-              disagreement this whole screen exists to avoid. */}
-          {running ? (
-            <span className="fx-chip fx-chip-warn fx-bkp-live-chip">
-              <span className="fx-bkp-live-dot" aria-hidden="true" />
-              {t(`admin.backup_state_${running.status}`, {
-                duration: elapsedMs === null ? '—' : formatDurationMs(elapsedMs, t),
-              })}
-            </span>
-          ) : failures > 0 ? (
-            <span className="fx-chip fx-chip-danger">
-              {t('admin.backup_failures_chip', { count: failures })}
-            </span>
-          ) : last ? (
-            <span className="fx-chip fx-chip-ok">{t('admin.backup_status_succeeded')}</span>
-          ) : (
-            <span className="fx-chip">{t('admin.backup_never_ran')}</span>
-          )}
+          <JobStateChip running={running} elapsedMs={elapsedMs} failures={failures} last={last} t={t} />
         </span>
       </button>
 
@@ -685,7 +707,7 @@ const JobCard = memo(function JobCard({
  * the honest absence — a green panel with no numbers behind it would claim a
  * restore nobody ran.
  */
-const DrillCard = memo(function DrillCard({ drill }: { drill: BackupRun | null }) {
+const DrillCard = memo(function DrillCard({ drill }: Readonly<{ drill: BackupRun | null }>) {
   const { t } = useTranslation()
   return (
     <div className="fx-bkp-drill">
@@ -728,12 +750,12 @@ const AgentCard = memo(function AgentCard({
   stale,
   pending,
   skewed,
-}: {
+}: Readonly<{
   agent: BackupAgentState | null
   stale: boolean
   pending: boolean
   skewed: boolean
-}) {
+}>) {
   const { t } = useTranslation()
   if (pending) return null
 
@@ -808,14 +830,14 @@ const HistoryRow = memo(function HistoryRow({
   run,
   now,
   canDownload,
-}: {
+}: Readonly<{
   run: BackupRun
   now: number
   /* Whether the instance has the download bridge at all (ADR-48). The server
      is still the authority — it 404s without it — but an affordance that
      always fails is worse than no affordance. */
   canDownload: boolean
-}) {
+}>) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [asking, setAsking] = useState(false)
@@ -1032,7 +1054,7 @@ const HistoryRow = memo(function HistoryRow({
  * or malformed meta renders nothing — the panel's headline already says the
  * drill succeeded, and inventing zeros would claim a comparison that never ran.
  */
-function DrillCounts({ meta }: { meta: Record<string, unknown> }) {
+function DrillCounts({ meta }: Readonly<{ meta: Record<string, unknown> }>) {
   const { t } = useTranslation()
   const entries = drillTables(meta)
   if (entries.length === 0) return null

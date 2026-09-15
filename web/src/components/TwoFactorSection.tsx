@@ -40,7 +40,7 @@ export function TwoFactorSection() {
 
 /* ─── overview ──────────────────────────────────────────────────────── */
 
-function TwoFactorOverview({ controller }: { controller: Controller }) {
+function TwoFactorOverview({ controller }: Readonly<{ controller: Controller }>) {
   const { t } = useTranslation()
   return (
     <SectionCard
@@ -66,7 +66,7 @@ function TwoFactorOverview({ controller }: { controller: Controller }) {
   )
 }
 
-function ProofPanel({ controller }: { controller: Controller }) {
+function ProofPanel({ controller }: Readonly<{ controller: Controller }>) {
   const { t } = useTranslation()
   return (
     <div className="fx-2fa-proof">
@@ -105,7 +105,7 @@ function ProofPanel({ controller }: { controller: Controller }) {
  * Not decoration: an account whose only factor is e-mail has no authenticator
  * to read a code from, and without this the field is a box it cannot fill.
  */
-function ProofHint({ controller }: { controller: Controller }) {
+function ProofHint({ controller }: Readonly<{ controller: Controller }>) {
   if (!controller.emailEnabled) return null
   return (
     <MailCodeHint
@@ -116,7 +116,7 @@ function ProofHint({ controller }: { controller: Controller }) {
   )
 }
 
-function MethodList({ controller }: { controller: Controller }) {
+function MethodList({ controller }: Readonly<{ controller: Controller }>) {
   const { t } = useTranslation()
   const methods = twoFactorMethods({
     totpEnabled: controller.totpEnabled,
@@ -140,10 +140,10 @@ function MethodList({ controller }: { controller: Controller }) {
 function MethodRow({
   method,
   controller,
-}: {
+}: Readonly<{
   method: MethodSnapshot
   controller: Controller
-}) {
+}>) {
   const kind = methodKind(method)
   if (kind === 'hidden') return null
   if (method.id === 'recovery') {
@@ -152,7 +152,7 @@ function MethodRow({
   return <FactorRow method={method} kind={kind} controller={controller} />
 }
 
-function RecoveryRow({ controller }: { controller: Controller }) {
+function RecoveryRow({ controller }: Readonly<{ controller: Controller }>) {
   const { t } = useTranslation()
   const low = controller.remaining < LOW_RECOVERY_CODES
   return (
@@ -181,11 +181,11 @@ function FactorRow({
   method,
   kind,
   controller,
-}: {
+}: Readonly<{
   method: MethodSnapshot
   kind: ReturnType<typeof methodKind>
   controller: Controller
-}) {
+}>) {
   const { t } = useTranslation()
   const totp = method.id === 'totp'
   const disabled = methodActionDisabled(kind, controller.password, controller.code, controller.busy)
@@ -252,7 +252,7 @@ function FactorRow({
 
 /* ─── enrollment ────────────────────────────────────────────────────── */
 
-function EnrollmentPanel({ controller }: { controller: Controller }) {
+function EnrollmentPanel({ controller }: Readonly<{ controller: Controller }>) {
   const { t } = useTranslation()
   const enrollment = controller.enrollment
   if (!enrollment) return null
@@ -302,7 +302,7 @@ function EnrollmentPanel({ controller }: { controller: Controller }) {
   )
 }
 
-function RecoveryCodesPanel({ controller }: { controller: Controller }) {
+function RecoveryCodesPanel({ controller }: Readonly<{ controller: Controller }>) {
   const { t } = useTranslation()
   return (
     <SectionCard icon={I.key} title={t('twofa.codes_title')} subtitle={t('twofa.codes_subtitle')}>

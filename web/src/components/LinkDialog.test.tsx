@@ -150,7 +150,7 @@ describe('LinkDialog', () => {
     const rendered = renderWithProviders(
       <LinkDialog open link={null} defaultFolderId={10} onClose={vi.fn()} />,
     )
-    const folderInput = screen.getByRole('textbox', { name: /^folder$/i })
+    const folderInput = screen.getByRole('combobox', { name: /^folder$/i })
     await waitFor(() => expect(folderInput).toHaveAttribute('placeholder', 'Alpha'))
 
     rendered.rerender(<LinkDialog open link={null} defaultFolderId={20} onClose={vi.fn()} />)

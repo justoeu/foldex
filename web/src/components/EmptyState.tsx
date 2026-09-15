@@ -1,10 +1,10 @@
 import { Trans, useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 
-type Props = {
+type Props = Readonly<{
   onNewLink: () => void
   onImport: () => void
-}
+}>
 
 export function EmptyState({ onNewLink, onImport }: Props) {
   const { t } = useTranslation()

@@ -302,7 +302,7 @@ func (h *Handler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 		httperr.JSON(w, http.StatusUnauthorized, map[string]any{
 			"error": map[string]string{
 				"code":    "invalid_code",
-				"message": "that code is not valid",
+				"message": msgInvalidCode,
 			},
 			"attempts_remaining": remaining,
 		})
@@ -606,7 +606,7 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 	counter, err := verifyTOTP(string(secret), in.Code, row.Params, time.Now())
 	if err != nil {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code",
-			"that code is not valid"))
+			msgInvalidCode))
 		return
 	}
 	codes, hashes, err := h.newRecoveryCodeSet(uid)
@@ -704,11 +704,11 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
-			"password is incorrect"))
+			msgPasswordIncorrect))
 		return
 	}
 	if errors.Is(err, ErrTOTPReplay) {
-		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", msgInvalidCode))
 		return
 	}
 	if errors.Is(err, ErrNoPendingFactor) {
@@ -764,11 +764,11 @@ func (h *Handler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request
 	}
 	if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
-			"password is incorrect"))
+			msgPasswordIncorrect))
 		return
 	}
 	if errors.Is(err, ErrTOTPReplay) {
-		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", msgInvalidCode))
 		return
 	}
 	if errors.Is(err, ErrSessionInvalid) {
@@ -898,7 +898,7 @@ func (h *Handler) stepUpSecondFactor(w http.ResponseWriter, r *http.Request,
 	}
 	proof, err := h.tryStepUpProof(r.Context(), uid, user, code)
 	if err != nil {
-		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", "that code is not valid"))
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", msgInvalidCode))
 		return SecondFactorProof{}, key, false
 	}
 	return proof, key, true
@@ -1027,7 +1027,7 @@ func (h *Handler) enrollmentPrincipal(w http.ResponseWriter, r *http.Request) (a
 		if err != nil {
 			if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
 				httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
-					"password is incorrect"))
+					msgPasswordIncorrect))
 			} else {
 				h.logger.Error("verify enrollment password", "err", err)
 				httperr.Write(w, httperr.ErrInternal)

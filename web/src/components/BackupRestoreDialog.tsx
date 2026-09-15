@@ -13,11 +13,11 @@ import {
 import { apiErrorText } from '../lib/apiError'
 import { ConflictModePicker, type ConflictMode } from './ConflictModePicker'
 
-type Props = {
+type Props = Readonly<{
   file: File
   onClose: () => void
   onRestored: () => void
-}
+}>
 
 export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
   const { t } = useTranslation()
@@ -197,7 +197,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
   )
 }
 
-function ValidationSummary({ v, t }: { v: BackupValidation; t: TFunction }) {
+function ValidationSummary({ v, t }: Readonly<{ v: BackupValidation; t: TFunction }>) {
   const m = v.manifest
   if (!m) return null
   return (
@@ -216,7 +216,7 @@ function ValidationSummary({ v, t }: { v: BackupValidation; t: TFunction }) {
   )
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: Readonly<{ label: string; value: string }>) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
       <span style={{ color: 'var(--fx-ink-4)' }}>{label}</span>
@@ -225,7 +225,7 @@ function Row({ label, value }: { label: string; value: string }) {
   )
 }
 
-function RestoreReportBlock({ r, t }: { r: RestoreReport; t: TFunction }) {
+function RestoreReportBlock({ r, t }: Readonly<{ r: RestoreReport; t: TFunction }>) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <Row label={t('backup.result_mode')} value={r.mode} />
